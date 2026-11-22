@@ -29,7 +29,16 @@ import {
 } from '../db/databases.js'
 import { generateHexSecret } from '../db/names.js'
 import { createDriver, createPlacement, getDriver, getPlacement, listDrivers } from '../drivers.js'
-import { type PollOptions, runDeployJob, type Sleep } from '../gitlab-write.js'
+import {
+  findPipeline,
+  GitlabWriteError,
+  jobNamed,
+  type PollOptions,
+  retryJob,
+  runDeployJob,
+  type Sleep,
+  waitJob
+} from '../gitlab-write.js'
 import { pinText } from '../registry.js'
 import { openSecret } from '../secrets.js'
 import type { readEnvironmentStatus } from '../status.js'
@@ -50,6 +59,7 @@ import {
   finishFork,
   forkProject,
   type HubProjectSettings,
+  jobLogTail,
   projectExists,
   protectBranch,
   pushDeployVariables,
@@ -62,6 +72,7 @@ import {
   CREATE_LOCK_RENEW_MS,
   type CreationMade,
   type CreationRow,
+  type CreationWait,
   creationsOfApp,
   hubCreateRepoLockKey,
   type KeyedLock,
@@ -127,7 +138,7 @@ export interface StepContext {
 
 export type StepResult =
   | { status: 'done'; note: string; sha?: string }
-  | { status: 'waiting'; on: 'database' | 'name'; note: string }
+  | { status: 'waiting'; on: CreationWait; note: string }
 
 /** A step refusal with its code (the message never carries a secret). */
 export class StepFailure extends Error {
@@ -429,7 +440,8 @@ async function stepRepository(ctx: StepContext): Promise<StepResult> {
     }
 
     let driverId = shared.driver_id
-    if (!driverId || !(await getDriver(driverId))) driverId = await driverFor(c.api, path)
+    if (!driverId || !(await getDriver(driverId)))
+      driverId = (await driverFor(c.api, path)) ?? undefined
     if (driverId) {
       await saveAppMade(app.id, { driver_id: driverId })
     } else {
@@ -641,20 +653,117 @@ async function stepConfig(ctx: StepContext): Promise<StepResult> {
 
 // ── deploy ───────────────────────────────────────────────────────────────────
 
-async function stepDeploy(ctx: StepContext): Promise<StepResult> {
-  const sha = ctx.doneSha('config')
-  if (!sha) throw new StepFailure('COMMIT_MISSING', 'The config step recorded no commit.')
-  const pctx = projectCtx(ctx)
-  // Fail closed: the deploy runs only with the pinned template as the CI configuration.
-  await configureProject(pctx, projectSettings(ctx.target))
+/** The one line deploy.sh and the manager's nivaro-hub-deploy print (exit 77) for a key not installed or not bound. */
+export const KEY_NOT_INSTALLED = 'NIVARO_HUB_KEY_NOT_INSTALLED'
+
+// biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI colour codes in job logs
+const ANSI = /\u001b\[[0-9;]*[A-Za-z]/g
+const SECTION = /section_(start|end):\d+:[A-Za-z0-9_.-]+(\[[^\]]*\])?/g
+/** GitLab's timestamped log prefix: `2024-07-02T08:05:44.123456Z 01O ` (stream + flags). */
+const STAMP = /^\d{4}-\d\d-\d\dT[0-9:.]+Z \d+[OE]\+? ?/
+
+/** Whether a job log holds the key-not-installed marker as a line of its own. */
+export function hasKeyNotInstalledLine(log: string): boolean {
+  const clean = String(log ?? '')
+    .replace(ANSI, '')
+    .replace(SECTION, '')
+  return clean
+    .split(/\r\n|\n|\r/)
+    .some((line) => line.replace(STAMP, '').trim() === KEY_NOT_INSTALLED)
+}
+
+export const OPERATOR_NOTE =
+  'Install this app’s deploy key on the swarm manager (the authorized_keys line and key.conf shown here), then press Installed.'
+
+/** The newest deploy job of the pipeline for `sha` on `branch`, or null. */
+async function deployJobOf(ctx: StepContext, pctx: GitCtx, sha: string) {
+  const p = await findPipeline(pctx, ctx.env.key, sha)
+  return p ? jobNamed(pctx, p.id, ctx.target.config.deploy_job) : null
+}
+
+/**
+ * Runs the deploy job for `sha` once: a job that already failed (the deploy that ran on the push
+ * before the key was installed, or an earlier try) is retried once and waited for; anything else
+ * goes through runDeployJob (already succeeded / running on its own / manual).
+ */
+async function deployOnce(
+  ctx: StepContext,
+  pctx: GitCtx,
+  sha: string
+): Promise<{ web_url: string; id: number }> {
   const poll: PollOptions = { sleep: ctx.deps.sleep, now: ctx.deps.now }
+  const job = await deployJobOf(ctx, pctx, sha)
+  if (job && (job.status === 'failed' || job.status === 'canceled')) {
+    const again = await retryJob(pctx, job.id)
+    ctx.log(`${ctx.target.config.deploy_job}: ran again (${again.web_url || `job ${again.id}`})`)
+    const end = await waitJob(pctx, again.id, {
+      ...poll,
+      minutes: DEPLOY_MINUTES,
+      onStatus: (st) => ctx.log(`${ctx.target.config.deploy_job}: ${st}`)
+    })
+    if (end.status !== 'success')
+      throw new GitlabWriteError(
+        'DEPLOY_FAILED',
+        `${ctx.target.config.deploy_job} ${end.status} — the deploy script rolled back (${end.web_url})`,
+        { step: 'deployOnce', webUrl: end.web_url || undefined }
+      )
+    return { id: end.id, web_url: end.web_url }
+  }
   const out = await runDeployJob(pctx, ctx.env.key, sha, {
     ...poll,
     deploy: ctx.target.config.deploy_job,
     minutes: DEPLOY_MINUTES,
     onEvent: (e) => ctx.log(e.message)
   })
-  return done(`Deployed ${ctx.creation.version} (${out.job.web_url || `job ${out.job.id}`}).`)
+  return { id: out.job.id, web_url: out.job.web_url }
+}
+
+/** The failed deploy job's log ends with the marker (a read that fails says no). */
+async function refusedForKey(ctx: StepContext, pctx: GitCtx, sha: string): Promise<boolean> {
+  try {
+    const job = await deployJobOf(ctx, pctx, sha)
+    if (!job || job.status !== 'failed') return false
+    return hasKeyNotInstalledLine(await jobLogTail(pctx, job.id))
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Ruling P3-22: the deploy waits for the operator (waiting_for 'operator') until someone says the
+ * app's deploy key and key.conf are installed on the swarm manager (confirmOperatorInstalled).
+ * Then it runs the deploy once. A deploy refused with the marker line NIVARO_HUB_KEY_NOT_INSTALLED
+ * (and only that) goes back to the operator wait; any other failure fails the step. No timeout,
+ * no automatic re-deploy.
+ */
+async function stepDeploy(ctx: StepContext): Promise<StepResult> {
+  const sha = ctx.doneSha('config')
+  if (!sha) throw new StepFailure('COMMIT_MISSING', 'The config step recorded no commit.')
+  if (!(await appMade(ctx.app.id)).operator_ack)
+    return { status: 'waiting', on: 'operator', note: OPERATOR_NOTE }
+  const pctx = projectCtx(ctx)
+  // Fail closed: the deploy runs only with the pinned template as the CI configuration.
+  await configureProject(pctx, projectSettings(ctx.target))
+  let job: { id: number; web_url: string }
+  try {
+    job = await deployOnce(ctx, pctx, sha)
+  } catch (err) {
+    if (
+      err instanceof GitlabWriteError &&
+      err.code === 'DEPLOY_FAILED' &&
+      (await refusedForKey(ctx, pctx, sha))
+    ) {
+      await saveAppMade(ctx.app.id, { operator_ack: null })
+      ctx.log(`${KEY_NOT_INSTALLED}: the swarm manager refused this app's deploy key`, 'warn')
+      return {
+        status: 'waiting',
+        on: 'operator',
+        note: `The swarm manager refused this app’s deploy key (not installed, or the stack is bound to another key). ${OPERATOR_NOTE}`
+      }
+    }
+    throw err
+  }
+  return done(`Deployed ${ctx.creation.version} (${job.web_url || `job ${job.id}`}).`)
 }
 
 // ── name ─────────────────────────────────────────────────────────────────────

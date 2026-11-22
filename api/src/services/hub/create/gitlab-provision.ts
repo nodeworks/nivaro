@@ -16,6 +16,7 @@ import {
   GitlabWriteError,
   gitlabCall,
   gitlabRootCall,
+  gitlabTextCall,
   type PollOptions
 } from '../gitlab-write.js'
 import { deployProjectVariables } from './app-config.js'
@@ -487,4 +488,15 @@ export async function commitFiles(
   const sha = str(obj(res.body).id)
   if (!sha) throw new GitlabWriteError('GITLAB_BAD_ANSWER', 'GitLab named no commit', { step })
   return { sha, changed: true }
+}
+
+// ── job logs ─────────────────────────────────────────────────────────────────────────────
+
+/** The end of a job's log (GET /jobs/:id/trace), as text. */
+export async function jobLogTail(ctx: GitCtx, jobId: number, maxChars = 65_536): Promise<string> {
+  if (!Number.isInteger(jobId) || jobId <= 0)
+    throw new GitlabWriteError('GITLAB_BAD_NAME', 'Refused job id for jobLogTail', {
+      step: 'jobLogTail'
+    })
+  return gitlabTextCall(ctx, 'jobLogTail', `/jobs/${jobId}/trace`, maxChars)
 }

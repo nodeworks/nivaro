@@ -175,13 +175,29 @@ printf '%s' "$DEPLOY_KNOWN_HOSTS" | base64 -d >"$WORK/known_hosts" 2>/dev/null |
 [ -s "$WORK/known_hosts" ] || die "DEPLOY_KNOWN_HOSTS is empty"
 
 # The manager runs only nivaro-hub-deploy for this key; "$@" becomes its SSH_ORIGINAL_COMMAND.
+# Not installed yet (sshd refuses the key) or not bound (the wrapper answers 77): the one fixed
+# line below and status 77, which the Hub reads as "the operator has not installed the key".
+KEY_MARKER=NIVARO_HUB_KEY_NOT_INSTALLED
 remote() {
-  ssh -F /dev/null -i "$WORK/key" -o IdentitiesOnly=yes -o BatchMode=yes -o UserKnownHostsFile="$WORK/known_hosts" -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes -o UpdateHostKeys=no -o ConnectTimeout=20 -o ServerAliveInterval=15 -T -- "$DEST" "$@"
+  rc=0
+  ssh -F /dev/null -i "$WORK/key" -o IdentitiesOnly=yes -o BatchMode=yes -o UserKnownHostsFile="$WORK/known_hosts" -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes -o UpdateHostKeys=no -o ConnectTimeout=20 -o ServerAliveInterval=15 -T -- "$DEST" "$@" 2>"$WORK/ssh.err" || rc=$?
+  grep -v -x "$KEY_MARKER" "$WORK/ssh.err" >&2 || true
+  if [ "$rc" -ne 0 ] && { [ "$rc" -eq 77 ] || grep -q 'Permission denied (publickey' "$WORK/ssh.err"; }; then
+    printf 'deploy: the swarm manager does not accept this app'"'"'s deploy key: install it (the Hub shows the lines), then press Installed\n' >&2
+    printf '%s\n' "$KEY_MARKER" >&2
+    return 77
+  fi
+  return "$rc"
+}
+# A refused remote call: 77 (key not installed) keeps its status, anything else stops with $2.
+stop() {
+  [ "$1" -eq 77 ] && exit 77
+  die "$2"
 }
 
 # ── 3. owner ────────────────────────────────────────────────────────────────
 # The manager judges by this key's stack= lines and the key the stack is bound to.
-owner=$(remote stack-owner "$STACK_NAME" </dev/null) || die "the manager refused stack $STACK_NAME for this key"
+owner=$(remote stack-owner "$STACK_NAME" </dev/null) || stop $? "the manager refused stack $STACK_NAME for this key"
 case "$owner" in
   free | mine) ;;
   *) die "unexpected answer from the manager about $STACK_NAME" ;;
@@ -197,7 +213,7 @@ for pair in $SECRET_VARS; do
   [ -n "$value" ] || die "$var is empty"
   sha8=$(printf '%s' "$value" | sha256sum | cut -c1-8)
   name="${STACK_NAME}_${short}_${sha8}"
-  printf '%s' "$value" | remote secret-create "$name" >/dev/null || die "the manager refused secret $short"
+  printf '%s' "$value" | remote secret-create "$name" >/dev/null || stop $? "the manager refused secret $short"
   value=
   b64=
   upper=$(printf '%s' "$short" | tr 'a-z' 'A-Z')
@@ -215,5 +231,5 @@ done
     printf 'SECRET_%s=%s\n' "$s" "$(printenv "SECRET_$s")"
   done
   printf 'WAIT_TRIES=%s\n' "$WAIT_TRIES"
-} | remote deploy "$STACK_NAME" || die "the manager did not deploy $STACK_NAME"
+} | remote deploy "$STACK_NAME" || stop $? "the manager did not deploy $STACK_NAME"
 say "done: web answers $VERSION"

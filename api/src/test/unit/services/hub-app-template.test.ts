@@ -448,6 +448,10 @@ exit 0
     join(bin, 'ssh'),
     `#!/bin/sh
 printf 'ssh %s\\n' "$*" >> '${log}'
+case "\${FAKE_SSH_FAIL:-}" in
+  deny) echo 'deploy@swarm1.example.com: Permission denied (publickey).' >&2; exit 255 ;;
+  hostkey) echo 'Host key verification failed.' >&2; exit 255 ;;
+esac
 prev=''
 for a; do
   if [ "$prev" = -o ]; then case "$a" in UserKnownHostsFile=*) kh=\${a#UserKnownHostsFile=} ;; esac; fi
@@ -598,6 +602,27 @@ describe('manager/nivaro-hub-deploy (forced command)', () => {
       expect(forced(box, `stack-owner ${STACK}`, '', args).status, args.join(' ')).not.toBe(0)
     }
     expect(dockerCalls(box)).toEqual([])
+  })
+
+  it('not installed or not bound: one marker line, exit 77; other refusals exit 2', () => {
+    const none = manager()
+    rmSync(join(none.etc, 'keys/demo.conf'))
+    for (const r of [
+      forced(none, `stack-owner ${STACK}`),
+      forced(manager(), 'stack-owner demo--qa'),
+      forced(
+        manager({
+          services: [`${STACK}_web|${STACK}|${OTHER_BIND}|demo--staging.apps.example.com`]
+        }),
+        `stack-owner ${STACK}`
+      )
+    ]) {
+      expect(r.status).toBe(77)
+      expect(r.out.split('\n').filter((l) => l === 'NIVARO_HUB_KEY_NOT_INSTALLED')).toHaveLength(1)
+    }
+    const other = forced(manager(), 'docker ps')
+    expect(other.status).toBe(2)
+    expect(other.out).not.toContain('NIVARO_HUB_KEY_NOT_INSTALLED')
   })
 
   it('a configuration still using prefix= is refused', () => {
@@ -858,9 +883,11 @@ describe('scripts/deploy.sh run (through the real wrapper)', () => {
       pin?: string
       env?: Record<string, string | undefined>
       services?: string[]
+      removeConf?: boolean
     } = {}
   ) {
     const box = manager({ services: o.services })
+    if (o.removeConf) rmSync(join(box.etc, 'keys/demo.conf'))
     const repo = join(box.dir, 'repo')
     mkdirSync(join(repo, '.hub'), { recursive: true })
     writeFileSync(join(repo, 'deploy.sh'), read('scripts/deploy.sh'))
@@ -1068,13 +1095,37 @@ describe('scripts/deploy.sh run (through the real wrapper)', () => {
     refusedBeforeSsh(run({ env: { DEPLOY_HOST: undefined } }))
   })
 
-  it('stops when the stack is bound to another key', () => {
+  const markerLines = (out: string) =>
+    out.split('\n').filter((l) => l === 'NIVARO_HUB_KEY_NOT_INSTALLED').length
+
+  it('stops with the key marker (77) when the stack is bound to another key', () => {
     const r = run({
       services: [`${STACK}_web|${STACK}|${OTHER_BIND}|demo--staging.apps.example.com`]
     })
-    expect(r.status).not.toBe(0)
-    expect(r.out).toContain('refused stack')
+    expect(r.status).toBe(77)
+    expect(r.out).toContain('bound to another deploy key')
+    expect(markerLines(r.out)).toBe(1)
     expect(r.calls).not.toContain('secret-create')
+  })
+
+  it('a key sshd does not know (not installed) is the marker and 77', () => {
+    const r = run({ env: { FAKE_SSH_FAIL: 'deny' } })
+    expect(r.status).toBe(77)
+    expect(markerLines(r.out)).toBe(1)
+    expect(r.out).toContain('press Installed')
+  })
+
+  it('any other connection failure is a plain failure, never the marker', () => {
+    const r = run({ env: { FAKE_SSH_FAIL: 'hostkey' } })
+    expect(r.status).toBe(1)
+    expect(markerLines(r.out)).toBe(0)
+    expect(r.out).toContain('refused stack')
+  })
+
+  it('a key without its key.conf on the manager is the marker and 77', () => {
+    const r = run({ removeConf: true })
+    expect(r.status).toBe(77)
+    expect(markerLines(r.out)).toBe(1)
   })
 
   it('refuses a missing secret variable', () => {

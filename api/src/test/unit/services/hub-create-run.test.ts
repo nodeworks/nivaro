@@ -345,10 +345,33 @@ async function remember(envIds: number[]) {
   }
 }
 
-async function startAndWait(i: CreateAppInput = input(), d: CreationDeps = deps()) {
+/**
+ * Waits for the legs; every creation that stops at the operator step (P3-22) is confirmed
+ * "Installed" (once per app) and waited for again, as the operator would.
+ */
+async function settle(envIds: number[], d: CreationDeps = deps()) {
+  for (let round = 0; round < 4; round++) {
+    for (const id of envIds) await R.awaitCreation(id)
+    const waiting = []
+    for (const id of envIds) {
+      const c = await store.readCreationRow(id)
+      if (c?.status === 'waiting' && c.waiting_for === 'operator') waiting.push(id)
+    }
+    if (!waiting.length) return
+    await R.confirmOperatorInstalled(waiting[0], USER, d)
+  }
+}
+
+async function startAndWait(
+  i: CreateAppInput = input(),
+  d: CreationDeps = deps(),
+  o: { stopAtOperator?: boolean } = {}
+) {
   const out = await R.startCreation(i, USER, d)
-  for (const e of out.environments) await R.awaitCreation(e.id)
-  await remember(out.environments.map((e) => e.id))
+  const ids = out.environments.map((e) => e.id)
+  if (o.stopAtOperator) for (const id of ids) await R.awaitCreation(id)
+  else await settle(ids, d)
+  await remember(ids)
   return out
 }
 
@@ -591,7 +614,7 @@ describe('startCreation — a full automatic run of two environments', () => {
     const lines = runs.flatMap((r) => r.run.lines)
     for (const key of ['database', 'repository', 'variables', 'config', 'deploy', 'name', 'link'])
       expect(lines.some((l) => l.startsWith(`${key} → done`))).toBe(true)
-    expect(runs.map((r) => r.label).sort()).toEqual([
+    expect([...new Set(runs.map((r) => r.label))].sort()).toEqual([
       'Create demo/production',
       'Create demo/staging'
     ])
@@ -654,7 +677,7 @@ describe('startCreation — a full automatic run of two environments', () => {
     for (const s of ok)
       for (const e of (s as PromiseFulfilledResult<{ environments: Array<{ id: number }> }>).value
         .environments)
-        await R.awaitCreation(e.id)
+        await settle([e.id])
     const again = await R.startCreation(one, USER, deps()).catch((e) => e)
     expect(again).toMatchObject({ status: 409 })
   })
@@ -691,7 +714,7 @@ describe('waits', () => {
       password: DBA_PASSWORD
     })
     expect(await R.resumeCreation(envId, USER, 'check', deps())).toEqual({ status: 'running' })
-    await R.awaitCreation(envId)
+    await settle([envId])
     await remember([envId])
     c = await creation(envId)
     expect(c.status).toBe('done')
@@ -741,7 +764,7 @@ describe('waits', () => {
     live = true
     nameAnswer = (host, version) => serving(host, version)
     expect(await R.resumeCreation(envId, USER, 'check', deps())).toEqual({ status: 'running' })
-    await R.awaitCreation(envId)
+    await settle([envId])
     expect((await creation(envId)).status).toBe('done')
     expect(await statusOf()).toBe('active')
   })
@@ -770,7 +793,7 @@ describe('waits', () => {
     const envId = out.environments[0].id
     expect((await creation(envId)).status).toBe('waiting')
     expect(await R.checkWaitingCreations(deps())).toBe(1)
-    await R.awaitCreation(envId)
+    await settle([envId])
     expect((await creation(envId)).status).toBe('done')
   })
 
@@ -802,7 +825,7 @@ describe('waits', () => {
     adminAnswers = [{ result: 'refused', code: 'HUB_LINK_MISSING' }]
     adminCalls = 0
     await R.resumeCreation(one.environments[0].id, USER, 'retry', deps())
-    await R.awaitCreation(one.environments[0].id)
+    await settle([one.environments[0].id])
     expect((await creation(one.environments[0].id)).error).toMatch(/^HUB_LINK_MISSING/)
     expect(adminCalls).toBe(5)
   })
@@ -844,7 +867,7 @@ describe('retry and recovery', () => {
 
     const looked = digestLooks
     expect(await R.resumeCreation(envId, USER, 'retry', deps())).toEqual({ status: 'running' })
-    await R.awaitCreation(envId)
+    await settle([envId])
     await remember([envId])
     c = await creation(envId)
     expect(c.status).toBe('done')
@@ -886,7 +909,7 @@ describe('retry and recovery', () => {
     expect(session).toBeTruthy()
 
     await R.resumeCreation(envId, USER, 'retry', deps())
-    await R.awaitCreation(envId)
+    await settle([envId])
     const c = await creation(envId)
     expect(c.status).toBe('done')
     expect(varValue('NIVARO_SESSION_SECRET_B64')).toBe(session)
@@ -908,7 +931,7 @@ describe('retry and recovery', () => {
       deps({ lock: refusing })
     )
     const envId = out.environments[0].id
-    await R.awaitCreation(envId)
+    await settle([envId])
     expect((await creation(envId)).status).toBe('queued')
 
     const token = await lock.take(envId) // a promotion
@@ -916,7 +939,10 @@ describe('retry and recovery', () => {
     expect((await creation(envId)).status).toBe('queued')
     expect(runs).toHaveLength(0)
     await lock.release(envId, token as string)
-    expect(await R.runCreationLeg(envId, USER, deps())).toBe('done')
+    expect(await R.runCreationLeg(envId, USER, deps())).toBe('waiting')
+    expect((await creation(envId)).waiting_for).toBe('operator')
+    await settle([envId])
+    expect((await creation(envId)).status).toBe('done')
     expect(await lock.held(envId)).toBe(false)
   })
 
@@ -928,13 +954,13 @@ describe('retry and recovery', () => {
       deps({ lock: refusing })
     )
     const envId = out.environments[0].id
-    await R.awaitCreation(envId)
+    await settle([envId])
     expect((await creation(envId)).status).toBe('queued')
     const token = await lock.take(envId)
     expect(await R.checkWaitingCreations(deps())).toBe(0) // still held: left alone
     await lock.release(envId, token as string)
     expect(await R.checkWaitingCreations(deps())).toBe(1)
-    await R.awaitCreation(envId)
+    await settle([envId])
     expect((await creation(envId)).status).toBe('done')
     expect(runs[0].label).toBe('Create demo/production')
   })
@@ -966,7 +992,7 @@ describe('retry and recovery', () => {
     const pipelines = gl.pipelinesOf(PROJECT).length
     serve = true
     await R.resumeCreation(envId, USER, 'retry', deps())
-    await R.awaitCreation(envId)
+    await settle([envId])
     expect((await creation(envId)).status).toBe('done')
     expect(forkCalls()).toHaveLength(1)
     expect(gl.pipelinesOf(PROJECT).length).toBe(pipelines) // no new commit, no new deploy
@@ -1004,7 +1030,7 @@ describe('retry and recovery', () => {
     expect((await stepOf(envId, 'link'))?.status).toBe('pending')
     expect(adminCalls).toBe(0)
     await R.resumeCreation(envId, USER, 'retry', deps())
-    await R.awaitCreation(envId)
+    await settle([envId])
     expect((await creation(envId)).status).toBe('done')
     expect(adminCalls).toBe(1)
   })
@@ -1067,7 +1093,7 @@ describe('fix round 1: runner secrets, made writes and orphans', () => {
     plant = `${hubToken}-${OIDC_SECRET}-${gl.token}`
     runs = []
     await R.resumeCreation(envId, USER, 'retry', deps())
-    await R.awaitCreation(envId)
+    await settle([envId])
     expect((await creation(envId)).status).toBe('done')
     const lines = runs.flatMap((r) => r.run.lines).join('\n')
     expect(lines).toContain('?leak=')
@@ -1081,7 +1107,7 @@ describe('fix round 1: runner secrets, made writes and orphans', () => {
       USER,
       deps({ lock: { ...lock, take: async () => null } })
     )
-    for (const e of out.environments) await R.awaitCreation(e.id)
+    for (const e of out.environments) await settle([e.id])
     const [a, b] = await Promise.all(out.environments.map((e) => creation(e.id)))
     for (let i = 1; i <= 20; i++) {
       // A's repository step (app keys) against B's config step (B's own placement/component).
@@ -1110,7 +1136,7 @@ describe('fix round 1: runner secrets, made writes and orphans', () => {
     )
     await store.patchCreation(c.id, { made: rest, steps, status: 'failed' })
     await R.resumeCreation(envId, USER, 'retry', deps())
-    await R.awaitCreation(envId)
+    await settle([envId])
     expect((await creation(envId)).status).toBe('done')
     expect(await db('nivaro_hub_drivers').count('* as n').first()).toMatchObject({ n: 1 })
     expect((await creation(envId)).made.driver_id).toBe(driverId)
@@ -1130,7 +1156,7 @@ describe('fix round 1: runner secrets, made writes and orphans', () => {
     await store.patchCreation(c.id, { made: rest, steps, status: 'failed' })
     await db('nivaro_hub_environments').where({ id: envId }).update({ placement_id: null })
     await R.resumeCreation(envId, USER, 'retry', deps())
-    await R.awaitCreation(envId)
+    await settle([envId])
     expect((await creation(envId)).status).toBe('done')
     expect(await db('nivaro_hub_placements').count('* as n').first()).toMatchObject({ n: 1 })
     expect(await db('nivaro_hub_components').count('* as n').first()).toMatchObject({ n: 1 })
@@ -1173,6 +1199,142 @@ describe('fix round 1: runner secrets, made writes and orphans', () => {
   })
 })
 
+// ── the operator step (ruling P3-22) ─────────────────────────────────────────
+
+describe('operator step', () => {
+  const one = () =>
+    input({ environments: [{ key: 'production', database: { server_id: autoServer } }] })
+  const MARKED = [
+    '\u001b[0Ksection_start:1719907544:step_script\r\u001b[0K\u001b[32;1mExecuting "step_script"\u001b[0;m',
+    'deploy: stack demo--production, image nodeworks/nivaro@sha256:aaa, hosts demo.apps.example.com',
+    '2024-07-02T08:05:44.123456Z 01E nivaro-hub-deploy: stack demo--production is bound to another deploy key',
+    '2024-07-02T08:05:44.123499Z 01E NIVARO_HUB_KEY_NOT_INSTALLED',
+    '\u001b[31;1mERROR: Job failed: exit code 77\u001b[0;m',
+    ''
+  ].join('\r\n')
+  /** Every deploy job of new pipelines: fails (and fails again when retried) with `trace`. */
+  function deployFails(trace: string) {
+    const t = gl.projects.get(TEMPLATE)
+    if (t)
+      t.jobs = (ref) =>
+        ref === 'main'
+          ? []
+          : [
+              {
+                name: 'deploy',
+                statuses: ['running', 'failed'],
+                onRetry: ['running', 'failed'],
+                trace
+              }
+            ]
+  }
+  /** From now on a retried deploy job succeeds. */
+  function deployWorks() {
+    for (const pl of gl.pipelinesOf(PROJECT))
+      for (const j of pl.jobs) {
+        j.onRetry = ['running', 'success']
+        j.trace = ''
+      }
+  }
+
+  it('waits right after the config step, showing the manager lines; nothing moves it but Installed', async () => {
+    const out = await startAndWait(input(), deps(), { stopAtOperator: true })
+    for (const e of out.environments) {
+      const c = await creation(e.id)
+      expect(c).toMatchObject({ status: 'waiting', waiting_for: 'operator' })
+      expect((await stepOf(e.id, 'config'))?.status).toBe('done')
+      expect(await stepOf(e.id, 'deploy')).toMatchObject({
+        status: 'waiting',
+        note: expect.stringContaining('press Installed')
+      })
+      const view = await R.readCreation(e.id)
+      expect(view?.waiting_for).toBe('operator')
+      expect(view?.operator_installed_at).toBeNull()
+      expect(view?.deploy_key?.authorized_keys).toContain('nivaro-hub-deploy demo keyid=SHA256:')
+      expect(view?.deploy_key?.key_conf).toContain('stack=demo--production')
+      expect(JSON.stringify(view)).not.toContain('PRIVATE KEY')
+    }
+    const id = out.environments[0].id
+    expect(await R.resumeCreation(id, USER, 'check', deps())).toEqual({ status: 'waiting' })
+    expect(await R.checkWaitingCreations(deps())).toBe(0)
+    expect((await creation(id)).status).toBe('waiting')
+    expect(gl.retries).toHaveLength(0)
+    await expect(R.confirmOperatorInstalled(999_999, USER, deps())).rejects.toMatchObject({
+      code: 'NOT_FOUND'
+    })
+  })
+
+  it('Installed: every environment of the app waiting for it deploys once, then done', async () => {
+    const out = await startAndWait(input(), deps(), { stopAtOperator: true })
+    const ids = out.environments.map((e) => e.id)
+    const r = await R.confirmOperatorInstalled(ids[1], USER, deps())
+    expect(r).toEqual({ status: 'running', environments: ids })
+    for (const id of ids) await R.awaitCreation(id)
+    for (const id of ids) expect((await creation(id)).status).toBe('done')
+    expect((await R.readCreation(ids[0]))?.operator_installed_at).toBeTruthy()
+    await expect(R.confirmOperatorInstalled(ids[0], USER, deps())).rejects.toMatchObject({
+      code: 'NOT_WAITING_FOR_OPERATOR',
+      status: 409
+    })
+  })
+
+  it('a deploy refused with the key marker goes back to the operator wait; Installed again finishes', async () => {
+    deployFails(MARKED)
+    const out = await startAndWait(one(), deps(), { stopAtOperator: true })
+    const envId = out.environments[0].id
+    await R.confirmOperatorInstalled(envId, USER, deps())
+    await R.awaitCreation(envId)
+    let c = await creation(envId)
+    expect(c).toMatchObject({ status: 'waiting', waiting_for: 'operator' })
+    expect((await stepOf(envId, 'deploy'))?.note).toContain('refused this app’s deploy key')
+    expect((await R.readCreation(envId))?.operator_installed_at).toBeNull()
+    // The push's own deploy job was waited for: no retry, and no automatic second try.
+    expect(gl.retries).toHaveLength(0)
+    expect(await R.checkWaitingCreations(deps())).toBe(0)
+    expect(gl.retries).toHaveLength(0)
+
+    deployWorks()
+    await R.confirmOperatorInstalled(envId, USER, deps())
+    await R.awaitCreation(envId)
+    c = await creation(envId)
+    expect(c.status).toBe('done')
+    expect(gl.retries).toHaveLength(1) // the failed job ran again once
+  })
+
+  it('a deploy failure without the marker is an ordinary failure; Retry runs it again', async () => {
+    deployFails(
+      'deploy: the manager did not deploy demo--production\nERROR: Job failed: exit code 1\n'
+    )
+    const out = await startAndWait(one())
+    const envId = out.environments[0].id
+    const c = await creation(envId)
+    expect(c.status).toBe('failed')
+    expect(c.error).toMatch(/^DEPLOY_FAILED/)
+    expect((await stepOf(envId, 'deploy'))?.status).toBe('failed')
+    deployWorks()
+    await R.resumeCreation(envId, USER, 'retry', deps())
+    await settle([envId])
+    expect((await creation(envId)).status).toBe('done')
+  })
+
+  it('the marker counts only as a line of its own', async () => {
+    const { hasKeyNotInstalledLine } = await import('../../../services/hub/create/steps.js')
+    expect(hasKeyNotInstalledLine(MARKED)).toBe(true)
+    expect(hasKeyNotInstalledLine('NIVARO_HUB_KEY_NOT_INSTALLED')).toBe(true)
+    expect(hasKeyNotInstalledLine('a\n\u001b[31mNIVARO_HUB_KEY_NOT_INSTALLED\u001b[0m\nb')).toBe(
+      true
+    )
+    for (const no of [
+      'echo NIVARO_HUB_KEY_NOT_INSTALLED',
+      'NIVARO_HUB_KEY_NOT_INSTALLED_NOT',
+      'deploy: NIVARO_HUB_KEY_NOT_INSTALLED here',
+      'exit code 77',
+      ''
+    ])
+      expect(hasKeyNotInstalledLine(no), no).toBe(false)
+  })
+})
+
 // ── the deploy repository (P3-7, P3-9, P3-16) ────────────────────────────────
 
 describe('deploy repository', () => {
@@ -1186,7 +1348,7 @@ describe('deploy repository', () => {
     expect(c.error).toMatch(/^IMPORT_TIMEOUT/)
     expect(c.made.project_id).toBeTruthy()
     await R.resumeCreation(envId, USER, 'retry', deps())
-    await R.awaitCreation(envId)
+    await settle([envId])
     expect((await creation(envId)).status).toBe('done')
     expect(forkCalls()).toHaveLength(1)
   })
@@ -1212,7 +1374,7 @@ describe('deploy repository', () => {
     expect(p?.description).toBe(mark)
     if (p) plant(p, mark)
     await R.resumeCreation(envId, USER, 'retry', deps())
-    await R.awaitCreation(envId)
+    await settle([envId])
     return await creation(envId)
   }
 

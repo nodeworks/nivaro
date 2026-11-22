@@ -55,6 +55,7 @@ import { buildCreationPlan } from './plan.js'
 import {
   checkDatabaseWait,
   checkNameWait,
+  OPERATOR_NOTE,
   STEPS,
   type StepApp,
   type StepContext,
@@ -71,6 +72,7 @@ import {
   type CreationMade,
   type CreationRow,
   type CreationStatus,
+  type CreationWait,
   defaultCreationFlags,
   defaultKeyedLock,
   HUB_CREATE_START_LOCK_KEY,
@@ -79,6 +81,7 @@ import {
   OPEN_CREATION_STATUSES,
   patchCreation,
   readCreationRow,
+  saveAppMade,
   writeOwnMade
 } from './store.js'
 import { getTargetRow, type HubTargetRow } from './targets.js'
@@ -700,6 +703,11 @@ async function lookAtWait(
   r: Resolved
 ): Promise<{ resolved: boolean; note: string }> {
   const secrets = new Set<string>()
+  if (row.waiting_for === 'operator') {
+    // Only the operator's "Installed" moves it on (no automatic re-deploy): keep the reason.
+    const waiting = row.steps.find((x) => x.status === 'waiting')
+    return { resolved: false, note: waiting?.note ?? OPERATOR_NOTE }
+  }
   try {
     const { app, env, target } = await loadContext(row)
     const ctx: StepContext = {
@@ -724,6 +732,38 @@ async function lookAtWait(
       note: scrub(`The check failed (${errorCode(err)}).`, secrets, 300)
     }
   }
+}
+
+/**
+ * The operator's "Installed" (ruling P3-22): the app's deploy key and key.conf are on the swarm
+ * manager. Recorded for the app (one key per app), then every environment of the app waiting for
+ * the operator runs its deploy once. Refused NOT_WAITING_FOR_OPERATOR unless this environment's
+ * creation waits for the operator.
+ */
+export async function confirmOperatorInstalled(
+  envId: number,
+  user: { id: string },
+  deps?: CreationDeps
+): Promise<{ status: 'running'; environments: number[] }> {
+  const r = resolve(deps)
+  const row = await readCreationRow(envId)
+  if (!row) throw new CreationError('NOT_FOUND', 'No creation for this environment.', 404)
+  if (row.status !== 'waiting' || row.waiting_for !== 'operator')
+    throw new CreationError(
+      'NOT_WAITING_FOR_OPERATOR',
+      'This creation is not waiting for the deploy key to be installed.',
+      409
+    )
+  await saveAppMade(row.app_id, {
+    operator_ack: { at: new Date().toISOString(), by: user.id || null }
+  })
+  const waiting = (await db(CREATIONS)
+    .where({ app_id: row.app_id, status: 'waiting', waiting_for: 'operator' })
+    .orderBy('id')
+    .select('environment_id')) as Array<{ environment_id: number }>
+  const envs = waiting.map((w) => Number(w.environment_id))
+  for (const id of envs) launchLeg(id, user, r, ['waiting'])
+  return { status: 'running', environments: envs }
 }
 
 /** Asks a running creation to stop at its next step boundary; a waiting or queued one stops now. */
@@ -907,7 +947,9 @@ export interface CreationView {
   env_key: string
   status: CreationStatus
   step: string | null
-  waiting_for: 'database' | 'name' | null
+  waiting_for: CreationWait | null
+  /** When the operator last said the app's deploy key is installed (null: not yet, or refused since). */
+  operator_installed_at: string | null
   steps: CreationStepState[]
   error: string | null
   version: string
@@ -1033,6 +1075,7 @@ export async function readCreation(envId: number): Promise<CreationView | null> 
     status: row.status,
     step: row.step,
     waiting_for: row.waiting_for,
+    operator_installed_at: shared.operator_ack?.at ?? null,
     steps: row.steps,
     error: row.error,
     version: row.version,

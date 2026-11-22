@@ -15,6 +15,8 @@ export interface JobSpec {
   onPlay?: string[]
   /** Statuses of the new job a retry starts (default running, success). */
   onRetry?: string[]
+  /** The job's log (GET /jobs/:id/trace). */
+  trace?: string
 }
 
 interface Job extends JobSpec {
@@ -600,6 +602,12 @@ export class FakeGitLab {
           web_url: j.web_url
         }))
       )
+    }
+    m = path.match(/^\/jobs\/(\d+)\/trace$/)
+    if (m && method === 'GET') {
+      const j = this.job(Number(m[1]))
+      if (!j) return json(404, { message: 'no job' })
+      return new Response(j.trace ?? '', { status: 200 })
     }
     m = path.match(/^\/jobs\/(\d+)\/retry$/)
     if (m && method === 'POST') {

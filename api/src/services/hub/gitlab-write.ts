@@ -162,6 +162,52 @@ async function call(
 
 export { call as gitlabCall }
 
+/**
+ * One authenticated GET of a project path answered as TEXT (a job log), same rules as every call:
+ * token in PRIVATE-TOKEN only, redirects refused, errors without body text. Answers the last
+ * `maxChars` characters (a job log ends with what matters).
+ */
+export async function gitlabTextCall(
+  ctx: GitCtx,
+  step: string,
+  path: string,
+  maxChars = 65_536
+): Promise<string> {
+  if (!ctx.token) {
+    throw new GitlabWriteError('GITLAB_NO_TOKEN', 'The deploy repository has no GitLab token', {
+      step
+    })
+  }
+  const ctl = new AbortController()
+  const timer = setTimeout(() => ctl.abort(), 15_000)
+  try {
+    let res: Response
+    try {
+      res = await fetch(gitlabApi(ctx, path), {
+        headers: { 'PRIVATE-TOKEN': ctx.token },
+        redirect: 'error',
+        signal: ctl.signal
+      })
+    } catch (err) {
+      const cause = (err as { cause?: { message?: unknown } } | null)?.cause
+      if (/redirect/i.test(String(cause?.message ?? ''))) {
+        throw new GitlabWriteError('FETCH_REDIRECT', `GitLab redirected ${step}; refused`, { step })
+      }
+      throw new GitlabWriteError('GITLAB_UNREACHABLE', `GitLab did not answer ${step}`, { step })
+    }
+    if (!res.ok) {
+      throw new GitlabWriteError(httpCode(res.status), `GitLab refused ${step} (${res.status})`, {
+        status: res.status,
+        step
+      })
+    }
+    const text = await res.text()
+    return text.length > maxChars ? text.slice(-maxChars) : text
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 /** One authenticated call to a root API path outside /projects (GET /user, /namespaces/:id). */
 export async function gitlabRootCall(
   ctx: GitCtx,

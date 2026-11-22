@@ -73,6 +73,17 @@ from deciding what runs on the swarm, and BOTH are required:
    `[host]:port` entries when the port is not 22), the proxy network, and how names are made
    (wildcard DNS, or manual tickets).
 
+## The operator step (Installed)
+
+The Hub makes the app's key pair when it creates the deploy repository, then waits before the
+first deploy: the creation shows the app's `authorized_keys` line and `keys/<app>.conf` text
+(step 4 above). Install both on the manager, then press **Installed**; the Hub runs the deploy
+once. When the key is not installed yet or a stack is bound to another key, `deploy.sh` and
+`nivaro-hub-deploy` stop with exit code 77 and print the single line
+`NIVARO_HUB_KEY_NOT_INSTALLED`; the Hub reads only that line and goes back to waiting for
+Installed. Every other failure is an ordinary deploy failure (Retry). There is no timeout and no
+automatic re-deploy.
+
 ## What a deploy does
 
 1. Reads `.hub/app.env`: exactly the settings listed in `.hub/README.md`; any other key, a

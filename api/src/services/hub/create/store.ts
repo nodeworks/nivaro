@@ -16,6 +16,9 @@ import { type CreationStepKey, type CreationStepState, STEP_ORDER } from './type
 
 export const CREATIONS = 'nivaro_hub_creations'
 
+/** What a waiting creation waits for: a DBA's database, a hand-made name, the operator's key. */
+export type CreationWait = 'database' | 'name' | 'operator'
+
 export type CreationStatus =
   | 'queued'
   | 'running'
@@ -51,12 +54,24 @@ export interface CreationMade {
     /** Unguessable (base64url of 18 random bytes): the fork's mark. Never answered. */
     nonce: string
   }
+  /**
+   * The operator said the app's deploy key and key.conf are installed on the swarm manager
+   * (app-level: one key per app). Cleared (null) when a deploy is refused with
+   * NIVARO_HUB_KEY_NOT_INSTALLED.
+   */
+  operator_ack?: { at: string; by: string | null } | null
   /** CI variable key → outcome (created / updated / kept). */
   variables?: Record<string, string>
 }
 
 /** The keys of `made` shared by every environment of an app (written to all its rows). */
-export const APP_MADE_KEYS = ['project_id', 'project_path', 'driver_id', 'deploy_key'] as const
+export const APP_MADE_KEYS = [
+  'project_id',
+  'project_path',
+  'driver_id',
+  'deploy_key',
+  'operator_ack'
+] as const
 
 export interface CreationRow {
   id: number
@@ -64,7 +79,7 @@ export interface CreationRow {
   environment_id: number
   status: CreationStatus
   step: CreationStepKey | null
-  waiting_for: 'database' | 'name' | null
+  waiting_for: CreationWait | null
   steps: CreationStepState[]
   made: CreationMade
   error: string | null
@@ -117,7 +132,7 @@ export function creationFromRow(r: Record<string, unknown>): CreationRow {
     environment_id: Number(r.environment_id),
     status: String(r.status) as CreationStatus,
     step: (r.step as CreationStepKey | null) ?? null,
-    waiting_for: (r.waiting_for as 'database' | 'name' | null) ?? null,
+    waiting_for: (r.waiting_for as CreationWait | null) ?? null,
     steps: normaliseSteps(r.steps),
     made: parseObj<CreationMade>(r.made, {}),
     error: (r.error as string | null) ?? null,
@@ -179,7 +194,7 @@ export async function insertCreation(
 export interface CreationPatch {
   status?: CreationStatus
   step?: CreationStepKey | null
-  waiting_for?: 'database' | 'name' | null
+  waiting_for?: CreationWait | null
   steps?: CreationStepState[]
   made?: CreationMade
   error?: string | null

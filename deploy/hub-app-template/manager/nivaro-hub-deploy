@@ -40,6 +40,14 @@ refuse() {
   exit 2
 }
 
+# This key is not installed here yet, or not bound to the stack: the operator's step (the Hub
+# waits for "Installed"). One fixed line and exit 77, which the Hub matches; nothing else is.
+not_installed() {
+  printf 'nivaro-hub-deploy: %s\n' "$*" >&2
+  printf 'NIVARO_HUB_KEY_NOT_INSTALLED\n' >&2
+  exit 77
+}
+
 # ── this key ─────────────────────────────────────────────────────────────────
 [ "$#" -eq 2 ] || refuse "authorized_keys must run: nivaro-hub-deploy <app> keyid=<fingerprint>"
 KEY=$1
@@ -55,11 +63,11 @@ if [ -n "${SSH_USER_AUTH:-}" ] && [ -f "$SSH_USER_AUTH" ]; then
   used=$(sed -n 's/^publickey //p' "$SSH_USER_AUTH" | head -n 1)
   if [ -n "$used" ]; then
     fp=$(printf '%s\n' "$used" | ssh-keygen -lf - 2>/dev/null | cut -d' ' -f2) || fp=''
-    [ "$fp" = "$KEYID" ] || refuse "the key that signed in is not the keyid= of its authorized_keys line"
+    [ "$fp" = "$KEYID" ] || not_installed "the key that signed in is not the keyid= of its authorized_keys line"
   fi
 fi
 CONF="$ROOT/keys/$KEY.conf"
-[ -f "$CONF" ] || refuse "no configuration for key $KEY"
+[ -f "$CONF" ] || not_installed "no configuration for key $KEY"
 [ -f "$STACK_FILE" ] || refuse "no stack file at $STACK_FILE"
 
 STACKS=' '
@@ -123,7 +131,7 @@ check_stack() {
   case "$1" in [a-z]*) ;; *) refuse "stack name not allowed" ;; esac
   case "$1" in *[!a-z0-9-]*) refuse "stack name not allowed" ;; esac
   [ "${#1}" -ge 2 ] && [ "${#1}" -le 40 ] || refuse "stack name not allowed"
-  case "$STACKS" in *" $1 "*) ;; *) refuse "stack $1 is not one of this key's stacks" ;; esac
+  case "$STACKS" in *" $1 "*) ;; *) not_installed "stack $1 is not one of this key's stacks (install the app's key.conf)" ;; esac
 }
 
 # "free" when the stack runs nothing, "mine" when every service is bound to this key; refuses
@@ -135,7 +143,7 @@ binding() {
   for svc in $names; do
     bound=$(docker service inspect --format '{{index .Spec.Labels "nivaro.hub.key"}}' "$svc") ||
       refuse "cannot read service labels"
-    [ "$bound" = "$BINDING" ] || refuse "stack $1 is bound to another deploy key"
+    [ "$bound" = "$BINDING" ] || not_installed "stack $1 is bound to another deploy key"
     state=mine
   done
   printf '%s' "$state"
@@ -269,7 +277,7 @@ case "$VERB" in
       case "$h" in
         '' | [-.]* | *[-.] | *..* | *.-* | *-.* | *[!a-z0-9.-]*) refuse "APP_HOSTS: '$h' is not a hostname" ;;
       esac
-      case "$HOSTS" in *" $h "*) ;; *) refuse "APP_HOSTS: $h is not one of this key's hosts" ;; esac
+      case "$HOSTS" in *" $h "*) ;; *) not_installed "APP_HOSTS: $h is not one of this key's hosts (install the app's key.conf)" ;; esac
       case "$claimed" in *" $h "*) refuse "APP_HOSTS: $h is already served by another stack" ;; esac
       TRAEFIK_RULE="${TRAEFIK_RULE:+$TRAEFIK_RULE || }Host(\`$h\`)"
     done
