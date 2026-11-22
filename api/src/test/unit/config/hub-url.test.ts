@@ -1,13 +1,19 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // A compose passthrough (`HUB_URL: ${HUB_URL}`) hands an unset variable over as '' — that must
 // read as unset, never stop cloud or EFP from booting (ruling P5-1).
 
 describe('HUB_URL setting', () => {
-  const saved = process.env.HUB_URL
+  // Importing config.ts writes to process.env: DB_URL fills the DB_* variables
+  // (applyDbUrlToProcess), DB_CLIENT=sqlite fills DB_HOST / DB_USER / DB_PASSWORD, X_FILE values
+  // land as X (applyEnvFiles). Snapshot the whole environment and put it back after each case.
+  let saved: NodeJS.ProcessEnv = {}
+  beforeEach(() => {
+    saved = { ...process.env }
+  })
   afterEach(() => {
-    if (saved === undefined) delete process.env.HUB_URL
-    else process.env.HUB_URL = saved
+    for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k]
+    for (const [k, v] of Object.entries(saved)) process.env[k] = v
     vi.restoreAllMocks()
     vi.resetModules()
   })

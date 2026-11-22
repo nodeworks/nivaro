@@ -93,8 +93,9 @@ describe('deployment-mode predicates', () => {
   const bad: Array<[string, NodeJS.ProcessEnv, RegExp]> = [
     ['with cloud', { ...shared, CLOUD_META_DB_URL: 'postgres://x' }, /CLOUD_META_DB_URL/],
     ['with HUB=on', { ...shared, HUB: 'on' }, /HUB=on/],
-    ['no url', { ...shared, HUB_URL: undefined }, /HUB_URL/],
-    ['http remote', { ...shared, HUB_URL: 'http://hub.example' }, /HUB_URL/],
+    ['no url', { ...shared, HUB_URL: undefined }, /needs HUB_URL/],
+    ['blank url', { ...shared, HUB_URL: '  ' }, /needs HUB_URL/],
+    ['http remote', { ...shared, HUB_URL: 'http://hub.example' }, /https/],
     ['short token', { ...shared, HUB_DEPLOYMENT_TOKEN: 'y'.repeat(31) }, /32/],
     ['bad key', { ...shared, HUB_SHARED_DEPLOYMENT: 'Bad_Key' }, /lowercase/]
   ]
