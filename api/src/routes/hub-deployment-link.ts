@@ -230,4 +230,66 @@ export async function hubDeploymentLinkRoutes(app: FastifyInstance): Promise<voi
       return refuse(reply, 400, 'A connection is required', 'BAD_DB_CONNECTION')
     return reply.send(await checkDatabase(client, connection))
   })
+
+  // ─── Hub phase 6 Task 10: file transfer for a move, per app (services/hub-transfer/*) ─────
+  // The same three calls as the hub link's /files/*, for one app of this deployment. A ticket is
+  // minted FOR that app (the ticket decides the app the serve route reads, ruling R16); a pull
+  // runs inside that app (its rows, its storage scope, its Redis keys) and its run is seen only
+  // there. The ticket is never logged (the request log skips /api/hub-deployment/ here) or
+  // answered back.
+
+  app.post<{ Params: { id: string } }>('/apps/:id/files/ticket', async (req, reply) => {
+    const registry = registryOr503(reply)
+    if (!registry) return reply
+    const t = await tenantById(registry, req.params.id)
+    if (!t) return refuse(reply, 404, 'This deployment does not serve that app', 'UNKNOWN_APP')
+    const { mintTransferTicket } = await import('../services/hub-transfer/tickets.js')
+    try {
+      return reply.send(await mintTransferTicket(t.id))
+    } catch {
+      return refuse(
+        reply,
+        503,
+        'The transfer ticket could not be stored (Redis)',
+        'REDIS_UNAVAILABLE'
+      )
+    }
+  })
+
+  app.post<{ Params: { id: string } }>('/apps/:id/files/pull', async (req, reply) => {
+    const registry = registryOr503(reply)
+    if (!registry) return reply
+    const t = await tenantById(registry, req.params.id)
+    if (!t) return refuse(reply, 404, 'This deployment does not serve that app', 'UNKNOWN_APP')
+    const { startPull, PullError } = await import('../services/hub-transfer/pull.js')
+    const b = (req.body ?? {}) as { source?: unknown; ticket?: unknown; mode?: unknown }
+    try {
+      const out = await withTenant(t, () =>
+        startPull({
+          source: b.source as string,
+          ticket: b.ticket as string,
+          mode: b.mode as 'full' | 'delta'
+        })
+      )
+      return reply.code(202).send(out)
+    } catch (err) {
+      if (err instanceof PullError) return refuse(reply, err.statusCode, err.message, err.code)
+      app.log.warn({ tenant: t.id }, 'deployment link: a file copy could not be started')
+      return refuse(reply, 500, 'The file copy could not be started', 'PULL_FAILED')
+    }
+  })
+
+  app.get<{ Params: { id: string; runId: string } }>(
+    '/apps/:id/files/pull/:runId',
+    async (req, reply) => {
+      const registry = registryOr503(reply)
+      if (!registry) return reply
+      const t = await tenantById(registry, req.params.id)
+      if (!t) return refuse(reply, 404, 'This deployment does not serve that app', 'UNKNOWN_APP')
+      const { readPullStatus } = await import('../services/hub-transfer/pull.js')
+      const s = await withTenant(t, () => readPullStatus(req.params.runId))
+      if (!s) return refuse(reply, 404, 'No file copy with that id here', 'UNKNOWN_RUN')
+      return reply.send(s)
+    }
+  )
 }

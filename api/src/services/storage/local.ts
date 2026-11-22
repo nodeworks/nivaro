@@ -86,6 +86,15 @@ export class LocalStorage implements StorageProvider {
     }
   }
 
+  async size(key: string): Promise<number | null> {
+    try {
+      const st = await stat(this.resolveKey(key))
+      return st.isFile() ? st.size : null
+    } catch {
+      return null
+    }
+  }
+
   async delete(key: string): Promise<void> {
     await unlink(this.resolveKey(key)).catch(() => null)
   }

@@ -1,0 +1,164 @@
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
+import { db } from '../db/index.js'
+import { withTenant } from '../db/tenant-context.js'
+import { failedAuthLimiter } from '../lib/auth-fail-limiter.js'
+import { trustedRequestHost } from '../lib/trust-proxy.js'
+import { tenantSource } from '../services/deployment-mode.js'
+import { isUuid } from '../services/help-video-files.js'
+import {
+  hubTransferMounted,
+  ticketTenant,
+  transferTicketFromHeader
+} from '../services/hub-transfer/tickets.js'
+import { sendStoredObject } from '../services/stored-object-stream.js'
+import { getTenantRegistry } from '../services/tenancy/registry.js'
+import type { TenantRecord } from '../services/tenancy/types.js'
+
+/**
+ * File transfer, source side (Hub phase 6, Decision 11).
+ *
+ *   GET /api/hub-transfer/files/:id   the stored object of the app's nivaro_files row :id
+ *
+ * The target of a move pulls every object from here (services/hub-transfer/pull.ts). Auth is a
+ * transfer ticket the source minted on the Hub's request, and nothing else — no session, API
+ * key, OAuth token or hub-link bearer: `Authorization: Transfer <ticket>` (timing-safe by
+ * construction: the ticket is looked up by its sha256). 401 TRANSFER_REFUSED; 20 failures a
+ * minute from one address = 429.
+ *
+ * The ticket decides the app (ruling R16). On a Hub shared deployment the read runs inside the
+ * ticket's app (its database, its storage scope apps/<tenantId>/); the request host does not
+ * pick the app — a call on the deployment's own link address or an unknown host is fine, and
+ * only a host that resolves to a DIFFERENT app answers 401. On a dedicated app the ticket must
+ * be one this app minted (no app part).
+ *
+ * Mounted where the hub link is (HUB_TOKEN on a single-app process) or on a Hub shared
+ * deployment; never in Nivaro Cloud. The retire gate and the maintenance freeze let it through
+ * (services/hub-link/retire.ts retiredExemptPath, services/maintenance-freeze.ts): a retired or
+ * frozen source must still hand over its files.
+ *
+ * Serves the row's object whatever the file kind (help-video files included: they move with the
+ * app), this process's own copy only (never FILES_FALLBACK_URL), with `X-Nivaro-Filename-Disk`
+ * (the key, percent-encoded) and `Content-Length`; never compressed. Missing row or object = 404.
+ */
+
+export const TRANSFER_REFUSED = 'TRANSFER_REFUSED'
+
+function refuse(reply: FastifyReply, status: number, code: string, message: string) {
+  return reply
+    .code(status)
+    .header('Cache-Control', 'no-store')
+    .send({ statusCode: status, error: message, message, code })
+}
+
+/** A request host without its port, lower case; null when there is none. */
+function bareHost(raw: string | null | undefined): string | null {
+  const v = String(raw ?? '')
+    .trim()
+    .toLowerCase()
+  if (!v) return null
+  if (v.startsWith('[')) {
+    const end = v.indexOf(']')
+    return end > 0 ? v.slice(0, end + 1) : null
+  }
+  const colon = v.indexOf(':')
+  return colon >= 0 ? v.slice(0, colon) : v
+}
+
+type TicketApp = { kind: 'dedicated' } | { kind: 'shared'; tenant: TenantRecord }
+
+declare module 'fastify' {
+  interface FastifyRequest {
+    hubTransferApp?: TicketApp
+  }
+}
+
+interface FileRow {
+  id: unknown
+  filename_disk: string | null
+  type: string | null
+}
+
+async function fileRow(id: string): Promise<FileRow | null> {
+  if (!isUuid(id)) return null
+  const row = (await db('nivaro_files').where('id', id).first('id', 'filename_disk', 'type')) as
+    | FileRow
+    | undefined
+  return row?.filename_disk ? row : null
+}
+
+export async function hubTransferRoutes(app: FastifyInstance): Promise<void> {
+  if (!hubTransferMounted()) return
+  const shared = tenantSource() === 'hub'
+  const authFails = failedAuthLimiter()
+
+  /** The app the ticket opens here, or null (refused). */
+  const appFor = async (req: FastifyRequest): Promise<TicketApp | null> => {
+    const ticket = transferTicketFromHeader(req.headers.authorization)
+    if (!ticket) return null
+    const v = await ticketTenant(ticket)
+    if (!v.ok) return null
+    if (!shared) return v.tenant === null ? { kind: 'dedicated' } : null
+    if (v.tenant === null) return null
+    const registry = getTenantRegistry()
+    if (!registry) return null
+    const tenant = registry.byId
+      ? await registry.byId(v.tenant)
+      : ((await registry.listActive()).find((t) => t.id === v.tenant) ?? null)
+    if (!tenant) return null
+    // R16: only a host that names ANOTHER app refuses; the link address or no app is fine.
+    const host = bareHost(
+      trustedRequestHost(req.headers, req.socket?.remoteAddress) ?? req.hostname
+    )
+    if (host) {
+      const all = registry.listAll ? await registry.listAll() : await registry.listActive()
+      const there = all.find((t) => t.hostnames.some((h) => h.toLowerCase() === host))
+      if (there && there.id !== tenant.id) return null
+    }
+    return { kind: 'shared', tenant }
+  }
+
+  app.addHook('onRequest', async (req, reply) => {
+    reply.header('Cache-Control', 'no-store')
+    if (authFails.blocked(req.ip)) return refuse(reply, 429, TRANSFER_REFUSED, 'Too many attempts')
+    let found: TicketApp | null = null
+    try {
+      found = await appFor(req)
+    } catch {
+      found = null
+    }
+    if (!found) {
+      if (authFails.fail(req.ip))
+        app.log.warn({ ip: req.ip }, 'hub transfer: refused transfer ticket')
+      return refuse(reply, 401, TRANSFER_REFUSED, 'Unauthorized')
+    }
+    req.hubTransferApp = found
+  })
+
+  app.get<{ Params: { id: string } }>(
+    '/files/:id',
+    { compress: false, exposeHeadRoute: false },
+    async (req, reply) => {
+      const found = req.hubTransferApp
+      if (!found) return refuse(reply, 401, TRANSFER_REFUSED, 'Unauthorized')
+      const serve = async () => {
+        const row = await fileRow(req.params.id)
+        if (!row?.filename_disk) return refuse(reply, 404, 'NOT_FOUND', 'Not found')
+        const key = row.filename_disk
+        reply.header('X-Nivaro-Filename-Disk', encodeURIComponent(key).replace(/%2F/gi, '/'))
+        try {
+          return await sendStoredObject(reply, key, {
+            rangeHeader: req.headers.range,
+            contentType: row.type || 'application/octet-stream',
+            disposition: 'attachment',
+            // This home's own copy only: a source never asks another source.
+            remote: false
+          })
+        } catch {
+          reply.removeHeader('X-Nivaro-Filename-Disk')
+          return refuse(reply, 404, 'NOT_FOUND', 'Stored object not found')
+        }
+      }
+      return found.kind === 'shared' ? withTenant(found.tenant, serve) : serve()
+    }
+  )
+}
