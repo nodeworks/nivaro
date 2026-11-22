@@ -5,14 +5,17 @@ import { logActivity } from '../services/activity.js'
 import { APP_KEY_RE, keyFingerprint } from '../services/app-key-fingerprint.js'
 import { hubPublicOrigin, hubUrlOrigin } from '../services/deployment-mode.js'
 import { idParam } from '../services/hub/apps.js'
-import { openStackSecrets, readStackSettings } from '../services/hub/docker/stack-settings.js'
 import { PromotionError } from '../services/hub/promote-lock.js'
-import { HUB_MASK, HubSecretError, openSecret } from '../services/hub/secrets.js'
+import { HUB_MASK, HubSecretError } from '../services/hub/secrets.js'
+import {
+  APP_KEY_UNKNOWN_MESSAGE,
+  decideAppKey,
+  readKeyEnv
+} from '../services/hub/shared/app-key-check.js'
 import {
   DeploymentLinkError,
   type DeploymentStatus,
-  deploymentClient,
-  linkedKeyFingerprint
+  deploymentClient
 } from '../services/hub/shared/deployment-client.js'
 import { liveSightings, type Sighting } from '../services/hub/shared/sightings.js'
 import {
@@ -48,7 +51,8 @@ import { poolMaxOf, type SharedTenantRow, tenantsOf } from '../services/hub/shar
  *                                          a link failure answers {state:'unreachable', code}
  *   GET    /environments/:envId/app-key    {known, key: mask|null, fp, source} — never the key
  *   PUT    /environments/:envId/app-key    {key} → {fp, verified}; 400 BAD_KEY;
- *                                          409 APP_KEY_MISMATCH when the app runs with another key
+ *                                          409 APP_KEY_MISMATCH | APP_KEY_UNVERIFIED | APP_KEY_IMMUTABLE
+ *                                          (services/hub/shared/app-key-check.ts, ruling P6-7)
  *
  * Refusals are `{statusCode, error, message, code}` with a plain sentence. Answers never carry a
  * token after the one that made or rotated it, an app key, a database connection or the
@@ -57,8 +61,6 @@ import { poolMaxOf, type SharedTenantRow, tenantsOf } from '../services/hub/shar
 
 const SHARED = 'nivaro_hub_shared_deployments'
 const ENVS = 'nivaro_hub_environments'
-const APPS = 'nivaro_hub_apps'
-const PLACEMENTS = 'nivaro_hub_placements'
 
 /** How long a deployment's link status is reused. */
 export const SHARED_STATUS_TTL_S = 30
@@ -75,9 +77,8 @@ const PATCHABLE = [
   'settings'
 ] as const
 
-/** Sentence for an environment whose app key the Hub does not know (preflight R9). */
-export const APP_KEY_UNKNOWN_MESSAGE =
-  "The Hub does not know this app's encryption key. Enter it on the environment (the app's ENCRYPTION_KEY, 64 hex characters). Apps created through GitLab always need this: the Hub never kept their key."
+/** Re-exported for callers of the routes module; the sentence lives with the app-key check. */
+export { APP_KEY_UNKNOWN_MESSAGE }
 
 // ─── token rotation on a Docker shared deployment (preflight R7) ───────────────────────────
 
@@ -264,106 +265,6 @@ async function previousTokenUntil(id: number): Promise<string | null> {
         : new Date(String(v))
   if (Number.isNaN(d.getTime()) || d.getTime() <= Date.now()) return null
   return d.toISOString()
-}
-
-// ─── app keys ──────────────────────────────────────────────────────────────────────────────
-
-interface EnvKeyRow {
-  id: number
-  app_id: number
-  base_url: string
-  placement_id: number | null
-  hub_token: string | null
-  encryption_key: string | null
-  encryption_key_fp: string | null
-}
-
-async function readEnv(envId: number): Promise<EnvKeyRow | null> {
-  const row = (await db(ENVS)
-    .where({ id: envId })
-    .first(
-      'id',
-      'app_id',
-      'base_url',
-      'placement_id',
-      'hub_token',
-      'encryption_key',
-      'encryption_key_fp'
-    )) as Record<string, unknown> | undefined
-  if (!row) return null
-  return {
-    id: Number(row.id),
-    app_id: Number(row.app_id),
-    base_url: String(row.base_url ?? ''),
-    placement_id: row.placement_id == null ? null : Number(row.placement_id),
-    hub_token: (row.hub_token as string | null) ?? null,
-    encryption_key: (row.encryption_key as string | null) ?? null,
-    encryption_key_fp: (row.encryption_key_fp as string | null) ?? null
-  }
-}
-
-async function stackKeyFp(envId: number): Promise<string | null> {
-  try {
-    const k = openStackSecrets(await readStackSettings(envId)).ENCRYPTION_KEY
-    return k && APP_KEY_RE.test(k) ? keyFingerprint(k.toLowerCase()) : null
-  } catch {
-    return null
-  }
-}
-
-type KeyEvidence =
-  | { source: 'stack' | 'shared' | 'hub-link'; fp: string | null }
-  | { source: null; code: string }
-
-/**
- * Which key does the environment really run with? The Docker stack settings secret first (what
- * the Hub deploys it with), else the shared deployment it is placed on (the key in the Hub's list
- * for its tenant), else its hub link (`shared-readiness`, Task 9). `source: null` = cannot tell.
- */
-async function runningKeyFp(env: EnvKeyRow): Promise<KeyEvidence> {
-  const stack = await stackKeyFp(env.id)
-  if (stack) return { source: 'stack', fp: stack }
-  if (env.placement_id !== null) {
-    const p = await db(PLACEMENTS).where({ id: env.placement_id }).first('shared_deployment_id')
-    if (p?.shared_deployment_id != null) {
-      const shared = await getShared(Number(p.shared_deployment_id))
-      const app = await db(APPS).where({ id: env.app_id }).first('key')
-      if (shared && app) {
-        try {
-          const st = await deploymentClient(shared).appStatus(
-            tenantIdFor({ key: String(app.key) }, { id: env.id })
-          )
-          return { source: 'shared', fp: st.key_fp }
-        } catch (err) {
-          return {
-            source: null,
-            code: err instanceof DeploymentLinkError ? err.code : 'LINK_UNREACHABLE'
-          }
-        }
-      }
-    }
-  }
-  if (env.hub_token) {
-    let token: string | null = null
-    try {
-      token = openSecret(env.hub_token)
-    } catch {
-      token = null
-    }
-    if (!token) return { source: null, code: 'HUB_SECRET_UNREADABLE' }
-    const r = await linkedKeyFingerprint(env, token)
-    return r.ok ? { source: 'hub-link', fp: r.fp } : { source: null, code: r.code }
-  }
-  return { source: null, code: 'NO_LINK' }
-}
-
-const MISMATCH_TEXT: Record<'stack' | 'shared' | 'hub-link', string> = {
-  stack:
-    "This environment's Docker stack settings hold a different encryption key. Values the app sealed would not open with this one.",
-  shared:
-    'The shared deployment serves this app with a different encryption key. Values the app sealed would not open with this one.',
-  'hub-link':
-    'The app reports a different encryption key over its hub link. Values it sealed would not open with this one.'
 }
 
 // ─── routes ────────────────────────────────────────────────────────────────────────────────
@@ -580,7 +481,7 @@ export function hubSharedRoutes(app: FastifyInstance): void {
 
   app.get('/environments/:envId/app-key', { preHandler: requireAdmin }, async (req, reply) => {
     const envId = idParam((req.params as { envId: string }).envId)
-    const env = envId === null ? null : await readEnv(envId)
+    const env = envId === null ? null : await readKeyEnv(envId)
     if (envId === null || !env) return notFound(reply, 'environment')
     const key = await openAppKey(envId)
     if (!key)
@@ -607,7 +508,7 @@ export function hubSharedRoutes(app: FastifyInstance): void {
 
   app.put('/environments/:envId/app-key', { preHandler: requireAdmin }, async (req, reply) => {
     const envId = idParam((req.params as { envId: string }).envId)
-    const env = envId === null ? null : await readEnv(envId)
+    const env = envId === null ? null : await readKeyEnv(envId)
     if (envId === null || !env) return notFound(reply, 'environment')
     const raw = body(req).key
     const key = typeof raw === 'string' ? raw.trim() : ''
@@ -618,11 +519,17 @@ export function hubSharedRoutes(app: FastifyInstance): void {
         'BAD_KEY',
         "The app's encryption key is 64 hex characters (its ENCRYPTION_KEY)."
       )
-    const fp = keyFingerprint(key.toLowerCase())
-    const running = await runningKeyFp(env)
-    if (running.source !== null && running.fp !== null && running.fp !== fp)
-      return refuse(reply, 409, 'APP_KEY_MISMATCH', MISMATCH_TEXT[running.source])
     return guarded(reply, async () => {
+      const d = await decideAppKey(env, key)
+      if (d.action === 'unchanged') return { data: { fp: d.fp, changed: false } }
+      if (d.action === 'refuse')
+        return reply.code(409).send({
+          statusCode: 409,
+          error: d.message,
+          message: d.message,
+          code: d.code,
+          ...(d.reason ? { reason: d.reason } : {})
+        })
       const saved = await setAppKey(envId, key)
       await logActivity({
         action: 'hub-app-key',
@@ -634,9 +541,10 @@ export function hubSharedRoutes(app: FastifyInstance): void {
       return {
         data: {
           fp: saved.fp,
+          changed: true,
           // Where the key was checked against what the app runs with; null = it could not be.
-          verified: running.source !== null && running.fp !== null ? running.source : null,
-          ...(running.source === null ? { unverified_code: running.code } : {})
+          verified: d.verified,
+          ...(d.unverified_code ? { unverified_code: d.unverified_code } : {})
         }
       }
     })

@@ -668,7 +668,11 @@ describe('app key', () => {
       payload: { key: APP_KEY }
     })
     expect(res.statusCode).toBe(200)
-    expect(res.json().data).toEqual({ fp: keyFingerprint(APP_KEY), verified: 'hub-link' })
+    expect(res.json().data).toEqual({
+      fp: keyFingerprint(APP_KEY),
+      changed: true,
+      verified: 'hub-link'
+    })
     const row = await db('nivaro_hub_environments').where({ id: 9 }).first()
     expect(row.encryption_key).not.toContain(APP_KEY)
     expect(openSecret(row.encryption_key)).toBe(APP_KEY)
@@ -744,7 +748,7 @@ describe('app key', () => {
     expect(res.statusCode).toBe(409)
     expect(res.json().code).toBe('APP_KEY_MISMATCH')
     expect(res.json().message).toMatch(/stack settings/)
-    // The same key as the stack's → stored, verified against the stack.
+    // The same key as the stack's → the Hub already holds it: nothing to change.
     m.stackKey = APP_KEY
     const same = await app.inject({
       method: 'PUT',
@@ -752,7 +756,8 @@ describe('app key', () => {
       headers: asAdmin,
       payload: { key: APP_KEY }
     })
-    expect(same.json().data).toEqual({ fp: keyFingerprint(APP_KEY), verified: 'stack' })
+    expect(same.statusCode).toBe(200)
+    expect(same.json().data).toEqual({ fp: keyFingerprint(APP_KEY), changed: false })
   })
 
   it('a stack-settings key the Hub knows reads as known, source stack', async () => {
@@ -783,9 +788,120 @@ describe('app key', () => {
     expect(res.statusCode).toBe(200)
     expect(res.json().data).toEqual({
       fp: keyFingerprint(APP_KEY),
+      changed: true,
       verified: null,
       unverified_code: 'HUB_LINK_MISSING'
     })
+  })
+
+  async function putKey(envId: number, key: string) {
+    return app.inject({
+      method: 'PUT',
+      url: `/api/hub/environments/${envId}/app-key`,
+      headers: asAdmin,
+      payload: { key }
+    })
+  }
+  async function storedEntry(envId: number) {
+    const row = await db('nivaro_hub_environments').where({ id: envId }).first()
+    return { key: row.encryption_key ? openSecret(row.encryption_key) : null, row }
+  }
+
+  it('the same key re-sent → 200 no-op, nothing written, nothing asked', async () => {
+    await dedicatedEnv(9)
+    m.linkedFp.mockResolvedValue({ ok: true, fp: keyFingerprint(APP_KEY) })
+    expect((await putKey(9, APP_KEY)).statusCode).toBe(200)
+    const before = await storedEntry(9)
+    m.linkedFp.mockClear()
+    const again = await putKey(9, APP_KEY.toUpperCase())
+    expect(again.statusCode).toBe(200)
+    expect(again.json().data).toEqual({ fp: keyFingerprint(APP_KEY), changed: false })
+    expect(m.linkedFp).not.toHaveBeenCalled()
+    expect((await storedEntry(9)).row.encryption_key).toBe(before.row.encryption_key)
+  })
+
+  it('replacing a stored key with a positive match from the app → saved', async () => {
+    await dedicatedEnv(9)
+    m.linkedFp.mockResolvedValue({ ok: true, fp: keyFingerprint(APP_KEY) })
+    await putKey(9, APP_KEY)
+    m.linkedFp.mockResolvedValue({ ok: true, fp: keyFingerprint(OTHER_KEY) })
+    const res = await putKey(9, OTHER_KEY)
+    expect(res.statusCode).toBe(200)
+    expect(res.json().data).toEqual({
+      fp: keyFingerprint(OTHER_KEY),
+      changed: true,
+      verified: 'hub-link'
+    })
+    expect((await storedEntry(9)).key).toBe(OTHER_KEY)
+  })
+
+  it('replacing a stored key the app cannot confirm → 409 APP_KEY_UNVERIFIED, nothing saved', async () => {
+    await dedicatedEnv(9)
+    m.linkedFp.mockResolvedValue({ ok: true, fp: keyFingerprint(APP_KEY) })
+    await putKey(9, APP_KEY)
+    for (const answer of [
+      { ok: false, code: 'UNREACHABLE' },
+      { ok: false, code: 'HUB_LINK_MISSING' },
+      { ok: true, fp: null }
+    ]) {
+      m.linkedFp.mockResolvedValue(answer)
+      const res = await putKey(9, OTHER_KEY)
+      expect(res.statusCode).toBe(409)
+      expect(res.json().code).toBe('APP_KEY_UNVERIFIED')
+      expect(res.body).not.toContain(OTHER_KEY)
+      expect((await storedEntry(9)).key).toBe(APP_KEY)
+    }
+    // The app still reporting the old key → mismatch.
+    m.linkedFp.mockResolvedValue({ ok: true, fp: keyFingerprint(APP_KEY) })
+    expect((await putKey(9, OTHER_KEY)).json().code).toBe('APP_KEY_MISMATCH')
+    expect((await storedEntry(9)).key).toBe(APP_KEY)
+  })
+
+  it('a dedicated env with no link and a stored key → 409 APP_KEY_UNVERIFIED', async () => {
+    await dedicatedEnv(9, null)
+    await db('nivaro_hub_environments')
+      .where({ id: 9 })
+      .update({ encryption_key: sealSecret(APP_KEY), encryption_key_fp: keyFingerprint(APP_KEY) })
+    const res = await putKey(9, OTHER_KEY)
+    expect(res.statusCode).toBe(409)
+    expect(res.json().code).toBe('APP_KEY_UNVERIFIED')
+  })
+
+  it('a shared placement with a stored key → any different key 409 APP_KEY_IMMUTABLE', async () => {
+    const made = await create()
+    await placeEnv(made.row.id, 7)
+    await db('nivaro_hub_environments')
+      .where({ id: 7 })
+      .update({ encryption_key: sealSecret(APP_KEY), encryption_key_fp: keyFingerprint(APP_KEY) })
+    for (const st of [
+      () => m.appStatus.mockRejectedValue(new DeploymentLinkError('LINK_UNREACHABLE')),
+      () => m.appStatus.mockResolvedValue({ key_fp: keyFingerprint(OTHER_KEY) })
+    ]) {
+      st()
+      const res = await putKey(7, OTHER_KEY)
+      expect(res.statusCode).toBe(409)
+      expect(res.json().code).toBe('APP_KEY_IMMUTABLE')
+      expect((await storedEntry(7)).key).toBe(APP_KEY)
+    }
+    expect((await putKey(7, APP_KEY)).json().data).toEqual({
+      fp: keyFingerprint(APP_KEY),
+      changed: false
+    })
+  })
+
+  it('a shared placement with no stored key and the link down → stored, unverified', async () => {
+    const made = await create()
+    await placeEnv(made.row.id, 7)
+    m.appStatus.mockRejectedValue(new DeploymentLinkError('LINK_UNREACHABLE'))
+    const res = await putKey(7, APP_KEY)
+    expect(res.statusCode).toBe(200)
+    expect(res.json().data).toEqual({
+      fp: keyFingerprint(APP_KEY),
+      changed: true,
+      verified: null,
+      unverified_code: 'LINK_UNREACHABLE'
+    })
+    expect((await storedEntry(7)).key).toBe(APP_KEY)
   })
 
   it('an unknown key answers APP_KEY_UNKNOWN with the plain sentence', async () => {
