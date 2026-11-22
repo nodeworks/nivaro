@@ -976,13 +976,17 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
         log(`removed the target stack ${to.stack} (its volumes are kept)`)
         return
       }
-      // A GitLab target cannot be removed by the Hub: retire it so it runs no jobs.
+      // A GitLab target cannot be removed by the Hub: retire it so it serves and runs nothing.
+      // R3-I-1: a retire that fails is never "stopped" — the caller decides (a release undo halts).
       try {
         await (await targetLink()).retire(move.id)
-        log('the GitLab target is retired (its pipeline keeps the stack; stop it there)', 'warn')
       } catch (err) {
-        log(`the GitLab target could not be retired (${codeOf(err)}); stop it in GitLab`, 'warn')
+        throw new MoveStepError(
+          'TARGET_NOT_STOPPED',
+          `The GitLab target could not be retired (${codeOf(err)}); stop its stack by hand.`
+        )
       }
+      log('the GitLab target is retired (its pipeline keeps the stack; stop it there)', 'warn')
     },
 
     async route(a) {

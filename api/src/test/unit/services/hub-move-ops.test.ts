@@ -741,3 +741,46 @@ describe('deployTarget on GitLab (P6-20: boot maintenance rides the deploy job)'
     ])
   })
 })
+
+describe('removeTarget on GitLab (R3-I-1)', () => {
+  it('a retire that fails is reported (TARGET_NOT_STOPPED), never taken as stopped', async () => {
+    const w = await setup(true)
+    TENANT = w.tenant
+    await db('nivaro_hub_environments')
+      .where({ id: w.envId })
+      .update({
+        hub_token: (await import('../../../services/hub/secrets.js')).sealSecret('t'.repeat(40))
+      })
+    const steps = {
+      ...w.move.steps,
+      addresses: { ...w.move.steps.addresses, target_link_base: 'https://acme-direct.example.com' }
+    }
+    // The move's target is the GitLab placement of this world (setup(false) placement pd).
+    const driver = await insertId('nivaro_hub_drivers', {
+      kind: 'gitlab',
+      name: `glr${w.envId}`,
+      config: JSON.stringify({ api: 'https://gitlab.example.com', project: 'a/b' })
+    })
+    const pd = await insertId('nivaro_hub_placements', {
+      kind: 'dedicated',
+      driver_id: driver,
+      target: '{}'
+    })
+    await db('nivaro_hub_moves')
+      .where({ id: w.move.id })
+      .update({ to_placement_id: pd, steps: JSON.stringify(steps) })
+    const move = (await readMove(w.move.id)) as NonNullable<Awaited<ReturnType<typeof readMove>>>
+    const retire = vi.fn(async () => {
+      throw new Error('unreachable')
+    })
+    const ops = defaultMoveOps(move, w.plan, {
+      client: clients().factory,
+      link: () => ({ retire }) as never,
+      sleep,
+      now
+    })
+    const err = await ops.removeTarget().catch((e) => e)
+    expect(retire).toHaveBeenCalledWith(w.move.id)
+    expect(err?.code).toBe('TARGET_NOT_STOPPED')
+  })
+})
