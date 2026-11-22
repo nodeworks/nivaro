@@ -330,6 +330,10 @@ const CODE_COPY: Record<string, { title: string; hint?: string }> = {
     title: 'The Hub has no record of the build this version deployed, so it cannot redeploy it.',
     hint: 'Roll back only to a version the Hub deployed here itself. Nothing was changed.'
   },
+  REDEPLOY_REFUSED_BY_GITLAB: {
+    title: 'GitLab refused to rerun the deploy job',
+    hint: 'The environment runs an older build (after a rollback), so the Hub reran this version\'s deploy job, and GitLab refused. Check the project\'s "Prevent outdated deployment jobs" setting, or run the deploy job by hand.'
+  },
   ROLLBACK_REFUSED_BY_GITLAB: {
     title: 'GitLab refused to rerun the earlier deploy job',
     hint: 'The project\'s "Prevent outdated deployment jobs" setting refuses an older deploy job. Allow job retries for rollback deployments in GitLab\'s CI/CD settings, or roll back by hand.'

@@ -8,6 +8,7 @@ import { hubDeploysKeys } from './deploys.js'
 import { DriverMisconfiguredError, repositoryIdentity } from './drivers.js'
 import * as gitlab from './gitlab-write.js'
 import {
+  currentVersionReader,
   gatherPlanInput,
   RERUNNABLE_JOB,
   readServedField,
@@ -165,6 +166,12 @@ export interface ExecuteDeps {
   stopRequested?: () => boolean | Promise<boolean>
   /** Asked at every step boundary first; true = this run no longer holds its lock. */
   lockLost?: () => boolean | Promise<boolean>
+  /**
+   * What the environment runs now for a step, read the way the plan reads it: the API's version
+   * (the status reader), a frontend's served commit (its check address). null = cannot tell.
+   * Asked when a held promote finds its deploy job already succeeded (P30).
+   */
+  currentVersion?: (s: PromotionStep) => Promise<string | null>
 }
 
 export interface RunOutcome {
@@ -214,6 +221,14 @@ const short = (sha: string | null | undefined) => (sha ? sha.slice(0, 8) : '?')
 
 /** GitLab's failure_reason for a deploy job dropped by "Prevent outdated deployment jobs". */
 const OUTDATED_DEPLOYMENT = 'forward_deployment_failure'
+
+/** A GitLab refusal's own code by HTTP status (gitlab-write's call() mapping). */
+function gitlabCodeFor(status: number | null): string {
+  if (status === 401) return 'GITLAB_UNAUTHORIZED'
+  if (status === 403) return 'GITLAB_FORBIDDEN'
+  if (status === 404) return 'GITLAB_NOT_FOUND'
+  return 'GITLAB_REFUSED'
+}
 
 /** The refusal code of a rollback whose build cannot be redeployed. */
 const rollbackNoBuild = (s: PromotionStep) =>
@@ -591,17 +606,40 @@ export async function executePlan(
     await log(
       `${label}: redeploying ${s.component}'s build ${short(full)} — retrying ${s.deployJob} of pipeline ${pipelineId}`
     )
+    await retryDeployJob(c, s, job.id, pipelineId, 'ROLLBACK_REFUSED_BY_GITLAB')
+    return { sha: full, pipelineId }
+  }
+
+  /**
+   * Reruns a finished deploy job and waits for it. GitLab refusing the rerun — a 403 from the
+   * retry, or the new job dropped as an outdated deployment ("Prevent outdated deployment jobs")
+   * — is `refusedCode`; any other answer keeps its own GitLab code (unauthorized, unreachable…).
+   */
+  const retryDeployJob = async (
+    c: GitCtx,
+    s: PromotionStep,
+    jobId: number,
+    pipelineId: number,
+    refusedCode: 'ROLLBACK_REFUSED_BY_GITLAB' | 'REDEPLOY_REFUSED_BY_GITLAB'
+  ): Promise<void> => {
+    const label = `deploy ${s.component}`
     const refusedByGitlab = (why: string) =>
       new PromotionError(
-        'ROLLBACK_REFUSED_BY_GITLAB',
-        `${s.component}: GitLab refused to rerun ${s.deployJob} of pipeline ${pipelineId} (${why}). The project's "Prevent outdated deployment jobs" setting refuses an older deploy job — allow job retries for rollback deployments in GitLab, or roll back by hand`
+        refusedCode,
+        `${s.component}: GitLab refused to rerun ${s.deployJob} of pipeline ${pipelineId} (${why}). The project's "Prevent outdated deployment jobs" setting refuses an older deploy job — allow job retries for rollback deployments in GitLab, or deploy by hand`
       )
     let retried: gitlab.HubJob
     try {
-      retried = await ops.retryJob(c, job.id)
+      retried = await ops.retryJob(c, jobId)
     } catch (err) {
-      if (err instanceof gitlab.GitlabWriteError && err.code === 'JOB_RETRY_REFUSED')
-        throw refusedByGitlab(`HTTP ${err.status ?? 'error'}`)
+      if (err instanceof gitlab.GitlabWriteError && err.code === 'JOB_RETRY_REFUSED') {
+        if (err.status === 403) throw refusedByGitlab('HTTP 403')
+        // Not that setting: keep GitLab's own code for the answer.
+        throw new gitlab.GitlabWriteError(gitlabCodeFor(err.status), err.message, {
+          status: err.status,
+          step: err.step
+        })
+      }
       throw err
     }
     const done = await ops.waitJob(c, retried.id, {
@@ -621,7 +659,6 @@ export async function executePlan(
         { step: 'retryJob', webUrl: done.web_url || undefined }
       )
     await log(`${label}: ${s.deployJob} passed${done.web_url ? ` (${done.web_url})` : ''}`)
-    return { sha: full, pipelineId }
   }
 
   const deploy = async (s: PromotionStep, p: Pushed): Promise<Deployed> => {
@@ -704,6 +741,26 @@ export async function executePlan(
       repeat = true
     }
     if (!res) throw new PromotionError('DEPLOY_JOB_UNEXPECTED', `${s.deployJob} never ran`)
+    // P30: the branch already held this commit and its deploy job already succeeded — but a
+    // rollback since redeployed an older build without moving the branch. When the environment
+    // does not run what this step promotes, the job is rerun (as a rollback reruns one).
+    if (deps.currentVersion && seen.how === 'already' && p.held && !p.merged && seen.pipelineId) {
+      // null = cannot tell: rerun (a redeploy of the same build is safe; reporting success
+      // without knowing is not).
+      const now = await deps.currentVersion(s).catch(() => null)
+      const same = (a: string, b: string) =>
+        a === b || (a.length >= 7 && b.length >= 7 && (a.startsWith(b) || b.startsWith(a)))
+      const runs =
+        now != null && (s.kind === 'api' ? now === s.want : same(now, p.sha) || same(now, s.want))
+      if (!runs) {
+        if (await stopped()) throw aborted()
+        await log(
+          `${label}: ${ctx.targetKey} runs ${now ?? 'an unknown version'}, not what this promotes — rerunning ${s.deployJob} of pipeline ${seen.pipelineId}`
+        )
+        await retryDeployJob(c, s, res.job.id, seen.pipelineId, 'REDEPLOY_REFUSED_BY_GITLAB')
+        return { sha: p.sha, pipelineId: seen.pipelineId }
+      }
+    }
     const url = res.job.web_url ? ` (${res.job.web_url})` : ''
     if (seen.how === 'auto')
       await log(`${label}: ${s.deployJob} ran automatically and passed${url}`)
@@ -1071,6 +1128,7 @@ async function runPromotion(o: {
         },
         deps: {
           ...deps.execute,
+          currentVersion: deps.execute?.currentVersion ?? currentVersionReader(envId),
           lockLost: async () => {
             if (!entry.lockLost && !(await deps.lock.renew(envId, o.token))) lostLock()
             await heartbeat()

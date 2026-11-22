@@ -158,6 +158,13 @@ function startDeps(over: Partial<StartDeps> = {}) {
         clock.t += ms
       },
       now: () => clock.t,
+      // What production runs, read as the plan reads it (status reader / check address).
+      currentVersion: async (s) =>
+        s.kind === 'api'
+          ? prodApiVersion()
+          : s.verifyUrl
+            ? (await gather.readServedField(s.verifyUrl, s.verifyField)).value
+            : null,
       ...over.execute
     }
   }
@@ -378,6 +385,58 @@ describe('hub promotions end to end (merge-commit repos, automatic deploys)', ()
       'deploy api: started',
       'verify: started'
     ])
+  })
+
+  it('P30: API rollback, then promote the newer version again — its deploy job is rerun', async () => {
+    await db('nivaro_hub_components').where({ kind: 'frontend' }).del()
+    release('0.3.10')
+    expect((await promote('promote', '0.3.10')).row.status).toBe('success')
+    release('0.3.11')
+    expect((await promote('promote', '0.3.11')).row.status).toBe('success')
+    expect((await promote('rollback', '0.3.10')).row.status).toBe('success')
+    expect(prodApiVersion()).toBe('0.3.10')
+    const head = gl.projects.get('efp/deploy')?.branches.get('production')
+    const pipes = prodPipelines('efp/deploy')
+    const again = await promote('promote', '0.3.11')
+    expect(again.row).toMatchObject({ status: 'success', step: 'verify', error: null })
+    expect(prodApiVersion()).toBe('0.3.11')
+    // The branch already held 0.3.11 and its deploy job had passed: rerun, not "not run again".
+    expect(gl.retries).toHaveLength(2)
+    expect(
+      again.lines.some((l) => l.includes('production runs 0.3.10, not what this promotes'))
+    ).toBe(true)
+    expect(gl.projects.get('efp/deploy')?.branches.get('production')).toBe(head)
+    expect(prodPipelines('efp/deploy')).toBe(pipes)
+  })
+
+  it('P30: frontend rollback, then promote again — the portal build is rerun too', async () => {
+    release('0.3.10')
+    await promote('promote', '0.3.10')
+    const portal10 = prodPortal()
+    release('0.3.11')
+    await promote('promote', '0.3.11')
+    const portal11 = prodPortal()
+    expect((await promote('rollback', '0.3.10')).row.status).toBe('success')
+    expect(prodPortal()).toBe(portal10)
+    const again = await promote('promote', '0.3.11')
+    expect(again.row).toMatchObject({ status: 'success', step: 'verify', error: null })
+    expect(prodApiVersion()).toBe('0.3.11')
+    expect(prodPortal()).toBe(portal11)
+    // Two reruns for the rollback, two for the promotion; no new merge or pipeline.
+    expect(gl.retries).toHaveLength(4)
+    expect(again.lines.filter((l) => l.includes('not what this promotes'))).toHaveLength(2)
+  })
+
+  it('P30: a held promote whose environment already runs it does not rerun', async () => {
+    release('0.3.10')
+    await promote('promote', '0.3.10')
+    // Same version, frontend stopped earlier → finishing: here simply nothing new; the planner
+    // refuses ALREADY_RUNS as before.
+    const plan = buildPromotionPlan(
+      await gather.gatherPlanInput(2, { kind: 'promote', version: '0.3.10' }, gatherDeps())
+    )
+    expect(plan.blockers.map((b) => b.code)).toEqual(['ALREADY_RUNS'])
+    expect(gl.retries).toHaveLength(0)
   })
 
   it('B2: a rollback whose frontend build is gone is refused before the API moves', async () => {

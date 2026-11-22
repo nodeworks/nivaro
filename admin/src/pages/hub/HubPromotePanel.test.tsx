@@ -531,7 +531,8 @@ describe('promotion copy', () => {
       'DRIVER_MISCONFIGURED',
       'DRIVER_CHANGED',
       'ROLLBACK_NOT_RECORDED',
-      'ROLLBACK_REFUSED_BY_GITLAB'
+      'ROLLBACK_REFUSED_BY_GITLAB',
+      'REDEPLOY_REFUSED_BY_GITLAB'
     ])
       expect(refusal(code), code).not.toBe('fallback')
     expect(refusal('ROLLBACK_REFUSED_BY_GITLAB')).toBe(

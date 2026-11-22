@@ -537,6 +537,53 @@ describe('executePlan', () => {
     expect(w.gl.calls.some((c) => c.path === '/merge_requests')).toBe(false)
   })
 
+  it('P30: a held promote whose deploy job already passed reruns it only when the environment runs something else', async () => {
+    const heldWorld = () => {
+      const w = use(world())
+      // Production holds the release commit and its pin; that head's pipeline already deployed.
+      w.gl.branch('efp/deploy', 'production', w.apiSource)
+      const head = w.gl.commit('efp/deploy', 'production', 'pin', {
+        '.docker/nivaro-version': `0.3.10\n${DIGEST}\n${SLIM}\n`
+      })
+      const pl = w.gl.pipeline('efp/deploy', 'production', head, [
+        { name: 'build_extension', statuses: ['success'] },
+        { name: 'deploy_production', statuses: ['success'] }
+      ])
+      w.gl.served.set(API_URL, [{ version: '0.3.10' }])
+      const plan = buildPromotionPlan(
+        input(w, {
+          components: [apiComp],
+          sourceOnTarget: { 1: true },
+          pinOnTarget: { 1: `0.3.10\n${DIGEST}\n${SLIM}\n` }
+        })
+      )
+      return { w, pl, plan }
+    }
+    // The environment runs what this promotes: not run again.
+    const a = heldWorld()
+    const same = await execute(a.w, a.plan, { deps: { currentVersion: async () => '0.3.10' } })
+    expect(same.outcome.status).toBe('success')
+    expect(a.w.gl.retries).toEqual([])
+    // A rollback left it on 0.3.9: the passed job is rerun, then verified.
+    const b = heldWorld()
+    const asked: string[] = []
+    const back = await execute(b.w, b.plan, {
+      deps: {
+        currentVersion: async (st) => {
+          asked.push(st.component)
+          return '0.3.9'
+        }
+      }
+    })
+    expect(back.outcome).toEqual({ status: 'success', step: 'verify', error: null })
+    expect(asked).toEqual(['api'])
+    expect(b.w.gl.retries).toEqual([{ from: b.pl.jobs[1].id, to: expect.any(Number) }])
+    // It cannot tell what runs: rerun too.
+    const c = heldWorld()
+    await execute(c.w, c.plan, { deps: { currentVersion: async () => null } })
+    expect(c.w.gl.retries).toHaveLength(1)
+  })
+
   it('API conflict: a release commit that does not merge onto production fails at push, production untouched', async () => {
     const w = use(world())
     // Production and main changed the same file differently since they last met.

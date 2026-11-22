@@ -25,7 +25,8 @@ import type {
   HubDeployKind,
   HubEnvironmentRow,
   PlanDriver,
-  PlanInput
+  PlanInput,
+  PromotionStep
 } from './promote-types.js'
 import { hubImage, imageDigest } from './registry.js'
 import {
@@ -353,6 +354,22 @@ export async function gitlabDeployedVersions(
 /** `nivaro <version>` at the END of a commit subject (0.3.1 never matches a 0.3.10 commit). */
 export function sourceSubjectRe(version: string): RegExp {
   return new RegExp(`nivaro ${escapeRe(version)}$`)
+}
+
+/**
+ * What an environment runs now for one step, read as the plan reads it: the API's version from
+ * the status reader (fresh), a frontend's served commit from its check address. null = cannot
+ * tell. The runner asks it when a held promote finds its deploy job already succeeded (P30).
+ */
+export function currentVersionReader(envId: number): (s: PromotionStep) => Promise<string | null> {
+  return async (s) => {
+    if (s.kind === 'frontend')
+      return s.verifyUrl ? (await readServedField(s.verifyUrl, s.verifyField)).value : null
+    const row = (await db(ENVS).where({ id: envId }).first()) as Record<string, unknown> | undefined
+    if (!row) return null
+    return (await readEnvironmentStatus(statusTarget(row), { fresh: true, redis: appRedis() }))
+      .version
+  }
 }
 
 function statusTarget(r: Record<string, unknown>): HubStatusTarget {
