@@ -45,6 +45,7 @@ import {
   type MoveFilesSummary,
   type MoveStatus,
   type MoveSteps,
+  mergeSteps,
   OPEN_MOVE_STATUSES,
   openMoveOf,
   patchMove,
@@ -662,11 +663,13 @@ async function boundary(ctx: Ctx, allowCancel = true): Promise<void> {
  * taken from the stored one.
  */
 async function saveSteps(ctx: Ctx, steps: MoveSteps, extra: Partial<{ step: MoveStepKey }> = {}) {
-  const stored = (await readMove(ctx.moveId))?.steps
-  if (stored)
+  // R3-M-1: one atomic merge — the run's list wins, a key it lacks is kept from the stored one.
+  await mergeSteps(ctx.moveId, (stored) => {
     for (const [k, v] of Object.entries(stored))
       if (k !== 'list' && !(k in steps)) (steps as unknown as Record<string, unknown>)[k] = v
-  await patchMove(ctx.moveId, { steps, ...extra })
+    return steps
+  })
+  if (extra.step !== undefined) await patchMove(ctx.moveId, { step: extra.step })
 }
 
 async function forward(ctx: Ctx): Promise<void> {
@@ -1211,14 +1214,9 @@ async function rollBack(
 ): Promise<void> {
   const move0 = await readMove(ctx.moveId)
   if (!move0) return
-  const steps0 = structuredClone(move0.steps)
-  steps0.phase = 'rollback'
-  steps0.undo_reason = steps0.undo_reason ?? reason
-  const why = steps0.undo_reason
-  await patchMove(ctx.moveId, {
-    steps: steps0,
-    ...(err ? { error: safeLine(`${err.code}: ${err.message}`) } : {})
-  })
+  const why = move0.steps.undo_reason ?? reason
+  await mergeSteps(ctx.moveId, (stored) => ({ ...stored, phase: 'rollback', undo_reason: why }))
+  if (err) await patchMove(ctx.moveId, { error: safeLine(`${err.code}: ${err.message}`) })
   ctx.run.log(why === 'cancelled' ? 'cancelled: rolling back' : 'rolling back', 'warn')
   const move = (await readMove(ctx.moveId)) as HubMoveRow
   const { failed, stopped } = await undoMove({
@@ -1480,9 +1478,11 @@ export async function confirmRoute(
   const ops = e.opsFor(move, move.plan, () => undefined)
   const serving = await ops.verifyName({ version: move.plan.version, shared: sharedKey })
   if (serving) {
-    const steps = structuredClone(move.steps)
-    steps.route_confirmed_at = new Date(e.now()).toISOString()
-    await patchMove(id, { steps }, { status: ['waiting'] })
+    // R3-M-1: only this key, atomically, and only while the move still waits for its route.
+    const at = new Date(e.now()).toISOString()
+    await mergeSteps(id, (stored) => ({ ...stored, route_confirmed_at: at }), {
+      status: ['waiting']
+    })
   }
   await logActivity({
     action: 'hub-move-route-confirm',

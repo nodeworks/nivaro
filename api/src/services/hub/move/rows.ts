@@ -283,3 +283,33 @@ export async function restoreEnvRow(
 export async function restoreExtensionPins(envId: number, raw: string | null): Promise<void> {
   await db(ENVS).where({ id: envId }).update({ extension_pins: raw, updated_at: new Date() })
 }
+
+/**
+ * R3-M-1: an atomic change of a move's step list — read, change, write back only if nobody wrote
+ * it meanwhile (compare-and-set on the stored text, retried). Every writer of the list goes
+ * through here: the runner, confirmRoute, the ops' bookkeeping. `change` gets the stored list
+ * and answers the list to store (or null: write nothing).
+ */
+export async function mergeSteps(
+  id: number,
+  change: (stored: MoveSteps) => MoveSteps | null,
+  where: { status?: readonly MoveStatus[] } = {}
+): Promise<boolean> {
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const row = (await db(MOVES).where({ id }).first('steps', 'status')) as
+      | { steps: unknown; status: string }
+      | undefined
+    if (!row) return false
+    if (where.status && !where.status.includes(row.status as MoveStatus)) return false
+    const raw = row.steps == null ? null : String(row.steps)
+    const stored = moveFromRow({ id, steps: raw }).steps
+    const next = change(structuredClone(stored))
+    if (!next) return false
+    const q = db(MOVES).where({ id })
+    if (raw === null) q.whereNull('steps')
+    else q.where({ steps: raw })
+    if (where.status) q.whereIn('status', where.status as string[])
+    if (Number(await q.update({ steps: JSON.stringify(next) }))) return true
+  }
+  throw new Error('the move step list kept changing under this write')
+}

@@ -1599,3 +1599,25 @@ describe('no secret in an error, job run or activity', () => {
     expect((await readMove(move_id))?.error).toBe('SCHEMA_FAILED: The app could not be migrated.')
   })
 })
+
+describe('step list writes are atomic (R3-M-1)', () => {
+  it('two writers at once both land (compare-and-set, retried); a status guard is kept', async () => {
+    plan = planOf('to_shared')
+    const w = await world('docker')
+    const { move_id } = await start(w, toFor('to_shared', w))
+    await Run.awaitMove(move_id)
+    const { mergeSteps } = await import('../../../services/hub/move/rows.js')
+    await Promise.all([
+      mergeSteps(move_id, (s) => ({ ...s, route_confirmed_at: 'a' })),
+      mergeSteps(move_id, (s) => ({ ...s, waiting_since: 'b' })),
+      mergeSteps(move_id, (s) => ({ ...s, source_db: 'c' }))
+    ])
+    const m = await readMove(move_id)
+    expect(m?.steps).toMatchObject({ route_confirmed_at: 'a', waiting_since: 'b', source_db: 'c' })
+    // Guarded by status: a move that is not waiting is left alone.
+    expect(
+      await mergeSteps(move_id, (s) => ({ ...s, route_confirmed_at: 'z' }), { status: ['waiting'] })
+    ).toBe(false)
+    expect((await readMove(move_id))?.steps.route_confirmed_at).toBe('a')
+  })
+})
