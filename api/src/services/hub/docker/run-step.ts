@@ -512,6 +512,8 @@ export function defaultDockerOps(deps: DockerOpsDeps = {}): DockerStepOps {
     const where = urlForLog(url)
 
     const manual = driver?.kind === 'docker' && driver.config.dns_mode === 'manual'
+    /** The status before this deploy: an active environment served its name. */
+    const wasActive = env.status === 'active'
     /** Manual DNS, the name not there (yet): the stack runs; the environment waits for it. */
     const waitForName = async (why: string) => {
       const host = (() => {
@@ -535,7 +537,7 @@ export function defaultDockerOps(deps: DockerOpsDeps = {}): DockerStepOps {
     if (manual) {
       const look = await nameLook(env, s.want)
       if (look === 'not_resolving') return waitForName('does not resolve yet')
-      if (look === 'not_serving' && env.status !== 'active')
+      if (look === 'not_serving' && !wasActive)
         return waitForName(`does not serve nivaro ${s.want} yet`)
     }
 
@@ -547,8 +549,14 @@ export function defaultDockerOps(deps: DockerOpsDeps = {}): DockerStepOps {
       streak = r.value === s.want ? streak + 1 : 0
       if (streak >= 2) break
       if (i >= VERIFY_POLLS) {
-        // Manual DNS and the name never answered at all: it is not there (yet), not a bad deploy.
-        if (manual && !answered) return waitForName('never answered')
+        // Manual DNS, the name never answered at all and never served before: not there (yet).
+        // A name that served before and went dark after the deploy is a failed deploy (P4-18).
+        if (manual && !answered && !wasActive) return waitForName('never answered')
+        if (!answered && wasActive)
+          throw new PromotionError(
+            'VERIFY_FAILED',
+            `${s.component}: ${where} served before this deploy and has not answered since (${VERIFY_POLLS} reads, last: ${r.error ?? 'no answer'})`
+          )
         throw new PromotionError(
           'VERIFY_FAILED',
           `${s.component}: ${where} never answered version = ${s.want} twice (last: ${r.value ?? r.error ?? 'no answer'})`

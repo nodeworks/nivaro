@@ -666,15 +666,24 @@ describe('docker step — verify', () => {
     expect((await envRow()).status).toBe('active')
   })
 
-  it('manual DNS on an active environment: a name that never answers falls back to waiting_for_name', async () => {
+  it('manual DNS on an active environment: a name gone dark after the deploy fails VERIFY_FAILED', async () => {
     await useDriver(manual)
     const r = await execute({ name: 'not_serving', served: [null] })
-    expect(r.outcome).toEqual({ status: 'success', step: 'verify', error: null })
+    expect(r.outcome).toMatchObject({ status: 'failed', step: 'verify', code: 'VERIFY_FAILED' })
+    expect(r.outcome.error).toMatch(/served before this deploy and has not answered since/)
     expect(r.servedReads).toHaveLength(40)
     expect(r.statusReads).toEqual([])
-    expect((await envRow()).status).toBe('waiting_for_name')
+    expect((await envRow()).status).toBe('active')
   })
 
+  it('manual DNS on a never-active environment whose look served: no answer after falls back to waiting_for_name', async () => {
+    await useDriver(manual)
+    await db('nivaro_hub_environments').where({ id: 2 }).update({ status: 'new' })
+    const r = await execute({ name: 'serving', served: [null] })
+    expect(r.outcome).toEqual({ status: 'success', step: 'verify', error: null })
+    expect(r.servedReads).toHaveLength(40)
+    expect((await envRow()).status).toBe('waiting_for_name')
+  })
   it('the default name look reads through the same reader the step got', async () => {
     await useDriver(manual)
     const k = clock()
