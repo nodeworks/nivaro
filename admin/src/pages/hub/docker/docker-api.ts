@@ -15,7 +15,10 @@ export interface HubAgentHealth {
   api: number
   agent_version: string
   engine_api: string
-  swarm: { manager: boolean; node_id: string }
+  /** nodes: how many nodes the swarm has (absent/null: an older agent or not read). */
+  swarm: { manager: boolean; node_id: string; nodes?: number | null }
+  /** The volume driver stacks get (`local` = one copy per node). */
+  volume_driver?: string
   /** The Nivaro image repositories the agent may run. */
   images: string[]
   /** Host-name suffixes the agent routes (traefik edge). */
@@ -25,6 +28,15 @@ export interface HubAgentHealth {
   extensions_shared: boolean
   redis_bundled: boolean
 }
+
+/** P4-33: a swarm of more than one node where stack volumes are `local` (one copy per node). */
+export const multiNodeLocal = (h: Pick<HubAgentHealth, 'swarm' | 'volume_driver'>): boolean =>
+  typeof h.swarm?.nodes === 'number' &&
+  h.swarm.nodes > 1 &&
+  (h.volume_driver ?? 'local') === 'local'
+
+export const MULTI_NODE_VOLUMES_TEXT =
+  "This swarm has more than one node and stack volumes are local: each node keeps its own uploads and Redis data, and Remove stack deletes only the agent node's copies. Pin the stack to one node, or set a shared volume driver on the agent."
 
 export const dockerKeys: {
   agent: (driverId: number) => DataTag<readonly ['hub', 'docker', 'agent', number], HubAgentHealth>

@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import { BLOCKER_COPY, type HubEnvironment, hubError, hubKeys, hubToast } from '../hub-api'
 import { dangerGhost, ghostButton, StatusChip } from '../hub-parts'
+import { MULTI_NODE_VOLUMES_TEXT } from './docker-api'
 import { StackSettingsEditor } from './StackSettingsEditor'
 import {
   applyStack,
@@ -200,6 +201,11 @@ function StackBody({
         )}
       </div>
 
+      {typeof info.local_volumes_on_nodes === 'number' && info.local_volumes_on_nodes > 1 && (
+        <p role='status' className='m-0 text-[12px] text-amber-700 dark:text-amber-400'>
+          {MULTI_NODE_VOLUMES_TEXT}
+        </p>
+      )}
       {state === 'rolled_back' && (
         <p className='m-0 text-[12px] text-amber-700 dark:text-amber-400'>
           Docker rolled the stack back to the version before, because the new one could not start.

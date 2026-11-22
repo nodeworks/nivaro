@@ -593,6 +593,7 @@ export const hubDockerDocs: DocSection = {
           '`local`',
           'Driver and options for the uploads and Redis volumes, for example an NFS export. `o=bind` (also `rbind` and `remount`) and a `device` that is not an NFS export are refused at start.'
         ],
+
         [
           '`HUB_AGENT_EXTENSIONS_ROOT`, `HUB_AGENT_EXTENSIONS_HOST_ROOT`, `HUB_AGENT_EXTENSIONS_SHARED`',
           'see README',
@@ -883,6 +884,10 @@ export const hubDockerDocs: DocSection = {
     {
       type: 'p',
       text: 'Agent refusals passed through as they are: `HOSTNAME_TAKEN` (another stack routes the name), `SPEC_INVALID` (with the refused fields, each as `field (code)`: `UNKNOWN_FIELD`, `REQUIRED`, `BAD_KEY`, `IMAGE_NOT_ALLOWED`, `IMAGE_NOT_PINNED`, `ENV_FORBIDDEN`, `ENV_NOT_ALLOWED`, `ROLE_BAD`, `REPLICAS_BAD`, `LIMIT_BAD`, `HOSTNAME_NOT_ALLOWED`, `TOO_MANY`, `TOO_LONG`, `PORT_NOT_ALLOWED`, `REDIS_NOT_CONFIGURED`, `EXTENSION_ID_BAD`, `SETTING_INVALID`), `SPEC_MISMATCH` (a restart: the stack does not run the spec sent), `STACK_NAME_INVALID`, `STACK_NOT_FOUND`, `STACK_NOT_HUB`, `STACK_OWNER_MISMATCH`, `EXPECT_INVALID`, `ENGINE_FORBIDDEN` (the agent guard refused an Engine call it built, so nothing reached Docker), `ENGINE_ERROR` (Docker refused a call), `REDIS_NOT_CONFIGURED`, `EXTENSION_INVALID` and `IMAGE_PULL_FAILED`. The Hub turns each into one plain sentence and never shows the agent body text.'
+    },
+    {
+      type: 'warn',
+      text: 'A swarm of more than one node and the default `local` volume driver: `local` volumes are per node, so each node a web, worker or importer task lands on keeps its own uploads, and a Redis task that moves to another node starts empty. Remove stack with its volumes deletes only the agent node’s copies. Pin the stack to one node (a placement constraint on the swarm) or set a shared volume driver (`HUB_AGENT_VOLUME_DRIVER`, `HUB_AGENT_VOLUME_OPTS_FILE`, for example an NFS export). The agent check shows the node count and the volume driver, and the stack panel warns when the swarm has more than one node and the volumes are local. Shared volumes managed by the Hub come in a later phase.'
     },
     { type: 'h2', id: 'hub-docker-remove', text: 'Removing a stack and its volumes' },
     {

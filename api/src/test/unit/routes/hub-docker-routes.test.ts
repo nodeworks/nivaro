@@ -486,7 +486,8 @@ describe('GET /environments/:envId/stack', () => {
       dns_mode: 'automatic',
       name_request: null,
       status: stackStatus(),
-      agent: 'ok'
+      agent: 'ok',
+      local_volumes_on_nodes: null
     })
     expect(m.stack.mock.calls[0].slice(1)).toEqual([STACK, HASH])
     await expectNoSecret(res.body)
@@ -796,6 +797,28 @@ describe('stack settings', () => {
     })
     expect([res.statusCode, res.json().code]).toEqual([400, 'SECRET_IN_SETTINGS'])
     expect(res.body).not.toContain('in-Plain-Settings-999')
+  })
+})
+
+describe('P4-33: local volumes on a swarm of several nodes', () => {
+  const read = async () =>
+    (await call('GET', `/environments/${DOCKER}/stack`, asOwner)).json().data.local_volumes_on_nodes
+  it('the stack read names the node count when volumes are local and nodes > 1', async () => {
+    m.health.mockResolvedValue(
+      health({ swarm: { manager: true, node_id: 'n1', nodes: 3 }, volume_driver: 'local' })
+    )
+    expect(await read()).toBe(3)
+    m.health.mockResolvedValue(health({ swarm: { manager: true, node_id: 'n1', nodes: 1 } }))
+    expect(await read()).toBeNull()
+    m.health.mockResolvedValue(
+      health({ swarm: { manager: true, node_id: 'n1', nodes: 3 }, volume_driver: 'nfs-shared' })
+    )
+    expect(await read()).toBeNull()
+    // An older agent (no node count) or one that does not answer: no warning, the read still works.
+    m.health.mockResolvedValue(health())
+    expect(await read()).toBeNull()
+    m.health.mockRejectedValue(new AgentError('AGENT_UNREACHABLE', 0, 'down'))
+    expect(await read()).toBeNull()
   })
 })
 

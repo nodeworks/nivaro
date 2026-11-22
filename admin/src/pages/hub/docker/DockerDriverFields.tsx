@@ -13,6 +13,8 @@ import {
   type DockerDraft,
   dockerDraftErrors,
   generateAgentToken,
+  MULTI_NODE_VOLUMES_TEXT,
+  multiNodeLocal,
   useAgentCheck
 } from './docker-api'
 
@@ -256,7 +258,16 @@ export function AgentCheck({ driverId, dirty }: { driverId: number; dirty: boole
               value={`${h.publish_ports[0]}–${h.publish_ports[1]}`}
             />
           )}
+          {typeof h.swarm?.nodes === 'number' && (
+            <AgentFact label='Swarm nodes' value={String(h.swarm.nodes)} />
+          )}
+          {h.volume_driver && <AgentFact label='Volume driver' value={h.volume_driver} mono />}
         </dl>
+      )}
+      {h && multiNodeLocal(h) && (
+        <p role='status' className='m-0 text-[12px] text-amber-700 dark:text-amber-400'>
+          {MULTI_NODE_VOLUMES_TEXT}
+        </p>
       )}
     </div>
   )

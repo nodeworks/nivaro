@@ -372,6 +372,7 @@ export function hubDockerRoutes(app: FastifyInstance) {
     const env = environmentFromRow(row)
     let status: StackStatus | null = null
     let agent = 'ok'
+    let localVolumesOnNodes: number | null = null
     if (!target.stackName) agent = 'NO_STACK_NAME'
     else {
       const deployed = await deployedStack(envId, target.stackName)
@@ -384,6 +385,13 @@ export function hubDockerRoutes(app: FastifyInstance) {
         // Ruling P4-21: a stack labelled for another app or environment is not shown here.
         if (read && !ownsStack(read, target)) agent = 'STACK_OWNER_MISMATCH'
         else status = read
+        // P4-33: local volumes on a swarm of several nodes split the stack's data.
+        if (status) {
+          const h = await agentHealth(target.driver).catch(() => null)
+          const nodes = h?.swarm?.nodes
+          if (typeof nodes === 'number' && nodes > 1 && (h?.volume_driver ?? 'local') === 'local')
+            localVolumesOnNodes = nodes
+        }
       } catch (err) {
         const code = err instanceof AgentError ? err.code : null
         agent = code && KNOWN_AGENT_CODES.has(code) ? code : 'AGENT_UNREACHABLE'
@@ -395,7 +403,8 @@ export function hubDockerRoutes(app: FastifyInstance) {
         dns_mode: config.dns_mode,
         name_request: config.dns_mode === 'manual' ? nameRequest(env, config) : null,
         status,
-        agent
+        agent,
+        local_volumes_on_nodes: localVolumesOnNodes
       }
     }
   })

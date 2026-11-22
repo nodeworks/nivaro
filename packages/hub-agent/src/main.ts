@@ -57,7 +57,27 @@ export async function checkEngine(
  * Health only; the stack routes answer 501. `startAgent` uses these unless a
  * caller passes `makeHandlers` — the real entry point (`run`) always does.
  */
-export function baseHandlers(cfg: AgentConfig, facts: EngineFacts): Handlers {
+/** How long a read of the swarm's node count is reused (health is polled). */
+const NODES_TTL_MS = 30_000
+
+export function baseHandlers(cfg: AgentConfig, facts: EngineFacts, engine?: Engine): Handlers {
+  // P4-33: the node count, read live from GET /info (no new Engine path), cached briefly.
+  // null = not read. With more than one node, `local` volumes are per node.
+  let nodes: { at: number; n: number | null } | null = null
+  const swarmNodes = async (): Promise<number | null> => {
+    if (!engine) return null
+    if (nodes && Date.now() - nodes.at < NODES_TTL_MS) return nodes.n
+    let n: number | null = null
+    try {
+      const info = await engine.call<{ Swarm?: { Nodes?: unknown } }>('GET', '/info')
+      const v = info.status === 200 ? info.body?.Swarm?.Nodes : null
+      n = typeof v === 'number' && Number.isInteger(v) && v >= 0 ? v : null
+    } catch {
+      n = null
+    }
+    nodes = { at: Date.now(), n }
+    return n
+  }
   const notYet = async (): Promise<HandlerResult> => ({
     status: 501,
     body: { error: 'Not implemented', code: 'NOT_IMPLEMENTED' }
@@ -69,7 +89,8 @@ export function baseHandlers(cfg: AgentConfig, facts: EngineFacts): Handlers {
         api: 1,
         agent_version: AGENT_VERSION,
         engine_api: facts.engineApi,
-        swarm: { manager: true, node_id: facts.nodeId },
+        swarm: { manager: true, node_id: facts.nodeId, nodes: await swarmNodes() },
+        volume_driver: cfg.volumeDriver,
         images: cfg.images,
         host_suffixes: cfg.hostSuffixes,
         edge: cfg.edge,
@@ -105,7 +126,7 @@ export async function startAgent(opts: {
   const engine = createEngine(cfg, opts.transport)
   const checked = await checkEngine(engine)
   if (!checked.ok) return checked
-  const handlers = (opts.makeHandlers ?? ((c, _e, f) => baseHandlers(c, f)))(
+  const handlers = (opts.makeHandlers ?? ((c, e, f) => baseHandlers(c, f, e)))(
     cfg,
     engine,
     checked.facts
@@ -135,7 +156,7 @@ async function run(): Promise<void> {
     makeHandlers: (cfg, engine, facts) =>
       makeHandlers(engine, cfg, {
         nodeId: facts.nodeId,
-        health: baseHandlers(cfg, facts).health,
+        health: baseHandlers(cfg, facts, engine).health,
         log
       })
   })

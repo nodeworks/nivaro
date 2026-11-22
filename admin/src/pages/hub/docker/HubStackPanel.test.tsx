@@ -49,7 +49,9 @@ const status = (state: string) => ({
   ]
 })
 
-function setup(opts: { state?: string; agent?: string; settings?: unknown } = {}) {
+function setup(
+  opts: { state?: string; agent?: string; settings?: unknown; nodes?: number | null } = {}
+) {
   h.get.mockImplementation(async (url: string) => {
     if (url === '/hub/environments/5/stack')
       return {
@@ -59,7 +61,8 @@ function setup(opts: { state?: string; agent?: string; settings?: unknown } = {}
             dns_mode: 'automatic',
             name_request: null,
             status: opts.agent && opts.agent !== 'ok' ? null : status(opts.state ?? 'converged'),
-            agent: opts.agent ?? 'ok'
+            agent: opts.agent ?? 'ok',
+            local_volumes_on_nodes: opts.nodes ?? null
           }
         }
       }
@@ -164,6 +167,19 @@ describe('HubStackPanel', () => {
     const buttons = screen.getAllByRole('button', { name: 'Apply now' })
     fireEvent.click(buttons[buttons.length - 1])
     expect(await screen.findByLabelText(/to apply/)).toBeTruthy()
+  })
+
+  it('P4-33: warns about local volumes on a swarm of several nodes', async () => {
+    setup({ nodes: 3 })
+    view(false)
+    expect(await screen.findByText(/each node keeps its own uploads and Redis data/)).toBeTruthy()
+  })
+
+  it('P4-33: no volume warning on one node', async () => {
+    setup()
+    view(false)
+    await screen.findByText('Converged')
+    expect(screen.queryByText(/each node keeps its own/)).toBeNull()
   })
 
   it('shows the rolled back hint', async () => {

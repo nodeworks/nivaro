@@ -66,6 +66,8 @@ export class FakeEngine implements Engine {
   archives = new Map<string, Buffer | (() => Readable)>()
   /** How often each service's tasks were replaced (a task template change, ForceUpdate included). */
   restarts = new Map<string, number>()
+  /** How many nodes /info says the swarm has. */
+  swarmNodes = 1
   /** The same stateful ownership guard the real engine runs. */
   private readonly guard = new OwnershipGuard()
 
@@ -318,7 +320,10 @@ export class FakeEngine implements Engine {
     if (method === 'GET' && path === '/version')
       return { status: 200, body: { ApiVersion: '1.45' } }
     if (method === 'GET' && path === '/info')
-      return { status: 200, body: { Swarm: { ControlAvailable: true, NodeID: 'node-agent-1' } } }
+      return {
+        status: 200,
+        body: { Swarm: { ControlAvailable: true, NodeID: 'node-agent-1', Nodes: this.swarmNodes } }
+      }
 
     switch (key) {
       case 'GET /services': {

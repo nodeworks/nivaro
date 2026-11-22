@@ -73,13 +73,25 @@ Secrets are read from files only (`*_FILE`). All values are read once at start.
 | `HUB_AGENT_HOST_SUFFIXES` | required for traefik | Comma list such as `.apps.example.com`; an app host must end in one. |
 | `HUB_AGENT_PUBLISH_PORTS` | required for publish | Range `lo-hi` (1024-65535) the agent may publish. |
 | `HUB_AGENT_REDIS_IMAGE` | none | `<repo>@sha256:<digest>` to offer a bundled Redis; omit to not offer it. |
-| `HUB_AGENT_VOLUME_DRIVER` | `local` | Driver for uploads and Redis volumes. |
+| `HUB_AGENT_VOLUME_DRIVER` | `local` | Driver for uploads and Redis volumes. `local` is per node: see the warning below. |
 | `HUB_AGENT_VOLUME_OPTS_FILE` | none | JSON object of driver options (for example an NFS export). `o=bind` and `device` (unless an NFS export) are refused. |
 | `HUB_AGENT_EXTENSIONS_ROOT` | `/var/lib/nivaro-hub-agent/extensions` | Where the agent unpacks extensions (path inside the container). |
 | `HUB_AGENT_EXTENSIONS_HOST_ROOT` | the root | The same folder as the host sees it; app services bind this path. |
 | `HUB_AGENT_EXTENSIONS_SHARED` | off | `on` when the folder is shared storage every node mounts. |
 | `HUB_AGENT_REGISTRY_AUTH_FILE` | none | A docker `config.json` with `auths`, for private registries. |
 | `HUB_AGENT_ENV_PREFIXES` | none | Comma list of env key prefixes a stack may set on top of the keys Nivaro reads, such as `EFP_` or `EFP_OPS_` for the EFP extension. Each entry is upper-case segments ending with `_` (`^[A-Z][A-Z0-9]*(_[A-Z0-9]+)*_$`). |
+
+## Volumes on a swarm of more than one node
+
+**Warning:** the default `local` volume driver keeps one copy per node. On a
+swarm with more than one node, each node a web, worker or importer task lands
+on gets its own uploads, and a Redis task that moves to another node starts
+empty. "Remove volumes" removes only this (the agent's) node's copies, because
+the Engine's `/volumes` is node-local. Pin the stack to one node, or set a
+shared volume driver (`HUB_AGENT_VOLUME_DRIVER` + `HUB_AGENT_VOLUME_OPTS_FILE`,
+for example an NFS export). `GET /v1/health` reports `swarm.nodes` and
+`volume_driver`; the Hub's stack panel warns when the swarm has more than one
+node and volumes are local.
 
 ## Which env keys a stack may set
 

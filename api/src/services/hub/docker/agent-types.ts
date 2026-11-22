@@ -48,7 +48,10 @@ export interface AgentHealth {
   api: number
   agent_version: string
   engine_api: string
-  swarm: { manager: boolean; node_id: string }
+  /** nodes (P4-33): how many nodes the swarm has; null/absent = unknown (an older agent). */
+  swarm: { manager: boolean; node_id: string; nodes?: number | null }
+  /** P4-33: HUB_AGENT_VOLUME_DRIVER (`local` = one copy per node). Absent on an older agent. */
+  volume_driver?: string
   images: string[]
   host_suffixes: string[]
   edge: 'traefik' | 'publish'

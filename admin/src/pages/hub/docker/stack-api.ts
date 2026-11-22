@@ -32,6 +32,8 @@ export interface StackInfo {
   status: StackStatus | null
   /** 'ok' or the agent's / the Hub's refusal code (STACK_OWNER_MISMATCH, AGENT_UNREACHABLE…). */
   agent: string
+  /** P4-33: the swarm has this many nodes (> 1) and the stack's volumes are local; else null. */
+  local_volumes_on_nodes?: number | null
 }
 
 /** `GET|PUT /hub/environments/:id/stack/settings` */

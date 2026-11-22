@@ -56,7 +56,7 @@ beforeEach(async () => {
   const facts = { engineApi: '1.45', nodeId: 'node-agent-1' }
   const handlers = makeHandlers(fake, cfg, {
     nodeId: facts.nodeId,
-    health: baseHandlers(cfg, facts).health,
+    health: baseHandlers(cfg, facts, fake).health,
     log,
     sleep: async () => {}
   })
@@ -313,5 +313,20 @@ describe('stack routes', () => {
     }
     const creates = fake.calls.filter((c) => c.path === '/secrets/create')
     expect(creates.some((c) => (c.body as any).Data === SECRET_B64)).toBe(true)
+  })
+})
+
+describe('P4-33: health says how many nodes the swarm has and the volume driver', () => {
+  it('one node, local volumes', async () => {
+    const r = await req('GET', '/v1/health')
+    expect(r.status).toBe(200)
+    expect(r.body.swarm).toEqual({ manager: true, node_id: 'node-agent-1', nodes: 1 })
+    expect(r.body.volume_driver).toBe('local')
+  })
+
+  it('three nodes are read live from the Engine (/info)', async () => {
+    fake.swarmNodes = 3
+    const r = await req('GET', '/v1/health')
+    expect(r.body.swarm.nodes).toBe(3)
   })
 })
