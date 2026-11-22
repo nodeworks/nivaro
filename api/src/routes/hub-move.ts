@@ -10,8 +10,8 @@ import {
   MoveError,
   planFor,
   resumeMove,
-  setMoveChecklist,
   type StartBody,
+  setMoveChecklist,
   startMove
 } from '../services/hub/move/run.js'
 import { PromotionError } from '../services/hub/promote-lock.js'
