@@ -62,11 +62,14 @@ const kindFits = (kind: HubComponent['kind'], driver: string): boolean =>
  */
 export function componentTargetBranch(
   c: Pick<HubComponent, 'target_branch' | 'implicit'> | null,
-  placement: { target?: { branch?: string | null } | null } | null,
+  // Any placement shape (phase 6: a shared placement's target has no branch).
+  placement: { target?: unknown } | null,
   driverBranch: string | null = null
 ): string | null {
   if (c?.target_branch) return c.target_branch
-  const fromPlacement = !c || c.implicit ? placement?.target?.branch || null : null
+  const branch = (placement?.target as { branch?: unknown } | null | undefined)?.branch
+  const fromPlacement =
+    !c || c.implicit ? (typeof branch === 'string' && branch ? branch : null) : null
   return fromPlacement || driverBranch || null
 }
 
@@ -82,7 +85,8 @@ export async function listComponents(placementId: number): Promise<HubComponent[
     .orderBy('position', 'asc')) as Record<string, unknown>[]
   if (rows.length) return rows.map(toComponent)
   const p = await getPlacement(placementId)
-  if (!p) return []
+  // Phase 6: a shared placement deploys nothing of its own (the shared deployment does).
+  if (!p || p.kind === 'shared') return []
   const stack = (await driverKind(Number(p.driver_id))) === 'docker'
   return [
     {
@@ -153,6 +157,14 @@ export async function validateComponentInput(
 ): Promise<Result<ComponentFields>> {
   const pick = <K extends keyof ComponentFields>(k: K): unknown =>
     b[k] !== undefined ? b[k] : existing?.[k]
+
+  // Phase 6: the shared deployment deploys a shared placement's app; it has no components.
+  if ((await getPlacement(placementId))?.kind === 'shared')
+    return fail(
+      'SHARED_PLACEMENT',
+      'This placement is on a shared deployment, which deploys the app itself: it has no components.',
+      409
+    )
 
   const kind = pick('kind')
   if (kind !== 'api' && kind !== 'frontend' && kind !== 'stack')
