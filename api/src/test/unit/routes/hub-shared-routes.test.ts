@@ -155,7 +155,8 @@ beforeEach(async () => {
     'nivaro_hub_drivers',
     'nivaro_hub_shared_deployments',
     'nivaro_hub_shared_deploys',
-    'nivaro_hub_stack_settings'
+    'nivaro_hub_stack_settings',
+    'nivaro_hub_moves'
   ])
     await db(t).del()
   await db('nivaro_hub_apps').insert({ id: 1, key: 'acme', name: 'Acme' })
@@ -355,6 +356,58 @@ describe('create, read, token', () => {
     expect(d.sightings).toEqual([
       expect.objectContaining({ instance: 'web-1', version: '0.3.210' })
     ])
+  })
+
+  it("the placed apps are Task 2's served set: its status map, mid-move envs, pool_max 1-20", async () => {
+    const made = await create()
+    await placeEnv(made.row.id, 7, 'moving') // dead status → maintenance (T2 WIRE_STATUS)
+    await placeEnv(made.row.id, 8, 'weird') // a status the contract has no word for → not served
+    await placeEnv(made.row.id, 11)
+    await db('nivaro_hub_placements')
+      .where({ id: 61 })
+      .update({ target: JSON.stringify({ pool_max: 50 }) })
+    // env 12 moved out (its placement now elsewhere) but the move has not retired the source
+    await db('nivaro_hub_placements').insert({ id: 70, kind: 'gitlab', driver_id: 3, target: '{}' })
+    await db('nivaro_hub_environments').insert({
+      id: 12,
+      app_id: 1,
+      key: 'env12',
+      base_url: 'https://env12.example.com',
+      hostnames: '[]',
+      status: 'active',
+      placement_id: 70
+    })
+    await db('nivaro_hub_placements').insert({
+      id: 71,
+      kind: 'shared',
+      driver_id: null,
+      target: JSON.stringify({ pool_max: 5 }),
+      shared_deployment_id: made.row.id
+    })
+    await db('nivaro_hub_moves').insert({
+      app_id: 1,
+      environment_id: 12,
+      from_placement_id: 71,
+      to_placement_id: 70,
+      kind: 'to_dedicated',
+      routing: 'automatic',
+      status: 'running',
+      step: 'files_delta',
+      steps: '[]'
+    })
+    const got = await app.inject({
+      method: 'GET',
+      url: `/api/hub/shared/${made.row.id}`,
+      headers: asAdmin
+    })
+    const apps = got.json().data.apps as Array<Record<string, unknown>>
+    expect(apps.map((a) => [a.tenant_id, a.status, a.pool_max, a.placed_here])).toEqual([
+      ['acme-e11', 'active', null, true],
+      ['acme-e12', 'maintenance', 5, false],
+      ['acme-e7', 'maintenance', 5, true]
+    ])
+    const list = await app.inject({ method: 'GET', url: '/api/hub/shared', headers: asAdmin })
+    expect(list.json().data[0].apps).toBe(3)
   })
 
   it('sightings that cannot be read show as null, never as no replicas', async () => {

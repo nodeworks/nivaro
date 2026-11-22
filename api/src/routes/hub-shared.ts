@@ -30,6 +30,7 @@ import {
   updateShared,
   validateSharedInput
 } from '../services/hub/shared/store.js'
+import { poolMaxOf, type SharedTenantRow, tenantsOf } from '../services/hub/shared/tenants.js'
 
 /**
  * Nivaro Hub phase 6 (Task 3): shared deployments and app keys, mounted under /api/hub by hub.ts
@@ -215,24 +216,11 @@ function blockWarnings(shared: SharedDeployment): { code: string; text: string }
 
 // ─── apps placed on a deployment ───────────────────────────────────────────────────────────
 
-/** An environment's status as the tenants list sends it (Task 2's mapping, ruling B1). */
-function wireStatus(envStatus: string): 'active' | 'maintenance' | 'provisioning' | 'suspended' {
-  if (envStatus === 'maintenance') return 'maintenance'
-  if (envStatus === 'provisioning' || envStatus === 'waiting_for_name') return 'provisioning'
-  if (envStatus === 'suspended') return 'suspended'
-  return 'active'
-}
-
-function poolMaxOf(target: unknown): number | null {
-  try {
-    const t = typeof target === 'string' ? JSON.parse(target) : target
-    const n = (t as { pool_max?: unknown } | null)?.pool_max
-    return typeof n === 'number' && Number.isInteger(n) ? n : null
-  } catch {
-    return null
-  }
-}
-
+/**
+ * One row per environment the deployment serves now: exactly Task 2's tenants list
+ * (`tenantsOf`: its status map, mid-move environments, archived and unmapped statuses left out),
+ * so the admin page never shows a different set from what the deployment is sent.
+ */
 export interface SharedAppRow {
   env_id: number
   env_key: string
@@ -241,56 +229,27 @@ export interface SharedAppRow {
   app_key: string
   app_name: string
   tenant_id: string
-  status: ReturnType<typeof wireStatus>
+  status: SharedTenantRow['wireStatus']
+  /** The environment's own placement is here (false: a move in or out is under way). */
+  placed_here: boolean
   pool_max: number | null
   base_url: string
 }
 
-async function appsPlaced(sharedId: number): Promise<SharedAppRow[]> {
-  const rows = (await db(`${ENVS} as e`)
-    .join(`${PLACEMENTS} as p`, 'p.id', 'e.placement_id')
-    .join(`${APPS} as a`, 'a.id', 'e.app_id')
-    .where('p.shared_deployment_id', sharedId)
-    .whereNot('e.status', 'archived')
-    .orderBy([
-      { column: 'a.key', order: 'asc' },
-      { column: 'e.position', order: 'asc' },
-      { column: 'e.id', order: 'asc' }
-    ])
-    .select(
-      'e.id as env_id',
-      'e.key as env_key',
-      'e.status as env_status',
-      'e.base_url as base_url',
-      'a.id as app_id',
-      'a.key as app_key',
-      'a.name as app_name',
-      'p.target as target'
-    )) as Record<string, unknown>[]
-  return rows.map((r) => ({
-    env_id: Number(r.env_id),
-    env_key: String(r.env_key),
-    env_status: String(r.env_status ?? 'active'),
-    app_id: Number(r.app_id),
-    app_key: String(r.app_key),
-    app_name: String(r.app_name),
-    tenant_id: tenantIdFor({ key: String(r.app_key) }, { id: Number(r.env_id) }),
-    status: wireStatus(String(r.env_status ?? 'active')),
-    pool_max: poolMaxOf(r.target),
-    base_url: String(r.base_url ?? '')
+async function appsPlaced(shared: SharedDeployment): Promise<SharedAppRow[]> {
+  return (await tenantsOf(shared)).map((r) => ({
+    env_id: r.env.id,
+    env_key: r.env.key,
+    env_status: r.env.status,
+    app_id: r.app.id,
+    app_key: r.app.key,
+    app_name: r.app.name,
+    tenant_id: tenantIdFor(r.app, r.env),
+    status: r.wireStatus,
+    placed_here: r.placedHere,
+    pool_max: poolMaxOf(r.placement),
+    base_url: r.env.base_url
   }))
-}
-
-/** Environments placed per deployment id (archived ones left out). */
-async function appCounts(): Promise<Map<number, number>> {
-  const rows = (await db(`${ENVS} as e`)
-    .join(`${PLACEMENTS} as p`, 'p.id', 'e.placement_id')
-    .whereNotNull('p.shared_deployment_id')
-    .whereNot('e.status', 'archived')
-    .groupBy('p.shared_deployment_id')
-    .select('p.shared_deployment_id as id')
-    .count({ n: '*' })) as Array<{ id: unknown; n: unknown }>
-  return new Map(rows.map((r) => [Number(r.id), Number(r.n)]))
 }
 
 async function previousTokenUntil(id: number): Promise<string | null> {
@@ -411,12 +370,15 @@ const MISMATCH_TEXT: Record<'stack' | 'shared' | 'hub-link', string> = {
 
 export function hubSharedRoutes(app: FastifyInstance): void {
   app.get('/shared', { preHandler: requireAdmin }, async () => {
-    const [rows, counts] = await Promise.all([listShared(), appCounts()])
-    const live = await Promise.all(rows.map((r) => sightingsOrNull(r.id)))
+    const rows = await listShared()
+    const [counts, live] = await Promise.all([
+      Promise.all(rows.map(async (r) => (await tenantsOf(r)).length)),
+      Promise.all(rows.map((r) => sightingsOrNull(r.id)))
+    ])
     return {
       data: rows.map((r, i) => ({
         ...r,
-        apps: counts.get(r.id) ?? 0,
+        apps: counts[i],
         live_replicas: live[i] === null ? null : (live[i] as Sighting[]).length
       }))
     }
@@ -427,7 +389,7 @@ export function hubSharedRoutes(app: FastifyInstance): void {
     const row = id === null ? null : await getShared(id)
     if (id === null || !row) return notFound(reply)
     const [apps, sightings, prevUntil] = await Promise.all([
-      appsPlaced(id),
+      appsPlaced(row),
       sightingsOrNull(id),
       previousTokenUntil(id)
     ])
