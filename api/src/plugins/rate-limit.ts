@@ -5,6 +5,7 @@ import { SESSION_COOKIE } from '../auth/session.js'
 import { clientCredentialAccepted } from '../lib/client-credential.js'
 import { parseTrustProxy } from '../lib/trust-proxy.js'
 import { isMultiTenant, tenantSource } from '../services/deployment-mode.js'
+import { hubModeEnabled } from '../services/hub/mode.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
 import { entityBreakerHook, startBreakerSync } from '../services/traffic-breaker.js'
 
@@ -159,6 +160,9 @@ export function exemptFromLimits(req: {
   if (url.startsWith('/api/hub-link/')) return true
   // Its shared twin (routes/hub-deployment-link.ts, phase 6): the same, only where it is mounted.
   if (url.startsWith('/api/hub-deployment/') && tenantSource() === 'hub') return true
+  // A Hub shared deployment's processes polling their tenant list (routes/hub-shared-tenants.ts,
+  // phase 6): bearer-only, with its own failed-token brake; only where the Hub serves it.
+  if (/^\/api\/hub\/shared\/[^/?]+\/tenants([?]|$)/.test(url) && hubModeEnabled()) return true
   // The Nivaro Hub's OpenID discovery document and public key set: cacheable public reads.
   if (/^\/api\/hub\/oidc\/(\.well-known\/|jwks([/?]|$))/.test(url)) return true
   // The file source: one lower environment's server on behalf of its readers; it has its own

@@ -7,6 +7,7 @@ import type {
 } from '@nivaro/extension-kit'
 import type { FastifyBaseLogger } from 'fastify'
 import { db } from '../db/index.js'
+import { currentTenantKey } from '../services/tenant-rooms.js'
 
 export type {
   FlowData,
@@ -163,8 +164,11 @@ export function emitTrigger(
     await Promise.all(runs)
   }
   if (opts?.orderKey) {
+    // Ordered per app: on a Hub shared deployment two apps may share a record id, and one app's
+    // slow run must never hold another's events (the key is unchanged self-hosted).
+    const tenant = currentTenantKey()
     runInOrder(
-      `${triggerType}|${opts.orderKey}`,
+      `${tenant ? `${tenant}\u0000` : ''}${triggerType}|${opts.orderKey}`,
       () =>
         run().catch((err: unknown) => log.error({ err, triggerType }, 'emitTrigger: run failed')),
       opts.orderTimeoutMs ?? ORDERED_EVENT_TIMEOUT_MS
