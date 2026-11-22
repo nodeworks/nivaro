@@ -330,7 +330,7 @@ export async function gatherSharedUpgrade(
         if (pins.missing.length)
           block(
             'EXTENSION_UNPINNED',
-            `No image pin for extension ${pins.missing.join(', ')}: set extension_pins on the shared deployment.`
+            `No image pin for extension ${pins.missing.join(', ')}: set extension_pins on the shared deployment (<repo>@sha256:<64 hex>).`
           )
       }
     }
@@ -339,7 +339,7 @@ export async function gatherSharedUpgrade(
     if (pins.missing.length)
       block(
         'EXTENSION_UNPINNED',
-        `No image pin for extension ${pins.missing.join(', ')}: set extension_pins on the shared deployment.`
+        `No image pin for extension ${pins.missing.join(', ')}: set extension_pins on the shared deployment (<repo>@sha256:<64 hex>).`
       )
   }
   if (versionOk && !image && shared.mode === 'docker' && shared.status !== 'retired') {

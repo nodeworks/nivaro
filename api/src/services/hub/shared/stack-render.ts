@@ -165,7 +165,7 @@ export function renderSharedSpec(input: RenderSharedInput): StackSpec {
   if (ext.missing.length)
     throw new SharedRenderError(
       'EXTENSION_UNPINNED',
-      `No image pin for extension ${ext.missing.join(', ')}: set extension_pins on the shared deployment.`
+      `No image pin for extension ${ext.missing.join(', ')}: set extension_pins on the shared deployment (<repo>@sha256:<64 hex>).`
     )
 
   const hostnames =

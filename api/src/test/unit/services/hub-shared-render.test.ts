@@ -10,7 +10,7 @@ import {
   SharedRenderError,
   sharedRedisPrefix
 } from '../../../services/hub/shared/stack-render.js'
-import type { SharedDeployment } from '../../../services/hub/shared/store.js'
+import { type SharedDeployment, validateSharedInput } from '../../../services/hub/shared/store.js'
 
 // Nivaro Hub phase 6, Task 5: the StackSpec of a Docker shared deployment. Pure. Every spec the
 // renderer emits must pass the Hub agent's OWN validator (packages/hub-agent/src/spec.ts, loaded by
@@ -214,6 +214,36 @@ describe('renderSharedSpec', () => {
     expect(spec.host_pattern).toBeUndefined()
     expect(spec.publish_port).toBe(31001)
     expect(spec.env.COOKIE_SECURE).toBeUndefined()
+  })
+})
+
+describe('extension pins as the PATCH stores them (ruling P6-16)', () => {
+  it('a pin that passes validateSharedInput renders; a version string never does', () => {
+    const v = validateSharedInput({
+      key: 'shared-one',
+      name: 'Shared one',
+      link_url: 'https://shared-one.internal.example.com',
+      extensions: ['reports'],
+      extension_pins: { reports: EXT }
+    })
+    if (!v.ok) throw new Error(v.code)
+    const spec = renderSharedSpec(
+      input({
+        shared: shared({ extensions: v.row.extensions, extension_pins: v.row.extension_pins }),
+        extensions: v.row.extension_pins
+      })
+    )
+    expect(spec.extensions).toEqual({ reports: EXT })
+    expect(agent.validateStackSpec(JSON.parse(JSON.stringify(spec)), cfg('traefik'))).toMatchObject(
+      { ok: true }
+    )
+    expect(
+      code(() =>
+        renderSharedSpec(
+          input({ shared: shared({ extensions: ['reports'] }), extensions: { reports: '1.2.3' } })
+        )
+      )
+    ).toBe('EXTENSION_UNPINNED')
   })
 })
 
