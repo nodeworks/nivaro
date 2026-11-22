@@ -45,7 +45,8 @@ const m = vi.hoisted(() => ({
   linkedFp: vi.fn(),
   deleteShared: null as null | ((...a: unknown[]) => Promise<unknown>),
   stackKey: null as string | null,
-  lockFail: false
+  lockFail: false,
+  onTake: null as null | (() => Promise<void>)
 }))
 vi.mock('../../../services/hub/promote-lock.js', async (orig) => {
   const real = await orig<typeof import('../../../services/hub/promote-lock.js')>()
@@ -60,7 +61,16 @@ vi.mock('../../../services/hub/promote-lock.js', async (orig) => {
     },
     defaultPromoteLock: () => {
       const l = real.defaultPromoteLock()
-      return m.lockFail ? { ...l, take: async () => failing() } : l
+      if (m.lockFail) return { ...l, take: async () => failing() }
+      return {
+        ...l,
+        take: async (...a: Parameters<typeof l.take>) => {
+          const hook = m.onTake
+          m.onTake = null
+          if (hook) await hook()
+          return l.take(...a)
+        }
+      }
     }
   }
 })
@@ -166,6 +176,7 @@ beforeEach(async () => {
   m.deleteShared = null
   m.stackKey = null
   m.lockFail = false
+  m.onTake = null
   setSharedReapply(null)
   cache.clear()
   _setSightingsDepsForTests({ redis: memorySightingsRedis() })
@@ -965,6 +976,32 @@ describe('app key', () => {
     expect(blocked.json().code).toBe('PROMOTION_RUNNING')
     await envLock.release(9, t as string)
     expect((await putKey(9, APP_KEY)).statusCode).toBe(200)
+  })
+
+  it('re-reads the placement after the lock: an env moved onto shared meanwhile is judged there', async () => {
+    const made = await create()
+    await dedicatedEnv(9)
+    await db('nivaro_hub_environments')
+      .where({ id: 9 })
+      .update({ encryption_key: sealSecret(APP_KEY), encryption_key_fp: keyFingerprint(APP_KEY) })
+    // The app would confirm the new key over its hub link: judged on the stale (dedicated)
+    // placement the save would go through.
+    m.linkedFp.mockResolvedValue({ ok: true, fp: keyFingerprint(OTHER_KEY) })
+    m.appStatus.mockResolvedValue({ key_fp: keyFingerprint(APP_KEY) })
+    m.onTake = async () => {
+      await db('nivaro_hub_placements').insert({
+        id: 90,
+        kind: 'shared',
+        driver_id: null,
+        target: JSON.stringify({ pool_max: 5 }),
+        shared_deployment_id: made.row.id
+      })
+      await db('nivaro_hub_environments').where({ id: 9 }).update({ placement_id: 90 })
+    }
+    const res = await putKey(9, OTHER_KEY)
+    expect(res.statusCode).toBe(409)
+    expect(res.json().code).toBe('APP_KEY_IMMUTABLE')
+    expect((await storedEntry(9)).key).toBe(APP_KEY)
   })
 
   it('a lock that cannot be taken (Redis down) → 503 LOCK_UNAVAILABLE, nothing saved', async () => {

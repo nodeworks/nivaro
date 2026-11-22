@@ -295,37 +295,61 @@ async function previousTokenUntil(id: number): Promise<string | null> {
  */
 async function withKeyLock(
   reply: FastifyReply,
-  env: KeyEnv,
-  run: () => Promise<unknown>
+  envId: number,
+  run: (fresh: KeyEnv) => Promise<unknown>
 ): Promise<unknown> {
-  const shared = await sharedPlacementOf(env)
-  if (shared) {
-    const lock = defaultSharedLock()
-    const token = await lock.take(shared.id, 'app-key')
-    if (!token) {
-      const r = sharedLockRefusal(await lock.holder(shared.id))
-      return refuse(reply, 409, r.code, r.message)
-    }
+  // The lock is chosen from the placement read before it is taken; once held, the environment is
+  // read again and judged as it is now (re-review N-3). A placement that changed in between (an
+  // environment placed on a shared deployment meanwhile) is let go and the right lock taken —
+  // once; a second change answers 409 PLACEMENT_CHANGED.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const env = await readKeyEnv(envId)
+    if (!env) return notFound(reply, 'environment')
+    const shared = await sharedPlacementOf(env)
+    const held = shared
+      ? await takeSharedKeyLock(reply, shared.id)
+      : await takeEnvKeyLock(reply, env.id)
+    if ('refused' in held) return held.refused
     try {
-      return await run()
+      const fresh = await readKeyEnv(envId)
+      if (!fresh) return notFound(reply, 'environment')
+      const now = await sharedPlacementOf(fresh)
+      if ((now?.id ?? null) === (shared?.id ?? null)) return await run(fresh)
     } finally {
-      await lock.release(shared.id, token)
+      await held.release()
     }
   }
-  const lock = defaultPromoteLock()
-  const token = await lock.take(env.id, 'app-key')
+  return refuse(
+    reply,
+    409,
+    'PLACEMENT_CHANGED',
+    "The environment's placement changed while its key was being saved — try again."
+  )
+}
+
+type HeldLock = { release: () => Promise<void> } | { refused: unknown }
+
+async function takeSharedKeyLock(reply: FastifyReply, sharedId: number): Promise<HeldLock> {
+  const lock = defaultSharedLock()
+  const token = await lock.take(sharedId, 'app-key')
   if (!token) {
-    const r = lockHolderRefusal((await lock.holder?.(env.id)) ?? null, {
+    const r = sharedLockRefusal(await lock.holder(sharedId))
+    return { refused: refuse(reply, 409, r.code, r.message) }
+  }
+  return { release: () => lock.release(sharedId, token) }
+}
+
+async function takeEnvKeyLock(reply: FastifyReply, envId: number): Promise<HeldLock> {
+  const lock = defaultPromoteLock()
+  const token = await lock.take(envId, 'app-key')
+  if (!token) {
+    const r = lockHolderRefusal((await lock.holder?.(envId)) ?? null, {
       code: 'ENVIRONMENT_BUSY',
       message: 'Another action holds this environment — try again shortly.'
     })
-    return refuse(reply, 409, r.code, r.message)
+    return { refused: refuse(reply, 409, r.code, r.message) }
   }
-  try {
-    return await run()
-  } finally {
-    await lock.release(env.id, token)
-  }
+  return { release: () => lock.release(envId, token) }
 }
 
 // ─── routes ────────────────────────────────────────────────────────────────────────────────
@@ -587,8 +611,8 @@ export function hubSharedRoutes(app: FastifyInstance): void {
         "The app's encryption key is 64 hex characters (its ENCRYPTION_KEY)."
       )
     return guarded(reply, async () =>
-      withKeyLock(reply, env, async () => {
-        const d = await decideAppKey(env, key)
+      withKeyLock(reply, envId, async (fresh) => {
+        const d = await decideAppKey(fresh, key)
         if (d.action === 'unchanged') return { data: { fp: d.fp, changed: false } }
         if (d.action === 'refuse')
           return reply.code(409).send({
