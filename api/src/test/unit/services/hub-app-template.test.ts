@@ -316,6 +316,9 @@ const SECRETS: Record<string, string> = {
 const STACK = 'demo--staging'
 const KEYID = 'SHA256:TestKeyFingerprint0123456789abcdefABCDEF+/x'
 const OTHER_KEYID = 'SHA256:SomeoneElsesKeyFingerprint0123456789'
+/** What the wrapper binds stacks and secrets to: <app key line name>:<keyid>. */
+const BIND = `demo:${KEYID}`
+const OTHER_BIND = `demo:${OTHER_KEYID}`
 const sha8 = (v: string) => createHash('sha256').update(v).digest('hex').slice(0, 8)
 const secretName = (stack: string, k: string) =>
   `${stack}_${HUB_SECRET_FILES[k].secret}_${sha8(SECRETS[k])}`
@@ -456,6 +459,10 @@ shift 2
 SSH_ORIGINAL_COMMAND="$*" exec sh '${wrapper}' demo 'keyid=${KEYID}'
 `
   )
+  writeFileSync(
+    join(bin, 'ssh-keygen'),
+    '#!/bin/sh\ncat > /dev/null\nprintf "256 %s nivaro-hub (ED25519)\\n" "$FAKE_FP"\n'
+  )
   for (const [tool, body] of Object.entries(SHIMS))
     if (body) writeFileSync(join(bin, tool), `#!/bin/sh\n${body}\n`)
   for (const f of readdirSync(bin)) chmodSync(join(bin, f), 0o755)
@@ -467,10 +474,16 @@ function forced(
   box: Box,
   command: string,
   stdin = '',
-  args: string[] = ['demo', `keyid=${KEYID}`]
+  args: string[] = ['demo', `keyid=${KEYID}`],
+  extraEnv: Record<string, string> = {}
 ) {
   const r = spawnSync('sh', [box.wrapper, ...args], {
-    env: { PATH: `${box.bin}:${process.env.PATH}`, HOME: box.dir, SSH_ORIGINAL_COMMAND: command },
+    env: {
+      PATH: `${box.bin}:${process.env.PATH}`,
+      HOME: box.dir,
+      SSH_ORIGINAL_COMMAND: command,
+      ...extraEnv
+    },
     input: stdin,
     encoding: 'utf8'
   })
@@ -499,8 +512,8 @@ function deploySettings(over: Record<string, string> = {}, drop: string[] = []):
 }
 
 /** This stack's five secrets, made by `keyid`. */
-const ownSecrets = (stack = STACK, keyid = KEYID): Record<string, string> =>
-  Object.fromEntries(Object.keys(SECRETS).map((k) => [secretName(stack, k), `${stack} ${keyid}`]))
+const ownSecrets = (stack = STACK, bind = BIND): Record<string, string> =>
+  Object.fromEntries(Object.keys(SECRETS).map((k) => [secretName(stack, k), `${stack} ${bind}`]))
 
 describe('manager/nivaro-hub-deploy (forced command)', () => {
   it('the authorized_keys template binds one app key to the wrapper with its keyid', () => {
@@ -594,10 +607,10 @@ describe('manager/nivaro-hub-deploy (forced command)', () => {
 
   it('stack-owner: "mine" when bound to this key; another key, or none, is refused', () => {
     const mine = manager({
-      services: [`${STACK}_web|${STACK}|${KEYID}|demo--staging.apps.example.com`]
+      services: [`${STACK}_web|${STACK}|${BIND}|demo--staging.apps.example.com`]
     })
     expect(forced(mine, `stack-owner ${STACK}`)).toEqual({ status: 0, out: 'mine\n' })
-    for (const key of [OTHER_KEYID, '']) {
+    for (const key of [OTHER_BIND, `other:${KEYID}`, KEYID, '']) {
       const other = manager({
         services: [`${STACK}_web|${STACK}|${key}|demo--staging.apps.example.com`]
       })
@@ -628,7 +641,7 @@ describe('manager/nivaro-hub-deploy (forced command)', () => {
     })
     expect(readFileSync(join(box.state, 'secrets', name), 'utf8')).toBe(SECRETS[k])
     expect(readFileSync(join(box.state, 'secrets', `${name}.labels`), 'utf8')).toBe(
-      `${STACK} ${KEYID}`
+      `${STACK} ${BIND}`
     )
     expect(forced(box, `secret-create ${name}`, SECRETS[k])).toEqual({ status: 0, out: 'exists\n' })
     expect(dockerCalls(box).join('\n')).not.toContain(SECRETS[k])
@@ -637,7 +650,7 @@ describe('manager/nivaro-hub-deploy (forced command)', () => {
   it('secret-create: an existing secret of another key or stack is refused', () => {
     const k = 'NIVARO_DB_URL_B64'
     const name = secretName(STACK, k)
-    for (const labels of [`${STACK} ${OTHER_KEYID}`, `other--staging ${KEYID}`, '']) {
+    for (const labels of [`${STACK} ${OTHER_BIND}`, `other--staging ${BIND}`, '']) {
       const box = manager({ secrets: { [name]: labels } })
       const r = forced(box, `secret-create ${name}`, SECRETS[k])
       expect(r.status, labels).not.toBe(0)
@@ -646,7 +659,7 @@ describe('manager/nivaro-hub-deploy (forced command)', () => {
   })
 
   it('secret-create on a stack bound to another key is refused', () => {
-    const box = manager({ services: [`${STACK}_web|${STACK}|${OTHER_KEYID}|x.example.com`] })
+    const box = manager({ services: [`${STACK}_web|${STACK}|${OTHER_BIND}|x.example.com`] })
     const k = 'NIVARO_DB_URL_B64'
     expect(forced(box, `secret-create ${secretName(STACK, k)}`, SECRETS[k]).status).not.toBe(0)
     expect(dockerCalls(box).join('\n')).not.toContain('secret create')
@@ -665,7 +678,7 @@ describe('manager/nivaro-hub-deploy (forced command)', () => {
         .find((l) => l.startsWith('deployed ')) ?? ''
     expect(line).toContain('RULE=Host(`demo--staging.apps.example.com`) TLS=true EP=websecure')
     expect(line).toContain(`IMAGE=nodeworks/nivaro@${DIGEST}`)
-    expect(line).toContain(`KEY=${KEYID}`)
+    expect(line).toContain(`KEY=${BIND}`)
     expect(line).toContain(`FILE=${join(box.etc, 'docker-stack.yml')}`)
     expect(line).toContain(`STACK=${STACK}`)
   })
@@ -673,7 +686,7 @@ describe('manager/nivaro-hub-deploy (forced command)', () => {
   it('deploy: a later deploy by the same key is "mine"', () => {
     const box = manager({
       secrets: ownSecrets(),
-      services: [`${STACK}_web|${STACK}|${KEYID}|demo--staging.apps.example.com`]
+      services: [`${STACK}_web|${STACK}|${BIND}|demo--staging.apps.example.com`]
     })
     const r = forced(box, `deploy ${STACK}`, deploySettings())
     expect(r.status).toBe(0)
@@ -681,7 +694,7 @@ describe('manager/nivaro-hub-deploy (forced command)', () => {
   })
 
   it('deploy: a key mismatch on an existing stack is refused', () => {
-    for (const key of [OTHER_KEYID, '']) {
+    for (const key of [OTHER_BIND, `other:${KEYID}`, KEYID, '']) {
       const box = manager({
         secrets: ownSecrets(),
         services: [`${STACK}_web|${STACK}|${key}|demo--staging.apps.example.com`]
@@ -781,10 +794,60 @@ describe('manager/nivaro-hub-deploy (forced command)', () => {
   })
 
   it('deploy refuses secrets made by another key', () => {
-    const box = manager({ secrets: ownSecrets(STACK, OTHER_KEYID) })
+    const box = manager({ secrets: ownSecrets(STACK, OTHER_BIND) })
     const r = forced(box, `deploy ${STACK}`, deploySettings())
     expect(r.status).not.toBe(0)
     expect(box.calls()).not.toContain('stack deploy')
+  })
+})
+
+describe('manager/nivaro-hub-deploy: key identity and rotation', () => {
+  it('with ExposeAuthInfo, the signed-in key must be the keyid= one', () => {
+    const box = manager()
+    const auth = join(box.dir, 'auth-info')
+    writeFileSync(auth, `publickey ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI${'k'.repeat(43)}\n`)
+    const ok = forced(box, `stack-owner ${STACK}`, '', undefined, {
+      SSH_USER_AUTH: auth,
+      FAKE_FP: KEYID
+    })
+    expect(ok).toEqual({ status: 0, out: 'free\n' })
+    const bad = forced(box, `stack-owner ${STACK}`, '', undefined, {
+      SSH_USER_AUTH: auth,
+      FAKE_FP: OTHER_KEYID
+    })
+    expect(bad.status).not.toBe(0)
+    expect(bad.out).toContain('not the keyid=')
+    // without the auth info file (ExposeAuthInfo off) the keyid= line alone decides
+    expect(
+      forced(box, `stack-owner ${STACK}`, '', undefined, { FAKE_FP: OTHER_KEYID }).status
+    ).toBe(0)
+  })
+
+  it('a stack bound to the same keyid under another key name is refused', () => {
+    const box = manager({ services: [`${STACK}_web|${STACK}|other:${KEYID}|x.example.com`] })
+    expect(forced(box, `stack-owner ${STACK}`).status).not.toBe(0)
+  })
+
+  it('after a rotation (stack relabelled to the new key) the old secrets are accepted', () => {
+    const oldBind = `demo:${OTHER_KEYID}`
+    const box = manager({
+      secrets: ownSecrets(STACK, oldBind),
+      services: [`${STACK}_web|${STACK}|${BIND}|demo--staging.apps.example.com`]
+    })
+    const k = 'NIVARO_DB_URL_B64'
+    expect(forced(box, `secret-create ${secretName(STACK, k)}`, SECRETS[k])).toEqual({
+      status: 0,
+      out: 'exists\n'
+    })
+    const r = forced(box, `deploy ${STACK}`, deploySettings())
+    expect(r.status).toBe(0)
+    expect(r.out).toContain(`deploying ${STACK} (mine)`)
+  })
+
+  it('the README documents the rotation relabel', () => {
+    const readme = read('README.md')
+    expect(readme).toContain("## Rotating an app's deploy key")
+    expect(readme).toContain("--label-add 'nivaro.hub.key=<app>:<new keyid>'")
   })
 })
 
@@ -847,11 +910,11 @@ describe('scripts/deploy.sh run (through the real wrapper)', () => {
       const name = secretName(STACK, k)
       expect(readFileSync(join(r.box.state, 'secrets', name), 'utf8')).toBe(SECRETS[k])
       expect(readFileSync(join(r.box.state, 'secrets', `${name}.labels`), 'utf8')).toBe(
-        `${STACK} ${KEYID}`
+        `${STACK} ${BIND}`
       )
     }
     expect(r.calls).toContain('RULE=Host(`demo--staging.apps.example.com`) TLS=true')
-    expect(r.calls).toContain(`KEY=${KEYID}`)
+    expect(r.calls).toContain(`KEY=${BIND}`)
     const argv = r.calls
       .split('\n')
       .filter((l) => l.startsWith('ssh ') || l.startsWith('docker '))
@@ -897,6 +960,33 @@ describe('scripts/deploy.sh run (through the real wrapper)', () => {
     const c = run({ env: { CI_PROJECT_NAME: 'other-deploy' } })
     refusedBeforeSsh(c)
     expect(c.out).toContain('not demo-deploy')
+  })
+
+  it('a commit sha ref deploys, whatever digit it starts with', () => {
+    for (const sha of [
+      '3f2a5b6c7d8e9f00112233445566778899aabbcc',
+      '0123456789abcdef0123456789abcdef01234567',
+      '1a2b3c4d5e6f708192a3b4c5d6e7f80912345678'
+    ]) {
+      const r = run({ env: { CI_CONFIG_PATH: `ci/deploy.yml@platform/nivaro-template:${sha}` } })
+      expect(r.status, `${sha}: ${r.out}`).toBe(0)
+    }
+  })
+
+  it('a version tag of another major, a branch, or no ref is refused', () => {
+    const tag = run({ env: { CI_CONFIG_PATH: 'ci/deploy.yml@platform/nivaro-template:v2.1.0' } })
+    refusedBeforeSsh(tag)
+    expect(tag.out).toContain('is major 2 but this deploy job is major 1')
+    for (const path of [
+      'ci/deploy.yml@platform/nivaro-template:main',
+      'ci/deploy.yml@platform/nivaro-template:v1.0-RC1',
+      'ci/deploy.yml@platform/nivaro-template:3f2a5b6',
+      'ci/deploy.yml@platform/nivaro-template'
+    ]) {
+      refusedBeforeSsh(run({ env: { CI_CONFIG_PATH: path } }))
+    }
+    // the fallback include (no ci_config_path) has no ref to read
+    expect(run({ env: { CI_CONFIG_PATH: '.gitlab-ci.yml' } }).status).toBe(0)
   })
 
   it('refuses a template ref of another major (ci_config_path)', () => {
@@ -980,7 +1070,7 @@ describe('scripts/deploy.sh run (through the real wrapper)', () => {
 
   it('stops when the stack is bound to another key', () => {
     const r = run({
-      services: [`${STACK}_web|${STACK}|${OTHER_KEYID}|demo--staging.apps.example.com`]
+      services: [`${STACK}_web|${STACK}|${OTHER_BIND}|demo--staging.apps.example.com`]
     })
     expect(r.status).not.toBe(0)
     expect(r.out).toContain('refused stack')

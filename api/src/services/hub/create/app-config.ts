@@ -457,6 +457,11 @@ export function renderAppCi(target: HubTargetConfig): string {
   const ref = target.template_ref
   if (typeof project !== 'string' || !GITLAB_PATH.test(project) || project.length > 255)
     throw new AppConfigError('The target template project is not a GitLab path.')
+  // include: project and ci_config_path need the full path; GitLab does not resolve an id there.
+  if (!project.includes('/'))
+    throw new AppConfigError(
+      'The target template project must be its namespace/project path (not a numeric id) for the CI configuration path.'
+    )
   if (typeof ref !== 'string' || !PINNED_REF.test(ref))
     throw new AppConfigError('The target template ref is not a tag or commit sha.')
   return [

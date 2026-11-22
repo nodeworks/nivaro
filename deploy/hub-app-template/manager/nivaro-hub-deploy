@@ -9,7 +9,8 @@
 # <app> names the key's configuration $ROOT/keys/<app>.conf: the exact stack= names and exact
 # host= names this key may deploy (plus network=, image=, entry points). keyid= is the key's own
 # fingerprint (ssh-keygen -lf key.pub): a stack is bound to the key that first deployed it (service
-# label nivaro.hub.key) and every later deploy, secret or owner question by another key is refused.
+# label nivaro.hub.key=<app>:<keyid>) and every later deploy, secret or owner question by another
+# key is refused. With sshd's ExposeAuthInfo on, the signed-in key must also have that fingerprint.
 #
 # Whatever the CI job asks for arrives in SSH_ORIGINAL_COMMAND and is only ever one of:
 #
@@ -47,6 +48,16 @@ KEYID=${2#keyid=}
 [ "$KEYID" != "$2" ] || refuse "authorized_keys must give keyid=<fingerprint>"
 case "$KEYID" in '' | *[!A-Za-z0-9+/=:._-]*) refuse "bad keyid in authorized_keys" ;; esac
 [ "${#KEYID}" -ge 8 ] && [ "${#KEYID}" -le 100 ] || refuse "bad keyid in authorized_keys"
+# What a stack and its secrets are bound to: this key line's app name AND its key.
+BINDING="$KEY:$KEYID"
+# With sshd's ExposeAuthInfo on, the key that actually signed in must be the keyid= one.
+if [ -n "${SSH_USER_AUTH:-}" ] && [ -f "$SSH_USER_AUTH" ]; then
+  used=$(sed -n 's/^publickey //p' "$SSH_USER_AUTH" | head -n 1)
+  if [ -n "$used" ]; then
+    fp=$(printf '%s\n' "$used" | ssh-keygen -lf - 2>/dev/null | cut -d' ' -f2) || fp=''
+    [ "$fp" = "$KEYID" ] || refuse "the key that signed in is not the keyid= of its authorized_keys line"
+  fi
+fi
 CONF="$ROOT/keys/$KEY.conf"
 [ -f "$CONF" ] || refuse "no configuration for key $KEY"
 [ -f "$STACK_FILE" ] || refuse "no stack file at $STACK_FILE"
@@ -124,7 +135,7 @@ binding() {
   for svc in $names; do
     bound=$(docker service inspect --format '{{index .Spec.Labels "nivaro.hub.key"}}' "$svc") ||
       refuse "cannot read service labels"
-    [ "$bound" = "$KEYID" ] || refuse "stack $1 is bound to another deploy key"
+    [ "$bound" = "$BINDING" ] || refuse "stack $1 is bound to another deploy key"
     state=mine
   done
   printf '%s' "$state"
@@ -141,11 +152,13 @@ stack_for() {
   fi
 }
 
-# A secret of this stack, made by this key.
+# A secret of this stack ($2), made by this key — or by an earlier key of a stack now bound to
+# this one ($3 = mine: the operator relabelled it when rotating the key; secrets are immutable).
 own_secret() {
   labels=$(docker secret inspect --format '{{index .Spec.Labels "nivaro.hub.stack"}} {{index .Spec.Labels "nivaro.hub.key"}}' "$1" 2>/dev/null) ||
     return 1
-  [ "$labels" = "$2 $KEYID" ] || refuse "secret $1 belongs to another stack or key"
+  [ "${labels%% *}" = "$2" ] || refuse "secret $1 belongs to another stack or key"
+  [ "${labels#* }" = "$BINDING" ] || [ "$3" = mine ] || refuse "secret $1 belongs to another stack or key"
 }
 
 SECRET_SHORTS="db_url hub_token session_secret encryption_key oidc_secret"
@@ -173,11 +186,11 @@ case "$VERB" in
     have=$(printf '%s' "$value" | sha256sum | cut -c1-8)
     [ "$have" = "$sha8" ] || refuse "the secret name does not match its value"
     state=$(binding "$stack")
-    if own_secret "$ARG" "$stack"; then
+    if own_secret "$ARG" "$stack" "$state"; then
       value=
       echo exists
     else
-      printf '%s' "$value" | docker secret create --label "nivaro.hub.stack=$stack" --label "nivaro.hub.key=$KEYID" "$ARG" - >/dev/null ||
+      printf '%s' "$value" | docker secret create --label "nivaro.hub.stack=$stack" --label "nivaro.hub.key=$BINDING" "$ARG" - >/dev/null ||
         refuse "docker refused the secret"
       value=
       echo created
@@ -263,6 +276,7 @@ case "$VERB" in
     IFS=$old_ifs
     [ -n "$TRAEFIK_RULE" ] || refuse "APP_HOSTS is empty"
 
+    state=$(binding "$ARG")
     for pair in DB_URL:db_url HUB_TOKEN:hub_token SESSION_SECRET:session_secret ENCRYPTION_KEY:encryption_key OIDC_SECRET:oidc_secret; do
       var=SECRET_${pair%%:*}
       short=${pair#*:}
@@ -271,13 +285,12 @@ case "$VERB" in
       [ "$sha8" != "$name" ] || refuse "$var is not a secret of this stack"
       case "$sha8" in *[!0-9a-f]*) refuse "$var is not a secret of this stack" ;; esac
       [ "${#sha8}" -eq 8 ] || refuse "$var is not a secret of this stack"
-      own_secret "$name" "$ARG" || refuse "$var names a secret that does not exist"
+      own_secret "$name" "$ARG" "$state" || refuse "$var names a secret that does not exist"
     done
 
-    state=$(binding "$ARG")
     docker network inspect "$NETWORK" >/dev/null 2>&1 || refuse "the proxy network $NETWORK does not exist"
 
-    NIVARO_HUB_KEY=$KEYID
+    NIVARO_HUB_KEY=$BINDING
     export TRAEFIK_RULE TRAEFIK_TLS TRAEFIK_ENTRYPOINT NIVARO_HUB_KEY
     printf 'nivaro-hub-deploy: deploying %s (%s)\n' "$ARG" "$state"
     docker stack deploy --detach=false --resolve-image always -c "$STACK_FILE" "$ARG"

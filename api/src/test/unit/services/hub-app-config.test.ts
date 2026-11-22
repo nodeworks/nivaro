@@ -16,6 +16,7 @@ import {
   manualTicket,
   nivaroEnvironmentFor,
   redirectUriFor,
+  renderAppCi,
   renderAppEnv,
   STACK_NAME_MAX,
   stackName
@@ -546,5 +547,13 @@ describe('ciConfigPath', () => {
     for (const ref of ['main', 'release', 'v1.0-RC1', 'f'.repeat(64), "v1'"])
       expect(() => ciConfigPath({ ...auto, template_ref: ref }), ref).toThrow(AppConfigError)
     expect(ciConfigPath({ ...auto, template_ref: 'a'.repeat(40) })).toContain(`:${'a'.repeat(40)}`)
+  })
+
+  it('needs the namespace/project path, never a numeric id', () => {
+    expect(() => ciConfigPath({ ...auto, template_project: '4242' })).toThrow(/namespace\/project/)
+    expect(() => renderAppCi({ ...auto, template_project: '4242' })).toThrow(AppConfigError)
+    expect(ciConfigPath({ ...auto, template_project: 'group/sub/nivaro-template' })).toBe(
+      'ci/deploy.yml@group/sub/nivaro-template:v1.0.0'
+    )
   })
 })

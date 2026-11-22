@@ -10,7 +10,7 @@
 #   ${NIVARO_IMAGE_REF} <image=…>@sha256:<digest>, the pin's line 2
 #   ${TRAEFIK_RULE}     Host(`a`) || Host(`b`) built from APP_HOSTS (each under a host=…)
 #   ${TRAEFIK_TLS}      true when PUBLIC_URL is https
-#   ${NIVARO_HUB_KEY}   keyid= of the deploy key: binds the stack to that key on first deploy
+#   ${NIVARO_HUB_KEY}   <app>:<keyid> of the deploy key: binds the stack to it on first deploy
 #   ${SECRET_*}         swarm secret <STACK_NAME>_<name>_<sha8 of the value>, made from:
 #     db_url            NIVARO_DB_URL_B64              -> DB_URL_FILE
 #     hub_token         NIVARO_HUB_TOKEN_B64           -> HUB_TOKEN_FILE

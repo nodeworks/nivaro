@@ -31,7 +31,7 @@ from deciding what runs on the swarm, and BOTH are required:
   (forced command, `restrict`): three verbs (`stack-owner <stack>`, `secret-create
   <stack>_<name>_<sha8>`, `deploy <stack>`) for the exact `stack=` names and exact `host=`
   names in that app's key configuration, one proxy network, one image by digest. The first
-  deploy labels the stack's services with the key's `keyid=`; any other key is refused there
+  deploy labels the stack's services `nivaro.hub.key=<app>:<keyid>`; any other key is refused there
   afterwards. A hostname another stack already serves is refused. Ownership is never taken from
   the APP_KEY/ENV_KEY the job sends; those are only checked against the stack name. The stack
   file is the one installed on the manager; the job sends only settings and secret values, on
@@ -91,6 +91,24 @@ from deciding what runs on the swarm, and BOTH are required:
 5. Sends the settings; the manager checks them again, deploys its stack file
    (`--detach=false`, start-first, rollback on failure) and waits (40 × 15 s) until
    `http://web:3055/api/version`, read on the stack's own network, answers the pinned version.
+
+## Rotating an app's deploy key
+
+The stack and its secrets are bound to `<app>:<old keyid>`, so the new key is refused until the
+operator moves the binding. Secrets are immutable and keep their old label; once the stack is
+bound to the new key the wrapper accepts them, and new values get the new label.
+
+1. The Hub makes the new key pair and replaces the app project's `DEPLOY_SSH_KEY` (masked, base64).
+2. On the manager, replace the app's `authorized_keys` line: same `<app>`, the new public key,
+   `keyid=` the new fingerprint (`ssh-keygen -lf <new>.pub`).
+3. Relabel every service of each of the app's stacks (a label change does not restart tasks):
+   ```sh
+   for svc in $(docker service ls --filter label=com.docker.stack.namespace=<stack> --format '{{.Name}}'); do
+     docker service update --detach --label-add 'nivaro.hub.key=<app>:<new keyid>' "$svc"
+   done
+   ```
+4. Run the deploy job once per environment: `stack-owner` answers `mine` and the deploy goes on.
+   Until step 3, every deploy with the new key stops with "bound to another deploy key".
 
 ## Changing the deploy job
 

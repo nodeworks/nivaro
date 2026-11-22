@@ -1,7 +1,8 @@
 #!/bin/sh
-# Deploy one environment of a Nivaro Hub app. Runs in the GitLab `deploy` job, which app
-# repositories include from the Hub-owned template project at a pinned ref (ci/deploy.yml is
-# generated from this file by scripts/sync-ci.sh). The app repository's own copy is never run.
+# Deploy one environment of a Nivaro Hub app. Runs in the GitLab `deploy` job that every app
+# project reads from the Hub-owned template project at a pinned ref (the project's
+# ci_config_path is ci/deploy.yml@<template>:<tag or sha>; ci/deploy.yml is generated from this
+# file by scripts/sync-ci.sh). The app repository's own copy is never run.
 #
 # It holds no power of its own: the app's own deploy key reaches the swarm manager only through
 # the forced command manager/nivaro-hub-deploy (three verbs, this key's exact stacks and hosts,
@@ -90,14 +91,23 @@ if [ "${#expected}" -gt 40 ]; then
   expected="$(printf '%s' "$expected" | cut -c1-35 | sed 's/-*$//')-$h"
 fi
 [ "$STACK_NAME" = "$expected" ] || die "STACK_NAME must be $expected"
-# With ci_config_path = ci/deploy.yml@<template>:<ref>, the ref's major must be this template's.
+# With ci_config_path = ci/deploy.yml@<template>:<ref>: a 40-hex sha pins a commit (no major to
+# read); a version tag's major must be this template's; anything else is not a pin. Without an
+# @ the job came from the fallback include, whose ref the Hub wrote the same way.
 case "${CI_CONFIG_PATH:-}" in
-  *@*:v[0-9]* | *@*:[0-9]*)
+  *@*:*)
     ref=${CI_CONFIG_PATH##*:}
-    ref_major=$(printf '%s' "${ref#v}" | sed 's/[^0-9].*$//')
-    [ "$ref_major" = "$HUB_TEMPLATE_MAJOR" ] ||
-      die "template ref $ref is major $ref_major but this deploy job is major $HUB_TEMPLATE_MAJOR"
+    if [ "${#ref}" -eq 40 ] && ! printf '%s' "$ref" | grep -q '[^0-9a-f]'; then
+      : # a commit sha
+    elif printf '%s\n' "$ref" | grep -Eqx 'v?[0-9]{1,9}(\.[0-9]+){0,3}([-.][a-z0-9]+)?'; then
+      ref_major=$(printf '%s' "${ref#v}" | sed 's/[^0-9].*$//')
+      [ "$ref_major" -eq "$HUB_TEMPLATE_MAJOR" ] ||
+        die "template ref $ref is major $ref_major but this deploy job is major $HUB_TEMPLATE_MAJOR"
+    else
+      die "the CI configuration ref $ref is not a version tag or a commit sha (refusing)"
+    fi
     ;;
+  *@*) die "the CI configuration path does not pin a template ref (refusing)" ;;
 esac
 # An app.env copied onto another branch or into another app's repository never deploys.
 [ "$ENV_KEY" = "$CI_COMMIT_REF_NAME" ] || die "ENV_KEY $ENV_KEY does not match branch $CI_COMMIT_REF_NAME (refusing)"
@@ -146,7 +156,7 @@ case "${DEPLOY_HOST:-}" in
 esac
 DEST="ssh://$DEPLOY_HOST"
 [ -n "${DEPLOY_KNOWN_HOSTS:-}" ] || die "DEPLOY_KNOWN_HOSTS is not set: the Hub pushes the manager's host keys (refusing to connect)"
-[ -n "${DEPLOY_SSH_KEY:-}" ] || die "DEPLOY_SSH_KEY is not set (a group CI variable)"
+[ -n "${DEPLOY_SSH_KEY:-}" ] || die "DEPLOY_SSH_KEY is not set (a project variable the Hub sets for this app)"
 
 umask 077
 WORK=$(mktemp -d)
