@@ -28,7 +28,7 @@ import {
   provisionDatabase
 } from '../db/databases.js'
 import { generateHexSecret } from '../db/names.js'
-import { createDriver, createPlacement, getDriver, getPlacement } from '../drivers.js'
+import { createDriver, createPlacement, getDriver, getPlacement, listDrivers } from '../drivers.js'
 import { type PollOptions, runDeployJob, type Sleep } from '../gitlab-write.js'
 import { pinText } from '../registry.js'
 import { openSecret } from '../secrets.js'
@@ -429,7 +429,10 @@ async function stepRepository(ctx: StepContext): Promise<StepResult> {
     }
 
     let driverId = shared.driver_id
-    if (!driverId || !(await getDriver(driverId))) {
+    if (!driverId || !(await getDriver(driverId))) driverId = await driverFor(c.api, path)
+    if (driverId) {
+      await saveAppMade(app.id, { driver_id: driverId })
+    } else {
       const driver = await createDriver({
         kind: 'gitlab',
         name: `${app.key} deploy repository`,
@@ -450,6 +453,55 @@ async function stepRepository(ctx: StepContext): Promise<StepResult> {
     ctx.made.driver_id = driverId
     return done(`${path} ${how}; CI configuration pinned to ${c.template_ref}.`)
   })
+}
+
+const originOf = (raw: string) => {
+  try {
+    return new URL(raw).origin
+  } catch {
+    return raw
+  }
+}
+
+/** The driver already recorded for this deploy repository (same GitLab, same project), if any. */
+async function driverFor(api: string, project: string): Promise<number | null> {
+  const hit = (await listDrivers()).find(
+    (d) =>
+      d.kind === 'gitlab' &&
+      d.config?.project === project &&
+      originOf(String(d.config?.api ?? '')) === originOf(api)
+  )
+  return hit ? hit.id : null
+}
+
+/**
+ * A dedicated placement of `driverId` for `branch` that no other environment uses (one this
+ * environment's earlier try made before it could record it), if any.
+ */
+async function placementFor(
+  driverId: number,
+  branch: string,
+  envId: number
+): Promise<number | null> {
+  const rows = (await db('nivaro_hub_placements')
+    .where({ driver_id: driverId, kind: 'dedicated' })
+    .orderBy('id')
+    .select('id', 'target')) as Array<{ id: number; target: unknown }>
+  for (const r of rows) {
+    let t: { branch?: unknown } = {}
+    try {
+      t = (typeof r.target === 'string' ? JSON.parse(r.target) : r.target) ?? {}
+    } catch {
+      t = {}
+    }
+    if (t.branch !== branch) continue
+    const user = (await db('nivaro_hub_environments')
+      .where({ placement_id: r.id })
+      .whereNot({ id: envId })
+      .first('id')) as { id: number } | undefined
+    if (!user) return Number(r.id)
+  }
+  return null
 }
 
 // ── variables ────────────────────────────────────────────────────────────────
@@ -513,8 +565,9 @@ async function stepConfig(ctx: StepContext): Promise<StepResult> {
 
   // The branch is the environment key: app.env's ENV_KEY must equal it (deploy.sh refuses else).
   const branch = env.key
-  const made = await ensureBranch(pctx, branch, 'main')
+  // Protected before it exists: nobody can push to the name in between.
   await protectBranch(pctx, branch)
+  const made = await ensureBranch(pctx, branch, 'main')
   const appEnv = renderAppEnv({
     app: { key: app.key, oidc: app.oidc },
     envKey: branch,
@@ -544,9 +597,14 @@ async function stepConfig(ctx: StepContext): Promise<StepResult> {
 
   // The environment becomes an ordinary phase-2 environment: its placement + api component.
   let placementId = ctx.made.placement_id
-  if (!placementId || !(await getPlacement(placementId))) {
+  if (!placementId || !(await getPlacement(placementId)))
+    // A crash between create and record left one behind: use it, never a second.
+    placementId = (await placementFor(driverId, branch, env.id)) ?? undefined
+  if (!placementId) {
     const p = await createPlacement({ kind: 'dedicated', driver_id: driverId, target: { branch } })
     placementId = p.id
+  }
+  if (ctx.made.placement_id !== placementId) {
     ctx.made.placement_id = placementId
     await ctx.saveMade()
   }

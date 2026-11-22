@@ -1034,6 +1034,145 @@ describe('retry and recovery', () => {
   })
 })
 
+// ── fix round 1: secrets on resume, made writes, orphans ─────────────────────
+
+describe('fix round 1: runner secrets, made writes and orphans', () => {
+  const one = () =>
+    input({ environments: [{ key: 'production', database: { server_id: autoServer } }] })
+
+  it('a retry that resumes at deploy scrubs the hub token, OIDC secret and GitLab token', async () => {
+    let refusePipelines = true
+    let plant = ''
+    vi.stubGlobal('fetch', async (url: string, init: RequestInit = {}) => {
+      if (String(url).includes('/pipelines?')) {
+        if (refusePipelines) {
+          refusePipelines = false
+          return new Response(JSON.stringify({ message: 'down' }), { status: 500 })
+        }
+        // A job line that (wrongly) echoes secrets back.
+        const res = await gl.fetch(url, init)
+        const list = (await res.json()) as Array<{ id: number; web_url: string }>
+        return new Response(
+          JSON.stringify(list.map((x) => ({ ...x, web_url: `${x.web_url}?leak=${plant}` }))),
+          { status: 200 }
+        )
+      }
+      return gl.fetch(url, init)
+    })
+    const out = await startAndWait(one())
+    const envId = out.environments[0].id
+    expect((await stepOf(envId, 'deploy'))?.status).toBe('failed')
+    const env = await db('nivaro_hub_environments').where({ id: envId }).first('hub_token')
+    const hubToken = openSecret(env.hub_token) as string
+    plant = `${hubToken}-${OIDC_SECRET}-${gl.token}`
+    runs = []
+    await R.resumeCreation(envId, USER, 'retry', deps())
+    await R.awaitCreation(envId)
+    expect((await creation(envId)).status).toBe('done')
+    const lines = runs.flatMap((r) => r.run.lines).join('\n')
+    expect(lines).toContain('?leak=')
+    for (const s of [hubToken, OIDC_SECRET, gl.token]) expect(lines).not.toContain(s)
+    vi.stubGlobal('fetch', gl.fetch)
+  })
+
+  it('app-level and own made writes interleave without losing either', async () => {
+    const out = await R.startCreation(
+      input(),
+      USER,
+      deps({ lock: { ...lock, take: async () => null } })
+    )
+    for (const e of out.environments) await R.awaitCreation(e.id)
+    const [a, b] = await Promise.all(out.environments.map((e) => creation(e.id)))
+    for (let i = 1; i <= 20; i++) {
+      // A's repository step (app keys) against B's config step (B's own placement/component).
+      const staleB = { ...(await creation(b.environment_id)).made, driver_id: 1000 + i - 1 }
+      await Promise.all([
+        store.saveAppMade(a.app_id, { driver_id: 1000 + i, project_id: 2000 + i }),
+        store.writeOwnMade(b.id, { ...staleB, placement_id: 3000 + i, component_id: 4000 + i })
+      ])
+      const mb = (await creation(b.environment_id)).made
+      const ma = (await creation(a.environment_id)).made
+      expect(mb).toMatchObject({ placement_id: 3000 + i, component_id: 4000 + i })
+      expect(mb.driver_id).toBe(1000 + i)
+      expect(ma).toMatchObject({ driver_id: 1000 + i, project_id: 2000 + i })
+      expect(mb.planned?.nonce).toBeTruthy()
+    }
+  })
+
+  it('a driver made before the crash is found again, never a second one', async () => {
+    const out = await startAndWait(one())
+    const envId = out.environments[0].id
+    const c = await creation(envId)
+    const driverId = c.made.driver_id
+    const { driver_id: _d, ...rest } = c.made
+    const steps = c.steps.map((x) =>
+      x.key === 'database' ? x : { ...x, status: 'pending' as const, at: null, note: null }
+    )
+    await store.patchCreation(c.id, { made: rest, steps, status: 'failed' })
+    await R.resumeCreation(envId, USER, 'retry', deps())
+    await R.awaitCreation(envId)
+    expect((await creation(envId)).status).toBe('done')
+    expect(await db('nivaro_hub_drivers').count('* as n').first()).toMatchObject({ n: 1 })
+    expect((await creation(envId)).made.driver_id).toBe(driverId)
+  })
+
+  it('a placement made before the crash is found again, never a second one', async () => {
+    const out = await startAndWait(one())
+    const envId = out.environments[0].id
+    const c = await creation(envId)
+    const placementId = c.made.placement_id
+    const { placement_id: _p, component_id: _c, ...rest } = c.made
+    const steps = c.steps.map((x) =>
+      ['database', 'repository', 'variables'].includes(x.key)
+        ? x
+        : { ...x, status: 'pending' as const, at: null, note: null }
+    )
+    await store.patchCreation(c.id, { made: rest, steps, status: 'failed' })
+    await db('nivaro_hub_environments').where({ id: envId }).update({ placement_id: null })
+    await R.resumeCreation(envId, USER, 'retry', deps())
+    await R.awaitCreation(envId)
+    expect((await creation(envId)).status).toBe('done')
+    expect(await db('nivaro_hub_placements').count('* as n').first()).toMatchObject({ n: 1 })
+    expect(await db('nivaro_hub_components').count('* as n').first()).toMatchObject({ n: 1 })
+    expect((await creation(envId)).made.placement_id).toBe(placementId)
+    expect(
+      (await db('nivaro_hub_environments').where({ id: envId }).first('placement_id')).placement_id
+    ).toBe(placementId)
+  })
+
+  it('the branch is protected before it is created', async () => {
+    await startAndWait(one())
+    const at = (method: string, path: string) =>
+      gl.calls.findIndex(
+        (c) => c.method === method && c.path === path && /\/projects\/\d+/.test(c.url)
+      )
+    const protect = at('POST', '/protected_branches')
+    const create = at('POST', '/repository/branches')
+    expect(protect).toBeGreaterThan(-1)
+    expect(create).toBeGreaterThan(protect)
+  })
+
+  it('runCreationLeg runs only queued or waiting creations; Retry is the way for the rest', async () => {
+    adminAnswers = [{ result: 'refused', code: 'NO_ADMIN_ROLE' }]
+    const out = await startAndWait(one())
+    const envId = out.environments[0].id
+    expect((await creation(envId)).status).toBe('failed')
+    await expect(R.runCreationLeg(envId, USER, deps())).rejects.toMatchObject({
+      code: 'NOT_RESUMABLE'
+    })
+  })
+
+  it('withEnvironmentsQuiet interrupts a stale running row and goes on', async () => {
+    const out = await startAndWait(one())
+    const envId = out.environments[0].id
+    const c = await creation(envId)
+    await store.patchCreation(c.id, { status: 'running', step: 'deploy' })
+    const done = await R.withEnvironmentsQuiet([envId], async () => 'deleted', { lock })
+    expect(done).toBe('deleted')
+    expect((await creation(envId)).status).toBe('interrupted')
+  })
+})
+
 // ── the deploy repository (P3-7, P3-9, P3-16) ────────────────────────────────
 
 describe('deploy repository', () => {

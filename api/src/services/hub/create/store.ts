@@ -217,17 +217,64 @@ export async function appMade(appId: number, k: Knex = db): Promise<CreationMade
   return out
 }
 
-/** Writes app-level `made` keys to every creation of the app (each environment shows them). */
-export async function saveAppMade(appId: number, patch: Partial<CreationMade>): Promise<void> {
-  const keys = Object.keys(patch).filter((key) =>
-    (APP_MADE_KEYS as readonly string[]).includes(key)
+/** `made` without the app-level keys. */
+function ownPart(made: CreationMade): CreationMade {
+  const out: CreationMade = { ...made }
+  for (const key of APP_MADE_KEYS) delete (out as Record<string, unknown>)[key]
+  return out
+}
+
+/** The app-level keys of `made` only. */
+function appPart(made: CreationMade): Partial<CreationMade> {
+  const out: Record<string, unknown> = {}
+  for (const key of APP_MADE_KEYS)
+    if (made[key] !== undefined) out[key] = (made as Record<string, unknown>)[key]
+  return out as Partial<CreationMade>
+}
+
+const readMade = async (k: Knex, id: number): Promise<CreationMade> =>
+  parseObj<CreationMade>(
+    ((await k(CREATIONS).where({ id }).first('made')) as { made?: unknown } | undefined)?.made,
+    {}
   )
-  if (!keys.length) return
-  for (const c of await creationsOfApp(appId)) {
-    const made = { ...c.made }
-    for (const key of keys) (made as Record<string, unknown>)[key] = (patch as never)[key]
-    await patchCreation(c.id, { made })
-  }
+
+/**
+ * Writes app-level `made` keys to every creation of the app (each environment shows them), in
+ * ONE transaction that first row-locks every creation of the app (a no-op UPDATE), then changes
+ * only those keys in each row: a leg's own keys (placement, component, variables …) written
+ * meanwhile are never lost.
+ */
+export async function saveAppMade(appId: number, patch: Partial<CreationMade>): Promise<void> {
+  const app = appPart(patch as CreationMade)
+  if (!Object.keys(app).length) return
+  await db.transaction(async (trx) => {
+    await trx(CREATIONS).where({ app_id: appId }).update({ updated_at: new Date() })
+    const ids = (await trx(CREATIONS).where({ app_id: appId }).select('id')) as Array<{
+      id: number
+    }>
+    for (const { id } of ids) {
+      const made = { ...(await readMade(trx, Number(id))), ...app }
+      await trx(CREATIONS)
+        .where({ id })
+        .update({ made: JSON.stringify(made) })
+    }
+  })
+}
+
+/**
+ * Writes a leg's own `made` keys to its row: in one transaction that row-locks the row first,
+ * the app-level keys stay what the row holds (only saveAppMade writes those). Answers the row's
+ * `made` as written (own keys + the current app-level ones).
+ */
+export async function writeOwnMade(id: number, made: CreationMade): Promise<CreationMade> {
+  return db.transaction(async (trx) => {
+    await trx(CREATIONS).where({ id }).update({ updated_at: new Date() })
+    const out = { ...ownPart(made), ...appPart(await readMade(trx, id)) }
+    await trx(CREATIONS)
+      .where({ id })
+      .update({ made: JSON.stringify(out) })
+    return out
+  })
 }
 
 // ── coordination ─────────────────────────────────────────────────────────────

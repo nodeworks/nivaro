@@ -44,7 +44,7 @@ import { defaultSleep, type Sleep } from '../gitlab-write.js'
 import { checkName as checkEnvironmentNameById } from '../name-check.js'
 import { defaultPromoteLock, LOCK_RENEW_MS, type PromoteLock } from '../promote-lock.js'
 import { hubImage } from '../registry.js'
-import { HubSecretError, sealSecret } from '../secrets.js'
+import { HubSecretError, openSecret, sealSecret } from '../secrets.js'
 import { readEnvironmentStatus } from '../status.js'
 import { manualTicket, redirectUriFor, stackName } from './app-config.js'
 import { managerLines } from './deploy-key.js'
@@ -65,7 +65,6 @@ import {
   tokenUserMemo
 } from './steps.js'
 import {
-  APP_MADE_KEYS,
   appMade,
   CREATIONS,
   type CreationFlags,
@@ -79,7 +78,8 @@ import {
   type KeyedLock,
   OPEN_CREATION_STATUSES,
   patchCreation,
-  readCreationRow
+  readCreationRow,
+  writeOwnMade
 } from './store.js'
 import { getTargetRow, type HubTargetRow } from './targets.js'
 import type { CreateAppInput, CreationFacts, CreationPlan, CreationStepState } from './types.js'
@@ -158,14 +158,6 @@ const yieldToIo = () => new Promise<void>((resolve) => setImmediate(resolve))
 /** Text that may be stored or logged: every secret of the leg masked, cut to `max`. */
 function scrub(text: unknown, secrets: Set<string>, max = 1000): string {
   return scrubDbErrorFull(text, [...secrets]).slice(0, max)
-}
-
-/** `own` with the app-level keys (APP_MADE_KEYS) taken from the shared copy when it has them. */
-function withShared(own: CreationMade, shared: CreationMade): CreationMade {
-  const out: CreationMade = { ...own }
-  for (const key of APP_MADE_KEYS)
-    if (shared[key] !== undefined) (out as Record<string, unknown>)[key] = shared[key]
-  return out
 }
 
 function errorCode(err: unknown): string {
@@ -385,24 +377,25 @@ function launchLeg(
   })
 }
 
-const RESUMABLE: readonly CreationStatus[] = [
-  'queued',
-  'waiting',
-  'failed',
-  'interrupted',
-  'cancelled'
-]
-
 /**
- * Walks one environment's creation from its first unfinished step. Answers 'busy' (nothing
+ * Walks one queued or waiting environment's creation from its first unfinished step (a failed,
+ * interrupted or cancelled one is refused NOT_RESUMABLE: Retry). Answers 'busy' (nothing
  * touched) when another runner — a promotion or a creation leg — holds the environment.
  */
-export function runCreationLeg(
+export async function runCreationLeg(
   envId: number,
   user: { id: string } | null,
   deps?: CreationDeps
-): Promise<'done' | 'waiting' | 'failed' | 'cancelled' | 'busy'> {
-  return runLeg(envId, user, resolve(deps), RESUMABLE)
+): Promise<'done' | 'waiting' | 'failed' | 'cancelled' | 'interrupted' | 'busy'> {
+  // Only a queued or waiting creation; a failed, interrupted or cancelled one goes through Retry.
+  const row = await readCreationRow(envId)
+  if (row && !['queued', 'waiting', 'running', 'done'].includes(row.status))
+    throw new CreationError(
+      'NOT_RESUMABLE',
+      `The creation is ${row.status}: use Retry to start it again.`,
+      409
+    )
+  return runLeg(envId, user, resolve(deps), ['queued', 'waiting'])
 }
 
 async function loadContext(
@@ -464,7 +457,7 @@ async function runLeg(
   user: { id: string } | null,
   r: Resolved,
   from: readonly CreationStatus[]
-): Promise<'done' | 'waiting' | 'failed' | 'cancelled' | 'busy'> {
+): Promise<'done' | 'waiting' | 'failed' | 'cancelled' | 'interrupted' | 'busy'> {
   const first = await readCreationRow(envId)
   if (!first) throw new CreationError('NOT_FOUND', 'No creation for this environment.', 404)
   if (first.status === 'done') return 'done'
@@ -506,7 +499,7 @@ async function walk(
   r: Resolved,
   entry: LiveLeg,
   lockLost: () => boolean
-): Promise<'done' | 'waiting' | 'failed' | 'cancelled'> {
+): Promise<'done' | 'waiting' | 'failed' | 'cancelled' | 'interrupted'> {
   const secrets = new Set<string>()
   let row = (await readCreationRow(envId)) as CreationRow
   let run: JobRunHandle | null = null
@@ -519,6 +512,19 @@ async function walk(
   let current: CreationStepState | null = null
   try {
     const { app, env, target } = await loadContext(row)
+    // Every secret this leg could print, known before any step runs (a retry that resumes
+    // mid-leg opens no variable step, yet its deploy lines may echo one).
+    for (const sealed of [target.secret, env.hub_token, app.oidc_secret]) {
+      try {
+        const plain = openSecret(sealed)
+        if (plain) {
+          secrets.add(plain)
+          secrets.add(Buffer.from(plain).toString('base64'))
+        }
+      } catch {
+        // unreadable: the step that needs it fails with its own code
+      }
+    }
     run = await r.startJobRun(`Create ${app.key}/${env.key}`, envId, user?.id || null)
     if (run.id != null) await patchCreation(creationId, { job_run_id: run.id }, ['running'])
     const ctx: StepContext = {
@@ -528,9 +534,8 @@ async function walk(
       target,
       made: { ...row.made },
       async saveMade() {
-        // App-level keys are written to every row by saveAppMade only: the shared copy wins.
-        ctx.made = withShared(ctx.made, await appMade(app.id))
-        await patchCreation(creationId, { made: ctx.made })
+        // Own keys only; the app-level ones are saveAppMade's (the row's copy comes back).
+        ctx.made = await writeOwnMade(creationId, ctx.made)
       },
       doneSha: (key) => steps.find((s) => s.key === key && s.status === 'done')?.sha ?? null,
       log,
@@ -543,10 +548,10 @@ async function walk(
       const state = steps.find((s) => s.key === key) as CreationStepState
       if (state.status === 'done') continue
       if (lockLost()) {
-        await finish('interrupted', 'The environment lock was lost; retry.')
+        await finish('interrupted', 'INTERRUPTED: The environment lock was lost; retry.')
         log('the creation lock was lost — stopped', 'error')
         await run.fail(new Error(`Create ${app.key}/${env.key}: stopped (lock lost)`))
-        return 'failed'
+        return 'interrupted'
       }
       if (entry.cancel || (await r.flags.cancelRequested(creationId))) {
         await finish('cancelled', null)
@@ -558,15 +563,15 @@ async function walk(
       Object.assign(state, { status: 'running', at: new Date().toISOString(), note: null })
       await persist({ step: key })
       const result = await STEPS[key](ctx)
-      // Keep the shared made (another leg may have written app-level keys) with this leg's own.
-      ctx.made = withShared(ctx.made, await appMade(app.id))
+      // This leg's own keys; the app-level ones come back as the rows hold them.
+      ctx.made = await writeOwnMade(creationId, ctx.made)
       if (result.status === 'waiting') {
         Object.assign(state, {
           status: 'waiting',
           at: new Date().toISOString(),
           note: scrub(result.note, secrets, 300)
         })
-        await persist({ status: 'waiting', waiting_for: result.on, made: ctx.made })
+        await persist({ status: 'waiting', waiting_for: result.on })
         log(`${key} → waiting: ${result.note}`)
         await run.complete(`Create ${app.key}/${env.key}: waiting for the ${result.on}`)
         return 'waiting'
@@ -577,16 +582,21 @@ async function walk(
         note: scrub(result.note, secrets, 300),
         ...(result.sha ? { sha: result.sha } : {})
       })
-      await persist({ made: ctx.made })
+      await persist()
       log(`${key} → done: ${result.note}`)
       current = null
     }
 
+    // Only the run that really closed the row moves the environment on.
+    if (!(await finish('done', null))) {
+      log('the creation was changed elsewhere while it finished — left as it is', 'warn')
+      await run.complete(`Create ${app.key}/${env.key}: finished elsewhere`)
+      return 'interrupted'
+    }
     await db(ENVS)
       .where({ id: envId })
       .whereIn('status', ['provisioning', 'waiting_for_name'])
       .update({ status: 'active', updated_at: new Date() })
-    await finish('done', null)
     await logActivity({
       action: 'hub-create-done',
       user: user?.id || row.started_by,
@@ -611,9 +621,9 @@ async function walk(
     return 'failed'
   }
 
-  async function finish(status: CreationStatus, error: string | null): Promise<void> {
-    const terminal = status === 'done' || status === 'failed' || status === 'cancelled'
-    await patchCreation(
+  async function finish(status: CreationStatus, error: string | null): Promise<number> {
+    const terminal = status !== 'running' && status !== 'waiting' && status !== 'queued'
+    const n = await patchCreation(
       creationId,
       {
         steps,
@@ -625,6 +635,7 @@ async function walk(
       ['running']
     )
     row = (await readCreationRow(envId)) ?? row
+    return n
   }
 }
 
@@ -868,17 +879,11 @@ export async function withEnvironmentsQuiet<T>(
         )
       held.push({ envId, token })
     }
-    if (envIds.length) {
-      const running = await db(CREATIONS)
-        .whereIn('environment_id', envIds)
-        .whereIn('status', ['running', 'queued'])
-        .first('id')
-      if (running)
-        throw new CreationError(
-          'CREATION_RUNNING',
-          'A creation is running on this environment — wait for it or cancel it.',
-          409
-        )
+    // We hold every lock: a `running` row here belongs to a runner that died — mark it.
+    for (const envId of envIds) {
+      if (live.has(envId)) continue
+      const row = await readCreationRow(envId)
+      if (row?.status === 'running') await interrupt(row, 'The runner stopped during this step')
     }
     return await fn()
   } finally {
