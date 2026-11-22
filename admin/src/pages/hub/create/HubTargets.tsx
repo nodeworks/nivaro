@@ -499,7 +499,7 @@ function TargetForm({
             onChange={(v) => set({ dns_mode: v as Draft['dns_mode'] })}
             options={DNS_OPTIONS}
             ariaLabel='How names are made'
-            className='h-8 text-[13px]'
+            className='h-8 text-left text-[13px]'
             triggerProps={{ id: id('dns') }}
           />
         </Field>
@@ -541,7 +541,7 @@ function TargetForm({
               onChange={(v) => set({ scheme: v as Draft['scheme'] })}
               options={SCHEME_OPTIONS}
               ariaLabel='Scheme'
-              className='h-8 text-[13px]'
+              className='h-8 text-left text-[13px]'
               triggerProps={{ id: id('scheme') }}
             />
           </Field>
