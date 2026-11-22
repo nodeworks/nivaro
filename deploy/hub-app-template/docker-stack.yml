@@ -1,0 +1,167 @@
+# One Nivaro environment as a swarm stack: web (requests, behind Traefik) + worker (scheduled
+# jobs, imports, renders) + a private Redis. Deployed by scripts/deploy.sh, which fills every
+# ${...} below from .hub/app.env, the pin file and the secret CI variables:
+#
+#   setting            from
+#   ${NIVARO_IMAGE_REF} nodeworks/nivaro@<digest> from the pin file (.hub/nivaro-version)
+#   ${TRAEFIK_RULE}    Host(`a`) || Host(`b`) built from APP_HOSTS
+#   ${TRAEFIK_TLS}     true when PUBLIC_URL is https
+#   ${SECRET_*}        swarm secret <STACK_NAME>_<name>_<sha8 of the value>, made from:
+#     db_url           NIVARO_DB_URL_B64              -> DB_URL_FILE
+#     hub_token        NIVARO_HUB_TOKEN_B64           -> HUB_TOKEN_FILE
+#     session_secret   NIVARO_SESSION_SECRET_B64      -> SESSION_SECRET_FILE
+#     encryption_key   NIVARO_ENCRYPTION_KEY_B64      -> ENCRYPTION_KEY_FILE
+#     oidc_secret      NIVARO_OIDC_CLIENT_SECRET_B64  -> OIDC_CLIENT_SECRET_FILE
+#
+# No host bind mounts, no privileged settings, no published ports: Traefik reaches web over
+# the external ${PROXY_NETWORK} network; everything else talks on the stack's own network.
+
+x-nivaro: &nivaro
+  image: ${NIVARO_IMAGE_REF}
+  networks:
+    - internal
+  volumes:
+    - uploads:/app/uploads
+  secrets:
+    - source: db_url
+      target: db_url
+    - source: hub_token
+      target: hub_token
+    - source: session_secret
+      target: session_secret
+    - source: encryption_key
+      target: encryption_key
+    - source: oidc_secret
+      target: oidc_secret
+
+x-env: &env
+  NODE_ENV: production
+  APP_KEY: ${APP_KEY}
+  ENV_KEY: ${ENV_KEY}
+  PUBLIC_URL: ${PUBLIC_URL}
+  ADMIN_URL: ${ADMIN_URL}
+  HUB_URL: ${HUB_URL}
+  NIVARO_ENVIRONMENT: ${NIVARO_ENVIRONMENT}
+  NIVARO_INSTANCE: ${STACK_NAME}
+  DB_CLIENT: ${DB_CLIENT}
+  OIDC_ISSUER: ${OIDC_ISSUER}
+  OIDC_CLIENT_ID: ${OIDC_CLIENT_ID}
+  OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI}
+  TRUST_PROXY: ${TRUST_PROXY}
+  REDIS_URL: redis://redis:6379
+  # Migrations run under a lock: web and worker may start together.
+  MIGRATION_SAFE_MODE: 'true'
+  DB_URL_FILE: /run/secrets/db_url
+  HUB_TOKEN_FILE: /run/secrets/hub_token
+  SESSION_SECRET_FILE: /run/secrets/session_secret
+  ENCRYPTION_KEY_FILE: /run/secrets/encryption_key
+  OIDC_CLIENT_SECRET_FILE: /run/secrets/oidc_secret
+
+x-update: &update
+  parallelism: 1
+  order: start-first
+  failure_action: rollback
+  monitor: 30s
+
+services:
+  web:
+    <<: *nivaro
+    networks:
+      - internal
+      - proxy
+    environment:
+      <<: *env
+      NIVARO_ROLE: web
+      CRON_TICKS: 'off'
+    deploy:
+      replicas: 1
+      update_config: *update
+      rollback_config:
+        parallelism: 1
+        order: start-first
+      restart_policy:
+        condition: any
+      # One node keeps web and worker on the same uploads volume (see README: multi-node).
+      placement:
+        constraints:
+          - node.role == manager
+      labels:
+        - traefik.enable=true
+        - traefik.swarm.network=${PROXY_NETWORK}
+        - traefik.docker.network=${PROXY_NETWORK}
+        - traefik.http.routers.${STACK_NAME}.rule=${TRAEFIK_RULE}
+        - traefik.http.routers.${STACK_NAME}.entrypoints=${TRAEFIK_ENTRYPOINT}
+        - traefik.http.routers.${STACK_NAME}.tls=${TRAEFIK_TLS}
+        - traefik.http.routers.${STACK_NAME}.service=${STACK_NAME}
+        - traefik.http.services.${STACK_NAME}.loadbalancer.server.port=3055
+        - traefik.http.services.${STACK_NAME}.loadbalancer.healthcheck.path=/api/ready
+        - traefik.http.services.${STACK_NAME}.loadbalancer.healthcheck.interval=10s
+        - nivaro.hub.app=${APP_KEY}
+        - nivaro.hub.env=${ENV_KEY}
+        - nivaro.hub.hosts=${APP_HOSTS}
+
+  worker:
+    <<: *nivaro
+    environment:
+      <<: *env
+      NIVARO_ROLE: worker
+    deploy:
+      replicas: 1
+      update_config: *update
+      rollback_config:
+        parallelism: 1
+        order: start-first
+      restart_policy:
+        condition: any
+      placement:
+        constraints:
+          - node.role == manager
+      labels:
+        - nivaro.hub.app=${APP_KEY}
+        - nivaro.hub.env=${ENV_KEY}
+
+  redis:
+    image: redis:7.4-alpine
+    command: ['redis-server', '--appendonly', 'yes', '--save', '60', '1000']
+    networks:
+      - internal
+    volumes:
+      - redis:/data
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      labels:
+        - nivaro.hub.app=${APP_KEY}
+        - nivaro.hub.env=${ENV_KEY}
+
+networks:
+  internal:
+    driver: overlay
+    # The deploy script runs one short wget container here to read /api/version.
+    attachable: true
+  proxy:
+    external: true
+    name: ${PROXY_NETWORK}
+
+volumes:
+  uploads:
+  redis:
+
+secrets:
+  db_url:
+    external: true
+    name: ${SECRET_DB_URL}
+  hub_token:
+    external: true
+    name: ${SECRET_HUB_TOKEN}
+  session_secret:
+    external: true
+    name: ${SECRET_SESSION_SECRET}
+  encryption_key:
+    external: true
+    name: ${SECRET_ENCRYPTION_KEY}
+  oidc_secret:
+    external: true
+    name: ${SECRET_OIDC_SECRET}
