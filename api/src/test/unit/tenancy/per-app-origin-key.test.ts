@@ -167,7 +167,13 @@ describe('per-app origin in app jobs', () => {
       data: {
         deployment: DEPLOYMENT,
         generated_at: '2026-11-22T00:00:00Z',
-        tenants: [wire('app-a-e1', { origin: 'https://listed.example.com' }), wire('app-b-e2')]
+        tenants: [
+          wire('app-a-e1', { origin: 'https://listed.example.com' }),
+          wire('app-b-e2'),
+          // a local throwaway: the listed port is kept (http, no default port)
+          wire('app-c-e3', { hostnames: ['app-c.localhost:3141'] }),
+          wire('app-d-e4', { hostnames: ['d.example.com:8443'] })
+        ]
       }
     }
     const fetch = vi.fn(async () => new Response(JSON.stringify(body), { status: 200 }))
@@ -175,9 +181,11 @@ describe('per-app origin in app jobs', () => {
       redis: null,
       fetch: fetch as never
     })) as HubTenantRegistry
-    const [a, b] = await reg.listAll()
+    const [a, b, c, d] = await reg.listAll()
     expect(a.origin).toBe('https://listed.example.com')
     expect(b.origin).toBe('https://app-b-e2.example.com')
+    expect(c.origin).toBe('http://app-c.localhost:3141')
+    expect(d.origin).toBe('https://d.example.com:8443')
     // a request keeps the origin of the host it came on (resolve is unchanged)
     expect((await reg.resolve('www.app-b-e2.example.com'))?.origin).toBe(
       'https://www.app-b-e2.example.com'

@@ -126,11 +126,12 @@ function originOf(h: { bare: string; clean: string }, t: TenantRecord): string {
 }
 
 /** The tenant with its origin: the Hub's, else its first listed hostname's (the same rule as a
- *  request on that host). */
+ *  request on that host). A local host keeps its listed port (a request would carry its own). */
 function withListedOrigin(t: TenantRecord): TenantRecord {
   if (t.origin || !t.hostnames[0]) return t
   const h = t.hostnames[0]
-  return { ...t, origin: originOf({ bare: h, clean: h }, t) }
+  const port = t.originPorts?.[h]
+  return { ...t, origin: originOf({ bare: h, clean: port ? `${h}:${port}` : h }, t) }
 }
 
 /** Plain text for a failed fetch: the error's kind only, never its message. */
