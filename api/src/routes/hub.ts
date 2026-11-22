@@ -1050,6 +1050,8 @@ function placementRoutes(app: FastifyInstance) {
     if (!done.ok) {
       if (done.code === 'IN_USE')
         return fail(reply, 409, 'IN_USE', 'An environment still uses this placement')
+      if (done.code === 'PLACEMENT_IN_USE')
+        return fail(reply, 409, 'PLACEMENT_IN_USE', 'A move in progress uses this placement')
       return notFound(reply)
     }
     await logActivity({

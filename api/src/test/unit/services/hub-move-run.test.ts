@@ -647,6 +647,67 @@ describe('rolls back from every step before release', () => {
   })
 })
 
+// Ruling P6-21: placements an open move names are kept; a never-used dedicated target goes.
+describe('move placements (P6-21)', () => {
+  it('deletePlacement refuses 409 PLACEMENT_IN_USE while an open move names it (source or target)', async () => {
+    const { deletePlacement } = await import('../../../services/hub/drivers.js')
+    plan = planOf('to_dedicated', 'manual')
+    const w = await world('shared')
+    fake.state.serving = false
+    useDeps({
+      sleep: async (ms: number) => {
+        t += ms
+        await new Promise((r) => setTimeout(r, 20))
+      }
+    })
+    const { move_id } = await start(w, toFor('to_dedicated', w))
+    await waitFor(async () => (await readMove(move_id))?.status === 'waiting')
+    // Nobody names the target placement yet: only the open move does.
+    expect(await deletePlacement(w.dockerPlacement)).toEqual({
+      ok: false,
+      code: 'PLACEMENT_IN_USE'
+    })
+    await Run.cancelMove(move_id, 'u')
+    await Run.awaitMove(move_id)
+  })
+
+  it('a rollback deletes a dedicated target placement that never served and nobody uses; recorded', async () => {
+    plan = planOf('to_dedicated')
+    const w = await world('shared')
+    fake.state.failOn = (name) => name === 'targetReady'
+    const { move_id } = await start(w, toFor('to_dedicated', w))
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    expect(m?.status).toBe('rolled_back')
+    expect(m?.steps.removed_target_placement).toBe(w.dockerPlacement)
+    expect(
+      await db('nivaro_hub_placements').where({ id: w.dockerPlacement }).first()
+    ).toBeUndefined()
+  })
+
+  it('a dedicated target placement that served before (an earlier move off it) is kept', async () => {
+    plan = planOf('to_dedicated')
+    const w = await world('shared')
+    await db('nivaro_hub_moves').insert({
+      app_id: 1,
+      environment_id: w.envId,
+      from_placement_id: w.dockerPlacement,
+      to_placement_id: w.sharedPlacementA,
+      kind: 'to_shared',
+      routing: 'automatic',
+      status: 'success',
+      steps: '{"list":[],"phase":"forward"}'
+    })
+    fake.state.failOn = (name) => name === 'targetReady'
+    const { move_id } = await start(w, toFor('to_dedicated', w))
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    expect(m?.status).toBe('rolled_back')
+    expect(m?.steps.removed_target_placement ?? null).toBeNull()
+    expect(await db('nivaro_hub_placements').where({ id: w.dockerPlacement }).first()).toBeDefined()
+  })
+})
+
 describe('after release', () => {
   it('a failure in retire_source → success with the checklist item open, never rolled back', async () => {
     plan = planOf('to_shared')
@@ -1142,9 +1203,7 @@ describe('start refusals and locks', () => {
         }
       }
     })
-    expect((await refusal(start(w, toFor('between_shared', w)))).code).toBe(
-      'LINK_URL_NOT_PULLABLE'
-    )
+    expect((await refusal(start(w, toFor('between_shared', w)))).code).toBe('LINK_URL_NOT_PULLABLE')
     expect(
       (await refusal(start(w, toFor('between_shared', w), { overrides: ['ORDER'] }))).code
     ).toBe('BAD_OVERRIDE')

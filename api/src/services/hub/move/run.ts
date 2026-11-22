@@ -1113,6 +1113,7 @@ async function rollBack(
   await ctx.ops.revokeTickets().catch(() => undefined)
   // A placement this move made for the target goes again, unless something else uses it.
   if (move.steps.created_placement) await dropCreatedPlacement(ctx.moveId, move.to_placement_id)
+  else await dropUnservedTarget(ctx, move)
   await clearPlaced(ctx.moveId)
 
   const status: MoveStatus = failed.length
@@ -1199,6 +1200,40 @@ async function dropUnusedSharedPlacement(moveId: number): Promise<void> {
     .first('id')
   if (used || open) return
   await db(PLACEMENTS).where({ id: from.id }).del()
+}
+
+/**
+ * P6-21: a dedicated target placement that never served and that no environment uses is deleted
+ * with the rollback (recorded as steps.removed_target_placement). "Never served": no environment
+ * names it and no move ever left it or reached it (an earlier home is kept for a move back).
+ */
+async function dropUnservedTarget(ctx: Ctx, move: HubMoveRow): Promise<void> {
+  const p = await getPlacement(move.to_placement_id)
+  if (!p || p.kind === 'shared') return
+  const used = await db(ENVS).where({ placement_id: p.id }).first('id')
+  const served = await db(MOVES)
+    .whereNot({ id: ctx.moveId })
+    .where((q) =>
+      q
+        .where({ from_placement_id: p.id })
+        .orWhere((x) => x.where({ to_placement_id: p.id, status: 'success' }))
+        .orWhere((x) =>
+          x.where({ to_placement_id: p.id }).whereIn('status', OPEN_MOVE_STATUSES as string[])
+        )
+    )
+    .first('id')
+  if (used || served) return
+  await db.transaction(async (trx) => {
+    await trx('nivaro_hub_components').where({ placement_id: p.id }).del()
+    await trx(PLACEMENTS).where({ id: p.id }).del()
+  })
+  const now = await readMove(ctx.moveId)
+  if (now) {
+    const steps = structuredClone(now.steps)
+    steps.removed_target_placement = p.id
+    await saveSteps(ctx, steps)
+  }
+  ctx.run.log(`rollback: removed the target placement ${p.id} (it never served)`)
 }
 
 async function clearPlaced(moveId: number) {
