@@ -176,7 +176,7 @@ export const deploymentModesDocs: DocSection = {
     },
     {
       type: 'note',
-      text: 'A shared deployment also needs a Redis, an ENCRYPTION_KEY if it should keep the last good app list across a restart, and SESSION_SECRET, as in every mode. SQLite apps cannot be served on a shared deployment.'
+      text: 'A shared deployment also needs a Redis, an ENCRYPTION_KEY if it should keep the last good app list across a restart, and SESSION_SECRET, as in every mode. SQLite apps cannot be served on a shared deployment. The release image healthcheck probes `/api/ready` on a shared deployment, as in cloud: a probe to 127.0.0.1 names no app, so `/api/version` would answer 503 or 404 and the container would be restarted in a loop.'
     },
     { type: 'h2', id: 'deployment-modes-hub-source', text: 'The Hub tenants contract' },
     {
