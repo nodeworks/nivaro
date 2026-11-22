@@ -404,6 +404,40 @@ describe('HubMovePanel — before start', () => {
     await waitFor(() => expect(h.del).toHaveBeenCalledWith('/hub/placements/15'))
   })
 
+  it('the new stack option shows the name the request was sent with', async () => {
+    window.localStorage.setItem('nvr:hub-move-dismissed:10', '0')
+    const base = h.get.getMockImplementation() as (url: string) => Promise<unknown>
+    h.get.mockImplementation(async (url: string) =>
+      url === '/hub/placements/9'
+        ? {
+            data: {
+              data: { id: 9, kind: 'shared', shared_deployment_id: 4, driver_id: null, target: {} }
+            }
+          }
+        : base(url)
+    )
+    let answer: (v: unknown) => void = () => {}
+    const basePost = h.post.getMockImplementation() as (u: string, b?: unknown) => Promise<unknown>
+    h.post.mockImplementation((url: string, b?: unknown) =>
+      url === '/hub/placements' ? new Promise((r) => (answer = r)) : basePost(url, b)
+    )
+    renderPanelOn9()
+    fireEvent.click(await screen.findByRole('combobox', { name: 'Move to' }))
+    fireEvent.click(await screen.findByRole('option', { name: /New stack on Docker east/ }))
+    const field = screen.getByLabelText('Stack name')
+    fireEvent.change(field, { target: { value: 'efp-sent' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Make the stack placement and plan' }))
+    await waitFor(() => expect(h.post).toHaveBeenCalledWith('/hub/placements', expect.anything()))
+    // Edited while the request is out: the option still names what was sent.
+    fireEvent.change(field, { target: { value: 'efp-edited' } })
+    answer({ data: { data: { id: 16 } } })
+    await waitFor(() =>
+      expect(screen.getByRole('combobox', { name: 'Move to' })).toHaveTextContent(
+        'Dedicated · Docker east · efp-sent'
+      )
+    )
+  })
+
   it('while a start is out: no Close, no Cancel, no new pick', async () => {
     plan = { ...basePlan, checklist: [] }
     const basePost = h.post.getMockImplementation() as (u: string, b?: unknown) => Promise<unknown>

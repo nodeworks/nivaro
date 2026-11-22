@@ -425,7 +425,9 @@ function MoveForm({
         return
       }
       madeRef.current = { id: r.id, started: false }
-      setMade({ id: r.id, driver: newDriver?.name ?? 'driver', stack: stackName.trim() })
+      // Named as it was asked for (the name field may have been edited while it was out).
+      const driverName = drivers.data?.find((d) => d.id === v.driverId)?.name ?? 'driver'
+      setMade({ id: r.id, driver: driverName, stack: v.stack })
       setPickRaw(`dedicated:${r.id}`)
     },
     onError: (err) => moveToast(err, 'Could not make the stack placement')
