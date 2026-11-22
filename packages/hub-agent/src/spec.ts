@@ -95,27 +95,52 @@ const MAX_ENV_BYTES = 4096
 const MAX_SECRET_BYTES = 65536
 
 /**
- * Keys a spec may never set (env, role env, or as a secret file, which
- * Nivaro reads in place of the env value): they change how the process loads
- * code, which user it runs as, where secrets come from, or what the agent
- * itself sets per role. `<KEY>_FILE` is refused for each, since Nivaro reads
- * X from the file X_FILE names.
+ * Every env key renderServices sets itself — THE one list. The validator
+ * refuses each from the spec as env, as a secret (Nivaro reads /run/secrets/X
+ * in place of env X) and as `<KEY>_FILE`; only role env may carry the role
+ * keys. REDIS_URL is the agent's only while redis is bundled.
  */
-const FORBIDDEN_KEYS = new Set([
-  'NODE_OPTIONS',
-  'NODE_PATH',
-  'PATH',
-  'HOME',
-  'NIVARO_RUN_AS',
-  'NIVARO_SECRETS_DIR',
-  'NIVARO_ROLE'
-])
+export const AGENT_SET_ENV_KEYS: readonly string[] = [
+  'NIVARO_ROLE',
+  'REDIS_URL',
+  'STORAGE_LOCAL_ROOT',
+  ...ROLE_ENV_KEYS
+]
 
-function forbiddenKey(key: string, redis: unknown): boolean {
-  const k = key.endsWith('_FILE') ? key.slice(0, -5) : key
-  if (FORBIDDEN_KEYS.has(k) || k.startsWith('LD_')) return true
-  if (k === 'REDIS_URL' && redis !== 'external') return true
+/**
+ * The NIVARO_* keys a spec may set. Every other NIVARO_* key is refused: the
+ * image entrypoint reads several (NIVARO_APP_UID/GID, NIVARO_RUN_AS,
+ * NIVARO_CGROUP_ROOT, NIVARO_MEMINFO, NIVARO_RUNNING_AS_ROOT,
+ * NIVARO_ROOT_REASON) to decide which user Node runs as.
+ */
+export const NIVARO_ENV_ALLOWED: readonly string[] = [
+  'NIVARO_ENVIRONMENT',
+  'NIVARO_INSTANCE',
+  'NIVARO_EXPECTED_DB',
+  'NIVARO_HEAP_FROM_CGROUP'
+]
+
+/**
+ * Process and runtime keys: where code is loaded from (PATH, LD_*, NODE_*,
+ * OPENSSL_*), whose files the entrypoint chowns while still root (TMPDIR and
+ * its fallbacks), and outbound TLS trust (NODE_*, SSL_CERT_*).
+ */
+const RUNTIME_KEYS = new Set(['PATH', 'HOME', 'TMPDIR', 'TMP', 'TEMP'])
+const RUNTIME_PREFIXES = ['LD_', 'OPENSSL_', 'SSL_CERT_']
+
+function forbiddenBase(k: string, redis: unknown): boolean {
+  if (RUNTIME_KEYS.has(k)) return true
+  if (RUNTIME_PREFIXES.some((p) => k.startsWith(p))) return true
+  if (k.startsWith('NODE_') && k !== 'NODE_ENV') return true
+  if (k.startsWith('NIVARO_') && !NIVARO_ENV_ALLOWED.includes(k)) return true
+  if (AGENT_SET_ENV_KEYS.includes(k)) return !(k === 'REDIS_URL' && redis === 'external')
   return false
+}
+
+/** A key the spec may not set, itself or through `<KEY>_FILE`. */
+export function forbiddenEnvKey(key: string, redis: unknown): boolean {
+  if (forbiddenBase(key, redis)) return true
+  return key.endsWith('_FILE') && forbiddenBase(key.slice(0, -5), redis)
 }
 
 /** `<repo>@sha256:<64 lowercase hex>`; repo in the Docker reference grammar. */
@@ -159,15 +184,23 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 }
 
 const own = (o: Record<string, unknown>) => Object.keys(o)
+
+/** Key text from the caller, echoed in a field path: at most 64 characters. */
+const KEY_ECHO_MAX = 64
+const cap = (k: string) => (k.length > KEY_ECHO_MAX ? `${k.slice(0, KEY_ECHO_MAX)}…` : k)
+/** At most this many field errors in one answer. */
+export const MAX_FIELD_ERRORS = 100
 const bytes = (s: string) => Buffer.byteLength(s, 'utf8')
 
 export function validateStackSpec(body: unknown, cfg: SpecConfig): SpecResult {
   const errs: FieldError[] = []
-  const bad = (field: string, code: FieldCode) => errs.push({ field, code })
+  const bad = (field: string, code: FieldCode) => {
+    if (errs.length < MAX_FIELD_ERRORS) errs.push({ field, code })
+  }
 
   if (!isPlainObject(body)) return { ok: false, fields: [{ field: '', code: 'REQUIRED' }] }
 
-  for (const k of own(body)) if (!TOP_FIELDS.has(k)) bad(k, 'UNKNOWN_FIELD')
+  for (const k of own(body)) if (!TOP_FIELDS.has(k)) bad(cap(k), 'UNKNOWN_FIELD')
   const has = (k: string) => Object.hasOwn(body, k)
 
   // owner
@@ -178,7 +211,7 @@ export function validateStackSpec(body: unknown, cfg: SpecConfig): SpecResult {
     const keys = own(o)
     const which = keys.includes('app') ? 'app' : keys.includes('shared') ? 'shared' : null
     if (!which) bad('owner', 'REQUIRED')
-    for (const k of keys) if (k !== which) bad(`owner.${k}`, 'UNKNOWN_FIELD')
+    for (const k of keys) if (k !== which) bad(`owner.${cap(k)}`, 'UNKNOWN_FIELD')
     if (which) {
       const v = o[which]
       if (typeof v !== 'string' || !OWNER_KEY_RE.test(v)) bad(`owner.${which}`, 'BAD_KEY')
@@ -212,9 +245,9 @@ export function validateStackSpec(body: unknown, cfg: SpecConfig): SpecResult {
     if (keys.length > MAX_SECRETS) bad('secrets', 'TOO_MANY')
     for (const k of keys) {
       const v = body.secrets[k]
-      const f = `secrets.${k}`
+      const f = `secrets.${cap(k)}`
       if (!ENV_KEY_RE.test(k)) bad(f, 'BAD_KEY')
-      else if (forbiddenKey(k, redis)) bad(f, 'ENV_FORBIDDEN')
+      else if (forbiddenEnvKey(k, redis)) bad(f, 'ENV_FORBIDDEN')
       else if (typeof v !== 'string') bad(f, 'REQUIRED')
       else if (bytes(v) > MAX_SECRET_BYTES) bad(f, 'TOO_LONG')
       else secrets[k] = v
@@ -230,9 +263,9 @@ export function validateStackSpec(body: unknown, cfg: SpecConfig): SpecResult {
     const secretKeys = isPlainObject(body.secrets) ? own(body.secrets) : []
     for (const k of keys) {
       const v = body.env[k]
-      const f = `env.${k}`
+      const f = `env.${cap(k)}`
       if (!ENV_KEY_RE.test(k)) bad(f, 'BAD_KEY')
-      else if (forbiddenKey(k, redis) || secretKeys.includes(k)) bad(f, 'ENV_FORBIDDEN')
+      else if (forbiddenEnvKey(k, redis) || secretKeys.includes(k)) bad(f, 'ENV_FORBIDDEN')
       else if (typeof v !== 'string') bad(f, 'REQUIRED')
       else if (bytes(v) > MAX_ENV_BYTES) bad(f, 'TOO_LONG')
       else env[k] = v
@@ -252,7 +285,7 @@ export function validateStackSpec(body: unknown, cfg: SpecConfig): SpecResult {
         bad(p, 'REQUIRED')
         return
       }
-      for (const k of own(r)) if (!ROLE_FIELDS.has(k)) bad(`${p}.${k}`, 'UNKNOWN_FIELD')
+      for (const k of own(r)) if (!ROLE_FIELDS.has(k)) bad(`${p}.${cap(k)}`, 'UNKNOWN_FIELD')
       const role = r.role
       let okRole = false
       if (typeof role !== 'string' || !(ROLES as readonly string[]).includes(role)) {
@@ -290,7 +323,7 @@ export function validateStackSpec(body: unknown, cfg: SpecConfig): SpecResult {
           const renv: Record<string, string> = {}
           for (const k of own(r.env)) {
             const v = r.env[k]
-            const f = `${p}.env.${k}`
+            const f = `${p}.env.${cap(k)}`
             if (!ENV_KEY_RE.test(k)) bad(f, 'BAD_KEY')
             else if (!ROLE_ENV_KEYS.includes(k)) bad(f, 'ENV_FORBIDDEN')
             else if (typeof v !== 'string') bad(f, 'REQUIRED')
@@ -330,7 +363,7 @@ export function validateStackSpec(body: unknown, cfg: SpecConfig): SpecResult {
     const keys = own(body.extensions)
     if (keys.length > MAX_EXTENSIONS) bad('extensions', 'TOO_MANY')
     for (const id of keys) {
-      const f = `extensions.${id}`
+      const f = `extensions.${cap(id)}`
       if (!EXTENSION_ID_RE.test(id)) {
         bad(f, 'EXTENSION_ID_BAD')
         continue

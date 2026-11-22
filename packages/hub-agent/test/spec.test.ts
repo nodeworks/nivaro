@@ -7,7 +7,14 @@ import {
   specHash,
   specHashInput
 } from '../src/names.js'
-import { type SpecConfig, type StackSpec, validateStackSpec } from '../src/spec.js'
+import {
+  AGENT_SET_ENV_KEYS,
+  MAX_FIELD_ERRORS,
+  NIVARO_ENV_ALLOWED,
+  type SpecConfig,
+  type StackSpec,
+  validateStackSpec
+} from '../src/spec.js'
 
 const EXAMPLE = JSON.parse(
   readFileSync(new URL('../contract/stack-spec.example.json', import.meta.url), 'utf8')
@@ -165,7 +172,7 @@ describe('validateStackSpec — BAD_KEY (names cannot escape)', () => {
   it('accepts a shared owner', () => {
     expect(validateStackSpec({ ...base(), owner: { shared: 'tools' } }, cfg()).ok).toBe(true)
   })
-  for (const key of ['lower', '1A', 'A-B', 'A=B', 'A B', '', `A${'B'.repeat(64)}`, '../A']) {
+  for (const key of ['lower', '1A', 'A-B', 'A=B', 'A B', '', '../A']) {
     it(`refuses env key ${JSON.stringify(key)}`, () => {
       expect(codeOf({ ...base(), env: { [key]: 'x' } }, `env.${key}`)).toBe('BAD_KEY')
     })
@@ -173,6 +180,12 @@ describe('validateStackSpec — BAD_KEY (names cannot escape)', () => {
       expect(codeOf({ ...base(), secrets: { [key]: 'x' } }, `secrets.${key}`)).toBe('BAD_KEY')
     })
   }
+  it('refuses a 65-character key, echoing at most 64 characters of it', () => {
+    const key = `A${'B'.repeat(64)}`
+    const echoed = `${key.slice(0, 64)}…`
+    expect(codeOf({ ...base(), env: { [key]: 'x' } }, `env.${echoed}`)).toBe('BAD_KEY')
+    expect(codeOf({ ...base(), secrets: { [key]: 'x' } }, `secrets.${echoed}`)).toBe('BAD_KEY')
+  })
 })
 
 describe('validateStackSpec — images', () => {
@@ -223,29 +236,93 @@ describe('validateStackSpec — images', () => {
 })
 
 describe('validateStackSpec — ENV_FORBIDDEN', () => {
-  for (const key of [
-    'NODE_OPTIONS',
-    'NODE_PATH',
-    'LD_PRELOAD',
-    'LD_LIBRARY_PATH',
-    'LD_AUDIT',
-    'PATH',
-    'HOME',
-    'NIVARO_RUN_AS',
-    'NIVARO_SECRETS_DIR',
-    'NIVARO_ROLE',
-    'NIVARO_ROLE_FILE',
-    'NODE_OPTIONS_FILE',
-    'REDIS_URL',
-    'REDIS_URL_FILE'
-  ]) {
-    it(`refuses env ${key}`, () => {
-      expect(codeOf({ ...base(), env: { [key]: 'x' } }, `env.${key}`)).toBe('ENV_FORBIDDEN')
-    })
-    it(`refuses secret ${key} (a secret file would override it)`, () => {
-      expect(codeOf({ ...base(), secrets: { [key]: 'x' } }, `secrets.${key}`)).toBe('ENV_FORBIDDEN')
+  const families: Record<string, string[]> = {
+    'process and loader': ['PATH', 'HOME', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'LD_AUDIT'],
+    'NODE_* except NODE_ENV': [
+      'NODE_OPTIONS',
+      'NODE_PATH',
+      'NODE_EXTRA_CA_CERTS',
+      'NODE_TLS_REJECT_UNAUTHORIZED',
+      'NODE_ANYTHING'
+    ],
+    'OPENSSL_*': ['OPENSSL_CONF', 'OPENSSL_MODULES', 'OPENSSL_ENGINES', 'OPENSSL_ANYTHING'],
+    'SSL_CERT_*': ['SSL_CERT_FILE', 'SSL_CERT_DIR'],
+    'temp folders the entrypoint chowns as root': ['TMPDIR', 'TMP', 'TEMP'],
+    'NIVARO_* outside the allow set (entrypoint inputs)': [
+      'NIVARO_APP_UID',
+      'NIVARO_APP_GID',
+      'NIVARO_RUN_AS',
+      'NIVARO_CGROUP_ROOT',
+      'NIVARO_MEMINFO',
+      'NIVARO_RUNNING_AS_ROOT',
+      'NIVARO_ROOT_REASON',
+      'NIVARO_SECRETS_DIR',
+      'NIVARO_IMAGE_VARIANT',
+      'NIVARO_DOTENV',
+      'NIVARO_ANYTHING'
+    ],
+    'agent-set keys': AGENT_SET_ENV_KEYS as string[],
+    '<KEY>_FILE of a refused key': [
+      'NODE_OPTIONS_FILE',
+      'TMPDIR_FILE',
+      'NIVARO_APP_UID_FILE',
+      'OPENSSL_CONF_FILE',
+      'STORAGE_LOCAL_ROOT_FILE',
+      'NIVARO_ROLE_FILE',
+      'REDIS_URL_FILE',
+      'SOCKETS_FILE',
+      'CRON_TICKS_FILE'
+    ]
+  }
+  for (const [family, keys] of Object.entries(families)) {
+    describe(family, () => {
+      for (const key of keys) {
+        it(`refuses env ${key}`, () => {
+          expect(codeOf({ ...base(), env: { [key]: 'x' } }, `env.${key}`)).toBe('ENV_FORBIDDEN')
+        })
+        it(`refuses secret ${key} (the /run/secrets file would win)`, () => {
+          expect(codeOf({ ...base(), secrets: { [key]: 'x' } }, `secrets.${key}`)).toBe(
+            'ENV_FORBIDDEN'
+          )
+        })
+      }
     })
   }
+  it('the agent-set list holds every key the renderer sets', () => {
+    expect([...AGENT_SET_ENV_KEYS].sort()).toEqual(
+      [
+        'CRON_TICKS',
+        'IMPORT_WORKER',
+        'MEDIA_WORKER',
+        'NIVARO_ROLE',
+        'REDIS_URL',
+        'SOCKETS',
+        'STORAGE_LOCAL_ROOT',
+        'VIDEO_RENDER'
+      ].sort()
+    )
+  })
+  it('accepts NODE_ENV and the NIVARO_* allow set', () => {
+    expect(NIVARO_ENV_ALLOWED).toEqual([
+      'NIVARO_ENVIRONMENT',
+      'NIVARO_INSTANCE',
+      'NIVARO_EXPECTED_DB',
+      'NIVARO_HEAP_FROM_CGROUP'
+    ])
+    const env = { ...base().env, NODE_ENV: 'production' }
+    for (const k of NIVARO_ENV_ALLOWED) env[k] = 'x'
+    expect(validateStackSpec({ ...base(), env }, cfg()).ok).toBe(true)
+  })
+  it('refuses the agent-set keys whatever the redis mode, except REDIS_URL when external', () => {
+    const ext = { ...base(), redis: 'external' }
+    expect(codeOf({ ...ext, env: { STORAGE_LOCAL_ROOT: '/' } }, 'env.STORAGE_LOCAL_ROOT')).toBe(
+      'ENV_FORBIDDEN'
+    )
+    expect(codeOf({ ...ext, secrets: { SOCKETS: 'on' } }, 'secrets.SOCKETS')).toBe('ENV_FORBIDDEN')
+    expect(
+      validateStackSpec({ ...ext, secrets: { REDIS_URL: 'redis://u:p@r:6379' } }, cfg()).ok
+    ).toBe(true)
+  })
   it('allows REDIS_URL when redis is external', () => {
     const r = validateStackSpec(
       { ...base(), redis: 'external', env: { ...base().env, REDIS_URL: 'redis://r:6379' } },
@@ -475,6 +552,29 @@ describe('validateStackSpec — every problem at once', () => {
         { field: 'hostnames[0]', code: 'HOSTNAME_NOT_ALLOWED' }
       ])
     )
+  })
+  it('caps echoed key text at 64 characters for every keyed field', () => {
+    const k = `X${'y'.repeat(999)}`
+    const b = base()
+    b.owner = { app: 'acme', [k]: 1 }
+    b.roles[0][k] = 1
+    b.roles[0].env = { [k]: 'x' }
+    const f = fields({
+      ...b,
+      [k]: 1,
+      env: { [k]: 'x' },
+      secrets: { [k]: 'x' },
+      extensions: { [k]: 'x' }
+    })
+    expect(f.length).toBe(7)
+    for (const e of f) {
+      expect(e.field).toContain(`${k.slice(0, 64)}…`)
+      expect(e.field.length).toBeLessThan(90)
+    }
+  })
+  it(`answers at most ${MAX_FIELD_ERRORS} field errors`, () => {
+    const extra = Object.fromEntries(Array.from({ length: 500 }, (_, i) => [`junk${i}`, 1]))
+    expect(fields({ ...base(), ...extra }).length).toBe(MAX_FIELD_ERRORS)
   })
   it('never echoes a value in the answer', () => {
     const f = fields({ ...base(), secrets: { 'bad key': 'hunter2-secret' } })

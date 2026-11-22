@@ -127,6 +127,17 @@ function extensionSource(root: string, path: string): string {
   return norm
 }
 
+/**
+ * Traefik router/service names. `_` separates the parts because a stack name
+ * cannot hold one, so no two stacks (or roles) share a name: with `-`, stack
+ * `x` realtime and stack `x-rt` web were both `nvh-x-rt`. Traefik takes any
+ * characters but `.` and `@` in a label-defined router name.
+ * The realtime router carries no explicit priority: its rule is the web rule
+ * plus `&& PathPrefix(...)`, always longer, and Traefik ranks by rule length.
+ */
+export const webRouterName = (stack: string) => `nvh_web_${stack}`
+export const realtimeRouterName = (stack: string) => `nvh_rt_${stack}`
+
 function traefikLabels(
   stack: string,
   role: Role,
@@ -143,9 +154,14 @@ function traefikLabels(
     if (cfg.certResolver) out[`traefik.http.routers.${router}.tls.certresolver`] = cfg.certResolver
     return out
   }
-  const base = { 'traefik.enable': 'true', 'traefik.docker.network': cfg.edgeNetwork }
+  // Both provider spellings: v2 docker / v3 docker read the first, v3 swarm the second.
+  const base = {
+    'traefik.enable': 'true',
+    'traefik.docker.network': cfg.edgeNetwork,
+    'traefik.swarm.network': cfg.edgeNetwork
+  }
   if (role === 'web' || role === 'all') {
-    const r = `nvh-${stack}`
+    const r = webRouterName(stack)
     return {
       ...base,
       [`traefik.http.routers.${r}.rule`]: hosts,
@@ -155,12 +171,11 @@ function traefikLabels(
     }
   }
   if (role === 'realtime') {
-    const r = `nvh-${stack}-rt`
+    const r = realtimeRouterName(stack)
     const lb = `traefik.http.services.${r}.loadbalancer`
     return {
       ...base,
       [`traefik.http.routers.${r}.rule`]: `(${hosts}) && PathPrefix(\`/socket.io\`)`,
-      [`traefik.http.routers.${r}.priority`]: '100',
       ...tls(r),
       [`traefik.http.routers.${r}.service`]: r,
       [`${lb}.server.port`]: String(APP_PORT),
@@ -240,6 +255,8 @@ export function renderServices(
   const services: EngineServiceSpec[] = spec.roles.map((r) => {
     const env = new Map<string, string>()
     for (const k of Object.keys(spec.env).sort()) env.set(k, spec.env[k])
+    // Every key set from here on is in AGENT_SET_ENV_KEYS (spec.ts), which the
+    // validator refuses from the spec; render.test.ts holds the two together.
     for (const [k, v] of Object.entries(r.env ?? {})) env.set(k, v)
     if (r.role !== 'all') env.set('NIVARO_ROLE', r.role)
     else env.delete('NIVARO_ROLE')

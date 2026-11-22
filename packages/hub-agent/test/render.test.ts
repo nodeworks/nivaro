@@ -3,9 +3,11 @@ import {
   type EngineServiceSpec,
   type RenderConfig,
   type RenderContext,
-  renderServices
+  realtimeRouterName,
+  renderServices,
+  webRouterName
 } from '../src/render.js'
-import type { StackSpec } from '../src/spec.js'
+import { AGENT_SET_ENV_KEYS, type StackSpec } from '../src/spec.js'
 
 const DIGEST = `sha256:${'a'.repeat(64)}`
 const IMAGE = `nodeworks/nivaro@${DIGEST}`
@@ -36,7 +38,7 @@ const large = (over: Partial<StackSpec> = {}): StackSpec => ({
     { role: 'realtime', replicas: 2, cpus: 1, memory_mb: 1024 },
     { role: 'importer', replicas: 1, cpus: 2, memory_mb: 4096 }
   ],
-  env: { DB_HOST: 'db', PUBLIC_URL: 'https://a.apps.corp', SOCKETS: 'on' },
+  env: { DB_HOST: 'db', PUBLIC_URL: 'https://a.apps.corp' },
   secrets: { SESSION_SECRET: 'super-secret-value' },
   hostnames: ['a.apps.corp', 'b.apps.corp'],
   redis: 'bundled',
@@ -89,12 +91,8 @@ describe('renderServices — services and env', () => {
     }
   })
 
-  it('role env wins over spec env; SOCKETS=off only where given', () => {
-    const svcs = renderServices('st', large(), cfg(), ctx())
-    expect(envOf(byName(svcs, 'st_web')).SOCKETS).toBe('off')
-    expect(envOf(byName(svcs, 'st_realtime')).SOCKETS).toBe('on')
-    const plain = large({ env: { DB_HOST: 'db' } })
-    const s2 = renderServices('st', plain, cfg(), ctx())
+  it('SOCKETS=off only where the role env gives it', () => {
+    const s2 = renderServices('st', large(), cfg(), ctx())
     expect(envOf(byName(s2, 'st_web')).SOCKETS).toBe('off')
     for (const n of ['st_worker', 'st_realtime', 'st_importer']) {
       expect(envOf(byName(s2, n)).SOCKETS).toBeUndefined()
@@ -302,28 +300,29 @@ describe('renderServices — labels', () => {
     expect(pick(byName(svcs, 'st_web'))).toEqual({
       'traefik.enable': 'true',
       'traefik.docker.network': 'edge',
-      'traefik.http.routers.nvh-st.rule': 'Host(`a.apps.corp`) || Host(`b.apps.corp`)',
-      'traefik.http.routers.nvh-st.entrypoints': 'websecure',
-      'traefik.http.routers.nvh-st.tls': 'true',
-      'traefik.http.routers.nvh-st.tls.certresolver': 'le',
-      'traefik.http.routers.nvh-st.service': 'nvh-st',
-      'traefik.http.services.nvh-st.loadbalancer.server.port': '3055'
+      'traefik.swarm.network': 'edge',
+      'traefik.http.routers.nvh_web_st.rule': 'Host(`a.apps.corp`) || Host(`b.apps.corp`)',
+      'traefik.http.routers.nvh_web_st.entrypoints': 'websecure',
+      'traefik.http.routers.nvh_web_st.tls': 'true',
+      'traefik.http.routers.nvh_web_st.tls.certresolver': 'le',
+      'traefik.http.routers.nvh_web_st.service': 'nvh_web_st',
+      'traefik.http.services.nvh_web_st.loadbalancer.server.port': '3055'
     })
     expect(pick(byName(svcs, 'st_realtime'))).toEqual({
       'traefik.enable': 'true',
       'traefik.docker.network': 'edge',
-      'traefik.http.routers.nvh-st-rt.rule':
+      'traefik.swarm.network': 'edge',
+      'traefik.http.routers.nvh_rt_st.rule':
         '(Host(`a.apps.corp`) || Host(`b.apps.corp`)) && PathPrefix(`/socket.io`)',
-      'traefik.http.routers.nvh-st-rt.priority': '100',
-      'traefik.http.routers.nvh-st-rt.entrypoints': 'websecure',
-      'traefik.http.routers.nvh-st-rt.tls': 'true',
-      'traefik.http.routers.nvh-st-rt.tls.certresolver': 'le',
-      'traefik.http.routers.nvh-st-rt.service': 'nvh-st-rt',
-      'traefik.http.services.nvh-st-rt.loadbalancer.server.port': '3055',
-      'traefik.http.services.nvh-st-rt.loadbalancer.sticky.cookie': 'true',
-      'traefik.http.services.nvh-st-rt.loadbalancer.sticky.cookie.name': 'nvh_rt',
-      'traefik.http.services.nvh-st-rt.loadbalancer.sticky.cookie.secure': 'true',
-      'traefik.http.services.nvh-st-rt.loadbalancer.sticky.cookie.httponly': 'true'
+      'traefik.http.routers.nvh_rt_st.entrypoints': 'websecure',
+      'traefik.http.routers.nvh_rt_st.tls': 'true',
+      'traefik.http.routers.nvh_rt_st.tls.certresolver': 'le',
+      'traefik.http.routers.nvh_rt_st.service': 'nvh_rt_st',
+      'traefik.http.services.nvh_rt_st.loadbalancer.server.port': '3055',
+      'traefik.http.services.nvh_rt_st.loadbalancer.sticky.cookie': 'true',
+      'traefik.http.services.nvh_rt_st.loadbalancer.sticky.cookie.name': 'nvh_rt',
+      'traefik.http.services.nvh_rt_st.loadbalancer.sticky.cookie.secure': 'true',
+      'traefik.http.services.nvh_rt_st.loadbalancer.sticky.cookie.httponly': 'true'
     })
     for (const n of ['st_worker', 'st_importer', 'st_redis'])
       expect(pick(byName(svcs, n))).toEqual({})
@@ -339,8 +338,8 @@ describe('renderServices — labels', () => {
       ),
       'st_web'
     )
-    expect(web.Labels['traefik.http.routers.nvh-st.tls.certresolver']).toBeUndefined()
-    expect(web.Labels['traefik.http.routers.nvh-st.entrypoints']).toBe('web,websecure')
+    expect(web.Labels['traefik.http.routers.nvh_web_st.tls.certresolver']).toBeUndefined()
+    expect(web.Labels['traefik.http.routers.nvh_web_st.entrypoints']).toBe('web,websecure')
   })
 
   it('edge network only on web/all/realtime in traefik mode', () => {
@@ -404,4 +403,140 @@ describe('renderServices — placement', () => {
       }
     }
   })
+})
+
+describe('renderServices — router names and priority', () => {
+  const traefikNames = (svcs: EngineServiceSpec[]) => {
+    const names = new Set<string>()
+    for (const s of svcs) {
+      for (const k of Object.keys(s.Labels)) {
+        const m = /^traefik\.http\.(routers|services)\.([^.]+)\./.exec(k)
+        if (m) names.add(`${m[1]}:${m[2]}`)
+      }
+    }
+    return names
+  }
+  it('stack a and stack a-rt share no router or service name', () => {
+    const a = traefikNames(renderServices('ab', large(), cfg(), ctx({ network: 'nvh_ab' })))
+    const b = traefikNames(renderServices('ab-rt', large(), cfg(), ctx({ network: 'nvh_ab-rt' })))
+    expect(a.size).toBe(4)
+    expect(b.size).toBe(4)
+    for (const n of a) expect(b.has(n)).toBe(false)
+  })
+  it('names use a separator a stack name cannot hold', () => {
+    expect(webRouterName('ab')).toBe('nvh_web_ab')
+    expect(realtimeRouterName('ab')).toBe('nvh_rt_ab')
+    expect(webRouterName('ab-rt')).not.toBe(realtimeRouterName('ab'))
+  })
+  it('sets no explicit priority; with 10 long hostnames the realtime rule is still the longer', () => {
+    const hostnames = Array.from({ length: 10 }, (_, i) => `${'h'.repeat(60)}${i}.apps.corp`)
+    const svcs = renderServices('st', large({ hostnames }), cfg(), ctx())
+    const all = svcs.flatMap((s) => Object.keys(s.Labels))
+    expect(all.some((k) => k.endsWith('.priority'))).toBe(false)
+    const web = byName(svcs, 'st_web').Labels['traefik.http.routers.nvh_web_st.rule']
+    const rt = byName(svcs, 'st_realtime').Labels['traefik.http.routers.nvh_rt_st.rule']
+    expect(rt.length).toBeGreaterThan(web.length)
+    expect(rt.startsWith(`(${web})`)).toBe(true)
+  })
+})
+
+describe('renderServices — env keys the agent sets', () => {
+  it('every env key not taken from spec.env is in AGENT_SET_ENV_KEYS', () => {
+    const spec = large({
+      roles: [
+        {
+          role: 'web',
+          replicas: 1,
+          env: {
+            SOCKETS: 'off',
+            CRON_TICKS: 'off',
+            IMPORT_WORKER: 'off',
+            MEDIA_WORKER: 'off',
+            VIDEO_RENDER: 'off'
+          }
+        },
+        { role: 'worker', replicas: 1 }
+      ]
+    })
+    const set = new Set<string>()
+    for (const s of renderServices('st', spec, cfg(), ctx())) {
+      if (s.Name === 'st_redis') continue
+      for (const k of Object.keys(envOf(s))) if (!(k in spec.env)) set.add(k)
+    }
+    expect([...set].sort()).toEqual([...AGENT_SET_ENV_KEYS].sort())
+  })
+})
+
+describe('renderServices — safety scan over sizes and edge modes', () => {
+  const sizes: Record<string, Partial<StackSpec>> = {
+    small: { roles: [{ role: 'all', replicas: 1, cpus: 2, memory_mb: 3072 }], redis: 'external' },
+    medium: {
+      roles: [
+        { role: 'web', replicas: 2, cpus: 2, memory_mb: 3072 },
+        { role: 'worker', replicas: 1, cpus: 2, memory_mb: 4096 }
+      ]
+    },
+    large: {}
+  }
+  const CONTAINER_KEYS = ['Env', 'Image', 'Labels', 'Mounts', 'Secrets']
+  const SERVICE_KEYS = ['Labels', 'Mode', 'Name', 'RollbackConfig', 'TaskTemplate', 'UpdateConfig']
+  for (const [size, over] of Object.entries(sizes)) {
+    for (const edge of ['traefik', 'publish'] as const) {
+      for (const withExt of [false, true]) {
+        it(`${size} / ${edge} / ${withExt ? 'extensions' : 'no extensions'}`, () => {
+          const spec = large({
+            ...over,
+            ...(edge === 'publish' ? { publish_port: 31000 } : {}),
+            extensions: withExt ? { 'acme-tools': EXT } : {}
+          })
+          const svcs = renderServices(
+            'st',
+            spec,
+            cfg({ edge }),
+            ctx({
+              extensionPaths: withExt ? { 'acme-tools': `${ROOT}/st/acme-tools@cccccccccccc` } : {}
+            })
+          )
+          for (const s of svcs) {
+            const isRedis = s.Name === 'st_redis'
+            const publishes = edge === 'publish' && (s.Name === 'st_web' || s.Name === 'st_all')
+            expect(Object.keys(s).sort()).toEqual(
+              [...SERVICE_KEYS, ...(publishes ? ['EndpointSpec'] : [])].sort()
+            )
+            expect(Object.keys(s.TaskTemplate.ContainerSpec).sort()).toEqual(CONTAINER_KEYS)
+            const pinned = withExt && !isRedis
+            expect(Object.keys(s.TaskTemplate).sort()).toEqual(
+              [
+                'ContainerSpec',
+                'Networks',
+                'Resources',
+                'RestartPolicy',
+                ...(pinned ? ['Placement'] : [])
+              ].sort()
+            )
+            for (const m of s.TaskTemplate.ContainerSpec.Mounts) {
+              if (m.Type === 'bind') {
+                expect(Object.keys(m).sort()).toEqual(['ReadOnly', 'Source', 'Target', 'Type'])
+                expect(m.ReadOnly).toBe(true)
+                expect(m.Source.startsWith(`${ROOT}/`)).toBe(true)
+              } else {
+                expect(Object.keys(m).sort()).toEqual(['Source', 'Target', 'Type', 'VolumeOptions'])
+                expect(m.Source).toMatch(/^nvh_st_(uploads|redis)$/)
+              }
+            }
+            for (const n of s.TaskTemplate.Networks) {
+              expect(Object.keys(n)).toEqual(['Target'])
+              expect(edge === 'traefik' ? ['nvh_st', 'edge'] : ['nvh_st']).toContain(n.Target)
+            }
+            if (s.EndpointSpec) {
+              expect(s.EndpointSpec).toEqual({
+                Ports: [{ TargetPort: 3055, PublishedPort: 31000 }]
+              })
+            }
+            expect(JSON.stringify(s)).not.toContain('docker.sock')
+          }
+        })
+      }
+    }
+  }
 })
