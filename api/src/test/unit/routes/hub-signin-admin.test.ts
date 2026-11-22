@@ -436,6 +436,58 @@ describe('environment clients', () => {
   })
 })
 
+describe('distinct people and the overview', () => {
+  it('counts one person once across identity keys and rows without hub_user_id', async () => {
+    const { appId, envId } = await seed('efp', OWNER)
+    const recent = new Date(Date.now() - 2 * 86_400_000)
+    const seen = { first_seen: recent, last_seen: recent }
+    const U1 = 'DDDDDDDD-0000-4000-8000-000000000004'
+    await db('nivaro_hub_signins').insert([
+      {
+        identity_key: 'oid:1',
+        hub_user_id: U1,
+        app_id: appId,
+        environment_id: envId,
+        via: 'hub',
+        ...seen
+      },
+      {
+        identity_key: 'email:a@x',
+        hub_user_id: U1,
+        app_id: appId,
+        environment_id: envId,
+        via: 'hub',
+        ...seen
+      },
+      {
+        identity_key: 'email:z@x',
+        hub_user_id: null,
+        app_id: appId,
+        environment_id: envId,
+        via: 'hub',
+        ...seen
+      }
+    ])
+    const g = await req('GET', `/hub/signin/environments/${envId}/client`, asOwner)
+    expect(g.json().data.signins_30d).toBe(2)
+    expect(g.json().data.redirect_uris).toContain('https://efp.example.com/api/auth/callback')
+    const o = await req('GET', '/hub/signin/overview', asOwner)
+    expect(o.json().data).toHaveLength(1)
+    expect(o.json().data[0]).toMatchObject({
+      key: 'efp',
+      signins_30d: 2,
+      environments: [{ key: 'production', has_client: false, signins_30d: 2 }]
+    })
+  })
+
+  it('overview shows an owner only their apps; admins all', async () => {
+    await seed('efp', OWNER)
+    await seed('beta')
+    expect((await req('GET', '/hub/signin/overview', asOwner)).json().data).toHaveLength(1)
+    expect((await req('GET', '/hub/signin/overview', asAdmin)).json().data).toHaveLength(2)
+  })
+})
+
 describe('hub token writes keep the lookup in step (routes/hub.ts)', () => {
   const TOKEN = 'link-token-0123456789abcdefghijklmnop'
 

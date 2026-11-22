@@ -3,11 +3,19 @@ import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { credentialMintRefusal, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { idParam, isAppOwner, isSigninMode, readApp } from '../services/hub/apps.js'
+import {
+  environmentFromRow,
+  idParam,
+  isAppOwner,
+  isSigninMode,
+  listApps,
+  readApp
+} from '../services/hub/apps.js'
 import { hubModeEnabled } from '../services/hub/mode.js'
 import {
   clientForEnvironment,
   createClient,
+  derivedRedirectUris,
   HubClientError,
   type HubOidcClient,
   rotateClientSecret,
@@ -140,14 +148,38 @@ async function clientView(client: HubOidcClient) {
   }
 }
 
-async function signinsLast30Days(envId: number): Promise<number> {
+/** Distinct people, not rows: one person may hold several identity keys (oid, email). */
+function personOf(r: { hub_user_id?: unknown; identity_key?: unknown }): string {
+  return r.hub_user_id ? `u:${String(r.hub_user_id).toLowerCase()}` : `k:${String(r.identity_key)}`
+}
+
+/** Distinct people who signed in in the last 30 days, per environment and per app. */
+async function distinctSignins(envIds: number[]) {
+  const perEnv = new Map<number, Set<string>>()
+  const perApp = new Map<number, Set<string>>()
+  if (envIds.length === 0) return { perEnv, perApp }
   const since = new Date(Date.now() - 30 * DAY_MS)
-  const row = (await db(SIGNINS)
-    .where({ environment_id: envId })
+  const rows = (await db(SIGNINS)
+    .whereIn('environment_id', envIds)
     .where('last_seen', '>=', since)
-    .count({ n: '*' })
-    .first()) as { n: number | string } | undefined
-  return Number(row?.n ?? 0)
+    .select('environment_id', 'app_id', 'hub_user_id', 'identity_key')) as Array<
+    Record<string, unknown>
+  >
+  for (const r of rows) {
+    const who = personOf(r)
+    const e = Number(r.environment_id)
+    const a = Number(r.app_id)
+    if (!perEnv.has(e)) perEnv.set(e, new Set())
+    perEnv.get(e)?.add(who)
+    if (!perApp.has(a)) perApp.set(a, new Set())
+    perApp.get(a)?.add(who)
+  }
+  return { perEnv, perApp }
+}
+
+async function signinsLast30Days(envId: number): Promise<number> {
+  const { perEnv } = await distinctSignins([envId])
+  return perEnv.get(envId)?.size ?? 0
 }
 
 export async function hubSigninAdminRoutes(app: FastifyInstance) {
@@ -160,6 +192,48 @@ export async function hubSigninAdminRoutes(app: FastifyInstance) {
         idp_audience: idpAudience(),
         keys: req.isAdmin === true ? await listSigningKeys() : null
       }
+    }
+  })
+
+  // The apps table: every app (admins) or the caller's own apps (owners), with each
+  // environment's client state and distinct people signed in over 30 days.
+  app.get('/overview', { preHandler: requireAuth }, async (req) => {
+    const apps = await listApps(userId(req), req.isAdmin === true)
+    const appIds = apps.map((a) => a.id)
+    const envRows = appIds.length
+      ? ((await db(ENVS)
+          .whereIn('app_id', appIds)
+          .orderBy('position', 'asc')
+          .orderBy('id', 'asc')) as Array<Record<string, unknown>>)
+      : []
+    const envIds = envRows.map((r) => Number(r.id))
+    const clientRows = envIds.length
+      ? ((await db(CLIENTS)
+          .whereIn('environment_id', envIds)
+          .select('environment_id', 'active')) as Array<Record<string, unknown>>)
+      : []
+    const clients = new Map(clientRows.map((c) => [Number(c.environment_id), c]))
+    const { perEnv, perApp } = await distinctSignins(envIds)
+    return {
+      data: apps.map((a) => ({
+        id: a.id,
+        key: a.key,
+        name: a.name,
+        signin_mode: a.signin_mode,
+        signins_30d: perApp.get(a.id)?.size ?? 0,
+        environments: envRows
+          .filter((r) => Number(r.app_id) === a.id)
+          .map((r) => {
+            const c = clients.get(Number(r.id))
+            return {
+              id: Number(r.id),
+              key: String(r.key),
+              has_client: !!c,
+              active: c ? c.active === true || c.active === 1 || c.active === '1' : false,
+              signins_30d: perEnv.get(Number(r.id))?.size ?? 0
+            }
+          })
+      }))
     }
   })
 
@@ -201,9 +275,11 @@ export async function hubSigninAdminRoutes(app: FastifyInstance) {
     const env = await manageableEnvironment(req)
     if (!env) return notFound(reply)
     const client = await clientForEnvironment(env.id)
+    const envRow = (await db(ENVS).where({ id: env.id }).first()) as Record<string, unknown>
     return {
       data: {
         client: client ? await clientView(client) : null,
+        redirect_uris: derivedRedirectUris(environmentFromRow(envRow)),
         env_lines: envLines(client?.client_id ?? null),
         signins_30d: await signinsLast30Days(env.id)
       }
