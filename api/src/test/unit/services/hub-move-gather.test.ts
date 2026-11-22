@@ -376,6 +376,25 @@ describe('gatherMovePlanInput — to_shared from a Docker stack', () => {
     expect(d.readiness).not.toHaveBeenCalled()
   })
 
+  it('a ready record whose connection cannot be opened → DB_UNREACHABLE_FROM_TARGET (never a pass)', async () => {
+    const sharedId = await newShared()
+    const dbId = await newDb()
+    await db('nivaro_hub_databases').where({ id: dbId }).update({ connection: null })
+    const placement = await dockerPlacement('shop-nc')
+    const e = await newEnv({ placement_id: placement, db_ref: `hub-db:${dbId}` })
+    const input = await Gather.gatherMovePlanInput(
+      e.id,
+      { kind: 'shared', shared_id: sharedId },
+      deps()
+    )
+    expect(input.target_facts.db).toEqual({
+      reachable: false,
+      identity: null,
+      error: 'CONNECTION_UNREADABLE'
+    })
+    expect(buildMovePlan(input).blockers.map((b) => b.code)).toContain('DB_UNREACHABLE_FROM_TARGET')
+  })
+
   it('a target whose link is down → TARGET_UNREACHABLE', async () => {
     const sharedId = await newShared()
     const placement = await dockerPlacement('shop-b')
@@ -412,6 +431,83 @@ describe('gatherMovePlanInput — to_shared from a Docker stack', () => {
     expect(fake.dbChecks.length).toBe(2)
   })
 
+  it('the tenant list cannot be read → GATHER_FAILED (never "no other apps")', async () => {
+    const sharedId = await newShared()
+    const placement = await dockerPlacement('shop-tf')
+    const e = await newEnv({ placement_id: placement, db_ref: `hub-db:${await newDb()}` })
+    const input = await Gather.gatherMovePlanInput(
+      e.id,
+      { kind: 'shared', shared_id: sharedId },
+      deps({
+        tenants: async () => {
+          throw new Error('db down')
+        }
+      })
+    )
+    expect(buildMovePlan(input).blockers.map((b) => b.code)).toContain('GATHER_FAILED')
+  })
+
+  it('apps past the cap and a failed check count as unchecked → DB_IDENTITY_UNCHECKED', async () => {
+    const sharedId = await newShared()
+    for (let i = 0; i < 3; i++)
+      await newEnv({
+        placement_id: await sharedPlacement(sharedId, 2),
+        db_ref: `hub-db:${await newDb()}`
+      })
+    const placement = await dockerPlacement('shop-cap')
+    const e = await newEnv({ placement_id: placement, db_ref: `hub-db:${await newDb()}` })
+    const base = fakeClient().factory()
+    let others = 0
+    const client = {
+      ...base,
+      dbCheck: vi.fn(async (w: { client: string; connection: string }) => {
+        if (base.dbCheck.mock.calls.length === 0) return base.dbCheck(w) // this app's own check
+        others++
+        if (others === 1) throw new DeploymentLinkError('LINK_UNREACHABLE')
+        return base.dbCheck(w)
+      })
+    }
+    // Own check first (dbCheck spy counts), then others: cap 2 → one past the cap, one failed.
+    const input = await Gather.gatherMovePlanInput(
+      e.id,
+      { kind: 'shared', shared_id: sharedId },
+      deps({ client: (() => client) as never, identity: { max: 2, parallel: 1, budgetMs: 5_000 } })
+    )
+    expect(input.target_facts.identity_unchecked).toBe(2)
+    const plan = buildMovePlan(input)
+    expect(plan.warnings.map((w) => w.code)).toContain('DB_IDENTITY_UNCHECKED')
+    expect(plan.checklist.find((c) => c.id === 'db_identity_checked')?.required).toBe(true)
+  })
+
+  it('the identity pass has one total budget; what is left past it counts as unchecked', async () => {
+    const sharedId = await newShared()
+    for (let i = 0; i < 2; i++)
+      await newEnv({
+        placement_id: await sharedPlacement(sharedId, 2),
+        db_ref: `hub-db:${await newDb()}`
+      })
+    const placement = await dockerPlacement('shop-slow')
+    const e = await newEnv({ placement_id: placement, db_ref: `hub-db:${await newDb()}` })
+    const base = fakeClient().factory()
+    let calls = 0
+    const client = {
+      ...base,
+      dbCheck: vi.fn(async (w: { client: string; connection: string }) => {
+        calls++
+        if (calls === 1) return base.dbCheck(w)
+        return new Promise<never>(() => undefined) // hangs
+      })
+    }
+    const started = Date.now()
+    const input = await Gather.gatherMovePlanInput(
+      e.id,
+      { kind: 'shared', shared_id: sharedId },
+      deps({ client: (() => client) as never, identity: { budgetMs: 50 } })
+    )
+    expect(Date.now() - started).toBeLessThan(5_000)
+    expect(input.target_facts.identity_unchecked).toBe(2)
+  })
+
   it('distinct identities on the target → no DB_IDENTITY_SHARED; pool counts the other app', async () => {
     const sharedId = await newShared()
     const otherDb = await newDb()
@@ -435,17 +531,22 @@ describe('gatherMovePlanInput — to_shared from a Docker stack', () => {
     expect(input.target_facts.pool).toEqual({ used: 7, budget: 60, asked: 5 })
   })
 
-  it('the same external Redis on both sides → REDIS_SHARED', async () => {
-    const sharedId = await newShared({
-      settings: { redis: 'external', REDIS_URL: 'redis://:pw@redis1.example.com:6379/2' }
-    })
+  it('the same external Redis db and prefix on both sides → REDIS_SHARED (Task 5 sealed secrets)', async () => {
+    const sharedId = await newShared({ settings: { redis: 'external' } })
+    const shared = await Store.getShared(sharedId)
+    // Task 5's format: one sealed JSON of plain values.
+    await db('nivaro_hub_shared_deployments')
+      .where({ id: sharedId })
+      .update({
+        secrets: sealSecret(JSON.stringify({ REDIS_URL: 'redis://:pw@redis1.example.com:6379/2' }))
+      })
     const placement = await dockerPlacement('shop-e')
     const e = await newEnv({ placement_id: placement, db_ref: `hub-db:${await newDb()}` })
     await db('nivaro_hub_stack_settings').insert({
       environment_id: e.id,
       size: 'small',
       redis: 'external',
-      settings: JSON.stringify({})
+      settings: JSON.stringify({ REDIS_CHANNEL_PREFIX: `nvr-shared-${shared?.key}:` })
     })
     stack.secrets = { REDIS_URL: 'redis://:other@redis1.example.com:6379/2' }
     const input = await Gather.gatherMovePlanInput(
@@ -455,8 +556,69 @@ describe('gatherMovePlanInput — to_shared from a Docker stack', () => {
     )
     const plan = buildMovePlan(input)
     expect(plan.blockers.map((b) => b.code)).toContain('REDIS_SHARED')
+    expect(plan.warnings.map((w) => w.code)).not.toContain('REDIS_UNVERIFIED')
     expect(JSON.stringify(input)).not.toContain('redis1.example.com')
     expect(JSON.stringify(input)).not.toContain(':pw@')
+  })
+
+  it('the same Redis host with another prefix → no REDIS_SHARED, nothing unverified', async () => {
+    const sharedId = await newShared({ settings: { redis: 'external' } })
+    await db('nivaro_hub_shared_deployments')
+      .where({ id: sharedId })
+      .update({
+        secrets: sealSecret(JSON.stringify({ REDIS_URL: 'redis://redis1.example.com:6379/2' }))
+      })
+    const placement = await dockerPlacement('shop-e2')
+    const e = await newEnv({ placement_id: placement, db_ref: `hub-db:${await newDb()}` })
+    await db('nivaro_hub_stack_settings').insert({
+      environment_id: e.id,
+      size: 'small',
+      redis: 'external',
+      settings: JSON.stringify({})
+    })
+    stack.secrets = { REDIS_URL: 'redis://redis1.example.com:6379/2' }
+    const plan = buildMovePlan(
+      await Gather.gatherMovePlanInput(e.id, { kind: 'shared', shared_id: sharedId }, deps())
+    )
+    expect(plan.blockers.map((b) => b.code)).not.toContain('REDIS_SHARED')
+    expect(plan.warnings.map((w) => w.code)).not.toContain('REDIS_UNVERIFIED')
+    expect(plan.warnings.map((w) => w.code)).not.toContain('STORAGE_UNVERIFIED')
+  })
+
+  it('external Redis with no REDIS_URL the Hub can read → REDIS_UNVERIFIED', async () => {
+    const sharedId = await newShared({ settings: { redis: 'external' } })
+    const placement = await dockerPlacement('shop-e3')
+    const e = await newEnv({ placement_id: placement, db_ref: `hub-db:${await newDb()}` })
+    await db('nivaro_hub_stack_settings').insert({
+      environment_id: e.id,
+      size: 'small',
+      redis: 'bundled',
+      settings: JSON.stringify({})
+    })
+    const plan = buildMovePlan(
+      await Gather.gatherMovePlanInput(e.id, { kind: 'shared', shared_id: sharedId }, deps())
+    )
+    expect(plan.warnings.map((w) => w.code)).toContain('REDIS_UNVERIFIED')
+    expect(plan.checklist.find((c) => c.id === 'redis_separate')?.required).toBe(true)
+  })
+
+  it('a GitLab source: Redis unknown → REDIS_UNVERIFIED; storage known from its readiness report', async () => {
+    const sharedId = await newShared()
+    const g = await insertId('nivaro_hub_placements', {
+      kind: 'dedicated',
+      driver_id: gitlabDriver,
+      target: JSON.stringify({ branch: 'deploy' })
+    })
+    const e = await newEnv({ placement_id: g, db_ref: `hub-db:${await newDb()}` })
+    const input = await Gather.gatherMovePlanInput(
+      e.id,
+      { kind: 'shared', shared_id: sharedId },
+      deps()
+    )
+    expect(input.source.storage_provider).toBe('local')
+    const plan = buildMovePlan(input)
+    expect(plan.warnings.map((w) => w.code)).toContain('REDIS_UNVERIFIED')
+    expect(plan.warnings.map((w) => w.code)).not.toContain('STORAGE_UNVERIFIED')
   })
 
   it('a lock held on the environment → BUSY; ownLocks ignores a move holder', async () => {
