@@ -85,6 +85,14 @@ const OFF_DRIFT =
 
 /** Process-wide by design (never app data on a shared deployment), with why. */
 const SHARED: Record<string, string> = {
+  'db/metadata-query-cache.ts :: counters': DIAG,
+  'middleware/authenticate.ts :: identityCounters': DIAG,
+  'routes/collection-layouts.ts :: layoutBundleCounters': DIAG,
+  'routes/presence.ts :: presenceOnlineCounters': DIAG,
+  'services/collection-live-mode.ts :: stats': DIAG,
+  'services/event-journal.ts :: replayStats': DIAG,
+  'services/related-announce.ts :: stats': DIAG,
+  'services/permission-cache.ts :: entries': OFF_PERMCACHE,
   'auth/hub-signin.ts :: discoveries': OFF_HUBSIGNIN,
   'auth/hub-signin.ts :: hubRequestTimeoutS': OFF_HUBSIGNIN,
   'auth/hub-signin.ts :: keySets': OFF_HUBSIGNIN,
@@ -1124,6 +1132,18 @@ const SHARED: Record<string, string> = {
 
 /** Keyed per app in a way the scan cannot follow (the key comes from a caller or a helper). */
 const KEYED: Record<string, string> = {
+  'services/cache-warm.ts :: usageMemo':
+    'key = usageMemoKey() = `${currentTenantKey()}|<slice>`; handed to pruneUsageMemo, which only drops expired entries',
+  'services/cache-warm.ts :: queueUsageMemo':
+    'key = usageMemoKey() (starts with currentTenantKey()); pruneUsageMemo only drops expired entries',
+  'services/command-center/work-access.ts :: memos':
+    'tenantMemo() key = `${currentTenantKey()}|<name>`; also aliased as `store` for the same writes',
+  'services/raw-write-announcer.ts :: queue':
+    'keyed by currentTenantKey() (Task 13); swapped out whole by the flush',
+  'services/read-caches.ts :: totals':
+    'totalKey() = scopeKey(tenant, collection) + statement, tenant = currentTenantKey()',
+  'services/read-caches.ts :: rows':
+    'the row key starts with scopeKey(tenant, collection), tenant = currentTenantKey()',
   'db/dialect/ef.ts :: idKinds':
     'per knex handle, and the inner key starts with getTenantId(): callers pass the shared db proxy, so the app is in the key',
   'flows/registry.ts :: orderChains': 'key starts with currentTenantKey()',

@@ -242,6 +242,27 @@ function isFreshCollection(init: ts.Expression | undefined): string | null {
   return COLLECTION_CLASS.test(init.expression.text) ? init.expression.text : null
 }
 
+/** `Object.create(null)` — a bare dictionary, written by index like a literal. */
+function isObjectCreate(init: ts.Expression): boolean {
+  return (
+    ts.isCallExpression(init) &&
+    ts.isPropertyAccessExpression(init.expression) &&
+    init.expression.getText() === 'Object.create'
+  )
+}
+
+/** The literal named `n` is written after its declaration: assigned (`=`, `+=`, `??=` …),
+ *  counted (`++` / `--`, either side), mutated by a method (`push`, `set` …), deleted from or
+ *  Object.assign-ed — through any chain of `.prop` / `[index]` (review I-3). */
+function literalWritten(n: string, after: string): boolean {
+  const chain = `(?:\\s*(?:\\.[\\w$]+|\\[[^\\]]*\\]))*`
+  const assign = `(?:=(?!=)|\\+\\+|--|[-+*/%&|^]=|\\*\\*=|<<=|>>>?=|\\?\\?=|\\|\\|=|&&=)`
+  const method = `\\.(?:push|splice|unshift|pop|shift|set|add|delete|clear|fill|sort|reverse)\\s*\\(`
+  return new RegExp(
+    `\\b${n}${chain}\\s*(?:${assign}|${method})|(?:\\+\\+|--)\\s*${n}\\b${chain}|delete\\s+${n}\\b|Object\\.assign\\(\\s*${n}\\b`
+  ).test(after)
+}
+
 /** Every module-level state of one file. */
 export function scanStateFile(rel: string, src: string): StateFinding[] {
   const sf = ts.createSourceFile(rel, src, ts.ScriptTarget.Latest, true)
@@ -283,15 +304,20 @@ export function scanStateFile(rel: string, src: string): StateFinding[] {
         if (written || passed || exported) kind = coll
       } else if (
         init &&
-        (ts.isObjectLiteralExpression(init) || ts.isArrayLiteralExpression(init)) &&
-        new RegExp(
-          `\\b${n}(?:\\.[\\w$]+)*\\s*(?:\\[[^\\]]*\\])?\\s*(?:=(?!=)|\\.(?:push|splice|unshift|pop|shift|set|add|delete|clear)\\s*\\()|delete\\s+${n}\\b|Object\\.assign\\(\\s*${n}\\b`
-        ).test(after)
+        (ts.isObjectLiteralExpression(init) ||
+          ts.isArrayLiteralExpression(init) ||
+          isObjectCreate(init)) &&
+        literalWritten(n, after)
       )
         kind = 'literal'
       if (!kind) continue
       let keyed = false
-      if (coll && kind !== 'WeakMap' && kind !== 'WeakSet') {
+      // A Map handed to another function or aliased may be written there with any key: never
+      // detected as keyed, it must be listed (review I-3). dropAppEntries() only removes.
+      const handedOn =
+        new RegExp(`(?<!dropAppEntries)\\(\\s*${n}\\s*[,)]|,\\s*${n}\\s*[,)]`).test(src) ||
+        new RegExp(`[=:]\\s*${n}\\s*(?:[,;)}\\n]|$)`, 'm').test(after)
+      if (coll && kind !== 'WeakMap' && kind !== 'WeakSet' && !handedOn) {
         const keys = writeKeys(sf, name, d)
         keyed = !!keys && keys.length > 0 && keys.every((k) => namesApp(k, k.getText(sf), sf, fns))
       }
