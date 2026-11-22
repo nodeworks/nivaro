@@ -140,7 +140,20 @@ async function setup(fromShared: boolean) {
     kind: plan.kind,
     routing: 'automatic',
     status: 'running',
-    steps: JSON.stringify({ list: [], phase: 'forward' }),
+    steps: JSON.stringify({
+      list: [],
+      phase: 'forward',
+      addresses: {
+        source_link_base: fromShared ? null : 'https://src-direct.example.com',
+        source_link_public: false,
+        pull_source: fromShared
+          ? 'https://src.internal.example.com'
+          : 'https://src-direct.example.com',
+        target_link_base: null,
+        target_publish_host: null,
+        target_temp_host: null
+      }
+    }),
     plan: JSON.stringify(plan),
     placed_at: new Date(t)
   })
@@ -373,6 +386,62 @@ describe('maintenance and retire', () => {
     expect(sleep).toHaveBeenCalledWith(16_000)
     await ops.sourceMaintenance(false)
     expect(link.maintenance).toHaveBeenLastCalledWith(false, w.move.id)
+  })
+
+  it('C-2: a dedicated source is reached on its own address after the name points at the target (maintenance on, then rollback off)', async () => {
+    const w = await setup(false)
+    TENANT = w.tenant
+    await db('nivaro_hub_environments')
+      .where({ id: w.envId })
+      .update({
+        hub_token: (await import('../../../services/hub/secrets.js')).sealSecret('t'.repeat(40))
+      })
+    // The manual route already moved the name: the public name answers from the target now.
+    const steps = { ...w.move.steps, routed: [0], route_confirmed_at: new Date(t).toISOString() }
+    await db('nivaro_hub_moves')
+      .where({ id: w.move.id })
+      .update({ steps: JSON.stringify(steps) })
+    const bases: string[] = []
+    const link = { maintenance: vi.fn(async () => undefined) }
+    const ops = defaultMoveOps(w.move, w.plan, {
+      client: clients().factory,
+      link: (base) => {
+        bases.push(base)
+        return link as never
+      },
+      sleep,
+      now
+    })
+    await ops.sourceMaintenance(true)
+    await ops.sourceMaintenance(false)
+    expect(link.maintenance).toHaveBeenCalledTimes(2)
+    expect(bases).toEqual(['https://src-direct.example.com', 'https://src-direct.example.com'])
+    expect(bases.join()).not.toContain(
+      new URL(String((await db('nivaro_hub_environments').where({ id: w.envId }).first()).base_url))
+        .host
+    )
+  })
+
+  it('a public-name source base is refused while a route intent stands (never sent to the target)', async () => {
+    const w = await setup(false)
+    TENANT = w.tenant
+    const steps = {
+      ...w.move.steps,
+      routed: [0],
+      addresses: { ...w.move.steps.addresses, source_link_public: true }
+    }
+    await db('nivaro_hub_moves')
+      .where({ id: w.move.id })
+      .update({ steps: JSON.stringify(steps) })
+    const linkFn = vi.fn()
+    const ops = defaultMoveOps(w.move, w.plan, {
+      client: clients().factory,
+      link: linkFn,
+      sleep,
+      now
+    })
+    expect((await ops.sourceMaintenance(false).catch((e) => e)).code).toBe('SOURCE_UNREACHABLE')
+    expect(linkFn).not.toHaveBeenCalled()
   })
 
   it('a shared source is retired by the list: every replica takes it', async () => {

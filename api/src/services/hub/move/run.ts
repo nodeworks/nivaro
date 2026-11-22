@@ -18,6 +18,7 @@ import {
 } from '../promote-lock.js'
 import type { PullStatus } from '../shared/deployment-client.js'
 import { getShared } from '../shared/store.js'
+import { AddressError, type MoveAddresses, resolveMoveAddresses } from './addresses.js'
 import { isMoveLiveHere, markMoveLive, unmarkMoveLive } from './heal.js'
 import { asStepError, defaultMoveOps, type MoveOps, MoveStepError } from './ops.js'
 import {
@@ -131,6 +132,8 @@ export interface MoveRunDeps {
   startJobRun?: (label: string, moveId: number, by: string | null) => Promise<JobRunHandle>
   /** Heartbeat + lock renewal interval (default 60 s). */
   renewMs?: number
+  /** Resolves and probes each dedicated side's address at start (addresses.ts). */
+  addresses?: (envId: number, to: MoveTarget, plan: MovePlan) => Promise<MoveAddresses>
   /** Poll intervals (tests shorten or lengthen them against a fake clock). */
   pollMs?: number
   manualPollMs?: number
@@ -159,6 +162,7 @@ interface Env {
   opsFor: (move: HubMoveRow, plan: MovePlan, log: RunLog) => MoveOps
   startRun: (label: string, moveId: number, by: string | null) => Promise<JobRunHandle>
   renewMs: number
+  addresses: (envId: number, to: MoveTarget, plan: MovePlan) => Promise<MoveAddresses>
   pollMs: number
   manualPollMs: number
 }
@@ -177,6 +181,7 @@ function envOf(over: MoveRunDeps = {}): Env {
       ((label, id, by) =>
         startJobRun('deploy', `hub-move-${id}`, { label, triggeredBy: by ?? null })),
     renewMs: d.renewMs ?? LOCK_RENEW_MS,
+    addresses: d.addresses ?? ((envId, to, plan) => resolveMoveAddresses(envId, to, plan)),
     pollMs: d.pollMs ?? POLL_MS,
     manualPollMs: d.manualPollMs ?? MANUAL_POLL_MS
   }
@@ -368,6 +373,16 @@ export async function startMove(
         { open: open2.map((c) => c.id) }
       )
 
+    // C-2 / P6-18 #1 #2: every dedicated side has an address of its own, probed now, and the
+    // target can pull the files from the source — before anything is written.
+    let addresses: MoveAddresses
+    try {
+      addresses = await e.addresses(envId, body.to, plan)
+    } catch (err) {
+      if (err instanceof AddressError) throw new MoveError(err.code, err.message, err.statusCode)
+      throw err
+    }
+
     // The target placement: the dedicated one named, or a new shared placement.
     let toPlacementId: number
     let created = false
@@ -393,7 +408,11 @@ export async function startMove(
       ...c,
       done: body.checklist[c.id] === true
     }))
-    const steps: MoveSteps = { ...freshSteps(plan.steps), created_placement: created }
+    const steps: MoveSteps = {
+      ...freshSteps(plan.steps),
+      created_placement: created,
+      addresses
+    }
     const startedAt = new Date(e.now())
     const moveId = Number(
       await insertReturningId(db, MOVES, {

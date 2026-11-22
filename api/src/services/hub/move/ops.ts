@@ -14,7 +14,6 @@ import {
 } from '../docker/agent-client.js'
 import type { StackSpec } from '../docker/agent-types.js'
 import { agentOrigin } from '../docker/driver-config.js'
-import { isAgentDnsName } from '../docker/render-spec.js'
 import { type DockerOpsDeps, prepareStackSpec } from '../docker/run-step.js'
 import { databaseRecordId } from '../docker/stack-env.js'
 import { strictPinMap } from '../docker/stack-gather.js'
@@ -50,9 +49,10 @@ import {
   tenantIdFor
 } from '../shared/store.js'
 import { tenantsBody } from '../shared/tenants.js'
+import type { MoveAddresses } from './addresses.js'
 import { type HubLinkClient, HubLinkError, hubLinkClient, hubLinkOrigin } from './link-client.js'
 import type { MovePlan, RouteAction } from './plan-port.js'
-import { type HubMoveRow, MOVES } from './rows.js'
+import { type HubMoveRow, MOVES, readMove } from './rows.js'
 import { sharedStackRouter as defaultSharedStackRouter } from './shared-route.js'
 
 /**
@@ -69,16 +69,11 @@ import { sharedStackRouter as defaultSharedStackRouter } from './shared-route.js
  * Phase 6 kinds always have a shared side: to_shared (dedicated → shared), to_dedicated
  * (shared → dedicated), between_shared (shared → shared).
  *
- * Where a dedicated TARGET answers before its route (ruling R4 + B5): its public name still
- * reaches the source until `route`, so the Hub talks to the target on an address of its own —
- *   docker, traefik edge: a per-move name `hub-move-<move>-e<env>.<first agent host suffix>`
- *     (needs wildcard DNS for that suffix); `deploy_target` routes only it, `route`'s
- *     apply_stack swaps it for the environment's names;
- *   docker, publish edge: http://<agent host>:<published port>, only when the agent host is this
- *     machine or a .test/.localhost name (the hub token is never sent in clear elsewhere);
- *   gitlab: the API component's verify_url origin when its host is not the public one.
- * Otherwise it is the public name, which before the route reaches the SHARED source, which has
- * no hub link (404): the step waits and then fails — never a call to the wrong app.
+ * Addresses (fix round 1, P6-19 C-2 / P6-18 #1): a dedicated side is reached only on the
+ * address addresses.ts resolved and probed at start (steps.addresses): the source on one that
+ * does not depend on the public name (or, automatic Docker traefik only, the public name while it
+ * still holds it), the target on its per-move name / published port / GitLab check address. The
+ * public name reaches the target only at release, after verify proved it serves the target.
  *
  * Secrets: the hub token, deployment token (inside deploymentClient), transfer tickets, the app
  * key and stack secrets are opened inside one call and never logged, stored or put in an error.
@@ -257,14 +252,6 @@ const originOf = (url: string): string | null => {
   }
 }
 
-const hostOf = (url: string): string | null => {
-  try {
-    return new URL(url).hostname.toLowerCase()
-  } catch {
-    return null
-  }
-}
-
 export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDeps = {}): MoveOps {
   const sleep = deps.sleep ?? realSleep
   const now = deps.now ?? Date.now
@@ -310,57 +297,66 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
     return loaded
   }
 
-  /** The public name's hub link (a dedicated SOURCE before its route). */
-  const publicLink = async (): Promise<HubLinkClient> => {
-    const l = await load()
-    return linkFor(l.baseUrl, await hubToken(envId))
+  /** The addresses resolved and probed at start (addresses.ts), from the stored move. */
+  const addresses = async (): Promise<MoveAddresses> => {
+    const m = await readMove(move.id)
+    const a = (m ?? move).steps.addresses ?? move.steps.addresses
+    if (!a)
+      throw new MoveStepError(
+        'ADDRESSES_MISSING',
+        'This move has no recorded addresses for its sides (it started on an older Hub); roll it back and start it again.'
+      )
+    return a
   }
 
-  /** The per-move name a Docker target on a traefik edge answers before its route. */
-  const tempHost = async (side: Extract<Side, { kind: 'docker' }>): Promise<string | null> => {
-    let suffix: string | undefined
-    try {
-      suffix = (await agent.agentHealth(side.driver)).host_suffixes?.[0]
-    } catch {
-      return null
+  /**
+   * C-2: the dedicated SOURCE's hub link, on the address recorded at start — never the public
+   * name once the source has given it up. A public-name base (automatic Docker traefik only) is
+   * refused while any route intent is recorded: the Hub moved the name, and puts it back first on
+   * rollback (the undo clears the intents).
+   */
+  const sourceLink = async (): Promise<HubLinkClient> => {
+    const a = await addresses()
+    if (!a.source_link_base)
+      throw new MoveStepError('SOURCE_UNREACHABLE', 'The move has no address for its source app.')
+    if (a.source_link_public) {
+      const m = await readMove(move.id)
+      if ((m?.steps.routed ?? []).length)
+        throw new MoveStepError(
+          'SOURCE_UNREACHABLE',
+          'The source gave its name up to the target; the Hub does not reach it there.'
+        )
     }
-    if (!suffix) return null
-    const host = `hub-move-${move.id}-e${envId}.${suffix.replace(/^\.+/, '').toLowerCase()}`
-    return isAgentDnsName(host) ? host : null
+    return linkFor(a.source_link_base, await hubToken(envId))
   }
 
-  /** The address a dedicated TARGET answers on before its route (see the header). */
+  /** The per-move name a Docker traefik target runs on before its route (recorded at start). */
+  const tempHost = async (): Promise<string | null> => (await addresses()).target_temp_host
+
+  /** I-1: the address a dedicated TARGET answers on before its route; never the public name. */
   const targetLinkBase = async (): Promise<string> => {
     const l = await load()
-    const to = l.to
-    if (to.kind === 'docker') {
-      const health = await agent.agentHealth(to.driver).catch(() => null)
-      if (health?.edge === 'publish') {
-        const st = await agent.agentStack(to.driver, to.stack).catch(() => null)
-        const host = hostOf(String(to.driver.config.agent_url ?? ''))
-        if (st?.published_port && host) {
-          const base = `http://${host}:${st.published_port}`
-          if (hubLinkOrigin(base)) return base
-        }
-        return l.baseUrl
-      }
-      const temp = await tempHost(to)
-      return temp ? `https://${temp}` : l.baseUrl
+    const a = await addresses()
+    if (l.to.kind === 'docker' && a.target_publish_host) {
+      const st = await agent.agentStack(l.to.driver, l.to.stack).catch(() => null)
+      const base = st?.published_port
+        ? `http://${a.target_publish_host}:${st.published_port}`
+        : null
+      if (base && hubLinkOrigin(base)) return base
+      throw new MoveStepError('TARGET_UNREACHABLE', 'The target stack publishes no port yet.')
     }
-    if (to.kind === 'gitlab') {
-      const comps = await listComponents(to.placement.id).catch(() => [])
-      const api = comps.find((c) => c.kind === 'api' && c.verify_url)
-      const verifyHost = api?.verify_url ? hostOf(api.verify_url) : null
-      if (api?.verify_url && verifyHost && verifyHost !== hostOf(l.baseUrl)) {
-        const o = originOf(api.verify_url)
-        if (o) return o
-      }
-    }
-    return l.baseUrl
+    if (a.target_link_base) return a.target_link_base
+    throw new MoveStepError('TARGET_UNREACHABLE', 'The move has no address for its target app.')
   }
 
   const targetLink = async (): Promise<HubLinkClient> =>
     linkFor(await targetLinkBase(), await hubToken(envId))
+
+  /** The target over the public name: only once `verify` proved the name serves it (release). */
+  const verifiedTargetLink = async (): Promise<HubLinkClient> => {
+    const l = await load()
+    return linkFor(l.baseUrl, await hubToken(envId))
+  }
 
   /** A best-effort list refresh on a shared deployment (replicas poll every 30 s anyway). */
   const refresh = async (shared: SharedDeployment) => {
@@ -629,7 +625,7 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
         await refresh(l.from.shared)
         return
       }
-      const link = await publicLink()
+      const link = await sourceLink()
       await link.maintenance(on, move.id)
       if (on) {
         // Every source replica enforces it within its 15 s cache (R14).
@@ -647,7 +643,8 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
       // A Docker target boots in strict maintenance (HUB_BOOT_MAINTENANCE): only `off` is sent,
       // with the move id that releases it for good. A GitLab target is set both ways (M18).
       if (l.to.kind === 'docker' && on) return
-      const link = l.to.kind === 'docker' && !on ? await publicLink() : await targetLink()
+      // `off` happens at release, after verify saw the name serve the target.
+      const link = !on ? await verifiedTargetLink() : await targetLink()
       await link.maintenance(on, move.id)
     },
 
@@ -655,7 +652,7 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
       const l = await load()
       if (l.from.kind === 'shared')
         return (await clientFor(l.from.shared).appStatus(l.tenantId)).busy
-      return (await (await publicLink()).sharedReadiness()).busy
+      return (await (await sourceLink()).sharedReadiness()).busy
     },
 
     async pullFiles(mode) {
@@ -677,11 +674,9 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
         const t = ticket
         revoke = () => clientFor(sharedFrom).revokeTicket(l.tenantId, t)
       } else {
-        const origin = originOf(l.baseUrl)
-        if (!origin)
-          throw new MoveStepError('BAD_BASE_URL', "The environment's address is unusable.")
-        source = `${origin}/api/hub-transfer/files`
-        const link = await publicLink()
+        // The address checked pullable at start (addresses.ts), never a later public name.
+        source = `${(await addresses()).pull_source}/api/hub-transfer/files`
+        const link = await sourceLink()
         ticket = (await link.fileTicket()).ticket
         const t = ticket
         revoke = () => link.revokeTicket(t)
@@ -895,7 +890,7 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
       await seedStackKey()
       const image = await imageFor(plan.version)
       const extensions = await extensionPins(l.app)
-      const temp = await tempHost(to)
+      const temp = await tempHost()
       const done = await applyStack(to, { version: plan.version, image, extensions }, (spec) => {
         // B5: no public name before the route; the per-move name (traefik) or nothing.
         spec.hostnames = temp ? [temp] : []
@@ -970,7 +965,7 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
         return
       }
       // The target goes back to the per-move name only.
-      const temp = await tempHost(side)
+      const temp = await tempHost()
       await applyStack(side, want, (spec) => {
         spec.hostnames = temp ? [temp] : []
         spec.env.HUB_BOOT_MAINTENANCE = String(move.id)
@@ -1017,14 +1012,17 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
         await ops.waitReplicas(from.shared.id)
         return
       }
-      // A dedicated source over its own hub link. After the route the public name reaches the
-      // shared target, which has no hub link (404): never retired by mistake.
+      // A dedicated source over the address recorded at start (C-2). A Docker source that was
+      // reached on its public name has given it up: its stack is removed instead.
       let retired = false
-      try {
-        await (await publicLink()).retire(move.id)
-        retired = true
-      } catch (err) {
-        log(`the source could not be retired over its hub link (${codeOf(err)})`, 'warn')
+      const a = await addresses()
+      if (!a.source_link_public) {
+        try {
+          await (await sourceLink()).retire(move.id)
+          retired = true
+        } catch (err) {
+          log(`the source could not be retired over its hub link (${codeOf(err)})`, 'warn')
+        }
       }
       if (from.kind === 'docker') {
         await removeStack(from, l.envKey, l.app)
@@ -1055,7 +1053,7 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
           })
           return answer.reachable ? answer.db_identity : null
         }
-        const link = which === 'source' ? await publicLink() : await targetLink()
+        const link = which === 'source' ? await sourceLink() : await targetLink()
         return (await link.sharedReadiness()).db_identity
       } catch (err) {
         log(`the ${which}'s database identity could not be read (${codeOf(err)})`, 'warn')

@@ -152,6 +152,14 @@ function deps(o: Record<string, unknown> = {}) {
       complete: async () => undefined,
       fail: async () => undefined
     }),
+    addresses: async () => ({
+      source_link_base: 'https://src.direct.example.com',
+      source_link_public: false,
+      pull_source: 'https://src.direct.example.com',
+      target_link_base: null,
+      target_publish_host: null,
+      target_temp_host: null
+    }),
     renewMs: 3_600_000,
     manualPollMs: 60 * 60_000,
     ...o

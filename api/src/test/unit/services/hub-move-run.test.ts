@@ -253,6 +253,14 @@ function useDeps(o: Partial<Parameters<typeof Run.setMoveRunDeps>[0] & object> =
     now,
     sleep,
     startJobRun: run.start,
+    addresses: async () => ({
+      source_link_base: 'https://src.direct.example.com',
+      source_link_public: false,
+      pull_source: 'https://src.direct.example.com',
+      target_link_base: null,
+      target_publish_host: null,
+      target_temp_host: null
+    }),
     renewMs: 3_600_000,
     pollMs: 5_000,
     manualPollMs: 60 * 60_000,
@@ -924,6 +932,29 @@ describe('start refusals and locks', () => {
       await db('nivaro_hub_placements').where({ shared_deployment_id: w.sharedA }).count({ n: '*' })
     ).toEqual([{ n: 1 }])
     expect(await lock.held(w.envId)).toBe(false)
+  })
+
+  it('no address of its own for a side → 409 (SOURCE_UNREACHABLE …) before any change', async () => {
+    plan = planOf('to_shared', 'manual')
+    const w = await world('docker')
+    const { AddressError } = await import('../../../services/hub/move/addresses.js')
+    for (const code of ['SOURCE_UNREACHABLE', 'TARGET_UNREACHABLE', 'LINK_URL_NOT_PULLABLE']) {
+      useDeps({
+        addresses: async () => {
+          throw new AddressError(code, 'No address.')
+        }
+      })
+      expect(await refusal(start(w, toFor('to_shared', w)))).toMatchObject({
+        code,
+        statusCode: 409
+      })
+    }
+    expect(await db('nivaro_hub_moves').where({ environment_id: w.envId }).first()).toBeUndefined()
+    expect(
+      await db('nivaro_hub_placements').where({ shared_deployment_id: w.sharedA }).count({ n: '*' })
+    ).toEqual([{ n: 1 }])
+    expect(await lock.held(w.envId)).toBe(false)
+    expect(fake.calls).toEqual([])
   })
 
   it('re-plans with its own locks held (ownLocks) before writing anything', async () => {

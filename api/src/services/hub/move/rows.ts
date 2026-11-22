@@ -1,5 +1,6 @@
 import { db } from '../../../db/index.js'
 import type { PullStatus } from '../shared/deployment-client.js'
+import type { MoveAddresses } from './addresses.js'
 import type { MovePlan, MoveStepKey, RouteAction } from './types.js'
 
 export type MoveChecklistItem = MovePlan['checklist'][number]
@@ -67,6 +68,8 @@ export interface MoveSteps {
   route_confirmed_at?: string | null
   /** When the run started waiting for the manual route (24 h budget). */
   waiting_since?: string | null
+  /** Where each dedicated side is reached (addresses.ts), resolved and probed at start. */
+  addresses?: MoveAddresses
   /** sha256 of the source's database identity, read at `check` (R2; never the identity). */
   source_db?: string | null
 }
