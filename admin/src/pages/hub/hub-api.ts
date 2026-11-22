@@ -561,6 +561,10 @@ export const BLOCKER_COPY: Record<string, { title: string; hint?: string }> = {
     title: 'The frontend build for that version cannot be redeployed',
     hint: 'Its commit is no longer on the branch, GitLab no longer has the build, or its deploy job cannot run again. Nothing was changed.'
   },
+  HEAD_UNKNOWN: {
+    title: 'GitLab did not say which commit the target branch points at',
+    hint: 'The Hub deploys only a head it names in the plan. Check the branch in GitLab, then plan again.'
+  },
   PIN_CHANGED: {
     title: 'The image for this version changed since it was deployed here',
     hint: 'The Hub never rewrites the pin of the version that is running. Publish a new version instead.'

@@ -183,7 +183,8 @@ describe('gatherPlanInput', () => {
     expect(input.drivers[1]).toEqual({
       branch: 'production',
       deploy_job: 'deploy_production',
-      pin_file: '.docker/nivaro-version'
+      pin_file: '.docker/nivaro-version',
+      identity: 'https://gitlab.example.com|efp/deploy'
     })
     expect(input.digest).toBe(DIGEST)
     expect(input.running).toBe(false)

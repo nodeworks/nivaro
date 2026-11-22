@@ -178,6 +178,16 @@ export function buildPromotionPlan(input: PlanInput): PromotionPlan {
           ? `${s.component}: the Hub has no record of the build ${target.key} deployed with ${version}`
           : `${s.component}: ${previous?.key ?? 'the previous environment'} serves no version this Hub can read`
       )
+    else if (
+      s.kind === 'frontend' &&
+      kind === 'promote' &&
+      input.frontendHeld?.[s.position] === true &&
+      !input.frontendHead?.[s.position]
+    )
+      block(
+        'HEAD_UNKNOWN',
+        `${s.component}: ${s.targetBranch} already holds ${s.sourceSha}, but GitLab did not say which commit ${s.targetBranch} points at — the Hub deploys only a head it names in the plan`
+      )
     else if (s.kind === 'frontend' && kind === 'rollback') {
       const problem = input.frontendRollbackBuild?.[s.position]?.problem
       if (problem) block('FRONTEND_ROLLBACK_NO_BUILD', `${s.component}: ${problem}`)
@@ -214,6 +224,11 @@ export function planHash(input: PlanInput, steps: PromotionStep[]): string {
         s.position,
         s.component,
         s.kind,
+        // Who deploys it: the driver and the repository it pointed at when planned.
+        s.driverId,
+        input.drivers[s.driverId]?.identity ?? null,
+        s.verifyUrl,
+        s.verifyField,
         s.sourceSha,
         s.expectHead ?? null,
         s.buildPipelineId ?? null,
@@ -302,6 +317,9 @@ function stepFor(c: HubComponent, input: PlanInput): PromotionStep {
     ...(build?.pipelineId ? { buildPipelineId: build.pipelineId } : {}),
     ...(!isApi && input.kind === 'promote' && input.frontendHeld?.[c.position] === true
       ? { expectHead: input.frontendHead?.[c.position] ?? null }
+      : {}),
+    ...(isApi && input.kind === 'promote' && input.targetVersion === input.version
+      ? { pinMustExist: true }
       : {})
   }
 }

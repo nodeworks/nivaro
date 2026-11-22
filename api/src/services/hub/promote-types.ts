@@ -65,6 +65,8 @@ export interface PlanDriver {
   branch: string
   deploy_job: string
   pin_file: string
+  /** Which repository it deploys (GitLab base + project path): part of the plan hash. */
+  identity?: string
 }
 
 /** Everything the planner needs, gathered beforehand (promote-gather.ts) so planning stays pure. */
@@ -136,6 +138,7 @@ export type PromotionBlockerCode =
   | 'FRONTEND_NOT_ON_SOURCE'
   | 'FRONTEND_ROLLBACK_NO_BUILD'
   | 'PIN_CHANGED'
+  | 'HEAD_UNKNOWN'
   | 'IMAGE_MISSING'
   | 'IMAGE_NO_DIGEST'
   | 'NO_COMPONENTS'
@@ -174,6 +177,11 @@ export interface PromotionStep {
    * deploys the head and refuses (changing nothing) when the head moved since the plan.
    */
   expectHead?: string | null
+  /**
+   * api, promote of the version the target already runs: the pin file must already be there —
+   * the run never creates a pin for the running version (PIN_CHANGED).
+   */
+  pinMustExist?: boolean
   /** frontend, rollback: the pipeline whose deploy job is rerun (the earlier build). */
   buildPipelineId?: number | null
   /** Written by the runner once the deploy passed: the commit the deploy job ran on. */

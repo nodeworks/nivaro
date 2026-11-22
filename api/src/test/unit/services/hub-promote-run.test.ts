@@ -578,6 +578,47 @@ describe('executePlan', () => {
     expect(w.gl.calls.some((c) => c.path.endsWith('/play'))).toBe(false)
   })
 
+  it('a job the Hub plays on a later pass is logged as played, never "ran automatically"', async () => {
+    const w = use(world())
+    serveNew(w)
+    let reads = 0
+    const { outcome, events } = await execute(
+      w,
+      buildPromotionPlan(input(w, { components: [apiComp] })),
+      {
+        deps: {
+          gitlab: {
+            jobNamed: async (...a) => {
+              const { jobNamed } = await import('../../../services/hub/gitlab-write.js')
+              const j = await jobNamed(...a)
+              return ++reads === 1 && j ? { ...j, status: 'running' } : j
+            }
+          }
+        }
+      }
+    )
+    expect(outcome.status).toBe('success')
+    const lines = events.map((e) => e.line ?? '')
+    expect(lines.some((l) => /^deploy api: deploy_production passed \(https:/.test(l))).toBe(true)
+    expect(lines.some((l) => l.includes('ran automatically'))).toBe(false)
+    expect(w.gl.calls.filter((c) => c.path.endsWith('/play'))).toHaveLength(1)
+  })
+
+  it('a same-version API step never creates a pin that is missing at run time', async () => {
+    const w = use(world())
+    const bare = w.gl.commit('efp/deploy', 'bare', 'a production without a pin')
+    w.gl.branch('efp/deploy', 'production', bare)
+    const plan = buildPromotionPlan(input(w, { components: [apiComp], targetVersion: '0.3.10' }))
+    expect(plan.ok).toBe(true)
+    expect(plan.steps[0].pinMustExist).toBe(true)
+    const { outcome } = await execute(w, plan)
+    expect(outcome).toMatchObject({ status: 'failed', step: 'push api', code: 'PIN_CHANGED' })
+    expect(outcome.error).toBe(
+      'api: production has no recorded pin for 0.3.10 (no .docker/nivaro-version) — the Hub never creates a pin for the version that is running; nothing was changed'
+    )
+    expect(w.gl.calls.some((c) => c.method !== 'GET')).toBe(false)
+  })
+
   it('a job that was not manual at the read and is manual again on the next pass is still asked about', async () => {
     const w = use(world())
     let reads = 0
@@ -907,6 +948,49 @@ describe('executePlan', () => {
         (c) => c.url.includes('efp%2Fportal') && c.method !== 'GET'
       )
       expect(portalWrites).toEqual([])
+    })
+
+    it('a plan that saw the commit held refuses when it is gone from the branch, never merging', async () => {
+      const w = use(world())
+      // The plan saw production holding the portal commit; by the run it no longer does.
+      const plan = buildPromotionPlan(
+        input(w, {
+          components: [feComp],
+          frontendHeld: { 2: true },
+          frontendHead: { 2: w.feFull }
+        })
+      )
+      const { outcome } = await execute(w, plan)
+      expect(outcome).toMatchObject({ status: 'failed', step: 'push frontend', code: 'HEAD_MOVED' })
+      expect(outcome.error).toBe(
+        `frontend: production no longer holds ${w.feFull.slice(0, 8)} (the plan deployed its head ${w.feFull.slice(0, 8)}) — nothing was changed; plan again`
+      )
+      expect(w.gl.calls.some((c) => c.method !== 'GET')).toBe(false)
+    })
+
+    it('a merge refused because the commit arrived meanwhile: production was not changed', async () => {
+      const w = use(world())
+      const plan = buildPromotionPlan(input(w, { components: [feComp] }))
+      const proj = w.gl.projects.get('efp/portal')
+      const { outcome } = await execute(w, plan, {
+        deps: {
+          gitlab: {
+            openMergeRequest: async (...a) => {
+              const { openMergeRequest } = await import('../../../services/hub/gitlab-write.js')
+              // Someone merges the portal commit by hand; GitLab refuses the empty merge.
+              w.gl.branch('efp/portal', 'production', w.feFull)
+              if (proj) proj.refuseMerge = true
+              return openMergeRequest(...a)
+            }
+          }
+        }
+      })
+      expect(outcome).toMatchObject({ status: 'failed', step: 'push frontend', code: 'HEAD_MOVED' })
+      expect(outcome.error).toBe(
+        `frontend: production took ${w.feServed} since the plan, which planned a merge (head now ${w.feFull.slice(0, 8)}) — production was not changed; plan again`
+      )
+      expect([...(proj?.branches.keys() ?? [])].filter((b) => b.startsWith('hub/'))).toEqual([])
+      expect(proj?.branches.get('production')).toBe(w.feFull)
     })
 
     it('rollback of a build no longer on the branch never falls through to a merge', async () => {

@@ -256,6 +256,20 @@ function statusTarget(r: Record<string, unknown>): HubStatusTarget {
   }
 }
 
+/** The repository a driver deploys: GitLab base (without /api/v4) and project path. */
+export function driverIdentity(row: HubDriverRow): string {
+  const base = String(row.config?.api ?? '')
+    .trim()
+    .replace(/\/+$/, '')
+    .replace(/\/api\/v4$/, '')
+    .toLowerCase()
+  const project = String(row.config?.project ?? '')
+    .trim()
+    .replace(/^\/+|\/+$/g, '')
+    .toLowerCase()
+  return `${base}|${project}`
+}
+
 const unique = (xs: Array<string | null | undefined>) => [
   ...new Set(xs.filter((x): x is string => typeof x === 'string' && !!x))
 ]
@@ -435,7 +449,8 @@ export async function gatherPlanInput(
     drivers[row.id] = {
       branch: row.config.branch,
       deploy_job: row.config.deploy_job,
-      pin_file: row.config.pin_file
+      pin_file: row.config.pin_file,
+      identity: driverIdentity(row)
     }
   }
 

@@ -384,6 +384,56 @@ describe('hub promotions end to end (merge-commit repos, automatic deploys)', ()
     expect(prodApiVersion()).toBe('0.3.11')
   })
 
+  it('the plan hash covers who deploys: a switched driver or an edited repository is PLAN_CHANGED', async () => {
+    release('0.3.10')
+    const seen = buildPromotionPlan(
+      await gather.gatherPlanInput(2, { kind: 'promote', version: '0.3.10' }, gatherDeps())
+    )
+    expect(seen.ok).toBe(true)
+    // The same repository under another path: same commits, same branches, same served commit.
+    const portal = gl.projects.get('efp/portal')
+    if (portal) gl.projects.set('efp/portal-copy', portal)
+    const start = () =>
+      run
+        .startPromotion(
+          2,
+          {
+            kind: 'promote',
+            version: '0.3.10',
+            confirm: 'production',
+            planHash: seen.plan_hash,
+            user: null
+          },
+          startDeps().deps
+        )
+        .catch((e) => e)
+
+    // 1. The component is switched to another driver pointing at that repository.
+    await db('nivaro_hub_drivers').insert({
+      id: 3,
+      kind: 'gitlab',
+      name: 'portal copy',
+      config: driverConfig('efp/portal-copy')
+    })
+    await db('nivaro_hub_components')
+      .where({ placement_id: 5, kind: 'frontend' })
+      .update({ driver_id: 3 })
+    expect(await start()).toMatchObject({ code: 'PLAN_CHANGED', status: 409 })
+
+    // 2. Back on its driver, but the driver's project is edited in place.
+    await db('nivaro_hub_components')
+      .where({ placement_id: 5, kind: 'frontend' })
+      .update({ driver_id: 2 })
+    await db('nivaro_hub_drivers')
+      .where({ id: 2 })
+      .update({ config: driverConfig('efp/portal-copy') })
+    const edited = await start()
+    expect(edited).toMatchObject({ code: 'PLAN_CHANGED', status: 409 })
+    expect(edited.plan.ok).toBe(true)
+    expect(await db('nivaro_hub_deploys').count({ n: '*' })).toEqual([{ n: 0 }])
+    expect(gl.calls.some((c) => c.method !== 'GET')).toBe(false)
+  })
+
   it('B5: a promotion stopped after the api finishes when started again: only the portal runs', async () => {
     release('0.3.10')
     let stop = false

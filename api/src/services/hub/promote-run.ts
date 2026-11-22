@@ -130,6 +130,7 @@ type GitlabOps = Pick<
   | 'openMergeRequest'
   | 'mergeMergeRequest'
   | 'commitFile'
+  | 'readFile'
   | 'commitExistsOn'
   | 'latestCommitMatching'
   | 'runDeployJob'
@@ -168,6 +169,7 @@ const DEFAULT_OPS: GitlabOps = {
   openMergeRequest: gitlab.openMergeRequest,
   mergeMergeRequest: gitlab.mergeMergeRequest,
   commitFile: gitlab.commitFile,
+  readFile: gitlab.readFile,
   commitExistsOn: gitlab.commitExistsOn,
   latestCommitMatching: gitlab.latestCommitMatching,
   runDeployJob: gitlab.runDeployJob,
@@ -326,13 +328,17 @@ export async function executePlan(
    * the head its plan named. A plan that saw the commit unheld named none (someone merged it in
    * since), and a head that moved is not what was confirmed: HEAD_MOVED, nothing written.
    */
-  const refuseUnplannedHead = (s: PromotionStep, head: string) => {
+  const refuseUnplannedHead = (
+    s: PromotionStep,
+    head: string,
+    unchanged = 'nothing was changed'
+  ) => {
     if (s.expectHead && head === s.expectHead) return
     throw new PromotionError(
       'HEAD_MOVED',
       s.expectHead
-        ? `${s.component}: ${s.targetBranch} moved since the plan (planned head ${short(s.expectHead)}, now ${short(head)}) — nothing was changed; plan again`
-        : `${s.component}: ${s.targetBranch} took ${short(s.sourceSha)} since the plan, which planned a merge (head now ${short(head)}) — nothing was changed; plan again`
+        ? `${s.component}: ${s.targetBranch} moved since the plan (planned head ${short(s.expectHead)}, now ${short(head)}) — ${unchanged}; plan again`
+        : `${s.component}: ${s.targetBranch} took ${short(s.sourceSha)} since the plan, which planned a merge (head now ${short(head)}) — ${unchanged}; plan again`
     )
   }
 
@@ -366,7 +372,26 @@ export async function executePlan(
       return { sha: head?.sha ?? full, full, merged: null, held: true, noop: true }
     }
 
-    if (await ops.commitExistsOn(c, full, s.targetBranch)) {
+    // The version running here keeps the pin it was deployed with: never create one for it.
+    if (
+      s.kind === 'api' &&
+      s.pinMustExist &&
+      (await ops.readFile(c, s.pinFile as string, s.targetBranch)) == null
+    )
+      throw new PromotionError(
+        'PIN_CHANGED',
+        `${s.component}: ${s.targetBranch} has no recorded pin for ${ctx.version} (no ${s.pinFile}) — the Hub never creates a pin for the version that is running; nothing was changed`
+      )
+
+    const held = await ops.commitExistsOn(c, full, s.targetBranch)
+    // The plan saw the commit held and named the head to deploy: a commit gone from the branch
+    // since is not that plan (and is never merged back in on its own say-so).
+    if (!held && s.kind === 'frontend' && ctx.kind === 'promote' && s.expectHead)
+      throw new PromotionError(
+        'HEAD_MOVED',
+        `${s.component}: ${s.targetBranch} no longer holds ${short(full)} (the plan deployed its head ${short(s.expectHead)}) — nothing was changed; plan again`
+      )
+    if (held) {
       await log(`${label}: ${s.targetBranch} already holds ${short(full)} — nothing to merge`)
       if (s.kind === 'api') {
         // One commit on the target branch (none when it already pins this content).
@@ -477,7 +502,8 @@ export async function executePlan(
             throw err
           await log(`${label}: ${s.targetBranch} already holds ${short(full)} — nothing to merge`)
           const head = await ops.latestCommitMatching(c, s.targetBranch, /^/, 1)
-          refuseUnplannedHead(s, head?.sha ?? '')
+          // The temporary branch is deleted below; the target branch was never written.
+          refuseUnplannedHead(s, head?.sha ?? '', `${s.targetBranch} was not changed`)
           return { sha: head?.sha ?? full, full, merged: null, held: true }
         }
       }
@@ -597,6 +623,7 @@ export async function executePlan(
       if (job?.status === 'manual') {
         if (await stopped()) throw aborted()
         await log(`${label}: playing ${s.deployJob}`)
+        seen.how = 'played'
         const played = await ops.playJob(c, job.id)
         const done = await ops.waitJob(c, played.id, {
           ...poll,

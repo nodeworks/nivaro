@@ -380,6 +380,50 @@ describe('hub promotion planner', () => {
         )
     })
 
+    it('HEAD_UNKNOWN: a held frontend whose head GitLab did not name is never planned', () => {
+      const plan = buildPromotionPlan(
+        input({ frontendHeld: { 2: true }, frontendHead: { 2: null } })
+      )
+      expect(plan.blockers).toEqual([
+        {
+          code: 'HEAD_UNKNOWN',
+          text: 'frontend: production already holds abc1234, but GitLab did not say which commit production points at — the Hub deploys only a head it names in the plan'
+        }
+      ])
+    })
+
+    it('plan_hash covers who deploys: the driver, its repository and the check address', () => {
+      const a = buildPromotionPlan(input())
+      const repo = (identity: string) => ({
+        drivers: {
+          7: {
+            branch: 'production',
+            deploy_job: 'deploy_production',
+            pin_file: 'NIVARO_VERSION'
+          },
+          8: { branch: 'main', deploy_job: 'deploy_main', pin_file: 'unused', identity }
+        }
+      })
+      const base = buildPromotionPlan(input(repo('https://gitlab.example.com|efp/portal')))
+      expect(
+        buildPromotionPlan(input(repo('https://gitlab.example.com|efp/portal-copy'))).plan_hash
+      ).not.toBe(base.plan_hash)
+      expect(
+        buildPromotionPlan(input({ components: [{ ...feComp, driver_id: 7 }, apiComp] })).plan_hash
+      ).not.toBe(a.plan_hash)
+      expect(
+        buildPromotionPlan(
+          input({
+            components: [{ ...feComp, verify_url: 'https://elsewhere.example.com/v.json' }, apiComp]
+          })
+        ).plan_hash
+      ).not.toBe(a.plan_hash)
+      expect(
+        buildPromotionPlan(input({ components: [{ ...feComp, verify_field: 'commit' }, apiComp] }))
+          .plan_hash
+      ).not.toBe(a.plan_hash)
+    })
+
     it('a held frontend names the head it will deploy', () => {
       const plan = buildPromotionPlan(
         input({ frontendHeld: { 2: true }, frontendHead: { 2: 'feed00112233' } })

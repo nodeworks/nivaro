@@ -481,7 +481,8 @@ describe('promotion copy', () => {
       'NO_DRIVER',
       'FRONTEND_NOT_ON_SOURCE',
       'FRONTEND_ROLLBACK_NO_BUILD',
-      'PIN_CHANGED'
+      'PIN_CHANGED',
+      'HEAD_UNKNOWN'
     ])
       expect(BLOCKER_COPY[code]?.title, code).toBeTruthy()
   })
