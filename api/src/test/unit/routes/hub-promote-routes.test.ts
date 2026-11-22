@@ -444,6 +444,14 @@ describe('promote', () => {
     expect(r.statusCode).toBe(503)
     expect(r.json().code).toBe('MAINTENANCE')
     expect(m.start).not.toHaveBeenCalled()
+    // The plan is a read: it answers during maintenance.
+    m.gather.mockRejectedValue(new PromotionError('NOT_FOUND', 'Not found', 404))
+    const plan = await post(`/environments/${prodId}/promote/plan`, asOwner, {
+      version: '0.3.209',
+      kind: 'promote'
+    })
+    expect(plan.json().code).not.toBe('MAINTENANCE')
+    expect(m.gather).toHaveBeenCalled()
   })
 })
 

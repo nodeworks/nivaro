@@ -290,6 +290,42 @@ const CODE_COPY: Record<string, { title: string; hint?: string }> = {
     title: 'GitLab did not answer',
     hint: "Check the driver's API URL, project and token."
   },
+  LOCK_UNAVAILABLE: {
+    title: 'The Hub cannot make sure only one promotion runs right now',
+    hint: 'It cannot reach Redis. Nothing was started. Try again in a moment.'
+  },
+  PLAN_HASH_REQUIRED: {
+    title: 'Check the plan before you start',
+    hint: 'A start must carry the plan you checked. Read the plan again, then start.'
+  },
+  NOT_RUNNING: {
+    title: 'That promotion is not running any more',
+    hint: 'It already finished, failed or was stopped. Reload to see how it ended.'
+  },
+  GITLAB_UNAUTHORIZED: {
+    title: "GitLab did not accept the driver's token",
+    hint: 'The token is wrong or expired. A Hub admin enters a new one on the driver.'
+  },
+  GITLAB_FORBIDDEN: {
+    title: "The driver's token may not do this in GitLab",
+    hint: 'Give the token the api scope and enough rights on the project (merging into the target branch included).'
+  },
+  GITLAB_NO_TOKEN: {
+    title: 'The driver has no GitLab token',
+    hint: 'A Hub admin adds a token to the driver.'
+  },
+  DRIVER_MISCONFIGURED: {
+    title: 'The driver is not set up completely',
+    hint: 'A Hub admin checks its GitLab address, project, branch, pin file and deploy job.'
+  },
+  DRIVER_CHANGED: {
+    title: 'A driver was changed while this ran',
+    hint: 'It now points at another repository than when the run started, so the Hub stopped. Check the driver, then plan and start again.'
+  },
+  ROLLBACK_NOT_RECORDED: {
+    title: 'The Hub did not record the build this version deployed',
+    hint: 'A rollback reruns the exact build the Hub deployed. Without that record it cannot roll back to this version. Nothing was changed.'
+  },
   ROLLBACK_REFUSED_BY_GITLAB: {
     title: 'GitLab refused to rerun the earlier deploy job',
     hint: 'The project\'s "Prevent outdated deployment jobs" setting refuses an older deploy job. Allow job retries for rollback deployments in GitLab\'s CI/CD settings, or roll back by hand.'

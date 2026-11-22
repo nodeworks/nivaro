@@ -489,10 +489,15 @@ export async function executePlan(
           )
         } catch (err) {
           if (!(err instanceof gitlab.GitlabWriteError && err.code === 'MERGE_REFUSED')) throw err
+          // GitLab's own merge status says why (conflict, not_approved, ci_must_pass, …).
+          const why = err.mergeStatus
+          const conflict = !why || why === 'conflict' || why === 'cannot_be_merged'
           throw new gitlab.GitlabWriteError(
             'MERGE_REFUSED',
-            `${s.component}: release commit ${short(full)} does not merge cleanly onto ${s.targetBranch} (on the temporary branch ${temp}) — ${s.targetBranch} is untouched`,
-            { status: err.status, step: err.step }
+            conflict
+              ? `${s.component}: release commit ${short(full)} does not merge cleanly onto ${s.targetBranch} (on the temporary branch ${temp}; GitLab merge status ${why ?? 'unknown'}) — ${s.targetBranch} is untouched`
+              : `${s.component}: GitLab refused to merge release commit ${short(full)} onto ${s.targetBranch} (on the temporary branch ${temp}; GitLab merge status ${why}) — ${s.targetBranch} is untouched`,
+            { status: err.status, step: err.step, mergeStatus: why }
           )
         }
         const pin = await ops.commitFile(
@@ -1044,8 +1049,9 @@ async function runPromotion(o: {
     if (!st) return
     st.deployedSha = sha
     st.deployedPipelineId = pipelineId
+    // Only while the row is still this run's (never over a row healed or closed elsewhere).
     await db(DEPLOYS)
-      .where({ id: deployId })
+      .where({ id: deployId, status: 'running' })
       .update({ plan: JSON.stringify(recorded) })
       .catch(() =>
         run.log(`could not record what ${st.component} deployed on deploy #${deployId}`, 'warn')

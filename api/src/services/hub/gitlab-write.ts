@@ -17,11 +17,13 @@ export class GitlabWriteError extends Error {
   step: string
   /** The GitLab page of the job or pipeline concerned, when there is one. */
   webUrl?: string
+  /** MERGE_REFUSED: GitLab's detailed_merge_status (a fixed word such as conflict, not_approved). */
+  mergeStatus?: string
 
   constructor(
     code: string,
     message: string,
-    opts: { status?: number | null; step: string; webUrl?: string }
+    opts: { status?: number | null; step: string; webUrl?: string; mergeStatus?: string }
   ) {
     super(message)
     this.name = 'GitlabWriteError'
@@ -29,8 +31,13 @@ export class GitlabWriteError extends Error {
     this.status = opts.status ?? null
     this.step = opts.step
     if (opts.webUrl) this.webUrl = opts.webUrl
+    if (opts.mergeStatus) this.mergeStatus = opts.mergeStatus
   }
 }
+
+/** GitLab's merge status word, only when it is one (a fixed enum, never free text). */
+const mergeWord = (v: unknown): string | undefined =>
+  typeof v === 'string' && /^[a-z_]{1,40}$/.test(v) ? v : undefined
 
 export type Sleep = (ms: number, signal?: AbortSignal) => Promise<void>
 
@@ -257,16 +264,26 @@ export async function mergeMergeRequest(
   opts: PollOptions = {}
 ): Promise<{ mergeSha: string }> {
   const step = 'mergeMergeRequest'
+  /** GitLab's last merge status word for this MR (said in every refusal). */
+  let said: string | undefined
   for (let i = 0; ; i++) {
     checkAbort(opts.signal, step)
     const mr = obj((await call(ctx, step, `/merge_requests/${iid}`)).body)
     if (mr.state === 'merged') return { mergeSha: await mergedSha(ctx, iid, mr, opts, step) }
     if (mr.state === 'closed' || mr.state === 'locked') {
-      throw new GitlabWriteError('MERGE_REFUSED', `Merge request !${iid} is ${mr.state}`, { step })
+      throw new GitlabWriteError('MERGE_REFUSED', `Merge request !${iid} is ${mr.state}`, {
+        step,
+        mergeStatus: mergeWord(mr.state)
+      })
     }
     const state = str(mr.detailed_merge_status) || str(mr.merge_status)
+    said = mergeWord(state) ?? said
     if (mr.has_conflicts === true || state === 'conflict' || state === 'cannot_be_merged') {
-      throw new GitlabWriteError('MERGE_REFUSED', `Merge request !${iid} has conflicts`, { step })
+      throw new GitlabWriteError(
+        'MERGE_REFUSED',
+        `Merge request !${iid} has conflicts (merge status ${said ?? 'conflict'})`,
+        { step, mergeStatus: said ?? 'conflict' }
+      )
     }
     if (!MR_CHECKING.includes(state) || i + 1 >= MR_POLLS) break
     await pause(opts, MR_POLL_MS, step)
@@ -283,18 +300,19 @@ export async function mergeMergeRequest(
     if (err instanceof GitlabWriteError && [405, 406, 409, 422].includes(err.status ?? 0)) {
       throw new GitlabWriteError(
         'MERGE_REFUSED',
-        `GitLab refused to merge !${iid} (${err.status})`,
-        { status: err.status, step }
+        `GitLab refused to merge !${iid} (${err.status}; merge status ${said ?? 'unknown'})`,
+        { status: err.status, step, mergeStatus: said }
       )
     }
     throw err
   }
   const merged = obj(res.body)
   if (merged.state !== 'merged') {
+    const now = mergeWord(str(merged.detailed_merge_status)) ?? said
     throw new GitlabWriteError(
       'MERGE_REFUSED',
-      `GitLab did not merge !${iid} (state ${str(merged.state) || 'unknown'})`,
-      { status: res.status, step }
+      `GitLab did not merge !${iid} (state ${str(merged.state) || 'unknown'}; merge status ${now ?? 'unknown'})`,
+      { status: res.status, step, mergeStatus: now }
     )
   }
   return { mergeSha: await mergedSha(ctx, iid, merged, opts, step) }

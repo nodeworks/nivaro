@@ -410,6 +410,28 @@ describe('executePlan', () => {
     expect(w.gl.file('efp/deploy', 'production', '.docker/nivaro-version')).toBe('0.3.9\n')
   })
 
+  it("Minor 2: a merge GitLab refuses for another reason names GitLab's merge status", async () => {
+    const w = use(world())
+    const { GitlabWriteError } = await import('../../../services/hub/gitlab-write.js')
+    const { outcome } = await execute(w, buildPromotionPlan(input(w)), {
+      deps: {
+        gitlab: {
+          mergeMergeRequest: async () => {
+            throw new GitlabWriteError('MERGE_REFUSED', 'GitLab refused to merge !1 (405)', {
+              status: 405,
+              step: 'mergeMergeRequest',
+              mergeStatus: 'not_approved'
+            })
+          }
+        }
+      }
+    })
+    expect(outcome).toMatchObject({ status: 'failed', step: 'push api', code: 'MERGE_REFUSED' })
+    expect(outcome.error).toMatch(
+      /^api: GitLab refused to merge release commit [0-9a-f]{8} onto production \(on the temporary branch hub\/promote-1-1; GitLab merge status not_approved\) — production is untouched$/
+    )
+  })
+
   it('a merge that changes nothing is success (the branch already holds the commit)', async () => {
     const w = use(world())
     w.gl.branch('efp/deploy', 'production', w.apiSource)
@@ -535,7 +557,7 @@ describe('executePlan', () => {
     expect(outcome).toMatchObject({ status: 'failed', step: 'push api', code: 'MERGE_REFUSED' })
     expect(steps).toEqual(['push api'])
     expect(outcome.error).toBe(
-      `api: release commit ${src.slice(0, 8)} does not merge cleanly onto production (on the temporary branch hub/promote-1-1) — production is untouched`
+      `api: release commit ${src.slice(0, 8)} does not merge cleanly onto production (on the temporary branch hub/promote-1-1; GitLab merge status conflict) — production is untouched`
     )
     expect(w.gl.merges('efp/deploy', 'production')).toBe(0)
     expect(w.gl.projects.get('efp/deploy')?.branches.get('production')).toBe(prodBefore)
@@ -1625,6 +1647,11 @@ describe('startPromotion', () => {
     expect(runs[0].lines).toContain(
       `deploy #${started.deployId} is no longer running — its status was left as it is`
     )
+    // Minor 8: what the deploys ran on is not written over a row that is no longer this run's.
+    const stored = JSON.parse(
+      (await db('nivaro_hub_deploys').where({ id: started.deployId }).first()).plan
+    )
+    expect(stored.steps.every((st: { deployedSha?: string }) => !st.deployedSha)).toBe(true)
   })
 
   it('cancelPromotion stops the run at the next step boundary', async () => {

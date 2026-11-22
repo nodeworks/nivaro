@@ -482,7 +482,9 @@ describe('promotion copy', () => {
       'FRONTEND_NOT_ON_SOURCE',
       'FRONTEND_ROLLBACK_NO_BUILD',
       'PIN_CHANGED',
-      'HEAD_UNKNOWN'
+      'HEAD_UNKNOWN',
+      'ROLLBACK_NO_BUILD',
+      'ROLLBACK_NOT_RECORDED'
     ])
       expect(BLOCKER_COPY[code]?.title, code).toBeTruthy()
   })
@@ -490,6 +492,23 @@ describe('promotion copy', () => {
   it('names the route refusals in plain words', () => {
     const refusal = (code: string) =>
       hubError({ response: { status: 400, data: { code } } }, 'fallback').title
+    // Minor 5: every refusal a promotion route or run can answer has its own words.
+    for (const code of [
+      'LOCK_UNAVAILABLE',
+      'PLAN_HASH_REQUIRED',
+      'NOT_RUNNING',
+      'GITLAB_UNAUTHORIZED',
+      'GITLAB_FORBIDDEN',
+      'GITLAB_NO_TOKEN',
+      'DRIVER_MISCONFIGURED',
+      'DRIVER_CHANGED',
+      'ROLLBACK_NOT_RECORDED',
+      'ROLLBACK_REFUSED_BY_GITLAB'
+    ])
+      expect(refusal(code), code).not.toBe('fallback')
+    expect(refusal('ROLLBACK_REFUSED_BY_GITLAB')).toBe(
+      'GitLab refused to rerun the earlier deploy job'
+    )
     expect(refusal('CONFIRM_REQUIRED')).toBe("Type the environment's name to confirm")
     expect(refusal('BAD_KIND')).toBe('Pick what the component is')
     expect(refusal('BAD_DRIVER')).toBe('That driver does not exist any more')
@@ -583,6 +602,21 @@ describe('fix round 1: progress', () => {
     expect(rows[currentStepIndex(rows, 'push api-v2: merged !4')].key).toBe('push-2')
   })
 
+  it('Minor 4: a rollback says Redeploy; a no-op API step says it already runs', () => {
+    const back = stepRows(okPlan as never, 'rollback').map((r) => r.label)
+    expect(back).toContain("Redeploy api's earlier build")
+    expect(back).toContain("Find frontend's earlier build on production")
+    expect(back.join('\n')).not.toMatch(/Merge|pin the version/)
+    const finish = {
+      ...okPlan,
+      steps: [{ ...okPlan.steps[0], noop: true }, okPlan.steps[1]]
+    }
+    const labels = stepRows(finish as never).map((r) => r.label)
+    expect(labels).toContain('Already running 0.3.210 — api is not deployed again')
+    expect(labels).not.toContain('Deploy api')
+    expect(labels).toContain('Deploy frontend')
+  })
+
   it('P22: a rollback lists the portal first, then the API', () => {
     const plan = {
       ...okPlan,
@@ -633,6 +667,28 @@ describe('fix round 1: the confirmation names one version', () => {
         plan_hash: HASH
       })
     )
+  })
+
+  it('Minor 7: clears a typed confirmation when a re-read plans differently', async () => {
+    let current: unknown = okPlan
+    routes()
+    h.post.mockImplementation(async (url: string) => {
+      if (url === '/hub/environments/10/promote/plan') return { data: { data: current } }
+      throw new Error(`unexpected POST ${url}`)
+    })
+    const view = wrap(<HubPromotePanel env={env} kind='promote' idPrefix='t' onClose={() => {}} />)
+    await screen.findByText('api: merge main into production, then deploy')
+    const confirm = screen.getByLabelText(/Type production to promote/)
+    fireEvent.change(confirm, { target: { value: 'production' } })
+    // The same plan read again keeps it.
+    await view.qc.invalidateQueries({ queryKey: ['hub-plan'] })
+    await view.qc.refetchQueries()
+    expect(confirm).toHaveValue('production')
+    current = { ...okPlan, plan_hash: 'b'.repeat(64), lines: ['production moved on'] }
+    await view.qc.refetchQueries()
+    await screen.findByText('production moved on')
+    await waitFor(() => expect(confirm).toHaveValue(''))
+    expect(startButton()).toBeDisabled()
   })
 
   it('clears a typed confirmation when the kind changes', async () => {

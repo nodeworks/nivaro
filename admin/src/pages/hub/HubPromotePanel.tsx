@@ -165,6 +165,13 @@ function PromoteForm({
     enabled: !!version,
     staleTime: 0
   })
+  // The confirmation names one plan: a re-read that plans differently clears it.
+  const shownHash = useRef<string | undefined>(undefined)
+  const planHash = plan.data?.plan_hash
+  useEffect(() => {
+    if (shownHash.current && planHash && planHash !== shownHash.current) setConfirm('')
+    if (planHash) shownHash.current = planHash
+  }, [planHash])
 
   const start = useMutation({
     mutationFn: () =>
@@ -390,20 +397,31 @@ export function stepRows(plan: PromotionPlan | null, kind: PromotionKind = 'prom
     (a, b) => runRank(kind, a) - runRank(kind, b) || a.position - b.position
   )
   for (const s of ordered) {
-    rows.push({
-      key: `push-${s.position}`,
-      phase: 'push',
-      component: s.component,
-      label:
-        s.kind === 'api'
-          ? `Merge ${s.component} into ${s.targetBranch} and pin the version`
-          : `Merge ${s.component} into ${s.targetBranch}`
-    })
+    // What the run really does for this step: a rollback reruns an earlier build (nothing is
+    // merged or pinned); a no-op API step finds the version already running.
+    const [push, deploy] =
+      kind === 'rollback'
+        ? [
+            `Find ${s.component}'s earlier build on ${s.targetBranch}`,
+            `Redeploy ${s.component}'s earlier build`
+          ]
+        : s.noop
+          ? [
+              `${s.component}: ${s.targetBranch} already holds this release and its pin`,
+              `Already running ${s.want} — ${s.component} is not deployed again`
+            ]
+          : [
+              s.kind === 'api'
+                ? `Merge ${s.component} into ${s.targetBranch} and pin the version`
+                : `Merge ${s.component} into ${s.targetBranch}`,
+              `Deploy ${s.component}`
+            ]
+    rows.push({ key: `push-${s.position}`, phase: 'push', component: s.component, label: push })
     rows.push({
       key: `deploy-${s.position}`,
       phase: 'deploy',
       component: s.component,
-      label: `Deploy ${s.component}`
+      label: deploy
     })
   }
   rows.push({
