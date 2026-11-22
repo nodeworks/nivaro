@@ -15,7 +15,10 @@ import {
   defaultLoginName,
   generateHexSecret,
   generatePassword,
-  isDbIdentifier
+  isDbIdentifier,
+  isReservedDbName,
+  maxLoginLength,
+  mysqlGrantDb
 } from '../../../services/hub/db/names.js'
 
 const CLIENT: Record<HubDbEngine, string> = {
@@ -238,11 +241,130 @@ describe('names', () => {
     const seen = new Set<string>()
     for (let i = 0; i < 200; i++) {
       const p = generatePassword()
-      expect(p).toMatch(/^(?=.*[A-Z])(?=.*[a-z])(?=.*\d)[A-Za-z0-9]{32}$/)
+      expect(p).toMatch(/^(?=.*[A-Z])(?=.*[a-z])(?=.*\d)(?=.*[-_.~])[A-Za-z0-9._~-]{32}$/)
       seen.add(p)
     }
     expect(seen.size).toBe(200)
     expect(generateHexSecret()).toMatch(/^[0-9a-f]{64}$/)
     expect(generateHexSecret(8)).toMatch(/^[0-9a-f]{16}$/)
+  })
+})
+
+describe('fix round 1', () => {
+  const parts = { engine: 'pg', database: 'd', user: 'u', password: 'pw', ssl_mode: 'verify-full' }
+  it('refuses URL syntax in a host, accepts names and IPs', () => {
+    for (const host of [
+      'realhost/x?sslmode=disable#',
+      'evil@realhost',
+      'h\\SQLEXPRESS',
+      'a:b',
+      'a b',
+      '-x.com',
+      `${'a'.repeat(64)}.com`,
+      'a..b',
+      '[::1',
+      'h?x'
+    ])
+      expect(connectionFromInput({ ...parts, host })).toMatchObject({ ok: false })
+    for (const host of [
+      'db.example.com',
+      'localhost',
+      '10.0.0.5',
+      '::1',
+      '[2001:db8::1]',
+      'db-1.example.com.'
+    ])
+      expect(connectionFromInput({ ...parts, host })).toMatchObject({ ok: true })
+    const r = connectionFromInput({ ...parts, host: '[2001:db8::1]' })
+    expect(r.ok && r.conn.host).toBe('2001:db8::1')
+    const url = connectionUrl((r as any).conn)
+    expect(parseDbUrl(url).host).toBe('2001:db8::1')
+  })
+  it('mssql with null ssl_mode keeps encrypt and trust', () => {
+    const p = parseDbUrl(connectionUrl(make('mssql', { ssl_mode: null, trust_server_cert: true })))
+    expect(p.trustServerCertificate).toBe(true)
+    expect(p.sslMode).toBe('require')
+    const q = parseDbUrl(connectionUrl(make('mssql', { ssl_mode: null, trust_server_cert: false })))
+    expect(q.sslMode).toBe('verify-full')
+  })
+  it('scrub replaces secrets before structural masks', () => {
+    const out = scrubDbError('login Password=Sec;r3t failed', ['Sec;r3t'])
+    expect(out).not.toContain('r3t')
+    const knexShaped = scrubDbError(
+      new Error("insert into x values ('it''s;S3c') - Login 'it''s;S3c' failed"),
+      ["it's;S3c"]
+    )
+    expect(knexShaped).not.toContain('S3c')
+    const tedious = scrubDbError(new Error("Login failed for user 'app_prod'."), ['app_prod'])
+    expect(tedious).not.toContain('app_prod')
+    expect(scrubDbError(new Error('x {"a":"q\\"w"}'), ['q"w'])).not.toContain('q\\"w')
+  })
+  it('scrub falls back for empty AggregateError and masks JSON password keys', () => {
+    const agg = new AggregateError([new Error('connect ECONNREFUSED 10.0.0.1:5432')], '')
+    expect(scrubDbError(agg, [])).toContain('ECONNREFUSED')
+    const coded = Object.assign(new AggregateError([], ''), { code: 'ETIMEDOUT' })
+    expect(scrubDbError(coded, [])).toContain('ETIMEDOUT')
+    const out = scrubDbError({ user: 'u', password: 'hunter2' }, [])
+    expect(out).not.toContain('hunter2')
+  })
+  it('mysql afterCreate tolerates errno 1193 and sets lock_wait_timeout', () => {
+    for (const engine of ['mysql2', 'mariadb'] as const) {
+      const cfg = knexConfigFor(make(engine)) as any
+      const seen: string[] = []
+      const conn = {
+        query: (sql: string, cb: (e: any) => void) => {
+          seen.push(sql)
+          cb(/max_/.test(sql) ? Object.assign(new Error('unknown'), { errno: 1193 }) : null)
+        }
+      }
+      let result: any = 'unset'
+      cfg.pool.afterCreate(conn, (err: any) => {
+        result = err
+      })
+      expect(result).toBeNull()
+      expect(seen.some((q) => /lock_wait_timeout = 120/.test(q))).toBe(true)
+    }
+    const cfg = knexConfigFor(make('mysql2')) as any
+    let result: any
+    cfg.pool.afterCreate(
+      { query: (_: string, cb: any) => cb(Object.assign(new Error('x'), { errno: 1045 })) },
+      (e: any) => {
+        result = e
+      }
+    )
+    expect(result).toBeInstanceOf(Error)
+  })
+  it('reserved names and login lengths', () => {
+    for (const n of [
+      'sa',
+      'root',
+      'postgres',
+      'master',
+      'msdb',
+      'model',
+      'tempdb',
+      'mysql',
+      'sys',
+      'information_schema',
+      'performance_schema',
+      'template0',
+      'template1',
+      'public',
+      'dbo',
+      'guest',
+      'pg_catalog',
+      'mysql_x',
+      'ROOT'
+    ])
+      expect(isReservedDbName('pg', n)).toBe(true)
+    expect(isReservedDbName('mssql', 'nivaro_app_prod')).toBe(false)
+    expect(maxLoginLength('mysql2')).toBe(32)
+    expect(maxLoginLength('mariadb')).toBe(32)
+    expect(maxLoginLength('pg')).toBe(63)
+    expect(maxLoginLength('mssql')).toBe(128)
+  })
+  it('mysqlGrantDb escapes wildcards', () => {
+    expect(mysqlGrantDb('nivaro_a_b')).toBe('`nivaro\\_a\\_b`')
+    expect(mysqlGrantDb('a%b`c')).toBe('`a\\%b``c`')
   })
 })

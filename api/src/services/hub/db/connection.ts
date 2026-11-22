@@ -1,6 +1,7 @@
 // The Hub's model of a database connection: build the app's DB_URL, read one back from input,
 // make a knex config for a short-lived provisioning connection, and scrub driver errors.
 // Pure functions: no database, no config.
+import { isIP } from 'node:net'
 import type { Knex } from 'knex'
 import { maskConnectionString, parseDbUrl, type SslMode } from '../../../db/connection-url.js'
 import { knexClientFor } from '../../../db/mysql-flavor.js'
@@ -44,7 +45,8 @@ export function connectionUrl(c: HubDbConnection): string {
   const q: string[] = []
   if (c.engine === 'mssql') {
     if (c.ssl_mode === 'disable') q.push('encrypt=false')
-    else if (c.ssl_mode) {
+    else {
+      // ssl_mode null: knexConfigFor connects encrypted, trusting the certificate when told to.
       q.push('encrypt=true')
       q.push(`trustServerCertificate=${c.trust_server_cert || c.ssl_mode === 'require'}`)
     }
@@ -122,6 +124,9 @@ export function connectionFromInput(v: unknown): FromInput {
     const err = text(value, label, max, { spaces })
     if (err) return bad(err)
   }
+  const cleanedHost = cleanHost(host)
+  if (!cleanedHost) return bad('The host must be a host name or an IP address')
+  host = cleanedHost
   let portNum: number | null = null
   if (port !== undefined && port !== null && port !== '') {
     portNum = typeof port === 'string' && /^\d+$/.test(port) ? Number(port) : (port as number)
@@ -149,6 +154,24 @@ export function connectionFromInput(v: unknown): FromInput {
       trust_server_cert: trust === true
     }
   }
+}
+
+const HOSTNAME_LABEL = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/
+
+/** A hostname, IPv4 or IPv6 address (brackets removed), else null. Never URL syntax. */
+function cleanHost(v: unknown): string | null {
+  if (typeof v !== 'string') return null
+  let h = v.trim()
+  if (h !== v || h.length === 0 || h.length > 253) return null
+  if (h.startsWith('[') && h.endsWith(']')) h = h.slice(1, -1)
+  if (isIP(h)) return h
+  if (!/^[A-Za-z0-9.-]+$/.test(h)) return null
+  return h
+    .replace(/\.$/, '')
+    .split('.')
+    .every((l) => HOSTNAME_LABEL.test(l))
+    ? h
+    : null
 }
 
 const CONNECT_MS = 10_000
@@ -208,10 +231,14 @@ export function knexConfigFor(
       }
     } as Knex.Config
   // MySQL: max_execution_time (ms, SELECT only); MariaDB: max_statement_time (seconds, all).
-  const limit =
+  // The other flavour's variable does not exist (errno 1193): that is fine, the flavour is not
+  // known until a probe runs.
+  const sets = [
     c.engine === 'mariadb'
       ? `SET SESSION max_statement_time = ${STATEMENT_MS / 1000}`
-      : `SET SESSION max_execution_time = ${STATEMENT_MS}`
+      : `SET SESSION max_execution_time = ${STATEMENT_MS}`,
+    `SET SESSION lock_wait_timeout = ${STATEMENT_MS / 1000}`
+  ]
   return {
     ...base,
     pool: {
@@ -220,7 +247,19 @@ export function knexConfigFor(
       afterCreate: (
         conn: { query: (sql: string, cb: (err: Error | null) => void) => void },
         done: (err: Error | null, conn: unknown) => void
-      ) => conn.query(limit, (err) => done(err, conn))
+      ) => {
+        const run = (i: number): void => {
+          if (i >= sets.length) {
+            done(null, conn)
+            return
+          }
+          conn.query(sets[i], (err) => {
+            if (err && (err as { errno?: number }).errno !== 1193) done(err, conn)
+            else run(i + 1)
+          })
+        }
+        run(0)
+      }
     },
     connection: {
       host: c.host,
@@ -234,31 +273,50 @@ export function knexConfigFor(
   } as Knex.Config
 }
 
+/** Every spelling a secret may take inside driver text. */
+function secretForms(x: string): string[] {
+  return [x, encodeURIComponent(x), x.replace(/'/g, "''"), JSON.stringify(x).slice(1, -1)]
+}
+
+function errorText(err: unknown): string {
+  if (err instanceof Error) {
+    if (err.message) return err.message
+    const e = err as Error & { code?: unknown; errors?: unknown }
+    const parts: string[] = []
+    if (e.code) parts.push(String(e.code))
+    if (Array.isArray(e.errors))
+      for (const sub of e.errors) {
+        const m =
+          sub instanceof Error
+            ? sub.message || String((sub as { code?: unknown }).code ?? '')
+            : String(sub)
+        if (m) parts.push(m)
+      }
+    return parts.join('; ') || err.name
+  }
+  if (typeof err === 'string') return err
+  try {
+    return JSON.stringify(err) ?? String(err)
+  } catch {
+    return String(err)
+  }
+}
+
 /**
- * Text safe to store and show: connection strings lose their user and password, every secret
- * (and its percent-encoded form) becomes '••••', at most 300 characters.
+ * Text safe to store and show. The listed secrets go first, in every spelling (raw,
+ * percent-encoded, SQL-quoted, JSON-escaped); then connection strings lose their user and
+ * password and password-like pairs are masked. At most 300 characters.
  */
 export function scrubDbError(err: unknown, secrets: Array<string | null | undefined>): string {
-  let s: string
-  if (err instanceof Error) s = err.message
-  else if (typeof err === 'string') s = err
-  else {
-    try {
-      s = JSON.stringify(err) ?? String(err)
-    } catch {
-      s = String(err)
-    }
-  }
+  let s = errorText(err)
+  const list = new Set<string>()
+  for (const x of secrets) if (x) for (const f of secretForms(x)) if (f) list.add(f)
+  for (const x of [...list].sort((a, b) => b.length - a.length)) s = s.split(x).join('••••')
   s = s.replace(/[a-z][a-z0-9+.-]*:\/\/[^\s'"<>]+/gi, (m) =>
     maskConnectionString(m).replace(/^([a-z][a-z0-9+.-]*:\/\/)[^@/\s]*@/i, '$1••••@')
   )
-  s = maskConnectionString(s).replace(/\b(password|pwd)(\s*=\s*)[^;&\s]*/gi, '$1$2••••')
-  const list = new Set<string>()
-  for (const x of secrets) {
-    if (!x) continue
-    list.add(x)
-    list.add(encodeURIComponent(x))
-  }
-  for (const x of [...list].sort((a, b) => b.length - a.length)) s = s.split(x).join('••••')
+  s = maskConnectionString(s)
+    .replace(/\b(password|pwd)(\s*=\s*)[^;&\s]*/gi, '$1$2••••')
+    .replace(/"(password|pwd|pass)"\s*:\s*"(?:[^"\\]|\\.)*"/gi, '"$1":"••••"')
   return s.slice(0, 300)
 }

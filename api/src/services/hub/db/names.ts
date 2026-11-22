@@ -43,13 +43,18 @@ export function defaultLoginName(appKey: string, envKey: string, engine: HubDbEn
 const UPPER = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
 const LOWER = 'abcdefghijklmnopqrstuvwxyz'
 const DIGIT = '0123456789'
+// MySQL validate_password MEDIUM and MariaDB simple_password_check want a special character.
+// - _ . ~ are the URL "unreserved" set (no percent-encoding), carry no meaning inside a
+// single-quoted SQL literal on any engine (no quote, backslash, percent or wildcard), and keep
+// the password valid in a shell-free GitLab variable.
+const SPECIAL = '-_.~'
 const ALL = UPPER + LOWER + DIGIT
 
 const pick = (set: string) => set[randomInt(set.length)]
 
-/** 32 characters [A-Za-z0-9] with at least one upper, lower and digit. */
+/** 32 characters [A-Za-z0-9] plus -_.~, with at least one upper, lower, digit and special. */
 export function generatePassword(): string {
-  const chars = [pick(UPPER), pick(LOWER), pick(DIGIT)]
+  const chars = [pick(UPPER), pick(LOWER), pick(DIGIT), pick(SPECIAL)]
   while (chars.length < 32) chars.push(pick(ALL))
   for (let i = chars.length - 1; i > 0; i--) {
     const j = randomInt(i + 1)
@@ -60,4 +65,46 @@ export function generatePassword(): string {
 
 export function generateHexSecret(bytes = 32): string {
   return randomBytes(bytes).toString('hex')
+}
+
+const RESERVED = new Set([
+  'sa',
+  'root',
+  'postgres',
+  'master',
+  'msdb',
+  'model',
+  'tempdb',
+  'mysql',
+  'sys',
+  'information_schema',
+  'performance_schema',
+  'template0',
+  'template1',
+  'public',
+  'dbo',
+  'guest',
+  'admin',
+  'administrator',
+  'system',
+  'default'
+])
+
+/** Names a database or login must never take, on any engine. */
+export function isReservedDbName(_engine: HubDbEngine, name: string): boolean {
+  const n = String(name ?? '').toLowerCase()
+  return RESERVED.has(n) || n.startsWith('pg_') || n.startsWith('mysql')
+}
+
+export function maxLoginLength(engine: HubDbEngine): number {
+  if (engine === 'mysql2' || engine === 'mariadb') return 32
+  return engine === 'pg' ? 63 : 128
+}
+
+/**
+ * A database name for GRANT / REVOKE on MySQL and MariaDB: backquoted, with `_` and `%` escaped,
+ * because both are wildcards in a grant (`a_b` would also cover `axb`).
+ */
+export function mysqlGrantDb(name: string): string {
+  return `\`${name.replace(/`/g, '``').replace(/([_%])/g, '\\$1')}\``
 }
