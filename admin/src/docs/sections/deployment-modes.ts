@@ -7,7 +7,7 @@ export const deploymentModesDocs: DocSection = {
     { type: 'h1', id: 'deployment-modes', text: 'Deployment modes' },
     {
       type: 'p',
-      text: 'A Nivaro process runs in one of three modes. Self-hosted (one process, one app, one database) and Nivaro Cloud (the hosted product, one process per tenant behind a meta database) behave exactly as before. A Hub shared deployment is new: one process serves many apps, each with its own database, and the list of apps comes from a Nivaro Hub.'
+      text: 'A Nivaro process runs in one of three modes. Self-hosted (one process, one app, one database) and Nivaro Cloud (the hosted product: tenants and their databases listed in a meta database) behave exactly as before. A Hub shared deployment is new: one process serves many apps, each with its own database, and the list of apps comes from a Nivaro Hub.'
     },
     {
       type: 'table',
@@ -32,10 +32,10 @@ export const deploymentModesDocs: DocSection = {
       type: 'note',
       text: 'Cloud and self-hosted are unchanged. With HUB_SHARED_DEPLOYMENT unset, nothing in this section applies and every check that used to read CLOUD_META_DB_URL answers exactly as it did.'
     },
-    { type: 'h2', id: 'deployment-modes-predicates', text: 'The two questions the code asks' },
+    { type: 'h2', id: 'deployment-modes-predicates', text: 'The questions the code asks' },
     {
       type: 'p',
-      text: 'The code no longer reads CLOUD_META_DB_URL directly. One module (`services/deployment-mode.ts`) answers two questions, and every place that used to test the variable now asks the one it means.'
+      text: 'The code no longer reads CLOUD_META_DB_URL directly. One module (`services/deployment-mode.ts`) answers two questions about the deployment (a third, `perAppJobs()`, derives from them), and every place that used to test the variable now asks the one it means.'
     },
     {
       type: 'table',
@@ -125,7 +125,7 @@ export const deploymentModesDocs: DocSection = {
         [
           'C5',
           'cloud',
-          'Protections for untrusted customers that an operator-run deployment does not need: R2 and `GATEWAY_URL` file events, `/api/health` `cloud`. `SSRF_ALLOW_HOSTS` is an operator list and is honoured on a shared deployment.'
+          'Protections for untrusted customers that an operator-run deployment does not need: `/api/health` `cloud`. `SSRF_ALLOW_HOSTS` is an operator list and is honoured on a shared deployment.'
         ]
       ]
     },
@@ -138,7 +138,7 @@ export const deploymentModesDocs: DocSection = {
       type: 'ul',
       items: [
         'Huddle media servers come from the platform `HUDDLE_LIVEKIT_URL`, `HUDDLE_TURN_URLS` and `HUDDLE_STUN_URLS`; an app cannot set its own.',
-        'There is no env push-relay key: `MOBILE_PUSH_RELAY_KEY` is ignored, and an app sends push only with the relay key stored for that app.',
+        'There is no env push-relay key: `MOBILE_PUSH_RELAY_KEY` is ignored, and nothing on a shared deployment can store a per-app relay key yet, so phone push stays off until phase 6.',
         'The SSRF guard applies to URLs an app admin sets (webhooks, link preview, the flow webhook operation): pinned address, every redirect re-checked.',
         'Ending maintenance in one app does not end the operator deployment-wide freeze (see Per-app jobs and maintenance below).'
       ]
@@ -154,7 +154,7 @@ export const deploymentModesDocs: DocSection = {
         ],
         [
           '`HUB_URL`',
-          "The origin of the Nivaro Hub that lists this deployment's apps. https only; plain http is accepted for localhost and 127.0.0.1. A blank value counts as unset. (In phase 1 this variable was reserved and did nothing; with HUB_SHARED_DEPLOYMENT it is required.)"
+          "The origin of the Nivaro Hub that lists this deployment's apps. https only; plain http is accepted for localhost, 127.0.0.1 and [::1]. A blank value counts as unset. (In phase 1 this variable was reserved and did nothing; with HUB_SHARED_DEPLOYMENT it is required.)"
         ],
         [
           '`HUB_DEPLOYMENT_TOKEN`',
@@ -170,7 +170,7 @@ export const deploymentModesDocs: DocSection = {
         ],
         [
           '`HUB_TOKEN`',
-          'Still the token an app answers the Hub link with (`GET /api/hub-link/status`). On a shared deployment it is process configuration (rule T4): one token for the process, not per app. Some messages still say it is "set in cloud mode".'
+          'The token an app answers the Hub link with (`GET /api/hub-link/status`). It is not honoured on a shared deployment (rule T4): the hub link routes are not mounted there, and the log says "HUB_TOKEN is set in cloud mode".'
         ]
       ]
     },
@@ -214,7 +214,7 @@ export const deploymentModesDocs: DocSection = {
         ],
         [
           '`status`',
-          '`active`, `maintenance`, `suspended` or `provisioning`. Active and maintenance apps are served and get jobs; the others get a neutral blocked page.'
+          '`active`, `maintenance`, `suspended` or `provisioning`. Active and maintenance apps are served and listed for jobs (a job then skips an app whose own maintenance setting is on); the others get a neutral blocked page.'
         ],
         ['`db.client`', '`mssql`, `pg`, `mysql2` or `mariadb`.'],
         ['`pool_max`', 'Optional, 1 to 20. Omitted = the default tenant pool size.'],
@@ -237,7 +237,7 @@ export const deploymentModesDocs: DocSection = {
         'The last good list is kept through a Hub outage: a 5xx, a timeout, a refused token or a body that is not a tenant list never empties the deployment. The list is also kept sealed in Redis (`nvr:tenancy:hub:<deployment>`), so a restart during an outage still serves. Without ENCRYPTION_KEY the copy is memory-only and readiness warns.',
         "An answer for another deployment key never replaces this deployment's list.",
         'Ports are stripped for routing. A hostname listed as `a.example.com:8443` matches requests and sockets on `a.example.com`.',
-        'Clashes drop BOTH tenants: two apps claiming one id, one hostname or one database connection are all left out, so a broken entry can never hand its hostname or database to another app. Dropped apps are named with a plain reason in readiness (never the connection).',
+        'Clashes drop BOTH tenants: two apps claiming one id, one hostname or one database connection are all left out, so a broken entry can never hand its hostname or database to another app. Dropped apps are named, with a plain reason and never the connection, in the process log (`[tenancy]` lines); readiness shows only how many were dropped.',
         'A body larger than 2 MB, or a call slower than 10 seconds, is treated as a failed refresh.'
       ]
     },
@@ -259,7 +259,7 @@ export const deploymentModesDocs: DocSection = {
         "An app admin can pause and resume a job for their own app only. The pause is that app's own `paused_crons` setting; the process-wide paused set is never touched. Pausing a process-scoped job answers 409.",
         "Schedules, time zones, chains and overrides are deployment-wide: `PATCH /api/cron/:id` and the revert route answer 409 `SCHEDULE_IS_DEPLOYMENT_WIDE`, and an app's `sla_timezone` does not move the cron zone.",
         'The miss detector skips process jobs (they have no per-app run to miss) and skips jobs the current app paused.',
-        "Run now runs an app job for the caller's app only.",
+        "Run now runs an app job for the caller's app only. Run now or a dry run of a process job from an app answers 409 `SCHEDULE_IS_DEPLOYMENT_WIDE`, like pausing it.",
         "In cloud, core and cloud-extension crons do NOT fan out per tenant (`perAppJobs()` is false), so the cloud extensions' cross-tenant crons keep working."
       ]
     },
@@ -304,6 +304,7 @@ export const deploymentModesDocs: DocSection = {
         '(a) every scanned site is in the inventory and every entry is still there;',
         '(b) every entry is classified: C rules go with nivaroCloud, T rules with multiTenant, T6 carries `phase6`;',
         "(c) a converted file contains no raw reads and exactly the predicate calls its inventory classifies (new calls written after the inventory are declared in the test's `EXTRA_CALLS` with a comment saying why);",
+        '(d) only `deployment-mode.ts` reads `HUB_SHARED_DEPLOYMENT` and `HUB_DEPLOYMENT_TOKEN`;',
         '(e) the ratchet is closed: every batch is converted, so a new raw read anywhere fails the test.'
       ]
     },

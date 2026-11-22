@@ -2565,7 +2565,7 @@
       "rule": "T7",
       "why": "process-wide push-relay key never from env: one tenant admin must not get or set it on a shared process",
       "batch": "B",
-      "phase6": "shared deployment reads one env relay key (MOBILE_PUSH_RELAY_KEY) for every app; per-app keys need per-app storage, as cloud provisioning does"
+      "phase6": "shared deployment ignores the env relay key (MOBILE_PUSH_RELAY_KEY); a per-app key needs per-app storage that nothing on shared writes yet, as cloud provisioning does, so phone push stays off"
     },
     {
       "id": "services/push-relay.ts:100",
