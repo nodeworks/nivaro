@@ -244,6 +244,18 @@ export const defaultStackName = (appKey: string, envKey: string) =>
     .replace(/-+$/, '')
 
 /**
+ * A fresh stack name per attempt (`<app>-<env>-<4 random>`), so a placement left by a closed
+ * tab never makes the next attempt answer STACK_NAME_TAKEN (ruling P6-18 N-1).
+ */
+export function uniqueStackName(appKey: string, envKey: string): string {
+  const base = defaultStackName(appKey, envKey).slice(0, 36).replace(/-+$/, '') || 'app'
+  const bytes = new Uint8Array(4)
+  globalThis.crypto.getRandomValues(bytes)
+  const tail = [...bytes].map((b) => 'abcdefghijklmnopqrstuvwxyz0123456789'[b % 36]).join('')
+  return `${base}-${tail}`
+}
+
+/**
  * Ruling P6-17 gap (a): a new dedicated Docker placement for an environment that has only ever
  * run on a shared deployment (as HubAdoptForm makes one). The panel deletes it again when no
  * move is started on it.

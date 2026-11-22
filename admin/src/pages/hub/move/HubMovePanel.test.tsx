@@ -132,6 +132,20 @@ function renderPanel() {
   )
 }
 
+function renderPanelOn9() {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return render(
+    <QueryClientProvider client={qc}>
+      <HubMovePanel
+        appKey='efp'
+        env={{ ...env, placement_id: 9 }}
+        idPrefix='mv'
+        onClose={() => {}}
+      />
+    </QueryClientProvider>
+  )
+}
+
 async function pickTarget(label: RegExp) {
   fireEvent.click(await screen.findByRole('combobox', { name: 'Move to' }))
   fireEvent.click(await screen.findByRole('option', { name: label }))
@@ -229,13 +243,15 @@ describe('HubMovePanel — before start', () => {
     )
     fireEvent.click(await screen.findByRole('combobox', { name: 'Move to' }))
     fireEvent.click(await screen.findByRole('option', { name: /New stack on Docker east/ }))
-    expect(screen.getByLabelText('Stack name')).toHaveValue('efp-production')
+    const name = (screen.getByLabelText('Stack name') as HTMLInputElement).value
+    // A fresh name per attempt: a placement a closed tab left never blocks the next one.
+    expect(name).toMatch(/^efp-production-[a-z0-9]{4}$/)
     fireEvent.click(screen.getByRole('button', { name: 'Make the stack placement and plan' }))
     await waitFor(() =>
       expect(h.post).toHaveBeenCalledWith('/hub/placements', {
         kind: 'dedicated',
         driver_id: 2,
-        target: { stack: 'efp-production' }
+        target: { stack: name }
       })
     )
     await waitFor(() =>
@@ -246,6 +262,70 @@ describe('HubMovePanel — before start', () => {
     // Leaving without starting removes the placement again.
     view.unmount()
     await waitFor(() => expect(h.del).toHaveBeenCalledWith('/hub/placements/12'))
+  })
+
+  it('while a stack placement is being made: no Close, no Cancel, no new pick; a late answer is undone', async () => {
+    window.localStorage.setItem('nvr:hub-move-dismissed:10', '0')
+    const base = h.get.getMockImplementation() as (url: string) => Promise<unknown>
+    h.get.mockImplementation(async (url: string) =>
+      url === '/hub/placements/9'
+        ? {
+            data: {
+              data: { id: 9, kind: 'shared', shared_deployment_id: 4, driver_id: null, target: {} }
+            }
+          }
+        : base(url)
+    )
+    let answer: (v: unknown) => void = () => {}
+    const basePost = h.post.getMockImplementation() as (u: string, b?: unknown) => Promise<unknown>
+    h.post.mockImplementation((url: string, b?: unknown) =>
+      url === '/hub/placements' ? new Promise((r) => (answer = r)) : basePost(url, b)
+    )
+    h.del.mockResolvedValue({})
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const view = render(
+      <QueryClientProvider client={qc}>
+        <HubMovePanel
+          appKey='efp'
+          env={{ ...env, placement_id: 9 }}
+          idPrefix='mv'
+          onClose={() => {}}
+        />
+      </QueryClientProvider>
+    )
+    fireEvent.click(await screen.findByRole('combobox', { name: 'Move to' }))
+    fireEvent.click(await screen.findByRole('option', { name: /New stack on Docker east/ }))
+    const first = (screen.getByLabelText('Stack name') as HTMLInputElement).value
+    fireEvent.click(screen.getByRole('button', { name: 'Make the stack placement and plan' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Close' })).toBeDisabled())
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled()
+    expect(screen.getByRole('combobox', { name: 'Move to' })).toBeDisabled()
+    // The panel goes away (its row closed) before the answer: the placement is removed at once.
+    view.unmount()
+    answer({ data: { data: { id: 13 } } })
+    await waitFor(() => expect(h.del).toHaveBeenCalledWith('/hub/placements/13'))
+    // A new attempt gets another name.
+    renderPanelOn9()
+    fireEvent.click(await screen.findByRole('combobox', { name: 'Move to' }))
+    fireEvent.click(await screen.findByRole('option', { name: /New stack on Docker east/ }))
+    expect((screen.getByLabelText('Stack name') as HTMLInputElement).value).not.toBe(first)
+  })
+
+  it('while a start is out: no Close, no Cancel, no new pick', async () => {
+    plan = { ...basePlan, checklist: [] }
+    const basePost = h.post.getMockImplementation() as (u: string, b?: unknown) => Promise<unknown>
+    h.post.mockImplementation((url: string, b?: unknown) =>
+      url === '/hub/environments/10/move' ? new Promise(() => {}) : basePost(url, b)
+    )
+    renderPanel()
+    await pickTarget(/Shared · east/)
+    fireEvent.change(await screen.findByLabelText(/Type efp\/production to move/), {
+      target: { value: 'efp/production' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Start move' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Close' })).toBeDisabled())
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled()
+    expect(screen.getByRole('combobox', { name: 'Move to' })).toBeDisabled()
   })
 
   it('shows no form when the moves list cannot be read', async () => {

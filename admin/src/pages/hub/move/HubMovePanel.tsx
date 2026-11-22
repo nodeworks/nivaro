@@ -38,7 +38,6 @@ import {
   changedMovePlanOf,
   confirmMoveRoute,
   createDedicatedPlacement,
-  defaultStackName,
   deletePlacement,
   fetchMove,
   fetchMovePlan,
@@ -73,6 +72,7 @@ import {
   setMoveChecklist,
   startMove,
   targetFromValue,
+  uniqueStackName,
   useDrivers,
   usePlacement,
   useSharedList,
@@ -105,7 +105,8 @@ export function OptionCombobox({
   options,
   placeholder = 'Pick one…',
   emptyText = 'Nothing to pick',
-  className
+  className,
+  disabled
 }: {
   id?: string
   /** The accessible name of the trigger. */
@@ -116,6 +117,7 @@ export function OptionCombobox({
   placeholder?: string
   emptyText?: string
   className?: string
+  disabled?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const selected = options.find((o) => o.value === value)
@@ -129,6 +131,7 @@ export function OptionCombobox({
           role='combobox'
           aria-label={label}
           aria-expanded={open}
+          disabled={disabled}
           className={cn(
             'h-8 w-full justify-between bg-white px-2 text-[13px] font-normal dark:bg-background',
             className
@@ -200,6 +203,9 @@ export function HubMovePanel({
   onClose: () => void
 }) {
   const [started, setStarted] = useState<number | null>(null)
+  // While a start or a stack-placement request is out, the panel cannot be closed (closing would
+  // drop the request's answer: a placement then leaks, or is deleted under a starting move).
+  const [busy, setBusy] = useState(false)
   // The move on screen stays there after it ends (its result, error and open checklist items)
   // until the person dismisses it: a refetched list no longer naming it open never hides it.
   const [latched, setLatched] = useState<number | null>(null)
@@ -233,7 +239,14 @@ export function HubMovePanel({
         <h4 className='m-0 min-w-0 flex-1 truncate text-[13px] font-semibold text-slate-900 dark:text-foreground'>
           Move <span className='font-mono'>{env.key}</span>
         </h4>
-        <button type='button' aria-label='Close' className={ghostButton} onClick={onClose}>
+        <button
+          type='button'
+          aria-label='Close'
+          className={ghostButton}
+          disabled={busy}
+          data-tip={busy ? 'Wait for the request to finish' : undefined}
+          onClick={onClose}
+        >
           <X className='h-3.5 w-3.5' aria-hidden />
         </button>
       </div>
@@ -255,6 +268,7 @@ export function HubMovePanel({
           idPrefix={idPrefix}
           pastMoves={moves.data ?? []}
           onStarted={setStarted}
+          onBusy={setBusy}
           onClose={onClose}
         />
       )}
@@ -279,6 +293,7 @@ function MoveForm({
   idPrefix,
   pastMoves,
   onStarted,
+  onBusy,
   onClose
 }: {
   appKey: string
@@ -286,6 +301,8 @@ function MoveForm({
   idPrefix: string
   pastMoves: HubMove[]
   onStarted: (moveId: number) => void
+  /** A start or a stack-placement request is out (the panel then cannot be closed). */
+  onBusy?: (busy: boolean) => void
   onClose: () => void
 }) {
   const qc = useQueryClient()
@@ -320,6 +337,11 @@ function MoveForm({
   })
 
   const [pick, setPickRaw] = useState('')
+  const pickRef = useRef(pick)
+  pickRef.current = pick
+  const aliveRef = useRef(true)
+  /** A start is out: the placement may already belong to a move the server just started. */
+  const startingRef = useRef(false)
   // A placement this form made for a new stack: removed again unless a move starts on it.
   const [made, setMade] = useState<{ id: number; driver: string; stack: string } | null>(null)
   const madeRef = useRef<{ id: number; started: boolean } | null>(null)
@@ -327,24 +349,41 @@ function MoveForm({
     const m = madeRef.current
     madeRef.current = null
     setMade(null)
-    if (m && !m.started) {
+    // Never while a start is out: the server may have started a move on it (and refuses to delete
+    // a placement an open move names; a rollback removes one it never deployed).
+    if (m && !m.started && !startingRef.current) {
       void deletePlacement(m.id).catch(() => undefined)
       qc.removeQueries({ queryKey: moveKeys.placement(m.id) })
     }
   }
   const setPick = (v: string) => {
     if (made && v !== `dedicated:${made.id}`) forgetMade()
+    // Each new-stack attempt gets its own name (a leftover never blocks the next one).
+    if (v.startsWith('new:') && v !== pick) setStackName(uniqueStackName(appKey, env.key))
     setPickRaw(v)
   }
   // biome-ignore lint/correctness/useExhaustiveDependencies: on unmount only
-  useEffect(() => () => forgetMade(), [])
+  useEffect(
+    () => () => {
+      aliveRef.current = false
+      forgetMade()
+    },
+    []
+  )
   const newOn = /^new:(\d+)$/.exec(pick)
   const newDriver = newOn ? drivers.data?.find((d) => d.id === Number(newOn[1])) : undefined
-  const [stackName, setStackName] = useState(() => defaultStackName(appKey, env.key))
+  const [stackName, setStackName] = useState(() => uniqueStackName(appKey, env.key))
   const stackBad = !STACK_NAME_RE.test(stackName.trim())
   const makeStack = useMutation({
-    mutationFn: () => createDedicatedPlacement(Number(newOn?.[1]), stackName.trim()),
-    onSuccess: (r) => {
+    mutationFn: (v: { driverId: number; stack: string; askedPick: string }) =>
+      createDedicatedPlacement(v.driverId, v.stack),
+    onSuccess: (r, v) => {
+      // An answer for a form that is gone, or for a pick that changed meanwhile, is not used:
+      // its placement is removed at once.
+      if (!aliveRef.current || pickRef.current !== v.askedPick) {
+        void deletePlacement(r.id).catch(() => undefined)
+        return
+      }
       madeRef.current = { id: r.id, started: false }
       setMade({ id: r.id, driver: newDriver?.name ?? 'driver', stack: stackName.trim() })
       setPickRaw(`dedicated:${r.id}`)
@@ -439,6 +478,12 @@ function MoveForm({
     !!p && !!p.plan_hash && p.blockers.length === 0 && !requiredOpen && confirm.trim() === expected
 
   const start = useMutation({
+    onMutate: () => {
+      startingRef.current = true
+    },
+    onSettled: () => {
+      startingRef.current = false
+    },
     mutationFn: () =>
       startMove(env.id, {
         to: target as NonNullable<typeof target>,
@@ -466,6 +511,11 @@ function MoveForm({
     }
   })
 
+  const busy = start.isPending || makeStack.isPending
+  useEffect(() => onBusy?.(busy), [busy, onBusy])
+  // biome-ignore lint/correctness/useExhaustiveDependencies: on unmount only
+  useEffect(() => () => onBusy?.(false), [])
+
   return (
     <div className='space-y-3'>
       <div className='grid grid-cols-1 gap-3 sm:grid-cols-[minmax(220px,1fr)_120px]'>
@@ -475,6 +525,7 @@ function MoveForm({
             label='Move to'
             value={pick}
             onChange={setPick}
+            disabled={busy}
             options={options}
             placeholder='Pick a shared deployment or stack…'
             emptyText='No other place to move to'
@@ -520,7 +571,13 @@ function MoveForm({
             variant='outline'
             className='h-8'
             disabled={stackBad || makeStack.isPending || !newDriver}
-            onClick={() => makeStack.mutate()}
+            onClick={() =>
+              makeStack.mutate({
+                driverId: Number(newOn?.[1]),
+                stack: stackName.trim(),
+                askedPick: pick
+              })
+            }
           >
             {makeStack.isPending ? 'Making…' : 'Make the stack placement and plan'}
           </Button>
@@ -613,7 +670,7 @@ function MoveForm({
         >
           {start.isPending ? 'Starting…' : 'Start move'}
         </Button>
-        <Button size='sm' variant='ghost' className='h-8' onClick={onClose}>
+        <Button size='sm' variant='ghost' className='h-8' disabled={busy} onClick={onClose}>
           Cancel
         </Button>
         {p && p.blockers.length === 0 && requiredOpen && (
