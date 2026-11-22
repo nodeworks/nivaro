@@ -1308,6 +1308,11 @@ function MoveProgress({
               Cancel rolls the move back: the app stays on its old home and leaves maintenance.
             </span>
           </>
+        ) : m.status === 'success' && checklist.some((c) => !c.done) ? (
+          // The reminder stays until its items are ticked: no Dismiss while something is open.
+          <span className='text-[11px] text-slate-500 dark:text-muted-foreground'>
+            Tick what is still to do to close this move.
+          </span>
         ) : m.status !== 'interrupted' ? (
           <Button size='sm' variant='ghost' className='h-8' onClick={onDismiss}>
             Dismiss

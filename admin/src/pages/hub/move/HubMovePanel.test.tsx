@@ -761,6 +761,18 @@ describe('HubMovePanel — a move that ended (ruling P6-17 I-1)', () => {
         .getByText('The old home could not be retired; retire it by hand.')
         .closest('[data-tone]')
     ).toHaveAttribute('data-tone', 'warning')
+    // No Dismiss while something is still to do; ticking it closes the item, then Dismiss shows.
+    expect(screen.queryByRole('button', { name: 'Dismiss' })).toBeNull()
+    expect(screen.getByText('Tick what is still to do to close this move.')).toBeInTheDocument()
+    h.post.mockImplementation(async (url: string) => {
+      if (url === '/hub/moves/77/checklist') {
+        openMove({ ...ended, checklist: [{ ...ended.checklist[0], done: true }] })
+        return { data: { data: [] } }
+      }
+      throw new Error(url)
+    })
+    fireEvent.click(screen.getByRole('checkbox', { name: /Retire the old home by hand/ }))
+    expect(await screen.findByRole('button', { name: 'Dismiss' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
     expect(await screen.findByRole('combobox', { name: 'Move to' })).toBeInTheDocument()
     first.unmount()
