@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { isMultiTenant } from './deployment-mode.js'
 import { getIo } from './io-holder.js'
 import { broadcastCollectionUpdate } from './realtime.js'
 import { noteRealtimeEmit } from './request-trace.js'
@@ -267,7 +268,7 @@ export function emitToTenant(
   try {
     const io = getIo()
     if (!io) return
-    if (process.env.CLOUD_META_DB_URL) {
+    if (isMultiTenant()) {
       if (tenant) io.to(tenantScopedRoom(TENANT_ALL_ROOM, tenant)).emit(event, payload)
     } else io.emit(event, payload)
   } catch {
@@ -289,7 +290,7 @@ export function emitToSignedIn(
   try {
     const io = getIo()
     if (!io) return
-    if (process.env.CLOUD_META_DB_URL) {
+    if (isMultiTenant()) {
       if (tenant) io.to(tenantScopedRoom(TENANT_ALL_ROOM, tenant)).emit(event, payload)
     } else io.to(TENANT_ALL_ROOM).emit(event, payload)
   } catch {

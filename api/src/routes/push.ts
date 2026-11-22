@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { isMultiTenant } from '../services/deployment-mode.js'
 import {
   credentialLive,
   deletePushRowsOrKeep,
@@ -361,7 +362,7 @@ export async function pushRoutes(app: FastifyInstance) {
     // Cloud provisioning owns a tenant's relay key and url (POST /admin/push-relay): an admin
     // here may choose the content, never connect, set, point elsewhere or drop the key.
     if (
-      process.env.CLOUD_META_DB_URL &&
+      isMultiTenant() &&
       (connect || disconnect || relay_key !== undefined || body.relay_url !== undefined)
     ) {
       return reply.code(403).send({

@@ -5,6 +5,7 @@ import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { withDeadlockRetry } from '../services/deadlock-retry.js'
+import { isMultiTenant } from '../services/deployment-mode.js'
 import { activeMasquerades } from '../services/masquerade-marker.js'
 import { machineAccountIds } from '../services/online-now.js'
 import { PRESENCE_ONLINE_WINDOW_MS } from '../services/presence-sockets.js'
@@ -156,7 +157,7 @@ export function schedulePresenceBroadcast(app: FastifyInstance, tenant = current
 
 /** Tenants with live presence sessions ('' self-hosted). */
 export async function sessionTenants(app: FastifyInstance): Promise<string[]> {
-  if (!process.env.CLOUD_META_DB_URL) return ['']
+  if (!isMultiTenant()) return ['']
   const tenants = new Set<string>()
   let cursor = '0'
   do {
@@ -1277,9 +1278,7 @@ async function loadAdminExtras(base: PresenceBase): Promise<PresenceAdminExtras>
   if (userIds.length > 0) {
     try {
       const { getClusterStaleBuilds } = await import('../plugins/socketio.js')
-      staleBuilds = await getClusterStaleBuilds(
-        process.env.CLOUD_META_DB_URL ? currentTenantKey() || '-' : null
-      )
+      staleBuilds = await getClusterStaleBuilds(isMultiTenant() ? currentTenantKey() || '-' : null)
     } catch {
       /* decoration only */
     }

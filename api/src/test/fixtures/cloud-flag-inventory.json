@@ -383,9 +383,9 @@
       "text": "if (!process.env.CLOUD_META_DB_URL) return fetch(url, init)",
       "form": "raw",
       "weight": 1,
-      "meaning": "nivaroCloud",
-      "rule": "C5",
-      "why": "fetchGuardedInCloud: safeFetch for untrusted customers, plain fetch for operator-owned apps",
+      "meaning": "multiTenant",
+      "rule": "T7",
+      "why": "fetchGuardedInCloud: safeFetch wherever tenant admins configure outbound URLs on a shared process",
       "batch": "A"
     },
     {
@@ -998,9 +998,9 @@
       "text": "process.env.CLOUD_META_DB_URL &&",
       "form": "raw",
       "weight": 1,
-      "meaning": "nivaroCloud",
-      "rule": "C5",
-      "why": "push-relay key/url are provisioned by the cloud platform, never set by a tenant admin",
+      "meaning": "multiTenant",
+      "rule": "T7",
+      "why": "a tenant admin must not set the process-wide push-relay key/url (CLOUD_MANAGED)",
       "batch": "B"
     },
     {
@@ -2004,9 +2004,9 @@
       "text": "if (!process.env.CLOUD_META_DB_URL) return true",
       "form": "raw",
       "weight": 1,
-      "meaning": "nivaroCloud",
-      "rule": "C5",
-      "why": "outbound URL guard for untrusted customers (SSRF strictness)",
+      "meaning": "multiTenant",
+      "rule": "T7",
+      "why": "outbound URL guard: tenant admins on a shared process must not reach internal hosts (SSRF strictness)",
       "batch": "E"
     },
     {
@@ -2065,9 +2065,9 @@
       "text": "return !!env.CLOUD_META_DB_URL",
       "form": "env-param",
       "weight": 1,
-      "meaning": "nivaroCloud",
-      "rule": "C5",
-      "why": "platform-supplied HUDDLE_* media servers replace tenant settings",
+      "meaning": "multiTenant",
+      "rule": "T7",
+      "why": "platform-supplied HUDDLE_* media servers replace tenant settings: a tenant admin must not choose outbound hosts on a shared process",
       "batch": "B"
     },
     {
@@ -2480,7 +2480,7 @@
       "rule": "C4",
       "why": "tenant canonical origin for push links",
       "batch": "B",
-      "phase6": "shared deployment names the self-hosted admin origin as the relay instance for every app; a per-app relay identity needs a per-app origin"
+      "phase6": "shared deployment names the self-hosted admin origin as the relay instance for every app; a per-app relay identity needs a per-app origin; shared mode needs a per-tenant origin before phone push can be turned on"
     },
     {
       "id": "services/pool-attribution.ts:187",
@@ -2549,9 +2549,9 @@
       "text": "const cloudMode = () => !!process.env.CLOUD_META_DB_URL",
       "form": "helper-def",
       "weight": 0,
-      "meaning": "nivaroCloud",
-      "rule": "C5",
-      "why": "helper definition (deleted, Decision 4): push-relay key never from env in cloud; provisioning stores it per tenant",
+      "meaning": "multiTenant",
+      "rule": "T7",
+      "why": "helper definition (deleted, Decision 4): process-wide push-relay key never read from env or set by a tenant admin",
       "batch": "B"
     },
     {
@@ -2561,9 +2561,9 @@
       "text": "if (cloudMode()) return null",
       "form": "helper-call",
       "weight": 1,
-      "meaning": "nivaroCloud",
-      "rule": "C5",
-      "why": "push-relay key never from env in cloud; provisioning stores it per tenant",
+      "meaning": "multiTenant",
+      "rule": "T7",
+      "why": "process-wide push-relay key never from env: one tenant admin must not get or set it on a shared process",
       "batch": "B",
       "phase6": "shared deployment reads one env relay key (MOBILE_PUSH_RELAY_KEY) for every app; per-app keys need per-app storage, as cloud provisioning does"
     },
@@ -2574,9 +2574,9 @@
       "text": "const storedUrl = cloudMode() || (!envKey && storedKey) ? cleanRelayUrl(stored.relay_url) : null",
       "form": "helper-call",
       "weight": 1,
-      "meaning": "nivaroCloud",
-      "rule": "C5",
-      "why": "push-relay key never from env in cloud; provisioning stores it per tenant",
+      "meaning": "multiTenant",
+      "rule": "T7",
+      "why": "process-wide push-relay key never from env: one tenant admin must not get or set it on a shared process",
       "batch": "B"
     },
     {

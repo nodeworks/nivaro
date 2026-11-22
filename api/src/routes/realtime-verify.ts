@@ -3,6 +3,7 @@ import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { isMultiTenant } from '../services/deployment-mode.js'
 
 /**
  * Realtime verification (admin, under /api/realtime): the tooling that proves the realtime
@@ -115,7 +116,7 @@ export async function realtimeVerifyRoutes(app: FastifyInstance): Promise<void> 
   // ── #2760 leak auditor ─────────────────────────────────────────────────────
   // Findings and the timed switch are instance-wide, so the auditor never runs in cloud mode.
   const leakRefused = (reply: FastifyReply) =>
-    process.env.CLOUD_META_DB_URL
+    isMultiTenant()
       ? reply.code(403).send({ error: 'The leak audit never runs in cloud mode' })
       : null
   app.get('/leak-audit', async (_req, reply) => {
@@ -175,7 +176,7 @@ export async function realtimeVerifyRoutes(app: FastifyInstance): Promise<void> 
 
   // ── #2478 socket replay ─────────────────────────────────────────────────────
   app.get<{ Querystring: { minutes?: string } }>('/replay/capture', async (req, reply) => {
-    if (process.env.CLOUD_META_DB_URL)
+    if (isMultiTenant())
       return reply.code(403).send({ error: 'Socket capture never runs in cloud mode' })
     const redis = app.redis
     if (!redis) return reply.code(503).send({ error: 'Redis is not available' })

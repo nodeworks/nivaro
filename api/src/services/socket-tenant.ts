@@ -8,6 +8,7 @@
  */
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { cleanTenantHost, getTenantId, runWithTenantDb } from '../db/tenant-context.js'
+import { isMultiTenant } from './deployment-mode.js'
 import { tenantStoreId } from './traffic-taps.js'
 
 interface SocketLike {
@@ -20,10 +21,6 @@ interface ReadyTenant {
   tenantId: string
   /** Verified origin (db/tenant-context.ts verifiedTenantOrigin); absent from older resolvers. */
   origin?: string
-}
-
-function inCloud(): boolean {
-  return !!process.env.CLOUD_META_DB_URL
 }
 
 function headerOf(socket: SocketLike, name: string): string | undefined {
@@ -51,7 +48,7 @@ export function socketTenantHost(socket: SocketLike): string | null {
 
 /** The socket's ready tenant (resolved once, cached on socket.data), or null. */
 export async function socketTenant(socket: SocketLike): Promise<ReadyTenant | null> {
-  if (!inCloud()) return null
+  if (!isMultiTenant()) return null
   // Security audit C-1: dormant unless EDGE_AUTH_SECRET is set; refuse a socket that did not
   // arrive through the Worker (which injects X-Edge-Auth) so it joins no tenant rooms.
   const edgeSecret = process.env.EDGE_AUTH_SECRET
@@ -87,7 +84,7 @@ export function inSocketTenant<A extends unknown[]>(
   handler: (...args: A) => Promise<void> | void
 ): (...args: A) => Promise<void> {
   return async (...args: A) => {
-    if (!inCloud()) {
+    if (!isMultiTenant()) {
       await handler(...args)
       return
     }
@@ -116,7 +113,7 @@ export function inSocketTenant<A extends unknown[]>(
  * Matches tenant-rooms.ts currentTenantKey() (tenant id, slug as the fallback).
  */
 export function requestTenantKey(req: unknown): string {
-  if (!inCloud()) return ''
+  if (!isMultiTenant()) return ''
   const stamped = (req as { nvrTenantId?: unknown } | null | undefined)?.nvrTenantId
   if (typeof stamped === 'string' && stamped) return stamped
   return getTenantId() ?? ''

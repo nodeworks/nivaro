@@ -1,5 +1,6 @@
 import { hostname } from 'node:os'
 import type { Redis } from 'ioredis'
+import { isMultiTenant } from './deployment-mode.js'
 
 /**
  * Which journaled events ask real clients for a delivery acknowledgement (#2477). A leaf module
@@ -89,7 +90,7 @@ export function noteStampedDelivery(
   sockets: number,
   opts: { node?: string; at?: number } = {}
 ): void {
-  if (!redis || !(sockets > 0) || process.env.CLOUD_META_DB_URL) return
+  if (!redis || !(sockets > 0) || isMultiTenant()) return
   // The probe's socket never acknowledges (it is not a person); its delivery is its own sample.
   if (/(^|:)probe:/.test(room)) return
   const node = (opts.node ?? deliveryNode()).replace(/\|/g, '/')

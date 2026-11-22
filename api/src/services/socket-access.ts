@@ -6,6 +6,7 @@ import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { bumpAccessStamp } from './access-stamp.js'
 import { canSeeRoom } from './chat.js'
+import { isMultiTenant } from './deployment-mode.js'
 import { getIo } from './io-holder.js'
 import { grantKey } from './oauth-store.js'
 import { opsTopicGate } from './ops-live.js'
@@ -475,9 +476,7 @@ export async function roomStillAllowed(
     // The tenant-wide notice room (record-events.ts TENANT_ALL_ROOM): own tenant only.
     // Self-hosted the bare `all` room is every fully signed-in socket (emitToSignedIn).
     if (room === 'all')
-      return roomTenant
-        ? (ctx.tenantNames ?? []).includes(roomTenant)
-        : !process.env.CLOUD_META_DB_URL
+      return roomTenant ? (ctx.tenantNames ?? []).includes(roomTenant) : !isMultiTenant()
     // Live operations pages (ops-live.ts): the topic's own gate — admin topics (readiness,
     // broadcasts, issue:<id>) for administrators, the rest for anyone signed in.
     if (room.startsWith('ops:')) {
@@ -508,7 +507,7 @@ export async function roomStillAllowed(
       return ctx.bind?.kind === 'masq' && room === masqRoom(ctx.bind.token)
     if (room.startsWith('tenant:')) {
       // Self-hosted there is no tenant to leak; in cloud only the socket's own.
-      if (!process.env.CLOUD_META_DB_URL) return true
+      if (!isMultiTenant()) return true
       return (ctx.tenantNames ?? []).includes(room.slice(7))
     }
     if (room.startsWith('collection:')) return await can(user, 'read', room.slice(11))
