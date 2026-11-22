@@ -340,7 +340,8 @@ export function scanStateFile(rel: string, src: string): StateFinding[] {
 export function scanModuleState(root: string): StateFinding[] {
   const out: StateFinding[] = []
   for (const rel of listSourceFiles(root)) {
-    if (!SCAN_DIRS.some((d) => rel.startsWith(d))) continue
+    // The scanned folders, and the files at api/src itself (server.ts, realtime-server.ts …, M-6).
+    if (rel.includes('/') && !SCAN_DIRS.some((d) => rel.startsWith(d))) continue
     out.push(...scanStateFile(rel, readFileSync(join(root, rel), 'utf8')))
   }
   return out

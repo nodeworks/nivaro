@@ -85,6 +85,8 @@ const OFF_DRIFT =
 
 /** Process-wide by design (never app data on a shared deployment), with why. */
 const SHARED: Record<string, string> = {
+  'realtime-server.ts :: served':
+    'the routes this realtime-only process registered at boot (code, the same for every app)',
   'db/metadata-query-cache.ts :: counters': DIAG,
   'middleware/authenticate.ts :: identityCounters': DIAG,
   'routes/collection-layouts.ts :: layoutBundleCounters': DIAG,
