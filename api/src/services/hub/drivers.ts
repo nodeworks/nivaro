@@ -154,6 +154,8 @@ export function repositoryIdentity(api: string, project: string): string {
     .trim()
     .replace(/\/+$/, '')
     .replace(/\/api\/v4$/, '')
+    // `https://host//api/v4` leaves a slash behind once /api/v4 is gone.
+    .replace(/\/+$/, '')
     .toLowerCase()
   const path = String(project ?? '')
     .trim()

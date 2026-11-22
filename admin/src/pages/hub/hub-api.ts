@@ -324,7 +324,7 @@ const CODE_COPY: Record<string, { title: string; hint?: string }> = {
   },
   ROLLBACK_NOT_RECORDED: {
     title: 'The Hub did not record the build this version deployed',
-    hint: 'A rollback reruns the exact build the Hub deployed. Without that record it cannot roll back to this version. Nothing was changed.'
+    hint: 'A rollback reruns the exact build the Hub deployed; without that record it cannot roll back to this version. A portal this run already rolled back stays on the older build: roll back again or promote.'
   },
   ROLLBACK_BUILD_UNKNOWN: {
     title: 'The Hub has no record of the build this version deployed, so it cannot redeploy it.',
@@ -336,7 +336,7 @@ const CODE_COPY: Record<string, { title: string; hint?: string }> = {
   },
   ROLLBACK_REFUSED_BY_GITLAB: {
     title: 'GitLab refused to rerun the earlier deploy job',
-    hint: 'The project\'s "Prevent outdated deployment jobs" setting refuses an older deploy job. Allow job retries for rollback deployments in GitLab\'s CI/CD settings, or roll back by hand.'
+    hint: 'The project\'s "Prevent outdated deployment jobs" setting refuses an older deploy job. Allow job retries for rollback deployments in GitLab\'s CI/CD settings, or roll back by hand. A portal this run already rolled back stays on the older build.'
   }
 }
 

@@ -430,6 +430,7 @@ export const hubPromotionsDocs: DocSection = {
         "'Pipelines must succeed' refuses the Hub's merge: the Hub waits only about 30 seconds for a merge request's pipeline. Turn it off on these projects, or make sure merge requests from `hub/promote-*` branches get no pipeline that has to pass.",
         'The token must be allowed to merge into the protected target branch (for example production): Maintainer, or named in the branch protection as allowed to merge.',
         'CI rules: a push of a `hub/promote-*` branch is a branch push. Check that the rules run no deploy job on those branches (deploy jobs only on the target branches).',
+        "Artifacts: a rollback reruns only the deploy job of the earlier pipeline. If that job needs build_extension's artifacts and GitLab has expired them, the rerun cannot rebuild the old extension. Set the artifact expiry of deploy-repository builds at least as long as you may want to roll back, or keep the artifacts of deployed pipelines (GitLab can keep the artifacts of the latest successful pipeline per branch).",
         "'Prevent outdated deployment jobs' refuses a rollback: GitLab will not rerun an older deploy job. Turn on 'Allow job retries for rollback deployments' in the project's CI/CD settings, or roll back by hand (see the runbook). The Hub stops with `ROLLBACK_REFUSED_BY_GITLAB` when this happens."
       ]
     },

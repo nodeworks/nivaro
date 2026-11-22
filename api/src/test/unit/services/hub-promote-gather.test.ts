@@ -738,7 +738,10 @@ describe('driverIdentity', () => {
     for (const [api, project] of [
       ['https://gitlab.example.com/', 'efp/deploy'],
       ['https://gitlab.example.com/api/v4', '/efp/deploy/'],
-      ['  https://GitLab.Example.com/api/v4/ ', ' EFP/Deploy ']
+      ['  https://GitLab.Example.com/api/v4/ ', ' EFP/Deploy '],
+      // A slash left behind once /api/v4 is gone.
+      ['https://gitlab.example.com//api/v4', 'efp/deploy'],
+      ['https://gitlab.example.com//api/v4//', 'efp/deploy']
     ])
       expect(gather.driverIdentity(row(api, project))).toBe('https://gitlab.example.com|efp/deploy')
     // Another project, group or host is another repository.

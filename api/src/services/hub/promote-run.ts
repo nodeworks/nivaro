@@ -357,6 +357,19 @@ export async function executePlan(
   // Promote: by position (API first). Rollback: the portal first, then the API.
   const ordered = runOrder(plan.steps, ctx.kind)
   const deployedAt = new Map<number, Deployed>()
+  /**
+   * What this run already deployed, said with a refusal (a rollback takes the portal first, so a
+   * refused API step does not mean nothing changed). '' when nothing was.
+   */
+  const partDone = (): string => {
+    const done = ordered.filter((x) => deployedAt.has(x.position)).map((x) => x.component)
+    if (!done.length) return ''
+    return ctx.kind === 'rollback'
+      ? ` — ${done.join(', ')} was already rolled back to ${ctx.version} by this run and stays there; check ${ctx.targetKey}, then roll back again or promote`
+      : ` — ${done.join(', ')} was already deployed by this run`
+  }
+  /** "nothing was changed", or what this run already changed. */
+  const unchanged = () => partDone().replace(/^ — /, '') || 'nothing was changed'
 
   /** Opens a merge request `source` → `target` and merges it; answers the commit it left. */
   const mergeInto = async (
@@ -413,7 +426,7 @@ export async function executePlan(
       if (!(await ops.commitExistsOn(c, full, s.targetBranch)))
         throw new PromotionError(
           rollbackNoBuild(s),
-          `${s.component}: ${short(full)} is no longer on ${s.targetBranch} — that build can't be redeployed; nothing was changed`
+          `${s.component}: ${short(full)} is no longer on ${s.targetBranch} — that build can't be redeployed; ${unchanged()}`
         )
       await log(`${label}: ${s.targetBranch} still holds ${s.component}'s build ${short(full)}`)
       return { sha: full, full, merged: null, held: true }
@@ -589,7 +602,7 @@ export async function executePlan(
       throw new PromotionError(
         s.kind === 'api' ? 'ROLLBACK_NOT_RECORDED' : code,
         s.kind === 'api'
-          ? `${s.component}: the Hub did not record which pipeline deployed ${ctx.version} here — that build can't be redeployed; nothing was changed`
+          ? `${s.component}: the Hub did not record which pipeline deployed ${ctx.version} here — that build can't be redeployed; ${unchanged()}`
           : `${s.component}: ${s.targetBranch} has no pipeline for ${short(full)} — there is no build of that commit to redeploy`
       )
     const job = await ops.jobNamed(c, pipelineId, s.deployJob)
@@ -600,7 +613,10 @@ export async function executePlan(
       )
     // GitLab reruns only a finished job; a manual, pending or running one is not a build to redo.
     const cannotRerun = (why: string) =>
-      new PromotionError(code, `${s.component}'s earlier build can't be rerun (${why})`)
+      new PromotionError(
+        code,
+        `${s.component}'s earlier build can't be rerun (${why})${partDone()}`
+      )
     if (!RERUNNABLE_JOB.includes(job.status)) throw cannotRerun(`job is ${job.status || 'unknown'}`)
     if (await stopped()) throw aborted()
     await log(
@@ -626,7 +642,7 @@ export async function executePlan(
     const refusedByGitlab = (why: string) =>
       new PromotionError(
         refusedCode,
-        `${s.component}: GitLab refused to rerun ${s.deployJob} of pipeline ${pipelineId} (${why}). The project's "Prevent outdated deployment jobs" setting refuses an older deploy job — allow job retries for rollback deployments in GitLab, or deploy by hand`
+        `${s.component}: GitLab refused to rerun ${s.deployJob} of pipeline ${pipelineId} (${why}). The project's "Prevent outdated deployment jobs" setting refuses an older deploy job — allow job retries for rollback deployments in GitLab, or deploy by hand${partDone()}`
       )
     let retried: gitlab.HubJob
     try {

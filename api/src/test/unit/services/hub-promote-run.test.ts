@@ -1146,6 +1146,72 @@ describe('executePlan', () => {
       )
       expect(refused.outcome).toMatchObject({ code: 'ROLLBACK_REFUSED_BY_GITLAB' })
       expect(refused.outcome.error).toMatch(/HTTP 403.*Prevent outdated deployment jobs/)
+
+      // Any other answer keeps GitLab's own code: a bad token is not that setting.
+      const { GitlabWriteError: GWE } = await import('../../../services/hub/gitlab-write.js')
+      for (const [thrown, code] of [
+        [
+          new GWE('JOB_RETRY_REFUSED', 'GitLab refused to retry job 1 (401)', {
+            status: 401,
+            step: 'retryJob'
+          }),
+          'GITLAB_UNAUTHORIZED'
+        ],
+        [
+          new GWE('GITLAB_UNREACHABLE', 'GitLab did not answer retryJob', { step: 'retryJob' }),
+          'GITLAB_UNREACHABLE'
+        ]
+      ] as const) {
+        const w3 = use(world())
+        heldWithNewerHead(w3)
+        w3.gl.pipeline('efp/portal', 'production', w3.feFull, [
+          { name: 'deploy_production', statuses: ['success'] }
+        ])
+        const other = await execute(
+          w3,
+          buildPromotionPlan(rollbackInput(w3)),
+          {
+            deps: {
+              gitlab: {
+                retryJob: async () => {
+                  throw thrown
+                }
+              }
+            }
+          },
+          'rollback'
+        )
+        expect(other.outcome.code).toBe(code)
+        expect(other.outcome.error).not.toMatch(/Prevent outdated/)
+      }
+    })
+
+    it('Minor 2: an API rollback step refused after the portal went back says so', async () => {
+      const w = use(world())
+      heldWithNewerHead(w)
+      w.gl.pipeline('efp/portal', 'production', w.feFull, [
+        { name: 'deploy_production', statuses: ['success'] }
+      ])
+      w.gl.served.set(FE_URL, [{ version: w.feServed }])
+      // The API's recorded build is gone from production (force-pushed away).
+      const gone = w.gl.commit('efp/deploy', 'elsewhere', 'chore: promote nivaro 0.3.10')
+      const plan = buildPromotionPlan(
+        input(w, {
+          kind: 'rollback',
+          targetVersion: '0.3.11',
+          targetDeployedVersions: ['0.3.10'],
+          frontendServed: { 2: w.feServed },
+          rollbackBuild: { 1: { sha: gone, pipelineId: 999, problem: null } }
+        })
+      )
+      expect(plan.ok).toBe(true)
+      const { outcome, steps } = await execute(w, plan, {}, 'rollback')
+      expect(steps).toEqual(['push frontend', 'deploy frontend', 'push api'])
+      expect(outcome).toMatchObject({ status: 'failed', code: 'ROLLBACK_NO_BUILD' })
+      expect(outcome.error).toContain(
+        'frontend was already rolled back to 0.3.10 by this run and stays there'
+      )
+      expect(outcome.error).not.toContain('nothing was changed')
     })
 
     it('rollback of a build no longer on the branch never falls through to a merge', async () => {
