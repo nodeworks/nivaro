@@ -352,8 +352,10 @@ const ORDER: Record<MoveKind, string[]> = {
     'sourceMaintenance',
     'waitReplicas', // shared source: every replica holds the maintenance list
     'sourceBusy',
+    'targetMaintenance', // C-1: asked before the deploy …
     'deployTarget',
-    'targetMaintenance',
+    'targetMaintenance', // … and set right after it
+    'targetMaintenance', // target_ready (M18)
     'targetUnretire',
     'targetReady',
     'databaseIdentity',
@@ -701,6 +703,63 @@ describe('manual routing', () => {
     // The target's applied action is undone; nothing at the source was ever in maintenance.
     expect(undoCalls(fake.calls)).toEqual([['unroute', plan.route[1]], ['unplace']])
   })
+})
+
+// ── C-1: the target never runs as a second writer ───────────────────────────────────────────
+
+describe('a dedicated target stays in maintenance from its first deploy until cutover', () => {
+  /**
+   * Models the target: `maint` is its maintenance; a Docker target boots in it
+   * (HUB_BOOT_MAINTENANCE), a GitLab one does not (its first boot may not even answer before the
+   * deploy). Every op called between the deploy and the release-time lift must find it on.
+   */
+  function watchTarget(boot: boolean, reachableBeforeDeploy: boolean) {
+    const st = { maint: false, deployed: false, lifted: false, bad: [] as string[] }
+    const orig = { ...fake.ops }
+    for (const [name, fn] of Object.entries(orig)) {
+      ;(fake.ops as unknown as Record<string, unknown>)[name] = async (...a: unknown[]) => {
+        if (name === 'targetMaintenance') {
+          if (a[0] === true && !st.deployed && !reachableBeforeDeploy)
+            throw new MoveStepError('LINK_UNREACHABLE', 'The target does not answer yet.')
+          const out = await (fn as (...x: unknown[]) => Promise<unknown>)(...a)
+          st.maint = a[0] === true
+          if (a[0] === false) st.lifted = true
+          return out
+        }
+        if (st.deployed && !st.lifted && !st.maint) st.bad.push(name)
+        const out = await (fn as (...x: unknown[]) => Promise<unknown>)(...a)
+        if (name === 'deployTarget') {
+          st.deployed = true
+          if (boot) st.maint = true
+        }
+        return out
+      }
+    }
+    return st
+  }
+
+  for (const routing of ['manual', 'automatic'] as const)
+    for (const [label, boot, reachable] of [
+      ['Docker', true, false],
+      ['GitLab, first boot', false, false],
+      ['GitLab, already running', false, true]
+    ] as const)
+      it(`${routing} to_dedicated, ${label}: no op runs against a writable target`, async () => {
+        plan = planOf('to_dedicated', routing)
+        const w = await world('shared')
+        fake.state.serving = true
+        const st = watchTarget(boot, reachable)
+        const { move_id } = await start(w, toFor('to_dedicated', w))
+        await Run.awaitMove(move_id)
+        expect((await readMove(move_id))?.status).toBe('success')
+        expect(st.bad).toEqual([])
+        // Set right after the deploy (and asked before it), lifted only at release.
+        const names = fake.names()
+        const iDeploy = names.indexOf('deployTarget')
+        expect(fake.calls[iDeploy + 1]).toEqual(['targetMaintenance', true])
+        const iLift = fake.calls.findIndex((c) => c[0] === 'targetMaintenance' && c[1] === false)
+        expect(iLift).toBeGreaterThan(names.lastIndexOf('verifyName'))
+      })
 })
 
 // ── cancel ───────────────────────────────────────────────────────────────────────────────────

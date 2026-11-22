@@ -728,8 +728,23 @@ async function doStep(ctx: Ctx, key: MoveStepKey, steps: MoveSteps): Promise<voi
       return copyFiles(ctx, 'delta', true)
     case 'files_full':
       return copyFiles(ctx, 'full', true)
-    case 'deploy_target':
-      return ops.deployTarget()
+    case 'deploy_target': {
+      // C-1 (P6-19): the target is never a second writer. It is in maintenance from its first
+      // deploy until release: a Docker target boots in it (HUB_BOOT_MAINTENANCE); a GitLab one is
+      // asked before the deploy (it keeps it in its own Redis across the redeploy, when it already
+      // runs) and again right after it, before anything else happens.
+      await ops
+        .targetMaintenance(true)
+        .catch((err) =>
+          ctx.run.log(
+            `deploy_target: the target did not take maintenance before its deploy (${asStepError(err, '').code}); set right after it`,
+            'warn'
+          )
+        )
+      await ops.deployTarget()
+      await ops.targetMaintenance(true)
+      return
+    }
     case 'place_on_target': {
       await ops.placeOnTarget()
       if (ctx.shared.to !== null) await ops.waitReplicas(ctx.shared.to)
