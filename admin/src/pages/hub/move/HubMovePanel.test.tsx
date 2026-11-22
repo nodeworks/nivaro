@@ -366,6 +366,17 @@ describe('HubMovePanel — before start', () => {
     error.mockRestore()
   })
 
+  it('a new connections count clears the ticks and the confirmation (a new plan)', async () => {
+    renderPanel()
+    await pickTarget(/Shared · east/)
+    fireEvent.click(await screen.findByRole('checkbox', { name: /Register https/ }))
+    const confirm = screen.getByLabelText(/Type efp\/production to move/)
+    fireEvent.change(confirm, { target: { value: 'efp/production' } })
+    fireEvent.change(screen.getByLabelText('Database connections'), { target: { value: '6' } })
+    await waitFor(() => expect(confirm).toHaveValue(''))
+    expect(await screen.findByRole('checkbox', { name: /Register https/ })).not.toBeChecked()
+  })
+
   it('keeps Start off while a blocker is open, and says each blocker in plain words', async () => {
     plan = {
       ...basePlan,

@@ -417,12 +417,13 @@ function MoveForm({
   })
 
   // A new target (or a new plan) starts the checklist and the confirmation afresh.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: reset on the pick only
+  // A new target or a new connections count is a new plan: tick and confirm it afresh.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset on the pick and pool only
   useEffect(() => {
     setChecked({})
     setConfirm('')
     setChanged(false)
-  }, [pick])
+  }, [pick, pool])
 
   const expected = `${appKey}/${env.key}`
   const p = plan.data
