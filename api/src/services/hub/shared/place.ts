@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import type { Knex } from 'knex'
+import { insertReturningId } from '../../../db/dialect/ef.js'
 import { db } from '../../../db/index.js'
 import { runInBackgroundPool } from '../../../db/pool-context.js'
 import { logActivity } from '../../activity.js'
@@ -13,6 +14,7 @@ import { stackEditRefusal } from '../docker/stack-guards.js'
 import {
   createPlacement,
   DEFAULT_POOL_MAX,
+  getPlacement,
   type HubPlacementRow,
   MAX_SHARED_POOL_MAX,
   MIN_SHARED_POOL_MAX,
@@ -22,6 +24,7 @@ import {
   sharedPoolMax,
   updatePlacement
 } from '../drivers.js'
+import { HEARTBEAT_FRESH_MS, withoutFreshHeartbeat } from '../promote-heal.js'
 import {
   defaultPromoteLock,
   defaultSharedLock,
@@ -385,6 +388,61 @@ async function assertDatabaseEmpty(
     )
 }
 
+/**
+ * Closes placement run rows (`shared` deploy rows with no shared deploy id) a dead process left
+ * `running`: no fresh heartbeat, no run here, the environment's lock free (or held by the caller,
+ * `ownLock`). They become `interrupted`; the environment stays `provisioning` on its placement
+ * and placing it again resumes. Task 5's shared-deploy mirror rows are never touched. Answers the
+ * rows closed. Runs once at Hub boot and before each placement of the environment.
+ */
+export async function recoverInterruptedPlacements(
+  o: { envId?: number; ownLock?: boolean; lock?: PromoteLock; now?: number } = {}
+): Promise<number> {
+  const q = db(DEPLOYS).where({ kind: 'shared', status: 'running' }).whereNull('shared_deploy_id')
+  if (o.envId !== undefined) q.where({ environment_id: o.envId })
+  const rows = (await withoutFreshHeartbeat(q, o.now).select('id', 'environment_id')) as Array<{
+    id: number
+    environment_id: number
+  }>
+  const lock = o.lock ?? defaultPromoteLock()
+  let n = 0
+  for (const r of rows) {
+    const envId = Number(r.environment_id)
+    if (running.has(envId)) continue
+    if (!o.ownLock && (await lock.held(envId)) !== false) continue
+    n += Number(
+      await db(DEPLOYS).where({ id: r.id, status: 'running' }).update({
+        status: 'interrupted',
+        error: 'INTERRUPTED: The Hub stopped during the placement; place the environment again.',
+        finished_at: new Date()
+      })
+    )
+  }
+  return n
+}
+
+let bootRecovery = false
+
+/** Once per process start (hub mode): placement runs a previous process left `running`. */
+export function recoverPlacementsOnceAtBoot(logger?: {
+  info?: (o: unknown, msg?: string) => void
+  warn?: (o: unknown, msg?: string) => void
+}): void {
+  if (bootRecovery) return
+  bootRecovery = true
+  // After the heartbeat window, so a run another Hub process still renews is never taken.
+  const timer = setTimeout(() => {
+    void recoverInterruptedPlacements()
+      .then((n) => {
+        if (n) logger?.info?.({ interrupted: n }, 'hub: placements interrupted by a restart')
+      })
+      .catch((err) =>
+        logger?.warn?.({ err: (err as Error | null)?.name }, 'hub: placement recovery failed')
+      )
+  }, HEARTBEAT_FRESH_MS + 30_000)
+  timer.unref?.()
+}
+
 // ── start ──────────────────────────────────────────────────────────────────────────────────
 
 interface Placed {
@@ -394,6 +452,8 @@ interface Placed {
   tenantId: string
   shared: SharedDeployment
   input: PlaceSharedInput
+  /** The run's `shared` deploy row (the environment's "served" record once it succeeds). */
+  deployId: number
 }
 
 /** Runs this process started, by environment id (tests and shutdown wait on them). */
@@ -429,12 +489,20 @@ export async function placeOnShared(
   }
   let handedOff = false
   try {
-    const placed = await checkAndWrite(envId, input, deps)
+    // A run row of this environment a dead process left `running` is closed first (we hold the
+    // environment's lock, so no live run of it exists anywhere).
+    await recoverInterruptedPlacements({ envId, ownLock: true })
+    const placed = await checkAndWrite(envId, input, by, deps)
     const run = await (
       deps.startJobRun ??
       ((label, id, who) =>
         startJobRun('deploy', `hub-place-${id}`, { label, triggeredBy: who ?? null }))
     )(`Place ${placed.appKey}/${placed.envKey} on ${placed.shared.key}`, envId, by)
+    if (run.id != null)
+      await db(DEPLOYS)
+        .where({ id: placed.deployId })
+        .update({ job_run_id: run.id })
+        .catch(() => undefined)
     run.log(
       `1. placed on ${placed.shared.key} (pool ${input.pool_max ?? DEFAULT_POOL_MAX}, version ${placed.shared.version_pin ?? 'not yet known'})`
     )
@@ -467,10 +535,19 @@ export async function placeOnShared(
 async function checkAndWrite(
   envId: number,
   input: PlaceSharedInput,
+  by: string | null,
   deps: PlaceSharedDeps
 ): Promise<Placed> {
   const env = (await db(ENVS).where({ id: envId }).first()) as Record<string, unknown> | undefined
   if (!env) throw refuse('NOT_FOUND', 'No such environment.', 404)
+  const current = env.placement_id == null ? null : await getPlacement(Number(env.placement_id))
+  // Ruling P6-11 (I-1): a placed, serving environment is never placed again (a second place
+  // would take it offline and switch its database or deployment without a move).
+  if (current?.kind === 'shared' && env.status === 'active')
+    throw refuse(
+      'ALREADY_PLACED',
+      'This environment already runs on a shared deployment. Move it to change where it runs.'
+    )
   if (!['active', 'provisioning'].includes(String(env.status)))
     throw refuse(
       'USE_MOVE',
@@ -539,6 +616,7 @@ async function checkAndWrite(
 
     const entry = await db(ENVS).where({ id: envId }).first('encryption_key')
     const before = env.placement_id == null ? null : Number(env.placement_id)
+    let deployId = 0
     await db.transaction(async (trx) => {
       // The app's key, in the same transaction (M-1): kept when known (and copied into the
       // entry), else a new one for the empty database. Never logged or answered.
@@ -571,8 +649,26 @@ async function checkAndWrite(
         updated_at: new Date()
       })
       if (before !== null && before !== placement.id) await releasePlacement(trx, before)
+      // The run's record (I-1): `shared` kind, no shared deploy id, `success` once the app
+      // serves — the "never served" check counts it from then on.
+      deployId = Number(
+        await insertReturningId(trx, DEPLOYS, {
+          app_id: Number(env.app_id),
+          environment_id: envId,
+          kind: 'shared',
+          version: shared.version_pin ?? '',
+          from_version: null,
+          status: 'running',
+          step: 'place',
+          plan: JSON.stringify({ place: { shared_id: shared.id, shared: shared.key, pool } }),
+          started_by: by,
+          started_at: new Date(),
+          heartbeat_at: new Date()
+        })
+      )
     })
     return {
+      deployId,
       envId,
       envKey: String(env.key),
       appKey: app.key,
@@ -615,6 +711,11 @@ async function runPlacement(
       .then((ok) => {
         if (!ok) lockLost = true
       })
+      .catch(() => undefined)
+    // This run is alive: its row is never taken for an interrupted one (recoverInterruptedPlacements).
+    void db(DEPLOYS)
+      .where({ id: placed.deployId, status: 'running' })
+      .update({ heartbeat_at: new Date() })
       .catch(() => undefined)
   }, deps.renewMs ?? LOCK_RENEW_MS)
   renew.unref?.()
@@ -662,10 +763,12 @@ async function runPlacement(
     // 4. The app's database is migrated on the deployment.
     const schemaBy = now() + SCHEMA_WAIT_MS
     let lastSeen = ''
+    let servedVersion: string | null = null
     for (;;) {
       stillOurs()
       try {
         const st = await client.status()
+        servedVersion = st.version || null
         const mine = st.apps.find((a) => a.id === tenantId)
         const state = mine?.schema.state ?? 'not listed'
         if (state !== lastSeen) {
@@ -726,11 +829,25 @@ async function runPlacement(
       }
     }
 
-    // 6. Serving.
+    // 6. Serving: the environment and its run record move together (I-1).
     stillOurs()
-    await db(ENVS)
-      .where({ id: envId, status: 'provisioning' })
-      .update({ status: 'active', updated_at: new Date() })
+    const version = servedVersion ?? placed.shared.version_pin ?? ''
+    await db.transaction(async (trx) => {
+      await trx(ENVS)
+        .where({ id: envId, status: 'provisioning' })
+        .update({ status: 'active', updated_at: new Date() })
+      await trx(ENVS)
+        .where({ id: envId })
+        .whereNull('version_pin')
+        .update({ version_pin: version || null })
+      await trx(DEPLOYS).where({ id: placed.deployId }).update({
+        status: 'success',
+        step: 'done',
+        version,
+        error: null,
+        finished_at: new Date()
+      })
+    })
     await logActivity({
       action: 'hub-place-shared-done',
       user: by,
@@ -746,6 +863,16 @@ async function runPlacement(
     const code = err instanceof StepFailure ? err.code : 'STEP_FAILED'
     const text = err instanceof StepFailure ? err.message : 'The placement stopped unexpectedly.'
     run.log(`failed: ${code}: ${text}`, 'error')
+    // The environment stays `provisioning` on its placement (it never served): placing it
+    // again resumes. Its run record says why.
+    await db(DEPLOYS)
+      .where({ id: placed.deployId, status: 'running' })
+      .update({
+        status: code === 'INTERRUPTED' ? 'interrupted' : 'failed',
+        error: `${code}: ${text}`.slice(0, 1000),
+        finished_at: new Date()
+      })
+      .catch(() => undefined)
     await run.fail(new Error(`${code}: ${text}`))
   } finally {
     clearInterval(renew)

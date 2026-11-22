@@ -553,6 +553,41 @@ describe('fix round 1', () => {
   const placeDeploys = (envId: number) =>
     db('nivaro_hub_deploys').where({ environment_id: envId, kind: 'shared' }).orderBy('id')
 
+  it('I-1: a successful place leaves a shared success row; placing again → 409 ALREADY_PLACED', async () => {
+    const app = await newApp()
+    const envId = await newEnv(app.id)
+    TENANTS = [Store.tenantIdFor(app, { id: envId })]
+    const fake = fakeClient()
+    await place(
+      envId,
+      { database_id: await newDb() },
+      { client: fake.factory, startJobRun: fakeRun().start }
+    )
+    await Place.awaitPlacement(envId)
+    const rows = await placeDeploys(envId)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ status: 'success', version: '0.3.210', shared_deploy_id: null })
+    expect(JSON.parse(rows[0].plan)).toMatchObject({ place: { shared_id: sharedId } })
+    const before = await db('nivaro_hub_environments').where({ id: envId }).first()
+    const placements = await db('nivaro_hub_placements').count({ n: '*' }).first()
+    const err = await refusal(
+      place(
+        envId,
+        { database_id: await newDb() },
+        { client: fake.factory, startJobRun: fakeRun().start }
+      )
+    )
+    expect(err).toMatchObject({ code: 'ALREADY_PLACED', statusCode: 409 })
+    const after = await db('nivaro_hub_environments').where({ id: envId }).first()
+    expect(after).toMatchObject({
+      status: 'active',
+      placement_id: before.placement_id,
+      db_ref: before.db_ref,
+      encryption_key_fp: before.encryption_key_fp
+    })
+    expect(await db('nivaro_hub_placements').count({ n: '*' }).first()).toEqual(placements)
+  })
+
   it('I-2: a stack that came up although its deploy never succeeded → 409 STACK_RUNNING', async () => {
     const app = await newApp()
     const stackName = `stk${++seq}`
@@ -691,5 +726,90 @@ describe('fix round 1', () => {
     expect(err.code).toBe('DATABASE_DROPPING')
     const env = await db('nivaro_hub_environments').where({ id: envId }).first()
     expect(env).toMatchObject({ encryption_key: null, encryption_key_fp: null, placement_id: null })
+  })
+
+  it('interrupted: a lost lock ends the run interrupted; a stale run row is healed; place again resumes', async () => {
+    const app = await newApp()
+    const envId = await newEnv(app.id)
+    TENANTS = [Store.tenantIdFor(app, { id: envId })]
+    const fake = fakeClient({ schema: () => ({ state: 'running', error: null }) })
+    const lost = { ...memoryPromoteLock, renew: async () => false }
+    const run = fakeRun()
+    await place(
+      envId,
+      { database_id: await newDb() },
+      { client: fake.factory, startJobRun: run.start, lock: lost, renewMs: 1 }
+    )
+    // The renewal timer runs on real time: let it fire while the fake schema wait sleeps.
+    fake.client.status.mockImplementation(async () => {
+      await new Promise((r) => setTimeout(r, 5))
+      return {
+        version: '0.3.210',
+        instance: 'web-1',
+        registry: { count: 1, loaded_at: null, etag: null, stale: false, dropped: [] },
+        apps: TENANTS.map((id) => ({
+          id,
+          schema: { state: 'running', version: null, error: null }
+        })),
+        extensions: [],
+        oidc: null,
+        process: {}
+      }
+    })
+    await Place.awaitPlacement(envId)
+    expect(run.out.failed).toContain('INTERRUPTED')
+    expect((await placeDeploys(envId)).at(-1)).toMatchObject({ status: 'interrupted' })
+
+    // A run row a dead process left `running` (no heartbeat, lock free) is healed at boot.
+    const stale = Number(
+      (
+        (await db('nivaro_hub_deploys')
+          .insert({
+            app_id: app.id,
+            environment_id: envId,
+            kind: 'shared',
+            version: '0.3.210',
+            status: 'running',
+            plan: JSON.stringify({ place: { shared_id: sharedId, shared: 'shared-one' } }),
+            started_at: new Date(t - 3_600_000)
+          })
+          .returning('id')) as Array<{ id: number } | number>
+      ).map((r) => (typeof r === 'object' ? r.id : r))[0]
+    )
+    // A shared-deploy mirror row (Task 5's) is never touched here.
+    const mirror = Number(
+      (
+        (await db('nivaro_hub_deploys')
+          .insert({
+            app_id: app.id,
+            environment_id: envId,
+            kind: 'shared',
+            version: '0.3.210',
+            status: 'running',
+            shared_deploy_id: 99,
+            started_at: new Date(t - 3_600_000)
+          })
+          .returning('id')) as Array<{ id: number } | number>
+      ).map((r) => (typeof r === 'object' ? r.id : r))[0]
+    )
+    expect(await Place.recoverInterruptedPlacements({ lock: memoryPromoteLock })).toBe(1)
+    const st = async (id: number) => (await db('nivaro_hub_deploys').where({ id }).first()).status
+    expect(await st(stale)).toBe('interrupted')
+    expect(await st(mirror)).toBe('running')
+    await db('nivaro_hub_deploys').where({ id: mirror }).del()
+
+    // Still provisioning, never served: placing again resumes and ends active.
+    expect((await db('nivaro_hub_environments').where({ id: envId }).first()).status).toBe(
+      'provisioning'
+    )
+    const env = await db('nivaro_hub_environments').where({ id: envId }).first()
+    const again = fakeClient()
+    await place(
+      envId,
+      { database_id: Number(String(env.db_ref).slice(7)) },
+      { client: again.factory, startJobRun: fakeRun().start }
+    )
+    await Place.awaitPlacement(envId)
+    expect((await db('nivaro_hub_environments').where({ id: envId }).first()).status).toBe('active')
   })
 })
