@@ -357,7 +357,7 @@ export function DbConnectionForm({
   return (
     <SectionCard
       title='Connection'
-      description={`The database the DBA made on this ${ENGINE_LABEL[row.engine]} server. The Hub checks it before using it.`}
+      description={`Where the DBA made the database (${ENGINE_LABEL[row.engine]}) and the login it uses. The Hub checks it before using it.`}
     >
       <div className='space-y-4 p-4'>
         <ConnectionFields
