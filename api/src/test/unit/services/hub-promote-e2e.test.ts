@@ -427,6 +427,54 @@ describe('hub promotions end to end (merge-commit repos, automatic deploys)', ()
     expect(again.lines.filter((l) => l.includes('not what this promotes'))).toHaveLength(2)
   })
 
+  describe('P32: a portal with no check address', () => {
+    const noCheck = () =>
+      db('nivaro_hub_components')
+        .where({ placement_id: 5, kind: 'frontend' })
+        .update({ verify_url: null })
+
+    it('an API-only promotion does not rerun the portal deploy', async () => {
+      await noCheck()
+      release('0.3.10')
+      expect((await promote('promote', '0.3.10')).row.status).toBe('success')
+      // 0.3.11 changes only the API: staging serves the same portal commit.
+      gl.commit('efp/deploy', 'main', 'chore: deploy nivaro 0.3.11')
+      stagingVersion = '0.3.11'
+      const portalPipes = prodPipelines('efp/portal')
+      const next = await promote('promote', '0.3.11')
+      expect(next.row).toMatchObject({ status: 'success', error: null })
+      expect(gl.retries).toEqual([])
+      expect(prodPipelines('efp/portal')).toBe(portalPipes)
+      expect(
+        next.lines.some((l) => l.startsWith('deploy frontend:') && l.includes('already succeeded'))
+      ).toBe(true)
+    })
+
+    it('a portal rolled back by the Hub is rerun when promoted again', async () => {
+      await noCheck()
+      release('0.3.10')
+      await promote('promote', '0.3.10')
+      const portal10 = prodPortal()
+      release('0.3.11')
+      await promote('promote', '0.3.11')
+      const portal11 = prodPortal()
+      expect((await promote('rollback', '0.3.10')).row.status).toBe('success')
+      expect(prodPortal()).toBe(portal10)
+      const again = await promote('promote', '0.3.11')
+      expect(again.row).toMatchObject({ status: 'success', error: null })
+      expect(prodPortal()).toBe(portal11)
+      expect(gl.retries).toHaveLength(4)
+      expect(
+        again.lines.some(
+          (l) => l.startsWith('deploy frontend:') && l.includes('the Hub last deployed')
+        )
+      ).toBe(true)
+      // Minor 2: a rerun says so once, never "already succeeded … not run again".
+      expect(again.lines.some((l) => l.includes('not run again'))).toBe(false)
+      expect(again.lines.filter((l) => l.endsWith('rerunning it'))).toHaveLength(2)
+    })
+  })
+
   it('P30: a held promote whose environment already runs it does not rerun', async () => {
     release('0.3.10')
     await promote('promote', '0.3.10')

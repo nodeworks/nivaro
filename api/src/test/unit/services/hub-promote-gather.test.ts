@@ -368,6 +368,59 @@ describe('gatherPlanInput', () => {
       expect(seen.sort()).toEqual(['0.3.10', '0.3.12'])
     })
 
+    it('Minor 1: past the budget no read starts, and reads in flight are aborted', async () => {
+      await db('nivaro_hub_components')
+        .where({ placement_id: 4, kind: 'api' })
+        .update({ target_branch: 'staging' })
+      gl.branch('efp/deploy', 'staging', api['0.3.1'])
+      for (let i = 0; i < 8; i++) {
+        const sha = gl.commit('efp/deploy', 'staging', `chore: sync for nivaro 0.5.${i}`, {
+          '.docker/nivaro-version': `0.5.${i}\n`
+        })
+        gl.pipeline('efp/deploy', 'staging', sha, [
+          { name: 'deploy_production', statuses: ['success'] }
+        ])
+      }
+      const signals: AbortSignal[] = []
+      const seen = await gather.gitlabDeployedVersions({ placement_id: 4 }, ctxFor, {
+        budgetMs: 50,
+        readFile: (_ctx, _path, _ref, signal) => {
+          if (signal) signals.push(signal)
+          return new Promise<string | null>(() => {})
+        }
+      })
+      expect(seen).toEqual([])
+      // One batch of 5 started before the deadline; the other 3 never did.
+      await new Promise((r) => setTimeout(r, 100))
+      expect(signals).toHaveLength(5)
+      expect(signals.every((sg) => sg.aborted)).toBe(true)
+    })
+
+    it('Minor 4: a missing pin file is asked again after 60 s; a real pin never', async () => {
+      const shas = await staging()
+      // The pin file is gone at the newest commit (404).
+      const gone = gl.commit('efp/deploy', 'staging', 'chore: drop pin', {})
+      gl.projects.get('efp/deploy')?.commits.get(gone)?.tree.delete('.docker/nivaro-version')
+      gl.pipeline('efp/deploy', 'staging', gone, [
+        { name: 'deploy_production', statuses: ['success'] }
+      ])
+      let t = 5_000_000
+      const now = () => t
+      const fileReads = (ref: string) =>
+        gl.calls.filter((c) => c.path.startsWith('/repository/files') && c.url.includes(ref)).length
+      const call = () =>
+        gather.gitlabDeployedVersions({ placement_id: 4 }, ctxFor, { now, redis: null })
+      expect((await call()).sort()).toEqual(['0.3.10', '0.3.11', '0.3.12'])
+      expect(fileReads(gone)).toBe(1)
+      t += 30_000
+      await call()
+      expect(fileReads(gone)).toBe(1)
+      t += 31_000
+      await call()
+      expect(fileReads(gone)).toBe(2)
+      expect(fileReads(shas[0])).toBe(1)
+    })
+
     it('an edited driver (another repository) misses the cache', async () => {
       await staging()
       await gather.gitlabDeployedVersions({ placement_id: 4 }, ctxFor)
@@ -801,6 +854,48 @@ describe('gatherPlanInput', () => {
   })
 })
 
+describe('currentVersionReader (P30 default)', () => {
+  const step = (over: Record<string, unknown>) =>
+    ({
+      position: 1,
+      component: 'api',
+      kind: 'api',
+      driverId: 1,
+      sourceSha: null,
+      targetBranch: 'production',
+      pinText: null,
+      pinFile: null,
+      beforeJob: null,
+      deployJob: 'deploy_production',
+      verifyUrl: null,
+      verifyField: 'version',
+      want: '0.3.10',
+      ...over
+    }) as Parameters<ReturnType<typeof gather.currentVersionReader>>[0]
+
+  it('reads the API from the environment row through the status reader; a frontend from its check address', async () => {
+    // Production has no hub token: the public routes of its base_url answer.
+    gl.served.set('https://efp.example.com/api/version', [{ version: '0.3.9' }])
+    gl.served.set('https://efp.example.com/api/health', [{ status: 'ok', version: '0.3.9' }])
+    expect(await gather.currentVersionReader(2)(step({}))).toBe('0.3.9')
+    // An environment the Hub does not know: nothing to read.
+    expect(await gather.currentVersionReader(99)(step({}))).toBeNull()
+    // The API not answering: cannot tell.
+    gl.served.set('https://efp.example.com/api/version', [503])
+    gl.served.set('https://efp.example.com/api/health', [503])
+    expect(await gather.currentVersionReader(2)(step({}))).toBeNull()
+    // A frontend: its own check address.
+    gl.served.set('https://efp.example.com/version.json', [{ version: 'abc12345' }])
+    const fe = step({
+      kind: 'frontend',
+      component: 'frontend',
+      verifyUrl: 'https://efp.example.com/version.json'
+    })
+    expect(await gather.currentVersionReader(2)(fe)).toBe('abc12345')
+    expect(await gather.currentVersionReader(2)({ ...fe, verifyUrl: null })).toBeNull()
+  })
+})
+
 describe('driverIdentity', () => {
   const row = (api: string, project: string) =>
     ({
@@ -822,6 +917,8 @@ describe('driverIdentity', () => {
       ['  https://GitLab.Example.com/api/v4/ ', ' EFP/Deploy '],
       // A slash left behind once /api/v4 is gone.
       ['https://gitlab.example.com//api/v4', 'efp/deploy'],
+      // Upper-case /API/V4 is stripped too.
+      ['https://GitLab.example.com/API/V4/', 'efp/deploy'],
       ['https://gitlab.example.com//api/v4//', 'efp/deploy']
     ])
       expect(gather.driverIdentity(row(api, project))).toBe('https://gitlab.example.com|efp/deploy')

@@ -279,6 +279,30 @@ export function currentVersionReader(envId: number): (s: PromotionStep) => Promi
   }
 }
 
+/**
+ * The build the Hub's own runs on this environment last deployed for a step's component: the
+ * newest run (by id) whose stored step for it recorded a deployedSha — written only once that
+ * deploy passed, so a rollback run that redeployed the portal counts even if its API step then
+ * failed. null = the Hub has no record (P32).
+ */
+export function lastDeployedBuildReader(
+  envId: number
+): (s: PromotionStep) => Promise<{ sha: string; pipelineId: number | null } | null> {
+  return async (s) => {
+    const c = { name: s.component, kind: s.kind, position: s.position } as HubComponent
+    for (const r of await storedRuns(envId)) {
+      const st = storedStep(r.steps, c)
+      const sha = deployedSha(st)
+      if (sha)
+        return {
+          sha,
+          pipelineId: typeof st?.deployedPipelineId === 'number' ? st.deployedPipelineId : null
+        }
+    }
+    return null
+  }
+}
+
 function statusTarget(r: Record<string, unknown>): HubStatusTarget {
   return {
     id: Number(r.id),

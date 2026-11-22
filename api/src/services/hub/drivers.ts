@@ -152,11 +152,12 @@ export function publicDriver(row: HubDriverRow): HubDriver {
 export function repositoryIdentity(api: string, project: string): string {
   const base = String(api ?? '')
     .trim()
+    // Lower-cased first, so `/API/v4` is stripped too.
+    .toLowerCase()
     .replace(/\/+$/, '')
     .replace(/\/api\/v4$/, '')
     // `https://host//api/v4` leaves a slash behind once /api/v4 is gone.
     .replace(/\/+$/, '')
-    .toLowerCase()
   const path = String(project ?? '')
     .trim()
     .replace(/^\/+|\/+$/g, '')

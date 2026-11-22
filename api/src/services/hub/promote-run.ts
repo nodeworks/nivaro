@@ -10,6 +10,7 @@ import * as gitlab from './gitlab-write.js'
 import {
   currentVersionReader,
   gatherPlanInput,
+  lastDeployedBuildReader,
   RERUNNABLE_JOB,
   readServedField,
   resolveCommit,
@@ -172,6 +173,15 @@ export interface ExecuteDeps {
    * Asked when a held promote finds its deploy job already succeeded (P30).
    */
   currentVersion?: (s: PromotionStep) => Promise<string | null>
+  /**
+   * The build the Hub's own runs on this environment last deployed for a step's component (the
+   * newest recorded deployedSha / deployedPipelineId), or null when it has no record. Asked
+   * instead of currentVersion for a frontend with no check address (P32): nothing can be read
+   * there, so only a recorded different build (after a rollback) reruns its deploy job.
+   */
+  lastDeployedBuild?: (
+    s: PromotionStep
+  ) => Promise<{ sha: string; pipelineId: number | null } | null>
 }
 
 export interface RunOutcome {
@@ -682,9 +692,15 @@ export async function executePlan(
     const label = `deploy ${s.component}`
     const c = await git(s)
     // Filled by the deploy events (closures: kept on an object so the reads below are not narrowed).
-    const seen: { pipelineId: number | null; how: 'played' | 'auto' | 'already' } = {
+    const seen: {
+      pipelineId: number | null
+      how: 'played' | 'auto' | 'already'
+      /** "already succeeded … not run again": said only once the Hub knows it is not rerun. */
+      already: string | null
+    } = {
       pipelineId: null,
-      how: 'played'
+      how: 'played',
+      already: null
     }
     /** A later pass after the Hub asked: lines already said are not said again. */
     let repeat = false
@@ -706,6 +722,10 @@ export async function executePlan(
           } else if (e.kind === 'auto-run' || e.kind === 'already-succeeded') {
             if (repeat) return
             seen.how = e.kind === 'auto-run' ? 'auto' : 'already'
+            if (e.kind === 'already-succeeded') {
+              seen.already = `${label}: ${e.message}`
+              return
+            }
           }
           // The closing line below says it once, with the job's address.
           if (e.kind === 'passed') return
@@ -760,23 +780,40 @@ export async function executePlan(
     // P30: the branch already held this commit and its deploy job already succeeded — but a
     // rollback since redeployed an older build without moving the branch. When the environment
     // does not run what this step promotes, the job is rerun (as a rollback reruns one).
-    if (deps.currentVersion && seen.how === 'already' && p.held && !p.merged && seen.pipelineId) {
-      // null = cannot tell: rerun (a redeploy of the same build is safe; reporting success
-      // without knowing is not).
-      const now = await deps.currentVersion(s).catch(() => null)
+    if (seen.how === 'already' && p.held && !p.merged && seen.pipelineId) {
       const same = (a: string, b: string) =>
         a === b || (a.length >= 7 && b.length >= 7 && (a.startsWith(b) || b.startsWith(a)))
-      const runs =
-        now != null && (s.kind === 'api' ? now === s.want : same(now, p.sha) || same(now, s.want))
-      if (!runs) {
+      let why: string | null = null
+      if (s.kind === 'frontend' && !s.verifyUrl) {
+        // P32: no check address, so nothing can be read: only the Hub's own record decides —
+        // a different build deployed here since (a rollback) reruns; no record = not again.
+        const last = deps.lastDeployedBuild
+          ? await deps.lastDeployedBuild(s).catch(() => null)
+          : null
+        if (last && !same(last.sha, p.sha))
+          why = `the Hub last deployed ${short(last.sha)} here, not ${short(p.sha)}`
+      } else if (deps.currentVersion) {
+        // A failed read (null) with a check address = cannot tell: rerun (a redeploy of the
+        // same build is safe; reporting success without knowing is not).
+        const now = await deps.currentVersion(s).catch(() => null)
+        const runs =
+          now != null && (s.kind === 'api' ? now === s.want : same(now, p.sha) || same(now, s.want))
+        if (!runs)
+          why =
+            now == null
+              ? `what ${ctx.targetKey} runs could not be read`
+              : `${ctx.targetKey} runs ${now}, not what this promotes`
+      }
+      if (why) {
         if (await stopped()) throw aborted()
         await log(
-          `${label}: ${ctx.targetKey} runs ${now ?? 'an unknown version'}, not what this promotes — rerunning ${s.deployJob} of pipeline ${seen.pipelineId}`
+          `${label}: ${s.deployJob} of pipeline ${seen.pipelineId} already passed, but ${why} — rerunning it`
         )
         await retryDeployJob(c, s, res.job.id, seen.pipelineId, 'REDEPLOY_REFUSED_BY_GITLAB')
         return { sha: p.sha, pipelineId: seen.pipelineId }
       }
     }
+    if (seen.already) await log(seen.already)
     const url = res.job.web_url ? ` (${res.job.web_url})` : ''
     if (seen.how === 'auto')
       await log(`${label}: ${s.deployJob} ran automatically and passed${url}`)
@@ -1145,6 +1182,7 @@ async function runPromotion(o: {
         deps: {
           ...deps.execute,
           currentVersion: deps.execute?.currentVersion ?? currentVersionReader(envId),
+          lastDeployedBuild: deps.execute?.lastDeployedBuild ?? lastDeployedBuildReader(envId),
           lockLost: async () => {
             if (!entry.lockLost && !(await deps.lock.renew(envId, o.token))) lostLock()
             await heartbeat()
