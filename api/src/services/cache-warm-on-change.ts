@@ -49,6 +49,7 @@ import {
   customQueryStaleKey,
   customQueryStaleMarkValue
 } from './custom-query-cache.js'
+import { isMultiTenant } from './deployment-mode.js'
 import { onRecordChangeNotice, type RecordChangeNotice } from './record-change-notices.js'
 
 /** Changes collect this long before a flush. */
@@ -520,13 +521,9 @@ export class ChangeWarmScheduler {
 
 // ─── wiring ─────────────────────────────────────────────────────────────────
 
-function inCloud(): boolean {
-  return !!process.env.CLOUD_META_DB_URL
-}
-
 /** CACHE_WARM_ON_CHANGE (env wins), else the cache config; auto follows the warm's own Mode. */
 export async function changeWarmAllowed(): Promise<boolean> {
-  if (inCloud()) return false
+  if (isMultiTenant()) return false
   const mode = cacheSetting('warm.on_change')
   if (mode === 'off') return false
   if (mode === 'on') return true
@@ -622,7 +619,7 @@ let active: { scheduler: ChangeWarmScheduler; off: () => void } | null = null
  */
 export function startChangeWarm(redis: ChangeWarmRedis | null | undefined): () => void {
   if (active) return stopChangeWarm
-  if (!redis || inCloud()) return () => undefined
+  if (!redis || isMultiTenant()) return () => undefined
   void changeWarmAllowed().then((v) => {
     allowed = v
     allowedAt = Date.now()
@@ -674,5 +671,5 @@ export async function changeWarmStats(
     )
     buckets.push(...(await Promise.all(keys.map((k) => redis.hgetall(k).catch(() => null)))))
   }
-  return { ...sumStats(buckets), enabled: enabled && !!redis, cloud: inCloud() }
+  return { ...sumStats(buckets), enabled: enabled && !!redis, cloud: isMultiTenant() }
 }

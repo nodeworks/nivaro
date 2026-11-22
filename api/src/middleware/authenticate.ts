@@ -15,6 +15,7 @@ import { cacheSetting } from '../services/cache-config.js'
 import { registerCache } from '../services/cache-registry.js'
 import { appNowForAuth } from '../services/chaos/clock.js'
 import { autoJoinOnRequest } from '../services/chat-default-joins.js'
+import { isMultiTenant } from '../services/deployment-mode.js'
 import { touchMasqueradeMarker } from '../services/masquerade-marker.js'
 import {
   mcpOAuthEnabled,
@@ -613,7 +614,7 @@ export async function issuingAdminStillAdmin(adminId: string | null | undefined)
  */
 export function tenantTagRefused(t: unknown): boolean {
   if (typeof t === 'string' && t) return t !== currentTenantKey()
-  return !!process.env.CLOUD_META_DB_URL
+  return isMultiTenant()
 }
 
 /** Test hook: forget cached admin verdicts. */

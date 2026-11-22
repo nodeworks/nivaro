@@ -43,6 +43,7 @@ import { INTERNAL_DISPATCH_HEADER, internalDispatchTokens } from '../plugins/api
 import { accessPendingFor } from '../services/access-pending.js'
 import { logActivity } from '../services/activity.js'
 import { idpUnreachable } from '../services/chaos/outbound-points.js'
+import { isNivaroCloud } from '../services/deployment-mode.js'
 import { cardLogoVersion, parseCardLogo } from '../services/help-video-card-logo.js'
 import {
   endAdminMasquerades,
@@ -886,8 +887,7 @@ export async function authRoutes(app: FastifyInstance) {
   /** First-time setup is a cloud provisioning step (the welcome link). A self-hosted instance
    *  offers it only with AUTH_SETUP=on: otherwise any static token — a full credential meant for
    *  integrations — could be turned into a password that outlives the token's revocation. */
-  const setupOffered = () =>
-    !!process.env.CLOUD_META_DB_URL || /^(on|true|1)$/i.test(process.env.AUTH_SETUP ?? '')
+  const setupOffered = () => isNivaroCloud() || /^(on|true|1)$/i.test(process.env.AUTH_SETUP ?? '')
 
   // First-time setup: exchange static_token for a password
   app.post('/setup', async (req, reply) => {

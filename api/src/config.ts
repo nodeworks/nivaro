@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { resolveCookieSecure, sessionSecretProblem } from './auth/secret-policy.js'
 import { applyDbUrlToProcess } from './db/connection-url.js'
 import { applyEnvFiles } from './env-files.js'
+import { isMultiTenant } from './services/deployment-mode.js'
 
 // Load .env from the repo root (two levels up from api/src/)
 // quiet: dotenv 17 prints an "injected env" tip on every load. A module that loads config
@@ -17,19 +18,19 @@ if (process.env.NIVARO_DOTENV !== 'off')
 // Then secrets from files (#1084): X_FILE variables and /run/secrets.
 applyEnvFiles()
 // DB_URL (and DB_URL_FILE, read above) fills the DB_* variables it names; explicit DB_* win.
-if (!process.env.CLOUD_META_DB_URL) applyDbUrlToProcess()
+if (!isMultiTenant()) applyDbUrlToProcess()
 
 // In cloud mode the static DB connection is unused — all queries use per-request
 // tenant pools resolved from cloud_tenants. DB_* vars are therefore not required.
-const cloudMode = !!process.env.CLOUD_META_DB_URL
+const multiTenant = isMultiTenant()
 // SQLite (DB_CLIENT=sqlite) is one file: DB_DATABASE is its path, and there is no server to sign
 // in to, so the server settings below are not asked for (db/sqlite.ts).
 if (process.env.DB_CLIENT === 'sqlite')
   for (const k of ['DB_HOST', 'DB_USER', 'DB_PASSWORD']) process.env[k] ||= 'sqlite'
 const requiredStr = (fallback = '') =>
-  cloudMode ? z.string().default(fallback) : z.string().min(1)
+  multiTenant ? z.string().default(fallback) : z.string().min(1)
 const requiredUrl = (fallback = 'http://localhost') =>
-  cloudMode ? z.string().url().default(fallback) : z.string().url()
+  multiTenant ? z.string().url().default(fallback) : z.string().url()
 
 /** HUB_URL: blank = unset (a compose passthrough of an unset variable must never stop a boot). */
 export const hubUrlSetting = z.preprocess(

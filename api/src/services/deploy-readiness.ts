@@ -1,6 +1,7 @@
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { cronTicksEnabled } from './cron-ticks.js'
+import { isMultiTenant } from './deployment-mode.js'
 import { instanceKey } from './instance-key.js'
 import { listInstances } from './instance-roster.js'
 import { judgeRealtimeTier, probeRealtimeRouting, socketsServed } from './process-role.js'
@@ -217,7 +218,7 @@ export function registerDeployReadinessChecks(): void {
       'Clients acknowledge a sample of the record events they receive (REALTIME_ACK_EVERY, plus one per process every REALTIME_ACK_FLOOR_S); that is what the realtime delivery SLO and the delivery_node monitor measure. Warns when connected sockets received sampled events in the last 15 minutes and not one acknowledgement came back — the SLO would keep showing old figures. Passes while acknowledgements arrive or nothing anyone watches changed. Reads two Redis counters.',
     ttlMs: 120_000,
     run: async () => {
-      if (process.env.CLOUD_META_DB_URL)
+      if (isMultiTenant())
         return {
           status: 'skip',
           detail: 'Not kept in cloud mode: delivery figures are not per tenant.'

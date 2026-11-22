@@ -1,3 +1,5 @@
+import { isMultiTenant } from './deployment-mode.js'
+
 /**
  * Process roles (NIVARO_ROLE) and the realtime tier (post-mortem 3.3).
  *
@@ -38,7 +40,7 @@ export function isRealtimeRole(env: Env = process.env): boolean {
  * realtime tier is self-hosted only). Otherwise unless SOCKETS=off.
  */
 export function socketsServed(env: Env = process.env): boolean {
-  if (isRealtimeRole(env) || env.CLOUD_META_DB_URL) return true
+  if (isRealtimeRole(env) || isMultiTenant(env)) return true
   return (env.SOCKETS ?? '').trim().toLowerCase() !== 'off'
 }
 

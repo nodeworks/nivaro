@@ -1,3 +1,4 @@
+import { isMultiTenant } from './deployment-mode.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
 /**
@@ -57,8 +58,6 @@ export function maintenanceSignature(s: ObservedMaintenance): string {
   return ['on', s.display ?? 'banner', s.until ?? '', (s.message ?? '').trim()].join('|')
 }
 
-const inCloud = () => !!process.env.CLOUD_META_DB_URL
-
 /**
  * A successful maintenance read. Announces when it differs from the last one this process
  * saw for the tenant (the first read only sets the baseline). Returns true when it announced.
@@ -103,7 +102,7 @@ export function recheckMaintenanceSoon(): void {
 
 /** Self-hosted: while maintenance was last seen ON, look again every WATCH_MS. */
 function syncWatch(): void {
-  if (inCloud()) return
+  if (isMultiTenant()) return
   const anyOn = [...lastOn.values()].some(Boolean)
   if (anyOn && !watchTimer) {
     watchTimer = setInterval(() => {

@@ -6,6 +6,7 @@ import { clearMetadataCache } from '../services/collections.js'
 import { announceConfigChanged, collectionHint, isConfigWrite } from '../services/config-live.js'
 import { configWatchOnResponse, configWatchPreHandler } from '../services/config-watch.js'
 import { bustDefinitionCache } from '../services/definition-cache.js'
+import { isMultiTenant } from '../services/deployment-mode.js'
 import { bustLayoutReferences } from '../services/layout-references.js'
 import { announcePermissionChange, permissionTarget } from '../services/permission-live.js'
 import { clearPickerRuleCache } from '../services/picker-rules.js'
@@ -165,8 +166,8 @@ import { healthRoutes } from './health.js'
 import { helpVideoAdminRoutes } from './help-video-admin.js'
 import { helpVideoMediaRoutes, helpVideosRoutes } from './help-videos.js'
 import { hierarchyRoutes } from './hierarchy.js'
-import { hubLinkRoutes } from './hub-link.js'
 import { hubRoutes } from './hub.js'
+import { hubLinkRoutes } from './hub-link.js'
 import { ideasRoutes } from './ideas.js'
 import { importTemplatesRoutes } from './import-templates.js'
 import { importsRoutes } from './imports.js'
@@ -493,8 +494,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(runbookRoutes, { prefix: '/runbooks' })
   // Environment refresh copies whole databases between environments on one SQL Server — a
   // self-hosted operator tool, never mounted in cloud mode.
-  if (!process.env.CLOUD_META_DB_URL)
-    await app.register(envRefreshRoutes, { prefix: '/env-refresh' })
+  if (!isMultiTenant()) await app.register(envRefreshRoutes, { prefix: '/env-refresh' })
   await app.register(qualityCheckRoutes, { prefix: '/quality-checks' })
   await app.register(integrationEventsRoutes, { prefix: '/integration-events' })
   await app.register(inboundMappingsRoutes, { prefix: '/inbound-mappings' })
@@ -752,7 +752,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(atRiskRoutes, { prefix: '/at-risk' })
   await app.register(retentionRoutes, { prefix: '/retention' })
   // Issue tracker sync is a self-hosted feature — never mounted in cloud mode.
-  if (!process.env.CLOUD_META_DB_URL) {
+  if (!isMultiTenant()) {
     await app.register(trackerFeaturePublicRoutes, { prefix: '/trackers' })
     await app.register(trackerRoutes, { prefix: '/trackers' })
     // Create / link from a source: admins, and create_roles members for tickets and records.

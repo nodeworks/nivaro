@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { authenticate, enforceRateLimit, requireAuth } from '../middleware/authenticate.js'
 import { activityGroupKey, withActivityScope } from '../services/activity-scope.js'
+import { isMultiTenant } from '../services/deployment-mode.js'
 import {
   classifyToolAnswer,
   clientSlug,
@@ -100,7 +101,7 @@ export function injectFetch(
   if (opts.cookie) names.push('cookie')
   // Cloud (M11): the tenant is resolved from the host headers, so the in-process call carries
   // the caller's — without them it reached no tenant (or the default one).
-  if (process.env.CLOUD_META_DB_URL) names.push(...MCP_TENANT_HEADERS)
+  if (isMultiTenant()) names.push(...MCP_TENANT_HEADERS)
   for (const h of names) {
     const v = req.headers[h]
     if (typeof v === 'string') forward[h] = v

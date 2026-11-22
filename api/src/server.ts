@@ -69,6 +69,7 @@ import {
   requestDbFailure,
   sendDbUnavailable
 } from './services/db-outage.js'
+import { isMultiTenant, isNivaroCloud } from './services/deployment-mode.js'
 import { enrichErrorPayload, noteDbRefusal } from './services/error-enrich.js'
 import { logRouteError } from './services/error-log-level.js'
 import { stableIssueKey, trackError } from './services/error-tracking.js'
@@ -94,7 +95,7 @@ export async function buildServer() {
   // global). Core routes are lowered to BODY_LIMIT_MB (default 1MB) by the
   // onRoute hook below unless their group receives large bodies — see
   // lib/body-limits.ts (M20, security audit 2026-10-27).
-  const _fsMb = process.env.CLOUD_META_DB_URL
+  const _fsMb = isMultiTenant()
     ? null
     : await db('nivaro_settings')
         .first('file_max_size_mb')
@@ -201,10 +202,13 @@ export async function buildServer() {
   }
 
   // ─── Cloud multi-tenant: resolve tenant DB per request ────────────────────
-  // Only active when CLOUD_META_DB_URL is set. Self-hosted: this hook is never
+  // Only active in a multi-tenant process. Self-hosted: this hook is never
   // registered — behaviour is identical to before for self-hosted users.
-  if (process.env.CLOUD_META_DB_URL) {
+  if (isMultiTenant()) {
     app.addHook('onRequest', tenantHook)
+  }
+  // Nivaro Cloud operator routes (not on a Hub shared deployment).
+  if (isNivaroCloud()) {
     // Internal provisioning endpoint — not tenant-scoped, no tenant hook needed
     await app.register(adminProvisionRoutes)
     // #1185 — the operator's noisy-tenant ranking (same provision secret, tenant-free path)
@@ -375,7 +379,7 @@ export async function buildServer() {
     }
     // Staged imports run on the importer (NIVARO_ROLE=importer); the cron worker drains only
     // while no importer beats; a single process drains itself (services/import-handoff.ts).
-    if (!process.env.CLOUD_META_DB_URL) {
+    if (!isMultiTenant()) {
       const { startImportDrainer } = await import('./services/staged-import-worker.js')
       void startImportDrainer(app).catch((err) =>
         app.log.warn({ err }, '[import-worker] did not start')
@@ -421,7 +425,7 @@ export async function buildServer() {
       // pings, socket lists), shared once a second process is around (services/realtime-board.ts):
       // replicas that all serve sockets, a realtime tier, SOCKETS=off readers. A lone process
       // only registers itself every 5 s. Self-hosted only (cloud keeps per-process answers).
-      if (!process.env.CLOUD_META_DB_URL && app.redis) {
+      if (!isMultiTenant() && app.redis) {
         const { socketsServed } = await import('./services/process-role.js')
         const { startBoard } = await import('./services/realtime-board.js')
         const { localBoardCollector } = await import('./plugins/socketio.js')
@@ -505,7 +509,7 @@ export async function buildServer() {
     })
     // A schedule was created, edited or removed by another process.
     onEpoch(SCHEDULES_EPOCH, async () => {
-      if (process.env.CLOUD_META_DB_URL || !app.cron) return
+      if (isMultiTenant() || !app.cron) return
       const { resyncAllSchedules } = await import('./services/row-schedules.js')
       await resyncAllSchedules(app)
     })
@@ -658,7 +662,7 @@ export async function buildServer() {
   } catch {
     /* column mid-migration or unparseable — no chains */
   }
-  if (!process.env.CLOUD_META_DB_URL) {
+  if (!isMultiTenant()) {
     registerFileCleanup(app.cron)
     // digest-daily/weekly crons retired 2026-09-10 — the notification digest
     // rides the daily action summary (services/daily-digest.ts).
@@ -948,7 +952,7 @@ export async function buildServer() {
 
   // ─── Extensions + Scheduled flows (self-hosted only) ────────────────────
   // These query the static DB at startup — skipped in cloud mode.
-  if (!process.env.CLOUD_META_DB_URL) {
+  if (!isMultiTenant()) {
     setApp(app)
     // Core email types must exist before extensions add theirs.
     const { registerCoreMailTypes } = await import('./services/mail-types.js')
@@ -998,7 +1002,7 @@ export async function buildServer() {
 
   // ─── Cloud extensions ─────────────────────────────────────────────────────
   // Loaded AFTER the cron plugin so ctx.app.cron is available.
-  if (process.env.CLOUD_META_DB_URL) {
+  if (isNivaroCloud()) {
     setApp(app)
     await loadCloudExtensions({
       app,
@@ -1026,7 +1030,7 @@ export async function buildServer() {
 
   // ─── Daily retention purge (self-hosted only) ─────────────────────────────
   // In cloud mode, retention runs per-tenant via the provisioning system.
-  if (!process.env.CLOUD_META_DB_URL)
+  if (!isMultiTenant())
     app.addHook('onReady', async () => {
       // Admin links (replay button, task/approval notifications, record_url
       // fallbacks) all resolve through adminBaseUrl(). When that answer IS the

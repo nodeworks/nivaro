@@ -82,6 +82,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync, statSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { hostname } from 'node:os'
+import { isMultiTenant } from '../services/deployment-mode.js'
 
 const require = createRequire(import.meta.url)
 
@@ -104,7 +105,7 @@ export const SQLITE_NOW = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"
  */
 export function sqliteDeploymentProblem(env: Record<string, string | undefined>): string | null {
   if (env.DB_CLIENT !== 'sqlite') return null
-  if (env.CLOUD_META_DB_URL)
+  if (isMultiTenant(env))
     return 'DB_CLIENT=sqlite cannot run in cloud mode (CLOUD_META_DB_URL is set): tenants need a server database (SQL Server, Postgres or MySQL).'
   const role = (env.NIVARO_ROLE ?? '').trim()
   if (role)

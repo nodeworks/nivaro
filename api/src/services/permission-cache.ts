@@ -63,6 +63,7 @@
 import { getTenantId } from '../db/tenant-context.js'
 import type { User } from '../types.js'
 import { cacheSetting, onCacheConfigChange } from './cache-config.js'
+import { isMultiTenant } from './deployment-mode.js'
 
 export interface PermissionCacheRedis {
   status?: string
@@ -77,14 +78,14 @@ function bounded(raw: string | undefined, fallback: number, min: number, max: nu
   return Math.min(max, Math.max(min, Math.floor(n)))
 }
 
-const CLOUD = !!process.env.CLOUD_META_DB_URL
+const multiTenant = isMultiTenant()
 /** Tests and the equivalence harness pin the switch; undefined = follow the cache config. */
 let pinned: boolean | undefined
 let lastOn = false
 /** On / off: env PERMISSION_CACHE wins, else this instance's stored cache config
  *  (services/cache-config.ts, re-read every 15 s), else off. Never in cloud mode. */
 function isOn(): boolean {
-  if (CLOUD) return false
+  if (multiTenant) return false
   const on = pinned ?? cacheSetting('permission.enabled')
   if (on !== lastOn) switched(on)
   return on
@@ -111,7 +112,7 @@ let redis: PermissionCacheRedis | null = null
 const NONCE_SEED = `${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
 
 export function setPermissionCacheRedis(r: PermissionCacheRedis | null): void {
-  redis = CLOUD ? null : r
+  redis = multiTenant ? null : r
 }
 
 export function permissionCacheEnabled(): boolean {
@@ -122,7 +123,7 @@ export function permissionCacheEnabled(): boolean {
  *  with it off has no seam or commit hook attached unless wiring was provided
  *  (providePermissionCacheWiring), so its own writes move nothing. */
 export function setPermissionCacheEnabled(on: boolean): void {
-  pinned = on && !CLOUD
+  pinned = on && !multiTenant
   lastOn = pinned
   resetLocal(undefined, false)
 }
@@ -141,7 +142,7 @@ let wired = false
 /** What turning the cache on at run time attaches (the cache-config route plugin hands it
  *  over at boot). Attached at once when the cache is already on. */
 export function providePermissionCacheWiring(w: PermissionCacheWiring): void {
-  if (CLOUD) return
+  if (multiTenant) return
   wiring = w
   if (isOn()) wireUp()
 }
@@ -726,7 +727,7 @@ const attached = new WeakSet<object>()
 
 /** Hear access writes on one knex client (`knex.client`). Safe to call twice. */
 export function attachPermissionCacheSeam(client: EmitterLike | null | undefined): void {
-  if (CLOUD || !client || typeof client.on !== 'function' || attached.has(client)) return
+  if (multiTenant || !client || typeof client.on !== 'function' || attached.has(client)) return
   attached.add(client)
   const seen = (q: unknown, after: boolean) => {
     const ev = q as QueryEvent | null
@@ -753,7 +754,7 @@ const COMMIT_HOOK = Symbol.for('nivaro.permissionCacheCommitHook')
  * prototype, which every transaction client (nested ones too) shares.
  */
 export function attachPermissionCacheCommitHook(client: object | null | undefined): void {
-  if (CLOUD || !client) return
+  if (multiTenant || !client) return
   const proto = Object.getPrototypeOf(client) as Record<string | symbol, unknown> | null
   if (!proto || proto[COMMIT_HOOK] || typeof proto.transaction !== 'function') return
   proto[COMMIT_HOOK] = true
