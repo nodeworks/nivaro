@@ -1,10 +1,22 @@
 import { db } from '../../db/index.js'
 import { fetchJson, type GitCtx, gitlabApi } from '../gitlab-client.js'
 import { getApp } from '../io-holder.js'
-import { environmentFromRow, readApp } from './apps.js'
+import { environmentFromRow, type HubApp, readApp } from './apps.js'
 import { listComponents } from './components.js'
 import { listEnvironmentDeploys } from './deploys.js'
-import { driverCtx, type GitlabDriverRow, getDriver, getPlacement } from './drivers.js'
+import { listImageVersions } from './docker/image-tags.js'
+import {
+  defaultStackGatherDeps,
+  gatherStackFacts,
+  type StackGatherDeps
+} from './docker/stack-gather.js'
+import {
+  type DockerDriverRow,
+  driverCtx,
+  type GitlabDriverRow,
+  getDriver,
+  getPlacement
+} from './drivers.js'
 import { commitExistsOn, GitlabWriteError, latestCommitMatching } from './gitlab-write.js'
 import { type HealDeps, interruptStaleRows } from './promote-heal.js'
 import { defaultPromoteLock, PromotionError } from './promote-lock.js'
@@ -13,7 +25,8 @@ import type {
   HubDeployKind,
   HubEnvironmentRow,
   PlanDriver,
-  PlanInput
+  PlanInput,
+  StackFacts
 } from './promote-types.js'
 import { hubImage, imageDigest } from './registry.js'
 import {
@@ -141,6 +154,10 @@ export interface GatherDeps {
   isLocked(envId: number): Promise<boolean | 'unknown'>
   /** How a stale row's temporary branches are deleted (default: through its driver). */
   heal?: Partial<HealDeps>
+  /** phase 4: the agent and stack-settings reads of stack components (default: the real ones). */
+  stack?: Partial<StackGatherDeps>
+  /** phase 4: published x.y.z tags of an image, newest first (default: Docker Hub). */
+  listImageVersions?: (image: string) => Promise<string[]>
 }
 
 function appRedis(): StatusCache | null {
@@ -296,9 +313,15 @@ export async function gatherPlanInput(
     previous && kind === 'promote' ? await componentsForGather(previous.placement_id) : []
 
   const driverRows = new Map<number, GitlabDriverRow>()
+  const dockerRows = new Map<number, DockerDriverRow>() // phase 4
   const drivers: Record<number, PlanDriver> = {}
   for (const id of unique(components.map((c) => String(c.driver_id)))) {
     const row = await getDriver(Number(id))
+    if (row?.kind === 'docker') {
+      dockerRows.set(row.id, row)
+      drivers[row.id] = dockerPlanDriver(row)
+      continue
+    }
     if (row?.kind !== 'gitlab') continue
     driverRows.set(row.id, row)
     drivers[row.id] = {
@@ -356,13 +379,21 @@ export async function gatherPlanInput(
   }
 
   const hasApi = components.some((c) => c.kind === 'api')
+  const hasStack = components.some((c) => c.kind === 'stack') // phase 4
   const [digest, slimDigest] =
-    hasApi && versionOk
+    (hasApi || hasStack) && versionOk
       ? await Promise.all([
           deps.imageDigest(hubImage(), version),
           deps.imageDigest(hubImage(), `${version}-slim`)
         ])
       : [null, null]
+
+  const stackInput = await gatherStackInput(
+    components,
+    dockerRows,
+    { env: target, previous, app, kind, version },
+    deps
+  )
 
   const runningRow = await db(DEPLOYS)
     .where({ environment_id: envId, status: 'running' })
@@ -390,6 +421,55 @@ export async function gatherPlanInput(
     running,
     ...(lock === 'unknown' ? { lockUnknown: true } : {}),
     targetState: targetStatus.state,
-    drivers
+    drivers,
+    ...stackInput
   }
+}
+
+// ---------------------------------------------------------------------------------------------
+// phase 4: stack components (Docker placements). Kept apart from the phase-2 GitLab gathering
+// above: a placement with no stack component adds nothing here.
+
+/** A docker driver as the planner sees it: no branch, job or pin file. */
+function dockerPlanDriver(row: DockerDriverRow): PlanDriver {
+  return {
+    kind: 'docker',
+    branch: '',
+    deploy_job: '',
+    pin_file: '',
+    dns_mode: row.config?.dns_mode === 'manual' ? 'manual' : 'automatic'
+  }
+}
+
+/**
+ * The facts of every stack component on a Docker driver, and — for a promotion into the first
+ * environment of an all-stack app (Decision 11) — the image's published releases.
+ */
+async function gatherStackInput(
+  components: HubComponent[],
+  dockerRows: Map<number, DockerDriverRow>,
+  ctx: {
+    env: HubEnvironmentRow
+    previous: HubEnvironmentRow | null
+    app: HubApp
+    kind: HubDeployKind
+    version: string
+  },
+  deps: GatherDeps
+): Promise<Pick<PlanInput, 'stacks' | 'registryVersions'>> {
+  const stackComponents = components.filter((c) => c.kind === 'stack')
+  if (!stackComponents.length) return {}
+  const out: Pick<PlanInput, 'stacks' | 'registryVersions'> = {}
+  const stackDeps: StackGatherDeps = { ...defaultStackGatherDeps(), ...(deps.stack ?? {}) }
+  const stacks: Record<number, StackFacts> = {}
+  for (const c of stackComponents) {
+    const driver = dockerRows.get(c.driver_id)
+    if (!driver) continue
+    stacks[c.position] = await gatherStackFacts(c, { ...ctx, driver }, stackDeps)
+  }
+  out.stacks = stacks
+  if (ctx.kind === 'promote' && !ctx.previous && components.every((c) => c.kind === 'stack')) {
+    out.registryVersions = await (deps.listImageVersions ?? listImageVersions)(hubImage())
+  }
+  return out
 }

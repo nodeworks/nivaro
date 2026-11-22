@@ -569,3 +569,67 @@ export const promotionStatusTone = (s: string): string =>
  */
 export const isLivePromotion = (s: string) =>
   s === 'running' || s === 'planned' || !KNOWN_STATUS.has(s)
+
+/** Phase 4: why a Docker stack deploy cannot start, in plain words (by planner code). */
+Object.assign(BLOCKER_COPY, {
+  AGENT_UNREACHABLE: {
+    title: 'The Hub agent on the Docker host does not answer',
+    hint: "Check that the agent runs and that the driver's agent address is right."
+  },
+  AGENT_REFUSED: {
+    title: 'The Hub agent refused the Hub',
+    hint: "A Hub admin enters the agent's token again in the Docker driver."
+  },
+  AGENT_INCOMPATIBLE: {
+    title: 'The Hub agent is a version this Hub cannot talk to',
+    hint: 'Update the Hub agent (or the Hub) so both speak the same agent API.'
+  },
+  IMAGE_NOT_ALLOWED: {
+    title: 'The Hub agent does not allow the Nivaro image',
+    hint: "Add the image to the agent's allowed images (HUB_AGENT_IMAGES)."
+  },
+  EXTENSION_NOT_ALLOWED: {
+    title: 'The Hub agent does not allow an extension image',
+    hint: "Add the extension's image to the agent's allowed images (HUB_AGENT_IMAGES)."
+  },
+  EXTENSION_UNPINNED: {
+    title: 'An extension this app needs has no pinned image',
+    hint: 'Pin the extension on the environment the version comes from, then try again.'
+  },
+  STACK_SETTINGS_MISSING: {
+    title: 'The stack settings are not complete',
+    hint: "A Hub admin fills in the missing settings in the environment's stack settings."
+  },
+  STACK_SETTINGS_INVALID: {
+    title: 'The stack settings cannot make a stack the agent accepts',
+    hint: "A Hub admin fixes the environment's stack settings."
+  },
+  HOSTNAME_NOT_ALLOWED: {
+    title: 'A name of this environment cannot be routed by this Docker host',
+    hint: "Use names under the driver's DNS domain and the agent's allowed domains."
+  },
+  HOSTNAME_TAKEN: {
+    title: 'A name of this environment already belongs to another environment',
+    hint: 'Give this environment its own names.'
+  },
+  PUBLISH_PORT_NOT_ALLOWED: {
+    title: 'The stack needs a publish port inside the agent’s range',
+    hint: "A Hub admin sets a free publish port from the agent's range in the stack settings."
+  },
+  TEMPLATE_NONE: {
+    title: 'This version is too old to run as a Docker stack',
+    hint: 'Pick a newer version.'
+  },
+  STACK_NOT_HUB: {
+    title: 'A stack with this name already runs on the Docker host and is not this environment’s',
+    hint: "Give the environment's placement a stack name nothing else uses."
+  },
+  NO_STACK_NAME: {
+    title: 'The environment has no stack name',
+    hint: "A Hub admin sets the stack name in the environment's placement."
+  },
+  KIND_DRIVER_MISMATCH: {
+    title: 'A component is on the wrong kind of driver',
+    hint: 'Stacks deploy through a Docker driver; api and frontend components through GitLab.'
+  }
+} satisfies Record<string, { title: string; hint?: string }>)

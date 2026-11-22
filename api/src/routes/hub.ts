@@ -1035,9 +1035,11 @@ function promotionRoutes(app: FastifyInstance) {
         gatherPlanInput(envId, { kind: 'rollback', version: '' })
       ])
       const cur = fwd.targetVersion
-      const promote = cur
-        ? fwd.previousDeployedVersions.filter((v) => compareVersions(v, cur) > 0)
-        : fwd.previousDeployedVersions
+      // phase 4: the first environment of an all-stack app takes published releases (Decision 11).
+      const offered = [
+        ...new Set([...fwd.previousDeployedVersions, ...(fwd.registryVersions ?? [])])
+      ]
+      const promote = cur ? offered.filter((v) => compareVersions(v, cur) > 0) : offered
       const rollback = cur
         ? back.targetDeployedVersions.filter((v) => compareVersions(v, cur) < 0)
         : []
