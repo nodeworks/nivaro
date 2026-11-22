@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
+import { KNOWN_ENV_KEYS } from '../src/known-env.js'
 import {
   SECRET_NAME_MAX,
   STACK_NAME_RE,
@@ -9,8 +10,12 @@ import {
 } from '../src/names.js'
 import {
   AGENT_SET_ENV_KEYS,
+  acceptedEnvKey,
+  allowedEnvKey,
+  forbiddenEnvKey,
   MAX_FIELD_ERRORS,
   NIVARO_ENV_ALLOWED,
+  operatorPrefixConflict,
   type SpecConfig,
   type StackSpec,
   validateStackSpec
@@ -146,7 +151,7 @@ describe('validateStackSpec — REQUIRED', () => {
     expect(codeOf({ ...base(), redis: 'host' }, 'redis')).toBe('REQUIRED')
   })
   it('refuses a non-string env value', () => {
-    expect(codeOf({ ...base(), env: { A: 1 } }, 'env.A')).toBe('REQUIRED')
+    expect(codeOf({ ...base(), env: { MAIL_FROM: 1 } }, 'env.MAIL_FROM')).toBe('REQUIRED')
   })
   it('requires a hostname in traefik mode', () => {
     expect(codeOf({ ...base(), hostnames: [] }, 'hostnames')).toBe('REQUIRED')
@@ -250,7 +255,7 @@ describe('validateStackSpec — one-line values (SETTING_INVALID)', () => {
     })
   }
   it('other keys may still hold several lines', () => {
-    expect(validateStackSpec({ ...base(), secrets: { TLS_PEM: 'a\nb' } }, cfg()).ok).toBe(true)
+    expect(validateStackSpec({ ...base(), secrets: { SAML_CERT: 'a\nb' } }, cfg()).ok).toBe(true)
   })
 })
 
@@ -289,6 +294,35 @@ describe('validateStackSpec — ENV_FORBIDDEN', () => {
       'VK_LAYER_PATH',
       'LIBGL_DRIVERS_PATH',
       'LIBGL_ALWAYS_SOFTWARE'
+    ],
+    'more loader and module paths the scan named (ruling P4-23)': [
+      'GCONV_PATH',
+      'LOCPATH',
+      'GIO_MODULE_DIR',
+      'GTK_PATH',
+      'LIBVA_DRIVERS_PATH',
+      'LIBVA_DRIVER_NAME',
+      'MESA_LOADER_DRIVER_OVERRIDE',
+      'MESA_ANYTHING',
+      'GBM_BACKENDS_PATH',
+      'VDPAU_DRIVER_PATH',
+      'OCL_ICD_VENDORS',
+      'OCL_ICD_FILENAMES',
+      'GST_PLUGIN_PATH',
+      'GST_PLUGIN_SYSTEM_PATH',
+      'GST_PLUGIN_SCANNER',
+      'GIO_EXTRA_MODULES',
+      'GTK_MODULES',
+      'GDK_PIXBUF_MODULEDIR',
+      'GLIBC_TUNABLES',
+      'QT_PLUGIN_PATH',
+      'PYTHONPATH',
+      'CLASSPATH',
+      'PERL5LIB',
+      'GDK_PIXBUF_MODULE_FILE',
+      'XDG_DATA_DIRS',
+      'DYLD_INSERT_LIBRARIES',
+      'DYLD_LIBRARY_PATH'
     ],
     'NIVARO_* outside the allow set (entrypoint inputs)': [
       'NIVARO_APP_UID',
@@ -545,11 +579,17 @@ describe('validateStackSpec — sizes', () => {
     expect(codeOf({ ...base(), extensions }, 'extensions')).toBe('TOO_MANY')
   })
   it('refuses an env value over 4 KB (bytes, not characters)', () => {
-    expect(codeOf({ ...base(), env: { A: 'é'.repeat(2049) } }, 'env.A')).toBe('TOO_LONG')
-    expect(validateStackSpec({ ...base(), env: { A: 'x'.repeat(4096) } }, cfg()).ok).toBe(true)
+    expect(codeOf({ ...base(), env: { MAIL_FROM: 'é'.repeat(2049) } }, 'env.MAIL_FROM')).toBe(
+      'TOO_LONG'
+    )
+    expect(validateStackSpec({ ...base(), env: { MAIL_FROM: 'x'.repeat(4096) } }, cfg()).ok).toBe(
+      true
+    )
   })
   it('refuses a secret value over 64 KB', () => {
-    expect(codeOf({ ...base(), secrets: { S: 'x'.repeat(65537) } }, 'secrets.S')).toBe('TOO_LONG')
+    expect(
+      codeOf({ ...base(), secrets: { SMTP_PASSWORD: 'x'.repeat(65537) } }, 'secrets.SMTP_PASSWORD')
+    ).toBe('TOO_LONG')
   })
   it('refuses a role env value over 4 KB', () => {
     const b = base()
@@ -633,6 +673,97 @@ describe('validateStackSpec — every problem at once', () => {
   it('never echoes a value in the answer', () => {
     const f = fields({ ...base(), secrets: { 'bad key': 'hunter2-secret' } })
     expect(JSON.stringify(f)).not.toContain('hunter2')
+  })
+})
+
+describe('validateStackSpec — ENV_NOT_ALLOWED (ruling P4-23: an allow-list)', () => {
+  it('the contract example passes with no operator prefixes', () => {
+    expect(validateStackSpec(base(), cfg({ envPrefixes: [] })).ok).toBe(true)
+  })
+  it('refuses an env key Nivaro does not read, naming the key and never the value', () => {
+    const f = fields({ ...base(), env: { GREETING: 'hunter2-value' } })
+    expect(f).toEqual([{ field: 'env.GREETING', code: 'ENV_NOT_ALLOWED' }])
+    expect(JSON.stringify(f)).not.toContain('hunter2')
+  })
+  it('refuses a secret key Nivaro does not read', () => {
+    expect(fields({ ...base(), secrets: { EFP_API_SECRET: 'hunter2' } })).toEqual([
+      { field: 'secrets.EFP_API_SECRET', code: 'ENV_NOT_ALLOWED' }
+    ])
+  })
+  it("allows keys under the operator's HUB_AGENT_ENV_PREFIXES", () => {
+    const c = cfg({ envPrefixes: ['EFP_'] })
+    const b = { ...base(), env: { EFP_REGION: 'east' }, secrets: { EFP_API_SECRET: 'x' } }
+    expect(validateStackSpec(b, c).ok).toBe(true)
+    expect(codeOf({ ...base(), env: { ACME_X: '1' } }, 'env.ACME_X', c)).toBe('ENV_NOT_ALLOWED')
+  })
+  it('a prefix never opens a key the deny rules refuse (second layer)', () => {
+    const c = cfg({ envPrefixes: ['LD_', 'GCONV_', 'MESA_', 'NODE_', 'NIVARO_', 'GST_'] })
+    for (const k of ['LD_PRELOAD', 'GCONV_PATH', 'MESA_X', 'NODE_OPTIONS', 'NIVARO_RUN_AS']) {
+      expect(codeOf({ ...base(), env: { [k]: 'x' } }, `env.${k}`, c)).toBe('ENV_FORBIDDEN')
+      expect(acceptedEnvKey(k, 'external', c.envPrefixes)).toBe(false)
+    }
+    expect(codeOf({ ...base(), env: { GST_PLUGIN_PATH: 'x' } }, 'env.GST_PLUGIN_PATH', c)).toBe(
+      'ENV_FORBIDDEN'
+    )
+  })
+  it('a denied key is ENV_FORBIDDEN even when it is not on the allow-list', () => {
+    expect(codeOf({ ...base(), env: { LD_PRELOAD: 'x' } }, 'env.LD_PRELOAD')).toBe('ENV_FORBIDDEN')
+  })
+  it('the known list holds the keys Nivaro reads and no key the deny rules refuse', () => {
+    for (const k of ['DB_HOST', 'MAIL_FROM', 'TRUST_PROXY', 'PUBLIC_URL', 'SESSION_SECRET'])
+      expect([k, allowedEnvKey(k)]).toEqual([k, true])
+    for (const k of KNOWN_ENV_KEYS) expect([k, forbiddenEnvKey(k, 'external')]).toEqual([k, false])
+    expect([...KNOWN_ENV_KEYS]).toEqual([...KNOWN_ENV_KEYS].sort())
+  })
+  it('REDIS_URL is allowed, and still refused while redis is bundled', () => {
+    expect(allowedEnvKey('REDIS_URL')).toBe(true)
+    expect(acceptedEnvKey('REDIS_URL', 'bundled')).toBe(false)
+    expect(acceptedEnvKey('REDIS_URL', 'external')).toBe(true)
+  })
+  it('operatorPrefixConflict: a prefix of, or prefixed by, a deny key or prefix', () => {
+    for (const p of [
+      'GIO_',
+      'GTK_',
+      'GST_',
+      'GST_PLUGIN_X_',
+      'MESA_',
+      'LD_',
+      'LD_X_',
+      'NODE_',
+      'NIVARO_',
+      'NIVARO_X_',
+      'HELP_',
+      'SAMBA_',
+      'QT_',
+      'GLIBC_',
+      'GDK_',
+      'DYLD_',
+      'DYLD_X_',
+      'XDG_'
+    ])
+      expect([p, operatorPrefixConflict(p)]).toEqual([p, true])
+    // Only starting with an exact deny key (TEMP, HOME, PATH) opens nothing denied.
+    for (const p of [
+      'EFP_',
+      'EFP_OPS_',
+      'ACME2_',
+      'LIB_',
+      'G_',
+      'S_',
+      'TEMPLATE_',
+      'TEMPO_',
+      'HOMEPAGE_',
+      'PATHWAY_',
+      'PATH_',
+      'TMP_',
+      'PYTHON_'
+    ])
+      expect([p, operatorPrefixConflict(p)]).toEqual([p, false])
+  })
+  it('role env keeps its own fixed list', () => {
+    const b = base()
+    b.roles[0].env = { SOCKETS: 'off' }
+    expect(validateStackSpec(b, cfg()).ok).toBe(true)
   })
 })
 

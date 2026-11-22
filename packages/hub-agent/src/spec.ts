@@ -4,6 +4,7 @@
 // capabilities, no host network, no images outside the allow-list.
 // Pure: no I/O. Answers never echo a value, only field paths and codes.
 import { Buffer } from 'node:buffer'
+import { KNOWN_ENV_KEYS } from './known-env.js'
 import { ENV_KEY_RE } from './names.js'
 
 export type Role = 'all' | 'web' | 'worker' | 'realtime' | 'importer'
@@ -36,6 +37,11 @@ export type SpecConfig = {
   hostSuffixes: readonly string[]
   publishPorts: readonly [number, number] | null
   redisImage: string | null
+  /**
+   * HUB_AGENT_ENV_PREFIXES (ruling P4-23): env / secret keys under these prefixes are allowed on
+   * top of the Nivaro app's known config keys. Absent = none.
+   */
+  envPrefixes?: readonly string[]
 }
 
 export type FieldCode =
@@ -45,6 +51,7 @@ export type FieldCode =
   | 'IMAGE_NOT_ALLOWED'
   | 'IMAGE_NOT_PINNED'
   | 'ENV_FORBIDDEN'
+  | 'ENV_NOT_ALLOWED'
   | 'ROLE_BAD'
   | 'REPLICAS_BAD'
   | 'LIMIT_BAD'
@@ -130,7 +137,12 @@ export const NIVARO_ENV_ALLOWED: readonly string[] = [
  * FFREPORT; Chromium: PUPPETEER_*, CHROMIUM_FLAGS, CHROMIUM_USER_FLAGS;
  * captions: HELP_VIDEO_WHISPER_*, whose command template is spawned), the
  * library loader paths Chromium, ffmpeg and Mesa read (LD_*, VK_*, __EGL_*,
- * LIBGL_*: ruling P4-22), and
+ * LIBGL_*: ruling P4-22), the glibc and GLib/GTK/GStreamer module paths and the VA-API,
+ * Mesa, GBM, VDPAU and OpenCL loader keys (GCONV_PATH, LOCPATH, GIO_MODULE_DIR, GTK_PATH,
+ * LIBVA_*, MESA_*, GBM_*, VDPAU_*, OCL_ICD_*, GST_PLUGIN_*, GIO_EXTRA_MODULES, GTK_MODULES,
+ * GDK_PIXBUF_MODULEDIR, GDK_PIXBUF_MODULE_FILE, GLIBC_TUNABLES, QT_PLUGIN_PATH, XDG_DATA_DIRS,
+ * DYLD_*, and the PYTHONPATH / CLASSPATH / PERL5LIB interpreter paths: ruling P4-23 — a second
+ * layer under the allow-list, see allowedEnvKey), and
  * SAMBA_SERVER_PATH, a path spliced into a BULK INSERT statement.
  */
 const RUNTIME_KEYS = new Set([
@@ -144,11 +156,26 @@ const RUNTIME_KEYS = new Set([
   'FFREPORT',
   'CHROMIUM_FLAGS',
   'CHROMIUM_USER_FLAGS',
-  'SAMBA_SERVER_PATH'
+  'SAMBA_SERVER_PATH',
+  'GCONV_PATH',
+  'LOCPATH',
+  'GIO_MODULE_DIR',
+  'GTK_PATH',
+  'GIO_EXTRA_MODULES',
+  'GTK_MODULES',
+  'GDK_PIXBUF_MODULEDIR',
+  'GLIBC_TUNABLES',
+  'QT_PLUGIN_PATH',
+  'PYTHONPATH',
+  'CLASSPATH',
+  'PERL5LIB',
+  'GDK_PIXBUF_MODULE_FILE',
+  'XDG_DATA_DIRS'
 ])
 // LD_* covers LD_PRELOAD / LD_LIBRARY_PATH / LD_AUDIT; VK_, __EGL_ and LIBGL_ are the Vulkan,
 // EGL and Mesa loader paths Chromium and ffmpeg read (ruling P4-22). `__EGL_` keys already fail
 // ENV_KEY_RE (they start with _); the prefix keeps the list complete if that rule ever widens.
+// LIBVA_ … GST_PLUGIN_: the VA-API, Mesa, GBM, VDPAU, OpenCL and GStreamer loaders (ruling P4-23).
 const RUNTIME_PREFIXES = [
   'LD_',
   'OPENSSL_',
@@ -157,8 +184,32 @@ const RUNTIME_PREFIXES = [
   'HELP_VIDEO_WHISPER_',
   'VK_',
   '__EGL_',
-  'LIBGL_'
+  'LIBGL_',
+  'LIBVA_',
+  'MESA_',
+  'GBM_',
+  'VDPAU_',
+  'OCL_ICD_',
+  'GST_PLUGIN_',
+  'DYLD_'
 ]
+
+/**
+ * An operator prefix (HUB_AGENT_ENV_PREFIXES) that overlaps the deny rules: a prefix of a deny
+ * key (GIO_ vs GIO_MODULE_DIR, GTK_ vs GTK_PATH), or a prefix of, or prefixed by, a deny prefix
+ * (GST_ vs GST_PLUGIN_, LD_X_ vs LD_). A prefix that merely starts with an exact deny key
+ * (TEMPLATE_ vs TEMP, PATHWAY_ vs PATH) opens nothing denied and is fine. Refused at start
+ * (ENV_PREFIX_DENIED) so a prefix never even looks like it opens a loader key; the deny rules
+ * would still refuse each key.
+ */
+export function operatorPrefixConflict(prefix: string): boolean {
+  const keys = [...RUNTIME_KEYS, ...AGENT_SET_ENV_KEYS]
+  const prefixes = [...RUNTIME_PREFIXES, 'NODE_', 'NIVARO_']
+  return (
+    keys.some((k) => k.startsWith(prefix)) ||
+    prefixes.some((d) => d.startsWith(prefix) || prefix.startsWith(d))
+  )
+}
 
 function forbiddenBase(k: string, redis: unknown): boolean {
   if (RUNTIME_KEYS.has(k)) return true
@@ -179,6 +230,28 @@ function forbiddenBase(k: string, redis: unknown): boolean {
 export function forbiddenEnvKey(key: string, redis: unknown): boolean {
   if (key.endsWith('_FILE')) return true
   return forbiddenBase(key, redis)
+}
+
+const KNOWN_ENV = new Set(KNOWN_ENV_KEYS)
+
+/**
+ * The allow-list (ruling P4-23): a key the Nivaro app reads (KNOWN_ENV_KEYS, generated from the
+ * API's sources by scripts/hub-known-env.mts) or a key under one of the operator's
+ * HUB_AGENT_ENV_PREFIXES. Loader variables a child program reads can never be listed in full,
+ * so a spec sets only what Nivaro itself reads; the deny rules (forbiddenEnvKey) stay as a
+ * second layer.
+ */
+export function allowedEnvKey(key: string, prefixes: readonly string[] = []): boolean {
+  return KNOWN_ENV.has(key) || prefixes.some((p) => key.startsWith(p))
+}
+
+/** A key a spec may carry as env or secret: allowed AND not refused by the deny rules. */
+export function acceptedEnvKey(
+  key: string,
+  redis: unknown,
+  prefixes: readonly string[] = []
+): boolean {
+  return allowedEnvKey(key, prefixes) && !forbiddenEnvKey(key, redis)
 }
 
 /**
@@ -286,6 +359,9 @@ export function validateStackSpec(body: unknown, cfg: SpecConfig): SpecResult {
   if (redis !== 'bundled' && redis !== 'external') bad('redis', 'REQUIRED')
   else if (redis === 'bundled' && !cfg.redisImage) bad('redis', 'REDIS_NOT_CONFIGURED')
 
+  // env + secrets: the allow-list (ruling P4-23), then the deny rules as a second layer.
+  const prefixes = cfg.envPrefixes ?? []
+
   // secrets
   const secrets: Record<string, string> = {}
   if (!isPlainObject(body.secrets)) bad('secrets', 'REQUIRED')
@@ -297,6 +373,7 @@ export function validateStackSpec(body: unknown, cfg: SpecConfig): SpecResult {
       const f = `secrets.${cap(k)}`
       if (!ENV_KEY_RE.test(k)) bad(f, 'BAD_KEY')
       else if (forbiddenEnvKey(k, redis)) bad(f, 'ENV_FORBIDDEN')
+      else if (!allowedEnvKey(k, prefixes)) bad(f, 'ENV_NOT_ALLOWED')
       else if (typeof v !== 'string') bad(f, 'REQUIRED')
       else if (bytes(v) > MAX_SECRET_BYTES) bad(f, 'TOO_LONG')
       else if (multiLineRefused(k, v)) bad(f, 'SETTING_INVALID')
@@ -316,6 +393,7 @@ export function validateStackSpec(body: unknown, cfg: SpecConfig): SpecResult {
       const f = `env.${cap(k)}`
       if (!ENV_KEY_RE.test(k)) bad(f, 'BAD_KEY')
       else if (forbiddenEnvKey(k, redis) || secretKeys.includes(k)) bad(f, 'ENV_FORBIDDEN')
+      else if (!allowedEnvKey(k, prefixes)) bad(f, 'ENV_NOT_ALLOWED')
       else if (typeof v !== 'string') bad(f, 'REQUIRED')
       else if (bytes(v) > MAX_ENV_BYTES) bad(f, 'TOO_LONG')
       else if (multiLineRefused(k, v)) bad(f, 'SETTING_INVALID')

@@ -285,7 +285,7 @@ beforeEach(async () => {
     {
       size: 'medium',
       settings: { ...PG, MAIL_FROM: 'ops@acme.example' },
-      secrets: { DB_PASSWORD: DB_PASS, SMTP_PASS }
+      secrets: { DB_PASSWORD: DB_PASS, SMTP_PASSWORD: SMTP_PASS }
     },
     null,
     { driver: automatic, env }
@@ -543,7 +543,7 @@ describe('stack settings', () => {
       DB_PASSWORD: HUB_MASK,
       ENCRYPTION_KEY: HUB_MASK,
       SESSION_SECRET: HUB_MASK,
-      SMTP_PASS: HUB_MASK
+      SMTP_PASSWORD: HUB_MASK
     })
     expect(d.extension_pins).toEqual({ 'efp-ops': PIN })
     expect(res.body).not.toContain('hub_token')
@@ -560,12 +560,12 @@ describe('stack settings', () => {
     const before = S.openStackSecrets(await S.readStackSettings(DOCKER))
     const res = await call('PUT', `/environments/${DOCKER}/stack/settings`, asAdmin, {
       size: 'large',
-      settings: { ...PG, MAIL_FROM: 'new@acme.example', APP_NAME: 'Acme' },
+      settings: { ...PG, MAIL_FROM: 'new@acme.example', LOG_LEVEL: 'warn' },
       secrets: {
         DB_PASSWORD: HUB_MASK,
         SESSION_SECRET: HUB_MASK,
         ENCRYPTION_KEY: HUB_MASK,
-        SMTP_PASS: 'smtp-Changed-Value-789'
+        SMTP_PASSWORD: 'smtp-Changed-Value-789'
       },
       extension_pins: { 'efp-ops': PIN }
     })
@@ -575,7 +575,7 @@ describe('stack settings', () => {
     expect(after.DB_PASSWORD).toBe(DB_PASS)
     expect(after.SESSION_SECRET).toBe(before.SESSION_SECRET)
     expect(after.ENCRYPTION_KEY).toBe(before.ENCRYPTION_KEY)
-    expect(after.SMTP_PASS).toBe('smtp-Changed-Value-789')
+    expect(after.SMTP_PASSWORD).toBe('smtp-Changed-Value-789')
     const act = activityCalls()
     expect(act).toHaveLength(1)
     expect(act[0]).toMatchObject({
@@ -584,7 +584,7 @@ describe('stack settings', () => {
       item: String(DOCKER)
     })
     expect([...(act[0].changed_fields as string[])].sort()).toEqual(
-      ['size', 'settings.MAIL_FROM', 'settings.APP_NAME', 'secrets.SMTP_PASS'].sort()
+      ['size', 'settings.MAIL_FROM', 'settings.LOG_LEVEL', 'secrets.SMTP_PASSWORD'].sort()
     )
     const logged = JSON.stringify(act)
     expect(logged).not.toContain('new@acme.example')
@@ -595,11 +595,11 @@ describe('stack settings', () => {
   it('PUT with only masks writes nothing secret-side and logs no secret key', async () => {
     const sealedBefore = (await S.readStackSettings(DOCKER))?.secrets
     const res = await call('PUT', `/environments/${DOCKER}/stack/settings`, asAdmin, {
-      secrets: { DB_PASSWORD: HUB_MASK, SMTP_PASS: HUB_MASK }
+      secrets: { DB_PASSWORD: HUB_MASK, SMTP_PASSWORD: HUB_MASK }
     })
     expect(res.statusCode).toBe(200)
     const after = S.openStackSecrets(await S.readStackSettings(DOCKER))
-    expect([after.DB_PASSWORD, after.SMTP_PASS]).toEqual([DB_PASS, SMTP_PASS])
+    expect([after.DB_PASSWORD, after.SMTP_PASSWORD]).toEqual([DB_PASS, SMTP_PASS])
     expect(typeof sealedBefore).toBe('string')
     expect(activityCalls()[0].changed_fields).toEqual([])
   })
@@ -660,6 +660,53 @@ describe('stack settings', () => {
     }
     expect(activityCalls()).toHaveLength(0)
     expect(await S.readStackSettings(DOCKER)).toMatchObject({ size: 'medium' })
+  })
+
+  it("refuses a key outside the allow-list; the agent's env_prefixes open it (P4-23)", async () => {
+    const url = `/environments/${DOCKER}/stack/settings`
+    m.health.mockResolvedValue(health({ env_prefixes: [] }))
+    const res = await call('PUT', url, asAdmin, { settings: { ...PG, EFP_REGION: 'east-value' } })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().code).toBe('SETTING_INVALID')
+    expect(res.json().error).toContain('EFP_REGION')
+    expect(res.json().error).toContain('add its prefix to HUB_AGENT_ENV_PREFIXES on the agent')
+    expect(res.body).not.toContain('east-value')
+
+    // The agent allows EFP_: saved. A garbled prefix entry never counts.
+    m.health.mockResolvedValue(health({ env_prefixes: ['EFP_', 'bad', 7 as unknown as string] }))
+    const ok = await call('PUT', url, asAdmin, {
+      settings: { ...PG, EFP_REGION: 'east' },
+      secrets: { EFP_API_SECRET: 'efp-secret-value' }
+    })
+    expect(ok.statusCode).toBe(200)
+    expect(ok.body).not.toContain('efp-secret-value')
+    expect(m.health).toHaveBeenCalledWith(expect.objectContaining({ id: 3 }))
+
+    // A prefix that overlaps the deny rules never counts, whatever the agent answers.
+    m.health.mockResolvedValue(health({ env_prefixes: ['GTK_'] }))
+    const gtk = await call('PUT', url, asAdmin, { settings: { ...PG, GTK_THEME: 'x' } })
+    expect([gtk.statusCode, gtk.json().code]).toEqual([400, 'SETTING_INVALID'])
+
+    // An agent from before P4-23 (no env_prefixes): none count; the message says to upgrade.
+    m.health.mockResolvedValue(health())
+    const old = await call('PUT', url, asAdmin, { size: 'medium' })
+    expect([old.statusCode, old.json().code]).toEqual([400, 'SETTING_INVALID'])
+    expect(old.json().error).toContain('upgrade the Hub agent')
+
+    // Agent unreachable: no prefix counts (fail closed), even for a stored key.
+    m.health.mockRejectedValue(new AgentError('AGENT_UNREACHABLE', 0, 'down'))
+    const closed = await call('PUT', url, asAdmin, { size: 'medium' })
+    expect(closed.statusCode).toBe(400)
+    expect(closed.json().code).toBe('SETTING_INVALID')
+    expect(closed.json().error).toContain('could not reach the agent')
+  })
+
+  it('a save of known keys never calls the agent', async () => {
+    const res = await call('PUT', `/environments/${DOCKER}/stack/settings`, asAdmin, {
+      settings: { ...PG, MAIL_FROM: 'ops@acme.example' }
+    })
+    expect(res.statusCode).toBe(200)
+    expect(m.health).not.toHaveBeenCalled()
   })
 
   it('SAMBA_USER / SAMBA_PASS / SAMBA_WORKGROUP must be one line (SETTING_INVALID)', async () => {

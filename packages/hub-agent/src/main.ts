@@ -75,7 +75,8 @@ export function baseHandlers(cfg: AgentConfig, facts: EngineFacts): Handlers {
         edge: cfg.edge,
         publish_ports: cfg.publishPorts,
         extensions_shared: cfg.extensionsShared,
-        redis_bundled: cfg.redisImage !== null
+        redis_bundled: cfg.redisImage !== null,
+        env_prefixes: cfg.envPrefixes
       }
     }),
     listStacks: notYet,

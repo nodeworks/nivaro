@@ -1,4 +1,5 @@
 import type { HubEnvironmentRow } from '../promote-types.js'
+import { KNOWN_ENV_KEYS } from './known-env.js'
 
 /**
  * Env rules for a Docker stack (Hub phase 4): which keys a stack's settings may hold, and where
@@ -43,7 +44,23 @@ export const AGENT_ENV_RULES = {
     'FFREPORT',
     'CHROMIUM_FLAGS',
     'CHROMIUM_USER_FLAGS',
-    'SAMBA_SERVER_PATH'
+    'SAMBA_SERVER_PATH',
+    // glibc / GLib / GTK module paths a child loads code from (ruling P4-23).
+    'GCONV_PATH',
+    'LOCPATH',
+    'GIO_MODULE_DIR',
+    'GTK_PATH',
+    'GIO_EXTRA_MODULES',
+    'GTK_MODULES',
+    'GDK_PIXBUF_MODULEDIR',
+    'GLIBC_TUNABLES',
+    'QT_PLUGIN_PATH',
+    // interpreter and toolkit search paths (ruling P4-23)
+    'PYTHONPATH',
+    'CLASSPATH',
+    'PERL5LIB',
+    'GDK_PIXBUF_MODULE_FILE',
+    'XDG_DATA_DIRS'
   ] as readonly string[],
   runtime_prefixes: [
     'LD_',
@@ -55,7 +72,16 @@ export const AGENT_ENV_RULES = {
     // LD_LIBRARY_PATH and LD_AUDIT.
     'VK_',
     '__EGL_',
-    'LIBGL_'
+    'LIBGL_',
+    // VA-API, Mesa, GBM, VDPAU, OpenCL and GStreamer loaders (ruling P4-23).
+    'LIBVA_',
+    'MESA_',
+    'GBM_',
+    'VDPAU_',
+    'OCL_ICD_',
+    'GST_PLUGIN_',
+    // the macOS dynamic loader (DYLD_INSERT_LIBRARIES, DYLD_LIBRARY_PATH)
+    'DYLD_'
   ] as readonly string[],
   node_prefix: 'NODE_',
   node_allowed: ['NODE_ENV'] as readonly string[],
@@ -103,6 +129,77 @@ export function agentRefusesEnvKey(key: string, redis: RedisMode): boolean {
   if (AGENT_ENV_RULES.every_file_key_forbidden && key.endsWith(AGENT_ENV_RULES.file_suffix))
     return true
   return agentForbiddenBase(key, redis)
+}
+
+/**
+ * The allow-list (ruling P4-23). A stack may set only a key the Nivaro app reads (KNOWN_ENV_KEYS,
+ * generated from api/src by scripts/hub-known-env.mts; the agent ships the same list) or a key
+ * under one of the agent's HUB_AGENT_ENV_PREFIXES (GET /v1/health `env_prefixes`). The deny rules
+ * above stay as a second layer: a key is accepted only when allowed AND not refused.
+ */
+const KNOWN_ENV = new Set(KNOWN_ENV_KEYS)
+
+/** One HUB_AGENT_ENV_PREFIXES entry, as the agent's config accepts it (`EFP_`, `EFP_OPS_`). */
+export const ENV_PREFIX_RE = /^[A-Z][A-Z0-9]*(_[A-Z0-9]+)*_$/
+
+/**
+ * Exactly the agent's `operatorPrefixConflict`: a prefix of a deny key (GIO_ vs GIO_MODULE_DIR,
+ * GTK_ vs GTK_PATH), or a prefix of, or prefixed by, a deny prefix (GST_ vs GST_PLUGIN_). A
+ * prefix that only starts with an exact deny key (TEMPLATE_, PATHWAY_) is fine. Such a prefix
+ * never counts here (and the agent refuses to start with one).
+ */
+export function operatorPrefixConflict(prefix: string): boolean {
+  const r = AGENT_ENV_RULES
+  const keys = [...r.runtime_keys, ...r.agent_set_env_keys]
+  const prefixes = [...r.runtime_prefixes, r.node_prefix, r.nivaro_prefix]
+  return (
+    keys.some((k) => k.startsWith(prefix)) ||
+    prefixes.some((d) => d.startsWith(prefix) || prefix.startsWith(d))
+  )
+}
+
+/** A key the Nivaro app reads (the generated list). */
+export const knownEnvKey = (key: string): boolean => KNOWN_ENV.has(key)
+
+/** Exactly the agent's `allowedEnvKey`: a known key, or one under an operator prefix. */
+export function allowedEnvKey(key: string, prefixes: readonly string[] = []): boolean {
+  return KNOWN_ENV.has(key) || prefixes.some((p) => key.startsWith(p))
+}
+
+/** Exactly the agent's `acceptedEnvKey`: allowed AND not refused by the deny rules. */
+export function agentAcceptsEnvKey(
+  key: string,
+  redis: RedisMode,
+  prefixes: readonly string[] = []
+): boolean {
+  return allowedEnvKey(key, prefixes) && !agentRefusesEnvKey(key, redis)
+}
+
+/**
+ * What the Hub knows of the agent's HUB_AGENT_ENV_PREFIXES. `known: false` = no prefix counts
+ * (fail closed): the agent was not reached (`unreachable`), or it answers no `env_prefixes` at
+ * all — an agent from before P4-23 (`old_agent`).
+ */
+export interface AgentEnvPrefixRead {
+  prefixes: readonly string[]
+  known: boolean
+  reason?: 'unreachable' | 'old_agent'
+}
+
+/**
+ * The agent's `env_prefixes` from GET /v1/health (null = not reached). Only well-formed entries
+ * that do not overlap the deny rules count; a garbled one is dropped.
+ */
+export function agentEnvPrefixes(
+  health: { env_prefixes?: unknown } | null | undefined
+): AgentEnvPrefixRead {
+  if (!health) return { prefixes: [], known: false, reason: 'unreachable' }
+  const raw = health.env_prefixes
+  if (!Array.isArray(raw)) return { prefixes: [], known: false, reason: 'old_agent' }
+  const prefixes = raw.filter(
+    (p): p is string => typeof p === 'string' && ENV_PREFIX_RE.test(p) && !operatorPrefixConflict(p)
+  )
+  return { prefixes, known: true }
 }
 
 /**

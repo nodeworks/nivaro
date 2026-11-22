@@ -19,6 +19,7 @@ import type {
 } from '../services/hub/docker/agent-types.js'
 import { lookName, markNameServing, nameRequest } from '../services/hub/docker/name-check.js'
 import { prepareStackSpec } from '../services/hub/docker/run-step.js'
+import { agentEnvPrefixes } from '../services/hub/docker/stack-env.js'
 import { strictPinMap } from '../services/hub/docker/stack-gather.js'
 import {
   deployedStack,
@@ -422,7 +423,16 @@ export function hubDockerRoutes(app: FastifyInstance) {
       try {
         const v = await validateStackSettings(sent, existing, {
           driver: target.driver.config,
-          env
+          env,
+          // Ruling P4-23: keys outside the known list need the agent's HUB_AGENT_ENV_PREFIXES;
+          // health unknown = none (fail closed).
+          envPrefixes: async () => {
+            try {
+              return agentEnvPrefixes(await agentHealth(target.driver))
+            } catch {
+              return null
+            }
+          }
         })
         if (!v.ok) return fail(reply, 400, v.code, v.message)
         const pinsBefore = pinsOf(row)

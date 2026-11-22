@@ -11,7 +11,21 @@
     "FFREPORT",
     "CHROMIUM_FLAGS",
     "CHROMIUM_USER_FLAGS",
-    "SAMBA_SERVER_PATH"
+    "SAMBA_SERVER_PATH",
+    "GCONV_PATH",
+    "LOCPATH",
+    "GIO_MODULE_DIR",
+    "GTK_PATH",
+    "GIO_EXTRA_MODULES",
+    "GTK_MODULES",
+    "GDK_PIXBUF_MODULEDIR",
+    "GLIBC_TUNABLES",
+    "QT_PLUGIN_PATH",
+    "PYTHONPATH",
+    "CLASSPATH",
+    "PERL5LIB",
+    "GDK_PIXBUF_MODULE_FILE",
+    "XDG_DATA_DIRS"
   ],
   "runtime_prefixes": [
     "LD_",
@@ -21,7 +35,14 @@
     "HELP_VIDEO_WHISPER_",
     "VK_",
     "__EGL_",
-    "LIBGL_"
+    "LIBGL_",
+    "LIBVA_",
+    "MESA_",
+    "GBM_",
+    "VDPAU_",
+    "OCL_ICD_",
+    "GST_PLUGIN_",
+    "DYLD_"
   ],
   "node_prefix": "NODE_",
   "node_allowed": ["NODE_ENV"],

@@ -425,7 +425,8 @@ describe('startAgent', () => {
           edge: 'publish',
           publish_ports: [3110, 3119],
           extensions_shared: false,
-          redis_bundled: false
+          redis_bundled: false,
+          env_prefixes: []
         })
       } finally {
         await new Promise((res) => r.server.close(res))

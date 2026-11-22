@@ -170,13 +170,13 @@ describe('hub stack settings', () => {
 
   it('merges secrets per key: the mask keeps, empty clears, text reseals', async () => {
     const env = await newEnv()
-    await save(env, { settings: PG, secrets: { DB_PASSWORD: DB_PASS, MAIL_PASS: 'm1' } })
+    await save(env, { settings: PG, secrets: { DB_PASSWORD: DB_PASS, SMTP_PASSWORD: 'm1' } })
     const before = (await S.readStackSettings(env.id))?.secrets
-    await save(env, { secrets: { DB_PASSWORD: HUB_MASK, MAIL_PASS: '' } })
+    await save(env, { secrets: { DB_PASSWORD: HUB_MASK, SMTP_PASSWORD: '' } })
     let s = await opened(env)
     expect(s.DB_PASSWORD).toBe(DB_PASS)
-    expect(s).not.toHaveProperty('MAIL_PASS')
-    await save(env, { secrets: { DB_PASSWORD: 'new-pass', MAIL_PASS: null } })
+    expect(s).not.toHaveProperty('SMTP_PASSWORD')
+    await save(env, { secrets: { DB_PASSWORD: 'new-pass', SMTP_PASSWORD: null } })
     s = await opened(env)
     expect(s.DB_PASSWORD).toBe('new-pass')
     expect((await S.readStackSettings(env.id))?.secrets).not.toBe(before)
@@ -197,8 +197,11 @@ describe('hub stack settings', () => {
   it('refuses a secret-looking key as a plain setting', async () => {
     const env = await newEnv()
     expect(await codeOf(env, { settings: { ...PG, DB_PASSWORD: 'x' } })).toBe('SECRET_IN_SETTINGS')
-    expect(await codeOf(env, { settings: { SMTP_AUTH_USER: 'x' } })).toBe('SECRET_IN_SETTINGS')
-    expect(await codeOf(env, { settings: { API_KEY: 'x' } })).toBe('SECRET_IN_SETTINGS')
+    expect(await codeOf(env, { settings: { OIDC_CLIENT_SECRET: 'x' } })).toBe('SECRET_IN_SETTINGS')
+    expect(await codeOf(env, { settings: { ANTHROPIC_API_KEY: 'x' } })).toBe('SECRET_IN_SETTINGS')
+    // An unknown credential-looking key gets the one answer that helps: the allow-list.
+    expect(await codeOf(env, { settings: { SMTP_AUTH_USER: 'x' } })).toBe('SETTING_INVALID')
+    expect(await codeOf(env, { settings: { API_KEY: 'x' } })).toBe('SETTING_INVALID')
   })
 
   // Every key the renderer or the agent owns, and every env family the agent refuses: as a plain
@@ -287,8 +290,8 @@ describe('hub stack settings', () => {
     expect(await codeOf(env, { settings: { '1X': 'x' } })).toBe('BAD_KEY')
     expect(await codeOf(env, { secrets: { 'bad-key': 'x' } })).toBe('BAD_KEY')
     expect(await codeOf(env, { settings: 'nope' })).toBe('BAD_KEY')
-    expect(await codeOf(env, { settings: { X: 1 } })).toBe('BAD_VALUE')
-    expect(await codeOf(env, { settings: { X: 'v'.repeat(5000) } })).toBe('BAD_VALUE')
+    expect(await codeOf(env, { settings: { MAIL_FROM: 1 } })).toBe('BAD_VALUE')
+    expect(await codeOf(env, { settings: { MAIL_FROM: 'v'.repeat(5000) } })).toBe('BAD_VALUE')
     expect(await codeOf(env, { publish_port: 0 })).toBe('BAD_PUBLISH_PORT')
     expect(await codeOf(env, { publish_port: 70000 })).toBe('BAD_PUBLISH_PORT')
     expect(await codeOf(env, { publish_port: '31000' })).toBe('BAD_PUBLISH_PORT')
@@ -337,7 +340,7 @@ describe('hub stack settings', () => {
       { secrets: { NODE_OPTIONS: value } },
       { secrets: { SESSION_SECRET: value.slice(0, 10) } },
       { secrets: { ENCRYPTION_KEY: value } },
-      { secrets: { X: value.repeat(5000) } },
+      { secrets: { SMTP_PASSWORD: value.repeat(5000) } },
       { size: 'medium', settings: { DB_CLIENT: 'sqlite', DB_DATABASE: value } },
       { extension_pins: { x: value } }
     ]
@@ -391,15 +394,159 @@ describe('hub stack settings', () => {
     expect(later.SESSION_SECRET).toBe(first.SESSION_SECRET)
   })
 
+  describe('the allow-list (ruling P4-23)', () => {
+    const withPrefixes = (prefixes: readonly string[] | null) => {
+      const calls = { n: 0 }
+      const envPrefixes = async () => {
+        calls.n++
+        return prefixes === null ? null : { prefixes, known: true }
+      }
+      return { calls, envPrefixes }
+    }
+    async function check(env: Env, body: Body, prefixes: readonly string[] | null) {
+      const p = withPrefixes(prefixes)
+      const v = await S.validateStackSettings(body, await S.readStackSettings(env.id), {
+        driver,
+        env,
+        envPrefixes: p.envPrefixes
+      })
+      return { v, calls: p.calls.n }
+    }
+
+    it('refuses a setting Nivaro does not read: SETTING_INVALID naming the key and the fix', async () => {
+      const env = await newEnv()
+      const { v } = await check(env, { settings: { ...PG, GREETING: 'hello-value' } }, [])
+      expect(v.ok).toBe(false)
+      if (v.ok) return
+      expect(v.code).toBe('SETTING_INVALID')
+      expect(v.message).toContain('GREETING')
+      expect(v.message).toContain('add its prefix to HUB_AGENT_ENV_PREFIXES on the agent')
+      expect(v.message).not.toContain('hello-value')
+    })
+
+    it('refuses a secret Nivaro does not read, never echoing the value', async () => {
+      const env = await newEnv()
+      const { v } = await check(env, { secrets: { EFP_API_SECRET: 'hunter2-value' } }, [])
+      expect(v.ok ? null : v.code).toBe('SETTING_INVALID')
+      expect(JSON.stringify(v)).not.toContain('hunter2')
+    })
+
+    it("allows keys under the agent's prefixes, as settings and as secrets", async () => {
+      const env = await newEnv()
+      const body = { settings: { ...PG, EFP_REGION: 'east' }, secrets: { EFP_API_SECRET: 's' } }
+      expect((await check(env, body, ['EFP_'])).v.ok).toBe(true)
+      expect((await check(env, { settings: { ACME_X: '1' } }, ['EFP_'])).v).toMatchObject({
+        ok: false,
+        code: 'SETTING_INVALID'
+      })
+    })
+
+    it('health unknown = no prefixes (fail closed), and the message says so', async () => {
+      const env = await newEnv()
+      const { v } = await check(env, { settings: { EFP_REGION: 'east' } }, null)
+      expect(v).toMatchObject({ ok: false, code: 'SETTING_INVALID' })
+      if (!v.ok) expect(v.message).toContain('could not reach the agent')
+      // no loader at all: the same
+      expect(await codeOf(env, { settings: { EFP_REGION: 'east' } })).toBe('SETTING_INVALID')
+    })
+
+    it('an agent too old to report prefixes: none count, and the message says to upgrade', async () => {
+      const env = await newEnv()
+      const v = await S.validateStackSettings({ settings: { EFP_REGION: 'east' } }, null, {
+        driver,
+        env,
+        envPrefixes: async () => ({ prefixes: [], known: false, reason: 'old_agent' })
+      })
+      expect(v).toMatchObject({ ok: false, code: 'SETTING_INVALID' })
+      if (!v.ok) expect(v.message).toContain('upgrade the Hub agent')
+    })
+
+    it('a loader that throws counts as unknown', async () => {
+      const env = await newEnv()
+      const v = await S.validateStackSettings({ settings: { EFP_REGION: 'east' } }, null, {
+        driver,
+        env,
+        envPrefixes: async () => {
+          throw new Error('agent down')
+        }
+      })
+      expect(v).toMatchObject({ ok: false, code: 'SETTING_INVALID' })
+    })
+
+    it('a save of known keys never asks the agent', async () => {
+      const env = await newEnv()
+      const { v, calls } = await check(
+        env,
+        { settings: { ...PG, MAIL_FROM: 'a@b.c' }, secrets: { DB_PASSWORD: DB_PASS } },
+        null
+      )
+      expect(v.ok).toBe(true)
+      expect(calls).toBe(0)
+    })
+
+    it('a prefix never opens a key the deny rules refuse (second layer)', async () => {
+      const env = await newEnv()
+      const prefixes = ['GCONV_', 'MESA_', 'LD_', 'NODE_', 'GST_']
+      for (const k of ['GCONV_PATH', 'MESA_LOADER_DRIVER_OVERRIDE', 'LD_PRELOAD', 'NODE_OPTIONS']) {
+        expect([k, (await check(env, { settings: { [k]: 'v' } }, prefixes)).v]).toMatchObject([
+          k,
+          { ok: false, code: 'RESERVED_SETTING' }
+        ])
+        expect([k, (await check(env, { secrets: { [k]: 'v' } }, prefixes)).v]).toMatchObject([
+          k,
+          { ok: false, code: 'RESERVED_SETTING' }
+        ])
+      }
+    })
+
+    it('stored keys are checked again: a prefix the agent dropped refuses the next save', async () => {
+      const env = await newEnv()
+      const first = await check(env, { settings: { ...PG, EFP_REGION: 'east' } }, ['EFP_'])
+      if (!first.v.ok) throw new Error(first.v.code)
+      await S.saveStackSettings(env.id, first.v.row.fields, first.v.row.extension_pins)
+      const next = await check(env, { size: 'small' }, [])
+      expect(next.v).toMatchObject({ ok: false, code: 'SETTING_INVALID' })
+      expect(next.calls).toBe(1)
+    })
+  })
+
+  it.each([
+    'GCONV_PATH',
+    'LOCPATH',
+    'GIO_MODULE_DIR',
+    'GTK_PATH',
+    'LIBVA_DRIVERS_PATH',
+    'MESA_LOADER_DRIVER_OVERRIDE',
+    'GBM_BACKENDS_PATH',
+    'VDPAU_DRIVER_PATH',
+    'OCL_ICD_VENDORS',
+    'GST_PLUGIN_PATH',
+    'GIO_EXTRA_MODULES',
+    'GTK_MODULES',
+    'GDK_PIXBUF_MODULEDIR',
+    'GDK_PIXBUF_MODULE_FILE',
+    'GLIBC_TUNABLES',
+    'QT_PLUGIN_PATH',
+    'PYTHONPATH',
+    'CLASSPATH',
+    'PERL5LIB',
+    'XDG_DATA_DIRS',
+    'DYLD_INSERT_LIBRARIES'
+  ])('refuses the loader key %s the scan named (RESERVED_SETTING)', async (k) => {
+    const env = await newEnv()
+    expect(await codeOf(env, { settings: { [k]: 'v' } })).toBe('RESERVED_SETTING')
+    expect(await codeOf(env, { secrets: { [k]: 'v' } })).toBe('RESERVED_SETTING')
+  })
+
   it('refuses a value made only of mask characters', async () => {
     const env = await newEnv()
     await save(env, { settings: PG, secrets: { DB_PASSWORD: DB_PASS } })
-    expect(await codeOf(env, { settings: { X: '•••' } })).toBe('BAD_VALUE')
-    expect(await codeOf(env, { settings: { X: HUB_MASK } })).toBe('BAD_VALUE')
+    expect(await codeOf(env, { settings: { MAIL_FROM: '•••' } })).toBe('BAD_VALUE')
+    expect(await codeOf(env, { settings: { MAIL_FROM: HUB_MASK } })).toBe('BAD_VALUE')
     expect(await codeOf(env, { secrets: { DB_PASSWORD: ` ${HUB_MASK} ` } })).toBe('BAD_VALUE')
     expect(await codeOf(env, { secrets: { DB_PASSWORD: '••••••••' } })).toBe('BAD_VALUE')
     expect(await codeOf(env, { secrets: { DB_PASSWORD: HUB_MASK } })).toBeNull()
-    expect(await codeOf(env, { settings: { X: 'a•b' } })).toBeNull()
+    expect(await codeOf(env, { settings: { MAIL_FROM: 'a•b' } })).toBeNull()
   })
 
   it('a REDIS_URL with a password belongs in the secrets', async () => {

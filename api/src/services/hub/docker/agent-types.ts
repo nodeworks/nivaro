@@ -55,6 +55,11 @@ export interface AgentHealth {
   publish_ports: [number, number] | null
   extensions_shared: boolean
   redis_bundled: boolean
+  /**
+   * HUB_AGENT_ENV_PREFIXES (ruling P4-23): env key prefixes a stack may set on top of the Nivaro
+   * app's known config keys. Absent on an agent before P4-23 = none.
+   */
+  env_prefixes?: string[]
 }
 
 /** One row of `GET /v1/stacks` (Hub-managed stacks only). */

@@ -59,6 +59,60 @@ describe('loadAgentConfig', () => {
     expect(cfg.extensionsHostRoot).toBe('/var/lib/nivaro-hub-agent/extensions')
     expect(cfg.extensionsShared).toBe(false)
     expect(cfg.registryAuth).toBeNull()
+    expect(cfg.envPrefixes).toEqual([])
+  })
+
+  it('reads HUB_AGENT_ENV_PREFIXES (ruling P4-23)', () => {
+    const cfg = loadAgentConfig(
+      { ...traefikEnv, HUB_AGENT_ENV_PREFIXES: ' EFP_, ACME2_ ,EFP_,EFP_OPS_,A_B2_C_' },
+      files(baseFiles)
+    )
+    expect(cfg.envPrefixes).toEqual(['EFP_', 'ACME2_', 'EFP_OPS_', 'A_B2_C_'])
+  })
+
+  it('allows a prefix that only starts with an exact deny key (TEMPLATE_, PATHWAY_)', () => {
+    const cfg = loadAgentConfig(
+      { ...traefikEnv, HUB_AGENT_ENV_PREFIXES: 'TEMPLATE_,TEMPO_,HOMEPAGE_,PATHWAY_' },
+      files(baseFiles)
+    )
+    expect(cfg.envPrefixes).toEqual(['TEMPLATE_', 'TEMPO_', 'HOMEPAGE_', 'PATHWAY_'])
+  })
+
+  it.each([
+    'GIO_',
+    'GTK_',
+    'GST_',
+    'GST_PLUGIN_X_',
+    'LD_',
+    'NODE_',
+    'NIVARO_',
+    'MESA_',
+    'QT_',
+    'HELP_',
+    'DYLD_',
+    'XDG_'
+  ])('refuses the env prefix %j that overlaps the deny rules (ENV_PREFIX_DENIED)', (p) => {
+    expect(
+      codeOf(() =>
+        loadAgentConfig({ ...traefikEnv, HUB_AGENT_ENV_PREFIXES: `EFP_,${p}` }, files(baseFiles))
+      )
+    ).toBe('ENV_PREFIX_DENIED')
+  })
+
+  it.each([
+    'efp_',
+    'EFP',
+    'EFP-',
+    '_',
+    '1EFP_',
+    'EF P_',
+    'EFP__X',
+    'EFP__',
+    'EFP_x_'
+  ])('refuses the env prefix %j (ENV_PREFIXES_BAD)', (p) => {
+    expect(
+      codeOf(() => loadAgentConfig({ ...traefikEnv, HUB_AGENT_ENV_PREFIXES: p }, files(baseFiles)))
+    ).toBe('ENV_PREFIXES_BAD')
   })
 
   it('reads every optional setting', () => {

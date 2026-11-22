@@ -6,6 +6,8 @@
  * value, no path, so a failed start never prints a secret.
  */
 
+import { operatorPrefixConflict } from './spec.js'
+
 export class ConfigError extends Error {
   readonly code: string
   constructor(code: string) {
@@ -39,6 +41,11 @@ export type AgentConfig = {
   extensionsShared: boolean
   /** registry host → base64 `user:password`, from a docker config.json `auths`. */
   registryAuth: Record<string, string> | null
+  /**
+   * HUB_AGENT_ENV_PREFIXES (ruling P4-23): env key prefixes such as `EFP_` a stack may set on top
+   * of the Nivaro app's known config keys. Default none.
+   */
+  envPrefixes: string[]
 }
 
 export const MIN_TOKEN_LENGTH = 32
@@ -53,6 +60,8 @@ const HOST =
 /** An image repository: optional registry host[:port]/, then path components. No tag, no digest. */
 export const REPO_RE = new RegExp(`^(?:${HOST}/)?${COMPONENT}(?:/${COMPONENT})*$`)
 export const PINNED_IMAGE_RE = /^(.+)@sha256:[a-f0-9]{64}$/
+/** One HUB_AGENT_ENV_PREFIXES entry: upper-case segments, ends with `_` (`EFP_`, `EFP_OPS_`). */
+export const ENV_PREFIX_RE = /^[A-Z][A-Z0-9]*(_[A-Z0-9]+)*_$/
 const SUFFIX_RE = /^\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$/
 
 type ReadFile = (p: string) => string
@@ -255,6 +264,11 @@ export function loadAgentConfig(env: NodeJS.ProcessEnv, readFile: ReadFile): Age
     }
   }
 
+  const envPrefixes = [...new Set(list(env.HUB_AGENT_ENV_PREFIXES))]
+  if (envPrefixes.some((p) => !ENV_PREFIX_RE.test(p))) throw new ConfigError('ENV_PREFIXES_BAD')
+  // A prefix that overlaps a deny key or deny prefix (GTK_ vs GTK_PATH) is refused outright.
+  if (envPrefixes.some(operatorPrefixConflict)) throw new ConfigError('ENV_PREFIX_DENIED')
+
   return {
     token,
     hmacKey,
@@ -274,6 +288,7 @@ export function loadAgentConfig(env: NodeJS.ProcessEnv, readFile: ReadFile): Age
     extensionsRoot,
     extensionsHostRoot,
     extensionsShared,
-    registryAuth
+    registryAuth,
+    envPrefixes
   }
 }
