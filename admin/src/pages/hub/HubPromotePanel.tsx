@@ -376,10 +376,20 @@ interface StepRow {
   label: string
 }
 
+/**
+ * The order the runner takes a plan's steps in (api promote-plan.ts runOrder): a promotion by
+ * position, a rollback every frontend first, then the API.
+ */
+const runRank = (kind: PromotionKind, s: { kind: string }) =>
+  kind === 'rollback' && s.kind === 'frontend' ? 0 : 1
+
 /** The runner's steps for a plan: per component merge then deploy, then one check at the end. */
-export function stepRows(plan: PromotionPlan | null): StepRow[] {
+export function stepRows(plan: PromotionPlan | null, kind: PromotionKind = 'promote'): StepRow[] {
   const rows: StepRow[] = []
-  for (const s of [...(plan?.steps ?? [])].sort((a, b) => a.position - b.position)) {
+  const ordered = [...(plan?.steps ?? [])].sort(
+    (a, b) => runRank(kind, a) - runRank(kind, b) || a.position - b.position
+  )
+  for (const s of ordered) {
     rows.push({
       key: `push-${s.position}`,
       phase: 'push',
@@ -549,7 +559,7 @@ function PromotionProgress({
     )
 
   const d = q.data
-  const rows = stepRows(promotionPlanOf(d))
+  const rows = stepRows(promotionPlanOf(d), d.kind === 'rollback' ? 'rollback' : 'promote')
   const states = stepStates(rows, d.status, d.step)
   const live = isLivePromotion(d.status)
 

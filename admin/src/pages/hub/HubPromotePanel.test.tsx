@@ -582,6 +582,19 @@ describe('fix round 1: progress', () => {
     expect(rows[currentStepIndex(rows, 'deploy api')].key).toBe('deploy-1')
     expect(rows[currentStepIndex(rows, 'push api-v2: merged !4')].key).toBe('push-2')
   })
+
+  it('P22: a rollback lists the portal first, then the API', () => {
+    const plan = {
+      ...okPlan,
+      steps: [
+        { ...okPlan.steps[0], position: 1, component: 'api', kind: 'api' },
+        { ...okPlan.steps[0], position: 2, component: 'portal', kind: 'frontend' }
+      ]
+    }
+    const keys = (k: 'promote' | 'rollback') => stepRows(plan as never, k).map((r) => r.key)
+    expect(keys('rollback')).toEqual(['push-2', 'deploy-2', 'push-1', 'deploy-1', 'verify'])
+    expect(keys('promote')).toEqual(['push-1', 'deploy-1', 'push-2', 'deploy-2', 'verify'])
+  })
 })
 
 describe('fix round 1: the confirmation names one version', () => {

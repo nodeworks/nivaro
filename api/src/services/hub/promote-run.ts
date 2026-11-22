@@ -28,7 +28,7 @@ import {
   type PromoteLock,
   PromotionError
 } from './promote-lock.js'
-import { buildPromotionPlan, urlForLog } from './promote-plan.js'
+import { buildPromotionPlan, runOrder, urlForLog } from './promote-plan.js'
 import type {
   HubDeployKind,
   HubDeployRow,
@@ -49,7 +49,8 @@ import { hubStatusKey } from './status.js'
  *            nvr:hub:promote:<envId>, SET NX PX 5 min, renewed every 60 s, released at the end);
  *            a nivaro_hub_deploys row (running) + a job run (kind 'deploy'); the work runs in the
  *            background and the caller gets the ids at once.
- *   push     per component, in position order; the target branch moves exactly ONCE per
+ *   push     per component, in position order (a rollback takes every frontend first, then the
+ *            API — runOrder); the target branch moves exactly ONCE per
  *            component (its deploy may run on every push — two pushes would race two deploys):
  *            - api, target already holds the release commit: the pin commit straight on the target
  *              (identical content = no commit); a `noop` step (pin there, version answered) does
@@ -319,7 +320,8 @@ export async function executePlan(
     }
   }
 
-  const ordered = [...plan.steps].sort((a, b) => a.position - b.position)
+  // Promote: by position (API first). Rollback: the portal first, then the API.
+  const ordered = runOrder(plan.steps, ctx.kind)
   const deployedAt = new Map<number, Deployed>()
 
   /** Opens a merge request `source` → `target` and merges it; answers the commit it left. */

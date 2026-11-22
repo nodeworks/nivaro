@@ -369,6 +369,15 @@ describe('hub promotions end to end (merge-commit repos, automatic deploys)', ()
     expect(gl.calls.filter((c) => c.path === '/merge_requests').length).toBe(mrsBefore)
     expect(rolled.lines.some((l) => l.includes("redeploying frontend's build"))).toBe(true)
     expect(rolled.lines.some((l) => l.includes("redeploying api's build"))).toBe(true)
+    // P22: the portal goes back first, then the API.
+    const started = rolled.lines.filter((l) => / started$/.test(l))
+    expect(started).toEqual([
+      'push frontend: started',
+      'deploy frontend: started',
+      'push api: started',
+      'deploy api: started',
+      'verify: started'
+    ])
   })
 
   it('B2: a rollback whose frontend build is gone is refused before the API moves', async () => {

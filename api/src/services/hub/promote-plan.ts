@@ -34,6 +34,20 @@ export function compareVersions(a: string, b: string): number {
 
 const realDigest = (d: string | 'present' | null): d is string => !!d && d !== 'present'
 
+/**
+ * The order a run takes its steps in. A promotion goes by position (the API before the portal);
+ * a rollback puts every frontend first, then the API, so people never get the newer portal
+ * against the older API while the portal redeploys, and a GitLab refusal of the portal's rerun
+ * stops the rollback before the API moved.
+ */
+export function runOrder<T extends { position: number; kind: 'api' | 'frontend' }>(
+  steps: T[],
+  kind: 'promote' | 'rollback'
+): T[] {
+  const rank = (s: T) => (kind === 'rollback' && s.kind === 'frontend' ? 0 : 1)
+  return [...steps].sort((a, b) => rank(a) - rank(b) || a.position - b.position)
+}
+
 /** The pin file: version, image digest, slim digest — one per line (same as promote-production.mjs). */
 function pinFor(
   version: string,
@@ -410,8 +424,9 @@ function linesFor(
     lines.push('Could not check whether a promotion is running — starting checks again')
   if (refused) return lines
 
-  for (const s of steps) lines.push(pushLine(input, s))
-  const deploying = steps.filter((s) => !s.noop)
+  const order = runOrder(steps, input.kind)
+  for (const s of order) lines.push(pushLine(input, s))
+  const deploying = order.filter((s) => !s.noop)
   deploying.forEach((s, i) => {
     const name = cap(s.component)
     const wait = s.beforeJob ? `wait for ${s.beforeJob}, then ` : ''
@@ -423,7 +438,7 @@ function linesFor(
         : `${name}: after the ${cap(deploying[i - 1].component)} deploy passes, ${redo ? '' : wait}${redo ? run : 'run its deploy job'} and wait for it`
     )
   })
-  for (const s of steps) {
+  for (const s of order) {
     const name = cap(s.component)
     lines.push(
       s.verifyUrl

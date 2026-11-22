@@ -503,6 +503,17 @@ describe('hub promotion planner', () => {
         expect(plan.lines.join('\n')).not.toMatch(/Image|record 0\.3\.8 as the version|merge/)
       })
 
+      it('P22: rolls the portal back first, then the API; a promotion keeps API first', () => {
+        const back = rollback()
+        const deploy = back.lines.filter((l) => /the deploy job/.test(l))
+        expect(deploy).toEqual([
+          'Frontend: rerun the deploy job of that build and wait for it',
+          'API: after the Frontend deploy passes, rerun the deploy job of that build and wait for it'
+        ])
+        const fwd = buildPromotionPlan(input())
+        expect(fwd.lines.filter((l) => /deploy job/.test(l))[0]).toMatch(/^API: /)
+      })
+
       it('ROLLBACK_NOT_RECORDED when the API build or its pipeline was not recorded', () => {
         const none = rollback({ rollbackBuild: { 2: recordedBuilds()[2] } })
         expect(codes(none)).toEqual(['ROLLBACK_NOT_RECORDED'])
