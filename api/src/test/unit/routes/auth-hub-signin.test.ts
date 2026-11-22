@@ -858,14 +858,46 @@ describe('GET /callback with the Hub unavailable', () => {
     expect(session.userId).toBeUndefined()
   })
 
-  it('the Hub redirecting back temporarily_unavailable → the direct hop', async () => {
+  it('a browser-delivered error=temporarily_unavailable hops that person, the probe stays up (P7-11)', async () => {
     const session = hubSession()
     const app = await build(session)
+    // The probe is up and cached.
+    expect((await app.inject({ method: 'GET', url: '/providers' })).json().data.hub.up).toBe(true)
+    const pings = hub.pingHits
     const res = await app.inject({
       method: 'GET',
       url: cbUrl({ error: 'temporarily_unavailable' })
     })
-    expect(res.headers.location).toMatch(/^\/api\/auth\/login\?direct=1&/)
+    expect(res.headers.location).toBe(
+      `/api/auth/login?direct=1&returnTo=${encodeURIComponent(RETURN_TO)}`
+    )
+    expect(session.hubFellBack).toBe(true)
+    expect((await app.inject({ method: 'GET', url: '/providers' })).json().data.hub.up).toBe(true)
+    expect(hub.pingHits).toBe(pings)
+    // Someone else's plain /login still goes to the Hub.
+    const other = await (await build(fakeSession())).inject({ method: 'GET', url: '/login' })
+    expect(other.headers.location).toContain(`${issuer}/authorize`)
+  })
+
+  it('this app’s own Entra keys unreachable → IDP_UNREACHABLE hop, Hub not marked down', async () => {
+    await seedUser()
+    answer(await hubToken())
+    const keysAt = h.entraJwksUri
+    h.entraJwksUri = 'http://127.0.0.1:9/keys'
+    try {
+      const session = hubSession()
+      const app = await build(session)
+      const res = await app.inject({ method: 'GET', url: cbUrl() })
+      expect(res.headers.location).toBe(
+        `/api/auth/login?direct=1&returnTo=${encodeURIComponent(RETURN_TO)}`
+      )
+      expect(session.userId).toBeUndefined()
+      expect(trackError).not.toHaveBeenCalled()
+      const other = await (await build(fakeSession())).inject({ method: 'GET', url: '/login' })
+      expect(other.headers.location).toContain(`${issuer}/authorize`)
+    } finally {
+      h.entraJwksUri = keysAt
+    }
   })
 })
 

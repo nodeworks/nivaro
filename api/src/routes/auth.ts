@@ -386,7 +386,8 @@ export async function authRoutes(app: FastifyInstance) {
   async function hubSigninFailed(req: FastifyRequest, reply: FastifyReply, err: HubSigninError) {
     const { returnTo, fellBack } = endHubAttempt(req)
     if (err.availability) {
-      noteHubSigninFailed()
+      // Only what this server saw itself marks the Hub down for everyone (P7-11).
+      if (err.markHubDown) noteHubSigninFailed()
       void noteSignInFailure(req, app.redis, {
         reason: 'provider_unavailable',
         method: 'oidc',
@@ -785,7 +786,7 @@ export async function authRoutes(app: FastifyInstance) {
       if (req.session.hubSignIn === true && providerId == null) {
         // Hub phase 7: the code is the Hub's; the account is found by its Entra object id only.
         const hubCfg = hubSigninConfig()
-        if (!hubCfg) throw new HubSigninError('HUB_UNREACHABLE', { availability: true })
+        if (!hubCfg) throw new HubSigninError('HUB_UNREACHABLE')
         profile = await linkHubProfile(
           await handleHubCallback(hubCfg, requestUrl, {
             state: oidcState,

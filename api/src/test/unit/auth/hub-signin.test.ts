@@ -260,6 +260,16 @@ async function codeOf(p: Promise<unknown>): Promise<{ code: string; availability
   throw new Error('expected a HubSigninError')
 }
 
+async function errOf(p: Promise<unknown>): Promise<InstanceType<typeof HubSigninError>> {
+  try {
+    await p
+  } catch (err) {
+    expect(err).toBeInstanceOf(HubSigninError)
+    return err as InstanceType<typeof HubSigninError>
+  }
+  throw new Error('expected a HubSigninError')
+}
+
 // ─── buildHubLoginUrl ────────────────────────────────────────────────────────
 
 describe('buildHubLoginUrl', () => {
@@ -513,6 +523,8 @@ describe('handleHubCallback', () => {
     for (const error of ['server_error', 'temporarily_unavailable']) {
       const out = await codeOf(handleHubCallback(cfg, callbackUrl({ error }), args))
       expect(out).toEqual({ code: 'HUB_REFUSED', availability: true })
+      const e = await errOf(handleHubCallback(cfg, callbackUrl({ error }), args))
+      expect(e.markHubDown).toBe(false)
     }
     expect(hub.tokenHits).toBe(0)
   })
@@ -526,6 +538,49 @@ describe('handleHubCallback', () => {
     hub.tokenEndpoint = 'http://127.0.0.1:9/token'
     const out = await codeOf(handleHubCallback(cfg, callbackUrl(), args))
     expect(out).toEqual({ code: 'HUB_UNREACHABLE', availability: true })
+    // The server saw it: the Hub is marked down (P7-11).
+    hub.tokenEndpoint = 'http://127.0.0.1:9/token'
+    _resetHubSigninForTests()
+    expect((await errOf(handleHubCallback(cfg, callbackUrl(), args))).markHubDown).toBe(true)
+  })
+
+  it('a browser-delivered server_error marks nothing down (P7-11)', async () => {
+    const e = await errOf(handleHubCallback(cfg, callbackUrl({ error: 'server_error' }), args))
+    expect(e.availability).toBe(true)
+    expect(e.markHubDown).toBe(false)
+  })
+
+  it('a malformed Hub token response → TOKEN_INVALID, never a network failure', async () => {
+    const bodies: Array<{ status: number; body: unknown }> = [
+      { status: 200, body: { access_token: 'nvh_x', token_type: 'Bearer', id_token: 42 } },
+      { status: 200, body: { token_type: 'Bearer', id_token: 'x' } },
+      { status: 200, body: { access_token: 7, token_type: 'Bearer' } },
+      { status: 200, body: { access_token: 'nvh_x', token_type: 'Bearer', id_token: 'a.b.c' } },
+      { status: 200, body: '<html>not json</html>' }
+    ]
+    for (const b of bodies) {
+      hub.token = async () => b
+      const e = await errOf(handleHubCallback(cfg, callbackUrl(), args))
+      expect({ body: b.body, code: e.code, down: e.markHubDown }).toEqual({
+        body: b.body,
+        code: 'TOKEN_INVALID',
+        down: false
+      })
+    }
+  })
+
+  it('this app’s Entra keys unreachable → IDP_UNREACHABLE: hop to direct, Hub NOT marked down', async () => {
+    answer(await hubToken())
+    const keysAt = fake.entraJwksUri
+    fake.entraJwksUri = 'http://127.0.0.1:9/keys'
+    try {
+      const e = await errOf(handleHubCallback(cfg, callbackUrl(), args))
+      expect(e.code).toBe('IDP_UNREACHABLE')
+      expect(e.availability).toBe(true)
+      expect(e.markHubDown).toBe(false)
+    } finally {
+      fake.entraJwksUri = keysAt
+    }
   })
 
   it('token endpoint answering 503 → HUB_UNREACHABLE; 400 invalid_grant → HUB_REFUSED', async () => {

@@ -45,11 +45,19 @@ export type HubSigninErrorCode =
   | 'EVIDENCE_INVALID'
   | 'EVIDENCE_MISMATCH'
   | 'TOKEN_INVALID'
+  | 'IDP_UNREACHABLE'
 
-/** A Hub sign-in that failed. `availability` = the Hub is (temporarily) not there: fall back. */
+/**
+ * A Hub sign-in that failed. `availability` = sign-in is (temporarily) not possible this way:
+ * the person hops once to direct. `markHubDown` (ruling P7-11) = THIS server saw the Hub fail
+ * (discovery, a network error or 5xx at the token exchange, the Hub's JWKS): only then is the
+ * Hub marked down for everyone. A browser-delivered `error=server_error` hops that one person
+ * and marks nothing; this app's own Entra being unreachable (IDP_UNREACHABLE) is not the Hub.
+ */
 export class HubSigninError extends Error {
   readonly code: HubSigninErrorCode
   readonly availability: boolean
+  readonly markHubDown: boolean
   /** The OAuth error the Hub answered (`access_denied`, `invalid_grant`, …), when it did. */
   readonly hubError: string | null
   constructor(code: HubSigninErrorCode, opts: { availability?: boolean; hubError?: string } = {}) {
@@ -59,7 +67,10 @@ export class HubSigninError extends Error {
     this.code = code
     this.hubError = opts.hubError ? opts.hubError.replace(/[^a-z_]/gi, '').slice(0, 64) : null
     this.availability =
-      !!opts.availability && (code === 'HUB_UNREACHABLE' || code === 'HUB_REFUSED')
+      code === 'HUB_UNREACHABLE' ||
+      code === 'IDP_UNREACHABLE' ||
+      (!!opts.availability && code === 'HUB_REFUSED')
+    this.markHubDown = code === 'HUB_UNREACHABLE'
   }
 }
 
@@ -117,15 +128,22 @@ function remoteKeys(url: string): ReturnType<typeof createRemoteJWKSet> {
   return set
 }
 
+/** An undici (UND_ERR_…) or system (ECONNREFUSED, ETIMEDOUT, …) error code. */
+function netCode(code: unknown): boolean {
+  return typeof code === 'string' && /^(UND_ERR_|E[A-Z]+$)/.test(code)
+}
+
 /** A network failure (as opposed to a refusal or a bad token). */
 function isNetworkError(err: unknown, depth = 0): boolean {
   if (!err || depth > 3) return false
   const e = err as { name?: string; code?: string; message?: string; cause?: unknown }
-  if (err instanceof TypeError) return true
+  // Node's fetch fails with TypeError('fetch failed') (cause: an undici / system error). Any
+  // other TypeError — oauth4webapi's CodedTypeError on a malformed answer — is not the network.
+  if (err instanceof TypeError)
+    return e.message === 'fetch failed' || netCode((e.cause as { code?: unknown })?.code)
   if (e.name === 'TimeoutError' || e.name === 'AbortError') return true
   if (e.code === 'ERR_JWKS_TIMEOUT') return true
-  if (typeof e.code === 'string' && /^(ECONN|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|UND_ERR)/.test(e.code))
-    return true
+  if (netCode(e.code)) return true
   // jose: a key set endpoint answering anything but 200.
   if (/Expected 200 OK from the JSON Web Key Set/i.test(String(e.message ?? ''))) return true
   return isNetworkError(e.cause, depth + 1)
@@ -198,7 +216,7 @@ export async function verifyIdpEvidence(
     jwksUri = meta.jwks_uri
   } catch {
     // This app's own identity provider cannot be reached: direct sign-in will say so.
-    throw new HubSigninError('HUB_UNREACHABLE', { availability: true })
+    throw new HubSigninError('IDP_UNREACHABLE')
   }
   if (!issuer || !jwksUri) throw new HubSigninError('EVIDENCE_INVALID')
 
@@ -211,7 +229,7 @@ export async function verifyIdpEvidence(
       clockTolerance: 60
     }))
   } catch (err) {
-    if (isNetworkError(err)) throw new HubSigninError('HUB_UNREACHABLE', { availability: true })
+    if (isNetworkError(err)) throw new HubSigninError('IDP_UNREACHABLE')
     throw new HubSigninError('EVIDENCE_INVALID')
   }
 
@@ -276,18 +294,15 @@ function classifyGrantError(err: unknown): HubSigninError {
     })
   }
   if (err instanceof oidc.ResponseBodyError) {
-    if (err.status >= 500) return new HubSigninError('HUB_UNREACHABLE', { availability: true })
+    if (err.status >= 500) return new HubSigninError('HUB_UNREACHABLE')
     return new HubSigninError('HUB_REFUSED', { hubError: err.error })
   }
-  if (isNetworkError(err)) return new HubSigninError('HUB_UNREACHABLE', { availability: true })
+  if (isNetworkError(err)) return new HubSigninError('HUB_UNREACHABLE')
   const e = err as { code?: string; cause?: unknown }
-  if (e.code === 'OAUTH_RESPONSE_IS_NOT_JSON')
-    return new HubSigninError('HUB_UNREACHABLE', { availability: true })
-  if (e.code === 'OAUTH_RESPONSE_IS_NOT_CONFORM') {
-    const status = (e.cause as { status?: number } | undefined)?.status ?? 0
-    return status >= 500 || status === 0
-      ? new HubSigninError('HUB_UNREACHABLE', { availability: true })
-      : new HubSigninError('HUB_REFUSED')
+  const status = (e.cause as { status?: number } | undefined)?.status ?? 0
+  if (e.code === 'OAUTH_RESPONSE_IS_NOT_JSON' || e.code === 'OAUTH_RESPONSE_IS_NOT_CONFORM') {
+    if (status >= 500) return new HubSigninError('HUB_UNREACHABLE')
+    if (e.code === 'OAUTH_RESPONSE_IS_NOT_CONFORM') return new HubSigninError('HUB_REFUSED')
   }
   // Claim checks (iss / aud / nonce / state / alg / exp): a bad token, never a fallback.
   return new HubSigninError('TOKEN_INVALID')
@@ -302,7 +317,7 @@ export async function handleHubCallback(
   try {
     conf = await hubDiscovery(cfg)
   } catch {
-    throw new HubSigninError('HUB_UNREACHABLE', { availability: true })
+    throw new HubSigninError('HUB_UNREACHABLE')
   }
 
   let tokens: Awaited<ReturnType<typeof oidc.authorizationCodeGrant>>
@@ -336,7 +351,7 @@ export async function handleHubCallback(
       }
     ))
   } catch (err) {
-    if (isNetworkError(err)) throw new HubSigninError('HUB_UNREACHABLE', { availability: true })
+    if (isNetworkError(err)) throw new HubSigninError('HUB_UNREACHABLE')
     throw new HubSigninError('TOKEN_INVALID')
   }
   if (claims.nonce !== a.nonce) throw new HubSigninError('TOKEN_INVALID')
