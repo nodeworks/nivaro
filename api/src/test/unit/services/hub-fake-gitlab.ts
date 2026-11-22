@@ -1,5 +1,8 @@
 // In-memory GitLab (REST v4, the calls the Hub's GitLab write client makes) and JSON endpoints
 // for verify URLs, served through a `fetch` stub. Hub promotion tests run the real client over it.
+// Phase 3 adds the provisioning calls: fork + import status, DELETE /fork, CI variables,
+// protected branches, commit actions checked like GitLab (create vs update), GET /user and
+// GET /namespaces/:id.
 
 import { createHash } from 'node:crypto'
 import type { GitCtx } from '../../../services/gitlab-client.js'
@@ -48,7 +51,29 @@ interface Project {
   refuseMerge?: boolean
   /** Status every request answers instead (a broken token, a dead GitLab). */
   answerAll?: { status: number; body: unknown }
+  /** Numeric project id (GitLab answers it; calls may name the project by it). */
+  id?: number
+  path_with_namespace?: string
+  /** Project this one was forked from (null once DELETE /fork removed the relation). */
+  forkedFrom?: string | null
+  /** import_status values a GET /projects/:id walks through (the last one stays). */
+  importStatuses?: string[]
+  importAt?: number
+  variables?: FakeVariable[]
+  protectedBranches?: Map<string, { push_access_level: number; merge_access_level: number }>
 }
+
+export interface FakeVariable {
+  key: string
+  value: string
+  environment_scope: string
+  masked: boolean
+  protected: boolean
+  raw: boolean
+}
+
+/** GitLab's rule for a masked value: ≥ 8 characters of the Base64 alphabet plus @ : . ~ (one line). */
+const MASKABLE = /^[A-Za-z0-9+/=@:.~-]{8,}$/
 
 export interface Call {
   method: string
@@ -71,6 +96,14 @@ export class FakeGitLab {
   served = new Map<string, Array<Record<string, unknown> | number>>()
   servedReads = new Map<string, number>()
   private nextId = 100
+  /** Namespaces a fork may land in (full path → kind). */
+  namespaces = new Map<string, { id: number; kind: 'group' | 'user' }>()
+  /** The user the token belongs to (GET /user). */
+  user = { id: 7, username: 'hub-bot' }
+  /** import_status values every new fork walks through. */
+  forkImport: string[] = ['scheduled', 'started', 'finished']
+  private projectSeq = 1000
+  private byId = new Map<number, string>()
 
   ctx(project: string): GitCtx {
     return { provider: 'gitlab', base: this.base, project, token: this.token, ref: null }
@@ -84,8 +117,37 @@ export class FakeGitLab {
       pipelines: [],
       jobs
     }
-    this.projects.set(name, p)
+    this.register(name, p)
     return p
+  }
+
+  private register(name: string, p: Project): void {
+    p.id = this.projectSeq++
+    p.path_with_namespace = name
+    p.forkedFrom ??= null
+    p.importStatuses ??= ['none']
+    p.importAt = 0
+    p.variables ??= []
+    p.protectedBranches ??= new Map()
+    this.projects.set(name, p)
+    this.byId.set(p.id, name)
+  }
+
+  /** A namespace a fork may land in. */
+  namespace(path: string, kind: 'group' | 'user' = 'group'): void {
+    this.namespaces.set(path, { id: this.projectSeq++, kind })
+  }
+
+  variablesOf(project: string): FakeVariable[] {
+    return this.must(project).variables ?? []
+  }
+
+  protectedOf(project: string): string[] {
+    return [...(this.must(project).protectedBranches?.keys() ?? [])]
+  }
+
+  forkedFromOf(project: string): string | null {
+    return this.must(project).forkedFrom ?? null
   }
 
   /** A commit on `branch` (created when missing) with `files` changed. */
@@ -213,6 +275,26 @@ export class FakeGitLab {
     const json = (status: number, b?: unknown) =>
       new Response(b === undefined ? null : JSON.stringify(b), { status })
 
+    const root = `${this.base}/api/v4`
+    if (url === `${root}/user` || url.startsWith(`${root}/namespaces/`)) {
+      const path = decodeURIComponent(url.slice(root.length))
+      this.calls.push({
+        method,
+        url,
+        path,
+        token: headers['PRIVATE-TOKEN'] ?? null,
+        redirect: init.redirect,
+        body
+      })
+      if (headers['PRIVATE-TOKEN'] !== this.token) return json(401, { message: '401 Unauthorized' })
+      if (path === '/user') return json(200, { id: this.user.id, username: this.user.username })
+      const ns = path.slice('/namespaces/'.length)
+      const found = this.namespaces.get(ns)
+      return found
+        ? json(200, { id: found.id, kind: found.kind, full_path: ns, path: ns.split('/').pop() })
+        : json(404, { message: '404 Namespace Not Found' })
+    }
+
     if (!url.startsWith(`${this.base}/api/v4/projects/`)) {
       const seqd = this.served.get(url)
       this.servedReads.set(url, (this.servedReads.get(url) ?? 0) + 1)
@@ -222,9 +304,11 @@ export class FakeGitLab {
     }
 
     const rest = url.slice(`${this.base}/api/v4/projects/`.length)
-    const slash = rest.indexOf('/')
-    const project = decodeURIComponent(rest.slice(0, slash))
-    const u = new URL(`http://x${rest.slice(slash)}`)
+    const cut = rest.search(/[/?]/)
+    const slash = cut === -1 ? rest.length : cut
+    const named = decodeURIComponent(rest.slice(0, slash))
+    const project = /^\d+$/.test(named) ? (this.byId.get(Number(named)) ?? named) : named
+    const u = new URL(`http://x/${rest.slice(slash).replace(/^\//, '')}`)
     const path = decodeURIComponent(u.pathname)
     const q = u.searchParams
     this.calls.push({
@@ -241,6 +325,96 @@ export class FakeGitLab {
     if (headers['PRIVATE-TOKEN'] !== this.token) return json(401, { message: '401 Unauthorized' })
 
     let m: RegExpMatchArray | null
+    const view = (proj: Project, status?: string) => ({
+      id: proj.id,
+      path_with_namespace: proj.path_with_namespace,
+      web_url: `${this.base}/${proj.path_with_namespace}`,
+      import_status: status ?? proj.importStatuses?.[proj.importAt ?? 0] ?? 'none',
+      ...(proj.forkedFrom
+        ? { forked_from_project: { id: this.projects.get(proj.forkedFrom)?.id } }
+        : {})
+    })
+    if (method === 'GET' && path === '/') {
+      const out = view(p)
+      const list = p.importStatuses ?? ['none']
+      p.importAt = Math.min((p.importAt ?? 0) + 1, list.length - 1)
+      return json(200, out)
+    }
+    if (method === 'POST' && path === '/fork') {
+      const ns = String(body?.namespace_path ?? '')
+      if (!this.namespaces.has(ns)) return json(404, { message: '404 Namespace Not Found' })
+      const full = `${ns}/${body.path}`
+      if (this.projects.has(full))
+        return json(409, { message: { path: ['has already been taken'], token: this.token } })
+      const fork: Project = {
+        branches: new Map(p.branches),
+        commits: new Map(p.commits),
+        mrs: new Map(),
+        pipelines: [],
+        jobs: p.jobs,
+        forkedFrom: project,
+        importStatuses: [...this.forkImport]
+      }
+      this.register(full, fork)
+      const made = view(fork)
+      fork.importAt = Math.min(1, this.forkImport.length - 1)
+      return json(201, made)
+    }
+    if (method === 'DELETE' && path === '/fork') {
+      if (!p.forkedFrom) return json(304)
+      p.forkedFrom = null
+      return json(204)
+    }
+    if (method === 'POST' && path === '/variables') {
+      const key = String(body?.key ?? '')
+      const scope = String(body?.environment_scope ?? '*')
+      const vars = p.variables ?? []
+      if (!/^[A-Za-z0-9_]{1,255}$/.test(key)) return json(400, { message: { key: ['is invalid'] } })
+      if (body?.masked && !MASKABLE.test(String(body?.value ?? '')))
+        return json(400, { message: { value: [`is invalid ${body.value}`] } })
+      if (vars.some((v) => v.key === key && v.environment_scope === scope))
+        return json(400, { message: { key: [`(${key}) has already been taken`] } })
+      const v: FakeVariable = {
+        key,
+        value: String(body.value ?? ''),
+        environment_scope: scope,
+        masked: !!body.masked,
+        protected: !!body.protected,
+        raw: !!body.raw
+      }
+      vars.push(v)
+      p.variables = vars
+      return json(201, { ...v, value: undefined })
+    }
+    m = path.match(/^\/variables\/([^/]+)$/)
+    if (m && method === 'PUT') {
+      const key = m[1]
+      const scope = q.get('filter[environment_scope]')
+      const hits = (p.variables ?? []).filter(
+        (v) => v.key === key && (scope == null || v.environment_scope === scope)
+      )
+      if (!hits.length) return json(404, { message: '404 Variable Not Found' })
+      if (hits.length > 1) return json(409, { message: 'There are multiple variables with key' })
+      const v = hits[0]
+      if (body?.masked && !MASKABLE.test(String(body?.value ?? v.value)))
+        return json(400, { message: { value: ['is invalid'] } })
+      if (body?.value !== undefined) v.value = String(body.value)
+      if (body?.masked !== undefined) v.masked = !!body.masked
+      if (body?.protected !== undefined) v.protected = !!body.protected
+      if (body?.raw !== undefined) v.raw = !!body.raw
+      return json(200, { ...v, value: undefined })
+    }
+    if (method === 'POST' && path === '/protected_branches') {
+      const name = String(body?.name ?? '')
+      const prot = p.protectedBranches ?? new Map()
+      p.protectedBranches = prot
+      if (prot.has(name)) return json(409, { message: `Protected branch '${name}' already exists` })
+      prot.set(name, {
+        push_access_level: Number(body?.push_access_level ?? 40),
+        merge_access_level: Number(body?.merge_access_level ?? 40)
+      })
+      return json(201, { name })
+    }
     if (method === 'POST' && path === '/repository/branches') {
       const at = this.resolve(p, body.ref)
       if (!at || p.branches.has(body.branch)) return json(400, { message: 'bad ref' })
@@ -319,7 +493,13 @@ export class FakeGitLab {
       const parent = p.branches.get(body.branch)
       if (!parent) return json(400, { message: 'no branch' })
       const tree = new Map(p.commits.get(parent)?.tree)
-      for (const a of body.actions) tree.set(a.file_path, a.content)
+      for (const a of body.actions) {
+        if (a.action === 'create' && tree.has(a.file_path))
+          return json(400, { message: 'A file with this name already exists' })
+        if (a.action === 'update' && !tree.has(a.file_path))
+          return json(400, { message: "A file with this name doesn't exist" })
+        tree.set(a.file_path, a.content)
+      }
       const id = sha(body.commit_message)
       p.commits.set(id, { id, parents: [parent], title: body.commit_message, tree })
       p.branches.set(body.branch, id)

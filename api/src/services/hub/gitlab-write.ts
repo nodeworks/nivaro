@@ -139,6 +139,8 @@ async function call(
   })
 }
 
+export { call as gitlabCall }
+
 function obj(body: unknown): Record<string, unknown> {
   return body && typeof body === 'object' && !Array.isArray(body)
     ? (body as Record<string, unknown>)
