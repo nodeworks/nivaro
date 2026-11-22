@@ -119,11 +119,11 @@ const STATUS = {
   process: {}
 }
 
-function routes(detail: SharedDetail = DETAIL) {
+function routes(detail: SharedDetail = DETAIL, status: unknown = STATUS) {
   h.get.mockImplementation(async (url: string) => {
     if (url === '/hub/shared') return { data: { data: LIST } }
     if (url === `/hub/shared/${detail.row.id}`) return { data: { data: detail } }
-    if (url === `/hub/shared/${detail.row.id}/status`) return { data: { data: STATUS } }
+    if (url === `/hub/shared/${detail.row.id}/status`) return { data: { data: status } }
     if (url === '/hub/drivers') return { data: { data: [] } }
     throw Object.assign(new Error('not found'), { response: { status: 404, data: {} } })
   })
@@ -272,6 +272,32 @@ describe('HubShared', () => {
     expect(screen.getByRole('region', { name: 'Run it yourself' })).toHaveTextContent(
       'HUB_SHARED_DEPLOYMENT=shared-one'
     )
+  })
+
+  it('a deployment that does not answer says why in plain words', async () => {
+    routes(DETAIL, {
+      state: 'unreachable',
+      code: 'LINK_REFUSED',
+      message: 'The deployment refused the token.',
+      checked_at: new Date().toISOString()
+    })
+    wrap('/hub/shared?shared=4')
+    expect(await screen.findByText('Not answering')).toBeInTheDocument()
+    expect(screen.getByText("The deployment did not accept the Hub's token")).toBeInTheDocument()
+    expect(shownText()).not.toMatch(/LINK_REFUSED/)
+  })
+
+  it('deleting a deployment that served apps retires it and stays on its page', async () => {
+    h.del.mockResolvedValue({ data: { data: { id: 4, outcome: 'retired' } } })
+    wrap('/hub/shared?shared=4')
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete now?' }))
+    await waitFor(() => expect(h.del).toHaveBeenCalledWith('/hub/shared/4'))
+    // The detail is read again (now retired); the page stays on it.
+    await waitFor(() =>
+      expect(h.get.mock.calls.filter(([u]) => u === '/hub/shared/4').length).toBeGreaterThan(1)
+    )
+    expect(screen.getByRole('region', { name: 'Deployment token' })).toBeInTheDocument()
   })
 
   it('delete is a two-press inline confirm; a refusal shows in plain words, no status code', async () => {
