@@ -492,3 +492,70 @@ describe('fix round 1: lookup repair, shared tokens, write errors', () => {
     })
   })
 })
+
+describe('P7-3 follow-up: a failed lookup repair never carries the sealed token', () => {
+  const TOKEN = `${'q'.repeat(20)}uiet-0123456789abcdef`
+  const logged: string[] = []
+  let spy: ReturnType<typeof vi.spyOn>
+  beforeEach(() => {
+    logged.length = 0
+    spy = vi.spyOn(console, 'error').mockImplementation((...a: unknown[]) => {
+      logged.push(
+        a.map((x) => (x instanceof Error ? `${x.message}\n${x.stack}` : String(x))).join(' ')
+      )
+    })
+  })
+  afterEach(async () => {
+    spy.mockRestore()
+    await db.raw('DROP TRIGGER IF EXISTS hub_env_fail_upd')
+  })
+
+  it('the repair update is conditioned on the old lookup; its error holds no enc: text', async () => {
+    const appId = await makeApp()
+    const sealed = sealSecret(`${TOKEN}-new`)
+    expect(sealed.startsWith('enc:')).toBe(true)
+    await makeEnv(appId, { hub_token: sealed, hub_token_lookup: linkToken.tokenLookupHash(TOKEN) })
+    await db.raw(
+      "CREATE TRIGGER hub_env_fail_upd BEFORE UPDATE ON nivaro_hub_environments BEGIN SELECT RAISE(ABORT, 'disk on fire'); END"
+    )
+    let caught: unknown
+    try {
+      await linkToken.environmentForLinkToken(TOKEN)
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(Error)
+    const err = caught as Error & { cause?: unknown }
+    expect(err.message).toBe('Repairing hub token lookups failed')
+    expect(err.cause).toBeUndefined()
+    const text = [
+      err.message,
+      String(err.stack),
+      JSON.stringify(err, Object.getOwnPropertyNames(err)),
+      logged.join('\n')
+    ].join('\n')
+    expect(text).not.toMatch(/enc:|disk on fire|update /i)
+    expect(text).not.toContain(sealed)
+    expect(logged).toHaveLength(1)
+    expect(logged[0]).toMatch(/^hub: repairing hub token lookups failed \([A-Za-z0-9_]+\)$/)
+  })
+
+  it('a token rewritten (with its own lookup) during the repair keeps the newer lookup', async () => {
+    const appId = await makeApp()
+    const envId = await makeEnv(appId, {
+      hub_token: sealSecret(`${TOKEN}-new`),
+      hub_token_lookup: linkToken.tokenLookupHash(TOKEN)
+    })
+    // The repair read the old lookup; a concurrent write puts a third token with its lookup.
+    await db('nivaro_hub_environments')
+      .where({ id: envId })
+      .update({
+        hub_token: sealSecret(`${TOKEN}-third`),
+        hub_token_lookup: linkToken.tokenLookupHash(`${TOKEN}-third`)
+      })
+    expect(await linkToken.environmentForLinkToken(`${TOKEN}-third`)).toMatchObject({
+      environment_id: envId
+    })
+    expect(await linkToken.environmentForLinkToken(`${TOKEN}-new`)).toBeNull()
+  })
+})

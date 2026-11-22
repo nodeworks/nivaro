@@ -165,6 +165,7 @@ import { healthRoutes } from './health.js'
 import { helpVideoAdminRoutes } from './help-video-admin.js'
 import { helpVideoMediaRoutes, helpVideosRoutes } from './help-videos.js'
 import { hierarchyRoutes } from './hierarchy.js'
+import { hubAppLinkRoutes } from './hub-app-link.js'
 import { hubLinkRoutes } from './hub-link.js'
 import { hubRoutes } from './hub.js'
 import { hubOidcRoutes } from './hub-oidc.js'
@@ -493,6 +494,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(hubRoutes, { prefix: '/hub' })
   await app.register(hubSigninAdminRoutes, { prefix: '/hub/signin' })
   await app.register(hubOidcRoutes, { prefix: '/hub/oidc' })
+  await app.register(hubAppLinkRoutes, { prefix: '/hub/app-link' })
   await app.register(releaseRunsRoutes, { prefix: '/release' })
   await app.register(runbookRoutes, { prefix: '/runbooks' })
   // Environment refresh copies whole databases between environments on one SQL Server — a

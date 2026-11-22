@@ -63,9 +63,37 @@ export function _resetLinkTokenForTests(): void {
 /**
  * Makes every lookup match its sealed token: missing or stale ones are rewritten, a cleared
  * token's lookup is removed. An unreadable seal is left alone (it never matches anyway). Each
- * write names the sealed value it was computed from, so a concurrent token write wins.
+ * write is conditioned on the lookup it read (never on the sealed token: knex inlines bindings
+ * into its error messages, so a failed write would carry the sealed token into the logs), so a
+ * concurrent token write, which writes its own lookup, wins. A stale lookup left by a racing
+ * older replica only ever fails closed (byLookup confirms against the sealed token).
  */
 async function repairLookups(): Promise<void> {
+  try {
+    await rewriteLookups()
+  } catch (e) {
+    throw repairFailed(e)
+  }
+}
+
+/** An engine error code or name worth logging: short word characters only, never the message. */
+function errorTag(e: unknown): string {
+  const err = e as { code?: unknown; number?: unknown; name?: unknown }
+  for (const v of [err?.code, err?.number, err?.name]) {
+    const s = typeof v === 'number' ? String(v) : typeof v === 'string' ? v : ''
+    if (/^[A-Za-z0-9_]{1,40}$/.test(s)) return s
+  }
+  return 'unknown'
+}
+
+/** A failed repair: a fixed log line with the engine's code, and a generic error (no cause). */
+function repairFailed(e: unknown): Error {
+  // biome-ignore lint/suspicious/noConsole: the failure must reach the server log (fixed text)
+  console.error(`hub: repairing hub token lookups failed (${errorTag(e)})`)
+  return new Error('Repairing hub token lookups failed')
+}
+
+async function rewriteLookups(): Promise<void> {
   await db(ENVS)
     .whereNull('hub_token')
     .whereNotNull('hub_token_lookup')
@@ -82,7 +110,10 @@ async function repairLookups(): Promise<void> {
     if (!plain) continue
     const want = tokenLookupHash(plain)
     if (r.hub_token_lookup === want) continue
-    await db(ENVS).where({ id: r.id, hub_token: r.hub_token }).update({ hub_token_lookup: want })
+    const q = db(ENVS).where({ id: r.id })
+    if (r.hub_token_lookup == null) q.whereNull('hub_token_lookup')
+    else q.where({ hub_token_lookup: r.hub_token_lookup })
+    await q.update({ hub_token_lookup: want })
   }
 }
 

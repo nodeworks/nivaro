@@ -40,6 +40,8 @@ export function maintenanceExemptPath(url: string): boolean {
     url.startsWith('/api/internal/render/') ||
     // The Hub's OpenID provider (phase 7): apps sign people in through it during maintenance.
     url.startsWith('/api/hub/oidc/') ||
+    // Apps report sign-ins to the Hub's switcher with their hub token, never a person.
+    /^\/api\/hub\/app-link\/signins(\?|$)/.test(url) ||
     // Teams calls the bot with a Connector JWT, never a person; the route judges its own
     // activities (message/install stay answerable, invokes say "in maintenance" themselves).
     url.startsWith('/api/teams/messages') ||

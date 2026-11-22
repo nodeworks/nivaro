@@ -6,6 +6,7 @@ import { db } from '../db/index.js'
 import { failedAuthLimiter } from '../lib/auth-fail-limiter.js'
 import { escapeHtml, randomToken, verifyPkceS256, withAuthResponse } from '../lib/oauth.js'
 import { sessionPrincipal } from '../middleware/authenticate.js'
+import { accessPendingSignIn } from '../services/access-pending.js'
 import { hubModeEnabled } from '../services/hub/mode.js'
 import { checkAuthorizeRequest } from '../services/hub/oidc/authorize-check.js'
 import {
@@ -18,6 +19,7 @@ import { issueCode, takeCode } from '../services/hub/oidc/codes.js'
 import { bareEvidence, evidenceFresh } from '../services/hub/oidc/evidence.js'
 import { hubIssuer, publishedJwks, sidHash } from '../services/hub/oidc/keys.js'
 import { HUB_ID_TOKEN_TTL_S, mintIdToken } from '../services/hub/oidc/tokens.js'
+import { recordSignin } from '../services/hub/signins.js'
 import { canSignIn } from '../services/users.js'
 
 /**
@@ -290,6 +292,11 @@ export async function hubOidcRoutes(app: FastifyInstance) {
     }
     const user = signedIn.user
     if (!canSignIn(user)) return back('access_denied', 'This account cannot sign in.')
+    // Ruling P7-7: the new-user gate authenticate runs (accessPendingGate). A Hub account still
+    // in First Access / Needs Authorization may use the Hub's request-access screen only; it
+    // never signs anyone in to an app.
+    if (await accessPendingSignIn(user, 'session'))
+      return back('access_denied', 'This account is waiting for access to the Hub.')
     const userId = String(user.id)
     const sid = typeof req.session?.sessionId === 'string' ? req.session.sessionId : ''
     const ev = req.session?.hubIdpEvidence
@@ -410,6 +417,20 @@ export async function hubOidcRoutes(app: FastifyInstance) {
     } catch (err) {
       // HubKeyError included: only its code is logged, the answer carries no text.
       return tokenFailed(req, reply, err)
+    }
+    // The switcher's row for this environment (Decision 12). Never fails the sign-in.
+    try {
+      await recordSignin({
+        environment_id: client.environment_id,
+        app_id: client.app_id,
+        via: 'hub',
+        oid: rec.evidence.oid,
+        tid: rec.evidence.tid,
+        email: rec.evidence.email,
+        hub_user_id: String(user.id)
+      })
+    } catch {
+      req.log.warn({ route: 'hub-oidc-token' }, 'Hub sign-in: the sign-in was not recorded')
     }
     return reply.send({
       access_token: randomToken('nvh_'),

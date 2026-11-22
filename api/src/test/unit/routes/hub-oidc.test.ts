@@ -51,6 +51,7 @@ const { verifyHubIdToken } = await import('../../../services/hub/oidc/tokens.js'
 const { captureEvidence } = await import('../../../services/hub/oidc/evidence.js')
 const { authenticate } = await import('../../../middleware/authenticate.js')
 const { bustSessionPolicy } = await import('../../../services/session-policy.js')
+const { resetAccessPendingCache } = await import('../../../services/access-pending.js')
 
 const ISSUER = 'https://hub.example.com/api/hub/oidc'
 const BASE = '/api/hub/oidc'
@@ -1091,5 +1092,100 @@ describe('mounting', () => {
     expect(res.statusCode).toBe(404)
     await off.close()
     delete process.env.CLOUD_META_DB_URL
+  })
+})
+
+describe('task 5: the switcher row and the new-user gate', () => {
+  const ROLE_START = 'R0000000-0000-4000-8000-00000000000A'
+  const ROLE_REVIEW = 'R0000000-0000-4000-8000-00000000000B'
+  const ROLE_ADMIN = 'R0000000-0000-4000-8000-00000000000C'
+
+  beforeAll(async () => {
+    await db.schema.alterTable('nivaro_settings', (t) => {
+      t.string('new_user_role')
+      t.string('access_request_role')
+    })
+    await db.schema.createTable('nivaro_roles', (t) => {
+      t.string('id').primary()
+      t.boolean('admin_access').defaultTo(false)
+    })
+    await db('nivaro_roles').insert([
+      { id: ROLE_START, admin_access: false },
+      { id: ROLE_REVIEW, admin_access: false },
+      { id: ROLE_ADMIN, admin_access: true }
+    ])
+  })
+  beforeEach(async () => {
+    await db('nivaro_hub_signins').del()
+    await db('nivaro_settings').update({
+      new_user_role: ROLE_START,
+      access_request_role: ROLE_REVIEW
+    })
+    resetAccessPendingCache()
+  })
+  afterEach(async () => {
+    await db.raw('DROP TRIGGER IF EXISTS hub_signin_fail_ins')
+    await db('nivaro_settings').update({ new_user_role: null, access_request_role: null })
+    resetAccessPendingCache()
+  })
+
+  it('a redeemed code writes one hub row per identity key for the client’s environment', async () => {
+    const res = await redeem(await getCode())
+    expect(res.statusCode).toBe(200)
+    const rows = await db('nivaro_hub_signins').orderBy('identity_key')
+    expect(rows.map((r) => r.identity_key)).toEqual([
+      `email:pat@entra.example.com`,
+      `entra:${TID}:${OID}`
+    ])
+    for (const r of rows) {
+      expect(r.environment_id).toBe(envA)
+      expect(r.via).toBe('hub')
+      expect(String(r.hub_user_id)).toBe(USER)
+    }
+  })
+
+  it('a failed sign-in record never fails the token response', async () => {
+    await db.raw(
+      "CREATE TRIGGER hub_signin_fail_ins BEFORE INSERT ON nivaro_hub_signins BEGIN SELECT RAISE(ABORT, 'disk on fire'); END"
+    )
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      const res = await redeem(await getCode())
+      expect(res.statusCode).toBe(200)
+      expect(res.json().id_token).toBeTruthy()
+      expect(await db('nivaro_hub_signins').count({ n: '*' }).first()).toMatchObject({ n: 0 })
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('P7-7: a Hub account in First Access or Needs Authorization gets access_denied, no code', async () => {
+    for (const role of [ROLE_START, ROLE_REVIEW]) {
+      await db('nivaro_users').where({ id: USER }).update({ role })
+      sessions.clear()
+      signedInSession('sid-pending')
+      const res = await authorize(authorizeQuery(), cookie('sid-pending'))
+      expect(res.statusCode, role).toBe(302)
+      const loc = new URL(String(res.headers.location))
+      expect(`${loc.origin}${loc.pathname}`).toBe(CB_A)
+      expect(loc.searchParams.get('error')).toBe('access_denied')
+      expect(loc.searchParams.get('code')).toBeNull()
+      expect(loc.searchParams.get('state')).toBe('st-1')
+    }
+    expect([...redis.kv.keys()].some((k) => k.startsWith('nvr:hub-oidc:code:'))).toBe(false)
+  })
+
+  it('P7-7: a role granting admin access (even the start role) or no role is not pending', async () => {
+    // The start role set to an admin role: the gate exempts admins, as accessPendingGate does.
+    await db('nivaro_settings').update({ new_user_role: ROLE_ADMIN })
+    resetAccessPendingCache()
+    for (const role of [ROLE_ADMIN, null]) {
+      await db('nivaro_users').where({ id: USER }).update({ role })
+      sessions.clear()
+      signedInSession('sid-ok')
+      const res = await authorize(authorizeQuery(), cookie('sid-ok'))
+      expect(res.statusCode).toBe(302)
+      expect(new URL(String(res.headers.location)).searchParams.get('code')).toBeTruthy()
+    }
   })
 })
