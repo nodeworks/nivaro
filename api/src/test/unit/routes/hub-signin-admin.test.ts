@@ -28,23 +28,33 @@ vi.mock('../../../db/index.js', async () => {
   })
   return { db }
 })
-vi.mock('../../../middleware/authenticate.js', () => {
+// Sign-in is faked (x-user / x-admin / x-auth = the auth method, default session); the
+// credential-mint judgement is the real one.
+vi.mock('../../../middleware/authenticate.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../middleware/authenticate.js')>()
   const sign = async (req: {
     headers: Record<string, string | undefined>
     user?: unknown
     isAdmin?: boolean
+    authMethod?: string
   }) => {
     const id = req.headers['x-user']
     if (!id) throw Object.assign(new Error('Unauthorized'), { statusCode: 401 })
     req.user = { id, status: 'active' }
     req.isAdmin = req.headers['x-admin'] === '1'
+    req.authMethod = req.headers['x-auth'] ?? 'session'
   }
   const admin = async (req: Parameters<typeof sign>[0]) => {
     await sign(req)
     if (!req.isAdmin)
       throw Object.assign(new Error('Forbidden'), { statusCode: 403, code: 'ADMIN_ONLY' })
   }
-  return { requireAuth: vi.fn(sign), requireAdmin: vi.fn(admin), authenticate: vi.fn(sign) }
+  return {
+    requireAuth: vi.fn(sign),
+    requireAdmin: vi.fn(admin),
+    authenticate: vi.fn(sign),
+    credentialMintRefusal: actual.credentialMintRefusal
+  }
 })
 // Activity rows land in a real nivaro_activity table so the test can read every stored column.
 vi.mock('../../../services/activity.js', () => ({
@@ -472,5 +482,81 @@ describe('hub token writes keep the lookup in step (routes/hub.ts)', () => {
       (await db('nivaro_hub_environments').where({ id: none.json().data.id }).first())
         .hub_token_lookup
     ).toBeNull()
+  })
+})
+
+describe('fix round 1: own-session minting, duplicate tokens, write errors', () => {
+  it('a named API key or connected app cannot create or rotate a secret, or rotate keys', async () => {
+    const { envId } = await seed('efp', OWNER)
+    for (const auth of ['api_key', 'oauth', 'masquerade', 'key_sim']) {
+      const h = { ...asAdmin, 'x-auth': auth }
+      for (const url of [
+        `/hub/signin/environments/${envId}/client`,
+        `/hub/signin/environments/${envId}/client/rotate`,
+        '/hub/signin/keys/rotate'
+      ]) {
+        const r = await req('POST', url, h)
+        expect(r.statusCode).toBe(403)
+        expect(['CREDENTIAL_MINT_REFUSED', 'NOT_WHILE_MASQUERADING']).toContain(r.json().code)
+        expect(r.body).not.toMatch(/hubs_/)
+      }
+    }
+    expect(await db('nivaro_hub_oidc_clients').count({ n: '*' })).toEqual([{ n: 0 }])
+    expect(await db('nivaro_hub_oidc_keys').count({ n: '*' })).toEqual([{ n: 0 }])
+    // The person's own static token may.
+    const own = await req('POST', `/hub/signin/environments/${envId}/client`, {
+      ...asOwner,
+      'x-auth': 'token'
+    })
+    expect(own.statusCode).toBe(201)
+  })
+
+  it('a hub token another environment holds → 409 TOKEN_IN_USE on create and on patch', async () => {
+    const TOKEN = 'shared-link-token-0123456789abcdefghij'
+    const [appId] = await db('nivaro_hub_apps').insert({
+      key: 'efp',
+      name: 'EFP',
+      signin_mode: 'direct',
+      adopted: false,
+      extensions: '[]'
+    })
+    const first = await req('POST', `/hub/apps/${appId}/environments`, asAdmin, {
+      key: 'production',
+      base_url: 'https://efp.example.com',
+      hub_token: TOKEN
+    })
+    expect(first.statusCode).toBe(200)
+    const dup = await req('POST', `/hub/apps/${appId}/environments`, asAdmin, {
+      key: 'staging',
+      base_url: 'https://efp-staging.example.com',
+      hub_token: TOKEN
+    })
+    expect(dup.statusCode).toBe(409)
+    expect(dup.json().code).toBe('TOKEN_IN_USE')
+    expect(dup.body).not.toContain(TOKEN)
+    const second = await req('POST', `/hub/apps/${appId}/environments`, asAdmin, {
+      key: 'staging',
+      base_url: 'https://efp-staging.example.com',
+      hub_token: `${TOKEN}-2`
+    })
+    expect(second.statusCode).toBe(200)
+    const stagingId = second.json().data.id as number
+    const patch = await req('PATCH', `/hub/environments/${stagingId}`, asAdmin, {
+      hub_token: TOKEN
+    })
+    expect(patch.statusCode).toBe(409)
+    expect(patch.json().code).toBe('TOKEN_IN_USE')
+    expect(await environmentForLinkToken(`${TOKEN}-2`)).toMatchObject({
+      environment_id: stagingId
+    })
+    // Re-sending its own token to the same environment is not a clash; nor is the mask.
+    const prodId = first.json().data.id as number
+    expect(
+      (await req('PATCH', `/hub/environments/${prodId}`, asAdmin, { hub_token: TOKEN })).statusCode
+    ).toBe(200)
+    expect(
+      (await req('PATCH', `/hub/environments/${stagingId}`, asAdmin, { hub_token: MASK }))
+        .statusCode
+    ).toBe(200)
   })
 })

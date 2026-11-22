@@ -68,9 +68,10 @@ export async function markMcpInnerRequest(req: FastifyRequest): Promise<void> {
  */
 // agent-triggers: an endpoint + secret that receives record data (#3210) — an agent must not
 // point one at itself. agent-questions/:id/answer: an agent never answers its own ask_human
-// question (#3220; the route also refuses every non-session caller).
+// question (#3220; the route also refuses every non-session caller). hub/signin: Hub sign-in
+// clients and signing keys (phase 7) — mints and rotates client secrets.
 const OAUTH_NO_WRITE =
-  /^\/api\/(auth|api-keys|oauth|graphql|mcp-connections|agent-triggers|command-center\/kiosk-links)(\/|$)|^\/api\/users\/[^/]+\/(token|devices)(\/|$)|^\/api\/items\/(nivaro_|directus_)|^\/api\/agent-questions\/[^/]+\/answer(\/|$)/i
+  /^\/api\/(auth|api-keys|oauth|graphql|mcp-connections|agent-triggers|command-center\/kiosk-links|hub\/signin)(\/|$)|^\/api\/users\/[^/]+\/(token|devices)(\/|$)|^\/api\/items\/(nivaro_|directus_)|^\/api\/agent-questions\/[^/]+\/answer(\/|$)/i
 
 /**
  * The path as the router will see it: percent-decoded (to a fixed point),

@@ -51,7 +51,7 @@ import {
   validatePlacementInput
 } from '../services/hub/drivers.js'
 import { GitlabWriteError } from '../services/hub/gitlab-write.js'
-import { tokenLookupHash } from '../services/hub/link-token.js'
+import { linkTokenInUse, tokenLookupHash } from '../services/hub/link-token.js'
 import { hubModeEnabled } from '../services/hub/mode.js'
 import { gatherPlanInput, PromotionError } from '../services/hub/promote-gather.js'
 import { buildPromotionPlan, compareVersions } from '../services/hub/promote-plan.js'
@@ -497,6 +497,8 @@ function environmentRoutes(app: FastifyInstance) {
       return fail(reply, 409, 'KEY_TAKEN', `This app already has an environment "${patch.key}"`)
     const refused = await placementRefusal(patch.placement_id, null)
     if (refused) return fail(reply, refused.status, refused.code, refused.error)
+    if (await linkTokenInUse(incoming.token, null))
+      return fail(reply, 409, 'TOKEN_IN_USE', 'Another environment already uses this hub token')
     return guarded(reply, async () => {
       const token = incoming.token === undefined ? null : nextSecret(incoming.token, null)
       if (patch.position === undefined) {
@@ -548,6 +550,8 @@ function environmentRoutes(app: FastifyInstance) {
       return fail(reply, 409, 'KEY_TAKEN', `This app already has an environment "${patch.key}"`)
     const refused = await placementRefusal(patch.placement_id, id)
     if (refused) return fail(reply, refused.status, refused.code, refused.error)
+    if (await linkTokenInUse(sent, id))
+      return fail(reply, 409, 'TOKEN_IN_USE', 'Another environment already uses this hub token')
     // The stored token never follows the app to another address: a new origin needs the token
     // typed again (or cleared). Absent and the mask both mean "keep the stored one".
     const storedToken = (current.hub_token as string | null) ?? null

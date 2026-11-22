@@ -1,5 +1,5 @@
 import type { Knex } from 'knex'
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Nivaro Hub phase 7: sign-in clients (one per environment) and the app-link token lookup.
 // Real SQLite holds the rows; client secrets and hub tokens are sealed at rest, redirect URIs are
@@ -341,5 +341,154 @@ describe('link-token lookup', () => {
     const appId = await makeApp()
     await makeEnv(appId, { hub_token: null, hub_token_lookup: linkToken.tokenLookupHash(TOKEN) })
     expect(await linkToken.environmentForLinkToken(TOKEN)).toBeNull()
+  })
+})
+
+describe('fix round 1: lookup repair, shared tokens, write errors', () => {
+  const TOKEN = `${'r'.repeat(20)}epair-0123456789abcdef`
+
+  it('a stale lookup (written by an older replica) repairs itself on the first miss', async () => {
+    const appId = await makeApp()
+    const envId = await makeEnv(appId, {
+      hub_token: sealSecret(`${TOKEN}-new`),
+      hub_token_lookup: linkToken.tokenLookupHash(TOKEN)
+    })
+    // The old token still hits the stale lookup but never confirms.
+    expect(await linkToken.environmentForLinkToken(TOKEN)).toBeNull()
+    const row = await db('nivaro_hub_environments').where({ id: envId }).first()
+    expect(row.hub_token_lookup).toBe(linkToken.tokenLookupHash(`${TOKEN}-new`))
+    expect(await linkToken.environmentForLinkToken(`${TOKEN}-new`)).toMatchObject({
+      environment_id: envId
+    })
+  })
+
+  it('the repair also finds the new token directly and drops a cleared token’s lookup', async () => {
+    const appId = await makeApp()
+    const envId = await makeEnv(appId, {
+      hub_token: sealSecret(`${TOKEN}-new`),
+      hub_token_lookup: linkToken.tokenLookupHash(TOKEN)
+    })
+    const cleared = await makeEnv(appId, {
+      key: 'staging',
+      hub_token: null,
+      hub_token_lookup: linkToken.tokenLookupHash(`${TOKEN}-gone`)
+    })
+    expect(await linkToken.environmentForLinkToken(`${TOKEN}-new`)).toMatchObject({
+      environment_id: envId
+    })
+    expect(
+      (await db('nivaro_hub_environments').where({ id: cleared }).first()).hub_token_lookup
+    ).toBeNull()
+  })
+
+  it('a token held by two environments names neither', async () => {
+    const appId = await makeApp()
+    const lookup = linkToken.tokenLookupHash(TOKEN)
+    await makeEnv(appId, { hub_token: sealSecret(TOKEN), hub_token_lookup: lookup })
+    await makeEnv(appId, { key: 'staging', hub_token: sealSecret(TOKEN), hub_token_lookup: lookup })
+    expect(await linkToken.environmentForLinkToken(TOKEN)).toBeNull()
+    // Same when both were saved before the lookup column (the repair fills both).
+    await db('nivaro_hub_environments').update({ hub_token_lookup: null })
+    linkToken._resetLinkTokenForTests()
+    expect(await linkToken.environmentForLinkToken(TOKEN)).toBeNull()
+  })
+
+  it('linkTokenInUse: another environment’s token only; never the mask, empty or non-text', async () => {
+    const appId = await makeApp()
+    const envId = await makeEnv(appId, {
+      hub_token: sealSecret(TOKEN),
+      hub_token_lookup: linkToken.tokenLookupHash(TOKEN)
+    })
+    expect(await linkToken.linkTokenInUse(TOKEN, null)).toBe(true)
+    expect(await linkToken.linkTokenInUse(TOKEN, envId)).toBe(false)
+    expect(await linkToken.linkTokenInUse(`${TOKEN}x`, null)).toBe(false)
+    for (const v of ['••••••', '', null, undefined, 42])
+      expect(await linkToken.linkTokenInUse(v, null)).toBe(false)
+  })
+
+  describe('a failed client write never carries the statement', () => {
+    const logged: string[] = []
+    let spy: ReturnType<typeof vi.spyOn>
+    beforeEach(() => {
+      logged.length = 0
+      spy = vi.spyOn(console, 'error').mockImplementation((...a: unknown[]) => {
+        logged.push(
+          a.map((x) => (x instanceof Error ? `${x.message}\n${x.stack}` : String(x))).join(' ')
+        )
+      })
+    })
+    afterEach(async () => {
+      spy.mockRestore()
+      await db.raw('DROP TRIGGER IF EXISTS hub_client_fail_ins')
+      await db.raw('DROP TRIGGER IF EXISTS hub_client_fail_upd')
+    })
+
+    function leakText(e: unknown): string {
+      const err = e as Error & { cause?: unknown }
+      return [
+        String(err?.message),
+        String(err?.stack),
+        String(err?.cause),
+        JSON.stringify(err, Object.getOwnPropertyNames(err ?? {}))
+      ].join('\n')
+    }
+
+    it('insert: generic error without a cause, one fixed log line, nothing sealed', async () => {
+      const envId = await makeEnv(await makeApp())
+      await db.raw(
+        "CREATE TRIGGER hub_client_fail_ins BEFORE INSERT ON nivaro_hub_oidc_clients BEGIN SELECT RAISE(ABORT, 'disk on fire'); END"
+      )
+      let caught: unknown
+      try {
+        await clients.createClient(envId, USER)
+      } catch (e) {
+        caught = e
+      }
+      expect(caught).toBeInstanceOf(Error)
+      expect((caught as Error).message).toBe('Saving the sign-in client failed')
+      expect((caught as Error & { cause?: unknown }).cause).toBeUndefined()
+      expect(caught).not.toBeInstanceOf(clients.HubClientError)
+      const text = leakText(caught) + logged.join('\n')
+      expect(text).not.toMatch(/enc:|hubs_|insert into|disk on fire/i)
+      expect(logged).toHaveLength(1)
+      expect(logged[0]).toMatch(/^hub: saving a sign-in client failed \([A-Za-z0-9_]+\)$/)
+    })
+
+    it('rotate and toggle: the same', async () => {
+      const envId = await makeEnv(await makeApp())
+      await clients.createClient(envId, USER)
+      await db.raw(
+        "CREATE TRIGGER hub_client_fail_upd BEFORE UPDATE ON nivaro_hub_oidc_clients BEGIN SELECT RAISE(ABORT, 'disk on fire'); END"
+      )
+      for (const run of [
+        () => clients.rotateClientSecret(envId, USER),
+        () => clients.setClientActive(envId, false)
+      ]) {
+        let caught: unknown
+        try {
+          await run()
+        } catch (e) {
+          caught = e
+        }
+        expect((caught as Error).message).toBe('Saving the sign-in client failed')
+        expect((caught as Error & { cause?: unknown }).cause).toBeUndefined()
+        expect(leakText(caught)).not.toMatch(/enc:|hubs_|update|disk on fire/i)
+      }
+      expect(logged).toHaveLength(2)
+      expect(logged.join('\n')).not.toMatch(/enc:|hubs_|update|disk on fire/i)
+    })
+
+    it('an error whose text says UNIQUE, without the engine code, is not read as a clash', async () => {
+      const envId = await makeEnv(await makeApp())
+      await clients.createClient(envId, USER)
+      // A message mentioning "unique" with no engine code is NOT read as a clash.
+      await db.raw(
+        "CREATE TRIGGER hub_client_fail_ins BEFORE INSERT ON nivaro_hub_oidc_clients BEGIN SELECT RAISE(ABORT, 'UNIQUE constraint failed: fake'); END"
+      )
+      await db('nivaro_hub_oidc_clients').del()
+      await expect(clients.createClient(envId, USER)).rejects.toThrow(
+        'Saving the sign-in client failed'
+      )
+    })
   })
 })

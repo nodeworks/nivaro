@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { db } from '../../db/index.js'
-import { openSecret } from './secrets.js'
+import { HUB_MASK, openSecret } from './secrets.js'
 
 /**
  * Nivaro Hub phase 7 (plan Decision 13): which environment an app-link bearer belongs to.
@@ -11,8 +11,14 @@ import { openSecret } from './secrets.js'
  * opening the sealed token and comparing timing-safe, so a stale lookup (the token changed by an
  * older replica) or an unreadable seal never lets a request through.
  *
- * Rows saved before migration 551 have no lookup: on the first miss in a process they are
- * backfilled once (open each sealed token, store its hash), then the lookup is retried.
+ * One token, one environment: hub.ts refuses a token another environment already uses (409
+ * TOKEN_IN_USE), and a bearer that still confirms on more than one row (rows saved before that
+ * check) names no environment at all.
+ *
+ * On the first miss in a process the lookups are repaired once: every row whose lookup is
+ * missing (saved before migration 551) or differs from the hash of its sealed token (written by
+ * an older replica) gets the right one, a cleared token loses its lookup; then the lookup is
+ * retried.
  *
  * Hub-only (HUB=on, never cloud mode), so module state here is not shared between tenants.
  */
@@ -30,14 +36,18 @@ function sha256(v: string): Buffer {
   return createHash('sha256').update(v, 'utf8').digest()
 }
 
+/** The sealed token in plain, or null when there is none or it cannot be opened. */
+function opened(sealed: string | null): string | null {
+  try {
+    return openSecret(sealed)
+  } catch {
+    return null
+  }
+}
+
 /** True when the sealed token opens and equals `presented` (timing-safe over both hashes). */
 function sealedTokenMatches(sealed: string | null, presented: string): boolean {
-  let plain: string | null
-  try {
-    plain = openSecret(sealed)
-  } catch {
-    return false
-  }
+  const plain = opened(sealed)
   if (!plain) return false
   return timingSafeEqual(sha256(plain), sha256(presented))
 }
@@ -50,33 +60,37 @@ export function _resetLinkTokenForTests(): void {
   backfilled = false
 }
 
-/** Stores the lookup of every sealed token that has none. An unreadable seal is skipped. */
-async function backfillLookups(): Promise<void> {
+/**
+ * Makes every lookup match its sealed token: missing or stale ones are rewritten, a cleared
+ * token's lookup is removed. An unreadable seal is left alone (it never matches anyway). Each
+ * write names the sealed value it was computed from, so a concurrent token write wins.
+ */
+async function repairLookups(): Promise<void> {
+  await db(ENVS)
+    .whereNull('hub_token')
+    .whereNotNull('hub_token_lookup')
+    .update({ hub_token_lookup: null })
   const rows = (await db(ENVS)
     .whereNotNull('hub_token')
-    .whereNull('hub_token_lookup')
-    .select('id', 'hub_token')) as Array<{ id: number; hub_token: string | null }>
+    .select('id', 'hub_token', 'hub_token_lookup')) as Array<{
+    id: number
+    hub_token: string
+    hub_token_lookup: string | null
+  }>
   for (const r of rows) {
-    let plain: string | null
-    try {
-      plain = openSecret(r.hub_token)
-    } catch {
-      continue
-    }
+    const plain = opened(r.hub_token)
     if (!plain) continue
-    // Only fills a lookup that is still empty: a concurrent token write is never overwritten.
-    await db(ENVS)
-      .where({ id: r.id })
-      .whereNull('hub_token_lookup')
-      .update({ hub_token_lookup: tokenLookupHash(plain) })
+    const want = tokenLookupHash(plain)
+    if (r.hub_token_lookup === want) continue
+    await db(ENVS).where({ id: r.id, hub_token: r.hub_token }).update({ hub_token_lookup: want })
   }
 }
 
-/** The backfill, at most once per process; callers during a run share it (a failed run may be
+/** The repair, at most once per process; callers during a run share it (a failed run may be
  *  tried again). */
-function backfillOnce(): Promise<void> {
+function repairOnce(): Promise<void> {
   if (!backfill)
-    backfill = backfillLookups().then(
+    backfill = repairLookups().then(
       () => {
         backfilled = true
       },
@@ -90,6 +104,7 @@ function backfillOnce(): Promise<void> {
 
 type Found = { environment_id: number; app_id: number; env_key: string }
 
+/** The one environment whose sealed token is `bearer`; null for none or for more than one. */
 async function byLookup(bearer: string): Promise<Found | null> {
   const rows = (await db(ENVS)
     .where({ hub_token_lookup: tokenLookupHash(bearer) })
@@ -99,10 +114,10 @@ async function byLookup(bearer: string): Promise<Found | null> {
     key: string
     hub_token: string | null
   }>
-  for (const r of rows)
-    if (sealedTokenMatches(r.hub_token, bearer))
-      return { environment_id: Number(r.id), app_id: Number(r.app_id), env_key: String(r.key) }
-  return null
+  const matches = rows.filter((r) => sealedTokenMatches(r.hub_token, bearer))
+  if (matches.length !== 1) return null
+  const r = matches[0]
+  return { environment_id: Number(r.id), app_id: Number(r.app_id), env_key: String(r.key) }
 }
 
 /**
@@ -114,6 +129,17 @@ export async function environmentForLinkToken(bearer: string): Promise<Found | n
   const found = await byLookup(bearer)
   if (found) return found
   if (backfilled) return null
-  await backfillOnce()
+  await repairOnce()
   return byLookup(bearer)
+}
+
+/**
+ * True when `token` (as sent to an environment write) is a new token another environment
+ * already holds. Absent, empty, non-text and the mask are never "in use" (they write no token).
+ */
+export async function linkTokenInUse(token: unknown, exceptEnvId: number | null): Promise<boolean> {
+  if (typeof token !== 'string' || !token || token === HUB_MASK) return false
+  const q = db(ENVS).where({ hub_token_lookup: tokenLookupHash(token) })
+  if (exceptEnvId !== null) q.whereNot({ id: exceptEnvId })
+  return !!(await q.first('id'))
 }

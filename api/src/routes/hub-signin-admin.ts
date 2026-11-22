@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
-import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
+import { credentialMintRefusal, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { idParam, isAppOwner, isSigninMode, readApp } from '../services/hub/apps.js'
 import { hubModeEnabled } from '../services/hub/mode.js'
@@ -29,7 +29,9 @@ import { HUB_MASK, HubSecretError } from '../services/hub/secrets.js'
  *
  * App and environment routes: a Hub admin, or an owner of that app (plan Decision 7: owners
  * manage their app's sign-in); anyone else gets 404, never 403. Every write is logged; no
- * activity row, log line or later read ever holds a client secret.
+ * activity row, log line or later read ever holds a client secret. Every write here is refused
+ * to View-as / run-as-key (DELEGATED_NO_WRITE) and connected apps (OAUTH_NO_WRITE); minting or
+ * rotating a secret or key also needs the person's own session or static token.
  */
 
 const APPS = 'nivaro_hub_apps'
@@ -70,6 +72,15 @@ async function guarded(reply: FastifyReply, run: () => Promise<unknown>) {
     if (e instanceof HubSecretError) return fail(reply, 400, e.code, e.message)
     throw e
   }
+}
+
+/**
+ * Minting or rotating a secret or key: only a person signed in as themselves (a session or their
+ * own static token) — never a View-as, run-as-key, named API key or connected app (403).
+ */
+function mintRefused(req: FastifyRequest, reply: FastifyReply) {
+  const refusal = credentialMintRefusal(req)
+  return refusal ? fail(reply, 403, refusal.code, refusal.error) : null
 }
 
 /** The app `:id` names when the caller may manage its sign-in; else null (404). */
@@ -152,7 +163,9 @@ export async function hubSigninAdminRoutes(app: FastifyInstance) {
     }
   })
 
-  app.post('/keys/rotate', { preHandler: requireAdmin }, async (req) => {
+  app.post('/keys/rotate', { preHandler: requireAdmin }, async (req, reply) => {
+    const refused = mintRefused(req, reply)
+    if (refused) return refused
     const { kid } = await rotateSigningKey(userId(req))
     await logActivity({
       action: 'hub-signin-key-rotate',
@@ -200,6 +213,8 @@ export async function hubSigninAdminRoutes(app: FastifyInstance) {
   app.post('/environments/:envId/client', { preHandler: requireAuth }, async (req, reply) => {
     const env = await manageableEnvironment(req)
     if (!env) return notFound(reply)
+    const refused = mintRefused(req, reply)
+    if (refused) return refused
     return guarded(reply, async () => {
       const made = await createClient(env.id, userId(req))
       const client = await clientForEnvironment(env.id)
@@ -229,6 +244,8 @@ export async function hubSigninAdminRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const env = await manageableEnvironment(req)
       if (!env) return notFound(reply)
+      const refused = mintRefused(req, reply)
+      if (refused) return refused
       return guarded(reply, async () => {
         const { client_secret } = await rotateClientSecret(env.id, userId(req))
         const client = await clientForEnvironment(env.id)

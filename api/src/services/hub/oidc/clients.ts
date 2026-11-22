@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { config } from '../../../config.js'
 import { db } from '../../../db/index.js'
+import { isUniqueViolation } from '../../../lib/unique-violation.js'
 import { parseJson } from '../../pipeline-engine.js'
 import { openSecret, sealSecret } from '../secrets.js'
 
@@ -159,17 +160,25 @@ function newClientSecret(): string {
   return `hubs_${randomBytes(32).toString('base64url')}`
 }
 
-function isUniqueViolation(e: unknown): boolean {
-  const err = e as { code?: unknown; number?: unknown; errno?: unknown; message?: unknown }
-  const code = String(err?.code ?? '')
-  return (
-    code === '23505' || // postgres
-    code === 'ER_DUP_ENTRY' || // mysql / mariadb
-    code.startsWith('SQLITE_CONSTRAINT') ||
-    err?.number === 2627 || // sql server unique constraint
-    err?.number === 2601 || // sql server unique index
-    /unique/i.test(String(err?.message ?? ''))
-  )
+/** An engine error code or name worth logging: short word characters only, never the message. */
+function errorTag(e: unknown): string {
+  const err = e as { code?: unknown; number?: unknown; name?: unknown }
+  for (const v of [err?.code, err?.number, err?.name]) {
+    const s = typeof v === 'number' ? String(v) : typeof v === 'string' ? v : ''
+    if (/^[A-Za-z0-9_]{1,40}$/.test(s)) return s
+  }
+  return 'unknown'
+}
+
+/**
+ * A failed client write. knex errors carry the statement with its values inlined (the sealed
+ * secret among them), so the error never leaves here: a fixed line is logged with the engine's
+ * code only, and a generic error without a cause is thrown instead.
+ */
+function clientWriteFailed(e: unknown): Error {
+  // biome-ignore lint/suspicious/noConsole: the failure must reach the server log (fixed text)
+  console.error(`hub: saving a sign-in client failed (${errorTag(e)})`)
+  return new Error('Saving the sign-in client failed')
 }
 
 const noClient = () =>
@@ -187,12 +196,14 @@ export async function createClient(
   if (await db(CLIENTS).where({ environment_id: envId }).first('id')) throw exists()
   const client_id = newClientId()
   const client_secret = newClientSecret()
+  // Sealed before the write: a missing ENCRYPTION_KEY stays a HubSecretError (400).
+  const sealed = sealSecret(client_secret)
   const at = new Date()
   try {
     await db(CLIENTS).insert({
       environment_id: envId,
       client_id,
-      client_secret: sealSecret(client_secret),
+      client_secret: sealed,
       active: true,
       created_by: userId || null,
       created_at: at,
@@ -201,7 +212,7 @@ export async function createClient(
   } catch (e) {
     // Two creates racing: the unique (environment_id) index lets one through.
     if (isUniqueViolation(e)) throw exists()
-    throw e
+    throw clientWriteFailed(e)
   }
   return { client_id, client_secret }
 }
@@ -214,17 +225,27 @@ export async function rotateClientSecret(
   const client_secret = newClientSecret()
   const sealed = sealSecret(client_secret)
   const at = new Date()
-  const n = await db(CLIENTS)
-    .where({ environment_id: envId })
-    .update({ client_secret: sealed, secret_rotated_at: at, updated_at: at })
+  let n: number
+  try {
+    n = await db(CLIENTS)
+      .where({ environment_id: envId })
+      .update({ client_secret: sealed, secret_rotated_at: at, updated_at: at })
+  } catch (e) {
+    throw clientWriteFailed(e)
+  }
   if (!n) throw noClient()
   return { client_secret }
 }
 
 export async function setClientActive(envId: number, active: boolean): Promise<void> {
-  const n = await db(CLIENTS)
-    .where({ environment_id: envId })
-    .update({ active: active === true, updated_at: new Date() })
+  let n: number
+  try {
+    n = await db(CLIENTS)
+      .where({ environment_id: envId })
+      .update({ active: active === true, updated_at: new Date() })
+  } catch (e) {
+    throw clientWriteFailed(e)
+  }
   if (!n) throw noClient()
 }
 

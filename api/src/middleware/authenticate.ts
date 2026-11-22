@@ -574,9 +574,10 @@ export function checkApiKeyScope(req: FastifyRequest, action: string, collection
 // ─── View-as / run-as-key limits (security audit, auth Lows) ──────────────────
 
 /** Credential routes a View-as (nvm_) or run-as-key (nvq_) request may not write to: what they
- *  minted would belong to — and be logged as — the person or key being viewed. */
+ *  minted would belong to — and be logged as — the person or key being viewed. hub/signin: Hub
+ *  sign-in client secrets and signing keys (phase 7). */
 const DELEGATED_NO_WRITE =
-  /^\/api\/(api-keys|oauth|mcp-connections|agent-triggers|command-center\/kiosk-links)(\/|$)|^\/api\/users\/[^/]+\/(token|devices)(\/|$)|^\/api\/items\/(nivaro_|directus_)|^\/api\/auth\/masquerade\/?$/
+  /^\/api\/(api-keys|oauth|mcp-connections|agent-triggers|command-center\/kiosk-links|hub\/signin)(\/|$)|^\/api\/users\/[^/]+\/(token|devices)(\/|$)|^\/api\/items\/(nivaro_|directus_)|^\/api\/auth\/masquerade\/?$/
 
 export function delegatedWriteRefusal(req: FastifyRequest): string | null {
   const m = String(req.method ?? 'GET').toUpperCase()
