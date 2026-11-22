@@ -42,7 +42,8 @@ export type AgentConfig = {
 }
 
 export const MIN_TOKEN_LENGTH = 32
-export const DEFAULT_LISTEN = '0.0.0.0:7480'
+export const MIN_TOKEN_DISTINCT_CHARS = 8
+export const DEFAULT_LISTEN = '127.0.0.1:7480'
 export const DEFAULT_SOCKET = '/var/run/docker.sock'
 export const DEFAULT_EXTENSIONS_ROOT = '/var/lib/nivaro-hub-agent/extensions'
 
@@ -98,23 +99,48 @@ export function parseListen(listen: string): { host: string; port: number } {
   return { host: m[1] ?? m[2], port }
 }
 
-function absolute(v: string): boolean {
-  return v.startsWith('/') && !v.split('/').includes('..')
+/** Absolute, no `..`, and at least two path segments (never `/` or `/srv`). */
+function extensionRootOk(v: string): boolean {
+  const segments = v.split('/').filter(Boolean)
+  return (
+    v.startsWith('/') && !segments.includes('..') && !segments.includes('.') && segments.length >= 2
+  )
+}
+
+function strongEnough(secret: string): boolean {
+  return secret.length >= MIN_TOKEN_LENGTH && new Set(secret).size >= MIN_TOKEN_DISTINCT_CHARS
+}
+
+/** 127.0.0.0/8, ::1 and localhost. `0.0.0.0` and `::` are NOT loopback. */
+export function isLoopbackHost(host: string): boolean {
+  const h = host.toLowerCase()
+  return h === 'localhost' || h === '::1' || /^127(?:\.[0-9]{1,3}){3}$/.test(h)
+}
+
+/** Volume driver options that would turn a volume into a bind of a host path. */
+function volumeOptsSafe(opts: Record<string, string>): boolean {
+  if (Object.hasOwn(opts, 'device')) return false
+  const o = opts.o ?? ''
+  return !o
+    .split(',')
+    .map((x) => x.trim().toLowerCase())
+    .some((x) => x === 'bind' || x === 'rbind')
 }
 
 export function loadAgentConfig(env: NodeJS.ProcessEnv, readFile: ReadFile): AgentConfig {
   const token = readTrimmed(readFile, env.HUB_AGENT_TOKEN_FILE, 'TOKEN_MISSING')
   if (!token || token.length < MIN_TOKEN_LENGTH) throw new ConfigError('TOKEN_MISSING')
+  if (!strongEnough(token)) throw new ConfigError('TOKEN_WEAK')
 
   let hmacKey = token
   if (env.HUB_AGENT_HMAC_KEY_FILE?.trim()) {
     const k = readTrimmed(readFile, env.HUB_AGENT_HMAC_KEY_FILE, 'HMAC_KEY_BAD')
-    if (!k || k.length < MIN_TOKEN_LENGTH) throw new ConfigError('HMAC_KEY_BAD')
+    if (!k || !strongEnough(k)) throw new ConfigError('HMAC_KEY_BAD')
     hmacKey = k
   }
 
   const listen = env.HUB_AGENT_LISTEN?.trim() || DEFAULT_LISTEN
-  parseListen(listen)
+  const listenHost = parseListen(listen).host
 
   const certFile = env.HUB_AGENT_TLS_CERT_FILE?.trim()
   const keyFile = env.HUB_AGENT_TLS_KEY_FILE?.trim()
@@ -125,6 +151,10 @@ export function loadAgentConfig(env: NodeJS.ProcessEnv, readFile: ReadFile): Age
     const key = readTrimmed(readFile, keyFile, 'TLS_BAD')
     if (!cert || !key) throw new ConfigError('TLS_BAD')
     tls = { cert, key }
+  }
+  // The bearer token never crosses a network in clear text unless the operator says so.
+  if (!tls && !isLoopbackHost(listenHost) && env.HUB_AGENT_INSECURE_HTTP?.trim() !== '1') {
+    throw new ConfigError('INSECURE_LISTEN')
   }
 
   const socket = env.HUB_AGENT_DOCKER_SOCKET?.trim() || DEFAULT_SOCKET
@@ -178,11 +208,12 @@ export function loadAgentConfig(env: NodeJS.ProcessEnv, readFile: ReadFile): Age
       throw new ConfigError('VOLUME_OPTS_BAD')
     }
     volumeOpts = optsRaw as Record<string, string>
+    if (!volumeOptsSafe(volumeOpts)) throw new ConfigError('VOLUME_OPTS_BAD')
   }
 
   const extensionsRoot = env.HUB_AGENT_EXTENSIONS_ROOT?.trim() || DEFAULT_EXTENSIONS_ROOT
   const extensionsHostRoot = env.HUB_AGENT_EXTENSIONS_HOST_ROOT?.trim() || extensionsRoot
-  if (!absolute(extensionsRoot) || !absolute(extensionsHostRoot))
+  if (!extensionRootOk(extensionsRoot) || !extensionRootOk(extensionsHostRoot))
     throw new ConfigError('EXTENSIONS_ROOT_BAD')
   const extensionsShared = env.HUB_AGENT_EXTENSIONS_SHARED?.trim() === 'on'
 

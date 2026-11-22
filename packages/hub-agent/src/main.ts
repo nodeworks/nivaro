@@ -3,7 +3,7 @@
  * code only), check the Engine (API ≥ 1.44, this node is a swarm manager,
  * else exit 1 NOT_A_MANAGER) and serve the agent API.
  */
-import { readFileSync } from 'node:fs'
+import { readFileSync, realpathSync } from 'node:fs'
 import type http from 'node:http'
 import type https from 'node:https'
 import { fileURLToPath } from 'node:url'
@@ -144,6 +144,25 @@ async function run(): Promise<void> {
   process.on('SIGINT', stop)
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+/** True when this file is the process entry point (symlinks resolved; `node dist/main` works too). */
+export function isEntryPoint(argv1: string | undefined, moduleUrl: string): boolean {
+  if (!argv1) return false
+  let self: string
+  try {
+    self = realpathSync(fileURLToPath(moduleUrl))
+  } catch {
+    return false
+  }
+  for (const candidate of [argv1, `${argv1}.js`]) {
+    try {
+      if (realpathSync(candidate) === self) return true
+    } catch {
+      // Not there under that name; try the next.
+    }
+  }
+  return false
+}
+
+if (isEntryPoint(process.argv[1], import.meta.url)) {
   void run()
 }

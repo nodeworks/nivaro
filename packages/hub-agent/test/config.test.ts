@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { ConfigError, loadAgentConfig, parseListen } from '../src/config.js'
 
-const TOKEN = 't'.repeat(40)
+const TOKEN = 'abcdefghij'.repeat(4)
+const HMAC = 'HMACkey-0123456789-HMACkey-0123456789'
 const DIGEST = 'a'.repeat(64)
 
 function files(map: Record<string, string>) {
@@ -41,7 +42,7 @@ describe('loadAgentConfig', () => {
 
   it('applies the defaults', () => {
     const cfg = loadAgentConfig(traefikEnv, files(baseFiles))
-    expect(cfg.listen).toBe('0.0.0.0:7480')
+    expect(cfg.listen).toBe('127.0.0.1:7480')
     expect(cfg.tls).toBeUndefined()
     expect(cfg.socket).toBe('/var/run/docker.sock')
     expect(cfg.images).toEqual(['nodeworks/nivaro'])
@@ -83,14 +84,14 @@ describe('loadAgentConfig', () => {
       },
       files({
         ...baseFiles,
-        '/run/secrets/hmac': `${'h'.repeat(32)}\n`,
+        '/run/secrets/hmac': `${HMAC}\n`,
         '/tls/cert.pem': 'CERT',
         '/tls/key.pem': 'KEY',
         '/run/secrets/vol': '{"type":"nfs","o":"addr=10.0.0.5"}',
         '/run/secrets/docker.json': '{"auths":{"registry.corp:5000":{"auth":"dTpw"}}}'
       })
     )
-    expect(cfg.hmacKey).toBe('h'.repeat(32))
+    expect(cfg.hmacKey).toBe(HMAC)
     expect(cfg.listen).toBe('127.0.0.1:7481')
     expect(cfg.tls).toEqual({ cert: 'CERT', key: 'KEY' })
     expect(cfg.socket).toBe('/tmp/docker.sock')
@@ -248,6 +249,7 @@ describe('loadAgentConfig', () => {
   })
 
   it('never puts a value into an error', () => {
+    expect.assertions(1)
     const secret = `S3CRET-${'z'.repeat(30)}`
     try {
       loadAgentConfig(
@@ -258,6 +260,116 @@ describe('loadAgentConfig', () => {
       expect(JSON.stringify({ m: (err as Error).message, s: (err as Error).stack })).not.toContain(
         'S3CRET'
       )
+    }
+  })
+})
+
+describe('fix round 1: listen, token strength, volume options, extension root', () => {
+  it('INSECURE_LISTEN: a non-loopback listen without TLS', () => {
+    for (const listen of ['0.0.0.0:7480', '[::]:7480', '10.0.0.5:7480', 'agent:7480']) {
+      expect(
+        codeOf(() =>
+          loadAgentConfig({ ...traefikEnv, HUB_AGENT_LISTEN: listen }, files(baseFiles))
+        ),
+        listen
+      ).toBe('INSECURE_LISTEN')
+    }
+  })
+
+  it('loopback listens need no TLS', () => {
+    for (const listen of ['127.0.0.1:7480', '127.0.0.2:7480', '[::1]:7480', 'localhost:7480']) {
+      expect(
+        loadAgentConfig({ ...traefikEnv, HUB_AGENT_LISTEN: listen }, files(baseFiles)).listen
+      ).toBe(listen)
+    }
+  })
+
+  it('HUB_AGENT_INSECURE_HTTP=1 is the escape hatch; any other value is not', () => {
+    const env = { ...traefikEnv, HUB_AGENT_LISTEN: '0.0.0.0:7480' }
+    expect(loadAgentConfig({ ...env, HUB_AGENT_INSECURE_HTTP: '1' }, files(baseFiles)).listen).toBe(
+      '0.0.0.0:7480'
+    )
+    for (const v of ['true', 'on', 'yes', '0', '']) {
+      expect(
+        codeOf(() => loadAgentConfig({ ...env, HUB_AGENT_INSECURE_HTTP: v }, files(baseFiles))),
+        v
+      ).toBe('INSECURE_LISTEN')
+    }
+  })
+
+  it('TLS allows a non-loopback listen', () => {
+    const cfg = loadAgentConfig(
+      {
+        ...traefikEnv,
+        HUB_AGENT_LISTEN: '0.0.0.0:7480',
+        HUB_AGENT_TLS_CERT_FILE: '/c',
+        HUB_AGENT_TLS_KEY_FILE: '/k'
+      },
+      files({ ...baseFiles, '/c': 'CERT', '/k': 'KEY' })
+    )
+    expect(cfg.tls).toEqual({ cert: 'CERT', key: 'KEY' })
+  })
+
+  it('TOKEN_WEAK: a long token with fewer than 8 distinct characters', () => {
+    expect(
+      codeOf(() =>
+        loadAgentConfig(traefikEnv, files({ '/run/secrets/token': 'abcdefg'.repeat(10) }))
+      )
+    ).toBe('TOKEN_WEAK')
+    expect(
+      codeOf(() => loadAgentConfig(traefikEnv, files({ '/run/secrets/token': 't'.repeat(64) })))
+    ).toBe('TOKEN_WEAK')
+    expect(
+      loadAgentConfig(traefikEnv, files({ '/run/secrets/token': 'abcdefgh'.repeat(4) })).token
+    ).toBe('abcdefgh'.repeat(4))
+  })
+
+  it('HMAC_KEY_BAD for a weak HMAC key', () => {
+    expect(
+      codeOf(() =>
+        loadAgentConfig(
+          { ...traefikEnv, HUB_AGENT_HMAC_KEY_FILE: '/h' },
+          files({ ...baseFiles, '/h': 'h'.repeat(40) })
+        )
+      )
+    ).toBe('HMAC_KEY_BAD')
+  })
+
+  it('VOLUME_OPTS_BAD for driver options that bind a host path', () => {
+    for (const opts of [
+      '{"type":"none","o":"bind","device":"/"}',
+      '{"o":"bind"}',
+      '{"o":"rw, rbind"}',
+      '{"o":"BIND"}',
+      '{"device":"/srv/data"}',
+      '{"type":"nfs","o":"addr=10.0.0.5","device":":/export"}'
+    ]) {
+      expect(
+        codeOf(() =>
+          loadAgentConfig(
+            { ...traefikEnv, HUB_AGENT_VOLUME_OPTS_FILE: '/v' },
+            files({ ...baseFiles, '/v': opts })
+          )
+        ),
+        opts
+      ).toBe('VOLUME_OPTS_BAD')
+    }
+  })
+
+  it('EXTENSIONS_ROOT_BAD for /, a single segment, . or ..', () => {
+    for (const root of ['/', '/srv', '//srv', '/srv/./x', '/srv/../etc']) {
+      expect(
+        codeOf(() =>
+          loadAgentConfig({ ...traefikEnv, HUB_AGENT_EXTENSIONS_HOST_ROOT: root }, files(baseFiles))
+        ),
+        root
+      ).toBe('EXTENSIONS_ROOT_BAD')
+      expect(
+        codeOf(() =>
+          loadAgentConfig({ ...traefikEnv, HUB_AGENT_EXTENSIONS_ROOT: root }, files(baseFiles))
+        ),
+        root
+      ).toBe('EXTENSIONS_ROOT_BAD')
     }
   })
 })

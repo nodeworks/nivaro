@@ -1,12 +1,16 @@
+import fs from 'node:fs'
 import http from 'node:http'
 import net, { type AddressInfo } from 'node:net'
+import os from 'node:os'
+import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { type AgentConfig, loadAgentConfig } from '../src/config.js'
 import type { Transport } from '../src/engine.js'
-import { startAgent } from '../src/main.js'
+import { isEntryPoint, startAgent } from '../src/main.js'
 import { createServer, type Handlers } from '../src/server.js'
 
-const TOKEN = 'T'.repeat(48)
+const TOKEN = 'Server-Token-0123456789-ABCDEFGHIJ-xyz'
 const cfg: AgentConfig = loadAgentConfig(
   { HUB_AGENT_TOKEN_FILE: '/t', HUB_AGENT_EDGE: 'publish', HUB_AGENT_PUBLISH_PORTS: '3110-3119' },
   () => TOKEN
@@ -163,13 +167,16 @@ describe('auth', () => {
     const r21 = await req('GET', '/v1/health', { token: 'bad-21' })
     expect(r21.status).toBe(429)
     expect(r21.body.code).toBe('TOO_MANY_BAD_TOKENS')
-    // Locked: even the right token is refused from that address while the window lasts.
-    expect((await req('GET', '/v1/health')).status).toBe(429)
-    // Another address is unaffected.
-    expect((await req('GET', '/v1/health', { from: '::1' })).status).toBe(200)
-    // Once the bad tokens are older than 60 s the address works again.
-    now += 61_000
+    // Further bad tokens stay locked; the right token is checked first and is never locked out.
+    expect((await req('GET', '/v1/health', { token: 'bad-22' })).status).toBe(429)
     expect((await req('GET', '/v1/health')).status).toBe(200)
+    expect((await req('GET', '/v1/health', { token: 'bad-23' })).status).toBe(429)
+    // Another address is unaffected: its bad token is a plain 401.
+    expect((await req('GET', '/v1/health', { from: '::1', token: 'bad' })).status).toBe(401)
+    expect((await req('GET', '/v1/health', { from: '::1' })).status).toBe(200)
+    // Once the bad tokens are older than 60 s, a bad token is a 401 again.
+    now += 61_000
+    expect((await req('GET', '/v1/health', { token: 'bad-24' })).status).toBe(401)
   })
 
   it('bad tokens spread over more than 60 s never lock', async () => {
@@ -394,5 +401,24 @@ describe('startAgent', () => {
       }
     })
     expect(JSON.stringify(log.mock.calls)).not.toContain(TOKEN)
+  })
+})
+
+describe('isEntryPoint', () => {
+  it('matches the real path, a symlink and a name without .js; nothing else', () => {
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'hub-agent-entry-')))
+    try {
+      const file = path.join(dir, 'main.js')
+      fs.writeFileSync(file, '')
+      fs.symlinkSync(file, path.join(dir, 'link.js'))
+      const url = pathToFileURL(file).href
+      expect(isEntryPoint(file, url)).toBe(true)
+      expect(isEntryPoint(path.join(dir, 'link.js'), url)).toBe(true)
+      expect(isEntryPoint(path.join(dir, 'main'), url)).toBe(true)
+      expect(isEntryPoint(path.join(dir, 'other.js'), url)).toBe(false)
+      expect(isEntryPoint(undefined, url)).toBe(false)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

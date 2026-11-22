@@ -1,8 +1,9 @@
 /**
  * The agent's HTTP(S) API (wire contract v1). Every request is authenticated
  * before routing: a bearer token compared timing-safe over SHA-256 digests.
- * Twenty bad tokens from one address inside 60 s lock that address (429)
- * until the oldest falls out of the window. Bodies are capped at 1 MB and
+ * After twenty bad tokens from one address inside 60 s, further bad tokens
+ * from it get 429 until the oldest falls out of the window; the right token
+ * is always accepted. Bodies are capped at 1 MB and
  * never logged; the request log carries the route TEMPLATE, never the raw
  * path or query.
  */
@@ -178,13 +179,16 @@ export function createServer(
     ctx.stack = name
 
     // Authentication comes before routing.
-    const address = clientAddress(req)
-    const t = now()
-    if (recentBad(address, t).length >= BAD_TOKEN_LIMIT) {
-      send(res, 429, { error: 'Too many bad tokens', code: 'TOO_MANY_BAD_TOKENS' }, true)
-      return 429
-    }
+    // The token is checked first, so only bad tokens count and the right token is
+    // never locked out: behind the swarm routing mesh every caller can share one
+    // source address, and an attacker must not be able to lock the Hub out.
     if (!tokenOk(req.headers.authorization)) {
+      const address = clientAddress(req)
+      const t = now()
+      if (recentBad(address, t).length >= BAD_TOKEN_LIMIT) {
+        send(res, 429, { error: 'Too many bad tokens', code: 'TOO_MANY_BAD_TOKENS' }, true)
+        return 429
+      }
       noteBad(address, t)
       send(res, 401, { error: 'Unauthorized', code: 'UNAUTHORIZED' }, true)
       return 401

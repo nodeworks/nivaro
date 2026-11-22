@@ -21,7 +21,12 @@ const cfg: AgentConfig = loadAgentConfig(
     HUB_AGENT_REDIS_IMAGE: REDIS,
     HUB_AGENT_EXTENSIONS_HOST_ROOT: '/srv/ext'
   },
-  () => 'k'.repeat(40)
+  () => 'agent-token-0123456789-abcdefghij'
+)
+
+const publishCfg: AgentConfig = loadAgentConfig(
+  { HUB_AGENT_TOKEN_FILE: '/t', HUB_AGENT_EDGE: 'publish', HUB_AGENT_PUBLISH_PORTS: '3110-3119' },
+  () => 'agent-token-0123456789-abcdefghij'
 )
 
 // The fake Engine: an HTTP stub on a loopback port. Never the host's real Docker socket.
@@ -89,7 +94,7 @@ const service = (extra: Record<string, unknown> = {}) => ({
       ],
       ...extra
     },
-    Networks: [{ Target: 's_net' }]
+    Networks: [{ Target: 'nvh_s_net' }, { Target: 'edge' }]
   }
 })
 
@@ -106,9 +111,13 @@ const ALLOWED_CALLS: Array<[string, string, Record<string, unknown>?]> = [
   ['GET', '/containers/abc123/archive', { query: { path: '/extension' } }],
   ['POST', '/services/create', { body: service(), headers: { 'X-Registry-Auth': 'e30=' } }],
   ['POST', '/services/abc123/update', { body: service(), query: { version: 7 } }],
-  ['POST', '/networks/create', { body: { Name: 's_net', Driver: 'overlay' } }],
+  [
+    'POST',
+    '/networks/create',
+    { body: { Name: 'nvh_s_net', Driver: 'overlay', Attachable: false } }
+  ],
   ['POST', '/secrets/create', { body: { Name: 'nvh_s_X_0123456789ab', Data: 'eA==' } }],
-  ['POST', '/volumes/create', { body: { Name: 'nvh_s_uploads' } }],
+  ['POST', '/volumes/create', { body: { Name: 'nvh_s_uploads', Driver: 'local' } }],
   ['POST', '/images/create', { query: { fromImage: IMAGE } }],
   ['POST', '/containers/create', { body: { Image: IMAGE, Labels: { 'nivaro.hub.managed': '1' } } }],
   ['DELETE', '/services/abc123'],
@@ -319,13 +328,12 @@ describe('engine body guards (defence in depth)', () => {
 describe('engine I/O', () => {
   it('encodes the query and sends the JSON body', async () => {
     const engine = createEngine(cfg, transport)
-    await engine.call('POST', '/secrets/create', {
-      body: { Name: 'n', Data: 'eA==' },
-      query: { a: 'x&y=z', b: 2 }
-    })
-    expect(seen[0].url).toBe('/v1.44/secrets/create?a=x%26y%3Dz&b=2')
-    expect(JSON.parse(seen[0].body)).toEqual({ Name: 'n', Data: 'eA==' })
-    expect(seen[0].headers['content-type']).toBe('application/json')
+    await engine.call('GET', '/tasks', { query: { filters: '{"label":["a&b=c"]}' } })
+    expect(seen[0].url).toBe('/v1.44/tasks?filters=%7B%22label%22%3A%5B%22a%26b%3Dc%22%5D%7D')
+    await engine.call('POST', '/secrets/create', { body: { Name: 'nvh_s_X_0123', Data: 'eA==' } })
+    expect(seen[1].url).toBe('/v1.44/secrets/create')
+    expect(JSON.parse(seen[1].body)).toEqual({ Name: 'nvh_s_X_0123', Data: 'eA==' })
+    expect(seen[1].headers['content-type']).toBe('application/json')
   })
 
   it('passes a non-2xx status and body through', async () => {
@@ -350,5 +358,396 @@ describe('engine I/O', () => {
     await expect(engine.call('GET', '/version')).rejects.toMatchObject({
       code: 'ENGINE_UNREACHABLE'
     })
+  })
+})
+
+describe('fix round 1: query allow-lists', () => {
+  const Q: Array<[string, string, string, Record<string, unknown>]> = [
+    [
+      'service update with rollback=previous',
+      'POST',
+      '/services/abc/update',
+      { body: service(), query: { version: 3, rollback: 'previous' } }
+    ],
+    [
+      'service update with a non-integer version',
+      'POST',
+      '/services/abc/update',
+      { body: service(), query: { version: '3; x' } }
+    ],
+    [
+      'service update with a negative version',
+      'POST',
+      '/services/abc/update',
+      { body: service(), query: { version: -1 } }
+    ],
+    [
+      'service update with registryAuthFrom=bogus',
+      'POST',
+      '/services/abc/update',
+      { body: service(), query: { registryAuthFrom: 'bogus' } }
+    ],
+    [
+      'archive of /run/secrets',
+      'GET',
+      '/containers/abc/archive',
+      { query: { path: '/run/secrets' } }
+    ],
+    [
+      'archive of /extension/../run',
+      'GET',
+      '/containers/abc/archive',
+      { query: { path: '/extension/../run' } }
+    ],
+    ['archive of /', 'GET', '/containers/abc/archive', { query: { path: '/' } }],
+    [
+      'archive with an extra key',
+      'GET',
+      '/containers/abc/archive',
+      { query: { path: '/extension', noOverwriteDirNonDir: true } }
+    ],
+    ['container delete with v', 'DELETE', '/containers/abc', { query: { force: true, v: true } }],
+    [
+      'container delete with force=garbage',
+      'DELETE',
+      '/containers/abc',
+      { query: { force: 'yes please' } }
+    ],
+    ['volume delete with force', 'DELETE', '/volumes/nvh_s_uploads', { query: { force: true } }],
+    [
+      'image pull with platform',
+      'POST',
+      '/images/create',
+      { query: { fromImage: `nodeworks/nivaro@sha256:${D}`, platform: 'linux/amd64' } }
+    ],
+    [
+      'image pull with repo',
+      'POST',
+      '/images/create',
+      { query: { fromImage: `nodeworks/nivaro@sha256:${D}`, repo: 'x' } }
+    ],
+    ['service list with status', 'GET', '/services', { query: { status: true } }],
+    ['task list with an extra key', 'GET', '/tasks', { query: { filters: '{}', x: 1 } }],
+    [
+      'service inspect with insertDefaults',
+      'GET',
+      '/services/abc',
+      { query: { insertDefaults: true } }
+    ],
+    ['version with a query', 'GET', '/version', { query: { x: 1 } }],
+    ['service delete with a query', 'DELETE', '/services/abc', { query: { force: true } }],
+    [
+      'service create with a query',
+      'POST',
+      '/services/create',
+      { body: service(), query: { x: 'y' } }
+    ],
+    ['a __proto__ query key', 'GET', '/services', { query: JSON.parse('{"__proto__":"x"}') }],
+    ['a constructor query key', 'GET', '/services', { query: { constructor: 'x' } }]
+  ]
+
+  it.each(Q)('%s is refused before any I/O', async (_name, method, path, opts) => {
+    const engine = createEngine(cfg, transport)
+    await expect(engine.call(method as 'GET', path, opts as never)).rejects.toBeInstanceOf(
+      EngineForbiddenError
+    )
+    await expect(engine.stream(method as 'GET', path, opts as never)).rejects.toBeInstanceOf(
+      EngineForbiddenError
+    )
+    expect(transport).not.toHaveBeenCalled()
+  })
+
+  it('accepts the queries the rules name', async () => {
+    const engine = createEngine(cfg, transport)
+    await engine.call('POST', '/services/abc/update', {
+      body: service(),
+      query: { version: '12', registryAuthFrom: 'spec' }
+    })
+    await engine.call('DELETE', '/containers/abc', { query: { force: true } })
+    await engine.call('DELETE', '/containers/abc')
+    await engine.call('GET', '/services', { query: { filters: '{}', other: undefined } })
+    expect(seen.map((x) => x.url)).toEqual([
+      '/v1.44/services/abc/update?version=12&registryAuthFrom=spec',
+      '/v1.44/containers/abc?force=true',
+      '/v1.44/containers/abc',
+      '/v1.44/services?filters=%7B%7D'
+    ])
+  })
+})
+
+describe('fix round 1: volumes, networks, secrets, runtimes, ports, headers', () => {
+  const withMount = (m: Record<string, unknown>) => service({ Mounts: [m] })
+  const withTask = (extra: Record<string, unknown>) => ({
+    ...service(),
+    TaskTemplate: { ...service().TaskTemplate, ...extra }
+  })
+  const B: Array<[string, string, string, Record<string, unknown>]> = [
+    [
+      'volume mount with a bind DriverConfig',
+      'POST',
+      '/services/create',
+      {
+        body: withMount({
+          Type: 'volume',
+          Source: 'nvh_s_x',
+          Target: '/x',
+          VolumeOptions: {
+            DriverConfig: { Name: 'local', Options: { type: 'none', o: 'bind', device: '/' } }
+          }
+        })
+      }
+    ],
+    [
+      'volume mount with any DriverConfig',
+      'POST',
+      '/services/abc/update',
+      {
+        body: withMount({
+          Type: 'volume',
+          Source: 'nvh_s_x',
+          Target: '/x',
+          VolumeOptions: { DriverConfig: { Name: 'nfs' } }
+        })
+      }
+    ],
+    [
+      'volume mount of a foreign volume',
+      'POST',
+      '/services/create',
+      { body: withMount({ Type: 'volume', Source: 'efp_uploads', Target: '/x' }) }
+    ],
+    [
+      'volume create with bind DriverOpts',
+      'POST',
+      '/volumes/create',
+      {
+        body: {
+          Name: 'nvh_s_x',
+          Driver: 'local',
+          DriverOpts: { type: 'none', o: 'bind', device: '/' }
+        }
+      }
+    ],
+    [
+      'volume create with another driver',
+      'POST',
+      '/volumes/create',
+      { body: { Name: 'nvh_s_x', Driver: 'nfs' } }
+    ],
+    ['volume create with no driver', 'POST', '/volumes/create', { body: { Name: 'nvh_s_x' } }],
+    [
+      'volume create without the nvh_ prefix',
+      'POST',
+      '/volumes/create',
+      { body: { Name: 'efp_uploads', Driver: 'local' } }
+    ],
+    [
+      'volume create with a cluster spec',
+      'POST',
+      '/volumes/create',
+      { body: { Name: 'nvh_s_x', Driver: 'local', ClusterVolumeSpec: {} } }
+    ],
+    [
+      'service on a network named by id',
+      'POST',
+      '/services/create',
+      { body: withTask({ Networks: [{ Target: 'abc123def456' }] }) }
+    ],
+    [
+      'service on the host network',
+      'POST',
+      '/services/create',
+      { body: withTask({ Networks: [{ Target: 'host' }] }) }
+    ],
+    [
+      'service on ingress',
+      'POST',
+      '/services/create',
+      { body: withTask({ Networks: [{ Target: 'ingress' }] }) }
+    ],
+    [
+      'service with top-level Networks not ours',
+      'POST',
+      '/services/create',
+      { body: { ...service(), Networks: [{ Target: 'efp_default' }] } }
+    ],
+    [
+      'network create with the bridge driver',
+      'POST',
+      '/networks/create',
+      { body: { Name: 'nvh_s_net', Driver: 'bridge' } }
+    ],
+    ['network create with no driver', 'POST', '/networks/create', { body: { Name: 'nvh_s_net' } }],
+    [
+      'network create with Ingress',
+      'POST',
+      '/networks/create',
+      { body: { Name: 'nvh_s_net', Driver: 'overlay', Ingress: true } }
+    ],
+    [
+      'network create with ConfigFrom',
+      'POST',
+      '/networks/create',
+      { body: { Name: 'nvh_s_net', Driver: 'overlay', ConfigFrom: { Network: 'x' } } }
+    ],
+    [
+      'network create with ConfigOnly',
+      'POST',
+      '/networks/create',
+      { body: { Name: 'nvh_s_net', Driver: 'overlay', ConfigOnly: true } }
+    ],
+    [
+      'network create without the nvh_ prefix',
+      'POST',
+      '/networks/create',
+      { body: { Name: 'efp_net', Driver: 'overlay' } }
+    ],
+    [
+      'service with Runtime plugin',
+      'POST',
+      '/services/create',
+      { body: withTask({ Runtime: 'plugin' }) }
+    ],
+    [
+      'service with a PluginSpec',
+      'POST',
+      '/services/create',
+      { body: withTask({ PluginSpec: { Name: 'x' } }) }
+    ],
+    [
+      'bind mount with Propagation',
+      'POST',
+      '/services/create',
+      {
+        body: withMount({
+          Type: 'bind',
+          Source: '/srv/ext/s/a',
+          Target: '/x',
+          ReadOnly: true,
+          BindOptions: { Propagation: 'rshared' }
+        })
+      }
+    ],
+    [
+      'bind mount with ReadOnlyNonRecursive',
+      'POST',
+      '/services/create',
+      {
+        body: withMount({
+          Type: 'bind',
+          Source: '/srv/ext/s/a',
+          Target: '/x',
+          ReadOnly: true,
+          BindOptions: { ReadOnlyNonRecursive: true }
+        })
+      }
+    ],
+    [
+      'published port in traefik mode',
+      'POST',
+      '/services/create',
+      {
+        body: { ...service(), EndpointSpec: { Ports: [{ TargetPort: 3055, PublishedPort: 3110 }] } }
+      }
+    ],
+    [
+      'secret create with a Driver',
+      'POST',
+      '/secrets/create',
+      { body: { Name: 'nvh_s_X_1', Data: 'eA==', Driver: { Name: 'vault' } } }
+    ],
+    [
+      'secret create with Templating',
+      'POST',
+      '/secrets/create',
+      { body: { Name: 'nvh_s_X_1', Data: 'eA==', Templating: { Name: 'golang' } } }
+    ],
+    [
+      'secret create without the nvh_ prefix',
+      'POST',
+      '/secrets/create',
+      { body: { Name: 'efp_db', Data: 'eA==' } }
+    ],
+    ['X-Registry-Auth on /version', 'GET', '/version', { headers: { 'X-Registry-Auth': 'e30=' } }],
+    [
+      'X-Registry-Auth on /networks/create',
+      'POST',
+      '/networks/create',
+      { body: { Name: 'nvh_s_net', Driver: 'overlay' }, headers: { 'X-Registry-Auth': 'e30=' } }
+    ],
+    [
+      'X-Registry-Auth on /containers/create',
+      'POST',
+      '/containers/create',
+      { body: { Image: IMAGE }, headers: { 'x-registry-auth': 'e30=' } }
+    ]
+  ]
+
+  it.each(B)('%s is refused before any I/O', async (_name, method, path, opts) => {
+    const engine = createEngine(cfg, transport)
+    await expect(engine.call(method as 'GET', path, opts as never)).rejects.toBeInstanceOf(
+      EngineForbiddenError
+    )
+    expect(transport).not.toHaveBeenCalled()
+  })
+
+  it('publish mode: a port inside the range passes, outside or unpinned is refused', async () => {
+    const engine = createEngine(publishCfg, transport)
+    const base = service({
+      Mounts: [{ Type: 'volume', Source: 'nvh_s_uploads', Target: '/app/uploads' }]
+    })
+    const ok = {
+      ...base,
+      TaskTemplate: { ...base.TaskTemplate, Networks: [{ Target: 'nvh_s_net' }] }
+    }
+    await engine.call('POST', '/services/create', {
+      body: { ...ok, EndpointSpec: { Ports: [{ TargetPort: 3055, PublishedPort: 3115 }] } }
+    })
+    expect(seen).toHaveLength(1)
+    for (const port of [
+      { TargetPort: 3055, PublishedPort: 3120 },
+      { TargetPort: 3055, PublishedPort: 22 },
+      { TargetPort: 3055 },
+      { TargetPort: 3055, PublishedPort: 3115, Protocol: 'udp' }
+    ]) {
+      await expect(
+        engine.call('POST', '/services/create', {
+          body: { ...ok, EndpointSpec: { Ports: [port] } }
+        })
+      ).rejects.toBeInstanceOf(EngineForbiddenError)
+    }
+    // The edge network does not exist in publish mode, so it is not an allowed target there.
+    await expect(
+      engine.call('POST', '/services/create', {
+        body: { ...ok, TaskTemplate: { ...ok.TaskTemplate, Networks: [{ Target: 'edge' }] } }
+      })
+    ).rejects.toBeInstanceOf(EngineForbiddenError)
+    expect(seen).toHaveLength(1)
+  })
+
+  it('accepts runtime container, a plain bind with no options and a volume with only Labels', async () => {
+    const engine = createEngine(cfg, transport)
+    const t = service({
+      Mounts: [
+        {
+          Type: 'volume',
+          Source: 'nvh_s_uploads',
+          Target: '/app/uploads',
+          VolumeOptions: { Labels: { a: 'b' } }
+        },
+        {
+          Type: 'bind',
+          Source: '/srv/ext/s/a',
+          Target: '/x',
+          ReadOnly: true,
+          BindOptions: { NonRecursive: false }
+        },
+        { Type: 'tmpfs', Target: '/tmp' }
+      ]
+    })
+    await engine.call('POST', '/services/create', {
+      body: { ...t, TaskTemplate: { ...t.TaskTemplate, Runtime: 'container' } }
+    })
+    expect(seen).toHaveLength(1)
   })
 })
