@@ -114,6 +114,13 @@ export interface MaintenanceState {
    *  operator or a rebuild job set (`MAINTENANCE_OVERRIDE_KEY`), which wins
    *  while present — it is the one thing that survives a database restore. */
   source: 'settings' | 'override'
+  /** Hub phase 6 (Decision 19): the override was written with `strict: true` — no caller is
+   *  exempt from the write freeze, administrators on their own session included. Present only
+   *  when true. */
+  strict?: true
+  /** The override was set by the Nivaro Hub over the hub link (a move); an admin's End
+   *  maintenance leaves it alone. Present only when true. */
+  hub?: true
 }
 
 /**
@@ -168,6 +175,8 @@ async function readOverride(): Promise<Omit<MaintenanceState, 'source'> | null> 
       message?: unknown
       display?: unknown
       until?: unknown
+      strict?: unknown
+      hub?: unknown
     }
     if (j?.on !== true) return null
     const until = typeof j.until === 'string' && j.until ? new Date(j.until) : null
@@ -175,7 +184,9 @@ async function readOverride(): Promise<Omit<MaintenanceState, 'source'> | null> 
       on: true,
       message: typeof j.message === 'string' && j.message.trim() ? j.message.trim() : null,
       display: normalizeMaintenanceDisplay(j.display),
-      until: until && !Number.isNaN(until.getTime()) ? until.toISOString() : null
+      until: until && !Number.isNaN(until.getTime()) ? until.toISOString() : null,
+      ...(j.strict === true ? { strict: true as const } : {}),
+      ...(j.hub === true ? { hub: true as const } : {})
     }
   } catch {
     return null
@@ -198,11 +209,93 @@ export async function clearMaintenanceOverride(): Promise<void> {
   const redis = redisClient()
   if (!redis) return
   try {
-    await redis.del(MAINTENANCE_OVERRIDE_KEY)
+    // Hub phase 6: a freeze the Hub set for a move is the Hub's to lift (POST
+    // /api/hub-link/maintenance {on:false}); an admin's End maintenance leaves it.
+    if (!(await hubOverrideSet(redis))) await redis.del(MAINTENANCE_OVERRIDE_KEY)
   } catch {
     /* best-effort */
   }
   maintenanceWritten()
+}
+
+async function hubOverrideSet(redis: any): Promise<boolean> {
+  const raw = (await redis.get(MAINTENANCE_OVERRIDE_KEY)) as string | null
+  if (!raw) return false
+  try {
+    return (JSON.parse(raw) as { hub?: unknown })?.hub === true
+  } catch {
+    return false
+  }
+}
+
+// ─── Hub phase 6: strict maintenance over the hub link (a move) ─────────────────────────────
+
+/** Marker that a move's boot maintenance was released (HUB_BOOT_MAINTENANCE=<move id>). */
+export function hubBootMaintenanceDoneKey(moveId: number): string {
+  return `nvr:hub:boot-maintenance-done:${moveId}`
+}
+
+export const HUB_MAINTENANCE_DEFAULT_MESSAGE =
+  'This app is moving to a new home. It will be back in a few minutes.'
+
+function hubOverrideJson(message: string | null, moveId: number | null): string {
+  return JSON.stringify({
+    on: true,
+    display: 'page',
+    strict: true,
+    hub: true,
+    message: message || HUB_MAINTENANCE_DEFAULT_MESSAGE,
+    ...(moveId ? { move_id: moveId } : {}),
+    set_by: 'hub'
+  })
+}
+
+/**
+ * Set or clear the Hub's strict maintenance (POST /api/hub-link/maintenance). On: the override
+ * `{on, display:'page', strict, hub, message}`. Off: removes it only when it is the Hub's own (an
+ * operator's freeze stays); with `moveId` it also records that this move's boot maintenance is
+ * released, so a restart carrying HUB_BOOT_MAINTENANCE=<moveId> does not set it again. Busts
+ * this process's cached state at once (ruling R14); other replicas follow within 15 s.
+ * Throws without Redis: a freeze that is not stored would hold on one replica only.
+ */
+export async function setHubMaintenance(input: {
+  on: boolean
+  message?: string | null
+  moveId?: number | null
+}): Promise<void> {
+  const redis = redisClient()
+  if (!redis) throw new Error('Redis is not available')
+  if (input.on) {
+    await redis.set(
+      MAINTENANCE_OVERRIDE_KEY,
+      hubOverrideJson(input.message ?? null, input.moveId ?? null)
+    )
+  } else {
+    if (await hubOverrideSet(redis)) await redis.del(MAINTENANCE_OVERRIDE_KEY)
+    if (input.moveId)
+      await redis.set(hubBootMaintenanceDoneKey(input.moveId), new Date().toISOString())
+  }
+  maintenanceWritten()
+}
+
+/**
+ * Boot (index.ts): a dedicated target a move deployed carries HUB_BOOT_MAINTENANCE=<move id> and
+ * starts in strict maintenance until the Hub releases it. Applies once per value: after the
+ * release (`maintenance {on:false, move_id}`) the done marker stops a restart from setting it
+ * again. Only where the hub link is mounted. Returns whether it set the freeze.
+ */
+export async function applyHubBootMaintenance(
+  redis: any,
+  env: NodeJS.ProcessEnv = process.env
+): Promise<boolean> {
+  const raw = (env.HUB_BOOT_MAINTENANCE ?? '').trim()
+  if (!/^[1-9]\d{0,15}$/.test(raw)) return false
+  const moveId = Number(raw)
+  if (!redis) return false
+  if (await redis.get(hubBootMaintenanceDoneKey(moveId))) return false
+  await redis.set(MAINTENANCE_OVERRIDE_KEY, hubOverrideJson(null, moveId))
+  maintenanceWritten()
+  return true
 }
 
 export function normalizeMaintenanceDisplay(v: unknown): MaintenanceDisplay {

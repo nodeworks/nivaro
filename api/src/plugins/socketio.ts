@@ -57,6 +57,7 @@ import {
   mayReadSignalField
 } from '../services/field-signal-gate.js'
 import { registerGridPresence } from '../services/grid-presence.js'
+import { APP_MOVED, isRetiredSync } from '../services/hub-link/retire.js'
 import { fullHuddleDeps, registerHuddle } from '../services/huddle.js'
 import { defaultHuddleCollabDeps, registerHuddleCollab } from '../services/huddle-collab.js'
 import { INSTANCE_ID } from '../services/instance-roster.js'
@@ -855,6 +856,9 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     perMessageDeflate: socketCompressionOn() ? { threshold: 1024 } : false
   })
   _ioRef = io
+  // Hub phase 6 (ruling M17): a retired app (moved away by the Hub) takes no new socket; its
+  // clients reach the app at its new home after a reload.
+  io.use((_socket, next) => (isRetiredSync() ? next(new Error(APP_MOVED)) : next()))
   // Cloud: personal `user:<id>` rooms are per tenant (services/cloud-user-rooms.ts).
   scopeUserRoomsPerTenant(io)
   // #2460 / #2488 / #2779 / #2462 — buffer growth samples and this process's figures for the
