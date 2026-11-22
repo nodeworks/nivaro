@@ -1,0 +1,62 @@
+name: Publish Hub agent
+
+on:
+  push:
+    tags:
+      - '@hub-agent-*'
+
+  # A manual run must be started ON a release tag (Use workflow from → Tags →
+  # @hub-agent-x.y.z): from a branch the job skips, so a branch can never push
+  # a version or latest.
+  workflow_dispatch:
+
+# Nothing by default; the job asks for what it needs.
+permissions: {}
+
+jobs:
+  publish:
+    # The dev repo receives the same tags a minute earlier; only the public
+    # mirror publishes, or the two runs race for one version.
+    if: github.repository == 'nodeworks/nivaro' && startsWith(github.ref, 'refs/tags/@hub-agent-')
+    name: Publish nodeworks/nivaro-hub-agent
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Extract version from tag
+        id: meta
+        run: |
+          VERSION="${GITHUB_REF_NAME#@hub-agent-}"
+          # Only a plain semver goes further (the tag name is user input).
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "tag $GITHUB_REF_NAME does not carry a version" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/hub-agent/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            nodeworks/nivaro-hub-agent:${{ steps.meta.outputs.version }}
+            nodeworks/nivaro-hub-agent:latest

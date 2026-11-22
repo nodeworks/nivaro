@@ -1,0 +1,6 @@
+# Used instead of the repo-root .dockerignore when building deploy/hub-agent/Dockerfile.
+**/node_modules
+**/dist
+.git
+.env
+.env.*
