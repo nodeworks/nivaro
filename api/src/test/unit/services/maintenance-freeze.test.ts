@@ -137,7 +137,10 @@ describe('maintenanceExemptPath', () => {
       '/api/hub/app-link/other',
       '/api/hub/signin/clients',
       '/api/hub/apps',
-      '/api/hub/signin/keys/some-kid'
+      '/api/hub/signin/keys/some-kid',
+      // Phase 3 merge: the Hub seeding an app's first administrator is a write — frozen.
+      '/api/hub-link/first-admin',
+      '/api/hub-link/first-admin?x=1'
     ]) {
       expect(maintenanceExemptPath(p), p).toBe(false)
     }
