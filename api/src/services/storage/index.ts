@@ -5,6 +5,9 @@
  * Env vars are read from process.env directly — see local.ts / s3.ts / azure.ts
  * for the provider-specific variables.
  */
+import { getTenantId } from '../../db/tenant-context.js'
+import { tenantSource } from '../deployment-mode.js'
+import { scopedStorage } from './app-scope.js'
 import { AzureStorage } from './azure.js'
 import { instrumentStorage } from './instrument.js'
 import { LocalStorage } from './local.js'
@@ -38,6 +41,7 @@ export interface StorageProvider {
 
 let _storage: StorageProvider | null = null
 let _provider: string | null = null
+let _appScoped = false
 
 export function getStorageProviderName(): 'local' | 's3' | 'azure' {
   const name = (process.env.STORAGE_PROVIDER ?? 'local').toLowerCase()
@@ -46,13 +50,19 @@ export function getStorageProviderName(): 'local' | 's3' | 'azure' {
 
 export function getStorage(): StorageProvider {
   const name = getStorageProviderName()
-  if (_storage && _provider === name) return _storage
+  // Hub phase 6: on a Hub shared deployment every key lives under apps/<tenantId>/ of the app
+  // the call runs in (services/storage/app-scope.ts). Self-hosted and cloud: unwrapped.
+  const appScoped = tenantSource() === 'hub'
+  if (_storage && _provider === name && _appScoped === appScoped) return _storage
 
   // #2164: every call is timed for the Traffic Map's storage node.
-  if (name === 's3') _storage = instrumentStorage(new S3Storage(), name)
-  else if (name === 'azure') _storage = instrumentStorage(new AzureStorage(), name)
-  else _storage = instrumentStorage(new LocalStorage(), name)
+  let base: StorageProvider
+  if (name === 's3') base = instrumentStorage(new S3Storage(), name)
+  else if (name === 'azure') base = instrumentStorage(new AzureStorage(), name)
+  else base = instrumentStorage(new LocalStorage(), name)
+  _storage = appScoped ? scopedStorage(base, () => getTenantId() ?? null) : base
 
   _provider = name
+  _appScoped = appScoped
   return _storage
 }

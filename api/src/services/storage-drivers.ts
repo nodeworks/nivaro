@@ -23,6 +23,9 @@ import { createReadStream } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import { Readable } from 'node:stream'
 import { db } from '../db/index.js'
+import { getTenantId } from '../db/tenant-context.js'
+import { tenantSource } from './deployment-mode.js'
+import { scopedStorage } from './storage/app-scope.js'
 import { readFallback } from './storage/fallback.js'
 import { readFallbackUrl } from './storage/fallback-url.js'
 import { getStorage } from './storage/index.js'
@@ -432,11 +435,22 @@ export function buildDriver(
   return envDriver()
 }
 
-let _cache: { fetched: number; driver: StorageDriver } | null = null
+// One cached driver per app on a Hub shared deployment (each app has its own settings row and
+// may name its own bucket); one for the process everywhere else ('' — the old single slot).
+const _cache = new Map<string, { fetched: number; driver: StorageDriver }>()
 const CACHE_TTL_MS = 60_000
 
+/** A settings driver whose keys live under the current app's apps/<tenantId>/ (hub source). */
+function appScopedDriver(d: StorageDriver): StorageDriver {
+  return scopedStorage(d, () => getTenantId() ?? null)
+}
+
+function driverCacheKey(): string {
+  return tenantSource() === 'hub' ? `app:${getTenantId() ?? ''}` : ''
+}
+
 export function bustStorageDriverCache(): void {
-  _cache = null
+  _cache.clear()
 }
 
 /** Read the configured driver + parsed config straight from settings (no cache). */
@@ -474,7 +488,9 @@ export async function readStorageSettings(): Promise<{
  * surfaced loudly.
  */
 export async function getActiveStorageDriver(): Promise<StorageDriver> {
-  if (_cache && Date.now() - _cache.fetched < CACHE_TTL_MS) return _cache.driver
+  const cacheKey = driverCacheKey()
+  const hit = _cache.get(cacheKey)
+  if (hit && Date.now() - hit.fetched < CACHE_TTL_MS) return hit.driver
   const { driver, config } = await readStorageSettings()
   let resolved: StorageDriver
   try {
@@ -485,8 +501,13 @@ export async function getActiveStorageDriver(): Promise<StorageDriver> {
   // #2164: timed for the Traffic Map's storage node. The env provider is already timed inside
   // getStorage(), so it is not wrapped twice; the Settings "Test connection" probe builds its
   // driver with buildDriver and is not counted.
-  const timed = resolved.name === 'local' ? resolved : instrumentStorage(resolved, resolved.name)
-  _cache = { fetched: Date.now(), driver: timed }
+  let timed = resolved.name === 'local' ? resolved : instrumentStorage(resolved, resolved.name)
+  // Hub phase 6: on a shared deployment a saved-settings bucket is keyed per app too. Two apps
+  // that are copies of one database carry the same settings row, so they name the same bucket:
+  // every key goes under apps/<tenantId>/, as the env provider does (getStorage() scopes the
+  // 'local' driver already).
+  if (resolved.name !== 'local' && tenantSource() === 'hub') timed = appScopedDriver(timed)
+  _cache.set(cacheKey, { fetched: Date.now(), driver: timed })
   return timed
 }
 
@@ -558,6 +579,8 @@ export async function testStorageDriver(
   let d: StorageDriver
   try {
     d = buildDriver(driver, config)
+    // The probe object stays inside the app on a shared deployment, like every other key.
+    if (d.name !== 'local' && tenantSource() === 'hub') d = appScopedDriver(d)
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) }
   }
