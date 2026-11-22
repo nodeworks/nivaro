@@ -17,7 +17,8 @@ import {
   RENDERER_DEFAULT_ENV_KEYS,
   RENDERER_ENV_KEYS,
   reservedSettingKey,
-  SECRET_LIKE_KEY_RE
+  SECRET_LIKE_KEY_RE,
+  secretOnlyEnvKey
 } from './stack-env.js'
 import { STACK_SIZES, type StackSize } from './templates.js'
 
@@ -262,6 +263,14 @@ function settingKeyProblem(k: string, redis: StackRedis, allow: EnvAllow): Fail 
     return fail(
       'RESERVED_SETTING',
       `${k} cannot be a stack setting (${redisNote(k, redis)}).`,
+      named('setting', k)
+    )
+  }
+  // Ruling X-2: a credential that may only ever be a secret (the agent refuses it as env).
+  if (secretOnlyEnvKey(k)) {
+    return fail(
+      'SECRET_IN_SETTINGS',
+      `${k} can only be a secret, never a plain setting.`,
       named('setting', k)
     )
   }

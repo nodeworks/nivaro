@@ -54,6 +54,8 @@
     "NIVARO_HEAP_FROM_CGROUP"
   ],
   "role_env_keys": ["SOCKETS", "CRON_TICKS", "IMPORT_WORKER", "MEDIA_WORKER", "VIDEO_RENDER"],
+  "hub_owned_keys": ["HUB_SHARED_DEPLOYMENT", "HUB_DEPLOYMENT_TOKEN"],
+  "secret_only_keys": ["HUB_TOKEN", "HUB_CLIENT_SECRET"],
   "agent_set_env_keys": [
     "NIVARO_ROLE",
     "REDIS_URL",

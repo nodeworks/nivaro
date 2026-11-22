@@ -93,6 +93,10 @@ export const AGENT_ENV_RULES = {
     'NIVARO_HEAP_FROM_CGROUP'
   ] as readonly string[],
   role_env_keys: ROLE_ENV_KEYS,
+  /** Ruling X-2: the deployment's mode and identity belong to the Hub (phase 6), never a stack. */
+  hub_owned_keys: ['HUB_SHARED_DEPLOYMENT', 'HUB_DEPLOYMENT_TOKEN'] as readonly string[],
+  /** Ruling X-2: credentials a spec carries only as a secret, never as env. */
+  secret_only_keys: ['HUB_TOKEN', 'HUB_CLIENT_SECRET'] as readonly string[],
   /** Every env key the agent sets itself (REDIS_URL only while redis is bundled). */
   agent_set_env_keys: [
     'NIVARO_ROLE',
@@ -115,6 +119,7 @@ type RedisMode = 'bundled' | 'external' | string
 function agentForbiddenBase(k: string, redis: RedisMode): boolean {
   const r = AGENT_ENV_RULES
   if (r.runtime_keys.includes(k)) return true
+  if (r.hub_owned_keys.includes(k)) return true
   if (r.runtime_prefixes.some((p) => k.startsWith(p))) return true
   if (k.startsWith(r.node_prefix) && !r.node_allowed.includes(k)) return true
   if (k.startsWith(r.nivaro_prefix) && !r.nivaro_allowed.includes(k)) return true
@@ -129,6 +134,11 @@ export function agentRefusesEnvKey(key: string, redis: RedisMode): boolean {
   if (AGENT_ENV_RULES.every_file_key_forbidden && key.endsWith(AGENT_ENV_RULES.file_suffix))
     return true
   return agentForbiddenBase(key, redis)
+}
+
+/** Exactly the agent's SECRET_ONLY_KEYS test: a key a spec may carry as a secret, never as env. */
+export function secretOnlyEnvKey(key: string): boolean {
+  return AGENT_ENV_RULES.secret_only_keys.includes(key)
 }
 
 /**
@@ -150,7 +160,7 @@ export const ENV_PREFIX_RE = /^[A-Z][A-Z0-9]*(_[A-Z0-9]+)*_$/
  */
 export function operatorPrefixConflict(prefix: string): boolean {
   const r = AGENT_ENV_RULES
-  const keys = [...r.runtime_keys, ...r.agent_set_env_keys]
+  const keys = [...r.runtime_keys, ...r.agent_set_env_keys, ...r.hub_owned_keys]
   const prefixes = [...r.runtime_prefixes, r.node_prefix, r.nivaro_prefix]
   return (
     keys.some((k) => k.startsWith(prefix)) ||

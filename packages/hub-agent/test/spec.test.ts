@@ -272,6 +272,36 @@ describe('validateStackSpec — one-line values (SETTING_INVALID)', () => {
   })
 })
 
+describe('validateStackSpec — Hub-owned and secret-only keys (ruling X-2)', () => {
+  it('HUB_SHARED_DEPLOYMENT and HUB_DEPLOYMENT_TOKEN are refused as env and as a secret, field named', () => {
+    for (const key of ['HUB_SHARED_DEPLOYMENT', 'HUB_DEPLOYMENT_TOKEN']) {
+      expect(codeOf({ ...base(), env: { [key]: 'x' } }, `env.${key}`)).toBe('ENV_FORBIDDEN')
+      expect(
+        codeOf(
+          { ...base(), secrets: { ...base().secrets, [key]: 'x'.repeat(40) } },
+          `secrets.${key}`
+        )
+      ).toBe('ENV_FORBIDDEN')
+    }
+  })
+
+  it('HUB_TOKEN and HUB_CLIENT_SECRET only as a secret, never as env', () => {
+    for (const key of ['HUB_TOKEN', 'HUB_CLIENT_SECRET']) {
+      const env = { ...base().env, [key]: 'x'.repeat(40) }
+      const secrets = { ...base().secrets }
+      delete secrets[key]
+      expect(codeOf({ ...base(), env, secrets }, `env.${key}`)).toBe('ENV_FORBIDDEN')
+      const asSecret = { ...base(), secrets: { ...base().secrets, [key]: 'x'.repeat(40) } }
+      expect(validateStackSpec(asSecret, cfg()).ok).toBe(true)
+    }
+  })
+
+  it('an operator prefix over a Hub-owned key is refused (HUB_)', () => {
+    expect(operatorPrefixConflict('HUB_')).toBe(true)
+    expect(operatorPrefixConflict('HUB_SHARED_')).toBe(true)
+  })
+})
+
 describe('validateStackSpec — ENV_FORBIDDEN', () => {
   const families: Record<string, string[]> = {
     'process and loader': ['PATH', 'HOME', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'LD_AUDIT'],

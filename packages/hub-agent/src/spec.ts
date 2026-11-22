@@ -117,6 +117,19 @@ export const AGENT_SET_ENV_KEYS: readonly string[] = [
 ]
 
 /**
+ * Keys only the Hub decides (ruling X-2): HUB_SHARED_DEPLOYMENT and HUB_DEPLOYMENT_TOKEN make a
+ * process a shared deployment and name it to the Hub — the deployment's mode and identity, which
+ * belong to the Hub (phase 6), never to a stack's settings. Refused as env and as a secret.
+ */
+export const HUB_OWNED_KEYS: readonly string[] = ['HUB_SHARED_DEPLOYMENT', 'HUB_DEPLOYMENT_TOKEN']
+
+/**
+ * Credentials a spec may carry only as a secret, never as env (ruling X-2): the hub token (the
+ * Hub's renderer sets it) and the Hub sign-in client secret.
+ */
+export const SECRET_ONLY_KEYS: readonly string[] = ['HUB_TOKEN', 'HUB_CLIENT_SECRET']
+
+/**
  * The NIVARO_* keys a spec may set. Every other NIVARO_* key is refused: the
  * image entrypoint reads several (NIVARO_APP_UID/GID, NIVARO_RUN_AS,
  * NIVARO_CGROUP_ROOT, NIVARO_MEMINFO, NIVARO_RUNNING_AS_ROOT,
@@ -204,7 +217,7 @@ const RUNTIME_PREFIXES = [
  * would still refuse each key.
  */
 export function operatorPrefixConflict(prefix: string): boolean {
-  const keys = [...RUNTIME_KEYS, ...AGENT_SET_ENV_KEYS]
+  const keys = [...RUNTIME_KEYS, ...AGENT_SET_ENV_KEYS, ...HUB_OWNED_KEYS]
   const prefixes = [...RUNTIME_PREFIXES, 'NODE_', 'NIVARO_']
   return (
     keys.some((k) => k.startsWith(prefix)) ||
@@ -214,6 +227,7 @@ export function operatorPrefixConflict(prefix: string): boolean {
 
 function forbiddenBase(k: string, redis: unknown): boolean {
   if (RUNTIME_KEYS.has(k)) return true
+  if (HUB_OWNED_KEYS.includes(k)) return true
   if (RUNTIME_PREFIXES.some((p) => k.startsWith(p))) return true
   if (k.startsWith('NODE_') && k !== 'NODE_ENV') return true
   if (k.startsWith('NIVARO_') && !NIVARO_ENV_ALLOWED.includes(k)) return true
@@ -400,6 +414,8 @@ export function validateStackSpec(body: unknown, cfg: SpecConfig): SpecResult {
       const f = `env.${cap(k)}`
       if (!ENV_KEY_RE.test(k)) bad(f, 'BAD_KEY')
       else if (forbiddenEnvKey(k, redis) || secretKeys.includes(k)) bad(f, 'ENV_FORBIDDEN')
+      // X-2: a credential that may only ever be a secret (mounted at /run/secrets).
+      else if (SECRET_ONLY_KEYS.includes(k)) bad(f, 'ENV_FORBIDDEN')
       else if (!allowedEnvKey(k, prefixes)) bad(f, 'ENV_NOT_ALLOWED')
       else if (typeof v !== 'string') bad(f, 'REQUIRED')
       else if (bytes(v) > MAX_ENV_BYTES) bad(f, 'TOO_LONG')

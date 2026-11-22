@@ -102,7 +102,9 @@ generated from the API's sources and shipped inside the agent) plus keys under
 (`ENV_NOT_ALLOWED` on the field, which names the key and never the value). The
 deny rules stay as a second layer, so a prefix never opens a refused key: `PATH`,
 `LD_*`, `NODE_*` (except `NODE_ENV`), the library loader paths and every
-`<KEY>_FILE` stay refused. The Hub reads the prefixes from `GET /v1/health`
+`<KEY>_FILE` stay refused, and so do `HUB_SHARED_DEPLOYMENT` and
+`HUB_DEPLOYMENT_TOKEN` (a deployment's mode and identity belong to the Hub).
+`HUB_TOKEN` and `HUB_CLIENT_SECRET` are taken only as secrets, never as env. The Hub reads the prefixes from `GET /v1/health`
 (`env_prefixes`) and refuses the same keys when stack settings are saved; when it
 cannot reach the agent, no prefix counts. To let an extension read its own
 settings, add its prefix here and restart the agent.

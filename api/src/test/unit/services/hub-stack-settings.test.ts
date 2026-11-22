@@ -248,6 +248,36 @@ describe('hub stack settings', () => {
     expect(await codeOf(env, { secrets: { [k]: 'v' } })).toBe('RESERVED_SETTING')
   })
 
+  it('X-2: the deployment mode keys belong to the Hub, refused with the field named', async () => {
+    const env = await newEnv()
+    for (const k of ['HUB_SHARED_DEPLOYMENT', 'HUB_DEPLOYMENT_TOKEN', 'HUB_TOKEN']) {
+      for (const [kind, body] of [
+        ['setting', { settings: { [k]: 'x'.repeat(40) } }],
+        ['secret', { secrets: { [k]: 'x'.repeat(40) } }]
+      ] as const) {
+        const v = await validate(env, body)
+        expect(v.ok, `${k} ${kind}`).toBe(false)
+        if (!v.ok) {
+          expect(v.code).toBe('RESERVED_SETTING')
+          expect(v.field).toEqual({ kind, key: k })
+        }
+      }
+    }
+  })
+
+  it('X-2: HUB_CLIENT_SECRET only as a secret', async () => {
+    const env = await newEnv()
+    const v = await validate(env, { settings: { ...PG, HUB_CLIENT_SECRET: 'x'.repeat(40) } })
+    expect(v.ok).toBe(false)
+    if (!v.ok) {
+      expect(v.code).toBe('SECRET_IN_SETTINGS')
+      expect(v.field).toEqual({ kind: 'setting', key: 'HUB_CLIENT_SECRET' })
+    }
+    expect(
+      await codeOf(env, { settings: PG, secrets: { HUB_CLIENT_SECRET: 'x'.repeat(40) } })
+    ).toBeNull()
+  })
+
   it('allows the NIVARO_* keys the agent allows', async () => {
     const env = await newEnv()
     expect(

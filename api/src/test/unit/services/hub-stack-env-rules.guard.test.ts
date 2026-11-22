@@ -7,7 +7,8 @@ import {
   agentRefusesEnvKey,
   ENV_KEY_RE,
   ONE_LINE_KEYS,
-  reservedSettingKey
+  reservedSettingKey,
+  secretOnlyEnvKey
 } from '../../../services/hub/docker/stack-env.js'
 
 // Guard: the Hub's stack settings must refuse every env key the Hub agent refuses
@@ -28,7 +29,10 @@ const FIXTURE = JSON.parse(
   readFileSync(resolve(import.meta.dirname, '../../fixtures/hub-agent-env-rules.json'), 'utf8')
 )
 
-type AgentSpec = { forbiddenEnvKey: (key: string, redis: unknown) => boolean }
+type AgentSpec = {
+  forbiddenEnvKey: (key: string, redis: unknown) => boolean
+  SECRET_ONLY_KEYS: readonly string[]
+}
 type AgentNames = { ENV_KEY_RE: RegExp }
 
 async function loadAgent(): Promise<{ spec: AgentSpec; names: AgentNames }> {
@@ -76,6 +80,8 @@ function corpus(): string[] {
     ...FIXTURE.nivaro_allowed,
     ...FIXTURE.role_env_keys,
     ...FIXTURE.agent_set_env_keys,
+    ...FIXTURE.hub_owned_keys,
+    ...FIXTURE.secret_only_keys,
     `${FIXTURE.node_prefix}X`,
     FIXTURE.node_prefix,
     `${FIXTURE.nivaro_prefix}X`,
@@ -119,6 +125,8 @@ describe('hub stack env rules mirror the agent', () => {
     expect(AGENT_ENV_RULES.nivaro_allowed).toEqual(FIXTURE.nivaro_allowed)
     expect(AGENT_ENV_RULES.role_env_keys).toEqual(FIXTURE.role_env_keys)
     expect(AGENT_ENV_RULES.agent_set_env_keys).toEqual(FIXTURE.agent_set_env_keys)
+    expect(AGENT_ENV_RULES.hub_owned_keys).toEqual(FIXTURE.hub_owned_keys)
+    expect(AGENT_ENV_RULES.secret_only_keys).toEqual(FIXTURE.secret_only_keys)
     expect(AGENT_ENV_RULES.redis_url_allowed_when).toBe(FIXTURE.redis_url_allowed_when)
     expect(AGENT_ENV_RULES.file_suffix).toBe(FIXTURE.file_suffix)
     expect(AGENT_ENV_RULES.every_file_key_forbidden).toBe(FIXTURE.every_file_key_forbidden)
@@ -142,6 +150,13 @@ describe('hub stack env rules mirror the agent', () => {
       ...strings(agentSet),
       ...(agentSet.includes('...ROLE_ENV_KEYS') ? FIXTURE.role_env_keys : [])
     ]).toEqual(FIXTURE.agent_set_env_keys)
+    // Ruling X-2: the Hub-owned and secret-only keys are the same lists on both sides.
+    expect(strings(block(src, 'export const HUB_OWNED_KEYS: readonly string[] = [', ']'))).toEqual(
+      FIXTURE.hub_owned_keys
+    )
+    expect(
+      strings(block(src, 'export const SECRET_ONLY_KEYS: readonly string[] = [', ']'))
+    ).toEqual(FIXTURE.secret_only_keys)
     // The one-line keys (smbclient auth file lines) are the same list on both sides.
     expect(strings(block(src, 'export const ONE_LINE_KEYS: readonly string[] = [', ']'))).toEqual([
       ...ONE_LINE_KEYS
@@ -174,6 +189,27 @@ describe('hub stack env rules mirror the agent', () => {
       (k) => spec.forbiddenEnvKey(k, redis) && !reservedSettingKey(k, redis as string)
     )
     expect(looser).toEqual([])
+  })
+
+  it("X-2: secretOnlyEnvKey answers exactly the agent's SECRET_ONLY_KEYS", async () => {
+    const { spec } = await loadAgent()
+    const differ = corpus().filter((k) => spec.SECRET_ONLY_KEYS.includes(k) !== secretOnlyEnvKey(k))
+    expect(differ).toEqual([])
+  })
+
+  it.each([
+    'bundled',
+    'external'
+  ] as const)('X-2: Hub-owned keys are refused everywhere (redis %s)', (redis) => {
+    for (const k of ['HUB_SHARED_DEPLOYMENT', 'HUB_DEPLOYMENT_TOKEN']) {
+      expect(agentRefusesEnvKey(k, redis)).toBe(true)
+      expect(reservedSettingKey(k, redis)).toBe(true)
+    }
+    // HUB_TOKEN: the renderer's own; HUB_CLIENT_SECRET: a secret, never env.
+    expect(reservedSettingKey('HUB_TOKEN', redis)).toBe(true)
+    expect(agentRefusesEnvKey('HUB_CLIENT_SECRET', redis)).toBe(false)
+    expect(secretOnlyEnvKey('HUB_CLIENT_SECRET')).toBe(true)
+    expect(secretOnlyEnvKey('HUB_TOKEN')).toBe(true)
   })
 
   it.each(['bundled', 'external'] as const)('spot checks with redis %s', (redis) => {

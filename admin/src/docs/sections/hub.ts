@@ -686,7 +686,7 @@ export const hubDockerDocs: DocSection = {
     },
     {
       type: 'p',
-      text: 'Templates apply from Nivaro 0.3.0 and are the full image only; an older version has no template (`TEMPLATE_NONE`). SQLite can only run at size small (`SQLITE_ONE_PROCESS`). The Hub adds `PUBLIC_URL`, `ADMIN_URL`, `NIVARO_ENVIRONMENT`, `NODE_ENV`, `MIGRATION_SAFE_MODE`, `TRUST_PROXY` (default `1`) and `HUB_URL` itself, and the environment hub token as the secret `HUB_TOKEN`; a setting or secret of the same name is refused (`RESERVED_SETTING`, or `ENV_SECRET_CLASH` when a secret collides with a value the Hub sets).'
+      text: "Templates apply from Nivaro 0.3.0 and are the full image only; an older version has no template (`TEMPLATE_NONE`). SQLite can only run at size small (`SQLITE_ONE_PROCESS`). The Hub adds `PUBLIC_URL`, `ADMIN_URL`, `NIVARO_ENVIRONMENT`, `NODE_ENV`, `MIGRATION_SAFE_MODE`, `TRUST_PROXY` (default `1`) and `HUB_URL` itself, and the environment hub token as the secret `HUB_TOKEN`; a setting or secret of the same name is refused (`RESERVED_SETTING`, or `ENV_SECRET_CLASH` when a secret collides with a value the Hub sets). `HUB_SHARED_DEPLOYMENT` and `HUB_DEPLOYMENT_TOKEN` decide a deployment's mode and identity and belong to the Hub: refused as a setting and as a secret (`RESERVED_SETTING`; the agent answers `ENV_FORBIDDEN`). `HUB_CLIENT_SECRET` (Hub sign-in) may only be a secret (`SECRET_IN_SETTINGS` as a plain setting); `HUB_TOKEN` only ever comes from the Hub. An agent operator prefix that covers one of these keys (`HUB_`) is refused at start."
     },
     {
       type: 'h3',
