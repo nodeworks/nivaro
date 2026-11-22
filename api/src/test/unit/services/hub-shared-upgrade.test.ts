@@ -649,6 +649,49 @@ describe('startSharedUpgrade — the run', () => {
     expect(again.SESSION_SECRET).toBe(opened.SESSION_SECRET)
   })
 
+  it('wait_version leaves only once swarm converged, not just when sightings agree (review minor 6)', async () => {
+    const id = await newShared()
+    const f = fakes()
+    const states = ['updating', 'updating', 'converged']
+    const order: string[] = []
+    const { deps } = runDeps(f)
+    deps.agentStack = vi.fn(async () => {
+      const state = states.shift() ?? 'converged'
+      order.push(`stack:${state}`)
+      return {
+        name: 'x',
+        owner: { shared: 'x' },
+        environment: 'shared',
+        spec_hash: 'f'.repeat(64),
+        image: null,
+        state: state as 'converged',
+        published_port: null,
+        services: []
+      }
+    }) as never
+    const status = deps.status
+    deps.status = vi.fn(async (s: never) => {
+      order.push('status')
+      return status(s)
+    }) as never
+    const plan = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', deps)
+    const key = (await Store.getShared(id))?.key as string
+    const out = await Run.startSharedUpgrade(
+      id,
+      { version: '0.3.210', plan_hash: plan.plan_hash, confirm: key },
+      'admin-1',
+      deps
+    )
+    await Run.awaitSharedUpgrade(out.shared_deploy_id)
+    expect((await Run.readSharedDeploy(out.shared_deploy_id))?.status).toBe('success')
+    expect(order.slice(0, 4)).toEqual([
+      'stack:updating',
+      'stack:updating',
+      'stack:converged',
+      'status'
+    ])
+  })
+
   it('one app’s schema failed: run failed naming that tenant, pins unchanged, others ok', async () => {
     const id = await newShared()
     const a = await newApp(id, [{ key: 'production', placed: true }])

@@ -58,8 +58,8 @@ import {
  *                its row; the token opened; the agent asked again (edge); the spec rendered.
  *   2. apply   — PUT to the agent (cancel asked once more just before).
  *   3. wait_version ≤ 30 min — every replica the Hub saw in the last 2 min reports the version
- *                (an old replica drops out of that window once it is gone); swarm rolling back or
- *                pausing the update fails at once.
+ *                (an old replica drops out of that window once it is gone) and swarm says the
+ *                stack converged; swarm rolling back or pausing the update fails at once.
  *   4. wait_schema ≤ 10 min — the deployment says every app's schema is `ok` on the version; an
  *                app whose migration failed fails the run, named by its tenant id (the others keep
  *                serving: the deployment blocks only that app).
@@ -624,24 +624,31 @@ async function runUpgrade(c: RunCtx, deps: SharedRunDeps): Promise<void> {
         seen = []
       }
       const behind = seen.filter((s) => s.version !== version)
-      const line = seen.length
-        ? `${seen.length - behind.length}/${seen.length} replicas run ${version}`
-        : 'no replica seen yet'
+      const line = `${
+        seen.length
+          ? `${seen.length - behind.length}/${seen.length} replicas run ${version}`
+          : 'no replica seen yet'
+      }; swarm ${st === undefined ? 'not answering' : (st?.state ?? 'has no such stack')}`
       if (line !== lastLine) {
         run.log(`3. ${line}`)
         lastLine = line
       }
-      if (seen.length && !behind.length) break
+      // Both: every live replica on the version AND swarm done replacing tasks — a same-version
+      // re-apply has every sighting right at once while swarm is still rolling (review minor 6).
+      const converged = st?.state === 'converged'
+      if (seen.length && !behind.length && converged) break
       if (now() >= versionBy)
         throw new Stop(
           'failed',
           'VERSION_TIMEOUT',
-          seen.length
-            ? `Replicas still on another version after 30 minutes: ${behind
-                .slice(0, 5)
-                .map((s) => `${s.instance} (${s.version ?? 'unknown'})`)
-                .join(', ')}.`
-            : 'No replica of the shared deployment asked the Hub for its list within 30 minutes.'
+          seen.length && !behind.length
+            ? `Swarm did not finish updating ${stackName} within 30 minutes (last: ${st?.state ?? 'no answer'}).`
+            : seen.length
+              ? `Replicas still on another version after 30 minutes: ${behind
+                  .slice(0, 5)
+                  .map((s) => `${s.instance} (${s.version ?? 'unknown'})`)
+                  .join(', ')}.`
+              : 'No replica of the shared deployment asked the Hub for its list within 30 minutes.'
         )
       await sleep(POLL_MS)
     }
