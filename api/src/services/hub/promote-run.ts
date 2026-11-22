@@ -5,6 +5,7 @@ import type { GitCtx } from '../gitlab-client.js'
 import { getApp } from '../io-holder.js'
 import { type JobRunHandle, startJobRun } from '../job-runs.js'
 import { hubDeploysKeys } from './deploys.js'
+import { type DockerStepOps, defaultDockerOps } from './docker/run-step.js'
 import { DriverMisconfiguredError } from './drivers.js'
 import * as gitlab from './gitlab-write.js'
 import {
@@ -102,6 +103,8 @@ export interface RunContext {
   targetKey: string
   /** The GitLab context of a driver, token opened for this step only. */
   gitCtx(driverId: number): Promise<GitCtx>
+  /** phase 4: the target environment (docker steps read it fresh); absent = the deploy row's. */
+  envId?: number
 }
 
 export type PromoteEvent =
@@ -133,6 +136,8 @@ export interface ExecuteDeps {
   stopRequested?: () => boolean | Promise<boolean>
   /** Asked at every step boundary first; true = this run no longer holds its lock. */
   lockLost?: () => boolean | Promise<boolean>
+  /** phase 4: the docker step's deploy and verify (default: through the Hub agent). */
+  docker?: Partial<DockerStepOps>
 }
 
 export interface RunOutcome {
@@ -249,6 +254,11 @@ export async function executePlan(
 
   const ordered = [...plan.steps].sort((a, b) => a.position - b.position)
   const pushed = new Map<number, Pushed>()
+  // phase 4: docker steps (driver 'docker') run through the Hub agent, never GitLab.
+  const docker: DockerStepOps = {
+    ...defaultDockerOps({ sleep, now: deps.now, readServedField: read }),
+    ...deps.docker
+  }
 
   const push = async (s: PromotionStep): Promise<Pushed> => {
     const label = `push ${s.component}`
@@ -435,8 +445,31 @@ export async function executePlan(
     return null
   }
 
+  /**
+   * phase 4: a docker step — no push. Cancel is asked at the boundary and once more right before
+   * the agent PUT; once the PUT is sent the step waits for swarm and never stops half way.
+   */
+  const dockerStep = async (s: PromotionStep): Promise<RunOutcome | null> => {
+    const before = await halt(`deploy ${s.component}`)
+    if (before) return before
+    await begin(`deploy ${s.component}`)
+    let held: RunOutcome | null = null
+    await docker.deploy(s, ctx, log, {
+      beforeApply: async () => {
+        held = await halt('the agent applies the stack')
+        return held !== null
+      }
+    })
+    return held
+  }
+
   try {
     for (const s of ordered) {
+      if (s.driver === 'docker') {
+        const stop = await dockerStep(s) // phase 4
+        if (stop) return stop
+        continue
+      }
       const before = await halt(`push ${s.component}`)
       if (before) return before
       await begin(`push ${s.component}`)
@@ -456,7 +489,10 @@ export async function executePlan(
     const last = await halt('verify')
     if (last) return last
     await begin('verify')
-    for (const s of ordered) await verify(s, pushed.get(s.position))
+    for (const s of ordered)
+      if (s.driver === 'docker')
+        await docker.verify(s, ctx, log) // phase 4
+      else await verify(s, pushed.get(s.position))
     await log(`done: ${ctx.kind === 'rollback' ? 'rolled back to' : 'promoted'} ${ctx.version}`)
     return { status: 'success', step, error: null }
   } catch (err) {
@@ -652,7 +688,14 @@ async function runPromotion(o: {
   try {
     outcome = await executePlan(
       o.plan,
-      { deployId, version: o.version, kind: o.kind, targetKey: o.envKey, gitCtx: deps.gitCtx },
+      {
+        deployId,
+        version: o.version,
+        kind: o.kind,
+        targetKey: o.envKey,
+        gitCtx: deps.gitCtx,
+        envId // phase 4
+      },
       {
         onEvent: async (e) => {
           if (e.kind === 'step') await setStep(e.step)

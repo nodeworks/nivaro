@@ -1,6 +1,7 @@
 import { db } from '../../db/index.js'
 import type { GitCtx } from '../gitlab-client.js'
 import { getApp } from '../io-holder.js'
+import { dockerHealNote, type StackStateReader } from './docker/stack-heal.js'
 import { driverCtx, getDriver } from './drivers.js'
 import { deleteBranch } from './gitlab-write.js'
 import { PromotionError } from './promote-lock.js'
@@ -25,6 +26,8 @@ export interface HealDeps {
   gitCtx(driverId: number): Promise<GitCtx>
   deleteBranch: typeof deleteBranch
   logger?: Logger | null
+  /** phase 4: reads a docker step's stack state through the Hub agent (default: the real one). */
+  stackState?: StackStateReader
 }
 
 /** The GitLab context of a driver; its token is opened here, for one call. */
@@ -38,7 +41,8 @@ export function healDeps(over: Partial<HealDeps> = {}): HealDeps {
   return {
     gitCtx: over.gitCtx ?? driverGitCtx,
     deleteBranch: over.deleteBranch ?? deleteBranch,
-    logger: over.logger !== undefined ? over.logger : (getApp()?.log ?? null)
+    logger: over.logger !== undefined ? over.logger : (getApp()?.log ?? null),
+    ...(over.stackState ? { stackState: over.stackState } : {})
   }
 }
 
@@ -48,13 +52,15 @@ export async function deleteTemporaryBranches(
   planText: string | null,
   deps: HealDeps
 ): Promise<void> {
-  let steps: Array<{ position?: unknown; driverId?: unknown }> = []
+  let steps: Array<{ position?: unknown; driverId?: unknown; driver?: unknown }> = []
   try {
     steps = (JSON.parse(String(planText ?? '')) as { steps?: typeof steps }).steps ?? []
   } catch {
     return
   }
   for (const s of steps) {
+    // phase 4: a docker step has no branch, and its driver is no GitLab (dockerHealNote reads it).
+    if (s.driver === 'docker') continue
     const position = Number(s.position)
     const driverId = Number(s.driverId)
     if (!Number.isInteger(position) || !Number.isInteger(driverId)) continue
@@ -97,7 +103,26 @@ export async function interruptRow(
   )
   if (!changed) return false
   await bounded(deleteTemporaryBranches(Number(row.id), row.plan, deps), waitMs)
+  await bounded(noteDockerState(row, error, deps), waitMs) // phase 4
   return true
+}
+
+/**
+ * phase 4: an interrupted row with a docker step says where swarm stands, read through the Hub
+ * agent (never driverCtx, never a write: nothing on the Docker host is deleted or re-applied).
+ * Best-effort; the row is already interrupted.
+ */
+async function noteDockerState(
+  row: { id: number; plan: string | null },
+  error: string,
+  deps: HealDeps
+): Promise<void> {
+  const note = await dockerHealNote(row.plan, deps.stackState)
+  if (!note) return
+  await db(DEPLOYS)
+    .where({ id: row.id, status: 'interrupted', error })
+    .update({ error: `${error}: ${note}`.slice(0, 1000) })
+    .catch(() => undefined)
 }
 
 /**

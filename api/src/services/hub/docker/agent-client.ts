@@ -283,12 +283,21 @@ export async function agentApply(
   })) as StackApplyResult
 }
 
-/** `POST /v1/stacks/:name/restart` (30 s). */
-export async function agentRestart(driver: AgentDriver, name: string): Promise<StackRestartResult> {
+/**
+ * `POST /v1/stacks/:name/restart` (30 s) with the StackSpec the stack runs, freshly rendered
+ * (ruling P4-16): the agent renders every service body from it — never from an inspect — and
+ * answers 409 SPEC_MISMATCH when the stack does not run that spec (apply it instead).
+ */
+export async function agentRestart(
+  driver: AgentDriver,
+  name: string,
+  spec: StackSpec
+): Promise<StackRestartResult> {
   return (await call<StackRestartResult>(driver, {
     what: `restart ${name}`,
     method: 'POST',
     path: `${stackPath(name)}/restart`,
+    body: spec,
     timeoutMs: AGENT_TIMEOUTS.restart
   })) as StackRestartResult
 }
@@ -308,4 +317,65 @@ export async function agentRemove(
     query,
     timeoutMs: AGENT_TIMEOUTS.remove
   })) as StackRemoveResult
+}
+
+/** The names a `hostnames[i]` field list points at, from the spec that was sent. */
+function fieldHostnames(fields: AgentFieldError[] | undefined, hostnames: string[]): string[] {
+  const out: string[] = []
+  for (const f of fields ?? []) {
+    const m = /^hostnames\[(\d+)\]$/.exec(f.field)
+    const h = m ? hostnames[Number(m[1])] : undefined
+    if (h && !out.includes(h)) out.push(h)
+  }
+  return out
+}
+
+/**
+ * An agent refusal in plain words, for a log line, a deploy row or an answer. Built only from the
+ * code, the field list (`{ field, code }` names, never a value) and what the Hub itself sent —
+ * never the agent's body text or a token.
+ */
+export function describeAgentError(
+  err: AgentError,
+  ctx: { stack?: string; hostnames?: string[] } = {}
+): string {
+  const stack = ctx.stack ?? 'the stack'
+  const fieldList = () =>
+    err.fields?.length ? err.fields.map((f) => `${f.field} (${f.code})`).join(', ') : null
+  switch (err.code) {
+    case 'HOSTNAME_TAKEN': {
+      const names = fieldHostnames(err.fields, ctx.hostnames ?? [])
+      return names.length
+        ? `another stack on the swarm already routes ${names.join(', ')} — the agent never takes a name from another stack`
+        : 'another stack on the swarm already routes one of these names — the agent never takes a name from another stack'
+    }
+    case 'EXPECT_INVALID':
+      return 'the agent refused the status check: the spec hash the Hub sent is not one it accepts'
+    case 'ENGINE_FORBIDDEN':
+      return "the agent's own guard refused the Docker Engine call it built, so nothing was sent to Docker — see the agent's log"
+    case 'STACK_NAME_INVALID':
+      return `the agent does not accept ${stack} as a stack name`
+    case 'STACK_NOT_HUB':
+      return `the swarm already runs a stack named ${stack} that the Hub did not create — the agent never changes it`
+    case 'STACK_OWNER_MISMATCH':
+      return `the stack ${stack} belongs to another Hub app or environment`
+    case 'STACK_NOT_FOUND':
+      return `the swarm has no stack named ${stack}`
+    case 'SPEC_MISMATCH':
+      return `${stack} does not run the spec the Hub sent — deploy it instead of restarting`
+    case 'SPEC_INVALID': {
+      const list = fieldList()
+      return `the agent refused the stack spec${list ? `: ${list}` : ''}`
+    }
+    case 'IMAGE_PULL_FAILED':
+      return 'the agent could not pull an image of the stack (the Nivaro image or an extension)'
+    case 'EXTENSION_INVALID':
+      return 'an extension image does not hold a usable /extension folder — the agent refused it'
+    case 'REDIS_NOT_CONFIGURED':
+      return 'the stack asks for bundled Redis but the agent has no Redis image configured'
+    case 'ENGINE_ERROR':
+      return "the Docker engine refused a call the agent made — see the agent's log"
+    default:
+      return err.message
+  }
 }

@@ -176,7 +176,10 @@ function stackStateOf(
   return owner?.app === app.key && status.environment === env.key ? 'hub' : 'other_owner'
 }
 
-function publishPortProblem(health: AgentHealth, row: StackSettingsRow | null): string | null {
+export function publishPortProblem(
+  health: AgentHealth,
+  row: StackSettingsRow | null
+): string | null {
   if (health.edge !== 'publish') return null
   const range = Array.isArray(health.publish_ports) ? health.publish_ports : null
   const where = range ? `${range[0]}–${range[1]}` : null

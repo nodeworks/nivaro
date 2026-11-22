@@ -660,6 +660,58 @@ describe('executePlan', () => {
     expect(outcome.status).toBe('failed')
     expect(w.gl.calls).toEqual([])
   })
+
+  // phase 4: the planner never mixes driver kinds on a placement, but the runner still picks the
+  // executor per step — a gitlab step through GitLab, a docker step through the Hub agent.
+  it('runs each step with its own executor: gitlab through GitLab, docker through the agent', async () => {
+    const w = use(world())
+    serveNew(w)
+    const plan = buildPromotionPlan(input(w, { components: [apiComp] }))
+    expect(plan.ok).toBe(true)
+    plan.steps.push({
+      position: 2,
+      component: 'stack',
+      kind: 'stack',
+      driverId: 9,
+      driver: 'docker',
+      sourceSha: null,
+      targetBranch: '',
+      pinText: null,
+      pinFile: null,
+      beforeJob: null,
+      deployJob: '',
+      verifyUrl: 'https://stack.example.com/api/version',
+      verifyField: 'version',
+      want: '0.3.10',
+      stack: {
+        name: 'acme-prod',
+        image: `nodeworks/nivaro@${DIGEST}`,
+        size: 'small',
+        extensions: {},
+        agentOrigin: 'https://agent.example.com'
+      }
+    })
+    const docker: string[] = []
+    const { outcome, steps } = await execute(w, plan, {
+      deps: {
+        docker: {
+          deploy: async (s, ctx) => {
+            docker.push(`deploy ${s.component} ${ctx.version}`)
+          },
+          verify: async (s) => {
+            docker.push(`verify ${s.component}`)
+          }
+        }
+      }
+    })
+    expect(outcome).toEqual({ status: 'success', step: 'verify', error: null })
+    expect(steps).toEqual(['push api', 'deploy api', 'deploy stack', 'verify'])
+    expect(docker).toEqual(['deploy stack 0.3.10', 'verify stack'])
+    // GitLab saw only the api step; the docker step's URL was never read by the GitLab verify.
+    expect(w.gl.servedReads.get(API_URL)).toBe(2)
+    expect(w.gl.servedReads.has('https://stack.example.com/api/version')).toBe(false)
+    expect(w.gl.calls.every((c) => c.url.includes('/projects/'))).toBe(true)
+  })
 })
 
 describe('startPromotion', () => {

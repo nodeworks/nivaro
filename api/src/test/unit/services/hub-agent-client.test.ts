@@ -12,7 +12,8 @@ import {
   agentHealth,
   agentRemove,
   agentRestart,
-  agentStack
+  agentStack,
+  describeAgentError
 } from '../../../services/hub/docker/agent-client.js'
 import type { StackSpec } from '../../../services/hub/docker/agent-types.js'
 import { sealSecret } from '../../../services/hub/secrets.js'
@@ -115,7 +116,7 @@ describe('hub agent client', () => {
     await agentHealth(d())
     await agentStack(d(), 'efp-prod', 'abc123')
     await agentApply(d(), 'efp-prod', SPEC)
-    await agentRestart(d(), 'efp-prod')
+    await agentRestart(d(), 'efp-prod', SPEC)
     await agentRemove(d(), 'efp-prod', { removeVolumes: true })
     await agentRemove(d(), 'efp-prod', { removeVolumes: false })
 
@@ -134,6 +135,11 @@ describe('hub agent client', () => {
       expect(s.url).not.toContain(TOKEN)
     }
     expect(JSON.parse(String(seen[2].init.body))).toEqual(SPEC)
+    // Restart sends the freshly rendered spec too (ruling P4-16), never an empty body.
+    expect(JSON.parse(String(seen[3].init.body))).toEqual(SPEC)
+    expect((seen[3].init.headers as Record<string, string>)['content-type']).toBe(
+      'application/json'
+    )
     expect((seen[2].init.headers as Record<string, string>)['content-type']).toBe(
       'application/json'
     )
@@ -151,7 +157,7 @@ describe('hub agent client', () => {
     await agentHealth(d(), { timeoutMs: 1234 })
     await agentStack(d(), 'efp-prod')
     await agentApply(d(), 'efp-prod', SPEC)
-    await agentRestart(d(), 'efp-prod')
+    await agentRestart(d(), 'efp-prod', SPEC)
     await agentRemove(d(), 'efp-prod', { removeVolumes: false })
     expect(spy.mock.calls.map((c) => c[0])).toEqual([5_000, 1234, 10_000, 300_000, 30_000, 120_000])
     expect(AGENT_TIMEOUTS).toEqual({
@@ -206,7 +212,7 @@ describe('hub agent client', () => {
     answer = () => {
       throw new TypeError('fetch failed', { cause: new Error('unexpected redirect') })
     }
-    expect((await refusal(() => agentRestart(d(), 'efp-prod'))).code).toBe('AGENT_REDIRECT')
+    expect((await refusal(() => agentRestart(d(), 'efp-prod', SPEC))).code).toBe('AGENT_REDIRECT')
   })
 
   it('health with api 2, or no JSON → AGENT_INCOMPATIBLE', async () => {
@@ -237,7 +243,7 @@ describe('hub agent client', () => {
     expect(e.message).not.toContain('SECRET-BODY-TEXT')
 
     answer = () => json(409, { error: 'x', code: 'STACK_NOT_HUB' })
-    expect((await refusal(() => agentRestart(d(), 'efp'))).code).toBe('STACK_NOT_HUB')
+    expect((await refusal(() => agentRestart(d(), 'efp', SPEC))).code).toBe('STACK_NOT_HUB')
     answer = () => json(500, { error: 'boom', code: 'lower case nonsense' })
     expect((await refusal(() => agentStack(d(), 'efp-prod'))).code).toBe('AGENT_ERROR')
   })
@@ -307,5 +313,48 @@ describe('hub agent client', () => {
     driver.config.agent_url = 'http://10.0.0.5:8088'
     await agentHealth(d())
     expect(seen[0].url).toBe('http://10.0.0.5:8088/v1/health')
+  })
+})
+
+describe('describeAgentError', () => {
+  const err = (code: string, fields?: Array<{ field: string; code: string }>) =>
+    new AgentError(
+      code,
+      409,
+      `the Hub agent at ${ORIGIN} refused apply efp-prod: ${code} (409)`,
+      fields
+    )
+
+  it('says each new agent code in plain words, naming the stack and the taken names', () => {
+    const ctx = { stack: 'efp-prod', hostnames: ['efp.apps.example.com', 'efp2.apps.example.com'] }
+    expect(
+      describeAgentError(
+        err('HOSTNAME_TAKEN', [{ field: 'hostnames[1]', code: 'HOSTNAME_TAKEN' }]),
+        ctx
+      )
+    ).toBe(
+      'another stack on the swarm already routes efp2.apps.example.com — the agent never takes a name from another stack'
+    )
+    expect(describeAgentError(err('EXPECT_INVALID'), ctx)).toMatch(/spec hash the Hub sent/)
+    expect(describeAgentError(err('ENGINE_FORBIDDEN'), ctx)).toMatch(/nothing was sent to Docker/)
+    expect(describeAgentError(err('STACK_NAME_INVALID'), ctx)).toBe(
+      'the agent does not accept efp-prod as a stack name'
+    )
+    expect(describeAgentError(err('STACK_NOT_HUB'), ctx)).toMatch(
+      /already runs a stack named efp-prod that the Hub did not create/
+    )
+    expect(describeAgentError(err('STACK_OWNER_MISMATCH'), ctx)).toBe(
+      'the stack efp-prod belongs to another Hub app or environment'
+    )
+    expect(describeAgentError(err('SPEC_MISMATCH'), ctx)).toMatch(/deploy it instead of restarting/)
+    expect(
+      describeAgentError(err('SPEC_INVALID', [{ field: 'env.PATH', code: 'ENV_FORBIDDEN' }]), ctx)
+    ).toBe('the agent refused the stack spec: env.PATH (ENV_FORBIDDEN)')
+  })
+
+  it('an unknown code keeps the client message (no agent body text, no token)', () => {
+    const e = err('SOMETHING_NEW')
+    expect(describeAgentError(e)).toBe(e.message)
+    expect(describeAgentError(e)).not.toContain(TOKEN)
   })
 })
