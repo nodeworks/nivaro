@@ -728,6 +728,19 @@ describe('fix round 1', () => {
     expect(env).toMatchObject({ encryption_key: null, encryption_key_fp: null, placement_id: null })
   })
 
+  it('M-5: an archived environment takes no pool', async () => {
+    const other = await newApp()
+    const pid = await insertId('nivaro_hub_placements', {
+      kind: 'shared',
+      shared_deployment_id: sharedId,
+      target: JSON.stringify({ pool_max: 7 })
+    })
+    const before = await Place.sharedPoolUsed(sharedId)
+    const envId = await newEnv(other.id, { placement_id: pid, status: 'archived' })
+    expect(await Place.sharedPoolUsed(sharedId)).toBe(before)
+    await db('nivaro_hub_environments').where({ id: envId }).update({ placement_id: null })
+  })
+
   it('interrupted: a lost lock ends the run interrupted; a stale run row is healed; place again resumes', async () => {
     const app = await newApp()
     const envId = await newEnv(app.id)

@@ -227,7 +227,11 @@ export async function sharedPoolUsed(
     .select('id', 'target')) as Array<{ id: number; target: unknown }>
   if (!rows.length) return 0
   const ids = rows.map((r) => Number(r.id))
-  const named = (await k(ENVS).whereIn('placement_id', ids).select('id', 'placement_id')) as Array<{
+  // An archived environment is never served (the tenant list leaves it out): it takes no pool.
+  const named = (await k(ENVS)
+    .whereIn('placement_id', ids)
+    .whereNot({ status: 'archived' })
+    .select('id', 'placement_id')) as Array<{
     id: number
     placement_id: number
   }>
