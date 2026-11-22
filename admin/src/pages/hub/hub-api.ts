@@ -650,7 +650,7 @@ Object.assign(BLOCKER_COPY, {
 /** Phase 4 (docker plan, run step and stack routes): refusals and failures in plain words. */
 Object.assign(BLOCKER_COPY, {
   STACK_OWNER_MISMATCH: {
-    title: 'The stack on the Docker host belongs to another app',
+    title: 'This stack belongs to another environment',
     hint: "Give this environment's placement a stack name no other app uses."
   },
   STACK_LEFTOVERS: {

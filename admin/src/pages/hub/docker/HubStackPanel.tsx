@@ -63,11 +63,14 @@ export function HubStackPanel({
   env,
   appId,
   isAdmin,
-  layout
+  layout,
+  idPrefix = ''
 }: {
   env: HubEnvironment
   appId: number
   isAdmin: boolean
+  /** Unique per mount: '-m' for the phone card (the table and the card both mount a panel). */
+  idPrefix?: string
   /** 'row' wraps the panel in a full-width table row (the desktop table). */
   layout: 'row' | 'card'
 }) {
@@ -76,15 +79,17 @@ export function HubStackPanel({
     queryKey: stackKeys.stack(env.id),
     queryFn: () => fetchStack(env.id),
     retry: false,
-    refetchInterval: (q) => (q.state.data?.status?.state === 'updating' ? 5000 : 30000)
+    refetchInterval: (q) =>
+      q.state.error && refusalOf(q.state.error).code === 'NOT_DOCKER'
+        ? false
+        : q.state.data?.status?.state === 'updating'
+          ? 5000
+          : 30000
   })
   if (stack.isPending) return null
   const refusal = stack.isError ? refusalOf(stack.error) : null
-  // Not a Docker environment (or the read failed without an answer from the Hub): no panel.
-  if (stack.isError && (refusal?.code === 'NOT_DOCKER' || !refusal?.code)) {
-    if (refusal?.code === 'NOT_DOCKER' || !(stack.error as { response?: unknown })?.response)
-      return null
-  }
+  // Not a Docker environment: no panel. An owner who cannot reach the Hub sees none either.
+  if (refusal?.code === 'NOT_DOCKER' || (refusal && !refusal.code && !isAdmin)) return null
   const body = (
     <div className='space-y-3 rounded-lg border border-slate-200 bg-white p-3 dark:border-border dark:bg-card'>
       {stack.isError ? (
@@ -97,6 +102,7 @@ export function HubStackPanel({
           env={env}
           appId={appId}
           isAdmin={isAdmin}
+          idPrefix={idPrefix}
           info={stack.data}
           refresh={() => {
             void qc.invalidateQueries({ queryKey: stackKeys.stack(env.id) })
@@ -130,12 +136,14 @@ function StackBody({
   env,
   appId,
   isAdmin,
+  idPrefix,
   info,
   refresh
 }: {
   env: HubEnvironment
   appId: number
   isAdmin: boolean
+  idPrefix: string
   info: StackInfo
   refresh: () => void
 }) {
@@ -252,14 +260,14 @@ function StackBody({
         />
       )}
 
-      <RestartRow env={env} refresh={refresh} />
+      <RestartRow env={env} idPrefix={idPrefix} refresh={refresh} />
 
       {isAdmin && (
         <>
           <Section title='Settings'>
             {settingsOpen ? (
               <>
-                <StackSettingsEditor env={env} appId={appId} />
+                <StackSettingsEditor env={env} appId={appId} idPrefix={idPrefix} />
                 <button
                   type='button'
                   className={ghostButton}
@@ -274,7 +282,7 @@ function StackBody({
               </button>
             )}
           </Section>
-          <RemoveRow env={env} stackName={info.stack_name} refresh={refresh} />
+          <RemoveRow env={env} idPrefix={idPrefix} stackName={info.stack_name} refresh={refresh} />
         </>
       )}
     </>
@@ -335,7 +343,15 @@ function NameRequest({
   )
 }
 
-function RestartRow({ env, refresh }: { env: HubEnvironment; refresh: () => void }) {
+function RestartRow({
+  env,
+  idPrefix,
+  refresh
+}: {
+  env: HubEnvironment
+  idPrefix: string
+  refresh: () => void
+}) {
   const [open, setOpen] = useState(false)
   const [typed, setTyped] = useState('')
   const restart = useMutation({
@@ -356,11 +372,11 @@ function RestartRow({ env, refresh }: { env: HubEnvironment; refresh: () => void
     )
   return (
     <div className='flex flex-wrap items-center gap-2'>
-      <label htmlFor={`hub-restart-${env.id}`} className={rowText}>
+      <label htmlFor={`hub-restart-${env.id}${idPrefix}`} className={rowText}>
         Type <span className='font-mono'>{env.key}</span> to restart:
       </label>
       <Input
-        id={`hub-restart-${env.id}`}
+        id={`hub-restart-${env.id}${idPrefix}`}
         value={typed}
         onChange={(e) => setTyped(e.target.value)}
         autoComplete='off'
@@ -384,10 +400,12 @@ function RestartRow({ env, refresh }: { env: HubEnvironment; refresh: () => void
 
 function RemoveRow({
   env,
+  idPrefix,
   stackName,
   refresh
 }: {
   env: HubEnvironment
+  idPrefix: string
   stackName: string | null
   refresh: () => void
 }) {
@@ -438,11 +456,11 @@ function RemoveRow({
       ) : (
         <div className='space-y-2'>
           <div className='flex flex-wrap items-center gap-2'>
-            <label htmlFor={`hub-remove-${env.id}`} className={rowText}>
+            <label htmlFor={`hub-remove-${env.id}${idPrefix}`} className={rowText}>
               Type <span className='font-mono'>{name}</span> to remove it:
             </label>
             <Input
-              id={`hub-remove-${env.id}`}
+              id={`hub-remove-${env.id}${idPrefix}`}
               value={typed}
               onChange={(e) => setTyped(e.target.value)}
               autoComplete='off'
@@ -460,11 +478,11 @@ function RemoveRow({
           </label>
           {volumes && (
             <div className='flex flex-wrap items-center gap-2'>
-              <label htmlFor={`hub-remove-vol-${env.id}`} className={rowText}>
+              <label htmlFor={`hub-remove-vol-${env.id}${idPrefix}`} className={rowText}>
                 Type <span className='font-mono'>{phrase}</span>:
               </label>
               <Input
-                id={`hub-remove-vol-${env.id}`}
+                id={`hub-remove-vol-${env.id}${idPrefix}`}
                 value={typedVol}
                 onChange={(e) => setTypedVol(e.target.value)}
                 autoComplete='off'

@@ -1,7 +1,7 @@
 import { ConfirmButton, ErrorNotice, QueryErrorState } from '@nivaro/shared'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { ChevronLeft, Container, GitBranch, Plus, Trash2 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -56,6 +56,10 @@ function DriversAdmin() {
   const creating = params.get('new') === '1'
   /** The generated agent token: kept here so it survives the create → edit remount. */
   const [fresh, setFresh] = useState<{ id: number | null; token: string } | null>(null)
+  // Leaving the create form drops a token that was never saved.
+  useEffect(() => {
+    if (!creating) setFresh((f) => (f && f.id === null ? null : f))
+  }, [creating])
   const show = (next: { driver?: number | null; create?: boolean }) =>
     setParams((p) => {
       const out = new URLSearchParams(p)

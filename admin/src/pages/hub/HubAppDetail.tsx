@@ -617,7 +617,7 @@ function EnvItem({
       </p>
       <EnvStatusHint status={row.status} className='mt-0.5' />
       {env.placement_id != null && (
-        <HubStackPanel env={env} appId={app.id} isAdmin={isAdmin} layout='card' />
+        <HubStackPanel env={env} appId={app.id} isAdmin={isAdmin} layout='card' idPrefix='-m' />
       )}
       {row.promoting && (
         <div className='mt-2'>

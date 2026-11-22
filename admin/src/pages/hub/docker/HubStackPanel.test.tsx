@@ -157,7 +157,7 @@ describe('HubStackPanel', () => {
     const value = (await screen.findByLabelText('Setting value')) as HTMLInputElement
     fireEvent.change(value, { target: { value: 'debug' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save settings' }))
-    expect(await screen.findByText(/put it under Secrets/)).toBeTruthy()
+    expect(await screen.findByText(/Put it under Secrets/)).toBeTruthy()
     expect(h.put.mock.calls[0][1].secrets).toEqual({ SESSION_SECRET: '••••••', API_KEY: '••••••' })
   })
 
@@ -188,5 +188,75 @@ describe('HubStackPanel', () => {
       })
     )
     expect(await screen.findByText(/Removed 1 services, 2 secrets/)).toBeTruthy()
+  })
+
+  it('a SQLite DB_CLIENT sends size small whatever was picked', async () => {
+    setup({
+      settings: {
+        size: 'large',
+        redis: 'bundled',
+        publish_port: null,
+        settings: { DB_CLIENT: 'sqlite' },
+        secrets: {},
+        saved: true,
+        extension_pins: {}
+      }
+    })
+    h.put.mockResolvedValue({ data: { data: {} } })
+    view(true)
+    fireEvent.click(await screen.findByText('Edit settings'))
+    const value = (await screen.findByLabelText('Setting value')) as HTMLInputElement
+    expect(screen.getByRole('combobox', { name: 'Size' })).toHaveTextContent('Small')
+    // A harmless edit makes the form dirty; the saved size is small, not large.
+    fireEvent.click(screen.getByRole('button', { name: 'Add setting' }))
+    fireEvent.change(screen.getAllByLabelText('Setting name')[1], { target: { value: 'A' } })
+    fireEvent.change(screen.getAllByLabelText('Setting value')[1], { target: { value: 'b' } })
+    expect(value.value).toBe('sqlite')
+    fireEvent.click(screen.getByRole('button', { name: 'Save settings' }))
+    await waitFor(() => expect(h.put).toHaveBeenCalled())
+    expect(h.put.mock.calls[0][1].size).toBe('small')
+  })
+
+  it('a refusal that matches no row falls back to the page notice', async () => {
+    setup()
+    h.put.mockRejectedValue({
+      response: {
+        status: 400,
+        data: { code: 'BAD_SIZE', error: 'size must be small, medium or large.' }
+      }
+    })
+    view(true)
+    fireEvent.click(await screen.findByText('Edit settings'))
+    fireEvent.change(await screen.findByLabelText('Setting value'), { target: { value: 'debug' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save settings' }))
+    expect(await screen.findByText('Pick small, medium or large')).toBeTruthy()
+  })
+
+  it('renders nothing for an environment that is not Docker', async () => {
+    h.get.mockRejectedValue({ response: { status: 409, data: { code: 'NOT_DOCKER', error: 'x' } } })
+    const { container } = view(false)
+    await waitFor(() => expect(h.get).toHaveBeenCalled())
+    await new Promise((r) => setTimeout(r, 20))
+    expect(container.textContent).toBe('')
+  })
+
+  it('two mounts (table and phone card) never share an element id', async () => {
+    setup()
+    render(
+      <QueryClientProvider client={client()}>
+        <HubStackPanel env={env} appId={1} isAdmin layout='card' />
+        <HubStackPanel env={env} appId={1} isAdmin layout='card' idPrefix='-m' />
+      </QueryClientProvider>
+    )
+    await waitFor(() => expect(screen.getAllByText('Edit settings').length).toBe(2))
+    for (const b of screen.getAllByText('Edit settings')) fireEvent.click(b)
+    for (const b of await screen.findAllByRole('button', { name: 'Restart' })) fireEvent.click(b)
+    for (const b of screen.getAllByRole('button', { name: 'Remove stack…' })) fireEvent.click(b)
+    await waitFor(() =>
+      expect(document.querySelectorAll('[id^="hub-stack-5"]').length).toBeGreaterThan(2)
+    )
+    const ids = [...document.querySelectorAll('[id]')].map((e) => e.id)
+    expect(ids.length).toBeGreaterThan(6)
+    expect(new Set(ids).size).toBe(ids.length)
   })
 })

@@ -6,9 +6,16 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { Skeleton } from '@/components/ui/skeleton'
-import { fetchComponents, HUB_MASK, type HubEnvironment, hubError, hubKeys } from '../hub-api'
+import {
+  BLOCKER_COPY,
+  fetchComponents,
+  HUB_MASK,
+  type HubEnvironment,
+  hubError,
+  hubKeys
+} from '../hub-api'
 import { Field, ghostButton } from '../hub-parts'
-import { fetchAgentHealth } from './docker-api'
+import { dockerKeys, fetchAgentHealth } from './docker-api'
 import {
   fetchStackSettings,
   GENERATED_SECRETS,
@@ -85,8 +92,10 @@ export function settingsBody(d: Draft, withPort: boolean, pinsKnown: boolean) {
   }
   const pairs = (rows: KvRow[]) =>
     Object.fromEntries(rows.filter((r) => r.key.trim()).map((r) => [r.key.trim(), r.value.trim()]))
+  // SQLite is one process: the form shows (and sends) size small whatever was picked before.
+  const sqlite = d.settings.some((r) => r.key.trim() === 'DB_CLIENT' && r.value === 'sqlite')
   return {
-    size: d.size,
+    size: sqlite ? 'small' : d.size,
     redis: d.redis,
     ...(withPort ? { publish_port: d.port.trim() === '' ? null : Number(d.port) } : {}),
     settings: Object.fromEntries(
@@ -98,22 +107,33 @@ export function settingsBody(d: Draft, withPort: boolean, pinsKnown: boolean) {
   }
 }
 
-const ROW_COPY: Record<string, string> = {
-  SECRET_IN_SETTINGS: 'Looks like a credential — put it under Secrets instead.',
-  RESERVED_SETTING: 'The Hub sets this itself — remove it.',
-  BAD_KEY: 'Not a valid name (A–Z, 0–9 and _).'
+/** A row's refusal in plain words, by code — never the server's own message text. */
+function rowText(code: string | null): string {
+  const c = code ? BLOCKER_COPY[code] : undefined
+  if (!c) return 'This value is not accepted.'
+  return c.hint ? `${c.title}. ${c.hint}` : c.title
 }
 
 const keyIn = (message: string, key: string) =>
   key !== '' &&
   new RegExp(`(^|[^A-Za-z0-9_])${key.replace(/\W/g, '\\$&')}($|[^A-Za-z0-9_])`).test(message)
 
-export function StackSettingsEditor({ env, appId }: { env: HubEnvironment; appId: number }) {
+export function StackSettingsEditor({
+  env,
+  appId,
+  idPrefix = ''
+}: {
+  env: HubEnvironment
+  appId: number
+  /** Unique per mount (the table and the phone list can both hold an editor). */
+  idPrefix?: string
+}) {
   const qc = useQueryClient()
   const q = useQuery({
     queryKey: stackKeys.settings(env.id),
     queryFn: () => fetchStackSettings(env.id),
-    retry: false
+    retry: false,
+    refetchOnWindowFocus: false
   })
   // The agent's edge decides whether a publish port applies: read it through the stack component.
   const comps = useQuery({
@@ -124,7 +144,7 @@ export function StackSettingsEditor({ env, appId }: { env: HubEnvironment; appId
   })
   const driverId = comps.data?.find((c) => c.kind === 'stack')?.driver_id ?? null
   const agent = useQuery({
-    queryKey: ['hub', 'docker', 'agent', driverId ?? 0],
+    queryKey: dockerKeys.agent(driverId ?? 0),
     queryFn: () => fetchAgentHealth(driverId as number),
     enabled: driverId != null,
     retry: false
@@ -137,13 +157,18 @@ export function StackSettingsEditor({ env, appId }: { env: HubEnvironment; appId
   const [notice, setNotice] = useState<unknown>(null)
   const seeded = useRef<unknown>(null)
 
+  const seed = (data: StackSettings) => {
+    seeded.current = data
+    const d = draftOf(data)
+    setDraft(d)
+    setBase(JSON.stringify(settingsBody(d, true, true)))
+  }
+  const isDirty = (d: Draft | null) => !!d && JSON.stringify(settingsBody(d, true, true)) !== base
+
+  // A fresh read never lands over unsaved edits.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: seeds on new data only
   useEffect(() => {
-    if (q.data && seeded.current !== q.data) {
-      seeded.current = q.data
-      const d = draftOf(q.data)
-      setDraft(d)
-      setBase(JSON.stringify(settingsBody(d, true, true)))
-    }
+    if (q.data && seeded.current !== q.data && !isDirty(draft)) seed(q.data)
   }, [q.data])
 
   const showPort = agent.data?.edge === 'publish' || (q.data?.publish_port ?? null) !== null
@@ -157,6 +182,7 @@ export function StackSettingsEditor({ env, appId }: { env: HubEnvironment; appId
   const save = useMutation({
     mutationFn: () => putStackSettings(env.id, settingsBody(draft as Draft, showPort, pinsKnown)),
     onSuccess: (s) => {
+      seed(s)
       qc.setQueryData(stackKeys.settings(env.id), s)
       setFieldError(null)
       setNotice(null)
@@ -165,15 +191,17 @@ export function StackSettingsEditor({ env, appId }: { env: HubEnvironment; appId
     onError: (err) => {
       const { code, message } = refusalOf(err)
       const d = draft as Draft
-      const text = (c: string | null, m: string | null) =>
-        (c && ROW_COPY[c]) || m || hubError(err, 'Could not save the settings').title
+      const onRow = (kind: string, id: number) => {
+        setNotice(null)
+        setFieldError({ kind, id, text: rowText(code) })
+      }
       if (message) {
         const s = d.settings.find((r) => keyIn(message, r.key.trim()))
-        if (s) return setFieldError({ kind: 'setting', id: s.id, text: text(code, message) })
+        if (s) return onRow('setting', s.id)
         const sec = d.secrets.find((r) => keyIn(message, r.key.trim()))
-        if (sec) return setFieldError({ kind: 'secret', id: sec.id, text: text(code, message) })
+        if (sec) return onRow('secret', sec.id)
         const p = d.pins.find((r) => keyIn(message, r.key.trim()))
-        if (p) return setFieldError({ kind: 'pin', id: p.id, text: text(code, message) })
+        if (p) return onRow('pin', p.id)
       }
       setFieldError(null)
       setNotice(err)
@@ -194,7 +222,7 @@ export function StackSettingsEditor({ env, appId }: { env: HubEnvironment; appId
   const size = sqlite ? 'small' : draft.size
   const rowErr = (kind: string, id: number) =>
     fieldError && fieldError.kind === kind && fieldError.id === id ? fieldError.text : null
-  const idp = `hub-stack-${env.id}`
+  const idp = `hub-stack-${env.id}${idPrefix}`
 
   const kvRows = (
     kind: 'setting' | 'pin',
@@ -494,14 +522,9 @@ export function StackSettingsEditor({ env, appId }: { env: HubEnvironment; appId
             variant='ghost'
             className='h-8'
             onClick={() => {
-              seeded.current = null
               setFieldError(null)
               setNotice(null)
-              if (q.data) {
-                const d = draftOf(q.data)
-                setDraft(d)
-                setBase(JSON.stringify(settingsBody(d, true, true)))
-              }
+              if (q.data) seed(q.data)
             }}
           >
             Discard changes
