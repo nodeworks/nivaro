@@ -16,7 +16,9 @@ import type { SchemaCheckResult, SchemaStepDef } from '@nivaro/extension-kit'
 import type { Knex } from 'knex'
 import { MIGRATION_LOCK_NAME, PG_LOCK_KEY } from '../db/index.js'
 import { diffSchema, listSchema, summarizeEffects } from '../db/migration-effects.js'
+import { getTenantDb } from '../db/tenant-context.js'
 import { NIVARO_VERSION } from '../version.js'
+import { currentTenantKey } from './tenant-rooms.js'
 
 export const SCHEMA_STEPS_TABLE = 'nivaro_extension_schema_steps'
 
@@ -48,10 +50,34 @@ const CAP = 400
 
 /** Steps declared per extension this boot, in declaration order. */
 const declared = new Map<string, SchemaStepDef[]>()
-/** The database each extension's steps run against (its ctx.database). */
+/** The database each extension's steps run against (its ctx.database), per app: on a Hub
+ *  shared deployment every app's steps run on its own database (services/tenancy/
+ *  app-migrations.ts), so these two maps are keyed by the current tenant ('' self-hosted). */
 const databases = new Map<string, Knex>()
-/** Last known ledger rows per extension (refreshed by runSchemaSteps / checks). */
+/** Last known ledger rows per extension and app (refreshed by runSchemaSteps / checks). */
 const lastRows = new Map<string, SchemaStepRow[]>()
+
+/** The two maps' key: the current app (tenant) and the extension. */
+function slot(extId: string): string {
+  return `${currentTenantKey()}\u0000${extId}`
+}
+
+/**
+ * The database an extension's steps are judged on: the one they last ran on in this context;
+ * inside an app that never ran them on this process (another replica migrated it, or this process
+ * restarted and adopted its state), that app's own database, so its ledger is read instead of
+ * reported "not run" (P6-8 I-1). Self-hosted: the boot database, as before.
+ */
+function stepsDatabase(extId: string): Knex | undefined {
+  const known = databases.get(slot(extId))
+  if (known) return known
+  const appDb = currentTenantKey() ? (getTenantDb() as Knex | undefined) : undefined
+  if (appDb) {
+    databases.set(slot(extId), appDb)
+    return appDb
+  }
+  return databases.get(`\u0000${extId}`)
+}
 
 export function declareSchemaStep(extId: string, def: SchemaStepDef): void {
   if (!def || typeof def !== 'object') throw new Error('A schema step needs a definition')
@@ -74,8 +100,9 @@ export function declaredSchemaSteps(extId: string): SchemaStepDef[] {
 export function clearSchemaSteps(extId?: string): void {
   if (extId) {
     declared.delete(extId)
-    databases.delete(extId)
-    lastRows.delete(extId)
+    const suffix = `\u0000${extId}`
+    for (const k of [...databases.keys()]) if (k.endsWith(suffix)) databases.delete(k)
+    for (const k of [...lastRows.keys()]) if (k.endsWith(suffix)) lastRows.delete(k)
   } else {
     declared.clear()
     databases.clear()
@@ -245,7 +272,7 @@ export async function runSchemaSteps(
 ): Promise<RunSchemaStepsResult> {
   const steps = declared.get(extId) ?? []
   const result: RunSchemaStepsResult = { applied: [], skipped: [], failed: [] }
-  databases.set(extId, knex)
+  databases.set(slot(extId), knex)
   if (steps.length === 0) return result
   // SKIP_BOOT_MIGRATIONS=1 (pnpm dev:db) leaves the database exactly as found:
   // extension schema steps are migrations too.
@@ -339,13 +366,13 @@ export async function runSchemaSteps(
     }
   }
   rows = await readRows(knex, extId).catch(() => [])
-  lastRows.set(extId, rows)
+  lastRows.set(slot(extId), rows)
   return result
 }
 
 /** Re-run every applied step's check now and refresh the stored verdicts. */
 export async function runSchemaChecks(extId: string): Promise<SchemaStepStatus[]> {
-  const knex = databases.get(extId)
+  const knex = stepsDatabase(extId)
   if (!knex) return schemaStepStatus(extId)
   const rows = await readRows(knex, extId).catch(() => [] as SchemaStepRow[])
   for (const def of declared.get(extId) ?? []) {
@@ -362,13 +389,13 @@ export async function runSchemaChecks(extId: string): Promise<SchemaStepStatus[]
       checked_at: row.checked_at
     }).catch(() => {})
   }
-  lastRows.set(extId, rows)
+  lastRows.set(slot(extId), rows)
   return schemaStepStatus(extId)
 }
 
 /** The declared steps with their ledger state, in declaration order. */
 export function schemaStepStatus(extId: string): SchemaStepStatus[] {
-  const rows = lastRows.get(extId) ?? []
+  const rows = lastRows.get(slot(extId)) ?? []
   return (declared.get(extId) ?? []).map((def) => {
     const row = rows.find((r) => r.step === def.id)
     return {

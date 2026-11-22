@@ -87,7 +87,11 @@ import { registerQueueSnapshotCron } from './services/queue-snapshots.js'
 import { maskUrlQuery } from './services/secret-mask.js'
 import { noteAccessDenied } from './services/security-alerts.js'
 import { registerStagedImportWorker } from './services/staged-import-worker.js'
-import { startHubTenantSource, stopHubTenantSource } from './services/tenancy/hub-source.js'
+import {
+  getHubTenantSource,
+  startHubTenantSource,
+  stopHubTenantSource
+} from './services/tenancy/hub-source.js'
 import { registerTrackerCrons } from './services/trackers/crons.js'
 import { registerTrackerFlows } from './services/trackers/flow-ops.js'
 import { registerTrackerHealthReadiness } from './services/trackers/health-readiness.js'
@@ -817,7 +821,14 @@ export async function buildServer() {
       // A statement that lost its connection while it ran is counted with the outage's one
       // issue, not filed under its route. Its answer below stays a 500: the write may or
       // may not have been applied, so this is not "try again".
-      if (status >= 500 && req.url.startsWith('/api/') && !noteCutStatement(err, req)) {
+      // APP_KEY_MISSING (services/encryption.ts): a Hub shared deployment has no key for this
+      // app — an operator setting the Hub shows, not a route fault: logged, never filed per route.
+      if (
+        status >= 500 &&
+        err.code !== 'APP_KEY_MISSING' &&
+        req.url.startsWith('/api/') &&
+        !noteCutStatement(err, req)
+      ) {
         // #300 — every 5th 500 per route also captures a REDACTED request
         // sketch (query keys + body shape, never values) onto the issue, so a
         // recurring 500 carries a reproducible request without leaking data.
@@ -859,11 +870,12 @@ export async function buildServer() {
         }).catch(() => {})
       }
       logRouteError(req.log, err, status, maskUrlQuery(req.url))
-      // LIST_TIMEOUT is ours, not a driver code: clients show "took too long, Retry" on it.
+      // LIST_TIMEOUT and APP_KEY_MISSING are ours, not driver codes: clients show "took too
+      // long, Retry" on the first and "this app's key is not known here" on the second.
       const coded =
         !!err.code &&
         /^[A-Z][A-Z0-9_]+$/.test(err.code) &&
-        (status < 500 || err.code === 'LIST_TIMEOUT')
+        (status < 500 || err.code === 'LIST_TIMEOUT' || err.code === 'APP_KEY_MISSING')
       reply.code(status).send({
         statusCode: status,
         error: STATUS_CODES[status] ?? 'Error',
@@ -968,8 +980,12 @@ export async function buildServer() {
   }
 
   // ─── Extensions + Scheduled flows (self-hosted only) ────────────────────
-  // These query the static DB at startup — skipped in cloud mode.
-  if (!isMultiTenant()) {
+  // These query the static DB at startup — skipped in cloud mode. A Hub shared deployment (phase
+  // 6) loads the extensions HUB_SHARED_EXTENSIONS lists (extensions/loader.ts); their schema steps
+  // run per app when each app is migrated (below), never on a static database.
+  const hubShared = tenantSource() === 'hub'
+  const selfHosted = !isMultiTenant()
+  if (selfHosted || hubShared) {
     setApp(app)
     // Core email types must exist before extensions add theirs.
     const { registerCoreMailTypes } = await import('./services/mail-types.js')
@@ -996,6 +1012,23 @@ export async function buildServer() {
     )
     // Post-mortem 3.3 — with SOCKETS=off an extension's socket handler would never run.
     refuseExtensionSocketHandlers(coreSocketHandlers, connectionHandlerCount(app.io as never))
+  }
+  if (hubShared) {
+    // Each app's database: migrations, default workspace, the loaded extensions' schema steps —
+    // after the extensions above declared their steps. In the background: it never holds up the
+    // boot, and an app answers "getting ready" until its own run is done (Hub phase 6, Task 8).
+    // Like the self-hosted boot: never on an importer / exporter, nor with SKIP_BOOT_MIGRATIONS=1.
+    const registry = getHubTenantSource()
+    const role = processRole()
+    const migrates =
+      role !== 'importer' && role !== 'exporter' && process.env.SKIP_BOOT_MIGRATIONS !== '1'
+    if (registry && migrates) {
+      const { startAppMigrations } = await import('./services/tenancy/app-migrations.js')
+      const stop = startAppMigrations(registry, { redis: app.redis ?? null })
+      app.addHook('preClose', async () => stop())
+    }
+  }
+  if (selfHosted) {
     await bootPhase('Scheduled flows', () => loadScheduledFlows(app))
     // #530 — fingerprint what each extension registered this boot; a changed
     // ledger becomes a new version so "when did this check appear?" has an answer.
