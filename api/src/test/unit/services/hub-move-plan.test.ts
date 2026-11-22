@@ -317,6 +317,19 @@ describe('buildMovePlan — one test per blocker', () => {
     )
   })
 
+  it('a docker deployment the Hub never deployed (new) → SHARED_NOT_ACTIVE; a registered new one is judged live (M-4)', () => {
+    expect(codes(buildMovePlan(input({ to: sharedSide({ status: 'new' }) })))).toContain(
+      'SHARED_NOT_ACTIVE'
+    )
+    expect(
+      codes(
+        buildMovePlan(
+          input({ to: sharedSide({ status: 'new', mode: 'registered', driver_id: null }) })
+        )
+      )
+    ).not.toContain('SHARED_NOT_ACTIVE')
+  })
+
   it('a move into a shared deployment being upgraded → SHARED_BUSY', () => {
     const p = buildMovePlan(
       input({

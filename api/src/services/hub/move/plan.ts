@@ -178,6 +178,13 @@ function blockersOf(input: MovePlanInput): Blocker[] {
       'SHARED_NOT_ACTIVE',
       `The shared deployment ${to.shared.key} is retired; nothing moves onto it.`
     )
+  // A docker deployment stays `new` until the Hub's first deploy of it ends (Task 5). A registered
+  // one is run outside the Hub and never leaves `new`: it is judged by its live answer instead.
+  if (to.kind === 'shared' && to.shared.status === 'new' && to.shared.mode === 'docker')
+    add(
+      'SHARED_NOT_ACTIVE',
+      `The Hub has not deployed the shared deployment ${to.shared.key} yet. Deploy it first.`
+    )
   if (t.in_use_by)
     add(
       'TARGET_IN_USE',
