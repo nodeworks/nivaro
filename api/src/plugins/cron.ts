@@ -1149,12 +1149,16 @@ export class CronManager {
             const since = this.lastProgress.get(slot) ?? this.runningSince.get(slot)
             if (skipWorthAnIssue(since, Date.now(), budget)) {
               const mins = since ? Math.round((Date.now() - since) / 60_000) : 0
-              void withTenant(t, async () =>
-                this.issue(
-                  `Cron "${id}" tick skipped — the previous tick has been running for ${mins} minute(s)`,
-                  'medium',
-                  stableIssueKey('cron-skip', id)
-                )
+              void withTenant(
+                t,
+                async () =>
+                  this.issue(
+                    `Cron "${id}" tick skipped — the previous tick has been running for ${mins} minute(s)`,
+                    'medium',
+                    stableIssueKey('cron-skip', id)
+                  ),
+                // the app's own origin: the issue's notice links into that app
+                t.origin
               ).catch(() => {})
             }
             return 'busy'

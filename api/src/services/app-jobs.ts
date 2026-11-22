@@ -89,7 +89,8 @@ export async function forEachApp(
         continue
       }
       try {
-        const out = await withTenant(t, () => work(t))
+        // The app's own origin: links its job builds (mail, notices) name the app (phase 6).
+        const out = await withTenant(t, () => work(t), t.origin)
         if (out === 'ran') result.ran.push(t.id)
         else result.skipped.push({ tenant: t.id, why: out })
       } catch (err) {

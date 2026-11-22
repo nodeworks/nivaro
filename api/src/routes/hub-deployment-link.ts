@@ -178,11 +178,15 @@ export async function hubDeploymentLinkRoutes(app: FastifyInstance): Promise<voi
     const t = await tenantById(registry, req.params.id)
     if (!t) return refuse(reply, 404, 'This deployment does not serve that app', 'UNKNOWN_APP')
     try {
-      const out = await withTenant(t, async () => {
-        const { maintenanceState } = await import('../services/security.js')
-        if ((await maintenanceState()).on) return 'frozen' as const
-        return seedFirstAdmin(req.body, getTenantDb())
-      })
+      const out = await withTenant(
+        t,
+        async () => {
+          const { maintenanceState } = await import('../services/security.js')
+          if ((await maintenanceState()).on) return 'frozen' as const
+          return seedFirstAdmin(req.body, getTenantDb())
+        },
+        t.origin
+      )
       if (out === 'frozen')
         return refuse(reply, 503, 'The app is in maintenance mode', 'MAINTENANCE')
       if (!out.ok) return refuse(reply, out.status, out.message, out.code)
