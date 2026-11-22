@@ -12,7 +12,10 @@ import { describe, expect, it } from 'vitest'
  * DOCKER_SOURCE_SHA256 below in the same commit.
  */
 
-const DOCKER_SOURCE_SHA256 = '602657e110ae624df5ceb0cb50fde2b974525253721f0af25b0cf5d5634d6f68'
+// Hub phase 5 (cloud-flag split): dockerHosts() tests isMultiTenant() instead of reading
+// CLOUD_META_DB_URL. Reviewed at the integration merge (ruling X-3): no new request path, no
+// write, GET allow-list unchanged.
+const DOCKER_SOURCE_SHA256 = 'ca0d9ad79c9eaa3fc2876fab75f487e2068378e14d01fb8e6931abd04fe31cc1'
 
 const SRC = join(import.meta.dirname, '..', '..', '..')
 
