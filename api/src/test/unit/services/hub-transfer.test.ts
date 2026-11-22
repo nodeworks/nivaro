@@ -459,6 +459,52 @@ describe('pull', () => {
     }
   })
 
+  it('a wait no signal can reach (size never resolves) still fails the run in the stall window', async () => {
+    pullDeps.limits = { ...pullDeps.defaultLimits, stallMs: 150, stallCheckMs: 20 }
+    objects.set('s1', Buffer.from('s'))
+    rows.push(row('s1', 1))
+    let release: (v: number | null) => void = () => {}
+    const hung = new Promise<number | null>((r) => {
+      release = r
+    })
+    pullDeps.storage = () => ({ ...fakeStorage(), size: () => hung }) as never
+    const t0 = Date.now()
+    const { run_id } = await startPull({ source: SOURCE, ticket: TICKET, mode: 'full' })
+    const s = await finished(run_id)
+    expect(s.state).toBe('failed')
+    expect(s.error).toMatch(/no progress/i)
+    expect(Date.now() - t0).toBeLessThan(2_000)
+    expect(logs.some((l) => l.includes('"reason":"STALLED"'))).toBe(true)
+    // the lock is gone and the mirror says failed
+    expect([...redis.kv.keys()].some((k) => k.includes('pull-lock'))).toBe(false)
+    resetPullsForTests()
+    expect((await readPullStatus(run_id))?.state).toBe('failed')
+    // the stuck wait comes back late: nothing flips back
+    release(1)
+    await new Promise((r) => setTimeout(r, 30))
+    expect((await readPullStatus(run_id))?.state).toBe('failed')
+    // and a new pull can start
+    pullDeps.storage = () => fakeStorage() as never
+    const next = await startPull({ source: SOURCE, ticket: TICKET, mode: 'full' })
+    expect((await finished(next.run_id)).state).toBe('done')
+  })
+
+  it('a late return after a stall never flips the status this process answers', async () => {
+    pullDeps.limits = { ...pullDeps.defaultLimits, stallMs: 150, stallCheckMs: 20 }
+    objects.set('s2', Buffer.from('s'))
+    rows.push(row('s2', 1))
+    let release: (v: number | null) => void = () => {}
+    const hung = new Promise<number | null>((r) => {
+      release = r
+    })
+    pullDeps.storage = () => ({ ...fakeStorage(), size: () => hung }) as never
+    const { run_id } = await startPull({ source: SOURCE, ticket: TICKET, mode: 'full' })
+    expect((await finished(run_id)).state).toBe('failed')
+    release(1)
+    await new Promise((r) => setTimeout(r, 50))
+    expect(pullStatus(run_id)).toMatchObject({ state: 'failed', copied: 0, skipped: 0 })
+  })
+
   it('a run is seen only inside the app that started it (shared deployment)', async () => {
     process.env.HUB_SHARED_DEPLOYMENT = 'shared-a'
     process.env.HUB_URL = 'https://hub.example'

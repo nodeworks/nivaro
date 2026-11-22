@@ -382,10 +382,11 @@ async function execute(
     run.lastProgress = Date.now()
   }
   let lastMirror = 0
-  const mirror = async (force = false) => {
-    if (!redis) return
+  const mirror = async () => {
+    // A finished run's mirror is written once, by finalize().
+    if (!redis || run.finished) return
     const now = Date.now()
-    if (!force && now - lastMirror < limits.mirrorEveryMs) return
+    if (now - lastMirror < limits.mirrorEveryMs) return
     lastMirror = now
     try {
       await redis.set(runKey(run.id), JSON.stringify({ status: st, at: now }), 'PX', RUN_TTL_MS)
@@ -405,8 +406,58 @@ async function execute(
     }
   }
 
+  // Ends the run once: the status this process answers is frozen (a worker that comes back late
+  // from a wait no signal could interrupt — a hung NFS stat, a Redis call — changes an orphaned
+  // copy only), the mirror is written, and the lock is released if it is still this run's.
+  let finalized: Promise<void> | null = null
+  const finalize = (state: 'done' | 'failed', error: string | null, reason?: string) => {
+    if (finalized) return finalized
+    clearInterval(watchdog)
+    run.finished = true
+    run.status = { ...copyStatus(st), state, error }
+    const final = run.status
+    finalized = (async () => {
+      if (redis) {
+        try {
+          await redis.set(
+            runKey(run.id),
+            JSON.stringify({ status: final, at: Date.now() }),
+            'PX',
+            RUN_TTL_MS
+          )
+        } catch {
+          /* best-effort: this process still answers */
+        }
+        try {
+          if ((await redis.get(lockK)) === run.id) await redis.del(lockK)
+        } catch {
+          /* the lock expires on its own */
+        }
+      }
+      pullDeps.log('hub transfer: pull finished', {
+        run_id: run.id,
+        state,
+        ...(reason ? { reason } : {}),
+        total: final.total,
+        copied: final.copied,
+        skipped: final.skipped,
+        failed: final.failed,
+        missing: final.total - final.copied - final.skipped - final.failed,
+        bytes: final.bytes
+      })
+    })()
+    return finalized
+  }
+
   const watchdog = setInterval(() => {
-    if (Date.now() - run.lastProgress > limits.stallMs) stop(ERR_STALL)
+    if (run.finished) return
+    if (Date.now() - run.lastProgress > limits.stallMs) {
+      // Fail the run here, not when the workers return: one may be stuck on a wait the abort
+      // signal cannot reach, and the lock and the mirror must not stay `running` behind it.
+      stop(ERR_STALL)
+      void finalize('failed', ERR_STALL, 'STALLED')
+      return
+    }
     if (redis) void redis.pexpire(lockK, LOCK_TTL_MS).catch(() => {})
     void mirror()
   }, limits.stallCheckMs)
@@ -566,41 +617,22 @@ async function execute(
       }
     }
     await Promise.all(Array.from({ length: Math.max(1, limits.concurrency) }, worker))
-
+    // A stall already ended the run: a late return changes nothing.
+    if (run.finished) return
     if (fatal) {
-      st.state = 'failed'
-      st.error = fatal
+      await finalize('failed', fatal)
     } else {
-      st.state = 'done'
       if (redis) {
         // The next delta takes rows changed since this run started.
         await redis.set(startK, String(run.startedAt), 'PX', MANIFEST_TTL_MS).catch(() => {})
         await redis.pexpire(mKey, MANIFEST_TTL_MS).catch(() => {})
       }
+      await finalize('done', null)
     }
   } catch {
-    st.state = 'failed'
-    st.error = fatal ?? 'The file copy failed.'
+    await finalize('failed', fatal ?? 'The file copy failed.')
   } finally {
-    clearInterval(watchdog)
-    run.finished = true
-    await mirror(true)
-    if (redis) {
-      try {
-        if ((await redis.get(lockK)) === run.id) await redis.del(lockK)
-      } catch {
-        /* the lock expires on its own */
-      }
-    }
-    pullDeps.log('hub transfer: pull finished', {
-      run_id: run.id,
-      state: st.state,
-      total: st.total,
-      copied: st.copied,
-      skipped: st.skipped,
-      failed: st.failed,
-      missing: st.total - st.copied - st.skipped - st.failed,
-      bytes: st.bytes
-    })
+    // Every path above finalizes; this only guards a path that did not.
+    if (!run.finished) await finalize('failed', fatal ?? 'The file copy failed.')
   }
 }
