@@ -384,12 +384,11 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
     'SIGN_IN_AGAIN',
     'Everyone signs in again after the move: sessions live in Redis, which differs on the other side. Phone app and MCP (connected app) sign-ins must be made again too.'
   )
-  if (toShared(kind) && to.kind === 'shared')
+  // Decision 8: only when another environment of this app is already on that deployment.
+  if (toShared(kind) && to.kind === 'shared' && t.siblings.length)
     add(
       'SAME_APP_ON_DEPLOYMENT',
-      t.siblings.length
-        ? `${list(t.siblings)} of this app already run${t.siblings.length === 1 ? 's' : ''} on ${to.shared.key}. Environments of one app on one deployment usually hold copied databases: their stored files and sign-ins are kept apart, but test with care.`
-        : `${to.shared.key} serves other apps from one process. If another environment of this app is placed here later (copied databases), its files and sign-ins stay apart, but test with care.`
+      `${list(t.siblings)} of this app already run${t.siblings.length === 1 ? 's' : ''} on ${to.shared.key}. Environments of one app on one deployment usually hold copied databases: their stored files and sign-ins are kept apart, but test with care.`
     )
   add(
     'SIGNED_LINKS_RESET',

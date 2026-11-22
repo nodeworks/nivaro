@@ -335,10 +335,14 @@ describe('buildMovePlan — one test per blocker', () => {
 })
 
 describe('buildMovePlan — warnings', () => {
-  it('SAME_APP_ON_DEPLOYMENT and SIGN_IN_AGAIN always appear on to_shared', () => {
-    const w = buildMovePlan(input()).warnings.map((x) => x.code)
-    expect(w).toContain('SAME_APP_ON_DEPLOYMENT')
-    expect(w).toContain('SIGN_IN_AGAIN')
+  it('SIGN_IN_AGAIN always appears on to_shared', () => {
+    expect(buildMovePlan(input()).warnings.map((x) => x.code)).toContain('SIGN_IN_AGAIN')
+  })
+
+  it('SAME_APP_ON_DEPLOYMENT is absent when no other environment of the app is there (Decision 8)', () => {
+    expect(buildMovePlan(input()).warnings.map((x) => x.code)).not.toContain(
+      'SAME_APP_ON_DEPLOYMENT'
+    )
   })
 
   it('SAME_APP_ON_DEPLOYMENT names the other environments of the app already there', () => {
