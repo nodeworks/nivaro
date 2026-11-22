@@ -93,6 +93,7 @@ beforeEach(async () => {
     await db(t).del()
   locked = false
   gitlabHistory = []
+  gather.forgetDeployEvidence()
   versions[1] = '0.3.10'
   versions[2] = '0.3.9'
   await db('nivaro_hub_apps').insert({ id: 1, key: 'efp', name: 'EFP' })
@@ -301,6 +302,86 @@ describe('gatherPlanInput', () => {
       }
     )
     expect(asked).toBe(0)
+  })
+
+  describe('P31: GitLab deploy evidence is cached', () => {
+    const staging = async () => {
+      await db('nivaro_hub_components')
+        .where({ placement_id: 4, kind: 'api' })
+        .update({ target_branch: 'staging' })
+      gl.branch('efp/deploy', 'staging', api['0.3.1'])
+      const shas: string[] = []
+      for (const v of ['0.3.10', '0.3.11', '0.3.12']) {
+        const sha = gl.commit('efp/deploy', 'staging', `chore: sync for nivaro ${v}`, {
+          '.docker/nivaro-version': `${v}\n`
+        })
+        gl.pipeline('efp/deploy', 'staging', sha, [
+          { name: 'deploy_production', statuses: ['success'] }
+        ])
+        shas.push(sha)
+      }
+      return shas
+    }
+    const ctxFor = (d: { config: { project: string } }) => gl.ctx(d.config.project)
+    const reads = () =>
+      gl.calls.filter((c) => c.path === '/jobs' || c.path.startsWith('/repository/files')).length
+
+    it('a second call is answered from the cache: no GitLab read', async () => {
+      await staging()
+      const first = await gather.gitlabDeployedVersions({ placement_id: 4 }, ctxFor)
+      expect(first.sort()).toEqual(['0.3.10', '0.3.11', '0.3.12'])
+      const before = reads()
+      expect(before).toBeGreaterThan(0)
+      const second = await gather.gitlabDeployedVersions({ placement_id: 4 }, ctxFor)
+      expect(second.sort()).toEqual(first.sort())
+      expect(reads()).toBe(before)
+      // Keys never carry the token.
+      expect(JSON.stringify(gl.calls.map((c) => c.path))).not.toContain(gl.token)
+    })
+
+    it('the job list expires after 60 s; pins never do; concurrent callers share one read', async () => {
+      await staging()
+      let t = 1_000_000
+      const now = () => t
+      const both = await Promise.all([
+        gather.gitlabDeployedVersions({ placement_id: 4 }, ctxFor, { now, redis: null }),
+        gather.gitlabDeployedVersions({ placement_id: 4 }, ctxFor, { now, redis: null })
+      ])
+      expect(both[0].sort()).toEqual(both[1].sort())
+      expect(gl.calls.filter((c) => c.path === '/jobs')).toHaveLength(1)
+      t += 61_000
+      const files = gl.calls.filter((c) => c.path.startsWith('/repository/files')).length
+      await gather.gitlabDeployedVersions({ placement_id: 4 }, ctxFor, { now, redis: null })
+      expect(gl.calls.filter((c) => c.path === '/jobs')).toHaveLength(2)
+      expect(gl.calls.filter((c) => c.path.startsWith('/repository/files')).length).toBe(files)
+    })
+
+    it('the budget cuts a hanging pin read and answers what it has', async () => {
+      const shas = await staging()
+      const started = Date.now()
+      const seen = await gather.gitlabDeployedVersions({ placement_id: 4 }, ctxFor, {
+        budgetMs: 100,
+        readFile: (ctx, path, ref) =>
+          ref === shas[1] ? new Promise<string | null>(() => {}) : gw.readFile(ctx, path, ref)
+      })
+      expect(Date.now() - started).toBeLessThan(2000)
+      expect(seen.sort()).toEqual(['0.3.10', '0.3.12'])
+    })
+
+    it('an edited driver (another repository) misses the cache', async () => {
+      await staging()
+      await gather.gitlabDeployedVersions({ placement_id: 4 }, ctxFor)
+      const jobs = gl.calls.filter((c) => c.path === '/jobs').length
+      const copy = gl.projects.get('efp/deploy')
+      if (copy) gl.projects.set('efp/deploy-copy', copy)
+      await db('nivaro_hub_drivers')
+        .where({ id: 1 })
+        .update({ config: driverConfig('efp/deploy-copy') })
+      const again = await gather.gitlabDeployedVersions({ placement_id: 4 }, ctxFor)
+      expect(again.sort()).toEqual(['0.3.10', '0.3.11', '0.3.12'])
+      expect(gl.calls.filter((c) => c.path === '/jobs').length).toBe(jobs + 1)
+      expect(gl.calls.some((c) => c.url.includes('efp%2Fdeploy-copy'))).toBe(true)
+    })
   })
 
   /** A successful Hub run of `version` here; steps carry what each deploy ran on. */
