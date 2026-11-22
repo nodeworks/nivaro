@@ -654,6 +654,16 @@ describe('anonymous limiter: app servers calling the Hub', () => {
     const blocked = await redeemAt('nope', wrong)
     expect(blocked.statusCode).toBe(429)
     expect(blocked.json().code).toBe('RATE_LIMITED')
+    // P7-20: a percent-encoded path reaches the same route and is refused the same way.
+    const encoded = await limited.inject({
+      method: 'POST',
+      url: `${BASE}/%74oken`,
+      remoteAddress: ip,
+      headers: { 'content-type': 'application/x-www-form-urlencoded', authorization: wrong },
+      payload: 'grant_type=authorization_code&code=nope'
+    })
+    expect(encoded.statusCode).toBe(429)
+    expect(encoded.json().code).toBe('RATE_LIMITED')
     // the ping is throttled the same way
     const ping = await limited.inject({
       method: 'GET',

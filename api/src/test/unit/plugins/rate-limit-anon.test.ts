@@ -150,6 +150,35 @@ describe('Nivaro Hub calls from app servers (P7-15)', () => {
   })
 })
 
+describe('Hub client calls are judged on the matched route (P7-20)', () => {
+  async function hubApp() {
+    const saved = { ...process.env }
+    process.env.RATE_LIMIT_ANON_PER_MINUTE = '2'
+    const app = Fastify()
+    app.decorate('redis', fakeRedis() as never)
+    app.decorateRequest('session', null as never)
+    await app.register(callerRateLimitPlugin)
+    // stands in for the Hub token endpoint: the client secret never checks out
+    app.post('/api/hub/oidc/token', async (_req, reply) => reply.code(401).send({ error: 'x' }))
+    await app.ready()
+    process.env = saved
+    return app
+  }
+  const basic = { authorization: `Basic ${Buffer.from('hubc_x:wrong').toString('base64')}` }
+
+  it.each([
+    ['the plain path', '/api/hub/oidc/token'],
+    ['a percent-encoded path', '/api/hub/oidc/%74oken']
+  ])('over budget, a failed client call by %s is refused even with a Basic header', async (_why, url) => {
+    const app = await hubApp()
+    const codes: number[] = []
+    for (let i = 0; i < 4; i++)
+      codes.push((await app.inject({ method: 'POST', url, ...remote, headers: basic })).statusCode)
+    expect(codes).toEqual([401, 401, 429, 429])
+    await app.close()
+  })
+})
+
 describe('anonymous limit', () => {
   it('refuses an address after N anonymous requests', async () => {
     const { app } = await build({ RATE_LIMIT_ANON_PER_MINUTE: '3' })

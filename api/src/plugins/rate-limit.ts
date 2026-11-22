@@ -134,6 +134,15 @@ export function hubClientCall(url: string | undefined): boolean {
   return HUB_CLIENT_CALLS.some((re) => re.test(u))
 }
 
+/**
+ * Is this request a Hub client call? Judged on the ROUTE it matched (ruling P7-20): the router
+ * decodes the path, so `/api/hub/oidc/%74oken` reaches the token route while its raw url names
+ * no such path. The raw url is checked too (a request no route matched has no template).
+ */
+function isHubClientRequest(req: { raw: { url?: string }; routeOptions?: { url?: string } }) {
+  return hubClientCall(req.routeOptions?.url) || hubClientCall(req.raw.url)
+}
+
 /** Is this request outside the limits altogether? */
 export function exemptFromLimits(req: {
   raw: { url?: string }
@@ -221,7 +230,7 @@ export const callerRateLimitPlugin = fp(async (app: FastifyInstance) => {
     app.addHook('onRequest', async (req, reply) => {
       if (exemptFromLimits(req)) return
       // A Hub client call is refused over budget even with its credential (P7-15).
-      if (!hubClientCall(req.raw.url) && (sessionUser(req) || carriesCredential(req))) return
+      if (!isHubClientRequest(req) && (sessionUser(req) || carriesCredential(req))) return
       const r = redis()
       if (!r) return
       const { nowSec, windowStart, resetAt } = windowNow()
@@ -244,7 +253,7 @@ export const callerRateLimitPlugin = fp(async (app: FastifyInstance) => {
     // (anonymous, or a credential that did not check out) spends this IP's budget.
     app.addHook('onResponse', async (req) => {
       if (exemptFromLimits(req) || sessionUser(req) || req.user) return
-      if (hubClientCall(req.raw.url) && clientCredentialAccepted(req)) return
+      if (isHubClientRequest(req) && clientCredentialAccepted(req)) return
       const r = redis()
       if (!r) return
       const { windowStart } = windowNow()
