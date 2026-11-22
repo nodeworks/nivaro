@@ -1,0 +1,27 @@
+{
+  "_comment": "Copy of the Hub agent's env deny-list (packages/hub-agent/src/spec.ts forbiddenEnvKey). The API's stack settings mirror it in services/hub/docker/stack-env.ts; hub-stack-env-rules.guard.test.ts fails when either side drifts. Change all three together.",
+  "runtime_keys": ["PATH", "HOME", "TMPDIR", "TMP", "TEMP"],
+  "runtime_prefixes": ["LD_", "OPENSSL_", "SSL_CERT_"],
+  "node_prefix": "NODE_",
+  "node_allowed": ["NODE_ENV"],
+  "nivaro_prefix": "NIVARO_",
+  "nivaro_allowed": [
+    "NIVARO_ENVIRONMENT",
+    "NIVARO_INSTANCE",
+    "NIVARO_EXPECTED_DB",
+    "NIVARO_HEAP_FROM_CGROUP"
+  ],
+  "role_env_keys": ["SOCKETS", "CRON_TICKS", "IMPORT_WORKER", "MEDIA_WORKER", "VIDEO_RENDER"],
+  "agent_set_env_keys": [
+    "NIVARO_ROLE",
+    "REDIS_URL",
+    "STORAGE_LOCAL_ROOT",
+    "SOCKETS",
+    "CRON_TICKS",
+    "IMPORT_WORKER",
+    "MEDIA_WORKER",
+    "VIDEO_RENDER"
+  ],
+  "redis_url_allowed_when": "external",
+  "file_suffix": "_FILE"
+}

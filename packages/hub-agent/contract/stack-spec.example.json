@@ -25,6 +25,7 @@
     "DB_HOST": "db.internal.example.com",
     "DB_USER": "acme_app",
     "MIGRATION_SAFE_MODE": "true",
+    "NIVARO_ENVIRONMENT": "staging",
     "NODE_ENV": "production",
     "PUBLIC_URL": "https://acme-staging.apps.example.com",
     "TRUST_PROXY": "1"
