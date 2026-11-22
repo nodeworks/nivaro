@@ -538,6 +538,7 @@ export const hubDockerDocs: DocSection = {
       items: [
         'It takes a stack spec the Hub validated and turns it into Docker Engine calls: secrets, volumes, services and labels. It lists, reads, restarts and removes only stacks it created itself (labelled `nivaro.hub.managed`), and every write re-reads the live labels first.',
         'It unpacks app extensions out of OCI images into a folder the app services mount read-only.',
+        "Its web service claims the stack's hostnames with the label `nivaro.hub.hosts`, the same label the GitLab app template's stacks carry. A name one deploy path claims is refused on the other: the agent answers `HOSTNAME_TAKEN`, the template's deploy command refuses the host.",
         'It never runs a container for an app, execs into one or reads logs. Its only container is a short-lived one that is created but never started, used to read an extension out of an image. The Engine paths it may call are a fixed allow-list; anything else is refused inside the agent, before it reaches the socket.',
         'It never uses an image that is not in `HUB_AGENT_IMAGES` or is not pinned by digest, never binds a host path or device into an app service, and never touches a service, secret or volume it did not create.',
         'It never prints or stores a token, key or registry credential. A failed start prints only an error code, for example `TOKEN_MISSING`.',

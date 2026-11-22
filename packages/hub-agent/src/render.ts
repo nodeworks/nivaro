@@ -10,6 +10,7 @@
 import { posix } from 'node:path'
 import {
   isStackName,
+  LABEL_HOSTS,
   LABEL_ROLE,
   LABEL_SPEC_HASH,
   ownershipLabels,
@@ -299,7 +300,15 @@ export function renderServices(
     const labels = labelsFor(r.role)
     const svc: EngineServiceSpec = {
       Name: serviceName(stack, r.role),
-      Labels: { ...labels, ...traefikLabels(stack, r.role, spec.hostnames, cfg) },
+      Labels: {
+        ...labels,
+        ...traefikLabels(stack, r.role, spec.hostnames, cfg),
+        // The host claim the template's forced command reads (LABEL_HOSTS), on the service that
+        // serves the names, whatever the edge.
+        ...((r.role === 'web' || r.role === 'all') && spec.hostnames.length > 0
+          ? { [LABEL_HOSTS]: spec.hostnames.join(',') }
+          : {})
+      },
       TaskTemplate: {
         ContainerSpec: {
           Image: spec.image,

@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { LABEL_HOSTS } from '../src/names.js'
 import {
   type EngineServiceSpec,
   REALTIME_PATHS,
@@ -343,6 +344,33 @@ describe('renderServices — labels', () => {
     )
     expect(web.Labels['traefik.http.routers.nvh_web_st.tls.certresolver']).toBeUndefined()
     expect(web.Labels['traefik.http.routers.nvh_web_st.entrypoints']).toBe('web,websecure')
+  })
+
+  it('the web service claims its hostnames with the template host label, in every edge mode', () => {
+    for (const edge of ['traefik', 'publish'] as const) {
+      const svcs = renderServices('st', large({ publish_port: 31000 }), cfg({ edge }), ctx())
+      expect(byName(svcs, 'st_web').Labels[LABEL_HOSTS]).toBe('a.apps.corp,b.apps.corp')
+      for (const n of ['st_worker', 'st_realtime', 'st_importer', 'st_redis'])
+        expect(byName(svcs, n).Labels[LABEL_HOSTS]).toBeUndefined()
+    }
+    const [all] = renderServices(
+      'st',
+      large({ roles: [{ role: 'all', replicas: 1 }], redis: 'external' }),
+      cfg(),
+      ctx()
+    )
+    expect(all.Labels[LABEL_HOSTS]).toBe('a.apps.corp,b.apps.corp')
+  })
+
+  it('the GitLab app template uses the same host-claim label (one name on both deploy paths)', () => {
+    const tpl = resolve(import.meta.dirname, '../../../deploy/hub-app-template/manager')
+    expect(LABEL_HOSTS).toBe('nivaro.hub.hosts')
+    expect(readFileSync(resolve(tpl, 'docker-stack.yml'), 'utf8')).toContain(
+      `- ${LABEL_HOSTS}=\${APP_HOSTS}`
+    )
+    const wrapper = readFileSync(resolve(tpl, 'nivaro-hub-deploy'), 'utf8')
+    expect(wrapper).toContain(`--filter label=${LABEL_HOSTS} `)
+    expect(wrapper).toContain(`{{index .Spec.Labels "${LABEL_HOSTS}"}}`)
   })
 
   it('edge network only on web/all/realtime in traefik mode', () => {

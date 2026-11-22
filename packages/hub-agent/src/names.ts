@@ -73,6 +73,14 @@ export const LABEL_SHARED = 'nivaro.hub.shared'
 export const LABEL_ENV = 'nivaro.hub.env'
 export const LABEL_SPEC_HASH = 'nivaro.hub.spec-hash'
 export const LABEL_ROLE = 'nivaro.hub.role'
+/**
+ * The hostnames a stack claims on the swarm, comma-separated, on the service that serves them.
+ * The SAME label the Hub's GitLab template stacks carry (deploy/hub-app-template: docker-stack.yml
+ * and the manager's forced command nivaro-hub-deploy, which refuses a host another stack claims).
+ * One name on both deploy paths, so neither can take a name the other serves; render.test.ts
+ * pins the template files to this constant.
+ */
+export const LABEL_HOSTS = 'nivaro.hub.hosts'
 
 /** The labels every object of a stack carries. Built only from validated fields. */
 export function ownershipLabels(stack: string, spec: StackSpec): Record<string, string> {

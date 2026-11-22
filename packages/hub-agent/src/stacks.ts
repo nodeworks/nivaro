@@ -47,6 +47,7 @@ import {
   isStackName,
   LABEL_APP,
   LABEL_ENV,
+  LABEL_HOSTS,
   LABEL_MANAGED,
   LABEL_NAMESPACE,
   LABEL_ROLE,
@@ -290,6 +291,21 @@ function routerRules(labels: Labels): string[] {
 }
 
 /**
+ * The host claim another stack carries (LABEL_HOSTS: the Hub's GitLab template stacks set it on
+ * their web service), as Host rules: a name claimed there is taken here even if that stack
+ * routes it some other way.
+ */
+function hostClaimRules(labels: Labels): string[] {
+  const v = labels[LABEL_HOSTS]
+  if (typeof v !== 'string') return []
+  return v
+    .split(',')
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean)
+    .map((h) => `host(\`${h}\`)`)
+}
+
+/**
  * Hostnames named by `Host(...)`, `HostHeader(...)` or (TCP) `HostSNI(...)`
  * in a rule, with backtick or double-quoted arguments (`\"` escapes included).
  */
@@ -519,7 +535,10 @@ async function survey(engine: Engine, name: string, spec: StackSpec): Promise<Su
   }
 
   const foreignRules: string[] = []
-  for (const s of services) if (!belongs(s, name)) foreignRules.push(...routerRules(labelsOf(s)))
+  for (const s of services) {
+    if (belongs(s, name)) continue
+    foreignRules.push(...routerRules(labelsOf(s)), ...hostClaimRules(labelsOf(s)))
+  }
   const hostFields = spec.hostnames.flatMap((h, i) =>
     hostTaken(h, foreignRules) ? [{ field: `hostnames[${i}]`, code: 'HOSTNAME_TAKEN' }] : []
   )

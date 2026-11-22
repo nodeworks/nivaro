@@ -450,6 +450,15 @@ describe('ownership', () => {
     ).resolves.toBeTruthy()
   })
 
+  it("a name another stack claims with the template's host label is taken (LABEL_HOSTS)", async () => {
+    // A Hub GitLab-template stack (deploy/hub-app-template) claims its names this way.
+    fake.preexisting('tpl--prod_web', { 'nivaro.hub.hosts': 'a.apps.corp,X.apps.corp' })
+    expect(await codeOf(applyStack(fake, cfg, S, spec({ hostnames: ['x.apps.corp'] }), deps))).toBe(
+      'HOSTNAME_TAKEN'
+    )
+    expect(fake.writes()).toEqual([])
+  })
+
   it('a TCP router with HostSNI takes the hostname too', async () => {
     fake.preexisting('other_db', { 'traefik.tcp.routers.db.rule': 'HostSNI(`x.apps.corp`)' })
     expect(await codeOf(applyStack(fake, cfg, S, spec({ hostnames: ['x.apps.corp'] }), deps))).toBe(
