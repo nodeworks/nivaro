@@ -27,8 +27,16 @@ type Logger = { warn?: (o: unknown, msg?: string) => void }
 export interface HealDeps {
   gitCtx(driverId: number): Promise<GitCtx>
   deleteBranch: typeof deleteBranch
-  /** Ends the row's job run as failed with `message` (only while it is still running). */
-  failJobRun(jobRunId: number, envId: number | null, message: string): Promise<void>
+  /**
+   * Ends the row's job run as failed with `message` (only while it is still running);
+   * `startedAt` = the deploy row's start, so the run's duration is real.
+   */
+  failJobRun(
+    jobRunId: number,
+    envId: number | null,
+    message: string,
+    startedAt?: Date | string | null
+  ): Promise<void>
   logger?: Logger | null
 }
 
@@ -36,11 +44,14 @@ export interface HealDeps {
 async function failJobRunDefault(
   jobRunId: number,
   envId: number | null,
-  message: string
+  message: string,
+  startedAt?: Date | string | null
 ): Promise<void> {
+  const at = startedAt == null ? null : new Date(startedAt)
   try {
     await resumeJobRun(jobRunId, 'deploy', `hub-promote-${envId ?? ''}`, {
-      guardRunning: true
+      guardRunning: true,
+      startedAt: at && Number.isFinite(at.getTime()) ? at : null
     }).fail(message)
   } catch {
     /* bookkeeping never breaks healing */
@@ -114,6 +125,7 @@ export async function interruptRow(
     plan: string | null
     job_run_id?: number | null
     environment_id?: number | null
+    started_at?: Date | string | null
   },
   error: string,
   deps: HealDeps,
@@ -129,7 +141,8 @@ export async function interruptRow(
     await deps.failJobRun(
       Number(row.job_run_id),
       row.environment_id == null ? null : Number(row.environment_id),
-      error
+      error,
+      row.started_at ?? null
     )
   await bounded(deleteTemporaryBranches(Number(row.id), row.plan, deps), waitMs)
   return true
@@ -148,12 +161,13 @@ export async function interruptStaleRows(
 ): Promise<number> {
   const rows = (await db(DEPLOYS)
     .where({ environment_id: envId, status: 'running' })
-    .select('id', 'step', 'plan', 'job_run_id', 'environment_id')) as Array<{
+    .select('id', 'step', 'plan', 'job_run_id', 'environment_id', 'started_at')) as Array<{
     id: number
     step: string | null
     plan: string | null
     job_run_id: number | null
     environment_id: number
+    started_at: Date | string | null
   }>
   if (!rows.length) return 0
   if (!ownLock && (await isLocked(envId)) !== false) return 0

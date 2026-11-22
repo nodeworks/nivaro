@@ -314,6 +314,46 @@ describe('hub promotion planner', () => {
       )
     })
 
+    it('PIN_CHANGED: a same-version run never rewrites the pin of the running version', () => {
+      const OLD = `sha256:${'c'.repeat(64)}`
+      const plan = buildPromotionPlan(
+        input({
+          targetVersion: '0.3.10',
+          sourceOnTarget: { 1: true },
+          pinOnTarget: { 1: `0.3.10\n${OLD}\n` },
+          recordedDeploys: { 1: ['f00d'] }
+        })
+      )
+      expect(codes(plan)).toEqual(['PIN_CHANGED'])
+      expect(plan.blockers[0].text).toBe(
+        'api: the image for 0.3.10 changed since it was deployed — production pins 0.3.10 image cccccccccccc, the registry now has 0.3.10 image aaaaaaaaaaaa, slim image bbbbbbbbbbbb. The Hub never rewrites the pin of the version that is running'
+      )
+      // An identical pin stays a no-op; a pin of another version is a normal promotion.
+      const same = buildPromotionPlan(
+        input({
+          targetVersion: '0.3.10',
+          sourceOnTarget: { 1: true },
+          pinOnTarget: { 1: `0.3.10\n${DIGEST}\n${SLIM}\n` },
+          recordedDeploys: { 1: ['f00d'] }
+        })
+      )
+      expect(codes(same)).toEqual([])
+      expect(same.steps.find((st) => st.kind === 'api')?.noop).toBe(true)
+      expect(codes(buildPromotionPlan(input({ pinOnTarget: { 1: `0.3.9\n${OLD}\n` } })))).toEqual(
+        []
+      )
+    })
+
+    it('a held frontend names the head it will deploy', () => {
+      const plan = buildPromotionPlan(
+        input({ frontendHeld: { 2: true }, frontendHead: { 2: 'feed00112233' } })
+      )
+      expect(plan.steps.find((st) => st.kind === 'frontend')?.expectHead).toBe('feed00112233')
+      expect(plan.lines).toContain(
+        "Frontend: production already holds abc1234 — deploy production's current head feed001"
+      )
+    })
+
     it('OLDER_THAN_CURRENT on a promote of an older version', () => {
       const plan = buildPromotionPlan(input({ targetVersion: '0.3.11' }))
       expect(codes(plan)).toEqual(['OLDER_THAN_CURRENT'])

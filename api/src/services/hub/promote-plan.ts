@@ -140,6 +140,19 @@ export function buildPromotionPlan(input: PlanInput): PromotionPlan {
 
   const steps: PromotionStep[] = components.map((c) => stepFor(c, input))
   for (const s of steps) {
+    const onTarget = input.pinOnTarget?.[s.position]
+    if (
+      s.kind === 'api' &&
+      kind === 'promote' &&
+      input.targetVersion === version &&
+      typeof onTarget === 'string' &&
+      s.pinText != null &&
+      onTarget !== s.pinText
+    )
+      block(
+        'PIN_CHANGED',
+        `${s.component}: the image for ${version} changed since it was deployed — ${target.key} pins ${pinWords(onTarget)}, the registry now has ${pinWords(s.pinText)}. The Hub never rewrites the pin of the version that is running`
+      )
     if (s.kind === 'api' && !s.sourceSha)
       block(
         'NO_SOURCE_COMMIT',
@@ -192,6 +205,13 @@ function unfinished(input: PlanInput, components: HubComponent[]): boolean {
   return false
 }
 
+/** A pin file in plain words: version, short image digest, short slim digest. */
+function pinWords(pin: string): string {
+  const [v, d, slim] = pin.split('\n').filter((l) => l.trim())
+  const dig = (x: string) => x.replace(/^sha256:/, '').slice(0, 12)
+  return `${v ?? '(nothing)'} ${d ? `image ${dig(d)}` : 'with no image digest'}${slim ? `, slim image ${dig(slim)}` : ''}`
+}
+
 /** True when an api step has nothing to do: commit held, pin unchanged, version answered. */
 function apiNoop(c: HubComponent, input: PlanInput, pinText: string): boolean {
   return (
@@ -233,7 +253,10 @@ function stepFor(c: HubComponent, input: PlanInput): PromotionStep {
         ? (served ?? '').slice(0, 8)
         : (served ?? ''),
     ...(isApi && pinText != null && apiNoop(c, input, pinText) ? { noop: true } : {}),
-    ...(build?.pipelineId ? { buildPipelineId: build.pipelineId } : {})
+    ...(build?.pipelineId ? { buildPipelineId: build.pipelineId } : {}),
+    ...(!isApi && input.kind === 'promote' && input.frontendHeld?.[c.position] === true
+      ? { expectHead: input.frontendHead?.[c.position] ?? null }
+      : {})
   }
 }
 
@@ -349,6 +372,6 @@ function pushLine(input: PlanInput, s: PromotionStep): string {
   const sha = shortSha(s.sourceSha ?? '')
   if (input.kind === 'rollback') return `${name}: redeploy ${s.component}'s build ${sha}`
   if (input.frontendHeld?.[s.position] === true)
-    return `${name}: ${branch} already holds ${sha} — deploy ${branch}'s current head`
+    return `${name}: ${branch} already holds ${sha} — deploy ${branch}'s current head${s.expectHead ? ` ${shortSha(s.expectHead)}` : ''}`
   return `${name}: merge ${sha} into ${branch}`
 }

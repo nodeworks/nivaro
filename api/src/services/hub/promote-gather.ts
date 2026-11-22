@@ -321,6 +321,24 @@ function completeVersions(runs: StoredRun[], components: HubComponent[]): string
     .map((r) => r.version)
 }
 
+/**
+ * A Hub promotion of `version` here stopped before every component deployed: the Hub ran that
+ * version here at least once and some component has no deploy of it recorded (any run status).
+ * /promotable then offers the version the environment already answers, so the stopped promotion
+ * can be finished; the planner judges the rest. An environment the Hub never promoted to that
+ * version is not offered it again.
+ */
+export async function unrecordedComponents(
+  envId: number,
+  version: string,
+  components: HubComponent[]
+): Promise<boolean> {
+  if (!VERSION_RE.test(version) || !components.length) return false
+  const runs = (await storedRuns(envId)).filter((r) => r.version === version)
+  if (!runs.length) return false
+  return components.some((c) => !runs.some((r) => !!deployedSha(storedStep(r.steps, c))))
+}
+
 /** Versions the previous environment ran through the Hub successfully (any record). */
 const successfulVersions = (runs: StoredRun[]) =>
   runs.filter((r) => r.status === 'success').map((r) => r.version)
@@ -441,6 +459,7 @@ export async function gatherPlanInput(
   const pinOnTarget: NonNullable<PlanInput['pinOnTarget']> = {}
   const frontendOnTarget: NonNullable<PlanInput['frontendOnTarget']> = {}
   const frontendHeld: NonNullable<PlanInput['frontendHeld']> = {}
+  const frontendHead: NonNullable<PlanInput['frontendHead']> = {}
   const frontendRollbackBuild: NonNullable<PlanInput['frontendRollbackBuild']> = {}
 
   for (const c of components) {
@@ -452,8 +471,12 @@ export async function gatherPlanInput(
       const src = await deps.latestCommitMatching(ctx, c.source_branch, sourceSubjectRe(version))
       sources[c.position] = src
       if (src) sourceOnTarget[c.position] = await deps.commitExistsOn(ctx, src.sha, targetBranch)
-      // A promote of the version the target runs, release commit held: is the pin already there?
-      if (kind === 'promote' && sourceOnTarget[c.position] === true && driver.config.pin_file)
+      // Is the pin already there (a no-op), or would a same-version run rewrite it?
+      if (
+        kind === 'promote' &&
+        driver.config.pin_file &&
+        (sourceOnTarget[c.position] === true || targetVersion === version)
+      )
         pinOnTarget[c.position] = await deps.readFile(ctx, driver.config.pin_file, targetBranch)
       continue
     }
@@ -467,15 +490,22 @@ export async function gatherPlanInput(
       const sha = deployedSha(step)
       frontendServed[c.position] = sha
       frontendOnSource[c.position] = true
-      if (sha)
-        frontendRollbackBuild[c.position] = await rollbackBuild(
-          deps,
-          deps.ctxFor(driver),
-          targetBranch,
-          sha,
-          typeof step?.deployedPipelineId === 'number' ? step.deployedPipelineId : null,
-          c.deploy_job ?? driver.config.deploy_job
-        )
+      if (!sha) continue
+      const ctx = deps.ctxFor(driver)
+      // A build is redeployed only from its own branch: a commit no longer there is never merged.
+      frontendRollbackBuild[c.position] = (await deps.commitExistsOn(ctx, sha, targetBranch))
+        ? await rollbackBuild(
+            deps,
+            ctx,
+            targetBranch,
+            sha,
+            typeof step?.deployedPipelineId === 'number' ? step.deployedPipelineId : null,
+            c.deploy_job ?? driver.config.deploy_job
+          )
+        : {
+            pipelineId: null,
+            problem: `${sha.slice(0, 8)} is no longer on ${targetBranch} — that build can't be redeployed`
+          }
       continue
     }
     const where = previous ? previousFrontendUrl(c, target, previous, previousComponents) : null
@@ -492,6 +522,10 @@ export async function gatherPlanInput(
       ? await deps.commitExistsOn(ctx, full, c.source_branch)
       : false
     if (full) frontendHeld[c.position] = await deps.commitExistsOn(ctx, full, targetBranch)
+    // Held: the run deploys the branch head; the plan names it and the run refuses if it moved.
+    if (frontendHeld[c.position])
+      frontendHead[c.position] =
+        (await deps.latestCommitMatching(ctx, targetBranch, /^/, 1))?.sha ?? null
   }
 
   const hasApi = components.some((c) => c.kind === 'api')
@@ -524,6 +558,7 @@ export async function gatherPlanInput(
     pinOnTarget,
     frontendOnTarget,
     frontendHeld,
+    frontendHead,
     frontendRollbackBuild,
     sources,
     frontendServed,

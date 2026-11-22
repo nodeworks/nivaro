@@ -205,8 +205,52 @@ describe('promotable', () => {
     const r = await get(`/environments/${prodId}/promotable`, asOwner)
     expect(r.statusCode).toBe(200)
     expect(r.json()).toEqual({
-      data: { promote: ['0.3.210', '0.3.209'], rollback: ['0.3.150', '0.3.20', '0.3.9'] }
+      data: {
+        promote: ['0.3.210', '0.3.209'],
+        rollback: ['0.3.150', '0.3.20', '0.3.9'],
+        finish: null
+      }
     })
+  })
+
+  it('B5: offers the running version again while a Hub promotion of it stopped between components', async () => {
+    const components = [
+      { position: 1, name: 'api', kind: 'api' },
+      { position: 2, name: 'frontend', kind: 'frontend' }
+    ]
+    m.gather.mockImplementation(async (_id: number, o: { kind: string }) =>
+      planInput({
+        components,
+        ...(o.kind === 'rollback' ? {} : { targetDeployedVersions: ['0.3.208'] })
+      })
+    )
+    const promotable = async () =>
+      (await get(`/environments/${prodId}/promotable`, asOwner)).json().data
+    // The Hub never promoted 0.3.208 here: nothing to finish.
+    expect(await promotable()).toMatchObject({ promote: ['0.3.210', '0.3.209'], finish: null })
+    const run = (status: string, steps: unknown[]) =>
+      db('nivaro_hub_deploys').insert({
+        app_id: appId,
+        environment_id: prodId,
+        kind: 'promote',
+        version: '0.3.208',
+        status,
+        step: 'deploy api',
+        plan: JSON.stringify({ steps }),
+        started_at: new Date()
+      })
+    // Stopped after the api deployed: the running version is offered to finish it.
+    await run('cancelled', [{ kind: 'api', component: 'api', position: 1, deployedSha: 'f00d' }])
+    expect(await promotable()).toMatchObject({
+      promote: ['0.3.210', '0.3.209', '0.3.208'],
+      finish: '0.3.208'
+    })
+    // Finished: not offered again.
+    await run('success', [
+      { kind: 'api', component: 'api', position: 1, deployedSha: 'f00d' },
+      { kind: 'frontend', component: 'frontend', position: 2, deployedSha: 'beef' }
+    ])
+    expect(await promotable()).toMatchObject({ promote: ['0.3.210', '0.3.209'], finish: null })
   })
 
   it('no known current version: nothing to roll back to, every previous version promotes', async () => {

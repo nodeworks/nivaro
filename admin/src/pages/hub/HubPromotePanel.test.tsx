@@ -82,10 +82,16 @@ function wrap(
   }
 }
 
-function routes(opts: { plan?: unknown; promotion?: unknown; history?: unknown[] } = {}) {
+function routes(
+  opts: { plan?: unknown; promotion?: unknown; history?: unknown[]; promotable?: unknown } = {}
+) {
   h.get.mockImplementation(async (url: string) => {
     if (url === '/hub/environments/10/promotable')
-      return { data: { data: { promote: ['0.3.210', '0.3.209'], rollback: ['0.3.205'] } } }
+      return {
+        data: {
+          data: opts.promotable ?? { promote: ['0.3.210', '0.3.209'], rollback: ['0.3.205'] }
+        }
+      }
     if (url === '/hub/promotions/55') return { data: { data: opts.promotion } }
     if (url === '/hub/environments/10/deploys/hub') return { data: { data: opts.history ?? [] } }
     throw new Error(`unexpected GET ${url}`)
@@ -135,6 +141,21 @@ describe('HubPromotePanel', () => {
       target: { value: 'production' }
     })
     expect(startButton()).toBeDisabled()
+  })
+
+  it('offers the running version again when its Hub promotion stopped between components', async () => {
+    routes({ promotable: { promote: ['0.3.208'], rollback: [], finish: '0.3.208' } })
+    wrap(<HubPromotePanel env={env} kind='promote' idPrefix='t' onClose={() => {}} />)
+    await waitFor(() =>
+      expect(h.post).toHaveBeenCalledWith('/hub/environments/10/promote/plan', {
+        version: '0.3.208',
+        kind: 'promote'
+      })
+    )
+    expect(screen.queryByText(/Nothing to promote/)).not.toBeInTheDocument()
+    expect(
+      screen.getByText(/production already runs 0\.3\.208, but its Hub promotion stopped/)
+    ).toBeInTheDocument()
   })
 
   it('needs the environment name typed before Start', async () => {
@@ -375,7 +396,9 @@ describe('promotion copy', () => {
       'NO_COMPONENTS',
       'BAD_VERSION',
       'NO_DRIVER',
-      'FRONTEND_NOT_ON_SOURCE'
+      'FRONTEND_NOT_ON_SOURCE',
+      'FRONTEND_ROLLBACK_NO_BUILD',
+      'PIN_CHANGED'
     ])
       expect(BLOCKER_COPY[code]?.title, code).toBeTruthy()
   })

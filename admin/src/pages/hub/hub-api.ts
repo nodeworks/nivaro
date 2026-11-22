@@ -346,6 +346,11 @@ export interface HubPromotable {
    * recorded (versions from before the Hub only when the environment has no frontend).
    */
   rollback: string[]
+  /**
+   * The version running here when a Hub promotion of it stopped between components (listed in
+   * `promote` too): promoting it again finishes it. null otherwise.
+   */
+  finish?: string | null
 }
 
 export interface PromotionBlocker {
@@ -427,9 +432,13 @@ export const fetchComponents = (placementId: number) =>
     .then((r) => r.data.data ?? [])
 
 export const fetchPromotable = (envId: number) =>
-  api
-    .get<{ data: HubPromotable }>(`/hub/environments/${envId}/promotable`)
-    .then((r) => ({ promote: r.data.data?.promote ?? [], rollback: r.data.data?.rollback ?? [] }))
+  api.get<{ data: HubPromotable }>(`/hub/environments/${envId}/promotable`).then(
+    (r): HubPromotable => ({
+      promote: r.data.data?.promote ?? [],
+      rollback: r.data.data?.rollback ?? [],
+      finish: r.data.data?.finish ?? null
+    })
+  )
 
 export const fetchPromotionPlan = (envId: number, kind: PromotionKind, version: string) =>
   api
@@ -536,6 +545,14 @@ export const BLOCKER_COPY: Record<string, { title: string; hint?: string }> = {
   FRONTEND_NOT_ON_SOURCE: {
     title: 'The frontend the environment before this one serves is not on the source branch',
     hint: 'Merge that frontend commit into the source branch, then try again.'
+  },
+  FRONTEND_ROLLBACK_NO_BUILD: {
+    title: 'The frontend build for that version cannot be redeployed',
+    hint: 'GitLab no longer has it, or its deploy job cannot run again. Nothing was changed.'
+  },
+  PIN_CHANGED: {
+    title: 'The image for this version changed since it was deployed here',
+    hint: 'The Hub never rewrites the pin of the version that is running. Publish a new version instead.'
   }
 }
 

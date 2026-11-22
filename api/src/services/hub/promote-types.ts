@@ -103,12 +103,17 @@ export interface PlanInput {
    * this version (step `deployedSha`, any run status). Missing = nothing recorded.
    */
   recordedDeploys?: Record<number, string[]>
-  /** Per component position (api, promote): the pin file's text on the target branch now. */
+  /**
+   * Per component position (api, promote): the pin file's text on the target branch now (read
+   * when the release commit is held or the target already answers the version).
+   */
   pinOnTarget?: Record<number, string | null>
   /** Per component position (frontend, promote): the commit the TARGET serves now (short sha). */
   frontendOnTarget?: Record<number, string | null>
   /** Per component position (frontend, promote): the target branch already holds the commit. */
   frontendHeld?: Record<number, boolean>
+  /** Per component position (frontend, promote, held): the target branch head at plan time. */
+  frontendHead?: Record<number, string | null>
   /**
    * Per component position (frontend, rollback): the pipeline of the earlier build and why it
    * cannot be rerun (null = it can).
@@ -130,6 +135,7 @@ export type PromotionBlockerCode =
   | 'FRONTEND_UNKNOWN'
   | 'FRONTEND_NOT_ON_SOURCE'
   | 'FRONTEND_ROLLBACK_NO_BUILD'
+  | 'PIN_CHANGED'
   | 'IMAGE_MISSING'
   | 'IMAGE_NO_DIGEST'
   | 'NO_COMPONENTS'
@@ -163,6 +169,11 @@ export interface PromotionStep {
    * after this component and started again).
    */
   noop?: boolean
+  /**
+   * frontend, promote, target already holds the commit: the branch head the plan saw. The run
+   * deploys the head and refuses (changing nothing) when the head moved since the plan.
+   */
+  expectHead?: string | null
   /** frontend, rollback: the pipeline whose deploy job is rerun (the earlier build). */
   buildPipelineId?: number | null
   /** Written by the runner once the deploy passed: the commit the deploy job ran on. */

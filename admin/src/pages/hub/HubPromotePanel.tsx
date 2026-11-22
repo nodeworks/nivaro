@@ -216,11 +216,23 @@ function PromoteForm({
             setPicked(v)
             setRefused(null)
           }}
-          options={choices.map((v) => ({ value: v, label: v }))}
+          options={choices.map((v) => ({
+            value: v,
+            label:
+              kind === 'promote' && v === promotable.data?.finish
+                ? `${v} — finish the stopped promotion`
+                : v
+          }))}
           ariaLabel='Version'
           className='h-8 bg-white font-mono text-[13px] dark:bg-background'
           triggerProps={{ id: `${idPrefix}-version` }}
         />
+        {kind === 'promote' && version && version === promotable.data?.finish && (
+          <p className='m-0 text-[12px] text-slate-600 dark:text-slate-300'>
+            {env.key} already runs {version}, but its Hub promotion stopped before every part was
+            deployed. Promoting it again deploys only what is missing.
+          </p>
+        )}
       </div>
 
       {plan.data ? (

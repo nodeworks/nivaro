@@ -298,6 +298,67 @@ describe('gatherPlanInput', () => {
     expect(none.blockers[0].text).toMatch(/has no pipeline for .* no build of that commit/)
   })
 
+  it('a rollback whose recorded build is no longer on the target branch is refused at plan time', async () => {
+    versions[2] = '0.3.10'
+    // Recorded, with a pipeline, but production no longer holds the commit (force-pushed away).
+    const gone = gl.commit('efp/portal', 'elsewhere', 'Merge into production')
+    const build = gl.pipeline('efp/portal', 'production', gone, [
+      { name: 'deploy_production', statuses: ['success'] }
+    ])
+    await recordedRun('0.3.1', [
+      { kind: 'api', component: 'api', position: 1, deployedSha: 'f00d' },
+      {
+        kind: 'frontend',
+        component: 'frontend',
+        position: 2,
+        deployedSha: gone,
+        deployedPipelineId: build.id
+      }
+    ])
+    const plan = buildPromotionPlan(
+      await gather.gatherPlanInput(2, { kind: 'rollback', version: '0.3.1' }, deps())
+    )
+    expect(plan.blockers).toEqual([
+      {
+        code: 'FRONTEND_ROLLBACK_NO_BUILD',
+        text: `frontend: ${gone.slice(0, 8)} is no longer on production — that build can't be redeployed`
+      }
+    ])
+  })
+
+  it('a held frontend: the plan reads the target head it will deploy', async () => {
+    gl.branch('efp/portal', 'production', feFull)
+    const head = gl.commit('efp/portal', 'production', 'feat: newer on production')
+    const input = await gather.gatherPlanInput(2, { kind: 'promote', version: '0.3.10' }, deps())
+    expect(input.frontendHeld).toEqual({ 2: true })
+    expect(input.frontendHead).toEqual({ 2: head })
+    const plan = buildPromotionPlan(input)
+    expect(plan.steps[1].expectHead).toBe(head)
+    expect(plan.lines).toContain(
+      `Frontend: production already holds ${feFull.slice(0, 7)} — deploy production's current head ${head.slice(0, 7)}`
+    )
+  })
+
+  it('a same-version run whose image changed is refused with PIN_CHANGED', async () => {
+    versions[2] = '0.3.10'
+    gl.branch('efp/deploy', 'production', api['0.3.10'])
+    gl.commit('efp/deploy', 'production', 'pin', {
+      '.docker/nivaro-version': `0.3.10\nsha256:${'c'.repeat(64)}\n`
+    })
+    await recordedRun(
+      '0.3.10',
+      [{ kind: 'api', component: 'api', position: 1, deployedSha: 'f00d' }],
+      'cancelled'
+    )
+    const plan = buildPromotionPlan(
+      await gather.gatherPlanInput(2, { kind: 'promote', version: '0.3.10' }, deps())
+    )
+    expect(plan.blockers.map((b) => b.code)).toEqual(['PIN_CHANGED'])
+    expect(plan.blockers[0].text).toMatch(
+      /^api: the image for 0\.3\.10 changed since it was deployed — production pins 0\.3\.10 image cccccccccccc, the registry now has 0\.3\.10 image aaaaaaaaaaaa/
+    )
+  })
+
   it('B3: rollback offers only Hub runs with every deployed commit recorded; GitLab history only without a frontend', async () => {
     versions[2] = '0.3.10'
     gitlabHistory = ['0.3.8', '0.3.9']

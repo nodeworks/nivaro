@@ -396,7 +396,9 @@ describe('executePlan', () => {
     const { outcome, steps } = await execute(w, buildPromotionPlan(input(w)))
     expect(outcome.status).toBe('failed')
     expect(outcome.step).toBe('push api')
-    expect(outcome.error).toMatch(/conflicts/)
+    expect(outcome.error).toMatch(
+      /does not merge cleanly onto production .* production is untouched/
+    )
     expect(steps).toEqual(['push api'])
     expect(
       w.gl.calls.some(
@@ -513,6 +515,69 @@ describe('executePlan', () => {
     expect(w.gl.calls.some((c) => c.path === '/merge_requests')).toBe(false)
   })
 
+  it('API conflict: a release commit that does not merge onto production fails at push, production untouched', async () => {
+    const w = use(world())
+    // Production and main changed the same file differently since they last met.
+    w.gl.commit('efp/deploy', 'production', 'hotfix on production', { 'stack.yml': 'prod\n' })
+    const src = w.gl.commit('efp/deploy', 'main', 'chore: deploy nivaro 0.3.10', {
+      'stack.yml': 'main\n'
+    })
+    const prodBefore = w.gl.projects.get('efp/deploy')?.branches.get('production')
+    const { outcome, steps } = await execute(
+      w,
+      buildPromotionPlan(
+        input(w, {
+          components: [apiComp],
+          sources: { 1: { sha: src, subject: 'chore: deploy nivaro 0.3.10' } }
+        })
+      )
+    )
+    expect(outcome).toMatchObject({ status: 'failed', step: 'push api', code: 'MERGE_REFUSED' })
+    expect(steps).toEqual(['push api'])
+    expect(outcome.error).toBe(
+      `api: release commit ${src.slice(0, 8)} does not merge cleanly onto production (on the temporary branch hub/promote-1-1) — production is untouched`
+    )
+    expect(w.gl.merges('efp/deploy', 'production')).toBe(0)
+    expect(w.gl.projects.get('efp/deploy')?.branches.get('production')).toBe(prodBefore)
+    expect(w.gl.calls.filter((c) => c.method === 'DELETE').map((c) => c.path)).toEqual([
+      '/repository/branches/hub/promote-1-1-src',
+      '/repository/branches/hub/promote-1-1'
+    ])
+    expect(
+      [...(w.gl.projects.get('efp/deploy')?.branches.keys() ?? [])].filter((b) =>
+        b.startsWith('hub/')
+      )
+    ).toEqual([])
+    expect(w.gl.calls.some((c) => c.path.endsWith('/play'))).toBe(false)
+  })
+
+  it('a cancel on another replica, seen right before the deploy job is read and played (no before job)', async () => {
+    const w = use(world())
+    // The cancel lands (in Redis) once the runner reads the deploy pipeline's jobs: after the
+    // step boundary, with no wait in between.
+    let landed = false
+    fetchSpy.mockImplementation((async (url: string | URL, init?: RequestInit) => {
+      if (/efp%2Fdeploy\/pipelines\/\d+\/jobs/.test(String(url))) landed = true
+      return w.gl.fetch(url, init)
+    }) as typeof fetch)
+    let asked = 0
+    const { outcome } = await execute(
+      w,
+      buildPromotionPlan(input(w, { components: [{ ...apiComp, before_job: null }] })),
+      {
+        deps: {
+          stopRequested: () => {
+            asked++
+            return landed
+          }
+        }
+      }
+    )
+    expect(outcome).toEqual({ status: 'cancelled', step: 'deploy api', error: null })
+    expect(asked).toBeGreaterThanOrEqual(4)
+    expect(w.gl.calls.some((c) => c.path.endsWith('/play'))).toBe(false)
+  })
+
   describe('B4: a cancel during a deploy', () => {
     it('stops the wait for the build and never plays the manual deploy job', async () => {
       const w = use(world({ apiDeploy: { statuses: ['manual'], onPlay: ['running', 'success'] } }))
@@ -589,9 +654,9 @@ describe('executePlan', () => {
       deps: {
         stopRequested: () => stop,
         gitlab: {
-          runDeployJob: async (...a) => {
-            const { runDeployJob } = await import('../../../services/hub/gitlab-write.js')
-            const r = await runDeployJob(...a)
+          waitJob: async (...a) => {
+            const { waitJob } = await import('../../../services/hub/gitlab-write.js')
+            const r = await waitJob(...a)
             stop = true // asked while the api deploy ran
             return r
           }
@@ -762,6 +827,44 @@ describe('executePlan', () => {
         error: "frontend's earlier build can't be rerun (job is manual)"
       })
       expect(w.gl.retries).toEqual([])
+    })
+
+    it('promote refuses, changing nothing, when the head moved since the plan', async () => {
+      const w = use(world())
+      const planned = heldWithNewerHead(w)
+      const plan = buildPromotionPlan(
+        input(w, {
+          components: [feComp],
+          frontendHeld: { 2: true },
+          frontendHead: { 2: planned }
+        })
+      )
+      expect(plan.lines).toContain(
+        `Frontend: production already holds ${w.feServed.slice(0, 7)} — deploy production's current head ${planned.slice(0, 7)}`
+      )
+      const moved = w.gl.commit('efp/portal', 'production', 'feat: pushed after the plan')
+      const pipes = w.gl.pipelinesOf('efp/portal').length
+      const { outcome, steps } = await execute(w, plan)
+      expect(outcome).toMatchObject({ status: 'failed', step: 'push frontend', code: 'HEAD_MOVED' })
+      expect(outcome.error).toBe(
+        `frontend: production moved since the plan (planned head ${planned.slice(0, 8)}, now ${moved.slice(0, 8)}) — nothing was changed; plan again`
+      )
+      expect(steps).toEqual(['push frontend'])
+      expect(w.gl.pipelinesOf('efp/portal').length).toBe(pipes)
+      expect(w.gl.calls.some((c) => c.method !== 'GET')).toBe(false)
+    })
+
+    it('rollback of a build no longer on the branch never falls through to a merge', async () => {
+      const w = use(world())
+      // feFull was never on production: the recorded build is gone from the branch.
+      const { outcome } = await execute(w, buildPromotionPlan(rollbackInput(w)), {}, 'rollback')
+      expect(outcome).toMatchObject({
+        status: 'failed',
+        step: 'push frontend',
+        code: 'FRONTEND_ROLLBACK_NO_BUILD'
+      })
+      expect(outcome.error).toMatch(/is no longer on production .* nothing was changed/)
+      expect(w.gl.calls.some((c) => c.method !== 'GET')).toBe(false)
     })
 
     it('promote deploys the head, as the script does, and verifies what was deployed', async () => {
@@ -1163,6 +1266,8 @@ describe('startPromotion', () => {
   })
 })
 
+const STARTED = new Date('2026-11-21T10:00:00.000Z')
+
 describe('recoverInterruptedPromotions', () => {
   const running = (env: number, plan?: unknown) => ({
     app_id: 1,
@@ -1214,17 +1319,20 @@ describe('recoverInterruptedPromotions', () => {
 
   it('fails the job run of a row it interrupts, with the same message (B6)', async () => {
     const w = use(world())
-    await db('nivaro_hub_deploys').insert({ ...running(2), job_run_id: 91 })
-    const failed: Array<[number, number | null, string]> = []
+    await db('nivaro_hub_deploys').insert({ ...running(2), job_run_id: 91, started_at: STARTED })
+    const failed: unknown[][] = []
     const n = await run.recoverInterruptedPromotions({
       lock: run.redisPromoteLock(fakeRedis()),
       gitCtx: async (driverId) => w.gl.ctx(PROJECTS[driverId]),
-      failJobRun: async (id, envId, message) => {
-        failed.push([id, envId, message])
+      failJobRun: async (id, envId, message, startedAt) => {
+        failed.push([id, envId, message, startedAt])
       }
     })
     expect(n).toBe(1)
-    expect(failed).toEqual([[91, 2, 'The Hub restarted during deploy api']])
+    expect(failed).toEqual([[91, 2, 'The Hub restarted during deploy api', expect.anything()]])
+    // The healed run keeps the deploy's own start, so its duration is real.
+    const started = (failed[0] as unknown[])[3]
+    expect(new Date(started as string).getTime()).toBe(STARTED.getTime())
   })
 
   it('leaves a running row alone while its lock is held, and never deletes the lock', async () => {

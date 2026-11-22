@@ -133,6 +133,7 @@ type GitlabOps = Pick<
   | 'commitExistsOn'
   | 'latestCommitMatching'
   | 'runDeployJob'
+  | 'playJob'
   | 'findPipeline'
   | 'jobNamed'
   | 'retryJob'
@@ -170,6 +171,7 @@ const DEFAULT_OPS: GitlabOps = {
   commitExistsOn: gitlab.commitExistsOn,
   latestCommitMatching: gitlab.latestCommitMatching,
   runDeployJob: gitlab.runDeployJob,
+  playJob: gitlab.playJob,
   findPipeline: gitlab.findPipeline,
   jobNamed: gitlab.jobNamed,
   retryJob: gitlab.retryJob,
@@ -192,6 +194,9 @@ const realSleep: gitlab.Sleep = (ms, signal) =>
   })
 
 const short = (sha: string | null | undefined) => (sha ? sha.slice(0, 8) : '?')
+
+/** Thrown from runDeployJob's `play` event: the Hub plays the manual job itself, after a cancel check. */
+class PlayHere extends Error {}
 
 /** A cancel seen inside a step (before a merge into the target branch). */
 class StopRun extends Error {
@@ -375,9 +380,22 @@ export async function executePlan(
           'BRANCH_UNKNOWN',
           `${s.component}: ${s.targetBranch} has no commits`
         )
+      // The plan named the head it would deploy: a head that moved since is not what was confirmed.
+      if (s.expectHead && head.sha !== s.expectHead)
+        throw new PromotionError(
+          'HEAD_MOVED',
+          `${s.component}: ${s.targetBranch} moved since the plan (planned head ${short(s.expectHead)}, now ${short(head.sha)}) — nothing was changed; plan again`
+        )
       await log(`${label}: deploying ${s.targetBranch}'s current head ${short(head.sha)}`)
       return { sha: head.sha, full, merged: null, held: true }
     }
+
+    // A rollback redeploys a build from its own branch; it never merges an old commit back in.
+    if (s.kind === 'frontend' && ctx.kind === 'rollback')
+      throw new PromotionError(
+        'FRONTEND_ROLLBACK_NO_BUILD',
+        `${s.component}: ${short(full)} is no longer on ${s.targetBranch} — that build can't be redeployed; nothing was changed`
+      )
 
     const temp = `hub/promote-${ctx.deployId}-${s.position}`
     const made: string[] = []
@@ -391,13 +409,22 @@ export async function executePlan(
         made.push(temp)
         await ops.createBranch(c, src, full)
         made.push(src)
-        await mergeInto(
-          c,
-          label,
-          src,
-          temp,
-          `Merge ${short(full)} for nivaro ${ctx.version} on ${ctx.targetKey}`
-        )
+        try {
+          await mergeInto(
+            c,
+            label,
+            src,
+            temp,
+            `Merge ${short(full)} for nivaro ${ctx.version} on ${ctx.targetKey}`
+          )
+        } catch (err) {
+          if (!(err instanceof gitlab.GitlabWriteError && err.code === 'MERGE_REFUSED')) throw err
+          throw new gitlab.GitlabWriteError(
+            'MERGE_REFUSED',
+            `${s.component}: release commit ${short(full)} does not merge cleanly onto ${s.targetBranch} (on the temporary branch ${temp}) — ${s.targetBranch} is untouched`,
+            { status: err.status, step: err.step }
+          )
+        }
         const pin = await ops.commitFile(
           c,
           temp,
@@ -517,24 +544,66 @@ export async function executePlan(
       pipelineId: null,
       how: 'played'
     }
-    const res = await ops.runDeployJob(c, s.targetBranch, p.sha, {
-      ...poll,
-      signal: ac.signal,
-      sleep: watchSleep,
-      before: s.beforeJob,
-      deploy: s.deployJob,
-      minutes: s.kind === 'api' ? API_DEPLOY_MINUTES : FRONTEND_DEPLOY_MINUTES,
-      onEvent: (e) => {
-        if (e.kind === 'pipeline') seen.pipelineId = e.id
-        else if (e.kind === 'auto-run') seen.how = 'auto'
-        else if (e.kind === 'already-succeeded') seen.how = 'already'
-        // Never play a manual deploy job once a cancel was asked.
-        else if (e.kind === 'play' && ac.signal.aborted) throw aborted()
-        // The closing line below says it once, with the job's address.
-        if (e.kind === 'passed') return
-        void log(`${label}: ${e.message}`)
+    let handedPlay = false
+    const runOnce = () =>
+      ops.runDeployJob(c, s.targetBranch, p.sha, {
+        ...poll,
+        signal: ac.signal,
+        sleep: watchSleep,
+        before: s.beforeJob,
+        deploy: s.deployJob,
+        minutes: s.kind === 'api' ? API_DEPLOY_MINUTES : FRONTEND_DEPLOY_MINUTES,
+        onEvent: (e) => {
+          if (e.kind === 'pipeline') {
+            seen.pipelineId = e.id
+            if (handedPlay) return
+          } else if (e.kind === 'play') {
+            // A manual job is played by the Hub, after asking for a cancel (any replica).
+            if (!handedPlay) throw new PlayHere()
+          } else if (e.kind === 'auto-run' || e.kind === 'already-succeeded') {
+            // After the Hub played it, the job running "on its own" is the one it played.
+            if (handedPlay) return
+            seen.how = e.kind === 'auto-run' ? 'auto' : 'already'
+          }
+          // The closing line below says it once, with the job's address.
+          if (e.kind === 'passed') return
+          void log(`${label}: ${e.message}`)
+        }
+      })
+    let res: Awaited<ReturnType<typeof runOnce>>
+    try {
+      res = await runOnce()
+    } catch (err) {
+      if (!(err instanceof PlayHere)) throw err
+      // Asked right before the deploy job is read and played, so a cancel that landed on
+      // another replica since the last wait is seen and the job is never played.
+      if (await stopped()) throw aborted()
+      const job = seen.pipelineId ? await ops.jobNamed(c, seen.pipelineId, s.deployJob) : null
+      handedPlay = true
+      if (job?.status === 'manual') {
+        if (await stopped()) throw aborted()
+        await log(`${label}: playing ${s.deployJob}`)
+        const played = await ops.playJob(c, job.id)
+        const done = await ops.waitJob(c, played.id, {
+          ...poll,
+          signal: ac.signal,
+          sleep: watchSleep,
+          minutes: s.kind === 'api' ? API_DEPLOY_MINUTES : FRONTEND_DEPLOY_MINUTES,
+          onStatus: (st) => void log(`${label}: ${s.deployJob}: ${st}`)
+        })
+        if (done.status !== 'success')
+          throw new gitlab.GitlabWriteError(
+            'DEPLOY_FAILED',
+            `${s.deployJob} ${done.status} — the deploy script rolled back (${done.web_url})`,
+            { step: 'runDeployJob', webUrl: done.web_url || undefined }
+          )
+        res = { status: 'success', job: { ...job, ...played, ...done, name: job.name } }
+      } else {
+        // It started (or finished) on its own meanwhile: wait for it as runDeployJob does.
+        seen.how = 'auto'
+        res = await runOnce()
       }
-    })
+    }
     const url = res.job.web_url ? ` (${res.job.web_url})` : ''
     if (seen.how === 'auto')
       await log(`${label}: ${s.deployJob} ran automatically and passed${url}`)
@@ -977,12 +1046,13 @@ export async function recoverInterruptedPromotions(
 ): Promise<number> {
   const rows = (await db(DEPLOYS)
     .where({ status: 'running' })
-    .select('id', 'environment_id', 'step', 'plan', 'job_run_id')) as Array<{
+    .select('id', 'environment_id', 'step', 'plan', 'job_run_id', 'started_at')) as Array<{
     id: number
     environment_id: number
     step: string | null
     plan: string | null
     job_run_id: number | null
+    started_at: Date | string | null
   }>
   const heal = healDeps(deps)
   let n = 0
