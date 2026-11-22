@@ -285,6 +285,7 @@ export const deploymentModesDocs: DocSection = {
         'The flow `exec-script` operation (needs a per-app sandbox).',
         'Phone app sign-in, phone push and the MCP/OAuth issuer: a shared deployment gives the self-hosted admin origin for every app, so these need a per-app origin first.',
         'Local file storage keyed per app.',
+        "Microsoft directory lookups and nightly directory sync: one app never uses the deployment's own Microsoft app registration, and no app setting holds one yet, so the directory reads as not configured and directory sync skips the app.",
         'Automatic mail retry (`MAIL_RETRY`): never on a multi-tenant process, as in cloud.',
         'Staged imports (upload a file, the import drainer runs it): the upload and requeue answer 409 `IMPORTS_NOT_ON_SHARED`, because no drainer runs per app yet. Collection imports, which run in the request, still work.',
         'A per-app help-video render queue: a publish renders its own video in the request; videos left queued after a restart wait for the next publish.'
