@@ -205,6 +205,7 @@ const m543 = await import('../../../db/migrations/543_hub_promotions.js')
 const m544 = await import('../../../db/migrations/544_hub_databases.js')
 const m545 = await import('../../../db/migrations/545_hub_creations.js')
 const { hubRoutes } = await import('../../../routes/hub.js')
+const { countOwnerTry } = await import('../../../routes/hub-create.js')
 const { maintenanceFreezeHook } = await import('../../../services/maintenance-freeze.js')
 const R = await import('../../../services/hub/create/run.js')
 const store = await import('../../../services/hub/create/store.js')
@@ -1069,6 +1070,110 @@ describe('owner limits (P3-24)', () => {
     for (let i = 0; i < 12; i++)
       expect((await call('POST', `/databases/${dbId}/check`, asAdmin)).statusCode).toBe(200)
     expect(connects).toHaveLength(22)
+  })
+})
+
+describe('owner limits — follow-ups', () => {
+  it('Check now judges the row’s place with the row’s own engine', async () => {
+    const out = await created({
+      environments: [{ key: 'production', database: { server_id: manualServer } }]
+    })
+    const envId = out.environments[0].id
+    const dbId = Number(
+      String((await db('nivaro_hub_environments').where({ id: envId }).first()).db_ref).split(
+        ':'
+      )[1]
+    )
+    // Same host, no port: as mysql2 that is 3306 — not the pg server's 5432.
+    await db('nivaro_hub_databases')
+      .where({ id: dbId })
+      .update({ engine: 'mysql2', host: 'pg2.example.com', port: null })
+    const res = await call('POST', `/databases/${dbId}/check`, asOwner)
+    expect(res.statusCode).toBe(400)
+    expect(res.json().code).toBe('HOST_NOT_SERVER')
+    expect(connects).toEqual([])
+  })
+
+  it('the try counter sets its window with the key (a failing EXPIRE never locks anyone out)', async () => {
+    const store = new Map<string, { n: number; ttl: number | null }>()
+    const calls: string[] = []
+    const redis = {
+      async set(k: string, v: string, ex: string, s: number, nx: string) {
+        calls.push(`set ${ex} ${s} ${nx}`)
+        if (store.has(k)) return null
+        store.set(k, { n: Number(v), ttl: s })
+        return 'OK'
+      },
+      async incr(k: string) {
+        calls.push('incr')
+        const e = store.get(k) ?? { n: 0, ttl: null }
+        e.n++
+        store.set(k, e)
+        return e.n
+      },
+      async expire() {
+        throw new Error('EXPIRE refused')
+      }
+    }
+    const key = 'nvr:hub:db-tries:-:u1:1'
+    const counts: number[] = []
+    for (let i = 0; i < 11; i++) counts.push(await countOwnerTry(redis, key))
+    expect(counts).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
+    expect(store.get(key)?.ttl).toBe(600)
+    expect(calls.slice(0, 2)).toEqual(['set EX 600 NX', 'incr'])
+    expect(calls).not.toContain('expire')
+  })
+
+  it('Redis failing partway counts the try once, in-process', async () => {
+    let n = 0
+    const redis = {
+      async set() {
+        return 'OK'
+      },
+      async incr() {
+        n++
+        if (n === 3) throw new Error('connection reset')
+        return n
+      }
+    }
+    const key = 'nvr:hub:db-tries:-:u2:1'
+    expect(await countOwnerTry(redis, key)).toBe(1)
+    expect(await countOwnerTry(redis, key)).toBe(2)
+    // The failed INCR: counted once, here.
+    expect(await countOwnerTry(redis, key)).toBe(1)
+    expect(await countOwnerTry(null, key)).toBe(2)
+  })
+})
+
+describe('closing', () => {
+  it('a closing Hub waits for background target syncs', async () => {
+    const out = await created()
+    await db('nivaro_hub_creations')
+      .where({ app_id: out.app_id })
+      .update({ made: JSON.stringify({ project_id: 77 }) })
+    let release = () => {}
+    const slow = new Promise<void>((r) => (release = r))
+    let synced = false
+    const res = await R.syncTargetApps(targetId, {
+      budgetMs: 10,
+      syncApp: async () => {
+        await slow
+        synced = true
+      }
+    })
+    expect(res).toEqual([{ app_id: out.app_id, ok: false, code: 'PENDING', pending: true }])
+    const other = Fastify()
+    await other.register(hubRoutes, { prefix: '/api/hub' })
+    await other.ready()
+    let closed = false
+    const closing = other.close().then(() => {
+      closed = true
+    })
+    await new Promise((r) => setTimeout(r, 30))
+    expect(closed).toBe(false)
+    release()
+    await closing
+    expect(synced).toBe(true)
   })
 })
 

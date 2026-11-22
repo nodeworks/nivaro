@@ -1590,25 +1590,34 @@ describe('deploy repository', () => {
 })
 
 describe('syncTargetApps (bounded)', () => {
-  /** Apps on the target with only an app-level deploy project (no creation rows). */
-  async function bareApps(projects: Array<string | null>) {
+  /** Apps on the target whose creation row recorded a project id (null: none recorded). */
+  async function recordedApps(projects: Array<number | null>) {
     const ids: number[] = []
-    for (const [i, p] of projects.entries())
-      ids.push(
-        await insertId('nivaro_hub_apps', {
-          key: `bare${i}`,
-          name: `Bare ${i}`,
-          signin_mode: 'direct',
-          extensions: '[]',
-          target_id: targetId,
-          deploy_project: p
+    for (const [i, p] of projects.entries()) {
+      const id = await insertId('nivaro_hub_apps', {
+        key: `bare${i}`,
+        name: `Bare ${i}`,
+        signin_mode: 'direct',
+        extensions: '[]',
+        target_id: targetId
+      })
+      ids.push(id)
+      if (p !== null)
+        await db('nivaro_hub_creations').insert({
+          app_id: id,
+          environment_id: 900_000 + i,
+          status: 'done',
+          steps: '[]',
+          made: JSON.stringify({ project_id: p }),
+          version: '1.2.3',
+          first_admin: '{"email":"a@example.com"}'
         })
-      )
+    }
     return ids
   }
 
-  it('falls back to the app’s deploy_project, runs at most 3 at once and reports each app', async () => {
-    const ids = await bareApps(['apps/a', 'apps/b', null, 'apps/c', 'apps/d', 'apps/e'])
+  it('runs at most 3 apps at once and reports each app', async () => {
+    const ids = await recordedApps([101, 102, null, 103, 104, 105])
     let inFlight = 0
     let most = 0
     const seen: string[] = []
@@ -1619,12 +1628,12 @@ describe('syncTargetApps (bounded)', () => {
         seen.push(project)
         await new Promise((r) => setTimeout(r, 5))
         inFlight--
-        if (project === 'apps/d') throw Object.assign(new Error('x'), { code: 'GITLAB_FORBIDDEN' })
+        if (project === '104') throw Object.assign(new Error('x'), { code: 'GITLAB_FORBIDDEN' })
       }
     })
     expect(most).toBe(3)
-    expect(seen.sort()).toEqual(['apps/a', 'apps/b', 'apps/c', 'apps/d', 'apps/e'])
-    // The app without a project is left out; one app's failure is its own entry.
+    expect(seen.sort()).toEqual(['101', '102', '103', '104', '105'])
+    // The app with no project is left out; one app's failure is its own entry.
     expect(out).toEqual([
       { app_id: ids[0], ok: true },
       { app_id: ids[1], ok: true },
@@ -1635,14 +1644,14 @@ describe('syncTargetApps (bounded)', () => {
   })
 
   it('answers what is not done within the budget as pending and finishes it in the background', async () => {
-    const ids = await bareApps(['apps/fast', 'apps/slow'])
+    const ids = await recordedApps([201, 202])
     let release = () => {}
     const slow = new Promise<void>((r) => (release = r))
     const done: string[] = []
     const out = await R.syncTargetApps(targetId, {
       budgetMs: 30,
       syncApp: async (_t, project) => {
-        if (project === 'apps/slow') await slow
+        if (project === '202') await slow
         done.push(project)
       }
     })
@@ -1650,22 +1659,66 @@ describe('syncTargetApps (bounded)', () => {
       { app_id: ids[0], ok: true },
       { app_id: ids[1], ok: false, code: 'PENDING', pending: true }
     ])
-    expect(done).toEqual(['apps/fast'])
+    expect(done).toEqual(['201'])
+    // A bounded wait gives up on it; an unbounded one sees it finish.
+    await R.awaitTargetSyncs(20)
+    expect(done).toEqual(['201'])
     release()
     await R.awaitTargetSyncs()
-    expect(done).toEqual(['apps/fast', 'apps/slow'])
+    expect(done).toEqual(['201', '202'])
   })
 
-  it('the real sync reaches an app whose creation rows are gone (deploy_project)', async () => {
-    const out1 = await startAndWait(
+  /** A created app whose creation rows lost the recorded project id (the deploy_project stays). */
+  async function createdWithoutProjectId() {
+    const out = await startAndWait(
       input({ environments: [{ key: 'production', database: { server_id: autoServer } }] })
     )
-    await db('nivaro_hub_creations').where({ app_id: out1.app_id }).del()
+    for (const c of await store.creationsOfApp(out.app_id)) {
+      const made = { ...c.made }
+      delete made.project_id
+      await db('nivaro_hub_creations')
+        .where({ id: c.id })
+        .update({ made: JSON.stringify(made) })
+    }
     await db('nivaro_hub_targets')
       .where({ id: targetId })
       .update({ config: JSON.stringify({ ...targetConfig, template_ref: 'v1.2.0' }) })
-    expect(await R.syncTargetApps(targetId)).toEqual([{ app_id: out1.app_id, ok: true }])
+    return out
+  }
+
+  it('deploy_project fallback: ours by the creation mark and the Hub’s own user', async () => {
+    const out = await createdWithoutProjectId()
+    expect(await R.syncTargetApps(targetId)).toEqual([{ app_id: out.app_id, ok: true }])
     expect(gl.projects.get(PROJECT)?.ci_config_path).toBe(`ci/deploy.yml@${TEMPLATE}:v1.2.0`)
+  })
+
+  it('deploy_project fallback: another description, or no creation row left → PROJECT_NOT_OURS', async () => {
+    const out = await createdWithoutProjectId()
+    const proj = gl.projects.get(PROJECT)
+    const mark = proj?.description
+    if (proj) proj.description = 'planted by someone'
+    expect(await R.syncTargetApps(targetId)).toEqual([
+      { app_id: out.app_id, ok: false, code: 'PROJECT_NOT_OURS' }
+    ])
+    if (proj) proj.description = mark
+    await db('nivaro_hub_creations').where({ app_id: out.app_id }).del()
+    expect(await R.syncTargetApps(targetId)).toEqual([
+      { app_id: out.app_id, ok: false, code: 'PROJECT_NOT_OURS' }
+    ])
+    // Nothing was configured on a project that is not ours.
+    expect(gl.projects.get(PROJECT)?.ci_config_path).toBe(`ci/deploy.yml@${TEMPLATE}:v1.0.0`)
+  })
+})
+
+describe('placeOf / samePlace', () => {
+  it('a trailing dot and case never make two places of one host, on either side', async () => {
+    const { placeOf, samePlace } = await import('../../../services/hub/db/stored-connection.js')
+    const a = placeOf({ engine: 'pg', host: 'PG1.Example.com.', port: null })
+    expect(a).toEqual({ engine: 'pg', host: 'pg1.example.com', port: 5432 })
+    expect(samePlace(a, { engine: 'pg', host: 'pg1.example.com', port: 5432 })).toBe(true)
+    // A place stored before the normalisation (with its dot) still compares.
+    expect(samePlace({ engine: 'pg', host: 'pg1.example.com.', port: 5432 }, a)).toBe(true)
+    expect(samePlace(a, { engine: 'pg', host: 'pg2.example.com', port: 5432 })).toBe(false)
   })
 })
 

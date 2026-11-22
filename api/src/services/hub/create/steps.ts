@@ -930,8 +930,21 @@ export const TARGET_SYNC_BUDGET_MS = 20_000
 /** Target syncs still running after their request answered (tests and shutdown wait on them). */
 const syncsInFlight = new Set<Promise<unknown>>()
 
-export async function awaitTargetSyncs(): Promise<void> {
-  while (syncsInFlight.size) await Promise.allSettled([...syncsInFlight])
+/** Waits for every background target sync, at most `maxMs` (a closing process never hangs). */
+export async function awaitTargetSyncs(maxMs = Number.POSITIVE_INFINITY): Promise<void> {
+  const all = (async () => {
+    while (syncsInFlight.size) await Promise.allSettled([...syncsInFlight])
+  })()
+  if (!Number.isFinite(maxMs)) return all
+  let timer: NodeJS.Timeout | undefined
+  await Promise.race([
+    all,
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, maxMs)
+      timer.unref?.()
+    })
+  ])
+  clearTimeout(timer)
 }
 
 async function syncAppProject(target: HubTargetRow, project: string): Promise<void> {
@@ -941,10 +954,33 @@ async function syncAppProject(target: HubTargetRow, project: string): Promise<vo
 }
 
 /**
+ * An app's deploy_project, used only when it passes the adoption rule (ruling P3-23): its
+ * description is EXACTLY one of the app's creation marks AND the target token's own GitLab user
+ * made it (a recorded project id never reaches here). Answers its numeric id, or null: no
+ * project there, no creation row left to hold a mark, or not ours.
+ */
+async function ownedFallback(
+  target: HubTargetRow,
+  path: string,
+  rows: Awaited<ReturnType<typeof creationsOfApp>>,
+  tokenUser: () => Promise<number>
+): Promise<string | null> {
+  const marks = new Set<string>()
+  for (const r of rows)
+    if (r.made.planned?.nonce) marks.add(creationMarker(r.id, r.made.planned.nonce))
+  if (!marks.size) return null
+  const p = await projectExists(targetCtx(target), path)
+  if (!p || !marks.has(p.description.trim())) return null
+  if (p.creator_id === null || p.creator_id !== (await tokenUser())) return null
+  return String(p.id)
+}
+
+/**
  * After a target changes (settings, template_ref moved): every app created on it gets the
  * target's CI configuration path and project variables again, checked back (fail closed per
  * app). Call it after every target update (routes, Task 10). The project is the one the app's
- * creation rows recorded, else the app's own deploy_project (an app whose creation rows are gone).
+ * creation rows recorded, else the app's own deploy_project — only when it passes the adoption
+ * rule (ownedFallback; otherwise that app is `PROJECT_NOT_OURS`).
  *
  * Answers per app (an app with no project is left out); one app's failure — a read or a GitLab
  * call — is that app's `{ok: false, code}`, never a throw. At most TARGET_SYNC_CONCURRENCY apps at
@@ -970,22 +1006,36 @@ export async function syncTargetApps(
   const results = new Map<number, TargetSyncResult>()
   const skipped = new Set<number>()
 
+  const tokenUser = tokenUserMemo(target)
   const one = async (a: { id: number; deploy_project: string | null }) => {
     const appId = Number(a.id)
-    let project: string | null
+    let made: CreationMade
+    let rows: Awaited<ReturnType<typeof creationsOfApp>>
     try {
-      const made = await appMade(appId)
-      project =
-        made.project_id != null ? String(made.project_id) : (a.deploy_project ?? null) || null
+      made = await appMade(appId)
+      rows = await creationsOfApp(appId)
     } catch {
       results.set(appId, { app_id: appId, ok: false, code: 'READ_FAILED' })
       return
     }
-    if (!project) {
+    const fallback = made.project_id == null ? a.deploy_project?.trim() || null : null
+    if (made.project_id == null && !fallback) {
       skipped.add(appId)
       return
     }
     try {
+      let project: string
+      if (made.project_id != null) project = String(made.project_id)
+      else {
+        // The app's own deploy_project (no recorded project id): judged like adoption (P3-23)
+        // before anything is configured or pushed there.
+        const owned = await ownedFallback(target, fallback as string, rows, tokenUser)
+        if (!owned) {
+          results.set(appId, { app_id: appId, ok: false, code: 'PROJECT_NOT_OURS' })
+          return
+        }
+        project = owned
+      }
       await sync(target, project)
       results.set(appId, { app_id: appId, ok: true })
     } catch (err) {

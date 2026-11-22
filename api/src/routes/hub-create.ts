@@ -6,6 +6,7 @@ import { idParam, isAppOwner } from '../services/hub/apps.js'
 import { gatherCreationFacts } from '../services/hub/create/gather.js'
 import { buildCreationPlan } from '../services/hub/create/plan.js'
 import {
+  awaitTargetSyncs,
   CreationError,
   cancelCreation,
   checkWaitingCreations,
@@ -30,7 +31,7 @@ import {
 } from '../services/hub/create/targets.js'
 import type { CreateAppInput } from '../services/hub/create/types.js'
 import { type ChecklistItem, dbaChecklist } from '../services/hub/db/checklist.js'
-import { connectionFromInput } from '../services/hub/db/connection.js'
+import { connectionFromInput, type HubDbEngine } from '../services/hub/db/connection.js'
 import {
   adoptDatabase,
   checkDatabase,
@@ -88,11 +89,19 @@ export function hubPhase3Routes(app: FastifyInstance) {
         'Every 5 minutes — Hub app creation: heals creation legs a stopped process left running, looks again at every creation waiting for a database or a hostname (and starts it once that is there), starts legs that found their environment busy, and checks environments waiting for their name.'
     }
   )
+  // Target syncs still running in the background (PATCH /targets answered `pending`): a deploy
+  // waits for them, at most TARGET_SYNC_CLOSE_WAIT_MS.
+  app.addHook('onClose', async () => {
+    await awaitTargetSyncs(TARGET_SYNC_CLOSE_WAIT_MS)
+  })
   dbServerRoutes(app)
   databaseRoutes(app)
   targetRoutes(app)
   creationRoutes(app)
 }
+
+/** How long a closing process waits for background target syncs. */
+export const TARGET_SYNC_CLOSE_WAIT_MS = 10_000
 
 const SERVERS = 'nivaro_hub_db_servers'
 const DATABASES = 'nivaro_hub_databases'
@@ -315,17 +324,10 @@ function connectionInput(b: Body, engine: string): Record<string, unknown> {
  */
 async function ownerPlaceRefusal(
   found: HubDatabase,
-  place: { host: string; port: number | null }
+  place: { engine: HubDbEngine; host: string; port: number | null }
 ): Promise<string | null> {
   const server = found.server_id === null ? null : await getServerRow(found.server_id)
-  if (
-    server &&
-    samePlace(
-      placeOf({ engine: server.engine, host: place.host, port: place.port }),
-      placeOf(server)
-    )
-  )
-    return null
+  if (server && samePlace(placeOf(place), placeOf(server))) return null
   return server
     ? `Only this database's server (${server.host}${server.port ? `:${server.port}` : ''}) can be used here.`
     : 'This database has no server an owner may connect to; ask a Hub admin.'
@@ -335,21 +337,22 @@ export const OWNER_TRY_LIMIT = 10
 export const OWNER_TRY_WINDOW_S = 600
 const memoryTries = new Map<string, { n: number; until: number }>()
 
-type TryRedis = { incr(k: string): Promise<number>; expire(k: string, s: number): Promise<unknown> }
+export type TryRedis = {
+  set(k: string, v: string, ex: 'EX', s: number, nx: 'NX'): Promise<unknown>
+  incr(k: string): Promise<number>
+}
 
 /**
- * Counts an owner's connection try on a database: at most OWNER_TRY_LIMIT per
- * OWNER_TRY_WINDOW_S per person per database (Redis, keyed with the tenant; in-process when
- * Redis is absent or fails). True = over the limit.
+ * Counts one try under `key` and answers the count in the current window. Redis: the window is
+ * set WITH the key (SET key 0 EX <window> NX), then INCR — no separate EXPIRE that could fail and
+ * leave a key that never expires (an owner locked out for good). Redis absent or failing: counted
+ * in this process instead, once (a failed INCR counted nothing there).
  */
-async function overTryLimit(app: FastifyInstance, req: FastifyRequest, dbId: number) {
-  const key = `nvr:hub:db-tries:${currentTenantKey() || '-'}:${userId(req)}:${dbId}`
-  const redis = (app as unknown as { redis?: TryRedis }).redis
+export async function countOwnerTry(redis: TryRedis | null, key: string): Promise<number> {
   if (redis) {
     try {
-      const n = Number(await redis.incr(key))
-      if (n === 1) await redis.expire(key, OWNER_TRY_WINDOW_S)
-      return n > OWNER_TRY_LIMIT
+      await redis.set(key, '0', 'EX', OWNER_TRY_WINDOW_S, 'NX')
+      return Number(await redis.incr(key))
     } catch {
       // Redis trouble: count here instead
     }
@@ -361,7 +364,17 @@ async function overTryLimit(app: FastifyInstance, req: FastifyRequest, dbId: num
   const entry = cur && cur.until > now ? cur : { n: 0, until: now + OWNER_TRY_WINDOW_S * 1000 }
   entry.n++
   memoryTries.set(key, entry)
-  return entry.n > OWNER_TRY_LIMIT
+  return entry.n
+}
+
+/**
+ * An owner's connection try on a database: at most OWNER_TRY_LIMIT per OWNER_TRY_WINDOW_S per
+ * person per database (keyed with the tenant). True = over the limit.
+ */
+async function overTryLimit(app: FastifyInstance, req: FastifyRequest, dbId: number) {
+  const key = `nvr:hub:db-tries:${currentTenantKey() || '-'}:${userId(req)}:${dbId}`
+  const redis = (app as unknown as { redis?: TryRedis }).redis ?? null
+  return (await countOwnerTry(redis, key)) > OWNER_TRY_LIMIT
 }
 
 /**
@@ -374,7 +387,7 @@ async function ownerTryRefused(
   req: FastifyRequest,
   reply: FastifyReply,
   found: HubDatabase,
-  place: { host: string; port: number | null }
+  place: { engine: HubDbEngine; host: string; port: number | null }
 ): Promise<boolean> {
   if (req.isAdmin) return false
   const wrong = await ownerPlaceRefusal(found, place)
@@ -449,7 +462,14 @@ function databaseRoutes(app: FastifyInstance) {
     const found = await readableDatabase(req)
     if (!found) return notFound(reply)
     // An owner's Check now connects where the row points: only to its own server.
-    if (await ownerTryRefused(app, req, reply, found, found)) return reply
+    if (
+      await ownerTryRefused(app, req, reply, found, {
+        engine: found.engine,
+        host: found.host,
+        port: found.port
+      })
+    )
+      return reply
     return guarded(reply, async () => {
       const check = await checkDatabase(found.id)
       await logActivity({

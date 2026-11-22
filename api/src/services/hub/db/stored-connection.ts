@@ -26,16 +26,26 @@ export function normPort(engine: HubDbEngine, port: number | null | undefined): 
   return port ?? DEFAULT_PORTS[engine]
 }
 
+/** A host as compared: trimmed, lower case, without a trailing dot (`db.example.com.`). */
+export function normHost(host: string): string {
+  return host.trim().toLowerCase().replace(/\.$/, '')
+}
+
 export function placeOf(o: {
   engine: HubDbEngine
   host: string
   port: number | null | undefined
 }): DbPlace {
-  return { engine: o.engine, host: o.host.trim().toLowerCase(), port: normPort(o.engine, o.port) }
+  return { engine: o.engine, host: normHost(o.host), port: normPort(o.engine, o.port) }
 }
 
+/** Normalises both sides again, so a place stored before normHost (a trailing dot) still compares. */
 export function samePlace(a: DbPlace, b: DbPlace): boolean {
-  return a.engine === b.engine && a.host === b.host && Number(a.port) === Number(b.port)
+  return (
+    a.engine === b.engine &&
+    normHost(String(a.host)) === normHost(String(b.host)) &&
+    Number(a.port) === Number(b.port)
+  )
 }
 
 export function hasMarkers(s: StoredConnection | null): boolean {

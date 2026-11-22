@@ -178,23 +178,28 @@ printf '%s' "$DEPLOY_KNOWN_HOSTS" | base64 -d >"$WORK/known_hosts" 2>/dev/null |
 # Not installed yet (sshd refuses the key) or not bound (the wrapper answers 77): the one fixed
 # line below and status 77, which the Hub reads as "the operator has not installed the key".
 KEY_MARKER=NIVARO_HUB_KEY_NOT_INSTALLED
-# A file without any line the Hub could read as the marker: the Hub strips colour codes and
-# GitLab section markers, splits on CR and trims, so a line still holding the marker after those
-# two removals is dropped (spaces, a CR, a timestamp around it included). Only the line remote()
-# prints itself may say it.
+# Copies a file (or stdin, "-") without any line the Hub could read as the marker: the Hub strips
+# colour codes and GitLab section markers, splits on CR and trims, so a line still holding the
+# marker after those two removals is dropped (spaces, a CR, a timestamp around it included). Only
+# the line remote() prints itself may say it. Line by line, flushed: the job log streams.
 drop_marker() {
   awk -v m="$KEY_MARKER" -v e="$(printf '\033')" '{
     l = $0
     gsub(e "\\[[0-9;]*[A-Za-z]", "", l)
     gsub(/section_(start|end):[0-9]+:[A-Za-z0-9_.-]+(\[[^]]*\])?/, "", l)
-    if (index(l, m) == 0) print
+    if (index(l, m) == 0) { print; fflush() }
   }' "$1"
 }
 remote() {
-  rc=0
-  ssh -F /dev/null -i "$WORK/key" -o IdentitiesOnly=yes -o BatchMode=yes -o UserKnownHostsFile="$WORK/known_hosts" -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes -o UpdateHostKeys=no -o ConnectTimeout=20 -o ServerAliveInterval=15 -T -- "$DEST" "$@" >"$WORK/ssh.out" 2>"$WORK/ssh.err" || rc=$?
-  # The remote's output and errors, both without the marker (stdout once the call ends).
-  drop_marker "$WORK/ssh.out" || true
+  # The remote's output streams through the filter as it comes (a job timeout keeps what was
+  # printed); its status travels through a file, as a pipeline answers the filter's.
+  rm -f "$WORK/ssh.rc"
+  {
+    rc=0
+    ssh -F /dev/null -i "$WORK/key" -o IdentitiesOnly=yes -o BatchMode=yes -o UserKnownHostsFile="$WORK/known_hosts" -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes -o UpdateHostKeys=no -o ConnectTimeout=20 -o ServerAliveInterval=15 -T -- "$DEST" "$@" 2>"$WORK/ssh.err" || rc=$?
+    echo "$rc" >"$WORK/ssh.rc"
+  } | drop_marker -
+  rc=$(cat "$WORK/ssh.rc" 2>/dev/null || echo 1)
   drop_marker "$WORK/ssh.err" >&2 || true
   if [ "$rc" -ne 0 ] && { [ "$rc" -eq 77 ] || grep -q 'Permission denied (publickey' "$WORK/ssh.err"; }; then
     printf 'deploy: the swarm manager does not accept this app'"'"'s deploy key: install it (the Hub shows the lines), then press Installed\n' >&2

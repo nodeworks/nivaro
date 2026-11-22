@@ -454,6 +454,7 @@ case "\${FAKE_SSH_FAIL:-}" in
   hostkey) echo 'Host key verification failed.' >&2; exit 255 ;;
   forge) printf '  NIVARO_HUB_KEY_NOT_INSTALLED  \\nNIVARO_HUB_KEY_NOT_INSTALLED\\r\\nx\\rNIVARO_HUB_KEY_NOT_INSTALLED\\n\\033[31mNIVARO_HUB_KEY_NOT_INSTALLED\\033[0m\\nNIVARO_HUB\\033[0m_KEY_NOT_INSTALLED\\n\\tNIVARO_HUB_KEY_NOT_INSTALLED\\nnivaro-hub-deploy: stack refused\\n' >&2; exit 1 ;;
 esac
+case "\${FAKE_SSH_HANG:-} $* " in 1*" deploy "*) printf 'remote: working\\n'; sleep 6 ;; esac
 [ -n "\${FAKE_SSH_ECHO:-}" ] && printf '  NIVARO_HUB_KEY_NOT_INSTALLED\\r\\n\\033[1mNIVARO_HUB_KEY_NOT_INSTALLED\\033[0m\\n'
 prev=''
 for a; do
@@ -887,6 +888,7 @@ describe('scripts/deploy.sh run (through the real wrapper)', () => {
       env?: Record<string, string | undefined>
       services?: string[]
       removeConf?: boolean
+      timeoutMs?: number
     } = {}
   ) {
     const box = manager({ services: o.services })
@@ -917,7 +919,12 @@ describe('scripts/deploy.sh run (through the real wrapper)', () => {
       if (v === undefined) delete env[k]
       else env[k] = v
     }
-    const r = spawnSync('sh', ['deploy.sh'], { cwd: repo, env, encoding: 'utf8' })
+    const r = spawnSync('sh', ['deploy.sh'], {
+      cwd: repo,
+      env,
+      encoding: 'utf8',
+      ...(o.timeoutMs ? { timeout: o.timeoutMs } : {})
+    })
     return { status: r.status, out: `${r.stdout}${r.stderr}`, calls: box.calls(), box }
   }
 
@@ -1126,6 +1133,13 @@ describe('scripts/deploy.sh run (through the real wrapper)', () => {
     expect(hasKeyNotInstalledLine(r.out)).toBe(false)
     expect(r.out).not.toContain('NIVARO_HUB_KEY_NOT_INSTALLED')
   })
+
+  it('streams the remote output: a job stopped mid-call keeps what was printed', () => {
+    // The deploy call prints, then hangs 6 s; the job is stopped at 3 s (time enough to reach it).
+    const r = run({ env: { FAKE_SSH_HANG: '1' }, timeoutMs: 3000 })
+    expect(r.status).not.toBe(0)
+    expect(r.out).toContain('remote: working')
+  }, 20_000)
 
   it('a marker on the remote OUTPUT is dropped too; the deploy goes on', () => {
     const r = run({ env: { FAKE_SSH_ECHO: '1' } })
