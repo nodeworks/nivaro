@@ -103,9 +103,11 @@ function input(o: Partial<MovePlanInput> = {}): MovePlanInput {
       redis: 'r-target',
       multi_node: null,
       stack_key_fp: null,
-      in_use_by: null
+      in_use_by: null,
+      identity_unchecked: 0
     },
     driver_problem: null,
+    gather_failed: [],
     ...o
   }
 }
@@ -349,6 +351,28 @@ describe('buildMovePlan — one test per blocker', () => {
       })
     )
     expect(p.blockers).toEqual([])
+  })
+})
+
+describe('buildMovePlan — a check that could not run is never a pass (P6-15)', () => {
+  it('a part of the gather that failed → GATHER_FAILED naming it', () => {
+    const p = buildMovePlan(input({ gather_failed: ['the tenant list of pool-a'] }))
+    expect(p.blockers.find((b) => b.code === 'GATHER_FAILED')?.text).toContain(
+      'the tenant list of pool-a'
+    )
+  })
+
+  it('other apps not compared → DB_IDENTITY_UNCHECKED naming how many, and a required checklist item', () => {
+    const p = buildMovePlan(input({ target_facts: tgt({ identity_unchecked: 3 }) }))
+    expect(p.warnings.find((w) => w.code === 'DB_IDENTITY_UNCHECKED')?.text).toMatch(/\b3\b/)
+    expect(p.checklist.find((c) => c.id === 'db_identity_checked')?.required).toBe(true)
+    expect(codes(p)).toEqual([])
+  })
+
+  it('every other app compared → no such warning or item', () => {
+    const p = buildMovePlan(input())
+    expect(p.warnings.map((w) => w.code)).not.toContain('DB_IDENTITY_UNCHECKED')
+    expect(p.checklist.map((c) => c.id)).not.toContain('db_identity_checked')
   })
 })
 

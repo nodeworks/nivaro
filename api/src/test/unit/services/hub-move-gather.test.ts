@@ -431,6 +431,83 @@ describe('gatherMovePlanInput — to_shared from a Docker stack', () => {
     expect(fake.dbChecks.length).toBe(2)
   })
 
+  it('the tenant list cannot be read → GATHER_FAILED (never "no other apps")', async () => {
+    const sharedId = await newShared()
+    const placement = await dockerPlacement('shop-tf')
+    const e = await newEnv({ placement_id: placement, db_ref: `hub-db:${await newDb()}` })
+    const input = await Gather.gatherMovePlanInput(
+      e.id,
+      { kind: 'shared', shared_id: sharedId },
+      deps({
+        tenants: async () => {
+          throw new Error('db down')
+        }
+      })
+    )
+    expect(buildMovePlan(input).blockers.map((b) => b.code)).toContain('GATHER_FAILED')
+  })
+
+  it('apps past the cap and a failed check count as unchecked → DB_IDENTITY_UNCHECKED', async () => {
+    const sharedId = await newShared()
+    for (let i = 0; i < 3; i++)
+      await newEnv({
+        placement_id: await sharedPlacement(sharedId, 2),
+        db_ref: `hub-db:${await newDb()}`
+      })
+    const placement = await dockerPlacement('shop-cap')
+    const e = await newEnv({ placement_id: placement, db_ref: `hub-db:${await newDb()}` })
+    const base = fakeClient().factory()
+    let others = 0
+    const client = {
+      ...base,
+      dbCheck: vi.fn(async (w: { client: string; connection: string }) => {
+        if (base.dbCheck.mock.calls.length === 0) return base.dbCheck(w) // this app's own check
+        others++
+        if (others === 1) throw new DeploymentLinkError('LINK_UNREACHABLE')
+        return base.dbCheck(w)
+      })
+    }
+    // Own check first (dbCheck spy counts), then others: cap 2 → one past the cap, one failed.
+    const input = await Gather.gatherMovePlanInput(
+      e.id,
+      { kind: 'shared', shared_id: sharedId },
+      deps({ client: (() => client) as never, identity: { max: 2, parallel: 1, budgetMs: 5_000 } })
+    )
+    expect(input.target_facts.identity_unchecked).toBe(2)
+    const plan = buildMovePlan(input)
+    expect(plan.warnings.map((w) => w.code)).toContain('DB_IDENTITY_UNCHECKED')
+    expect(plan.checklist.find((c) => c.id === 'db_identity_checked')?.required).toBe(true)
+  })
+
+  it('the identity pass has one total budget; what is left past it counts as unchecked', async () => {
+    const sharedId = await newShared()
+    for (let i = 0; i < 2; i++)
+      await newEnv({
+        placement_id: await sharedPlacement(sharedId, 2),
+        db_ref: `hub-db:${await newDb()}`
+      })
+    const placement = await dockerPlacement('shop-slow')
+    const e = await newEnv({ placement_id: placement, db_ref: `hub-db:${await newDb()}` })
+    const base = fakeClient().factory()
+    let calls = 0
+    const client = {
+      ...base,
+      dbCheck: vi.fn(async (w: { client: string; connection: string }) => {
+        calls++
+        if (calls === 1) return base.dbCheck(w)
+        return new Promise<never>(() => undefined) // hangs
+      })
+    }
+    const started = Date.now()
+    const input = await Gather.gatherMovePlanInput(
+      e.id,
+      { kind: 'shared', shared_id: sharedId },
+      deps({ client: (() => client) as never, identity: { budgetMs: 50 } })
+    )
+    expect(Date.now() - started).toBeLessThan(5_000)
+    expect(input.target_facts.identity_unchecked).toBe(2)
+  })
+
   it('distinct identities on the target → no DB_IDENTITY_SHARED; pool counts the other app', async () => {
     const sharedId = await newShared()
     const otherDb = await newDb()

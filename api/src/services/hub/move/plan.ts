@@ -177,6 +177,11 @@ function blockersOf(input: MovePlanInput): Blocker[] {
       `That placement is used by ${t.in_use_by}. A move needs a placement of its own.`
     )
   if (input.driver_problem) add('DRIVER_UNSUPPORTED', input.driver_problem)
+  if (input.gather_failed.length)
+    add(
+      'GATHER_FAILED',
+      `The Hub could not read ${list(input.gather_failed)}, so this plan cannot be trusted. Plan again in a moment.`
+    )
 
   // The hub link of the dedicated side (maintenance, retire and the readiness report need it).
   const dedicatedSide = kind === 'to_shared' || kind === 'to_dedicated'
@@ -406,6 +411,11 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
     'REPLAYS_NOT_MOVED',
     'Session replays and generated image sizes are not moved. Images are made again when asked for; old replays stay on the source until it is removed.'
   )
+  if (t.identity_unchecked > 0 && to.kind === 'shared')
+    add(
+      'DB_IDENTITY_UNCHECKED',
+      `${t.identity_unchecked} other app${t.identity_unchecked === 1 ? '' : 's'} on ${to.shared.key} could not be compared with this app's database (too many to check, a check failed, or time ran out). The Hub cannot rule out that one of them reports the same database.`
+    )
   if (t.multi_node !== null)
     add(
       'MULTI_NODE_VOLUMES',
@@ -441,6 +451,12 @@ function checklistOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Mov
       id: 'old_stack_stopped',
       text: 'The old GitLab-deployed stack is stopped (after the move; not needed to start).',
       required: false
+    })
+  if (input.target_facts.identity_unchecked > 0 && input.to.kind === 'shared')
+    out.push({
+      id: 'db_identity_checked',
+      text: `No other app on ${input.to.shared.key} uses this app's database server and name (${input.target_facts.identity_unchecked} could not be compared by the Hub).`,
+      required: true
     })
   if (routing === 'manual')
     out.push({

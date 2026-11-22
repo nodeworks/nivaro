@@ -79,6 +79,8 @@ const READINESS_TIMEOUT_MS = 10_000
  *  at once. */
 const IDENTITY_CHECK_MAX = 25
 const IDENTITY_CHECK_PARALLEL = 4
+/** The whole collision pass ends after this; what it did not reach counts as unchecked. */
+const IDENTITY_CHECK_BUDGET_MS = 30_000
 
 export interface MoveGatherDeps {
   /** The deployment link client of a shared deployment. */
@@ -93,6 +95,10 @@ export interface MoveGatherDeps {
    * someone else's. Unset for a plan read.
    */
   ownLocks?: boolean
+  /** The shared tenant list (tests make it fail). */
+  tenants?: typeof tenantsOf
+  /** The identity-collision pass: how many other apps, how many at once, its total budget. */
+  identity?: { max?: number; parallel?: number; budgetMs?: number }
 }
 
 export type ReadinessRead = { ok: true; report: SharedReadiness } | { ok: false; code: string }
@@ -232,13 +238,17 @@ function multiNode(h: AgentHealth | null): number | null {
     : null
 }
 
-async function inParallel<T, R>(items: T[], n: number, fn: (x: T) => Promise<R>): Promise<R[]> {
+async function inParallel<T, R>(
+  items: T[],
+  n: number,
+  fn: (x: T, i: number) => Promise<R>
+): Promise<R[]> {
   const out: R[] = new Array(items.length)
   let next = 0
   const worker = async () => {
     while (next < items.length) {
       const i = next++
-      out[i] = await fn(items[i])
+      out[i] = await fn(items[i], i)
     }
   }
   await Promise.all(Array.from({ length: Math.min(n, items.length) }, worker))
@@ -408,6 +418,8 @@ interface Ctx {
   deps: MoveGatherDeps
   health: Map<number, Promise<{ h: AgentHealth | null; code: string | null }>>
   problems: string[]
+  /** Parts of the gather that could not be read (GATHER_FAILED): never read as "nothing". */
+  failed: string[]
 }
 
 /** The agent's health of a Docker driver, read once per gather. */
@@ -609,7 +621,8 @@ const NO_TARGET: MoveTargetFacts = {
   redis: null,
   multi_node: null,
   stack_key_fp: null,
-  in_use_by: null
+  in_use_by: null,
+  identity_unchecked: 0
 }
 
 async function sharedTargetFacts(
@@ -638,7 +651,12 @@ async function sharedTargetFacts(
     if (driver?.kind === 'docker') out.multi_node = multiNode((await healthOf(ctx, driver)).h)
   }
 
-  const rows = await tenantsOf(shared).catch(() => [])
+  let rows: Awaited<ReturnType<typeof tenantsOf>> = []
+  try {
+    rows = await (ctx.deps.tenants ?? tenantsOf)(shared)
+  } catch {
+    ctx.failed.push(`the list of apps on ${shared.key}`)
+  }
   const others = rows.filter((r) => r.env.id !== ctx.envId)
   out.siblings = others.filter((r) => r.app.id === app.id).map((r) => r.env.key)
 
@@ -688,23 +706,42 @@ async function sharedTargetFacts(
           ).map((r) => [Number(r.id), databaseRecordId(r.db_ref)])
         : []
     )
-    const asks = others
-      .filter((r) => {
-        const id = refs.get(r.env.id)
-        return id != null && id !== recordId
-      })
-      .slice(0, IDENTITY_CHECK_MAX)
-    const same = await inParallel(asks, IDENTITY_CHECK_PARALLEL, async (r) => {
+    const lim = ctx.deps.identity ?? {}
+    const candidates = others.filter((r) => {
+      const id = refs.get(r.env.id)
+      return id != null && id !== recordId
+    })
+    const asks = candidates.slice(0, lim.max ?? IDENTITY_CHECK_MAX)
+    /** Per ask: a match label, 'no' (compared, differs), or undefined (not compared). */
+    const results: Array<string | 'no' | undefined> = asks.map(() => undefined)
+    let stopped = false
+    const pass = inParallel(asks, lim.parallel ?? IDENTITY_CHECK_PARALLEL, async (r, i) => {
+      if (stopped) return
       const w = await dbWire(refs.get(r.env.id) ?? null)
-      if (!w) return null
+      if (!w || stopped) return
       try {
         const a = await client.dbCheck(w)
-        return a.db_identity === mine ? `${r.app.key}/${r.env.key}` : null
+        if (stopped) return
+        if (a.reachable && a.db_identity)
+          results[i] = a.db_identity === mine ? `${r.app.key}/${r.env.key}` : 'no'
       } catch {
-        return null
+        // not compared
       }
     })
-    out.identity_shared_with = same.filter((x): x is string => x !== null)
+    let timer: NodeJS.Timeout | undefined
+    await Promise.race([
+      pass,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, lim.budgetMs ?? IDENTITY_CHECK_BUDGET_MS)
+      })
+    ]).finally(() => {
+      stopped = true
+      clearTimeout(timer)
+    })
+    pass.catch(() => undefined)
+    const same = results.filter((x): x is string => x !== undefined && x !== 'no')
+    out.identity_unchecked = candidates.length - results.filter((x) => x !== undefined).length
+    out.identity_shared_with = same
   }
   return out
 }
@@ -792,7 +829,7 @@ export async function gatherMovePlanInput(
   if (!current)
     throw new MoveError('NO_PLACEMENT', "This environment's placement no longer exists.", 409)
 
-  const ctx: Ctx = { envId, deps, health: new Map(), problems: [] }
+  const ctx: Ctx = { envId, deps, health: new Map(), problems: [], failed: [] }
 
   // The sides.
   let from: PlacementSide
@@ -890,6 +927,7 @@ export async function gatherMovePlanInput(
     locks: await lockFacts(ctx, sharedSides),
     source,
     target_facts: targetFacts,
-    driver_problem: ctx.problems.length ? ctx.problems.join(' ') : null
+    driver_problem: ctx.problems.length ? ctx.problems.join(' ') : null,
+    gather_failed: [...ctx.failed]
   }
 }
