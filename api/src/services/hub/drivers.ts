@@ -2,6 +2,11 @@ import type { Knex } from 'knex'
 import { insertReturningId } from '../../db/dialect/ef.js'
 import { db } from '../../db/index.js'
 import type { GitCtx } from '../gitlab-client.js'
+import {
+  type DockerDriverConfig,
+  type DockerDriverFields,
+  validateDockerDriverInput
+} from './docker/driver-config.js'
 import { HUB_MASK, maskSecret, nextSecret, openSecret } from './secrets.js'
 
 export interface HubDriverConfig {
@@ -12,8 +17,8 @@ export interface HubDriverConfig {
   deploy_job: string
 }
 
-/** A driver as stored: config parsed, secret still sealed. */
-export interface HubDriverRow {
+/** A GitLab driver as stored: config parsed, secret still sealed. */
+export interface GitlabDriverRow {
   id: number
   kind: 'gitlab'
   name: string
@@ -21,21 +26,35 @@ export interface HubDriverRow {
   secret: string | null
 }
 
-/** A driver as the API shows it: the secret is only ever a mask. */
-export interface HubDriver {
+/** A Docker driver (phase 4) as stored: the secret is the sealed agent token. */
+export interface DockerDriverRow {
   id: number
-  kind: 'gitlab'
+  kind: 'docker'
   name: string
-  config: HubDriverConfig
+  config: DockerDriverConfig
   secret: string | null
 }
+
+/** A driver as stored: config parsed, secret still sealed. */
+export type HubDriverRow = GitlabDriverRow | DockerDriverRow
+
+export type HubDriverKind = HubDriverRow['kind']
+
+/** A driver as the API shows it: the secret is only ever a mask. */
+export type HubDriver = HubDriverRow
 
 export interface HubPlacementRow {
   id: number
   kind: 'dedicated'
   driver_id: number
-  target: { branch?: string }
+  /** branch: GitLab drivers; stack: the swarm stack name on a Docker driver (phase 4). */
+  target: PlacementTarget
 }
+
+export type PlacementTarget = { branch?: string; stack?: string }
+
+/** A Docker placement's stack name (also the agent's `:name`). */
+export const STACK_NAME_RE = /^[a-z][a-z0-9-]{1,40}$/
 
 export type HubPlacement = HubPlacementRow
 
@@ -77,15 +96,32 @@ export class DriverMisconfiguredError extends Error {
   }
 }
 
-type DriverFields = { kind: 'gitlab'; name: string; config: HubDriverConfig; secret: string | null }
+type GitlabDriverFields = {
+  kind: 'gitlab'
+  name: string
+  config: HubDriverConfig
+  secret: string | null
+}
+type DriverFields = GitlabDriverFields | DockerDriverFields
 
 export function validateDriverInput(
   body: Record<string, unknown>,
   existing?: HubDriverRow
 ): Validation<DriverFields> {
   const kind = body.kind ?? existing?.kind
-  if (kind !== 'gitlab') return fail('BAD_KIND', 'Driver kind must be gitlab.')
+  if (kind !== 'gitlab' && kind !== 'docker')
+    return fail('BAD_KIND', 'Driver kind must be gitlab or docker.')
+  if (existing && existing.kind !== kind)
+    return fail('BAD_KIND', 'A driver keeps its kind; add a new driver instead.')
+  if (kind === 'docker')
+    return validateDockerDriverInput(body, existing?.kind === 'docker' ? existing : undefined)
+  return validateGitlabDriverInput(body, existing?.kind === 'gitlab' ? existing : undefined)
+}
 
+function validateGitlabDriverInput(
+  body: Record<string, unknown>,
+  existing?: GitlabDriverRow
+): Validation<GitlabDriverFields> {
   const name = body.name !== undefined ? body.name : existing?.name
   if (typeof name !== 'string' || !name.trim()) return fail('BAD_NAME', 'A driver needs a name.')
 
@@ -135,17 +171,15 @@ export function validateDriverInput(
 }
 
 export function publicDriver(row: HubDriverRow): HubDriver {
-  return {
-    id: row.id,
-    kind: row.kind,
-    name: row.name,
-    config: row.config,
-    secret: maskSecret(row.secret)
-  }
+  const secret = maskSecret(row.secret)
+  if (row.kind === 'docker') return { ...row, config: { ...row.config }, secret }
+  return { ...row, config: { ...row.config }, secret }
 }
 
 /** GitCtx for the shared GitLab client: `base` is the host (the client adds /api/v4). */
 export function driverCtx(row: HubDriverRow): GitCtx {
+  if (row.kind === 'docker')
+    throw new DriverMisconfiguredError('A Docker driver has no GitLab project to push to.')
   if (!row.config || typeof row.config.api !== 'string' || !row.config.api.trim()) {
     throw new DriverMisconfiguredError('The driver has no GitLab address configured.')
   }
@@ -161,7 +195,7 @@ export function driverCtx(row: HubDriverRow): GitCtx {
 
 export function validatePlacementInput(
   body: Record<string, unknown>
-): Validation<{ kind: 'dedicated'; driver_id: number; target: { branch?: string } }> {
+): Validation<{ kind: 'dedicated'; driver_id: number; target: PlacementTarget }> {
   if (body.kind !== 'dedicated') return fail('BAD_KIND', 'Placement kind must be dedicated.')
   const driverId = body.driver_id
   if (typeof driverId !== 'number' || !Number.isInteger(driverId)) {
@@ -171,12 +205,21 @@ export function validatePlacementInput(
   if (typeof target !== 'object' || Array.isArray(target)) {
     return fail('BAD_TARGET', 'target must be an object.')
   }
-  const out: { branch?: string } = {}
+  const out: PlacementTarget = {}
   if (target.branch !== undefined) {
     if (typeof target.branch !== 'string' || !target.branch.trim()) {
       return fail('BAD_TARGET', 'target.branch must be a non-empty string.')
     }
     out.branch = target.branch.trim()
+  }
+  if (target.stack !== undefined) {
+    if (typeof target.stack !== 'string' || !STACK_NAME_RE.test(target.stack)) {
+      return fail(
+        'BAD_TARGET',
+        'target.stack must be 2–41 lower-case letters, digits or dashes, starting with a letter.'
+      )
+    }
+    out.stack = target.stack
   }
   return { ok: true, row: { kind: 'dedicated', driver_id: driverId, target: out } }
 }
@@ -195,13 +238,14 @@ function parseObj<T>(raw: unknown, fallback: T): T {
 }
 
 function toDriverRow(r: Record<string, unknown>): HubDriverRow {
-  return {
+  const base = {
     id: Number(r.id),
-    kind: r.kind as 'gitlab',
     name: String(r.name),
-    config: parseObj(r.config, {} as HubDriverConfig),
     secret: (r.secret as string | null) ?? null
   }
+  if (r.kind === 'docker')
+    return { ...base, kind: 'docker', config: parseObj(r.config, {} as DockerDriverConfig) }
+  return { ...base, kind: r.kind as 'gitlab', config: parseObj(r.config, {} as HubDriverConfig) }
 }
 
 function toPlacementRow(r: Record<string, unknown>): HubPlacementRow {
@@ -317,7 +361,7 @@ export async function releasePlacement(trx: Knex.Transaction, id: number | null)
   await dropPlacement(trx, id)
 }
 
-type PlacementFields = { kind: 'dedicated'; driver_id: number; target: { branch?: string } }
+type PlacementFields = { kind: 'dedicated'; driver_id: number; target: PlacementTarget }
 
 export async function createPlacement(row: PlacementFields): Promise<HubPlacementRow> {
   const id = await insertReturningId(db, 'nivaro_hub_placements', {
@@ -353,4 +397,5 @@ export async function getPlacement(id: number): Promise<HubPlacementRow | null> 
   return r ? toPlacementRow(r) : null
 }
 
+export type { DockerDriverConfig, DockerDriverFields }
 export { HUB_MASK }

@@ -390,3 +390,109 @@ describe('hub components', () => {
     })
   })
 })
+
+describe('stack components (phase 4)', () => {
+  async function createDocker() {
+    const r = await req('POST', '/hub/drivers', asAdmin, {
+      kind: 'docker',
+      name: 'Swarm',
+      config: {
+        agent_url: 'https://agent.example.com',
+        dns_mode: 'manual',
+        edge_target: 'edge.example.com'
+      },
+      secret: 'agent-token'
+    })
+    expect(r.statusCode).toBe(200)
+    return r.json().data.id as number
+  }
+  const post = (placementId: number, body: Record<string, unknown>) =>
+    req('POST', `/hub/placements/${placementId}/components`, asAdmin, body)
+
+  it('the implicit component of a docker placement is the stack', async () => {
+    const docker = await createDocker()
+    const placementId = await createPlacement(docker, { stack: 'efp-prod' })
+    const r = await req('GET', `/hub/placements/${placementId}/components`, asAdmin)
+    expect(r.json().data).toEqual([
+      expect.objectContaining({
+        id: null,
+        position: 1,
+        kind: 'stack',
+        name: 'stack',
+        driver_id: docker,
+        implicit: true
+      })
+    ])
+  })
+
+  it('a stack component on its docker placement is stored without GitLab fields', async () => {
+    const docker = await createDocker()
+    const placementId = await createPlacement(docker, { stack: 'efp-prod' })
+    const r = await post(placementId, {
+      name: 'nivaro',
+      kind: 'stack',
+      driver_id: docker,
+      target_branch: 'production',
+      deploy_job: 'deploy'
+    })
+    expect(r.statusCode).toBe(200)
+    expect(r.json().data).toMatchObject({
+      kind: 'stack',
+      position: 1,
+      target_branch: null,
+      deploy_job: null,
+      before_job: null
+    })
+    const list = (await req('GET', `/hub/placements/${placementId}/components`, asAdmin)).json()
+      .data
+    expect(list).toHaveLength(1)
+    expect(list[0]).toMatchObject({ kind: 'stack', name: 'nivaro' })
+    // PATCH of the stored stack itself is not a "second component".
+    const id = r.json().data.id
+    const p = await req('PATCH', `/hub/components/${id}`, asAdmin, { name: 'renamed' })
+    expect(p.statusCode).toBe(200)
+  })
+
+  it('stack on gitlab, or api/frontend on docker → 400 KIND_DRIVER_MISMATCH', async () => {
+    const g = await createDriver()
+    const docker = await createDocker()
+    const gp = await createPlacement(g.id)
+    const dp = await createPlacement(docker, { stack: 'efp-prod' })
+    const a = await post(gp, { name: 's', kind: 'stack', driver_id: g.id })
+    expect([a.statusCode, a.json().code]).toEqual([400, 'KIND_DRIVER_MISMATCH'])
+    for (const kind of ['api', 'frontend']) {
+      const b = await post(dp, { name: 'x', kind, driver_id: docker })
+      expect([kind, b.statusCode, b.json().code]).toEqual([kind, 400, 'KIND_DRIVER_MISMATCH'])
+    }
+    expect(await db('nivaro_hub_components').count({ n: '*' }).first()).toMatchObject({ n: 0 })
+  })
+
+  it('a second component on a docker placement → 409 ONE_STACK', async () => {
+    const docker = await createDocker()
+    const dp = await createPlacement(docker, { stack: 'efp-prod' })
+    expect((await post(dp, { name: 'one', kind: 'stack', driver_id: docker })).statusCode).toBe(200)
+    const two = await post(dp, { name: 'two', kind: 'stack', driver_id: docker })
+    expect([two.statusCode, two.json().code]).toEqual([409, 'ONE_STACK'])
+  })
+
+  it('gitlab and docker drivers on one placement → 400 MIXED_DRIVER_KINDS', async () => {
+    const g = await createDriver()
+    const docker = await createDocker()
+    // A GitLab placement: a stack on the docker driver would mix kinds.
+    const gp = await createPlacement(g.id)
+    expect((await post(gp, { name: 'api', kind: 'api', driver_id: g.id })).statusCode).toBe(200)
+    const mixed = await post(gp, { name: 's', kind: 'stack', driver_id: docker })
+    expect([mixed.statusCode, mixed.json().code]).toEqual([400, 'MIXED_DRIVER_KINDS'])
+    // A Docker placement: an api on a GitLab driver mixes too.
+    const dp = await createPlacement(docker, { stack: 'efp-prod' })
+    const mixed2 = await post(dp, { name: 'api', kind: 'api', driver_id: g.id })
+    expect([mixed2.statusCode, mixed2.json().code]).toEqual([400, 'MIXED_DRIVER_KINDS'])
+    // PATCH moving a stored api onto the docker driver as a stack mixes as well.
+    const apiId = (await db('nivaro_hub_components').where({ placement_id: gp }).first('id')).id
+    const p = await req('PATCH', `/hub/components/${apiId}`, asAdmin, {
+      kind: 'stack',
+      driver_id: docker
+    })
+    expect([p.statusCode, p.json().code]).toEqual([400, 'MIXED_DRIVER_KINDS'])
+  })
+})

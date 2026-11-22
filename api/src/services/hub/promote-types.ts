@@ -7,14 +7,15 @@ import type { HubEnvState } from './status.js'
  * importing this file runs nothing.
  */
 
-/** One ordered piece of a placement, deployed through its own GitLab driver. */
+/** One ordered piece of a placement, deployed through its own driver (GitLab, or Docker for a stack). */
 export interface HubComponent {
   /** null on the implicit component of a phase-1 placement (no stored row). */
   id: number | null
   placement_id: number
   position: number
   name: string
-  kind: 'api' | 'frontend'
+  /** stack (phase 4): the one component of a Docker placement, deployed through the Hub agent. */
+  kind: 'api' | 'frontend' | 'stack'
   driver_id: number
   source_branch: string
   /** null = the driver config's branch. */
@@ -127,7 +128,7 @@ export interface PromotionBlocker {
 export interface PromotionStep {
   position: number
   component: string
-  kind: 'api' | 'frontend'
+  kind: 'api' | 'frontend' | 'stack'
   driverId: number
   sourceSha: string | null
   targetBranch: string

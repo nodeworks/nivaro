@@ -4,7 +4,7 @@ import { getApp } from '../io-holder.js'
 import { environmentFromRow, readApp } from './apps.js'
 import { listComponents } from './components.js'
 import { listEnvironmentDeploys } from './deploys.js'
-import { driverCtx, getDriver, getPlacement, type HubDriverRow } from './drivers.js'
+import { driverCtx, type GitlabDriverRow, getDriver, getPlacement } from './drivers.js'
 import { commitExistsOn, GitlabWriteError, latestCommitMatching } from './gitlab-write.js'
 import { type HealDeps, interruptStaleRows } from './promote-heal.js'
 import { defaultPromoteLock, PromotionError } from './promote-lock.js'
@@ -130,7 +130,7 @@ export async function resolveCommit(ctx: GitCtx, sha: string): Promise<string | 
 export interface GatherDeps {
   readStatus(env: HubStatusTarget): Promise<HubEnvStatus>
   imageDigest(image: string, tag: string): Promise<string | 'present' | null>
-  ctxFor(driver: HubDriverRow): GitCtx
+  ctxFor(driver: GitlabDriverRow): GitCtx
   latestCommitMatching: typeof latestCommitMatching
   commitExistsOn: typeof commitExistsOn
   resolveCommit: typeof resolveCommit
@@ -295,7 +295,7 @@ export async function gatherPlanInput(
   const previousComponents =
     previous && kind === 'promote' ? await componentsForGather(previous.placement_id) : []
 
-  const driverRows = new Map<number, HubDriverRow>()
+  const driverRows = new Map<number, GitlabDriverRow>()
   const drivers: Record<number, PlanDriver> = {}
   for (const id of unique(components.map((c) => String(c.driver_id)))) {
     const row = await getDriver(Number(id))

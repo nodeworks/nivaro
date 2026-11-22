@@ -510,3 +510,111 @@ describe('hub mode off', () => {
     await off.close()
   })
 })
+
+describe('docker drivers (phase 4)', () => {
+  const AGENT_TOKEN = 'agent-token-plain-value'
+  const DOCKER = {
+    agent_url: 'https://agent.example.com',
+    dns_mode: 'automatic',
+    wildcard_domain: 'apps.example.com'
+  }
+  const createDocker = async (extra: Record<string, unknown> = {}) => {
+    const r = await req('POST', '/hub/drivers', asAdmin, {
+      kind: 'docker',
+      name: 'Swarm',
+      config: DOCKER,
+      secret: AGENT_TOKEN,
+      ...extra
+    })
+    expect(r.statusCode).toBe(200)
+    return r.json().data as { id: number; secret: string | null }
+  }
+
+  it('POST stores the agent token sealed; POST and GET answer it masked', async () => {
+    const d = await createDocker()
+    expect(d).toEqual({
+      id: d.id,
+      kind: 'docker',
+      name: 'Swarm',
+      config: { ...DOCKER, edge_target: null },
+      secret: MASK
+    })
+    const stored = await db('nivaro_hub_drivers').where({ id: d.id }).first()
+    expect(stored.kind).toBe('docker')
+    expect(stored.secret).toMatch(/^enc:v1:/)
+    expect(stored.secret).not.toContain(AGENT_TOKEN)
+    const list = await req('GET', '/hub/drivers', asAdmin)
+    expect(list.json().data).toEqual([expect.objectContaining({ kind: 'docker', secret: MASK })])
+    expect(list.body).not.toContain(AGENT_TOKEN)
+    expect(list.body).not.toContain('enc:v1:')
+    expect(activityText()).not.toContain(AGENT_TOKEN)
+  })
+
+  it('validation codes reach the answer; nothing is stored', async () => {
+    const post = (config: Record<string, unknown>) =>
+      req('POST', '/hub/drivers', asAdmin, { kind: 'docker', name: 'S', config, secret: 'x' })
+    for (const config of [
+      { ...DOCKER, agent_url: 'http://agent.example.com' },
+      { ...DOCKER, agent_url: 'https://a:b@agent.example.com' },
+      { ...DOCKER, agent_url: 'https://agent.example.com/api' },
+      { ...DOCKER, dns_mode: undefined },
+      { ...DOCKER, wildcard_domain: null },
+      { agent_url: DOCKER.agent_url, dns_mode: 'manual' }
+    ]) {
+      const r = await post(config)
+      expect([r.statusCode, r.json().code]).toEqual([400, 'BAD_CONFIG'])
+    }
+    expect(await db('nivaro_hub_drivers').count({ n: '*' }).first()).toMatchObject({ n: 0 })
+  })
+
+  it('PATCH changing the agent origin with the mask → SECRET_REQUIRED; with a token → ok', async () => {
+    const d = await createDocker()
+    const before = await db('nivaro_hub_drivers').where({ id: d.id }).first()
+    const r = await req('PATCH', `/hub/drivers/${d.id}`, asAdmin, {
+      config: { agent_url: 'https://elsewhere.example.com' },
+      secret: MASK
+    })
+    expect([r.statusCode, r.json().code]).toEqual([400, 'SECRET_REQUIRED'])
+    expect(await db('nivaro_hub_drivers').where({ id: d.id }).first()).toEqual(before)
+    const ok = await req('PATCH', `/hub/drivers/${d.id}`, asAdmin, {
+      config: { agent_url: 'https://elsewhere.example.com' },
+      secret: 'a-new-agent-token'
+    })
+    expect(ok.statusCode).toBe(200)
+    expect(ok.json().data).toMatchObject({
+      config: { agent_url: 'https://elsewhere.example.com' },
+      secret: MASK
+    })
+  })
+
+  it("PATCH can't change a driver's kind", async () => {
+    const g = await createDriver()
+    const r = await req('PATCH', `/hub/drivers/${g.id}`, asAdmin, {
+      kind: 'docker',
+      config: DOCKER,
+      secret: 'x'
+    })
+    expect([r.statusCode, r.json().code]).toEqual([400, 'BAD_KIND'])
+  })
+
+  it('a placement on a docker driver takes target.stack; a bad name → BAD_TARGET', async () => {
+    const d = await createDocker()
+    const id = await createPlacement(d.id, { stack: 'efp-prod' })
+    const got = await req('GET', `/hub/placements/${id}`, asAdmin)
+    expect(got.json().data.target).toEqual({ stack: 'efp-prod' })
+    const bad = await req('POST', '/hub/placements', asAdmin, {
+      kind: 'dedicated',
+      driver_id: d.id,
+      target: { stack: 'EFP_prod' }
+    })
+    expect([bad.statusCode, bad.json().code]).toEqual([400, 'BAD_TARGET'])
+  })
+
+  it('the deploy history of a docker environment reads NO_DRIVER (no GitLab call)', async () => {
+    const d = await createDocker()
+    const envId = await createEnv(await createPlacement(d.id, { stack: 'efp-prod' }))
+    const r = await req('GET', `/hub/environments/${envId}/deploys`, asAdmin)
+    expect(r.statusCode).toBe(200)
+    expect(r.json()).toMatchObject({ data: [], reason: 'NO_DRIVER' })
+  })
+})
