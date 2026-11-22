@@ -669,8 +669,8 @@ describe('startSharedUpgrade — the run', () => {
         services: []
       }
     }) as never
-    const status = deps.status
-    deps.status = vi.fn(async (s: never) => {
+    const status = deps.status as unknown as (s: unknown) => Promise<unknown>
+    deps.status = vi.fn(async (s: unknown) => {
       order.push('status')
       return status(s)
     }) as never
