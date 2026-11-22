@@ -68,8 +68,8 @@ export interface MoveSteps {
   route_confirmed_at?: string | null
   /** When the run started waiting for the manual route (24 h budget). */
   waiting_since?: string | null
-  /** P6-21: the never-used dedicated target placement a rollback deleted (its id). */
-  removed_target_placement?: number | null
+  /** P6-22: after a rollback, no environment uses the dedicated target placement (it is kept). */
+  target_placement_unused?: boolean
   /** Refusals the operator overrode at start (P6-20 #2: LINK_URL_NOT_PULLABLE). */
   overrides?: string[]
   /** The run's own lock tokens (env + shared), which heal frees by compare-and-delete. */

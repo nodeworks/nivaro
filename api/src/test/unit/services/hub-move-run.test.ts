@@ -672,7 +672,8 @@ describe('move placements (P6-21)', () => {
     await Run.awaitMove(move_id)
   })
 
-  it('a rollback deletes a dedicated target placement that never served and nobody uses; recorded', async () => {
+  // Ruling P6-22 reverses P6-21 #2: a rollback never deletes a dedicated target placement.
+  it('a rollback keeps the dedicated target placement and records that it is unused', async () => {
     plan = planOf('to_dedicated')
     const w = await world('shared')
     fake.state.failOn = (name) => name === 'targetReady'
@@ -680,31 +681,7 @@ describe('move placements (P6-21)', () => {
     await Run.awaitMove(move_id)
     const m = await readMove(move_id)
     expect(m?.status).toBe('rolled_back')
-    expect(m?.steps.removed_target_placement).toBe(w.dockerPlacement)
-    expect(
-      await db('nivaro_hub_placements').where({ id: w.dockerPlacement }).first()
-    ).toBeUndefined()
-  })
-
-  it('a dedicated target placement that served before (an earlier move off it) is kept', async () => {
-    plan = planOf('to_dedicated')
-    const w = await world('shared')
-    await db('nivaro_hub_moves').insert({
-      app_id: 1,
-      environment_id: w.envId,
-      from_placement_id: w.dockerPlacement,
-      to_placement_id: w.sharedPlacementA,
-      kind: 'to_shared',
-      routing: 'automatic',
-      status: 'success',
-      steps: '{"list":[],"phase":"forward"}'
-    })
-    fake.state.failOn = (name) => name === 'targetReady'
-    const { move_id } = await start(w, toFor('to_dedicated', w))
-    await Run.awaitMove(move_id)
-    const m = await readMove(move_id)
-    expect(m?.status).toBe('rolled_back')
-    expect(m?.steps.removed_target_placement ?? null).toBeNull()
+    expect(m?.steps.target_placement_unused).toBe(true)
     expect(await db('nivaro_hub_placements').where({ id: w.dockerPlacement }).first()).toBeDefined()
   })
 })
