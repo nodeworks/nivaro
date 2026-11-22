@@ -359,8 +359,9 @@ export async function pushRoutes(app: FastifyInstance) {
         .send({ error: "content must be 'full' or 'minimal'", code: 'RELAY_CONTENT_INVALID' })
     }
     const body = (req.body ?? {}) as Record<string, unknown>
-    // Cloud provisioning owns a tenant's relay key and url (POST /admin/push-relay): an admin
-    // here may choose the content, never connect, set, point elsewhere or drop the key.
+    // Multi-tenant (Nivaro Cloud or a Hub shared deployment, rule T7): the platform owns an app's
+    // relay key and url (cloud: POST /admin/push-relay): an admin here may choose the content,
+    // never connect, set, point elsewhere or drop the key.
     if (
       isMultiTenant() &&
       (connect || disconnect || relay_key !== undefined || body.relay_url !== undefined)

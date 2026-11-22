@@ -68,8 +68,9 @@ async function storedConfig(): Promise<Record<string, unknown>> {
   }
 }
 
-/** The env relay key, or null. Never in cloud mode: one process serves many tenants, and each
- *  sends only with the key cloud provisioning stored for it. */
+/** The env relay key, or null. Never on a multi-tenant process (Nivaro Cloud or a Hub shared
+ *  deployment, rule T7): one process serves many apps, and each sends only with the key stored
+ *  for it (cloud provisioning; nothing stores one per app on a shared deployment yet). */
 export function envRelayKey(): string | null {
   if (isMultiTenant()) return null
   return process.env.MOBILE_PUSH_RELAY_KEY?.trim() || null

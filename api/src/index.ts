@@ -55,10 +55,12 @@ import { NIVARO_VERSION } from './version.js'
 
 async function main() {
   // Post-mortem 3.3 — NIVARO_ROLE=realtime holds live connections only (realtime-server.ts):
-  // no hooks, no migrations, no event flows. Self-hosted only.
+  // no hooks, no migrations, no event flows. Self-hosted only (never multi-tenant).
   const realtime = isRealtimeRole()
   if (realtime && isMultiTenant()) {
-    console.error('NIVARO_ROLE=realtime is self-hosted only — unset it in cloud mode.')
+    console.error(
+      'NIVARO_ROLE=realtime is self-hosted only — unset it on a deployment that serves many apps (Nivaro Cloud or a Hub shared deployment).'
+    )
     process.exit(1)
   }
   const modeProblem = deploymentModeProblem()

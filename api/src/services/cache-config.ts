@@ -470,7 +470,10 @@ export async function saveCacheConfig(
   patch: Record<string, unknown>
 ): Promise<EffectiveCacheSetting[]> {
   if (isMultiTenant())
-    throw new CacheConfigError('Cache switches are platform-managed in cloud mode', '')
+    throw new CacheConfigError(
+      'Cache switches are platform-managed on a deployment that serves many apps',
+      ''
+    )
   const { db } = await import('../db/index.js')
   const { instanceKey } = await import('./instance-key.js')
   const row = await readRow()

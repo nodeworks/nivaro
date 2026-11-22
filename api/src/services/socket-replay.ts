@@ -193,7 +193,8 @@ export function replayServerRefusal(
   env: NodeJS.ProcessEnv,
   ctx: { captureOrigin: string | null; selfHosts: Array<string | null | undefined> }
 ): string | null {
-  if (isMultiTenant(env)) return 'Socket replay never runs in cloud mode'
+  if (isMultiTenant(env))
+    return 'Socket replay never runs in cloud mode or on a Hub shared deployment'
   if (String(env.REALTIME_REPLAY ?? '').toLowerCase() !== 'on')
     return 'This server does not accept socket replays (set REALTIME_REPLAY=on on staging)'
   const origin = hostOf(ctx.captureOrigin)

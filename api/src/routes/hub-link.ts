@@ -129,7 +129,9 @@ export async function hubLinkRoutes(app: FastifyInstance) {
   const token = hubLinkToken()
   if (!token) return
   if (isMultiTenant()) {
-    app.log.warn('HUB_TOKEN is set in cloud mode: hub link routes not mounted')
+    app.log.warn(
+      'HUB_TOKEN is set on a deployment that serves many apps (Nivaro Cloud or a Hub shared deployment): hub link routes not mounted'
+    )
     return
   }
 

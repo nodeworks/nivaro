@@ -65,7 +65,9 @@ describe('batch B: T sites (tenant-keyed realtime state)', () => {
     expect(replayServerRefusal(process.env, ctx)).not.toMatch(/never runs/)
     for (const m of ['cloud', 'shared'] as const) {
       setMode(m, { REALTIME_REPLAY: 'on' })
-      expect(replayServerRefusal(process.env, ctx)).toBe('Socket replay never runs in cloud mode')
+      expect(replayServerRefusal(process.env, ctx)).toBe(
+        'Socket replay never runs in cloud mode or on a Hub shared deployment'
+      )
     }
   })
 

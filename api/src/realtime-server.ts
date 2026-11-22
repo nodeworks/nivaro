@@ -65,7 +65,7 @@ export function servedRealtimeRoutes(): readonly string[] {
 export async function buildRealtimeServer(): Promise<FastifyInstance> {
   if (isMultiTenant())
     throw new Error(
-      'NIVARO_ROLE=realtime is self-hosted only: cloud mode resolves a tenant per request and keeps sockets on every process.'
+      'NIVARO_ROLE=realtime is self-hosted only: a deployment that serves many apps (Nivaro Cloud or a Hub shared deployment) resolves the app per request and keeps sockets on every process.'
     )
 
   const app = fastify({
