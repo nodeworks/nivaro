@@ -16,8 +16,8 @@
  */
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type { Knex } from 'knex'
-// Leaf too (no db import) — read for who made a configuration write (#1053).
 import { isMultiTenant } from '../services/deployment-mode.js'
+// Leaf too (no db import) — read for who made a configuration write (#1053).
 import { currentTraceMeta } from '../services/request-trace.js'
 
 const TABLE = 'nivaro_cache_epochs'

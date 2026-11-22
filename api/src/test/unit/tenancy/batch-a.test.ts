@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import Fastify from 'fastify'
+import ts from 'typescript'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../../middleware/authenticate.js', () => ({
@@ -55,9 +56,11 @@ describe('/api/health reports cloud and multi_tenant', () => {
     app.decorate('redis', { ping: async () => 'PONG' })
     app.register(healthRoutes)
     await app.ready()
-    const res = await app.inject({ method: 'GET', url: '/health' })
+    const out: Record<string, Record<string, unknown>> = {}
+    for (const url of ['/health', '/version'])
+      out[url] = JSON.parse((await app.inject({ method: 'GET', url })).body)
     await app.close()
-    return JSON.parse(res.body) as Record<string, unknown>
+    return out
   }
 
   it.each([
@@ -65,9 +68,11 @@ describe('/api/health reports cloud and multi_tenant', () => {
     ['cloud', CLOUD, true, true],
     ['shared', SHARED, false, true]
   ])('%s', async (_n, env, cloud, multi) => {
-    const body = await health(env)
-    expect(body.cloud).toBe(cloud)
-    expect(body.multi_tenant).toBe(multi)
+    const bodies = await health(env)
+    for (const url of ['/health', '/version']) {
+      expect(bodies[url].cloud, url).toBe(cloud)
+      expect(bodies[url].multi_tenant, url).toBe(multi)
+    }
   })
 })
 
@@ -149,40 +154,38 @@ describe('realtime-server refuses in a multi-tenant process', () => {
       (e: Error) => e.message
     )
   }
+  it('self-hosted does not refuse', async () =>
+    expect(await build(SELF_HOSTED)).not.toMatch(/self-hosted only/))
   it('refuses in cloud', async () => expect(await build(CLOUD)).toMatch(/self-hosted only/))
   it('refuses on shared', async () => expect(await build(SHARED)).toMatch(/self-hosted only/))
 })
 
 describe('server.ts: tenant hook vs operator routes (split block)', () => {
-  const src = readFileSync(
-    join(fileURLToPath(new URL('.', import.meta.url)), '../../../server.ts'),
-    'utf8'
-  )
-  const hook = src.indexOf("app.addHook('onRequest', tenantHook)")
-  const provision = src.indexOf('await app.register(adminProvisionRoutes)')
-  const guardOf = () => /if \((isMultiTenant|isNivaroCloud)\(\)\) \{/g
-  const lastGuard = (at: number) => {
-    const found = [...src.slice(0, at).matchAll(guardOf())]
-    return found[found.length - 1]?.[1]
+  const file = join(fileURLToPath(new URL('.', import.meta.url)), '../../../server.ts')
+  const sf = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true)
+
+  /** The nearest enclosing `if` whose THEN branch holds the statement (not its else), as the
+   *  condition text; null when the statement is not inside a then branch. */
+  function guardOf(needle: string): string | null {
+    let hit: ts.Node | undefined
+    const visit = (n: ts.Node) => {
+      if (!hit && ts.isExpressionStatement(n) && n.getText(sf).includes(needle)) hit = n
+      ts.forEachChild(n, visit)
+    }
+    visit(sf)
+    expect(hit, `${needle} is registered in server.ts`).toBeDefined()
+    let child: ts.Node = hit as ts.Node
+    for (let n = child.parent; n; child = n, n = n.parent) {
+      if (ts.isIfStatement(n)) {
+        return n.thenStatement === child ? n.expression.getText(sf) : null
+      }
+    }
+    return null
   }
 
-  it('the tenant hook sits under isMultiTenant, the provision and traffic-tenant routes under isNivaroCloud', () => {
-    expect(hook).toBeGreaterThan(0)
-    expect(lastGuard(hook)).toBe('isMultiTenant')
-    expect(lastGuard(provision)).toBe('isNivaroCloud')
-    expect(lastGuard(src.indexOf('await app.register(adminTrafficTenantRoutes)'))).toBe(
-      'isNivaroCloud'
-    )
-  })
-
-  it('evaluated per deployment: shared registers the hook and not the operator routes', async () => {
-    const { isMultiTenant, isNivaroCloud } = await import('../../../services/deployment-mode.js')
-    const reg = (env: Record<string, string>) => ({
-      hook: isMultiTenant(env),
-      provision: isNivaroCloud(env)
-    })
-    expect(reg(SELF_HOSTED)).toEqual({ hook: false, provision: false })
-    expect(reg(CLOUD)).toEqual({ hook: true, provision: true })
-    expect(reg(SHARED)).toEqual({ hook: true, provision: false })
+  it('the tenant hook is guarded by isMultiTenant() and each operator route by isNivaroCloud()', () => {
+    expect(guardOf("app.addHook('onRequest', tenantHook)")).toBe('isMultiTenant()')
+    expect(guardOf('app.register(adminProvisionRoutes)')).toBe('isNivaroCloud()')
+    expect(guardOf('app.register(adminTrafficTenantRoutes)')).toBe('isNivaroCloud()')
   })
 })

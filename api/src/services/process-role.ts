@@ -1,5 +1,3 @@
-import { isMultiTenant } from './deployment-mode.js'
-
 /**
  * Process roles (NIVARO_ROLE) and the realtime tier (post-mortem 3.3).
  *
@@ -22,6 +20,7 @@ import { isMultiTenant } from './deployment-mode.js'
  * realtime processes through the Socket.io Redis adapter and the event stream. Nothing set =
  * one process that does everything, sockets included (the historic behaviour).
  */
+import { isMultiTenant } from './deployment-mode.js'
 
 type Env = Record<string, string | undefined>
 
