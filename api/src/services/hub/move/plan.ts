@@ -318,11 +318,19 @@ function blockersOf(input: MovePlanInput): Blocker[] {
         )
     }
     // The same database, seen from the target (ruling R2; T9 carry on colliding identities).
+    // A ready record the target was never asked about is not a pass (R2, P6-15).
+    if (!t.db && t.reachable && input.database?.ready)
+      add(
+        'DB_UNREACHABLE_FROM_TARGET',
+        `The Hub did not get ${target.key} to check this app's database, so it cannot tell that the deployment reaches it.`
+      )
     if (t.db) {
       if (!t.db.reachable)
         add(
           'DB_UNREACHABLE_FROM_TARGET',
-          `${target.key} cannot reach this app's database. Open the network path (or fix the record) first.`
+          t.db.error === 'CONNECTION_UNREADABLE'
+            ? `The Hub could not open the connection saved on this app's database record, so ${target.key} was never asked to check it. Save the connection again on the record first.`
+            : `${target.key} cannot reach this app's database. Open the network path (or fix the record) first.`
         )
       else if (!s.db_identity || !t.db.identity)
         add(

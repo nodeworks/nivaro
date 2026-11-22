@@ -297,6 +297,24 @@ describe('buildMovePlan — one test per blocker', () => {
     ).toContain('DATABASE_DIFFERS')
   })
 
+  it('a ready record the target was never asked about (no db check) → DB_UNREACHABLE_FROM_TARGET (I-2)', () => {
+    const p = buildMovePlan(input({ target_facts: tgt({ db: null }) }))
+    expect(codes(p)).toContain('DB_UNREACHABLE_FROM_TARGET')
+  })
+
+  it('a record whose connection the Hub cannot open → DB_UNREACHABLE_FROM_TARGET naming that', () => {
+    const p = buildMovePlan(
+      input({
+        target_facts: tgt({
+          db: { reachable: false, identity: null, error: 'CONNECTION_UNREADABLE' }
+        })
+      })
+    )
+    expect(p.blockers.find((b) => b.code === 'DB_UNREACHABLE_FROM_TARGET')?.text).toMatch(
+      /could not open/i
+    )
+  })
+
   it('a move into a shared deployment being upgraded → SHARED_BUSY', () => {
     const p = buildMovePlan(
       input({

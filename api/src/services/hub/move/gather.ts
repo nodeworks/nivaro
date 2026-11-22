@@ -650,8 +650,13 @@ async function sharedTargetFacts(
     return { ...out, reachable: false, error: codeOf(err, 'LINK_UNREACHABLE') }
   }
 
+  if (recordId == null) return out
   const wire = await dbWire(recordId)
-  if (!wire) return out
+  if (!wire) {
+    // The record exists but the Hub cannot open its connection: never read as a pass (R2).
+    out.db = { reachable: false, identity: null, error: 'CONNECTION_UNREADABLE' }
+    return out
+  }
   try {
     const answer = await client.dbCheck(wire)
     out.db = {
@@ -839,14 +844,17 @@ export async function gatherMovePlanInput(
   const poolAsked =
     target.kind === 'shared' ? (target.pool_max ?? DEFAULT_POOL_MAX) : DEFAULT_POOL_MAX
 
+  /** Only a ready record is checked from a side (one not ready is NO_DATABASE_RECORD). */
+  const readyRecord = record?.status === 'ready' ? record.id : null
+
   // Live: both sides at once.
   const [source, targetFacts] = await Promise.all([
     fromShared
-      ? sharedSourceFacts(ctx, fromShared, tenantId, record ? record.id : null, app.extensions)
+      ? sharedSourceFacts(ctx, fromShared, tenantId, readyRecord, app.extensions)
       : dedicatedSourceFacts(ctx, env, (row.hub_token as string | null) ?? null, from),
     toSide.kind !== 'shared'
       ? dedicatedTargetFacts(ctx, toSide, toSide.placement.id)
-      : sharedTargetFacts(ctx, toShared ?? toSide.shared, app, record ? record.id : null, poolAsked)
+      : sharedTargetFacts(ctx, toShared ?? toSide.shared, app, readyRecord, poolAsked)
   ])
 
   // A Docker target is deployed at the source's version: it needs a stack template for it.

@@ -376,6 +376,25 @@ describe('gatherMovePlanInput — to_shared from a Docker stack', () => {
     expect(d.readiness).not.toHaveBeenCalled()
   })
 
+  it('a ready record whose connection cannot be opened → DB_UNREACHABLE_FROM_TARGET (never a pass)', async () => {
+    const sharedId = await newShared()
+    const dbId = await newDb()
+    await db('nivaro_hub_databases').where({ id: dbId }).update({ connection: null })
+    const placement = await dockerPlacement('shop-nc')
+    const e = await newEnv({ placement_id: placement, db_ref: `hub-db:${dbId}` })
+    const input = await Gather.gatherMovePlanInput(
+      e.id,
+      { kind: 'shared', shared_id: sharedId },
+      deps()
+    )
+    expect(input.target_facts.db).toEqual({
+      reachable: false,
+      identity: null,
+      error: 'CONNECTION_UNREADABLE'
+    })
+    expect(buildMovePlan(input).blockers.map((b) => b.code)).toContain('DB_UNREACHABLE_FROM_TARGET')
+  })
+
   it('a target whose link is down → TARGET_UNREACHABLE', async () => {
     const sharedId = await newShared()
     const placement = await dockerPlacement('shop-b')
