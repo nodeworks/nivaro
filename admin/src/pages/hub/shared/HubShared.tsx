@@ -576,7 +576,11 @@ function TokenCard({
               envBlock={reveal.envBlock}
               rotated={reveal.rotated}
               version={row.version_pin}
-              onDone={onRevealDone}
+              onDone={() => {
+                // The rotate answer holds the token: drop it now, not when the card unmounts.
+                rotate.reset()
+                onRevealDone()
+              }}
             />
           ) : (
             <p className='m-0 flex items-center gap-2 text-[13px] text-slate-900 dark:text-foreground'>

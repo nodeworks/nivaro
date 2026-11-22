@@ -129,11 +129,12 @@ function routes(detail: SharedDetail = DETAIL, status: unknown = STATUS) {
   })
 }
 
-const wrap = (url = '/hub/shared') =>
+const wrap = (
+  url = '/hub/shared',
+  client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+) =>
   render(
-    <QueryClientProvider
-      client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
-    >
+    <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[url]}>
         <HubShared />
       </MemoryRouter>
@@ -225,6 +226,35 @@ describe('HubShared', () => {
     fireEvent.click(within(card).getByRole('button', { name: 'Rotate now?' }))
     await waitFor(() => expect(h.post).toHaveBeenCalledWith('/hub/shared/4/token', {}))
     expect(await screen.findByTestId('shared-token')).toHaveTextContent(TOKEN)
+  })
+
+  it('Done drops the rotated token from memory (the mutation cache holds no answer with it)', async () => {
+    h.post.mockResolvedValue({
+      data: {
+        data: {
+          token: TOKEN,
+          previous_token_valid_until: null,
+          reapply: 'manual',
+          reapply_reason: null,
+          env_block: null
+        }
+      }
+    })
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const holdsToken = () =>
+      client
+        .getMutationCache()
+        .getAll()
+        .some((m) => JSON.stringify(m.state.data ?? null).includes(TOKEN))
+    wrap('/hub/shared?shared=4', client)
+    const card = await screen.findByRole('region', { name: 'Deployment token' })
+    fireEvent.click(within(card).getByRole('button', { name: 'Rotate token' }))
+    fireEvent.click(within(card).getByRole('button', { name: 'Rotate now?' }))
+    expect(await screen.findByTestId('shared-token')).toHaveTextContent(TOKEN)
+    expect(holdsToken()).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Done, I have stored it' }))
+    await waitFor(() => expect(holdsToken()).toBe(false))
+    expect(screen.queryByTestId('shared-token')).toBeNull()
   })
 
   it('a shown token is gone once the person leaves that deployment', async () => {
