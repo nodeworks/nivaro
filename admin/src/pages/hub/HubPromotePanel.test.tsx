@@ -21,7 +21,7 @@ vi.mock('@/lib/api', () => ({
 const { HubPromotePanel, PromotionHistory, currentStepIndex, stepRows } = await import(
   './HubPromotePanel'
 )
-const { BLOCKER_COPY, blockerCopy, hubError } = await import('./hub-api')
+const { BLOCKER_COPY, blockerCopy, blockerDetail, hubError } = await import('./hub-api')
 
 const env = {
   id: 10,
@@ -122,6 +122,32 @@ describe('HubPromotePanel', () => {
   afterEach(() => {
     h.get.mockReset()
     h.post.mockReset()
+  })
+
+  it("phase 4: says when the published releases couldn't be read", async () => {
+    routes()
+    const base = h.get.getMockImplementation() as (url: string) => Promise<unknown>
+    h.get.mockImplementation(async (url: string) =>
+      url === '/hub/environments/10/promotable'
+        ? { data: { data: { promote: [], rollback: [], releases_error: true } } }
+        : base(url)
+    )
+    wrap(<HubPromotePanel env={env} kind='promote' idPrefix='t' onClose={() => {}} />)
+    expect(
+      await screen.findByText(
+        "Couldn't read the published releases, so none of them are listed. Try again in a moment."
+      )
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText('Nothing to promote: the environment before this one runs no newer version.')
+    ).toBeInTheDocument()
+  })
+
+  it('phase 4: no releases note when the registry answered', async () => {
+    routes()
+    wrap(<HubPromotePanel env={env} kind='promote' idPrefix='t' onClose={() => {}} />)
+    await screen.findByText('api: merge main into production, then deploy')
+    expect(screen.queryByText(/Couldn't read the published releases/)).toBeNull()
   })
 
   it('shows blockers in plain words and keeps Start off', async () => {
@@ -814,5 +840,143 @@ describe('fix round 1: the confirmation names one version', () => {
         kind: 'rollback'
       })
     )
+  })
+})
+
+describe('phase 4: stack steps and blocker copy', () => {
+  afterEach(() => {
+    h.get.mockReset()
+    h.post.mockReset()
+  })
+
+  const stackStep = {
+    position: 1,
+    component: 'stack',
+    kind: 'stack',
+    driver: 'docker',
+    sourceSha: null,
+    targetBranch: '',
+    pinText: null,
+    beforeJob: null,
+    deployJob: '',
+    verifyUrl: null,
+    want: '0.3.210',
+    stack: { name: 'efp-prod' }
+  }
+
+  it('a stack step is one "Deploy stack <name>" row with no merge row', () => {
+    const rows = stepRows({ ...okPlan, steps: [stackStep] } as never)
+    expect(rows.map((r) => r.label)).toEqual([
+      'Deploy stack efp-prod',
+      'Check the new version answers'
+    ])
+    expect(rows.some((r) => r.phase === 'push')).toBe(false)
+    expect(rows[currentStepIndex(rows, 'deploy stack')].key).toBe('deploy-1')
+  })
+
+  it('the settings blocker lists the missing names, and no value', async () => {
+    routes({
+      plan: {
+        ok: false,
+        blockers: [
+          {
+            code: 'STACK_SETTINGS_MISSING',
+            text: "production's stack settings are missing DB_HOST, DB_PASSWORD"
+          }
+        ],
+        lines: [],
+        steps: [stackStep]
+      }
+    })
+    wrap(<HubPromotePanel env={env} kind='promote' idPrefix='t' onClose={() => {}} />)
+    expect(await screen.findByText('The stack settings are not complete')).toBeInTheDocument()
+    expect(screen.getByText(/missing DB_HOST, DB_PASSWORD/)).toBeInTheDocument()
+    expect(startButton()).toBeDisabled()
+  })
+
+  it('shows the agent blocker in plain words', async () => {
+    routes({
+      plan: {
+        ok: false,
+        blockers: [{ code: 'AGENT_UNREACHABLE', text: 'ECONNREFUSED 10.0.0.4' }],
+        lines: [],
+        steps: [stackStep]
+      }
+    })
+    wrap(<HubPromotePanel env={env} kind='promote' idPrefix='t' onClose={() => {}} />)
+    expect(
+      await screen.findByText('The Hub agent on the Docker host does not answer')
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/ECONNREFUSED/)).toBeNull()
+  })
+
+  it('only names-bearing codes show the planner sentence', () => {
+    expect(blockerDetail({ code: 'AGENT_UNREACHABLE', text: 'x' } as never)).toBeNull()
+    expect(blockerDetail({ code: 'HOSTNAME_TAKEN', text: 'a.example.com is taken' } as never)).toBe(
+      'a.example.com is taken'
+    )
+  })
+
+  const REQUIRED = [
+    'STACK_OWNER_MISMATCH',
+    'STACK_LEFTOVERS',
+    'STACK_NAME_TAKEN',
+    'NO_STACK_NAME',
+    'NOT_DEPLOYED',
+    'STACK_STATE_UNKNOWN',
+    'NOT_WAITING_FOR_NAME',
+    'TOO_SOON',
+    'OWNER_REQUIRED',
+    'PREFLIGHT_FAILED',
+    'VERIFY_FAILED',
+    'SWARM_ROLLED_BACK',
+    'STACK_DEPLOY_TIMEOUT',
+    'AGENT_UNREACHABLE',
+    'AGENT_REFUSED',
+    'NOT_DOCKER',
+    'SETTING_INVALID',
+    'STACK_SETTINGS_MISSING'
+  ]
+
+  it('has plain copy for every required code', () => {
+    for (const code of REQUIRED) {
+      expect(BLOCKER_COPY[code]?.title, code).toBeTruthy()
+      expect(BLOCKER_COPY[code]?.hint, code).toBeTruthy()
+    }
+  })
+
+  it('has copy for every code the docker plan, run step and routes can answer', async () => {
+    const { readFileSync, readdirSync } = await import('node:fs')
+    const { join } = await import('node:path')
+    const api = join(process.cwd(), '..', 'api', 'src')
+    const files = [
+      join(api, 'routes', 'hub-docker.ts'),
+      ...readdirSync(join(api, 'services', 'hub', 'docker'))
+        .filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'))
+        .map((f) => join(api, 'services', 'hub', 'docker', f)),
+      join(api, 'services', 'hub', 'promote-plan.ts'),
+      join(api, 'services', 'hub', 'promote-run.ts')
+    ]
+    const found = new Set<string>()
+    for (const f of files) {
+      let text = ''
+      try {
+        text = readFileSync(f, 'utf8')
+      } catch {
+        continue
+      }
+      for (const m of text.matchAll(
+        /(?:code: |fail\(reply, \d+, |AgentError\(\s*|block\(\s*)'([A-Z][A-Z_]{3,})'/g
+      ))
+        found.add(m[1])
+    }
+    expect(found.size).toBeGreaterThan(15)
+    // Generic ones describeError already words (sign-in, missing record).
+    const generic = new Set(['ADMIN_ONLY', 'NOT_FOUND'])
+    const { CODE_COPY_KEYS } = await import('./hub-api')
+    const missing = [...found].filter(
+      (c) => !generic.has(c) && !BLOCKER_COPY[c] && !CODE_COPY_KEYS.has(c)
+    )
+    expect(missing).toEqual([])
   })
 })

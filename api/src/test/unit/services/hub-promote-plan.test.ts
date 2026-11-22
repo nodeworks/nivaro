@@ -3,7 +3,8 @@ import { buildPromotionPlan, compareVersions } from '../../../services/hub/promo
 import type {
   HubComponent,
   HubEnvironmentRow,
-  PlanInput
+  PlanInput,
+  StackFacts
 } from '../../../services/hub/promote-types.js'
 
 const DIGEST = `sha256:${'a'.repeat(64)}`
@@ -617,5 +618,287 @@ describe('hub promotion planner', () => {
       expect(plan.ok).toBe(false)
       for (const b of plan.blockers) expect(b.text.length).toBeGreaterThan(10)
     })
+  })
+})
+
+// ---------------------------------------------------------------------------------------------
+// phase 4: stack components (Docker placements through the Hub agent)
+
+const EXT_PIN = `nodeworks/efp-ops@sha256:${'c'.repeat(64)}`
+
+const stackComp: HubComponent = {
+  id: null,
+  placement_id: 9,
+  position: 1,
+  name: 'stack',
+  kind: 'stack',
+  driver_id: 20,
+  source_branch: '',
+  target_branch: null,
+  before_job: null,
+  deploy_job: null,
+  verify_url: null,
+  verify_field: 'version',
+  implicit: true
+}
+
+function facts(over: Partial<StackFacts> = {}): StackFacts {
+  return {
+    stackName: 'acme-prod',
+    agent: 'ok',
+    imageAllowed: true,
+    imageRepo: 'nodeworks/nivaro',
+    disallowedExtensions: [],
+    settingsMissing: [],
+    hostnameProblems: [],
+    hostnameTaken: [],
+    edge: 'traefik',
+    publishPortProblem: null,
+    renderProblem: null,
+    stackState: 'hub',
+    size: 'medium',
+    roles: [
+      { role: 'web', replicas: 2, cpus: 2, memory_mb: 3072 },
+      { role: 'worker', replicas: 1, cpus: 2, memory_mb: 4096 }
+    ],
+    extensions: { 'efp-ops': EXT_PIN },
+    extensionsUnreadable: null,
+    missingExtensions: [],
+    agentOrigin: 'https://agent.example.com',
+    ...over
+  }
+}
+
+const dockerDriver = (dns: 'automatic' | 'manual' = 'automatic') => ({
+  kind: 'docker' as const,
+  branch: '',
+  deploy_job: '',
+  pin_file: '',
+  dns_mode: dns
+})
+
+/** acme: staging → production, both Docker stacks. */
+function stackInput(over: Partial<PlanInput> = {}, f: Partial<StackFacts> = {}): PlanInput {
+  return input({
+    app: {
+      id: 1,
+      key: 'acme',
+      name: 'Acme',
+      signin_mode: 'direct',
+      adopted: false,
+      extensions: []
+    },
+    target: env({ base_url: 'https://acme.apps.example.com' }),
+    previous: env({
+      id: 1,
+      key: 'staging',
+      position: 1,
+      base_url: 'https://acme-stg.apps.example.com'
+    }),
+    components: [stackComp],
+    sources: {},
+    frontendServed: {},
+    frontendOnSource: {},
+    sourceOnTarget: {},
+    drivers: { 20: dockerDriver() },
+    stacks: { 1: facts(f) },
+    ...over
+  })
+}
+
+describe('hub promotion planner — stack components (phase 4)', () => {
+  it('plans a clean docker promotion as one docker step', () => {
+    const plan = buildPromotionPlan(stackInput())
+    expect(plan.blockers).toEqual([])
+    expect(plan.ok).toBe(true)
+    expect(plan.steps).toEqual([
+      {
+        position: 1,
+        component: 'stack',
+        kind: 'stack',
+        driverId: 20,
+        driver: 'docker',
+        sourceSha: null,
+        targetBranch: '',
+        pinText: null,
+        pinFile: null,
+        beforeJob: null,
+        deployJob: '',
+        verifyUrl: 'https://acme.apps.example.com/api/version',
+        verifyField: 'version',
+        want: '0.3.10',
+        stack: {
+          name: 'acme-prod',
+          image: `nodeworks/nivaro@${DIGEST}`,
+          size: 'medium',
+          extensions: { 'efp-ops': EXT_PIN },
+          agentOrigin: 'https://agent.example.com'
+        }
+      }
+    ])
+    expect(plan.lines).toContain(
+      `stack acme-prod: deploy nivaro 0.3.10 (${DIGEST.slice(0, 19)}…) as medium: web ×2, worker ×1 through the agent at https://agent.example.com`
+    )
+    expect(plan.lines).toContain(`extension efp-ops: nodeworks/efp-ops@${'c'.repeat(12)}`)
+    expect(plan.lines).toContain(
+      'stack acme-prod: verify https://acme.apps.example.com/api/version answers version = 0.3.10 twice, then the preflight must not fail'
+    )
+    // No GitLab merge / job lines for a stack.
+    expect(plan.lines.some((l) => l.includes('merge') || l.includes('run ?'))).toBe(false)
+    expect(plan.lines.some((l) => l.includes('waiting for the name'))).toBe(false)
+  })
+
+  it('a manual-DNS driver says the name may not serve yet', () => {
+    const plan = buildPromotionPlan(stackInput({ drivers: { 20: dockerDriver('manual') } }))
+    expect(plan.ok).toBe(true)
+    expect(plan.lines).toContain(
+      'the name may not serve yet — the deploy then ends waiting for the name'
+    )
+  })
+
+  it('the first environment of an all-stack app takes a published release (Decision 11)', () => {
+    const first = (over: Partial<PlanInput>) =>
+      buildPromotionPlan(
+        stackInput({
+          previous: null,
+          previousVersion: null,
+          previousDeployedVersions: [],
+          registryVersions: ['0.3.11', '0.3.10', '0.3.9'],
+          ...over
+        })
+      )
+    const ok = first({})
+    expect(ok.blockers).toEqual([])
+    expect(ok.steps).toHaveLength(1)
+    expect(ok.steps[0].driver).toBe('docker')
+    // Not a published release: IMAGE_MISSING, never NO_PREVIOUS_ENVIRONMENT / PREVIOUS_NEVER_RAN.
+    expect(codes(first({ registryVersions: ['0.3.9'] }))).toEqual(['IMAGE_MISSING'])
+    expect(codes(first({ registryVersions: undefined }))).toEqual(['IMAGE_MISSING'])
+    // A tag with no real digest is refused like phase 2's pin.
+    expect(codes(first({ digest: 'present' }))).toEqual(['IMAGE_NO_DIGEST'])
+    expect(codes(first({ digest: null }))).toEqual(['IMAGE_MISSING'])
+  })
+
+  it('a docker environment after another one needs the previous environment to have run it', () => {
+    const plan = buildPromotionPlan(
+      stackInput({ previousVersion: '0.3.9', previousDeployedVersions: ['0.3.9'] })
+    )
+    expect(codes(plan)).toEqual(['PREVIOUS_NEVER_RAN'])
+  })
+
+  it('the image digest is needed for a stack: IMAGE_MISSING / IMAGE_NO_DIGEST', () => {
+    expect(codes(buildPromotionPlan(stackInput({ digest: null })))).toEqual(['IMAGE_MISSING'])
+    expect(codes(buildPromotionPlan(stackInput({ digest: 'present' })))).toEqual([
+      'IMAGE_NO_DIGEST'
+    ])
+  })
+
+  it('a first environment that is not all-stack keeps NO_PREVIOUS_ENVIRONMENT', () => {
+    const plan = buildPromotionPlan(
+      input({ previous: null, previousVersion: null, registryVersions: ['0.3.10'] })
+    )
+    expect(codes(plan)).toEqual(['NO_PREVIOUS_ENVIRONMENT'])
+  })
+
+  const one = (f: Partial<StackFacts>, over: Partial<PlanInput> = {}) =>
+    codes(buildPromotionPlan(stackInput(over, f)))
+
+  it.each([
+    [{ agent: 'unreachable' as const }, 'AGENT_UNREACHABLE'],
+    [{ agent: 'refused' as const }, 'AGENT_REFUSED'],
+    [{ agent: 'incompatible' as const }, 'AGENT_INCOMPATIBLE'],
+    [{ imageAllowed: false }, 'IMAGE_NOT_ALLOWED'],
+    [{ disallowedExtensions: ['efp-ops'] }, 'EXTENSION_NOT_ALLOWED'],
+    [{ missingExtensions: ['efp-ops'] }, 'EXTENSION_UNPINNED'],
+    [{ settingsMissing: ['DB_HOST', 'DB_PASSWORD'] }, 'STACK_SETTINGS_MISSING'],
+    [{ settingsMissing: ['(no settings)'] }, 'STACK_SETTINGS_MISSING'],
+    [
+      { hostnameProblems: ['x.example.org is outside the agent’s domains'] },
+      'HOSTNAME_NOT_ALLOWED'
+    ],
+    [{ hostnameTaken: ['acme.apps.example.com already belongs to another'] }, 'HOSTNAME_TAKEN'],
+    [{ publishPortProblem: 'publish_port 9000 is outside 8000–8010' }, 'PUBLISH_PORT_NOT_ALLOWED'],
+    [{ renderProblem: { code: 'TEMPLATE_NONE', text: 'No stack template' } }, 'TEMPLATE_NONE'],
+    [{ renderProblem: { code: 'ENV_SECRET_CLASH', text: 'clash' } }, 'STACK_SETTINGS_INVALID'],
+    [{ stackState: 'not_hub' as const }, 'STACK_NOT_HUB'],
+    [{ stackState: 'other_owner' as const }, 'STACK_NOT_HUB'],
+    [{ stackName: null }, 'NO_STACK_NAME']
+  ])('%o → %s', (f, code) => {
+    expect(one(f)).toEqual([code])
+  })
+
+  it('fix 1: unreadable stored pins are EXTENSION_UNPINNED with the reason', () => {
+    const plan = buildPromotionPlan(
+      stackInput(
+        { kind: 'rollback', version: '0.3.8' },
+        {
+          extensions: {},
+          extensionsUnreadable: "the stored plan of the 0.3.8 deploy can't be read"
+        }
+      )
+    )
+    expect(plan.blockers).toEqual([
+      { code: 'EXTENSION_UNPINNED', text: "the stored plan of the 0.3.8 deploy can't be read" }
+    ])
+  })
+
+  it('fix 1: agent ok but the stack state unknown is a warning line, not a blocker', () => {
+    const plan = buildPromotionPlan(stackInput({}, { stackState: 'unknown' }))
+    expect(plan.ok).toBe(true)
+    expect(plan.lines).toContain(
+      'stack acme-prod: the agent could not say what runs under this name now — the deploy may be refused'
+    )
+  })
+
+  it('fix 1: a stack not gathered because the version is bad says BAD_VERSION only', () => {
+    expect(codes(buildPromotionPlan(stackInput({ version: '', stacks: {} })))).toEqual([
+      'BAD_VERSION'
+    ])
+  })
+
+  it('an unreachable agent hides the checks only the agent can answer', () => {
+    expect(
+      one({ agent: 'unreachable', imageAllowed: false, stackState: 'unknown', settingsMissing: [] })
+    ).toEqual(['AGENT_UNREACHABLE'])
+  })
+
+  it('names the missing settings — names only', () => {
+    const plan = buildPromotionPlan(stackInput({}, { settingsMissing: ['DB_HOST', 'DB_PASSWORD'] }))
+    expect(plan.blockers[0].text).toBe(
+      "production's stack settings are missing DB_HOST, DB_PASSWORD"
+    )
+  })
+
+  it('KIND_DRIVER_MISMATCH: a stack on a GitLab driver, an api on a Docker one', () => {
+    const stackOnGitlab = buildPromotionPlan(
+      stackInput({
+        drivers: { 20: { branch: 'production', deploy_job: 'deploy', pin_file: 'PIN' } }
+      })
+    )
+    expect(codes(stackOnGitlab)).toEqual(['KIND_DRIVER_MISMATCH'])
+    const apiOnDocker = buildPromotionPlan(
+      input({ drivers: { 7: dockerDriver(), 8: input().drivers[8] } })
+    )
+    expect(codes(apiOnDocker)).toContain('KIND_DRIVER_MISMATCH')
+  })
+
+  it('a stack the agent was not asked about is not deployable', () => {
+    expect(codes(buildPromotionPlan(stackInput({ stacks: {} })))).toEqual(['AGENT_UNREACHABLE'])
+  })
+
+  it('rollback of a docker environment needs a successful deploy of that version there', () => {
+    const back = (over: Partial<PlanInput>) =>
+      buildPromotionPlan(stackInput({ kind: 'rollback', version: '0.3.8', ...over }))
+    expect(back({}).blockers).toEqual([])
+    expect(back({}).steps[0].stack?.extensions).toEqual({ 'efp-ops': EXT_PIN })
+    expect(codes(back({ targetDeployedVersions: ['0.3.9'] }))).toEqual(['NOT_DEPLOYED_BEFORE'])
+  })
+
+  it('a phase-2 plan carries no docker fields', () => {
+    const plan = buildPromotionPlan(input())
+    for (const s of plan.steps) {
+      expect(s.driver).toBeUndefined()
+      expect(s.stack).toBeUndefined()
+    }
   })
 })

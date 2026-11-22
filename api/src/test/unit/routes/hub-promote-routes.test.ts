@@ -167,6 +167,7 @@ const post = (p: string, headers: Record<string, string>, payload?: unknown) =>
   app.inject({ method: 'POST', url: url(p), headers, payload: payload as never })
 
 describe('access', () => {
+  // Cold: the first request loads the whole hub route graph (5–6 s on a busy machine).
   it('a non-owner non-admin gets 404 on every route; owners and admins pass', async () => {
     m.gather.mockResolvedValue(planInput())
     const HASH = 'c'.repeat(64)
@@ -286,6 +287,21 @@ describe('promotable', () => {
     const r = await get(`/environments/${prodId}/promotable`, asAdmin)
     expect(r.json().data.rollback).toEqual([])
     expect(r.json().data.promote).toEqual(['0.3.210', '0.3.209', '0.3.208', '0.3.100'])
+  })
+
+  it('phase 4: a first all-stack environment also offers published releases newer than it runs', async () => {
+    m.gather.mockImplementation(async (_id: number, o: { kind: string }) =>
+      planInput(
+        o.kind === 'rollback'
+          ? {}
+          : {
+              previousDeployedVersions: [],
+              registryVersions: ['0.3.211', '0.3.210', '0.3.150', '0.3.9']
+            }
+      )
+    )
+    const r = await get(`/environments/${prodId}/promotable`, asAdmin)
+    expect(r.json().data.promote).toEqual(['0.3.211', '0.3.210'])
   })
 })
 

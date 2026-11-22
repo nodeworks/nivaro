@@ -22,7 +22,9 @@ import {
   appsOfPlacement,
   createComponent,
   deleteComponent,
+  followPlacementDriver,
   listComponents,
+  placementDriverRefusal,
   readComponent,
   updateComponent,
   validateComponentInput
@@ -36,6 +38,14 @@ import {
   listEnvironmentDeploys
 } from '../services/hub/deploys.js'
 import {
+  type DeleteRefusal,
+  dockerEnvironmentDeleteRefusal,
+  type LockedRun,
+  type StackEditRefusal,
+  stackEditRefusal,
+  withEnvironmentLock
+} from '../services/hub/docker/stack-guards.js'
+import {
   createDriver,
   createPlacement,
   deleteDriver,
@@ -43,6 +53,8 @@ import {
   getDriver,
   getPlacement,
   listDrivers,
+  placementStackRefusal,
+  placementTargetRefusal,
   publicDriver,
   releasePlacement,
   updateDriver,
@@ -74,6 +86,7 @@ import {
   type StatusCache
 } from '../services/hub/status.js'
 import { readJobLog } from '../services/job-runs.js'
+import { hubDockerRoutes } from './hub-docker.js'
 
 /**
  * Nivaro Hub API, mounted at /api/hub. Nothing is registered unless hub mode is on (HUB=on,
@@ -97,6 +110,7 @@ export async function hubRoutes(app: FastifyInstance) {
   statusRoutes(app)
   deployRoutes(app)
   promotionRoutes(app)
+  hubDockerRoutes(app) // phase 4
 }
 
 const APPS = 'nivaro_hub_apps'
@@ -177,7 +191,12 @@ async function forgetEnvironment(app: FastifyInstance, envId: number) {
   ])
 }
 
+/** P4-31: an edit that would orphan a running stack, answered with the field it names. */
+const stackRunning = (reply: FastifyReply, r: StackEditRefusal) =>
+  reply.code(r.status).send({ error: r.message, code: r.code, field: r.field })
+
 /** Ids of the environments deployed through a placement, or through any placement of a driver. */
+
 async function environmentsUsing(by: { placement: number } | { driver: number }) {
   const rows = (
     'placement' in by
@@ -277,6 +296,14 @@ function appRoutes(app: FastifyInstance) {
         )
       if (await db(APPS).where({ key: b.key }).whereNot({ id }).first('id'))
         return fail(reply, 409, 'KEY_TAKEN', `An app with key "${b.key}" already exists`)
+      // P4-31: a running stack's owner labels name the app key.
+      if (b.key !== (await readApp(id))?.key) {
+        const envIds = (
+          (await db(ENVS).where({ app_id: id }).select('id')) as Array<{ id: number }>
+        ).map((r) => Number(r.id))
+        const running = await stackEditRefusal(envIds, 'key')
+        if (running) return stackRunning(reply, running)
+      }
       patch.key = b.key
     }
     if (b.name !== undefined) {
@@ -538,6 +565,20 @@ function environmentRoutes(app: FastifyInstance) {
     const checked = environmentPatch(b, false)
     if ('error' in checked) return fail(reply, 400, checked.code, checked.error)
     const { patch } = checked
+    // P4-31: a running stack's labels name the environment key, and the Hub finds it through
+    // the placement: neither may change while the stack runs.
+    const before = current.placement_id == null ? null : Number(current.placement_id)
+    const stackEdit =
+      patch.key !== undefined && patch.key !== current.key
+        ? await stackEditRefusal([id], 'key')
+        : patch.placement_id !== undefined && (patch.placement_id ?? null) !== before
+          ? await stackEditRefusal([id], 'placement_id')
+          : // P4-35: the Hub owns version_pin while a stack runs (Apply now and restart read it).
+            patch.version_pin !== undefined &&
+              (patch.version_pin ?? null) !== (current.version_pin ?? null)
+            ? await stackEditRefusal([id], 'version_pin')
+            : null
+    if (stackEdit) return stackRunning(reply, stackEdit)
     const incoming = tokenInput(b.hub_token)
     if ('error' in incoming) return fail(reply, 400, incoming.code, incoming.error)
     const sent = incoming.token
@@ -570,7 +611,6 @@ function environmentRoutes(app: FastifyInstance) {
       // Absent keeps the stored token (nextSecret reads undefined as a clear).
       if (sent !== undefined) patch.hub_token = nextSecret(sent, storedToken)
       if (Object.keys(patch).length) {
-        const before = current.placement_id == null ? null : Number(current.placement_id)
         await db.transaction(async (trx) => {
           await trx(ENVS)
             .where({ id })
@@ -598,14 +638,35 @@ function environmentRoutes(app: FastifyInstance) {
     const id = idParam((req.params as { envId: string }).envId)
     const current = id === null ? undefined : await readEnvironmentRow(id)
     if (id === null || !current) return notFound(reply)
-    await db.transaction(async (trx) => {
-      await trx(ENVS).where({ id }).del()
-      // Its dedicated placement goes with it, unless another environment still names it.
-      await releasePlacement(
-        trx,
-        current.placement_id == null ? null : Number(current.placement_id)
+    // phase 4: under the environment's promotion lock (no promotion starts meanwhile), and a
+    // Docker stack this environment still runs must be removed first.
+    let done: LockedRun<DeleteRefusal | null>
+    try {
+      done = await withEnvironmentLock(id, async () => {
+        const stackRefusal = await dockerEnvironmentDeleteRefusal(id)
+        if (stackRefusal) return stackRefusal
+        await db.transaction(async (trx) => {
+          await trx(ENVS).where({ id }).del()
+          // Its dedicated placement goes with it, unless another environment still names it.
+          await releasePlacement(
+            trx,
+            current.placement_id == null ? null : Number(current.placement_id)
+          )
+        })
+        return null
+      })
+    } catch (err) {
+      if (err instanceof PromotionError) return fail(reply, err.status, err.code, err.message)
+      throw err
+    }
+    if (!done.held)
+      return fail(
+        reply,
+        409,
+        'PROMOTION_RUNNING',
+        `a promotion of ${String(current.key)} is running — wait for it to end`
       )
-    })
+    if (done.value) return fail(reply, 409, done.value.code, done.value.message)
     await forgetEnvironment(app, id)
     await logActivity({
       action: 'delete',
@@ -723,7 +784,12 @@ function placementRoutes(app: FastifyInstance) {
   app.post('/placements', { preHandler: requireAdmin }, async (req, reply) => {
     const checked = validatePlacementInput(body(req))
     if (!checked.ok) return fail(reply, 400, checked.code, checked.message)
-    if (!(await getDriver(checked.row.driver_id))) return noDriver(reply)
+    const driver = await getDriver(checked.row.driver_id)
+    if (!driver) return noDriver(reply)
+    const badTarget = placementTargetRefusal(driver.kind, checked.row.target)
+    if (badTarget) return fail(reply, 400, badTarget.code, badTarget.message)
+    const takenStack = await placementStackRefusal(driver.id, checked.row.target) // phase 4
+    if (takenStack) return fail(reply, takenStack.status, takenStack.code, takenStack.message)
     const created = await createPlacement(checked.row)
     await logActivity({
       action: 'create',
@@ -753,10 +819,31 @@ function placementRoutes(app: FastifyInstance) {
       target: b.target ?? existing.target
     })
     if (!checked.ok) return fail(reply, 400, checked.code, checked.message)
-    if (checked.row.driver_id !== existing.driver_id && !(await getDriver(checked.row.driver_id)))
-      return noDriver(reply)
+    const moved = checked.row.driver_id !== existing.driver_id
+    const driver = await getDriver(checked.row.driver_id)
+    if (moved && !driver) return noDriver(reply)
+    if (driver) {
+      const badTarget = placementTargetRefusal(driver.kind, checked.row.target)
+      if (badTarget) return fail(reply, 400, badTarget.code, badTarget.message)
+      const takenStack = await placementStackRefusal(driver.id, checked.row.target, id) // phase 4
+      if (takenStack) return fail(reply, takenStack.status, takenStack.code, takenStack.message)
+    }
+    if (moved) {
+      const mixed = await placementDriverRefusal(id, checked.row.driver_id)
+      if (mixed) return fail(reply, mixed.status, mixed.code, mixed.message)
+    }
+    // P4-31: the Hub finds a running stack through this placement's driver and stack name.
+    const stackMoved = (checked.row.target?.stack ?? null) !== (existing.target?.stack ?? null)
+    if (moved || stackMoved) {
+      const running = await stackEditRefusal(
+        await environmentsUsing({ placement: id }),
+        moved ? 'driver_id' : 'target.stack'
+      )
+      if (running) return stackRunning(reply, running)
+    }
     const updated = await updatePlacement(id, checked.row)
     if (!updated) return notFound(reply)
+    if (moved) await followPlacementDriver(id, checked.row.driver_id)
     await logActivity({
       action: 'update',
       user: userId(req),
@@ -1042,9 +1129,11 @@ function promotionRoutes(app: FastifyInstance) {
         gatherPlanInput(envId, { kind: 'rollback', version: '' })
       ])
       const cur = fwd.targetVersion
-      const promote = cur
-        ? fwd.previousDeployedVersions.filter((v) => compareVersions(v, cur) > 0)
-        : fwd.previousDeployedVersions
+      // phase 4: the first environment of an all-stack app takes published releases (Decision 11).
+      const offered = [
+        ...new Set([...fwd.previousDeployedVersions, ...(fwd.registryVersions ?? [])])
+      ]
+      const promote = cur ? offered.filter((v) => compareVersions(v, cur) > 0) : offered
       // Rollback: only versions whose every build the Hub recorded here (never pre-Hub ones).
       const rollback = cur
         ? (back.rollbackVersions ?? back.targetDeployedVersions).filter(
@@ -1062,7 +1151,9 @@ function promotionRoutes(app: FastifyInstance) {
           rollback: newestFirst(rollback),
           finish,
           // The environment promotions come from (null: this is the first one).
-          previous: fwd.previous?.key ?? null
+          previous: fwd.previous?.key ?? null,
+          // phase 4: the published releases could not be read (first all-stack environment).
+          ...(fwd.registryError ? { releases_error: true } : {})
         }
       }
     } catch (err) {

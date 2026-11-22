@@ -4,9 +4,9 @@ import { getApp } from '../io-holder.js'
 import { componentTargetBranch, listComponents } from './components.js'
 import {
   driverCtx,
+  type GitlabDriverRow,
   getDriver,
   getPlacement,
-  type HubDriverRow,
   repositoryIdentity
 } from './drivers.js'
 import { GitlabWriteError } from './gitlab-write.js'
@@ -280,7 +280,7 @@ async function pinAt(
  */
 export async function gitlabDeployedVersions(
   env: { placement_id: number | null },
-  ctxFor: (driver: HubDriverRow) => GitCtx = driverCtx,
+  ctxFor: (driver: GitlabDriverRow) => GitCtx = driverCtx,
   opts: EvidenceOptions = {}
 ): Promise<string[]> {
   if (!env.placement_id) return []

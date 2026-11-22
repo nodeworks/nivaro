@@ -8,6 +8,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { UserCombobox } from '@/components/user-combobox'
 import { api } from '@/lib/api'
 import { cn, formatDateTime, formatRelative } from '@/lib/utils'
+import { HubStackPanel } from './docker/HubStackPanel'
 import {
   createEnvironment,
   type EnvDraft,
@@ -118,7 +119,8 @@ function AppHeader({
       void qc.invalidateQueries({ queryKey: hubKeys.apps() })
       setEditing(false)
     },
-    onError: (err) => hubToast(err, 'Could not save the app')
+    onError: (err) =>
+      hubToast(err, 'Could not save the app', { fieldLabels: { key: 'the app key' } })
   })
   const remove = useMutation({
     mutationFn: () => api.delete(`/hub/apps/${app.id}`),
@@ -307,15 +309,17 @@ function EnvironmentsCard({
             ))}
           </ul>
           <div className='hidden overflow-x-auto sm:block'>
-            <table className='w-full min-w-[640px] text-[12px]'>
+            {/* Fixed layout (P4-25): a long status, address or stack panel wraps or truncates
+                inside its column; the table never scrolls sideways on a desktop screen. */}
+            <table className='w-full min-w-[640px] table-fixed text-[12px]'>
               <thead>
                 <tr className='border-b border-slate-200 text-left text-[11px] uppercase tracking-wide text-slate-500 dark:border-border dark:text-muted-foreground'>
-                  <th className='px-4 py-2 font-medium'>Environment</th>
+                  <th className='w-[18%] px-4 py-2 font-medium'>Environment</th>
                   <th className='px-4 py-2 font-medium'>Address</th>
-                  <th className='px-4 py-2 font-medium'>Version</th>
-                  <th className='px-4 py-2 font-medium'>Status</th>
-                  <th className='px-4 py-2 font-medium'>Checked</th>
-                  <th className='px-4 py-2'>
+                  <th className='w-[12%] px-4 py-2 font-medium'>Version</th>
+                  <th className='w-[22%] px-4 py-2 font-medium'>Status</th>
+                  <th className='w-[11%] px-4 py-2 font-medium'>Checked</th>
+                  <th className='w-[200px] px-4 py-2'>
                     <span className='sr-only'>Actions</span>
                   </th>
                 </tr>
@@ -511,7 +515,7 @@ function EnvRow({
   return (
     <Fragment>
       <tr className='border-b border-slate-100 last:border-0 dark:border-border'>
-        <td className='px-4 py-2.5 font-mono text-[12px] font-medium text-slate-800 dark:text-foreground'>
+        <td className='truncate px-4 py-2.5 font-mono text-[12px] font-medium text-slate-800 dark:text-foreground'>
           {env.key}
         </td>
         <td className='max-w-[280px] px-4 py-2.5'>
@@ -527,12 +531,12 @@ function EnvRow({
         <td className='px-4 py-2.5 font-mono tabular-nums text-slate-700 dark:text-slate-300'>
           {s?.version ?? '—'}
         </td>
-        <td className='max-w-[260px] px-4 py-2.5'>
+        <td className='min-w-0 px-4 py-2.5'>
           <EnvStatus status={row.status} />
           <EnvStatusHint status={row.status} className='mt-1' />
         </td>
         <td
-          className='whitespace-nowrap px-4 py-2.5 text-slate-500 dark:text-muted-foreground'
+          className='truncate px-4 py-2.5 text-slate-500 dark:text-muted-foreground'
           data-tip={s?.checked_at ? formatDateTime(s.checked_at) : undefined}
         >
           {s?.checked_at ? formatRelative(s.checked_at) : '—'}
@@ -541,6 +545,9 @@ function EnvRow({
           <EnvActions env={env} row={row} isAdmin={isAdmin} canPromote={canPromote} />
         </td>
       </tr>
+      {env.placement_id != null && (
+        <HubStackPanel env={env} appId={app.id} isAdmin={isAdmin} layout='row' />
+      )}
       {row.promoting && (
         <tr className='border-b border-slate-100 last:border-0 dark:border-border'>
           <td colSpan={6} className='px-4 pb-3'>
@@ -612,6 +619,9 @@ function EnvItem({
         <span className='shrink-0'>{s?.checked_at ? formatRelative(s.checked_at) : '—'}</span>
       </p>
       <EnvStatusHint status={row.status} className='mt-0.5' />
+      {env.placement_id != null && (
+        <HubStackPanel env={env} appId={app.id} isAdmin={isAdmin} layout='card' idPrefix='-m' />
+      )}
       {row.promoting && (
         <div className='mt-2'>
           <HubPromotePanel
@@ -660,7 +670,10 @@ function EditEnvironment({
       void qc.invalidateQueries({ queryKey: hubKeys.envStatus(env.id) })
       onClose()
     },
-    onError: (err) => hubToast(err, `Could not save ${env.key}`)
+    onError: (err) =>
+      hubToast(err, `Could not save ${env.key}`, {
+        fieldLabels: { key: 'the environment name', placement_id: 'the placement' }
+      })
   })
 
   return (

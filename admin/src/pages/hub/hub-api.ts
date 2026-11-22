@@ -82,11 +82,20 @@ export interface HubDriverConfig {
   deploy_job: string
 }
 
+/** A Docker driver's config (phase 4): the Hub agent's address and how names reach the edge. */
+export interface HubDockerDriverConfig {
+  agent_url: string
+  dns_mode: 'automatic' | 'manual'
+  wildcard_domain: string | null
+  edge_target: string | null
+}
+
 export interface HubDriver {
   id: number
-  kind: 'gitlab'
+  kind: 'gitlab' | 'docker'
   name: string
-  config: HubDriverConfig
+  /** GitLab drivers carry the GitLab fields, Docker drivers the Docker ones (never both). */
+  config: Partial<HubDriverConfig> & Partial<HubDockerDriverConfig>
   /** '••••••' when a token is stored, else null. */
   secret: string | null
 }
@@ -341,28 +350,47 @@ const CODE_COPY: Record<string, { title: string; hint?: string }> = {
 }
 
 /** describeError with the Hub's own refusals in plain words. */
-export function hubError(err: unknown, fallback: string): ErrorDescription {
+export function hubError(
+  err: unknown,
+  fallback: string,
+  fieldLabels: Record<string, string> = {}
+): ErrorDescription {
   const d = describeError(err, fallback)
   const copy = d.code ? (CODE_COPY[d.code] ?? BLOCKER_COPY[d.code]) : undefined
   if (!copy) return d
   const out: ErrorDescription = { ...d, title: copy.title }
   if (copy.hint) out.hint = copy.hint
   else delete out.hint
+  // A refused edit names the field it refused (STACK_RUNNING carries `field`).
+  const field = (err as { response?: { data?: { field?: unknown } } })?.response?.data?.field
+  if (d.code === 'STACK_RUNNING' && typeof field === 'string') {
+    const label = fieldLabels[field] ?? STACK_FIELD_LABELS[field] ?? `the ${field}`
+    out.hint = `Changing ${label} would lose the stack. Use Remove stack… in its stack panel first, then change it.`
+  }
   return out
+}
+
+const STACK_FIELD_LABELS: Record<string, string> = {
+  key: 'the key',
+  placement_id: 'the placement'
 }
 
 /**
  * An error toast with the Hub's refusals in plain words. `title` keeps the caller's own title
  * (e.g. a count) and takes only the hint and action from the error.
  */
-export function hubToast(err: unknown, fallback: string, opts: { title?: string } = {}) {
-  const d = hubError(err, fallback)
+export function hubToast(
+  err: unknown,
+  fallback: string,
+  opts: { title?: string; fieldLabels?: Record<string, string> } = {}
+) {
+  const d = hubError(err, fallback, opts.fieldLabels)
   toast.error(opts.title ?? d.title, errorToastOptions(d))
 }
 
 // ─── Phase 2: components, promote and roll back ───────────────────────────────
 
-export type ComponentKind = 'api' | 'frontend'
+export type ComponentKind = 'api' | 'frontend' | 'stack'
 export type PromotionKind = 'promote' | 'rollback'
 
 /** One ordered piece of an environment's placement, each deployed through its own driver. */
@@ -419,6 +447,10 @@ export interface PromotionStep {
   deployJob: string
   verifyUrl: string | null
   want: string
+  /** Phase 4: the executor; absent = GitLab (merge + deploy job), docker = the Hub agent. */
+  driver?: 'gitlab' | 'docker'
+  /** Phase 4, docker steps: the stack the Hub deploys (never a setting or a secret). */
+  stack?: { name: string; image?: string; size?: string }
   /** api: already deployed with this version — nothing is merged or deployed. */
   noop?: boolean
   /** rollback: the pipeline whose deploy job is rerun (the recorded build). */
@@ -463,6 +495,8 @@ export interface HubPromotion {
   started_by_name?: string | null
   started_at: string
   finished_at: string | null
+  /** Phase 4: an Apply now run (the saved stack settings onto the running version). */
+  apply?: boolean
 }
 
 export interface HubPromotionLogLine {
@@ -568,7 +602,10 @@ export const BLOCKER_COPY: Record<string, { title: string; hint?: string }> = {
     title: 'The environment before this one has not run this version',
     hint: 'Promote it there first.'
   },
-  ALREADY_RUNS: { title: 'This environment already runs this version' },
+  ALREADY_RUNS: {
+    title: 'This environment already runs this version',
+    hint: 'To deploy changed stack settings or extension pins to a Docker environment, use Apply now in its stack panel.'
+  },
   OLDER_THAN_CURRENT: {
     title: 'This version is older than the one running here',
     hint: 'Use Roll back to go to an older version.'
@@ -671,3 +708,273 @@ export const promotionStatusTone = (s: string): string =>
  */
 export const isLivePromotion = (s: string) =>
   s === 'running' || s === 'planned' || !KNOWN_STATUS.has(s)
+
+/** Phase 4: why a Docker stack deploy cannot start, in plain words (by planner code). */
+Object.assign(BLOCKER_COPY, {
+  AGENT_UNREACHABLE: {
+    title: 'The Hub agent on the Docker host does not answer',
+    hint: "Check that the agent runs and that the driver's agent address is right."
+  },
+  AGENT_REFUSED: {
+    title: 'The Hub agent refused the Hub',
+    hint: "A Hub admin enters the agent's token again in the Docker driver."
+  },
+  AGENT_INCOMPATIBLE: {
+    title: 'The Hub agent is a version this Hub cannot talk to',
+    hint: 'Update the Hub agent (or the Hub) so both speak the same agent API.'
+  },
+  IMAGE_NOT_ALLOWED: {
+    title: 'The Hub agent does not allow the Nivaro image',
+    hint: "Add the image to the agent's allowed images (HUB_AGENT_IMAGES)."
+  },
+  EXTENSION_NOT_ALLOWED: {
+    title: 'The Hub agent does not allow an extension image',
+    hint: "Add the extension's image to the agent's allowed images (HUB_AGENT_IMAGES)."
+  },
+  EXTENSION_UNPINNED: {
+    title: 'An extension this app needs has no pinned image',
+    hint: 'Pin the extension on the environment the version comes from, then try again.'
+  },
+  STACK_SETTINGS_MISSING: {
+    title: 'The stack settings are not complete',
+    hint: "A Hub admin fills in the missing settings in the environment's stack settings."
+  },
+  STACK_SETTINGS_INVALID: {
+    title: 'The stack settings cannot make a stack the agent accepts',
+    hint: "A Hub admin fixes the environment's stack settings."
+  },
+  HOSTNAME_NOT_ALLOWED: {
+    title: 'A name of this environment cannot be routed by this Docker host',
+    hint: "Use names under the driver's DNS domain and the agent's allowed domains."
+  },
+  HOSTNAME_TAKEN: {
+    title: 'A name of this environment already belongs to another environment',
+    hint: 'Give this environment its own names.'
+  },
+  PUBLISH_PORT_NOT_ALLOWED: {
+    title: 'The stack needs a publish port inside the agent’s range',
+    hint: "A Hub admin sets a free publish port from the agent's range in the stack settings."
+  },
+  TEMPLATE_NONE: {
+    title: 'This version is too old to run as a Docker stack',
+    hint: 'Pick a newer version.'
+  },
+  STACK_NOT_HUB: {
+    title: 'A stack with this name already runs on the Docker host and is not this environment’s',
+    hint: "Give the environment's placement a stack name nothing else uses."
+  },
+  NO_STACK_NAME: {
+    title: 'The environment has no stack name',
+    hint: "A Hub admin sets the stack name in the environment's placement."
+  },
+  KIND_DRIVER_MISMATCH: {
+    title: 'A component is on the wrong kind of driver',
+    hint: 'Stacks deploy through a Docker driver; api and frontend components through GitLab.'
+  }
+} satisfies Record<string, { title: string; hint?: string }>)
+
+/** Phase 4 (docker plan, run step and stack routes): refusals and failures in plain words. */
+Object.assign(BLOCKER_COPY, {
+  STACK_OWNER_MISMATCH: {
+    title: 'This stack belongs to another environment',
+    hint: "Give this environment's placement a stack name no other app uses."
+  },
+  STACK_LEFTOVERS: {
+    title: 'Parts of an older stack with this name are still on the Docker host',
+    hint: 'Use Remove stack… in its stack panel to clear them, then delete the environment.'
+  },
+  STACK_NAME_TAKEN: {
+    title: 'Another environment already uses this stack name',
+    hint: 'Give each environment its own stack name.'
+  },
+  NOT_DEPLOYED: {
+    title: 'The stack is not deployed yet',
+    hint: 'Deploy a version first.'
+  },
+  SPEC_MISMATCH: {
+    title: 'The stack does not run what the Hub has on record',
+    hint: 'Saved settings or pins changed since the last deploy. Use Apply now to deploy them, then restart if needed.'
+  },
+  MIXED_DRIVER_KINDS: {
+    title: 'A placement deploys through one kind of driver',
+    hint: 'Keep GitLab components and Docker stacks on separate placements.'
+  },
+  ONE_STACK: {
+    title: 'A Docker placement deploys exactly one stack',
+    hint: 'Remove the extra component, or use another placement.'
+  },
+  ENV_NOT_ALLOWED: {
+    title: 'The agent does not allow that setting name',
+    hint: 'Use a Nivaro setting, or a name under a prefix the agent allows (HUB_AGENT_ENV_PREFIXES).'
+  },
+  STACK_STATE_UNKNOWN: {
+    title: 'The Hub cannot tell whether the stack runs',
+    hint: 'The Docker host did not answer clearly. Check the agent, then try again.'
+  },
+  STACK_RUNNING: {
+    title: 'A stack the Hub deployed runs on this',
+    hint: 'Changing it would lose the stack. Use Remove stack… in its stack panel first, then change it.'
+  },
+  STACK_STILL_RUNNING: {
+    title: 'The stack still runs',
+    hint: 'Use Remove stack… in its stack panel first, then delete the environment.'
+  },
+  NOT_WAITING_FOR_NAME: {
+    title: 'This deploy is not waiting for a name',
+    hint: 'Only a deploy that finished and waits for DNS can check a name.'
+  },
+  TOO_SOON: {
+    title: 'That was checked a moment ago',
+    hint: 'Wait a few seconds, then check again.'
+  },
+  OWNER_REQUIRED: {
+    title: 'Only an owner of this app or a Hub admin can do this',
+    hint: 'Ask an owner of the app.'
+  },
+  PREFLIGHT_FAILED: {
+    title: 'The new version started but its checks fail',
+    hint: "Open the app's preflight list, fix what fails, then deploy again."
+  },
+  VERIFY_FAILED: {
+    title: 'The new version never answered',
+    hint: 'The stack runs, but its address did not report this version. Check the names and the logs.'
+  },
+  SWARM_ROLLED_BACK: {
+    title: 'Docker rolled the stack back to the version before',
+    hint: 'The new version could not start. Read the stack log, fix it, then deploy again.'
+  },
+  STACK_DEPLOY_TIMEOUT: {
+    title: 'The stack did not settle in time',
+    hint: 'It may still be starting. Check the stack, then deploy again if it stays stuck.'
+  },
+  NOT_DOCKER: {
+    title: 'That driver is not a Docker driver',
+    hint: 'Pick a driver of kind Docker.'
+  },
+  SETTING_INVALID: {
+    title: 'A stack setting has a value the stack cannot use',
+    hint: 'Check this entry. Names ending in _FILE and reserved names are not allowed here.'
+  },
+  HOSTNAME_INVALID: {
+    title: 'A name of this environment is not a valid host name',
+    hint: 'Use lower-case letters, digits, dots and dashes.'
+  },
+  HOSTNAME_NOT_UNDER_WILDCARD: {
+    title: "A name is not under the driver's wildcard domain",
+    hint: "Use a name that ends with the driver's wildcard domain, or switch the driver to manual DNS."
+  },
+  TOO_MANY_HOSTNAMES: {
+    title: 'This environment has too many names',
+    hint: 'Remove names it does not need.'
+  },
+  AGENT_REDIRECT: {
+    title: 'The agent address redirects somewhere else',
+    hint: "Use the agent's own address, not one that redirects."
+  },
+  NOT_RUNNING: {
+    title: 'The stack is not running',
+    hint: 'Deploy a version first.'
+  },
+  BAD_CONFIG: {
+    title: 'The driver settings are not complete',
+    hint: 'Fill in the Agent URL, and the wildcard domain (automatic) or edge target (manual).'
+  },
+  BAD_NAME: {
+    title: 'Give it a name',
+    hint: 'The name cannot be empty or too long.'
+  },
+  BAD_STACK_NAME: {
+    title: 'That is not a valid stack name',
+    hint: 'Lower-case letters, digits and dashes.'
+  }
+} satisfies Record<string, { title: string; hint?: string }>)
+
+/** The codes the Hub's own (non-planner) refusals have copy for (a test checks coverage). */
+export const CODE_COPY_KEYS: ReadonlySet<string> = new Set(Object.keys(CODE_COPY))
+
+/** Codes whose planner text names things the person must see (setting or host names — never values). */
+const DETAIL_CODES = new Set([
+  'STACK_SETTINGS_MISSING',
+  'STACK_SETTINGS_INVALID',
+  'HOSTNAME_NOT_ALLOWED',
+  'HOSTNAME_TAKEN',
+  'PUBLISH_PORT_NOT_ALLOWED',
+  'IMAGE_NOT_ALLOWED',
+  'EXTENSION_NOT_ALLOWED',
+  'EXTENSION_UNPINNED'
+])
+
+/** The planner's own sentence for a blocker whose names matter (e.g. which settings are missing). */
+export const blockerDetail = (b: PromotionBlocker): string | null =>
+  DETAIL_CODES.has(b.code) && b.text.trim() ? b.text.trim() : null
+
+/**
+ * The detail line under a blocker's plain words: the planner's sentence, unless it only repeats
+ * the title. Agent refusals (AGENT_*) stay in plain words only: their sentence names addresses
+ * the person cannot act on; the names-bearing phase-4 codes (blockerDetail) always show it.
+ */
+export const blockerDetailLine = (b: PromotionBlocker, title: string): string | null => {
+  const text = b.text?.trim()
+  if (!text || text === title) return null
+  if (DETAIL_CODES.has(b.code)) return text
+  return b.code.startsWith('AGENT_') ? null : text
+}
+
+/** Phase 4: the promotable versions plus whether the published releases could be read. */
+export interface HubPromotableReleases extends HubPromotable {
+  /** The first environment of an all-stack app lists published releases; true = unreadable. */
+  releases_error: boolean
+}
+
+export const fetchPromotableReleases = (envId: number): Promise<HubPromotableReleases> =>
+  api
+    .get<{ data: Partial<HubPromotableReleases> }>(`/hub/environments/${envId}/promotable`)
+    .then((r) => ({
+      promote: r.data.data?.promote ?? [],
+      rollback: r.data.data?.rollback ?? [],
+      finish: r.data.data?.finish ?? null,
+      // undefined (an older API): not known whether there is an environment before this one.
+      previous: r.data.data?.previous,
+      releases_error: r.data.data?.releases_error === true
+    }))
+
+export const RELEASES_ERROR_TEXT =
+  "Couldn't read the published releases, so none of them are listed. Try again in a moment."
+
+/** Phase 4 (stack panel): refusals the settings, restart, remove and name-check routes add. */
+Object.assign(BLOCKER_COPY, {
+  ADMIN_ONLY: {
+    title: 'Only a Hub administrator can do this',
+    hint: 'Ask an administrator of this Hub.'
+  },
+  AGENT_ERROR: {
+    title: 'The Hub agent could not do that',
+    hint: 'Check the agent, then try again.'
+  },
+  ENGINE_ERROR: {
+    title: 'Docker on the host could not do that',
+    hint: 'Check the Docker host, then try again.'
+  },
+  SECRET_IN_SETTINGS: {
+    title: 'That looks like a credential',
+    hint: 'Put it under Secrets, not Settings.'
+  },
+  RESERVED_SETTING: {
+    title: 'The Hub sets that name itself',
+    hint: 'Remove it from the stack settings.'
+  },
+  BAD_KEY: { title: 'A name is not valid', hint: 'Use A–Z, 0–9 and _ (upper case).' },
+  BAD_VALUE: { title: 'A value is not valid', hint: 'Check this value.' },
+  BAD_SIZE: { title: 'Pick small, medium or large' },
+  BAD_REDIS: { title: 'Pick bundled or external Redis' },
+  BAD_PUBLISH_PORT: { title: 'The publish port must be a port number (1–65535)' },
+  BAD_DB_CLIENT: { title: 'That database client is not one Nivaro boots with' },
+  SQLITE_ONE_PROCESS: {
+    title: 'SQLite needs size small',
+    hint: 'SQLite is one file one process can write.'
+  },
+  BAD_EXTENSION_PIN: {
+    title: 'An extension pin is not valid',
+    hint: 'Use image@sha256:… with the 64-character digest.'
+  }
+} satisfies Record<string, { title: string; hint?: string }>)

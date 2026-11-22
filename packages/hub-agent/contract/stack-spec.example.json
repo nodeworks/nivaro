@@ -1,0 +1,44 @@
+{
+  "owner": {
+    "app": "acme"
+  },
+  "environment": "staging",
+  "image": "nodeworks/nivaro@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "roles": [
+    {
+      "role": "web",
+      "replicas": 2,
+      "cpus": 2,
+      "memory_mb": 3072
+    },
+    {
+      "role": "worker",
+      "replicas": 1,
+      "cpus": 2,
+      "memory_mb": 4096
+    }
+  ],
+  "env": {
+    "ADMIN_URL": "https://acme-staging.apps.example.com",
+    "DB_CLIENT": "mssql",
+    "DB_DATABASE": "acme_staging",
+    "DB_HOST": "db.internal.example.com",
+    "DB_USER": "acme_app",
+    "MIGRATION_SAFE_MODE": "true",
+    "NIVARO_ENVIRONMENT": "staging",
+    "NODE_ENV": "production",
+    "PUBLIC_URL": "https://acme-staging.apps.example.com",
+    "TRUST_PROXY": "1"
+  },
+  "secrets": {
+    "DB_PASSWORD": "example-db-password-not-real",
+    "ENCRYPTION_KEY": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+    "HUB_TOKEN": "example-hub-token-not-real-0000000000000000",
+    "SESSION_SECRET": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  },
+  "hostnames": ["acme-staging.apps.example.com"],
+  "redis": "bundled",
+  "extensions": {
+    "acme-tools": "registry.example.com/acme/tools-ext@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+  }
+}

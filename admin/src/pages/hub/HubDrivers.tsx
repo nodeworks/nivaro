@@ -1,14 +1,23 @@
 import { ConfirmButton, ErrorNotice, QueryErrorState } from '@nivaro/shared'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { ChevronLeft, GitBranch, Plus, Trash2 } from 'lucide-react'
-import { useState } from 'react'
+import { ChevronLeft, Container, GitBranch, Plus, Trash2 } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { SimpleSelect } from '@/components/ui/simple-select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
+import { AgentCheck, DockerDriverFields } from './docker/DockerDriverFields'
+import {
+  dockerConfigBody,
+  dockerDraftErrors,
+  dockerDraftOf,
+  dockerKeys,
+  EMPTY_DOCKER_DRAFT
+} from './docker/docker-api'
 import { useDriverOptions } from './HubAdoptForm'
 import {
   HUB_MASK,
@@ -45,6 +54,12 @@ function DriversAdmin() {
   const [params, setParams] = useSearchParams()
   const selected = Number(params.get('driver')) || null
   const creating = params.get('new') === '1'
+  /** The generated agent token: kept here so it survives the create → edit remount. */
+  const [fresh, setFresh] = useState<{ id: number | null; token: string } | null>(null)
+  // Leaving the create form drops a token that was never saved.
+  useEffect(() => {
+    if (!creating) setFresh((f) => (f && f.id === null ? null : f))
+  }, [creating])
   const show = (next: { driver?: number | null; create?: boolean }) =>
     setParams((p) => {
       const out = new URLSearchParams(p)
@@ -67,7 +82,7 @@ function DriversAdmin() {
       >
         <div className='flex items-center gap-2 border-b border-slate-200 px-3 py-2.5 dark:border-border'>
           <p className='m-0 flex-1 text-[12px] font-medium text-slate-500 dark:text-muted-foreground'>
-            GitLab drivers
+            Drivers
           </p>
           <button
             type='button'
@@ -111,8 +126,17 @@ function DriversAdmin() {
                     {d.name}
                   </span>
                   <span className='mt-0.5 flex items-center gap-1 truncate font-mono text-[11px] text-slate-500 dark:text-muted-foreground'>
-                    <GitBranch className='h-3 w-3 shrink-0' aria-hidden />
-                    {d.config.project} · {d.config.branch}
+                    {d.kind === 'docker' ? (
+                      <>
+                        <Container className='h-3 w-3 shrink-0' aria-hidden />
+                        Docker · {d.config.agent_url}
+                      </>
+                    ) : (
+                      <>
+                        <GitBranch className='h-3 w-3 shrink-0' aria-hidden />
+                        {d.config.project} · {d.config.branch}
+                      </>
+                    )}
                   </span>
                 </button>
               </li>
@@ -138,13 +162,20 @@ function DriversAdmin() {
           <DriverForm
             key='new'
             driver={null}
-            onSaved={(id) => show({ driver: id })}
+            fresh={fresh && fresh.id === null ? fresh.token : null}
+            onFresh={(token) => setFresh(token ? { id: null, token } : null)}
+            onSaved={(id) => {
+              setFresh((f) => (f ? { ...f, id } : f))
+              show({ driver: id })
+            }}
             onCancel={() => show({})}
           />
         ) : current ? (
           <DriverForm
             key={current.id}
             driver={current}
+            fresh={fresh && fresh.id === current.id ? fresh.token : null}
+            onFresh={(token) => setFresh(token ? { id: current.id, token } : null)}
             onSaved={() => {}}
             onCancel={() => show({})}
             onDeleted={() => show({})}
@@ -161,8 +192,8 @@ function DriversAdmin() {
               Pick a driver
             </p>
             <p className='m-0 mt-1 max-w-[44ch] text-[12px] text-slate-500 dark:text-muted-foreground'>
-              A driver tells the Hub which GitLab project deploys an app, so it can show the deploy
-              history of each environment.
+              A GitLab driver tells the Hub which project deploys an app. A Docker driver tells it
+              which Hub agent runs the app's stacks on a swarm.
             </p>
           </div>
         )}
@@ -181,11 +212,15 @@ const EMPTY_CONFIG: HubDriverConfig = {
 
 function DriverForm({
   driver,
+  fresh,
+  onFresh,
   onSaved,
   onCancel,
   onDeleted
 }: {
   driver: HubDriver | null
+  fresh: string | null
+  onFresh: (token: string | null) => void
   onSaved: (id: number) => void
   onCancel: () => void
   onDeleted?: () => void
@@ -193,43 +228,75 @@ function DriverForm({
   const qc = useQueryClient()
   const stored = !!driver?.secret
   const [name, setName] = useState(driver?.name ?? '')
-  const [config, setConfig] = useState<HubDriverConfig>({ ...EMPTY_CONFIG, ...driver?.config })
+  const [kind, setKind] = useState<'gitlab' | 'docker'>(driver?.kind ?? 'gitlab')
+  const [config, setConfig] = useState<HubDriverConfig>({
+    ...EMPTY_CONFIG,
+    ...(driver?.kind === 'docker' ? {} : driver?.config)
+  })
+  const [docker, setDocker] = useState(
+    dockerDraftOf(driver?.kind === 'docker' ? driver.config : undefined)
+  )
+  const isDocker = kind === 'docker'
   const [token, setToken] = useState(stored ? HUB_MASK : '')
   const [tried, setTried] = useState(false)
   const [failure, setFailure] = useState<unknown>(null)
+  /** Switching kind starts the other kind's fields clean (a GitLab token is no agent token). */
+  const switchKind = (next: 'gitlab' | 'docker') => {
+    if (next === kind) return
+    setKind(next)
+    setConfig({ api: '', project: '', branch: '', pin_file: '', deploy_job: '' })
+    setDocker({ ...EMPTY_DOCKER_DRAFT })
+    setToken('')
+    onFresh(null)
+    setTried(false)
+    setFailure(null)
+  }
   const set = (patch: Partial<HubDriverConfig>) => setConfig((c) => ({ ...c, ...patch }))
 
   const errors = {
     name: name.trim() ? '' : 'Give the driver a name',
-    api: /^https?:\/\/\S+$/i.test(config.api.trim())
+    api: isDocker
       ? ''
-      : 'The GitLab API address, e.g. https://gitlab.example.com/api/v4',
-    project: config.project.trim() ? '' : 'The project path, e.g. group/repo',
-    branch: config.branch.trim() ? '' : 'The branch deploys run on'
+      : /^https?:\/\/\S+$/i.test(config.api.trim())
+        ? ''
+        : 'The GitLab API address, e.g. https://gitlab.example.com/api/v4',
+    project: isDocker || config.project.trim() ? '' : 'The project path, e.g. group/repo',
+    branch: isDocker || config.branch.trim() ? '' : 'The branch deploys run on'
   }
-  const invalid = Object.values(errors).some(Boolean)
+  const invalid =
+    Object.values(errors).some(Boolean) ||
+    (isDocker && Object.values(dockerDraftErrors(docker)).some(Boolean))
 
   const save = useMutation({
     mutationFn: () => {
       const body = {
         name: name.trim(),
-        config: {
-          api: config.api.trim().replace(/\/+$/, ''),
-          project: config.project.trim(),
-          branch: config.branch.trim(),
-          pin_file: config.pin_file.trim(),
-          deploy_job: config.deploy_job.trim()
-        },
+        config: isDocker
+          ? dockerConfigBody(docker)
+          : {
+              api: config.api.trim().replace(/\/+$/, ''),
+              project: config.project.trim(),
+              branch: config.branch.trim(),
+              pin_file: config.pin_file.trim(),
+              deploy_job: config.deploy_job.trim()
+            },
         // Unchanged = not sent (the stored token stays); cleared = removed.
         ...(token !== (stored ? HUB_MASK : '') ? { secret: token.trim() } : {})
       }
       return driver
         ? api.patch<{ data: HubDriver }>(`/hub/drivers/${driver.id}`, body).then((r) => r.data.data)
-        : api
-            .post<{ data: HubDriver }>('/hub/drivers', { kind: 'gitlab', ...body })
-            .then((r) => r.data.data)
+        : api.post<{ data: HubDriver }>('/hub/drivers', { kind, ...body }).then((r) => r.data.data)
     },
     onSuccess: (saved) => {
+      // The agent check described the old address or token: it says nothing about the new ones.
+      if (
+        driver &&
+        isDocker &&
+        (token !== (stored ? HUB_MASK : '') ||
+          docker.agent_url.trim().replace(/\/+$/, '') !==
+            dockerDraftOf(driver.config).agent_url.replace(/\/+$/, ''))
+      )
+        void qc.resetQueries({ queryKey: dockerKeys.agent(driver.id) })
       setFailure(null)
       setToken(token.trim() ? HUB_MASK : '')
       void qc.invalidateQueries({ queryKey: hubKeys.drivers() })
@@ -252,7 +319,7 @@ function DriverForm({
       <div className='max-w-[720px] space-y-5'>
         <div className='flex flex-wrap items-start gap-3'>
           <h2 className='m-0 min-w-0 flex-1 truncate text-[18px] font-semibold tracking-[-0.015em] text-slate-900 dark:text-foreground'>
-            {driver ? driver.name : 'New GitLab driver'}
+            {driver ? driver.name : isDocker ? 'New Docker driver' : 'New driver'}
           </h2>
           {driver && (
             <ConfirmButton
@@ -278,66 +345,114 @@ function DriverForm({
               className='h-8 text-[13px]'
             />
           </Field>
-          <Field id={id('api')} label='GitLab API URL' error={tried ? errors.api : null}>
-            <Input
-              id={id('api')}
-              value={config.api}
-              onChange={(e) => set({ api: e.target.value })}
-              placeholder='https://gitlab.example.com/api/v4'
-              inputMode='url'
-              className='h-8 text-[13px]'
+          <Field
+            id={id('kind')}
+            label='Kind'
+            hint={driver ? 'A driver keeps its kind.' : undefined}
+          >
+            <SimpleSelect
+              value={kind}
+              onChange={(v) => switchKind(v as 'gitlab' | 'docker')}
+              options={[
+                { value: 'gitlab', label: 'GitLab (merges and runs a deploy job)' },
+                { value: 'docker', label: 'Docker (a Hub agent runs stacks on a swarm)' }
+              ]}
+              ariaLabel='Kind'
+              disabled={!!driver}
+              className='h-8 text-left text-[13px]'
+              triggerProps={{ id: id('kind') }}
             />
           </Field>
-          <Field id={id('project')} label='Project' error={tried ? errors.project : null}>
-            <Input
-              id={id('project')}
-              value={config.project}
-              onChange={(e) => set({ project: e.target.value })}
-              placeholder='group/repo'
-              className='h-8 font-mono text-[13px]'
+          {isDocker ? (
+            <DockerDriverFields
+              idPrefix={id('docker')}
+              draft={docker}
+              onChange={(patch) => setDocker((d) => ({ ...d, ...patch }))}
+              token={token}
+              onTokenChange={setToken}
+              tokenStored={stored}
+              fresh={fresh}
+              onFresh={onFresh}
+              tried={tried}
             />
-          </Field>
-          <Field id={id('branch')} label='Branch' error={tried ? errors.branch : null}>
-            <Input
-              id={id('branch')}
-              value={config.branch}
-              onChange={(e) => set({ branch: e.target.value })}
-              placeholder='production'
-              className='h-8 font-mono text-[13px]'
-            />
-          </Field>
-          <Field id={id('pin')} label='Version pin file' hint='The file that names the version.'>
-            <Input
-              id={id('pin')}
-              value={config.pin_file}
-              onChange={(e) => set({ pin_file: e.target.value })}
-              placeholder='.docker/nivaro-version'
-              className='h-8 font-mono text-[13px]'
-            />
-          </Field>
-          <Field id={id('job')} label='Deploy job' hint='The pipeline job that deploys.'>
-            <Input
-              id={id('job')}
-              value={config.deploy_job}
-              onChange={(e) => set({ deploy_job: e.target.value })}
-              placeholder='deploy_production'
-              className='h-8 font-mono text-[13px]'
-            />
-          </Field>
-          <div className='sm:col-span-2'>
-            <Field
-              id={id('token')}
-              label='Access token'
-              hint={
-                stored
-                  ? 'Stored sealed. Leave as is to keep it; clear it to remove it.'
-                  : 'A GitLab token that can read pipelines (read_api). Stored sealed.'
-              }
-            >
-              <SecretInput id={id('token')} value={token} onChange={setToken} stored={stored} />
-            </Field>
-          </div>
+          ) : (
+            <>
+              <Field id={id('api')} label='GitLab API URL' error={tried ? errors.api : null}>
+                <Input
+                  id={id('api')}
+                  value={config.api}
+                  onChange={(e) => set({ api: e.target.value })}
+                  placeholder='https://gitlab.example.com/api/v4'
+                  inputMode='url'
+                  className='h-8 text-[13px]'
+                />
+              </Field>
+              <Field id={id('project')} label='Project' error={tried ? errors.project : null}>
+                <Input
+                  id={id('project')}
+                  value={config.project}
+                  onChange={(e) => set({ project: e.target.value })}
+                  placeholder='group/repo'
+                  className='h-8 font-mono text-[13px]'
+                />
+              </Field>
+              <Field id={id('branch')} label='Branch' error={tried ? errors.branch : null}>
+                <Input
+                  id={id('branch')}
+                  value={config.branch}
+                  onChange={(e) => set({ branch: e.target.value })}
+                  placeholder='production'
+                  className='h-8 font-mono text-[13px]'
+                />
+              </Field>
+              <Field
+                id={id('pin')}
+                label='Version pin file'
+                hint='The file that names the version.'
+              >
+                <Input
+                  id={id('pin')}
+                  value={config.pin_file}
+                  onChange={(e) => set({ pin_file: e.target.value })}
+                  placeholder='.docker/nivaro-version'
+                  className='h-8 font-mono text-[13px]'
+                />
+              </Field>
+              <Field id={id('job')} label='Deploy job' hint='The pipeline job that deploys.'>
+                <Input
+                  id={id('job')}
+                  value={config.deploy_job}
+                  onChange={(e) => set({ deploy_job: e.target.value })}
+                  placeholder='deploy_production'
+                  className='h-8 font-mono text-[13px]'
+                />
+              </Field>
+              <div className='sm:col-span-2'>
+                <Field
+                  id={id('token')}
+                  label='Access token'
+                  hint={
+                    stored
+                      ? 'Stored sealed. Leave as is to keep it; clear it to remove it.'
+                      : 'A GitLab token that can read pipelines (read_api). Stored sealed.'
+                  }
+                >
+                  <SecretInput id={id('token')} value={token} onChange={setToken} stored={stored} />
+                </Field>
+              </div>
+            </>
+          )}
         </div>
+
+        {isDocker && driver && (
+          <AgentCheck
+            driverId={driver.id}
+            dirty={
+              token !== (stored ? HUB_MASK : '') ||
+              JSON.stringify(docker) !== JSON.stringify(dockerDraftOf(driver.config))
+            }
+          />
+        )}
 
         {failure != null && (
           <ErrorNotice description={hubError(failure, 'Could not save the driver')} />

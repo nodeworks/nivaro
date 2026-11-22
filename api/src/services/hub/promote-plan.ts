@@ -40,7 +40,7 @@ const realDigest = (d: string | 'present' | null): d is string => !!d && d !== '
  * against the older API while the portal redeploys, and a GitLab refusal of the portal's rerun
  * stops the rollback before the API moved.
  */
-export function runOrder<T extends { position: number; kind: 'api' | 'frontend' }>(
+export function runOrder<T extends { position: number; kind: 'api' | 'frontend' | 'stack' }>(
   steps: T[],
   kind: 'promote' | 'rollback'
 ): T[] {
@@ -83,6 +83,10 @@ export function buildPromotionPlan(input: PlanInput): PromotionPlan {
   const versionOk = VERSION_RE.test(version)
   const components = [...input.components].sort((a, b) => a.position - b.position)
   const hasApi = components.some((c) => c.kind === 'api')
+  // phase 4: stack components (Docker placements). The first environment of an all-stack app
+  // takes any published release (Decision 11) — nothing before it can run one.
+  const hasStack = components.some((c) => c.kind === 'stack')
+  const firstAllStack = !previous && hasStack && components.every((c) => c.kind === 'stack')
 
   if (!target.hub_managed)
     block(
@@ -93,13 +97,29 @@ export function buildPromotionPlan(input: PlanInput): PromotionPlan {
   if (!versionOk) block('BAD_VERSION', `"${version}" is not a version (x.y.z)`)
   if (!components.length) block('NO_COMPONENTS', `${target.key} has no components to deploy`)
 
-  if (versionOk) {
+  // Apply now (P4-30): the running version again, through the Hub agent only — no promotion
+  // checks (it is not a promotion), but every stack check below still applies.
+  if (input.apply && components.some((c) => c.kind !== 'stack'))
+    block(
+      'KIND_DRIVER_MISMATCH',
+      `${target.key} has components that do not deploy through a Docker driver — Apply now redeploys stacks only`
+    )
+  if (versionOk && !input.apply) {
     if (kind === 'promote') {
       if (!previous) {
-        block(
-          'NO_PREVIOUS_ENVIRONMENT',
-          `${target.key} is the first environment — there is nothing to promote from`
-        )
+        if (!firstAllStack)
+          block(
+            'NO_PREVIOUS_ENVIRONMENT',
+            `${target.key} is the first environment — there is nothing to promote from`
+          )
+        // phase 4: in place of PREVIOUS_NEVER_RAN (a missing digest says IMAGE_MISSING below).
+        else if (input.digest && !(input.registryVersions ?? []).includes(version))
+          block(
+            'IMAGE_MISSING',
+            input.registryError
+              ? `couldn't read the published releases (${input.registryError}) — ${version} cannot be checked`
+              : `${version} is not a published release of the Nivaro image`
+          )
       } else if (
         input.previousVersion !== version &&
         !input.previousDeployedVersions.includes(version)
@@ -127,7 +147,12 @@ export function buildPromotionPlan(input: PlanInput): PromotionPlan {
       )
     if (input.targetVersion === version) {
       if (!restamp && !(kind === 'promote' && unfinished(input, components)))
-        block('ALREADY_RUNS', `${target.key} already runs ${version}`)
+        block(
+          'ALREADY_RUNS',
+          hasStack
+            ? `${target.key} already runs ${version} — to deploy changed stack settings or extension pins, use Apply now in its stack panel`
+            : `${target.key} already runs ${version}`
+        )
     } else if (kind === 'promote' && input.targetVersion && VERSION_RE.test(input.targetVersion)) {
       if (compareVersions(version, input.targetVersion) < 0)
         block(
@@ -144,8 +169,9 @@ export function buildPromotionPlan(input: PlanInput): PromotionPlan {
       `no deploy driver for ${missingDrivers.map((c) => c.name).join(', ')} — set one on the component`
     )
 
-  // A rollback redeploys recorded builds and never pins: the registry does not matter to it.
-  if (hasApi && kind === 'promote') {
+  // A rollback redeploys recorded builds and never pins: the registry does not matter to it
+  // (a stack rollback deploys the recorded image digest, P4-29; so does Apply now, P4-30).
+  if (kind === 'promote' && !input.apply && (hasApi || hasStack)) {
     if (!input.digest) block('IMAGE_MISSING', `the image for ${version} is not on the registry`)
     else if (input.digest === 'present')
       block(
@@ -154,7 +180,9 @@ export function buildPromotionPlan(input: PlanInput): PromotionPlan {
       )
   }
 
-  const steps: PromotionStep[] = components.map((c) => stepFor(c, input))
+  const steps: PromotionStep[] = components.map((c) =>
+    c.kind === 'stack' ? stackStepFor(c, input) : stepFor(c, input)
+  )
   for (const s of steps) {
     const onTarget = input.pinOnTarget?.[s.position]
     if (
@@ -229,12 +257,15 @@ export function buildPromotionPlan(input: PlanInput): PromotionPlan {
       )
   }
 
+  stackBlockers(input, components, block)
+
   return {
     ok: blockers.length === 0,
     blockers,
-    lines: linesFor(input, components, steps, blockers.length > 0),
+    lines: stackAwareLines(input, components, steps, blockers.length > 0),
     steps,
-    plan_hash: planHash(input, steps)
+    plan_hash: planHash(input, steps),
+    ...(input.apply ? { apply: true } : {})
   }
 }
 
@@ -247,6 +278,7 @@ export function buildPromotionPlan(input: PlanInput): PromotionPlan {
 export function planHash(input: PlanInput, steps: PromotionStep[]): string {
   const body = {
     kind: input.kind,
+    ...(input.apply ? { apply: true } : {}),
     version: input.version,
     from: input.targetVersion,
     steps: [...steps]
@@ -269,7 +301,16 @@ export function planHash(input: PlanInput, steps: PromotionStep[]): string {
         s.pinText,
         s.beforeJob,
         s.deployJob,
-        s.want
+        s.want,
+        // phase 4, docker steps: what the agent is asked to run (a change trips PLAN_CHANGED).
+        s.driver ?? 'gitlab',
+        s.stack?.name ?? null,
+        s.stack?.image ?? null,
+        s.stack?.size ?? null,
+        s.stack
+          ? Object.entries(s.stack.extensions).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+          : null,
+        s.stack?.agentOrigin ?? null
       ])
   }
   return createHash('sha256').update(JSON.stringify(body)).digest('hex')
@@ -386,9 +427,11 @@ function linesFor(
     `${target.key} is currently ${state}${input.targetVersion ? ` (runs ${input.targetVersion})` : ''}`
   )
   lines.push(
-    input.kind === 'promote'
-      ? `promote ${version} from ${previous?.key ?? '(none)'} (${previous ? (input.previousVersion ?? 'no answer') : '-'}) to ${target.key}`
-      : `roll ${target.key} back from ${input.targetVersion ?? '(unknown)'} to ${version}`
+    input.apply
+      ? `apply ${target.key}'s saved stack settings and extension pins to the version it runs (${version})`
+      : input.kind === 'promote'
+        ? `promote ${version} from ${previous?.key ?? '(none)'} (${previous ? (input.previousVersion ?? 'no answer') : '-'}) to ${target.key}`
+        : `roll ${target.key} back from ${input.targetVersion ?? '(unknown)'} to ${version}`
   )
   if (input.kind === 'promote' && components.some((c) => c.kind === 'api')) {
     const d = input.digest
@@ -453,6 +496,204 @@ function linesFor(
   lines.push(
     `The deploy jobs run their own health checks; ${target.key}'s current status does not stop a promotion`
   )
+  return lines
+}
+
+// ---------------------------------------------------------------------------------------------
+// phase 4: stack components (Docker placements, deployed through the Hub agent). Kept apart from
+// the phase-2 GitLab planning above: a plan with no stack component never reaches this code.
+
+const short12 = (pin: string) => {
+  const at = pin.indexOf('@')
+  return `${pin.slice(0, at)}@${pin
+    .slice(at + 1)
+    .replace(/^sha256:/, '')
+    .slice(0, 12)}`
+}
+
+/** One docker step: no branch, job or pin file — the runner renders the spec and asks the agent. */
+function stackStepFor(c: HubComponent, input: PlanInput): PromotionStep {
+  const f = input.stacks?.[c.position]
+  const base = input.target.base_url.replace(/\/+$/, '')
+  return {
+    position: c.position,
+    component: c.name,
+    kind: c.kind,
+    driverId: c.driver_id,
+    driver: 'docker',
+    sourceSha: null,
+    targetBranch: '',
+    pinText: null,
+    pinFile: null,
+    beforeJob: null,
+    deployJob: '',
+    verifyUrl: `${base}/api/version`,
+    verifyField: 'version',
+    want: input.version,
+    stack: {
+      name: f?.stackName ?? '',
+      // A rollback deploys the image the Hub recorded for that version here (P4-29); a promote
+      // the registry's digest for the tag, read at plan time.
+      image:
+        input.kind === 'rollback' || input.apply
+          ? (f?.deployedImage ?? '')
+          : realDigest(input.digest) && f
+            ? `${f.imageRepo}@${input.digest}`
+            : '',
+      size: f?.size ?? 'small',
+      extensions: { ...(f?.extensions ?? {}) },
+      agentOrigin: f?.agentOrigin ?? ''
+    }
+  }
+}
+
+const listOf = (xs: string[]) => xs.join(', ')
+
+/** Blockers of stack components; also the driver-kind check of every component. */
+function stackBlockers(
+  input: PlanInput,
+  components: HubComponent[],
+  block: (code: PromotionBlockerCode, text: string) => void
+) {
+  const { target, previous, kind, version } = input
+  const versionOk = VERSION_RE.test(version)
+  for (const c of components) {
+    const d = input.drivers[c.driver_id]
+    if (!d) continue
+    const docker = d.kind === 'docker'
+    if (docker === (c.kind === 'stack')) continue
+    block(
+      'KIND_DRIVER_MISMATCH',
+      c.kind === 'stack'
+        ? `${c.name}: a stack deploys through a Docker driver, not a GitLab one`
+        : `${c.name}: ${c.kind} components deploy through a GitLab driver, not a Docker one`
+    )
+  }
+  for (const c of components) {
+    if (c.kind !== 'stack' || input.drivers[c.driver_id]?.kind !== 'docker') continue
+    const f = input.stacks?.[c.position]
+    if (!f) {
+      // A bad version is not gathered (BAD_VERSION says why); otherwise it should have been.
+      if (versionOk)
+        block('AGENT_UNREACHABLE', `${c.name}: the Hub agent was not asked about this stack`)
+      continue
+    }
+    const at = `the Hub agent at ${f.agentOrigin ?? '(no address)'}`
+    if (!f.stackName)
+      block('NO_STACK_NAME', `${c.name}: the placement names no swarm stack — set its stack name`)
+    if (f.agent === 'unreachable') block('AGENT_UNREACHABLE', `${at} does not answer`)
+    else if (f.agent === 'refused')
+      block('AGENT_REFUSED', `${at} refused the Hub — check the driver's agent token`)
+    else if (f.agent === 'incompatible')
+      block('AGENT_INCOMPATIBLE', `${at} speaks another agent API than this Hub`)
+    if (f.agent === 'ok') {
+      if (!f.imageAllowed)
+        block('IMAGE_NOT_ALLOWED', `${at} does not allow the image ${f.imageRepo}`)
+      if (f.disallowedExtensions.length)
+        block(
+          'EXTENSION_NOT_ALLOWED',
+          `${at} does not allow the image of extension ${listOf(f.disallowedExtensions)}`
+        )
+      if (f.publishPortProblem) block('PUBLISH_PORT_NOT_ALLOWED', f.publishPortProblem)
+      if (f.stackState === 'not_hub' || f.stackState === 'other_owner')
+        block(
+          'STACK_NOT_HUB',
+          f.stackState === 'not_hub'
+            ? `the swarm already runs a stack named ${f.stackName} that the Hub did not create`
+            : `the stack ${f.stackName} belongs to another Hub app or environment`
+        )
+    }
+    if ((kind === 'rollback' || input.apply) && f.recordedImageProblem)
+      block(f.recordedImageProblem.code, f.recordedImageProblem.text)
+    if (f.extensionsUnreadable) block('EXTENSION_UNPINNED', f.extensionsUnreadable)
+    else if (f.missingExtensions.length)
+      block(
+        'EXTENSION_UNPINNED',
+        kind === 'rollback'
+          ? `the ${version} deploy installed no pin for extension ${listOf(f.missingExtensions)}`
+          : `${previous?.key ?? target.key} has no pin for extension ${listOf(f.missingExtensions)}`
+      )
+    if (f.settingsMissing.length)
+      block(
+        'STACK_SETTINGS_MISSING',
+        f.settingsMissing[0] === '(no settings)'
+          ? `${target.key} has no stack settings yet`
+          : `${target.key}'s stack settings are missing ${listOf(f.settingsMissing)}`
+      )
+    if (f.hostnameProblems.length) block('HOSTNAME_NOT_ALLOWED', f.hostnameProblems.join(' '))
+    if (f.hostnameTaken.length) block('HOSTNAME_TAKEN', f.hostnameTaken.join(' '))
+    if (f.renderProblem)
+      block(
+        f.renderProblem.code === 'TEMPLATE_NONE' ? 'TEMPLATE_NONE' : 'STACK_SETTINGS_INVALID',
+        f.renderProblem.text
+      )
+  }
+}
+
+/** The phase-2 lines with each stack step's lines in place of a merge/job/verify for it. */
+function stackAwareLines(
+  input: PlanInput,
+  components: HubComponent[],
+  steps: PromotionStep[],
+  refused: boolean
+): string[] {
+  const docker = steps.filter((s) => s.driver === 'docker')
+  if (!docker.length) return linesFor(input, components, steps, refused)
+  const gitlab = steps.filter((s) => s.driver !== 'docker')
+  const lines = linesFor(
+    input,
+    components.filter((c) => gitlab.some((s) => s.position === c.position)),
+    gitlab,
+    refused
+  )
+  // A refused plan lists only facts: linesFor then ends without its closing line.
+  const tail = refused ? null : (lines.pop() as string)
+  for (const s of docker) lines.push(...stackLines(input, s))
+  if (tail === null) return lines
+  lines.push(
+    gitlab.length
+      ? tail
+      : "swarm's health checks and the verify above are the health check — the target's state above does not block"
+  )
+  return lines
+}
+
+function stackLines(input: PlanInput, s: PromotionStep): string[] {
+  const f = input.stacks?.[s.position]
+  const name = s.stack?.name || s.component
+  const d = input.digest
+  const recorded = input.kind === 'rollback' || input.apply ? s.stack?.image || null : null
+  const digest =
+    input.kind === 'rollback' || input.apply
+      ? recorded
+        ? `the recorded image ${short12(recorded)}`
+        : 'no recorded image'
+      : realDigest(d)
+        ? `${d.slice(0, 19)}…`
+        : !d
+          ? 'image MISSING'
+          : 'no digest'
+  const roles = f?.roles?.length
+    ? f.roles.map((r) => `${r.role} ×${r.replicas}`).join(', ')
+    : 'roles unknown'
+  const lines = [
+    `stack ${name}: deploy nivaro ${input.version} (${digest}) as ${f?.size ?? '?'}: ${roles} through the agent at ${f?.agentOrigin ?? '?'}`
+  ]
+  for (const id of Object.keys(s.stack?.extensions ?? {}).sort())
+    lines.push(
+      `extension ${id}: ${short12((s.stack as { extensions: Record<string, string> }).extensions[id])}`
+    )
+  if (f?.stackState === 'none')
+    lines.push(`stack ${name}: not on the swarm yet — the agent creates it`)
+  else if (f?.stackState === 'unknown' && f.agent === 'ok')
+    lines.push(
+      `stack ${name}: the agent could not say what runs under this name now — the deploy may be refused`
+    )
+  lines.push(
+    `stack ${name}: verify ${urlForLog(s.verifyUrl ?? '')} answers version = ${input.version} twice, then the preflight must not fail`
+  )
+  if (input.drivers[s.driverId]?.dns_mode === 'manual')
+    lines.push('the name may not serve yet — the deploy then ends waiting for the name')
   return lines
 }
 

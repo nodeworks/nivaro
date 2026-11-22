@@ -133,8 +133,6 @@ export async function opsLogsRoutes(app: FastifyInstance) {
       'MAIL_TEST_MODE',
       'MAIL_TEST_RECIPIENT',
       'SMS_TEST_MODE',
-      'EFP_OPS_TAKEOVER',
-      'EFP_NUVOLO_USER',
       'REQUIRED_EXTENSIONS',
       'MIGRATION_SAFE_MODE',
       'RUNTIME_RSS_WARN_MB',

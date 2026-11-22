@@ -15,10 +15,11 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { cn, formatDateTime, formatRelative } from '@/lib/utils'
 import {
   blockerCopy,
+  blockerDetailLine,
   blockersOf,
   cancelPromotion,
   changedPlanOf,
-  fetchPromotable,
+  fetchPromotableReleases,
   fetchPromotion,
   fetchPromotionPlan,
   fetchPromotions,
@@ -34,6 +35,7 @@ import {
   promotionPlanOf,
   promotionStatusTone,
   promotionStatusWords,
+  RELEASES_ERROR_TEXT,
   startPromotion
 } from './hub-api'
 import { dangerArmed, dangerGhost, ghostButton, SectionCard } from './hub-parts'
@@ -125,7 +127,7 @@ function PromoteForm({
   const qc = useQueryClient()
   const promotable = useQuery({
     queryKey: hubKeys.promotable(env.id),
-    queryFn: () => fetchPromotable(env.id),
+    queryFn: () => fetchPromotableReleases(env.id),
     staleTime: 15_000
   })
   const choices = useMemo(() => {
@@ -224,19 +226,29 @@ function PromoteForm({
         onRetry={() => void promotable.refetch()}
       />
     )
+  const releasesNote =
+    kind === 'promote' && promotable.data.releases_error ? (
+      <p role='status' className='m-0 text-[12px] text-amber-800 dark:text-amber-300'>
+        {RELEASES_ERROR_TEXT}
+      </p>
+    ) : null
   if (choices.length === 0)
     return (
-      <p className='m-0 text-[12px] text-slate-600 dark:text-slate-300'>
-        {kind === 'rollback'
-          ? 'Nothing to roll back to: this environment has no earlier successful deploy.'
-          : promotable.data?.previous === null
-            ? 'Nothing to promote: this is the first environment, so new versions reach it through its own pipeline.'
-            : 'Nothing to promote: the environment before this one runs no newer version.'}
-      </p>
+      <div className='space-y-1.5'>
+        {releasesNote}
+        <p className='m-0 text-[12px] text-slate-600 dark:text-slate-300'>
+          {kind === 'rollback'
+            ? 'Nothing to roll back to: this environment has no earlier successful deploy.'
+            : promotable.data?.previous === null
+              ? 'Nothing to promote: this is the first environment, so new versions reach it through its own pipeline.'
+              : 'Nothing to promote: the environment before this one runs no newer version.'}
+        </p>
+      </div>
     )
 
   return (
     <div className='space-y-3'>
+      {releasesNote}
       <div className='max-w-[280px] space-y-1.5'>
         <label
           htmlFor={`${idPrefix}-version`}
@@ -358,9 +370,9 @@ function PlanPreview({ plan, blockers }: { plan: PromotionPlan; blockers: Promot
                   {copy.hint && (
                     <span className='block text-red-700/90 dark:text-red-300/90'>{copy.hint}</span>
                   )}
-                  {b.text && b.text !== copy.title && (
-                    <span className='mt-0.5 block break-words text-[11px] text-red-700/80 dark:text-red-300/80'>
-                      {b.text}
+                  {blockerDetailLine(b, copy.title) && (
+                    <span className='mt-0.5 block break-words text-[11px] text-slate-600 dark:text-slate-400'>
+                      {blockerDetailLine(b, copy.title)}
                     </span>
                   )}
                 </li>
@@ -399,6 +411,16 @@ export function stepRows(plan: PromotionPlan | null, kind: PromotionKind = 'prom
     (a, b) => runRank(kind, a) - runRank(kind, b) || a.position - b.position
   )
   for (const s of ordered) {
+    if (s.driver === 'docker' || s.kind === 'stack') {
+      // A stack deploys through the Hub agent: one step, no merge or pin row.
+      rows.push({
+        key: `deploy-${s.position}`,
+        phase: 'deploy',
+        component: s.component,
+        label: `${kind === 'rollback' ? 'Redeploy' : 'Deploy'} stack ${s.stack?.name ?? s.component}`
+      })
+      continue
+    }
     // What the run really does for this step: a rollback reruns an earlier build (nothing is
     // merged or pinned); a no-op API step finds the version already running.
     const [push, deploy] =
@@ -698,7 +720,9 @@ function PromotionProgress({
               <Ban className='h-3.5 w-3.5' aria-hidden /> Cancel
             </ConfirmButton>
             <span className='text-[11px] text-slate-500 dark:text-muted-foreground'>
-              Stops at the next safe point; a merge is never left without its pin.
+              {rows.some((r) => r.phase === 'push')
+                ? 'Stops at the next safe point; a merge is never left without its pin.'
+                : 'Stops at the next safe point; a stack Docker already has is left to settle first.'}
             </span>
           </>
         ) : !live ? (
@@ -734,7 +758,7 @@ export function PromotionHistory({
   })
   const promotable = useQuery({
     queryKey: hubKeys.promotable(env.id),
-    queryFn: () => fetchPromotable(env.id),
+    queryFn: () => fetchPromotableReleases(env.id),
     staleTime: 15_000,
     enabled: canPromote
   })
@@ -792,7 +816,7 @@ export function PromotionHistory({
                 </span>
               )}
               <span className='text-[11px] text-slate-500 dark:text-muted-foreground'>
-                {KIND_NOUN[r.kind] ?? r.kind}
+                {r.apply ? 'Apply settings' : (KIND_NOUN[r.kind] ?? r.kind)}
               </span>
               <span className={cn('text-[12px] font-medium', promotionStatusTone(r.status))}>
                 {promotionStatusWords(r.status)}
@@ -838,7 +862,7 @@ export function PromotionHistory({
                   )}
                 </td>
                 <td className='py-2 pr-4 text-slate-600 dark:text-slate-300'>
-                  {KIND_NOUN[r.kind] ?? r.kind}
+                  {r.apply ? 'Apply settings' : (KIND_NOUN[r.kind] ?? r.kind)}
                 </td>
                 <td className={cn('py-2 pr-4 font-medium', promotionStatusTone(r.status))}>
                   {promotionStatusWords(r.status)}

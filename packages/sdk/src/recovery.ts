@@ -174,11 +174,13 @@ export function isRecoverable(
   if (!read && !outcome.keyed) return false
   const { status, code } = outcome
   if (status === undefined) return true
-  if (status === 502) return true
+  // A 502/504 carrying the app's own code is the app's answer about an upstream it relays (a
+  // Hub agent, GitLab): the server is there, so nothing is waited out (P4-25).
+  if (status === 502) return code == null
   if (status === 503) return code == null || PASSING_503.has(code)
   // The proxy stopped waiting for a slow request: a keyed write's retry waits for the
   // first try's answer; a read would only run slowly again.
-  if (status === 504) return outcome.keyed
+  if (status === 504) return code == null && outcome.keyed
   // The first try of this very write is still running on the server: wait for its answer.
   if (status === 409 && code === 'IDEMPOTENCY_IN_PROGRESS') return outcome.keyed
   return false
@@ -187,6 +189,8 @@ export function isRecoverable(
 /** True when the final answer shows the server is back (a real answer, not "away" or broken). */
 export function isServerBack(status: number | undefined, code?: string | null): boolean {
   if (status === undefined) return false
+  // The app's own coded 502/504 (an upstream refusal): the server answered.
+  if ((status === 502 || status === 504) && code) return true
   if (status >= 500) return false
   return code !== 'IDEMPOTENCY_IN_PROGRESS'
 }
@@ -251,7 +255,7 @@ export async function recoveryVerdict(
   if (!res) return { retry: false, back: false }
   if (res.ok) return { retry: false, back: true }
   const code =
-    res.status === 409 || res.status === 503
+    res.status === 409 || res.status === 502 || res.status === 503 || res.status === 504
       ? await res
           .clone()
           .json()

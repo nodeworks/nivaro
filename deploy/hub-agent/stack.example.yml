@@ -1,0 +1,96 @@
+# Nivaro Hub agent: the agent's own swarm stack (an example, copy and edit).
+#
+#   openssl rand -hex 32 > token.txt                        # a random 256-bit token
+#   docker secret create hub_agent_token   ./token.txt      # (the floor is 32+ chars, 8+ distinct)
+#   (optional) the same for a separate key mounted as HUB_AGENT_HMAC_KEY_FILE
+#   docker secret create hub_agent_tls_cert ./agent.crt
+#   docker secret create hub_agent_tls_key  ./agent.key
+#   mkdir -p /srv/nivaro-hub/extensions
+#   docker stack deploy -c stack.example.yml nivaro-hub-agent
+#
+# Run it on a swarm MANAGER only (the Engine answers swarm calls there). The
+# Hub calls it over HTTPS on port 7480 with the token as bearer.
+services:
+  agent:
+    image: nodeworks/nivaro-hub-agent:latest   # pin an x.y.z or a digest in production
+    environment:
+      # Secrets are read from files only.
+      HUB_AGENT_TOKEN_FILE: /run/secrets/hub_agent_token
+      HUB_AGENT_TLS_CERT_FILE: /run/secrets/hub_agent_tls_cert
+      HUB_AGENT_TLS_KEY_FILE: /run/secrets/hub_agent_tls_key
+      HUB_AGENT_LISTEN: 0.0.0.0:7480
+      # Image repositories a stack may name (no tag, no digest). Extension
+      # images share this list.
+      HUB_AGENT_IMAGES: nodeworks/nivaro
+      # Edge: traefik (labels on the app services) or publish (host ports).
+      HUB_AGENT_EDGE: traefik
+      HUB_AGENT_EDGE_NETWORK: edge
+      HUB_AGENT_ENTRYPOINTS: websecure
+      HUB_AGENT_HOST_SUFFIXES: .apps.example.com
+      # HUB_AGENT_CERT_RESOLVER: letsencrypt
+      # Extension unpack folders. The app services bind the HOST path, so the
+      # container path and the host path are the same folder here.
+      HUB_AGENT_EXTENSIONS_ROOT: /srv/nivaro-hub/extensions
+      HUB_AGENT_EXTENSIONS_HOST_ROOT: /srv/nivaro-hub/extensions
+      # Set on only when that folder is shared storage every node mounts.
+      # HUB_AGENT_EXTENSIONS_SHARED: 'on'
+    secrets:
+      - hub_agent_token
+      - hub_agent_tls_cert
+      - hub_agent_tls_key
+    volumes:
+      # The agent's one privileged mount: the Docker socket.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /srv/nivaro-hub/extensions:/srv/nivaro-hub/extensions
+    networks:
+      - hub
+    # Reach: a Hub that runs on this swarm joins the `hub` network and calls
+    # https://agent:7480. A Hub elsewhere needs a published port instead, and
+    # an internal network cannot publish one: make `hub` a plain overlay
+    # (drop `internal: true`) and add
+    #   ports: [{target: 7480, published: 7480, protocol: tcp, mode: host}]
+    # with the host firewall limited to the Hub's address.
+    # The agent runs as root, which already owns the socket's access path, so it
+    # needs no capability. (A host whose socket is not owned by root needs group
+    # access instead: `user: "0:<docker gid>"` and a matching socket mode.)
+    # The image's health check, spelled out: a TCP connect, but a node process per
+    # check — on a loaded host 5 s was too short and swarm killed a healthy agent.
+    healthcheck:
+      test: ["CMD", "node", "dist/healthcheck.js"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    stop_grace_period: 15s
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: any
+        delay: 5s
+      resources:
+        limits:
+          memory: 256M
+
+networks:
+  hub:
+    driver: overlay
+    internal: true
+    attachable: true
+
+secrets:
+  hub_agent_token:
+    external: true
+  hub_agent_tls_cert:
+    external: true
+  hub_agent_tls_key:
+    external: true

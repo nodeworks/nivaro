@@ -115,4 +115,13 @@ describe('admin recovery adapter', () => {
     expect(axiosVerdict('GET', false, fail(c, 503, 'SERVER_BUSY')).retry).toBe(true)
     expect(axiosVerdict('PATCH', true, fail(c, 409, 'IDEMPOTENCY_IN_PROGRESS')).retry).toBe(true)
   })
+
+  it('P4-25: a 502/504 with the app’s own code is an answer; a bare gateway 502 is waited out', () => {
+    const c = cfg('get', '/hub/drivers/3/agent')
+    const coded = axiosVerdict('GET', false, fail(c, 502, 'AGENT_UNREACHABLE'))
+    expect([coded.retry, coded.back]).toEqual([false, true])
+    expect(axiosVerdict('POST', true, fail(c, 504, 'AGENT_TIMEOUT')).retry).toBe(false)
+    const bare = axiosVerdict('GET', false, fail(c, 502))
+    expect([bare.retry, bare.back]).toEqual([true, false])
+  })
 })

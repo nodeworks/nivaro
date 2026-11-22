@@ -5,6 +5,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 // Nivaro Hub (phase 2): a Hub admin orders an environment's deploy components and turns on
 // "the Hub deploys this environment" from the environment's edit panel.
 
+// jsdom has no layout or pointer capture; Radix Select needs them to open.
+const proto = Element.prototype as unknown as Record<string, unknown>
+proto.scrollIntoView ??= vi.fn()
+proto.hasPointerCapture ??= () => false
+proto.releasePointerCapture ??= vi.fn()
+const openSelect = (el: HTMLElement) => fireEvent.keyDown(el, { key: 'Enter' })
+
 const h = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() }))
 
 vi.mock('@/lib/api', () => ({
@@ -251,5 +258,87 @@ describe('fix round 1', () => {
       ['/hub/components/32', 2],
       ['/hub/components/31', 1]
     ])
+  })
+
+  it('phase 4: a stack is offered only for a Docker driver and hides the GitLab fields', async () => {
+    const docker = {
+      id: 9,
+      kind: 'docker',
+      name: 'Swarm A',
+      config: { agent_url: 'https://swarm.example.com:8443', dns_mode: 'automatic' },
+      secret: '••••••'
+    }
+    h.get.mockImplementation(async (url: string) => {
+      if (url === '/hub/placements/5/components') return { data: { data: [implicit] } }
+      if (url === '/hub/drivers') return { data: { data: [...drivers, docker] } }
+      throw new Error(`unexpected GET ${url}`)
+    })
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={qc}>
+        <HubComponentsEditor appId={1} env={env} idPrefix='c' />
+      </QueryClientProvider>
+    )
+    await screen.findByRole('list', { name: 'Deploy components' })
+    fireEvent.click(screen.getByRole('button', { name: 'Add component' }))
+    // GitLab driver: API and frontend, never a stack; the branch fields show.
+    openSelect(screen.getByRole('combobox', { name: 'Kind' }))
+    expect(screen.queryByRole('option', { name: /^Stack/ })).toBeNull()
+    expect(screen.getByRole('option', { name: /^API/ })).toBeInTheDocument()
+    fireEvent.keyDown(screen.getByRole('listbox'), { key: 'Escape' })
+    expect(screen.getByLabelText('Source branch')).toBeInTheDocument()
+    // Docker driver: only the stack; branch and job fields are gone.
+    openSelect(screen.getByRole('combobox', { name: 'Driver' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'Swarm A' }))
+    openSelect(screen.getByRole('combobox', { name: 'Kind' }))
+    expect(await screen.findByRole('option', { name: /^Stack/ })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: /^API/ })).toBeNull()
+    fireEvent.keyDown(screen.getByRole('listbox'), { key: 'Escape' })
+    expect(screen.queryByLabelText('Source branch')).toBeNull()
+    expect(screen.queryByLabelText('Target branch')).toBeNull()
+    expect(screen.queryByLabelText('Before job')).toBeNull()
+    expect(screen.queryByLabelText('Deploy job')).toBeNull()
+  })
+
+  it('phase 4: going back to GitLab restores the previous kind, and a stack body has no source branch', async () => {
+    const docker = {
+      id: 9,
+      kind: 'docker',
+      name: 'Swarm A',
+      config: { agent_url: 'https://swarm.example.com:8443', dns_mode: 'automatic' },
+      secret: '••••••'
+    }
+    h.get.mockImplementation(async (url: string) => {
+      if (url === '/hub/placements/5/components') return { data: { data: [stored] } }
+      if (url === '/hub/drivers') return { data: { data: [...drivers, docker] } }
+      throw new Error(`unexpected GET ${url}`)
+    })
+    h.post.mockResolvedValue({ data: { data: {} } })
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={qc}>
+        <HubComponentsEditor appId={1} env={env} idPrefix='c' />
+      </QueryClientProvider>
+    )
+    await screen.findByRole('list', { name: 'Deploy components' })
+    fireEvent.click(screen.getByRole('button', { name: 'Add component' }))
+    // A second component defaults to a frontend; docker and back keeps it.
+    expect(screen.getByRole('combobox', { name: 'Kind' })).toHaveTextContent(/Frontend/)
+    openSelect(screen.getByRole('combobox', { name: 'Driver' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'Swarm A' }))
+    openSelect(screen.getByRole('combobox', { name: 'Driver' }))
+    fireEvent.click(await screen.findByRole('option', { name: drivers[0].name }))
+    await waitFor(() =>
+      expect(screen.getByRole('combobox', { name: 'Kind' })).toHaveTextContent(/Frontend/)
+    )
+    // Stack body: no source_branch key.
+    openSelect(screen.getByRole('combobox', { name: 'Driver' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'Swarm A' }))
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'stack' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save component' }))
+    await waitFor(() => expect(h.post).toHaveBeenCalled())
+    const body = h.post.mock.calls.at(-1)?.[1] as Record<string, unknown>
+    expect(body.kind).toBe('stack')
+    expect('source_branch' in body).toBe(false)
   })
 })

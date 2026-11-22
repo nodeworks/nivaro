@@ -1,0 +1,55 @@
+{
+  "app": {
+    "id": 7,
+    "key": "acme",
+    "name": "Acme",
+    "signin_mode": "direct",
+    "adopted": false,
+    "extensions": ["acme-tools"]
+  },
+  "env": {
+    "id": 21,
+    "app_id": 7,
+    "key": "staging",
+    "position": 1,
+    "status": "active",
+    "base_url": "https://acme-staging.apps.example.com",
+    "hostnames": ["ACME-Staging.apps.example.com"],
+    "placement_id": 4,
+    "version_pin": "0.3.200",
+    "hub_token": "••••••",
+    "hub_managed": true
+  },
+  "driver": {
+    "agent_url": "https://agent.example.com",
+    "dns_mode": "automatic",
+    "wildcard_domain": "apps.example.com",
+    "edge_target": null
+  },
+  "edge": "traefik",
+  "row": {
+    "environment_id": 21,
+    "size": "medium",
+    "redis": "bundled",
+    "publish_port": null,
+    "settings": {
+      "DB_CLIENT": "mssql",
+      "DB_HOST": "db.internal.example.com",
+      "DB_DATABASE": "acme_staging",
+      "DB_USER": "acme_app"
+    },
+    "secrets": "enc:v1:not-read-by-the-renderer"
+  },
+  "secrets": {
+    "DB_PASSWORD": "example-db-password-not-real",
+    "SESSION_SECRET": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ENCRYPTION_KEY": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+  },
+  "hubToken": "example-hub-token-not-real-0000000000000000",
+  "version": "0.3.208",
+  "image": "nodeworks/nivaro@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "extensions": {
+    "acme-tools": "registry.example.com/acme/tools-ext@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+  },
+  "hubPublicUrl": null
+}

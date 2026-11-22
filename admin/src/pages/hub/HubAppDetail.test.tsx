@@ -139,6 +139,15 @@ describe('HubAppDetail', () => {
     expect(screen.getByText('Pat Owner')).toBeInTheDocument()
   })
 
+  it('P4-25: the environments table lays out fixed, so it never scrolls sideways on a desktop', async () => {
+    renderDetail()
+    const table = await screen.findByRole('table')
+    expect(table.className).toContain('table-fixed')
+    // The status cell lets its chip truncate (the chip carries the full words as a tip).
+    const chip = await within(table).findByText('Not answering')
+    expect(chip.className).toContain('truncate')
+  })
+
   it('stacks each environment on a phone with its status and version', async () => {
     renderDetail()
     const list = await screen.findByRole('list', { name: 'Environments' })

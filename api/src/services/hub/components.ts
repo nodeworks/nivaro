@@ -30,7 +30,7 @@ function toComponent(r: Record<string, unknown>): HubComponent {
     placement_id: Number(r.placement_id),
     position: Number(r.position),
     name: String(r.name),
-    kind: r.kind as 'api' | 'frontend',
+    kind: r.kind as HubComponent['kind'],
     driver_id: Number(r.driver_id),
     source_branch: String(r.source_branch ?? 'main'),
     target_branch: s(r.target_branch),
@@ -40,6 +40,18 @@ function toComponent(r: Record<string, unknown>): HubComponent {
     verify_field: String(r.verify_field ?? 'version')
   }
 }
+
+/** The kind of driver `id` ('gitlab' | 'docker'), or null when it does not exist. */
+async function driverKind(id: number): Promise<string | null> {
+  const r = (await db('nivaro_hub_drivers').where({ id }).first('kind')) as
+    | { kind: string }
+    | undefined
+  return r ? String(r.kind) : null
+}
+
+/** The component kind a driver kind deploys: docker drivers deploy stacks only. */
+const kindFits = (kind: HubComponent['kind'], driver: string): boolean =>
+  driver === 'docker' ? kind === 'stack' : kind !== 'stack'
 
 /**
  * The branch a component deploys to, resolved component → placement → driver: the component's own
@@ -60,8 +72,9 @@ export function componentTargetBranch(
 
 /**
  * The placement's components in position order. A phase-1 placement with none stored behaves as
- * one implicit api component on its own driver, deploying to the placement's target branch (so
- * storing it — the editor does before adding a frontend — keeps that branch).
+ * one implicit component on its own driver (api on a GitLab driver, the stack on a Docker one),
+ * deploying to the placement's target branch (so storing it — the editor does before adding a
+ * frontend — keeps that branch).
  */
 export async function listComponents(placementId: number): Promise<HubComponent[]> {
   const rows = (await db(TABLE)
@@ -70,13 +83,14 @@ export async function listComponents(placementId: number): Promise<HubComponent[
   if (rows.length) return rows.map(toComponent)
   const p = await getPlacement(placementId)
   if (!p) return []
+  const stack = (await driverKind(Number(p.driver_id))) === 'docker'
   return [
     {
       id: null,
       placement_id: placementId,
       position: 1,
-      name: 'api',
-      kind: 'api',
+      name: stack ? 'stack' : 'api',
+      kind: stack ? 'stack' : 'api',
       driver_id: Number(p.driver_id),
       source_branch: 'main',
       target_branch: componentTargetBranch({ target_branch: null, implicit: true }, p),
@@ -116,6 +130,18 @@ const textOrNull = (v: unknown, max: number): string | null | undefined => {
   return v.trim()
 }
 
+/** verify_url (null or an http(s) URL) and verify_field (default `version`), as stored. */
+function checkVerify(
+  rawUrl: unknown,
+  rawField: unknown
+): Fail | { ok: true; verifyUrl: string | null; field: string } {
+  const url = rawUrl ?? null
+  if (!verifyUrlOk(url)) return fail('BAD_VERIFY_URL', 'verify_url must be an http(s) URL or null.')
+  const field = textOrNull(orDefault(rawField, 'version'), 64)
+  if (!field) return fail('BAD_VERIFY_FIELD', 'verify_field must be a field name.')
+  return { ok: true, verifyUrl: url === null ? null : String(url).trim(), field }
+}
+
 /**
  * Validates the component fields in `b` over `existing` (PATCH) or defaults (create). Position
  * and driver existence are checked against the database.
@@ -129,8 +155,8 @@ export async function validateComponentInput(
     b[k] !== undefined ? b[k] : existing?.[k]
 
   const kind = pick('kind')
-  if (kind !== 'api' && kind !== 'frontend')
-    return fail('BAD_KIND', 'Component kind must be api or frontend.')
+  if (kind !== 'api' && kind !== 'frontend' && kind !== 'stack')
+    return fail('BAD_KIND', 'Component kind must be api, frontend or stack.')
 
   const name = pick('name')
   if (typeof name !== 'string' || !name.trim() || name.trim().length > 64)
@@ -139,11 +165,19 @@ export async function validateComponentInput(
   const driverId = pick('driver_id')
   if (typeof driverId !== 'number' || !Number.isInteger(driverId))
     return fail('BAD_DRIVER', 'driver_id must name an existing driver.')
-  if (
-    driverId !== existing?.driver_id &&
-    !(await db('nivaro_hub_drivers').where({ id: driverId }).first('id'))
-  )
+  const ownKind = await driverKind(driverId)
+  if (driverId !== existing?.driver_id && !ownKind)
     return fail('BAD_DRIVER', 'driver_id must name an existing driver.')
+  if (ownKind) {
+    const refused = await driverKindRefusal(
+      placementId,
+      kind,
+      driverId,
+      ownKind,
+      existing?.id ?? null
+    )
+    if (refused) return refused
+  }
 
   let position = pick('position')
   if (position === undefined) {
@@ -160,6 +194,27 @@ export async function validateComponentInput(
   if (await taken.first('id'))
     return fail('POSITION_TAKEN', `Position ${position} is already used on this placement.`, 409)
 
+  if (kind === 'stack') {
+    // A stack has no branches or jobs: the Docker driver deploys it through the Hub agent.
+    const verify = checkVerify(pick('verify_url'), pick('verify_field'))
+    if (!verify.ok) return verify
+    return {
+      ok: true,
+      row: {
+        position,
+        name: name.trim(),
+        kind,
+        driver_id: driverId,
+        source_branch: 'main',
+        target_branch: null,
+        before_job: null,
+        deploy_job: null,
+        verify_url: verify.verifyUrl,
+        verify_field: verify.field
+      }
+    }
+  }
+
   const source = textOrNull(orDefault(pick('source_branch'), 'main'), 200)
   if (!source) return fail('BAD_BRANCH', 'source_branch must be a branch name.')
   const target = textOrNull(pick('target_branch') ?? null, 200)
@@ -170,11 +225,8 @@ export async function validateComponentInput(
   if (beforeJob === undefined || deployJob === undefined)
     return fail('BAD_JOB', 'before_job and deploy_job must be job names or null.')
 
-  const verifyUrl = pick('verify_url') ?? null
-  if (!verifyUrlOk(verifyUrl))
-    return fail('BAD_VERIFY_URL', 'verify_url must be an http(s) URL or null.')
-  const field = textOrNull(orDefault(pick('verify_field'), 'version'), 64)
-  if (!field) return fail('BAD_VERIFY_FIELD', 'verify_field must be a field name.')
+  const verify = checkVerify(pick('verify_url'), pick('verify_field'))
+  if (!verify.ok) return verify
 
   return {
     ok: true,
@@ -187,10 +239,91 @@ export async function validateComponentInput(
       target_branch: target,
       before_job: beforeJob,
       deploy_job: deployJob,
-      verify_url: verifyUrl === null ? null : String(verifyUrl).trim(),
-      verify_field: field
+      verify_url: verify.verifyUrl,
+      verify_field: verify.field
     }
   }
+}
+
+/**
+ * One driver kind per placement (phase 4, Decision 12): a stack only on a Docker driver and api /
+ * frontend only on GitLab ones (KIND_DRIVER_MISMATCH); every component on the placement's own
+ * driver kind (MIXED_DRIVER_KINDS); a stack on its Docker placement's own driver (BAD_DRIVER); a
+ * Docker placement holds exactly one component (ONE_STACK).
+ */
+async function driverKindRefusal(
+  placementId: number,
+  kind: HubComponent['kind'],
+  driverId: number,
+  ownKind: string,
+  selfId: number | null
+): Promise<Fail | null> {
+  if (!kindFits(kind, ownKind))
+    return fail(
+      'KIND_DRIVER_MISMATCH',
+      kind === 'stack'
+        ? 'A stack component needs a Docker driver.'
+        : `A ${kind} component needs a GitLab driver.`
+    )
+  const placement = (await db('nivaro_hub_placements')
+    .where({ id: placementId })
+    .first('driver_id')) as { driver_id: number } | undefined
+  const kinds = new Set<string>()
+  const placementKind = placement ? await driverKind(Number(placement.driver_id)) : null
+  if (placementKind) kinds.add(placementKind)
+  const others = db(`${TABLE} as c`)
+    .join('nivaro_hub_drivers as d', 'd.id', 'c.driver_id')
+    .where('c.placement_id', placementId)
+    .select('c.id', 'd.kind')
+  if (selfId != null) others.whereNot('c.id', selfId)
+  const rows = (await others) as Array<{ id: number; kind: string }>
+  for (const r of rows) kinds.add(String(r.kind))
+  for (const k of kinds)
+    if (k !== ownKind)
+      return fail(
+        'MIXED_DRIVER_KINDS',
+        'Every component of a placement deploys through the same kind of driver (GitLab or Docker).'
+      )
+  // A Docker placement's stack deploys through the placement's own driver (ruling P4-11).
+  if (placementKind === 'docker' && placement && Number(placement.driver_id) !== driverId)
+    return fail('BAD_DRIVER', "A stack component uses its Docker placement's own driver.")
+  if (ownKind === 'docker' && rows.length)
+    return fail('ONE_STACK', 'A Docker placement deploys exactly one stack component.', 409)
+  return null
+}
+
+/**
+ * A placement PATCH moving it to driver `driverId`: refused (MIXED_DRIVER_KINDS) while a stored
+ * component deploys through another kind of driver — the components fix the placement's kind.
+ */
+export async function placementDriverRefusal(
+  placementId: number,
+  driverId: number
+): Promise<Fail | null> {
+  const newKind = await driverKind(driverId)
+  if (!newKind) return null
+  const rows = (await db(`${TABLE} as c`)
+    .join('nivaro_hub_drivers as d', 'd.id', 'c.driver_id')
+    .where('c.placement_id', placementId)
+    .select('d.kind')) as Array<{ kind: string }>
+  if (rows.some((r) => String(r.kind) !== newKind))
+    return fail(
+      'MIXED_DRIVER_KINDS',
+      'The placement keeps the kind of driver (GitLab or Docker) its components deploy through; change or remove them first.'
+    )
+  return null
+}
+
+/**
+ * After a Docker placement moved to another Docker driver: its stored stack follows, as a
+ * stack always deploys through its placement's own driver (ruling P4-11).
+ */
+export async function followPlacementDriver(placementId: number, driverId: number): Promise<void> {
+  if ((await driverKind(driverId)) !== 'docker') return
+  await db(TABLE)
+    .where({ placement_id: placementId })
+    .whereNot({ driver_id: driverId })
+    .update({ driver_id: driverId, updated_at: new Date() })
 }
 
 const racedPosition = (position: number): Fail =>
