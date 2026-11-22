@@ -643,6 +643,9 @@ export async function authRoutes(app: FastifyInstance) {
   })
 
   app.get('/login', async (req, reply) => {
+    // Hub phase 7: only the hop itself (?direct=1) continues an attempt; anything else is a new
+    // one and may hop to direct once again.
+    if ((req.query as Record<string, string>).direct !== '1') req.session.hubFellBack = undefined
     const state = generateState()
     const codeVerifier = generateCodeVerifier()
 

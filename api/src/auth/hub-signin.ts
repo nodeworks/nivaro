@@ -128,13 +128,16 @@ function remoteKeys(url: string): ReturnType<typeof createRemoteJWKSet> {
   return set
 }
 
-/** An undici (UND_ERR_…) or system (ECONNREFUSED, ETIMEDOUT, …) error code. */
+/**
+ * An undici (UND_ERR_…) or system (ECONNREFUSED, ETIMEDOUT, EAI_AGAIN, …) error code. Never an
+ * `ERR_…` code: those are Node's own and jose's (ERR_JWT_EXPIRED is a bad token, not the network).
+ */
 function netCode(code: unknown): boolean {
-  return typeof code === 'string' && /^(UND_ERR_|E[A-Z]+$)/.test(code)
+  return typeof code === 'string' && !code.startsWith('ERR_') && /^(UND_ERR_|E[A-Z_]+$)/.test(code)
 }
 
 /** A network failure (as opposed to a refusal or a bad token). */
-function isNetworkError(err: unknown, depth = 0): boolean {
+export function isNetworkError(err: unknown, depth = 0): boolean {
   if (!err || depth > 3) return false
   const e = err as { name?: string; code?: string; message?: string; cause?: unknown }
   // Node's fetch fails with TypeError('fetch failed') (cause: an undici / system error). Any

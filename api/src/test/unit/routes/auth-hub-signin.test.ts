@@ -565,6 +565,15 @@ describe('GET /login', () => {
     expect(session.hubNonce).toBeUndefined()
   })
 
+  it('a new attempt (/login without direct=1) clears the one-hop guard; ?direct=1 keeps it', async () => {
+    const session = fakeSession({ hubFellBack: true })
+    const app = await build(session)
+    await app.inject({ method: 'GET', url: '/login?direct=1' })
+    expect(session.hubFellBack).toBe(true)
+    await app.inject({ method: 'GET', url: '/login' })
+    expect(session.hubFellBack).toBeUndefined()
+  })
+
   it('a provider sign-in (?provider=) never goes to the Hub', async () => {
     const app = await build(fakeSession())
     const res = await app.inject({ method: 'GET', url: '/login?provider=no-such-provider' })
@@ -614,12 +623,14 @@ describe('GET /callback through the Hub', () => {
       expect.anything(),
       expect.objectContaining({ reason: 'account_link', code: 'HUB_NEEDS_DIRECT', userId: 'u1' })
     )
-    // The Hub is still up: a plain /login goes to it.
+    // The Hub is still up: a plain /login goes to it (a new attempt: the guard is cleared).
     const login = await app.inject({ method: 'GET', url: '/login' })
     expect(login.headers.location).toContain(`${issuer}/authorize`)
+    expect(session.hubFellBack).toBeUndefined()
 
-    // The same again in this session (already fell back): stops at account_link.
+    // The same again in an attempt that already fell back: stops at account_link.
     Object.assign(session, {
+      hubFellBack: true,
       hubSignIn: true,
       hubNonce: NONCE,
       oidcState: STATE,
@@ -839,14 +850,21 @@ describe('GET /callback with the Hub unavailable', () => {
     expect(session.userId).toBeUndefined()
     expect(trackError).not.toHaveBeenCalled()
 
-    // The Hub is now marked down: a plain /login goes direct without asking it.
+    // The hop itself (?direct=1) keeps the one-hop guard.
+    await app.inject({ method: 'GET', url: '/login?direct=1' })
+    expect(session.hubFellBack).toBe(true)
+
+    // The Hub is now marked down: a plain /login goes direct without asking it, and as a new
+    // attempt it clears the guard.
     const pings = hub.pingHits
     const login = await app.inject({ method: 'GET', url: '/login' })
     expect(login.headers.location).toMatch(/^https:\/\/login\.microsoftonline\.com\//)
     expect(hub.pingHits).toBe(pings)
+    expect(session.hubFellBack).toBeUndefined()
 
-    // Another availability failure in the same session: no second hop.
+    // Another availability failure in the same attempt (after its hop): no second hop.
     Object.assign(session, {
+      hubFellBack: true,
       hubSignIn: true,
       hubNonce: NONCE,
       oidcState: STATE,

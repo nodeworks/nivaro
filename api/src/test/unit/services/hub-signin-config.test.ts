@@ -130,7 +130,9 @@ describe('hubSigninConfig', () => {
     for (const host of [
       'login.microsoftonline.us',
       'login.chinacloudapi.cn',
-      'login.microsoftonline.de'
+      'login.microsoftonline.de',
+      'sts.windows.net',
+      'login.partner.microsoftonline.cn'
     ]) {
       const e = env({ OIDC_ISSUER: `https://${host}/11111111-2222-3333-4444-555555555555/v2.0` })
       expect(hubSigninConfig(e)).not.toBeNull()

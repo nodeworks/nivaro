@@ -27,11 +27,16 @@ export type HubSigninConfig = {
 
 const MIN_SECRET = 32
 const MULTI_TENANT = new Set(['common', 'organizations', 'consumers'])
-/** Entra sign-in hosts (public, US government, China, Germany): the evidence is an Entra token. */
+/**
+ * Entra sign-in hosts (public, v1 sts.windows.net, US government, China (both names), Germany):
+ * the evidence is an Entra token.
+ */
 const ENTRA_HOSTS = new Set([
   'login.microsoftonline.com',
+  'sts.windows.net',
   'login.microsoftonline.us',
   'login.chinacloudapi.cn',
+  'login.partner.microsoftonline.cn',
   'login.microsoftonline.de'
 ])
 

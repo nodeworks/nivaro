@@ -47,6 +47,7 @@ const {
   HubAccountLinkError,
   HubSigninError,
   hubLogoutUrl,
+  isNetworkError,
   linkHubProfile,
   verifyIdpEvidence
 } = await import('../../../auth/hub-signin.js')
@@ -271,6 +272,21 @@ async function errOf(p: Promise<unknown>): Promise<InstanceType<typeof HubSignin
 }
 
 // ─── buildHubLoginUrl ────────────────────────────────────────────────────────
+
+describe('isNetworkError', () => {
+  it('system codes with underscores count: EAI_AGAIN (DNS try again) is the network', () => {
+    for (const code of ['EAI_AGAIN', 'ECONNREFUSED', 'ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT']) {
+      expect(isNetworkError(Object.assign(new Error('x'), { code }))).toBe(true)
+      expect(isNetworkError(new TypeError('other', { cause: { code } }))).toBe(true)
+    }
+  })
+
+  it('a refusal or a malformed answer is not the network', () => {
+    for (const code of ['ERR_JWT_EXPIRED', 'OAUTH_INVALID_RESPONSE', 'Eai_again', 'E1'])
+      expect(isNetworkError(Object.assign(new Error('x'), { code }))).toBe(false)
+    expect(isNetworkError(new TypeError('bad answer'))).toBe(false)
+  })
+})
 
 describe('buildHubLoginUrl', () => {
   it('sends the person to the Hub authorize endpoint with PKCE S256, state and nonce', async () => {
