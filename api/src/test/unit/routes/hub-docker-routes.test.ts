@@ -487,7 +487,8 @@ describe('GET /environments/:envId/stack', () => {
       name_request: null,
       status: stackStatus(),
       agent: 'ok',
-      local_volumes_on_nodes: null
+      local_volumes_on_nodes: null,
+      leftovers: null
     })
     expect(m.stack.mock.calls[0].slice(1)).toEqual([STACK, HASH])
     await expectNoSecret(res.body)
@@ -797,6 +798,47 @@ describe('stack settings', () => {
     })
     expect([res.statusCode, res.json().code]).toEqual([400, 'SECRET_IN_SETTINGS'])
     expect(res.body).not.toContain('in-Plain-Settings-999')
+  })
+})
+
+describe('P4-25: a stack with no service but leftovers', () => {
+  it('the stack read names what is left, never "no stack"', async () => {
+    m.stack.mockResolvedValue(null)
+    m.leftovers.mockResolvedValue({
+      services: [],
+      secrets: [`nvh_${STACK}_SESSION_SECRET_ab`],
+      networks: [],
+      volumes: [`nvh_${STACK}_uploads`, `nvh_${STACK}_redis`],
+      extensions: true
+    })
+    const data = (await call('GET', `/environments/${DOCKER}/stack`, asOwner)).json().data
+    expect(data.status).toBeNull()
+    expect(data.leftovers).toEqual({
+      services: 0,
+      secrets: 1,
+      networks: 0,
+      volumes: 2,
+      extensions: true
+    })
+    expect(m.leftovers.mock.calls[0].slice(1)).toEqual([
+      STACK,
+      { app: 'acme', environment: 'production' }
+    ])
+    // Nothing left, or the agent not answering the leftovers read: null.
+    m.leftovers.mockResolvedValue({
+      services: [],
+      secrets: [],
+      networks: [],
+      volumes: [],
+      extensions: false
+    })
+    expect(
+      (await call('GET', `/environments/${DOCKER}/stack`, asOwner)).json().data.leftovers
+    ).toBeNull()
+    m.leftovers.mockRejectedValue(new AgentError('AGENT_UNREACHABLE', 0, 'down'))
+    expect(
+      (await call('GET', `/environments/${DOCKER}/stack`, asOwner)).json().data.leftovers
+    ).toBeNull()
   })
 })
 

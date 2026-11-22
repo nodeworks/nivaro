@@ -371,7 +371,7 @@ function PlanPreview({ plan, blockers }: { plan: PromotionPlan; blockers: Promot
                     <span className='block text-red-700/90 dark:text-red-300/90'>{copy.hint}</span>
                   )}
                   {blockerDetailLine(b, copy.title) && (
-                    <span className='mt-0.5 block break-words text-[11px] text-red-700/80 dark:text-red-300/80'>
+                    <span className='mt-0.5 block break-words text-[11px] text-slate-600 dark:text-slate-400'>
                       {blockerDetailLine(b, copy.title)}
                     </span>
                   )}

@@ -7,6 +7,7 @@ import { hubDeploysKeys } from '../services/hub/deploys.js'
 import {
   AgentError,
   agentHealth,
+  agentLeftovers,
   agentRemove,
   agentRestart,
   agentStack,
@@ -373,6 +374,14 @@ export function hubDockerRoutes(app: FastifyInstance) {
     let status: StackStatus | null = null
     let agent = 'ok'
     let localVolumesOnNodes: number | null = null
+    /** P4-25: no service runs, but parts of this stack remain (what Remove stack clears). */
+    let leftovers: {
+      services: number
+      secrets: number
+      networks: number
+      volumes: number
+      extensions: boolean
+    } | null = null
     if (!target.stackName) agent = 'NO_STACK_NAME'
     else {
       const deployed = await deployedStack(envId, target.stackName)
@@ -385,6 +394,25 @@ export function hubDockerRoutes(app: FastifyInstance) {
         // Ruling P4-21: a stack labelled for another app or environment is not shown here.
         if (read && !ownsStack(read, target)) agent = 'STACK_OWNER_MISMATCH'
         else status = read
+        if (read === null) {
+          const left = await agentLeftovers(target.driver, target.stackName, {
+            app: target.appKey,
+            environment: target.envKey
+          }).catch(() => null)
+          const n = (xs: unknown) => (Array.isArray(xs) ? xs.length : 0)
+          if (
+            left &&
+            (left.extensions === true ||
+              n(left.services) + n(left.secrets) + n(left.networks) + n(left.volumes) > 0)
+          )
+            leftovers = {
+              services: n(left.services),
+              secrets: n(left.secrets),
+              networks: n(left.networks),
+              volumes: n(left.volumes),
+              extensions: left.extensions === true
+            }
+        }
         // P4-33: local volumes on a swarm of several nodes split the stack's data.
         if (status) {
           const h = await agentHealth(target.driver).catch(() => null)
@@ -404,7 +432,8 @@ export function hubDockerRoutes(app: FastifyInstance) {
         name_request: config.dns_mode === 'manual' ? nameRequest(env, config) : null,
         status,
         agent,
-        local_volumes_on_nodes: localVolumesOnNodes
+        local_volumes_on_nodes: localVolumesOnNodes,
+        leftovers
       }
     }
   })

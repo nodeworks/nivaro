@@ -50,7 +50,14 @@ const status = (state: string) => ({
 })
 
 function setup(
-  opts: { state?: string; agent?: string; settings?: unknown; nodes?: number | null } = {}
+  opts: {
+    state?: string
+    agent?: string
+    settings?: unknown
+    nodes?: number | null
+    leftovers?: unknown
+    noStatus?: boolean
+  } = {}
 ) {
   h.get.mockImplementation(async (url: string) => {
     if (url === '/hub/environments/5/stack')
@@ -60,9 +67,13 @@ function setup(
             stack_name: 'efp-staging',
             dns_mode: 'automatic',
             name_request: null,
-            status: opts.agent && opts.agent !== 'ok' ? null : status(opts.state ?? 'converged'),
+            status:
+              opts.noStatus || (opts.agent && opts.agent !== 'ok')
+                ? null
+                : status(opts.state ?? 'converged'),
             agent: opts.agent ?? 'ok',
-            local_volumes_on_nodes: opts.nodes ?? null
+            local_volumes_on_nodes: opts.nodes ?? null,
+            leftovers: opts.leftovers ?? null
           }
         }
       }
@@ -173,6 +184,23 @@ describe('HubStackPanel', () => {
     setup({ nodes: 3 })
     view(false)
     expect(await screen.findByText(/each node keeps its own uploads and Redis data/)).toBeTruthy()
+  })
+
+  it('P4-25: no service but leftovers: says what is left, not "No stack yet"', async () => {
+    setup({
+      noStatus: true,
+      leftovers: { services: 0, secrets: 1, networks: 0, volumes: 2, extensions: true }
+    })
+    view(true)
+    expect(await screen.findByText('Leftovers on the swarm')).toBeTruthy()
+    expect(screen.getByText(/2 volumes, 1 secret and the extensions folder/)).toBeTruthy()
+    expect(screen.queryByText('No stack yet')).toBeNull()
+  })
+
+  it('P4-25: nothing left: "No stack yet"', async () => {
+    setup({ noStatus: true })
+    view(true)
+    expect(await screen.findByText('No stack yet')).toBeTruthy()
   })
 
   it('P4-33: no volume warning on one node', async () => {

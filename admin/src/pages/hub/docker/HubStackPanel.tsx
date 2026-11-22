@@ -185,7 +185,7 @@ function StackBody({
         ) : (
           <StatusChip
             state={info.agent === 'ok' ? 'checking' : 'failed'}
-            label={words ?? 'No stack yet'}
+            label={words ?? (info.leftovers ? 'Leftovers on the swarm' : 'No stack yet')}
             glyph
           />
         )}
@@ -204,6 +204,12 @@ function StackBody({
       {typeof info.local_volumes_on_nodes === 'number' && info.local_volumes_on_nodes > 1 && (
         <p role='status' className='m-0 text-[12px] text-amber-700 dark:text-amber-400'>
           {MULTI_NODE_VOLUMES_TEXT}
+        </p>
+      )}
+      {!s && info.leftovers && (
+        <p className='m-0 text-[12px] text-slate-600 dark:text-slate-300'>
+          No service runs, but {leftoverWords(info.leftovers)} of this stack are still on the swarm.
+          {isAdmin ? ' Remove stack… clears them.' : ' A Hub administrator can clear them.'}
         </p>
       )}
       {state === 'rolled_back' && (
@@ -543,6 +549,21 @@ function ApplyForm({
       </div>
     </div>
   )
+}
+
+/** "2 volumes, 1 secret and the extensions folder" from a stack read's leftovers. */
+export function leftoverWords(l: NonNullable<StackInfo['leftovers']>): string {
+  const part = (n: number, one: string) => (n ? `${n} ${one}${n === 1 ? '' : 's'}` : null)
+  const parts = [
+    part(l.services, 'service'),
+    part(l.volumes, 'volume'),
+    part(l.secrets, 'secret'),
+    part(l.networks, 'network'),
+    l.extensions ? 'the extensions folder' : null
+  ].filter((x): x is string => !!x)
+  return parts.length > 1
+    ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`
+    : (parts[0] ?? 'parts')
 }
 
 /** "1 services, 2 secrets, …" from a remove answer. */

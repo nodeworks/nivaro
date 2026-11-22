@@ -34,6 +34,14 @@ export interface StackInfo {
   agent: string
   /** P4-33: the swarm has this many nodes (> 1) and the stack's volumes are local; else null. */
   local_volumes_on_nodes?: number | null
+  /** No service runs, but these parts of the stack remain on the swarm (Remove stack clears them). */
+  leftovers?: {
+    services: number
+    secrets: number
+    networks: number
+    volumes: number
+    extensions: boolean
+  } | null
 }
 
 /** `GET|PUT /hub/environments/:id/stack/settings` */

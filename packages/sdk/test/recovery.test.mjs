@@ -7,6 +7,7 @@ import {
   isKeyedWrite,
   isReadPost,
   isRecoverable,
+  isServerBack,
   onRecoveryEvent,
   setRecoveryDefaults
 } from '../dist/index.js'
@@ -86,6 +87,19 @@ describe('recovery policy', () => {
     // a slow read is not re-run; a keyed write waits for its first try
     assert.equal(isRecoverable('GET', { status: 504, keyed: false }), false)
     assert.equal(isRecoverable('PATCH', { status: 504, keyed: true }), true)
+  })
+
+  it('a 502/504 that carries the app\'s own code is an answer, not the server away (P4-25)', () => {
+    // A true gateway answer (no app body) is still waited out.
+    assert.equal(isRecoverable('GET', { status: 502, code: null, keyed: false }), true)
+    // The app answered 502 for an upstream it relays (a Hub agent / GitLab refusal).
+    assert.equal(isRecoverable('GET', { status: 502, code: 'AGENT_UNREACHABLE', keyed: false }), false)
+    assert.equal(isRecoverable('POST', { status: 502, code: 'GITLAB_UNREACHABLE', keyed: true }), false)
+    assert.equal(isRecoverable('PATCH', { status: 504, code: 'AGENT_TIMEOUT', keyed: true }), false)
+    assert.equal(isServerBack(502, 'AGENT_UNREACHABLE'), true)
+    assert.equal(isServerBack(504, 'AGENT_TIMEOUT'), true)
+    assert.equal(isServerBack(502, null), false)
+    assert.equal(isServerBack(500, 'INTERNAL'), false)
   })
 })
 
@@ -209,6 +223,17 @@ describe('createNivaro recovery', () => {
     const c = createNivaro('http://x', { fetch, recovery: FAST })
     await assert.rejects(c.request(cmd('GET', '/items/orders')), (e) => e.code === 'LIST_TIMEOUT')
     assert.equal(inits.length, 1)
+  })
+
+  it('a coded 502 (an upstream the app relays) is answered at once; a bare 502 is waited out', async () => {
+    const coded = scripted([{ status: 502, code: 'AGENT_UNREACHABLE' }, 200])
+    const c = createNivaro('http://x', { fetch: coded.fetch, recovery: FAST })
+    await assert.rejects(c.request(cmd('GET', '/items/orders')), (e) => e.code === 'AGENT_UNREACHABLE')
+    assert.equal(coded.inits.length, 1)
+    const bare = scripted([502, 200])
+    const c2 = createNivaro('http://x', { fetch: bare.fetch, recovery: FAST })
+    await c2.request(cmd('GET', '/items/orders'))
+    assert.equal(bare.inits.length, 2)
   })
 
   it('waiting then a server error closes the wait as gave-up, never "recovered"', async () => {
