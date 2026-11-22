@@ -934,14 +934,14 @@ describe('P4-30: Apply now', () => {
   const RUNNING = `nodeworks/nivaro@sha256:${'c'.repeat(64)}`
 
   /** The deploy that put 0.3.9 where it runs, recorded the way the runner records it. */
-  async function recordRunning() {
+  async function recordRunning(status = 'success', version = '0.3.9') {
     await db('nivaro_hub_deploys').del()
     await db('nivaro_hub_deploys').insert({
       app_id: 1,
       environment_id: 2,
       kind: 'promote',
-      version: '0.3.9',
-      status: 'success',
+      version,
+      status,
       plan: JSON.stringify(
         planOf([
           {
@@ -1061,6 +1061,47 @@ describe('P4-30: Apply now', () => {
     const env2 = await envRow()
     expect(env2.version_pin).toBe('0.3.9')
     expect(strictPinMap(env2.extension_pins)).toEqual({ 'efp-ops': STG_PIN })
+  })
+
+  it('P4-35: after a deploy that converged but failed verify, Apply now redeploys with the saved settings', async () => {
+    // The 0.3.9 deploy converged (version_pin, image, pins recorded), then verify failed.
+    await recordRunning('failed')
+    const env = environmentFromRow(
+      await db('nivaro_hub_environments').where({ id: 2 }).first()
+    ) as Env
+    const v = await S.validateStackSettings(
+      {
+        size: 'medium',
+        settings: { ...PG, MAIL_FROM: 'fixed@acme.example' },
+        secrets: { DB_PASSWORD: HUB_MASK }
+      },
+      await S.readStackSettings(2),
+      { driver: automatic, env }
+    )
+    if (!v.ok) throw new Error(`${v.code}: ${v.message}`)
+    await S.saveStackSettings(2, v.row.fields, v.row.extension_pins)
+
+    const a = fakeAgent(['converged'])
+    const started = await run.startStackApply(
+      2,
+      { confirm: 'production', user: { id: 'u1' } },
+      startDeps(a, clock()) as never
+    )
+    await run.awaitPromotion(started.deployId)
+    expect(a.applied).toHaveLength(1)
+    expect(a.applied[0].image).toBe(RUNNING)
+    expect(a.applied[0].env.MAIL_FROM).toBe('fixed@acme.example')
+    const row = await db('nivaro_hub_deploys').where({ id: started.deployId }).first()
+    expect(row.status).toBe('success')
+  })
+
+  it('P4-35: the newest recorded deploy ran another version than version_pin: refused, nothing sent', async () => {
+    await recordRunning('failed', '0.3.8')
+    const a = fakeAgent(['converged'])
+    await expect(
+      run.startStackApply(2, { confirm: 'production', user: null }, startDeps(a, clock()) as never)
+    ).rejects.toMatchObject({ code: 'STACK_STATE_UNKNOWN' })
+    expect(a.calls.filter((c) => c.startsWith('apply'))).toEqual([])
   })
 
   it('nothing deployed: NOT_DEPLOYED, nothing sent', async () => {

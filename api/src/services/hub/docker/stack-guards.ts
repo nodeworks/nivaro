@@ -70,6 +70,8 @@ export type DeployedStack =
       specHash: string | null
       /** The extension pins that same step installed (stack.extensions). */
       extensions: Record<string, string>
+      /** The size that step deployed (stack.size); null when not recorded. */
+      size: string | null
     }
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -122,7 +124,8 @@ export async function deployedStack(envId: number, stackName: string): Promise<D
       version: String(r.version),
       image,
       specHash: typeof hash === 'string' && HASH_RE.test(hash) ? hash : null,
-      extensions
+      extensions,
+      size: typeof step.stack.size === 'string' ? step.stack.size : null
     }
   }
   return { state: 'none' }

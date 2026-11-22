@@ -19,6 +19,7 @@ import {
   StackRenderError,
   stackHostnames
 } from './render-spec.js'
+import type { DeployedStack } from './stack-guards.js'
 import {
   missingSettings,
   otherEnvironmentNames,
@@ -65,6 +66,12 @@ export interface StackGatherDeps {
    * be read. A rollback redeploys exactly this (P4-29): the registry is never read again.
    */
   deployedBuild(envId: number, version: string): Promise<DeployedBuild | typeof UNREADABLE | null>
+  /**
+   * Apply now (P4-35): what the stack last converged to, from the newest recorded deploy of it
+   * whatever that deploy's outcome (a deploy can converge and then fail verify) — the same
+   * reader restart uses (stack-guards.ts deployedStack).
+   */
+  recordedStack(envId: number, stackName: string): Promise<DeployedStack>
 }
 
 /** What a recorded docker deploy ran. */
@@ -159,7 +166,10 @@ export function defaultStackGatherDeps(): StackGatherDeps {
       return typeof name === 'string' && STACK_NAME_RE.test(name) ? name : null
     },
     extensionPins: readExtensionPins,
-    deployedBuild: readDeployedBuild
+    deployedBuild: readDeployedBuild,
+    // Lazy: stack-guards imports this module.
+    recordedStack: async (envId, stackName) =>
+      (await import('./stack-guards.js')).deployedStack(envId, stackName)
   }
 }
 
@@ -228,6 +238,8 @@ export async function gatherStackFacts(
   const versionOk = VERSION_RE.test(version)
   /** rollback: the image the rolled-back-to deploy ran (P4-29); undefined = not read. */
   let deployedImage: string | null | undefined
+  /** Apply now: why the recorded build cannot be redeployed (P4-35). */
+  let applyProblem: { code: 'STACK_STATE_UNKNOWN'; text: string } | null = null
 
   // Decision 10: promote installs the tested set (the previous environment's; the first
   // environment its own), rollback the set the rolled-back-to deploy installed. Fails closed:
@@ -255,11 +267,21 @@ export async function gatherStackFacts(
       return { pins: {}, unreadable: null }
     }
     if (apply && versionOk) {
-      // Apply now: the image the running version's deploy recorded; the pins saved here now.
-      const deployed = await deps.deployedBuild(env.id, version)
-      if (deployed === UNREADABLE)
-        return unreadable(`the stored plan of the ${version} deploy can't be read`)
-      if (deployed) deployedImage = deployed.image
+      // Apply now: the image the stack last converged to (any outcome of that deploy, P4-35),
+      // which must be the version it runs; the pins saved here now.
+      const name = await deps.stackName(c.placement_id)
+      const rec: DeployedStack = name ? await deps.recordedStack(env.id, name) : { state: 'none' }
+      if (rec.state === 'unreadable')
+        applyProblem = {
+          code: 'STACK_STATE_UNKNOWN',
+          text: `the Hub cannot tell which build ${env.key} runs — its newest recorded deploy can't be read`
+        }
+      else if (rec.state === 'ok' && rec.version !== version)
+        applyProblem = {
+          code: 'STACK_STATE_UNKNOWN',
+          text: `the newest recorded deploy of ${env.key} ran ${rec.version}, not ${version} — deploy a version instead`
+        }
+      else if (rec.state === 'ok') deployedImage = rec.image
     }
     const from = apply ? env : (previous ?? env)
     const pins = await deps.extensionPins(from.id)
@@ -306,8 +328,9 @@ export async function gatherStackFacts(
           deployedImage: deployedImage ?? null,
           // A recorded deploy without its image: nothing to redeploy. For a rollback no record at
           // all is the plan's NOT_DEPLOYED_BEFORE, an unreadable plan EXTENSION_UNPINNED.
-          recordedImageProblem:
-            deployedImage === null
+          recordedImageProblem: applyProblem
+            ? applyProblem
+            : deployedImage === null
               ? {
                   code: 'ROLLBACK_NOT_RECORDED' as const,
                   text: `the Hub did not record which image the ${version} deploy ran here, so it cannot redeploy that build`

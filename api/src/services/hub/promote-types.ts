@@ -123,7 +123,10 @@ export interface StackFacts {
    * rollback / Apply now: why the recorded image cannot be redeployed (ROLLBACK_NOT_RECORDED;
    * NOT_DEPLOYED for Apply now with no recorded deploy at all).
    */
-  recordedImageProblem?: { code: 'ROLLBACK_NOT_RECORDED' | 'NOT_DEPLOYED'; text: string } | null
+  recordedImageProblem?: {
+    code: 'ROLLBACK_NOT_RECORDED' | 'NOT_DEPLOYED' | 'STACK_STATE_UNKNOWN'
+    text: string
+  } | null
   agentOrigin: string | null
 }
 
@@ -247,6 +250,8 @@ export type PromotionBlockerCode =
   | 'KIND_DRIVER_MISMATCH'
   /** Apply now (P4-30): the environment has no recorded stack deploy to apply settings to. */
   | 'NOT_DEPLOYED'
+  /** Apply now (P4-35): the newest recorded deploy is unreadable or ran another version. */
+  | 'STACK_STATE_UNKNOWN'
 
 export interface PromotionBlocker {
   code: PromotionBlockerCode

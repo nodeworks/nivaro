@@ -57,6 +57,7 @@ function setup(
     nodes?: number | null
     leftovers?: unknown
     noStatus?: boolean
+    preview?: unknown
   } = {}
 ) {
   h.get.mockImplementation(async (url: string) => {
@@ -73,7 +74,8 @@ function setup(
                 : status(opts.state ?? 'converged'),
             agent: opts.agent ?? 'ok',
             local_volumes_on_nodes: opts.nodes ?? null,
-            leftovers: opts.leftovers ?? null
+            leftovers: opts.leftovers ?? null,
+            apply_preview: opts.preview ?? null
           }
         }
       }
@@ -147,6 +149,28 @@ describe('HubStackPanel', () => {
     await waitFor(() =>
       expect(h.post).toHaveBeenCalledWith('/hub/environments/5/stack/apply', { confirm: 'staging' })
     )
+  })
+
+  it('P4-35: the Apply now box names the saved size and the pins that change', async () => {
+    setup({
+      preview: {
+        size: 'large',
+        running_size: 'medium',
+        pins_changed: [
+          {
+            id: 'efp-ops',
+            running: 'nodeworks/efp-ops@222222222222',
+            saved: 'nodeworks/efp-ops@333333333333'
+          }
+        ],
+        pins_unreadable: false
+      }
+    })
+    view(false)
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply now' }))
+    expect(screen.getByText('large')).toBeTruthy()
+    expect(screen.getByText(/runs medium now/)).toBeTruthy()
+    expect(screen.getByText('nodeworks/efp-ops@333333333333')).toBeTruthy()
   })
 
   it('P4-30: after a save the editor says when settings apply, and offers Apply now', async () => {

@@ -488,7 +488,13 @@ describe('GET /environments/:envId/stack', () => {
       status: stackStatus(),
       agent: 'ok',
       local_volumes_on_nodes: null,
-      leftovers: null
+      leftovers: null,
+      apply_preview: {
+        size: 'medium',
+        running_size: 'medium',
+        pins_changed: [],
+        pins_unreadable: false
+      }
     })
     expect(m.stack.mock.calls[0].slice(1)).toEqual([STACK, HASH])
     await expectNoSecret(res.body)
@@ -882,6 +888,33 @@ describe('P4-33: local volumes on a swarm of several nodes', () => {
     expect(await read()).toBeNull()
     m.health.mockRejectedValue(new AgentError('AGENT_UNREACHABLE', 0, 'down'))
     expect(await read()).toBeNull()
+  })
+})
+
+describe('P4-35: the stack read previews what Apply now deploys', () => {
+  it('names the saved size and the pins changed since the running deploy (never a setting)', async () => {
+    const NEW_PIN = `nodeworks/efp-ops@sha256:${'3'.repeat(64)}`
+    await db('nivaro_hub_environments')
+      .where({ id: DOCKER })
+      .update({ extension_pins: JSON.stringify({ 'efp-ops': NEW_PIN, extra: PIN }) })
+    await db('nivaro_hub_stack_settings')
+      .where({ environment_id: DOCKER })
+      .update({ size: 'large' })
+    const res = await call('GET', `/environments/${DOCKER}/stack`, asOwner)
+    expect(res.json().data.apply_preview).toEqual({
+      size: 'large',
+      running_size: 'medium',
+      pins_changed: [
+        {
+          id: 'efp-ops',
+          running: 'nodeworks/efp-ops@222222222222',
+          saved: 'nodeworks/efp-ops@333333333333'
+        },
+        { id: 'extra', running: null, saved: 'nodeworks/efp-ops@222222222222' }
+      ],
+      pins_unreadable: false
+    })
+    await expectNoSecret(res.body)
   })
 })
 

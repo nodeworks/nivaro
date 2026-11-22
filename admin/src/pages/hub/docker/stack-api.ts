@@ -34,6 +34,13 @@ export interface StackInfo {
   agent: string
   /** P4-33: the swarm has this many nodes (> 1) and the stack's volumes are local; else null. */
   local_volumes_on_nodes?: number | null
+  /** P4-35: what Apply now deploys against what runs: sizes and the pins that changed. */
+  apply_preview?: {
+    size: string | null
+    running_size: string | null
+    pins_changed: Array<{ id: string; running: string | null; saved: string | null }>
+    pins_unreadable: boolean
+  } | null
   /** No service runs, but these parts of the stack remain on the swarm (Remove stack clears them). */
   leftovers?: {
     services: number
