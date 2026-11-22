@@ -122,6 +122,21 @@ describe('maintenanceExemptPath', () => {
       expect(maintenanceExemptPath(p), p).toBe(false)
   })
 
+  it('keeps sign-in through the Hub open: the token POST and the app reports (phase 7)', () => {
+    for (const p of [
+      '/api/hub/oidc/token',
+      '/api/hub/oidc/authorize?client_id=x',
+      '/api/hub/oidc/logout',
+      '/api/hub/app-link/signins',
+      '/api/hub/app-link/switcher'
+    ]) {
+      expect(maintenanceExemptPath(p), p).toBe(true)
+    }
+    // Only those two app-link reports; hub administration stays frozen.
+    for (const p of ['/api/hub/app-link/other', '/api/hub/signin/clients', '/api/hub/apps']) {
+      expect(maintenanceExemptPath(p), p).toBe(false)
+    }
+  })
   it('freezes record writes on every surface', () => {
     for (const p of [
       '/api/items/workflows',
