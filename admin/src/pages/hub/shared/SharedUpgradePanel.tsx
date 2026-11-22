@@ -30,6 +30,7 @@ import {
   overrideId,
   planSharedUpgrade,
   refusedPlanOf,
+  runErrorText,
   type SharedDeploy,
   type SharedUpgradeKind,
   type SharedUpgradePlan,
@@ -757,9 +758,9 @@ function UpgradeProgress({
           role='status'
           className='m-0 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[12px] text-red-800 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-200'
         >
-          {isRawErrorText(d.error)
+          {isRawErrorText(runErrorText(d.error))
             ? 'The run stopped with an error. Its job run has the details.'
-            : d.error}
+            : runErrorText(d.error)}
         </p>
       )}
       {d.status === 'failed' && (

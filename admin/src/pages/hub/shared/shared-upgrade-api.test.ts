@@ -4,9 +4,11 @@ import {
   openBlockers,
   overrideId,
   refusedPlanOf,
+  runErrorText,
   type SharedUpgradePlan,
   stepStates,
-  UPGRADE_COPY
+  UPGRADE_COPY,
+  upgradeCopy
 } from './shared-upgrade-api'
 
 const plan = (over: Partial<SharedUpgradePlan> = {}): SharedUpgradePlan => ({
@@ -84,6 +86,13 @@ describe('shared upgrade client (Task 5 contract)', () => {
       // Setting names (HUB_URL, REDIS_URL) may be named; the code itself never is.
       expect(`${c?.title} ${c?.hint}`, code).not.toContain(code)
     }
+  })
+
+  it('drops the code in front of a run error, and never shows a code as copy', () => {
+    expect(runErrorText('START_FAILED: The stack did not start.')).toBe('The stack did not start.')
+    expect(runErrorText('acme-e7: migration failed')).toBe('acme-e7: migration failed')
+    expect(upgradeCopy('SOMETHING_NEW').hint).toBeUndefined()
+    expect(upgradeCopy('SOMETHING_NEW', 'Plain words.').title).toBe('Plain words.')
   })
 
   it('maps the run to step states', () => {

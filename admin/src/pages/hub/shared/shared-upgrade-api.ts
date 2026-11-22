@@ -209,6 +209,13 @@ export function refusedPlanOf(err: unknown): { code: string; plan: SharedUpgrade
     : null
 }
 
+/**
+ * A run's `error` without its leading code (`START_FAILED: The stack …` → `The stack …`): the
+ * sentence is for people, the code is not.
+ */
+export const runErrorText = (error: string): string =>
+  error.replace(/^[A-Z][A-Z0-9_]{2,63}:\s*/, '').trim()
+
 /** The run's step keys, in order (Task 5's run steps 1–5). */
 export const UPGRADE_STEPS: { key: string; label: string }[] = [
   { key: 'render', label: 'Write the stack' },
@@ -368,7 +375,7 @@ export const UPGRADE_COPY: Record<string, { title: string; hint?: string }> = {
 
 /** A code this screen has no words for keeps the planner's sentence (or a plain one). */
 export const upgradeCopy = (code: string, text?: string): { title: string; hint?: string } =>
-  UPGRADE_COPY[code] ?? { title: text || 'Held back by a check the Hub made', hint: `Code ${code}` }
+  UPGRADE_COPY[code] ?? { title: text || 'Held back by a check the Hub made' }
 
 /** The plan's warning listing every app it touches: the apps table already shows them. */
 export const SILENT_WARNINGS = new Set(['APPS_AFFECTED'])
