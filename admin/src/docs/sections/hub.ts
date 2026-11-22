@@ -11,7 +11,7 @@ export const hubOverviewDocs: DocSection = {
     },
     {
       type: 'warn',
-      text: 'The Hub is built in phases. It adopts apps that already run and shows their status and deploy history, promotes and rolls back builds of GitLab-driven apps, keeps database servers and databases and creates new apps, runs apps as Docker swarm stacks through the Hub agent, and signs people in to apps that choose sign-in via the Hub (with direct Microsoft sign-in as the fallback and an app switcher). It does not yet place an app on a shared deployment; that arrives in a later phase.'
+      text: 'The Hub is built in phases. It adopts apps that already run and shows their status and deploy history, promotes and rolls back builds of GitLab-driven apps, keeps database servers and databases and creates new apps, runs apps as Docker swarm stacks through the Hub agent, and signs people in to apps that choose sign-in via the Hub (with direct Microsoft sign-in as the fallback and an app switcher). It places new apps on shared deployments (one process serving many apps), moves an environment between a dedicated stack and a shared deployment in either direction, and upgrades a shared deployment (see Shared deployments and Moving an environment).'
     },
     { type: 'h2', id: 'hub-overview-on', text: 'Turning hub mode on' },
     {
@@ -274,7 +274,7 @@ export const hubLinkDocs: DocSection = {
     },
     {
       type: 'note',
-      text: 'Phase 1 only reads. Maintenance on and off, seeding a first admin and sign-in events over the link belong to later phases and are not available now. An app that does not set HUB_TOKEN has no hub link at all: the route answers 404, which the Hub shows as `link_refused` / `HUB_LINK_MISSING` for an environment saved with a token. An environment saved without a token is read through the public version and health routes instead.'
+      text: 'The link started read-only. Later phases added seeding a first administrator and, for moves, strict maintenance on and off, retiring an app, a shared-readiness report and file transfer (see Moving an environment). An app that does not set HUB_TOKEN has no hub link at all: the route answers 404, which the Hub shows as `link_refused` / `HUB_LINK_MISSING` for an environment saved with a token. An environment saved without a token is read through the public version and health routes instead.'
     }
   ]
 }
@@ -889,7 +889,7 @@ export const hubDockerDocs: DocSection = {
     },
     {
       type: 'p',
-      text: 'Agent refusals passed through as they are: `HOSTNAME_TAKEN` (another stack routes the name), `SPEC_INVALID` (with the refused fields, each as `field (code)`: `UNKNOWN_FIELD`, `REQUIRED`, `BAD_KEY`, `IMAGE_NOT_ALLOWED`, `IMAGE_NOT_PINNED`, `ENV_FORBIDDEN`, `ENV_NOT_ALLOWED`, `ROLE_BAD`, `REPLICAS_BAD`, `LIMIT_BAD`, `HOSTNAME_NOT_ALLOWED`, `TOO_MANY`, `TOO_LONG`, `PORT_NOT_ALLOWED`, `REDIS_NOT_CONFIGURED`, `EXTENSION_ID_BAD`, `SETTING_INVALID`), `SPEC_MISMATCH` (a restart: the stack does not run the spec sent), `STACK_NAME_INVALID`, `STACK_NOT_FOUND`, `STACK_NOT_HUB`, `STACK_OWNER_MISMATCH`, `EXPECT_INVALID`, `ENGINE_FORBIDDEN` (the agent guard refused an Engine call it built, so nothing reached Docker), `ENGINE_ERROR` (Docker refused a call), `REDIS_NOT_CONFIGURED`, `EXTENSION_INVALID` and `IMAGE_PULL_FAILED`. The Hub turns each into one plain sentence and never shows the agent body text.'
+      text: 'Agent refusals passed through as they are: `HOSTNAME_TAKEN` (another stack routes the name), `SPEC_INVALID` (with the refused fields, each as `field (code)`: `UNKNOWN_FIELD`, `REQUIRED`, `BAD_KEY`, `IMAGE_NOT_ALLOWED`, `IMAGE_NOT_PINNED`, `ENV_FORBIDDEN`, `ENV_NOT_ALLOWED`, `ROLE_BAD`, `REPLICAS_BAD`, `LIMIT_BAD`, `HOSTNAME_NOT_ALLOWED`, `TOO_MANY`, `TOO_LONG`, `PORT_NOT_ALLOWED`, `REDIS_NOT_CONFIGURED`, `EXTENSION_ID_BAD`, `SETTING_INVALID`, `SHARED_KEY_MISMATCH` (a shared stack names another key than its owner), `ROLE_NOT_SHARED` (a shared stack has no realtime role)), `SPEC_MISMATCH` (a restart: the stack does not run the spec sent), `STACK_NAME_INVALID`, `STACK_NOT_FOUND`, `STACK_NOT_HUB`, `STACK_OWNER_MISMATCH`, `EXPECT_INVALID`, `ENGINE_FORBIDDEN` (the agent guard refused an Engine call it built, so nothing reached Docker), `ENGINE_ERROR` (Docker refused a call), `REDIS_NOT_CONFIGURED`, `EXTENSION_INVALID` and `IMAGE_PULL_FAILED`. The Hub turns each into one plain sentence and never shows the agent body text.'
     },
     {
       type: 'warn',
