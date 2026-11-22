@@ -402,6 +402,19 @@ describe('servers', () => {
     expect(fake.adminSeen).toEqual([{ user: ADMIN_USER, password: ADMIN_PASSWORD }])
   })
 
+  it("the probe's own text keeps the engine's name when the login is called postgres (P3-33)", async () => {
+    const row = await automaticServer({
+      admin_secret: { user: 'postgres', password: ADMIN_PASSWORD }
+    })
+    fake.probe = { ...fake.probe, text: 'Postgres 16.16: can create databases and roles.' }
+    try {
+      const probe = await S.testServer(row.id)
+      expect(probe.text).toBe('Postgres 16.16: can create databases and roles.')
+    } finally {
+      fake.probe = { ...fake.probe, text: 'ok' }
+    }
+  })
+
   it('a manual server without a login answers manual without connecting', async () => {
     const row = await manualServer()
     const probe = remember(await S.testServer(row.id))

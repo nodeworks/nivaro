@@ -453,8 +453,10 @@ export async function testServer(id: number): Promise<ServerProbe> {
       text: scrubText(err, secrets)
     }
   }
-  // Belt and braces: the probe text is the provisioner's, already scrubbed.
-  const safe = { ...probe, text: scrubText(probe.text, secrets) }
+  // Belt and braces: the probe text is the provisioner's own words, already scrubbed. Only the
+  // password is looked for again: masking the login over this text would hide words that equal
+  // it ("Postgres 16" with the login `postgres`), and no login value is shown in it (P3-33).
+  const safe = { ...probe, text: scrubText(probe.text, { passwords: secrets.passwords }) }
   if (row.provision_mode === 'automatic') return safe
   const reachable = safe.version !== null
   return {
