@@ -553,7 +553,7 @@ describe('update and delete', () => {
     expect(bad.json().code).toBe('BAD_BUDGET')
   })
 
-  it('PATCH on a retired deployment → 409 IMMUTABLE', async () => {
+  it('PATCH on a retired deployment → 409 SHARED_RETIRED (as rotation)', async () => {
     const made = await create()
     await db('nivaro_hub_shared_deployments')
       .where({ id: made.row.id })
@@ -565,7 +565,7 @@ describe('update and delete', () => {
       payload: { name: 'Again' }
     })
     expect(res.statusCode).toBe(409)
-    expect(res.json().code).toBe('IMMUTABLE')
+    expect(res.json().code).toBe('SHARED_RETIRED')
     expect(
       (await db('nivaro_hub_shared_deployments').where({ id: made.row.id }).first()).name
     ).toBe('Shared one')

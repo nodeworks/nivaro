@@ -116,6 +116,15 @@ function refuse(reply: FastifyReply, status: number, code: string, message: stri
   return reply.code(status).send({ statusCode: status, error: message, message, code })
 }
 
+/** One code for every write a retired deployment refuses (PATCH, token rotation). */
+const retired = (reply: FastifyReply) =>
+  refuse(
+    reply,
+    409,
+    'SHARED_RETIRED',
+    'This shared deployment is retired; it can no longer be changed.'
+  )
+
 const notFound = (reply: FastifyReply, what = 'shared deployment') =>
   refuse(reply, 404, 'NOT_FOUND', `No such ${what}.`)
 
@@ -384,13 +393,7 @@ export function hubSharedRoutes(app: FastifyInstance): void {
     const id = idParam((req.params as { id: string }).id)
     const existing = id === null ? null : await getShared(id)
     if (id === null || !existing) return notFound(reply)
-    if (existing.status === 'retired')
-      return refuse(
-        reply,
-        409,
-        'IMMUTABLE',
-        'This shared deployment is retired; it can no longer be changed.'
-      )
+    if (existing.status === 'retired') return retired(reply)
     const b = body(req)
     for (const k of ['key', 'mode'] as const)
       if (Object.hasOwn(b, k) && b[k] !== undefined && b[k] !== existing[k])
@@ -443,8 +446,7 @@ export function hubSharedRoutes(app: FastifyInstance): void {
     const id = idParam((req.params as { id: string }).id)
     const row = id === null ? null : await getShared(id)
     if (id === null || !row) return notFound(reply)
-    if (row.status === 'retired')
-      return refuse(reply, 409, 'SHARED_RETIRED', 'This shared deployment is retired.')
+    if (row.status === 'retired') return retired(reply)
     return guarded(reply, async () => {
       const { token } = await rotateSharedToken(id)
       await logActivity({
