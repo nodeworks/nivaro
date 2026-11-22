@@ -354,7 +354,22 @@ describe('merge requests', () => {
     expect(err.code).toBe('MERGE_REFUSED')
     expect(err.status).toBe(status)
     expect(err.step).toBe('mergeMergeRequest')
+    // GitLab's merge status word rides the refusal (never its message text).
+    expect(err.mergeStatus).toBe('mergeable')
+    expect(err.message).toContain('merge status mergeable')
+    expect(err.message).not.toContain('Branch cannot be merged')
     expectSafe(calls)
+  })
+
+  it('a merge status that is not a plain word is never echoed', async () => {
+    gitlab((m) =>
+      m === 'GET'
+        ? { body: { iid: 1, has_conflicts: true, detailed_merge_status: 'x <script>' } }
+        : undefined
+    )
+    const err = await caught(mergeMergeRequest(ctx, 1, 'abc', { sleep: noSleep }))
+    expect(err.mergeStatus).toBe('conflict')
+    expect(err.message).not.toContain('<script>')
   })
 
   it('a merge request with conflicts is refused without trying the merge', async () => {

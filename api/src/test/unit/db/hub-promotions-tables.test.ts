@@ -38,6 +38,15 @@ describe('migration 543: hub promotion tables', () => {
     expect(got.verify_field).toBe('version')
   })
 
+  it('P24: nivaro_hub_deploys has a nullable heartbeat_at, added to an earlier draft too', async () => {
+    await up542(db)
+    await up(db)
+    expect(await db.schema.hasColumn('nivaro_hub_deploys', 'heartbeat_at')).toBe(true)
+    await db.schema.alterTable('nivaro_hub_deploys', (t) => t.dropColumn('heartbeat_at'))
+    await up(db)
+    expect(await db.schema.hasColumn('nivaro_hub_deploys', 'heartbeat_at')).toBe(true)
+  })
+
   it('defaults hub_managed to false', async () => {
     await db('nivaro_hub_environments').insert({ app_id: 1, key: 'p', base_url: 'https://a' })
     const r = await db('nivaro_hub_environments').first()

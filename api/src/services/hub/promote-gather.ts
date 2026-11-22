@@ -2,10 +2,23 @@ import { db } from '../../db/index.js'
 import { fetchJson, type GitCtx, gitlabApi } from '../gitlab-client.js'
 import { getApp } from '../io-holder.js'
 import { environmentFromRow, readApp } from './apps.js'
-import { listComponents } from './components.js'
-import { listEnvironmentDeploys } from './deploys.js'
-import { driverCtx, getDriver, getPlacement, type HubDriverRow } from './drivers.js'
-import { commitExistsOn, GitlabWriteError, latestCommitMatching } from './gitlab-write.js'
+import { componentTargetBranch, listComponents } from './components.js'
+import { gitlabDeployedVersions } from './deploy-evidence.js'
+import {
+  driverCtx,
+  getDriver,
+  getPlacement,
+  type HubDriverRow,
+  repositoryIdentity
+} from './drivers.js'
+import {
+  commitExistsOn,
+  findPipeline,
+  GitlabWriteError,
+  jobNamed,
+  latestCommitMatching,
+  readFile
+} from './gitlab-write.js'
 import { type HealDeps, interruptStaleRows } from './promote-heal.js'
 import { defaultPromoteLock, PromotionError } from './promote-lock.js'
 import type {
@@ -13,7 +26,8 @@ import type {
   HubDeployKind,
   HubEnvironmentRow,
   PlanDriver,
-  PlanInput
+  PlanInput,
+  PromotionStep
 } from './promote-types.js'
 import { hubImage, imageDigest } from './registry.js'
 import {
@@ -36,10 +50,20 @@ import {
  *  - the frontend commit is the short sha the previous environment's version.json answers,
  *    resolved to the full sha through the GitLab API before it is checked against the branch;
  *  - "the previous environment ran it" = the Hub's own successful deploys there UNION the
- *    version it answers now (staging is deployed by the release chain, not by the Hub).
+ *    version it answers now UNION the versions its own successful GitLab deploy jobs ran (the
+ *    pin file at each job's commit, newest 50 jobs): staging is deployed by the release chain,
+ *    not by the Hub, and moves on — an older version it ran is still promotable.
  *
- * A rollback's frontend commit is the one the Hub deployed with that version before (its stored
- * plan); it was deployed there, so it counts as on its branch.
+ * A rollback redeploys, per component, the build the Hub recorded when it deployed that version
+ * here: the commit the deploy job ran on (the stored plan's `deployedSha`, a merge commit on
+ * merge-method repos) and its pipeline (`deployedPipelineId`). The API's build is the commit that
+ * carried the old pin, so its rerun deploys the old Nivaro and builds the old extension together;
+ * no pin is committed and the registry is not read again. Every build is checked here, so a
+ * rollback that cannot redeploy one is refused before anything moves.
+ *
+ * Rollback offers only versions the Hub deployed here successfully with every component's
+ * deployed commit recorded and every API build's pipeline recorded (ROLLBACK_NOT_RECORDED
+ * otherwise); never versions from before the Hub.
  *
  * GitLab refusals (no token, unreachable) propagate as GitlabWriteError; the routes answer them.
  */
@@ -48,8 +72,69 @@ const ENVS = 'nivaro_hub_environments'
 const DEPLOYS = 'nivaro_hub_deploys'
 const VERSION_RE = /^\d+\.\d+\.\d+$/
 
+export {
+  forgetDeployEvidence,
+  GITLAB_DEPLOY_EVIDENCE,
+  gitlabDeployedVersions,
+  pinVersion,
+  successfulDeployCommits
+} from './deploy-evidence.js'
 export { interruptStaleRows } from './promote-heal.js'
 export { hubPromoteLockKey, PromotionError } from './promote-lock.js'
+
+/** Deploy job states GitLab can retry (a rollback reruns the earlier build's deploy job). */
+export const RERUNNABLE_JOB = ['success', 'failed', 'canceled']
+
+/**
+ * Whether an earlier frontend build can be redeployed: its pipeline (recorded, else the newest
+ * one GitLab has for the commit on the branch) has the deploy job in a state GitLab reruns.
+ */
+async function rollbackBuild(
+  deps: GatherDeps,
+  ctx: GitCtx,
+  branch: string,
+  sha: string,
+  recorded: number | null,
+  deployJob: string,
+  /** Look the pipeline up by commit when none is recorded (frontend); api: only the recorded one. */
+  lookUp: boolean
+): Promise<{ pipelineId: number | null; problem: string | null }> {
+  const short = sha.slice(0, 8)
+  const jobOf = async (id: number) => {
+    try {
+      return { found: true, job: await deps.jobNamed(ctx, id, deployJob) }
+    } catch (err) {
+      // A pipeline GitLab no longer has (pruned) answers 404.
+      if (err instanceof GitlabWriteError && err.status === 404) return { found: false, job: null }
+      throw err
+    }
+  }
+  // An API build is redeployed only from the pipeline the Hub recorded (none = not offered).
+  if (!lookUp && !recorded) return { pipelineId: null, problem: null }
+  let pipelineId = recorded
+  let read = pipelineId ? await jobOf(pipelineId) : { found: false, job: null }
+  if (!read.found && lookUp) {
+    pipelineId = (await deps.findPipeline(ctx, branch, sha))?.id ?? null
+    read = pipelineId ? await jobOf(pipelineId) : read
+  }
+  if (!pipelineId || !read.found)
+    return {
+      pipelineId: null,
+      problem: `${branch} has no pipeline for ${short} — there is no build of that commit to redeploy`
+    }
+  const job = read.job
+  if (!job)
+    return {
+      pipelineId,
+      problem: `pipeline ${pipelineId} for ${short} has no ${deployJob} job to redeploy`
+    }
+  if (!RERUNNABLE_JOB.includes(job.status))
+    return {
+      pipelineId,
+      problem: `the earlier build can't be rerun (job is ${job.status || 'unknown'})`
+    }
+  return { pipelineId, problem: null }
+}
 
 /** A value read from a JSON URL (the verify URL, a version.json). Never carries a token. */
 export interface ServedField {
@@ -133,9 +218,16 @@ export interface GatherDeps {
   ctxFor(driver: HubDriverRow): GitCtx
   latestCommitMatching: typeof latestCommitMatching
   commitExistsOn: typeof commitExistsOn
+  readFile: typeof readFile
+  findPipeline: typeof findPipeline
+  jobNamed: typeof jobNamed
   resolveCommit: typeof resolveCommit
   readServedField(url: string, field: string): Promise<ServedField>
-  /** Versions the environment's own GitLab deploy history shows a successful deploy job for. */
+  /**
+   * Versions an environment's own successful GitLab deploy jobs ran: the pin file at each job's
+   * commit, through its API components' drivers (newest GITLAB_DEPLOY_EVIDENCE jobs). [] when
+   * GitLab cannot tell — the plan then refuses PREVIOUS_NEVER_RAN as before.
+   */
   gitlabDeployedVersions(env: { placement_id: number | null }): Promise<string[]>
   /** The promotion lock of this environment is held (by anyone); 'unknown' = Redis unreachable. */
   isLocked(envId: number): Promise<boolean | 'unknown'>
@@ -154,18 +246,12 @@ export function defaultGatherDeps(): GatherDeps {
     ctxFor: driverCtx,
     latestCommitMatching,
     commitExistsOn,
+    readFile,
+    findPipeline,
+    jobNamed,
     resolveCommit,
     readServedField: (url, field) => readServedField(url, field),
-    gitlabDeployedVersions: async (env) => {
-      try {
-        const { data } = await listEnvironmentDeploys(env, { limit: 50 })
-        return data
-          .filter((d) => d.deploy_job?.status === 'success' && d.version)
-          .map((d) => d.version as string)
-      } catch {
-        return []
-      }
-    },
+    gitlabDeployedVersions: (env) => gitlabDeployedVersions(env).catch(() => [] as string[]),
     isLocked: (envId) => defaultPromoteLock().held(envId)
   }
 }
@@ -177,6 +263,46 @@ export function sourceSubjectRe(version: string): RegExp {
   return new RegExp(`nivaro ${escapeRe(version)}$`)
 }
 
+/**
+ * What an environment runs now for one step, read as the plan reads it: the API's version from
+ * the status reader (fresh), a frontend's served commit from its check address. null = cannot
+ * tell. The runner asks it when a held promote finds its deploy job already succeeded (P30).
+ */
+export function currentVersionReader(envId: number): (s: PromotionStep) => Promise<string | null> {
+  return async (s) => {
+    if (s.kind === 'frontend')
+      return s.verifyUrl ? (await readServedField(s.verifyUrl, s.verifyField)).value : null
+    const row = (await db(ENVS).where({ id: envId }).first()) as Record<string, unknown> | undefined
+    if (!row) return null
+    return (await readEnvironmentStatus(statusTarget(row), { fresh: true, redis: appRedis() }))
+      .version
+  }
+}
+
+/**
+ * The build the Hub's own runs on this environment last deployed for a step's component: the
+ * newest run (by id) whose stored step for it recorded a deployedSha — written only once that
+ * deploy passed, so a rollback run that redeployed the portal counts even if its API step then
+ * failed. null = the Hub has no record (P32).
+ */
+export function lastDeployedBuildReader(
+  envId: number
+): (s: PromotionStep) => Promise<{ sha: string; pipelineId: number | null } | null> {
+  return async (s) => {
+    const c = { name: s.component, kind: s.kind, position: s.position } as HubComponent
+    for (const r of await storedRuns(envId)) {
+      const st = storedStep(r.steps, c)
+      const sha = deployedSha(st)
+      if (sha)
+        return {
+          sha,
+          pipelineId: typeof st?.deployedPipelineId === 'number' ? st.deployedPipelineId : null
+        }
+    }
+    return null
+  }
+}
+
 function statusTarget(r: Record<string, unknown>): HubStatusTarget {
   return {
     id: Number(r.id),
@@ -186,43 +312,136 @@ function statusTarget(r: Record<string, unknown>): HubStatusTarget {
   }
 }
 
-async function successfulVersions(envId: number): Promise<string[]> {
-  const rows = (await db(DEPLOYS)
-    .where({ environment_id: envId, status: 'success' })
-    .orderBy('id', 'desc')
-    .select('version')) as Array<{ version: string }>
-  return rows.map((r) => String(r.version))
+/** The repository a driver deploys: GitLab base (without /api/v4) and project path. */
+export function driverIdentity(row: HubDriverRow): string {
+  return repositoryIdentity(String(row.config?.api ?? ''), String(row.config?.project ?? ''))
 }
 
 const unique = (xs: Array<string | null | undefined>) => [
   ...new Set(xs.filter((x): x is string => typeof x === 'string' && !!x))
 ]
 
-/** The frontend commit the Hub deployed to `envId` together with `version`, from its stored plan. */
-async function frontendDeployedWith(
-  envId: number,
-  version: string,
-  c: HubComponent
-): Promise<string | null> {
+/** A step as the runner stored it in a deploy row's plan JSON. */
+export interface StoredStep {
+  kind?: string
+  component?: string
+  position?: number
+  deployedSha?: string | null
+  deployedPipelineId?: number | null
+}
+
+export interface StoredRun {
+  kind: string
+  version: string
+  status: string
+  steps: StoredStep[]
+}
+
+/** The Hub's runs of one environment, newest first, with their stored steps. */
+async function storedRuns(envId: number): Promise<StoredRun[]> {
   const rows = (await db(DEPLOYS)
-    .where({ environment_id: envId, status: 'success', version })
+    .where({ environment_id: envId })
     .orderBy('id', 'desc')
-    .select('plan')) as Array<{ plan: string | null }>
-  for (const r of rows) {
+    .limit(500)
+    .select('kind', 'version', 'status', 'plan')) as Array<{
+    kind: string
+    version: string
+    status: string
+    plan: string | null
+  }>
+  return rows.map((r) => {
+    let steps: StoredStep[] = []
     try {
-      const plan = JSON.parse(String(r.plan ?? '')) as {
-        steps?: Array<{ kind?: string; component?: string; position?: number; sourceSha?: string }>
-      }
-      const steps = (plan.steps ?? []).filter((s) => s.kind === 'frontend')
-      const hit =
-        steps.find((s) => s.component === c.name) ?? steps.find((s) => s.position === c.position)
-      if (hit?.sourceSha) return hit.sourceSha
+      const plan = JSON.parse(String(r.plan ?? '')) as { steps?: StoredStep[] }
+      steps = Array.isArray(plan.steps) ? plan.steps : []
     } catch {
       /* an unreadable plan proves nothing */
     }
-  }
-  return null
+    return {
+      kind: String(r.kind),
+      version: String(r.version),
+      status: String(r.status),
+      steps
+    }
+  })
 }
+
+/** This component's stored step (same name, else same position). */
+function storedStep(steps: StoredStep[], c: HubComponent): StoredStep | undefined {
+  return (
+    steps.find((s) => s.component === c.name && s.kind === c.kind) ??
+    steps.find((s) => s.position === c.position && s.kind === c.kind)
+  )
+}
+
+const deployedSha = (s: StoredStep | undefined) =>
+  typeof s?.deployedSha === 'string' && s.deployedSha ? s.deployedSha : null
+
+/**
+ * The build the Hub recorded for `version` here for one component: the commit its deploy job ran
+ * on and that pipeline. Successful runs first, then any run whose deploy of the component passed
+ * (a deployed commit is written only once its deploy passed); one with a pipeline wins over one
+ * without (a no-op step of a finished promotion records no pipeline).
+ */
+export function recordedBuild(
+  runs: StoredRun[],
+  version: string,
+  c: HubComponent
+): { sha: string; pipelineId: number | null } | null {
+  const mine = runs.filter((r) => r.version === version)
+  const ordered = [
+    ...mine.filter((r) => r.status === 'success'),
+    ...mine.filter((r) => r.status !== 'success')
+  ]
+  const steps = ordered
+    .map((r) => storedStep(r.steps, c))
+    .filter((st): st is StoredStep => !!deployedSha(st))
+  const pick = steps.find((st) => typeof st.deployedPipelineId === 'number') ?? steps[0]
+  if (!pick) return null
+  return {
+    sha: deployedSha(pick) as string,
+    pipelineId: typeof pick.deployedPipelineId === 'number' ? pick.deployedPipelineId : null
+  }
+}
+
+/** Versions the Hub deployed here successfully with every component's deployed commit recorded. */
+function completeVersions(runs: StoredRun[], components: HubComponent[]): string[] {
+  return runs
+    .filter(
+      (r) =>
+        r.status === 'success' &&
+        components.length > 0 &&
+        components.every((c) => !!deployedSha(storedStep(r.steps, c)))
+    )
+    .map((r) => r.version)
+}
+
+/**
+ * A Hub PROMOTION of `version` here stopped before every component deployed: some promote run of
+ * that version planned a component (its own stored plan has it) that no promote run of the
+ * version recorded a deploy for. /promotable then offers the version the environment already
+ * answers, so the stopped promotion can be finished; the planner judges the rest. Rollback runs
+ * never count, nor a component added after a run that finished, nor an environment the Hub never
+ * promoted to that version.
+ */
+export async function unrecordedComponents(
+  envId: number,
+  version: string,
+  components: HubComponent[]
+): Promise<boolean> {
+  if (!VERSION_RE.test(version) || !components.length) return false
+  const runs = (await storedRuns(envId)).filter(
+    (r) => r.kind === 'promote' && r.version === version
+  )
+  const recorded = (c: HubComponent) => runs.some((r) => !!deployedSha(storedStep(r.steps, c)))
+  // Components some run of this version planned itself, matched to the placement's components.
+  const planned = components.filter((c) => runs.some((r) => !!storedStep(r.steps, c)))
+  return planned.some((c) => !recorded(c))
+}
+
+/** Versions the previous environment ran through the Hub successfully (any record). */
+const successfulVersions = (runs: StoredRun[]) =>
+  runs.filter((r) => r.status === 'success').map((r) => r.version)
 
 /**
  * Where the previous environment says which frontend commit it serves: its own component of the
@@ -253,17 +472,16 @@ function previousFrontendUrl(
 }
 
 /**
- * A placement's components; the implicit component of a phase-1 placement deploys to the
- * placement's own target branch when it names one (as the phase-1 deploy history reads it).
+ * A placement's components, each target branch resolved component → placement (the implicit
+ * component deploys to the placement's own branch, as the phase-1 deploy history reads it).
  */
 async function componentsForGather(placementId: number | null): Promise<HubComponent[]> {
   if (!placementId) return []
-  const list = await listComponents(placementId)
-  if (!list.some((c) => c.implicit)) return list
-  const branch = (await getPlacement(placementId))?.target.branch ?? null
-  return list.map((c) =>
-    c.implicit && branch && !c.target_branch ? { ...c, target_branch: branch } : c
-  )
+  const [list, placement] = await Promise.all([
+    listComponents(placementId),
+    getPlacement(placementId)
+  ])
+  return list.map((c) => ({ ...c, target_branch: componentTargetBranch(c, placement) }))
 }
 
 export async function gatherPlanInput(
@@ -304,7 +522,8 @@ export async function gatherPlanInput(
     drivers[row.id] = {
       branch: row.config.branch,
       deploy_job: row.config.deploy_job,
-      pin_file: row.config.pin_file
+      pin_file: row.config.pin_file,
+      identity: driverIdentity(row)
     }
   }
 
@@ -315,49 +534,119 @@ export async function gatherPlanInput(
   const targetVersion = targetStatus.version
   const previousVersion = previousStatus?.version ?? null
 
-  const [prevHub, targetHub, targetGitlab] = await Promise.all([
-    previous ? successfulVersions(previous.id) : Promise.resolve([]),
-    successfulVersions(envId),
-    kind === 'rollback' ? deps.gitlabDeployedVersions(target) : Promise.resolve([])
+  const [prevRuns, targetRuns] = await Promise.all([
+    previous ? storedRuns(previous.id) : Promise.resolve([] as StoredRun[]),
+    storedRuns(envId)
   ])
+  const prevHub = successfulVersions(prevRuns)
+  // GitLab evidence (the release chain deploys staging): read only when the Hub's own records
+  // and what the previous environment answers now do not already show the version.
+  const prevGitlab =
+    kind === 'promote' &&
+    previous &&
+    (!VERSION_RE.test(version) || ![...prevHub, previousVersion].includes(version))
+      ? await deps.gitlabDeployedVersions(previous)
+      : []
+  const targetHub = completeVersions(targetRuns, components)
+  // Offered for rollback: every API build's pipeline recorded too (a frontend's is looked up).
+  const rollbackVersions = targetHub.filter((v) =>
+    components.every((c) => c.kind !== 'api' || recordedBuild(targetRuns, v, c)?.pipelineId != null)
+  )
+  const thisVersion = targetRuns.filter((r) => r.version === version)
+  const recordedDeploys: Record<number, string[]> = {}
+  for (const c of components) {
+    const shas = unique(thisVersion.map((r) => deployedSha(storedStep(r.steps, c))))
+    if (shas.length) recordedDeploys[c.position] = shas
+  }
 
   const versionOk = VERSION_RE.test(version)
   const sources: PlanInput['sources'] = {}
   const sourceOnTarget: PlanInput['sourceOnTarget'] = {}
   const frontendServed: PlanInput['frontendServed'] = {}
   const frontendOnSource: PlanInput['frontendOnSource'] = {}
+  const pinOnTarget: NonNullable<PlanInput['pinOnTarget']> = {}
+  const frontendOnTarget: NonNullable<PlanInput['frontendOnTarget']> = {}
+  const frontendHeld: NonNullable<PlanInput['frontendHeld']> = {}
+  const frontendHead: NonNullable<PlanInput['frontendHead']> = {}
+  const rollbackBuilds: NonNullable<PlanInput['rollbackBuild']> = {}
 
   for (const c of components) {
     const driver = driverRows.get(c.driver_id)
     if (!driver || !versionOk) continue
-    const targetBranch = c.target_branch ?? driver.config.branch
+    const targetBranch = componentTargetBranch(c, null, driver.config.branch) as string
+    if (kind === 'rollback') {
+      // The build the Hub's deploy job ran on here with this version, and its pipeline.
+      const build = recordedBuild(targetRuns, version, c)
+      if (c.kind === 'frontend') {
+        frontendServed[c.position] = build?.sha ?? null
+        frontendOnSource[c.position] = true
+      }
+      if (!build) continue
+      // An API build without a recorded pipeline is never looked up: ROLLBACK_NOT_RECORDED.
+      if (c.kind === 'api' && build.pipelineId == null) {
+        rollbackBuilds[c.position] = { sha: build.sha, pipelineId: null, problem: null }
+        continue
+      }
+      const ctx = deps.ctxFor(driver)
+      // A build is redeployed only from its own branch: a commit no longer there is never merged.
+      rollbackBuilds[c.position] = (await deps.commitExistsOn(ctx, build.sha, targetBranch))
+        ? {
+            sha: build.sha,
+            ...(await rollbackBuild(
+              deps,
+              ctx,
+              targetBranch,
+              build.sha,
+              build.pipelineId,
+              c.deploy_job ?? driver.config.deploy_job,
+              c.kind === 'frontend'
+            ))
+          }
+        : {
+            sha: build.sha,
+            pipelineId: null,
+            problem: `${build.sha.slice(0, 8)} is no longer on ${targetBranch} — that build can't be redeployed`
+          }
+      continue
+    }
     if (c.kind === 'api') {
       const ctx = deps.ctxFor(driver)
       const src = await deps.latestCommitMatching(ctx, c.source_branch, sourceSubjectRe(version))
       sources[c.position] = src
       if (src) sourceOnTarget[c.position] = await deps.commitExistsOn(ctx, src.sha, targetBranch)
-      continue
-    }
-    if (kind === 'rollback') {
-      // The commit the Hub deployed here with this version; it was deployed, so it is on its branch.
-      frontendServed[c.position] = await frontendDeployedWith(envId, version, c)
-      frontendOnSource[c.position] = true
+      // Is the pin already there (a no-op), or would a same-version run rewrite it?
+      if (
+        kind === 'promote' &&
+        driver.config.pin_file &&
+        (sourceOnTarget[c.position] === true || targetVersion === version)
+      )
+        pinOnTarget[c.position] = await deps.readFile(ctx, driver.config.pin_file, targetBranch)
       continue
     }
     const where = previous ? previousFrontendUrl(c, target, previous, previousComponents) : null
-    const served = where ? (await deps.readServedField(where.url, where.field)).value : null
+    const [served, onTarget] = await Promise.all([
+      where ? deps.readServedField(where.url, where.field).then((r) => r.value) : null,
+      c.verify_url ? deps.readServedField(c.verify_url, c.verify_field).then((r) => r.value) : null
+    ])
     frontendServed[c.position] = served
+    frontendOnTarget[c.position] = onTarget
     if (!served) continue
     const ctx = deps.ctxFor(driver)
     const full = await deps.resolveCommit(ctx, served)
     frontendOnSource[c.position] = full
       ? await deps.commitExistsOn(ctx, full, c.source_branch)
       : false
+    if (full) frontendHeld[c.position] = await deps.commitExistsOn(ctx, full, targetBranch)
+    // Held: the run deploys the branch head; the plan names it and the run refuses if it moved.
+    if (frontendHeld[c.position])
+      frontendHead[c.position] =
+        (await deps.latestCommitMatching(ctx, targetBranch, /^/, 1))?.sha ?? null
   }
 
+  // A rollback redeploys recorded builds: the registry is not read again.
   const hasApi = components.some((c) => c.kind === 'api')
   const [digest, slimDigest] =
-    hasApi && versionOk
+    hasApi && versionOk && kind === 'promote'
       ? await Promise.all([
           deps.imageDigest(hubImage(), version),
           deps.imageDigest(hubImage(), `${version}-slim`)
@@ -379,8 +668,15 @@ export async function gatherPlanInput(
     version,
     targetVersion,
     previousVersion,
-    previousDeployedVersions: unique([...prevHub, previousVersion]),
-    targetDeployedVersions: unique([...targetHub, ...targetGitlab]),
+    previousDeployedVersions: unique([...prevHub, previousVersion, ...prevGitlab]),
+    targetDeployedVersions: unique(targetHub),
+    rollbackVersions: unique(rollbackVersions),
+    recordedDeploys,
+    pinOnTarget,
+    frontendOnTarget,
+    frontendHeld,
+    frontendHead,
+    rollbackBuild: rollbackBuilds,
     sources,
     frontendServed,
     frontendOnSource,

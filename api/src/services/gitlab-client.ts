@@ -8,6 +8,8 @@ export interface FetchJsonOptions {
   method?: string
   /** Sent as JSON (content-type application/json) when set. */
   body?: unknown
+  /** Aborts the request (as the timeout does) when it fires. */
+  signal?: AbortSignal
 }
 
 export async function fetchJson(
@@ -18,6 +20,10 @@ export async function fetchJson(
 ): Promise<{ ok: boolean; status: number; body: unknown }> {
   const ctl = new AbortController()
   const timer = setTimeout(() => ctl.abort(), timeoutMs)
+  const outer = opts.signal
+  const onOuter = () => ctl.abort()
+  if (outer?.aborted) ctl.abort()
+  else outer?.addEventListener('abort', onOuter, { once: true })
   try {
     let res: Response
     try {
@@ -49,6 +55,7 @@ export async function fetchJson(
     return { ok: res.ok, status: res.status, body }
   } finally {
     clearTimeout(timer)
+    outer?.removeEventListener('abort', onOuter)
   }
 }
 

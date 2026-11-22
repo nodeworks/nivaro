@@ -497,7 +497,7 @@ function ComponentForm({
               { value: 'frontend', label: 'Frontend (what the environment before serves)' }
             ]}
             ariaLabel='Kind'
-            className='h-8 text-[13px]'
+            className='h-8 text-left text-[13px]'
             triggerProps={{ id: `${idPrefix}-kind` }}
           />
         </Field>
@@ -507,7 +507,7 @@ function ComponentForm({
             onChange={(v) => set({ driver_id: v })}
             options={drivers.map((x) => ({ value: String(x.id), label: x.name }))}
             ariaLabel='Driver'
-            className='h-8 text-[13px]'
+            className='h-8 text-left text-[13px]'
             triggerProps={{ id: `${idPrefix}-driver` }}
           />
         </Field>

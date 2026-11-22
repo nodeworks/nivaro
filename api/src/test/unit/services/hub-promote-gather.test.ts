@@ -24,6 +24,7 @@ const m542 = await import('../../../db/migrations/542_hub_tables.js')
 const m543 = await import('../../../db/migrations/543_hub_promotions.js')
 const gather = await import('../../../services/hub/promote-gather.js')
 const gw = await import('../../../services/hub/gitlab-write.js')
+const drivers = await import('../../../services/hub/drivers.js')
 const { buildPromotionPlan } = await import('../../../services/hub/promote-plan.js')
 const { FakeGitLab } = await import('./hub-fake-gitlab.js')
 
@@ -34,6 +35,7 @@ let gl: InstanceType<typeof FakeGitLab>
 let fetchSpy: ReturnType<typeof vi.spyOn>
 const versions: Record<number, string | null> = {}
 let locked = false
+let gitlabHistory: string[] = []
 
 function deps(): GatherDeps {
   return {
@@ -48,9 +50,12 @@ function deps(): GatherDeps {
     ctxFor: (driver) => gl.ctx(driver.config.project),
     latestCommitMatching: gw.latestCommitMatching,
     commitExistsOn: gw.commitExistsOn,
+    readFile: gw.readFile,
+    findPipeline: gw.findPipeline,
+    jobNamed: gw.jobNamed,
     resolveCommit: gather.resolveCommit,
     readServedField: (url, field) => gather.readServedField(url, field),
-    gitlabDeployedVersions: async () => [],
+    gitlabDeployedVersions: async () => gitlabHistory,
     isLocked: async () => locked
   }
 }
@@ -87,6 +92,8 @@ beforeEach(async () => {
   ])
     await db(t).del()
   locked = false
+  gitlabHistory = []
+  gather.forgetDeployEvidence()
   versions[1] = '0.3.10'
   versions[2] = '0.3.9'
   await db('nivaro_hub_apps').insert({ id: 1, key: 'efp', name: 'EFP' })
@@ -178,7 +185,8 @@ describe('gatherPlanInput', () => {
     expect(input.drivers[1]).toEqual({
       branch: 'production',
       deploy_job: 'deploy_production',
-      pin_file: '.docker/nivaro-version'
+      pin_file: '.docker/nivaro-version',
+      identity: 'https://gitlab.example.com|efp/deploy'
     })
     expect(input.digest).toBe(DIGEST)
     expect(input.running).toBe(false)
@@ -219,23 +227,479 @@ describe('gatherPlanInput', () => {
     )
   })
 
-  it('rollback: the frontend commit the Hub deployed with that version counts as on its branch', async () => {
-    versions[2] = '0.3.10'
-    await db('nivaro_hub_deploys').insert({
+  it('P26: staging deployed by the release chain and moved ahead — the older version is still promotable', async () => {
+    // Staging's API deploys to its own branch; the release chain ran 0.3.10, then 0.3.11.
+    await db('nivaro_hub_components')
+      .where({ placement_id: 4, kind: 'api' })
+      .update({ target_branch: 'staging' })
+    gl.branch('efp/deploy', 'staging', api['0.3.1'])
+    const deploy = (version: string, status = 'success') => {
+      const sha = gl.commit('efp/deploy', 'staging', `chore: sync for nivaro ${version}`, {
+        '.docker/nivaro-version': `${version}\n${DIGEST}\n`
+      })
+      gl.pipeline('efp/deploy', 'staging', sha, [{ name: 'deploy_production', statuses: [status] }])
+    }
+    deploy('0.3.8', 'failed')
+    deploy('0.3.10')
+    deploy('0.3.11')
+    versions[1] = '0.3.11'
+    const real = {
+      ...deps(),
+      gitlabDeployedVersions: (env: { placement_id: number | null }) =>
+        gather.gitlabDeployedVersions(env, (d) => gl.ctx(d.config.project))
+    }
+    const input = await gather.gatherPlanInput(2, { kind: 'promote', version: '0.3.10' }, real)
+    expect(input.previousDeployedVersions.sort()).toEqual(['0.3.10', '0.3.11'])
+    expect(buildPromotionPlan(input).blockers.map((b) => b.code)).not.toContain(
+      'PREVIOUS_NEVER_RAN'
+    )
+    // A failed deploy job is no evidence; neither is a version staging never deployed.
+    const failed = buildPromotionPlan(
+      await gather.gatherPlanInput(2, { kind: 'promote', version: '0.3.8' }, real)
+    )
+    expect(failed.blockers.map((b) => b.code)).toContain('PREVIOUS_NEVER_RAN')
+    // Read through the token header, redirects refused.
+    const jobReads = gl.calls.filter((c) => c.path === '/jobs')
+    expect(jobReads.length).toBeGreaterThan(0)
+    for (const c of jobReads) {
+      expect(c.token).toBe(gl.token)
+      expect(c.redirect).toBe('error')
+    }
+  })
+
+  it('P26: only the newest 50 successful deploy jobs count', async () => {
+    await db('nivaro_hub_components')
+      .where({ placement_id: 4, kind: 'api' })
+      .update({ target_branch: 'staging' })
+    gl.branch('efp/deploy', 'staging', api['0.3.1'])
+    for (let i = 0; i <= gather.GITLAB_DEPLOY_EVIDENCE; i++) {
+      const v = `0.4.${i}`
+      const sha = gl.commit('efp/deploy', 'staging', `chore: sync for nivaro ${v}`, {
+        '.docker/nivaro-version': `${v}\n`
+      })
+      gl.pipeline('efp/deploy', 'staging', sha, [
+        { name: 'deploy_production', statuses: ['success'] }
+      ])
+    }
+    const seen = await gather.gitlabDeployedVersions({ placement_id: 4 }, (d) =>
+      gl.ctx(d.config.project)
+    )
+    expect(seen).toHaveLength(gather.GITLAB_DEPLOY_EVIDENCE)
+    expect(seen).not.toContain('0.4.0')
+    expect(seen).toContain(`0.4.${gather.GITLAB_DEPLOY_EVIDENCE}`)
+    // The Hub's own records already show the version: GitLab is not asked.
+    gl.calls.length = 0
+    let asked = 0
+    await gather.gatherPlanInput(
+      2,
+      { kind: 'promote', version: '0.3.10' },
+      {
+        ...deps(),
+        gitlabDeployedVersions: async () => {
+          asked++
+          return []
+        }
+      }
+    )
+    expect(asked).toBe(0)
+  })
+
+  describe('P31: GitLab deploy evidence is cached', () => {
+    const staging = async () => {
+      await db('nivaro_hub_components')
+        .where({ placement_id: 4, kind: 'api' })
+        .update({ target_branch: 'staging' })
+      gl.branch('efp/deploy', 'staging', api['0.3.1'])
+      const shas: string[] = []
+      for (const v of ['0.3.10', '0.3.11', '0.3.12']) {
+        const sha = gl.commit('efp/deploy', 'staging', `chore: sync for nivaro ${v}`, {
+          '.docker/nivaro-version': `${v}\n`
+        })
+        gl.pipeline('efp/deploy', 'staging', sha, [
+          { name: 'deploy_production', statuses: ['success'] }
+        ])
+        shas.push(sha)
+      }
+      return shas
+    }
+    const ctxFor = (d: { config: { project: string } }) => gl.ctx(d.config.project)
+    const reads = () =>
+      gl.calls.filter((c) => c.path === '/jobs' || c.path.startsWith('/repository/files')).length
+
+    it('a second call is answered from the cache: no GitLab read', async () => {
+      await staging()
+      const first = await gather.gitlabDeployedVersions({ placement_id: 4 }, ctxFor)
+      expect(first.sort()).toEqual(['0.3.10', '0.3.11', '0.3.12'])
+      const before = reads()
+      expect(before).toBeGreaterThan(0)
+      const second = await gather.gitlabDeployedVersions({ placement_id: 4 }, ctxFor)
+      expect(second.sort()).toEqual(first.sort())
+      expect(reads()).toBe(before)
+      // Keys never carry the token.
+      expect(JSON.stringify(gl.calls.map((c) => c.path))).not.toContain(gl.token)
+    })
+
+    it('the job list expires after 60 s; pins never do; concurrent callers share one read', async () => {
+      await staging()
+      let t = 1_000_000
+      const now = () => t
+      const both = await Promise.all([
+        gather.gitlabDeployedVersions({ placement_id: 4 }, ctxFor, { now, redis: null }),
+        gather.gitlabDeployedVersions({ placement_id: 4 }, ctxFor, { now, redis: null })
+      ])
+      expect(both[0].sort()).toEqual(both[1].sort())
+      expect(gl.calls.filter((c) => c.path === '/jobs')).toHaveLength(1)
+      t += 61_000
+      const files = gl.calls.filter((c) => c.path.startsWith('/repository/files')).length
+      await gather.gitlabDeployedVersions({ placement_id: 4 }, ctxFor, { now, redis: null })
+      expect(gl.calls.filter((c) => c.path === '/jobs')).toHaveLength(2)
+      expect(gl.calls.filter((c) => c.path.startsWith('/repository/files')).length).toBe(files)
+    })
+
+    it('the budget cuts a hanging pin read and answers what it has', async () => {
+      const shas = await staging()
+      const started = Date.now()
+      const seen = await gather.gitlabDeployedVersions({ placement_id: 4 }, ctxFor, {
+        budgetMs: 100,
+        readFile: (ctx, path, ref) =>
+          ref === shas[1] ? new Promise<string | null>(() => {}) : gw.readFile(ctx, path, ref)
+      })
+      expect(Date.now() - started).toBeLessThan(2000)
+      expect(seen.sort()).toEqual(['0.3.10', '0.3.12'])
+    })
+
+    it('Minor 1: past the budget no read starts, and reads in flight are aborted', async () => {
+      await db('nivaro_hub_components')
+        .where({ placement_id: 4, kind: 'api' })
+        .update({ target_branch: 'staging' })
+      gl.branch('efp/deploy', 'staging', api['0.3.1'])
+      for (let i = 0; i < 8; i++) {
+        const sha = gl.commit('efp/deploy', 'staging', `chore: sync for nivaro 0.5.${i}`, {
+          '.docker/nivaro-version': `0.5.${i}\n`
+        })
+        gl.pipeline('efp/deploy', 'staging', sha, [
+          { name: 'deploy_production', statuses: ['success'] }
+        ])
+      }
+      const signals: AbortSignal[] = []
+      const seen = await gather.gitlabDeployedVersions({ placement_id: 4 }, ctxFor, {
+        budgetMs: 50,
+        readFile: (_ctx, _path, _ref, signal) => {
+          if (signal) signals.push(signal)
+          return new Promise<string | null>(() => {})
+        }
+      })
+      expect(seen).toEqual([])
+      // One batch of 5 started before the deadline; the other 3 never did.
+      await new Promise((r) => setTimeout(r, 100))
+      expect(signals).toHaveLength(5)
+      expect(signals.every((sg) => sg.aborted)).toBe(true)
+    })
+
+    it('Minor 4: a missing pin file is asked again after 60 s; a real pin never', async () => {
+      const shas = await staging()
+      // The pin file is gone at the newest commit (404).
+      const gone = gl.commit('efp/deploy', 'staging', 'chore: drop pin', {})
+      gl.projects.get('efp/deploy')?.commits.get(gone)?.tree.delete('.docker/nivaro-version')
+      gl.pipeline('efp/deploy', 'staging', gone, [
+        { name: 'deploy_production', statuses: ['success'] }
+      ])
+      let t = 5_000_000
+      const now = () => t
+      const fileReads = (ref: string) =>
+        gl.calls.filter((c) => c.path.startsWith('/repository/files') && c.url.includes(ref)).length
+      const call = () =>
+        gather.gitlabDeployedVersions({ placement_id: 4 }, ctxFor, { now, redis: null })
+      expect((await call()).sort()).toEqual(['0.3.10', '0.3.11', '0.3.12'])
+      expect(fileReads(gone)).toBe(1)
+      t += 30_000
+      await call()
+      expect(fileReads(gone)).toBe(1)
+      t += 31_000
+      await call()
+      expect(fileReads(gone)).toBe(2)
+      expect(fileReads(shas[0])).toBe(1)
+    })
+
+    it('an edited driver (another repository) misses the cache', async () => {
+      await staging()
+      await gather.gitlabDeployedVersions({ placement_id: 4 }, ctxFor)
+      const jobs = gl.calls.filter((c) => c.path === '/jobs').length
+      const copy = gl.projects.get('efp/deploy')
+      if (copy) gl.projects.set('efp/deploy-copy', copy)
+      await db('nivaro_hub_drivers')
+        .where({ id: 1 })
+        .update({ config: driverConfig('efp/deploy-copy') })
+      const again = await gather.gitlabDeployedVersions({ placement_id: 4 }, ctxFor)
+      expect(again.sort()).toEqual(['0.3.10', '0.3.11', '0.3.12'])
+      expect(gl.calls.filter((c) => c.path === '/jobs').length).toBe(jobs + 1)
+      expect(gl.calls.some((c) => c.url.includes('efp%2Fdeploy-copy'))).toBe(true)
+    })
+  })
+
+  /** A successful Hub run of `version` here; steps carry what each deploy ran on. */
+  const recordedRun = (
+    version: string,
+    steps: Array<Record<string, unknown>>,
+    status = 'success'
+  ) =>
+    db('nivaro_hub_deploys').insert({
       app_id: 1,
       environment_id: 2,
       kind: 'promote',
-      version: '0.3.1',
-      status: 'success',
-      plan: JSON.stringify({
-        steps: [{ kind: 'frontend', component: 'frontend', position: 2, sourceSha: 'abc12345' }]
-      })
+      version,
+      status,
+      plan: JSON.stringify({ steps })
     })
+
+  /** An API build the Hub deployed on production: the pinned commit and its deploy pipeline. */
+  const apiBuild = (version = '0.3.1') => {
+    const sha = gl.commit('efp/deploy', 'production', `chore: promote nivaro ${version}`, {
+      '.docker/nivaro-version': `${version}\n${DIGEST}\n`
+    })
+    const pipeline = gl.pipeline('efp/deploy', 'production', sha, [
+      { name: 'deploy_production', statuses: ['success'] }
+    ])
+    return {
+      sha,
+      pipeline,
+      step: {
+        kind: 'api',
+        component: 'api',
+        position: 1,
+        deployedSha: sha,
+        deployedPipelineId: pipeline.id
+      }
+    }
+  }
+
+  it('B2: a rollback redeploys the commit the deploy job ran on (the merge commit) and its pipeline', async () => {
+    versions[2] = '0.3.10'
+    const merged = gl.commit('efp/portal', 'production', 'Merge into production')
+    const build = gl.pipeline('efp/portal', 'production', merged, [
+      { name: 'deploy_production', statuses: ['success'] }
+    ])
+    const ab = apiBuild()
+    await recordedRun('0.3.1', [
+      ab.step,
+      {
+        kind: 'frontend',
+        component: 'frontend',
+        position: 2,
+        sourceSha: feFull.slice(0, 8),
+        deployedSha: merged,
+        deployedPipelineId: build.id
+      }
+    ])
     const input = await gather.gatherPlanInput(2, { kind: 'rollback', version: '0.3.1' }, deps())
-    expect(input.frontendServed).toEqual({ 2: 'abc12345' })
+    expect(input.frontendServed).toEqual({ 2: merged })
     expect(input.frontendOnSource).toEqual({ 2: true })
+    expect(input.rollbackBuild).toEqual({
+      1: { sha: ab.sha, pipelineId: ab.pipeline.id, problem: null },
+      2: { sha: merged, pipelineId: build.id, problem: null }
+    })
     expect(input.targetDeployedVersions).toEqual(['0.3.1'])
+    expect(input.rollbackVersions).toEqual(['0.3.1'])
+    // A rollback redeploys recorded builds: the registry is not asked again.
+    expect(input.digest).toBeNull()
+    const plan = buildPromotionPlan(input)
+    expect(plan.ok).toBe(true)
+    expect(plan.steps[0]).toMatchObject({
+      sourceSha: ab.sha,
+      buildPipelineId: ab.pipeline.id,
+      pinText: null
+    })
+    expect(plan.steps[1]).toMatchObject({ sourceSha: merged, buildPipelineId: build.id })
+    // B8: the plan says it redeploys that build, never "serves" or "merge".
+    expect(plan.lines).toContain(`Frontend: redeploy frontend's build ${merged.slice(0, 7)}`)
+    expect(plan.lines.join('\n')).not.toMatch(/staging serves|merge [0-9a-f]{7} into/)
+  })
+
+  it('B2: a rollback whose frontend build cannot be rerun is refused at plan time', async () => {
+    versions[2] = '0.3.10'
+    const merged = gl.commit('efp/portal', 'production', 'Merge into production')
+    const build = gl.pipeline('efp/portal', 'production', merged, [
+      { name: 'deploy_production', statuses: ['manual'] }
+    ])
+    await recordedRun('0.3.1', [
+      apiBuild().step,
+      { kind: 'frontend', component: 'frontend', position: 2, deployedSha: merged }
+    ])
+    const plan = buildPromotionPlan(
+      await gather.gatherPlanInput(2, { kind: 'rollback', version: '0.3.1' }, deps())
+    )
+    expect(plan.blockers).toEqual([
+      {
+        code: 'FRONTEND_ROLLBACK_NO_BUILD',
+        text: "frontend: the earlier build can't be rerun (job is manual)"
+      }
+    ])
+    expect(build.jobs[0].plays).toBe(0)
+    // No pipeline at all for the commit: refused the same way.
+    gl.pipelinesOf('efp/portal').length = 0
+    const none = buildPromotionPlan(
+      await gather.gatherPlanInput(2, { kind: 'rollback', version: '0.3.1' }, deps())
+    )
+    expect(none.blockers.map((b) => b.code)).toEqual(['FRONTEND_ROLLBACK_NO_BUILD'])
+    expect(none.blockers[0].text).toMatch(/has no pipeline for .* no build of that commit/)
+  })
+
+  it('a rollback whose recorded build is no longer on the target branch is refused at plan time', async () => {
+    versions[2] = '0.3.10'
+    // Recorded, with a pipeline, but production no longer holds the commit (force-pushed away).
+    const gone = gl.commit('efp/portal', 'elsewhere', 'Merge into production')
+    const build = gl.pipeline('efp/portal', 'production', gone, [
+      { name: 'deploy_production', statuses: ['success'] }
+    ])
+    await recordedRun('0.3.1', [
+      apiBuild().step,
+      {
+        kind: 'frontend',
+        component: 'frontend',
+        position: 2,
+        deployedSha: gone,
+        deployedPipelineId: build.id
+      }
+    ])
+    const plan = buildPromotionPlan(
+      await gather.gatherPlanInput(2, { kind: 'rollback', version: '0.3.1' }, deps())
+    )
+    expect(plan.blockers).toEqual([
+      {
+        code: 'FRONTEND_ROLLBACK_NO_BUILD',
+        text: `frontend: ${gone.slice(0, 8)} is no longer on production — that build can't be redeployed`
+      }
+    ])
+  })
+
+  it('a held frontend: the plan reads the target head it will deploy', async () => {
+    gl.branch('efp/portal', 'production', feFull)
+    const head = gl.commit('efp/portal', 'production', 'feat: newer on production')
+    const input = await gather.gatherPlanInput(2, { kind: 'promote', version: '0.3.10' }, deps())
+    expect(input.frontendHeld).toEqual({ 2: true })
+    expect(input.frontendHead).toEqual({ 2: head })
+    const plan = buildPromotionPlan(input)
+    expect(plan.steps[1].expectHead).toBe(head)
+    expect(plan.lines).toContain(
+      `Frontend: production already holds ${feFull.slice(0, 7)} — deploy production's current head ${head.slice(0, 7)}`
+    )
+  })
+
+  it('a same-version run whose image changed is refused with PIN_CHANGED', async () => {
+    versions[2] = '0.3.10'
+    gl.branch('efp/deploy', 'production', api['0.3.10'])
+    gl.commit('efp/deploy', 'production', 'pin', {
+      '.docker/nivaro-version': `0.3.10\nsha256:${'c'.repeat(64)}\n`
+    })
+    await recordedRun(
+      '0.3.10',
+      [{ kind: 'api', component: 'api', position: 1, deployedSha: 'f00d' }],
+      'cancelled'
+    )
+    const plan = buildPromotionPlan(
+      await gather.gatherPlanInput(2, { kind: 'promote', version: '0.3.10' }, deps())
+    )
+    expect(plan.blockers.map((b) => b.code)).toEqual(['PIN_CHANGED'])
+    expect(plan.blockers[0].text).toMatch(
+      /^api: the image for 0\.3\.10 changed since it was deployed — production pins 0\.3\.10 image cccccccccccc, the registry now has 0\.3\.10 image aaaaaaaaaaaa/
+    )
+  })
+
+  it('B3: rollback offers only Hub runs with every deployed commit recorded; never GitLab history', async () => {
+    versions[2] = '0.3.10'
+    gitlabHistory = ['0.3.8', '0.3.9']
+    // A run before deployed commits were recorded, and one stopped after the api.
+    await recordedRun('0.3.5', [
+      { kind: 'api', component: 'api', position: 1, sourceSha: 'aaa' },
+      { kind: 'frontend', component: 'frontend', position: 2, sourceSha: 'bbbbbbb' }
+    ])
+    await recordedRun(
+      '0.3.6',
+      [{ kind: 'api', component: 'api', position: 1, deployedSha: 'f00d' }],
+      'cancelled'
+    )
+    await recordedRun('0.3.7', [
+      { kind: 'api', component: 'api', position: 1, deployedSha: 'f00d' },
+      { kind: 'frontend', component: 'frontend', position: 2, deployedSha: feFull }
+    ])
+    const input = await gather.gatherPlanInput(2, { kind: 'rollback', version: '0.3.9' }, deps())
+    expect(input.targetDeployedVersions).toEqual(['0.3.7'])
+    const plan = buildPromotionPlan(input)
+    // P29: its own code, never the check-address hint of FRONTEND_UNKNOWN.
+    expect(plan.blockers.map((b) => b.code)).toEqual(
+      expect.arrayContaining(['NOT_DEPLOYED_BEFORE', 'ROLLBACK_BUILD_UNKNOWN'])
+    )
+    expect(plan.blockers.map((b) => b.code)).not.toContain('FRONTEND_UNKNOWN')
+    expect(plan.blockers.find((b) => b.code === 'ROLLBACK_BUILD_UNKNOWN')?.text).toBe(
+      'frontend: the Hub has no record of the build production deployed with 0.3.9'
+    )
+    expect(plan.lines.join('\n')).not.toContain('serves')
+
+    // P21 / review Minor 3: an API-only placement gets no versions from GitLab's own history
+    // either (deployed before the Hub, so there is no recorded build to redeploy).
+    await db('nivaro_hub_components').where({ placement_id: 5, kind: 'frontend' }).del()
+    const apiOnly = await gather.gatherPlanInput(2, { kind: 'rollback', version: '0.3.9' }, deps())
+    expect(apiOnly.targetDeployedVersions).toEqual(['0.3.7'])
+    // 0.3.7's API build has no recorded pipeline: deployed, but not offered for rollback.
+    expect(apiOnly.rollbackVersions).toEqual([])
+    const unrecorded = buildPromotionPlan(
+      await gather.gatherPlanInput(2, { kind: 'rollback', version: '0.3.7' }, deps())
+    )
+    expect(unrecorded.blockers.map((b) => b.code)).toEqual(['ROLLBACK_NOT_RECORDED'])
+  })
+
+  it('P21: an API rollback takes the recorded pipeline, never a pin or the registry', async () => {
+    versions[2] = '0.3.10'
+    await db('nivaro_hub_components').where({ placement_id: 5, kind: 'frontend' }).del()
+    const ab = apiBuild('0.3.7')
+    // The build of a later, finished promotion of 0.3.7 recorded no pipeline (its api was a
+    // no-op): the earlier stopped run's pipeline is the one redeployed.
+    await recordedRun('0.3.7', [ab.step], 'cancelled')
+    await recordedRun('0.3.7', [
+      { kind: 'api', component: 'api', position: 1, deployedSha: ab.sha }
+    ])
+    const input = await gather.gatherPlanInput(2, { kind: 'rollback', version: '0.3.7' }, deps())
+    expect(input.rollbackVersions).toEqual(['0.3.7'])
+    expect(input.rollbackBuild).toEqual({
+      1: { sha: ab.sha, pipelineId: ab.pipeline.id, problem: null }
+    })
+    expect(input.digest).toBeNull()
     expect(buildPromotionPlan(input).ok).toBe(true)
+    // The pipeline is gone (pruned): the API build is never looked up by commit.
+    gl.pipelinesOf('efp/deploy').length = 0
+    gl.pipeline('efp/deploy', 'production', ab.sha, [
+      { name: 'deploy_production', statuses: ['success'] }
+    ])
+    const pruned = buildPromotionPlan(
+      await gather.gatherPlanInput(2, { kind: 'rollback', version: '0.3.7' }, deps())
+    )
+    expect(pruned.blockers.map((b) => b.code)).toEqual(['ROLLBACK_NO_BUILD'])
+  })
+
+  it('B5: a promote of the version the target runs reads what is recorded and what the target serves', async () => {
+    versions[2] = '0.3.10'
+    // The api release commit and its pin are on production; the portal is not.
+    gl.branch('efp/deploy', 'production', api['0.3.10'])
+    gl.commit('efp/deploy', 'production', 'pin', {
+      '.docker/nivaro-version': `0.3.10\n${DIGEST}\n${DIGEST}\n`
+    })
+    gl.served.set('https://efp.example.com/version.json', [{ version: 'feba5e1' }])
+    await recordedRun(
+      '0.3.10',
+      [{ kind: 'api', component: 'api', position: 1, deployedSha: 'f00d' }],
+      'cancelled'
+    )
+    const input = await gather.gatherPlanInput(2, { kind: 'promote', version: '0.3.10' }, deps())
+    expect(input.recordedDeploys).toEqual({ 1: ['f00d'] })
+    expect(input.pinOnTarget).toEqual({ 1: `0.3.10\n${DIGEST}\n${DIGEST}\n` })
+    expect(input.frontendOnTarget).toEqual({ 2: 'feba5e1' })
+    expect(input.frontendHeld).toEqual({ 2: false })
+    const plan = buildPromotionPlan(input)
+    expect(plan.ok).toBe(true)
+    expect(plan.steps.map((st) => [st.component, !!st.noop])).toEqual([
+      ['api', true],
+      ['frontend', false]
+    ])
   })
 
   it('running: a held lock, or a running row whose lock is held; a stale row is interrupted', async () => {
@@ -268,6 +732,24 @@ describe('gatherPlanInput', () => {
     const [other] = (await db('nivaro_hub_deploys').insert(row('verify'))) as number[]
     expect((await plan(true)).running).toBe(false)
     expect((await db('nivaro_hub_deploys').where({ id: other }).first()).status).toBe('interrupted')
+  })
+
+  it('P24: a plan read never heals a row whose heartbeat is fresh, lock or not', async () => {
+    const [id] = (await db('nivaro_hub_deploys').insert({
+      app_id: 1,
+      environment_id: 2,
+      kind: 'promote',
+      version: '0.3.10',
+      status: 'running',
+      step: 'deploy api',
+      heartbeat_at: new Date()
+    })) as number[]
+    const input = await gather.gatherPlanInput(2, { kind: 'promote', version: '0.3.10' }, deps())
+    expect(input.running).toBe(true)
+    expect((await db('nivaro_hub_deploys').where({ id }).first()).status).toBe('running')
+    // Even a caller holding the lock (a start) leaves it.
+    await gather.gatherPlanInput(2, { kind: 'promote', version: '0.3.10', lockHeld: true }, deps())
+    expect((await db('nivaro_hub_deploys').where({ id }).first()).status).toBe('running')
   })
 
   it('a stale row healed by a plan read loses its temporary branches', async () => {
@@ -324,10 +806,134 @@ describe('gatherPlanInput', () => {
     })
   })
 
+  it('P23: a shared driver, with a frontend added, still deploys the api to the placement branch', async () => {
+    const comps = await import('../../../services/hub/components.js')
+    // One deploy-repo driver (config branch "production") serves staging and production; each
+    // placement names its own branch.
+    await db('nivaro_hub_placements').where({ id: 4 }).update({ target: '{"branch":"staging"}' })
+    await db('nivaro_hub_placements').where({ id: 5 }).update({ target: '{"branch":"release"}' })
+    await db('nivaro_hub_components').where({ placement_id: 5 }).del()
+    const [standIn] = await comps.listComponents(5)
+    expect(standIn).toMatchObject({ implicit: true, target_branch: 'release' })
+    // The editor's "add component": store the stand-in as listed, then the frontend.
+    const { id: _id, placement_id: _p, implicit: _i, ...fields } = standIn
+    const stored = await comps.validateComponentInput(5, fields)
+    if (!stored.ok) throw new Error(stored.message)
+    await comps.createComponent(5, stored.row)
+    const fe = await comps.validateComponentInput(5, {
+      name: 'frontend',
+      kind: 'frontend',
+      driver_id: 2,
+      verify_url: 'https://efp.example.com/version.json'
+    })
+    if (!fe.ok) throw new Error(fe.message)
+    await comps.createComponent(5, fe.row)
+
+    const input = await gather.gatherPlanInput(2, { kind: 'promote', version: '0.3.10' }, deps())
+    expect(input.components.map((c) => [c.name, c.target_branch])).toEqual([
+      ['api', 'release'],
+      ['frontend', null]
+    ])
+    const plan = buildPromotionPlan(input)
+    expect(plan.steps.find((st) => st.kind === 'api')?.targetBranch).toBe('release')
+    // The resolver: own branch, else the stand-in's placement branch, else the driver's.
+    expect(comps.componentTargetBranch({ target_branch: 'x' }, { target: { branch: 'y' } })).toBe(
+      'x'
+    )
+    expect(
+      comps.componentTargetBranch({ target_branch: null }, { target: { branch: 'y' } }, 'z')
+    ).toBe('z')
+    expect(comps.componentTargetBranch(null, { target: { branch: 'y' } }, 'z')).toBe('y')
+    expect(comps.componentTargetBranch(null, { target: {} }, 'z')).toBe('z')
+  })
+
   it('an unknown environment is 404', async () => {
     await expect(
       gather.gatherPlanInput(99, { kind: 'promote', version: '0.3.10' }, deps())
     ).rejects.toMatchObject({ code: 'NOT_FOUND', status: 404 })
+  })
+})
+
+describe('currentVersionReader (P30 default)', () => {
+  const step = (over: Record<string, unknown>) =>
+    ({
+      position: 1,
+      component: 'api',
+      kind: 'api',
+      driverId: 1,
+      sourceSha: null,
+      targetBranch: 'production',
+      pinText: null,
+      pinFile: null,
+      beforeJob: null,
+      deployJob: 'deploy_production',
+      verifyUrl: null,
+      verifyField: 'version',
+      want: '0.3.10',
+      ...over
+    }) as Parameters<ReturnType<typeof gather.currentVersionReader>>[0]
+
+  it('reads the API from the environment row through the status reader; a frontend from its check address', async () => {
+    // Production has no hub token: the public routes of its base_url answer.
+    gl.served.set('https://efp.example.com/api/version', [{ version: '0.3.9' }])
+    gl.served.set('https://efp.example.com/api/health', [{ status: 'ok', version: '0.3.9' }])
+    expect(await gather.currentVersionReader(2)(step({}))).toBe('0.3.9')
+    // An environment the Hub does not know: nothing to read.
+    expect(await gather.currentVersionReader(99)(step({}))).toBeNull()
+    // The API not answering: cannot tell.
+    gl.served.set('https://efp.example.com/api/version', [503])
+    gl.served.set('https://efp.example.com/api/health', [503])
+    expect(await gather.currentVersionReader(2)(step({}))).toBeNull()
+    // A frontend: its own check address.
+    gl.served.set('https://efp.example.com/version.json', [{ version: 'abc12345' }])
+    const fe = step({
+      kind: 'frontend',
+      component: 'frontend',
+      verifyUrl: 'https://efp.example.com/version.json'
+    })
+    expect(await gather.currentVersionReader(2)(fe)).toBe('abc12345')
+    expect(await gather.currentVersionReader(2)({ ...fe, verifyUrl: null })).toBeNull()
+  })
+})
+
+describe('driverIdentity', () => {
+  const row = (api: string, project: string) =>
+    ({
+      id: 1,
+      kind: 'gitlab',
+      name: 'd',
+      secret: null,
+      config: { api, project, branch: 'main', pin_file: 'p', deploy_job: 'deploy' }
+    }) as Parameters<typeof gather.driverIdentity>[0]
+
+  it('names the repository: base without /api/v4 or slashes, path without outer slashes', () => {
+    expect(gather.driverIdentity(row('https://gitlab.example.com', 'efp/deploy'))).toBe(
+      'https://gitlab.example.com|efp/deploy'
+    )
+    // The same repository written another way is the same identity.
+    for (const [api, project] of [
+      ['https://gitlab.example.com/', 'efp/deploy'],
+      ['https://gitlab.example.com/api/v4', '/efp/deploy/'],
+      ['  https://GitLab.Example.com/api/v4/ ', ' EFP/Deploy '],
+      // A slash left behind once /api/v4 is gone.
+      ['https://gitlab.example.com//api/v4', 'efp/deploy'],
+      // Upper-case /API/V4 is stripped too.
+      ['https://GitLab.example.com/API/V4/', 'efp/deploy'],
+      ['https://gitlab.example.com//api/v4//', 'efp/deploy']
+    ])
+      expect(gather.driverIdentity(row(api, project))).toBe('https://gitlab.example.com|efp/deploy')
+    // Another project, group or host is another repository.
+    expect(gather.driverIdentity(row('https://gitlab.example.com', 'efp/portal'))).not.toBe(
+      'https://gitlab.example.com|efp/deploy'
+    )
+    expect(gather.driverIdentity(row('https://gitlab.other.com', 'efp/deploy'))).not.toBe(
+      'https://gitlab.example.com|efp/deploy'
+    )
+    // The GitCtx made from a driver names the same repository (the run compares the two).
+    const { driverCtx, repositoryIdentity } = drivers
+    const r = row('https://gitlab.example.com/api/v4/', 'efp/deploy')
+    const c = driverCtx({ ...r, secret: null })
+    expect(repositoryIdentity(c.base, c.project)).toBe(gather.driverIdentity(r))
   })
 })
 
