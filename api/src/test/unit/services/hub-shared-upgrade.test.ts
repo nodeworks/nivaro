@@ -692,6 +692,54 @@ describe('startSharedUpgrade — the run', () => {
     ])
   })
 
+  it('a rollback redeploys the image and pins its recorded run used, not the registry’s (review minor 8)', async () => {
+    const OLD_IMAGE = `nodeworks/nivaro@sha256:${'7'.repeat(64)}`
+    const OLD_PIN = `registry.example.com/acme/reports@sha256:${'8'.repeat(64)}`
+    const id = await newShared({ version_pin: '0.3.210' }, WITH_EXT)
+    const a = await newApp(id, [{ key: 'production', placed: true }])
+    await db('nivaro_hub_shared_deploys').insert({
+      shared_deployment_id: id,
+      kind: 'upgrade',
+      version: '0.3.209',
+      status: 'success',
+      plan: JSON.stringify({ image: OLD_IMAGE, extensions: { reports: OLD_PIN } })
+    })
+    const f = fakes()
+    const tenant = Store.tenantIdFor({ key: a.appKey }, { id: a.envIds[0] })
+    f.sightings = [
+      { instance: 'i1', version: '0.3.209', etag: null, at: new Date(START).toISOString() }
+    ]
+    f.statusVersion = '0.3.209'
+    f.schema = { [tenant]: { state: 'ok', error: null } }
+    f.served = { [`https://${a.appKey}-production.apps.example.com/api/version`]: '0.3.209' }
+    const { deps } = runDeps(f)
+    const plan = await Plan.planSharedUpgrade(id, '0.3.209', 'rollback', deps)
+    expect(plan.blockers).toEqual([])
+    expect(plan.image).toBe(OLD_IMAGE)
+    expect(deps.imageDigest).not.toHaveBeenCalled()
+    const key = (await Store.getShared(id))?.key as string
+    const out = await Run.startSharedUpgrade(
+      id,
+      { version: '0.3.209', kind: 'rollback', plan_hash: plan.plan_hash, confirm: key },
+      'admin-1',
+      deps
+    )
+    await Run.awaitSharedUpgrade(out.shared_deploy_id)
+    const row = await Run.readSharedDeploy(out.shared_deploy_id)
+    expect(row).toMatchObject({
+      status: 'success',
+      kind: 'rollback',
+      version: '0.3.209',
+      from_version: '0.3.210'
+    })
+    expect(f.applied[0].image).toBe(OLD_IMAGE)
+    expect(f.applied[0].extensions).toEqual({ reports: OLD_PIN })
+    expect((await Store.getShared(id))?.version_pin).toBe('0.3.209')
+    expect(
+      (await db('nivaro_hub_environments').where({ id: a.envIds[0] }).first()).version_pin
+    ).toBe('0.3.209')
+  })
+
   it('a start that breaks after its rows were written leaves nothing running (review minor 7)', async () => {
     const id = await newShared()
     const a = await newApp(id, [{ key: 'production', placed: true }])
