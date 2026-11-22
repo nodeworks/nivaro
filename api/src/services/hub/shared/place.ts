@@ -1,16 +1,20 @@
 import { randomBytes } from 'node:crypto'
 import type { Knex } from 'knex'
+import { insertReturningId } from '../../../db/dialect/ef.js'
 import { db } from '../../../db/index.js'
 import { runInBackgroundPool } from '../../../db/pool-context.js'
 import { logActivity } from '../../activity.js'
 import { getApp } from '../../io-holder.js'
 import { type JobRunHandle, startJobRun } from '../../job-runs.js'
 import { readApp } from '../apps.js'
-import { attachDatabase, getDatabase } from '../db/databases.js'
+import { connectionUrl } from '../db/connection.js'
+import { attachDatabase, getDatabase, openDatabaseConnection } from '../db/databases.js'
 import { HubDbError } from '../db/servers.js'
+import { stackEditRefusal } from '../docker/stack-guards.js'
 import {
   createPlacement,
   DEFAULT_POOL_MAX,
+  getPlacement,
   type HubPlacementRow,
   MAX_SHARED_POOL_MAX,
   MIN_SHARED_POOL_MAX,
@@ -20,6 +24,7 @@ import {
   sharedPoolMax,
   updatePlacement
 } from '../drivers.js'
+import { HEARTBEAT_FRESH_MS, withoutFreshHeartbeat } from '../promote-heal.js'
 import {
   defaultPromoteLock,
   defaultSharedLock,
@@ -29,6 +34,7 @@ import {
   type SharedLock,
   sharedLockRefusal
 } from '../promote-lock.js'
+import { APP_KEY_UNKNOWN_MESSAGE } from './app-key-check.js'
 import { DeploymentLinkError, deploymentClient } from './deployment-client.js'
 import { replicasHolding } from './sightings.js'
 import { getShared, openAppKey, type SharedDeployment, setAppKey, tenantIdFor } from './store.js'
@@ -82,6 +88,8 @@ export const REPLICAS_WAIT_MS = 2 * 60_000
 export const SCHEMA_WAIT_MS = 10 * 60_000
 const REPLICAS_POLL_MS = 2_000
 const SCHEMA_POLL_MS = 5_000
+/** The list's ETag is built again at most this often while waiting for replicas (M-3). */
+const ETAG_EVERY_MS = 10_000
 /** A refresh kick again this often while replicas are behind. */
 const REFRESH_AGAIN_MS = 30_000
 const ADMIN_TRIES = 3
@@ -219,7 +227,11 @@ export async function sharedPoolUsed(
     .select('id', 'target')) as Array<{ id: number; target: unknown }>
   if (!rows.length) return 0
   const ids = rows.map((r) => Number(r.id))
-  const named = (await k(ENVS).whereIn('placement_id', ids).select('id', 'placement_id')) as Array<{
+  // An archived environment is never served (the tenant list leaves it out): it takes no pool.
+  const named = (await k(ENVS)
+    .whereIn('placement_id', ids)
+    .whereNot({ status: 'archived' })
+    .select('id', 'placement_id')) as Array<{
     id: number
     placement_id: number
   }>
@@ -346,6 +358,105 @@ function hexKey(): string {
   return randomBytes(32).toString('hex')
 }
 
+/**
+ * I-3: the database holds nothing a key could have sealed — the shared deployment looks at it
+ * live (db-check): reachable, and it positively reports no nivaro_migrations table or no rows in
+ * it (P6-11b). Anything else (an install, a read error, an answer that does not say, unreachable,
+ * a link that does not answer) → 409 APP_KEY_UNKNOWN. The connection
+ * goes only to the deployment link (which is sent it anyway once placed), never to a log.
+ */
+async function assertDatabaseEmpty(
+  databaseId: number,
+  shared: SharedDeployment,
+  deps: PlaceSharedDeps
+): Promise<void> {
+  const unknownKey = (why: string) =>
+    refuse(
+      'APP_KEY_UNKNOWN',
+      `${APP_KEY_UNKNOWN_MESSAGE} ${why} Enter the key on the environment (PUT /api/hub/environments/:envId/app-key), then place it again.`
+    )
+  let answer: Awaited<ReturnType<ReturnType<typeof deploymentClient>['dbCheck']>>
+  try {
+    const c = await openDatabaseConnection(databaseId)
+    answer = await (deps.client ?? deploymentClient)(shared).dbCheck({
+      client: c.engine,
+      connection: connectionUrl(c)
+    })
+  } catch (err) {
+    const code =
+      err instanceof DeploymentLinkError || err instanceof HubDbError ? err.code : 'UNREACHABLE'
+    throw unknownKey(`The Hub could not look at the database to see that it is empty (${code}).`)
+  }
+  if (!answer.reachable)
+    throw unknownKey('The shared deployment could not reach the database to see that it is empty.')
+  // P6-11b: only a positive "no ledger table" or "an empty ledger" lets a key be made. A read
+  // error, or an answer that does not say (an older deployment), is unknown.
+  const state = answer.ledger_state
+  if (state === 'present' || (answer.ledger && answer.ledger.count > 0))
+    throw unknownKey(
+      'The database already holds a Nivaro install, sealed with its own key: a new key would leave its values unreadable.'
+    )
+  if (state !== 'absent' && state !== 'empty')
+    throw unknownKey(
+      'The shared deployment could not tell whether the database already holds a Nivaro install.'
+    )
+}
+
+/**
+ * Closes placement run rows (`shared` deploy rows with no shared deploy id) a dead process left
+ * `running`: no fresh heartbeat, no run here, the environment's lock free (or held by the caller,
+ * `ownLock`). They become `interrupted`; the environment stays `provisioning` on its placement
+ * and placing it again resumes. Task 5's shared-deploy mirror rows are never touched. Answers the
+ * rows closed. Runs once at Hub boot and before each placement of the environment.
+ */
+export async function recoverInterruptedPlacements(
+  o: { envId?: number; ownLock?: boolean; lock?: PromoteLock; now?: number } = {}
+): Promise<number> {
+  const q = db(DEPLOYS).where({ kind: 'shared', status: 'running' }).whereNull('shared_deploy_id')
+  if (o.envId !== undefined) q.where({ environment_id: o.envId })
+  const rows = (await withoutFreshHeartbeat(q, o.now).select('id', 'environment_id')) as Array<{
+    id: number
+    environment_id: number
+  }>
+  const lock = o.lock ?? defaultPromoteLock()
+  let n = 0
+  for (const r of rows) {
+    const envId = Number(r.environment_id)
+    if (running.has(envId)) continue
+    if (!o.ownLock && (await lock.held(envId)) !== false) continue
+    n += Number(
+      await db(DEPLOYS).where({ id: r.id, status: 'running' }).update({
+        status: 'interrupted',
+        error: 'INTERRUPTED: The Hub stopped during the placement; place the environment again.',
+        finished_at: new Date()
+      })
+    )
+  }
+  return n
+}
+
+let bootRecovery = false
+
+/** Once per process start (hub mode): placement runs a previous process left `running`. */
+export function recoverPlacementsOnceAtBoot(logger?: {
+  info?: (o: unknown, msg?: string) => void
+  warn?: (o: unknown, msg?: string) => void
+}): void {
+  if (bootRecovery) return
+  bootRecovery = true
+  // After the heartbeat window, so a run another Hub process still renews is never taken.
+  const timer = setTimeout(() => {
+    void recoverInterruptedPlacements()
+      .then((n) => {
+        if (n) logger?.info?.({ interrupted: n }, 'hub: placements interrupted by a restart')
+      })
+      .catch((err) =>
+        logger?.warn?.({ err: (err as Error | null)?.name }, 'hub: placement recovery failed')
+      )
+  }, HEARTBEAT_FRESH_MS + 30_000)
+  timer.unref?.()
+}
+
 // ── start ──────────────────────────────────────────────────────────────────────────────────
 
 interface Placed {
@@ -355,6 +466,8 @@ interface Placed {
   tenantId: string
   shared: SharedDeployment
   input: PlaceSharedInput
+  /** The run's `shared` deploy row (the environment's "served" record once it succeeds). */
+  deployId: number
 }
 
 /** Runs this process started, by environment id (tests and shutdown wait on them). */
@@ -390,12 +503,20 @@ export async function placeOnShared(
   }
   let handedOff = false
   try {
-    const placed = await checkAndWrite(envId, input, deps)
+    // A run row of this environment a dead process left `running` is closed first (we hold the
+    // environment's lock, so no live run of it exists anywhere).
+    await recoverInterruptedPlacements({ envId, ownLock: true })
+    const placed = await checkAndWrite(envId, input, by, deps)
     const run = await (
       deps.startJobRun ??
       ((label, id, who) =>
         startJobRun('deploy', `hub-place-${id}`, { label, triggeredBy: who ?? null }))
     )(`Place ${placed.appKey}/${placed.envKey} on ${placed.shared.key}`, envId, by)
+    if (run.id != null)
+      await db(DEPLOYS)
+        .where({ id: placed.deployId })
+        .update({ job_run_id: run.id })
+        .catch(() => undefined)
     run.log(
       `1. placed on ${placed.shared.key} (pool ${input.pool_max ?? DEFAULT_POOL_MAX}, version ${placed.shared.version_pin ?? 'not yet known'})`
     )
@@ -428,10 +549,19 @@ export async function placeOnShared(
 async function checkAndWrite(
   envId: number,
   input: PlaceSharedInput,
+  by: string | null,
   deps: PlaceSharedDeps
 ): Promise<Placed> {
   const env = (await db(ENVS).where({ id: envId }).first()) as Record<string, unknown> | undefined
   if (!env) throw refuse('NOT_FOUND', 'No such environment.', 404)
+  const current = env.placement_id == null ? null : await getPlacement(Number(env.placement_id))
+  // Ruling P6-11 (I-1): a placed, serving environment is never placed again (a second place
+  // would take it offline and switch its database or deployment without a move).
+  if (current?.kind === 'shared' && env.status === 'active')
+    throw refuse(
+      'ALREADY_PLACED',
+      'This environment already runs on a shared deployment. Move it to change where it runs.'
+    )
   if (!['active', 'provisioning'].includes(String(env.status)))
     throw refuse(
       'USE_MOVE',
@@ -467,6 +597,17 @@ async function checkAndWrite(
   if (database.environment && database.environment.id !== envId)
     throw refuse('DATABASE_IN_USE', 'Another environment already uses this database.')
 
+  // Ruling P6-11 (I-2): the same running-stack check as an env PATCH of placement_id — a stack
+  // that came up (even if its deploy then failed) is never orphaned by a placement swap.
+  const stack = await stackEditRefusal([envId], 'placement_id')
+  if (stack) throw refuse(stack.code, stack.message, stack.status)
+
+  // Ruling P6-11 (I-3): a key is generated only for a database known to be empty, looked at
+  // live from the shared deployment (no nivaro_migrations table or rows). One that holds an
+  // install, or cannot be looked at, needs the app's own key entered first.
+  const known = await openAppKey(envId)
+  if (!known) await assertDatabaseEmpty(input.database_id, shared0, deps)
+
   const sharedLock = deps.sharedLock ?? defaultSharedLock()
   const held = await sharedLock.take(input.shared_id, 'place')
   if (!held) {
@@ -487,14 +628,14 @@ async function checkAndWrite(
         `The shared deployment has ${Math.max(0, shared.pool_budget - used)} of its ${shared.pool_budget} database connections left; this app asks for ${pool}.`
       )
 
-    // The app's key: kept when known (and copied into the entry), else a new one.
-    const known = await openAppKey(envId)
     const entry = await db(ENVS).where({ id: envId }).first('encryption_key')
-    if (!known) await setAppKey(envId, hexKey())
-    else if (!entry?.encryption_key) await setAppKey(envId, known)
-
     const before = env.placement_id == null ? null : Number(env.placement_id)
+    let deployId = 0
     await db.transaction(async (trx) => {
+      // The app's key, in the same transaction (M-1): kept when known (and copied into the
+      // entry), else a new one for the empty database. Never logged or answered.
+      if (!known) await setAppKey(envId, hexKey(), trx)
+      else if (!entry?.encryption_key) await setAppKey(envId, known, trx)
       const placement = await createPlacement(
         {
           kind: 'shared',
@@ -522,8 +663,26 @@ async function checkAndWrite(
         updated_at: new Date()
       })
       if (before !== null && before !== placement.id) await releasePlacement(trx, before)
+      // The run's record (I-1): `shared` kind, no shared deploy id, `success` once the app
+      // serves — the "never served" check counts it from then on.
+      deployId = Number(
+        await insertReturningId(trx, DEPLOYS, {
+          app_id: Number(env.app_id),
+          environment_id: envId,
+          kind: 'shared',
+          version: shared.version_pin ?? '',
+          from_version: null,
+          status: 'running',
+          step: 'place',
+          plan: JSON.stringify({ place: { shared_id: shared.id, shared: shared.key, pool } }),
+          started_by: by,
+          started_at: new Date(),
+          heartbeat_at: new Date()
+        })
+      )
     })
     return {
+      deployId,
       envId,
       envKey: String(env.key),
       appKey: app.key,
@@ -567,6 +726,11 @@ async function runPlacement(
         if (!ok) lockLost = true
       })
       .catch(() => undefined)
+    // This run is alive: its row is never taken for an interrupted one (recoverInterruptedPlacements).
+    void db(DEPLOYS)
+      .where({ id: placed.deployId, status: 'running' })
+      .update({ heartbeat_at: new Date() })
+      .catch(() => undefined)
   }, deps.renewMs ?? LOCK_RENEW_MS)
   renew.unref?.()
   const stillOurs = () => {
@@ -578,19 +742,27 @@ async function runPlacement(
     // 2. Every replica re-reads its list (best effort: they poll every 30 s anyway).
     await kick(client, run)
 
-    // 3. Every replica seen in the last 2 min holds the list that names this app.
+    // 3. Every replica seen in the last 2 min holds the list that names this app. The list's
+    // ETag is built again only after a kick or every ETAG_EVERY_MS (M-3: building it opens every
+    // app's connection and key).
     const replicasBy = now() + REPLICAS_WAIT_MS
     let lastKick = now()
+    let etag: string | null = null
+    let etagAt = 0
     for (;;) {
       stillOurs()
-      const shared = (await getShared(placed.shared.id)) ?? placed.shared
       let holding: string[] = []
       let behind: string[] = []
       try {
-        const { etag } = await tenantsBody(shared)
-        ;({ holding, behind } = await replicasHolding(shared.id, etag))
+        if (etag === null || now() - etagAt >= ETAG_EVERY_MS) {
+          const shared = (await getShared(placed.shared.id)) ?? placed.shared
+          etag = (await tenantsBody(shared)).etag
+          etagAt = now()
+        }
+        ;({ holding, behind } = await replicasHolding(placed.shared.id, etag))
       } catch {
         // Redis or the list could not be read: never "every replica holds it".
+        etag = null
       }
       if (holding.length && !behind.length) {
         run.log(`3. every replica holds the new list (${holding.length})`)
@@ -606,6 +778,7 @@ async function runPlacement(
       if (now() - lastKick >= REFRESH_AGAIN_MS) {
         await kick(client, run)
         lastKick = now()
+        etag = null
       }
       await sleep(REPLICAS_POLL_MS)
     }
@@ -613,10 +786,12 @@ async function runPlacement(
     // 4. The app's database is migrated on the deployment.
     const schemaBy = now() + SCHEMA_WAIT_MS
     let lastSeen = ''
+    let servedVersion: string | null = null
     for (;;) {
       stillOurs()
       try {
         const st = await client.status()
+        servedVersion = st.version || null
         const mine = st.apps.find((a) => a.id === tenantId)
         const state = mine?.schema.state ?? 'not listed'
         if (state !== lastSeen) {
@@ -677,11 +852,25 @@ async function runPlacement(
       }
     }
 
-    // 6. Serving.
+    // 6. Serving: the environment and its run record move together (I-1).
     stillOurs()
-    await db(ENVS)
-      .where({ id: envId, status: 'provisioning' })
-      .update({ status: 'active', updated_at: new Date() })
+    const version = servedVersion ?? placed.shared.version_pin ?? ''
+    await db.transaction(async (trx) => {
+      await trx(ENVS)
+        .where({ id: envId, status: 'provisioning' })
+        .update({ status: 'active', updated_at: new Date() })
+      await trx(ENVS)
+        .where({ id: envId })
+        .whereNull('version_pin')
+        .update({ version_pin: version || null })
+      await trx(DEPLOYS).where({ id: placed.deployId }).update({
+        status: 'success',
+        step: 'done',
+        version,
+        error: null,
+        finished_at: new Date()
+      })
+    })
     await logActivity({
       action: 'hub-place-shared-done',
       user: by,
@@ -697,6 +886,16 @@ async function runPlacement(
     const code = err instanceof StepFailure ? err.code : 'STEP_FAILED'
     const text = err instanceof StepFailure ? err.message : 'The placement stopped unexpectedly.'
     run.log(`failed: ${code}: ${text}`, 'error')
+    // The environment stays `provisioning` on its placement (it never served): placing it
+    // again resumes. Its run record says why.
+    await db(DEPLOYS)
+      .where({ id: placed.deployId, status: 'running' })
+      .update({
+        status: code === 'INTERRUPTED' ? 'interrupted' : 'failed',
+        error: `${code}: ${text}`.slice(0, 1000),
+        finished_at: new Date()
+      })
+      .catch(() => undefined)
     await run.fail(new Error(`${code}: ${text}`))
   } finally {
     clearInterval(renew)

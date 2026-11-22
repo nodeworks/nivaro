@@ -504,6 +504,17 @@ describe('forget stack', () => {
     expect(await stackEditRefusal([DOCKER_ENV], 'key')).toMatchObject({ code: 'STACK_RUNNING' })
   })
 
+  it('M-6: forgotten, but the agent comes back reporting the stack as ours → delete refused', async () => {
+    m.agentStack.mockRejectedValueOnce(new AgentError('AGENT_UNREACHABLE', 0, 'no answer'))
+    await dockerDeploy(Date.now() - 60_000)
+    const res = await inject('POST', '/placements/11/forget-stack', { confirm: 'acme-old' })
+    expect(res.statusCode).toBe(200)
+    m.agentStack.mockResolvedValueOnce(OWNED)
+    expect((await dockerEnvironmentDeleteRefusal(DOCKER_ENV))?.code).toBe('STACK_STILL_RUNNING')
+    m.agentStack.mockResolvedValueOnce(null)
+    expect(await dockerEnvironmentDeleteRefusal(DOCKER_ENV)).toBeNull()
+  })
+
   it('a shared placement has no stack to forget', async () => {
     const res = await inject('POST', '/placements/10/forget-stack', { confirm: 'x' })
     expect(res.statusCode).toBe(409)

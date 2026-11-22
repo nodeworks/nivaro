@@ -30,6 +30,12 @@ vi.mock('../../../services/hub/docker/stack-settings.js', async (orig) => {
   }
 })
 
+const agent = vi.hoisted(() => ({ stack: vi.fn() }))
+vi.mock('../../../services/hub/docker/agent-client.js', async (orig) => ({
+  ...(await orig<typeof import('../../../services/hub/docker/agent-client.js')>()),
+  agentStack: agent.stack
+}))
+
 const { db } = (await import('../../../db/index.js')) as unknown as { db: Knex }
 const migrations = [
   await import('../../../db/migrations/542_hub_tables.js'),
@@ -51,6 +57,8 @@ const { DeploymentLinkError } = await import('../../../services/hub/shared/deplo
 const { keyFingerprint } = await import('../../../services/app-key-fingerprint.js')
 const { defaultSharedLock } = await import('../../../services/hub/promote-lock.js')
 const { getPlacement } = await import('../../../services/hub/drivers.js')
+const { memoryPromoteLock, PromotionError } = await import('../../../services/hub/promote-lock.js')
+const { sealSecret } = await import('../../../services/hub/secrets.js')
 
 const HUB_KEY = 'e'.repeat(64)
 const STACK_KEY = 'cd'.repeat(32)
@@ -142,7 +150,16 @@ function fakeClient(o: { schema?: () => { state: string; error: string | null } 
     firstAdmin: vi.fn(async (id: string, body: unknown) => {
       calls.firstAdmin.push([id, body])
       return { user_id: 'u-1', created: true }
-    })
+    }),
+    // I-3: the database is looked at live before a key is generated (empty here).
+    dbCheck: vi.fn(async () => ({
+      reachable: true,
+      ledger: null as { count: number; latest: string | null } | null,
+      // P6-11b: what the deployment saw of nivaro_migrations (absent = no table).
+      ledger_state: 'absent' as string | null,
+      db_identity: null,
+      error: null as string | null
+    }))
   }
   return { client, calls, factory: (() => client) as never }
 }
@@ -531,5 +548,388 @@ describe('placeOnShared — refusals (nothing written)', () => {
       'BAD_FIRST_ADMIN',
       400
     )
+  })
+})
+
+describe('fix round 1', () => {
+  const placeDeploys = (envId: number) =>
+    db('nivaro_hub_deploys').where({ environment_id: envId, kind: 'shared' }).orderBy('id')
+
+  it('I-1: a successful place leaves a shared success row; placing again → 409 ALREADY_PLACED', async () => {
+    const app = await newApp()
+    const envId = await newEnv(app.id)
+    TENANTS = [Store.tenantIdFor(app, { id: envId })]
+    const fake = fakeClient()
+    await place(
+      envId,
+      { database_id: await newDb() },
+      { client: fake.factory, startJobRun: fakeRun().start }
+    )
+    await Place.awaitPlacement(envId)
+    const rows = await placeDeploys(envId)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ status: 'success', version: '0.3.210', shared_deploy_id: null })
+    expect(JSON.parse(rows[0].plan)).toMatchObject({ place: { shared_id: sharedId } })
+    const before = await db('nivaro_hub_environments').where({ id: envId }).first()
+    const placements = await db('nivaro_hub_placements').count({ n: '*' }).first()
+    const err = await refusal(
+      place(
+        envId,
+        { database_id: await newDb() },
+        { client: fake.factory, startJobRun: fakeRun().start }
+      )
+    )
+    expect(err).toMatchObject({ code: 'ALREADY_PLACED', statusCode: 409 })
+    const after = await db('nivaro_hub_environments').where({ id: envId }).first()
+    expect(after).toMatchObject({
+      status: 'active',
+      placement_id: before.placement_id,
+      db_ref: before.db_ref,
+      encryption_key_fp: before.encryption_key_fp
+    })
+    expect(await db('nivaro_hub_placements').count({ n: '*' }).first()).toEqual(placements)
+  })
+
+  it('I-2: a stack that came up although its deploy never succeeded → 409 STACK_RUNNING', async () => {
+    const app = await newApp()
+    const stackName = `stk${++seq}`
+    const driverId = await insertId('nivaro_hub_drivers', {
+      kind: 'docker',
+      name: `swarm${++seq}`,
+      config: JSON.stringify({
+        agent_url: 'https://agent.example.com',
+        dns_mode: 'automatic',
+        wildcard_domain: 'apps.example.com',
+        edge_target: null
+      }),
+      secret: sealSecret('agent-Token-Value-0123456789-abcdefghij')
+    })
+    const pid = await insertId('nivaro_hub_placements', {
+      kind: 'dedicated',
+      driver_id: driverId,
+      target: JSON.stringify({ stack: stackName })
+    })
+    const envId = await newEnv(app.id, { placement_id: pid })
+    const env = await db('nivaro_hub_environments').where({ id: envId }).first('key')
+    await db('nivaro_hub_deploys').insert({
+      app_id: app.id,
+      environment_id: envId,
+      kind: 'promote',
+      version: '0.3.210',
+      status: 'failed',
+      plan: JSON.stringify({ steps: [{ driver: 'docker', stack: { name: stackName } }] }),
+      started_at: new Date(t)
+    })
+    agent.stack.mockResolvedValueOnce({
+      name: stackName,
+      owner: { app: app.key },
+      environment: env.key,
+      state: 'converged',
+      services: []
+    })
+    const before = await db('nivaro_hub_environments').where({ id: envId }).first()
+    const err = await refusal(
+      place(envId, { database_id: await newDb() }, { client: fakeClient().factory })
+    )
+    expect(err).toMatchObject({ code: 'STACK_RUNNING', statusCode: 409 })
+    const after = await db('nivaro_hub_environments').where({ id: envId }).first()
+    expect(after.placement_id).toBe(before.placement_id)
+    expect(await getPlacement(pid)).not.toBeNull()
+  })
+
+  it('I-3: no key known and the database holds a Nivaro install → 409 APP_KEY_UNKNOWN', async () => {
+    const app = await newApp()
+    const envId = await newEnv(app.id)
+    const fake = fakeClient()
+    fake.client.dbCheck.mockResolvedValueOnce({
+      reachable: true,
+      ledger: { count: 512, latest: '551_hub_signins' },
+      ledger_state: 'present',
+      db_identity: null,
+      error: null
+    })
+    const err = await refusal(
+      place(envId, { database_id: await newDb() }, { client: fake.factory })
+    )
+    expect(err).toMatchObject({ code: 'APP_KEY_UNKNOWN', statusCode: 409 })
+    expect((err as unknown as Error).message).toMatch(/encryption key/)
+    const env = await db('nivaro_hub_environments').where({ id: envId }).first()
+    expect(env).toMatchObject({ encryption_key: null, placement_id: null, db_ref: null })
+    // The database cannot be looked at: the same refusal (never "assume empty").
+    fake.client.dbCheck.mockRejectedValueOnce(new DeploymentLinkError('LINK_UNREACHABLE'))
+    expect(
+      (await refusal(place(envId, { database_id: await newDb() }, { client: fake.factory }))).code
+    ).toBe('APP_KEY_UNKNOWN')
+    // Unreachable from the deployment: the same.
+    fake.client.dbCheck.mockResolvedValueOnce({
+      reachable: false,
+      ledger: null,
+      ledger_state: null,
+      db_identity: null,
+      error: 'timeout'
+    })
+    expect(
+      (await refusal(place(envId, { database_id: await newDb() }, { client: fake.factory }))).code
+    ).toBe('APP_KEY_UNKNOWN')
+  })
+
+  it('I-3: an empty database (no migrations rows) gets a generated key; a known key never asks', async () => {
+    const app = await newApp()
+    const envId = await newEnv(app.id)
+    TENANTS = [Store.tenantIdFor(app, { id: envId })]
+    const fake = fakeClient()
+    fake.client.dbCheck.mockResolvedValueOnce({
+      reachable: true,
+      ledger: { count: 0, latest: null },
+      ledger_state: 'empty',
+      db_identity: null,
+      error: null
+    })
+    const run = fakeRun()
+    await place(
+      envId,
+      { database_id: await newDb() },
+      { client: fake.factory, startJobRun: run.start }
+    )
+    await Place.awaitPlacement(envId)
+    expect(fake.client.dbCheck).toHaveBeenCalledTimes(1)
+    const key = (await Store.openAppKey(envId)) as string
+    expect(key).toMatch(/^[0-9a-f]{64}$/)
+    expect(JSON.stringify(fake.client.dbCheck.mock.calls)).not.toContain(key)
+    expect(run.lines.join('\n')).not.toContain(key)
+
+    const known = await newEnv(app.id)
+    await Store.setAppKey(known, STACK_KEY)
+    TENANTS = [Store.tenantIdFor(app, { id: known })]
+    const fake2 = fakeClient()
+    await place(
+      known,
+      { database_id: await newDb() },
+      { client: fake2.factory, startJobRun: fakeRun().start }
+    )
+    await Place.awaitPlacement(known)
+    expect(fake2.client.dbCheck).not.toHaveBeenCalled()
+    expect(await Store.openAppKey(known)).toBe(STACK_KEY)
+  })
+
+  it('M-1: a write that fails leaves no generated key behind', async () => {
+    const app = await newApp()
+    const envId = await newEnv(app.id)
+    const dbId = await newDb()
+    const real = defaultSharedLock()
+    // The database starts dropping between the checks and the write.
+    const racing = {
+      ...real,
+      take: async (id: number, holder: 'place') => {
+        await db('nivaro_hub_databases').where({ id: dbId }).update({ status: 'dropping' })
+        return real.take(id, holder)
+      }
+    }
+    const err = await refusal(
+      place(envId, { database_id: dbId }, { client: fakeClient().factory, sharedLock: racing })
+    )
+    expect(err.code).toBe('DATABASE_DROPPING')
+    const env = await db('nivaro_hub_environments').where({ id: envId }).first()
+    expect(env).toMatchObject({ encryption_key: null, encryption_key_fp: null, placement_id: null })
+  })
+
+  it('M-5: an archived environment takes no pool', async () => {
+    const other = await newApp()
+    const pid = await insertId('nivaro_hub_placements', {
+      kind: 'shared',
+      shared_deployment_id: sharedId,
+      target: JSON.stringify({ pool_max: 7 })
+    })
+    const before = await Place.sharedPoolUsed(sharedId)
+    const envId = await newEnv(other.id, { placement_id: pid, status: 'archived' })
+    expect(await Place.sharedPoolUsed(sharedId)).toBe(before)
+    await db('nivaro_hub_environments').where({ id: envId }).update({ placement_id: null })
+  })
+
+  it('interrupted: a lost lock ends the run interrupted; a stale run row is healed; place again resumes', async () => {
+    const app = await newApp()
+    const envId = await newEnv(app.id)
+    TENANTS = [Store.tenantIdFor(app, { id: envId })]
+    const fake = fakeClient({ schema: () => ({ state: 'running', error: null }) })
+    const lost = { ...memoryPromoteLock, renew: async () => false }
+    const run = fakeRun()
+    await place(
+      envId,
+      { database_id: await newDb() },
+      { client: fake.factory, startJobRun: run.start, lock: lost, renewMs: 1 }
+    )
+    // The renewal timer runs on real time: let it fire while the fake schema wait sleeps.
+    fake.client.status.mockImplementation(async () => {
+      await new Promise((r) => setTimeout(r, 5))
+      return {
+        version: '0.3.210',
+        instance: 'web-1',
+        registry: { count: 1, loaded_at: null, etag: null, stale: false, dropped: [] },
+        apps: TENANTS.map((id) => ({
+          id,
+          schema: { state: 'running', version: null, error: null }
+        })),
+        extensions: [],
+        oidc: null,
+        process: {}
+      }
+    })
+    await Place.awaitPlacement(envId)
+    expect(run.out.failed).toContain('INTERRUPTED')
+    expect((await placeDeploys(envId)).at(-1)).toMatchObject({ status: 'interrupted' })
+
+    // A run row a dead process left `running` (no heartbeat, lock free) is healed at boot.
+    const stale = Number(
+      (
+        (await db('nivaro_hub_deploys')
+          .insert({
+            app_id: app.id,
+            environment_id: envId,
+            kind: 'shared',
+            version: '0.3.210',
+            status: 'running',
+            plan: JSON.stringify({ place: { shared_id: sharedId, shared: 'shared-one' } }),
+            started_at: new Date(t - 3_600_000)
+          })
+          .returning('id')) as Array<{ id: number } | number>
+      ).map((r) => (typeof r === 'object' ? r.id : r))[0]
+    )
+    // A shared-deploy mirror row (Task 5's) is never touched here.
+    const mirror = Number(
+      (
+        (await db('nivaro_hub_deploys')
+          .insert({
+            app_id: app.id,
+            environment_id: envId,
+            kind: 'shared',
+            version: '0.3.210',
+            status: 'running',
+            shared_deploy_id: 99,
+            started_at: new Date(t - 3_600_000)
+          })
+          .returning('id')) as Array<{ id: number } | number>
+      ).map((r) => (typeof r === 'object' ? r.id : r))[0]
+    )
+    expect(await Place.recoverInterruptedPlacements({ lock: memoryPromoteLock })).toBe(1)
+    const st = async (id: number) => (await db('nivaro_hub_deploys').where({ id }).first()).status
+    expect(await st(stale)).toBe('interrupted')
+    expect(await st(mirror)).toBe('running')
+    await db('nivaro_hub_deploys').where({ id: mirror }).del()
+
+    // Still provisioning, never served: placing again resumes and ends active.
+    expect((await db('nivaro_hub_environments').where({ id: envId }).first()).status).toBe(
+      'provisioning'
+    )
+    const env = await db('nivaro_hub_environments').where({ id: envId }).first()
+    const again = fakeClient()
+    await place(
+      envId,
+      { database_id: Number(String(env.db_ref).slice(7)) },
+      { client: again.factory, startJobRun: fakeRun().start }
+    )
+    await Place.awaitPlacement(envId)
+    expect((await db('nivaro_hub_environments').where({ id: envId }).first()).status).toBe('active')
+  })
+
+  it('M-7: ENVIRONMENT_BUSY, LOCK_UNAVAILABLE, SCHEMA_TIMEOUT, a refused first admin', async () => {
+    const app = await newApp()
+    const envId = await newEnv(app.id)
+    const lock = memoryPromoteLock
+    const held = (await lock.take(envId, 'promotion')) as string
+    try {
+      expect((await refusal(place(envId, { database_id: await newDb() }, { lock }))).code).toBe(
+        'PROMOTION_RUNNING'
+      )
+    } finally {
+      await lock.release(envId, held)
+    }
+    const down = {
+      ...defaultSharedLock(),
+      take: async () => {
+        throw new PromotionError('LOCK_UNAVAILABLE', 'no redis', 503)
+      }
+    }
+    expect(
+      await refusal(
+        place(
+          envId,
+          { database_id: await newDb() },
+          { client: fakeClient().factory, sharedLock: down }
+        )
+      )
+    ).toMatchObject({ code: 'LOCK_UNAVAILABLE', status: 503 })
+    expect((await db('nivaro_hub_environments').where({ id: envId }).first()).encryption_key).toBe(
+      null
+    )
+
+    TENANTS = [Store.tenantIdFor(app, { id: envId })]
+    const slow = fakeClient({ schema: () => ({ state: 'running', error: null }) })
+    const run = fakeRun()
+    await place(
+      envId,
+      { database_id: await newDb() },
+      { client: slow.factory, startJobRun: run.start }
+    )
+    await Place.awaitPlacement(envId)
+    expect(run.out.failed).toContain('SCHEMA_TIMEOUT')
+
+    const env2 = await newEnv(app.id)
+    TENANTS = [Store.tenantIdFor(app, { id: env2 })]
+    const refused = fakeClient()
+    refused.client.firstAdmin.mockRejectedValue(
+      new DeploymentLinkError('FIRST_ADMIN_REFUSED', 409, 'NO_ADMIN_ROLE')
+    )
+    const run2 = fakeRun()
+    await place(
+      env2,
+      { database_id: await newDb() },
+      { client: refused.factory, startJobRun: run2.start }
+    )
+    await Place.awaitPlacement(env2)
+    expect(run2.out.failed).toContain('FIRST_ADMIN_REFUSED')
+    expect(run2.out.failed).toContain('NO_ADMIN_ROLE')
+    expect(refused.client.firstAdmin).toHaveBeenCalledTimes(1)
+  })
+
+  it('M-7: a shared placement stays on its deployment (patchSharedPlacement USE_MOVE)', async () => {
+    const pid = await insertId('nivaro_hub_placements', {
+      kind: 'shared',
+      shared_deployment_id: sharedId,
+      target: '{}'
+    })
+    const existing = await getPlacement(pid)
+    if (existing?.kind !== 'shared') throw new Error('fixture')
+    await expect(
+      Place.patchSharedPlacement(existing, { shared_deployment_id: sharedId + 1, target: {} })
+    ).rejects.toMatchObject({ code: 'USE_MOVE' })
+  })
+})
+
+describe('fix round 1 — P6-11b: a key only on a positive "empty"', () => {
+  it('the ledger read fails, or the answer says nothing about it → no key, 409 APP_KEY_UNKNOWN', async () => {
+    const app = await newApp()
+    const envId = await newEnv(app.id)
+    const fake = fakeClient()
+    for (const answer of [
+      // The table is there but reading it threw (T7 used to report this as ledger: null).
+      { reachable: true, ledger: null, ledger_state: 'error', db_identity: null, error: null },
+      // An older deployment that does not say: unknown, never "empty".
+      { reachable: true, ledger: null, db_identity: null, error: null },
+      {
+        reachable: true,
+        ledger: null,
+        ledger_state: 'something-else',
+        db_identity: null,
+        error: null
+      }
+    ]) {
+      fake.client.dbCheck.mockResolvedValueOnce(answer as never)
+      const err = await refusal(
+        place(envId, { database_id: await newDb() }, { client: fake.factory })
+      )
+      expect(err).toMatchObject({ code: 'APP_KEY_UNKNOWN', statusCode: 409 })
+      const env = await db('nivaro_hub_environments').where({ id: envId }).first()
+      expect(env).toMatchObject({ encryption_key: null, placement_id: null, db_ref: null })
+    }
   })
 })
