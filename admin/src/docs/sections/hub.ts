@@ -296,36 +296,39 @@ export const hubPromotionsDocs: DocSection = {
     {
       type: 'ul',
       items: [
-        'API component: the Hub merges the newest deploy commit on the source branch whose subject ends with `nivaro <version>` into the target branch, then adds one commit that pins the version. The pin is three lines: the version, the image digest and, when both are real, the slim image digest. It is refused when the image or its digest is not on the registry.',
-        "Frontend component: the Hub merges the commit that the environment before this one is serving. That commit must already be on the component's source branch.",
+        'API component: the Hub takes the newest deploy commit on the source branch whose subject ends with `nivaro <version>` and a pin of the version. The pin is three lines: the version, the image digest and, when both are real, the slim image digest. It is refused when the image or its digest is not on the registry.',
+        'The target branch moves once per component. For the API, the Hub builds the merge of the deploy commit and the pin on a temporary branch, then merges that branch into the target branch in one merge. A deploy job that runs on every push therefore runs once, on the deploy commit and its pin together. When the target branch already holds the deploy commit, the pin is one commit on it.',
+        "Frontend component: the Hub merges the commit that the environment before this one is serving. That commit must already be on the component's source branch. When the target branch already holds it, the Hub deploys the target branch's current head: the plan names that head, and the run stops without changing anything if the head moved since the plan, or if the commit reached the branch only after a plan that expected to merge it, or left the branch after a plan that saw it there.",
         'A Hub administrator adds components to an environment under its settings. An environment with none stored uses its placement driver as a single API component.'
       ]
     },
     { type: 'h2', id: 'hub-promotions-run', text: 'Promoting' },
     {
       type: 'p',
-      text: "Open the environment, choose Promote, and pick a version. The Hub lists versions the previous environment runs or ran, newer than the one here. It shows the plan in plain words and any reason it cannot start. To start, type the environment's key to confirm."
+      text: "Open the environment, choose Promote, and pick a version. The Hub lists versions the previous environment runs or ran, newer than the one here. It shows the plan in plain words and every reason it cannot start, each with the planner's own details. To start, type the environment's key to confirm. The start carries the plan you saw: the Hub plans again, and if anything it would do changed (a commit, a pin, a version, a component, the driver or repository that deploys it, or its check address), it starts nothing, shows the new plan and asks you to check it again."
     },
     {
       type: 'ul',
       items: [
         'Hub administrators and the owners of the app may promote and roll back. Anyone else gets nothing, as if the environment did not exist.',
-        "Verify: after each deploy the Hub reads each component's check address. It must answer the planned version (API) or commit (frontend) twice in a row. The Hub asks every 15 seconds, at most 40 times, then the step fails.",
+        "Verify: after each deploy the Hub reads each component's check address. The API must answer the planned version. A frontend must answer the planned commit or the commit its deploy job actually ran on (a merge commit, or the branch's current head when the branch already held the commit). Each must answer twice in a row. The Hub asks every 15 seconds, at most 40 times, then the step fails.",
+        'The Hub records the commit and pipeline each deploy job ran on in the run. A rollback redeploys exactly that build.',
         'Only one promotion runs per environment at a time.',
-        'Cancel stops the run at the next step boundary. It never stops between a merge and its pin commit, so a branch is never left merged but unpinned.',
-        'If the Hub restarts in the middle of a run, the run is marked Interrupted and the temporary branches it made are deleted. Nothing already deployed is undone: check the environment, then start again.'
+        'Cancel stops the run at the next step boundary, right before a merge into a target branch, or while the Hub waits for a deploy job. The Hub asks again right before it reads and plays a manual deploy job, so a cancel made on another Hub server is seen too, and the job is never played after a cancel. A deploy job GitLab already started keeps running in GitLab.',
+        'A promotion that stopped between components (cancelled or failed) can be finished: the version list offers the version the environment already runs, marked as finishing the stopped promotion. Components already deployed with that version are skipped (an API whose branch already holds the deploy commit and the same pin is not deployed again), and the rest run. The Hub never rewrites the pin of the version that is running: if the image for that version changed since it was deployed, the plan is refused with `PIN_CHANGED`.',
+        'If the Hub restarts in the middle of a run, the run and its job are marked Interrupted and the temporary branches it made are deleted. Nothing already deployed is undone: check the environment, then start again.'
       ]
     },
     { type: 'h2', id: 'hub-promotions-rollback', text: 'Rolling back' },
     {
       type: 'p',
-      text: 'Roll back goes only to a version this environment previously deployed successfully. It is confirmed the same way as a promotion.'
+      text: 'Roll back goes only to a version the Hub itself deployed here successfully, with the deployed commit of every component recorded. Versions deployed before the Hub took over are offered only when the environment has no frontend component. Roll back is confirmed the same way as a promotion.'
     },
     {
       type: 'ul',
       items: [
         'API: the Hub pins the older image again and deploys it.',
-        "Frontend: the Hub reruns that older commit's own deploy job in GitLab. If GitLab no longer has a build for that commit, the rollback stops with `FRONTEND_ROLLBACK_NO_BUILD` and changes nothing."
+        "Frontend: the Hub reruns the deploy job of the exact build it deployed with that version (the merge commit's pipeline). The plan checks that build first: if the commit is no longer on the target branch, GitLab no longer has the build, or its deploy job cannot be rerun, the plan is refused with `FRONTEND_ROLLBACK_NO_BUILD` and nothing runs, so the API is never rolled back alone. A rollback never merges an old commit back into the branch."
       ]
     },
     { type: 'h2', id: 'hub-promotions-blockers', text: 'Why a promotion cannot start' },
@@ -353,7 +356,10 @@ export const hubPromotionsDocs: DocSection = {
           '`PREVIOUS_NEVER_RAN`',
           'The environment before this one never ran the version, now or in a successful deploy. Promote it there first.'
         ],
-        ['`ALREADY_RUNS`', 'This environment already runs that version.'],
+        [
+          '`ALREADY_RUNS`',
+          'This environment already runs that version, and every component was deployed with it. A run that stopped between components is not refused: promote the version again to finish it.'
+        ],
         ['`OLDER_THAN_CURRENT`', 'The version is older than the one running here. Use Roll back.'],
         [
           '`NOT_DEPLOYED_BEFORE`',
@@ -365,11 +371,23 @@ export const hubPromotionsDocs: DocSection = {
         ],
         [
           '`FRONTEND_UNKNOWN`',
-          'The Hub cannot tell which frontend commit the environment before this one serves. Its check address must answer with a commit.'
+          'Promote: the Hub cannot tell which frontend commit the environment before this one serves. Its check address must answer with a commit. Roll back: the Hub has no record of the frontend build it deployed with that version.'
         ],
         [
           '`FRONTEND_NOT_ON_SOURCE`',
           "The frontend commit the previous environment serves is not on the component's source branch. Merge it there first."
+        ],
+        [
+          '`FRONTEND_ROLLBACK_NO_BUILD`',
+          "Roll back only: the frontend build the Hub deployed with that version is no longer on the target branch, GitLab no longer has it, or its deploy job can't be rerun. Nothing runs."
+        ],
+        [
+          '`HEAD_UNKNOWN`',
+          'The target branch already holds the frontend commit, so the Hub would deploy the branch head, but GitLab did not say which commit that is. The Hub deploys only a head it names in the plan. Plan again.'
+        ],
+        [
+          '`PIN_CHANGED`',
+          'Promoting the version that already runs here would rewrite its pin: the image for that version changed since it was deployed (the plan shows the pinned and the new digests), or the target branch has no pin for it at all. The Hub never writes a pin for the version that is running. Publish a new version instead.'
         ],
         [
           '`IMAGE_MISSING`',
@@ -406,15 +424,15 @@ export const hubPromotionsDocs: DocSection = {
       rows: [
         [
           '`GET /api/hub/environments/:envId/promotable`',
-          'Versions that can be promoted here, and older ones that can be rolled back to.'
+          'Versions that can be promoted here, and older ones that can be rolled back to (Hub deploys with every component recorded). `finish` names the version running here when its Hub promotion stopped between components; it is listed in `promote` too.'
         ],
         [
           '`POST /api/hub/environments/:envId/promote/plan`',
-          'Body `{ version, kind }`, kind `promote` or `rollback`. Read-only: the plan with its steps and every blocker.'
+          'Body `{ version, kind }`, kind `promote` or `rollback`. Read-only: the plan with its steps, every blocker and its `plan_hash`.'
         ],
         [
           '`POST /api/hub/environments/:envId/promote`',
-          'Body `{ version, kind, confirm }`; `confirm` is the environment key. Answers 202 with the run id, or 409 with the blockers.'
+          'Body `{ version, kind, confirm, plan_hash }`; `confirm` is the environment key, `plan_hash` the one the plan route answered (400 `PLAN_HASH_REQUIRED` without it). Answers 202 with the run id, 409 with the blockers, or 409 `PLAN_CHANGED` with the new `plan` when the plan is no longer the one you saw (nothing starts).'
         ],
         [
           '`GET /api/hub/environments/:envId/deploys/hub`',
@@ -436,11 +454,11 @@ export const hubPromotionsDocs: DocSection = {
       type: 'ul',
       items: [
         '1. Add components for EFP production: an API component on the deploy repository and a portal frontend component. Check their jobs: the deploy job names must match the ones the laptop script runs, and each check address must answer its version or commit.',
-        '2. Run a plan-only promote for the version staging runs (Promote, then read the plan, and do not confirm). Compare each step with the output of `promote-production.mjs --dry-run`: same commits, same pin, same jobs. Stop and fix anything that differs.',
+        '2. Run a plan-only promote for the version staging runs (Promote, then read the plan, and do not confirm). Compare each step with the plan the laptop script prints: `node scripts/promote-production.mjs --version <version>` (without `--go` it only prints the plan and changes nothing). Check the same deploy commit, the same pin, the same portal commit and the same jobs. Stop and fix anything that differs.',
         '3. Switch `hub_managed` on for production.',
         '4. Set `production.enabled: false` in `release-chain.config.json`, so the laptop release chain stops promoting production.',
         '5. Make the first real promotion, and watch it from start to Succeeded: the merge, the pin, the deploy and both checks.',
-        '6. If it goes wrong, use Roll back to the previous version. If the Hub itself is unusable, set `production.enabled` back to true and use the laptop script.'
+        '6. If it goes wrong, roll back with the laptop script. The Hub offers Roll back only to versions it deployed itself, so Roll back in the Hub becomes available after the first successful Hub promotion. Until then, and whenever the Hub itself is unusable, set `production.enabled` back to true and use the laptop script.'
       ]
     },
     {

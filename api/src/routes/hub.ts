@@ -52,7 +52,11 @@ import {
 } from '../services/hub/drivers.js'
 import { GitlabWriteError } from '../services/hub/gitlab-write.js'
 import { hubModeEnabled } from '../services/hub/mode.js'
-import { gatherPlanInput, PromotionError } from '../services/hub/promote-gather.js'
+import {
+  gatherPlanInput,
+  PromotionError,
+  unrecordedComponents
+} from '../services/hub/promote-gather.js'
 import { buildPromotionPlan, compareVersions } from '../services/hub/promote-plan.js'
 import {
   cancelPromotion,
@@ -966,6 +970,7 @@ function promotionRefusal(reply: FastifyReply, err: unknown) {
   if (err instanceof PromotionError) {
     const out: Record<string, unknown> = { error: err.message, code: err.code }
     if (err.blockers) out.blockers = err.blockers
+    if (err.plan !== undefined) out.plan = err.plan
     return reply.code(err.status).send(out)
   }
   const code = (err as { code?: unknown } | null)?.code
@@ -1025,7 +1030,14 @@ function promotionRoutes(app: FastifyInstance) {
       const rollback = cur
         ? back.targetDeployedVersions.filter((v) => compareVersions(v, cur) < 0)
         : []
-      return { data: { promote: newestFirst(promote), rollback: newestFirst(rollback) } }
+      // A Hub promotion of the version running here that stopped between components: offered
+      // again so it can be finished (the planner judges whether it can start).
+      const finish =
+        cur && (await unrecordedComponents(envId, cur, fwd.components ?? [])) ? cur : null
+      if (finish && !promote.includes(finish)) promote.push(finish)
+      return {
+        data: { promote: newestFirst(promote), rollback: newestFirst(rollback), finish }
+      }
     } catch (err) {
       return promotionRefusal(reply, err)
     }
@@ -1052,6 +1064,7 @@ function promotionRoutes(app: FastifyInstance) {
       const started = await startPromotion(Number(row.id), {
         ...input,
         confirm: body(req).confirm,
+        planHash: body(req).plan_hash,
         user: { id: userId(req) }
       })
       await logActivity({

@@ -341,8 +341,16 @@ export interface HubComponent {
 export interface HubPromotable {
   /** Versions the previous environment runs or deployed, newer than this one's. */
   promote: string[]
-  /** Older versions this environment deployed successfully. */
+  /**
+   * Older versions the Hub deployed here successfully, with every component's deployed commit
+   * recorded (versions from before the Hub only when the environment has no frontend).
+   */
   rollback: string[]
+  /**
+   * The version running here when a Hub promotion of it stopped between components (listed in
+   * `promote` too): promoting it again finishes it. null otherwise.
+   */
+  finish?: string | null
 }
 
 export interface PromotionBlocker {
@@ -361,6 +369,13 @@ export interface PromotionStep {
   deployJob: string
   verifyUrl: string | null
   want: string
+  /** api: already deployed with this version — nothing is merged or deployed. */
+  noop?: boolean
+  /** frontend rollback: the pipeline whose deploy job is rerun. */
+  buildPipelineId?: number | null
+  /** Recorded once the deploy passed: the commit its deploy job ran on, and the pipeline. */
+  deployedSha?: string | null
+  deployedPipelineId?: number | null
 }
 
 export interface PromotionPlan {
@@ -368,6 +383,8 @@ export interface PromotionPlan {
   blockers: PromotionBlocker[]
   lines: string[]
   steps: PromotionStep[]
+  /** What a start must send back: it starts only if the plan is still exactly this one. */
+  plan_hash?: string
 }
 
 export type PromotionStatus =
@@ -417,9 +434,13 @@ export const fetchComponents = (placementId: number) =>
     .then((r) => r.data.data ?? [])
 
 export const fetchPromotable = (envId: number) =>
-  api
-    .get<{ data: HubPromotable }>(`/hub/environments/${envId}/promotable`)
-    .then((r) => ({ promote: r.data.data?.promote ?? [], rollback: r.data.data?.rollback ?? [] }))
+  api.get<{ data: HubPromotable }>(`/hub/environments/${envId}/promotable`).then(
+    (r): HubPromotable => ({
+      promote: r.data.data?.promote ?? [],
+      rollback: r.data.data?.rollback ?? [],
+      finish: r.data.data?.finish ?? null
+    })
+  )
 
 export const fetchPromotionPlan = (envId: number, kind: PromotionKind, version: string) =>
   api
@@ -428,7 +449,7 @@ export const fetchPromotionPlan = (envId: number, kind: PromotionKind, version: 
 
 export const startPromotion = (
   envId: number,
-  body: { version: string; kind: PromotionKind; confirm: string }
+  body: { version: string; kind: PromotionKind; confirm: string; plan_hash: string }
 ) =>
   api
     .post<{ data: { deploy_id: number; job_run_id: number | null } }>(
@@ -466,6 +487,15 @@ export function promotionPlanOf(d: { plan?: PromotionPlan | string | null }): Pr
 export function blockersOf(err: unknown): PromotionBlocker[] {
   const body = (err as { response?: { data?: { blockers?: unknown } } })?.response?.data
   return Array.isArray(body?.blockers) ? (body.blockers as PromotionBlocker[]) : []
+}
+
+/** The plan a start refused with 409 PLAN_CHANGED carried (the plan as it stands now). */
+export function changedPlanOf(err: unknown): PromotionPlan | null {
+  const res = (err as { response?: { status?: number; data?: { code?: unknown; plan?: unknown } } })
+    ?.response
+  if (res?.data?.code !== 'PLAN_CHANGED') return null
+  const plan = res.data.plan as PromotionPlan | undefined
+  return plan && Array.isArray(plan.steps) ? plan : null
 }
 
 /** Why a promotion or rollback cannot start, in plain words (by planner code). */
@@ -526,6 +556,18 @@ export const BLOCKER_COPY: Record<string, { title: string; hint?: string }> = {
   FRONTEND_NOT_ON_SOURCE: {
     title: 'The frontend the environment before this one serves is not on the source branch',
     hint: 'Merge that frontend commit into the source branch, then try again.'
+  },
+  FRONTEND_ROLLBACK_NO_BUILD: {
+    title: 'The frontend build for that version cannot be redeployed',
+    hint: 'Its commit is no longer on the branch, GitLab no longer has the build, or its deploy job cannot run again. Nothing was changed.'
+  },
+  HEAD_UNKNOWN: {
+    title: 'GitLab did not say which commit the target branch points at',
+    hint: 'The Hub deploys only a head it names in the plan. Check the branch in GitLab, then plan again.'
+  },
+  PIN_CHANGED: {
+    title: 'The image for this version changed since it was deployed here',
+    hint: 'The Hub never rewrites the pin of the version that is running. Publish a new version instead.'
   }
 }
 

@@ -17,6 +17,7 @@ import {
   blockerCopy,
   blockersOf,
   cancelPromotion,
+  changedPlanOf,
   fetchPromotable,
   fetchPromotion,
   fetchPromotionPlan,
@@ -147,9 +148,14 @@ function PromoteForm({
   }, [kind, initialVersion])
   const version = picked || choices[0] || ''
   const [confirm, setConfirm] = useState('')
+  /** A start refused with PLAN_CHANGED: the new plan is shown and must be checked again. */
+  const [changed, setChanged] = useState(false)
   // The confirmation names one version and one kind: either changing clears it.
   // biome-ignore lint/correctness/useExhaustiveDependencies: clearing is the point
-  useEffect(() => setConfirm(''), [kind, version])
+  useEffect(() => {
+    setConfirm('')
+    setChanged(false)
+  }, [kind, version])
   /** Blockers a refused start sent back, and when: a later fresh plan replaces them. */
   const [refused, setRefused] = useState<{ at: number; blockers: PromotionBlocker[] } | null>(null)
 
@@ -161,12 +167,26 @@ function PromoteForm({
   })
 
   const start = useMutation({
-    mutationFn: () => startPromotion(env.id, { version, kind, confirm: confirm.trim() }),
+    mutationFn: () =>
+      startPromotion(env.id, {
+        version,
+        kind,
+        confirm: confirm.trim(),
+        // The plan on screen: the Hub starts only if it would still do exactly this.
+        plan_hash: plan.data?.plan_hash ?? ''
+      }),
     onSuccess: (r) => {
       void qc.invalidateQueries({ queryKey: hubKeys.promotions(env.id) })
       onStarted(r.deploy_id)
     },
     onError: (err) => {
+      const now = changedPlanOf(err)
+      if (now) {
+        qc.setQueryData(hubKeys.plan(env.id, kind, version), now)
+        setChanged(true)
+        setConfirm('')
+        return
+      }
       const blockers = blockersOf(err)
       if (blockers.length > 0) {
         setRefused({ at: Date.now(), blockers })
@@ -182,7 +202,12 @@ function PromoteForm({
 
   const verb = KIND_VERB[kind]
   const blockers = refused ? refused.blockers : (plan.data?.blockers ?? [])
-  const ready = !!plan.data?.ok && !refused && confirm.trim() === env.key && !start.isPending
+  const ready =
+    !!plan.data?.ok &&
+    !!plan.data.plan_hash &&
+    !refused &&
+    confirm.trim() === env.key &&
+    !start.isPending
 
   if (promotable.isPending) return <Skeleton className='h-24 w-full' />
   if (promotable.isError)
@@ -216,13 +241,34 @@ function PromoteForm({
             setPicked(v)
             setRefused(null)
           }}
-          options={choices.map((v) => ({ value: v, label: v }))}
+          options={choices.map((v) => ({
+            value: v,
+            label:
+              kind === 'promote' && v === promotable.data?.finish
+                ? `${v} — finish the stopped promotion`
+                : v
+          }))}
           ariaLabel='Version'
           className='h-8 bg-white font-mono text-[13px] dark:bg-background'
           triggerProps={{ id: `${idPrefix}-version` }}
         />
+        {kind === 'promote' && version && version === promotable.data?.finish && (
+          <p className='m-0 text-[12px] text-slate-600 dark:text-slate-300'>
+            {env.key} already runs {version}, but its Hub promotion stopped before every part was
+            deployed. Promoting it again deploys only what is missing.
+          </p>
+        )}
       </div>
 
+      {changed && (
+        <p
+          role='status'
+          className='m-0 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] font-medium text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-200'
+        >
+          The plan changed — check it again. This is the plan as it stands now; type {env.key} again
+          to start it.
+        </p>
+      )}
       {plan.data ? (
         <PlanPreview plan={plan.data} blockers={blockers} />
       ) : plan.isPending ? (
@@ -300,6 +346,11 @@ function PlanPreview({ plan, blockers }: { plan: PromotionPlan; blockers: Promot
                   <span className='block text-red-800 dark:text-red-200'>{copy.title}</span>
                   {copy.hint && (
                     <span className='block text-red-700/90 dark:text-red-300/90'>{copy.hint}</span>
+                  )}
+                  {b.text && b.text !== copy.title && (
+                    <span className='mt-0.5 block break-words text-[11px] text-red-700/80 dark:text-red-300/80'>
+                      {b.text}
+                    </span>
                   )}
                 </li>
               )
