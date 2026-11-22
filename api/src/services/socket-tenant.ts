@@ -8,7 +8,7 @@
  */
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { cleanTenantHost, getTenantId, runWithTenantDb } from '../db/tenant-context.js'
-import { isMultiTenant } from './deployment-mode.js'
+import { isMultiTenant, isNivaroCloud } from './deployment-mode.js'
 import { tenantStoreId } from './traffic-taps.js'
 
 interface SocketLike {
@@ -37,10 +37,11 @@ function edgeAuthOk(got: string | undefined, want: string): boolean {
   )
 }
 
-/** The host the tenant is resolved from — X-Tenant-Host, then X-Forwarded-Host, then Host. */
+/** The host the tenant is resolved from — X-Tenant-Host (Nivaro Cloud's edge only), then
+ *  X-Forwarded-Host, then Host. */
 export function socketTenantHost(socket: SocketLike): string | null {
   const raw =
-    headerOf(socket, 'x-tenant-host') ??
+    (isNivaroCloud() ? headerOf(socket, 'x-tenant-host') : undefined) ??
     headerOf(socket, 'x-forwarded-host') ??
     headerOf(socket, 'host')
   return cleanTenantHost(raw)?.replace(/:\d+$/, '') || null
@@ -51,7 +52,9 @@ export async function socketTenant(socket: SocketLike): Promise<ReadyTenant | nu
   if (!isMultiTenant()) return null
   // Security audit C-1: dormant unless EDGE_AUTH_SECRET is set; refuse a socket that did not
   // arrive through the Worker (which injects X-Edge-Auth) so it joins no tenant rooms.
-  const edgeSecret = process.env.EDGE_AUTH_SECRET
+  // Nivaro Cloud's edge only: a Hub shared deployment has no Worker in front of it.
+  const cloud = isNivaroCloud()
+  const edgeSecret = cloud ? process.env.EDGE_AUTH_SECRET : undefined
   if (edgeSecret && !edgeAuthOk(headerOf(socket, 'x-edge-auth'), edgeSecret)) return null
   if (!socket.data) socket.data = {}
   const data = socket.data
@@ -59,7 +62,8 @@ export async function socketTenant(socket: SocketLike): Promise<ReadyTenant | nu
   if (cached) return cached
   const host = socketTenantHost(socket)
   // X-Tenant-Custom-Host counts only beside X-Tenant-Host, as on requests (middleware/tenant.ts).
-  const custom = headerOf(socket, 'x-tenant-host') ? headerOf(socket, 'x-tenant-custom-host') : null
+  const custom =
+    cloud && headerOf(socket, 'x-tenant-host') ? headerOf(socket, 'x-tenant-custom-host') : null
   const p = host
     ? import('../middleware/tenant.js')
         .then((m) => m.resolveReadyTenant(host, custom ?? null))

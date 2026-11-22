@@ -69,7 +69,7 @@ import {
   requestDbFailure,
   sendDbUnavailable
 } from './services/db-outage.js'
-import { isMultiTenant, isNivaroCloud } from './services/deployment-mode.js'
+import { isMultiTenant, isNivaroCloud, tenantSource } from './services/deployment-mode.js'
 import { enrichErrorPayload, noteDbRefusal } from './services/error-enrich.js'
 import { logRouteError } from './services/error-log-level.js'
 import { stableIssueKey, trackError } from './services/error-tracking.js'
@@ -82,6 +82,7 @@ import { registerQueueSnapshotCron } from './services/queue-snapshots.js'
 import { maskUrlQuery } from './services/secret-mask.js'
 import { noteAccessDenied } from './services/security-alerts.js'
 import { registerStagedImportWorker } from './services/staged-import-worker.js'
+import { startHubTenantSource, stopHubTenantSource } from './services/tenancy/hub-source.js'
 import { registerTrackerCrons } from './services/trackers/crons.js'
 import { registerTrackerFlows } from './services/trackers/flow-ops.js'
 import { registerTrackerHealthReadiness } from './services/trackers/health-readiness.js'
@@ -245,6 +246,13 @@ export async function buildServer() {
 
   // ─── Redis ─────────────────────────────────────────────────────────────────
   await app.register(redisPlugin)
+
+  // A Hub shared deployment's tenant list (the tenant hook above reads it): sealed Redis copy
+  // first, then the Hub. Started here because it needs Redis; it never throws on a Hub outage.
+  if (tenantSource() === 'hub') {
+    await startHubTenantSource({ redis: app.redis ?? null })
+    app.addHook('preClose', async () => stopHubTenantSource())
+  }
 
   // ─── Rate limiting + API analytics logging ────────────────────────────────
   // Tracing goes first so its onRequest hook opens the phase context before
