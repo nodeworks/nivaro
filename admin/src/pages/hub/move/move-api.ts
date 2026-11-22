@@ -563,6 +563,7 @@ export function moveChecklistOf(
 
 /** Checklist items the Hub adds after a move (Task 16: a failed retire leaves its item open). */
 const CHECKLIST_WORDS: Record<string, string> = {
+  issuer_same: 'The old and the new home sign in through the same Entra tenant.',
   redis_separate: 'The old and the new home do not share one Redis database and channel prefix.',
   storage_local: 'Every file is on local storage on both sides.',
   db_identity_checked: 'No other app on the target uses this app’s database.',
@@ -746,6 +747,10 @@ export const MOVE_WARNING_COPY: Record<string, Copy> = {
   MANUAL_ROUTE: {
     title: 'Someone outside the Hub changes the address',
     hint: 'The old home keeps serving until the new address answers. The request to send is below.'
+  },
+  ISSUER_UNVERIFIED: {
+    title: 'The Hub could not read which sign-in the app uses',
+    hint: 'Accounts link only when both sides sign in through the same Entra tenant. Check that they do, then tick that item in the checklist.'
   },
   REDIS_UNVERIFIED: {
     title: 'The Hub cannot see which Redis one side uses',

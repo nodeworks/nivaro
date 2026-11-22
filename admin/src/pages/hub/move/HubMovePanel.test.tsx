@@ -245,6 +245,41 @@ describe('HubMovePanel — before start', () => {
     expect(start).toBeEnabled()
   })
 
+  it('groups required items under Confirm before moving and asks for the plan once', async () => {
+    plan = {
+      ...basePlan,
+      checklist: [
+        { id: 'redis_separate', text: 'No shared Redis.', required: true },
+        { id: 'issuer_same', text: 'Same Entra tenant.', required: true },
+        { id: 'old_stack_stopped', text: 'Stop the old stack.', required: false }
+      ]
+    }
+    renderPanel()
+    await pickTarget(/Shared · east/)
+    const group = await screen.findByRole('group', { name: 'Confirm before moving' })
+    expect(within(group).getAllByRole('checkbox')).toHaveLength(2)
+    expect(within(group).getByText(/0 of 2 ticked/)).toBeInTheDocument()
+    expect(screen.getByRole('group', { name: 'After the move' })).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText(/Type efp\/production to move/), {
+      target: { value: 'efp/production' }
+    })
+    const start = screen.getByRole('button', { name: 'Start move' })
+    fireEvent.click(within(group).getByRole('checkbox', { name: 'No shared Redis.' }))
+    expect(start).toBeDisabled()
+    fireEvent.click(within(group).getByRole('checkbox', { name: 'Same Entra tenant.' }))
+    expect(start).toBeEnabled()
+    // The after-the-move reminder never gates Start.
+    window.dispatchEvent(new Event('focus'))
+    const asked = h.post.mock.calls.filter((c) => c[0] === '/hub/environments/10/move/plan')
+    expect(asked).toHaveLength(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Plan again' }))
+    await waitFor(() =>
+      expect(
+        h.post.mock.calls.filter((c) => c[0] === '/hub/environments/10/move/plan')
+      ).toHaveLength(2)
+    )
+  })
+
   it('a start refused with PLAN_BLOCKED says so in plain words and plans again', async () => {
     const { toast } = await import('sonner')
     const error = vi.spyOn(toast, 'error').mockImplementation(() => 1)

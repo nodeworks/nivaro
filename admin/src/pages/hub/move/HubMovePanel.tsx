@@ -341,7 +341,13 @@ function MoveForm({
     queryKey: planKey,
     queryFn: () => fetchMovePlan(env.id, target as NonNullable<typeof target>),
     enabled: !!target && !(base?.kind === 'shared' && poolBad),
-    staleTime: 0,
+    // A plan reads both sides live (30–50 s into a shared deployment): read on demand only —
+    // never on focus or a timer. "Plan again" (or a refused start) asks for a fresh one.
+    staleTime: Number.POSITIVE_INFINITY,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    // A closed panel forgets its plan: opening it again plans afresh (hashes change).
+    gcTime: 0,
     retry: false
   })
 
@@ -448,8 +454,27 @@ function MoveForm({
             onRetry={() => void plan.refetch()}
           />
         ) : plan.fetchStatus !== 'idle' ? (
-          <Skeleton className='h-24 w-full' />
+          <PlanReading />
         ) : null)}
+      {target && p && (
+        <div className='flex items-center gap-2'>
+          <button
+            type='button'
+            className={ghostButton}
+            disabled={plan.isFetching}
+            onClick={() => void plan.refetch()}
+          >
+            <RotateCcw
+              className={cn('h-3.5 w-3.5', plan.isFetching && 'animate-spin')}
+              aria-hidden
+            />
+            {plan.isFetching ? 'Checking again…' : 'Plan again'}
+          </button>
+          <span className='text-[11px] text-slate-500 dark:text-muted-foreground'>
+            The plan is read once; ask again after you change something.
+          </span>
+        </div>
+      )}
 
       {target && (
         <div className='space-y-1.5'>
@@ -489,6 +514,25 @@ function MoveForm({
           </span>
         )}
       </div>
+    </div>
+  )
+}
+
+/** While a plan is read: both sides are asked live, which can take most of a minute. */
+function PlanReading() {
+  const [seconds, setSeconds] = useState(0)
+  useEffect(() => {
+    const t = window.setInterval(() => setSeconds((n) => n + 1), 1000)
+    return () => window.clearInterval(t)
+  }, [])
+  return (
+    <div role='status' className='space-y-2'>
+      <p className='m-0 flex items-center gap-2 text-[12px] text-slate-600 dark:text-slate-300'>
+        <Loader2 className='h-3.5 w-3.5 animate-spin text-sky-600 dark:text-sky-400' aria-hidden />
+        Checking both sides: the app, its database and the target. This can take up to a minute
+        {seconds >= 5 ? ` (${seconds} s so far)` : ''}.
+      </p>
+      <Skeleton className='h-20 w-full' />
     </div>
   )
 }
@@ -570,42 +614,73 @@ function MovePlanView({
         <ManualRequest text={plan.manual_request} />
       )}
 
-      {plan.checklist.length > 0 && (
-        <fieldset className='m-0 space-y-1.5 border-0 p-0'>
-          <legend className='mb-1 p-0 text-[12px] font-semibold text-slate-800 dark:text-foreground'>
-            Checklist
-          </legend>
-          {plan.checklist.map((c) => {
-            const id = `${idPrefix}-check-${c.id}`
-            return (
-              <div key={c.id} className='flex items-start gap-2 text-[12px]'>
-                <Checkbox
-                  id={id}
-                  checked={!!checked[c.id]}
-                  onCheckedChange={(v) => onCheck(c.id, v === true)}
-                  className='mt-0.5'
-                />
-                <label
-                  htmlFor={id}
-                  className='min-w-0 break-words text-slate-700 dark:text-slate-300'
-                >
-                  {c.text}
-                  {c.required ? (
-                    <span className='ml-1 text-[11px] font-medium text-red-700 dark:text-red-300'>
-                      (required)
-                    </span>
-                  ) : (
-                    <span className='ml-1 text-[11px] text-slate-500 dark:text-muted-foreground'>
-                      (after the move)
-                    </span>
-                  )}
-                </label>
-              </div>
-            )
-          })}
-        </fieldset>
-      )}
+      <ChecklistGroup
+        title='Confirm before moving'
+        note={(n) => `${n.done} of ${n.total} ticked. Start stays off until every one is.`}
+        items={plan.checklist.filter((c) => c.required)}
+        idPrefix={idPrefix}
+        checked={checked}
+        onCheck={onCheck}
+      />
+      <ChecklistGroup
+        title='After the move'
+        items={plan.checklist.filter((c) => !c.required)}
+        idPrefix={idPrefix}
+        checked={checked}
+        onCheck={onCheck}
+      />
     </div>
+  )
+}
+
+/**
+ * Checklist items in one block. Required ones (each fact the Hub could not check adds one, so a
+ * move may carry several) gate Start; the others are reminders for after the move.
+ */
+function ChecklistGroup({
+  title,
+  note,
+  items,
+  idPrefix,
+  checked,
+  onCheck
+}: {
+  title: string
+  note?: (n: { done: number; total: number }) => string
+  items: { id: string; text: string; required: boolean }[]
+  idPrefix: string
+  checked: Record<string, boolean>
+  onCheck: (id: string, v: boolean) => void
+}) {
+  if (items.length === 0) return null
+  const done = items.filter((c) => checked[c.id]).length
+  return (
+    <fieldset className='m-0 space-y-1.5 rounded-md border border-slate-200 bg-white px-3 py-2 dark:border-border dark:bg-card'>
+      <legend className='px-1 text-[12px] font-semibold text-slate-800 dark:text-foreground'>
+        {title}
+      </legend>
+      {note && (
+        <p className='m-0 text-[11px] text-slate-500 dark:text-muted-foreground'>
+          {note({ done, total: items.length })}
+        </p>
+      )}
+      {items.map((c) => {
+        const id = `${idPrefix}-check-${c.id}`
+        return (
+          <div key={c.id} className='flex items-start gap-2 text-[12px]'>
+            <Checkbox
+              id={id}
+              checked={!!checked[c.id]}
+              onCheckedChange={(v) => onCheck(c.id, v === true)}
+              className='mt-0.5'
+            />
+            <label htmlFor={id} className='min-w-0 break-words text-slate-700 dark:text-slate-300'>
+              {c.text}
+            </label>
+          </div>
+        )
+      })}
+    </fieldset>
   )
 }
 
