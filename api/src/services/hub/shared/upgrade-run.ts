@@ -253,6 +253,10 @@ export async function startSharedUpgrade(
   await healSharedDeploys({ sharedId, deps })
   const planDeps = defaultSharedPlanDeps(deps)
   const { plan, facts } = await gatherSharedUpgrade(sharedId, body.version, body.kind, planDeps)
+  // A lock the Hub cannot read (Redis down) refuses as the lock take would: 503, never a plan
+  // mismatch or a 409 (T15 round 2).
+  const unreadable = plan.blockers.find((b) => b.code === 'LOCK_UNAVAILABLE')
+  if (unreadable) throw new SharedUpgradeError('LOCK_UNAVAILABLE', unreadable.text, 503)
   if (body.confirm !== facts.shared.key)
     throw new SharedUpgradeError(
       'CONFIRM_MISMATCH',
@@ -842,7 +846,14 @@ export async function healSharedDeploys(
     const id = Number(r.id)
     const sharedId = Number(r.shared_deployment_id)
     if (live.has(id)) continue
-    if ((await lock.holder(sharedId)) !== null) continue
+    // A held lock — or one that cannot be read — may belong to a live runner elsewhere: keep it.
+    let holder: unknown
+    try {
+      holder = await lock.holder(sharedId)
+    } catch {
+      continue
+    }
+    if (holder !== null) continue
     const msg = opts.message ?? `The Hub stopped during ${String(r.step ?? 'the start')}`
     const when = new Date(now)
     let prior: SharedStatus = 'active'

@@ -45,7 +45,9 @@ const { sealStoredConnection } = await import('../../../services/hub/db/stored-c
 const { sealSecret } = await import('../../../services/hub/secrets.js')
 const { keyFingerprint } = await import('../../../services/app-key-fingerprint.js')
 const { DeploymentLinkError } = await import('../../../services/hub/shared/deployment-client.js')
-const { memoryPromoteLock } = await import('../../../services/hub/promote-lock.js')
+const { memoryPromoteLock, redisPromoteLock, sharedLock } = await import(
+  '../../../services/hub/promote-lock.js'
+)
 
 const HUB_KEY = 'e'.repeat(64)
 const APP_KEY = 'ab'.repeat(32)
@@ -655,6 +657,32 @@ describe('gatherMovePlanInput — to_shared from a Docker stack', () => {
     )
     expect(input.locks.env).toBe('unreadable')
     expect(input.locks.shared[0].holder).toBe('unreadable')
+  })
+
+  it('real Redis locks whose holder cannot be read show as unreadable in the plan (round 2)', async () => {
+    const sharedId = await newShared()
+    const placement = await dockerPlacement('shop-rd')
+    const e = await newEnv({ placement_id: placement, db_ref: `hub-db:${await newDb()}` })
+    const down = {
+      set: async () => null,
+      get: async () => {
+        throw new Error('ECONNREFUSED')
+      },
+      del: async () => 0,
+      exists: async () => 1,
+      eval: async () => 0
+    }
+    const input = await Gather.gatherMovePlanInput(
+      e.id,
+      { kind: 'shared', shared_id: sharedId },
+      deps({ lock: redisPromoteLock(down), sharedLock: sharedLock(down) })
+    )
+    expect(input.locks.env).toBe('unreadable')
+    expect(input.locks.shared[0].holder).toBe('unreadable')
+    const plan = buildMovePlan(input)
+    expect(plan.blockers.map((b) => b.code)).toEqual(
+      expect.arrayContaining(['BUSY', 'SHARED_BUSY'])
+    )
   })
 
   it('a lock held on the environment → BUSY; ownLocks ignores a move holder', async () => {
