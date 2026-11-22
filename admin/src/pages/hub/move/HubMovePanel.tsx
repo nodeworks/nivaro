@@ -814,7 +814,10 @@ function MoveProgress({
   const cancel = useMutation({
     mutationFn: () => cancelMove(moveId),
     onSuccess: refresh,
-    onError: (err) => moveToast(err, 'Could not cancel the move')
+    onError: (err) => {
+      refresh()
+      moveToast(err, 'Could not cancel the move')
+    }
   })
   const resume = useMutation({
     mutationFn: () => resumeMove(moveId),
@@ -1094,11 +1097,18 @@ function MoveProgress({
           <span role='status' className='text-[12px] text-slate-600 dark:text-slate-300'>
             Rolling back: undoing each step it took, newest first.
           </span>
+        ) : live && past ? (
+          // After release there is nothing to roll back to and the Hub refuses a cancel
+          // (TOO_LATE): say so instead of offering a button that can only refuse.
+          <span role='status' className='text-[12px] text-slate-600 dark:text-slate-300'>
+            The app already serves from its new home, so this move can no longer be cancelled or
+            rolled back. The Hub finishes retiring the old home.
+          </span>
         ) : live ? (
           <>
             <ConfirmButton
               title='Cancel move'
-              confirmLabel={past ? 'Stop here?' : 'Roll back?'}
+              confirmLabel='Roll back?'
               className={dangerGhost}
               armedClassName={dangerArmed}
               disabled={cancel.isPending}
@@ -1107,9 +1117,7 @@ function MoveProgress({
               <Ban className='h-3.5 w-3.5' aria-hidden /> Cancel
             </ConfirmButton>
             <span className='text-[11px] text-slate-500 dark:text-muted-foreground'>
-              {past
-                ? 'The app already serves from its new home. Cancel stops what is left (retiring the old home). Nothing is rolled back.'
-                : 'Cancel rolls the move back: the app stays on its old home and leaves maintenance.'}
+              Cancel rolls the move back: the app stays on its old home and leaves maintenance.
             </span>
           </>
         ) : m.status !== 'interrupted' ? (

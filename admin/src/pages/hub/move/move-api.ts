@@ -245,8 +245,8 @@ export const fetchMoves = (envId: number) =>
   api.get<{ data: HubMove[] }>(`/hub/environments/${envId}/moves`).then((r) => r.data.data ?? [])
 
 /**
- * Cancel a move. Before `release` the Hub rolls it back (the app stays on its old home); after
- * it, the move is stopped where it is. Every call names the move by its id.
+ * Cancel a move: before `release` the Hub rolls it back (the app stays on its old home). After
+ * it the Hub refuses (409 TOO_LATE), so the panel offers no cancel then. Names the move by id.
  */
 export const cancelMove = (id: number) => api.post(`/hub/moves/${id}/cancel`, {})
 
@@ -813,6 +813,18 @@ export const MOVE_CODE_COPY: Record<string, Copy> = {
   CHECKLIST_OPEN: {
     title: 'A required checklist item is not ticked',
     hint: 'Tick every required item once it is done, then start again.'
+  },
+  TOO_LATE: {
+    title: 'The move is past the point it can be rolled back',
+    hint: 'The app already serves from its new home. Let the move finish; if it stops, use Resume.'
+  },
+  MOVE_ENDED: {
+    title: 'That move has already ended',
+    hint: 'Its result is shown here. Dismiss it to plan a new move.'
+  },
+  ROLLING_BACK: {
+    title: 'The move is already rolling back',
+    hint: 'Wait for it to finish undoing its steps; the app stays on its old home.'
   },
   PLAN_BLOCKED: {
     title: 'Something now stops this move',

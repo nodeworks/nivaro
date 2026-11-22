@@ -488,7 +488,7 @@ describe('HubMovePanel — a move in progress', () => {
     expect(await screen.findByText(/still answers from the old home/)).toBeInTheDocument()
   })
 
-  it('Cancel says it rolls back before release, and that nothing is rolled back after it', async () => {
+  it('Cancel rolls back before release; after release no Cancel is offered (P6-17 I-2)', async () => {
     openMove({ step: 'maintenance_on' })
     const first = renderPanel()
     expect(await screen.findByText(/Cancel rolls the move back/)).toBeInTheDocument()
@@ -496,10 +496,12 @@ describe('HubMovePanel — a move in progress', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Roll back?' }))
     await waitFor(() => expect(h.post).toHaveBeenCalledWith('/hub/moves/77/cancel', {}))
     first.unmount()
+    window.localStorage.clear()
 
     openMove({ step: 'retire_source' })
     renderPanel()
-    expect(await screen.findByText(/Nothing is rolled back/)).toBeInTheDocument()
+    expect(await screen.findByText(/can no longer be cancelled or rolled back/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Cancel move' })).toBeNull()
     expect(screen.queryByText(/Cancel rolls the move back/)).toBeNull()
   })
 
