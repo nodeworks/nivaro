@@ -1,7 +1,8 @@
 import { randomUUID, timingSafeEqual } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
-import type { HookAction } from '../hooks/registry.js'
+import { eventFlowSpec, forgetTenantEventFlows, runEventFlow } from '../flows/tenant-event-flows.js'
+import type { HookContext } from '../hooks/registry.js'
 import { hooks } from '../hooks/registry.js'
 import { registerRawCapturingParser } from '../lib/json-body.js'
 import { requireAdmin } from '../middleware/authenticate.js'
@@ -9,6 +10,7 @@ import { logActivity } from '../services/activity.js'
 import { checkAudienceConfirm, logAudienceConfirm } from '../services/audience-gate.js'
 import { type AudiencePreview, isSendingFlowOperation } from '../services/audience-preview.js'
 import { staleConfigRefusal } from '../services/config-watch.js'
+import { tenantSource } from '../services/deployment-mode.js'
 import { executeFlow } from '../services/flow-executor.js'
 import { flowHealth } from '../services/flow-health.js'
 import { registerReadinessCheck } from '../services/readiness.js'
@@ -18,7 +20,8 @@ import {
   reconcile,
   registerScheduleResync
 } from '../services/row-schedules.js'
-import { deferEffect, drainDetachedEffects } from '../services/unit-of-work.js'
+import { currentTenantKey } from '../services/tenant-rooms.js'
+import { drainDetachedEffects } from '../services/unit-of-work.js'
 import { verifyWebhookSignature } from '../services/webhook-signature.js'
 
 const FLOW_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -362,84 +365,36 @@ export async function loadScheduledFlows(app: FastifyInstance) {
 
 // ─── Event hook helpers ───────────────────────────────────────────────────────
 
-const ITEM_ACTIONS: HookAction[] = ['create', 'update', 'delete']
-
 function flowHookTag(flowId: string) {
   return `flow-event:${flowId}`
 }
 
+/** A Hub shared deployment serves many apps from one process: its event flows run through the
+ *  per-app dispatcher (flows/tenant-event-flows.ts), never as process-wide hooks. */
+const perAppEventFlows = () => tenantSource() === 'hub'
+
 function registerEventFlowHook(app: FastifyInstance, flow: Flow) {
-  const opts = flow.trigger_options ? (JSON.parse(flow.trigger_options) as EventTriggerOptions) : {}
-  const timing = opts.timing ?? 'after'
-  const rawTypes = (opts.types ?? []).filter((t) =>
-    ITEM_ACTIONS.includes(t as HookAction)
-  ) as HookAction[]
-  const actions: HookAction[] = rawTypes.length ? rawTypes : ITEM_ACTIONS
-  const collections: Array<string | '*'> = (opts.collections ?? []).length
-    ? (opts.collections as string[])
-    : ['*']
+  // Shared deployment: the app's cached list is dropped; its next write reads the new one.
+  if (perAppEventFlows()) return forgetTenantEventFlows(currentTenantKey())
+  const spec = eventFlowSpec(flow)
   const tag = flowHookTag(flow.id)
 
-  for (const action of actions) {
-    for (const collection of collections) {
-      // biome-ignore lint/complexity/noForEach: inner loop captures flow/action/collection
-      const returnPayload = timing === 'before' && (opts.return_payload ?? false)
-      const hookFn = async (ctx: import('../hooks/registry.js').HookContext) => {
-        const execCtx = {
-          flowId: flow.id,
-          flowName: flow.name,
-          trigger: `${timing}:${action}`,
-          payload: {
-            collection: ctx.collection,
-            action: ctx.action,
-            keys: ctx.keys ?? [],
-            payload: ctx.payload ?? {},
-            previousData: ctx.previousData ?? {}
-          },
-          log: app.log,
-          userId: ctx.user?.id,
-          ...(ctx.dryRun ? { dryRun: true } : {})
-        }
-        // A rehearsed write runs only the flows that shape its payload, with
-        // their sending operations in dry-run mode.
-        if (ctx.dryRun && !returnPayload) return
-        if (returnPayload) {
-          try {
-            const result = await executeFlow(execCtx)
-            // Merge exec-script's returned payload back into ctx so the items service writes it
-            if (ctx.payload && result?.payload && typeof result.payload === 'object') {
-              Object.assign(ctx.payload, result.payload as Record<string, unknown>)
-            }
-          } catch (err) {
-            app.log.error({ err, flowId: flow.id }, 'Before-event flow failed')
-          }
-        } else {
-          // "After — async, post-save processing": the writer never waits for
-          // the run. Inside a create's unit of work it still starts only once
-          // the whole create has landed (and is dropped when it is undone),
-          // but the create answers without it — a flow that ends in a partner
-          // call held every such create for the length of that call. The run
-          // records itself (nivaro_flow_runs, its partner obligation, dead
-          // letters), so nothing about a failure is lost by not waiting.
-          void deferEffect(
-            `event-flow:${flow.id}`,
-            () =>
-              executeFlow(execCtx).catch((err) =>
-                app.log.error({ err, flowId: flow.id }, 'Event flow execution failed')
-              ),
-            { detached: true }
-          )
-        }
-      }
-      if (timing === 'before') hooks.before(collection, action, hookFn, { extensionId: tag })
+  for (const action of spec.actions) {
+    for (const collection of spec.collections) {
+      const hookFn = (ctx: HookContext) => runEventFlow(app, spec, action, ctx)
+      if (spec.timing === 'before') hooks.before(collection, action, hookFn, { extensionId: tag })
       else hooks.after(collection, action, hookFn, { extensionId: tag })
     }
   }
 
-  app.log.debug({ flowId: flow.id, timing, actions, collections }, 'Event flow hook registered')
+  app.log.debug(
+    { flowId: flow.id, timing: spec.timing, actions: spec.actions, collections: spec.collections },
+    'Event flow hook registered'
+  )
 }
 
 function unregisterEventFlowHook(flowId: string) {
+  if (perAppEventFlows()) return forgetTenantEventFlows(currentTenantKey())
   hooks.removeExtensionHooks(flowHookTag(flowId))
 }
 
@@ -759,6 +714,9 @@ export async function flowsRoutes(app: FastifyInstance) {
       .delete()
       .catch(() => undefined)
     const deleted = await db('nivaro_flows').where({ id }).delete()
+    // Shared deployment: a write between the forget above and this delete may have cached the
+    // flow again — drop it once more now that it is gone.
+    if (perAppEventFlows()) forgetTenantEventFlows(currentTenantKey())
     if (!deleted) return reply.code(404).send({ error: 'Not found' })
     await logActivity({
       action: 'delete',

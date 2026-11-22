@@ -116,6 +116,19 @@ export interface ScheduleOpts {
 /** How one scheduled tick ended (runScheduledTick). */
 type TickOutcome = 'ran' | AppSkipWhy | { failed: unknown }
 
+/** Hub phase 6: the listed apps the fan-out may run; each app whose Hub status is `maintenance`
+ *  (the Hub is moving or updating it) is recorded in `skipped` with why 'maintenance'. */
+function withoutHubMaintenance<T extends { id: string; status: string }>(
+  apps: T[],
+  skipped: AppFanOutResult['skipped']
+): T[] {
+  return apps.filter((t) => {
+    if (t.status !== 'maintenance') return true
+    skipped.push({ tenant: t.id, why: 'maintenance' })
+    return false
+  })
+}
+
 /** services/security.js, imported lazily as before, through one shared promise. The promise is
  *  there for test determinism: under vitest 4, parallel first-time dynamic imports of a mocked
  *  module (the per-app fan-out's maintenance checks) hand the real module to all but the first.
@@ -1086,8 +1099,10 @@ export class CronManager {
     let result: AppFanOutResult
     const claimedElsewhere: AppFanOutResult['skipped'] = []
     try {
-      const apps = await listApps()
-      if (apps.length === 0) this.warnNoApps(id)
+      const listed = await listApps()
+      if (listed.length === 0) this.warnNoApps(id)
+      // Hub phase 6: an app the Hub put in maintenance (being moved or updated) runs nothing.
+      const apps = withoutHubMaintenance(listed, claimedElsewhere)
       const mine = this.leader.active
         ? (
             await Promise.all(
@@ -1463,6 +1478,8 @@ export class CronManager {
   ): Promise<void> {
     try {
       const r = await forEachApp(async (t) => {
+        // Hub phase 6: an app the Hub put in maintenance catches up after it is released.
+        if (t.status === 'maintenance') return 'maintenance'
         if (await appPaused(id)) return 'paused'
         if (await this.heldByMaintenance(id, t.id)) return 'maintenance'
         const recent = await db('nivaro_job_runs')

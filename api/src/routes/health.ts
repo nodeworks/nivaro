@@ -4,10 +4,16 @@ import { fileURLToPath } from 'node:url'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
+import { getTenantId } from '../db/tenant-context.js'
 import { describeTls, type TlsSettings } from '../db/tls-options.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { bootState } from '../services/boot-phases.js'
-import { isMultiTenant, isNivaroCloud } from '../services/deployment-mode.js'
+import {
+  hubSharedConfig,
+  isMultiTenant,
+  isNivaroCloud,
+  tenantSource
+} from '../services/deployment-mode.js'
 import { requestDevRestart } from '../services/dev-extension-watch.js'
 import { devStaleness, startDevStalenessScan } from '../services/dev-staleness.js'
 import { readGateStats } from '../services/read-gate.js'
@@ -78,6 +84,10 @@ export async function healthRoutes(app: FastifyInstance) {
   startDevStalenessScan(config.NODE_ENV)
   app.get('/version', async (_req, reply) => {
     const dev = devStaleness()
+    // A Hub shared deployment (phase 6): which deployment serves this app, and which app the
+    // address resolved to (ruling B3: a move or an upgrade verifies both). Never in cloud mode
+    // or self-hosted.
+    const shared = tenantSource() === 'hub' ? hubSharedConfig() : null
     return reply.send({
       version: NIVARO_VERSION,
       // The shared-code (@nivaro/react) version the admin SPA carries — a
@@ -87,6 +97,7 @@ export async function healthRoutes(app: FastifyInstance) {
       instance: instanceKey(),
       cloud: isNivaroCloud(),
       multi_tenant: isMultiTenant(),
+      ...(shared ? { shared_deployment: shared.deployment, tenant: getTenantId() ?? null } : {}),
       ...(dev ? { dev } : {})
     })
   })

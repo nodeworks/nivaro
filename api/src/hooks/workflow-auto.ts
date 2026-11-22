@@ -1,6 +1,7 @@
 import { db } from '../db/index.js'
-import { parseConditionRules } from '../services/workflow-conditions.js'
+import { currentTenantKey } from '../services/tenant-rooms.js'
 import { deferEffect } from '../services/unit-of-work.js'
+import { parseConditionRules } from '../services/workflow-conditions.js'
 import { runAutoTransitions } from '../services/workflow-transitions.js'
 import { hooks } from './registry.js'
 
@@ -17,11 +18,27 @@ import { hooks } from './registry.js'
 //
 // The hourly sweep in server.ts covers conditions that flip purely by time.
 
-let boundCollectionsCache: { set: Set<string>; loadedAt: number } | null = null
+// Both caches are per app: a Hub shared-deployment process serves many apps (Hub phase 6).
+type ChildWatch = { fk: string; parents: Set<string> }
+type AutoState = {
+  bound: { set: Set<string>; loadedAt: number } | null
+  childWatch: { map: Map<string, ChildWatch[]>; loadedAt: number } | null
+}
+const autoStates = new Map<string, AutoState>()
+function autoState(): AutoState {
+  const key = currentTenantKey()
+  let st = autoStates.get(key)
+  if (!st) {
+    st = { bound: null, childWatch: null }
+    autoStates.set(key, st)
+  }
+  return st
+}
 
 async function boundCollections(): Promise<Set<string>> {
-  if (boundCollectionsCache && Date.now() - boundCollectionsCache.loadedAt < 60_000) {
-    return boundCollectionsCache.set
+  const st = autoState()
+  if (st.bound && Date.now() - st.bound.loadedAt < 60_000) {
+    return st.bound.set
   }
   const set = new Set<string>()
   try {
@@ -32,12 +49,11 @@ async function boundCollections(): Promise<Set<string>> {
   } catch {
     /* table missing pre-migration */
   }
-  boundCollectionsCache = { set, loadedAt: Date.now() }
+  st.bound = { set, loadedAt: Date.now() }
   return set
 }
 
 // child collection → [{ fk (column on the child pointing at the parent), parent collections }]
-type ChildWatch = { fk: string; parents: Set<string> }
 const RELATED_FIELD_RE = /^([A-Za-z_][A-Za-z0-9_]*):([A-Za-z_][A-Za-z0-9_]*)$/
 const RELATED_OPS = new Set([
   'related_some',
@@ -45,16 +61,19 @@ const RELATED_OPS = new Set([
   'children_in_state',
   'children_not_in_state'
 ])
-let childWatchCache: { map: Map<string, ChildWatch[]>; loadedAt: number } | null = null
 
+/** Drop the cached bindings and child watches (pipeline config changed): the current app's,
+ *  or every app's when called outside one (a cache reset, another process's config change). */
 export function bustWorkflowAutoCaches(): void {
-  boundCollectionsCache = null
-  childWatchCache = null
+  const key = currentTenantKey()
+  if (key) autoStates.delete(key)
+  else autoStates.clear()
 }
 
 async function childWatches(): Promise<Map<string, ChildWatch[]>> {
-  if (childWatchCache && Date.now() - childWatchCache.loadedAt < 60_000) {
-    return childWatchCache.map
+  const st = autoState()
+  if (st.childWatch && Date.now() - st.childWatch.loadedAt < 60_000) {
+    return st.childWatch.map
   }
   const map = new Map<string, ChildWatch[]>()
   try {
@@ -86,7 +105,7 @@ async function childWatches(): Promise<Map<string, ChildWatch[]>> {
   } catch {
     /* tables missing pre-migration */
   }
-  childWatchCache = { map, loadedAt: Date.now() }
+  st.childWatch = { map, loadedAt: Date.now() }
   return map
 }
 
