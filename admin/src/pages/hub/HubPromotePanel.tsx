@@ -227,9 +227,11 @@ function PromoteForm({
   if (choices.length === 0)
     return (
       <p className='m-0 text-[12px] text-slate-600 dark:text-slate-300'>
-        {kind === 'promote'
-          ? 'Nothing to promote: the environment before this one runs no newer version.'
-          : 'Nothing to roll back to: this environment has no earlier successful deploy.'}
+        {kind === 'rollback'
+          ? 'Nothing to roll back to: this environment has no earlier successful deploy.'
+          : promotable.data?.previous === null
+            ? 'Nothing to promote: this is the first environment, so new versions reach it through its own pipeline.'
+            : 'Nothing to promote: the environment before this one runs no newer version.'}
       </p>
     )
 
@@ -272,8 +274,8 @@ function PromoteForm({
           role='status'
           className='m-0 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] font-medium text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-200'
         >
-          The plan changed — check it again. This is the plan as it stands now; type {env.key} again
-          to start it.
+          The plan changed — check it again. This is the plan as it stands now; type{' '}
+          <code className='font-mono font-semibold'>{env.key}</code> again to start it.
         </p>
       )}
       {plan.data ? (
@@ -784,6 +786,11 @@ export function PromotionHistory({
               <span className='font-mono text-[12px] font-medium text-slate-900 dark:text-foreground'>
                 {r.version}
               </span>
+              {r.from_version && (
+                <span className='font-mono text-[11px] text-slate-500 dark:text-slate-400'>
+                  from {r.from_version}
+                </span>
+              )}
               <span className='text-[11px] text-slate-500 dark:text-muted-foreground'>
                 {KIND_NOUN[r.kind] ?? r.kind}
               </span>
@@ -793,8 +800,7 @@ export function PromotionHistory({
               <div className='ml-auto'>{actions(r)}</div>
             </div>
             <p className='m-0 mt-0.5 text-[11px] text-slate-500 dark:text-muted-foreground'>
-              {whoOf(r)} · {formatRelative(r.started_at)}
-              {r.step ? ` · ${r.step}` : ''}
+              {[whoOf(r), formatRelative(r.started_at), r.step].filter(Boolean).join(' · ')}
             </p>
             {r.error && (
               <div className='mt-0.5 text-[11px] text-red-700 dark:text-red-300'>
@@ -889,7 +895,8 @@ export function RunnerError({ text, clamp }: { text: string; clamp?: boolean }) 
   )
 }
 
-const whoOf = (r: HubPromotion) => r.started_by_name || (r.started_by ? 'Someone' : '—')
+/** Who started a run; nothing at all when the Hub has no starter for it. */
+const whoOf = (r: HubPromotion) => r.started_by_name || (r.started_by ? 'Someone' : '')
 
 function RowActions({
   row,

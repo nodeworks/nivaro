@@ -491,10 +491,12 @@ describe('gatherPlanInput', () => {
     const input = await gather.gatherPlanInput(2, { kind: 'rollback', version: '0.3.9' }, deps())
     expect(input.targetDeployedVersions).toEqual(['0.3.7'])
     const plan = buildPromotionPlan(input)
+    // P29: its own code, never the check-address hint of FRONTEND_UNKNOWN.
     expect(plan.blockers.map((b) => b.code)).toEqual(
-      expect.arrayContaining(['NOT_DEPLOYED_BEFORE', 'FRONTEND_UNKNOWN'])
+      expect.arrayContaining(['NOT_DEPLOYED_BEFORE', 'ROLLBACK_BUILD_UNKNOWN'])
     )
-    expect(plan.blockers.find((b) => b.code === 'FRONTEND_UNKNOWN')?.text).toBe(
+    expect(plan.blockers.map((b) => b.code)).not.toContain('FRONTEND_UNKNOWN')
+    expect(plan.blockers.find((b) => b.code === 'ROLLBACK_BUILD_UNKNOWN')?.text).toBe(
       'frontend: the Hub has no record of the build production deployed with 0.3.9'
     )
     expect(plan.lines.join('\n')).not.toContain('serves')

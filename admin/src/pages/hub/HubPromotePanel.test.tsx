@@ -21,7 +21,7 @@ vi.mock('@/lib/api', () => ({
 const { HubPromotePanel, PromotionHistory, currentStepIndex, stepRows } = await import(
   './HubPromotePanel'
 )
-const { BLOCKER_COPY, hubError } = await import('./hub-api')
+const { BLOCKER_COPY, blockerCopy, hubError } = await import('./hub-api')
 
 const env = {
   id: 10,
@@ -454,6 +454,31 @@ describe('PromotionHistory', () => {
     expect(within(list).getAllByRole('listitem')).toHaveLength(3)
   })
 
+  it('P29: no starter shows nothing; the phone list shows the from-version like the table', async () => {
+    routes({
+      history: [
+        row({
+          id: 9,
+          kind: 'promote',
+          version: '0.3.208',
+          from_version: '0.3.207',
+          status: 'success',
+          step: 'verify',
+          started_by: null,
+          started_by_name: null
+        })
+      ]
+    })
+    wrap(<PromotionHistory env={env} canPromote={false} onRollback={() => {}} onWatch={() => {}} />)
+    const table = await screen.findByRole('table', { name: 'production Hub deploys' })
+    expect(within(table).queryByText('—')).toBeNull()
+    expect(within(table).getByText('from 0.3.207')).toBeInTheDocument()
+    const list = screen.getByRole('list', { name: 'production Hub deploys' })
+    expect(within(list).getByText('from 0.3.207')).toBeInTheDocument()
+    expect(within(list).queryByText(/—/)).toBeNull()
+    expect(within(list).queryByText(/^ · /)).toBeNull()
+  })
+
   it('offers no Roll back to readers who may not promote', async () => {
     routes({ history: rows })
     wrap(<PromotionHistory env={env} canPromote={false} onRollback={() => {}} onWatch={() => {}} />)
@@ -487,6 +512,9 @@ describe('promotion copy', () => {
       'ROLLBACK_NOT_RECORDED'
     ])
       expect(BLOCKER_COPY[code]?.title, code).toBeTruthy()
+    expect(blockerCopy({ code: 'ROLLBACK_BUILD_UNKNOWN', text: 'x' }).title).toBe(
+      'The Hub has no record of the build this version deployed, so it cannot redeploy it.'
+    )
   })
 
   it('names the route refusals in plain words', () => {
@@ -628,6 +656,84 @@ describe('fix round 1: progress', () => {
     const keys = (k: 'promote' | 'rollback') => stepRows(plan as never, k).map((r) => r.key)
     expect(keys('rollback')).toEqual(['push-2', 'deploy-2', 'push-1', 'deploy-1', 'verify'])
     expect(keys('promote')).toEqual(['push-1', 'deploy-1', 'push-2', 'deploy-2', 'verify'])
+  })
+})
+
+describe('P29: promote panel wording', () => {
+  afterEach(() => {
+    h.get.mockReset()
+    h.post.mockReset()
+  })
+
+  it('the first environment is not told about an environment before it', async () => {
+    routes({ promotable: { promote: [], rollback: [], previous: null } })
+    wrap(<HubPromotePanel env={env} kind='promote' idPrefix='t' onClose={() => {}} />)
+    expect(
+      await screen.findByText(
+        'Nothing to promote: this is the first environment, so new versions reach it through its own pipeline.'
+      )
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/environment before this one/)).toBeNull()
+  })
+
+  it('a later environment with nothing newer says so', async () => {
+    routes({ promotable: { promote: [], rollback: [], previous: 'staging' } })
+    wrap(<HubPromotePanel env={env} kind='promote' idPrefix='t' onClose={() => {}} />)
+    expect(
+      await screen.findByText(
+        'Nothing to promote: the environment before this one runs no newer version.'
+      )
+    ).toBeInTheDocument()
+  })
+
+  it('a rollback whose build is unknown has its own words, never the check-address hint', async () => {
+    routes({
+      plan: {
+        ...okPlan,
+        ok: false,
+        blockers: [
+          {
+            code: 'ROLLBACK_BUILD_UNKNOWN',
+            text: 'frontend: the Hub has no record of the build production deployed with 0.3.205'
+          }
+        ]
+      }
+    })
+    wrap(
+      <HubPromotePanel
+        env={env}
+        kind='rollback'
+        initialVersion='0.3.205'
+        idPrefix='t'
+        onClose={() => {}}
+      />
+    )
+    expect(
+      await screen.findByText(
+        'The Hub has no record of the build this version deployed, so it cannot redeploy it.'
+      )
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/check address/)).toBeNull()
+  })
+
+  it('names the environment in code type in the plan-changed notice', async () => {
+    routes({
+      startError: {
+        response: {
+          status: 409,
+          data: { code: 'PLAN_CHANGED', plan: { ...okPlan, plan_hash: 'b'.repeat(64) } }
+        }
+      }
+    })
+    wrap(<HubPromotePanel env={env} kind='promote' idPrefix='t' onClose={() => {}} />)
+    await screen.findByText('api: merge main into production, then deploy')
+    fireEvent.change(screen.getByLabelText(/Type production to promote/), {
+      target: { value: 'production' }
+    })
+    fireEvent.click(startButton())
+    const notice = await screen.findByText(/The plan changed — check it again/)
+    const code = within(notice).getByText('production')
+    expect(code.tagName).toBe('CODE')
   })
 })
 

@@ -1057,7 +1057,13 @@ function promotionRoutes(app: FastifyInstance) {
         cur && (await unrecordedComponents(envId, cur, fwd.components ?? [])) ? cur : null
       if (finish && !promote.includes(finish)) promote.push(finish)
       return {
-        data: { promote: newestFirst(promote), rollback: newestFirst(rollback), finish }
+        data: {
+          promote: newestFirst(promote),
+          rollback: newestFirst(rollback),
+          finish,
+          // The environment promotions come from (null: this is the first one).
+          previous: fwd.previous?.key ?? null
+        }
       }
     } catch (err) {
       return promotionRefusal(reply, err)

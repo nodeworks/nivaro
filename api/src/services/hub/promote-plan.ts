@@ -200,12 +200,15 @@ export function buildPromotionPlan(input: PlanInput): PromotionPlan {
         `${s.component}: no commit on ${componentOf(components, s).source_branch} names nivaro ${version}`
       )
     if (s.kind === 'frontend' && !s.sourceSha)
-      block(
-        'FRONTEND_UNKNOWN',
-        kind === 'rollback'
-          ? `${s.component}: the Hub has no record of the build ${target.key} deployed with ${version}`
-          : `${s.component}: ${previous?.key ?? 'the previous environment'} serves no version this Hub can read`
-      )
+      kind === 'rollback'
+        ? block(
+            'ROLLBACK_BUILD_UNKNOWN',
+            `${s.component}: the Hub has no record of the build ${target.key} deployed with ${version}`
+          )
+        : block(
+            'FRONTEND_UNKNOWN',
+            `${s.component}: ${previous?.key ?? 'the previous environment'} serves no version this Hub can read`
+          )
     else if (
       s.kind === 'frontend' &&
       kind === 'promote' &&

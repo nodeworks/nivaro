@@ -375,7 +375,11 @@ export const hubPromotionsDocs: DocSection = {
         ],
         [
           '`FRONTEND_UNKNOWN`',
-          'Promote: the Hub cannot tell which frontend commit the environment before this one serves. Its check address must answer with a commit. Roll back: the Hub has no record of the frontend build it deployed with that version.'
+          'Promote: the Hub cannot tell which frontend commit the environment before this one serves. Its check address must answer with a commit.'
+        ],
+        [
+          '`ROLLBACK_BUILD_UNKNOWN`',
+          'Roll back only: the Hub has no record of the frontend build it deployed with that version, so it cannot redeploy it. Nothing runs.'
         ],
         [
           '`FRONTEND_NOT_ON_SOURCE`',

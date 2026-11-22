@@ -209,9 +209,15 @@ describe('promotable', () => {
       data: {
         promote: ['0.3.210', '0.3.209'],
         rollback: ['0.3.150', '0.3.20', '0.3.9'],
-        finish: null
+        finish: null,
+        previous: null
       }
     })
+    // P29: names the environment promotions come from.
+    m.gather.mockResolvedValue(planInput({ previous: { key: 'staging' } }))
+    expect((await get(`/environments/${prodId}/promotable`, asOwner)).json().data.previous).toBe(
+      'staging'
+    )
   })
 
   it('P21: rollback offers only versions whose every build the Hub recorded', async () => {

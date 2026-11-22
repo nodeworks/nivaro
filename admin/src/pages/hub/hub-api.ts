@@ -326,6 +326,10 @@ const CODE_COPY: Record<string, { title: string; hint?: string }> = {
     title: 'The Hub did not record the build this version deployed',
     hint: 'A rollback reruns the exact build the Hub deployed. Without that record it cannot roll back to this version. Nothing was changed.'
   },
+  ROLLBACK_BUILD_UNKNOWN: {
+    title: 'The Hub has no record of the build this version deployed, so it cannot redeploy it.',
+    hint: 'Roll back only to a version the Hub deployed here itself. Nothing was changed.'
+  },
   ROLLBACK_REFUSED_BY_GITLAB: {
     title: 'GitLab refused to rerun the earlier deploy job',
     hint: 'The project\'s "Prevent outdated deployment jobs" setting refuses an older deploy job. Allow job retries for rollback deployments in GitLab\'s CI/CD settings, or roll back by hand.'
@@ -391,6 +395,8 @@ export interface HubPromotable {
    * `promote` too): promoting it again finishes it. null otherwise.
    */
   finish?: string | null
+  /** The environment promotions here come from; null = this is the first environment. */
+  previous?: string | null
 }
 
 export interface PromotionBlocker {
@@ -478,7 +484,9 @@ export const fetchPromotable = (envId: number) =>
     (r): HubPromotable => ({
       promote: r.data.data?.promote ?? [],
       rollback: r.data.data?.rollback ?? [],
-      finish: r.data.data?.finish ?? null
+      finish: r.data.data?.finish ?? null,
+      // undefined (an older API): not known whether there is an environment before this one.
+      previous: r.data.data?.previous
     })
   )
 
@@ -621,7 +629,7 @@ export const BLOCKER_COPY: Record<string, { title: string; hint?: string }> = {
 
 /** One blocker in plain words; an unknown code keeps the planner's own text. */
 export function blockerCopy(b: PromotionBlocker): { title: string; hint?: string } {
-  return BLOCKER_COPY[b.code] ?? { title: b.text || 'This cannot start yet' }
+  return BLOCKER_COPY[b.code] ?? CODE_COPY[b.code] ?? { title: b.text || 'This cannot start yet' }
 }
 
 const PROMOTION_STATUS_WORDS: Record<PromotionStatus, string> = {
