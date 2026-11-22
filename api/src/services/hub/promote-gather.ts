@@ -4,7 +4,7 @@ import { getApp } from '../io-holder.js'
 import { environmentFromRow, type HubApp, readApp } from './apps.js'
 import { listComponents } from './components.js'
 import { listEnvironmentDeploys } from './deploys.js'
-import { listImageVersions } from './docker/image-tags.js'
+import { type ImageVersions, listImageVersions } from './docker/image-tags.js'
 import {
   defaultStackGatherDeps,
   gatherStackFacts,
@@ -157,7 +157,7 @@ export interface GatherDeps {
   /** phase 4: the agent and stack-settings reads of stack components (default: the real ones). */
   stack?: Partial<StackGatherDeps>
   /** phase 4: published x.y.z tags of an image, newest first (default: Docker Hub). */
-  listImageVersions?: (image: string) => Promise<string[]>
+  listImageVersions?: (image: string) => Promise<ImageVersions>
 }
 
 function appRedis(): StatusCache | null {
@@ -351,6 +351,8 @@ export async function gatherPlanInput(
   const frontendOnSource: PlanInput['frontendOnSource'] = {}
 
   for (const c of components) {
+    // phase 4: a stack never reads GitLab, even on a (mismatched) GitLab driver.
+    if (c.kind === 'stack') continue
     const driver = driverRows.get(c.driver_id)
     if (!driver || !versionOk) continue
     const targetBranch = c.target_branch ?? driver.config.branch
@@ -443,7 +445,8 @@ function dockerPlanDriver(row: DockerDriverRow): PlanDriver {
 
 /**
  * The facts of every stack component on a Docker driver, and — for a promotion into the first
- * environment of an all-stack app (Decision 11) — the image's published releases.
+ * environment of an all-stack app (Decision 11) — the image's published releases. With no valid
+ * version (the promotable listing asks with '') only the releases are read: no agent call.
  */
 async function gatherStackInput(
   components: HubComponent[],
@@ -456,20 +459,24 @@ async function gatherStackInput(
     version: string
   },
   deps: GatherDeps
-): Promise<Pick<PlanInput, 'stacks' | 'registryVersions'>> {
+): Promise<Pick<PlanInput, 'stacks' | 'registryVersions' | 'registryError'>> {
   const stackComponents = components.filter((c) => c.kind === 'stack')
   if (!stackComponents.length) return {}
-  const out: Pick<PlanInput, 'stacks' | 'registryVersions'> = {}
-  const stackDeps: StackGatherDeps = { ...defaultStackGatherDeps(), ...(deps.stack ?? {}) }
-  const stacks: Record<number, StackFacts> = {}
-  for (const c of stackComponents) {
-    const driver = dockerRows.get(c.driver_id)
-    if (!driver) continue
-    stacks[c.position] = await gatherStackFacts(c, { ...ctx, driver }, stackDeps)
+  const out: Pick<PlanInput, 'stacks' | 'registryVersions' | 'registryError'> = {}
+  if (VERSION_RE.test(ctx.version)) {
+    const stackDeps: StackGatherDeps = { ...defaultStackGatherDeps(), ...(deps.stack ?? {}) }
+    const stacks: Record<number, StackFacts> = {}
+    for (const c of stackComponents) {
+      const driver = dockerRows.get(c.driver_id)
+      if (!driver) continue
+      stacks[c.position] = await gatherStackFacts(c, { ...ctx, driver }, stackDeps)
+    }
+    out.stacks = stacks
   }
-  out.stacks = stacks
   if (ctx.kind === 'promote' && !ctx.previous && components.every((c) => c.kind === 'stack')) {
-    out.registryVersions = await (deps.listImageVersions ?? listImageVersions)(hubImage())
+    const releases = await (deps.listImageVersions ?? listImageVersions)(hubImage())
+    out.registryVersions = releases.versions
+    if (releases.error) out.registryError = releases.error
   }
   return out
 }

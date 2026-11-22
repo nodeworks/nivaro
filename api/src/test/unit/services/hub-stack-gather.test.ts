@@ -133,7 +133,7 @@ function deps(over: Partial<GatherDeps> = {}): GatherDeps {
     gitlabDeployedVersions: async () => [],
     isLocked: async () => false,
     stack: stackDeps(),
-    listImageVersions: async () => ['0.3.11', '0.3.10', '0.3.9'],
+    listImageVersions: async () => ({ versions: ['0.3.11', '0.3.10', '0.3.9'], error: null }),
     ...over
   }
 }
@@ -341,6 +341,90 @@ describe('gatherPlanInput — stack components', () => {
     expect(plan.steps[0].stack?.extensions).toEqual({ 'efp-ops': OLD_PIN })
   })
 
+  const dockerPlan = (extensions: unknown) =>
+    JSON.stringify({ steps: [{ kind: 'stack', driver: 'docker', stack: { extensions } }] })
+  const success = (version: string, plan: string | null) => ({
+    app_id: 1,
+    environment_id: 2,
+    kind: 'promote',
+    version,
+    status: 'success',
+    plan
+  })
+  const rollbackFacts = async (over: Partial<GatherDeps> = {}) => {
+    versions[2] = '0.3.10'
+    const input = await gather.gatherPlanInput(
+      2,
+      { kind: 'rollback', version: '0.3.9' },
+      deps(over)
+    )
+    return { input, f: input.stacks?.[1], plan: buildPromotionPlan(input) }
+  }
+
+  it('fix 1: a corrupt newest deploy row never falls through to an older one', async () => {
+    await db('nivaro_hub_deploys').insert(success('0.3.9', dockerPlan({ 'efp-ops': OLD_PIN })))
+    await db('nivaro_hub_deploys').insert(success('0.3.9', '{"steps": [ not json'))
+    const { f, plan } = await rollbackFacts()
+    expect(f?.extensions).toEqual({})
+    expect(f?.extensionsUnreadable).toBe("the stored plan of the 0.3.9 deploy can't be read")
+    expect(plan.blockers).toEqual([
+      { code: 'EXTENSION_UNPINNED', text: "the stored plan of the 0.3.9 deploy can't be read" }
+    ])
+    expect(plan.steps[0].stack?.extensions).toEqual({})
+  })
+
+  it('fix 1: a newer row with no docker step is passed over; a null plan is unreadable', async () => {
+    await db('nivaro_hub_deploys').insert(success('0.3.9', dockerPlan({ 'efp-ops': OLD_PIN })))
+    await db('nivaro_hub_deploys').insert(
+      success('0.3.9', JSON.stringify({ steps: [{ kind: 'api', component: 'api' }] }))
+    )
+    expect((await rollbackFacts()).f?.extensions).toEqual({ 'efp-ops': OLD_PIN })
+    await db('nivaro_hub_deploys').insert(success('0.3.9', null))
+    expect((await rollbackFacts()).f?.extensionsUnreadable).toBe(
+      "the stored plan of the 0.3.9 deploy can't be read"
+    )
+  })
+
+  it.each([
+    ['a tampered pin (no digest)', { 'efp-ops': 'nodeworks/efp-ops:latest' }],
+    ['a pin next to a junk id', { 'efp-ops': OLD_PIN, 'Bad Id': OLD_PIN }],
+    ['a non-string pin', { 'efp-ops': 7 }],
+    ['extensions as a list', [OLD_PIN]],
+    ['no extensions object', undefined]
+  ])('fix 1: %s in the stored plan is unreadable, never a smaller set', async (_l, ext) => {
+    await db('nivaro_hub_deploys').insert(success('0.3.9', dockerPlan(ext)))
+    const { f, plan } = await rollbackFacts()
+    expect(f?.extensions).toEqual({})
+    expect(plan.blockers.map((b) => b.code)).toEqual(['EXTENSION_UNPINNED'])
+  })
+
+  it('fix 1: no stored docker plan while the stack runs extensions → unreadable', async () => {
+    // 0.3.9 ran here, but no Hub docker deploy of it stored a plan (its own deploy history says so).
+    const history = { gitlabDeployedVersions: async () => ['0.3.9'] }
+    const { f, plan } = await rollbackFacts(history)
+    expect(f?.extensionsUnreadable).toBe(
+      'no stored plan of a 0.3.9 deploy says which extensions it installed, and production runs extensions now'
+    )
+    expect(plan.blockers.map((b) => b.code)).toEqual(['EXTENSION_UNPINNED'])
+    // With none running now, rolling back with none is right (the app needs none either).
+    await db('nivaro_hub_environments').where({ id: 2 }).update({ extension_pins: null })
+    await db('nivaro_hub_apps').where({ id: 1 }).update({ extensions: '[]' })
+    const clean = await rollbackFacts(history)
+    expect(clean.f?.extensionsUnreadable).toBeNull()
+    expect(clean.f?.extensions).toEqual({})
+    expect(clean.plan.blockers).toEqual([])
+  })
+
+  it('fix 1: malformed pins on the previous environment block a promote', async () => {
+    await db('nivaro_hub_environments')
+      .where({ id: 1 })
+      .update({ extension_pins: JSON.stringify({ 'efp-ops': STG_PIN, other: 'x' }) })
+    const input = await gather.gatherPlanInput(2, { kind: 'promote', version: '0.3.10' }, deps())
+    expect(buildPromotionPlan(input).blockers).toEqual([
+      { code: 'EXTENSION_UNPINNED', text: "the stored extension pins of staging can't be read" }
+    ])
+  })
+
   it('the first environment of an all-stack app plans from the published releases', async () => {
     await db('nivaro_hub_environments').where({ id: 1 }).del()
     versions[2] = null
@@ -351,7 +435,7 @@ describe('gatherPlanInput — stack components', () => {
       deps({
         listImageVersions: async (image) => {
           asked.push(image)
-          return ['0.3.11', '0.3.10']
+          return { versions: ['0.3.11', '0.3.10'], error: null }
         }
       })
     )
@@ -365,6 +449,42 @@ describe('gatherPlanInput — stack components', () => {
     expect(plan.steps).toHaveLength(1)
     const missing = buildPromotionPlan({ ...input, version: '0.3.12' })
     expect(missing.blockers.map((b) => b.code)).toEqual(['IMAGE_MISSING'])
+  })
+
+  it('fix 1: the promotable listing (no version) reads only the releases — no agent call', async () => {
+    await db('nivaro_hub_environments').where({ id: 1 }).del()
+    const input = await gather.gatherPlanInput(2, { kind: 'promote', version: '' }, deps())
+    expect(input.registryVersions).toEqual(['0.3.11', '0.3.10', '0.3.9'])
+    expect(input.stacks).toBeUndefined()
+    expect(agentCalls).toEqual([])
+    // A bad version is BAD_VERSION (+ no image, as in phase 2), never "the agent was not asked".
+    expect(buildPromotionPlan(input).blockers.map((b) => b.code)).toEqual([
+      'BAD_VERSION',
+      'IMAGE_MISSING'
+    ])
+    const back = await gather.gatherPlanInput(2, { kind: 'rollback', version: '' }, deps())
+    expect(back.stacks).toBeUndefined()
+    expect(agentCalls).toEqual([])
+  })
+
+  it('fix 1: unreadable releases say so in the plan', async () => {
+    await db('nivaro_hub_environments').where({ id: 1 }).del()
+    versions[2] = null
+    const input = await gather.gatherPlanInput(
+      2,
+      { kind: 'promote', version: '0.3.11' },
+      deps({
+        listImageVersions: async () => ({ versions: [], error: 'the registry did not answer' })
+      })
+    )
+    expect(input.registryVersions).toEqual([])
+    expect(input.registryError).toBe('the registry did not answer')
+    expect(buildPromotionPlan(input).blockers).toEqual([
+      {
+        code: 'IMAGE_MISSING',
+        text: "couldn't read the published releases (the registry did not answer) — 0.3.11 cannot be checked"
+      }
+    ])
   })
 
   it('an unreachable agent (real client): facts say so and only GET /v1/health was sent', async () => {
@@ -530,16 +650,30 @@ describe('gatherStackFacts', () => {
     ])
   })
 
-  it('automatic DNS: a name outside the wildcard domain, even with the agent down', async () => {
+  it('automatic DNS: a name outside the wildcard domain', async () => {
+    env = { ...env, hostnames: ['acme.example.org'] }
+    const f = await facts()
+    expect(f.hostnameProblems).toEqual([
+      'acme.example.org is not under apps.example.com: automatic DNS only serves names ending in .apps.example.com',
+      "acme.example.org is outside the agent's allowed domains (apps.example.com)."
+    ])
+  })
+
+  it('fix 1: with the agent down the names are not judged — AGENT_UNREACHABLE stands alone', async () => {
     agent.health = async () => {
       throw new AgentError('AGENT_UNREACHABLE', 0, 'down')
     }
     env = { ...env, hostnames: ['acme.example.org'] }
+    await db('nivaro_hub_environments')
+      .where({ id: 1 })
+      .update({
+        hostnames: JSON.stringify(['acme.apps.example.com'])
+      })
     const f = await facts()
     expect(f.agent).toBe('unreachable')
-    expect(f.hostnameProblems).toEqual([
-      'acme.example.org is not under apps.example.com: automatic DNS only serves names ending in .apps.example.com'
-    ])
+    expect(f.edge).toBeNull()
+    expect(f.hostnameProblems).toEqual([])
+    expect(f.hostnameTaken).toEqual([])
     expect(agentCalls).toEqual(['health'])
   })
 
@@ -580,7 +714,8 @@ describe('gatherStackFacts', () => {
     agent.stack = async () => {
       throw new AgentError('AGENT_UNREACHABLE', 0, 'blip')
     }
-    expect((await facts()).stackState).toBe('unknown')
+    const unknown = await facts()
+    expect(unknown.stackState).toBe('unknown')
   })
 
   it('no stack name on the placement', async () => {
@@ -631,23 +766,38 @@ describe('listImageVersions', () => {
           { status: 200, headers: { 'content-type': 'application/json' } }
         )) as typeof fetch
     )
-    expect(await listImageVersions('nodeworks/nivaro')).toEqual(['0.10.0', '0.3.10', '0.3.9'])
-    expect(await listImageVersions('nodeworks/nivaro', 2)).toEqual(['0.10.0', '0.3.10'])
+    expect(await listImageVersions('nodeworks/nivaro')).toEqual({
+      versions: ['0.10.0', '0.3.10', '0.3.9'],
+      error: null
+    })
+    expect(await listImageVersions('nodeworks/nivaro', 2)).toEqual({
+      versions: ['0.10.0', '0.3.10'],
+      error: null
+    })
     expect(String(spy.mock.calls[0][0])).toBe(
       'https://hub.docker.com/v2/repositories/nodeworks/nivaro/tags?page_size=100&ordering=last_updated'
     )
   })
 
-  it('answers [] on any error', async () => {
+  it('answers no versions and says why on any error', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(
       (async () => new Response('x', { status: 500 })) as typeof fetch
     )
-    expect(await listImageVersions('nodeworks/nivaro')).toEqual([])
+    expect(await listImageVersions('nodeworks/nivaro')).toEqual({
+      versions: [],
+      error: 'the registry answered HTTP 500'
+    })
     vi.restoreAllMocks()
     vi.spyOn(globalThis, 'fetch').mockImplementation((async () => {
       throw new TypeError('fetch failed')
     }) as typeof fetch)
-    expect(await listImageVersions('nodeworks/nivaro')).toEqual([])
-    expect(await listImageVersions('registry.example.com:5000/a/b')).toEqual([])
+    expect(await listImageVersions('nodeworks/nivaro')).toEqual({
+      versions: [],
+      error: 'the registry did not answer'
+    })
+    expect(await listImageVersions('registry.example.com:5000/a/b')).toEqual({
+      versions: [],
+      error: 'the image is not a Docker Hub repository'
+    })
   })
 })

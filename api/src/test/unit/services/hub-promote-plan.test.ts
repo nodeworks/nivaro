@@ -351,6 +351,7 @@ function facts(over: Partial<StackFacts> = {}): StackFacts {
       { role: 'worker', replicas: 1, cpus: 2, memory_mb: 4096 }
     ],
     extensions: { 'efp-ops': EXT_PIN },
+    extensionsUnreadable: null,
     missingExtensions: [],
     agentOrigin: 'https://agent.example.com',
     ...over
@@ -513,6 +514,35 @@ describe('hub promotion planner — stack components (phase 4)', () => {
     [{ stackName: null }, 'NO_STACK_NAME']
   ])('%o → %s', (f, code) => {
     expect(one(f)).toEqual([code])
+  })
+
+  it('fix 1: unreadable stored pins are EXTENSION_UNPINNED with the reason', () => {
+    const plan = buildPromotionPlan(
+      stackInput(
+        { kind: 'rollback', version: '0.3.8' },
+        {
+          extensions: {},
+          extensionsUnreadable: "the stored plan of the 0.3.8 deploy can't be read"
+        }
+      )
+    )
+    expect(plan.blockers).toEqual([
+      { code: 'EXTENSION_UNPINNED', text: "the stored plan of the 0.3.8 deploy can't be read" }
+    ])
+  })
+
+  it('fix 1: agent ok but the stack state unknown is a warning line, not a blocker', () => {
+    const plan = buildPromotionPlan(stackInput({}, { stackState: 'unknown' }))
+    expect(plan.ok).toBe(true)
+    expect(plan.lines).toContain(
+      'stack acme-prod: the agent could not say what runs under this name now — the deploy may be refused'
+    )
+  })
+
+  it('fix 1: a stack not gathered because the version is bad says BAD_VERSION only', () => {
+    expect(codes(buildPromotionPlan(stackInput({ version: '', stacks: {} })))).toEqual([
+      'BAD_VERSION'
+    ])
   })
 
   it('an unreachable agent hides the checks only the agent can answer', () => {

@@ -56,49 +56,82 @@ export interface StackGatherDeps {
   otherEnvironmentNames(envId: number): Promise<Set<string>>
   /** The placement's swarm stack name (target.stack); null when none is set. */
   stackName(placementId: number | null): Promise<string | null>
-  /** nivaro_hub_environments.extension_pins of an environment. */
-  extensionPins(envId: number): Promise<Record<string, string>>
-  /** The extension pins the stored plan of `envId`'s newest successful deploy of `version` installed. */
-  deployedExtensions(envId: number, version: string): Promise<Record<string, string> | null>
+  /** nivaro_hub_environments.extension_pins of an environment; UNREADABLE when malformed. */
+  extensionPins(envId: number): Promise<Record<string, string> | typeof UNREADABLE>
+  /**
+   * The extension pins the stored plan of `envId`'s newest successful docker deploy of `version`
+   * installed; null = no such deploy; UNREADABLE = that plan (or its pins) cannot be read.
+   */
+  deployedExtensions(
+    envId: number,
+    version: string
+  ): Promise<Record<string, string> | typeof UNREADABLE | null>
 }
 
-/** id → pin, keeping only well-formed pairs (the agent checks the rest). */
-export function pinMap(raw: unknown): Record<string, string> {
+/** A stored pin set that cannot be read whole: the deploy must not guess (fails closed). */
+export const UNREADABLE = 'unreadable' as const
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) return false
+  const proto = Object.getPrototypeOf(v)
+  return proto === Object.prototype || proto === null
+}
+
+/**
+ * id → pin, all or nothing: null when the value is not a plain object or ANY entry is not a
+ * well-formed `<id>: <repo>@sha256:<64 hex>` pair — a dropped pin would silently uninstall it.
+ */
+export function strictPinMap(raw: unknown): Record<string, string> | null {
   const v = typeof raw === 'string' ? parseJson(raw) : raw
+  if (!isPlainObject(v)) return null
   const out: Record<string, string> = {}
-  if (!v || typeof v !== 'object' || Array.isArray(v)) return out
-  for (const [id, pin] of Object.entries(v as Record<string, unknown>)) {
-    if (EXTENSION_ID_RE.test(id) && typeof pin === 'string' && PIN_RE.test(pin)) out[id] = pin
+  for (const [id, pin] of Object.entries(v)) {
+    if (!EXTENSION_ID_RE.test(id) || typeof pin !== 'string' || !PIN_RE.test(pin)) return null
+    out[id] = pin
   }
   return out
 }
 
-async function readExtensionPins(envId: number): Promise<Record<string, string>> {
+async function readExtensionPins(
+  envId: number
+): Promise<Record<string, string> | typeof UNREADABLE> {
   const row = (await db(ENVS).where({ id: envId }).first('extension_pins')) as
     | { extension_pins: unknown }
     | undefined
-  return pinMap(row?.extension_pins)
+  const raw = row?.extension_pins
+  if (raw == null || (typeof raw === 'string' && !raw.trim())) return {}
+  return strictPinMap(raw) ?? UNREADABLE
 }
 
-/** From the stored plans of successful deploys, newest first: the first stack step's extensions. */
+/**
+ * From the stored plans of successful deploys, newest first, the FIRST row that has a docker step
+ * decides: its pins, or UNREADABLE when its `stack.extensions` is not a plain object or any pin is
+ * malformed. A row whose plan does not parse stops the search as UNREADABLE (it may be the docker
+ * deploy): an older deploy never stands in for it.
+ */
 async function readDeployedExtensions(
   envId: number,
   version: string
-): Promise<Record<string, string> | null> {
+): Promise<Record<string, string> | typeof UNREADABLE | null> {
   const rows = (await db(DEPLOYS)
     .where({ environment_id: envId, status: 'success', version })
     .orderBy('id', 'desc')
     .select('plan')) as Array<{ plan: string | null }>
   for (const r of rows) {
+    let plan: unknown
     try {
-      const plan = JSON.parse(String(r.plan ?? '')) as {
-        steps?: Array<{ driver?: string; stack?: { extensions?: unknown } }>
-      }
-      const step = (plan.steps ?? []).find((s) => s.driver === 'docker' && s.stack)
-      if (step?.stack) return pinMap(step.stack.extensions)
+      plan = JSON.parse(String(r.plan ?? ''))
     } catch {
-      /* an unreadable plan proves nothing */
+      return UNREADABLE
     }
+    if (!isPlainObject(plan)) return UNREADABLE
+    const steps: unknown[] = Array.isArray(plan.steps) ? plan.steps : []
+    const step = steps.find((x) => isPlainObject(x) && x.driver === 'docker') as
+      | Record<string, unknown>
+      | undefined
+    if (!step) continue
+    const extensions = isPlainObject(step.stack) ? step.stack.extensions : undefined
+    return strictPinMap(extensions) ?? UNREADABLE
   }
   return null
 }
@@ -179,18 +212,40 @@ export async function gatherStackFacts(
   const versionOk = VERSION_RE.test(version)
 
   // Decision 10: promote installs the tested set (the previous environment's; the first
-  // environment its own), rollback the set the rolled-back-to deploy installed.
-  const extensionsFor = async (): Promise<Record<string, string>> => {
-    if (kind === 'rollback')
-      return versionOk ? ((await deps.deployedExtensions(env.id, version)) ?? {}) : {}
-    return deps.extensionPins(previous ? previous.id : env.id)
+  // environment its own), rollback the set the rolled-back-to deploy installed. Fails closed:
+  // pins that cannot be read whole are a reason (EXTENSION_UNPINNED), never an empty set.
+  const extensionsFor = async (): Promise<{
+    pins: Record<string, string>
+    unreadable: string | null
+  }> => {
+    const unreadable = (text: string) => ({ pins: {}, unreadable: text })
+    if (kind === 'rollback') {
+      if (!versionOk) return { pins: {}, unreadable: null }
+      const deployed = await deps.deployedExtensions(env.id, version)
+      if (deployed === UNREADABLE)
+        return unreadable(`the stored plan of the ${version} deploy can't be read`)
+      if (deployed) return { pins: deployed, unreadable: null }
+      // No stored docker plan: rolling back with no extensions is right only if none run now.
+      const current = await deps.extensionPins(env.id)
+      if (current === UNREADABLE || Object.keys(current).length)
+        return unreadable(
+          `no stored plan of a ${version} deploy says which extensions it installed, and ${env.key} runs extensions now`
+        )
+      return { pins: {}, unreadable: null }
+    }
+    const from = previous ?? env
+    const pins = await deps.extensionPins(from.id)
+    if (pins === UNREADABLE)
+      return unreadable(`the stored extension pins of ${from.key} can't be read`)
+    return { pins, unreadable: null }
   }
-  const [stackName, row, taken, extensions] = await Promise.all([
+  const [stackName, row, taken, ext] = await Promise.all([
     deps.stackName(c.placement_id),
     deps.readStackSettings(env.id),
     deps.otherEnvironmentNames(env.id),
     extensionsFor()
   ])
+  const extensions = ext.pins
 
   const masked = publicStackSettings(row)
   const settingsMissing = !row
@@ -215,7 +270,8 @@ export async function gatherStackFacts(
     size: row?.size ?? null,
     roles: null,
     extensions,
-    missingExtensions: app.extensions.filter((id) => !extensions[id]).sort(),
+    extensionsUnreadable: ext.unreadable,
+    missingExtensions: ext.unreadable ? [] : app.extensions.filter((id) => !extensions[id]).sort(),
     agentOrigin: agentOrigin(driver.config?.agent_url)
   }
 
@@ -238,15 +294,21 @@ export async function gatherStackFacts(
     facts.publishPortProblem = publishPortProblem(health, row)
   }
 
-  // The driver's wildcard rule always; the agent's suffixes only once it said them (traefik).
-  const edge = facts.edge ?? 'traefik'
-  const refusals = hostnameRefusals(stackHostnames(env, edge), driver.config, {
-    taken,
-    hostSuffixes: health && edge === 'traefik' ? health.host_suffixes : undefined,
-    edge
-  })
-  facts.hostnameTaken = refusals.filter((p) => p.code === 'HOSTNAME_TAKEN').map((p) => p.message)
-  facts.hostnameProblems = refusals.filter((p) => p.code !== 'HOSTNAME_TAKEN').map((p) => p.message)
+  // Which names a stack routes depends on the agent's edge (publish routes none of the base
+  // host): with the agent down the edge is unknown, so names are judged once it answers and
+  // AGENT_UNREACHABLE stands alone.
+  if (health) {
+    const edge = facts.edge ?? 'traefik'
+    const refusals = hostnameRefusals(stackHostnames(env, edge), driver.config, {
+      taken,
+      hostSuffixes: edge === 'traefik' ? health.host_suffixes : undefined,
+      edge
+    })
+    facts.hostnameTaken = refusals.filter((p) => p.code === 'HOSTNAME_TAKEN').map((p) => p.message)
+    facts.hostnameProblems = refusals
+      .filter((p) => p.code !== 'HOSTNAME_TAKEN')
+      .map((p) => p.message)
+  }
 
   if (row && versionOk) {
     try {

@@ -107,6 +107,32 @@ describe('HubPromotePanel', () => {
     h.post.mockReset()
   })
 
+  it("phase 4: says when the published releases couldn't be read", async () => {
+    routes()
+    const base = h.get.getMockImplementation() as (url: string) => Promise<unknown>
+    h.get.mockImplementation(async (url: string) =>
+      url === '/hub/environments/10/promotable'
+        ? { data: { data: { promote: [], rollback: [], releases_error: true } } }
+        : base(url)
+    )
+    wrap(<HubPromotePanel env={env} kind='promote' idPrefix='t' onClose={() => {}} />)
+    expect(
+      await screen.findByText(
+        "Couldn't read the published releases, so none of them are listed. Try again in a moment."
+      )
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText('Nothing to promote: the environment before this one runs no newer version.')
+    ).toBeInTheDocument()
+  })
+
+  it('phase 4: no releases note when the registry answered', async () => {
+    routes()
+    wrap(<HubPromotePanel env={env} kind='promote' idPrefix='t' onClose={() => {}} />)
+    await screen.findByText('api: merge main into production, then deploy')
+    expect(screen.queryByText(/Couldn't read the published releases/)).toBeNull()
+  })
+
   it('shows blockers in plain words and keeps Start off', async () => {
     routes({
       plan: {

@@ -17,7 +17,7 @@ import {
   blockerCopy,
   blockersOf,
   cancelPromotion,
-  fetchPromotable,
+  fetchPromotableReleases,
   fetchPromotion,
   fetchPromotionPlan,
   fetchPromotions,
@@ -33,6 +33,7 @@ import {
   promotionPlanOf,
   promotionStatusTone,
   promotionStatusWords,
+  RELEASES_ERROR_TEXT,
   startPromotion
 } from './hub-api'
 import { dangerArmed, dangerGhost, ghostButton, SectionCard } from './hub-parts'
@@ -124,7 +125,7 @@ function PromoteForm({
   const qc = useQueryClient()
   const promotable = useQuery({
     queryKey: hubKeys.promotable(env.id),
-    queryFn: () => fetchPromotable(env.id),
+    queryFn: () => fetchPromotableReleases(env.id),
     staleTime: 15_000
   })
   const choices = useMemo(() => {
@@ -192,17 +193,27 @@ function PromoteForm({
         onRetry={() => void promotable.refetch()}
       />
     )
+  const releasesNote =
+    kind === 'promote' && promotable.data.releases_error ? (
+      <p role='status' className='m-0 text-[12px] text-amber-800 dark:text-amber-300'>
+        {RELEASES_ERROR_TEXT}
+      </p>
+    ) : null
   if (choices.length === 0)
     return (
-      <p className='m-0 text-[12px] text-slate-600 dark:text-slate-300'>
-        {kind === 'promote'
-          ? 'Nothing to promote: the environment before this one runs no newer version.'
-          : 'Nothing to roll back to: this environment has no earlier successful deploy.'}
-      </p>
+      <div className='space-y-1.5'>
+        {releasesNote}
+        <p className='m-0 text-[12px] text-slate-600 dark:text-slate-300'>
+          {kind === 'promote'
+            ? 'Nothing to promote: the environment before this one runs no newer version.'
+            : 'Nothing to roll back to: this environment has no earlier successful deploy.'}
+        </p>
+      </div>
     )
 
   return (
     <div className='space-y-3'>
+      {releasesNote}
       <div className='max-w-[280px] space-y-1.5'>
         <label
           htmlFor={`${idPrefix}-version`}
@@ -651,7 +662,7 @@ export function PromotionHistory({
   })
   const promotable = useQuery({
     queryKey: hubKeys.promotable(env.id),
-    queryFn: () => fetchPromotable(env.id),
+    queryFn: () => fetchPromotableReleases(env.id),
     staleTime: 15_000,
     enabled: canPromote
   })

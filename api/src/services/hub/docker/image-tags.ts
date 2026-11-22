@@ -25,20 +25,30 @@ export function releaseTags(names: unknown[], limit = 30): string[] {
   return [...tags].sort((a, b) => compareVersions(b, a)).slice(0, Math.max(0, limit))
 }
 
-/** The image's published x.y.z tags, newest first; [] on any error (never throws). */
-export async function listImageVersions(image: string, limit = 30): Promise<string[]> {
+/** Published releases, newest first; `error` says why none could be read (versions is then []). */
+export interface ImageVersions {
+  versions: string[]
+  error: string | null
+}
+
+/** The image's published x.y.z tags, newest first; never throws — a failure is `error`. */
+export async function listImageVersions(image: string, limit = 30): Promise<ImageVersions> {
   const url = tagsUrl(image)
-  if (!url) return []
+  if (!url) return { versions: [], error: 'the image is not a Docker Hub repository' }
   try {
     const res = await fetchJson(url, { Accept: 'application/json' }, TIMEOUT_MS)
-    if (res.status !== 200) return []
+    if (res.status !== 200)
+      return { versions: [], error: `the registry answered HTTP ${res.status}` }
     const results = (res.body as { results?: unknown } | null)?.results
-    if (!Array.isArray(results)) return []
-    return releaseTags(
-      results.map((r) => (r as { name?: unknown } | null)?.name),
-      limit
-    )
+    if (!Array.isArray(results)) return { versions: [], error: 'the registry answer had no tags' }
+    return {
+      versions: releaseTags(
+        results.map((r) => (r as { name?: unknown } | null)?.name),
+        limit
+      ),
+      error: null
+    }
   } catch {
-    return []
+    return { versions: [], error: 'the registry did not answer' }
   }
 }

@@ -106,6 +106,8 @@ export interface StackFacts {
   roles: StackRole[] | null
   /** The extension set this deploy installs (Decision 10): id → <repo>@sha256:<64 hex>. */
   extensions: Record<string, string>
+  /** Why the stored pins this deploy must install cannot be read (fails closed); null = read. */
+  extensionsUnreadable: string | null
   /** app.extensions with no pin in `extensions`. */
   missingExtensions: string[]
   agentOrigin: string | null
@@ -148,6 +150,8 @@ export interface PlanInput {
   stacks?: Record<number, StackFacts>
   /** phase 4: published x.y.z tags of the Nivaro image, newest first (first all-stack environment). */
   registryVersions?: string[]
+  /** phase 4: why the published releases could not be read (registryVersions is then []). */
+  registryError?: string
 }
 
 export type PromotionBlockerCode =

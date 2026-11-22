@@ -633,3 +633,21 @@ Object.assign(BLOCKER_COPY, {
     hint: 'Stacks deploy through a Docker driver; api and frontend components through GitLab.'
   }
 } satisfies Record<string, { title: string; hint?: string }>)
+
+/** Phase 4: the promotable versions plus whether the published releases could be read. */
+export interface HubPromotableReleases extends HubPromotable {
+  /** The first environment of an all-stack app lists published releases; true = unreadable. */
+  releases_error: boolean
+}
+
+export const fetchPromotableReleases = (envId: number): Promise<HubPromotableReleases> =>
+  api
+    .get<{ data: Partial<HubPromotableReleases> }>(`/hub/environments/${envId}/promotable`)
+    .then((r) => ({
+      promote: r.data.data?.promote ?? [],
+      rollback: r.data.data?.rollback ?? [],
+      releases_error: r.data.data?.releases_error === true
+    }))
+
+export const RELEASES_ERROR_TEXT =
+  "Couldn't read the published releases, so none of them are listed. Try again in a moment."

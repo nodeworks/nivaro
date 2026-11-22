@@ -1043,7 +1043,14 @@ function promotionRoutes(app: FastifyInstance) {
       const rollback = cur
         ? back.targetDeployedVersions.filter((v) => compareVersions(v, cur) < 0)
         : []
-      return { data: { promote: newestFirst(promote), rollback: newestFirst(rollback) } }
+      return {
+        data: {
+          promote: newestFirst(promote),
+          rollback: newestFirst(rollback),
+          // phase 4: the published releases could not be read (first all-stack environment).
+          ...(fwd.registryError ? { releases_error: true } : {})
+        }
+      }
     } catch (err) {
       return promotionRefusal(reply, err)
     }

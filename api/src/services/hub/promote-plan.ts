@@ -94,7 +94,12 @@ export function buildPromotionPlan(input: PlanInput): PromotionPlan {
           )
         // phase 4: in place of PREVIOUS_NEVER_RAN (a missing digest says IMAGE_MISSING below).
         else if (input.digest && !(input.registryVersions ?? []).includes(version))
-          block('IMAGE_MISSING', `${version} is not a published release of the Nivaro image`)
+          block(
+            'IMAGE_MISSING',
+            input.registryError
+              ? `couldn't read the published releases (${input.registryError}) — ${version} cannot be checked`
+              : `${version} is not a published release of the Nivaro image`
+          )
       } else if (
         input.previousVersion !== version &&
         !input.previousDeployedVersions.includes(version)
@@ -315,6 +320,7 @@ function stackBlockers(
   block: (code: PromotionBlockerCode, text: string) => void
 ) {
   const { target, previous, kind, version } = input
+  const versionOk = VERSION_RE.test(version)
   for (const c of components) {
     const d = input.drivers[c.driver_id]
     if (!d) continue
@@ -331,7 +337,9 @@ function stackBlockers(
     if (c.kind !== 'stack' || input.drivers[c.driver_id]?.kind !== 'docker') continue
     const f = input.stacks?.[c.position]
     if (!f) {
-      block('AGENT_UNREACHABLE', `${c.name}: the Hub agent was not asked about this stack`)
+      // A bad version is not gathered (BAD_VERSION says why); otherwise it should have been.
+      if (versionOk)
+        block('AGENT_UNREACHABLE', `${c.name}: the Hub agent was not asked about this stack`)
       continue
     }
     const at = `the Hub agent at ${f.agentOrigin ?? '(no address)'}`
@@ -359,7 +367,8 @@ function stackBlockers(
             : `the stack ${f.stackName} belongs to another Hub app or environment`
         )
     }
-    if (f.missingExtensions.length)
+    if (f.extensionsUnreadable) block('EXTENSION_UNPINNED', f.extensionsUnreadable)
+    else if (f.missingExtensions.length)
       block(
         'EXTENSION_UNPINNED',
         kind === 'rollback'
@@ -425,7 +434,9 @@ function stackLines(input: PlanInput, s: PromotionStep): string[] {
   if (f?.stackState === 'none')
     lines.push(`stack ${name}: not on the swarm yet — the agent creates it`)
   else if (f?.stackState === 'unknown' && f.agent === 'ok')
-    lines.push(`stack ${name}: the agent could not say what runs under this name now`)
+    lines.push(
+      `stack ${name}: the agent could not say what runs under this name now — the deploy may be refused`
+    )
   lines.push(
     `stack ${name}: verify ${urlForLog(s.verifyUrl ?? '')} answers version = ${input.version} twice, then the preflight must not fail`
   )
