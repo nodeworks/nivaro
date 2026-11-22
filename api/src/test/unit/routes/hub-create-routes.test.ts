@@ -499,6 +499,28 @@ describe('access', () => {
     expect((await call('GET', `/databases/${dbId}`, asOther)).statusCode).toBe(404)
     expect((await call('GET', `/environments/${envId}/creation`, asOther)).statusCode).toBe(404)
   })
+
+  it('the creation view carries the server’s TLS (P3-24) and nothing secret', async () => {
+    await db('nivaro_hub_db_servers')
+      .where({ id: manualServer })
+      .update({
+        ssl_mode: 'verify-full',
+        trust_server_cert: true,
+        admin_secret: sealSecret(JSON.stringify(ADMIN_LOGIN))
+      })
+    const out = await created({
+      environments: [{ key: 'production', database: { server_id: manualServer } }]
+    })
+    const envId = out.environments[0].id
+    for (const h of [asOwner, asAdmin]) {
+      const c = await call('GET', `/environments/${envId}/creation`, h)
+      expect(c.statusCode).toBe(200)
+      const tls = c.json().data.database.server_tls
+      expect(tls).toEqual({ ssl_mode: 'verify-full', trust_server_cert: true })
+      expect(c.body).not.toContain(ADMIN_LOGIN.password)
+      expect(c.body).not.toContain('admin_secret')
+    }
+  })
 })
 
 // ── servers ──────────────────────────────────────────────────────────────────

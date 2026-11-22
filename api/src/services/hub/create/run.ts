@@ -40,7 +40,7 @@ import {
   recordDatabase
 } from '../db/databases.js'
 import { generateHexSecret } from '../db/names.js'
-import { getServerRow, publicServer } from '../db/servers.js'
+import { getServerRow, type HubDbServerRow, publicServer } from '../db/servers.js'
 import { defaultSleep, type Sleep } from '../gitlab-write.js'
 import { checkName as checkEnvironmentNameById } from '../name-check.js'
 import { defaultPromoteLock, LOCK_RENEW_MS, type PromoteLock } from '../promote-lock.js'
@@ -1005,8 +1005,11 @@ export interface CreationView {
   checklist: ChecklistItem[] | null
   /** The DNS / certificate ticket on a target that makes names by hand. */
   ticket: string | null
-  /** The environment's database, masked. */
-  database: HubDatabase | null
+  /**
+   * The environment's database, masked, with its server's TLS (never the server's login): an
+   * owner's connection always uses the server's TLS (ruling P3-24), so the form shows it read-only.
+   */
+  database: (HubDatabase & { server_tls: CreationServerTls | null }) | null
   /** What the operator installs on the swarm manager for this app (template README). */
   deploy_key: {
     keyid: string
@@ -1015,6 +1018,12 @@ export interface CreationView {
     key_conf: string
     key_conf_path: string
   } | null
+}
+
+/** The TLS settings of a database's server, as an owner may see them (no host login). */
+export interface CreationServerTls {
+  ssl_mode: HubDbServerRow['ssl_mode']
+  trust_server_cert: boolean
 }
 
 export async function readCreation(envId: number): Promise<CreationView | null> {
@@ -1034,19 +1043,26 @@ export async function readCreation(envId: number): Promise<CreationView | null> 
   const baseUrl = env?.base_url ?? row.made.planned?.base_url ?? null
 
   const dbId = row.made.database_id
-  const database = dbId ? await getDatabase(dbId) : null
+  const found = dbId ? await getDatabase(dbId) : null
+  const server = found?.server_id != null ? await getServerRow(found.server_id) : null
+  const database: CreationView['database'] = found
+    ? {
+        ...found,
+        server_tls: server
+          ? { ssl_mode: server.ssl_mode, trust_server_cert: server.trust_server_cert }
+          : null
+      }
+    : null
   let checklist: ChecklistItem[] | null = null
   if (
     database &&
+    server &&
     !database.created_by_hub &&
     !database.adopted &&
     database.status !== 'ready' &&
-    database.server_id != null
-  ) {
-    const server = await getServerRow(database.server_id)
-    if (server && database.login_name)
-      checklist = dbaChecklist(publicServer(server), database.database_name, database.login_name)
-  }
+    database.login_name
+  )
+    checklist = dbaChecklist(publicServer(server), database.database_name, database.login_name)
   let ticket: string | null = null
   if (target?.config?.dns_mode === 'manual' && hostname) {
     try {

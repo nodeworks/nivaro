@@ -4,33 +4,28 @@ import { Check, Circle, Copy, Loader2, Pause, RefreshCw, RotateCcw, X } from 'lu
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { SimpleSelect } from '@/components/ui/simple-select'
 import { cn, formatRelative } from '@/lib/utils'
+import { CheckResult, DbaChecklist, DbConnectionForm } from '../databases/DatabaseDetail'
 import { hubKeys } from '../hub-api'
-import { dangerArmed, dangerGhost, Field, ghostButton, SectionCard } from '../hub-parts'
+import { dangerArmed, dangerGhost, ghostButton, SectionCard } from '../hub-parts'
 import {
-  type ChecklistItem,
   type CreationStepState,
   type CreationView,
   cancelCreation,
   checkCreation,
   confirmInstalled,
-  createError,
   createKeys,
   createToast,
   creationErrorDescription,
   creationPollMs,
   creationStatusWords,
   fetchCreation,
-  type HubDatabaseLite,
-  type HubDbCheck,
   noteWords,
   retryCreation,
   STEP_LABELS,
   STEP_ORDER,
   STEP_STATE_WORDS,
-  saveDbConnection,
+  serverTlsWords,
   WAIT_WORDS
 } from './create-api'
 
@@ -361,33 +356,6 @@ function CopyBlock({
   )
 }
 
-// merge: reuse DbaChecklist from databases/ (Task 11) in place of this small list.
-function Checklist({ items }: { items: ChecklistItem[] }) {
-  return (
-    <ul aria-label='DBA checklist' className='m-0 list-none space-y-1.5 p-0'>
-      {items.map((it) => (
-        <li
-          key={`${it.label}:${it.value}`}
-          className='flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 dark:border-border dark:bg-card'
-        >
-          <span className='min-w-[120px] text-[12px] text-slate-600 dark:text-slate-300'>
-            {it.label}
-          </span>
-          <code className='min-w-0 flex-1 break-all font-mono text-[12px] text-slate-900 dark:text-foreground'>
-            {it.value}
-          </code>
-          <CopyButton value={it.value} label={`Copy ${it.label}`} />
-          {it.note && (
-            <span className='w-full text-[11px] text-slate-500 dark:text-muted-foreground'>
-              {it.note}
-            </span>
-          )}
-        </li>
-      ))}
-    </ul>
-  )
-}
-
 function DatabaseWait({
   view,
   isAdmin,
@@ -405,173 +373,21 @@ function DatabaseWait({
         database and its login exist, enter the connection here. The Hub checks it is empty and that
         the login owns it, then carries on.
       </p>
-      {view.checklist?.length ? <Checklist items={view.checklist} /> : null}
-      {d?.last_check && <LastCheck check={d.last_check} />}
-      {/* merge: with Task 11's DbConnectionForm, pass serverTls from the creation's database/server data (owners cannot read /db-servers). */}
-      {d && <ConnectionForm db={d} lockPlace={!isAdmin} onSaved={onSaved} />}
+      {view.checklist?.length ? <DbaChecklist items={view.checklist} /> : null}
+      {d?.last_check && <CheckResult check={d.last_check} checkedAt={d.checked_at} />}
+      {/* The Databases tab's form. An owner (ruling P3-24) gets the database's own server: host,
+          port and TLS read-only; the TLS comes with the creation view (owners cannot read
+          /db-servers) and the API uses the server's whatever is sent. */}
+      {d && (
+        <DbConnectionForm
+          key={d.id}
+          row={d}
+          lockPlace={!isAdmin}
+          serverTls={serverTlsWords(d.server_tls)}
+          onChecked={onSaved}
+        />
+      )}
     </WaitBox>
-  )
-}
-
-function LastCheck({ check }: { check: HubDbCheck }) {
-  return (
-    <p className='m-0 text-[12px] text-slate-700 dark:text-slate-200'>
-      <span className='font-medium'>
-        Last check{check.at ? ` ${formatRelative(check.at)}` : ''}:
-      </span>{' '}
-      {check.text}
-    </p>
-  )
-}
-
-const SSL_OPTIONS = [
-  { value: '', label: "Server's default" },
-  { value: 'disable', label: 'Off' },
-  { value: 'require', label: 'Required' },
-  { value: 'verify-ca', label: 'Verify the authority' },
-  { value: 'verify-full', label: 'Verify the authority and name' }
-]
-
-// merge: reuse DbConnectionForm (lockPlace) from databases/ (Task 11) in place of this form.
-/**
- * The connection the DBA made. The password starts empty and is never filled from the Hub.
- * `lockPlace` (owners, ruling P3-24): host and port are the database's own server, read-only.
- */
-export function ConnectionForm({
-  db,
-  lockPlace,
-  onSaved
-}: {
-  db: HubDatabaseLite
-  lockPlace: boolean
-  onSaved: () => void
-}) {
-  const qc = useQueryClient()
-  const [host, setHost] = useState(db.host ?? '')
-  const [port, setPort] = useState(db.port != null ? String(db.port) : '')
-  const [database, setDatabase] = useState(db.database_name ?? '')
-  const [user, setUser] = useState(db.login_name ?? '')
-  const [password, setPassword] = useState('')
-  const [ssl, setSsl] = useState('')
-  const [failure, setFailure] = useState<unknown>(null)
-  const [result, setResult] = useState<HubDbCheck | null>(null)
-  const missing = !host.trim() || !database.trim() || !user.trim() || !password
-  const portBad = port.trim() !== '' && !/^\d{1,5}$/.test(port.trim())
-
-  const save = useMutation({
-    mutationFn: () =>
-      saveDbConnection(db.id, db.engine, {
-        host: host.trim(),
-        port: port.trim() ? Number(port.trim()) : null,
-        database: database.trim(),
-        user: user.trim(),
-        password,
-        ssl_mode: ssl || undefined
-      }),
-    onSuccess: (out) => {
-      setFailure(null)
-      setPassword('')
-      setResult(out.check)
-      void qc.invalidateQueries({ queryKey: createKeys.databases() })
-      onSaved()
-    },
-    onError: (e) => {
-      setPassword('')
-      setFailure(e)
-    }
-  })
-
-  const id = (f: string) => `hub-creation-db-${db.id}-${f}`
-  return (
-    <div className='space-y-3'>
-      <div className='grid grid-cols-1 gap-3 sm:grid-cols-2'>
-        <Field
-          id={id('host')}
-          label='Host'
-          hint={lockPlace ? "The database's server (only a Hub admin can change it)." : undefined}
-        >
-          <Input
-            id={id('host')}
-            value={host}
-            onChange={(e) => setHost(e.target.value)}
-            readOnly={lockPlace}
-            className={cn('h-8 font-mono text-[13px]', lockPlace && 'bg-slate-50 dark:bg-muted')}
-          />
-        </Field>
-        <Field id={id('port')} label='Port' error={portBad ? 'A port number' : null}>
-          <Input
-            id={id('port')}
-            value={port}
-            onChange={(e) => setPort(e.target.value)}
-            readOnly={lockPlace}
-            inputMode='numeric'
-            placeholder="Engine's default"
-            className={cn('h-8 font-mono text-[13px]', lockPlace && 'bg-slate-50 dark:bg-muted')}
-          />
-        </Field>
-        <Field id={id('database')} label='Database'>
-          <Input
-            id={id('database')}
-            value={database}
-            onChange={(e) => setDatabase(e.target.value)}
-            className='h-8 font-mono text-[13px]'
-          />
-        </Field>
-        <Field id={id('user')} label='Login'>
-          <Input
-            id={id('user')}
-            value={user}
-            onChange={(e) => setUser(e.target.value)}
-            autoComplete='off'
-            className='h-8 font-mono text-[13px]'
-          />
-        </Field>
-        <Field id={id('password')} label='Password' hint='Sent once and stored sealed.'>
-          <Input
-            id={id('password')}
-            type='password'
-            autoComplete='new-password'
-            spellCheck={false}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className='h-8 font-mono text-[13px]'
-          />
-        </Field>
-        <Field id={id('ssl')} label='TLS'>
-          <SimpleSelect
-            value={ssl}
-            onChange={setSsl}
-            options={SSL_OPTIONS}
-            ariaLabel='TLS'
-            className='h-8 text-[13px]'
-          />
-        </Field>
-      </div>
-      {failure != null && (
-        <ErrorNotice description={createError(failure, 'Could not save the connection')} />
-      )}
-      {result && (
-        <p
-          role='status'
-          className={cn(
-            'm-0 text-[12px]',
-            result.state === 'empty'
-              ? 'text-emerald-700 dark:text-emerald-300'
-              : 'text-amber-800 dark:text-amber-300'
-          )}
-        >
-          {result.text}
-        </p>
-      )}
-      <Button
-        size='sm'
-        className='h-8 bg-nvr-cyan text-white hover:bg-nvr-cyan/90'
-        disabled={missing || portBad || save.isPending}
-        onClick={() => save.mutate()}
-      >
-        {save.isPending ? 'Checking…' : 'Save and check'}
-      </Button>
-    </div>
   )
 }
 

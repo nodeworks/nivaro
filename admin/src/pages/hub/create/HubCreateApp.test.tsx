@@ -43,6 +43,7 @@ vi.mock('@/components/ui/simple-select', () => ({
 vi.mock('@/components/user-combobox', () => ({ UserCombobox: () => null }))
 
 const { HubCreateApp } = await import('./HubCreateApp')
+const { dbKeys } = await import('../databases/db-api')
 
 const baseTarget = {
   id: 3,
@@ -275,6 +276,33 @@ describe('HubCreateApp', () => {
     const secret = (await screen.findByLabelText('Client secret')) as HTMLInputElement
     expect(secret.type).toBe('password')
     expect(secret.value).toBe('')
+  })
+
+  it('a client secret of spaces only keeps Create disabled and says why', async () => {
+    answerGets([baseTarget])
+    answerPlan(cleanPlan)
+    mount()
+    await fillBasics()
+    fireEvent.change(screen.getByLabelText('Client secret'), { target: { value: '   ' } })
+    await waitFor(() => expect(planCalls().length).toBeGreaterThan(0), { timeout: 3000 })
+    await new Promise((r) => setTimeout(r, 700))
+    expect(createButton().disabled).toBe(true)
+    expect(screen.getByText('Type the client secret')).toBeTruthy()
+    for (const [, body] of planCalls()) expect(body.signin.client_secret).not.toBe('••••••')
+  })
+
+  it('reads servers and databases under the Databases tab keys (one key per endpoint)', async () => {
+    answerGets([baseTarget])
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={qc}>
+        <HubCreateApp onDone={vi.fn()} onCancel={vi.fn()} />
+      </QueryClientProvider>
+    )
+    await waitFor(() => expect(qc.getQueryData(dbKeys.servers())).toHaveLength(1))
+    expect(qc.getQueryData(dbKeys.databases())).toEqual([])
+    expect(qc.getQueryCache().find({ queryKey: ['hub-create-servers'] })).toBeUndefined()
+    expect(qc.getQueryCache().find({ queryKey: ['hub-create-databases'] })).toBeUndefined()
   })
 
   it('previews never carry the client secret; only Create does', async () => {

@@ -8,6 +8,7 @@ import { SimpleSelect } from '@/components/ui/simple-select'
 import { UserCombobox } from '@/components/user-combobox'
 import type { User } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { dbKeys, useDatabases, useDbServers } from '../databases/db-api'
 import { HUB_MASK, hubKeys } from '../hub-api'
 import { Field, ghostButton, SectionCard } from '../hub-parts'
 import {
@@ -21,8 +22,6 @@ import {
   createError,
   createKeys,
   defaultDbNames,
-  fetchDatabases,
-  fetchDbServers,
   fetchTargets,
   isCreatableKey,
   previewPlan,
@@ -86,8 +85,9 @@ export function HubCreateApp({
 }) {
   const qc = useQueryClient()
   const targets = useQuery({ queryKey: createKeys.targets(), queryFn: fetchTargets })
-  const servers = useQuery({ queryKey: createKeys.servers(), queryFn: fetchDbServers })
-  const databases = useQuery({ queryKey: createKeys.databases(), queryFn: fetchDatabases })
+  // The Databases tab's reads and keys: a save on either screen refreshes both.
+  const servers = useDbServers()
+  const databases = useDatabases()
 
   const [key, setKey] = useState('')
   const [name, setName] = useState('')
@@ -153,7 +153,7 @@ export function HubCreateApp({
   const previewInput: CreateAppInput = useMemo(
     () => ({
       ...input,
-      signin: { ...input.signin, client_secret: input.signin.client_secret ? HUB_MASK : '' }
+      signin: { ...input.signin, client_secret: input.signin.client_secret.trim() ? HUB_MASK : '' }
     }),
     [input]
   )
@@ -226,9 +226,11 @@ export function HubCreateApp({
     ),
     // The preview never sees the secret, so the form checks what the planner would.
     secret:
-      clientSecret.length > 1000 || hasControlChar(clientSecret)
-        ? 'One line, at most 1000 characters'
-        : ''
+      clientSecret && !clientSecret.trim()
+        ? 'Type the client secret'
+        : clientSecret.length > 1000 || hasControlChar(clientSecret)
+          ? 'One line, at most 1000 characters'
+          : ''
   }
   const localProblem =
     !!local.key || !!local.version || !!local.secret || local.hostnames.some(Boolean) || !targetId
@@ -252,7 +254,7 @@ export function HubCreateApp({
     try {
       const out = await startCreate(input)
       await qc.invalidateQueries({ queryKey: hubKeys.apps() })
-      void qc.invalidateQueries({ queryKey: createKeys.databases() })
+      void qc.invalidateQueries({ queryKey: dbKeys.databases() })
       onDone(out.app_id)
     } catch (err) {
       const found = createBlockersOf(err)

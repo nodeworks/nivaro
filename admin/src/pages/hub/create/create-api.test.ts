@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { DB_CODE_COPY } from '../databases/db-api'
 import {
   appBlockers,
   automaticHostname,
@@ -32,6 +33,17 @@ const SOURCES = [
   'services/hub/db/connection.ts'
 ]
 
+/**
+ * services/hub/db/codes.ts: every code the database routes answer. Services refuse through the
+ * typed HubDbCode (often a const or a variable, which the pattern below cannot see), so the whole
+ * list is read; a creation can surface any of them.
+ */
+const DB_CODES_FILE = 'services/hub/db/codes.ts'
+function hubDbCodes(): string[] {
+  const src = readFileSync(join(API, DB_CODES_FILE), 'utf8')
+  return [...src.matchAll(/^ {2}'([A-Z][A-Z0-9_]+)',?$/gm)].map((m) => m[1])
+}
+
 /** A code in a refusal position: fail/block/refused/bad(…, 'CODE'), new XError('CODE'), code: 'CODE'. */
 const CODE_RE =
   /(?:\b(?:fail|block|refused|bad)\(\s*(?:reply,\s*\d+,\s*)?|(?:Error|Failure)\(\s*|\b(?:code|sync_error)\s*[:=]\s*\(?\s*)'([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)'/g
@@ -42,6 +54,7 @@ function answeredCodes(): Map<string, string> {
     const src = readFileSync(join(API, f), 'utf8')
     for (const m of src.matchAll(CODE_RE)) if (!out.has(m[1])) out.set(m[1], f)
   }
+  for (const c of hubDbCodes()) if (!out.has(c)) out.set(c, DB_CODES_FILE)
   return out
 }
 
@@ -57,6 +70,21 @@ describe('creation refusal copy', () => {
     ])
       expect(codes.has(known)).toBe(true)
     expect(codes.size).toBeGreaterThan(60)
+    // The HUB_DB_CODES list is read too (a broken pattern would find none of it).
+    expect(hubDbCodes().length).toBeGreaterThan(40)
+    for (const c of ['LOGIN_HALF_MASKED', 'PROVISION_RUNNING', 'DATABASE_NOT_EMPTY'])
+      expect(codes.get(c), c).toBeTruthy()
+  })
+
+  it('database refusals read with the Databases tab copy: one table per endpoint', () => {
+    // The connection form's codes are only ever answered by the database routes, whose copy
+    // lives in databases/db-api.ts; the creation copy does not repeat them.
+    for (const c of ['HOST_NOT_SERVER', 'TOO_MANY_TRIES', 'BAD_CONNECTION', 'LOGIN_HALF_MASKED']) {
+      expect(CREATE_COPY[c], c).toBeUndefined()
+      expect(copyFor(c)?.title, c).toBe(DB_CODE_COPY[c].title)
+    }
+    // A creation code keeps its own words where both name it.
+    expect(copyFor('NOT_FOUND')?.title).toBe(CREATE_COPY.NOT_FOUND.title)
   })
 
   it('has plain words for every code the routes and services answer', () => {

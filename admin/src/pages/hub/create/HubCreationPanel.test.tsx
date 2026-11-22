@@ -18,6 +18,29 @@ vi.mock('@/lib/api', () => ({
   }
 }))
 
+// Test double: the Radix select needs a real browser.
+vi.mock('@/components/ui/simple-select', () => ({
+  SimpleSelect: ({
+    value,
+    onChange,
+    options,
+    ariaLabel
+  }: {
+    value: string
+    onChange: (v: string) => void
+    options: Array<{ value: string; label: string }>
+    ariaLabel?: string
+  }) => (
+    <select aria-label={ariaLabel} value={value} onChange={(e) => onChange(e.target.value)}>
+      {options.map((o) => (
+        <option key={o.value} value={o.value}>
+          {o.label}
+        </option>
+      ))}
+    </select>
+  )
+}))
+
 const { HubCreationPanel } = await import('./HubCreationPanel')
 const { creationPollMs, STEP_ORDER } = await import('./create-api')
 
@@ -44,7 +67,8 @@ const database = {
   last_check: null,
   checked_at: null,
   connection: '••••••',
-  environment: { id: 10, app_id: 1, app_key: 'demo', env_key: 'staging' }
+  environment: { id: 10, app_id: 1, app_key: 'demo', env_key: 'staging' },
+  server_tls: { ssl_mode: 'verify-full', trust_server_cert: false }
 }
 
 function view(patch: Record<string, unknown> = {}) {
@@ -161,6 +185,8 @@ describe('HubCreationPanel', () => {
       })
     )
     const list = await screen.findByRole('list', { name: 'DBA checklist' })
+    // The Databases tab's checklist (Task 11), not a second copy of it.
+    expect(screen.getByText('Checklist for the DBA')).toBeTruthy()
     expect(within(list).getByText('nivaro_demo_staging')).toBeTruthy()
     expect(within(list).getByRole('button', { name: 'Copy Login' })).toBeTruthy()
     const pw = screen.getByLabelText('Password') as HTMLInputElement
@@ -168,9 +194,33 @@ describe('HubCreationPanel', () => {
     expect(pw.type).toBe('password')
     expect(document.body.textContent).not.toContain('••••••')
     expect(screen.getByRole('button', { name: /Check now/ })).toBeTruthy()
+    // An admin picks the TLS mode.
+    expect(screen.getByRole('combobox', { name: 'TLS' })).toBeTruthy()
   })
 
-  it('an owner sees the database host and port read-only and may save a connection', async () => {
+  it('copying a checklist row without a clipboard shows the text selected', async () => {
+    const saved = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true })
+    try {
+      mount(
+        view({
+          status: 'waiting',
+          waiting_for: 'database',
+          steps: steps({ database: { status: 'waiting' } }),
+          checklist: [{ label: 'Login', value: 'demo_staging' }],
+          database
+        })
+      )
+      fireEvent.click(await screen.findByRole('button', { name: 'Copy Login' }))
+      const box = (await screen.findByRole('textbox', { name: 'Copy Login' })) as HTMLInputElement
+      expect(box.value).toBe('demo_staging')
+      expect(screen.getByText(/Copying is not available here/)).toBeTruthy()
+    } finally {
+      if (saved) Object.defineProperty(navigator, 'clipboard', saved)
+    }
+  })
+
+  it('an owner sees the host, port and the server’s TLS read-only and may save a connection', async () => {
     mount(
       view({
         status: 'waiting',
@@ -183,19 +233,27 @@ describe('HubCreationPanel', () => {
     const host = (await screen.findByLabelText('Host')) as HTMLInputElement
     expect(host.readOnly).toBe(true)
     expect((screen.getByLabelText('Port') as HTMLInputElement).readOnly).toBe(true)
+    // P3-24: the server's TLS, in words, read-only; no TLS choice for an owner.
+    const tls = screen.getByLabelText('TLS') as HTMLInputElement
+    expect(tls.readOnly).toBe(true)
+    expect(tls.value).toBe('TLS, verify CA and host name')
+    expect(screen.queryByRole('combobox', { name: 'TLS' })).toBeNull()
     h.put.mockResolvedValue({
       data: {
         data: { ...database, status: 'ready' },
-        check: { state: 'empty', text: 'Empty and owned by the login', at: '' },
+        check: { state: 'empty', ok: true, text: 'driver text', at: '' },
         creation: { status: 'running' }
       }
     })
+    const reads = h.get.mock.calls.length
     fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'pw-typed-here' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save and check' }))
     await waitFor(() => expect(h.put).toHaveBeenCalled())
     expect(h.put.mock.calls[0][0]).toBe('/hub/databases/9/connection')
-    expect(await screen.findByText('Empty and owned by the login')).toBeTruthy()
+    expect(await screen.findByText('Empty and ready for a new app')).toBeTruthy()
     expect((screen.getByLabelText('Password') as HTMLInputElement).value).toBe('')
+    // The creation is read again (it carries on once the database is ready).
+    await waitFor(() => expect(h.get.mock.calls.length).toBeGreaterThan(reads))
   })
 
   it('a name wait shows the ticket and the last check in words', async () => {

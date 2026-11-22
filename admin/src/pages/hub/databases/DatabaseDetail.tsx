@@ -60,19 +60,39 @@ export function canDropDatabase(d: HubDatabaseRow, servers: DbServer[] | undefin
 
 function CopyButton({ text, label }: { text: string; label: string }) {
   const [done, setDone] = useState(false)
+  // No clipboard (a plain-http page) or a refused write: show the text selected instead.
+  const [manual, setManual] = useState(false)
+  if (manual)
+    return (
+      <span className='inline-flex min-w-0 max-w-full flex-wrap items-center gap-1.5'>
+        <input
+          readOnly
+          aria-label={`Copy ${label}`}
+          value={text}
+          ref={(el) => el?.select()}
+          onFocus={(e) => e.currentTarget.select()}
+          className='h-7 min-w-0 max-w-[260px] flex-1 rounded border border-slate-300 bg-white px-1.5 font-mono text-[11px] text-slate-900 dark:border-border dark:bg-card dark:text-foreground'
+        />
+        <span role='status' className='text-[11px] text-amber-800 dark:text-amber-300'>
+          Copying is not available here: the text is selected, press Ctrl+C (⌘C on a Mac).
+        </span>
+      </span>
+    )
   return (
     <button
       type='button'
       data-tip={done ? 'Copied' : 'Copy'}
       aria-label={`Copy ${label}`}
       onClick={() => {
-        void navigator.clipboard
-          ?.writeText(text)
-          .then(() => {
+        const clip = typeof navigator !== 'undefined' ? navigator.clipboard : undefined
+        if (!clip?.writeText) return setManual(true)
+        clip.writeText(text).then(
+          () => {
             setDone(true)
             window.setTimeout(() => setDone(false), 1500)
-          })
-          .catch(() => {})
+          },
+          () => setManual(true)
+        )
       }}
       className='inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-slate-500 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:text-muted-foreground dark:hover:bg-muted'
     >

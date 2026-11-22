@@ -7,6 +7,14 @@ import {
 import type { DataTag } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
+import {
+  type ChecklistItem,
+  DB_CODE_COPY,
+  type DbEngine,
+  type HubDatabaseRow,
+  SSL_LABEL,
+  type SslMode
+} from '../databases/db-api'
 import { hubError } from '../hub-api'
 
 /**
@@ -65,50 +73,22 @@ export interface TargetSaveAnswer {
   sync_error?: string
 }
 
-// ─── Databases (what the Create app panel picks from) ─────────────────────────
+// ─── Databases ────────────────────────────────────────────────────────────────
+// The servers, databases, checklist and connection form are the Databases tab's (databases/
+// db-api.ts): same types, same query keys, same refusal copy. Only what the creation view adds
+// lives here.
 
-export type HubDbEngine = 'mssql' | 'pg' | 'mysql2' | 'mariadb'
-
-export interface HubDbServerLite {
-  id: number
-  name: string
-  engine: HubDbEngine
-  host: string
-  port: number | null
-  provision_mode: 'automatic' | 'manual'
+/** The TLS settings of a database's server, as the creation view carries them (no login). */
+export interface CreationServerTls {
+  ssl_mode: SslMode | null
+  trust_server_cert: boolean
 }
 
-export interface HubDbCheck {
-  state: string
-  ok?: boolean
-  text: string
-  at: string
-  code?: string
-}
-
-export interface HubDatabaseLite {
-  id: number
-  server_id: number | null
-  server_name: string | null
-  engine: HubDbEngine
-  host: string
-  port: number | null
-  database_name: string
-  login_name: string | null
-  status: 'requested' | 'creating' | 'ready' | 'failed' | 'dropping'
-  adopted: boolean
-  created_by_hub: boolean
-  last_check: HubDbCheck | null
-  checked_at: string | null
-  /** Only ever the mask. */
-  connection: string | null
-  environment: { id: number; app_id: number; app_key: string; env_key: string } | null
-}
-
-export interface ChecklistItem {
-  label: string
-  value: string
-  note?: string
+/** The server's TLS in words, for an owner's read-only field (ruling P3-24). */
+export function serverTlsWords(tls: CreationServerTls | null | undefined): string | undefined {
+  if (!tls) return undefined
+  const mode = tls.ssl_mode ? SSL_LABEL[tls.ssl_mode] : 'Engine default'
+  return tls.trust_server_cert ? `${mode}, server certificate trusted` : mode
 }
 
 // ─── Creation ─────────────────────────────────────────────────────────────────
@@ -153,7 +133,7 @@ export interface CreationPlanEnvironment {
     server_name: string | null
     database_name: string
     login_name: string | null
-    engine: HubDbEngine
+    engine: DbEngine
     checklist: ChecklistItem[] | null
   }
 }
@@ -238,7 +218,8 @@ export interface CreationView {
   log: CreationLogLine[]
   checklist: ChecklistItem[] | null
   ticket: string | null
-  database: HubDatabaseLite | null
+  /** The environment's database (masked) with its server's TLS; null server_tls = no server. */
+  database: (HubDatabaseRow & { server_tls?: CreationServerTls | null }) | null
   deploy_key: {
     keyid: string
     public_key: string
@@ -248,22 +229,16 @@ export interface CreationView {
   } | null
 }
 
-// ─── Query keys (own roots: one key = one shape) ──────────────────────────────
+// ─── Query keys (creation-only endpoints; database reads use dbKeys) ───────────
 
 type Tagged<K extends readonly unknown[], T> = DataTag<K, T>
 const tag = <T, K extends readonly unknown[]>(k: K) => k as unknown as Tagged<K, T>
 
 export const createKeys: {
   targets: () => Tagged<readonly ['hub-create-targets'], HubTarget[]>
-  servers: () => Tagged<readonly ['hub-create-servers'], HubDbServerLite[]>
-  databases: () => Tagged<readonly ['hub-create-databases'], HubDatabaseLite[]>
   creation: (envId: number) => Tagged<readonly ['hub-creation', number], CreationView>
 } = {
   targets: () => tag<HubTarget[], readonly ['hub-create-targets']>(['hub-create-targets'] as const),
-  servers: () =>
-    tag<HubDbServerLite[], readonly ['hub-create-servers']>(['hub-create-servers'] as const),
-  databases: () =>
-    tag<HubDatabaseLite[], readonly ['hub-create-databases']>(['hub-create-databases'] as const),
   creation: (envId) =>
     tag<CreationView, readonly ['hub-creation', number]>(['hub-creation', envId] as const)
 }
@@ -285,12 +260,6 @@ export const testTarget = (id: number) =>
     .then((r) => r.data.data)
 
 export const deleteTarget = (id: number) => api.delete(`/hub/targets/${id}`)
-
-export const fetchDbServers = () =>
-  api.get<{ data: HubDbServerLite[] }>('/hub/db-servers').then((r) => r.data.data ?? [])
-
-export const fetchDatabases = () =>
-  api.get<{ data: HubDatabaseLite[] }>('/hub/databases').then((r) => r.data.data ?? [])
 
 export const previewPlan = (input: CreateAppInput) =>
   api.post<{ data: CreationPlan }>('/hub/apps/create/plan', input).then((r) => r.data.data)
@@ -319,33 +288,6 @@ export const cancelCreation = (envId: number) =>
 
 export const confirmInstalled = (envId: number) =>
   api.post(`/hub/environments/${envId}/creation/installed`, {})
-
-export interface ConnectionInput {
-  host: string
-  port: number | null
-  database: string
-  user: string
-  password: string
-  ssl_mode?: string
-}
-
-export const saveDbConnection = (dbId: number, engine: HubDbEngine, c: ConnectionInput) =>
-  api
-    .put<{ data: HubDatabaseLite; check: HubDbCheck; creation: { status: string } | null }>(
-      `/hub/databases/${dbId}/connection`,
-      {
-        connection: {
-          engine,
-          host: c.host,
-          ...(c.port ? { port: c.port } : {}),
-          database: c.database,
-          user: c.user,
-          password: c.password,
-          ...(c.ssl_mode ? { ssl_mode: c.ssl_mode } : {})
-        }
-      }
-    )
-    .then((r) => r.data)
 
 /** The blockers a refused start (409) carried, if any. */
 export function createBlockersOf(err: unknown): CreationBlocker[] {
@@ -506,8 +448,10 @@ type Copy = {
 }
 
 /**
- * Every refusal code the creation, target and database routes (and the services behind them)
- * answer, in plain words. A guard test reads the API sources and fails on a code missing here.
+ * Every refusal code the creation and target routes (and the services behind them) answer, in
+ * plain words. The database routes' codes read with DB_CODE_COPY (databases/db-api.ts) through
+ * copyFor; a code here wins where both name it. A guard test reads the API sources and
+ * services/hub/db/codes.ts and fails on a code with no copy in either table.
  */
 export const CREATE_COPY: Record<string, Copy> = {
   // Plan blockers (the plan's own text is shown with them)
@@ -695,6 +639,10 @@ export const CREATE_COPY: Record<string, Copy> = {
   },
   TARGET_MISCONFIGURED: { title: 'The target is not set up completely', detail: true },
   IN_USE: { title: 'It is still in use', detail: true },
+  PROJECT_NOT_OURS: {
+    title: 'The deploy repository was not made by the Hub',
+    hint: 'The Hub only updates repositories it made. Check the app in GitLab.'
+  },
   SYNC_READ_FAILED: {
     title: 'Saved, but the apps on this target were not updated',
     hint: 'Save again to retry.'
@@ -704,48 +652,15 @@ export const CREATE_COPY: Record<string, Copy> = {
     hint: 'Set ENCRYPTION_KEY on the Hub server, restart it, then try again.'
   },
   HUB_SECRET_NOT_SEALED: { title: "A saved secret can't be read", hint: 'Enter it again.' },
-  HUB_SECRET_UNREADABLE: { title: "A saved secret can't be read", hint: 'Enter it again.' },
-
-  // Database connection (the creation panel's form)
-  BAD_CONNECTION: { title: 'The connection is not valid', detail: true },
-  HOST_NOT_SERVER: { title: "Use this database's own server", detail: true },
-  TOO_MANY_TRIES: {
-    title: 'Too many tries on this database',
-    hint: 'Wait a few minutes, then try again.'
-  },
-  BAD_DROP: { title: 'Drop must be on or off' },
-  ADMIN_REQUIRED: { title: 'Only a Hub admin can do that' },
-  CONFIRM_REQUIRED: {
-    title: "Type the database's name to confirm",
-    hint: 'Type the name exactly as shown.'
-  },
-  CONNECTION_UNREADABLE: { title: "The saved connection can't be read", hint: 'Enter it again.' },
-  DB_ERROR: { title: 'The database answered with an error', detail: true },
-  DROP_NOT_ALLOWED: { title: 'That database cannot be dropped', detail: true },
-  ENGINE_MISMATCH: {
-    title: 'That connection is for another kind of database',
-    detail: true
-  },
-  LOGIN_NAME_INVALID: { title: 'The login name is not valid', detail: true },
-  NAME_TAKEN: { title: 'That name is already used', detail: true },
-  NOT_AUTOMATIC: { title: 'The Hub does not create databases on that server', detail: true },
-  NOT_MANUAL: { title: 'The Hub manages this database itself', detail: true },
-  NOT_READY: { title: 'That database is not ready yet', detail: true },
-  NOT_WAITING: { title: 'That database is not waiting for a connection', detail: true },
-  NO_CONNECTION: {
-    title: 'No connection is saved for this database',
-    hint: 'Enter the connection first.'
-  },
-  SERVER_MOVED: { title: 'The database server changed', detail: true },
-  STATE_CHANGED: {
-    title: 'Someone changed this database meanwhile',
-    hint: 'Reload, then try again.'
-  }
+  HUB_SECRET_UNREADABLE: { title: "A saved secret can't be read", hint: 'Enter it again.' }
 }
 
-/** Plain-words copy for a code, or undefined when no screen knows it. */
+/**
+ * Plain-words copy for a code, or undefined when no screen knows it. A database code a creation
+ * passes on reads with the Databases tab's copy; a creation code keeps its own words.
+ */
 export const copyFor = (code: string): Copy | undefined =>
-  /^[A-Z][A-Z0-9_]*$/.test(code) ? CREATE_COPY[code] : undefined
+  /^[A-Z][A-Z0-9_]*$/.test(code) ? (CREATE_COPY[code] ?? DB_CODE_COPY[code]) : undefined
 
 /**
  * describeError with the creation refusals in plain words. A `detail` code keeps the server's
