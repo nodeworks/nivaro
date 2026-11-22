@@ -211,7 +211,8 @@ export interface MovePlanInput {
   database: { id: number; ready: boolean } | null
   app_key: { known: boolean; fp: string | null }
   locks: {
-    /** Who holds the environment's lock: a holder, 'held' (cannot tell who), or null. */
+    /** Who holds the environment's lock: a holder, 'held' (cannot tell who), 'unreadable'
+     *  (Redis did not answer: never read as free), or null. Same for each shared `holder`. */
     env: string | null
     /** A move of this environment is still open (running, waiting or interrupted). */
     open_move: boolean

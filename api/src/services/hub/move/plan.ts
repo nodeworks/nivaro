@@ -131,6 +131,8 @@ function busyText(holder: string | null, openMove: boolean): string {
     code: 'BUSY',
     message: 'Another action holds this environment — wait for it to end, then plan again.'
   }
+  if (holder === 'unreadable')
+    return "The Hub could not read this environment's lock (Redis did not answer), so it cannot tell whether another action runs. Try again shortly."
   if (holder === null && openMove)
     return 'A move of this environment is still open (running, waiting for a route, or interrupted). Resume it or roll it back first.'
   return lockHolderRefusal(holderOf(holder), fallback).message
@@ -156,6 +158,11 @@ function blockersOf(input: MovePlanInput): Blocker[] {
       add(
         'SHARED_BUSY',
         `The shared deployment ${l.key} is being upgraded or rolled back — wait for it to end.`
+      )
+    else if (l.holder === 'unreadable')
+      add(
+        'SHARED_BUSY',
+        `The Hub could not read the lock of the shared deployment ${l.key} (Redis did not answer), so it cannot tell whether an upgrade or another move runs. Try again shortly.`
       )
     else if (l.holder !== null)
       add(

@@ -621,6 +621,29 @@ describe('gatherMovePlanInput — to_shared from a Docker stack', () => {
     expect(plan.warnings.map((w) => w.code)).not.toContain('STORAGE_UNVERIFIED')
   })
 
+  it('a lock read that fails reads as unreadable, never as free (M-1)', async () => {
+    const sharedId = await newShared()
+    const placement = await dockerPlacement('shop-lk')
+    const e = await newEnv({ placement_id: placement, db_ref: `hub-db:${await newDb()}` })
+    const input = await Gather.gatherMovePlanInput(
+      e.id,
+      { kind: 'shared', shared_id: sharedId },
+      deps({
+        lock: { ...memoryPromoteLock, holder: async () => null, held: async () => 'unknown' },
+        sharedLock: {
+          take: async () => null,
+          holder: async () => {
+            throw new Error('redis down')
+          },
+          renew: async () => true,
+          release: async () => undefined
+        }
+      })
+    )
+    expect(input.locks.env).toBe('unreadable')
+    expect(input.locks.shared[0].holder).toBe('unreadable')
+  })
+
   it('a lock held on the environment → BUSY; ownLocks ignores a move holder', async () => {
     const sharedId = await newShared()
     const placement = await dockerPlacement('shop-f')

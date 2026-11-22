@@ -770,11 +770,16 @@ async function lockFacts(ctx: Ctx, sides: SharedDeployment[]): Promise<MovePlanI
   const shared = ctx.deps.sharedLock ?? defaultSharedLock()
   const ignore = (h: string | null) => (ctx.deps.ownLocks && h === 'move' ? null : h)
   let env: string | null = null
+  // A lock that cannot be read is 'unreadable' (BUSY), never free (M-1).
   try {
     env = ignore((await lock.holder?.(ctx.envId)) ?? null)
-    if (env === null && !ctx.deps.ownLocks && (await lock.held(ctx.envId)) === true) env = 'held'
+    if (env === null && !ctx.deps.ownLocks) {
+      const held = await lock.held(ctx.envId)
+      if (held === true) env = 'held'
+      else if (held === 'unknown') env = 'unreadable'
+    }
   } catch {
-    env = null
+    env = 'unreadable'
   }
   const open = await db(MOVES)
     .where({ environment_id: ctx.envId })
@@ -789,7 +794,7 @@ async function lockFacts(ctx: Ctx, sides: SharedDeployment[]): Promise<MovePlanI
     try {
       holder = ignore(await shared.holder(s.id))
     } catch {
-      holder = null
+      holder = 'unreadable'
     }
     out.push({ id: s.id, key: s.key, holder, upgrading: s.status === 'upgrading' })
   }

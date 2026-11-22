@@ -335,6 +335,20 @@ describe('buildMovePlan — one test per blocker', () => {
     )
   })
 
+  it('a lock the Hub could not read → BUSY saying so (M-1)', () => {
+    const p = buildMovePlan(input({ locks: { ...input().locks, env: 'unreadable' } }))
+    expect(p.blockers.find((b) => b.code === 'BUSY')?.text).toMatch(/could not read/i)
+    const q = buildMovePlan(
+      input({
+        locks: {
+          ...input().locks,
+          shared: [{ id: 7, key: 'pool-a', holder: 'unreadable', upgrading: false }]
+        }
+      })
+    )
+    expect(q.blockers.find((b) => b.code === 'SHARED_BUSY')?.text).toMatch(/could not read/i)
+  })
+
   it('BUSY names the real holder (lockHolderRefusal)', () => {
     const p = buildMovePlan(input({ locks: { ...input().locks, env: 'creation' } }))
     expect(p.blockers.find((b) => b.code === 'BUSY')?.text).toMatch(/creation/i)
