@@ -19,6 +19,9 @@ const { realtimeRoutes } = await import('../../../routes/realtime.js')
 const { realtimeVerifyRoutes } = await import('../../../routes/realtime-verify.js')
 const { telemetryRoutes } = await import('../../../routes/telemetry.js')
 const { metricsPlugin } = await import('../../../plugins/metrics.js')
+const { opsDbRoutes } = await import('../../../routes/ops-db.js')
+const { opsRedisRoutes } = await import('../../../routes/ops-redis.js')
+const { infrastructureRoutes } = await import('../../../routes/infrastructure.js')
 
 const ENV = ['HUB_SHARED_DEPLOYMENT', 'CLOUD_META_DB_URL'] as const
 afterEach(() => {
@@ -98,6 +101,20 @@ describe('restart', () => {
 describe('one route from each other group', () => {
   const cases: Array<[string, (app: FastifyInstance) => Promise<void>, string, string]> = [
     ['process runtime', opsRuntimeRoutes, '/api/ops-runtime', '/api/ops-runtime/runtime'],
+    [
+      'every replica’s in-flight requests',
+      opsRuntimeRoutes,
+      '/api/ops-runtime',
+      '/api/ops-runtime/inflight'
+    ],
+    ['server-wide expensive SQL', opsDbRoutes, '/api/ops-db', '/api/ops-db/expensive-sql'],
+    ['the shared Redis key browser', opsRedisRoutes, '/api/ops-redis', '/api/ops-redis/keys'],
+    [
+      'the deployment infrastructure',
+      infrastructureRoutes,
+      '/api/infrastructure',
+      '/api/infrastructure/status'
+    ],
     ['cache console', opsRuntimeRoutes, '/api/ops-runtime', '/api/ops-runtime/caches'],
     ['deployment environment', opsLogsRoutes, '/api/ops-logs', '/api/ops-logs/env'],
     ['detailed health', healthRoutes, '/api', '/api/health/detailed'],

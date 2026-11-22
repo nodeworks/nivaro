@@ -38,7 +38,7 @@ export async function opsRuntimeRoutes(app: FastifyInstance) {
   registerConfigStamps()
 
   // #2761 — every request running on every replica (route, age, person, phase, SQL + wait type).
-  app.get('/inflight', async () => {
+  app.get('/inflight', { preHandler: refuseOnSharedDeployment }, async () => {
     return { data: await clusterInflight(currentTraceMeta()?.id ?? null) }
   })
 
@@ -139,7 +139,7 @@ export async function opsRuntimeRoutes(app: FastifyInstance) {
 
   // #252 — subsystem status → which FEATURES are impacted, in plain language.
   // The map is static knowledge; the status column is probed live.
-  app.get('/degradation', async (_req, reply) => {
+  app.get('/degradation', { preHandler: refuseOnSharedDeployment }, async (_req, reply) => {
     const probe = async (fn: () => Promise<unknown>): Promise<'ok' | 'down'> => {
       try {
         await fn()
@@ -366,7 +366,7 @@ export async function opsRuntimeRoutes(app: FastifyInstance) {
   })
   app.get<{ Params: { name: string } }>(
     '/cpu-profile/:name',
-    { compress: false },
+    { compress: false, preHandler: refuseOnSharedDeployment },
     async (req, reply) => {
       const name = req.params.name
       if (!/^nivaro-cpu-\d+\.cpuprofile$/.test(name)) {
@@ -529,7 +529,7 @@ export async function opsRuntimeRoutes(app: FastifyInstance) {
     }
   })
 
-  app.get('/db-identity', async (_req, reply) => {
+  app.get('/db-identity', { preHandler: refuseOnSharedDeployment }, async (_req, reply) => {
     const expected = process.env.NIVARO_EXPECTED_DB?.trim() || null
     return reply.send({
       data: {

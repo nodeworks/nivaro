@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
-import { logActivity } from '../services/activity.js'
 import { requireAdmin } from '../middleware/authenticate.js'
+import { logActivity } from '../services/activity.js'
+import { refuseOnSharedDeployment } from '../services/shared-operator.js'
 
 // ─── Redis key browser (#655) ────────────────────────────────────────────────
 // Admin-only visibility into the live Redis. Iteration is ALWAYS SCAN (cursor,
@@ -19,7 +20,7 @@ function isMasked(name: string): boolean {
 
 export async function opsRedisRoutes(app: FastifyInstance) {
   // GET /ops-redis/keys?pattern=&cursor= — one SCAN page with type + TTL
-  app.get('/keys', { preHandler: requireAdmin }, async (req, reply) => {
+  app.get('/keys', { preHandler: [requireAdmin, refuseOnSharedDeployment] }, async (req, reply) => {
     const q = req.query as { pattern?: string; cursor?: string }
     const pattern = q.pattern?.trim() || '*'
     const cursor = /^\d+$/.test(q.cursor ?? '') ? (q.cursor as string) : '0'
@@ -45,7 +46,7 @@ export async function opsRedisRoutes(app: FastifyInstance) {
   })
 
   // GET /ops-redis/key?name= — type-aware peek
-  app.get('/key', { preHandler: requireAdmin }, async (req, reply) => {
+  app.get('/key', { preHandler: [requireAdmin, refuseOnSharedDeployment] }, async (req, reply) => {
     const name = ((req.query as { name?: string }).name ?? '').trim()
     if (!name) return reply.code(400).send({ error: 'name is required' })
 
@@ -127,17 +128,21 @@ export async function opsRedisRoutes(app: FastifyInstance) {
   })
 
   // DELETE /ops-redis/key?name=
-  app.delete('/key', { preHandler: requireAdmin }, async (req, reply) => {
-    const name = ((req.query as { name?: string }).name ?? '').trim()
-    if (!name) return reply.code(400).send({ error: 'name is required' })
+  app.delete(
+    '/key',
+    { preHandler: [requireAdmin, refuseOnSharedDeployment] },
+    async (req, reply) => {
+      const name = ((req.query as { name?: string }).name ?? '').trim()
+      if (!name) return reply.code(400).send({ error: 'name is required' })
 
-    const deleted = await app.redis.del(name)
-    await logActivity({
-      action: 'redis-key-delete',
-      user: req.user?.id,
-      req,
-      comment: name.slice(0, 300)
-    })
-    return reply.send({ data: { name, deleted: deleted > 0 } })
-  })
+      const deleted = await app.redis.del(name)
+      await logActivity({
+        action: 'redis-key-delete',
+        user: req.user?.id,
+        req,
+        comment: name.slice(0, 300)
+      })
+      return reply.send({ data: { name, deleted: deleted > 0 } })
+    }
+  )
 }

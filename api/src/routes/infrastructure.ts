@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { isMultiTenant } from '../services/deployment-mode.js'
 import { dockerGet, dockerHosts, forEachDockerHost } from '../services/docker-source.js'
+import { refuseOnSharedDeployment } from '../services/shared-operator.js'
 import { storeEnabled } from '../services/telemetry-store.js'
 import { infrastructureAiRoutes } from './infrastructure-ai.js'
 import { infrastructureDriftRoutes } from './infrastructure-drift.js'
@@ -17,6 +18,8 @@ import { infrastructureSwarmRoutes } from './infrastructure-swarm.js'
  */
 export async function infrastructureRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireAdmin)
+  // The deployment's hosts, swarm, proxy and images: operator-only on a shared deployment (P6-13).
+  app.addHook('preHandler', refuseOnSharedDeployment)
 
   // Which sources are configured and whether each Docker host answers.
   app.get('/status', async () => {
