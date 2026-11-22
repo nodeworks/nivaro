@@ -7,13 +7,16 @@
 // key that changes the runtime or the user the app runs as (appEnvKeyRefusal) — the template's
 // deploy script reads exactly HUB_APP_ENV_KEYS from it and refuses every other line.
 //
-// Twins: deploy/hub-app-template/scripts/deploy.sh (APP_ENV_KEYS, secret names) and
-// deploy/hub-app-template/docker-stack.yml (one ${KEY} per setting, one secret per variable).
+// Twins: deploy/hub-app-template/scripts/deploy.sh (APP_ENV_KEYS, secret names),
+// deploy/hub-app-template/manager/nivaro-hub-deploy (the manager's own allow-list) and
+// deploy/hub-app-template/manager/docker-stack.yml (one ${KEY} per setting, one secret per
+// variable).
 // hub-app-template.test.ts keeps them in step.
 
 import { createHash } from 'node:crypto'
 import { isIP } from 'node:net'
 import type { HubDbEngine } from '../db/connection.js'
+import { DNS_LABEL, dnsSuffix, httpAllowed } from './dns.js'
 import type { HubTargetConfig } from './targets.js'
 
 /** The non-secret settings in `.hub/app.env`, in the order the deploy script lists them. */
@@ -146,7 +149,20 @@ for (const k of HUB_APP_ENV_KEYS) {
 
 /** Hub app / environment key (phase 1): `^[a-z][a-z0-9-]{1,62}$`. */
 const HUB_KEY = /^[a-z][a-z0-9-]{1,62}$/
-const DNS_LABEL = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/
+
+/**
+ * A key an app or environment may be CREATED with: a Hub key that does not end in `-` and holds
+ * no `--`. Non-production names are `<app>--<env>`, so with no `--` inside a key every name
+ * splits one way (app `a-b` production = `a-b`, app `a` env `b` = `a--b`).
+ */
+export function isCreatableKey(v: unknown): v is string {
+  return typeof v === 'string' && HUB_KEY.test(v) && !v.endsWith('-') && !v.includes('--')
+}
+
+/** The label an automatic name starts with: `<app>` for production, else `<app>--<env>`. */
+export function hostLabelFor(appKey: string, envKey: string): string {
+  return envKey === 'production' ? appKey : `${appKey}--${envKey}`
+}
 
 type HostnameResult =
   | { ok: true; hostname: string }
@@ -162,15 +178,9 @@ const invalid = (message: string): HostnameResult => ({
   message
 })
 
-/** A DNS suffix as targets.ts stores it (lower case, no `*.`, no trailing dot), or null. */
-function suffixOf(raw: string | null | undefined): string | null {
-  if (!raw) return null
-  const s = raw.trim().toLowerCase().replace(/^\*\./, '').replace(/\.$/, '')
-  return s?.split('.').every((l) => DNS_LABEL.test(l)) ? s : null
-}
-
 /** Lower-cased, trailing dot dropped; null unless every label is a DNS label (≤ 253 in all). */
-function normaliseHost(raw: string): string | null {
+function normaliseHost(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
   const h = raw.trim().toLowerCase().replace(/\.$/, '')
   if (!h || h.length > 253 || isIP(h) || isIP(h.replace(/^\[|\]$/g, ''))) return null
   const labels = h.split('.')
@@ -181,16 +191,11 @@ function normaliseHost(raw: string): string | null {
   return h
 }
 
-/** True for `localhost`, `*.localhost`, `test` and `*.test` — the names plain http may use. */
-function httpHost(host: string): boolean {
-  return (
-    host === 'localhost' || host.endsWith('.localhost') || host === 'test' || host.endsWith('.test')
-  )
-}
+const httpHost = (host: string) => httpAllowed(host)
 
 /**
  * The hostname of an environment. Automatic targets build it from the validated keys and the
- * wildcard (production = `<app>.<wildcard>`, others `<app>-<env>.<wildcard>`); a given name must
+ * wildcard (production = `<app>.<wildcard>`, others `<app>--<env>.<wildcard>`); a given name must
  * sit directly under the wildcard. Manual targets need a given name (under the wildcard too, when
  * the target names one). Plain-http targets serve only localhost / .test names: the Hub link
  * token is sent to this address.
@@ -201,14 +206,12 @@ export function hostnameFor(
   envKey: string,
   given?: string | null
 ): HostnameResult {
-  if (
-    !HUB_KEY.test(appKey) ||
-    !HUB_KEY.test(envKey) ||
-    appKey.endsWith('-') ||
-    envKey.endsWith('-')
-  )
-    return invalid('App and environment keys must be lower-case letters, digits and dashes.')
-  const suffix = suffixOf(target.wildcard_domain)
+  if (!isCreatableKey(appKey) || !isCreatableKey(envKey))
+    return invalid(
+      'App and environment keys must be lower-case letters, digits and single dashes (no "--").'
+    )
+  if (!target || typeof target !== 'object') return invalid('The target has no settings.')
+  const suffix = dnsSuffix(target.wildcard_domain)
   const givenText = typeof given === 'string' ? given.trim() : ''
 
   let host: string
@@ -238,7 +241,8 @@ export function hostnameFor(
     }
   } else {
     if (!suffix) return invalid('The target has no wildcard domain to make names under.')
-    const label = envKey === 'production' ? appKey : `${appKey}-${envKey}`
+    const label = hostLabelFor(appKey, envKey)
+    if (label.startsWith('xn--')) return invalid('A name may not start with xn-- (punycode).')
     if (!DNS_LABEL.test(label))
       return invalid(
         `"${label.slice(0, 80)}…" is longer than a DNS label (63 characters): enter a hostname.`
@@ -254,23 +258,32 @@ export function hostnameFor(
 
 /** scheme://host[:port] (the default port of the scheme is left out). */
 export function baseUrlFor(target: HubTargetConfig, hostname: string): string {
+  if (!target || typeof target !== 'object') throw new AppConfigError('The target has no settings.')
   const host = normaliseHost(hostname)
   if (!host || host !== hostname) throw new AppConfigError('Not a hostname.')
   if (target.scheme !== 'https' && target.scheme !== 'http')
     throw new AppConfigError('The target scheme must be https or http.')
   if (target.scheme === 'http' && !httpHost(host))
     throw new AppConfigError('Plain http is only allowed for localhost and .test names.')
+  if (
+    target.port != null &&
+    (!Number.isInteger(target.port) || target.port < 1 || target.port > 65535)
+  )
+    throw new AppConfigError('The target port must be a whole number from 1 to 65535.')
   const defaultPort = target.scheme === 'https' ? 443 : 80
   const port = target.port != null && target.port !== defaultPort ? `:${target.port}` : ''
   return `${target.scheme}://${host}${port}`
 }
 
 export function redirectUriFor(baseUrl: string): string {
+  if (typeof baseUrl !== 'string') throw new AppConfigError('The base URL must be text.')
   return `${baseUrl.replace(/\/+$/, '')}/api/auth/callback`
 }
 
 /** `<app>-<env>`; past STACK_NAME_MAX it keeps (max - 5) chars + `-` + 4 hex of sha1. */
 export function stackName(appKey: string, envKey: string): string {
+  if (!isCreatableKey(appKey) || !isCreatableKey(envKey))
+    throw new AppConfigError('App and environment keys must be creatable Hub keys.')
   const name = `${appKey}-${envKey}`
   if (name.length <= STACK_NAME_MAX) return name
   const hash = createHash('sha1').update(name).digest('hex').slice(0, 4)
@@ -280,6 +293,7 @@ export function stackName(appKey: string, envKey: string): string {
 export function nivaroEnvironmentFor(
   envKey: string
 ): 'production' | 'staging' | 'development' | 'test' | 'other' {
+  if (typeof envKey !== 'string') throw new AppConfigError('The environment key must be text.')
   const k = envKey.toLowerCase()
   if (['production', 'prod', 'prd', 'live'].includes(k)) return 'production'
   if (['staging', 'stage', 'stg', 'preprod', 'pre-prod', 'uat'].includes(k)) return 'staging'
@@ -290,6 +304,8 @@ export function nivaroEnvironmentFor(
 
 /** The DNS + certificate request for a manual-name environment, ready to paste into a ticket. */
 export function manualTicket(target: HubTargetConfig, hostname: string): string {
+  if (!target || typeof target !== 'object' || normaliseHost(hostname) !== hostname)
+    throw new AppConfigError('A ticket needs the target and a normalised hostname.')
   const lines = [
     `Please create the DNS name ${hostname}`,
     target.edge_address
@@ -310,7 +326,7 @@ export function manualTicket(target: HubTargetConfig, hostname: string): string 
 const ENGINES: readonly HubDbEngine[] = ['mssql', 'pg', 'mysql2', 'mariadb']
 
 /** One line of printable text: no line break, NUL or other control character. */
-function safeValue(key: string, v: string, max = 2000): string {
+function safeValue(key: string, v: unknown, max = 2000): string {
   // biome-ignore lint/suspicious/noControlCharactersInRegex: refusing control characters
   if (typeof v !== 'string' || !v || v.length > max || /[\u0000-\u001f\u007f]/.test(v))
     throw new AppConfigError(`${key} must be one line of text.`)
@@ -318,7 +334,7 @@ function safeValue(key: string, v: string, max = 2000): string {
 }
 
 /** An http(s) origin; plain http only for localhost / .test names. */
-function originSetting(key: string, raw: string): string {
+function originSetting(key: string, raw: unknown): string {
   let u: URL
   try {
     u = new URL(safeValue(key, raw))
@@ -333,7 +349,7 @@ function originSetting(key: string, raw: string): string {
   throw new AppConfigError(`${key} must be https (http only for localhost and .test).`)
 }
 
-function issuerSetting(raw: string): string {
+function issuerSetting(raw: unknown): string {
   let u: URL
   try {
     u = new URL(safeValue('OIDC_ISSUER', raw, 500))
@@ -341,7 +357,8 @@ function issuerSetting(raw: string): string {
     throw new AppConfigError('OIDC_ISSUER must be a URL.')
   }
   if (u.username || u.password || u.hash) throw new AppConfigError('OIDC_ISSUER must be a URL.')
-  if (u.protocol === 'https:' || (u.protocol === 'http:' && httpHost(u.hostname))) return raw.trim()
+  if (u.protocol === 'https:' || (u.protocol === 'http:' && httpHost(u.hostname)))
+    return String(raw).trim()
   throw new AppConfigError('OIDC_ISSUER must be an https URL.')
 }
 
@@ -359,6 +376,19 @@ export function renderAppEnv(o: {
   engine: HubDbEngine
   target: HubTargetConfig
 }): string {
+  if (!o || typeof o !== 'object' || !o.app || typeof o.app !== 'object' || !o.app.oidc)
+    throw new AppConfigError('The app settings are missing.')
+  for (const [k, v] of [
+    ['app key', o.app.key],
+    ['environment key', o.envKey],
+    ['hostname', o.hostname],
+    ['base URL', o.baseUrl],
+    ['Hub URL', o.hubUrl],
+    ['OIDC issuer', o.app.oidc.issuer],
+    ['OIDC client id', o.app.oidc.client_id]
+  ] as const) {
+    if (typeof v !== 'string') throw new AppConfigError(`The ${k} must be text.`)
+  }
   const named = hostnameFor(o.target, o.app.key, o.envKey, o.hostname)
   if (!named.ok) throw new AppConfigError(named.message)
   if (named.hostname !== o.hostname) throw new AppConfigError('The hostname is not normalised.')
@@ -369,7 +399,7 @@ export function renderAppEnv(o: {
   const clientId = safeValue('OIDC_CLIENT_ID', o.app.oidc.client_id.trim(), 200)
   if (/\s/.test(clientId)) throw new AppConfigError('OIDC_CLIENT_ID must not contain spaces.')
   const network = o.target.proxy_network
-  if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$/.test(network))
+  if (typeof network !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$/.test(network))
     throw new AppConfigError('The target proxy network is not a Docker network name.')
 
   const values: Record<string, string> = {
@@ -400,4 +430,106 @@ export function renderAppEnv(o: {
   ]
   for (const k of keys) lines.push(`${k}=${safeValue(k, values[k])}`)
   return `${lines.join('\n')}\n`
+}
+
+// ── the app repository's CI and project variables ────────────────────────────
+
+/** The deploy job's file inside the template project (included at the target's pinned ref). */
+export const HUB_DEPLOY_CI_FILE = 'ci/deploy.yml'
+
+const GITLAB_PATH = /^[A-Za-z0-9][A-Za-z0-9._-]*(\/[A-Za-z0-9][A-Za-z0-9._-]*)*$/
+const PINNED_REF = /^([0-9a-f]{40}|[0-9a-f]{64}|[A-Za-z0-9][A-Za-z0-9._-]{0,99})$/
+
+/**
+ * The app repository's whole `.gitlab-ci.yml`: it only includes the deploy job from the
+ * Hub-owned template project at the target's pinned ref. The app repository carries no deploy
+ * logic of its own (the forked copies of scripts/ and ci/ are never run).
+ */
+export function renderAppCi(target: HubTargetConfig): string {
+  if (!target || typeof target !== 'object') throw new AppConfigError('The target has no settings.')
+  const project = target.template_project
+  const ref = target.template_ref
+  if (typeof project !== 'string' || !GITLAB_PATH.test(project) || project.length > 255)
+    throw new AppConfigError('The target template project is not a GitLab path.')
+  if (typeof ref !== 'string' || !PINNED_REF.test(ref) || ref.includes('..'))
+    throw new AppConfigError('The target template ref is not a tag or commit sha.')
+  return [
+    '# Written by the Nivaro Hub. The deploy job comes from the Hub-owned template at a pinned',
+    '# ref; changing this file does not change what may run on the swarm manager.',
+    'include:',
+    `  - project: '${project}'`,
+    `    ref: '${ref}'`,
+    `    file: '/${HUB_DEPLOY_CI_FILE}'`,
+    ''
+  ].join('\n')
+}
+
+export interface DeployProjectVariable {
+  key: string
+  value: string
+  scope: '*'
+  masked: boolean
+  protected: boolean
+}
+
+/**
+ * Project CI variables every app repository of `target` gets (all environments, protected):
+ * DEPLOY_HOST (the manager, an ssh destination), DEPLOY_KNOWN_HOSTS (the manager's host keys,
+ * base64 so GitLab can mask it; the deploy job refuses to connect without it), HUB_HOST_SUFFIX
+ * (the wildcard: every hostname must end in it) and HUB_PIN_FILE when it is not the default.
+ */
+export function deployProjectVariables(target: HubTargetConfig): DeployProjectVariable[] {
+  if (!target || typeof target !== 'object') throw new AppConfigError('The target has no settings.')
+  const host = target.deploy_host
+  if (
+    typeof host !== 'string' ||
+    !/^[A-Za-z0-9][A-Za-z0-9._-]*(@[A-Za-z0-9.-]+)?(:\d+)?$/.test(host)
+  )
+    throw new AppConfigError('The target deploy host is not host, user@host or host:port.')
+  const known = target.manager_known_hosts
+  if (typeof known !== 'string' || !known.trim())
+    throw new AppConfigError('The target has no manager host keys (manager_known_hosts).')
+  const out: DeployProjectVariable[] = [
+    { key: 'DEPLOY_HOST', value: host, scope: '*', masked: false, protected: true },
+    {
+      key: 'DEPLOY_KNOWN_HOSTS',
+      value: Buffer.from(`${known.trim()}\n`).toString('base64'),
+      scope: '*',
+      masked: true,
+      protected: true
+    }
+  ]
+  const suffix = dnsSuffix(target.wildcard_domain)
+  if (target.dns_mode === 'automatic' && !suffix)
+    throw new AppConfigError('An automatic target needs its wildcard domain.')
+  if (suffix)
+    out.push({ key: 'HUB_HOST_SUFFIX', value: suffix, scope: '*', masked: false, protected: true })
+  if (target.pin_file && target.pin_file !== '.hub/nivaro-version')
+    out.push({
+      key: 'HUB_PIN_FILE',
+      value: target.pin_file,
+      scope: '*',
+      masked: false,
+      protected: true
+    })
+  return out
+}
+
+/**
+ * The Hub's own hostnames (from its PUBLIC_URL, ADMIN_URL, HUB_URL …): a created environment
+ * may never take one. Task 8's takenHostnames / HOSTNAME_TAKEN adds these to the names other
+ * environments hold. Lower case, de-duplicated; unparsable or empty values are skipped.
+ */
+export function hubOwnHostnames(urls: ReadonlyArray<string | null | undefined>): string[] {
+  const out = new Set<string>()
+  for (const raw of urls) {
+    if (typeof raw !== 'string' || !raw.trim()) continue
+    try {
+      const h = new URL(raw.trim()).hostname.toLowerCase().replace(/\.$/, '')
+      if (h) out.add(h)
+    } catch {
+      // not a URL: nothing to reserve
+    }
+  }
+  return [...out]
 }

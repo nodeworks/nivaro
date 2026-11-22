@@ -1,34 +1,25 @@
-# Deploy repository of one Nivaro Hub app. One branch per environment, named by its key
-# (staging, production, …); each holds .hub/app.env (settings, written by the Hub) and the pin
-# .hub/nivaro-version (the image). A push to such a branch deploys that environment.
-# `main` holds no .hub/app.env, so it never deploys.
+# The TEMPLATE project's own pipeline: checks the scripts and that ci/deploy.yml matches
+# scripts/deploy.sh. It never deploys.
 #
-# Secrets are CI variables the Hub sets per environment (masked, protected, scoped):
-# NIVARO_DB_URL_B64, NIVARO_HUB_TOKEN_B64, NIVARO_SESSION_SECRET_B64,
-# NIVARO_ENCRYPTION_KEY_B64, NIVARO_OIDC_CLIENT_SECRET_B64. DEPLOY_HOST is a project variable;
-# DEPLOY_SSH_KEY (and DEPLOY_KNOWN_HOSTS) are group variables the operator sets once.
+# An app repository does not use this file: the Hub commits the app's own .gitlab-ci.yml, which
+# only includes ci/deploy.yml from this project at the target's pinned ref (template_ref). If a
+# fork still carries this file on a branch, the check below is all it can run.
 
 stages:
-  - deploy
+  - check
 
-variables:
-  HUB_PIN_FILE: .hub/nivaro-version
-
-deploy:
-  stage: deploy
-  image: docker:27-cli
-  environment:
-    name: $CI_COMMIT_REF_NAME
-  # One deploy at a time per environment.
-  resource_group: $CI_COMMIT_REF_NAME
-  interruptible: false
+check:
+  stage: check
+  image:
+    name: alpine/git:2.47.2@sha256:062a01ad7a0eb17cff382bc5e26086b4d710e56dfdfdf001109a49b6d9bd378c
+    entrypoint: ['']
   rules:
-    - if: $CI_COMMIT_BRANCH
-      exists:
+    - exists:
         - .hub/app.env
-  before_script:
-    - apk add --no-cache openssh-client >/dev/null
+      when: never
+    - when: on_success
   script:
-    - test -s "$HUB_PIN_FILE" || { echo "no $HUB_PIN_FILE pin — refusing to deploy"; exit 1; }
-    - test "$(sed -n 1p "$HUB_PIN_FILE" | tr -d '[:space:]')" != latest || { echo "$HUB_PIN_FILE pins latest — refusing"; exit 1; }
-    - sh scripts/deploy.sh
+    - sh -n scripts/deploy.sh
+    - sh -n scripts/sync-ci.sh
+    - sh -n manager/nivaro-hub-deploy
+    - sh scripts/sync-ci.sh --check

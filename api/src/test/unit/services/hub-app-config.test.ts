@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import {
+  AppConfigError,
   appEnvKeyRefusal,
   baseUrlFor,
+  deployProjectVariables,
   HUB_APP_ENV_KEYS,
   HUB_APP_SECRET_VARS,
   HUB_SECRET_FILES,
   hostnameFor,
+  hubOwnHostnames,
+  isCreatableKey,
   KEEP_ONCE_VARS,
   manualTicket,
   nivaroEnvironmentFor,
@@ -23,9 +27,11 @@ const auto: HubTargetConfig = {
   api: 'https://gitlab.example.com',
   namespace: 'apps',
   template_project: 'apps/nivaro-template',
+  template_ref: 'v1.0.0',
   pin_file: '.hub/nivaro-version',
   deploy_job: 'deploy',
   deploy_host: 'deploy@swarm1.example.com',
+  manager_known_hosts: `swarm1.example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI${'k'.repeat(43)}`,
   proxy_network: 'proxy',
   dns_mode: 'automatic',
   wildcard_domain: 'apps.example.com',
@@ -43,15 +49,38 @@ const manual: HubTargetConfig = {
 }
 
 describe('hostnameFor — automatic', () => {
-  it('production gets <app>.<wildcard>, others <app>-<env>.<wildcard>', () => {
+  it('production gets <app>.<wildcard>, others <app>--<env>.<wildcard>', () => {
     expect(hostnameFor(auto, 'demo', 'production')).toEqual({
       ok: true,
       hostname: 'demo.apps.example.com'
     })
     expect(hostnameFor(auto, 'demo', 'staging')).toEqual({
       ok: true,
-      hostname: 'demo-staging.apps.example.com'
+      hostname: 'demo--staging.apps.example.com'
     })
+  })
+
+  it('names never collide: app ab-cd production vs app ab env cd', () => {
+    const one = hostnameFor(auto, 'ab-cd', 'production')
+    const two = hostnameFor(auto, 'ab', 'cd')
+    expect(one).toEqual({ ok: true, hostname: 'ab-cd.apps.example.com' })
+    expect(two).toEqual({ ok: true, hostname: 'ab--cd.apps.example.com' })
+    // and a key holding -- (which could fake that split) is never creatable
+    expect(hostnameFor(auto, 'ab--cd', 'production')).toMatchObject({
+      ok: false,
+      code: 'HOSTNAME_INVALID'
+    })
+    expect(hostnameFor(auto, 'ab', 'cd--ef')).toMatchObject({ ok: false, code: 'HOSTNAME_INVALID' })
+    expect(hostnameFor(auto, 'xn', 'staging')).toMatchObject({
+      ok: false,
+      code: 'HOSTNAME_INVALID'
+    })
+  })
+
+  it('isCreatableKey: Hub keys without -- or a trailing dash', () => {
+    for (const k of ['demo', 'a-b', 'app2']) expect(isCreatableKey(k), k).toBe(true)
+    for (const k of ['a--b', 'demo-', 'Demo', '1demo', 'd', '', 7, null])
+      expect(isCreatableKey(k), String(k)).toBe(false)
   })
 
   it('a given hostname directly under the wildcard is kept (normalised)', () => {
@@ -325,8 +354,8 @@ describe('renderAppEnv', () => {
       }
     },
     envKey: 'staging',
-    hostname: 'demo-staging.apps.example.com',
-    baseUrl: 'https://demo-staging.apps.example.com',
+    hostname: 'demo--staging.apps.example.com',
+    baseUrl: 'https://demo--staging.apps.example.com',
     hubUrl: 'https://hub.example.com',
     engine: 'mssql' as const,
     target: auto
@@ -362,15 +391,15 @@ describe('renderAppEnv', () => {
     expect(v('APP_KEY')).toBe('demo')
     expect(v('ENV_KEY')).toBe('staging')
     expect(v('STACK_NAME')).toBe('demo-staging')
-    expect(v('APP_HOSTS')).toBe('demo-staging.apps.example.com')
-    expect(v('PUBLIC_URL')).toBe('https://demo-staging.apps.example.com')
-    expect(v('ADMIN_URL')).toBe('https://demo-staging.apps.example.com')
+    expect(v('APP_HOSTS')).toBe('demo--staging.apps.example.com')
+    expect(v('PUBLIC_URL')).toBe('https://demo--staging.apps.example.com')
+    expect(v('ADMIN_URL')).toBe('https://demo--staging.apps.example.com')
     expect(v('HUB_URL')).toBe('https://hub.example.com')
     expect(v('NIVARO_ENVIRONMENT')).toBe('staging')
     expect(v('DB_CLIENT')).toBe('mssql')
     expect(v('OIDC_ISSUER')).toBe(input.app.oidc.issuer)
     expect(v('OIDC_CLIENT_ID')).toBe(input.app.oidc.client_id)
-    expect(v('OIDC_REDIRECT_URI')).toBe('https://demo-staging.apps.example.com/api/auth/callback')
+    expect(v('OIDC_REDIRECT_URI')).toBe('https://demo--staging.apps.example.com/api/auth/callback')
     expect(v('PROXY_NETWORK')).toBe('proxy')
     expect(v('TRUST_PROXY')).toBe('1')
   })
@@ -424,5 +453,74 @@ describe('manualTicket', () => {
     expect(t).toContain('demo.localhost')
     expect(t.toLowerCase()).toContain('edge')
     expect(t.toLowerCase()).not.toContain('tls certificate')
+  })
+})
+
+describe('non-string input', () => {
+  it('raises AppConfigError (never a TypeError)', () => {
+    const calls: Array<() => unknown> = [
+      () => baseUrlFor(auto, 42 as never),
+      () => baseUrlFor(null as never, 'demo.apps.example.com'),
+      () => redirectUriFor(null as never),
+      () => stackName(1 as never, 'staging'),
+      () => nivaroEnvironmentFor({} as never),
+      () => manualTicket(manual, 5 as never),
+      () => renderAppEnv(null as never),
+      () =>
+        renderAppEnv({
+          app: { key: 'demo', oidc: { issuer: 'https://x.example.com', client_id: 12 as never } },
+          envKey: 'staging',
+          hostname: 'demo--staging.apps.example.com',
+          baseUrl: 'https://demo--staging.apps.example.com',
+          hubUrl: 'https://hub.example.com',
+          engine: 'mssql',
+          target: auto
+        }),
+      () => deployProjectVariables(undefined as never)
+    ]
+    for (const c of calls) expect(c).toThrow(AppConfigError)
+    expect(hostnameFor(auto, 5 as never, 'staging')).toMatchObject({ ok: false })
+    expect(hostnameFor(auto, 'demo', 'staging', 7 as never)).toMatchObject({ ok: true })
+  })
+})
+
+describe('deployProjectVariables', () => {
+  it('DEPLOY_HOST, the masked base64 DEPLOY_KNOWN_HOSTS, HUB_HOST_SUFFIX', () => {
+    const vars = deployProjectVariables(auto)
+    expect(vars.map((v) => v.key)).toEqual(['DEPLOY_HOST', 'DEPLOY_KNOWN_HOSTS', 'HUB_HOST_SUFFIX'])
+    for (const v of vars) {
+      expect(v.scope).toBe('*')
+      expect(v.protected).toBe(true)
+    }
+    const kh = vars[1]
+    expect(kh.masked).toBe(true)
+    expect(kh.value).toMatch(/^[A-Za-z0-9+/]+=*$/)
+    expect(Buffer.from(kh.value, 'base64').toString()).toBe(`${auto.manager_known_hosts}\n`)
+    expect(vars[2].value).toBe('apps.example.com')
+  })
+
+  it('refuses a target without host keys or with a hostile deploy host', () => {
+    expect(() => deployProjectVariables({ ...auto, manager_known_hosts: '' })).toThrow(
+      AppConfigError
+    )
+    expect(() => deployProjectVariables({ ...auto, deploy_host: '-oProxyCommand=x' })).toThrow(
+      AppConfigError
+    )
+  })
+})
+
+describe('hubOwnHostnames', () => {
+  it("the Hub's own hosts, lower case, de-duplicated, junk skipped", () => {
+    expect(
+      hubOwnHostnames([
+        'https://Hub.Example.com',
+        'https://hub.example.com:8443/admin',
+        'http://localhost:3055',
+        null,
+        undefined,
+        '',
+        'not a url'
+      ])
+    ).toEqual(['hub.example.com', 'localhost'])
   })
 })

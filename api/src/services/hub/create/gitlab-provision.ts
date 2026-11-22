@@ -18,6 +18,8 @@ import {
   gitlabRootCall,
   type PollOptions
 } from '../gitlab-write.js'
+import { deployProjectVariables } from './app-config.js'
+import type { HubTargetConfig } from './targets.js'
 
 export const IMPORT_POLLS = 40
 export const IMPORT_POLL_MS = 3_000
@@ -335,6 +337,24 @@ export async function upsertVariable(
   )
   if (put.status === 400) throw refused(400)
   return 'updated'
+}
+
+/**
+ * The target's project variables on an app repository (app-config deployProjectVariables):
+ * DEPLOY_HOST together with DEPLOY_KNOWN_HOSTS (masked; the deploy job refuses to connect
+ * without the manager's host key), HUB_HOST_SUFFIX for wildcard targets, HUB_PIN_FILE when not
+ * the default. Each is created or updated in place (scope `*`, protected, raw). Answers each
+ * key's outcome, never a value.
+ */
+export async function pushDeployVariables(
+  ctx: GitCtx,
+  target: HubTargetConfig
+): Promise<Array<{ key: string; result: 'created' | 'updated' | 'kept' }>> {
+  const out: Array<{ key: string; result: 'created' | 'updated' | 'kept' }> = []
+  for (const v of deployProjectVariables(target)) {
+    out.push({ key: v.key, result: await upsertVariable(ctx, v) })
+  }
+  return out
 }
 
 // ── files ────────────────────────────────────────────────────────────────────────────────

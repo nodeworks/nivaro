@@ -11,8 +11,10 @@ import {
   namespaceExists,
   projectExists,
   protectBranch,
+  pushDeployVariables,
   upsertVariable
 } from '../../../services/hub/create/gitlab-provision.js'
+import type { HubTargetConfig } from '../../../services/hub/create/targets.js'
 import { GitlabWriteError, gitlabCall, gitlabRootCall } from '../../../services/hub/gitlab-write.js'
 import { FakeGitLab } from './hub-fake-gitlab.js'
 
@@ -495,5 +497,74 @@ describe('fix round 1', () => {
     expect(await groupAccessLevel(ctx, 'apps', 7)).toBe(40)
     expect(await groupAccessLevel(ctx, 'apps', 8)).toBeNull()
     expectSafeCalls()
+  })
+})
+
+describe('pushDeployVariables', () => {
+  const known = `swarm-1.internal ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI${'k'.repeat(43)}`
+  const target: HubTargetConfig = {
+    api: 'https://gitlab.example.com',
+    namespace: 'apps',
+    template_project: TEMPLATE,
+    template_ref: 'v1.0.0',
+    pin_file: '.hub/nivaro-version',
+    deploy_job: 'deploy',
+    deploy_host: 'deploy@swarm-1.internal',
+    manager_known_hosts: known,
+    proxy_network: 'proxy',
+    dns_mode: 'automatic',
+    wildcard_domain: 'apps.example.com',
+    edge_address: null,
+    scheme: 'https',
+    port: null,
+    cert_note: null
+  }
+
+  it('pushes DEPLOY_HOST with the masked DEPLOY_KNOWN_HOSTS and the host suffix', async () => {
+    const ctx = gl.ctx(TEMPLATE)
+    expect(await pushDeployVariables(ctx, target)).toEqual([
+      { key: 'DEPLOY_HOST', result: 'created' },
+      { key: 'DEPLOY_KNOWN_HOSTS', result: 'created' },
+      { key: 'HUB_HOST_SUFFIX', result: 'created' }
+    ])
+    const vars = Object.fromEntries(gl.variablesOf(TEMPLATE).map((v) => [v.key, v]))
+    expect(vars.DEPLOY_HOST).toMatchObject({
+      value: 'deploy@swarm-1.internal',
+      environment_scope: '*',
+      protected: true,
+      raw: true
+    })
+    expect(vars.DEPLOY_KNOWN_HOSTS).toMatchObject({ masked: true, protected: true, raw: true })
+    expect(Buffer.from(vars.DEPLOY_KNOWN_HOSTS.value, 'base64').toString()).toBe(`${known}\n`)
+    expect(vars.HUB_HOST_SUFFIX).toMatchObject({ value: 'apps.example.com', protected: true })
+    expectSafeCalls()
+  })
+
+  it('a second push updates in place (a changed host key replaces the old one)', async () => {
+    const ctx = gl.ctx(TEMPLATE)
+    await pushDeployVariables(ctx, target)
+    const next = `swarm-1.internal ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI${'z'.repeat(43)}`
+    const r = await pushDeployVariables(ctx, { ...target, manager_known_hosts: next })
+    expect(r.map((x) => x.result)).toEqual(['updated', 'updated', 'updated'])
+    const kh = gl.variablesOf(TEMPLATE).filter((v) => v.key === 'DEPLOY_KNOWN_HOSTS')
+    expect(kh).toHaveLength(1)
+    expect(Buffer.from(kh[0].value, 'base64').toString()).toBe(`${next}\n`)
+  })
+
+  it('manual target without a wildcard: no suffix; a custom pin file is pushed', async () => {
+    const r = await pushDeployVariables(gl.ctx(TEMPLATE), {
+      ...target,
+      dns_mode: 'manual',
+      wildcard_domain: null,
+      pin_file: 'deploy/pin'
+    })
+    expect(r.map((x) => x.key)).toEqual(['DEPLOY_HOST', 'DEPLOY_KNOWN_HOSTS', 'HUB_PIN_FILE'])
+  })
+
+  it('refuses to push without host keys', async () => {
+    await expect(
+      pushDeployVariables(gl.ctx(TEMPLATE), { ...target, manager_known_hosts: '' })
+    ).rejects.toThrow(/host keys/)
+    expect(gl.variablesOf(TEMPLATE)).toEqual([])
   })
 })

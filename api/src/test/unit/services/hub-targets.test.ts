@@ -27,11 +27,14 @@ const { HUB_MASK, sealSecret } = await import('../../../services/hub/secrets.js'
 const { FakeGitLab } = await import('./hub-fake-gitlab.js')
 
 const KEY = 'c'.repeat(64)
+const HOST_KEY = `swarm-1.internal ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI${'k'.repeat(43)}`
 const config = {
   api: 'https://gitlab.example.com/api/v4',
   namespace: 'apps',
   template_project: 'platform/hub-app-template',
+  template_ref: 'v1.0.0',
   deploy_host: 'deploy@swarm-1.internal',
+  manager_known_hosts: HOST_KEY,
   dns_mode: 'automatic',
   wildcard_domain: 'apps.example.com'
 }
@@ -63,6 +66,70 @@ const valid = (over: Record<string, unknown> = {}, cfg: Record<string, unknown> 
     ...over
   })
 
+describe('validateTargetInput — pinned template ref and manager host keys', () => {
+  it('template_ref: a tag or a full sha, never a moving branch', () => {
+    for (const r of [
+      'v1.0.0',
+      'hub-template-3',
+      'a'.repeat(40),
+      '0123456789abcdef0123456789abcdef01234567'
+    ])
+      expect(valid({}, { template_ref: r }).ok, r).toBe(true)
+    for (const r of [
+      undefined,
+      '',
+      'main',
+      'MASTER',
+      'HEAD',
+      'develop',
+      '-x',
+      'a..b',
+      'v1 2',
+      'x.lock',
+      'a/b'
+    ])
+      expect(valid({}, { template_ref: r }), String(r)).toMatchObject({
+        ok: false,
+        code: 'BAD_CONFIG'
+      })
+  })
+
+  it('manager_known_hosts: known_hosts lines only, normalised', () => {
+    const multi = [
+      '# swarm-1',
+      '',
+      `swarm-1.internal,10.0.0.5   ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI${'k'.repeat(43)} root@swarm-1`,
+      `[swarm-1.internal]:2222 ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAI${'b'.repeat(40)}=`,
+      `@cert-authority *.internal ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI${'c'.repeat(43)}`,
+      `|1|c2FsdHNhbHRzYWx0|aGFzaGhhc2hoYXNo= ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAB${'d'.repeat(60)}`
+    ].join('\r\n')
+    const r = valid({}, { manager_known_hosts: multi })
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    const lines = r.row.config.manager_known_hosts.split('\n')
+    expect(lines).toHaveLength(4)
+    expect(lines[0]).toBe(
+      `swarm-1.internal,10.0.0.5 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI${'k'.repeat(43)}`
+    )
+    for (const bad of [
+      undefined,
+      '',
+      '# only a comment',
+      'swarm-1.internal',
+      'swarm-1.internal ssh-dss AAAAB3NzaC1kc3MAAACBAP',
+      `swarm-1.internal ssh-ed25519 not*base64${'k'.repeat(20)}`,
+      `@revoked-ish swarm ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI${'k'.repeat(43)}`,
+      `-oProxyCommand=x ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI${'k'.repeat(43)}`,
+      `swarm;id ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI${'k'.repeat(43)}`,
+      'x'.repeat(16_001)
+    ])
+      expect(valid({}, { manager_known_hosts: bad }), String(bad).slice(0, 40)).toMatchObject({
+        ok: false,
+        code: 'BAD_CONFIG'
+      })
+  })
+})
+
 describe('validateTargetInput', () => {
   it('fills the defaults and seals the token', () => {
     const r = valid()
@@ -72,9 +139,11 @@ describe('validateTargetInput', () => {
       api: 'https://gitlab.example.com/api/v4',
       namespace: 'apps',
       template_project: 'platform/hub-app-template',
+      template_ref: 'v1.0.0',
       pin_file: '.hub/nivaro-version',
       deploy_job: 'deploy',
       deploy_host: 'deploy@swarm-1.internal',
+      manager_known_hosts: HOST_KEY,
       proxy_network: 'proxy',
       dns_mode: 'automatic',
       wildcard_domain: 'apps.example.com',

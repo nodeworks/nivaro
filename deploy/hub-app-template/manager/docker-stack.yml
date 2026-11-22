@@ -1,20 +1,22 @@
 # One Nivaro environment as a swarm stack: web (requests, behind Traefik) + worker (scheduled
-# jobs, imports, renders) + a private Redis. Deployed by scripts/deploy.sh, which fills every
-# ${...} below from .hub/app.env, the pin file and the secret CI variables:
+# jobs, imports, renders) + a private Redis. Installed on the manager as
+# /etc/nivaro-hub-deploy/docker-stack.yml and deployed ONLY by nivaro-hub-deploy, which fills
+# every ${...} below from settings it has checked itself (the CI job never sends a stack file):
 #
-#   setting            from
-#   ${NIVARO_IMAGE_REF} nodeworks/nivaro@<digest> from the pin file (.hub/nivaro-version)
-#   ${TRAEFIK_RULE}    Host(`a`) || Host(`b`) built from APP_HOSTS
-#   ${TRAEFIK_TLS}     true when PUBLIC_URL is https
-#   ${SECRET_*}        swarm secret <STACK_NAME>_<name>_<sha8 of the value>, made from:
-#     db_url           NIVARO_DB_URL_B64              -> DB_URL_FILE
-#     hub_token        NIVARO_HUB_TOKEN_B64           -> HUB_TOKEN_FILE
-#     session_secret   NIVARO_SESSION_SECRET_B64      -> SESSION_SECRET_FILE
-#     encryption_key   NIVARO_ENCRYPTION_KEY_B64      -> ENCRYPTION_KEY_FILE
-#     oidc_secret      NIVARO_OIDC_CLIENT_SECRET_B64  -> OIDC_CLIENT_SECRET_FILE
+#   setting             from
+#   ${NIVARO_IMAGE_REF} <image=…>@sha256:<digest>, the pin's line 2
+#   ${TRAEFIK_RULE}     Host(`a`) || Host(`b`) built from APP_HOSTS (each under a host=…)
+#   ${TRAEFIK_TLS}      true when PUBLIC_URL is https
+#   ${SECRET_*}         swarm secret <STACK_NAME>_<name>_<sha8 of the value>, made from:
+#     db_url            NIVARO_DB_URL_B64              -> DB_URL_FILE
+#     hub_token         NIVARO_HUB_TOKEN_B64           -> HUB_TOKEN_FILE
+#     session_secret    NIVARO_SESSION_SECRET_B64      -> SESSION_SECRET_FILE
+#     encryption_key    NIVARO_ENCRYPTION_KEY_B64      -> ENCRYPTION_KEY_FILE
+#     oidc_secret       NIVARO_OIDC_CLIENT_SECRET_B64  -> OIDC_CLIENT_SECRET_FILE
 #
 # No host bind mounts, no privileged settings, no published ports: Traefik reaches web over
 # the external ${PROXY_NETWORK} network; everything else talks on the stack's own network.
+# Images are pinned by digest (Redis below; Nivaro by the pin).
 
 x-nivaro: &nivaro
   image: ${NIVARO_IMAGE_REF}
@@ -121,7 +123,7 @@ services:
         - nivaro.hub.env=${ENV_KEY}
 
   redis:
-    image: redis:7.4-alpine
+    image: redis:7.4-alpine@sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fbe
     command: ['redis-server', '--appendonly', 'yes', '--save', '60', '1000']
     networks:
       - internal
@@ -139,7 +141,7 @@ services:
 networks:
   internal:
     driver: overlay
-    # The deploy script runs one short wget container here to read /api/version.
+    # nivaro-hub-deploy runs one short wget container here to read /api/version.
     attachable: true
   proxy:
     external: true

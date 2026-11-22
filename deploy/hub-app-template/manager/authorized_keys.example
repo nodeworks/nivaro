@@ -1,0 +1,4 @@
+# ~deploy/.ssh/authorized_keys on the swarm manager: the Hub deploy key may run nivaro-hub-deploy
+# and nothing else (no shell, no pty, no port / socket / agent / X11 forwarding). The argument
+# names the key's configuration, /etc/nivaro-hub-deploy/keys/<name>.conf.
+command="/usr/local/bin/nivaro-hub-deploy apps",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding,restrict ssh-ed25519 AAAA...replace-with-the-public-key nivaro-hub-deploy

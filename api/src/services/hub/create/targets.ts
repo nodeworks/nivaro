@@ -9,6 +9,7 @@ import type { GitCtx } from '../../gitlab-client.js'
 import type { Validation } from '../drivers.js'
 import { GitlabWriteError } from '../gitlab-write.js'
 import { HubSecretError, maskSecret, nextSecret, openSecret } from '../secrets.js'
+import { dnsSuffix, httpAllowed } from './dns.js'
 import {
   currentUser,
   groupAccessLevel,
@@ -23,9 +24,13 @@ export interface HubTargetConfig {
   api: string
   namespace: string
   template_project: string
+  /** Tag or commit sha of template_project that app repositories include the deploy job from. */
+  template_ref: string
   pin_file: string
   deploy_job: string
   deploy_host: string
+  /** known_hosts lines of the swarm manager: the deploy job refuses any other host key. */
+  manager_known_hosts: string
   proxy_network: string
   dns_mode: 'automatic' | 'manual'
   wildcard_domain: string | null
@@ -65,9 +70,11 @@ const CONFIG_KEYS = [
   'api',
   'namespace',
   'template_project',
+  'template_ref',
   'pin_file',
   'deploy_job',
   'deploy_host',
+  'manager_known_hosts',
   'proxy_network',
   'dns_mode',
   'wildcard_domain',
@@ -86,7 +93,6 @@ const DEFAULTS = {
 
 /** A GitLab project / namespace path (or numeric id). */
 const GITLAB_PATH = /^[A-Za-z0-9][A-Za-z0-9._-]*(\/[A-Za-z0-9][A-Za-z0-9._-]*)*$/
-const DNS_LABEL = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/
 /** `host`, `user@host`, `host:port` — never a leading `-` (it would read as an ssh option). */
 const DEPLOY_HOST = /^[A-Za-z0-9][A-Za-z0-9._-]*(@[A-Za-z0-9.-]+)?(:\d+)?$/
 
@@ -120,26 +126,52 @@ function originOf(raw: string): string {
 }
 
 /**
- * A DNS suffix (`apps.example.com`, `localhost`), lower-cased; a leading `*.` and trailing `.`
- * dropped. At least two labels, except the single names `localhost` and `test`.
+ * A pinned ref of the template: a full commit sha, or a tag-like name. Branch names people
+ * move (main, master, HEAD, develop) are refused: the deploy job must not change under an app.
  */
-function dnsSuffix(raw: string): string | null {
-  const s = raw.trim().toLowerCase().replace(/^\*\./, '').replace(/\.$/, '')
-  if (!s || s.length > 253) return null
-  const labels = s.split('.')
-  if (labels.length < 2 && s !== 'localhost' && s !== 'test') return null
-  return labels.every((l) => DNS_LABEL.test(l)) ? s : null
+export function validTemplateRef(v: unknown): v is string {
+  if (typeof v !== 'string') return false
+  if (/^[0-9a-f]{40}$/.test(v) || /^[0-9a-f]{64}$/.test(v)) return true
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(v) || v.includes('..') || v.endsWith('.lock'))
+    return false
+  return !['main', 'master', 'head', 'develop', 'development', 'trunk'].includes(v.toLowerCase())
 }
 
-/** Hostnames that may be served over plain http: localhost and the reserved .test domain. */
-function httpAllowed(suffix: string | null): boolean {
-  if (!suffix) return false
-  return (
-    suffix === 'localhost' ||
-    suffix.endsWith('.localhost') ||
-    suffix === 'test' ||
-    suffix.endsWith('.test')
-  )
+const KEY_TYPES = new Set([
+  'ssh-ed25519',
+  'ssh-rsa',
+  'ecdsa-sha2-nistp256',
+  'ecdsa-sha2-nistp384',
+  'ecdsa-sha2-nistp521',
+  'sk-ssh-ed25519@openssh.com',
+  'sk-ecdsa-sha2-nistp256@openssh.com'
+])
+/** Host patterns (`host`, `[host]:port`, comma lists, `*`/`?` wildcards) or a hashed `|1|salt|hash`. */
+const KH_HOSTS = /^(\|1\|[A-Za-z0-9+/=]+\|[A-Za-z0-9+/=]+|[A-Za-z0-9.:*?![\]_,-]+)$/
+const KH_KEY = /^[A-Za-z0-9+/]{16,}={0,2}$/
+
+/**
+ * ssh known_hosts text: `[@cert-authority|@revoked] <hosts> <key type> <base64 key> [comment]`
+ * lines only (blank and `#` lines dropped). Answers the normalised lines (single spaces, no
+ * comments), or null when any line is something else, there is none, or it is too long.
+ */
+export function parseKnownHosts(raw: unknown): string | null {
+  if (typeof raw !== 'string' || raw.length > 16_000) return null
+  const out: string[] = []
+  for (const line of raw.split(/\r?\n/)) {
+    const t = line.trim()
+    if (!t || t.startsWith('#')) continue
+    const parts = t.split(/[ \t]+/)
+    const marker = parts[0].startsWith('@') ? parts.shift() : null
+    if (marker && marker !== '@cert-authority' && marker !== '@revoked') return null
+    const [hosts, type, key] = parts
+    if (!hosts || !type || !key) return null
+    if (!KH_HOSTS.test(hosts) || hosts.startsWith('-') || !KEY_TYPES.has(type) || !KH_KEY.test(key))
+      return null
+    out.push([marker, hosts, type, key].filter(Boolean).join(' '))
+  }
+  if (!out.length || out.length > 50) return null
+  return out.join('\n')
 }
 
 function optText(v: unknown, max: number): string | null | undefined {
@@ -175,7 +207,13 @@ export function validateTargetInput(
   const pick = (k: (typeof CONFIG_KEYS)[number]) => (k in inc ? inc[k] : prev[k])
 
   const required: Record<string, string> = {}
-  for (const k of ['api', 'namespace', 'template_project', 'deploy_host'] as const) {
+  for (const k of [
+    'api',
+    'namespace',
+    'template_project',
+    'template_ref',
+    'deploy_host'
+  ] as const) {
     const v = pick(k)
     if (typeof v !== 'string' || !v.trim()) return fail('BAD_CONFIG', `Config ${k} is required.`)
     required[k] = v.trim()
@@ -189,6 +227,17 @@ export function validateTargetInput(
     return fail('BAD_CONFIG', 'Config template_project must be a GitLab project path or id.')
   if (!DEPLOY_HOST.test(required.deploy_host) || required.deploy_host.length > 253)
     return fail('BAD_CONFIG', 'Config deploy_host must be host, user@host or host:port.')
+  if (!validTemplateRef(required.template_ref))
+    return fail(
+      'BAD_CONFIG',
+      'Config template_ref must be a tag or commit sha of the template (never a branch like main).'
+    )
+  const knownHosts = parseKnownHosts(pick('manager_known_hosts'))
+  if (!knownHosts)
+    return fail(
+      'BAD_CONFIG',
+      "Config manager_known_hosts must be the manager's ssh known_hosts lines (ssh-keyscan <host>)."
+    )
 
   const withDefault = (k: keyof typeof DEFAULTS): unknown => {
     const v = pick(k)
@@ -266,9 +315,11 @@ export function validateTargetInput(
     api: required.api,
     namespace: required.namespace,
     template_project: required.template_project,
+    template_ref: required.template_ref,
     pin_file: pinFile,
     deploy_job: deployJob.trim(),
     deploy_host: required.deploy_host,
+    manager_known_hosts: knownHosts,
     proxy_network: proxyNetwork,
     dns_mode: dnsMode,
     wildcard_domain: wildcard,
