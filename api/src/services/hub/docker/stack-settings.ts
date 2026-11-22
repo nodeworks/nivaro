@@ -665,7 +665,10 @@ export async function saveStackSettings(
   const env = (await db(ENVS).where({ id: envId }).first('id', 'hub_token')) as
     | { id: number; hub_token: string | null }
     | undefined
-  if (!env) throw new HubSecretError('NOT_FOUND', 'No such environment.')
+  // Phase 3 merge: HubSecretError carries only sealed-secret codes now; an environment deleted
+  // under the save is a plain 404.
+  if (!env)
+    throw Object.assign(new Error('No such environment.'), { statusCode: 404, code: 'NOT_FOUND' })
   const hubToken = env.hub_token ? null : sealSecret(newSecret())
 
   try {
