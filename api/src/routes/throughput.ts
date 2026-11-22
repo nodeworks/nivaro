@@ -4,6 +4,7 @@ import { rawRows } from '../db/raw-rows.js'
 import { limitN, notLikeCi, qi, textLength, topN } from '../db/sql-dialect.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { getAiClient, getAiModelSettings } from '../services/ai-client.js'
+import { appMap } from '../services/app-state.js'
 import { buildFirstOpenReport, parseFirstOpenParams } from '../services/first-open.js'
 import { clientGoneSignal, gateServerTiming, sharedGatedRead } from '../services/read-gate.js'
 import { aggregateThroughput, parseThroughputParams } from '../services/throughput.js'
@@ -213,4 +214,4 @@ export async function throughputRoutes(app: FastifyInstance) {
   })
 }
 
-const themeCache = new Map<string, { at: number; data: unknown }>()
+const themeCache = appMap<string, { at: number; data: unknown }>()

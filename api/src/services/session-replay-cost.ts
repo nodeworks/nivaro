@@ -21,9 +21,12 @@
  *   `{ default: 1, routes: { '/content/orders/:id': 0.25, '/reports/*': 0 } }`
  *   — an exact route pattern, or a prefix ending in `/*` (the longest wins).
  */
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { db } from '../db/index.js'
 import { isUniqueViolation } from '../lib/unique-violation.js'
+import { appBox } from './app-state.js'
 import { replayTierSizes } from './session-replay-storage.js'
+import { currentTenantKey } from './tenant-rooms.js'
 
 export const FLUSH_MS = 15_000
 const CACHE_MS = 30_000
@@ -245,18 +248,36 @@ const emptyDelta = (): DayDelta => ({
   cap_hit_at: null
 })
 
-let pendingDaily = new Map<string, DayDelta>()
-let pendingUsage = new Map<
-  string,
-  { day: string; route: string; build: string; bytes: number; chunks: number }
->()
+type UsageDelta = { day: string; route: string; build: string; bytes: number; chunks: number }
+
+/** Counted, not yet written — per app (Hub phase 6 Task 22): a shared deployment's apps each
+ *  write their own counts to their own database. Each app's pending counts carry the async
+ *  context of an upload of that app, so a flush started anywhere writes them there. */
+interface Pending {
+  daily: Map<string, DayDelta>
+  usage: Map<string, UsageDelta>
+  inApp: <R>(fn: () => R) => R
+}
+const pendings = new Map<string, Pending>()
+
+function pendingHere(): Pending {
+  const key = currentTenantKey()
+  let p = pendings.get(key)
+  if (!p) {
+    p = { daily: new Map(), usage: new Map(), inApp: AsyncLocalStorage.snapshot() }
+    pendings.set(key, p)
+  }
+  return p
+}
+
 let flushTimer: ReturnType<typeof setTimeout> | null = null
 
 function dayDelta(day: string): DayDelta {
-  let d = pendingDaily.get(day)
+  const { daily } = pendingHere()
+  let d = daily.get(day)
   if (!d) {
     d = emptyDelta()
-    pendingDaily.set(day, d)
+    daily.set(day, d)
   }
   return d
 }
@@ -288,7 +309,8 @@ export function noteChunk(
   if (outcome === 'accepted' && bytes > 0) {
     d.bytes += bytes
     const key = `${day}\u0000${meta.route}\u0000${meta.build}`
-    const u = pendingUsage.get(key) ?? {
+    const { usage } = pendingHere()
+    const u = usage.get(key) ?? {
       day,
       route: meta.route,
       build: meta.build,
@@ -297,7 +319,7 @@ export function noteChunk(
     }
     u.bytes += bytes
     u.chunks++
-    pendingUsage.set(key, u)
+    usage.set(key, u)
   }
   scheduleFlush()
 }
@@ -324,12 +346,15 @@ async function bump(
   }
 }
 
-/** Write the counted deltas. A failed write puts them back for the next flush. */
+/** Write the counted deltas, each app's in that app. A failed write puts them back. */
 export async function flushReplayUsage(): Promise<void> {
-  const daily = pendingDaily
-  const usage = pendingUsage
-  pendingDaily = new Map()
-  pendingUsage = new Map()
+  const all = [...pendings.values()]
+  pendings.clear()
+  for (const p of all) await p.inApp(() => flushOne(p))
+}
+
+async function flushOne(p: Pending): Promise<void> {
+  const { daily, usage } = p
   try {
     for (const [day, d] of daily) {
       const { cap_hit_at, ...incs } = d
@@ -343,7 +368,7 @@ export async function flushReplayUsage(): Promise<void> {
       )
     }
     // What this replica just wrote is now in the table the cap reads.
-    if (dayCache) dayCache.at = 0
+    if (dayCache.value) dayCache.value.at = 0
   } catch {
     for (const [day, d] of daily) {
       const into = dayDelta(day)
@@ -352,37 +377,39 @@ export async function flushReplayUsage(): Promise<void> {
         else (into[k] as number) += d[k] as number
       }
     }
+    const here = pendingHere().usage
     for (const [k, u] of usage) {
-      const into = pendingUsage.get(k)
+      const into = here.get(k)
       if (into) {
         into.bytes += u.bytes
         into.chunks += u.chunks
-      } else pendingUsage.set(k, u)
+      } else here.set(k, u)
     }
   }
 }
 
 // ── The daily cap ────────────────────────────────────────────────────────────
 
-let capCache: { at: number; capBytes: number | null } | null = null
-let dayCache: { day: string; at: number; bytes: number; capHit: boolean } | null = null
+const capCache = appBox<{ at: number; capBytes: number | null } | null>(() => null)
+const dayCache = appBox<{ day: string; at: number; bytes: number; capHit: boolean } | null>(
+  () => null
+)
 
 /** Tests (and a settings save) start from a clean slate. */
 export function resetReplayCostState(): void {
-  capCache = null
-  dayCache = null
-  pendingDaily = new Map()
-  pendingUsage = new Map()
+  capCache.value = null
+  dayCache.value = null
+  pendings.clear()
   if (flushTimer) clearTimeout(flushTimer)
   flushTimer = null
 }
 
 export function bustReplayCapCache(): void {
-  capCache = null
+  capCache.value = null
 }
 
 async function capBytes(now: number): Promise<number | null> {
-  if (capCache && now - capCache.at < CACHE_MS) return capCache.capBytes
+  if (capCache.value && now - capCache.value.at < CACHE_MS) return capCache.value.capBytes
   let cap: number | null = null
   try {
     const row = (await db('nivaro_settings').where({ id: 1 }).first('replay_daily_cap_mb')) as
@@ -393,12 +420,12 @@ async function capBytes(now: number): Promise<number | null> {
   } catch {
     cap = null
   }
-  capCache = { at: now, capBytes: cap }
+  capCache.value = { at: now, capBytes: cap }
   return cap
 }
 
 async function storedToday(day: string, now: number): Promise<{ bytes: number; capHit: boolean }> {
-  if (!dayCache || dayCache.day !== day || now - dayCache.at >= CACHE_MS) {
+  if (!dayCache.value || dayCache.value.day !== day || now - dayCache.value.at >= CACHE_MS) {
     let bytes = 0
     let capHit = false
     try {
@@ -410,11 +437,11 @@ async function storedToday(day: string, now: number): Promise<{ bytes: number; c
     } catch {
       /* pre-migration — nothing stored counts */
     }
-    dayCache = { day, at: now, bytes, capHit }
+    dayCache.value = { day, at: now, bytes, capHit }
   }
   return {
-    bytes: dayCache.bytes + (pendingDaily.get(day)?.bytes ?? 0),
-    capHit: dayCache.capHit
+    bytes: dayCache.value.bytes + (pendings.get(currentTenantKey())?.daily.get(day)?.bytes ?? 0),
+    capHit: dayCache.value.capHit
   }
 }
 

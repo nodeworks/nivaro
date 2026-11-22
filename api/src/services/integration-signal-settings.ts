@@ -7,6 +7,7 @@
  */
 import { createHash } from 'node:crypto'
 import { db } from '../db/index.js'
+import { appBox } from './app-state.js'
 import { type BusinessSchedule, businessHoursElapsed, getSlaSchedule } from './business-hours.js'
 import type { IntegrationSignal, SignalRow } from './integration-signals.js'
 import { majorUsHolidaySet } from './major-holidays.js'
@@ -17,18 +18,21 @@ export interface ResolvedSettings {
   thresholds: Record<string, number>
 }
 
-let cache: { at: number; rows: Array<{ signal: string; key: string; value: string }> } | null = null
+const cache = appBox<{
+  at: number
+  rows: Array<{ signal: string; key: string; value: string }>
+} | null>(() => null)
 
 export function bustSignalSettings(): void {
-  cache = null
+  cache.value = null
 }
 
 async function allSettings() {
-  if (cache && Date.now() - cache.at < 60_000) return cache.rows
+  if (cache.value && Date.now() - cache.value.at < 60_000) return cache.value.rows
   const rows = (await db('nivaro_integration_signal_settings')
     .select('signal', 'key', 'value')
     .catch(() => [])) as Array<{ signal: string; key: string; value: string }>
-  cache = { at: Date.now(), rows }
+  cache.value = { at: Date.now(), rows }
   return rows
 }
 

@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { assertSafeUrl, safeFetch } from '../lib/ssrf.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { appBox } from '../services/app-state.js'
 import {
   dispatchWebhook,
   fireWebhooks,
@@ -102,17 +103,17 @@ function validateConditions(raw: unknown): string | null {
   return null
 }
 
-let conditionsColumnExists: boolean | null = null
+const conditionsColumnExists = appBox<boolean | null>(() => null)
 /** The column arrives with migration 355; a database that has not run it yet
  *  keeps saving webhooks, without conditions. */
 async function conditionsColumn(raw: unknown): Promise<{ conditions?: string | null }> {
   if (raw === undefined) return {}
-  if (conditionsColumnExists !== true) {
-    conditionsColumnExists = await db.schema
+  if (conditionsColumnExists.value !== true) {
+    conditionsColumnExists.value = await db.schema
       .hasColumn('nivaro_webhooks', 'conditions')
       .catch(() => false)
   }
-  if (!conditionsColumnExists) return {}
+  if (!conditionsColumnExists.value) return {}
   const rules = parseWebhookConditions(raw)
   return { conditions: rules.length ? JSON.stringify(rules) : null }
 }

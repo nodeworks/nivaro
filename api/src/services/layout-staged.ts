@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { appBox } from './app-state.js'
 
 /**
  * Staged layout edits (#2589): the editor's unsaved steps, kept on the server
@@ -51,21 +52,22 @@ export class StagedError extends Error {
 
 // nivaro_drafts arrived in migration 316; a database behind it simply has no staged
 // drafts (the editor keeps them in the browser alone). Re-checked each minute until found.
-let table: { has: boolean; at: number } | null = null
+const table = appBox<{ has: boolean; at: number } | null>(() => null)
 export async function stagedAvailable(): Promise<boolean> {
-  if (table && (table.has || Date.now() - table.at < 60_000)) return table.has
+  if (table.value && (table.value.has || Date.now() - table.value.at < 60_000))
+    return table.value.has
   let has = false
   try {
     has = await db.schema.hasTable('nivaro_drafts')
   } catch {
     has = false
   }
-  table = { has, at: Date.now() }
+  table.value = { has, at: Date.now() }
   return has
 }
 /** Tests: forget what the table check found. */
 export function resetStagedTableCheck(): void {
-  table = null
+  table.value = null
 }
 
 const isStep = (s: unknown): s is StagedStep => {

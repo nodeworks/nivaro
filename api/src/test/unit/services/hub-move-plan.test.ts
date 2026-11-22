@@ -13,6 +13,9 @@ import { SHARED_READINESS_BLOCKERS } from '../../../services/hub-link/shared-rea
 // plan's rules (B8 adds the manual step order).
 
 const FP = 'a'.repeat(32)
+/** Extension image pins (ruling P6-16: `<repo>@sha256:<64 hex>`). */
+const PIN_A = `registry.example.com/ext-x@sha256:${'1'.repeat(64)}`
+const PIN_B = `registry.example.com/ext-x@sha256:${'2'.repeat(64)}`
 
 function shared(o: Partial<SharedDeployment> = {}): SharedDeployment {
   return {
@@ -24,7 +27,7 @@ function shared(o: Partial<SharedDeployment> = {}): SharedDeployment {
     stack: 'pool-a',
     version_pin: '0.3.210',
     extensions: ['x'],
-    extension_pins: { x: '1.2.0' },
+    extension_pins: { x: PIN_A },
     host_pattern: '*.apps.example.com',
     link_url: 'https://pool-a.internal.example.com',
     pool_budget: 60,
@@ -84,6 +87,7 @@ function input(o: Partial<MovePlanInput> = {}): MovePlanInput {
       db_identity: 'pg|10.0.0.5|5432|shop',
       files: { count: 40, bytes: 123456, local: 38 },
       extensions: { x: '1.2.0' },
+      extension_pins: { x: PIN_A },
       readiness: [],
       storage_provider: 'local',
       redis: 'r-source'
@@ -94,7 +98,7 @@ function input(o: Partial<MovePlanInput> = {}): MovePlanInput {
       version: '0.3.210',
       oidc: { issuer_host: 'login.microsoftonline.com', tenant: 'corp-tenant' },
       extensions: ['x'],
-      extension_pins: { x: '1.2.0' },
+      extension_pins: { x: PIN_A },
       db: { reachable: true, identity: 'pg|10.0.0.5|5432|shop', error: null },
       identity_shared_with: [],
       pool: { used: 10, budget: 60, asked: 5 },
@@ -137,7 +141,7 @@ describe('buildMovePlan — one test per blocker', () => {
     ['LINK_UNREACHABLE', input({ source: src({ reachable: false, error: 'UNREACHABLE' }) })],
     ['VERSION_DIFFERS', input({ target_facts: tgt({ version: '0.3.211' }) })],
     ['EXTENSION_NOT_ALLOWED', input({ target_facts: tgt({ extensions: [] }) })],
-    ['EXTENSION_VERSION_DIFFERS', input({ target_facts: tgt({ extension_pins: { x: '1.3.0' } }) })],
+    ['EXTENSION_VERSION_DIFFERS', input({ target_facts: tgt({ extension_pins: { x: PIN_B } }) })],
     ['NO_DATABASE_RECORD', input({ database: null })],
     ['APP_KEY_UNKNOWN', input({ app_key: { known: false, fp: null } })],
     ['APP_KEY_MISMATCH', input({ source: src({ key_fp: 'b'.repeat(32) }) })],
@@ -228,6 +232,38 @@ describe('buildMovePlan — one test per blocker', () => {
   it('a key entry the Hub cannot open → APP_KEY_UNKNOWN saying so, not "does not know" (M-9)', () => {
     const p = buildMovePlan(input({ app_key: { known: false, fp: null, unreadable: true } }))
     expect(p.blockers.find((b) => b.code === 'APP_KEY_UNKNOWN')?.text).toMatch(/cannot open/i)
+  })
+
+  it('extension builds are compared as image pins; a source whose pins are unknown → EXTENSION_PIN_UNVERIFIED + item (P6-16)', () => {
+    const same = buildMovePlan(input())
+    expect(codes(same)).not.toContain('EXTENSION_VERSION_DIFFERS')
+    expect(same.warnings.map((w) => w.code)).not.toContain('EXTENSION_PIN_UNVERIFIED')
+    const unknown = buildMovePlan(input({ source: src({ extension_pins: null }) }))
+    expect(codes(unknown)).toEqual([])
+    expect(unknown.warnings.find((w) => w.code === 'EXTENSION_PIN_UNVERIFIED')?.text).toMatch(
+      /\bx\b/
+    )
+    expect(unknown.checklist.find((c) => c.id === 'extension_builds_same')?.required).toBe(true)
+    const missing = buildMovePlan(input({ source: src({ extension_pins: {} }) }))
+    expect(missing.warnings.map((w) => w.code)).toContain('EXTENSION_PIN_UNVERIFIED')
+    // The text never shows a digest.
+    const differs = buildMovePlan(input({ target_facts: tgt({ extension_pins: { x: PIN_B } }) }))
+    expect(JSON.stringify(differs)).not.toContain('1'.repeat(64))
+    expect(JSON.stringify(differs)).not.toContain('2'.repeat(64))
+  })
+
+  it('a registered target that allows x but pins no build → EXTENSION_PIN_UNVERIFIED + item (I-A)', () => {
+    const p = buildMovePlan(
+      input({
+        to: sharedSide({ mode: 'registered', driver_id: null, extension_pins: {} }),
+        target_facts: tgt({ extension_pins: {} })
+      })
+    )
+    expect(codes(p)).toEqual([])
+    expect(p.warnings.find((w) => w.code === 'EXTENSION_PIN_UNVERIFIED')?.text).toMatch(
+      /pool-a.*\bx\b|\bx\b.*pool-a/
+    )
+    expect(p.checklist.find((c) => c.id === 'extension_builds_same')?.required).toBe(true)
   })
 
   it('key_fp differs → APP_KEY_MISMATCH', () => {
@@ -426,6 +462,13 @@ describe('buildMovePlan — a check that could not run is never a pass (P6-15)',
     expect(p.checklist.find((c) => c.id === 'issuer_same')?.required).toBe(true)
   })
 
+  it('a target agent the Hub could not read → MULTI_NODE_UNVERIFIED and the item volumes_one_node (N-2)', () => {
+    const p = buildMovePlan(input({ target_facts: tgt({ multi_node_unread: true }) }))
+    expect(p.warnings.find((w) => w.code === 'MULTI_NODE_UNVERIFIED')?.text).toMatch(/pool-a/)
+    expect(p.checklist.find((c) => c.id === 'volumes_one_node')?.required).toBe(true)
+    expect(codes(p)).toEqual([])
+  })
+
   it('every other app compared → no such warning or item', () => {
     const p = buildMovePlan(input())
     expect(p.warnings.map((w) => w.code)).not.toContain('DB_IDENTITY_UNCHECKED')
@@ -617,6 +660,34 @@ describe('buildMovePlan — plan hash', () => {
     const p = buildMovePlan(input({ names: [' Shop.Apps.Example.com', 'shop.apps.example.com'] }))
     expect(p.plan_hash).toBe(buildMovePlan(input()).plan_hash)
     expect(p.hostnames).toEqual(['shop.apps.example.com'])
+  })
+
+  it('changes when the set of unverified extensions grows (M-A)', () => {
+    const two = {
+      app: { ...input().app, extensions: ['x', 'y'] },
+      target_facts: tgt({ extensions: ['x', 'y'], extension_pins: { x: PIN_A, y: PIN_B } })
+    }
+    const oneUnknown = buildMovePlan(
+      input({ ...two, source: src({ extension_pins: { x: PIN_A } }) })
+    )
+    const twoUnknown = buildMovePlan(input({ ...two, source: src({ extension_pins: {} }) }))
+    expect(oneUnknown.warnings.map((w) => w.code)).toContain('EXTENSION_PIN_UNVERIFIED')
+    expect(twoUnknown.warnings.map((w) => w.code)).toContain('EXTENSION_PIN_UNVERIFIED')
+    expect(oneUnknown.plan_hash).not.toBe(twoUnknown.plan_hash)
+  })
+
+  it('changes when the set of differing extensions grows (M-A)', () => {
+    const two = {
+      app: { ...input().app, extensions: ['x', 'y'] },
+      target_facts: tgt({ extensions: ['x', 'y'], extension_pins: { x: PIN_B, y: PIN_B } })
+    }
+    const one = buildMovePlan(
+      input({ ...two, source: src({ extension_pins: { x: PIN_A, y: PIN_B } }) })
+    )
+    const both = buildMovePlan(
+      input({ ...two, source: src({ extension_pins: { x: PIN_A, y: PIN_A } }) })
+    )
+    expect(one.plan_hash).not.toBe(both.plan_hash)
   })
 
   it('changes when a hostname changes', () => {

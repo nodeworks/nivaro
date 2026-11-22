@@ -28,6 +28,7 @@ import {
 } from '../services/hub/shared/deployment-client.js'
 import { PlaceSharedError, placeOnShared } from '../services/hub/shared/place.js'
 import { liveSightings, type Sighting } from '../services/hub/shared/sightings.js'
+import { checkSharedSecretsInput } from '../services/hub/shared/stack-render.js'
 import {
   createShared,
   deleteShared,
@@ -44,6 +45,7 @@ import {
   validateSharedInput
 } from '../services/hub/shared/store.js'
 import { poolMaxOf, type SharedTenantRow, tenantsOf } from '../services/hub/shared/tenants.js'
+import { setSharedSecrets, sharedSecretsShown } from '../services/hub/shared/upgrade-run.js'
 
 /**
  * Nivaro Hub phase 6 (Task 3): shared deployments and app keys, mounted under /api/hub by hub.ts
@@ -53,7 +55,11 @@ import { poolMaxOf, type SharedTenantRow, tenantsOf } from '../services/hub/shar
  *   GET    /shared/:id                     row, apps placed, live sightings, `env_block` (registered)
  *   POST   /shared                         201 {row, token, env_block} — the token is shown ONCE
  *   PATCH  /shared/:id                     name, link_url, host_pattern, extensions, extension_pins,
- *                                          pool_budget, settings; key or mode → 400 IMMUTABLE
+ *                                          pool_budget, settings; key or mode → 400 IMMUTABLE;
+ *                                          write-only `secrets: {REDIS_URL}` (docker only, P6-16):
+ *                                          sealed, answered as set/not set, body never logged,
+ *                                          the stack re-applied → {data, secrets, reapply,
+ *                                          reapply_reason}
  *   POST   /shared/:id/token               a new token (shown once; the old one works 24 h)
  *   DELETE /shared/:id                     {outcome: deleted|retired}; 409 SHARED_IN_USE / SHARED_BUSY
  *   GET    /shared/:id/status              the deployment link's status, cached 30 s
@@ -110,6 +116,35 @@ let reapplyAfterRotation: SharedReapply | null = null
 
 export function setSharedReapply(fn: SharedReapply | null): void {
   reapplyAfterRotation = fn
+}
+
+/**
+ * Applies a Docker deployment's stack again through the registered hook (a token rotation, a new
+ * REDIS_URL): `manual` for a registered deployment, `unavailable` with no hook, `started`, or
+ * `failed` with a code (never an error's text).
+ */
+async function reapplyStack(
+  row: SharedDeployment,
+  by: string
+): Promise<{
+  reapply: 'manual' | 'started' | 'unavailable' | 'failed'
+  reapply_reason: string | null
+}> {
+  if (row.mode !== 'docker') return { reapply: 'manual', reapply_reason: null }
+  if (!reapplyAfterRotation) return { reapply: 'unavailable', reapply_reason: null }
+  try {
+    const r = await reapplyAfterRotation(row, by)
+    return {
+      reapply: r.started ? 'started' : 'failed',
+      reapply_reason: r.started ? null : (r.reason ?? null)
+    }
+  } catch (err) {
+    const code = (err as { code?: unknown } | null)?.code
+    return {
+      reapply: 'failed',
+      reapply_reason: typeof code === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(code) ? code : null
+    }
+  }
 }
 
 // ─── helpers ───────────────────────────────────────────────────────────────────────────────
@@ -378,10 +413,11 @@ export function hubSharedRoutes(app: FastifyInstance): void {
     const id = idParam((req.params as { id: string }).id)
     const row = id === null ? null : await getShared(id)
     if (id === null || !row) return notFound(reply)
-    const [apps, sightings, prevUntil] = await Promise.all([
+    const [apps, sightings, prevUntil, secrets] = await Promise.all([
       appsPlaced(row),
       sightingsOrNull(id),
-      previousTokenUntil(id)
+      previousTokenUntil(id),
+      sharedSecretsShown(id)
     ])
     const warnings = blockWarnings(row)
     if (sightings === null)
@@ -396,7 +432,9 @@ export function hubSharedRoutes(app: FastifyInstance): void {
         sightings,
         previous_token_valid_until: prevUntil,
         env_block: envBlock(row, null),
-        warnings
+        warnings,
+        // Write-only secrets (ruling P6-16): set (masked) or null, never the value.
+        secrets
       }
     }
   })
@@ -436,6 +474,7 @@ export function hubSharedRoutes(app: FastifyInstance): void {
         b[k] !== undefined &&
         k !== 'key' &&
         k !== 'mode' &&
+        k !== 'secrets' &&
         !(PATCHABLE as readonly string[]).includes(k)
     )
     if (other.length)
@@ -445,8 +484,23 @@ export function hubSharedRoutes(app: FastifyInstance): void {
         'NOT_EDITABLE',
         `These fields cannot be changed here: ${other.slice(0, 10).join(', ')}.`
       )
+    // Write-only secrets (ruling P6-16): a Docker deployment's external REDIS_URL.
+    let secrets: Record<string, string | null> | null = null
+    if (b.secrets !== undefined) {
+      if (existing.mode !== 'docker')
+        return refuse(
+          reply,
+          400,
+          'NOT_EDITABLE',
+          'Only a Docker shared deployment keeps secrets here; whoever runs a registered one sets them there.'
+        )
+      const sc = checkSharedSecretsInput(b.secrets)
+      if (!sc.ok) return refuse(reply, 400, 'BAD_SECRETS', sc.message)
+      secrets = sc.secrets
+    }
+    const { secrets: _secrets, ...fields } = b
     return guarded(reply, async () => {
-      const checked = validateSharedInput(b, existing)
+      const checked = validateSharedInput(fields, existing)
       if (!checked.ok) return refuse(reply, 400, checked.code, checked.message)
       const changes: Partial<SharedFields> = {}
       const changed: string[] = []
@@ -457,6 +511,10 @@ export function hubSharedRoutes(app: FastifyInstance): void {
       }
       const updated = await updateShared(id, changes)
       if (!updated) return notFound(reply)
+      if (secrets) {
+        await setSharedSecrets(id, secrets)
+        for (const k of Object.keys(secrets)) changed.push(`secrets.${k}`)
+      }
       await logActivity({
         action: 'hub-shared-update',
         user: userId(req),
@@ -466,7 +524,10 @@ export function hubSharedRoutes(app: FastifyInstance): void {
         changed_fields: changed
       })
       if (changes.link_url !== undefined) await forgetStatus(app, id)
-      return { data: updated }
+      if (!secrets) return { data: updated }
+      // The stack reads REDIS_URL only when applied again: the same hook a token rotation uses.
+      const { reapply, reapply_reason } = await reapplyStack(updated, userId(req))
+      return { data: updated, secrets: await sharedSecretsShown(id), reapply, reapply_reason }
     })
   })
 
@@ -486,24 +547,7 @@ export function hubSharedRoutes(app: FastifyInstance): void {
       })
       await forgetStatus(app, id)
       // R7: a Docker deployment gets the new token only when its stack is applied again.
-      let reapply: 'manual' | 'started' | 'unavailable' | 'failed' = 'manual'
-      let reapply_reason: string | null = null
-      if (row.mode === 'docker') {
-        if (!reapplyAfterRotation) reapply = 'unavailable'
-        else {
-          try {
-            const r = await reapplyAfterRotation(row, userId(req))
-            reapply = r.started ? 'started' : 'failed'
-            reapply_reason = r.started ? null : (r.reason ?? null)
-          } catch (err) {
-            reapply = 'failed'
-            // A code only, never the error's text.
-            const code = (err as { code?: unknown } | null)?.code
-            reapply_reason =
-              typeof code === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(code) ? code : null
-          }
-        }
-      }
+      const { reapply, reapply_reason } = await reapplyStack(row, userId(req))
       return {
         data: {
           token,

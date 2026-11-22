@@ -14,6 +14,7 @@
 import { joinLogUser } from '../db/dialect/traffic-d.js'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
+import { appBox } from './app-state.js'
 import { hasChainColumns } from './chain-columns.js'
 import { isMachineAccount } from './machine-accounts.js'
 
@@ -272,12 +273,12 @@ export function parseCallerKey(
   return null
 }
 
-let stampedSinceCache: { at: number; value: Date | null } | null = null
+const stampedSinceCache = appBox<{ at: number; value: Date | null } | null>(() => null)
 
 /** When migration 384 ran on this database (null = not yet, or unknown). */
 export async function inboundStampedSince(): Promise<Date | null> {
-  if (stampedSinceCache && Date.now() - stampedSinceCache.at < 10 * 60_000)
-    return stampedSinceCache.value
+  if (stampedSinceCache.value && Date.now() - stampedSinceCache.value.at < 10 * 60_000)
+    return stampedSinceCache.value.value
   let value: Date | null = null
   try {
     if (await hasInboundColumns()) {
@@ -289,7 +290,7 @@ export async function inboundStampedSince(): Promise<Date | null> {
   } catch {
     value = null
   }
-  stampedSinceCache = { at: Date.now(), value }
+  stampedSinceCache.value = { at: Date.now(), value }
   return value
 }
 

@@ -10,7 +10,7 @@ import {
   SharedRenderError,
   sharedRedisPrefix
 } from '../../../services/hub/shared/stack-render.js'
-import type { SharedDeployment } from '../../../services/hub/shared/store.js'
+import { type SharedDeployment, validateSharedInput } from '../../../services/hub/shared/store.js'
 
 // Nivaro Hub phase 6, Task 5: the StackSpec of a Docker shared deployment. Pure. Every spec the
 // renderer emits must pass the Hub agent's OWN validator (packages/hub-agent/src/spec.ts, loaded by
@@ -206,6 +206,27 @@ describe('renderSharedSpec', () => {
     expect(code(() => renderSharedSpec(input({ hubPublicUrl: '' })))).toBe('HUB_URL_UNUSABLE')
   })
 
+  it('HUB_URL is the origin of the Hub address, never a path (review minor 2)', () => {
+    expect(
+      renderSharedSpec(input({ hubPublicUrl: 'https://hub.example.com/x/y?z=1' })).env.HUB_URL
+    ).toBe('https://hub.example.com')
+    expect(code(() => renderSharedSpec(input({ hubPublicUrl: 'not a url' })))).toBe(
+      'HUB_URL_UNUSABLE'
+    )
+    expect(code(() => renderSharedSpec(input({ hubPublicUrl: 'ftp://hub.example.com' })))).toBe(
+      'HUB_URL_UNUSABLE'
+    )
+  })
+
+  it('refuses a spec without the deployment secrets (review minor 1)', () => {
+    expect(code(() => renderSharedSpec(input({ secrets: { ENCRYPTION_KEY: ENC } })))).toBe(
+      'SECRETS_MISSING'
+    )
+    expect(code(() => renderSharedSpec(input({ secrets: { SESSION_SECRET: SESSION } })))).toBe(
+      'SECRETS_MISSING'
+    )
+  })
+
   it('the publish edge sends no names and no pattern', () => {
     const spec = renderSharedSpec(
       input({ edge: 'publish', shared: shared({ settings: { publish_port: 31001 } }) })
@@ -214,6 +235,36 @@ describe('renderSharedSpec', () => {
     expect(spec.host_pattern).toBeUndefined()
     expect(spec.publish_port).toBe(31001)
     expect(spec.env.COOKIE_SECURE).toBeUndefined()
+  })
+})
+
+describe('extension pins as the PATCH stores them (ruling P6-16)', () => {
+  it('a pin that passes validateSharedInput renders; a version string never does', () => {
+    const v = validateSharedInput({
+      key: 'shared-one',
+      name: 'Shared one',
+      link_url: 'https://shared-one.internal.example.com',
+      extensions: ['reports'],
+      extension_pins: { reports: EXT }
+    })
+    if (!v.ok) throw new Error(v.code)
+    const spec = renderSharedSpec(
+      input({
+        shared: shared({ extensions: v.row.extensions, extension_pins: v.row.extension_pins }),
+        extensions: v.row.extension_pins
+      })
+    )
+    expect(spec.extensions).toEqual({ reports: EXT })
+    expect(agent.validateStackSpec(JSON.parse(JSON.stringify(spec)), cfg('traefik'))).toMatchObject(
+      { ok: true }
+    )
+    expect(
+      code(() =>
+        renderSharedSpec(
+          input({ shared: shared({ extensions: ['reports'] }), extensions: { reports: '1.2.3' } })
+        )
+      )
+    ).toBe('EXTENSION_UNPINNED')
   })
 })
 

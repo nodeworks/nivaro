@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { appMap } from './app-state.js'
 import {
   type DeliveryDecision,
   NOTIFY_CATEGORIES,
@@ -20,7 +21,7 @@ export async function archiveReadOlderThan(userId: string, days: number): Promis
 export const CLEANUP_DAYS_MIN = 7
 export const CLEANUP_DAYS_MAX = 365
 
-const cleanedAt = new Map<string, number>()
+const cleanedAt = appMap<string, number>()
 
 /** Per-person automatic clean-up (preferences.notification_cleanup_days),
  *  run lazily from the list at most once an hour — no cron needed. */

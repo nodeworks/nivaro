@@ -7,6 +7,7 @@ import { columnTypes } from '../db/dialect/h2.js'
 import { rawRows } from '../db/raw-rows.js'
 import { sqlDialect } from '../db/sql-dialect.js'
 import { isUniqueViolation } from '../lib/unique-violation.js'
+import { appMap } from './app-state.js'
 
 export interface AutoIdVariant {
   /** Condition on the record's own columns; first matching variant wins. */
@@ -420,7 +421,7 @@ export function dbLookups(db: Knex): AutoIdLookups {
 // 30s TTL cache of auto_id fields, keyed by collection name. Fields change
 // rarely (admin-driven schema edits), so a short TTL is fine — matches
 // junctionTargetsCache below and items.ts's other meta-caches.
-const autoIdFieldsCache = new Map<
+const autoIdFieldsCache = appMap<
   string,
   { fields: Array<{ field: string; config: AutoIdConfig }>; at: number }
 >()
@@ -721,7 +722,7 @@ export interface AutoIdJunctionTarget {
 // Fields/relations change rarely (admin-driven schema edits), so a short TTL
 // is fine — matches the pragmatism of items.ts's other meta-caches
 // (wsColumnCache, inheritableFieldsCache).
-const junctionTargetsCache = new Map<string, { targets: AutoIdJunctionTarget[]; at: number }>()
+const junctionTargetsCache = appMap<string, { targets: AutoIdJunctionTarget[]; at: number }>()
 const JUNCTION_TARGETS_TTL_MS = 30_000
 
 /**

@@ -20,6 +20,7 @@
 import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
+import { appBox } from './app-state.js'
 import { type DigestLine, type DigestSection, registerDigestSection } from './daily-digest.js'
 import { type NotifyUserOptions, notifyUser } from './notification-channels.js'
 import { plainObligationReason } from './obligation-reason-text.js'
@@ -442,19 +443,19 @@ interface DigestPassData {
  *  re-fetches for whoever is left — self-healing, never a correctness
  *  issue, only ever a cost one. */
 const DIGEST_PASS_CACHE_TTL_MS = 60_000
-let digestPassCache: DigestPassData | null = null
+const digestPassCache = appBox<DigestPassData | null>(() => null)
 
 async function digestPassData(): Promise<DigestPassData> {
-  if (digestPassCache && Date.now() - digestPassCache.at < DIGEST_PASS_CACHE_TTL_MS) {
-    return digestPassCache
+  if (digestPassCache.value && Date.now() - digestPassCache.value.at < DIGEST_PASS_CACHE_TTL_MS) {
+    return digestPassCache.value
   }
   const rows = await fetchUnmetRows(BATCH)
   const [apiOwners, recordOwners] = await Promise.all([
     apiOwnerMap().catch(() => new Map<string, string | null>()),
     batchRecordOwners(rows.map((r) => ({ collection: r.collection, item: r.item })))
   ])
-  digestPassCache = { rows, apiOwners, recordOwners, at: Date.now() }
-  return digestPassCache
+  digestPassCache.value = { rows, apiOwners, recordOwners, at: Date.now() }
+  return digestPassCache.value
 }
 
 /** Rows relevant to ONE user: obligations on an API they own, or on a

@@ -20,6 +20,7 @@ import {
   saveRecoverySettings
 } from '../services/recovery/settings.js'
 import { markDrillQueued, recoveryStatus } from '../services/recovery/status.js'
+import { refuseOnSharedDeployment } from '../services/shared-operator.js'
 import { type AskTurn, askTelemetry, TelemetryAskError } from '../services/telemetry-ai.js'
 import { telemetryStatus } from '../services/telemetry-status.js'
 import { storeEnabled } from '../services/telemetry-store.js'
@@ -43,6 +44,9 @@ const CLAIM_WAIT_MS = 3_000
 
 export async function telemetryRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireAdmin)
+  // The deployment's telemetry stack, backups and restore drills: operator-only on a shared
+  // deployment (P6-13).
+  app.addHook('preHandler', refuseOnSharedDeployment)
 
   app.get('/status', async () => ({ data: await telemetryStatus() }))
 

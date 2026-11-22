@@ -259,12 +259,16 @@ async function creationEnvironments(appId: number): Promise<number[]> {
   ]
 }
 
-/** Runs a delete holding these environments' locks; CREATION_RUNNING (409) while one is held. */
+/**
+ * Runs a delete holding these environments' locks; CREATION_RUNNING (409) while one is held. A
+ * lock the Hub cannot take or read (Redis down) answers its own status: 503 LOCK_UNAVAILABLE.
+ */
 async function quiet(reply: FastifyReply, envIds: number[], run: () => Promise<unknown>) {
   try {
     return await withEnvironmentsQuiet(envIds, run)
   } catch (e) {
     if (e instanceof CreationError) return fail(reply, e.status, e.code, e.message)
+    if (e instanceof PromotionError) return fail(reply, e.status, e.code, e.message)
     throw e
   }
 }

@@ -142,8 +142,8 @@ export async function matchAttemptedIdentity(attempt: {
 }
 
 function appKey(userId: string): string {
-  const t = currentTenantKey()
-  return `nvr:signin-app:${t ? `${t}:` : ''}${String(userId).toUpperCase()}`
+  const tenant = currentTenantKey()
+  return `nvr:signin-app:${tenant ? `${tenant}:` : ''}${String(userId).toUpperCase()}`
 }
 
 /** A successful web sign-in: remember which app it was for (Redis, 35 days). */

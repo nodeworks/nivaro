@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
 import { db } from '../db/index.js'
 import { getTenantDb, getTenantId } from '../db/tenant-context.js'
+import { appMap } from './app-state.js'
 import { tenantSource } from './deployment-mode.js'
 import { appKeyOf } from './tenancy/app-keys.js'
 
@@ -117,7 +118,9 @@ export function decryptForDeployment(stored: string): string {
 // the same nivaro_fields query before the first had answered (1.6s of a 2.1s
 // list read, caught by the trace's N+1 counter). Sharing the in-flight
 // promise makes the 25 one. A failed lookup is evicted so the next call retries.
-const fieldCache = new Map<string, { fields: Promise<string[]>; at: number }>()
+// Per app (Hub phase 6 Task 22): two apps of a shared deployment hold the same collection names
+// with different encrypted fields; app A's list must never decide for app B.
+const fieldCache = appMap<string, { fields: Promise<string[]>; at: number }>()
 const CACHE_TTL_MS = 30_000
 
 export async function getEncryptedFields(collection: string): Promise<string[]> {

@@ -10,6 +10,7 @@ import { storedRuns, successfulVersions } from '../promote-gather.js'
 import {
   defaultPromoteLock,
   defaultSharedLock,
+  type LockHolder,
   lockHolderRefusal,
   type PromoteLock,
   type SharedLock,
@@ -49,7 +50,7 @@ import { type SharedTenantRow, tenantsOf } from './tenants.js'
  * successfully (phase 2's rule, `successfulVersions`: any success row, a shared one included); a
  * previous environment placed on this same deployment is upgraded in the same run and never
  * counts. PREFLIGHT_FAILING (preflight R17) — the app's own preflight fails on the deployment now.
- * Neither is checked when the version does not change (a re-apply).
+ * Neither is checked when the version does not change (a re-apply), nor for a rollback.
  *
  * Warnings: HUB_URL_PROBLEM (the Hub's own HUB_URL is ignored, hubUrlBootWarning), MULTI_NODE_
  * VOLUMES (the agent's swarm has several nodes and volumes are local), APPS_AFFECTED (every app
@@ -284,12 +285,27 @@ export async function gatherSharedUpgrade(
   const placedHere = new Set(rows.filter((r) => r.placedHere).map((r) => r.env.id))
 
   // BUSY: the deployment's own lock, or any listed environment's lock.
-  const holder = await deps.sharedLock.holder(shared.id)
-  if (holder) block('BUSY', sharedLockRefusal(holder).message)
+  // A holder that cannot be read is never free (T15 round 2): blocker LOCK_UNAVAILABLE.
+  const unreadable = 'The Hub cannot reach Redis to tell who holds'
+  try {
+    const holder = await deps.sharedLock.holder(shared.id)
+    if (holder) block('BUSY', sharedLockRefusal(holder).message)
+  } catch {
+    block('LOCK_UNAVAILABLE', `${unreadable} this shared deployment's lock — try again shortly.`)
+  }
   for (const r of rows) {
     const held = await deps.envLock.held(r.env.id)
     if (held === false) continue
-    const h = (await deps.envLock.holder?.(r.env.id)) ?? null
+    let h: LockHolder | null = null
+    try {
+      h = (await deps.envLock.holder?.(r.env.id)) ?? null
+    } catch {
+      block(
+        'LOCK_UNAVAILABLE',
+        `${unreadable} the lock of ${r.app.key}/${r.env.key} — try again shortly.`
+      )
+      continue
+    }
     block(
       'BUSY',
       `${r.app.key}/${r.env.key}: ${
@@ -330,7 +346,7 @@ export async function gatherSharedUpgrade(
         if (pins.missing.length)
           block(
             'EXTENSION_UNPINNED',
-            `No image pin for extension ${pins.missing.join(', ')}: set extension_pins on the shared deployment.`
+            `No image pin for extension ${pins.missing.join(', ')}: set extension_pins on the shared deployment (<repo>@sha256:<64 hex>).`
           )
       }
     }
@@ -339,7 +355,7 @@ export async function gatherSharedUpgrade(
     if (pins.missing.length)
       block(
         'EXTENSION_UNPINNED',
-        `No image pin for extension ${pins.missing.join(', ')}: set extension_pins on the shared deployment.`
+        `No image pin for extension ${pins.missing.join(', ')}: set extension_pins on the shared deployment (<repo>@sha256:<64 hex>).`
       )
   }
   if (versionOk && !image && shared.mode === 'docker' && shared.status !== 'retired') {
@@ -518,7 +534,14 @@ export async function gatherSharedUpgrade(
         notes.push(order)
       }
     }
-    if (versionOk && !sameVersion && r.placedHere && shared.mode === 'docker') {
+    // A rollback is the way out of a broken version: the current preflight never blocks it.
+    if (
+      versionOk &&
+      !sameVersion &&
+      kind === 'upgrade' &&
+      r.placedHere &&
+      shared.mode === 'docker'
+    ) {
       try {
         const st = await client.appStatus(tenant)
         const failing = Array.isArray(st.preflight?.failing) ? st.preflight.failing : []

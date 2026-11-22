@@ -5,6 +5,7 @@ import { db } from '../db/index.js'
 import { auditLevelOf } from '../hooks/activity.js'
 import { describeDbRefusal, describeValueRefusal } from '../lib/db-refusal.js'
 import type { User } from '../types.js'
+import { appMap } from './app-state.js'
 import { autoIdFieldsFor } from './auto-ids.js'
 import { chainFields } from './chain-columns.js'
 import { editLockTouches } from './edit-lock.js'
@@ -95,7 +96,7 @@ interface ColumnType {
   max_chars: number | null
 }
 
-const typeCache = new Map<string, { at: number; cols: Promise<Map<string, ColumnType>> }>()
+const typeCache = appMap<string, { at: number; cols: Promise<Map<string, ColumnType>> }>()
 const TYPE_TTL_MS = 60_000
 
 /** Physical columns of a table with the SQL type a bound value is cast to. */

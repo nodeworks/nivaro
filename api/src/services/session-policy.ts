@@ -14,6 +14,7 @@
  */
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
+import { appBox } from './app-state.js'
 
 export interface SessionLimits {
   max_age_hours: number | null
@@ -163,15 +164,15 @@ export function judgeDeviceGrant(
   )
 }
 
-let cache: { at: number; value: SessionPolicy | null } | null = null
+const cache = appBox<{ at: number; value: SessionPolicy | null } | null>(() => null)
 const TTL_MS = 60_000
 
 export function bustSessionPolicy(): void {
-  cache = null
+  cache.value = null
 }
 
 export async function getSessionPolicy(): Promise<SessionPolicy | null> {
-  if (cache && Date.now() - cache.at < TTL_MS) return cache.value
+  if (cache.value && Date.now() - cache.value.at < TTL_MS) return cache.value.value
   let value: SessionPolicy | null = null
   try {
     if (await hasColumn('nivaro_settings', 'session_policy')) {
@@ -179,8 +180,8 @@ export async function getSessionPolicy(): Promise<SessionPolicy | null> {
       value = parseSessionPolicy(row?.session_policy)
     }
   } catch {
-    value = cache?.value ?? null
+    value = cache.value?.value ?? null
   }
-  cache = { at: Date.now(), value }
+  cache.value = { at: Date.now(), value }
   return value
 }

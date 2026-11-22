@@ -14,6 +14,7 @@ import { agentHealth as realAgentHealth } from '../docker/agent-client.js'
 import type { AgentHealth } from '../docker/agent-types.js'
 import { environmentNames, type StackEdge } from '../docker/render-spec.js'
 import { databaseRecordId } from '../docker/stack-env.js'
+import { defaultStackGatherDeps, type StackGatherDeps, UNREADABLE } from '../docker/stack-gather.js'
 import {
   openStackSecrets,
   otherEnvironmentNames,
@@ -79,8 +80,12 @@ const READINESS_TIMEOUT_MS = 10_000
  *  at once. */
 const IDENTITY_CHECK_MAX = 25
 const IDENTITY_CHECK_PARALLEL = 4
-/** The whole collision pass ends after this; what it did not reach counts as unchecked. */
-const IDENTITY_CHECK_BUDGET_MS = 30_000
+/**
+ * The whole collision pass ends after this; what it did not reach counts as unchecked. 15 s keeps
+ * a plan read under 40 s at worst (N-1): sides 5 s (agent health, both at once) + target 15 s
+ * (status 8 s ∥ db check 15 s) + this pass 15 s = 35 s; the source (≤ 15 s) runs beside it.
+ */
+export const IDENTITY_CHECK_BUDGET_MS = 15_000
 
 export interface MoveGatherDeps {
   /** The deployment link client of a shared deployment. */
@@ -97,6 +102,8 @@ export interface MoveGatherDeps {
   ownLocks?: boolean
   /** The shared tenant list (tests make it fail). */
   tenants?: typeof tenantsOf
+  /** What a Docker environment's stack last deployed at a version (stack-gather). */
+  deployedBuild?: StackGatherDeps['deployedBuild']
   /** The identity-collision pass: how many other apps, how many at once, its total budget. */
   identity?: { max?: number; parallel?: number; budgetMs?: number }
 }
@@ -531,7 +538,8 @@ async function dedicatedSourceFacts(
   ctx: Ctx,
   env: { base_url: string },
   sealedToken: string | null,
-  side: PlacementSide
+  side: PlacementSide,
+  versionPin: string | null
 ): Promise<MoveSourceFacts> {
   const redisAndStorage =
     side.kind === 'docker' && side.stack
@@ -539,11 +547,44 @@ async function dedicatedSourceFacts(
       : { redis: null, storage: null }
   const base: MoveSourceFacts = {
     ...NO_SOURCE,
+    // Set below for a Docker stack (what it last deployed); a GitLab placement's builds are unknown.
+    extension_pins: null,
     redis: redisAndStorage.redis,
     // The readiness report names env-driven object storage itself (ENV_OBJECT_STORAGE).
     storage_provider: null
   }
   if (!sealedToken) return { ...base, error: 'NO_HUB_TOKEN' }
+  const facts = await linkedSourceFacts(ctx, env, sealedToken, base)
+  if (side.kind === 'docker')
+    facts.extension_pins = await deployedPins(ctx, facts.version ?? versionPin)
+  return facts
+}
+
+/**
+ * The extension image pins a Docker source's stack last deployed at `version` (M-B: what runs,
+ * not the configured pins an unapplied edit may have changed). null = unknown: no recorded docker
+ * deploy of that version, or its stored plan cannot be read (EXTENSION_PIN_UNVERIFIED).
+ */
+async function deployedPins(
+  ctx: Ctx,
+  version: string | null
+): Promise<Record<string, string> | null> {
+  if (!version) return null
+  try {
+    const read = ctx.deps.deployedBuild ?? defaultStackGatherDeps().deployedBuild
+    const build = await read(ctx.envId, version)
+    return build && build !== UNREADABLE ? { ...build.extensions } : null
+  } catch {
+    return null
+  }
+}
+
+async function linkedSourceFacts(
+  ctx: Ctx,
+  env: { base_url: string },
+  sealedToken: string,
+  base: MoveSourceFacts
+): Promise<MoveSourceFacts> {
   let token: string | null
   try {
     token = openSecret(sealedToken)
@@ -584,6 +625,10 @@ async function dbWire(recordId: number | null): Promise<DbWire | null> {
   }
 }
 
+function pinsOf(all: Record<string, string>, ids: string[]): Record<string, string> {
+  return Object.fromEntries(ids.filter((x) => typeof all[x] === 'string').map((x) => [x, all[x]]))
+}
+
 async function sharedSourceFacts(
   ctx: Ctx,
   shared: SharedDeployment,
@@ -597,38 +642,30 @@ async function sharedSourceFacts(
     storage_provider: sharedStorage(shared),
     redis: await sharedRedis(shared),
     // The app runs the deployment's pins of the extensions it uses.
-    extensions: Object.fromEntries(
-      appExtensions
-        .filter((x) => typeof shared.extension_pins[x] === 'string')
-        .map((x) => [x, shared.extension_pins[x]])
-    )
+    extensions: pinsOf(shared.extension_pins, appExtensions),
+    extension_pins: pinsOf(shared.extension_pins, appExtensions)
   }
-  try {
-    const st = await client.appStatus(tenantId)
-    Object.assign(out, {
-      reachable: true,
-      version: st.version,
-      key_fp: st.key_fp,
-      files: st.files
-    })
-  } catch (err) {
-    return { ...out, error: codeOf(err, 'LINK_UNREACHABLE') }
-  }
-  try {
-    out.oidc = (await client.status()).oidc
-  } catch {
+  // The three link calls at once (N-1): the slowest bounds the read, not their sum.
+  const wire = await dbWire(recordId)
+  const [st, status, check] = await Promise.allSettled([
+    client.appStatus(tenantId),
+    client.status(),
+    wire ? client.dbCheck(wire) : Promise.resolve(null)
+  ])
+  if (st.status === 'rejected') return { ...out, error: codeOf(st.reason, 'LINK_UNREACHABLE') }
+  Object.assign(out, {
+    reachable: true,
+    version: st.value.version,
+    key_fp: st.value.key_fp,
+    files: st.value.files
+  })
+  if (status.status === 'fulfilled') out.oidc = status.value.oidc
+  else {
     // Unknown, not "no issuer" (M-10).
     out.oidc = null
     out.oidc_unread = true
   }
-  const wire = await dbWire(recordId)
-  if (wire) {
-    try {
-      out.db_identity = (await client.dbCheck(wire)).db_identity
-    } catch {
-      out.db_identity = null
-    }
-  }
+  out.db_identity = check.status === 'fulfilled' ? (check.value?.db_identity ?? null) : null
   return out
 }
 
@@ -676,7 +713,10 @@ async function sharedTargetFacts(
   }
   if (shared.mode === 'docker' && shared.driver_id != null) {
     const driver = await getDriver(shared.driver_id)
-    if (driver?.kind === 'docker') out.multi_node = multiNode((await healthOf(ctx, driver)).h)
+    const h = driver?.kind === 'docker' ? (await healthOf(ctx, driver)).h : null
+    // An agent the Hub cannot read is unknown, not "one node" (N-2, P6-15).
+    if (h) out.multi_node = multiNode(h)
+    else out.multi_node_unread = true
   }
 
   let rows: Awaited<ReturnType<typeof tenantsOf>> = []
@@ -688,30 +728,32 @@ async function sharedTargetFacts(
   const others = rows.filter((r) => r.env.id !== ctx.envId)
   out.siblings = others.filter((r) => r.app.id === app.id).map((r) => r.env.key)
 
-  try {
-    const st = await client.status()
-    out.version = st.version
-    out.oidc = st.oidc
-  } catch (err) {
-    return { ...out, reachable: false, error: codeOf(err, 'LINK_UNREACHABLE') }
-  }
+  // The status and the database check at once (N-1).
+  const wire = recordId == null ? null : await dbWire(recordId)
+  const [st, check] = await Promise.allSettled([
+    client.status(),
+    wire ? client.dbCheck(wire) : Promise.resolve(null)
+  ])
+  if (st.status === 'rejected')
+    return { ...out, reachable: false, error: codeOf(st.reason, 'LINK_UNREACHABLE') }
+  out.version = st.value.version
+  out.oidc = st.value.oidc
 
   if (recordId == null) return out
-  const wire = await dbWire(recordId)
   if (!wire) {
     // The record exists but the Hub cannot open its connection: never read as a pass (R2).
     out.db = { reachable: false, identity: null, error: 'CONNECTION_UNREADABLE' }
     return out
   }
-  try {
-    const answer = await client.dbCheck(wire)
+  if (check.status === 'fulfilled' && check.value) {
+    const answer = check.value
     out.db = {
       reachable: answer.reachable,
       identity: answer.db_identity,
       error: answer.reachable ? null : 'DB_UNREACHABLE'
     }
-  } catch (err) {
-    const code = codeOf(err, 'LINK_UNREACHABLE')
+  } else {
+    const code = codeOf(check.status === 'rejected' ? check.reason : null, 'LINK_UNREACHABLE')
     if (code === 'BAD_DB_CLIENT' || code === 'BAD_DB_CONNECTION' || code === 'APP_UNREACHABLE')
       out.db = { reachable: false, identity: null, error: code }
     else return { ...out, reachable: false, error: code }
@@ -864,12 +906,14 @@ export async function gatherMovePlanInput(
 
   const ctx: Ctx = { envId, deps, health: new Map(), problems: [], failed: [] }
 
-  // The sides.
-  let from: PlacementSide
+  // The sides, both at once (each may read a Docker agent's health: N-1).
   /** The shared deployments as stored (full settings: Redis and storage are judged on them). */
-  let fromShared: SharedDeployment | null = null
-  let toShared: SharedDeployment | null = null
-  if (current.kind === 'shared') {
+  const stored: { from: SharedDeployment | null; to: SharedDeployment | null } = {
+    from: null,
+    to: null
+  }
+  const readFrom = async (): Promise<PlacementSide> => {
+    if (current.kind !== 'shared') return dedicatedSide(ctx, current, 'source')
     const s = await getShared(current.shared_deployment_id)
     if (!s)
       throw new MoveError(
@@ -877,17 +921,16 @@ export async function gatherMovePlanInput(
         'The shared deployment this environment runs on no longer exists.',
         409
       )
-    fromShared = s
-    from = await sharedSide(ctx, s)
-  } else from = await dedicatedSide(ctx, current, 'source')
-
-  let toSide: PlacementSide
-  if (target.kind === 'shared') {
-    const s = await getShared(target.shared_id)
-    if (!s) throw new MoveError('NOT_FOUND', 'No such shared deployment.', 404)
-    toShared = s
-    toSide = await sharedSide(ctx, s)
-  } else {
+    stored.from = s
+    return sharedSide(ctx, s)
+  }
+  const readTo = async (): Promise<PlacementSide> => {
+    if (target.kind === 'shared') {
+      const s = await getShared(target.shared_id)
+      if (!s) throw new MoveError('NOT_FOUND', 'No such shared deployment.', 404)
+      stored.to = s
+      return sharedSide(ctx, s)
+    }
     const p = await getPlacement(target.placement_id)
     if (!p) throw new MoveError('NOT_FOUND', 'No such placement.', 404)
     if (p.kind === 'shared')
@@ -895,8 +938,11 @@ export async function gatherMovePlanInput(
         'BAD_TARGET',
         'That placement is on a shared deployment: name the shared deployment (to.kind shared) instead.'
       )
-    toSide = await dedicatedSide(ctx, p, 'target')
+    return dedicatedSide(ctx, p, 'target')
   }
+  const [from, toSide] = await Promise.all([readFrom(), readTo()])
+  const fromShared = stored.from
+  const toShared = stored.to
   const kind = kindOf(from, target)
 
   // The Hub's own records.
@@ -937,7 +983,13 @@ export async function gatherMovePlanInput(
   const [source, targetFacts] = await Promise.all([
     fromShared
       ? sharedSourceFacts(ctx, fromShared, tenantId, readyRecord, app.extensions)
-      : dedicatedSourceFacts(ctx, env, (row.hub_token as string | null) ?? null, from),
+      : dedicatedSourceFacts(
+          ctx,
+          env,
+          (row.hub_token as string | null) ?? null,
+          from,
+          env.version_pin
+        ),
     toSide.kind !== 'shared'
       ? dedicatedTargetFacts(ctx, toSide, toSide.placement.id)
       : sharedTargetFacts(ctx, toShared ?? toSide.shared, app, readyRecord, poolAsked)

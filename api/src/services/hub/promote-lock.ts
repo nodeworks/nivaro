@@ -127,6 +127,18 @@ export function lockHolderRefusal(
   return fallback
 }
 
+/**
+ * A lock holder read that failed (Redis down): 503 LOCK_UNAVAILABLE. holder() throws this rather
+ * than answer null, which every caller reads as "nobody holds it".
+ */
+export function lockUnreadable(): PromotionError {
+  return new PromotionError(
+    'LOCK_UNAVAILABLE',
+    'The Hub cannot reach Redis to tell who holds this lock — try again shortly',
+    503
+  )
+}
+
 /** The slice of ioredis the lock needs. */
 export interface PromoteRedis {
   set(key: string, value: string, ...args: Array<string | number>): Promise<unknown>
@@ -142,7 +154,10 @@ export interface PromoteLock {
    * `holder` is recorded in the lock value (default 'promotion').
    */
   take(envId: number, holder?: LockHolder): Promise<string | null>
-  /** Who holds the environment's lock now; null when no one, or it cannot be told. */
+  /**
+   * Who holds the environment's lock now; null when no one (or an older value that names no
+   * holder). A Redis error throws PromotionError LOCK_UNAVAILABLE (503): never read as free.
+   */
   holder?(envId: number): Promise<LockHolder | null>
   /** Extends the lock while `token` still holds it; false when it no longer does. */
   renew(envId: number, token: string): Promise<boolean>
@@ -205,11 +220,14 @@ export function redisPromoteLock(redis: PromoteRedis): PromoteLock {
       }
     },
     async holder(envId) {
+      let value: string | null
       try {
-        return holderOf(await redis.get(hubPromoteLockKey(envId)))
+        value = await redis.get(hubPromoteLockKey(envId))
       } catch {
-        return null
+        // Never null ("free"): a holder that cannot be read refuses (T15 round 2).
+        throw lockUnreadable()
       }
+      return holderOf(value)
     },
     async requestCancel(deployId) {
       await Promise.resolve(
@@ -326,7 +344,8 @@ export function sharedLockRefusal(holder: SharedLockHolder | null): {
 export interface SharedLock {
   /** A token when this caller now holds the deployment's lock; null when someone else does. */
   take(sharedId: number, holder: SharedLockHolder): Promise<string | null>
-  /** Who holds the deployment's lock now; null when no one, or it cannot be told. */
+  /** Who holds the deployment's lock now; null when no one. A Redis error throws
+   *  PromotionError LOCK_UNAVAILABLE (503): never read as free. */
   holder(sharedId: number): Promise<SharedLockHolder | null>
   /** Extends the lock while `token` still holds it; false when it no longer does. */
   renew(sharedId: number, token: string): Promise<boolean>
@@ -383,11 +402,14 @@ export function sharedLock(redis: PromoteRedis | null): SharedLock {
       return ok === 'OK' ? token : null
     },
     async holder(id) {
+      let value: string | null
       try {
-        return sharedHolderOf(await redis.get(hubSharedLockKey(id)))
+        value = await redis.get(hubSharedLockKey(id))
       } catch {
-        return null
+        // Never null ("free"): a holder that cannot be read refuses (T15 round 2).
+        throw lockUnreadable()
       }
+      return sharedHolderOf(value)
     },
     async renew(id, token) {
       try {

@@ -45,13 +45,17 @@ const { sealStoredConnection } = await import('../../../services/hub/db/stored-c
 const { sealSecret } = await import('../../../services/hub/secrets.js')
 const { keyFingerprint } = await import('../../../services/app-key-fingerprint.js')
 const { DeploymentLinkError } = await import('../../../services/hub/shared/deployment-client.js')
-const { memoryPromoteLock } = await import('../../../services/hub/promote-lock.js')
+const { memoryPromoteLock, redisPromoteLock, sharedLock } = await import(
+  '../../../services/hub/promote-lock.js'
+)
 
 const HUB_KEY = 'e'.repeat(64)
 const APP_KEY = 'ab'.repeat(32)
 const HUB_TOKEN = 'hubtoken-plain-0123456789-abcdefghijklmnop'
 const saved = { HUB: process.env.HUB, KEY: process.env.ENCRYPTION_KEY }
 const IDENTITY = 'pg|10.0.0.5|5432|shop'
+/** An extension image pin (ruling P6-16). */
+const X_PIN = `registry.example.com/ext-x@sha256:${'1'.repeat(64)}`
 
 let seq = 0
 async function insertId(table: string, row: Record<string, unknown>): Promise<number> {
@@ -89,7 +93,7 @@ async function newShared(o: Record<string, unknown> = {}): Promise<number> {
     driver_id: dockerDriver,
     link_url: 'https://pool.internal.example.com',
     extensions: ['x'],
-    extension_pins: { x: '1.2.0' },
+    extension_pins: { x: X_PIN },
     host_pattern: '*.apps.example.com',
     ...o
   })
@@ -134,6 +138,7 @@ async function newEnv(o: Record<string, unknown> = {}) {
     base_url: `https://shop${seq}.apps.example.com`,
     hostnames: '[]',
     version_pin: '0.3.210',
+    extension_pins: JSON.stringify({ x: X_PIN }),
     hub_token: sealSecret(HUB_TOKEN),
     ...o
   })
@@ -372,6 +377,47 @@ describe('gatherMovePlanInput — to_shared from a Docker stack', () => {
     expect(input.app_key).toEqual({ known: false, fp: null, unreadable: true })
   })
 
+  it('extension pins: a Docker source reads its own, a GitLab source has none (P6-16)', async () => {
+    const sharedId = await newShared()
+    const placement = await dockerPlacement('shop-px')
+    const e = await newEnv({ placement_id: placement, db_ref: `hub-db:${await newDb()}` })
+    // M-B: what the stack last deployed, not the configured pins (a pin edited, not applied yet).
+    const DEPLOYED = `registry.example.com/ext-x@sha256:${'3'.repeat(64)}`
+    const deployed = async (plan: string) =>
+      insertId('nivaro_hub_deploys', {
+        app_id: e.appId,
+        environment_id: e.id,
+        kind: 'promote',
+        version: '0.3.210',
+        status: 'success',
+        plan
+      })
+    const read = async () =>
+      (await Gather.gatherMovePlanInput(e.id, { kind: 'shared', shared_id: sharedId }, deps()))
+        .source.extension_pins
+    // No recorded deploy: unknown.
+    expect(await read()).toBeNull()
+    await deployed(
+      JSON.stringify({ steps: [{ driver: 'docker', stack: { extensions: { x: DEPLOYED } } }] })
+    )
+    expect(await read()).toEqual({ x: DEPLOYED })
+    // The newest deploy's plan cannot be read: unknown, never the older build.
+    await deployed('{not json')
+    expect(await read()).toBeNull()
+    const g = await insertId('nivaro_hub_placements', {
+      kind: 'dedicated',
+      driver_id: gitlabDriver,
+      target: JSON.stringify({ branch: 'deploy' })
+    })
+    const gl = await newEnv({ placement_id: g, db_ref: `hub-db:${await newDb()}` })
+    const glInput = await Gather.gatherMovePlanInput(
+      gl.id,
+      { kind: 'shared', shared_id: sharedId },
+      deps()
+    )
+    expect(glInput.source.extension_pins).toBeNull()
+  })
+
   it('no hub token → NOT_HUB_LINKED (the link is never called)', async () => {
     const sharedId = await newShared()
     const placement = await dockerPlacement('shop-a')
@@ -406,6 +452,24 @@ describe('gatherMovePlanInput — to_shared from a Docker stack', () => {
       error: 'CONNECTION_UNREADABLE'
     })
     expect(buildMovePlan(input).blockers.map((b) => b.code)).toContain('DB_UNREACHABLE_FROM_TARGET')
+  })
+
+  it('a docker shared target whose agent cannot be read → multi_node_unread (N-2)', async () => {
+    const sharedId = await newShared()
+    const placement = await dockerPlacement('shop-mn')
+    const e = await newEnv({ placement_id: placement, db_ref: `hub-db:${await newDb()}` })
+    const input = await Gather.gatherMovePlanInput(
+      e.id,
+      { kind: 'shared', shared_id: sharedId },
+      deps({
+        agentHealth: vi.fn(async () => {
+          throw new Error('agent down')
+        })
+      })
+    )
+    expect(input.target_facts.multi_node).toBeNull()
+    expect(input.target_facts.multi_node_unread).toBe(true)
+    expect(buildMovePlan(input).warnings.map((w) => w.code)).toContain('MULTI_NODE_UNVERIFIED')
   })
 
   it('a target whose link is down → TARGET_UNREACHABLE', async () => {
@@ -657,6 +721,32 @@ describe('gatherMovePlanInput — to_shared from a Docker stack', () => {
     expect(input.locks.shared[0].holder).toBe('unreadable')
   })
 
+  it('real Redis locks whose holder cannot be read show as unreadable in the plan (round 2)', async () => {
+    const sharedId = await newShared()
+    const placement = await dockerPlacement('shop-rd')
+    const e = await newEnv({ placement_id: placement, db_ref: `hub-db:${await newDb()}` })
+    const down = {
+      set: async () => null,
+      get: async () => {
+        throw new Error('ECONNREFUSED')
+      },
+      del: async () => 0,
+      exists: async () => 1,
+      eval: async () => 0
+    }
+    const input = await Gather.gatherMovePlanInput(
+      e.id,
+      { kind: 'shared', shared_id: sharedId },
+      deps({ lock: redisPromoteLock(down), sharedLock: sharedLock(down) })
+    )
+    expect(input.locks.env).toBe('unreadable')
+    expect(input.locks.shared[0].holder).toBe('unreadable')
+    const plan = buildMovePlan(input)
+    expect(plan.blockers.map((b) => b.code)).toEqual(
+      expect.arrayContaining(['BUSY', 'SHARED_BUSY'])
+    )
+  })
+
   it('a lock held on the environment → BUSY; ownLocks ignores a move holder', async () => {
     const sharedId = await newShared()
     const placement = await dockerPlacement('shop-f')
@@ -751,6 +841,49 @@ describe('gatherMovePlanInput — to_dedicated and between_shared', () => {
       await Gather.gatherMovePlanInput(e.id, { kind: 'shared', shared_id: b }, deps())
     )
     expect(retired.blockers.map((x) => x.code)).toContain('SHARED_NOT_ACTIVE')
+  })
+})
+
+describe('gatherMovePlanInput — time (N-1)', () => {
+  it('the identity pass budget is 15 s', () => {
+    expect(Gather.IDENTITY_CHECK_BUDGET_MS).toBe(15_000)
+  })
+
+  it('the link calls of each shared side start together, not one after another', async () => {
+    const a = await newShared()
+    const b = await newShared()
+    const e = await newEnv({
+      placement_id: await sharedPlacement(a),
+      db_ref: `hub-db:${await newDb()}`
+    })
+    const base = fakeClient().factory()
+    const events: string[] = []
+    const slow =
+      <T>(name: string, fn: () => Promise<T>) =>
+      async () => {
+        events.push(`start:${name}`)
+        await new Promise((r) => setTimeout(r, 30))
+        events.push(`end:${name}`)
+        return fn()
+      }
+    const clientFor = (s: { id: number }) => {
+      const side = s.id === a ? 'src' : 'tgt'
+      return {
+        status: slow(`${side}.status`, () => base.status()),
+        appStatus: (id: string) => slow(`${side}.appStatus`, () => base.appStatus(id))(),
+        dbCheck: (w: { client: string; connection: string }) =>
+          slow(`${side}.dbCheck`, () => base.dbCheck(w))()
+      }
+    }
+    await Gather.gatherMovePlanInput(
+      e.id,
+      { kind: 'shared', shared_id: b },
+      deps({ client: clientFor as never })
+    )
+    const firstEnd = events.findIndex((x) => x.startsWith('end:'))
+    const startedBefore = events.slice(0, firstEnd)
+    for (const n of ['src.status', 'src.appStatus', 'src.dbCheck', 'tgt.status', 'tgt.dbCheck'])
+      expect(startedBefore).toContain(`start:${n}`)
   })
 })
 

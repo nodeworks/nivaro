@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { db } from '../db/index.js'
+import { appBox } from './app-state.js'
 
 /**
  * Auto-record on a signal (#1371). When something says "this is going wrong
@@ -85,12 +86,12 @@ function storeOf(redis: AutoStore | null | undefined): AutoStore {
 /** Test seam. */
 export function resetAutoSignalsForTest(): void {
   fallback = null
-  cachedOn = null
+  cachedOn.value = null
 }
 
-let cachedOn: { on: boolean; at: number } | null = null
+const cachedOn = appBox<{ on: boolean; at: number } | null>(() => null)
 export async function autoSignalsOn(now = Date.now()): Promise<boolean> {
-  if (cachedOn && now - cachedOn.at < 30_000) return cachedOn.on
+  if (cachedOn.value && now - cachedOn.value.at < 30_000) return cachedOn.value.on
   let on = false
   try {
     const row = (await db('nivaro_settings').where({ id: 1 }).first()) as
@@ -100,7 +101,7 @@ export async function autoSignalsOn(now = Date.now()): Promise<boolean> {
   } catch {
     on = false
   }
-  cachedOn = { on, at: now }
+  cachedOn.value = { on, at: now }
   return on
 }
 

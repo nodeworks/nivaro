@@ -11,6 +11,7 @@
  */
 import type { OpsTaskDef, OpsTaskOutcome, OpsTaskRunContext } from '@nivaro/extension-kit'
 import { logActivity } from './activity.js'
+import { appMap } from './app-state.js'
 import { clearCancel, isCancelled, requestCancel } from './job-cancel.js'
 import { startJobRun } from './job-runs.js'
 
@@ -39,8 +40,8 @@ export interface OpsTaskRun {
 }
 
 const tasks = new Map<string, Registered>()
-const running = new Map<string, number>()
-const runs = new Map<number, OpsTaskRun>()
+const running = appMap<string, number>()
+const runs = appMap<number, OpsTaskRun>()
 let nextLocalId = -1
 
 export function registerOpsTask(def: OpsTaskDef, owner = 'core'): void {

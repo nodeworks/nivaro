@@ -2,6 +2,7 @@ import { AsyncResource } from 'node:async_hooks'
 import { db } from '../db/index.js'
 import { type OwnerChangeKind, onOwnersChanged } from '../db/owner-signal.js'
 import { runInBackgroundPool } from '../db/pool-context.js'
+import { appBox } from './app-state.js'
 import { selectInChunks, whereInList } from './db-batch.js'
 import { announceRecordAspect, emitToTenant } from './record-events.js'
 import { currentTenantKey } from './tenant-rooms.js'
@@ -141,15 +142,15 @@ function remember(tenant: string, fps: Map<string, string>, now = Date.now()): v
 // ── default dependencies ─────────────────────────────────────────────────────
 
 /** Pipeline-bound collections (cached 60 s): only their records have owners. */
-let boundCache: { at: number; set: Set<string> } | null = null
+const boundCache = appBox<{ at: number; set: Set<string> } | null>(() => null)
 async function boundCollections(): Promise<Set<string>> {
-  if (boundCache && Date.now() - boundCache.at < 60_000) return boundCache.set
+  if (boundCache.value && Date.now() - boundCache.value.at < 60_000) return boundCache.value.set
   const rows = (await db('nivaro_workflow_bindings').distinct('collection')) as Array<{
     collection: string
   }>
   const set = new Set(rows.map((r) => r.collection))
   set.add('nivaro_addendums')
-  boundCache = { at: Date.now(), set }
+  boundCache.value = { at: Date.now(), set }
   return set
 }
 
@@ -399,7 +400,7 @@ export function resetOwnerLiveForTests(): void {
   lastRun.clear()
   running.clear()
   memos.clear()
-  boundCache = null
+  boundCache.value = null
 }
 
 /**

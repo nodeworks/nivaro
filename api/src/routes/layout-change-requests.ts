@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
+import { appBox } from '../services/app-state.js'
 import { readOne } from '../services/items.js'
 import {
   FORM_CHANGE_CATEGORY,
@@ -60,7 +61,7 @@ async function findCategory(): Promise<CategoryRow | undefined> {
 
 const CORE_EXT = 'nivaro-core'
 const REQUESTS_PER_HOUR = 10
-let creatingCategory: Promise<CategoryRow> | null = null
+const creatingCategory = appBox<Promise<CategoryRow> | null>(() => null)
 
 /**
  * The "Form change" type, made on first use (admins route it like any other type).
@@ -70,7 +71,7 @@ let creatingCategory: Promise<CategoryRow> | null = null
 export async function ensureCategory(): Promise<CategoryRow> {
   const found = await findCategory()
   if (found) return found
-  creatingCategory ??= (async () => {
+  creatingCategory.value ??= (async () => {
     let mine: number | null = null
     try {
       const [row] = (await db('nivaro_task_categories')
@@ -97,9 +98,9 @@ export async function ensureCategory(): Promise<CategoryRow> {
         .catch(() => undefined)
     return winner
   })().finally(() => {
-    creatingCategory = null
+    creatingCategory.value = null
   })
-  return creatingCategory
+  return creatingCategory.value
 }
 
 /** Server-written: which form (and field) a request is about. Never read from the text. */

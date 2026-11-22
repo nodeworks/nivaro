@@ -10,6 +10,7 @@
 import type { Knex } from 'knex'
 import { idText } from '../db/dialect/items-query.js'
 import { db } from '../db/index.js'
+import { appBox, appMap } from './app-state.js'
 
 type QB = Knex.QueryBuilder
 
@@ -110,25 +111,28 @@ export function parseOriginFilter(
 }
 
 // ── the origin column (migration 340) may be absent on an older database ─────
-let originColumn: { value: boolean; at: number } | null = null
+const originColumn = appBox<{ value: boolean; at: number } | null>(() => null)
 
 /** Resolved before the synchronous filter compilers run. A hit is kept for the
  *  life of the process; a miss is asked again after a minute. */
 export async function primeOriginColumn(): Promise<boolean> {
-  if (originColumn && (originColumn.value || Date.now() - originColumn.at < 60_000))
-    return originColumn.value
+  if (
+    originColumn.value &&
+    (originColumn.value.value || Date.now() - originColumn.value.at < 60_000)
+  )
+    return originColumn.value.value
   let value = false
   try {
     value = await db.schema.hasColumn('nivaro_activity', 'origin')
   } catch {
     value = false
   }
-  originColumn = { value, at: Date.now() }
+  originColumn.value = { value, at: Date.now() }
   return value
 }
 
 export function resetOriginColumnProbe(): void {
-  originColumn = null
+  originColumn.value = null
 }
 
 /**
@@ -137,7 +141,7 @@ export function resetOriginColumnProbe(): void {
  * none and matches no origin.
  */
 export function applyOriginFilter(q: QB, collection: string, f: OriginFilter | null): void {
-  if (!f || !originColumn?.value) {
+  if (!f || !originColumn.value?.value) {
     q.whereRaw('1 = 0')
     return
   }
@@ -188,7 +192,7 @@ type RuleRow = Parameters<RiskModule['parseActiveRules']>[0][number] & { collect
 
 let riskModule: RiskModule | null = null
 const RISK_TTL_MS = 15_000
-const primedRisk = new Map<string, { at: number; rows: RuleRow[] }>()
+const primedRisk = appMap<string, { at: number; rows: RuleRow[] }>()
 
 function riskIds(value: unknown): { any: boolean; ids: number[] } {
   let v: unknown = value

@@ -290,15 +290,12 @@ function blockersOf(input: MovePlanInput): Blocker[] {
         'EXTENSION_NOT_ALLOWED',
         `${target.key} does not load ${list(missing)}, which this app uses.`
       )
-    const differ = needed.filter((x) => {
-      const pin = t.extension_pins[x]
-      const runs = s.extensions[x]
-      return t.extensions.includes(x) && !!pin && !!runs && pin !== runs
-    })
+    // Builds are compared as image pins (ruling P6-16), never version text against a digest.
+    const differ = extensionPinsDiffer(input)
     if (differ.length)
       add(
         'EXTENSION_VERSION_DIFFERS',
-        `${target.key} pins another version of ${list(differ.map((x) => `${x} (app ${s.extensions[x]}, deployment ${t.extension_pins[x]})`))}.`
+        `${target.key} installs another build of ${list(differ)} than this app runs now.`
       )
     // The database the tenant list will name.
     if (!input.database)
@@ -447,6 +444,17 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
       'DB_IDENTITY_UNCHECKED',
       `${t.identity_unchecked} other app${t.identity_unchecked === 1 ? '' : 's'} on ${to.shared.key} could not be compared with this app's database (too many to check, a check failed, or time ran out). The Hub cannot rule out that one of them reports the same database.`
     )
+  const unpinned = extensionPinsUnknown(input)
+  if (unpinned.length && to.kind === 'shared')
+    add(
+      'EXTENSION_PIN_UNVERIFIED',
+      `The Hub cannot compare the build of ${list(unpinned)} this app runs now with the one ${to.shared.key} installs: one side names no image pin for it.`
+    )
+  if (t.multi_node_unread)
+    add(
+      'MULTI_NODE_UNVERIFIED',
+      `The Hub could not read the Docker agent of ${sideName(to)}, so it cannot tell whether its swarm has several nodes with local volumes (one copy per node): files copied in could then be missing on another node.`
+    )
   if (t.multi_node !== null)
     add(
       'MULTI_NODE_VOLUMES',
@@ -467,6 +475,32 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
       if (!SHARED_READINESS_BLOCKERS.includes(r.code))
         add(r.code, `${readinessTitle(r.code)}: ${clean(r.detail)}`)
   return out
+}
+
+/** Extensions a shared target pins whose build on the source the Hub cannot see (P6-16). */
+function extensionPinsUnknown(input: MovePlanInput): string[] {
+  const { source: s, target_facts: t } = input
+  if (!toShared(input.kind)) return []
+  const pins = s.extension_pins ?? null
+  const needed = [...new Set([...input.app.extensions, ...Object.keys(s.extensions)])].sort()
+  // A missing pin on either side is unknown, never a pass (P6-15; I-A: a registered target may
+  // list an extension it pins no build for).
+  return needed.filter((x) => t.extensions.includes(x) && (!t.extension_pins[x] || !pins?.[x]))
+}
+
+/** Extensions whose image pins are known on both sides and differ (P6-16). */
+function extensionPinsDiffer(input: MovePlanInput): string[] {
+  const { source: s, target_facts: t } = input
+  if (!toShared(input.kind)) return []
+  const pins = s.extension_pins ?? null
+  const needed = [...new Set([...input.app.extensions, ...Object.keys(s.extensions)])].sort()
+  return needed.filter(
+    (x) =>
+      t.extensions.includes(x) &&
+      !!t.extension_pins[x] &&
+      !!pins?.[x] &&
+      pins[x] !== t.extension_pins[x]
+  )
 }
 
 /** Which side(s) a fact is unknown on, in words; null when both are known. */
@@ -499,6 +533,18 @@ function checklistOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Mov
     out.push({
       id: 'issuer_same',
       text: 'The source and the target sign in with the same issuer (the same Entra tenant).',
+      required: true
+    })
+  if (input.to.kind === 'shared' && extensionPinsUnknown(input).length)
+    out.push({
+      id: 'extension_builds_same',
+      text: `This app runs the same build of ${list(extensionPinsUnknown(input))} as ${input.to.shared.key} installs.`,
+      required: true
+    })
+  if (input.target_facts.multi_node_unread)
+    out.push({
+      id: 'volumes_one_node',
+      text: "The target's stack keeps its files on one node, or on volumes every node shares.",
       required: true
     })
   if (input.source.redis === null || input.target_facts.redis === null)
@@ -552,7 +598,10 @@ function planHash(
     routing,
     route: route.map((a) => [a.side, a.op, a.host ?? null]),
     blockers: blockers.map((b) => b.code).sort(),
-    warnings: warnings.map((w) => w.code).sort()
+    warnings: warnings.map((w) => w.code).sort(),
+    // Which extensions a ticked extension_builds_same covers, and which differ (M-A).
+    extensions_unverified: extensionPinsUnknown(input),
+    extensions_differ: extensionPinsDiffer(input)
   }
   return createHash('sha256').update(JSON.stringify(body)).digest('hex')
 }
