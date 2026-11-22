@@ -171,9 +171,7 @@ function validateGitlabDriverInput(
 }
 
 export function publicDriver(row: HubDriverRow): HubDriver {
-  const secret = maskSecret(row.secret)
-  if (row.kind === 'docker') return { ...row, config: { ...row.config }, secret }
-  return { ...row, config: { ...row.config }, secret }
+  return { ...row, secret: maskSecret(row.secret) }
 }
 
 /** GitCtx for the shared GitLab client: `base` is the host (the client adds /api/v4). */
@@ -222,6 +220,21 @@ export function validatePlacementInput(
     out.stack = target.stack
   }
   return { ok: true, row: { kind: 'dedicated', driver_id: driverId, target: out } }
+}
+
+/**
+ * The target fields a driver kind takes (phase 4): `branch` on a GitLab driver, `stack` on a
+ * Docker one. The other one is refused (BAD_TARGET).
+ */
+export function placementTargetRefusal(
+  kind: HubDriverKind,
+  target: PlacementTarget
+): { ok: false; code: string; message: string } | null {
+  if (kind === 'docker' && target.branch !== undefined)
+    return fail('BAD_TARGET', 'A Docker placement has no target.branch; name its target.stack.')
+  if (kind !== 'docker' && target.stack !== undefined)
+    return fail('BAD_TARGET', 'target.stack is only for a placement on a Docker driver.')
+  return null
 }
 
 function parseObj<T>(raw: unknown, fallback: T): T {

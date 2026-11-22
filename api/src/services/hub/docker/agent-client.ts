@@ -1,5 +1,4 @@
-import type { DockerDriverRow } from '../drivers.js'
-import { DriverMisconfiguredError } from '../drivers.js'
+import { type DockerDriverRow, DriverMisconfiguredError, STACK_NAME_RE } from '../drivers.js'
 import { openSecret } from '../secrets.js'
 import {
   AGENT_API_VERSION,
@@ -34,7 +33,6 @@ export const AGENT_TIMEOUTS = {
 /** Longest answer body the client reads (a status of a large stack stays far below it). */
 const MAX_BODY_BYTES = 4 * 1024 * 1024
 
-const STACK_RE = /^[a-z][a-z0-9-]{1,40}$/
 const CODE_RE = /^[A-Z][A-Z0-9_]{1,63}$/
 
 export type AgentErrorCode =
@@ -76,7 +74,7 @@ type Call = {
 }
 
 function stackPath(name: string): string {
-  if (typeof name !== 'string' || !STACK_RE.test(name))
+  if (typeof name !== 'string' || !STACK_NAME_RE.test(name))
     throw new AgentError('BAD_STACK_NAME', 0, 'The stack name is not one the Hub agent accepts')
   return `/v1/stacks/${name}`
 }
@@ -106,18 +104,43 @@ function isRedirectError(err: unknown): boolean {
   return false
 }
 
+const isAbort = (err: unknown): boolean => {
+  const name = (err as { name?: unknown } | null)?.name
+  return name === 'TimeoutError' || name === 'AbortError'
+}
+
+/**
+ * The answer's JSON, read with a byte count: past MAX_BODY_BYTES the read stops and the body
+ * counts as unreadable (undefined), as does a body that is not JSON. A timeout while reading
+ * throws (the caller turns it into AGENT_UNREACHABLE).
+ */
 async function readBody(res: Response): Promise<unknown> {
-  const len = Number(res.headers?.get?.('content-length') ?? 0)
-  if (len > MAX_BODY_BYTES) return undefined
-  let text: string
-  try {
-    text = await res.text()
-  } catch {
+  if (Number(res.headers.get('content-length') ?? 0) > MAX_BODY_BYTES) {
+    await res.body?.cancel().catch(() => undefined)
     return undefined
   }
-  if (text.length > MAX_BODY_BYTES || !text) return undefined
+  if (!res.body) return undefined
+  const reader = res.body.getReader()
+  const chunks: Uint8Array[] = []
+  let bytes = 0
   try {
-    return JSON.parse(text)
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      bytes += value.byteLength
+      if (bytes > MAX_BODY_BYTES) {
+        await reader.cancel().catch(() => undefined)
+        return undefined
+      }
+      chunks.push(value)
+    }
+  } catch (err) {
+    if (isAbort(err)) throw err
+    return undefined
+  }
+  if (!bytes) return undefined
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'))
   } catch {
     return undefined
   }
@@ -130,6 +153,14 @@ async function call<T>(driver: AgentDriver, c: Call, notFoundNull = false): Prom
   const url = new URL(c.path, `${origin}/`)
   for (const [k, v] of Object.entries(c.query ?? {})) url.searchParams.set(k, v)
   const at = `the Hub agent at ${origin}`
+  const unreachable = (err: unknown, status: number) =>
+    new AgentError(
+      'AGENT_UNREACHABLE',
+      status,
+      isAbort(err)
+        ? `${at} did not answer ${c.what} within ${Math.round(c.timeoutMs / 1000)} s`
+        : `${at} could not be reached for ${c.what}`
+    )
 
   let res: Response
   try {
@@ -158,14 +189,7 @@ async function call<T>(driver: AgentDriver, c: Call, notFoundNull = false): Prom
       throw err
     if (isRedirectError(err))
       throw new AgentError('AGENT_REDIRECT', 0, `${at} answered ${c.what} with a redirect`)
-    const timedOut = (err as { name?: unknown } | null)?.name === 'TimeoutError'
-    throw new AgentError(
-      'AGENT_UNREACHABLE',
-      0,
-      timedOut
-        ? `${at} did not answer ${c.what} within ${Math.round(c.timeoutMs / 1000)} s`
-        : `${at} could not be reached for ${c.what}`
-    )
+    throw unreachable(err, 0)
   }
 
   const status = res.status
@@ -173,7 +197,12 @@ async function call<T>(driver: AgentDriver, c: Call, notFoundNull = false): Prom
     await res.body?.cancel().catch(() => undefined)
     throw new AgentError('AGENT_REDIRECT', status, `${at} answered ${c.what} with a redirect`)
   }
-  const body = await readBody(res)
+  let body: unknown
+  try {
+    body = await readBody(res)
+  } catch (err) {
+    throw unreachable(err, status)
+  }
   if (status === 401 || status === 429)
     throw new AgentError(
       'AGENT_REFUSED',

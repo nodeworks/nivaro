@@ -9,6 +9,7 @@ import { validateDockerDriverInput } from '../../../services/hub/docker/driver-c
 import {
   type DockerDriverRow,
   driverCtx,
+  placementTargetRefusal,
   publicDriver,
   validateDriverInput,
   validatePlacementInput
@@ -171,6 +172,29 @@ describe('docker driver validation', () => {
     })
   })
 
+  it('SECRET_REQUIRED on a scheme change or a port change of the agent', () => {
+    const plain = stored({
+      config: {
+        agent_url: 'https://hub-agent:8443',
+        dns_mode: 'manual',
+        wildcard_domain: null,
+        edge_target: 'edge.example.com'
+      }
+    })
+    expect(
+      validateDriverInput({ config: { agent_url: 'http://hub-agent:8443' } }, plain)
+    ).toMatchObject({ ok: false, code: 'SECRET_REQUIRED' })
+    expect(
+      validateDriverInput({ config: { agent_url: 'https://hub-agent:9443' } }, plain)
+    ).toMatchObject({ ok: false, code: 'SECRET_REQUIRED' })
+    expect(
+      validateDriverInput(
+        { config: { agent_url: 'https://agent.example.com:9443' }, secret: HUB_MASK },
+        stored()
+      )
+    ).toMatchObject({ ok: false, code: 'SECRET_REQUIRED' })
+  })
+
   it('validateDockerDriverInput is the docker branch of validateDriverInput', () => {
     expect(validateDockerDriverInput({ name: 'S', config: auto, secret: TOKEN }).ok).toBe(true)
     expect(validateDockerDriverInput({ name: '', config: auto })).toMatchObject({
@@ -219,6 +243,18 @@ describe('placement target.stack', () => {
       ok: true,
       row: { target: { branch: 'production' } }
     })
+  })
+
+  it('stack only on docker, branch only on gitlab → BAD_TARGET', () => {
+    expect(placementTargetRefusal('gitlab', { stack: 'efp-prod' })).toMatchObject({
+      code: 'BAD_TARGET'
+    })
+    expect(placementTargetRefusal('docker', { branch: 'production' })).toMatchObject({
+      code: 'BAD_TARGET'
+    })
+    expect(placementTargetRefusal('docker', { stack: 'efp-prod' })).toBeNull()
+    expect(placementTargetRefusal('gitlab', { branch: 'production' })).toBeNull()
+    expect(placementTargetRefusal('docker', {})).toBeNull()
   })
 
   it('refuses a bad stack name → BAD_TARGET', () => {

@@ -22,7 +22,9 @@ import {
   appsOfPlacement,
   createComponent,
   deleteComponent,
+  followPlacementDriver,
   listComponents,
+  placementDriverRefusal,
   readComponent,
   updateComponent,
   validateComponentInput
@@ -43,6 +45,7 @@ import {
   getDriver,
   getPlacement,
   listDrivers,
+  placementTargetRefusal,
   publicDriver,
   releasePlacement,
   updateDriver,
@@ -718,7 +721,10 @@ function placementRoutes(app: FastifyInstance) {
   app.post('/placements', { preHandler: requireAdmin }, async (req, reply) => {
     const checked = validatePlacementInput(body(req))
     if (!checked.ok) return fail(reply, 400, checked.code, checked.message)
-    if (!(await getDriver(checked.row.driver_id))) return noDriver(reply)
+    const driver = await getDriver(checked.row.driver_id)
+    if (!driver) return noDriver(reply)
+    const badTarget = placementTargetRefusal(driver.kind, checked.row.target)
+    if (badTarget) return fail(reply, 400, badTarget.code, badTarget.message)
     const created = await createPlacement(checked.row)
     await logActivity({
       action: 'create',
@@ -748,10 +754,20 @@ function placementRoutes(app: FastifyInstance) {
       target: b.target ?? existing.target
     })
     if (!checked.ok) return fail(reply, 400, checked.code, checked.message)
-    if (checked.row.driver_id !== existing.driver_id && !(await getDriver(checked.row.driver_id)))
-      return noDriver(reply)
+    const moved = checked.row.driver_id !== existing.driver_id
+    const driver = await getDriver(checked.row.driver_id)
+    if (moved && !driver) return noDriver(reply)
+    if (driver) {
+      const badTarget = placementTargetRefusal(driver.kind, checked.row.target)
+      if (badTarget) return fail(reply, 400, badTarget.code, badTarget.message)
+    }
+    if (moved) {
+      const mixed = await placementDriverRefusal(id, checked.row.driver_id)
+      if (mixed) return fail(reply, mixed.status, mixed.code, mixed.message)
+    }
     const updated = await updatePlacement(id, checked.row)
     if (!updated) return notFound(reply)
+    if (moved) await followPlacementDriver(id, checked.row.driver_id)
     await logActivity({
       action: 'update',
       user: userId(req),

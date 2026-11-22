@@ -242,6 +242,42 @@ describe('hub agent client', () => {
     expect((await refusal(() => agentStack(d(), 'efp-prod'))).code).toBe('AGENT_ERROR')
   })
 
+  it('a body past 4 MB is not read to the end → AGENT_INCOMPATIBLE', async () => {
+    let pulled = 0
+    const chunk = new Uint8Array(1024 * 1024).fill(0x20)
+    answer = () =>
+      new Response(
+        new ReadableStream({
+          pull(ctl) {
+            pulled++
+            if (pulled > 50) ctl.close()
+            else ctl.enqueue(chunk)
+          }
+        }),
+        { status: 200 }
+      )
+    expect((await refusal(() => agentHealth(d()))).code).toBe('AGENT_INCOMPATIBLE')
+    expect(pulled).toBeLessThan(10)
+  })
+
+  it('a timeout while reading the body → AGENT_UNREACHABLE', async () => {
+    answer = () =>
+      new Response(
+        new ReadableStream({
+          start(ctl) {
+            ctl.enqueue(new TextEncoder().encode('{"api":'))
+          },
+          pull(ctl) {
+            ctl.error(new DOMException('The operation was aborted due to timeout', 'TimeoutError'))
+          }
+        }),
+        { status: 200 }
+      )
+    const e = await refusal(() => agentStack(d(), 'efp-prod'))
+    expect(e.code).toBe('AGENT_UNREACHABLE')
+    expect(e.message).toMatch(/10 s/)
+  })
+
   it('never puts the URL query in an error', async () => {
     answer = () => {
       throw new TypeError('fetch failed')
