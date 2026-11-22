@@ -401,7 +401,7 @@ export const SHARED_COPY: Record<string, { title: string; hint?: string }> = {
   BAD_BUDGET: { title: 'The pool budget is a whole number from 1 to 500' },
   BAD_EXTENSIONS: {
     title: 'An extension or pin is not valid',
-    hint: 'Extension ids are lower-case letters, digits and hyphens; a pin names a listed extension.'
+    hint: 'Extension ids are lower-case letters, digits and hyphens; a pin names a listed extension and its image by digest (repo@sha256:…).'
   },
   BAD_STACK: {
     title: 'The stack name is not valid',
