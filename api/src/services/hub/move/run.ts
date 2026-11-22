@@ -228,6 +228,10 @@ async function releaseLocks(held: Held, e: Env): Promise<void> {
   await e.lock.release(held.envId, held.envToken).catch(() => undefined)
 }
 
+function lockTokens(held: Held): NonNullable<MoveSteps['locks']> {
+  return { env: held.envToken, shared: held.shared.map((x) => ({ id: x.id, token: x.token })) }
+}
+
 /** The shared deployment ids of a move's two sides. */
 async function sharedIdsOf(fromPlacementId: number, toPlacementId: number) {
   const [from, to] = await Promise.all([getPlacement(fromPlacementId), getPlacement(toPlacementId)])
@@ -411,7 +415,9 @@ export async function startMove(
     const steps: MoveSteps = {
       ...freshSteps(plan.steps),
       created_placement: created,
-      addresses
+      addresses,
+      // I-3: heal frees exactly these locks (compare-and-delete) once the heartbeat is stale.
+      locks: lockTokens(held)
     }
     const startedAt = new Date(e.now())
     const moveId = Number(
@@ -552,7 +558,14 @@ async function drive(
       if (!(await e.sharedLock.renew(s.id, s.token).catch(() => true))) sharedOk = false
     if (!ok || !sharedOk) ctx.lockLost = true
     const at = new Date(e.now())
-    await patchMove(moveId, { heartbeat_at: at }, { status: ['running', 'waiting'] }).catch(() => 0)
+    // Review minor 2: a run another replica healed (its heartbeat looked stale) stops at its next
+    // boundary instead of writing over `interrupted`; heal also freed its locks.
+    const beatRows = await patchMove(
+      moveId,
+      { heartbeat_at: at },
+      { status: ['running', 'waiting'] }
+    ).catch(() => 1)
+    if (beatRows === 0 && (await readMove(moveId))?.status === 'interrupted') ctx.lockLost = true
     await db(DEPLOYS)
       .where({ id: ctx.deployId, status: 'running' })
       .update({ heartbeat_at: at })
@@ -1161,6 +1174,7 @@ async function restart(
   let handedOff = false
   try {
     const steps = structuredClone(move.steps)
+    steps.locks = lockTokens(held)
     if (way === 'rollback' && steps.phase !== 'rollback') {
       steps.phase = 'rollback'
       steps.undo_reason = 'cancelled'

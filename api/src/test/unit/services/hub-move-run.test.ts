@@ -840,6 +840,94 @@ describe('heal and resume', () => {
     expect((await readMove(move_id))?.status).toBe('success')
   })
 
+  // I-3 / I-5: a run that died at any step, still holding its locks, is healed: interrupted, its
+  // own locks freed (compare-and-delete with its tokens), and resume continues at that step.
+  const FIRST_OP: Record<string, string> = {
+    check: 'databaseIdentity',
+    place_on_target: 'placeOnTarget',
+    files_warm: 'pullFiles',
+    maintenance_on: 'sourceMaintenance',
+    wait_idle: 'sourceBusy',
+    files_delta: 'pullFiles',
+    target_ready: 'targetMaintenance',
+    route: 'route',
+    verify: 'verifyName',
+    release: 'targetMaintenance',
+    retire_source: 'retireSource'
+  }
+  for (const key of MOVE_STEPS.to_shared.filter((k) => k !== 'done'))
+    it(`heal at ${key}: a dead run holding its locks → interrupted, locks freed, resume from ${key}`, async () => {
+      plan = planOf('to_shared')
+      const w = await world('docker')
+      const { move_id } = await start(w, toFor('to_shared', w))
+      await Run.awaitMove(move_id)
+      const m0 = (await readMove(move_id)) as NonNullable<Awaited<ReturnType<typeof readMove>>>
+      const steps = structuredClone(m0.steps)
+      const at = steps.list.findIndex((x) => x.key === key)
+      steps.list.forEach((x, i) => {
+        x.state = i < at ? 'done' : i === at ? 'running' : 'pending'
+      })
+      steps.phase = 'forward'
+      const released = at > steps.list.findIndex((x) => x.key === 'release')
+      if (!released) {
+        steps.routed = []
+        steps.route_done = []
+      }
+      // The dead run's locks are still in Redis (TTL 5 min), with its tokens on the row.
+      const envToken = (await lock.take(w.envId, 'move')) as string
+      const shToken = (await shLock.take(w.sharedA, 'move')) as string
+      steps.locks = { env: envToken, shared: [{ id: w.sharedA, token: shToken }] }
+      await db('nivaro_hub_moves')
+        .where({ id: move_id })
+        .update({
+          status: 'running',
+          step: key,
+          steps: JSON.stringify(steps),
+          finished_at: null,
+          heartbeat_at: new Date(START - 3 * 60_000)
+        })
+      await db('nivaro_hub_environments')
+        .where({ id: w.envId })
+        .update({ placement_id: released ? m0.to_placement_id : m0.from_placement_id })
+      await db('nivaro_hub_deploys').where({ move_id }).update({ status: 'running' })
+      expect(
+        await healMoves({ now, lock, sharedLock: shLock, failJobRun: async () => undefined })
+      ).toBe(1)
+      expect((await readMove(move_id))?.status).toBe('interrupted')
+      expect(await lock.held(w.envId)).toBe(false)
+      expect(await shLock.holder(w.sharedA)).toBeNull()
+      // Someone else's lock taken since is never freed by heal.
+      fake = fakeOps()
+      useDeps()
+      await Run.resumeMove(move_id, 'u')
+      await Run.awaitMove(move_id)
+      expect(fake.names()[0]).toBe(FIRST_OP[key])
+      expect((await readMove(move_id))?.status).toBe('success')
+    })
+
+  it('heal never frees a lock another holder took after the dead run', async () => {
+    plan = planOf('to_shared')
+    const w = await world('docker')
+    const { move_id } = await start(w, toFor('to_shared', w))
+    await Run.awaitMove(move_id)
+    const m0 = (await readMove(move_id)) as NonNullable<Awaited<ReturnType<typeof readMove>>>
+    const steps = structuredClone(m0.steps)
+    steps.locks = { env: 'move:dead-token', shared: [{ id: w.sharedA, token: 'move:dead-token' }] }
+    await db('nivaro_hub_moves')
+      .where({ id: move_id })
+      .update({
+        status: 'running',
+        steps: JSON.stringify(steps),
+        heartbeat_at: new Date(START - 3 * 60_000)
+      })
+    const other = (await lock.take(w.envId, 'promotion')) as string
+    expect(
+      await healMoves({ now, lock, sharedLock: shLock, failJobRun: async () => undefined })
+    ).toBe(1)
+    expect(await lock.held(w.envId)).toBe(true)
+    await lock.release(w.envId, other)
+  })
+
   it('a fresh heartbeat is never healed', async () => {
     plan = planOf('to_shared')
     const w = await world('docker')

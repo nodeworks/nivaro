@@ -1,6 +1,12 @@
 import { db } from '../../../db/index.js'
 import { getApp } from '../../io-holder.js'
 import { resumeJobRun } from '../../job-runs.js'
+import {
+  defaultPromoteLock,
+  defaultSharedLock,
+  type PromoteLock,
+  type SharedLock
+} from '../promote-lock.js'
 import { MOVES, moveFromRow } from './rows.js'
 
 /**
@@ -10,7 +16,8 @@ import { MOVES, moveFromRow } from './rows.js'
  * A run renews its heartbeat (nivaro_hub_moves.heartbeat_at) every 60 s while it works or waits
  * for a manual route. A `running` or `waiting` move whose heartbeat is older than 2 minutes, and
  * that no runner in THIS process owns, is interrupted: its mirror deploy row too (kind `move`,
- * closed here and never by the phase-2 heal, ruling R8) and its job run is failed. Nothing is
+ * closed here and never by the phase-2 heal, ruling R8) and its job run is failed; its own env and
+ * shared locks are freed by compare-and-delete with the tokens the run stored (I-3). Nothing is
  * undone here: the person resumes (from the stored step) or rolls back.
  *
  * Run at boot (routes/hub-move.ts, beside the phase-2 promotion heal) and before a move is read
@@ -35,6 +42,8 @@ export function isMoveLiveHere(id: number): boolean {
 
 export interface HealDeps {
   now?: () => number
+  lock?: PromoteLock
+  sharedLock?: SharedLock
   /** Fails a job run (tests replace it). */
   failJobRun?: (jobRunId: number, moveId: number, message: string) => Promise<void>
 }
@@ -72,6 +81,16 @@ export async function healMoves(deps: HealDeps = {}, onlyId?: number): Promise<n
       .update({ status: 'interrupted', heartbeat_at: null })
     if (!Number(changed)) continue
     healed++
+    // I-3 (P6-18 #4): the dead run's own locks go now, so Resume / Roll back need not wait out
+    // their TTL. Compare-and-delete with ITS tokens only: a lock someone took since is kept.
+    const tokens = m.steps.locks
+    if (tokens) {
+      const lock = deps.lock ?? defaultPromoteLock()
+      const sharedLock = deps.sharedLock ?? defaultSharedLock()
+      await lock.release(m.environment_id, tokens.env).catch(() => undefined)
+      for (const x of tokens.shared ?? [])
+        await sharedLock.release(x.id, x.token).catch(() => undefined)
+    }
     await db(DEPLOYS)
       .where({ move_id: m.id, status: 'running' })
       .update({ status: 'interrupted', heartbeat_at: null })

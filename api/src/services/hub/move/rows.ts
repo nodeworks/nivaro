@@ -68,6 +68,8 @@ export interface MoveSteps {
   route_confirmed_at?: string | null
   /** When the run started waiting for the manual route (24 h budget). */
   waiting_since?: string | null
+  /** The run's own lock tokens (env + shared), which heal frees by compare-and-delete. */
+  locks?: { env: string; shared: Array<{ id: number; token: string }> }
   /** Where each dedicated side is reached (addresses.ts), resolved and probed at start. */
   addresses?: MoveAddresses
   /** sha256 of the source's database identity, read at `check` (R2; never the identity). */
