@@ -209,6 +209,7 @@ describe('manager/docker-stack.yml', () => {
   })
 
   it('passes HUB_BOOT_MAINTENANCE (phase 6 move target) into the app, empty by default', () => {
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: a compose placeholder, literally
     expect(code(text)).toContain('HUB_BOOT_MAINTENANCE: ${HUB_BOOT_MAINTENANCE:-}')
   })
 

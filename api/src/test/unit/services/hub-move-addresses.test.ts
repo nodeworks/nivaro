@@ -362,6 +362,7 @@ describe('GitLab boot maintenance proof (P6-20 gather)', () => {
     const NEW: Record<string, string> = {
       'ci/deploy.yml': 'deploy.sh … HUB_BOOT_MAINTENANCE …',
       'manager/nivaro-hub-deploy': '… the stack file does not pass HUB_BOOT_MAINTENANCE …',
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: a compose placeholder, literally
       'manager/docker-stack.yml': 'HUB_BOOT_MAINTENANCE: ${HUB_BOOT_MAINTENANCE:-}'
     }
     const ask = (files: Record<string, string | null>) =>
