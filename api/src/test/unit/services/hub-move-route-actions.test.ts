@@ -124,6 +124,14 @@ describe('routeActions — the decision table', () => {
     ])
   })
 
+  it('shared A → shared B with the same pattern: the name gets an explicit route on B (M-2)', () => {
+    const a = sharedSide({ id: 7, key: 'pool-a', host_pattern: '*.apps.example.com' })
+    const b = sharedSide({ id: 8, key: 'pool-b', host_pattern: '*.apps.example.com' })
+    const r = routeActions(a, b, ['shop.apps.example.com'])
+    expect(r.routing).toBe('automatic')
+    expect(r.actions).toEqual([{ side: 'target', op: 'add_host', host: 'shop.apps.example.com' }])
+  })
+
   it('gitlab source → manual with a request naming the host, the target and TLS', () => {
     const r = routeActions(gitlab(), sharedSide(), ['shop.example.org'])
     expect(r.routing).toBe('manual')
