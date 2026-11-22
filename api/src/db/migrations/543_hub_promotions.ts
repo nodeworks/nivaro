@@ -8,7 +8,9 @@ import { longText } from '../portable-ddl.js'
  * (portable on all five engines).
  *
  *  - nivaro_hub_components    what a placement deploys (api / frontend), in order
- *  - nivaro_hub_deploys       one promotion or rollback of an environment (history + plan)
+ *  - nivaro_hub_deploys       one promotion or rollback of an environment (history + plan);
+ *                             heartbeat_at = renewed by the live runner with its lock, so a row
+ *                             whose Redis lock vanished is still known to be running
  *  - nivaro_hub_environments.hub_managed   the hub deploys this environment
  */
 export async function up(knex: Knex): Promise<void> {
@@ -48,7 +50,13 @@ export async function up(knex: Knex): Promise<void> {
       t.uuid('started_by').nullable()
       t.dateTime('started_at').nullable().defaultTo(utcNow(knex))
       t.dateTime('finished_at').nullable()
+      t.dateTime('heartbeat_at').nullable()
       t.index(['environment_id', 'id'], 'ix_nivaro_hub_deploys_env')
+    })
+  } else if (!(await knex.schema.hasColumn('nivaro_hub_deploys', 'heartbeat_at'))) {
+    // A database that ran an earlier draft of this migration (phase 2 was never released).
+    await knex.schema.alterTable('nivaro_hub_deploys', (t) => {
+      t.dateTime('heartbeat_at').nullable()
     })
   }
 

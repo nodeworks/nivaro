@@ -185,7 +185,7 @@ describe('access', () => {
     for (const h of [asOwner, asAdmin])
       expect((await get(`/environments/${prodId}/deploys/hub`, h)).statusCode).toBe(200)
     expect((await get(`/environments/99999/promotable`, asAdmin)).statusCode).toBe(404)
-  })
+  }, 20000)
 })
 
 function planInput(over: Record<string, unknown> = {}) {

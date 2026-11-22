@@ -520,6 +520,24 @@ describe('gatherPlanInput', () => {
     expect((await db('nivaro_hub_deploys').where({ id: other }).first()).status).toBe('interrupted')
   })
 
+  it('P24: a plan read never heals a row whose heartbeat is fresh, lock or not', async () => {
+    const [id] = (await db('nivaro_hub_deploys').insert({
+      app_id: 1,
+      environment_id: 2,
+      kind: 'promote',
+      version: '0.3.10',
+      status: 'running',
+      step: 'deploy api',
+      heartbeat_at: new Date()
+    })) as number[]
+    const input = await gather.gatherPlanInput(2, { kind: 'promote', version: '0.3.10' }, deps())
+    expect(input.running).toBe(true)
+    expect((await db('nivaro_hub_deploys').where({ id }).first()).status).toBe('running')
+    // Even a caller holding the lock (a start) leaves it.
+    await gather.gatherPlanInput(2, { kind: 'promote', version: '0.3.10', lockHeld: true }, deps())
+    expect((await db('nivaro_hub_deploys').where({ id }).first()).status).toBe('running')
+  })
+
   it('a stale row healed by a plan read loses its temporary branches', async () => {
     const [id] = (await db('nivaro_hub_deploys').insert({
       app_id: 1,

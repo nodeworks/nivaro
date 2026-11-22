@@ -1333,6 +1333,94 @@ describe('startPromotion', () => {
     expect(runs[0].ended[0]).toMatch(/^fail:promote 0\.3\.10 on production: stopped at push api/)
   })
 
+  it('P24: the Redis lock dropped mid-run — a second start is refused, the first row untouched', async () => {
+    const w = use(world())
+    serveNew(w)
+    const redis = fakeRedis()
+    const { d } = deps(w, redis)
+    let second: unknown = null
+    let rowThen: Record<string, unknown> | undefined
+    d.execute = {
+      ...d.execute,
+      gitlab: {
+        createBranch: async (...a: Parameters<typeof gwCreateBranch>) => {
+          if (second === null) {
+            // Redis restarted without persistence: the lock key is gone, the runner lives on.
+            redis.store.delete(hubPromoteLockKey(2))
+            second = await run.startPromotion(2, req, d).catch((e) => e)
+            rowThen = await db('nivaro_hub_deploys').where({ status: 'running' }).first()
+          }
+          return gwCreateBranch(...a)
+        }
+      }
+    } as typeof d.execute
+    const first = await run.startPromotion(2, req, d)
+    await run.awaitPromotion(first.deployId)
+    expect(second).toMatchObject({ code: 'PROMOTION_RUNNING', status: 409 })
+    // Nothing healed the live row: still running, its own, no error.
+    expect(rowThen).toMatchObject({ id: first.deployId, status: 'running', error: null })
+    expect(await db('nivaro_hub_deploys').count({ n: '*' })).toEqual([{ n: 1 }])
+    // The first run then sees its lock gone at the next boundary and stops on its own.
+    expect(await db('nivaro_hub_deploys').where({ id: first.deployId }).first()).toMatchObject({
+      status: 'interrupted',
+      error: 'Lost the promotion lock'
+    })
+  })
+
+  it('P24: a running row with a fresh heartbeat (another process, lock gone) is never healed', async () => {
+    const w = use(world())
+    serveNew(w)
+    const { d } = deps(w)
+    const now = Date.now()
+    const [other] = (await db('nivaro_hub_deploys').insert({
+      app_id: 1,
+      environment_id: 2,
+      kind: 'promote',
+      version: '0.3.10',
+      status: 'running',
+      step: 'deploy api',
+      heartbeat_at: new Date(now - 30_000)
+    })) as number[]
+    await expect(run.startPromotion(2, req, { ...d, now: () => now })).rejects.toMatchObject({
+      code: 'PROMOTION_RUNNING',
+      status: 409
+    })
+    expect(await run.recoverInterruptedPromotions({ lock: d.lock, now: () => now })).toBe(0)
+    expect(await db('nivaro_hub_deploys').where({ id: other }).first()).toMatchObject({
+      status: 'running',
+      error: null
+    })
+    // Three minutes without a heartbeat: its runner is gone, the next start heals it.
+    const later = now + 3 * 60_000
+    const started = await run.startPromotion(2, req, { ...d, now: () => later })
+    await run.awaitPromotion(started.deployId)
+    expect(await db('nivaro_hub_deploys').where({ id: other }).first()).toMatchObject({
+      status: 'interrupted',
+      error: 'The Hub stopped during deploy api'
+    })
+  })
+
+  it('P24: a live run writes its heartbeat while it runs', async () => {
+    const w = use(world())
+    serveNew(w)
+    const { d } = deps(w)
+    let seen: unknown = null
+    d.execute = {
+      ...d.execute,
+      gitlab: {
+        createBranch: async (...a: Parameters<typeof gwCreateBranch>) => {
+          seen ??= (await db('nivaro_hub_deploys').where({ status: 'running' }).first())
+            ?.heartbeat_at
+          return gwCreateBranch(...a)
+        }
+      }
+    } as typeof d.execute
+    const started = await run.startPromotion(2, req, d)
+    await run.awaitPromotion(started.deployId)
+    expect(seen).not.toBeNull()
+    expect(seen).not.toBeUndefined()
+  })
+
   it('the closing write is retried once', async () => {
     const w = use(world())
     serveNew(w)
@@ -1359,9 +1447,10 @@ describe('startPromotion', () => {
     }
     const first = await run.startPromotion(2, req, { ...d, finishRow: failing })
     await run.awaitPromotion(first.deployId)
-    expect((await db('nivaro_hub_deploys').where({ id: first.deployId }).first()).status).toBe(
-      'running'
-    )
+    const left = await db('nivaro_hub_deploys').where({ id: first.deployId }).first()
+    expect(left.status).toBe('running')
+    // P24: the runner ended, so it no longer vouches for the row (the next start heals it).
+    expect(left.heartbeat_at).toBeNull()
     expect(
       runs[0].lines.some((l) =>
         l.includes(`could not record the final status (success) of deploy #${first.deployId}`)

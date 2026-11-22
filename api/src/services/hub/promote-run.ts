@@ -19,7 +19,12 @@ import {
   type HealDeps,
   healDeps,
   interruptRow,
-  interruptStaleRows
+  interruptStaleRows,
+  isLiveHere,
+  liveHereFor,
+  markLive,
+  unmarkLive,
+  withoutFreshHeartbeat
 } from './promote-heal.js'
 import {
   appPromoteRedis,
@@ -83,7 +88,10 @@ import { hubStatusKey } from './status.js'
  *
  * A running row belongs to whoever holds its lock: a runner that loses it stops at the next step
  * boundary (`interrupted`, "Lost the promotion lock"); the closing write only touches a row still
- * `running`; boot recovery and the next start interrupt only rows nobody holds the lock of.
+ * `running`; boot recovery and the next start interrupt only rows nobody holds the lock of. The
+ * runner also renews the row's heartbeat_at with every lock renewal (and clears it when it ends),
+ * so a row whose lock vanished from Redis while its runner lives (in this process — `live` — or
+ * another, heartbeat < 2 min) is never healed, and a start refuses PROMOTION_RUNNING beside it.
  *
  * The deploy row's `step` is exactly `push <component>`, `deploy <component>` or `verify` (the
  * admin page reads it). Cancel stops at the next step boundary, before the merge into a target
@@ -811,6 +819,8 @@ export interface StartDeps {
   execute?: ExecuteDeps
   /** Default: an UPDATE of the row while it is still `running`. */
   finishRow?: FinishRow
+  /** The clock heartbeats are judged by (tests). */
+  now?: () => number
 }
 
 export function defaultStartDeps(): StartDeps {
@@ -828,6 +838,7 @@ const finishRunningRow: FinishRow = async (deployId, patch) =>
   Number(await db(DEPLOYS).where({ id: deployId, status: 'running' }).update(patch))
 
 interface Live {
+  envId: number
   done: Promise<void>
   run: JobRunHandle
   cancel: boolean
@@ -870,17 +881,26 @@ export async function startPromotion(
       400
     )
 
-  const token = await deps.lock.take(envId)
-  if (!token) {
+  const alreadyRunning = () => {
     const blockers: PromotionBlocker[] = [
       { code: 'PROMOTION_RUNNING', text: `a promotion of ${env.key} is already running` }
     ]
-    throw new PromotionError('PROMOTION_RUNNING', blockers[0].text, 409, blockers)
+    return new PromotionError('PROMOTION_RUNNING', blockers[0].text, 409, blockers)
   }
+  const token = await deps.lock.take(envId)
+  if (!token) throw alreadyRunning()
   let handedOff = false
   try {
-    // We hold the lock now: a row still `running` here belongs to a process that lost it.
-    await interruptStaleRows(envId, true, async () => true, { gitCtx: deps.gitCtx })
+    // A run of this environment alive in this process (its Redis lock may have vanished).
+    if (liveHereFor(envId)) throw alreadyRunning()
+    // We hold the lock now: a row still `running` here belongs to a process that lost it —
+    // unless its heartbeat says its runner is alive (then it stays, and so does the refusal).
+    await interruptStaleRows(envId, true, async () => true, {
+      gitCtx: deps.gitCtx,
+      ...(deps.now ? { now: deps.now } : {})
+    })
+    if (await db(DEPLOYS).where({ environment_id: envId, status: 'running' }).first('id'))
+      throw alreadyRunning()
     const input = await deps.gather(envId, { kind: req.kind, version: req.version, lockHeld: true })
     const plan = buildPromotionPlan(input)
     if (!plan.ok)
@@ -918,7 +938,8 @@ export async function startPromotion(
           plan: JSON.stringify(plan),
           job_run_id: run.id,
           started_by: userId,
-          started_at: new Date()
+          started_at: new Date(),
+          heartbeat_at: new Date()
         })
       )
     } catch (err) {
@@ -927,6 +948,7 @@ export async function startPromotion(
     }
 
     const entry: Live = {
+      envId,
       done: Promise.resolve(),
       run,
       cancel: false,
@@ -934,6 +956,7 @@ export async function startPromotion(
       abort: new AbortController()
     }
     live.set(deployId, entry)
+    markLive(deployId, envId)
     handedOff = true
     entry.done = runInBackgroundPool(() =>
       runPromotion({
@@ -954,7 +977,10 @@ export async function startPromotion(
           'hub promotion bookkeeping failed'
         )
       )
-      .finally(() => live.delete(deployId))
+      .finally(() => {
+        live.delete(deployId)
+        unmarkLive(deployId)
+      })
     return { deployId, jobRunId: run.id }
   } finally {
     if (!handedOff) await deps.lock.release(envId, token)
@@ -979,6 +1005,12 @@ async function runPromotion(o: {
     entry.lockLost = true
     run.log('the promotion lock was lost — stopping at the next step', 'error')
   }
+  /** This runner is alive: written with every lock renewal, whether or not the lock held. */
+  const heartbeat = () =>
+    db(DEPLOYS)
+      .where({ id: deployId, status: 'running' })
+      .update({ heartbeat_at: new Date() })
+      .catch(() => undefined)
   const renew = setInterval(() => {
     void deps.lock
       .renew(envId, o.token)
@@ -986,6 +1018,7 @@ async function runPromotion(o: {
         if (!held) lostLock()
       })
       .catch(() => undefined)
+    void heartbeat()
   }, LOCK_RENEW_MS)
   renew.unref?.()
   const setStep = (step: string) =>
@@ -1023,6 +1056,7 @@ async function runPromotion(o: {
           ...deps.execute,
           lockLost: async () => {
             if (!entry.lockLost && !(await deps.lock.renew(envId, o.token))) lostLock()
+            await heartbeat()
             return entry.lockLost
           },
           stopRequested: async () =>
@@ -1050,6 +1084,12 @@ async function runPromotion(o: {
         )
       )
   } finally {
+    // This runner no longer vouches for the row: one the closing write could not move off
+    // `running` becomes stale for the next start or read at once.
+    await db(DEPLOYS)
+      .where({ id: deployId, status: 'running' })
+      .update({ heartbeat_at: null })
+      .catch(() => undefined)
     await deps.lock.release(envId, o.token)
     await deps.lock.clearCancel(deployId)
     await forgetEnvironmentCaches(envId)
@@ -1142,9 +1182,12 @@ export interface RecoverDeps extends Partial<HealDeps> {
 export async function recoverInterruptedPromotions(
   deps: RecoverDeps = { lock: defaultPromoteLock() }
 ): Promise<number> {
-  const rows = (await db(DEPLOYS)
-    .where({ status: 'running' })
-    .select('id', 'environment_id', 'step', 'plan', 'job_run_id', 'started_at')) as Array<{
+  const heal = healDeps(deps)
+  // A fresh heartbeat = a runner alive in some process (its lock may be gone): left alone.
+  const rows = (await withoutFreshHeartbeat(
+    db(DEPLOYS).where({ status: 'running' }),
+    heal.now?.()
+  ).select('id', 'environment_id', 'step', 'plan', 'job_run_id', 'started_at')) as Array<{
     id: number
     environment_id: number
     step: string | null
@@ -1152,11 +1195,10 @@ export async function recoverInterruptedPromotions(
     job_run_id: number | null
     started_at: Date | string | null
   }>
-  const heal = healDeps(deps)
   let n = 0
   for (const r of rows) {
     const id = Number(r.id)
-    if (live.has(id)) continue
+    if (live.has(id) || isLiveHere(id)) continue
     if ((await deps.lock.held(Number(r.environment_id))) !== false) continue
     if (!(await interruptRow(r, `The Hub restarted during ${r.step ?? 'the start'}`, heal)))
       continue
