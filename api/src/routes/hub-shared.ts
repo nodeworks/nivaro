@@ -26,6 +26,7 @@ import {
   type DeploymentStatus,
   deploymentClient
 } from '../services/hub/shared/deployment-client.js'
+import { PlaceSharedError, placeOnShared } from '../services/hub/shared/place.js'
 import { liveSightings, type Sighting } from '../services/hub/shared/sightings.js'
 import {
   createShared,
@@ -62,6 +63,9 @@ import { poolMaxOf, type SharedTenantRow, tenantsOf } from '../services/hub/shar
  *   PUT    /environments/:envId/app-key    {key} → {fp, verified}; 400 BAD_KEY;
  *                                          409 APP_KEY_MISMATCH | APP_KEY_UNVERIFIED | APP_KEY_IMMUTABLE
  *                                          (services/hub/shared/app-key-check.ts, ruling P6-7)
+ *   POST   /environments/:envId/place-shared  (Task 4) {shared_id, database_id, pool_max?,
+ *                                          first_admin} → 202 {job_run_id}; a new environment
+ *                                          only (409 USE_MOVE), services/hub/shared/place.ts
  *
  * Refusals are `{statusCode, error, message, code}` with a plain sentence. Answers never carry a
  * token after the one that made or rotated it, an app key, a database connection or the
@@ -644,4 +648,30 @@ export function hubSharedRoutes(app: FastifyInstance): void {
       })
     )
   })
+
+  // Task 4: place a new environment on a shared deployment. The checks and the placement write
+  // answer at once (every refusal a code); the run goes on in the background as a job run.
+  app.post(
+    '/environments/:envId/place-shared',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const envId = idParam((req.params as { envId: string }).envId)
+      if (envId === null) return notFound(reply, 'environment')
+      return guarded(reply, async () => {
+        try {
+          const out = await placeOnShared(
+            envId,
+            body(req) as unknown as Parameters<typeof placeOnShared>[1],
+            userId(req) || null
+          )
+          await forgetStatus(app, Number(body(req).shared_id))
+          return reply.code(202).send({ data: out })
+        } catch (err) {
+          if (err instanceof PlaceSharedError)
+            return refuse(reply, err.statusCode, err.code, err.message)
+          throw err
+        }
+      })
+    }
+  )
 }
