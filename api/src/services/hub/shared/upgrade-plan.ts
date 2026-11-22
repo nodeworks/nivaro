@@ -10,6 +10,7 @@ import { storedRuns, successfulVersions } from '../promote-gather.js'
 import {
   defaultPromoteLock,
   defaultSharedLock,
+  type LockHolder,
   lockHolderRefusal,
   type PromoteLock,
   type SharedLock,
@@ -284,12 +285,27 @@ export async function gatherSharedUpgrade(
   const placedHere = new Set(rows.filter((r) => r.placedHere).map((r) => r.env.id))
 
   // BUSY: the deployment's own lock, or any listed environment's lock.
-  const holder = await deps.sharedLock.holder(shared.id)
-  if (holder) block('BUSY', sharedLockRefusal(holder).message)
+  // A holder that cannot be read is never free (T15 round 2): blocker LOCK_UNAVAILABLE.
+  const unreadable = 'The Hub cannot reach Redis to tell who holds'
+  try {
+    const holder = await deps.sharedLock.holder(shared.id)
+    if (holder) block('BUSY', sharedLockRefusal(holder).message)
+  } catch {
+    block('LOCK_UNAVAILABLE', `${unreadable} this shared deployment's lock — try again shortly.`)
+  }
   for (const r of rows) {
     const held = await deps.envLock.held(r.env.id)
     if (held === false) continue
-    const h = (await deps.envLock.holder?.(r.env.id)) ?? null
+    let h: LockHolder | null = null
+    try {
+      h = (await deps.envLock.holder?.(r.env.id)) ?? null
+    } catch {
+      block(
+        'LOCK_UNAVAILABLE',
+        `${unreadable} the lock of ${r.app.key}/${r.env.key} — try again shortly.`
+      )
+      continue
+    }
     block(
       'BUSY',
       `${r.app.key}/${r.env.key}: ${
