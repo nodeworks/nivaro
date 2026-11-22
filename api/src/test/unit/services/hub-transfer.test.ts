@@ -194,6 +194,8 @@ beforeEach(() => {
       .sort((a, b) => (a.id < b.id ? -1 : 1))
       .slice(0, limit)
   pullDeps.log = (msg, meta) => void logs.push(`${msg} ${JSON.stringify(meta ?? {})}`)
+  pullDeps.fetch = (url, init) => fetch(url, init)
+  pullDeps.safeFetch = () => Promise.reject(new Error('safeFetch is not expected in this test'))
   pullDeps.limits = { ...pullDeps.defaultLimits }
 })
 
@@ -379,6 +381,41 @@ describe('pull', () => {
       expect(out.run_id, source).toMatch(/^[A-Za-z0-9_-]{1,100}$/)
       await finished(out.run_id)
     }
+  })
+
+  it('an https source on a host name goes through safeFetch; a private literal keeps plain fetch', async () => {
+    const guarded: string[] = []
+    const plain: string[] = []
+    const answer = () =>
+      new Response('ok', {
+        status: 200,
+        headers: { 'content-length': '2', 'x-nivaro-filename-disk': 'm1.bin' }
+      })
+    pullDeps.safeFetch = async (url, init) => {
+      guarded.push(String(url))
+      expect(init.redirect).toBe('error')
+      return answer()
+    }
+    pullDeps.fetch = async (url, init) => {
+      plain.push(String(url))
+      expect(init.redirect).toBe('error')
+      return answer()
+    }
+    rows.push(row('m1', 2))
+    for (const source of [
+      'https://acme.example.com/api/hub-transfer/files',
+      'https://10.1.2.3/api/hub-transfer/files',
+      'http://192.168.1.4:3055/api/hub-transfer/files'
+    ]) {
+      rmSync(join(root, 'm1.bin'), { force: true })
+      const s = await finished((await startPull({ source, ticket: TICKET, mode: 'full' })).run_id)
+      expect(s.copied, source).toBe(1)
+    }
+    expect(guarded).toEqual(['https://acme.example.com/api/hub-transfer/files/m1'])
+    expect(plain).toEqual([
+      'https://10.1.2.3/api/hub-transfer/files/m1',
+      'http://192.168.1.4:3055/api/hub-transfer/files/m1'
+    ])
   })
 
   it('refuses a bad ticket or mode', async () => {

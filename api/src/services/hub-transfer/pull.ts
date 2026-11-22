@@ -9,6 +9,7 @@ import { pipeline } from 'node:stream/promises'
 import type { ReadableStream as WebReadableStream } from 'node:stream/web'
 import { db } from '../../db/index.js'
 import { getTenantId } from '../../db/tenant-context.js'
+import { type SafeFetchInit, safeFetch } from '../../lib/ssrf.js'
 import { tenantSource } from '../deployment-mode.js'
 import { hubLinkKeyTag } from '../hub-link/retire.js'
 import { getApp } from '../io-holder.js'
@@ -34,7 +35,12 @@ import { TRANSFER_TICKET_RE } from './tickets.js'
  *  - `delta`: only rows not in the run manifest (a Redis set of the ids copied or found present
  *    here), or changed since the previous finished run started. A `full` run starts a new
  *    manifest.
- *  - Source: `https:`, or `http:` only to loopback / RFC 1918 (`BAD_SOURCE`).
+ *  - Source: `https:`, or `http:` only to loopback / RFC 1918 (`BAD_SOURCE`). An https host NAME
+ *    is fetched through `safeFetch` (lib/ssrf.ts: the address is pinned, a name that resolves to a
+ *    private or reserved address is refused unless SSRF_ALLOW_HOSTS lets it through). The one
+ *    exception to "safeFetch for a URL someone supplied": a loopback / RFC 1918 LITERAL (http or
+ *    https) uses plain fetch with `redirect: 'error'` — the Hub names a source on its own network
+ *    on purpose, and a literal cannot be rebound.
  *
  * One pull per app at a time (`PULL_RUNNING`; a Redis lock across replicas). Status lives in this
  * process and is mirrored to Redis, so another replica can answer the Hub; a run whose mirror
@@ -151,7 +157,10 @@ export const pullDeps = {
     if (after !== null) q = q.where('id', '>', after)
     return (await q) as FileRow[]
   },
+  /** Plain fetch: only for an http(s) source that is a loopback / private literal. */
   fetch: (url: string, init: RequestInit): Promise<Response> => fetch(url, init),
+  /** The SSRF-guarded fetch (address pinned, private answers refused) for every https host name. */
+  safeFetch: (url: string, init: SafeFetchInit): Promise<Response> => safeFetch(url, init),
   log(msg: string, meta?: Record<string, unknown>): void {
     try {
       getApp()?.log?.info?.(meta ?? {}, msg)
@@ -515,6 +524,8 @@ async function execute(
 
     const storage = pullDeps.storage()
     const iter = candidates()
+    // A private literal is the only plain fetch (see the header); every host name is guarded.
+    const guarded = !plainHttpHost(new URL(req.source).hostname)
 
     const failRow = () => {
       if (!fatal) st.failed++
@@ -537,12 +548,14 @@ async function execute(
       const signal = AbortSignal.any([ac.signal, AbortSignal.timeout(limits.objectTimeoutMs)])
       let res: Response
       try {
-        res = await pullDeps.fetch(`${req.source}/${encodeURIComponent(id)}`, {
+        const url = `${req.source}/${encodeURIComponent(id)}`
+        const init = {
           method: 'GET',
           headers: { Authorization: `Transfer ${req.ticket}` },
-          redirect: 'error',
+          redirect: 'error' as const,
           signal
-        })
+        }
+        res = guarded ? await pullDeps.safeFetch(url, init) : await pullDeps.fetch(url, init)
       } catch {
         // unreachable, timed out, or a redirect (redirect: 'error')
         return failRow()
