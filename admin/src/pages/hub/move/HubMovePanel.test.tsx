@@ -483,6 +483,68 @@ describe('HubMovePanel — before start', () => {
     expect(screen.getByRole('button', { name: 'Start move' })).toBeDisabled()
   })
 
+  it('LINK_URL_NOT_PULLABLE: one override box, outside the required group, gates Start and is sent', async () => {
+    plan = {
+      ...basePlan,
+      blockers: [{ code: 'LINK_URL_NOT_PULLABLE', text: 'The name resolves to a private address.' }]
+    }
+    renderPanel()
+    await pickTarget(/Shared · east/)
+    const box = await screen.findByRole('checkbox', {
+      name: /The target deployment allows this host/
+    })
+    const group = screen.getByRole('group', { name: 'Confirm before moving' })
+    expect(within(group).queryByRole('checkbox', { name: /allows this host/ })).toBeNull()
+    fireEvent.click(within(group).getByRole('checkbox', { name: /Register https/ }))
+    fireEvent.change(screen.getByLabelText(/Type efp\/production to move/), {
+      target: { value: 'efp/production' }
+    })
+    const start = screen.getByRole('button', { name: 'Start move' })
+    expect(start).toBeDisabled()
+    fireEvent.click(box)
+    expect(start).toBeEnabled()
+    fireEvent.click(start)
+    await waitFor(() =>
+      expect(h.post).toHaveBeenCalledWith('/hub/environments/10/move', {
+        to: { kind: 'shared', shared_id: 3, pool_max: 5 },
+        plan_hash: 'h1',
+        confirm: 'efp/production',
+        checklist: { callbacks_registered: true },
+        overrides: ['LINK_URL_NOT_PULLABLE']
+      })
+    )
+  })
+
+  it('no override box without that refusal; a refused start offers it; a new plan resets it', async () => {
+    plan = { ...basePlan, checklist: [] }
+    const basePost = h.post.getMockImplementation() as (u: string, b?: unknown) => Promise<unknown>
+    h.post.mockImplementation(async (url: string, b?: unknown) => {
+      if (url === '/hub/environments/10/move')
+        throw {
+          response: {
+            status: 409,
+            data: { code: 'LINK_URL_NOT_PULLABLE', message: 'private address' }
+          }
+        }
+      return basePost(url, b)
+    })
+    renderPanel()
+    await pickTarget(/Shared · east/)
+    const confirm = await screen.findByLabelText(/Type efp\/production to move/)
+    expect(screen.queryByRole('checkbox', { name: /allows this host/ })).toBeNull()
+    fireEvent.change(confirm, { target: { value: 'efp/production' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Start move' }))
+    const box = await screen.findByRole('checkbox', { name: /allows this host/ })
+    expect(screen.getByRole('button', { name: 'Start move' })).toBeDisabled()
+    fireEvent.click(box)
+    expect(box).toBeChecked()
+    plan = { ...basePlan, checklist: [], plan_hash: 'h7' }
+    fireEvent.click(screen.getByRole('button', { name: 'Plan again' }))
+    await waitFor(() =>
+      expect(screen.queryByRole('checkbox', { name: /allows this host/ })).toBeNull()
+    )
+  })
+
   it('a start refused with PLAN_BLOCKED says so in plain words and plans again', async () => {
     const { toast } = await import('sonner')
     const error = vi.spyOn(toast, 'error').mockImplementation(() => 1)

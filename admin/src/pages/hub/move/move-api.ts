@@ -271,7 +271,14 @@ export function answerOf<T>(body: unknown): T | undefined {
 /** 202 `{data: {move_id}}` (Task 16 routes/hub-move.ts). */
 export const startMove = (
   envId: number,
-  body: { to: MoveTarget; plan_hash: string; confirm: string; checklist: Record<string, boolean> }
+  body: {
+    to: MoveTarget
+    plan_hash: string
+    confirm: string
+    checklist: Record<string, boolean>
+    /** Refusals the operator overrides for this move (P6-20: only LINK_URL_NOT_PULLABLE). */
+    overrides?: string[]
+  }
 ) =>
   api.post(`/hub/environments/${envId}/move`, body).then((r) => {
     const id = Number(answerOf<{ move_id?: unknown }>(r.data)?.move_id)
@@ -747,7 +754,7 @@ export const MOVE_BLOCKER_COPY: Record<string, Copy> = {
   },
   LINK_URL_NOT_PULLABLE: {
     title: 'The target cannot fetch files from the source deployment’s link address',
-    hint: 'Its name resolves to a private address. Use a private IP for the link address, or list the name in the target’s SSRF_ALLOW_HOSTS.'
+    hint: 'Its name resolves to a private address. Use a private IP for the link address, or list the name in the target’s SSRF_ALLOW_HOSTS. If the target already allows it there, tick that box below and start again.'
   },
   GATHER_FAILED: {
     title: 'The Hub could not read everything this plan needs',
@@ -1121,6 +1128,11 @@ export function moveToast(err: unknown, fallback: string) {
   const d = moveError(err, fallback)
   toast.error(d.title, errorToastOptions(d))
 }
+
+/** The one refusal a move start may override (Task 16 MOVE_OVERRIDES, ruling P6-20 #2). */
+export const LINK_OVERRIDE = 'LINK_URL_NOT_PULLABLE'
+export const LINK_OVERRIDE_TEXT =
+  'The target deployment allows this host (it is in its SSRF_ALLOW_HOSTS).'
 
 /** The plan a refused start (409 PLAN_CHANGED) carried, if any. */
 export function changedMovePlanOf(err: unknown): MovePlan | null {

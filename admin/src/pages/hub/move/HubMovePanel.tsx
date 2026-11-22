@@ -49,6 +49,8 @@ import {
   isLiveMove,
   isOpenMove,
   isRollingBack,
+  LINK_OVERRIDE,
+  LINK_OVERRIDE_TEXT,
   MOVE_KIND_WORDS,
   type MoveIssue,
   type MovePlan,
@@ -499,7 +501,13 @@ function MoveForm({
     setChecked({})
     setConfirm('')
     setChanged(false)
+    setOverride(false)
+    setPullRefused(false)
   }, [pick, pool])
+  // The LINK_URL_NOT_PULLABLE override (ruling P6-20 #2): offered when the plan or a refused
+  // start names it; never a required checklist item; reset with every new plan.
+  const [override, setOverride] = useState(false)
+  const [pullRefused, setPullRefused] = useState(false)
 
   const expected = `${appKey}/${env.key}`
   const p = plan.data
@@ -511,12 +519,21 @@ function MoveForm({
     if (planHash && seenHash.current && planHash !== seenHash.current) {
       setChecked({})
       setConfirm('')
+      setOverride(false)
     }
     if (planHash) seenHash.current = planHash
   }, [planHash])
   const requiredOpen = (p?.checklist ?? []).some((c) => c.required && !checked[c.id])
+  const offerOverride = pullRefused || !!p?.blockers.some((b) => b.code === LINK_OVERRIDE)
+  // The overridable blocker stops nothing once its box is ticked; every other blocker does.
+  const blocking = (p?.blockers ?? []).filter((b) => !(override && b.code === LINK_OVERRIDE))
   const ready =
-    !!p && !!p.plan_hash && p.blockers.length === 0 && !requiredOpen && confirm.trim() === expected
+    !!p &&
+    !!p.plan_hash &&
+    blocking.length === 0 &&
+    !requiredOpen &&
+    (!offerOverride || override) &&
+    confirm.trim() === expected
 
   const start = useMutation({
     onMutate: () => {
@@ -530,7 +547,8 @@ function MoveForm({
         to: target as NonNullable<typeof target>,
         plan_hash: (p as MovePlan).plan_hash,
         confirm: confirm.trim(),
-        checklist: Object.fromEntries((p?.checklist ?? []).map((c) => [c.id, !!checked[c.id]]))
+        checklist: Object.fromEntries((p?.checklist ?? []).map((c) => [c.id, !!checked[c.id]])),
+        ...(offerOverride && override ? { overrides: [LINK_OVERRIDE] } : {})
       }),
     onSuccess: (r) => {
       // The move owns the placement it starts on: it is never removed by this form.
@@ -547,6 +565,8 @@ function MoveForm({
         setChecked({})
         return
       }
+      const code = (err as { response?: { data?: { code?: unknown } } })?.response?.data?.code
+      if (code === LINK_OVERRIDE) setPullRefused(true)
       void qc.invalidateQueries({ queryKey: planKey })
       moveToast(err, `Could not move ${env.key}`)
     }
@@ -668,7 +688,10 @@ function MoveForm({
             type='button'
             className={ghostButton}
             disabled={plan.isFetching}
-            onClick={() => void plan.refetch()}
+            onClick={() => {
+              setPullRefused(false)
+              void plan.refetch()
+            }}
           >
             <RotateCcw
               className={cn('h-3.5 w-3.5', plan.isFetching && 'animate-spin')}
@@ -679,6 +702,28 @@ function MoveForm({
           <span className='text-[11px] text-slate-500 dark:text-muted-foreground'>
             The plan is read once; ask again after you change something.
           </span>
+        </div>
+      )}
+
+      {target && p && offerOverride && (
+        // Not a checklist item: an override the operator vouches for, sent with the start.
+        <div className='flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] dark:border-amber-900/60 dark:bg-amber-950/40'>
+          <Checkbox
+            id={`${idPrefix}-override`}
+            checked={override}
+            onCheckedChange={(v) => setOverride(v === true)}
+            className='mt-0.5'
+          />
+          <label
+            htmlFor={`${idPrefix}-override`}
+            className='min-w-0 break-words text-amber-900 dark:text-amber-200'
+          >
+            {LINK_OVERRIDE_TEXT}
+            <span className='block text-[11px] text-amber-800 dark:text-amber-300'>
+              The Hub could not prove the target may fetch files from the source deployment's link
+              address. Tick only if you know it does; the move records this override.
+            </span>
+          </label>
         </div>
       )}
 
