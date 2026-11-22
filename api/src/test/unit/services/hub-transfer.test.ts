@@ -36,6 +36,7 @@ import {
 } from '../../../services/hub-transfer/pull.js'
 import {
   mintTransferTicket,
+  revokeTransferTicket,
   TRANSFER_TICKET_RE,
   ticketDeps,
   ticketKey,
@@ -274,6 +275,22 @@ describe('transfer tickets', () => {
     // another shared deployment on the same Redis never accepts it
     process.env.HUB_SHARED_DEPLOYMENT = 'shared-b'
     expect((await ticketTenant(ticket)).ok).toBe(false)
+  })
+
+  it('revoke ends a ticket at once, only for the app it was minted for', async () => {
+    process.env.HUB_SHARED_DEPLOYMENT = 'shared-a'
+    process.env.HUB_URL = 'https://hub.example'
+    process.env.HUB_DEPLOYMENT_TOKEN = 'd'.repeat(40)
+    delete process.env.HUB_TOKEN
+    const { ticket } = await mintTransferTicket('app-a-e1')
+    expect(await revokeTransferTicket(ticket, 'app-b-e2')).toBe(false)
+    expect((await ticketTenant(ticket)).ok).toBe(true)
+    expect(await revokeTransferTicket(ticket, 'app-a-e1')).toBe(true)
+    expect((await ticketTenant(ticket)).ok).toBe(false)
+    expect(redis.kv.size).toBe(0)
+    // already gone, or not a ticket: nothing to revoke
+    expect(await revokeTransferTicket(ticket, 'app-a-e1')).toBe(false)
+    expect(await revokeTransferTicket('nope', 'app-a-e1')).toBe(false)
   })
 
   it('no Redis: minting fails with REDIS_UNAVAILABLE, a check fails closed', async () => {

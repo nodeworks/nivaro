@@ -259,6 +259,25 @@ export async function hubDeploymentLinkRoutes(app: FastifyInstance): Promise<voi
     }
   })
 
+  // Revoke a ticket minted for this app ({ticket} → 200 {revoked}); another app's stays valid.
+  app.delete<{ Params: { id: string } }>('/apps/:id/files/ticket', async (req, reply) => {
+    const registry = registryOr503(reply)
+    if (!registry) return reply
+    const t = await tenantById(registry, req.params.id)
+    if (!t) return refuse(reply, 404, 'This deployment does not serve that app', 'UNKNOWN_APP')
+    const { revokeTransferTicket, TRANSFER_TICKET_RE } = await import(
+      '../services/hub-transfer/tickets.js'
+    )
+    const ticket = (req.body as { ticket?: unknown } | null)?.ticket
+    if (typeof ticket !== 'string' || !TRANSFER_TICKET_RE.test(ticket))
+      return refuse(reply, 400, 'ticket must be a transfer ticket', 'BAD_TICKET')
+    try {
+      return reply.send({ revoked: await revokeTransferTicket(ticket, t.id) })
+    } catch {
+      return refuse(reply, 503, 'The ticket could not be revoked (Redis)', 'REDIS_UNAVAILABLE')
+    }
+  })
+
   app.post<{ Params: { id: string } }>('/apps/:id/files/pull', async (req, reply) => {
     const registry = registryOr503(reply)
     if (!registry) return reply

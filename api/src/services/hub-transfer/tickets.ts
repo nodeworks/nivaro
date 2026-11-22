@@ -12,7 +12,8 @@ import { getApp } from '../io-holder.js'
  * to the target with the pull.
  *
  *  - `nvt_` + 32 random bytes (base64url). Valid 6 h; reusable inside that window (a pull reads
- *    thousands of objects), never answered back, logged or put in an error.
+ *    thousands of objects), never answered back, logged or put in an error. The Hub revokes it
+ *    at the end of a move (`DELETE …/files/ticket`, revokeTransferTicket).
  *  - Stored in the source's Redis as `nvr:hub-transfer:<sha256(ticket)>` → `{t, a, exp}`: only the
  *    hash is a key, so a Redis read never yields a usable ticket.
  *  - The ticket decides the app (ruling R16): `t` is the tenant it was minted for (null on a
@@ -28,6 +29,7 @@ export const TRANSFER_TICKET_RE = /^nvt_[A-Za-z0-9_-]{43}$/
 export interface TicketRedis {
   set(key: string, value: string, mode: 'PX', ms: number): Promise<unknown>
   get(key: string): Promise<string | null>
+  del(...keys: string[]): Promise<unknown>
 }
 
 /** Test seams. */
@@ -117,6 +119,27 @@ export async function ticketTenant(
   if (v.a !== minterTag()) return { ok: false }
   if (v.t !== null && typeof v.t !== 'string') return { ok: false }
   return { ok: true, tenant: v.t }
+}
+
+/**
+ * Revoke a ticket before its 6 h are up (the Hub calls this at the end of a move): true when it
+ * was a live ticket of `tenantId` here and is now gone; false when it was not (unknown, expired,
+ * another app's, another minter's). Throws TransferTicketError when Redis refuses the delete.
+ */
+export async function revokeTransferTicket(
+  ticket: string,
+  tenantId: string | null
+): Promise<boolean> {
+  const v = await ticketTenant(ticket)
+  if (!v.ok || v.tenant !== tenantId) return false
+  const redis = ticketDeps.redis()
+  if (!redis) throw new TransferTicketError()
+  try {
+    await redis.del(ticketKey(ticket))
+  } catch {
+    throw new TransferTicketError()
+  }
+  return true
 }
 
 /** `Authorization: Transfer <ticket>` → the ticket text, or null. */

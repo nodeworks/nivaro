@@ -337,6 +337,22 @@ export async function hubLinkRoutes(app: FastifyInstance) {
     }
   })
 
+  // Revoke a ticket this app minted ({ticket} → 200 {revoked}); the Hub calls it when a move ends.
+  app.delete('/files/ticket', async (req, reply) => {
+    reply.header('Cache-Control', 'no-store')
+    const { revokeTransferTicket, TRANSFER_TICKET_RE } = await import(
+      '../services/hub-transfer/tickets.js'
+    )
+    const ticket = (req.body as { ticket?: unknown } | null)?.ticket
+    if (typeof ticket !== 'string' || !TRANSFER_TICKET_RE.test(ticket))
+      return fail(reply, 400, 'BAD_TICKET', 'ticket must be a transfer ticket')
+    try {
+      return reply.send({ revoked: await revokeTransferTicket(ticket, null) })
+    } catch {
+      return fail(reply, 503, 'REDIS_UNAVAILABLE', 'The ticket could not be revoked (Redis)')
+    }
+  })
+
   app.post('/files/pull', async (req, reply) => {
     reply.header('Cache-Control', 'no-store')
     const { startPull, PullError } = await import('../services/hub-transfer/pull.js')

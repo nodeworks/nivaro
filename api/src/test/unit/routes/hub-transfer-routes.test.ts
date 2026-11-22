@@ -94,7 +94,8 @@ const redis = {
   set: async (k: string, v: string) => {
     store.set(k, v)
     return 'OK'
-  }
+  },
+  del: async (...keys: string[]) => keys.filter((k) => store.delete(k)).length
 }
 
 const FILE_A = '11111111-2222-4333-8444-555555555555'
@@ -311,6 +312,61 @@ describe('the Hub asks for tickets and pulls', () => {
     expect(await ticketTenant(res.json().ticket)).toEqual({ ok: true, tenant: null })
     const refused = await a.inject({ method: 'POST', url: '/api/hub-link/files/ticket' })
     expect(refused.statusCode).toBe(401)
+  })
+
+  it('dedicated: DELETE /api/hub-link/files/ticket revokes a ticket at once', async () => {
+    dedicated()
+    const a = await build()
+    const h = { authorization: `Bearer ${HUB_TOKEN}` }
+    const { ticket } = await mintTransferTicket(null)
+    expect((await get(a, FILE_A, { authorization: `Transfer ${ticket}` })).statusCode).toBe(200)
+    const refused = await a.inject({
+      method: 'DELETE',
+      url: '/api/hub-link/files/ticket',
+      payload: { ticket }
+    })
+    expect(refused.statusCode).toBe(401)
+    const bad = await a.inject({
+      method: 'DELETE',
+      url: '/api/hub-link/files/ticket',
+      headers: h,
+      payload: { ticket: 'x' }
+    })
+    expect(bad.statusCode).toBe(400)
+    expect(bad.json().code).toBe('BAD_TICKET')
+    const r = await a.inject({
+      method: 'DELETE',
+      url: '/api/hub-link/files/ticket',
+      headers: h,
+      payload: { ticket }
+    })
+    expect(r.statusCode).toBe(200)
+    expect(r.json()).toEqual({ revoked: true })
+    expect(r.body).not.toContain(ticket)
+    expect((await get(a, FILE_A, { authorization: `Transfer ${ticket}` })).statusCode).toBe(401)
+  })
+
+  it('shared: DELETE /apps/:id/files/ticket revokes only that app’s ticket', async () => {
+    shared()
+    const a = await build()
+    const h = { authorization: `Bearer ${deploymentLinkBearer(DEP_TOKEN)}` }
+    const { ticket } = await mintTransferTicket('app-a-e1')
+    const other = await a.inject({
+      method: 'DELETE',
+      url: '/api/hub-deployment/apps/app-b-e2/files/ticket',
+      headers: h,
+      payload: { ticket }
+    })
+    expect(other.json()).toEqual({ revoked: false })
+    expect((await ticketTenant(ticket)).ok).toBe(true)
+    const mine = await a.inject({
+      method: 'DELETE',
+      url: '/api/hub-deployment/apps/app-a-e1/files/ticket',
+      headers: h,
+      payload: { ticket }
+    })
+    expect(mine.json()).toEqual({ revoked: true })
+    expect((await ticketTenant(ticket)).ok).toBe(false)
   })
 
   it('dedicated: POST /files/pull starts a pull (202), GET /files/pull/:id reads it', async () => {
