@@ -18,7 +18,7 @@ import {
 } from './chat.js'
 import { recordChatSend, recordChatSendFailure } from './chat-health.js'
 import { parseTimeRefs, type TimeRef } from './chat-time-refs.js'
-import { appCredentialRefused, appCredentialTag } from './tenancy/credential-binding.js'
+import { appCredentialRefused, appCredentialTag, appKeyPart } from './tenancy/credential-binding.js'
 import { tenantScopedRoom } from './tenant-rooms.js'
 
 /**
@@ -252,7 +252,7 @@ export function clientIdClaimKey(
   clientId: string | null | undefined
 ): string | null {
   if (!senderId || !clientId || !room) return null
-  return `nvr:chatcid:${String(senderId).toUpperCase()}:${room}:${String(clientId).slice(0, 64)}`
+  return `nvr:chatcid:${appKeyPart()}${String(senderId).toUpperCase()}:${room}:${String(clientId).slice(0, 64)}`
 }
 
 async function tryClaim(redis: ClaimRedis | undefined, key: string): Promise<boolean> {
@@ -872,17 +872,27 @@ export async function redeemReplyToken(
 ): Promise<{ user: string; room: string } | null> {
   const redis = (
     app as unknown as {
-      redis?: { getdel: (k: string) => Promise<string | null> }
+      redis?: {
+        get: (k: string) => Promise<string | null>
+        getdel: (k: string) => Promise<string | null>
+      }
     }
   ).redis
   if (!redis || !/^[0-9a-f-]{36}$/i.test(token)) return null
   try {
     // One reply per notification: the token is spent as it is read (a copied or intercepted
     // notification payload cannot post again as its recipient).
-    const raw = await redis.getdel(`nvr:chatreply:${token}`)
+    // On a Hub shared deployment another app's token (or one naming no app) is refused before
+    // it is spent, so a request that reached the wrong app's host cannot burn it.
+    const key = `nvr:chatreply:${token}`
+    if (appCredentialTag() !== undefined) {
+      const peek = await redis.get(key)
+      if (!peek) return null
+      if (appCredentialRefused((JSON.parse(peek) as { t?: unknown }).t)) return null
+    }
+    const raw = await redis.getdel(key)
     if (!raw) return null
     const { t, ...claim } = JSON.parse(raw) as { user: string; room: string; t?: unknown }
-    // Minted for another app of a Hub shared deployment (or none): not a reply here.
     if (appCredentialRefused(t)) return null
     return claim
   } catch {

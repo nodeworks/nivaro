@@ -8,6 +8,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
 vi.mock('../../../services/help-video-render.js', () => ({ queueRender: vi.fn() }))
+const holder = vi.hoisted(() => ({ redis: null as unknown }))
+vi.mock('../../../services/io-holder.js', async (orig) => ({
+  ...(await orig<object>()),
+  getApp: () => (holder.redis ? { redis: holder.redis } : null)
+}))
 vi.mock('../../../services/socket-access.js', async (orig) => ({
   ...(await orig<object>()),
   // The ticket's sign-in still stands (judged elsewhere): only the app check is under test here.
@@ -31,6 +36,18 @@ const { tenantTagRefused } = await import('../../../middleware/authenticate.js')
 const { mintStreamTicket, redeemStreamTicket } = await import('../../../services/stream-ticket.js')
 const { signActionToken, verifyActionToken } = await import('../../../routes/message-actions.js')
 const { issueCode, consumeCode } = await import('../../../services/oauth-store.js')
+
+const { bulkResultKey, rateWindowKey } = await import('../../../services/app-redis-keys.js')
+const { saveProposal, loadProposal } = await import('../../../services/autofill-store.js')
+const { saveAskAttachment, loadAskAttachment } = await import(
+  '../../../services/ai-ask-attachments.js'
+)
+const { cfdRollupKey } = await import('../../../services/cumulative-flow.js')
+const { takeBackfillLock, releaseBackfillLock } = await import(
+  '../../../functions/queue-materialization-jobs.js'
+)
+const { transitionClaimKey } = await import('../../../services/transition-guard.js')
+const { clientIdClaimKey } = await import('../../../services/chat-send.js')
 
 const A = 'app-a-e1'
 const B = 'app-b-e2'
@@ -380,4 +397,147 @@ describe('OAuth / phone sign-in records (codes, tokens, grants)', () => {
 
 beforeEach(() => {
   delete process.env.HUB_SHARED_DEPLOYMENT
+})
+
+// ─── Fix round 1: Redis pointer keys that hold app data (ruling P6-6) ─────────
+
+describe('async bulk results (nvr:bulk:<job run id>)', () => {
+  it('self-hosted: the key is unchanged', () => {
+    expect(bulkResultKey(7)).toBe('nvr:bulk:7')
+  })
+  it("shared: B cannot read A's run 7, and B's run 7 never overwrites A's", async () => {
+    hub()
+    const redis = fakeRedis()
+    await redis.set(await inApp(A, () => bulkResultKey(7)), '{"from":"A"}')
+    expect(await redis.get(await inApp(B, () => bulkResultKey(7)))).toBeNull()
+    await redis.set(await inApp(B, () => bulkResultKey(7)), '{"from":"B"}')
+    expect(await redis.get(await inApp(A, () => bulkResultKey(7)))).toBe('{"from":"A"}')
+  })
+})
+
+describe('document autofill proposals (nvr:autofill:)', () => {
+  const value = {
+    proposal: null,
+    status: 'running' as const,
+    user: USER,
+    collection: 'things',
+    document_name: 'x.pdf',
+    created_at: 'now'
+  }
+  it('self-hosted: saved and loaded', async () => {
+    const app = { redis: fakeRedis() } as never
+    await saveProposal(app, 'p-self', value)
+    expect((await loadProposal(app, 'p-self'))?.user).toBe(USER)
+  })
+  it('shared: saved in A, not found in B (Redis or memory), found in A', async () => {
+    hub()
+    for (const redis of [fakeRedis(), undefined]) {
+      const app = { redis } as never
+      const id = `p-${redis ? 'r' : 'm'}`
+      await inApp(A, () => saveProposal(app, id, value))
+      expect(await inApp(B, () => loadProposal(app, id))).toBeNull()
+      expect((await inApp(A, () => loadProposal(app, id)))?.user).toBe(USER)
+    }
+  })
+})
+
+describe('Ask AI attachments (nvr:askdoc:)', () => {
+  const input = { user: USER, name: 'a.pdf', mime: 'application/pdf', text: 'hello' } as never
+  it('self-hosted: saved and loaded by its owner', async () => {
+    const app = { redis: fakeRedis() } as never
+    const v = await saveAskAttachment(app, input)
+    expect((await loadAskAttachment(app, v.id, USER))?.id).toBe(v.id)
+  })
+  it('shared: attached in A, not found in B for the same person, found in A', async () => {
+    hub()
+    for (const redis of [fakeRedis(), undefined]) {
+      const app = { redis } as never
+      const v = await inApp(A, () => saveAskAttachment(app, input))
+      expect(await inApp(B, () => loadAskAttachment(app, v.id, USER))).toBeNull()
+      expect((await inApp(A, () => loadAskAttachment(app, v.id, USER)))?.id).toBe(v.id)
+    }
+  })
+})
+
+describe('cumulative-flow rollup cache (nvr:cfd:v1:)', () => {
+  it('self-hosted: unchanged', () => {
+    expect(cfdRollupKey('t1', 'things')).toBe('nvr:cfd:v1:t1:things')
+  })
+  it("shared: app B never reads app A's rollup for the same template + collection", async () => {
+    hub()
+    expect(await inApp(A, () => cfdRollupKey('t1', 'things'))).not.toBe(
+      await inApp(B, () => cfdRollupKey('t1', 'things'))
+    )
+  })
+})
+
+describe('per-key rate limit windows (nvr:keyrl:)', () => {
+  it('self-hosted: unchanged', () => {
+    expect(rateWindowKey('k3', 60)).toBe('nvr:keyrl:k3:60')
+  })
+  it("shared: app A's key 3 never spends app B's key 3 budget", async () => {
+    hub()
+    expect(await inApp(A, () => rateWindowKey('k3', 60))).not.toBe(
+      await inApp(B, () => rateWindowKey('k3', 60))
+    )
+  })
+})
+
+describe('queue backfill lock (nvr:queue-backfill:)', () => {
+  afterEach(() => {
+    holder.redis = null
+  })
+  it('self-hosted: one backfill per queue', async () => {
+    holder.redis = fakeRedis()
+    expect(await takeBackfillLock('q-self')).toBe(true)
+    expect(await takeBackfillLock('q-self')).toBe(false)
+    await releaseBackfillLock('q-self')
+    expect((holder.redis as ReturnType<typeof fakeRedis>).kv.has('nvr:queue-backfill:q-self')).toBe(
+      false
+    )
+  })
+  it("shared: app A's backfill of queue 3 never blocks app B's queue 3", async () => {
+    hub()
+    for (const redis of [fakeRedis(), null]) {
+      holder.redis = redis
+      const q = `q3-${redis ? 'r' : 'm'}`
+      expect(await inApp(A, () => takeBackfillLock(q))).toBe(true)
+      expect(await inApp(B, () => takeBackfillLock(q))).toBe(true)
+      expect(await inApp(A, () => takeBackfillLock(q))).toBe(false)
+      await inApp(A, () => releaseBackfillLock(q))
+      await inApp(B, () => releaseBackfillLock(q))
+    }
+  })
+})
+
+describe('transition double-click guard (nvr:transition:)', () => {
+  it('self-hosted: unchanged', () => {
+    expect(transitionClaimKey('i1', 't1')).toBe('nvr:transition:I1:T1')
+  })
+  it("shared: app A's move of record 1 never blocks app B's", async () => {
+    hub()
+    expect(await inApp(A, () => transitionClaimKey('i1', 't1'))).not.toBe(
+      await inApp(B, () => transitionClaimKey('i1', 't1'))
+    )
+  })
+})
+
+describe('chat send client-id claims (nvr:chatcid:)', () => {
+  it("shared: app A's send never swallows app B's with the same sender, room and client id", async () => {
+    hub()
+    expect(await inApp(A, () => clientIdClaimKey('u', 'ch:x', 'c1'))).not.toBe(
+      await inApp(B, () => clientIdClaimKey('u', 'ch:x', 'c1'))
+    )
+  })
+})
+
+describe('a refused one-time token is not spent (review minor 1)', () => {
+  it('shared: a reply token presented to app B stays usable in app A', async () => {
+    hub()
+    const redis = fakeRedis()
+    const app = { redis } as never
+    const t = (await inApp(A, () => mintReplyToken(app, USER, 'dm:x'))) as string
+    expect(await inApp(B, () => redeemReplyToken(app, t))).toBeNull()
+    expect(await inApp(A, () => redeemReplyToken(app, t))).toEqual({ user: USER, room: 'dm:x' })
+  })
 })

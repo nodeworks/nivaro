@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import type { Redis } from 'ioredis'
 import type { DocumentProposal } from './document-autofill.js'
+import { appKeyPart } from './tenancy/credential-binding.js'
 
 /**
  * Where a document proposal lives between the extraction and the form that
@@ -11,6 +12,10 @@ import type { DocumentProposal } from './document-autofill.js'
 
 const TTL_SECONDS = 24 * 60 * 60
 const memory = new Map<string, { at: number; value: StoredProposal }>()
+
+/** Where a proposal is kept: per app on a Hub shared deployment (copied apps share user ids, so
+ *  the owner check alone would open app A's proposal in app B). Unchanged elsewhere. */
+const slot = (id: string) => `${appKeyPart()}${id}`
 
 export type StoredProposal = {
   proposal: DocumentProposal | null
@@ -33,12 +38,12 @@ export async function saveProposal(
   id: string,
   value: StoredProposal
 ): Promise<void> {
-  memory.set(id, { at: Date.now(), value })
+  memory.set(slot(id), { at: Date.now(), value })
   for (const [k, v] of memory) if (Date.now() - v.at > TTL_SECONDS * 1000) memory.delete(k)
   const redis = redisOf(app)
   if (!redis) return
   try {
-    await redis.set(`nvr:autofill:${id}`, JSON.stringify(value), 'EX', TTL_SECONDS)
+    await redis.set(`nvr:autofill:${appKeyPart()}${id}`, JSON.stringify(value), 'EX', TTL_SECONDS)
   } catch {
     // memory copy stands
   }
@@ -51,11 +56,11 @@ export async function loadProposal(
   const redis = redisOf(app)
   if (redis) {
     try {
-      const raw = await redis.get(`nvr:autofill:${id}`)
+      const raw = await redis.get(`nvr:autofill:${appKeyPart()}${id}`)
       if (raw) return JSON.parse(raw) as StoredProposal
     } catch {
       // fall through
     }
   }
-  return memory.get(id)?.value ?? null
+  return memory.get(slot(id))?.value ?? null
 }

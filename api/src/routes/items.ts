@@ -10,6 +10,7 @@ import { resolveWorkspace } from '../middleware/workspace.js'
 import { outOfViewReason } from '../services/access-explain.js'
 import { logActivity } from '../services/activity.js'
 import { markActivityBurst } from '../services/activity-scope.js'
+import { bulkResultKey } from '../services/app-redis-keys.js'
 import {
   type AutoIdToken,
   autoIdFieldsFor,
@@ -2242,7 +2243,7 @@ export async function itemsRoutes(app: FastifyInstance) {
           .send({ error: 'The job could not be recorded — send the request without async' })
       }
       const redis = app.redis
-      const resultKey = `nvr:bulk:${run.id}`
+      const resultKey = bulkResultKey(run.id)
       const owner = String(user.id).toUpperCase()
       const store = async (state: Record<string, unknown>) => {
         await redis
@@ -2327,7 +2328,7 @@ export async function itemsRoutes(app: FastifyInstance) {
   app.get('/:collection/bulk/:runId', async (req, reply) => {
     const { collection, runId } = req.params as { collection: string; runId: string }
     if (!/^\d+$/.test(runId)) return reply.code(400).send({ error: 'Invalid run id' })
-    const raw = await app.redis.get(`nvr:bulk:${runId}`).catch(() => null)
+    const raw = await app.redis.get(bulkResultKey(runId)).catch(() => null)
     if (!raw) {
       return reply.code(404).send({
         error: 'No results for this run — they are kept for 24 hours after it was queued'

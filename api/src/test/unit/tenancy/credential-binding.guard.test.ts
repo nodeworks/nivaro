@@ -53,6 +53,51 @@ function firstArg(src: string, from: number): string {
   return out.replace(/\s+/g, ' ').trim()
 }
 
+/** Read one string or template literal starting at `i` (its opening quote); template `${…}`
+ *  expressions, nested templates included, are kept in the text. */
+function readLiteral(src: string, i: number): string {
+  const q = src[i]
+  let j = i + 1
+  if (q !== '`') {
+    while (j < src.length && src[j] !== q && src[j] !== '\n') j += src[j] === '\\' ? 2 : 1
+    return src.slice(i + 1, j)
+  }
+  while (j < src.length && src[j] !== '`') {
+    if (src[j] === '\\') j += 2
+    else if (src[j] === '$' && src[j + 1] === '{') {
+      let depth = 1
+      j += 2
+      while (j < src.length && depth > 0) {
+        const c = src[j]
+        if (c === '`') j = j + readLiteral(src, j).length + 1
+        else if (c === '{') depth++
+        else if (c === '}') depth--
+        j++
+      }
+    } else j++
+  }
+  return src.slice(i + 1, j)
+}
+
+/** Every `nvr:` Redis key literal (string or template) outside comments, as `file :: prefix`
+ *  (text before the first `${`), with whether its text names the app. */
+const APP_PART =
+  /appKeyPart\(\)|currentTenantKey\(\)|getTenantId\(\)|tenantScopedRoom\(|tenantPart\(|\$\{\s*(?:opts\.|meta\.|s\.)?(?:tenant|tid|t)\b/
+
+function scanNvrKeys(): Map<string, boolean> {
+  const out = new Map<string, boolean>()
+  for (const rel of listSourceFiles(API_SRC)) {
+    if (rel.startsWith('test/')) continue
+    const src = stripCommentsKeepLines(readFileSync(join(API_SRC, rel), 'utf8'))
+    for (const m of src.matchAll(/['"`]nvr:/g)) {
+      const text = readLiteral(src, m.index ?? 0)
+      const id = `${rel} :: ${text.split('${')[0]}`
+      out.set(id, (out.get(id) ?? false) || APP_PART.test(text))
+    }
+  }
+  return out
+}
+
 function scan(): { redis: string[]; secrets: Record<string, number> } {
   const redis = new Set<string>()
   const secrets: Record<string, number> = {}
@@ -252,6 +297,186 @@ const SECRET_SITES: Record<string, Entry & { reads: number }> = {
   }
 }
 
+// ─── nvr: Redis keys that need no app part (fix round 1, ruling P6-6) ─────────
+// Every other `nvr:` key literal must name the app (appKeyPart(), currentTenantKey(), a
+// tenant variable) — a new key holding app data that does not fails here.
+
+const PROC = 'process-wide by design: per-process / per-instance operations state, not app data'
+const TM =
+  'Traffic Map / telemetry of the whole deployment (counts and timings, no app records; views filter by tenant)'
+const LABEL =
+  'a key-family label or SCAN prefix (Traffic Map / chaos key families), never a key itself'
+const HUB = 'Hub-only (HUB=on), which a shared deployment refuses (deploymentModeProblem)'
+const OFF =
+  'the feature is off on any multi-tenant deployment (Teams bot, Hub sign-in, outside-write watch, change warms, chaos test job)'
+
+const NVR_ALLOW: Record<string, string> = {
+  'plugins/socketio.ts :: nvr:ping': PROC,
+  'plugins/socketio.ts :: nvr:pong': PROC,
+  'scripts/realtime-replay.ts :: nvr:ping': PROC,
+  'scripts/realtime-replay.ts :: nvr:pong': PROC,
+  'services/realtime-worker-source.ts :: nvr:ping': PROC,
+  'services/realtime-worker-source.ts :: nvr:pong': PROC,
+  'services/socket-health.ts :: nvr:ping': PROC,
+  'services/socket-health.ts :: nvr:rt:health:': PROC,
+  'services/boot-phases.ts :: nvr:boots:': PROC,
+  'services/cloud-user-rooms.ts :: nvr:probe': PROC,
+  'services/inflight-cluster.ts :: nvr:inflight:watch': PROC,
+  'services/inflight-cluster.ts :: nvr:inflight:node:': PROC,
+  'services/inflight-cluster.ts :: nvr:inflight:node:*': PROC,
+  'services/instance-roster.ts :: nvr:instance:': PROC,
+  'services/instance-roster.ts :: nvr:instance:*': PROC,
+  'services/maintenance-windows.ts :: nvr:last-version': PROC,
+  'services/ops-signals.ts :: nvr:ops-signals:': PROC,
+  'services/pool-holders.ts :: nvr:pool-holders:watch': PROC,
+  'services/pool-holders.ts :: nvr:pool-holders:node:': PROC,
+  'services/pool-holders.ts :: nvr:pool-hogs': PROC,
+  'services/pool-holders.ts :: nvr:pool-holders:node:*': PROC,
+  'services/wait-reasons.ts :: nvr:wait:watch': PROC,
+  'services/wait-reasons.ts :: nvr:wait:node:': PROC,
+  'services/wait-reasons.ts :: nvr:wait:node:*': PROC,
+  'services/realtime-ack-sample.ts :: nvr:rt:ack:st:': PROC,
+  'services/realtime-ack-sample.ts :: nvr:rt:dlv:s:': PROC,
+  'services/realtime-delivery-slo.ts :: nvr:rt:dlv:m:': PROC,
+  'services/realtime-delivery-slo.ts :: nvr:rt:dlv:h:': PROC,
+  'services/realtime-delivery-slo.ts :: nvr:rt:ack:who:': PROC,
+  'services/realtime-leak-audit.ts :: nvr:rt:leak:findings': PROC,
+  'services/realtime-leak-audit.ts :: nvr:rt:leak:stats': PROC,
+  'services/realtime-leak-audit.ts :: nvr:rt:leak:state': PROC,
+  'services/realtime-probe.ts :: nvr:rt:probe:results': PROC,
+  'services/socket-access.ts :: nvr:access-recheck': PROC,
+  'services/socket-chaos.ts :: nvr:rt:chaos:runs': PROC,
+  'services/socket-chaos.ts :: nvr:rt:chaos:run:': PROC,
+  'services/socket-chaos.ts :: nvr:rt:chaos': PROC,
+  'services/huddle-turn-monitor.ts :: nvr:huddle:probe:history': PROC,
+  'services/huddle-turn-monitor.ts :: nvr:huddle:probe:state': PROC,
+  'services/infra-swarm/health.ts :: nvr:infra:health:': PROC,
+  'services/cache-warm.ts :: nvr:warm:': PROC,
+  'services/traffic-actions/temp-cache.ts :: nvr:tm:cache:stats:': TM,
+  'services/traffic-actions/timed-rules.ts :: nvr:tm:actions': TM,
+  'services/traffic-actions/timed-rules.ts :: nvr:tm:actions:end:': TM,
+  'services/traffic-baselines.ts :: nvr:tm:roll:': TM,
+  'services/traffic-breaker.ts :: nvr:tm:breakers': TM,
+  'services/traffic-breaker.ts :: nvr:tm:brk:': TM,
+  'services/traffic-inspect/request-capture.ts :: nvr:tm-trace-next': TM,
+  'services/traffic-minutes.ts :: nvr:tm:min:': TM,
+  'services/traffic-taps/change-markers.ts :: nvr:tm:boot-versions:': TM,
+  'services/traffic-taps/redis.ts :: nvr:idem': LABEL,
+  'services/traffic-taps/redis.ts :: nvr:transition': LABEL,
+  'services/traffic-taps/redis.ts :: nvr:cron': LABEL,
+  'services/traffic-taps/redis.ts :: nvr:ev': LABEL,
+  'services/traffic-taps/redis.ts :: nvr:keyrl': LABEL,
+  'services/traffic-taps/redis.ts :: nvr:masq': LABEL,
+  'services/traffic-taps/redis.ts :: nvr:autofill': LABEL,
+  'services/traffic-taps/redis.ts :: nvr:aichat': LABEL,
+  'services/traffic-taps/redis.ts :: nvr:queue-backfill': LABEL,
+  'services/traffic-taps/redis.ts :: nvr:bulk': LABEL,
+  'services/traffic-taps/redis.ts :: nvr:boots': LABEL,
+  'services/traffic-taps/redis.ts :: nvr:instance': LABEL,
+  'services/traffic-taps/redis.ts :: nvr:chatreply': LABEL,
+  'services/traffic-taps/redis.ts :: nvr:linkprev': LABEL,
+  'services/traffic-taps/redis.ts :: nvr:epoch': LABEL,
+  'services/traffic-taps/redis.ts :: nvr:mdl2': LABEL,
+  'services/chaos/redis-keys.ts :: nvr:mdl2:': LABEL,
+  'services/chaos/redis-keys.ts :: nvr:cron:': LABEL,
+  'services/chaos/redis-keys.ts :: nvr:ev': LABEL,
+  'services/chaos/redis-keys.ts :: nvr:idem': LABEL,
+  'services/chaos/redis-keys.ts :: nvr:': LABEL,
+  'routes/hub-app-link.ts :: nvr:hub:signins:new:': HUB,
+  'routes/hub-docker.ts :: nvr:hub:check-name:': HUB,
+  'services/hub/create/store.ts :: nvr:hub:create-repo:': HUB,
+  'services/hub/create/store.ts :: nvr:hub:create-start': HUB,
+  'services/hub/create/store.ts :: nvr:hub:create-cancel:': HUB,
+  'services/hub/db/db-lock.ts :: nvr:hub:db:': HUB,
+  'services/hub/deploy-evidence.ts :: nvr:hub:evidence:jobs:': HUB,
+  'services/hub/deploys.ts :: nvr:hub:deploys:': HUB,
+  'services/hub/oidc/codes.ts :: nvr:hub-oidc:code:': HUB,
+  'services/hub/promote-lock.ts :: nvr:hub:promote:': HUB,
+  'services/hub/promote-lock.ts :: nvr:hub:promote-cancel:': HUB,
+  'services/hub/promote-lock.ts :: nvr:hub:shared:': HUB,
+  'services/hub/status.ts :: nvr:hub:status:': HUB,
+  'routes/teams-bot.ts :: nvr:teams:act:': OFF,
+  'services/teams-bot/actions.ts :: nvr:teams:nonce:': OFF,
+  'services/teams-bot/stats.ts :: nvr:teams:stat:': OFF,
+  'services/hub-signin/link-client.ts :: nvr:hub-signin-push:': OFF,
+  'services/hub-signin/link-client.ts :: nvr:hub-switcher:': OFF,
+  'services/outside-write-watch.ts :: nvr:rt:outside:': OFF,
+  'services/cache-warm-on-change.ts :: nvr:warm:chg:plan': OFF,
+  'services/cache-warm-on-change.ts :: nvr:warm:chg:plan:lock': OFF,
+  'services/cache-warm-on-change.ts :: nvr:warm:chg:cd:': OFF,
+  'services/cache-warm-on-change.ts :: nvr:warm:chg:stats:': OFF,
+  'services/chaos/cron-test-job.ts :: nvr:cron:leader:chaos-test': OFF,
+  'db/metadata-l2.ts :: nvr:mdl2':
+    'metadata L2: genPrefix() adds getTenantId() and the DB incarnation',
+  'plugins/cron.ts :: nvr:cron:leader':
+    "scheduler leader lease of the deployment (one leader ticks every app's jobs)",
+  'plugins/cron.ts :: nvr:cron:run:':
+    "per-app job runs carry `@<tenant>` in the job id (P5-9); plugins/cron.ts is Task 8's",
+  'plugins/cron.ts :: nvr:cron:active:':
+    "per-app job runs carry `@<tenant>` in the job id (P5-9); plugins/cron.ts is Task 8's",
+  'plugins/cron.ts :: nvr:cron:heavy':
+    "heavy-slot lease; per-app runs suffix `:<tenant>` (P5-9); plugins/cron.ts is Task 8's",
+  'plugins/cron.ts :: nvr:cron:held:':
+    'held-slot marker per job id; per-app job ids carry `@<tenant>` (P5-9)',
+  'routes/layout-collab.ts :: nvr:formpreview:rl:':
+    'anti-abuse limiter keyed by a random preview token and the caller IP',
+  'routes/oauth.ts :: nvr:oauth:rl:':
+    'per-IP limiter on the OAuth endpoints; counts only, no app data',
+  'services/agent-presence.ts :: nvr:agentp:':
+    'keyed by a record room, which is tenantScopedRoom() (app-prefixed)',
+  'services/ai-answer-cache.ts :: nvr:aichat:':
+    'the tenant is inside the hashed part (scope.tenant in answerCacheKey)',
+  'services/ai-ask-attachments.ts :: nvr:askdoc:rate:':
+    'the key variable is currentTenantKey() + the user (takeUploadSlot)',
+  'services/ai-explain.ts :: nvr:aiexplain:':
+    'content-addressed: a hash of the exact instructions and facts, so the same input gives the same answer',
+  'services/ai-stream-delivery.ts :: nvr:aistop:':
+    'stop flag for a random Ask AI stream id, checked against the asker; grants nothing',
+  'services/approval-changes.ts :: nvr:cab:':
+    'the key variable starts with currentTenantKey() (burstKey)',
+  'services/approval-changes.ts :: nvr:cab:chg:':
+    'the key variable starts with currentTenantKey() (burstKey)',
+  'services/cell-locks.ts :: nvr:cell-lock:': 'prefix; cellLockKey() adds currentTenantKey()',
+  'services/chat-bot-stream.ts :: nvr:chatbot:stream:':
+    'owner of a random chat-bot stream id (who may stop it); grants nothing',
+  'services/chat-link-preview.ts :: nvr:linkprev:':
+    'cache of a public URL preview keyed by the URL hash; holds no app data',
+  'services/chat-send.ts :: nvr:chatreply:':
+    'random one-time token; the value carries `t` and is refused in another app before it is spent',
+  'services/event-journal.ts :: nvr:ev:seq':
+    'deployment-wide event sequence; every event names a tenant-scoped room',
+  'services/event-journal.ts :: nvr:ev:journal':
+    'deployment-wide event journal; every event names a tenant-scoped room',
+  'services/event-journal.ts :: nvr:ev:rseq:':
+    'per-room counter; rooms are tenantScopedRoom() (app-prefixed)',
+  'services/event-journal.ts :: nvr:ev:iseq:': 'per-record counter under a tenant-scoped room',
+  'services/event-stream.ts :: nvr:ev:stream':
+    'deployment-wide event stream; every event names a tenant-scoped room',
+  'services/socket-replay.ts :: nvr:ev:stream':
+    'reads the deployment-wide event stream; every event names a tenant-scoped room',
+  'services/file-processing.ts :: nvr:fileproc:': 'keyOf() puts currentTenantKey() first',
+  'services/job-runs.ts :: nvr:joblog:': 'logKey() puts currentTenantKey() first',
+  'services/oauth-store.ts :: nvr:oauth:':
+    'prefix; every record carries `t` and is refused in another app (sameTenant)',
+  'services/oauth-store.ts :: nvr:oauth:rt-replay:v1:':
+    "keyed by a spent refresh token's hash and encrypted with that token; the grant is app-checked first",
+  'services/oauth-store.ts :: nvr:install:': 'hash input for a stored install id, not a Redis key',
+  'services/permission-cache.ts :: nvr:permver':
+    'prefix; the key helper adds getTenantId() and the cache is off on multi-tenant',
+  'services/readiness.ts :: nvr:readiness:v1:': 'scope = currentTenantKey() + the API version',
+  'services/readiness.ts :: nvr:readiness:lock:': 'scope = currentTenantKey() + the API version',
+  'services/readiness.ts :: nvr:readiness:fresh:': 'scope = currentTenantKey() + the API version',
+  'services/realtime-board.ts :: nvr:rt:board:':
+    'per-instance board of record viewers keyed by tenant-scoped rooms',
+  'services/security.ts :: nvr:maintenance':
+    "on multi-tenant the deployment-wide operator freeze by design (P5 T7); each app's own maintenance is its settings row",
+  'services/socket-health.ts :: nvr:rt:resync:':
+    'keyed by a random browser tab id; a resync hint, grants nothing',
+  'services/sql-checks/run.ts :: nvr:sqlchecks:lock:': 'runKey() = getTenantId()',
+  'services/tenancy/hub-source.ts :: nvr:tenancy:hub:':
+    "the deployment's own sealed tenant list (one per deployment by design)"
+}
+
 describe('credential binding guard (Hub phase 6 Task 12)', () => {
   const found = scan()
 
@@ -274,8 +499,23 @@ describe('credential binding guard (Hub phase 6 Task 12)', () => {
     expect([...wrong, ...stale.map((f) => `${f}: gone`)]).toEqual([])
   })
 
+  it('every nvr: Redis key names the app on a shared deployment, or is allow-listed', () => {
+    const keys = scanNvrKeys()
+    const unbound = [...keys].filter(([id, bound]) => !bound && !NVR_ALLOW[id]).map(([id]) => id)
+    expect(
+      unbound,
+      `add the app part (appKeyPart()) or allow-list with a reason:\n${unbound.join('\n')}`
+    ).toEqual([])
+    const stale = Object.keys(NVR_ALLOW).filter((id) => !keys.has(id) || keys.get(id))
+    expect(
+      stale,
+      `remove from NVR_ALLOW (gone, or now names the app):\n${stale.join('\n')}`
+    ).toEqual([])
+  })
+
   it('every entry says why', () => {
     for (const e of [...Object.values(REDIS_SITES), ...Object.values(SECRET_SITES)])
       expect(e.why.length).toBeGreaterThan(10)
+    for (const why of Object.values(NVR_ALLOW)) expect(why.length).toBeGreaterThan(10)
   })
 })

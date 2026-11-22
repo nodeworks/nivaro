@@ -11,6 +11,7 @@ import {
   accessPendingRefusals,
   accessPendingRouteAllowed
 } from '../services/access-pending.js'
+import { rateWindowKey } from '../services/app-redis-keys.js'
 import { withAuthDeadline } from '../services/auth-deadline.js'
 import { cacheSetting } from '../services/cache-config.js'
 import { registerCache } from '../services/cache-registry.js'
@@ -152,8 +153,8 @@ export async function enforceRateLimit(
     const results = await withAuthDeadline(
       req.server.redis
         .multi()
-        .incrby(`nvr:keyrl:${bucket}:${windowStart}`, cost)
-        .expire(`nvr:keyrl:${bucket}:${windowStart}`, KEY_WINDOW_SECONDS + 5)
+        .incrby(rateWindowKey(bucket, windowStart), cost)
+        .expire(rateWindowKey(bucket, windowStart), KEY_WINDOW_SECONDS + 5)
         .exec(),
       'the rate-limit counter'
     )

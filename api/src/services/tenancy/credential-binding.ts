@@ -38,5 +38,5 @@ export function appBoundSigInput(input: string): string {
  *  keys in Nivaro Cloud and self-hosted stay exactly as they were). */
 export function appKeyPart(): string {
   if (tenantSource() !== 'hub') return ''
-  return `app:${getTenantId() ?? '-'}:`
+  return `app:${getTenantId() ?? ''}:`
 }

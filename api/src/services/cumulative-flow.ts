@@ -4,6 +4,7 @@ import { db } from '../db/index.js'
 import { castText, qi, sqlDialect } from '../db/sql-dialect.js'
 import type { User } from '../types.js'
 import { isMultiTenant } from './deployment-mode.js'
+import { appKeyPart } from './tenancy/credential-binding.js'
 
 /**
  * #2758 — cumulative flow diagram: how many records sat in each pipeline
@@ -264,7 +265,11 @@ function assemble(
   }
 }
 
-const rollupKey = (template: string, collection: string) => `nvr:cfd:v1:${template}:${collection}`
+/** The stored rollup per pipeline template + collection; per app on a Hub shared deployment
+ *  (copied apps share template ids). */
+export const cfdRollupKey = (template: string, collection: string) =>
+  `nvr:cfd:v1:${appKeyPart()}${template}:${collection}`
+const rollupKey = cfdRollupKey
 
 /** Viewer is unrestricted on the collection: no row filter, no scope. */
 async function viewerUnrestricted(user: User, collection: string): Promise<boolean> {

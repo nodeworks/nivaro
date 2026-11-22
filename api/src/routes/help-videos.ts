@@ -1185,18 +1185,15 @@ export async function helpVideoMediaRoutes(app: FastifyInstance) {
       })
     if (!isUuid(token)) return gone()
     const key = `${EXPORT_TICKET_PREFIX}${token}`
-    // Single use: read and delete in one step so a second request finds nothing.
-    const raw = await app.redis
-      .multi()
-      .get(key)
-      .del(key)
-      .exec()
-      .then((r) => (r?.[0]?.[1] as string | null) ?? null)
-      .catch(() => null)
-    if (!raw) return gone()
-    // Unreadable, or made in another app of a Hub shared deployment: gone.
-    const ticket = readExportTicket(raw)
+    // Unreadable, or made in another app of a Hub shared deployment: gone, and left unspent
+    // (a request that reached the wrong app's host cannot burn the asker's link).
+    const peek = await app.redis.get(key).catch(() => null)
+    if (!peek) return gone()
+    const ticket = readExportTicket(peek)
     if (!ticket || !isUuid(ticket.user)) return gone()
+    // Single use: GETDEL, so of two requests racing one link only one gets it.
+    const spent = await app.redis.getdel(key).catch(() => null)
+    if (spent !== peek) return gone()
     if (ticket.tag) {
       // The session that asked has signed out: the link dies with it. Unlike
       // media tickets this fails CLOSED — an export is every chosen video.

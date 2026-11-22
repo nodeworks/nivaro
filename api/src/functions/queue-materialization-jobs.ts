@@ -20,6 +20,7 @@ import {
   resolveOwnedByMeSource,
   resolveTasksSource
 } from '../services/queues.js'
+import { appKeyPart } from '../services/tenancy/credential-binding.js'
 import type { User } from '../types.js'
 
 // ── Running a backfill ───────────────────────────────────────────────────────
@@ -54,43 +55,57 @@ async function backfillRedis(): Promise<LockRedis | null> {
   }
 }
 
-async function takeBackfillLock(queueId: string): Promise<boolean> {
-  if (runningHere.has(queueId)) return false
+/** The lock's name: per app on a Hub shared deployment (copied apps share queue ids, and one
+ *  app's backfill must not hold another's back). Unchanged elsewhere. */
+const lockName = (queueId: string) => `${appKeyPart()}${queueId}`
+
+/** Exported for tests. */
+export async function takeBackfillLock(queueId: string): Promise<boolean> {
+  const name = lockName(queueId)
+  if (runningHere.has(name)) return false
   const redis = await backfillRedis()
   if (redis) {
     try {
-      const ok = await redis.set(`nvr:queue-backfill:${queueId}`, '1', 'PX', BACKFILL_LOCK_MS, 'NX')
+      const ok = await redis.set(
+        `nvr:queue-backfill:${appKeyPart()}${queueId}`,
+        '1',
+        'PX',
+        BACKFILL_LOCK_MS,
+        'NX'
+      )
       if (ok !== 'OK') return false
     } catch {
       // Redis unreachable: fall back to this process's own guard.
     }
   }
-  runningHere.add(queueId)
+  runningHere.add(name)
   return true
 }
 
 async function markRerun(queueId: string): Promise<void> {
-  rerunHere.add(queueId)
+  const name = lockName(queueId)
+  rerunHere.add(name)
   const redis = await backfillRedis()
   await redis
-    ?.set(`nvr:queue-backfill:rerun:${queueId}`, '1', 'PX', BACKFILL_LOCK_MS)
+    ?.set(`nvr:queue-backfill:rerun:${appKeyPart()}${queueId}`, '1', 'PX', BACKFILL_LOCK_MS)
     .catch(() => {})
 }
 
-/** Release the lock; true when another pass was asked for meanwhile. */
-async function releaseBackfillLock(queueId: string): Promise<boolean> {
-  runningHere.delete(queueId)
-  let again = rerunHere.delete(queueId)
+/** Release the lock; true when another pass was asked for meanwhile. Exported for tests. */
+export async function releaseBackfillLock(queueId: string): Promise<boolean> {
+  const name = lockName(queueId)
+  runningHere.delete(name)
+  let again = rerunHere.delete(name)
   const redis = await backfillRedis()
   if (redis) {
     try {
-      const flag = `nvr:queue-backfill:rerun:${queueId}`
+      const flag = `nvr:queue-backfill:rerun:${appKeyPart()}${queueId}`
       const v = await redis.get(flag)
       if (v) {
         again = true
         await redis.del(flag)
       }
-      await redis.del(`nvr:queue-backfill:${queueId}`)
+      await redis.del(`nvr:queue-backfill:${appKeyPart()}${queueId}`)
     } catch {
       /* the lock expires on its own */
     }
