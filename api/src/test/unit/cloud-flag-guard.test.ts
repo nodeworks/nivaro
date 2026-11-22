@@ -23,8 +23,8 @@ import {
 //   cd api && node --import tsx ../scripts/cloud-flag-inventory.mts
 // and classify new sites by hand: rule, a one-line why, phase6 for every T6.
 
-/** Batches whose files are converted (Tasks 3, 5–9 add their letter). */
-const CONVERTED: Batch[] = ['R', 'B', 'C', 'D', 'A']
+/** Batches whose files are converted (every batch: the ratchet is closed, check (e)). */
+const CONVERTED: Batch[] = ['R', 'B', 'C', 'D', 'A', 'E']
 
 /** Predicate calls a converted file may carry beyond its inventory (new code written after the
  *  inventory, e.g. Task 4's hub source start in server.ts). Keep it short and explain each. */
@@ -32,6 +32,8 @@ const EXTRA_CALLS: Record<string, { multiTenant?: number; nivaroCloud?: number }
   // Its one C1 read (getMetaDb's connection URL) moved to services/tenancy/cloud-meta-source.ts
   // as cloudMetaDbUrl(); the inventory entry stays, the file now holds no such call.
   'middleware/tenant.ts': { nivaroCloud: -1 },
+  // ...and this is where that call went: getMetaDb's connection URL (no inventory entry of its own).
+  'services/tenancy/cloud-meta-source.ts': { nivaroCloud: 1 },
   // Task 5: the additive `multi_tenant` field on both /api/health answers
   'routes/health.ts': { multiTenant: 2 }
 }
@@ -336,7 +338,9 @@ describe('cloud-flag inventory (ratchet)', () => {
     for (const file of files) {
       if (!CONVERTED.includes(batchFor(file))) continue
       if (sitesIn.get(file)) problems.push(`${file}: ${sitesIn.get(file)} cloud-flag site(s) left`)
-      const want = expected.get(file)
+      // a file with no inventory entry is checked only when EXTRA_CALLS names it
+      const want =
+        expected.get(file) ?? (EXTRA_CALLS[file] ? { multiTenant: 0, nivaroCloud: 0 } : null)
       if (!want) continue
       const code = stripCommentsKeepLines(readFileSync(join(SRC, file), 'utf8'))
       const got = {
@@ -350,6 +354,17 @@ describe('cloud-flag inventory (ratchet)', () => {
       }
     }
     expect(problems).toEqual([])
+  })
+
+  it('(e) the ratchet is closed: every batch converted, no raw read outside deployment-mode.ts', () => {
+    expect(CONVERTED.slice().sort()).toEqual(['A', 'B', 'C', 'D', 'E', 'R'])
+    expect(scanned.map((s) => `${s.file}:${s.line} ${s.text}`)).toEqual([])
+    const raw = /\b(?:process\.)?env\.CLOUD_META_DB_URL\b|\[['"`]CLOUD_META_DB_URL['"`]\]/
+    const readers = listSourceFiles(SRC).filter(
+      (f) =>
+        f !== MODE_MODULE && raw.test(stripCommentsKeepLines(readFileSync(join(SRC, f), 'utf8')))
+    )
+    expect(readers).toEqual([])
   })
 
   it('(d) only deployment-mode.ts reads HUB_SHARED_DEPLOYMENT / HUB_DEPLOYMENT_TOKEN', () => {
