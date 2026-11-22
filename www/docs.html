@@ -22314,6 +22314,7 @@ GET /api/files/usage/orphans    → files referenced by nothing (admin)</code></
             <li>Phone app sign-in, phone push and the MCP/OAuth issuer: a shared deployment gives the self-hosted admin origin for every app, so these need a per-app origin first.</li>
             <li>Local file storage keyed per app.</li>
             <li>Automatic mail retry (<code class="doc-code">MAIL_RETRY</code>): never on a multi-tenant process, as in cloud.</li>
+            <li>Staged imports (upload a file, the import drainer runs it): the upload and requeue answer 409 <code class="doc-code">IMPORTS_NOT_ON_SHARED</code>, because no drainer runs per app yet. Collection imports, which run in the request, still work.</li>
             <li>A per-app help-video render queue: a publish renders its own video in the request; videos left queued after a restart wait for the next publish.</li>
           </ul>
           <div class="doc-note">Some messages still say "cloud mode" on a shared deployment too (for example the Teams bot reason, the hub link note about HUB_TOKEN, socket replay, and a few copy lines in the SQLite, realtime and cache settings). The behaviour is correct; the wording is tidied in phase 6.</div>
