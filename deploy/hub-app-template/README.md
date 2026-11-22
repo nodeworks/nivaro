@@ -47,10 +47,17 @@ from deciding what runs on the swarm, and BOTH are required:
    tags, and tag a commit `v<major>.<minor>.<patch>` (the major is `HUB_TEMPLATE_MAJOR` in
    `scripts/deploy.sh` and `nivaro-hub-stack-major` in `manager/docker-stack.yml`). Only Hub
    operators get write access to it.
-2. **Swarm.** A swarm manager running Traefik v3 with the swarm provider on an external overlay
-   network (default `proxy`). Entry points `websecure` (https) and `web` (http), or set
-   `entrypoint_https=` / `entrypoint_http=` in a key configuration. The TLS certificate is
-   Traefik's (a resolver or a default certificate covering the names).
+2. **GitLab and swarm.** GitLab 17.1 or newer: the Hub sets `restrict_user_defined_variables`
+   with `ci_pipeline_variables_minimum_override_role = no_one_allowed` on every app project and
+   stops with `CI_CONFIG_REFUSED` when GitLab does not keep both. A swarm manager running
+   Traefik v3 with the swarm provider on an external overlay network (default `proxy`). Entry
+   points `websecure` (https) and `web` (http), or set `entrypoint_https=` /
+   `entrypoint_http=` in a key configuration. The stack's router asks for TLS and names no
+   certificate resolver, so Traefik serves its **default certificate**: make the wildcard
+   certificate (or a certificate covering the names you use) Traefik's default certificate
+   (a `tls.stores.default` entry). With automatic names the wildcard DNS record must already
+   point at the edge in front of Traefik; the Hub waits for a name to resolve but never makes
+   DNS records.
 3. **Manager setup** (as root on the manager, once per template major):
    ```sh
    install -m 0755 manager/nivaro-hub-deploy /usr/local/bin/nivaro-hub-deploy
@@ -66,12 +73,17 @@ from deciding what runs on the swarm, and BOTH are required:
      `stack=` names (`<app>--<env>`) and exact `host=` names.
    - one `~deploy/.ssh/authorized_keys` line as in `manager/authorized_keys.example`, with the
      app's public key and `keyid=` its fingerprint (`ssh-keygen -lf <key>.pub`).
-   - The private key is the app project's masked `DEPLOY_SSH_KEY` variable (base64), set by the
-     Hub. The Hub never holds a key that reaches another app.
-5. **Hub target.** GitLab address, namespace, this template + `template_ref`, `deploy_host`
-   (`deploy@manager.example.com`), `manager_known_hosts` (`ssh-keyscan -t ed25519 <manager>`;
-   `[host]:port` entries when the port is not 22), the proxy network, and how names are made
-   (wildcard DNS, or manual tickets).
+   - The private key is the app project's masked, protected `DEPLOY_SSH_KEY` variable (base64),
+     set by the Hub on that one project. It is not a group variable: no key reaches another app,
+     and the Hub does not keep the private half after pushing it.
+5. **Hub target** (Hub → Drivers → Where new apps go). GitLab address, a token with the `api`
+   scope belonging to a Maintainer of the namespace, the namespace, this template as
+   `namespace/project` (not a numeric id) + `template_ref` (a tag or a full commit sha, never a
+   branch), `deploy_host` (`deploy@manager.example.com`), `manager_known_hosts`
+   (`ssh-keyscan -t ed25519 <manager>`; `[host]:port` entries when the port is not 22), the proxy
+   network, and how names are made (wildcard DNS, or manual tickets). Test checks the token, the
+   namespace and that the template can be seen. Each app repository is created as
+   `<namespace>/<app>-deploy`; no group variable is needed.
 
 ## The operator step (Installed)
 

@@ -449,3 +449,898 @@ export const hubPromotionsDocs: DocSection = {
     }
   ]
 }
+
+export const hubDatabasesDocs: DocSection = {
+  id: 'hub-databases',
+  label: 'Hub databases',
+  content: [
+    { type: 'h1', id: 'hub-databases', text: 'Hub databases' },
+    {
+      type: 'p',
+      text: "The Databases tab of the Hub (Hub administrators only) keeps the database servers the Hub knows and the databases it has made, requested or adopted. A database belongs to one environment of one app. The Hub never reads an app's records: it only creates the database, hands it to a login the app uses, and later checks that it still answers and is still the right kind of database."
+    },
+    {
+      type: 'note',
+      text: 'Every secret here is sealed with `ENCRYPTION_KEY` and shown as ••••••. A provisioning login, an app login password and a database connection are never answered, logged or written into an error. Without `ENCRYPTION_KEY` saving any of them answers `HUB_NEEDS_ENCRYPTION_KEY`.'
+    },
+    { type: 'h2', id: 'hub-databases-servers', text: 'Servers and modes' },
+    {
+      type: 'p',
+      text: "A server is an engine, a host, a port and a mode. Engines: SQL Server (`mssql`), Postgres (`pg`), MySQL (`mysql2`) and MariaDB (`mariadb`). SQLite is a file on the app's own host, so the Hub cannot make one: a SQLite server is refused with `ENGINE_NOT_PROVISIONABLE`."
+    },
+    {
+      type: 'table',
+      head: ['Mode', 'What the Hub does', 'Provisioning login'],
+      rows: [
+        [
+          '`automatic`',
+          'Creates the app login and the database on the server, hands the database to the login, then checks it as that login.',
+          'Required: a user and password that may create databases and logins. Sealed; never answered.'
+        ],
+        [
+          '`manual`',
+          'Records the request and shows a DBA checklist. The DBA creates the database and login by hand, and the connection is entered in the Hub. The Hub only checks it.',
+          'Optional. When saved it is used only to test that the server answers, never to create anything.'
+        ]
+      ]
+    },
+    {
+      type: 'p',
+      text: 'Server settings: name (unique, case-insensitive), engine, host (a name or an IP, never a URL), port (blank = the engine default: 1433, 5432, 3306), TLS mode (`disable`, `require`, `verify-ca`, `verify-full`) and, for SQL Server, whether to trust the server certificate, the SQL Server collation for new databases (default `SQL_Latin1_General_CP1_CI_AS`), the MySQL and MariaDB account host the app login is created for (default `%`) and free notes. Test connects with the provisioning login and says what is missing:'
+    },
+    {
+      type: 'table',
+      head: ['Engine', 'Oldest release', 'Rights the provisioning login needs'],
+      rows: [
+        ['SQL Server', 'SQL Server 2019 (15)', '`CREATE ANY DATABASE` and `ALTER ANY LOGIN`.'],
+        ['Postgres', '14', '`CREATEDB` and `CREATEROLE`, or a superuser.'],
+        [
+          'MySQL',
+          '8.0.13',
+          '`GRANT OPTION`, `CREATE USER`, and every privilege that `GRANT ALL PRIVILEGES ON <database>.*` hands over (or `ALL` on `*.*`).'
+        ],
+        [
+          'MariaDB',
+          '10.11',
+          'The same rights as MySQL. The server flavour must match the engine you chose.'
+        ]
+      ]
+    },
+    {
+      type: 'p',
+      text: 'Azure SQL Database and Azure SQL Managed Instance cannot be provisioned by the Hub: use a manual server for them.'
+    },
+    {
+      type: 'ul',
+      items: [
+        "Changing a server's engine, host or port is refused with `SERVER_IN_USE` while any database on it has ownership markers or is not yet ready. Add a new server instead.",
+        'Changing the engine, host, port or TLS settings without entering the provisioning login again is refused with `SECRET_REQUIRED`: a stored login never follows a server somewhere else.',
+        'A server cannot be deleted while a database row names it (`IN_USE`).'
+      ]
+    },
+    { type: 'h2', id: 'hub-databases-names', text: 'Names and what each engine gets' },
+    {
+      type: 'p',
+      text: 'For an environment the Hub proposes database `nivaro_<app>_<env>` and login `<app>_<env>` (a login that starts with a digit or is a reserved name gets `u_` in front; long names are shortened with a 4-character hash). You may type your own. A database name is lower-case letters, digits and `_`, 2 to 63 characters, starting with a letter. A login name follows the same rule and holds at most 32 characters on MySQL and MariaDB, 63 on Postgres, 128 on SQL Server. Reserved names are refused on every engine: `sa`, `root`, `postgres`, `master`, `msdb`, `model`, `tempdb`, `mysql`, `sys`, `information_schema`, `performance_schema`, `template0`, `template1`, `public`, `dbo`, `guest`, `admin`, `administrator`, `system`, `default`, and anything starting `pg_` or `mysql`.'
+    },
+    {
+      type: 'p',
+      text: 'The app login password is generated by the Hub (32 characters), sealed when the database is recorded, and reused by every retry. Each engine gets the same shape: one empty database, one login that owns only that database and has no server-wide rights.'
+    },
+    {
+      type: 'table',
+      head: ['Engine', 'Database', 'Login and rights'],
+      rows: [
+        [
+          'SQL Server',
+          '`CREATE DATABASE … COLLATE <collation>`, `READ_COMMITTED_SNAPSHOT ON`.',
+          'A SQL login (`CHECK_POLICY = ON`), a user in the database for it, member of `db_owner`. No server roles.'
+        ],
+        [
+          'Postgres',
+          "`CREATE DATABASE … ENCODING 'UTF8' TEMPLATE template0`, `CONNECT` revoked from `PUBLIC`.",
+          'A role with `LOGIN` that owns the database. No superuser, `CREATEDB` or `CREATEROLE`.'
+        ],
+        [
+          'MySQL',
+          '`CHARACTER SET utf8mb4`, collation `utf8mb4_0900_ai_ci`.',
+          "`CREATE USER '<login>'@'<account host>'` and `GRANT ALL PRIVILEGES` on that one database. Nothing on `*.*`."
+        ],
+        [
+          'MariaDB',
+          '`CHARACTER SET utf8mb4`, collation `utf8mb4_unicode_ci`.',
+          'The same as MySQL.'
+        ]
+      ]
+    },
+    { type: 'h2', id: 'hub-databases-lifecycle', text: 'Status of a database' },
+    {
+      type: 'table',
+      head: ['Status', 'Meaning'],
+      rows: [
+        ['`requested`', 'Asked of a DBA on a manual server. No connection yet.'],
+        ['`creating`', 'The Hub is making it on an automatic server.'],
+        [
+          '`ready`',
+          'Made (or connected) and checked: empty, or an existing Nivaro install when adopted. Only a ready database can be given to an environment.'
+        ],
+        [
+          '`failed`',
+          'Creation or a DBA connection failed. The last check says why. Retrying a creation, or entering a connection again, starts over.'
+        ],
+        [
+          '`dropping`',
+          'Fenced by a delete with drop. It cannot be attached or opened; if the drop fails it stays here until the delete is repeated.'
+        ]
+      ]
+    },
+    {
+      type: 'p',
+      text: 'Making a database is safe to repeat. The Hub writes to a database or login only when its own marker says it made that object, and the marker is stored together with the engine, host and port it was made on. A database or login with the same name that the Hub did not make is never touched: creation stops with `DATABASE_EXISTS` or `LOGIN_EXISTS`. After creating, the Hub connects as the new login and the database must read as empty, and no other Hub record may already use the same server and database.'
+    },
+    { type: 'h2', id: 'hub-databases-manual', text: 'Manual servers: the DBA checklist' },
+    {
+      type: 'p',
+      text: 'While a database on a manual server is not ready, its detail shows what the DBA must make: the server, the database name, the collation or character set, the login and how it is created, the rights (owner of this database only), `READ_COMMITTED_SNAPSHOT ON` on SQL Server, the instruction to leave it empty, any server notes, and then "Databases → Set connection". The DBA, or the app\'s owner, enters the connection (host, port, database, login, password, TLS) in the Hub. The Hub checks it before it becomes ready. A creation that waits for the database continues by itself within 5 minutes of the database becoming ready, or at once when Set connection or Check now makes it ready.'
+    },
+    {
+      type: 'warn',
+      text: "An app owner (not a Hub administrator) may set a connection and press Check now only on a database attached to an environment of their own app, and only against that database's own server. The host and port they send must be the server's (compared as the server compares them: case, a trailing dot and the engine default port do not matter), otherwise the Hub answers `HOST_NOT_SERVER`. The TLS settings are the server's, whatever the owner sends. Each owner has 10 tries per 10 minutes per database; the next answers 429 `TOO_MANY_TRIES`. Without this, the Hub would try logins against any host for any owner."
+    },
+    { type: 'h2', id: 'hub-databases-checks', text: 'Checks' },
+    {
+      type: 'p',
+      text: "A check connects as the app's own login and reads only: the version, whether the login may build tables, how many tables there are and whether the Nivaro migration ledger exists. It stores the result and the time on the database."
+    },
+    {
+      type: 'table',
+      head: ['State', 'Meaning', 'Refusal code'],
+      rows: [
+        [
+          '`unreachable`',
+          'The connection failed (wrong login, host, port, TLS, or the server is down).',
+          '`DATABASE_UNREACHABLE`'
+        ],
+        [
+          '`too_old`',
+          'The server is older than the oldest release in the table above, or the server is MariaDB while the engine says MySQL (or the other way round).',
+          '`DATABASE_TOO_OLD`'
+        ],
+        [
+          '`no_rights`',
+          'Connected, but the login cannot build tables (SQL Server: not `db_owner`; Postgres: neither owner nor `CREATE` on schema `public`; MySQL and MariaDB: neither `ALL` nor `CREATE`, `ALTER`, `INDEX` and `DROP`), or the migration ledger cannot be read.',
+          '`DATABASE_NO_RIGHTS`'
+        ],
+        ['`empty`', 'Connected, no tables. What a new app needs.', 'none'],
+        [
+          '`nivaro`',
+          'Connected and it holds a Nivaro install (the number of migrations and the last one are shown). Accepted only by Adopt.',
+          '`DATABASE_NOT_EMPTY` anywhere an empty database is required'
+        ],
+        [
+          '`foreign`',
+          'Connected, but it holds tables that are not a Nivaro install. Never accepted.',
+          '`DATABASE_NOT_NIVARO` (Adopt), `DATABASE_NOT_EMPTY` (creation)'
+        ]
+      ]
+    },
+    {
+      type: 'p',
+      text: 'A failure the Hub itself recorded (for example a failed creation) shows as state `error` with its code. Check now on a waiting manual database whose result is `empty` makes it ready.'
+    },
+    { type: 'h2', id: 'hub-databases-adopt', text: 'Adopting a database' },
+    {
+      type: 'p',
+      text: 'Adopt a database records one that already exists (Databases → Adopt a database): engine, host, port, database, login, password, TLS. The Hub checks it and accepts only an empty database or an existing Nivaro install; a database with other tables is refused (`DATABASE_NOT_NIVARO`). Adopting never creates or changes anything on the server. An adopted database is linked to a server row when its engine, host and port match one. Two records may never point at the same database: the Hub compares host and name, and also the server identity the database itself reports (so an alias, an IP and a name for the same server count as one), and refuses with `DATABASE_IN_USE`.'
+    },
+    { type: 'h2', id: 'hub-databases-delete', text: 'Detach and drop' },
+    {
+      type: 'p',
+      text: 'Delete always needs the database name typed as `confirm` (`CONFIRM_REQUIRED` otherwise). It is refused with `IN_USE` while an environment uses the database: detach it from the environment first (deleting the environment does that).'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Detach (default): the Hub forgets the record and its sealed connection. The database and login stay on the server.',
+        'Detach and drop (`drop: true`): also drops the database and the login on the server. Allowed only for a database the Hub made itself on a server that is still `automatic` and still where the markers were made, and only for what its markers say it made (a login the Hub did not create is never dropped). A database adopted or requested from a DBA is `DROP_NOT_ALLOWED`: detach it. If the server now points somewhere else the answer is `SERVER_MOVED` and nothing is dropped.',
+        'A drop fences the row first (`dropping`), then touches the server. If the drop fails the row stays on record so the leftovers are not forgotten, and repeating the delete retries it.'
+      ]
+    },
+    { type: 'h2', id: 'hub-databases-routes', text: 'Routes' },
+    {
+      type: 'p',
+      text: "All under `/api/hub`, hub mode only. Every write is a Hub administrator's except where the second column says an app owner may act. A person who may not reach a database gets 404, never 403. Every write adds an activity row."
+    },
+    {
+      type: 'table',
+      head: ['Route', 'Purpose'],
+      rows: [
+        [
+          '`GET /db-servers`, `POST /db-servers`, `PATCH/DELETE /db-servers/:id`',
+          'List, add, edit, delete servers. The provisioning login is the mask in every answer.'
+        ],
+        [
+          '`POST /db-servers/:id/test`',
+          'Connect and report version, whether the login can create, and what is missing.'
+        ],
+        [
+          '`GET /databases`',
+          'Every database with its server, status, last check and environment (administrators).'
+        ],
+        [
+          '`GET /databases/:id`',
+          'One database, with the DBA checklist while a manual one is not ready. App owners: only a database of their own app.'
+        ],
+        [
+          '`POST /databases/adopt`',
+          'Adopt a database (body is the connection, or `{ connection }`).'
+        ],
+        [
+          '`PUT /databases/:id/connection`',
+          "Set the DBA's connection on a requested or failed manual database. App owners: own app only, own server only, rate limited. Answers `{ data, check, creation }`; `creation` says a waiting creation was started."
+        ],
+        [
+          '`POST /databases/:id/check`',
+          'Check now. App owners: own app only, own server only, rate limited. Answers `{ data, creation }`.'
+        ],
+        ['`DELETE /databases/:id`', 'Body `{ confirm, drop? }`: detach, or detach and drop.']
+      ]
+    },
+    { type: 'h2', id: 'hub-databases-errors', text: 'Every refusal code' },
+    {
+      type: 'p',
+      text: "The Hub answers `{ error, code }`. The text is the Hub's own and never a driver's: a driver error can carry a login or a host. Anything the Hub does not recognise is a fixed 500 `HUB_ERROR` and only its name is logged. The Databases tab keeps plain words for each code and a test compares them with this list."
+    },
+    { type: 'h3', text: 'Input' },
+    {
+      type: 'table',
+      head: ['Code', 'Meaning'],
+      rows: [
+        ['`BAD_NAME`', 'A server needs a name of at most 200 characters.'],
+        ['`BAD_ENGINE`', 'The engine must be `mssql`, `pg`, `mysql2` or `mariadb`.'],
+        ['`BAD_HOST`', 'The host must be a host name or an IP address, not a URL.'],
+        ['`BAD_PORT`', 'The port must be a whole number from 1 to 65535.'],
+        ['`BAD_MODE`', 'The mode must be `automatic` or `manual`.'],
+        [
+          '`BAD_SSL`',
+          '`ssl_mode` is not one of `disable`, `require`, `verify-ca`, `verify-full`, or `trust_server_cert` is not true or false.'
+        ],
+        ['`BAD_COLLATION`', 'The collation is not a collation name.'],
+        [
+          '`BAD_USER_HOST`',
+          'The MySQL or MariaDB login host must be `%`, a host name, an address or a pattern.'
+        ],
+        ['`BAD_NOTES`', 'Notes must be text of at most 1000 characters.'],
+        ['`BAD_SECRET`', 'On a manual server, the saved login must be a user and a password.'],
+        [
+          '`BAD_CONNECTION`',
+          'The connection is not valid (missing part, spaces, control characters, a bad URL, an unsupported engine).'
+        ],
+        ['`BAD_DROP`', '`drop` must be true or false.']
+      ]
+    },
+    { type: 'h3', text: 'Servers and logins' },
+    {
+      type: 'table',
+      head: ['Code', 'Meaning'],
+      rows: [
+        ['`ADMIN_REQUIRED`', 'An automatic server needs a provisioning login (user and password).'],
+        [
+          '`SECRET_REQUIRED`',
+          'The engine, host, port or TLS changed: enter the provisioning login again.'
+        ],
+        [
+          '`LOGIN_HALF_MASKED`',
+          'The login was sent with one half still the mask (••••••). Send both user and password again, or neither. Sealing the mask would lock the server out.'
+        ],
+        [
+          '`SERVER_IN_USE`',
+          'The Hub made or is making databases on this server, so its engine, host and port cannot change.'
+        ],
+        [
+          '`IN_USE`',
+          'A server is still named by a database row, or an environment still uses the database, or another environment already uses it.'
+        ],
+        ['`NAME_TAKEN`', 'A server with that name already exists.'],
+        [
+          '`SERVER_MOVED`',
+          'The server now points somewhere else than where this database was made. Nothing was changed or dropped.'
+        ],
+        [
+          '`NOT_AUTOMATIC`',
+          'Only a database the Hub creates on an automatic server can be provisioned, and the server must still be automatic.'
+        ],
+        [
+          '`NOT_MANUAL`',
+          'Only a database requested from a DBA takes a connection; the Hub manages this one itself.'
+        ],
+        [
+          '`ENGINE_MISMATCH`',
+          'The connection is for another engine than the one the database was requested on.'
+        ],
+        [
+          '`ENGINE_NOT_PROVISIONABLE`',
+          'The Hub makes databases on SQL Server, Postgres, MySQL and MariaDB only.'
+        ]
+      ]
+    },
+    { type: 'h3', text: 'Names' },
+    {
+      type: 'table',
+      head: ['Code', 'Meaning'],
+      rows: [
+        [
+          '`DATABASE_NAME_INVALID`',
+          'Lower-case letters, digits and `_`, 2 to 63 characters, starting with a letter, not a reserved name.'
+        ],
+        [
+          '`LOGIN_NAME_INVALID`',
+          'Lower-case letters, digits and `_`, starting with a letter, short enough for the engine, not reserved.'
+        ],
+        [
+          '`UNSAFE_IDENTIFIER`',
+          'A name, password, collation or login host that is not safe to put into a statement was refused before it reached the server.'
+        ],
+        ['`RESERVED_NAME`', 'That name is reserved on database servers.'],
+        [
+          '`LOGIN_EXISTS`',
+          'A login with this name exists on the server and the Hub did not make it for this record. Nothing was changed.'
+        ],
+        [
+          '`DATABASE_EXISTS`',
+          'A database with this name exists on the server and the Hub did not make it for this record. Nothing was changed.'
+        ],
+        ['`NOT_OWNED`', 'The Hub changes or drops only an object its own marker says it made.'],
+        ['`DATABASE_RECORDED`', 'The Hub already records a database with this name on this host.'],
+        ['`DATABASE_IN_USE`', 'Another Hub record already uses this database on this server.']
+      ]
+    },
+    { type: 'h3', text: 'State' },
+    {
+      type: 'table',
+      head: ['Code', 'Meaning'],
+      rows: [
+        ['`NOT_FOUND`', 'No such database or server (or the caller may not see it).'],
+        ['`NOT_READY`', 'The database is not ready yet.'],
+        ['`DATABASE_NOT_READY`', 'Only a ready database can be given to an environment.'],
+        ['`NOT_WAITING`', 'This database already has a working connection.'],
+        ['`NO_CONNECTION`', 'No connection is saved for this database yet.'],
+        ['`DATABASE_DROPPING`', 'This database is being dropped.'],
+        [
+          '`PROVISION_RUNNING`',
+          'This database is being created or dropped right now. Try again when that finishes.'
+        ],
+        [
+          '`LOCK_UNAVAILABLE`',
+          '503. The Hub cannot reach Redis to be sure only one change runs on this database. Try again shortly.'
+        ],
+        [
+          '`STATE_CHANGED`',
+          'The database changed while this ran (another action finished first). Reload and try again.'
+        ],
+        [
+          '`CONNECTION_UNREADABLE`',
+          'The stored connection cannot be read (check `ENCRYPTION_KEY`).'
+        ],
+        [
+          '`HUB_SECRET_UNREADABLE`',
+          'A saved secret cannot be decrypted (wrong key or damaged value).'
+        ],
+        ['`HUB_SECRET_NOT_SEALED`', 'A stored secret is not encrypted.'],
+        [
+          '`HUB_NEEDS_ENCRYPTION_KEY`',
+          'Set `ENCRYPTION_KEY` (64 hex characters) on the Hub before saving a secret.'
+        ]
+      ]
+    },
+    { type: 'h3', text: 'Delete, checks and owners' },
+    {
+      type: 'table',
+      head: ['Code', 'Meaning'],
+      rows: [
+        ['`CONFIRM_REQUIRED`', 'Type the database name to confirm.'],
+        [
+          '`DROP_NOT_ALLOWED`',
+          'The Hub drops only a database or login it created itself on an automatic server. Detach instead.'
+        ],
+        ['`DATABASE_UNREACHABLE`', 'The check could not connect.'],
+        [
+          '`DATABASE_TOO_OLD`',
+          'The server is older than the oldest release Nivaro supports, or it is the other flavour (MySQL / MariaDB).'
+        ],
+        ['`DATABASE_NO_RIGHTS`', 'Connected, but the login cannot build tables.'],
+        ['`DATABASE_NOT_NIVARO`', 'The database holds tables that are not a Nivaro install.'],
+        [
+          '`DATABASE_NOT_EMPTY`',
+          'An empty database is required here and this one holds tables (creation, or a database that is a Nivaro install).'
+        ],
+        ['`HOST_NOT_SERVER`', "An app owner may point a check only at the database's own server."],
+        [
+          '`TOO_MANY_TRIES`',
+          '429, with `Retry-After`. More than 10 owner tries in 10 minutes on this database.'
+        ],
+        [
+          '`DB_ERROR`',
+          '502. The database server answered with an error. The text is scrubbed of logins and passwords.'
+        ],
+        ['`HUB_ERROR`', '500. The Hub could not do that; see the server log.']
+      ]
+    }
+  ]
+}
+
+export const hubCreateDocs: DocSection = {
+  id: 'hub-create-app',
+  label: 'Creating apps from the Hub',
+  content: [
+    { type: 'h1', id: 'hub-create-app', text: 'Creating apps from the Hub' },
+    {
+      type: 'p',
+      text: "Apps → Create app (Hub administrators) makes a new Nivaro app end to end: a database for each environment, a GitLab deploy repository, the settings and secrets the deploy needs, the first deploy on the Docker swarm, the app's name, the Hub link and the first administrator. The result is an ordinary environment the Hub can promote and roll back like any adopted one."
+    },
+    {
+      type: 'warn',
+      text: 'Creating apps needs GitLab 17.1 or newer (the Hub sets `restrict_user_defined_variables` together with `ci_pipeline_variables_minimum_override_role` on every deploy repository and refuses to deploy when GitLab does not keep them), a Docker swarm with Traefik v3, and a Hub with `ENCRYPTION_KEY` set. The Hub never makes DNS names on a name server, Microsoft app registrations, or swarm users: those are listed below as what you do yourself.'
+    },
+    { type: 'h2', id: 'hub-create-targets', text: 'Targets: where new apps go' },
+    {
+      type: 'p',
+      text: 'A target (Drivers tab → Where new apps go) holds everything about one place apps are created. Only kind `gitlab` exists. Settings:'
+    },
+    {
+      type: 'table',
+      head: ['Setting', 'Meaning'],
+      rows: [
+        [
+          'Token',
+          'A GitLab token with the `api` scope, as a Maintainer of the namespace. Sealed; shown as ••••••. Changing the GitLab address or namespace needs it entered again (`SECRET_REQUIRED`).'
+        ],
+        [
+          '`api`',
+          'The GitLab address. https only (http only for localhost). No user, query or fragment.'
+        ],
+        [
+          '`namespace`',
+          "The GitLab group (or the token's own user) the deploy repositories are created in. A repository is `<namespace>/<app>-deploy`."
+        ],
+        [
+          '`template_project`, `template_ref`',
+          'The deploy repository template (below) and the pinned ref its deploy job is read from: a version tag such as `v1.2.0`, or a full 40-character commit sha. A branch name is refused, so the job cannot change under an app.'
+        ],
+        ['`pin_file`', 'Where the version pin is committed. Default `.hub/nivaro-version`.'],
+        ['`deploy_job`', 'The job name the deploy runs under. Default `deploy`.'],
+        [
+          '`deploy_host`',
+          'The swarm manager the deploy connects to by ssh: `host`, `user@host` or `host:port`.'
+        ],
+        [
+          '`manager_known_hosts`',
+          "The manager's ssh host keys (`ssh-keyscan -t ed25519 <manager>`; `[host]:port` entries when the port is not 22). Must hold a key for `deploy_host`. The deploy connects with strict host key checking and refuses any other key."
+        ],
+        ['`proxy_network`', 'The external overlay network Traefik reads. Default `proxy`.'],
+        [
+          '`dns_mode`',
+          '`automatic`: the Hub derives every hostname under a wildcard domain. `manual`: you give each hostname and the Hub waits until a person has made the DNS name.'
+        ],
+        [
+          '`wildcard_domain`',
+          'Required for `automatic`, for example `apps.example.com`. Every hostname must end in it.'
+        ],
+        [
+          '`edge_address`, `cert_note`',
+          'Used only in the manual-name ticket text: where the name must point, and a free note about the certificate.'
+        ],
+        [
+          '`scheme`, `port`',
+          'https (default) or http, and an optional port. Plain http is allowed only when the wildcard domain is `localhost` or ends in `.test`.'
+        ]
+      ]
+    },
+    {
+      type: 'p',
+      text: "Test checks, one by one: the token works, the namespace exists and the token user is a Maintainer there (or the namespace is the token user's own), and the template project can be seen. A target cannot be deleted while an app was created on it (`IN_USE`). Saving a target gives every app created on it its CI path and project variables again, one app at a time (the answer says which, and `pending` for any that finish in the background)."
+    },
+    { type: 'h2', id: 'hub-create-template', text: 'The deploy repository template' },
+    {
+      type: 'p',
+      text: 'The Hub forks one deploy repository per app from a template that ships in this repository (`deploy/hub-app-template/`). Import it once into GitLab, protect its tags, tag a commit `v<major>.<minor>.<patch>` and name the project and tag in the target. Its README is the operator manual; this is the summary.'
+    },
+    {
+      type: 'ul',
+      items: [
+        "Nothing the app repository changes can decide what runs. At fork the Hub sets the app project's CI configuration path to `ci/deploy.yml@<template_project>:<template_ref>`, so GitLab reads the deploy job from the Hub-owned template at the pinned ref and ignores the app repository's own `.gitlab-ci.yml`. It also sets the project so nobody may set pipeline variables by hand. These are checked again before every deploy and whenever the target changes; a project that does not keep them stops with `CI_CONFIG_REFUSED`.",
+        "One deploy key per app. The Hub makes an ed25519 key pair when it creates the repository and pushes the private half once as the project's masked, protected variable `DEPLOY_SSH_KEY`. It is never stored by the Hub. The public half and its fingerprint are what an operator installs on the manager. A key can reach only that app's stacks and hostnames.",
+        "The manager runs a forced command. The key may run only `nivaro-hub-deploy`, with three verbs (check who owns a stack, create a secret, deploy a stack) for the exact stack names and hostnames in that app's key file, one proxy network and one image by digest. There is no shell and no Docker socket forwarding.",
+        'The image is pinned by digest. The pin file holds the Nivaro version and the image digest; `latest` and a pin without a digest are refused.'
+      ]
+    },
+    {
+      type: 'p',
+      text: "What the Hub sets on each app repository. Project variables for every environment (protected): `DEPLOY_HOST`, `DEPLOY_KNOWN_HOSTS` (base64, masked), `HUB_HOST_SUFFIX` (the wildcard domain) and `HUB_PIN_FILE` when the pin file is not the default. Per environment (scoped to it, masked, protected, each the base64 of its value): `NIVARO_DB_URL_B64`, `NIVARO_HUB_TOKEN_B64`, `NIVARO_SESSION_SECRET_B64`, `NIVARO_ENCRYPTION_KEY_B64`, `NIVARO_OIDC_CLIENT_SECRET_B64`. The deploy turns each into a swarm secret and the app reads it through its `<SETTING>_FILE`, so no value reaches a command line, an environment or a log. On the environment branch the Hub commits `.hub/app.env` with only these settings (never a secret), the version pin and the app's `.gitlab-ci.yml`: `APP_KEY`, `ENV_KEY`, `STACK_NAME`, `APP_HOSTS`, `PUBLIC_URL`, `ADMIN_URL`, `HUB_URL`, `NIVARO_ENVIRONMENT`, `DB_CLIENT`, `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_REDIRECT_URI`, `PROXY_NETWORK`, `TRUST_PROXY`. The deploy refuses any other key in that file."
+    },
+    {
+      type: 'warn',
+      text: 'The session secret and the encryption key are made once and never overwritten, on a retry or any later run. A new session secret signs everyone out; a new encryption key makes every sealed value in the app unreadable.'
+    },
+    { type: 'h2', id: 'hub-create-host', text: 'Host prerequisites' },
+    {
+      type: 'ul',
+      items: [
+        'A swarm manager running Traefik v3 with the swarm provider on the external proxy network. Entry points `websecure` (https) and `web` (http).',
+        'On an automatic target the wildcard DNS record must already point at the edge that reaches Traefik: the Hub waits for the name to resolve but never makes DNS records.',
+        "The wildcard certificate must be Traefik's default certificate. The app's router asks for TLS with no certificate resolver, so Traefik answers every name with its default certificate. With manual names, the same holds for the names a person adds.",
+        'On the manager, once per template major: the `nivaro-hub-deploy` wrapper, its configuration folder and the stack file (see the template README). Per app: its key file and its `authorized_keys` line, which the Hub shows (see "Waiting for the deploy key").',
+        'Created apps run one node: web, worker and Redis share an uploads volume and are placed on manager nodes. Extensions are not part of a created app.'
+      ]
+    },
+    { type: 'h2', id: 'hub-create-form', text: 'What you enter' },
+    {
+      type: 'table',
+      head: ['Field', 'Rule'],
+      rows: [
+        [
+          'App key and name',
+          'The key is lower-case letters, digits and single dashes, starting with a letter, no `--` and not ending in `-`. It makes the repository `<key>-deploy`. The name is one line, 200 characters at most.'
+        ],
+        ['Owners', 'People who may see the app (and act on its creation): they must exist.'],
+        [
+          'First administrator',
+          'An email address, and optionally a first and last name. The new app is told to make this person its administrator.'
+        ],
+        [
+          'Target',
+          'The target the app is created on. It must be complete (token, namespace, a pinned template ref, host keys that cover the deploy host, a DNS mode, https).'
+        ],
+        [
+          'Version',
+          '`x.y.z`. Its image must exist on Docker Hub (`HUB_IMAGE`, default `nodeworks/nivaro`) with a digest. Created apps start with no extensions.'
+        ],
+        [
+          'Sign-in',
+          "The issuer (https), client id and client secret of the Microsoft app registration the new app signs people in with. The secret is sealed and goes only to the app. You add each environment's redirect URI (`<base URL>/api/auth/callback`) to the registration yourself; the plan lists them."
+        ],
+        [
+          'Environments',
+          'One to six, in promotion order. Each key is a branch name and follows the key rule. The first branches from `main`; each later one is promoted from the one before it. `production` gets the host `<app>`, any other `<app>--<env>`, under the wildcard domain. On a manual target you type each hostname; on an automatic target you may type one directly under the wildcard.'
+        ],
+        [
+          'Database, per environment',
+          'A server (the Hub makes the database on an automatic server, or asks a DBA on a manual one) with an optional database and login name, or an existing ready database not used by another environment.'
+        ]
+      ]
+    },
+    {
+      type: 'p',
+      text: 'Plan (a read that writes nothing) shows, per environment, the hostname, base URL, the ticket text for a manual name, the redirect URI, the branch, the swarm stack name (`<app>--<env>`, shortened with a hash past 40 characters), the database and, for a DBA, the checklist, and lists every problem at once. Create plans again inside a lock that only one creation at a time holds, so two creations never take the same key, hostname or stack name. It writes the app, owners, environments, database records and one creation per environment in one transaction, and answers 202.'
+    },
+    { type: 'h2', id: 'hub-create-steps', text: 'The eight steps' },
+    {
+      type: 'p',
+      text: "Each environment is walked through the same steps in the background, in position order. Every step can be repeated safely, so Retry starts again at the first unfinished step and never plans again. A creation holds the environment's promotion lock, so a promotion and a creation never run on one environment together."
+    },
+    {
+      type: 'table',
+      head: ['Step', 'What it does'],
+      rows: [
+        [
+          '`database`',
+          "Makes the database on an automatic server (see Hub databases), or waits for the DBA's connection, or uses the existing ready one."
+        ],
+        [
+          '`repository`',
+          "Forks the template into `<namespace>/<app>-deploy` (once per app, however many environments), sets the CI path and locks pipeline variables, makes and pushes the app's deploy key, and records a GitLab driver for it. A project already at the path is adopted only if it is the one this app recorded, or its description carries this app's own mark and it was created by the target's token user; otherwise the step stops with `PROJECT_EXISTS`."
+        ],
+        ['`variables`', "Sets the project variables and this environment's five secret variables."],
+        [
+          '`config`',
+          'Protects and creates the environment branch, commits `.hub/app.env`, the pin and `.gitlab-ci.yml`, and gives the environment its placement and an `api` component whose check address is `<base URL>/api/version`, so promotions and rollbacks work afterwards.'
+        ],
+        [
+          '`deploy`',
+          "Waits for the operator to install the app's key, then runs the deploy job once and waits for it (up to 60 minutes)."
+        ],
+        [
+          '`name`',
+          'Waits until the hostname resolves and `<base URL>/api/version` answers the version being created. Automatic names: 20 looks, 15 seconds apart. Manual names: waits for as long as it takes.'
+        ],
+        ['`link`', 'Waits until the app answers the Hub link (10 looks, 15 seconds apart).'],
+        [
+          '`admin`',
+          'Asks the app, over the Hub link, to make the first administrator (up to 20 tries 15 seconds apart for "not ready yet" answers).'
+        ]
+      ]
+    },
+    {
+      type: 'p',
+      text: "The environment is `provisioning` while it is created, `waiting_for_name` while a hand-made name is awaited, and becomes `active` when every step is done. A creation is `queued`, `running`, `waiting`, `done`, `failed`, `interrupted` or `cancelled`. Progress, the log, the made repository, driver, placement and database, the ticket, the checklist and the manager lines are on the environment's creation panel; none of them contains a secret."
+    },
+    { type: 'h2', id: 'hub-create-waits', text: 'Waits' },
+    {
+      type: 'table',
+      head: ['Waiting for', 'Why', 'How it ends'],
+      rows: [
+        [
+          '`database`',
+          'A manual server: a DBA must make the database and the connection must be entered.',
+          'The connection is saved and checks empty (or Check now says so). The Hub also looks again every 5 minutes.'
+        ],
+        [
+          '`operator`',
+          "The app's deploy key is not installed on the swarm manager yet.",
+          'Press Installed (below). There is no timeout and no automatic deploy.'
+        ],
+        [
+          '`name`',
+          'A manual target: a person must make the DNS name and the certificate.',
+          'The name resolves and serves the version. The Hub looks again every 5 minutes and on Check now. There is no timeout.'
+        ]
+      ]
+    },
+    { type: 'h3', id: 'hub-create-waits-operator', text: 'Waiting for the deploy key' },
+    {
+      type: 'p',
+      text: "After the repository step the creation shows what the operator installs on the manager: the `authorized_keys` line for the app's key (a forced command, `restrict`) and the text of `/etc/nivaro-hub-deploy/keys/<app>.conf` with the exact `stack=` and `host=` lines of all the app's environments, plus the network and image. Install both, then press Installed. The Hub then runs the deploy once for every environment of that app that was waiting. If the manager refuses the key (not installed, or the stack is already bound to another key) the job exits with code 77 after printing the single line `NIVARO_HUB_KEY_NOT_INSTALLED`; the Hub reads only that line and goes back to waiting, with the press spent. Every other deploy failure fails the step (`DEPLOY_FAILED`); Retry runs the job again. Installed is allowed to the app's owners too."
+    },
+    { type: 'h3', id: 'hub-create-waits-name', text: 'Manual names: the ticket' },
+    {
+      type: 'p',
+      text: "On a manual target the creation shows a ready-to-paste request: create the DNS name, pointing at the edge address of the target (or the edge that serves the swarm), with a certificate that covers it, routed to the swarm's Traefik by name; plus the target's certificate note. Hand it to whoever makes names. Check now looks at once: whether the name resolves, and whether it serves the version. The name check sends no credential, follows no redirect and is bounded to a few seconds."
+    },
+    { type: 'h2', id: 'hub-create-admin', text: 'The first administrator' },
+    {
+      type: 'p',
+      text: "An app made by the Hub has `HUB_TOKEN` set, which mounts `POST /api/hub-link/first-admin` on it (never in cloud mode, and not at all without a hub token). The Hub calls it with the app's hub token as the bearer. It works only while the app has no active administrator:"
+    },
+    {
+      type: 'ul',
+      items: [
+        'No user has the email: one is created, in the oldest role with admin access, active, with no external id (the first Microsoft sign-in links it by email).',
+        'A person already has the email: they are moved to that role (`created: false`). A person not yet started (draft, invited, pending, unverified) is made active; one disabled on purpose is refused.',
+        'Once an administrator exists every call answers 409 `HAS_ADMIN` and writes nothing: the Hub counts that as done.',
+        'Exactly one call wins, however many race. The call is a write, so the maintenance freeze applies. It adds an activity row and a security alert in the app.'
+      ]
+    },
+    { type: 'h2', id: 'hub-create-control', text: 'Retry, check, cancel and delete' },
+    {
+      type: 'ul',
+      items: [
+        'Retry (administrators): a failed, interrupted or cancelled creation starts again at its first unfinished step.',
+        "Check now (administrators and the app's owners): looks at the waited thing once. If it is there the creation continues. If a promotion holds the environment the creation stays waiting, with a note, and continues when the environment is free.",
+        'Installed: see "Waiting for the deploy key".',
+        'Cancel (administrators): a waiting or queued creation stops at once; a running one stops at its next step boundary.',
+        'A creation whose Hub stopped mid-step becomes `interrupted` when the Hub starts again, or within 5 minutes if its lock is gone; Retry continues it. The 5-minute job `hub-creation-waits` also starts waiting creations whose database or name is ready, and creations that found their environment busy.'
+      ]
+    },
+    {
+      type: 'warn',
+      text: "Deleting an environment or an app in the Hub removes only the Hub's records (and the creation rows and the environment's dedicated placement). It does not touch anything it made outside the Hub. Left behind: the GitLab deploy repository and its branches and variables, the GitLab driver, the database and login (the database row stays on the Databases tab, now attached to nothing: detach it, or detach and drop it there), the swarm stack and its secrets on the manager, the app's key file and `authorized_keys` line on the manager, the DNS name and certificate, and the redirect URI in the Microsoft app registration. Deleting is refused with `CREATION_RUNNING` while a creation step or a promotion holds the environment."
+    },
+    { type: 'h2', id: 'hub-create-routes', text: 'Routes' },
+    {
+      type: 'p',
+      text: 'Under `/api/hub`, hub mode only. Administrators unless stated; an app owner reaches only their own environments (anything else is 404).'
+    },
+    {
+      type: 'table',
+      head: ['Route', 'Purpose'],
+      rows: [
+        [
+          '`GET/POST /targets`, `PATCH/DELETE /targets/:id`, `POST /targets/:id/test`',
+          'Targets. The token is the mask. PATCH answers `sync` (one result per app made on the target: `ok`, `code`, or `pending`) or `sync_error: SYNC_READ_FAILED`; the target is saved either way.'
+        ],
+        ['`POST /apps/create/plan`', 'The plan with every blocker. Read only.'],
+        [
+          '`POST /apps/create`',
+          'Start. 202 `{ app_id, environments }`, or 409 with `blockers` and the first blocker as `code`.'
+        ],
+        [
+          '`GET /environments/:envId/creation`',
+          "The creation: steps, status, waiting reason, log, ticket, checklist, database, deploy key lines. Administrators and the app's owners."
+        ],
+        ['`POST /environments/:envId/creation/retry`', 'Retry.'],
+        ['`POST /environments/:envId/creation/check`', 'Check now (administrators and owners).'],
+        [
+          '`POST /environments/:envId/creation/installed`',
+          'The deploy key is installed (administrators and owners). 202.'
+        ],
+        [
+          '`POST /environments/:envId/creation/cancel`',
+          'Cancel. 409 `NOT_RUNNING` unless it is running, waiting or queued.'
+        ]
+      ]
+    },
+    { type: 'h2', id: 'hub-create-blockers', text: 'Blocker codes' },
+    {
+      type: 'p',
+      text: 'Plan and Create list every blocker at once; fix them all and plan again. A blocker with an `env` belongs to that environment.'
+    },
+    {
+      type: 'table',
+      head: ['Code', 'Meaning'],
+      rows: [
+        [
+          '`BAD_KEY`',
+          'The app key is not lower-case letters, digits and single dashes starting with a letter (no `--`).'
+        ],
+        ['`KEY_TAKEN`', 'An app with that key exists.'],
+        ['`BAD_NAME`', 'The app needs a one-line name of at most 200 characters.'],
+        ['`BAD_OWNER`', 'Owners must be a list of existing people.'],
+        [
+          '`BAD_EMAIL`',
+          'The first administrator needs an email like ada@example.com; names must be one line.'
+        ],
+        [
+          '`BAD_TARGET`',
+          'No target picked, or the target is incomplete (the text says what is missing: token, namespace, template ref, host keys, DNS mode, scheme, wildcard domain).'
+        ],
+        ['`BAD_VERSION`', 'The version is not `x.y.z`.'],
+        [
+          '`IMAGE_MISSING`',
+          'The image for that version is not on Docker Hub, or Docker Hub did not answer.'
+        ],
+        [
+          '`IMAGE_NO_DIGEST`',
+          'Docker Hub lists the version without a digest, which the pin needs.'
+        ],
+        [
+          '`BAD_SIGNIN`',
+          'The sign-in issuer must be an https URL, the client id one word, and the client secret present.'
+        ],
+        ['`EXTENSIONS_UNSUPPORTED`', 'Created apps start with no extensions.'],
+        [
+          '`NEEDS_ENCRYPTION_KEY`',
+          "Set `ENCRYPTION_KEY` on the Hub: it seals the new apps' tokens and connections."
+        ],
+        ['`NO_ENVIRONMENTS`', 'Add at least one environment.'],
+        ['`TOO_MANY_ENVIRONMENTS`', 'At most six environments.'],
+        ['`BAD_ENV_KEY`', 'An environment key breaks the key rule.'],
+        ['`DUPLICATE_ENV`', 'An environment key is listed twice.'],
+        ['`HOSTNAME_REQUIRED`', 'A manual target: enter the hostname for this environment.'],
+        [
+          '`HOSTNAME_INVALID`',
+          'Not a hostname (an IP, one label, bad characters, a label of 64 or more characters, `xn--`, or plain http for a name that is not `localhost` or `.test`).'
+        ],
+        [
+          '`HOSTNAME_OUTSIDE_WILDCARD`',
+          'The name must be one label directly under the wildcard (automatic), or end in the wildcard (manual).'
+        ],
+        [
+          '`HOSTNAME_TAKEN`',
+          'Another environment, another environment in this request, or the Hub itself already uses that name.'
+        ],
+        [
+          '`STACK_NAME_TAKEN`',
+          "The swarm stack name is already another environment's: pick another environment key."
+        ],
+        [
+          '`BAD_SERVER`',
+          'No database server picked, or the server is not usable (not provisionable, an automatic server with no login, a bad collation or login host).'
+        ],
+        ['`DATABASE_NOT_READY`', 'The existing database named does not exist or is not ready.'],
+        [
+          '`DATABASE_IN_USE`',
+          'The existing database already belongs to an environment, or is given to two.'
+        ],
+        [
+          '`DATABASE_NAME_INVALID`',
+          'A database or login name is not accepted (see Hub databases).'
+        ],
+        [
+          '`DATABASE_RECORDED`',
+          'The Hub already records that database on that server, or two environments get the same database or login.'
+        ],
+        [
+          '`DATABASE_EXISTS`',
+          'The automatic server already has a database of that name: pick another name, or adopt it.'
+        ],
+        [
+          '`SERVER_UNREACHABLE`',
+          'The automatic server did not answer when the Hub looked for the name.'
+        ],
+        [
+          '`PROJECT_EXISTS`',
+          'GitLab already has a project at `<namespace>/<app>-deploy`. The Hub creates the repository itself.'
+        ],
+        ['`GITLAB_UNREACHABLE`', 'GitLab did not answer when the Hub looked for that project.'],
+        [
+          '`NO_HUB_URL`',
+          'The Hub has no address to give the apps (`HUB_URL`, else `ADMIN_URL`, else `PUBLIC_URL`), or it is not https (http only for localhost and `.test`), or it is local to the machine while the apps are not.'
+        ]
+      ]
+    },
+    { type: 'h3', text: 'Refusals while it runs' },
+    {
+      type: 'table',
+      head: ['Code', 'Meaning'],
+      rows: [
+        [
+          '`CREATION_STARTING`',
+          '409. Another app is being created right now (the start lock); try again in a moment.'
+        ],
+        ['`NOT_FOUND`', '404. No creation for that environment.'],
+        [
+          '`NOT_RESUMABLE`',
+          '409. Retry works on a failed, interrupted or cancelled creation; Check now on a waiting one.'
+        ],
+        [
+          '`ENVIRONMENT_BUSY`',
+          '409. A promotion or a creation step holds the environment; try again shortly.'
+        ],
+        ['`NOT_WAITING_FOR_OPERATOR`', '409. The creation is not waiting for the deploy key.'],
+        ['`NOT_RUNNING`', '409. Cancel works on a running, waiting or queued creation.'],
+        [
+          '`CREATION_RUNNING`',
+          '409. A creation step or a promotion holds the environment: wait for it or cancel it before deleting.'
+        ],
+        ['`TARGET_MISCONFIGURED`', '409. The target has no GitLab address.']
+      ]
+    },
+    { type: 'h3', text: 'Why a step failed' },
+    {
+      type: 'p',
+      text: "A failed step shows `CODE: text` as its note and as the creation's error. Database codes are listed under Hub databases."
+    },
+    {
+      type: 'table',
+      head: ['Code', 'Meaning'],
+      rows: [
+        [
+          '`PROJECT_EXISTS`',
+          "A GitLab project exists at the path (or the recorded one) and is not this app's deploy repository."
+        ],
+        [
+          '`REPOSITORY_BUSY`',
+          'Another environment of this app held the repository too long; retry.'
+        ],
+        [
+          '`FORK_UNFINISHED`, `IMPORT_FAILED`, `IMPORT_TIMEOUT`',
+          'GitLab did not finish copying the template (stopped, failed, or too slow). Retry resumes the same project.'
+        ],
+        [
+          '`GITLAB_REFUSED`, `GITLAB_BAD_ANSWER`, `GITLAB_BAD_NAME`',
+          'GitLab refused a call or answered something the Hub cannot use.'
+        ],
+        [
+          '`GITLAB_NO_TOKEN`, `GITLAB_UNAUTHORIZED`, `GITLAB_FORBIDDEN`, `GITLAB_UNREACHABLE`',
+          'No token, a refused token (wrong, expired, revoked), a token without the `api` scope or role, or GitLab did not answer.'
+        ],
+        [
+          '`CI_CONFIG_REFUSED`',
+          "The deploy repository's CI path or pipeline-variable setting is not what the Hub set, or GitLab (older than 17.1) would not keep it. Nothing deploys from it."
+        ],
+        ['`VARIABLE_REFUSED`', 'GitLab refused a CI variable.'],
+        [
+          '`PLAN_MISSING`, `PROJECT_MISSING`, `DRIVER_MISSING`, `DATABASE_MISSING`, `COMMIT_MISSING`, `HUB_TOKEN_MISSING`, `OIDC_SECRET_MISSING`',
+          'What an earlier step should have recorded is missing. Retry; start again if it persists.'
+        ],
+        ['`IMAGE_NO_DIGEST`', 'The image planned for the creation has no digest.'],
+        [
+          '`DEPLOY_FAILED`',
+          'The deploy job did not succeed; its page is linked in the log. The deploy script rolls back.'
+        ],
+        [
+          '`PIPELINE_NOT_CREATED`, `JOB_TIMEOUT`, `JOB_RETRY_REFUSED`, `DEPLOY_JOB_UNEXPECTED`',
+          'GitLab never created the pipeline, the job did not finish in 60 minutes, GitLab refused to retry it, or it was in a state the Hub did not expect.'
+        ],
+        [
+          '`NAME_NOT_SERVING`',
+          'Automatic names: the hostname never resolved and served the new version within the looks.'
+        ],
+        ['`LINK_REFUSED`', "The app refused the Hub link: its `HUB_TOKEN` is not the Hub's."],
+        ['`LINK_UNREACHABLE`', "The app's Hub link never answered."],
+        [
+          '`BAD_EMAIL`, `NO_ADMIN_ROLE`, `PERSON_DISABLED`, `AMBIGUOUS_EMAIL`, `FIRST_ADMIN_FAILED`',
+          'The app refused the first administrator: the email is not valid; the app has no role with admin access; the person with that email was disabled on purpose; two people differ only in the case of the email; or the app could not save it.'
+        ],
+        [
+          '`HUB_LINK_REFUSED`, `HUB_LINK_MISSING`, `HUB_LINK_REDIRECT`, `HUB_TOKEN_MISSING`, `BAD_BASE_URL`, `BAD_ANSWER`, `HTTP_<status>`',
+          'The first-administrator call was refused (wrong token or too many wrong ones), the app has no hub link route (no `HUB_TOKEN`, or an older app), it redirected, the environment has no hub token, the base URL is not usable, the app answered something unreadable, or it answered another HTTP status.'
+        ],
+        [
+          '`MAINTENANCE`, `TIMEOUT`, `UNREACHABLE`, `HTTP_502`, `HTTP_503`, `HTTP_504`',
+          'Not an error yet: the Hub asks again (up to 20 times) before it fails the step.'
+        ]
+      ]
+    }
+  ]
+}
