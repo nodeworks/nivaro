@@ -50,6 +50,7 @@ import {
 import { generateHexSecret } from '../db/names.js'
 import { getServerRow, type HubDbServerRow, publicServer } from '../db/servers.js'
 import { defaultSleep, type Sleep } from '../gitlab-write.js'
+import { hubTokenColumns } from '../link-token.js'
 import { checkName as checkEnvironmentNameById } from '../name-check.js'
 import { HEARTBEAT_FRESH_MS, withoutFreshHeartbeat } from '../promote-heal.js'
 import { defaultPromoteLock, LOCK_RENEW_MS, type PromoteLock } from '../promote-lock.js'
@@ -253,7 +254,8 @@ async function writeCreation(
 ): Promise<{ app_id: number; environments: Array<{ id: number; key: string }> }> {
   // Sealed before the transaction: a missing ENCRYPTION_KEY writes nothing.
   const oidcSecret = sealSecret(String(input.signin.client_secret))
-  const tokens = plan.environments.map(() => sealSecret(generateHexSecret(32)))
+  // Ruling X-4: sealed with its app-link lookup (link-token.ts hubTokenColumns).
+  const tokens = plan.environments.map(() => hubTokenColumns(generateHexSecret(32)))
   const now = () => new Date()
   // The digests and Hub URL the planner accepted: each creation keeps them for its retries.
   const digest = String(facts.digest)
@@ -302,7 +304,7 @@ async function writeCreation(
           status: 'provisioning',
           base_url: pe.base_url,
           hostnames: JSON.stringify(pe.hostname ? [pe.hostname] : []),
-          hub_token: tokens[i],
+          ...tokens[i],
           hub_managed: true,
           created_at: now(),
           updated_at: now()

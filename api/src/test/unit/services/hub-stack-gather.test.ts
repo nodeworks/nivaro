@@ -23,6 +23,8 @@ const { db } = (await import('../../../db/index.js')) as unknown as { db: Knex }
 const m542 = await import('../../../db/migrations/542_hub_tables.js')
 const m543 = await import('../../../db/migrations/543_hub_promotions.js')
 const m546 = await import('../../../db/migrations/546_hub_stack_settings.js')
+// X-4: hub tokens are written with their app-link lookup (551 adds the column).
+const m551 = await import('../../../db/migrations/551_hub_signins.js')
 const gather = await import('../../../services/hub/promote-gather.js')
 const SG = await import('../../../services/hub/docker/stack-gather.js')
 const S = await import('../../../services/hub/docker/stack-settings.js')
@@ -161,6 +163,7 @@ beforeAll(async () => {
   await m542.up(db)
   await m543.up(db)
   await m546.up(db)
+  await m551.up(db)
 })
 
 afterAll(async () => {

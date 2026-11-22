@@ -66,7 +66,7 @@ import {
   validatePlacementInput
 } from '../services/hub/drivers.js'
 import { GitlabWriteError } from '../services/hub/gitlab-write.js'
-import { linkTokenInUse, tokenLookupHash } from '../services/hub/link-token.js'
+import { hubTokenColumns, linkTokenInUse } from '../services/hub/link-token.js'
 import { hubModeEnabled } from '../services/hub/mode.js'
 import {
   gatherPlanInput,
@@ -82,7 +82,7 @@ import {
   recoverOnceAtBoot,
   startPromotion
 } from '../services/hub/promote-run.js'
-import { HUB_MASK, HubSecretError, nextSecret } from '../services/hub/secrets.js'
+import { HUB_MASK, HubSecretError } from '../services/hub/secrets.js'
 import {
   hubStatusKey,
   readAppStatus,
@@ -563,7 +563,8 @@ function environmentRoutes(app: FastifyInstance) {
     if (await linkTokenInUse(incoming.token, null))
       return fail(reply, 409, 'TOKEN_IN_USE', 'Another environment already uses this hub token')
     return guarded(reply, async () => {
-      const token = incoming.token === undefined ? null : nextSecret(incoming.token, null)
+      // Ruling X-4: sealed with its app-link lookup, through the one helper.
+      const token = hubTokenColumns(typeof incoming.token === 'string' ? incoming.token : null)
       if (patch.position === undefined) {
         const last = (await db(ENVS).where({ app_id: appId }).max({ p: 'position' }).first()) as
           | { p: number | null }
@@ -575,8 +576,7 @@ function environmentRoutes(app: FastifyInstance) {
         status: 'active',
         hostnames: '[]',
         ...patch,
-        hub_token: token,
-        hub_token_lookup: token ? tokenLookupHash(String(incoming.token)) : null,
+        ...token,
         created_at: now(),
         updated_at: now()
       })
@@ -645,10 +645,10 @@ function environmentRoutes(app: FastifyInstance) {
         'Enter the hub token again when the address changes'
       )
     return guarded(reply, async () => {
-      // Absent keeps the stored token (nextSecret reads undefined as a clear).
-      if (sent !== undefined) patch.hub_token = nextSecret(sent, storedToken)
+      // Absent and the mask keep the stored token; a new one (or a clear) goes through the one
+      // helper, so its lookup is written with it (ruling X-4).
       if (sent !== undefined && sent !== HUB_MASK)
-        patch.hub_token_lookup = patch.hub_token ? tokenLookupHash(String(sent)) : null
+        Object.assign(patch, hubTokenColumns(typeof sent === 'string' ? sent : null))
       if (Object.keys(patch).length) {
         await db.transaction(async (trx) => {
           await trx(ENVS)

@@ -25,6 +25,8 @@ const m543 = await import('../../../db/migrations/543_hub_promotions.js')
 const m544 = await import('../../../db/migrations/544_hub_databases.js')
 const m545 = await import('../../../db/migrations/545_hub_creations.js')
 const m546 = await import('../../../db/migrations/546_hub_stack_settings.js')
+// X-4: hub tokens are written with their app-link lookup (551 adds the column).
+const m551 = await import('../../../db/migrations/551_hub_signins.js')
 const run = await import('../../../services/hub/promote-run.js')
 const RS = await import('../../../services/hub/docker/run-step.js')
 const S = await import('../../../services/hub/docker/stack-settings.js')
@@ -289,6 +291,7 @@ beforeAll(async () => {
   await m544.up(db)
   await m545.up(db)
   await m546.up(db)
+  await m551.up(db)
 })
 
 afterAll(async () => {

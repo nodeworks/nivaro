@@ -4,6 +4,7 @@ import { sessionSecretProblem } from '../../../auth/secret-policy.js'
 import { db } from '../../../db/index.js'
 import { parseJson } from '../../pipeline-engine.js'
 import type { Validation } from '../drivers.js'
+import { hubTokenColumns } from '../link-token.js'
 import type { HubEnvironmentRow } from '../promote-types.js'
 import { HUB_MASK, HubSecretError, nextSecret, openSecret, sealSecret } from '../secrets.js'
 import type { DockerDriverConfig } from './driver-config.js'
@@ -612,7 +613,7 @@ async function writeStackSettings(
   envId: number,
   fields: StackSettingsFields,
   extensionPins: Record<string, string> | undefined,
-  hubToken: string | null
+  hubToken: { hub_token: string | null; hub_token_lookup: string | null } | null
 ): Promise<void> {
   await db.transaction(async (trx) => {
     const stored = await trx(TABLE).where({ environment_id: envId }).first('id', 'secrets')
@@ -640,7 +641,7 @@ async function writeStackSettings(
       await trx(ENVS)
         .where({ id: envId })
         .where((q) => q.whereNull('hub_token').orWhere('hub_token', ''))
-        .update({ hub_token: hubToken, updated_at: new Date() })
+        .update({ ...hubToken, updated_at: new Date() })
     }
     if (extensionPins !== undefined) {
       await trx(ENVS)
@@ -669,7 +670,8 @@ export async function saveStackSettings(
   // under the save is a plain 404.
   if (!env)
     throw Object.assign(new Error('No such environment.'), { statusCode: 404, code: 'NOT_FOUND' })
-  const hubToken = env.hub_token ? null : sealSecret(newSecret())
+  // Ruling X-4: sealed with its app-link lookup (link-token.ts hubTokenColumns).
+  const hubToken = env.hub_token ? null : hubTokenColumns(newSecret())
 
   try {
     await writeStackSettings(envId, fields, extensionPins, hubToken)

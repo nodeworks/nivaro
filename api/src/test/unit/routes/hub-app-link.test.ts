@@ -30,6 +30,10 @@ vi.mock('../../../db/index.js', async () => {
 const { db } = (await import('../../../db/index.js')) as unknown as { db: Knex }
 const { up: up542 } = await import('../../../db/migrations/542_hub_tables.js')
 const { up: up551 } = await import('../../../db/migrations/551_hub_signins.js')
+// Ruling X-4: phase 4's first stack-settings save mints the environment's hub token.
+const { up: up546 } = await import('../../../db/migrations/546_hub_stack_settings.js')
+const { saveStackSettings } = await import('../../../services/hub/docker/stack-settings.js')
+const { openSecret } = await import('../../../services/hub/secrets.js')
 const { hubAppLinkRoutes } = await import('../../../routes/hub-app-link.js')
 const { sealSecret } = await import('../../../services/hub/secrets.js')
 const { tokenLookupHash, _resetLinkTokenForTests } = await import(
@@ -96,6 +100,7 @@ let ids: Record<keyof typeof TOKENS, { app: number; env: number }>
 
 beforeAll(async () => {
   await up542(db)
+  await up546(db)
   await up551(db)
   app = await build()
 })
@@ -240,6 +245,33 @@ describe('POST /signins', () => {
     expect(maintenanceExemptPath('/api/hub/app-link/switcher')).toBe(true)
     expect(maintenanceExemptPath('/api/hub/app-link/switcherx')).toBe(false)
     expect(maintenanceExemptPath('/api/hub/app-link/other')).toBe(false)
+  })
+})
+
+describe('X-4: a hub token another phase mints is found at once', () => {
+  it('a Docker environment whose first stack-settings save made its token passes /signins and /switcher (no restart)', async () => {
+    // The once-per-process repair ran already (first miss); every later miss is final.
+    expect((await ask('x'.repeat(48), PAT)).statusCode).toBe(401)
+    const [envId] = await db('nivaro_hub_environments').insert({
+      app_id: ids.opsProd.app,
+      key: 'docker',
+      position: 9,
+      status: 'active',
+      base_url: 'https://ops-docker.example.com',
+      hostnames: '[]'
+    })
+    await saveStackSettings(Number(envId), {
+      size: 'small',
+      redis: 'bundled',
+      publish_port: null,
+      settings: {},
+      secrets: null
+    })
+    const row = await db('nivaro_hub_environments').where({ id: envId }).first()
+    const plain = openSecret(row.hub_token) as string
+    expect(plain).toBeTruthy()
+    expect((await report(plain, PAT)).statusCode).toBe(204)
+    expect((await ask(plain, PAT)).statusCode).toBe(200)
   })
 })
 

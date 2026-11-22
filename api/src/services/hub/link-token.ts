@@ -1,7 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { db } from '../../db/index.js'
 import { errorTag } from '../../lib/error-tag.js'
-import { HUB_MASK, openSecret } from './secrets.js'
+import { HUB_MASK, openSecret, sealSecret } from './secrets.js'
 
 /**
  * Nivaro Hub phase 7 (plan Decision 13): which environment an app-link bearer belongs to.
@@ -16,7 +16,11 @@ import { HUB_MASK, openSecret } from './secrets.js'
  * TOKEN_IN_USE), and a bearer that still confirms on more than one row (rows saved before that
  * check) names no environment at all.
  *
- * On the first miss in a process the lookups are repaired once: every row whose lookup is
+ * Every writer of a hub token (environment create/patch, app creation, the first stack-settings
+ * save) stores it through hubTokenColumns(), which writes the sealed token and its lookup
+ * together (ruling X-4), so an app's first call finds it at once.
+ *
+ * As a backstop, on the first miss in a process the lookups are repaired once: every row whose lookup is
  * missing (saved before migration 551) or differs from the hash of its sealed token (written by
  * an older replica) gets the right one, a cleared token loses its lookup; then the lookup is
  * retried.
@@ -31,6 +35,19 @@ const MAX_TOKEN_LENGTH = 1024
 /** SHA-256 hex of a hub token: what `hub_token_lookup` holds. */
 export function tokenLookupHash(token: string): string {
   return createHash('sha256').update(String(token), 'utf8').digest('hex')
+}
+
+/**
+ * The ONE way to write an environment's hub token (ruling X-4): the sealed token and its lookup,
+ * always together. A plain token → sealed + SHA-256 lookup; null or '' → both cleared. Spread the
+ * answer into the row's insert or update.
+ */
+export function hubTokenColumns(plain: string | null): {
+  hub_token: string | null
+  hub_token_lookup: string | null
+} {
+  if (typeof plain !== 'string' || plain === '') return { hub_token: null, hub_token_lookup: null }
+  return { hub_token: sealSecret(plain), hub_token_lookup: tokenLookupHash(plain) }
 }
 
 function sha256(v: string): Buffer {

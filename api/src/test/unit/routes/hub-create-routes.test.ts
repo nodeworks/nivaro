@@ -220,6 +220,11 @@ const store = await import('../../../services/hub/create/store.js')
 const { memoryPromoteLock } = await import('../../../services/hub/promote-lock.js')
 const { HUB_MASK, sealSecret } = await import('../../../services/hub/secrets.js')
 const { GitlabWriteError } = await import('../../../services/hub/gitlab-write.js')
+const { hubAppLinkRoutes } = await import('../../../routes/hub-app-link.js')
+const { environmentForLinkToken, _resetLinkTokenForTests } = await import(
+  '../../../services/hub/link-token.js'
+)
+const { openSecret } = await import('../../../services/hub/secrets.js')
 
 const KEY = 'f'.repeat(64)
 const ADMIN_ID = 'aaaaaaaa-0000-4000-8000-000000000001'
@@ -855,6 +860,38 @@ describe('databases', () => {
 // ── creation ─────────────────────────────────────────────────────────────────
 
 describe('creation', () => {
+  it('X-4: an app created after the boot repair passes the app link at once (no restart)', async () => {
+    _resetLinkTokenForTests()
+    // The once-per-process repair runs on the first miss; after it every miss is final.
+    expect(await environmentForLinkToken('x'.repeat(48))).toBeNull()
+    const out = await created()
+    const envId = out.environments[0].id
+    const row = await db('nivaro_hub_environments').where({ id: envId }).first()
+    const plain = openSecret(row.hub_token) as string
+    expect(row.hub_token_lookup).toBeTruthy()
+    expect((await environmentForLinkToken(plain))?.environment_id).toBe(envId)
+    // and through the app-link route itself
+    const link = Fastify()
+    link.decorate('redis', {
+      get: async () => null,
+      incrby: async () => 1,
+      expire: async () => 1
+    } as never)
+    await link.register(hubAppLinkRoutes, { prefix: '/api/hub/app-link' })
+    await link.ready()
+    try {
+      const res = await link.inject({
+        method: 'POST',
+        url: '/api/hub/app-link/switcher',
+        headers: { authorization: `Bearer ${plain}` },
+        payload: { email: 'pat@example.com' }
+      })
+      expect(res.statusCode, res.body).toBe(200)
+    } finally {
+      await link.close()
+    }
+  })
+
   it('/apps/create/plan answers the plan and writes nothing', async () => {
     const before = await counts()
     const res = await call('POST', '/apps/create/plan', asAdmin, createInput())

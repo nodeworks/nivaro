@@ -22,6 +22,8 @@ vi.mock('../../../db/index.js', async () => {
 const { db } = (await import('../../../db/index.js')) as unknown as { db: Knex }
 const { up: up542 } = await import('../../../db/migrations/542_hub_tables.js')
 const { up: up546 } = await import('../../../db/migrations/546_hub_stack_settings.js')
+// X-4: the hub token is written with its app-link lookup (551 adds the column).
+const { up: up551 } = await import('../../../db/migrations/551_hub_signins.js')
 const S = await import('../../../services/hub/docker/stack-settings.js')
 const { HUB_MASK, openSecret, sealSecret } = await import('../../../services/hub/secrets.js')
 const { environmentFromRow } = await import('../../../services/hub/apps.js')
@@ -86,6 +88,7 @@ describe('hub stack settings', () => {
     process.env.ENCRYPTION_KEY = KEY
     await up542(db)
     await up546(db)
+    await up551(db)
   })
   afterAll(async () => {
     if (prevKey === undefined) delete process.env.ENCRYPTION_KEY
