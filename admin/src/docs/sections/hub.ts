@@ -291,7 +291,7 @@ export const hubPromotionsDocs: DocSection = {
     { type: 'h2', id: 'hub-promotions-components', text: 'Components' },
     {
       type: 'p',
-      text: "An environment is deployed in one or more components, run in order. Each component has its own GitLab driver, source branch, target branch, deploy job and a check address. The API component is the Nivaro image; the frontend component is the portal in front of it. Each component is merged, then deployed, then checked before the next one starts. The API always comes before the portal, and the portal is deployed only after the API's deploy passed."
+      text: "An environment is deployed in one or more components, run in order. Each component has its own GitLab driver, source branch, target branch, deploy job and a check address. The API component is the Nivaro image; the frontend component is the portal in front of it. Each component is merged, then deployed, then checked before the next one starts. Within one promotion the API is deployed first, and the portal only after the API's deploy passed. The Hub does not stop a promotion that moves only the portal while the API stays on an older version: when a portal needs a newer API, promote the API first."
     },
     {
       type: 'ul',
@@ -362,7 +362,7 @@ export const hubPromotionsDocs: DocSection = {
         ],
         [
           '`ALREADY_RUNS`',
-          'This environment already runs that version, and every component was deployed with it. A run that stopped between components is not refused: promote the version again to finish it.'
+          'This environment already runs that version, and every component was deployed with it. Two exceptions are not refused: a run that stopped between components (promote the version again to finish it), and a re-stamp, where the release commit for that version is not yet on the target branch: an extension-only change released again under the same version tag.'
         ],
         ['`OLDER_THAN_CURRENT`', 'The version is older than the one running here. Use Roll back.'],
         [
@@ -414,6 +414,35 @@ export const hubPromotionsDocs: DocSection = {
         ['`BAD_VERSION`', 'The version is not in the form 0.3.210.']
       ]
     },
+    { type: 'h2', id: 'hub-promotions-gitlab', text: 'GitLab prerequisites' },
+    {
+      type: 'p',
+      text: "The Hub works only through GitLab's API, as the driver's token. Check each deploy repository and portal repository before the first promotion."
+    },
+    {
+      type: 'ul',
+      items: [
+        'Merge method: the project must allow merges that are not fast-forward (merge commit), and must not require squash. Every Hub merge is a merge request with a merge commit; a fast-forward-only or squash-required project cannot be promoted.',
+        "'Pipelines must succeed' refuses the Hub's merge: the Hub waits only about 30 seconds for a merge request's pipeline. Turn it off on these projects, or make sure merge requests from `hub/promote-*` branches get no pipeline that has to pass.",
+        'The token must be allowed to merge into the protected target branch (for example production): Maintainer, or named in the branch protection as allowed to merge.',
+        'CI rules: a push of a `hub/promote-*` branch is a branch push. Check that the rules run no deploy job on those branches (deploy jobs only on the target branches).',
+        "'Prevent outdated deployment jobs' refuses a rollback: GitLab will not rerun an older deploy job. Turn on 'Allow job retries for rollback deployments' in the project's CI/CD settings, or roll back by hand (see the runbook). The Hub stops with `ROLLBACK_REFUSED_BY_GITLAB` when this happens."
+      ]
+    },
+    { type: 'h2', id: 'hub-promotions-script', text: 'Differences from promote-production.mjs' },
+    {
+      type: 'ul',
+      items: [
+        'No `--bootstrap` and no `--portal-only`: a promotion always takes every component of the environment.',
+        'Verify always runs when a component has a check address (the script ran it only at ROUTE_PRIORITY 3 or higher).',
+        'The release commit is looked up among the newest 100 commits of the source branch; an older one is refused with `NO_SOURCE_COMMIT`.',
+        'Every merge goes through a temporary branch and a merge request, so it leaves a merge commit, and pipelines, merge method, approvals and protected-branch rights apply (see GitLab prerequisites).',
+        'Order per component: each component is merged, then deployed, before the next one. If the API fails, the portal is never merged. (The script pushed both, then deployed.)',
+        'The same version again: when the image for it changed or its pin is missing, the plan is refused with `PIN_CHANGED`; the Hub never rewrites the pin of the version that is running. A stopped promotion is finished instead.',
+        'Like the script, a merge lands on whatever the target branch holds at that moment: the target head is not bound for merges. Only a frontend the target branch already holds has its head named in the plan and checked.',
+        'Logs: the last step and the error stay on the run; the job log is kept for 24 hours.'
+      ]
+    },
     { type: 'h2', id: 'hub-promotions-settings', text: 'Settings' },
     {
       type: 'table',
@@ -440,7 +469,7 @@ export const hubPromotionsDocs: DocSection = {
         ],
         [
           '`POST /api/hub/environments/:envId/promote/plan`',
-          'Body `{ version, kind }`, kind `promote` or `rollback`. Read-only: the plan with its steps, every blocker and its `plan_hash`.'
+          'Body `{ version, kind }`, kind `promote` or `rollback`. Read-only: the plan with its steps, every blocker and its `plan_hash`. Answers during maintenance too.'
         ],
         [
           '`POST /api/hub/environments/:envId/promote`',
@@ -468,12 +497,13 @@ export const hubPromotionsDocs: DocSection = {
     {
       type: 'ul',
       items: [
-        '1. Add components for EFP production: an API component on the deploy repository and a portal frontend component. Check their jobs: the deploy job names must match the ones the laptop script runs, and each check address must answer its version or commit.',
+        '0. Set `NODE_EXTRA_CA_CERTS` on the Hub to the company certificate bundle (GitLab and the check addresses sit behind the company certificate), restart the Hub, then test each driver from its page. Check the GitLab prerequisites above on both repositories.',
+        "1. Add components for EFP production: an API component on the deploy repository and a portal frontend component. Check their jobs: the deploy job names must match the ones the laptop script runs, and each check address must answer its version or commit. Add a portal frontend component to the staging environment too, whose check address answers the portal commit staging serves: production's plan reads the portal commit from it, and without it the plan is refused with `FRONTEND_UNKNOWN` (the Hub can only guess staging's address from production's when both are on the same host, which EFP's are not).",
         '2. Run a plan-only promote for the version staging runs (Promote, then read the plan, and do not confirm). Compare each step with the plan the laptop script prints: `node scripts/promote-production.mjs --version <version>` (without `--go` it only prints the plan and changes nothing). Check the same deploy commit, the same pin, the same portal commit and the same jobs. Stop and fix anything that differs.',
         '3. Switch `hub_managed` on for production.',
         '4. Set `production.enabled: false` in `release-chain.config.json`, so the laptop release chain stops promoting production.',
         '5. Make the first real promotion, and watch it from start to Succeeded: the merge, the pin, the deploy and both checks.',
-        '6. If it goes wrong, roll back with the laptop script. The Hub offers Roll back only to versions it deployed itself, so Roll back in the Hub becomes available after the first successful Hub promotion. Until then, and whenever the Hub itself is unusable, set `production.enabled` back to true and use the laptop script.'
+        "6. If it goes wrong, roll back by hand: the laptop script cannot roll back (it refuses a version older than the one production runs). In the deploy repository, on the production branch, revert the pin commit (or edit the driver's pin file back to the previous version and its digest lines) and commit it. In GitLab, open the pipeline that commit started and run its deploy job (deploy_production), then watch it pass its canary and gates. (Rerunning the deploy job of the earlier production pipeline that deployed the previous version also works, as the Hub's own rollback does, unless 'Prevent outdated deployment jobs' refuses it.) For the portal, rerun the deploy job of its previous production pipeline in GitLab. The Hub offers Roll back only to versions it deployed itself, so Roll back in the Hub becomes available after the first successful Hub promotion. Whenever the Hub itself is unusable, set `production.enabled` back to true and promote forward with the laptop script."
       ]
     },
     {
