@@ -98,6 +98,18 @@ function PasswordLoginForm() {
   )
 }
 
+/** ?error= values the Hub sign-in adds (Hub phase 7). */
+const HUB_ERROR_COPY: Record<string, string> = {
+  hub_unavailable: 'The sign-in hub is not answering. Sign in directly with Microsoft.',
+  hub_auth_failed:
+    'Sign-in through the hub could not be checked. Sign in directly with Microsoft, and tell your administrator.',
+  hub_access_denied:
+    'Your Hub account is waiting for approval. Sign in directly with Microsoft for now.',
+  hub_account_conflict:
+    'This sign-in matches a different account here. Ask your administrator to check your account.'
+}
+const HUB_DIRECT_ERRORS = new Set(['hub_unavailable', 'hub_auth_failed', 'hub_access_denied'])
+
 const THEME_CYCLE = ['light', 'system', 'dark'] as const
 const THEME_ICONS = { light: Sun, system: Monitor, dark: Moon } as const
 
@@ -268,11 +280,15 @@ export function LoginPage() {
   // redirect this page was opened with (an AI app's consent page), else home.
   const returnTo = `${window.location.origin}${postLoginTarget(redirectTo)}`
   const totpStep = params.get('totp') === '1'
+  // Break-glass: skips the Hub (keeps direct=1 so the server does not clear its fell-back mark).
+  const directHref = `/api/auth/login?direct=1&returnTo=${encodeURIComponent(returnTo)}`
   const reauth = params.get('reauth') === '1'
   const [tab, setTab] = usePersistedTab<'microsoft' | 'password'>('nvr_tab_login', 'microsoft')
   const [providers, setProviders] = useState<{
     oidc: { enabled: boolean; label: string }
     saml: { enabled: boolean; label: string }
+    /** Hub phase 7: sign-in goes through the Nivaro Hub when configured. */
+    hub?: { configured: boolean; up: boolean }
     /** Additional admin-configured OIDC providers (#538). */
     sso?: Array<{
       id: number
@@ -616,8 +632,18 @@ export function LoginPage() {
                             ? 'The sign-in provider is not answering right now. Anyone already signed in keeps working — try again in a few minutes.'
                             : error === 'account_link'
                               ? 'This sign-in matches an account that is already linked to a different sign-in. Ask an administrator to check your account.'
-                              : 'Authentication failed. Please try again or contact IT support.'}
+                              : (HUB_ERROR_COPY[error ?? ''] ??
+                                'Authentication failed. Please try again or contact IT support.')}
                   </div>
+                )}
+                {/* Nothing here starts a sign-in by itself: only a click does (no loop when the Hub is down). */}
+                {error && tab === 'microsoft' && HUB_DIRECT_ERRORS.has(error) && (
+                  <a
+                    href={directHref}
+                    className='mb-4 flex w-full items-center justify-center gap-3 rounded-xl bg-nvr-cyan px-5 py-4 text-[14px] font-semibold text-white shadow-md transition-all hover:shadow-lg hover:brightness-110 active:scale-[0.985]'
+                  >
+                    Sign in directly with {oidcLabel}
+                  </a>
                 )}
 
                 {tab === 'microsoft' ? (
@@ -632,6 +658,16 @@ export function LoginPage() {
                         Continue with {oidcLabel}
                       </a>
                     )}
+                    {oidcOn &&
+                      providers?.hub?.configured &&
+                      !(error && HUB_DIRECT_ERRORS.has(error)) && (
+                        <a
+                          href={directHref}
+                          className='mt-3 block text-center text-[12px] font-medium text-slate-600 underline decoration-slate-300 underline-offset-2 hover:text-slate-800 dark:hover:text-white'
+                        >
+                          Trouble signing in? Sign in directly with {oidcLabel}
+                        </a>
+                      )}
                     {providers?.saml.enabled && (
                       <a
                         href={`/api/auth/saml/login?returnTo=${encodeURIComponent(returnTo)}`}

@@ -90,6 +90,7 @@ import {
   getNavTrail,
   HelpVideoMatchChip,
   HelpVideoRecordingProvider,
+  HubSwitcher,
   HuddleCallLayer,
   IncidentBanner,
   ItemEditAuthContext,
@@ -879,6 +880,7 @@ export function AppLayout() {
                   <TeamChatDock />
                   {/* Realtime idea 12: refresh this page's data in place (never the page). */}
                   <ScreenRefreshButton variant='rail' />
+                  {serverFeatures.has('hub_switcher') && <HubSwitcher variant='rail' />}
                   <NotificationBell collapsed compact />
                   {/* rt5: the watch list (dot = a pinned record changed while it was closed). */}
                   <WatchListButton variant='rail' />
