@@ -84,11 +84,18 @@ describe('place-on-shared and app-key refusals', () => {
   it('every code the place and app-key routes refuse with has plain words', async () => {
     const { BLOCKER_COPY, CODE_COPY_KEYS } = await import('../hub-api')
     const found = new Set<string>()
-    for (const f of ['services/hub/shared/place.ts', 'services/hub/shared/app-key-check.ts']) {
+    // promote-lock.ts: the lock-holder refusals both routes answer when the env or the shared
+    // lock is held (MOVE_RUNNING, APP_KEY_BUSY, SHARED_UPGRADE_RUNNING …).
+    for (const f of [
+      'services/hub/shared/place.ts',
+      'services/hub/shared/app-key-check.ts',
+      'services/hub/promote-lock.ts'
+    ]) {
       const src = readFileSync(join(API, f), 'utf8')
       for (const m of src.matchAll(/(?:refuse\(\s*|code: )'([A-Z][A-Z0-9_]+)'/g)) found.add(m[1])
     }
     expect(found.has('ALREADY_PLACED')).toBe(true)
+    expect(found.has('MOVE_RUNNING')).toBe(true)
     const missing = [...found].filter(
       (c) =>
         !MOVE_CODE_COPY[c] &&

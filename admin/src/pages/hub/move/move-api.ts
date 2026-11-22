@@ -927,6 +927,18 @@ export const MOVE_CODE_COPY: Record<string, Copy> = {
     title: 'That checklist item is not on this move',
     hint: 'Reload the move to see its checklist as it stands.'
   },
+  MOVE_RUNNING: {
+    title: 'A move of this environment is running',
+    hint: 'Wait for it to end, or open Move… on the environment to follow it or roll it back.'
+  },
+  APP_KEY_BUSY: {
+    title: "This environment's encryption key is being saved",
+    hint: 'Try again in a moment.'
+  },
+  SHARED_UPGRADE_RUNNING: {
+    title: 'The shared deployment is being upgraded',
+    hint: 'Wait for the upgrade to end (Shared deployments tab), then try again.'
+  },
   CHECKLIST_INCOMPLETE: {
     title: 'A required checklist item is not ticked',
     hint: 'The Hub checked the list again at start. Tick every item under Confirm before moving once it is true, then start again.'
