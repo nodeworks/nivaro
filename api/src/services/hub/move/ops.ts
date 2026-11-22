@@ -2,6 +2,8 @@ import { db } from '../../../db/index.js'
 import { keyFingerprint } from '../../app-key-fingerprint.js'
 import { type HubApp, readApp } from '../apps.js'
 import { componentTargetBranch, listComponents } from '../components.js'
+import { connectionUrl } from '../db/connection.js'
+import { openDatabaseConnection } from '../db/databases.js'
 import {
   AgentError,
   agentApply,
@@ -14,6 +16,7 @@ import type { StackSpec } from '../docker/agent-types.js'
 import { agentOrigin } from '../docker/driver-config.js'
 import { isAgentDnsName } from '../docker/render-spec.js'
 import { type DockerOpsDeps, prepareStackSpec } from '../docker/run-step.js'
+import { databaseRecordId } from '../docker/stack-env.js'
 import { strictPinMap } from '../docker/stack-gather.js'
 import { deployedStack } from '../docker/stack-guards.js'
 import { readStackSettings, saveStackSettings } from '../docker/stack-settings.js'
@@ -24,16 +27,16 @@ import {
   type HubPlacementRow,
   STACK_NAME_RE
 } from '../drivers.js'
+import { sourceSubjectRe } from '../promote-gather.js'
 import { driverGitCtx } from '../promote-heal.js'
 import { PromotionError } from '../promote-lock.js'
 import { deployComponentAt } from '../promote-run.js'
-import { sourceSubjectRe } from '../promote-gather.js'
 import type { PromotionStep } from '../promote-types.js'
 import { hubImage, imageDigest, pinText } from '../registry.js'
 import { HubSecretError, openSecret, sealSecret } from '../secrets.js'
 import {
-  DeploymentLinkError,
   type DeploymentClient,
+  DeploymentLinkError,
   deploymentClient,
   type PullRequest,
   type PullStatus
@@ -47,9 +50,10 @@ import {
   tenantIdFor
 } from '../shared/store.js'
 import { tenantsBody } from '../shared/tenants.js'
-import { HubLinkError, type HubLinkClient, hubLinkClient, hubLinkOrigin } from './link-client.js'
+import { type HubLinkClient, HubLinkError, hubLinkClient, hubLinkOrigin } from './link-client.js'
 import type { MovePlan, RouteAction } from './plan-port.js'
 import { type HubMoveRow, MOVES } from './rows.js'
+import { sharedStackRouter as defaultSharedStackRouter } from './shared-route.js'
 
 /**
  * Nivaro Hub phase 6, Task 16: every side effect of a move, behind one injectable interface. The
@@ -129,22 +133,26 @@ export interface MoveOps {
   retireSource(): Promise<void>
   /** T10 carry: revokes any transfer ticket this move still holds (move end, rollback). */
   revokeTickets(): Promise<void>
+  /**
+   * R2: `engine|server|port|database` as that side reaches the app's database; null = cannot
+   * tell. The run records the source's (hashed) at `check` and compares the target's at
+   * `target_ready`: a target on another database never serves the app's name.
+   */
+  databaseIdentity(side: 'source' | 'target'): Promise<string | null>
 }
 
 /**
- * Task 5 (shared stacks, built in parallel) owns a shared Docker deployment's stack apply. A move
- * that adds or drops an explicit name on a shared stack calls this; until Task 5 registers it,
- * such a route answers ROUTE_UNAVAILABLE (the move rolls back). MERGE: Task 5 calls
- * setSharedStackRouter from routes/hub-shared-upgrade.ts (as it does setSharedReapply).
+ * A move's name change on a `docker`-mode shared stack (an explicit name added or dropped),
+ * through Task 5's renderer (shared-route.ts). Replaceable for tests.
  */
 export type SharedStackRouter = (
   shared: SharedDeployment,
   change: { op: 'add_host' | 'drop_host'; host: string; moveId: number }
 ) => Promise<void>
 
-let sharedStackRouter: SharedStackRouter | null = null
+let sharedStackRouter: SharedStackRouter = defaultSharedStackRouter()
 export function setSharedStackRouter(fn: SharedStackRouter | null): void {
-  sharedStackRouter = fn
+  sharedStackRouter = fn ?? defaultSharedStackRouter()
 }
 
 export interface MoveOpsDeps {
@@ -257,11 +265,7 @@ const hostOf = (url: string): string | null => {
   }
 }
 
-export function defaultMoveOps(
-  move: HubMoveRow,
-  plan: MovePlan,
-  deps: MoveOpsDeps = {}
-): MoveOps {
+export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDeps = {}): MoveOps {
   const sleep = deps.sleep ?? realSleep
   const now = deps.now ?? Date.now
   const clientFor = deps.client ?? ((s: SharedDeployment) => deploymentClient(s))
@@ -366,8 +370,6 @@ export function defaultMoveOps(
       log(`the shared deployment ${shared.key} did not take the refresh (${codeOf(err)})`, 'warn')
     }
   }
-
-  const sharedOf = (s: Side) => (s.kind === 'shared' ? s.shared : null)
 
   // ── Docker helpers ───────────────────────────────────────────────────────────────────────
 
@@ -483,7 +485,8 @@ export function defaultMoveOps(
           )
       } catch (err) {
         if (err instanceof MoveStepError) throw err
-        if (++misses >= 3) throw asStepError(err, `The agent stopped answering about ${side.stack}.`)
+        if (++misses >= 3)
+          throw asStepError(err, `The agent stopped answering about ${side.stack}.`)
       }
       if (now() >= by)
         throw new MoveStepError(
@@ -505,7 +508,11 @@ export function defaultMoveOps(
     return { version: d.version, image: d.image, extensions: d.extensions }
   }
 
-  const removeStack = async (side: Extract<Side, { kind: 'docker' }>, envKey: string, app: HubApp) => {
+  const removeStack = async (
+    side: Extract<Side, { kind: 'docker' }>,
+    envKey: string,
+    app: HubApp
+  ) => {
     try {
       await agent.agentRemove(side.driver, side.stack, {
         removeVolumes: false,
@@ -646,7 +653,8 @@ export function defaultMoveOps(
 
     async sourceBusy() {
       const l = await load()
-      if (l.from.kind === 'shared') return (await clientFor(l.from.shared).appStatus(l.tenantId)).busy
+      if (l.from.kind === 'shared')
+        return (await clientFor(l.from.shared).appStatus(l.tenantId)).busy
       return (await (await publicLink()).sharedReadiness()).busy
     },
 
@@ -670,7 +678,8 @@ export function defaultMoveOps(
         revoke = () => clientFor(sharedFrom).revokeTicket(l.tenantId, t)
       } else {
         const origin = originOf(l.baseUrl)
-        if (!origin) throw new MoveStepError('BAD_BASE_URL', "The environment's address is unusable.")
+        if (!origin)
+          throw new MoveStepError('BAD_BASE_URL', "The environment's address is unusable.")
         source = `${origin}/api/hub-transfer/files`
         const link = await publicLink()
         ticket = (await link.fileTicket()).ticket
@@ -710,13 +719,18 @@ export function defaultMoveOps(
           await revoke()
           tickets.delete(key)
         } catch (err) {
-          log(`the transfer ticket could not be revoked yet (${codeOf(err)}); kept for the move end`, 'warn')
+          log(
+            `the transfer ticket could not be revoked yet (${codeOf(err)}); kept for the move end`,
+            'warn'
+          )
         }
       }
     },
 
     async placeOnTarget() {
-      await db(MOVES).where({ id: move.id }).update({ placed_at: new Date(now()) })
+      await db(MOVES)
+        .where({ id: move.id })
+        .update({ placed_at: new Date(now()) })
       const l = await load()
       if (l.to.kind === 'shared') await refresh(l.to.shared)
     },
@@ -777,7 +791,10 @@ export function defaultMoveOps(
           if (now() >= by) throw asStepError(err, 'The target did not answer on its hub link.')
         }
         if (now() >= by)
-          throw new MoveStepError('TARGET_RETIRED', 'The target stays retired from an earlier move.')
+          throw new MoveStepError(
+            'TARGET_RETIRED',
+            'The target stays retired from an earlier move.'
+          )
         await sleep(POLL_MS)
       }
     },
@@ -803,10 +820,9 @@ export function defaultMoveOps(
             if (mine?.schema.state === 'failed')
               throw new MoveStepError(
                 'SCHEMA_FAILED',
-                (mine.schema.error ?? 'The app could not be migrated on the shared deployment.').slice(
-                  0,
-                  500
-                )
+                (
+                  mine.schema.error ?? 'The app could not be migrated on the shared deployment.'
+                ).slice(0, 500)
               )
             if (mine?.schema.state !== 'ok') {
               last = new MoveStepError(
@@ -915,11 +931,8 @@ export function defaultMoveOps(
         if (a.op !== 'add_host' && a.op !== 'drop_host')
           throw new MoveStepError('ROUTE_UNSUPPORTED', `A shared deployment does not take ${a.op}.`)
         const router = deps.sharedStackRouter ?? sharedStackRouter
-        if (!router || !a.host)
-          throw new MoveStepError(
-            'ROUTE_UNAVAILABLE',
-            'The Hub cannot change the names of a shared stack yet; route this move by hand.'
-          )
+        if (!a.host)
+          throw new MoveStepError('ROUTE_UNSUPPORTED', 'A shared route change names no host.')
         await router(side.shared, { op: a.op, host: a.host, moveId: move.id })
         return
       }
@@ -939,11 +952,8 @@ export function defaultMoveOps(
       const side = a.side === 'source' ? l.from : l.to
       if (side.kind === 'shared') {
         const router = deps.sharedStackRouter ?? sharedStackRouter
-        if (!router || !a.host || (a.op !== 'add_host' && a.op !== 'drop_host'))
-          throw new MoveStepError(
-            'ROUTE_UNAVAILABLE',
-            'The Hub cannot change the names of a shared stack yet; undo this route by hand.'
-          )
+        if (!a.host || (a.op !== 'add_host' && a.op !== 'drop_host'))
+          throw new MoveStepError('ROUTE_UNSUPPORTED', 'A shared route change names no host.')
         await router(side.shared, {
           op: a.op === 'add_host' ? 'drop_host' : 'add_host',
           host: a.host,
@@ -1028,13 +1038,41 @@ export function defaultMoveOps(
         )
     },
 
+    async databaseIdentity(which) {
+      const l = await load()
+      const side = which === 'source' ? l.from : l.to
+      try {
+        if (side.kind === 'shared') {
+          const r = (await db(ENVS).where({ id: envId }).first('db_ref')) as
+            | { db_ref: string | null }
+            | undefined
+          const id = databaseRecordId(r?.db_ref)
+          if (id === null) return null
+          const c = await openDatabaseConnection(id)
+          const answer = await clientFor(side.shared).dbCheck({
+            client: c.engine,
+            connection: connectionUrl(c)
+          })
+          return answer.reachable ? answer.db_identity : null
+        }
+        const link = which === 'source' ? await publicLink() : await targetLink()
+        return (await link.sharedReadiness()).db_identity
+      } catch (err) {
+        log(`the ${which}'s database identity could not be read (${codeOf(err)})`, 'warn')
+        return null
+      }
+    },
+
     async revokeTickets() {
       for (const [key, revoke] of [...tickets]) {
         try {
           await revoke()
           tickets.delete(key)
         } catch (err) {
-          log(`a transfer ticket could not be revoked (${codeOf(err)}); it expires within 6 h`, 'warn')
+          log(
+            `a transfer ticket could not be revoked (${codeOf(err)}); it expires within 6 h`,
+            'warn'
+          )
         }
       }
     }
@@ -1043,7 +1081,9 @@ export function defaultMoveOps(
 }
 
 /** For a run's log: which shared deployments the sides of a move are on (ids), from placements. */
-export async function sharedSidesOf(move: Pick<HubMoveRow, 'from_placement_id' | 'to_placement_id'>): Promise<{
+export async function sharedSidesOf(
+  move: Pick<HubMoveRow, 'from_placement_id' | 'to_placement_id'>
+): Promise<{
   from: number | null
   to: number | null
 }> {

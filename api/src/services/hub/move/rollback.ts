@@ -97,7 +97,8 @@ export async function undoMove(ctx: UndoContext): Promise<{ failed: MoveStepKey[
       } else if (key === 'deploy_target') {
         await ctx.ops.removeTarget()
       } else if (key === 'maintenance_on') {
-        if (ctx.move.prior_status) await setEnvStatus(ctx.move.environment_id, ctx.move.prior_status)
+        if (ctx.move.prior_status)
+          await setEnvStatus(ctx.move.environment_id, ctx.move.prior_status)
         await ctx.ops.sourceMaintenance(false)
         if (ctx.shared.from !== null) {
           try {

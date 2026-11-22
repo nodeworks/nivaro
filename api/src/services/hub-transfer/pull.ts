@@ -77,9 +77,9 @@ export interface PullStatus {
    * served. The source's object (its Content-Length, then the bytes counted) wins: the row is
    * copied anyway and counted here, so a stale filesize never fails the row on every run.
    */
-  size_mismatch: number
+  size_mismatch?: number
   /** Task 16: the file ids that failed (at most 50), so a move can say which. */
-  failed_ids: string[]
+  failed_ids?: string[]
 }
 
 export interface FileRow {
@@ -613,8 +613,8 @@ async function execute(
     const failRow = (id?: string) => {
       if (!fatal) {
         st.failed++
-        const ids = (st.failed_ids ??= [])
-        if (id && ids.length < MAX_MISSING) ids.push(id)
+        if (!st.failed_ids) st.failed_ids = []
+        if (id && st.failed_ids.length < MAX_MISSING) st.failed_ids.push(id)
       }
       progress()
     }

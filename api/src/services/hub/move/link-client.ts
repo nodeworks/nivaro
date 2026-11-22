@@ -237,7 +237,10 @@ export function hubLinkClient(
         preflight: {
           status: isStr(pf.status) ? pf.status.slice(0, 32) : 'unknown',
           failing: Array.isArray(pf.failing)
-            ? pf.failing.filter(isStr).map((x) => x.slice(0, 100)).slice(0, 50)
+            ? pf.failing
+                .filter(isStr)
+                .map((x) => x.slice(0, 100))
+                .slice(0, 50)
             : []
         }
       }
@@ -283,8 +286,7 @@ export function hubLinkClient(
           bytes: isNum(files.bytes) ? files.bytes : 0,
           local: isNum(files.local) ? files.local : 0
         },
-        db_identity:
-          isStr(b.db_identity) && b.db_identity.length <= 600 ? b.db_identity : null,
+        db_identity: isStr(b.db_identity) && b.db_identity.length <= 600 ? b.db_identity : null,
         version: isStr(b.version) ? b.version.slice(0, 64) : null
       }
     },
