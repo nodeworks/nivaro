@@ -266,13 +266,22 @@ export function buildPromotionPlan(input: PlanInput): PromotionPlan {
 
   stackBlockers(input, components, block)
 
+  // Phase 6 (Task 5): stack warnings, once each (never part of the hash: nothing the run does).
+  const warnings: { code: string; text: string }[] = []
+  for (const c of components)
+    for (const w of input.stacks?.[c.position]?.warnings ?? [])
+      if (!warnings.some((x) => x.code === w.code)) warnings.push(w)
+  const lines = stackAwareLines(input, components, steps, blockers.length > 0)
+  for (const w of warnings) lines.push(`warning ${w.code}: ${w.text}`)
+
   return {
     ok: blockers.length === 0,
     blockers,
-    lines: stackAwareLines(input, components, steps, blockers.length > 0),
+    lines,
     steps,
     plan_hash: planHash(input, steps),
-    ...(input.apply ? { apply: true } : {})
+    ...(input.apply ? { apply: true } : {}),
+    ...(warnings.length ? { warnings } : {})
   }
 }
 

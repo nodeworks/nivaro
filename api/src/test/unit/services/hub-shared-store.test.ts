@@ -281,7 +281,7 @@ describe('delete and update', () => {
       fields({
         key: 'shared-upd',
         extensions: ['efp-ops', 'efp-ops'],
-        extension_pins: { 'efp-ops': '1.2.3' },
+        extension_pins: { 'efp-ops': `registry.example.com/acme/efp-ops@sha256:${'1'.repeat(64)}` },
         host_pattern: '*.apps.example.com',
         pool_budget: 80,
         settings: { size: 'medium' }
@@ -293,7 +293,7 @@ describe('delete and update', () => {
       mode: 'registered',
       status: 'new',
       extensions: ['efp-ops'],
-      extension_pins: { 'efp-ops': '1.2.3' },
+      extension_pins: { 'efp-ops': `registry.example.com/acme/efp-ops@sha256:${'1'.repeat(64)}` },
       host_pattern: '*.apps.example.com',
       pool_budget: 80,
       settings: { size: 'medium' },
@@ -371,6 +371,16 @@ describe('validateSharedInput', () => {
       'BAD_EXTENSIONS'
     )
     expect(code({ extension_pins: { 'other-ext': '1.0.0' } })).toBe('BAD_EXTENSIONS')
+    // Ruling P6-16 (Task 5 review I-1): a pin is the agent's image pin, as phase-4 stack settings.
+    const PIN = `registry.example.com/acme/efp-ops@sha256:${'2'.repeat(64)}`
+    const withExt = (pin: unknown) =>
+      code({ extensions: ['efp-ops'], extension_pins: { 'efp-ops': pin } })
+    expect(withExt(PIN)).toBe('ok')
+    expect(withExt(`nodeworks/efp-ops@sha256:${'a'.repeat(64)}`)).toBe('ok')
+    expect(withExt('1.2.3')).toBe('BAD_EXTENSIONS')
+    expect(withExt('nodeworks/efp-ops:1.2.3')).toBe('BAD_EXTENSIONS')
+    expect(withExt(`nodeworks/efp-ops@sha256:${'a'.repeat(63)}`)).toBe('BAD_EXTENSIONS')
+    expect(withExt(`Nodeworks/efp-ops@sha256:${'a'.repeat(64)}`)).toBe('BAD_EXTENSIONS')
     expect(code({ mode: 'docker' })).toBe('DRIVER_NOT_DOCKER')
     expect(code({ mode: 'gitlab' })).toBe('BAD_MODE')
   })
