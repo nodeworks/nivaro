@@ -68,6 +68,10 @@ export interface MoveSteps {
   route_confirmed_at?: string | null
   /** When the run started waiting for the manual route (24 h budget). */
   waiting_since?: string | null
+  /** P6-21: the never-used dedicated target placement a rollback deleted (its id). */
+  removed_target_placement?: number | null
+  /** Refusals the operator overrode at start (P6-20 #2: LINK_URL_NOT_PULLABLE). */
+  overrides?: string[]
   /** The run's own lock tokens (env + shared), which heal frees by compare-and-delete. */
   locks?: { env: string; shared: Array<{ id: number; token: string }> }
   /** Where each dedicated side is reached (addresses.ts), resolved and probed at start. */

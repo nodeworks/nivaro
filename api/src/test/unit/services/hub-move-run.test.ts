@@ -48,6 +48,7 @@ type MovePlan = import('../../../services/hub/move/types.js').MovePlan
 type MoveKind = import('../../../services/hub/move/types.js').MoveKind
 type RouteAction = import('../../../services/hub/move/types.js').RouteAction
 type MoveOps = import('../../../services/hub/move/ops.js').MoveOps
+type PullStatus = import('../../../services/hub/shared/deployment-client.js').PullStatus
 
 const HUB_KEY = 'e'.repeat(64)
 const SECRET_TOKEN = 'hub-link-Token-SECRET-0123456789-abcdefghij'
@@ -167,8 +168,8 @@ function fakeOps() {
     failOn: null as null | ((name: string, arg: unknown) => boolean),
     busy: { imports: 0, exports: 0, renders: 0 },
     serving: true,
-    pull: (mode: 'full' | 'delta') => ({
-      state: 'done' as const,
+    pull: (mode: 'full' | 'delta'): PullStatus => ({
+      state: 'done',
       total: 3,
       copied: mode === 'full' ? 3 : 0,
       skipped: mode === 'full' ? 0 : 3,
@@ -177,7 +178,7 @@ function fakeOps() {
       bytes: 30,
       error: null,
       size_mismatch: 0,
-      failed_ids: [] as string[]
+      failed_ids: []
     }),
     during: null as null | ((name: string, arg: unknown) => Promise<void> | void),
     identity: { source: 'pg|db.internal|5432|acme', target: 'pg|db.internal|5432|acme' }
@@ -644,6 +645,67 @@ describe('rolls back from every step before release', () => {
     expect(m?.error).toMatch(/could not undo: place_on_target/)
     // The other undo still ran.
     expect(undoCalls(fake.calls)).toContainEqual(['sourceMaintenance', false])
+  })
+})
+
+// Ruling P6-21: placements an open move names are kept; a never-used dedicated target goes.
+describe('move placements (P6-21)', () => {
+  it('deletePlacement refuses 409 PLACEMENT_IN_USE while an open move names it (source or target)', async () => {
+    const { deletePlacement } = await import('../../../services/hub/drivers.js')
+    plan = planOf('to_dedicated', 'manual')
+    const w = await world('shared')
+    fake.state.serving = false
+    useDeps({
+      sleep: async (ms: number) => {
+        t += ms
+        await new Promise((r) => setTimeout(r, 20))
+      }
+    })
+    const { move_id } = await start(w, toFor('to_dedicated', w))
+    await waitFor(async () => (await readMove(move_id))?.status === 'waiting')
+    // Nobody names the target placement yet: only the open move does.
+    expect(await deletePlacement(w.dockerPlacement)).toEqual({
+      ok: false,
+      code: 'PLACEMENT_IN_USE'
+    })
+    await Run.cancelMove(move_id, 'u')
+    await Run.awaitMove(move_id)
+  })
+
+  it('a rollback deletes a dedicated target placement that never served and nobody uses; recorded', async () => {
+    plan = planOf('to_dedicated')
+    const w = await world('shared')
+    fake.state.failOn = (name) => name === 'targetReady'
+    const { move_id } = await start(w, toFor('to_dedicated', w))
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    expect(m?.status).toBe('rolled_back')
+    expect(m?.steps.removed_target_placement).toBe(w.dockerPlacement)
+    expect(
+      await db('nivaro_hub_placements').where({ id: w.dockerPlacement }).first()
+    ).toBeUndefined()
+  })
+
+  it('a dedicated target placement that served before (an earlier move off it) is kept', async () => {
+    plan = planOf('to_dedicated')
+    const w = await world('shared')
+    await db('nivaro_hub_moves').insert({
+      app_id: 1,
+      environment_id: w.envId,
+      from_placement_id: w.dockerPlacement,
+      to_placement_id: w.sharedPlacementA,
+      kind: 'to_shared',
+      routing: 'automatic',
+      status: 'success',
+      steps: '{"list":[],"phase":"forward"}'
+    })
+    fake.state.failOn = (name) => name === 'targetReady'
+    const { move_id } = await start(w, toFor('to_dedicated', w))
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    expect(m?.status).toBe('rolled_back')
+    expect(m?.steps.removed_target_placement ?? null).toBeNull()
+    expect(await db('nivaro_hub_placements').where({ id: w.dockerPlacement }).first()).toBeDefined()
   })
 })
 
@@ -1118,6 +1180,61 @@ describe('start refusals and locks', () => {
     ).toEqual([{ n: 1 }])
     expect(await lock.held(w.envId)).toBe(false)
     expect(fake.calls).toEqual([])
+  })
+
+  // Ruling P6-20 #2: LINK_URL_NOT_PULLABLE is overridable per move (operator checkbox, like
+  // ORDER), recorded on the move and in the activity; a wrong override fails at files_warm.
+  it('LINK_URL_NOT_PULLABLE: refused without the override; with it, recorded, and a wrong one rolls back at files_warm', async () => {
+    plan = planOf('between_shared')
+    const w = await world('shared')
+    const { AddressError } = await import('../../../services/hub/move/addresses.js')
+    const seen: Array<boolean | undefined> = []
+    useDeps({
+      addresses: async (_e, _t, _p, o) => {
+        seen.push(o?.allowUnpullable)
+        if (!o?.allowUnpullable)
+          throw new AddressError('LINK_URL_NOT_PULLABLE', 'The target cannot pull from it.')
+        return {
+          source_link_base: null,
+          source_link_public: false,
+          pull_source: 'https://src.internal.example.com',
+          target_link_base: null,
+          target_publish_host: null,
+          target_temp_host: null
+        }
+      }
+    })
+    expect((await refusal(start(w, toFor('between_shared', w)))).code).toBe('LINK_URL_NOT_PULLABLE')
+    expect(
+      (await refusal(start(w, toFor('between_shared', w), { overrides: ['ORDER'] }))).code
+    ).toBe('BAD_OVERRIDE')
+    // The target does not in fact allow the host: its pull fails (SSRF refusal).
+    fake.state.pull = () => ({
+      state: 'failed',
+      total: 0,
+      copied: 0,
+      skipped: 0,
+      failed: 0,
+      missing: [],
+      bytes: 0,
+      error: 'The source could not be reached.',
+      size_mismatch: 0,
+      failed_ids: []
+    })
+    const { move_id } = await start(w, toFor('between_shared', w), {
+      overrides: ['LINK_URL_NOT_PULLABLE']
+    })
+    await Run.awaitMove(move_id)
+    expect(seen).toEqual([false, true])
+    const m = await readMove(move_id)
+    expect(m?.steps.overrides).toEqual(['LINK_URL_NOT_PULLABLE'])
+    expect(m?.status).toBe('rolled_back')
+    expect(m?.error).toMatch(/^FILES_FAILED/)
+    expect(m?.steps.list.find((x) => x.key === 'files_warm')?.state).toBe('failed')
+    expect(undoCalls(fake.calls)).toEqual([['unplace']])
+    expect(fake.names()).not.toContain('sourceMaintenance')
+    const startRow = activity.rows.find((r) => r.action === 'hub-move-start')
+    expect(String(startRow?.comment)).toContain('target allows this host')
   })
 
   it('re-plans with its own locks held (ownLocks) before writing anything', async () => {

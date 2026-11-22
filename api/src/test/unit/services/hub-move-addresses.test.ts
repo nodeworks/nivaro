@@ -244,6 +244,15 @@ describe('shared source pull rule (P6-18 #2)', () => {
     )
     expect(e?.code).toBe('LINK_URL_NOT_PULLABLE')
     expect(d1.bases).toEqual([])
+    // P6-20 #2: the operator's override (the target allows this host) lets it through.
+    const over = await resolveMoveAddresses(
+      bad,
+      { kind: 'dedicated', placement_id: target },
+      { routing: 'automatic' },
+      d1.deps,
+      { allowUnpullable: true }
+    )
+    expect(over.pull_source).toBe('https://src.internal.example.com')
     const literal = await envOn(await placementOf('shared', { linkUrl: 'http://10.0.0.5:3140' }))
     const a = await resolveMoveAddresses(
       literal,
@@ -342,5 +351,42 @@ describe('STACK_REAPPLY_ALL (P6-18 #3)', () => {
       shared_id: sid
     })
     expect(none.warnings).toEqual([])
+  })
+})
+
+describe('GitLab boot maintenance proof (P6-20 gather)', () => {
+  it('forwarded only for a Hub-created app whose pinned template CI carries HUB_BOOT_MAINTENANCE', async () => {
+    const { bootMaintenanceForwarded } = await import('../../../services/hub/move/gather.js')
+    const env = await envOn(await placementOf('shared'))
+    const appId = (await db('nivaro_hub_environments').where({ id: env }).first('app_id')).app_id
+    const ask = (ci: string | null) =>
+      bootMaintenanceForwarded({ envId: env, deps: { templateCi: async () => ci } })
+    // An adopted app (no Hub target): never proven.
+    expect(await ask('… HUB_BOOT_MAINTENANCE …')).toBe('unproven')
+    await db('nivaro_hub_apps').where({ id: appId }).update({ target_id: 3 })
+    expect(await ask('script: deploy.sh with HUB_BOOT_MAINTENANCE forwarded')).toBe('forwarded')
+    expect(await ask('an older template')).toBe('unproven')
+    expect(await ask(null)).toBe('unproven')
+    expect(
+      await bootMaintenanceForwarded({
+        envId: env,
+        deps: {
+          templateCi: async () => {
+            throw new Error('gitlab down')
+          }
+        }
+      })
+    ).toBe('unproven')
+  })
+
+  it('the shipped template CI carries the marker', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { join } = await import('node:path')
+    const ci = readFileSync(
+      join(import.meta.dirname, '../../../../../deploy/hub-app-template/ci/deploy.yml'),
+      'utf8'
+    )
+    const { BOOT_MAINTENANCE_MARKER } = await import('../../../services/hub/move/gather.js')
+    expect(ci).toContain(BOOT_MAINTENANCE_MARKER)
   })
 })
