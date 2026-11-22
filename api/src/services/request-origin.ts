@@ -1,7 +1,7 @@
 import type { FastifyRequest } from 'fastify'
 import { config } from '../config.js'
 import { tenantOrigin } from '../db/tenant-context.js'
-import { isNivaroCloud } from './deployment-mode.js'
+import { isMultiTenant } from './deployment-mode.js'
 import { mcpPublicOrigin } from './mcp-config.js'
 
 /** This instance's configured addresses: PUBLIC_URL, ADMIN_URL, MCP_PUBLIC_URL, APP_URLS. */
@@ -44,14 +44,15 @@ function hostIs(origin: string, host: string): boolean {
  * the discovery document's `issuer` on that host, so the two always agree.
  *
  *  - Cloud: the tenant's verified origin (its own subdomain or active custom domain), else its
- *    canonical origin (db/tenant-context.ts).
+ *    canonical origin (db/tenant-context.ts). A Hub shared deployment: the app's origin (the
+ *    listed host the request came on).
  *  - Self-hosted: the configured address (MCP_PUBLIC_URL first, then PUBLIC_URL, ADMIN_URL, APP_URLS) whose
  *    host is the request's host — as Fastify reads it, so a forwarded host counts only from a
  *    proxy TRUST_PROXY trusts — else MCP_PUBLIC_URL's origin (mcpPublicOrigin). An internal host
  *    behind an untrusted proxy is never named.
  */
 export function requestIssuer(req: FastifyRequest): string {
-  if (isNivaroCloud()) return tenantOrigin() ?? mcpPublicOrigin()
+  if (isMultiTenant()) return tenantOrigin() ?? mcpPublicOrigin()
   const host = String(req.host ?? '')
     .split(',')[0]
     .trim()

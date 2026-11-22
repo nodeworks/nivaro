@@ -3,6 +3,7 @@ import { cleanTenantHost, runWithoutTenant } from '../../db/tenant-context.js'
 import { NIVARO_VERSION } from '../../version.js'
 import { hubSharedConfig } from '../deployment-mode.js'
 import { INSTANCE_ID } from '../instance-roster.js'
+import { resetAppKeysForTests, setAppKeys } from './app-keys.js'
 import { HUB_TENANTS_PATH, parseHubTenants } from './hub-contract.js'
 import { HubBodyTooLargeError, hubFetch, readCappedText } from './hub-fetch.js'
 import type {
@@ -18,10 +19,15 @@ import type {
  *
  * A Hub outage never empties the deployment: a 5xx, a timeout, a refused token or a body that is
  * not a tenant list keeps the last good list. That list is also kept in Redis
- * (`nvr:tenancy:hub:<deployment>`, sealed with encryptValue: it carries every app's database
- * connection), so a restart during an outage still serves. Without ENCRYPTION_KEY the copy is
- * memory-only (readiness warns). The token and connections never reach a log, an error or a
- * readiness text.
+ * (`nvr:tenancy:hub:<deployment>`, sealed with encryptForDeployment: it carries every app's
+ * database connection and key), so a restart during an outage still serves. Without
+ * ENCRYPTION_KEY the copy is memory-only (readiness warns). The token, connections and keys never
+ * reach a log, an error or a readiness text.
+ *
+ * Phase 6: each list hands the apps' own ENCRYPTION_KEYs to tenancy/app-keys.ts (encryptValue
+ * inside an app uses them), and a tenant the Hub listed without an `origin` gets its first
+ * hostname's (`https://host[:listed port]`), the origin its jobs name. A request keeps the origin
+ * of the host it came on (resolve).
  */
 
 const FETCH_TIMEOUT_MS = 10_000
@@ -119,6 +125,14 @@ function originOf(h: { bare: string; clean: string }, t: TenantRecord): string {
   return `https://${h.bare}${port ? `:${port}` : ''}`
 }
 
+/** The tenant with its origin: the Hub's, else its first listed hostname's (the same rule as a
+ *  request on that host). */
+function withListedOrigin(t: TenantRecord): TenantRecord {
+  if (t.origin || !t.hostnames[0]) return t
+  const h = t.hostnames[0]
+  return { ...t, origin: originOf({ bare: h, clean: h }, t) }
+}
+
 /** Plain text for a failed fetch: the error's kind only, never its message. */
 function fetchFailureText(err: unknown): string {
   const name = (err as { name?: unknown } | null)?.name
@@ -155,9 +169,10 @@ export async function startHubTenantSource(deps: Deps): Promise<TenantRegistry> 
   let lastForced = Number.NEGATIVE_INFINITY
 
   const setList = (list: TenantRecord[]) => {
-    tenants = list
+    tenants = list.map(withListedOrigin)
+    setAppKeys(tenants)
     const m = new Map<string, TenantRecord>()
-    for (const t of list) for (const h of t.hostnames) m.set(h, t)
+    for (const t of tenants) for (const h of t.hostnames) m.set(h, t)
     byHost = m
     loaded = true
   }
@@ -179,9 +194,10 @@ export async function startHubTenantSource(deps: Deps): Promise<TenantRegistry> 
     try {
       const raw = await redis.get(hubCacheKey(deployment))
       if (!raw) return
-      const { decryptValue, isEncrypted } = await import('../encryption.js')
+      const { decryptForDeployment, isEncrypted } = await import('../encryption.js')
       if (!isEncrypted(raw)) return // never trust a plaintext copy
-      const copy = JSON.parse(decryptValue(raw)) as {
+      // The deployment's own key, never an app's (decryptValue inside an app would use the app's).
+      const copy = JSON.parse(decryptForDeployment(raw)) as {
         tenants?: TenantRecord[]
         etag?: string | null
         confirmedAt?: number
@@ -201,8 +217,8 @@ export async function startHubTenantSource(deps: Deps): Promise<TenantRegistry> 
   const writeCopy = async () => {
     if (!redis || sealProblem) return
     try {
-      const { encryptValue } = await import('../encryption.js')
-      const sealed = encryptValue(JSON.stringify({ tenants, etag, confirmedAt, dropped }))
+      const { encryptForDeployment } = await import('../encryption.js')
+      const sealed = encryptForDeployment(JSON.stringify({ tenants, etag, confirmedAt, dropped }))
       await redis.set(hubCacheKey(deployment), sealed)
       writeFailed = false
     } catch {
@@ -475,4 +491,5 @@ export function stopHubTenantSource(): void {
 export function resetHubTenantSourceForTests(): void {
   active?.stop()
   active = null
+  resetAppKeysForTests()
 }
