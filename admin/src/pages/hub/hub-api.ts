@@ -1000,3 +1000,48 @@ Object.assign(BLOCKER_COPY, {
     hint: 'Use image@sha256:… with the 64-character digest.'
   }
 } satisfies Record<string, { title: string; hint?: string }>)
+
+// ─── Phase 6: shared placements, moves ───────────────────────────────────────
+
+/** A Hub deploy row's kind: phase 6 adds the mirror rows of a move and of a shared upgrade. */
+export type HubDeployKind = PromotionKind | 'move' | 'shared'
+
+/** Why a promotion, a stack change or a creation step refuses a shared-placed environment. */
+export const SHARED_PLACEMENT_TIP =
+  'Runs on a shared deployment, so its version follows the deployment. Upgrade the shared deployment instead.'
+
+Object.assign(BLOCKER_COPY, {
+  SHARED_PLACEMENT: {
+    title: 'This environment runs on a shared deployment',
+    hint: 'Its version follows the deployment. Upgrade the shared deployment instead (Apps hub → Shared deployments).'
+  },
+  USE_MOVE: {
+    title: 'This change needs a move',
+    hint: 'An environment goes onto or off a shared deployment only through Move….'
+  },
+  PLACEMENT_CHANGED: {
+    title: "The environment's placement changed meanwhile",
+    hint: 'Nothing was changed. Reload, check where it runs now, then try again.'
+  }
+} satisfies Record<string, { title: string; hint?: string }>)
+
+/** A Hub deploy row's kind in words (history): `move` = "Moved", `shared` = "Shared upgrade". */
+export function deployKindWords(r: { kind: string; apply?: boolean }): string {
+  if (r.apply) return 'Apply settings'
+  switch (r.kind) {
+    case 'promote':
+      return 'Promote'
+    case 'rollback':
+      return 'Rollback'
+    case 'move':
+      return 'Moved'
+    case 'shared':
+      return 'Shared upgrade'
+    default:
+      return r.kind
+  }
+}
+
+/** Promotions and rollbacks are watched and rolled back here; move and shared rows are not. */
+export const isPromotionKind = (k: string): k is PromotionKind =>
+  k === 'promote' || k === 'rollback'

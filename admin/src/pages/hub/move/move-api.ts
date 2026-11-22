@@ -1,0 +1,849 @@
+import { describeError, type ErrorDescription, errorToastOptions } from '@nivaro/shared'
+import { type DataTag, useQuery } from '@tanstack/react-query'
+import { toast } from 'sonner'
+import { api } from '@/lib/api'
+import { fetchDrivers, type HubDriver, hubError, hubKeys } from '../hub-api'
+
+/**
+ * Nivaro Hub (phase 6) — every call the move panel, the place-on-shared form and the app key
+ * field make, in one module. The move routes (Tasks 15/16) are built beside this screen; their
+ * shapes here are the plan's, so wiring them at merge is a change to this file only.
+ *
+ * Never kept or shown here: an app key (only its mask and fingerprint), a deployment token, a
+ * transfer ticket or a database connection.
+ */
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+export type MoveKind = 'to_shared' | 'to_dedicated' | 'between_shared'
+export type MoveRouting = 'automatic' | 'manual'
+
+/** Where a move goes: a shared deployment, or a dedicated placement of this environment. */
+export type MoveTarget =
+  | { kind: 'shared'; shared_id: number; pool_max?: number }
+  | { kind: 'dedicated'; placement_id: number }
+
+export interface MoveRouteAction {
+  side: 'source' | 'target'
+  op: 'drop_host' | 'add_host' | 'remove_stack' | 'apply_stack'
+  host?: string
+}
+
+export interface MoveIssue {
+  code: string
+  text: string
+}
+
+export interface MoveChecklistItem {
+  id: string
+  text: string
+  required: boolean
+}
+
+/** The plan `POST /hub/environments/:envId/move/plan` answers (Task 15 `MovePlan`). */
+export interface MovePlan {
+  kind: MoveKind
+  routing: MoveRouting
+  steps: string[]
+  route: MoveRouteAction[]
+  manual_request: string | null
+  version: string
+  hostnames: string[]
+  files: { count: number; bytes: number }
+  blockers: MoveIssue[]
+  warnings: MoveIssue[]
+  checklist: MoveChecklistItem[]
+  plan_hash: string
+}
+
+export type MoveStatus =
+  | 'planned'
+  | 'running'
+  | 'waiting'
+  | 'interrupted'
+  | 'success'
+  | 'failed'
+  | 'rolled_back'
+  | 'cancelled'
+
+/** File copy progress (the target's pull status, Task 10). */
+export interface MoveFiles {
+  state?: 'running' | 'done' | 'failed'
+  total?: number
+  copied?: number
+  skipped?: number
+  failed?: number
+  bytes?: number
+  error?: string | null
+}
+
+/** One move (`nivaro_hub_moves`, migration 553) as `GET /hub/moves/:id` answers it. */
+export interface HubMove {
+  id: number
+  app_id: number
+  environment_id: number
+  from_placement_id: number
+  to_placement_id: number
+  kind: MoveKind
+  routing: MoveRouting
+  status: MoveStatus | string
+  /** The step the runner is on (or stopped on). */
+  step: string | null
+  /** The run's steps in order: keys, or `{key, status}` rows (stored as JSON text). */
+  steps: unknown
+  plan: MovePlan | string | null
+  plan_hash?: string | null
+  files: MoveFiles | string | null
+  /** Checklist state: `{id: done}` or `[{id, text, required, done}]` (stored as JSON text). */
+  checklist: unknown
+  error: string | null
+  placed_at?: string | null
+  job_run_id?: number | null
+  started_by?: string | null
+  started_by_name?: string | null
+  started_at: string | null
+  finished_at: string | null
+  heartbeat_at?: string | null
+}
+
+/** Shared deployment list row (`GET /hub/shared`, Task 3). */
+export interface SharedDeploymentRow {
+  id: number
+  key: string
+  name: string
+  mode: 'registered' | 'docker'
+  status: 'new' | 'active' | 'upgrading' | 'retired'
+  version_pin: string | null
+  pool_budget: number
+  apps?: number
+  live_replicas?: number | null
+}
+
+/** A placement (`GET /hub/placements/:id`): dedicated on a driver, or on a shared deployment. */
+export type HubPlacement =
+  | {
+      id: number
+      kind: 'dedicated'
+      driver_id: number
+      target: { branch?: string; stack?: string; forgotten_at?: string }
+    }
+  | {
+      id: number
+      kind: 'shared'
+      shared_deployment_id: number
+      driver_id: null
+      target: { pool_max?: number }
+    }
+
+/** `GET /hub/environments/:envId/app-key` (Task 3): never the key, only its mask and fingerprint. */
+export interface AppKeyInfo {
+  known: boolean
+  /** '••••••' when known, else null. */
+  key: string | null
+  fp: string | null
+  source: 'entry' | 'stack' | null
+  /** The stored entry no longer opens (the Hub's ENCRYPTION_KEY changed, or it is damaged). */
+  entry_unreadable?: boolean
+  code?: string
+  message?: string
+}
+
+export interface AppKeySaved {
+  fp: string
+  changed: boolean
+  /** Where the key was checked against what the app runs with; null = it could not be. */
+  verified?: string | null
+  unverified_code?: string
+}
+
+export interface PlaceSharedInput {
+  shared_id: number
+  database_id: number
+  pool_max?: number
+  first_admin: { email: string; first_name?: string; last_name?: string }
+}
+
+export interface JobRunState {
+  id: number
+  status: string
+  error: string | null
+}
+
+// ─── Query keys (every root starts 'hub'; one key = one shape) ────────────────
+
+type Tagged<K extends readonly unknown[], T> = DataTag<K, T>
+const tag = <T, K extends readonly unknown[]>(k: K) => k as unknown as Tagged<K, T>
+
+export const moveKeys: {
+  /** Same key and shape as the Shared deployments page (Task 17): the `GET /hub/shared` rows. */
+  shared: () => Tagged<readonly ['hub', 'shared'], SharedDeploymentRow[]>
+  placement: (id: number) => Tagged<readonly ['hub', 'placement', number], HubPlacement>
+  moves: (envId: number) => Tagged<readonly ['hub', 'moves', number], HubMove[]>
+  move: (id: number) => Tagged<readonly ['hub', 'move', number], HubMove>
+  plan: (
+    envId: number,
+    target: string
+  ) => Tagged<readonly ['hub', 'move-plan', number, string], MovePlan>
+  appKey: (envId: number) => Tagged<readonly ['hub', 'app-key', number], AppKeyInfo>
+  jobRun: (id: number) => Tagged<readonly ['hub', 'job-run', number], JobRunState>
+} = {
+  shared: () => tag<SharedDeploymentRow[], readonly ['hub', 'shared']>(['hub', 'shared'] as const),
+  placement: (id) =>
+    tag<HubPlacement, readonly ['hub', 'placement', number]>(['hub', 'placement', id] as const),
+  moves: (envId) =>
+    tag<HubMove[], readonly ['hub', 'moves', number]>(['hub', 'moves', envId] as const),
+  move: (id) => tag<HubMove, readonly ['hub', 'move', number]>(['hub', 'move', id] as const),
+  plan: (envId, target) =>
+    tag<MovePlan, readonly ['hub', 'move-plan', number, string]>([
+      'hub',
+      'move-plan',
+      envId,
+      target
+    ] as const),
+  appKey: (envId) =>
+    tag<AppKeyInfo, readonly ['hub', 'app-key', number]>(['hub', 'app-key', envId] as const),
+  jobRun: (id) =>
+    tag<JobRunState, readonly ['hub', 'job-run', number]>(['hub', 'job-run', id] as const)
+}
+
+/** A target as one string (query key, Combobox value): `shared:3` / `dedicated:12`. */
+export const targetValue = (t: MoveTarget): string =>
+  t.kind === 'shared' ? `shared:${t.shared_id}` : `dedicated:${t.placement_id}`
+
+export function targetFromValue(v: string): MoveTarget | null {
+  const m = /^(shared|dedicated):(\d+)$/.exec(v)
+  if (!m) return null
+  const id = Number(m[2])
+  return m[1] === 'shared'
+    ? { kind: 'shared', shared_id: id }
+    : { kind: 'dedicated', placement_id: id }
+}
+
+// ─── Calls ────────────────────────────────────────────────────────────────────
+
+const data = <T>(r: { data: { data: T } }) => r.data.data
+
+export const fetchSharedList = () =>
+  api.get<{ data: SharedDeploymentRow[] }>('/hub/shared').then((r) => r.data.data ?? [])
+
+export const fetchPlacement = (id: number) =>
+  api.get<{ data: HubPlacement }>(`/hub/placements/${id}`).then(data)
+
+export const fetchMovePlan = (envId: number, to: MoveTarget) =>
+  api.post<{ data: MovePlan }>(`/hub/environments/${envId}/move/plan`, { to }).then(data)
+
+export const startMove = (
+  envId: number,
+  body: { to: MoveTarget; plan_hash: string; confirm: string; checklist: Record<string, boolean> }
+) => api.post<{ data: { move_id: number } }>(`/hub/environments/${envId}/move`, body).then(data)
+
+export const fetchMove = (id: number) => api.get<{ data: HubMove }>(`/hub/moves/${id}`).then(data)
+
+export const fetchMoves = (envId: number) =>
+  api.get<{ data: HubMove[] }>(`/hub/environments/${envId}/moves`).then((r) => r.data.data ?? [])
+
+/**
+ * Cancel a move. Before `release` the Hub rolls it back (the app stays on its old home); after
+ * it, the move is stopped where it is. Every call names the move by its id.
+ */
+export const cancelMove = (id: number) => api.post(`/hub/moves/${id}/cancel`, {})
+
+/**
+ * Roll back an interrupted move (before `release`): the plan has no route of its own for it —
+ * a cancel before release is the rollback (Task 16 `cancelMove`). Carries the move id.
+ */
+export const rollbackMove = (id: number) => cancelMove(id)
+
+export const resumeMove = (id: number) => api.post(`/hub/moves/${id}/resume`, {})
+
+/** Manual routing: ask the Hub to check the public name now. */
+export const confirmMoveRoute = (id: number) =>
+  api
+    .post<{ data: { serving: boolean } }>(`/hub/moves/${id}/confirm-route`, {})
+    .then((r) => ({ serving: r.data.data?.serving === true }))
+
+export const setMoveChecklist = (id: number, item: string, done: boolean) =>
+  api.post(`/hub/moves/${id}/checklist`, { item, done })
+
+export const placeShared = (envId: number, body: PlaceSharedInput) =>
+  api
+    .post<{ data: { job_run_id: number } }>(`/hub/environments/${envId}/place-shared`, body)
+    .then(data)
+
+export const fetchAppKey = (envId: number) =>
+  api.get<{ data: AppKeyInfo }>(`/hub/environments/${envId}/app-key`).then(data)
+
+export const putAppKey = (envId: number, key: string) =>
+  api.put<{ data: AppKeySaved }>(`/hub/environments/${envId}/app-key`, { key }).then(data)
+
+export const fetchJobRun = (id: number) =>
+  api
+    .get<{ data: { run: JobRunState } }>(`/job-runs/${id}/log`, { params: { after: 0 } })
+    .then((r) => r.data.data.run)
+
+// ─── Hooks ────────────────────────────────────────────────────────────────────
+
+/** Shared deployments (Hub admins only). */
+export function useSharedList(enabled = true) {
+  return useQuery({
+    queryKey: moveKeys.shared(),
+    queryFn: fetchSharedList,
+    enabled,
+    staleTime: 30_000
+  })
+}
+
+export function usePlacement(id: number | null, enabled = true) {
+  return useQuery({
+    queryKey: moveKeys.placement(id ?? 0),
+    queryFn: () => fetchPlacement(id as number),
+    enabled: enabled && id != null,
+    staleTime: 60_000
+  })
+}
+
+export function useDrivers(enabled = true) {
+  return useQuery({
+    queryKey: hubKeys.drivers(),
+    queryFn: fetchDrivers,
+    enabled,
+    staleTime: 60_000
+  })
+}
+
+/**
+ * The placement chip of an environment: `Shared · <key>` or `Dedicated · <driver>`. Null while
+ * any part is unknown (no placement, still reading, or the reader may not see placements).
+ */
+export function placementLabel(
+  p: HubPlacement | undefined,
+  shared: SharedDeploymentRow[] | undefined,
+  drivers: HubDriver[] | undefined
+): string | null {
+  if (!p) return null
+  if (p.kind === 'shared') {
+    const s = shared?.find((x) => x.id === p.shared_deployment_id)
+    return s ? `Shared · ${s.key}` : 'Shared'
+  }
+  const d = drivers?.find((x) => x.id === p.driver_id)
+  return d ? `Dedicated · ${d.name}` : 'Dedicated'
+}
+
+// ─── Status and steps ─────────────────────────────────────────────────────────
+
+const LIVE = new Set(['planned', 'running', 'waiting'])
+const OPEN = new Set(['planned', 'running', 'waiting', 'interrupted'])
+
+/** Still going (or about to): polled. A status this screen does not know counts as live. */
+export const isLiveMove = (s: string) => LIVE.has(s) || !KNOWN_MOVE_STATUS.has(s)
+/** A move that still holds the environment (interrupted waits for Resume or Roll back). */
+export const isOpenMove = (s: string) => OPEN.has(s) || !KNOWN_MOVE_STATUS.has(s)
+
+export const MOVE_STATUS_WORDS: Record<MoveStatus, string> = {
+  planned: 'Starting',
+  running: 'Running',
+  waiting: 'Waiting for the address',
+  interrupted: 'Interrupted',
+  success: 'Moved',
+  failed: 'Failed',
+  rolled_back: 'Rolled back',
+  cancelled: 'Cancelled'
+}
+const KNOWN_MOVE_STATUS = new Set<string>(Object.keys(MOVE_STATUS_WORDS))
+
+export const moveStatusWords = (s: string) =>
+  KNOWN_MOVE_STATUS.has(s) ? MOVE_STATUS_WORDS[s as MoveStatus] : s || 'Unknown'
+
+export const MOVE_STATUS_TONE: Record<MoveStatus, string> = {
+  planned: 'text-sky-700 dark:text-sky-300',
+  running: 'text-sky-700 dark:text-sky-300',
+  waiting: 'text-amber-800 dark:text-amber-300',
+  interrupted: 'text-amber-800 dark:text-amber-300',
+  success: 'text-emerald-700 dark:text-emerald-300',
+  failed: 'text-red-700 dark:text-red-300',
+  rolled_back: 'text-slate-600 dark:text-slate-300',
+  cancelled: 'text-slate-600 dark:text-slate-300'
+}
+export const moveStatusTone = (s: string) =>
+  KNOWN_MOVE_STATUS.has(s)
+    ? MOVE_STATUS_TONE[s as MoveStatus]
+    : 'text-slate-600 dark:text-slate-300'
+
+export const MOVE_KIND_WORDS: Record<MoveKind, string> = {
+  to_shared: 'To a shared deployment',
+  to_dedicated: 'To a dedicated stack',
+  between_shared: 'Between shared deployments'
+}
+
+/** What each step does, in plain words (a key this screen does not know shows as sent). */
+export const MOVE_STEP_WORDS: Record<string, string> = {
+  check: 'Check everything again',
+  files_warm: 'Copy the files while the app still serves',
+  maintenance_on: 'Put the app in maintenance',
+  wait_idle: 'Wait for running imports, exports and renders to finish',
+  files_delta: 'Copy the files that changed since',
+  deploy_target: 'Deploy the new stack',
+  place_on_target: 'Place the app on the target',
+  target_ready: 'Wait until the target serves the app',
+  files_full: 'Copy every file',
+  route: 'Point the address at the target',
+  verify: 'Check the address answers from the target',
+  release: 'Take the app out of maintenance',
+  retire_source: 'Retire the old home',
+  done: 'Done'
+}
+export const stepWords = (key: string) => MOVE_STEP_WORDS[key] ?? key
+
+export type MoveStepState = 'done' | 'running' | 'waiting' | 'failed' | 'undone' | 'pending'
+
+export interface MoveStepRow {
+  key: string
+  label: string
+  state: MoveStepState
+}
+
+const parse = <T>(v: unknown): T | null => {
+  if (v == null) return null
+  if (typeof v !== 'string') return v as T
+  try {
+    return JSON.parse(v) as T
+  } catch {
+    return null
+  }
+}
+
+export const movePlanOf = (m: Pick<HubMove, 'plan'>): MovePlan | null => parse<MovePlan>(m.plan)
+export const moveFilesOf = (m: Pick<HubMove, 'files'>): MoveFiles | null =>
+  parse<MoveFiles>(m.files)
+
+const STEP_STATE_ALIAS: Record<string, MoveStepState> = {
+  done: 'done',
+  success: 'done',
+  ok: 'done',
+  running: 'running',
+  waiting: 'waiting',
+  failed: 'failed',
+  undone: 'undone',
+  rolled_back: 'undone',
+  pending: 'pending'
+}
+
+/**
+ * The run's steps with a state each. The row stores either the keys in order (the state follows
+ * from `step` and the status) or `{key, status}` rows (taken as they are).
+ */
+export function moveStepRows(
+  m: Pick<HubMove, 'steps' | 'step' | 'status' | 'plan'>
+): MoveStepRow[] {
+  const raw = parse<unknown[]>(m.steps) ?? movePlanOf(m)?.steps ?? []
+  const list = Array.isArray(raw) ? raw : []
+  const objects = list.every((s) => s && typeof s === 'object')
+  if (list.length > 0 && objects) {
+    return list.map((s) => {
+      const o = s as { key?: unknown; status?: unknown; state?: unknown }
+      const key = String(o.key ?? '')
+      const st = String(o.state ?? o.status ?? 'pending')
+      return { key, label: stepWords(key), state: STEP_STATE_ALIAS[st] ?? 'pending' }
+    })
+  }
+  const keys = list.map(String)
+  if (m.status === 'success')
+    return keys.map((key) => ({ key, label: stepWords(key), state: 'done' }))
+  const at = m.step ? keys.indexOf(m.step) : -1
+  const cur = at < 0 && isLiveMove(m.status) ? 0 : at
+  const atState: MoveStepState =
+    m.status === 'waiting'
+      ? 'waiting'
+      : isLiveMove(m.status)
+        ? 'running'
+        : m.status === 'rolled_back' || m.status === 'cancelled'
+          ? 'undone'
+          : 'failed'
+  return keys.map((key, i) => ({
+    key,
+    label: stepWords(key),
+    state:
+      i < cur ? (m.status === 'rolled_back' ? 'undone' : 'done') : i === cur ? atState : 'pending'
+  }))
+}
+
+/** Whether the run has passed `release` (after it, nothing is rolled back). */
+export function pastRelease(m: Pick<HubMove, 'steps' | 'step' | 'status' | 'plan'>): boolean {
+  const rows = moveStepRows(m)
+  const rel = rows.findIndex((r) => r.key === 'release')
+  if (rel < 0) return false
+  if (rows[rel].state === 'done') return true
+  const keys = rows.map((r) => r.key)
+  return !!m.step && keys.indexOf(m.step) > rel
+}
+
+/** The move's checklist with what is done: `{id: done}` or `[{id, text, required, done}]`. */
+export function moveChecklistOf(
+  m: Pick<HubMove, 'checklist' | 'plan'>
+): (MoveChecklistItem & { done: boolean })[] {
+  const raw = parse<unknown>(m.checklist)
+  const planned = movePlanOf(m)?.checklist ?? []
+  if (Array.isArray(raw))
+    return raw.map((r) => {
+      const o = r as Partial<MoveChecklistItem> & { done?: unknown }
+      const p = planned.find((x) => x.id === o.id)
+      return {
+        id: String(o.id ?? ''),
+        text: String(o.text ?? p?.text ?? o.id ?? ''),
+        required: !!(o.required ?? p?.required),
+        done: o.done === true
+      }
+    })
+  const done = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+  const items = planned.map((p) => ({ ...p, done: done[p.id] === true }))
+  for (const [id, v] of Object.entries(done))
+    if (!items.some((i) => i.id === id))
+      items.push({ id, text: CHECKLIST_WORDS[id] ?? id, required: false, done: v === true })
+  return items
+}
+
+/** Checklist items the Hub adds after a move (Task 16: a failed retire leaves its item open). */
+const CHECKLIST_WORDS: Record<string, string> = {
+  retire_source: 'Retire the old home by hand: it could not be retired automatically.',
+  old_stack_stopped: 'Stop the old stack.',
+  callbacks_registered: 'Register the sign-in callback addresses.',
+  route_ticket: 'Ask for the address change.'
+}
+
+export function formatBytes(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let i = 0
+  let v = n
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024
+    i++
+  }
+  return `${v >= 10 || i === 0 ? Math.round(v) : v.toFixed(1)} ${units[i]}`
+}
+
+// ─── Plain words for blockers, warnings and refusals ──────────────────────────
+
+type Copy = { title: string; hint?: string }
+
+/** Why a move cannot start (plan blockers, Task 15 + rulings R1/R2, T9 carries). */
+export const MOVE_BLOCKER_COPY: Record<string, Copy> = {
+  SAME_PLACEMENT: {
+    title: 'The environment already runs there',
+    hint: 'Pick another shared deployment or dedicated stack.'
+  },
+  NOT_HUB_LINKED: {
+    title: 'The Hub has no hub link to this app',
+    hint: "Set the app's HUB_TOKEN and enter the same token on the environment, then plan again."
+  },
+  LINK_UNREACHABLE: {
+    title: "The app's hub link does not answer",
+    hint: 'The Hub cannot ask the app what a move would change. Check that the app runs, then plan again.'
+  },
+  VERSION_DIFFERS: {
+    title: 'The target runs another version',
+    hint: 'A move never changes the version. Promote the environment, or upgrade the shared deployment, so both run the same one.'
+  },
+  EXTENSION_NOT_ALLOWED: {
+    title: 'The shared deployment does not load an extension this app uses',
+    hint: "Add it to the deployment's extensions (only extensions marked safe for shared deployments load there)."
+  },
+  EXTENSION_VERSION_DIFFERS: {
+    title: 'An extension is pinned to another version on the target',
+    hint: 'Pin the same extension image on both, then plan again.'
+  },
+  NO_DATABASE_RECORD: {
+    title: "The Hub has no record of this app's database",
+    hint: 'Adopt the database on the Databases tab and attach it to the environment.'
+  },
+  SQLITE_NOT_SHARED: {
+    title: 'The app runs on SQLite',
+    hint: 'A shared deployment needs a database server. Move the data to SQL Server, Postgres or MySQL first.'
+  },
+  APP_KEY_UNKNOWN: {
+    title: "The Hub does not know this app's encryption key",
+    hint: "Enter it below (the app's ENCRYPTION_KEY, 64 hex characters), then plan again. Apps created through GitLab always need this."
+  },
+  APP_KEY_MISMATCH: {
+    title: 'The key the Hub holds is not the one the app runs with',
+    hint: "Enter the app's real ENCRYPTION_KEY below, then plan again. The target would not open what the app sealed."
+  },
+  SIGNIN_VIA_HUB: {
+    title: 'The app signs in through the Hub',
+    hint: 'Sign-in through the Hub does not work on a shared deployment yet. Switch the app to direct sign-in first.'
+  },
+  ISSUER_DIFFERS: {
+    title: "The deployment's sign-in is in another Microsoft tenant",
+    hint: "Accounts would not match after the move. Use a deployment that signs in with the app's tenant."
+  },
+  POOL_BUDGET: {
+    title: 'The deployment has no room for this app’s connections',
+    hint: "Lower the app's connections, raise the deployment's connection budget, or pick another deployment."
+  },
+  POOL_TOO_SMALL: {
+    title: 'The app needs at least 2 database connections',
+    hint: 'Give it between 2 and 20.'
+  },
+  BUSY: {
+    title: 'Something else is running on this environment',
+    hint: 'Wait for the promotion, stack change or other move to finish, then plan again.'
+  },
+  SHARED_BUSY: {
+    title: 'The shared deployment is busy',
+    hint: 'It is being upgraded, or another app is being placed or moved there. Try again when it finishes.'
+  },
+  SHARED_NOT_ACTIVE: {
+    title: 'The shared deployment is not running yet',
+    hint: 'Deploy it first, or pick another one.'
+  },
+  SHARED_RETIRED: {
+    title: 'That shared deployment is retired',
+    hint: 'A retired deployment takes no apps. Pick another one.'
+  },
+  TARGET_UNREACHABLE: {
+    title: 'The target does not answer',
+    hint: "Check the deployment's link address, or the Docker host's agent, then plan again."
+  },
+  DB_UNREACHABLE_FROM_TARGET: {
+    title: "The target cannot reach the app's database",
+    hint: 'Open the network path from the target to the database server, then plan again.'
+  },
+  DATABASE_DIFFERS: {
+    title: 'The target would open another database than the one the app serves',
+    hint: "Check the database record attached to the environment: its server and name must be the app's own."
+  },
+  HOSTNAME_TAKEN: {
+    title: 'An address of this app already belongs to another app on the target',
+    hint: 'Give the environment its own addresses.'
+  },
+  DRIVER_UNSUPPORTED: {
+    title: 'The Hub cannot move an app to or from this kind of placement',
+    hint: 'Move it by hand, or pick a Docker stack or a shared deployment.'
+  },
+  SAME_REDIS: {
+    title: 'The old and the new home share one Redis database',
+    hint: 'Retiring the old home would also stop the new one. Give the target its own Redis database (or channel prefix), then plan again.'
+  },
+  // The app's own readiness report (Task 9): what a shared deployment cannot run yet.
+  STAGED_IMPORTS: {
+    title: 'The app has staged imports set up',
+    hint: 'A shared deployment does not run staged imports yet. Finish or remove them first.'
+  },
+  ROW_SCHEDULES: {
+    title: 'The app has schedules stored in its data',
+    hint: 'A shared deployment does not run per-app schedules yet, so they would silently stop. Turn them off first.'
+  },
+  ISSUE_TRACKERS: {
+    title: 'GitLab issue sync is on in this app',
+    hint: 'A shared deployment does not sync issues yet. Turn issue sync off first.'
+  },
+  EXEC_SCRIPT_FLOWS: {
+    title: 'Some of the app’s flows run scripts',
+    hint: 'A shared deployment cannot run flow scripts. Change or turn off those flows first.'
+  },
+  SQLITE: {
+    title: 'The app runs on SQLite',
+    hint: 'A shared deployment needs a database server. Move the data to SQL Server, Postgres or MySQL first.'
+  },
+  ENV_OBJECT_STORAGE: {
+    title: 'Files are stored in S3 or Azure set by environment variables',
+    hint: 'A move copies only files stored on disk, so these would be lost. Move the storage settings into the app (Settings → Files) first.'
+  }
+}
+
+/** What a move will change that is not a reason to stop (amber). */
+export const MOVE_WARNING_COPY: Record<string, Copy> = {
+  SIGN_IN_AGAIN: {
+    title: 'Everyone signs in again after the move',
+    hint: 'Sessions do not move. Phone app and connected AI apps (MCP) sign in again too.'
+  },
+  SIGNED_LINKS_RESET: {
+    title: 'Links the old home signed stop working',
+    hint: 'For example submission status links and shared media links. People ask for a new link.'
+  },
+  SAME_APP_ON_DEPLOYMENT: {
+    title: 'Another environment of this app already runs on this deployment',
+    hint: 'Fine for development and staging next to each other; each keeps its own data and files.'
+  },
+  MULTI_NODE_VOLUMES: {
+    title: 'The Docker host has more than one node',
+    hint: 'Files on a local volume stay on one node. Use shared storage (NFS) for the files volume.'
+  },
+  MANUAL_ROUTE: {
+    title: 'Someone outside the Hub changes the address',
+    hint: 'The old home keeps serving until the new address answers. The request to send is below.'
+  },
+  REPLAYS_NOT_MOVED: {
+    title: 'Session replays are not moved',
+    hint: 'Replays recorded on the old home stay there.'
+  },
+  OLD_STACK_STOP: {
+    title: 'The old stack keeps running until someone stops it',
+    hint: 'The Hub retires it (it answers only "moved"); stop it in its own pipeline afterwards.'
+  },
+  DIRECTORY_SYNC: {
+    title: 'Directory sync does not run on a shared deployment',
+    hint: 'People still sign in; new people are not added ahead of their first sign-in.'
+  },
+  PHONE_PUSH: {
+    title: 'Phone alerts do not run on a shared deployment',
+    hint: 'In-app and email notifications still work.'
+  },
+  TEAMS_BOT: { title: 'The Teams bot does not run on a shared deployment' },
+  MAIL_RETRY: {
+    title: 'Failed emails are not retried on a shared deployment',
+    hint: 'They stay in the mail log and can be resent by hand.'
+  },
+  HUDDLE_TURN: { title: 'Huddles use the deployment’s media servers, not the app’s own' },
+  ENV_SMTP: {
+    title: 'Mail settings come from environment variables on the old home',
+    hint: 'Enter them in the app (Settings → Email) so mail keeps going after the move.'
+  },
+  SESSION_REPLAYS: { title: 'Session replays are not moved' },
+  HELP_VIDEO_RENDERS: {
+    title: 'Help-video renders in the queue start again',
+    hint: 'A video waiting for its render is rendered again on its next publish.'
+  },
+  SLA_FLIPS: { title: 'SLA status changes are not checked on a shared deployment' },
+  WEEKLY_DIGESTS: { title: 'Weekly digests are not sent on a shared deployment' },
+  RETENTION_PASS: { title: 'Log retention does not run per app on a shared deployment' }
+}
+
+/** Refusals of the move, place and app-key routes (non-planner codes), in plain words. */
+export const MOVE_CODE_COPY: Record<string, Copy> = {
+  PLAN_CHANGED: {
+    title: 'The plan changed since you read it',
+    hint: 'Check the plan as it stands now, then start again.'
+  },
+  CONFIRM_MISMATCH: {
+    title: 'The confirmation does not match',
+    hint: 'Type the app and environment exactly as shown, then start again.'
+  },
+  CHECKLIST_OPEN: {
+    title: 'A required checklist item is not ticked',
+    hint: 'Tick every required item once it is done, then start again.'
+  },
+  NOT_INTERRUPTED: {
+    title: 'That move is not interrupted any more',
+    hint: 'Reload to see how it stands.'
+  },
+  NOT_WAITING: {
+    title: 'That move is not waiting for its address',
+    hint: 'Reload to see how it stands.'
+  },
+  USE_MOVE: {
+    title: 'This environment has already served',
+    hint: 'An environment that served moves instead: use Move….'
+  },
+  ALREADY_PLACED: {
+    title: 'This environment already runs on a shared deployment',
+    hint: 'Use Move… to take it to another one.'
+  },
+  STACK_RUNNING: {
+    title: 'A Docker stack still runs for this environment',
+    hint: 'Remove the stack in its stack panel first, or use Move… to take its data along.'
+  },
+  DATABASE_NOT_READY: {
+    title: 'That database is not ready',
+    hint: 'Pick a database whose status is Ready.'
+  },
+  DATABASE_IN_USE: {
+    title: 'Another environment already uses that database',
+    hint: 'Each environment has its own database.'
+  },
+  CREATION_RUNNING: {
+    title: 'A creation step is running on this environment',
+    hint: 'Wait for it to finish, then try again.'
+  },
+  BAD_FIRST_ADMIN: {
+    title: 'The first administrator needs a valid email address',
+    hint: 'They sign in with it and get full rights in the app.'
+  },
+  BAD_POOL: { title: 'Connections must be a number from 2 to 20' },
+  BAD_SHARED: { title: 'Pick a shared deployment' },
+  BAD_DATABASE: { title: 'Pick a database' },
+  NOT_FOUND: {
+    title: 'That no longer exists',
+    hint: 'It was removed meanwhile. Reload and pick again.'
+  },
+  BAD_KEY: {
+    title: 'That is not an app encryption key',
+    hint: "The key is the app's ENCRYPTION_KEY: 64 characters, 0–9 and a–f."
+  },
+  APP_KEY_UNVERIFIED: {
+    title: 'The Hub could not confirm the new key',
+    hint: 'It already holds a different key and could not check the new one against the running app, so nothing changed. Check that the app answers over its hub link, then save again.'
+  },
+  APP_KEY_IMMUTABLE: {
+    title: 'The key of an app on a shared deployment cannot be changed',
+    hint: 'Every value the app sealed would become unreadable. Nothing was changed.'
+  },
+  APP_KEY_MISSING: {
+    title: 'The shared deployment has no encryption key for this app',
+    hint: "Enter the app's key on the environment."
+  },
+  PLACEMENT_CHANGED: {
+    title: "The environment's placement changed while the key was saved",
+    hint: 'Nothing was changed. Save again.'
+  },
+  ENVIRONMENT_BUSY: {
+    title: 'Another action holds this environment',
+    hint: 'Try again in a moment.'
+  },
+  LOCK_UNAVAILABLE: {
+    title: 'The Hub cannot make sure only one action runs right now',
+    hint: 'It cannot reach Redis. Nothing was started. Try again in a moment.'
+  }
+}
+
+/** One plan blocker or warning: plain words, and the planner's own sentence as the detail. */
+export function moveIssueCopy(
+  issue: MoveIssue,
+  level: 'blocker' | 'warning'
+): Copy & { detail: string | null } {
+  const table = level === 'blocker' ? MOVE_BLOCKER_COPY : MOVE_WARNING_COPY
+  const copy =
+    table[issue.code] ??
+    (level === 'blocker' ? MOVE_WARNING_COPY : MOVE_BLOCKER_COPY)[issue.code] ??
+    null
+  const text = issue.text?.trim() || null
+  if (!copy) return { title: text ?? 'This cannot start yet', detail: null }
+  return { ...copy, detail: text && text !== copy.title ? text : null }
+}
+
+/** describeError with the move, place and app-key refusals in plain words (then the Hub's). */
+export function moveError(err: unknown, fallback: string): ErrorDescription {
+  const d = describeError(err, fallback)
+  const copy = d.code
+    ? (MOVE_CODE_COPY[d.code] ?? MOVE_BLOCKER_COPY[d.code] ?? MOVE_WARNING_COPY[d.code])
+    : undefined
+  if (!copy) return hubError(err, fallback)
+  const out: ErrorDescription = { ...d, title: copy.title }
+  if (copy.hint) out.hint = copy.hint
+  else delete out.hint
+  return out
+}
+
+export function moveToast(err: unknown, fallback: string) {
+  const d = moveError(err, fallback)
+  toast.error(d.title, errorToastOptions(d))
+}
+
+/** The plan a refused start (409 PLAN_CHANGED) carried, if any. */
+export function changedMovePlanOf(err: unknown): MovePlan | null {
+  const body = (err as { response?: { data?: { code?: unknown; plan?: unknown } } })?.response?.data
+  if (body?.code !== 'PLAN_CHANGED') return null
+  const plan = body.plan as MovePlan | undefined
+  return plan && Array.isArray(plan.blockers) && typeof plan.plan_hash === 'string' ? plan : null
+}
+
+/**
+ * Ruling (T3 open question): there is no operator override to re-key a shared app whose stored
+ * key is lost. A different key would leave every value the app sealed unreadable on the shared
+ * deployment; what the field tells the person to do instead.
+ */
+export const LOST_KEY_TEXT =
+  "There is no override for a lost key: the Hub never gives an app on a shared deployment a new key, because every value the app sealed would become unreadable. Look for the app's ENCRYPTION_KEY in your secret store, in the stack settings of its old dedicated stack, or in a backup of the Hub's database from before it was lost, and enter it here. The Hub checks it against the running app."
+
+/** Re-exported for the panel: the Hub's driver list. */
+export type { HubDriver }
