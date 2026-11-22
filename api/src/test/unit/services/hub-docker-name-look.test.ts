@@ -1,14 +1,14 @@
 import { describe, expect, it, vi } from 'vitest'
 
-// Nivaro Hub phase 4, Task 9: the one-look name check of a Docker deploy's verify step and the
-// copy a manual-DNS admin passes on. (Phase 3 owns the waiting_for_name status, its cron and
-// the Check name button.)
+// Nivaro Hub phase 4, Task 9: the Docker verify step's look at its name and the copy a
+// manual-DNS admin passes on. Since the phase 3 merge the look IS phase 3's name check
+// (create/name-check.ts checkName, tested in hub-name-check.test.ts) answered as three states;
+// phase 3 owns the waiting_for_name status, its cron and the Check name button.
 
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
 
-const { lookName, nameRequest, NAME_LOOKUP_TIMEOUT_MS } = await import(
-  '../../../services/hub/docker/name-check.js'
-)
+const { lookName, nameRequest } = await import('../../../services/hub/docker/name-check.js')
+const { NAME_CHECK_TIMEOUT_MS } = await import('../../../services/hub/create/name-check.js')
 
 const env = { base_url: 'https://acme.apps.example.com', hostnames: ['acme-alt.example.org'] }
 
@@ -59,7 +59,7 @@ describe('lookName', () => {
     )
   })
 
-  it('a DNS look that hangs counts as not_resolving after 5 s', async () => {
+  it("a DNS look that hangs counts as not_resolving after phase 3's timeout", async () => {
     vi.useFakeTimers()
     try {
       const r = reader('0.3.10')
@@ -67,9 +67,8 @@ describe('lookName', () => {
         lookup: () => new Promise(() => {}),
         readServedField: r.read
       })
-      await vi.advanceTimersByTimeAsync(NAME_LOOKUP_TIMEOUT_MS)
+      await vi.advanceTimersByTimeAsync(NAME_CHECK_TIMEOUT_MS)
       expect(await p).toBe('not_resolving')
-      expect(NAME_LOOKUP_TIMEOUT_MS).toBe(5_000)
       expect(r.urls).toEqual([])
     } finally {
       vi.useRealTimers()

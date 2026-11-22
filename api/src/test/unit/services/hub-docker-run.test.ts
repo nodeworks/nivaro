@@ -21,6 +21,9 @@ vi.mock('../../../db/index.js', async () => {
 const { db } = (await import('../../../db/index.js')) as unknown as { db: Knex }
 const m542 = await import('../../../db/migrations/542_hub_tables.js')
 const m543 = await import('../../../db/migrations/543_hub_promotions.js')
+// Phase 3's name check flips waiting_for_name only for an environment no creation walks.
+const m544 = await import('../../../db/migrations/544_hub_databases.js')
+const m545 = await import('../../../db/migrations/545_hub_creations.js')
 const m546 = await import('../../../db/migrations/546_hub_stack_settings.js')
 const run = await import('../../../services/hub/promote-run.js')
 const RS = await import('../../../services/hub/docker/run-step.js')
@@ -281,6 +284,8 @@ beforeAll(async () => {
   process.env.ENCRYPTION_KEY = KEY
   await m542.up(db)
   await m543.up(db)
+  await m544.up(db)
+  await m545.up(db)
   await m546.up(db)
 })
 
@@ -635,7 +640,9 @@ describe('docker step — verify', () => {
 
   it('manual DNS + not_resolving on a new environment: waiting_for_name, as before', async () => {
     await useDriver(manual)
-    await db('nivaro_hub_environments').where({ id: 2 }).update({ status: 'new' })
+    // A never-active environment (phase 3's markWaitingForName moves only active, provisioning
+    // or waiting_for_name; 'new' is not an environment status).
+    await db('nivaro_hub_environments').where({ id: 2 }).update({ status: 'provisioning' })
     const r = await execute({ name: 'not_resolving' })
     expect(r.outcome).toEqual({ status: 'success', step: 'verify', error: null })
     expect(r.servedReads).toEqual([])
@@ -644,7 +651,9 @@ describe('docker step — verify', () => {
 
   it('manual DNS + not_serving on a never-active environment waits for its name', async () => {
     await useDriver(manual)
-    await db('nivaro_hub_environments').where({ id: 2 }).update({ status: 'new' })
+    // A never-active environment (phase 3's markWaitingForName moves only active, provisioning
+    // or waiting_for_name; 'new' is not an environment status).
+    await db('nivaro_hub_environments').where({ id: 2 }).update({ status: 'provisioning' })
     const r = await execute({ name: 'not_serving' })
     expect(r.outcome.status).toBe('success')
     expect(r.servedReads).toEqual([])
@@ -697,7 +706,9 @@ describe('docker step — verify', () => {
 
   it('manual DNS on a never-active environment whose look served: no answer after falls back to waiting_for_name', async () => {
     await useDriver(manual)
-    await db('nivaro_hub_environments').where({ id: 2 }).update({ status: 'new' })
+    // A never-active environment (phase 3's markWaitingForName moves only active, provisioning
+    // or waiting_for_name; 'new' is not an environment status).
+    await db('nivaro_hub_environments').where({ id: 2 }).update({ status: 'provisioning' })
     const r = await execute({ name: 'serving', served: [null] })
     expect(r.outcome).toEqual({ status: 'success', step: 'verify', error: null })
     expect(r.servedReads).toHaveLength(40)

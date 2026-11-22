@@ -18,7 +18,7 @@ import type {
   StackRestartResult,
   StackStatus
 } from '../services/hub/docker/agent-types.js'
-import { lookName, markNameServing, nameRequest } from '../services/hub/docker/name-check.js'
+import { lookName, nameRequest } from '../services/hub/docker/name-check.js'
 import { prepareStackSpec } from '../services/hub/docker/run-step.js'
 import { agentEnvPrefixes } from '../services/hub/docker/stack-env.js'
 import { strictPinMap } from '../services/hub/docker/stack-gather.js'
@@ -36,6 +36,7 @@ import {
   validateStackSettings
 } from '../services/hub/docker/stack-settings.js'
 import { getDriver } from '../services/hub/drivers.js'
+import { markNameServing } from '../services/hub/name-check.js'
 import { PromotionError } from '../services/hub/promote-lock.js'
 import { startStackApply } from '../services/hub/promote-run.js'
 import type { HubEnvironmentRow } from '../services/hub/promote-types.js'
@@ -768,9 +769,10 @@ export function hubDockerRoutes(app: FastifyInstance) {
           `The name was checked less than ${CHECK_NAME_EVERY_MS / 1000} s ago — try again shortly`
         )
       const version = row.version_pin == null ? null : String(row.version_pin)
-      // merge: use phase 3 name-check — checkName(envId) replaces the look + flip below.
+      // Phase 3's name check (lookName answers create/name-check.ts checkName as three states)
+      // and phase 3's flip, which leaves an environment a creation is walking to its runner.
       const state = await lookName({ base_url: String(row.base_url) }, version)
-      const flipped = state === 'serving' ? Number(await markNameServing(envId)) > 0 : false
+      const flipped = state === 'serving' ? (await markNameServing(envId)) > 0 : false
       if (flipped) {
         await logActivity({
           action: 'hub-name-ready',

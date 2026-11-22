@@ -67,9 +67,19 @@ export async function checkEnvironmentName(
   )
   const result = check.resolves && check.serves ? 'ok' : 'waiting'
 
-  if (result === 'ok' && env.status === WAITING_FOR_NAME && !open) {
-    // The open-creation test rides the UPDATE itself: a creation opened since the read above
-    // keeps the status (its runner moves the environment on).
+  if (result === 'ok' && env.status === WAITING_FOR_NAME && !open) await markNameServing(envId)
+  return { result, hostname, check }
+}
+
+/**
+ * The name serves: a `waiting_for_name` environment no creation is walking becomes `active`
+ * (also phase 4's Docker verify step and its Check name route). The open-creation test rides the
+ * UPDATE itself: a creation opened since any earlier read keeps the status (its runner moves the
+ * environment on). Answers how many rows moved (0 or 1).
+ */
+export async function markNameServing(envId: number): Promise<number> {
+  if (!Number.isInteger(envId)) return 0
+  return Number(
     await db('nivaro_hub_environments')
       .where({ id: envId, status: WAITING_FOR_NAME })
       .whereNotExists(
@@ -79,8 +89,7 @@ export async function checkEnvironmentName(
           .select('id')
       )
       .update({ status: 'active', updated_at: new Date() })
-  }
-  return { result, hostname, check }
+  )
 }
 
 /** 'ok' once the name resolves and serves the expected version, else 'waiting'. */

@@ -1,7 +1,6 @@
-import { lookup as dnsLookup } from 'node:dns/promises'
 import { isIP } from 'node:net'
-import { db } from '../../../db/index.js'
-import { readServedField } from '../promote-gather.js'
+import type { fetchJson } from '../../gitlab-client.js'
+import { checkName } from '../create/name-check.js'
 import type { HubEnvironmentRow } from '../promote-types.js'
 import type { DockerDriverConfig } from './driver-config.js'
 import { stackHostnames } from './render-spec.js'
@@ -11,9 +10,10 @@ import { stackHostnames } from './render-spec.js'
  * DNS may end before someone has added the name: the deploy then succeeds with a warning and the
  * environment waits for its name.
  *
- * Phase 3 owns the `waiting_for_name` status, the name-check cron and the "Check name" button
- * (cross-phase ruling: services/hub/name-check.ts). This module is only what the Docker verify
- * step needs: one look at the name now, and the copy a manual-DNS admin passes on.
+ * Phase 3 owns the name check, the `waiting_for_name` status, the name-check cron and the
+ * "Check name" button (cross-phase ruling: services/hub/name-check.ts, create/name-check.ts).
+ * This module is only what the Docker verify step needs on top: phase 3's check answered as
+ * three states, and the copy a manual-DNS admin passes on.
  */
 
 export type NameState = 'serving' | 'not_resolving' | 'not_serving'
@@ -24,62 +24,52 @@ export type ServedFieldReader = (
   field: string
 ) => Promise<{ value: string | null; error: string | null }>
 
-/** How long one DNS look may take before the name counts as not resolving. */
-export const NAME_LOOKUP_TIMEOUT_MS = 5_000
-
 export interface NameCheckDeps {
   /** Resolves a host name; rejects when it does not resolve. */
   lookup?: (host: string) => Promise<unknown>
   readServedField?: ServedFieldReader
 }
 
-function baseOf(raw: string): URL | null {
-  try {
-    const u = new URL(String(raw ?? '').trim())
-    return u.protocol === 'http:' || u.protocol === 'https:' ? u : null
-  } catch {
-    return null
-  }
-}
-
-/** Rejects when `p` takes longer than `ms`. */
-function within<T>(p: Promise<T>, ms: number): Promise<T> {
-  let timer: NodeJS.Timeout | undefined
-  return Promise.race([
-    p,
-    new Promise<T>((_, reject) => {
-      timer = setTimeout(() => reject(new Error('lookup timed out')), ms)
-      timer.unref?.()
-    })
-  ]).finally(() => clearTimeout(timer))
-}
-
 /**
- * One look at the name (named apart from phase 3's `checkName(envId)`): the base_url host
- * resolves (DNS, ≤ 5 s), then `<base_url>/api/version` answers `version` — any version when
- * `version` is null. Never throws.
+ * One look at the name (named apart from phase 3's `checkName(envId)`): phase 3's one name check
+ * (create/name-check.ts checkName) on the base_url host and `<base_url>/api/version`, answered as
+ * the Docker verify step's three states. `version` null accepts any version. Never throws.
+ * `readServedField`, when given, is how /api/version is read (the verify step passes its own
+ * reader in tests); otherwise phase 3's bounded, no-redirect fetch.
  */
 export async function lookName(
   env: { base_url: string },
   version: string | null,
   deps: NameCheckDeps = {}
 ): Promise<NameState> {
-  const base = baseOf(env.base_url)
-  if (!base) return 'not_resolving'
-  const lookup = deps.lookup ?? ((host: string) => dnsLookup(host))
+  let host: string
   try {
-    await within(Promise.resolve(lookup(base.hostname)), NAME_LOOKUP_TIMEOUT_MS)
+    const u = new URL(String(env.base_url ?? '').trim())
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return 'not_resolving'
+    host = u.hostname
   } catch {
     return 'not_resolving'
   }
-  const read: ServedFieldReader =
-    deps.readServedField ?? ((url, field) => readServedField(url, field))
+  const read = deps.readServedField
   try {
-    const r = await read(`${base.origin}/api/version`, 'version')
-    if (!r.value) return 'not_serving'
-    return version == null || r.value === version ? 'serving' : 'not_serving'
+    const check = await checkName(host, String(env.base_url), version ?? '', {
+      ...(deps.lookup ? { lookup: deps.lookup } : {}),
+      ...(read ? { fetchJson: servedFieldAsFetch(read) } : {})
+    })
+    if (!check.resolves) return 'not_resolving'
+    return check.serves ? 'serving' : 'not_serving'
   } catch {
     return 'not_serving'
+  }
+}
+
+/** A served-field reader in the shape phase 3's checkName fetches with. */
+function servedFieldAsFetch(read: ServedFieldReader): typeof fetchJson {
+  return async (url: string) => {
+    const r = await read(url, 'version')
+    return r.value
+      ? { ok: true, status: 200, body: { version: r.value } }
+      : { ok: false, status: 0, body: null }
   }
 }
 
@@ -110,11 +100,3 @@ export function nameRequest(
 function isIpAddress(host: string): boolean {
   return isIP(host.replace(/^\[|\]$/g, '')) !== 0
 }
-
-/** A waiting_for_name environment whose name now serves becomes active. */
-// biome-ignore format: one line, swapped for phase 3's name check at merge
-export const markNameServing = (envId: number) => db('nivaro_hub_environments').where({ id: envId, status: 'waiting_for_name' }).update({ status: 'active' }) // merge: use phase 3 name-check
-
-/** Sets an environment's status to waiting_for_name (manual DNS, the name does not serve yet). */
-// biome-ignore format: one line, swapped for phase 3's name check at merge
-export const markWaitingForName = (envId: number) => db('nivaro_hub_environments').where({ id: envId }).update({ status: 'waiting_for_name' }) // merge: use phase 3 name-check

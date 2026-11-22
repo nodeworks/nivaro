@@ -2,6 +2,7 @@ import { db } from '../../../db/index.js'
 import { hubUrlOrigin } from '../../deployment-mode.js'
 import { environmentFromRow, type HubApp, readApp } from '../apps.js'
 import { type DockerDriverRow, getDriver, getPlacement, STACK_NAME_RE } from '../drivers.js'
+import { markNameServing, markWaitingForName } from '../name-check.js'
 import { readServedField, type ServedField } from '../promote-gather.js'
 import { PromotionError } from '../promote-lock.js'
 import { urlForLog } from '../promote-plan.js'
@@ -18,13 +19,7 @@ import {
 } from './agent-client.js'
 import type { AgentHealth, StackSpec, StackStatus } from './agent-types.js'
 import { agentOrigin } from './driver-config.js'
-import {
-  lookName,
-  markNameServing,
-  markWaitingForName,
-  type NameState,
-  nameRequest
-} from './name-check.js'
+import { lookName, type NameState, nameRequest } from './name-check.js'
 import {
   hostnameRefusals,
   renderStackSpec,
@@ -358,7 +353,11 @@ export function defaultDockerOps(deps: DockerOpsDeps = {}): DockerStepOps {
   const nameLook =
     deps.lookName ??
     ((env: { base_url: string }, version: string | null) =>
-      lookName(env, version, { readServedField: read, lookup: deps.dnsLookup }))
+      lookName(env, version, {
+        // Phase 3's own bounded fetch unless a reader was injected (tests).
+        ...(deps.readServedField ? { readServedField: read } : {}),
+        ...(deps.dnsLookup ? { lookup: deps.dnsLookup } : {})
+      }))
 
   /** Waits for swarm on the applied spec; never stops half way. */
   const waitConverged = async (
