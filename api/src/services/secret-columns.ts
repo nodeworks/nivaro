@@ -41,6 +41,12 @@ const REDACTED: Record<string, string[]> = {
   nivaro_submission_forms: ['password_hash'],
   nivaro_widget_feeds: ['token'],
   nivaro_persisted_queries: [],
+  // Nivaro Hub: sealed credentials. stack_settings.secrets (546) is the stack's secret map
+  // (DB_PASSWORD, SESSION_SECRET, ENCRYPTION_KEY …) — `secrets` escapes the name rule. The driver
+  // secret (GitLab / agent token) and the environment hub token are listed too, not left to it.
+  nivaro_hub_stack_settings: ['secrets'],
+  nivaro_hub_drivers: ['secret'],
+  nivaro_hub_environments: ['hub_token'],
   // Not secrets: per-database facts (what THIS database last got from config). A snapshot of
   // another instance must not claim them, and a restore keeps the live value.
   nivaro_managed_procedures: ['deployed_hash', 'deployed_at', 'deployed_by']
