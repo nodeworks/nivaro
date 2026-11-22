@@ -13,7 +13,7 @@ import {
   Undo2,
   X
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -219,18 +219,27 @@ export function HubMovePanel({
   appKey,
   env,
   idPrefix,
-  onClose
+  onClose,
+  onBusy
 }: {
   appKey: string
   env: HubEnvironment
   /** Unique per layout (the table and the phone list can both hold a panel). */
   idPrefix: string
   onClose: () => void
+  /** A start or a stack-placement request is out: the host keeps its row controls still. */
+  onBusy?: (busy: boolean) => void
 }) {
   const [started, setStarted] = useState<number | null>(null)
   // While a start or a stack-placement request is out, the panel cannot be closed (closing would
   // drop the request's answer: a placement then leaks, or is deleted under a starting move).
-  const [busy, setBusy] = useState(false)
+  const [busy, setBusyState] = useState(false)
+  const busyRef = useRef(onBusy)
+  busyRef.current = onBusy
+  const setBusy = useCallback((b: boolean) => {
+    setBusyState(b)
+    busyRef.current?.(b)
+  }, [])
   // The move on screen stays there after it ends (its result, error and open checklist items)
   // until the person dismisses it: a refetched list no longer naming it open never hides it.
   const [latched, setLatched] = useState<number | null>(null)
@@ -377,11 +386,12 @@ function MoveForm({
   const madeRef = useRef<{ id: number; started: boolean } | null>(null)
   const forgetMade = () => {
     const m = madeRef.current
-    madeRef.current = null
-    setMade(null)
     // Never while a start is out: the server may have started a move on it (and refuses to delete
-    // a placement an open move names; a rollback removes one it never deployed).
-    if (m && !m.started && !startingRef.current) {
+    // a placement an open move names). The start's own answer settles it then (onError below).
+    if (m && startingRef.current) return
+    madeRef.current = null
+    if (aliveRef.current) setMade(null)
+    if (m && !m.started) {
       void deletePlacement(m.id).catch(() => undefined)
       qc.removeQueries({ queryKey: moveKeys.placement(m.id) })
     }
@@ -557,6 +567,14 @@ function MoveForm({
       onStarted(r.move_id)
     },
     onError: (err) => {
+      // The form went away while this start was out (its row closed): no move took the new
+      // placement, so it goes now instead of being left behind.
+      if (!aliveRef.current) {
+        const m = madeRef.current
+        madeRef.current = null
+        if (m && !m.started) void deletePlacement(m.id).catch(() => undefined)
+        return
+      }
       const now = changedMovePlanOf(err)
       if (now) {
         qc.setQueryData(planKey, now)

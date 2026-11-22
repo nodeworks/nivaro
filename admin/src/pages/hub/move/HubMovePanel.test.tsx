@@ -354,6 +354,56 @@ describe('HubMovePanel — before start', () => {
     expect((screen.getByLabelText('Stack name') as HTMLInputElement).value).not.toBe(first)
   })
 
+  it('the panel closed during a pending start: the host is told it is busy, and a refused start removes the new placement', async () => {
+    window.localStorage.setItem('nvr:hub-move-dismissed:10', '0')
+    const base = h.get.getMockImplementation() as (url: string) => Promise<unknown>
+    h.get.mockImplementation(async (url: string) =>
+      url === '/hub/placements/9'
+        ? {
+            data: {
+              data: { id: 9, kind: 'shared', shared_deployment_id: 4, driver_id: null, target: {} }
+            }
+          }
+        : base(url)
+    )
+    plan = { ...basePlan, kind: 'to_dedicated', checklist: [] }
+    let refuse: (e: unknown) => void = () => {}
+    const basePost = h.post.getMockImplementation() as (u: string, b?: unknown) => Promise<unknown>
+    h.post.mockImplementation((url: string, b?: unknown) => {
+      if (url === '/hub/placements') return Promise.resolve({ data: { data: { id: 15 } } })
+      if (url === '/hub/environments/10/move') return new Promise((_, rej) => (refuse = rej))
+      return basePost(url, b)
+    })
+    h.del.mockResolvedValue({})
+    const onBusy = vi.fn()
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const view = render(
+      <QueryClientProvider client={qc}>
+        <HubMovePanel
+          appKey='efp'
+          env={{ ...env, placement_id: 9 }}
+          idPrefix='mv'
+          onClose={() => {}}
+          onBusy={onBusy}
+        />
+      </QueryClientProvider>
+    )
+    fireEvent.click(await screen.findByRole('combobox', { name: 'Move to' }))
+    fireEvent.click(await screen.findByRole('option', { name: /New stack on Docker east/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Make the stack placement and plan' }))
+    fireEvent.change(await screen.findByLabelText(/Type efp\/production to move/), {
+      target: { value: 'efp/production' }
+    })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Start move' })).toBeEnabled())
+    fireEvent.click(screen.getByRole('button', { name: 'Start move' }))
+    await waitFor(() => expect(onBusy).toHaveBeenLastCalledWith(true))
+    // The row closes the panel anyway (it cannot from its buttons, but a page change can).
+    view.unmount()
+    expect(h.del).not.toHaveBeenCalled()
+    refuse({ response: { status: 409, data: { code: 'BUSY', message: 'busy' } } })
+    await waitFor(() => expect(h.del).toHaveBeenCalledWith('/hub/placements/15'))
+  })
+
   it('while a start is out: no Close, no Cancel, no new pick', async () => {
     plan = { ...basePlan, checklist: [] }
     const basePost = h.post.getMockImplementation() as (u: string, b?: unknown) => Promise<unknown>

@@ -386,6 +386,8 @@ function useEnvRow(app: HubAppFull, env: HubEnvironment, isAdmin: boolean) {
   const drivers = useDrivers(isAdmin && placement.data?.kind === 'dedicated')
   const placementText = placementLabel(placement.data, shared.data, drivers.data)
   const [moving, setMoving] = useState(false)
+  // A start or a stack-placement request is out in the move panel: the row keeps it mounted.
+  const [moveBusy, setMoveBusy] = useState(false)
   const [placing, setPlacing] = useState(false)
   const [editing, setEditing] = useState(false)
   const refresh = useMutation({
@@ -416,6 +418,8 @@ function useEnvRow(app: HubAppFull, env: HubEnvironment, isAdmin: boolean) {
     placementText,
     moving,
     setMoving,
+    moveBusy,
+    setMoveBusy,
     placing,
     setPlacing
   }
@@ -575,6 +579,7 @@ function EnvActions({
           aria-expanded={row.moving}
           data-tip='Move to a shared deployment or another stack'
           className={cn(ghostButton, row.moving && 'bg-accent')}
+          disabled={row.moveBusy}
           onClick={() => row.setMoving(!row.moving)}
         >
           <ArrowRightLeft className='h-3.5 w-3.5' aria-hidden />
@@ -588,6 +593,7 @@ function EnvActions({
           aria-expanded={row.placing}
           data-tip='Place on shared deployment… (a new environment)'
           className={cn(ghostButton, row.placing && 'bg-accent')}
+          disabled={row.moveBusy}
           onClick={() => row.setPlacing(!row.placing)}
         >
           <Layers className='h-3.5 w-3.5' aria-hidden />
@@ -599,8 +605,9 @@ function EnvActions({
           <button
             type='button'
             aria-label={`Edit ${env.key}`}
-            data-tip='Edit'
+            data-tip={row.moveBusy ? 'Wait for the request to finish' : 'Edit'}
             className={ghostButton}
+            disabled={row.moveBusy}
             onClick={() => row.setEditing(true)}
           >
             <Pencil className='h-3.5 w-3.5' aria-hidden />
@@ -705,6 +712,7 @@ function EnvRow({
               env={env}
               idPrefix={`hub-move-${env.id}`}
               onClose={() => row.setMoving(false)}
+              onBusy={row.setMoveBusy}
             />
           </td>
         </tr>
@@ -717,6 +725,7 @@ function EnvRow({
               env={env}
               idPrefix={`hub-place-${env.id}`}
               onClose={() => row.setPlacing(false)}
+              onBusy={row.setMoveBusy}
             />
           </td>
         </tr>
@@ -803,6 +812,7 @@ function EnvItem({
             env={env}
             idPrefix={`hub-move-${env.id}-m`}
             onClose={() => row.setMoving(false)}
+            onBusy={row.setMoveBusy}
           />
         </div>
       )}
@@ -813,6 +823,7 @@ function EnvItem({
             env={env}
             idPrefix={`hub-place-${env.id}-m`}
             onClose={() => row.setPlacing(false)}
+            onBusy={row.setMoveBusy}
           />
         </div>
       )}

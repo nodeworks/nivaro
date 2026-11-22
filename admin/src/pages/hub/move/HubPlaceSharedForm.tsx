@@ -32,12 +32,15 @@ export function HubPlaceSharedForm({
   appId,
   env,
   idPrefix,
-  onClose
+  onClose,
+  onBusy
 }: {
   appId: number
   env: HubEnvironment
   idPrefix: string
   onClose: () => void
+  /** The place request is out: the host keeps its row controls still. */
+  onBusy?: (busy: boolean) => void
 }) {
   const qc = useQueryClient()
   const shared = useSharedList()
@@ -99,6 +102,10 @@ export function HubPlaceSharedForm({
   })
 
   const ready = !!sharedId && !!dbId && !poolBad && !emailBad && !place.isPending
+  const placing = place.isPending
+  useEffect(() => onBusy?.(placing), [placing, onBusy])
+  // biome-ignore lint/correctness/useExhaustiveDependencies: on unmount only
+  useEffect(() => () => onBusy?.(false), [])
 
   if (runId != null)
     return (
@@ -120,7 +127,13 @@ export function HubPlaceSharedForm({
         <h4 className='m-0 min-w-0 flex-1 truncate text-[13px] font-semibold text-slate-900 dark:text-foreground'>
           Place <span className='font-mono'>{env.key}</span> on a shared deployment
         </h4>
-        <button type='button' aria-label='Close' className={ghostButton} onClick={onClose}>
+        <button
+          type='button'
+          aria-label='Close'
+          className={ghostButton}
+          disabled={place.isPending}
+          onClick={onClose}
+        >
           <X className='h-3.5 w-3.5' aria-hidden />
         </button>
       </div>
@@ -238,7 +251,13 @@ export function HubPlaceSharedForm({
         >
           {place.isPending ? 'Placing…' : 'Place on shared deployment'}
         </Button>
-        <Button size='sm' variant='ghost' className='h-8' onClick={onClose}>
+        <Button
+          size='sm'
+          variant='ghost'
+          className='h-8'
+          disabled={place.isPending}
+          onClick={onClose}
+        >
           Cancel
         </Button>
       </div>
