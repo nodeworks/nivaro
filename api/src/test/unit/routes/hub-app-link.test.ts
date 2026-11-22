@@ -36,6 +36,27 @@ const { tokenLookupHash, _resetLinkTokenForTests } = await import(
   '../../../services/hub/link-token.js'
 )
 const { maintenanceExemptPath } = await import('../../../services/maintenance-freeze.js')
+const { recordSignin } = await import('../../../services/hub/signins.js')
+const HUB_USER = 'AAAAAAAA-0000-4000-8000-000000000001'
+
+/** An in-memory Redis for the daily new-identity counter; `failing` makes every call throw. */
+const redisState = { kv: new Map<string, string>(), ttl: new Map<string, number>(), failing: false }
+const fakeRedis = {
+  get: async (k: string) => {
+    if (redisState.failing) throw new Error('redis down')
+    return redisState.kv.get(k) ?? null
+  },
+  incrby: async (k: string, n: number) => {
+    if (redisState.failing) throw new Error('redis down')
+    const v = Number(redisState.kv.get(k) ?? 0) + n
+    redisState.kv.set(k, String(v))
+    return v
+  },
+  expire: async (k: string, s: number) => {
+    redisState.ttl.set(k, s)
+    return 1
+  }
+}
 
 const TID = '11111111-2222-3333-4444-555555555555'
 const OID = '99999999-8888-7777-6666-555555555555'
@@ -60,6 +81,7 @@ const scheduled: Scheduled[] = []
 
 async function build(): Promise<FastifyInstance> {
   const app = Fastify({ trustProxy: true })
+  app.decorate('redis', fakeRedis as never)
   app.decorate('cron', {
     schedule: (id: string, expr: string, fn: () => Promise<void>, opts: Record<string, unknown>) =>
       scheduled.push({ id, expr, fn, opts })
@@ -122,6 +144,9 @@ beforeEach(async () => {
   for (const t of ['nivaro_hub_signins', 'nivaro_hub_environments', 'nivaro_hub_apps'])
     await db(t).del()
   _resetLinkTokenForTests()
+  redisState.kv.clear()
+  redisState.ttl.clear()
+  redisState.failing = false
   ids = {
     efpProd: await seed('efp', 'production', 'https://efp.example.com', TOKENS.efpProd),
     efpStaging: await seed('efp', 'staging', 'https://efp-staging.example.com', TOKENS.efpStaging),
@@ -141,10 +166,21 @@ const report = (token: string | null, body: unknown, ip = freshIp()) =>
 
 const ask = (token: string | null, who: Record<string, string>, ip = freshIp()) =>
   app.inject({
-    method: 'GET',
-    url: `${BASE}/switcher?${new URLSearchParams(who).toString()}`,
+    method: 'POST',
+    url: `${BASE}/switcher`,
     remoteAddress: ip,
-    headers: token ? { authorization: `Bearer ${token}` } : {}
+    headers: token ? { authorization: `Bearer ${token}` } : {},
+    payload: who
+  })
+
+/** What the Hub's own /token path writes: the person proven on that environment. */
+const hubSeen = (env: { app: number; env: number }, who = PAT) =>
+  recordSignin({
+    environment_id: env.env,
+    app_id: env.app,
+    via: 'hub',
+    ...who,
+    hub_user_id: HUB_USER
   })
 
 describe('POST /signins', () => {
@@ -197,19 +233,51 @@ describe('POST /signins', () => {
     expect(await db('nivaro_hub_signins').count({ n: '*' }).first()).toMatchObject({ n: 0 })
   })
 
-  it('is exempt from the maintenance freeze; nothing else here is', () => {
+  it('both POSTs are exempt from the maintenance freeze; nothing else here is', () => {
     expect(maintenanceExemptPath('/api/hub/app-link/signins')).toBe(true)
     expect(maintenanceExemptPath('/api/hub/app-link/signins?x=1')).toBe(true)
     expect(maintenanceExemptPath('/api/hub/app-link/signinsx')).toBe(false)
-    expect(maintenanceExemptPath('/api/hub/app-link/switcher')).toBe(false)
+    expect(maintenanceExemptPath('/api/hub/app-link/switcher')).toBe(true)
+    expect(maintenanceExemptPath('/api/hub/app-link/switcherx')).toBe(false)
+    expect(maintenanceExemptPath('/api/hub/app-link/other')).toBe(false)
   })
 })
 
-describe('GET /switcher', () => {
+describe('POST /switcher', () => {
   beforeEach(async () => {
-    await report(TOKENS.efpProd, PAT)
+    await hubSeen(ids.efpProd)
+    await hubSeen(ids.opsStaging)
     await report(TOKENS.opsProd, PAT)
-    await report(TOKENS.opsStaging, PAT)
+  })
+
+  it('P7-8: an environment that only has app reports about the person gets nothing', async () => {
+    expect((await ask(TOKENS.opsProd, PAT)).json()).toEqual({ data: { apps: [] } })
+    // Reporting the person first does not make them askable.
+    await report(TOKENS.efpStaging, PAT)
+    expect((await ask(TOKENS.efpStaging, PAT)).json().data.apps).toEqual([])
+  })
+
+  it('the identity travels in the body; a query string is ignored', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `${BASE}/switcher?oid=${OID}&tid=${TID}&email=${encodeURIComponent(PAT.email)}`,
+      remoteAddress: freshIp(),
+      headers: { authorization: `Bearer ${TOKENS.efpProd}` },
+      payload: {}
+    })
+    expect(res.json().data.apps).toEqual([])
+    const get = await app.inject({
+      method: 'GET',
+      url: `${BASE}/switcher?oid=${OID}&tid=${TID}`,
+      remoteAddress: freshIp(),
+      headers: { authorization: `Bearer ${TOKENS.efpProd}` }
+    })
+    expect(get.statusCode).toBe(404)
+  })
+
+  it('a switcher body over 4 KB → 413', async () => {
+    const res = await ask(TOKENS.efpProd, { ...PAT, pad: 'x'.repeat(5000) })
+    expect(res.statusCode).toBe(413)
   })
 
   it('production asks: both production apps, efp current, never ops/staging', async () => {
@@ -271,7 +339,7 @@ describe('the bearer', () => {
       expect(res.body).not.toContain(TOKENS.efpProd)
     }
     const basic = await app.inject({
-      method: 'GET',
+      method: 'POST',
       url: `${BASE}/switcher`,
       remoteAddress: freshIp(),
       headers: { authorization: `Basic ${Buffer.from(`x:${TOKENS.efpProd}`).toString('base64')}` }
@@ -345,39 +413,118 @@ describe('the prune cron', () => {
   })
 })
 
+describe('flood control and closed environments', () => {
+  it('reports: 120 a minute per environment, then 429 HUB_LINK_BUSY; other environments go on', async () => {
+    const own = await build()
+    try {
+      const send = (token: string, i: number) =>
+        own.inject({
+          method: 'POST',
+          url: `${BASE}/signins`,
+          remoteAddress: freshIp(),
+          headers: { authorization: `Bearer ${token}` },
+          payload: { email: `p${i}@example.com` }
+        })
+      for (let i = 0; i < 120; i++) expect((await send(TOKENS.opsProd, i)).statusCode).toBe(204)
+      const over = await send(TOKENS.opsProd, 999)
+      expect(over.statusCode).toBe(429)
+      expect(over.json().code).toBe('HUB_LINK_BUSY')
+      expect(
+        await db('nivaro_hub_signins').where({ identity_key: 'email:p999@example.com' }).first()
+      ).toBeUndefined()
+      expect((await send(TOKENS.efpProd, 1)).statusCode).toBe(204)
+    } finally {
+      await own.close()
+    }
+  })
+
+  it('new identities are counted per environment and UTC day; past 5000 → 429, nothing written', async () => {
+    const { newIdentityCounterKey, NEW_IDENTITIES_PER_DAY } = await import(
+      '../../../routes/hub-app-link.js'
+    )
+    expect(NEW_IDENTITIES_PER_DAY).toBe(5000)
+    const key = newIdentityCounterKey(ids.opsProd.env)
+    expect(key).toMatch(new RegExp(`^nvr:hub:signins:new:${ids.opsProd.env}:\\d{8}$`))
+    expect((await report(TOKENS.opsProd, PAT)).statusCode).toBe(204)
+    expect(redisState.kv.get(key)).toBe('2')
+    expect(redisState.ttl.get(key)).toBeGreaterThanOrEqual(86_400)
+    // A repeat inserts nothing new: not counted.
+    expect((await report(TOKENS.opsProd, PAT)).statusCode).toBe(204)
+    expect(redisState.kv.get(key)).toBe('2')
+
+    redisState.kv.set(key, '5000')
+    const res = await report(TOKENS.opsProd, { email: 'late@example.com' })
+    expect(res.statusCode).toBe(429)
+    expect(res.json().code).toBe('HUB_LINK_BUSY')
+    expect(
+      await db('nivaro_hub_signins').where({ identity_key: 'email:late@example.com' }).first()
+    ).toBeUndefined()
+    // Another environment's budget is its own.
+    expect((await report(TOKENS.efpProd, { email: 'late@example.com' })).statusCode).toBe(204)
+  })
+
+  it('the counter unreadable → 503, nothing written', async () => {
+    redisState.failing = true
+    const res = await report(TOKENS.opsProd, PAT)
+    expect(res.statusCode).toBe(503)
+    expect(await db('nivaro_hub_signins').count({ n: '*' }).first()).toMatchObject({ n: 0 })
+  })
+
+  it('a token of an archived or suspended environment → 401, no writes, not counted', async () => {
+    const ip = '10.7.7.7'
+    for (const status of ['archived', 'suspended']) {
+      await db('nivaro_hub_environments').where({ id: ids.opsProd.env }).update({ status })
+      for (let i = 0; i < 11; i++) {
+        expect((await report(TOKENS.opsProd, PAT, ip)).statusCode).toBe(401)
+        expect((await ask(TOKENS.opsProd, PAT, ip)).statusCode).toBe(401)
+      }
+    }
+    expect(await db('nivaro_hub_signins').count({ n: '*' }).first()).toMatchObject({ n: 0 })
+    // 44 refusals from that address, yet it is not blocked: a working token still answers.
+    expect((await report(TOKENS.efpProd, PAT, ip)).statusCode).toBe(204)
+  })
+})
+
 describe('mounting', () => {
   it('HUB off: every app-link route answers 404 and no cron is scheduled', async () => {
     const prev = process.env.HUB
     process.env.HUB = 'off'
-    const before = scheduled.length
-    const off = await build()
-    for (const [method, url] of [
-      ['POST', `${BASE}/signins`],
-      ['GET', `${BASE}/switcher`]
-    ] as const) {
-      const res = await off.inject({
-        method,
-        url,
-        headers: { authorization: `Bearer ${TOKENS.efpProd}` },
-        payload: method === 'POST' ? PAT : undefined
-      })
-      expect(res.statusCode, url).toBe(404)
+    try {
+      const before = scheduled.length
+      const off = await build()
+      for (const url of [`${BASE}/signins`, `${BASE}/switcher`]) {
+        const res = await off.inject({
+          method: 'POST',
+          url,
+          headers: { authorization: `Bearer ${TOKENS.efpProd}` },
+          payload: PAT
+        })
+        expect(res.statusCode, url).toBe(404)
+      }
+      expect(scheduled.length).toBe(before)
+      await off.close()
+    } finally {
+      process.env.HUB = prev
     }
-    expect(scheduled.length).toBe(before)
-    await off.close()
-    process.env.HUB = prev
+    expect(await db('nivaro_hub_signins').count({ n: '*' }).first()).toMatchObject({ n: 0 })
   })
 
   it('cloud mode: nothing is mounted', async () => {
+    const prev = process.env.CLOUD_META_DB_URL
     process.env.CLOUD_META_DB_URL = 'postgres://cloud'
-    const off = await build()
-    const res = await off.inject({
-      method: 'GET',
-      url: `${BASE}/switcher`,
-      headers: { authorization: `Bearer ${TOKENS.efpProd}` }
-    })
-    expect(res.statusCode).toBe(404)
-    await off.close()
-    delete process.env.CLOUD_META_DB_URL
+    try {
+      const off = await build()
+      const res = await off.inject({
+        method: 'POST',
+        url: `${BASE}/switcher`,
+        headers: { authorization: `Bearer ${TOKENS.efpProd}` },
+        payload: PAT
+      })
+      expect(res.statusCode).toBe(404)
+      await off.close()
+    } finally {
+      if (prev === undefined) delete process.env.CLOUD_META_DB_URL
+      else process.env.CLOUD_META_DB_URL = prev
+    }
   })
 })

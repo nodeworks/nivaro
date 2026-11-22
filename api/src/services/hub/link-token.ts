@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { db } from '../../db/index.js'
+import { errorTag } from '../../lib/error-tag.js'
 import { HUB_MASK, openSecret } from './secrets.js'
 
 /**
@@ -76,16 +77,6 @@ async function repairLookups(): Promise<void> {
   }
 }
 
-/** An engine error code or name worth logging: short word characters only, never the message. */
-function errorTag(e: unknown): string {
-  const err = e as { code?: unknown; number?: unknown; name?: unknown }
-  for (const v of [err?.code, err?.number, err?.name]) {
-    const s = typeof v === 'number' ? String(v) : typeof v === 'string' ? v : ''
-    if (/^[A-Za-z0-9_]{1,40}$/.test(s)) return s
-  }
-  return 'unknown'
-}
-
 /** A failed repair: a fixed log line with the engine's code, and a generic error (no cause). */
 function repairFailed(e: unknown): Error {
   // biome-ignore lint/suspicious/noConsole: the failure must reach the server log (fixed text)
@@ -133,22 +124,28 @@ function repairOnce(): Promise<void> {
   return backfill
 }
 
-type Found = { environment_id: number; app_id: number; env_key: string }
+type Found = { environment_id: number; app_id: number; env_key: string; status: string }
 
 /** The one environment whose sealed token is `bearer`; null for none or for more than one. */
 async function byLookup(bearer: string): Promise<Found | null> {
   const rows = (await db(ENVS)
     .where({ hub_token_lookup: tokenLookupHash(bearer) })
-    .select('id', 'app_id', 'key', 'hub_token')) as Array<{
+    .select('id', 'app_id', 'key', 'status', 'hub_token')) as Array<{
     id: number
     app_id: number
     key: string
+    status: string | null
     hub_token: string | null
   }>
   const matches = rows.filter((r) => sealedTokenMatches(r.hub_token, bearer))
   if (matches.length !== 1) return null
   const r = matches[0]
-  return { environment_id: Number(r.id), app_id: Number(r.app_id), env_key: String(r.key) }
+  return {
+    environment_id: Number(r.id),
+    app_id: Number(r.app_id),
+    env_key: String(r.key),
+    status: String(r.status ?? 'active')
+  }
 }
 
 /**

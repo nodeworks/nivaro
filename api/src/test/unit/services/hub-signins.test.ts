@@ -101,7 +101,16 @@ const at = (
   via: 'hub' | 'direct' = 'direct',
   who = PAT,
   when?: Date
-) => recordSignin({ environment_id: env.env, app_id: env.app, via, ...who, at: when })
+) =>
+  recordSignin({
+    environment_id: env.env,
+    app_id: env.app,
+    via,
+    ...who,
+    at: when,
+    // The Hub's own redemption always names the Hub account (routes/hub-oidc.ts).
+    hub_user_id: via === 'hub' ? HUB_USER : undefined
+  })
 
 describe('identityKeys', () => {
   it('entra key (lowercased) when oid AND tid, then the lowercased email', () => {
@@ -149,6 +158,65 @@ describe('recordSignin', () => {
     }
   })
 
+  it('P7-8: a direct report never moves a Hub row down: via, email and hub_user_id kept', async () => {
+    const t0 = new Date('2026-11-01T10:00:00Z')
+    await at(ids.efpProd, 'hub', PAT, t0)
+    // 7 h later an app reports someone else's details under the same keys.
+    const t1 = new Date(t0.getTime() + 7 * 3_600_000)
+    await recordSignin({
+      environment_id: ids.efpProd.env,
+      app_id: ids.efpProd.app,
+      via: 'direct',
+      ...PAT,
+      email: 'PAT@example.com',
+      hub_user_id: 'EVIL-USER',
+      at: t1
+    })
+    for (const r of await db('nivaro_hub_signins')) {
+      expect(r.via).toBe('hub')
+      expect(String(r.hub_user_id)).toBe(HUB_USER)
+      expect(r.email).toBe('pat@example.com')
+      expect(new Date(r.last_seen).toISOString()).toBe(t1.toISOString())
+    }
+  })
+
+  it('P7-8: a direct report under 6 h after the last sighting writes nothing; at 7 h it moves on', async () => {
+    const t0 = new Date('2026-11-01T10:00:00Z')
+    await at(ids.efpProd, 'direct', PAT, t0)
+    const t1 = new Date(t0.getTime() + 5 * 3_600_000)
+    expect(await at(ids.efpProd, 'direct', { ...PAT, email: 'new@example.com' }, t1)).toEqual({
+      inserted: 1
+    })
+    // The entra row stayed (fresh); the new email is a new key.
+    const entra = await db('nivaro_hub_signins')
+      .where({ identity_key: `entra:${TID}:${OID}` })
+      .first()
+    expect(new Date(entra.last_seen).toISOString()).toBe(t0.toISOString())
+    expect(entra.email).toBe('pat@example.com')
+    const t2 = new Date(t0.getTime() + 7 * 3_600_000)
+    expect(await at(ids.efpProd, 'direct', { ...PAT, email: 'new@example.com' }, t2)).toEqual({
+      inserted: 0
+    })
+    const later = await db('nivaro_hub_signins')
+      .where({ identity_key: `entra:${TID}:${OID}` })
+      .first()
+    expect(new Date(later.last_seen).toISOString()).toBe(t2.toISOString())
+    expect(later.email).toBe('new@example.com')
+    // A fresh Hub row is not bumped by a direct report either.
+    await at(ids.opsProd, 'hub', PAT, t0)
+    await at(ids.opsProd, 'direct', PAT, t1)
+    const hubRow = await db('nivaro_hub_signins')
+      .where({ environment_id: ids.opsProd.env, identity_key: `entra:${TID}:${OID}` })
+      .first()
+    expect(new Date(hubRow.last_seen).toISOString()).toBe(t0.toISOString())
+  })
+
+  it('answers how many new rows were inserted', async () => {
+    expect(await at(ids.efpProd)).toEqual({ inserted: 2 })
+    expect(await at(ids.efpProd)).toEqual({ inserted: 0 })
+    expect(await at(ids.opsProd, 'direct', { email: PAT.email })).toEqual({ inserted: 1 })
+  })
+
   it('the same report twice is idempotent', async () => {
     await at(ids.efpProd)
     await at(ids.efpProd)
@@ -161,7 +229,7 @@ describe('recordSignin', () => {
   })
 
   it('hub_user_id: given wins; else by entra_oid; else one account by email; never on ambiguity', async () => {
-    await at(ids.efpProd, 'hub', PAT)
+    await at(ids.efpProd, 'direct', PAT)
     expect((await db('nivaro_hub_signins').first()).hub_user_id).toBeNull()
 
     await db('nivaro_hub_signins').del()
@@ -284,12 +352,71 @@ describe('switcherFor', () => {
     expect(apps.map((a) => a.app_name)).toEqual(['Alpha', 'EFP', 'Ops desk'])
   })
 
-  it('found by either key: an email-only ask matches the email rows', async () => {
-    const apps = await switcherFor('production', ids.opsProd.env, { email: 'PAT@example.com' })
+  it('found by either key: an email-only ask matches the Hub row', async () => {
+    const apps = await switcherFor('production', ids.efpProd.env, { email: 'PAT@example.com' })
     expect(apps.map((a) => [a.app_key, a.current])).toEqual([
-      ['efp', false],
-      ['ops', true]
+      ['efp', true],
+      ['ops', false]
     ])
+  })
+
+  it('P7-8: only Hub-recorded rows prove a person; app reports alone never do', async () => {
+    // ops/production holds only Pat's direct (app-reported) rows.
+    expect(await switcherFor('production', ids.opsProd.env, PAT)).toEqual([])
+    // A person known only from app reports, everywhere.
+    const DORA = {
+      oid: 'dddddddd-0000-4000-8000-000000000001',
+      tid: TID,
+      email: 'dora@example.com'
+    }
+    // Dora has a Hub account the reports resolve to (by email): still not proven.
+    await db('nivaro_users').insert({ id: 'DORA-ID', email: 'dora@example.com' })
+    await at(ids.efpProd, 'direct', DORA)
+    await at(ids.opsProd, 'direct', DORA)
+    expect(await switcherFor('production', ids.efpProd.env, DORA)).toEqual([])
+  })
+
+  it('mixed keys: A’s email + B’s oid/tid lists only A’s environments', async () => {
+    const BOB = { oid: 'bbbbbbbb-0000-4000-8000-000000000002', tid: TID, email: 'bob@example.com' }
+    const BOB_ID = 'BBBBBBBB-0000-4000-8000-000000000002'
+    // Bob is Hub-proven on alpha production only.
+    await recordSignin({
+      environment_id: ids.alphaProd.env,
+      app_id: ids.alphaProd.app,
+      via: 'hub',
+      ...BOB,
+      hub_user_id: BOB_ID
+    })
+    const apps = await switcherFor('production', ids.efpProd.env, {
+      email: PAT.email,
+      oid: BOB.oid,
+      tid: BOB.tid
+    })
+    expect(apps.map((a) => a.app_key)).toEqual(['efp', 'ops'])
+    // Both people Hub-proven on the asking environment: the ask is ambiguous, nothing.
+    await recordSignin({
+      environment_id: ids.efpProd.env,
+      app_id: ids.efpProd.app,
+      via: 'hub',
+      ...BOB,
+      hub_user_id: BOB_ID
+    })
+    expect(
+      await switcherFor('production', ids.efpProd.env, {
+        email: PAT.email,
+        oid: BOB.oid,
+        tid: BOB.tid
+      })
+    ).toEqual([])
+  })
+
+  it('the listing follows the proven person, not the asked keys', async () => {
+    // Asked by email only, Pat's entra-keyed rows elsewhere still list (their own Hub keys).
+    await db('nivaro_hub_signins')
+      .where({ environment_id: ids.opsProd.env, identity_key: 'email:pat@example.com' })
+      .del()
+    const apps = await switcherFor('production', ids.efpProd.env, { email: PAT.email })
+    expect(apps.map((a) => a.app_key)).toEqual(['efp', 'ops'])
   })
 
   it('a person with no row for the asking environment → [] though rows exist elsewhere', async () => {
@@ -328,6 +455,32 @@ describe('switcherFor', () => {
 })
 
 describe('pruneSignins', () => {
+  it('deletes in batches of at most `batch` ids per statement, looping to the end', async () => {
+    const old = new Date(Date.now() - 200 * 86_400_000)
+    const rows = Array.from({ length: 25 }, (_, i) => ({
+      identity_key: `email:old${i}@example.com`,
+      environment_id: ids.efpProd.env,
+      app_id: ids.efpProd.app,
+      via: 'direct',
+      first_seen: old,
+      last_seen: old
+    }))
+    await db('nivaro_hub_signins').insert(rows)
+    await at(ids.efpProd)
+    const deletes: number[] = []
+    const onQuery = (q: { sql: string; bindings?: unknown[] }) => {
+      if (/^delete/i.test(q.sql)) deletes.push(q.bindings?.length ?? 0)
+    }
+    db.on('query', onQuery)
+    try {
+      expect(await pruneSignins(new Date(), { batch: 10 })).toBe(25)
+    } finally {
+      db.removeListener('query', onQuery)
+    }
+    expect(deletes).toEqual([10, 10, 5])
+    expect(await db('nivaro_hub_signins').count({ n: '*' }).first()).toMatchObject({ n: 2 })
+  })
+
   it('removes a 181-day-old row and keeps a 179-day-old one', async () => {
     const now = new Date('2026-11-21T12:00:00Z')
     const days = (n: number) => new Date(now.getTime() - n * 86_400_000)

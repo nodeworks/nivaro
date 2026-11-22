@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { config } from '../../../config.js'
 import { db } from '../../../db/index.js'
+import { errorTag } from '../../../lib/error-tag.js'
 import { isUniqueViolation } from '../../../lib/unique-violation.js'
 import { parseJson } from '../../pipeline-engine.js'
 import { openSecret, sealSecret } from '../secrets.js'
@@ -158,16 +159,6 @@ function newClientId(): string {
 
 function newClientSecret(): string {
   return `hubs_${randomBytes(32).toString('base64url')}`
-}
-
-/** An engine error code or name worth logging: short word characters only, never the message. */
-function errorTag(e: unknown): string {
-  const err = e as { code?: unknown; number?: unknown; name?: unknown }
-  for (const v of [err?.code, err?.number, err?.name]) {
-    const s = typeof v === 'number' ? String(v) : typeof v === 'string' ? v : ''
-    if (/^[A-Za-z0-9_]{1,40}$/.test(s)) return s
-  }
-  return 'unknown'
 }
 
 /**

@@ -284,7 +284,8 @@ describe('link-token lookup', () => {
     expect(await linkToken.environmentForLinkToken(TOKEN)).toEqual({
       environment_id: envId,
       app_id: appId,
-      env_key: 'production'
+      env_key: 'production',
+      status: 'active'
     })
     const off = `${TOKEN.slice(0, -1)}${TOKEN.endsWith('f') ? 'e' : 'f'}`
     expect(await linkToken.environmentForLinkToken(off)).toBeNull()

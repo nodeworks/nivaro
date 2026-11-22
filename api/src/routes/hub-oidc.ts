@@ -134,6 +134,14 @@ function clientCredentials(
   return { id: bodyId, secret: bodySecret, basic: false }
 }
 
+/** How long a token answer waits for its switcher row (ruling P7-9). */
+const SIGNIN_RECORD_WAIT_MS = 1_000
+let signinRecordWaitMs = SIGNIN_RECORD_WAIT_MS
+
+export function _setSigninRecordWaitForTests(ms?: number): void {
+  signinRecordWaitMs = ms ?? SIGNIN_RECORD_WAIT_MS
+}
+
 export async function hubOidcRoutes(app: FastifyInstance) {
   if (!hubModeEnabled()) return
 
@@ -418,20 +426,31 @@ export async function hubOidcRoutes(app: FastifyInstance) {
       // HubKeyError included: only its code is logged, the answer carries no text.
       return tokenFailed(req, reply, err)
     }
-    // The switcher's row for this environment (Decision 12). Never fails the sign-in.
-    try {
-      await recordSignin({
-        environment_id: client.environment_id,
-        app_id: client.app_id,
-        via: 'hub',
-        oid: rec.evidence.oid,
-        tid: rec.evidence.tid,
-        email: rec.evidence.email,
-        hub_user_id: String(user.id)
+    // The switcher's row for this environment (Decision 12). Never fails or delays the
+    // sign-in: waited for at most SIGNIN_RECORD_WAIT_MS, then the answer goes out regardless.
+    const recorded = recordSignin({
+      environment_id: client.environment_id,
+      app_id: client.app_id,
+      via: 'hub',
+      oid: rec.evidence.oid,
+      tid: rec.evidence.tid,
+      email: rec.evidence.email,
+      hub_user_id: String(user.id)
+    }).then(
+      () => 'ok' as const,
+      () => 'failed' as const
+    )
+    let timer: NodeJS.Timeout | undefined
+    const outcome = await Promise.race([
+      recorded,
+      new Promise<'timeout'>((resolve) => {
+        timer = setTimeout(() => resolve('timeout'), signinRecordWaitMs)
       })
-    } catch {
+    ]).finally(() => clearTimeout(timer))
+    if (outcome === 'failed')
       req.log.warn({ route: 'hub-oidc-token' }, 'Hub sign-in: the sign-in was not recorded')
-    }
+    else if (outcome === 'timeout')
+      req.log.warn({ route: 'hub-oidc-token' }, 'Hub sign-in: recording the sign-in timed out')
     return reply.send({
       access_token: randomToken('nvh_'),
       token_type: 'Bearer',

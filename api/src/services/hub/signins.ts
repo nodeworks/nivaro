@@ -1,4 +1,5 @@
 import { db } from '../../db/index.js'
+import { errorTag } from '../../lib/error-tag.js'
 import { isUniqueViolation } from '../../lib/unique-violation.js'
 
 /**
@@ -11,9 +12,10 @@ import { isUniqueViolation } from '../../lib/unique-violation.js'
  *   entra:<tid>:<oid>   lowercased, when both are known (the Entra object id is the identity)
  *   email:<lowercased>  when an email is known
  *
- * The switcher answers an app only about a person who has a row for THAT environment, and lists
- * only environments with the same key (production lists production), status `active`, where the
- * person has a row. Links are the target app's own sign-in, never a code, token or email.
+ * The switcher answers an app only about a person the Hub itself recorded on THAT environment
+ * (a `via = 'hub'` row; app reports never prove anyone, ruling P7-8), and lists only that
+ * person's environments with the same key (production lists production), status `active`.
+ * Links are the target app's own sign-in, never a code, token or email.
  *
  * Rows older than 180 days are pruned daily (cron hub-signins-prune, Hub only).
  * Hub-only (HUB=on, never cloud mode).
@@ -57,16 +59,6 @@ export function identityKeys(who: SigninWho): string[] {
   const email = cleanEmail(who?.email)
   if (email) keys.push(`email:${email}`)
   return keys
-}
-
-/** An engine error code or name worth logging: short word characters only, never the message. */
-function errorTag(e: unknown): string {
-  const err = e as { code?: unknown; number?: unknown; name?: unknown }
-  for (const v of [err?.code, err?.number, err?.name]) {
-    const s = typeof v === 'number' ? String(v) : typeof v === 'string' ? v : ''
-    if (/^[A-Za-z0-9_]{1,40}$/.test(s)) return s
-  }
-  return 'unknown'
 }
 
 /** knex inlines bindings (emails) into its errors: a fixed line and a generic error instead. */
@@ -114,26 +106,35 @@ export interface RecordSigninInput extends SigninWho {
   at?: Date
 }
 
+/** A direct report moves a row on at most once per this long (Decision 12). */
+export const DIRECT_REFRESH_MS = 6 * 3_600_000
+
 /**
- * One row per identity key for this environment: inserted, or (unique key already there) its
- * last_seen, via and app moved on, and hub_user_id / email set when known. Idempotent: the same
- * report twice leaves the same rows. No usable identity = nothing written.
+ * One row per identity key for this environment. A new key is inserted; an existing one:
+ *
+ *   via 'hub'     (the Hub redeemed a code: proven)  last_seen, via = 'hub', app_id, and
+ *                 hub_user_id / email when known — a direct row is promoted
+ *   via 'direct'  (an app's report: asserted)       never touches a Hub row's via, email or
+ *                 hub_user_id (only its last_seen); a direct row's fields move on. Either way
+ *                 only when last_seen is DIRECT_REFRESH_MS old or more.
+ *
+ * `via` only ever moves up to 'hub'. Idempotent; no usable identity = nothing written.
+ * Answers how many NEW rows were inserted (the app link's daily cap counts them).
  */
-export async function recordSignin(input: RecordSigninInput): Promise<void> {
+export async function recordSignin(input: RecordSigninInput): Promise<{ inserted: number }> {
   const keys = identityKeys(input)
-  if (!keys.length) return
+  if (!keys.length) return { inserted: 0 }
   const environmentId = Number(input.environment_id)
   const appId = Number(input.app_id)
-  if (!Number.isInteger(environmentId) || !Number.isInteger(appId)) return
+  if (!Number.isInteger(environmentId) || !Number.isInteger(appId)) return { inserted: 0 }
   const via = input.via === 'hub' ? 'hub' : 'direct'
   const at = input.at ?? new Date()
   const hubUserId = input.hub_user_id ? String(input.hub_user_id) : await resolveHubUser(input)
   const email = cleanEmail(input.email)
+  const staleBefore = new Date(at.getTime() - DIRECT_REFRESH_MS)
+  let inserted = 0
 
   for (const identity_key of keys) {
-    const update: Record<string, unknown> = { last_seen: at, via, app_id: appId }
-    if (hubUserId) update.hub_user_id = hubUserId
-    if (email) update.email = email
     try {
       try {
         await db(SIGNINS).insert({
@@ -146,15 +147,29 @@ export async function recordSignin(input: RecordSigninInput): Promise<void> {
           first_seen: at,
           last_seen: at
         })
+        inserted++
         continue
       } catch (e) {
         if (!isUniqueViolation(e)) throw e
       }
-      await db(SIGNINS).where({ identity_key, environment_id: environmentId }).update(update)
+      const row = () => db(SIGNINS).where({ identity_key, environment_id: environmentId })
+      const fields: Record<string, unknown> = { last_seen: at, app_id: appId }
+      if (hubUserId) fields.hub_user_id = hubUserId
+      if (email) fields.email = email
+      if (via === 'hub') {
+        await row().update({ ...fields, via: 'hub' })
+        continue
+      }
+      const stale = (q: ReturnType<typeof row>) =>
+        q.where((w) => w.whereNull('last_seen').orWhere('last_seen', '<', staleBefore))
+      // A Hub row: an app's report only says "seen again".
+      await stale(row().where({ via: 'hub' })).update({ last_seen: at })
+      await stale(row().whereNot({ via: 'hub' })).update({ ...fields, via: 'direct' })
     } catch (e) {
       throw writeFailed(e)
     }
   }
+  return { inserted }
 }
 
 export interface SwitcherApp {
@@ -180,9 +195,15 @@ function originOf(baseUrl: unknown): string | null {
 
 /**
  * The apps to offer a person in the switcher of environment `askingEnvId` (whose key is
- * `envKey`). Empty unless the person has a sign-in row for the asking environment (an app learns
- * nothing about people who never signed in to it). Otherwise every active environment with the
- * same key where the person has a row, the asking one marked `current`, sorted by app name.
+ * `envKey`). Ruling P7-8: the person must be PROVEN on the asking environment — a row the Hub
+ * itself wrote there (`via = 'hub'`, a redeemed code) matching one of the asked keys. App
+ * reports never count. All matching Hub rows must name the same Hub account (asked keys that
+ * point at two people answer nothing).
+ *
+ * The listing is then built from THAT person only — rows carrying their hub_user_id, plus rows
+ * under the identity keys of their own Hub-recorded rows — never from the raw asked keys. Every
+ * active environment with the same key where they have a row, the asking one `current`, sorted
+ * by app name.
  */
 export async function switcherFor(
   envKey: string,
@@ -191,16 +212,28 @@ export async function switcherFor(
 ): Promise<SwitcherApp[]> {
   const keys = identityKeys(who)
   if (!keys.length || typeof envKey !== 'string' || !envKey) return []
-  const own = await db(SIGNINS)
-    .where({ environment_id: askingEnvId })
+  const proven = (await db(SIGNINS)
+    .where({ environment_id: askingEnvId, via: 'hub' })
     .whereIn('identity_key', keys)
-    .first('id')
-  if (!own) return []
+    .select('hub_user_id')) as Array<{ hub_user_id: string | null }>
+  if (!proven.length) return []
+  const people = new Set(proven.map((r) => (r.hub_user_id ? String(r.hub_user_id) : '')))
+  if (people.size !== 1 || people.has('')) return []
+  const personId = [...people][0]
+
+  const personKeys = (
+    (await db(SIGNINS)
+      .where({ hub_user_id: personId, via: 'hub' })
+      .distinct('identity_key')) as Array<{ identity_key: string }>
+  ).map((r) => String(r.identity_key))
 
   const rows = (await db(`${SIGNINS} as s`)
     .join(`${ENVS} as e`, 'e.id', 's.environment_id')
     .join(`${APPS} as a`, 'a.id', 'e.app_id')
-    .whereIn('s.identity_key', keys)
+    .where((w) => {
+      w.where('s.hub_user_id', personId)
+      if (personKeys.length) w.orWhereIn('s.identity_key', personKeys)
+    })
     .where('e.key', envKey)
     .where('e.status', 'active')
     .select(
@@ -239,9 +272,32 @@ export async function switcherFor(
   return out.map(({ env_id: _e, ...rest }) => rest)
 }
 
-/** Deletes rows not seen for SIGNIN_KEEP_DAYS; answers how many went. */
-export async function pruneSignins(now: Date = new Date()): Promise<number> {
+/** Rows per prune statement: under every engine's bound-parameter cap (SQL Server ~2100). */
+const PRUNE_BATCH = 1000
+
+/**
+ * Deletes rows not seen for SIGNIN_KEEP_DAYS, in batches of at most `batch` ids per statement
+ * (read ids, delete them, repeat), so a large backlog never becomes one long locking statement.
+ * Answers how many went.
+ */
+export async function pruneSignins(
+  now: Date = new Date(),
+  opts: { batch?: number } = {}
+): Promise<number> {
+  const batch = Math.max(1, Math.min(opts.batch ?? PRUNE_BATCH, PRUNE_BATCH))
   const cutoff = new Date(now.getTime() - SIGNIN_KEEP_DAYS * 86_400_000)
-  const n = await db(SIGNINS).where('last_seen', '<', cutoff).del()
-  return Number(n) || 0
+  let total = 0
+  for (;;) {
+    const ids = (
+      (await db(SIGNINS)
+        .where('last_seen', '<', cutoff)
+        .orderBy('id')
+        .limit(batch)
+        .select('id')) as Array<{ id: number }>
+    ).map((r) => Number(r.id))
+    if (!ids.length) break
+    total += Number(await db(SIGNINS).whereIn('id', ids).del()) || 0
+    if (ids.length < batch) break
+  }
+  return total
 }

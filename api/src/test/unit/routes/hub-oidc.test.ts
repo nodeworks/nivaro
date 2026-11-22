@@ -35,6 +35,16 @@ vi.mock('../../../db/index.js', async () => {
 vi.mock('../../../services/socket-access.js', () => ({ endSessionSockets: vi.fn() }))
 vi.mock('../../../services/sessions-live.js', () => ({ noteSessionsChanged: vi.fn() }))
 vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () => null) }))
+// Task 5 fix round (P7-9): a switcher write that never answers must not hold the token answer.
+const signinHang = vi.hoisted(() => ({ on: false }))
+vi.mock('../../../services/hub/signins.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../../services/hub/signins.js')>()
+  return {
+    ...real,
+    recordSignin: (input: Parameters<typeof real.recordSignin>[0]) =>
+      signinHang.on ? new Promise<never>(() => {}) : real.recordSignin(input)
+  }
+})
 
 const { db } = (await import('../../../db/index.js')) as unknown as { db: Knex }
 const { up: up542 } = await import('../../../db/migrations/542_hub_tables.js')
@@ -1141,6 +1151,22 @@ describe('task 5: the switcher row and the new-user gate', () => {
       expect(r.environment_id).toBe(envA)
       expect(r.via).toBe('hub')
       expect(String(r.hub_user_id)).toBe(USER)
+    }
+  })
+
+  it('P7-9: a sign-in record that never answers delays the token answer by at most 1 s', async () => {
+    signinHang.on = true
+    try {
+      const code = await getCode()
+      const started = Date.now()
+      const res = await redeem(code)
+      const took = Date.now() - started
+      expect(res.statusCode).toBe(200)
+      expect(res.json().id_token).toBeTruthy()
+      expect(took).toBeGreaterThanOrEqual(900)
+      expect(took).toBeLessThan(2000)
+    } finally {
+      signinHang.on = false
     }
   })
 
