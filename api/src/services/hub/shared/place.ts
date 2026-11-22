@@ -8,6 +8,7 @@ import { type JobRunHandle, startJobRun } from '../../job-runs.js'
 import { readApp } from '../apps.js'
 import { attachDatabase, getDatabase } from '../db/databases.js'
 import { HubDbError } from '../db/servers.js'
+import { stackEditRefusal } from '../docker/stack-guards.js'
 import {
   createPlacement,
   DEFAULT_POOL_MAX,
@@ -466,6 +467,11 @@ async function checkAndWrite(
     )
   if (database.environment && database.environment.id !== envId)
     throw refuse('DATABASE_IN_USE', 'Another environment already uses this database.')
+
+  // Ruling P6-11 (I-2): the same running-stack check as an env PATCH of placement_id — a stack
+  // that came up (even if its deploy then failed) is never orphaned by a placement swap.
+  const stack = await stackEditRefusal([envId], 'placement_id')
+  if (stack) throw refuse(stack.code, stack.message, stack.status)
 
   const sharedLock = deps.sharedLock ?? defaultSharedLock()
   const held = await sharedLock.take(input.shared_id, 'place')

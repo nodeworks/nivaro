@@ -30,6 +30,12 @@ vi.mock('../../../services/hub/docker/stack-settings.js', async (orig) => {
   }
 })
 
+const agent = vi.hoisted(() => ({ stack: vi.fn() }))
+vi.mock('../../../services/hub/docker/agent-client.js', async (orig) => ({
+  ...(await orig<typeof import('../../../services/hub/docker/agent-client.js')>()),
+  agentStack: agent.stack
+}))
+
 const { db } = (await import('../../../db/index.js')) as unknown as { db: Knex }
 const migrations = [
   await import('../../../db/migrations/542_hub_tables.js'),
@@ -51,6 +57,8 @@ const { DeploymentLinkError } = await import('../../../services/hub/shared/deplo
 const { keyFingerprint } = await import('../../../services/app-key-fingerprint.js')
 const { defaultSharedLock } = await import('../../../services/hub/promote-lock.js')
 const { getPlacement } = await import('../../../services/hub/drivers.js')
+const { memoryPromoteLock, PromotionError } = await import('../../../services/hub/promote-lock.js')
+const { sealSecret } = await import('../../../services/hub/secrets.js')
 
 const HUB_KEY = 'e'.repeat(64)
 const STACK_KEY = 'cd'.repeat(32)
@@ -142,7 +150,14 @@ function fakeClient(o: { schema?: () => { state: string; error: string | null } 
     firstAdmin: vi.fn(async (id: string, body: unknown) => {
       calls.firstAdmin.push([id, body])
       return { user_id: 'u-1', created: true }
-    })
+    }),
+    // I-3: the database is looked at live before a key is generated (empty here).
+    dbCheck: vi.fn(async () => ({
+      reachable: true,
+      ledger: null as { count: number; latest: string | null } | null,
+      db_identity: null,
+      error: null as string | null
+    }))
   }
   return { client, calls, factory: (() => client) as never }
 }
@@ -531,5 +546,57 @@ describe('placeOnShared — refusals (nothing written)', () => {
       'BAD_FIRST_ADMIN',
       400
     )
+  })
+})
+
+describe('fix round 1', () => {
+  const placeDeploys = (envId: number) =>
+    db('nivaro_hub_deploys').where({ environment_id: envId, kind: 'shared' }).orderBy('id')
+
+  it('I-2: a stack that came up although its deploy never succeeded → 409 STACK_RUNNING', async () => {
+    const app = await newApp()
+    const stackName = `stk${++seq}`
+    const driverId = await insertId('nivaro_hub_drivers', {
+      kind: 'docker',
+      name: `swarm${++seq}`,
+      config: JSON.stringify({
+        agent_url: 'https://agent.example.com',
+        dns_mode: 'automatic',
+        wildcard_domain: 'apps.example.com',
+        edge_target: null
+      }),
+      secret: sealSecret('agent-Token-Value-0123456789-abcdefghij')
+    })
+    const pid = await insertId('nivaro_hub_placements', {
+      kind: 'dedicated',
+      driver_id: driverId,
+      target: JSON.stringify({ stack: stackName })
+    })
+    const envId = await newEnv(app.id, { placement_id: pid })
+    const env = await db('nivaro_hub_environments').where({ id: envId }).first('key')
+    await db('nivaro_hub_deploys').insert({
+      app_id: app.id,
+      environment_id: envId,
+      kind: 'promote',
+      version: '0.3.210',
+      status: 'failed',
+      plan: JSON.stringify({ steps: [{ driver: 'docker', stack: { name: stackName } }] }),
+      started_at: new Date(t)
+    })
+    agent.stack.mockResolvedValueOnce({
+      name: stackName,
+      owner: { app: app.key },
+      environment: env.key,
+      state: 'converged',
+      services: []
+    })
+    const before = await db('nivaro_hub_environments').where({ id: envId }).first()
+    const err = await refusal(
+      place(envId, { database_id: await newDb() }, { client: fakeClient().factory })
+    )
+    expect(err).toMatchObject({ code: 'STACK_RUNNING', statusCode: 409 })
+    const after = await db('nivaro_hub_environments').where({ id: envId }).first()
+    expect(after.placement_id).toBe(before.placement_id)
+    expect(await getPlacement(pid)).not.toBeNull()
   })
 })
