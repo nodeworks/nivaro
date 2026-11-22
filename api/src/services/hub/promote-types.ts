@@ -61,6 +61,8 @@ export interface HubDeployRow {
   started_by: string | null
   started_at: string | Date
   finished_at: string | Date | null
+  /** phase 4: an Apply now run (P4-30); absent otherwise. */
+  apply?: true
 }
 
 /** The driver config fields the planner resolves a component's branch, job and pin file from. */
@@ -113,17 +115,26 @@ export interface StackFacts {
   /** app.extensions with no pin in `extensions`. */
   missingExtensions: string[]
   /**
-   * rollback only (P4-29): the image the rolled-back-to deploy ran, as recorded
+   * rollback / Apply now (P4-29, P4-30): the image the recorded deploy ran, as recorded
    * (<repo>@sha256:<64 hex>); null = recorded without one. The step deploys exactly this.
    */
   deployedImage?: string | null
-  /** rollback only: why the recorded image cannot be redeployed (ROLLBACK_NOT_RECORDED). */
-  rollbackImageProblem?: string | null
+  /**
+   * rollback / Apply now: why the recorded image cannot be redeployed (ROLLBACK_NOT_RECORDED;
+   * NOT_DEPLOYED for Apply now with no recorded deploy at all).
+   */
+  recordedImageProblem?: { code: 'ROLLBACK_NOT_RECORDED' | 'NOT_DEPLOYED'; text: string } | null
   agentOrigin: string | null
 }
 
 /** Everything the planner needs, gathered beforehand (promote-gather.ts) so planning stays pure. */
 export interface PlanInput {
+  /**
+   * phase 4, Apply now (P4-30): redeploy the version the stack runs with the image the Hub
+   * recorded for it and the environment's own saved settings and extension pins. kind is
+   * 'promote', version the environment's version_pin; no promotion checks apply.
+   */
+  apply?: boolean
   app: HubApp
   target: HubEnvironmentRow
   previous: HubEnvironmentRow | null
@@ -234,6 +245,8 @@ export type PromotionBlockerCode =
   | 'STACK_NOT_HUB'
   | 'NO_STACK_NAME'
   | 'KIND_DRIVER_MISMATCH'
+  /** Apply now (P4-30): the environment has no recorded stack deploy to apply settings to. */
+  | 'NOT_DEPLOYED'
 
 export interface PromotionBlocker {
   code: PromotionBlockerCode
@@ -309,4 +322,6 @@ export interface PromotionPlan {
   steps: PromotionStep[]
   /** sha256 of what the plan would do (planHash): a start must send the one it previewed. */
   plan_hash: string
+  /** phase 4: an Apply now run (P4-30) — the saved stack settings onto the running version. */
+  apply?: boolean
 }

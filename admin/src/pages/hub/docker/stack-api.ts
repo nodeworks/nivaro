@@ -69,6 +69,15 @@ export const putStackSettings = (envId: number, body: Record<string, unknown>) =
 export const restartStack = (envId: number, confirm: string) =>
   api.post(`/hub/environments/${envId}/stack/restart`, { confirm })
 
+/** Apply now (P4-30): the running version again with the saved settings; a deploy run. */
+export const applyStack = (envId: number, confirm: string) =>
+  api
+    .post<{ data: { deploy_id: number; job_run_id: number | null } }>(
+      `/hub/environments/${envId}/stack/apply`,
+      { confirm }
+    )
+    .then((r) => r.data.data)
+
 export interface RemoveResult {
   removed: boolean | Record<string, string[] | number>
   already_absent?: boolean

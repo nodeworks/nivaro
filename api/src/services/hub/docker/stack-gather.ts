@@ -218,10 +218,13 @@ export async function gatherStackFacts(
     kind: HubDeployKind
     version: string
     driver: DockerDriverRow
+    /** Apply now (P4-30): the recorded image + the environment's own saved pins. */
+    apply?: boolean
   },
   deps: StackGatherDeps = defaultStackGatherDeps()
 ): Promise<StackFacts> {
   const { env, previous, app, kind, version, driver } = ctx
+  const apply = ctx.apply === true
   const versionOk = VERSION_RE.test(version)
   /** rollback: the image the rolled-back-to deploy ran (P4-29); undefined = not read. */
   let deployedImage: string | null | undefined
@@ -251,7 +254,14 @@ export async function gatherStackFacts(
         )
       return { pins: {}, unreadable: null }
     }
-    const from = previous ?? env
+    if (apply && versionOk) {
+      // Apply now: the image the running version's deploy recorded; the pins saved here now.
+      const deployed = await deps.deployedBuild(env.id, version)
+      if (deployed === UNREADABLE)
+        return unreadable(`the stored plan of the ${version} deploy can't be read`)
+      if (deployed) deployedImage = deployed.image
+    }
+    const from = apply ? env : (previous ?? env)
     const pins = await deps.extensionPins(from.id)
     if (pins === UNREADABLE)
       return unreadable(`the stored extension pins of ${from.key} can't be read`)
@@ -291,15 +301,23 @@ export async function gatherStackFacts(
     roles: null,
     extensions,
     extensionsUnreadable: ext.unreadable,
-    ...(kind === 'rollback' && versionOk
+    ...((kind === 'rollback' || apply) && versionOk
       ? {
           deployedImage: deployedImage ?? null,
-          // A recorded deploy without its image: nothing to redeploy (no record = the plan's
-          // NOT_DEPLOYED_BEFORE; an unreadable plan = EXTENSION_UNPINNED already says so).
-          rollbackImageProblem:
+          // A recorded deploy without its image: nothing to redeploy. For a rollback no record at
+          // all is the plan's NOT_DEPLOYED_BEFORE, an unreadable plan EXTENSION_UNPINNED.
+          recordedImageProblem:
             deployedImage === null
-              ? `the Hub did not record which image the ${version} deploy ran here, so it cannot redeploy that build`
-              : null
+              ? {
+                  code: 'ROLLBACK_NOT_RECORDED' as const,
+                  text: `the Hub did not record which image the ${version} deploy ran here, so it cannot redeploy that build`
+                }
+              : apply && deployedImage === undefined && !ext.unreadable
+                ? {
+                    code: 'NOT_DEPLOYED' as const,
+                    text: `${env.key} has no recorded Hub deploy of ${version} — deploy it first`
+                  }
+                : null
         }
       : {}),
     missingExtensions: ext.unreadable ? [] : app.extensions.filter((id) => !extensions[id]).sort(),

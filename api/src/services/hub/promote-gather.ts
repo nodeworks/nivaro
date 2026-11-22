@@ -498,7 +498,13 @@ async function componentsForGather(placementId: number | null): Promise<HubCompo
 
 export async function gatherPlanInput(
   envId: number,
-  opts: { kind: HubDeployKind; version: string; lockHeld?: boolean },
+  opts: {
+    kind: HubDeployKind
+    version: string
+    lockHeld?: boolean
+    /** phase 4, Apply now (P4-30): kind 'promote' of the running version. */
+    apply?: boolean
+  },
   deps: GatherDeps = defaultGatherDeps()
 ): Promise<PlanInput> {
   const { kind, version } = opts
@@ -668,7 +674,7 @@ export async function gatherPlanInput(
   const hasApi = components.some((c) => c.kind === 'api')
   const hasStack = components.some((c) => c.kind === 'stack') // phase 4
   const [digest, slimDigest] =
-    versionOk && kind === 'promote' && (hasApi || hasStack)
+    versionOk && kind === 'promote' && !opts.apply && (hasApi || hasStack)
       ? await Promise.all([
           deps.imageDigest(hubImage(), version),
           deps.imageDigest(hubImage(), `${version}-slim`)
@@ -678,7 +684,7 @@ export async function gatherPlanInput(
   const stackInput = await gatherStackInput(
     components,
     dockerRows,
-    { env: target, previous, app, kind, version },
+    { env: target, previous, app, kind, version, apply: opts.apply === true },
     deps
   )
 
@@ -689,6 +695,7 @@ export async function gatherPlanInput(
   const running = !!runningRow || (!opts.lockHeld && lock === true)
 
   return {
+    ...(opts.apply ? { apply: true } : {}),
     app,
     target,
     previous,
@@ -749,6 +756,7 @@ async function gatherStackInput(
     app: HubApp
     kind: HubDeployKind
     version: string
+    apply?: boolean
   },
   deps: GatherDeps
 ): Promise<Pick<PlanInput, 'stacks' | 'registryVersions' | 'registryError'>> {
@@ -765,7 +773,12 @@ async function gatherStackInput(
     }
     out.stacks = stacks
   }
-  if (ctx.kind === 'promote' && !ctx.previous && components.every((c) => c.kind === 'stack')) {
+  if (
+    ctx.kind === 'promote' &&
+    !ctx.apply &&
+    !ctx.previous &&
+    components.every((c) => c.kind === 'stack')
+  ) {
     const releases = await (deps.listImageVersions ?? listImageVersions)(hubImage())
     out.registryVersions = releases.versions
     if (releases.error) out.registryError = releases.error

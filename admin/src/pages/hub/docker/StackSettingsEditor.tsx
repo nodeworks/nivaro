@@ -1,6 +1,6 @@
 import { ErrorNotice, useUnsavedWork } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Plus, X } from 'lucide-react'
+import { Play, Plus, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -129,12 +129,15 @@ const keyIn = (message: string, key: string) =>
 export function StackSettingsEditor({
   env,
   appId,
-  idPrefix = ''
+  idPrefix = '',
+  onApplyNow
 }: {
   env: HubEnvironment
   appId: number
   /** Unique per mount (the table and the phone list can both hold an editor). */
   idPrefix?: string
+  /** A stack runs: after a save, offer Apply now (P4-30). */
+  onApplyNow?: () => void
 }) {
   const qc = useQueryClient()
   const q = useQuery({
@@ -163,6 +166,8 @@ export function StackSettingsEditor({
     null
   )
   const [notice, setNotice] = useState<unknown>(null)
+  /** Saved and not edited since: the settings reach the stack on the next deploy or Apply now. */
+  const [saved, setSaved] = useState(false)
   // A list-wide refusal (too many entries, a named entry with no row): own copy, no raw text.
   const [listNotice, setListNotice] = useState<string | null>(null)
   const seeded = useRef<unknown>(null)
@@ -200,6 +205,7 @@ export function StackSettingsEditor({
       setFieldError(null)
       setNotice(null)
       setListNotice(null)
+      setSaved(true)
       void qc.invalidateQueries({ queryKey: hubKeys.app(appId) })
     },
     onError: (err) => {
@@ -554,6 +560,19 @@ export function StackSettingsEditor({
       )}
       {notice != null && (
         <ErrorNotice description={hubError(notice, 'Could not save the settings')} />
+      )}
+      {saved && !dirty && (
+        <div role='status' className='flex flex-wrap items-center gap-2'>
+          <p className='m-0 text-[12px] text-slate-600 dark:text-slate-300'>
+            Saved. The settings reach the stack on its next deploy
+            {onApplyNow ? ', or now with Apply now.' : '.'}
+          </p>
+          {onApplyNow && (
+            <button type='button' className={ghostButton} onClick={onApplyNow}>
+              <Play className='h-3.5 w-3.5' aria-hidden /> Apply now
+            </button>
+          )}
+        </div>
       )}
       <div className='flex items-center gap-2'>
         <Button

@@ -97,7 +97,14 @@ export function buildPromotionPlan(input: PlanInput): PromotionPlan {
   if (!versionOk) block('BAD_VERSION', `"${version}" is not a version (x.y.z)`)
   if (!components.length) block('NO_COMPONENTS', `${target.key} has no components to deploy`)
 
-  if (versionOk) {
+  // Apply now (P4-30): the running version again, through the Hub agent only — no promotion
+  // checks (it is not a promotion), but every stack check below still applies.
+  if (input.apply && components.some((c) => c.kind !== 'stack'))
+    block(
+      'KIND_DRIVER_MISMATCH',
+      `${target.key} has components that do not deploy through a Docker driver — Apply now redeploys stacks only`
+    )
+  if (versionOk && !input.apply) {
     if (kind === 'promote') {
       if (!previous) {
         if (!firstAllStack)
@@ -140,7 +147,12 @@ export function buildPromotionPlan(input: PlanInput): PromotionPlan {
       )
     if (input.targetVersion === version) {
       if (!restamp && !(kind === 'promote' && unfinished(input, components)))
-        block('ALREADY_RUNS', `${target.key} already runs ${version}`)
+        block(
+          'ALREADY_RUNS',
+          hasStack
+            ? `${target.key} already runs ${version} — to deploy changed stack settings or extension pins, use Apply now in its stack panel`
+            : `${target.key} already runs ${version}`
+        )
     } else if (kind === 'promote' && input.targetVersion && VERSION_RE.test(input.targetVersion)) {
       if (compareVersions(version, input.targetVersion) < 0)
         block(
@@ -158,8 +170,8 @@ export function buildPromotionPlan(input: PlanInput): PromotionPlan {
     )
 
   // A rollback redeploys recorded builds and never pins: the registry does not matter to it
-  // (a stack rollback deploys the recorded image digest, P4-29).
-  if (kind === 'promote' && (hasApi || hasStack)) {
+  // (a stack rollback deploys the recorded image digest, P4-29; so does Apply now, P4-30).
+  if (kind === 'promote' && !input.apply && (hasApi || hasStack)) {
     if (!input.digest) block('IMAGE_MISSING', `the image for ${version} is not on the registry`)
     else if (input.digest === 'present')
       block(
@@ -252,7 +264,8 @@ export function buildPromotionPlan(input: PlanInput): PromotionPlan {
     blockers,
     lines: stackAwareLines(input, components, steps, blockers.length > 0),
     steps,
-    plan_hash: planHash(input, steps)
+    plan_hash: planHash(input, steps),
+    ...(input.apply ? { apply: true } : {})
   }
 }
 
@@ -265,6 +278,7 @@ export function buildPromotionPlan(input: PlanInput): PromotionPlan {
 export function planHash(input: PlanInput, steps: PromotionStep[]): string {
   const body = {
     kind: input.kind,
+    ...(input.apply ? { apply: true } : {}),
     version: input.version,
     from: input.targetVersion,
     steps: [...steps]
@@ -413,9 +427,11 @@ function linesFor(
     `${target.key} is currently ${state}${input.targetVersion ? ` (runs ${input.targetVersion})` : ''}`
   )
   lines.push(
-    input.kind === 'promote'
-      ? `promote ${version} from ${previous?.key ?? '(none)'} (${previous ? (input.previousVersion ?? 'no answer') : '-'}) to ${target.key}`
-      : `roll ${target.key} back from ${input.targetVersion ?? '(unknown)'} to ${version}`
+    input.apply
+      ? `apply ${target.key}'s saved stack settings and extension pins to the version it runs (${version})`
+      : input.kind === 'promote'
+        ? `promote ${version} from ${previous?.key ?? '(none)'} (${previous ? (input.previousVersion ?? 'no answer') : '-'}) to ${target.key}`
+        : `roll ${target.key} back from ${input.targetVersion ?? '(unknown)'} to ${version}`
   )
   if (input.kind === 'promote' && components.some((c) => c.kind === 'api')) {
     const d = input.digest
@@ -519,7 +535,7 @@ function stackStepFor(c: HubComponent, input: PlanInput): PromotionStep {
       // A rollback deploys the image the Hub recorded for that version here (P4-29); a promote
       // the registry's digest for the tag, read at plan time.
       image:
-        input.kind === 'rollback'
+        input.kind === 'rollback' || input.apply
           ? (f?.deployedImage ?? '')
           : realDigest(input.digest) && f
             ? `${f.imageRepo}@${input.digest}`
@@ -587,8 +603,8 @@ function stackBlockers(
             : `the stack ${f.stackName} belongs to another Hub app or environment`
         )
     }
-    if (kind === 'rollback' && f.rollbackImageProblem)
-      block('ROLLBACK_NOT_RECORDED', f.rollbackImageProblem)
+    if ((kind === 'rollback' || input.apply) && f.recordedImageProblem)
+      block(f.recordedImageProblem.code, f.recordedImageProblem.text)
     if (f.extensionsUnreadable) block('EXTENSION_UNPINNED', f.extensionsUnreadable)
     else if (f.missingExtensions.length)
       block(
@@ -646,9 +662,9 @@ function stackLines(input: PlanInput, s: PromotionStep): string[] {
   const f = input.stacks?.[s.position]
   const name = s.stack?.name || s.component
   const d = input.digest
-  const recorded = input.kind === 'rollback' ? s.stack?.image || null : null
+  const recorded = input.kind === 'rollback' || input.apply ? s.stack?.image || null : null
   const digest =
-    input.kind === 'rollback'
+    input.kind === 'rollback' || input.apply
       ? recorded
         ? `the recorded image ${short12(recorded)}`
         : 'no recorded image'

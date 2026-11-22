@@ -36,6 +36,7 @@ import {
 } from '../services/hub/docker/stack-settings.js'
 import { getDriver } from '../services/hub/drivers.js'
 import { PromotionError } from '../services/hub/promote-lock.js'
+import { startStackApply } from '../services/hub/promote-run.js'
 import type { HubEnvironmentRow } from '../services/hub/promote-types.js'
 import { HUB_MASK, HubSecretError } from '../services/hub/secrets.js'
 import { hubStatusKey } from '../services/hub/status.js'
@@ -48,6 +49,7 @@ import { hubStatusKey } from '../services/hub/status.js'
  *   GET  /environments/:envId/stack/settings      admin           settings, secrets as masks
  *   PUT  /environments/:envId/stack/settings      admin           save (masks keep secrets)
  *   POST /environments/:envId/stack/restart       admin + owner   { confirm: <env key> }
+ *   POST /environments/:envId/stack/apply         admin + owner   { confirm: <env key> } (P4-30)
  *   POST /environments/:envId/stack/remove        admin           { confirm: <stack name>, … }
  *   POST /environments/:envId/stack/check-name    admin + owner   look at the name now
  *
@@ -536,6 +538,42 @@ export function hubDockerRoutes(app: FastifyInstance) {
       }
     }
   )
+
+  // Apply now (P4-30): the running version again with the recorded image and the saved settings
+  // and extension pins — a stack update through the agent, run and recorded like a promotion.
+  app.post('/environments/:envId/stack/apply', { preHandler: requireAuth }, async (req, reply) => {
+    const row = await readableEnvironment(req)
+    if (!row) return notFound(reply)
+    const envId = Number(row.id)
+    const target = await dockerTargetOf(envId)
+    if (!target) return notDocker(reply)
+    const key = String(row.key)
+    if (body(req).confirm !== key)
+      return fail(reply, 400, 'CONFIRM_REQUIRED', `Type the environment key (${key}) to apply`)
+    try {
+      const started = await startStackApply(envId, {
+        confirm: body(req).confirm,
+        user: { id: userId(req) }
+      })
+      await logActivity({
+        action: 'hub-stack-apply',
+        user: userId(req),
+        collection: 'nivaro_hub_deploys',
+        item: String(started.deployId),
+        req
+      })
+      await forgetEnvironment(app, envId)
+      return reply
+        .code(202)
+        .send({ data: { deploy_id: started.deployId, job_run_id: started.jobRunId } })
+    } catch (err) {
+      if (err instanceof PromotionError && err.blockers?.length)
+        return reply
+          .code(err.status === 404 ? 404 : 409)
+          .send({ error: err.message, code: err.code, blockers: err.blockers })
+      return refusal(reply, err, { stack: target.stackName ?? undefined })
+    }
+  })
 
   app.post('/environments/:envId/stack/remove', { preHandler: requireAuth }, async (req, reply) => {
     const row = await readableEnvironment(req)

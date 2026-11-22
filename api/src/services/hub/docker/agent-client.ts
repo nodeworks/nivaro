@@ -391,7 +391,7 @@ export function describeAgentError(
     case 'STACK_NOT_FOUND':
       return `the swarm has no stack named ${stack}`
     case 'SPEC_MISMATCH':
-      return `${stack} does not run the spec the Hub sent — deploy it instead of restarting`
+      return `${stack} does not run the spec the Hub has on record — the saved settings or pins changed since its last deploy; use Apply now to deploy them`
     case 'SPEC_INVALID': {
       const list = fieldList()
       return `the agent refused the stack spec${list ? `: ${list}` : ''}`

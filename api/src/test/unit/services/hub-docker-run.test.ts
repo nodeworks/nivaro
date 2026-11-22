@@ -26,7 +26,7 @@ const run = await import('../../../services/hub/promote-run.js')
 const RS = await import('../../../services/hub/docker/run-step.js')
 const S = await import('../../../services/hub/docker/stack-settings.js')
 const { AgentError } = await import('../../../services/hub/docker/agent-client.js')
-const { openSecret, sealSecret } = await import('../../../services/hub/secrets.js')
+const { openSecret, sealSecret, HUB_MASK } = await import('../../../services/hub/secrets.js')
 const { environmentFromRow } = await import('../../../services/hub/apps.js')
 const { strictPinMap } = await import('../../../services/hub/docker/stack-gather.js')
 
@@ -869,5 +869,165 @@ describe('recovery of a running docker row', () => {
     const row = await db('nivaro_hub_deploys').where({ id: deployId }).first()
     expect(row.status).toBe('interrupted')
     expect(row.error).toMatch(/could not say how acme-prod stands/)
+  })
+})
+
+const gatherMod = await import('../../../services/hub/promote-gather.js')
+const { memoryPromoteLock } = await import('../../../services/hub/promote-lock.js')
+
+describe('P4-30: Apply now', () => {
+  const RUNNING = `nodeworks/nivaro@sha256:${'c'.repeat(64)}`
+
+  /** The deploy that put 0.3.9 where it runs, recorded the way the runner records it. */
+  async function recordRunning() {
+    await db('nivaro_hub_deploys').del()
+    await db('nivaro_hub_deploys').insert({
+      app_id: 1,
+      environment_id: 2,
+      kind: 'promote',
+      version: '0.3.9',
+      status: 'success',
+      plan: JSON.stringify(
+        planOf([
+          {
+            ...STEP,
+            want: '0.3.9',
+            stack: { ...(STEP.stack as NonNullable<PromotionStep['stack']>), image: RUNNING },
+            deployedSha: HASH,
+            deployedPipelineId: null,
+            deployedSpecHash: HASH,
+            deployedImage: RUNNING
+          }
+        ])
+      )
+    })
+  }
+
+  function startDeps(a: ReturnType<typeof fakeAgent>, k: ReturnType<typeof clock>) {
+    const docker = RS.defaultDockerOps({
+      sleep: k.sleep,
+      now: k.now,
+      agent: a.agent as never,
+      readServedField: async () => ({ value: '0.3.9', error: null }),
+      readStatus: async () => ({
+        state: 'ok',
+        version: '0.3.9',
+        preflight: 'ok',
+        checked_at: '2026-11-21T00:00:00.000Z',
+        source: 'hub-link'
+      }),
+      lookName: async () => 'serving'
+    })
+    const job = { lines: [] as string[] }
+    return {
+      gather: (envId: number, opts: Parameters<typeof gatherMod.gatherPlanInput>[1]) =>
+        gatherMod.gatherPlanInput(envId, opts, {
+          ...gatherMod.defaultGatherDeps(),
+          readStatus: async () => ({
+            state: 'ok',
+            version: '0.3.9',
+            preflight: 'ok',
+            checked_at: '2026-11-21T00:00:00.000Z',
+            source: 'hub-link'
+          }),
+          imageDigest: async () => {
+            throw new Error('Apply now never reads the registry')
+          },
+          isLocked: async () => false,
+          stack: {
+            agentHealth: async () => health(),
+            agentStack: async () => status('converged')
+          }
+        }),
+      lock: memoryPromoteLock,
+      startJobRun: async () => ({
+        id: null,
+        progress: () => {},
+        log: (line: string) => {
+          job.lines.push(line)
+          written.push(line)
+        },
+        complete: async () => {},
+        fail: async () => {}
+      }),
+      gitCtx: async () => {
+        throw new Error('no GitLab in Apply now')
+      },
+      execute: { sleep: k.sleep, now: k.now, docker }
+    }
+  }
+
+  it('save → Apply now: the agent gets the new settings on the running image; the deploy row records it', async () => {
+    await recordRunning()
+    // Save changed settings (a new MAIL_FROM) and pins, as the settings editor does.
+    const env = environmentFromRow(
+      await db('nivaro_hub_environments').where({ id: 2 }).first()
+    ) as Env
+    const v = await S.validateStackSettings(
+      {
+        size: 'medium',
+        settings: { ...PG, MAIL_FROM: 'new-sender@acme.example' },
+        secrets: { DB_PASSWORD: HUB_MASK },
+        extension_pins: { 'efp-ops': STG_PIN }
+      },
+      await S.readStackSettings(2),
+      { driver: automatic, env }
+    )
+    if (!v.ok) throw new Error(`${v.code}: ${v.message}`)
+    await S.saveStackSettings(2, v.row.fields, v.row.extension_pins)
+
+    const k = clock()
+    const a = fakeAgent(['updating', 'converged'])
+    const started = await run.startStackApply(
+      2,
+      { confirm: 'production', user: { id: 'u1' } },
+      startDeps(a, k) as never
+    )
+    await run.awaitPromotion(started.deployId)
+
+    // The agent got the running version's recorded image, the new setting and the saved pins.
+    expect(a.applied).toHaveLength(1)
+    const spec = a.applied[0]
+    expect(spec.image).toBe(RUNNING)
+    expect(spec.env.MAIL_FROM).toBe('new-sender@acme.example')
+    expect(spec.extensions).toEqual({ 'efp-ops': STG_PIN })
+
+    const row = await db('nivaro_hub_deploys').where({ id: started.deployId }).first()
+    expect(row).toMatchObject({ kind: 'promote', version: '0.3.9', status: 'success' })
+    const plan = JSON.parse(row.plan)
+    expect(plan.apply).toBe(true)
+    expect(plan.steps[0]).toMatchObject({
+      driver: 'docker',
+      deployedSha: HASH,
+      deployedSpecHash: HASH,
+      deployedImage: IMAGE,
+      stack: { image: RUNNING, extensions: { 'efp-ops': STG_PIN } }
+    })
+    const env2 = await envRow()
+    expect(env2.version_pin).toBe('0.3.9')
+    expect(strictPinMap(env2.extension_pins)).toEqual({ 'efp-ops': STG_PIN })
+  })
+
+  it('nothing deployed: NOT_DEPLOYED, nothing sent', async () => {
+    await db('nivaro_hub_deploys').del()
+    await db('nivaro_hub_environments').where({ id: 2 }).update({ version_pin: null })
+    const a = fakeAgent(['converged'])
+    await expect(
+      run.startStackApply(2, { confirm: 'production', user: null }, startDeps(a, clock()) as never)
+    ).rejects.toMatchObject({ code: 'NOT_DEPLOYED' })
+    // A version pin but no recorded Hub deploy of it: refused by the plan, nothing sent.
+    await db('nivaro_hub_environments').where({ id: 2 }).update({ version_pin: '0.3.9' })
+    await expect(
+      run.startStackApply(2, { confirm: 'production', user: null }, startDeps(a, clock()) as never)
+    ).rejects.toMatchObject({ code: 'NOT_DEPLOYED' })
+    expect(a.calls.filter((c) => c.startsWith('apply'))).toEqual([])
+  })
+
+  it('a wrong confirm: CONFIRM_REQUIRED', async () => {
+    await recordRunning()
+    const a = fakeAgent(['converged'])
+    await expect(
+      run.startStackApply(2, { confirm: 'prod', user: null }, startDeps(a, clock()) as never)
+    ).rejects.toMatchObject({ code: 'CONFIRM_REQUIRED' })
   })
 })

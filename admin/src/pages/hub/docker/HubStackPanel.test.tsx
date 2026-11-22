@@ -120,6 +120,52 @@ describe('HubStackPanel', () => {
     )
   })
 
+  it('P4-30: Apply now needs the typed key and starts the apply run', async () => {
+    setup()
+    h.post.mockResolvedValue({ data: { data: { deploy_id: 9, job_run_id: null } } })
+    view(false)
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply now' }))
+    const go = screen.getAllByRole('button', { name: 'Apply now' }).at(-1) as HTMLButtonElement
+    expect(go.disabled).toBe(true)
+    fireEvent.change(screen.getByLabelText(/to apply/), { target: { value: 'staging' } })
+    expect(go.disabled).toBe(false)
+    fireEvent.click(go)
+    await waitFor(() =>
+      expect(h.post).toHaveBeenCalledWith('/hub/environments/5/stack/apply', { confirm: 'staging' })
+    )
+  })
+
+  it('P4-30: after a save the editor says when settings apply, and offers Apply now', async () => {
+    setup()
+    h.put.mockImplementation(async () => ({
+      data: {
+        data: {
+          size: 'small',
+          redis: 'bundled',
+          publish_port: null,
+          settings: { LOG_LEVEL: 'debug' },
+          secrets: { SESSION_SECRET: '••••••', API_KEY: '••••••' },
+          saved: true,
+          extension_pins: {}
+        }
+      }
+    }))
+    view(true)
+    fireEvent.click(await screen.findByText('Edit settings'))
+    const value = (await screen.findByLabelText('Setting value')) as HTMLInputElement
+    fireEvent.change(value, { target: { value: 'debug' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save settings' }))
+    expect(
+      await screen.findByText(
+        /The settings reach the stack on its next deploy, or now with Apply now/
+      )
+    ).toBeTruthy()
+    // Its Apply now opens the typed confirm.
+    const buttons = screen.getAllByRole('button', { name: 'Apply now' })
+    fireEvent.click(buttons[buttons.length - 1])
+    expect(await screen.findByLabelText(/to apply/)).toBeTruthy()
+  })
+
   it('shows the rolled back hint', async () => {
     setup({ state: 'rolled_back' })
     view(false)

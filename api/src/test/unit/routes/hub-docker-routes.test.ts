@@ -46,7 +46,12 @@ const m = vi.hoisted(() => ({
   remove: vi.fn(),
   leftovers: vi.fn(),
   look: vi.fn(),
-  maint: vi.fn()
+  maint: vi.fn(),
+  apply: vi.fn()
+}))
+vi.mock('../../../services/hub/promote-run.js', async (orig) => ({
+  ...(await orig<typeof import('../../../services/hub/promote-run.js')>()),
+  startStackApply: m.apply
 }))
 vi.mock('../../../services/hub/docker/agent-client.js', async (orig) => ({
   ...(await orig<typeof import('../../../services/hub/docker/agent-client.js')>()),
@@ -794,6 +799,61 @@ describe('stack settings', () => {
   })
 })
 
+describe('POST /environments/:envId/stack/apply (P4-30)', () => {
+  it('starts Apply now for an owner or admin; 202 with the deploy id', async () => {
+    m.apply.mockResolvedValue({ deployId: 77, jobRunId: 5 })
+    const res = await call('POST', `/environments/${DOCKER}/stack/apply`, asOwner, {
+      confirm: 'production'
+    })
+    expect(res.statusCode).toBe(202)
+    expect(res.json().data).toEqual({ deploy_id: 77, job_run_id: 5 })
+    expect(m.apply).toHaveBeenCalledWith(DOCKER, { confirm: 'production', user: { id: OWNER } })
+    expect(activityCalls()[0]).toMatchObject({
+      action: 'hub-stack-apply',
+      collection: 'nivaro_hub_deploys',
+      item: '77'
+    })
+  })
+
+  it('wrong confirm → 400; a GitLab environment → 409 NOT_DOCKER; a stranger → 404', async () => {
+    const wrong = await call('POST', `/environments/${DOCKER}/stack/apply`, asAdmin, {
+      confirm: 'prod'
+    })
+    expect([wrong.statusCode, wrong.json().code]).toEqual([400, 'CONFIRM_REQUIRED'])
+    const gl = await call('POST', `/environments/${GITLAB}/stack/apply`, asAdmin, {
+      confirm: 'staging'
+    })
+    expect([gl.statusCode, gl.json().code]).toEqual([409, 'NOT_DOCKER'])
+    const other = await call('POST', `/environments/${DOCKER}/stack/apply`, asOther, {
+      confirm: 'production'
+    })
+    expect(other.statusCode).toBe(404)
+    expect(m.apply).not.toHaveBeenCalled()
+  })
+
+  it('refusals keep their code and blockers', async () => {
+    const { PromotionError } = await import('../../../services/hub/promote-lock.js')
+    m.apply.mockRejectedValueOnce(
+      new PromotionError('STACK_SETTINGS_MISSING', 'missing', 409, [
+        { code: 'STACK_SETTINGS_MISSING', text: "production's stack settings are missing DB_USER" }
+      ])
+    )
+    const r1 = await call('POST', `/environments/${DOCKER}/stack/apply`, asAdmin, {
+      confirm: 'production'
+    })
+    expect(r1.statusCode).toBe(409)
+    expect(r1.json()).toMatchObject({
+      code: 'STACK_SETTINGS_MISSING',
+      blockers: [{ code: 'STACK_SETTINGS_MISSING' }]
+    })
+    m.apply.mockRejectedValueOnce(new PromotionError('NOT_DEPLOYED', 'nothing deployed'))
+    const r2 = await call('POST', `/environments/${DOCKER}/stack/apply`, asAdmin, {
+      confirm: 'production'
+    })
+    expect([r2.statusCode, r2.json().code]).toEqual([409, 'NOT_DEPLOYED'])
+  })
+})
+
 describe('POST /environments/:envId/stack/restart', () => {
   it('renders the spec from version_pin, extension_pins and the deployed image; 202', async () => {
     const res = await call('POST', `/environments/${DOCKER}/stack/restart`, asOwner, {
@@ -932,7 +992,7 @@ describe('POST /environments/:envId/stack/restart', () => {
     })
     expect([a.statusCode, a.json().code]).toEqual([409, 'SPEC_MISMATCH'])
     expect(a.json().error).toBe(
-      `${STACK} does not run the spec the Hub sent — deploy it instead of restarting`
+      `${STACK} does not run the spec the Hub has on record — the saved settings or pins changed since its last deploy; use Apply now to deploy them`
     )
     m.restart.mockRejectedValueOnce(
       new AgentError('SPEC_INVALID', 400, 'refused', [{ field: 'env.X', code: 'ENV_FORBIDDEN' }])

@@ -1,6 +1,6 @@
 import { ErrorNotice } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Copy, RotateCw, Settings2, Trash2 } from 'lucide-react'
+import { Copy, Play, RotateCw, Settings2, Trash2 } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -11,6 +11,7 @@ import { BLOCKER_COPY, type HubEnvironment, hubError, hubKeys, hubToast } from '
 import { dangerGhost, ghostButton, StatusChip } from '../hub-parts'
 import { StackSettingsEditor } from './StackSettingsEditor'
 import {
+  applyStack,
   checkStackName,
   fetchStack,
   type RemoveResult,
@@ -27,7 +28,8 @@ import {
 
 /**
  * Nivaro Hub (phase 4) — one Docker environment's stack: state, services, names to request
- * (manual DNS), Restart, and for Hub admins the settings and Remove. Renders nothing for an
+ * (manual DNS), Restart, Apply now (the saved settings onto the running version, P4-30), and
+ * for Hub admins the settings and Remove. Renders nothing for an
  * environment not deployed through a Docker driver.
  */
 
@@ -159,9 +161,10 @@ function StackBody({
   refresh: () => void
 }) {
   /** One action open at a time: its form shows under the action row. */
-  const [open, setOpen] = useState<'restart' | 'settings' | 'remove' | null>(null)
+  const [open, setOpen] = useState<'restart' | 'apply' | 'settings' | 'remove' | null>(null)
   const [removed, setRemoved] = useState<RemoveResult | null>(null)
-  const toggle = (k: 'restart' | 'settings' | 'remove') => setOpen((o) => (o === k ? null : k))
+  const toggle = (k: 'restart' | 'apply' | 'settings' | 'remove') =>
+    setOpen((o) => (o === k ? null : k))
   const s = info.status
   const words = agentWords(info.agent)
   const state = s?.state
@@ -297,6 +300,18 @@ function StackBody({
               <RotateCw className='h-3.5 w-3.5' aria-hidden /> Restart
             </button>
           )}
+          {/* Apply now redeploys the running version with the saved settings and pins. */}
+          {s && (
+            <button
+              type='button'
+              aria-expanded={open === 'apply'}
+              className={cn(ghostButton, open === 'apply' && 'bg-accent')}
+              data-tip='Deploy the saved settings and extension pins to the version this stack runs'
+              onClick={() => toggle('apply')}
+            >
+              <Play className='h-3.5 w-3.5' aria-hidden /> Apply now
+            </button>
+          )}
           {isAdmin && (
             <>
               <button
@@ -334,9 +349,17 @@ function StackBody({
           onClose={() => setOpen(null)}
         />
       )}
+      {open === 'apply' && (
+        <ApplyForm env={env} idPrefix={idPrefix} refresh={refresh} onClose={() => setOpen(null)} />
+      )}
       {isAdmin && open === 'settings' && (
         <Section title='Stack settings'>
-          <StackSettingsEditor env={env} appId={appId} idPrefix={idPrefix} />
+          <StackSettingsEditor
+            env={env}
+            appId={appId}
+            idPrefix={idPrefix}
+            onApplyNow={s ? () => setOpen('apply') : undefined}
+          />
         </Section>
       )}
       {isAdmin && open === 'remove' && info.stack_name && (
@@ -452,6 +475,66 @@ function RestartForm({
       <button type='button' className={ghostButton} onClick={onClose}>
         Cancel
       </button>
+    </div>
+  )
+}
+
+function ApplyForm({
+  env,
+  idPrefix,
+  refresh,
+  onClose
+}: {
+  env: HubEnvironment
+  idPrefix: string
+  refresh: () => void
+  onClose: () => void
+}) {
+  const qc = useQueryClient()
+  const [typed, setTyped] = useState('')
+  const apply = useMutation({
+    mutationFn: () => applyStack(env.id, typed),
+    onSuccess: () => {
+      toast.success(
+        `Applying the saved settings to ${env.key} — follow it in the promotion history`
+      )
+      void qc.invalidateQueries({ queryKey: hubKeys.promotions(env.id) })
+      onClose()
+      refresh()
+    },
+    onError: (err) => hubToast(err, `Could not apply the settings to ${env.key}`)
+  })
+  return (
+    <div className='space-y-1.5'>
+      <p className={`m-0 ${rowText}`}>
+        Redeploys the version this stack runs, with the image the Hub recorded for it and the saved
+        settings and extension pins. Swarm replaces the tasks one by one; the run is checked like a
+        deploy.
+      </p>
+      <div className='flex flex-wrap items-center gap-2'>
+        <label htmlFor={`hub-apply-${env.id}${idPrefix}`} className={rowText}>
+          Type <span className='font-mono'>{env.key}</span> to apply:
+        </label>
+        <Input
+          id={`hub-apply-${env.id}${idPrefix}`}
+          value={typed}
+          onChange={(e) => setTyped(e.target.value)}
+          autoComplete='off'
+          spellCheck={false}
+          className='h-8 w-40 font-mono text-[12px]'
+        />
+        <Button
+          size='sm'
+          className='h-8 bg-nvr-cyan text-white hover:bg-nvr-cyan/90'
+          disabled={typed !== env.key || apply.isPending}
+          onClick={() => apply.mutate()}
+        >
+          {apply.isPending ? 'Starting…' : 'Apply now'}
+        </Button>
+        <button type='button' className={ghostButton} onClick={onClose}>
+          Cancel
+        </button>
+      </div>
     </div>
   )
 }

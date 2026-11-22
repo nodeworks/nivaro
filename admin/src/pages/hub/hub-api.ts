@@ -476,6 +476,8 @@ export interface HubPromotion {
   started_by_name?: string | null
   started_at: string
   finished_at: string | null
+  /** Phase 4: an Apply now run (the saved stack settings onto the running version). */
+  apply?: boolean
 }
 
 export interface HubPromotionLogLine {
@@ -581,7 +583,10 @@ export const BLOCKER_COPY: Record<string, { title: string; hint?: string }> = {
     title: 'The environment before this one has not run this version',
     hint: 'Promote it there first.'
   },
-  ALREADY_RUNS: { title: 'This environment already runs this version' },
+  ALREADY_RUNS: {
+    title: 'This environment already runs this version',
+    hint: 'To deploy changed stack settings or extension pins to a Docker environment, use Apply now in its stack panel.'
+  },
   OLDER_THAN_CURRENT: {
     title: 'This version is older than the one running here',
     hint: 'Use Roll back to go to an older version.'
@@ -766,6 +771,22 @@ Object.assign(BLOCKER_COPY, {
   NOT_DEPLOYED: {
     title: 'The stack is not deployed yet',
     hint: 'Deploy a version first.'
+  },
+  SPEC_MISMATCH: {
+    title: 'The stack does not run what the Hub has on record',
+    hint: 'Saved settings or pins changed since the last deploy. Use Apply now to deploy them, then restart if needed.'
+  },
+  MIXED_DRIVER_KINDS: {
+    title: 'A placement deploys through one kind of driver',
+    hint: 'Keep GitLab components and Docker stacks on separate placements.'
+  },
+  ONE_STACK: {
+    title: 'A Docker placement deploys exactly one stack',
+    hint: 'Remove the extra component, or use another placement.'
+  },
+  ENV_NOT_ALLOWED: {
+    title: 'The agent does not allow that setting name',
+    hint: 'Use a Nivaro setting, or a name under a prefix the agent allows (HUB_AGENT_ENV_PREFIXES).'
   },
   STACK_STATE_UNKNOWN: {
     title: 'The Hub cannot tell whether the stack runs',

@@ -991,7 +991,7 @@ export type FinishRow = (deployId: number, patch: Record<string, unknown>) => Pr
 export interface StartDeps {
   gather(
     envId: number,
-    opts: { kind: HubDeployKind; version: string; lockHeld?: boolean }
+    opts: { kind: HubDeployKind; version: string; lockHeld?: boolean; apply?: boolean }
   ): Promise<PlanInput>
   lock: PromoteLock
   startJobRun(label: string, envId: number, userId: string | null): Promise<JobRunHandle>
@@ -1040,9 +1040,14 @@ export async function startPromotion(
     kind: HubDeployKind
     version: string
     confirm: unknown
-    /** The plan_hash of the plan the person previewed and confirmed. */
+    /** The plan_hash of the plan the person previewed and confirmed (not asked for Apply now). */
     planHash: unknown
     user: { id: string } | null
+    /**
+     * phase 4, Apply now (P4-30; startStackApply): the running version again with the saved
+     * stack settings and pins. Confirmed by the typed key, like a restart: no plan preview.
+     */
+    apply?: boolean
   },
   deps: StartDeps = defaultStartDeps()
 ): Promise<{ deployId: number; jobRunId: number | null }> {
@@ -1052,9 +1057,12 @@ export async function startPromotion(
   if (!env) throw new PromotionError('NOT_FOUND', 'Not found', 404)
   if (req.kind !== 'promote' && req.kind !== 'rollback')
     throw new PromotionError('BAD_KIND', 'kind must be promote or rollback')
+  const apply = req.apply === true
+  if (apply && req.kind !== 'promote')
+    throw new PromotionError('BAD_KIND', 'Apply now redeploys the running version (kind promote)')
   if (typeof req.confirm !== 'string' || req.confirm.trim() !== env.key)
     throw new PromotionError('CONFIRM_REQUIRED', `Type ${env.key} to confirm`, 400)
-  if (typeof req.planHash !== 'string' || !/^[0-9a-f]{64}$/.test(req.planHash))
+  if (!apply && (typeof req.planHash !== 'string' || !/^[0-9a-f]{64}$/.test(req.planHash)))
     throw new PromotionError(
       'PLAN_HASH_REQUIRED',
       'Send the plan_hash of the plan you checked',
@@ -1081,12 +1089,17 @@ export async function startPromotion(
     })
     if (await db(DEPLOYS).where({ environment_id: envId, status: 'running' }).first('id'))
       throw alreadyRunning()
-    const input = await deps.gather(envId, { kind: req.kind, version: req.version, lockHeld: true })
+    const input = await deps.gather(envId, {
+      kind: req.kind,
+      version: req.version,
+      lockHeld: true,
+      ...(apply ? { apply: true } : {})
+    })
     const plan = buildPromotionPlan(input)
     if (!plan.ok)
       throw new PromotionError(plan.blockers[0].code, plan.blockers[0].text, 409, plan.blockers)
     // Only the plan the person saw starts: anything it would do differently is checked again.
-    if (plan.plan_hash !== req.planHash)
+    if (!apply && plan.plan_hash !== req.planHash)
       throw new PromotionError(
         'PLAN_CHANGED',
         'The plan changed since you checked it — check it again',
@@ -1099,7 +1112,9 @@ export async function startPromotion(
     const verb = req.kind === 'rollback' ? 'Roll back' : 'Promote'
     // The job run first: a start that fails there leaves no `running` row behind.
     const run = await deps.startJobRun(
-      `${verb} ${input.app.key} ${env.key} to ${req.version}`,
+      apply
+        ? `Apply stack settings to ${input.app.key} ${env.key} (${req.version})`
+        : `${verb} ${input.app.key} ${env.key} to ${req.version}`,
       envId,
       userId
     )
@@ -1165,6 +1180,34 @@ export async function startPromotion(
   } finally {
     if (!handedOff) await deps.lock.release(envId, token)
   }
+}
+
+/**
+ * phase 4, Apply now (P4-30): redeploys the version a Docker environment runs with the image the
+ * Hub recorded for it and the environment's saved stack settings and extension pins — a stack
+ * update through the agent, run and recorded like a promotion (lock, job run, deploy row, verify,
+ * history). Confirmed by typing the environment key. NOT_DEPLOYED when nothing was deployed.
+ */
+export async function startStackApply(
+  envId: number,
+  req: { confirm: unknown; user: { id: string } | null },
+  deps: StartDeps = defaultStartDeps()
+): Promise<{ deployId: number; jobRunId: number | null }> {
+  const env = (await db(ENVS).where({ id: envId }).first('key', 'version_pin')) as
+    | { key: string; version_pin: string | null }
+    | undefined
+  if (!env) throw new PromotionError('NOT_FOUND', 'Not found', 404)
+  const version = env.version_pin == null ? '' : String(env.version_pin)
+  if (!version)
+    throw new PromotionError(
+      'NOT_DEPLOYED',
+      `${env.key} has no deployed stack to apply settings to — deploy it first`
+    )
+  return startPromotion(
+    envId,
+    { kind: 'promote', version, confirm: req.confirm, planHash: null, user: req.user, apply: true },
+    deps
+  )
 }
 
 async function runPromotion(o: {
@@ -1275,7 +1318,9 @@ async function runPromotion(o: {
   }
   try {
     await closeRow(deployId, outcome, run, deps.finishRow ?? finishRunningRow)
-    const what = `${o.kind === 'rollback' ? 'roll back to' : 'promote'} ${o.version} on ${o.envKey}`
+    const what = o.plan.apply
+      ? `apply stack settings to ${o.envKey} (${o.version})`
+      : `${o.kind === 'rollback' ? 'roll back to' : 'promote'} ${o.version} on ${o.envKey}`
     if (outcome.status === 'success') await run.complete(`${what}: done`)
     else if (outcome.status === 'cancelled')
       await run.complete(`${what}: cancelled after ${outcome.step ?? 'the start'}`)
@@ -1502,7 +1547,18 @@ function toDeployRow(r: Record<string, unknown>): HubDeployRow {
     job_run_id: r.job_run_id == null ? null : Number(r.job_run_id),
     started_by: s(r.started_by),
     started_at: r.started_at as string | Date,
-    finished_at: (r.finished_at as string | Date | null) ?? null
+    finished_at: (r.finished_at as string | Date | null) ?? null,
+    ...(planIsApply(r.plan) ? { apply: true as const } : {})
+  }
+}
+
+/** The stored plan says Apply now (P4-30). An unreadable plan is not one. */
+function planIsApply(plan: unknown): boolean {
+  if (typeof plan !== 'string' || !plan.includes('"apply"')) return false
+  try {
+    return (JSON.parse(plan) as { apply?: unknown }).apply === true
+  } catch {
+    return false
   }
 }
 

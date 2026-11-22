@@ -816,7 +816,7 @@ export function PromotionHistory({
                 </span>
               )}
               <span className='text-[11px] text-slate-500 dark:text-muted-foreground'>
-                {KIND_NOUN[r.kind] ?? r.kind}
+                {r.apply ? 'Apply settings' : (KIND_NOUN[r.kind] ?? r.kind)}
               </span>
               <span className={cn('text-[12px] font-medium', promotionStatusTone(r.status))}>
                 {promotionStatusWords(r.status)}
@@ -862,7 +862,7 @@ export function PromotionHistory({
                   )}
                 </td>
                 <td className='py-2 pr-4 text-slate-600 dark:text-slate-300'>
-                  {KIND_NOUN[r.kind] ?? r.kind}
+                  {r.apply ? 'Apply settings' : (KIND_NOUN[r.kind] ?? r.kind)}
                 </td>
                 <td className={cn('py-2 pr-4 font-medium', promotionStatusTone(r.status))}>
                   {promotionStatusWords(r.status)}

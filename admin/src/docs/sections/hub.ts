@@ -744,7 +744,8 @@ export const hubDockerDocs: DocSection = {
         'Pins: once the stack converged, the Hub records the version and the extension pins on the environment, and what the stack runs on the deploy row (spec hash, image and extension pins), which a restart and a rollback read.',
         'Verify: `/api/version` of the environment must answer the wanted version twice in a row (up to 40 reads, 15 seconds apart), then the app preflight must not fail.',
         'Rollback redeploys the build the Hub recorded for that version here: the image digest the stack ran and the extension pins it installed. The registry is not read again, so a re-pushed tag, an unreachable registry or a changed `HUB_IMAGE` changes nothing; a recorded deploy without its image is refused as `ROLLBACK_NOT_RECORDED`. Swarm itself rolling a failed update back is reported as a failure (`SWARM_ROLLED_BACK`); the panel then offers Roll back, which works even though swarm already runs the older spec.',
-        'Restart redeploys the same spec the stack runs (never one rebuilt from an inspect). It is refused when the Hub cannot tell which spec that is, and the panel offers it only while the agent reports the stack.'
+        'Restart redeploys the same spec the stack runs (never one rebuilt from an inspect). It is refused when the Hub cannot tell which spec that is, and the panel offers it only while the agent reports the stack.',
+        'Apply now: saved settings, secrets, size and extension pins reach a running stack only on its next deploy. Apply now (stack panel, owners and admins, typed environment key) deploys them now: the version the stack runs, with the image the Hub recorded for it and the saved settings and pins, run and checked like a promotion and listed in the promotion history as Apply settings. A restart answers `SPEC_MISMATCH` and a promote of the running version `ALREADY_RUNS` while the saved settings differ from what runs; both point to Apply now.'
       ]
     },
     {
@@ -919,6 +920,11 @@ export const hubDockerDocs: DocSection = {
           '`POST /api/hub/environments/:envId/stack/restart`',
           'Owner, admin',
           'Body `{ confirm }`, the environment key. 202 with the services; 400 `CONFIRM_REQUIRED`, 409 `NO_STACK_NAME`, `NOT_DEPLOYED`, `STACK_STATE_UNKNOWN`, `PROMOTION_RUNNING`.'
+        ],
+        [
+          '`POST /api/hub/environments/:envId/stack/apply`',
+          'Owner, admin',
+          'Apply now. Body `{ confirm }`, the environment key. 202 `{ deploy_id, job_run_id }`: a deploy run of the running version with the recorded image and the saved settings and pins. 400 `CONFIRM_REQUIRED`, 409 `NOT_DEPLOYED`, `PROMOTION_RUNNING` or any stack plan blocker (with `blockers`).'
         ],
         [
           '`POST /api/hub/environments/:envId/stack/remove`',

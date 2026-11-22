@@ -366,7 +366,7 @@ describe('describeAgentError', () => {
     expect(describeAgentError(err('STACK_OWNER_MISMATCH'), ctx)).toBe(
       'the stack efp-prod belongs to another Hub app or environment'
     )
-    expect(describeAgentError(err('SPEC_MISMATCH'), ctx)).toMatch(/deploy it instead of restarting/)
+    expect(describeAgentError(err('SPEC_MISMATCH'), ctx)).toMatch(/use Apply now to deploy them/)
     expect(
       describeAgentError(err('SPEC_INVALID', [{ field: 'env.PATH', code: 'ENV_FORBIDDEN' }]), ctx)
     ).toBe('the agent refused the stack spec: env.PATH (ENV_FORBIDDEN)')
