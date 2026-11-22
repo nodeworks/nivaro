@@ -92,6 +92,7 @@ import {
 import { readJobLog } from '../services/job-runs.js'
 import { hubPhase3Routes } from './hub-create.js'
 import { hubDockerRoutes } from './hub-docker.js'
+import { hubSharedRoutes } from './hub-shared.js'
 
 /**
  * Nivaro Hub API, mounted at /api/hub. Nothing is registered unless hub mode is on (HUB=on,
@@ -117,6 +118,7 @@ export async function hubRoutes(app: FastifyInstance) {
   promotionRoutes(app)
   hubDockerRoutes(app) // phase 4
   hubPhase3Routes(app)
+  hubSharedRoutes(app) // phase 6
 }
 
 const APPS = 'nivaro_hub_apps'
