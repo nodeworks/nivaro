@@ -17,7 +17,8 @@ import {
   setAppMode,
   setClientActive,
   signinKeys,
-  useEnvClient
+  useEnvClient,
+  useSigninOverview
 } from './signin-api'
 
 type Mode = 'direct' | 'hub'
@@ -43,6 +44,9 @@ export function HubAppSigninCard({
   const qc = useQueryClient()
   const [mode, setMode] = useState<Mode>(app.signin_mode === 'hub' ? 'hub' : 'direct')
   const [busy, setBusy] = useState(false)
+  const overview = useSigninOverview()
+  const noClients =
+    overview.data?.find((a) => a.id === app.id)?.environments.some((e) => e.has_client) === false
   useEffect(() => setMode(app.signin_mode === 'hub' ? 'hub' : 'direct'), [app.signin_mode])
 
   const change = async (next: Mode) => {
@@ -99,6 +103,11 @@ export function HubAppSigninCard({
         </fieldset>
       }
     >
+      {mode === 'hub' && noClients && (
+        <p className='m-0 border-b border-amber-200 bg-amber-50 px-4 py-2 text-[12px] text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-200'>
+          Create a sign-in client for each environment first.
+        </p>
+      )}
       {envs.length === 0 ? (
         <p className='m-0 p-4 text-[12px] text-slate-500 dark:text-muted-foreground'>
           Add an environment first.
@@ -194,12 +203,25 @@ export function HubEnvSigninPanel({ env, mode }: { env: { id: number; key: strin
             </code>
             <span className='ml-auto flex items-center gap-2 text-[12px] text-slate-600 dark:text-slate-300'>
               Active
-              <Switch
-                checked={client.active}
-                disabled={busy}
-                onCheckedChange={(v) => void toggle(v)}
-                aria-label={`Sign-in client active in ${env.key}`}
-              />
+              {client.active ? (
+                <ConfirmButton
+                  title={`Turn off sign-in client in ${env.key}`}
+                  confirmLabel={`Turn off? Sign-ins in ${env.key} stop at once`}
+                  className={ghostButton}
+                  armedClassName={dangerArmed}
+                  disabled={busy}
+                  onConfirm={() => void toggle(false)}
+                >
+                  On
+                </ConfirmButton>
+              ) : (
+                <Switch
+                  checked={false}
+                  disabled={busy}
+                  onCheckedChange={(v) => void toggle(v)}
+                  aria-label={`Sign-in client active in ${env.key}`}
+                />
+              )}
             </span>
             <ConfirmButton
               title='Rotate secret'

@@ -148,9 +148,16 @@ async function clientView(client: HubOidcClient) {
   }
 }
 
-/** Distinct people, not rows: one person may hold several identity keys (oid, email). */
-function personOf(r: { hub_user_id?: unknown; identity_key?: unknown }): string {
-  return r.hub_user_id ? `u:${String(r.hub_user_id).toLowerCase()}` : `k:${String(r.identity_key)}`
+/**
+ * One person per sign-in row: the Hub user, else the email (trimmed, lowercased), else the
+ * identity key. recordSignin writes one row per identity key (Entra + email), so a non-Hub
+ * person has two rows that share an email. An Entra-only row with no email cannot be merged
+ * with anything and counts as its own person. Done in Node (portable across the five engines).
+ */
+function personOf(r: { hub_user_id?: unknown; email?: unknown; identity_key?: unknown }): string {
+  if (r.hub_user_id) return `u:${String(r.hub_user_id).toLowerCase()}`
+  const email = typeof r.email === 'string' ? r.email.trim().toLowerCase() : ''
+  return email ? `e:${email}` : `k:${String(r.identity_key)}`
 }
 
 /** Distinct people who signed in in the last 30 days, per environment and per app. */
@@ -162,7 +169,7 @@ async function distinctSignins(envIds: number[]) {
   const rows = (await db(SIGNINS)
     .whereIn('environment_id', envIds)
     .where('last_seen', '>=', since)
-    .select('environment_id', 'app_id', 'hub_user_id', 'identity_key')) as Array<
+    .select('environment_id', 'app_id', 'hub_user_id', 'email', 'identity_key')) as Array<
     Record<string, unknown>
   >
   for (const r of rows) {

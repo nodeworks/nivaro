@@ -52,6 +52,29 @@ function wire() {
           }
         }
       }
+    if (url === '/hub/signin/overview')
+      return {
+        data: {
+          data: [
+            {
+              id: 1,
+              key: 'efp',
+              name: 'EFP',
+              signin_mode: 'hub',
+              signins_30d: 0,
+              environments: [
+                {
+                  id: 10,
+                  key: 'production',
+                  has_client: hasClient,
+                  active: hasClient,
+                  signins_30d: 0
+                }
+              ]
+            }
+          ]
+        }
+      }
     throw new Error(`unexpected GET ${url}`)
   })
   h.post.mockImplementation(async (url: string) => {
@@ -156,7 +179,36 @@ describe('HubEnvSigninPanel', () => {
   })
 })
 
+describe('HubEnvSigninPanel active switch', () => {
+  it('turning the client off asks first and says sign-ins stop at once', async () => {
+    hasClient = true
+    wire()
+    mount(<HubEnvSigninPanel env={{ id: 10, key: 'production' }} mode='hub' />)
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Turn off sign-in client in production' })
+    )
+    expect(h.patch).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: /Sign-ins in production stop at once/ }))
+    await waitFor(() =>
+      expect(h.patch).toHaveBeenCalledWith('/hub/signin/environments/10/client', { active: false })
+    )
+  })
+})
+
 describe('HubAppSigninCard', () => {
+  it('hints to create clients first when no environment has one in Via the Hub mode', async () => {
+    wire()
+    mount(
+      <HubAppSigninCard
+        app={{ id: 1, name: 'EFP', signin_mode: 'hub' }}
+        envs={[{ id: 10, key: 'production' }]}
+      />
+    )
+    expect(
+      await screen.findByText('Create a sign-in client for each environment first.')
+    ).toBeTruthy()
+  })
+
   it('the mode switch sends PATCH /hub/signin/apps/:id/mode', async () => {
     wire()
     mount(

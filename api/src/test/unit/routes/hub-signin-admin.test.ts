@@ -480,6 +480,43 @@ describe('distinct people and the overview', () => {
     })
   })
 
+  it('counts a non-Hub person once when their Entra and email rows share an email', async () => {
+    const { appId, envId } = await seed('efp', OWNER)
+    const recent = new Date(Date.now() - 2 * 86_400_000)
+    const seen = { first_seen: recent, last_seen: recent }
+    await db('nivaro_hub_signins').insert([
+      {
+        identity_key: 'entra:t:o1',
+        email: 'Pat@X.com ',
+        app_id: appId,
+        environment_id: envId,
+        via: 'hub',
+        ...seen
+      },
+      {
+        identity_key: 'email:pat@x.com',
+        email: 'pat@x.com',
+        app_id: appId,
+        environment_id: envId,
+        via: 'hub',
+        ...seen
+      },
+      {
+        identity_key: 'entra:t:o2',
+        email: null,
+        app_id: appId,
+        environment_id: envId,
+        via: 'hub',
+        ...seen
+      }
+    ])
+    const g = await req('GET', `/hub/signin/environments/${envId}/client`, asOwner)
+    expect(g.json().data.signins_30d).toBe(2)
+    const o = (await req('GET', '/hub/signin/overview', asOwner)).json().data[0]
+    expect(o.signins_30d).toBe(2)
+    expect(o.environments[0].signins_30d).toBe(2)
+  })
+
   it('overview shows an owner only their apps; admins all', async () => {
     await seed('efp', OWNER)
     await seed('beta')
