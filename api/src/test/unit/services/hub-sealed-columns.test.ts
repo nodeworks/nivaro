@@ -6,7 +6,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const COLS: Record<string, string[]> = {
   nivaro_hub_drivers: ['id', 'kind', 'name', 'config', 'secret'],
-  nivaro_hub_environments: ['id', 'app_id', 'key', 'base_url', 'hub_token', 'placement_id']
+  nivaro_hub_environments: ['id', 'app_id', 'key', 'base_url', 'hub_token', 'placement_id'],
+  nivaro_hub_apps: ['id', 'key', 'name', 'oidc', 'oidc_secret'],
+  nivaro_hub_db_servers: ['id', 'name', 'engine', 'host', 'admin_secret'],
+  nivaro_hub_databases: ['id', 'host', 'database_name', 'connection'],
+  nivaro_hub_targets: ['id', 'kind', 'name', 'config', 'secret']
 }
 
 const rec = vi.hoisted(() => ({ selects: [] as Array<{ table: string; cols: unknown[] }> }))
@@ -64,7 +68,11 @@ import { sensitiveColumns } from '../../../services/system-collections.js'
 const admin = { id: 'AAAAAAAA-0000-4000-8000-000000000001', role: 'ADMIN' } as never
 const SEALED: Record<string, string> = {
   nivaro_hub_drivers: 'secret',
-  nivaro_hub_environments: 'hub_token'
+  nivaro_hub_environments: 'hub_token',
+  nivaro_hub_apps: 'oidc_secret',
+  nivaro_hub_db_servers: 'admin_secret',
+  nivaro_hub_databases: 'connection',
+  nivaro_hub_targets: 'secret'
 }
 const selected = (table: string) =>
   rec.selects.filter((s) => s.table === table).flatMap((s) => s.cols.map(String))
@@ -78,6 +86,10 @@ describe('hub sealed columns through /items', () => {
     expect(sensitiveColumns('nivaro_hub_drivers')).toContain('secret')
     expect(sensitiveColumns('nivaro_hub_environments')).toContain('hub_token')
     expect(sensitiveColumns('NIVARO_HUB_DRIVERS')).toContain('secret')
+    expect(sensitiveColumns('nivaro_hub_apps')).toContain('oidc_secret')
+    expect(sensitiveColumns('nivaro_hub_db_servers')).toContain('admin_secret')
+    expect(sensitiveColumns('nivaro_hub_databases')).toContain('connection')
+    expect(sensitiveColumns('nivaro_hub_targets')).toContain('secret')
   })
 
   for (const [table, col] of Object.entries(SEALED)) {
