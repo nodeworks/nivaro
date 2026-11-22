@@ -5,11 +5,10 @@ import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useDatabases } from '../databases/db-api'
-import { RunnerError } from '../HubPromotePanel'
 import { type HubEnvironment, hubKeys } from '../hub-api'
 import { Field, ghostButton } from '../hub-parts'
 import { HubAppKeyField } from './HubAppKeyField'
-import { OptionCombobox } from './HubMovePanel'
+import { MoveRunError, OptionCombobox } from './HubMovePanel'
 import { fetchJobRun, moveError, moveKeys, placeShared, useSharedList } from './move-api'
 
 /**
@@ -282,8 +281,8 @@ function PlaceProgress({
     wasLive.current = RUN_LIVE.has(status)
   }, [status, appId, qc])
 
-  // The run's error is "CODE: sentence"; the sentence is plain words written for people.
-  const errorText = run.data?.error?.replace(/^[A-Z][A-Z0-9_]+:\s*/, '') ?? null
+  // The run's error is "CODE: sentence": the code maps to copy, the sentence shows under it.
+  const errorText = run.data?.error ?? null
 
   return (
     <section
@@ -311,7 +310,7 @@ function PlaceProgress({
           {/* Plain text shows as is; raw text (a stack, a driver error) becomes one plain
               sentence with the text under "Details for support". */}
           {errorText ? (
-            <RunnerError text={errorText} />
+            <MoveRunError text={errorText} />
           ) : (
             <p className='m-0'>It stopped on an error.</p>
           )}

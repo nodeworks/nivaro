@@ -2,7 +2,7 @@ import { describeError, type ErrorDescription, errorToastOptions } from '@nivaro
 import { type DataTag, useQuery } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
-import { fetchDrivers, type HubDriver, hubError, hubKeys } from '../hub-api'
+import { BLOCKER_COPY, fetchDrivers, type HubDriver, hubError, hubKeys } from '../hub-api'
 
 /**
  * Nivaro Hub (phase 6) — every call the move panel, the place-on-shared form and the app key
@@ -927,6 +927,15 @@ export const MOVE_CODE_COPY: Record<string, Copy> = {
     title: 'That checklist item is not on this move',
     hint: 'Reload the move to see its checklist as it stands.'
   },
+  // Step failures stored on a move as `CODE: sentence` (Task 16 run.ts / ops.ts).
+  ROUTE_UNSUPPORTED: {
+    title: 'The Hub cannot change this address itself',
+    hint: 'This placement is routed by hand: make the change the request names and use Check now, or roll the move back.'
+  },
+  TOKEN_MISSING: {
+    title: "The Hub cannot open the shared deployment's token",
+    hint: 'Rotate the token on the Shared deployments tab, give the new one to the deployment, then resume the move.'
+  },
   MOVE_RUNNING: {
     title: 'A move of this environment is running',
     hint: 'Wait for it to end, or open Move… on the environment to follow it or roll it back.'
@@ -1041,6 +1050,28 @@ export const KEY_CHECK_REASON_WORDS: Record<string, string> = {
   LINK_REFUSED: 'the app refused the hub link',
   LINK_BAD_ANSWER: 'the app gave an answer the Hub could not read',
   UNREACHABLE: 'the app did not answer'
+}
+
+/**
+ * A stored run error (`move.error`, a job run's error) is `CODE: sentence`. The code maps to
+ * plain words when this screen has copy for it; the sentence is shown under them. Text without a
+ * code prefix comes back as the sentence alone.
+ */
+export function splitRunError(text: string): { code: string | null; sentence: string } {
+  const m = /^([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+):\s*([\s\S]*)$/.exec(text.trim())
+  return m ? { code: m[1], sentence: m[2].trim() } : { code: null, sentence: text.trim() }
+}
+
+/** Plain words for a run error's code, from the move tables then the Hub's own. */
+export function runErrorCopy(code: string | null): { title: string; hint?: string } | null {
+  if (!code) return null
+  return (
+    MOVE_CODE_COPY[code] ??
+    MOVE_BLOCKER_COPY[code] ??
+    MOVE_WARNING_COPY[code] ??
+    (BLOCKER_COPY as Record<string, { title: string; hint?: string }>)[code] ??
+    null
+  )
 }
 
 /** One plan blocker or warning: plain words, and the planner's own sentence as the detail. */

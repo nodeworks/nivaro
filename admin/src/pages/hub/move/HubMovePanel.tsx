@@ -68,8 +68,10 @@ import {
   readDismissedMove,
   resumeMove,
   rollbackMove,
+  runErrorCopy,
   STACK_NAME_RE,
   setMoveChecklist,
+  splitRunError,
   startMove,
   targetFromValue,
   uniqueStackName,
@@ -185,6 +187,27 @@ export function OptionCombobox({
         </Command>
       </PopoverContent>
     </Popover>
+  )
+}
+
+/**
+ * A stored run error (`CODE: sentence`): the code's plain words when known, the sentence under
+ * them (raw text stays under "Details for support" via RunnerError); never the code itself.
+ */
+export function MoveRunError({ text }: { text: string }) {
+  const { code, sentence } = splitRunError(text)
+  const copy = runErrorCopy(code)
+  if (!copy) return <RunnerError text={sentence || text} />
+  return (
+    <div className='space-y-0.5'>
+      <p className='m-0 font-medium'>{copy.title}</p>
+      {copy.hint && <p className='m-0'>{copy.hint}</p>}
+      {sentence && sentence !== copy.title && (
+        <div className='text-[11px] opacity-90'>
+          <RunnerError text={sentence} />
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -1204,7 +1227,7 @@ function MoveProgress({
           )}
           data-tone={m.status === 'success' ? 'warning' : 'error'}
         >
-          <RunnerError text={m.error} />
+          <MoveRunError text={m.error} />
         </div>
       )}
       {m.status === 'rolled_back' && (

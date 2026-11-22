@@ -699,6 +699,18 @@ describe('HubMovePanel — a move in progress', () => {
     expect(await screen.findByText(/both go on undoing its steps/)).toBeInTheDocument()
   })
 
+  it('a stored CODE: sentence error shows plain words and the sentence, never the code', async () => {
+    openMove({
+      status: 'rolled_back',
+      step: 'route',
+      error: 'ROUTE_UNSUPPORTED: A GitLab placement is routed by hand.'
+    })
+    renderPanel()
+    expect(await screen.findByText('The Hub cannot change this address itself')).toBeInTheDocument()
+    expect(screen.getByText('A GitLab placement is routed by hand.')).toBeInTheDocument()
+    expect(screen.queryByText(/ROUTE_UNSUPPORTED/)).toBeNull()
+  })
+
   it('an interrupted move past release offers only Resume', async () => {
     openMove({ status: 'interrupted', step: 'retire_source' })
     renderPanel()

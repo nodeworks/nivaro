@@ -225,3 +225,37 @@ describe('HubPlaceSharedForm — a run that failed', () => {
     expect(screen.getByText(/place it again to retry/)).toBeInTheDocument()
   })
 })
+
+describe('HubPlaceSharedForm — a failed run with a known sentence', () => {
+  it('shows the sentence without its code', async () => {
+    h.post.mockResolvedValue({ data: { data: { job_run_id: 57 } } })
+    const base = h.get.getMockImplementation() as (url: string) => Promise<unknown>
+    h.get.mockImplementation(async (url: string) =>
+      url === '/job-runs/57/log'
+        ? {
+            data: {
+              data: {
+                run: {
+                  id: 57,
+                  status: 'failed',
+                  error: "SCHEMA_TIMEOUT: The app's database was not ready in 10 minutes."
+                },
+                lines: []
+              }
+            }
+          }
+        : base(url)
+    )
+    renderForm()
+    await pick('Shared deployment', /east/)
+    await pick('Database', /efp_dev/)
+    fireEvent.change(screen.getByLabelText('First administrator email'), {
+      target: { value: 'pat@example.com' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Place on shared deployment' }))
+    expect(
+      await screen.findByText("The app's database was not ready in 10 minutes.")
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/SCHEMA_TIMEOUT/)).toBeNull()
+  })
+})
