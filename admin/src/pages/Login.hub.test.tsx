@@ -89,14 +89,17 @@ describe('Login with the Hub', () => {
   })
 
   const cases: Array<[string, string]> = [
-    ['hub_unavailable', 'The sign-in hub is not answering. Sign in directly with Microsoft.'],
+    [
+      'hub_unavailable',
+      'The Hub, which signs you in to your apps, is not answering right now. Sign in directly with Microsoft instead.'
+    ],
     [
       'hub_auth_failed',
-      'Sign-in through the hub could not be checked. Sign in directly with Microsoft, and tell your administrator.'
+      'Your sign-in through the Hub could not be checked. Sign in directly with Microsoft, and tell your administrator.'
     ],
     [
       'hub_access_denied',
-      'Your Hub account is waiting for approval. Sign in directly with Microsoft for now.'
+      'Your Hub account is still waiting for approval. Sign in directly with Microsoft for now.'
     ],
     [
       'hub_account_conflict',
@@ -115,13 +118,15 @@ describe('Login with the Hub', () => {
       expect(calls.some((c) => String(c[0]).includes('/auth/login'))).toBe(false)
       expect(document.querySelector('meta[http-equiv="refresh"]')).toBeNull()
       if (code !== 'hub_account_conflict') expect(directLinks().length).toBeGreaterThan(0)
+      // One provider button after a Hub failure: it goes direct, never a second big button.
+      if (code !== 'hub_account_conflict') expect(host.textContent).not.toContain('Continue with')
     })
   }
 
   it('a forged hub error on a non-Hub install shows the copy but no direct button', async () => {
     stubFetch(undefined)
     const host = await render('?error=hub_unavailable')
-    expect(host.textContent).toContain('The sign-in hub is not answering')
+    expect(host.textContent).toContain('is not answering right now')
     expect(directLinks()).toHaveLength(0)
   })
 

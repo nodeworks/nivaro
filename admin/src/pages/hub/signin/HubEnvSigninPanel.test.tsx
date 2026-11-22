@@ -106,7 +106,7 @@ describe('HubEnvSigninPanel', () => {
       <HubEnvSigninPanel env={{ id: 10, key: 'production' }} mode='hub' />
     )
     fireEvent.click(await screen.findByRole('button', { name: 'Create sign-in client' }))
-    expect(await screen.findByText('This secret is shown once.')).toBeTruthy()
+    expect(await screen.findByText(/This secret is shown once/)).toBeTruthy()
     const lineBlock = screen.getByTestId('hub-env-lines').textContent ?? ''
     expect(lineBlock).toContain(`HUB_CLIENT_SECRET=${SECRET}`)
     expect(lineBlock).toContain('HUB_URL=https://hub.example.com')
@@ -154,7 +154,7 @@ describe('HubEnvSigninPanel', () => {
     fireEvent.click(rotate)
     expect(h.post).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'Rotate the secret?' }))
-    expect(await screen.findByText('This secret is shown once.')).toBeTruthy()
+    expect(await screen.findByText(/This secret is shown once/)).toBeTruthy()
     expect(h.post).toHaveBeenCalledWith('/hub/signin/environments/10/client/rotate', undefined)
   })
 
@@ -204,9 +204,7 @@ describe('HubAppSigninCard', () => {
         envs={[{ id: 10, key: 'production' }]}
       />
     )
-    expect(
-      await screen.findByText('Create a sign-in client for each environment first.')
-    ).toBeTruthy()
+    expect(await screen.findByText(/No environment has a sign-in client yet/)).toBeTruthy()
   })
 
   it('the mode switch sends PATCH /hub/signin/apps/:id/mode', async () => {

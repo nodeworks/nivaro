@@ -2,7 +2,18 @@ import { useQuery } from '@tanstack/react-query'
 import { LayoutGrid } from 'lucide-react'
 import { useApiFetchConfig } from '../../context'
 import { cn } from '../../lib/utils'
+import { useOverflowTip } from '../TipLayer'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
+
+/** The app's name, cut to one line; the whole name shows on hover only when it is cut. */
+function AppName({ name, className }: { name: string; className?: string }) {
+  const ref = useOverflowTip<HTMLSpanElement>(name)
+  return (
+    <span ref={ref} className={cn('truncate', className)}>
+      {name}
+    </span>
+  )
+}
 
 export interface HubSwitcherApp {
   app_key: string
@@ -68,26 +79,30 @@ export function HubSwitcherView({
         </div>
         {unavailable && (
           <p className='px-2 py-2 text-[13px] text-slate-600 dark:text-slate-300'>
-            The app list is not available right now.
+            The app list is not available right now. Try again in a few minutes.
           </p>
         )}
         <ul className='m-0 list-none p-0'>
           {apps.map((a) => {
             const chip =
               a.environment_key && a.environment_key !== 'production' ? (
-                <span className='ml-2 shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 dark:bg-muted dark:text-slate-300'>
+                <span className='shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 dark:bg-white/[0.08] dark:text-slate-300'>
                   {a.environment_key}
                 </span>
               ) : null
             const row =
-              'flex items-center justify-between rounded-md px-2 py-2 text-[13px] text-slate-800 dark:text-slate-100'
+              'flex items-center justify-between gap-2 rounded-md px-2 py-2 text-[13px] text-slate-800 dark:text-slate-100'
             if (a.current)
               return (
                 <li key={`${a.app_key}:${a.environment_key}`}>
-                  <div className={cn(row, 'bg-slate-50 dark:bg-muted')} aria-current='true'>
-                    <span className='truncate font-medium'>{a.app_name}</span>
-                    <span className='ml-2 shrink-0 text-[11px] text-slate-500'>You are here</span>
-                    {chip}
+                  <div className={cn(row, 'bg-slate-50 dark:bg-white/[0.06]')} aria-current='true'>
+                    <AppName name={a.app_name} className='font-medium' />
+                    <span className='flex shrink-0 items-center gap-2'>
+                      <span className='text-[11px] text-slate-500 dark:text-slate-400'>
+                        You are here
+                      </span>
+                      {chip}
+                    </span>
                   </div>
                 </li>
               )
@@ -98,9 +113,9 @@ export function HubSwitcherView({
                   href={a.signin_url}
                   target='_blank'
                   rel='noopener noreferrer'
-                  className={cn(row, 'hover:bg-slate-100 dark:hover:bg-muted')}
+                  className={cn(row, 'hover:bg-slate-100 dark:hover:bg-white/[0.06]')}
                 >
-                  <span className='truncate'>{a.app_name}</span>
+                  <AppName name={a.app_name} />
                   {chip}
                 </a>
               </li>

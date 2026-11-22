@@ -99,14 +99,19 @@ function PasswordLoginForm() {
 }
 
 /** ?error= values the Hub sign-in adds (Hub phase 7). */
-const HUB_ERROR_COPY: Record<string, string> = {
-  hub_unavailable: 'The sign-in hub is not answering. Sign in directly with Microsoft.',
-  hub_auth_failed:
-    'Sign-in through the hub could not be checked. Sign in directly with Microsoft, and tell your administrator.',
-  hub_access_denied:
-    'Your Hub account is waiting for approval. Sign in directly with Microsoft for now.',
-  hub_account_conflict:
-    'This sign-in matches a different account here. Ask your administrator to check your account.'
+function hubErrorCopy(error: string, label: string): string | undefined {
+  switch (error) {
+    case 'hub_unavailable':
+      return `The Hub, which signs you in to your apps, is not answering right now. Sign in directly with ${label} instead.`
+    case 'hub_auth_failed':
+      return `Your sign-in through the Hub could not be checked. Sign in directly with ${label}, and tell your administrator.`
+    case 'hub_access_denied':
+      return `Your Hub account is still waiting for approval. Sign in directly with ${label} for now.`
+    case 'hub_account_conflict':
+      return 'This sign-in matches a different account here. Ask your administrator to check your account.'
+    default:
+      return undefined
+  }
 }
 const HUB_DIRECT_ERRORS = new Set(['hub_unavailable', 'hub_auth_failed', 'hub_access_denied'])
 
@@ -629,7 +634,7 @@ export function LoginPage() {
                   </div>
                 )}
                 {error && tab === 'microsoft' && (
-                  <div className='mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-[13px] text-red-700'>
+                  <div className='mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-[13px] text-red-700 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300'>
                     {error === 'suspended'
                       ? 'Your account is suspended — usually because the directory no longer lists it, a retention rule ran, or an administrator set it. Ask an administrator: the reason is shown on your account page, and they can restore access.'
                       : error === 'sign_in_disabled'
@@ -640,40 +645,45 @@ export function LoginPage() {
                             ? 'The sign-in provider is not answering right now. Anyone already signed in keeps working — try again in a few minutes.'
                             : error === 'account_link'
                               ? 'This sign-in matches an account that is already linked to a different sign-in. Ask an administrator to check your account.'
-                              : (HUB_ERROR_COPY[error ?? ''] ??
+                              : (hubErrorCopy(error ?? '', oidcLabel) ??
                                 'Authentication failed. Please try again or contact IT support.')}
                   </div>
                 )}
-                {/* Nothing here starts a sign-in by itself: only a click does (no loop when the Hub is down). */}
-                {showDirectButton && (
-                  <a
-                    href={directHref}
-                    className='mb-4 flex w-full items-center justify-center gap-3 rounded-xl bg-nvr-cyan px-5 py-4 text-[14px] font-semibold text-white shadow-md transition-all hover:shadow-lg hover:brightness-110 active:scale-[0.985]'
-                  >
-                    Sign in directly with {oidcLabel}
-                  </a>
-                )}
-
                 {tab === 'microsoft' ? (
                   <>
+                    {/* Nothing here starts a sign-in by itself: only a click does (no loop when the Hub is down).
+                      After a Hub failure the one provider button goes direct; the Hub path drops to a quiet link. */}
                     {oidcOn && (
                       <a
-                        href={`/api/auth/login?returnTo=${encodeURIComponent(returnTo)}`}
+                        href={
+                          showDirectButton
+                            ? directHref
+                            : `/api/auth/login?returnTo=${encodeURIComponent(returnTo)}`
+                        }
                         className='group flex w-full items-center justify-center gap-3 rounded-xl px-5 py-4 text-[14px] font-semibold text-[#fff] shadow-md transition-all hover:shadow-lg hover:brightness-110 active:scale-[0.985]'
                         style={{ background: isMicrosoft ? '#0078d4' : '#0f172a' }}
                       >
                         {isMicrosoft ? <MicrosoftIcon /> : <KeyIcon />}
-                        Continue with {oidcLabel}
+                        {showDirectButton ? 'Sign in directly with' : 'Continue with'} {oidcLabel}
                       </a>
                     )}
-                    {oidcOn && providers?.hub?.configured && !showDirectButton && (
-                      <a
-                        href={directHref}
-                        className='mt-3 block text-center text-[12px] font-medium text-slate-600 underline decoration-slate-300 underline-offset-2 hover:text-slate-800 dark:hover:text-white'
-                      >
-                        Trouble signing in? Sign in directly with {oidcLabel}
-                      </a>
-                    )}
+                    {/* Waiting for Hub approval: trying the Hub again cannot help, so no link back. */}
+                    {oidcOn &&
+                      providers?.hub?.configured &&
+                      !(showDirectButton && error === 'hub_access_denied') && (
+                        <a
+                          href={
+                            showDirectButton
+                              ? `/api/auth/login?returnTo=${encodeURIComponent(returnTo)}`
+                              : directHref
+                          }
+                          className='mt-3 block text-center text-[12px] font-medium text-slate-600 underline decoration-slate-300 underline-offset-2 hover:text-slate-800 dark:decoration-slate-600 dark:hover:text-white'
+                        >
+                          {showDirectButton
+                            ? 'Try signing in through the Hub again'
+                            : `Trouble signing in? Sign in directly with ${oidcLabel}`}
+                        </a>
+                      )}
                     {providers?.saml.enabled && (
                       <a
                         href={`/api/auth/saml/login?returnTo=${encodeURIComponent(returnTo)}`}

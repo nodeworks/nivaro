@@ -5,7 +5,6 @@ import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
 import { hubKeys, hubToast } from '../hub-api'
 import { dangerArmed, ghostButton, SectionCard, smallButton } from '../hub-parts'
@@ -105,7 +104,8 @@ export function HubAppSigninCard({
     >
       {mode === 'hub' && noClients && (
         <p className='m-0 border-b border-amber-200 bg-amber-50 px-4 py-2 text-[12px] text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-200'>
-          Create a sign-in client for each environment first.
+          No environment has a sign-in client yet, so nobody can sign in through the Hub. Create one
+          for each environment below.
         </p>
       )}
       {envs.length === 0 ? (
@@ -201,8 +201,17 @@ export function HubEnvSigninPanel({ env, mode }: { env: { id: number; key: strin
             <code className='break-all rounded bg-slate-100 px-1.5 py-px font-mono text-[11px] text-slate-700 dark:bg-muted dark:text-slate-300'>
               {client.client_id}
             </code>
-            <span className='ml-auto flex items-center gap-2 text-[12px] text-slate-600 dark:text-slate-300'>
-              Active
+            <span className='ml-auto flex items-center gap-2'>
+              <span
+                className={cn(
+                  'rounded-full border px-2 py-0.5 text-[11px] font-medium',
+                  client.active
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-300'
+                    : 'border-slate-200 bg-slate-50 text-slate-600 dark:border-border dark:bg-muted dark:text-slate-300'
+                )}
+              >
+                {client.active ? 'On' : 'Off'}
+              </span>
               {client.active ? (
                 <ConfirmButton
                   title={`Turn off sign-in client in ${env.key}`}
@@ -212,15 +221,18 @@ export function HubEnvSigninPanel({ env, mode }: { env: { id: number; key: strin
                   disabled={busy}
                   onConfirm={() => void toggle(false)}
                 >
-                  On
+                  Turn off
                 </ConfirmButton>
               ) : (
-                <Switch
-                  checked={false}
+                <button
+                  type='button'
+                  className={ghostButton}
                   disabled={busy}
-                  onCheckedChange={(v) => void toggle(v)}
-                  aria-label={`Sign-in client active in ${env.key}`}
-                />
+                  aria-label={`Turn on sign-in client in ${env.key}`}
+                  onClick={() => void toggle(true)}
+                >
+                  Turn on
+                </button>
               )}
             </span>
             <ConfirmButton
@@ -296,7 +308,7 @@ function OneTimeSecret({ minted, onClose }: { minted: Minted; onClose: () => voi
     >
       <div className='flex flex-wrap items-center gap-2'>
         <p className='m-0 flex-1 text-[12px] font-medium text-amber-900 dark:text-amber-200'>
-          This secret is shown once.
+          This secret is shown once. Copy these lines into the app's settings now.
         </p>
         <button type='button' className={ghostButton} onClick={() => void copy()}>
           <Copy className='h-3.5 w-3.5' aria-hidden /> Copy

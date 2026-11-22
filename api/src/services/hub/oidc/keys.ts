@@ -386,7 +386,7 @@ export async function rotateSigningKey(
 }
 
 const SOON_WARNING =
-  'The next key now signs at once. An app that fetched the key list before that key was published may refuse a sign-in briefly: apps look up an unknown key again at most every 30 seconds, and trying again then works.'
+  'The next key signs from now. For up to 30 seconds an app may refuse a sign-in; trying again then works, and direct sign-in always works.'
 
 /** Why removing `target` is refused, or null (the server's one rule; the admin list shows it). */
 function removalRefusal(rows: KeyRow[], now: number, target: KeyRow): HubKeyError | null {
