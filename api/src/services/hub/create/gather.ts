@@ -19,7 +19,13 @@ import { hubImage, imageDigest } from '../registry.js'
 import { sealSecret } from '../secrets.js'
 import { hubOwnHostnames, isCreatableKey, stackName } from './app-config.js'
 import { projectExists as gitlabProjectExists } from './gitlab-provision.js'
-import { databaseNameProblem, plannedDatabaseNames, serverProblem, targetProblem } from './plan.js'
+import {
+  databaseNameProblem,
+  MAX_CREATE_ENVIRONMENTS,
+  plannedDatabaseNames,
+  serverProblem,
+  targetProblem
+} from './plan.js'
 import { getTargetRow, type HubTargetRow, targetCtx } from './targets.js'
 import type { CreateAppInput, CreationFacts } from './types.js'
 
@@ -96,7 +102,10 @@ export async function gatherCreationFacts(
   const i = (input && typeof input === 'object' ? input : {}) as Partial<CreateAppInput>
   const key = str(i.key)
   const keyOk = isCreatableKey(key)
-  const envs = Array.isArray(i.environments) ? i.environments.slice(0, 20) : []
+  // The planner reads at most MAX_CREATE_ENVIRONMENTS (one more says "too many").
+  const envs = Array.isArray(i.environments)
+    ? i.environments.slice(0, MAX_CREATE_ENVIRONMENTS + 1)
+    : []
 
   // App key + owners
   const keyTaken =

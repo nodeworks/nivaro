@@ -250,7 +250,10 @@ export function buildCreationPlan(input: CreateAppInput, facts: CreationFacts): 
   if (!VERSION_RE.test(version))
     block('BAD_VERSION', `"${cut(version, 40)}" is not a version (x.y.z).`)
   else if (facts.digest === null)
-    block('IMAGE_MISSING', `The image for ${version} is not on Docker Hub.`)
+    block(
+      'IMAGE_MISSING',
+      `The image for ${version} is not on Docker Hub, or Docker Hub did not answer.`
+    )
   else if (facts.digest === 'present')
     block(
       'IMAGE_NO_DIGEST',
@@ -488,7 +491,10 @@ export function buildCreationPlan(input: CreateAppInput, facts: CreationFacts): 
 
     const names = plannedDatabaseNames(appKey, envKey, server.engine, spec)
     const dbWhy = databaseNameProblem(server.engine, names.database_name)
-    const loginWhy = loginNameProblem(server.engine, names.login_name)
+    // A bad app key makes no default login worth judging (BAD_KEY already says it); a login
+    // typed for the environment is still checked.
+    const loginGiven = spec.login_name !== undefined && spec.login_name !== null
+    const loginWhy = keyOk || loginGiven ? loginNameProblem(server.engine, names.login_name) : null
     if (dbWhy) block('DATABASE_NAME_INVALID', dbWhy, label)
     if (loginWhy) block('DATABASE_NAME_INVALID', loginWhy, label)
 
@@ -511,7 +517,8 @@ export function buildCreationPlan(input: CreateAppInput, facts: CreationFacts): 
         block('DATABASE_RECORDED', `${names.database_name} is given to two environments.`, label)
       seenDbName.add(dbKey)
 
-      if (automatic && !serverWhy) {
+      // gather.ts probes only with a good app key: without one there is no verdict to read.
+      if (automatic && !serverWhy && keyOk) {
         const has = facts.serverHas[`${server.id}:${names.database_name}`]
         if (has === true)
           block(
@@ -522,7 +529,7 @@ export function buildCreationPlan(input: CreateAppInput, facts: CreationFacts): 
         else if (has !== false) block('SERVER_UNREACHABLE', `${server.name} did not answer.`, label)
       }
     }
-    if (!loginWhy) {
+    if (!loginWhy && (keyOk || loginGiven)) {
       const loginKey = `${hostKey(server.host)}\u0000${names.login_name.toLowerCase()}`
       if (seenLogin.has(loginKey))
         block(

@@ -68,8 +68,16 @@ export async function checkEnvironmentName(
   const result = check.resolves && check.serves ? 'ok' : 'waiting'
 
   if (result === 'ok' && env.status === WAITING_FOR_NAME && !open) {
+    // The open-creation test rides the UPDATE itself: a creation opened since the read above
+    // keeps the status (its runner moves the environment on).
     await db('nivaro_hub_environments')
       .where({ id: envId, status: WAITING_FOR_NAME })
+      .whereNotExists(
+        db('nivaro_hub_creations')
+          .where('environment_id', envId)
+          .whereIn('status', OPEN_CREATION)
+          .select('id')
+      )
       .update({ status: 'active', updated_at: new Date() })
   }
   return { result, hostname, check }
@@ -80,10 +88,21 @@ export async function checkName(envId: number, deps?: NameCheckDeps): Promise<'o
   return (await checkEnvironmentName(envId, deps))?.result ?? 'waiting'
 }
 
-/** Puts an environment in `waiting_for_name` (phase 4's deploy with a manual name not yet working). */
+/** The statuses markWaitingForName may move an environment from. */
+export const MAY_WAIT_FOR_NAME: readonly string[] = Object.freeze([
+  'active',
+  'provisioning',
+  WAITING_FOR_NAME
+])
+
+/**
+ * Puts an environment in `waiting_for_name` (phase 4's deploy with a manual name not yet
+ * working). Only from MAY_WAIT_FOR_NAME: any other status (one another flow set) stays.
+ */
 export async function markWaitingForName(envId: number): Promise<void> {
   if (!Number.isInteger(envId)) return
   await db('nivaro_hub_environments')
     .where({ id: envId })
+    .whereIn('status', MAY_WAIT_FOR_NAME)
     .update({ status: WAITING_FOR_NAME, updated_at: new Date() })
 }

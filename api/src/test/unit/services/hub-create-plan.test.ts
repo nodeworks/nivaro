@@ -582,3 +582,75 @@ describe('buildCreationPlan — environment blockers', () => {
       'production'
     ))
 })
+
+describe('buildCreationPlan — review minors (Task 9 fold-in)', () => {
+  it('IMAGE_MISSING says Docker Hub may not have answered', () => {
+    const plan = expectBlocked('IMAGE_MISSING', {}, { digest: null })
+    expect(plan.blockers.find((b) => b.code === 'IMAGE_MISSING')?.text).toBe(
+      'The image for 1.2.3 is not on Docker Hub, or Docker Hub did not answer.'
+    )
+  })
+
+  it('a bad app key: no probe verdict and no default-login refusal, only BAD_KEY', () => {
+    // gather.ts never probes with a bad key, so serverHas holds nothing for these names.
+    const plan = buildCreationPlan(
+      input({
+        key: 'Bad Key!',
+        environments: [
+          { key: 'production', database: { server_id: 2, database_name: 'nivaro_named' } }
+        ]
+      }),
+      facts({ serverHas: {} })
+    )
+    expect(codes(plan)).toContain('BAD_KEY')
+    expect(codes(plan)).not.toContain('SERVER_UNREACHABLE')
+    expect(codes(plan)).not.toContain('DATABASE_NAME_INVALID')
+  })
+
+  it('a bad app key still checks a login typed for the environment', () => {
+    const plan = buildCreationPlan(
+      input({
+        key: 'Bad Key!',
+        environments: [
+          {
+            key: 'production',
+            database: { server_id: 2, database_name: 'nivaro_named', login_name: 'Bad Login' }
+          }
+        ]
+      }),
+      facts({ serverHas: {} })
+    )
+    expect(codes(plan)).toContain('DATABASE_NAME_INVALID')
+  })
+
+  it('a stack name past 40 characters is hashed and planned', () => {
+    const key = `a${'b'.repeat(30)}`
+    const envKey = 'production-eu-west'
+    const plan = buildCreationPlan(
+      input({ key, environments: [{ key: envKey, database: { server_id: 1 } }] }),
+      facts()
+    )
+    const stack = plan.environments[0].stack_name as string
+    expect(`${key}--${envKey}`.length).toBeGreaterThan(40)
+    expect(stack).toBe(stackName(key, envKey))
+    expect(stack.length).toBeLessThanOrEqual(40)
+    expect(stack).toMatch(/-[0-9a-f]{4}$/)
+    expect(codes(plan)).not.toContain('STACK_NAME_TAKEN')
+  })
+
+  it('the same stack twice in one request is STACK_NAME_TAKEN on the second', () => {
+    const plan = buildCreationPlan(
+      input({
+        environments: [
+          { key: 'production', database: { server_id: 1 } },
+          { key: 'production', database: { server_id: 1, database_name: 'nivaro_other_name' } }
+        ]
+      }),
+      facts()
+    )
+    expect(codes(plan)).toContain('DUPLICATE_ENV')
+    const stack = plan.blockers.filter((b) => b.code === 'STACK_NAME_TAKEN')
+    expect(stack).toHaveLength(1)
+    expect(stack[0].env).toBe('production')
+  })
+})

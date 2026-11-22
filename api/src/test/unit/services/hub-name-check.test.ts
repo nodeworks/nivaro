@@ -159,6 +159,25 @@ describe('checkName (hostname, base URL, version)', () => {
     expect(r.resolves).toBe(false)
   })
 
+  it('an empty version accepts any version that answers', async () => {
+    const ok = await pure.checkName('demo.corp.example.com', 'https://demo.corp.example.com', '', {
+      lookup: resolves,
+      fetchJson: serving('0.9.1')
+    })
+    expect(ok).toMatchObject({ resolves: true, serves: true, version: '0.9.1' })
+    const none = await pure.checkName(
+      'demo.corp.example.com',
+      'https://demo.corp.example.com',
+      '',
+      {
+        lookup: resolves,
+        fetchJson: serving(null)
+      }
+    )
+    expect(none).toMatchObject({ resolves: true, serves: false, version: null })
+    expect(none.text).toContain('a version')
+  })
+
   it('a base URL that is not an http(s) origin is never fetched', async () => {
     const fetchJson = vi.fn(serving('1.2.3'))
     const r = await pure.checkName('demo.corp.example.com', 'file:///etc/passwd', '1.2.3', {
@@ -254,6 +273,36 @@ describe('checkName(envId)', () => {
     expect(await envCheck.checkName(id, { lookup: resolves, fetchJson: serving('1.2.3') })).toBe(
       'ok'
     )
+    expect(await statusOf(id)).toBe('waiting_for_name')
+  })
+
+  it('a creation opened during the look keeps the status (guard inside the update)', async () => {
+    const id = await env('waiting_for_name')
+    const out = await envCheck.checkName(id, {
+      // The creation row was read before this look: open one now, as a concurrent start would.
+      lookup: async () => {
+        await db('nivaro_hub_creations').insert({
+          app_id: appId,
+          environment_id: id,
+          status: 'running',
+          steps: '[]',
+          version: '1.2.3',
+          first_admin: '{"email":"ada@example.com"}'
+        })
+        return [{ address: '10.0.0.5', family: 4 }]
+      },
+      fetchJson: serving('1.2.3')
+    })
+    expect(out).toBe('ok')
+    expect(await statusOf(id)).toBe('waiting_for_name')
+  })
+
+  it('markWaitingForName leaves a status it may not move from', async () => {
+    const id = await env('disabled')
+    await envCheck.markWaitingForName(id)
+    expect(await statusOf(id)).toBe('disabled')
+    await db('nivaro_hub_environments').where({ id }).update({ status: 'provisioning' })
+    await envCheck.markWaitingForName(id)
     expect(await statusOf(id)).toBe('waiting_for_name')
   })
 

@@ -27,7 +27,9 @@ const m543 = await import('../../../db/migrations/543_hub_promotions.js')
 const m544 = await import('../../../db/migrations/544_hub_databases.js')
 const m545 = await import('../../../db/migrations/545_hub_creations.js')
 const { gatherCreationFacts, hubUrlFrom } = await import('../../../services/hub/create/gather.js')
-const { buildCreationPlan } = await import('../../../services/hub/create/plan.js')
+const { buildCreationPlan, MAX_CREATE_ENVIRONMENTS } = await import(
+  '../../../services/hub/create/plan.js'
+)
 const { stackName } = await import('../../../services/hub/create/app-config.js')
 
 const OWNER = '6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b'
@@ -194,6 +196,15 @@ describe('gatherCreationFacts', () => {
     )
     expect(looks).toEqual([{ server: 'pg-auto', name: 'nivaro_demo_production' }])
     expect(f.serverHas).toEqual({ [`${autoId}:nivaro_demo_production`]: false })
+  })
+
+  it('probes at most MAX_CREATE_ENVIRONMENTS + 1 environments', async () => {
+    const many = Array.from({ length: 12 }, (_, n) => ({
+      key: `env${n}`,
+      database: { server_id: autoId }
+    }))
+    await gatherCreationFacts(input({ environments: many }), deps())
+    expect(looks).toHaveLength(MAX_CREATE_ENVIRONMENTS + 1)
   })
 
   it('a failing or hanging server look is unreachable', async () => {
