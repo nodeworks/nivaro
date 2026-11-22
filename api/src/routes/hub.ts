@@ -51,6 +51,7 @@ import {
   validatePlacementInput
 } from '../services/hub/drivers.js'
 import { GitlabWriteError } from '../services/hub/gitlab-write.js'
+import { tokenLookupHash } from '../services/hub/link-token.js'
 import { hubModeEnabled } from '../services/hub/mode.js'
 import { gatherPlanInput, PromotionError } from '../services/hub/promote-gather.js'
 import { buildPromotionPlan, compareVersions } from '../services/hub/promote-plan.js'
@@ -510,6 +511,7 @@ function environmentRoutes(app: FastifyInstance) {
         hostnames: '[]',
         ...patch,
         hub_token: token,
+        hub_token_lookup: token ? tokenLookupHash(String(incoming.token)) : null,
         created_at: now(),
         updated_at: now()
       })
@@ -564,6 +566,8 @@ function environmentRoutes(app: FastifyInstance) {
     return guarded(reply, async () => {
       // Absent keeps the stored token (nextSecret reads undefined as a clear).
       if (sent !== undefined) patch.hub_token = nextSecret(sent, storedToken)
+      if (sent !== undefined && sent !== HUB_MASK)
+        patch.hub_token_lookup = patch.hub_token ? tokenLookupHash(String(sent)) : null
       if (Object.keys(patch).length) {
         const before = current.placement_id == null ? null : Number(current.placement_id)
         await db.transaction(async (trx) => {
