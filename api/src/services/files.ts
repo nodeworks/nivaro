@@ -10,8 +10,10 @@ import { db } from '../db/index.js'
 import { concat } from '../db/sql-dialect.js'
 import { getTenantId, getTenantSlug } from '../db/tenant-context.js'
 import type { CMSFile, User } from '../types.js'
+import { tenantSource } from './deployment-mode.js'
 import { normalizeStoredType } from './file-serving-safety.js'
 import { PRIVATE_TAG } from './private-files.js'
+import { appScopedKey } from './storage/app-scope.js'
 import { getStorage, getStorageProviderName } from './storage/index.js'
 import { deleteStoredObject, getActiveStorageDriver, readStoredObject } from './storage-drivers.js'
 import { putStoredObjectFromFile } from './stored-object-stream.js'
@@ -62,8 +64,11 @@ async function reportFileEvent(
 
 /** Build the storage key for a new file. In cloud mode, prefixes with the tenant
  *  slug so each tenant's files live in their own key namespace within the shared
- *  bucket. Falls back gracefully to a flat key in self-hosted mode. */
-function buildDiskName(id: string, ext: string): string {
+ *  bucket. Falls back gracefully to a flat key in self-hosted mode. On a Hub shared
+ *  deployment the key is flat too: the storage scope keeps it under apps/<tenantId>/
+ *  (services/storage/app-scope.ts). */
+export function buildDiskName(id: string, ext: string): string {
+  if (tenantSource() === 'hub') return `${id}${ext}`
   // Use tenant UUID as prefix — immune to slug changes; new tenants never collide with old slugs
   const tenantId = getTenantId()
   if (tenantId) return `${tenantId}/files/${id}${ext}`
@@ -616,7 +621,21 @@ export async function reportFileBandwidth(file: StoredFile): Promise<void> {
   })
 }
 
-/** Local-disk path of a file (only meaningful for the local provider). */
+/** Local-disk path of a file (only meaningful for the local provider). On a Hub shared
+ *  deployment the path is resolved inside the current app's storage scope. */
 export function getFilePath(file: CMSFile): string {
+  if (tenantSource() === 'hub') {
+    const storage = getStorage() as StorageProviderWithPath
+    if (typeof storage.resolveKey === 'function')
+      return storage.resolveKey(file.filename_disk ?? '')
+    return join(
+      config.STORAGE_LOCAL_ROOT,
+      appScopedKey(file.filename_disk ?? '', getTenantId() ?? null)
+    )
+  }
   return join(config.STORAGE_LOCAL_ROOT, file.filename_disk ?? '')
+}
+
+type StorageProviderWithPath = ReturnType<typeof getStorage> & {
+  resolveKey?: (key: string) => string
 }

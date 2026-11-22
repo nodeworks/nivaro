@@ -23,6 +23,8 @@ import { createReadStream } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import { Readable } from 'node:stream'
 import { db } from '../db/index.js'
+import { getTenantId } from '../db/tenant-context.js'
+import { tenantSource } from './deployment-mode.js'
 import { readFallback } from './storage/fallback.js'
 import { readFallbackUrl } from './storage/fallback-url.js'
 import { getStorage } from './storage/index.js'
@@ -432,11 +434,17 @@ export function buildDriver(
   return envDriver()
 }
 
-let _cache: { fetched: number; driver: StorageDriver } | null = null
+// One cached driver per app on a Hub shared deployment (each app has its own settings row and
+// may name its own bucket); one for the process everywhere else ('' — the old single slot).
+const _cache = new Map<string, { fetched: number; driver: StorageDriver }>()
 const CACHE_TTL_MS = 60_000
 
+function driverCacheKey(): string {
+  return tenantSource() === 'hub' ? `app:${getTenantId() ?? ''}` : ''
+}
+
 export function bustStorageDriverCache(): void {
-  _cache = null
+  _cache.clear()
 }
 
 /** Read the configured driver + parsed config straight from settings (no cache). */
@@ -474,7 +482,9 @@ export async function readStorageSettings(): Promise<{
  * surfaced loudly.
  */
 export async function getActiveStorageDriver(): Promise<StorageDriver> {
-  if (_cache && Date.now() - _cache.fetched < CACHE_TTL_MS) return _cache.driver
+  const cacheKey = driverCacheKey()
+  const hit = _cache.get(cacheKey)
+  if (hit && Date.now() - hit.fetched < CACHE_TTL_MS) return hit.driver
   const { driver, config } = await readStorageSettings()
   let resolved: StorageDriver
   try {
@@ -486,7 +496,7 @@ export async function getActiveStorageDriver(): Promise<StorageDriver> {
   // getStorage(), so it is not wrapped twice; the Settings "Test connection" probe builds its
   // driver with buildDriver and is not counted.
   const timed = resolved.name === 'local' ? resolved : instrumentStorage(resolved, resolved.name)
-  _cache = { fetched: Date.now(), driver: timed }
+  _cache.set(cacheKey, { fetched: Date.now(), driver: timed })
   return timed
 }
 
