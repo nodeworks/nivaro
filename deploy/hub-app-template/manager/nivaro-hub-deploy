@@ -262,6 +262,10 @@ case "$VERB" in
     HUB_BOOT_MAINTENANCE=${HUB_BOOT_MAINTENANCE:-}
     case "$HUB_BOOT_MAINTENANCE" in '' | [1-9] | [1-9]*[0-9]) ;; *) refuse "HUB_BOOT_MAINTENANCE must be a move id" ;; esac
     case "$HUB_BOOT_MAINTENANCE" in *[!0-9]*) refuse "HUB_BOOT_MAINTENANCE must be a move id" ;; esac
+    # A stack file from before this setting would drop it silently: the app would boot writable.
+    if [ -n "$HUB_BOOT_MAINTENANCE" ] && ! grep -q 'HUB_BOOT_MAINTENANCE: \${HUB_BOOT_MAINTENANCE' "$STACK_FILE"; then
+      refuse "the stack file does not pass HUB_BOOT_MAINTENANCE: update the stack file on the manager"
+    fi
     export HUB_BOOT_MAINTENANCE
     WAIT_TRIES=${WAIT_TRIES:-40}
     case "$WAIT_TRIES" in '' | *[!0-9]*) refuse "WAIT_TRIES must be a number" ;; esac

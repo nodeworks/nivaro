@@ -595,6 +595,33 @@ describe('rolls back from every step before release', () => {
     ])
   })
 
+  it("R2-M-2: a rollback puts the environment's extension pins back", async () => {
+    plan = planOf('to_dedicated')
+    const w = await world('shared')
+    const OLD = JSON.stringify({ x: `r/x@sha256:${'1'.repeat(64)}` })
+    await db('nivaro_hub_environments').where({ id: w.envId }).update({ extension_pins: OLD })
+    let id = 0
+    // deployTarget installs the source's pins (as the real one does) and keeps the old ones.
+    fake.state.during = async (name) => {
+      if (name !== 'deployTarget') return
+      const m = await readMove(id)
+      const steps = { ...m?.steps, prev_extension_pins: OLD }
+      await db('nivaro_hub_moves')
+        .where({ id })
+        .update({ steps: JSON.stringify(steps) })
+      await db('nivaro_hub_environments')
+        .where({ id: w.envId })
+        .update({ extension_pins: JSON.stringify({ x: `r/x@sha256:${'2'.repeat(64)}` }) })
+    }
+    fake.state.failOn = (name) => name === 'targetReady'
+    const out = await start(w, toFor('to_dedicated', w))
+    id = out.move_id
+    await Run.awaitMove(id)
+    expect((await readMove(id))?.status).toBe('rolled_back')
+    const env = await db('nivaro_hub_environments').where({ id: w.envId }).first('extension_pins')
+    expect(env.extension_pins).toBe(OLD)
+  })
+
   it('a delta copy with failed rows rolls back (nothing is lost); missing ones do not', async () => {
     plan = planOf('to_shared')
     const w = await world('docker')
@@ -1147,6 +1174,63 @@ describe('heal and resume', () => {
     ).toBe(1)
     expect(await lock.held(w.envId)).toBe(true)
     await lock.release(w.envId, other)
+  })
+
+  it('R2-M-3: a converge longer than the stale window keeps the heartbeat fresh; another replica never heals it', async () => {
+    plan = planOf('to_dedicated')
+    const w = await world('shared')
+    useDeps({ renewMs: 10 })
+    let id = 0
+    let healedDuring = -1
+    fake.state.during = async (name) => {
+      if (name !== 'deployTarget') return
+      // A 6-minute converge (fake clock), the heartbeat timer ticking meanwhile.
+      for (let i = 0; i < 12; i++) {
+        t += 30_000
+        await new Promise((r) => setTimeout(r, 25))
+      }
+      // Seen from another replica (not this process's live set): the heartbeat is fresh.
+      unmarkMoveLive(id)
+      healedDuring = await healMoves({
+        now,
+        lock,
+        sharedLock: shLock,
+        failJobRun: async () => undefined
+      })
+      const { markMoveLive } = await import('../../../services/hub/move/heal.js')
+      markMoveLive(id)
+    }
+    const out = await start(w, toFor('to_dedicated', w))
+    id = out.move_id
+    await Run.awaitMove(id)
+    expect(healedDuring).toBe(0)
+    expect((await readMove(id))?.status).toBe('success')
+  })
+
+  it('R2-M-5: a Redis error on lock renewal counts as lost: the run stops (interrupted), never runs on', async () => {
+    plan = planOf('to_shared')
+    const w = await world('docker')
+    let redisDown = false
+    const flaky = {
+      ...memoryPromoteLock,
+      // The phase-2 renew treats a Redis blink as held; the move's strict renewal does not.
+      renewStrict: async (envId: number, token: string) =>
+        redisDown ? false : memoryPromoteLock.renew(envId, token)
+    }
+    useDeps({ lock: flaky as never, renewMs: 10 })
+    fake.state.busy = { imports: 1, exports: 0, renders: 0 }
+    fake.state.during = async (name) => {
+      if (name !== 'sourceBusy' || redisDown) return
+      redisDown = true
+      await new Promise((r) => setTimeout(r, 40))
+    }
+    const { move_id } = await start(w, toFor('to_shared', w))
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    expect(m?.status).toBe('interrupted')
+    expect(fake.names()).not.toContain('pullFiles:delta')
+    expect(fake.calls.filter((c) => c[0] === 'pullFiles')).toHaveLength(1)
+    expect(fake.names()).not.toContain('retireSource')
   })
 
   it('a fresh heartbeat is never healed', async () => {

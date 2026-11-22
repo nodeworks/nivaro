@@ -75,6 +75,8 @@ export interface MoveSteps {
     hub_managed: boolean
     version_pin: string | null
   }
+  /** R2-M-2: env.extension_pins before deploy_target replaced them (raw column text or null). */
+  prev_extension_pins?: string | null
   /** P6-22: after a rollback, no environment uses the dedicated target placement (it is kept). */
   target_placement_unused?: boolean
   /** Refusals the operator overrode at start (P6-20 #2: LINK_URL_NOT_PULLABLE). */
@@ -275,4 +277,9 @@ export async function restoreEnvRow(
     version_pin: prev.version_pin,
     updated_at: new Date()
   })
+}
+
+/** R2-M-2: puts the environment's extension pins back as they were before the target deploy. */
+export async function restoreExtensionPins(envId: number, raw: string | null): Promise<void> {
+  await db(ENVS).where({ id: envId }).update({ extension_pins: raw, updated_at: new Date() })
 }

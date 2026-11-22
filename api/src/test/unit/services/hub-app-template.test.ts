@@ -703,6 +703,25 @@ describe('manager/nivaro-hub-deploy (forced command)', () => {
     const r = forced(ok, `deploy ${STACK}`, deploySettings({ HUB_BOOT_MAINTENANCE: '7' }))
     expect(r.status, r.out).toBe(0)
     expect(ok.calls()).toMatch(/^deployed .* BOOT=7$/m)
+    // R2-M-1: a manager whose stack file does not pass it into the app refuses it (never a
+    // silent boot without maintenance).
+    const oldStack = read('manager/docker-stack.yml')
+      .split('\n')
+      .filter((l) => !l.includes('HUB_BOOT_MAINTENANCE'))
+      .join('\n')
+    const stale = manager({ secrets: ownSecrets(), stackFile: oldStack })
+    const r2 = forced(stale, `deploy ${STACK}`, deploySettings({ HUB_BOOT_MAINTENANCE: '7' }))
+    expect(r2.status).not.toBe(0)
+    expect(r2.out).toContain('the stack file does not pass HUB_BOOT_MAINTENANCE')
+    expect(dockerCalls(stale).join('\n')).not.toContain('stack deploy')
+    // Without the variable, an old stack file still deploys (promotions are unchanged).
+    expect(
+      forced(
+        manager({ secrets: ownSecrets(), stackFile: oldStack }),
+        `deploy ${STACK}`,
+        deploySettings()
+      ).status
+    ).toBe(0)
     for (const bad of ['0', 'abc', '7 8']) {
       const box = manager({ secrets: ownSecrets() })
       const b = forced(box, `deploy ${STACK}`, deploySettings({ HUB_BOOT_MAINTENANCE: bad }))

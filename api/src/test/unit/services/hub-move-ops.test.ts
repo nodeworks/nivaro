@@ -650,6 +650,10 @@ describe('deployTarget on Docker (R9: the target gets the app key, never a fresh
     })
     const env = await db('nivaro_hub_environments').where({ id: w.envId }).first('extension_pins')
     expect(JSON.parse(env.extension_pins)).toEqual({ x: SRC_PIN })
+    // R2-M-2: the pins it replaced are kept with the move for a rollback.
+    expect((await readMove(w.move.id))?.steps.prev_extension_pins).toBe(
+      JSON.stringify({ x: ENV_PIN })
+    )
   })
 
   it('stack settings holding another key → APP_KEY_MISMATCH, nothing applied', async () => {

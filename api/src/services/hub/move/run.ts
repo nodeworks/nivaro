@@ -608,10 +608,16 @@ async function drive(
 
   // Heartbeat: locks renewed, heartbeat_at written (move + mirror row) every renewMs.
   const beat = async () => {
-    const ok = await e.lock.renew(held.envId, held.envToken).catch(() => true)
+    // R2-M-5: a Redis error while renewing counts as a lost lock (strict renewal), never "held":
+    // the run stops at its next boundary (interrupted; heal frees the rest, a person rolls back).
+    const strictEnv = (envId: number, token: string) =>
+      e.lock.renewStrict ? e.lock.renewStrict(envId, token) : e.lock.renew(envId, token)
+    const strictShared = (id: number, token: string) =>
+      e.sharedLock.renewStrict ? e.sharedLock.renewStrict(id, token) : e.sharedLock.renew(id, token)
+    const ok = await strictEnv(held.envId, held.envToken).catch(() => false)
     let sharedOk = true
     for (const s of held.shared)
-      if (!(await e.sharedLock.renew(s.id, s.token).catch(() => true))) sharedOk = false
+      if (!(await strictShared(s.id, s.token).catch(() => false))) sharedOk = false
     if (!ok || !sharedOk) ctx.lockLost = true
     const at = new Date(e.now())
     // Review minor 2: a run another replica healed (its heartbeat looked stale) stops at its next
@@ -650,7 +656,16 @@ async function boundary(ctx: Ctx, allowCancel = true): Promise<void> {
   if (allowCancel && (await cancelAsked(ctx))) throw new Halt('cancel')
 }
 
+/**
+ * Writes the run's step list. Bookkeeping another writer added to the stored list meanwhile (the
+ * ops record prev_extension_pins, confirmRoute its time) is kept: a key the run's copy lacks is
+ * taken from the stored one.
+ */
 async function saveSteps(ctx: Ctx, steps: MoveSteps, extra: Partial<{ step: MoveStepKey }> = {}) {
+  const stored = (await readMove(ctx.moveId))?.steps
+  if (stored)
+    for (const [k, v] of Object.entries(stored))
+      if (k !== 'list' && !(k in steps)) (steps as unknown as Record<string, unknown>)[k] = v
   await patchMove(ctx.moveId, { steps, ...extra })
 }
 
