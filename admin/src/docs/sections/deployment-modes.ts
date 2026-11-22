@@ -248,13 +248,14 @@ export const deploymentModesDocs: DocSection = {
     { type: 'h2', id: 'deployment-modes-jobs', text: 'Per-app jobs and maintenance' },
     {
       type: 'p',
-      text: 'On a shared deployment (`perAppJobs()`), scheduled jobs are either per app or deployment-wide.'
+      text: 'A shared deployment (`perAppJobs()`) schedules the core jobs a self-hosted install does; Nivaro Cloud schedules none of them, as before. Each job is either per app or deployment-wide.'
     },
     {
       type: 'ul',
       items: [
         "App jobs read or write one app's database, files or people. The job fires once, and the fan-out runs it once for every active app, each run inside that app's tenant context, at most `TENANT_JOB_CONCURRENCY` apps at a time. One app failing or hanging never stops the others. Job-run rows land in that app's own database. An app in maintenance mode is skipped, and an app whose previous run is still going is skipped.",
-        'Process jobs sample or serve the process itself (traffic taps, sockets, pool, hosts, drainers) and run once with no tenant. Their scope is listed in `services/cron-scope.ts`; a test fails when a core job is missing from it.',
+        'Process jobs sample or serve the process itself (the connection pool, socket counts) and run once with no tenant. Their scope is listed in `services/cron-scope.ts`; a test fails when a core job is missing from it, and the boot log names any job registered without a scope.',
+        'Some core jobs only make sense self-hosted and are not registered on a shared deployment (`SELF_HOSTED_ONLY_CRONS` in `services/cron-scope.ts`, each with its reason): the restore drill, fault drills, Docker host and Traffic Map history jobs, huddle crons, the import drainer, the outside-write watch, live SLA flips, the cumulative-flow rollup, and three storage jobs (file cleanup, the storage snapshot, session recording tiering) because local storage is not keyed per app yet. The boot log line `[cron] shared deployment` counts app jobs, process jobs and the ones left out.',
         "Extension jobs default to `app`. An extension job that serves the process passes `scope: 'process'` in `ctx.cron.schedule(id, expression, fn, { scope })`. The option is ignored in cloud and self-hosted, so existing extensions need no change.",
         "An app admin can pause and resume a job for their own app only. The pause is that app's own `paused_crons` setting; the process-wide paused set is never touched. Pausing a process-scoped job answers 409.",
         "Schedules, time zones, chains and overrides are deployment-wide: `PATCH /api/cron/:id` and the revert route answer 409 `SCHEDULE_IS_DEPLOYMENT_WIDE`, and an app's `sla_timezone` does not move the cron zone.",
@@ -278,7 +279,7 @@ export const deploymentModesDocs: DocSection = {
         "Boot-time work against a database: hook registration per app, flow loading per app, extension allow-list per app, default workspace row on demand, and migrations. Boot never migrates an app's database; each app database must already be migrated and carry its default workspace.",
         'Config epochs per tenant (`CACHE_EPOCH`).',
         'DB-defined row schedules (retention policies, scheduled reports, sync jobs, scheduled flows): per-app hydration is missing.',
-        'Per-app passes that still run as process work: log retention, SLA flips, mail retry, the daily-digest audiences, huddle crons.',
+        'Boot passes against a database, which do not run on a shared deployment: the daily retention purge (activity, revisions, logs), row-schedule hydration, the boot cache and readiness warms, the restart-impact sweep of interrupted job runs, and the REST changelog. Also the self-hosted-only jobs above.',
         'GitLab issue sync (connections, webhook to app, app-scoped crons).',
         'The flow `exec-script` operation (needs a per-app sandbox).',
         'Phone app sign-in, phone push and the MCP/OAuth issuer: a shared deployment gives the self-hosted admin origin for every app, so these need a per-app origin first.',

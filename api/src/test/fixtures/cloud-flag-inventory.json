@@ -1303,9 +1303,9 @@
       "weight": 1,
       "meaning": "multiTenant",
       "rule": "T1",
-      "why": "crons registered against the static DB (file cleanup, queue snapshots, staged imports, trackers)",
+      "why": "core jobs (file cleanup, queue snapshots, staged imports, trackers) registered self-hosted; also on a Hub shared deployment (`|| perAppJobs()`, P5-9), never in Nivaro Cloud",
       "batch": "A",
-      "phase6": "app-scoped jobs via Task 10 fan-out"
+      "phase6": "the self-hosted-only jobs of services/cron-scope.ts SELF_HOSTED_ONLY_CRONS (file-cleanup, staged-imports) need per-app storage keys / drainers"
     },
     {
       "id": "server.ts:951",
@@ -1341,9 +1341,9 @@
       "weight": 1,
       "meaning": "multiTenant",
       "rule": "T1",
-      "why": "daily retention purge on the static DB",
+      "why": "onReady hook registering ~115 core jobs plus static-DB boot passes; also on a Hub shared deployment (`|| perAppJobs()`, P5-9, jobs fan out by scope), never in Nivaro Cloud",
       "batch": "A",
-      "phase6": "per-app retention pass via job fan-out"
+      "phase6": "per-app boot passes (retention purge, row schedules, warms, restart impact, paused-set hydrate), which stay self-hosted only (`!multiTenant` inside the hook)"
     },
     {
       "id": "services/ai-explain-weekly.ts:210",

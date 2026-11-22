@@ -159,16 +159,65 @@ export const CORE_CRON_SCOPES: Record<string, CronScope> = {
   'flow:*': 'app'
 }
 
+/**
+ * Core jobs a shared deployment never registers (Hub phase 5, ruling P5-9), with the reason.
+ * Each one reaches something that is not one app's and has no per-app form yet: the host, the
+ * process's own operator stores, or storage that is not keyed per app. Its own code already
+ * refuses on a multi-tenant process, or running it once per app would be wrong. Self-hosted
+ * and Nivaro Cloud register them exactly as before (cloud registers none of the server.ts jobs).
+ * Every id here is also in CORE_CRON_SCOPES.
+ */
+export const SELF_HOSTED_ONLY_CRONS: Record<string, string> = {
+  'restore-drill': 'restores the server backup into a scratch database; refused on multi-tenant',
+  'chaos-gamedays': 'fault drills: the chaos gate refuses every multi-tenant process',
+  'chaos-monkey': 'fault drills: the chaos gate refuses every multi-tenant process',
+  'chaos-test-overlap': 'the chaos lease-split drill job; the chaos gate refuses multi-tenant',
+  'infra-drift-check': 'Docker stack drift of the host; operator infrastructure',
+  'infra-health-sample': 'Docker host health samples; operator infrastructure',
+  'traffic-map-snapshots': 'Traffic Map store is the process’s own; refused on multi-tenant',
+  'traffic-minutes-write': 'Traffic Map minute history: no deployment store yet',
+  'traffic-minutes-prune': 'Traffic Map minute history: no deployment store yet',
+  'traffic-baselines-rollup': 'Traffic Map baselines: no deployment store yet',
+  'huddle-turn-probe': 'huddle crons are off on multi-tenant (operator TURN hosts)',
+  'huddle-sessions-sweep': 'huddle crons are off on multi-tenant',
+  'huddle-sessions-prune': 'huddle crons are off on multi-tenant',
+  'staged-imports': 'the import hand-off drainer is off on multi-tenant',
+  'outside-write-watch': 'returns at once on multi-tenant (process-local change tracking)',
+  'sla-live-flips': 'returns at once on multi-tenant (process-local live collections)',
+  'cumulative-flow-rollup': 'returns at once on multi-tenant',
+  'file-cleanup':
+    "lists the deployment's whole transforms/ prefix and judges it by one app's files: it would delete other apps' cached transforms",
+  'storage-snapshot': "walks the deployment's whole upload folder, not one app's files",
+  'session-replay-tiering':
+    'cold recording keys are not keyed per app, so two apps could write one key'
+}
+
+/** Whether a shared deployment leaves this core job out (SELF_HOSTED_ONLY_CRONS). */
+export function selfHostedOnlyCron(id: string): boolean {
+  return Object.hasOwn(SELF_HOSTED_ONLY_CRONS, id)
+}
+
+/** The scope a job declares: the core map (exact id, then a `*` prefix), else its own `scope`,
+ *  else 'app' for an extension job (Decision 10: an extension job reads its app's data unless
+ *  it says otherwise), else null: a job that says nothing. */
+export function explicitCronScope(
+  id: string,
+  opts?: { scope?: CronScope; extensionId?: string }
+): CronScope | null {
+  const own = CORE_CRON_SCOPES[id]
+  if (own) return own
+  for (const [key, scope] of Object.entries(CORE_CRON_SCOPES)) {
+    if (key.endsWith('*') && id.startsWith(key.slice(0, -1))) return scope
+  }
+  if (opts?.scope) return opts.scope
+  return opts?.extensionId ? 'app' : null
+}
+
 /** The scope one job runs in on a shared deployment: the core map, else the job's own
  *  `scope`, else 'app' (an extension job reads its app's data unless it says otherwise). */
 export function cronScope(
   id: string,
   opts?: { scope?: CronScope; extensionId?: string }
 ): CronScope {
-  const own = CORE_CRON_SCOPES[id]
-  if (own) return own
-  for (const [key, scope] of Object.entries(CORE_CRON_SCOPES)) {
-    if (key.endsWith('*') && id.startsWith(key.slice(0, -1))) return scope
-  }
-  return opts?.scope ?? 'app'
+  return explicitCronScope(id, opts) ?? 'app'
 }

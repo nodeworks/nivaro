@@ -145,6 +145,11 @@ export async function cronRoutes(app: FastifyInstance) {
       if (!app.cron.list().some((j) => j.id === id)) {
         return reply.code(404).send({ error: 'No scheduled job with that id' })
       }
+      // Hub phase 5 (P5-7) — a job that runs once for the whole shared deployment is not one
+      // app's to run, like pausing it.
+      if (perAppJobs() && app.cron.jobScope(id) === 'process') {
+        return reply.code(409).send(DEPLOYMENT_WIDE)
+      }
       const t0 = Date.now()
       try {
         const r = await app.cron.dryRun(id)
@@ -331,6 +336,11 @@ export async function cronRoutes(app: FastifyInstance) {
       const { id } = req.params
       const known = app.cron.list().some((j) => j.id === id)
       if (!known) return reply.code(404).send({ error: 'No scheduled job with that id' })
+      // Hub phase 5 (P5-7) — run now of a deployment-wide ('process') job from an app would run
+      // it in that app's context: refused like pausing it. An app job runs for the caller's app.
+      if (perAppJobs() && app.cron.jobScope(id) === 'process') {
+        return reply.code(409).send(DEPLOYMENT_WIDE)
+      }
 
       const startedAt = Date.now()
       try {

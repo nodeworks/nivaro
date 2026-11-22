@@ -18,7 +18,12 @@ import { newChainId, startChain } from '../services/chain.js'
 import { appDate } from '../services/chaos/clock.js'
 import { chaosPoint } from '../services/chaos/registry.js'
 import { runWithCronProgress } from '../services/cron-progress.js'
-import { type CronScope, cronScope } from '../services/cron-scope.js'
+import {
+  type CronScope,
+  cronScope,
+  explicitCronScope,
+  selfHostedOnlyCron
+} from '../services/cron-scope.js'
 import { cronTicksEnabled } from '../services/cron-ticks.js'
 import { perAppJobs } from '../services/deployment-mode.js'
 import { INSTANCE_ID } from '../services/instance-roster.js'
@@ -589,6 +594,10 @@ export class CronManager {
   private lastProgress = new Map<string, number>()
   /** Paused cron ids (#198) — hydrated from settings at boot, edited via /cron routes. */
   private pausedIds = new Set<string>()
+  /** Hub phase 5 (P5-9) — on a shared deployment: core jobs left out as self-hosted only, and
+   *  jobs registered without a scope of their own (they run per app, the default). */
+  private sharedLeftOut = new Set<string>()
+  private sharedUnscoped = new Set<string>()
   /** Schedule overrides (cron id → expression) — hydrated from settings BEFORE
    *  extensions register, so a job scheduled later still gets its override. */
   private overrides = new Map<string, string>()
@@ -938,6 +947,17 @@ export class CronManager {
   }
 
   schedule(id: string, expression: string, fn: CronFn, opts?: ScheduleOpts): void {
+    // Hub phase 5 (P5-9) — a shared deployment leaves out the core jobs that only make sense
+    // self-hosted (services/cron-scope.ts SELF_HOSTED_ONLY_CRONS), and notes a job that declares
+    // no scope. Self-hosted and cloud register every job exactly as before.
+    if (perAppJobs()) {
+      if (selfHostedOnlyCron(id)) {
+        this.sharedLeftOut.add(id)
+        return
+      }
+      if (explicitCronScope(id, opts) === null) this.sharedUnscoped.add(id)
+      else this.sharedUnscoped.delete(id)
+    }
     // Replace any existing job with the same id
     this.unschedule(id)
 
@@ -1489,6 +1509,28 @@ export class CronManager {
     return this.list().filter(
       (j) => !j.paused && !j.after && !this.skipsMissCheck(j.id) && !appSet?.has(j.id)
     )
+  }
+
+  /**
+   * Hub phase 5 (P5-9) — the registered jobs of a shared deployment by scope, the core jobs it
+   * left out as self-hosted only, and the jobs that declared no scope (they run per app; the boot
+   * log names them and a guard test keeps core free of them). Empty lists off a shared deployment.
+   */
+  sharedRoster(): { app: string[]; process: string[]; leftOut: string[]; unscoped: string[] } {
+    if (!perAppJobs()) return { app: [], process: [], leftOut: [], unscoped: [] }
+    const app: string[] = []
+    const proc: string[] = []
+    for (const e of this.entries.values()) {
+      if (cronScope(e.id, e.scheduleOpts) === 'process') proc.push(e.id)
+      else app.push(e.id)
+    }
+    const live = (s: Set<string>) => [...s].filter((id) => this.entries.has(id))
+    return {
+      app,
+      process: proc,
+      leftOut: [...this.sharedLeftOut],
+      unscoped: live(this.sharedUnscoped)
+    }
   }
 
   /** Hub phase 5 — whether `id` runs once per app ('app') or once per process ('process'). */

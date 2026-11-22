@@ -69,7 +69,12 @@ import {
   requestDbFailure,
   sendDbUnavailable
 } from './services/db-outage.js'
-import { isMultiTenant, isNivaroCloud, tenantSource } from './services/deployment-mode.js'
+import {
+  isMultiTenant,
+  isNivaroCloud,
+  perAppJobs,
+  tenantSource
+} from './services/deployment-mode.js'
 import { enrichErrorPayload, noteDbRefusal } from './services/error-enrich.js'
 import { logRouteError } from './services/error-log-level.js'
 import { stableIssueKey, trackError } from './services/error-tracking.js'
@@ -670,7 +675,11 @@ export async function buildServer() {
   } catch {
     /* column mid-migration or unparseable — no chains */
   }
-  if (!isMultiTenant()) {
+  // Core jobs: self-hosted, and a Hub shared deployment, where each job runs once per app or once
+  // for the deployment by its scope (services/cron-scope.ts; Hub phase 5, P5-9). Nivaro Cloud
+  // registers none of them. The ones that only make sense self-hosted (file-cleanup's orphan
+  // sweep, the import drainer…) are left out on a shared deployment by the manager itself.
+  if (!isMultiTenant() || perAppJobs()) {
     registerFileCleanup(app.cron)
     // digest-daily/weekly crons retired 2026-09-10 — the notification digest
     // rides the daily action summary (services/daily-digest.ts).
@@ -1036,27 +1045,35 @@ export async function buildServer() {
     readinessWarmTimer = null
   })
 
-  // ─── Daily retention purge (self-hosted only) ─────────────────────────────
-  // In cloud mode, retention runs per-tenant via the provisioning system.
-  if (!isMultiTenant())
+  // ─── Core scheduled jobs + boot passes (self-hosted, and Hub shared deployments) ──
+  // Nivaro Cloud registers none of these (retention runs per tenant via its provisioning
+  // system). A Hub shared deployment registers the jobs — each one fans out once per app or runs
+  // once for the deployment by its scope (services/cron-scope.ts; Hub phase 5, P5-9) — but not
+  // the boot passes against the static database, which stay self-hosted only (`!multiTenant`).
+  if (!isMultiTenant() || perAppJobs())
     app.addHook('onReady', async () => {
+      // A Hub shared deployment has no static database: boot passes that read or write one
+      // (retention, row schedules, warms, restart impact…) run self-hosted only. Per-app boot
+      // passes are phase 6.
+      const multiTenant = isMultiTenant()
       // Admin links (replay button, task/approval notifications, record_url
       // fallbacks) all resolve through adminBaseUrl(). When that answer IS the
       // registered portal, every such link lands on the headless frontend's
       // router instead of the admin page — say so once at boot, since no env
       // rule can tell a genuine admin host from a mis-pointed ADMIN_URL.
-      void import('./services/app-links.js')
-        .then(async ({ portalRegistration }) => {
-          const { adminBaseUrl } = await import('./admin-base.js')
-          const portal = (await portalRegistration())?.base?.replace(/\/$/, '')
-          const admin = adminBaseUrl()
-          if (portal && admin && portal === admin)
-            app.log.warn(
-              { admin_url: admin, portal_url: portal },
-              'adminBaseUrl() resolves to the registered portal — set ADMIN_URL to the host that serves the admin build or admin links will open the portal'
-            )
-        })
-        .catch(() => {})
+      if (!multiTenant)
+        void import('./services/app-links.js')
+          .then(async ({ portalRegistration }) => {
+            const { adminBaseUrl } = await import('./admin-base.js')
+            const portal = (await portalRegistration())?.base?.replace(/\/$/, '')
+            const admin = adminBaseUrl()
+            if (portal && admin && portal === admin)
+              app.log.warn(
+                { admin_url: admin, portal_url: portal },
+                'adminBaseUrl() resolves to the registered portal — set ADMIN_URL to the host that serves the admin build or admin links will open the portal'
+              )
+          })
+          .catch(() => {})
 
       async function runRetentionPurge() {
         const { noteRetentionPassStarted, noteRetentionPassScheduled, noteRetentionPassResult } =
@@ -1188,8 +1205,9 @@ export async function buildServer() {
         noteRetentionPassScheduled(new Date(Date.now() + 24 * 60 * 60 * 1000))
         setTimeout(() => void runInBackgroundPool(runRetentionPurge), 24 * 60 * 60 * 1000)
       }
-      // Bookkeeping, not a request: its deletes borrow the background pool (#1321).
-      void runInBackgroundPool(runRetentionPurge)
+      // Bookkeeping, not a request: its deletes borrow the background pool (#1321). Self-hosted
+      // only: a per-app retention pass is phase 6.
+      if (!multiTenant) void runInBackgroundPool(runRetentionPurge)
 
       // ── Tamper-evident activity trail (#16) ──
       // Sealer: chains new (and, in capped batches, existing) activity rows; never on the
@@ -1232,13 +1250,15 @@ export async function buildServer() {
       // ── Schedules that live in rows: retention policies, scheduled reports ──
       // Registered here at boot and again whenever a row changes (the routes
       // and the schedules epoch call the same reconcile).
-      void import('./services/row-schedules.js').then(async (m) => {
-        await m.resyncSchedules(app, 'retention')
-        await m.resyncSchedules(app, 'scheduled-reports')
-        // #11 — saved audit views with a schedule (the module registers its resync on import).
-        await import('./services/activity-views.js')
-        await m.resyncSchedules(app, 'activity-views')
-      })
+      // Off on every multi-tenant process (Decision 12: per-app hydration is phase 6).
+      if (!multiTenant)
+        void import('./services/row-schedules.js').then(async (m) => {
+          await m.resyncSchedules(app, 'retention')
+          await m.resyncSchedules(app, 'scheduled-reports')
+          // #11 — saved audit views with a schedule (the module registers its resync on import).
+          await import('./services/activity-views.js')
+          await m.resyncSchedules(app, 'activity-views')
+        })
 
       // ── Report Studio — hourly alert checks + daily/weekly subscription mail ──
       // Auto-transition sweep: date-based transition conditions (within_days etc.)
@@ -1470,12 +1490,13 @@ export async function buildServer() {
       )
       // Every process clears its own stale render scratch; only a process
       // that owns the render queue (ticks crons or VIDEO_RENDER=on) drains it.
-      void import('./services/help-video-render.js')
-        .then((m) => {
-          void m.cleanRenderScratch()
-          m.kickRenderer()
-        })
-        .catch(() => {})
+      if (!multiTenant)
+        void import('./services/help-video-render.js')
+          .then((m) => {
+            void m.cleanRenderScratch()
+            m.kickRenderer()
+          })
+          .catch(() => {})
 
       // Config health: nightly usage-hygiene + schema-lint sweep.
       // Help videos (#1495): flag published videos whose screen changed since
@@ -1808,11 +1829,12 @@ export async function buildServer() {
 
       // Post-deploy smoke (#299): a version change gets one health verdict at
       // minute one instead of waiting for the first user report.
-      setTimeout(() => {
-        void import('./services/maintenance-windows.js').then(({ postDeploySmoke }) =>
-          postDeploySmoke(app)
-        )
-      }, 60_000)
+      if (!multiTenant)
+        setTimeout(() => {
+          void import('./services/maintenance-windows.js').then(({ postDeploySmoke }) =>
+            postDeploySmoke(app)
+          )
+        }, 60_000)
 
       // Session replay storage tiering (#1411): recordings older than
       // replay_cold_after_days move to the storage driver as one object each;
@@ -2485,68 +2507,71 @@ export async function buildServer() {
       // instead of paying the ~6s compile. Best-effort, never awaited.
       // Owner groups for every bound template (#481): the first queue read
       // after a deploy used to fetch ~1.9MB of group filters cold (~3s).
-      void bootPhase(
-        'Warm owner groups',
-        async () => {
-          const m = await import('./services/pipeline-engine.js')
-          const n = await m.warmOwnerGroupCache()
-          app.log.info(`owners: warmed owner groups for ${n} state(s)`)
-        },
-        { background: true }
-      ).catch(() => {})
-      void bootPhase(
-        'Warm integrity checks',
-        async () => {
-          const m = await import('./services/config-conformance.js')
-          const n = await m.warmCompiledChecks()
-          app.log.info(`integrity: warmed checks for ${n} collection(s)`)
-        },
-        { background: true }
-      ).catch(() => {})
-      // #2445 — query caches and the buffer pool behind them, once per cluster
-      // per version (nvr:warm:<version>), a while after listen so it never
-      // competes with the boot's first requests. Never a readiness check.
-      // Metadata warms on every process. The query warm holds the cluster's
-      // heavy-job slot, like the 06:30 cron.
-      cacheWarmTimer = setTimeout(() => {
-        cacheWarmTimer = null
-        void import('./services/cache-warm.js')
-          .then(async (m) => {
-            if (!m.cacheWarmAllowed()) return
-            await bootPhase('Warm metadata', () => m.warmMetadata(), { background: true })
-            const { NIVARO_VERSION } = await import('./version.js')
-            const { INSTANCE_ID } = await import('./services/instance-roster.js')
-            if (!(await m.takeBootWarm(app.redis, NIVARO_VERSION, INSTANCE_ID))) return
-            await app.cron.withHeavySlot('cache-warm (boot)', async () => {
-              await bootPhase(
-                'Warm query caches',
-                () =>
-                  m.runCacheWarm({
-                    redis: app.redis,
-                    log: (summary, line) => app.log.info(summary, line)
-                  }),
-                { background: true }
-              )
+      // Boot warms read the static database: self-hosted only (per-app warms are phase 6).
+      if (!multiTenant) {
+        void bootPhase(
+          'Warm owner groups',
+          async () => {
+            const m = await import('./services/pipeline-engine.js')
+            const n = await m.warmOwnerGroupCache()
+            app.log.info(`owners: warmed owner groups for ${n} state(s)`)
+          },
+          { background: true }
+        ).catch(() => {})
+        void bootPhase(
+          'Warm integrity checks',
+          async () => {
+            const m = await import('./services/config-conformance.js')
+            const n = await m.warmCompiledChecks()
+            app.log.info(`integrity: warmed checks for ${n} collection(s)`)
+          },
+          { background: true }
+        ).catch(() => {})
+        // #2445 — query caches and the buffer pool behind them, once per cluster
+        // per version (nvr:warm:<version>), a while after listen so it never
+        // competes with the boot's first requests. Never a readiness check.
+        // Metadata warms on every process. The query warm holds the cluster's
+        // heavy-job slot, like the 06:30 cron.
+        cacheWarmTimer = setTimeout(() => {
+          cacheWarmTimer = null
+          void import('./services/cache-warm.js')
+            .then(async (m) => {
+              if (!m.cacheWarmAllowed()) return
+              await bootPhase('Warm metadata', () => m.warmMetadata(), { background: true })
+              const { NIVARO_VERSION } = await import('./version.js')
+              const { INSTANCE_ID } = await import('./services/instance-roster.js')
+              if (!(await m.takeBootWarm(app.redis, NIVARO_VERSION, INSTANCE_ID))) return
+              await app.cron.withHeavySlot('cache-warm (boot)', async () => {
+                await bootPhase(
+                  'Warm query caches',
+                  () =>
+                    m.runCacheWarm({
+                      redis: app.redis,
+                      log: (summary, line) => app.log.info(summary, line)
+                    }),
+                  { background: true }
+                )
+              })
             })
-          })
-          .catch((err) => app.log.warn({ err }, 'cache warm failed'))
-      }, 20_000)
-      cacheWarmTimer.unref()
-      // Readiness results for this version (the cache is keyed by version, so
-      // a deploy starts empty): evaluate them once, on one replica, so the
-      // first dashboard reads a scorecard instead of 'pending'. Same switch as
-      // the cache warm — dev never runs the heavy checks unprompted.
-      readinessWarmTimer = setTimeout(() => {
-        readinessWarmTimer = null
-        void (async () => {
-          const { cacheWarmAllowed } = await import('./services/cache-warm.js')
-          if (!cacheWarmAllowed()) return
-          const { warmReadiness } = await import('./services/readiness.js')
-          const n = await warmReadiness()
-          if (n > 0) app.log.info(`readiness: evaluated ${n} check(s) for this version`)
-        })().catch((err) => app.log.warn({ err }, 'readiness warm failed'))
-      }, 15_000)
-      readinessWarmTimer.unref()
+            .catch((err) => app.log.warn({ err }, 'cache warm failed'))
+        }, 20_000)
+        cacheWarmTimer.unref()
+        // Readiness results for this version (the cache is keyed by version, so
+        // a deploy starts empty): evaluate them once, on one replica, so the
+        // first dashboard reads a scorecard instead of 'pending'. Same switch as
+        // the cache warm — dev never runs the heavy checks unprompted.
+        readinessWarmTimer = setTimeout(() => {
+          readinessWarmTimer = null
+          void (async () => {
+            const { cacheWarmAllowed } = await import('./services/cache-warm.js')
+            if (!cacheWarmAllowed()) return
+            const { warmReadiness } = await import('./services/readiness.js')
+            const n = await warmReadiness()
+            if (n > 0) app.log.info(`readiness: evaluated ${n} check(s) for this version`)
+          })().catch((err) => app.log.warn({ err }, 'readiness warm failed'))
+        }, 15_000)
+        readinessWarmTimer.unref()
+      }
 
       // Nightly config-conformance runs for scheduled collections, with a
       // regression note when a collection's issue count grew since last run.
@@ -2836,18 +2861,20 @@ export async function buildServer() {
       // Registered always; the run returns at once while db_tuning.enabled is off. A killed
       // proof leaves its `<proc>__tune_<hex>` twin behind, so boot sweeps the ones older than any
       // live proof — fire-and-forget: the sweep must never fail or hold up boot.
-      void Promise.all([
-        import('./services/db-tuning/twin.js'),
-        import('./services/db-tuning/settings.js')
-      ])
-        .then(async ([{ sweepTwinLeftovers }, { readTuningSettings }]) =>
-          sweepTwinLeftovers((await readTuningSettings()).proc_timeout_minutes)
-        )
-        .then((dropped) => {
-          if (dropped.length)
-            app.log.warn(`db-tuning: dropped leftover twin procedure(s) ${dropped.join(', ')}`)
-        })
-        .catch((err) => app.log.warn({ err }, 'db-tuning: twin sweep failed'))
+      if (!multiTenant) {
+        void Promise.all([
+          import('./services/db-tuning/twin.js'),
+          import('./services/db-tuning/settings.js')
+        ])
+          .then(async ([{ sweepTwinLeftovers }, { readTuningSettings }]) =>
+            sweepTwinLeftovers((await readTuningSettings()).proc_timeout_minutes)
+          )
+          .then((dropped) => {
+            if (dropped.length)
+              app.log.warn(`db-tuning: dropped leftover twin procedure(s) ${dropped.join(', ')}`)
+          })
+          .catch((err) => app.log.warn({ err }, 'db-tuning: twin sweep failed'))
+      }
       app.cron.schedule(
         'db-tuning-observe',
         '35 3 * * *',
@@ -3259,13 +3286,15 @@ export async function buildServer() {
 
       // REST API changelog (#315): record this release's route inventory and
       // diff against the previous release (removed routes = breaking).
-      setTimeout(() => {
-        void (async () => {
-          const { recordRestRoutes } = await import('./services/api-changelog.js')
-          const { NIVARO_VERSION } = await import('./version.js')
-          await recordRestRoutes(NIVARO_VERSION, collectedRoutes)
-        })()
-      }, 10_000)
+      if (!multiTenant) {
+        setTimeout(() => {
+          void (async () => {
+            const { recordRestRoutes } = await import('./services/api-changelog.js')
+            const { NIVARO_VERSION } = await import('./version.js')
+            await recordRestRoutes(NIVARO_VERSION, collectedRoutes)
+          })()
+        }, 10_000)
+      }
 
       // Missed-cron catch-up (#328): the idempotent nightly detectors run once
       // now if a restart straddled their window. Deliberately NOT flagged:
@@ -3326,89 +3355,110 @@ export async function buildServer() {
         app.cron.annotate(id, { description })
       }
 
-      // #198 — hydrate the paused set from settings so pauses survive restarts.
-      try {
-        const row = (await db('nivaro_settings').orderBy('id', 'asc').first('paused_crons')) as
-          | { paused_crons?: string | null }
-          | undefined
-        if (row?.paused_crons) {
-          const ids = JSON.parse(row.paused_crons)
-          if (Array.isArray(ids)) app.cron.setPaused(ids.map(String))
+      // Static-database boot passes: self-hosted only. On a shared deployment each app's pauses
+      // are its own settings (app-job-settings.ts); restart impact per app is phase 6.
+      if (!multiTenant) {
+        // #198 — hydrate the paused set from settings so pauses survive restarts.
+        try {
+          const row = (await db('nivaro_settings').orderBy('id', 'asc').first('paused_crons')) as
+            | { paused_crons?: string | null }
+            | undefined
+          if (row?.paused_crons) {
+            const ids = JSON.parse(row.paused_crons)
+            if (Array.isArray(ids)) app.cron.setPaused(ids.map(String))
+          }
+        } catch {
+          /* column mid-migration — nothing paused */
         }
-      } catch {
-        /* column mid-migration — nothing paused */
-      }
 
-      // Restart impact report (#292): job runs still marked 'running' from
-      // BEFORE this boot were killed by the restart — mark them interrupted
-      // and raise one summary issue with the names.
-      try {
-        const bootTime = new Date(Date.now() - process.uptime() * 1000)
-        // #1051 — only runs of THIS deployment slot whose process is no longer in the roster.
-        // The dev laptop shares its database with staging: unscoped, every laptop boot marked
-        // staging's in-flight runs interrupted. Rows from before migration 388 carry no
-        // instance: only a ticking (deployed) process sweeps those, never a dev laptop.
-        const { hasColumn } = await import('./lib/column-probe.js')
-        const { listInstances } = await import('./services/instance-roster.js')
-        const { instanceKey } = await import('./services/instance-key.js')
-        const { cronTicksEnabled } = await import('./services/cron-ticks.js')
-        const { skipHandedOffExports } = await import('./services/job-run-sweeps.js')
-        const scoped = await hasColumn('nivaro_job_runs', 'instance_id').catch(() => false)
-        const live = scoped ? (await listInstances()).map((i) => String(i.id)).filter(Boolean) : []
-        const sweepsLegacy = cronTicksEnabled()
-        const stranded = (await db('nivaro_job_runs')
-          .where('status', 'running')
-          .where('started_at', '<', bootTime)
-          .modify((q) => {
-            if (!scoped) return
-            q.where((w) => {
-              w.where((o) => {
-                o.where('instance', instanceKey())
-                if (live.length) o.whereNotIn('instance_id', live)
+        // Restart impact report (#292): job runs still marked 'running' from
+        // BEFORE this boot were killed by the restart — mark them interrupted
+        // and raise one summary issue with the names.
+        try {
+          const bootTime = new Date(Date.now() - process.uptime() * 1000)
+          // #1051 — only runs of THIS deployment slot whose process is no longer in the roster.
+          // The dev laptop shares its database with staging: unscoped, every laptop boot marked
+          // staging's in-flight runs interrupted. Rows from before migration 388 carry no
+          // instance: only a ticking (deployed) process sweeps those, never a dev laptop.
+          const { hasColumn } = await import('./lib/column-probe.js')
+          const { listInstances } = await import('./services/instance-roster.js')
+          const { instanceKey } = await import('./services/instance-key.js')
+          const { cronTicksEnabled } = await import('./services/cron-ticks.js')
+          const { skipHandedOffExports } = await import('./services/job-run-sweeps.js')
+          const scoped = await hasColumn('nivaro_job_runs', 'instance_id').catch(() => false)
+          const live = scoped
+            ? (await listInstances()).map((i) => String(i.id)).filter(Boolean)
+            : []
+          const sweepsLegacy = cronTicksEnabled()
+          const stranded = (await db('nivaro_job_runs')
+            .where('status', 'running')
+            .where('started_at', '<', bootTime)
+            .modify((q) => {
+              if (!scoped) return
+              q.where((w) => {
+                w.where((o) => {
+                  o.where('instance', instanceKey())
+                  if (live.length) o.whereNotIn('instance_id', live)
+                })
+                if (sweepsLegacy) w.orWhereNull('instance')
               })
-              if (sweepsLegacy) w.orWhereNull('instance')
+              // Background exports handed to a drainer: the drainer judges them (lost leases),
+              // never the process that started them (services/job-run-sweeps.ts).
+              skipHandedOffExports(q)
             })
-            // Background exports handed to a drainer: the drainer judges them (lost leases),
-            // never the process that started them (services/job-run-sweeps.ts).
-            skipHandedOffExports(q)
-          })
-          .limit(50)
-          .select('id', 'kind', 'job_id')) as Array<{ id: number; kind: string; job_id: string }>
-        if (stranded.length > 0) {
-          await db('nivaro_job_runs')
-            .whereIn(
-              'id',
-              stranded.map((r) => r.id)
+            .limit(50)
+            .select('id', 'kind', 'job_id')) as Array<{ id: number; kind: string; job_id: string }>
+          if (stranded.length > 0) {
+            await db('nivaro_job_runs')
+              .whereIn(
+                'id',
+                stranded.map((r) => r.id)
+              )
+              .update({ status: 'interrupted', finished_at: new Date() })
+            const { trackError } = await import('./services/error-tracking.js')
+            const { restartImpactIssue } = await import('./services/system-issues.js')
+            await trackError(
+              restartImpactIssue(
+                stranded.map((r) => r.job_id),
+                stranded.length
+              )
             )
-            .update({ status: 'interrupted', finished_at: new Date() })
-          const { trackError } = await import('./services/error-tracking.js')
-          const { restartImpactIssue } = await import('./services/system-issues.js')
-          await trackError(
-            restartImpactIssue(
-              stranded.map((r) => r.job_id),
-              stranded.length
-            )
-          )
+          }
+        } catch {
+          /* job-runs table shape mid-migration — skip */
         }
-      } catch {
-        /* job-runs table shape mid-migration — skip */
+
+        // Same for Data Integrity sweeps: a conformance run still 'running'
+        // from before this boot died with the process, and its row would
+        // 409 every new run for that collection forever.
+        try {
+          const bootTime = new Date(Date.now() - process.uptime() * 1000)
+          await db('nivaro_conformance_runs')
+            .where('status', 'running')
+            .where('started_at', '<', bootTime)
+            .update({
+              status: 'error',
+              error: 'Interrupted by an API restart — run it again.',
+              finished_at: new Date()
+            })
+        } catch {
+          /* table absent mid-migration — skip */
+        }
       }
 
-      // Same for Data Integrity sweeps: a conformance run still 'running'
-      // from before this boot died with the process, and its row would
-      // 409 every new run for that collection forever.
-      try {
-        const bootTime = new Date(Date.now() - process.uptime() * 1000)
-        await db('nivaro_conformance_runs')
-          .where('status', 'running')
-          .where('started_at', '<', bootTime)
-          .update({
-            status: 'error',
-            error: 'Interrupted by an API restart — run it again.',
-            finished_at: new Date()
-          })
-      } catch {
-        /* table absent mid-migration — skip */
+      // Hub phase 5 (P5-9) — what a shared deployment scheduled: app jobs fan out once per app,
+      // process jobs run once, the self-hosted-only ones are left out (services/cron-scope.ts).
+      if (multiTenant) {
+        const r = app.cron.sharedRoster()
+        app.log.info(
+          { app_jobs: r.app.length, process_jobs: r.process.length, left_out: r.leftOut.length },
+          '[cron] shared deployment: app jobs run once per app, process jobs once'
+        )
+        if (r.unscoped.length)
+          app.log.warn(
+            { jobs: r.unscoped },
+            '[cron] jobs that declare no scope run once per app (add them to services/cron-scope.ts)'
+          )
       }
     })
 
