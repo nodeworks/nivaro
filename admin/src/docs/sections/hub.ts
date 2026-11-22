@@ -305,7 +305,7 @@ export const hubPromotionsDocs: DocSection = {
     { type: 'h2', id: 'hub-promotions-run', text: 'Promoting' },
     {
       type: 'p',
-      text: "Open the environment, choose Promote, and pick a version. The Hub lists versions the previous environment runs or ran, newer than the one here. It shows the plan in plain words and every reason it cannot start, each with the planner's own details. To start, type the environment's key to confirm. The start carries the plan you saw: the Hub plans again, and if anything it would do changed (a commit, a pin, a version, a component, the driver or repository that deploys it, or its check address), it starts nothing, shows the new plan and asks you to check it again."
+      text: "Open the environment, choose Promote, and pick a version. The Hub lists versions the previous environment runs or ran, newer than the one here: what it answers now, what the Hub deployed there, and what its own successful deploy jobs in GitLab ran (the pin file at each job's commit, newest 50 jobs), so a staging deployed by the release chain that has moved on still offers the older version. It shows the plan in plain words and every reason it cannot start, each with the planner's own details. To start, type the environment's key to confirm. The start carries the plan you saw: the Hub plans again, and if anything it would do changed (a commit, a pin, a version, a component, the driver or repository that deploys it, or its check address), it starts nothing, shows the new plan and asks you to check it again."
     },
     {
       type: 'ul',
@@ -357,7 +357,7 @@ export const hubPromotionsDocs: DocSection = {
         ],
         [
           '`PREVIOUS_NEVER_RAN`',
-          'The environment before this one never ran the version, now or in a successful deploy. Promote it there first.'
+          'The environment before this one never ran the version: not now, not in a Hub deploy, and not in one of its newest 50 successful deploy jobs in GitLab. Promote it there first.'
         ],
         [
           '`ALREADY_RUNS`',

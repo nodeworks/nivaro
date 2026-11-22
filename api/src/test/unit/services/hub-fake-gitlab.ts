@@ -350,7 +350,8 @@ export class FakeGitLab {
     }
     m = path.match(/^\/repository\/files\/(.+)$/)
     if (m) {
-      const head = p.branches.get(q.get('ref') ?? '')
+      // A ref is a branch or a commit (as GitLab takes either).
+      const head = this.resolve(p, q.get('ref') ?? '')
       const content = head ? p.commits.get(head)?.tree.get(m[1]) : undefined
       if (!head || content === undefined) return json(404, { message: '404 File Not Found' })
       return json(200, {
@@ -416,6 +417,25 @@ export class FakeGitLab {
           web_url: j.web_url
         }))
       )
+    }
+    if (method === 'GET' && path === '/jobs') {
+      // The project's jobs, newest first, narrowed by scope[] (their current status).
+      const scopes = q.getAll('scope[]')
+      const all = p.pipelines
+        .flatMap((pl) => pl.jobs.map((j) => ({ j, pl })))
+        .filter(({ j }) => !scopes.length || scopes.includes(j.statuses[j.at]))
+        .sort((a, b) => b.j.id - a.j.id)
+        .map(({ j, pl }) => ({
+          id: j.id,
+          name: j.name,
+          status: j.statuses[j.at],
+          ref: pl.ref,
+          commit: { id: pl.sha },
+          pipeline: { id: pl.id, ref: pl.ref, sha: pl.sha }
+        }))
+      const per = Number(q.get('per_page') ?? 20)
+      const page = Number(q.get('page') ?? 1)
+      return json(200, all.slice((page - 1) * per, page * per))
     }
     m = path.match(/^\/jobs\/(\d+)\/retry$/)
     if (m && method === 'POST') {

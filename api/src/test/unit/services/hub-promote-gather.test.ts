@@ -225,6 +225,83 @@ describe('gatherPlanInput', () => {
     )
   })
 
+  it('P26: staging deployed by the release chain and moved ahead — the older version is still promotable', async () => {
+    // Staging's API deploys to its own branch; the release chain ran 0.3.10, then 0.3.11.
+    await db('nivaro_hub_components')
+      .where({ placement_id: 4, kind: 'api' })
+      .update({ target_branch: 'staging' })
+    gl.branch('efp/deploy', 'staging', api['0.3.1'])
+    const deploy = (version: string, status = 'success') => {
+      const sha = gl.commit('efp/deploy', 'staging', `chore: sync for nivaro ${version}`, {
+        '.docker/nivaro-version': `${version}\n${DIGEST}\n`
+      })
+      gl.pipeline('efp/deploy', 'staging', sha, [{ name: 'deploy_production', statuses: [status] }])
+    }
+    deploy('0.3.8', 'failed')
+    deploy('0.3.10')
+    deploy('0.3.11')
+    versions[1] = '0.3.11'
+    const real = {
+      ...deps(),
+      gitlabDeployedVersions: (env: { placement_id: number | null }) =>
+        gather.gitlabDeployedVersions(env, (d) => gl.ctx(d.config.project))
+    }
+    const input = await gather.gatherPlanInput(2, { kind: 'promote', version: '0.3.10' }, real)
+    expect(input.previousDeployedVersions.sort()).toEqual(['0.3.10', '0.3.11'])
+    expect(buildPromotionPlan(input).blockers.map((b) => b.code)).not.toContain(
+      'PREVIOUS_NEVER_RAN'
+    )
+    // A failed deploy job is no evidence; neither is a version staging never deployed.
+    const failed = buildPromotionPlan(
+      await gather.gatherPlanInput(2, { kind: 'promote', version: '0.3.8' }, real)
+    )
+    expect(failed.blockers.map((b) => b.code)).toContain('PREVIOUS_NEVER_RAN')
+    // Read through the token header, redirects refused.
+    const jobReads = gl.calls.filter((c) => c.path === '/jobs')
+    expect(jobReads.length).toBeGreaterThan(0)
+    for (const c of jobReads) {
+      expect(c.token).toBe(gl.token)
+      expect(c.redirect).toBe('error')
+    }
+  })
+
+  it('P26: only the newest 50 successful deploy jobs count', async () => {
+    await db('nivaro_hub_components')
+      .where({ placement_id: 4, kind: 'api' })
+      .update({ target_branch: 'staging' })
+    gl.branch('efp/deploy', 'staging', api['0.3.1'])
+    for (let i = 0; i <= gather.GITLAB_DEPLOY_EVIDENCE; i++) {
+      const v = `0.4.${i}`
+      const sha = gl.commit('efp/deploy', 'staging', `chore: sync for nivaro ${v}`, {
+        '.docker/nivaro-version': `${v}\n`
+      })
+      gl.pipeline('efp/deploy', 'staging', sha, [
+        { name: 'deploy_production', statuses: ['success'] }
+      ])
+    }
+    const seen = await gather.gitlabDeployedVersions({ placement_id: 4 }, (d) =>
+      gl.ctx(d.config.project)
+    )
+    expect(seen).toHaveLength(gather.GITLAB_DEPLOY_EVIDENCE)
+    expect(seen).not.toContain('0.4.0')
+    expect(seen).toContain(`0.4.${gather.GITLAB_DEPLOY_EVIDENCE}`)
+    // The Hub's own records already show the version: GitLab is not asked.
+    gl.calls.length = 0
+    let asked = 0
+    await gather.gatherPlanInput(
+      2,
+      { kind: 'promote', version: '0.3.10' },
+      {
+        ...deps(),
+        gitlabDeployedVersions: async () => {
+          asked++
+          return []
+        }
+      }
+    )
+    expect(asked).toBe(0)
+  })
+
   /** A successful Hub run of `version` here; steps carry what each deploy ran on. */
   const recordedRun = (
     version: string,

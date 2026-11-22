@@ -3,7 +3,6 @@ import { fetchJson, type GitCtx, gitlabApi } from '../gitlab-client.js'
 import { getApp } from '../io-holder.js'
 import { environmentFromRow, readApp } from './apps.js'
 import { componentTargetBranch, listComponents } from './components.js'
-import { listEnvironmentDeploys } from './deploys.js'
 import { driverCtx, getDriver, getPlacement, type HubDriverRow } from './drivers.js'
 import {
   commitExistsOn,
@@ -43,7 +42,9 @@ import {
  *  - the frontend commit is the short sha the previous environment's version.json answers,
  *    resolved to the full sha through the GitLab API before it is checked against the branch;
  *  - "the previous environment ran it" = the Hub's own successful deploys there UNION the
- *    version it answers now (staging is deployed by the release chain, not by the Hub).
+ *    version it answers now UNION the versions its own successful GitLab deploy jobs ran (the
+ *    pin file at each job's commit, newest 50 jobs): staging is deployed by the release chain,
+ *    not by the Hub, and moves on — an older version it ran is still promotable.
  *
  * A rollback redeploys, per component, the build the Hub recorded when it deployed that version
  * here: the commit the deploy job ran on (the stored plan's `deployedSha`, a merge commit on
@@ -207,7 +208,11 @@ export interface GatherDeps {
   jobNamed: typeof jobNamed
   resolveCommit: typeof resolveCommit
   readServedField(url: string, field: string): Promise<ServedField>
-  /** Versions the environment's own GitLab deploy history shows a successful deploy job for. */
+  /**
+   * Versions an environment's own successful GitLab deploy jobs ran: the pin file at each job's
+   * commit, through its API components' drivers (newest GITLAB_DEPLOY_EVIDENCE jobs). [] when
+   * GitLab cannot tell — the plan then refuses PREVIOUS_NEVER_RAN as before.
+   */
   gitlabDeployedVersions(env: { placement_id: number | null }): Promise<string[]>
   /** The promotion lock of this environment is held (by anyone); 'unknown' = Redis unreachable. */
   isLocked(envId: number): Promise<boolean | 'unknown'>
@@ -231,21 +236,113 @@ export function defaultGatherDeps(): GatherDeps {
     jobNamed,
     resolveCommit,
     readServedField: (url, field) => readServedField(url, field),
-    gitlabDeployedVersions: async (env) => {
-      try {
-        const { data } = await listEnvironmentDeploys(env, { limit: 50 })
-        return data
-          .filter((d) => d.deploy_job?.status === 'success' && d.version)
-          .map((d) => d.version as string)
-      } catch {
-        return []
-      }
-    },
+    gitlabDeployedVersions: (env) => gitlabDeployedVersions(env).catch(() => [] as string[]),
     isLocked: (envId) => defaultPromoteLock().held(envId)
   }
 }
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/** How many of an environment's newest successful deploy jobs count as GitLab evidence. */
+export const GITLAB_DEPLOY_EVIDENCE = 50
+const JOB_PAGES = 5
+const PIN_READS_AT_ONCE = 5
+
+/**
+ * The commits of a project's newest successful `job` runs on `branch` (at most `max`, from at
+ * most JOB_PAGES pages of GitLab's job list). Token in the PRIVATE-TOKEN header only, redirects
+ * refused; errors never carry GitLab's answer.
+ */
+export async function successfulDeployCommits(
+  ctx: GitCtx,
+  branch: string,
+  job: string,
+  max = GITLAB_DEPLOY_EVIDENCE
+): Promise<string[]> {
+  const step = 'successfulDeployCommits'
+  if (!ctx.token)
+    throw new GitlabWriteError('GITLAB_NO_TOKEN', 'The deploy repository has no GitLab token', {
+      step
+    })
+  const out: string[] = []
+  for (let page = 1; page <= JOB_PAGES && out.length < max; page++) {
+    let res: { ok: boolean; status: number; body: unknown }
+    try {
+      res = await fetchJson(
+        gitlabApi(ctx, `/jobs?scope[]=success&per_page=100&page=${page}`),
+        { 'PRIVATE-TOKEN': ctx.token },
+        15_000,
+        { redirect: 'error' }
+      )
+    } catch {
+      throw new GitlabWriteError('GITLAB_UNREACHABLE', `GitLab did not answer ${step}`, { step })
+    }
+    if (!res.ok)
+      throw new GitlabWriteError('GITLAB_REFUSED', `GitLab refused ${step} (${res.status})`, {
+        status: res.status,
+        step
+      })
+    const list = Array.isArray(res.body) ? (res.body as Array<Record<string, unknown>>) : []
+    for (const j of list) {
+      if (out.length >= max) break
+      if (j.name !== job || j.ref !== branch || j.status !== 'success') continue
+      const commit = (j.commit as { id?: unknown } | null)?.id
+      const sha =
+        typeof commit === 'string' ? commit : (j.pipeline as { sha?: unknown } | null)?.sha
+      if (typeof sha === 'string' && sha) out.push(sha)
+    }
+    if (list.length < 100) break
+  }
+  return out
+}
+
+/** The version a pin file names (its first line), or null. */
+export function pinVersion(pin: string | null): string | null {
+  const first = (pin ?? '').split('\n')[0]?.trim() ?? ''
+  return VERSION_RE.test(first) ? first : null
+}
+
+/**
+ * Versions an environment's successful GitLab deploy jobs ran, read through the same drivers the
+ * Hub deploys it with: each API component's deploy job on its target branch, and the pin file at
+ * each job's commit (newest GITLAB_DEPLOY_EVIDENCE jobs per component).
+ */
+export async function gitlabDeployedVersions(
+  env: { placement_id: number | null },
+  ctxFor: (driver: HubDriverRow) => GitCtx = driverCtx
+): Promise<string[]> {
+  if (!env.placement_id) return []
+  const [components, placement] = await Promise.all([
+    listComponents(env.placement_id),
+    getPlacement(env.placement_id)
+  ])
+  const versions = new Set<string>()
+  for (const c of components) {
+    if (c.kind !== 'api') continue
+    const driver = await getDriver(c.driver_id)
+    if (driver?.kind !== 'gitlab' || !driver.config.pin_file) continue
+    const ctx = ctxFor(driver)
+    const branch = componentTargetBranch(c, placement, driver.config.branch)
+    if (!branch) continue
+    const shas = [
+      ...new Set(
+        await successfulDeployCommits(ctx, branch, c.deploy_job ?? driver.config.deploy_job)
+      )
+    ]
+    for (let i = 0; i < shas.length; i += PIN_READS_AT_ONCE) {
+      const pins = await Promise.all(
+        shas
+          .slice(i, i + PIN_READS_AT_ONCE)
+          .map((sha) => readFile(ctx, driver.config.pin_file, sha).catch(() => null))
+      )
+      for (const pin of pins) {
+        const v = pinVersion(pin)
+        if (v) versions.add(v)
+      }
+    }
+  }
+  return [...versions]
+}
 
 /** `nivaro <version>` at the END of a commit subject (0.3.1 never matches a 0.3.10 commit). */
 export function sourceSubjectRe(version: string): RegExp {
@@ -497,6 +594,14 @@ export async function gatherPlanInput(
     storedRuns(envId)
   ])
   const prevHub = successfulVersions(prevRuns)
+  // GitLab evidence (the release chain deploys staging): read only when the Hub's own records
+  // and what the previous environment answers now do not already show the version.
+  const prevGitlab =
+    kind === 'promote' &&
+    previous &&
+    (!VERSION_RE.test(version) || ![...prevHub, previousVersion].includes(version))
+      ? await deps.gitlabDeployedVersions(previous)
+      : []
   const targetHub = completeVersions(targetRuns, components)
   // Offered for rollback: every API build's pipeline recorded too (a frontend's is looked up).
   const rollbackVersions = targetHub.filter((v) =>
@@ -618,7 +723,7 @@ export async function gatherPlanInput(
     version,
     targetVersion,
     previousVersion,
-    previousDeployedVersions: unique([...prevHub, previousVersion]),
+    previousDeployedVersions: unique([...prevHub, previousVersion, ...prevGitlab]),
     targetDeployedVersions: unique(targetHub),
     rollbackVersions: unique(rollbackVersions),
     recordedDeploys,
