@@ -17,7 +17,12 @@ import type {
  * Nivaro Hub phase 6 (Task 15): the move plan, pure. gather.ts reads every fact; this turns them
  * into the steps, the route changes, blockers, warnings, a checklist and the hash a start binds to.
  *
- * Steps: the plan's lists for automatic routing. Manual routing (preflight B8) keeps the old
+ * Steps: the plan's lists for automatic routing, with one change for a shared target:
+ * `place_on_target` comes before `files_warm`. The target pulls the files through its deployment
+ * link, which serves only apps on its tenant list (404 UNKNOWN_APP otherwise, Task 10), and an app
+ * enters that list when it is placed there (Task 2: `placed_at`, wire status `maintenance` until
+ * release). Placing first is harmless: the target holds the app in maintenance (its crons too)
+ * while the source serves, and `unplace` undoes it. Manual routing (preflight B8) keeps the old
  * placement serving until the new route is confirmed: the target is prepared first (placed or
  * deployed, held in maintenance, files copied warm), the manual route is waited for and verified
  * by the public name while the source still serves, and only then maintenance → idle → the delta
@@ -30,11 +35,11 @@ import type {
 export const MOVE_STEPS: Record<MoveKind, MoveStepKey[]> = {
   to_shared: [
     'check',
+    'place_on_target',
     'files_warm',
     'maintenance_on',
     'wait_idle',
     'files_delta',
-    'place_on_target',
     'target_ready',
     'route',
     'verify',
@@ -57,11 +62,11 @@ export const MOVE_STEPS: Record<MoveKind, MoveStepKey[]> = {
   ],
   between_shared: [
     'check',
+    'place_on_target',
     'files_warm',
     'maintenance_on',
     'wait_idle',
     'files_delta',
-    'place_on_target',
     'target_ready',
     'route',
     'verify',

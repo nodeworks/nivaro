@@ -390,13 +390,14 @@ describe('buildMovePlan — warnings', () => {
 
 describe('buildMovePlan — steps, route, checklist', () => {
   it('the steps per kind (automatic)', () => {
+    // The plan's list with place_on_target first: the target's file pull serves listed apps only.
     expect(buildMovePlan(input()).steps).toEqual([
       'check',
+      'place_on_target',
       'files_warm',
       'maintenance_on',
       'wait_idle',
       'files_delta',
-      'place_on_target',
       'target_ready',
       'route',
       'verify',
