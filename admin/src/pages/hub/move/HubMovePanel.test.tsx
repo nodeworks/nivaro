@@ -137,6 +137,7 @@ async function pickTarget(label: RegExp) {
 }
 
 beforeEach(() => {
+  window.localStorage.clear()
   plan = basePlan
   moves = []
   move = null
@@ -164,6 +165,8 @@ describe('HubMovePanel — before start', () => {
         steps: '[]'
       }
     ]
+    // That move ended and was dismissed: the panel opens on the form.
+    window.localStorage.setItem('nvr:hub-move-dismissed:10', '50')
     const base = h.get.getMockImplementation() as (url: string) => Promise<unknown>
     h.get.mockImplementation(async (url: string) =>
       url === '/hub/placements/9'
@@ -419,5 +422,62 @@ describe('HubMovePanel — a move in progress', () => {
     renderPanel()
     expect(await screen.findByRole('button', { name: 'Resume' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Roll back' })).toBeNull()
+  })
+})
+
+describe('HubMovePanel — a move that ended (ruling P6-17 I-1)', () => {
+  const ended = {
+    status: 'success',
+    step: 'done',
+    steps: {
+      list: steps.map((key) => ({ key, state: key === 'retire_source' ? 'failed' : 'done' })),
+      phase: 'forward'
+    },
+    error: 'The old home could not be retired; retire it by hand.',
+    checklist: [
+      { id: 'retire_source', text: 'Retire the old home by hand.', required: false, done: false }
+    ]
+  }
+
+  beforeEach(() => window.localStorage.clear())
+
+  it('keeps the result on screen when the move ends while the panel is open', async () => {
+    openMove({ status: 'interrupted', step: 'retire_source' })
+    h.post.mockImplementation(async (url: string) => {
+      if (url === '/hub/moves/77/resume') {
+        openMove(ended)
+        return { data: { data: { resumed: true } } }
+      }
+      if (url === '/hub/moves/77/checklist') return { data: { data: [] } }
+      throw new Error(url)
+    })
+    renderPanel()
+    fireEvent.click(await screen.findByRole('button', { name: 'Resume' }))
+    expect(await screen.findByText('Moved')).toBeInTheDocument()
+    expect(
+      screen.getByText('The old home could not be retired; retire it by hand.')
+    ).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('checkbox', { name: /Retire the old home by hand/ }))
+    await waitFor(() =>
+      expect(h.post).toHaveBeenCalledWith('/hub/moves/77/checklist', {
+        item: 'retire_source',
+        done: true
+      })
+    )
+  })
+
+  it('after a reload shows the newest move until it is dismissed', async () => {
+    openMove(ended)
+    const first = renderPanel()
+    expect(await screen.findByText('Moved')).toBeInTheDocument()
+    expect(
+      screen.getByRole('checkbox', { name: /Retire the old home by hand/ })
+    ).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
+    expect(await screen.findByRole('combobox', { name: 'Move to' })).toBeInTheDocument()
+    first.unmount()
+    // Dismissed stays dismissed in this browser.
+    renderPanel()
+    expect(await screen.findByRole('combobox', { name: 'Move to' })).toBeInTheDocument()
   })
 })

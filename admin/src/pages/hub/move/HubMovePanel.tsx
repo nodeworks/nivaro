@@ -61,7 +61,9 @@ import {
   moveStatusWords,
   moveStepRows,
   moveToast,
+  newestMove,
   pastRelease,
+  readDismissedMove,
   resumeMove,
   rollbackMove,
   setMoveChecklist,
@@ -69,7 +71,8 @@ import {
   targetFromValue,
   useDrivers,
   usePlacement,
-  useSharedList
+  useSharedList,
+  writeDismissedMove
 } from './move-api'
 
 /**
@@ -193,13 +196,28 @@ export function HubMovePanel({
   onClose: () => void
 }) {
   const [started, setStarted] = useState<number | null>(null)
+  // The move on screen stays there after it ends (its result, error and open checklist items)
+  // until the person dismisses it: a refetched list no longer naming it open never hides it.
+  const [latched, setLatched] = useState<number | null>(null)
+  const [dismissed, setDismissed] = useState<number | null>(() => readDismissedMove(env.id))
   const moves = useQuery({
     queryKey: moveKeys.moves(env.id),
     queryFn: () => fetchMoves(env.id),
     refetchInterval: (q) => (q.state.data?.some((m) => isLiveMove(m.status)) ? 5000 : false)
   })
   const open = moves.data?.find((m) => isOpenMove(m.status))
-  const watching = started ?? open?.id ?? null
+  const latest = newestMove(moves.data)
+  const unseen = latest && latest.id !== dismissed ? latest.id : null
+  const watching = started ?? latched ?? open?.id ?? unseen
+  useEffect(() => {
+    if (watching != null && latched !== watching) setLatched(watching)
+  }, [watching, latched])
+  const dismiss = (moveId: number) => {
+    writeDismissedMove(env.id, moveId)
+    setDismissed(moveId)
+    setStarted(null)
+    setLatched(null)
+  }
   const title = `Move ${env.key}`
 
   return (
@@ -218,14 +236,7 @@ export function HubMovePanel({
       {moves.isPending ? (
         <Skeleton className='h-24 w-full' />
       ) : watching != null ? (
-        <MoveProgress
-          moveId={watching}
-          env={env}
-          onClose={() => {
-            setStarted(null)
-            onClose()
-          }}
-        />
+        <MoveProgress moveId={watching} env={env} onDismiss={() => dismiss(watching)} />
       ) : (
         <MoveForm
           appKey={appKey}
@@ -691,11 +702,12 @@ const MAX_READ_FAILURES = 3
 function MoveProgress({
   moveId,
   env,
-  onClose
+  onDismiss
 }: {
   moveId: number
   env: HubEnvironment
-  onClose: () => void
+  /** The move ended and the person is done with it: show the form for a new move. */
+  onDismiss: () => void
 }) {
   const qc = useQueryClient()
   const failures = useRef(0)
@@ -1026,8 +1038,8 @@ function MoveProgress({
             </span>
           </>
         ) : m.status !== 'interrupted' ? (
-          <Button size='sm' variant='ghost' className='h-8' onClick={onClose}>
-            Close
+          <Button size='sm' variant='ghost' className='h-8' onClick={onDismiss}>
+            Dismiss
           </Button>
         ) : null}
         {plan && (

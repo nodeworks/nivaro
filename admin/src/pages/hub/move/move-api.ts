@@ -331,6 +331,36 @@ export function placementLabel(
   return d ? `Dedicated · ${d.name}` : 'Dedicated'
 }
 
+// ─── Which move the panel shows ───────────────────────────────────────────────
+
+/**
+ * Ruling P6-17 I-1: the panel shows the newest move of an environment (its result, error and open
+ * checklist items) until the person dismisses it. What was dismissed is a per-viewer convenience
+ * (this browser only); the move itself is never changed by it.
+ */
+const dismissKey = (envId: number) => `nvr:hub-move-dismissed:${envId}`
+
+export function readDismissedMove(envId: number): number | null {
+  try {
+    const v = Number(window.localStorage.getItem(dismissKey(envId)))
+    return Number.isInteger(v) && v > 0 ? v : null
+  } catch {
+    return null
+  }
+}
+
+export function writeDismissedMove(envId: number, moveId: number) {
+  try {
+    window.localStorage.setItem(dismissKey(envId), String(moveId))
+  } catch {
+    // No storage (private window): the move shows again on the next visit.
+  }
+}
+
+/** The newest move (highest id); the list is newest first, but never trust the order. */
+export const newestMove = (moves: HubMove[] | undefined): HubMove | undefined =>
+  (moves ?? []).reduce<HubMove | undefined>((a, b) => (!a || b.id > a.id ? b : a), undefined)
+
 // ─── Status and steps ─────────────────────────────────────────────────────────
 
 const LIVE = new Set(['planned', 'running', 'waiting'])
