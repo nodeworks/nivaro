@@ -48,6 +48,8 @@ export interface CreationMade {
     hostname: string
     base_url: string
     source_branch: string
+    /** Unguessable (base64url of 18 random bytes): the fork's mark. Never answered. */
+    nonce: string
   }
   /** CI variable key → outcome (created / updated / kept). */
   variables?: Record<string, string>

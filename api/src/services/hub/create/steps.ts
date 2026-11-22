@@ -45,6 +45,7 @@ import { generateDeployKey } from './deploy-key.js'
 import {
   commitFiles,
   configureProject,
+  currentUser,
   ensureBranch,
   finishFork,
   forkProject,
@@ -119,6 +120,8 @@ export interface StepContext {
   log(line: string, level?: 'info' | 'warn' | 'error'): void
   /** Every secret value opened or made in this leg: the runner scrubs stored text of them. */
   secrets: Set<string>
+  /** The GitLab user id of the target's token (GET /user), read once per leg. */
+  tokenUserId(): Promise<number>
   deps: StepDeps
 }
 
@@ -179,16 +182,31 @@ const ADMIN_RETRY = new Set([
 export function projectSettings(target: HubTargetRow): HubProjectSettings {
   return {
     ci_config_path: ciConfigPath(target.config),
-    ci_pipeline_variables_minimum_override_role: 'no_one_allowed'
+    ci_pipeline_variables_minimum_override_role: 'no_one_allowed',
+    restrict_user_defined_variables: true
   }
 }
 
-export const creationMarker = (creationId: number) => `nivaro-hub creation ${creationId}`
-const MARKER_RE = /\bnivaro-hub creation (\d+)\b/g
+/**
+ * The description a creation's fork carries (ruling P3-23): its id and its own unguessable nonce
+ * (made at start, kept only in the creation row, never answered). A project is adopted by this
+ * mark only when its description is EXACTLY one of this app's marks and the Hub's own GitLab user
+ * made it; a Developer of the namespace can plant a project at the path but not the nonce.
+ */
+export const creationMarker = (creationId: number, nonce: string) =>
+  `nivaro-hub creation ${creationId} ${nonce}`
 
-/** Creation ids named by `nivaro-hub creation <id>` marks in a project description. */
-export function markedCreations(description: string): number[] {
-  return [...String(description ?? '').matchAll(MARKER_RE)].map((m) => Number(m[1]))
+/** A per-leg memo of the target token's GitLab user id (GET /user through the write client). */
+export function tokenUserMemo(target: HubTargetRow): () => Promise<number> {
+  let id: Promise<number> | null = null
+  return () => {
+    id ??= currentUser(targetCtx(target)).then((u) => {
+      if (!Number.isInteger(u.id) || u.id <= 0)
+        throw new StepFailure('GITLAB_BAD_ANSWER', 'GitLab named no user for the target token.')
+      return u.id
+    })
+    return id
+  }
 }
 
 function projectCtx(ctx: StepContext): GitCtx {
@@ -300,10 +318,18 @@ async function stepRepository(ctx: StepContext): Promise<StepResult> {
     const base = targetCtx(target)
     secret(ctx, base.token)
     const shared = await appMade(app.id)
-    const ownCreations = new Set((await creationsOfApp(app.id)).map((x) => x.id))
-    const ours = (p: { id: number; description: string }) =>
-      (shared.project_id !== undefined && p.id === shared.project_id) ||
-      markedCreations(p.description).some((id) => ownCreations.has(id))
+    const ownNonce = ctx.creation.made.planned?.nonce
+    if (!ownNonce)
+      throw new StepFailure('PLAN_MISSING', 'The creation has no repository mark; start it again.')
+    const marks = new Set<string>()
+    for (const x of await creationsOfApp(app.id))
+      if (x.made.planned?.nonce) marks.add(creationMarker(x.id, x.made.planned.nonce))
+    for (const m of marks) secret(ctx, m)
+    const ours = async (p: { id: number; description: string; creator_id: number | null }) => {
+      if (shared.project_id !== undefined && p.id === shared.project_id) return true
+      if (!marks.has(p.description.trim())) return false
+      return p.creator_id !== null && p.creator_id === (await ctx.tokenUserId())
+    }
     const repoPath = `${app.key}-deploy`
     const fullPath = `${c.namespace}/${repoPath}`
 
@@ -313,7 +339,7 @@ async function stepRepository(ctx: StepContext): Promise<StepResult> {
     if (shared.project_id) {
       const p = await projectExists(base, String(shared.project_id))
       if (p) {
-        if (!ours(p))
+        if (!(await ours(p)))
           throw new StepFailure(
             'PROJECT_EXISTS',
             `GitLab project ${p.path_with_namespace || shared.project_id} is not this app’s deploy repository.`
@@ -321,11 +347,11 @@ async function stepRepository(ctx: StepContext): Promise<StepResult> {
         project = p
       }
     }
-    // 2. A project at the path: only ours by its id or our mark (P3-7).
+    // 2. A project at the path: ours only by its id, or by our exact mark AND our token's user.
     if (!project) {
       const p = await projectExists(base, fullPath)
       if (p) {
-        if (!ours(p))
+        if (!(await ours(p)))
           throw new StepFailure(
             'PROJECT_EXISTS',
             `GitLab already has a project ${fullPath} the Hub did not make for this app.`
@@ -348,7 +374,7 @@ async function stepRepository(ctx: StepContext): Promise<StepResult> {
       try {
         // The GitLab name is the path too: an app name may hold characters GitLab refuses.
         project = await forkProject(base, c.template_project, c.namespace, repoPath, repoPath, {
-          description: creationMarker(ctx.creation.id),
+          description: creationMarker(ctx.creation.id, ownNonce),
           sleep: ctx.deps.sleep,
           now: ctx.deps.now
         })

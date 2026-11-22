@@ -21,6 +21,7 @@
 //
 // Secrets never reach a log line, a step note, an error, an activity row or readCreation: every
 // stored or logged text passes the leg's scrub over every secret it opened or made.
+import { randomBytes } from 'node:crypto'
 import { insertReturningId } from '../../../db/dialect/ef.js'
 import { db } from '../../../db/index.js'
 import { runInBackgroundPool } from '../../../db/pool-context.js'
@@ -60,7 +61,8 @@ import {
   type StepDeps,
   type StepEnv,
   StepFailure,
-  syncTargetApps
+  syncTargetApps,
+  tokenUserMemo
 } from './steps.js'
 import {
   APP_MADE_KEYS,
@@ -316,7 +318,8 @@ async function writeCreation(
           slim_digest: slimDigest,
           hostname: pe.hostname as string,
           base_url: pe.base_url as string,
-          source_branch: pe.source_branch
+          source_branch: pe.source_branch,
+          nonce: randomBytes(18).toString('base64url')
         }
       }
       await insertCreation(trx, {
@@ -532,6 +535,7 @@ async function walk(
       doneSha: (key) => steps.find((s) => s.key === key && s.status === 'done')?.sha ?? null,
       log,
       secrets,
+      tokenUserId: tokenUserMemo(target),
       deps: r.step
     }
 
@@ -697,6 +701,7 @@ async function lookAtWait(
       doneSha: () => null,
       log: () => undefined,
       secrets,
+      tokenUserId: tokenUserMemo(target),
       deps: r.step
     }
     const look =

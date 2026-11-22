@@ -65,6 +65,9 @@ interface Project {
   description?: string
   ci_config_path?: string
   ci_pipeline_variables_minimum_override_role?: string
+  restrict_user_defined_variables?: boolean
+  /** The GitLab user who made the project (a fork: the token's user; default someone else). */
+  creator_id?: number
   /** PUT /projects/:id answers this status instead of saving. */
   refuseSettings?: number
   /** Settings a PUT accepts (200) but does not keep (an older GitLab, a policy). */
@@ -139,6 +142,7 @@ export class FakeGitLab {
     p.importAt = 0
     p.variables ??= []
     p.protectedBranches ??= new Map()
+    p.creator_id ??= 1
     this.projects.set(name, p)
     this.byId.set(p.id, name)
   }
@@ -353,6 +357,8 @@ export class FakeGitLab {
       ci_config_path: proj.ci_config_path ?? '',
       ci_pipeline_variables_minimum_override_role:
         proj.ci_pipeline_variables_minimum_override_role ?? 'developer',
+      restrict_user_defined_variables: proj.restrict_user_defined_variables ?? false,
+      creator_id: proj.creator_id,
       web_url: `${this.base}/${proj.path_with_namespace}`,
       import_status: status ?? proj.importStatuses?.[proj.importAt ?? 0] ?? 'none',
       ...(proj.forkedFrom
@@ -367,6 +373,11 @@ export class FakeGitLab {
         'ci_pipeline_variables_minimum_override_role'
       ] as const)
         if (body?.[k] !== undefined && !p.ignoreSettings?.includes(k)) p[k] = String(body[k])
+      if (
+        body?.restrict_user_defined_variables !== undefined &&
+        !p.ignoreSettings?.includes('restrict_user_defined_variables')
+      )
+        p.restrict_user_defined_variables = body.restrict_user_defined_variables === true
       return json(200, view(p))
     }
     if (method === 'GET' && path === '/') {
@@ -391,6 +402,7 @@ export class FakeGitLab {
         jobs: p.jobs,
         forkedFrom: project,
         importStatuses: [...this.forkImport],
+        creator_id: this.user.id,
         ...(body?.description ? { description: String(body.description) } : {})
       }
       this.register(full, fork)

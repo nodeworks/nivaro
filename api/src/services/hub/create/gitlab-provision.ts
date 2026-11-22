@@ -116,14 +116,22 @@ export async function groupAccessLevel(
 export async function projectExists(
   ctx: GitCtx,
   path: string
-): Promise<{ id: number; path_with_namespace: string; description: string } | null> {
+): Promise<{
+  id: number
+  path_with_namespace: string
+  description: string
+  /** The GitLab user who made the project; null when GitLab does not say. */
+  creator_id: number | null
+} | null> {
   const res = await gitlabCall(at(ctx, path), 'projectExists', '', { allow: [404] })
   if (res.status === 404) return null
   const p = obj(res.body)
   return {
     id: Number(p.id),
     path_with_namespace: str(p.path_with_namespace),
-    description: str(p.description)
+    description: str(p.description),
+    creator_id:
+      Number.isInteger(Number(p.creator_id)) && p.creator_id != null ? Number(p.creator_id) : null
   }
 }
 
@@ -133,6 +141,8 @@ export interface HubProjectSettings {
   ci_config_path: string
   /** Nobody may set pipeline variables when running a pipeline by hand. */
   ci_pipeline_variables_minimum_override_role: 'no_one_allowed'
+  /** Pipeline variables are restricted to that role (GitLab 17.1+ honours both together). */
+  restrict_user_defined_variables: true
 }
 
 /**
@@ -147,8 +157,8 @@ export async function configureProject(
 ): Promise<{ changed: boolean }> {
   const step = 'configureProject'
   const differs = (p: Record<string, unknown>) =>
-    (Object.keys(settings) as Array<keyof HubProjectSettings>).filter(
-      (k) => str(p[k]) !== settings[k]
+    (Object.keys(settings) as Array<keyof HubProjectSettings>).filter((k) =>
+      typeof settings[k] === 'boolean' ? p[k] !== settings[k] : str(p[k]) !== settings[k]
     )
   const before = obj((await gitlabCall(ctx, step, '')).body)
   const missing = differs(before)

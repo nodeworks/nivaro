@@ -496,7 +496,8 @@ describe('startCreation — a full automatic run of two environments', () => {
     expect(forkCalls()).toHaveLength(1)
     expect(gl.forkedFromOf(PROJECT)).toBeNull()
     const proj = gl.projects.get(PROJECT)
-    expect(proj?.description).toMatch(/^nivaro-hub creation \d+$/)
+    expect(proj?.description).toMatch(/^nivaro-hub creation \d+ [A-Za-z0-9_-]{24}$/)
+    expect(proj?.restrict_user_defined_variables).toBe(true)
     expect(proj?.ci_config_path).toBe(`ci/deploy.yml@${TEMPLATE}:v1.0.0`)
     expect(proj?.ci_pipeline_variables_minimum_override_role).toBe('no_one_allowed')
     const app = await db('nivaro_hub_apps').where({ id: out.app_id }).first()
@@ -1051,39 +1052,71 @@ describe('deploy repository', () => {
     expect(forkCalls()).toHaveLength(1)
   })
 
-  it('a project at the path is adopted only with this app’s creation mark', async () => {
+  /**
+   * A fork GitLab made before the Hub could record it (import timeout), then the record lost —
+   * only GitLab says whose it is. `plant` rewrites the project as an attacker might.
+   */
+  async function lostFork(
+    plant: (p: { description?: string; creator_id?: number }, mark: string) => void
+  ) {
     gl.forkImport = [...Array(45).fill('started'), 'finished']
     const out = await startAndWait(
       input({ environments: [{ key: 'production', database: { server_id: autoServer } }] })
     )
     const envId = out.environments[0].id
     const c = await creation(envId)
-    // As if the Hub died before recording the fork: only the mark on GitLab says it is ours.
+    expect(c.error).toMatch(/^IMPORT_TIMEOUT/)
     const { project_id: _drop, project_path: _path, ...rest } = c.made
     await store.patchCreation(c.id, { made: rest })
+    const mark = `nivaro-hub creation ${c.id} ${c.made.planned?.nonce}`
+    const p = gl.projects.get(PROJECT)
+    expect(p?.description).toBe(mark)
+    if (p) plant(p, mark)
     await R.resumeCreation(envId, USER, 'retry', deps())
     await R.awaitCreation(envId)
-    expect((await creation(envId)).status).toBe('done')
+    return await creation(envId)
+  }
+
+  it('a project at the path is adopted with this creation’s exact mark made by the Hub user', async () => {
+    const c = await lostFork(() => {})
+    expect(c.status).toBe('done')
     expect(forkCalls()).toHaveLength(1)
+    // The nonce never leaves the creation row.
+    expect(JSON.stringify(await R.readCreation(c.environment_id))).not.toContain(
+      String(c.made.planned?.nonce)
+    )
   })
 
-  it('a project at the path without our mark is PROJECT_EXISTS, never adopted', async () => {
-    gl.forkImport = [...Array(45).fill('started'), 'finished']
-    const out = await startAndWait(
-      input({ environments: [{ key: 'production', database: { server_id: autoServer } }] })
-    )
-    const envId = out.environments[0].id
-    const c = await creation(envId)
-    const { project_id: _drop, project_path: _path, ...rest } = c.made
-    await store.patchCreation(c.id, { made: rest })
-    const p = gl.projects.get(PROJECT)
-    if (p) p.description = 'somebody else’s project'
-    await R.resumeCreation(envId, USER, 'retry', deps())
-    await R.awaitCreation(envId)
-    const after = await creation(envId)
-    expect(after.status).toBe('failed')
-    expect(after.error).toMatch(/^PROJECT_EXISTS/)
+  it('P3-23: many marks in the description are not ours', async () => {
+    const c = await lostFork((p, mark) => {
+      p.description = Array.from({ length: 50 }, (_, i) => `nivaro-hub creation ${i} x`)
+        .concat(mark)
+        .join('\n')
+    })
+    expect(c.error).toMatch(/^PROJECT_EXISTS/)
     expect(gl.variablesOf(PROJECT)).toHaveLength(0)
+  })
+
+  it('P3-23: the right mark but another creator is not ours', async () => {
+    const c = await lostFork((p) => {
+      p.creator_id = 4242
+    })
+    expect(c.error).toMatch(/^PROJECT_EXISTS/)
+    expect(gl.variablesOf(PROJECT)).toHaveLength(0)
+  })
+
+  it('P3-23: the right mark with extra text is not ours', async () => {
+    const c = await lostFork((p, mark) => {
+      p.description = `${mark} (planted)`
+    })
+    expect(c.error).toMatch(/^PROJECT_EXISTS/)
+  })
+
+  it('P3-23: a guessed creation id without the nonce is not ours', async () => {
+    const c = await lostFork((p, mark) => {
+      p.description = mark.split(' ').slice(0, 3).join(' ')
+    })
+    expect(c.error).toMatch(/^PROJECT_EXISTS/)
   })
 
   it('GitLab refusing the CI configuration path fails closed: nothing else is pushed', async () => {

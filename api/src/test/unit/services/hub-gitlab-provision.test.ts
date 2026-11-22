@@ -89,7 +89,8 @@ describe('projectExists', () => {
     expect(found).toEqual({
       id: expect.any(Number),
       path_with_namespace: TEMPLATE,
-      description: ''
+      description: '',
+      creator_id: 1
     })
     expect(await projectExists(gl.ctx(TEMPLATE), 'apps/nope-deploy')).toBeNull()
     expectSafeCalls()
@@ -577,7 +578,8 @@ describe('pushDeployVariables', () => {
 describe('Task 9 additions: fork description, configureProject', () => {
   const settings = {
     ci_config_path: `ci/deploy.yml@${TEMPLATE}:v1.0.0`,
-    ci_pipeline_variables_minimum_override_role: 'no_one_allowed' as const
+    ci_pipeline_variables_minimum_override_role: 'no_one_allowed' as const,
+    restrict_user_defined_variables: true as const
   }
 
   it('forkProject sends the description marker; projectExists answers it', async () => {
@@ -614,6 +616,22 @@ describe('Task 9 additions: fork description, configureProject', () => {
     const ignored = await codeOf(configureProject(gl.ctx('apps/ignore-deploy'), settings))
     expect(ignored.code).toBe('CI_CONFIG_REFUSED')
     expect(ignored.message).toContain('ci_config_path')
+  })
+
+  it('restrict_user_defined_variables is set and read back as a boolean', async () => {
+    const p = gl.project('apps/flag-deploy')
+    await configureProject(gl.ctx('apps/flag-deploy'), settings)
+    expect(p.restrict_user_defined_variables).toBe(true)
+    const q = gl.project('apps/old-gitlab-deploy')
+    q.ignoreSettings = ['restrict_user_defined_variables']
+    const r = await codeOf(configureProject(gl.ctx('apps/old-gitlab-deploy'), settings))
+    expect(r.code).toBe('CI_CONFIG_REFUSED')
+    expect(r.message).toContain('restrict_user_defined_variables')
+  })
+
+  it('a fork answers its creator (the token user)', async () => {
+    const out = await forkProject(gl.ctx(TEMPLATE), TEMPLATE, 'apps', 'mine-deploy', 'm', { sleep })
+    expect((await projectExists(gl.ctx(TEMPLATE), String(out.id)))?.creator_id).toBe(gl.user.id)
   })
 
   it('verifyOnly never writes', async () => {
