@@ -4,7 +4,7 @@ import type { Knex } from 'knex'
 import { getOrCreateTenantPool, runWithTenantDb } from '../db/tenant-context.js'
 import { isAppInfoPath } from '../lib/app-info-path.js'
 import { isNivaroCloud } from '../services/deployment-mode.js'
-import { blockedPage, unknownHostPage } from '../services/tenancy/blocked-page.js'
+import { blockedPage, notReadyPage, unknownHostPage } from '../services/tenancy/blocked-page.js'
 import { getMetaDb } from '../services/tenancy/cloud-meta-source.js'
 import { getTenantRegistry } from '../services/tenancy/registry.js'
 
@@ -942,6 +942,19 @@ export function tenantHook(req: FastifyRequest, reply: FastifyReply, done: (err?
     .then((result) => {
       if (!result.found) {
         if (!cloud) {
+          // A Hub shared deployment that never loaded its list of apps (starting up, or the Hub
+          // has not answered yet and there is no sealed copy): 503 for every host, not 404.
+          if (getTenantRegistry()?.status().loadedAt == null) {
+            reply.code(503).header('retry-after', '15').header('cache-control', 'no-store')
+            if (wantsHtml(req))
+              reply.header('content-type', 'text/html; charset=utf-8').send(notReadyPage())
+            else
+              reply.send({
+                error: 'Service unavailable',
+                message: 'This deployment is starting up or cannot reach its Hub yet.'
+              })
+            return
+          }
           // A Hub shared deployment: an address that serves no app is a plain 404.
           if (wantsHtml(req))
             reply

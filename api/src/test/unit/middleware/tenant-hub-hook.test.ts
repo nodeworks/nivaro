@@ -4,6 +4,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 const state = vi.hoisted(() => ({ ran: [] as string[] }))
 
 vi.mock('../../../db/index.js', () => ({ db: () => ({}) }))
+vi.mock('../../../services/readiness.js', () => ({ registerReadinessCheck: () => {} }))
 vi.mock('../../../db/tenant-context.js', async (orig) => ({
   ...(await orig<object>()),
   getOrCreateTenantPool: () => ({}),
@@ -15,6 +16,10 @@ vi.mock('../../../db/tenant-context.js', async (orig) => ({
 
 import { tenantHook } from '../../../middleware/tenant.js'
 import { socketTenant } from '../../../services/socket-tenant.js'
+import {
+  resetHubTenantSourceForTests,
+  startHubTenantSource
+} from '../../../services/tenancy/hub-source.js'
 import { setTenantRegistryForTests } from '../../../services/tenancy/registry.js'
 import type { TenantRecord, TenantRegistry } from '../../../services/tenancy/types.js'
 
@@ -52,7 +57,13 @@ const fakeRegistry: TenantRegistry = {
   async listActive() {
     return Object.values(TENANTS)
   },
-  status: () => ({ source: 'hub', count: 3, loadedAt: null, stale: false, lastError: null })
+  status: () => ({
+    source: 'hub',
+    count: 3,
+    loadedAt: '2026-11-21T00:00:00.000Z',
+    stale: false,
+    lastError: null
+  })
 }
 
 const savedEnv = { ...process.env }
@@ -217,5 +228,77 @@ describe('tenantHook in Nivaro Cloud (unchanged)', () => {
     expect(denied.statusCode).toBe(403)
     const sock = await socketTenant({ handshake: { headers: { host: 'a.example.com' } } })
     expect(sock).toBeNull()
+  })
+})
+
+describe('the real Hub source behind the hook and sockets', () => {
+  let app: Awaited<ReturnType<typeof build>>
+  beforeAll(async () => {
+    app = await build()
+  })
+  afterAll(() => app.close())
+  beforeEach(() => {
+    delete process.env.CLOUD_META_DB_URL
+    delete process.env.ENCRYPTION_KEY
+    process.env.HUB_SHARED_DEPLOYMENT = 'shared-a'
+    process.env.HUB_URL = 'https://hub.example'
+    process.env.HUB_DEPLOYMENT_TOKEN = 't'.repeat(40)
+    state.ran.length = 0
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+  afterEach(() => {
+    resetHubTenantSourceForTests()
+    process.env = { ...savedEnv }
+    vi.restoreAllMocks()
+  })
+
+  const hubAnswer = (status: number, tenants: unknown[] = []) =>
+    (async () =>
+      new Response(
+        JSON.stringify({ data: { deployment: 'shared-a', generated_at: 'x', tenants } }),
+        { status }
+      )) as unknown as typeof fetch
+
+  const listed = {
+    id: 'app-a-prod',
+    app_key: 'app-a',
+    env_key: 'prod',
+    name: 'App A',
+    status: 'active',
+    hostnames: ['a.example.com:443'],
+    db: { client: 'pg', connection: 'postgres://a' }
+  }
+
+  it('a socket whose host carries a port resolves the app (and so does a request)', async () => {
+    await startHubTenantSource({ redis: null, fetch: hubAnswer(200, [listed]) })
+    for (const host of ['a.example.com:443', 'a.example.com:8443', 'a.example.com']) {
+      const t = await socketTenant({ handshake: { headers: { host } } })
+      expect(t?.slug).toBe('app-a')
+      expect(t?.origin).toBe('https://a.example.com')
+    }
+    const res = await app.inject({
+      url: '/api/other',
+      headers: { host: 'a.example.com', 'x-forwarded-host': 'a.example.com:8443' }
+    })
+    expect(res.statusCode).toBe(200)
+  })
+
+  it('a list that never loaded answers 503 (starting up), not 404', async () => {
+    await startHubTenantSource({ redis: null, fetch: hubAnswer(500) })
+    const api = await app.inject({ url: '/api/other', headers: { host: 'a.example.com' } })
+    expect(api.statusCode).toBe(503)
+    expect(api.headers['retry-after']).toBe('15')
+    const page = await app.inject({
+      url: '/',
+      headers: { host: 'a.example.com', accept: 'text/html' }
+    })
+    expect(page.statusCode).toBe(503)
+    expect(page.body).toContain('starting up')
+  })
+
+  it('once loaded, an unknown host is a 404', async () => {
+    await startHubTenantSource({ redis: null, fetch: hubAnswer(200, [listed]) })
+    const res = await app.inject({ url: '/api/other', headers: { host: 'nope.example.com' } })
+    expect(res.statusCode).toBe(404)
   })
 })

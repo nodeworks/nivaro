@@ -69,6 +69,17 @@ export function blockedPage(name: string, kind: 'suspended' | 'provisioning'): s
   )
 }
 
+/** The page while this deployment has never loaded its list of apps (starting up, or its Hub is
+ *  not answering). Checks again by itself. */
+export function notReadyPage(): string {
+  return page(
+    'Starting up',
+    'This service is starting up',
+    '<p>It cannot tell yet which app is served at this address. This page checks again by itself in a few seconds.</p>',
+    '<meta http-equiv="refresh" content="15" />'
+  )
+}
+
 /** The page for an address that serves no app on this deployment. */
 export function unknownHostPage(): string {
   return page(

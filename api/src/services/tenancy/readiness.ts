@@ -39,6 +39,10 @@ export function judgeTenantRegistry(d: HubSourceDetails | null, now: number): Re
     warnings.push(
       `The list of apps was last confirmed by the Hub ${age === null ? 'at an unknown time' : ago(age)}${d.fetchError ? ` (${d.fetchError})` : ''}; apps are served from that list.`
     )
+  if (d.count === 0)
+    warnings.push(
+      'The Hub lists no app for this deployment: every address answers "No app is served".'
+    )
   if (!d.sealedCopy)
     warnings.push(
       `The list of apps is kept in memory only (${d.sealedCopyProblem ?? 'no sealed copy'}): a restart while the Hub is down serves no app.`

@@ -1,7 +1,8 @@
 import type { Redis } from 'ioredis'
 import { cleanTenantHost } from '../../db/tenant-context.js'
 import { hubSharedConfig } from '../deployment-mode.js'
-import { HUB_TENANTS_PATH, parseHubTenants, WRONG_DEPLOYMENT } from './hub-contract.js'
+import { HUB_TENANTS_PATH, parseHubTenants } from './hub-contract.js'
+import { HubBodyTooLargeError, hubFetch, readCappedText } from './hub-fetch.js'
 import type {
   TenantRecord,
   TenantRegistry,
@@ -22,6 +23,8 @@ import type {
  */
 
 const FETCH_TIMEOUT_MS = 10_000
+/** The largest tenants answer read; a bigger one is refused before parsing. */
+export const HUB_BODY_MAX_BYTES = 2 * 1024 * 1024
 const DEFAULT_REFRESH_MS = 30_000
 const MIN_REFRESH_MS = 5_000
 /** An unknown host forces at most one refresh per this window. */
@@ -37,6 +40,8 @@ export interface HubSourceDetails {
   confirmedAt: number | null
   /** The list was loaded at least once (from the Hub or the sealed copy). */
   loaded: boolean
+  /** Apps in the current list (dropped ones not counted). */
+  count: number
   /** The last fetch failed; plain text, never the token or a connection. */
   fetchError: string | null
   /** Tenants the Hub listed that this deployment cannot serve. */
@@ -80,32 +85,34 @@ function sealKeyProblem(): string | null {
   return null
 }
 
-/** The request host as a tenant hostname: cleaned (lower case, first entry), port kept. */
-function lookupKeys(host: string): string[] {
+/** The request host as the list holds it (hubHostname: lower case, no port), plus the cleaned
+ *  host with its port for a local origin. */
+function lookupHost(host: string): { bare: string; clean: string } | null {
   const clean = cleanTenantHost(host)
-  if (!clean) return []
-  const bare = clean.replace(/:\d+$/, '')
-  return bare === clean ? [clean] : [clean, bare]
+  return clean ? { bare: clean.replace(/:\d+$/, ''), clean } : null
 }
 
-const originOf = (host: string) => `${LOCAL_HOST.test(host) ? 'http' : 'https'}://${host}`
+/** https://<listed host>; a local development host keeps the request's port, over http. */
+const originOf = (h: { bare: string; clean: string }) =>
+  LOCAL_HOST.test(h.bare) ? `http://${h.clean}` : `https://${h.bare}`
 
 /** Plain text for a failed fetch: the error's kind only, never its message. */
 function fetchFailureText(err: unknown): string {
   const name = (err as { name?: unknown } | null)?.name
   if (name === 'TimeoutError' || name === 'AbortError')
     return `the Hub did not answer within ${FETCH_TIMEOUT_MS / 1000} s`
+  if (name === 'HubRedirectError') return 'the Hub answered with a redirect'
   return 'the Hub could not be reached'
 }
 
 export async function startHubTenantSource(deps: Deps): Promise<TenantRegistry> {
   const cfg = hubSharedConfig()
   if (!cfg) throw new Error('The Hub tenant source runs only on a Hub shared deployment.')
-  stopHubTenantSource()
+  active?.stop()
 
   const { deployment, token } = cfg
   const url = `${cfg.hubUrl.replace(/\/+$/, '')}${HUB_TENANTS_PATH(deployment)}`
-  const doFetch = deps.fetch ?? fetch
+  const doFetch = deps.fetch ?? hubFetch
   const now = deps.now ?? Date.now
   const redis = deps.redis
 
@@ -159,7 +166,7 @@ export async function startHubTenantSource(deps: Deps): Promise<TenantRegistry> 
       if (!Array.isArray(copy.tenants)) return
       setList(copy.tenants)
       etag = copy.etag ?? null
-      confirmedAt = typeof copy.confirmedAt === 'number' ? copy.confirmedAt : null
+      confirmedAt = typeof copy.confirmedAt === 'number' ? copy.confirmedAt : 0
       dropped = Array.isArray(copy.dropped) ? copy.dropped : []
     } catch {
       // An unreadable copy (another key, corrupt) is ignored: the fetch decides.
@@ -211,9 +218,12 @@ export async function startHubTenantSource(deps: Deps): Promise<TenantRegistry> 
     }
     let body: unknown
     try {
-      body = await res.json()
-    } catch {
-      fetchError = 'the Hub sent a body that is not a tenant list'
+      body = JSON.parse(await readCappedText(res, HUB_BODY_MAX_BYTES))
+    } catch (err) {
+      fetchError =
+        err instanceof HubBodyTooLargeError
+          ? `the Hub sent more than ${HUB_BODY_MAX_BYTES / 1024 / 1024} MB`
+          : 'the Hub sent a body that is not a tenant list'
       return
     }
     const parsed = parseHubTenants(body, deployment)
@@ -222,10 +232,7 @@ export async function startHubTenantSource(deps: Deps): Promise<TenantRegistry> 
       return
     }
     // Another deployment's list (even an empty one) never replaces this deployment's.
-    if (
-      (body as { data: { deployment: unknown } }).data.deployment !== deployment ||
-      parsed.dropped.some((d) => d.why === WRONG_DEPLOYMENT)
-    ) {
+    if ((body as { data: { deployment: unknown } }).data.deployment !== deployment) {
       fetchError = 'the Hub answered for another deployment'
       return
     }
@@ -256,19 +263,17 @@ export async function startHubTenantSource(deps: Deps): Promise<TenantRegistry> 
     return inFlight
   }
 
-  const find = (host: string): { tenant: TenantRecord; matched: string } | null => {
-    for (const k of lookupKeys(host)) {
-      const t = byHost.get(k)
-      if (t) return { tenant: t, matched: k }
-    }
-    return null
+  const find = (host: string): TenantResolution | null => {
+    const h = lookupHost(host)
+    const t = h ? byHost.get(h.bare) : undefined
+    return h && t ? { tenant: t, origin: originOf(h) } : null
   }
 
   const registry: HubTenantRegistry = {
     source: 'hub',
     async resolve(host: string): Promise<TenantResolution | null> {
       let hit = find(host)
-      if (!hit && lookupKeys(host).length > 0) {
+      if (!hit && lookupHost(host)) {
         // A new app may have been added since the last refresh: ask the Hub, at most once per 5 s.
         if (inFlight) await inFlight
         else if (now() - lastForced >= UNKNOWN_HOST_REFRESH_GAP_MS) {
@@ -277,8 +282,7 @@ export async function startHubTenantSource(deps: Deps): Promise<TenantRegistry> 
         }
         hit = find(host)
       }
-      if (!hit) return null
-      return { tenant: hit.tenant, origin: originOf(hit.matched) }
+      return hit
     },
     async listActive(): Promise<TenantRecord[]> {
       return tenants.filter((t) => t.status === 'active' || t.status === 'maintenance')
@@ -291,7 +295,8 @@ export async function startHubTenantSource(deps: Deps): Promise<TenantRegistry> 
       return {
         source: 'hub',
         count: tenants.length,
-        loadedAt: confirmedAt === null ? null : new Date(confirmedAt).toISOString(),
+        // null exactly while nothing was ever loaded (the tenant hook answers 503 then)
+        loadedAt: loaded ? new Date(confirmedAt ?? 0).toISOString() : null,
         stale: !loaded || fetchError !== null || (age !== null && age > 5 * 60_000),
         lastError: [fetchError, droppedText].filter(Boolean).join('; ') || null
       }
@@ -300,6 +305,7 @@ export async function startHubTenantSource(deps: Deps): Promise<TenantRegistry> 
       return {
         confirmedAt,
         loaded,
+        count: tenants.length,
         fetchError,
         dropped: [...dropped],
         sealedCopy: !sealProblem && !writeFailed,
@@ -323,7 +329,13 @@ export async function startHubTenantSource(deps: Deps): Promise<TenantRegistry> 
   return registry
 }
 
+/** Stops the refresh timer only: work during shutdown (preClose) still resolves from the list. */
 export function stopHubTenantSource(): void {
+  active?.stop()
+}
+
+/** Test seam: forget the running source entirely. */
+export function resetHubTenantSourceForTests(): void {
   active?.stop()
   active = null
 }

@@ -20,7 +20,9 @@ import {
 } from '../../../services/tenancy/hub-contract.js'
 import {
   getHubTenantSource,
+  HUB_BODY_MAX_BYTES,
   hubCacheKey,
+  resetHubTenantSourceForTests,
   startHubTenantSource,
   stopHubTenantSource
 } from '../../../services/tenancy/hub-source.js'
@@ -34,14 +36,16 @@ const CONN_A = 'postgres://app-a-user:pa55-SECRET@db.internal/app_a'
 const CONN_B = 'mssql://sa:Other-SECRET@db.internal/app_b'
 
 function tenant(over: Partial<HubTenantWire> = {}): HubTenantWire {
+  const id = over.id ?? 'app-a-prod'
   return {
-    id: 'app-a-prod',
+    id,
     app_key: 'app-a',
     env_key: 'prod',
     name: 'App A',
     status: 'active',
     hostnames: ['a.example.com', 'www.a.example.com'],
-    db: { client: 'pg', connection: CONN_A },
+    // every app its own database unless a test says otherwise (a shared one drops both)
+    db: { client: 'pg', connection: id === 'app-a-prod' ? CONN_A : `${CONN_A}?app=${id}` },
     ...over
   }
 }
@@ -123,7 +127,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  stopHubTenantSource()
+  resetHubTenantSourceForTests()
   setTenantRegistryForTests(null)
   process.env = { ...savedEnv }
   vi.restoreAllMocks()
@@ -150,7 +154,7 @@ describe('parseHubTenants', () => {
       dbClient: 'mssql',
       dbConnection: CONN_B,
       poolMax: 12,
-      hostnames: ['b.example.com', 'app-b.localhost:3121']
+      hostnames: ['b.example.com', 'app-b.localhost']
     })
     expect(r.tenants[0].poolMax).toBeNull()
   })
@@ -202,6 +206,80 @@ describe('parseHubTenants', () => {
     )!
     expect(r.tenants.map((t) => t.id)).toEqual(['three'])
     expect(r.dropped.map((d) => d.id).sort()).toEqual(['one', 'two'])
+  })
+
+  it('hostnames are normalised: lower case, no port; default ports clash with bare names', () => {
+    const r = parseHubTenants(
+      body([
+        tenant({ id: 'one', hostnames: ['ONE.example.com:443', 'one.example.com'] }),
+        tenant({ id: 'two', hostnames: ['shared.example.com:443'] }),
+        tenant({ id: 'three', hostnames: ['shared.example.com:80'] }),
+        tenant({ id: 'four', hostnames: ['four.example.com:8443'] })
+      ]),
+      DEPLOYMENT
+    )!
+    expect(r.tenants.map((t) => [t.id, t.hostnames])).toEqual([
+      ['one', ['one.example.com']],
+      ['four', ['four.example.com']]
+    ])
+    expect(r.dropped.map((d) => d.id).sort()).toEqual(['three', 'two'])
+  })
+
+  it('a claim from a tenant dropped for another reason still clashes', () => {
+    const r = parseHubTenants(
+      body([
+        tenant({ id: 'broken', pool_max: 99, hostnames: ['a.example.com'] }),
+        tenant({ id: 'fine', hostnames: ['a.example.com', 'fine.example.com'] }),
+        tenant({ id: 'Bad_Id', hostnames: ['x.example.com'] }),
+        tenant({
+          id: 'other',
+          hostnames: ['x.example.com:443'],
+          db: { client: 'pg', connection: CONN_B }
+        })
+      ]),
+      DEPLOYMENT
+    )!
+    expect(r.tenants).toEqual([])
+    const why = Object.fromEntries(r.dropped.map((d) => [d.id, d.why]))
+    expect(why.broken).toMatch(/pool_max/)
+    expect(why.fine).toBe('hostname a.example.com also claimed by broken')
+    expect(why.other).toBe('hostname x.example.com also claimed by #3')
+  })
+
+  it('two tenants on one database are both dropped; the why never shows the connection', () => {
+    const r = parseHubTenants(
+      body([
+        tenant({
+          id: 'one',
+          hostnames: ['one.example.com'],
+          db: { client: 'pg', connection: CONN_A }
+        }),
+        tenant({
+          id: 'two',
+          hostnames: ['two.example.com'],
+          db: { client: 'pg', connection: ` ${CONN_A} ` }
+        }),
+        tenant({
+          id: 'three',
+          hostnames: ['three.example.com'],
+          db: { client: 'mssql', connection: CONN_B }
+        })
+      ]),
+      DEPLOYMENT
+    )!
+    expect(r.tenants.map((t) => t.id)).toEqual(['three'])
+    expect(r.dropped).toEqual([
+      { id: 'one', why: 'shares its database with two' },
+      { id: 'two', why: 'shares its database with one' }
+    ])
+    expect(JSON.stringify(r.dropped)).not.toContain('SECRET')
+  })
+
+  it('the app key (slug) uses the id character set', () => {
+    for (const app_key of ['App_A', 'a b', '', 'x'.repeat(65), '../x'])
+      expect(parseHubTenants(body([tenant({ app_key })]), DEPLOYMENT)!.dropped).toEqual([
+        { id: 'app-a-prod', why: 'invalid app key' }
+      ])
   })
 
   it('null for a body that is not a tenant list', () => {
@@ -280,6 +358,55 @@ describe('Hub tenant source', () => {
       expect(s.lastError).not.toContain('SECRET')
     })
   }
+
+  it('a request or socket host with any port resolves the listed host', async () => {
+    const reg = await start(
+      fakeFetch([json(body([tenant({ hostnames: ['a.example.com:443'] })]))]).fn
+    )
+    for (const h of ['a.example.com', 'a.example.com:443', 'A.EXAMPLE.COM:8443'])
+      expect((await reg.resolve(h))?.origin).toBe('https://a.example.com')
+  })
+
+  it('a body over 2 MB is refused before parsing and keeps the list', async () => {
+    const big = JSON.stringify(body([tenant({ name: 'x'.repeat(HUB_BODY_MAX_BYTES) })]))
+    const streamed = () =>
+      new Response(
+        new ReadableStream({
+          start(c) {
+            c.enqueue(new TextEncoder().encode(big))
+            c.close()
+          }
+        }),
+        { status: 200 }
+      )
+    const declared = () =>
+      new Response('{}', { status: 200, headers: { 'content-length': String(3 * 1024 * 1024) } })
+    for (const answer of [streamed, declared]) {
+      const reg = (await start(fakeFetch([json(goodList()), answer]).fn)) as NonNullable<
+        ReturnType<typeof getHubTenantSource>
+      >
+      await reg.refresh()
+      expect(reg.status().lastError).toMatch(/more than 2 MB/)
+      expect(reg.status().count).toBe(2)
+    }
+  })
+
+  it('stop ends the refresh timer but keeps the list for shutdown work', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    try {
+      const f = fakeFetch([json(goodList())])
+      const reg = await startHubTenantSource({ redis: null, fetch: f.fn, now, refreshMs: 5_000 })
+      vi.advanceTimersByTime(5_000)
+      expect(f.calls).toHaveLength(2)
+      stopHubTenantSource()
+      vi.advanceTimersByTime(60_000)
+      expect(f.calls).toHaveLength(2)
+      expect(getHubTenantSource()).toBe(reg)
+      expect((await reg.resolve('a.example.com'))?.tenant.id).toBe('app-a-prod')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 
   it('a body that lists no apps is a real answer: the list empties', async () => {
     const f = fakeFetch([json(goodList()), json(body([]))])
@@ -469,9 +596,20 @@ describe('readiness tenant-registry', () => {
       clock
     )
     expect(res.status).toBe('warn')
-    expect(res.detail).toMatch(/2 apps/)
+    expect(res.blockers?.join(' ')).toMatch(/2 apps/)
     // readiness is read by app admins: it names no other app
     expect(`${res.detail} ${res.blockers?.join(' ')}`).not.toMatch(/\bone\b|\btwo\b|same\.example/)
+  })
+})
+
+describe('readiness on an empty list', () => {
+  it('warns when the loaded list has no app', async () => {
+    const reg = (await start(fakeFetch([json(body([]))]).fn)) as NonNullable<
+      ReturnType<typeof getHubTenantSource>
+    >
+    const res = judgeTenantRegistry(reg.details(), clock)
+    expect(res.status).toBe('warn')
+    expect(res.detail).toMatch(/lists no app/)
   })
 })
 
