@@ -77,7 +77,7 @@ export function SharedUpgradePanel({ shared }: { shared: SharedDeployment }) {
             onClose={() => setWatching(null)}
           />
         ) : (
-          <UpgradeForm shared={shared} onStarted={setWatching} />
+          <UpgradeForm shared={shared} runs={history.data ?? []} onStarted={setWatching} />
         )}
         <UpgradeHistory query={history} onWatch={setWatching} current={current} />
       </div>
@@ -87,6 +87,20 @@ export function SharedUpgradePanel({ shared }: { shared: SharedDeployment }) {
 
 /** Planned or running (and any status this screen does not know, so a live view never freezes). */
 const isLiveRun = (s: string) => isLivePromotion(s)
+
+/** Versions this deployment ran after a finished Hub run (upgrade or rollback), newest first. */
+export function rollbackVersions(runs: SharedDeploy[], current: string | null): string[] {
+  const out: string[] = []
+  for (const r of runs)
+    if (
+      r.status === 'success' &&
+      (r.kind === 'upgrade' || r.kind === 'rollback') &&
+      r.version !== current &&
+      !out.includes(r.version)
+    )
+      out.push(r.version)
+  return out
+}
 
 function upgradeError(err: unknown, fallback: string): ErrorDescription {
   const d = sharedError(err, fallback)
@@ -107,9 +121,12 @@ const KIND_LABEL: Record<SharedUpgradeKind, { title: string; verb: string; start
 
 function UpgradeForm({
   shared,
+  runs,
   onStarted
 }: {
   shared: SharedDeployment
+  /** The deployment's runs, newest first: a rollback goes only to a version it ran before. */
+  runs: SharedDeploy[]
   onStarted: (deployId: number) => void
 }) {
   const qc = useQueryClient()
@@ -120,13 +137,28 @@ function UpgradeForm({
     queryFn: () => fetchSharedVersions(shared.id),
     staleTime: 60_000
   })
-  const choices = useMemo(() => versions.data?.versions ?? [], [versions.data])
+  // Upgrade: the published versions. Roll back: only versions a run of the Hub deployed here
+  // and finished (NOT_DEPLOYED_BEFORE otherwise), newest first, never the one it runs.
+  const choices = useMemo(
+    () =>
+      kind === 'rollback'
+        ? rollbackVersions(runs, shared.version_pin)
+        : (versions.data?.versions ?? []),
+    [kind, runs, shared.version_pin, versions.data]
+  )
   const [picked, setPicked] = useState('')
   // Pinned on first load: a refetch listing a newer version never swaps it under a typed key.
   useEffect(() => {
     if (picked || choices.length === 0) return
     setPicked(choices.find((v) => v !== shared.version_pin) ?? choices[0])
   }, [picked, choices, shared.version_pin])
+  // Upgrade and roll back offer different versions: switching starts the pick again.
+  const shownKind = useRef(kind)
+  useEffect(() => {
+    if (shownKind.current === kind) return
+    shownKind.current = kind
+    setPicked('')
+  }, [kind])
   const version = picked.trim()
 
   const [confirm, setConfirm] = useState('')

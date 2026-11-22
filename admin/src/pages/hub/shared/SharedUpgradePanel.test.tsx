@@ -16,7 +16,7 @@ vi.mock('@/lib/api', () => ({
   }
 }))
 
-const { SharedUpgradePanel } = await import('./SharedUpgradePanel')
+const { rollbackVersions, SharedUpgradePanel } = await import('./SharedUpgradePanel')
 
 const SHARED: SharedDeployment = {
   id: 4,
@@ -317,6 +317,63 @@ describe('SharedUpgradePanel', () => {
     await waitFor(() => expect(h.post).toHaveBeenCalledWith('/hub/shared-deploys/31/cancel', {}), {
       timeout: 5000
     })
+  })
+
+  it('roll back offers only versions a finished Hub run deployed here, not the registry', async () => {
+    history = [
+      {
+        id: 30,
+        shared_deployment_id: 4,
+        kind: 'upgrade',
+        version: '0.3.210',
+        from_version: '0.3.200',
+        status: 'success',
+        step: 'verify',
+        error: null,
+        job_run_id: 1,
+        started_by: null,
+        started_at: '2026-11-20T10:00:00.000Z',
+        finished_at: '2026-11-20T10:10:00.000Z'
+      },
+      {
+        id: 29,
+        shared_deployment_id: 4,
+        kind: 'upgrade',
+        version: '0.3.200',
+        from_version: null,
+        status: 'success',
+        step: 'verify',
+        error: null,
+        job_run_id: 1,
+        started_by: null,
+        started_at: '2026-11-19T10:00:00.000Z',
+        finished_at: '2026-11-19T10:10:00.000Z'
+      },
+      {
+        id: 28,
+        shared_deployment_id: 4,
+        kind: 'upgrade',
+        version: '0.3.150',
+        from_version: null,
+        status: 'failed',
+        step: 'apply',
+        error: null,
+        job_run_id: 1,
+        started_by: null,
+        started_at: '2026-11-18T10:00:00.000Z',
+        finished_at: '2026-11-18T10:10:00.000Z'
+      }
+    ]
+    wrap()
+    await screen.findByRole('list', { name: 'Upgrade history' })
+    fireEvent.click(screen.getByRole('button', { name: 'Roll back' }))
+    await waitFor(() =>
+      expect(h.post).toHaveBeenCalledWith('/hub/shared/4/upgrade/plan', {
+        version: '0.3.200',
+        kind: 'rollback'
+      })
+    )
+    expect(rollbackVersions(history, '0.3.210')).toEqual(['0.3.200'])
   })
 
   it('history lists earlier runs', async () => {
