@@ -1213,7 +1213,8 @@ export const hubCreateDocs: DocSection = {
         "Check now (administrators and the app's owners): looks at the waited thing once. If it is there the creation continues. If a promotion holds the environment the creation stays waiting, with a note, and continues when the environment is free.",
         'Installed: see "Waiting for the deploy key".',
         'Cancel (administrators): a waiting or queued creation stops at once; a running one stops at its next step boundary.',
-        'A creation whose Hub stopped mid-step becomes `interrupted` when the Hub starts again, or within 5 minutes if its lock is gone; Retry continues it. The 5-minute job `hub-creation-waits` also starts waiting creations whose database or name is ready, and creations that found their environment busy.'
+        'A creation whose Hub stopped mid-step becomes `interrupted` when the Hub starts again, or within 5 minutes if its lock is gone; Retry continues it. The 5-minute job `hub-creation-waits` also starts waiting creations whose database or name is ready, and creations that found their environment busy.',
+        'Only one creation step runs per environment, even if Redis loses the lock: a running creation also writes a heartbeat every minute, and while it is fresh (2 minutes) nothing takes the creation over or marks it interrupted. Retry, the 5-minute job and a delete of the environment leave it alone (the delete answers `CREATION_RUNNING`). A running creation that finds its own lock gone stops its current wait at once and becomes `interrupted`; Retry continues it.'
       ]
     },
     {

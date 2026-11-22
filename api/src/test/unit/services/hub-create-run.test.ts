@@ -126,7 +126,9 @@ const R = await import('../../../services/hub/create/run.js')
 const store = await import('../../../services/hub/create/store.js')
 const D = await import('../../../services/hub/db/databases.js')
 const { listComponents } = await import('../../../services/hub/components.js')
-const { redisPromoteLock } = await import('../../../services/hub/promote-lock.js')
+const { redisPromoteLock, hubPromoteLockKey } = await import(
+  '../../../services/hub/promote-lock.js'
+)
 const { openSecret, sealSecret } = await import('../../../services/hub/secrets.js')
 const { pinText } = await import('../../../services/hub/registry.js')
 const { stackName } = await import('../../../services/hub/create/app-config.js')
@@ -1259,6 +1261,110 @@ describe('fix round 1: runner secrets, made writes and orphans', () => {
     const done = await R.withEnvironmentsQuiet([envId], async () => 'deleted', { lock })
     expect(done).toBe('deleted')
     expect((await creation(envId)).status).toBe('interrupted')
+  })
+})
+
+// ── liveness beside the lock (ruling P3-31) ─────────────────────────────────
+
+describe('a live leg proves it is alive (heartbeat)', () => {
+  const one = () =>
+    input({ environments: [{ key: 'production', database: { server_id: autoServer } }] })
+  const lockKey = (envId: number) => hubPromoteLockKey(envId)
+
+  /** Starts one environment, Installed, and parks its leg inside the deploy wait. */
+  async function parkedInDeploy(renewMs?: number) {
+    const gate: { release: () => void; parked: boolean } = { release: () => {}, parked: false }
+    const held = new Promise<void>((r) => {
+      gate.release = r
+    })
+    const d = deps({
+      ...(renewMs ? { renewMs } : {}),
+      sleep: async (ms: number, signal?: AbortSignal) => {
+        clock.t += ms
+        if (gate.parked) return
+        const deploying = await db('nivaro_hub_creations')
+          .where({ status: 'running', step: 'deploy' })
+          .first('id')
+        if (!deploying) return
+        gate.parked = true
+        await Promise.race([
+          held,
+          new Promise<void>((r) => signal?.addEventListener('abort', () => r(), { once: true }))
+        ])
+      }
+    })
+    const out = await startAndWait(one(), d, { stopAtOperator: true })
+    const envId = out.environments[0].id
+    await R.confirmOperatorInstalled(envId, USER, d)
+    for (let i = 0; i < 500 && !gate.parked; i++) await new Promise((r) => setTimeout(r, 2))
+    expect(gate.parked).toBe(true)
+    return { envId, d, gate }
+  }
+
+  it('Redis loses the lock mid-deploy: cron, Retry and delete all leave the live leg alone', async () => {
+    const { envId, d, gate } = await parkedInDeploy()
+    const row = await creation(envId)
+    expect(row.status).toBe('running')
+    expect(row.heartbeat_at).not.toBeNull()
+    redis.store.delete(lockKey(envId))
+    expect(await lock.held(envId)).toBe(false)
+
+    expect(await R.recoverInterruptedCreations({ lock })).toBe(0)
+    await R.checkWaitingCreations(d)
+    await expect(R.resumeCreation(envId, USER, 'retry', d)).rejects.toMatchObject({
+      code: 'NOT_RESUMABLE'
+    })
+    await expect(
+      R.withEnvironmentsQuiet([envId], async () => 'deleted', { lock })
+    ).rejects.toMatchObject({ code: 'CREATION_RUNNING' })
+    expect(await R.runCreationLeg(envId, USER, d)).toBe('busy')
+    expect((await creation(envId)).status).toBe('running')
+    expect(await lock.held(envId)).toBe(false) // the delete gate let go of what it took
+
+    gate.release()
+    await settle([envId], d)
+    expect((await creation(envId)).status).toBe('done')
+  })
+
+  it('a running row another Hub vouches for (fresh heartbeat, no lock) is never taken over', async () => {
+    const out = await startAndWait(one())
+    const envId = out.environments[0].id
+    const c = await creation(envId)
+    await store.patchCreation(c.id, { status: 'running', step: 'deploy', heartbeat_at: new Date() })
+    expect(await lock.held(envId)).toBe(false)
+
+    expect(await R.recoverInterruptedCreations({ lock })).toBe(0)
+    await expect(R.resumeCreation(envId, USER, 'retry', deps())).rejects.toMatchObject({
+      code: 'NOT_RESUMABLE'
+    })
+    await expect(
+      R.withEnvironmentsQuiet([envId], async () => 'deleted', { lock })
+    ).rejects.toMatchObject({ code: 'CREATION_RUNNING' })
+    await store.patchCreation(c.id, { status: 'waiting' })
+    await store.patchCreation(c.id, { status: 'running' })
+    expect((await creation(envId)).status).toBe('running')
+
+    // The heartbeat goes stale (its Hub died): healed to interrupted, Retry works again.
+    await store.patchCreation(c.id, { heartbeat_at: new Date(Date.now() - 3 * 60_000) })
+    expect(await R.recoverInterruptedCreations({ lock })).toBe(1)
+    expect((await creation(envId)).status).toBe('interrupted')
+    expect((await creation(envId)).heartbeat_at).toBeNull()
+  })
+
+  it('a renewal that finds the lock gone stops the leg in its wait (interrupted, Retry resumes)', async () => {
+    const { envId, d } = await parkedInDeploy(20)
+    redis.store.delete(lockKey(envId))
+    await R.awaitCreation(envId)
+    const c = await creation(envId)
+    expect(c.status).toBe('interrupted')
+    expect(c.error).toMatch(/^INTERRUPTED: The environment lock was lost/)
+    expect(c.steps.find((s) => s.key === 'deploy')).toMatchObject({ status: 'failed' })
+    expect(c.heartbeat_at).toBeNull()
+
+    await R.resumeCreation(envId, USER, 'retry', deps())
+    await settle([envId])
+    expect((await creation(envId)).status).toBe('done')
+    void d
   })
 })
 

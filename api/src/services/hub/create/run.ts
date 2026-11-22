@@ -16,8 +16,10 @@
 //
 // Retry never re-plans: it resumes the stored creation at its first unfinished step (every step
 // is idempotent), so the creation's own app key, environments, stack names and database rows
-// never count against it. On boot a `running` row whose environment lock is gone becomes
-// `interrupted`; Retry resumes it at that step.
+// never count against it. A live leg renews its lock and the row's heartbeat_at every minute; a
+// `running` row whose heartbeat is stale (> 2 min) and whose lock is gone becomes `interrupted`
+// (boot, the cron, Retry, the delete gate); one with a fresh heartbeat is never taken over, even
+// when Redis lost the lock (ruling P3-31). Retry resumes an interrupted one at that step.
 //
 // Secrets never reach a log line, a step note, an error, an activity row or readCreation: every
 // stored or logged text passes the leg's scrub over every secret it opened or made.
@@ -43,6 +45,7 @@ import { generateHexSecret } from '../db/names.js'
 import { getServerRow, type HubDbServerRow, publicServer } from '../db/servers.js'
 import { defaultSleep, type Sleep } from '../gitlab-write.js'
 import { checkName as checkEnvironmentNameById } from '../name-check.js'
+import { HEARTBEAT_FRESH_MS, withoutFreshHeartbeat } from '../promote-heal.js'
 import { defaultPromoteLock, LOCK_RENEW_MS, type PromoteLock } from '../promote-lock.js'
 import { hubImage } from '../registry.js'
 import { HubSecretError, openSecret, sealSecret } from '../secrets.js'
@@ -120,6 +123,8 @@ export interface CreationDeps {
   repoLock?: KeyedLock
   startLock?: KeyedLock
   flags?: CreationFlags
+  /** How often a leg renews its lock and heartbeat (default LOCK_RENEW_MS; tests shorten it). */
+  renewMs?: number
 }
 
 export function defaultCreationDeps(): CreationDeps {
@@ -128,6 +133,7 @@ export function defaultCreationDeps(): CreationDeps {
 
 interface Resolved {
   lock: PromoteLock
+  renewMs: number
   flags: CreationFlags
   startLock: KeyedLock
   startJobRun: NonNullable<CreationDeps['startJobRun']>
@@ -138,6 +144,7 @@ interface Resolved {
 function resolve(d: CreationDeps = defaultCreationDeps()): Resolved {
   return {
     lock: d.lock,
+    renewMs: d.renewMs ?? LOCK_RENEW_MS,
     flags: d.flags ?? defaultCreationFlags(),
     startLock: d.startLock ?? defaultKeyedLock(),
     startJobRun:
@@ -476,30 +483,91 @@ async function runLeg(
   if (!token) return 'busy'
   const entry: LiveLeg = { creationId: first.id, cancel: false }
   live.set(envId, entry)
+  // A lost lock aborts the step's waits (a deploy wait, a name / link / admin poll) at once.
+  const ac = new AbortController()
   let lockLost = false
+  let claimed = 0
+  /** This leg is alive: written with every lock renewal, whether or not the lock held (P3-31). */
+  const heartbeat = () =>
+    claimed
+      ? db(CREATIONS)
+          .where({ id: first.id, status: 'running' })
+          .update({ heartbeat_at: new Date() })
+          .catch(() => undefined)
+      : Promise.resolve()
   const renew = setInterval(() => {
     void r.lock
       .renew(envId, token)
       .then((held) => {
-        if (!held) lockLost = true
+        if (!held) {
+          lockLost = true
+          ac.abort()
+        }
       })
       .catch(() => undefined)
-  }, LOCK_RENEW_MS)
+    void heartbeat()
+  }, r.renewMs)
   renew.unref?.()
   try {
-    // We hold the environment: a row still `running` here belongs to a runner that died.
-    const claimed = await patchCreation(
-      first.id,
-      { status: 'running', waiting_for: null, error: null, finished_at: null },
-      [...from, 'running']
-    )
+    // We hold the environment, but a row still `running` here may belong to a leg that lost its
+    // lock and runs on (a Redis restart): only one whose heartbeat is stale is taken over.
+    claimed = await claimLeg(first.id, from)
     if (!claimed) return 'busy'
     await r.flags.clearCancel(first.id)
-    return await walk(envId, first.id, user, r, entry, () => lockLost)
+    return await walk(envId, first.id, user, r, entry, () => lockLost, ac.signal)
   } finally {
     clearInterval(renew)
     live.delete(envId)
+    // This leg no longer vouches for the row (whatever it ended in): one left `running` is
+    // stale at once. Still under our lock, so no other leg can have claimed it meanwhile.
+    if (claimed)
+      await db(CREATIONS)
+        .where({ id: first.id })
+        .update({ heartbeat_at: null })
+        .catch(() => undefined)
     await r.lock.release(envId, token)
+  }
+}
+
+/**
+ * Moves the creation to `running` for this leg: from one of `from`, or from a `running` row no
+ * leg vouches for (no heartbeat, or one older than HEARTBEAT_FRESH_MS). Answers the rows changed.
+ */
+async function claimLeg(id: number, from: readonly CreationStatus[]): Promise<number> {
+  const now = Date.now()
+  const q = db(CREATIONS)
+    .where({ id })
+    .where((w) =>
+      w
+        .whereIn('status', from as CreationStatus[])
+        .orWhere((x) => withoutFreshHeartbeat(x.where({ status: 'running' }), now))
+    )
+  return Number(
+    await q.update({
+      status: 'running',
+      waiting_for: null,
+      error: null,
+      finished_at: null,
+      heartbeat_at: new Date(now),
+      updated_at: new Date(now)
+    })
+  )
+}
+
+/** A `running` creation row a live leg still vouches for (heartbeat within HEARTBEAT_FRESH_MS). */
+export function creationHeartbeatFresh(row: CreationRow, now = Date.now()): boolean {
+  if (row.status !== 'running' || !row.heartbeat_at) return false
+  const at = Date.parse(row.heartbeat_at)
+  return Number.isFinite(at) && at >= now - HEARTBEAT_FRESH_MS
+}
+
+/** A step's sleep that ends at once and throws when the leg's lock is lost (P3-31). */
+function guardedSleep(sleep: Sleep, signal: AbortSignal): Sleep {
+  const stop = () => new StepFailure('INTERRUPTED', 'The environment lock was lost.')
+  return async (ms) => {
+    if (signal.aborted) throw stop()
+    await sleep(ms, signal)
+    if (signal.aborted) throw stop()
   }
 }
 
@@ -509,7 +577,8 @@ async function walk(
   user: { id: string } | null,
   r: Resolved,
   entry: LiveLeg,
-  lockLost: () => boolean
+  lockLost: () => boolean,
+  signal: AbortSignal
 ): Promise<'done' | 'waiting' | 'failed' | 'cancelled' | 'interrupted'> {
   const secrets = new Set<string>()
   let row = (await readCreationRow(envId)) as CreationRow
@@ -565,7 +634,8 @@ async function walk(
       log,
       secrets,
       tokenUserId: tokenUserMemo(target),
-      deps: r.step
+      signal,
+      deps: { ...r.step, sleep: guardedSleep(r.step.sleep, signal) }
     }
 
     for (const key of STEP_ORDER) {
@@ -631,6 +701,15 @@ async function walk(
     await run.complete(`Create ${app.key}/${env.key}: done`)
     return 'done'
   } catch (err) {
+    if (signal.aborted) {
+      // The lock was lost mid-step: stop at once, the step left as interrupted (Retry resumes).
+      const note = 'The environment lock was lost during this step; retry.'
+      if (current) Object.assign(current, { status: 'failed', at: new Date().toISOString(), note })
+      await finish('interrupted', `INTERRUPTED: ${note}`).catch(() => undefined)
+      log(`${current?.key ?? 'start'} → stopped: the creation lock was lost`, 'error')
+      await run?.fail(new Error(`${current?.key ?? 'start'}: stopped (lock lost)`))
+      return 'interrupted'
+    }
     const code = errorCode(err)
     const text = scrub(err instanceof Error ? err.message : err, secrets, 900)
     if (current)
@@ -832,23 +911,29 @@ export async function cancelCreation(
   return { ok: true }
 }
 
-async function interrupt(row: CreationRow, note: string): Promise<boolean> {
+/**
+ * Marks a `running` row interrupted — only while no leg vouches for it: no heartbeat, or one
+ * older than HEARTBEAT_FRESH_MS ("now" from the app's clock, bound). A live leg whose lock was
+ * lost keeps its heartbeat fresh and is never interrupted here (ruling P3-31).
+ */
+async function interrupt(row: CreationRow, note: string, now = Date.now()): Promise<boolean> {
   const steps = row.steps.map((s) =>
     s.status === 'running'
-      ? { ...s, status: 'failed' as const, at: new Date().toISOString(), note }
+      ? { ...s, status: 'failed' as const, at: new Date(now).toISOString(), note }
       : s
   )
-  const n = await patchCreation(
-    row.id,
-    {
-      status: 'interrupted',
-      steps,
-      error: `INTERRUPTED: ${note}${row.step ? ` (${row.step})` : ''}`,
-      finished_at: new Date()
-    },
-    ['running']
-  )
-  return n > 0
+  const n = await withoutFreshHeartbeat(
+    db(CREATIONS).where({ id: row.id, status: 'running' }),
+    now
+  ).update({
+    status: 'interrupted',
+    steps: JSON.stringify(steps),
+    error: `INTERRUPTED: ${note}${row.step ? ` (${row.step})` : ''}`,
+    finished_at: new Date(now),
+    heartbeat_at: null,
+    updated_at: new Date(now)
+  })
+  return Number(n) > 0
 }
 
 /**
@@ -955,11 +1040,20 @@ export async function withEnvironmentsQuiet<T>(
         )
       held.push({ envId, token })
     }
-    // We hold every lock: a `running` row here belongs to a runner that died — mark it.
+    // We hold every lock: a `running` row here belongs to a runner that died — unless its leg
+    // lost the lock and still runs (fresh heartbeat): then refused, the row left alone.
     for (const envId of envIds) {
-      if (live.has(envId)) continue
+      const busy = () =>
+        new CreationError(
+          'CREATION_RUNNING',
+          'A creation step is running on this environment — wait for it or cancel it.',
+          409
+        )
+      if (live.has(envId)) throw busy()
       const row = await readCreationRow(envId)
-      if (row?.status === 'running') await interrupt(row, 'The runner stopped during this step')
+      if (row?.status !== 'running') continue
+      if (await interrupt(row, 'The runner stopped during this step')) continue
+      if ((await readCreationRow(envId))?.status === 'running') throw busy()
     }
     return await fn()
   } finally {

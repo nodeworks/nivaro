@@ -6,7 +6,10 @@ import { longText } from '../portable-ddl.js'
  * Nivaro Hub phase 3: app creation runs, plus the creation settings an app carries. Created on
  * every install, used only in hub mode. No foreign keys; every step is skipped when it exists.
  *
- *  - nivaro_hub_creations                       one creation run per environment
+ *  - nivaro_hub_creations                       one creation run per environment;
+ *                                               heartbeat_at = renewed by the live leg with its
+ *                                               lock, so a row whose lock was lost but whose leg
+ *                                               still runs is never taken over or healed
  *  - nivaro_hub_apps.target_id / deploy_project / oidc / oidc_secret
  */
 export async function up(knex: Knex): Promise<void> {
@@ -28,7 +31,13 @@ export async function up(knex: Knex): Promise<void> {
       t.dateTime('created_at').nullable().defaultTo(utcNow(knex))
       t.dateTime('updated_at').nullable().defaultTo(utcNow(knex))
       t.dateTime('finished_at').nullable()
+      t.dateTime('heartbeat_at').nullable()
       t.unique(['environment_id'], { indexName: 'ux_nivaro_hub_creation_env' })
+    })
+  } else if (!(await knex.schema.hasColumn('nivaro_hub_creations', 'heartbeat_at'))) {
+    // A database that ran an earlier draft of this migration (phase 3 was never released).
+    await knex.schema.alterTable('nivaro_hub_creations', (t) => {
+      t.dateTime('heartbeat_at').nullable()
     })
   }
 

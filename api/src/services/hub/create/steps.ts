@@ -137,6 +137,8 @@ export interface StepContext {
   secrets: Set<string>
   /** The GitLab user id of the target's token (GET /user), read once per leg. */
   tokenUserId(): Promise<number>
+  /** Aborted when the leg loses its lock: every wait ends at once (ruling P3-31). */
+  signal?: AbortSignal
   deps: StepDeps
 }
 
@@ -674,7 +676,7 @@ async function rerunJob(
   pctx: GitCtx,
   jobId: number
 ): Promise<{ web_url: string; id: number }> {
-  const poll: PollOptions = { sleep: ctx.deps.sleep, now: ctx.deps.now }
+  const poll: PollOptions = { sleep: ctx.deps.sleep, now: ctx.deps.now, signal: ctx.signal }
   const again = await retryJob(pctx, jobId)
   ctx.log(`${ctx.target.config.deploy_job}: ran again (${again.web_url || `job ${again.id}`})`)
   const end = await waitJob(pctx, again.id, {
@@ -701,7 +703,7 @@ async function deployOnce(
   pctx: GitCtx,
   sha: string
 ): Promise<{ web_url: string; id: number }> {
-  const poll: PollOptions = { sleep: ctx.deps.sleep, now: ctx.deps.now }
+  const poll: PollOptions = { sleep: ctx.deps.sleep, now: ctx.deps.now, signal: ctx.signal }
   const job = await deployJobOf(ctx, pctx, sha)
   if (job && (job.status === 'failed' || job.status === 'canceled'))
     return rerunJob(ctx, pctx, job.id)

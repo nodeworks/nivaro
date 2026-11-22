@@ -90,6 +90,8 @@ export interface CreationRow {
   created_at: string | null
   updated_at: string | null
   finished_at: string | null
+  /** Renewed by the live leg with its lock (ruling P3-31); null when no leg vouches for it. */
+  heartbeat_at: string | null
 }
 
 function parseObj<T>(raw: unknown, fallback: T): T {
@@ -105,7 +107,13 @@ function parseObj<T>(raw: unknown, fallback: T): T {
 
 function iso(v: unknown): string | null {
   if (v === null || v === undefined || v === '') return null
-  const d = v instanceof Date ? v : new Date(String(v))
+  // SQLite may hand a datetime back as epoch milliseconds.
+  const d =
+    v instanceof Date
+      ? v
+      : typeof v === 'number' || /^\d{12,}$/.test(String(v))
+        ? new Date(Number(v))
+        : new Date(String(v))
   return Number.isNaN(d.getTime()) ? String(v) : d.toISOString()
 }
 
@@ -142,7 +150,8 @@ export function creationFromRow(r: Record<string, unknown>): CreationRow {
     started_by: (r.started_by as string | null) ?? null,
     created_at: iso(r.created_at),
     updated_at: iso(r.updated_at),
-    finished_at: iso(r.finished_at)
+    finished_at: iso(r.finished_at),
+    heartbeat_at: iso(r.heartbeat_at)
   }
 }
 
@@ -200,6 +209,7 @@ export interface CreationPatch {
   error?: string | null
   job_run_id?: number | null
   finished_at?: Date | null
+  heartbeat_at?: Date | null
 }
 
 /**
