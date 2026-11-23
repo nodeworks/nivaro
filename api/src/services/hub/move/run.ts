@@ -929,6 +929,11 @@ async function doStep(ctx: Ctx, key: MoveStepKey, steps: MoveSteps): Promise<voi
         throw err
       }
       await targetMaintenanceWithRetry(ctx)
+      // FW-4 I-1: a fact for the halt text (a Docker target's call sends nothing: boot maintenance).
+      if (!ctx.shared.toDocker && ctx.shared.to === null) {
+        steps.target_maint_set = true
+        await saveSteps(ctx, steps)
+      }
       if (steps.boot_freeze === 'on') {
         // R6-M-4: the intent first, so a crash inside the lift is seen (Resume freezes again,
         // a rollback lifts it).
@@ -1297,9 +1302,16 @@ async function halt(ctx: Ctx, move: HubMoveRow, sourceFrozen: boolean): Promise<
   const checklist = fresh.checklist.filter((c) => c.id !== 'target_stopped')
   checklist.push({ id: 'target_stopped', text: say, required: true, done: false })
   // R5-I-1: worded from the source's real state, never "stays in maintenance" when it serves.
+  // FW-4 I-1: and what the Hub did to the target, never more: it set its maintenance after the
+  // deploy (target_maint_set), or the target was deployed to start in it (a Docker stack's boot
+  // maintenance, a template that reads the move id from the pin); the Hub never claims it set
+  // a maintenance it did not.
+  const fresh0 = (await readMove(ctx.moveId)) ?? move
   const state = sourceFrozen
     ? 'so the source stays in maintenance (never two writers)'
-    : 'and the source keeps serving: it was not put in maintenance, and the target was last set to maintenance by the Hub'
+    : fresh0.steps.target_maint_set
+      ? 'and the source keeps serving: it was not put in maintenance, and the target was put in maintenance after its deploy'
+      : 'and the source keeps serving: it was not put in maintenance, because the target was deployed to start in maintenance'
   const error = `HALTED_TARGET_LIVE: The rollback stopped: the target could not be frozen or stopped, ${state}. ${say}`
   const ours = await patchMoveIfHolder(ctx.moveId, ctx.held.envToken, {
     status: 'interrupted',

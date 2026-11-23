@@ -98,6 +98,8 @@ export interface MoveSteps {
    * later run revokes what a dead one left. Written by the ops only (never by a run's step copy).
    */
   open_tickets?: string[]
+  /** FW-4 I-1: the Hub set a GitLab target's maintenance after its deploy (call answered). */
+  target_maint_set?: boolean
 }
 
 export interface MoveFilesSummary {

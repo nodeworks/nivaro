@@ -26,7 +26,10 @@ import {
   type HubPlacementRow,
   STACK_NAME_RE
 } from '../drivers.js'
-import { playJob as gitlabPlayJob, runDeployJob as gitlabRunDeployJob } from '../gitlab-write.js'
+import type {
+  playJob as gitlabPlayJob,
+  runDeployJob as gitlabRunDeployJob
+} from '../gitlab-write.js'
 import { sourceSubjectRe } from '../promote-gather.js'
 import { driverGitCtx } from '../promote-heal.js'
 import { PromotionError } from '../promote-lock.js'
@@ -191,7 +194,7 @@ export interface MoveOpsDeps {
   sharedStackRouter?: SharedStackRouter
   /** Gitlab target: one component through the promotion's own code (tests replace it). */
   deployComponent?: typeof deployComponentAt
-  /** The GitLab calls the boot-maintenance variable rides (tests replace them). */
+  /** The GitLab calls of the target deploy (tests replace them; the move sends no variables). */
   gitlabWrite?: Partial<{ runDeployJob: typeof gitlabRunDeployJob; playJob: typeof gitlabPlayJob }>
 }
 
@@ -623,23 +626,18 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
   // ── Gitlab target: the promotion's own pin + deploy job (Decision 9) ──────────────────────
 
   /**
-   * P6-20: the target's deploy job gets the pipeline variable HUB_BOOT_MAINTENANCE=<move id> on
-   * the play call (the trigger a promotion uses); a created app's template forwards it into the
-   * app's environment, so it boots in strict maintenance (no first-boot window). A deploy job that
-   * starts on its own cannot take variables: runDeployJob refuses (DEPLOY_VARIABLES_REFUSED) and
-   * the move rolls back rather than boot a writable target.
+   * FW-4 I-1 (ruling P6-37): the move id rides the PIN COMMIT, never a pipeline variable. The Hub
+   * template's deploy job runs by itself on every push (no play call), so a variable could never
+   * reach it: runDeployJob refused it (DEPLOY_VARIABLES_REFUSED) while the job deployed the target
+   * writable anyway. The pin file gets a last line `boot-maintenance=<move id>`, which a template
+   * that reads it (BOOT_MAINTENANCE_PROOF) forwards into the app, so the target boots in strict
+   * maintenance whether its job runs by itself or is played. A target whose template does not read
+   * it is 'unproven' (GITLAB_BOOT_WINDOW): the source is frozen for the deploy (R5-I-1) and the
+   * Hub sets the target's maintenance right after it. The deploy waits for the job either way,
+   * as a promotion does.
    */
-  const write = { runDeployJob: gitlabRunDeployJob, playJob: gitlabPlayJob, ...deps.gitlabWrite }
-  const boot = { HUB_BOOT_MAINTENANCE: String(move.id) }
-  const bootVariables = {
-    runDeployJob: ((ctx, ref, sha, o) =>
-      write.runDeployJob(ctx, ref, sha, {
-        ...o,
-        variables: { ...o.variables, ...boot }
-      })) as typeof gitlabRunDeployJob,
-    playJob: ((ctx, jobId, variables) =>
-      write.playJob(ctx, jobId, { ...variables, ...boot })) as typeof gitlabPlayJob
-  }
+  const write = deps.gitlabWrite
+  const bootPinLine = `boot-maintenance=${move.id}\n`
 
   const deployGitlab = async (
     side: Extract<Side, { kind: 'gitlab' }>,
@@ -676,7 +674,7 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
         driverId: driver.id,
         sourceSha: src.sha,
         targetBranch: componentTargetBranch(c, side.placement, driver.config.branch) ?? '',
-        pinText: pinText(version, digest, slim),
+        pinText: `${pinText(version, digest, slim)}${bootPinLine}`,
         pinFile: driver.config.pin_file ?? null,
         beforeJob: c.before_job,
         deployJob: c.deploy_job ?? driver.config.deploy_job,
@@ -694,7 +692,9 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
           envId
         },
         (line, level) => log(line, level),
-        { deps: { gitlab: bootVariables, ...(stopRequested ? { stopRequested } : {}) } }
+        {
+          deps: { ...(write ? { gitlab: write } : {}), ...(stopRequested ? { stopRequested } : {}) }
+        }
       )
       if (out.status === 'cancelled')
         throw new MoveStepError(

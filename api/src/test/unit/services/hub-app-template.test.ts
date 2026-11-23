@@ -1096,6 +1096,31 @@ describe('scripts/deploy.sh run (through the real wrapper)', () => {
       expect(run({ env: { HUB_BOOT_MAINTENANCE: bad } }).status, bad).not.toBe(0)
   })
 
+  // FW-4 I-1 (ruling P6-37): the template's deploy job runs by itself on the pin commit, so a
+  // pipeline variable never reaches it. The move id rides the pin file instead: a line
+  // `boot-maintenance=<move id>` (after the version, the digest and an optional slim digest).
+  it('FW-4 I-1: reads boot-maintenance=<move id> from the pin when no pipeline variable is set', () => {
+    const pinned = run({ pin: `0.3.300\n${DIGEST}\nboot-maintenance=42\n` })
+    expect(pinned.status, pinned.out).toBe(0)
+    expect(pinned.calls).toMatch(/^deployed .* BOOT=42$/m)
+    // After a slim digest line too.
+    const slim = run({ pin: `0.3.300\n${DIGEST}\n${DIGEST}\nboot-maintenance=43\n` })
+    expect(slim.status, slim.out).toBe(0)
+    expect(slim.calls).toMatch(/^deployed .* BOOT=43$/m)
+    // The pipeline variable still wins when it is set.
+    const both = run({
+      pin: `0.3.300\n${DIGEST}\nboot-maintenance=42\n`,
+      env: { HUB_BOOT_MAINTENANCE: '44' }
+    })
+    expect(both.calls).toMatch(/^deployed .* BOOT=44$/m)
+    // Only a move id: anything else in that line stops the deploy before ssh.
+    for (const bad of ['0', 'x1', '1;rm', '12a', ''])
+      expect(
+        run({ pin: `0.3.300\n${DIGEST}\nboot-maintenance=${bad}\n` }).status,
+        bad
+      ).not.toBe(0)
+  })
+
   const refusedBeforeSsh = (r: { status: number | null; calls: string }) => {
     expect(r.status).not.toBe(0)
     expect(r.calls).not.toMatch(/^ssh /m)

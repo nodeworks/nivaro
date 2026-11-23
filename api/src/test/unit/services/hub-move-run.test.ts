@@ -1304,8 +1304,33 @@ describe('rollback from release: exactly one writer at every point (P6-22)', () 
     expect(m?.error).toMatch(/^HALTED_TARGET_LIVE/)
     expect(m?.error).not.toMatch(/stays in maintenance/)
     expect(m?.error).toMatch(/source keeps serving/)
+    // FW-4 I-1: what happened, never more: this (Docker) target boots in maintenance; the Hub
+    // never claims it set one itself.
+    expect(m?.error).toMatch(/target was deployed to start in maintenance/)
+    expect(m?.error).not.toMatch(/by the Hub/)
     expect(ws.bad).toEqual([])
     expect(ws.sourceLive).toBe(true)
+  })
+
+  // FW-4 I-1: a deploy that fails before the Hub set the target's maintenance (no deploy freeze:
+  // the target starts in maintenance) halts without ever claiming the Hub set it.
+  it('FW-4 I-1: a target deploy that fails before its maintenance was set → the halt says it was deployed to start in maintenance', async () => {
+    plan = planOf('to_dedicated', 'manual')
+    const w = await world('shared')
+    fake.state.serving = true
+    fake.state.during = (name) => {
+      if (name === 'deployTarget')
+        throw new MoveStepError('DEPLOY_FAILED', 'The deploy job failed after it started.')
+      if (name === 'removeTarget')
+        throw new MoveStepError('TARGET_NOT_STOPPED', 'The GitLab target could not be retired.')
+    }
+    const { move_id } = await start(w, toFor('to_dedicated', w))
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    expect(m?.status).toBe('interrupted')
+    expect(m?.error).toMatch(/^HALTED_TARGET_LIVE/)
+    expect(m?.error).toMatch(/deployed to start in maintenance/)
+    expect(m?.error).not.toMatch(/after its deploy|by the Hub/)
   })
 
   it('halt: a GitLab target that cannot be frozen or retired → interrupted HALTED_TARGET_LIVE; tick, Roll back → source serving, one writer throughout', async () => {

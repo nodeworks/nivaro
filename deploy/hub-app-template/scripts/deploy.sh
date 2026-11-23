@@ -30,7 +30,9 @@
 #   DEPLOY_WAIT_TRIES     optional, default 40 (x 15 s) for /api/version
 #   HUB_BOOT_MAINTENANCE  optional pipeline variable the Hub sends when it deploys a move's
 #                         target (phase 6): a move id, forwarded so the app boots in strict
-#                         maintenance until the Hub releases that move
+#                         maintenance until the Hub releases that move. A job that runs by
+#                         itself (the pin commit starts it) gets no variable: the Hub then writes
+#                         the move id into the pin as a line boot-maintenance=<move id>
 set -eu
 # No globbing: hostnames and keys are split on commas / spaces below.
 set -f
@@ -127,6 +129,10 @@ case "$PUBLIC_URL" in https://* | http://*) ;; *) die "PUBLIC_URL must be an htt
 # A move's target deploy (Nivaro Hub phase 6): a move id, checked here so a bad value stops the
 # deploy before anything reaches the manager.
 BOOT_MAINTENANCE=${HUB_BOOT_MAINTENANCE:-}
+if [ -z "$BOOT_MAINTENANCE" ] && grep -q '^boot-maintenance=' "$PIN_FILE" 2>/dev/null; then
+  BOOT_MAINTENANCE=$(sed -n 's/^boot-maintenance=//p' "$PIN_FILE" | head -n 1)
+  [ -n "$BOOT_MAINTENANCE" ] || die "$PIN_FILE: boot-maintenance must be a move id"
+fi
 case "$BOOT_MAINTENANCE" in '' | [1-9] | [1-9]*[0-9]) ;; *) die "HUB_BOOT_MAINTENANCE must be a move id" ;; esac
 case "$BOOT_MAINTENANCE" in *[!0-9]*) die "HUB_BOOT_MAINTENANCE must be a move id" ;; esac
 [ "${#BOOT_MAINTENANCE}" -le 15 ] || die "HUB_BOOT_MAINTENANCE must be a move id"

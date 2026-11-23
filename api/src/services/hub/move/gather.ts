@@ -770,7 +770,9 @@ async function sharedTargetFacts(
  * too: so with this revision the app either boots in maintenance or is never deployed.
  */
 export const BOOT_MAINTENANCE_PROOF: Readonly<Record<string, string>> = Object.freeze({
-  'ci/deploy.yml': 'HUB_BOOT_MAINTENANCE',
+  // FW-4 I-1: the job reads the move id from the pin commit (it runs by itself; a pipeline
+  // variable never reaches it).
+  'ci/deploy.yml': 'boot-maintenance=',
   'manager/nivaro-hub-deploy': 'the stack file does not pass HUB_BOOT_MAINTENANCE',
   'manager/docker-stack.yml': 'HUB_BOOT_MAINTENANCE: ${HUB_BOOT_MAINTENANCE'
 })
