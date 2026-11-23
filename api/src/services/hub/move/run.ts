@@ -54,6 +54,7 @@ import {
   setEnvStatus,
   stepDone
 } from './rows.js'
+import { withMoveRun } from './run-context.js'
 
 /**
  * Nivaro Hub phase 6, Task 16: the move run — a recorded, locked, resumable run of the plan's
@@ -271,7 +272,8 @@ export async function awaitMove(id: number): Promise<void> {
 
 function spawn(moveId: number, work: () => Promise<void>): void {
   markMoveLive(moveId)
-  const p = runInBackgroundPool(work)
+  // FW-4: everything this run does is marked as the move's own (the MOVE_OPEN guards let it pass).
+  const p = runInBackgroundPool(() => withMoveRun(moveId, work))
     .catch((err) =>
       getApp()?.log?.error?.(
         { move_id: moveId, err: (err as Error | null)?.name ?? 'Error' },

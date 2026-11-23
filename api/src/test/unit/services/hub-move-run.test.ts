@@ -2141,3 +2141,24 @@ describe('per-move name removed at the end (P6-27)', () => {
     expect(fake.names()).toContain('dropTempHost')
   })
 })
+
+// FW-4 MOVE_OPEN (ruling P6-37): FW-1 refuses actions on an environment or shared deployment an
+// open move touches (services/hub/move-open.ts). The move's own run must still act: every op runs
+// inside currentMoveRun() = its move id, which the guard lets through; nothing else does.
+describe('the move runner marks its own actions (MOVE_OPEN)', () => {
+  it('every op of a run (forward, rollback, resume) sees currentMoveRun() = its move id', async () => {
+    const { currentMoveRun } = await import('../../../services/hub/move/run-context.js')
+    plan = planOf('to_shared')
+    const w = await world('docker')
+    const seen = new Set<number | null>()
+    fake.state.during = () => {
+      seen.add(currentMoveRun())
+    }
+    fake.state.failOn = (name) => name === 'verifyName'
+    const { move_id } = await start(w, toFor('to_shared', w))
+    await Run.awaitMove(move_id)
+    expect([...seen]).toEqual([move_id])
+    // Outside a run: none.
+    expect(currentMoveRun()).toBeNull()
+  })
+})
