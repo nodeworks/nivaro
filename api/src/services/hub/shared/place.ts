@@ -34,6 +34,7 @@ import {
   type SharedLock,
   sharedLockRefusal
 } from '../promote-lock.js'
+import { type HubEnvStatus, readEnvironmentStatus } from '../status.js'
 import { APP_KEY_UNKNOWN_MESSAGE } from './app-key-check.js'
 import { DeploymentLinkError, deploymentClient } from './deployment-client.js'
 import { replicasHolding } from './sightings.js'
@@ -137,6 +138,8 @@ export interface PlaceSharedDeps {
   startJobRun?: (label: string, envId: number, by: string | null) => Promise<JobRunHandle>
   /** How often the run renews its environment lock (tests shorten it). */
   renewMs?: number
+  /** Final review I-1: asks an environment's own hub link whether its app runs (tests fake it). */
+  probeLink?: (env: { id: number; base_url: string; hub_token: string }) => Promise<HubEnvStatus>
 }
 
 const realSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
@@ -359,6 +362,86 @@ function hexKey(): string {
 }
 
 /**
+ * Final review I-1: an environment with a hub token is asked through it whether its app runs.
+ * Any answer (ok, degraded, even a refused token) = it runs → USE_MOVE. No answer is unknown,
+ * and unknown never passes (SERVING_UNKNOWN): the token is cleared by an administrator once the
+ * app is gone for good.
+ */
+async function assertLinkSilent(
+  env: Record<string, unknown>,
+  deps: PlaceSharedDeps
+): Promise<void> {
+  const target = {
+    id: Number(env.id),
+    base_url: String(env.base_url ?? ''),
+    hub_token: String(env.hub_token)
+  }
+  let status: HubEnvStatus
+  try {
+    status = await (deps.probeLink ?? ((e) => readEnvironmentStatus(e, { fresh: true })))(target)
+  } catch {
+    status = {
+      state: 'unreachable',
+      version: null,
+      preflight: null,
+      checked_at: new Date().toISOString(),
+      source: 'hub-link'
+    }
+  }
+  const answered =
+    status.state === 'ok' ||
+    status.state === 'degraded' ||
+    (status.state === 'link_refused' &&
+      (status.error === 'HUB_LINK_REFUSED' || status.error === 'HUB_LINK_MISSING'))
+  if (answered)
+    throw refuse(
+      'USE_MOVE',
+      'This environment runs: its app answers at its address. Move it to the shared deployment instead.'
+    )
+  throw refuse(
+    'SERVING_UNKNOWN',
+    `This environment has a hub token, but its app did not answer (${status.error ?? status.state}), so the Hub cannot tell that it no longer runs. If it runs, move it instead; if it is gone for good, clear its hub token, then place it again.`
+  )
+}
+
+/**
+ * Final review I-1: with the app's key known, the database is still looked at. One that already
+ * holds a Nivaro install is an app that has served → USE_MOVE; one that cannot be looked at is
+ * unknown → SERVING_UNKNOWN (never a pass).
+ */
+async function assertDatabaseUnserved(
+  databaseId: number,
+  shared: SharedDeployment,
+  deps: PlaceSharedDeps
+): Promise<void> {
+  const unknown = (why: string) =>
+    refuse(
+      'SERVING_UNKNOWN',
+      `The Hub could not tell whether the database already serves an app (${why}). Place it again once the shared deployment can reach the database.`
+    )
+  let answer: Awaited<ReturnType<ReturnType<typeof deploymentClient>['dbCheck']>>
+  try {
+    const c = await openDatabaseConnection(databaseId)
+    answer = await (deps.client ?? deploymentClient)(shared).dbCheck({
+      client: c.engine,
+      connection: connectionUrl(c)
+    })
+  } catch (err) {
+    throw unknown(
+      err instanceof DeploymentLinkError || err instanceof HubDbError ? err.code : 'UNREACHABLE'
+    )
+  }
+  if (!answer.reachable) throw unknown('UNREACHABLE')
+  if (answer.ledger_state === 'present' || (answer.ledger && answer.ledger.count > 0))
+    throw refuse(
+      'USE_MOVE',
+      'The database already holds a Nivaro install: the app has served from it. Move the environment to the shared deployment instead.'
+    )
+  if (answer.ledger_state !== 'absent' && answer.ledger_state !== 'empty')
+    throw unknown('NO_LEDGER_ANSWER')
+}
+
+/**
  * I-3: the database holds nothing a key could have sealed — the shared deployment looks at it
  * live (db-check): reachable, and it positively reports no nivaro_migrations table or no rows in
  * it (P6-11b). Anything else (an install, a read error, an answer that does not say, unreachable,
@@ -368,7 +451,8 @@ function hexKey(): string {
 async function assertDatabaseEmpty(
   databaseId: number,
   shared: SharedDeployment,
-  deps: PlaceSharedDeps
+  deps: PlaceSharedDeps,
+  sharedRetry = false
 ): Promise<void> {
   const unknownKey = (why: string) =>
     refuse(
@@ -392,10 +476,18 @@ async function assertDatabaseEmpty(
   // P6-11b: only a positive "no ledger table" or "an empty ledger" lets a key be made. A read
   // error, or an answer that does not say (an older deployment), is unknown.
   const state = answer.ledger_state
-  if (state === 'present' || (answer.ledger && answer.ledger.count > 0))
+  if (state === 'present' || (answer.ledger && answer.ledger.count > 0)) {
+    // Final review I-1: an install is an app that has served — it moves, a key entered later
+    // would not change that. (A retry of a shared placement always has its key; kept as before.)
+    if (!sharedRetry)
+      throw refuse(
+        'USE_MOVE',
+        'The database already holds a Nivaro install: the app has served from it. Move the environment to the shared deployment instead.'
+      )
     throw unknownKey(
       'The database already holds a Nivaro install, sealed with its own key: a new key would leave its values unreadable.'
     )
+  }
   if (state !== 'absent' && state !== 'empty')
     throw unknownKey(
       'The shared deployment could not tell whether the database already holds a Nivaro install.'
@@ -626,11 +718,25 @@ async function checkAndWrite(
   const stack = await stackEditRefusal([envId], 'placement_id')
   if (stack) throw refuse(stack.code, stack.message, stack.status)
 
+  // Final review I-1: "never served" is judged from what runs, not only from Hub records. An
+  // adopted environment (phase 1) can serve on its own stack without one Hub deploy: placing it
+  // would give its database a second writer. A retry of a shared placement that never succeeded
+  // is the one placement kept (the earlier run already judged all of this).
+  const sharedRetry = current?.kind === 'shared'
+  if (current && !sharedRetry)
+    throw refuse(
+      'USE_MOVE',
+      'This environment has a dedicated placement: it runs, or ran, there. Move it to the shared deployment instead. If it never ran there, clear its placement first.'
+    )
+  if (!sharedRetry && env.hub_token) await assertLinkSilent(env, deps)
+
   // Ruling P6-11 (I-3): a key is generated only for a database known to be empty, looked at
   // live from the shared deployment (no nivaro_migrations table or rows). One that holds an
-  // install, or cannot be looked at, needs the app's own key entered first.
+  // install, or cannot be looked at, needs the app's own key entered first. I-1: with a known
+  // key, a database that already holds an install is an app that has served → USE_MOVE.
   const known = await openAppKey(envId)
-  if (!known) await assertDatabaseEmpty(input.database_id, shared0, deps)
+  if (!known) await assertDatabaseEmpty(input.database_id, shared0, deps, sharedRetry)
+  else if (!sharedRetry) await assertDatabaseUnserved(input.database_id, shared0, deps)
 
   const sharedLock = deps.sharedLock ?? defaultSharedLock()
   const held = await sharedLock.take(input.shared_id, 'place')
