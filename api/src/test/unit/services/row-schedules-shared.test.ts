@@ -420,6 +420,27 @@ describe('registerRowScheduleLifecycle', () => {
     expect(selfHosted.cron.list()).toEqual([])
   })
 
+  it('an importer or exporter process registers nothing (it runs one queue; web keeps the roster)', async () => {
+    for (const role of ['importer', 'exporter']) {
+      process.env.NIVARO_ROLE = role
+      const bus = new FakeBus()
+      const app = makeApp(bus.client())
+      rs.registerRowScheduleLifecycle(asApp(app))
+      expect(app.cron.list(), role).toEqual([])
+      expect(bus.subs, role).toEqual([])
+      state.rows.set('A', { nivaro_scheduled_reports: [report(1)] })
+      lifecycle.fireAppReady(tenant('A'))
+      await new Promise((r) => setTimeout(r, 20))
+      expect(app.cron.list(), role).toEqual([])
+      expect(state.reads, role).toEqual([])
+      lifecycle._resetAppLifecycleForTests()
+    }
+    process.env.NIVARO_ROLE = 'web'
+    const web = makeApp()
+    rs.registerRowScheduleLifecycle(asApp(web))
+    expect(web.cron.list().map((j) => j.id)).toEqual(['row-schedules-resync'])
+  })
+
   it('self-hosted: announcing a change still moves the schedules epoch and publishes nothing', async () => {
     delete process.env.HUB_SHARED_DEPLOYMENT
     const bus = new FakeBus()

@@ -23,6 +23,7 @@ import { db } from '../db/index.js'
 import { getTenantId, withTenant } from '../db/tenant-context.js'
 import { appBox } from './app-state.js'
 import { isNivaroCloud, perAppJobs } from './deployment-mode.js'
+import { isWorkerOnlyRole } from './process-role.js'
 import { onAppLeft, onAppReady } from './tenancy/app-lifecycle.js'
 import { appReadyForRequests } from './tenancy/app-migrations.js'
 import { getTenantRegistry } from './tenancy/registry.js'
@@ -226,10 +227,13 @@ async function resyncEverySource(app: FastifyInstance): Promise<void> {
  *   - an app that leaves has its bound entries dropped;
  *   - `row-schedules-resync` (every five minutes, once per app) catches anything missed;
  *   - a subscriber hears every replica's announcements (see onRowScheduleMessage).
- * Self-hosted and Nivaro Cloud: nothing (self-hosted keeps its boot resync and the epoch).
+ * Self-hosted and Nivaro Cloud: nothing (self-hosted keeps its boot resync and the epoch). An
+ * importer or exporter process neither: it runs one queue, ticks no row schedule, and runs no
+ * app migrations (every app would read as ready there, so it would resync against databases that
+ * may be half-migrated). A web process keeps the roster: Background Jobs lists it.
  */
 export function registerRowScheduleLifecycle(app: FastifyInstance): void {
-  if (!perAppJobs()) return
+  if (!perAppJobs() || isWorkerOnlyRole()) return
   onAppReady('row-schedules', () => resyncEverySource(app))
   onAppLeft('row-schedules', (tenantId) => {
     app.cron?.unscheduleTenant(tenantId)
