@@ -81,6 +81,7 @@ Secrets are read from files only (`*_FILE`). All values are read once at start.
 | `HUB_AGENT_EXTENSIONS_SHARED` | off | `on` when the folder is shared storage every node mounts. |
 | `HUB_AGENT_REGISTRY_AUTH_FILE` | none | A docker `config.json` with `auths`, for private registries. |
 | `HUB_AGENT_ENV_PREFIXES` | none | Comma list of env key prefixes a stack may set on top of the keys Nivaro reads, such as `EFP_` or `EFP_OPS_` for the EFP extension. Each entry is upper-case segments ending with `_` (`^[A-Z][A-Z0-9]*(_[A-Z0-9]+)*_$`). |
+| `HUB_AGENT_CA_BUNDLE_FILE` | none | PEM file of extra CA certificates every app service trusts (see Company CA below). Read once at start; at most 256 KB, at least one `CERTIFICATE` block and no private key, else the agent refuses to start (`CA_BUNDLE_BAD`, never printing the file). |
 
 ## Volumes on a swarm of more than one node
 
@@ -157,6 +158,32 @@ Secret files the agent creates for an app are owned by uid and gid 1000 with
 mode 0400. The Nivaro image drops from root to uid 1000 before Node starts, so a
 root-owned 0400 file could not be read.
 
+## Company CA
+
+App services call the Hub over https (sign-in through the Hub, reports, a shared
+deployment's tenant list). When a company or internal CA signs the Hub's
+certificate, Node in the app container rejects it. A stack cannot fix that
+itself: `NODE_EXTRA_CA_CERTS` and every `*_FILE` key stay refused as stack
+settings. The operator hands the CA to the agent instead:
+
+1. Put the CA certificates (root and any intermediates, PEM) in one file and
+   mount it into the agent, for example as a secret:
+   `docker secret create hub_agent_ca ./company-ca.pem`, then
+   `HUB_AGENT_CA_BUNDLE_FILE=/run/secrets/hub_agent_ca`.
+2. Restart the agent. `GET /v1/health` answers `ca_bundle: true`.
+3. Apply each stack again from the Hub. Every app service (all roles of an app
+   stack and of a shared deployment; not the bundled Redis, not the extension
+   unpack container) gets a swarm secret `nvh_<stack>_ca-<sha12>` (the first 12
+   hex of the bundle's sha256; uid/gid 1000, mode 0400) and
+   `NODE_EXTRA_CA_CERTS=/run/secrets/nvh_<stack>_ca-<sha12>`, set by the agent.
+
+The bundle's hash is part of each stack's spec hash, so after setting or
+changing the bundle the stacks show a different spec and Restart answers
+`SPEC_MISMATCH` until they are applied again. A changed bundle gets a new secret
+name; the old secret is removed once nothing can roll back to it, like any
+rotated secret. An agent without a bundle renders and hashes stacks exactly as
+before.
+
 ## TLS
 
 Without TLS the agent only listens on loopback (anything else needs
@@ -198,4 +225,5 @@ The container healthcheck is a TCP connect to the listen port (every 30 s, 15 s
 timeout, 3 retries, 30 s start period: a short timeout got the agent killed on a
 loaded host). `GET /v1/health` needs the token and is what the Hub uses. It
 answers `traefik_version` too, so a shared deployment's upgrade plan refuses a
-host pattern on a Traefik v2 agent before anything is applied.
+host pattern on a Traefik v2 agent before anything is applied. `ca_bundle` says
+whether `HUB_AGENT_CA_BUNDLE_FILE` is set (never its contents).

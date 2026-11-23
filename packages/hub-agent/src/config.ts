@@ -6,6 +6,7 @@
  * value, no path, so a failed start never prints a secret.
  */
 
+import { createHash } from 'node:crypto'
 import { parsePinned } from './image-ref.js'
 import { operatorPrefixConflict } from './spec.js'
 
@@ -53,6 +54,13 @@ export type AgentConfig = {
    * of the Nivaro app's known config keys. Default none.
    */
   envPrefixes: string[]
+  /**
+   * HUB_AGENT_CA_BUNDLE_FILE: extra trusted CA certificates (PEM) every app service of every stack
+   * gets as a swarm secret + NODE_EXTRA_CA_CERTS, so the app can call a Hub whose certificate a
+   * company CA signed. `sha256` = hex of `pem` (names the secret, part of the stack hash). null =
+   * not set: stacks render and hash exactly as before.
+   */
+  caBundle: { pem: string; sha256: string } | null
 }
 
 export const MIN_TOKEN_LENGTH = 32
@@ -60,6 +68,11 @@ export const MIN_TOKEN_DISTINCT_CHARS = 8
 export const DEFAULT_LISTEN = '127.0.0.1:7480'
 export const DEFAULT_SOCKET = '/var/run/docker.sock'
 export const DEFAULT_EXTENSIONS_ROOT = '/var/lib/nivaro-hub-agent/extensions'
+/** HUB_AGENT_CA_BUNDLE_FILE size cap (a few hundred certificates). */
+export const CA_BUNDLE_MAX_BYTES = 256 * 1024
+const CERT_BLOCK_RE = /-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/
+/** Any private key block (PRIVATE KEY, RSA/EC/ENCRYPTED PRIVATE KEY): never handed to an app. */
+const PRIVATE_KEY_RE = /PRIVATE KEY/
 
 const COMPONENT = '[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*'
 const HOST =
@@ -164,6 +177,25 @@ export function volumeOptsSafe(opts: Record<string, unknown>): boolean {
   )
     return false
   return o.some((x) => /^addr=[^=\s]+$/i.test(x))
+}
+
+/**
+ * HUB_AGENT_CA_BUNDLE_FILE: read once, ≤ CA_BUNDLE_MAX_BYTES, at least one whole CERTIFICATE
+ * block and no private key. Anything else is CA_BUNDLE_BAD (code only, never the contents).
+ */
+function readCaBundle(readFile: ReadFile, path: string | undefined): AgentConfig['caBundle'] {
+  if (!path?.trim()) return null
+  let raw: string
+  try {
+    raw = readFile(path.trim())
+  } catch {
+    throw new ConfigError('CA_BUNDLE_BAD')
+  }
+  if (typeof raw !== 'string' || Buffer.byteLength(raw, 'utf8') > CA_BUNDLE_MAX_BYTES)
+    throw new ConfigError('CA_BUNDLE_BAD')
+  const pem = `${raw.trim()}\n`
+  if (!CERT_BLOCK_RE.test(pem) || PRIVATE_KEY_RE.test(pem)) throw new ConfigError('CA_BUNDLE_BAD')
+  return { pem, sha256: createHash('sha256').update(pem).digest('hex') }
 }
 
 export function loadAgentConfig(env: NodeJS.ProcessEnv, readFile: ReadFile): AgentConfig {
@@ -279,6 +311,8 @@ export function loadAgentConfig(env: NodeJS.ProcessEnv, readFile: ReadFile): Age
   // A prefix that overlaps a deny key or deny prefix (GTK_ vs GTK_PATH) is refused outright.
   if (envPrefixes.some(operatorPrefixConflict)) throw new ConfigError('ENV_PREFIX_DENIED')
 
+  const caBundle = readCaBundle(readFile, env.HUB_AGENT_CA_BUNDLE_FILE)
+
   return {
     token,
     hmacKey,
@@ -300,6 +334,7 @@ export function loadAgentConfig(env: NodeJS.ProcessEnv, readFile: ReadFile): Age
     extensionsHostRoot,
     extensionsShared,
     registryAuth,
-    envPrefixes
+    envPrefixes,
+    caBundle
   }
 }

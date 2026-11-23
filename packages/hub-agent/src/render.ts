@@ -41,6 +41,11 @@ export type RenderContext = {
   extensionPaths: Record<string, string>
   agentNodeId: string
   network: string
+  /**
+   * The agent's CA bundle secret for this stack (HUB_AGENT_CA_BUNDLE_FILE, names.caBundleSecretName).
+   * Absent = no bundle: the rendered services are exactly what they were before the option.
+   */
+  caBundle?: { id: string; name: string }
 }
 
 export type EngineMount =
@@ -93,6 +98,15 @@ export type EngineServiceSpec = {
 export const APP_PORT = 3055
 export const UPLOADS_PATH = '/app/uploads'
 export const EXTENSIONS_PATH = '/app/api/extensions'
+/** Where swarm mounts a service's secrets. */
+export const SECRETS_PATH = '/run/secrets'
+/**
+ * The env the agent sets to its CA bundle file on every app service. It is NOT in
+ * AGENT_SET_ENV_KEYS (the Hub mirrors that list): a spec never reaches it because the NODE_*
+ * deny rule (spec.ts forbiddenEnvKey) refuses it as env and as a secret; only the agent's own
+ * configuration (HUB_AGENT_CA_BUNDLE_FILE) puts it here.
+ */
+export const CA_BUNDLE_ENV = 'NODE_EXTRA_CA_CERTS'
 
 /**
  * Owner of the secret files under /run/secrets. The image's entrypoint steps
@@ -313,6 +327,24 @@ export function renderServices(
       }
     })
 
+  // The agent's CA bundle (app services only; never Redis, never an unpack container).
+  const ca = ctx.caBundle
+  if (ca && (!ca.name.startsWith(`nvh_${stack}_`) || ca.name.includes('/'))) {
+    throw new Error('renderServices: bad CA bundle secret')
+  }
+  const caRef: EngineSecretRef | null = ca
+    ? {
+        SecretID: ca.id,
+        SecretName: ca.name,
+        File: {
+          Name: ca.name,
+          UID: SECRET_FILE_OWNER.UID,
+          GID: SECRET_FILE_OWNER.GID,
+          Mode: SECRET_FILE_OWNER.Mode
+        }
+      }
+    : null
+
   const extIds = Object.keys(spec.extensions).sort()
   const extMounts: EngineMount[] = extIds.map((id) => {
     if (!EXTENSION_ID_RE.test(id)) throw new Error('renderServices: bad extension id')
@@ -337,6 +369,7 @@ export function renderServices(
     else env.delete('NIVARO_ROLE')
     if (bundled) env.set('REDIS_URL', `redis://${serviceName(stack, 'redis')}:6379`)
     env.set('STORAGE_LOCAL_ROOT', UPLOADS_PATH)
+    if (caRef) env.set(CA_BUNDLE_ENV, `${SECRETS_PATH}/${caRef.File.Name}`)
 
     const limits: { NanoCPUs?: number; MemoryBytes?: number } = {}
     if (r.cpus !== undefined) limits.NanoCPUs = Math.round(r.cpus * 1e9)
@@ -361,7 +394,10 @@ export function renderServices(
           Image: spec.image,
           Env: envList(env),
           Labels: { ...labels },
-          Secrets: secrets.map((s) => ({ ...s, File: { ...s.File } })),
+          Secrets: [...secrets, ...(caRef ? [caRef] : [])].map((s) => ({
+            ...s,
+            File: { ...s.File }
+          })),
           Mounts: [
             volumeMount(uploadsVolume(stack), UPLOADS_PATH),
             ...extMounts.map((m) => ({ ...m }))

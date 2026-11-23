@@ -49,6 +49,7 @@ import {
 import { parsePinned } from './image-ref.js'
 import type { Log } from './log.js'
 import {
+  caBundleSecretName,
   isStackName,
   LABEL_APP,
   LABEL_ENV,
@@ -397,7 +398,9 @@ function repoOfImage(image: string): string | null {
  * spec hash (secret values replaced by keyed digests) plus every agent setting
  * that changes what is rendered — edge mode, network and Traefik version, entrypoints, cert
  * resolver, redis image, volume driver and options, the extension root and
- * placement. A config change therefore re-applies (ruling P4-5).
+ * placement — and the CA bundle's sha256 when HUB_AGENT_CA_BUNDLE_FILE is set. A config change
+ * therefore re-applies (ruling P4-5). Without a bundle the key is left out entirely, so a stack on
+ * an agent without one keeps the hash it had before the option existed.
  */
 export function stackHash(spec: StackSpec, cfg: AgentConfig, nodeId: string): string {
   const pinned = Object.keys(spec.extensions).length > 0 && !cfg.extensionsShared
@@ -413,7 +416,8 @@ export function stackHash(spec: StackSpec, cfg: AgentConfig, nodeId: string): st
     volumeOpts: cfg.volumeOpts,
     extensionsShared: cfg.extensionsShared,
     extensionsHostRoot: cfg.extensionsHostRoot,
-    node: pinned ? nodeId : null
+    node: pinned ? nodeId : null,
+    ...(cfg.caBundle ? { caBundle: cfg.caBundle.sha256 } : {})
   }
   return sha256(JSON.stringify(canonical({ v: 1, spec: specHash(spec, cfg.hmacKey), agent })))
 }
@@ -609,14 +613,16 @@ function render(
   hash: string,
   network: string,
   secretIds: Record<string, { id: string; name: string }>,
-  extensionPaths: Record<string, string>
+  extensionPaths: Record<string, string>,
+  caBundle: { id: string; name: string } | null
 ): EngineServiceSpec[] {
   return renderServices(name, spec, cfg, {
     hash,
     secretIds,
     extensionPaths,
     agentNodeId: deps.nodeId,
-    network
+    network,
+    ...(caBundle ? { caBundle } : {})
   }).map(finalize)
 }
 
@@ -704,12 +710,32 @@ export async function applyStack(
     }
     secretIds[key] = { id, name: sn }
   }
+  // 4b. The agent's CA bundle (HUB_AGENT_CA_BUNDLE_FILE): one more secret of this stack, made
+  // and labelled like the others; a changed bundle = a new name, the old one pruned in step 8.
+  let caBundle: { id: string; name: string } | null = null
+  if (cfg.caBundle) {
+    const sn = caBundleSecretName(name, cfg.caBundle.sha256)
+    let id = existing.get(sn)
+    if (!id) {
+      const r = await engine.call<{ ID?: unknown }>('POST', '/secrets/create', {
+        body: {
+          Name: sn,
+          Labels: { ...owner },
+          Data: Buffer.from(cfg.caBundle.pem, 'utf8').toString('base64')
+        }
+      })
+      if (!ok(r.status) || typeof r.body?.ID !== 'string') throw engineFailed()
+      id = r.body.ID
+      existing.set(sn, id)
+    }
+    caBundle = { id, name: sn }
+  }
 
   // 5. Extensions: unpacked folders on the host.
   const extensionPaths = await prepareExtensions(engine, cfg, name, spec, deps)
 
   // 6. Services, rendered fresh.
-  const rendered = render(name, spec, cfg, deps, hash, network, secretIds, extensionPaths)
+  const rendered = render(name, spec, cfg, deps, hash, network, secretIds, extensionPaths, caBundle)
   const current = new Map(mine.map((s) => [nameOf(s), s]))
   const changed: string[] = []
   const unchanged: string[] = []
@@ -793,6 +819,13 @@ export async function restartStack(
     if (!id) throw specMismatch()
     secretIds[key] = { id, name: sn }
   }
+  let caBundle: { id: string; name: string } | null = null
+  if (cfg.caBundle) {
+    const sn = caBundleSecretName(name, cfg.caBundle.sha256)
+    const id = existing.get(sn)
+    if (!id) throw specMismatch()
+    caBundle = { id, name: sn }
+  }
   // Restart creates nothing: an extension folder that is not there means another spec.
   const extensionPaths: Record<string, string> = {}
   for (const id of Object.keys(spec.extensions).sort()) {
@@ -800,7 +833,7 @@ export async function restartStack(
     if (!path) throw specMismatch()
     extensionPaths[id] = path
   }
-  const rendered = render(name, spec, cfg, deps, hash, network, secretIds, extensionPaths)
+  const rendered = render(name, spec, cfg, deps, hash, network, secretIds, extensionPaths, caBundle)
 
   const current = new Map(mine.map((s) => [nameOf(s), s]))
   if (rendered.length !== mine.length || rendered.some((svc) => !current.has(svc.Name)))

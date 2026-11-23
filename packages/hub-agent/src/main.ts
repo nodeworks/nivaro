@@ -100,7 +100,9 @@ export function baseHandlers(cfg: AgentConfig, facts: EngineFacts, engine?: Engi
         env_prefixes: cfg.envPrefixes,
         // Final review M-7: which Traefik reads the labels (HUB_AGENT_TRAEFIK_VERSION), so the
         // Hub's plans refuse a host pattern on v2 before any apply.
-        traefik_version: cfg.traefikVersion
+        traefik_version: cfg.traefikVersion,
+        // HUB_AGENT_CA_BUNDLE_FILE is set: app services trust its CAs. Never its contents.
+        ca_bundle: cfg.caBundle !== null
       }
     }),
     listStacks: notYet,
