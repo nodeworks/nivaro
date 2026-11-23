@@ -394,7 +394,21 @@ describe('the Hub asks for tickets and pulls', () => {
     })
     expect(started.statusCode).toBe(202)
     expect(started.json()).toEqual({ run_id: 'run-1' })
-    expect(vi.mocked(pull.startPull)).toHaveBeenCalledWith(body)
+    expect(vi.mocked(pull.startPull)).toHaveBeenCalledWith({ ...body, objects: false })
+    // P6-31: the Hub's `objects: true` reaches the pull (only a real true counts).
+    for (const [sent, got] of [
+      [true, true],
+      ['yes', false]
+    ] as const) {
+      vi.mocked(pull.startPull).mockClear()
+      await a.inject({
+        method: 'POST',
+        url: '/api/hub-link/files/pull',
+        headers: h,
+        payload: { ...body, objects: sent }
+      })
+      expect(vi.mocked(pull.startPull)).toHaveBeenCalledWith({ ...body, objects: got })
+    }
     const unknown = await a.inject({
       method: 'GET',
       url: '/api/hub-link/files/pull/run-x',
@@ -483,8 +497,10 @@ describe('the Hub asks for tickets and pulls', () => {
     expect(t.statusCode).toBe(200)
     expect(await ticketTenant(t.json().ticket)).toEqual({ ok: true, tenant: 'app-a-e1' })
     const seenIn: Array<string | undefined> = []
-    vi.mocked(pull.startPull).mockImplementationOnce(async () => {
+    let objectsSeen: unknown
+    vi.mocked(pull.startPull).mockImplementationOnce(async (req) => {
       seenIn.push(getTenantId())
+      objectsSeen = req.objects
       return { run_id: 'run-9' }
     })
     const p = await a.inject({
@@ -494,11 +510,13 @@ describe('the Hub asks for tickets and pulls', () => {
       payload: {
         source: 'https://a.example.com/api/hub-transfer/files',
         ticket: `nvt_${'T'.repeat(43)}`,
-        mode: 'delta'
+        mode: 'delta',
+        objects: true
       }
     })
     expect(p.statusCode).toBe(202)
     expect(seenIn).toEqual(['app-b-e2'])
+    expect(objectsSeen).toBe(true)
     const unknownApp = await a.inject({
       method: 'POST',
       url: '/api/hub-deployment/apps/nope-e1/files/ticket',

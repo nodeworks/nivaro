@@ -788,6 +788,10 @@ export const MOVE_BLOCKER_COPY: Record<string, Copy> = {
   ENV_OBJECT_STORAGE: {
     title: 'Files are stored in S3 or Azure set by environment variables',
     hint: 'A move copies only files stored on disk, so these would be lost. Move the storage settings into the app (Settings → Files) first.'
+  },
+  STORAGE_LAYOUT_DIFFERS: {
+    title: 'Some files are on storage the move cannot copy',
+    hint: 'This move changes the folder files are kept in, and the move copies only local, S3 and Azure files. Move those files to one of them first.'
   }
 }
 
@@ -820,6 +824,10 @@ export const MOVE_WARNING_COPY: Record<string, Copy> = {
   GITLAB_BOOT_WINDOW: {
     title: 'The Hub cannot prove the new app starts in maintenance',
     hint: 'For a few seconds it could take writes while the old one still runs on the same database. Make sure its deploy job passes the Hub’s boot maintenance, or move at a quiet time, then tick that item in the checklist.'
+  },
+  STORAGE_PREFIX_CHANGES: {
+    title: 'Files in S3 or Azure are copied to a new folder',
+    hint: 'A shared deployment keeps each app’s files in its own folder of the bucket, so they are copied, not shared: the bucket holds both copies until the old ones are removed.'
   },
   STACK_REAPPLY_ALL: {
     title: 'Every app on the shared deployment restarts once',

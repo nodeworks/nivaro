@@ -314,7 +314,8 @@ export function hubLinkClient(
       const a = await call('/files/pull', 'POST', {
         source: req.source,
         ticket: req.ticket,
-        mode: req.mode
+        mode: req.mode,
+        ...(req.objects ? { objects: true } : {})
       })
       if (!ok(a)) throw refusal(a)
       const b = a.body

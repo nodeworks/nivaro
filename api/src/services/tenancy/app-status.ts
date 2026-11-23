@@ -8,6 +8,7 @@ import { getTenantId, mysqlTenantTls, withTenant } from '../../db/tenant-context
 import { NIVARO_VERSION } from '../../version.js'
 import { keyFingerprint } from '../app-key-fingerprint.js'
 import { scrubDbError } from '../hub/db/connection.js'
+import { objectStorageCounts } from '../hub-transfer/object-counts.js'
 import type { TenantRecord } from './types.js'
 
 /**
@@ -30,7 +31,8 @@ export interface DeploymentAppStatus {
   preflight: PreflightSummary
   readiness_score: number | null
   busy: { imports: number; exports: number; renders: number }
-  files: { count: number; bytes: number; local: number }
+  /** objects (P6-31): rows per non-local provider; absent from older apps (= unknown). */
+  files: { count: number; bytes: number; local: number; objects?: Record<string, number> }
   key_fp: string | null
   maintenance: boolean
 }
@@ -175,7 +177,13 @@ async function fileCounts(): Promise<DeploymentAppStatus['files']> {
     .where((q) => q.whereNull('storage_provider').orWhere('storage_provider', 'local'))
     .count({ n: '*' })
     .first()) as { n?: unknown } | undefined
-  return { count: num(all?.n), bytes: num(all?.b), local: num(local?.n) }
+  const objects = await objectStorageCounts()
+  return {
+    count: num(all?.n),
+    bytes: num(all?.b),
+    local: num(local?.n),
+    ...(objects ? { objects } : {})
+  }
 }
 
 /**

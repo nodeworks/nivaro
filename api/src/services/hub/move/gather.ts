@@ -6,6 +6,7 @@ import type {
   SharedReadinessCode,
   SharedReadinessItem
 } from '../../hub-link/shared-readiness.js'
+import { parseObjectCounts } from '../../hub-transfer/object-counts.js'
 import { environmentFromRow, readApp } from '../apps.js'
 import { listComponents } from '../components.js'
 import { connectionUrl } from '../db/connection.js'
@@ -335,7 +336,7 @@ export function parseReadiness(raw: unknown): SharedReadiness | null {
     signin_hub: raw.signin_hub === true,
     db_identity: identity,
     busy: b as SharedReadiness['busy'],
-    files: f as SharedReadiness['files'],
+    files: { ...(f as SharedReadiness['files']), objects: parseObjectCounts(files.objects) },
     version,
     extensions
   }
@@ -672,7 +673,12 @@ async function sharedSourceFacts(
     reachable: true,
     version: st.value.version,
     key_fp: st.value.key_fp,
-    files: st.value.files
+    files: {
+      count: st.value.files.count,
+      bytes: st.value.files.bytes,
+      local: st.value.files.local,
+      objects: parseObjectCounts((st.value.files as { objects?: unknown }).objects)
+    }
   })
   if (status.status === 'fulfilled') out.oidc = status.value.oidc
   else {

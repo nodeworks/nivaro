@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { SHARED_READINESS_BLOCKERS } from '../../hub-link/shared-readiness.js'
+import { COPYABLE_OBJECT_STORAGE } from '../../hub-transfer/copyable.js'
 import { MIN_SHARED_POOL_MAX } from '../drivers.js'
 import { holderOf, lockHolderRefusal, sharedHolderOf, sharedLockRefusal } from '../promote-lock.js'
 import { routeActions } from './route-actions.js'
@@ -139,6 +140,12 @@ function answerWords(code: string | null | undefined): string {
   if (!code) return 'it did not answer'
   if (ANSWER_WORDS[code]) return ANSWER_WORDS[code]
   return /^[A-Z][A-Z0-9_]*$/.test(code) ? 'it gave no usable answer' : clean(code)
+}
+
+/** P6-31: to or from a shared deployment the object key prefix changes (apps/<tenantId>/ on a
+ *  shared one, the bucket root elsewhere); between two shared ones it stays (one tenant id). */
+function prefixChanges(input: MovePlanInput): boolean {
+  return (input.from.kind === 'shared') !== (input.to.kind === 'shared')
 }
 
 function list(items: string[], max = 10): string {
@@ -298,6 +305,20 @@ function blockersOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Bloc
       'ENV_OBJECT_STORAGE',
       `${envStorage(s.storage_provider) ? 'The source' : sideName(to)[0].toUpperCase() + sideName(to).slice(1)} keeps files in object storage set by environment variables (STORAGE_PROVIDER). A move copies only local files, so those would be lost.`
     )
+
+  // P6-31: on a shared deployment every object key lives under apps/<tenantId>/; to or from one
+  // the prefix changes, so saved-settings objects are copied — which the pull can do only for the
+  // saved-settings drivers it knows.
+  if (prefixChanges(input)) {
+    const odd = Object.entries(s.files?.objects ?? {})
+      .filter(([p, n]) => n > 0 && !(COPYABLE_OBJECT_STORAGE as readonly string[]).includes(p))
+      .map(([p, n]) => `${n} on ${p}`)
+    if (odd.length)
+      add(
+        'STORAGE_LAYOUT_DIFFERS',
+        `This move changes where stored files are kept (a shared deployment keeps each app's files in its own folder), and some files are on storage the move cannot copy (${list(odd)}). Move them to S3, Azure or local storage first.`
+      )
+  }
 
   if (intoShared && to.kind === 'shared') {
     const target = to.shared
@@ -491,6 +512,17 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
       'MANUAL_ROUTE',
       'The Hub cannot change this route itself. Someone must route the names to the new placement (the request is in the plan); the old placement serves until the name answers from the new one.'
     )
+  if (prefixChanges(input)) {
+    const objects = input.source.files?.objects
+    const copyable = objects
+      ? COPYABLE_OBJECT_STORAGE.reduce((n, p) => n + (objects[p] ?? 0), 0)
+      : null
+    if (copyable === null || copyable > 0)
+      add(
+        'STORAGE_PREFIX_CHANGES',
+        `${copyable === null ? 'Any files' : `${copyable} file(s)`} kept in S3 or Azure storage saved in Settings are copied to a new folder in the same bucket (a shared deployment keeps each app's files under apps/<app>/; elsewhere they sit at the bucket root). They are copied, not shared: the bucket holds both copies until the old ones are removed.`
+      )
+  }
   if (input.target_facts.boot_maintenance === 'unproven')
     add(
       'GITLAB_BOOT_WINDOW',

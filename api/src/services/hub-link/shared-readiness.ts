@@ -4,6 +4,7 @@ import { db } from '../../db/index.js'
 import { rawRows } from '../../db/raw-rows.js'
 import { NIVARO_VERSION } from '../../version.js'
 import { APP_KEY_RE, keyFingerprint } from '../app-key-fingerprint.js'
+import { objectStorageCounts } from '../hub-transfer/object-counts.js'
 
 /**
  * Nivaro Hub phase 6 (Decision 12): what this dedicated app would lose on a Hub shared deployment,
@@ -62,7 +63,8 @@ export interface SharedReadiness {
   /** `engine|server|port|database`, lower case (ruling R2); null when it cannot be read. */
   db_identity: string | null
   busy: { imports: number; exports: number; renders: number }
-  files: { count: number; bytes: number; local: number }
+  /** objects (P6-31): rows per non-local provider; absent from older apps (= unknown). */
+  files: { count: number; bytes: number; local: number; objects?: Record<string, number> }
   version: string
   extensions: Record<string, string>
 }
@@ -333,7 +335,13 @@ async function fileCounts(): Promise<SharedReadiness['files']> {
     .where((q) => q.whereNull('storage_provider').orWhere('storage_provider', 'local'))
     .count({ n: '*' })
     .first()) as { n?: unknown } | undefined
-  return { count: num(all?.n), bytes: num(all?.b), local: num(local?.n) }
+  const objects = await objectStorageCounts()
+  return {
+    count: num(all?.n),
+    bytes: num(all?.b),
+    local: num(local?.n),
+    ...(objects ? { objects } : {})
+  }
 }
 
 async function loadedExtensions(): Promise<Record<string, string>> {

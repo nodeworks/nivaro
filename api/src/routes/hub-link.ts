@@ -356,12 +356,18 @@ export async function hubLinkRoutes(app: FastifyInstance) {
   app.post('/files/pull', async (req, reply) => {
     reply.header('Cache-Control', 'no-store')
     const { startPull, PullError, errorShape } = await import('../services/hub-transfer/pull.js')
-    const b = (req.body ?? {}) as { source?: unknown; ticket?: unknown; mode?: unknown }
+    const b = (req.body ?? {}) as {
+      source?: unknown
+      ticket?: unknown
+      mode?: unknown
+      objects?: unknown
+    }
     try {
       const out = await startPull({
         source: b.source as string,
         ticket: b.ticket as string,
-        mode: b.mode as 'full' | 'delta'
+        mode: b.mode as 'full' | 'delta',
+        objects: b.objects === true
       })
       return reply.code(202).send(out)
     } catch (err) {

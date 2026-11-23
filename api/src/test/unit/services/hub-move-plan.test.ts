@@ -808,3 +808,60 @@ describe('plan text wording (design S9)', () => {
     expect(texts).not.toMatch(/[A-Z]{2,}_[A-Z_]+/)
   })
 })
+
+// Ruling P6-31: saved-settings S3/Azure objects live under apps/<tenant>/ on a shared deployment;
+// a move to or from shared changes the key prefix, so they are copied (never "same storage").
+describe('object storage key prefix (P6-31)', () => {
+  const warns = (p: { warnings: { code: string }[] }) => p.warnings.map((w) => w.code)
+  const withObjects = (objects: Record<string, number> | undefined) =>
+    src({ files: { count: 40, bytes: 1, local: 38, ...(objects ? { objects } : {}) } })
+
+  it('to_shared with saved-settings S3 objects → STORAGE_PREFIX_CHANGES (copied, not shared)', () => {
+    const p = buildMovePlan(input({ source: withObjects({ s3: 2 }) }))
+    expect(warns(p)).toContain('STORAGE_PREFIX_CHANGES')
+    expect(p.warnings.find((w) => w.code === 'STORAGE_PREFIX_CHANGES')?.text).toMatch(/copied/)
+    expect(codes(p)).not.toContain('STORAGE_LAYOUT_DIFFERS')
+  })
+
+  it('from shared to a dedicated stack with Azure objects → STORAGE_PREFIX_CHANGES', () => {
+    const p = buildMovePlan(
+      input({
+        kind: 'to_dedicated',
+        from: sharedSide(),
+        to: dockerSide(),
+        target: { kind: 'dedicated', placement_id: 3 } as never,
+        source: withObjects({ 'azure-blob': 1 })
+      })
+    )
+    expect(warns(p)).toContain('STORAGE_PREFIX_CHANGES')
+  })
+
+  it('not reported (an older report) while the prefix changes → still warned', () => {
+    expect(warns(buildMovePlan(input({ source: withObjects(undefined) })))).toContain(
+      'STORAGE_PREFIX_CHANGES'
+    )
+  })
+
+  it('between two shared deployments the prefix is the same → no warning', () => {
+    const p = buildMovePlan(
+      input({
+        kind: 'between_shared',
+        from: sharedSide({ id: 8, key: 'pool-b' }),
+        source: withObjects({ s3: 2 })
+      })
+    )
+    expect(warns(p)).not.toContain('STORAGE_PREFIX_CHANGES')
+  })
+
+  it('no object rows at all → no warning', () => {
+    expect(warns(buildMovePlan(input({ source: withObjects({}) })))).not.toContain(
+      'STORAGE_PREFIX_CHANGES'
+    )
+  })
+
+  it('a provider the copy cannot handle → STORAGE_LAYOUT_DIFFERS blocks the move', () => {
+    const p = buildMovePlan(input({ source: withObjects({ s3: 1, gcs: 3 }) }))
+    expect(codes(p)).toContain('STORAGE_LAYOUT_DIFFERS')
+    expect(p.blockers.find((b) => b.code === 'STORAGE_LAYOUT_DIFFERS')?.text).toMatch(/gcs/)
+  })
+})

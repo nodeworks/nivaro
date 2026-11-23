@@ -777,7 +777,11 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
       // Review minor 3: a counter, never the map's size (a kept un-revoked entry would collide).
       const key = String(++ticketSeq)
       tickets.set(key, revoke)
-      const req: PullRequest = { source, ticket, mode }
+      // P6-31: to or from a shared deployment the key prefix changes (apps/<tenantId>/ there,
+      // the bucket root elsewhere): saved-settings S3/Azure objects are copied too, same bucket
+      // or not. Between two shared deployments the prefix is the same (one tenant id).
+      const objects = (l.from.kind === 'shared') !== (l.to.kind === 'shared')
+      const req: PullRequest = { source, ticket, mode, ...(objects ? { objects: true } : {}) }
       try {
         let start: () => Promise<{ run_id: string }>
         let status: (run: string) => Promise<PullStatus>

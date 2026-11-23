@@ -212,11 +212,19 @@ function clients() {
       return { revoked: true }
     }),
     pullFiles: vi.fn(
-      async (_tid: string, req: { source: string; ticket: string; mode: string }) => {
+      async (
+        _tid: string,
+        req: { source: string; ticket: string; mode: string; objects?: boolean }
+      ) => {
         calls.push([
           shared.id,
           'pullFiles',
-          { source: req.source, mode: req.mode, ticket: req.ticket === TICKET }
+          {
+            source: req.source,
+            mode: req.mode,
+            ticket: req.ticket === TICKET,
+            ...(req.objects ? { objects: true } : {})
+          }
         ])
         return { run_id: 'run-1' }
       }
@@ -344,6 +352,30 @@ describe('pullFiles', () => {
     // Nothing left to revoke at the move end.
     await ops.revokeTickets()
     expect(c.calls.filter((x) => x[1] === 'revokeTicket')).toHaveLength(1)
+  })
+
+  // P6-31: to a shared deployment the key prefix changes: saved-settings objects are copied too.
+  it('a dedicated source to a shared target asks the pull for the saved-settings objects too', async () => {
+    const w = await setup(false)
+    TENANT = w.tenant
+    await db('nivaro_hub_environments')
+      .where({ id: w.envId })
+      .update({
+        hub_token: (await import('../../../services/hub/secrets.js')).sealSecret('t'.repeat(40))
+      })
+    const c = clients()
+    const ops = defaultMoveOps(w.move, w.plan, {
+      client: c.factory,
+      link: () =>
+        ({
+          fileTicket: async () => ({ ticket: TICKET, expires_at: '2026-11-23T00:00:00Z' }),
+          revokeTicket: async () => ({ revoked: true })
+        }) as never,
+      sleep,
+      now
+    })
+    await ops.pullFiles('full')
+    expect(c.calls.find((x) => x[1] === 'pullFiles')?.[2]).toMatchObject({ objects: true })
   })
 
   it('a ticket that could not be revoked is revoked at the move end', async () => {

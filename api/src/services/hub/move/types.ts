@@ -106,6 +106,9 @@ export type MoveBlockerCode =
   | 'REDIS_SHARED'
   | 'HOSTNAME_TAKEN'
   | 'DRIVER_UNSUPPORTED'
+  // P6-31: the key prefix changes and the source keeps objects on a provider the copy cannot
+  // handle.
+  | 'STORAGE_LAYOUT_DIFFERS'
   // Fix round 1 (P6-15: a check that could not run is never a pass).
   | 'GATHER_FAILED'
   | SharedReadinessCode
@@ -129,6 +132,8 @@ export type MoveWarningCode =
   | 'EXTENSION_PIN_UNVERIFIED'
   // Task 16 (plan-port.ts): new names on a shared target re-apply its whole stack.
   | 'STACK_REAPPLY_ALL'
+  // P6-31: saved-settings S3/Azure objects are copied to the new key prefix (never shared).
+  | 'STORAGE_PREFIX_CHANGES'
   | SharedReadinessCode
 
 export interface MovePlan {
@@ -170,7 +175,8 @@ export interface MoveSourceFacts {
   signin_hub: boolean
   /** `engine|server|port|database` as the source reaches its database; null = unknown. */
   db_identity: string | null
-  files: { count: number; bytes: number; local: number } | null
+  /** objects (P6-31): rows per non-local provider; undefined = not reported (unknown). */
+  files: { count: number; bytes: number; local: number; objects?: Record<string, number> } | null
   /** Extension id → what the source reports for it (a version, or a shared deployment's pin). */
   extensions: Record<string, string>
   /**
