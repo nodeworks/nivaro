@@ -148,6 +148,34 @@ describe('describeError — one shape for every failure', () => {
       }
     ],
     [
+      // Hub phase 6: a retired app (moved by the Hub) — says it moved, offers a reload, and never
+      // reads as "the server is busy or restarting".
+      'app moved',
+      sdk(503, {
+        statusCode: 503,
+        error: 'This app has moved to another server. Reload the page to reach it at its new home.',
+        message:
+          'This app has moved to another server. Reload the page to reach it at its new home.',
+        code: 'APP_MOVED'
+      }),
+      {
+        kind: 'unavailable',
+        title: 'This app has moved to another server. Reload the page to reach it at its new home.',
+        hint: ERROR_HINTS.APP_MOVED,
+        action: { kind: 'reload', label: 'Reload the page' }
+      }
+    ],
+    [
+      'app moved, no sentence',
+      sdk(503, { code: 'APP_MOVED' }),
+      {
+        kind: 'unavailable',
+        title: 'This app has moved to another server',
+        hint: ERROR_HINTS.APP_MOVED,
+        action: { kind: 'reload', label: 'Reload the page' }
+      }
+    ],
+    [
       '503 busy',
       sdk(503, {
         statusCode: 503,

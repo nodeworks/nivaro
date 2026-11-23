@@ -159,7 +159,12 @@ export const ERROR_HINTS: Readonly<Record<string, string>> = {
   IMPORTS_NOT_ON_SHARED:
     'Ask whoever runs the shared deployment when staged imports will be available here.',
   SCHEDULE_IS_DEPLOYMENT_WIDE:
-    'This job is set for every app on the shared deployment. Ask whoever runs the deployment to change or run it.'
+    'This job is set for every app on the shared deployment. Ask whoever runs the deployment to change or run it.',
+  // A Nivaro Hub app that moved, is being updated or is not ready yet (never "the server is busy").
+  APP_MOVED: 'Reload the page to reach the app at its new home.',
+  APP_STATE_UNKNOWN: 'The app cannot confirm where it runs right now. Try again in a minute.',
+  APP_MAINTENANCE: 'The app is being updated. Try again in a few minutes.',
+  APP_NOT_READY: 'The app is still getting ready. Try again in a few minutes.'
 }
 
 /** A hint for an answer that carries no known code. */

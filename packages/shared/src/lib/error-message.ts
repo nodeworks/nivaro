@@ -317,6 +317,16 @@ export function describeError(
       ACTIONS.reload
     )
 
+  // A Nivaro Hub app that moved to another server: a reload reaches its new home (never the
+  // generic "server is busy or restarting" a bare 503 reads as).
+  if (code === 'APP_MOVED')
+    return pick(
+      said ?? 'This app has moved to another server',
+      'unavailable',
+      sentHint ?? tableHint,
+      ACTIONS.reloadPage
+    )
+
   if (status === 401)
     return pick(
       said ?? STATUS_TITLES[401],
