@@ -11,6 +11,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../../services/readiness.js', () => ({ registerReadinessCheck: () => {} }))
 
+const fireAppReady = vi.fn()
+vi.mock('../../../services/tenancy/app-lifecycle.js', () => ({ fireAppReady }))
+
 const m = await import('../../../services/tenancy/app-migrations.js')
 const { registerAppKeyed } = await import('../../../services/app-forget.js')
 type TenantRecord = import('../../../services/tenancy/types.js').TenantRecord
@@ -130,6 +133,25 @@ describe('the loop runs one pass at a time', () => {
 })
 
 describe('adopting stored ok states', () => {
+  it('fires app ready once with the app record when adopted on a shared deployment, never self-hosted', async () => {
+    const redis = new FakeRedis()
+    const a = rec('a')
+    await storedOk(redis, [a])
+    fireAppReady.mockClear()
+    await m.appMigrationPass(registry([a]), { ...base, schemaCurrent: async () => true })
+    expect(base.migrate).not.toHaveBeenCalled()
+    expect(fireAppReady).toHaveBeenCalledTimes(1)
+    expect(fireAppReady.mock.calls[0]?.[0]).toMatchObject({ id: 'a', slug: 'a' })
+
+    // Self-hosted / no shared deployment: adopted the same way, no hook.
+    await storedOk(redis, [a])
+    for (const k of ['HUB_SHARED_DEPLOYMENT', 'HUB_URL', 'HUB_DEPLOYMENT_TOKEN'])
+      delete process.env[k]
+    fireAppReady.mockClear()
+    await m.appMigrationPass(registry([a]), { ...base, schemaCurrent: async () => true })
+    expect(fireAppReady).not.toHaveBeenCalled()
+  })
+
   it('an app whose ledger is being read by another check is not adopted this pass', async () => {
     const redis = new FakeRedis()
     await storedOk(redis, [rec('a')])
