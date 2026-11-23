@@ -385,10 +385,12 @@ export async function directoryConfigured(): Promise<boolean> {
   return Boolean(c.tenant && c.clientId && c.secret)
 }
 
-/** The Graph token, per app; `client` is the client id it was minted for. */
+/** The Graph token, per app; `client` and `tenant` are the client id and Entra tenant it was
+ *  minted for (a token is never served for another registration or tenant). */
 const cachedToken = appBox<{
   key: string
   client: string
+  tenant: string | null
   token: string
   expiresAt: number
   roles: string[]
@@ -432,7 +434,13 @@ async function appToken(): Promise<{ token: string; roles: string[] }> {
   const identity = await directoryIdentity()
   const key = directoryTokenKey(identity)
   const hit = cachedToken.value
-  if (hit && hit.key === key && hit.client === c.clientId && hit.expiresAt > Date.now()) {
+  if (
+    hit &&
+    hit.key === key &&
+    hit.client === c.clientId &&
+    hit.tenant === c.tenant &&
+    hit.expiresAt > Date.now()
+  ) {
     return { token: hit.token, roles: hit.roles }
   }
   const body =
@@ -522,6 +530,7 @@ async function appToken(): Promise<{ token: string; roles: string[] }> {
   const minted = {
     key,
     client: c.clientId,
+    tenant: c.tenant,
     token: json.access_token,
     expiresAt: Date.now() + Math.max(60, (json.expires_in ?? 3600) - 60) * 1000,
     roles: grantsFromJwt(json.access_token)

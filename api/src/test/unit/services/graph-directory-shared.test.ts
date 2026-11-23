@@ -185,3 +185,28 @@ describe('directory credentials on a shared deployment', () => {
     expect(directoryTokenKey(identity)).toBe('|service_account|svc@x|')
   })
 })
+
+describe('the cached Graph token and a changed Entra tenant', () => {
+  it("shared: a token minted for the old tenant is not served once the app's tenant changes", async () => {
+    process.env.HUB_SHARED_DEPLOYMENT = 'shared-1'
+    await saveCreds('A')
+    await inApp('A', () => directoryStatus())
+    expect(calls).toHaveLength(1)
+    // The admin points app A at another Entra tenant, same client id; the saved credentials are
+    // read again once their minute is up, the token (an hour) is still cached.
+    rows.byApp.A = { ...rows.byApp.A, directory_graph_tenant_id: 'tenant-x' }
+    const later = Date.now() + 61_000
+    const now = vi.spyOn(Date, 'now').mockReturnValue(later)
+    try {
+      const status = await inApp('A', () => directoryStatus())
+      expect(status.tenant).toBe('tenant-x')
+      expect(calls).toHaveLength(2)
+      expect(calls[1].url).toBe('https://login.microsoftonline.com/tenant-x/oauth2/v2.0/token')
+      // and the new tenant's token is then cached
+      await inApp('A', () => directoryStatus())
+      expect(calls).toHaveLength(2)
+    } finally {
+      now.mockRestore()
+    }
+  })
+})
