@@ -35,17 +35,4 @@ export async function objectStorageCounts(): Promise<Record<string, number> | un
   return out
 }
 
-/** The Hub side: a reported `objects` map, or undefined when absent or not one (unknown). */
-export function parseObjectCounts(raw: unknown): Record<string, number> | undefined {
-  if (raw === undefined || raw === null || typeof raw !== 'object' || Array.isArray(raw))
-    return undefined
-  const out: Record<string, number> = {}
-  const entries = Object.entries(raw as Record<string, unknown>)
-  if (entries.length > 20) return undefined
-  for (const [k, v] of entries) {
-    if (!/^[a-z0-9][a-z0-9._-]{0,31}$/.test(k)) return undefined
-    if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) return undefined
-    out[k] = Math.floor(v)
-  }
-  return out
-}
+export { parseObjectCounts } from './copyable.js'

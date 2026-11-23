@@ -1,4 +1,5 @@
 import type { PullRequest, PullStatus } from '../shared/deployment-client.js'
+import { parseReadiness } from './readiness-parse.js'
 
 /**
  * Nivaro Hub phase 6, Task 16: the Hub's client for a DEDICATED app's hub link
@@ -74,7 +75,7 @@ export interface HubLinkStatus {
 export interface HubLinkReadiness {
   key_fp: string | null
   busy: { imports: number; exports: number; renders: number }
-  files: { count: number; bytes: number; local: number }
+  files: { count: number; bytes: number; local: number; objects?: Record<string, number> }
   db_identity: string | null
   version: string | null
 }
@@ -268,26 +269,15 @@ export function hubLinkClient(
     async sharedReadiness() {
       const a = await call('/shared-readiness', 'GET', undefined, true)
       if (!ok(a)) throw refusal(a)
-      const b = a.body
-      if (!isObj(b) || !isObj(b.busy) || !isObj(b.files))
-        throw new HubLinkError('LINK_BAD_ANSWER', a.status)
-      const busy = b.busy as Record<string, unknown>
-      const files = b.files as Record<string, unknown>
-      const fp = b.key_fp
+      // R2-M-9: the plan's own parser; a report it refuses is never read as idle here.
+      const r = parseReadiness(a.body)
+      if (!r) throw new HubLinkError('LINK_BAD_ANSWER', a.status)
       return {
-        key_fp: isStr(fp) && /^[0-9a-f]{32}$/.test(fp) ? fp : null,
-        busy: {
-          imports: isNum(busy.imports) ? busy.imports : 0,
-          exports: isNum(busy.exports) ? busy.exports : 0,
-          renders: isNum(busy.renders) ? busy.renders : 0
-        },
-        files: {
-          count: isNum(files.count) ? files.count : 0,
-          bytes: isNum(files.bytes) ? files.bytes : 0,
-          local: isNum(files.local) ? files.local : 0
-        },
-        db_identity: isStr(b.db_identity) && b.db_identity.length <= 600 ? b.db_identity : null,
-        version: isStr(b.version) ? b.version.slice(0, 64) : null
+        key_fp: r.key_fp,
+        busy: r.busy,
+        files: r.files,
+        db_identity: r.db_identity,
+        version: r.version
       }
     },
 
