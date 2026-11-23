@@ -747,7 +747,7 @@ function EnvironmentAttach({ d, onChanged }: { d: HubDatabaseRow; onChanged: () 
       err instanceof EnvDbFailure ? err : new EnvDbFailure(envDbError(err, fallback), null)
     )
   const attach = useMutation({
-    mutationFn: () => attachEnvDatabase(Number(envId), d.id),
+    mutationFn: (opts: { override?: boolean } = {}) => attachEnvDatabase(Number(envId), d.id, opts),
     onSuccess: (out) => {
       setWarning(out.warning)
       setPicking(false)
@@ -775,6 +775,20 @@ function EnvironmentAttach({ d, onChanged }: { d: HubDatabaseRow; onChanged: () 
       )}
       {failure && <ErrorNotice description={failure.description} />}
       {failure?.check && <CheckResult check={failure.check} />}
+      {failure?.description.code === 'DATABASE_IDENTITY_DIFFERS' && envId && (
+        // On a Docker stack the record becomes the stack's database on the next deploy: attach it
+        // only when the administrator knows it is the same database (the Hub logs the override).
+        <ConfirmButton
+          title='Attach anyway'
+          confirmLabel='It is the same database: attach?'
+          className={dangerGhost}
+          armedClassName={dangerArmed}
+          disabled={attach.isPending}
+          onConfirm={() => attach.mutate({ override: true })}
+        >
+          Attach anyway
+        </ConfirmButton>
+      )}
     </>
   )
 
@@ -855,7 +869,7 @@ function EnvironmentAttach({ d, onChanged }: { d: HubDatabaseRow; onChanged: () 
               size='sm'
               className='h-8 bg-nvr-cyan text-white hover:bg-nvr-cyan/90'
               disabled={!envId || attach.isPending}
-              onClick={() => attach.mutate()}
+              onClick={() => attach.mutate({})}
             >
               {attach.isPending ? 'Attaching…' : 'Attach to environment'}
             </Button>
