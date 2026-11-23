@@ -734,7 +734,9 @@ describe('HubMovePanel — before start', () => {
     expect(
       within(alert).getByText('The old and the new home share one Redis database')
     ).toBeInTheDocument()
-    expect(screen.getByText('Links the old home signed stop working')).toBeInTheDocument()
+    expect(
+      screen.getByText('Links the old home signed stop working, and unsaved drafts are dropped')
+    ).toBeInTheDocument()
     fireEvent.change(screen.getByLabelText(/Type efp\/production to move/), {
       target: { value: 'efp/production' }
     })

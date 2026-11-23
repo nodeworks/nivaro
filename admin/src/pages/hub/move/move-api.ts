@@ -848,8 +848,8 @@ export const MOVE_WARNING_COPY: Record<string, Copy> = {
     hint: 'Sessions do not move. Phone app and connected AI apps (MCP) sign in again too.'
   },
   SIGNED_LINKS_RESET: {
-    title: 'Links the old home signed stop working',
-    hint: 'For example submission status links and shared media links. People ask for a new link.'
+    title: 'Links the old home signed stop working, and unsaved drafts are dropped',
+    hint: 'For example submission status links and shared media links. People ask for a new link. Unsaved form drafts are dropped too: ask people to save their open forms first.'
   },
   SAME_APP_ON_DEPLOYMENT: {
     title: 'Another environment of this app already runs on this deployment',
