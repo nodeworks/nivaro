@@ -1413,6 +1413,7 @@ export const hubDatabasesDocs: DocSection = {
       type: 'ul',
       items: [
         "Attach and detach run under the environment's lock. Both are refused while a move or a creation of the environment is open (`MOVE_OPEN`, `CREATION_OPEN`) and for an environment on a shared deployment (`SHARED_PLACEMENT`: the deployment serves it from its record; move the environment to change it). Another action holding the environment answers with its own code (for example `PROMOTION_RUNNING`, `MOVE_RUNNING` or `ENVIRONMENT_BUSY`): try again when it ends. `STATE_CHANGED`: the environment changed meanwhile, try again.",
+        '`database_id` must be the id of a Hub database (400 `BAD_DATABASE`); an environment or database that does not exist answers 404 `NOT_FOUND`.',
         'The environment must have no record yet (`ALREADY_ATTACHED`: detach that one first), and the database must be ready (`DATABASE_NOT_READY`) and attached to no other environment (`IN_USE`). Attaching the record the environment already has changes nothing (`changed: false`).',
         'The Hub asks the app over its hub link which database it runs on. Another engine family is `ENGINE_MISMATCH` (attach the record of the database the app really uses); an app that cannot be asked is `ENGINE_UNVERIFIED` (link it to the Hub and make sure it runs).',
         "The Hub then checks the record's stored connection. A failed check refuses with `DATABASE_UNREACHABLE`, and the answer carries the check, shown under the refusal: fix the connection on the database page and try again.",
