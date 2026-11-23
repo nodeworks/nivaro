@@ -92,6 +92,11 @@ export interface SharedUpgradePlan {
   stack: string | null
   /** Names routed besides the pattern. */
   hostnames: string[]
+  /**
+   * An upgrade to a version older than the one deployed (or either version unparseable): the
+   * start needs `downgrade: true` (409 DOWNGRADE_NEEDS_CONFIRM, ruling P6-29). Never a rollback.
+   */
+  downgrade: boolean
 }
 
 /** Per-app codes an override may clear. */
@@ -101,6 +106,46 @@ export const OVERRIDABLE_CODES = ['ORDER', 'PREFLIGHT_FAILING'] as const
 export const SHARED_AGENT_MIN_VERSION = '0.2.0'
 
 const VERSION_RE = /^\d+\.\d+\.\d+$/
+const SEMVER_RE =
+  /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z.-]+)?$/
+
+/** Semver precedence of two parsed versions (build metadata ignored); null if either is not one. */
+function semverCompare(a: string, b: string): number | null {
+  const pa = SEMVER_RE.exec(a)
+  const pb = SEMVER_RE.exec(b)
+  if (!pa || !pb) return null
+  for (let i = 1; i <= 3; i++) {
+    const d = Number(pa[i]) - Number(pb[i])
+    if (d !== 0) return Math.sign(d)
+  }
+  const ra = pa[4]?.split('.') ?? null
+  const rb = pb[4]?.split('.') ?? null
+  if (!ra || !rb) return ra ? -1 : rb ? 1 : 0 // a pre-release comes before its release
+  for (let i = 0; i < Math.max(ra.length, rb.length); i++) {
+    if (ra[i] === undefined) return -1
+    if (rb[i] === undefined) return 1
+    const na = /^\d+$/.test(ra[i]) ? Number(ra[i]) : null
+    const nb = /^\d+$/.test(rb[i]) ? Number(rb[i]) : null
+    if (na !== null && nb !== null) {
+      if (na !== nb) return Math.sign(na - nb)
+    } else if (na !== null) return -1
+    else if (nb !== null) return 1
+    else if (ra[i] !== rb[i]) return ra[i] < rb[i] ? -1 : 1
+  }
+  return 0
+}
+
+/**
+ * True when going from `from` to `to` is a downgrade the admin must confirm (ruling P6-29): `to`
+ * is older by semver precedence, or either side cannot be read as semver. Nothing deployed yet
+ * (`from` null) and the same version are never one.
+ */
+export function isSharedDowngrade(from: string | null, to: string): boolean {
+  if (from === null || from === to) return false
+  const c = semverCompare(to, from)
+  return c === null || c < 0
+}
+
 const PIN_RE = /^[^@\s]+@sha256:[0-9a-f]{64}$/
 const SHARED_DEPLOYS = 'nivaro_hub_shared_deploys'
 const SHARED = 'nivaro_hub_shared_deployments'
@@ -584,6 +629,13 @@ export async function gatherSharedUpgrade(
     })
 
   const from_version = shared.version_pin
+  // A rollback goes back on purpose (to the recorded previous build); only an upgrade asks.
+  const downgrade = kind === 'upgrade' && isSharedDowngrade(from_version, version)
+  if (downgrade)
+    warnings.push({
+      code: 'DOWNGRADE',
+      text: `${version} is not newer than the ${from_version} this deployment runs. Every app on it goes back to ${version}; an older version may not read data a newer one wrote. Confirm the downgrade to start.`
+    })
   const stack = shared.stack && STACK_NAME_RE.test(shared.stack) ? shared.stack : null
   const plan_hash = hashOf({
     shared: shared.id,
@@ -615,7 +667,8 @@ export async function gatherSharedUpgrade(
     overridable: [...OVERRIDABLE_CODES],
     image,
     stack,
-    hostnames
+    hostnames,
+    downgrade
   }
   return { plan, facts: { shared, driver, health, edge, image, extensions, hostnames, rows } }
 }

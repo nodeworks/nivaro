@@ -1329,3 +1329,100 @@ describe('a start whose job run began but could not be linked (N-5)', () => {
     expect((await Store.getShared(id))?.status).toBe('active')
   })
 })
+
+describe('downgrade needs confirm (ruling P6-29, B2)', () => {
+  it('isSharedDowngrade compares semver-aware and treats an unparseable version as a downgrade', () => {
+    const d = Plan.isSharedDowngrade
+    expect(d('0.3.210', '0.3.209')).toBe(true)
+    expect(d('0.3.210', '0.3.21')).toBe(true)
+    expect(d('0.3.9', '0.3.10')).toBe(false)
+    expect(d('1.0.0', '0.99.99')).toBe(true)
+    expect(d('0.3.210', '0.3.210')).toBe(false)
+    expect(d('0.3.210', '0.3.211')).toBe(false)
+    // Pre-releases come before their release.
+    expect(d('0.3.210', '0.3.210-rc.1')).toBe(true)
+    expect(d('0.3.210-rc.1', '0.3.210')).toBe(false)
+    expect(d('0.3.210-rc.10', '0.3.210-rc.9')).toBe(true)
+    expect(d('0.3.210-rc.1', '0.3.210-rc.2')).toBe(false)
+    expect(d('v0.3.210', '0.3.211')).toBe(false)
+    // Unparseable either side: the flag is required.
+    expect(d('latest', '0.3.211')).toBe(true)
+    expect(d('0.3.210', 'next')).toBe(true)
+    expect(d('0.3', '0.3.211')).toBe(true)
+    // Nothing deployed yet: nothing to go down from.
+    expect(d(null, '0.3.211')).toBe(false)
+  })
+
+  it('an upgrade to an older version → 409 DOWNGRADE_NEEDS_CONFIRM unless downgrade: true', async () => {
+    const id = await newShared({ version_pin: '0.3.211' })
+    const { deps } = runDeps(fakes())
+    const plan = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', deps)
+    expect(plan.downgrade).toBe(true)
+    expect(codes(plan.warnings)).toContain('DOWNGRADE')
+    const key = (await Store.getShared(id))?.key as string
+    const body = { version: '0.3.210', plan_hash: plan.plan_hash, confirm: key }
+    const refused = await refusal(Run.startSharedUpgrade(id, body, 'admin-1', deps))
+    expect(refused).toMatchObject({ code: 'DOWNGRADE_NEEDS_CONFIRM', statusCode: 409 })
+    expect(await db('nivaro_hub_shared_deploys').where({ shared_deployment_id: id })).toHaveLength(
+      0
+    )
+    expect(await locks.shared.holder(id)).toBeNull()
+    for (const bad of ['yes', 1])
+      expect(
+        await refusal(Run.startSharedUpgrade(id, { ...body, downgrade: bad }, 'admin-1', deps))
+      ).toMatchObject({ code: 'BAD_DOWNGRADE', statusCode: 400 })
+    const out = await Run.startSharedUpgrade(id, { ...body, downgrade: true }, 'admin-1', deps)
+    await Run.awaitSharedUpgrade(out.shared_deploy_id)
+    expect((await Run.readSharedDeploy(out.shared_deploy_id))?.kind).toBe('upgrade')
+  })
+
+  it('a newer or the same version needs no flag; an unparseable current version does', async () => {
+    const id = await newShared()
+    const { deps } = runDeps(fakes())
+    const plan = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', deps)
+    expect(plan.downgrade).toBe(false)
+    expect(codes(plan.warnings)).not.toContain('DOWNGRADE')
+    const odd = await newShared({ version_pin: 'nightly' })
+    const oddPlan = await Plan.planSharedUpgrade(odd, '0.3.210', 'upgrade', deps)
+    expect(oddPlan.downgrade).toBe(true)
+    const key = (await Store.getShared(odd))?.key as string
+    expect(
+      await refusal(
+        Run.startSharedUpgrade(
+          odd,
+          { version: '0.3.210', plan_hash: oddPlan.plan_hash, confirm: key },
+          'admin-1',
+          deps
+        )
+      )
+    ).toMatchObject({ code: 'DOWNGRADE_NEEDS_CONFIRM' })
+  })
+
+  it('a rollback to the recorded previous build needs no flag', async () => {
+    const id = await newShared({ version_pin: '0.3.210' })
+    await db('nivaro_hub_shared_deploys').insert({
+      shared_deployment_id: id,
+      kind: 'upgrade',
+      version: '0.3.209',
+      status: 'success',
+      plan: JSON.stringify({ image: `nodeworks/nivaro@sha256:${'7'.repeat(64)}`, extensions: {} })
+    })
+    const f = fakes()
+    f.sightings = [
+      { instance: 'i1', version: '0.3.209', etag: null, at: new Date(START).toISOString() }
+    ]
+    f.statusVersion = '0.3.209'
+    const { deps } = runDeps(f)
+    const plan = await Plan.planSharedUpgrade(id, '0.3.209', 'rollback', deps)
+    expect(plan.downgrade).toBe(false)
+    const key = (await Store.getShared(id))?.key as string
+    const out = await Run.startSharedUpgrade(
+      id,
+      { version: '0.3.209', kind: 'rollback', plan_hash: plan.plan_hash, confirm: key },
+      'admin-1',
+      deps
+    )
+    await Run.awaitSharedUpgrade(out.shared_deploy_id)
+    expect((await Run.readSharedDeploy(out.shared_deploy_id))?.status).toBe('success')
+  })
+})

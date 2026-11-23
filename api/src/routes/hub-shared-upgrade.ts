@@ -25,10 +25,12 @@ import { setSharedReapply } from './hub-shared.js'
  * under /api/hub by hub.ts (HUB=on only). Every route is for a Hub administrator.
  *
  *   POST /shared/:id/upgrade/plan     {version, kind?} → {data: SharedUpgradePlan}
- *   POST /shared/:id/upgrade          {version, kind?, plan_hash, confirm, overrides?}
+ *   POST /shared/:id/upgrade          {version, kind?, plan_hash, confirm, overrides?, downgrade?}
  *                                     → 202 {data: {shared_deploy_id}}; 409 PLAN_CHANGED carries
  *                                     the new plan (`plan`); BLOCKED / APP_BLOCKED too;
- *                                     400 CONFIRM_MISMATCH
+ *                                     409 DOWNGRADE_NEEDS_CONFIRM (plan.downgrade, an upgrade to
+ *                                     an older version without `downgrade: true`, P6-29);
+ *                                     400 CONFIRM_MISMATCH / BAD_DOWNGRADE
  *   GET  /shared/:id/deploys          {data: [...]} — the deployment's runs, newest first
  *   GET  /shared-deploys/:id          {data: run + plan + apps (mirror rows) + log}
  *   POST /shared-deploys/:id/cancel   {data: {interrupted?}}; 409 NOT_RUNNING

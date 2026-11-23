@@ -54,7 +54,9 @@ import {
  * Start: the confirm text is the deployment key (400 CONFIRM_MISMATCH); the plan is made again
  * and must have the hash the admin saw (409 PLAN_CHANGED, carrying the new plan); no blocker
  * (409 BLOCKED); every per-app blocker overridden (`<CODE>:<env_id>` for ORDER / PREFLIGHT_FAILING,
- * else 409 APP_BLOCKED — each override is logged). Then the deployment's shared lock (holder
+ * else 409 APP_BLOCKED — each override is logged); an upgrade to an older version (or one that
+ * is not semver) needs `downgrade: true` (409 DOWNGRADE_NEEDS_CONFIRM, ruling P6-29; a rollback
+ * never does). Then the deployment's shared lock (holder
  * `shared`, R10) and every listed environment's lock (holder `shared`) are taken, a
  * `nivaro_hub_shared_deploys` row (status running) and one `shared` mirror row in
  * `nivaro_hub_deploys` per environment placed here (`shared_deploy_id` set) are written, the
@@ -281,6 +283,8 @@ export interface StartBody {
   confirm: string
   overrides?: string[]
   kind?: SharedUpgradeKind
+  /** Confirms an upgrade to an older version (ruling P6-29). */
+  downgrade?: boolean
 }
 
 function checkBody(raw: unknown): StartBody {
@@ -294,6 +298,8 @@ function checkBody(raw: unknown): StartBody {
     throw new SharedUpgradeError('BAD_PLAN_HASH', 'Send the plan_hash of the plan you saw.', 400)
   if (b.kind !== undefined && b.kind !== 'upgrade' && b.kind !== 'rollback')
     throw new SharedUpgradeError('BAD_KIND', 'kind is upgrade or rollback.', 400)
+  if (b.downgrade !== undefined && typeof b.downgrade !== 'boolean')
+    throw new SharedUpgradeError('BAD_DOWNGRADE', 'downgrade is true or false.', 400)
   let overrides: string[] = []
   if (b.overrides !== undefined) {
     if (
@@ -313,7 +319,8 @@ function checkBody(raw: unknown): StartBody {
     plan_hash: b.plan_hash,
     confirm: typeof b.confirm === 'string' ? b.confirm : '',
     overrides,
-    kind: (b.kind as SharedUpgradeKind | undefined) ?? 'upgrade'
+    kind: (b.kind as SharedUpgradeKind | undefined) ?? 'upgrade',
+    downgrade: b.downgrade === true
   }
 }
 
@@ -373,6 +380,14 @@ export async function startSharedUpgrade(
     throw new SharedUpgradeError(
       'APP_BLOCKED',
       `Some apps are blocked and not overridden: ${open.slice(0, 5).join('; ')}.`,
+      409,
+      plan
+    )
+  // Ruling P6-29 (B2): going to an older version is said out loud, never a slip of the picker.
+  if (plan.downgrade && !body.downgrade)
+    throw new SharedUpgradeError(
+      'DOWNGRADE_NEEDS_CONFIRM',
+      `${plan.version} is not newer than the ${plan.from_version ?? 'unknown version'} this deployment runs — confirm the downgrade to start.`,
       409,
       plan
     )
