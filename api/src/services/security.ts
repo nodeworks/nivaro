@@ -319,6 +319,9 @@ export async function setHubMaintenance(input: {
       MAINTENANCE_OVERRIDE_KEY,
       await hubOverrideJson(redis, input.message ?? null, input.moveId ?? null)
     )
+    // Hub phase 6 (P6-26): a move freezing its target again (rollback) invalidates that move's
+    // boot-maintenance done marker, so the app — restarted or re-created — boots in maintenance.
+    if (input.moveId) await redis.del(hubBootMaintenanceDoneKey(input.moveId))
   } else {
     const cur = await readOverrideJson(redis)
     if (cur?.hub === true) {

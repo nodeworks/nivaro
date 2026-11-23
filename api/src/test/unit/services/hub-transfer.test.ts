@@ -407,7 +407,10 @@ describe('pull', () => {
     expect(() => statSync(join(root, 'f2.bin'))).toThrow()
   })
 
-  it('an answer without the disk name or Content-Length, or not the row size, fails its row', async () => {
+  // Task 16 changed this on purpose (T10 review N-1): a row whose stored filesize disagrees with
+  // what the source serves is copied anyway against the source's Content-Length and counted in
+  // size_mismatch; before, a stale filesize failed the row on every run.
+  it('an answer without the disk name or Content-Length fails its row; a stale row size copies and counts', async () => {
     for (const id of ['n1', 'n2', 'n3', 'n4']) objects.set(id, Buffer.from(`body-${id}`))
     noName.add('n1')
     noLength.add('n2')
@@ -415,8 +418,10 @@ describe('pull', () => {
     const s = await finished(
       (await startPull({ source: SOURCE, ticket: TICKET, mode: 'full' })).run_id
     )
-    expect(s).toMatchObject({ state: 'done', copied: 1, failed: 3 })
-    for (const id of ['n1', 'n2', 'n3']) expect(() => statSync(join(root, `${id}.bin`))).toThrow()
+    expect(s).toMatchObject({ state: 'done', copied: 2, failed: 2, size_mismatch: 1 })
+    expect([...(s?.failed_ids ?? [])].sort()).toEqual(['n1', 'n2'])
+    for (const id of ['n1', 'n2']) expect(() => statSync(join(root, `${id}.bin`))).toThrow()
+    expect(readFileSync(join(root, 'n3.bin'), 'utf8')).toBe('body-n3')
     expect(readFileSync(join(root, 'n4.bin'), 'utf8')).toBe('body-n4')
   })
 

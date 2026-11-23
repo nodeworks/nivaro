@@ -161,6 +161,11 @@ export interface PromoteLock {
   holder?(envId: number): Promise<LockHolder | null>
   /** Extends the lock while `token` still holds it; false when it no longer does. */
   renew(envId: number, token: string): Promise<boolean>
+  /**
+   * Phase 6 (move run, R2-M-5): as renew, but a Redis error answers false (lost) instead of
+   * "held". Optional: a lock without it is renewed with renew.
+   */
+  renewStrict?(envId: number, token: string): Promise<boolean>
   /** Deletes the lock only while `token` still holds it. */
   release(envId: number, token: string): Promise<void>
   /** Someone holds the environment's lock; 'unknown' when it cannot be read (never stolen then). */
@@ -205,6 +210,17 @@ export function redisPromoteLock(redis: PromoteRedis): PromoteLock {
         )
       } catch {
         return true // a Redis blink is not a lost lock; the next renewal tries again
+      }
+    },
+    async renewStrict(envId, token) {
+      try {
+        return (
+          Number(
+            await redis.eval(RENEW_SCRIPT, 1, hubPromoteLockKey(envId), token, LOCK_TTL_MS)
+          ) === 1
+        )
+      } catch {
+        return false
       }
     },
     async release(envId, token) {
@@ -349,6 +365,8 @@ export interface SharedLock {
   holder(sharedId: number): Promise<SharedLockHolder | null>
   /** Extends the lock while `token` still holds it; false when it no longer does. */
   renew(sharedId: number, token: string): Promise<boolean>
+  /** As renew, but a Redis error answers false (lost) instead of "held" (move run, R2-M-5). */
+  renewStrict?(sharedId: number, token: string): Promise<boolean>
   /** Deletes the lock only while `token` still holds it. */
   release(sharedId: number, token: string): Promise<void>
 }
@@ -418,6 +436,15 @@ export function sharedLock(redis: PromoteRedis | null): SharedLock {
         )
       } catch {
         return true // a Redis blink is not a lost lock; the next renewal tries again
+      }
+    },
+    async renewStrict(id, token) {
+      try {
+        return (
+          Number(await redis.eval(RENEW_SCRIPT, 1, hubSharedLockKey(id), token, LOCK_TTL_MS)) === 1
+        )
+      } catch {
+        return false
       }
     },
     async release(id, token) {

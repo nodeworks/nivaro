@@ -64,6 +64,9 @@ deploy:
       #   HUB_PIN_FILE          optional, default .hub/nivaro-version
       #   HUB_IMAGE             optional, default nodeworks/nivaro (the manager allows one image)
       #   DEPLOY_WAIT_TRIES     optional, default 40 (x 15 s) for /api/version
+      #   HUB_BOOT_MAINTENANCE  optional pipeline variable the Hub sends when it deploys a move's
+      #                         target (phase 6): a move id, forwarded so the app boots in strict
+      #                         maintenance until the Hub releases that move
       set -eu
       # No globbing: hostnames and keys are split on commas / spaces below.
       set -f
@@ -151,6 +154,13 @@ deploy:
       case "$DB_CLIENT" in mssql | pg | mysql2 | mariadb) ;; *) die "DB_CLIENT $DB_CLIENT is not supported" ;; esac
       case "$PROXY_NETWORK" in '' | [!A-Za-z0-9]* | *[!A-Za-z0-9_.-]*) die "PROXY_NETWORK is not a network name" ;; esac
       case "$PUBLIC_URL" in https://* | http://*) ;; *) die "PUBLIC_URL must be an http(s) URL" ;; esac
+
+      # A move's target deploy (Nivaro Hub phase 6): a move id, checked here so a bad value stops the
+      # deploy before anything reaches the manager.
+      BOOT_MAINTENANCE=${HUB_BOOT_MAINTENANCE:-}
+      case "$BOOT_MAINTENANCE" in '' | [1-9] | [1-9]*[0-9]) ;; *) die "HUB_BOOT_MAINTENANCE must be a move id" ;; esac
+      case "$BOOT_MAINTENANCE" in *[!0-9]*) die "HUB_BOOT_MAINTENANCE must be a move id" ;; esac
+      [ "${#BOOT_MAINTENANCE}" -le 15 ] || die "HUB_BOOT_MAINTENANCE must be a move id"
 
       SUFFIX=${HUB_HOST_SUFFIX:-}
       if [ -n "$SUFFIX" ]; then
@@ -286,6 +296,7 @@ deploy:
           printf 'SECRET_%s=%s\n' "$s" "$(printenv "SECRET_$s")"
         done
         printf 'WAIT_TRIES=%s\n' "$WAIT_TRIES"
+        [ -z "$BOOT_MAINTENANCE" ] || printf 'HUB_BOOT_MAINTENANCE=%s\n' "$BOOT_MAINTENANCE"
       } | remote deploy "$STACK_NAME" || stop $? "the manager did not deploy $STACK_NAME"
       say "done: web answers $VERSION"
       HUB_DEPLOY_SH
