@@ -1043,6 +1043,20 @@ Object.assign(BLOCKER_COPY, {
   PLACEMENT_CHANGED: {
     title: "The environment's placement changed meanwhile",
     hint: 'Nothing was changed. Reload, check where it runs now, then try again.'
+  },
+  // Final fix wave: an open (or interrupted) move holds what it relies on.
+  MOVE_OPEN: {
+    title: 'A move of this environment is open',
+    hint: 'Resume it or roll it back first (open Move… on the environment).'
+  },
+  // Final fix wave: place on a Docker shared deployment, and an environment that may still serve.
+  NAME_NOT_ROUTED: {
+    title: "The shared deployment's stack does not route this name",
+    hint: "Use a name under the deployment's host pattern, or set a pattern that covers it, then place it again."
+  },
+  SERVING_UNKNOWN: {
+    title: 'The Hub cannot tell whether this environment still runs',
+    hint: 'If it runs, move it instead. If it is gone for good, clear its hub token, then place it again.'
   }
 } satisfies Record<string, { title: string; hint?: string }>)
 

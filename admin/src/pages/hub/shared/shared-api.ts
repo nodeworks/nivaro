@@ -404,6 +404,10 @@ export function warningDetail(n: SharedNote): string | null {
 
 /** Refusals of the shared deployment routes, in plain words. Wins over the Hub's general copy. */
 export const SHARED_COPY: Record<string, { title: string; hint?: string }> = {
+  EXTENSION_IN_USE: {
+    title: 'An app on this deployment still uses that extension',
+    hint: 'Keep it in the list, or move that app off the deployment first.'
+  },
   SECRETS_CHANGED: {
     title: "The deployment's secrets changed at the same moment",
     hint: 'Nothing was saved. Save again.'
