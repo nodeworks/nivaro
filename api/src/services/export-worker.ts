@@ -408,7 +408,7 @@ async function exportAppReady(app: FastifyInstance, t: TenantRecord): Promise<bo
   if (t.status !== 'active') return false
   if (!appReadyForRequests(t.id)) return false
   if (!isWorkerOnlyRole()) return true
-  return storedAppSchemaOk(t, (app as unknown as { redis?: never }).redis ?? null)
+  return storedAppSchemaOk(t, asExportRedis(app.redis))
 }
 
 /**
