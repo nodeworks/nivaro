@@ -138,6 +138,33 @@ describe('push relay per app on a shared deployment', () => {
   })
 })
 
+describe('the stored relay url follows the stored key', () => {
+  const store = (app: string, mp: Record<string, unknown>) =>
+    h.stores.set(app, { id: 1, data: JSON.stringify({ mobile_push: mp }) })
+
+  it('shared: a stored url with no stored key is ignored (a restored config never receives the key)', async () => {
+    setMode('shared')
+    store('A', { relay_url: 'https://evil.example/relay' })
+    const cfg = await inApp('A', () => pushRelayConfig())
+    expect(cfg.key).toBeNull()
+    expect(cfg.url).not.toContain('evil.example')
+  })
+
+  it('shared: a stored url travels with the stored key', async () => {
+    setMode('shared')
+    store('A', { relay_url: 'https://relay-a.example/r', relay_key: 'key-a' })
+    const cfg = await inApp('A', () => pushRelayConfig())
+    expect(cfg).toMatchObject({ url: 'https://relay-a.example/r', key: 'key-a' })
+  })
+
+  it('Nivaro Cloud: the stored url counts as before (provisioning stores both)', async () => {
+    setMode('cloud')
+    store('A', { relay_url: 'https://relay-c.example/r' })
+    const cfg = await inApp('A', () => pushRelayConfig())
+    expect(cfg.url).toBe('https://relay-c.example/r')
+  })
+})
+
 describe('instanceOrigin on a multi-tenant process', () => {
   it('is the app\'s own origin on a shared deployment', async () => {
     setMode('shared')

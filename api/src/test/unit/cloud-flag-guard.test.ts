@@ -87,6 +87,9 @@ const EXTRA_CALLS: Record<string, { multiTenant?: number; nivaroCloud?: number }
   // 0); a Hub shared deployment connects each app's own relay. instanceOrigin() (its C4 entry is
   // weight 0) names the app's own origin on every multi-tenant process.
   'routes/push.ts': { nivaroCloud: 1 },
+  // pushRelayConfig's stored url without a stored key counts in Nivaro Cloud only (its T7 entry
+  // is weight 0): on a shared deployment the url travels with the app's own key (final fix F10).
+  'services/push-relay.ts': { nivaroCloud: 1 },
   'services/phone-push.ts': { multiTenant: 1 }
 }
 

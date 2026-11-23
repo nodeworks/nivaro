@@ -2585,11 +2585,12 @@
       "line": 100,
       "text": "const storedUrl = cloudMode() || (!envKey && storedKey) ? cleanRelayUrl(stored.relay_url) : null",
       "form": "helper-call",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T7",
-      "why": "process-wide push-relay key never from env: one tenant admin must not get or set it on a shared process",
-      "batch": "B"
+      "why": "process-wide push-relay key never from env: one tenant admin must not get or set it on a shared process. Now isNivaroCloud() (EXTRA_CALLS): only cloud provisioning's stored url counts without a stored key",
+      "batch": "B",
+      "phase6": "done: on a shared deployment an app's stored relay url travels with its own stored key only"
     },
     {
       "id": "services/realtime-ack-sample.ts:92",
