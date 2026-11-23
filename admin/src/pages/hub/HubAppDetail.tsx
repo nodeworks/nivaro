@@ -59,7 +59,17 @@ import {
 import { HubAppKeyField } from './move/HubAppKeyField'
 import { HubMovePanel } from './move/HubMovePanel'
 import { HubPlaceSharedForm } from './move/HubPlaceSharedForm'
-import { placementLabel, useDrivers, usePlacement, useSharedList } from './move/move-api'
+import {
+  fetchMoves,
+  isOpenMove,
+  moveBadge,
+  moveKeys,
+  newestMove,
+  placementLabel,
+  useDrivers,
+  usePlacement,
+  useSharedList
+} from './move/move-api'
 import { HubAppSigninCard } from './signin/HubEnvSigninPanel'
 
 /**
@@ -342,12 +352,14 @@ function EnvironmentsCard({
             <table className='w-full min-w-[640px] table-fixed text-[12px]'>
               <thead>
                 <tr className='border-b border-slate-200 text-left text-[11px] uppercase tracking-wide text-slate-500 dark:border-border dark:text-muted-foreground'>
-                  <th className='w-[18%] px-4 py-2 font-medium'>Environment</th>
+                  <th className='w-[20%] px-4 py-2 font-medium'>Environment</th>
                   <th className='px-4 py-2 font-medium'>Address</th>
-                  <th className='w-[12%] px-4 py-2 font-medium'>Version</th>
-                  <th className='w-[22%] px-4 py-2 font-medium'>Status</th>
-                  <th className='w-[11%] px-4 py-2 font-medium'>Checked</th>
-                  <th className='w-[200px] px-4 py-2'>
+                  <th className='w-[11%] px-4 py-2 font-medium'>Version</th>
+                  <th className='w-[20%] px-4 py-2 font-medium'>Status</th>
+                  <th className='w-[10%] px-4 py-2 font-medium'>Checked</th>
+                  {/* Design B1: icons only (each has its name and a tip), five at most, so the
+                      column always holds them; it never paints over Checked. */}
+                  <th className='w-[192px] px-2 py-2'>
                     <span className='sr-only'>Actions</span>
                   </th>
                 </tr>
@@ -385,6 +397,18 @@ function useEnvRow(app: HubAppFull, env: HubEnvironment, isAdmin: boolean) {
   const shared = useSharedList(isAdmin && isShared)
   const drivers = useDrivers(isAdmin && placement.data?.kind === 'dedicated')
   const placementText = placementLabel(placement.data, shared.data, drivers.data)
+  // Design B4: the newest move of this environment (Hub admins; moves are an admin read).
+  const moves = useQuery({
+    queryKey: moveKeys.moves(env.id),
+    queryFn: () => fetchMoves(env.id),
+    enabled: isAdmin && env.placement_id != null,
+    retry: false,
+    refetchInterval: (q) =>
+      q.state.data?.some((m) => isOpenMove(m.status)) ? 10_000 : q.state.error ? false : 60_000
+  })
+  const lastMove = newestMove(moves.data)
+  const moveOpen = !!lastMove && isOpenMove(lastMove.status)
+  const badge = moveBadge(lastMove)
   const [moving, setMoving] = useState(false)
   // A start or a stack-placement request is out in the move panel: the row keeps it mounted.
   const [moveBusy, setMoveBusy] = useState(false)
@@ -415,6 +439,8 @@ function useEnvRow(app: HubAppFull, env: HubEnvironment, isAdmin: boolean) {
     setPromoting,
     isShared,
     placementPending,
+    moveOpen,
+    badge,
     placementText,
     moving,
     setMoving,
@@ -436,7 +462,7 @@ function PlacementChip({ text, shared }: { text: string | null; shared: boolean 
           : 'Runs on its own stack or pipeline'
       }
       className={cn(
-        'inline-flex max-w-full items-center gap-1 truncate rounded-full border px-1.5 py-px font-sans text-[10px] font-medium',
+        'inline-flex min-w-0 max-w-full shrink-0 items-center gap-1 truncate rounded-full border px-1.5 py-px font-sans text-[10px] font-medium',
         shared
           ? 'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-900/60 dark:bg-sky-950/40 dark:text-sky-300'
           : 'border-slate-200 bg-slate-50 text-slate-600 dark:border-border dark:bg-muted dark:text-slate-300'
@@ -445,6 +471,37 @@ function PlacementChip({ text, shared }: { text: string | null; shared: boolean 
       <Layers className='h-2.5 w-2.5 shrink-0' aria-hidden />
       <span className='truncate'>{text}</span>
     </span>
+  )
+}
+
+const MOVE_OPEN_TIP =
+  'A move of this environment is open: Promote waits until it ends (open Move… to follow it).'
+
+const BADGE_TONE = {
+  live: 'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-900/60 dark:bg-sky-950/40 dark:text-sky-300',
+  attention:
+    'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-300',
+  halted:
+    'border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300'
+} as const
+
+/** Design B4: the environment's move as a chip that opens the move panel. */
+function MoveBadgeChip({ env, row }: { env: HubEnvironment; row: EnvRowState }) {
+  if (!row.badge) return null
+  return (
+    <button
+      type='button'
+      aria-label={`Move of ${env.key}: ${row.badge.text}. Open it`}
+      data-tip='Open the move'
+      onClick={() => row.setMoving(true)}
+      className={cn(
+        'inline-flex max-w-full shrink-0 items-center gap-1 truncate rounded-full border px-1.5 py-px font-sans text-[10px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50',
+        BADGE_TONE[row.badge.tone]
+      )}
+    >
+      <ArrowRightLeft className='h-2.5 w-2.5 shrink-0' aria-hidden />
+      <span className='truncate'>{row.badge.text}</span>
+    </button>
   )
 }
 
@@ -512,12 +569,13 @@ function EnvActions({
 }) {
   // The table row and the phone entry both render actions: ids unique per mount.
   const whyId = useId()
+  const promoteBlocked = row.isShared ? SHARED_PLACEMENT_TIP : row.moveOpen ? MOVE_OPEN_TIP : null
   return (
-    <div className='flex items-center justify-end gap-0.5'>
-      {canPromote && env.placement_id != null && row.isShared && (
-        // A shared-placed environment's version follows its deployment: say so, don't open a
-        // panel that can only refuse.
-        <span data-tip={SHARED_PLACEMENT_TIP} className='inline-flex'>
+    <div className='flex flex-wrap items-center justify-end gap-0'>
+      {canPromote && env.placement_id != null && promoteBlocked && (
+        // A shared-placed environment's version follows its deployment, and an open move holds
+        // the environment: say so, don't open a panel that can only refuse.
+        <span data-tip={promoteBlocked} className='inline-flex'>
           <button
             type='button'
             aria-label={`Promote ${env.key}`}
@@ -526,11 +584,10 @@ function EnvActions({
             disabled
           >
             <Rocket className='h-3.5 w-3.5' aria-hidden />
-            <span className='hidden lg:inline'>Promote</span>
           </button>
           {/* The reason for assistive tech too (the tip is pointer-only). */}
           <span id={whyId} className='sr-only'>
-            {SHARED_PLACEMENT_TIP}
+            {promoteBlocked}
           </span>
         </span>
       )}
@@ -543,10 +600,9 @@ function EnvActions({
           disabled
         >
           <Rocket className='h-3.5 w-3.5' aria-hidden />
-          <span className='hidden lg:inline'>Promote</span>
         </button>
       )}
-      {canPromote && env.placement_id != null && !row.isShared && !row.placementPending && (
+      {canPromote && env.placement_id != null && !promoteBlocked && !row.placementPending && (
         <button
           type='button'
           aria-label={`Promote ${env.key}`}
@@ -556,7 +612,6 @@ function EnvActions({
           onClick={() => row.setPromoting(!row.promoting)}
         >
           <Rocket className='h-3.5 w-3.5' aria-hidden />
-          <span className='hidden lg:inline'>Promote</span>
         </button>
       )}
       <button
@@ -583,7 +638,6 @@ function EnvActions({
           onClick={() => row.setMoving(!row.moving)}
         >
           <ArrowRightLeft className='h-3.5 w-3.5' aria-hidden />
-          <span className='hidden lg:inline'>Move…</span>
         </button>
       )}
       {isAdmin && placeable(env) && (
@@ -597,7 +651,6 @@ function EnvActions({
           onClick={() => row.setPlacing(!row.placing)}
         >
           <Layers className='h-3.5 w-3.5' aria-hidden />
-          <span className='hidden lg:inline'>Place…</span>
         </button>
       )}
       {isAdmin && (
@@ -656,6 +709,7 @@ function EnvRow({
             idPrefix={`hub-env-${env.id}`}
             taken={envs.filter((e) => e.id !== env.id).map((e) => e.key)}
             onClose={() => row.setEditing(false)}
+            shared={row.isShared}
           />
         </td>
       </tr>
@@ -668,9 +722,10 @@ function EnvRow({
       <tr className='border-b border-slate-100 last:border-0 dark:border-border'>
         <td className='truncate px-4 py-2.5 font-mono text-[12px] font-medium text-slate-800 dark:text-foreground'>
           {env.key}
-          {row.placementText && (
-            <div className='mt-0.5'>
+          {(row.placementText || row.badge) && (
+            <div className='mt-0.5 flex flex-wrap gap-1'>
               <PlacementChip text={row.placementText} shared={row.isShared} />
+              <MoveBadgeChip env={env} row={row} />
             </div>
           )}
         </td>
@@ -697,7 +752,7 @@ function EnvRow({
         >
           {s?.checked_at ? formatRelative(s.checked_at) : '—'}
         </td>
-        <td className='px-4 py-2.5'>
+        <td className='overflow-hidden px-2 py-2.5'>
           <EnvActions env={env} row={row} isAdmin={isAdmin} canPromote={canPromote} />
         </td>
       </tr>
@@ -770,6 +825,7 @@ function EnvItem({
           idPrefix={`hub-env-${env.id}-m`}
           taken={envs.filter((e) => e.id !== env.id).map((e) => e.key)}
           onClose={() => row.setEditing(false)}
+          shared={row.isShared}
         />
       </li>
     )
@@ -777,16 +833,20 @@ function EnvItem({
   const s = row.status.data
   return (
     <li className='px-4 py-2.5'>
-      <div className='flex items-center gap-2'>
+      {/* Design S1: name and status on the first line, chips wrap below at their full width,
+          the actions get a line of their own under the facts (nothing runs off the card). */}
+      <div className='flex flex-wrap items-center gap-x-2 gap-y-1'>
         <span className='font-mono text-[12px] font-medium text-slate-800 dark:text-foreground'>
           {env.key}
         </span>
         <EnvStatus status={row.status} />
-        <PlacementChip text={row.placementText} shared={row.isShared} />
-        <div className='ml-auto'>
-          <EnvActions env={env} row={row} isAdmin={isAdmin} canPromote={canPromote} />
-        </div>
       </div>
+      {(row.placementText || row.badge) && (
+        <div className='mt-1 flex flex-wrap items-center gap-1'>
+          <PlacementChip text={row.placementText} shared={row.isShared} />
+          <MoveBadgeChip env={env} row={row} />
+        </div>
+      )}
       <p className='m-0 mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-slate-500 dark:text-muted-foreground'>
         <a
           href={env.base_url}
@@ -802,6 +862,9 @@ function EnvItem({
         <span className='shrink-0'>{s?.checked_at ? formatRelative(s.checked_at) : '—'}</span>
       </p>
       <EnvStatusHint status={row.status} className='mt-0.5' />
+      <div className='mt-1 flex justify-start [&>div]:justify-start'>
+        <EnvActions env={env} row={row} isAdmin={isAdmin} canPromote={canPromote} />
+      </div>
       {env.placement_id != null && !row.isShared && !row.placementPending && (
         <HubStackPanel env={env} appId={app.id} isAdmin={isAdmin} layout='card' idPrefix='-m' />
       )}
@@ -846,10 +909,13 @@ function EditEnvironment({
   env,
   idPrefix,
   taken,
-  onClose
+  onClose,
+  shared = false
 }: {
   app: HubAppFull
   env: HubEnvironment
+  /** It runs on a shared deployment (the key field then speaks of a lost key). */
+  shared?: boolean
   /** Unique per layout (the table and the phone list can both hold a form). */
   idPrefix: string
   taken: string[]
@@ -927,7 +993,7 @@ function EditEnvironment({
         own as you change them.
       </p>
       <HubComponentsEditor appId={app.id} env={env} idPrefix={idPrefix} />
-      <HubAppKeyField envId={env.id} idPrefix={idPrefix} />
+      <HubAppKeyField envId={env.id} idPrefix={idPrefix} shared={shared} />
     </div>
   )
 }

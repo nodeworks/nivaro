@@ -41,9 +41,12 @@ const VERIFIED_WORDS: Record<string, string> = {
 export function HubAppKeyField({
   envId,
   idPrefix,
-  className
+  className,
+  shared = false
 }: {
   envId: number
+  /** The environment runs on a shared deployment: a missing key there is a lost key. */
+  shared?: boolean
   /** Unique per mount (the table and the phone list can both hold one). */
   idPrefix: string
   className?: string
@@ -130,6 +133,13 @@ export function HubAppKeyField({
               </>
             )}
           </dl>
+        ) : shared ? (
+          // Design S12: on a shared deployment the key is not one "to enter before a move": it
+          // is lost, and there is no override (LOST_KEY_TEXT below says what to do).
+          <p className='m-0 text-[12px] text-amber-800 dark:text-amber-300'>
+            The Hub does not hold this app's encryption key, and the app already runs on a shared
+            deployment.
+          </p>
         ) : (
           <p className='m-0 text-[12px] text-amber-800 dark:text-amber-300'>
             The Hub does not know this app's encryption key. Enter the app's ENCRYPTION_KEY to place
@@ -186,7 +196,9 @@ export function HubAppKeyField({
       </div>
 
       {refusal && <ErrorNotice description={refusal.description} />}
-      {(refusal?.code === 'APP_KEY_IMMUTABLE' || d?.entry_unreadable) && (
+      {(refusal?.code === 'APP_KEY_IMMUTABLE' ||
+        d?.entry_unreadable ||
+        (shared && d && !d.known)) && (
         <p className='m-0 text-[12px] text-slate-600 dark:text-slate-300'>{LOST_KEY_TEXT}</p>
       )}
     </div>

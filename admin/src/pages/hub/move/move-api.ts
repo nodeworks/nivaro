@@ -475,7 +475,15 @@ export const MOVE_STEP_WORDS: Record<string, string> = {
 }
 export const stepWords = (key: string) => MOVE_STEP_WORDS[key] ?? key
 
-export type MoveStepState = 'done' | 'running' | 'waiting' | 'failed' | 'undone' | 'pending'
+/** `stopped` = the step a run was on when it stopped (interrupted): no spinner, nothing failed. */
+export type MoveStepState =
+  | 'done'
+  | 'running'
+  | 'waiting'
+  | 'stopped'
+  | 'failed'
+  | 'undone'
+  | 'pending'
 
 export interface MoveStepRow {
   key: string
@@ -551,7 +559,11 @@ export function moveStepRows(
       const o = s as { key?: unknown; status?: unknown; state?: unknown }
       const key = String(o.key ?? '')
       const st = String(o.state ?? o.status ?? 'pending')
-      return { key, label: stepWords(key), state: STEP_STATE_ALIAS[st] ?? 'pending' }
+      const state = STEP_STATE_ALIAS[st] ?? 'pending'
+      // A run that is not live (interrupted, ended) never shows a step as still going.
+      const settled =
+        !isLiveMove(m.status) && (state === 'running' || state === 'waiting') ? 'stopped' : state
+      return { key, label: stepWords(key), state: settled }
     })
   }
   const keys = list.map(String)
@@ -566,13 +578,43 @@ export function moveStepRows(
         ? 'running'
         : m.status === 'rolled_back' || m.status === 'cancelled'
           ? 'undone'
-          : 'failed'
+          : m.status === 'interrupted'
+            ? 'stopped'
+            : 'failed'
   return keys.map((key, i) => ({
     key,
     label: stepWords(key),
     state:
       i < cur ? (m.status === 'rolled_back' ? 'undone' : 'done') : i === cur ? atState : 'pending'
   }))
+}
+
+/**
+ * Design B4: what the environment row says about its newest move, or null when nothing needs
+ * attention there. `tone` picks the chip colours.
+ */
+export type MoveBadge = { text: string; tone: 'live' | 'attention' | 'halted' }
+
+export function moveBadge(m: HubMove | undefined): MoveBadge | null {
+  if (!m) return null
+  if (m.status === 'waiting') return { text: 'Waiting for you', tone: 'attention' }
+  if (isHaltedTargetLive(m)) return { text: 'Halted: stop the new home', tone: 'halted' }
+  if (m.status === 'interrupted') return { text: 'Move interrupted', tone: 'attention' }
+  if (isLiveMove(m.status)) {
+    const rows = moveStepRows(m)
+    const at = rows.findIndex((r) => r.state === 'running' || r.state === 'waiting')
+    const n = at >= 0 ? at + 1 : rows.filter((r) => r.state === 'done').length + 1
+    return {
+      text: rows.length ? `Moving · step ${Math.min(n, rows.length)} of ${rows.length}` : 'Moving',
+      tone: 'live'
+    }
+  }
+  // Ended: only while something is still to do (the panel cannot be dismissed then).
+  const open = moveChecklistOf(m).some(
+    (c) => !c.done && (m.status === 'success' || c.id === REPOINT_ITEM)
+  )
+  if (open) return { text: 'To do after move', tone: 'attention' }
+  return null
 }
 
 /** Whether the run has passed `release` (after it, nothing is rolled back). */
@@ -1097,6 +1139,9 @@ export function splitRunError(text: string): { code: string | null; sentence: st
  * item `target_stopped` names the target and how to stop it ("Stop <target>: <how>. …").
  */
 export const TARGET_STOPPED_ITEM = 'target_stopped'
+
+/** Task 16: a rolled-back manual move a person had re-pointed; they point the name back. */
+export const REPOINT_ITEM = 'repoint_name'
 
 export const isHaltedTargetLive = (m: Pick<HubMove, 'status' | 'error'>) =>
   m.status === 'interrupted' && splitRunError(m.error ?? '').code === 'HALTED_TARGET_LIVE'
