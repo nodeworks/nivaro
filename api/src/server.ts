@@ -58,6 +58,7 @@ import { sharePublicRoutes } from './routes/share-links.js'
 import { statusPublicRoutes } from './routes/status.js'
 import { setPulseApp } from './services/activity.js'
 import { registerAgentPresence } from './services/agent-presence.js'
+import type { BootPhaseRunner } from './services/app-boot-passes.js'
 import { installAppInject } from './services/app-inject-host.js'
 import { bootPhase } from './services/boot-phases.js'
 import { CRON_DESCRIPTIONS } from './services/cron-descriptions.js'
@@ -1049,6 +1050,10 @@ export async function buildServer() {
     if (perAppJobs()) {
       const { registerRowScheduleLifecycle } = await import('./services/row-schedules.js')
       registerRowScheduleLifecycle(app)
+      // The boot passes (warms, db-tuning twin sweep, REST inventory, extension registry
+      // versions, portal-URL warning) run per app when it becomes ready — same ordering rule.
+      const { registerAppBootPasses } = await import('./services/app-boot-passes.js')
+      registerAppBootPasses(app, { restRoutes: collectedRoutes })
     }
     // Each app's database: migrations, default workspace, the loaded extensions' schema steps —
     // after the extensions above declared their steps. In the background: it never holds up the
@@ -1068,22 +1073,11 @@ export async function buildServer() {
     await bootPhase('Scheduled flows', () => loadScheduledFlows(app))
     // #530 — fingerprint what each extension registered this boot; a changed
     // ledger becomes a new version so "when did this check appear?" has an answer.
-    void (async () => {
-      const { extensionRegistry, describeExtensionRegistry } = await import(
-        './extensions/loader.js'
-      )
-      const { recordRegistryVersion } = await import('./services/extension-registry-versions.js')
-      for (const id of extensionRegistry.keys()) {
-        const desc = await describeExtensionRegistry(id, app.cron).catch(() => null)
-        if (!desc) continue
-        const r = await recordRegistryVersion(id, desc)
-        if (r?.changed)
-          app.log.info(
-            { extension: id, version: r.version },
-            '[extension-registry] new registry version'
-          )
-      }
-    })().catch((err) => app.log.warn({ err }, '[extension-registry] versioning failed'))
+    // (A Hub shared deployment records it per app: services/app-boot-passes.ts.)
+    const bootPasses = await import('./services/app-boot-passes.js')
+    const versioningFailed = (err: unknown) =>
+      app.log.warn({ err }, '[extension-registry] versioning failed')
+    void bootPasses.recordExtensionRegistryVersions(app).catch(versioningFailed)
   }
 
   // ─── Cloud extensions ─────────────────────────────────────────────────────
@@ -1122,27 +1116,13 @@ export async function buildServer() {
   if (!isMultiTenant() || perAppJobs())
     app.addHook('onReady', async () => {
       // A Hub shared deployment has no static database: boot passes that read or write one
-      // (retention, row schedules, warms, restart impact…) run self-hosted only. Per-app boot
-      // passes are phase 6.
+      // (retention, row schedules, warms, restart impact…) run inline here self-hosted only. On
+      // shared the same named passes run per app when it becomes ready (registerAppBootPasses).
       const multiTenant = isMultiTenant()
-      // Admin links (replay button, task/approval notifications, record_url
-      // fallbacks) all resolve through adminBaseUrl(). When that answer IS the
-      // registered portal, every such link lands on the headless frontend's
-      // router instead of the admin page — say so once at boot, since no env
-      // rule can tell a genuine admin host from a mis-pointed ADMIN_URL.
-      if (!multiTenant)
-        void import('./services/app-links.js')
-          .then(async ({ portalRegistration }) => {
-            const { adminBaseUrl } = await import('./admin-base.js')
-            const portal = (await portalRegistration())?.base?.replace(/\/$/, '')
-            const admin = adminBaseUrl()
-            if (portal && admin && portal === admin)
-              app.log.warn(
-                { admin_url: admin, portal_url: portal },
-                'adminBaseUrl() resolves to the registered portal — set ADMIN_URL to the host that serves the admin build or admin links will open the portal'
-              )
-          })
-          .catch(() => {})
+      const bootPasses = await import('./services/app-boot-passes.js')
+      const warnOn = (msg: string) => (err: unknown) => app.log.warn({ err }, msg)
+      // Admin links resolving to the registered portal: said once at boot.
+      if (!multiTenant) void bootPasses.warnIfPortalIsAdmin(app).catch(() => {})
 
       // The daily retention pass (services/retention-pass.ts). Self-hosted: this chain, at boot and
       // every 24 h after, the help-video import sweep in its old place.
@@ -2457,73 +2437,26 @@ export async function buildServer() {
         }
       })
 
-      // Warm the compiled integrity checks for every laid-out collection so
-      // the FIRST record form after a boot gets a sub-second live check
-      // instead of paying the ~6s compile. Best-effort, never awaited.
-      // Owner groups for every bound template (#481): the first queue read
-      // after a deploy used to fetch ~1.9MB of group filters cold (~3s).
-      // Boot warms read the static database: self-hosted only (per-app warms are phase 6).
+      // Boot warms (services/app-boot-passes.ts): owner groups, compiled integrity checks, then
+      // metadata + query caches and readiness results a while after listen so they never compete
+      // with the boot's first requests. Best-effort, never awaited, never a readiness check.
+      // They read the static database: inline self-hosted only (shared: per app when ready).
       if (!multiTenant) {
-        void bootPhase(
-          'Warm owner groups',
-          async () => {
-            const m = await import('./services/pipeline-engine.js')
-            const n = await m.warmOwnerGroupCache()
-            app.log.info(`owners: warmed owner groups for ${n} state(s)`)
-          },
-          { background: true }
-        ).catch(() => {})
-        void bootPhase(
-          'Warm integrity checks',
-          async () => {
-            const m = await import('./services/config-conformance.js')
-            const n = await m.warmCompiledChecks()
-            app.log.info(`integrity: warmed checks for ${n} collection(s)`)
-          },
-          { background: true }
-        ).catch(() => {})
-        // #2445 — query caches and the buffer pool behind them, once per cluster
-        // per version (nvr:warm:<version>), a while after listen so it never
-        // competes with the boot's first requests. Never a readiness check.
-        // Metadata warms on every process. The query warm holds the cluster's
-        // heavy-job slot, like the 06:30 cron.
+        const inBootPhase: BootPhaseRunner = (name, fn) => bootPhase(name, fn, { background: true })
+        void bootPhase('Warm owner groups', () => bootPasses.warmOwnerGroups(app), {
+          background: true
+        }).catch(() => {})
+        void bootPhase('Warm integrity checks', () => bootPasses.warmIntegrityChecks(app), {
+          background: true
+        }).catch(() => {})
         cacheWarmTimer = setTimeout(() => {
           cacheWarmTimer = null
-          void import('./services/cache-warm.js')
-            .then(async (m) => {
-              if (!m.cacheWarmAllowed()) return
-              await bootPhase('Warm metadata', () => m.warmMetadata(), { background: true })
-              const { NIVARO_VERSION } = await import('./version.js')
-              const { INSTANCE_ID } = await import('./services/instance-roster.js')
-              if (!(await m.takeBootWarm(app.redis, NIVARO_VERSION, INSTANCE_ID))) return
-              await app.cron.withHeavySlot('cache-warm (boot)', async () => {
-                await bootPhase(
-                  'Warm query caches',
-                  () =>
-                    m.runCacheWarm({
-                      redis: app.redis,
-                      log: (summary, line) => app.log.info(summary, line)
-                    }),
-                  { background: true }
-                )
-              })
-            })
-            .catch((err) => app.log.warn({ err }, 'cache warm failed'))
+          void bootPasses.warmCaches(app, inBootPhase).catch(warnOn('cache warm failed'))
         }, 20_000)
         cacheWarmTimer.unref()
-        // Readiness results for this version (the cache is keyed by version, so
-        // a deploy starts empty): evaluate them once, on one replica, so the
-        // first dashboard reads a scorecard instead of 'pending'. Same switch as
-        // the cache warm — dev never runs the heavy checks unprompted.
         readinessWarmTimer = setTimeout(() => {
           readinessWarmTimer = null
-          void (async () => {
-            const { cacheWarmAllowed } = await import('./services/cache-warm.js')
-            if (!cacheWarmAllowed()) return
-            const { warmReadiness } = await import('./services/readiness.js')
-            const n = await warmReadiness()
-            if (n > 0) app.log.info(`readiness: evaluated ${n} check(s) for this version`)
-          })().catch((err) => app.log.warn({ err }, 'readiness warm failed'))
+          void bootPasses.warmReadinessResults(app).catch(warnOn('readiness warm failed'))
         }, 15_000)
         readinessWarmTimer.unref()
       }
@@ -2817,18 +2750,7 @@ export async function buildServer() {
       // proof leaves its `<proc>__tune_<hex>` twin behind, so boot sweeps the ones older than any
       // live proof — fire-and-forget: the sweep must never fail or hold up boot.
       if (!multiTenant) {
-        void Promise.all([
-          import('./services/db-tuning/twin.js'),
-          import('./services/db-tuning/settings.js')
-        ])
-          .then(async ([{ sweepTwinLeftovers }, { readTuningSettings }]) =>
-            sweepTwinLeftovers((await readTuningSettings()).proc_timeout_minutes)
-          )
-          .then((dropped) => {
-            if (dropped.length)
-              app.log.warn(`db-tuning: dropped leftover twin procedure(s) ${dropped.join(', ')}`)
-          })
-          .catch((err) => app.log.warn({ err }, 'db-tuning: twin sweep failed'))
+        void bootPasses.sweepTuningTwins(app).catch(warnOn('db-tuning: twin sweep failed'))
       }
       app.cron.schedule(
         'db-tuning-observe',
@@ -3243,11 +3165,7 @@ export async function buildServer() {
       // diff against the previous release (removed routes = breaking).
       if (!multiTenant) {
         setTimeout(() => {
-          void (async () => {
-            const { recordRestRoutes } = await import('./services/api-changelog.js')
-            const { NIVARO_VERSION } = await import('./version.js')
-            await recordRestRoutes(NIVARO_VERSION, collectedRoutes)
-          })()
+          void bootPasses.recordRestRouteInventory(collectedRoutes).catch(() => {})
         }, 10_000)
       }
 

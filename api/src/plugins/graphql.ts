@@ -23,7 +23,7 @@ import { db } from '../db/index.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { registerAppKeyed } from '../services/app-forget.js'
 import { markBootPhase } from '../services/boot-phases.js'
-import { isMultiTenant } from '../services/deployment-mode.js'
+import { isMultiTenant, perAppJobs } from '../services/deployment-mode.js'
 import { isRetiredSync, onRetired } from '../services/hub-link/retire.js'
 import { beginIdempotency, isGraphQLMutation } from '../services/idempotency.js'
 import { type LiveIdentity, liveOperation, liveQuery } from '../services/live-query.js'
@@ -357,8 +357,10 @@ export async function graphqlPlugin(
   // first GraphQL request is never the slow one. In development it is the
   // largest single cost of a restart (~13s cold: one read per collection,
   // field and relation table), so the build runs in the background and the
-  // port opens at once — the first GraphQL request simply awaits it.
+  // port opens at once — the first GraphQL request simply awaits it. A Hub shared deployment has
+  // no database outside an app: each app's schema is built on its first request, inside the app.
   app.addHook('onReady', async () => {
+    if (perAppJobs()) return
     const build = getSchema()
       .then(() => app.log.info('GraphQL schema built'))
       .catch((err) =>

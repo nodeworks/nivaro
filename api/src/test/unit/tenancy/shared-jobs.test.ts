@@ -125,7 +125,7 @@ describe('server.ts: which deployments schedule the core jobs', () => {
 
   it('boot work against the static database stays self-hosted only inside the job block', () => {
     for (const needle of [
-      "void import('./services/app-links.js')",
+      'void bootPasses.warnIfPortalIsAdmin(app)',
       'void runInBackgroundPool(runRetentionPurge)',
       "void import('./services/row-schedules.js')",
       "void import('./services/help-video-render.js')",
@@ -133,8 +133,8 @@ describe('server.ts: which deployments schedule the core jobs', () => {
       'void bootPhase(',
       'cacheWarmTimer = setTimeout',
       'readinessWarmTimer = setTimeout',
-      'void Promise.all([', // the db-tuning twin sweep
-      "const { recordRestRoutes } = await import('./services/api-changelog.js')",
+      'void bootPasses.sweepTuningTwins(app)', // the db-tuning twin sweep
+      'void bootPasses.recordRestRouteInventory(collectedRoutes)',
       "const row = (await db('nivaro_settings').orderBy('id', 'asc').first('paused_crons'))",
       "await import('./services/restart-cleanups.js')"
     ]) {
@@ -142,6 +142,32 @@ describe('server.ts: which deployments schedule the core jobs', () => {
       expect(g, needle).toContain('!multiTenant')
       expect(g.at(-1), needle).toBe(OUTER)
     }
+  })
+})
+
+describe('server.ts: boot passes per app on a shared deployment', () => {
+  it('self-hosted calls each pass inline; shared registers them on app-ready', () => {
+    // the self-hosted inline calls are the needles above (all `!multiTenant`); the extension
+    // registry versioning sits in the self-hosted extensions block
+    expect(guardsOf('void bootPasses.recordExtensionRegistryVersions(app)')).toEqual(['selfHosted'])
+    // a shared deployment registers the per-app passes, before the app migrations start
+    expect(guardsOf('registerAppBootPasses(app,')).toEqual(['perAppJobs()', 'hubShared'])
+    const src = readFileSync(serverFile, 'utf8')
+    expect(src.indexOf('registerAppBootPasses(app,')).toBeLessThan(
+      src.indexOf('startAppMigrations(registry')
+    )
+    // every pass the shared hook runs is the same named function self-hosted calls
+    for (const pass of [
+      'warmOwnerGroups',
+      'warmIntegrityChecks',
+      'warmCaches',
+      'warmReadinessResults',
+      'sweepTuningTwins',
+      'recordRestRouteInventory',
+      'recordExtensionRegistryVersions',
+      'warnIfPortalIsAdmin'
+    ])
+      expect(src, pass).toContain(`bootPasses.${pass}(`)
   })
 })
 
