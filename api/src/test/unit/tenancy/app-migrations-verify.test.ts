@@ -248,3 +248,56 @@ describe('Task 14 fix M3: a passing check keeps the stored `ok` alive', () => {
     expect(await m.storedAppSchemaOk(rec('a'), redis)).toBe(false)
   })
 })
+
+describe('Task 14 fix round 2: the refresh writes only a confirmed `ok` over nothing or its own `ok`', () => {
+  function memRedis() {
+    const store = new Map<string, string>()
+    const sets: string[] = []
+    return {
+      store,
+      sets,
+      get: async (k: string) => store.get(k) ?? null,
+      set: async (k: string, v: string) => {
+        sets.push(k)
+        store.set(k, v)
+        return 'OK'
+      }
+    }
+  }
+
+  it('a ledger that cannot be read (null) writes nothing: a `pending` another replica wrote stays', async () => {
+    const redis = memRedis()
+    m._configureAppMigrationsForTests({ now, gate: true, random: () => 0, redis })
+    await allOk([rec('a')])
+    // Another replica found the database behind (dropOk): `pending` for this version.
+    const pending = JSON.stringify({ version: null, state: 'pending', at: null, error: null })
+    redis.store.set(m.appSchemaKey('a'), pending)
+    redis.sets.length = 0
+    clock += m.APP_SCHEMA_VERIFY_MS
+    await m.appMigrationPass(registry([rec('a')]), {
+      ...base,
+      schemaCurrent: vi.fn(async () => {
+        throw new Error('ledger unreadable')
+      })
+    })
+    expect(redis.sets).toEqual([])
+    expect(redis.store.get(m.appSchemaKey('a'))).toBe(pending)
+  })
+
+  it('a confirmed check never overwrites a state written by another version or another state', async () => {
+    const redis = memRedis()
+    m._configureAppMigrationsForTests({ now, gate: true, random: () => 0, redis })
+    await allOk([rec('a')])
+    const key = m.appSchemaKey('a')
+    const other = JSON.stringify({ version: '9.9.9', state: 'ok', at: null, error: null })
+    redis.store.set(key, other)
+    redis.sets.length = 0
+    clock += m.APP_SCHEMA_VERIFY_MS
+    await m.appMigrationPass(registry([rec('a')]), {
+      ...base,
+      schemaCurrent: vi.fn(async () => true)
+    })
+    expect(redis.sets).toEqual([])
+    expect(redis.store.get(key)).toBe(other)
+  })
+})

@@ -519,10 +519,20 @@ async function migrationPass(
         due.push(t)
         return
       }
-      // Still migrated: write the stored `ok` again so it never runs out of its TTL while the
+      // Confirmed migrated: write the stored `ok` again so it never runs out of its TTL while the
       // app is served (Task 14 fix M3: an importer, which runs no loop, reads only that key).
+      // Only on a confirmed check (an unreadable ledger proves nothing), and only over nothing or
+      // this version's own `ok` for this database: never over a `pending` another replica's
+      // dropOk wrote, nor a state another version wrote.
       const e = states.get(t.id)
-      if (current !== undefined && e?.state === 'ok' && e.conn === conn) await writeStored(t.id, e)
+      if (current !== true || e?.state !== 'ok' || e.conn !== conn) return
+      const stored = await readStored(t.id)
+      if (
+        stored &&
+        !(stored.state === 'ok' && stored.version === NIVARO_VERSION && stored.conn === conn)
+      )
+        return
+      await writeStored(t.id, e)
     })
   ]
   let next = 0
