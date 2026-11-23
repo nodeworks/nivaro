@@ -960,6 +960,22 @@ describe('parseReadiness', () => {
     expect(Gather.parseReadiness(report({ files: null }))).toBeNull()
     expect(Gather.parseReadiness({})).toBeNull()
   })
+
+  it("knows the env-credential warnings and keeps an older app's codes known (shared features)", () => {
+    const sent = [
+      { code: 'DIRECTORY_ENV_CREDENTIALS', level: 'warning', detail: 'd' },
+      { code: 'TEAMS_BOT_ENV_CREDENTIALS', level: 'warning', detail: 't' },
+      { code: 'PUSH_RELAY_ENV', level: 'warning', detail: 'p' },
+      // An app before 0.3.211 still sends these; the plan decides by the target's version.
+      { code: 'STAGED_IMPORTS', level: 'blocker', detail: 's' },
+      { code: 'ROW_SCHEDULES', level: 'blocker', detail: 'r' },
+      { code: 'DIRECTORY_SYNC', level: 'warning', detail: 'ds' },
+      { code: 'TEAMS_BOT', level: 'warning', detail: 'tb' },
+      { code: 'PHONE_PUSH', level: 'warning', detail: 'pp' },
+      { code: 'MAIL_RETRY', level: 'warning', detail: 'mr' }
+    ]
+    expect(Gather.parseReadiness(report({ codes: sent }))?.codes).toEqual(sent)
+  })
 })
 
 describe('readSharedReadiness', () => {

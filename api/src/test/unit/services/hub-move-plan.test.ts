@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { buildMovePlan, MANUAL_MOVE_STEPS, MOVE_STEPS } from '../../../services/hub/move/plan.js'
+import {
+  buildMovePlan,
+  MANUAL_MOVE_STEPS,
+  MOVE_STEPS,
+  SHARED_FEATURES_SINCE
+} from '../../../services/hub/move/plan.js'
 import type {
   MoveBlockerCode,
   MovePlanInput,
@@ -311,14 +316,87 @@ describe('buildMovePlan — one test per blocker', () => {
     expect(codes(p)).not.toContain('TEAMS_BOT')
   })
 
-  it('every one of the six readiness blockers becomes a plan blocker', () => {
-    expect(SHARED_READINESS_BLOCKERS).toHaveLength(6)
-    for (const code of SHARED_READINESS_BLOCKERS) {
-      const p = buildMovePlan(
-        input({ source: src({ readiness: [{ code, level: 'blocker', detail: 'counted' }] }) })
+  it('every one of the four readiness blockers becomes a plan blocker, on any target version', () => {
+    expect(SHARED_READINESS_BLOCKERS).toHaveLength(4)
+    for (const version of ['0.3.210', '0.3.211'])
+      for (const code of SHARED_READINESS_BLOCKERS) {
+        const p = buildMovePlan(
+          input({
+            source: src({ version, readiness: [{ code, level: 'blocker', detail: 'counted' }] }),
+            target_facts: tgt({ version })
+          })
+        )
+        expect(codes(p), `${code} @ ${version}`).toContain(code)
+      }
+  })
+
+  it("an older app's staged imports and row schedules block only a target before 0.3.211", () => {
+    expect(SHARED_FEATURES_SINCE).toBe('0.3.211')
+    const readiness = [
+      { code: 'ROW_SCHEDULES' as const, level: 'blocker' as const, detail: '3 scheduled reports' },
+      { code: 'STAGED_IMPORTS' as const, level: 'blocker' as const, detail: '1 import definition' }
+    ]
+    const at = (version: string | null) =>
+      buildMovePlan(
+        input({
+          source: src({ version: version ?? '0.3.210', readiness }),
+          target_facts: tgt({ version })
+        })
       )
-      expect(codes(p)).toContain(code)
+    // Target 0.3.210: a shared deployment that does not run them yet.
+    expect(codes(at('0.3.210'))).toEqual(['ROW_SCHEDULES', 'STAGED_IMPORTS'])
+    // Target 0.3.211 and later: they run per app there, so neither a blocker nor a warning.
+    for (const v of ['0.3.211', '0.3.212', '0.4.0', '1.0.0']) {
+      const p = at(v)
+      expect(codes(p), v).toEqual([])
+      expect(
+        p.warnings.filter((w) => ['ROW_SCHEDULES', 'STAGED_IMPORTS'].includes(w.code)),
+        v
+      ).toEqual([])
     }
+    // A target version the Hub cannot read is taken as older (the safe side).
+    expect(codes(at(null))).toEqual(expect.arrayContaining(['ROW_SCHEDULES', 'STAGED_IMPORTS']))
+    expect(codes(at('latest'))).toEqual(expect.arrayContaining(['ROW_SCHEDULES', 'STAGED_IMPORTS']))
+    // A pre-release of 0.3.211 is still before it.
+    expect(codes(at('0.3.211-rc.1'))).toEqual(
+      expect.arrayContaining(['ROW_SCHEDULES', 'STAGED_IMPORTS'])
+    )
+  })
+
+  it("an older app's directory, Teams bot, phone and mail retry warnings show only for a target before 0.3.211", () => {
+    const old = ['DIRECTORY_SYNC', 'TEAMS_BOT', 'PHONE_PUSH', 'MAIL_RETRY'] as const
+    const readiness = old.map((code) => ({ code, level: 'warning' as const, detail: 'today' }))
+    const warned = (version: string) =>
+      buildMovePlan(input({ source: src({ version, readiness }), target_facts: tgt({ version }) }))
+        .warnings.map((w) => w.code)
+        .filter((c) => (old as readonly string[]).includes(c))
+    expect(warned('0.3.210')).toEqual([...old])
+    expect(warned('0.3.211')).toEqual([])
+  })
+
+  it('the env-credential warnings read as "<title>: <detail>" and never block', () => {
+    const p = buildMovePlan(
+      input({
+        source: src({
+          version: '0.3.211',
+          readiness: [
+            { code: 'DIRECTORY_ENV_CREDENTIALS', level: 'warning', detail: 'dir detail' },
+            { code: 'TEAMS_BOT_ENV_CREDENTIALS', level: 'warning', detail: 'bot detail' },
+            { code: 'PUSH_RELAY_ENV', level: 'warning', detail: 'relay detail' }
+          ]
+        }),
+        target_facts: tgt({ version: '0.3.211' })
+      })
+    )
+    expect(codes(p)).toEqual([])
+    const text = (c: string) => p.warnings.find((w) => w.code === c)?.text
+    expect(text('DIRECTORY_ENV_CREDENTIALS')).toBe(
+      'A shared app reads the directory with its own saved app registration: dir detail'
+    )
+    expect(text('TEAMS_BOT_ENV_CREDENTIALS')).toBe(
+      "A shared app's Teams bot uses the bot saved in its Settings: bot detail"
+    )
+    expect(text('PUSH_RELAY_ENV')).toBe('A shared app connects its own push relay: relay detail')
   })
 
   it('a readiness code the app marks as a blocker counts as one whatever its level says', () => {
@@ -495,6 +573,10 @@ describe('buildMovePlan — warnings', () => {
     const w = p.warnings.find((x) => x.code === 'SAME_APP_ON_DEPLOYMENT')
     expect(w?.text).toContain('staging')
     expect(w?.text).toContain('dev')
+    // A copy carries the original's saved Teams bot and directory app registration.
+    expect(w?.text).toMatch(/Teams bot/)
+    expect(w?.text).toMatch(/directory/)
+    expect(w?.text).toMatch(/turn the bot off on the copy/i)
   })
 
   it('SIGN_IN_AGAIN names phone and MCP sign-ins', () => {

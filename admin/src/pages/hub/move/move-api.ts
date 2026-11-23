@@ -826,14 +826,15 @@ export const MOVE_BLOCKER_COPY: Record<string, Copy> = {
     title: 'The old and the new home share one Redis database',
     hint: 'Retiring the old home would also stop the new one. Give the target its own Redis database (or channel prefix), then plan again.'
   },
-  // The app's own readiness report (Task 9): what a shared deployment cannot run yet.
+  // The app's own readiness report (Task 9): what a shared deployment cannot run. Staged imports
+  // and row schedules come only from an app before 0.3.211, and block only a target before it.
   STAGED_IMPORTS: {
     title: 'The app has staged imports set up',
-    hint: 'A shared deployment does not run staged imports yet. Finish or remove them first.'
+    hint: 'This shared deployment runs a version before 0.3.211, which does not run staged imports. Upgrade it (and the app) to 0.3.211 or later, or finish or remove them first.'
   },
   ROW_SCHEDULES: {
     title: 'The app has schedules stored in its data',
-    hint: 'A shared deployment does not run per-app schedules yet, so they would silently stop. Turn them off first.'
+    hint: 'This shared deployment runs a version before 0.3.211, which does not run per-app schedules, so they would silently stop. Upgrade it (and the app) to 0.3.211 or later, or turn them off first.'
   },
   ISSUE_TRACKERS: {
     title: 'GitLab issue sync is on in this app',
@@ -873,7 +874,7 @@ export const MOVE_WARNING_COPY: Record<string, Copy> = {
   },
   SAME_APP_ON_DEPLOYMENT: {
     title: 'Another environment of this app already runs on this deployment',
-    hint: 'Fine for development and staging next to each other; each keeps its own data and files.'
+    hint: 'Fine for development and staging next to each other; each keeps its own data and files. A copy also carries the original’s saved Teams bot and directory app registration, so it answers in Teams and syncs the directory as that app: turn the bot off on the copy if it should not.'
   },
   MULTI_NODE_VOLUMES: {
     title: 'The Docker host has more than one node',
@@ -927,21 +928,35 @@ export const MOVE_WARNING_COPY: Record<string, Copy> = {
     title: 'The old stack keeps running until someone stops it',
     hint: 'The Hub retires it (it answers only "moved"); stop it in its own pipeline afterwards.'
   },
+  // From an app before 0.3.211, shown only when the target runs a version before it.
   DIRECTORY_SYNC: {
-    title: 'Directory sync does not run on a shared deployment',
-    hint: 'People still sign in; new people are not added ahead of their first sign-in.'
+    title: 'Directory sync does not run on this shared deployment',
+    hint: 'It runs a version before 0.3.211. People still sign in; new people are not added ahead of their first sign-in. Upgrade it to 0.3.211 or later to keep the sync.'
   },
   PHONE_PUSH: {
-    title: 'Phone alerts do not run on a shared deployment',
-    hint: 'In-app and email notifications still work.'
+    title: 'Phone alerts do not run on this shared deployment',
+    hint: 'It runs a version before 0.3.211. In-app and email notifications still work. Upgrade it to 0.3.211 or later to keep phone alerts.'
   },
   TEAMS_BOT: {
-    title: 'The Teams bot does not run on a shared deployment',
-    hint: 'Tell the people who use it that alerts arrive in the app and by email instead.'
+    title: 'The Teams bot does not run on this shared deployment',
+    hint: 'It runs a version before 0.3.211. Tell the people who use it that alerts arrive in the app and by email instead, or upgrade it to 0.3.211 or later.'
   },
   MAIL_RETRY: {
-    title: 'Failed emails are not retried on a shared deployment',
-    hint: 'They stay in the mail log and can be resent by hand.'
+    title: 'Failed emails are not retried on this shared deployment',
+    hint: 'It runs a version before 0.3.211. They stay in the mail log and can be resent by hand. Upgrade it to 0.3.211 or later to keep the retries.'
+  },
+  // What an app on a shared deployment brings itself (the server's own settings are not used).
+  DIRECTORY_ENV_CREDENTIALS: {
+    title: 'A shared app reads the directory with its own saved app registration',
+    hint: 'Before the move, save the app’s own Microsoft app registration (tenant, client id and secret) in Settings → Microsoft, or directory sync stops after it.'
+  },
+  TEAMS_BOT_ENV_CREDENTIALS: {
+    title: "A shared app's Teams bot uses the bot saved in its Settings",
+    hint: 'Before the move, save the bot’s app id, secret and tenant in Settings → Microsoft and switch it on there, or the bot stops answering after it.'
+  },
+  PUSH_RELAY_ENV: {
+    title: 'A shared app connects its own push relay',
+    hint: 'After the move, connect the app’s own push relay in Settings → Mobile app so phones keep getting alerts.'
   },
   HUDDLE_TURN: {
     title: 'Huddles use the deployment’s media servers, not the app’s own',

@@ -1,8 +1,13 @@
 import { createHash } from 'node:crypto'
-import { SHARED_READINESS_BLOCKERS } from '../../hub-link/shared-readiness.js'
+import {
+  SHARED_READINESS_BLOCKERS,
+  type SharedReadinessCode,
+  type SharedReadinessItem
+} from '../../hub-link/shared-readiness.js'
 import { COPYABLE_OBJECT_STORAGE } from '../../hub-transfer/copyable.js'
 import { MIN_SHARED_POOL_MAX } from '../drivers.js'
 import { holderOf, lockHolderRefusal, sharedHolderOf, sharedLockRefusal } from '../promote-lock.js'
+import { compareVersions } from '../promote-plan.js'
 import { routeActions } from './route-actions.js'
 import type {
   MoveBlockerCode,
@@ -422,28 +427,71 @@ function blockersOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Bloc
   // What shared would lose (Task 9): every blocker code is a blocker, whatever level it was sent
   // with (an unreadable check is sent as its blocker).
   if (kind === 'to_shared')
-    for (const r of s.readiness)
-      if (SHARED_READINESS_BLOCKERS.includes(r.code))
-        add(r.code, `${readinessTitle(r.code)}: ${clean(r.detail)}`)
+    for (const r of readinessFor(input))
+      if (isReadinessBlocker(r.code)) add(r.code, `${readinessTitle(r.code)}: ${clean(r.detail)}`)
 
   return out
 }
 
+/**
+ * Shared features: from this version a shared deployment runs staged imports, row schedules,
+ * directory sync, the Teams bot, phone push and mail retry per app. An app before it still
+ * reports them (two as blockers); they hold only for a target before it.
+ */
+export const SHARED_FEATURES_SINCE = '0.3.211'
+
+/** Codes an app before SHARED_FEATURES_SINCE reports for what shared deployments now run. */
+const PER_APP_SINCE_SHARED_FEATURES: readonly SharedReadinessCode[] = [
+  'STAGED_IMPORTS',
+  'ROW_SCHEDULES',
+  'DIRECTORY_SYNC',
+  'TEAMS_BOT',
+  'PHONE_PUSH',
+  'MAIL_RETRY'
+]
+
+/** Blockers on a target before SHARED_FEATURES_SINCE, besides the app's own blocker list. */
+const OLDER_TARGET_BLOCKERS: readonly SharedReadinessCode[] = ['STAGED_IMPORTS', 'ROW_SCHEDULES']
+
+const isReadinessBlocker = (code: SharedReadinessCode) =>
+  SHARED_READINESS_BLOCKERS.includes(code) || OLDER_TARGET_BLOCKERS.includes(code)
+
+/**
+ * The target runs SHARED_FEATURES_SINCE or later. A version the Hub cannot read (none, not
+ * x.y.z) is taken as older, and so is a pre-release of that version: the safe side keeps the
+ * blocker.
+ */
+function targetRunsSharedFeatures(version: string | null): boolean {
+  const m = /^v?(\d+\.\d+\.\d+)(.*)$/.exec((version ?? '').trim())
+  if (!m) return false
+  const c = compareVersions(m[1], SHARED_FEATURES_SINCE)
+  return c > 0 || (c === 0 && !m[2].startsWith('-'))
+}
+
+/** The source's readiness codes the target's version makes real (ruling: target version). */
+function readinessFor(input: MovePlanInput): SharedReadinessItem[] {
+  if (!targetRunsSharedFeatures(input.target_facts.version)) return input.source.readiness
+  return input.source.readiness.filter((r) => !PER_APP_SINCE_SHARED_FEATURES.includes(r.code))
+}
+
 const READINESS_TITLES: Record<string, string> = {
-  STAGED_IMPORTS: 'Staged imports do not run on a shared deployment yet',
-  ROW_SCHEDULES: 'Schedules kept in table rows do not run on a shared deployment yet',
+  STAGED_IMPORTS: 'Staged imports do not run on a shared deployment before 0.3.211',
+  ROW_SCHEDULES: 'Schedules kept in table rows do not run on a shared deployment before 0.3.211',
   ISSUE_TRACKERS: 'Issue tracker sync does not run on a shared deployment yet',
   EXEC_SCRIPT_FLOWS: 'Flows that run scripts do not run on a shared deployment yet',
   SQLITE: 'A SQLite database cannot be served by a shared deployment',
   ENV_OBJECT_STORAGE: 'Files in object storage set by environment variables are not copied',
-  DIRECTORY_SYNC: 'Directory sync is off on a shared deployment',
-  PHONE_PUSH: 'Phone push is off on a shared deployment',
-  TEAMS_BOT: 'The Teams bot is off on a shared deployment',
-  MAIL_RETRY: 'Automatic mail retry is off on a shared deployment',
+  DIRECTORY_SYNC: 'Directory sync is off on a shared deployment before 0.3.211',
+  PHONE_PUSH: 'Phone push is off on a shared deployment before 0.3.211',
+  TEAMS_BOT: 'The Teams bot is off on a shared deployment before 0.3.211',
+  MAIL_RETRY: 'Automatic mail retry is off on a shared deployment before 0.3.211',
   HUDDLE_TURN: "Huddles use the deployment's media servers",
   ENV_SMTP: "Mail set by environment variables uses the deployment's settings",
   SESSION_REPLAYS: 'Session replays are not moved',
-  HELP_VIDEO_RENDERS: 'Queued help-video renders redo on the next publish'
+  HELP_VIDEO_RENDERS: 'Queued help-video renders redo on the next publish',
+  DIRECTORY_ENV_CREDENTIALS: 'A shared app reads the directory with its own saved app registration',
+  TEAMS_BOT_ENV_CREDENTIALS: "A shared app's Teams bot uses the bot saved in its Settings",
+  PUSH_RELAY_ENV: 'A shared app connects its own push relay'
 }
 
 function readinessTitle(code: string): string {
@@ -465,7 +513,7 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
   if (toShared(kind) && to.kind === 'shared' && t.siblings.length)
     add(
       'SAME_APP_ON_DEPLOYMENT',
-      `${list(t.siblings)} of this app already run${t.siblings.length === 1 ? 's' : ''} on ${to.shared.key}. Environments of one app on one deployment usually hold copied databases: their stored files and sign-ins are kept apart, but test with care.`
+      `${list(t.siblings)} of this app already run${t.siblings.length === 1 ? 's' : ''} on ${to.shared.key}. Environments of one app on one deployment usually hold copied databases: their stored files and sign-ins are kept apart, but test with care. A copied app also carries the original's saved Teams bot and directory app registration, so it answers in Teams and syncs the directory as that app: turn the bot off on the copy if it should not.`
     )
   add(
     'SIGNED_LINKS_RESET',
@@ -541,9 +589,8 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
       'The old GitLab-deployed app is retired (it answers "moved"), not stopped. Stop its stack afterwards; it is on the checklist.'
     )
   if (kind === 'to_shared')
-    for (const r of s.readiness)
-      if (!SHARED_READINESS_BLOCKERS.includes(r.code))
-        add(r.code, `${readinessTitle(r.code)}: ${clean(r.detail)}`)
+    for (const r of readinessFor(input))
+      if (!isReadinessBlocker(r.code)) add(r.code, `${readinessTitle(r.code)}: ${clean(r.detail)}`)
   return out
 }
 

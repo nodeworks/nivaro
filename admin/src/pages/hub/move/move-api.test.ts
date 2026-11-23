@@ -73,6 +73,29 @@ describe('move copy covers every code', () => {
     expect(moveIssueCopy({ code: 'SOMETHING_NEW', text: '' }, 'blocker').hint).toBeTruthy()
   })
 
+  it('the shared-features readiness warnings say how a shared app works, with what to do', () => {
+    const titles = {
+      DIRECTORY_ENV_CREDENTIALS:
+        'A shared app reads the directory with its own saved app registration',
+      TEAMS_BOT_ENV_CREDENTIALS: "A shared app's Teams bot uses the bot saved in its Settings",
+      PUSH_RELAY_ENV: 'A shared app connects its own push relay'
+    }
+    for (const [code, title] of Object.entries(titles)) {
+      const c = moveIssueCopy({ code, text: 'This app does it today' }, 'warning')
+      expect(c.title, code).toBe(title)
+      expect(c.hint, code).toMatch(/Settings → (Microsoft|Mobile app)/)
+      expect(c.detail, code).toBe('This app does it today')
+    }
+    // An older app's codes keep their words: they show when the target runs a version before
+    // shared apps ran them.
+    for (const code of ['STAGED_IMPORTS', 'ROW_SCHEDULES'])
+      expect(MOVE_BLOCKER_COPY[code]?.hint, code).toMatch(/0\.3\.211/)
+    for (const code of ['DIRECTORY_SYNC', 'TEAMS_BOT', 'PHONE_PUSH', 'MAIL_RETRY'])
+      expect(MOVE_WARNING_COPY[code]?.hint, code).toMatch(/0\.3\.211/)
+    // A copy of an app carries the original's Teams bot and directory registration.
+    expect(MOVE_WARNING_COPY.SAME_APP_ON_DEPLOYMENT.hint).toMatch(/Teams bot/)
+  })
+
   it('an unknown code keeps the planner sentence', () => {
     expect(moveIssueCopy({ code: 'SOMETHING_NEW', text: 'Plain sentence.' }, 'blocker').title).toBe(
       'Plain sentence.'

@@ -320,7 +320,7 @@ function tenantId(): string | null {
   return m?.[1] ?? null
 }
 
-type GraphCredentials = { tenant: string | null; clientId: string; secret: string }
+export type GraphCredentials = { tenant: string | null; clientId: string; secret: string }
 
 const NO_CREDENTIALS: GraphCredentials = { tenant: null, clientId: '', secret: '' }
 const SAVED_CREDENTIALS_TTL_MS = 60_000
@@ -361,16 +361,23 @@ async function savedCredentials(): Promise<GraphCredentials> {
   return creds
 }
 
-async function credentials(): Promise<GraphCredentials> {
-  // Hub phase 5 (P5-10) + shared features (554): on a shared deployment one app never uses the
-  // deployment's own Microsoft app registration (env) — only the one saved in its own settings.
-  // Without one the directory reads as not configured there and directory-sync skips the app.
-  if (perAppJobs()) return savedCredentials()
+/** The server's own Microsoft app registration (env GRAPH_*, else the OIDC sign-in app): what
+ *  the directory uses everywhere but on a shared deployment. The Hub's shared-readiness report
+ *  reads it to warn before a move (DIRECTORY_ENV_CREDENTIALS). */
+export function envGraphCredentials(): GraphCredentials {
   return {
     tenant: tenantId(),
     clientId: config.GRAPH_CLIENT_ID || config.OIDC_CLIENT_ID,
     secret: config.GRAPH_CLIENT_SECRET || config.OIDC_CLIENT_SECRET
   }
+}
+
+async function credentials(): Promise<GraphCredentials> {
+  // Hub phase 5 (P5-10) + shared features (554): on a shared deployment one app never uses the
+  // deployment's own Microsoft app registration (env) — only the one saved in its own settings.
+  // Without one the directory reads as not configured there and directory-sync skips the app.
+  if (perAppJobs()) return savedCredentials()
+  return envGraphCredentials()
 }
 
 export async function directoryConfigured(): Promise<boolean> {
