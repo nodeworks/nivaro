@@ -1553,3 +1553,22 @@ describe('final review I-4: an app needs an extension the deployment does not lo
     ).toEqual({ started: false, reason: 'APP_BLOCKED' })
   })
 })
+
+describe('final review M-1: the run renews its shared lock strictly', () => {
+  it('a renewal Redis cannot answer is a lost lock (LOCK_LOST), never "still held"', async () => {
+    const id = await newShared()
+    await newApp(id, [{ key: 'production', placed: true }])
+    const f = fakes()
+    f.statusVersion = '0.3.209' // never reaches the new version: the run keeps waiting
+    const blinking = {
+      ...locks.shared,
+      renew: async () => true,
+      renewStrict: async () => false
+    }
+    const { deps } = runDeps(f, { sharedLock: blinking, renewMs: 1 })
+    onSleep = () => new Promise<void>((r) => setTimeout(r, 5))
+    const { row } = await start(id, deps)
+    expect(row?.status).toBe('interrupted')
+    expect(row?.error).toMatch(/LOCK_LOST/)
+  })
+})

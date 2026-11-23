@@ -591,8 +591,18 @@ async function runUpgrade(c: RunCtx, deps: SharedRunDeps): Promise<void> {
 
   const beat = async () => {
     try {
-      if (!(await c.sharedLock.renew(sharedId, c.sharedToken))) lockLost = true
-      for (const [envId, t] of c.envTokens) if (!(await c.envLock.renew(envId, t))) lockLost = true
+      // Final review M-1: strict renewals (as the move run, R2-M-5) — a renewal Redis cannot
+      // answer is a lost lock: one that expired during the outage may be someone else's now.
+      const sharedHeld = c.sharedLock.renewStrict
+        ? await c.sharedLock.renewStrict(sharedId, c.sharedToken)
+        : await c.sharedLock.renew(sharedId, c.sharedToken)
+      if (!sharedHeld) lockLost = true
+      for (const [envId, t] of c.envTokens) {
+        const held = c.envLock.renewStrict
+          ? await c.envLock.renewStrict(envId, t)
+          : await c.envLock.renew(envId, t)
+        if (!held) lockLost = true
+      }
       await db(SHARED_DEPLOYS)
         .where({ id: deployId, status: 'running' })
         .update({ heartbeat_at: new Date(now()) })
