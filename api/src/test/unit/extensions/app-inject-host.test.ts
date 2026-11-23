@@ -183,6 +183,71 @@ describe('withAppHost', () => {
   })
 })
 
+describe('the wrap keeps each instance and every error path', () => {
+  it("a child scope's inject before listen waits on that scope's ready, as unwrapped Fastify does", async () => {
+    const app = Fastify()
+    installAppInject(app)
+    let child: FastifyInstance | undefined
+    app.register(async (c) => {
+      c.get('/api/ping', async () => ({ ok: true }))
+      child = c
+    })
+    await app.after()
+    if (!child) throw new Error('child scope not loaded')
+    // Stand-ins: only WHICH ready the inject waits on is checked (Fastify dispatches after it).
+    const childReady = vi.spyOn(child, 'ready').mockImplementation((() => undefined) as never)
+    const rootReady = vi.spyOn(app, 'ready').mockImplementation((() => undefined) as never)
+    // Bound to the root, the wrap made every scope wait on the root's ready (the whole boot).
+    child.inject({ method: 'GET', url: '/api/ping' }, () => {})
+    expect(childReady).toHaveBeenCalledTimes(1)
+    expect(rootReady).not.toHaveBeenCalled()
+    childReady.mockRestore()
+    rootReady.mockRestore()
+    await app.ready()
+    expect((await child.inject({ method: 'GET', url: '/api/ping' })).statusCode).toBe(200)
+    await app.close()
+  })
+
+  it('callback form: a synchronous throw of the original reaches the callback, no unhandled rejection', async () => {
+    const unhandled: unknown[] = []
+    const onUnhandled = (e: unknown) => unhandled.push(e)
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      const inject = appInject((..._args: unknown[]) => {
+        throw new Error('closed')
+      })
+      const err = await inApp(
+        'app-a',
+        'https://efp-a.example',
+        () =>
+          new Promise<unknown>((resolve) => {
+            inject({ url: '/api/x' } as never, ((e: unknown) => resolve(e)) as never)
+          })
+      )
+      expect((err as Error).message).toBe('closed')
+      await new Promise((r) => setTimeout(r, 20))
+      expect(unhandled).toEqual([])
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
+  })
+
+  it('the original runs as the instance it was called on', async () => {
+    let self: unknown = null
+    const inject = appInject(function (this: unknown, ..._args: unknown[]) {
+      self = this
+      return 'res'
+    })
+    const child = { inject }
+    await inApp('app-a', 'https://efp-a.example', async () =>
+      child.inject({ url: '/api/x' } as never)
+    )
+    expect(self).toBe(child)
+    child.inject(undefined as never)
+    expect(self).toBe(child)
+  })
+})
+
 describe('self-hosted and Nivaro Cloud: nothing installed', () => {
   it('self-hosted: inject is the very same function', () => {
     process.env = { ...saved }

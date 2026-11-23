@@ -78,30 +78,41 @@ type InjectFn = (...args: unknown[]) => unknown
 
 /**
  * Wraps an `inject`: the promise form and the callback form inside an app get the app's host.
- * The chain form (`inject()` with no options, then `.get(url)…`) is passed through unchanged —
- * nothing in core or the shipped extensions uses it.
+ * The wrapper calls the original with the instance it is called on (`this`): a child scope's
+ * inject keeps its own `ready` (avvio's, bound to the child), so an inject awaited inside a
+ * plugin's register before listen waits for that scope only, never the whole boot. In the
+ * callback form any error — the host lookup, or a synchronous throw from the original — reaches
+ * the callback, never an unhandled rejection. The chain form (`inject()` with no options, then
+ * `.get(url)…`) is passed through unchanged — nothing in core or the shipped extensions uses it.
  */
 export function appInject<F extends (...args: never[]) => unknown>(inject: F): F {
-  const call = inject as unknown as InjectFn
-  return ((...args: unknown[]) => {
+  const original = inject as unknown as InjectFn
+  return function (this: unknown, ...args: unknown[]) {
+    const call = (...a: unknown[]) => original.apply(this, a)
     const [opts, cb] = args
     if (opts === undefined || !hubShared() || !getTenantId()) return call(...args)
     if (typeof cb === 'function') {
-      withAppHost(opts).then(
-        (o) => call(o, cb),
-        (err) => (cb as (e: unknown) => void)(err)
-      )
+      let called = false
+      const done = (err: unknown, res?: unknown) => {
+        if (called) return
+        called = true
+        ;(cb as (e: unknown, r?: unknown) => void)(err, res)
+      }
+      withAppHost(opts)
+        .then((o) => call(o, done))
+        .catch((err) => done(err))
       return undefined
     }
     return withAppHost(opts).then((o) => call(o))
-  }) as unknown as F
+  } as unknown as F
 }
 
-/** Installs the wrapper on the root instance (boot, Hub shared deployments only). Idempotent. */
+/** Installs the wrapper on the root instance (boot, Hub shared deployments only). Idempotent. The
+ *  original stays unbound: each instance (root, child scope, req.server) calls it as itself. */
 export function installAppInject(app: FastifyInstance): void {
   if (!hubShared()) return
   const a = app as unknown as { inject: InjectFn; [WRAPPED]?: true }
   if (a[WRAPPED]) return
-  a.inject = appInject(a.inject.bind(app))
+  a.inject = appInject(a.inject)
   a[WRAPPED] = true
 }
