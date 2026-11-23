@@ -532,6 +532,16 @@ export interface ExtensionContext {
       opts?: { label?: string }
     ): (req: Req, reply: Reply) => Promise<R>
   }
+  /** Record comments (the Notes thread on a record). They are not an items collection, so
+   *  `hooks.after(...)` never fires for them; listen here instead. Optional: older APIs do not
+   *  offer it. */
+  comments?: {
+    /** Called after a record comment is stored (Notes, or a person's own chat message copied to
+     *  Notes by them, with the right to comment on the record). Runs
+     *  off the request on the background pool: it never delays or fails the comment, and a throw
+     *  is logged and swallowed. Not called for edits or deletes. */
+    onCreated(fn: (event: CommentCreatedEvent) => void | Promise<void>): void
+  }
   /** The daily operations report (Health → Daily report). Optional: older APIs do not offer it. */
   opsReport?: {
     /** Add a section of numbers to every daily report (e.g. business volume). `build` gets the
@@ -942,3 +952,25 @@ export type RecordAspectName =
   | '$support'
   | '$proposals'
   | '$attributes'
+
+/** A record comment just stored (`ctx.comments.onCreated`). */
+export interface CommentCreatedEvent {
+  /** The comment's id (nivaro_comments.id, a uuid). */
+  id: string
+  /** The record it is on. */
+  collection: string
+  item: string
+  /** Set for a comment on one field (shown only to readers of that field); null = the record. */
+  field: string | null
+  /** As stored: what the person typed, or server-built HTML for a chat copy (see `source`). */
+  text: string
+  /** Who the comment is from. */
+  author: string | null
+  /** Who wrote it into the record (the signed-in person; today always the same as `author`). */
+  writtenBy: string | null
+  /** `comment` = written on the record; `chat-copy` = a person's own chat message they copied to
+   *  Notes (a copy of someone else's message is never announced). `text` of a chat copy is HTML
+   *  the server built with the message escaped; any other `text` is what a person typed — escape
+   *  it before putting it into HTML. */
+  source: 'comment' | 'chat-copy'
+}

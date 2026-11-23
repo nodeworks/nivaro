@@ -1,6 +1,7 @@
 import knex, { type Knex } from 'knex'
 import { parseDbUrl } from '../../db/connection-url.js'
 import { db } from '../../db/index.js'
+import { mssqlUrlConnection } from '../../db/mssql-url-connection.js'
 import { mysqlFlavorConfig } from '../../db/mysql-flavor.js'
 import { MYSQL_SESSION_SQL, mysqlTypeCast } from '../../db/mysql-session.js'
 import { rawRows } from '../../db/raw-rows.js'
@@ -273,7 +274,10 @@ function oneShotKnex(client: string, connection: string): Knex {
         ) => conn.query(MYSQL_SESSION_SQL, (err) => done(err, conn))
       }
     })
-  return knex({ client: k, connection, acquireConnectionTimeout: DB_CHECK_TIMEOUT_MS, pool })
+  // A SQL Server URL with options as an object (db/mssql-url-connection.ts): as a string,
+  // encrypt=false reached tedious as the text "false" and every such check failed.
+  const conn = (/mssql/i.test(k) ? mssqlUrlConnection(connection) : null) ?? connection
+  return knex({ client: k, connection: conn, acquireConnectionTimeout: DB_CHECK_TIMEOUT_MS, pool })
 }
 
 /** The ledger and what was seen of it; a read that throws is `error`, never absent or empty. */

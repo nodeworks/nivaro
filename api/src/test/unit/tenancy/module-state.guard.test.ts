@@ -461,6 +461,8 @@ const SHARED: Record<string, string> = {
   'services/chat.ts :: relayClear': FN_SLOT,
   'services/coedit-fields.ts :: SAVE_META_KEYS': FIXED,
   'services/collections.ts :: metadataGen': GEN,
+  'services/comment-listeners.ts :: isEnabled': FN_SLOT,
+  'services/comment-listeners.ts :: listeners': REGISTRY,
   'services/command-center/throughput.ts :: fmtCache': 'date formatters by time zone; no app data',
   'services/command-center/work-math.ts :: ZONE_FORMATS':
     'date formatters by time zone; no app data',

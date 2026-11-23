@@ -614,6 +614,11 @@ export const hubDockerDocs: DocSection = {
           '`HUB_AGENT_ENV_PREFIXES`',
           'none',
           'Comma list of key prefixes a stack may set on top of the keys Nivaro reads (see Stack settings). Each is upper-case segments ending with `_`, for example `EFP_` or `EFP_OPS_`.'
+        ],
+        [
+          '`HUB_AGENT_CA_BUNDLE_FILE`',
+          'none',
+          'A PEM file of company CA certificates, for a Hub whose certificate an internal CA signs. Every app service (not the bundled Redis) gets it as the swarm secret `nvh_<stack>_ca-<sha12>` with `NODE_EXTRA_CA_CERTS` pointing at it, set by the agent; a stack still may not set `NODE_EXTRA_CA_CERTS` or any `*_FILE` key itself. At most 256 KB, at least one `CERTIFICATE` block and no private key, else the agent refuses to start (`CA_BUNDLE_BAD`). The bundle is part of the hash of each stack: re-apply the stacks after setting or changing it (Restart answers `SPEC_MISMATCH` until then). Health answers `ca_bundle: true`.'
         ]
       ]
     },

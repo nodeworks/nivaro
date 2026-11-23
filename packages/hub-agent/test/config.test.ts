@@ -1,5 +1,6 @@
+import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { ConfigError, loadAgentConfig, parseListen } from '../src/config.js'
+import { CA_BUNDLE_MAX_BYTES, ConfigError, loadAgentConfig, parseListen } from '../src/config.js'
 
 const TOKEN = 'abcdefghij'.repeat(4)
 const HMAC = 'HMACkey-0123456789-HMACkey-0123456789'
@@ -490,5 +491,77 @@ describe('parseListen', () => {
         ),
         v
       ).toBe('TRAEFIK_VERSION_BAD')
+  })
+})
+
+describe('HUB_AGENT_CA_BUNDLE_FILE', () => {
+  const CERT = (body: string) => `-----BEGIN CERTIFICATE-----\n${body}\n-----END CERTIFICATE-----`
+  const withCa = (pem: string | undefined, path = '/run/secrets/ca.pem') =>
+    loadAgentConfig(
+      { ...traefikEnv, HUB_AGENT_CA_BUNDLE_FILE: path },
+      files({ ...baseFiles, ...(pem === undefined ? {} : { '/run/secrets/ca.pem': pem }) })
+    )
+
+  it('unset or blank = no bundle', () => {
+    expect(loadAgentConfig(traefikEnv, files(baseFiles)).caBundle).toBeNull()
+    expect(
+      loadAgentConfig({ ...traefikEnv, HUB_AGENT_CA_BUNDLE_FILE: '  ' }, files(baseFiles)).caBundle
+    ).toBeNull()
+  })
+
+  it('reads one or more certificates once; sha256 is of the stored text', () => {
+    const one = `\n${CERT('QUFBQQ==')}\n\n`
+    const cfg = withCa(one)
+    expect(cfg.caBundle?.pem).toBe(`${CERT('QUFBQQ==')}\n`)
+    expect(cfg.caBundle?.sha256).toBe(
+      createHash('sha256')
+        .update(`${CERT('QUFBQQ==')}\n`)
+        .digest('hex')
+    )
+    // Text around the blocks (openssl -text output, comments) is fine.
+    const two = `# corp root\n${CERT('QUFBQQ==')}\nsubject=CN=Issuing\n${CERT('QkJCQg==')}\n`
+    expect(withCa(two).caBundle?.pem).toBe(two)
+    expect(withCa(` ${CERT('QUFBQQ==')}`, ' /run/secrets/ca.pem ').caBundle).not.toBeNull()
+  })
+
+  it('refuses a missing file, no certificate, a private key or > 256 KB: CA_BUNDLE_BAD', () => {
+    const cases: Record<string, string | undefined> = {
+      missing: undefined,
+      empty: '',
+      'not PEM': 'hello',
+      'BEGIN without END': '-----BEGIN CERTIFICATE-----\nQUFBQQ==\n',
+      'a key only': '-----BEGIN PRIVATE KEY-----\nQUFBQQ==\n-----END PRIVATE KEY-----',
+      'a cert and a key': `${CERT('QUFBQQ==')}\n-----BEGIN PRIVATE KEY-----\nS0VZ\n-----END PRIVATE KEY-----`,
+      'a cert and an RSA key': `${CERT('QUFBQQ==')}\n-----BEGIN RSA PRIVATE KEY-----\nS0VZ\n-----END RSA PRIVATE KEY-----`,
+      'a cert and an EC key': `-----BEGIN EC PRIVATE KEY-----\nS0VZ\n-----END EC PRIVATE KEY-----\n${CERT('QUFBQQ==')}`,
+      'a cert and an encrypted key': `${CERT('QUFBQQ==')}\n-----BEGIN ENCRYPTED PRIVATE KEY-----\nS0VZ\n-----END ENCRYPTED PRIVATE KEY-----`,
+      'over the cap': `${CERT('QUFBQQ==')}\n${'#'.repeat(CA_BUNDLE_MAX_BYTES)}`
+    }
+    for (const [name, pem] of Object.entries(cases)) {
+      expect(
+        codeOf(() => withCa(pem)),
+        name
+      ).toBe('CA_BUNDLE_BAD')
+    }
+  })
+
+  it('exactly at the cap is accepted', () => {
+    const cert = `${CERT('QUFBQQ==')}\n`
+    const pad = '#'.repeat(CA_BUNDLE_MAX_BYTES - cert.length - 1)
+    expect(withCa(`${pad}\n${cert}`).caBundle).not.toBeNull()
+  })
+
+  it('a refusal never carries the contents', () => {
+    const secret = 'S0VZLW1hdGVyaWFsLXNob3VsZC1uZXZlci1sZWFr'
+    try {
+      withCa(
+        `${CERT('QUFBQQ==')}\n-----BEGIN PRIVATE KEY-----\n${secret}\n-----END PRIVATE KEY-----`
+      )
+      throw new Error('accepted')
+    } catch (err) {
+      expect(String(err)).not.toContain(secret)
+      expect(JSON.stringify(err)).not.toContain(secret)
+      expect((err as Error).stack ?? '').not.toContain(secret)
+    }
   })
 })

@@ -236,6 +236,7 @@ interface ServerOpts {
 function makeServer(o: ServerOpts) {
   const calls: Cmd[] = []
   const created: Array<Record<string, unknown>> = []
+  const createdPaths: string[] = []
   let nextId = 372777
   const layoutFields = o.shape.fields.map((f) => f.field)
   const client = {
@@ -304,7 +305,8 @@ function makeServer(o: ServerOpts) {
       if (p === '/items/project_funding_years_junction')
         return { data: [{ id: 1, funding_year: 2027 }] }
       if (p === '/items/batch-read') return { data: [] }
-      if (method === 'POST' && p === `/items/${o.shape.collection}`) {
+      if (method === 'POST' && p.split('?')[0] === `/items/${o.shape.collection}`) {
+        createdPaths.push(p)
         const body = cmd._body ?? {}
         const id = nextId++
         created.push({ id, ...body })
@@ -340,7 +342,7 @@ function makeServer(o: ServerOpts) {
       return { data: [] }
     })
   }
-  return { client, calls, created }
+  return { client, calls, created, createdPaths }
 }
 
 // ── Harness ────────────────────────────────────────────────────────────────
@@ -396,6 +398,7 @@ async function mount(
     initialValues?: Record<string, unknown>
     initialLinks?: Record<string, unknown[]>
     initialRows?: Record<string, Array<Record<string, unknown>>>
+    createStartState?: string
   }
 ) {
   const srv = makeServer(o)
@@ -414,6 +417,7 @@ async function mount(
               initialValues={o.initialValues}
               initialLinks={o.initialLinks}
               initialRows={o.initialRows}
+              createStartState={o.createStartState}
               onSaved={onSaved}
               registerSaveHandler={(fn) => {
                 save = fn
@@ -672,5 +676,35 @@ describe('a record in a locked approval step', () => {
         '[data-field="title"] .pointer-events-none:not([data-field-source-anchor])'
       )
     ).toBeNull()
+  })
+})
+
+// EFP 2026-11-23 (HQ27-81598): a workflow generated from an orphaned PO must be created
+// COMPLETED, as the old portal did — not started and then moved by hand.
+describe('createStartState — create straight in a pipeline step', () => {
+  const opts = {
+    shape: WORKFLOWS,
+    scoped: false,
+    initialValues: { project: 8170 },
+    initialLinks: { divisions: ['2'], regions: ['14'], project_sub_types: ['S1'] }
+  }
+
+  it('the create POST names the step; the record is created once', async () => {
+    const m = await mount({ ...opts, createStartState: 'completed' })
+    await settle(() => m.calls.some((c) => c._path === '/items/project_funding_years_junction'))
+    await settle(() => false, 10)
+    await m.save()
+    await settle(() => m.onSaved.mock.calls.length > 0, 250)
+    expect(m.createdPaths).toEqual(['/items/workflows?start_state=completed'])
+    expect(m.created).toHaveLength(1)
+  })
+
+  it('without it the create carries no start step', async () => {
+    const m = await mount(opts)
+    await settle(() => m.calls.some((c) => c._path === '/items/project_funding_years_junction'))
+    await settle(() => false, 10)
+    await m.save()
+    await settle(() => m.onSaved.mock.calls.length > 0, 250)
+    expect(m.createdPaths).toEqual(['/items/workflows'])
   })
 })

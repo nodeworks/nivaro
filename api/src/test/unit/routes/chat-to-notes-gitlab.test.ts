@@ -11,7 +11,8 @@ const h = vi.hoisted(() => ({
   mayCreate: true,
   visible: true,
   inserted: [] as Array<Record<string, unknown>>,
-  sent: [] as unknown[][]
+  sent: [] as unknown[][],
+  announced: [] as Array<Record<string, unknown>>
 }))
 
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
@@ -56,6 +57,12 @@ vi.mock('../../../services/trackers/comment-out-hook.js', () => ({
   }
 }))
 
+vi.mock('../../../services/comment-listeners.js', () => ({
+  commentCreated: async (e: Record<string, unknown>) => {
+    h.announced.push(e)
+  }
+}))
+
 import { db } from '../../../db/index.js'
 import { chatRoutes } from '../../../routes/chat.js'
 
@@ -83,6 +90,7 @@ beforeEach(() => {
   h.visible = true
   h.inserted = []
   h.sent = []
+  h.announced = []
   fakeDb()
 })
 
@@ -110,5 +118,36 @@ describe('chat copy-to-notes → GitLab', () => {
     expect((await copy()).statusCode).toBe(201)
     expect(h.inserted).toHaveLength(2)
     expect(h.sent).toHaveLength(0)
+  })
+})
+
+// ctx.comments.onCreated listeners may send the comment out under its author's name (EFP: an MWF
+// message carrying the author's email), so the copy is announced under the same gate.
+describe('chat copy-to-notes → comment listeners', () => {
+  it('the author copying their own message with create rights is announced', async () => {
+    const r = await copy()
+    expect(h.announced).toEqual([
+      expect.objectContaining({
+        id: r.json().data.comment_id,
+        collection: 'nivaro_issues',
+        item: '5',
+        author: 'BOB',
+        writtenBy: 'BOB',
+        source: 'chat-copy'
+      })
+    ])
+  })
+
+  it("someone else's message, read-only callers and unseen records are never announced", async () => {
+    h.sender = 'ANN'
+    await copy()
+    h.sender = 'BOB'
+    h.mayCreate = false
+    await copy()
+    h.mayCreate = true
+    h.visible = false
+    await copy()
+    expect(h.inserted).toHaveLength(3)
+    expect(h.announced).toHaveLength(0)
   })
 })

@@ -289,6 +289,20 @@ function settingKeyProblem(k: string, redis: StackRedis, allow: EnvAllow): Fail 
   return null
 }
 
+/**
+ * One plain setting, judged as a stack setting is (name, reserved and secret-only keys, the
+ * allow-list without agent prefixes, value): null = fine. For a shared deployment's `settings.env`
+ * (deployment-wide variables, ruling 2026-11-23); answers the code and message only.
+ */
+export function plainSettingProblem(
+  k: string,
+  v: unknown,
+  redis: StackRedis
+): { code: string; message: string } | null {
+  const bad = settingKeyProblem(k, redis, NO_PREFIXES) ?? settingValueProblem(k, v)
+  return bad ? { code: bad.code, message: bad.message } : null
+}
+
 function settingValueProblem(k: string, v: unknown): Fail | null {
   const field = named('setting', k)
   if (typeof v !== 'string') return fail('BAD_VALUE', `Setting ${k} must be text.`, field)

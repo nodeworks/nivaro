@@ -428,13 +428,50 @@ describe('startAgent', () => {
           redis_bundled: false,
           env_prefixes: [],
           // Final review M-7: the Hub's plans see which Traefik reads the labels.
-          traefik_version: 3
+          traefik_version: 3,
+          ca_bundle: false
         })
       } finally {
         await new Promise((res) => r.server.close(res))
       }
     })
     expect(JSON.stringify(log.mock.calls)).not.toContain(TOKEN)
+  })
+
+  it('health says ca_bundle: true with HUB_AGENT_CA_BUNDLE_FILE, never its contents', async () => {
+    const PEM = '-----BEGIN CERTIFICATE-----\nQ0FCVU5ETEVURVNU\n-----END CERTIFICATE-----\n'
+    const files: Record<string, string> = { '/t': TOKEN, '/ca.pem': PEM }
+    await withEngine('1.45', true, async (transport) => {
+      const r = await startAgent({
+        env: { ...env, HUB_AGENT_CA_BUNDLE_FILE: '/ca.pem' },
+        readFile: (p) => files[p],
+        transport,
+        log: () => {}
+      })
+      if (!r.ok) throw new Error(r.code)
+      try {
+        const p = (r.server.address() as AddressInfo).port
+        const res = await fetch(`http://127.0.0.1:${p}/v1/health`, {
+          headers: { authorization: `Bearer ${TOKEN}` }
+        })
+        const text = await res.text()
+        expect(JSON.parse(text).ca_bundle).toBe(true)
+        expect(text).not.toContain('Q0FCVU5ETEVURVNU')
+        expect(text).not.toContain('CERTIFICATE')
+      } finally {
+        await new Promise((res) => r.server.close(res))
+      }
+    })
+  })
+
+  it('a bad CA bundle refuses to start with CA_BUNDLE_BAD', async () => {
+    const files: Record<string, string> = { '/t': TOKEN, '/ca.pem': 'not a certificate' }
+    const r = await startAgent({
+      env: { ...env, HUB_AGENT_CA_BUNDLE_FILE: '/ca.pem' },
+      readFile: (p) => files[p],
+      log: () => {}
+    })
+    expect(r).toEqual({ ok: false, code: 'CA_BUNDLE_BAD' })
   })
 })
 

@@ -57,7 +57,22 @@ export interface SharedStackSettings {
   size: StackSize
   redis: 'bundled' | 'external'
   publish_port: number | null
+  /** Deployment-wide plain variables (`settings.env`), e.g. a variable an extension needs. Every
+   *  app on the deployment shares them: one process. Checked like a stack's plain settings. */
+  env: Record<string, string>
 }
+
+/** The env keys the Hub sets on a shared stack itself: never taken from `settings.env`. */
+export const SHARED_HUB_ENV_KEYS: readonly string[] = [
+  'HUB_SHARED_DEPLOYMENT',
+  'HUB_URL',
+  'HUB_SHARED_EXTENSIONS',
+  'TRUST_PROXY',
+  'REDIS_CHANNEL_PREFIX',
+  'NODE_ENV',
+  'MIGRATION_SAFE_MODE',
+  'COOKIE_SECURE'
+]
 
 /** Replicas of the one service, per size. */
 export const SHARED_REPLICAS: Record<StackSize, number> = { small: 1, medium: 2, large: 3 }
@@ -84,10 +99,16 @@ export function sharedStackSettings(
     s.size === 'medium' || s.size === 'large' || s.size === 'small' ? s.size : 'small'
   const redis = s.redis === 'external' ? 'external' : 'bundled'
   const port = s.publish_port
+  const env: Record<string, string> = {}
+  const rawEnv = s.env
+  if (rawEnv && typeof rawEnv === 'object' && !Array.isArray(rawEnv))
+    for (const [k, v] of Object.entries(rawEnv as Record<string, unknown>))
+      if (typeof v === 'string') env[k] = v
   return {
     size,
     redis,
-    publish_port: typeof port === 'number' && Number.isInteger(port) && port > 0 ? port : null
+    publish_port: typeof port === 'number' && Number.isInteger(port) && port > 0 ? port : null,
+    env
   }
 }
 
@@ -213,7 +234,12 @@ export function renderSharedSpec(input: RenderSharedInput): StackSpec {
       'The Hub has no address a shared deployment can call: set HUB_URL on the Hub to its https origin.'
     )
 
+  const ownKey = Object.keys(settings.env).find((k) => SHARED_HUB_ENV_KEYS.includes(k))
+  if (ownKey !== undefined)
+    throw new SharedRenderError('KEY_REFUSED', `${ownKey} is set by the Hub on a shared stack.`)
   const env: Record<string, string> = {
+    // Deployment-wide variables first: the Hub's own keys below are never overridden.
+    ...settings.env,
     [SHARED_ENV_KEY]: shared.key,
     HUB_URL: hubUrl,
     HUB_SHARED_EXTENSIONS: Object.keys(ext.pins).sort().join(','),

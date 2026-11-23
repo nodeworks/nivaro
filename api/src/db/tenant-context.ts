@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import knex, { type Knex } from 'knex'
 import { tenantSource } from '../services/deployment-mode.js'
 import { normaliseSslMode } from './connection-url.js'
+import { mssqlUrlConnection } from './mssql-url-connection.js'
 import { mysqlFlavorConfig } from './mysql-flavor.js'
 import { MYSQL_SESSION_SQL, mysqlTypeCast } from './mysql-session.js'
 import { sqlSslOption } from './tls-options.js'
@@ -63,7 +64,15 @@ export function getOrCreateTenantPool(
               ) => conn.query(MYSQL_SESSION_SQL, (err) => done(err, conn))
             }
           })
-        : knex({ client, connection: connectionString, pool: { min: 0, max } })
+        : knex({
+            client,
+            // A SQL Server URL with options as an object: as a string its options reach tedious
+            // as text (encrypt=false → "false", refused). db/mssql-url-connection.ts.
+            connection:
+              (/mssql/i.test(client) ? mssqlUrlConnection(connectionString) : null) ??
+              connectionString,
+            pool: { min: 0, max }
+          })
     )
   }
   return pools.get(connectionString)!

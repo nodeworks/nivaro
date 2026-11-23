@@ -599,6 +599,35 @@ describe('HubMovePanel — before start', () => {
     )
   })
 
+  it('SOURCE_NOT_PULLABLE (a dedicated source): the same override box, and only that code is sent', async () => {
+    plan = {
+      ...basePlan,
+      blockers: [
+        { code: 'SOURCE_NOT_PULLABLE', text: 'The source name resolves to a private address.' }
+      ]
+    }
+    renderPanel()
+    await pickTarget(/Shared · east/)
+    const box = await screen.findByRole('checkbox', {
+      name: /The target deployment allows this host/
+    })
+    const group = screen.getByRole('group', { name: 'Confirm before moving' })
+    fireEvent.click(within(group).getByRole('checkbox', { name: /Register https/ }))
+    fireEvent.change(screen.getByLabelText(/Type efp\/production to move/), {
+      target: { value: 'efp/production' }
+    })
+    const start = screen.getByRole('button', { name: 'Start move' })
+    expect(start).toBeDisabled()
+    fireEvent.click(box)
+    fireEvent.click(start)
+    await waitFor(() =>
+      expect(h.post).toHaveBeenCalledWith(
+        '/hub/environments/10/move',
+        expect.objectContaining({ overrides: ['SOURCE_NOT_PULLABLE'] })
+      )
+    )
+  })
+
   it('Plan again resets the override: a repeat refusal shows the box unticked', async () => {
     plan = { ...basePlan, checklist: [] }
     const basePost = h.post.getMockImplementation() as (u: string, b?: unknown) => Promise<unknown>

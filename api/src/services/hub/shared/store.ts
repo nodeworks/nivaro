@@ -5,11 +5,17 @@ import { insertReturningId } from '../../../db/dialect/ef.js'
 import { db } from '../../../db/index.js'
 import { APP_KEY_RE, keyFingerprint } from '../../app-key-fingerprint.js'
 import { isHubKey } from '../apps.js'
-import { openStackSecrets, PINNED_RE, readStackSettings } from '../docker/stack-settings.js'
+import {
+  openStackSecrets,
+  PINNED_RE,
+  plainSettingProblem,
+  readStackSettings
+} from '../docker/stack-settings.js'
 import { STACK_NAME_RE, type Validation } from '../drivers.js'
 import { tokenLookupHash } from '../link-token.js'
 import { defaultSharedLock, type SharedLock, sharedLockRefusal } from '../promote-lock.js'
 import { maskSecret, openSecret, sealSecret } from '../secrets.js'
+import { SHARED_HUB_ENV_KEYS } from './stack-render.js'
 
 /**
  * Nivaro Hub phase 6: shared deployments (one process serving many apps, run by the Hub).
@@ -313,6 +319,21 @@ export function validateSharedInput(
   const settings = pick('settings') ?? {}
   if (!isPlainObject(settings) || JSON.stringify(settings).length > SETTINGS_MAX)
     return fail('BAD_SETTINGS', 'Settings are an object of at most 20,000 characters.')
+  // Deployment-wide variables (settings.env): judged as a stack's plain settings, and never a key
+  // the Hub sets on a shared stack itself (stack-render SHARED_HUB_ENV_KEYS).
+  const envIn = (settings as Record<string, unknown>).env
+  if (envIn !== undefined) {
+    if (!isPlainObject(envIn))
+      return fail('BAD_SETTINGS', 'settings.env is an object of NAME: value.')
+    const redis =
+      (settings as Record<string, unknown>).redis === 'external' ? 'external' : 'bundled'
+    for (const [k, v] of Object.entries(envIn)) {
+      if (SHARED_HUB_ENV_KEYS.includes(k))
+        return fail('BAD_SETTINGS', `${k} is set by the Hub on a shared stack.`)
+      const bad = plainSettingProblem(k, v, redis)
+      if (bad) return fail('BAD_SETTINGS', `settings.env: ${bad.message}`)
+    }
+  }
 
   return {
     ok: true,

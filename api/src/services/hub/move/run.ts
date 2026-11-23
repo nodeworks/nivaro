@@ -301,12 +301,14 @@ export interface StartBody {
   plan_hash: string
   confirm: string
   checklist: Record<string, boolean>
-  /** Ruling P6-20 #2: refusals the operator overrides for this move (LINK_URL_NOT_PULLABLE). */
+  /** Ruling P6-20 #2: refusals the operator overrides for this move (LINK_URL_NOT_PULLABLE for a
+   *  shared source, SOURCE_NOT_PULLABLE for a dedicated one: the target lists the host in its
+   *  SSRF_ALLOW_HOSTS). */
   overrides: string[]
 }
 
 /** Refusals a move start may override (operator checkbox, recorded with the move). */
-export const MOVE_OVERRIDES = ['LINK_URL_NOT_PULLABLE'] as const
+export const MOVE_OVERRIDES = ['LINK_URL_NOT_PULLABLE', 'SOURCE_NOT_PULLABLE'] as const
 
 function checkBody(raw: unknown): StartBody {
   const b = (raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}) as Record<
@@ -427,7 +429,9 @@ export async function startMove(
     let addresses: MoveAddresses
     try {
       addresses = await e.addresses(envId, body.to, plan, {
-        allowUnpullable: body.overrides.includes('LINK_URL_NOT_PULLABLE')
+        allowUnpullable:
+          body.overrides.includes('LINK_URL_NOT_PULLABLE') ||
+          body.overrides.includes('SOURCE_NOT_PULLABLE')
       })
     } catch (err) {
       if (err instanceof AddressError) throw new MoveError(err.code, err.message, err.statusCode)
@@ -528,9 +532,9 @@ export async function startMove(
         move_id: moveId,
         kind: plan.kind,
         routing: plan.routing,
-        ...(body.overrides.includes('LINK_URL_NOT_PULLABLE')
+        ...(body.overrides.length
           ? {
-              override: 'LINK_URL_NOT_PULLABLE',
+              override: body.overrides.join(','),
               note: "target allows this host (the operator says the target's SSRF_ALLOW_HOSTS lists the source link)"
             }
           : {})

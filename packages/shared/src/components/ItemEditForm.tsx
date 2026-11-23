@@ -995,6 +995,13 @@ export interface ItemEditFormProps {
    *  outside the draft, so a caller deep-linking a prefilled record (generate
    *  a workflow from a PO, say) has no other way to hand them over. */
   initialLinks?: Record<string, unknown[]>
+  /** Create a NEW record straight in this pipeline step (state key): the create POST carries
+   *  `?start_state=`, so the server starts the record there in one call — no transition, so no
+   *  transition actions run. The server's start-step gate decides (administrators always may;
+   *  other roles only when the pipeline binding allows them); a refusal fails the create and
+   *  nothing is written. Ignored when editing. EFP: a workflow generated from an orphaned PO is
+   *  created completed, as the old portal did. */
+  createStartState?: string
   /** Seed staged child rows on a NEW record, keyed
    *  `<child collection>.<foreign key field>`. Same reason as initialLinks:
    *  o2m rows are queued outside the draft, so a caller generating a record
@@ -2188,6 +2195,7 @@ function ItemEditFormView({
   initialImportResult,
   initialValues,
   initialLinks,
+  createStartState,
   initialRows,
   rehearseCopiedLines: rehearseCopiedLinesProp = false,
   design,
@@ -10472,7 +10480,17 @@ function ItemEditFormView({
       try {
         if (isNew) {
           const r = await client
-            .request<WriteAnswer>(post(withSaveId(`/items/${collection}`, saveId), payload))
+            .request<WriteAnswer>(
+              post(
+                withSaveId(
+                  createStartState
+                    ? `/items/${collection}?start_state=${encodeURIComponent(createStartState)}`
+                    : `/items/${collection}`,
+                  saveId
+                ),
+                payload
+              )
+            )
             .finally(() => {
               activeSaveRef.current = null
             })

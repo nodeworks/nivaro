@@ -981,7 +981,9 @@ describe('manager/nivaro-hub-deploy: key identity and rotation', () => {
   })
 })
 
-describe('scripts/deploy.sh run (through the real wrapper)', () => {
+// Each case runs the real deploy.sh through its wrapper (bash + a fake ssh/docker): seconds each,
+// past vitest's 5 s default under a loaded CI runner.
+describe('scripts/deploy.sh run (through the real wrapper)', { timeout: 60_000 }, () => {
   function run(
     o: {
       appEnv?: string[]

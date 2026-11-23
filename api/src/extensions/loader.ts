@@ -88,6 +88,10 @@ import {
   registerChatMessageAction,
   unregisterChatMessageActions
 } from '../services/chat-message-actions.js'
+import {
+  registerCommentListener,
+  unregisterCommentListeners
+} from '../services/comment-listeners.js'
 import { dropCustomQueryCache } from '../services/custom-query-cache.js'
 import {
   describeExtensionTools,
@@ -1191,6 +1195,12 @@ export function registrationMembers(
         }
       }
     },
+    comments: {
+      onCreated: (fn) => {
+        note('comments')
+        if (registerCommentListener(extId, fn)) own('comment_listeners', 'onCreated')
+      }
+    },
     opsReport: {
       registerSection: (key, title, build) => registerOpsSection(key, title, build)
     },
@@ -1700,6 +1710,7 @@ async function loadExtension(
     unregisterExtensionLenses(extId)
     void import('../services/chat-commands.js').then((m) => m.unregisterChatCommands(extId))
     unregisterChatMessageActions(extId)
+    unregisterCommentListeners(extId)
     unregisterExtensionTools(extId)
     forgetRecordChangeListeners(extId)
 
@@ -2203,6 +2214,7 @@ export function removeExtension(id: string): boolean {
   forgetRecordChangeListeners(id)
   void import('../services/chat-commands.js').then((m) => m.unregisterChatCommands(id))
   unregisterChatMessageActions(id)
+  unregisterCommentListeners(id)
   unregisterExtensionTools(id)
 
   const config = readConfig()

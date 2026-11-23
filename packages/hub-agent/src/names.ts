@@ -34,6 +34,20 @@ export function secretName(stack: string, key: string, value: string, hmacKey: s
   return `nvh_${stack}_${key.slice(0, SECRET_NAME_MAX - fixed)}_${mac}`
 }
 
+/**
+ * The agent's CA bundle secret of a stack (HUB_AGENT_CA_BUNDLE_FILE): `nvh_<stack>_ca-<sha12>`,
+ * sha12 = the first 12 hex of the bundle's sha256 (a CA certificate is public, so a plain content
+ * hash). A changed bundle = a new name; the old one is pruned like any rotated secret. The `-`
+ * keeps it apart from every spec secret (`nvh_<stack>_<KEY>_…`, KEY never holds a `-`; swarm
+ * compares secret names case-insensitively), and the name is not an env name, so Nivaro's
+ * /run/secrets loader never reads the mounted file as a setting. ≤ 61 characters.
+ */
+export function caBundleSecretName(stack: string, sha256: string): string {
+  if (!isStackName(stack)) throw new Error('caBundleSecretName: bad stack name')
+  if (!/^[a-f0-9]{64}$/.test(sha256)) throw new Error('caBundleSecretName: bad hash')
+  return `nvh_${stack}_ca-${sha256.slice(0, 12)}`
+}
+
 /** What a secret value becomes inside the spec hash. */
 function secretDigest(key: string, value: string, hmacKey: string): string {
   return hmac12(hmacKey, ['spec', key, value])
