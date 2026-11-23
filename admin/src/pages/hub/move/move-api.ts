@@ -475,7 +475,15 @@ export const MOVE_STEP_WORDS: Record<string, string> = {
 }
 export const stepWords = (key: string) => MOVE_STEP_WORDS[key] ?? key
 
-export type MoveStepState = 'done' | 'running' | 'waiting' | 'failed' | 'undone' | 'pending'
+/** `stopped` = the step a run was on when it stopped (interrupted): no spinner, nothing failed. */
+export type MoveStepState =
+  | 'done'
+  | 'running'
+  | 'waiting'
+  | 'stopped'
+  | 'failed'
+  | 'undone'
+  | 'pending'
 
 export interface MoveStepRow {
   key: string
@@ -551,7 +559,11 @@ export function moveStepRows(
       const o = s as { key?: unknown; status?: unknown; state?: unknown }
       const key = String(o.key ?? '')
       const st = String(o.state ?? o.status ?? 'pending')
-      return { key, label: stepWords(key), state: STEP_STATE_ALIAS[st] ?? 'pending' }
+      const state = STEP_STATE_ALIAS[st] ?? 'pending'
+      // A run that is not live (interrupted, ended) never shows a step as still going.
+      const settled =
+        !isLiveMove(m.status) && (state === 'running' || state === 'waiting') ? 'stopped' : state
+      return { key, label: stepWords(key), state: settled }
     })
   }
   const keys = list.map(String)
@@ -566,7 +578,9 @@ export function moveStepRows(
         ? 'running'
         : m.status === 'rolled_back' || m.status === 'cancelled'
           ? 'undone'
-          : 'failed'
+          : m.status === 'interrupted'
+            ? 'stopped'
+            : 'failed'
   return keys.map((key, i) => ({
     key,
     label: stepWords(key),

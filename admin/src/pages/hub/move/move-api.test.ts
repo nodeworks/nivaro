@@ -201,6 +201,23 @@ describe('steps of a stored move', () => {
     expect(files?.total).toBe(4)
   })
 
+  it('an interrupted run shows the step it stopped on as stopped, never running', () => {
+    const stored = {
+      list: [
+        { key: 'check', state: 'done' },
+        { key: 'files_delta', state: 'running' }
+      ]
+    }
+    expect(
+      moveStepRows({ steps: stored, step: 'files_delta', status: 'interrupted', plan: null }).map(
+        (r) => r.state
+      )
+    ).toEqual(['done', 'stopped'])
+    expect(
+      moveStepRows({ steps, step: 'release', status: 'interrupted', plan: null })[2].state
+    ).toBe('stopped')
+  })
+
   it('knows when the run is past release', () => {
     expect(pastRelease({ steps, step: 'maintenance_on', status: 'running', plan: null })).toBe(
       false

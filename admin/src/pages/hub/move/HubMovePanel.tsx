@@ -8,6 +8,7 @@ import {
   Circle,
   Clock,
   Loader2,
+  Pause,
   Play,
   RotateCcw,
   Undo2,
@@ -1030,6 +1031,8 @@ function StepIcon({ state }: { state: MoveStepState }) {
     return (
       <Loader2 className='h-3.5 w-3.5 animate-spin text-sky-600 dark:text-sky-400' aria-hidden />
     )
+  if (state === 'stopped')
+    return <Pause className='h-3.5 w-3.5 text-amber-600 dark:text-amber-400' aria-hidden />
   if (state === 'waiting')
     return <Clock className='h-3.5 w-3.5 text-amber-600 dark:text-amber-400' aria-hidden />
   if (state === 'failed')
@@ -1043,6 +1046,7 @@ const STEP_STATE_WORDS: Record<MoveStepState, string> = {
   done: 'done',
   running: 'in progress',
   waiting: 'waiting',
+  stopped: 'stopped here',
   failed: 'failed',
   undone: 'undone',
   pending: 'not started'
