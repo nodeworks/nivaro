@@ -1,5 +1,5 @@
 import type { ErrorDescription } from '@nivaro/shared'
-import { errorToastOptions } from '@nivaro/shared'
+import { errorToastOptions, isRawErrorText } from '@nivaro/shared'
 import type { DataTag } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
@@ -384,8 +384,22 @@ export const WARNING_COPY: Record<string, { title: string; hint?: string }> = {
   },
   REDIS_URL_NOT_APPLIED: {
     title: 'The stored Redis address is not in use yet',
-    hint: 'The stack has not been applied with it. Upgrade the deployment (to the version it runs, to apply it again) so it uses that Redis.'
+    hint: 'The stack has not been applied with it yet. Upgrade the deployment at the version it runs to apply it.'
   }
+}
+
+/** Warnings whose own text is a list of names the copy cannot hold (extensions, dropped apps). */
+const NAMED_DETAIL = new Set(['EXTENSIONS_DIFFER', 'APPS_DROPPED'])
+
+/**
+ * The warning's own sentence to show under its plain title, or null (design R2-S2: said once).
+ * A code with copy and a hint shows the hint, not the server's restatement of it; only a warning
+ * that names things keeps its text. A code without copy uses its text as the title instead.
+ */
+export function warningDetail(n: SharedNote): string | null {
+  const c = WARNING_COPY[n.code]
+  if (!c || !n.text || isRawErrorText(n.text)) return null
+  return NAMED_DETAIL.has(n.code) || !c.hint ? n.text : null
 }
 
 /** Refusals of the shared deployment routes, in plain words. Wins over the Hub's general copy. */

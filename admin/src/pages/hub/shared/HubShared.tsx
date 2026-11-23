@@ -46,7 +46,8 @@ import {
   type Tone,
   WARNING_COPY,
   WIRE_TONE,
-  WIRE_WORDS
+  WIRE_WORDS,
+  warningDetail
 } from './shared-api'
 
 /**
@@ -723,13 +724,13 @@ export function warningsOf(d: SharedDetail, link: SharedLinkStatus | undefined):
   return out
 }
 
-function Warnings({ notes }: { notes: SharedNote[] }) {
+export function Warnings({ notes }: { notes: SharedNote[] }) {
   if (notes.length === 0) return null
   return (
     <ul aria-label='Warnings' className='m-0 list-none space-y-1.5 p-0'>
       {notes.map((n, i) => {
         const c = WARNING_COPY[n.code]
-        const detail = c && n.text && !isRawErrorText(n.text) ? n.text : null
+        const detail = warningDetail(n)
         return (
           <li
             // biome-ignore lint/suspicious/noArrayIndexKey: warnings have no id and a code may repeat
@@ -745,7 +746,7 @@ function Warnings({ notes }: { notes: SharedNote[] }) {
                 {c?.title ?? n.text}
               </p>
               {detail && (
-                <p className='m-0 mt-0.5 break-words font-mono text-[11.5px] text-amber-900/90 dark:text-amber-200/90'>
+                <p className='m-0 mt-0.5 break-words text-amber-900/90 dark:text-amber-200/90'>
                   {detail}
                 </p>
               )}
