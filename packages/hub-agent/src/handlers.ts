@@ -89,7 +89,8 @@ export function makeHandlers(engine: Engine, cfg: AgentConfig, deps: HandlerDeps
       }
       if (err instanceof EngineForbiddenError) {
         // The agent built a call its own guard refuses: a bug or tampered state. Nothing was sent.
-        log({ t, level: 'error', op, stack, status: 500, code: err.code })
+        // The reason is a fixed label from the guard (for example 'bind mount source'), never a value.
+        log({ t, level: 'error', op, stack, status: 500, code: err.code, reason: err.reason })
         return refusal(500, 'ENGINE_FORBIDDEN', 'The agent refused its own Engine call')
       }
       const errno = (err as NodeJS.ErrnoException | null)?.code

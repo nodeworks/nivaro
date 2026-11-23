@@ -31,8 +31,12 @@ export type EngineMethod = 'GET' | 'POST' | 'DELETE'
 
 /** One Engine object id or name: services, secrets, networks, volumes, containers. */
 const ID = '[A-Za-z0-9][A-Za-z0-9_.-]{0,254}'
-/** An image reference for inspect: repo[:tag] or repo@sha256:<hex>. */
-const REF = '[a-z0-9][a-z0-9._/-]*(?::[A-Za-z0-9_.-]{1,128}|@sha256:[a-f0-9]{64})?'
+/**
+ * An image reference for inspect: [host[:port]/]repo[:tag] or …@sha256:<hex>. The registry
+ * port is allowed only on the first segment, as HUB_AGENT_IMAGES (config REPO_RE) allows it.
+ */
+const REF =
+  '(?:[a-z0-9][a-z0-9.-]*:[0-9]{1,5}/)?[a-z0-9][a-z0-9._/-]*(?::[A-Za-z0-9_.-]{1,128}|@sha256:[a-f0-9]{64})?'
 
 /** Prefix of every object name the agent creates. */
 export const HUB_NAME_PREFIX = 'nvh_'
@@ -171,7 +175,7 @@ export const ENGINE_ALLOWED: ReadonlyArray<[EngineMethod, RegExp]> = Object.free
 
 export class EngineForbiddenError extends Error {
   readonly code = 'ENGINE_FORBIDDEN'
-  constructor(reason: string) {
+  constructor(readonly reason: string) {
     super(`Engine call refused: ${reason}`)
     this.name = 'EngineForbiddenError'
   }

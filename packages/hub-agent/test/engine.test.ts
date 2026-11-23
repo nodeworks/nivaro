@@ -224,6 +224,39 @@ describe('P4-34: pinned images with an informational tag', () => {
   })
 })
 
+describe('an image on a registry with a port', () => {
+  // HUB_AGENT_IMAGES takes host:port repositories (a GitLab registry on :5050, a local
+  // registry); the inspect path must too, or every pull of such an image ends ENGINE_FORBIDDEN.
+  const portCfg = loadAgentConfig(
+    {
+      HUB_AGENT_TOKEN_FILE: '/t',
+      HUB_AGENT_EDGE: 'publish',
+      HUB_AGENT_PUBLISH_PORTS: '3110-3119',
+      HUB_AGENT_IMAGES: 'nodeworks/nivaro,registry.corp:5050/apps/ext,localhost:5100/pole-ops'
+    },
+    () => 'agent-token-0123456789-abcdefghij'
+  )
+  it.each([
+    `registry.corp:5050/apps/ext@sha256:${D}`,
+    `localhost:5100/pole-ops@sha256:${D}`
+  ])('pull and inspect of %s pass the guard', async (ref) => {
+    const engine = createEngine(portCfg, transport)
+    const pulled = await engine.call('POST', '/images/create', { query: { fromImage: ref } })
+    expect(pulled.status).toBe(200)
+    const seenImage = await engine.call('GET', `/images/${ref}/json`)
+    expect(seenImage.status).toBe(200)
+  })
+  it('a port that is not a number, or a path segment with a colon, is still refused', async () => {
+    const engine = createEngine(portCfg, transport)
+    await expect(
+      engine.call('GET', `/images/registry.corp:x/apps/ext@sha256:${D}/json`)
+    ).rejects.toThrow('not on the allow-list')
+    await expect(
+      engine.call('GET', `/images/apps/registry.corp:5050/ext@sha256:${D}/json`)
+    ).rejects.toThrow('not on the allow-list')
+  })
+})
+
 describe('engine allow-list', () => {
   it('lists exactly the planned method + path pairs', () => {
     expect(ENGINE_ALLOWED.length).toBe(24)
