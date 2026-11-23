@@ -585,9 +585,9 @@ export const hubDockerDocs: DocSection = {
           'Comma list of image repositories (no tag, no digest) a stack may name. The Nivaro image and every extension image share this one list.'
         ],
         [
-          '`HUB_AGENT_EDGE`, `HUB_AGENT_EDGE_NETWORK`, `HUB_AGENT_ENTRYPOINTS`, `HUB_AGENT_CERT_RESOLVER`, `HUB_AGENT_HOST_SUFFIXES`',
+          '`HUB_AGENT_EDGE`, `HUB_AGENT_EDGE_NETWORK`, `HUB_AGENT_TRAEFIK_VERSION`, `HUB_AGENT_ENTRYPOINTS`, `HUB_AGENT_CERT_RESOLVER`, `HUB_AGENT_HOST_SUFFIXES`',
           '`traefik`',
-          'Edge `traefik` (needs the overlay network and the host suffixes, for example `.apps.example.com`; an app host must end in one; the agent sets both `traefik.docker.network` and `traefik.swarm.network` to that network, so either Traefik provider picks the right one) or `publish` (needs `HUB_AGENT_PUBLISH_PORTS`, a range inside 1024 to 65535).'
+          'Edge `traefik` (needs the overlay network and the host suffixes, for example `.apps.example.com`; an app host must end in one; the agent sets exactly one network label to that network: `traefik.swarm.network` for Traefik v3, the default, or `traefik.docker.network` with `HUB_AGENT_TRAEFIK_VERSION=2`; Traefik v3 skips a service carrying both; the host pattern of a shared deployment needs v3) or `publish` (needs `HUB_AGENT_PUBLISH_PORTS`, a range inside 1024 to 65535).'
         ],
         [
           '`HUB_AGENT_REDIS_IMAGE`',

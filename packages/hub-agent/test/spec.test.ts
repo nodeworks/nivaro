@@ -995,6 +995,13 @@ describe('validateStackSpec — shared deployment owners (phase 6)', () => {
     })
   }
 
+  it('E2E B1: refuses a pattern for Traefik v2 (the HostRegexp router is v3 syntax)', () => {
+    expect(codeOf(shared(), 'host_pattern', cfg({ traefikVersion: 2 }))).toBe(
+      'HOSTNAME_NOT_ALLOWED'
+    )
+    expect(validateStackSpec(shared(), cfg({ traefikVersion: 3 })).ok).toBe(true)
+  })
+
   it('refuses a pattern in publish mode (no edge to route it)', () => {
     const c = cfg({ edge: 'publish', publishPorts: [31000, 31010] })
     expect(codeOf(shared({ publish_port: 31000 }), 'host_pattern', c)).toBe('HOSTNAME_NOT_ALLOWED')
