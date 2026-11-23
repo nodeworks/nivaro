@@ -120,6 +120,7 @@ export type {
 } from '@nivaro/extension-kit'
 
 import { registerAppKeyed } from '../services/app-forget.js'
+import { appInject } from '../services/app-inject-host.js'
 import { appMap } from '../services/app-state.js'
 import {
   addHelpVideoStarterContexts,
@@ -634,6 +635,8 @@ export function routeRecordingApp(
           return (target.addHook as (n: string, f: unknown) => unknown).call(target, name, fn)
         }
       }
+      // An in-process call made inside an app reaches that app (services/app-inject-host.ts).
+      if (prop === 'inject') return appInject(target.inject.bind(target))
       if (prop === 'route') {
         return (opts: { method: string | string[]; url: string }) => {
           recordRoute(extId, withPrefix(target, opts) as never, gates)
