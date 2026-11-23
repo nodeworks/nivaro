@@ -396,8 +396,8 @@ export const extContext: DocSection = {
         ],
         [
           'apps',
-          '{ key(), many(), registerKeyed(container) } (optional)',
-          "Which app a request or job serves. A Nivaro Hub shared deployment runs `register()` once and then serves many apps from one process, so a module-level cache, memo or guard must put `key()` into its key (empty self-hosted, so nothing changes there). `many()` is true on a shared deployment or Nivaro Cloud. `registerKeyed(map or set)` lets the core drop an app's entries when it leaves the process. An extension that keeps state this way may declare `shared: true`. Older APIs do not offer it — `ctx.apps?.key()`."
+          '{ key(), many(), origin(), registerKeyed(container) } (optional)',
+          "Which app a request or job serves. A Nivaro Hub shared deployment runs `register()` once and then serves many apps from one process, so a module-level cache, memo or guard must put `key()` into its key (empty self-hosted, so nothing changes there). `many()` is true on a shared deployment or Nivaro Cloud. `origin()` is the app's own origin (null self-hosted). `registerKeyed(map or set)` lets the core drop an app's entries when it leaves the process. A core that provides it says so before importing extensions (`coreProvidesApps()` from the extension kit): declare `shared: true` only then (a getter), so an older core refuses the extension on a shared deployment. Older APIs do not offer it — `ctx.apps?.key()`."
         ]
       ]
     },
