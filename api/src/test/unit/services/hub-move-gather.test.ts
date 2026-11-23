@@ -1021,3 +1021,28 @@ describe('readSharedReadiness', () => {
     spy.mockRestore()
   })
 })
+
+// ── parked wave (T15 round 4, T18 R3-6) ───────────────────────────────────────────────────────
+
+describe('parked wave', () => {
+  it('a deployedBuild read that throws → the source pins are unknown and the plan warns', async () => {
+    const sharedId = await newShared()
+    const e = await newEnv({
+      placement_id: await dockerPlacement('shop-throw'),
+      db_ref: `hub-db:${await newDb()}`
+    })
+    const deployedBuild = vi.fn(async () => {
+      throw new Error('deploys table unreadable')
+    })
+    const input = await Gather.gatherMovePlanInput(
+      e.id,
+      { kind: 'shared', shared_id: sharedId },
+      deps({ deployedBuild })
+    )
+    expect(deployedBuild).toHaveBeenCalled()
+    expect(input.source.extension_pins).toBeNull()
+    const plan = buildMovePlan(input)
+    expect(plan.warnings.map((w) => w.code)).toContain('EXTENSION_PIN_UNVERIFIED')
+    expect(plan.checklist.map((c) => c.id)).toContain('extension_builds_same')
+  })
+})
