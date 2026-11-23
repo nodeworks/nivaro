@@ -1,6 +1,6 @@
 import { QueryErrorState, useOverflowTip } from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
-import { AppWindow, ChevronLeft, Plus } from 'lucide-react'
+import { AppWindow, ChevronLeft } from 'lucide-react'
 import { useSearchParams } from 'react-router'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useAuth } from '@/lib/auth'
@@ -52,8 +52,8 @@ export default function HubApps() {
             detailOpen ? 'hidden' : 'flex'
           )}
         >
-          <div className='flex items-center gap-2 border-b border-slate-200 px-3 py-2.5 dark:border-border'>
-            <p className='m-0 flex-1 text-[12px] font-medium text-slate-500 dark:text-muted-foreground'>
+          <div className='flex items-center gap-1 border-b border-slate-200 py-2 pr-2 pl-3 dark:border-border'>
+            <p className='m-0 min-w-0 flex-1 truncate text-[12px] font-medium text-slate-500 tabular-nums dark:text-muted-foreground'>
               {apps.data
                 ? `${apps.data.length} ${apps.data.length === 1 ? 'app' : 'apps'}`
                 : 'Apps'}
@@ -61,19 +61,19 @@ export default function HubApps() {
             {isAdmin && (
               <button
                 type='button'
-                className={cn(ghostButton, creating && 'bg-accent')}
+                className={cn(ghostButton, 'px-2', creating && 'bg-accent')}
                 onClick={() => show({ create: true })}
               >
-                <Plus className='h-3.5 w-3.5' aria-hidden /> Create app
+                Create app
               </button>
             )}
             {isAdmin && (
               <button
                 type='button'
-                className={cn(ghostButton, adopting && 'bg-accent')}
+                className={cn(ghostButton, 'px-2', adopting && 'bg-accent')}
                 onClick={() => show({ adopt: true })}
               >
-                <Plus className='h-3.5 w-3.5' aria-hidden /> Adopt app
+                Adopt app
               </button>
             )}
           </div>

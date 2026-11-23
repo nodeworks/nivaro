@@ -166,7 +166,7 @@ export function SecretInput({
 }
 
 export const smallButton =
-  'inline-flex h-8 items-center justify-center gap-1.5 rounded-md px-2.5 text-[12px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50'
+  'inline-flex h-8 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-2.5 text-[12px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50'
 
 export const ghostButton = cn(
   smallButton,
