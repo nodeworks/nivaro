@@ -269,5 +269,13 @@ done
   done
   printf 'WAIT_TRIES=%s\n' "$WAIT_TRIES"
   [ -z "$BOOT_MAINTENANCE" ] || printf 'HUB_BOOT_MAINTENANCE=%s\n' "$BOOT_MAINTENANCE"
-} | remote deploy "$STACK_NAME" || stop $? "the manager did not deploy $STACK_NAME"
+} | remote deploy "$STACK_NAME" || {
+  rc=$?
+  # A manager installed before a setting this deploy sends (TRAEFIK_VERSION, HUB_BOOT_MAINTENANCE)
+  # refuses it by name: say what to do about it, not only that it failed.
+  if [ "$rc" -ne 77 ] && grep -q 'is not a deploy setting' "$WORK/ssh.err" 2>/dev/null; then
+    die "the manager did not deploy $STACK_NAME: it is older than this template and does not know a setting this deploy sends. Update the manager (install manager/nivaro-hub-deploy and manager/docker-stack.yml from this template on the swarm manager), then deploy again"
+  fi
+  stop "$rc" "the manager did not deploy $STACK_NAME"
+}
 say "done: web answers $VERSION"

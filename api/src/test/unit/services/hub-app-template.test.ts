@@ -990,10 +990,19 @@ describe('scripts/deploy.sh run (through the real wrapper)', () => {
       services?: string[]
       removeConf?: boolean
       timeoutMs?: number
+      /** A manager installed before TRAEFIK_VERSION / HUB_BOOT_MAINTENANCE (final review E-2). */
+      oldManager?: boolean
     } = {}
   ) {
     const box = manager({ services: o.services })
     if (o.removeConf) rmSync(join(box.etc, 'keys/demo.conf'))
+    if (o.oldManager) {
+      const w = join(box.dir, 'nivaro-hub-deploy')
+      const text = readFileSync(w, 'utf8')
+      const older = text.replace(' TRAEFIK_VERSION ', ' ').replace(' HUB_BOOT_MAINTENANCE"', '"')
+      expect(older).not.toBe(text)
+      writeFileSync(w, older)
+    }
     const repo = join(box.dir, 'repo')
     mkdirSync(join(repo, '.hub'), { recursive: true })
     writeFileSync(join(repo, 'deploy.sh'), read('scripts/deploy.sh'))
@@ -1083,6 +1092,28 @@ describe('scripts/deploy.sh run (through the real wrapper)', () => {
       expect(b.status, bad).not.toBe(0)
       expect(b.calls, bad).not.toContain('stack deploy')
     }
+  })
+
+  it('final review E-2: a manager older than the template says to update the manager', () => {
+    for (const r of [
+      run({ oldManager: true, appEnv: [...APP_ENV, 'TRAEFIK_VERSION=3'] }),
+      run({ oldManager: true, env: { HUB_BOOT_MAINTENANCE: '42' } })
+    ]) {
+      expect(r.status).not.toBe(0)
+      expect(r.out).toContain('is not a deploy setting')
+      expect(r.out).toMatch(/update the manager/i)
+    }
+    // A deploy that sends nothing new still deploys on the old manager.
+    expect(run({ oldManager: true }).status).toBe(0)
+    // Any other refusal keeps its plain line.
+    const other = run({
+      services: [
+        'other--prod_web|other--prod|SHA256:x0123456789|portal.example.org,demo--staging.apps.example.com'
+      ]
+    })
+    expect(other.out).toContain('already served by another stack')
+    expect(other.status).not.toBe(0)
+    expect(other.out).not.toMatch(/update the manager/i)
   })
 
   it('forwards HUB_BOOT_MAINTENANCE (a move id) into the stack; absent → nothing sent', () => {
