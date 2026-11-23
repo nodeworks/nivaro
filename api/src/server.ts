@@ -60,6 +60,7 @@ import { statusPublicRoutes } from './routes/status.js'
 import { setPulseApp } from './services/activity.js'
 import { registerAgentPresence } from './services/agent-presence.js'
 import { pruneAiCalls } from './services/ai-log.js'
+import { installAppInject } from './services/app-inject-host.js'
 import { bootPhase } from './services/boot-phases.js'
 import { CRON_DESCRIPTIONS } from './services/cron-descriptions.js'
 import { registerMissedCronProbe } from './services/cron-misses.js'
@@ -173,6 +174,9 @@ export async function buildServer() {
   })
 
   if (trustProxy.warning) app.log.warn(`[boot] ${trustProxy.warning}`)
+  // A Hub shared deployment: an in-process call made inside an app (an extension's inject, core's
+  // callAsCaller through req.server) reaches that app, never localhost's (services/app-inject-host.ts).
+  installAppInject(app)
 
   // M20 — core routes get the small body ceiling unless their group receives large bodies or
   // they declare their own; routes registered after `coreRoutes` closes (extensions, often
