@@ -367,7 +367,8 @@ describe('two apps, copied queues', () => {
 
 describe('how many runs one process drives at once', () => {
   // IMPORT_MAX_PARALLEL (default 3): a shared deployment counts it across every app of the
-  // process, not per app — N apps x 3 runs in one process is how an importer runs out of memory.
+  // process, not per app — N apps x 3 runs in one process is how an importer runs out of memory —
+  // and one app holds at most MAX_PARALLEL - 1 of them (2), so it never starves the others.
   const keys = ['invoices', 'orders', 'receipts', 'vendors']
   const statuses = (app: string) =>
     h.mems[app].rows('nivaro_import_queue').map((r: { status: string }) => r.status)
@@ -379,32 +380,40 @@ describe('how many runs one process drives at once', () => {
   })
   afterEach(() => open())
 
-  it('shared: app A driving 3 runs leaves app B none until one finishes; each app stays <= 3', async () => {
+  it('shared: one app holds at most 2 of the 3 slots; the third is left for another app', async () => {
     Object.assign(process.env, SHARED)
-    keys.forEach((k, i) => {
+    const keys5 = [...keys, 'shipments']
+    keys5.forEach((k, i) => {
       h.mems.A.rows('nivaro_import_queue').push(queued(i + 1, k))
-      h.mems.B.rows('nivaro_import_queue').push(queued(i + 1, k))
     })
+    h.mems.B.rows('nivaro_import_queue').push(queued(1, 'invoices'))
+    h.mems.N.rows('nivaro_import_queue').push(queued(1, 'invoices'))
     const app = makeApp()
     await inApp('A', () => worker.drainImportsTick(app))
-    await vi.waitFor(() => expect(h.defs).toHaveLength(3))
-    expect(statuses('A').filter((x) => x === 'running')).toHaveLength(3)
-    await inApp('B', () => worker.drainImportsTick(app))
+    await vi.waitFor(() => expect(h.defs).toHaveLength(2))
+    expect(statuses('A').filter((x) => x === 'running')).toHaveLength(2)
+    // A's next tick takes no more: its share is 2
+    await inApp('A', () => worker.drainImportsTick(app))
     await new Promise((r) => setTimeout(r, 20))
-    expect(statuses('B')).toEqual(['queued', 'queued', 'queued', 'queued'])
-    expect(h.defs.every((d) => d.startsWith('A:'))).toBe(true)
-    // A's runs finish (no definition: error); B then gets its turn, still 3 at most.
+    expect(statuses('A').filter((x) => x === 'running')).toHaveLength(2)
+    // B gets the third slot
+    await inApp('B', () => worker.drainImportsTick(app))
+    await vi.waitFor(() => expect(statuses('B')).toEqual(['running']))
+    // the process is full (3): a third app waits
+    await inApp('N', () => worker.drainImportsTick(app))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(statuses('N')).toEqual(['queued'])
+    expect(h.defs.sort()).toEqual(['A:invoices', 'A:orders', 'B:invoices'])
+    // runs finish (no definition: error); the waiting app then gets its turn
     open()
     h.gate = new Promise<void>((r) => {
       open = r
     })
-    await vi.waitFor(() =>
-      expect(statuses('A').filter((x) => x === 'error')).toHaveLength(3)
-    )
+    await vi.waitFor(() => expect(statuses('B')).toEqual(['error']))
+    await vi.waitFor(() => expect(statuses('A').filter((x) => x === 'error')).toHaveLength(2))
     await new Promise((r) => setTimeout(r, 20))
-    await inApp('B', () => worker.drainImportsTick(app))
-    await vi.waitFor(() => expect(h.defs.filter((d) => d.startsWith('B:'))).toHaveLength(3))
-    expect(statuses('B').filter((x) => x === 'running')).toHaveLength(3)
+    await inApp('N', () => worker.drainImportsTick(app))
+    await vi.waitFor(() => expect(statuses('N')).toEqual(['running']))
   })
 
   it('self-hosted: the one app drives 3 at once, as before', async () => {

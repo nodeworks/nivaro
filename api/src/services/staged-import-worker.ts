@@ -518,10 +518,15 @@ const driving = appSet<string>()
  *  Process-wide by design (a count, no app data). */
 const processDriving = { count: 0 }
 
-/** No room for another run: this app's own cap, and on a shared deployment the process's. */
+/** Hub shared deployment: the most runs one app may hold at once, so one app never takes every
+ *  slot of the process and starves the others (default 3 → 2 per app, 1 left for another). */
+const APP_SHARE = Math.max(1, MAX_PARALLEL - 1)
+
+/** No room for another run. Self-hosted / cloud: this app's own MAX_PARALLEL, as before. Shared:
+ *  the app's fair share (APP_SHARE) and the process-wide total (MAX_PARALLEL across every app). */
 function atCapacity(): boolean {
-  if (driving.size >= MAX_PARALLEL) return true
-  return perAppJobs() && processDriving.count >= MAX_PARALLEL
+  if (!perAppJobs()) return driving.size >= MAX_PARALLEL
+  return driving.size >= APP_SHARE || processDriving.count >= MAX_PARALLEL
 }
 
 type QueueRow = Record<string, any>
