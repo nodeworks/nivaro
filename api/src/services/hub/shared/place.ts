@@ -502,16 +502,21 @@ export async function placeOnShared(
     throw refuse(r.code, r.message)
   }
   let handedOff = false
+  /** Step 1 written (its run row exists): a start that breaks after it closes the row. */
+  let written: number | null = null
+  let started: JobRunHandle | null = null
   try {
     // A run row of this environment a dead process left `running` is closed first (we hold the
     // environment's lock, so no live run of it exists anywhere).
     await recoverInterruptedPlacements({ envId, ownLock: true })
     const placed = await checkAndWrite(envId, input, by, deps)
+    written = placed.deployId
     const run = await (
       deps.startJobRun ??
       ((label, id, who) =>
         startJobRun('deploy', `hub-place-${id}`, { label, triggeredBy: who ?? null }))
     )(`Place ${placed.appKey}/${placed.envKey} on ${placed.shared.key}`, envId, by)
+    started = run
     if (run.id != null)
       await db(DEPLOYS)
         .where({ id: placed.deployId })
@@ -541,9 +546,28 @@ export async function placeOnShared(
     })
     return { job_run_id: Number(run.id ?? 0) }
   } finally {
-    if (!handedOff) await lock.release(envId, token)
+    if (!handedOff) {
+      // Round 2 N-1: never a `running` row with no runner (the heal would only find it at the
+      // next place or a restart). The environment stays `provisioning` on its placement, so
+      // placing it again resumes.
+      if (written !== null)
+        await db(DEPLOYS)
+          .where({ id: written, status: 'running' })
+          .update({
+            status: 'failed',
+            error: PLACE_START_FAILED,
+            finished_at: new Date(),
+            heartbeat_at: null
+          })
+          .catch(() => undefined)
+      if (started) await started.fail(new Error(PLACE_START_FAILED)).catch(() => undefined)
+      await lock.release(envId, token)
+    }
   }
 }
+
+const PLACE_START_FAILED =
+  'START_FAILED: The placement run could not be started; place the environment again.'
 
 /** Every check, then step 1 under the shared lock. Holds the environment's lock (the caller's). */
 async function checkAndWrite(

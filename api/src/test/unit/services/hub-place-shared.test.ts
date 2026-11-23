@@ -953,3 +953,43 @@ describe('fix round 1 — P6-11b: a key only on a positive "empty"', () => {
     }
   })
 })
+
+// ── parked wave (Task 4 round 2 N-1, N-2) ─────────────────────────────────────────────────────
+
+describe('parked wave', () => {
+  const placeDeploys = (envId: number) =>
+    db('nivaro_hub_deploys').where({ environment_id: envId, kind: 'shared' }).orderBy('id')
+
+  it('N-1: a job run that cannot start closes the place row (never left running) and frees the lock', async () => {
+    const app = await newApp()
+    const envId = await newEnv(app.id)
+    TENANTS = [Store.tenantIdFor(app, { id: envId })]
+    const fake = fakeClient()
+    const startJobRun = vi.fn(async () => {
+      throw new Error('job runs table is gone')
+    })
+    await expect(
+      place(
+        envId,
+        { database_id: await newDb() },
+        { client: fake.factory, startJobRun, lock: memoryPromoteLock }
+      )
+    ).rejects.toThrow()
+    const rows = await placeDeploys(envId)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ status: 'failed' })
+    expect(rows[0].error).toMatch(/^START_FAILED: /)
+    expect(rows[0].finished_at).not.toBeNull()
+    expect(await memoryPromoteLock.held(envId)).toBe(false)
+    // Still provisioning on its placement: placing again resumes and ends active.
+    const env = await db('nivaro_hub_environments').where({ id: envId }).first()
+    expect(env.status).toBe('provisioning')
+    await place(
+      envId,
+      { database_id: Number(String(env.db_ref).slice(7)) },
+      { client: fakeClient().factory, startJobRun: fakeRun().start }
+    )
+    await Place.awaitPlacement(envId)
+    expect((await db('nivaro_hub_environments').where({ id: envId }).first()).status).toBe('active')
+  })
+})
