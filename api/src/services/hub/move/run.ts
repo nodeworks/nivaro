@@ -903,7 +903,9 @@ async function doStep(ctx: Ctx, key: MoveStepKey, steps: MoveSteps): Promise<voi
       const window =
         plan.warnings.some((w) => w.code === 'GITLAB_BOOT_WINDOW') &&
         !stepDone(steps, 'maintenance_on')
-      if (window && steps.boot_freeze !== 'on') {
+      // R6-M-4: whenever this step runs (again, after a crash or a Resume), the source is frozen
+      // again first: the freeze is idempotent, and a crash may have lifted it already.
+      if (window) {
         steps.boot_freeze = 'on'
         await saveSteps(ctx, steps)
         ctx.run.log(
@@ -928,6 +930,10 @@ async function doStep(ctx: Ctx, key: MoveStepKey, steps: MoveSteps): Promise<voi
       }
       await targetMaintenanceWithRetry(ctx)
       if (steps.boot_freeze === 'on') {
+        // R6-M-4: the intent first, so a crash inside the lift is seen (Resume freezes again,
+        // a rollback lifts it).
+        steps.boot_freeze = 'lifting'
+        await saveSteps(ctx, steps)
         await liftSource(ctx)
         steps.boot_freeze = 'lifted'
         await saveSteps(ctx, steps)

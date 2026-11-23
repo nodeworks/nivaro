@@ -112,7 +112,9 @@ export async function undoMove(ctx: UndoContext): Promise<UndoResult> {
       }
     await ctx.save(steps)
   }
-  const sourceFrozen = () => ran('maintenance_on') || steps.boot_freeze === 'on'
+  // `lifting` (R6-M-4): the lift may not have reached the source; it is lifted again in phase 5.
+  const frozenByDeploy = () => steps.boot_freeze === 'on' || steps.boot_freeze === 'lifting'
+  const sourceFrozen = () => ran('maintenance_on') || frozenByDeploy()
   const halt = async (key: MoveStepKey, why: string): Promise<UndoResult> => {
     failed.push(key)
     const frozen = sourceFrozen()
@@ -260,7 +262,7 @@ export async function undoMove(ctx: UndoContext): Promise<UndoResult> {
   }
 
   // ── 5. lift the source ─────────────────────────────────────────────────────────────────────
-  if (ran('maintenance_on') || steps.boot_freeze === 'on') {
+  if (ran('maintenance_on') || frozenByDeploy()) {
     if (!(await ctx.stillHeld())) return lost()
     try {
       if (ctx.move.prior_status) await setEnvStatus(ctx.move.environment_id, ctx.move.prior_status)
@@ -277,7 +279,7 @@ export async function undoMove(ctx: UndoContext): Promise<UndoResult> {
         }
       }
       ctx.log('undo: maintenance at the source undone')
-      if (steps.boot_freeze === 'on') {
+      if (frozenByDeploy()) {
         steps.boot_freeze = 'lifted'
         await ctx.save(steps)
       }

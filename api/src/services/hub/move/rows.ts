@@ -92,7 +92,7 @@ export interface MoveSteps {
    * maintenance is not proven (GITLAB_BOOT_WINDOW) before `maintenance_on` ran: `on` until the
    * target's maintenance is set (then lifted again), so a rollback knows to lift it.
    */
-  boot_freeze?: 'on' | 'lifted'
+  boot_freeze?: 'on' | 'lifting' | 'lifted'
   /**
    * R2-M-6: transfer tickets minted for this move and not revoked yet, SEALED (secrets.ts), so a
    * later run revokes what a dead one left. Written by the ops only (never by a run's step copy).

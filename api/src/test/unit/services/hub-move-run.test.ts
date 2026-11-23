@@ -1248,6 +1248,44 @@ describe('rollback from release: exactly one writer at every point (P6-22)', () 
       expect(names.indexOf('sourceMaintenance')).toBeLessThan(iDeploy())
     })
 
+  // R6-M-4: the process dies while the source's deploy-window maintenance is being lifted (the
+  // lift went through, the mark did not). Resume re-runs deploy_target: it must freeze again.
+  it('R6-M-4: a crash inside the lift of the deploy freeze, heal, Resume → the source is frozen again before the redeploy', async () => {
+    plan = planOf('to_dedicated', 'manual')
+    bootWindow()
+    const w = await world('shared')
+    fake.state.serving = true
+    const ws = fresh()
+    let crashed = false
+    fake.state.during = (name, arg) => {
+      if (name === 'sourceMaintenance' && arg === false && !crashed) {
+        crashed = true
+        ws.sourceLive = true // the lift reached the source
+        return new Promise<void>(() => undefined) // … and the process died
+      }
+    }
+    writers(ws, false)
+    const { move_id } = await start(w, toFor('to_dedicated', w))
+    await waitFor(async () => crashed)
+    unmarkMoveLive(move_id)
+    await db('nivaro_hub_moves')
+      .where({ id: move_id })
+      .update({ heartbeat_at: new Date(START - 3 * 60_000) })
+    expect(
+      await healMoves({ now, lock, sharedLock: shLock, failJobRun: async () => undefined })
+    ).toBe(1)
+    const before = fake.calls.length
+    await Run.resumeMove(move_id, 'u')
+    await Run.awaitMove(move_id)
+    const again = fake.calls.slice(before).map((c) => `${c[0]}:${String(c[1] ?? '')}`)
+    const iFreeze = again.indexOf('sourceMaintenance:true')
+    const iDeploy = again.findIndex((x) => x.startsWith('deployTarget'))
+    expect(iDeploy).toBeGreaterThanOrEqual(0)
+    expect(iFreeze).toBeGreaterThanOrEqual(0)
+    expect(iFreeze).toBeLessThan(iDeploy)
+    expect(ws.bad).toEqual([])
+  })
+
   it('R5-I-1: a halt with the source never frozen says the source keeps serving (never that it stays in maintenance)', async () => {
     plan = planOf('to_dedicated', 'manual')
     const w = await world('shared')
