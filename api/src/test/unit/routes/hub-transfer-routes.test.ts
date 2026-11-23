@@ -18,8 +18,16 @@ const st = vi.hoisted(() => ({
   // file rows per database connection (a tenant's own database), '' = the static database
   files: new Map<
     string,
-    Array<{ id: string; filename_disk: string | null; type: string; filesize: number }>
-  >()
+    Array<{
+      id: string
+      filename_disk: string | null
+      type: string
+      filesize: number
+      storage?: string
+    }>
+  >(),
+  /** R6-I-1 / R6-M-3: the saved-settings driver a test stands up (null = local only). */
+  driver: null as null | Record<string, unknown>
 }))
 
 vi.mock('../../../config.js', () => ({
@@ -47,7 +55,7 @@ vi.mock('../../../db/tenant-context.js', async (orig) => {
   }
 })
 vi.mock('../../../services/storage-drivers.js', () => ({
-  getActiveStorageDriver: async () => ({ name: 'local' }),
+  getActiveStorageDriver: async () => st.driver ?? { name: 'local' },
   readOwnStoredObject: async () => {
     throw new Error('ENOENT')
   }
@@ -274,6 +282,61 @@ describe('GET /api/hub-transfer/files/:id on a dedicated app', () => {
     const a = await build()
     expect((await get(a, FILE_A, { authorization: `Transfer ${ticket}` })).statusCode).toBe(401)
   })
+})
+
+// R6-I-1 (ruling P6-33): only a real not-found of a saved-settings object is a 404 ("missing"):
+// any other read error is a 5xx, which the target counts as failed (it blocks inside
+// maintenance, so the move never releases without the object).
+describe('GET /api/hub-transfer/files/:id for a saved-settings object', () => {
+  const FILE_S3 = '55555555-2222-4333-8444-555555555555'
+  beforeAll(() => {
+    st.files.get('')?.push({
+      id: FILE_S3,
+      filename_disk: 'cd/photo.jpg',
+      type: 'image/jpeg',
+      filesize: 10,
+      storage: 's3'
+    })
+  })
+  afterEach(() => {
+    st.driver = null
+  })
+
+  it('a real not-found is 404 (missing)', async () => {
+    const { StoredObjectMissing } = await import('../../../services/storage/missing.js')
+    st.driver = {
+      name: 's3',
+      get: async () => {
+        throw new StoredObjectMissing()
+      }
+    }
+    dedicated()
+    const a = await build()
+    const { ticket } = await mintTransferTicket(null)
+    expect((await get(a, FILE_S3, { authorization: `Transfer ${ticket}` })).statusCode).toBe(404)
+  })
+
+  for (const [label, err] of [
+    ['throttled (503)', Object.assign(new Error('S3 GET failed: 503 SlowDown'), { status: 503 })],
+    ['refused (403)', Object.assign(new Error('S3 GET failed: 403 AccessDenied'), { status: 403 })],
+    ['a timeout', Object.assign(new Error('The operation was aborted'), { name: 'TimeoutError' })]
+  ] as const)
+    it(`any other read error (${label}) is a 5xx, never a 404, and names no key`, async () => {
+      st.driver = {
+        name: 's3',
+        get: async () => {
+          throw err
+        }
+      }
+      dedicated()
+      const a = await build()
+      const { ticket } = await mintTransferTicket(null)
+      const res = await get(a, FILE_S3, { authorization: `Transfer ${ticket}` })
+      expect(res.statusCode).toBe(503)
+      expect(res.json().code).toBe('SOURCE_READ_FAILED')
+      expect(res.headers['x-nivaro-filename-disk']).toBeUndefined()
+      expect(res.body).not.toContain('photo.jpg')
+    })
 })
 
 describe('GET /api/hub-transfer/files/:id on a shared deployment', () => {

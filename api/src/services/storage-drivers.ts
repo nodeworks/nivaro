@@ -30,6 +30,7 @@ import { readFallback } from './storage/fallback.js'
 import { readFallbackUrl } from './storage/fallback-url.js'
 import { getStorage } from './storage/index.js'
 import { instrumentStorage } from './storage/instrument.js'
+import { StoredObjectMissing } from './storage/missing.js'
 
 export type StorageDriverName = 'local' | 's3' | 'azure-blob'
 
@@ -236,8 +237,15 @@ class SettingsS3Driver implements StorageDriver {
 
   async get(key: string): Promise<Buffer> {
     const res = await this.signedFetch('GET', key)
+    if (res.status === 404) {
+      void res.body?.cancel().catch(() => {})
+      throw new StoredObjectMissing(`S3 GET ${key}: not found`)
+    }
     if (!res.ok) {
-      throw new Error(`S3 GET ${key} failed: ${res.status} ${(await res.text()).slice(0, 300)}`)
+      throw Object.assign(
+        new Error(`S3 GET ${key} failed: ${res.status} ${(await res.text()).slice(0, 300)}`),
+        { status: res.status }
+      )
     }
     return Buffer.from(await res.arrayBuffer())
   }
@@ -375,8 +383,15 @@ class SettingsAzureBlobDriver implements StorageDriver {
 
   async get(key: string): Promise<Buffer> {
     const res = await this.signedFetch('GET', key)
+    if (res.status === 404) {
+      void res.body?.cancel().catch(() => {})
+      throw new StoredObjectMissing(`Azure GET ${key}: not found`)
+    }
     if (!res.ok) {
-      throw new Error(`Azure GET ${key} failed: ${res.status} ${(await res.text()).slice(0, 300)}`)
+      throw Object.assign(
+        new Error(`Azure GET ${key} failed: ${res.status} ${(await res.text()).slice(0, 300)}`),
+        { status: res.status }
+      )
     }
     return Buffer.from(await res.arrayBuffer())
   }

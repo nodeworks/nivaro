@@ -108,6 +108,8 @@ const redirects = new Set<string>()
 /** Ids answered without X-Nivaro-Filename-Disk / without Content-Length (chunked). */
 const noName = new Set<string>()
 const noLength = new Set<string>()
+/** R6-I-1: ids the source cannot read right now (its storage throttles): 503. */
+const readFails = new Set<string>()
 const sourceSeen: string[] = []
 let server: Server
 let SOURCE = ''
@@ -124,6 +126,10 @@ beforeAll(async () => {
       // to a place that WOULD answer the bytes: only redirect: 'error' keeps them out
       res.writeHead(302, { location: `${SOURCE}/redirect-target` })
       return res.end()
+    }
+    if (readFails.has(id)) {
+      res.writeHead(503, { 'content-type': 'application/json' })
+      return res.end('{"code":"SOURCE_READ_FAILED"}')
     }
     if (id === 'redirect-target') {
       res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': '4' })
@@ -212,6 +218,7 @@ beforeEach(() => {
   redirects.clear()
   noName.clear()
   noLength.clear()
+  readFails.clear()
   sourceSeen.length = 0
   logs.length = 0
   resetPullsForTests()
@@ -785,6 +792,24 @@ describe('pull: saved-settings objects (P6-31)', () => {
     const s = await finished(run_id)
     expect(s).toMatchObject({ state: 'done', total: 1, copied: 1, failed: 0 })
     expect(bucket.get('o2.bin')?.toString()).toBe('object two')
+  })
+
+  // R6-I-1: an S3 read error at the source (a 5xx, not a 404) fails the row, never "missing":
+  // in a blocking copy (inside maintenance) that stops the move before release.
+  it('R6-I-1: a source that cannot read an S3 object right now fails that row (not missing)', async () => {
+    rows.push(row('o4', 10, { storage: 's3' }))
+    readFails.add('o4')
+    pullDeps.objectStorage = async () => fakeS3() as never
+    const { run_id } = await startPull({
+      source: SOURCE,
+      ticket: TICKET,
+      mode: 'full',
+      objects: true
+    })
+    const s = await finished(run_id)
+    expect(s).toMatchObject({ state: 'done', total: 1, copied: 0, failed: 1 })
+    expect(s.missing).toEqual([])
+    expect(s.failed_ids).toEqual(['o4'])
   })
 
   it('without objects (the prefix stays) a saved-settings row is never copied', async () => {

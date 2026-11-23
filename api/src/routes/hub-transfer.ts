@@ -10,7 +10,8 @@ import {
   ticketTenant,
   transferTicketFromHeader
 } from '../services/hub-transfer/tickets.js'
-import { sendStoredObject } from '../services/stored-object-stream.js'
+import { isStoredObjectMissing } from '../services/storage/missing.js'
+import { openTransferObject, sendOpenedObject } from '../services/stored-object-stream.js'
 import { getTenantRegistry } from '../services/tenancy/registry.js'
 import type { TenantRecord } from '../services/tenancy/types.js'
 
@@ -79,14 +80,16 @@ interface FileRow {
   id: unknown
   filename_disk: string | null
   type: string | null
+  /** The row's provider: local, or a saved-settings s3 / azure-blob (P6-31). */
+  storage?: string | null
 }
 
 // No isHelpVideoFile() check here on purpose (see the header: the one ruled exception).
 async function fileRow(id: string): Promise<FileRow | null> {
   if (!isUuid(id)) return null
-  const row = (await db('nivaro_files').where('id', id).first('id', 'filename_disk', 'type')) as
-    | FileRow
-    | undefined
+  const row = (await db('nivaro_files')
+    .where('id', id)
+    .first('id', 'filename_disk', 'type', 'storage')) as FileRow | undefined
   return row?.filename_disk ? row : null
 }
 
@@ -149,18 +152,36 @@ export async function hubTransferRoutes(app: FastifyInstance): Promise<void> {
         if (!row?.filename_disk) return refuse(reply, 404, 'NOT_FOUND', 'Not found')
         const key = row.filename_disk
         reply.header('X-Nivaro-Filename-Disk', encodeURIComponent(key).replace(/%2F/gi, '/'))
+        let opened: Awaited<ReturnType<typeof openTransferObject>>
         try {
-          return await sendStoredObject(reply, key, {
-            rangeHeader: req.headers.range,
-            contentType: row.type || 'application/octet-stream',
-            disposition: 'attachment',
-            // This home's own copy only: a source never asks another source.
-            remote: false
-          })
-        } catch {
+          // This home's own copy only (a source never asks another source), read by the row's
+          // provider (P6-31: saved-settings S3/Azure objects through their driver).
+          opened = await openTransferObject(key, row.storage, req.headers.range)
+        } catch (err) {
           reply.removeHeader('X-Nivaro-Filename-Disk')
-          return refuse(reply, 404, 'NOT_FOUND', 'Stored object not found')
+          // R6-I-1: only a real not-found is "missing" (404, never blocks a move). Any other read
+          // error (throttling, a timeout, a refused credential) is a 5xx: the target counts the
+          // row as failed, which blocks inside maintenance, so a move never releases without it.
+          if (isStoredObjectMissing(err))
+            return refuse(reply, 404, 'NOT_FOUND', 'Stored object not found')
+          req.log.warn(
+            {
+              err_name: (err as { name?: unknown } | null)?.name ?? null,
+              status: (err as { status?: unknown } | null)?.status ?? null
+            },
+            'hub transfer: a stored object could not be read'
+          )
+          return refuse(
+            reply,
+            503,
+            'SOURCE_READ_FAILED',
+            'The stored object could not be read here right now'
+          )
         }
+        return sendOpenedObject(reply, opened, {
+          contentType: row.type || 'application/octet-stream',
+          disposition: 'attachment'
+        })
       }
       return found.kind === 'shared'
         ? withTenant(found.tenant, serve, found.tenant.origin)
