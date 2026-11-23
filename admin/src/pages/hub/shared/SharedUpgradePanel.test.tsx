@@ -472,4 +472,32 @@ describe('SharedUpgradePanel', () => {
     expect(within(list).getByText('Succeeded')).toBeInTheDocument()
     expect(within(list).getByText(/0\.3\.200 → 0\.3\.210/)).toBeInTheDocument()
   })
+
+  it('parked C5: on a phone the version pair takes its own line, never cut ("0.…")', async () => {
+    history = [
+      {
+        id: 30,
+        shared_deployment_id: 4,
+        kind: 'upgrade',
+        version: '0.3.210',
+        from_version: '0.3.200',
+        status: 'success',
+        step: 'verify',
+        error: null,
+        job_run_id: 1,
+        started_by: null,
+        started_at: '2026-11-20T10:00:00.000Z',
+        finished_at: '2026-11-20T10:10:00.000Z'
+      }
+    ]
+    wrap()
+    const list = await screen.findByRole('list', { name: 'Upgrade history' })
+    const pair = within(list).getByText(/0\.3\.200 → 0\.3\.210/)
+    const cls = pair.className.split(/\s+/)
+    // Below sm: a full-width line of its own, wrapping; truncation only from sm up.
+    expect(cls).toContain('basis-full')
+    expect(cls).toContain('break-words')
+    expect(cls).not.toContain('truncate')
+    expect(cls).toContain('sm:truncate')
+  })
 })

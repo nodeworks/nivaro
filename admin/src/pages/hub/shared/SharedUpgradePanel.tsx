@@ -855,7 +855,8 @@ function UpgradeHistory({
               <span className='w-[92px] shrink-0 text-[12px] text-slate-900 dark:text-foreground'>
                 {KIND_WORDS[d.kind] ?? d.kind}
               </span>
-              <span className='min-w-0 flex-1 truncate font-mono text-[12px] text-slate-700 dark:text-slate-300'>
+              {/* Phone: its own full-width line after the rest (it was cut to "0.…"). */}
+              <span className='order-last min-w-0 basis-full break-words font-mono text-[12px] text-slate-700 sm:order-none sm:basis-0 sm:flex-1 sm:truncate dark:text-slate-300'>
                 {d.from_version ? `${d.from_version} → ${d.version}` : d.version}
               </span>
               <span className={cn('text-[12px] font-medium', promotionStatusTone(d.status))}>
