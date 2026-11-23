@@ -589,6 +589,34 @@ export function moveStepRows(
   }))
 }
 
+/**
+ * Design B4: what the environment row says about its newest move, or null when nothing needs
+ * attention there. `tone` picks the chip colours.
+ */
+export type MoveBadge = { text: string; tone: 'live' | 'attention' | 'halted' }
+
+export function moveBadge(m: HubMove | undefined): MoveBadge | null {
+  if (!m) return null
+  if (m.status === 'waiting') return { text: 'Waiting for you', tone: 'attention' }
+  if (isHaltedTargetLive(m)) return { text: 'Halted: stop the new home', tone: 'halted' }
+  if (m.status === 'interrupted') return { text: 'Move interrupted', tone: 'attention' }
+  if (isLiveMove(m.status)) {
+    const rows = moveStepRows(m)
+    const at = rows.findIndex((r) => r.state === 'running' || r.state === 'waiting')
+    const n = at >= 0 ? at + 1 : rows.filter((r) => r.state === 'done').length + 1
+    return {
+      text: rows.length ? `Moving · step ${Math.min(n, rows.length)} of ${rows.length}` : 'Moving',
+      tone: 'live'
+    }
+  }
+  // Ended: only while something is still to do (the panel cannot be dismissed then).
+  const open = moveChecklistOf(m).some(
+    (c) => !c.done && (m.status === 'success' || c.id === REPOINT_ITEM)
+  )
+  if (open) return { text: 'To do after move', tone: 'attention' }
+  return null
+}
+
 /** Whether the run has passed `release` (after it, nothing is rolled back). */
 export function pastRelease(m: Pick<HubMove, 'steps' | 'step' | 'status' | 'plan'>): boolean {
   const rows = moveStepRows(m)

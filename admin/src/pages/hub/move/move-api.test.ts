@@ -260,3 +260,41 @@ describe('stored run errors', () => {
     expect(runErrorCopy('INTERRUPTED')?.title).toBe('The run stopped before it finished')
   })
 })
+
+describe('moveBadge (design B4)', () => {
+  it('names what the environment row should say', async () => {
+    const { moveBadge } = await import('./move-api')
+    const base = {
+      id: 1,
+      app_id: 1,
+      environment_id: 1,
+      from_placement_id: 1,
+      to_placement_id: 2,
+      kind: 'to_shared' as const,
+      routing: 'automatic' as const,
+      step: 'files_warm',
+      steps: ['check', 'files_warm', 'release', 'done'],
+      plan: null,
+      files: null,
+      checklist: null,
+      error: null,
+      started_at: null,
+      finished_at: null
+    }
+    expect(moveBadge({ ...base, status: 'running' })?.text).toBe('Moving · step 2 of 4')
+    expect(moveBadge({ ...base, status: 'waiting' })).toEqual({
+      text: 'Waiting for you',
+      tone: 'attention'
+    })
+    expect(moveBadge({ ...base, status: 'interrupted' })?.text).toBe('Move interrupted')
+    expect(
+      moveBadge({ ...base, status: 'interrupted', error: 'HALTED_TARGET_LIVE: x' })?.tone
+    ).toBe('halted')
+    expect(
+      moveBadge({ ...base, status: 'success', checklist: [{ id: 'retire_source', done: false }] })
+        ?.text
+    ).toBe('To do after move')
+    expect(moveBadge({ ...base, status: 'success' })).toBeNull()
+    expect(moveBadge(undefined)).toBeNull()
+  })
+})

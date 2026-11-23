@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 // Nivaro Hub (phase 6, Task 18): an environment's Hub deploys name moves and shared upgrades,
@@ -224,5 +224,76 @@ describe('delete refused while the lock cannot be read', () => {
       expect.anything()
     )
     error.mockRestore()
+  })
+})
+
+describe('A move on the environment row (design B4)', () => {
+  const app = {
+    id: 1,
+    key: 'efp',
+    name: 'EFP',
+    signin_mode: 'direct',
+    adopted: false,
+    extensions: [],
+    owners: [],
+    environments: [{ ...env, id: 11, key: 'staging', placement_id: 5 }]
+  }
+  it('shows the move as a chip that opens the panel, and holds Promote while it is open', async () => {
+    const move = {
+      id: 70,
+      app_id: 1,
+      environment_id: 11,
+      from_placement_id: 5,
+      to_placement_id: 9,
+      kind: 'to_shared',
+      routing: 'manual',
+      status: 'waiting',
+      step: 'verify',
+      steps: JSON.stringify(['check', 'place_on_target', 'files_warm', 'route', 'verify', 'done']),
+      plan: null,
+      files: null,
+      checklist: null,
+      error: null,
+      started_at: now,
+      finished_at: null
+    }
+    h.get.mockImplementation(async (url: string) => {
+      if (url === '/hub/apps/1') return { data: { data: app } }
+      if (url === '/hub/placements/5')
+        return {
+          data: { data: { id: 5, kind: 'dedicated', driver_id: 2, target: { stack: 'efp' } } }
+        }
+      if (url === '/hub/drivers')
+        return {
+          data: { data: [{ id: 2, kind: 'docker', name: 'Docker east', config: {}, secret: null }] }
+        }
+      if (url === '/hub/environments/11/moves') return { data: { data: [move] } }
+      if (url === '/hub/moves/70') return { data: { data: move } }
+      if (/\/status$/.test(url))
+        return {
+          data: {
+            data: {
+              state: 'ok',
+              version: '0.3.210',
+              preflight: 'pass',
+              checked_at: now,
+              source: 'hub-link'
+            }
+          }
+        }
+      if (/\/deploys(\/hub)?$/.test(url)) return { data: { data: [] } }
+      if (/\/promotable$/.test(url)) return { data: { data: { promote: [], rollback: [] } } }
+      throw { response: { status: 404, data: { code: 'NOT_FOUND' } } }
+    })
+    wrap(<HubAppDetail appId={1} isAdmin userId='u1' onDeleted={() => {}} />)
+    const table = await screen.findByRole('table')
+    const chip = await within(table).findByRole('button', {
+      name: 'Move of staging: Waiting for you. Open it'
+    })
+    const promote = within(table).getByRole('button', { name: 'Promote staging' })
+    expect(promote).toBeDisabled()
+    expect(promote).toHaveAccessibleDescription(/A move of this environment is open/)
+    fireEvent.click(chip)
+    expect(await screen.findByRole('region', { name: 'Move staging' })).toBeInTheDocument()
   })
 })
