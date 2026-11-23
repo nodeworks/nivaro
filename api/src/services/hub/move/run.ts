@@ -1168,13 +1168,15 @@ async function finishSuccess(ctx: Ctx, warning: string | null): Promise<void> {
   await ctx.ops.revokeTickets().catch(() => undefined)
   // Review minor 6: the shared placement the environment left goes when nothing uses it.
   if (!warning) await dropUnusedSharedPlacement(ctx.moveId).catch(() => undefined)
-  await patchMove(ctx.moveId, {
+  // R5-M-2: only while this run still holds the move (never over a runner that took it).
+  const ours = await patchMoveIfHolder(ctx.moveId, ctx.held.envToken, {
     status: 'success',
     step: 'done',
     error: warning,
     finished_at: new Date(ctx.e.now()),
     heartbeat_at: null
   })
+  if (!ours) return notOurs(ctx)
   await closeDeployRow(ctx, 'success', null)
   await clearCancelFlag(ctx)
   await logActivity({
@@ -1309,6 +1311,13 @@ async function halt(ctx: Ctx, move: HubMoveRow, sourceFrozen: boolean): Promise<
   await ctx.run.fail(new Error(safeLine(error)))
 }
 
+/** R5-M-2: another runner holds the move now; this one ends without writing its end. */
+async function notOurs(ctx: Ctx): Promise<void> {
+  ctx.lockLost = true
+  ctx.run.log('stopped: another run holds this move now; it writes the end', 'error')
+  await ctx.run.fail(new Error('Stopped: another run holds this move now.'))
+}
+
 async function interrupt(ctx: Ctx): Promise<void> {
   // R4-M-1: only while this run is still the move's lock holder (a resumed run owns it now).
   if (
@@ -1405,12 +1414,14 @@ async function rollBack(
     ? `The rollback could not undo: ${failed.join(', ')}. ${recover ?? 'Check those by hand.'}${move.error ? ` — ${move.error}` : ''}`
     : move.error
   const error = repoint ? `${base ? `${base} — ` : ''}${repoint}` : base
-  await patchMove(ctx.moveId, {
+  // R5-M-2: only while this run still holds the move (never over a runner that took it).
+  const ours = await patchMoveIfHolder(ctx.moveId, ctx.held.envToken, {
     status,
     error: error ?? null,
     finished_at: new Date(ctx.e.now()),
     heartbeat_at: null
   })
+  if (!ours) return notOurs(ctx)
   await clearCancelFlag(ctx)
   await closeDeployRow(
     ctx,

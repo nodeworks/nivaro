@@ -1622,6 +1622,40 @@ describe('heal and resume', () => {
     await lock.release(w.envId, newToken)
   })
 
+  // R5-M-2: the final status and mirror-row writes are holder-guarded too.
+  for (const [label, failOn] of [
+    ['success', null],
+    ['rollback', 'verifyName']
+  ] as const)
+    it(`R5-M-2: a ${label} end never writes over a move another runner took just before it`, async () => {
+      plan = planOf('to_shared')
+      const w = await world('docker')
+      let newToken = ''
+      let move_id = 0
+      fake.state.during = async (name) => {
+        if (name === 'revokeTickets' && !newToken) {
+          const m = await readMove(move_id)
+          await lock.release(w.envId, m?.steps.locks?.env as string)
+          newToken = (await lock.take(w.envId, 'move')) as string
+          const steps = { ...(m?.steps ?? {}), locks: { env: newToken, shared: [] } }
+          await db('nivaro_hub_moves')
+            .where({ id: move_id })
+            .update({ status: 'running', steps: JSON.stringify(steps) })
+          await db('nivaro_hub_deploys').where({ move_id }).update({ status: 'running' })
+        }
+      }
+      if (failOn) fake.state.failOn = (name) => name === failOn
+      const out = await start(w, toFor('to_shared', w))
+      move_id = out.move_id
+      await Run.awaitMove(move_id)
+      const m = await readMove(move_id)
+      expect(m?.status).toBe('running')
+      expect(m?.steps.locks?.env).toBe(newToken)
+      expect((await db('nivaro_hub_deploys').where({ move_id }).first()).status).toBe('running')
+      await db('nivaro_hub_moves').where({ id: move_id }).update({ status: 'cancelled' })
+      await lock.release(w.envId, newToken)
+    })
+
   it('a fresh heartbeat is never healed', async () => {
     plan = planOf('to_shared')
     const w = await world('docker')
