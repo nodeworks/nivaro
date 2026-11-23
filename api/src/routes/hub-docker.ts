@@ -725,6 +725,12 @@ export function hubDockerRoutes(app: FastifyInstance) {
         'CONFIRM_REQUIRED',
         `Type "delete ${name} data" to remove the stack's volumes too`
       )
+    // Re-review FW1-M-1: an open move may still copy this stack's uploads (files_delta) —
+    // its volumes stay. A plain remove stays allowed (a halted move's checklist asks for it).
+    if (removeVolumes) {
+      const open = await moveOpenRefusal({ envIds: [envId] })
+      if (open) return fail(reply, open.status, open.code, open.message)
+    }
     try {
       // Its own hold on the environment's promotion lock: no promotion starts while the
       // stack is being taken down, and none is running when it starts.

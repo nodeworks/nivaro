@@ -97,7 +97,7 @@ const ENV = 21
 let app: FastifyInstance
 
 const inject = (
-  method: 'POST' | 'PATCH',
+  method: 'POST' | 'PATCH' | 'DELETE',
   url: string,
   payload: unknown,
   headers: Record<string, string> = asAdmin
@@ -106,7 +106,7 @@ const inject = (
     method,
     url: `/api/hub${url}`,
     headers,
-    payload: payload as Record<string, unknown>
+    ...(payload !== undefined ? { payload: payload as Record<string, unknown> } : {})
   })
 
 beforeAll(async () => {
@@ -240,5 +240,22 @@ describe('an open move refuses 409 MOVE_OPEN', () => {
     expect(res.json().code).not.toBe('MOVE_OPEN')
     const restart = await inject('POST', `/environments/${ENV}/stack/restart`, { confirm: 'dev' })
     expect(restart.json().code).not.toBe('MOVE_OPEN')
+  })
+})
+
+describe('re-review FW1-M-1 / FW1-M-2', () => {
+  it('M-1: stack remove with its volumes → 409 MOVE_OPEN; a plain remove still reaches the agent', async () => {
+    const res = await inject('POST', `/environments/${ENV}/stack/remove`, {
+      confirm: 'acme-dev',
+      remove_volumes: true,
+      confirm_volumes: 'delete acme-dev data'
+    })
+    expect(res.statusCode).toBe(409)
+    expect(res.json()).toMatchObject({ code: 'MOVE_OPEN', error: MOVE_TEXT })
+    expect(m.agentStack).not.toHaveBeenCalled()
+    expect(m.agentLeftovers).not.toHaveBeenCalled()
+    const plain = await inject('POST', `/environments/${ENV}/stack/remove`, { confirm: 'acme-dev' })
+    expect(plain.json().code).not.toBe('MOVE_OPEN')
+    expect(m.agentStack).toHaveBeenCalled()
   })
 })
