@@ -21,6 +21,7 @@
 
 import { db } from '../db/index.js'
 import { appBox } from './app-state.js'
+import { perAppJobs } from './deployment-mode.js'
 import { instanceKey } from './instance-key.js'
 
 export { instanceKey }
@@ -117,13 +118,35 @@ export async function getInstanceOverrides(): Promise<Record<string, unknown> | 
   return map
 }
 
+export interface OverlayOptions {
+  /**
+   * Keys starting with this prefix are the app's own credentials (its Teams bot, its directory
+   * sign-in). On a Hub shared deployment NIVARO_SETTINGS_OVERRIDES belongs to the whole
+   * deployment, so such a key there would become every app's credential: the env layer never
+   * supplies them there. The DB layer lives in the app's own database and still applies.
+   * Self-hosted and Nivaro Cloud ignore this.
+   */
+  appOwnPrefix?: string
+}
+
+/** The env layer for this read: without the app's own keys on a shared deployment. */
+function envLayerFor(opts?: OverlayOptions): Record<string, unknown> | null {
+  const env = envOverrides()
+  const prefix = opts?.appOwnPrefix
+  if (!env || !prefix || !perAppJobs()) return env
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(env)) if (!k.startsWith(prefix)) out[k] = v
+  return Object.keys(out).length ? out : null
+}
+
 /** Overlay this instance's overrides (DB row, then env on top) onto a
  *  nivaro_settings row or partial row. */
 export async function overlaySettings<T extends Record<string, unknown> | undefined>(
-  row: T
+  row: T,
+  opts?: OverlayOptions
 ): Promise<T> {
   const dbLayer = await getInstanceOverrides()
-  const envLayer = envOverrides()
+  const envLayer = envLayerFor(opts)
   if (!dbLayer && !envLayer) return row
   const base: Record<string, unknown> = row ? { ...row } : {}
   for (const [k, v] of Object.entries(dbLayer ?? {})) base[k] = v

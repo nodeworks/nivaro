@@ -9,6 +9,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const h = vi.hoisted(() => ({
   rows: {} as Record<string, Record<string, unknown>>,
+  /** Each app's own nivaro_settings_overrides row (Settings → Instance), in its own database. */
+  dbOverrides: {} as Record<string, Record<string, unknown>>,
   ack: vi.fn(async (..._a: unknown[]) => ({ status: 200, body: {} }) as unknown)
 }))
 
@@ -26,13 +28,17 @@ vi.mock('../../../db/index.js', async () => {
   const { getTenantId } = await import('../../../db/tenant-context.js')
   return {
     db: () => ({
-      select: () => ({ first: async () => ({ ...(h.rows[getTenantId() ?? ''] ?? {}) }) })
+      select: () => ({ first: async () => ({ ...(h.rows[getTenantId() ?? ''] ?? {}) }) }),
+      // nivaro_settings_overrides (the real overlaySettings reads it)
+      where: () => ({
+        first: async () => {
+          const o = h.dbOverrides[getTenantId() ?? '']
+          return o ? { data: JSON.stringify(o) } : undefined
+        }
+      })
     })
   }
 })
-vi.mock('../../../services/settings-overrides.js', () => ({
-  overlaySettings: async (r: unknown) => r
-}))
 vi.mock('../../../routes/approvals.js', () => ({ applyApprovalDecision: vi.fn() }))
 vi.mock('../../../services/app-links.js', () => ({ recordLink: async () => 'https://x/r' }))
 vi.mock('../../../services/ai-plan-steps.js', () => ({ isAdminUser: async () => false }))
@@ -52,6 +58,10 @@ vi.mock('../../../services/teams-bot/links.js', async (orig) => ({
 }))
 
 import { getTenantId, runWithTenantDb } from '../../../db/tenant-context.js'
+import {
+  bustInstanceOverridesCache,
+  resetEnvOverridesForTest
+} from '../../../services/settings-overrides.js'
 import { handleInvoke } from '../../../services/teams-bot/actions.js'
 import {
   bustTeamsBotConfig,
@@ -116,7 +126,8 @@ const ENV_KEYS = [
   'TEAMS_BOT_TENANT_ID',
   'MICROSOFT_APP_ID',
   'MICROSOFT_APP_PASSWORD',
-  'MICROSOFT_APP_TENANT_ID'
+  'MICROSOFT_APP_TENANT_ID',
+  'NIVARO_SETTINGS_OVERRIDES'
 ]
 const saved: Record<string, string | undefined> = {}
 const SHARED = {
@@ -139,6 +150,9 @@ beforeEach(() => {
     delete process.env[k]
   }
   h.rows = { A: savedBot('A'), B: savedBot('B') }
+  h.dbOverrides = {}
+  resetEnvOverridesForTest()
+  bustInstanceOverridesCache()
   h.ack.mockReset().mockResolvedValue({ status: 200, body: {} })
   bustTeamsBotConfig()
   resetConnectorCache()
@@ -149,6 +163,8 @@ afterEach(() => {
     else process.env[k] = saved[k]
   }
   bustTeamsBotConfig()
+  resetEnvOverridesForTest()
+  bustInstanceOverridesCache()
   vi.unstubAllGlobals()
 })
 
@@ -210,6 +226,54 @@ describe('config per app on a shared deployment', () => {
     expect((await inApp('B', () => getTeamsBotConfig())).appId).toBe('bot-B')
     bustTeamsBotConfig()
     expect((await inApp('B', () => getTeamsBotConfig())).appId).toBe('bot-B2')
+  })
+
+  it("the deployment's NIVARO_SETTINGS_OVERRIDES never supplies an app's bot (fix I1)", async () => {
+    shared()
+    process.env.NIVARO_SETTINGS_OVERRIDES = JSON.stringify({
+      teams_bot_enabled: true,
+      teams_bot_app_id: 'env-bot',
+      teams_bot_app_secret: 'env-secret',
+      teams_bot_tenant_id: 'env-tenant'
+    })
+    resetEnvOverridesForTest()
+    expect(await inApp('A', () => getTeamsBotConfig())).toMatchObject({
+      enabled: true,
+      appId: 'bot-A',
+      appSecret: 'secret-A',
+      tenantId: 'ms-tenant'
+    })
+    // B saved nothing: the env layer does not make the deployment's bot B's.
+    h.rows.B = {}
+    expect(await inApp('B', () => getTeamsBotConfig())).toMatchObject({
+      enabled: false,
+      reason: 'disabled',
+      appId: ''
+    })
+    expect(await inApp('B', () => teamsBotSetup())).toBeNull()
+  })
+
+  it("an app's own DB override row (its own database) still applies on shared", async () => {
+    shared()
+    h.dbOverrides.A = { teams_bot_app_id: 'bot-A-instance' }
+    expect((await inApp('A', () => getTeamsBotConfig())).appId).toBe('bot-A-instance')
+    expect((await inApp('B', () => getTeamsBotConfig())).appId).toBe('bot-B')
+  })
+
+  it('self-hosted keeps the env override layer for the bot', async () => {
+    process.env.NIVARO_SETTINGS_OVERRIDES = JSON.stringify({
+      teams_bot_enabled: true,
+      teams_bot_app_id: 'env-bot',
+      teams_bot_app_secret: 'env-secret',
+      teams_bot_tenant_id: 'env-tenant'
+    })
+    resetEnvOverridesForTest()
+    h.rows[''] = {}
+    expect(await getTeamsBotConfig()).toMatchObject({
+      enabled: true,
+      appId: 'env-bot',
+      source: 'settings'
+    })
   })
 
   it("Nivaro Cloud is unchanged: reason 'cloud'", async () => {

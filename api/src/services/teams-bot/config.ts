@@ -80,7 +80,9 @@ async function readRow(): Promise<Record<string, unknown> | undefined> {
           'teams_bot_tenant_id',
           'teams_bot_app_type'
         )
-        .first()) as Record<string, unknown> | undefined
+        .first()) as Record<string, unknown> | undefined,
+      // On a shared deployment the deployment's NIVARO_SETTINGS_OVERRIDES never names an app's bot.
+      { appOwnPrefix: 'teams_bot_' }
     )
   } catch {
     return undefined
