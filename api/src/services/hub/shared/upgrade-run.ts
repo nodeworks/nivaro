@@ -280,8 +280,7 @@ export async function tokenNotApplied(sharedId: number): Promise<boolean> {
     .first('mode', 'version_pin', 'prev_token_until')) as
     | { mode: string; version_pin: string | null; prev_token_until: unknown }
     | undefined
-  if (row?.mode !== 'docker' || !row.version_pin || row.prev_token_until == null)
-    return false
+  if (row?.mode !== 'docker' || !row.version_pin || row.prev_token_until == null) return false
   const until = new Date(row.prev_token_until as string | Date).getTime()
   if (!Number.isFinite(until)) return false
   const rotatedAt = new Date(until - PREV_TOKEN_GRACE_MS)
