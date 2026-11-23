@@ -478,14 +478,23 @@ const SAFE_SHARED_SETTINGS = ['size', 'redis', 'publish_port'] as const
 
 async function sharedSide(ctx: Ctx, shared: SharedDeployment): Promise<PlacementSide> {
   let edge: StackEdge | null = null
+  let driverName: string | undefined
   if (shared.mode === 'docker' && shared.driver_id != null) {
     const driver = await getDriver(shared.driver_id)
-    if (driver?.kind === 'docker') edge = (await healthOf(ctx, driver)).h?.edge ?? null
+    if (driver?.kind === 'docker') {
+      edge = (await healthOf(ctx, driver)).h?.edge ?? null
+      driverName = driver.name
+    }
   }
   const settings: Record<string, unknown> = {}
   for (const k of SAFE_SHARED_SETTINGS)
     if (shared.settings[k] !== undefined) settings[k] = shared.settings[k]
-  return { kind: 'shared', shared: { ...shared, settings }, edge }
+  return {
+    kind: 'shared',
+    shared: { ...shared, settings },
+    edge,
+    ...(driverName ? { driverName } : {})
+  }
 }
 
 async function dedicatedSide(
@@ -504,6 +513,7 @@ async function dedicatedSide(
       kind: 'docker',
       placement,
       driverId: driver.id,
+      driverName: driver.name,
       stack,
       edge: h?.edge ?? null
     }

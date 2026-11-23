@@ -793,3 +793,18 @@ describe('SOURCE_UNREACHABLE (Docker traefik source, manual route)', () => {
     if (auto.routing === 'automatic') expect(codes(auto)).not.toContain('SOURCE_UNREACHABLE')
   })
 })
+
+// Design S9: plan text never shows a raw code in brackets.
+describe('plan text wording (design S9)', () => {
+  it('an unreachable target or source is said in words, never as a code', () => {
+    const p = buildMovePlan(
+      input({
+        source: src({ reachable: false, error: 'LINK_UNREACHABLE' }),
+        target_facts: tgt({ reachable: false, error: 'LINK_UNREACHABLE' })
+      })
+    )
+    const texts = p.blockers.map((b) => b.text).join('\n')
+    expect(texts).toMatch(/did not answer/)
+    expect(texts).not.toMatch(/[A-Z]{2,}_[A-Z_]+/)
+  })
+})

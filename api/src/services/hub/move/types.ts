@@ -42,11 +42,19 @@ export type MoveStepKey =
  * - `gitlab`: a dedicated placement on a GitLab driver, with its components.
  */
 export type PlacementSide =
-  | { kind: 'shared'; shared: SharedDeployment; edge?: StackEdge | null }
+  | {
+      kind: 'shared'
+      shared: SharedDeployment
+      edge?: StackEdge | null
+      /** The name of its Docker driver (docker mode), for text a person reads (design S9). */
+      driverName?: string
+    }
   | {
       kind: 'docker'
       placement: HubPlacementRow
       driverId: number
+      /** The driver's name, for text a person reads (design S9). */
+      driverName?: string
       stack: string
       edge: StackEdge | null
     }

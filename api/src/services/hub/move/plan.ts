@@ -121,6 +121,26 @@ function clean(text: string): string {
   return out.replace(/ {2,}/g, ' ').trim().slice(0, 300)
 }
 
+/** Design S9: why a side gave no answer, in words; a code never reaches the text. */
+const ANSWER_WORDS: Record<string, string> = {
+  LINK_UNREACHABLE: 'it did not answer',
+  UNREACHABLE: 'it did not answer',
+  LINK_REFUSED: "it refused the Hub's token",
+  LINK_MISSING: 'it has no hub link (an older version, or no HUB_TOKEN)',
+  LINK_BAD_ANSWER: 'it gave an answer the Hub could not read',
+  LINK_SAID_NO: 'it refused the request',
+  NO_HUB_TOKEN: 'the Hub holds no hub token for it',
+  HUB_SECRET_UNREADABLE: 'the Hub cannot open its hub token (sealed with another Hub key)',
+  AGENT_UNREACHABLE: 'its Docker agent did not answer',
+  DB_UNREACHABLE: 'its database did not answer',
+  CONNECTION_UNREADABLE: 'the Hub cannot open its database connection'
+}
+function answerWords(code: string | null | undefined): string {
+  if (!code) return 'it did not answer'
+  if (ANSWER_WORDS[code]) return ANSWER_WORDS[code]
+  return /^[A-Z][A-Z0-9_]*$/.test(code) ? 'it gave no usable answer' : clean(code)
+}
+
 function list(items: string[], max = 10): string {
   const shown = items.slice(0, max).join(', ')
   return items.length > max ? `${shown} and ${items.length - max} more` : shown
@@ -219,18 +239,15 @@ function blockersOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Bloc
     add(
       'LINK_UNREACHABLE',
       from.kind === 'shared'
-        ? `The Hub could not read this app on ${sideName(from)} (${s.error ?? 'no answer'}).`
+        ? `The Hub could not read this app on ${sideName(from)}: ${answerWords(s.error)}.`
         : s.error === 'HUB_LINK_MISSING'
           ? 'The app answers but has no shared-readiness report: it runs a version older than moves need, or has no HUB_TOKEN. Upgrade or link it first.'
-          : `The Hub could not read the app over its hub link (${s.error ?? 'no answer'}).`
+          : `The Hub could not read the app over its hub link: ${answerWords(s.error)}.`
     )
 
   // The target, read live.
   if (!t.reachable)
-    add(
-      'TARGET_UNREACHABLE',
-      `The Hub could not reach ${sideName(to)} (${t.error ?? 'no answer'}).`
-    )
+    add('TARGET_UNREACHABLE', `The Hub could not reach ${sideName(to)}: ${answerWords(t.error)}.`)
 
   // The app's encryption key (Review Focus 5).
   if (!input.app_key.known)
