@@ -3,7 +3,7 @@ import { db } from '../../../db/index.js'
 import { hubPublicOrigin, hubUrlBootWarning, hubUrlCheck } from '../../deployment-mode.js'
 import { environmentFromRow } from '../apps.js'
 import { AgentError, agentHealth } from '../docker/agent-client.js'
-import type { AgentHealth } from '../docker/agent-types.js'
+import type { AgentHealth, StackSpec } from '../docker/agent-types.js'
 import { environmentNames, hostnameRefusals, type StackEdge } from '../docker/render-spec.js'
 import { type DockerDriverRow, getDriver, STACK_NAME_RE } from '../drivers.js'
 import { openMoveFor } from '../move-open.js'
@@ -24,6 +24,8 @@ import { HUB_MASK, openSecret } from '../secrets.js'
 import { DeploymentLinkError, deploymentClient } from './deployment-client.js'
 import {
   explicitHostsFor,
+  preSplitRoles,
+  recordedSharedRoles,
   renderSharedSpec,
   SharedRenderError,
   sharedExtensionPins,
@@ -100,7 +102,8 @@ export interface SharedUpgradePlan {
   stack: string | null
   /** Names routed besides the pattern. */
   hostnames: string[]
-  /** The services the run deploys (sharedRoles of the deployment's size), in order (Task 14). */
+  /** The services the run deploys, in order (Task 14): sharedRoles of the deployment's size, or
+   *  on a re-apply the shape it runs now. */
   roles: Array<{ role: string; replicas: number }>
   /**
    * The roles the last successful run deployed; null when the Hub never deployed this one. A run
@@ -179,6 +182,12 @@ export interface SharedPlanDeps {
   hubPublicUrl(): string | null
   /** hubUrlBootWarning(): the Hub's own HUB_URL is ignored. */
   hubUrlWarning(): string | null
+  /**
+   * Which roles the run deploys (Task 14, ruling I2): `size` (an upgrade: the deployment's size,
+   * ROLES_CHANGE when that differs from what runs) or `deployed` (a re-apply that is no upgrade:
+   * the shape the stack runs now, never a role change). Default `size`.
+   */
+  roleShape?: 'size' | 'deployed'
 }
 
 export function defaultSharedPlanDeps(over: Partial<SharedPlanDeps> = {}): SharedPlanDeps {
@@ -241,6 +250,8 @@ export interface SharedFacts {
   extensions: Record<string, string>
   hostnames: string[]
   rows: SharedTenantRow[]
+  /** The roles the run renders (plan.roles with their limits and role env). */
+  roles: StackSpec['roles']
 }
 
 export interface GatheredPlan {
@@ -281,30 +292,30 @@ async function recordedRun(
 }
 
 /**
- * The roles the newest successful run of this deployment deployed (its stored plan's `roles`);
- * ['all'] for a run recorded before the split (Task 14), null when none succeeded. Observed runs
- * (a registered deployment's version) deploy nothing and never count.
+ * What the stack runs now (Task 14, ruling I2): the roles the newest successful run of this
+ * deployment recorded (its stored plan's `roles`), or — a run recorded before the split, or a
+ * record that cannot be read — the pre-split shape, one `all` service with replicas by size.
+ * `never` when no run of it ever succeeded. Observed runs (a registered deployment's version)
+ * deploy nothing and never count.
  */
-async function deployedRoles(sharedId: number): Promise<string[] | null> {
+export async function deployedSharedRoles(
+  shared: Pick<SharedDeployment, 'id' | 'settings'>
+): Promise<{ never: boolean; roles: StackSpec['roles'] }> {
+  const size = sharedStackSettings(shared).size
   const row = (await db(SHARED_DEPLOYS)
-    .where({ shared_deployment_id: sharedId, status: 'success' })
+    .where({ shared_deployment_id: shared.id, status: 'success' })
     .whereNot({ kind: 'observed' })
     .orderBy('id', 'desc')
     .first('plan')) as { plan: string | null } | undefined
-  if (!row) return null
+  if (!row) return { never: true, roles: preSplitRoles(size) }
+  let recorded: StackSpec['roles'] | null = null
   try {
     const stored = JSON.parse(String(row.plan ?? '')) as { plan?: { roles?: unknown } }
-    const roles = stored?.plan?.roles
-    if (Array.isArray(roles)) {
-      const names = roles
-        .map((r) => (r && typeof r === 'object' ? (r as { role?: unknown }).role : null))
-        .filter((r): r is string => typeof r === 'string')
-      if (names.length) return names
-    }
+    recorded = recordedSharedRoles(stored?.plan?.roles)
   } catch {
     /* an unreadable plan: a run before the split */
   }
-  return ['all']
+  return { never: false, roles: recorded ?? preSplitRoles(size) }
 }
 
 /** Runs `fn` over `items`, at most `n` at once, in order of the answers. */
@@ -594,6 +605,29 @@ export async function gatherSharedUpgrade(
   const hubWarn = deps.hubUrlWarning()
   if (hubWarn) warnings.push({ code: 'HUB_URL_PROBLEM', text: hubWarn })
 
+  // Task 14: the services the run deploys, and what changes against what the stack runs now. An
+  // upgrade takes the deployment's size; a re-apply (roleShape `deployed`) keeps what runs.
+  const deployed = shared.mode === 'docker' ? await deployedSharedRoles(shared) : null
+  const toDeploy =
+    deps.roleShape === 'deployed' && deployed ? deployed.roles : sharedRoles(settings.size)
+  const roles = toDeploy.map((r) => ({ role: r.role, replicas: r.replicas }))
+  const roles_from = deployed && !deployed.never ? deployed.roles.map((r) => r.role) : null
+  if (roles_from) {
+    const to = roles.map((r) => r.role)
+    const added = to.filter((r) => !roles_from.includes(r))
+    const removed = roles_from.filter((r) => !to.includes(r))
+    if (added.length || removed.length)
+      warnings.push({
+        code: 'ROLES_CHANGE',
+        text: `The stack's services change (size ${settings.size}): ${[
+          added.length ? `adds ${added.join(', ')}` : '',
+          removed.length ? `removes ${removed.join(', ')}` : ''
+        ]
+          .filter(Boolean)
+          .join('; ')}. The agent creates the new services before it removes the old ones.`
+      })
+  }
+
   // A dry render over masked values: routing and settings make a spec the agent takes.
   if (shared.mode === 'docker' && hubUrl) {
     try {
@@ -616,7 +650,8 @@ export async function gatherSharedUpgrade(
         image: image ?? `${hubImage()}@${DRY}`,
         extensions,
         hubPublicUrl: hubUrl,
-        explicitHosts: hostnames
+        explicitHosts: hostnames,
+        roles: toDeploy
       })
     } catch (err) {
       if (!(err instanceof SharedRenderError)) throw err
@@ -710,24 +745,6 @@ export async function gatherSharedUpgrade(
       code: 'ROLLBACK_SCHEMA_AHEAD',
       text: `Apps that ${from_version} already migrated keep its newer database schema under ${version}; an older version may not read data a newer one wrote.`
     })
-  // Task 14: the services the run deploys, and what changes against the last run that applied.
-  const roles = sharedRoles(settings.size).map((r) => ({ role: r.role, replicas: r.replicas }))
-  const roles_from = shared.mode === 'docker' ? await deployedRoles(shared.id) : null
-  if (roles_from) {
-    const to = roles.map((r) => r.role)
-    const added = to.filter((r) => !roles_from.includes(r))
-    const removed = roles_from.filter((r) => !to.includes(r))
-    if (added.length || removed.length)
-      warnings.push({
-        code: 'ROLES_CHANGE',
-        text: `The stack's services change (size ${settings.size}): ${[
-          added.length ? `adds ${added.join(', ')}` : '',
-          removed.length ? `removes ${removed.join(', ')}` : ''
-        ]
-          .filter(Boolean)
-          .join('; ')}. The agent creates the new services before it removes the old ones.`
-      })
-  }
   const stack = shared.stack && STACK_NAME_RE.test(shared.stack) ? shared.stack : null
   const plan_hash = hashOf({
     shared: shared.id,
@@ -766,7 +783,10 @@ export async function gatherSharedUpgrade(
     roles_from,
     downgrade
   }
-  return { plan, facts: { shared, driver, health, edge, image, extensions, hostnames, rows } }
+  return {
+    plan,
+    facts: { shared, driver, health, edge, image, extensions, hostnames, rows, roles: toDeploy }
+  }
 }
 
 export async function planSharedUpgrade(

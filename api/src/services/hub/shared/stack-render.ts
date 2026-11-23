@@ -84,25 +84,76 @@ export const SHARED_HUB_ENV_KEYS: readonly string[] = [
 const SHARED_CPUS = 2
 const SHARED_MEMORY_MB = 4096
 
+type SharedRole = StackSpec['roles'][number]
+
+/** The roles a shared stack may run and each one's limits and role env (replicas aside). */
+const SHARED_ROLE_SHAPE: Partial<
+  Record<SharedRole['role'], Omit<SharedRole, 'role' | 'replicas'>>
+> = {
+  all: {},
+  // CRON_TICKS=off: the worker is the only process that ticks crons; the importer ticks none
+  // by its role (services/cron-ticks.ts).
+  web: { env: { CRON_TICKS: 'off' } },
+  worker: {},
+  importer: {}
+}
+
+/** One role of a shared stack: 2 CPUs and 4 GB per replica, plus its role env. A fresh object. */
+function sharedRole(role: SharedRole['role'], replicas: number): SharedRole {
+  const shape = SHARED_ROLE_SHAPE[role] ?? {}
+  const out: SharedRole = { role, replicas, cpus: SHARED_CPUS, memory_mb: SHARED_MEMORY_MB }
+  if (shape.env) out.env = { ...shape.env }
+  return out
+}
+
 /**
  * THE list of roles a shared stack runs, per size (Task 14). Replicas and CPUs mirror the
  * dedicated template (docker/templates.ts); memory is the shared per-replica 4 GB. A role added
- * later (the exporter) goes here and nowhere else.
+ * later (the exporter) goes here and in SHARED_ROLE_SHAPE, nowhere else.
  *  - small: one `all` process — exactly the stack before the split (its spec hash is pinned).
  *  - medium: web ×2, worker ×1, importer ×1.
  *  - large: web ×3, worker ×1, importer ×1. (A dedicated large stack also runs `realtime` ×2 with
  *    web SOCKETS=off; a shared one cannot yet — see the header.)
- * `web` says CRON_TICKS=off so the worker is the only process that ticks crons; the importer
- * ticks none by its role (services/cron-ticks.ts). A fresh copy on every call.
+ * Only an upgrade moves a deployment to this shape (its plan says ROLES_CHANGE); a re-apply keeps
+ * the shape the deployment runs (deployedSharedRoles in upgrade-plan.ts). A fresh copy per call.
  */
 export function sharedRoles(size: StackSize): StackSpec['roles'] {
-  const limits = { cpus: SHARED_CPUS, memory_mb: SHARED_MEMORY_MB }
-  if (size === 'small') return [{ role: 'all', replicas: 1, ...limits }]
+  if (size === 'small') return [sharedRole('all', 1)]
   return [
-    { role: 'web', replicas: size === 'large' ? 3 : 2, ...limits, env: { CRON_TICKS: 'off' } },
-    { role: 'worker', replicas: 1, ...limits },
-    { role: 'importer', replicas: 1, ...limits }
+    sharedRole('web', size === 'large' ? 3 : 2),
+    sharedRole('worker', 1),
+    sharedRole('importer', 1)
   ]
+}
+
+/** The shape every shared stack ran before the split: one `all` service, 1 / 2 / 3 by size. */
+export function preSplitRoles(size: StackSize): StackSpec['roles'] {
+  return [sharedRole('all', size === 'large' ? 3 : size === 'medium' ? 2 : 1)]
+}
+
+/**
+ * The roles a run recorded (`[{role, replicas}]` in its stored plan), rebuilt with each role's
+ * limits and env; null when nothing readable is recorded (a run before the split) or a role is
+ * not one a shared stack runs.
+ */
+export function recordedSharedRoles(raw: unknown): StackSpec['roles'] | null {
+  if (!Array.isArray(raw) || raw.length === 0) return null
+  const out: StackSpec['roles'] = []
+  for (const r of raw) {
+    const role = (r as { role?: unknown } | null)?.role
+    const replicas = (r as { replicas?: unknown } | null)?.replicas
+    if (typeof role !== 'string' || !Object.hasOwn(SHARED_ROLE_SHAPE, role)) return null
+    if (
+      typeof replicas !== 'number' ||
+      !Number.isInteger(replicas) ||
+      replicas < 0 ||
+      replicas > 10
+    )
+      return null
+    if (out.some((x) => x.role === role)) return null
+    out.push(sharedRole(role as SharedRole['role'], replicas))
+  }
+  return out
 }
 
 /** The environment label of a shared stack (the agent's owner rule allows it). */
@@ -185,6 +236,8 @@ export interface RenderSharedInput {
   hubPublicUrl: string
   /** Names placed here that the pattern does not cover (explicitHostsFor). */
   explicitHosts: string[]
+  /** The roles to run; absent = sharedRoles(size). A re-apply passes the shape the stack runs. */
+  roles?: StackSpec['roles']
 }
 
 /** The http(s) origin of an address; '' when it is not one. */
@@ -306,7 +359,7 @@ export function renderSharedSpec(input: RenderSharedInput): StackSpec {
     owner: { shared: shared.key },
     environment: SHARED_STACK_ENVIRONMENT,
     image: input.image,
-    roles: sharedRoles(settings.size),
+    roles: input.roles ? structuredClone(input.roles) : sharedRoles(settings.size),
     env,
     secrets,
     hostnames,

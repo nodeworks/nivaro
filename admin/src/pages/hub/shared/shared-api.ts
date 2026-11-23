@@ -393,11 +393,16 @@ export const WARNING_COPY: Record<string, { title: string; hint?: string }> = {
   REDIS_URL_NOT_APPLIED: {
     title: 'The stored Redis address is not in use yet',
     hint: 'The stack has not been applied with it yet. Upgrade the deployment at the version it runs to apply it.'
+  },
+  ROLES_CHANGE: {
+    title: "This upgrade changes the deployment's services",
+    hint: 'The new services start before the old ones are removed. Every app on the deployment restarts.'
   }
 }
 
-/** Warnings whose own text is a list of names the copy cannot hold (extensions, dropped apps). */
-const NAMED_DETAIL = new Set(['EXTENSIONS_DIFFER', 'APPS_DROPPED'])
+/** Warnings whose own text is a list of names the copy cannot hold (extensions, dropped apps,
+ *  the services an upgrade adds and removes). */
+const NAMED_DETAIL = new Set(['EXTENSIONS_DIFFER', 'APPS_DROPPED', 'ROLES_CHANGE'])
 
 /**
  * The warning's own sentence to show under its plain title, or null (design R2-S2: said once).
