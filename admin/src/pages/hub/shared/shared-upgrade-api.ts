@@ -295,6 +295,14 @@ export function stepStates(d: Pick<SharedDeploy, 'status' | 'step'>): StepState[
 
 /** Why an upgrade cannot start, per code (plan-wide and per app). */
 export const UPGRADE_COPY: Record<string, { title: string; hint?: string }> = {
+  MOVE_OPEN: {
+    title: 'A move into or out of this deployment is open',
+    hint: 'Resume it or roll it back first (Move… on that environment), then plan again.'
+  },
+  EXTENSION_MISSING: {
+    title: 'The app uses an extension this deployment does not load',
+    hint: "Add it to the deployment's extensions (Edit), then plan again."
+  },
   SHARED_NOT_HUB_DEPLOYED: {
     title: 'The Hub does not run this deployment',
     hint: 'It runs elsewhere; it is upgraded by whoever runs it. The Hub records the version it sees.'
@@ -366,7 +374,7 @@ export const UPGRADE_COPY: Record<string, { title: string; hint?: string }> = {
   },
   PATTERN_NOT_ALLOWED: {
     title: 'The agent does not allow this host pattern',
-    hint: "Use a pattern under the agent's host suffixes, or change them on the agent."
+    hint: "Use a pattern under the agent's host suffixes, or change them on the agent. An agent set for Traefik v2 cannot route a host pattern: set it to Traefik v3, or route explicit names instead."
   },
   HOSTNAME_NOT_ALLOWED: {
     title: 'The agent does not allow one of the app names',
@@ -405,6 +413,10 @@ export const UPGRADE_COPY: Record<string, { title: string; hint?: string }> = {
     hint: 'A start must carry the plan you checked. Read the plan again, then start.'
   },
   BAD_KIND: { title: 'Pick upgrade or roll back' },
+  BAD_DOWNGRADE: {
+    title: 'The downgrade confirmation was not understood',
+    hint: 'Reload the page and confirm the downgrade again.'
+  },
   BAD_OVERRIDES: {
     title: 'An override is not one the plan offers',
     hint: 'Read the plan again and tick only what it offers.'

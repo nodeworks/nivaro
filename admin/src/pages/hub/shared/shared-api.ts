@@ -1,5 +1,5 @@
 import type { ErrorDescription } from '@nivaro/shared'
-import { errorToastOptions } from '@nivaro/shared'
+import { errorToastOptions, isRawErrorText } from '@nivaro/shared'
 import type { DataTag } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
@@ -382,14 +382,40 @@ export const WARNING_COPY: Record<string, { title: string; hint?: string }> = {
     title: 'The deployment left some apps out of its list',
     hint: 'It refused their entries (see each app below). Fix the app, then refresh.'
   },
+  TOKEN_NOT_APPLIED: {
+    title: 'The new token is not in use yet',
+    hint: 'The stack still runs with the old token, which stops working 24 hours after the rotation; the deployment then loses its app list and its link. Upgrade the deployment at the version it runs to apply it.'
+  },
+  ROLLBACK_SCHEMA_AHEAD: {
+    title: 'A rollback keeps the newer database schema',
+    hint: 'Apps the newer version already migrated keep its schema; an older version may not read data a newer one wrote.'
+  },
   REDIS_URL_NOT_APPLIED: {
     title: 'The stored Redis address is not in use yet',
-    hint: 'The stack has not been applied with it. Upgrade the deployment (to the version it runs, to apply it again) so it uses that Redis.'
+    hint: 'The stack has not been applied with it yet. Upgrade the deployment at the version it runs to apply it.'
   }
+}
+
+/** Warnings whose own text is a list of names the copy cannot hold (extensions, dropped apps). */
+const NAMED_DETAIL = new Set(['EXTENSIONS_DIFFER', 'APPS_DROPPED'])
+
+/**
+ * The warning's own sentence to show under its plain title, or null (design R2-S2: said once).
+ * A code with copy and a hint shows the hint, not the server's restatement of it; only a warning
+ * that names things keeps its text. A code without copy uses its text as the title instead.
+ */
+export function warningDetail(n: SharedNote): string | null {
+  const c = WARNING_COPY[n.code]
+  if (!c || !n.text || isRawErrorText(n.text)) return null
+  return NAMED_DETAIL.has(n.code) || !c.hint ? n.text : null
 }
 
 /** Refusals of the shared deployment routes, in plain words. Wins over the Hub's general copy. */
 export const SHARED_COPY: Record<string, { title: string; hint?: string }> = {
+  EXTENSION_IN_USE: {
+    title: 'An app on this deployment still uses that extension',
+    hint: 'Keep it in the list, or move that app off the deployment first.'
+  },
   SECRETS_CHANGED: {
     title: "The deployment's secrets changed at the same moment",
     hint: 'Nothing was saved. Save again.'
@@ -421,7 +447,10 @@ export const SHARED_COPY: Record<string, { title: string; hint?: string }> = {
     title: 'The stack name is not valid',
     hint: '2–41 lower-case letters, digits and hyphens, starting with a letter.'
   },
-  BAD_VERSION: { title: 'The version is not valid', hint: 'A version or image tag (no spaces).' },
+  BAD_VERSION: {
+    title: 'The version is not valid',
+    hint: 'A version or image tag (no spaces). A Docker deployment takes no version here: create it, then upgrade it.'
+  },
   BAD_SETTINGS: { title: 'The settings are too large' },
   DRIVER_NOT_DOCKER: {
     title: 'Pick a Docker driver',

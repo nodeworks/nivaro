@@ -276,7 +276,7 @@ export const deploymentModesDocs: DocSection = {
     },
     {
       type: 'p',
-      text: "Maintenance is per app: an app admin turns their own maintenance banner or page on and off with their own settings, and the cached answer is kept per tenant. The operator can still freeze the whole deployment (the `nvr:maintenance` flag). On a multi-tenant process an app admin's End maintenance only ends their app's own setting; it never deletes the operator's deployment-wide freeze."
+      text: "Maintenance is per app: an app admin turns their own maintenance banner or page on and off with their own settings, and the cached answer is kept per tenant. The operator can still freeze the whole deployment with the Redis key `<REDIS_CHANNEL_PREFIX>nvr:maintenance` (just `nvr:maintenance` when the deployment sets no prefix). On a multi-tenant process an app admin's End maintenance only ends their app's own setting; it never deletes the operator's deployment-wide freeze."
     },
     { type: 'h2', id: 'deployment-modes-not-yet', text: 'Not yet on shared deployments' },
     {

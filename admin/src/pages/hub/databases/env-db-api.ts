@@ -28,6 +28,10 @@ export const ENV_DB_COPY: Record<string, { title: string; hint?: string }> = {
     title: 'The Hub could not ask the app which database it uses',
     hint: 'Make sure the environment is linked to the Hub and running, then try again.'
   },
+  DATABASE_IDENTITY_DIFFERS: {
+    title: 'The Hub reads another database than the app reports',
+    hint: 'This environment runs on a Docker stack, and its next deploy would point the app at this record. If it is the same database under another address, attach it anyway; otherwise attach the record of the database the app really uses.'
+  },
   DATABASE_UNREACHABLE: {
     title: 'The Hub could not use this database',
     hint: 'See the check below; fix the connection on this page, then try again.'
@@ -95,12 +99,23 @@ export interface EnvDbAttached {
   check: DbCheck | null
   changed: boolean
   warning: string | null
+  /** Attached although the identity differed on a Docker stack (an administrator said so). */
+  overridden?: boolean
 }
 
-export const attachEnvDatabase = (envId: number, databaseId: number) =>
+/**
+ * `override: true` only after DATABASE_IDENTITY_DIFFERS, when the administrator says it is the
+ * same database under another address (the Hub logs it); a plain attach never sends it.
+ */
+export const attachEnvDatabase = (
+  envId: number,
+  databaseId: number,
+  opts: { override?: boolean } = {}
+) =>
   api
     .put<{ data: EnvDbAttached }>(`/hub/environments/${envId}/database`, {
-      database_id: databaseId
+      database_id: databaseId,
+      ...(opts.override ? { override: true } : {})
     })
     .then((r) => r.data.data)
     .catch(failure('Could not attach the database'))

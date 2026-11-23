@@ -1,7 +1,7 @@
 import { KeyRound } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { formatDateTime } from '@/lib/utils'
-import { CopyButton } from '../hub-parts'
+import { CopyButton, NO_RECORD_ATTRS, NO_RECORD_CLASS } from '../hub-parts'
 import { reapplyWords, type SharedRotated } from './shared-api'
 
 /**
@@ -27,7 +27,9 @@ export function SharedTokenReveal({
   return (
     <section
       aria-label='New deployment token'
-      className='space-y-3 rounded-lg border border-amber-200 bg-amber-50 p-3 sm:p-4 dark:border-amber-900/60 dark:bg-amber-950/30'
+      // Never recorded: replay and screenshots get a blank box in its place (final review I-1).
+      {...NO_RECORD_ATTRS}
+      className={`${NO_RECORD_CLASS} space-y-3 rounded-lg border border-amber-200 bg-amber-50 p-3 sm:p-4 dark:border-amber-900/60 dark:bg-amber-950/30`}
     >
       <div className='flex items-start gap-2'>
         <KeyRound

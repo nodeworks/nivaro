@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { cn } from '@/lib/utils'
 import { hubError } from '../hub-api'
-import { Field, ghostButton, SecretInput } from '../hub-parts'
+import { Field, ghostButton, NO_RECORD_ATTRS, NO_RECORD_CLASS, SecretInput } from '../hub-parts'
 import {
   type DnsMode,
   type DockerDraft,
@@ -176,7 +176,9 @@ export function DockerDriverFields({
         {fresh && (
           <div
             role='status'
-            className='mt-2 space-y-1.5 rounded-md border border-amber-300 bg-amber-50 p-3 dark:border-amber-500/40 dark:bg-amber-950/30'
+            // Never recorded: replay and screenshots get a blank box in its place.
+            {...NO_RECORD_ATTRS}
+            className={`${NO_RECORD_CLASS} mt-2 space-y-1.5 rounded-md border border-amber-300 bg-amber-50 p-3 dark:border-amber-500/40 dark:bg-amber-950/30`}
           >
             <p className='m-0 text-[12px] font-medium text-amber-900 dark:text-amber-200'>
               {TOKEN_ONCE_LINE}

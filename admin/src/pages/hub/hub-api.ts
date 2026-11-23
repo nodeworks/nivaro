@@ -1,4 +1,9 @@
-import { describeError, type ErrorDescription, errorToastOptions } from '@nivaro/shared'
+import {
+  describeError,
+  type ErrorDescription,
+  errorToastOptions,
+  isRawErrorText
+} from '@nivaro/shared'
 import { type DataTag, useQuery } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
@@ -385,6 +390,22 @@ export function hubError(
   const out: ErrorDescription = { ...d, title: copy.title }
   if (copy.hint) out.hint = copy.hint
   else delete out.hint
+  const body = (err as { response?: { data?: { error?: unknown; fields?: unknown } } })?.response
+    ?.data
+  // An open move: the server's sentence names it (app/env and move id) — said before what to do.
+  if (d.code === 'MOVE_OPEN' && typeof body?.error === 'string' && !isRawErrorText(body.error))
+    out.hint = `${body.error.trim()} Open Move… on that environment in the Apps hub to follow it.`
+  // A refused spec: each refused field in words (the agent's codes never reach the page).
+  if (d.code === 'SPEC_INVALID' && Array.isArray(body?.fields)) {
+    const words = [
+      ...new Set(
+        body.fields
+          .map((f) => AGENT_FIELD_COPY[(f as { code?: string })?.code ?? ''])
+          .filter((w): w is string => !!w)
+      )
+    ]
+    if (words.length) out.hint = words.join(' ')
+  }
   // A refused edit names the field it refused (STACK_RUNNING carries `field`).
   const field = (err as { response?: { data?: { field?: unknown } } })?.response?.data?.field
   if (d.code === 'STACK_RUNNING' && typeof field === 'string') {
@@ -815,7 +836,7 @@ Object.assign(BLOCKER_COPY, {
   },
   NOT_DEPLOYED: {
     title: 'The stack is not deployed yet',
-    hint: 'Deploy a version first.'
+    hint: 'Deploy a version first (a shared deployment: upgrade it to a version), then try again.'
   },
   SPEC_MISMATCH: {
     title: 'The stack does not run what the Hub has on record',
@@ -1043,8 +1064,59 @@ Object.assign(BLOCKER_COPY, {
   PLACEMENT_CHANGED: {
     title: "The environment's placement changed meanwhile",
     hint: 'Nothing was changed. Reload, check where it runs now, then try again.'
+  },
+  // Final fix wave: an open (or interrupted) move holds what it relies on.
+  MOVE_OPEN: {
+    title: 'A move of this environment is open',
+    hint: 'Resume it or roll it back first: open Move… on that environment in the Apps hub.'
+  },
+  ENVIRONMENT_BUSY: {
+    title: 'Another action holds this environment',
+    hint: 'Try again in a moment.'
+  },
+  // FW-1 E-1: the Hub agent checks the stack spec field by field (AGENT_FIELD_COPY).
+  SPEC_INVALID: {
+    title: 'The Hub agent refused the stack spec',
+    hint: 'Fix the stack settings or the agent setup it names, then try again.'
+  },
+  // Final fix wave: place on a Docker shared deployment, and an environment that may still serve.
+  NAME_NOT_ROUTED: {
+    title: "The shared deployment's stack does not route this name",
+    hint: "Use a name under the deployment's host pattern, or set a pattern that covers it, then place it again."
+  },
+  SERVING_UNKNOWN: {
+    title: 'The Hub cannot tell whether this environment still runs',
+    hint: 'If it runs, move it instead. If it is gone for good, clear its hub token, then place it again.'
   }
 } satisfies Record<string, { title: string; hint?: string }>)
+
+/**
+ * The Hub agent's spec refusals (packages/hub-agent spec.ts FieldCode), one sentence each: what
+ * the agent refused and what to change. A guard test keeps this in step with the agent.
+ */
+export const AGENT_FIELD_COPY: Record<string, string> = {
+  UNKNOWN_FIELD: 'The stack spec carries a field this agent does not know: update the agent.',
+  REQUIRED: 'A required part of the stack spec is missing.',
+  BAD_KEY: 'An app, shared deployment or environment key is not one the agent accepts.',
+  IMAGE_NOT_ALLOWED: "An image is not on the agent's allow-list.",
+  IMAGE_NOT_PINNED: 'An image is not pinned by digest.',
+  ENV_FORBIDDEN: 'A stack setting is one the agent never passes into an app.',
+  ENV_NOT_ALLOWED: "A stack setting is not on the agent's allow-list.",
+  ROLE_BAD: 'A process role is not one the agent knows.',
+  REPLICAS_BAD: 'A replica count is out of range.',
+  LIMIT_BAD: 'A memory or CPU limit is out of range.',
+  HOSTNAME_NOT_ALLOWED: "A name is not under the agent's host suffixes.",
+  TOO_MANY: 'The stack spec lists too many of something (names, settings or extensions).',
+  TOO_LONG: 'A value in the stack spec is too long.',
+  PORT_NOT_ALLOWED: "The published port is outside the agent's allowed range.",
+  REDIS_NOT_CONFIGURED: 'Bundled Redis is asked for, but the agent has no Redis image set.',
+  EXTENSION_ID_BAD: 'An extension id is not one the agent accepts.',
+  SETTING_INVALID: 'A stack setting has a value the agent cannot use.',
+  SHARED_KEY_MISMATCH: 'The stack belongs to another shared deployment.',
+  ROLE_NOT_SHARED: 'That process role cannot run on a shared deployment.',
+  ROLE_NEEDS_TRAEFIK_V3:
+    'A separate realtime role needs Traefik v3: set the agent to Traefik v3 (HUB_AGENT_TRAEFIK_VERSION=3), or run without a separate realtime role.'
+}
 
 /** A Hub deploy row's kind in words (history): `move` = "Moved", `shared` = "Shared upgrade". */
 export function deployKindWords(r: { kind: string; apply?: boolean }): string {
