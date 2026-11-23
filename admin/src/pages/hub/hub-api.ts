@@ -1050,6 +1050,7 @@ export function splitRunError(text: string): { code: string | null; sentence: st
 export const RUN_ERROR_COPY: Record<string, { title: string }> = {
   SWARM_ROLLED_BACK: { title: 'Swarm put the previous version back' },
   SWARM_UPDATE_PAUSED: { title: 'Swarm paused the update' },
+  SWARM_DEGRADED: { title: 'Swarm ran fewer copies of the new version than wanted' },
   VERSION_TIMEOUT: { title: 'The replicas did not reach the version in time' },
   SCHEMA_FAILED: { title: "An app's database could not be brought up to date" },
   SCHEMA_TIMEOUT: { title: "The apps' databases were not up to date in time" },
