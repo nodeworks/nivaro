@@ -1145,14 +1145,38 @@ describe('attach a database record to an environment (P6-32)', () => {
         })
       ).changed
     ).toBe(false)
-    // Another identity read by the Hub: attached, with a warning (never a refusal).
+    // Another identity read by the Hub on a Docker placement: refused (final fix wave FW-1,
+    // parked Wave B — the attached record wins over the stack's DB_* on the next apply) unless
+    // explicitly overridden, which the answer says so the route logs it.
     const f = await newEnv({ placement_id: await dockerPlacement('shop-attach-2') })
-    const other = await attachEnvDatabase(f.id, await newDb(), {
+    const differs = await newDb()
+    const refused = await err(
+      attachEnvDatabase(f.id, differs, {
+        lock: memoryPromoteLock,
+        readiness: reports(),
+        check: okCheck('pg|db.internal|5432|shop')
+      })
+    )
+    expect(refused).toMatchObject({ code: 'DATABASE_IDENTITY_DIFFERS', status: 409 })
+    expect(await ref(f.id)).toBeNull()
+    const other = await attachEnvDatabase(
+      f.id,
+      differs,
+      { lock: memoryPromoteLock, readiness: reports(), check: okCheck('pg|db.internal|5432|shop') },
+      { override: true }
+    )
+    expect(other.overridden).toBe(true)
+    expect(other.warning).toMatch(/another server name or address/)
+    expect(await ref(f.id)).toBe(`hub-db:${differs}`)
+    // No Docker placement: the same difference only warns (the move plan checks it again).
+    const g = await newEnv()
+    const plain = await attachEnvDatabase(g.id, await newDb(), {
       lock: memoryPromoteLock,
       readiness: reports(),
       check: okCheck('pg|db.internal|5432|shop')
     })
-    expect(other.warning).toMatch(/another server name or address/)
+    expect(plain).toMatchObject({ changed: true, overridden: false })
+    expect(plain.warning).toMatch(/another server name or address/)
   })
 
   it('refuses a record another environment uses, and the other checks', async () => {
