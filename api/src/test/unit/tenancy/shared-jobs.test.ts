@@ -188,6 +188,15 @@ describe('server.ts: per-app housekeeping on a shared deployment (P5-10)', () =>
     expect(guardsOf("app.cron.schedule('job-runs-prune'")).toEqual(['multiTenant', OUTER])
   })
 
+  it('the retention pass runs per app on shared (its job), inline self-hosted (its timer)', () => {
+    expect(CORE_CRON_SCOPES['retention-pass']).toBe('app')
+    expect(guardsOf("app.cron.schedule('retention-pass'")).toEqual(['perAppJobs()', OUTER])
+    // the self-hosted chain (the needle above) stays !multiTenant; the process part of the pass
+    // (help-video import sweep: process memory + work dir) gets its own daily timer on shared
+    expect(guardsOf('void runInBackgroundPool(runRetentionPurge)')).toEqual(['!multiTenant', OUTER])
+    expect(guardsOf('startStaleImportSweep(app.log)')).toEqual(['multiTenant', OUTER])
+  })
+
   it('the restart clean-ups run per app on shared, inline self-hosted', () => {
     expect(guardsOf('const cleanups = setTimeout(')).toEqual(['multiTenant', OUTER])
     expect(guardsOf("await import('./services/restart-cleanups.js')")).toEqual([

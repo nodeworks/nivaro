@@ -127,6 +127,7 @@ export const CORE_CRON_SCOPES: Record<string, CronScope> = {
   'report-studio-alerts': 'app',
   'report-studio-daily': 'app',
   'report-studio-weekly': 'app',
+  'retention-pass': 'app', // shared deployments only: self-hosted runs the pass from its boot chain
   'rollup-drift-sweep': 'app',
   'scheduled-broadcasts': 'app',
   'scheduled-changes-apply': 'app',

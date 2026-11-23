@@ -862,12 +862,6 @@ const SHARED: Record<string, string> = {
   'services/request-trace.ts :: traceFallbacks': DIAG,
   'services/request-trace.ts :: wideTables': DIAG,
   'services/requirement-writes.ts :: memo': WEAK,
-  'services/retention-schedule.ts :: lastResult':
-    'the per-process retention timer, started only when not multi-tenant (server.ts runRetentionPurge)',
-  'services/retention-schedule.ts :: lastRunAt':
-    'the per-process retention timer, started only when not multi-tenant (server.ts runRetentionPurge)',
-  'services/retention-schedule.ts :: nextRunAt':
-    'the per-process retention timer, started only when not multi-tenant (server.ts runRetentionPurge)',
   'services/row-schedules.ts :: publisher': CONN,
   'services/row-schedules.ts :: resyncers': REGISTRY,
   'services/run-long.ts :: touched': WEAK,
@@ -1047,8 +1041,7 @@ const SHARED: Record<string, string> = {
   'services/traffic-detectors.ts :: loadedAt': TELEMETRY,
   'services/traffic-detectors.ts :: loading': TELEMETRY,
   'services/traffic-detectors.ts :: timer': TELEMETRY,
-  'services/traffic-digest.ts :: cache': TELEMETRY,
-  'services/traffic-digest.ts :: registered': TELEMETRY,
+  'services/traffic-digest.ts :: registered': REGISTRY,
   'services/traffic-down-history.ts :: providers': TELEMETRY,
   'services/traffic-entity-history.ts :: OWN_DOWN_NODES': TELEMETRY,
   'services/traffic-geoip.ts :: builtAt': TELEMETRY,

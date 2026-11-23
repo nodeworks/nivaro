@@ -72,12 +72,11 @@ describe('batch C: cross-tenant lenses are off wherever one process serves many 
     }
   })
 
-  it('Traffic Map digest audience (T5): empty on cloud and shared without touching the database', async () => {
-    for (const m of ['cloud', 'shared'] as const) {
-      for (const k of KEYS) delete process.env[k]
-      use(m)
-      expect(await trafficDigestAudience()).toEqual([])
-    }
+  // A Hub shared deployment sends the digest per app (its own admins, its own request log):
+  // test/unit/services/shared-digests.test.ts.
+  it('Traffic Map digest audience: empty in Nivaro Cloud without touching the database', async () => {
+    use('cloud')
+    expect(await trafficDigestAudience()).toEqual([])
   })
 
   it('in-flight wait lookup (T3): not found on cloud and shared, before any redis read', async () => {

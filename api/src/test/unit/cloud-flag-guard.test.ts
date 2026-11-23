@@ -63,7 +63,13 @@ const EXTRA_CALLS: Record<string, { multiTenant?: number; nivaroCloud?: number }
   // the collection-import lease refuse in Nivaro Cloud only (their T4 entries are weight 0); a Hub
   // shared deployment queues, kicks, leases and drains inside each app.
   'services/import-handoff.ts': { nivaroCloud: 3 },
-  'routes/imports.ts': { nivaroCloud: 1 }
+  'routes/imports.ts': { nivaroCloud: 1 },
+  // Retention pass and digests per app: the Traffic Map digest and the Monday AI summary (audience
+  // + register-once) and the Log retention page's `cloud` field refuse in Nivaro Cloud only (their
+  // T5/T6 entries are weight 0); a Hub shared deployment runs each inside its apps.
+  'services/traffic-digest.ts': { nivaroCloud: 2 },
+  'services/ai-explain-weekly.ts': { nivaroCloud: 2 },
+  'services/log-retention.ts': { nivaroCloud: 1 }
 }
 
 type Rule = 'T1' | 'T2' | 'T3' | 'T4' | 'T5' | 'T6' | 'T7' | 'C1' | 'C2' | 'C3' | 'C4' | 'C5'

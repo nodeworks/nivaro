@@ -5,6 +5,7 @@ import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
 import { runInBackgroundPool } from '../db/pool-context.js'
 import { sqlDialect } from '../db/sql-dialect.js'
+import { withTenant } from '../db/tenant-context.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { hasChainColumns } from '../services/chain-columns.js'
 import { tenantSource } from '../services/deployment-mode.js'
@@ -20,6 +21,8 @@ import {
 import { instanceKey } from '../services/settings-overrides.js'
 import { requestTenantKey } from '../services/socket-tenant.js'
 import { accessLogEnabled, accessLogLine, noteAccessLine } from '../services/telemetry-store.js'
+import { getTenantRegistry } from '../services/tenancy/registry.js'
+import type { TenantRecord } from '../services/tenancy/types.js'
 import { tenantScopedRoom } from '../services/tenant-rooms.js'
 import { errorCode, hasCacheHit, noteRequest } from '../services/traffic-map.js'
 import { notePublicHit } from '../services/traffic-taps/public-clients.js'
@@ -242,7 +245,10 @@ export function shouldSkip(path: string, method: string): boolean {
 const INSTANCE = instanceKey().slice(0, 60)
 
 export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
-  let buffer: ApiLogRow[] = []
+  // One buffer per app ('' = no app: self-hosted, where it is the only one). On a shared
+  // deployment the flush may start from any app's request or from the timer, so each app's rows
+  // are written inside that app (its own nivaro_api_logs), never the context the flush runs in.
+  const buffers = new Map<string, ApiLogRow[]>()
   let flushing = false
 
   // The flush starts from a request's onResponse (or the timer), so left alone it
@@ -254,10 +260,41 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
   }
 
   async function flushNow(): Promise<void> {
-    if (flushing || buffer.length === 0) return
+    if (flushing || buffers.size === 0) return
     flushing = true
-    const rows = buffer
-    buffer = []
+    const batches = [...buffers]
+    buffers.clear()
+    try {
+      for (const [key, rows] of batches) {
+        if (rows.length === 0) continue
+        if (!key) {
+          await writeRows(rows)
+          continue
+        }
+        const t = await appOf(key)
+        // An app that has left the deployment: its database is gone from here, drop its rows.
+        if (!t) continue
+        await withTenant(t, () => writeRows(rows), t.origin)
+      }
+    } finally {
+      flushing = false
+    }
+  }
+
+  /** The app behind a buffer key as the registry lists it now (byId, else the active list). */
+  async function appOf(key: string): Promise<TenantRecord | null> {
+    try {
+      const registry = getTenantRegistry()
+      if (!registry) return null
+      const byId = registry.byId ? await registry.byId(key) : null
+      return byId ?? (await registry.listActive()).find((t) => t.id === key) ?? null
+    } catch {
+      return null
+    }
+  }
+
+  /** Insert one app's rows into nivaro_api_logs of the current context (and, now and then, prune). */
+  async function writeRows(rows: ApiLogRow[]): Promise<void> {
     try {
       // A tenant that has not run migration 351 has no chain columns —
       // drop both fields rather than fail the whole flush.
@@ -370,8 +407,6 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
       }
     } catch (err) {
       app.log.warn({ err }, 'Failed to flush API logs')
-    } finally {
-      flushing = false
     }
   }
 
@@ -503,7 +538,13 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
       request_id: req.requestId ?? null,
       ...mcpLogColumns(mcp)
     }
-    buffer.push(row)
+    const key = requestTenantKey(req)
+    let bucket = buffers.get(key)
+    if (!bucket) {
+      bucket = []
+      buffers.set(key, bucket)
+    }
+    bucket.push(row)
     // #2544 — the same request as one structured line for the long-history telemetry store
     // (the request log above prunes at 14 days). Ids, route, status and timing only.
     if (accessLogEnabled()) {
@@ -538,7 +579,7 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
       })
     }
 
-    if (buffer.length >= FLUSH_THRESHOLD) void flush()
+    if (bucket.length >= FLUSH_THRESHOLD) void flush()
   })
 
   app.addHook('onClose', async () => {

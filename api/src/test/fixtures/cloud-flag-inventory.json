@@ -1352,12 +1352,12 @@
       "line": 210,
       "text": "if (process.env.CLOUD_META_DB_URL) return []",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T6",
-      "why": "weekly AI summary audience read from the static DB by the digest job",
+      "why": "weekly AI summary audience runs per app on a shared deployment (daily-digest fan-out); Nivaro Cloud still sends none (isNivaroCloud)",
       "batch": "E",
-      "phase6": "digest audience per app (daily-digest job fan-out)"
+      "phase6": "done: per app on a shared deployment"
     },
     {
       "id": "services/ai-explain-weekly.ts:255",
@@ -1365,12 +1365,12 @@
       "line": 255,
       "text": "if (registered || process.env.CLOUD_META_DB_URL) return",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T6",
-      "why": "weekly AI summary audience read from the static DB by the digest job",
+      "why": "weekly AI summary registers on a shared deployment (its audience and section run per app); Nivaro Cloud still never registers (isNivaroCloud)",
       "batch": "E",
-      "phase6": "digest audience per app (daily-digest job fan-out)"
+      "phase6": "done: per app on a shared deployment"
     },
     {
       "id": "services/ai-quality.ts:663",
@@ -2178,12 +2178,12 @@
       "line": 553,
       "text": "return { entries, retention_pass: pass, cloud: !!process.env.CLOUD_META_DB_URL }",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T6",
-      "why": "wire field `cloud`: the retention pass does not run in this process",
+      "why": "wire field `cloud`: the retention pass never runs here, Nivaro Cloud only (isNivaroCloud); a Hub shared deployment runs it per app (the retention-pass job)",
       "batch": "C",
-      "phase6": "per-app retention pass (job fan-out) and shared-deployment wording"
+      "phase6": "done: per app on a shared deployment"
     },
     {
       "id": "services/mail-retry-state.ts:18",
@@ -3147,11 +3147,12 @@
       "line": 177,
       "text": "if (process.env.CLOUD_META_DB_URL) return []",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T5",
-      "why": "Traffic Map digest is an operator report across tenants",
-      "batch": "C"
+      "why": "Traffic Map digest audience is per app on a shared deployment (that app's admins, its own request log); Nivaro Cloud still sends none (isNivaroCloud)",
+      "batch": "C",
+      "phase6": "done: per app on a shared deployment"
     },
     {
       "id": "services/traffic-digest.ts:191",
@@ -3159,11 +3160,12 @@
       "line": 191,
       "text": "if (registered || process.env.CLOUD_META_DB_URL) return",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T5",
-      "why": "Traffic Map digest is an operator report across tenants",
-      "batch": "C"
+      "why": "Traffic Map digest registers on a shared deployment (audience and section run per app); Nivaro Cloud still never registers (isNivaroCloud)",
+      "batch": "C",
+      "phase6": "done: per app on a shared deployment"
     },
     {
       "id": "services/traffic-entity-history.ts:154",
