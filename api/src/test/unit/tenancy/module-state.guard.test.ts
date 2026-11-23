@@ -967,6 +967,10 @@ const SHARED: Record<string, string> = {
   'services/tenancy/app-migrations.ts :: lastRequestNudge':
     'Task 8: process throttle of request-driven re-checks',
   'services/tenancy/app-migrations.ts :: loop': 'Task 8: the process re-check loop over every app',
+  'services/tenancy/app-migrations.ts :: passAgain':
+    'final review M2: the process loop asked for one more pass over every app (no app data)',
+  'services/tenancy/app-migrations.ts :: passRunning':
+    'final review M2: the process loop over every app is running a pass (no app data)',
   'services/tenancy/app-migrations.ts :: newestMigration':
     'the newest migration file in this image',
   'services/tenancy/app-migrations.ts :: nowFn': FN_SLOT,

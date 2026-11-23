@@ -5,6 +5,7 @@ import { parseDbUrl } from '../../db/connection-url.js'
 import type { runMigrationsOn } from '../../db/index.js'
 import { getTenantDb, getTenantId, runWithoutTenant, withTenant } from '../../db/tenant-context.js'
 import { NIVARO_VERSION } from '../../version.js'
+import { forgetAppState } from '../app-state.js'
 import { hubSharedConfig, tenantSource } from '../deployment-mode.js'
 import type { runSchemaSteps } from '../extension-schema-steps.js'
 import { scrubDbError } from '../hub/db/connection.js'
@@ -243,9 +244,14 @@ async function defaultSchemaCurrent(t: TenantRecord): Promise<boolean | null> {
   }
 }
 
-/** One ledger check for an app (none while another is running for it). */
-async function checkCurrent(t: TenantRecord, deps: AppSchemaDeps): Promise<boolean | null> {
-  if (verifying.has(t.id)) return null
+/** One ledger check for an app: true / false, null when it could not be read. `undefined` when
+ *  another check is reading this app's ledger right now — not decided, and never taken as "could
+ *  not be read" (final review M2: an overlapping pass adopted such an app without the I-3 check). */
+async function checkCurrent(
+  t: TenantRecord,
+  deps: AppSchemaDeps
+): Promise<boolean | null | undefined> {
+  if (verifying.has(t.id)) return undefined
   verifying.add(t.id)
   try {
     return await (deps.schemaCurrent ?? defaultSchemaCurrent)(t)
@@ -351,9 +357,22 @@ async function runEnsure(t: TenantRecord, deps: AppSchemaDeps): Promise<AppSchem
  * for those started here. An app needs it when its state at this version is not `ok` for its
  * current database and its status is active, maintenance or provisioning.
  */
-export async function appMigrationPass(
+export function appMigrationPass(
   registry: TenantRegistry,
   deps: AppSchemaDeps & { concurrency?: number } = {}
+): Promise<void> {
+  return migrationPass(registry, deps, { loop: false })
+}
+
+/** The loop's pass waits at most this long for its ledger checks; one still running then (an
+ *  unreachable database, held up to the pool's acquire timeout) finishes on its own and records its
+ *  verdict, while the next pass may start. */
+const LOOP_CHECK_WAIT_MS = 10_000
+
+async function migrationPass(
+  registry: TenantRegistry,
+  deps: AppSchemaDeps & { concurrency?: number },
+  mode: { loop: boolean }
 ): Promise<void> {
   const list = await (registry.listAll ? registry.listAll() : registry.listActive())
   const listed = new Set(list.map((t) => t.id))
@@ -361,6 +380,15 @@ export async function appMigrationPass(
   const now = nowFn()
   const due: TenantRecord[] = []
   const toVerify: Array<{ t: TenantRecord; conn: string }> = []
+  /** Stored `ok` states to adopt once the app's ledger says the database is migrated (I-3):
+   *  `fresh` = no usable state here (adopt, else migrate again); `waiting` = waiting out a
+   *  failure or a busy lock (adopt, else keep waiting). */
+  const toAdopt: Array<{
+    t: TenantRecord
+    conn: string
+    stored: StoredState
+    kind: 'fresh' | 'waiting'
+  }> = []
   for (const t of list) {
     if (!MIGRATED_STATUSES.has(t.status) || inFlight.has(t.id)) continue
     const conn = connFingerprint(t)
@@ -381,12 +409,8 @@ export async function appMigrationPass(
       if (now < e.nextTry) {
         // waiting out a failure or a busy lock; another replica may have finished meanwhile
         const stored = await readStored(t.id)
-        if (
-          stored?.state === 'ok' &&
-          stored.conn === conn &&
-          (await checkCurrent(t, deps)) !== false
-        )
-          adopt(t.id, stored, conn)
+        if (stored?.state === 'ok' && stored.conn === conn)
+          toAdopt.push({ t, conn, stored, kind: 'waiting' })
         continue
       }
     }
@@ -394,13 +418,9 @@ export async function appMigrationPass(
     if (stored?.conn === conn && stored.version === NIVARO_VERSION) {
       if (stored.state === 'ok') {
         // Adopt another replica's (or an earlier process's) run only if this database still
-        // holds the newest migration; a replaced database is migrated again (I-3).
-        if ((await checkCurrent(t, deps)) !== false) {
-          adopt(t.id, stored, conn)
-          continue
-        }
-        await dropOk(t.id, conn)
-        due.push(t)
+        // holds the newest migration; a replaced database is migrated again (I-3). Checked below
+        // with the others, a few at a time.
+        toAdopt.push({ t, conn, stored, kind: 'fresh' })
         continue
       }
       const at = typeof stored.at === 'string' ? Date.parse(stored.at) : Number.NaN
@@ -424,21 +444,47 @@ export async function appMigrationPass(
     }
     due.push(t)
   }
-  // The 5-minute ledger checks: APP_SCHEMA_VERIFY_CONCURRENCY lanes, so one unreachable app
-  // database (held up to the pool's acquire timeout) never holds every other check.
-  let next = 0
-  const lane = async () => {
-    while (next < toVerify.length) {
-      const { t, conn } = toVerify[next++]
+  // The ledger checks (adoptions first, then the 5-minute checks of `ok` apps):
+  // APP_SCHEMA_VERIFY_CONCURRENCY lanes, so one unreachable app database (held up to the pool's
+  // acquire timeout) never holds every other app — at "getting ready" after a restart, or behind
+  // its 5-minute check (final review M2).
+  const checks: Array<() => Promise<void>> = [
+    ...toAdopt.map(({ t, conn, stored, kind }) => async () => {
+      const current = await checkCurrent(t, deps)
+      if (current === undefined) return // another check is reading it: decided there
+      if (current !== false) {
+        adopt(t.id, stored, conn)
+        return
+      }
+      if (kind === 'waiting') return
+      await dropOk(t.id, conn)
+      due.push(t)
+    }),
+    ...toVerify.map(({ t, conn }) => async () => {
       if ((await checkCurrent(t, deps)) === false) {
         await dropOk(t.id, conn)
         due.push(t)
       }
-    }
+    })
+  ]
+  let next = 0
+  const lane = async () => {
+    while (next < checks.length) await checks[next++]()
   }
-  await Promise.all(
-    Array.from({ length: Math.min(APP_SCHEMA_VERIFY_CONCURRENCY, toVerify.length) }, lane)
+  const lanes = Promise.all(
+    Array.from({ length: Math.min(APP_SCHEMA_VERIFY_CONCURRENCY, checks.length) }, lane)
   )
+  if (mode.loop) {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    await Promise.race([
+      lanes,
+      new Promise<void>((r) => {
+        timer = setTimeout(r, LOOP_CHECK_WAIT_MS)
+        timer.unref?.()
+      })
+    ])
+    if (timer) clearTimeout(timer)
+  } else await lanes
   // Checked and taken with no await between, so two passes never start more than `max` together.
   const max = Math.max(1, Math.floor(deps.concurrency ?? DEFAULT_CONCURRENCY))
   const runs: Promise<AppSchemaStatus>[] = []
@@ -446,12 +492,15 @@ export async function appMigrationPass(
     if (inFlight.size >= max) break
     if (!inFlight.has(t.id)) runs.push(ensureAppSchema(t, deps))
   }
-  await Promise.all(runs)
+  // The loop does not wait for the runs: each frees its lane with a nudge (ensureAppSchema).
+  if (!mode.loop) await Promise.all(runs)
 }
 
 /** The app's database is behind: forget its `ok` here and in Redis (other replicas adopt no
- *  stale `ok`; their own 5-minute check finds the same). */
+ *  stale `ok`; their own 5-minute check finds the same), and the app's cached module state. */
 async function dropOk(tenantId: string, conn: string): Promise<void> {
+  // A replaced database: nothing cached from the old one may answer the app (final review I-1).
+  forgetAppState(tenantId)
   const pending: Entry = { ...PENDING, conn, nextTry: 0 }
   setState(tenantId, pending)
   await writeStored(tenantId, pending)
@@ -475,11 +524,31 @@ function adopt(tenantId: string, stored: StoredState, conn: string): void {
   })
 }
 
+/** A loop pass is deciding now; `passAgain` = one more was asked for meanwhile (final review M2:
+ *  the interval started a pass every 5 s whether or not the last one had finished). */
+let passRunning = false
+let passAgain = false
+
 function runLoopPass(): void {
   const l = loop
   if (!l) return
+  if (passRunning) {
+    passAgain = true
+    return
+  }
+  passRunning = true
   // Outside any app: the pass reads the deployment's list and enters each app itself.
-  void runWithoutTenant(() => appMigrationPass(l.registry, l.opts).catch(() => {}))
+  void runWithoutTenant(() =>
+    migrationPass(l.registry, l.opts, { loop: true })
+      .catch(() => {})
+      .finally(() => {
+        passRunning = false
+        if (passAgain && loop === l) {
+          passAgain = false
+          nudgeAppMigrations()
+        }
+      })
+  )
 }
 
 /** Run a pass soon (a request reached an app that is not ready, a lane freed). Folded. */
@@ -599,6 +668,8 @@ export function _resetAppMigrationsForTests(): void {
   states.clear()
   inFlight.clear()
   verifying.clear()
+  passRunning = false
+  passAgain = false
   lastRequestNudge = Number.NEGATIVE_INFINITY
   gateOn = false
   redisRef = null
