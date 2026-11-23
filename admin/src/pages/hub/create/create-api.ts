@@ -41,6 +41,8 @@ export interface HubTargetConfig {
   scheme: 'https' | 'http'
   port: number | null
   cert_note: string | null
+  /** P6-35: the Traefik on that swarm; a created app gets one network label from it. Absent = 3. */
+  traefik_version?: 2 | 3
 }
 
 export interface HubTarget {

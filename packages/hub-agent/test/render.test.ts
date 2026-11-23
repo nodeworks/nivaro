@@ -305,7 +305,6 @@ describe('renderServices — labels', () => {
       Object.fromEntries(Object.entries(s.Labels).filter(([k]) => k.startsWith('traefik.')))
     expect(pick(byName(svcs, 'st_web'))).toEqual({
       'traefik.enable': 'true',
-      'traefik.docker.network': 'edge',
       'traefik.swarm.network': 'edge',
       'traefik.http.routers.nvh_web_st.rule': 'Host(`a.apps.corp`) || Host(`b.apps.corp`)',
       'traefik.http.routers.nvh_web_st.entrypoints': 'websecure',
@@ -316,7 +315,6 @@ describe('renderServices — labels', () => {
     })
     expect(pick(byName(svcs, 'st_realtime'))).toEqual({
       'traefik.enable': 'true',
-      'traefik.docker.network': 'edge',
       'traefik.swarm.network': 'edge',
       'traefik.http.routers.nvh_rt_st.rule':
         '(Host(`a.apps.corp`) || Host(`b.apps.corp`)) && (PathPrefix(`/socket.io/`) || Path(`/api/graphql-ws`) || Path(`/api/graphql/stream`) || Path(`/api/events/stream`) || PathRegexp(`^/api/events/views/[^/]+/stream$`))',
@@ -625,7 +623,6 @@ describe('renderServices — shared deployment host pattern (phase 6)', () => {
     expect(r).toBe('nvh_pat_sh')
     expect(traefik(web)).toEqual({
       'traefik.enable': 'true',
-      'traefik.docker.network': 'edge',
       'traefik.swarm.network': 'edge',
       'traefik.http.routers.nvh_web_sh.rule': 'Host(`a.apps.corp`)',
       'traefik.http.routers.nvh_web_sh.entrypoints': 'websecure',
@@ -716,5 +713,26 @@ describe('renderServices — shared deployment host pattern (phase 6)', () => {
     expect(rules).toHaveLength(1)
     expect(hostTaken('a.apps.corp', rules)).toBe(false)
     expect(hostTaken('apps.corp', rules)).toBe(false)
+  })
+})
+
+describe('E2E B1 (P6-34): exactly one Traefik network label', () => {
+  const netLabels = (s: EngineServiceSpec) =>
+    Object.keys(s.Labels).filter((k) => /^traefik\.(docker|swarm)\./.test(k))
+
+  it('Traefik v3 (the default): only traefik.swarm.network, on every routed service', () => {
+    const svcs = renderServices('st', large(), cfg(), ctx())
+    for (const name of ['st_web', 'st_realtime']) {
+      expect(netLabels(byName(svcs, name))).toEqual(['traefik.swarm.network'])
+      expect(byName(svcs, name).Labels['traefik.swarm.network']).toBe('edge')
+    }
+  })
+
+  it('Traefik v2: only traefik.docker.network', () => {
+    const svcs = renderServices('st', large(), cfg({ traefikVersion: 2 }), ctx())
+    for (const name of ['st_web', 'st_realtime']) {
+      expect(netLabels(byName(svcs, name))).toEqual(['traefik.docker.network'])
+      expect(byName(svcs, name).Labels['traefik.docker.network']).toBe('edge')
+    }
   })
 })

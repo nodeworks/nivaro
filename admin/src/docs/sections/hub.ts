@@ -585,9 +585,9 @@ export const hubDockerDocs: DocSection = {
           'Comma list of image repositories (no tag, no digest) a stack may name. The Nivaro image and every extension image share this one list.'
         ],
         [
-          '`HUB_AGENT_EDGE`, `HUB_AGENT_EDGE_NETWORK`, `HUB_AGENT_ENTRYPOINTS`, `HUB_AGENT_CERT_RESOLVER`, `HUB_AGENT_HOST_SUFFIXES`',
+          '`HUB_AGENT_EDGE`, `HUB_AGENT_EDGE_NETWORK`, `HUB_AGENT_TRAEFIK_VERSION`, `HUB_AGENT_ENTRYPOINTS`, `HUB_AGENT_CERT_RESOLVER`, `HUB_AGENT_HOST_SUFFIXES`',
           '`traefik`',
-          'Edge `traefik` (needs the overlay network and the host suffixes, for example `.apps.example.com`; an app host must end in one; the agent sets both `traefik.docker.network` and `traefik.swarm.network` to that network, so either Traefik provider picks the right one) or `publish` (needs `HUB_AGENT_PUBLISH_PORTS`, a range inside 1024 to 65535).'
+          'Edge `traefik` (needs the overlay network and the host suffixes, for example `.apps.example.com`; an app host must end in one; the agent sets exactly one network label to that network: `traefik.swarm.network` for Traefik v3, the default, or `traefik.docker.network` with `HUB_AGENT_TRAEFIK_VERSION=2`; Traefik v3 skips a service carrying both; the host pattern of a shared deployment needs v3) or `publish` (needs `HUB_AGENT_PUBLISH_PORTS`, a range inside 1024 to 65535).'
         ],
         [
           '`HUB_AGENT_REDIS_IMAGE`',
@@ -1689,6 +1689,10 @@ export const hubCreateDocs: DocSection = {
           "The manager's ssh host keys (`ssh-keyscan -t ed25519 <manager>`; `[host]:port` entries when the port is not 22). Must hold a key for `deploy_host`. The deploy connects with strict host key checking and refuses any other key."
         ],
         ['`proxy_network`', 'The external overlay network Traefik reads. Default `proxy`.'],
+        [
+          '`traefik_version`',
+          'The Traefik on that swarm: `3` (default) or `2`. A created app gets exactly one network label from it (`traefik.swarm.network` or `traefik.docker.network`); Traefik v3 skips a service that carries both. Apps created earlier keep their pinned template and app.env until their template is re-pinned (and the manager stack file updated); without the setting they deploy as v3.'
+        ],
         [
           '`dns_mode`',
           '`automatic`: the Hub derives every hostname under a wildcard domain. `manual`: you give each hostname and the Hub waits until a person has made the DNS name.'

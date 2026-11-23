@@ -168,13 +168,15 @@ function envObjectStorage(): string | null {
 }
 
 // ─── Warnings ────────────────────────────────────────────────────────────────────────────
+// A detail follows its title in the move plan ("<title>: <detail>", the title saying how it is on
+// a shared deployment), so it says what THIS app does today, never "… is on" (E2E B M1).
 
 async function directorySync(): Promise<string | null> {
   if (!(await db.schema.hasColumn('nivaro_settings', 'directory_sync_enabled'))) return null
   const row = (await db('nivaro_settings').first('directory_sync_enabled')) as
     | { directory_sync_enabled?: unknown }
     | undefined
-  return row?.directory_sync_enabled ? 'Directory sync is on' : null
+  return row?.directory_sync_enabled ? 'This app syncs people from the directory today' : null
 }
 
 async function phonePush(): Promise<string | null> {
@@ -185,12 +187,14 @@ async function phonePush(): Promise<string | null> {
 
 async function teamsBot(): Promise<string | null> {
   const { getTeamsBotConfig } = await import('../teams-bot/config.js')
-  return (await getTeamsBotConfig()).enabled ? 'The Teams bot is on' : null
+  return (await getTeamsBotConfig()).enabled
+    ? 'This app answers in Teams through its bot today'
+    : null
 }
 
 async function mailRetry(): Promise<string | null> {
   const { mailRetryEnabled } = await import('../mail-retry-state.js')
-  return mailRetryEnabled() ? 'Automatic mail retry is on' : null
+  return mailRetryEnabled() ? 'This app retries failed mail automatically today' : null
 }
 
 async function huddleTurn(): Promise<string | null> {

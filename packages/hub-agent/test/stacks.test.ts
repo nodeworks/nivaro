@@ -635,6 +635,11 @@ describe('spec hash', () => {
       stackHash(spec({ hostnames: [] }), cfg, NODE)
     )
   })
+
+  it('E2E B1: covers the Traefik version (it picks the network label)', () => {
+    const v2 = makeCfg({ HUB_AGENT_TRAEFIK_VERSION: '2' })
+    expect(stackHash(spec(), v2, NODE)).not.toBe(stackHash(spec(), cfg, NODE))
+  })
 })
 
 describe('restartStack', () => {

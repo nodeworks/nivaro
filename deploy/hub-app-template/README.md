@@ -144,6 +144,23 @@ hand (step 3). The images are pinned by digest; re-pin with
 `docker buildx imagetools inspect <image>:<tag>` and copy the `Digest:` line (CI job image in
 `scripts/sync-ci.sh` and `.gitlab-ci.yml`, Redis in `manager/docker-stack.yml`).
 
+## Traefik network label (P6-35)
+
+The stack gives web exactly **one** Traefik network label: `traefik.swarm.network` for Traefik
+v3 (the default) or `traefik.docker.network` for v2. Traefik v3 skips a service that carries both
+("both Docker and Swarm labels are defined"), so a stack file from before this change is never
+routed by v3. The Hub writes `TRAEFIK_VERSION` (the target's `traefik_version`, default 3) into
+each new app's `.hub/app.env`; `nivaro-hub-deploy` picks the label from it.
+
+- Update `manager/docker-stack.yml` and `manager/nivaro-hub-deploy` on the manager together
+  (step 3). A deploy that sends `TRAEFIK_VERSION` to a manager whose stack file does not use
+  `TRAEFIK_NETWORK_LABEL` is refused with "update the stack file on the manager".
+- **Apps created earlier keep their pinned template** and their app.env until the target's
+  `template_ref` is moved and the app is re-pinned. An app.env without `TRAEFIK_VERSION` deploys
+  as v3 (the key is optional), so on a v3 swarm updating the manager's stack file is enough;
+  on a v2 swarm keep the old stack file until those apps are re-created or their app.env
+  carries `TRAEFIK_VERSION=2`.
+
 ## Limits of this template
 
 - **One node.** web, worker and redis are placed on manager nodes so they share the `uploads`

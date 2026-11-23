@@ -472,4 +472,23 @@ describe('parseListen', () => {
     expect(parseListen('0.0.0.0:7480')).toEqual({ host: '0.0.0.0', port: 7480 })
     expect(parseListen('[::]:7480')).toEqual({ host: '::', port: 7480 })
   })
+
+  it('E2E B1: HUB_AGENT_TRAEFIK_VERSION is 3 by default, 2 or 3 when set, anything else refused', () => {
+    expect(loadAgentConfig(traefikEnv, files(baseFiles)).traefikVersion).toBe(3)
+    expect(
+      loadAgentConfig({ ...traefikEnv, HUB_AGENT_TRAEFIK_VERSION: '2' }, files(baseFiles))
+        .traefikVersion
+    ).toBe(2)
+    expect(
+      loadAgentConfig({ ...traefikEnv, HUB_AGENT_TRAEFIK_VERSION: ' 3 ' }, files(baseFiles))
+        .traefikVersion
+    ).toBe(3)
+    for (const v of ['1', '4', 'v3', '3.6', 'two', '2,3'])
+      expect(
+        codeOf(() =>
+          loadAgentConfig({ ...traefikEnv, HUB_AGENT_TRAEFIK_VERSION: v }, files(baseFiles))
+        ),
+        v
+      ).toBe('TRAEFIK_VERSION_BAD')
+  })
 })
