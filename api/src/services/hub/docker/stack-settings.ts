@@ -685,6 +685,28 @@ export async function saveStackSettings(
   return saved
 }
 
+/**
+ * Ruling P6-43 (a), round 1b: sets ONE sealed stack secret to `value` through the same sealed
+ * path a Stack panel save uses (per-key sealSecret, one sealed map, saveStackSettings), keeping
+ * every other field and secret. Nothing is deployed. Answers whether it changed anything (false
+ * when the environment has no stack settings or already holds that value). Never logs a value.
+ */
+export async function setStackSecret(envId: number, name: string, value: string): Promise<boolean> {
+  const existing = await readStackSettings(envId)
+  if (!existing) return false
+  const map = openSealedMap(existing.secrets)
+  if (map[name] && openSecret(map[name]) === value) return false
+  map[name] = sealSecret(value)
+  await saveStackSettings(envId, {
+    size: existing.size,
+    redis: existing.redis,
+    publish_port: existing.publish_port,
+    settings: existing.settings,
+    secrets: sealMap(map)
+  })
+  return true
+}
+
 /** Every name the OTHER Hub environments claim (their base_url hosts and hostnames). */
 export async function otherEnvironmentNames(envId: number): Promise<Set<string>> {
   const rows = (await db(ENVS)

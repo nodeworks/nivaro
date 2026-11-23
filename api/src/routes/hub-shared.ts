@@ -6,6 +6,8 @@ import { APP_KEY_RE, keyFingerprint } from '../services/app-key-fingerprint.js'
 import { hubPublicOrigin, hubUrlOrigin } from '../services/deployment-mode.js'
 import { idParam } from '../services/hub/apps.js'
 import { listImageVersions } from '../services/hub/docker/image-tags.js'
+import { setStackSecret } from '../services/hub/docker/stack-settings.js'
+import { getDriver, getPlacement } from '../services/hub/drivers.js'
 import { newHomeKeyFp, retireStopFor } from '../services/hub/move/run.js'
 import {
   defaultPromoteLock,
@@ -422,6 +424,33 @@ async function takeEnvKeyLock(reply: FastifyReply, envId: number): Promise<HeldL
   return { release: () => lock.release(envId, token) }
 }
 
+/**
+ * Round 1b (ruling P6-43 (a)): the move stopped at retire_source goes to a Docker stack: its
+ * sealed stack secret ENCRYPTION_KEY becomes the accepted key when it differs (Stack panel's
+ * sealed path, stack-settings.ts setStackSecret). Logged by name only.
+ */
+async function alignDockerStackKey(
+  stop: { to_placement_id: number },
+  envId: number,
+  key: string,
+  req: FastifyRequest
+): Promise<boolean> {
+  const p = await getPlacement(stop.to_placement_id)
+  if (p?.kind !== 'dedicated' || p.driver_id == null) return false
+  if ((await getDriver(p.driver_id))?.kind !== 'docker') return false
+  const changed = await setStackSecret(envId, 'ENCRYPTION_KEY', key.toLowerCase())
+  if (changed)
+    await logActivity({
+      action: 'update',
+      user: userId(req),
+      collection: 'nivaro_hub_stack_settings',
+      item: String(envId),
+      req,
+      changed_fields: ['secrets.ENCRYPTION_KEY']
+    })
+  return changed
+}
+
 // ─── routes ────────────────────────────────────────────────────────────────────────────────
 
 export function hubSharedRoutes(app: FastifyInstance): void {
@@ -770,7 +799,12 @@ export function hubSharedRoutes(app: FastifyInstance): void {
         // against what the NEW home reports (the move's own key check), read under the lock.
         const stop = await retireStopFor(envId)
         const d = await decideAppKey(fresh, key, stop ? { newHome: await newHomeKeyFp(stop) } : {})
-        if (d.action === 'unchanged') return { data: { fp: d.fp, changed: false } }
+        // Round 1b: an accepted key at that stop also becomes a Docker target's stack secret, so a
+        // later Apply keeps the key the app really runs (no deploy here).
+        const stackKey =
+          stop && d.action !== 'refuse' ? await alignDockerStackKey(stop, envId, key, req) : false
+        if (d.action === 'unchanged')
+          return { data: { fp: d.fp, changed: false, ...(stackKey ? { stack_key: 'set' } : {}) } }
         if (d.action === 'refuse')
           return reply.code(409).send({
             statusCode: 409,
@@ -795,7 +829,8 @@ export function hubSharedRoutes(app: FastifyInstance): void {
             changed: true,
             // Where the key was checked against what the app runs with; null = it could not be.
             verified: d.verified,
-            ...(d.unverified_code ? { unverified_code: d.unverified_code } : {})
+            ...(d.unverified_code ? { unverified_code: d.unverified_code } : {}),
+            ...(stackKey ? { stack_key: 'set' } : {})
           }
         }
       })

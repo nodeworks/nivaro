@@ -67,6 +67,26 @@ const { keyFingerprint } = await import('../../../services/app-key-fingerprint.j
 const { hubSharedRoutes } = await import('../../../routes/hub-shared.js')
 const { hubMoveRoutes } = await import('../../../routes/hub-move.js')
 const Fastify = (await import('fastify')).default
+const StackSettings = await import('../../../services/hub/docker/stack-settings.js')
+const { sealSecret } = await import('../../../services/hub/secrets.js')
+
+/** The environment's Docker stack settings, its secrets sealed as a Stack panel save stores them. */
+async function stackWithKey(envId: number, encryptionKey: string, session = 'f0'.repeat(32)) {
+  await StackSettings.saveStackSettings(envId, {
+    size: 'small',
+    redis: 'bundled',
+    publish_port: null,
+    settings: { NIVARO_EXAMPLE: 'kept' },
+    secrets: sealSecret(
+      JSON.stringify({
+        ENCRYPTION_KEY: sealSecret(encryptionKey),
+        SESSION_SECRET: sealSecret(session)
+      })
+    )
+  })
+}
+const stackSecrets = async (envId: number) =>
+  StackSettings.openStackSecrets(await StackSettings.readStackSettings(envId))
 type MovePlan = import('../../../services/hub/move/types.js').MovePlan
 type MoveKind = import('../../../services/hub/move/types.js').MoveKind
 type MoveOps = import('../../../services/hub/move/ops.js').MoveOps
@@ -460,6 +480,8 @@ async function retiredOnce(w: World, kind: MoveKind, id: number) {
 describe('to_dedicated (Docker target): the new home runs another key', () => {
   it('stays open; the PUT takes only the key the new home reports; Resume retires once', async () => {
     const w = await world('shared')
+    // The Docker target's stack settings still hold the key the Hub holds (not what it runs).
+    await stackWithKey(w.envId, SECRET_KEY)
     const id = await startMove(w, 'to_dedicated')
     await stoppedAtRetire(w, 'to_dedicated', id)
 
@@ -476,6 +498,8 @@ describe('to_dedicated (Docker target): the new home runs another key', () => {
     )
     expect(wrong.body).not.toContain(OTHER_KEY)
     expect(await Store.openAppKey(w.envId)).toBe(SECRET_KEY)
+    // A refused key never reaches the stack secret.
+    expect((await stackSecrets(w.envId)).ENCRYPTION_KEY).toBe(SECRET_KEY)
     // The key the Hub already holds is not the new home's either: refused the same way.
     expect((await putKey(w.envId, SECRET_KEY)).json().code).toBe('APP_KEY_MISMATCH')
 
@@ -487,8 +511,28 @@ describe('to_dedicated (Docker target): the new home runs another key', () => {
     // The key the new home runs: taken (verified against the new home's own report).
     const ok = await putKey(w.envId, NEW_KEY)
     expect(ok.statusCode).toBe(200)
-    expect(ok.json().data).toMatchObject({ fp: fp(NEW_KEY), changed: true, verified: 'hub-link' })
+    expect(ok.json().data).toMatchObject({
+      fp: fp(NEW_KEY),
+      changed: true,
+      verified: 'hub-link',
+      stack_key: 'set'
+    })
     expect(await Store.openAppKey(w.envId)).toBe(NEW_KEY)
+    // Round 1b: the sealed stack secret now holds the key the app runs (a later Apply keeps
+    // it); every other setting and secret is kept, and nothing was deployed.
+    const after = await stackSecrets(w.envId)
+    expect(after.ENCRYPTION_KEY).toBe(NEW_KEY)
+    expect(after.SESSION_SECRET).toBe('f0'.repeat(32))
+    expect((await StackSettings.readStackSettings(w.envId))?.settings).toEqual({
+      NIVARO_EXAMPLE: 'kept'
+    })
+    expect(JSON.stringify(await StackSettings.readStackSettings(w.envId))).not.toContain(NEW_KEY)
+    expect(fake.calls).not.toContain('deployTarget')
+    expect(fake.calls).not.toContain('route')
+    // The same key again: nothing left to change.
+    const again2 = await putKey(w.envId, NEW_KEY)
+    expect(again2.json().data).toMatchObject({ changed: false })
+    expect(again2.json().data.stack_key).toBeUndefined()
 
     // Resume: the real check passes now; the old home is retired exactly once.
     await resumeAndWait(id)
@@ -502,6 +546,8 @@ for (const kind of ['to_shared', 'between_shared'] as MoveKind[]) {
   describe(`${kind} (shared target): the deployment reports another key`, () => {
     it('a different key is IMMUTABLE; the Hub key is taken once the deployment reports it', async () => {
       const w = await world(kind === 'to_shared' ? 'docker' : 'shared')
+      // A stack settings row left from an old Docker home: a shared target never touches it.
+      await stackWithKey(w.envId, OTHER_KEY)
       const id = await startMove(w, kind)
       await stoppedAtRetire(w, kind, id)
 
@@ -520,6 +566,8 @@ for (const kind of ['to_shared', 'between_shared'] as MoveKind[]) {
       const same = await putKey(w.envId, SECRET_KEY)
       expect(same.statusCode).toBe(200)
       expect(same.json().data).toMatchObject({ changed: false })
+      expect(same.json().data.stack_key).toBeUndefined()
+      expect((await stackSecrets(w.envId)).ENCRYPTION_KEY).toBe(OTHER_KEY)
       await resumeAndWait(id)
       await retiredOnce(w, kind, id)
     })
