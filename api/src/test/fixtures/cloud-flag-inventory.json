@@ -2863,11 +2863,12 @@
       "line": 762,
       "text": "cloud: !!process.env.CLOUD_META_DB_URL,",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T4",
-      "why": "import worker judgement (wire field `cloud`)",
-      "batch": "D"
+      "why": "import worker judgement (wire field `cloud`). Now isNivaroCloud() (EXTRA_CALLS): a Hub shared deployment drains its apps' queues itself, so stuck imports there are judged like self-hosted ones",
+      "batch": "D",
+      "phase6": "done: importWorkerJudgement reads each app's own queue and beats; only Nivaro Cloud answers 'Cloud mode'"
     },
     {
       "id": "services/stall-causes.ts:193",

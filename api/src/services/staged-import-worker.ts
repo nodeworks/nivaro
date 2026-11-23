@@ -8,7 +8,7 @@ import { type AppFanOutResult, forEachApp } from './app-jobs.js'
 import { appBox, appSet } from './app-state.js'
 import { withBackgroundWork } from './background-inflight.js'
 import { newChainId, startChain } from './chain.js'
-import { isMultiTenant, perAppJobs } from './deployment-mode.js'
+import { isNivaroCloud, perAppJobs } from './deployment-mode.js'
 import { getFile, readFileBuffer } from './files.js'
 import { announceCollectionImportRun } from './import-collection-runs.js'
 import {
@@ -510,13 +510,24 @@ export async function publishStanding(): Promise<void> {
   publishQueueStanding(entries, standing, labelOf)
 }
 
-/** Run ids this process is driving right now. */
+/** Run ids this process is driving right now (per app). */
 const driving = appSet<string>()
+
+/** Hub shared deployment: runs this process drives across every app. MAX_PARALLEL caps the
+ *  process, not each app: N apps x MAX_PARALLEL runs in one process is how it runs out of memory.
+ *  Process-wide by design (a count, no app data). */
+const processDriving = { count: 0 }
+
+/** No room for another run: this app's own cap, and on a shared deployment the process's. */
+function atCapacity(): boolean {
+  if (driving.size >= MAX_PARALLEL) return true
+  return perAppJobs() && processDriving.count >= MAX_PARALLEL
+}
 
 type QueueRow = Record<string, any>
 
 async function drainOnce(app: FastifyInstance): Promise<void> {
-  if (driving.size >= MAX_PARALLEL) return
+  if (atCapacity()) return
 
   // #802 — runs serialise per LOCK GROUP (default: the staging table), not
   // globally: procedures truncate a shared staging table, so two runs of one
@@ -544,7 +555,7 @@ async function drainOnce(app: FastifyInstance): Promise<void> {
   // table must never overtake an earlier one that is waiting on its file.
   const blocked = new Set<string>()
   for (const row of queued) {
-    if (driving.size >= MAX_PARALLEL) return
+    if (atCapacity()) return
     const group = groupOf(row.import_key)
     if (busy.has(group) || blocked.has(group)) continue
 
@@ -587,9 +598,13 @@ async function drainOnce(app: FastifyInstance): Promise<void> {
     busy.add(group)
     const id = String(row.id)
     driving.add(id)
+    processDriving.count++
     void withBackgroundWork('import', `${row.import_key ?? 'staged'} #${id}`, () =>
       runOne(app, row, buffer)
-    ).finally(() => driving.delete(id))
+    ).finally(() => {
+      driving.delete(id)
+      processDriving.count--
+    })
   }
 }
 
@@ -871,7 +886,9 @@ export async function importWorkerJudgement(redis: unknown): Promise<ImportJudge
     .map((at) => now - new Date(at ?? now).getTime())
     .filter((n) => Number.isFinite(n))
   return judgeImportWorker({
-    cloud: isMultiTenant(),
+    // Only Nivaro Cloud runs imports on the tenant process; a shared deployment drains its apps'
+    // queues itself, so stuck imports there must be flagged like self-hosted ones.
+    cloud: isNivaroCloud(),
     redis: !!r,
     importer: await readImportBeat(r, 'importer'),
     fallback: await readImportBeat(r, 'fallback'),

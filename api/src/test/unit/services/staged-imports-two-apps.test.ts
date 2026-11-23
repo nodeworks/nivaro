@@ -11,7 +11,9 @@ import type { MemoryDb } from '../../helpers/memory-db.js'
 
 const h = vi.hoisted(() => ({
   mems: {} as Record<string, MemoryDb>,
-  defs: [] as string[]
+  defs: [] as string[],
+  /** While set, every run waits on it before it reads its definition (it stays in flight). */
+  gate: null as Promise<void> | null
 }))
 
 vi.mock('../../../db/index.js', async () => {
@@ -30,6 +32,7 @@ vi.mock('../../../services/staged-imports.js', async (orig) => {
     // No definition: the run claims, then fails at once with a sentence (no file work).
     getImportDefinition: vi.fn(async (key: string) => {
       h.defs.push(`${tc.getTenantId() ?? '-'}:${key}`)
+      if (h.gate) await h.gate
       return null
     })
   }
@@ -187,6 +190,7 @@ const saved = { ...process.env }
 beforeEach(() => {
   for (const m of Object.values(h.mems)) m.reset()
   h.defs.length = 0
+  h.gate = null
   delete process.env.CLOUD_META_DB_URL
   delete process.env.HUB_SHARED_DEPLOYMENT
   delete process.env.NIVARO_ROLE
@@ -358,6 +362,78 @@ describe('two apps, copied queues', () => {
     expect(status('A')).toBe('queued')
     expect(h.mems.A.reads).toEqual([])
     expect(h.defs).toEqual([])
+  })
+})
+
+describe('how many runs one process drives at once', () => {
+  // IMPORT_MAX_PARALLEL (default 3): a shared deployment counts it across every app of the
+  // process, not per app — N apps x 3 runs in one process is how an importer runs out of memory.
+  const keys = ['invoices', 'orders', 'receipts', 'vendors']
+  const statuses = (app: string) =>
+    h.mems[app].rows('nivaro_import_queue').map((r: { status: string }) => r.status)
+  let open: () => void = () => {}
+  beforeEach(() => {
+    h.gate = new Promise<void>((r) => {
+      open = r
+    })
+  })
+  afterEach(() => open())
+
+  it('shared: app A driving 3 runs leaves app B none until one finishes; each app stays <= 3', async () => {
+    Object.assign(process.env, SHARED)
+    keys.forEach((k, i) => {
+      h.mems.A.rows('nivaro_import_queue').push(queued(i + 1, k))
+      h.mems.B.rows('nivaro_import_queue').push(queued(i + 1, k))
+    })
+    const app = makeApp()
+    await inApp('A', () => worker.drainImportsTick(app))
+    await vi.waitFor(() => expect(h.defs).toHaveLength(3))
+    expect(statuses('A').filter((x) => x === 'running')).toHaveLength(3)
+    await inApp('B', () => worker.drainImportsTick(app))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(statuses('B')).toEqual(['queued', 'queued', 'queued', 'queued'])
+    expect(h.defs.every((d) => d.startsWith('A:'))).toBe(true)
+    // A's runs finish (no definition: error); B then gets its turn, still 3 at most.
+    open()
+    h.gate = new Promise<void>((r) => {
+      open = r
+    })
+    await vi.waitFor(() =>
+      expect(statuses('A').filter((x) => x === 'error')).toHaveLength(3)
+    )
+    await new Promise((r) => setTimeout(r, 20))
+    await inApp('B', () => worker.drainImportsTick(app))
+    await vi.waitFor(() => expect(h.defs.filter((d) => d.startsWith('B:'))).toHaveLength(3))
+    expect(statuses('B').filter((x) => x === 'running')).toHaveLength(3)
+  })
+
+  it('self-hosted: the one app drives 3 at once, as before', async () => {
+    keys.forEach((k, i) => {
+      h.mems['-'].rows('nivaro_import_queue').push(queued(i + 1, k))
+    })
+    const app = makeApp()
+    await worker.drainImportsTick(app)
+    await vi.waitFor(() => expect(h.defs).toHaveLength(3))
+    expect(statuses('-').filter((x) => x === 'running')).toHaveLength(3)
+  })
+})
+
+describe('readiness: is something draining this app\'s imports?', () => {
+  it('shared: stuck imports with no drainer are flagged (a shared deployment is not Nivaro Cloud)', async () => {
+    Object.assign(process.env, SHARED, { NIVARO_ROLE: 'web' })
+    const long = new Date(Date.now() - 60 * 60_000)
+    h.mems.A.rows('nivaro_import_queue').push({ ...queued(1), created_at: long })
+    const app = makeApp()
+    const j = await inApp('A', () => worker.importWorkerJudgement(app.redis))
+    expect(j.status).not.toBe('ok')
+    expect(j.summary).not.toContain('Cloud mode')
+  })
+
+  it('Nivaro Cloud: still "Cloud mode: ok"', async () => {
+    process.env.CLOUD_META_DB_URL = 'postgres://meta'
+    const app = makeApp()
+    const j = await worker.importWorkerJudgement(app.redis)
+    expect(j).toEqual({ status: 'ok', summary: 'Cloud mode: imports run on the tenant process.' })
   })
 })
 

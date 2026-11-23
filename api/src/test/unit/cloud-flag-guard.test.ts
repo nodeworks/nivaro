@@ -64,6 +64,9 @@ const EXTRA_CALLS: Record<string, { multiTenant?: number; nivaroCloud?: number }
   // shared deployment queues, kicks, leases and drains inside each app.
   'services/import-handoff.ts': { nivaroCloud: 3 },
   'routes/imports.ts': { nivaroCloud: 1 },
+  // The import worker's judgement (its T4 entry is weight 0): only Nivaro Cloud answers "Cloud
+  // mode"; a shared deployment's stuck imports are flagged (final fix F7).
+  'services/staged-import-worker.ts': { nivaroCloud: 1 },
   // Exports per app (Task 15): exportHandoffEnabled and the export worker's judgement refuse in
   // Nivaro Cloud only (their T4 entries are weight 0); a Hub shared deployment hands off, beats and
   // drains inside each app.
