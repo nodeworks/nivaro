@@ -265,6 +265,25 @@ describe('shared source pull rule (P6-18 #2)', () => {
   })
 })
 
+describe('dedicated source pull rule (P6-20 #2 extended)', () => {
+  it('a public name that resolves privately → SOURCE_NOT_PULLABLE; the operator override lets it through', async () => {
+    const env = await envOn(await placementOf('docker'))
+    const d = deps({ dns: { 'acme.example.com': ['10.0.0.9'] } })
+    const e = await err(
+      resolveMoveAddresses(env, { kind: 'shared', shared_id: 1 }, { routing: 'automatic' }, d.deps)
+    )
+    expect(e?.code).toBe('SOURCE_NOT_PULLABLE')
+    const over = await resolveMoveAddresses(
+      env,
+      { kind: 'shared', shared_id: 1 },
+      { routing: 'automatic' },
+      d.deps,
+      { allowUnpullable: true }
+    )
+    expect(over.pull_source).toBe('https://acme.example.com')
+  })
+})
+
 describe('target addresses (P6-18 #1)', () => {
   it('a Docker traefik target gets a per-move name that must resolve; never the public name', async () => {
     const env = await envOn(await placementOf('shared'))

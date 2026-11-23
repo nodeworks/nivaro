@@ -141,7 +141,7 @@ async function resolves(host: string, resolve: (h: string) => Promise<string[]>)
 
 export interface AddressOptions {
   /**
-   * Ruling P6-20 #2: the operator ticked the LINK_URL_NOT_PULLABLE override (the target lists
+   * Ruling P6-20 #2: the operator ticked the LINK_URL_NOT_PULLABLE / SOURCE_NOT_PULLABLE override (the target lists
    * the link's host in SSRF_ALLOW_HOSTS). A wrong override fails at files_warm and rolls back.
    */
   allowUnpullable?: boolean
@@ -237,10 +237,12 @@ export async function resolveMoveAddresses(
       throw sourceUnreachable(`it does not answer its hub link at ${base}`)
     }
     out.source_link_base = base
-    if (!(await pullable(base, resolve)))
+    // Ruling P6-20 #2, for a dedicated source too: the operator says the target's SSRF_ALLOW_HOSTS
+    // lists this name (a wrong override fails at files_warm and rolls back).
+    if (!opts.allowUnpullable && !(await pullable(base, resolve)))
       throw new AddressError(
         'SOURCE_NOT_PULLABLE',
-        `The target cannot pull files from ${base}: use an address that resolves publicly, or a private IP literal.`
+        `The target cannot pull files from ${base}: its name resolves to a private address. Use an address that resolves publicly or a private IP literal, or list the name in the target's SSRF_ALLOW_HOSTS and override.`
       )
     out.pull_source = base
   }

@@ -293,7 +293,7 @@ export const startMove = (
     plan_hash: string
     confirm: string
     checklist: Record<string, boolean>
-    /** Refusals the operator overrides for this move (P6-20: only LINK_URL_NOT_PULLABLE). */
+    /** Refusals the operator overrides for this move (P6-20: LINK_URL_NOT_PULLABLE, SOURCE_NOT_PULLABLE). */
     overrides?: string[]
   }
 ) =>
@@ -812,7 +812,7 @@ export const MOVE_BLOCKER_COPY: Record<string, Copy> = {
   },
   SOURCE_NOT_PULLABLE: {
     title: 'The target cannot fetch files from the old home’s address',
-    hint: 'Give the source an address the target may reach (a private IP, or list its name in the target’s SSRF_ALLOW_HOSTS), then plan again.'
+    hint: 'Its name resolves to a private address. Give the source an address the target may reach (a private IP), or list its name in the target’s SSRF_ALLOW_HOSTS. If the target already allows it there, tick that box below and start again.'
   },
   LINK_URL_NOT_PULLABLE: {
     title: 'The target cannot fetch files from the source deployment’s link address',
@@ -1315,8 +1315,14 @@ export function moveToast(err: unknown, fallback: string) {
   toast.error(d.title, errorToastOptions(d))
 }
 
-/** The one refusal a move start may override (Task 16 MOVE_OVERRIDES, ruling P6-20 #2). */
+/** The refusals a move start may override (Task 16 MOVE_OVERRIDES, ruling P6-20 #2): the target
+ *  cannot pull files from the source's address (a shared source's link address, or a dedicated
+ *  source's own address) because its name resolves to a private address. */
 export const LINK_OVERRIDE = 'LINK_URL_NOT_PULLABLE'
+export const SOURCE_OVERRIDE = 'SOURCE_NOT_PULLABLE'
+export const PULL_OVERRIDES: readonly string[] = [LINK_OVERRIDE, SOURCE_OVERRIDE]
+export const isPullOverride = (code: unknown): code is string =>
+  typeof code === 'string' && PULL_OVERRIDES.includes(code)
 export const LINK_OVERRIDE_TEXT =
   'The target deployment allows this host (it is in its SSRF_ALLOW_HOSTS).'
 

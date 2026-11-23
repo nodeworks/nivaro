@@ -51,8 +51,8 @@ import {
   isHaltedTargetLive,
   isLiveMove,
   isOpenMove,
+  isPullOverride,
   isRollingBack,
-  LINK_OVERRIDE,
   LINK_OVERRIDE_TEXT,
   MOVE_KIND_WORDS,
   type MoveIssue,
@@ -533,12 +533,13 @@ function MoveForm({
     setConfirm('')
     setChanged(false)
     setOverride(false)
-    setPullRefused(false)
+    setPullRefused([])
   }, [pick, pool])
-  // The LINK_URL_NOT_PULLABLE override (ruling P6-20 #2): offered when the plan or a refused
-  // start names it; never a required checklist item; reset with every new plan.
+  // The pull overrides (LINK_URL_NOT_PULLABLE, SOURCE_NOT_PULLABLE; ruling P6-20 #2): offered
+  // when the plan or a refused start names one; never a required checklist item; reset with every
+  // new plan. Only the codes seen are sent.
   const [override, setOverride] = useState(false)
-  const [pullRefused, setPullRefused] = useState(false)
+  const [pullRefused, setPullRefused] = useState<string[]>([])
 
   const expected = `${appKey}/${env.key}`
   const p = plan.data
@@ -555,9 +556,12 @@ function MoveForm({
     if (planHash) seenHash.current = planHash
   }, [planHash])
   const requiredOpen = (p?.checklist ?? []).some((c) => c.required && !checked[c.id])
-  const offerOverride = pullRefused || !!p?.blockers.some((b) => b.code === LINK_OVERRIDE)
+  const pullCodes = [
+    ...new Set([...pullRefused, ...(p?.blockers ?? []).map((b) => b.code).filter(isPullOverride)])
+  ]
+  const offerOverride = pullCodes.length > 0
   // The overridable blocker stops nothing once its box is ticked; every other blocker does.
-  const blocking = (p?.blockers ?? []).filter((b) => !(override && b.code === LINK_OVERRIDE))
+  const blocking = (p?.blockers ?? []).filter((b) => !(override && isPullOverride(b.code)))
   const ready =
     !!p &&
     !!p.plan_hash &&
@@ -579,7 +583,7 @@ function MoveForm({
         plan_hash: (p as MovePlan).plan_hash,
         confirm: confirm.trim(),
         checklist: Object.fromEntries((p?.checklist ?? []).map((c) => [c.id, !!checked[c.id]])),
-        ...(offerOverride && override ? { overrides: [LINK_OVERRIDE] } : {})
+        ...(offerOverride && override ? { overrides: pullCodes } : {})
       }),
     onSuccess: (r) => {
       // The move owns the placement it starts on: it is never removed by this form.
@@ -605,7 +609,8 @@ function MoveForm({
         return
       }
       const code = (err as { response?: { data?: { code?: unknown } } })?.response?.data?.code
-      if (code === LINK_OVERRIDE) setPullRefused(true)
+      if (isPullOverride(code))
+        setPullRefused((seen) => (seen.includes(code) ? seen : [...seen, code]))
       void qc.invalidateQueries({ queryKey: planKey })
       moveToast(err, `Could not move ${env.key}`)
     }
@@ -729,7 +734,7 @@ function MoveForm({
             disabled={plan.isFetching}
             onClick={() => {
               // A fresh look: the override is asked again if a start is refused again.
-              setPullRefused(false)
+              setPullRefused([])
               setOverride(false)
               void plan.refetch()
             }}
