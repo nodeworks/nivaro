@@ -6,6 +6,7 @@ import { APP_KEY_RE, keyFingerprint } from '../services/app-key-fingerprint.js'
 import { hubPublicOrigin, hubUrlOrigin } from '../services/deployment-mode.js'
 import { idParam } from '../services/hub/apps.js'
 import { listImageVersions } from '../services/hub/docker/image-tags.js'
+import { newHomeKeyFp, retireStopFor } from '../services/hub/move/run.js'
 import {
   defaultPromoteLock,
   defaultSharedLock,
@@ -765,7 +766,10 @@ export function hubSharedRoutes(app: FastifyInstance): void {
       )
     return guarded(reply, async () =>
       withKeyLock(reply, envId, async (fresh) => {
-        const d = await decideAppKey(fresh, key)
+        // P6-43 (a): while the environment's move is stopped at retire_source, the key is judged
+        // against what the NEW home reports (the move's own key check), read under the lock.
+        const stop = await retireStopFor(envId)
+        const d = await decideAppKey(fresh, key, stop ? { newHome: await newHomeKeyFp(stop) } : {})
         if (d.action === 'unchanged') return { data: { fp: d.fp, changed: false } }
         if (d.action === 'refuse')
           return reply.code(409).send({

@@ -288,9 +288,24 @@ describe('moveBadge (design B4)', () => {
     })
     expect(moveBadge({ ...base, status: 'interrupted' })?.text).toBe('Move interrupted')
     // Untested path 2: the new home's key did not check at retire_source; the old home is kept.
-    expect(
-      moveBadge({ ...base, status: 'interrupted', error: 'APP_KEY_MISMATCH: Another key.' })
-    ).toEqual({ text: 'Waiting for the app key', tone: 'attention' })
+    const stopped = {
+      ...base,
+      status: 'interrupted' as const,
+      step: 'release',
+      steps: {
+        list: [
+          { key: 'check', state: 'done' },
+          { key: 'release', state: 'done' },
+          { key: 'retire_source', state: 'failed' },
+          { key: 'done', state: 'pending' }
+        ],
+        phase: 'forward'
+      }
+    }
+    expect(moveBadge({ ...stopped, error: 'APP_KEY_MISMATCH: Another key.' })).toEqual({
+      text: 'Waiting for the app key',
+      tone: 'attention'
+    })
     expect(
       moveBadge({ ...base, status: 'interrupted', error: 'HALTED_TARGET_LIVE: x' })?.tone
     ).toBe('halted')
@@ -300,5 +315,80 @@ describe('moveBadge (design B4)', () => {
     ).toBe('To do after move')
     expect(moveBadge({ ...base, status: 'success' })).toBeNull()
     expect(moveBadge(undefined)).toBeNull()
+  })
+})
+
+// Review I-2 / M-1: only THIS attempt's stop at retire_source counts, and an unreachable new home
+// is not a key to enter.
+describe('retireStopKind', () => {
+  const list = (retire: string, release = 'done') => [
+    { key: 'check', state: 'done' },
+    { key: 'target_ready', state: release === 'done' ? 'done' : 'failed' },
+    { key: 'release', state: release },
+    { key: 'retire_source', state: retire },
+    { key: 'done', state: 'pending' }
+  ]
+  const move = (over: Record<string, unknown>) =>
+    ({
+      id: 1,
+      app_id: 1,
+      environment_id: 1,
+      from_placement_id: 1,
+      to_placement_id: 2,
+      kind: 'to_shared',
+      routing: 'automatic',
+      status: 'interrupted',
+      step: 'release',
+      steps: { list: list('failed'), phase: 'forward' },
+      plan: null,
+      files: null,
+      checklist: null,
+      error: 'APP_KEY_MISMATCH: Another key. The old home was not retired.',
+      started_at: null,
+      finished_at: null,
+      ...over
+    }) as never
+
+  it('the current stop at retire_source: key or unreachable', async () => {
+    const { retireStopKind } = await import('./move-api')
+    expect(retireStopKind(move({}))).toBe('key')
+    expect(
+      retireStopKind(move({ error: 'APP_KEY_UNKNOWN: The new home holds no encryption key.' }))
+    ).toBe('key')
+    expect(
+      retireStopKind(
+        move({
+          error:
+            'LINK_UNREACHABLE: The Hub could not reach the new home to check its key (x) — Resume to try again.'
+        })
+      )
+    ).toBe('unreachable')
+  })
+
+  it('A: a rollback before release that stopped with an APP_KEY error is not one', async () => {
+    const { retireStopKind } = await import('./move-api')
+    expect(
+      retireStopKind(
+        move({
+          step: 'target_ready',
+          steps: { list: list('pending', 'pending'), phase: 'rollback' }
+        })
+      )
+    ).toBeNull()
+  })
+
+  it('B: a resumed stop that was cut off (step running, error cleared) is not one', async () => {
+    const { retireStopKind } = await import('./move-api')
+    expect(
+      retireStopKind(move({ error: null, steps: { list: list('running'), phase: 'forward' } }))
+    ).toBeNull()
+    // Even with an old error left on an older row: the step is not the failed stop.
+    expect(retireStopKind(move({ steps: { list: list('running'), phase: 'forward' } }))).toBeNull()
+  })
+
+  it('a halt or a running move is not one', async () => {
+    const { retireStopKind } = await import('./move-api')
+    expect(retireStopKind(move({ error: 'HALTED_TARGET_LIVE: x' }))).toBeNull()
+    expect(retireStopKind(move({ status: 'running' }))).toBeNull()
   })
 })

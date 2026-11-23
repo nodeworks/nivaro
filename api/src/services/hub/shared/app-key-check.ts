@@ -139,6 +139,47 @@ export async function runningKeyFp(
   return { source: null, code: 'NO_LINK' }
 }
 
+async function decideAtRetireStop(
+  env: KeyEnv,
+  fp: string,
+  storedFp: string | null,
+  newHome: NewHomeKeyEvidence
+): Promise<AppKeyDecision> {
+  const held = storedFp ? ` The Hub holds the key with fingerprint ${storedFp}.` : ''
+  if (storedFp && storedFp !== fp && (await sharedPlacementOf(env)))
+    return {
+      action: 'refuse',
+      fp,
+      code: 'APP_KEY_IMMUTABLE',
+      message: `This app already runs on a shared deployment with the encryption key the Hub holds (fingerprint ${storedFp}). A different key (fingerprint ${fp}) would leave every value it sealed unreadable, so it cannot be changed here. Resume once the deployment reports that key, or Finish and keep the old home.`
+    }
+  if ('code' in newHome)
+    return {
+      action: 'refuse',
+      fp,
+      code: 'APP_KEY_UNVERIFIED',
+      reason: newHome.code,
+      message: `The Hub could not ask the new home which key it runs (${newHome.code}), so nothing was changed. Try again, or Finish and keep the old home.`
+    }
+  if (newHome.fp === null)
+    return {
+      action: 'refuse',
+      fp,
+      code: 'APP_KEY_UNVERIFIED',
+      reason: 'NO_KEY_FP',
+      message: `The new home reports no encryption key for this app, so the key entered (fingerprint ${fp}) cannot be checked against it and nothing was changed.${held} Finish and keep the old home ends the move without retiring it.`
+    }
+  if (newHome.fp !== fp)
+    return {
+      action: 'refuse',
+      fp,
+      code: 'APP_KEY_MISMATCH',
+      message: `The new home reports the key with fingerprint ${newHome.fp}; the key entered has fingerprint ${fp}, so nothing was changed.${held} Enter the key the new home runs, or Finish and keep the old home.`
+    }
+  if (storedFp === fp) return { action: 'unchanged', fp }
+  return { action: 'save', fp, verified: newHome.source }
+}
+
 const MISMATCH_TEXT: Record<KeySource, string> = {
   stack:
     "This environment's Docker stack settings hold a different encryption key. Values the app sealed would not open with this one.",
@@ -155,11 +196,30 @@ export type AppKeyDecision =
   | { action: 'save'; fp: string; verified: KeySource | null; unverified_code?: string }
   | { action: 'refuse'; fp: string; code: AppKeyRefusalCode; message: string; reason?: string }
 
-/** Decides a PUT of `hexKey` (already checked as 64 hex) for `env`. Reads only; never writes. */
-export async function decideAppKey(env: KeyEnv, hexKey: string): Promise<AppKeyDecision> {
+/**
+ * Ruling P6-43 (a): what the NEW home of a move stopped at retire_source reports (the same reader
+ * as the move's key check, run.ts newHomeKeyFp), or `code` when it could not be asked.
+ */
+export type NewHomeKeyEvidence =
+  | { source: 'shared' | 'hub-link'; fp: string | null }
+  | { code: string }
+
+/**
+ * Decides a PUT of `hexKey` (already checked as 64 hex) for `env`. Reads only; never writes.
+ * `newHome`: the environment's move is stopped at retire_source (P6-43 (a)); the key is taken only
+ * when its fingerprint matches the one the new home reports, which is how the Hub gets a verified
+ * copy of the key the app really runs. A shared target still refuses a key that differs from the
+ * one the Hub holds (APP_KEY_IMMUTABLE).
+ */
+export async function decideAppKey(
+  env: KeyEnv,
+  hexKey: string,
+  opts: { newHome?: NewHomeKeyEvidence } = {}
+): Promise<AppKeyDecision> {
   const fp = keyFingerprint(hexKey.toLowerCase())
   const stored = await openAppKey(env.id)
   const storedFp = stored ? keyFingerprint(stored) : null
+  if (opts.newHome) return decideAtRetireStop(env, fp, storedFp, opts.newHome)
   if (storedFp === fp) return { action: 'unchanged', fp }
 
   const shared = await sharedPlacementOf(env)

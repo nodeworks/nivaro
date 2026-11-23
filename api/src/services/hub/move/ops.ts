@@ -151,6 +151,12 @@ export interface MoveOps {
    */
   verifyTargetKey(): Promise<void>
   /**
+   * The key fingerprint the new home reports for this app (the shared deployment's app status,
+   * or the dedicated target's readiness report); null = it reports none. Throws when it cannot
+   * be asked. The one reader verifyTargetKey and the App key PUT at retire_source share.
+   */
+  targetKeyFp(): Promise<string | null>
+  /**
    * P6-27: once rollback is no longer possible, a Docker target stack is applied again with only
    * the environment's own names and the per-move name is proven gone (the agent converged on a
    * spec without it, and the name no longer serves the app). Answers the name removed, or null
@@ -1212,16 +1218,19 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
       return temp
     },
 
-    async verifyTargetKey() {
+    async targetKeyFp() {
       const l = await load()
+      return l.to.kind === 'shared'
+        ? (await clientFor(l.to.shared).appStatus(l.tenantId)).key_fp
+        : (await (await targetLink()).sharedReadiness()).key_fp
+    },
+
+    async verifyTargetKey() {
       const appKey = await openAppKey(envId)
       if (!appKey)
         throw new MoveStepError('APP_KEY_UNKNOWN', 'The Hub holds no encryption key for this app.')
       const want = keyFingerprint(appKey)
-      const got =
-        l.to.kind === 'shared'
-          ? (await clientFor(l.to.shared).appStatus(l.tenantId)).key_fp
-          : (await (await targetLink()).sharedReadiness()).key_fp
+      const got = await ops.targetKeyFp()
       if (!got)
         throw new MoveStepError(
           'APP_KEY_UNKNOWN',

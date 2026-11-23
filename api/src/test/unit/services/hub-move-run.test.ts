@@ -217,6 +217,7 @@ function fakeOps() {
     verifyName: rec('verifyName', (_e: unknown) => state.serving),
     retireSource: rec('retireSource', () => undefined),
     verifyTargetKey: rec('verifyTargetKey', () => undefined),
+    targetKeyFp: rec('targetKeyFp', () => null as string | null),
     dropTempHost: rec('dropTempHost', () => null as string | null),
     revokeTickets: rec('revokeTickets', () => undefined),
     databaseIdentity: rec('databaseIdentity', (side: 'source' | 'target') => state.identity[side])
@@ -1645,6 +1646,9 @@ describe('heal and resume', () => {
         x.state = i < at ? 'done' : i === at ? 'running' : 'pending'
       })
       steps.phase = 'forward'
+      // Died before the new home's key checked (a run that died after it finishes the retire
+      // without checking again: hub-move-retire-retry.test.ts, M-2).
+      delete steps.retire_key_checked_at
       const released = at > steps.list.findIndex((x) => x.key === 'release')
       if (!released) {
         steps.routed = []
@@ -2327,9 +2331,8 @@ describe('the app key across moves (E2E B4, P6-38)', () => {
     expect(item).toMatchObject({ done: false })
     expect(fake.names()).not.toContain('retireSource')
     // F4-1 (P6-39): what to do, not "retire by hand".
-    expect(item?.text).toContain(
-      "Do not retire the old home yet. Enter the app's key on the new home (Hub → app → App key), then resume the move"
-    )
+    expect(item?.text).toMatch(/^Do not retire the old home yet: /)
+    expect(item?.text).toContain('Finish and keep the old home')
     expect(item?.text).not.toMatch(/^Retire the old placement by hand/)
     // Retried with backoff for about a minute before giving up.
     expect(fake.names().filter((n) => n === 'verifyTargetKey').length).toBeGreaterThanOrEqual(3)

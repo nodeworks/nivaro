@@ -8,6 +8,7 @@ import { type HubMoveRow, listMoves, readMove } from '../services/hub/move/rows.
 import {
   cancelMove,
   confirmRoute,
+  finishKeepSource,
   MoveError,
   planFor,
   resumeMove,
@@ -38,6 +39,11 @@ import { HubSecretError } from '../services/hub/secrets.js'
  *   POST /moves/:id/resume                       → 202 (interrupted only)
  *   POST /moves/:id/confirm-route                → {data: {serving}}
  *   POST /moves/:id/checklist {item, done}       → {data: checklist}
+ *   POST /moves/:id/finish-keep-source {confirm}  → 202; P6-43 (b) "Finish and keep the old home":
+ *                                                a move stopped at retire_source ends success
+ *                                                without retiring the old home (400
+ *                                                CONFIRM_MISMATCH; 409 NOT_RELEASED |
+ *                                                NOT_STOPPED_AT_RETIRE | MOVE_ENDED)
  *
  * Reads heal first: a move whose run stopped elsewhere shows `interrupted`. At boot the Hub heals
  * every stale move (beside the phase-2 promotion heal). Refusals are `{statusCode, error,
@@ -162,6 +168,16 @@ export function hubMoveRoutes(app: FastifyInstance) {
     return guarded(reply, async () => {
       await resumeMove(id, userId(req))
       return reply.code(202).send({ data: { resumed: true } })
+    })
+  })
+
+  app.post('/moves/:id/finish-keep-source', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = idOf(req)
+    if (id === null) return refuse(reply, 404, 'NOT_FOUND', 'No such move.')
+    await healMoves({}, id).catch(() => 0)
+    return guarded(reply, async () => {
+      await finishKeepSource(id, body(req).confirm, userId(req))
+      return reply.code(202).send({ data: { finishing: true } })
     })
   })
 

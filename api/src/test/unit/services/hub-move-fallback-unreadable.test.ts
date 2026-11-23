@@ -306,6 +306,7 @@ function moveOps() {
     verifyName: rec('verifyName', () => true),
     retireSource: rec('retireSource', () => undefined),
     verifyTargetKey: rec('verifyTargetKey', () => undefined),
+    targetKeyFp: rec('targetKeyFp', () => null as string | null),
     dropTempHost: rec('dropTempHost', () => null as string | null),
     revokeTickets: rec('revokeTickets', () => undefined),
     databaseIdentity: rec('databaseIdentity', () => 'pg|db.internal|5432|acme')

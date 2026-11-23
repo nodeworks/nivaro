@@ -1024,9 +1024,82 @@ describe('HubMovePanel — a move in progress', () => {
     expect(await screen.findByRole('button', { name: 'Resume' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Roll back' })).toBeNull()
     expect(
-      screen.getByText(/Enter the key under App key on this environment, then Resume/)
+      screen.getByText(/Enter the key the new home runs under App key on this environment/)
     ).toBeInTheDocument()
     expect(screen.queryByText(/The Hub stopped hearing from this move/)).toBeNull()
+  })
+
+  // P6-43 (b): Finish and keep the old home, typed confirm.
+  it('Finish and keep the old home waits for the typed confirm, then posts it', async () => {
+    openMove({
+      status: 'interrupted',
+      step: 'release',
+      steps: JSON.stringify({
+        list: steps.map((key) => ({
+          key,
+          state: key === 'retire_source' ? 'failed' : key === 'done' ? 'pending' : 'done'
+        })),
+        phase: 'forward'
+      }),
+      error: 'APP_KEY_UNKNOWN: The new home holds no encryption key for this app.'
+    })
+    h.post.mockImplementation(async (url: string) => {
+      if (url === '/hub/moves/77/finish-keep-source') return { data: { data: { finishing: true } } }
+      throw new Error(url)
+    })
+    renderPanel()
+    const button = await screen.findByRole('button', { name: 'Finish and keep the old home' })
+    expect(button).toBeDisabled()
+    const field = screen.getByLabelText(/Finish and keep the old home: the move ends/)
+    fireEvent.change(field, { target: { value: 'nope' } })
+    expect(button).toBeDisabled()
+    const label = field.closest('div')?.parentElement?.querySelector('code')?.textContent ?? ''
+    fireEvent.change(field, { target: { value: label } })
+    expect(button).toBeEnabled()
+    fireEvent.click(button)
+    await waitFor(() =>
+      expect(h.post).toHaveBeenCalledWith('/hub/moves/77/finish-keep-source', { confirm: label })
+    )
+  })
+
+  // M-1: a new home that could not be asked is not a key to enter.
+  it('an unreachable new home says to Resume, never to enter a key', async () => {
+    openMove({
+      status: 'interrupted',
+      step: 'release',
+      steps: JSON.stringify({
+        list: steps.map((key) => ({
+          key,
+          state: key === 'retire_source' ? 'failed' : key === 'done' ? 'pending' : 'done'
+        })),
+        phase: 'forward'
+      }),
+      error:
+        'LINK_UNREACHABLE: The Hub could not reach the new home to check its key (it did not answer) — Resume to try again.'
+    })
+    renderPanel()
+    expect(await screen.findByRole('button', { name: 'Resume' })).toBeInTheDocument()
+    expect(
+      screen.getAllByText(/could not reach the new home to check its key/).length
+    ).toBeGreaterThan(0)
+    expect(screen.queryByText(/Enter the key the new home runs/)).toBeNull()
+  })
+
+  // Review I-2 A: an interrupted ROLLBACK that carries an APP_KEY error keeps the rollback text.
+  it('a rollback before release stopped with an APP_KEY error shows the rollback text', async () => {
+    openMove({
+      status: 'interrupted',
+      step: 'target_ready',
+      steps: JSON.stringify({
+        list: steps.map((key) => ({ key, state: 'pending' })),
+        phase: 'rollback'
+      }),
+      error: "APP_KEY_MISMATCH: The new home seals this app's values with another key."
+    })
+    renderPanel()
+    expect(await screen.findByText(/Resume and Roll back both go on undoing/)).toBeInTheDocument()
+    expect(screen.queryByText(/Enter the key the new home runs/)).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Finish and keep the old home' })).toBeNull()
   })
 })
 

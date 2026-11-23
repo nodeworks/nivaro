@@ -82,6 +82,15 @@ export interface MoveSteps {
   target_placement_unused?: boolean
   /** Refusals the operator overrode at start (P6-20 #2: LINK_URL_NOT_PULLABLE). */
   overrides?: string[]
+  /**
+   * retire_source: when the new home's key checked (ISO time). Written before the step column
+   * says retire_source (which drops the app from a shared source's list), so a run that stops
+   * after it finishes the retire on Resume without checking again: a failed check never follows
+   * a retire that started (review M-2).
+   */
+  retire_key_checked_at?: string | null
+  /** P6-43 (b): a person chose "Finish and keep the old home" (typed confirm) after release. */
+  finish_keep?: { by: string | null; at: string }
   /** The run's own lock tokens (env + shared), which heal frees by compare-and-delete. */
   locks?: { env: string; shared: Array<{ id: number; token: string }> }
   /** Where each dedicated side is reached (addresses.ts), resolved and probed at start. */

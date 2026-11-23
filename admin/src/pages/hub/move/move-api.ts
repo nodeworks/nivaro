@@ -599,7 +599,9 @@ export function moveBadge(m: HubMove | undefined): MoveBadge | null {
   if (!m) return null
   if (m.status === 'waiting') return { text: 'Waiting for you', tone: 'attention' }
   if (isHaltedTargetLive(m)) return { text: 'Halted: stop the new home', tone: 'halted' }
-  if (isKeyNotChecked(m)) return { text: 'Waiting for the app key', tone: 'attention' }
+  const stop = retireStopKind(m)
+  if (stop === 'key') return { text: 'Waiting for the app key', tone: 'attention' }
+  if (stop === 'unreachable') return { text: 'Key not checked: Resume', tone: 'attention' }
   if (m.status === 'interrupted') return { text: 'Move interrupted', tone: 'attention' }
   if (isLiveMove(m.status)) {
     const rows = moveStepRows(m)
@@ -976,6 +978,14 @@ export const MOVE_CODE_COPY: Record<string, Copy> = {
     title: 'That move has already ended',
     hint: 'Its result is shown here. Dismiss it to plan a new move.'
   },
+  NOT_RELEASED: {
+    title: 'The move has not reached its new home yet',
+    hint: 'Before release the old home still serves the app: Resume or Roll back the move instead.'
+  },
+  NOT_STOPPED_AT_RETIRE: {
+    title: 'This move is not waiting on its old home',
+    hint: 'Finish and keep the old home is only for a move stopped at retiring the old home. Reload the move.'
+  },
   ROLLING_BACK: {
     title: 'The move is already rolling back',
     hint: 'Wait for it to finish undoing its steps; the app stays on its old home.'
@@ -1164,12 +1174,27 @@ export const isHaltedTargetLive = (m: Pick<HubMove, 'status' | 'error'>) =>
   m.status === 'interrupted' && splitRunError(m.error ?? '').code === 'HALTED_TARGET_LIVE'
 
 /**
- * Untested path 2: a released move whose new home's key did not check at retire_source. It
- * stays interrupted (MOVE_OPEN) with the old home kept until the key is entered and Resume
- * checks it again.
+ * Untested path 2 (rulings P6-42 / P6-43, review I-2 / M-1): a released move that THIS attempt
+ * stopped at retire_source because the new home's key did not check (`key`) or the new home could
+ * not be asked (`unreachable`); null for anything else. Only the current attempt's failure counts:
+ * release done, not rolling back, the retire_source step `failed` (a resume clears the error and
+ * sets the step running again), and the stored error is that stop's own.
  */
-export const isKeyNotChecked = (m: Pick<HubMove, 'status' | 'error'>) =>
-  m.status === 'interrupted' && /^APP_KEY_(MISMATCH|UNKNOWN): /.test(m.error ?? '')
+export function retireStopKind(
+  m: Pick<HubMove, 'status' | 'error' | 'steps' | 'step' | 'plan'>
+): 'key' | 'unreachable' | null {
+  if (m.status !== 'interrupted' || !m.error || isRollingBack(m) || !pastRelease(m)) return null
+  const retire = moveStepRows(m).find((r) => r.key === 'retire_source')
+  if (retire?.state !== 'failed') return null
+  const code = splitRunError(m.error).code
+  if (!code || code === 'HALTED_TARGET_LIVE') return null
+  if (/^APP_KEY_(MISMATCH|UNKNOWN)$/.test(code)) return 'key'
+  return m.error.includes('could not reach the new home to check its key') ? 'unreachable' : null
+}
+
+/** Finish and keep the old home (P6-43 (b)): typed confirm `<app>/<env>`. */
+export const finishKeepSource = (id: number, confirm: string) =>
+  api.post(`/hub/moves/${id}/finish-keep-source`, { confirm })
 
 /** The target the `target_stopped` item names ("Stop <target>: …"), else a plain stand-in. */
 export function haltedTargetName(itemText: string | undefined): string {
