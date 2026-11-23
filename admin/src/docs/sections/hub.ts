@@ -1417,6 +1417,7 @@ export const hubDatabasesDocs: DocSection = {
         'The Hub asks the app over its hub link which database it runs on. Another engine family is `ENGINE_MISMATCH` (attach the record of the database the app really uses); an app that cannot be asked is `ENGINE_UNVERIFIED` (link it to the Hub and make sure it runs).',
         "The Hub then checks the record's stored connection. A failed check refuses with `DATABASE_UNREACHABLE`, and the answer carries the check, shown under the refusal: fix the connection on the database page and try again.",
         "When the server identity the Hub reads through the record differs from the one the app reports, the answer carries a warning (shown on the card): the Hub may reach the same server under another name or address. A move's plan checks it again from the target's side (`DATABASE_DIFFERS`), and that is what blocks a wrong database.",
+        "An environment on a Docker stack is stricter, because its next deploy writes the attached record into the stack's database settings: a different identity, or one the Hub cannot read, refuses with `DATABASE_IDENTITY_DIFFERS`. When you know it is the same database under another address, press Attach anyway (a two-press confirm). It sends `override: true`, and the activity row is `hub-env-db-attach-override`.",
         'A database attached to an environment cannot be removed from the Hub (`IN_USE`): detach it here first.'
       ]
     },
@@ -1473,7 +1474,7 @@ export const hubDatabasesDocs: DocSection = {
         ['`DELETE /databases/:id`', 'Body `{ confirm, drop? }`: detach, or detach and drop.'],
         [
           '`PUT /environments/:envId/database`',
-          'Body `{ database_id }`: attach this record to an existing environment. Answers `{ data: { database, check, changed, warning } }`. Hub administrators; refusals in Attach to an existing environment.'
+          'Body `{ database_id, override? }`: attach this record to an existing environment (`override: true` only after `DATABASE_IDENTITY_DIFFERS`). Answers `{ data: { database, check, changed, warning, overridden } }`. Hub administrators; refusals in Attach to an existing environment.'
         ],
         [
           '`DELETE /environments/:envId/database`',
