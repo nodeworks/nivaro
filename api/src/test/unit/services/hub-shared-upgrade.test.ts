@@ -1226,3 +1226,37 @@ describe('re-apply after a run that never reached apply (N-2)', () => {
     })
   })
 })
+
+describe('REDIS_URL stored, not applied (N-3)', () => {
+  it('marked from the PATCH until a run that rendered that URL succeeds; never the value', async () => {
+    const id = await newShared({ settings: JSON.stringify({ redis: 'external' }) })
+    expect(await Run.redisUrlNotApplied(id)).toBe(false)
+    const url1 = 'rediss://:Pw-One-0123456789@redis.internal.example.com:6380/1'
+    await Run.setSharedSecrets(id, { REDIS_URL: url1 })
+    expect(await Run.redisUrlNotApplied(id)).toBe(true)
+    // A run that rendered it but failed (swarm rolled back) does not clear the mark.
+    const failing = runDeps(fakes())
+    failing.deps.agentStack = vi.fn(async () => ({
+      name: 'x',
+      owner: { shared: 'x' },
+      environment: 'shared',
+      spec_hash: 'f'.repeat(64),
+      image: null,
+      state: 'rolled_back' as const,
+      published_port: null,
+      services: []
+    })) as never
+    expect((await start(id, failing.deps)).row?.status).toBe('failed')
+    expect(await Run.redisUrlNotApplied(id)).toBe(true)
+    // A successful run clears it; the stored plan holds no URL.
+    await db('nivaro_hub_shared_deploys').where({ shared_deployment_id: id }).del()
+    const { row } = await start(id, runDeps(fakes()).deps)
+    expect(row?.status).toBe('success')
+    expect(await Run.redisUrlNotApplied(id)).toBe(false)
+    const stored = (await db('nivaro_hub_shared_deploys').where({ id: row?.id }).first()).plan
+    expect(stored).not.toContain('Pw-One')
+    // A new URL is pending again until the next successful apply.
+    await Run.setSharedSecrets(id, { REDIS_URL: url1.replace('One', 'Two') })
+    expect(await Run.redisUrlNotApplied(id)).toBe(true)
+  })
+})

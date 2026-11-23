@@ -1245,3 +1245,31 @@ describe('PATCH secrets: all or nothing', () => {
     expect(JSON.parse(openSecret(row.secrets) as string).REDIS_URL).toBe(URL_)
   })
 })
+
+// Parked wave (Task 5 round 2 N-3): a REDIS_URL the stack has not been applied with yet stays
+// marked on the GET (a warning, never the value) after the PATCH answer is gone.
+describe('GET: REDIS_URL stored, not applied', () => {
+  it('warns REDIS_URL_NOT_APPLIED after a re-apply that did not start', async () => {
+    const made = await create({ key: 'shared-r11', mode: 'docker', driver_id: 3 })
+    const get = async () =>
+      (
+        await app.inject({
+          method: 'GET',
+          url: `/api/hub/shared/${made.row.id}`,
+          headers: asAdmin
+        })
+      ).json().data.warnings as { code: string; text: string }[]
+    expect((await get()).map((w) => w.code)).not.toContain('REDIS_URL_NOT_APPLIED')
+    setSharedReapply(async () => ({ started: false, reason: 'BUSY' }))
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/hub/shared/${made.row.id}`,
+      headers: asAdmin,
+      payload: { secrets: { REDIS_URL: 'redis://:Pw-0123456789@redis.example.com:6379/0' } }
+    })
+    expect(res.json()).toMatchObject({ reapply: 'failed', reapply_reason: 'BUSY' })
+    const w = (await get()).find((x) => x.code === 'REDIS_URL_NOT_APPLIED')
+    expect(w?.text).toMatch(/not been applied/)
+    expect(JSON.stringify(w)).not.toContain('Pw-0123456789')
+  })
+})

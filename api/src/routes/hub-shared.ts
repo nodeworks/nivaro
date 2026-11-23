@@ -53,7 +53,11 @@ import {
   tenantsOf
 } from '../services/hub/shared/tenants.js'
 import { SharedUpgradeError } from '../services/hub/shared/upgrade-plan.js'
-import { setSharedSecrets, sharedSecretsShown } from '../services/hub/shared/upgrade-run.js'
+import {
+  redisUrlNotApplied,
+  setSharedSecrets,
+  sharedSecretsShown
+} from '../services/hub/shared/upgrade-run.js'
 
 /**
  * Nivaro Hub phase 6 (Task 3): shared deployments and app keys, mounted under /api/hub by hub.ts
@@ -438,18 +442,25 @@ export function hubSharedRoutes(app: FastifyInstance): void {
     const id = idParam((req.params as { id: string }).id)
     const row = id === null ? null : await getShared(id)
     if (id === null || !row) return notFound(reply)
-    const [apps, sightings, prevUntil, listEtag, secrets] = await Promise.all([
+    const [apps, sightings, prevUntil, listEtag, secrets, redisPending] = await Promise.all([
       appsPlaced(row),
       sightingsOrNull(id),
       previousTokenUntil(id),
       listEtagOrNull(row),
-      sharedSecretsShown(id)
+      sharedSecretsShown(id),
+      row.mode === 'docker' ? redisUrlNotApplied(id) : false
     ])
     const warnings = blockWarnings(row)
     if (sightings === null)
       warnings.push({
         code: 'SIGHTINGS_UNAVAILABLE',
         text: 'The Hub could not read which processes of this deployment it has seen (Redis did not answer).'
+      })
+    // Parked wave (Task 5 N-3): lasts until a run that rendered this REDIS_URL succeeds.
+    if (redisPending)
+      warnings.push({
+        code: 'REDIS_URL_NOT_APPLIED',
+        text: 'A REDIS_URL is stored for this deployment, but its stack has not been applied with it yet. Upgrade the deployment (at the same version to apply it again) so it uses that Redis.'
       })
     return {
       data: {

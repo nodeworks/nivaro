@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto'
+import { createHmac, randomBytes } from 'node:crypto'
 import { insertReturningId } from '../../../db/dialect/ef.js'
 import { db } from '../../../db/index.js'
 import { runInBackgroundPool } from '../../../db/pool-context.js'
@@ -220,6 +220,42 @@ export async function setSharedSecrets(
     'SECRETS_CHANGED',
     'The deployment secrets changed at the same moment — try again.'
   )
+}
+
+/**
+ * A fingerprint of the REDIS_URL a run rendered ('' when none): HMAC keyed by the deployment's
+ * own SESSION_SECRET (256 random bits, sealed), so the stored plan holds nothing that reveals or
+ * lets anyone test a guess at the URL. null before the deployment has its secrets.
+ */
+function redisUrlFp(secrets: Record<string, string>): string | null {
+  if (!secrets.SESSION_SECRET) return null
+  return createHmac('sha256', secrets.SESSION_SECRET)
+    .update(`nivaro-shared-redis-url\n${secrets.REDIS_URL ?? ''}`)
+    .digest('hex')
+    .slice(0, 32)
+}
+
+/**
+ * True while a REDIS_URL is stored that no successful run has applied (parked wave, Task 5 N-3):
+ * a re-apply answered BUSY / LAST_RUN_FAILED / failed, or the run that rendered it failed. The
+ * mark lasts until a run that rendered this URL succeeds. Never the value.
+ */
+export async function redisUrlNotApplied(sharedId: number): Promise<boolean> {
+  const s = await readSharedSecrets(sharedId)
+  if (!s.REDIS_URL) return false
+  const fp = redisUrlFp(s)
+  if (!fp) return true
+  const last = await db(SHARED_DEPLOYS)
+    .where({ shared_deployment_id: sharedId, status: 'success' })
+    .whereNot({ kind: 'observed' })
+    .orderBy('id', 'desc')
+    .first('plan')
+  if (!last) return true
+  try {
+    return (JSON.parse(String(last.plan ?? '{}')) as { redis_url_fp?: unknown }).redis_url_fp !== fp
+  } catch {
+    return true
+  }
 }
 
 /** Which writable secrets are set: the mask, or null. Never a value. */
@@ -621,7 +657,7 @@ async function runUpgrade(c: RunCtx, deps: SharedRunDeps): Promise<void> {
           : 'The agent did not apply the stack.'
       )
     }
-    await recordApplied(deployId, specHash)
+    await recordApplied(deployId, specHash, redisUrlFp(secrets))
 
     // 3. every live replica runs the version
     await step('wait_version', `3. waiting for every replica to run ${version} (≤ 30 min)`)
@@ -797,8 +833,15 @@ async function runUpgrade(c: RunCtx, deps: SharedRunDeps): Promise<void> {
   }
 }
 
-/** Notes what the agent applied in the stored plan (the spec hash; never the spec). */
-async function recordApplied(deployId: number, specHash: string): Promise<void> {
+/**
+ * Notes what the agent applied in the stored plan: the spec hash and the REDIS_URL fingerprint
+ * (redisUrlFp; never the spec or a secret).
+ */
+async function recordApplied(
+  deployId: number,
+  specHash: string,
+  redisFp: string | null
+): Promise<void> {
   const row = await db(SHARED_DEPLOYS).where({ id: deployId }).first('plan')
   let stored: Record<string, unknown> = {}
   try {
@@ -807,6 +850,7 @@ async function recordApplied(deployId: number, specHash: string): Promise<void> 
     /* keep going */
   }
   stored.spec_hash = /^[0-9a-f]{1,128}$/i.test(specHash) ? specHash : null
+  stored.redis_url_fp = redisFp
   await db(SHARED_DEPLOYS)
     .where({ id: deployId })
     .update({ plan: JSON.stringify(stored) })
