@@ -1,5 +1,5 @@
 import { ConfirmButton, type ErrorDescription, ErrorNotice, QueryErrorState } from '@nivaro/shared'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
@@ -10,6 +10,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { api } from '@/lib/api'
 import { cn, formatRelative } from '@/lib/utils'
+import { fetchHubApps, hubKeys, useHubApp } from '../hub-api'
 import { CopyButton, dangerArmed, dangerGhost, Field, SecretInput, SectionCard } from '../hub-parts'
 import {
   type ChecklistItem,
@@ -33,6 +34,7 @@ import {
   useDatabase,
   useDbServers
 } from './db-api'
+import { attachEnvDatabase, detachEnvDatabase, EnvDbFailure, envDbError } from './env-db-api'
 
 /** The Databases tab's right side for one database, and the forms an app's creation panel reuses. */
 
@@ -644,6 +646,8 @@ function DatabaseBody({
           <DbConnectionForm row={d} onChecked={setChecked} clearPassword={checks} />
         )}
 
+        <EnvironmentAttach d={d} onChanged={refresh} />
+
         <SectionCard
           title='Remove from the Hub'
           description={
@@ -703,5 +707,150 @@ function DatabaseBody({
         </SectionCard>
       </div>
     </div>
+  )
+}
+
+/**
+ * Attach this record to an environment that already exists, or detach it (ruling P6-32): what an
+ * app the Hub did not create needs before it can move onto a shared deployment.
+ */
+function EnvironmentAttach({ d, onChanged }: { d: HubDatabaseRow; onChanged: () => void }) {
+  const qc = useQueryClient()
+  const [appId, setAppId] = useState('')
+  const [envId, setEnvId] = useState('')
+  const [failure, setFailure] = useState<EnvDbFailure | null>(null)
+  const [warning, setWarning] = useState<string | null>(null)
+  const [picking, setPicking] = useState(false)
+  const apps = useQuery({
+    queryKey: hubKeys.apps(),
+    queryFn: fetchHubApps,
+    enabled: picking && !d.environment && d.status === 'ready'
+  })
+  const app = useHubApp(appId ? Number(appId) : null)
+  const done = () => {
+    setFailure(null)
+    onChanged()
+    if (appId) void qc.invalidateQueries({ queryKey: hubKeys.app(Number(appId)) })
+  }
+  const fail = (err: unknown, fallback: string) =>
+    setFailure(
+      err instanceof EnvDbFailure ? err : new EnvDbFailure(envDbError(err, fallback), null)
+    )
+  const attach = useMutation({
+    mutationFn: () => attachEnvDatabase(Number(envId), d.id),
+    onSuccess: (out) => {
+      setWarning(out.warning)
+      setPicking(false)
+      done()
+      toast.success(`Attached ${d.database_name}`)
+    },
+    onError: (err) => fail(err, 'Could not attach the database')
+  })
+  const detach = useMutation({
+    mutationFn: () => detachEnvDatabase(d.environment?.id as number),
+    onSuccess: () => {
+      setWarning(null)
+      done()
+      toast.success(`Detached ${d.database_name}`)
+    },
+    onError: (err) => fail(err, 'Could not detach the database')
+  })
+
+  const notes = (
+    <>
+      {warning && (
+        <p className='m-0 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-200'>
+          {warning}
+        </p>
+      )}
+      {failure && <ErrorNotice description={failure.description} />}
+      {failure?.check && <CheckResult check={failure.check} />}
+    </>
+  )
+
+  if (d.environment)
+    return (
+      <SectionCard
+        title='Environment'
+        description={`Attached to ${environmentWords(d)}. Detaching keeps this record and the database; the environment then has no record.`}
+      >
+        <div className='space-y-3 p-4'>
+          <ConfirmButton
+            title='Detach from environment'
+            confirmLabel={`Detach from ${environmentWords(d)}?`}
+            className={dangerGhost}
+            armedClassName={dangerArmed}
+            disabled={detach.isPending}
+            onConfirm={() => detach.mutate()}
+          >
+            {detach.isPending ? 'Detaching…' : 'Detach from environment'}
+          </ConfirmButton>
+          {notes}
+        </div>
+      </SectionCard>
+    )
+
+  return (
+    <SectionCard
+      title='Environment'
+      description='Not attached. For an app the Hub did not create: attach the record of the database it runs on, so it can move onto a shared deployment.'
+    >
+      <div className='space-y-3 p-4'>
+        {d.status !== 'ready' ? (
+          <p className='m-0 text-[12px] text-slate-500 dark:text-muted-foreground'>
+            Only a ready database can be attached.
+          </p>
+        ) : !picking ? (
+          <Button size='sm' variant='outline' className='h-8' onClick={() => setPicking(true)}>
+            Attach to environment…
+          </Button>
+        ) : (
+          <div className='flex flex-wrap items-end gap-3'>
+            <Field id={`hub-db-attach-app-${d.id}`} label='App'>
+              <SimpleSelect
+                value={appId}
+                onChange={(v) => {
+                  setAppId(v)
+                  setEnvId('')
+                }}
+                ariaLabel='App'
+                className='h-8 w-[200px] text-[13px]'
+                disabled={apps.isPending}
+                options={[
+                  { value: '', label: apps.isPending ? 'Loading…' : 'Pick an app' },
+                  ...(apps.data ?? []).map((a) => ({ value: String(a.id), label: a.name }))
+                ]}
+              />
+            </Field>
+            <Field id={`hub-db-attach-env-${d.id}`} label='Environment'>
+              <SimpleSelect
+                value={envId}
+                onChange={setEnvId}
+                ariaLabel='Environment'
+                className='h-8 w-[180px] text-[13px]'
+                disabled={!appId || app.isPending}
+                options={[
+                  { value: '', label: 'Pick an environment' },
+                  ...(app.data?.environments ?? []).map((e) => ({
+                    value: String(e.id),
+                    label: e.key
+                  }))
+                ]}
+              />
+            </Field>
+            <Button
+              size='sm'
+              className='h-8 bg-nvr-cyan text-white hover:bg-nvr-cyan/90'
+              disabled={!envId || attach.isPending}
+              onClick={() => attach.mutate()}
+            >
+              {attach.isPending ? 'Attaching…' : 'Attach to environment'}
+            </Button>
+          </div>
+        )}
+        {apps.isError && <ErrorNotice error={apps.error} onRetry={() => void apps.refetch()} />}
+        {notes}
+      </div>
+    </SectionCard>
   )
 }
