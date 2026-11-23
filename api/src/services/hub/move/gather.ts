@@ -827,7 +827,17 @@ async function dedicatedTargetFacts(
     .where('e.placement_id', placementId)
     .whereNot('e.id', ctx.envId)
     .first('a.key as app', 'e.key as env')) as { app: string; env: string } | undefined
-  if (user) out.in_use_by = `${user.app}/${user.env}`
+  // Another environment's open move onto this placement uses it too (T18 R3-6).
+  const usedBy =
+    user ??
+    ((await db(`${MOVES} as m`)
+      .join(`${ENVS} as e`, 'e.id', 'm.environment_id')
+      .join('nivaro_hub_apps as a', 'a.id', 'e.app_id')
+      .where('m.to_placement_id', placementId)
+      .whereNot('m.environment_id', ctx.envId)
+      .whereIn('m.status', OPEN_MOVE)
+      .first('a.key as app', 'e.key as env')) as { app: string; env: string } | undefined)
+  if (usedBy) out.in_use_by = `${usedBy.app}/${usedBy.env}`
   if (side.kind !== 'docker') return out
   const driver = await getDriver(side.driverId)
   const { h, code } =

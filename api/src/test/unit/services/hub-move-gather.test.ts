@@ -1045,4 +1045,35 @@ describe('parked wave', () => {
     expect(plan.warnings.map((w) => w.code)).toContain('EXTENSION_PIN_UNVERIFIED')
     expect(plan.checklist.map((c) => c.id)).toContain('extension_builds_same')
   })
+
+  it("R3-6: another environment's open move onto the placement → TARGET_IN_USE; a finished one is not", async () => {
+    const sharedId = await newShared()
+    const target = await dockerPlacement('shop-kept')
+    const other = await newEnv({ placement_id: await sharedPlacement(sharedId) })
+    const move = await insertId('nivaro_hub_moves', {
+      app_id: other.appId,
+      environment_id: other.id,
+      from_placement_id: await sharedPlacement(sharedId),
+      to_placement_id: target,
+      kind: 'to_dedicated',
+      routing: 'automatic',
+      status: 'running',
+      steps: '[]'
+    })
+    const e = await newEnv({
+      placement_id: await sharedPlacement(sharedId),
+      db_ref: `hub-db:${await newDb()}`
+    })
+    const gather = async () =>
+      Gather.gatherMovePlanInput(e.id, { kind: 'dedicated', placement_id: target }, deps())
+    const input = await gather()
+    expect(input.target_facts.in_use_by).toBe(`${other.appKey}/prod`)
+    expect(buildMovePlan(input).blockers.map((b) => b.code)).toContain('TARGET_IN_USE')
+    for (const status of ['waiting', 'interrupted']) {
+      await db('nivaro_hub_moves').where({ id: move }).update({ status })
+      expect((await gather()).target_facts.in_use_by).toBe(`${other.appKey}/prod`)
+    }
+    await db('nivaro_hub_moves').where({ id: move }).update({ status: 'rolled_back' })
+    expect((await gather()).target_facts.in_use_by).toBeNull()
+  })
 })
