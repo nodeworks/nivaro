@@ -38,7 +38,7 @@ vi.mock('../../../services/graph-directory.js', () => ({
 }))
 
 const { directoryRoutes } = await import('../../../routes/directory.js')
-const { runWithTenantDb } = await import('../../../db/tenant-context.js')
+const { runWithTenantDb, getTenantId } = await import('../../../db/tenant-context.js')
 
 type Session = { directoryConnect?: { returnTo: string; redirectUri: string } }
 const sessions: Session[] = []
@@ -47,6 +47,7 @@ async function buildApp() {
   const app = Fastify()
   app.decorateRequest('session', null as never)
   app.addHook('onRequest', async (req) => {
+    ;(req as unknown as { isAdmin: boolean }).isAdmin = req.headers['x-admin'] === '1'
     const s: Session = {}
     sessions.push(s)
     ;(req as unknown as { session: Session }).session = s
@@ -109,6 +110,44 @@ describe('GET /directory/connect', () => {
     expect(res.statusCode).toBe(302)
     expect(seen.redirectUri).toBe('https://admin.deploy.example/api/auth/callback')
     expect(sessions[0].directoryConnect?.returnTo).toBe('https://admin.deploy.example/')
+    await app.close()
+  })
+})
+
+describe('GET /directory/status?fresh=1 (forced token refresh, 30 s throttle)', () => {
+  const inAppNamed = <T>(id: string, fn: () => Promise<T>) =>
+    new Promise<T>((resolve, reject) =>
+      runWithTenantDb({} as never, id.toLowerCase(), () => void fn().then(resolve, reject), id)
+    )
+  const fresh = (app: Awaited<ReturnType<typeof buildApp>>) =>
+    app.inject({ url: '/directory/status?fresh=1', headers: { 'x-admin': '1' } })
+
+  it("shared: app A's forced refresh never throttles app B's (each app has its own 30 s)", async () => {
+    process.env.HUB_SHARED_DEPLOYMENT = 'shared-1'
+    const gd = await import('../../../services/graph-directory.js')
+    const reset = vi.mocked(gd.resetDirectoryToken)
+    reset.mockClear()
+    const app = await buildApp()
+    const tenants: string[] = []
+    reset.mockImplementation(() => {
+      tenants.push(getTenantId() ?? '')
+    })
+    await inAppNamed('A', () => fresh(app))
+    await inAppNamed('B', () => fresh(app))
+    await inAppNamed('A', () => fresh(app)) // within A's 30 s: throttled
+    expect(tenants).toEqual(['A', 'B'])
+    await app.close()
+  })
+
+  it('self-hosted: one throttle, as before', async () => {
+    const gd = await import('../../../services/graph-directory.js')
+    const reset = vi.mocked(gd.resetDirectoryToken)
+    reset.mockClear()
+    reset.mockImplementation(() => {})
+    const app = await buildApp()
+    await fresh(app)
+    await fresh(app)
+    expect(reset).toHaveBeenCalledTimes(1)
     await app.close()
   })
 })

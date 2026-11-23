@@ -5,6 +5,7 @@ import { db } from '../db/index.js'
 import { tenantOrigin } from '../db/tenant-context.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { appBox } from '../services/app-state.js'
 import { perAppJobs } from '../services/deployment-mode.js'
 import { checkDirectory } from '../services/directory-sync.js'
 import {
@@ -61,6 +62,10 @@ async function nivaroMatch(u: DirectoryUser) {
   return row ?? null
 }
 
+/** When this app last forced a directory token refresh (`?fresh=1`): each app on a shared
+ *  deployment has its own 30 s throttle, so one app's refresh never holds back another's. */
+const lastForcedRefresh = appBox(() => 0)
+
 export async function directoryRoutes(app: FastifyInstance) {
   // What the app token can do — the card and the Add-user dialog gate on this.
   // `?fresh=1` drops the cached token first: a consent granted in Azure only
@@ -68,13 +73,16 @@ export async function directoryRoutes(app: FastifyInstance) {
   // and rate-limited — every forced refresh is a call to Microsoft's token
   // endpoint on the tenant's behalf, not something any signed-in user should
   // be able to repeat in a loop.
-  let lastForcedRefresh = 0
   app.get<{ Querystring: { fresh?: string } }>(
     '/status',
     { preHandler: requireAuth },
     async (req) => {
-      if (req.query.fresh === '1' && req.isAdmin && Date.now() - lastForcedRefresh > 30_000) {
-        lastForcedRefresh = Date.now()
+      if (
+        req.query.fresh === '1' &&
+        req.isAdmin &&
+        Date.now() - lastForcedRefresh.value > 30_000
+      ) {
+        lastForcedRefresh.value = Date.now()
         resetDirectoryToken()
       }
       return { data: await directoryStatus() }
