@@ -1324,6 +1324,26 @@ async function interrupt(ctx: Ctx): Promise<void> {
   )
 }
 
+/**
+ * R5-M-1: when the rollback could not give the source its names back (or lift its maintenance),
+ * the way to recover by hand: Apply now on the source's own stack (it renders the environment's
+ * own names), and the Task 9 escape hatch for a maintenance the Hub can no longer lift.
+ */
+async function sourceRecoveryText(move: HubMoveRow): Promise<string> {
+  const p = await getPlacement(move.from_placement_id)
+  let names = 'Put the names back on the source by hand.'
+  if (p?.kind === 'shared') {
+    const shared = await getShared(p.shared_deployment_id)
+    names = `Apply now on the shared deployment ${shared?.key ?? p.shared_deployment_id} (its stack then carries this app's names again).`
+  } else if (p) {
+    const stack = (p.target as { stack?: unknown }).stack
+    const driver = await getDriver(p.driver_id)
+    if (driver?.kind === 'docker' && typeof stack === 'string')
+      names = `Apply now on the source stack ${stack} (driver ${driver.name}): it renders the environment's own names again.`
+  }
+  return `To recover: ${names} If the source still shows maintenance, lift it on the source app with POST /api/hub-link/maintenance {"on":false} without move_id, or delete the nvr:maintenance key in its Redis (remove HUB_BOOT_MAINTENANCE from its stack first if it is set).`
+}
+
 async function rollBack(
   ctx: Ctx,
   reason: 'failed' | 'cancelled',
@@ -1369,8 +1389,20 @@ async function rollBack(
     checklist.push({ id: 'repoint_name', text: repoint, required: true, done: false })
     await patchMove(ctx.moveId, { checklist })
   }
+  const recover =
+    failed.includes('route') || failed.includes('maintenance_on')
+      ? await sourceRecoveryText(move)
+      : null
+  if (recover) {
+    ctx.run.log(recover, 'error')
+    const fresh = (await readMove(ctx.moveId)) ?? move
+    const checklist = fresh.checklist.filter((c) => c.id !== 'restore_source')
+    checklist.push({ id: 'restore_source', text: safeLine(recover), required: true, done: false })
+    await patchMove(ctx.moveId, { checklist })
+  }
+  // The recovery goes first: the stored error is cut at 1000 characters.
   const base = failed.length
-    ? `${move.error ? `${move.error} — ` : ''}The rollback could not undo: ${failed.join(', ')}. Check those by hand.`
+    ? `The rollback could not undo: ${failed.join(', ')}. ${recover ?? 'Check those by hand.'}${move.error ? ` — ${move.error}` : ''}`
     : move.error
   const error = repoint ? `${base ? `${base} — ` : ''}${repoint}` : base
   await patchMove(ctx.moveId, {

@@ -706,6 +706,16 @@ describe('rolls back from every step before release', () => {
     expect(m?.status).toBe('failed')
     expect(m?.error).toMatch(/could not undo: route/)
     expect(undoCalls(fake.calls).at(-1)).toEqual(['sourceMaintenance', false])
+    // R5-M-1: the error and a required checklist item name the recovery.
+    const stack = (await db('nivaro_hub_placements').where({ id: m?.from_placement_id }).first())
+      .target
+    const name = JSON.parse(String(stack)).stack as string
+    expect(m?.error).toContain(`Apply now on the source stack ${name}`)
+    expect(m?.error).toMatch(/nvr:maintenance/)
+    const item = m?.checklist.find((c) => c.id === 'restore_source')
+    expect(item).toMatchObject({ required: true, done: false })
+    expect(item?.text).toContain(`Apply now on the source stack ${name}`)
+    expect(item?.text).toMatch(/\{"on":false\} without move_id/)
   })
 })
 
