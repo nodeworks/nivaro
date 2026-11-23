@@ -1016,7 +1016,8 @@ async function applyRoute(
       steps.routed = [...(steps.routed ?? []), i]
       await saveSteps(ctx, steps)
     }
-    await ctx.ops.route(route[i])
+    // R2-M-8: one apply's converge wait ends with the route budget, not 30 minutes later.
+    await ctx.ops.route(route[i], { deadline: by })
     steps.route_done = [...(steps.route_done ?? []), i]
     await saveSteps(ctx, steps)
     const a = route[i]

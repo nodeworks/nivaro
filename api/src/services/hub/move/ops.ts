@@ -136,7 +136,8 @@ export interface MoveOps {
   freezeTarget(): Promise<void>
   /** Docker: stack removed (volumes kept). GitLab: retired, read back. Shared: nothing. */
   removeTarget(): Promise<void>
-  route(a: RouteAction): Promise<void>
+  /** R2-M-8: `deadline` (epoch ms) bounds the apply's converge wait (the route step's budget). */
+  route(a: RouteAction, opts?: { deadline?: number }): Promise<void>
   unroute(a: RouteAction): Promise<void>
   verifyName(expect: { version: string; shared: string | null }): Promise<boolean>
   retireSource(): Promise<void>
@@ -163,7 +164,7 @@ export interface MoveOps {
  */
 export type SharedStackRouter = (
   shared: SharedDeployment,
-  change: { op: 'add_host' | 'drop_host'; host: string; moveId: number }
+  change: { op: 'add_host' | 'drop_host'; host: string; moveId: number; deadline?: number }
 ) => Promise<void>
 
 let sharedStackRouter: SharedStackRouter = defaultSharedStackRouter()
@@ -501,7 +502,8 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
   const applyStack = async (
     side: Extract<Side, { kind: 'docker' }>,
     want: { version: string; image: string; extensions: Record<string, string> },
-    shape: (spec: StackSpec) => void
+    shape: (spec: StackSpec) => void,
+    opts: { deadline?: number } = {}
   ): Promise<{ specHash: string; image: string }> => {
     const prepared = await prepareStackSpec(
       envId,
@@ -523,7 +525,9 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
     const hash = applied?.spec_hash
     if (typeof hash !== 'string' || !/^[0-9a-f]{64}$/.test(hash))
       throw new MoveStepError('AGENT_INCOMPATIBLE', 'The Hub agent answered without a spec hash.')
-    const by = now() + STACK_CONVERGE_MS
+    // R2-M-8: a route apply waits only for what is left of the route step's budget.
+    const capped = opts.deadline !== undefined && opts.deadline < now() + STACK_CONVERGE_MS
+    const by = capped ? (opts.deadline as number) : now() + STACK_CONVERGE_MS
     let misses = 0
     for (;;) {
       try {
@@ -545,10 +549,15 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
           throw asStepError(err, `The agent stopped answering about ${side.stack}.`)
       }
       if (now() >= by)
-        throw new MoveStepError(
-          'STACK_DEPLOY_TIMEOUT',
-          `${side.stack} did not converge within 30 minutes.`
-        )
+        throw capped
+          ? new MoveStepError(
+              'ROUTE_TIMEOUT',
+              `${side.stack} did not run the new names within the route's 10 minutes.`
+            )
+          : new MoveStepError(
+              'STACK_DEPLOY_TIMEOUT',
+              `${side.stack} did not converge within 30 minutes.`
+            )
       await sleep(STACK_POLL_MS)
     }
   }
@@ -1081,7 +1090,7 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
       log('the GitLab target is retired (its pipeline keeps the stack; stop it there)', 'warn')
     },
 
-    async route(a) {
+    async route(a, opts = {}) {
       const l = await load()
       const side = a.side === 'source' ? l.from : l.to
       if (side.kind === 'shared') {
@@ -1090,7 +1099,12 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
         const router = deps.sharedStackRouter ?? sharedStackRouter
         if (!a.host)
           throw new MoveStepError('ROUTE_UNSUPPORTED', 'A shared route change names no host.')
-        await router(side.shared, { op: a.op, host: a.host, moveId: move.id })
+        await router(side.shared, {
+          op: a.op,
+          host: a.host,
+          moveId: move.id,
+          ...(opts.deadline !== undefined ? { deadline: opts.deadline } : {})
+        })
         return
       }
       if (side.kind !== 'docker')
@@ -1100,13 +1114,18 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
       // apply_stack (target): the environment's own names plus the per-move name (the Hub keeps
       // reaching it there until release); drop_host (source): none.
       const temp = a.side === 'target' ? await tempHost() : null
-      await applyStack(side, want, (spec) => {
-        if (a.op === 'drop_host') spec.hostnames = []
-        if (a.side === 'target') {
-          if (temp && !spec.hostnames.includes(temp)) spec.hostnames = [...spec.hostnames, temp]
-          spec.env.HUB_BOOT_MAINTENANCE = String(move.id)
-        }
-      })
+      await applyStack(
+        side,
+        want,
+        (spec) => {
+          if (a.op === 'drop_host') spec.hostnames = []
+          if (a.side === 'target') {
+            if (temp && !spec.hostnames.includes(temp)) spec.hostnames = [...spec.hostnames, temp]
+            spec.env.HUB_BOOT_MAINTENANCE = String(move.id)
+          }
+        },
+        opts
+      )
     },
 
     async unroute(a) {

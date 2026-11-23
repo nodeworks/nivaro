@@ -86,7 +86,13 @@ export function sharedStackRouter(deps: SharedRouteDeps = {}) {
   const now = deps.now ?? Date.now
   return async (
     shared: SharedDeployment,
-    change: { op: 'add_host' | 'drop_host'; host: string; moveId: number }
+    change: {
+      op: 'add_host' | 'drop_host'
+      host: string
+      moveId: number
+      /** R2-M-8: the route step's own deadline (epoch ms); the 30-minute cap otherwise. */
+      deadline?: number
+    }
   ): Promise<void> => {
     if (shared.mode !== 'docker' || !shared.stack || shared.driver_id == null)
       throw new PromotionError(
@@ -152,7 +158,8 @@ export function sharedStackRouter(deps: SharedRouteDeps = {}) {
           : 'The agent did not apply the shared stack.'
       )
     }
-    const by = now() + CONVERGE_MS
+    const capped = change.deadline !== undefined && change.deadline < now() + CONVERGE_MS
+    const by = capped ? (change.deadline as number) : now() + CONVERGE_MS
     let misses = 0
     for (;;) {
       try {
@@ -173,10 +180,15 @@ export function sharedStackRouter(deps: SharedRouteDeps = {}) {
           )
       }
       if (now() >= by)
-        throw new PromotionError(
-          'STACK_DEPLOY_TIMEOUT',
-          `${shared.stack} did not converge within 30 minutes.`
-        )
+        throw capped
+          ? new PromotionError(
+              'ROUTE_TIMEOUT',
+              `${shared.stack} did not run the new names within the route's 10 minutes.`
+            )
+          : new PromotionError(
+              'STACK_DEPLOY_TIMEOUT',
+              `${shared.stack} did not converge within 30 minutes.`
+            )
       await sleep(POLL_MS)
     }
   }

@@ -50,6 +50,8 @@ const PASSWORD = 'pw-Secret-Value-123'
 const saved = { HUB: process.env.HUB, KEY: process.env.ENCRYPTION_KEY }
 
 let t = Date.parse('2026-11-22T10:00:00Z')
+/** R2-M-8: the Docker fake's stack stays updating while this is set. */
+let converging = false
 const now = () => t
 const sleep = vi.fn(async (ms: number) => {
   t += ms
@@ -657,7 +659,7 @@ describe('deployTarget on Docker (R9: the target gets the app key, never a fresh
         return { spec_hash: 'a'.repeat(64), changed: ['web'], unchanged: [] }
       }),
       agentStack: vi.fn(async () => ({
-        state: 'converged',
+        state: converging ? 'updating' : 'converged',
         image: `nodeworks/nivaro@sha256:${'b'.repeat(64)}`
       }))
     }
@@ -785,6 +787,22 @@ describe('deployTarget on Docker (R9: the target gets the app key, never a fresh
     await mirrorRow(w)
     await ops.deployTarget()
     expect((await ops.dropTempHost().catch((e) => e))?.code).toBe('TEMP_HOST_STILL_SERVED')
+  })
+
+  // R2-M-8: a route apply waits for the route step's own 10-minute budget, not 30 minutes.
+  it('R2-M-8: a route apply that never converges stops at the route deadline, not after 30 minutes', async () => {
+    const { w, ops } = await dockerTarget()
+    await mirrorRow(w)
+    await ops.deployTarget()
+    // From here the stack never converges.
+    converging = true
+    const start = t
+    const err = await ops
+      .route({ side: 'target', op: 'apply_stack' } as never, { deadline: start + 10 * 60_000 })
+      .catch((e) => e)
+    converging = false
+    expect(err?.code).toBe('ROUTE_TIMEOUT')
+    expect(t - start).toBeLessThan(11 * 60_000)
   })
 
   it('stack settings holding another key → APP_KEY_MISMATCH, nothing applied', async () => {
