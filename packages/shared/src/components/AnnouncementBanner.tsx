@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigation, useOptionalNivaroClient } from './../context'
 import { get, post } from '../lib/commands'
 import { useLiveAvailable, useLiveEvent } from '../lib/live'
@@ -35,12 +35,23 @@ function backAround(until: string | null | undefined): string | null {
 
 function StrictMaintenancePage({ row, fallback }: { row: StrictMaintenance; fallback: string }) {
   const back = backAround(row.until)
+  // A modal alert: keyboard users land on its heading and Tab never walks out into the frozen app
+  // behind it (the page has nothing to press; it goes away by itself).
+  const heading = useRef<HTMLHeadingElement>(null)
+  useEffect(() => {
+    heading.current?.focus({ preventScroll: true })
+  }, [])
   return (
     <div
       role='alertdialog'
       aria-modal='true'
       aria-labelledby='nvr-strict-maintenance-title'
       data-strict-maintenance
+      onKeyDown={(e) => {
+        if (e.key !== 'Tab') return
+        e.preventDefault()
+        heading.current?.focus({ preventScroll: true })
+      }}
       className='fixed inset-0 z-[150] flex items-center justify-center bg-slate-50 p-6 dark:bg-background'
     >
       <div className='w-full max-w-[520px] rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-border dark:bg-card'>
@@ -48,8 +59,10 @@ function StrictMaintenancePage({ row, fallback }: { row: StrictMaintenance; fall
           Maintenance
         </p>
         <h1
+          ref={heading}
           id='nvr-strict-maintenance-title'
-          className='mt-2 text-[16px] font-semibold text-slate-900 dark:text-foreground'
+          tabIndex={-1}
+          className='mt-2 text-[16px] font-semibold text-slate-900 outline-none dark:text-foreground'
         >
           {row.headline?.trim() || fallback}
         </h1>
