@@ -763,6 +763,10 @@ export interface ExtensionAppsMembers {
   key(): string
   /** Whether this process serves many apps (Nivaro Cloud, or a Hub shared deployment). */
   many(): boolean
+  /** The current app's own origin (`https://host[:port]`) on a multi-tenant deployment — the
+   *  verified origin of the request, or the one a per-app job runs with; null self-hosted, outside
+   *  any app, or when the deployment lists none. For links an app sends (mail, redirects). */
+  origin(): string | null
   /** Registers a container whose entries name the app — a Map / Set whose string keys carry
    *  `key()` between separators (`<app>|…`, `<app>\u0000…`), or a store with its own
    *  `forgetApp(appKey)` — so the core drops that app's entries when the app leaves this process
@@ -910,7 +914,10 @@ export interface ExtensionDefinition {
    *  when no module-level state (cache, memo, guard, in-flight promise) can carry one app's data
    *  into another — key such state on the app (`ctx.apps`) or keep none. A shared
    *  deployment refuses a listed extension without it (readiness `shared-extensions` fails
-   *  naming it). Self-hosted and Nivaro Cloud ignore it. */
+   *  naming it). Self-hosted and Nivaro Cloud ignore it. An extension that keys its state on
+   *  `ctx.apps` declares it only while `coreProvidesApps()` is true (a getter), so an older core
+   *  that has no `ctx.apps` refuses it on a shared deployment instead of serving every app from
+   *  one slot. */
   shared?: true
 }
 

@@ -70,6 +70,7 @@ import { type ValidatorDef, validatorRegistry } from './validators.js'
 import '../plugin-types.js'
 import type { ReadinessResult } from '@nivaro/extension-kit'
 import {
+  CTX_APPS_MARKER,
   deprecationMessage,
   type ExtensionContext,
   type ExtensionDefinition,
@@ -119,6 +120,7 @@ export type {
   FlowTriggerRegistration
 } from '@nivaro/extension-kit'
 
+import { tenantOrigin } from '../db/tenant-context.js'
 import { registerAppKeyed } from '../services/app-forget.js'
 import { appMap } from '../services/app-state.js'
 import {
@@ -139,6 +141,11 @@ import {
   unregisterExtensionLenses
 } from '../services/traffic-actions/ext-lenses.js'
 import { registerTrafficNode, type TrafficNodeDef } from '../services/traffic-taps/nodes.js'
+
+// This core hands extensions ctx.apps: say so before any extension module is imported, so one
+// that keys its state on it may declare `shared: true` (extension-kit CTX_APPS_MARKER).
+;(globalThis as Record<symbol, unknown>)[Symbol.for(CTX_APPS_MARKER)] = true
+
 export type Extension = ExtensionDefinition
 
 /** Every extension call lands in the external API's Call Logs. A caller that
@@ -1398,6 +1405,7 @@ export function registrationMembers(
     apps: {
       key: () => currentTenantKey(),
       many: () => isMultiTenant(),
+      origin: () => (isMultiTenant() ? tenantOrigin() : null),
       registerKeyed: (container) => registerAppKeyed(container)
     },
     // A raw write (knex update, procedure) runs no hooks, so the stored rollups on the parent

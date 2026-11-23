@@ -1,3 +1,4 @@
+import { coreProvidesApps } from '@nivaro/extension-kit'
 import { describe, expect, it, vi } from 'vitest'
 import { runWithTenantDb } from '../../../db/tenant-context.js'
 import { registrationMembers } from '../../../extensions/loader.js'
@@ -138,5 +139,33 @@ describe('registrationMembers', () => {
     forgetAppState('app-b')
     expect(dropped).toBe('app-b')
     expect([...cache.keys()]).toEqual(['x'])
+  })
+
+  it("ctx.apps.origin is the app's own origin on a shared deployment, null self-hosted", async () => {
+    const m = registrationMembers(
+      'efp',
+      { app: {} as never, logger: {} as never, database: {} as never },
+      { note: () => {}, own: () => {}, cronPrefix: 'ext:efp:' }
+    )
+    const apps = m.apps
+    if (!apps) throw new Error('ctx.apps missing')
+    const originIn = (id: string, origin: string) =>
+      new Promise<string | null>((resolve) =>
+        runWithTenantDb({} as never, id, () => resolve(apps.origin()), id, origin)
+      )
+    expect(apps.origin()).toBeNull()
+    expect(await originIn('app-a', 'https://efp-a.example')).toBeNull()
+    vi.stubEnv('HUB_SHARED_DEPLOYMENT', 'shared-a')
+    try {
+      expect(await originIn('app-a', 'https://efp-a.example')).toBe('https://efp-a.example')
+      expect(await originIn('app-b', 'https://efp-b.example')).toBe('https://efp-b.example')
+      expect(apps.origin()).toBeNull()
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('the loader says it provides ctx.apps before any extension is imported', () => {
+    expect(coreProvidesApps()).toBe(true)
   })
 })

@@ -34,6 +34,19 @@ export type * from './signals.js'
 export type * from './tools.js'
 export type * from './user.js'
 
+/**
+ * Set by a core that hands extensions `ctx.apps` (the app a request or job serves), before it
+ * imports any extension: `globalThis[Symbol.for(CTX_APPS_MARKER)] === true`. An extension that
+ * keeps per-app state through `ctx.apps` declares `shared: true` only when it is set, so an older
+ * core on a shared deployment refuses the extension instead of serving every app from one slot.
+ */
+export const CTX_APPS_MARKER = 'nivaro.extension.ctx.apps'
+
+/** Whether the running core provides `ctx.apps` (see CTX_APPS_MARKER). */
+export function coreProvidesApps(): boolean {
+  return (globalThis as Record<symbol, unknown>)[Symbol.for(CTX_APPS_MARKER)] === true
+}
+
 /** Type-checks an extension's default export without changing it. */
 export function defineExtension<T extends import('./context.js').ExtensionDefinition>(ext: T): T {
   return ext
