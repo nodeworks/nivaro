@@ -6,9 +6,10 @@ import type { runMigrationsOn } from '../../db/index.js'
 import { getTenantDb, getTenantId, runWithoutTenant, withTenant } from '../../db/tenant-context.js'
 import { NIVARO_VERSION } from '../../version.js'
 import { forgetAppState } from '../app-state.js'
-import { hubSharedConfig, tenantSource } from '../deployment-mode.js'
+import { hubSharedConfig, perAppJobs, tenantSource } from '../deployment-mode.js'
 import type { runSchemaSteps } from '../extension-schema-steps.js'
 import { scrubDbError } from '../hub/db/connection.js'
+import { fireAppReady } from './app-lifecycle.js'
 import type { AppSchemaState } from './app-status.js'
 import type { TenantRecord, TenantRegistry } from './types.js'
 
@@ -347,7 +348,9 @@ async function runEnsure(t: TenantRecord, deps: AppSchemaDeps): Promise<AppSchem
       verifyAt: nextVerifyAt(nowFn())
     }
     await writeStored(t.id, ok)
-    return setState(t.id, ok)
+    const status = setState(t.id, ok)
+    if (perAppJobs()) fireAppReady(t)
+    return status
   } catch (err) {
     const at = nowFn()
     if (lockBusy(err)) {
@@ -476,7 +479,7 @@ async function migrationPass(
         // The app joins this process: its boot-time seeds first (an efp-ops release that changed
         // a template reaches every app), then it serves.
         await seedApp(t, deps)
-        adopt(t.id, stored, conn)
+        adopt(t, stored, conn)
         return
       }
       if (kind === 'waiting') return
@@ -535,8 +538,8 @@ function nextVerifyAt(from: number): number {
   return from + APP_SCHEMA_VERIFY_MS - Math.floor(randomFn() * APP_SCHEMA_VERIFY_JITTER_MS)
 }
 
-function adopt(tenantId: string, stored: StoredState, conn: string): void {
-  setState(tenantId, {
+function adopt(t: TenantRecord, stored: StoredState, conn: string): void {
+  setState(t.id, {
     state: 'ok',
     version: NIVARO_VERSION,
     at: typeof stored.at === 'string' ? stored.at : null,
@@ -545,6 +548,7 @@ function adopt(tenantId: string, stored: StoredState, conn: string): void {
     nextTry: 0,
     verifyAt: nextVerifyAt(nowFn())
   })
+  if (perAppJobs()) fireAppReady(t)
 }
 
 /** A loop pass is deciding now; `passAgain` = one more was asked for meanwhile (final review M2:

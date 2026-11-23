@@ -959,6 +959,8 @@ const SHARED: Record<string, string> = {
   'services/telemetry-store.ts :: accessLines': DIAG,
   'services/telemetry-store.ts :: statusCache': TELEMETRY,
   'services/telemetry-store.ts :: transport': FN_SLOT,
+  'services/tenancy/app-lifecycle.ts :: leftHooks': REGISTRY,
+  'services/tenancy/app-lifecycle.ts :: readyHooks': REGISTRY,
   'services/tenancy/app-keys.ts :: keys':
     'Task 14: app keys by tenant id (the map is keyed by the app)',
   'services/tenancy/app-migrations.ts :: gateOn':

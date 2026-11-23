@@ -4,6 +4,7 @@ import { NIVARO_VERSION } from '../../version.js'
 import { forgetAppState } from '../app-state.js'
 import { hubSharedConfig } from '../deployment-mode.js'
 import { INSTANCE_ID } from '../instance-roster.js'
+import { fireAppLeft } from './app-lifecycle.js'
 import { resetAppKeysForTests, setAppKeys } from './app-keys.js'
 import { HUB_TENANTS_PATH, parseHubTenants } from './hub-contract.js'
 import { HubBodyTooLargeError, hubFetch, readCappedText } from './hub-fetch.js'
@@ -174,7 +175,11 @@ export async function startHubTenantSource(deps: Deps): Promise<TenantRegistry> 
     // Task 22 M-2 (via Task 16): an app no longer listed has left this process (unplaced, or
     // moved away at retire_source): its per-app module state goes with it.
     const listed = new Set(list.map((t) => t.id))
-    for (const t of tenants) if (!listed.has(t.id)) forgetAppState(t.id)
+    for (const t of tenants) {
+      if (listed.has(t.id)) continue
+      forgetAppState(t.id)
+      fireAppLeft(t.id)
+    }
     // Final review I-1: an app that (re)appears starts clean too, so a leave this process never
     // saw (it was not listed in between) cannot hand a returning app its old cached state.
     const before = new Set(tenants.map((t) => t.id))
