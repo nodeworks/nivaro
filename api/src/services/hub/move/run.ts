@@ -1250,15 +1250,16 @@ async function finishSuccess(ctx: Ctx, warning: string | null): Promise<void> {
 /** After release a failing retire_source never rolls back: success with the item open. */
 async function finishRetireFailed(ctx: Ctx, steps: MoveSteps, err: MoveStepError): Promise<void> {
   await mergeChecklist(ctx.moveId, (checklist) => {
+    // Final review moves Minor 4: the source's own instruction (a Docker source never retired
+    // says to remove its stack now), not only "see the log".
+    const text = safeLine(
+      `Retire the old placement by hand: the Hub could not (${err.code}). ${err.message}`
+    )
     const item = checklist.find((c) => c.id === 'retire_source')
-    if (item) item.done = false
-    else
-      checklist.push({
-        id: 'retire_source',
-        text: 'Retire the old placement by hand: the Hub could not (see the move log).',
-        required: false,
-        done: false
-      })
+    if (item) {
+      item.done = false
+      item.text = text
+    } else checklist.push({ id: 'retire_source', text, required: false, done: false })
     return checklist
   })
   // The steps after retire_source (done) still count as done.

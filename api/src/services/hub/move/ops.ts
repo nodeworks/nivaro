@@ -1288,7 +1288,16 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
         }
       }
       if (from.kind === 'docker') {
-        await removeStack(from, l.envKey, l.app)
+        try {
+          await removeStack(from, l.envKey, l.app)
+        } catch (err) {
+          // Final review moves Minor 4: a source reached on its public name was never retired
+          // (it gave that name up); its stack is the only thing left to stop. Say so plainly.
+          throw new MoveStepError(
+            'SOURCE_NOT_RETIRED',
+            `The old Docker stack ${from.stack} could not be removed (${codeOf(err)})${retired ? '' : ' and was never retired'}: remove it now (docker stack rm ${from.stack}); until then a restart of it could run its jobs on the app's database.`
+          )
+        }
         log(`removed the source stack ${from.stack} (its volumes are kept)`)
         return
       }

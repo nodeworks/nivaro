@@ -815,6 +815,24 @@ describe('after release', () => {
     expect(Number(env.placement_id)).toBe(m?.to_placement_id)
   })
 
+  // Final review moves Minor 4 (FW-4): the retire item says what is left to do in words the
+  // source's own failure gives (a Docker source never retired: remove its stack now).
+  it('FW-4: the retire_source item carries the source’s own instruction', async () => {
+    plan = planOf('to_shared')
+    const w = await world('docker')
+    fake.state.during = (name) => {
+      if (name === 'retireSource')
+        throw new MoveStepError(
+          'SOURCE_NOT_RETIRED',
+          'The old Docker stack acme-prod could not be removed: remove it now (docker stack rm acme-prod).'
+        )
+    }
+    const { move_id } = await start(w, toFor('to_shared', w))
+    await Run.awaitMove(move_id)
+    const item = (await readMove(move_id))?.checklist.find((c) => c.id === 'retire_source')
+    expect(item?.text).toContain('remove it now (docker stack rm acme-prod)')
+  })
+
   it('a cancel after release is refused (TOO_LATE)', async () => {
     plan = planOf('to_shared')
     const w = await world('docker')
