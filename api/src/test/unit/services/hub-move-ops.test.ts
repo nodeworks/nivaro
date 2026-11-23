@@ -1098,3 +1098,20 @@ describe('deployTarget on GitLab is cancellable (R2-M-7)', () => {
     expect(err?.code).toBe('ABORTED')
   })
 })
+
+// E2E B4 (P6-38): after release, the new home must seal with the app's own key.
+describe('verifyTargetKey (E2E B4)', () => {
+  it('a shared target: matching key_fp passes; another → APP_KEY_MISMATCH; none → APP_KEY_UNKNOWN', async () => {
+    const { keyFingerprint } = await import('../../../services/app-key-fingerprint.js')
+    const w = await setup(true)
+    TENANT = w.tenant
+    const c = clients()
+    const ops = defaultMoveOps(w.move, w.plan, { client: c.factory, sleep, now })
+    c.conf.keyFp = keyFingerprint('ab'.repeat(32))
+    await ops.verifyTargetKey()
+    c.conf.keyFp = '0'.repeat(32)
+    expect((await ops.verifyTargetKey().catch((e) => e))?.code).toBe('APP_KEY_MISMATCH')
+    c.conf.keyFp = null as never
+    expect((await ops.verifyTargetKey().catch((e) => e))?.code).toBe('APP_KEY_UNKNOWN')
+  })
+})

@@ -1,3 +1,4 @@
+import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
 import type { Knex } from 'knex'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -127,6 +128,9 @@ async function world(fromKind: 'docker' | 'shared'): Promise<World> {
     placement_id: fromKind === 'docker' ? dockerPlacement : sharedPlacementA,
     version_pin: '0.3.210'
   })
+  // The app's key, as the plan requires (APP_KEY_UNKNOWN blocks a move without one).
+  const { setAppKey } = await import('../../../services/hub/shared/store.js')
+  await setAppKey(envId, 'ab'.repeat(32))
   return { envId, appKey, envKey, sharedA, sharedB, dockerPlacement, sharedPlacementA }
 }
 
@@ -212,6 +216,7 @@ function fakeOps() {
     unroute: rec('unroute', (_a: RouteAction) => undefined),
     verifyName: rec('verifyName', (_e: unknown) => state.serving),
     retireSource: rec('retireSource', () => undefined),
+    verifyTargetKey: rec('verifyTargetKey', () => undefined),
     dropTempHost: rec('dropTempHost', () => null as string | null),
     revokeTickets: rec('revokeTickets', () => undefined),
     databaseIdentity: rec('databaseIdentity', (side: 'source' | 'target') => state.identity[side])
@@ -355,6 +360,7 @@ const ORDER: Record<MoveKind, string[]> = {
     'verifyName',
     'targetMaintenance', // release: target serves for real
     'waitReplicas', // release: every target replica has it active
+    'verifyTargetKey',
     'retireSource',
     'dropTempHost',
     'revokeTickets'
@@ -375,6 +381,7 @@ const ORDER: Record<MoveKind, string[]> = {
     'route',
     'verifyName',
     'targetMaintenance',
+    'verifyTargetKey',
     'retireSource',
     'dropTempHost',
     'revokeTickets'
@@ -397,6 +404,7 @@ const ORDER: Record<MoveKind, string[]> = {
     'verifyName',
     'targetMaintenance',
     'waitReplicas',
+    'verifyTargetKey',
     'retireSource',
     'dropTempHost',
     'revokeTickets'
@@ -1599,7 +1607,8 @@ describe('heal and resume', () => {
     route: 'route',
     verify: 'verifyName',
     release: 'targetMaintenance',
-    retire_source: 'retireSource'
+    // E2E B4: the new home's key is checked before the source is retired.
+    retire_source: 'verifyTargetKey'
   }
   for (const key of MOVE_STEPS.to_shared.filter((k) => k !== 'done'))
     it(`heal at ${key}: a dead run holding its locks → interrupted, locks freed, resume from ${key}`, async () => {
@@ -2210,5 +2219,84 @@ describe('the move runner marks its own actions (MOVE_OPEN)', () => {
     expect([...seen]).toEqual([move_id])
     // Outside a run: none.
     expect(currentMoveRun()).toBeNull()
+  })
+})
+
+// E2E B4 (ruling P6-38): a move onto a shared deployment carries the app's key into the
+// environment's own entry (the only place a shared-placed app's key is read from), in the release
+// transaction; and the key round-trips docker → shared → docker. Real store functions.
+describe('the app key across moves (E2E B4, P6-38)', () => {
+  const sealWith = (hex: string, plain: string) => {
+    const iv = randomBytes(12)
+    const c = createCipheriv('aes-256-gcm', Buffer.from(hex, 'hex'), iv)
+    const ct = Buffer.concat([c.update(plain, 'utf8'), c.final()])
+    return { iv, tag: c.getAuthTag(), ct }
+  }
+  const openWith = (hex: string, v: ReturnType<typeof sealWith>) => {
+    const d = createDecipheriv('aes-256-gcm', Buffer.from(hex, 'hex'), v.iv)
+    d.setAuthTag(v.tag)
+    return Buffer.concat([d.update(v.ct), d.final()]).toString('utf8')
+  }
+
+  it('docker → shared → docker: the app opens a value sealed before the move, on both sides', async () => {
+    const Store = await import('../../../services/hub/shared/store.js')
+    const { saveStackSettings } = await import('../../../services/hub/docker/stack-settings.js')
+    const { sealSecret } = await import('../../../services/hub/secrets.js')
+    const { keyFingerprint } = await import('../../../services/app-key-fingerprint.js')
+    const K = 'c7'.repeat(32)
+    const w = await world('docker')
+    await db('nivaro_hub_environments')
+      .where({ id: w.envId })
+      .update({ encryption_key: null, encryption_key_fp: null })
+    // A Docker app: its key sits in its stack settings only (no entry of its own yet).
+    await saveStackSettings(w.envId, {
+      size: 'small',
+      redis: 'bundled',
+      publish_port: null,
+      settings: {},
+      secrets: sealSecret(JSON.stringify({ ENCRYPTION_KEY: sealSecret(K) }))
+    })
+    expect(await Store.openAppKey(w.envId)).toBe(K)
+    const sealed = sealWith(K, 'sealed before the move')
+
+    plan = planOf('to_shared')
+    const out = await start(w, toFor('to_shared', w))
+    await Run.awaitMove(out.move_id)
+    expect((await readMove(out.move_id))?.status).toBe('success')
+    // On shared: the key the deployment is handed (tenantsBody reads openAppKey) opens the value.
+    const onShared = await Store.openAppKey(w.envId)
+    expect(onShared).toBe(K)
+    expect(openWith(onShared as string, sealed)).toBe('sealed before the move')
+    const env = await db('nivaro_hub_environments').where({ id: w.envId }).first()
+    expect(env.encryption_key_fp).toBe(keyFingerprint(K))
+    // The deployment's key was checked before the source was retired.
+    const names = fake.names()
+    expect(names.indexOf('verifyTargetKey')).toBeGreaterThanOrEqual(0)
+    expect(names.indexOf('verifyTargetKey')).toBeLessThan(names.indexOf('retireSource'))
+
+    // And back out to a Docker stack: still the same key.
+    fake = fakeOps()
+    useDeps()
+    plan = planOf('to_dedicated')
+    const back = await start(w, toFor('to_dedicated', w))
+    await Run.awaitMove(back.move_id)
+    expect((await readMove(back.move_id))?.status).toBe('success')
+    const onDocker = await Store.openAppKey(w.envId)
+    expect(onDocker).toBe(K)
+    expect(openWith(onDocker as string, sealed)).toBe('sealed before the move')
+  })
+
+  it('a deployment that does not report the matching key never gets the source retired', async () => {
+    plan = planOf('to_shared')
+    const w = await world('docker')
+    const Store = await import('../../../services/hub/shared/store.js')
+    await Store.setAppKey(w.envId, 'd8'.repeat(32))
+    fake.state.failOn = (name) => name === 'verifyTargetKey'
+    const { move_id } = await start(w, toFor('to_shared', w))
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    expect(m?.status).toBe('success')
+    expect(m?.checklist.find((c) => c.id === 'retire_source')).toMatchObject({ done: false })
+    expect(fake.names()).not.toContain('retireSource')
   })
 })

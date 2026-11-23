@@ -145,6 +145,12 @@ export interface MoveOps {
   verifyName(expect: { version: string; shared: string | null }): Promise<boolean>
   retireSource(): Promise<void>
   /**
+   * E2E B4 (P6-38): after release, the target reports the app's own key fingerprint (the shared
+   * deployment's app status, or the dedicated target's readiness report). Throws APP_KEY_UNKNOWN /
+   * APP_KEY_MISMATCH otherwise; the source is not retired then.
+   */
+  verifyTargetKey(): Promise<void>
+  /**
    * P6-27: once rollback is no longer possible, a Docker target stack is applied again with only
    * the environment's own names and the per-move name is proven gone (the agent converged on a
    * spec without it, and the name no longer serves the app). Answers the name removed, or null
@@ -1204,6 +1210,29 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
       }
       log(`the per-move name ${temp} is gone from the target stack ${to.stack}`)
       return temp
+    },
+
+    async verifyTargetKey() {
+      const l = await load()
+      const appKey = await openAppKey(envId)
+      if (!appKey)
+        throw new MoveStepError('APP_KEY_UNKNOWN', 'The Hub holds no encryption key for this app.')
+      const want = keyFingerprint(appKey)
+      const got =
+        l.to.kind === 'shared'
+          ? (await clientFor(l.to.shared).appStatus(l.tenantId)).key_fp
+          : (await (await targetLink()).sharedReadiness()).key_fp
+      if (!got)
+        throw new MoveStepError(
+          'APP_KEY_UNKNOWN',
+          'The new home holds no encryption key for this app.'
+        )
+      if (got !== want)
+        throw new MoveStepError(
+          'APP_KEY_MISMATCH',
+          "The new home seals this app's values with another key than the app's own."
+        )
+      log("the new home seals this app's values with the app's own key")
     },
 
     async verifyName(expect) {

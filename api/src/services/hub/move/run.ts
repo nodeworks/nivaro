@@ -17,7 +17,7 @@ import {
   sharedLockRefusal
 } from '../promote-lock.js'
 import type { PullStatus } from '../shared/deployment-client.js'
-import { getShared } from '../shared/store.js'
+import { getShared, openAppKey, setAppKey } from '../shared/store.js'
 import {
   AddressError,
   type AddressOptions,
@@ -1005,6 +1005,8 @@ async function doStep(ctx: Ctx, key: MoveStepKey, steps: MoveSteps): Promise<voi
     case 'release':
       return release(ctx, steps)
     case 'retire_source':
+      // E2E B4 (P6-38): the new home seals with the app's own key before the old one is retired.
+      await ops.verifyTargetKey()
       return ops.retireSource()
     case 'done':
       return
@@ -1120,15 +1122,37 @@ async function release(ctx: Ctx, steps: MoveSteps): Promise<void> {
     }
     await saveSteps(ctx, steps)
   }
-  await db(ENVS)
-    .where({ id: ctx.envId })
-    .update({
-      placement_id: move.to_placement_id,
-      version_pin: ctx.plan.version,
-      status: 'active',
-      ...(ctx.shared.toDocker ? { hub_managed: true } : {}),
-      updated_at: new Date()
-    })
+  // E2E B4 (P6-38): a shared-placed app's key is read from the environment's own entry only
+  // (openAppKey). A Docker source keeps it in its stack settings, so it is resolved now (the R9
+  // order: the entry, then the stack settings), before the switch, and written into the entry in
+  // the same transaction. No key at all: the move does not release (the plan blocks it first).
+  let carryKey: string | null = null
+  if (ctx.shared.to !== null) {
+    const entry = (await db(ENVS).where({ id: ctx.envId }).first('encryption_key')) as
+      | { encryption_key: string | null }
+      | undefined
+    if (!entry?.encryption_key) {
+      carryKey = await openAppKey(ctx.envId)
+      if (!carryKey)
+        throw new MoveStepError(
+          'APP_KEY_UNKNOWN',
+          "The Hub holds no encryption key for this app, so the shared deployment could not open its values. Enter the app's ENCRYPTION_KEY on the environment, then move again."
+        )
+    }
+  }
+  await db.transaction(async (trx) => {
+    if (carryKey) await setAppKey(ctx.envId, carryKey, trx)
+    await trx(ENVS)
+      .where({ id: ctx.envId })
+      .update({
+        placement_id: move.to_placement_id,
+        version_pin: ctx.plan.version,
+        status: 'active',
+        ...(ctx.shared.toDocker ? { hub_managed: true } : {}),
+        updated_at: new Date()
+      })
+  })
+  if (carryKey) ctx.run.log("release: the app's encryption key is kept with the environment")
   ctx.run.log(`release: the environment now lives on placement ${move.to_placement_id}`)
   // Committed: the target serves for real now (a Docker target's boot maintenance is released
   // for good with the move id; a shared target's replicas re-read their list).
