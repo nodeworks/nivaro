@@ -398,6 +398,11 @@ async function assertDockerReady(
   deps: PlaceSharedDeps
 ): Promise<void> {
   if (shared.mode !== 'docker') return
+  if (shared.status === 'new' || !shared.version_pin)
+    throw refuse(
+      'NOT_DEPLOYED',
+      'This shared deployment has not been deployed yet: upgrade it to a version first, then place apps on it.'
+    )
   const names = environmentNames(environmentFromRow(envRow))
   const routed = new Set(await lastRoutedNames(shared.id))
   const outside = names.filter((n) => !patternCovers(shared.host_pattern, n) && !routed.has(n))

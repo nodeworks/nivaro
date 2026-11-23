@@ -1316,4 +1316,27 @@ describe('final fix wave FW-1 — a Docker shared deployment (I-3, M-6)', () => 
       'active'
     )
   })
+
+  it('M-6: a Docker shared deployment never deployed → 409 NOT_DEPLOYED at once', async () => {
+    await db('nivaro_hub_shared_deployments')
+      .where({ id: dockerShared })
+      .update({ status: 'new', version_pin: null })
+    try {
+      const app = await newApp()
+      const envId = await newEnv(app.id)
+      const err = await refusal(
+        place(
+          envId,
+          { shared_id: dockerShared, database_id: await newDb() },
+          { client: fakeClient().factory, agentHealth: traefik }
+        )
+      )
+      expect(err).toMatchObject({ code: 'NOT_DEPLOYED', statusCode: 409 })
+      expect(sleep).not.toHaveBeenCalled()
+    } finally {
+      await db('nivaro_hub_shared_deployments')
+        .where({ id: dockerShared })
+        .update({ status: 'active', version_pin: '0.3.210' })
+    }
+  })
 })
