@@ -415,17 +415,22 @@ export async function buildServer() {
     }
     // Staged imports run on the importer (NIVARO_ROLE=importer); the cron worker drains only
     // while no importer beats; a single process drains itself (services/import-handoff.ts).
-    if (!isMultiTenant()) {
+    // A Hub shared deployment drains per app (each app's `staged-imports` tick); here it starts
+    // only the deployment's kick subscriber, once, outside any app. Nivaro Cloud: neither.
+    if (!isMultiTenant() || perAppJobs()) {
       const { startImportDrainer } = await import('./services/staged-import-worker.js')
       void startImportDrainer(app).catch((err) =>
         app.log.warn({ err }, '[import-worker] did not start')
       )
       // Background exports handed off by web processes run on the same drainers
       // (services/export-handoff.ts; EXPORT_HANDOFF=off keeps every export where it started).
-      const { startExportDrainer } = await import('./services/export-worker.js')
-      void startExportDrainer(app).catch((err) =>
-        app.log.warn({ err }, '[export-worker] did not start')
-      )
+      // Self-hosted only: the export hand-off is not per app yet.
+      if (!perAppJobs()) {
+        const { startExportDrainer } = await import('./services/export-worker.js')
+        void startExportDrainer(app).catch((err) =>
+          app.log.warn({ err }, '[export-worker] did not start')
+        )
+      }
     }
     // Export temp files a stopped process left behind: swept at boot and every hour
     // (services/export-files.ts).
@@ -702,8 +707,8 @@ export async function buildServer() {
   }
   // Core jobs: self-hosted, and a Hub shared deployment, where each job runs once per app or once
   // for the deployment by its scope (services/cron-scope.ts; Hub phase 5, P5-9). Nivaro Cloud
-  // registers none of them. The ones that only make sense self-hosted (the import drainer…,
-  // SELF_HOSTED_ONLY_CRONS) are left out on a shared deployment by the manager itself.
+  // registers none of them. The ones that only make sense self-hosted (SELF_HOSTED_ONLY_CRONS)
+  // are left out on a shared deployment by the manager itself.
   if (!isMultiTenant() || perAppJobs()) {
     registerFileCleanup(app.cron)
     // digest-daily/weekly crons retired 2026-09-10 — the notification digest

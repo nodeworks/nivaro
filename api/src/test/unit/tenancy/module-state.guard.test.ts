@@ -927,7 +927,8 @@ const SHARED: Record<string, string> = {
   'services/sse-hub.ts :: listeners':
     'open SSE subscribers of this process; each carries its own app filter',
   'services/sse-hub.ts :: seq': GEN,
-  'services/staged-import-worker.ts :: drainer': 'the process drain loop handle',
+  'services/staged-import-worker.ts :: drainer':
+    "the process drain loop handle (a shared deployment: the deployment's kick subscriber)",
   'services/staged-imports.ts :: xlsxEntry': 'where the xlsx worker file sits in this image',
   'services/stall-causes.ts :: book': PROC,
   'services/stall-causes.ts :: onCaptured': FN_SLOT,

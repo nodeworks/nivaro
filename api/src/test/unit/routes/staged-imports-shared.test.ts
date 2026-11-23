@@ -2,9 +2,10 @@ import fastifyMultipart from '@fastify/multipart'
 import Fastify from 'fastify'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-// Ruling P5-10 item 6 (review I6): staged imports run on the import drainer, which a Hub shared
-// deployment does not run (per-app draining is phase 6). The upload and requeue answer 409
-// IMPORTS_NOT_ON_SHARED there instead of "queued" forever. Self-hosted and cloud are unchanged.
+// Hub shared deployment: staged imports run per app (each app's 10 s cron and the deployment's
+// kick subscriber drain its own queue, services/staged-import-worker.ts). The upload and the
+// requeue queue the run as they do self-hosted; the old 409 IMPORTS_NOT_ON_SHARED refusal is gone.
+// Self-hosted and cloud are unchanged.
 
 const inserted = vi.hoisted(() => [] as Array<Record<string, unknown>>)
 
@@ -97,35 +98,28 @@ const upload = (app: Awaited<ReturnType<typeof appWithRoutes>>) =>
     ...multipartBody({ import_key: 'invoices' }, { name: 'a.csv', body: 'a,b\n1,2\n' })
   })
 
-const REFUSAL = {
-  error: 'Staged imports are not available on a shared deployment yet.',
-  code: 'IMPORTS_NOT_ON_SHARED'
-}
-
 describe('staged imports on a shared deployment', () => {
   beforeEach(() => {
     process.env.HUB_SHARED_DEPLOYMENT = 'shared-1'
   })
 
-  it('the upload answers 409 IMPORTS_NOT_ON_SHARED and queues nothing', async () => {
+  it('the upload queues the run (202)', async () => {
     const res = await upload(await appWithRoutes())
-    expect(res.statusCode).toBe(409)
-    expect(res.json()).toEqual(REFUSAL)
-    expect(inserted).toEqual([])
+    expect(res.statusCode).toBe(202)
+    expect(res.json().data).toMatchObject({ id: 77, import_key: 'invoices', status: 'queued' })
+    expect(inserted).toHaveLength(1)
   })
 
-  it('a requeue answers the same', async () => {
+  it('a requeue queues the run again', async () => {
     const app = await appWithRoutes()
     const res = await app.inject({ method: 'POST', url: '/staged-imports/9/requeue' })
-    expect(res.statusCode).toBe(409)
-    expect(res.json()).toEqual(REFUSAL)
-    expect(inserted).toEqual([])
+    expect(res.statusCode).not.toBe(409)
+    expect(res.statusCode).toBeLessThan(300)
+    expect(inserted).toEqual([expect.objectContaining({ status: 'queued' })])
   })
 
-  it('the code has a plain hint', () => {
-    expect(ERROR_HINTS.IMPORTS_NOT_ON_SHARED).toBe(
-      'Ask whoever runs the shared deployment when staged imports will be available here.'
-    )
+  it('the refusal code has no hint left', () => {
+    expect((ERROR_HINTS as Record<string, string>).IMPORTS_NOT_ON_SHARED).toBeUndefined()
   })
 })
 

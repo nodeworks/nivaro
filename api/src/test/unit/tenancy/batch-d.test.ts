@@ -25,9 +25,9 @@ describe('batch D: classified cloud-flag sites', () => {
     expect(chaosRefusal(SHARED)).toBe(why)
   })
 
-  it('import hand-off drain (T4): off on cloud and shared', () => {
+  it('import hand-off drain (T4): off on cloud; a shared deployment drains per app', () => {
     expect(importDrainMode(CLOUD)).toBe('off')
-    expect(importDrainMode(SHARED)).toBe('off')
+    expect(importDrainMode(SHARED)).not.toBe('off')
     expect(importDrainMode({ ...SELF, IMPORT_WORKER: 'on' })).not.toBe('off')
   })
 

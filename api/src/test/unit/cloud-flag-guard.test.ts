@@ -53,7 +53,12 @@ const EXTRA_CALLS: Record<string, { multiTenant?: number; nivaroCloud?: number }
   'services/hub-signin/config.ts': { multiTenant: 2 },
   // Row schedules per app: resyncSchedules refuses in Nivaro Cloud only (its T1 entry is weight 0);
   // a Hub shared deployment reconciles inside an app, so each entry binds to it.
-  'services/row-schedules.ts': { nivaroCloud: 1 }
+  'services/row-schedules.ts': { nivaroCloud: 1 },
+  // Staged imports per app: the hand-off (enqueueImportJob, importDrainMode, enqueueImportRun) and
+  // the collection-import lease refuse in Nivaro Cloud only (their T4 entries are weight 0); a Hub
+  // shared deployment queues, kicks, leases and drains inside each app.
+  'services/import-handoff.ts': { nivaroCloud: 3 },
+  'routes/imports.ts': { nivaroCloud: 1 }
 }
 
 type Rule = 'T1' | 'T2' | 'T3' | 'T4' | 'T5' | 'T6' | 'T7' | 'C1' | 'C2' | 'C3' | 'C4' | 'C5'

@@ -1,8 +1,9 @@
 import { config } from '../config.js'
 import { cronTicksEnabled } from './cron-ticks.js'
-import { isMultiTenant } from './deployment-mode.js'
+import { isNivaroCloud, perAppJobs } from './deployment-mode.js'
 import { isRetiredSync } from './hub-link/retire.js'
 import { processRole } from './process-role.js'
+import { currentTenantKey } from './tenant-rooms.js'
 
 /**
  * Import hand-off: staged imports run on their own process (NIVARO_ROLE=importer), shaped
@@ -20,6 +21,11 @@ import { processRole } from './process-role.js'
  *   beat     <prefix>nvr:import-worker:<db>             the importer, 90 s TTL
  *   fallback <prefix>nvr:import-worker:<db>:fallback    a worker draining in its place, 90 s TTL
  *
+ * Hub shared deployment (one process, many apps, one Redis): inside an app every key but the
+ * kick channel carries the app after `<db>` (`…:import-handoff:<db>:<app>`, `…:import-worker:<db>:
+ * <app>`), and the kick, on the one deployment channel, says which app: `<app>|<run id>` or
+ * `<app>|job:<id>` (parseKick). Self-hosted keys and payloads are byte-identical to before.
+ *
  * The run ROW is the truth, the list is the hand-off: a run is claimed by the row's own atomic
  * `queued → running` update (two drainers never run one row), and its list entry is removed
  * only once the row is final (completed / error / canceled) or gone. A run left `running` by a
@@ -31,8 +37,12 @@ import { processRole } from './process-role.js'
  *   enabled    IMPORT_WORKER=on
  *   fallback   the cron-ticking worker of a split stack — only while no importer beats
  *   inline     a single process (no NIVARO_ROLE) that ticks crons — drains itself, as before
- *   off        IMPORT_WORKER=off, web / realtime / canary roles, cloud mode, a dev process
+ *   off        IMPORT_WORKER=off, web / realtime / canary roles, Nivaro Cloud, a dev process
  *              whose crons do not tick
+ *
+ * A Hub shared deployment has no process loop: each app's 10 s `staged-imports` cron drains it
+ * inside the app, and a kick drains the app it names at once. So no `enabled` there, and an
+ * importer (which ticks no crons) drains only on kicks.
  */
 
 export type ImportDrainMode = 'importer' | 'enabled' | 'fallback' | 'inline' | 'off'
@@ -63,11 +73,31 @@ const dbScope = () =>
     .toLowerCase()
     .replace(/[^a-z0-9_.-]/g, '_')
     .slice(0, 64)
-export const importQueueKey = () => `${prefix()}nvr:import-handoff:${dbScope()}`
+/** `:<app>` inside an app on a multi-app process; '' self-hosted, so its keys stay identical. */
+const appScope = () => {
+  const t = currentTenantKey()
+  return t ? `:${t}` : ''
+}
+const deploymentQueueKey = () => `${prefix()}nvr:import-handoff:${dbScope()}`
+export const importQueueKey = () => `${deploymentQueueKey()}${appScope()}`
 export const importAttemptsKey = () => `${importQueueKey()}:attempts`
-export const importKickChannel = () => `${importQueueKey()}:kick`
-export const importWorkerKey = () => `${prefix()}nvr:import-worker:${dbScope()}`
+/** One channel for the deployment: the payload names the app (kickPayload / parseKick). */
+export const importKickChannel = () => `${deploymentQueueKey()}:kick`
+export const importWorkerKey = () => `${prefix()}nvr:import-worker:${dbScope()}${appScope()}`
 export const importFallbackKey = () => `${importWorkerKey()}:fallback`
+
+/** A kick's payload: the target alone self-hosted; `<app>|<target>` inside an app. */
+export function kickPayload(target: string): string {
+  const t = currentTenantKey()
+  return t ? `${t}|${target}` : target
+}
+
+/** The app a kick names (null when it names none) and its target (a run id or `job:<id>`). */
+export function parseKick(payload: string): { tenant: string | null; target: string } {
+  const bar = payload.indexOf('|')
+  if (bar < 0) return { tenant: null, target: payload }
+  return { tenant: payload.slice(0, bar) || null, target: payload.slice(bar + 1) }
+}
 
 // Collection imports (nivaro_import_jobs, POST /api/imports) ride the same drainers on their own
 // list: a job id is a uuid, so its entries never mix with the numeric staged-run entries.
@@ -90,10 +120,10 @@ export const isFinalJobStatus = (s: unknown) => FINAL_JOB.has(String(s ?? '').to
 /** Hand a pending collection-import job to the drainers: list entry + kick. Best effort — the
  *  row is already `pending` in the database, and every drainer also reads pending rows there. */
 export async function enqueueImportJob(r: ImportRedis | null, id: string): Promise<boolean> {
-  if (!r || isMultiTenant()) return false
+  if (!r || isNivaroCloud()) return false
   try {
     await r.rpush(importJobQueueKey(), JSON.stringify({ id: String(id), at: Date.now() }))
-    await r.publish(importKickChannel(), `job:${id}`).catch(() => 0)
+    await r.publish(importKickChannel(), kickPayload(`job:${id}`)).catch(() => 0)
     return true
   } catch {
     return false
@@ -150,12 +180,19 @@ export const isFinalStatus = (s: unknown) => FINAL.has(String(s ?? '').toLowerCa
 
 /** May this process drain the import queue, and on what terms? */
 export function importDrainMode(env: NodeJS.ProcessEnv = process.env): ImportDrainMode {
-  if (isMultiTenant(env)) return 'off'
+  if (isNivaroCloud(env)) return 'off'
   // Hub phase 6: a retired app (moved away) drains nothing; read on every tick.
   if (isRetiredSync()) return 'off'
   const flag = (env.IMPORT_WORKER ?? '').trim().toLowerCase()
   if (flag === 'off') return 'off'
   const role = processRole(env)
+  if (perAppJobs(env)) {
+    // No process loop on a shared deployment: each app's cron drains it (and kicks).
+    if (role === 'importer') return 'importer'
+    if (role === 'web' || role === 'realtime' || role === 'canary') return 'off'
+    if (!cronTicksEnabled()) return 'off'
+    return role ? 'fallback' : 'inline'
+  }
   if (role === 'importer') return 'importer'
   if (flag === 'on') return 'enabled'
   if (role === 'web' || role === 'realtime' || role === 'canary') return 'off'
@@ -203,10 +240,10 @@ export async function enqueueImportRun(
   r: ImportRedis | null,
   id: number | string
 ): Promise<boolean> {
-  if (!r || isMultiTenant()) return false
+  if (!r || isNivaroCloud()) return false
   try {
     await r.rpush(importQueueKey(), JSON.stringify({ id: Number(id), at: Date.now() }))
-    await r.publish(importKickChannel(), String(id)).catch(() => 0)
+    await r.publish(importKickChannel(), kickPayload(String(id))).catch(() => 0)
     return true
   } catch {
     return false

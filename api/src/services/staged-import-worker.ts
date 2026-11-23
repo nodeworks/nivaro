@@ -1,12 +1,13 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { runInBackgroundPool } from '../db/pool-context.js'
+import { withTenant } from '../db/tenant-context.js'
 import { NIVARO_VERSION } from '../version.js'
 import { activityGroupKey, withActivityScope } from './activity-scope.js'
 import { appBox, appSet } from './app-state.js'
 import { withBackgroundWork } from './background-inflight.js'
 import { newChainId, startChain } from './chain.js'
-import { isMultiTenant } from './deployment-mode.js'
+import { isMultiTenant, perAppJobs } from './deployment-mode.js'
 import { getFile, readFileBuffer } from './files.js'
 import { announceCollectionImportRun } from './import-collection-runs.js'
 import {
@@ -27,6 +28,7 @@ import {
   LEASE_FAIL_NOTE,
   LEASE_RENEW_MS,
   LEASE_RETRY_NOTE,
+  parseKick,
   pruneFinishedEntries,
   type RunningRow,
   readImportBeat,
@@ -50,6 +52,9 @@ import {
   runStagedImport,
   scrubSecrets
 } from './staged-imports.js'
+import { appReadyForRequests } from './tenancy/app-migrations.js'
+import { getTenantRegistry } from './tenancy/registry.js'
+import type { TenantRecord } from './tenancy/types.js'
 import { runAsTrafficSource, type TrafficSource, withTrafficSource } from './traffic-source.js'
 import { noteImportRun } from './traffic-taps/sources.js'
 
@@ -286,10 +291,11 @@ interface KickSubscriber {
   disconnect?: () => void
 }
 
-/** The upload's kick, heard on a duplicated connection; null without one (the loop drains). */
+/** The upload's kick, heard on a duplicated connection; null without one (the loop drains).
+ *  `onKick` gets the payload (a run id, `job:<id>`, or `<app>|…` on a shared deployment). */
 async function subscribeImportKicks(
   app: FastifyInstance,
-  onKick: () => void
+  onKick: (payload: string) => void
 ): Promise<KickSubscriber | null> {
   try {
     const dup = (app as unknown as { redis?: { duplicate?: () => unknown } }).redis?.duplicate?.()
@@ -297,23 +303,71 @@ async function subscribeImportKicks(
     const conn = dup as KickSubscriber
     conn.on('error', () => {})
     await conn.subscribe(importKickChannel())
-    conn.on('message', () => onKick())
+    conn.on('message', (_channel: unknown, payload: unknown) => onKick(String(payload ?? '')))
     return conn
   } catch {
     return null
   }
 }
 
+/**
+ * Hub shared deployment: one kick heard on the deployment's channel. Resolves the app it names
+ * and, when this process lists it, it is active and its schema is ready, runs one drain pass
+ * inside it. Anything else is skipped silently: an app this process has not listed yet (another
+ * replica took the upload) is drained by its own 10 s `staged-imports` tick.
+ */
+export async function onImportKick(app: FastifyInstance, payload: string): Promise<void> {
+  const { tenant } = parseKick(payload)
+  if (!tenant) return
+  const registry = getTenantRegistry()
+  if (!registry) return
+  let t: TenantRecord | null = null
+  try {
+    t = (await registry.byId?.(tenant)) ?? null
+    if (!t) t = (await registry.listActive()).find((x) => x.id === tenant) ?? null
+  } catch {
+    return
+  }
+  // Like the per-app fan-out: never an app the Hub is moving or updating, nor a half-migrated one.
+  if (t?.status !== 'active') return
+  if (!appReadyForRequests(t.id)) return
+  try {
+    await withTenant(t, () => runInBackgroundPool(() => drainImportsTick(app)), t.origin)
+  } catch (err) {
+    app.log.warn({ err, tenant: t.id }, 'staged-import worker: kick drain failed')
+  }
+}
+
+/** The process drain loop and kick subscriber (self-hosted), or the deployment's kick subscriber
+ *  (shared). Process-wide: started once at boot, outside any app. */
 let drainer: { stop: () => Promise<void> } | null = null
 
 /**
  * Start draining on this process when it may: an importer or IMPORT_WORKER=on process runs its
  * own 10 s loop (it may tick no crons); every drainer also hears the upload's kick, so a run
  * starts at once instead of at the next tick. Returns the mode it runs in.
+ *
+ * Hub shared deployment: no loop (each app's `staged-imports` cron drains it, inside the app);
+ * only the kick subscriber, which drains the app a kick names (onImportKick).
  */
 export async function startImportDrainer(app: FastifyInstance): Promise<ImportDrainMode> {
   const mode = importDrainMode()
   if (mode === 'off' || drainer) return mode
+  if (perAppJobs()) {
+    const sub = await subscribeImportKicks(app, (payload) => {
+      void onImportKick(app, payload).catch(() => {})
+    })
+    app.log.info({ mode }, '[import-worker] draining staged imports per app on kicks and ticks')
+    drainer = {
+      stop: async () => {
+        const conn = sub
+        if (conn) await (conn.quit?.() ?? Promise.resolve()).catch(() => conn.disconnect?.())
+        drainer = null
+      }
+    }
+    app.addHook('onClose', async () => drainer?.stop())
+    return mode
+  }
   const r = importRedis(app)
   const tick = () => void runInBackgroundPool(() => drainImportsTick(app))
   const sub = await subscribeImportKicks(app, tick)
@@ -337,7 +391,9 @@ export async function startImportDrainer(app: FastifyInstance): Promise<ImportDr
 
 export function registerStagedImportWorker(app: FastifyInstance): void {
   // Registered everywhere (the roster, run-now); a tick drains only where importDrainMode()
-  // allows it, and an importer, which ticks no crons, runs the same pass on its own loop.
+  // allows it, and an importer, which ticks no crons, runs the same pass on its own loop. On a
+  // Hub shared deployment the job is per app (services/cron-scope.ts): each tick runs inside one
+  // app and drains that app's queue.
   app.cron.schedule('staged-imports', '*/10 * * * * *', async () => {
     const mode = importDrainMode()
     if (mode === 'importer' || mode === 'enabled') return // its own loop drains

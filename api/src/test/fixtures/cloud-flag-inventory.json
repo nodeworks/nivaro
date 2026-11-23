@@ -768,11 +768,12 @@
       "line": 442,
       "text": "if (process.env.CLOUD_META_DB_URL) return null",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T4",
-      "why": "import hand-off workers / lease Redis are process-wide",
-      "batch": "D"
+      "why": "collection-import lease Redis. Now isNivaroCloud() (EXTRA_CALLS): a Hub shared deployment keeps the lease, keyed per app, so the app's drainers never recover a live run",
+      "batch": "D",
+      "phase6": "done: per-app collection-job lease (Hub shared features Task 4)"
     },
     {
       "id": "routes/imports.ts:1013",
@@ -1266,7 +1267,7 @@
       "weight": 1,
       "meaning": "multiTenant",
       "rule": "T4",
-      "why": "staged-import drainer is a process-wide worker",
+      "why": "staged-import drainer start: self-hosted, and on a Hub shared deployment (`|| perAppJobs()`) only the deployment's kick subscriber (each app's cron drains); the export drainer inside stays self-hosted (`!perAppJobs()`)",
       "batch": "A"
     },
     {
@@ -1305,7 +1306,7 @@
       "rule": "T1",
       "why": "core jobs (file cleanup, queue snapshots, staged imports, trackers) registered self-hosted; also on a Hub shared deployment (`|| perAppJobs()`, P5-9), never in Nivaro Cloud",
       "batch": "A",
-      "phase6": "the self-hosted-only jobs of services/cron-scope.ts SELF_HOSTED_ONLY_CRONS (file-cleanup, staged-imports) need per-app storage keys / drainers"
+      "phase6": "the self-hosted-only jobs of services/cron-scope.ts SELF_HOSTED_ONLY_CRONS need per-app storage keys / drainers (staged-imports runs per app since Hub shared features Task 4)"
     },
     {
       "id": "server.ts:951",
@@ -2075,11 +2076,12 @@
       "line": 91,
       "text": "if (!r || process.env.CLOUD_META_DB_URL) return false",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T4",
-      "why": "import hand-off queue/workers are process-wide",
-      "batch": "D"
+      "why": "import hand-off: enqueueImportJob. Now isNivaroCloud() (EXTRA_CALLS): a Hub shared deployment queues per app (app-keyed list, kick `<app>|job:<id>`)",
+      "batch": "D",
+      "phase6": "done: per-app import hand-off keys and kicks (Hub shared features Task 4)"
     },
     {
       "id": "services/import-handoff.ts:151",
@@ -2087,11 +2089,12 @@
       "line": 151,
       "text": "if (env.CLOUD_META_DB_URL) return 'off'",
       "form": "env-param",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T4",
-      "why": "import hand-off queue/workers are process-wide",
-      "batch": "D"
+      "why": "importDrainMode. Now isNivaroCloud() (EXTRA_CALLS): a Hub shared deployment drains per app from the `staged-imports` cron (scope 'app') and kicks, no process loop",
+      "batch": "D",
+      "phase6": "done: per-app draining (Hub shared features Task 4)"
     },
     {
       "id": "services/import-handoff.ts:202",
@@ -2099,11 +2102,12 @@
       "line": 202,
       "text": "if (!r || process.env.CLOUD_META_DB_URL) return false",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T4",
-      "why": "import hand-off queue/workers are process-wide",
-      "batch": "D"
+      "why": "import hand-off: enqueueImportRun. Now isNivaroCloud() (EXTRA_CALLS): a Hub shared deployment queues per app (app-keyed list, kick `<app>|<run id>`)",
+      "batch": "D",
+      "phase6": "done: per-app import hand-off keys and kicks (Hub shared features Task 4)"
     },
     {
       "id": "services/infra-drift/store.ts:48",

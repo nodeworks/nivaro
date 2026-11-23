@@ -83,7 +83,9 @@ vi.mock('../../../services/job-runs.js', () => ({
 const routes = await import('../../../routes/imports.js')
 const { importsRoutes, runImportJob, claimImportJob, IMPORT_EARLY_FAIL_ROWS } = routes
 const { IMPORT_EARLY_FAIL_NOTE } = routes
-const { importJobQueueKey, importKickChannel } = await import('../../../services/import-handoff.js')
+const { importJobLeaseKey, importJobQueueKey, importKickChannel } = await import(
+  '../../../services/import-handoff.js'
+)
 const items = await import('../../../services/items.js')
 const activity = await import('../../../services/activity.js')
 
@@ -94,9 +96,11 @@ const OTHER = 'CCCCCCCC-0000-4000-8000-000000000003'
 function fakeRedis() {
   const lists = new Map<string, string[]>()
   const published: Array<[string, string]> = []
+  const sets: string[] = []
   return {
     lists,
     published,
+    sets,
     rpush: async (k: string, v: string) => {
       const l = lists.get(k) ?? []
       l.push(v)
@@ -115,7 +119,10 @@ function fakeRedis() {
       published.push([c, m])
       return 1
     },
-    set: async () => 'OK',
+    set: async (k: string) => {
+      sets.push(k)
+      return 'OK'
+    },
     get: async () => null,
     hincrby: async () => 1,
     hdel: async () => 1
@@ -169,9 +176,11 @@ beforeEach(() => {
   h.resolve = null
   redis.lists.clear()
   redis.published.length = 0
+  redis.sets.length = 0
 })
 afterEach(() => {
   delete process.env.CLOUD_META_DB_URL
+  delete process.env.HUB_SHARED_DEPLOYMENT
 })
 
 const jobRow = (id: string) => h.mem.rows('nivaro_import_jobs').find((r) => r.id === id)
@@ -205,6 +214,22 @@ describe('POST /imports hands the job to the import worker', () => {
     await vi.waitFor(() => expect(jobRow(id)?.status).toBe('complete'))
     expect(h.mem.rows('things')).toHaveLength(3)
     expect(redis.lists.get(importJobQueueKey()) ?? []).toEqual([])
+    expect(redis.sets).toEqual([]) // no lease Redis in Nivaro Cloud
+  })
+
+  it("a shared deployment runs it where it was taken, holding a lease the app's drainers read", async () => {
+    process.env.HUB_SHARED_DEPLOYMENT = 'shared-1'
+    const r = await app.inject({
+      method: 'POST',
+      url: '/imports',
+      headers: ADMIN,
+      payload: { collection: 'things', csv_data: csv(3), column_map: { name: 'name' } }
+    })
+    const id = r.json().data.id as string
+    await vi.waitFor(() => expect(jobRow(id)?.status).toBe('complete'))
+    expect(h.mem.rows('things')).toHaveLength(3)
+    // The per-app drainer's lease recovery sees a live run, never a lost one.
+    expect(redis.sets).toContain(importJobLeaseKey(id))
   })
 })
 

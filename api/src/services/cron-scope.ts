@@ -31,7 +31,6 @@ export const CORE_CRON_SCOPES: Record<string, CronScope> = {
   'chaos-gamedays': 'process', // fault drills against this deployment
   'chaos-monkey': 'process', // random fault drills against this deployment
   'chaos-test-overlap': 'process', // the chaos lease-split drill's own sleeping job
-  'staged-imports': 'process', // drains the process-wide import hand-off queue
   'huddle-turn-probe': 'process', // probes the deployment's TURN servers
   'huddle-sessions-sweep': 'process', // deployment-wide Redis huddle session keys (no tenant)
   'huddle-sessions-prune': 'process', // same store, pruned with no tenant
@@ -138,6 +137,9 @@ export const CORE_CRON_SCOPES: Record<string, CronScope> = {
   'sla-live-flips': 'app',
   'sql-checks': 'app',
   'staged-import-staging-purge': 'app',
+  // drains the app's own import queue and hand-off keys (services/import-handoff.ts); the kick
+  // subscriber started at boot drains the app a kick names at once
+  'staged-imports': 'app',
   'storage-snapshot': 'app',
   'subscription-integrity': 'app',
   'task-done-when-sweep': 'app',
@@ -188,7 +190,6 @@ export const SELF_HOSTED_ONLY_CRONS: Record<string, string> = {
   'huddle-turn-probe': 'huddle crons are off on multi-tenant (operator TURN hosts)',
   'huddle-sessions-sweep': 'huddle crons are off on multi-tenant',
   'huddle-sessions-prune': 'huddle crons are off on multi-tenant',
-  'staged-imports': 'the import hand-off drainer is off on multi-tenant',
   'outside-write-watch': 'returns at once on multi-tenant (process-local change tracking)',
   'sla-live-flips': 'returns at once on multi-tenant (process-local live collections)',
   'cumulative-flow-rollup': 'returns at once on multi-tenant',

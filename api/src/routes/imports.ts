@@ -12,7 +12,7 @@ import { activityGroupKey, withActivityScope } from '../services/activity-scope.
 import { getFields } from '../services/collections.js'
 import { selectInChunks, whereInList } from '../services/db-batch.js'
 import { importRowErrorText } from '../services/db-refusal-labels.js'
-import { isMultiTenant } from '../services/deployment-mode.js'
+import { isMultiTenant, isNivaroCloud } from '../services/deployment-mode.js'
 import { importDuplicateScan } from '../services/duplicate-check.js'
 import { contentDisposition } from '../services/help-video-download.js'
 import {
@@ -439,8 +439,10 @@ interface LeaseRedis {
   del?(key: string): Promise<unknown>
 }
 
+/** Nivaro Cloud has no drainers and no lease. A Hub shared deployment keeps one, keyed per app
+ *  (importJobLeaseKey inside the app), so the app's drainers never take a live run for lost. */
 function leaseRedis(app: FastifyInstance): LeaseRedis | null {
-  if (isMultiTenant()) return null
+  if (isNivaroCloud()) return null
   const r = (app as unknown as { redis?: Partial<LeaseRedis> }).redis
   return r && typeof r.set === 'function' ? (r as LeaseRedis) : null
 }
@@ -1008,7 +1010,9 @@ async function createImportJob(input: CreateJobInput, app: FastifyInstance) {
  * job goes on the import hand-off and the importer (or whoever drains per importDrainMode, the
  * same rules as staged imports) claims and runs it (services/collection-import-worker.ts). The
  * list entry + kick are best effort: drainers also read pending rows from the database.
- * Cloud mode has no drainers: the tenant process that took the job runs it, as before.
+ * Cloud mode has no drainers: the tenant process that took the job runs it, as before. A Hub
+ * shared deployment runs it the same way, under a per-app lease that its app's drainers (each
+ * app's `staged-imports` tick) read before they would recover it.
  */
 function handOffImportJob(app: FastifyInstance, id: string): void {
   if (isMultiTenant()) {
