@@ -287,3 +287,55 @@ describe('pattern helpers', () => {
     ).toEqual(['crm.example.com', 'x.y.apps.example.com'])
   })
 })
+
+describe('deployment-wide variables (settings.env)', () => {
+  it('reach the stack env, pass the agent, and never override a Hub key', () => {
+    const spec = renderSharedSpec(
+      input({ shared: shared({ settings: { env: { CREATE_SCOPE_GUARD: 'on' } } }) })
+    )
+    expect(spec.env.CREATE_SCOPE_GUARD).toBe('on')
+    expect(spec.env.HUB_SHARED_DEPLOYMENT).toBe('shared-one')
+    expect(agent.validateStackSpec(spec, cfg('traefik')).ok).toBe(true)
+  })
+
+  it('a Hub key in settings.env is refused at render and at save', () => {
+    expect(
+      code(() =>
+        renderSharedSpec(
+          input({ shared: shared({ settings: { env: { HUB_URL: 'https://x.example.com' } } }) })
+        )
+      )
+    ).toBe('KEY_REFUSED')
+    const saved = validateSharedInput({
+      key: 'shared-two',
+      name: 'Shared two',
+      mode: 'registered',
+      link_url: 'https://shared-two.example.com',
+      settings: { env: { NODE_ENV: 'development' } }
+    })
+    expect(saved.ok).toBe(false)
+  })
+
+  it('save judges keys as stack settings: unknown, credential-like and multi-line values refused', () => {
+    const base = {
+      key: 'shared-two',
+      name: 'Shared two',
+      mode: 'registered',
+      link_url: 'https://shared-two.example.com'
+    }
+    expect(
+      validateSharedInput({ ...base, settings: { env: { CREATE_SCOPE_GUARD: 'on' } } }).ok
+    ).toBe(true)
+    expect(validateSharedInput({ ...base, settings: { env: { NOT_A_NIVARO_KEY: 'x' } } }).ok).toBe(
+      false
+    )
+    expect(validateSharedInput({ ...base, settings: { env: { DB_PASSWORD: 'x' } } }).ok).toBe(false)
+    expect(validateSharedInput({ ...base, settings: { env: ['x'] } }).ok).toBe(false)
+  })
+
+  it('no settings.env: the stack env is unchanged', () => {
+    const before = renderSharedSpec(input())
+    const after = renderSharedSpec(input({ shared: shared({ settings: { env: {} } }) }))
+    expect(after.env).toEqual(before.env)
+  })
+})
