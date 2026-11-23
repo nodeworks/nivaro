@@ -179,6 +179,16 @@ export function retiredRefusal(req: FastifyRequest, reply: FastifyReply): boolea
   return true
 }
 
+/**
+ * The root onRequest (server.ts, ruling M17): a retired app refuses before routing has any say,
+ * so a path with no route (the SPA fallback, a 404) and a route whose own onRequest would answer
+ * first (a bearer check → 401) both answer APP_MOVED too. The preHandler below keeps the same
+ * check for an app built without this hook (tests, the realtime process has its own).
+ */
+export async function retiredRequestHook(req: FastifyRequest, reply: FastifyReply) {
+  if (retiredRefusal(req, reply)) return reply
+}
+
 /** The root preHandler (server.ts). */
 export async function maintenanceFreezeHook(req: FastifyRequest, reply: FastifyReply) {
   // Before the read early return below: a retired app refuses reads too (ruling M17).
