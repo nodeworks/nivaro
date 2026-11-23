@@ -25,7 +25,7 @@ export const hubSharedDocs: DocSection = {
         [
           '`docker`',
           'The Hub, through the agent, on a Docker driver.',
-          'Writes the stack (one service with role `all`, replicas by size, bundled or external Redis), applies it, and upgrades and rolls it back. The stack is owned by the deployment key, never by an app. The Hub makes `SESSION_SECRET` and `ENCRYPTION_KEY` once and keeps them sealed.'
+          'Writes the stack (role `all` at small, separate web, worker and importer services at medium and large; bundled or external Redis), applies it, and upgrades and rolls it back. The stack is owned by the deployment key, never by an app. The Hub makes `SESSION_SECRET` and `ENCRYPTION_KEY` once and keeps them sealed.'
         ],
         [
           '`registered`',
@@ -105,13 +105,39 @@ export const hubSharedDocs: DocSection = {
         'Shared deployments need Traefik v3. The pattern is a Traefik v3 `HostRegexp` rule with priority 1, so any exact `Host()` rule from another stack wins over it.',
         "A wildcard name needs a wildcard certificate. If the stack's router uses a certificate resolver, the wildcard needs a DNS-01 challenge (an HTTP challenge cannot issue a wildcard). Or make the wildcard certificate Traefik's default certificate, as the Hub does for apps it creates.",
         'The pattern must sit under the agent host suffixes (`HUB_AGENT_HOST_SUFFIXES`). A second stack that claims the same pattern is refused (`HOSTNAME_TAKEN`, field `host_pattern`).',
-        "A shared stack has no `realtime` role (`ROLE_NOT_SHARED`), and the stack's environment must name its own key (`SHARED_KEY_MISMATCH`). These two agent field codes join the others in Docker driver and Hub agent.",
+        "A shared stack has no `realtime` role, and its roles are `all` alone or a split with both `web` and `worker` (`ROLE_NOT_SHARED`); the stack's environment must name its own key (`SHARED_KEY_MISMATCH`). These two agent field codes join the others in Docker driver and Hub agent.",
         'An agent older than 0.2.0 answers `UNKNOWN_FIELD` for `host_pattern` and `REQUIRED` for an empty `hostnames` list. Update the agent before deploying a shared stack.'
       ]
     },
     {
       type: 'p',
-      text: 'The Hub agent image has to be 0.2.0 or later (`nodeworks/nivaro-hub-agent`; publish the tag `@hub-agent-0.2.0` first, the release step is in Docker driver and Hub agent). A plan against an older agent stops with `AGENT_TOO_OLD`. The rendered stack is one service with role `all` (replicas: small 1, medium 2, large 3). There is never a `realtime` role, and no `web` role either, because a web-only process would leave exports, media and renders with nobody to drain them. The stack sets no sticky cookie on a multi-replica service: clients connect over websockets first, and the long-polling fallback may bounce between replicas. If you front the stack with a proxy that needs stickiness, add it there.'
+      text: 'The Hub agent image has to be 0.2.0 or later (`nodeworks/nivaro-hub-agent`; publish the tag `@hub-agent-0.2.0` first, the release step is in Docker driver and Hub agent). A plan against an older agent stops with `AGENT_TOO_OLD`. The stack size sets the services (`settings.size`, default small). The stack sets no sticky cookie on a multi-replica service: clients connect over websockets first, and the long-polling fallback may bounce between replicas. If you front the stack with a proxy that needs stickiness, add it there.'
+    },
+    {
+      type: 'table',
+      head: ['Size', 'Services (replicas)', 'Notes'],
+      rows: [
+        [
+          'small',
+          '`all` ×1',
+          'One process does everything: serves, ticks crons, drains imports and media.'
+        ],
+        [
+          'medium',
+          '`web` ×2, `worker` ×1, `importer` ×1',
+          "Web runs with `CRON_TICKS=off`. The worker is the only process that ticks crons, so every app's scheduled jobs, row schedules and 10-second import tick run there. The importer runs every app's staged imports."
+        ],
+        ['large', '`web` ×3, `worker` ×1, `importer` ×1', 'As medium, with a third web replica.']
+      ]
+    },
+    {
+      type: 'ul',
+      items: [
+        'Every service serves every app on the deployment: the same variables (`HUB_SHARED_DEPLOYMENT` and the deployment-wide `settings.env` included), the same secrets and the same extensions. Only `NIVARO_ROLE` differs. Each service gets 2 CPUs and 4 GB per replica.',
+        "The importer drains an app when an upload kicks it, and also passes over every ready app every 10 seconds, so a run put back after its process died starts without a new upload. It runs no migrations: it drains an app only once the migrating services have stored that app's schema as ok at this version. While it checks in for an app, the worker leaves that app's imports to it; when it stops, the worker takes over within 90 seconds.",
+        'There is no `realtime` service, even at large: a process that serves many apps keeps its own sockets (`NIVARO_ROLE=realtime` is for single-app deployments), so web keeps sockets on. A dedicated large stack differs here.',
+        'Changing the size is an upgrade: the plan lists the services it deploys (`roles`), what the last run deployed (`roles_from`, `all` for a run before the split) and warns `ROLES_CHANGE` with the services added and removed. The agent creates the new services before it removes the old ones. Stats such as live replicas count every process, importer and worker included.'
+      ]
     },
     {
       type: 'p',
@@ -154,7 +180,7 @@ export const hubSharedDocs: DocSection = {
     },
     {
       type: 'note',
-      text: 'Placing two environments of one app on one deployment is allowed (the usual case is development, staging and production together). The plan warns `SAME_APP_ON_DEPLOYMENT` and nothing more: the protections above are what keep copied databases apart. A copy carries the original\'s saved Teams bot and directory registration, so turn the bot off on the copy if it should not answer.'
+      text: "Placing two environments of one app on one deployment is allowed (the usual case is development, staging and production together). The plan warns `SAME_APP_ON_DEPLOYMENT` and nothing more: the protections above are what keep copied databases apart. A copy carries the original's saved Teams bot and directory registration, so turn the bot off on the copy if it should not answer."
     },
     { type: 'h2', id: 'hub-shared-maintenance', text: 'Maintenance and not-ready apps' },
     {
@@ -407,11 +433,7 @@ export const hubSharedDocs: DocSection = {
           'Off on shared. The daily digest keeps its other sections.',
           '-'
         ],
-        [
-          'Huddle relay (TURN)',
-          'Off on shared, as in cloud.',
-          'warning `HUDDLE_TURN`'
-        ],
+        ['Huddle relay (TURN)', 'Off on shared, as in cloud.', 'warning `HUDDLE_TURN`'],
         [
           'Help-video renders queued before a restart',
           'They render again on the next publish.',
@@ -444,7 +466,7 @@ export const hubSharedDocs: DocSection = {
     { type: 'h2', id: 'hub-shared-per-app', text: 'Per app on a shared deployment' },
     {
       type: 'p',
-      text: "These work on a shared deployment, each app with its own data, settings and schedule. A move no longer reports them as blockers or warnings when the app runs 0.3.212 or later."
+      text: 'These work on a shared deployment, each app with its own data, settings and schedule. A move no longer reports them as blockers or warnings when the app runs 0.3.212 or later.'
     },
     {
       type: 'ul',
@@ -454,8 +476,8 @@ export const hubSharedDocs: DocSection = {
         'Automatic mail retry (`MAIL_RETRY=off` still turns it off for the whole deployment), live SLA status changes, the cumulative-flow rollup and the weekly AI summary in the daily digest. The traffic digest section stays off.',
         'The daily retention pass (03:30, one job per app) and the boot passes (owner-group warm, integrity checks, cache warms, readiness warm, db-tuning sweep). They run once per app when it becomes ready. Retention status shows per app. Stale help-video import folders are swept once a day per process (deployment-wide, not per app).',
         'Microsoft directory lookups and sync. The app uses its own Microsoft app registration, saved in Settings → Microsoft directory (tenant id, client id, client secret; the secret is sealed with the app key). The server `GRAPH_*` and `OIDC_*` variables and the directory keys of `NIVARO_SETTINGS_OVERRIDES` are never used on shared.',
-        'The Teams bot. The app uses only the bot saved in its own Settings. `TEAMS_BOT_*`, `MICROSOFT_APP_*`, the sign-in app fallback and the `teams_bot_*` override keys are ignored. `TEAMS_BOT=off` still disables the bot on the whole deployment, but `TEAMS_BOT=on` does not switch an app on: each app saves its own switch. Register each bot with that app\'s host as its messaging endpoint.',
-        'Phone push. An app admin connects the app\'s push relay in Settings → Mobile app. The server `MOBILE_PUSH_RELAY_KEY` is not used on shared. Phone sign-in was already per app.'
+        "The Teams bot. The app uses only the bot saved in its own Settings. `TEAMS_BOT_*`, `MICROSOFT_APP_*`, the sign-in app fallback and the `teams_bot_*` override keys are ignored. `TEAMS_BOT=off` still disables the bot on the whole deployment, but `TEAMS_BOT=on` does not switch an app on: each app saves its own switch. Register each bot with that app's host as its messaging endpoint.",
+        "Phone push. An app admin connects the app's push relay in Settings → Mobile app. The server `MOBILE_PUSH_RELAY_KEY` is not used on shared. Phone sign-in was already per app."
       ]
     },
     {
@@ -863,7 +885,7 @@ export const hubMovesDocs: DocSection = {
         ],
         [
           '`SAME_APP_ON_DEPLOYMENT`',
-          'Another environment of the same app is already on the target deployment. A copy carries the original\'s saved Teams bot and directory registration: turn the bot off on the copy if it should not answer.'
+          "Another environment of the same app is already on the target deployment. A copy carries the original's saved Teams bot and directory registration: turn the bot off on the copy if it should not answer."
         ],
         ['`REPLAYS_NOT_MOVED`', 'Session replays and image transform caches stay behind.'],
         [
