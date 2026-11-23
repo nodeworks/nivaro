@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -110,6 +111,10 @@ const noName = new Set<string>()
 const noLength = new Set<string>()
 /** R6-I-1: ids the source cannot read right now (its storage throttles): 503. */
 const readFails = new Set<string>()
+/** Review M-5: ids answered by "a proxy's" 404 (no transfer-route marker). */
+const proxy404 = new Set<string>()
+/** C-1: ids whose 503 says the source's FILES_FALLBACK_DIR is gone or empty. */
+const fallbackGone = new Set<string>()
 const sourceSeen: string[] = []
 let server: Server
 let SOURCE = ''
@@ -127,6 +132,10 @@ beforeAll(async () => {
       res.writeHead(302, { location: `${SOURCE}/redirect-target` })
       return res.end()
     }
+    if (fallbackGone.has(id)) {
+      res.writeHead(503, { 'content-type': 'application/json' })
+      return res.end('{"code":"SOURCE_READ_FAILED","reason":"FALLBACK_FOLDER_UNAVAILABLE"}')
+    }
     if (readFails.has(id)) {
       res.writeHead(503, { 'content-type': 'application/json' })
       return res.end('{"code":"SOURCE_READ_FAILED"}')
@@ -137,7 +146,11 @@ beforeAll(async () => {
     }
     const body = objects.get(id)
     if (!body) {
-      res.writeHead(404, { 'content-type': 'application/json' })
+      // The transfer route's own "not found" marker (only that counts as missing).
+      res.writeHead(404, {
+        'content-type': 'application/json',
+        ...(proxy404.has(id) ? {} : { 'x-nivaro-transfer-missing': '1' })
+      })
       return res.end('{"code":"NOT_FOUND"}')
     }
     const headers: Record<string, string> = { 'content-type': 'application/octet-stream' }
@@ -219,6 +232,8 @@ beforeEach(() => {
   noName.clear()
   noLength.clear()
   readFails.clear()
+  proxy404.clear()
+  fallbackGone.clear()
   sourceSeen.length = 0
   logs.length = 0
   resetPullsForTests()
@@ -438,6 +453,50 @@ describe('pull', () => {
     expect(readFileSync(join(root, 'n3.bin'), 'utf8')).toBe('body-n3')
     expect(readFileSync(join(root, 'n4.bin'), 'utf8')).toBe('body-n4')
   })
+
+  // Review M-5: only the transfer route's own "not found" (its marker) is missing.
+  it('a 404 without the transfer route marker (a proxy) fails its row, never "missing"', async () => {
+    rows.push(row('p1', 4), row('p2', 4))
+    proxy404.add('p1')
+    const s = await finished(
+      (await startPull({ source: SOURCE, ticket: TICKET, mode: 'full' })).run_id
+    )
+    expect(s).toMatchObject({ state: 'done', failed: 1, missing: ['p2'] })
+    expect(s.failed_ids).toEqual(['p1'])
+    expect(s.failed_reasons).toEqual({ bad_answer: 1 })
+  })
+
+  // C-1: a source whose FILES_FALLBACK_DIR is gone or empty says so; the reason is its own.
+  it('a 503 naming FALLBACK_FOLDER_UNAVAILABLE counts as source_fallback_unavailable', async () => {
+    rows.push(row('g1', 4))
+    fallbackGone.add('g1')
+    const s = await finished(
+      (await startPull({ source: SOURCE, ticket: TICKET, mode: 'full' })).run_id
+    )
+    expect(s.failed_reasons).toEqual({ source_fallback_unavailable: 1 })
+  })
+
+  // Review M-5: a full or unwritable temporary folder on the target is its own reason.
+  it.skipIf(typeof process.getuid === 'function' && process.getuid() === 0)(
+    'a temporary folder that cannot be written fails the row as temp_write_failed',
+    async () => {
+      objects.set('t1', Buffer.from('four'))
+      rows.push(row('t1', 4))
+      const ro = join(tmp, 'read-only')
+      mkdirSync(ro)
+      chmodSync(ro, 0o500)
+      pullDeps.tmpDir = () => ro
+      try {
+        const s = await finished(
+          (await startPull({ source: SOURCE, ticket: TICKET, mode: 'full' })).run_id
+        )
+        expect(s).toMatchObject({ failed: 1, copied: 0 })
+        expect(s.failed_reasons).toEqual({ temp_write_failed: 1 })
+      } finally {
+        chmodSync(ro, 0o755)
+      }
+    }
+  )
 
   it('an answer over the per-object cap fails that row', async () => {
     pullDeps.limits = { ...pullDeps.defaultLimits, maxObjectBytes: 8 }

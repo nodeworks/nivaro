@@ -35,8 +35,9 @@ import { TRANSFER_TICKET_RE } from './tickets.js'
  *  - Per row: skipped when the object is already here at the row's size (resumable); otherwise
  *    fetched (`redirect: 'error'`, 10 min per object, 4 at a time) into a temp file, then
  *    `putFile(filename_disk)`. Streams go through `pipeline()`, never `.pipe()`.
- *  - A 404 is `missing` (≤ 50 ids listed; neither copied nor failed: total − copied − skipped −
- *    failed = how many were missing). An answer over 5 GB, a redirect, another status, an answer
+ *  - A 404 carrying the route's `X-Nivaro-Transfer-Missing: 1` is `missing` (≤ 50 ids listed;
+ *    neither copied nor failed: total − copied − skipped − failed = how many were missing); a 404
+ *    without it (a proxy, another route) fails the row. An answer over 5 GB, a redirect, another status, an answer
  *    without `X-Nivaro-Filename-Disk` (or naming another key) or without `Content-Length`, or a
  *    streamed size that differs from Content-Length fails that row (its id in `failed_ids`, ≤ 50;
  *    every failed row counted under its plain reason in `failed_reasons`, fail-reasons.ts).
@@ -137,6 +138,8 @@ export function errorShape(err: unknown): { err_name: string | null; err_code: s
 }
 
 export const TRANSFER_FILES_PATH = '/api/hub-transfer/files'
+/** The transfer route's own "not found" marker (routes/hub-transfer.ts TRANSFER_MISSING_HEADER). */
+const TRANSFER_MISSING_HEADER = 'x-nivaro-transfer-missing'
 const MAX_MISSING = 50
 const RUN_TTL_MS = 24 * 60 * 60 * 1000
 const MANIFEST_TTL_MS = 7 * 24 * 60 * 60 * 1000
@@ -291,8 +294,10 @@ export function transferSource(raw: unknown): string | null {
   return null
 }
 
-/** The `code` of a small JSON body (≤ 2 KB; a bigger one is cut off unread), or null. */
-async function smallJsonCode(body: ReadableStream<Uint8Array>): Promise<string | null> {
+/** `code` and `reason` of a small JSON body (≤ 2 KB; a bigger one is cut off unread). */
+async function smallJsonCode(
+  body: ReadableStream<Uint8Array>
+): Promise<{ code: string | null; reason: string | null } | null> {
   const reader = body.getReader()
   const parts: Uint8Array[] = []
   let n = 0
@@ -308,8 +313,14 @@ async function smallJsonCode(body: ReadableStream<Uint8Array>): Promise<string |
     void reader.cancel().catch(() => {})
   }
   try {
-    const b = JSON.parse(Buffer.concat(parts).toString('utf8')) as { code?: unknown } | null
-    return typeof b?.code === 'string' ? b.code : null
+    const b = JSON.parse(Buffer.concat(parts).toString('utf8')) as {
+      code?: unknown
+      reason?: unknown
+    } | null
+    return {
+      code: typeof b?.code === 'string' ? b.code : null,
+      reason: typeof b?.reason === 'string' ? b.reason : null
+    }
   } catch {
     return null
   }
@@ -681,8 +692,11 @@ async function execute(
      *  at most 2 KB), a gateway on the way, or not a Nivaro source's answer. */
     const answerReason = async (res: Response): Promise<PullFailReason> => {
       if (res.status === 503 && res.body) {
-        const code = await smallJsonCode(res.body).catch(() => null)
-        return code === 'SOURCE_READ_FAILED' ? 'source_read_failed' : 'unreachable'
+        const b = await smallJsonCode(res.body).catch(() => null)
+        if (b?.code !== 'SOURCE_READ_FAILED') return 'unreachable'
+        return b.reason === 'FALLBACK_FOLDER_UNAVAILABLE'
+          ? 'source_fallback_unavailable'
+          : 'source_read_failed'
       }
       void res.body?.cancel().catch(() => {})
       return res.status === 502 || res.status === 503 || res.status === 504
@@ -733,6 +747,9 @@ async function execute(
       }
       if (res.status === 404) {
         drop()
+        // Review M-5: only the transfer route's own "not found" (its marker header) is missing;
+        // a proxy's or another route's 404 would make every row "missing" and never block.
+        if (res.headers.get(TRANSFER_MISSING_HEADER) !== '1') return failRow(id, 'bad_answer')
         if (st.missing.length < MAX_MISSING) st.missing.push(id)
         progress()
         return
@@ -768,13 +785,19 @@ async function execute(
           } else cb(null, chunk)
         }
       })
-      // Which part failed decides the reason: the bytes coming in, or this side storing them.
+      // Which part failed decides the reason: the bytes coming in, this side's temporary file
+      // (a full or unwritable temp folder, review M-5), or this side storing them.
       let stage: 'incomplete' | 'write_failed' = 'incomplete'
+      let tempFailed = false
+      const sink = createWriteStream(tmp)
+      sink.once('error', () => {
+        tempFailed = true
+      })
       try {
         await pipeline(
           Readable.fromWeb(res.body as unknown as WebReadableStream<Uint8Array>),
           counter,
-          createWriteStream(tmp),
+          sink,
           { signal }
         )
         if (got !== declared) return failRow(id, 'incomplete')
@@ -788,7 +811,7 @@ async function execute(
         progress()
         await remember(id)
       } catch {
-        return failRow(id, tooBig ? 'bad_answer' : stage)
+        return failRow(id, tooBig ? 'bad_answer' : tempFailed ? 'temp_write_failed' : stage)
       } finally {
         await unlink(tmp).catch(() => {})
       }

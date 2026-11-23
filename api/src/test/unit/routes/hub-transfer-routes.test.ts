@@ -270,8 +270,13 @@ describe('GET /api/hub-transfer/files/:id on a dedicated app', () => {
     const a = await build()
     const { ticket } = await mintTransferTicket(null)
     const h = { authorization: `Transfer ${ticket}` }
-    expect((await get(a, FILE_GONE, h)).statusCode).toBe(404)
-    expect((await get(a, '99999999-2222-4333-8444-555555555555', h)).statusCode).toBe(404)
+    const gone = await get(a, FILE_GONE, h)
+    expect(gone.statusCode).toBe(404)
+    // Review M-5: the route's own "not found" marker (only that is "missing" to the pull).
+    expect(gone.headers['x-nivaro-transfer-missing']).toBe('1')
+    const noRow = await get(a, '99999999-2222-4333-8444-555555555555', h)
+    expect(noRow.statusCode).toBe(404)
+    expect(noRow.headers['x-nivaro-transfer-missing']).toBe('1')
     expect((await get(a, 'not-a-uuid', h)).statusCode).toBe(404)
   })
 

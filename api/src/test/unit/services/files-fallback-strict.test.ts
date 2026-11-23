@@ -112,4 +112,23 @@ describe('a fallback folder that is not there', () => {
       process.env.FILES_FALLBACK_DIR = root
     }
   })
+  // Ruling C-1: an unmounted share usually leaves its mount point as an EMPTY folder that exists.
+  it('strict: an existing but empty fallback folder (the mount point) is unavailable too', async () => {
+    const mountPoint = join(root, 'mount-point')
+    mkdirSync(mountPoint)
+    process.env.FILES_FALLBACK_DIR = mountPoint
+    try {
+      expect(await existingFallback('ok/a.bin')).toBeNull()
+      await expect(existingFallback('ok/a.bin', { strict: true })).rejects.toMatchObject({
+        code: 'FALLBACK_FOLDER_UNAVAILABLE'
+      })
+      const opened = await openTransferObject('ok/a.bin', 'local').catch((e) => e)
+      expect(isStoredObjectMissing(opened)).toBe(false)
+      // One entry is enough: a key missing from a folder that holds something is missing.
+      writeFileSync(join(mountPoint, 'other.bin'), 'x')
+      expect(await existingFallback('ok/a.bin', { strict: true })).toBeNull()
+    } finally {
+      process.env.FILES_FALLBACK_DIR = root
+    }
+  })
 })

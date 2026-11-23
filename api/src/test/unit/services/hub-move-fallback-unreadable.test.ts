@@ -470,7 +470,19 @@ describe.skipIf(isRoot)('the copy with an unreadable fallback folder', () => {
     expect(s.missing).toEqual([])
     expect(s.copied).toBe(0)
     expect(s.failed).toBe(4)
-    expect(s.failed_reasons).toEqual({ source_read_failed: 4 })
+    expect(s.failed_reasons).toEqual({ source_fallback_unavailable: 4 })
+  })
+
+  // Ruling C-1: the usual shape of an unmounted share is its mount point, an EMPTY folder.
+  it('an existing but empty fallback folder (the mount point) fails every row, never "missing"', async () => {
+    const mountPoint = join(base, 'mount-point')
+    mkdirSync(mountPoint, { recursive: true })
+    process.env.FILES_FALLBACK_DIR = mountPoint
+    const s = await pullOnce('full')
+    expect(s.missing).toEqual([])
+    expect(s.failed).toBe(4)
+    expect(s.failed_reasons).toEqual({ source_fallback_unavailable: 4 })
+    expect(sourceLog.join('\n')).not.toContain(mountPoint)
   })
 
   it('a key that is really not in a readable folder is still "missing" (404)', async () => {
@@ -525,6 +537,23 @@ describe.skipIf(isRoot)('a move whose source fallback folder is unreadable', () 
       expect(await readFile(join(target, KEY[k]), 'utf8')).toBe(BYTES[k])
     }
     expect(second.calls).toContain('retireSource')
+  })
+
+  it('an empty mount point rolls the move back and names the remedy (mount it, or unset FILES_FALLBACK_DIR)', async () => {
+    const w = await world()
+    const mountPoint = join(base, 'mount-point-move')
+    mkdirSync(mountPoint, { recursive: true })
+    process.env.FILES_FALLBACK_DIR = mountPoint
+    const ops = moveOps()
+    useDeps(ops.ops)
+    const id = await startMove(w)
+    const m = await readMove(id)
+    expect(m?.status).toBe('rolled_back')
+    expect(m?.error).toMatch(/^FILES_NOT_COPIED: 4 file\(s\) could not be copied/)
+    expect(m?.error).toContain("the source's FILES_FALLBACK_DIR is missing or empty")
+    expect(m?.error).toContain('unset FILES_FALLBACK_DIR on the source')
+    expect(m?.error).not.toContain(mountPoint)
+    expect(ops.calls).not.toContain('retireSource')
   })
 
   it('a fallback that breaks only after the warm copy still stops the move inside maintenance', async () => {
