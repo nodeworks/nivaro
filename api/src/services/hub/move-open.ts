@@ -1,5 +1,6 @@
 import type { Knex } from 'knex'
 import { db } from '../../db/index.js'
+import { currentMoveRun } from './move/run-context.js'
 
 /**
  * Nivaro Hub phase 6 (final review, moves I-2 / ruling P6-37): the open move that touches an
@@ -11,10 +12,12 @@ import { db } from '../../db/index.js'
  * MOVE_OPEN: a shared upgrade or re-apply, a promotion (plan and start, owners too), Docker Apply
  * now and Restart, an environment PATCH of its placement, stack or names, and place-on-shared.
  *
- * The move's own runner never passes through those entry points: it deploys with the lower-level
- * steps (promote-run deployComponentAt, docker/run-step prepareStackSpec, the agent client, its
- * own shared render) while it holds its own locks. So there is no bypass flag — the guard sits on
- * the callers a person reaches (a guard test pins that services/hub/move/** imports none of them).
+ * The move's own runner is let through: it runs every step, undo and op inside
+ * move/run-context.ts `withMoveRun(moveId)` (FW-4), and a move is never "open" against its own
+ * run (`currentMoveRun()` is left out here). Today the runner deploys with lower-level steps
+ * (promote-run deployComponentAt, docker/run-step prepareStackSpec, the agent client, its own
+ * shared render), not through these entry points; the context keeps it working if it ever does.
+ * Another open move still refuses inside a run.
  *
  * Open = running, waiting or interrupted (the same list as move/rows.ts OPEN_MOVE_STATUSES; a
  * test pins that they agree). Touches = the move's environment is one of `envIds`, or its from or
@@ -54,6 +57,8 @@ export async function openMoveFor(
   target: { envIds?: number[]; sharedId?: number | null },
   k: Knex = db
 ): Promise<OpenMove | null> {
+  // The move whose own run this is never refuses itself (FW-4 run context).
+  const own = currentMoveRun()
   const envIds = (target.envIds ?? []).filter((n) => Number.isInteger(n) && n > 0)
   const sharedId = target.sharedId ?? null
   if (!envIds.length && sharedId == null) return null
@@ -67,8 +72,9 @@ export async function openMoveFor(
           >
         ).map(Number)
   if (!envIds.length && !placementIds.length) return null
-  const row = (await k(MOVES)
-    .whereIn('status', MOVE_OPEN_STATUSES as string[])
+  const q0 = k(MOVES).whereIn('status', MOVE_OPEN_STATUSES as string[])
+  if (own != null) q0.whereNot({ id: own })
+  const row = (await q0
     .where((q) => {
       if (envIds.length) q.orWhereIn('environment_id', envIds)
       if (placementIds.length)

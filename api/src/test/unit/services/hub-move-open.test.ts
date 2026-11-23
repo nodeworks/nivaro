@@ -45,6 +45,7 @@ const Run = await import('../../../services/hub/shared/upgrade-run.js')
 const { startPromotion, startStackApply } = await import('../../../services/hub/promote-run.js')
 const { sharedLock, memoryPromoteLock } = await import('../../../services/hub/promote-lock.js')
 const { sealSecret } = await import('../../../services/hub/secrets.js')
+const { withMoveRun } = await import('../../../services/hub/move/run-context.js')
 
 const saved = { HUB: process.env.HUB, KEY: process.env.ENCRYPTION_KEY }
 let seq = 0
@@ -203,6 +204,35 @@ describe('openMoveFor / moveOpenRefusal', () => {
   })
 })
 
+describe("a move's own run is let through (FW-4 run context)", () => {
+  it('inside withMoveRun(id) its own move is not open; another open move still is', async () => {
+    const shared = await newShared()
+    const src = await dockerPlacement()
+    const e = await newEnv({ placement_id: src })
+    const mine = await newMove(e, src, await sharedPlacement(shared), 'running')
+    expect((await MoveOpen.moveOpenRefusal({ envIds: [e.envId] }))?.move_id).toBe(mine)
+    expect(
+      await withMoveRun(mine, () => MoveOpen.moveOpenRefusal({ envIds: [e.envId] }))
+    ).toBeNull()
+    expect(await withMoveRun(mine, () => MoveOpen.openMoveFor({ sharedId: shared }))).toBeNull()
+    // The move's own promotion start (Apply now on its Docker side) passes the guard and stops
+    // only at its own later checks.
+    const own = (await withMoveRun(mine, () =>
+      refusal(startStackApply(e.envId, { confirm: 'production', user: { id: 'u' } }))
+    )) as unknown as { code: string }
+    expect(own.code).not.toBe('MOVE_OPEN')
+    // Another move's run is not this one.
+    const other = await newEnv({ placement_id: await dockerPlacement() })
+    const theirs = await newMove(other, await dockerPlacement(), await sharedPlacement(shared))
+    expect(
+      (await withMoveRun(mine, () => MoveOpen.moveOpenRefusal({ sharedId: shared })))?.move_id
+    ).toBe(theirs)
+    expect(
+      (await withMoveRun(theirs, () => MoveOpen.moveOpenRefusal({ envIds: [e.envId] })))?.move_id
+    ).toBe(mine)
+  })
+})
+
 describe('MOVE_OPEN refusals', () => {
   it('place-on-shared: the environment has an open move', async () => {
     const shared = await newShared()
@@ -287,8 +317,9 @@ describe('MOVE_OPEN refusals', () => {
 
 describe('the move runner never passes through the guarded entry points', () => {
   // The guard sits on the callers a person reaches; the move deploys with lower-level steps
-  // (deployComponentAt, prepareStackSpec, the agent, its own shared render). If a move module
-  // ever imported one of these, its own action would refuse itself MOVE_OPEN.
+  // (deployComponentAt, prepareStackSpec, the agent, its own shared render). Its run context
+  // would let it through if it did, but a move module calling a person's entry point would also
+  // run that entry's other checks (locks it already holds): kept out on purpose.
   const GUARDED = [
     'startPromotion',
     'startStackApply',
