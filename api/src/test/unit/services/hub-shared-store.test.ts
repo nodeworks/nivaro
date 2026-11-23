@@ -506,6 +506,17 @@ describe('locks (preflight R10)', () => {
 })
 
 describe('final review M-2 / M-3', () => {
+  it('M-2: a Docker shared deployment refuses a version pin on create (the Hub owns it)', async () => {
+    const d = await driver('docker')
+    const v = S.validateSharedInput({ ...base, mode: 'docker', driver_id: d, version_pin: '0.3.1' })
+    expect(v.ok ? 'ok' : v.code).toBe('BAD_VERSION')
+    expect(v.ok ? '' : v.message).toMatch(/upgrade/)
+    // Registered: the operator says which version it runs.
+    expect(S.validateSharedInput({ ...base, version_pin: '0.3.1' }).ok).toBe(true)
+    // Docker without a pin is fine.
+    expect(S.validateSharedInput({ ...base, mode: 'docker', driver_id: d }).ok).toBe(true)
+  })
+
   it('M-3: a failed update never rethrows the engine error (it inlines the sealed values)', async () => {
     const { row } = await S.createShared(fields({ key: 'shared-m3' }), null)
     const sealed = sealSecret('{"REDIS_URL":"redis://secret-host:6379"}')
