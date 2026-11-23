@@ -851,6 +851,54 @@ describe('manual routing', () => {
     expect(undoCalls(fake.calls)).toEqual([['unroute', plan.route[1]], ['unplace']])
   })
 
+  // R2-M-4: the person repointed the name, then cancelled before the Hub's 5-min self-check saw
+  // it: the rollback checks the name once before it undoes anything.
+  it('R2-M-4: a cancel during the manual wait after the name was repointed (unseen yet) still says to point it back', async () => {
+    plan = planOf('to_shared', 'manual')
+    const w = await world('docker')
+    fake.state.serving = false
+    useDeps({
+      sleep: async (ms: number) => {
+        t += ms
+        await new Promise((r) => setTimeout(r, 20))
+      }
+    })
+    const { move_id } = await start(w, toFor('to_shared', w))
+    await waitFor(async () => (await readMove(move_id))?.status === 'waiting')
+    fake.state.serving = true // pointed by hand, the self-check has not run yet
+    await Run.cancelMove(move_id, 'u')
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    expect(m?.status).toBe('cancelled')
+    expect(m?.checklist.find((c) => c.id === 'repoint_name')).toMatchObject({
+      required: true,
+      done: false
+    })
+    // Checked before the target was undone.
+    const names = fake.names()
+    expect(names.lastIndexOf('verifyName')).toBeLessThan(names.indexOf('unplace'))
+  })
+
+  it('R2-M-4: a cancel during the manual wait while the name does not answer from the target yet → an "if it was done" item, not required', async () => {
+    plan = planOf('to_shared', 'manual')
+    const w = await world('docker')
+    fake.state.serving = false
+    useDeps({
+      sleep: async (ms: number) => {
+        t += ms
+        await new Promise((r) => setTimeout(r, 20))
+      }
+    })
+    const { move_id } = await start(w, toFor('to_shared', w))
+    await waitFor(async () => (await readMove(move_id))?.status === 'waiting')
+    await Run.cancelMove(move_id, 'u')
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    const item = m?.checklist.find((c) => c.id === 'repoint_name')
+    expect(item).toMatchObject({ required: false, done: false })
+    expect(item?.text).toMatch(/^If /)
+  })
+
   it('I-4: a rollback after the name was pointed at the target says to point it back, everywhere', async () => {
     plan = planOf('to_shared', 'manual')
     const w = await world('docker')

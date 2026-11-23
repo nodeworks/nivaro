@@ -1364,6 +1364,25 @@ async function rollBack(
   await mergeSteps(ctx.moveId, (stored) => ({ ...stored, phase: 'rollback', undo_reason: why }))
   if (err) await patchMove(ctx.moveId, { error: safeLine(`${err.code}: ${err.message}`) })
   ctx.run.log(why === 'cancelled' ? 'cancelled: rolling back' : 'rolling back', 'warn')
+  // R2-M-4: a person may have pointed the name at the target after the Hub's last self-check
+  // (it runs every 5 minutes of the manual wait): look once more, before the target is undone.
+  const r0 = move0.steps
+  if (
+    move0.routing === 'manual' &&
+    r0.waiting_since &&
+    !r0.route_confirmed_at &&
+    !stepDone(r0, 'verify') &&
+    (await ctx.ops
+      .verifyName({ version: ctx.plan.version, shared: ctx.sharedKeyTo })
+      .catch(() => false))
+  ) {
+    ctx.run.log('route: the name already answers from the target')
+    await mergeSteps(ctx.moveId, (stored) =>
+      stored.route_confirmed_at
+        ? null
+        : { ...stored, route_confirmed_at: new Date(ctx.e.now()).toISOString() }
+    )
+  }
   const move = (await readMove(ctx.moveId)) as HubMoveRow
   const { failed, stopped, sourceFrozen } = await undoMove({
     move,
@@ -1391,11 +1410,14 @@ async function rollBack(
       ? 'cancelled'
       : 'rolled_back'
   // I-4: a person pointed the name at the target (manual route); the Hub cannot undo that half.
-  const repoint = await repointText(ctx, move)
-  if (repoint) {
-    ctx.run.log(repoint, 'error')
+  const said = await repointText(ctx, move)
+  // Only a name seen answering from the target is certain (error, required item); a route
+  // request that may have been carried out unseen is an item that says "if" (R2-M-4).
+  const repoint = said?.sure ? said.text : null
+  if (said) {
+    ctx.run.log(said.text, said.sure ? 'error' : 'warn')
     const checklist = (move.checklist ?? []).filter((c) => c.id !== 'repoint_name')
-    checklist.push({ id: 'repoint_name', text: repoint, required: true, done: false })
+    checklist.push({ id: 'repoint_name', text: said.text, required: said.sure, done: false })
     await patchMove(ctx.moveId, { checklist })
   }
   const recover =
@@ -1452,9 +1474,14 @@ async function rollBack(
  * "Point <names> back to <source>." when the move routed by hand and the name was seen serving
  * the target (confirmRoute, the wait's own check, or verify passed); null otherwise.
  */
-async function repointText(ctx: Ctx, move: HubMoveRow): Promise<string | null> {
+async function repointText(
+  ctx: Ctx,
+  move: HubMoveRow
+): Promise<{ text: string; sure: boolean } | null> {
   if (move.routing !== 'manual') return null
-  if (!move.steps.route_confirmed_at && !stepDone(move.steps, 'verify')) return null
+  const sure = !!move.steps.route_confirmed_at || stepDone(move.steps, 'verify')
+  // R2-M-4: the route request went out (the wait began) but the name was never seen moved.
+  if (!sure && !move.steps.waiting_since) return null
   const names = ctx.plan.hostnames.length ? ctx.plan.hostnames.join(', ') : 'the public name'
   let source = 'the source placement'
   const from = await getPlacement(move.from_placement_id)
@@ -1467,7 +1494,13 @@ async function repointText(ctx: Ctx, move: HubMoveRow): Promise<string | null> {
     const stack = (from.target as { stack?: unknown }).stack
     source = typeof stack === 'string' ? `the Docker stack ${stack}` : `placement ${from.id}`
   }
-  return `Point ${names} back to ${source}: the move was rolled back and the target no longer serves this app.`
+  const back = `${names} back to ${source}: the move was rolled back and the target no longer serves this app.`
+  return sure
+    ? { text: `Point ${back}`, sure }
+    : {
+        text: `If someone already pointed ${names} at the target (the route request), point ${back}`,
+        sure
+      }
 }
 
 async function dropUnusedSharedPlacement(moveId: number): Promise<void> {
