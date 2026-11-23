@@ -32,7 +32,9 @@ import { TRANSFER_TICKET_RE } from './tickets.js'
  *  - A 404 is `missing` (≤ 50 ids listed; neither copied nor failed: total − copied − skipped −
  *    failed = how many were missing). An answer over 5 GB, a redirect, another status, an answer
  *    without `X-Nivaro-Filename-Disk` (or naming another key) or without `Content-Length`, or a
- *    streamed size that differs from Content-Length or from the row's known size fails that row. A 401/403 (the ticket refused) or no
+ *    streamed size that differs from Content-Length fails that row (its id in `failed_ids`, ≤ 50).
+ *    A Content-Length that differs from the row's stored filesize is copied anyway and counted in
+ *    `size_mismatch` (Task 16: a stale filesize must not fail the row on every run). A 401/403 (the ticket refused) or no
  *    progress for 10 minutes fails the run.
  *  - `delta`: only rows not in the run manifest (a Redis set of the ids copied or found present
  *    here), or whose `modified_on` moved since the previous finished run started — those are
@@ -70,6 +72,14 @@ export interface PullStatus {
   missing: string[]
   bytes: number
   error: string | null
+  /**
+   * Task 16 (T10 review N-1): rows whose stored `filesize` disagreed with the object the source
+   * served. The source's object (its Content-Length, then the bytes counted) wins: the row is
+   * copied anyway and counted here, so a stale filesize never fails the row on every run.
+   */
+  size_mismatch?: number
+  /** Task 16: the file ids that failed (at most 50), so a move can say which. */
+  failed_ids?: string[]
 }
 
 export interface FileRow {
@@ -233,8 +243,11 @@ function scope(): string {
 
 const LOOPBACK_HOSTS = new Set(['localhost', '[::1]'])
 
-/** Loopback, or an RFC 1918 IPv4 address (10/8, 172.16/12, 192.168/16). */
-function plainHttpHost(hostname: string): boolean {
+/**
+ * Loopback, or an RFC 1918 IPv4 address (10/8, 172.16/12, 192.168/16): fetched plainly (every
+ * other host through safeFetch). Exported for the Hub's move preflight (LINK_URL_NOT_PULLABLE).
+ */
+export function plainHttpHost(hostname: string): boolean {
   const h = hostname.toLowerCase()
   if (LOOPBACK_HOSTS.has(h)) return true
   if (isIP(h) !== 4) return false
@@ -283,7 +296,13 @@ function prune(now: number): void {
 }
 
 function copyStatus(s: PullStatus): PullStatus {
-  return { ...s, missing: [...s.missing] }
+  return {
+    ...s,
+    missing: [...s.missing],
+    // A mirror an older process wrote has neither field.
+    size_mismatch: Number(s.size_mismatch) || 0,
+    failed_ids: Array.isArray(s.failed_ids) ? [...s.failed_ids] : []
+  }
 }
 
 /** This app's run `runId` as this process knows it, or null. */
@@ -419,7 +438,9 @@ export async function startPull(req: PullRequest): Promise<{ run_id: string }> {
       failed: 0,
       missing: [],
       bytes: 0,
-      error: null
+      error: null,
+      size_mismatch: 0,
+      failed_ids: []
     }
   }
   runs.set(mapKey(sc, runId), run)
@@ -592,8 +613,12 @@ async function execute(
     // A private literal is the only plain fetch (see the header); every host name is guarded.
     const guarded = !plainHttpHost(new URL(req.source).hostname)
 
-    const failRow = () => {
-      if (!fatal) st.failed++
+    const failRow = (id?: string) => {
+      if (!fatal) {
+        st.failed++
+        if (!st.failed_ids) st.failed_ids = []
+        if (id && st.failed_ids.length < MAX_MISSING) st.failed_ids.push(id)
+      }
       progress()
     }
 
@@ -623,7 +648,7 @@ async function execute(
         res = guarded ? await pullDeps.safeFetch(url, init) : await pullDeps.fetch(url, init)
       } catch {
         // unreachable, timed out, or a redirect (redirect: 'error')
-        return failRow()
+        return failRow(id)
       }
       const drop = () => {
         void res.body?.cancel().catch(() => {})
@@ -640,25 +665,24 @@ async function execute(
       }
       if (res.status !== 200 || !res.body) {
         drop()
-        return failRow()
+        return failRow(id)
       }
       // A Nivaro source always names the object and its length: an answer without both is not
       // one (another endpoint at that path) and is never written over the row's key.
       const declared = toNumber(res.headers.get('content-length'))
       if (declared === null || declared > limits.maxObjectBytes) {
         drop()
-        return failRow()
+        return failRow(id)
       }
       const named = res.headers.get('x-nivaro-filename-disk')
       if (named === null || decodeHeader(named) !== key) {
         drop()
-        return failRow()
+        return failRow(id)
       }
-      // The row knows the size: an object of another size is not the one it describes.
-      if (expected !== null && declared !== expected) {
-        drop()
-        return failRow()
-      }
+      // The row's stored size disagrees with what the source serves (a stale filesize, T10
+      // review N-1): the source's object is the one the row names (same key), so it is copied
+      // anyway — against its own Content-Length — and counted apart.
+      const mismatch = expected !== null && declared !== expected
       const tmp = join(tmpDir, `${run.id}-${randomUUID()}`)
       let got = 0
       const max = limits.maxObjectBytes
@@ -677,16 +701,17 @@ async function execute(
           createWriteStream(tmp),
           { signal }
         )
-        if (got !== declared || (expected !== null && got !== expected)) return failRow()
+        if (got !== declared) return failRow(id)
         await storage.putFile(key, tmp, row.type || 'application/octet-stream', {
           signal: ac.signal
         })
         st.copied++
+        if (mismatch) st.size_mismatch = (st.size_mismatch ?? 0) + 1
         st.bytes += got
         progress()
         await remember(id)
       } catch {
-        return failRow()
+        return failRow(id)
       } finally {
         await unlink(tmp).catch(() => {})
       }

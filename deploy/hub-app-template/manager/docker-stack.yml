@@ -54,6 +54,8 @@ x-env: &env
   OIDC_CLIENT_ID: ${OIDC_CLIENT_ID}
   OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI}
   TRUST_PROXY: ${TRUST_PROXY}
+  # Hub phase 6: set only on a move's target deploy (a move id); empty otherwise.
+  HUB_BOOT_MAINTENANCE: ${HUB_BOOT_MAINTENANCE:-}
   REDIS_URL: redis://redis:6379
   # Migrations run under a lock: web and worker may start together.
   MIGRATION_SAFE_MODE: 'true'

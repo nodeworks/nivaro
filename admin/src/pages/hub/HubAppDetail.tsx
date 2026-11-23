@@ -1,7 +1,17 @@
 import { ConfirmButton, ErrorNotice, QueryErrorState, useOverflowTip } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ExternalLink, Pencil, Plus, RefreshCw, Rocket, Trash2, X } from 'lucide-react'
-import { Fragment, useState } from 'react'
+import {
+  ArrowRightLeft,
+  ExternalLink,
+  Layers,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Rocket,
+  Trash2,
+  X
+} from 'lucide-react'
+import { Fragment, useId, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -26,10 +36,12 @@ import {
   HUB_MASK,
   type HubAppFull,
   type HubEnvironment,
+  hubDeleteToast,
   hubError,
   hubKeys,
   hubToast,
   isBaseUrl,
+  SHARED_PLACEMENT_TIP,
   STATUS_COPY,
   statusHint,
   useEnvStatus,
@@ -44,6 +56,10 @@ import {
   SectionCard,
   StatusChip
 } from './hub-parts'
+import { HubAppKeyField } from './move/HubAppKeyField'
+import { HubMovePanel } from './move/HubMovePanel'
+import { HubPlaceSharedForm } from './move/HubPlaceSharedForm'
+import { placementLabel, useDrivers, usePlacement, useSharedList } from './move/move-api'
 import { HubAppSigninCard } from './signin/HubEnvSigninPanel'
 
 /**
@@ -141,7 +157,7 @@ function AppHeader({
       qc.removeQueries({ queryKey: hubKeys.app(app.id) })
       onDeleted()
     },
-    onError: (err) => hubToast(err, 'Could not delete the app')
+    onError: (err) => hubDeleteToast(err, 'Could not delete the app')
   })
 
   const nameTip = useOverflowTip<HTMLHeadingElement>(app.name)
@@ -358,9 +374,21 @@ function EnvironmentsCard({
 }
 
 /** One environment's status read, Refresh and Remove: shared by the table row and the phone entry. */
-function useEnvRow(app: HubAppFull, env: HubEnvironment) {
+function useEnvRow(app: HubAppFull, env: HubEnvironment, isAdmin: boolean) {
   const qc = useQueryClient()
   const status = useEnvStatus(env.id)
+  // Phase 6: where the environment runs (Hub admins only — placements are an admin read).
+  const placement = usePlacement(env.placement_id, isAdmin)
+  const isShared = placement.data?.kind === 'shared'
+  // Admins: until the placement is read, neither Promote nor the stack panel can be judged.
+  const placementPending = isAdmin && env.placement_id != null && placement.isPending
+  const shared = useSharedList(isAdmin && isShared)
+  const drivers = useDrivers(isAdmin && placement.data?.kind === 'dedicated')
+  const placementText = placementLabel(placement.data, shared.data, drivers.data)
+  const [moving, setMoving] = useState(false)
+  // A start or a stack-placement request is out in the move panel: the row keeps it mounted.
+  const [moveBusy, setMoveBusy] = useState(false)
+  const [placing, setPlacing] = useState(false)
   const [editing, setEditing] = useState(false)
   const refresh = useMutation({
     mutationFn: () => fetchEnvStatus(env.id, true),
@@ -374,11 +402,59 @@ function useEnvRow(app: HubAppFull, env: HubEnvironment) {
       qc.removeQueries({ queryKey: hubKeys.envStatus(env.id) })
       qc.removeQueries({ queryKey: hubKeys.deploys(env.id) })
     },
-    onError: (err) => hubToast(err, `Could not remove ${env.key}`)
+    onError: (err) => hubDeleteToast(err, `Could not remove ${env.key}`)
   })
   const [promoting, setPromoting] = useState(false)
-  return { status, refresh, remove, editing, setEditing, promoting, setPromoting }
+  return {
+    status,
+    refresh,
+    remove,
+    editing,
+    setEditing,
+    promoting,
+    setPromoting,
+    isShared,
+    placementPending,
+    placementText,
+    moving,
+    setMoving,
+    moveBusy,
+    setMoveBusy,
+    placing,
+    setPlacing
+  }
 }
+
+/** `Shared · <key>` / `Dedicated · <driver>`: where the environment runs. */
+function PlacementChip({ text, shared }: { text: string | null; shared: boolean }) {
+  if (!text) return null
+  return (
+    <span
+      data-tip={
+        shared
+          ? 'Runs inside a shared deployment with other apps'
+          : 'Runs on its own stack or pipeline'
+      }
+      className={cn(
+        'inline-flex max-w-full items-center gap-1 truncate rounded-full border px-1.5 py-px font-sans text-[10px] font-medium',
+        shared
+          ? 'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-900/60 dark:bg-sky-950/40 dark:text-sky-300'
+          : 'border-slate-200 bg-slate-50 text-slate-600 dark:border-border dark:bg-muted dark:text-slate-300'
+      )}
+    >
+      <Layers className='h-2.5 w-2.5 shrink-0' aria-hidden />
+      <span className='truncate'>{text}</span>
+    </span>
+  )
+}
+
+/**
+ * Place on shared is for an environment that never served (status provisioning) — also one whose
+ * earlier placement on a shared deployment did not finish (placing it again retries); one that
+ * served moves instead.
+ */
+const placeable = (env: HubEnvironment) => env.status === 'provisioning'
+const movable = (env: HubEnvironment) => env.placement_id != null && env.status !== 'provisioning'
 
 type EnvRowState = ReturnType<typeof useEnvRow>
 
@@ -434,9 +510,43 @@ function EnvActions({
   isAdmin: boolean
   canPromote: boolean
 }) {
+  // The table row and the phone entry both render actions: ids unique per mount.
+  const whyId = useId()
   return (
     <div className='flex items-center justify-end gap-0.5'>
-      {canPromote && env.placement_id != null && (
+      {canPromote && env.placement_id != null && row.isShared && (
+        // A shared-placed environment's version follows its deployment: say so, don't open a
+        // panel that can only refuse.
+        <span data-tip={SHARED_PLACEMENT_TIP} className='inline-flex'>
+          <button
+            type='button'
+            aria-label={`Promote ${env.key}`}
+            aria-describedby={whyId}
+            className={ghostButton}
+            disabled
+          >
+            <Rocket className='h-3.5 w-3.5' aria-hidden />
+            <span className='hidden lg:inline'>Promote</span>
+          </button>
+          {/* The reason for assistive tech too (the tip is pointer-only). */}
+          <span id={whyId} className='sr-only'>
+            {SHARED_PLACEMENT_TIP}
+          </span>
+        </span>
+      )}
+      {canPromote && env.placement_id != null && row.placementPending && (
+        <button
+          type='button'
+          aria-label={`Promote ${env.key}`}
+          aria-busy
+          className={ghostButton}
+          disabled
+        >
+          <Rocket className='h-3.5 w-3.5' aria-hidden />
+          <span className='hidden lg:inline'>Promote</span>
+        </button>
+      )}
+      {canPromote && env.placement_id != null && !row.isShared && !row.placementPending && (
         <button
           type='button'
           aria-label={`Promote ${env.key}`}
@@ -462,13 +572,42 @@ function EnvActions({
           aria-hidden
         />
       </button>
+      {isAdmin && movable(env) && (
+        <button
+          type='button'
+          aria-label={`Move ${env.key}`}
+          aria-expanded={row.moving}
+          data-tip='Move to a shared deployment or another stack'
+          className={cn(ghostButton, row.moving && 'bg-accent')}
+          disabled={row.moveBusy}
+          onClick={() => row.setMoving(!row.moving)}
+        >
+          <ArrowRightLeft className='h-3.5 w-3.5' aria-hidden />
+          <span className='hidden lg:inline'>Move…</span>
+        </button>
+      )}
+      {isAdmin && placeable(env) && (
+        <button
+          type='button'
+          aria-label={`Place ${env.key} on a shared deployment`}
+          aria-expanded={row.placing}
+          data-tip='Place on shared deployment… (a new environment)'
+          className={cn(ghostButton, row.placing && 'bg-accent')}
+          disabled={row.moveBusy}
+          onClick={() => row.setPlacing(!row.placing)}
+        >
+          <Layers className='h-3.5 w-3.5' aria-hidden />
+          <span className='hidden lg:inline'>Place…</span>
+        </button>
+      )}
       {isAdmin && (
         <>
           <button
             type='button'
             aria-label={`Edit ${env.key}`}
-            data-tip='Edit'
+            data-tip={row.moveBusy ? 'Wait for the request to finish' : 'Edit'}
             className={ghostButton}
+            disabled={row.moveBusy}
             onClick={() => row.setEditing(true)}
           >
             <Pencil className='h-3.5 w-3.5' aria-hidden />
@@ -505,7 +644,7 @@ function EnvRow({
   isAdmin: boolean
   canPromote: boolean
 }) {
-  const row = useEnvRow(app, env)
+  const row = useEnvRow(app, env, isAdmin)
 
   if (row.editing) {
     return (
@@ -529,6 +668,11 @@ function EnvRow({
       <tr className='border-b border-slate-100 last:border-0 dark:border-border'>
         <td className='truncate px-4 py-2.5 font-mono text-[12px] font-medium text-slate-800 dark:text-foreground'>
           {env.key}
+          {row.placementText && (
+            <div className='mt-0.5'>
+              <PlacementChip text={row.placementText} shared={row.isShared} />
+            </div>
+          )}
         </td>
         <td className='max-w-[280px] px-4 py-2.5'>
           <a
@@ -557,8 +701,34 @@ function EnvRow({
           <EnvActions env={env} row={row} isAdmin={isAdmin} canPromote={canPromote} />
         </td>
       </tr>
-      {env.placement_id != null && (
+      {env.placement_id != null && !row.isShared && !row.placementPending && (
         <HubStackPanel env={env} appId={app.id} isAdmin={isAdmin} layout='row' />
+      )}
+      {row.moving && (
+        <tr className='border-b border-slate-100 last:border-0 dark:border-border'>
+          <td colSpan={6} className='px-4 pb-3'>
+            <HubMovePanel
+              appKey={app.key}
+              env={env}
+              idPrefix={`hub-move-${env.id}`}
+              onClose={() => row.setMoving(false)}
+              onBusy={row.setMoveBusy}
+            />
+          </td>
+        </tr>
+      )}
+      {row.placing && (
+        <tr className='border-b border-slate-100 last:border-0 dark:border-border'>
+          <td colSpan={6} className='px-4 pb-3'>
+            <HubPlaceSharedForm
+              appId={app.id}
+              env={env}
+              idPrefix={`hub-place-${env.id}`}
+              onClose={() => row.setPlacing(false)}
+              onBusy={row.setMoveBusy}
+            />
+          </td>
+        </tr>
       )}
       {row.promoting && (
         <tr className='border-b border-slate-100 last:border-0 dark:border-border'>
@@ -590,7 +760,7 @@ function EnvItem({
   isAdmin: boolean
   canPromote: boolean
 }) {
-  const row = useEnvRow(app, env)
+  const row = useEnvRow(app, env, isAdmin)
   if (row.editing) {
     return (
       <li className='px-4 py-3'>
@@ -612,6 +782,7 @@ function EnvItem({
           {env.key}
         </span>
         <EnvStatus status={row.status} />
+        <PlacementChip text={row.placementText} shared={row.isShared} />
         <div className='ml-auto'>
           <EnvActions env={env} row={row} isAdmin={isAdmin} canPromote={canPromote} />
         </div>
@@ -631,8 +802,30 @@ function EnvItem({
         <span className='shrink-0'>{s?.checked_at ? formatRelative(s.checked_at) : '—'}</span>
       </p>
       <EnvStatusHint status={row.status} className='mt-0.5' />
-      {env.placement_id != null && (
+      {env.placement_id != null && !row.isShared && !row.placementPending && (
         <HubStackPanel env={env} appId={app.id} isAdmin={isAdmin} layout='card' idPrefix='-m' />
+      )}
+      {row.moving && (
+        <div className='mt-2'>
+          <HubMovePanel
+            appKey={app.key}
+            env={env}
+            idPrefix={`hub-move-${env.id}-m`}
+            onClose={() => row.setMoving(false)}
+            onBusy={row.setMoveBusy}
+          />
+        </div>
+      )}
+      {row.placing && (
+        <div className='mt-2'>
+          <HubPlaceSharedForm
+            appId={app.id}
+            env={env}
+            idPrefix={`hub-place-${env.id}-m`}
+            onClose={() => row.setPlacing(false)}
+            onBusy={row.setMoveBusy}
+          />
+        </div>
       )}
       {row.promoting && (
         <div className='mt-2'>
@@ -734,6 +927,7 @@ function EditEnvironment({
         own as you change them.
       </p>
       <HubComponentsEditor appId={app.id} env={env} idPrefix={idPrefix} />
+      <HubAppKeyField envId={env.id} idPrefix={idPrefix} />
     </div>
   )
 }

@@ -100,6 +100,7 @@ import {
 import { readJobLog } from '../services/job-runs.js'
 import { hubPhase3Routes } from './hub-create.js'
 import { hubDockerRoutes } from './hub-docker.js'
+import { hubMoveRoutes } from './hub-move.js'
 import { hubSharedRoutes } from './hub-shared.js'
 import { hubSharedTenantsRoutes } from './hub-shared-tenants.js'
 import { hubSharedUpgradeRoutes } from './hub-shared-upgrade.js'
@@ -133,6 +134,7 @@ export async function hubRoutes(app: FastifyInstance) {
   hubSharedRoutes(app) // phase 6
   app.register(hubSharedTenantsRoutes) // phase 6: GET /shared/:key/tenants (deployment bearer)
   hubSharedUpgradeRoutes(app) // phase 6: shared stack deploy/upgrade/rollback (Task 5)
+  hubMoveRoutes(app) // phase 6: moves between shared and dedicated placements (+ boot heal)
 }
 
 const APPS = 'nivaro_hub_apps'
@@ -1048,6 +1050,8 @@ function placementRoutes(app: FastifyInstance) {
     if (!done.ok) {
       if (done.code === 'IN_USE')
         return fail(reply, 409, 'IN_USE', 'An environment still uses this placement')
+      if (done.code === 'PLACEMENT_IN_USE')
+        return fail(reply, 409, 'PLACEMENT_IN_USE', 'A move in progress uses this placement')
       return notFound(reply)
     }
     await logActivity({

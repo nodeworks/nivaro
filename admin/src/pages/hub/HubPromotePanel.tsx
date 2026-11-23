@@ -19,6 +19,7 @@ import {
   blockersOf,
   cancelPromotion,
   changedPlanOf,
+  deployKindWords,
   fetchPromotableReleases,
   fetchPromotion,
   fetchPromotionPlan,
@@ -29,6 +30,7 @@ import {
   hubKeys,
   hubToast,
   isLivePromotion,
+  isPromotionKind,
   type PromotionBlocker,
   type PromotionKind,
   type PromotionPlan,
@@ -48,7 +50,6 @@ import { dangerArmed, dangerGhost, ghostButton, SectionCard } from './hub-parts'
 
 const KIND_VERB: Record<PromotionKind, string> = { promote: 'promote', rollback: 'roll back' }
 const KIND_TITLE: Record<PromotionKind, string> = { promote: 'Promote', rollback: 'Roll back' }
-const KIND_NOUN: Record<PromotionKind, string> = { promote: 'Promote', rollback: 'Rollback' }
 
 export function HubPromotePanel({
   env,
@@ -767,6 +768,8 @@ export function PromotionHistory({
   const offered = new Set<number>()
   const seen = new Set<string>()
   for (const r of q.data ?? []) {
+    // Phase 6: a move or shared-upgrade row never offers a rollback of its own.
+    if (!isPromotionKind(r.kind)) continue
     if (r.status !== 'success' || seen.has(r.version)) continue
     seen.add(r.version)
     if (rollbackTo.has(r.version)) offered.add(r.id)
@@ -816,7 +819,7 @@ export function PromotionHistory({
                 </span>
               )}
               <span className='text-[11px] text-slate-500 dark:text-muted-foreground'>
-                {r.apply ? 'Apply settings' : (KIND_NOUN[r.kind] ?? r.kind)}
+                {deployKindWords(r)}
               </span>
               <span className={cn('text-[12px] font-medium', promotionStatusTone(r.status))}>
                 {promotionStatusWords(r.status)}
@@ -862,7 +865,7 @@ export function PromotionHistory({
                   )}
                 </td>
                 <td className='py-2 pr-4 text-slate-600 dark:text-slate-300'>
-                  {r.apply ? 'Apply settings' : (KIND_NOUN[r.kind] ?? r.kind)}
+                  {deployKindWords(r)}
                 </td>
                 <td className={cn('py-2 pr-4 font-medium', promotionStatusTone(r.status))}>
                   {promotionStatusWords(r.status)}
@@ -937,7 +940,7 @@ function RowActions({
 }) {
   return (
     <div className='flex flex-nowrap items-center justify-end gap-0.5'>
-      {isLivePromotion(row.status) && (
+      {isLivePromotion(row.status) && isPromotionKind(row.kind) && (
         <button
           type='button'
           aria-label={`Watch ${row.version}`}
@@ -979,7 +982,7 @@ export function PromotionsCard({
   return (
     <SectionCard
       title='Hub deploys'
-      description='Promotions and rollbacks the Hub ran, newest first.'
+      description='Promotions, rollbacks and moves the Hub ran, newest first.'
     >
       <div className='divide-y divide-slate-200 dark:divide-border'>
         {managed.map((env) => (

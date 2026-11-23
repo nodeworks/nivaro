@@ -502,15 +502,28 @@ async function dropPlacement(trx: Knex.Transaction, id: number): Promise<void> {
   await trx('nivaro_hub_placements').where({ id }).del()
 }
 
-/** Deletes a placement no environment names; IN_USE while one does. */
+/**
+ * Deletes a placement no environment names; IN_USE while one does, PLACEMENT_IN_USE while an
+ * open move (running, waiting or interrupted) names it as its source or target (phase 6, ruling
+ * P6-21: the move's rollback still needs it).
+ */
 export async function deletePlacement(
   id: number
-): Promise<{ ok: true } | { ok: false; code: 'IN_USE' | 'NOT_FOUND' }> {
+): Promise<{ ok: true } | { ok: false; code: 'IN_USE' | 'PLACEMENT_IN_USE' | 'NOT_FOUND' }> {
   return db.transaction(async (trx) => {
     if (!(await trx('nivaro_hub_placements').where({ id }).first('id')))
       return { ok: false, code: 'NOT_FOUND' as const }
     if (await trx('nivaro_hub_environments').where({ placement_id: id }).first('id'))
       return { ok: false, code: 'IN_USE' as const }
+    // The moves table exists from migration 553 on (a database behind it has no moves).
+    if (
+      (await trx.schema.hasTable('nivaro_hub_moves')) &&
+      (await trx('nivaro_hub_moves')
+        .whereIn('status', ['running', 'waiting', 'interrupted'])
+        .where((q) => q.where({ from_placement_id: id }).orWhere({ to_placement_id: id }))
+        .first('id'))
+    )
+      return { ok: false, code: 'PLACEMENT_IN_USE' as const }
     await dropPlacement(trx, id)
     return { ok: true as const }
   })
