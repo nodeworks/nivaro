@@ -558,7 +558,9 @@ async function writeShared(
     changed = await q.update({ ...cols, updated_at: new Date() })
   } catch (err) {
     if (isUniqueViolation(err)) throw keyTaken()
-    throw err
+    // Final review M-3: never rethrow the engine's error — knex inlines the bindings (the sealed
+    // secrets) into its message, as createShared already says.
+    throw new Error('Saving the shared deployment failed')
   }
   if (Number(changed) === 1) return 'written'
   return (await db(TABLE).where({ id }).first('id')) ? (swap ? 'raced' : 'written') : 'missing'
