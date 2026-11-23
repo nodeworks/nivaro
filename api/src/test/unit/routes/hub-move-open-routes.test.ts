@@ -258,4 +258,16 @@ describe('re-review FW1-M-1 / FW1-M-2', () => {
     expect(plain.json().code).not.toBe('MOVE_OPEN')
     expect(m.agentStack).toHaveBeenCalled()
   })
+
+  it('M-2: deleting the environment → 409 MOVE_OPEN, nothing deleted; once the move ended it goes', async () => {
+    const res = await inject('DELETE', `/environments/${ENV}`, undefined)
+    expect(res.statusCode).toBe(409)
+    expect(res.json()).toMatchObject({ code: 'MOVE_OPEN', error: MOVE_TEXT })
+    expect(await db('nivaro_hub_environments').where({ id: ENV }).first('id')).toBeTruthy()
+    expect(await db('nivaro_hub_placements').where({ id: 11 }).first('id')).toBeTruthy()
+    await db('nivaro_hub_moves').where({ id: 7 }).update({ status: 'rolled_back' })
+    m.agentStack.mockResolvedValue(null)
+    const again = await inject('DELETE', `/environments/${ENV}`, undefined)
+    expect(again.json().code).not.toBe('MOVE_OPEN')
+  })
 })

@@ -778,6 +778,10 @@ function environmentRoutes(app: FastifyInstance) {
     // stack this environment still runs must be removed first (STACK_*); then its creation row
     // (phase 3) and its sign-in client and switcher rows (phase 7, ruling P7-18) go with it.
     return quiet(reply, [id], async () => {
+      // Re-review FW1-M-2: an open move (an interrupted one holds no lock) needs the
+      // environment and its placements to resume or roll back.
+      const open = await moveOpenRefusal({ envIds: [id] })
+      if (open) return fail(reply, open.status, open.code, open.message)
       let stackRefusal: DeleteRefusal | null
       try {
         stackRefusal = await dockerEnvironmentDeleteRefusal(id)
