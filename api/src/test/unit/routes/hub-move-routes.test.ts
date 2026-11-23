@@ -104,6 +104,7 @@ function ops(): MoveOps {
     targetMaintenance: r('targetMaintenance', undefined),
     freezeTarget: r('freezeTarget', undefined),
     dropTempHost: r('dropTempHost', null),
+    verifyTargetKey: r('verifyTargetKey', undefined),
     sourceBusy: r('sourceBusy', { imports: 0, exports: 0, renders: 0 }),
     pullFiles: async () => ({
       state: 'done',
@@ -233,6 +234,8 @@ beforeAll(async () => {
     hostnames: '[]',
     placement_id: placement
   })
+  const { setAppKey } = await import('../../../services/hub/shared/store.js')
+  await setAppKey(envId, 'ab'.repeat(32))
   app = Fastify()
   await app.register(hubRoutes, { prefix: '/api/hub' })
   await app.ready()

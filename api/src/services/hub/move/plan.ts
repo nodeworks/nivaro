@@ -469,7 +469,7 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
     )
   add(
     'SIGNED_LINKS_RESET',
-    'Links the app signed before the move stop working: submission status links (valid 90 days), help-video and export links and message-action links in mail. The session secret differs on the other side. People can ask for new ones.'
+    'Links the app signed before the move stop working: submission status links (valid 90 days), help-video and export links and message-action links in mail. The session secret differs on the other side. People can ask for new ones. Unsaved form drafts are dropped too (they are sealed with the same secret): ask people to save their open forms before the move.'
   )
   add(
     'REPLAYS_NOT_MOVED',

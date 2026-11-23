@@ -518,6 +518,8 @@ describe('buildMovePlan — warnings', () => {
     ]) {
       const w = p.warnings.find((x) => x.code === 'SIGNED_LINKS_RESET')
       expect(w?.text).toMatch(/90/)
+      // Core M7 (FW-4): record drafts are sealed with the session secret too.
+      expect(w?.text).toMatch(/unsaved form drafts are dropped/i)
     }
   })
 

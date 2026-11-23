@@ -41,8 +41,11 @@ import type { TenantRecord } from '../services/tenancy/types.js'
  * served through a file route" (gotchas): Decision 11 moves every object of the app, and this
  * route is machine-only — reachable solely with a ticket the source minted for the Hub, never by a
  * person, a session, an API key or an OAuth token. Do not copy this into any other file route.
- * It serves this process's own copy only (never FILES_FALLBACK_URL), with `X-Nivaro-Filename-Disk`
- * (the key, percent-encoded) and `Content-Length`; never compressed. Missing row or object = 404.
+ * It serves the object the app itself reads (P6-36): the row's saved-settings driver, then the env
+ * provider's file, the FILES_FALLBACK_DIR copy and FILES_FALLBACK_URL, with
+ * `X-Nivaro-Filename-Disk` (the key, percent-encoded) and `Content-Length`; never compressed. A
+ * missing row, or an object none of them has, is 404; any other read error is 503
+ * SOURCE_READ_FAILED.
  */
 
 export const TRANSFER_REFUSED = 'TRANSFER_REFUSED'
@@ -154,8 +157,8 @@ export async function hubTransferRoutes(app: FastifyInstance): Promise<void> {
         reply.header('X-Nivaro-Filename-Disk', encodeURIComponent(key).replace(/%2F/gi, '/'))
         let opened: Awaited<ReturnType<typeof openTransferObject>>
         try {
-          // This home's own copy only (a source never asks another source), read by the row's
-          // provider (P6-31: saved-settings S3/Azure objects through their driver).
+          // The object the app itself reads (P6-36): the row's saved-settings driver first
+          // (P6-31), then the local chain, FILES_FALLBACK_DIR and FILES_FALLBACK_URL included.
           opened = await openTransferObject(key, row.storage, req.headers.range)
         } catch (err) {
           reply.removeHeader('X-Nivaro-Filename-Disk')

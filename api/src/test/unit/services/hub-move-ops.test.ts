@@ -813,8 +813,10 @@ describe('deployTarget on Docker (R9: the target gets the app key, never a fresh
   })
 })
 
-describe('deployTarget on GitLab (P6-20: boot maintenance rides the deploy job)', () => {
-  it('sends HUB_BOOT_MAINTENANCE=<move id> as a pipeline variable on the deploy trigger', async () => {
+describe('deployTarget on GitLab (FW-4 I-1: boot maintenance rides the pin commit)', () => {
+  // The Hub template's deploy job runs by itself on the pin commit: a pipeline variable can never
+  // reach it (GitLab: DEPLOY_VARIABLES_REFUSED). The move id rides the pin file instead.
+  it('an automatic deploy job: no pipeline variable; the pin carries boot-maintenance=<move id>', async () => {
     const w = await setup(true)
     TENANT = w.tenant
     const driver = await insertId('nivaro_hub_drivers', {
@@ -845,6 +847,7 @@ describe('deployTarget on GitLab (P6-20: boot maintenance rides the deploy job)'
     await db('nivaro_hub_moves').where({ id: w.move.id }).update({ to_placement_id: pd })
     const move = (await readMove(w.move.id)) as NonNullable<Awaited<ReturnType<typeof readMove>>>
     const sent: Array<{ via: string; variables: Record<string, string> | undefined }> = []
+    const pins: string[] = []
     const ops = defaultMoveOps(
       move,
       { ...w.plan, kind: 'to_dedicated' },
@@ -854,6 +857,8 @@ describe('deployTarget on GitLab (P6-20: boot maintenance rides the deploy job)'
         now,
         imageDigest: async () => `sha256:${'b'.repeat(64)}`,
         gitlabWrite: {
+          // An automatic job, as the Hub template's: already running on the pin commit, so any
+          // variables are refused, as gitlab-write's runDeployJob refuses them.
           runDeployJob: (async (
             _c: unknown,
             _r: string,
@@ -861,33 +866,35 @@ describe('deployTarget on GitLab (P6-20: boot maintenance rides the deploy job)'
             o: { variables?: Record<string, string> }
           ) => {
             sent.push({ via: 'runDeployJob', variables: o.variables })
+            if (o.variables && Object.keys(o.variables).length)
+              throw Object.assign(new Error('The deploy job runs by itself'), {
+                code: 'DEPLOY_VARIABLES_REFUSED'
+              })
             return { status: 'success', job: {} }
-          }) as never,
-          playJob: (async (_c: unknown, _id: number, v?: Record<string, string>) => {
-            sent.push({ via: 'playJob', variables: v })
-            return {}
           }) as never
         },
-        // The promotion's own runner, reduced to the two calls it makes on the GitLab side.
+        // The promotion's own runner, reduced to the pin it commits and the auto-run it waits for.
         deployComponent: (async (
-          _step: unknown,
+          step: { pinText: string },
           _v: string,
           _ctx: unknown,
           _log: unknown,
           opts?: { deps?: { gitlab?: Record<string, (...a: unknown[]) => Promise<unknown>> } }
         ) => {
+          pins.push(step.pinText)
           const g = opts?.deps?.gitlab ?? {}
           await g.runDeployJob?.({}, 'prod', 'f'.repeat(40), { deploy: 'deploy', minutes: 60 })
-          await g.playJob?.({}, 5)
           return { status: 'success', step: 'deploy api', error: null }
         }) as never
       }
     )
     await ops.deployTarget()
-    expect(sent).toEqual([
-      { via: 'runDeployJob', variables: { HUB_BOOT_MAINTENANCE: String(w.move.id) } },
-      { via: 'playJob', variables: { HUB_BOOT_MAINTENANCE: String(w.move.id) } }
-    ])
+    expect(sent).toEqual([{ via: 'runDeployJob', variables: undefined }])
+    expect(pins).toHaveLength(1)
+    // The version, the digest (and a slim digest), then the move id as the last line.
+    const lines = pins[0].split('\n').filter(Boolean)
+    expect(lines.slice(0, 2)).toEqual(['0.3.210', `sha256:${'b'.repeat(64)}`])
+    expect(lines.at(-1)).toBe(`boot-maintenance=${w.move.id}`)
   })
 })
 
@@ -1089,5 +1096,22 @@ describe('deployTarget on GitLab is cancellable (R2-M-7)', () => {
       .catch((e) => e)
     expect(asked).toBeGreaterThan(0)
     expect(err?.code).toBe('ABORTED')
+  })
+})
+
+// E2E B4 (P6-38): after release, the new home must seal with the app's own key.
+describe('verifyTargetKey (E2E B4)', () => {
+  it('a shared target: matching key_fp passes; another → APP_KEY_MISMATCH; none → APP_KEY_UNKNOWN', async () => {
+    const { keyFingerprint } = await import('../../../services/app-key-fingerprint.js')
+    const w = await setup(true)
+    TENANT = w.tenant
+    const c = clients()
+    const ops = defaultMoveOps(w.move, w.plan, { client: c.factory, sleep, now })
+    c.conf.keyFp = keyFingerprint('ab'.repeat(32))
+    await ops.verifyTargetKey()
+    c.conf.keyFp = '0'.repeat(32)
+    expect((await ops.verifyTargetKey().catch((e) => e))?.code).toBe('APP_KEY_MISMATCH')
+    c.conf.keyFp = null as never
+    expect((await ops.verifyTargetKey().catch((e) => e))?.code).toBe('APP_KEY_UNKNOWN')
   })
 })

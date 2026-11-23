@@ -17,7 +17,7 @@ import {
   sharedLockRefusal
 } from '../promote-lock.js'
 import type { PullStatus } from '../shared/deployment-client.js'
-import { getShared } from '../shared/store.js'
+import { getShared, openAppKey, setAppKey } from '../shared/store.js'
 import {
   AddressError,
   type AddressOptions,
@@ -25,7 +25,7 @@ import {
   resolveMoveAddresses
 } from './addresses.js'
 import { isMoveLiveHere, markMoveLive, unmarkMoveLive } from './heal.js'
-import { asStepError, defaultMoveOps, type MoveOps, MoveStepError } from './ops.js'
+import { asStepError, defaultMoveOps, type MoveOps, MoveStepError, TARGET_READY_MS } from './ops.js'
 import {
   checkTarget,
   type MovePlan,
@@ -45,6 +45,7 @@ import {
   type MoveFilesSummary,
   type MoveStatus,
   type MoveSteps,
+  mergeChecklist,
   mergeSteps,
   OPEN_MOVE_STATUSES,
   openMoveOf,
@@ -54,6 +55,7 @@ import {
   setEnvStatus,
   stepDone
 } from './rows.js'
+import { withMoveRun } from './run-context.js'
 
 /**
  * Nivaro Hub phase 6, Task 16: the move run — a recorded, locked, resumable run of the plan's
@@ -271,7 +273,8 @@ export async function awaitMove(id: number): Promise<void> {
 
 function spawn(moveId: number, work: () => Promise<void>): void {
   markMoveLive(moveId)
-  const p = runInBackgroundPool(work)
+  // FW-4: everything this run does is marked as the move's own (the MOVE_OPEN guards let it pass).
+  const p = runInBackgroundPool(() => withMoveRun(moveId, work))
     .catch((err) =>
       getApp()?.log?.error?.(
         { move_id: moveId, err: (err as Error | null)?.name ?? 'Error' },
@@ -827,21 +830,51 @@ async function liftSource(ctx: Ctx): Promise<void> {
       )
 }
 
-/** R5-I-1: the post-deploy maintenance call, retried with backoff (about 2 minutes in all). */
+/**
+ * F4-1 (P6-39): the new home's key check, retried with backoff for about a minute (a shared
+ * deployment's replicas re-read the list every 30 s; one link error is not an answer) before the
+ * source is left unretired.
+ */
+async function verifyTargetKeyWithRetry(ctx: Ctx): Promise<void> {
+  const waits = [5_000, 10_000, 15_000, 30_000]
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await ctx.ops.verifyTargetKey()
+      return
+    } catch (err) {
+      const se = asStepError(err, "The new home's key could not be checked.")
+      if (attempt >= waits.length) throw se
+      ctx.run.log(
+        `retire_source: the new home's key does not check yet (${se.code}); trying again`,
+        'warn'
+      )
+      await ctx.e.sleep(waits[attempt])
+    }
+  }
+}
+
+/**
+ * R5-I-1: the post-deploy maintenance call, retried with backoff (5, 15, 30, then every 60 s).
+ * Final review moves Minor 3: within target_ready's own 10 minutes (TARGET_READY_MS), since an
+ * app that runs its migrations at boot can take longer than 2 minutes to answer.
+ */
 async function targetMaintenanceWithRetry(ctx: Ctx): Promise<void> {
-  const waits = [5_000, 15_000, 30_000, 60_000]
+  const waits = [5_000, 15_000, 30_000]
+  const by = ctx.e.now() + TARGET_READY_MS
   for (let attempt = 0; ; attempt++) {
     try {
       await ctx.ops.targetMaintenance(true)
       return
     } catch (err) {
       const se = asStepError(err, 'The target did not take maintenance.')
-      if (attempt >= waits.length) throw se
+      const wait = waits[attempt] ?? 60_000
+      if (ctx.e.now() + wait > by) throw se
       ctx.run.log(
         `deploy_target: the target did not take maintenance yet (${se.code}); trying again`,
         'warn'
       )
-      await ctx.e.sleep(waits[attempt])
+      await boundary(ctx)
+      await ctx.e.sleep(wait)
     }
   }
 }
@@ -929,6 +962,11 @@ async function doStep(ctx: Ctx, key: MoveStepKey, steps: MoveSteps): Promise<voi
         throw err
       }
       await targetMaintenanceWithRetry(ctx)
+      // FW-4 I-1: a fact for the halt text (a Docker target's call sends nothing: boot maintenance).
+      if (!ctx.shared.toDocker && ctx.shared.to === null) {
+        steps.target_maint_set = true
+        await saveSteps(ctx, steps)
+      }
       if (steps.boot_freeze === 'on') {
         // R6-M-4: the intent first, so a crash inside the lift is seen (Resume freezes again,
         // a rollback lifts it).
@@ -990,6 +1028,8 @@ async function doStep(ctx: Ctx, key: MoveStepKey, steps: MoveSteps): Promise<voi
     case 'release':
       return release(ctx, steps)
     case 'retire_source':
+      // E2E B4 (P6-38): the new home seals with the app's own key before the old one is retired.
+      await verifyTargetKeyWithRetry(ctx)
       return ops.retireSource()
     case 'done':
       return
@@ -1105,15 +1145,37 @@ async function release(ctx: Ctx, steps: MoveSteps): Promise<void> {
     }
     await saveSteps(ctx, steps)
   }
-  await db(ENVS)
-    .where({ id: ctx.envId })
-    .update({
-      placement_id: move.to_placement_id,
-      version_pin: ctx.plan.version,
-      status: 'active',
-      ...(ctx.shared.toDocker ? { hub_managed: true } : {}),
-      updated_at: new Date()
-    })
+  // E2E B4 (P6-38): a shared-placed app's key is read from the environment's own entry only
+  // (openAppKey). A Docker source keeps it in its stack settings, so it is resolved now (the R9
+  // order: the entry, then the stack settings), before the switch, and written into the entry in
+  // the same transaction. No key at all: the move does not release (the plan blocks it first).
+  let carryKey: string | null = null
+  if (ctx.shared.to !== null) {
+    const entry = (await db(ENVS).where({ id: ctx.envId }).first('encryption_key')) as
+      | { encryption_key: string | null }
+      | undefined
+    if (!entry?.encryption_key) {
+      carryKey = await openAppKey(ctx.envId)
+      if (!carryKey)
+        throw new MoveStepError(
+          'APP_KEY_UNKNOWN',
+          "The Hub holds no encryption key for this app, so the shared deployment could not open its values. Enter the app's ENCRYPTION_KEY on the environment, then move again."
+        )
+    }
+  }
+  await db.transaction(async (trx) => {
+    if (carryKey) await setAppKey(ctx.envId, carryKey, trx)
+    await trx(ENVS)
+      .where({ id: ctx.envId })
+      .update({
+        placement_id: move.to_placement_id,
+        version_pin: ctx.plan.version,
+        status: 'active',
+        ...(ctx.shared.toDocker ? { hub_managed: true } : {}),
+        updated_at: new Date()
+      })
+  })
+  if (carryKey) ctx.run.log("release: the app's encryption key is kept with the environment")
   ctx.run.log(`release: the environment now lives on placement ${move.to_placement_id}`)
   // Committed: the target serves for real now (a Docker target's boot maintenance is released
   // for good with the move id; a shared target's replicas re-read their list).
@@ -1168,16 +1230,15 @@ async function dropTempName(ctx: Ctx): Promise<void> {
     // E2E B3: where to check, on the public scheme and port it was served on.
     const at = move?.steps.addresses?.target_link_base ?? host
     ctx.run.log(`the per-move name ${host} is still on the target stack (${se.code})`, 'warn')
-    const checklist = (move?.checklist ?? []).filter((c) => c.id !== 'temp_host')
-    checklist.push({
+    const item = {
       id: 'temp_host',
       text: safeLine(
         `Still to do: remove the per-move name ${host} from the target stack. Apply the environment's stack again (Apply now renders only the environment's own names), then check that ${at} no longer serves the app.`
       ),
       required: false,
       done: false
-    })
-    await patchMove(ctx.moveId, { checklist })
+    }
+    await mergeChecklist(ctx.moveId, (c) => [...c.filter((x) => x.id !== 'temp_host'), item])
   }
 }
 
@@ -1211,18 +1272,25 @@ async function finishSuccess(ctx: Ctx, warning: string | null): Promise<void> {
 
 /** After release a failing retire_source never rolls back: success with the item open. */
 async function finishRetireFailed(ctx: Ctx, steps: MoveSteps, err: MoveStepError): Promise<void> {
-  const move = await readMove(ctx.moveId)
-  const checklist = [...(move?.checklist ?? [])]
-  const item = checklist.find((c) => c.id === 'retire_source')
-  if (item) item.done = false
-  else
-    checklist.push({
-      id: 'retire_source',
-      text: 'Retire the old placement by hand: the Hub could not (see the move log).',
-      required: false,
-      done: false
-    })
-  await patchMove(ctx.moveId, { checklist })
+  await mergeChecklist(ctx.moveId, (checklist) => {
+    // Final review moves Minor 4: the source's own instruction (a Docker source never retired
+    // says to remove its stack now), not only "see the log".
+    // F4-1 (P6-39): a key that does not check is not a retire to do by hand: the old home must
+    // keep the app until the new one seals with its key.
+    const text = err.code.startsWith('APP_KEY_')
+      ? safeLine(
+          `Do not retire the old home yet. Enter the app's key on the new home (Hub → app → App key), then retire. (${err.code}: ${err.message})`
+        )
+      : safeLine(
+          `Retire the old placement by hand: the Hub could not (${err.code}). ${err.message}`
+        )
+    const item = checklist.find((c) => c.id === 'retire_source')
+    if (item) {
+      item.done = false
+      item.text = text
+    } else checklist.push({ id: 'retire_source', text, required: false, done: false })
+    return checklist
+  })
   // The steps after retire_source (done) still count as done.
   for (const s of steps.list) if (s.key === 'done') s.state = 'done'
   await saveSteps(ctx, steps)
@@ -1262,27 +1330,39 @@ async function locksHeld(ctx: Ctx): Promise<boolean> {
  */
 async function targetStopText(move: HubMoveRow, sourceFrozen: boolean): Promise<string> {
   const p = await getPlacement(move.to_placement_id)
-  let target = `placement ${move.to_placement_id}`
+  let target = 'the new home'
   let how = 'stop every process of this app there and keep it from starting again'
   if (p?.kind === 'shared') {
+    // Design R2-S1: stopping a shared deployment stops every other app on it; say so, with how many.
     const shared = await getShared(p.shared_deployment_id)
     const key = shared?.key ?? String(p.shared_deployment_id)
-    target = `the shared deployment ${key}`
-    how = `remove the app from the shared deployment ${key}: stop that deployment (scale its services to 0) until this rollback is done; the rollback then drops the app from its list and the deployment can start again`
+    const others = Number(
+      (
+        (await db(ENVS)
+          .join('nivaro_hub_placements as p', 'p.id', `${ENVS}.placement_id`)
+          .where('p.shared_deployment_id', p.shared_deployment_id)
+          .whereNot(`${ENVS}.id`, move.environment_id)
+          .count({ n: '*' })
+          .first()) as { n?: unknown } | undefined
+      )?.n ?? 0
+    )
+    target = key
+    how = `scale its services to 0. This stops every app on ${key} (${others} other app${others === 1 ? '' : 's'}) until the rollback is done; the rollback then drops this app from its list and you can start ${key} again`
   } else if (p) {
     const driver = await getDriver(p.driver_id)
     const stack = (p.target as { stack?: unknown }).stack
     if (driver?.kind === 'docker' && typeof stack === 'string') {
       target = `the Docker stack ${stack} (driver ${driver.name})`
-      how = `remove the stack on that swarm (docker stack rm ${stack}) and do not deploy it again`
+      how = `remove it on that swarm (docker stack rm ${stack}) and do not deploy it again`
     } else {
       const at = move.steps.addresses?.target_link_base
-      target = `the GitLab-deployed app${at ? ` at ${at}` : ''} (placement ${p.id})`
+      target = at ? `the GitLab-deployed app at ${at}` : 'the GitLab-deployed app'
       how =
         'remove its stack on its swarm manager (docker stack rm) and stop its pipeline from deploying it again'
     }
   }
-  return `Make sure no process of this app runs at ${target}, and none can restart: ${how}. Then tick "target stopped" (it states that no process of this app runs at ${target}, and none can restart) and Roll back again: the Hub then ${sourceFrozen ? "lifts the source's maintenance" : 'finishes the rollback'}.`
+  // "Stop <target>: …" is what the admin reads the target's name from (haltedTargetName).
+  return `Stop ${target}: ${how}. Then tick this box and Roll back, once no process of this app runs there and none can restart: the Hub then ${sourceFrozen ? "lifts the source's maintenance" : 'finishes the rollback'}.`
 }
 
 /**
@@ -1293,25 +1373,33 @@ async function targetStopText(move: HubMoveRow, sourceFrozen: boolean): Promise<
  */
 async function halt(ctx: Ctx, move: HubMoveRow, sourceFrozen: boolean): Promise<void> {
   const say = await targetStopText(move, sourceFrozen)
-  const fresh = (await readMove(ctx.moveId)) ?? move
-  const checklist = fresh.checklist.filter((c) => c.id !== 'target_stopped')
-  checklist.push({ id: 'target_stopped', text: say, required: true, done: false })
   // R5-I-1: worded from the source's real state, never "stays in maintenance" when it serves.
+  // FW-4 I-1: and what the Hub did to the target, never more: it set its maintenance after the
+  // deploy (target_maint_set), or the target was deployed to start in it (a Docker stack's boot
+  // maintenance, a template that reads the move id from the pin); the Hub never claims it set
+  // a maintenance it did not.
+  const fresh0 = (await readMove(ctx.moveId)) ?? move
   const state = sourceFrozen
     ? 'so the source stays in maintenance (never two writers)'
-    : 'and the source keeps serving: it was not put in maintenance, and the target was last set to maintenance by the Hub'
+    : fresh0.steps.target_maint_set
+      ? 'and the source keeps serving: it was not put in maintenance, and the target was put in maintenance after its deploy'
+      : 'and the source keeps serving: it was not put in maintenance, because the target was deployed to start in maintenance'
   const error = `HALTED_TARGET_LIVE: The rollback stopped: the target could not be frozen or stopped, ${state}. ${say}`
   const ours = await patchMoveIfHolder(ctx.moveId, ctx.held.envToken, {
     status: 'interrupted',
     error: safeLine(error),
-    checklist,
     heartbeat_at: null
   })
   if (!ours) {
     ctx.run.log('stopped: this run no longer holds the move', 'error')
     await ctx.run.fail(new Error('Interrupted: the run lost its locks.'))
     return
-  }
+  } // A tick made meanwhile is kept (compare-and-set); a tick of an earlier halt's item is reset.
+  await mergeChecklist(ctx.moveId, (c) => [
+    ...c.filter((x) => x.id !== 'target_stopped'),
+    { id: 'target_stopped', text: say, required: true, done: false }
+  ])
+
   await closeDeployRow(ctx, 'interrupted', error)
   ctx.run.log(error, 'error')
   await logActivity({
@@ -1358,17 +1446,23 @@ async function interrupt(ctx: Ctx): Promise<void> {
  */
 async function sourceRecoveryText(move: HubMoveRow): Promise<string> {
   const p = await getPlacement(move.from_placement_id)
-  let names = 'Put the names back on the source by hand.'
   if (p?.kind === 'shared') {
+    // A shared source is frozen through the Hub's list (the environment's status), never a key of
+    // its own: its deployment's plain nvr:maintenance key would freeze every app on it.
     const shared = await getShared(p.shared_deployment_id)
-    names = `Apply now on the shared deployment ${shared?.key ?? p.shared_deployment_id} (its stack then carries this app's names again).`
-  } else if (p) {
+    const key = shared?.key ?? String(p.shared_deployment_id)
+    return `To recover: Apply now on the shared deployment ${key} (its stack then carries this app's names again). If the app still shows maintenance there, set the environment's status back to active on the Hub: the deployment's replicas re-read the Hub list within 30 seconds. Never clear the deployment's own maintenance key: that is the freeze of every app on ${key}.`
+  }
+  let names = 'Put the names back on the source by hand.'
+  if (p) {
     const stack = (p.target as { stack?: unknown }).stack
     const driver = await getDriver(p.driver_id)
     if (driver?.kind === 'docker' && typeof stack === 'string')
       names = `Apply now on the source stack ${stack} (driver ${driver.name}): it renders the environment's own names again.`
   }
-  return `To recover: ${names} If the source still shows maintenance, lift it on the source app with POST /api/hub-link/maintenance {"on":false} without move_id, or delete the nvr:maintenance key in its Redis (remove HUB_BOOT_MAINTENANCE from its stack first if it is set).`
+  // P6-32: a hub-linked app freezes on its OWN key (security.ts maintenanceOverrideKey), never
+  // the plain nvr:maintenance (that one is honoured, never written, by the Hub's freeze).
+  return `To recover: ${names} If the source still shows maintenance, lift it on the source app with POST /api/hub-link/maintenance {"on":false} without move_id (its hub token as the bearer). If that cannot be reached, delete the app's own key <REDIS_CHANNEL_PREFIX>nvr:maintenance:<tag> in its Redis, where <tag> is the first 16 hex characters of the sha256 of its HUB_TOKEN (redis-cli --scan --pattern '*nvr:maintenance:*' lists it); remove HUB_BOOT_MAINTENANCE from its stack first if it is set.`
 }
 
 async function rollBack(
@@ -1434,9 +1528,10 @@ async function rollBack(
   const repoint = said?.sure ? said.text : null
   if (said) {
     ctx.run.log(said.text, said.sure ? 'error' : 'warn')
-    const checklist = (move.checklist ?? []).filter((c) => c.id !== 'repoint_name')
-    checklist.push({ id: 'repoint_name', text: said.text, required: said.sure, done: false })
-    await patchMove(ctx.moveId, { checklist })
+    await mergeChecklist(ctx.moveId, (c) => [
+      ...c.filter((x) => x.id !== 'repoint_name'),
+      { id: 'repoint_name', text: said.text, required: said.sure, done: false }
+    ])
   }
   const recover =
     failed.includes('route') || failed.includes('maintenance_on')
@@ -1444,10 +1539,10 @@ async function rollBack(
       : null
   if (recover) {
     ctx.run.log(recover, 'error')
-    const fresh = (await readMove(ctx.moveId)) ?? move
-    const checklist = fresh.checklist.filter((c) => c.id !== 'restore_source')
-    checklist.push({ id: 'restore_source', text: safeLine(recover), required: true, done: false })
-    await patchMove(ctx.moveId, { checklist })
+    await mergeChecklist(ctx.moveId, (c) => [
+      ...c.filter((x) => x.id !== 'restore_source'),
+      { id: 'restore_source', text: safeLine(recover), required: true, done: false }
+    ])
   }
   // The recovery goes first: the stored error is cut at 1000 characters.
   const base = failed.length
@@ -1716,11 +1811,18 @@ export async function setMoveChecklist(
   if (!move) throw new MoveError('NOT_FOUND', 'No such move.', 404)
   if (typeof item !== 'string' || typeof done !== 'boolean')
     throw new MoveError('BAD_ITEM', 'Send {item, done}: an item id and true or false.', 400)
-  const checklist = [...move.checklist]
-  const found = checklist.find((c) => c.id === item)
-  if (!found) throw new MoveError('UNKNOWN_ITEM', 'This move has no such checklist item.', 400)
-  found.done = done
-  await patchMove(id, { checklist })
+  let checklist: MoveChecklistState[] = []
+  let known = false
+  // Final review moves Minor 2: compare-and-set, so a tick never drops an item the run adds.
+  await mergeChecklist(id, (stored) => {
+    const found = stored.find((c) => c.id === item)
+    known = !!found
+    if (!found) return null
+    found.done = done
+    checklist = stored
+    return stored
+  })
+  if (!known) throw new MoveError('UNKNOWN_ITEM', 'This move has no such checklist item.', 400)
   await logActivity({
     action: 'hub-move-checklist',
     user: by,

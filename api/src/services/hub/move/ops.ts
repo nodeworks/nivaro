@@ -26,7 +26,10 @@ import {
   type HubPlacementRow,
   STACK_NAME_RE
 } from '../drivers.js'
-import { playJob as gitlabPlayJob, runDeployJob as gitlabRunDeployJob } from '../gitlab-write.js'
+import type {
+  playJob as gitlabPlayJob,
+  runDeployJob as gitlabRunDeployJob
+} from '../gitlab-write.js'
 import { sourceSubjectRe } from '../promote-gather.js'
 import { driverGitCtx } from '../promote-heal.js'
 import { PromotionError } from '../promote-lock.js'
@@ -142,6 +145,12 @@ export interface MoveOps {
   verifyName(expect: { version: string; shared: string | null }): Promise<boolean>
   retireSource(): Promise<void>
   /**
+   * E2E B4 (P6-38): after release, the target reports the app's own key fingerprint (the shared
+   * deployment's app status, or the dedicated target's readiness report). Throws APP_KEY_UNKNOWN /
+   * APP_KEY_MISMATCH otherwise; the source is not retired then.
+   */
+  verifyTargetKey(): Promise<void>
+  /**
    * P6-27: once rollback is no longer possible, a Docker target stack is applied again with only
    * the environment's own names and the per-move name is proven gone (the agent converged on a
    * spec without it, and the name no longer serves the app). Answers the name removed, or null
@@ -191,7 +200,7 @@ export interface MoveOpsDeps {
   sharedStackRouter?: SharedStackRouter
   /** Gitlab target: one component through the promotion's own code (tests replace it). */
   deployComponent?: typeof deployComponentAt
-  /** The GitLab calls the boot-maintenance variable rides (tests replace them). */
+  /** The GitLab calls of the target deploy (tests replace them; the move sends no variables). */
   gitlabWrite?: Partial<{ runDeployJob: typeof gitlabRunDeployJob; playJob: typeof gitlabPlayJob }>
 }
 
@@ -623,23 +632,18 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
   // ── Gitlab target: the promotion's own pin + deploy job (Decision 9) ──────────────────────
 
   /**
-   * P6-20: the target's deploy job gets the pipeline variable HUB_BOOT_MAINTENANCE=<move id> on
-   * the play call (the trigger a promotion uses); a created app's template forwards it into the
-   * app's environment, so it boots in strict maintenance (no first-boot window). A deploy job that
-   * starts on its own cannot take variables: runDeployJob refuses (DEPLOY_VARIABLES_REFUSED) and
-   * the move rolls back rather than boot a writable target.
+   * FW-4 I-1 (ruling P6-37): the move id rides the PIN COMMIT, never a pipeline variable. The Hub
+   * template's deploy job runs by itself on every push (no play call), so a variable could never
+   * reach it: runDeployJob refused it (DEPLOY_VARIABLES_REFUSED) while the job deployed the target
+   * writable anyway. The pin file gets a last line `boot-maintenance=<move id>`, which a template
+   * that reads it (BOOT_MAINTENANCE_PROOF) forwards into the app, so the target boots in strict
+   * maintenance whether its job runs by itself or is played. A target whose template does not read
+   * it is 'unproven' (GITLAB_BOOT_WINDOW): the source is frozen for the deploy (R5-I-1) and the
+   * Hub sets the target's maintenance right after it. The deploy waits for the job either way,
+   * as a promotion does.
    */
-  const write = { runDeployJob: gitlabRunDeployJob, playJob: gitlabPlayJob, ...deps.gitlabWrite }
-  const boot = { HUB_BOOT_MAINTENANCE: String(move.id) }
-  const bootVariables = {
-    runDeployJob: ((ctx, ref, sha, o) =>
-      write.runDeployJob(ctx, ref, sha, {
-        ...o,
-        variables: { ...o.variables, ...boot }
-      })) as typeof gitlabRunDeployJob,
-    playJob: ((ctx, jobId, variables) =>
-      write.playJob(ctx, jobId, { ...variables, ...boot })) as typeof gitlabPlayJob
-  }
+  const write = deps.gitlabWrite
+  const bootPinLine = `boot-maintenance=${move.id}\n`
 
   const deployGitlab = async (
     side: Extract<Side, { kind: 'gitlab' }>,
@@ -676,7 +680,7 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
         driverId: driver.id,
         sourceSha: src.sha,
         targetBranch: componentTargetBranch(c, side.placement, driver.config.branch) ?? '',
-        pinText: pinText(version, digest, slim),
+        pinText: `${pinText(version, digest, slim)}${bootPinLine}`,
         pinFile: driver.config.pin_file ?? null,
         beforeJob: c.before_job,
         deployJob: c.deploy_job ?? driver.config.deploy_job,
@@ -694,7 +698,9 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
           envId
         },
         (line, level) => log(line, level),
-        { deps: { gitlab: bootVariables, ...(stopRequested ? { stopRequested } : {}) } }
+        {
+          deps: { ...(write ? { gitlab: write } : {}), ...(stopRequested ? { stopRequested } : {}) }
+        }
       )
       if (out.status === 'cancelled')
         throw new MoveStepError(
@@ -1206,6 +1212,29 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
       return temp
     },
 
+    async verifyTargetKey() {
+      const l = await load()
+      const appKey = await openAppKey(envId)
+      if (!appKey)
+        throw new MoveStepError('APP_KEY_UNKNOWN', 'The Hub holds no encryption key for this app.')
+      const want = keyFingerprint(appKey)
+      const got =
+        l.to.kind === 'shared'
+          ? (await clientFor(l.to.shared).appStatus(l.tenantId)).key_fp
+          : (await (await targetLink()).sharedReadiness()).key_fp
+      if (!got)
+        throw new MoveStepError(
+          'APP_KEY_UNKNOWN',
+          'The new home holds no encryption key for this app.'
+        )
+      if (got !== want)
+        throw new MoveStepError(
+          'APP_KEY_MISMATCH',
+          "The new home seals this app's values with another key than the app's own."
+        )
+      log("the new home seals this app's values with the app's own key")
+    },
+
     async verifyName(expect) {
       const l = await load()
       const origin = originOf(l.baseUrl)
@@ -1259,7 +1288,16 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
         }
       }
       if (from.kind === 'docker') {
-        await removeStack(from, l.envKey, l.app)
+        try {
+          await removeStack(from, l.envKey, l.app)
+        } catch (err) {
+          // Final review moves Minor 4: a source reached on its public name was never retired
+          // (it gave that name up); its stack is the only thing left to stop. Say so plainly.
+          throw new MoveStepError(
+            'SOURCE_NOT_RETIRED',
+            `The old Docker stack ${from.stack} could not be removed (${codeOf(err)})${retired ? '' : ' and was never retired'}: remove it now (docker stack rm ${from.stack}); until then a restart of it could run its jobs on the app's database.`
+          )
+        }
         log(`removed the source stack ${from.stack} (its volumes are kept)`)
         return
       }

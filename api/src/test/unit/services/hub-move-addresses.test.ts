@@ -375,15 +375,21 @@ describe('GitLab boot maintenance proof (P6-20 gather)', () => {
     const env = await envOn(await placementOf('shared'))
     const appId = (await db('nivaro_hub_environments').where({ id: env }).first('app_id')).app_id
     const NEW: Record<string, string> = {
-      'ci/deploy.yml': 'deploy.sh … HUB_BOOT_MAINTENANCE …',
+      'ci/deploy.yml': 'deploy.sh … HUB_BOOT_MAINTENANCE … boot-maintenance= …',
       'manager/nivaro-hub-deploy': '… the stack file does not pass HUB_BOOT_MAINTENANCE …',
       // biome-ignore lint/suspicious/noTemplateCurlyInString: a compose placeholder, literally
       'manager/docker-stack.yml': 'HUB_BOOT_MAINTENANCE: ${HUB_BOOT_MAINTENANCE:-}'
     }
+    // The app's own CI configuration path: the target's template at the target's ref (synced).
+    const appCi = 'ci/deploy.yml@hub/nivaro-app-template:v1.4.0'
     const ask = (files: Record<string, string | null>) =>
       bootMaintenanceForwarded({
         envId: env,
-        deps: { templateFile: async (_t: number, path: string) => files[path] ?? null }
+        deps: {
+          templateFile: async (_t: number, path: string) => files[path] ?? null,
+          appCiConfigPath: async () => appCi,
+          targetTemplate: async () => ({ project: 'hub/nivaro-app-template', ref: 'v1.4.0' })
+        }
       })
     // An adopted app (no Hub target): never proven.
     expect(await ask(NEW)).toBe('unproven')
@@ -403,6 +409,48 @@ describe('GitLab boot maintenance proof (P6-20 gather)', () => {
         }
       })
     ).toBe('unproven')
+    // FW-4 I-1: a template that forwards only the pipeline variable (its job runs by itself on
+    // the pin commit, where no variable reaches it) is not proof: the pin line is what counts.
+    expect(
+      await ask({ ...NEW, 'ci/deploy.yml': 'deploy.sh … HUB_BOOT_MAINTENANCE (pipeline only) …' })
+    ).toBe('unproven')
+  })
+
+  // F4-I-1 (ruling P6-39): the proof reads the deploy job the app's OWN project runs (its
+  // ci_config_path ref), never only the target's current template: an app whose re-sync failed or
+  // is pending still runs an older deploy.yml that ignores the pin line → unproven → the source is
+  // frozen for the deploy (GITLAB_BOOT_WINDOW).
+  it('F4-I-1: target template new, app CI still on an older ref → unproven', async () => {
+    const { bootMaintenanceForwarded } = await import('../../../services/hub/move/gather.js')
+    const env = await envOn(await placementOf('shared'))
+    const appId = (await db('nivaro_hub_environments').where({ id: env }).first('app_id')).app_id
+    await db('nivaro_hub_apps').where({ id: appId }).update({ target_id: 3 })
+    const NEW_CI = 'deploy.sh … HUB_BOOT_MAINTENANCE … boot-maintenance= …'
+    const OLD_CI = 'deploy.sh … HUB_BOOT_MAINTENANCE (pipeline only) …'
+    const MANAGER: Record<string, string> = {
+      'manager/nivaro-hub-deploy': '… the stack file does not pass HUB_BOOT_MAINTENANCE …',
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: a compose placeholder, literally
+      'manager/docker-stack.yml': 'HUB_BOOT_MAINTENANCE: ${HUB_BOOT_MAINTENANCE:-}'
+    }
+    const files = (_t: number, path: string, ref?: string) =>
+      Promise.resolve(
+        path === 'ci/deploy.yml' ? (ref === 'v1.3.0' ? OLD_CI : NEW_CI) : (MANAGER[path] ?? null)
+      )
+    const ask = (appCi: string | null) =>
+      bootMaintenanceForwarded({
+        envId: env,
+        deps: {
+          templateFile: files,
+          appCiConfigPath: async () => appCi,
+          targetTemplate: async () => ({ project: 'hub/nivaro-app-template', ref: 'v1.4.0' })
+        }
+      })
+    expect(await ask('ci/deploy.yml@hub/nivaro-app-template:v1.4.0')).toBe('forwarded')
+    expect(await ask('ci/deploy.yml@hub/nivaro-app-template:v1.3.0')).toBe('unproven')
+    // Not readable, not a template path, or another project's template: unproven.
+    expect(await ask(null)).toBe('unproven')
+    expect(await ask('.gitlab-ci.yml')).toBe('unproven')
+    expect(await ask('ci/deploy.yml@someone/else:v1.4.0')).toBe('unproven')
   })
 
   it('the shipped template carries every marker the proof reads', async () => {

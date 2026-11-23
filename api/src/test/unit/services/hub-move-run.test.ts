@@ -1,3 +1,4 @@
+import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
 import type { Knex } from 'knex'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -127,6 +128,9 @@ async function world(fromKind: 'docker' | 'shared'): Promise<World> {
     placement_id: fromKind === 'docker' ? dockerPlacement : sharedPlacementA,
     version_pin: '0.3.210'
   })
+  // The app's key, as the plan requires (APP_KEY_UNKNOWN blocks a move without one).
+  const { setAppKey } = await import('../../../services/hub/shared/store.js')
+  await setAppKey(envId, 'ab'.repeat(32))
   return { envId, appKey, envKey, sharedA, sharedB, dockerPlacement, sharedPlacementA }
 }
 
@@ -212,6 +216,7 @@ function fakeOps() {
     unroute: rec('unroute', (_a: RouteAction) => undefined),
     verifyName: rec('verifyName', (_e: unknown) => state.serving),
     retireSource: rec('retireSource', () => undefined),
+    verifyTargetKey: rec('verifyTargetKey', () => undefined),
     dropTempHost: rec('dropTempHost', () => null as string | null),
     revokeTickets: rec('revokeTickets', () => undefined),
     databaseIdentity: rec('databaseIdentity', (side: 'source' | 'target') => state.identity[side])
@@ -355,6 +360,7 @@ const ORDER: Record<MoveKind, string[]> = {
     'verifyName',
     'targetMaintenance', // release: target serves for real
     'waitReplicas', // release: every target replica has it active
+    'verifyTargetKey',
     'retireSource',
     'dropTempHost',
     'revokeTickets'
@@ -375,6 +381,7 @@ const ORDER: Record<MoveKind, string[]> = {
     'route',
     'verifyName',
     'targetMaintenance',
+    'verifyTargetKey',
     'retireSource',
     'dropTempHost',
     'revokeTickets'
@@ -397,6 +404,7 @@ const ORDER: Record<MoveKind, string[]> = {
     'verifyName',
     'targetMaintenance',
     'waitReplicas',
+    'verifyTargetKey',
     'retireSource',
     'dropTempHost',
     'revokeTickets'
@@ -686,8 +694,17 @@ describe('rolls back from every step before release', () => {
     const m = await readMove(move_id)
     expect(m?.status).toBe('interrupted')
     expect(m?.error).toMatch(/^HALTED_TARGET_LIVE/)
-    expect(m?.error).toMatch(/remove the app from the shared deployment/)
     expect(undoCalls(fake.calls)).not.toContainEqual(['sourceMaintenance', false])
+    // Design R2-S1: the item names the deployment, says plainly that stopping it stops every other
+    // app on it, never quotes its own internal name and says each thing once.
+    const item = m?.checklist.find((c) => c.id === 'target_stopped')?.text ?? ''
+    expect(item).toMatch(/^Stop [^:]+: scale its services to 0\./)
+    expect(item).toMatch(
+      /This stops every app on \S+ \(\d+ other apps?\) until the rollback is done/
+    )
+    expect(item).toMatch(/Then tick this box and Roll back/)
+    expect(item).not.toMatch(/"target stopped"|placement \d/)
+    expect(item.split('none can restart').length).toBeLessThanOrEqual(2)
   })
 
   it('a source undo that fails ends the move failed, naming it (the source is still lifted)', async () => {
@@ -711,11 +728,34 @@ describe('rolls back from every step before release', () => {
       .target
     const name = JSON.parse(String(stack)).stack as string
     expect(m?.error).toContain(`Apply now on the source stack ${name}`)
-    expect(m?.error).toMatch(/nvr:maintenance/)
     const item = m?.checklist.find((c) => c.id === 'restore_source')
     expect(item).toMatchObject({ required: true, done: false })
     expect(item?.text).toContain(`Apply now on the source stack ${name}`)
     expect(item?.text).toMatch(/\{"on":false\} without move_id/)
+    // FW-4 (P6-32): a hub-linked app freezes on its OWN key, never the plain nvr:maintenance;
+    // the hub-link call comes first.
+    expect(item?.text).toMatch(/<REDIS_CHANNEL_PREFIX>nvr:maintenance:<tag>/)
+    expect(item?.text).toMatch(/sha256 of its HUB_TOKEN/)
+    expect(item?.text).not.toMatch(/delete the nvr:maintenance key/)
+    expect(item?.text?.indexOf('{"on":false}')).toBeLessThan(
+      item?.text?.indexOf('nvr:maintenance:') ?? -1
+    )
+  })
+
+  it('FW-4: a shared source that stays frozen is lifted through the Hub list, never a Redis key', async () => {
+    plan = planOf('between_shared')
+    const w = await world('shared')
+    fake.state.during = (name, arg) => {
+      if (name === 'verifyName') throw new MoveStepError('X_FAILED', 'This failed.')
+      if (name === 'sourceMaintenance' && arg === false)
+        throw new MoveStepError('LINK_UNREACHABLE', 'No answer.')
+    }
+    const { move_id } = await start(w, toFor('between_shared', w))
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    const item = m?.checklist.find((c) => c.id === 'restore_source')
+    expect(item?.text).toMatch(/Hub/)
+    expect(item?.text).not.toMatch(/delete|redis/i)
   })
 })
 
@@ -773,6 +813,24 @@ describe('after release', () => {
     expect(undoCalls(fake.calls)).toEqual([])
     const env = await db('nivaro_hub_environments').where({ id: w.envId }).first()
     expect(Number(env.placement_id)).toBe(m?.to_placement_id)
+  })
+
+  // Final review moves Minor 4 (FW-4): the retire item says what is left to do in words the
+  // source's own failure gives (a Docker source never retired: remove its stack now).
+  it('FW-4: the retire_source item carries the source’s own instruction', async () => {
+    plan = planOf('to_shared')
+    const w = await world('docker')
+    fake.state.during = (name) => {
+      if (name === 'retireSource')
+        throw new MoveStepError(
+          'SOURCE_NOT_RETIRED',
+          'The old Docker stack acme-prod could not be removed: remove it now (docker stack rm acme-prod).'
+        )
+    }
+    const { move_id } = await start(w, toFor('to_shared', w))
+    await Run.awaitMove(move_id)
+    const item = (await readMove(move_id))?.checklist.find((c) => c.id === 'retire_source')
+    expect(item?.text).toContain('remove it now (docker stack rm acme-prod)')
   })
 
   it('a cancel after release is refused (TOO_LATE)', async () => {
@@ -1286,6 +1344,29 @@ describe('rollback from release: exactly one writer at every point (P6-22)', () 
     expect(ws.bad).toEqual([])
   })
 
+  // Final review moves Minor 3 (FW-4): an app that migrates at boot may take longer than 2
+  // minutes to answer; the maintenance call is retried within target_ready's 10 minutes.
+  it('FW-4: a target that answers its maintenance call only after 5 minutes still moves', async () => {
+    plan = planOf('to_dedicated', 'manual')
+    bootWindow()
+    const w = await world('shared')
+    fake.state.serving = true
+    let deployedAt: number | null = null
+    fake.state.during = (name, arg) => {
+      if (name === 'deployTarget') deployedAt = t
+      if (
+        name === 'targetMaintenance' &&
+        arg === true &&
+        deployedAt !== null &&
+        t - deployedAt < 5 * 60_000
+      )
+        throw new MoveStepError('LINK_UNREACHABLE', 'Still migrating.')
+    }
+    const { move_id } = await start(w, toFor('to_dedicated', w))
+    await Run.awaitMove(move_id)
+    expect((await readMove(move_id))?.status).toBe('success')
+  })
+
   it('R5-I-1: a halt with the source never frozen says the source keeps serving (never that it stays in maintenance)', async () => {
     plan = planOf('to_dedicated', 'manual')
     const w = await world('shared')
@@ -1304,8 +1385,33 @@ describe('rollback from release: exactly one writer at every point (P6-22)', () 
     expect(m?.error).toMatch(/^HALTED_TARGET_LIVE/)
     expect(m?.error).not.toMatch(/stays in maintenance/)
     expect(m?.error).toMatch(/source keeps serving/)
+    // FW-4 I-1: what happened, never more: this (Docker) target boots in maintenance; the Hub
+    // never claims it set one itself.
+    expect(m?.error).toMatch(/target was deployed to start in maintenance/)
+    expect(m?.error).not.toMatch(/by the Hub/)
     expect(ws.bad).toEqual([])
     expect(ws.sourceLive).toBe(true)
+  })
+
+  // FW-4 I-1: a deploy that fails before the Hub set the target's maintenance (no deploy freeze:
+  // the target starts in maintenance) halts without ever claiming the Hub set it.
+  it('FW-4 I-1: a target deploy that fails before its maintenance was set → the halt says it was deployed to start in maintenance', async () => {
+    plan = planOf('to_dedicated', 'manual')
+    const w = await world('shared')
+    fake.state.serving = true
+    fake.state.during = (name) => {
+      if (name === 'deployTarget')
+        throw new MoveStepError('DEPLOY_FAILED', 'The deploy job failed after it started.')
+      if (name === 'removeTarget')
+        throw new MoveStepError('TARGET_NOT_STOPPED', 'The GitLab target could not be retired.')
+    }
+    const { move_id } = await start(w, toFor('to_dedicated', w))
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    expect(m?.status).toBe('interrupted')
+    expect(m?.error).toMatch(/^HALTED_TARGET_LIVE/)
+    expect(m?.error).toMatch(/deployed to start in maintenance/)
+    expect(m?.error).not.toMatch(/after its deploy|by the Hub/)
   })
 
   it('halt: a GitLab target that cannot be frozen or retired → interrupted HALTED_TARGET_LIVE; tick, Roll back → source serving, one writer throughout', async () => {
@@ -1519,7 +1625,8 @@ describe('heal and resume', () => {
     route: 'route',
     verify: 'verifyName',
     release: 'targetMaintenance',
-    retire_source: 'retireSource'
+    // E2E B4: the new home's key is checked before the source is retired.
+    retire_source: 'verifyTargetKey'
   }
   for (const key of MOVE_STEPS.to_shared.filter((k) => k !== 'done'))
     it(`heal at ${key}: a dead run holding its locks → interrupted, locks freed, resume from ${key}`, async () => {
@@ -2026,6 +2133,33 @@ describe('step list writes are atomic (R3-M-1)', () => {
   })
 })
 
+// Final review moves Minor 2 (FW-4): a person's tick and the run's own checklist items are
+// compare-and-set writes, so neither drops the other.
+describe('checklist writes are atomic (FW-4)', () => {
+  it('a tick and an item the run adds at the same time both land', async () => {
+    plan = planOf('to_shared')
+    const w = await world('docker')
+    const { move_id } = await start(w, toFor('to_shared', w))
+    await Run.awaitMove(move_id)
+    const { mergeChecklist } = await import('../../../services/hub/move/rows.js')
+    await Promise.all([
+      Run.setMoveChecklist(move_id, 'callbacks_registered', false, 'u'),
+      mergeChecklist(move_id, (c) => [
+        ...c.filter((x) => x.id !== 'target_stopped'),
+        { id: 'target_stopped', text: 'Stop it.', required: true, done: false }
+      ]),
+      mergeChecklist(move_id, (c) => [
+        ...c,
+        { id: 'temp_host', text: 'Still to do.', required: false, done: false }
+      ])
+    ])
+    const m = await readMove(move_id)
+    const ids = m?.checklist.map((c) => c.id) ?? []
+    expect(ids).toEqual(expect.arrayContaining(['target_stopped', 'temp_host']))
+    expect(m?.checklist.find((c) => c.id === 'callbacks_registered')?.done).toBe(false)
+  })
+})
+
 // Ruling P6-27: the per-move name never stays on a live target after the move.
 describe('per-move name removed at the end (P6-27)', () => {
   const TEMP = 'hub-move-9-e1.example.com'
@@ -2082,5 +2216,131 @@ describe('per-move name removed at the end (P6-27)', () => {
     await Run.awaitMove(move_id)
     expect((await readMove(move_id))?.status).toBe('success')
     expect(fake.names()).toContain('dropTempHost')
+  })
+})
+
+// FW-4 MOVE_OPEN (ruling P6-37): FW-1 refuses actions on an environment or shared deployment an
+// open move touches (services/hub/move-open.ts). The move's own run must still act: every op runs
+// inside currentMoveRun() = its move id, which the guard lets through; nothing else does.
+describe('the move runner marks its own actions (MOVE_OPEN)', () => {
+  it('every op of a run (forward, rollback, resume) sees currentMoveRun() = its move id', async () => {
+    const { currentMoveRun } = await import('../../../services/hub/move/run-context.js')
+    plan = planOf('to_shared')
+    const w = await world('docker')
+    const seen = new Set<number | null>()
+    fake.state.during = () => {
+      seen.add(currentMoveRun())
+    }
+    fake.state.failOn = (name) => name === 'verifyName'
+    const { move_id } = await start(w, toFor('to_shared', w))
+    await Run.awaitMove(move_id)
+    expect([...seen]).toEqual([move_id])
+    // Outside a run: none.
+    expect(currentMoveRun()).toBeNull()
+  })
+})
+
+// E2E B4 (ruling P6-38): a move onto a shared deployment carries the app's key into the
+// environment's own entry (the only place a shared-placed app's key is read from), in the release
+// transaction; and the key round-trips docker → shared → docker. Real store functions.
+describe('the app key across moves (E2E B4, P6-38)', () => {
+  const sealWith = (hex: string, plain: string) => {
+    const iv = randomBytes(12)
+    const c = createCipheriv('aes-256-gcm', Buffer.from(hex, 'hex'), iv)
+    const ct = Buffer.concat([c.update(plain, 'utf8'), c.final()])
+    return { iv, tag: c.getAuthTag(), ct }
+  }
+  const openWith = (hex: string, v: ReturnType<typeof sealWith>) => {
+    const d = createDecipheriv('aes-256-gcm', Buffer.from(hex, 'hex'), v.iv)
+    d.setAuthTag(v.tag)
+    return Buffer.concat([d.update(v.ct), d.final()]).toString('utf8')
+  }
+
+  it('docker → shared → docker: the app opens a value sealed before the move, on both sides', async () => {
+    const Store = await import('../../../services/hub/shared/store.js')
+    const { saveStackSettings } = await import('../../../services/hub/docker/stack-settings.js')
+    const { sealSecret } = await import('../../../services/hub/secrets.js')
+    const { keyFingerprint } = await import('../../../services/app-key-fingerprint.js')
+    const K = 'c7'.repeat(32)
+    const w = await world('docker')
+    await db('nivaro_hub_environments')
+      .where({ id: w.envId })
+      .update({ encryption_key: null, encryption_key_fp: null })
+    // A Docker app: its key sits in its stack settings only (no entry of its own yet).
+    await saveStackSettings(w.envId, {
+      size: 'small',
+      redis: 'bundled',
+      publish_port: null,
+      settings: {},
+      secrets: sealSecret(JSON.stringify({ ENCRYPTION_KEY: sealSecret(K) }))
+    })
+    expect(await Store.openAppKey(w.envId)).toBe(K)
+    const sealed = sealWith(K, 'sealed before the move')
+
+    plan = planOf('to_shared')
+    const out = await start(w, toFor('to_shared', w))
+    await Run.awaitMove(out.move_id)
+    expect((await readMove(out.move_id))?.status).toBe('success')
+    // On shared: the key the deployment is handed (tenantsBody reads openAppKey) opens the value.
+    const onShared = await Store.openAppKey(w.envId)
+    expect(onShared).toBe(K)
+    expect(openWith(onShared as string, sealed)).toBe('sealed before the move')
+    const env = await db('nivaro_hub_environments').where({ id: w.envId }).first()
+    expect(env.encryption_key_fp).toBe(keyFingerprint(K))
+    // The deployment's key was checked before the source was retired.
+    const names = fake.names()
+    expect(names.indexOf('verifyTargetKey')).toBeGreaterThanOrEqual(0)
+    expect(names.indexOf('verifyTargetKey')).toBeLessThan(names.indexOf('retireSource'))
+
+    // And back out to a Docker stack: still the same key.
+    fake = fakeOps()
+    useDeps()
+    plan = planOf('to_dedicated')
+    const back = await start(w, toFor('to_dedicated', w))
+    await Run.awaitMove(back.move_id)
+    expect((await readMove(back.move_id))?.status).toBe('success')
+    const onDocker = await Store.openAppKey(w.envId)
+    expect(onDocker).toBe(K)
+    expect(openWith(onDocker as string, sealed)).toBe('sealed before the move')
+  })
+
+  it('a deployment that does not report the matching key never gets the source retired', async () => {
+    plan = planOf('to_shared')
+    const w = await world('docker')
+    const Store = await import('../../../services/hub/shared/store.js')
+    await Store.setAppKey(w.envId, 'd8'.repeat(32))
+    fake.state.during = (name) => {
+      if (name === 'verifyTargetKey') throw new MoveStepError('APP_KEY_MISMATCH', 'Another key.')
+    }
+    const { move_id } = await start(w, toFor('to_shared', w))
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    expect(m?.status).toBe('success')
+    const item = m?.checklist.find((c) => c.id === 'retire_source')
+    expect(item).toMatchObject({ done: false })
+    expect(fake.names()).not.toContain('retireSource')
+    // F4-1 (P6-39): what to do, not "retire by hand".
+    expect(item?.text).toContain(
+      "Do not retire the old home yet. Enter the app's key on the new home (Hub → app → App key), then retire."
+    )
+    expect(item?.text).not.toMatch(/^Retire the old placement by hand/)
+    // Retried with backoff for about a minute before giving up.
+    expect(fake.names().filter((n) => n === 'verifyTargetKey').length).toBeGreaterThanOrEqual(3)
+  })
+
+  it('F4-1: a key check that passes on a retry retires the source', async () => {
+    plan = planOf('to_shared')
+    const w = await world('docker')
+    let n = 0
+    fake.state.during = (name) => {
+      if (name === 'verifyTargetKey' && n++ < 2)
+        throw new MoveStepError('APP_KEY_UNKNOWN', 'Not yet.')
+    }
+    const { move_id } = await start(w, toFor('to_shared', w))
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    expect(m?.status).toBe('success')
+    expect(m?.error).toBeNull()
+    expect(fake.names()).toContain('retireSource')
   })
 })
