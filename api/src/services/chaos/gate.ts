@@ -4,15 +4,16 @@ import { isMultiTenant } from '../deployment-mode.js'
  * route, the socket drills (#2463) and the HTTP drills (#333) ask it; the console shows the
  * reason instead of a 404.
  *
- *   - cloud mode (CLOUD_META_DB_URL set): never — faults are instance-wide and tenants share
- *     a process
+ *   - a multi-tenant deployment (Nivaro Cloud, a Hub shared deployment): never — faults are
+ *     instance-wide and apps share a process
  *   - NODE_ENV=production: only when CHAOS_ENABLED=true was set on purpose
  *   - anywhere else (dev, staging, test): allowed
  */
 
 /** Why chaos may not run here, or null when it may (pure). */
 export function chaosRefusal(env: NodeJS.ProcessEnv = process.env): string | null {
-  if (isMultiTenant(env)) return 'Chaos drills never run in cloud mode'
+  if (isMultiTenant(env))
+    return 'Chaos drills never run on a multi-tenant deployment (cloud mode or a Hub shared deployment)'
   if (env.NODE_ENV === 'production' && env.CHAOS_ENABLED !== 'true')
     return 'Chaos drills are refused in production unless CHAOS_ENABLED=true'
   return null

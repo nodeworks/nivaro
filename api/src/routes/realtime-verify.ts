@@ -115,10 +115,14 @@ export async function realtimeVerifyRoutes(app: FastifyInstance): Promise<void> 
   })
 
   // ── #2760 leak auditor ─────────────────────────────────────────────────────
-  // Findings and the timed switch are instance-wide, so the auditor never runs in cloud mode.
+  // Findings and the timed switch are instance-wide, so the auditor never runs on a multi-tenant
+  // deployment (Nivaro Cloud, a Hub shared deployment).
   const leakRefused = (reply: FastifyReply) =>
     isMultiTenant()
-      ? reply.code(403).send({ error: 'The leak audit never runs in cloud mode' })
+      ? reply.code(403).send({
+          error:
+            'The leak audit never runs on a multi-tenant deployment (cloud mode or a Hub shared deployment)'
+        })
       : null
   app.get('/leak-audit', async (_req, reply) => {
     const refused = leakRefused(reply)
@@ -178,7 +182,10 @@ export async function realtimeVerifyRoutes(app: FastifyInstance): Promise<void> 
   // ── #2478 socket replay ─────────────────────────────────────────────────────
   app.get<{ Querystring: { minutes?: string } }>('/replay/capture', async (req, reply) => {
     if (isMultiTenant())
-      return reply.code(403).send({ error: 'Socket capture never runs in cloud mode' })
+      return reply.code(403).send({
+        error:
+          'Socket capture never runs on a multi-tenant deployment (cloud mode or a Hub shared deployment)'
+      })
     const redis = app.redis
     if (!redis) return reply.code(503).send({ error: 'Redis is not available' })
     const minutes = Math.max(1, Math.min(15, Number(req.query.minutes) || 15))
