@@ -511,6 +511,17 @@ describe('fix round 1', () => {
     expect(st.store.has(security.hubBootMaintenanceDoneKey(9))).toBe(false)
   })
 
+  // P6-26 Rule 2: a rollback freezing a lifted target again drops that move's done marker, so a
+  // restarted or re-created target boots in maintenance (never writable).
+  it('maintenance on with a move id drops that move’s boot-maintenance done marker', async () => {
+    st.store.set(security.hubBootMaintenanceDoneKey(14), '1')
+    st.store.set(security.hubBootMaintenanceDoneKey(15), '1')
+    await security.setHubMaintenance({ on: true, moveId: 14 })
+    expect(st.store.has(security.hubBootMaintenanceDoneKey(14))).toBe(false)
+    expect(st.store.has(security.hubBootMaintenanceDoneKey(15))).toBe(true)
+    await security.setHubMaintenance({ on: false, moveId: 14 })
+  })
+
   it('a retired process drains nothing, explicit switches included', async () => {
     const { importDrainMode } = await import('../../../services/import-handoff.js')
     const { exportDrainMode } = await import('../../../services/export-handoff.js')

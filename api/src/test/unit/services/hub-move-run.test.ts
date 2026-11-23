@@ -205,12 +205,14 @@ function fakeOps() {
     waitReplicas: rec('waitReplicas', (_id: number) => undefined),
     targetUnretire: rec('targetUnretire', () => undefined),
     targetReady: rec('targetReady', () => undefined),
+    freezeTarget: rec('freezeTarget', () => undefined),
     deployTarget: rec('deployTarget', () => undefined),
     removeTarget: rec('removeTarget', () => undefined),
     route: rec('route', (_a: RouteAction) => undefined),
     unroute: rec('unroute', (_a: RouteAction) => undefined),
     verifyName: rec('verifyName', (_e: unknown) => state.serving),
     retireSource: rec('retireSource', () => undefined),
+    dropTempHost: rec('dropTempHost', () => null as string | null),
     revokeTickets: rec('revokeTickets', () => undefined),
     databaseIdentity: rec('databaseIdentity', (side: 'source' | 'target') => state.identity[side])
   }
@@ -354,6 +356,7 @@ const ORDER: Record<MoveKind, string[]> = {
     'targetMaintenance', // release: target serves for real
     'waitReplicas', // release: every target replica has it active
     'retireSource',
+    'dropTempHost',
     'revokeTickets'
   ],
   to_dedicated: [
@@ -373,6 +376,7 @@ const ORDER: Record<MoveKind, string[]> = {
     'verifyName',
     'targetMaintenance',
     'retireSource',
+    'dropTempHost',
     'revokeTickets'
   ],
   between_shared: [
@@ -394,6 +398,7 @@ const ORDER: Record<MoveKind, string[]> = {
     'targetMaintenance',
     'waitReplicas',
     'retireSource',
+    'dropTempHost',
     'revokeTickets'
   ]
 }
@@ -466,6 +471,28 @@ const UNDO = new Set(['unroute', 'unplace', 'removeTarget'])
 const undoCalls = (calls: Call[]) =>
   calls.filter((c) => UNDO.has(c[0]) || (c[0] === 'sourceMaintenance' && c[1] === false))
 
+/**
+ * P6-26 Rule 2: the undo calls of a rollback, in the fixed order. `recorded` = route intents in
+ * the order they were recorded; `ran` = the steps that ran (done or the failed one).
+ */
+function rule2Undo(kind: MoveKind, recorded: number[], ran: readonly string[]): Call[] {
+  const sharedTarget = kind !== 'to_dedicated'
+  const newest = [...recorded].reverse()
+  const out: Call[] = []
+  // 2. target-side route actions (a dedicated target's go with its stack in 3).
+  if (sharedTarget)
+    for (const i of newest)
+      if (plan.route[i].side === 'target') out.push(['unroute', plan.route[i]])
+  // 3. stop / remove the target.
+  if (ran.includes('deploy_target')) out.push(['removeTarget'])
+  if (ran.includes('place_on_target')) out.push(['unplace'])
+  // 4. source-side route actions.
+  for (const i of newest) if (plan.route[i].side === 'source') out.push(['unroute', plan.route[i]])
+  // 5. lift the source.
+  if (ran.includes('maintenance_on')) out.push(['sourceMaintenance', false])
+  return out
+}
+
 describe('rolls back from every step before release', () => {
   for (const kind of ['to_shared', 'to_dedicated', 'between_shared'] as MoveKind[]) {
     const steps = MOVE_STEPS[kind]
@@ -480,21 +507,13 @@ describe('rolls back from every step before release', () => {
         const m = await readMove(move_id)
         expect(m?.status).toBe('rolled_back')
 
-        // Expected undo, latest first: each undoable step that ran (done, or the failed one).
+        // Expected undo (P6-26 Rule 2): each undoable step that ran (done, or the failed one).
         const ran = steps.slice(0, steps.indexOf(key) + 1)
-        const expected: Call[] = []
-        for (const s of [...ran].reverse()) {
-          if (s === 'route') {
-            // C-3: an action is recorded as an intent before it is applied, so the one whose
-            // apply (or converge) failed is undone too.
-            const intents = key === 'route' ? plan.route.slice(0, 1) : plan.route
-            for (const a of [...intents].reverse()) expected.push(['unroute', a])
-          }
-          if (s === 'place_on_target') expected.push(['unplace'])
-          if (s === 'deploy_target') expected.push(['removeTarget'])
-          if (s === 'maintenance_on') expected.push(['sourceMaintenance', false])
-        }
-        expect(undoCalls(fake.calls)).toEqual(expected)
+        // C-3: an action is recorded as an intent before it is applied, so the one whose apply
+        // (or converge) failed is undone too.
+        const all = plan.route.map((_, i) => i)
+        const recorded = !ran.includes('route') ? [] : key === 'route' ? all.slice(0, 1) : all
+        expect(undoCalls(fake.calls)).toEqual(rule2Undo(kind, recorded, ran))
         // Never undone twice, never a release, never retired.
         expect(fake.names()).not.toContain('retireSource')
         // The environment is back where it was, with its status before the move.
@@ -542,15 +561,7 @@ describe('rolls back from every step before release', () => {
               : ran.includes('verify')
                 ? [...targetIdx, ...sourceIdx]
                 : []
-        const expected: Call[] = []
-        for (const st of [...ran].reverse()) {
-          if (st === 'route')
-            for (const i of [...intents].reverse()) expected.push(['unroute', plan.route[i]])
-          if (st === 'place_on_target') expected.push(['unplace'])
-          if (st === 'deploy_target') expected.push(['removeTarget'])
-          if (st === 'maintenance_on') expected.push(['sourceMaintenance', false])
-        }
-        expect(undoCalls(fake.calls)).toEqual(expected)
+        expect(undoCalls(fake.calls)).toEqual(rule2Undo(kind, intents, ran))
         const env = await db('nivaro_hub_environments').where({ id: w.envId }).first()
         expect(Number(env.placement_id)).toBe(m?.from_placement_id)
         expect(env.status).toBe('active')
@@ -568,12 +579,13 @@ describe('rolls back from every step before release', () => {
     fake.state.failOn = (name) => name === 'route' && ++n === 2
     const { move_id } = await start(w, toFor('to_shared', w))
     await Run.awaitMove(move_id)
-    expect(undoCalls(fake.calls)).toEqual([
-      ['unroute', plan.route[1]],
-      ['unroute', plan.route[0]],
-      ['sourceMaintenance', false],
-      ['unplace']
-    ])
+    expect(undoCalls(fake.calls)).toEqual(
+      rule2Undo(
+        'to_shared',
+        [0, 1],
+        MOVE_STEPS.to_shared.slice(0, MOVE_STEPS.to_shared.indexOf('route') + 1)
+      )
+    )
   })
 
   it('a cancel inside route (between two actions) rolls back the recorded intent', async () => {
@@ -588,11 +600,13 @@ describe('rolls back from every step before release', () => {
     await Run.awaitMove(id)
     expect((await readMove(id))?.status).toBe('cancelled')
     expect(fake.calls.filter((c) => c[0] === 'route')).toHaveLength(1)
-    expect(undoCalls(fake.calls)).toEqual([
-      ['unroute', plan.route[0]],
-      ['sourceMaintenance', false],
-      ['unplace']
-    ])
+    expect(undoCalls(fake.calls)).toEqual(
+      rule2Undo(
+        'to_shared',
+        [0],
+        MOVE_STEPS.to_shared.slice(0, MOVE_STEPS.to_shared.indexOf('route') + 1)
+      )
+    )
   })
 
   it("R2-M-2: a rollback puts the environment's extension pins back", async () => {
@@ -658,7 +672,9 @@ describe('rolls back from every step before release', () => {
     expect(JSON.stringify(m)).not.toContain('other.internal')
   })
 
-  it('an undo that fails ends the move failed, naming it', async () => {
+  // P6-26 Rule 3: a shared target that cannot be proven to drop the app halts the rollback; the
+  // source stays in maintenance.
+  it('a target undo that cannot be proven halts: interrupted HALTED_TARGET_LIVE, source kept frozen', async () => {
     plan = planOf('to_shared')
     const w = await world('docker')
     fake.state.during = (name) => {
@@ -668,10 +684,28 @@ describe('rolls back from every step before release', () => {
     const { move_id } = await start(w, toFor('to_shared', w))
     await Run.awaitMove(move_id)
     const m = await readMove(move_id)
+    expect(m?.status).toBe('interrupted')
+    expect(m?.error).toMatch(/^HALTED_TARGET_LIVE/)
+    expect(m?.error).toMatch(/remove the app from the shared deployment/)
+    expect(undoCalls(fake.calls)).not.toContainEqual(['sourceMaintenance', false])
+  })
+
+  it('a source undo that fails ends the move failed, naming it (the source is still lifted)', async () => {
+    plan = planOf('to_shared')
+    const w = await world('docker')
+    const src = plan.route.findIndex((a) => a.side === 'source')
+    expect(src).toBeGreaterThanOrEqual(0)
+    fake.state.during = (name, arg) => {
+      if (name === 'verifyName') throw new MoveStepError('X_FAILED', 'This failed.')
+      if (name === 'unroute' && (arg as { side?: string })?.side === 'source')
+        throw new MoveStepError('X_FAILED', 'This failed.')
+    }
+    const { move_id } = await start(w, toFor('to_shared', w))
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
     expect(m?.status).toBe('failed')
-    expect(m?.error).toMatch(/could not undo: place_on_target/)
-    // The other undo still ran.
-    expect(undoCalls(fake.calls)).toContainEqual(['sourceMaintenance', false])
+    expect(m?.error).toMatch(/could not undo: route/)
+    expect(undoCalls(fake.calls).at(-1)).toEqual(['sourceMaintenance', false])
   })
 })
 
@@ -918,13 +952,34 @@ describe('rollback from release: exactly one writer at every point (P6-22)', () 
     sourceLive: boolean
     targetUp: boolean
     targetMaint: boolean
+    /** A shared target: what its replicas hold for the app (only a waitReplicas proves it). */
+    listed: 'none' | 'maintenance' | 'active'
     bad: string[]
   }
-  /** Wraps fake.ops: tracks which side can write and records any call made with two writers. */
-  function writers(ws: Writers, boot: boolean) {
+  /**
+   * Wraps fake.ops: tracks which side can write and records any call made with two writers.
+   * R4-M-3: a shared target writes only when its replicas hold the app `active`, learnt only from
+   * a waitReplicas of that deployment reading the env row as the Hub lists it (a refresh of a
+   * list that still says active is no freeze). A dedicated Docker target that is gone and gets
+   * its stack applied again by a target-side unroute comes back writable (its done marker).
+   */
+  function writers(ws: Writers, boot: boolean, o: { sharedTarget?: number; envId?: number } = {}) {
     const orig = { ...fake.ops }
+    const targetLive = () =>
+      o.sharedTarget !== undefined ? ws.listed === 'active' : ws.targetUp && !ws.targetMaint
     const check = (name: string) => {
-      if (ws.sourceLive && ws.targetUp && !ws.targetMaint) ws.bad.push(name)
+      if (ws.sourceLive && targetLive()) ws.bad.push(name)
+    }
+    const listedNow = async (): Promise<Writers['listed']> => {
+      const env = await db('nivaro_hub_environments').where({ id: o.envId }).first()
+      const m = await db('nivaro_hub_moves')
+        .where({ environment_id: o.envId })
+        .orderBy('id', 'desc')
+        .first()
+      if (!m) return 'none'
+      if (Number(env.placement_id) === Number(m.to_placement_id))
+        return env.status === 'active' ? 'active' : 'maintenance'
+      return m.placed_at ? 'maintenance' : 'none'
     }
     for (const [name, fn] of Object.entries(orig)) {
       ;(fake.ops as unknown as Record<string, unknown>)[name] = async (...a: unknown[]) => {
@@ -934,43 +989,123 @@ describe('rollback from release: exactly one writer at every point (P6-22)', () 
           ws.targetUp = true
           if (boot) ws.targetMaint = true
         }
-        if (name === 'targetMaintenance') ws.targetMaint = a[0] === true
+        if (name === 'targetMaintenance' && o.sharedTarget === undefined)
+          ws.targetMaint = a[0] === true
+        if (name === 'freezeTarget') ws.targetMaint = true
         if (name === 'removeTarget') ws.targetUp = false
-        // A shared target lists the app as maintenance once placed (B2), and drops it on unplace.
-        if (name === 'placeOnTarget') {
+        if (name === 'waitReplicas' && a[0] === o.sharedTarget) ws.listed = await listedNow()
+        const ra = a[0] as RouteAction | undefined
+        if (
+          name === 'unroute' &&
+          ra?.side === 'target' &&
+          ra.op === 'apply_stack' &&
+          !ws.targetUp
+        ) {
           ws.targetUp = true
-          ws.targetMaint = true
+          ws.targetMaint = false
         }
-        if (name === 'unplace') ws.targetUp = false
         check(name)
         return out
       }
     }
   }
-  const fresh = (): Writers => ({ sourceLive: true, targetUp: false, targetMaint: false, bad: [] })
+  const fresh = (): Writers => ({
+    sourceLive: true,
+    targetUp: false,
+    targetMaint: false,
+    listed: 'none',
+    bad: []
+  })
 
-  // R3-M-3: the same for shared targets.
+  // R3-M-3 / R4-I-1: the same for shared targets. The release committed `active` and the
+  // replicas took it; the rollback must prove every replica holds `maintenance` (and then no
+  // longer lists the app) before the source comes back.
   for (const kind of ['to_shared', 'between_shared'] as const)
-    it(`${kind}: the release's lift answers an error after lifting → target frozen first, then the source`, async () => {
+    it(`${kind}: rollback from release proves the shared target frozen (replicas hold maintenance) before the source`, async () => {
       plan = planOf(kind)
       const w = await world(fromFor(kind))
       const ws = fresh()
       fake.state.during = (name, arg) => {
         if (name === 'targetMaintenance' && arg === false) {
-          ws.targetMaint = false
+          ws.listed = 'active' // the replicas re-read the list the commit made `active`
           throw new MoveStepError('LINK_UNREACHABLE', 'No answer.')
         }
       }
-      writers(ws, true)
+      writers(ws, true, {
+        sharedTarget: kind === 'to_shared' ? w.sharedA : w.sharedB,
+        envId: w.envId
+      })
       const { move_id } = await start(w, toFor(kind, w))
       await Run.awaitMove(move_id)
       expect((await readMove(move_id))?.status).toBe('rolled_back')
       expect(ws.bad).toEqual([])
+      expect(ws.listed).not.toBe('active')
       const env = await db('nivaro_hub_environments').where({ id: w.envId }).first()
       expect(Number(env.placement_id)).toBe(
         kind === 'to_shared' ? w.dockerPlacement : w.sharedPlacementA
       )
     })
+
+  // R4-I-2: a Docker target removed by the release undo (or stopped by the operator) is never
+  // applied again by a target-side unroute (it would boot writable: its done marker).
+  it('manual to_dedicated Docker: re-freeze fails, removal succeeds → the target is never re-applied', async () => {
+    plan = planOf('to_dedicated', 'manual')
+    const w = await world('shared')
+    fake.state.serving = true
+    const ws = fresh()
+    let lifted = false
+    fake.state.during = (name, arg) => {
+      if (name === 'targetMaintenance' && arg === false) {
+        ws.targetMaint = false
+        lifted = true
+        throw new MoveStepError('LINK_UNREACHABLE', 'No answer.')
+      }
+      if (lifted && (name === 'freezeTarget' || (name === 'targetMaintenance' && arg === true)))
+        throw new MoveStepError('LINK_UNREACHABLE', 'No answer.')
+    }
+    writers(ws, true)
+    const { move_id } = await start(w, toFor('to_dedicated', w))
+    await Run.awaitMove(move_id)
+    expect((await readMove(move_id))?.status).toBe('rolled_back')
+    expect(ws.bad).toEqual([])
+    expect(ws.targetUp).toBe(false)
+    expect(
+      fake.calls.filter((c) => c[0] === 'unroute' && (c[1] as RouteAction).side === 'target')
+    ).toEqual([])
+  })
+
+  it('manual to_dedicated Docker: frozen and removal both fail, the operator stops it and ticks → the target is never re-applied', async () => {
+    plan = planOf('to_dedicated', 'manual')
+    const w = await world('shared')
+    fake.state.serving = true
+    const ws = fresh()
+    let lifted = false
+    fake.state.during = (name, arg) => {
+      if (name === 'targetMaintenance' && arg === false) {
+        ws.targetMaint = false
+        lifted = true
+        throw new MoveStepError('LINK_UNREACHABLE', 'No answer.')
+      }
+      if (
+        lifted &&
+        (name === 'freezeTarget' ||
+          name === 'removeTarget' ||
+          (name === 'targetMaintenance' && arg === true))
+      )
+        throw new MoveStepError('AGENT_UNREACHABLE', 'No answer.')
+    }
+    writers(ws, true)
+    const { move_id } = await start(w, toFor('to_dedicated', w))
+    await Run.awaitMove(move_id)
+    expect((await readMove(move_id))?.status).toBe('interrupted')
+    ws.targetUp = false // the operator removed it by hand
+    await Run.setMoveChecklist(move_id, 'target_stopped', true, 'u')
+    await Run.cancelMove(move_id, 'u')
+    await Run.awaitMove(move_id)
+    expect((await readMove(move_id))?.status).toBe('rolled_back')
+    expect(ws.bad).toEqual([])
+    expect(ws.targetUp).toBe(false)
+  })
 
   // R3-I-1 / R3-I-2: a lifted GitLab target that can be neither frozen nor retired halts the
   // rollback with the source frozen; the operator stops it, ticks target_stopped, rolls back.
@@ -986,8 +1121,8 @@ describe('rollback from release: exactly one writer at every point (P6-22)', () 
         lifted = true
         throw new MoveStepError('LINK_UNREACHABLE', 'No answer.')
       }
-      if (lifted && name === 'targetMaintenance' && arg === true)
-        throw new MoveStepError('LINK_UNREACHABLE', 'No answer.')
+      if (lifted && name === 'freezeTarget')
+        throw new MoveStepError('TARGET_NOT_FROZEN', 'No answer.')
       if (lifted && name === 'removeTarget')
         throw new MoveStepError('TARGET_NOT_STOPPED', 'The GitLab target could not be retired.')
     }
@@ -1054,7 +1189,7 @@ describe('rollback from release: exactly one writer at every point (P6-22)', () 
         expect(Number(env.placement_id)).toBe(m?.from_placement_id)
         // The first undo freezes the target, before the source comes back.
         const names = fake.calls.map((c) => `${c[0]}:${String(c[1] ?? '')}`)
-        const iFreeze = names.lastIndexOf('targetMaintenance:true')
+        const iFreeze = names.lastIndexOf('freezeTarget:')
         const iSource = names.indexOf('sourceMaintenance:false')
         expect(iFreeze).toBeGreaterThan(names.indexOf('targetMaintenance:false'))
         expect(iSource).toBeGreaterThan(iFreeze)
@@ -1363,6 +1498,38 @@ describe('heal and resume', () => {
     expect(undoCalls(fake.calls)).toEqual([['unroute', plan.route[1]]])
   })
 
+  // R4-M-1: a runner that lost its locks never writes `interrupted` over a move another runner
+  // took meanwhile (heal freed the locks, Resume wrote its own tokens and set it running).
+  it('R4-M-1: an old runner that lost its lock does not mark a resumed move interrupted', async () => {
+    plan = planOf('to_shared')
+    const w = await world('docker')
+    let took = false
+    let newToken = ''
+    fake.state.during = async (name) => {
+      if (name === 'unroute' && !took) {
+        took = true
+        const m = await readMove(move_id)
+        await lock.release(w.envId, m?.steps.locks?.env as string)
+        newToken = (await lock.take(w.envId, 'move')) as string
+        const steps = { ...(m?.steps ?? {}), locks: { env: newToken, shared: [] } }
+        await db('nivaro_hub_moves')
+          .where({ id: move_id })
+          .update({ status: 'running', steps: JSON.stringify(steps) })
+      }
+    }
+    fake.state.failOn = (name) => name === 'verifyName'
+    let move_id = 0
+    const out = await start(w, toFor('to_shared', w))
+    move_id = out.move_id
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    // The new holder's move: still running, its tokens untouched.
+    expect(m?.status).toBe('running')
+    expect(m?.steps.locks?.env).toBe(newToken)
+    await db('nivaro_hub_moves').where({ id: move_id }).update({ status: 'cancelled' })
+    await lock.release(w.envId, newToken)
+  })
+
   it('a fresh heartbeat is never healed', async () => {
     plan = planOf('to_shared')
     const w = await world('docker')
@@ -1386,6 +1553,10 @@ describe('heal and resume', () => {
     steps.list.forEach((s, i) => {
       s.state = i < at ? 'done' : i === at ? 'running' : 'pending'
     })
+    // As stored by a run that stopped inside wait_idle: no route intent, no release yet.
+    steps.routed = []
+    steps.route_done = []
+    delete steps.release_prev
     await db('nivaro_hub_moves')
       .where({ id: move_id })
       .update({ status: 'interrupted', steps: JSON.stringify(steps), heartbeat_at: null })
@@ -1393,8 +1564,8 @@ describe('heal and resume', () => {
     useDeps()
     await Run.cancelMove(move_id, 'u')
     await Run.awaitMove(move_id)
-    // place_on_target ran before maintenance_on (P6-14): undone after it.
-    expect(undoCalls(fake.calls)).toEqual([['sourceMaintenance', false], ['unplace']])
+    // P6-26 Rule 2: the target first (unplace), the source last.
+    expect(undoCalls(fake.calls)).toEqual([['unplace'], ['sourceMaintenance', false]])
     expect((await readMove(move_id))?.status).toBe('cancelled')
   })
 })
@@ -1619,5 +1790,64 @@ describe('step list writes are atomic (R3-M-1)', () => {
       await mergeSteps(move_id, (s) => ({ ...s, route_confirmed_at: 'z' }), { status: ['waiting'] })
     ).toBe(false)
     expect((await readMove(move_id))?.steps.route_confirmed_at).toBe('a')
+  })
+})
+
+// Ruling P6-27: the per-move name never stays on a live target after the move.
+describe('per-move name removed at the end (P6-27)', () => {
+  const TEMP = 'hub-move-9-e1.example.com'
+  const withTemp = () =>
+    useDeps({
+      addresses: async () => ({
+        source_link_base: 'https://src.direct.example.com',
+        source_link_public: false,
+        pull_source: 'https://src.direct.example.com',
+        target_link_base: `https://${TEMP}`,
+        target_publish_host: null,
+        target_temp_host: TEMP
+      })
+    })
+
+  it('done → the per-move name is removed after retire_source; no checklist item', async () => {
+    plan = planOf('to_dedicated')
+    withTemp()
+    const w = await world('shared')
+    const { move_id } = await start(w, toFor('to_dedicated', w))
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    expect(m?.status).toBe('success')
+    const names = fake.names()
+    expect(names).toContain('dropTempHost')
+    expect(names.indexOf('dropTempHost')).toBeGreaterThan(names.indexOf('retireSource'))
+    expect(m?.checklist.find((c) => c.id === 'temp_host')).toBeUndefined()
+  })
+
+  it('the removal fails → a Still to do item naming the name; the move still ends success, nothing undone', async () => {
+    plan = planOf('to_dedicated')
+    withTemp()
+    const w = await world('shared')
+    fake.state.failOn = (name) => name === 'dropTempHost'
+    const { move_id } = await start(w, toFor('to_dedicated', w))
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    expect(m?.status).toBe('success')
+    const item = m?.checklist.find((c) => c.id === 'temp_host')
+    expect(item).toMatchObject({ required: false, done: false })
+    expect(item?.text).toMatch(/^Still to do/)
+    expect(item?.text).toContain(TEMP)
+    expect(undoCalls(fake.calls)).toEqual([])
+    expect(fake.names()).not.toContain('freezeTarget')
+    expect(run.out.completed).toMatch(/done/)
+  })
+
+  it('a retire that fails still drops the per-move name (the target stays live)', async () => {
+    plan = planOf('to_dedicated')
+    withTemp()
+    const w = await world('shared')
+    fake.state.failOn = (name) => name === 'retireSource'
+    const { move_id } = await start(w, toFor('to_dedicated', w))
+    await Run.awaitMove(move_id)
+    expect((await readMove(move_id))?.status).toBe('success')
+    expect(fake.names()).toContain('dropTempHost')
   })
 })

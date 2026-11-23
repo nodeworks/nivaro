@@ -1,5 +1,5 @@
 import { type MoveOps, MoveStepError } from './ops.js'
-import type { MoveStepKey } from './plan-port.js'
+import type { MoveStepKey, RouteAction } from './plan-port.js'
 import {
   type HubMoveRow,
   type MoveSteps,
@@ -9,34 +9,43 @@ import {
 } from './rows.js'
 
 /**
- * Nivaro Hub phase 6, Task 16: a move's rollback — the steps it completed, undone in reverse.
+ * ROLLBACK INVARIANTS (ruling P6-26, binding). A move's rollback never leaves two writers on the
+ * app's database, and the source leaves maintenance last.
  *
- *   release          → (running/failed only: a done release is never rolled back) the target is
- *                      frozen again FIRST — maintenance on, else removed / retired; if it cannot
- *                      be stopped the rollback stops and the source stays frozen — and the
- *                      environment row goes back to the source (steps.release_prev)
- *   route            → unroute, each route action recorded as an intent, in reverse (steps.routed:
- *                      written before each apply, so an apply that never converged is undone too;
- *                      every unroute is idempotent)
- *   place_on_target  → unplace (the target's list drops the app; placed_at cleared)
- *   deploy_target    → removeTarget (a Docker stack removed with its volumes kept; a GitLab target
- *                      retired over its hub link — the Hub cannot stop its pipeline)
- *   maintenance_on   → the environment's prior status, then sourceMaintenance(false) (a dedicated
- *                      source gets {on:false, move_id}, which also releases a boot maintenance),
- *                      then, for a shared source, every replica holds the list again (best effort)
- * Every other step leaves nothing to undo: copied files stay, a check changed nothing, a ready
- * target is removed with its stack. The step that FAILED is undone too (it may have half
- * happened: maintenance set before the call errored, one of two route actions applied …); a step
- * that never started is not.
+ * Rule 1 — a freeze is PROVEN, per target kind (only a target `release` may have lifted):
+ *   - shared target: the env's listed status is written `maintenance`, then waitReplicas until
+ *     every replica seen holds THAT list (an empty sighting set = wait, never done). A refresh of
+ *     a list that still says `active` is not a freeze.
+ *   - dedicated Docker target: hub-link maintenance on, on the target's own address, read back.
+ *   - GitLab target: the same, or a retire read back.
+ *   The env row's other fields (placement, pin, hub_managed) go back only after the proof.
+ *   Before `release` ran, the target is frozen by construction (Docker boots in strict
+ *   maintenance, a GitLab target is set right after its deploy or the deploy failed, a shared
+ *   target lists a placed app as maintenance) and is not frozen again.
  *
- * Only a move before `release` is ever rolled back. The rollback is resumable: each undone step is
- * written (state `undone`) before the next, so an interrupted rollback continues where it stopped
- * and never undoes a step twice. An undo that fails is `undo_failed` and the rest still run; the
- * caller ends the move `failed` naming them (never `rolled_back`).
+ * Rule 2 — the undo order is fixed, whatever order the steps ran in:
+ *   1. freeze the target, proven (Rule 1);
+ *   2. undo the TARGET-side route actions without ever applying the target app's own stack again
+ *      (a dedicated target's intents are dropped: its stack goes in 3; a shared target's explicit
+ *      name is dropped from that live deployment's names);
+ *   3. stop / remove the target (a Docker stack removed with its volumes kept; a GitLab target
+ *      retired; a shared target unplaced and every replica proven to hold the list without it).
+ *      A stopped, removed or operator-confirmed-stopped target is never applied again; the hub
+ *      link's maintenance-on (step 1) also drops the move's boot-maintenance done marker in the
+ *      target's Redis, so a stack that ever came back would boot in maintenance;
+ *   4. undo the SOURCE-side route actions (the source gets its names back);
+ *   5. lift the source: its prior status, sourceMaintenance(false) with the move id.
+ *
+ * Rule 3 — halt: when 1, 2 or 3 cannot be proven (and the operator has not ticked
+ * `target_stopped`), the rollback halts with the source still in maintenance; the caller ends the
+ * move `interrupted` HALTED_TARGET_LIVE with an instruction the operator can carry out for that
+ * target kind. Roll back again retries from the step that halted (never skips it).
+ *
+ * Also: before every action the run re-checks it still holds its locks (R3-I-3); each finished
+ * phase is written before the next, so an interrupted rollback resumes without redoing a phase.
  */
 
 export const UNDOABLE: readonly MoveStepKey[] = [
-  // Only ever running / failed here (a done release is never rolled back): R2-I-2.
   'release',
   'route',
   'place_on_target',
@@ -51,30 +60,18 @@ export interface UndoContext {
   /** Shared deployment ids of the two sides (null for a dedicated side). */
   shared: { from: number | null; to: number | null }
   log: (line: string, level?: 'info' | 'warn' | 'error') => void
-  /** Writes the step list (after every undone step). */
+  /** Writes the step list (after every phase). */
   save: (steps: MoveSteps) => Promise<void>
-  /**
-   * R3-I-3: does the caller still hold the environment's and the shared locks (a strict
-   * renewal)? Asked before every undo action; false = stop at once (the run is interrupted, never
-   * undoing beside another runner).
-   */
+  /** R3-I-3: the caller still holds its locks (strict renewal); false = stop at once. */
   stillHeld: () => Promise<boolean>
-  /** R3-I-2: the operator ticked `target_stopped` (the target is stopped by hand). */
+  /** R3-I-2: the operator ticked `target_stopped` (no process of this app runs at the target). */
   targetStoppedByHand: () => Promise<boolean>
 }
 
 export interface UndoResult {
   failed: MoveStepKey[]
-  /** Stopped before the end: `halted` (target live, source kept frozen) or `lost` (locks). */
+  /** Stopped before the end: `halted` (Rule 3, source kept frozen) or `lost` (locks). */
   stopped: 'halted' | 'lost' | null
-}
-
-const LABEL: Record<string, string> = {
-  release: 'release',
-  route: 'route',
-  place_on_target: 'placement on the target',
-  deploy_target: 'target stack',
-  maintenance_on: 'maintenance at the source'
 }
 
 function codeOf(err: unknown): string {
@@ -83,124 +80,197 @@ function codeOf(err: unknown): string {
   return typeof c === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(c) ? c : 'ERROR'
 }
 
-/** The steps to undo, latest first: done ones, and the one that failed or was running. */
+/** States of a step that ran and still needs its undo (a halted undo is retried, Rule 3). */
+const NEEDS_UNDO = new Set(['done', 'failed', 'running', 'undo_failed'])
+
+/** The undoable steps that ran, in Rule 2's order (for display and tests). */
 export function stepsToUndo(steps: MoveSteps): MoveStepKey[] {
-  const out: MoveStepKey[] = []
-  for (const s of [...steps.list].reverse()) {
-    if (!UNDOABLE.includes(s.key)) continue
-    if (s.state === 'done' || s.state === 'failed' || s.state === 'running') out.push(s.key)
-    // R3-I-2: a halted release undo is retried on the next Roll back, never skipped.
-    else if (s.key === 'release' && s.state === 'undo_failed') out.push(s.key)
-  }
-  return out
+  const ran = (k: MoveStepKey) => steps.list.some((s) => s.key === k && NEEDS_UNDO.has(s.state))
+  return (['release', 'route', 'deploy_target', 'place_on_target', 'maintenance_on'] as const)
+    .filter((k) => UNDOABLE.includes(k))
+    .filter(ran)
 }
 
-/** Undoes the move's completed steps in reverse. Answers the steps whose undo failed. */
+/** Undoes a move in Rule 2's order. Answers the undos that failed and why it stopped early. */
 export async function undoMove(ctx: UndoContext): Promise<UndoResult> {
   const steps: MoveSteps = structuredClone(ctx.move.steps)
   const failed: MoveStepKey[] = []
-  const mark = async (key: MoveStepKey, state: 'undone' | 'undo_failed', note?: string) => {
+  const state = (k: MoveStepKey) => steps.list.find((s) => s.key === k)?.state
+  const ran = (k: MoveStepKey) => NEEDS_UNDO.has(String(state(k)))
+  const mark = async (key: MoveStepKey, to: 'undone' | 'undo_failed', note?: string) => {
     for (const s of steps.list)
       if (s.key === key) {
-        s.state = state
+        s.state = to
         s.finished_at = new Date().toISOString()
         if (note) s.note = note
       }
     await ctx.save(steps)
   }
+  const halt = async (key: MoveStepKey, why: string): Promise<UndoResult> => {
+    failed.push(key)
+    ctx.log(`undo: ${why}; the source stays in maintenance (HALTED_TARGET_LIVE)`, 'error')
+    await mark(key, 'undo_failed', `${why} (HALTED_TARGET_LIVE)`)
+    return { failed, stopped: 'halted' }
+  }
+  const lost = (): UndoResult => ({ failed, stopped: 'lost' })
+  const sharedTarget = ctx.shared.to !== null
+  const route = ctx.move.plan?.route ?? []
+  /** Route intents of one side, newest first (record order). */
+  const intents = (side: RouteAction['side']) =>
+    [...(steps.routed ?? [])].reverse().filter((i) => route[i]?.side === side)
+  const dropIntent = async (i: number) => {
+    steps.routed = (steps.routed ?? []).filter((x) => x !== i)
+    steps.route_done = (steps.route_done ?? []).filter((x) => x !== i)
+    await ctx.save(steps)
+  }
 
-  for (const key of stepsToUndo(steps)) {
-    if (!(await ctx.stillHeld())) return { failed, stopped: 'lost' }
+  // ── 1. freeze the target, proven (only once release may have lifted it) ────────────────────
+  if (ran('release')) {
+    if (!(await ctx.stillHeld())) return lost()
+    let proven = false
     try {
-      if (key === 'release') {
-        // R2-I-2 / R3-I-1 / R3-I-2: the target may already be lifted. It must be proven frozen
-        // again, or stopped (removed / retired), or the operator must say it is stopped
-        // (target_stopped) — only then does the environment row go back to the source and the
-        // rollback go on. Otherwise it halts with the source frozen: never two writers.
-        let stopped = false
+      if (sharedTarget) {
+        // The listed status first, then every replica proven to hold that list.
+        await setEnvStatus(ctx.move.environment_id, 'maintenance')
+        await ctx.ops.targetMaintenance(true) // a list refresh kick
+        await ctx.ops.waitReplicas(ctx.shared.to as number)
+      } else {
+        await ctx.ops.freezeTarget()
+      }
+      proven = true
+    } catch (err) {
+      ctx.log(`undo: the target could not be proven frozen (${codeOf(err)})`, 'warn')
+    }
+    if (!proven && !sharedTarget) {
+      // A dedicated target that cannot be frozen is stopped instead (removed / retired).
+      if (!(await ctx.stillHeld())) return lost()
+      try {
+        await ctx.ops.removeTarget()
+        proven = true
+      } catch (err) {
+        ctx.log(`undo: the target could not be stopped either (${codeOf(err)})`, 'warn')
+      }
+    }
+    if (!proven && (await ctx.targetStoppedByHand())) {
+      ctx.log('undo: the operator confirmed no process of this app runs at the target')
+      proven = true
+    }
+    if (!proven) return halt('release', 'the target could not be proven frozen or stopped')
+    const prev = ctx.move.steps.release_prev
+    if (prev)
+      await restoreEnvRow(ctx.move.environment_id, {
+        ...prev,
+        // A shared target was frozen through the env's status: it stays `maintenance` until the
+        // source is lifted (step 5 writes the status from before the move).
+        status: 'maintenance'
+      })
+    ctx.log('undo: the target is frozen; the environment row is back on the source')
+    await mark('release', 'undone')
+  }
+
+  // ── 2. target-side route actions, never applying the target app's stack again ──────────────
+  for (const i of intents('target')) {
+    if (!(await ctx.stillHeld())) return lost()
+    const a = route[i]
+    if (a && sharedTarget) {
+      try {
+        await ctx.ops.unroute(a)
+      } catch (err) {
+        return halt(
+          'route',
+          `the target's route ${a.op} ${a.host ?? ''} could not be undone (${codeOf(err)})`
+        )
+      }
+    }
+    // A dedicated target's own stack is removed in step 3; its intent is only dropped here.
+    if (a) ctx.log(`undo: target ${a.op}${a.host ? ` ${a.host}` : ''} undone`)
+    await dropIntent(i)
+  }
+
+  // ── 3. stop / remove the target ────────────────────────────────────────────────────────────
+  if (ran('deploy_target')) {
+    if (!(await ctx.stillHeld())) return lost()
+    let stopped = false
+    try {
+      await ctx.ops.removeTarget()
+      stopped = true
+    } catch (err) {
+      if (await ctx.targetStoppedByHand()) {
+        ctx.log('undo: the target was stopped by hand (target_stopped)')
+        stopped = true
+      } else ctx.log(`undo: the target could not be stopped (${codeOf(err)})`, 'warn')
+    } finally {
+      // R2-M-2 / R3-M-2: the environment's own extension pins, as before the target deploy.
+      if (ctx.move.steps.prev_extension_pins !== undefined)
+        await restoreExtensionPins(ctx.move.environment_id, ctx.move.steps.prev_extension_pins)
+    }
+    if (!stopped) return halt('deploy_target', 'the target stack could not be stopped')
+    ctx.log('undo: target stack undone')
+    await mark('deploy_target', 'undone')
+  }
+  if (ran('place_on_target')) {
+    if (!(await ctx.stillHeld())) return lost()
+    let gone = false
+    try {
+      await ctx.ops.unplace()
+      if (sharedTarget) await ctx.ops.waitReplicas(ctx.shared.to as number)
+      gone = true
+    } catch (err) {
+      if (await ctx.targetStoppedByHand()) gone = true
+      else ctx.log(`undo: not every replica of the target dropped the app (${codeOf(err)})`, 'warn')
+    }
+    if (!gone)
+      return halt('place_on_target', 'the shared target could not be proven to drop the app')
+    ctx.log('undo: placement on the target undone')
+    await mark('place_on_target', 'undone')
+  }
+
+  // ── 4. source-side route actions ───────────────────────────────────────────────────────────
+  let sourceRouteFailed = false
+  for (const i of intents('source')) {
+    if (!(await ctx.stillHeld())) return lost()
+    const a = route[i]
+    try {
+      if (a) {
+        await ctx.ops.unroute(a)
+        ctx.log(`undo: source ${a.op}${a.host ? ` ${a.host}` : ''} undone`)
+      }
+      await dropIntent(i)
+    } catch (err) {
+      sourceRouteFailed = true
+      ctx.log(`undo: the source's route could not be put back (${codeOf(err)})`, 'error')
+    }
+  }
+  if (ran('route')) {
+    if (sourceRouteFailed) {
+      failed.push('route')
+      await mark('route', 'undo_failed', 'the source route could not be put back')
+    } else await mark('route', 'undone')
+  }
+
+  // ── 5. lift the source ─────────────────────────────────────────────────────────────────────
+  if (ran('maintenance_on')) {
+    if (!(await ctx.stillHeld())) return lost()
+    try {
+      if (ctx.move.prior_status) await setEnvStatus(ctx.move.environment_id, ctx.move.prior_status)
+      await ctx.ops.sourceMaintenance(false)
+      if (ctx.shared.from !== null) {
         try {
-          await ctx.ops.targetMaintenance(true)
-          if (ctx.shared.to !== null) await ctx.ops.waitReplicas(ctx.shared.to)
-          stopped = true
+          await ctx.ops.waitReplicas(ctx.shared.from)
         } catch (err) {
+          // The list says it; a replica that has not read it yet does within 30 s.
           ctx.log(
-            `undo: the target did not take its maintenance back (${codeOf(err)}); stopping it instead`,
+            `undo: not every replica of the source has the lifted maintenance yet (${codeOf(err)})`,
             'warn'
           )
         }
-        if (!stopped && ctx.shared.to === null) {
-          try {
-            await ctx.ops.removeTarget()
-            stopped = true
-          } catch (err) {
-            ctx.log(`undo: the target could not be stopped (${codeOf(err)})`, 'warn')
-          }
-        }
-        if (!stopped && (await ctx.targetStoppedByHand())) {
-          ctx.log('undo: the operator confirmed the target is stopped (target_stopped)')
-          stopped = true
-        }
-        if (!stopped) {
-          failed.push(key)
-          ctx.log('undo: the target could not be stopped; the source stays in maintenance', 'error')
-          await mark(key, 'undo_failed', 'the target could not be stopped (HALTED_TARGET_LIVE)')
-          return { failed, stopped: 'halted' }
-        }
-        const prev = ctx.move.steps.release_prev
-        if (prev) await restoreEnvRow(ctx.move.environment_id, prev)
-      } else if (key === 'route') {
-        const route = ctx.move.plan?.route ?? []
-        const applied = [...(steps.routed ?? [])].reverse() // newest intent first (record order)
-        for (const i of applied) {
-          const a = route[i]
-          if (!(await ctx.stillHeld())) return { failed, stopped: 'lost' }
-          if (a) {
-            await ctx.ops.unroute(a)
-            ctx.log(`undo: ${a.side} ${a.op}${a.host ? ` ${a.host}` : ''} undone`)
-          }
-          steps.routed = (steps.routed ?? []).filter((x) => x !== i)
-          steps.route_done = (steps.route_done ?? []).filter((x) => x !== i)
-          await ctx.save(steps)
-        }
-      } else if (key === 'place_on_target') {
-        await ctx.ops.unplace()
-      } else if (key === 'deploy_target') {
-        try {
-          await ctx.ops.removeTarget()
-        } catch (err) {
-          // The operator already stopped it by hand (target_stopped, R3-I-2): nothing is left.
-          if (!(await ctx.targetStoppedByHand())) throw err
-          ctx.log('undo: the target was stopped by hand (target_stopped)')
-        } finally {
-          // R2-M-2 / R3-M-2: the environment's own extension pins, as they were before the target
-          // deploy — put back even when the removal failed.
-          if (ctx.move.steps.prev_extension_pins !== undefined)
-            await restoreExtensionPins(ctx.move.environment_id, ctx.move.steps.prev_extension_pins)
-        }
-      } else if (key === 'maintenance_on') {
-        if (ctx.move.prior_status)
-          await setEnvStatus(ctx.move.environment_id, ctx.move.prior_status)
-        await ctx.ops.sourceMaintenance(false)
-        if (ctx.shared.from !== null) {
-          try {
-            await ctx.ops.waitReplicas(ctx.shared.from)
-          } catch (err) {
-            // The list says it; a replica that has not read it yet does within 30 s.
-            ctx.log(
-              `undo: not every replica of the source has the lifted maintenance yet (${codeOf(err)})`,
-              'warn'
-            )
-          }
-        }
       }
-      ctx.log(`undo: ${LABEL[key] ?? key} undone`)
-      await mark(key, 'undone')
+      ctx.log('undo: maintenance at the source undone')
+      await mark('maintenance_on', 'undone')
     } catch (err) {
-      failed.push(key)
-      ctx.log(`undo: the ${LABEL[key] ?? key} could not be undone (${codeOf(err)})`, 'error')
-      await mark(key, 'undo_failed', `could not be undone (${codeOf(err)})`)
-      // Never bring the source back while the target could still write.
-      if (key === 'release') return { failed, stopped: 'halted' }
+      failed.push('maintenance_on')
+      ctx.log(`undo: the source's maintenance could not be lifted (${codeOf(err)})`, 'error')
+      await mark('maintenance_on', 'undo_failed', `could not be undone (${codeOf(err)})`)
     }
   }
   return { failed, stopped: null }

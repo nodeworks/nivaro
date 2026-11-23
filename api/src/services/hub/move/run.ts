@@ -49,6 +49,7 @@ import {
   OPEN_MOVE_STATUSES,
   openMoveOf,
   patchMove,
+  patchMoveIfHolder,
   readMove,
   setEnvStatus,
   stepDone
@@ -664,11 +665,23 @@ async function boundary(ctx: Ctx, allowCancel = true): Promise<void> {
  */
 async function saveSteps(ctx: Ctx, steps: MoveSteps, extra: Partial<{ step: MoveStepKey }> = {}) {
   // R3-M-1: one atomic merge — the run's list wins, a key it lacks is kept from the stored one.
+  // R4-M-1: never over a move another runner holds now (its tokens in `locks`), and the lock
+  // tokens are always the stored ones (a run's copy may be older).
+  let theirs = false
   await mergeSteps(ctx.moveId, (stored) => {
+    if (stored.locks?.env && stored.locks.env !== ctx.held.envToken) {
+      theirs = true
+      return null
+    }
     for (const [k, v] of Object.entries(stored))
       if (k !== 'list' && !(k in steps)) (steps as unknown as Record<string, unknown>)[k] = v
+    if (stored.locks) steps.locks = stored.locks
     return steps
   })
+  if (theirs) {
+    ctx.lockLost = true
+    return
+  }
   if (extra.step !== undefined) await patchMove(ctx.moveId, { step: extra.step })
 }
 
@@ -1066,7 +1079,34 @@ async function closeDeployRow(
     .catch(() => null)
 }
 
+/**
+ * P6-27: a move that ends with the target live (success, a retire that failed included) drops
+ * the per-move name from the target stack. A failure never rolls back: it is an open checklist
+ * item naming the name.
+ */
+async function dropTempName(ctx: Ctx): Promise<void> {
+  try {
+    await ctx.ops.dropTempHost()
+  } catch (err) {
+    const se = asStepError(err, 'The per-move name could not be removed.')
+    const move = await readMove(ctx.moveId)
+    const host = move?.steps.addresses?.target_temp_host ?? 'the per-move name'
+    ctx.run.log(`the per-move name ${host} is still on the target stack (${se.code})`, 'warn')
+    const checklist = (move?.checklist ?? []).filter((c) => c.id !== 'temp_host')
+    checklist.push({
+      id: 'temp_host',
+      text: safeLine(
+        `Still to do: remove the per-move name ${host} from the target stack. Apply the environment's stack again (Apply now renders only the environment's own names), then check that ${host} no longer serves the app.`
+      ),
+      required: false,
+      done: false
+    })
+    await patchMove(ctx.moveId, { checklist })
+  }
+}
+
 async function finishSuccess(ctx: Ctx, warning: string | null): Promise<void> {
+  await dropTempName(ctx)
   await ctx.ops.revokeTickets().catch(() => undefined)
   // Review minor 6: the shared placement the environment left goes when nothing uses it.
   if (!warning) await dropUnusedSharedPlacement(ctx.moveId).catch(() => undefined)
@@ -1138,29 +1178,33 @@ async function locksHeld(ctx: Ctx): Promise<boolean> {
   return ok
 }
 
-/** Where the target runs and how to stop it, in plain words (R3-I-2). */
+/**
+ * Where the target runs and how to stop it, in plain words (R3-I-2, R4-M-2): one thing the
+ * operator can carry out for that target kind, and what ticking `target_stopped` states.
+ */
 async function targetStopText(move: HubMoveRow): Promise<string> {
   const p = await getPlacement(move.to_placement_id)
   let target = `placement ${move.to_placement_id}`
-  let how = 'stop it'
+  let how = 'stop every process of this app there and keep it from starting again'
   if (p?.kind === 'shared') {
     const shared = await getShared(p.shared_deployment_id)
-    target = `the app on the shared deployment ${shared?.key ?? p.shared_deployment_id}`
-    how =
-      'make sure every replica of that deployment lists the app as maintenance (or stop the deployment)'
+    const key = shared?.key ?? String(p.shared_deployment_id)
+    target = `the shared deployment ${key}`
+    how = `remove the app from the shared deployment ${key}: stop that deployment (scale its services to 0) until this rollback is done; the rollback then drops the app from its list and the deployment can start again`
   } else if (p) {
     const driver = await getDriver(p.driver_id)
     const stack = (p.target as { stack?: unknown }).stack
     if (driver?.kind === 'docker' && typeof stack === 'string') {
       target = `the Docker stack ${stack} (driver ${driver.name})`
-      how = `remove it on that swarm (docker stack rm ${stack}) or put the app in maintenance`
+      how = `remove the stack on that swarm (docker stack rm ${stack}) and do not deploy it again`
     } else {
       const at = move.steps.addresses?.target_link_base
       target = `the GitLab-deployed app${at ? ` at ${at}` : ''} (placement ${p.id})`
-      how = 'stop its stack on its swarm manager, or put the app in maintenance'
+      how =
+        'remove its stack on its swarm manager (docker stack rm) and stop its pipeline from deploying it again'
     }
   }
-  return `Stop ${target}: ${how}. Then tick "target stopped" and Roll back: the Hub then lifts the source's maintenance.`
+  return `Make sure no process of this app runs at ${target}, and none can restart: ${how}. Then tick "target stopped" (it states that no process of this app runs at ${target}, and none can restart) and Roll back again: the Hub then lifts the source's maintenance.`
 }
 
 /**
@@ -1175,12 +1219,17 @@ async function halt(ctx: Ctx, move: HubMoveRow): Promise<void> {
   const checklist = fresh.checklist.filter((c) => c.id !== 'target_stopped')
   checklist.push({ id: 'target_stopped', text: say, required: true, done: false })
   const error = `HALTED_TARGET_LIVE: The rollback stopped: the target could not be frozen or stopped, so the source stays in maintenance (never two writers). ${say}`
-  await patchMove(ctx.moveId, {
+  const ours = await patchMoveIfHolder(ctx.moveId, ctx.held.envToken, {
     status: 'interrupted',
     error: safeLine(error),
     checklist,
     heartbeat_at: null
   })
+  if (!ours) {
+    ctx.run.log('stopped: this run no longer holds the move', 'error')
+    await ctx.run.fail(new Error('Interrupted: the run lost its locks.'))
+    return
+  }
   await closeDeployRow(ctx, 'interrupted', error)
   ctx.run.log(error, 'error')
   await logActivity({
@@ -1199,8 +1248,14 @@ async function halt(ctx: Ctx, move: HubMoveRow): Promise<void> {
 }
 
 async function interrupt(ctx: Ctx): Promise<void> {
-  await patchMove(ctx.moveId, { status: 'interrupted', heartbeat_at: null })
-  await closeDeployRow(ctx, 'interrupted', null)
+  // R4-M-1: only while this run is still the move's lock holder (a resumed run owns it now).
+  if (
+    await patchMoveIfHolder(ctx.moveId, ctx.held.envToken, {
+      status: 'interrupted',
+      heartbeat_at: null
+    })
+  )
+    await closeDeployRow(ctx, 'interrupted', null)
   ctx.run.log('stopped: this run lost its locks; resume or roll back the move', 'error')
   await ctx.run.fail(
     new Error('Interrupted: the run lost its locks. Resume or roll back the move.')
