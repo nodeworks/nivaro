@@ -18,8 +18,16 @@ const st = vi.hoisted(() => ({
   // file rows per database connection (a tenant's own database), '' = the static database
   files: new Map<
     string,
-    Array<{ id: string; filename_disk: string | null; type: string; filesize: number }>
-  >()
+    Array<{
+      id: string
+      filename_disk: string | null
+      type: string
+      filesize: number
+      storage?: string
+    }>
+  >(),
+  /** R6-I-1 / R6-M-3: the saved-settings driver a test stands up (null = local only). */
+  driver: null as null | Record<string, unknown>
 }))
 
 vi.mock('../../../config.js', () => ({
@@ -47,7 +55,7 @@ vi.mock('../../../db/tenant-context.js', async (orig) => {
   }
 })
 vi.mock('../../../services/storage-drivers.js', () => ({
-  getActiveStorageDriver: async () => ({ name: 'local' }),
+  getActiveStorageDriver: async () => st.driver ?? { name: 'local' },
   readOwnStoredObject: async () => {
     throw new Error('ENOENT')
   }
@@ -276,6 +284,140 @@ describe('GET /api/hub-transfer/files/:id on a dedicated app', () => {
   })
 })
 
+// R6-I-1 (ruling P6-33): only a real not-found of a saved-settings object is a 404 ("missing"):
+// any other read error is a 5xx, which the target counts as failed (it blocks inside
+// maintenance, so the move never releases without the object).
+describe('GET /api/hub-transfer/files/:id for a saved-settings object', () => {
+  const FILE_S3 = '55555555-2222-4333-8444-555555555555'
+  /** A saved-settings row whose bytes sit on the local disk (the driver was switched back). */
+  const FILE_S3_LOCAL = '66666666-2222-4333-8444-555555555555'
+  beforeAll(() => {
+    st.files.get('')?.push(
+      {
+        id: FILE_S3,
+        filename_disk: 'cd/photo.jpg',
+        type: 'image/jpeg',
+        filesize: 10,
+        storage: 's3'
+      },
+      {
+        id: FILE_S3_LOCAL,
+        filename_disk: 'ab/report.pdf',
+        type: 'application/pdf',
+        filesize: 14,
+        storage: 's3'
+      }
+    )
+  })
+  afterEach(() => {
+    st.driver = null
+  })
+
+  // R6-M-3: streamed from the driver, the Range passed through; never read whole (get throws).
+  it('streams it from the driver, passing a Range through (206)', async () => {
+    const { Readable } = await import('node:stream')
+    const asked: Array<[string, string | undefined]> = []
+    st.driver = {
+      name: 's3',
+      get: async () => {
+        throw new Error('never buffered whole')
+      },
+      openStream: async (key: string, range?: string) => {
+        asked.push([key, range])
+        return {
+          size: 10,
+          range: { start: 2, end: 5 },
+          unsatisfiable: false,
+          stream: Readable.from([Buffer.from('cdef')])
+        }
+      }
+    }
+    dedicated()
+    const a = await build()
+    const { ticket } = await mintTransferTicket(null)
+    const res = await get(a, FILE_S3, { authorization: `Transfer ${ticket}`, range: 'bytes=2-5' })
+    expect(res.statusCode).toBe(206)
+    expect(res.body).toBe('cdef')
+    expect(res.headers['content-range']).toBe('bytes 2-5/10')
+    expect(asked).toEqual([['cd/photo.jpg', 'bytes=2-5']])
+  })
+
+  it('R6-M-3: a streamed read that fails before any byte is a 5xx too', async () => {
+    st.driver = {
+      name: 's3',
+      get: async () => {
+        throw new Error('never buffered whole')
+      },
+      openStream: async () => {
+        throw Object.assign(new Error('S3 GET failed: 503'), { status: 503 })
+      }
+    }
+    dedicated()
+    const a = await build()
+    const { ticket } = await mintTransferTicket(null)
+    const res = await get(a, FILE_S3, { authorization: `Transfer ${ticket}` })
+    expect(res.statusCode).toBe(503)
+  })
+
+  it('a real not-found is 404 (missing)', async () => {
+    const { StoredObjectMissing } = await import('../../../services/storage/missing.js')
+    st.driver = {
+      name: 's3',
+      get: async () => {
+        throw new StoredObjectMissing()
+      }
+    }
+    dedicated()
+    const a = await build()
+    const { ticket } = await mintTransferTicket(null)
+    expect((await get(a, FILE_S3, { authorization: `Transfer ${ticket}` })).statusCode).toBe(404)
+  })
+
+  // P6-36: a driver 404 is not yet "missing": the local disk / fallback chain is asked too.
+  it('P6-36: the driver answers 404 and the bytes sit on the local disk → the object is streamed', async () => {
+    const { StoredObjectMissing } = await import('../../../services/storage/missing.js')
+    st.driver = {
+      name: 's3',
+      openStream: async () => {
+        throw new StoredObjectMissing()
+      },
+      get: async () => {
+        throw new StoredObjectMissing()
+      }
+    }
+    dedicated()
+    const a = await build()
+    const { ticket } = await mintTransferTicket(null)
+    const res = await get(a, FILE_S3_LOCAL, { authorization: `Transfer ${ticket}` })
+    expect(res.statusCode).toBe(200)
+    expect(res.body).toBe('%PDF-dedicated')
+    // Not there anywhere → 404.
+    expect((await get(a, FILE_S3, { authorization: `Transfer ${ticket}` })).statusCode).toBe(404)
+  })
+
+  for (const [label, err] of [
+    ['throttled (503)', Object.assign(new Error('S3 GET failed: 503 SlowDown'), { status: 503 })],
+    ['refused (403)', Object.assign(new Error('S3 GET failed: 403 AccessDenied'), { status: 403 })],
+    ['a timeout', Object.assign(new Error('The operation was aborted'), { name: 'TimeoutError' })]
+  ] as const)
+    it(`any other read error (${label}) is a 5xx, never a 404, and names no key`, async () => {
+      st.driver = {
+        name: 's3',
+        get: async () => {
+          throw err
+        }
+      }
+      dedicated()
+      const a = await build()
+      const { ticket } = await mintTransferTicket(null)
+      const res = await get(a, FILE_S3, { authorization: `Transfer ${ticket}` })
+      expect(res.statusCode).toBe(503)
+      expect(res.json().code).toBe('SOURCE_READ_FAILED')
+      expect(res.headers['x-nivaro-filename-disk']).toBeUndefined()
+      expect(res.body).not.toContain('photo.jpg')
+    })
+})
+
 describe('GET /api/hub-transfer/files/:id on a shared deployment', () => {
   it("the ticket decides the app: it serves that app's object, scoped, on any host", async () => {
     shared()
@@ -394,7 +536,21 @@ describe('the Hub asks for tickets and pulls', () => {
     })
     expect(started.statusCode).toBe(202)
     expect(started.json()).toEqual({ run_id: 'run-1' })
-    expect(vi.mocked(pull.startPull)).toHaveBeenCalledWith(body)
+    expect(vi.mocked(pull.startPull)).toHaveBeenCalledWith({ ...body, objects: false })
+    // P6-31: the Hub's `objects: true` reaches the pull (only a real true counts).
+    for (const [sent, got] of [
+      [true, true],
+      ['yes', false]
+    ] as const) {
+      vi.mocked(pull.startPull).mockClear()
+      await a.inject({
+        method: 'POST',
+        url: '/api/hub-link/files/pull',
+        headers: h,
+        payload: { ...body, objects: sent }
+      })
+      expect(vi.mocked(pull.startPull)).toHaveBeenCalledWith({ ...body, objects: got })
+    }
     const unknown = await a.inject({
       method: 'GET',
       url: '/api/hub-link/files/pull/run-x',
@@ -483,8 +639,10 @@ describe('the Hub asks for tickets and pulls', () => {
     expect(t.statusCode).toBe(200)
     expect(await ticketTenant(t.json().ticket)).toEqual({ ok: true, tenant: 'app-a-e1' })
     const seenIn: Array<string | undefined> = []
-    vi.mocked(pull.startPull).mockImplementationOnce(async () => {
+    let objectsSeen: unknown
+    vi.mocked(pull.startPull).mockImplementationOnce(async (req) => {
       seenIn.push(getTenantId())
+      objectsSeen = req.objects
       return { run_id: 'run-9' }
     })
     const p = await a.inject({
@@ -494,11 +652,13 @@ describe('the Hub asks for tickets and pulls', () => {
       payload: {
         source: 'https://a.example.com/api/hub-transfer/files',
         ticket: `nvt_${'T'.repeat(43)}`,
-        mode: 'delta'
+        mode: 'delta',
+        objects: true
       }
     })
     expect(p.statusCode).toBe(202)
     expect(seenIn).toEqual(['app-b-e2'])
+    expect(objectsSeen).toBe(true)
     const unknownApp = await a.inject({
       method: 'POST',
       url: '/api/hub-deployment/apps/nope-e1/files/ticket',

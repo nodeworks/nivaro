@@ -50,6 +50,8 @@ const PASSWORD = 'pw-Secret-Value-123'
 const saved = { HUB: process.env.HUB, KEY: process.env.ENCRYPTION_KEY }
 
 let t = Date.parse('2026-11-22T10:00:00Z')
+/** R2-M-8: the Docker fake's stack stays updating while this is set. */
+let converging = false
 const now = () => t
 const sleep = vi.fn(async (ms: number) => {
   t += ms
@@ -212,11 +214,19 @@ function clients() {
       return { revoked: true }
     }),
     pullFiles: vi.fn(
-      async (_tid: string, req: { source: string; ticket: string; mode: string }) => {
+      async (
+        _tid: string,
+        req: { source: string; ticket: string; mode: string; objects?: boolean }
+      ) => {
         calls.push([
           shared.id,
           'pullFiles',
-          { source: req.source, mode: req.mode, ticket: req.ticket === TICKET }
+          {
+            source: req.source,
+            mode: req.mode,
+            ticket: req.ticket === TICKET,
+            ...(req.objects ? { objects: true } : {})
+          }
         ])
         return { run_id: 'run-1' }
       }
@@ -344,6 +354,61 @@ describe('pullFiles', () => {
     // Nothing left to revoke at the move end.
     await ops.revokeTickets()
     expect(c.calls.filter((x) => x[1] === 'revokeTicket')).toHaveLength(1)
+  })
+
+  // P6-31: to a shared deployment the key prefix changes: saved-settings objects are copied too.
+  it('a dedicated source to a shared target asks the pull for the saved-settings objects too', async () => {
+    const w = await setup(false)
+    TENANT = w.tenant
+    await db('nivaro_hub_environments')
+      .where({ id: w.envId })
+      .update({
+        hub_token: (await import('../../../services/hub/secrets.js')).sealSecret('t'.repeat(40))
+      })
+    const c = clients()
+    const ops = defaultMoveOps(w.move, w.plan, {
+      client: c.factory,
+      link: () =>
+        ({
+          fileTicket: async () => ({ ticket: TICKET, expires_at: '2026-11-23T00:00:00Z' }),
+          revokeTicket: async () => ({ revoked: true })
+        }) as never,
+      sleep,
+      now
+    })
+    await ops.pullFiles('full')
+    expect(c.calls.find((x) => x[1] === 'pullFiles')?.[2]).toMatchObject({ objects: true })
+  })
+
+  // R2-M-6: a ticket a dead run could not revoke is revoked by the next run (heal + resume or
+  // roll back), not left to its 6 h expiry. It is kept with the move sealed, never in clear.
+  it('R2-M-6: a dead run’s un-revoked ticket is revoked by a fresh ops instance at the move end', async () => {
+    const w = await setup(true)
+    TENANT = w.tenant
+    const c = clients()
+    const factory = (fail: boolean) => (s: { id: number }) => {
+      const cl = (c.factory as (s: { id: number }) => Record<string, unknown>)(s)
+      const orig = cl.revokeTicket as (...a: unknown[]) => Promise<unknown>
+      cl.revokeTicket = async (...a: unknown[]) => {
+        if (fail) throw new Error('unreachable')
+        return orig(...a)
+      }
+      return cl as never
+    }
+    const dead = defaultMoveOps(w.move, w.plan, { client: factory(true), sleep, now })
+    await dead.pullFiles('delta')
+    const kept = (await db('nivaro_hub_moves').where({ id: w.move.id }).first()).steps as string
+    expect(kept).not.toContain(TICKET)
+    expect(JSON.parse(kept).open_tickets).toHaveLength(1)
+    // The process died; a new run (a new ops instance) ends the move.
+    const fresh = defaultMoveOps((await readMove(w.move.id)) as never, w.plan, {
+      client: factory(false),
+      sleep,
+      now
+    })
+    await fresh.revokeTickets()
+    expect(c.calls.filter((x) => x[1] === 'revokeTicket')).toEqual([[w.a, 'revokeTicket', true]])
+    expect((await readMove(w.move.id))?.steps.open_tickets ?? []).toEqual([])
   })
 
   it('a ticket that could not be revoked is revoked at the move end', async () => {
@@ -594,7 +659,7 @@ describe('deployTarget on Docker (R9: the target gets the app key, never a fresh
         return { spec_hash: 'a'.repeat(64), changed: ['web'], unchanged: [] }
       }),
       agentStack: vi.fn(async () => ({
-        state: 'converged',
+        state: converging ? 'updating' : 'converged',
         image: `nodeworks/nivaro@sha256:${'b'.repeat(64)}`
       }))
     }
@@ -722,6 +787,22 @@ describe('deployTarget on Docker (R9: the target gets the app key, never a fresh
     await mirrorRow(w)
     await ops.deployTarget()
     expect((await ops.dropTempHost().catch((e) => e))?.code).toBe('TEMP_HOST_STILL_SERVED')
+  })
+
+  // R2-M-8: a route apply waits for the route step's own 10-minute budget, not 30 minutes.
+  it('R2-M-8: a route apply that never converges stops at the route deadline, not after 30 minutes', async () => {
+    const { w, ops } = await dockerTarget()
+    await mirrorRow(w)
+    await ops.deployTarget()
+    // From here the stack never converges.
+    converging = true
+    const start = t
+    const err = await ops
+      .route({ side: 'target', op: 'apply_stack' } as never, { deadline: start + 10 * 60_000 })
+      .catch((e) => e)
+    converging = false
+    expect(err?.code).toBe('ROUTE_TIMEOUT')
+    expect(t - start).toBeLessThan(11 * 60_000)
   })
 
   it('stack settings holding another key → APP_KEY_MISMATCH, nothing applied', async () => {
@@ -940,5 +1021,73 @@ describe('freezeTarget on GitLab (P6-26 Rule 1)', () => {
       status: status({ maintenance: null, retired: false })
     })
     expect((await ops.removeTarget().catch((e) => e))?.code).toBe('TARGET_NOT_STOPPED')
+  })
+})
+
+// R2-M-7: a cancel reaches the GitLab target's deploy (the promotion runner polls stopRequested
+// at every wait and before playing a manual job), instead of waiting for the whole deploy job.
+describe('deployTarget on GitLab is cancellable (R2-M-7)', () => {
+  it('passes the run’s cancel check to the deploy as stopRequested; a stopped deploy is ABORTED', async () => {
+    const w = await setup(true)
+    TENANT = w.tenant
+    const driver = await insertId('nivaro_hub_drivers', {
+      kind: 'gitlab',
+      name: `gl-c${w.envId}`,
+      config: JSON.stringify({
+        api: 'https://gitlab.example.com',
+        project: 'acme/acme-deploy',
+        branch: 'prod',
+        deploy_job: 'deploy',
+        pin_file: '.hub/nivaro-version'
+      })
+    })
+    const pd = await insertId('nivaro_hub_placements', {
+      kind: 'dedicated',
+      driver_id: driver,
+      target: '{}'
+    })
+    await insertId('nivaro_hub_components', {
+      placement_id: pd,
+      position: 0,
+      name: 'api',
+      kind: 'api',
+      driver_id: driver,
+      source_branch: 'main',
+      verify_url: 'https://acme-direct.example.com/api/version'
+    })
+    await db('nivaro_hub_moves').where({ id: w.move.id }).update({ to_placement_id: pd })
+    const move = (await readMove(w.move.id)) as NonNullable<Awaited<ReturnType<typeof readMove>>>
+    let asked = 0
+    const ops = defaultMoveOps(
+      move,
+      { ...w.plan, kind: 'to_dedicated' },
+      {
+        client: clients().factory,
+        sleep,
+        now,
+        imageDigest: async () => `sha256:${'b'.repeat(64)}`,
+        deployComponent: (async (
+          _step: unknown,
+          _v: string,
+          _ctx: unknown,
+          _log: unknown,
+          opts?: { deps?: { stopRequested?: () => Promise<boolean> } }
+        ) => {
+          if (await opts?.deps?.stopRequested?.())
+            return { status: 'cancelled', step: 'deploy api', error: 'Stopped', code: 'ABORTED' }
+          return { status: 'success', step: 'deploy api', error: null }
+        }) as never
+      }
+    )
+    const err = await ops
+      .deployTarget({
+        stopRequested: async () => {
+          asked++
+          return true
+        }
+      })
+      .catch((e) => e)
+    expect(asked).toBeGreaterThan(0)
+    expect(err?.code).toBe('ABORTED')
   })
 })

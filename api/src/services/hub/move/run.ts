@@ -676,6 +676,9 @@ async function saveSteps(ctx: Ctx, steps: MoveSteps, extra: Partial<{ step: Move
     for (const [k, v] of Object.entries(stored))
       if (k !== 'list' && !(k in steps)) (steps as unknown as Record<string, unknown>)[k] = v
     if (stored.locks) steps.locks = stored.locks
+    // R2-M-6: the ops alone write open_tickets; a run's older copy never puts one back.
+    if (stored.open_tickets !== undefined) steps.open_tickets = stored.open_tickets
+    else delete steps.open_tickets
     return steps
   })
   if (theirs) {
@@ -798,6 +801,51 @@ async function copyFiles(ctx: Ctx, slot: keyof MoveFiles, blocking: boolean): Pr
     )
 }
 
+/** Puts the source in maintenance and waits until every replica holds it (maintenance_on). */
+async function freezeSource(ctx: Ctx): Promise<void> {
+  // B1 names shared sides; a dedicated source's env status says it too (Hub-only meaning,
+  // nothing reads it from the app; the rollback puts the prior status back).
+  await setEnvStatus(ctx.envId, 'maintenance')
+  await ctx.ops.sourceMaintenance(true)
+  // Review Focus #2: no step after this until every live replica holds the new list.
+  if (ctx.shared.from !== null) await ctx.ops.waitReplicas(ctx.shared.from)
+}
+
+/** Lifts the source's maintenance again (the R5-I-1 deploy window): its prior status first. */
+async function liftSource(ctx: Ctx): Promise<void> {
+  const move = await readMove(ctx.moveId)
+  if (move?.prior_status) await setEnvStatus(ctx.envId, move.prior_status)
+  await ctx.ops.sourceMaintenance(false)
+  if (ctx.shared.from !== null)
+    await ctx.ops
+      .waitReplicas(ctx.shared.from)
+      .catch((err) =>
+        ctx.run.log(
+          `not every replica of the source has the lifted maintenance yet (${asStepError(err, '').code})`,
+          'warn'
+        )
+      )
+}
+
+/** R5-I-1: the post-deploy maintenance call, retried with backoff (about 2 minutes in all). */
+async function targetMaintenanceWithRetry(ctx: Ctx): Promise<void> {
+  const waits = [5_000, 15_000, 30_000, 60_000]
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await ctx.ops.targetMaintenance(true)
+      return
+    } catch (err) {
+      const se = asStepError(err, 'The target did not take maintenance.')
+      if (attempt >= waits.length) throw se
+      ctx.run.log(
+        `deploy_target: the target did not take maintenance yet (${se.code}); trying again`,
+        'warn'
+      )
+      await ctx.e.sleep(waits[attempt])
+    }
+  }
+}
+
 async function doStep(ctx: Ctx, key: MoveStepKey, steps: MoveSteps): Promise<void> {
   const { ops, plan, e } = ctx
   switch (key) {
@@ -824,15 +872,8 @@ async function doStep(ctx: Ctx, key: MoveStepKey, steps: MoveSteps): Promise<voi
     }
     case 'files_warm':
       return copyFiles(ctx, 'warm', false)
-    case 'maintenance_on': {
-      // B1 names shared sides; a dedicated source's env status says it too (Hub-only meaning,
-      // nothing reads it from the app; the rollback puts the prior status back).
-      await setEnvStatus(ctx.envId, 'maintenance')
-      await ops.sourceMaintenance(true)
-      // Review Focus #2: no step after this until every live replica holds the new list.
-      if (ctx.shared.from !== null) await ops.waitReplicas(ctx.shared.from)
-      return
-    }
+    case 'maintenance_on':
+      return freezeSource(ctx)
     case 'wait_idle': {
       const by = e.now() + WAIT_IDLE_MS
       for (;;) {
@@ -856,6 +897,22 @@ async function doStep(ctx: Ctx, key: MoveStepKey, steps: MoveSteps): Promise<voi
       // deploy until release: a Docker target boots in it (HUB_BOOT_MAINTENANCE); a GitLab one is
       // asked before the deploy (it keeps it in its own Redis across the redeploy, when it already
       // runs) and again right after it, before anything else happens.
+      // R5-I-1 (P6-30): when its boot maintenance is not proven (GITLAB_BOOT_WINDOW), it may
+      // start writable: the source is put in maintenance before the deploy (the automatic order
+      // already did), and lifted again only once the target's maintenance is set.
+      const window =
+        plan.warnings.some((w) => w.code === 'GITLAB_BOOT_WINDOW') &&
+        !stepDone(steps, 'maintenance_on')
+      // R6-M-4: whenever this step runs (again, after a crash or a Resume), the source is frozen
+      // again first: the freeze is idempotent, and a crash may have lifted it already.
+      if (window) {
+        steps.boot_freeze = 'on'
+        await saveSteps(ctx, steps)
+        ctx.run.log(
+          'deploy_target: the target may start without maintenance, so the source goes into maintenance for its deploy'
+        )
+        await freezeSource(ctx)
+      }
       await ops
         .targetMaintenance(true)
         .catch((err) =>
@@ -864,8 +921,24 @@ async function doStep(ctx: Ctx, key: MoveStepKey, steps: MoveSteps): Promise<voi
             'warn'
           )
         )
-      await ops.deployTarget()
-      await ops.targetMaintenance(true)
+      try {
+        // R2-M-7: a cancel reaches a GitLab deploy (it polls this at every wait).
+        await ops.deployTarget({ stopRequested: () => cancelAsked(ctx) })
+      } catch (err) {
+        if (await cancelAsked(ctx)) throw new Halt('cancel')
+        throw err
+      }
+      await targetMaintenanceWithRetry(ctx)
+      if (steps.boot_freeze === 'on') {
+        // R6-M-4: the intent first, so a crash inside the lift is seen (Resume freezes again,
+        // a rollback lifts it).
+        steps.boot_freeze = 'lifting'
+        await saveSteps(ctx, steps)
+        await liftSource(ctx)
+        steps.boot_freeze = 'lifted'
+        await saveSteps(ctx, steps)
+        ctx.run.log('deploy_target: the target is in maintenance; the source serves again')
+      }
       return
     }
     case 'place_on_target': {
@@ -949,7 +1022,8 @@ async function applyRoute(
       steps.routed = [...(steps.routed ?? []), i]
       await saveSteps(ctx, steps)
     }
-    await ctx.ops.route(route[i])
+    // R2-M-8: one apply's converge wait ends with the route budget, not 30 minutes later.
+    await ctx.ops.route(route[i], { deadline: by })
     steps.route_done = [...(steps.route_done ?? []), i]
     await saveSteps(ctx, steps)
     const a = route[i]
@@ -1091,12 +1165,14 @@ async function dropTempName(ctx: Ctx): Promise<void> {
     const se = asStepError(err, 'The per-move name could not be removed.')
     const move = await readMove(ctx.moveId)
     const host = move?.steps.addresses?.target_temp_host ?? 'the per-move name'
+    // E2E B3: where to check, on the public scheme and port it was served on.
+    const at = move?.steps.addresses?.target_link_base ?? host
     ctx.run.log(`the per-move name ${host} is still on the target stack (${se.code})`, 'warn')
     const checklist = (move?.checklist ?? []).filter((c) => c.id !== 'temp_host')
     checklist.push({
       id: 'temp_host',
       text: safeLine(
-        `Still to do: remove the per-move name ${host} from the target stack. Apply the environment's stack again (Apply now renders only the environment's own names), then check that ${host} no longer serves the app.`
+        `Still to do: remove the per-move name ${host} from the target stack. Apply the environment's stack again (Apply now renders only the environment's own names), then check that ${at} no longer serves the app.`
       ),
       required: false,
       done: false
@@ -1110,13 +1186,15 @@ async function finishSuccess(ctx: Ctx, warning: string | null): Promise<void> {
   await ctx.ops.revokeTickets().catch(() => undefined)
   // Review minor 6: the shared placement the environment left goes when nothing uses it.
   if (!warning) await dropUnusedSharedPlacement(ctx.moveId).catch(() => undefined)
-  await patchMove(ctx.moveId, {
+  // R5-M-2: only while this run still holds the move (never over a runner that took it).
+  const ours = await patchMoveIfHolder(ctx.moveId, ctx.held.envToken, {
     status: 'success',
     step: 'done',
     error: warning,
     finished_at: new Date(ctx.e.now()),
     heartbeat_at: null
   })
+  if (!ours) return notOurs(ctx)
   await closeDeployRow(ctx, 'success', null)
   await clearCancelFlag(ctx)
   await logActivity({
@@ -1182,7 +1260,7 @@ async function locksHeld(ctx: Ctx): Promise<boolean> {
  * Where the target runs and how to stop it, in plain words (R3-I-2, R4-M-2): one thing the
  * operator can carry out for that target kind, and what ticking `target_stopped` states.
  */
-async function targetStopText(move: HubMoveRow): Promise<string> {
+async function targetStopText(move: HubMoveRow, sourceFrozen: boolean): Promise<string> {
   const p = await getPlacement(move.to_placement_id)
   let target = `placement ${move.to_placement_id}`
   let how = 'stop every process of this app there and keep it from starting again'
@@ -1204,7 +1282,7 @@ async function targetStopText(move: HubMoveRow): Promise<string> {
         'remove its stack on its swarm manager (docker stack rm) and stop its pipeline from deploying it again'
     }
   }
-  return `Make sure no process of this app runs at ${target}, and none can restart: ${how}. Then tick "target stopped" (it states that no process of this app runs at ${target}, and none can restart) and Roll back again: the Hub then lifts the source's maintenance.`
+  return `Make sure no process of this app runs at ${target}, and none can restart: ${how}. Then tick "target stopped" (it states that no process of this app runs at ${target}, and none can restart) and Roll back again: the Hub then ${sourceFrozen ? "lifts the source's maintenance" : 'finishes the rollback'}.`
 }
 
 /**
@@ -1213,12 +1291,16 @@ async function targetStopText(move: HubMoveRow): Promise<string> {
  * retries the freeze, and goes on once the operator ticked target_stopped), and the error, the job
  * log, the activity and a required checklist item all say the same thing.
  */
-async function halt(ctx: Ctx, move: HubMoveRow): Promise<void> {
-  const say = await targetStopText(move)
+async function halt(ctx: Ctx, move: HubMoveRow, sourceFrozen: boolean): Promise<void> {
+  const say = await targetStopText(move, sourceFrozen)
   const fresh = (await readMove(ctx.moveId)) ?? move
   const checklist = fresh.checklist.filter((c) => c.id !== 'target_stopped')
   checklist.push({ id: 'target_stopped', text: say, required: true, done: false })
-  const error = `HALTED_TARGET_LIVE: The rollback stopped: the target could not be frozen or stopped, so the source stays in maintenance (never two writers). ${say}`
+  // R5-I-1: worded from the source's real state, never "stays in maintenance" when it serves.
+  const state = sourceFrozen
+    ? 'so the source stays in maintenance (never two writers)'
+    : 'and the source keeps serving: it was not put in maintenance, and the target was last set to maintenance by the Hub'
+  const error = `HALTED_TARGET_LIVE: The rollback stopped: the target could not be frozen or stopped, ${state}. ${say}`
   const ours = await patchMoveIfHolder(ctx.moveId, ctx.held.envToken, {
     status: 'interrupted',
     error: safeLine(error),
@@ -1247,6 +1329,13 @@ async function halt(ctx: Ctx, move: HubMoveRow): Promise<void> {
   await ctx.run.fail(new Error(safeLine(error)))
 }
 
+/** R5-M-2: another runner holds the move now; this one ends without writing its end. */
+async function notOurs(ctx: Ctx): Promise<void> {
+  ctx.lockLost = true
+  ctx.run.log('stopped: another run holds this move now; it writes the end', 'error')
+  await ctx.run.fail(new Error('Stopped: another run holds this move now.'))
+}
+
 async function interrupt(ctx: Ctx): Promise<void> {
   // R4-M-1: only while this run is still the move's lock holder (a resumed run owns it now).
   if (
@@ -1262,6 +1351,26 @@ async function interrupt(ctx: Ctx): Promise<void> {
   )
 }
 
+/**
+ * R5-M-1: when the rollback could not give the source its names back (or lift its maintenance),
+ * the way to recover by hand: Apply now on the source's own stack (it renders the environment's
+ * own names), and the Task 9 escape hatch for a maintenance the Hub can no longer lift.
+ */
+async function sourceRecoveryText(move: HubMoveRow): Promise<string> {
+  const p = await getPlacement(move.from_placement_id)
+  let names = 'Put the names back on the source by hand.'
+  if (p?.kind === 'shared') {
+    const shared = await getShared(p.shared_deployment_id)
+    names = `Apply now on the shared deployment ${shared?.key ?? p.shared_deployment_id} (its stack then carries this app's names again).`
+  } else if (p) {
+    const stack = (p.target as { stack?: unknown }).stack
+    const driver = await getDriver(p.driver_id)
+    if (driver?.kind === 'docker' && typeof stack === 'string')
+      names = `Apply now on the source stack ${stack} (driver ${driver.name}): it renders the environment's own names again.`
+  }
+  return `To recover: ${names} If the source still shows maintenance, lift it on the source app with POST /api/hub-link/maintenance {"on":false} without move_id, or delete the nvr:maintenance key in its Redis (remove HUB_BOOT_MAINTENANCE from its stack first if it is set).`
+}
+
 async function rollBack(
   ctx: Ctx,
   reason: 'failed' | 'cancelled',
@@ -1273,8 +1382,27 @@ async function rollBack(
   await mergeSteps(ctx.moveId, (stored) => ({ ...stored, phase: 'rollback', undo_reason: why }))
   if (err) await patchMove(ctx.moveId, { error: safeLine(`${err.code}: ${err.message}`) })
   ctx.run.log(why === 'cancelled' ? 'cancelled: rolling back' : 'rolling back', 'warn')
+  // R2-M-4: a person may have pointed the name at the target after the Hub's last self-check
+  // (it runs every 5 minutes of the manual wait): look once more, before the target is undone.
+  const r0 = move0.steps
+  if (
+    move0.routing === 'manual' &&
+    r0.waiting_since &&
+    !r0.route_confirmed_at &&
+    !stepDone(r0, 'verify') &&
+    (await ctx.ops
+      .verifyName({ version: ctx.plan.version, shared: ctx.sharedKeyTo })
+      .catch(() => false))
+  ) {
+    ctx.run.log('route: the name already answers from the target')
+    await mergeSteps(ctx.moveId, (stored) =>
+      stored.route_confirmed_at
+        ? null
+        : { ...stored, route_confirmed_at: new Date(ctx.e.now()).toISOString() }
+    )
+  }
   const move = (await readMove(ctx.moveId)) as HubMoveRow
-  const { failed, stopped } = await undoMove({
+  const { failed, stopped, sourceFrozen } = await undoMove({
     move,
     ops: ctx.ops,
     shared: { from: ctx.shared.from, to: ctx.shared.to },
@@ -1287,7 +1415,7 @@ async function rollBack(
   // R3-I-3: a run that lost its locks never goes on undoing (another runner may own the move).
   if (stopped === 'lost') return interrupt(ctx)
   // R3-I-2: the target could not be stopped: interrupted (Roll back again once it is stopped).
-  if (stopped === 'halted') return halt(ctx, move)
+  if (stopped === 'halted') return halt(ctx, move, sourceFrozen)
   await ctx.ops.revokeTickets().catch(() => undefined)
   // A placement this move made for the target goes again, unless something else uses it.
   if (move.steps.created_placement) await dropCreatedPlacement(ctx.moveId, move.to_placement_id)
@@ -1300,23 +1428,40 @@ async function rollBack(
       ? 'cancelled'
       : 'rolled_back'
   // I-4: a person pointed the name at the target (manual route); the Hub cannot undo that half.
-  const repoint = await repointText(ctx, move)
-  if (repoint) {
-    ctx.run.log(repoint, 'error')
+  const said = await repointText(ctx, move)
+  // Only a name seen answering from the target is certain (error, required item); a route
+  // request that may have been carried out unseen is an item that says "if" (R2-M-4).
+  const repoint = said?.sure ? said.text : null
+  if (said) {
+    ctx.run.log(said.text, said.sure ? 'error' : 'warn')
     const checklist = (move.checklist ?? []).filter((c) => c.id !== 'repoint_name')
-    checklist.push({ id: 'repoint_name', text: repoint, required: true, done: false })
+    checklist.push({ id: 'repoint_name', text: said.text, required: said.sure, done: false })
     await patchMove(ctx.moveId, { checklist })
   }
+  const recover =
+    failed.includes('route') || failed.includes('maintenance_on')
+      ? await sourceRecoveryText(move)
+      : null
+  if (recover) {
+    ctx.run.log(recover, 'error')
+    const fresh = (await readMove(ctx.moveId)) ?? move
+    const checklist = fresh.checklist.filter((c) => c.id !== 'restore_source')
+    checklist.push({ id: 'restore_source', text: safeLine(recover), required: true, done: false })
+    await patchMove(ctx.moveId, { checklist })
+  }
+  // The recovery goes first: the stored error is cut at 1000 characters.
   const base = failed.length
-    ? `${move.error ? `${move.error} — ` : ''}The rollback could not undo: ${failed.join(', ')}. Check those by hand.`
+    ? `The rollback could not undo: ${failed.join(', ')}. ${recover ?? 'Check those by hand.'}${move.error ? ` — ${move.error}` : ''}`
     : move.error
   const error = repoint ? `${base ? `${base} — ` : ''}${repoint}` : base
-  await patchMove(ctx.moveId, {
+  // R5-M-2: only while this run still holds the move (never over a runner that took it).
+  const ours = await patchMoveIfHolder(ctx.moveId, ctx.held.envToken, {
     status,
     error: error ?? null,
     finished_at: new Date(ctx.e.now()),
     heartbeat_at: null
   })
+  if (!ours) return notOurs(ctx)
   await clearCancelFlag(ctx)
   await closeDeployRow(
     ctx,
@@ -1347,9 +1492,14 @@ async function rollBack(
  * "Point <names> back to <source>." when the move routed by hand and the name was seen serving
  * the target (confirmRoute, the wait's own check, or verify passed); null otherwise.
  */
-async function repointText(ctx: Ctx, move: HubMoveRow): Promise<string | null> {
+async function repointText(
+  ctx: Ctx,
+  move: HubMoveRow
+): Promise<{ text: string; sure: boolean } | null> {
   if (move.routing !== 'manual') return null
-  if (!move.steps.route_confirmed_at && !stepDone(move.steps, 'verify')) return null
+  const sure = !!move.steps.route_confirmed_at || stepDone(move.steps, 'verify')
+  // R2-M-4: the route request went out (the wait began) but the name was never seen moved.
+  if (!sure && !move.steps.waiting_since) return null
   const names = ctx.plan.hostnames.length ? ctx.plan.hostnames.join(', ') : 'the public name'
   let source = 'the source placement'
   const from = await getPlacement(move.from_placement_id)
@@ -1362,7 +1512,13 @@ async function repointText(ctx: Ctx, move: HubMoveRow): Promise<string | null> {
     const stack = (from.target as { stack?: unknown }).stack
     source = typeof stack === 'string' ? `the Docker stack ${stack}` : `placement ${from.id}`
   }
-  return `Point ${names} back to ${source}: the move was rolled back and the target no longer serves this app.`
+  const back = `${names} back to ${source}: the move was rolled back and the target no longer serves this app.`
+  return sure
+    ? { text: `Point ${back}`, sure }
+    : {
+        text: `If someone already pointed ${names} at the target (the route request), point ${back}`,
+        sure
+      }
 }
 
 async function dropUnusedSharedPlacement(moveId: number): Promise<void> {

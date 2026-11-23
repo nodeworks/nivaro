@@ -87,6 +87,17 @@ export interface MoveSteps {
   addresses?: MoveAddresses
   /** sha256 of the source's database identity, read at `check` (R2; never the identity). */
   source_db?: string | null
+  /**
+   * R5-I-1 (P6-30): the source was put in maintenance for the deploy of a target whose boot
+   * maintenance is not proven (GITLAB_BOOT_WINDOW) before `maintenance_on` ran: `on` until the
+   * target's maintenance is set (then lifted again), so a rollback knows to lift it.
+   */
+  boot_freeze?: 'on' | 'lifting' | 'lifted'
+  /**
+   * R2-M-6: transfer tickets minted for this move and not revoked yet, SEALED (secrets.ts), so a
+   * later run revokes what a dead one left. Written by the ops only (never by a run's step copy).
+   */
+  open_tickets?: string[]
 }
 
 export interface MoveFilesSummary {

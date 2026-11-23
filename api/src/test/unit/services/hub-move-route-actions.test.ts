@@ -208,3 +208,24 @@ describe('routeActions — the decision table', () => {
     }
   })
 })
+
+// Design S9: the route request goes to another team; it names drivers by name, never by id.
+describe('route request wording (design S9)', () => {
+  it('names the Docker driver by its name, never "driver #<id>"', () => {
+    const src: PlacementSide = {
+      kind: 'docker',
+      placement: dedicated(3, 1),
+      driverId: 1,
+      driverName: 'Docker east',
+      stack: 'app-prod',
+      edge: 'publish'
+    }
+    const to = sharedSide({ driver_id: 2 }, 'traefik')
+    const r = routeActions(src, { ...to, driverName: 'Docker west' } as PlacementSide, [
+      'shop.example.org'
+    ])
+    expect(r.manualRequest).toContain('Docker east')
+    expect(r.manualRequest).toContain('Docker west')
+    expect(r.manualRequest).not.toMatch(/#\d/)
+  })
+})

@@ -108,6 +108,8 @@ const redirects = new Set<string>()
 /** Ids answered without X-Nivaro-Filename-Disk / without Content-Length (chunked). */
 const noName = new Set<string>()
 const noLength = new Set<string>()
+/** R6-I-1: ids the source cannot read right now (its storage throttles): 503. */
+const readFails = new Set<string>()
 const sourceSeen: string[] = []
 let server: Server
 let SOURCE = ''
@@ -124,6 +126,10 @@ beforeAll(async () => {
       // to a place that WOULD answer the bytes: only redirect: 'error' keeps them out
       res.writeHead(302, { location: `${SOURCE}/redirect-target` })
       return res.end()
+    }
+    if (readFails.has(id)) {
+      res.writeHead(503, { 'content-type': 'application/json' })
+      return res.end('{"code":"SOURCE_READ_FAILED"}')
     }
     if (id === 'redirect-target') {
       res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': '4' })
@@ -212,6 +218,7 @@ beforeEach(() => {
   redirects.clear()
   noName.clear()
   noLength.clear()
+  readFails.clear()
   sourceSeen.length = 0
   logs.length = 0
   resetPullsForTests()
@@ -219,9 +226,14 @@ beforeEach(() => {
   ticketDeps.now = () => Date.now()
   pullDeps.redis = () => redis as never
   pullDeps.storage = () => fakeStorage() as never
-  pullDeps.listRows = async (after, limit) =>
+  pullDeps.listRows = async (after, limit, withObjects = false) =>
     rows
       .filter((r) => after === null || r.id > after)
+      .filter(
+        (r) =>
+          (r.storage ?? 'local') === 'local' ||
+          (withObjects && ['s3', 'azure-blob'].includes(String(r.storage)))
+      )
       .sort((a, b) => (a.id < b.id ? -1 : 1))
       .slice(0, limit)
   pullDeps.log = (msg, meta) => void logs.push(`${msg} ${JSON.stringify(meta ?? {})}`)
@@ -713,5 +725,106 @@ describe('pull', () => {
     expect(await withTenant(t('app-a-e1'), () => readPullStatus(run_id))).toMatchObject({
       state: 'done'
     })
+  })
+})
+
+// Ruling P6-31: saved-settings S3/Azure objects live under apps/<tenant>/ on a shared deployment.
+// A move to or from one changes the key prefix, so the pull copies them (same bucket or not)
+// through the target's own saved-settings driver.
+describe('pull: saved-settings objects (P6-31)', () => {
+  /** One S3 bucket both homes name (the app's settings row is the same on both). */
+  const bucket = new Map<string, Buffer>()
+  const fakeS3 = () => ({
+    name: 's3',
+    async put(k: string, b: Buffer) {
+      bucket.set(k, b)
+    },
+    async putFile(k: string, from: string) {
+      const b = readFileSync(from)
+      bucket.set(k, b)
+      return b.length
+    },
+    async get(k: string) {
+      const b = bucket.get(k)
+      if (!b) throw new Error('missing')
+      return b
+    },
+    async delete(k: string) {
+      bucket.delete(k)
+    },
+    async exists(k: string) {
+      return bucket.has(k)
+    }
+  })
+  beforeEach(() => bucket.clear())
+
+  it('to a shared deployment: a bucket-root object is copied under apps/<tenant>/ in the same bucket', async () => {
+    const { scopedStorage } = await import('../../../services/storage/app-scope.js')
+    bucket.set('o1.bin', Buffer.from('object one'))
+    objects.set('o1', bucket.get('o1.bin') as Buffer) // the source serves its own (root) key
+    rows.push(row('o1', 10, { storage: 's3' }), row('l1', 5))
+    objects.set('l1', Buffer.from('local'))
+    pullDeps.objectStorage = async () => scopedStorage(fakeS3(), () => 'shop-e11') as never
+    const { run_id } = await startPull({
+      source: SOURCE,
+      ticket: TICKET,
+      mode: 'full',
+      objects: true
+    })
+    const s = await finished(run_id)
+    expect(s).toMatchObject({ state: 'done', total: 2, copied: 2, failed: 0 })
+    expect(bucket.get('apps/shop-e11/o1.bin')?.toString()).toBe('object one')
+    expect(bucket.has('o1.bin')).toBe(true) // copied, not moved: the old copy is still there
+    expect(readFileSync(join(root, 'l1.bin'), 'utf8')).toBe('local')
+  })
+
+  it('from a shared deployment: an apps/<tenant>/ object is copied to the bucket root', async () => {
+    bucket.set('apps/shop-e11/o2.bin', Buffer.from('object two'))
+    objects.set('o2', bucket.get('apps/shop-e11/o2.bin') as Buffer) // served from its scope
+    rows.push(row('o2', 10, { storage: 's3' }))
+    pullDeps.objectStorage = async () => fakeS3() as never // a dedicated target: unscoped
+    const { run_id } = await startPull({
+      source: SOURCE,
+      ticket: TICKET,
+      mode: 'full',
+      objects: true
+    })
+    const s = await finished(run_id)
+    expect(s).toMatchObject({ state: 'done', total: 1, copied: 1, failed: 0 })
+    expect(bucket.get('o2.bin')?.toString()).toBe('object two')
+  })
+
+  // R6-I-1: an S3 read error at the source (a 5xx, not a 404) fails the row, never "missing":
+  // in a blocking copy (inside maintenance) that stops the move before release.
+  it('R6-I-1: a source that cannot read an S3 object right now fails that row (not missing)', async () => {
+    rows.push(row('o4', 10, { storage: 's3' }))
+    readFails.add('o4')
+    pullDeps.objectStorage = async () => fakeS3() as never
+    const { run_id } = await startPull({
+      source: SOURCE,
+      ticket: TICKET,
+      mode: 'full',
+      objects: true
+    })
+    const s = await finished(run_id)
+    expect(s).toMatchObject({ state: 'done', total: 1, copied: 0, failed: 1 })
+    expect(s.missing).toEqual([])
+    expect(s.failed_ids).toEqual(['o4'])
+  })
+
+  it('without objects (the prefix stays) a saved-settings row is never copied', async () => {
+    bucket.set('o3.bin', Buffer.from('object three'))
+    objects.set('o3', bucket.get('o3.bin') as Buffer)
+    rows.push(row('o3', 12, { storage: 's3' }))
+    let asked = false
+    pullDeps.objectStorage = async () => {
+      asked = true
+      return fakeS3() as never
+    }
+    const { run_id } = await startPull({ source: SOURCE, ticket: TICKET, mode: 'full' })
+    const s = await finished(run_id)
+    expect(s).toMatchObject({ state: 'done', total: 0, copied: 0 })
+    expect(asked).toBe(false)
+    expect(sourceSeen).toEqual([])
   })
 })

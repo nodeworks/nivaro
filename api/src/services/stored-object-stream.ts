@@ -1,6 +1,6 @@
 import { createReadStream } from 'node:fs'
 import { open, stat } from 'node:fs/promises'
-import { Readable } from 'node:stream'
+import { PassThrough, pipeline, Readable } from 'node:stream'
 import type { FastifyReply } from 'fastify'
 import { storageChaos } from './chaos/faults/storage.js'
 import { dispositionMode, storedFileSecurityHeaders } from './file-serving-safety.js'
@@ -8,7 +8,9 @@ import { existingFallback } from './storage/fallback.js'
 import { openFallbackUrl, peekFallbackUrl } from './storage/fallback-url.js'
 import { getStorage } from './storage/index.js'
 import { LocalStorage } from './storage/local.js'
+import { isStoredObjectMissing, StoredObjectMissing } from './storage/missing.js'
 import { getActiveStorageDriver, readOwnStoredObject } from './storage-drivers.js'
+import { isMissingObject } from './traffic-taps/storage.js'
 
 // Streaming reads and byte ranges for stored objects. Local disk streams from
 // the file; remote drivers (S3/Azure settings drivers) fall back to reading the
@@ -109,6 +111,85 @@ export async function openStoredObject(
   return { size, range: r, unsatisfiable: false, stream: Readable.from([slice]) }
 }
 
+/**
+ * Hub phase 6 move file route (R6-I-1, R6-M-3, P6-36): this environment's own copy of the
+ * object a files row names. A saved-settings row (s3 / azure-blob) is asked of the active
+ * saved-settings driver first (streamed). When the driver says it is not there, or for a
+ * `local` row, the same chain the app reads with: the env provider's file, the
+ * FILES_FALLBACK_DIR copy, then FILES_FALLBACK_URL. Throws StoredObjectMissing only when every
+ * one of them says not-found; any other read error, on any of them, is thrown as it is (the
+ * route answers 5xx, never "missing"), so a move never counts as missing bytes it can still read.
+ */
+export async function openTransferObject(
+  key: string,
+  storage: string | null | undefined,
+  rangeHeader?: string
+): Promise<OpenedObject> {
+  const provider = String(storage ?? 'local').toLowerCase() || 'local'
+  if (provider !== 'local') {
+    const active = await getActiveStorageDriver()
+    // A driver that is not the active one cannot be asked; the chain below still can.
+    if (active.name !== 'local') {
+      try {
+        if (active.openStream) {
+          const o = await active.openStream(key, rangeHeader)
+          // pipeline: an error on either side destroys both (never .pipe(), see gotchas).
+          const out = new PassThrough()
+          pipeline(o.stream, out, () => {})
+          return { ...o, stream: out }
+        }
+        return openedFromBuffer(await active.get(key), rangeHeader)
+      } catch (err) {
+        if (!isStoredObjectMissing(err)) throw err
+      }
+    }
+  }
+  return openLocalChain(key, rangeHeader)
+}
+
+/** The env provider's file, the FILES_FALLBACK_DIR copy, then FILES_FALLBACK_URL (P6-36). */
+async function openLocalChain(key: string, rangeHeader?: string): Promise<OpenedObject> {
+  const env = getStorage()
+  if (env instanceof LocalStorage) {
+    const path = env.resolveKey(key)
+    try {
+      return openedFromFile(path, (await stat(path)).size, rangeHeader)
+    } catch (err) {
+      if ((err as { code?: unknown } | null)?.code !== 'ENOENT') throw err
+    }
+  } else {
+    // An env provider that is not local disk (a move refuses it: ENV_OBJECT_STORAGE).
+    try {
+      return openedFromBuffer(await env.get(key), rangeHeader)
+    } catch (err) {
+      // The env S3/Azure providers report a miss their own way (NoSuchKey, BlobNotFound, 404).
+      if (!isStoredObjectMissing(err) && !isMissingObject(err)) throw err
+    }
+  }
+  const copy = await existingFallback(key)
+  if (copy) return openedFromFile(copy.path, copy.size, rangeHeader)
+  const remote = await openFallbackUrl(key, rangeHeader, { throwOnTrouble: true })
+  if (remote) return remote
+  throw new StoredObjectMissing()
+}
+
+function openedFromFile(path: string, size: number, rangeHeader?: string): OpenedObject {
+  const r = parseRange(rangeHeader, size)
+  if (r === 'unsatisfiable')
+    return { size, range: null, unsatisfiable: true, stream: Readable.from([]) }
+  const stream = r ? createReadStream(path, { start: r.start, end: r.end }) : createReadStream(path)
+  return { size, range: r, unsatisfiable: false, stream }
+}
+
+function openedFromBuffer(buf: Buffer, rangeHeader?: string): OpenedObject {
+  const size = buf.length
+  const r = parseRange(rangeHeader, size)
+  if (r === 'unsatisfiable')
+    return { size, range: null, unsatisfiable: true, stream: Readable.from([]) }
+  const slice = r ? buf.subarray(r.start, r.end + 1) : buf
+  return { size, range: r, unsatisfiable: false, stream: Readable.from([slice]) }
+}
+
 /** The first `bytes` of a stored object (type sniffing before serving it), or null
  *  when it cannot be read. Local disk reads only those bytes; remote drivers read
  *  the object (callers ask only for files stored under a text type). */
@@ -159,6 +240,15 @@ export async function sendStoredObject(
   opts: { rangeHeader?: string; contentType: string; disposition?: string; remote?: boolean }
 ): Promise<FastifyReply> {
   const o = await openStoredObject(key, opts.rangeHeader, { remote: opts.remote })
+  return sendOpenedObject(reply, o, opts)
+}
+
+/** Sends an opened object: the security headers, 416 / 206 / 200 and the stream. */
+export function sendOpenedObject(
+  reply: FastifyReply,
+  o: OpenedObject,
+  opts: { contentType: string; disposition?: string }
+): FastifyReply {
   // Stored bytes are user content: the browser keeps the declared type and
   // anything it renders as a document gets an opaque origin with no script (H1).
   reply

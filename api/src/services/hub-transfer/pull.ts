@@ -16,6 +16,7 @@ import { hubLinkKeyTag } from '../hub-link/retire.js'
 import { getApp } from '../io-holder.js'
 import { getStorage, type StorageProvider } from '../storage/index.js'
 import { appKeyPart } from '../tenancy/credential-binding.js'
+import { COPYABLE_OBJECT_STORAGE } from './copyable.js'
 import { TRANSFER_TICKET_RE } from './tickets.js'
 
 /**
@@ -25,7 +26,11 @@ import { TRANSFER_TICKET_RE } from './tickets.js'
  *
  *  - Rows: the app's `nivaro_files` whose provider is the env-driven `local` provider (`storage =
  *    'local'`). The database is the app's own (the same one on both homes), so both sides agree
- *    on ids and keys. Settings-driven S3/Azure objects live in the app's bucket and do not move.
+ *    on ids and keys. Settings-driven S3/Azure objects (`storage` 's3' / 'azure-blob') live in
+ *    the app's bucket; they are copied too when the request says `objects: true` — the Hub asks
+ *    for it whenever the effective key prefix changes (a move to or from a shared deployment,
+ *    where every key lives under apps/<tenantId>/; ruling P6-31), same bucket or not. They are
+ *    written through the target's own saved-settings driver (scoped on a shared deployment).
  *  - Per row: skipped when the object is already here at the row's size (resumable); otherwise
  *    fetched (`redirect: 'error'`, 10 min per object, 4 at a time) into a temp file, then
  *    `putFile(filename_disk)`. Streams go through `pipeline()`, never `.pipe()`.
@@ -60,6 +65,8 @@ export interface PullRequest {
   source: string
   ticket: string
   mode: 'full' | 'delta'
+  /** P6-31: also copy the saved-settings S3/Azure objects (the key prefix changes). */
+  objects?: boolean
 }
 
 export interface PullStatus {
@@ -85,6 +92,8 @@ export interface PullStatus {
 export interface FileRow {
   id: string
   filename_disk: string | null
+  /** The row's provider (`storage`); absent = 'local' (older seams). */
+  storage?: string | null
   filesize: number | string | null
   type: string | null
   uploaded_on: Date | string | null
@@ -189,11 +198,17 @@ export const pullDeps = {
   storage(): PullStorage {
     return getStorage()
   },
-  /** The next page of the app's env-local file rows after `after` (by id). */
-  async listRows(after: string | null, limit: number): Promise<FileRow[]> {
+  /** P6-31: the app's saved-settings driver (scoped under apps/<tenantId>/ on a shared one). */
+  async objectStorage(): Promise<PullStorage> {
+    const { getActiveStorageDriver } = await import('../storage-drivers.js')
+    return getActiveStorageDriver()
+  },
+  /** The next page of the app's env-local file rows after `after` (by id); with `objects`,
+   *  the saved-settings S3/Azure rows too (P6-31). */
+  async listRows(after: string | null, limit: number, objects = false): Promise<FileRow[]> {
     let q = db('nivaro_files')
-      .select('id', 'filename_disk', 'filesize', 'type', 'uploaded_on', 'modified_on')
-      .where('storage', 'local')
+      .select('id', 'filename_disk', 'storage', 'filesize', 'type', 'uploaded_on', 'modified_on')
+      .whereIn('storage', objects ? ['local', ...COPYABLE_OBJECT_STORAGE] : ['local'])
       .whereNotNull('filename_disk')
       .orderBy('id', 'asc')
       .limit(limit)
@@ -402,6 +417,7 @@ export async function startPull(req: PullRequest): Promise<{ run_id: string }> {
     throw new PullError('NO_APP', 'A pull on a shared deployment runs inside an app.')
   const ticket = b.ticket
   const mode = b.mode
+  const objects = b.objects === true
   const sc = scope()
   const now = Date.now()
   prune(now)
@@ -451,13 +467,13 @@ export async function startPull(req: PullRequest): Promise<{ run_id: string }> {
   })
   // Runs in the caller's async context (on a shared deployment, inside the target app) and on
   // the background pool: fire-and-forget work never takes request connections.
-  void runInBackgroundPool(() => execute(run, { source, ticket, mode }, redis))
+  void runInBackgroundPool(() => execute(run, { source, ticket, mode, objects }, redis))
   return { run_id: runId }
 }
 
 async function execute(
   run: Run,
-  req: { source: string; ticket: string; mode: 'full' | 'delta' },
+  req: { source: string; ticket: string; mode: 'full' | 'delta'; objects?: boolean },
   redis: PullRedis | null
 ): Promise<void> {
   const limits = pullDeps.limits
@@ -589,7 +605,7 @@ async function execute(
         if (fatal) return
         let page: FileRow[]
         try {
-          page = await pullDeps.listRows(after, limits.pageSize)
+          page = await pullDeps.listRows(after, limits.pageSize, req.objects === true)
         } catch {
           stop(ERR_LIST)
           return
@@ -609,6 +625,13 @@ async function execute(
     }
 
     const storage = pullDeps.storage()
+    // P6-31: the saved-settings driver, read once per run, only when objects are asked for.
+    let objectStore: Promise<PullStorage> | null = null
+    const storeFor = async (row: FileRow): Promise<PullStorage> => {
+      if (!row.storage || row.storage === 'local') return storage
+      objectStore ??= pullDeps.objectStorage()
+      return objectStore
+    }
     const iter = candidates()
     // A private literal is the only plain fetch (see the header); every host name is guarded.
     const guarded = !plainHttpHost(new URL(req.source).hostname)
@@ -626,8 +649,14 @@ async function execute(
       const id = String(row.id)
       const key = String(row.filename_disk)
       const expected = toNumber(row.filesize)
-      if (!changed && expected !== null && storage.size) {
-        const have = await storage.size(key).catch(() => null)
+      let store: PullStorage
+      try {
+        store = await storeFor(row)
+      } catch {
+        return failRow(id)
+      }
+      if (!changed && expected !== null && store.size) {
+        const have = await store.size(key).catch(() => null)
         if (have === expected) {
           st.skipped++
           progress()
@@ -702,7 +731,7 @@ async function execute(
           { signal }
         )
         if (got !== declared) return failRow(id)
-        await storage.putFile(key, tmp, row.type || 'application/octet-stream', {
+        await store.putFile(key, tmp, row.type || 'application/octet-stream', {
           signal: ac.signal
         })
         st.copied++

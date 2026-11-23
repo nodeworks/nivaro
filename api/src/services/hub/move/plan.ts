@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { SHARED_READINESS_BLOCKERS } from '../../hub-link/shared-readiness.js'
+import { COPYABLE_OBJECT_STORAGE } from '../../hub-transfer/copyable.js'
 import { MIN_SHARED_POOL_MAX } from '../drivers.js'
 import { holderOf, lockHolderRefusal, sharedHolderOf, sharedLockRefusal } from '../promote-lock.js'
 import { routeActions } from './route-actions.js'
@@ -121,6 +122,32 @@ function clean(text: string): string {
   return out.replace(/ {2,}/g, ' ').trim().slice(0, 300)
 }
 
+/** Design S9: why a side gave no answer, in words; a code never reaches the text. */
+const ANSWER_WORDS: Record<string, string> = {
+  LINK_UNREACHABLE: 'it did not answer',
+  UNREACHABLE: 'it did not answer',
+  LINK_REFUSED: "it refused the Hub's token",
+  LINK_MISSING: 'it has no hub link (an older version, or no HUB_TOKEN)',
+  LINK_BAD_ANSWER: 'it gave an answer the Hub could not read',
+  LINK_SAID_NO: 'it refused the request',
+  NO_HUB_TOKEN: 'the Hub holds no hub token for it',
+  HUB_SECRET_UNREADABLE: 'the Hub cannot open its hub token (sealed with another Hub key)',
+  AGENT_UNREACHABLE: 'its Docker agent did not answer',
+  DB_UNREACHABLE: 'its database did not answer',
+  CONNECTION_UNREADABLE: 'the Hub cannot open its database connection'
+}
+function answerWords(code: string | null | undefined): string {
+  if (!code) return 'it did not answer'
+  if (ANSWER_WORDS[code]) return ANSWER_WORDS[code]
+  return /^[A-Z][A-Z0-9_]*$/.test(code) ? 'it gave no usable answer' : clean(code)
+}
+
+/** P6-31: to or from a shared deployment the object key prefix changes (apps/<tenantId>/ on a
+ *  shared one, the bucket root elsewhere); between two shared ones it stays (one tenant id). */
+function prefixChanges(input: MovePlanInput): boolean {
+  return (input.from.kind === 'shared') !== (input.to.kind === 'shared')
+}
+
 function list(items: string[], max = 10): string {
   const shown = items.slice(0, max).join(', ')
   return items.length > max ? `${shown} and ${items.length - max} more` : shown
@@ -219,18 +246,15 @@ function blockersOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Bloc
     add(
       'LINK_UNREACHABLE',
       from.kind === 'shared'
-        ? `The Hub could not read this app on ${sideName(from)} (${s.error ?? 'no answer'}).`
+        ? `The Hub could not read this app on ${sideName(from)}: ${answerWords(s.error)}.`
         : s.error === 'HUB_LINK_MISSING'
           ? 'The app answers but has no shared-readiness report: it runs a version older than moves need, or has no HUB_TOKEN. Upgrade or link it first.'
-          : `The Hub could not read the app over its hub link (${s.error ?? 'no answer'}).`
+          : `The Hub could not read the app over its hub link: ${answerWords(s.error)}.`
     )
 
   // The target, read live.
   if (!t.reachable)
-    add(
-      'TARGET_UNREACHABLE',
-      `The Hub could not reach ${sideName(to)} (${t.error ?? 'no answer'}).`
-    )
+    add('TARGET_UNREACHABLE', `The Hub could not reach ${sideName(to)}: ${answerWords(t.error)}.`)
 
   // The app's encryption key (Review Focus 5).
   if (!input.app_key.known)
@@ -281,6 +305,26 @@ function blockersOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Bloc
       'ENV_OBJECT_STORAGE',
       `${envStorage(s.storage_provider) ? 'The source' : sideName(to)[0].toUpperCase() + sideName(to).slice(1)} keeps files in object storage set by environment variables (STORAGE_PROVIDER). A move copies only local files, so those would be lost.`
     )
+
+  // P6-31: on a shared deployment every object key lives under apps/<tenantId>/; to or from one
+  // the prefix changes, so saved-settings objects are copied — which the pull can do only for the
+  // saved-settings drivers it knows.
+  if (prefixChanges(input) && !s.files?.objects)
+    // R6-M-2: unknown is never "nothing to copy": a provider the copy cannot handle may hide in it.
+    add(
+      'STORAGE_COUNT_UNKNOWN',
+      "This move changes where stored files are kept (a shared deployment keeps each app's files in its own folder), and the app did not say which storage its files are on. Plan again once it answers."
+    )
+  if (prefixChanges(input)) {
+    const odd = Object.entries(s.files?.objects ?? {})
+      .filter(([p, n]) => n > 0 && !(COPYABLE_OBJECT_STORAGE as readonly string[]).includes(p))
+      .map(([p, n]) => `${n} on ${p}`)
+    if (odd.length)
+      add(
+        'STORAGE_LAYOUT_DIFFERS',
+        `This move changes where stored files are kept (a shared deployment keeps each app's files in its own folder), and some files are on storage the move cannot copy (${list(odd)}). Move them to S3, Azure or local storage first.`
+      )
+  }
 
   if (intoShared && to.kind === 'shared') {
     const target = to.shared
@@ -474,10 +518,22 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
       'MANUAL_ROUTE',
       'The Hub cannot change this route itself. Someone must route the names to the new placement (the request is in the plan); the old placement serves until the name answers from the new one.'
     )
+  if (prefixChanges(input)) {
+    const objects = input.source.files?.objects
+    // An unknown count blocks (STORAGE_COUNT_UNKNOWN), so it needs no warning here.
+    const copyable = objects
+      ? COPYABLE_OBJECT_STORAGE.reduce((n, p) => n + (objects[p] ?? 0), 0)
+      : 0
+    if (copyable > 0)
+      add(
+        'STORAGE_PREFIX_CHANGES',
+        `${copyable} file(s) kept in S3 or Azure storage saved in Settings are copied to a new folder in the same bucket (a shared deployment keeps each app's files under apps/<app>/; elsewhere they sit at the bucket root). They are copied, not shared: the bucket holds both copies until the old ones are removed.`
+      )
+  }
   if (input.target_facts.boot_maintenance === 'unproven')
     add(
       'GITLAB_BOOT_WINDOW',
-      `The Hub cannot prove that ${sideName(to)} starts in maintenance: its deploy job may not pass the Hub's boot maintenance into the app (an adopted app, or an older template). For the seconds between the new app starting and the Hub switching its maintenance on, it could take writes while the old placement still runs on the same database.`
+      `The Hub cannot prove that ${sideName(to)} starts in maintenance: its deploy job may not pass the Hub's boot maintenance into the app (an adopted app, or an older template). So the old placement goes into maintenance while it deploys, until the Hub has switched the new app's maintenance on: people see the maintenance page for the length of the deploy, even when the route is changed by hand later.`
     )
   if (from.kind === 'gitlab')
     add(
@@ -529,12 +585,25 @@ function unknownSides(
   return parts.length ? parts.join(' and ') : null
 }
 
+/**
+ * E2E B3: `name` on the environment's public scheme and port (every name of the environment is
+ * served on the same edge entrypoint); plain https://<name> when the public address is not known.
+ */
+function addressOf(input: MovePlanInput, name: string): string {
+  try {
+    const u = new URL(String(input.env.public_origin ?? ''))
+    return `${u.protocol}//${name}${u.port ? `:${u.port}` : ''}`
+  } catch {
+    return `https://${name}`
+  }
+}
+
 function checklistOf(input: MovePlanInput, routing: 'automatic' | 'manual'): MovePlan['checklist'] {
   const out: MovePlan['checklist'] = []
   if (toShared(input.kind) && input.to.kind === 'shared')
     out.push({
       id: 'callbacks_registered',
-      text: `The sign-in app of ${input.to.shared.key} lists each of these redirect addresses: ${input.names.map((n) => `https://${n}/api/auth/callback`).join(', ')}.`,
+      text: `The sign-in app of ${input.to.shared.key} lists each of these redirect addresses: ${input.names.map((n) => `${addressOf(input, n)}/api/auth/callback`).join(', ')}.`,
       required: true
     })
   if (input.from.kind === 'gitlab')
@@ -558,7 +627,7 @@ function checklistOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Mov
   if (input.target_facts.boot_maintenance === 'unproven')
     out.push({
       id: 'gitlab_boot_window',
-      text: 'I accept that the new GitLab-deployed app may run for a few seconds without maintenance while the old one still writes to the same database (nobody uses the app during the move, or its deploy job passes HUB_BOOT_MAINTENANCE into the app).',
+      text: 'I accept that the app is in maintenance while the new GitLab-deployed app deploys (it may start without maintenance, so the old one pauses until the Hub has switched it on), or its deploy job passes HUB_BOOT_MAINTENANCE into the app.',
       required: true
     })
   if (input.target_facts.multi_node_unread)

@@ -96,6 +96,18 @@ const originOf = (url: string): string | null => {
 }
 
 /** A GitLab placement's API verify_url origin, when its host is not the public one. */
+/** `host` on the scheme and port of the public address (https and the default port otherwise). */
+function onPublicEntrypoint(host: string, publicBase: string): string {
+  try {
+    const u = new URL(publicBase.trim())
+    if (u.protocol === 'https:' || u.protocol === 'http:')
+      return `${u.protocol}//${host}${u.port ? `:${u.port}` : ''}`
+  } catch {
+    // not a URL: the default below
+  }
+  return `https://${host}`
+}
+
 async function verifyOrigin(placement: HubPlacementRow, publicHost: string | null) {
   const comps = await listComponents(placement.id).catch(() => [])
   const api = comps.find((c) => c.kind === 'api' && c.verify_url)
@@ -269,7 +281,9 @@ export async function resolveMoveAddresses(
             `${temp} does not resolve (the per-move name needs wildcard DNS under ${suffix})`
           )
         out.target_temp_host = temp
-        out.target_link_base = `https://${temp}`
+        // E2E B3: the per-move name is served on the public name's edge entrypoint, so it keeps
+        // the public address's scheme and port (an edge that is not on 443).
+        out.target_link_base = onPublicEntrypoint(temp, String(env.base_url))
       }
     } else throw targetUnreachable('its driver is gone')
   }

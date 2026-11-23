@@ -85,7 +85,7 @@ function input(o: Partial<MovePlanInput> = {}): MovePlanInput {
       oidc: { issuer_host: 'login.microsoftonline.com', tenant: 'corp-tenant' },
       signin_hub: false,
       db_identity: 'pg|10.0.0.5|5432|shop',
-      files: { count: 40, bytes: 123456, local: 38 },
+      files: { count: 40, bytes: 123456, local: 38, objects: {} },
       extensions: { x: '1.2.0' },
       extension_pins: { x: PIN_A },
       readiness: [],
@@ -708,7 +708,9 @@ describe('buildMovePlan — plan hash', () => {
     )
     expect(buildMovePlan(input({ target_facts: tgt({ multi_node: 2 }) })).plan_hash).not.toBe(base)
     expect(
-      buildMovePlan(input({ source: src({ files: { count: 41, bytes: 1, local: 39 } }) })).plan_hash
+      buildMovePlan(
+        input({ source: src({ files: { count: 41, bytes: 1, local: 39, objects: {} } }) })
+      ).plan_hash
     ).toBe(base)
   })
 })
@@ -791,5 +793,111 @@ describe('SOURCE_UNREACHABLE (Docker traefik source, manual route)', () => {
     expect(codes(publish)).not.toContain('SOURCE_UNREACHABLE')
     const auto = buildMovePlan(input())
     if (auto.routing === 'automatic') expect(codes(auto)).not.toContain('SOURCE_UNREACHABLE')
+  })
+})
+
+// Design S9: plan text never shows a raw code in brackets.
+describe('plan text wording (design S9)', () => {
+  it('an unreachable target or source is said in words, never as a code', () => {
+    const p = buildMovePlan(
+      input({
+        source: src({ reachable: false, error: 'LINK_UNREACHABLE' }),
+        target_facts: tgt({ reachable: false, error: 'LINK_UNREACHABLE' })
+      })
+    )
+    const texts = p.blockers.map((b) => b.text).join('\n')
+    expect(texts).toMatch(/did not answer/)
+    expect(texts).not.toMatch(/[A-Z]{2,}_[A-Z_]+/)
+  })
+})
+
+// Ruling P6-31: saved-settings S3/Azure objects live under apps/<tenant>/ on a shared deployment;
+// a move to or from shared changes the key prefix, so they are copied (never "same storage").
+describe('object storage key prefix (P6-31)', () => {
+  const warns = (p: { warnings: { code: string }[] }) => p.warnings.map((w) => w.code)
+  const withObjects = (objects: Record<string, number> | undefined) =>
+    src({ files: { count: 40, bytes: 1, local: 38, ...(objects ? { objects } : {}) } })
+
+  it('to_shared with saved-settings S3 objects → STORAGE_PREFIX_CHANGES (copied, not shared)', () => {
+    const p = buildMovePlan(input({ source: withObjects({ s3: 2 }) }))
+    expect(warns(p)).toContain('STORAGE_PREFIX_CHANGES')
+    expect(p.warnings.find((w) => w.code === 'STORAGE_PREFIX_CHANGES')?.text).toMatch(/copied/)
+    expect(codes(p)).not.toContain('STORAGE_LAYOUT_DIFFERS')
+  })
+
+  it('from shared to a dedicated stack with Azure objects → STORAGE_PREFIX_CHANGES', () => {
+    const p = buildMovePlan(
+      input({
+        kind: 'to_dedicated',
+        from: sharedSide(),
+        to: dockerSide(),
+        target: { kind: 'dedicated', placement_id: 3 } as never,
+        source: withObjects({ 'azure-blob': 1 })
+      })
+    )
+    expect(warns(p)).toContain('STORAGE_PREFIX_CHANGES')
+  })
+
+  // R6-M-2: a count the Hub could not read may hide a provider the copy cannot handle.
+  it('a count that could not be read while the prefix changes → STORAGE_COUNT_UNKNOWN blocks', () => {
+    const p = buildMovePlan(input({ source: withObjects(undefined) }))
+    expect(codes(p)).toContain('STORAGE_COUNT_UNKNOWN')
+    expect(warns(p)).not.toContain('STORAGE_PREFIX_CHANGES')
+  })
+
+  it('a count that could not be read between two shared deployments blocks nothing', () => {
+    const p = buildMovePlan(
+      input({
+        kind: 'between_shared',
+        from: sharedSide({ id: 8, key: 'pool-b' }),
+        source: withObjects(undefined)
+      })
+    )
+    expect(codes(p)).not.toContain('STORAGE_COUNT_UNKNOWN')
+  })
+
+  it('between two shared deployments the prefix is the same → no warning', () => {
+    const p = buildMovePlan(
+      input({
+        kind: 'between_shared',
+        from: sharedSide({ id: 8, key: 'pool-b' }),
+        source: withObjects({ s3: 2 })
+      })
+    )
+    expect(warns(p)).not.toContain('STORAGE_PREFIX_CHANGES')
+  })
+
+  it('no object rows at all → no warning', () => {
+    expect(warns(buildMovePlan(input({ source: withObjects({}) })))).not.toContain(
+      'STORAGE_PREFIX_CHANGES'
+    )
+  })
+
+  it('a provider the copy cannot handle → STORAGE_LAYOUT_DIFFERS blocks the move', () => {
+    const p = buildMovePlan(input({ source: withObjects({ s3: 1, gcs: 3 }) }))
+    expect(codes(p)).toContain('STORAGE_LAYOUT_DIFFERS')
+    expect(p.blockers.find((b) => b.code === 'STORAGE_LAYOUT_DIFFERS')?.text).toMatch(/gcs/)
+  })
+})
+
+// E2E B3: the redirect addresses the checklist names keep the public address's scheme and port.
+describe('callback addresses (E2E B3)', () => {
+  it('an environment on a port other than 443 → its callbacks name that port', () => {
+    const p = buildMovePlan(
+      input({ env: { ...input().env, public_origin: 'https://shop.apps.example.com:18443' } })
+    )
+    expect(p.checklist.find((c) => c.id === 'callbacks_registered')?.text).toContain(
+      'https://shop.apps.example.com:18443/api/auth/callback'
+    )
+  })
+
+  it('the default port (or no origin known) → plain https://<name>', () => {
+    for (const env of [
+      { ...input().env, public_origin: 'https://shop.apps.example.com' },
+      input().env
+    ])
+      expect(
+        buildMovePlan(input({ env })).checklist.find((c) => c.id === 'callbacks_registered')?.text
+      ).toContain('https://shop.apps.example.com/api/auth/callback')
   })
 })

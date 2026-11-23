@@ -706,6 +706,16 @@ describe('rolls back from every step before release', () => {
     expect(m?.status).toBe('failed')
     expect(m?.error).toMatch(/could not undo: route/)
     expect(undoCalls(fake.calls).at(-1)).toEqual(['sourceMaintenance', false])
+    // R5-M-1: the error and a required checklist item name the recovery.
+    const stack = (await db('nivaro_hub_placements').where({ id: m?.from_placement_id }).first())
+      .target
+    const name = JSON.parse(String(stack)).stack as string
+    expect(m?.error).toContain(`Apply now on the source stack ${name}`)
+    expect(m?.error).toMatch(/nvr:maintenance/)
+    const item = m?.checklist.find((c) => c.id === 'restore_source')
+    expect(item).toMatchObject({ required: true, done: false })
+    expect(item?.text).toContain(`Apply now on the source stack ${name}`)
+    expect(item?.text).toMatch(/\{"on":false\} without move_id/)
   })
 })
 
@@ -823,6 +833,27 @@ describe('manual routing', () => {
     expect(iSource).toBeGreaterThan(iVerify)
   })
 
+  // R2-M-7: a cancel reaches the target deploy (its stopRequested), and ends the move cancelled.
+  it('R2-M-7: a cancel during the GitLab target deploy stops it and ends cancelled', async () => {
+    plan = planOf('to_dedicated', 'manual')
+    const w = await world('shared')
+    let id = 0
+    let saw: boolean | null = null
+    fake.state.during = async (name, arg) => {
+      if (name === 'deployTarget') {
+        await Run.cancelMove(id, 'u')
+        saw = await (arg as { stopRequested: () => Promise<boolean> }).stopRequested()
+        throw new MoveStepError('ABORTED', 'api: the deploy was stopped.')
+      }
+    }
+    const out = await start(w, toFor('to_dedicated', w))
+    id = out.move_id
+    await Run.awaitMove(id)
+    expect(saw).toBe(true)
+    expect((await readMove(id))?.status).toBe('cancelled')
+    expect(undoCalls(fake.calls)).toContainEqual(['removeTarget'])
+  })
+
   it('a cancel during the manual wait undoes the target actions already applied → cancelled', async () => {
     plan = planOf('to_shared', 'manual')
     const w = await world('docker')
@@ -839,6 +870,54 @@ describe('manual routing', () => {
     await Run.awaitMove(move_id)
     expect((await readMove(move_id))?.status).toBe('cancelled')
     expect(undoCalls(fake.calls)).toEqual([['unroute', plan.route[1]], ['unplace']])
+  })
+
+  // R2-M-4: the person repointed the name, then cancelled before the Hub's 5-min self-check saw
+  // it: the rollback checks the name once before it undoes anything.
+  it('R2-M-4: a cancel during the manual wait after the name was repointed (unseen yet) still says to point it back', async () => {
+    plan = planOf('to_shared', 'manual')
+    const w = await world('docker')
+    fake.state.serving = false
+    useDeps({
+      sleep: async (ms: number) => {
+        t += ms
+        await new Promise((r) => setTimeout(r, 20))
+      }
+    })
+    const { move_id } = await start(w, toFor('to_shared', w))
+    await waitFor(async () => (await readMove(move_id))?.status === 'waiting')
+    fake.state.serving = true // pointed by hand, the self-check has not run yet
+    await Run.cancelMove(move_id, 'u')
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    expect(m?.status).toBe('cancelled')
+    expect(m?.checklist.find((c) => c.id === 'repoint_name')).toMatchObject({
+      required: true,
+      done: false
+    })
+    // Checked before the target was undone.
+    const names = fake.names()
+    expect(names.lastIndexOf('verifyName')).toBeLessThan(names.indexOf('unplace'))
+  })
+
+  it('R2-M-4: a cancel during the manual wait while the name does not answer from the target yet → an "if it was done" item, not required', async () => {
+    plan = planOf('to_shared', 'manual')
+    const w = await world('docker')
+    fake.state.serving = false
+    useDeps({
+      sleep: async (ms: number) => {
+        t += ms
+        await new Promise((r) => setTimeout(r, 20))
+      }
+    })
+    const { move_id } = await start(w, toFor('to_shared', w))
+    await waitFor(async () => (await readMove(move_id))?.status === 'waiting')
+    await Run.cancelMove(move_id, 'u')
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    const item = m?.checklist.find((c) => c.id === 'repoint_name')
+    expect(item).toMatchObject({ required: false, done: false })
+    expect(item?.text).toMatch(/^If /)
   })
 
   it('I-4: a rollback after the name was pointed at the target says to point it back, everywhere', async () => {
@@ -1109,6 +1188,126 @@ describe('rollback from release: exactly one writer at every point (P6-22)', () 
 
   // R3-I-1 / R3-I-2: a lifted GitLab target that can be neither frozen nor retired halts the
   // rollback with the source frozen; the operator stops it, ticks target_stopped, rolls back.
+  // R5-I-1 (P6-30): a GitLab target whose boot maintenance is not proven (GITLAB_BOOT_WINDOW)
+  // may start writable; the source is frozen before its deploy, in both orders.
+  const bootWindow = () => {
+    plan.warnings = [
+      { code: 'GITLAB_BOOT_WINDOW', text: 'The Hub cannot prove it starts in maintenance.' }
+    ]
+  }
+
+  it('R5-I-1: manual GitLab, unproven boot maintenance, maintenance call fails, retire unreachable → no point with two writers; the halt says the source stays frozen', async () => {
+    plan = planOf('to_dedicated', 'manual')
+    bootWindow()
+    const w = await world('shared')
+    fake.state.serving = true
+    const ws = fresh()
+    fake.state.during = (name, arg) => {
+      if (name === 'targetMaintenance' && arg === true)
+        throw new MoveStepError('LINK_UNREACHABLE', 'No answer.')
+      if (name === 'removeTarget')
+        throw new MoveStepError('TARGET_NOT_STOPPED', 'The GitLab target could not be retired.')
+    }
+    writers(ws, false)
+    const { move_id } = await start(w, toFor('to_dedicated', w))
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    expect(m?.status).toBe('interrupted')
+    expect(m?.error).toMatch(/^HALTED_TARGET_LIVE/)
+    expect(m?.error).toMatch(/the source stays in maintenance/)
+    expect(ws.bad).toEqual([])
+    expect(ws.sourceLive).toBe(false)
+    // The source froze before the deploy; the maintenance call was retried with backoff.
+    const names = fake.names()
+    expect(names.indexOf('sourceMaintenance')).toBeLessThan(names.indexOf('deployTarget'))
+    const after = fake.calls.slice(names.indexOf('deployTarget'))
+    expect(
+      after.filter((c) => c[0] === 'targetMaintenance' && c[1] === true).length
+    ).toBeGreaterThanOrEqual(3)
+  })
+
+  for (const routing of ['manual', 'automatic'] as const)
+    it(`R5-I-1: ${routing} GitLab, unproven boot maintenance, the maintenance call succeeds on a retry → one writer throughout, success`, async () => {
+      plan = planOf('to_dedicated', routing)
+      bootWindow()
+      const w = await world('shared')
+      fake.state.serving = true
+      const ws = fresh()
+      let n = 0
+      const iDeploy = () => fake.names().indexOf('deployTarget')
+      fake.state.during = (name, arg) => {
+        if (name === 'targetMaintenance' && arg === true && iDeploy() >= 0 && n++ < 2)
+          throw new MoveStepError('LINK_UNREACHABLE', 'No answer.')
+      }
+      writers(ws, false)
+      const { move_id } = await start(w, toFor('to_dedicated', w))
+      await Run.awaitMove(move_id)
+      expect((await readMove(move_id))?.status).toBe('success')
+      expect(ws.bad).toEqual([])
+      const names = fake.names()
+      expect(names.indexOf('sourceMaintenance')).toBeLessThan(iDeploy())
+    })
+
+  // R6-M-4: the process dies while the source's deploy-window maintenance is being lifted (the
+  // lift went through, the mark did not). Resume re-runs deploy_target: it must freeze again.
+  it('R6-M-4: a crash inside the lift of the deploy freeze, heal, Resume → the source is frozen again before the redeploy', async () => {
+    plan = planOf('to_dedicated', 'manual')
+    bootWindow()
+    const w = await world('shared')
+    fake.state.serving = true
+    const ws = fresh()
+    let crashed = false
+    fake.state.during = (name, arg) => {
+      if (name === 'sourceMaintenance' && arg === false && !crashed) {
+        crashed = true
+        ws.sourceLive = true // the lift reached the source
+        return new Promise<void>(() => undefined) // … and the process died
+      }
+    }
+    writers(ws, false)
+    const { move_id } = await start(w, toFor('to_dedicated', w))
+    await waitFor(async () => crashed)
+    unmarkMoveLive(move_id)
+    await db('nivaro_hub_moves')
+      .where({ id: move_id })
+      .update({ heartbeat_at: new Date(START - 3 * 60_000) })
+    expect(
+      await healMoves({ now, lock, sharedLock: shLock, failJobRun: async () => undefined })
+    ).toBe(1)
+    const before = fake.calls.length
+    await Run.resumeMove(move_id, 'u')
+    await Run.awaitMove(move_id)
+    const again = fake.calls.slice(before).map((c) => `${c[0]}:${String(c[1] ?? '')}`)
+    const iFreeze = again.indexOf('sourceMaintenance:true')
+    const iDeploy = again.findIndex((x) => x.startsWith('deployTarget'))
+    expect(iDeploy).toBeGreaterThanOrEqual(0)
+    expect(iFreeze).toBeGreaterThanOrEqual(0)
+    expect(iFreeze).toBeLessThan(iDeploy)
+    expect(ws.bad).toEqual([])
+  })
+
+  it('R5-I-1: a halt with the source never frozen says the source keeps serving (never that it stays in maintenance)', async () => {
+    plan = planOf('to_dedicated', 'manual')
+    const w = await world('shared')
+    fake.state.serving = true
+    const ws = fresh()
+    fake.state.failOn = (name) => name === 'pullFiles'
+    fake.state.during = (name) => {
+      if (name === 'removeTarget')
+        throw new MoveStepError('TARGET_NOT_STOPPED', 'The GitLab target could not be retired.')
+    }
+    writers(ws, false)
+    const { move_id } = await start(w, toFor('to_dedicated', w))
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    expect(m?.status).toBe('interrupted')
+    expect(m?.error).toMatch(/^HALTED_TARGET_LIVE/)
+    expect(m?.error).not.toMatch(/stays in maintenance/)
+    expect(m?.error).toMatch(/source keeps serving/)
+    expect(ws.bad).toEqual([])
+    expect(ws.sourceLive).toBe(true)
+  })
+
   it('halt: a GitLab target that cannot be frozen or retired → interrupted HALTED_TARGET_LIVE; tick, Roll back → source serving, one writer throughout', async () => {
     plan = planOf('to_dedicated', 'manual')
     const w = await world('shared')
@@ -1529,6 +1728,40 @@ describe('heal and resume', () => {
     await db('nivaro_hub_moves').where({ id: move_id }).update({ status: 'cancelled' })
     await lock.release(w.envId, newToken)
   })
+
+  // R5-M-2: the final status and mirror-row writes are holder-guarded too.
+  for (const [label, failOn] of [
+    ['success', null],
+    ['rollback', 'verifyName']
+  ] as const)
+    it(`R5-M-2: a ${label} end never writes over a move another runner took just before it`, async () => {
+      plan = planOf('to_shared')
+      const w = await world('docker')
+      let newToken = ''
+      let move_id = 0
+      fake.state.during = async (name) => {
+        if (name === 'revokeTickets' && !newToken) {
+          const m = await readMove(move_id)
+          await lock.release(w.envId, m?.steps.locks?.env as string)
+          newToken = (await lock.take(w.envId, 'move')) as string
+          const steps = { ...(m?.steps ?? {}), locks: { env: newToken, shared: [] } }
+          await db('nivaro_hub_moves')
+            .where({ id: move_id })
+            .update({ status: 'running', steps: JSON.stringify(steps) })
+          await db('nivaro_hub_deploys').where({ move_id }).update({ status: 'running' })
+        }
+      }
+      if (failOn) fake.state.failOn = (name) => name === failOn
+      const out = await start(w, toFor('to_shared', w))
+      move_id = out.move_id
+      await Run.awaitMove(move_id)
+      const m = await readMove(move_id)
+      expect(m?.status).toBe('running')
+      expect(m?.steps.locks?.env).toBe(newToken)
+      expect((await db('nivaro_hub_deploys').where({ move_id }).first()).status).toBe('running')
+      await db('nivaro_hub_moves').where({ id: move_id }).update({ status: 'cancelled' })
+      await lock.release(w.envId, newToken)
+    })
 
   it('a fresh heartbeat is never healed', async () => {
     plan = planOf('to_shared')

@@ -77,6 +77,11 @@ function targetActions(side: PlacementSide, from: PlacementSide, names: string[]
   return []
 }
 
+/** A driver in words: its name, never its database id (design S9). */
+function driverWords(name: string | undefined): string {
+  return name ? `the Docker driver ${name}` : 'its Docker driver'
+}
+
 /** Where the names must point, in words (no secret: link addresses are origins). */
 function describeTarget(side: PlacementSide): string {
   if (side.kind === 'shared') {
@@ -87,8 +92,8 @@ function describeTarget(side: PlacementSide): string {
         : side.edge === 'publish'
           ? 'published on a port by its Docker agent'
           : side.edge === 'traefik'
-            ? `behind the Traefik edge of Docker driver #${s.driver_id}`
-            : `on Docker driver #${s.driver_id}, whose agent the Hub could not read`
+            ? `behind the Traefik edge of ${driverWords(side.driverName)}`
+            : `on ${driverWords(side.driverName)}, whose agent the Hub could not read`
     return `the shared deployment ${s.key} (${how}; its link address is ${s.link_url})`
   }
   if (side.kind === 'docker') {
@@ -98,14 +103,15 @@ function describeTarget(side: PlacementSide): string {
         : side.edge === 'traefik'
           ? 'behind its Traefik edge'
           : 'whose agent the Hub could not read'
-    return `the Docker stack ${side.stack} on driver #${side.driverId} (${how})`
+    return `the Docker stack ${side.stack} on ${driverWords(side.driverName)} (${how})`
   }
   return `the GitLab placement #${side.placement.id} (the deployment its own pipeline runs)`
 }
 
 function describeSource(side: PlacementSide): string {
   if (side.kind === 'shared') return `the shared deployment ${side.shared.key}`
-  if (side.kind === 'docker') return `the Docker stack ${side.stack} on driver #${side.driverId}`
+  if (side.kind === 'docker')
+    return `the Docker stack ${side.stack} on ${driverWords(side.driverName)}`
   return `the GitLab placement #${side.placement.id}`
 }
 

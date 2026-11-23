@@ -125,6 +125,8 @@ export interface PullRequest {
   /** A transfer ticket the source minted ('nvt_…'). Never logged or answered back. */
   ticket: string
   mode: 'full' | 'delta'
+  /** P6-31: also copy saved-settings S3/Azure objects (the key prefix changes). */
+  objects?: boolean
 }
 
 export interface PullStatus {
@@ -556,7 +558,12 @@ export function deploymentClient(
     async pullFiles(tenantId, req) {
       const a = await call(`${tenantPath(tenantId)}/files/pull`, {
         method: 'POST',
-        body: { source: req.source, ticket: req.ticket, mode: req.mode }
+        body: {
+          source: req.source,
+          ticket: req.ticket,
+          mode: req.mode,
+          ...(req.objects ? { objects: true } : {})
+        }
       })
       if (!ok(a)) throw refusalOf(a, transferRefusal)
       const b = a.body

@@ -123,7 +123,11 @@ export interface MoveOps {
   targetUnretire(): Promise<void>
   /** Schema ok + preflight ok + key fingerprint, ≤ 10 min. */
   targetReady(): Promise<void>
-  deployTarget(): Promise<void>
+  /**
+   * R2-M-7: `stopRequested` is the run's cancel check; a GitLab deploy polls it at every wait
+   * and before playing a manual job (a stopped deploy throws ABORTED).
+   */
+  deployTarget(opts?: { stopRequested?: () => Promise<boolean> }): Promise<void>
   /**
    * P6-26 Rule 1 (dedicated target only): hub-link maintenance on over the target's own address
    * (never the public name), read back; a GitLab target that will not take it is retired, read
@@ -132,7 +136,8 @@ export interface MoveOps {
   freezeTarget(): Promise<void>
   /** Docker: stack removed (volumes kept). GitLab: retired, read back. Shared: nothing. */
   removeTarget(): Promise<void>
-  route(a: RouteAction): Promise<void>
+  /** R2-M-8: `deadline` (epoch ms) bounds the apply's converge wait (the route step's budget). */
+  route(a: RouteAction, opts?: { deadline?: number }): Promise<void>
   unroute(a: RouteAction): Promise<void>
   verifyName(expect: { version: string; shared: string | null }): Promise<boolean>
   retireSource(): Promise<void>
@@ -159,7 +164,7 @@ export interface MoveOps {
  */
 export type SharedStackRouter = (
   shared: SharedDeployment,
-  change: { op: 'add_host' | 'drop_host'; host: string; moveId: number }
+  change: { op: 'add_host' | 'drop_host'; host: string; moveId: number; deadline?: number }
 ) => Promise<void>
 
 let sharedStackRouter: SharedStackRouter = defaultSharedStackRouter()
@@ -288,6 +293,27 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
   /** Tickets minted and not yet revoked: [revoke function]. Kept in memory only. */
   const tickets = new Map<string, () => Promise<unknown>>()
   let ticketSeq = 0
+
+  /** Revokes `ticket` on the source (where it was minted). */
+  const revokeAtSource = async (ticket: string): Promise<void> => {
+    const l = await load()
+    if (l.from.kind === 'shared') await clientFor(l.from.shared).revokeTicket(l.tenantId, ticket)
+    else await (await sourceLink()).revokeTicket(ticket)
+  }
+
+  /**
+   * R2-M-6: every minted ticket is also kept with the move, sealed (never in clear), until it is
+   * revoked: a run that dies holding one leaves it to the next run's revokeTickets instead of
+   * its 6 h expiry.
+   */
+  const keepSealed = (sealed: string) =>
+    mergeSteps(move.id, (st) => ({ ...st, open_tickets: [...(st.open_tickets ?? []), sealed] }))
+  const dropSealed = (sealed: string) =>
+    mergeSteps(move.id, (st) =>
+      st.open_tickets?.includes(sealed)
+        ? { ...st, open_tickets: st.open_tickets.filter((x) => x !== sealed) }
+        : null
+    )
 
   let loaded: Promise<Loaded> | null = null
   const load = (): Promise<Loaded> => {
@@ -476,7 +502,8 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
   const applyStack = async (
     side: Extract<Side, { kind: 'docker' }>,
     want: { version: string; image: string; extensions: Record<string, string> },
-    shape: (spec: StackSpec) => void
+    shape: (spec: StackSpec) => void,
+    opts: { deadline?: number } = {}
   ): Promise<{ specHash: string; image: string }> => {
     const prepared = await prepareStackSpec(
       envId,
@@ -498,7 +525,9 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
     const hash = applied?.spec_hash
     if (typeof hash !== 'string' || !/^[0-9a-f]{64}$/.test(hash))
       throw new MoveStepError('AGENT_INCOMPATIBLE', 'The Hub agent answered without a spec hash.')
-    const by = now() + STACK_CONVERGE_MS
+    // R2-M-8: a route apply waits only for what is left of the route step's budget.
+    const capped = opts.deadline !== undefined && opts.deadline < now() + STACK_CONVERGE_MS
+    const by = capped ? (opts.deadline as number) : now() + STACK_CONVERGE_MS
     let misses = 0
     for (;;) {
       try {
@@ -520,10 +549,15 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
           throw asStepError(err, `The agent stopped answering about ${side.stack}.`)
       }
       if (now() >= by)
-        throw new MoveStepError(
-          'STACK_DEPLOY_TIMEOUT',
-          `${side.stack} did not converge within 30 minutes.`
-        )
+        throw capped
+          ? new MoveStepError(
+              'ROUTE_TIMEOUT',
+              `${side.stack} did not run the new names within the route's 10 minutes.`
+            )
+          : new MoveStepError(
+              'STACK_DEPLOY_TIMEOUT',
+              `${side.stack} did not converge within 30 minutes.`
+            )
       await sleep(STACK_POLL_MS)
     }
   }
@@ -607,7 +641,11 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
       write.playJob(ctx, jobId, { ...variables, ...boot })) as typeof gitlabPlayJob
   }
 
-  const deployGitlab = async (side: Extract<Side, { kind: 'gitlab' }>, l: Loaded) => {
+  const deployGitlab = async (
+    side: Extract<Side, { kind: 'gitlab' }>,
+    l: Loaded,
+    stopRequested?: () => Promise<boolean>
+  ) => {
     const version = plan.version
     const comps = (await listComponents(side.placement.id)).filter((c) => c.kind === 'api')
     if (!comps.length)
@@ -656,8 +694,13 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
           envId
         },
         (line, level) => log(line, level),
-        { deps: { gitlab: bootVariables } }
+        { deps: { gitlab: bootVariables, ...(stopRequested ? { stopRequested } : {}) } }
       )
+      if (out.status === 'cancelled')
+        throw new MoveStepError(
+          'ABORTED',
+          `${c.name}: the deploy was stopped (the move was cancelled).`
+        )
       if (out.status !== 'success')
         throw new MoveStepError(
           out.code ?? 'DEPLOY_FAILED',
@@ -776,8 +819,19 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
       }
       // Review minor 3: a counter, never the map's size (a kept un-revoked entry would collide).
       const key = String(++ticketSeq)
+      const sealed = sealSecret(ticket)
+      await keepSealed(sealed)
+      const mintedRevoke = revoke
+      revoke = async () => {
+        await mintedRevoke()
+        await dropSealed(sealed).catch(() => false)
+      }
       tickets.set(key, revoke)
-      const req: PullRequest = { source, ticket, mode }
+      // P6-31: to or from a shared deployment the key prefix changes (apps/<tenantId>/ there,
+      // the bucket root elsewhere): saved-settings S3/Azure objects are copied too, same bucket
+      // or not. Between two shared deployments the prefix is the same (one tenant id).
+      const objects = (l.from.kind === 'shared') !== (l.to.kind === 'shared')
+      const req: PullRequest = { source, ticket, mode, ...(objects ? { objects: true } : {}) }
       try {
         let start: () => Promise<{ run_id: string }>
         let status: (run: string) => Promise<PullStatus>
@@ -976,11 +1030,11 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
       }
     },
 
-    async deployTarget() {
+    async deployTarget(opts = {}) {
       const l = await load()
       const to = l.to
       if (to.kind === 'shared') return
-      if (to.kind === 'gitlab') return deployGitlab(to, l)
+      if (to.kind === 'gitlab') return deployGitlab(to, l, opts.stopRequested)
       await seedStackKey()
       const image = await imageFor(plan.version)
       const extensions = await extensionPins(l.app, l.from)
@@ -1036,7 +1090,7 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
       log('the GitLab target is retired (its pipeline keeps the stack; stop it there)', 'warn')
     },
 
-    async route(a) {
+    async route(a, opts = {}) {
       const l = await load()
       const side = a.side === 'source' ? l.from : l.to
       if (side.kind === 'shared') {
@@ -1045,7 +1099,12 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
         const router = deps.sharedStackRouter ?? sharedStackRouter
         if (!a.host)
           throw new MoveStepError('ROUTE_UNSUPPORTED', 'A shared route change names no host.')
-        await router(side.shared, { op: a.op, host: a.host, moveId: move.id })
+        await router(side.shared, {
+          op: a.op,
+          host: a.host,
+          moveId: move.id,
+          ...(opts.deadline !== undefined ? { deadline: opts.deadline } : {})
+        })
         return
       }
       if (side.kind !== 'docker')
@@ -1055,13 +1114,18 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
       // apply_stack (target): the environment's own names plus the per-move name (the Hub keeps
       // reaching it there until release); drop_host (source): none.
       const temp = a.side === 'target' ? await tempHost() : null
-      await applyStack(side, want, (spec) => {
-        if (a.op === 'drop_host') spec.hostnames = []
-        if (a.side === 'target') {
-          if (temp && !spec.hostnames.includes(temp)) spec.hostnames = [...spec.hostnames, temp]
-          spec.env.HUB_BOOT_MAINTENANCE = String(move.id)
-        }
-      })
+      await applyStack(
+        side,
+        want,
+        (spec) => {
+          if (a.op === 'drop_host') spec.hostnames = []
+          if (a.side === 'target') {
+            if (temp && !spec.hostnames.includes(temp)) spec.hostnames = [...spec.hostnames, temp]
+            spec.env.HUB_BOOT_MAINTENANCE = String(move.id)
+          }
+        },
+        opts
+      )
     },
 
     async unroute(a) {
@@ -1110,13 +1174,15 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
       if (sent.some((h) => h.toLowerCase() === temp.toLowerCase()))
         throw new MoveStepError('TEMP_HOST_KEPT', `The stack spec still names ${temp}.`)
       // The edge drops the name once the stack converged; it must stop serving the app there.
+      // E2E B3: on the address recorded for it (the public scheme and port kept).
+      const probeBase = (await addresses()).target_link_base ?? `https://${temp}`
       const by = now() + TEMP_HOST_GONE_MS
       for (;;) {
         const ctl = new AbortController()
         const timer = setTimeout(() => ctl.abort(), 8_000)
         let served = false
         try {
-          const res = await (deps.fetch ?? fetch)(`https://${temp}/api/version`, {
+          const res = await (deps.fetch ?? fetch)(`${probeBase}/api/version`, {
             headers: { Accept: 'application/json' },
             redirect: 'manual',
             signal: ctl.signal
@@ -1237,6 +1303,25 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
         } catch (err) {
           log(
             `a transfer ticket could not be revoked (${codeOf(err)}); it expires within 6 h`,
+            'warn'
+          )
+        }
+      }
+      // R2-M-6: tickets an earlier run of this move minted and never revoked (it died).
+      const left = (await readMove(move.id))?.steps.open_tickets ?? []
+      for (const sealed of left) {
+        let ticket: string | null = null
+        try {
+          ticket = openSecret(sealed)
+        } catch {
+          ticket = null
+        }
+        try {
+          if (ticket) await revokeAtSource(ticket)
+          await dropSealed(sealed)
+        } catch (err) {
+          log(
+            `an earlier run's transfer ticket could not be revoked (${codeOf(err)}); it expires within 6 h`,
             'warn'
           )
         }

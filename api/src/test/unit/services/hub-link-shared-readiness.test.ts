@@ -282,7 +282,8 @@ describe('computeSharedReadiness', () => {
     h.extensions.set('broken', { status: 'error', enabled: true })
     h.signin = { hubUrl: 'https://hub.test' }
     const r = await computeSharedReadiness()
-    expect(r.files).toEqual({ count: 3, bytes: 157, local: 2 })
+    // No `storage` column (a table from before it): no saved-settings objects (P6-31).
+    expect(r.files).toEqual({ count: 3, bytes: 157, local: 2, objects: {} })
     expect(r.extensions).toEqual({ 'efp-ops': '1.2.0' })
     expect(r.signin_hub).toBe(true)
   })

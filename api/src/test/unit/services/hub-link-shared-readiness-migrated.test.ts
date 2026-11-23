@@ -59,6 +59,8 @@ beforeAll(async () => {
     t.uuid('id').primary()
     t.integer('filesize')
     t.string('storage_provider')
+    t.string('storage')
+    t.string('filename_disk')
   })
   await db.schema.createTable('nivaro_settings', (t) => {
     t.integer('id').primary()
@@ -83,7 +85,21 @@ describe('warnings over the real migrated columns', () => {
     const file = randomUUID()
     const video = randomUUID()
     await db('nivaro_users').insert({ id: user })
-    await db('nivaro_files').insert({ id: file, filesize: 10, storage_provider: 'local' })
+    await db('nivaro_files').insert({
+      id: file,
+      filesize: 10,
+      storage_provider: 'local',
+      storage: 'local',
+      filename_disk: 'a.bin'
+    })
+    // P6-31: a saved-settings S3 object is counted per provider.
+    await db('nivaro_files').insert({
+      id: randomUUID(),
+      filesize: 5,
+      storage_provider: 's3',
+      storage: 's3',
+      filename_disk: 'b.bin'
+    })
     await db('nivaro_settings').insert({ id: 1, directory_sync_enabled: true })
     await db('nivaro_push_subscriptions').insert({
       user,
@@ -113,6 +129,6 @@ describe('warnings over the real migrated columns', () => {
     expect(codes.SESSION_REPLAYS?.detail).toBe('1 session replay stays behind')
     expect(codes.HELP_VIDEO_RENDERS?.level).toBe('warning')
     expect(r.busy.renders).toBe(1)
-    expect(r.files).toEqual({ count: 1, bytes: 10, local: 1 })
+    expect(r.files).toEqual({ count: 2, bytes: 15, local: 1, objects: { s3: 1 } })
   })
 })
