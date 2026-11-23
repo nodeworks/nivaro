@@ -8,6 +8,8 @@
  */
 export const CRON_DESCRIPTIONS: Record<string, string> = {
   // ── Scheduler self-checks ──
+  'row-schedules-resync':
+    'Every 5 minutes, shared deployments only — brings this app’s row schedules (scheduled reports, retention policies, activity views, sync jobs, flows) in step with its rows, in case a change announcement was missed. Each schedule runs in its own app only.',
   'job-runs-prune':
     'Daily 04:25, shared deployments only — removes this app’s old job-run rows (older than 30 days, and all but the newest 50 per job), the same rule a self-hosted install applies in its boot retention purge.',
   'cron-miss-detector':

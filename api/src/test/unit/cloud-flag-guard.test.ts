@@ -50,7 +50,10 @@ const EXTRA_CALLS: Record<string, { multiTenant?: number; nivaroCloud?: number }
   // deployment (T4) — a shared deployment always has HUB_URL for its tenant list. hubUrl() (+1)
   // and hubSigninConfig() / hubSigninProblems() (+2).
   'services/hub/mode.ts': { multiTenant: 1 },
-  'services/hub-signin/config.ts': { multiTenant: 2 }
+  'services/hub-signin/config.ts': { multiTenant: 2 },
+  // Row schedules per app: resyncSchedules refuses in Nivaro Cloud only (its T1 entry is weight 0);
+  // a Hub shared deployment reconciles inside an app, so each entry binds to it.
+  'services/row-schedules.ts': { nivaroCloud: 1 }
 }
 
 type Rule = 'T1' | 'T2' | 'T3' | 'T4' | 'T5' | 'T6' | 'T7' | 'C1' | 'C2' | 'C3' | 'C4' | 'C5'

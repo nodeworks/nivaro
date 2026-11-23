@@ -8,11 +8,24 @@
  * changed expressions are rescheduled, removed or switched-off rows are
  * unscheduled. Routes call it after a change and move the schedules epoch, so
  * every other process on the database does the same within its poll.
+ *
+ * Hub shared deployment (one process, many apps): every row schedule belongs to one app. Its rows
+ * are reconciled inside that app, so each entry binds to it (plugins/cron.ts `boundCronKey`) and
+ * copied databases (both apps have `scheduled-report-1`) never touch each other's. An app is
+ * hydrated when it becomes ready and every five minutes, dropped when it leaves, and a change is
+ * announced to every replica on a Redis channel naming the app (the schedules epoch is off on a
+ * multi-tenant deployment). Nothing schedules a row-schedule id outside an app there.
  */
 import type { FastifyInstance } from 'fastify'
+import type { Redis } from 'ioredis'
 import { bumpEpoch, SCHEDULES_EPOCH } from '../db/config-epoch.js'
 import { db } from '../db/index.js'
-import { isMultiTenant } from './deployment-mode.js'
+import { getTenantId, withTenant } from '../db/tenant-context.js'
+import { isNivaroCloud, perAppJobs } from './deployment-mode.js'
+import { onAppLeft, onAppReady } from './tenancy/app-lifecycle.js'
+import { appReadyForRequests } from './tenancy/app-migrations.js'
+import { getTenantRegistry } from './tenancy/registry.js'
+import type { TenantRecord } from './tenancy/types.js'
 
 export interface DesiredSchedule {
   expression: string
@@ -86,12 +99,23 @@ export function registerScheduleResync(name: string, fn: Resync): void {
   resyncers.set(name, fn)
 }
 
+/** Test seam: forget a source a test registered. */
+export function _unregisterScheduleResyncForTests(name: string): void {
+  resyncers.delete(name)
+}
+
+/**
+ * Bring one source's schedules in step with its rows. Nivaro Cloud: never (null). Hub shared
+ * deployment: inside an app only — its rows, its bound entries; outside any app there is no
+ * database to read and an entry would bind to no app (null).
+ */
 export async function resyncSchedules(
   app: FastifyInstance,
   name: string
 ): Promise<ReconcileResult | null> {
   const fn = resyncers.get(name)
-  if (!fn || !app.cron || isMultiTenant()) return null
+  if (!fn || !app.cron || isNivaroCloud()) return null
+  if (perAppJobs() && !getTenantId()) return null
   try {
     const res = await fn(app)
     const n = res.scheduled.length + res.rescheduled.length + res.unscheduled.length
@@ -107,9 +131,109 @@ export async function resyncAllSchedules(app: FastifyInstance): Promise<void> {
   for (const name of resyncers.keys()) await resyncSchedules(app, name)
 }
 
-/** Tell every other process on this database that a schedule changed. */
-export function announceScheduleChange(): void {
+/** The deployment-wide channel a shared deployment announces schedule changes on. */
+export const rowSchedulesChannel = (): string =>
+  `${process.env.REDIS_CHANNEL_PREFIX ?? ''}nvr:row-schedules`
+
+// Hub shared deployment: the Redis client announcements are published on (set at boot by
+// registerRowScheduleLifecycle; null elsewhere).
+let publisher: Pick<Redis, 'publish'> | null = null
+
+/**
+ * Tell every other process that a schedule changed. Self-hosted (and cloud): move the schedules
+ * epoch, as before. Hub shared deployment: publish `<app id>|<source name or *>` on the
+ * deployment's channel, from inside the app the change belongs to (outside any app: nothing).
+ */
+export function announceScheduleChange(name?: string): void {
+  if (perAppJobs()) {
+    const tenantId = getTenantId()
+    if (!tenantId || !publisher) return
+    publisher.publish(rowSchedulesChannel(), `${tenantId}|${name ?? '*'}`).catch(() => {})
+    return
+  }
   void bumpEpoch(SCHEDULES_EPOCH)
+}
+
+/**
+ * Hub shared deployment: one announcement heard on the channel. Resolves the named app and, when
+ * it is listed, active and ready, runs the named source's resync — or
+ * every source for `*` — inside it. Anything else is skipped silently: an app this process has
+ * not listed yet is hydrated when it becomes ready and by the five-minute resync.
+ */
+export async function onRowScheduleMessage(app: FastifyInstance, raw: string): Promise<void> {
+  const bar = raw.indexOf('|')
+  if (bar <= 0) return
+  const tenantId = raw.slice(0, bar)
+  const name = raw.slice(bar + 1)
+  const registry = getTenantRegistry()
+  if (!registry) return
+  let t: TenantRecord | null = null
+  try {
+    t = (await registry.byId?.(tenantId)) ?? null
+    if (!t) t = (await registry.listActive()).find((x) => x.id === tenantId) ?? null
+  } catch {
+    return
+  }
+  // Like the per-app fan-out: never an app the Hub is moving or updating, nor a half-migrated one.
+  if (!t || t.status !== 'active') return
+  if (!appReadyForRequests(t.id)) return
+  try {
+    await withTenant(
+      t,
+      async () => {
+        if (name === '*' || name === '') await resyncAllSchedules(app)
+        else await resyncSchedules(app, name)
+      },
+      t.origin
+    )
+  } catch (err) {
+    app.log.warn({ err, tenant: t.id, name }, 'Schedules could not be brought in step')
+  }
+}
+
+/** Every source, the activity-views one included (it registers when its module loads). */
+async function resyncEverySource(app: FastifyInstance): Promise<void> {
+  await import('./activity-views.js')
+  await resyncAllSchedules(app)
+}
+
+/**
+ * Hub shared deployment: row schedules per app. Call once at boot, outside any app, before the
+ * app migrations start (an app already ready when its hook registers never fires it):
+ *   - an app that becomes ready has every source reconciled inside it;
+ *   - an app that leaves has its bound entries dropped;
+ *   - `row-schedules-resync` (every five minutes, once per app) catches anything missed;
+ *   - a subscriber hears every replica's announcements (see onRowScheduleMessage).
+ * Self-hosted and Nivaro Cloud: nothing (self-hosted keeps its boot resync and the epoch).
+ */
+export function registerRowScheduleLifecycle(app: FastifyInstance): void {
+  if (!perAppJobs()) return
+  onAppReady('row-schedules', () => resyncEverySource(app))
+  onAppLeft('row-schedules', (tenantId) => {
+    app.cron?.unscheduleTenant(tenantId)
+  })
+  // Described in services/cron-descriptions.ts; scope in services/cron-scope.ts.
+  app.cron?.schedule('row-schedules-resync', '*/5 * * * *', () => resyncEverySource(app), {
+    idempotent: 'safe',
+    scope: 'app'
+  })
+  const redis = (app as unknown as { redis?: Redis }).redis
+  if (!redis) return
+  publisher = redis
+  const channel = rowSchedulesChannel()
+  const sub = redis.duplicate()
+  sub.on('error', () => {})
+  sub.on('message', (ch: string, raw: string) => {
+    if (ch !== channel) return
+    void onRowScheduleMessage(app, raw).catch(() => {})
+  })
+  sub.subscribe(channel).catch((err: unknown) => {
+    app.log.warn({ err }, 'Row-schedule announcements could not be subscribed to')
+  })
+  app.addHook('onClose', async () => {
+    if (publisher === redis) publisher = null
+    await sub.quit().catch(() => {})
+  })
 }
 
 /**
@@ -123,7 +247,7 @@ export function resyncAfterWrites(app: FastifyInstance, name: string): void {
     // A manual run changes no schedule.
     if (/\/(run|test|preview|dry-run)(\/|$|\?)/.test(req.url)) return
     await resyncSchedules(req.server, name)
-    announceScheduleChange()
+    announceScheduleChange(name)
   })
 }
 

@@ -154,7 +154,11 @@ export const CORE_CRON_SCOPES: Record<string, CronScope> = {
   'watch-list-overdue': 'app',
   'workflow-auto-sweep': 'app',
 
-  // ── row schedules (services/row-schedules.ts; off in every multi-tenant process today) ─────
+  // ── row schedules (services/row-schedules.ts) ──────────────────────────────────────────────
+  // Never in Nivaro Cloud. On a shared deployment each one is bound to the app whose row it is
+  // (scheduled inside that app: plugins/cron.ts boundCronKey) and runs in that app only, never
+  // fanned out; 'app' below is the scope of its id, not a fan-out.
+  'row-schedules-resync': 'app', // shared deployments only: re-reads each app's schedule rows
   'retention-policy-*': 'app',
   'scheduled-report-*': 'app',
   'activity-view-*': 'app',

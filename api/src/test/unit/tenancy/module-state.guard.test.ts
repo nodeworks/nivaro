@@ -868,6 +868,7 @@ const SHARED: Record<string, string> = {
     'the per-process retention timer, started only when not multi-tenant (server.ts runRetentionPurge)',
   'services/retention-schedule.ts :: nextRunAt':
     'the per-process retention timer, started only when not multi-tenant (server.ts runRetentionPurge)',
+  'services/row-schedules.ts :: publisher': CONN,
   'services/row-schedules.ts :: resyncers': REGISTRY,
   'services/run-long.ts :: touched': WEAK,
   'services/runtime-monitor.ts :: breachStreak': PROC,

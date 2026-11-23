@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { perAppJobs } from '../services/deployment-mode.js'
 import {
   announceScheduleChange,
   type DesiredSchedule,
@@ -123,11 +124,14 @@ export async function syncJobsRoutes(app: FastifyInstance) {
   // Other processes on this database follow a schedule change.
   app.addHook('onResponse', async (req, reply) => {
     if (req.method !== 'GET' && reply.statusCode < 400 && !/\/run(\/|$|\?)/.test(req.url))
-      announceScheduleChange()
+      announceScheduleChange('sync-jobs')
   })
 
-  // Register schedules for existing active jobs at startup.
+  // Register schedules for existing active jobs at startup. Not on a Hub shared deployment:
+  // there is no database outside an app, and each app's jobs are bound to it by the sync-jobs
+  // resync when the app becomes ready (services/row-schedules.ts registerRowScheduleLifecycle).
   app.addHook('onReady', async () => {
+    if (perAppJobs()) return
     try {
       const jobs = (await db('nivaro_sync_jobs')
         .whereNotNull('schedule')

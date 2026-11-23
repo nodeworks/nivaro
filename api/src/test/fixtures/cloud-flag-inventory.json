@@ -2740,12 +2740,12 @@
       "line": 93,
       "text": "if (!fn || !app.cron || process.env.CLOUD_META_DB_URL) return null",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T1",
-      "why": "DB-defined row schedules (Decision 12)",
+      "why": "DB-defined row schedules (Decision 12). Now isNivaroCloud() (EXTRA_CALLS): a Hub shared deployment resyncs inside an app, bound to it",
       "batch": "A",
-      "phase6": "per-app row-schedule hydration"
+      "phase6": "done: per-app row-schedule hydration (registerRowScheduleLifecycle: app ready / app left hooks, row-schedules-resync, the nvr:row-schedules channel)"
     },
     {
       "id": "services/sla-flips.ts:198",

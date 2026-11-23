@@ -543,7 +543,9 @@ export async function buildServer() {
         'Configuration changed elsewhere — caches cleared'
       )
     })
-    // A schedule was created, edited or removed by another process.
+    // A schedule was created, edited or removed by another process. Self-hosted only: the epoch
+    // is off on a multi-tenant deployment, and a shared one announces each app's changes on its
+    // own channel (services/row-schedules.ts registerRowScheduleLifecycle).
     onEpoch(SCHEDULES_EPOCH, async () => {
       if (isMultiTenant() || !app.cron) return
       const { resyncAllSchedules } = await import('./services/row-schedules.js')
@@ -1033,6 +1035,13 @@ export async function buildServer() {
     refuseExtensionSocketHandlers(coreSocketHandlers, connectionHandlerCount(app.io as never))
   }
   if (hubShared) {
+    // Row schedules per app (services/row-schedules.ts): hydrated when an app becomes ready,
+    // dropped when it leaves, announced across replicas. Its ready hook must be registered before
+    // the app migrations below start: an app that is ready already never fires it again.
+    if (perAppJobs()) {
+      const { registerRowScheduleLifecycle } = await import('./services/row-schedules.js')
+      registerRowScheduleLifecycle(app)
+    }
     // Each app's database: migrations, default workspace, the loaded extensions' schema steps —
     // after the extensions above declared their steps. In the background: it never holds up the
     // boot, and an app answers "getting ready" until its own run is done (Hub phase 6, Task 8).
@@ -1302,7 +1311,8 @@ export async function buildServer() {
       // ── Schedules that live in rows: retention policies, scheduled reports ──
       // Registered here at boot and again whenever a row changes (the routes
       // and the schedules epoch call the same reconcile).
-      // Off on every multi-tenant process (Decision 12: per-app hydration is phase 6).
+      // Self-hosted only. Nivaro Cloud has none; a Hub shared deployment hydrates each app when
+      // it becomes ready (registerRowScheduleLifecycle, before the app migrations start).
       if (!multiTenant)
         void import('./services/row-schedules.js').then(async (m) => {
           await m.resyncSchedules(app, 'retention')

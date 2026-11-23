@@ -145,6 +145,21 @@ describe('server.ts: which deployments schedule the core jobs', () => {
   })
 })
 
+describe('server.ts: row schedules per app on a shared deployment', () => {
+  it('the static-database boot resync stays self-hosted; shared hydrates per app instead', () => {
+    // the boot resync (needle above) reads a static database: self-hosted only
+    expect(guardsOf("void import('./services/row-schedules.js')")).toEqual(['!multiTenant', OUTER])
+    // a shared deployment registers its per-app lifecycle, before the app migrations start
+    expect(guardsOf('registerRowScheduleLifecycle(app)')).toEqual(['perAppJobs()', 'hubShared'])
+    const src = readFileSync(serverFile, 'utf8')
+    expect(src.indexOf('registerRowScheduleLifecycle(app)')).toBeLessThan(
+      src.indexOf('startAppMigrations(registry')
+    )
+    // the scheduled-flows boot loader stays self-hosted only
+    expect(guardsOf("await bootPhase('Scheduled flows'")).toEqual(['selfHosted'])
+  })
+})
+
 describe('server.ts: no deployment-wide job runs on a shared deployment yet (P5-10)', () => {
   it('the process jobs with nowhere to write are registered self-hosted only', () => {
     expect(Object.keys(NO_DEPLOYMENT_STORE_CRONS).sort()).toEqual([
