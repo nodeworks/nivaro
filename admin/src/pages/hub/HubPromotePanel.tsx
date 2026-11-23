@@ -813,7 +813,7 @@ export function PromotionHistory({
               <span className='font-mono text-[12px] font-medium text-slate-900 dark:text-foreground'>
                 {r.version}
               </span>
-              {r.from_version && (
+              {r.from_version && r.from_version !== r.version && (
                 <span className='font-mono text-[11px] text-slate-500 dark:text-slate-400'>
                   from {r.from_version}
                 </span>
@@ -858,7 +858,7 @@ export function PromotionHistory({
               <tr key={r.id} className='border-b border-slate-100 last:border-0 dark:border-border'>
                 <td className='min-w-[104px] max-w-[220px] break-all py-2 pr-4 font-mono font-medium text-slate-900 dark:text-foreground'>
                   {r.version}
-                  {r.from_version && (
+                  {r.from_version && r.from_version !== r.version && (
                     <span className='block text-[11px] font-normal text-slate-500 dark:text-slate-400'>
                       from {r.from_version}
                     </span>

@@ -66,7 +66,7 @@ describe('Hub deploys history', () => {
         return {
           data: {
             data: [
-              row({ id: 3, kind: 'move', from_version: null }),
+              row({ id: 3, kind: 'move', from_version: '0.3.210' }),
               row({ id: 2, kind: 'shared', version: '0.3.211', status: 'running' }),
               row({ id: 1 })
             ]
@@ -79,6 +79,9 @@ describe('Hub deploys history', () => {
     wrap(<PromotionHistory env={env} canPromote onRollback={() => {}} onWatch={() => {}} />)
     const table = await screen.findByRole('table', { name: 'production Hub deploys' })
     expect(within(table).getByText('Moved')).toBeInTheDocument()
+    // A move keeps its version: no "from 0.3.210" under "0.3.210" (design N6).
+    const movedRow = within(table).getByText('Moved').closest('tr') as HTMLElement
+    expect(within(movedRow).queryByText(/^from /)).toBeNull()
     expect(within(table).getByText('Shared upgrade')).toBeInTheDocument()
     expect(within(table).getByText('Promote')).toBeInTheDocument()
     // A move or shared run is watched on its own panel, never as a promotion.
