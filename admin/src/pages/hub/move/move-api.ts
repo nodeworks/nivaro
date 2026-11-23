@@ -1112,6 +1112,9 @@ export function splitRunError(text: string): { code: string | null; sentence: st
  */
 export const TARGET_STOPPED_ITEM = 'target_stopped'
 
+/** Task 16: a rolled-back manual move a person had re-pointed; they point the name back. */
+export const REPOINT_ITEM = 'repoint_name'
+
 export const isHaltedTargetLive = (m: Pick<HubMove, 'status' | 'error'>) =>
   m.status === 'interrupted' && splitRunError(m.error ?? '').code === 'HALTED_TARGET_LIVE'
 

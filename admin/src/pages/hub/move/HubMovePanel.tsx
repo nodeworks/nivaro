@@ -70,6 +70,7 @@ import {
   moveToast,
   newestMove,
   pastRelease,
+  REPOINT_ITEM,
   readDismissedMove,
   resumeMove,
   rollbackMove,
@@ -1161,8 +1162,16 @@ function MoveProgress({
   // step is not done (amber, waiting on a person), whatever the run stored (design S11).
   const retireOpen =
     m.status === 'success' && checklistNow.some((c) => c.id === 'retire_source' && !c.done)
+  // Design B3: a rolled-back manual move whose name a person had pointed at the target leaves
+  // repoint_name open. Until it is ticked the name still routes to the target: the address
+  // steps are not undone, and nothing says the app serves again.
+  const repoint = checklistNow.find((c) => c.id === REPOINT_ITEM && !c.done)
   const rows = moveStepRows(m).map((r) =>
-    retireOpen && r.key === 'retire_source' ? { ...r, state: 'waiting' as const } : r
+    retireOpen && r.key === 'retire_source'
+      ? { ...r, state: 'waiting' as const }
+      : repoint && (r.key === 'route' || r.key === 'verify')
+        ? { ...r, state: 'waiting' as const }
+        : r
   )
   const plan = movePlanOf(m)
   const files = moveFilesOf(m)
@@ -1171,6 +1180,19 @@ function MoveProgress({
   const undoing = live && isRollingBack(m)
   const checklist = moveChecklistOf(m)
   const halted = isHaltedTargetLive(m)
+  const ended = !live && m.status !== 'interrupted'
+  // After a success, every open item is still to do. After a rollback only the repoint step is
+  // (shown first, on its own): the plan's after-the-move reminders no longer apply.
+  const openItems =
+    m.status === 'success' ? checklist.filter((c) => !c.done && c.id !== REPOINT_ITEM) : []
+  // The stored error ends with the repoint sentence (Task 16): it is shown in its own box.
+  const errorText =
+    repoint && m.error?.endsWith(repoint.text)
+      ? m.error
+          .slice(0, -repoint.text.length)
+          .replace(/\s*—\s*$/, '')
+          .trim()
+      : m.error
   const stopItem = checklist.find((c) => c.id === TARGET_STOPPED_ITEM)
   const total = files?.total ?? 0
   const moved = (files?.copied ?? 0) + (files?.skipped ?? 0)
@@ -1194,6 +1216,35 @@ function MoveProgress({
           </span>
         )}
       </div>
+
+      {repoint && (
+        <section
+          aria-label='Point the name back'
+          className='space-y-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 dark:border-amber-800/70 dark:bg-amber-950/40'
+        >
+          <div className='flex flex-col gap-2 sm:flex-row sm:items-start'>
+            <p className='m-0 min-w-0 flex-1 text-[12px] font-medium text-amber-900 dark:text-amber-200'>
+              {repoint.text} Until then the app does not answer.
+            </p>
+            <CopyButton value={repoint.text} label='Copy the instruction' />
+          </div>
+          <div className='flex items-start gap-2 text-[12px]'>
+            <Checkbox
+              id={`move-${moveId}-repoint`}
+              checked={false}
+              disabled={tick.isPending}
+              onCheckedChange={(v) => tick.mutate({ item: repoint.id, done: v === true })}
+              className='mt-0.5'
+            />
+            <label
+              htmlFor={`move-${moveId}-repoint`}
+              className='min-w-0 text-amber-900 dark:text-amber-200'
+            >
+              The name points back to the old home.
+            </label>
+          </div>
+        </section>
+      )}
 
       <ol aria-label='Move steps' className='m-0 list-none space-y-1.5 p-0'>
         {rows.map((r) => (
@@ -1317,10 +1368,10 @@ function MoveProgress({
           )}
           data-tone={m.status === 'success' ? 'warning' : 'error'}
         >
-          <MoveRunError text={m.error} />
+          <MoveRunError text={errorText ?? m.error} />
         </div>
       )}
-      {m.status === 'rolled_back' && (
+      {m.status === 'rolled_back' && !repoint && (
         <p className='m-0 text-[12px] text-slate-600 dark:text-slate-300'>
           Rolled back: the app serves from its old home again. Files already copied stay on the
           target.
@@ -1409,33 +1460,31 @@ function MoveProgress({
         </div>
       )}
 
-      {m.status === 'success' && checklist.some((c) => !c.done) && (
+      {ended && openItems.length > 0 && (
         <fieldset className='m-0 space-y-1.5 border-0 p-0'>
           <legend className='mb-1 p-0 text-[12px] font-semibold text-slate-800 dark:text-foreground'>
             Still to do
           </legend>
-          {checklist
-            .filter((c) => !c.done)
-            .map((c) => {
-              const id = `move-${moveId}-done-${c.id}`
-              return (
-                <div key={c.id} className='flex items-start gap-2 text-[12px]'>
-                  <Checkbox
-                    id={id}
-                    checked={false}
-                    disabled={tick.isPending}
-                    onCheckedChange={(v) => tick.mutate({ item: c.id, done: v === true })}
-                    className='mt-0.5'
-                  />
-                  <label
-                    htmlFor={id}
-                    className='min-w-0 break-words text-slate-700 dark:text-slate-300'
-                  >
-                    {c.text}
-                  </label>
-                </div>
-              )
-            })}
+          {openItems.map((c) => {
+            const id = `move-${moveId}-done-${c.id}`
+            return (
+              <div key={c.id} className='flex items-start gap-2 text-[12px]'>
+                <Checkbox
+                  id={id}
+                  checked={false}
+                  disabled={tick.isPending}
+                  onCheckedChange={(v) => tick.mutate({ item: c.id, done: v === true })}
+                  className='mt-0.5'
+                />
+                <label
+                  htmlFor={id}
+                  className='min-w-0 break-words text-slate-700 dark:text-slate-300'
+                >
+                  {c.text}
+                </label>
+              </div>
+            )
+          })}
         </fieldset>
       )}
 
@@ -1467,7 +1516,7 @@ function MoveProgress({
               Cancel rolls the move back: the app stays on its old home and leaves maintenance.
             </span>
           </>
-        ) : m.status === 'success' && checklist.some((c) => !c.done) ? (
+        ) : ended && (openItems.length > 0 || repoint) ? (
           // The reminder stays until its items are ticked: no Dismiss while something is open.
           <span className='text-[11px] text-slate-500 dark:text-muted-foreground'>
             Tick what is still to do to close this move.
