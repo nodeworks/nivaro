@@ -1012,6 +1012,10 @@ export const MOVE_CODE_COPY: Record<string, Copy> = {
     title: 'The Hub cannot stop this old home',
     hint: 'It is not a Docker stack or a shared deployment, so the Hub cannot stop it and prove it stopped. Enter the key the new home runs under App key, then Resume.'
   },
+  NEW_HOME_NOT_SERVING: {
+    title: 'The new home does not answer right now',
+    hint: 'The old home is the only other copy, so it is not stopped while the new home cannot be seen serving. Resume once the new home answers, or try Finish again then.'
+  },
   MOVE_CHANGED: {
     title: 'The move changed meanwhile',
     hint: 'Reload the move and try again.'

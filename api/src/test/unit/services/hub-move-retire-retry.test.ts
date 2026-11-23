@@ -897,6 +897,20 @@ describe('M-1: the new home cannot be reached to check its key', () => {
       expect(text).not.toContain('App key')
     }
     expect(fake.calls).not.toContain('retireSource')
+    // Review R2-3: Finish stops the old home only once the public name answers from the new
+    // home (the verify step's own check).
+    expect((await getMove(id)).retire_stop).toMatchObject({ finish: true })
+    fake.ops.verifyName = async () => {
+      fake.calls.push('verifyName')
+      return false
+    }
+    const notServing = await finishStop(id, `${w.appKey}/prod`)
+    expect(notServing.statusCode).toBe(409)
+    expect(notServing.json().code).toBe('NEW_HOME_NOT_SERVING')
+    expect(notServing.json().message).toContain('does not answer from the new home right now')
+    expect(fake.calls).toContain('verifyName')
+    expect(fake.calls).not.toContain('stopSource')
+    expect((await readMove(id))?.status).toBe('interrupted')
     // It answers again, with the right key: Resume retires.
     home.unreachable = false
     home.fp = fp(SECRET_KEY)
@@ -906,6 +920,21 @@ describe('M-1: the new home cannot be reached to check its key', () => {
 })
 
 // ── I-2: Resume clears the previous stop ─────────────────────────────────────────────────────
+
+describe('R2-3: Finish at an unreachable stop', () => {
+  it('starts once the public name answers from the new home', async () => {
+    home.unreachable = true
+    const w = await world('docker')
+    const id = await startMove(w, 'to_shared')
+    expect((await getMove(id)).retire_stop).toMatchObject({ case: 'unreachable', finish: true })
+    fake = fakeOps()
+    useDeps()
+    expect((await finishStop(id, `${w.appKey}/prod`)).statusCode).toBe(202)
+    await Run.awaitMove(id)
+    expect(fake.calls.indexOf('verifyName')).toBeLessThan(fake.calls.indexOf('stopSource'))
+    expect((await readMove(id))?.status).toBe('success')
+  })
+})
 
 describe('I-2: a resumed stop no longer carries its old error', () => {
   it('the error is cleared while the resumed run works, and only a new stop writes one', async () => {

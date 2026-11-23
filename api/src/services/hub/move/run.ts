@@ -1990,7 +1990,29 @@ export async function finishStopSource(
       `Type ${confirmText ?? 'the app and environment keys'} to finish the move and stop the old home.`,
       400
     )
+  // Review R2-3: at a stop where the Hub could not reach the new home, the old home is the only
+  // other copy: it is stopped only once the public name is seen answering from the new home
+  // (the same check `verify` makes: version, shared key or none, tenant).
+  if (stop.case === 'unreachable' && !(await newHomeServes(move, e)))
+    throw new MoveError(
+      'NEW_HOME_NOT_SERVING',
+      `${move.plan?.hostnames[0] ?? 'The public name'} does not answer from the new home right now, so the old home was not stopped. Resume once the new home answers (it checks the key again), or try Finish again then.`
+    )
   await restart(move, by, e, 'stop')
+}
+
+/** The public name answers from the move's new home now (the `verify` step's own check). */
+async function newHomeServes(move: HubMoveRow, e: Env): Promise<boolean> {
+  if (!move.plan) return false
+  const ids = await sharedIdsOf(move.from_placement_id, move.to_placement_id)
+  const shared = ids.to !== null ? ((await getShared(ids.to))?.key ?? null) : null
+  try {
+    return await e
+      .opsFor(move, move.plan, () => undefined)
+      .verifyName({ version: move.plan.version, shared })
+  } catch {
+    return false
+  }
 }
 
 function cannotStop(): MoveError {
