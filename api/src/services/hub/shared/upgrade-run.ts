@@ -1125,12 +1125,35 @@ export async function listSharedDeploys(
 
 // ── re-apply after a token rotation (routes/hub-shared.ts setSharedReapply) ────────────────────
 
+/** How many recent runs the re-apply looks through for the newest one that reached apply. */
+const APPLIED_LOOKBACK = 50
+
+/**
+ * True when the newest run of the deployment that reached apply (the agent took its spec:
+ * `spec_hash` recorded) ended failed, interrupted or cancelled. Runs that never reached apply are
+ * skipped: they changed nothing on the stack.
+ */
+async function lastAppliedRunFailed(sharedId: number): Promise<boolean> {
+  const rows = (await db(SHARED_DEPLOYS)
+    .where({ shared_deployment_id: sharedId })
+    .whereNot({ kind: 'observed' })
+    .orderBy('id', 'desc')
+    .limit(APPLIED_LOOKBACK)
+    .select('status', 'plan')) as Array<{ status: string; plan: unknown }>
+  for (const r of rows) {
+    if (!/"spec_hash":"[0-9a-f]/i.test(String(r.plan ?? ''))) continue
+    return r.status === 'failed' || r.status === 'interrupted' || r.status === 'cancelled'
+  }
+  return false
+}
+
 /**
  * Applies the stack again at the version it runs, so the deployment gets the new token (preflight
  * R7). The same run as an upgrade (kind `upgrade`, same version: no per-app checks). Not started
  * when the plan has a blocker (reason = its code), the deployment was never deployed, or its
- * newest run failed or was interrupted (LAST_RUN_FAILED: the stack may run another version than
- * the pin, so re-applying the pin would roll it back unannounced).
+ * newest run that reached apply failed, was interrupted or was cancelled (LAST_RUN_FAILED: the
+ * stack may run another version than the pin, so re-applying the pin would roll it back
+ * unannounced).
  */
 export async function startSharedReapply(
   shared: SharedDeployment,
@@ -1139,22 +1162,12 @@ export async function startSharedReapply(
 ): Promise<{ started: boolean; reason?: string; shared_deploy_id?: number }> {
   if (shared.mode !== 'docker') return { started: false, reason: 'SHARED_NOT_HUB_DEPLOYED' }
   if (!shared.version_pin) return { started: false, reason: 'NOT_DEPLOYED' }
-  // After a failed or interrupted run the stack may run another version than the pin: applying
-  // the pin again would be a rollback nobody asked for (review minor 4). Upgrade or roll back.
-  const last = await db(SHARED_DEPLOYS)
-    .where({ shared_deployment_id: shared.id })
-    .whereNot({ kind: 'observed' })
-    .orderBy('id', 'desc')
-    .first('status', 'plan')
-  // A cancel after the agent applied (spec_hash recorded) leaves the stack on the new image too.
-  const applied = /"spec_hash":"[0-9a-f]/i.test(String(last?.plan ?? ''))
-  if (
-    last &&
-    (last.status === 'failed' ||
-      last.status === 'interrupted' ||
-      (last.status === 'cancelled' && applied))
-  )
-    return { started: false, reason: 'LAST_RUN_FAILED' }
+  // After a run that reached apply and then failed, was interrupted or was cancelled, the stack
+  // may run another version than the pin: applying the pin again would be a rollback nobody asked
+  // for (review minor 4). Upgrade or roll back instead. Runs that never reached apply (no
+  // spec_hash: START_FAILED, a render step that failed) changed nothing, so the newest run that
+  // DID apply decides (round 2 N-2).
+  if (await lastAppliedRunFailed(shared.id)) return { started: false, reason: 'LAST_RUN_FAILED' }
   const plan = (await gatherSharedUpgrade(shared.id, shared.version_pin, 'upgrade', deps)).plan
   if (plan.blockers.length) return { started: false, reason: plan.blockers[0].code }
   const overrides = plan.apps.flatMap((a) => a.blockers.map((b) => `${b}:${a.env_id}`))
