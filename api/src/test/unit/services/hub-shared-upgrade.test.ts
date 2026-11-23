@@ -1516,3 +1516,40 @@ describe('final review I-2: an open move into the deployment', () => {
     expect(urls).not.toContain(`https://${m.appKey}.apps.example.com/api/version`)
   })
 })
+
+describe('final review I-4: an app needs an extension the deployment does not load', () => {
+  it('per-app blocker EXTENSION_MISSING, never overridable; a re-apply is not started', async () => {
+    const id = await newShared()
+    const a = await newApp(id, [{ key: 'production', placed: true }])
+    await db('nivaro_hub_apps')
+      .where({ id: a.appId })
+      .update({ extensions: JSON.stringify(['efp-ops']) })
+    const plan = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', planDeps())
+    const row = plan.apps.find((x) => x.env_id === a.envIds[0])
+    expect(row?.blockers).toContain('EXTENSION_MISSING')
+    expect(row?.notes.join(' ')).toContain('efp-ops')
+    expect(plan.overridable).not.toContain('EXTENSION_MISSING')
+    const key = (await Store.getShared(id))?.key as string
+    const err = await refusal(
+      Run.startSharedUpgrade(
+        id,
+        {
+          version: '0.3.210',
+          plan_hash: plan.plan_hash,
+          confirm: key,
+          overrides: [`EXTENSION_MISSING:${a.envIds[0]}`]
+        },
+        'admin-1',
+        runDeps(fakes()).deps
+      )
+    )
+    expect(err.code).toBe('APP_BLOCKED')
+    // Same version (a re-apply): still checked — the apply would strip the extension.
+    const same = await Plan.planSharedUpgrade(id, '0.3.209', 'upgrade', planDeps())
+    expect(same.apps.find((x) => x.env_id === a.envIds[0])?.blockers).toContain('EXTENSION_MISSING')
+    const sh = await Store.getShared(id)
+    expect(
+      await Run.startSharedReapply(sh as NonNullable<typeof sh>, 'admin-1', runDeps(fakes()).deps)
+    ).toEqual({ started: false, reason: 'APP_BLOCKED' })
+  })
+})

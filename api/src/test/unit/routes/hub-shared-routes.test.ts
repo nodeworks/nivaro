@@ -1273,3 +1273,33 @@ describe('GET: REDIS_URL stored, not applied', () => {
     expect(JSON.stringify(w)).not.toContain('Pw-0123456789')
   })
 })
+
+describe('final review I-4: an extension a placed app uses', () => {
+  it('PATCH that drops it → 409 EXTENSION_IN_USE naming the app; one nobody uses goes', async () => {
+    const made = await create({ extensions: ['efp-ops', 'reports'] })
+    await db('nivaro_hub_apps')
+      .where({ id: 1 })
+      .update({ extensions: JSON.stringify(['efp-ops']) })
+    await placeEnv(made.row.id, 7)
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/hub/shared/${made.row.id}`,
+      headers: asAdmin,
+      payload: { extensions: ['reports'] }
+    })
+    expect(res.statusCode).toBe(409)
+    expect(res.json().code).toBe('EXTENSION_IN_USE')
+    expect(res.json().error).toContain('acme/env7')
+    expect(res.json().error).toContain('efp-ops')
+    const row = await db('nivaro_hub_shared_deployments').where({ id: made.row.id }).first()
+    expect(JSON.parse(row.extensions)).toEqual(['efp-ops', 'reports'])
+    const ok = await app.inject({
+      method: 'PATCH',
+      url: `/api/hub/shared/${made.row.id}`,
+      headers: asAdmin,
+      payload: { extensions: ['efp-ops'] }
+    })
+    expect(ok.statusCode).toBe(200)
+    expect(ok.json().data.extensions).toEqual(['efp-ops'])
+  })
+})

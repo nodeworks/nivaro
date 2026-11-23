@@ -53,6 +53,8 @@ import { type SharedTenantRow, tenantsOf } from './tenants.js'
  * previous environment placed on this same deployment is upgraded in the same run and never
  * counts. PREFLIGHT_FAILING (preflight R17) — the app's own preflight fails on the deployment now.
  * Neither is checked when the version does not change (a re-apply), nor for a rollback.
+ * EXTENSION_MISSING (final review I-4) — the app uses an extension the deployment does not load;
+ * never overridable, checked for every kind.
  *
  * Warnings: HUB_URL_PROBLEM (the Hub's own HUB_URL is ignored, hubUrlBootWarning), MULTI_NODE_
  * VOLUMES (the agent's swarm has several nodes and volumes are local), APPS_AFFECTED (every app
@@ -589,6 +591,16 @@ export async function gatherSharedUpgrade(
     const tenant = tenantIdFor(r.app, r.env)
     const codes: string[] = []
     const notes: string[] = []
+    // Final review I-4: the run renders the deployment's extension list; an app that uses one
+    // not on it would restart without its hooks and routes. Never overridable; checked on a
+    // re-apply and a rollback too.
+    const missing = r.app.extensions.filter((x) => !shared.extensions.includes(x))
+    if (missing.length) {
+      codes.push('EXTENSION_MISSING')
+      notes.push(
+        `it uses ${missing.slice(0, 10).join(', ')}, which the deployment does not load — add it to the deployment's extensions`
+      )
+    }
     if (versionOk && !sameVersion && kind === 'upgrade' && r.placedHere) {
       const order = await orderProblem(r, version, placedHere)
       if (order) {
