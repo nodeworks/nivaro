@@ -36,7 +36,7 @@ export const hubSharedDocs: DocSection = {
     },
     {
       type: 'p',
-      text: 'Mode and key cannot be changed after the deployment is created. Create the deployment on the Shared deployments tab of the Apps hub (the tab after Apps; Hub administrators only): the Add button opens an inline panel in the detail pane, and editing uses the same panel. The key is 1 to 63 characters (lowercase letters, digits and dashes). The link address must be https, or http for a loopback or private address, with no user, password or path.'
+      text: 'Mode and key cannot be changed after the deployment is created. Create the deployment on the Shared deployments tab of the Apps hub (the tab after Apps; Hub administrators only): the Add button opens an inline panel in the detail pane, and editing uses the same panel. The key is 2 to 63 characters (lowercase letters, digits and dashes) and starts with a letter. The link address must be https, with no user, password or path. Plain http is accepted only for a loopback or private address, and only when the Hub does not run with `NODE_ENV=production`: on a production Hub an http link address is refused, so use https (or a name with a certificate).'
     },
     { type: 'h2', id: 'hub-shared-token', text: 'The token and the environment block' },
     {
@@ -57,7 +57,7 @@ export const hubSharedDocs: DocSection = {
         ],
         [
           '`HUB_DEPLOYMENT_TOKEN`',
-          'The token, at least 32 characters. A stack secret, never a plain environment variable. `_FILE` works.'
+          'The token, at least 32 characters. A secret, never a plain environment variable: in docker mode the Hub keeps it sealed and passes it to the stack as a swarm secret; in registered mode put it in your own secret store and pass it as a file (`HUB_DEPLOYMENT_TOKEN_FILE`) or a secret. `_FILE` works.'
         ],
         [
           '`HUB_SHARED_EXTENSIONS`',
@@ -103,7 +103,7 @@ export const hubSharedDocs: DocSection = {
         "A wildcard name needs a wildcard certificate. If the stack's router uses a certificate resolver, the wildcard needs a DNS-01 challenge (an HTTP challenge cannot issue a wildcard). Or make the wildcard certificate Traefik's default certificate, as the Hub does for apps it creates.",
         'The pattern must sit under the agent host suffixes (`HUB_AGENT_HOST_SUFFIXES`). A second stack that claims the same pattern is refused (`HOSTNAME_TAKEN`, field `host_pattern`).',
         "A shared stack has no `realtime` role (`ROLE_NOT_SHARED`), and the stack's environment must name its own key (`SHARED_KEY_MISMATCH`). These two agent field codes join the others in Docker driver and Hub agent.",
-        'An agent from before phase 6 answers `UNKNOWN_FIELD` for `host_pattern` and `REQUIRED` for an empty `hostnames` list. Update the agent before deploying a shared stack.'
+        'An agent older than 0.2.0 answers `UNKNOWN_FIELD` for `host_pattern` and `REQUIRED` for an empty `hostnames` list. Update the agent before deploying a shared stack.'
       ]
     },
     {
@@ -121,7 +121,7 @@ export const hubSharedDocs: DocSection = {
     { type: 'h2', id: 'hub-shared-pool', text: 'Pool budget' },
     {
       type: 'p',
-      text: 'Each placement on a shared deployment carries a pool size (1 to 20 connections, default 5; a shared placement needs at least 2, because one connection holds the migration lock while another migrates). The deployment has a pool budget (default 60, range 1 to 500). A placement that would take the sum of pool sizes over the budget is refused with `POOL_BUDGET`. The budget is per process: with three replicas the database sees up to three times the sizes. Per-process fairness for the heavy-read slots between apps is not built; the budget only caps connections.'
+      text: 'Each placement on a shared deployment carries a pool size (2 to 20 connections for a shared placement, default 5: one connection holds the migration lock while another migrates, and fewer than 2 is refused with `POOL_TOO_SMALL`). The deployment has a pool budget (default 60, range 1 to 500). A placement that would take the sum of pool sizes over the budget is refused with `POOL_BUDGET`. The budget is per process: with three replicas the database sees up to three times the sizes. Per-process fairness for the heavy-read slots between apps is not built; the budget only caps connections.'
     },
     { type: 'h2', id: 'hub-shared-migrations', text: 'Per-app migrations and the not-ready page' },
     {
@@ -139,13 +139,13 @@ export const hubSharedDocs: DocSection = {
     {
       type: 'ul',
       items: [
-        "Storage scope. Where files live in the deployment storage (the env-driven provider), every object key is prefixed `apps/<tenant id>/`. The prefix applies to saved-settings S3 and Azure drivers too. So two apps with copied databases (a development copy of production) can never read or delete each other's objects. New keys are flat inside the scope. A key with `..`, a leading `/`, a backslash or a NUL is refused.",
+        "Storage scope. Where files live in the deployment storage (the env-driven provider), every object key is prefixed `apps/<tenant id>/`. The prefix applies to saved-settings S3 and Azure drivers too: an app with its own bucket keeps its objects under `apps/<tenant id>/` in that bucket while it runs on a shared deployment, and at the bucket root while it runs on a dedicated stack. So two apps with copied databases (a development copy of production) can never read or delete each other's objects. New keys are flat inside the scope. A key with `..`, a leading `/`, a backslash or a NUL is refused.",
         "Encryption key. Each app's sealed values (stored credentials, tokens) were written with that app's `ENCRYPTION_KEY`. On a shared deployment the app's own key is used, from the Hub's tenant list. If an app has no key a seal or open fails with `APP_KEY_MISSING` (503). It never falls back to the deployment's key or to another app's. A value that belongs to the deployment itself, like the sealed copy of the tenant list in Redis, uses the deployment key (`encryptForDeployment`).",
         'Where the Hub gets the key: the key entered for the environment first; then, once, the Docker stack settings key (copied into the entry); a new key is generated only for a database known to be empty (made by the Hub, or without a `nivaro_migrations` table). An adopted database that already holds an installation, with no known key, is refused (`APP_KEY_UNKNOWN`): an administrator enters the key. A GitLab-created app has to have its key entered.',
-        'Fingerprints. The Hub and the app compare `keyFingerprint(key)` (a keyed hash, first 32 hex characters). The key itself never crosses the hub link. Saving a key that differs from the one the app reports is refused (`APP_KEY_MISMATCH`); replacing a stored key needs a positive match (`APP_KEY_UNVERIFIED` otherwise); an app that has already served on a shared deployment refuses a different key (`APP_KEY_IMMUTABLE`).',
+        'Fingerprints. The Hub and the app compare `keyFingerprint(key)` (a keyed hash, first 32 hex characters). The key itself never crosses the hub link. Saving a key that differs from the one the app reports is refused (`APP_KEY_MISMATCH`); replacing a stored key needs a positive match (`APP_KEY_UNVERIFIED` otherwise); an app that has already served on a shared deployment refuses a different key (`APP_KEY_IMMUTABLE`). There is no operator override in this phase, on purpose: everything the app sealed with its old key (stored credentials, tokens, partner secrets) becomes unreadable under a new one. If you hit `APP_KEY_IMMUTABLE`, do not look for a way around it. Enter the key the app really runs with (check it against the fingerprint the page shows), or, if the key is lost or has to change, contact support: re-keying a live shared app is a support action, and the people who use the app will have to enter its stored credentials again.',
         "Origin. Links in job mail, the phone app and the OAuth issuer use the app's own origin (the origin of its Hub base URL), not the deployment's.",
         'Credentials. Sessions, run-as keys, socket tickets, media tickets, export links and similar signed values are bound to their app, so a value minted in one app is refused in another even when the two databases are copies. The scan that proves it lists every Redis key and every signing site.',
-        'Module state. Everything the process remembers for an app (configuration caches such as collections, fields, permissions, workflows, pipelines and templates; sessions and sign-in state; settings; follow and presence sets) sits in a slot of its own per app (`appMap`, `appSet`, `appBox` in `services/app-state.ts`, keyed by the current app). A guard test (`module-state.guard.test.ts`) scans every module-level variable and fails when new module state is neither keyed per app nor listed with a reason. When an app leaves the deployment (unplaced, or moved away) its slots are dropped, so a later return starts clean.',
+        'Module state. Everything the process remembers for an app (configuration caches, sessions and sign-in state, settings, follow and presence sets) is kept in a slot of its own per app, and a test fails the build when new process-wide state is added without one. When an app leaves the deployment (unplaced, or moved away) its slots are dropped, so a later return starts clean.',
         "What an app administrator cannot see: on a shared deployment the screens that show or act on the whole process answer `403 SHARED_OPERATOR_ONLY`: heap snapshots and their download, restart, the pool, runtime, roster, caches, boot, degradation, clock and in-flight panels, the database and Redis panels of the Database hub (deadlocks, expensive SQL, long transactions, pool, metadata cache, Redis keys, memory and storage), server logs (`swallows`, `env`), the realtime pipeline, probe and delivery panels, `/health/slo` and `/health/detailed`, Telemetry, Infrastructure and the metrics endpoint. They would show one app every other app's data or let it disturb all of them. The deployment operator reads them through the Nivaro Hub. Self-hosted and Nivaro Cloud are unchanged."
       ]
     },
@@ -193,10 +193,14 @@ export const hubSharedDocs: DocSection = {
         ]
       ]
     },
-    { type: 'h2', id: 'hub-shared-tenants', text: 'The tenants contract, with phase 6 additions' },
+    {
+      type: 'h2',
+      id: 'hub-shared-tenants',
+      text: 'The tenants contract, with the optional fields'
+    },
     {
       type: 'p',
-      text: 'The Hub serves the call described in Deployment modes: `GET /api/hub/shared/<key>/tenants` with the bearer. Phase 6 adds two optional fields to each tenant, so an old deployment keeps working with the new Hub and the other way round: `origin` (the origin of the environment\'s base URL; a value that is not an http(s) origin is dropped, not the tenant) and `encryption_key` (64 hex characters; a bad key drops that tenant with the reason "bad encryption key").'
+      text: 'The Hub serves the call described in Deployment modes: `GET /api/hub/shared/<key>/tenants` with the bearer. This release adds two optional fields to each tenant, so an old deployment keeps working with the new Hub and the other way round: `origin` (the origin of the environment\'s base URL; a value that is not an http(s) origin is dropped, not the tenant) and `encryption_key` (64 hex characters; a bad key drops that tenant with the reason "bad encryption key").'
     },
     {
       type: 'ul',
@@ -263,7 +267,7 @@ export const hubSharedDocs: DocSection = {
         ],
         [
           'Per app: `ORDER`',
-          "The previous environment of an app has not run this version successfully (phase 2's rule). A Hub administrator may override it per app in the panel; each override is logged. A previous environment on this same deployment is upgraded in the same run and never counts. Not checked for a rollback or when the version does not change."
+          'The previous environment of an app has not run this version successfully (the rule that the previous environment of an app must have run this version). A Hub administrator may override it per app in the panel; each override is logged. A previous environment on this same deployment is upgraded in the same run and never counts. Not checked for a rollback or when the version does not change.'
         ],
         [
           'Per app: `PREFLIGHT_FAILING`',
@@ -283,7 +287,7 @@ export const hubSharedDocs: DocSection = {
       type: 'ul',
       items: [
         'If it fails, the run is `failed` and names the apps that failed (`VERSION_TIMEOUT`, `SCHEMA_FAILED`, `SCHEMA_TIMEOUT`, `VERIFY_FAILED`, `SWARM_ROLLED_BACK`, `SWARM_UPDATE_PAUSED`, `AGENT_UNREACHABLE`). Nothing is reverted by itself: the stack may run the new image while the pins stay unchanged, and the other apps keep serving. A rollback is a new run of the previous version (kind `rollback`) with its own plan.',
-        'Cancel is possible while the run waits. A run whose heartbeat is older than 2 minutes after a Hub restart shows as `interrupted`; a lost lock stops it the same way.',
+        'Cancel is possible while the run waits. A run that has stopped reporting for 2 minutes after a Hub restart shows as `interrupted`; a lost lock stops it the same way.',
         'While a move into or out of the deployment is waiting (a manual route can wait up to 24 hours), the plan is `BUSY` and the deployment page says which move it waits for.'
       ]
     },
@@ -366,7 +370,7 @@ export const hubSharedDocs: DocSection = {
         ],
         [
           'Objects in an env-driven S3 or Azure provider',
-          "A move copies only the objects the deployment storage holds (the `local` provider). Settings-driven S3 and Azure (the app's own bucket) are unaffected.",
+          'A move copies the objects the deployment storage holds (the `local` provider). An app with its own saved-settings S3 or Azure bucket is not unaffected: on a shared deployment its objects live under `apps/<id>/` in that bucket, so a move changes the key prefix and the objects must be copied to their new keys (see Files).',
           'blocker `ENV_OBJECT_STORAGE`'
         ],
         [
@@ -376,7 +380,7 @@ export const hubSharedDocs: DocSection = {
         ],
         [
           'Per-app OIDC client',
-          "Phase 6 uses the deployment-wide client; the app's own client record is not used. Each app's callback address must be registered on that one Entra app.",
+          "For now a shared deployment uses one deployment-wide client; the app's own client record is not used. Each app's callback address must be registered on that one Entra app.",
           'checklist item `callbacks_registered`'
         ],
         [
@@ -509,7 +513,7 @@ export const hubMovesDocs: DocSection = {
         ],
         [
           '`deploy_target`',
-          "Writes the pin at the current version and deploys the dedicated target: a Docker stack through the agent, booted in maintenance (`HUB_BOOT_MAINTENANCE=<move id>`), or the placement's deploy jobs for GitLab. A Docker target starts on its own per-move name only, never the public one; `route` gives it the real names."
+          "Writes the pin at the current version and deploys the dedicated target: a Docker stack through the agent, booted in maintenance (`HUB_BOOT_MAINTENANCE=<move id>`), or the placement's deploy jobs for GitLab. A Docker target starts on its own per-move name only, never the public one; `route` adds the real names, and the per-move name stays until the move ends."
         ],
         [
           '`target_ready`',
@@ -517,11 +521,11 @@ export const hubMovesDocs: DocSection = {
         ],
         [
           '`route`, `verify`',
-          'Switches the public name (below), then checks that the name answers `/api/version` at the version, with `shared_deployment` equal to the target key (to shared) or absent (to dedicated), and the right tenant. Up to 10 minutes (`ROUTE_TIMEOUT`, `VERIFY_FAILED`).'
+          'Switches the public name (below), then checks that the name answers `/api/version` at the version, with `shared_deployment` equal to the target key (to shared) or absent (to dedicated), and the right tenant. Up to 10 minutes (`ROUTE_TIMEOUT`, `VERIFY_FAILED`). For a Docker target `route` adds the real names beside the per-move name; it does not remove that name yet.'
         ],
         [
           '`release`',
-          "The point of no return. The environment's placement, version pin and `active` status switch to the target first; only then is the target's maintenance lifted. If the Hub dies between the two, the step stays open and a rollback freezes the target again before anything else."
+          "The point of no return. The source is already frozen. The environment's placement, version pin and `active` status switch to the target first; only then is the target's maintenance lifted (a Docker target's boot maintenance is released for good with the move id; a shared target's replicas re-read their list). The step is marked done only after the lift. If the Hub dies in between, the step stays open and a rollback proves the target frozen again before anything else; after a done `release` nothing is rolled back."
         ],
         [
           '`retire_source`',
@@ -535,7 +539,7 @@ export const hubMovesDocs: DocSection = {
     },
     {
       type: 'p',
-      text: 'With manual routing the order changes, so the app keeps serving while you wait for a person to switch the name: `check`, the target is prepared (`place_on_target` or `deploy_target`, held in maintenance), `files_warm`, then `route` (the Hub does its own half, then waits for the name) and `verify` while the source still serves, and only then `maintenance_on`, `wait_idle`, `files_delta`, `target_ready`, `release`, `retire_source`, `done`. The Hub does its own source-side route change only after the name verifies on the target.'
+      text: 'With manual routing the order changes, so the app keeps serving while you wait for a person to switch the name: `check`, the target is prepared (`place_on_target` or `deploy_target`, held in maintenance), `files_warm`, then `route` (the Hub does its own half, then waits for the name) and `verify` while the source still serves, and only then `maintenance_on`, `wait_idle`, `files_delta`, `target_ready`, `release`, `retire_source`, `done`. The Hub does its own source-side route change only after the name verifies on the target. In a manual `to_dedicated` move the target is deployed first and gets a warm copy (`files_warm`), then the same delta copy (`files_delta`) inside maintenance as a shared target; the full copy (`files_full`) belongs to the automatic order only.'
     },
     {
       type: 'h2',
@@ -550,7 +554,7 @@ export const hubMovesDocs: DocSection = {
       type: 'ul',
       items: [
         'A dedicated source must answer its hub link now. A GitLab source needs an API check address (`verify_url`) that is not its public name. A Docker source on the publish edge uses `http://<agent host>:<published port>`, and the hub token goes over plain http only to this machine or a `.test` or `.localhost` name. A Docker source on the Traefik edge is reached only on its public name: that is accepted only with automatic routing (the Hub moves that name itself and puts it back first on a rollback). Otherwise the start is refused with `SOURCE_UNREACHABLE`; with a manual route the plan blocks it already, because the Hub could not reach the source afterwards to put it in maintenance or roll back. Move it to a target on the same Docker driver, or give the source a published port.',
-        "A dedicated Docker target on the Traefik edge is deployed first on a per-move name, `hub-move-e<environment id>-<random>.<first agent host suffix>`. That name must resolve now, so the agent suffix needs wildcard DNS, and its certificate must be valid for it (a wildcard certificate for the suffix, as for the apps the Hub creates). The `route` step re-applies the stack with the environment's real names, which removes the per-move name. A target on the publish edge uses the agent host and the published port (this machine or a `.test` name only). A GitLab target uses its API check address, which must also resolve. With none, the start is refused with `TARGET_UNREACHABLE`.",
+        "A dedicated Docker target on the Traefik edge is deployed first on a per-move name, `hub-move-e<environment id>-<random>.<first agent host suffix>`. That name must resolve now, so the agent suffix needs wildcard DNS, and its certificate must be valid for it (a wildcard certificate for the suffix, as for the apps the Hub creates). The `route` step adds the environment's real names beside it. The per-move name is removed at the end of the move, once the app lives on the target: the Hub applies the stack again without it (and without the boot maintenance setting) and checks that it no longer serves the app. If that fails the move is still a success, and the checklist item `temp_host` stays open. A target on the publish edge uses the agent host and the published port (this machine or a `.test` name only). A GitLab target uses its API check address, which must also resolve. With none, the start is refused with `TARGET_UNREACHABLE`.",
         'Files (see Files below): the address the target pulls from must be one its pull may fetch, or the start is refused with `LINK_URL_NOT_PULLABLE` (a shared source) or `SOURCE_NOT_PULLABLE` (a dedicated source).'
       ]
     },
@@ -604,11 +608,13 @@ export const hubMovesDocs: DocSection = {
       items: [
         "The target pulls the files. They never go through the Hub: bytes flow from the source app to the target app. The source authorises the pull with a transfer ticket (`nvt_…`, valid 6 hours) it minted on the Hub's request. The ticket is bound to one app, never appears in a log or an error, and the Hub revokes it after each copy and again when the move ends (a revoke that fails is kept for the move end).",
         "What is copied: every file in the app's files table whose provider is the deployment-storage (`local`) provider. Objects keep their keys. An object already there at the same size is skipped, so a copy is resumable. The first warm copy of a move is always a full copy (a manifest left by an earlier move would make a delta skip rows); later ones are deltas. An object over 5 GB fails that file. A file the source says is missing (404) is listed as missing (up to 50 ids) and never blocks: it was gone before the move. A file whose stored size was stale is copied as the source has it and counted, not failed.",
-        "Not copied: objects in an env-driven S3 or Azure provider (a blocker, `ENV_OBJECT_STORAGE`), the app's own saved-settings bucket (it is the same bucket on both sides), session replays and image transform caches (replays warn `REPLAYS_NOT_MOVED`; transforms are made again).",
+        'Not copied: objects in an env-driven S3 or Azure provider (a blocker, `ENV_OBJECT_STORAGE`), session replays and image transform caches (replays warn `REPLAYS_NOT_MOVED`; transforms are made again).',
+        // T19-CHECK: P6-31 (STORAGE_PREFIX_CHANGES and STORAGE_LAYOUT_DIFFERS have not landed; confirm the names, what the move copies and when)
+        'Saved-settings S3 or Azure bucket. On a shared deployment every object of such an app sits under `apps/<id>/` in its bucket; on a dedicated stack it sits at the bucket root. A move between the two therefore changes every key. A copy within the bucket is needed, or the app finds nothing. Ruling P6-31 adds a plan warning `STORAGE_PREFIX_CHANGES` (the keys change, the move copies them) and a blocker `STORAGE_LAYOUT_DIFFERS` (the two sides keep objects in a layout the move cannot translate).',
         'A pull stalls if nothing moves for 10 minutes, and then fails. A failed pull keeps what it copied; Resume continues.',
         'A pull streams each object into a temporary file under the system temporary folder (`<tmpdir>/nivaro-hub-transfer/`) and only then stores it, so a failed object never leaves a half-written one. Temporary files older than 24 hours are removed when the next pull starts. A stack with a small `/tmp` should give that folder a volume; there is no setting for it yet. Separately, local storage writes each object to `<key>.nvr-part-<random>` beside its final name and renames it; a process killed mid-write leaves that file behind. It is never served and nothing sweeps it: delete leftovers by hand when no process is running.',
-        "The one plain (not SSRF-pinned) fetch to an address another system named: when the source is a private IP literal (loopback or RFC 1918, for example the Hub's own network), the pull fetches it with no redirects, and a literal cannot be rebound. A source named by an https host name goes through the SSRF guard: a name that resolves to a private address is refused unless the target lists it in `SSRF_ALLOW_HOSTS`. Give the target either an origin that resolves publicly, or a private IP address.",
-        '`LINK_URL_NOT_PULLABLE` (between shared deployments, the source deployment\'s link address is a name that resolves to a private address) can be overridden: tick "The target deployment allows this host (it is in its SSRF_ALLOW_HOSTS)" in the start panel. The start then carries `overrides: ["LINK_URL_NOT_PULLABLE"]` and the activity row records it. If the target does not really allow the host, the first file copy fails and the move rolls back.',
+        "The one plain fetch (not address-checked) to an address another system named: when the source is a private IP literal (loopback or RFC 1918, for example the Hub's own network), the pull fetches it with no redirects, and a literal cannot be rebound. A source named by an https host name goes through the check that stops a server calling private addresses: a name that resolves to a private address is refused unless the target lists it in its `SSRF_ALLOW_HOSTS` setting. Give the target either an origin that resolves publicly, or a private IP address.",
+        '`LINK_URL_NOT_PULLABLE` (between shared deployments, the source deployment\'s link address is a name that resolves to a private address) can be overridden: tick "The target deployment allows this host (it is in its SSRF_ALLOW_HOSTS)" (that setting lists hosts the private-address check lets through) in the start panel. The start then carries `overrides: ["LINK_URL_NOT_PULLABLE"]` and the activity row records it. If the target does not really allow the host, the first file copy fails and the move rolls back.',
         "A source with S3 or Azure as the env provider but rows saying `local` (files from before a driver switch) is read through the source's storage, whole objects in memory on the source. Big files make the source use memory."
       ]
     },
@@ -625,12 +631,13 @@ export const hubMovesDocs: DocSection = {
     {
       type: 'ul',
       items: [
-        'Any failure or Cancel before `release` rolls the move back. The completed steps are undone, the step that failed too (it may have half happened), newest first: `release` (if it started: the target is frozen again first), `route` (every route change is recorded before it is applied, so one that never converged is undone too), `place_on_target`, `deploy_target` (a Docker stack removed with its volumes kept; a GitLab target retired over its hub link), `maintenance_on` (the environment status goes back and the source leaves maintenance). Copied files stay on the target. The move ends `rolled_back` (or `cancelled`) and the environment returns to the status it had before. A placement made for the target stays for reuse, and is not deleted.',
+        "Any failure or Cancel before `release` rolls the move back, in a fixed order whatever order the steps ran in (ruling P6-26): (1) the target is frozen, and the Hub must prove it; (2) the target-side route changes are undone, without ever applying the target app's own stack again; (3) the target is stopped or removed (a Docker stack is removed with its volumes kept; a GitLab target is retired over its hub link; a shared target is unplaced and every replica must hold the list without it); (4) the source-side route changes are undone (the source gets its names back); (5) only then the source leaves maintenance and the environment returns to the status it had before. The step that failed is undone too (it may have half happened). Every route change is recorded before it is applied, so one that never converged is undone as well. Copied files stay on the target. The move ends `rolled_back` (or `cancelled`). A dedicated placement made for the target stays for reuse and is not deleted.",
         'After `release` nothing is rolled back (Cancel answers `409 TOO_LATE`). If `retire_source` fails the move is `success` with a warning, and the checklist item `retire_source` stays open: retire or stop the old placement yourself.',
-        "A run whose heartbeat is older than 2 minutes (the Hub restarted, or the process died) shows as `interrupted`, with Resume (continues from the stored step) and Roll back. Restarting the Hub marks such runs by itself, and frees the dead run's lock so resume or rollback is not `BUSY` for minutes. A run that loses its locks stops at once and never undoes beside another runner: it is interrupted, and you roll back after it heals.",
+        "A run that has stopped reporting for 2 minutes (the Hub restarted, or the process died) shows as `interrupted`, with Resume (continues from the stored step) and Roll back. Restarting the Hub marks such runs by itself, and frees the dead run's lock so resume or rollback is not `BUSY` for minutes. A run that loses its locks stops at once and never undoes beside another runner: it is interrupted, and you roll back after it heals.",
         'Cancel is a two-press confirm. A running move rolls back at its next step boundary; an interrupted one rolls back at once. `409 MOVE_ENDED` once it ended, `ROLLING_BACK` while it undoes.',
-        'Never two writers. The source is only taken out of maintenance after the Hub has proven the target cannot write: the target is frozen (a shared target: listed in maintenance and every replica holds it; a dedicated target: maintenance read back over its hub link), then removed or retired. A stopped target never boots writable again (its done marker is invalidated).',
-        'Halted: if the target (lifted at release) can be neither frozen nor stopped, the rollback stops with the source still in maintenance, one writer rather than availability. The move is `interrupted` with the code `HALTED_TARGET_LIVE` and a required checklist item `target_stopped` that names what to stop. For a shared target, stop the whole deployment, or make sure every replica lists the app as maintenance. For a Docker target, remove the stack (`docker stack rm <stack>`) or put the app in maintenance. For a GitLab target, stop its stack on its swarm manager or put the app in maintenance. Then tick "target stopped" (the Hub takes your word for it) and press Roll back: the Hub retries the freeze, then lifts the source. Resume is hidden in this state, and Roll back stays disabled until the box is ticked. A rollback that cannot stop the target without the box answers `TARGET_NOT_STOPPED`.',
+        "Never two writers: a freeze is proven, not assumed. A shared target counts as frozen only when the Hub has written the environment as `maintenance` on its list and every replica it has seen holds that list (a refresh of a list that still says `active` is not a freeze, and no replica seen means keep waiting). A dedicated Docker target counts as frozen when its maintenance is switched on over its own address and read back. A GitLab target: the same, or a retire read back. Before `release` the target is frozen by construction (a Docker target boots in maintenance, a GitLab target is held right after its deploy, a shared target lists the placed app as maintenance), so it is not frozen again. Switching a target's maintenance on also drops the boot-maintenance done marker for this move in the target's Redis, so a stack that ever came back would boot in maintenance rather than writable.",
+        'Halted: if the target (lifted at release) can be neither frozen nor stopped, the rollback stops with the source still in maintenance, one writer rather than availability. The move is `interrupted` with the code `HALTED_TARGET_LIVE` and a required checklist item `target_stopped` that says what to do for that kind of target. A shared target: stop the shared deployment (scale its services to 0) until the rollback is done; the rollback then drops the app from its list and the deployment can start again, so every other app on it is down meanwhile. A Docker target: remove the stack on its swarm (`docker stack rm <stack>`) and do not deploy it again. A GitLab target: remove its stack on its swarm manager (`docker stack rm`) and stop its pipeline from deploying it again. Resume is hidden in this state, and Roll back stays disabled until the box is ticked.',
+        "Before you tick `target_stopped`, make sure that no process of this app runs at the target and that none can restart. Check it: open the target's public or link address and see that it no longer answers for this app (the stack is gone, the deployment is stopped, or the app is listed as maintenance on every replica). Ticking is taken as proof, with nothing re-checked: the Hub then restores the environment to the source and lifts the source's maintenance. A wrong tick opens writes on the old placement while the new one may still accept them, two writers on one database. After the tick press Roll back; the Hub retries the freeze first. `TARGET_NOT_STOPPED` is a different, narrower code: a GitLab target's retire call failed, so stop its stack by hand.",
         'Every rollback and every release carries the move id with its maintenance-off call. If the Hub has lost the move and a container stays stuck in maintenance: remove `HUB_BOOT_MAINTENANCE` from the stack, then send `POST /api/hub-link/maintenance` with `{"on": false}` and no move id (or delete the `nvr:maintenance` key in that app\'s Redis). A move id that is not the held one answers 409 `MAINTENANCE_OTHER_MOVE` and lifts nothing.',
         "The source and the target of a move must not share one Redis database with the same key prefix (and the same `HUB_TOKEN`). They would read each other's retire and maintenance markers. The plan checks this (`REDIS_SHARED`, or `REDIS_UNVERIFIED` when it cannot see)."
       ]
@@ -647,7 +654,7 @@ export const hubMovesDocs: DocSection = {
     },
     {
       type: 'table',
-      head: ['Item', 'When it appears', 'Required to start'],
+      head: ['Item', 'When it appears', 'Must be ticked'],
       rows: [
         [
           '`callbacks_registered`',
@@ -700,9 +707,24 @@ export const hubMovesDocs: DocSection = {
           'no (it stays open after `retire_source`)'
         ],
         [
-          '`retire_source`, `repoint_name`, `target_stopped`',
-          'Added by the run: the old placement could not be retired (success with a warning); a manual route must be pointed back after a rollback; the target of a halted rollback must be stopped.',
-          'no (not part of the start; `repoint_name` and `target_stopped` are required items you must tick)'
+          '`retire_source`',
+          'Added by the run when the old placement could not be retired (the move is a success with a warning). Retire or stop it yourself.',
+          'no'
+        ],
+        [
+          '`temp_host`',
+          "Added by the run when the per-move name could not be removed from the target stack at the end. Apply the environment's stack again (Apply now renders only its own names), then check that the name no longer serves the app.",
+          'no'
+        ],
+        [
+          '`repoint_name`',
+          'Added after a rollback of a move whose manual route a person already did: point the names back to the source.',
+          'yes (to close the move)'
+        ],
+        [
+          '`target_stopped`',
+          'Added when a rollback halts (`HALTED_TARGET_LIVE`): what to stop, and the statement you vouch for.',
+          'yes (the rollback waits for it)'
         ]
       ]
     },
