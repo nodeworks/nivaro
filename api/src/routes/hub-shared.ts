@@ -546,30 +546,27 @@ export function hubSharedRoutes(app: FastifyInstance): void {
       secrets = sc.secrets
     }
     const { secrets: _secrets, ...fields } = b
-    return guarded(reply, async () => {
-      const checked = validateSharedInput(fields, existing)
-      if (!checked.ok) return refuse(reply, 400, checked.code, checked.message)
-      // Final review I-4: an extension a listed app uses never leaves the deployment (its next
-      // apply would restart that app without its hooks and routes).
-      if (b.extensions !== undefined) {
-        const dropped = existing.extensions.filter((x) => !checked.row.extensions.includes(x))
-        if (dropped.length) {
-          const users = (await tenantsOf(existing))
-            .map((r) => ({ r, uses: r.app.extensions.filter((x) => dropped.includes(x)) }))
-            .filter((u) => u.uses.length)
-          if (users.length)
-            return refuse(
-              reply,
-              409,
-              'EXTENSION_IN_USE',
-              `${users
-                .slice(0, 5)
-                .map((u) => `${u.r.app.key}/${u.r.env.key} uses ${u.uses.join(', ')}`)
-                .join(
-                  '; '
-                )}${users.length > 5 ? '; …' : ''}. Move those apps off the deployment, or remove the extension from them, first.`
-            )
-        }
+    const patchShared = async (
+      checked: Extract<ReturnType<typeof validateSharedInput>, { ok: true }>,
+      dropped: string[],
+      current: SharedDeployment = existing
+    ) => {
+      if (dropped.length) {
+        const users = (await tenantsOf(current))
+          .map((r) => ({ r, uses: r.app.extensions.filter((x) => dropped.includes(x)) }))
+          .filter((u) => u.uses.length)
+        if (users.length)
+          return refuse(
+            reply,
+            409,
+            'EXTENSION_IN_USE',
+            `${users
+              .slice(0, 5)
+              .map((u) => `${u.r.app.key}/${u.r.env.key} uses ${u.uses.join(', ')}`)
+              .join(
+                '; '
+              )}${users.length > 5 ? '; …' : ''}. Move those apps off the deployment, or remove the extension from them, first.`
+          )
       }
       const changes: Partial<SharedFields> = {}
       const changed: string[] = []
@@ -599,6 +596,33 @@ export function hubSharedRoutes(app: FastifyInstance): void {
       // The stack reads REDIS_URL only when applied again: the same hook a token rotation uses.
       const { reapply, reapply_reason } = await reapplyStack(updated, userId(req))
       return { data: updated, secrets: await sharedSecretsShown(id), reapply, reapply_reason }
+    }
+    return guarded(reply, async () => {
+      const checked = validateSharedInput(fields, existing)
+      if (!checked.ok) return refuse(reply, 400, checked.code, checked.message)
+      const dropped =
+        b.extensions === undefined
+          ? []
+          : existing.extensions.filter((x) => !checked.row.extensions.includes(x))
+      // Re-review FW1-M-3: dropping an extension is judged and written under the deployment's
+      // lock (holder `place`), which a placement holds while it writes and re-checks its app's
+      // extensions — so a place at the same moment never passes the check. Other edits take no
+      // lock, as before.
+      if (!dropped.length) return patchShared(checked, dropped)
+      const lock = defaultSharedLock()
+      const token = await lock.take(id, 'place')
+      if (!token) {
+        const r = sharedLockRefusal(await lock.holder(id))
+        return refuse(reply, 409, r.code, r.message)
+      }
+      try {
+        const fresh = await getShared(id)
+        if (!fresh) return notFound(reply)
+        if (fresh.status === 'retired') return retired(reply)
+        return await patchShared(checked, dropped, fresh)
+      } finally {
+        await lock.release(id, token)
+      }
     })
   })
 

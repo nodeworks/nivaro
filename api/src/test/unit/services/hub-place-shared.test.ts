@@ -1378,3 +1378,36 @@ describe('re-review FW1-I-1: a retry naming another database is judged like a fi
     ).toBe('SERVING_UNKNOWN')
   })
 })
+
+describe('re-review FW1-M-3: the place re-checks extensions under the deployment lock', () => {
+  it('an extension dropped between the checks and the write → EXTENSION_NOT_ALLOWED, nothing written', async () => {
+    const app = await newApp({ extensions: JSON.stringify(['reports']) })
+    const envId = await newEnv(app.id)
+    const real = defaultSharedLock()
+    const racing = {
+      ...real,
+      take: async (id: number, holder: 'place') => {
+        await db('nivaro_hub_shared_deployments')
+          .where({ id })
+          .update({ extensions: JSON.stringify([]) })
+        return real.take(id, holder)
+      }
+    }
+    try {
+      const err = await refusal(
+        place(
+          envId,
+          { database_id: await newDb() },
+          { client: fakeClient().factory, sharedLock: racing }
+        )
+      )
+      expect(err).toMatchObject({ code: 'EXTENSION_NOT_ALLOWED', statusCode: 409 })
+      const env = await db('nivaro_hub_environments').where({ id: envId }).first()
+      expect(env).toMatchObject({ placement_id: null, db_ref: null })
+    } finally {
+      await db('nivaro_hub_shared_deployments')
+        .where({ id: sharedId })
+        .update({ extensions: JSON.stringify(['reports']) })
+    }
+  })
+})

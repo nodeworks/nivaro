@@ -828,6 +828,14 @@ async function checkAndWrite(
     if (!shared) throw refuse('NOT_FOUND', 'No such shared deployment.', 404)
     const again = sharedStateRefusal(shared)
     if (again) throw again
+    // Re-review FW1-M-3: an extension PATCH drops one only under this same lock — judged again
+    // here so a drop between the checks and this write never strips this app's extension.
+    const gone = app.extensions.filter((x) => !shared.extensions.includes(x))
+    if (gone.length)
+      throw refuse(
+        'EXTENSION_NOT_ALLOWED',
+        `The shared deployment does not load ${gone.slice(0, 10).join(', ')}, which this app uses.`
+      )
     const pool = input.pool_max ?? DEFAULT_POOL_MAX
     const used = await sharedPoolUsed(shared.id, envId)
     if (used + pool > shared.pool_budget)
