@@ -2,7 +2,9 @@ import { createHash } from 'node:crypto'
 import { db } from '../../db/index.js'
 import { logActivity } from '../activity.js'
 import { registerAppKeyed } from '../app-forget.js'
+import { registerAppSeed } from '../app-seeds.js'
 import { bodySecretNames } from '../body-secrets.js'
+import { tenantSource } from '../deployment-mode.js'
 import { parseJson, toJsonStr } from '../pipeline-engine.js'
 import { currentTenantKey } from '../tenant-rooms.js'
 import { validateSpec } from './evaluate.js'
@@ -344,6 +346,10 @@ export async function registerPayloadTemplate(
 ): Promise<void> {
   validateDef(owner, def)
   tenantRegistry().set(def.key, { ...def, owner })
+  // A Hub shared deployment registers at boot outside any app: every app is seeded when it joins
+  // the process and after each of its migrations (services/app-seeds.ts) instead.
+  registerAppSeed('payload-templates', seedRegisteredPayloadTemplates)
+  if (tenantSource() === 'hub' && !currentTenantKey()) return
   try {
     await seed(owner, def)
   } catch (e) {
@@ -352,6 +358,32 @@ export async function registerPayloadTemplate(
       `[payload-templates] could not seed '${def.key}': ${e instanceof Error ? e.message : e}`
     )
   }
+}
+
+/**
+ * Seeds every registered template into the current app (the boot-time registrations, then the
+ * app's own), with the same idempotence as a boot: a missing row is inserted at version 1,
+ * registrar-owned metadata follows the code, bodies a person published are never touched.
+ * Answers how many were seeded; a template whose seed fails is logged and skipped.
+ */
+export async function seedRegisteredPayloadTemplates(): Promise<number> {
+  const defs = new Map([
+    ...(registries.get('') ?? new Map<string, RegisteredPayloadTemplate>()),
+    ...(registries.get(currentTenantKey()) ?? new Map<string, RegisteredPayloadTemplate>())
+  ])
+  let n = 0
+  for (const def of defs.values()) {
+    try {
+      await seed(def.owner, def)
+      n++
+    } catch (e) {
+      // biome-ignore lint/suspicious/noConsole: a seed failure must be visible in the server log
+      console.warn(
+        `[payload-templates] could not seed '${def.key}': ${e instanceof Error ? e.message : e}`
+      )
+    }
+  }
+  return n
 }
 
 /** Whether the template's live version is still its seed: version 1 and no version row a person
