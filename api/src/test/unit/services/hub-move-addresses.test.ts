@@ -375,7 +375,7 @@ describe('GitLab boot maintenance proof (P6-20 gather)', () => {
     const env = await envOn(await placementOf('shared'))
     const appId = (await db('nivaro_hub_environments').where({ id: env }).first('app_id')).app_id
     const NEW: Record<string, string> = {
-      'ci/deploy.yml': 'deploy.sh … HUB_BOOT_MAINTENANCE …',
+      'ci/deploy.yml': 'deploy.sh … HUB_BOOT_MAINTENANCE … boot-maintenance= …',
       'manager/nivaro-hub-deploy': '… the stack file does not pass HUB_BOOT_MAINTENANCE …',
       // biome-ignore lint/suspicious/noTemplateCurlyInString: a compose placeholder, literally
       'manager/docker-stack.yml': 'HUB_BOOT_MAINTENANCE: ${HUB_BOOT_MAINTENANCE:-}'
@@ -402,6 +402,11 @@ describe('GitLab boot maintenance proof (P6-20 gather)', () => {
           }
         }
       })
+    ).toBe('unproven')
+    // FW-4 I-1: a template that forwards only the pipeline variable (its job runs by itself on
+    // the pin commit, where no variable reaches it) is not proof: the pin line is what counts.
+    expect(
+      await ask({ ...NEW, 'ci/deploy.yml': 'deploy.sh … HUB_BOOT_MAINTENANCE (pipeline only) …' })
     ).toBe('unproven')
   })
 
