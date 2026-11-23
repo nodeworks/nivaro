@@ -2120,16 +2120,23 @@ export async function chatRoutes(app: FastifyInstance) {
     )
       void commentWritten(id, rec.collection, null)
     // Extensions listening for comments (ctx.comments.onCreated): off the request, never fails it.
-    void commentCreated({
-      id,
-      collection: rec.collection,
-      item: String(rec.id),
-      field: null,
-      text,
-      author,
-      writtenBy: String(req.user!.id),
-      source: 'chat-copy'
-    })
+    // Same gate as the GitLab copy: only the message's own author, passing the /comments create
+    // gate — an extension may send the comment out under its author's name (EFP: MWF message with
+    // the author's email), so a copy of someone else's message is never announced.
+    if (
+      author.toUpperCase() === String(req.user!.id).toUpperCase() &&
+      (await mayCommentOnRecord(req, rec.collection, rec.id))
+    )
+      void commentCreated({
+        id,
+        collection: rec.collection,
+        item: String(rec.id),
+        field: null,
+        text,
+        author,
+        writtenBy: String(req.user!.id),
+        source: 'chat-copy'
+      })
     // Ids only — never who wrote it (realtime gaps B4 review).
     emitRecordEvent(rec.collection, rec.id, 'record:comment')
     // Realtime gaps 2026-11-17 (minor): list comment columns and other Notes panels hear it too.
