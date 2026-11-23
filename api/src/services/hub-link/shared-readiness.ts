@@ -4,6 +4,13 @@ import { db } from '../../db/index.js'
 import { rawRows } from '../../db/raw-rows.js'
 import { NIVARO_VERSION } from '../../version.js'
 import { APP_KEY_RE, keyFingerprint } from '../app-key-fingerprint.js'
+import {
+  DB_IDENTITY_DEFAULT_PORT,
+  type DbIdentityEngine,
+  dbIdentitySql,
+  formatDbIdentity,
+  oidcIdentity
+} from '../db-identity.js'
 
 /**
  * Nivaro Hub phase 6 (Decision 12): what this dedicated app would lose on a Hub shared deployment,
@@ -255,20 +262,8 @@ function keyFp(): string | null {
   return APP_KEY_RE.test(k) ? keyFingerprint(k) : null
 }
 
-/** The sign-in issuer as the Hub compares it (Decision 13): host, plus the Entra tenant segment
- *  (`login.microsoftonline.com/<tenant>/v2.0`); null when no issuer is set. */
-export function oidcIdentity(issuer: string | null | undefined): SharedReadiness['oidc'] {
-  const raw = (issuer ?? '').trim()
-  if (!raw) return null
-  try {
-    const u = new URL(raw)
-    const first = u.pathname.split('/').filter(Boolean)[0] ?? ''
-    const tenant = first && !/^v\d/i.test(first) ? first.toLowerCase() : null
-    return { issuer_host: u.host.toLowerCase(), tenant }
-  } catch {
-    return null
-  }
-}
+/** The sign-in issuer as the Hub compares it (Decision 13): services/db-identity.ts. */
+export { oidcIdentity }
 
 async function signinHub(): Promise<boolean> {
   try {
@@ -279,28 +274,18 @@ async function signinHub(): Promise<boolean> {
   }
 }
 
-/** The same read-only statements as the Hub's phase-3 IDENTITY_SQL (services/hub/db/databases.ts,
- *  also copied in services/tenancy for the deployment's db-check): which server and database the
- *  app's own connection really reached. */
-const IDENTITY_SQL: Record<string, string> = {
-  mssql: 'SELECT CAST(@@SERVERNAME AS nvarchar(256)) AS s, CAST(NULL AS int) AS p, DB_NAME() AS d',
-  pg: "SELECT COALESCE(host(inet_server_addr()), '') AS s, inet_server_port() AS p, current_database() AS d",
-  mysql2: 'SELECT @@hostname AS s, @@port AS p, DATABASE() AS d',
-  mariadb: 'SELECT @@hostname AS s, @@port AS p, DATABASE() AS d'
-}
-const DEFAULT_PORT: Record<string, number> = { mssql: 1433, pg: 5432, mysql2: 3306, mariadb: 3306 }
-
 async function dbIdentity(): Promise<string | null> {
   const engine = config.DB_MARIADB ? 'mariadb' : String(config.DB_CLIENT)
-  const sql = IDENTITY_SQL[engine]
+  // Which server and database the app's own connection really reached: services/db-identity.ts.
+  const sql = dbIdentitySql(engine)
   if (!sql) return null // SQLite: a file, no server identity
   try {
     const [r] = rawRows<{ s: unknown; p: unknown; d: unknown }>(await db.raw(sql))
-    const server = String(r?.s ?? '').trim() || String(config.DB_HOST ?? '')
-    const port =
-      r?.p != null && r.p !== '' ? Number(r.p) : (config.DB_PORT ?? DEFAULT_PORT[engine] ?? null)
-    const database = String(r?.d ?? '').trim() || String(config.DB_DATABASE ?? '')
-    return `${engine}|${server}|${port}|${database}`.toLowerCase()
+    return formatDbIdentity(engine, r, {
+      server: String(config.DB_HOST ?? ''),
+      port: config.DB_PORT ?? DB_IDENTITY_DEFAULT_PORT[engine as DbIdentityEngine] ?? null,
+      database: String(config.DB_DATABASE ?? '')
+    })
   } catch {
     return null
   }

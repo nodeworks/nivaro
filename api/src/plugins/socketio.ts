@@ -1809,28 +1809,10 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         app.log.warn({ err }, 'Socket auth failed')
       }
     }
-    /**
-     * Cloud: a ws-token / View-as entry that names the tenant it was minted under (`t` or
-     * `tenant` in its JSON) signs a socket in only on that tenant's host. One that names none
-     * (older minting code) is judged by the socket's own tenant database alone, as before.
-     * A Hub shared deployment (ruling P5-16) refuses one that names no app: its apps are
-     * copies of each other, so their databases cannot tell one app's user from another's.
-     */
-    const mintedForThisTenant = async (raw: string): Promise<boolean> => {
-      if (!cloud) return true
-      // Untagged: accepted in Nivaro Cloud (as before), refused on a Hub shared deployment.
-      const untaggedOk = isNivaroCloud()
-      let named: unknown = null
-      try {
-        const v = JSON.parse(raw) as { t?: unknown; tenant?: unknown }
-        named = v?.t ?? v?.tenant ?? null
-      } catch {
-        return untaggedOk
-      }
-      if (named == null || named === '') return untaggedOk
-      const t = await socketTenant(socket)
-      return !!t && [t.tenantId, t.slug].map(String).includes(String(named))
-    }
+    // A ws-token / View-as entry signs this socket in only on the tenant it was minted under
+    // (wsEntryMintedForTenant, below the plugin).
+    const mintedForThisTenant = (raw: string): Promise<boolean> =>
+      wsEntryMintedForTenant(raw, cloud, () => socketTenant(socket))
 
     // Cloud: auth runs in the socket's tenant context (#1132); self-hosted: unchanged.
     socket.on('auth', (payload: { token?: string }) => {
@@ -2955,3 +2937,32 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     io.close()
   })
 })
+
+/**
+ * The ws-token / View-as entry reader's tenant rule (the socket `auth` handler above).
+ * Cloud: an entry that names the tenant it was minted under (`t` or `tenant` in its JSON) signs a
+ * socket in only on that tenant's host. One that names none (older minting code) is judged by the
+ * socket's own tenant database alone, as before. A Hub shared deployment (ruling P5-16) refuses
+ * one that names no app: its apps are copies of each other, so their databases cannot tell one
+ * app's user from another's. Self-hosted (`multiTenant` false): always true.
+ * `tenant` = the socket's own resolved tenant (socketTenant); read only when the entry names one.
+ */
+export async function wsEntryMintedForTenant(
+  raw: string,
+  multiTenant: boolean,
+  tenant: () => Promise<{ tenantId: string; slug: string } | null>
+): Promise<boolean> {
+  if (!multiTenant) return true
+  // Untagged: accepted in Nivaro Cloud (as before), refused on a Hub shared deployment.
+  const untaggedOk = isNivaroCloud()
+  let named: unknown = null
+  try {
+    const v = JSON.parse(raw) as { t?: unknown; tenant?: unknown }
+    named = v?.t ?? v?.tenant ?? null
+  } catch {
+    return untaggedOk
+  }
+  if (named == null || named === '') return untaggedOk
+  const t = await tenant()
+  return !!t && [t.tenantId, t.slug].map(String).includes(String(named))
+}
