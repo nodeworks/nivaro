@@ -486,7 +486,8 @@ export function validateStackSpec(body: unknown, cfg: SpecConfig): SpecResult {
       if (typeof role !== 'string' || !(ROLES as readonly string[]).includes(role)) {
         bad(`${p}.role`, 'ROLE_BAD')
       } else if (seen.has(role)) bad(`${p}.role`, 'ROLE_BAD')
-      // A shared deployment runs no separate realtime role (phase 6).
+      // A shared deployment runs no separate realtime role (phase 6): Nivaro refuses
+      // NIVARO_ROLE=realtime on a process that serves many apps.
       else if (sharedKey !== null && role === 'realtime') bad(`${p}.role`, 'ROLE_NOT_SHARED')
       // Final review E-1: the realtime router's path rule is Traefik v3 PathRegexp syntax; v2
       // would never route it (realtime lost without a word). The publish edge routes no paths.
@@ -538,6 +539,16 @@ export function validateStackSpec(body: unknown, cfg: SpecConfig): SpecResult {
       roles.push(out)
     })
     if (seen.has('all') && body.roles.length > 1) bad('roles', 'ROLE_BAD')
+    // Task 14: a shared stack is `all` alone, or a split with a `web` (someone serves the apps)
+    // and a `worker` (the role that ticks every app's crons: its scheduled jobs, its import
+    // fan-out). Checked only when every role was readable (a bad one has its own code).
+    else if (
+      sharedKey !== null &&
+      seen.size === body.roles.length &&
+      !seen.has('all') &&
+      !(seen.has('web') && seen.has('worker'))
+    )
+      bad('roles', 'ROLE_NOT_SHARED')
     if (total > MAX_TOTAL_REPLICAS) bad('roles', 'REPLICAS_BAD')
   }
 

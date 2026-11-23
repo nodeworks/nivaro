@@ -1027,6 +1027,56 @@ describe('validateStackSpec — shared deployment owners (phase 6)', () => {
     expect(validateStackSpec({ ...base(), roles }, cfg()).ok).toBe(true)
   })
 
+  it('Task 14: a shared owner takes the role split the Hub sends (web, worker, importer) and all alone', () => {
+    const limits = { cpus: 2, memory_mb: 4096 }
+    for (const roles of [
+      [{ role: 'all', replicas: 1, ...limits }],
+      [
+        { role: 'web', replicas: 2, ...limits, env: { CRON_TICKS: 'off' } },
+        { role: 'worker', replicas: 1, ...limits },
+        { role: 'importer', replicas: 1, ...limits }
+      ],
+      [
+        { role: 'web', replicas: 3, ...limits, env: { CRON_TICKS: 'off' } },
+        { role: 'worker', replicas: 1, ...limits },
+        { role: 'importer', replicas: 1, ...limits }
+      ]
+    ]) {
+      const r = validateStackSpec(shared({ roles }), cfg())
+      expect(r, JSON.stringify(roles)).toMatchObject({ ok: true })
+      if (r.ok) expect(r.spec.roles).toEqual(roles)
+    }
+  })
+
+  it('Task 14: a shared split without a web or a worker → ROLE_NOT_SHARED (nobody serves, or no app ticks)', () => {
+    const noWorker = [
+      { role: 'web', replicas: 2 },
+      { role: 'importer', replicas: 1 }
+    ]
+    const noWeb = [
+      { role: 'worker', replicas: 1 },
+      { role: 'importer', replicas: 1 }
+    ]
+    expect(codeOf(shared({ roles: noWorker }), 'roles')).toBe('ROLE_NOT_SHARED')
+    expect(codeOf(shared({ roles: noWeb }), 'roles')).toBe('ROLE_NOT_SHARED')
+    expect(codeOf(shared({ roles: [{ role: 'importer', replicas: 1 }] }), 'roles')).toBe(
+      'ROLE_NOT_SHARED'
+    )
+    // An app owner is not held to it (a dedicated stack's roles are the Hub template's).
+    expect(validateStackSpec({ ...base(), roles: noWorker }, cfg()).ok).toBe(true)
+  })
+
+  it('Task 14: a role outside the set is still refused on a shared owner', () => {
+    for (const role of ['exporter', 'canary', 'WEB', '', 7]) {
+      const roles = [
+        { role: 'web', replicas: 1 },
+        { role: 'worker', replicas: 1 },
+        { role, replicas: 1 }
+      ]
+      expect(codeOf(shared({ roles }), 'roles[2].role'), String(role)).toBe('ROLE_BAD')
+    }
+  })
+
   it('final review E-1: a realtime role on Traefik v2 → ROLE_NEEDS_TRAEFIK_V3 (its router is v3 PathRegexp)', () => {
     const roles = [
       { role: 'web', replicas: 2 },
