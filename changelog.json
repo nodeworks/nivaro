@@ -1,10 +1,93 @@
 {
-  "generated_at": "2026-11-23T09:57:26.883Z",
+  "generated_at": "2026-11-23T21:23:15.161Z",
   "releases": [
+    {
+      "version": "0.3.211",
+      "tag": "v0.3.211",
+      "date": "2026-11-23T16:22:57-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "shared",
+              "text": "ItemEditForm createStartState creates a record in a step",
+              "hash": "5234f4423"
+            },
+            {
+              "section": "Added",
+              "scope": "extensions",
+              "text": "ctx.comments.onCreated for record comments",
+              "hash": "051dca715"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "deployment-wide variables on a shared deployment (settings.env)",
+              "hash": "eaf8139d1"
+            },
+            {
+              "section": "Added",
+              "scope": "hub-agent",
+              "text": "trusted CA bundle for app stacks (HUB_AGENT_CA_BUNDLE_FILE)",
+              "hash": "d78f3d96e"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "open a SQL Server URL with options as a connection object",
+              "hash": "fc4156773"
+            },
+            {
+              "section": "Fixed",
+              "scope": "extensions",
+              "text": "announce a chat copy to Notes only under the GitLab gate",
+              "hash": "5f6e7b32b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub-agent",
+              "text": "inspect images on a registry with a port",
+              "hash": "3e7f721cb"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "Apps list toolbar stays on one line",
+              "hash": "b88379543"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "give the deploy.sh runs and the cloud-flag scan 60 s",
+              "hash": "78cf8c13e"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "give the known-env guard 60 s; the generator takes ~6 s on CI",
+              "hash": "dee9d226e"
+            }
+          ]
+        }
+      ],
+      "count": 10
+    },
     {
       "version": "0.3.210",
       "tag": "v0.3.210",
-      "date": "2026-11-23T04:57:09-05:00",
+      "date": "2026-11-23T04:57:26-05:00",
       "sections": [
         {
           "label": "Fixed",
