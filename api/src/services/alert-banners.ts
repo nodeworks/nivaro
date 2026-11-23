@@ -92,10 +92,17 @@ export async function bannerDefinitionIds(): Promise<Set<number>> {
   return ids
 }
 
+/** Drop the memo: inside an app that app's, outside any app every app's (final review Minor 1). */
+export function forgetBannerMemo(): void {
+  const app = currentTenantKey()
+  if (app) memos.delete(app)
+  else memos.clear()
+}
+
 export async function setDefinitionBanner(defId: number, on: boolean): Promise<void> {
-  memos.delete(currentTenantKey())
+  forgetBannerMemo()
   const current = await bannerDefinitionIds()
-  memos.delete(currentTenantKey())
+  forgetBannerMemo()
   const next = new Set(current)
   if (on) next.add(defId)
   else next.delete(defId)
