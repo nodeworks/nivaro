@@ -377,7 +377,9 @@ describe('shared deployment: boot passes go through one process-wide queue', () 
     await f.ready()
     lc.fireAppReady(tenant('A'))
     await until(ORDER.length)
-    expect(state.calls.map((c) => c.pass)).toEqual(ORDER.map((p) => (p === 'rest-routes:2' ? 'rest-routes:0' : p)))
+    expect(state.calls.map((c) => c.pass)).toEqual(
+      ORDER.map((p) => (p === 'rest-routes:2' ? 'rest-routes:0' : p))
+    )
   })
 })
 

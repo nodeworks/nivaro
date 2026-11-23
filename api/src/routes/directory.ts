@@ -77,11 +77,7 @@ export async function directoryRoutes(app: FastifyInstance) {
     '/status',
     { preHandler: requireAuth },
     async (req) => {
-      if (
-        req.query.fresh === '1' &&
-        req.isAdmin &&
-        Date.now() - lastForcedRefresh.value > 30_000
-      ) {
+      if (req.query.fresh === '1' && req.isAdmin && Date.now() - lastForcedRefresh.value > 30_000) {
         lastForcedRefresh.value = Date.now()
         resetDirectoryToken()
       }

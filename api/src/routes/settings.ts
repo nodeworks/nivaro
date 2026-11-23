@@ -806,7 +806,7 @@ export async function settingsRoutes(app: FastifyInstance) {
     { preHandler: requireAdmin },
     async (req, reply) => {
       const { to } = req.body
-      if (!to || !to.includes('@')) {
+      if (!to?.includes('@')) {
         return reply.code(400).send({ error: 'Valid email address required' })
       }
       try {

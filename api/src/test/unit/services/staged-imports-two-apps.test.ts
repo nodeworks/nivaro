@@ -427,7 +427,7 @@ describe('how many runs one process drives at once', () => {
   })
 })
 
-describe('readiness: is something draining this app\'s imports?', () => {
+describe("readiness: is something draining this app's imports?", () => {
   it('shared: stuck imports with no drainer are flagged (a shared deployment is not Nivaro Cloud)', async () => {
     Object.assign(process.env, SHARED, { NIVARO_ROLE: 'web' })
     const long = new Date(Date.now() - 60 * 60_000)

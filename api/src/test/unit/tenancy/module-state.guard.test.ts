@@ -922,7 +922,7 @@ const SHARED: Record<string, string> = {
   'services/staged-import-worker.ts :: drainer':
     "the process drain loop handle (a shared deployment: the deployment's kick subscriber)",
   'services/staged-import-worker.ts :: processDriving':
-    "the count of import runs this process drives across every app (a shared deployment caps the process at IMPORT_MAX_PARALLEL, not each app); a number, no app data",
+    'the count of import runs this process drives across every app (a shared deployment caps the process at IMPORT_MAX_PARALLEL, not each app); a number, no app data',
   'services/staged-import-worker.ts :: passing':
     "the importer's per-app pass in flight on this process (it walks every app; one at a time)",
   'services/staged-imports.ts :: xlsxEntry': 'where the xlsx worker file sits in this image',

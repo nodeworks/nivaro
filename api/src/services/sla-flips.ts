@@ -1,8 +1,8 @@
 import { db } from '../db/index.js'
+import { tenantState } from './ai-tenant-state.js'
 import { appDate } from './chaos/clock.js'
 import { whereInList } from './db-batch.js'
 import { isNivaroCloud } from './deployment-mode.js'
-import { tenantState } from './ai-tenant-state.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
 /**

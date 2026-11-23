@@ -198,7 +198,7 @@ export async function onRowScheduleMessage(app: FastifyInstance, raw: string): P
     return
   }
   // Like the per-app fan-out: never an app the Hub is moving or updating, nor a half-migrated one.
-  if (!t || t.status !== 'active') return
+  if (t?.status !== 'active') return
   if (!appReadyForRequests(t.id)) return
   try {
     await withTenant(

@@ -95,6 +95,7 @@ export function DirectorySyncCard() {
     return s
   }
   // Landing back from the Microsoft connect round-trip.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-shot on mount
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const outcome = params.get('directory')
@@ -112,7 +113,6 @@ export function DirectorySyncCard() {
       if (outcome === 'connected' && !s.granted && s.reason)
         toast.error(s.reason, { duration: 12000 })
     })
-    // biome-ignore lint/correctness/useExhaustiveDependencies: one-shot on mount
   }, [])
   const startConnect = () => {
     const q = new URLSearchParams({ returnTo: `${window.location.origin}/settings` })

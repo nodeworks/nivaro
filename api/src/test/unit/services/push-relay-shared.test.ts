@@ -166,7 +166,7 @@ describe('the stored relay url follows the stored key', () => {
 })
 
 describe('instanceOrigin on a multi-tenant process', () => {
-  it('is the app\'s own origin on a shared deployment', async () => {
+  it("is the app's own origin on a shared deployment", async () => {
     setMode('shared')
     expect(await inApp('A', instanceOrigin, 'https://a.example.com')).toBe('https://a.example.com')
     expect(await inApp('B', instanceOrigin, 'https://b.example.org')).toBe('https://b.example.org')

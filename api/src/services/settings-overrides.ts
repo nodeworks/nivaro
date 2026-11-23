@@ -32,7 +32,7 @@ let envParsed: Record<string, unknown> | null | undefined
 function envOverrides(): Record<string, unknown> | null {
   if (envParsed !== undefined) return envParsed
   const raw = process.env.NIVARO_SETTINGS_OVERRIDES
-  if (!raw || !raw.trim()) {
+  if (!raw?.trim()) {
     envParsed = null
     return null
   }

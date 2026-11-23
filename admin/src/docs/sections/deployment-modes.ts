@@ -138,7 +138,7 @@ export const deploymentModesDocs: DocSection = {
       type: 'ul',
       items: [
         'Huddle media servers come from the platform `HUDDLE_LIVEKIT_URL`, `HUDDLE_TURN_URLS` and `HUDDLE_STUN_URLS`; an app cannot set its own.',
-        'There is no env push-relay key: `MOBILE_PUSH_RELAY_KEY` is ignored on a shared deployment. An app admin connects the app\'s own push relay in Settings → Mobile app, and phone push runs per app.',
+        "There is no env push-relay key: `MOBILE_PUSH_RELAY_KEY` is ignored on a shared deployment. An app admin connects the app's own push relay in Settings → Mobile app, and phone push runs per app.",
         'The SSRF guard applies to URLs an app admin sets (webhooks, link preview, the flow webhook operation): pinned address, every redirect re-checked.',
         'Ending maintenance in one app does not end the operator deployment-wide freeze (see Per-app jobs and maintenance below).'
       ]

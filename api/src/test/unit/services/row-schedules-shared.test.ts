@@ -345,7 +345,12 @@ describe('planReconcile and time zones', () => {
     const cur = [
       { id: 'r-1', expression: '0 7 * * *', timezone: 'Europe/London', timezone_source: 'job' },
       { id: 'r-2', expression: '0 7 * * *', timezone: 'UTC', timezone_source: 'override' },
-      { id: 'r-3', expression: '0 7 * * *', timezone: 'America/New_York', timezone_source: 'instance' }
+      {
+        id: 'r-3',
+        expression: '0 7 * * *',
+        timezone: 'America/New_York',
+        timezone_source: 'instance'
+      }
     ] as const
     const want = new Map([
       ['r-1', { expression: '0 7 * * *', timezone: 'Asia/Tokyo' }],

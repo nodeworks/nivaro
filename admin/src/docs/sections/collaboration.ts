@@ -919,7 +919,7 @@ export const collabTeamsBot: DocSection = {
     },
     {
       type: 'note',
-      text: 'On a Hub shared deployment each app uses only the bot saved in its own Settings. The variables above, the sign-in app fallback below and the `teams_bot_*` instance overrides are ignored there. `TEAMS_BOT=off` still disables the bot for the whole deployment, but `TEAMS_BOT=on` does not switch an app on: each app saves its own switch. Register each app bot with that app\'s own host as the messaging endpoint. The bot stays off in Nivaro Cloud.'
+      text: "On a Hub shared deployment each app uses only the bot saved in its own Settings. The variables above, the sign-in app fallback below and the `teams_bot_*` instance overrides are ignored there. `TEAMS_BOT=off` still disables the bot for the whole deployment, but `TEAMS_BOT=on` does not switch an app on: each app saves its own switch. Register each app bot with that app's own host as the messaging endpoint. The bot stays off in Nivaro Cloud."
     },
     {
       type: 'warn',
