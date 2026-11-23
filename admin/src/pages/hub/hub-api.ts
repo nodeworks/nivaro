@@ -489,6 +489,8 @@ export interface PromotionPlan {
   steps: PromotionStep[]
   /** What a start must send back: it starts only if the plan is still exactly this one. */
   plan_hash?: string
+  /** Phase 6: what the person should know but that never holds the run (HUB_URL_PROBLEM). */
+  warnings?: PromotionBlocker[]
 }
 
 export type PromotionStatus =

@@ -980,3 +980,53 @@ describe('phase 4: stack steps and blocker copy', () => {
     expect(missing).toEqual([])
   })
 })
+
+describe('parked C2: plan warnings', () => {
+  afterEach(() => {
+    h.get.mockReset()
+    h.post.mockReset()
+  })
+
+  it('shows a plan warning in plain words, without its code, and still lets the run start', async () => {
+    routes({
+      plan: {
+        ...okPlan,
+        lines: [
+          ...okPlan.lines,
+          'warning HUB_URL_PROBLEM: HUB_URL is ignored. It must be an https address.'
+        ],
+        warnings: [
+          { code: 'HUB_URL_PROBLEM', text: 'HUB_URL is ignored. It must be an https address.' }
+        ]
+      }
+    })
+    wrap(<HubPromotePanel env={env} kind='promote' idPrefix='t' onClose={() => {}} />)
+    const box = await screen.findByRole('status', { name: 'Before you start' })
+    expect(
+      within(box).getByText("The Hub's own address is not one an app can use")
+    ).toBeInTheDocument()
+    expect(within(box).getByText(/Set HUB_URL on the Hub to its https address/)).toBeInTheDocument()
+    // The planner's own sentence says what is wrong with it.
+    expect(
+      within(box).getByText('HUB_URL is ignored. It must be an https address.')
+    ).toBeInTheDocument()
+    // The code never shows: the plan line that carries it is left out.
+    expect(document.body.textContent).not.toContain('HUB_URL_PROBLEM')
+    expect(screen.getByText('api: merge main into production, then deploy')).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText(/Type production to promote/), {
+      target: { value: 'production' }
+    })
+    expect(startButton()).toBeEnabled()
+  })
+
+  it('an unknown warning code keeps the planner sentence as its words', async () => {
+    routes({
+      plan: { ...okPlan, warnings: [{ code: 'SOMETHING_ODD', text: 'Something is odd here.' }] }
+    })
+    wrap(<HubPromotePanel env={env} kind='promote' idPrefix='t' onClose={() => {}} />)
+    const box = await screen.findByRole('status', { name: 'Before you start' })
+    expect(within(box).getByText('Something is odd here.')).toBeInTheDocument()
+    expect(within(box).getAllByText('Something is odd here.')).toHaveLength(1)
+    expect(document.body.textContent).not.toContain('SOMETHING_ODD')
+  })
+})

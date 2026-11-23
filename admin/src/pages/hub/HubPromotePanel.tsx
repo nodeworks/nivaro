@@ -336,12 +336,27 @@ function PromoteForm({
   )
 }
 
+/**
+ * The plan's lines without the ones that only carry a warning (`warning CODE: text`): those show
+ * in plain words in the warning box, never with their code.
+ */
+export function planLinesShown(plan: PromotionPlan): string[] {
+  const codes = new Set((plan.warnings ?? []).map((w) => w.code))
+  if (codes.size === 0) return plan.lines
+  return plan.lines.filter((line) => {
+    const m = /^warning ([A-Z][A-Z0-9_]*):/.exec(line)
+    return !(m && codes.has(m[1]))
+  })
+}
+
 function PlanPreview({ plan, blockers }: { plan: PromotionPlan; blockers: PromotionBlocker[] }) {
+  const lines = planLinesShown(plan)
+  const warnings = plan.warnings ?? []
   return (
     <div className='space-y-2'>
-      {plan.lines.length > 0 && (
+      {lines.length > 0 && (
         <ul className='m-0 list-none space-y-1 p-0 text-[12px] text-slate-700 dark:text-slate-300'>
-          {plan.lines.map((line, i) => (
+          {lines.map((line, i) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: lines are plain text and may repeat
             <li key={i} className='flex gap-2'>
               <ArrowRight className='mt-0.5 h-3 w-3 shrink-0 text-slate-400' aria-hidden />
@@ -349,6 +364,45 @@ function PlanPreview({ plan, blockers }: { plan: PromotionPlan; blockers: Promot
             </li>
           ))}
         </ul>
+      )}
+      {warnings.length > 0 && (
+        <div
+          role='status'
+          aria-labelledby='hub-plan-warnings'
+          className='rounded-md border border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-900/60 dark:bg-amber-950/40'
+        >
+          <p
+            id='hub-plan-warnings'
+            className='m-0 text-[12px] font-semibold text-amber-900 dark:text-amber-200'
+          >
+            Before you start
+          </p>
+          <p className='m-0 text-[11.5px] text-amber-800 dark:text-amber-300/90'>
+            These do not hold the run back.
+          </p>
+          <ul className='m-0 mt-1 list-none space-y-1.5 p-0'>
+            {warnings.map((w, i) => {
+              const copy = blockerCopy(w)
+              const detail = blockerDetailLine(w, copy.title)
+              return (
+                // biome-ignore lint/suspicious/noArrayIndexKey: the planner may repeat a code
+                <li key={i} className='text-[12px]'>
+                  <span className='block font-medium text-amber-900 dark:text-amber-200'>
+                    {isRawErrorText(copy.title) ? 'The plan has a warning' : copy.title}
+                  </span>
+                  {copy.hint && (
+                    <span className='block text-amber-800 dark:text-amber-300/90'>{copy.hint}</span>
+                  )}
+                  {detail && !isRawErrorText(detail) && (
+                    <span className='mt-0.5 block break-words text-[11px] text-slate-600 dark:text-slate-400'>
+                      {detail}
+                    </span>
+                  )}
+                </li>
+              )
+            })}
+          </ul>
+        </div>
       )}
       {blockers.length > 0 && (
         <div
