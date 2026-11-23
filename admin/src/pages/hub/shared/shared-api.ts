@@ -381,11 +381,19 @@ export const WARNING_COPY: Record<string, { title: string; hint?: string }> = {
   APPS_DROPPED: {
     title: 'The deployment left some apps out of its list',
     hint: 'It refused their entries (see each app below). Fix the app, then refresh.'
+  },
+  REDIS_URL_NOT_APPLIED: {
+    title: 'The stored Redis address is not in use yet',
+    hint: 'The stack has not been applied with it. Upgrade the deployment (to the version it runs, to apply it again) so it uses that Redis.'
   }
 }
 
 /** Refusals of the shared deployment routes, in plain words. Wins over the Hub's general copy. */
 export const SHARED_COPY: Record<string, { title: string; hint?: string }> = {
+  SECRETS_CHANGED: {
+    title: "The deployment's secrets changed at the same moment",
+    hint: 'Nothing was saved. Save again.'
+  },
   BAD_KEY: {
     title: 'The key is not valid',
     hint: '2–63 lower-case letters, digits and hyphens, starting with a letter.'

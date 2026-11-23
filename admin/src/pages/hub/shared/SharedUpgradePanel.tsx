@@ -16,20 +16,32 @@ import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn, formatRelative } from '@/lib/utils'
-import { isLivePromotion, promotionStatusTone, promotionStatusWords } from '../hub-api'
+import {
+  isLivePromotion,
+  promotionStatusTone,
+  promotionStatusWords,
+  RUN_ERROR_COPY,
+  splitRunError
+} from '../hub-api'
 import { dangerArmed, dangerGhost, SectionCard } from '../hub-parts'
 import { type SharedDeployment, sharedError, sharedKeys, WARNING_COPY } from './shared-api'
 import {
   cancelSharedDeploy,
+  defaultUpgradeVersion,
   fetchSharedDeploy,
   fetchSharedDeploys,
   fetchSharedVersions,
+  heldByPlan,
+  isDowngrade,
   isOverridable,
   KIND_WORDS,
+  logLineWords,
+  newestFirst,
   openBlockers,
   overrideId,
   planSharedUpgrade,
   refusedPlanOf,
+  restatesTitle,
   runErrorText,
   type SharedDeploy,
   type SharedUpgradeKind,
@@ -76,6 +88,11 @@ export function SharedUpgradePanel({ shared }: { shared: SharedDeployment }) {
             deployId={current}
             onClose={() => setWatching(null)}
           />
+        ) : history.isPending ? (
+          // Until the history answers, a run may be going: the form (and its plan read, which
+          // calls the registry) waits for it. A failed history read still shows the form; the
+          // server refuses a second run at start.
+          <Skeleton className='h-24 w-full' />
         ) : (
           <UpgradeForm shared={shared} runs={history.data ?? []} onStarted={setWatching} />
         )}
@@ -118,6 +135,8 @@ const KIND_LABEL: Record<SharedUpgradeKind, { title: string; verb: string; start
   upgrade: { title: 'Upgrade', verb: 'upgrade', start: 'Start upgrade' },
   rollback: { title: 'Roll back', verb: 'roll back', start: 'Start rollback' }
 }
+/** An upgrade to an older version says what it is (P6-29). */
+const DOWNGRADE_LABEL = { title: 'Downgrade', verb: 'downgrade', start: 'Start downgrade' }
 
 function UpgradeForm({
   shared,
@@ -143,28 +162,36 @@ function UpgradeForm({
     () =>
       kind === 'rollback'
         ? rollbackVersions(runs, shared.version_pin)
-        : (versions.data?.versions ?? []),
+        : newestFirst(versions.data?.versions ?? []),
     [kind, runs, shared.version_pin, versions.data]
   )
+  // What a first load picks: an upgrade the newest published version, and only when it is newer
+  // than what runs (never a downgrade by default, P6-29); a rollback the newest it ran before.
+  const firstPick =
+    kind === 'rollback' ? (choices[0] ?? null) : defaultUpgradeVersion(choices, shared.version_pin)
   const [picked, setPicked] = useState('')
   // Pinned on first load: a refetch listing a newer version never swaps it under a typed key.
   useEffect(() => {
-    if (picked || choices.length === 0) return
-    setPicked(choices.find((v) => v !== shared.version_pin) ?? choices[0])
-  }, [picked, choices, shared.version_pin])
-  // Upgrade and roll back offer different versions: switching starts the pick again.
-  const shownKind = useRef(kind)
-  useEffect(() => {
-    if (shownKind.current === kind) return
-    shownKind.current = kind
+    if (picked || !firstPick) return
+    setPicked(firstPick)
+  }, [picked, firstPick])
+  const runsNewest =
+    kind === 'upgrade' && !picked && versions.isSuccess && choices.length > 0 && !firstPick
+  // Upgrade and roll back offer different versions: switching starts the pick again. Done in the
+  // click, not an effect: an effect clearing it in the same commit as the first pick (versions
+  // not read yet when the person switched) left nothing picked for good.
+  const chooseKind = (k: SharedUpgradeKind) => {
+    if (k === kind) return
+    setKind(k)
     setPicked('')
-  }, [kind])
+  }
   const version = picked.trim()
 
   const [confirm, setConfirm] = useState('')
   const [overrides, setOverrides] = useState<Set<string>>(() => new Set())
   const [changed, setChanged] = useState(false)
   const [failure, setFailure] = useState<ErrorDescription | null>(null)
+  const [downgradeOk, setDowngradeOk] = useState(false)
   // The confirmation names one version and one kind: changing either clears it.
   // biome-ignore lint/correctness/useExhaustiveDependencies: clearing is the point
   useEffect(() => {
@@ -172,6 +199,7 @@ function UpgradeForm({
     setChanged(false)
     setFailure(null)
     setOverrides(new Set())
+    setDowngradeOk(false)
   }, [kind, version])
 
   const plan = useQuery({
@@ -191,6 +219,11 @@ function UpgradeForm({
     if (planHash) shownHash.current = planHash
   }, [planHash])
 
+  // The server's word once the plan is read (it also counts a version that is not semver); the
+  // client's own reading before that.
+  const downgrade = plan.data
+    ? plan.data.downgrade === true
+    : isDowngrade(kind, version, shared.version_pin)
   const start = useMutation({
     mutationFn: () =>
       startSharedUpgrade(shared.id, {
@@ -198,7 +231,8 @@ function UpgradeForm({
         version,
         plan_hash: plan.data?.plan_hash ?? '',
         confirm: confirm.trim(),
-        overrides: [...overrides].sort()
+        overrides: [...overrides].sort(),
+        ...(downgrade && downgradeOk ? { downgrade: true as const } : {})
       }),
     onSuccess: (r) => {
       void qc.invalidateQueries({ queryKey: upgradeKeys.deploys(shared.id) })
@@ -214,6 +248,7 @@ function UpgradeForm({
         setChanged(refused.code === 'PLAN_CHANGED')
         setConfirm('')
         setOverrides(new Set())
+        setDowngradeOk(false)
         setFailure(
           refused.code === 'PLAN_CHANGED'
             ? null
@@ -228,8 +263,13 @@ function UpgradeForm({
 
   const open = plan.data ? openBlockers(plan.data, overrides) : null
   const ready =
-    !!plan.data?.plan_hash && open === 0 && confirm.trim() === shared.key && !start.isPending
-  const label = KIND_LABEL[kind]
+    !!plan.data?.plan_hash &&
+    open === 0 &&
+    confirm.trim() === shared.key &&
+    (!downgrade || downgradeOk) &&
+    !start.isPending
+  const label = downgrade ? DOWNGRADE_LABEL : KIND_LABEL[kind]
+  const downgradeNote = plan.data?.warnings.find((w) => w.code === 'DOWNGRADE')?.text
 
   return (
     <div className='space-y-3'>
@@ -244,7 +284,7 @@ function UpgradeForm({
                 key={k}
                 type='button'
                 aria-pressed={kind === k}
-                onClick={() => setKind(k)}
+                onClick={() => chooseKind(k)}
                 className={cn(
                   'h-7 rounded px-2.5 text-[12px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50',
                   kind === k
@@ -268,6 +308,7 @@ function UpgradeForm({
             id={`${idPrefix}-version`}
             value={version}
             current={shared.version_pin}
+            markOlder={kind === 'upgrade'}
             options={choices}
             onChange={setPicked}
           />
@@ -298,7 +339,51 @@ function UpgradeForm({
         </p>
       )}
 
-      {!version ? (
+      {downgrade && version && (
+        <div
+          role='status'
+          aria-labelledby={`${idPrefix}-downgrade`}
+          className='space-y-1.5 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-900/60 dark:bg-amber-950/40'
+        >
+          <p
+            id={`${idPrefix}-downgrade`}
+            className='m-0 text-[12px] font-semibold text-amber-900 dark:text-amber-200'
+          >
+            This is a downgrade
+          </p>
+          <p className='m-0 text-[12px] text-amber-900 dark:text-amber-200'>
+            <span className='font-mono'>{version}</span> is older than the version it runs (
+            <span className='font-mono'>{shared.version_pin ?? 'unknown'}</span>). Every app on it
+            goes back, and an older version may not read data a newer one wrote. To return to a
+            version this deployment ran before, use Roll back.
+          </p>
+          {downgradeNote && !isRawErrorText(downgradeNote) && (
+            <p className='m-0 text-[11.5px] text-amber-800 dark:text-amber-300/90'>
+              {downgradeNote}
+            </p>
+          )}
+          <div className='flex items-center gap-1.5'>
+            <Checkbox
+              id={`${idPrefix}-downgrade-ok`}
+              checked={downgradeOk}
+              onCheckedChange={(v) => setDowngradeOk(v === true)}
+            />
+            <label
+              htmlFor={`${idPrefix}-downgrade-ok`}
+              className='text-[12px] text-amber-900 dark:text-amber-200'
+            >
+              I mean to downgrade to <span className='font-mono'>{version}</span>
+            </label>
+          </div>
+        </div>
+      )}
+
+      {runsNewest ? (
+        <p className='m-0 text-[12px] text-slate-500 dark:text-muted-foreground'>
+          Runs the newest published version. Pick a version to apply this one again or to go to
+          another.
+        </p>
+      ) : !version ? (
         <p className='m-0 text-[12px] text-slate-500 dark:text-muted-foreground'>
           Pick a version to see what the {label.verb} would do.
         </p>
@@ -337,7 +422,8 @@ function UpgradeForm({
           onChange={(e) => setConfirm(e.target.value)}
           autoComplete='off'
           spellCheck={false}
-          placeholder={shared.key}
+          // Not the required text itself: a grey copy of it reads as already filled in.
+          placeholder='Type it here'
           className='h-8 max-w-[280px] bg-white font-mono text-[13px] dark:bg-background'
         />
       </div>
@@ -368,12 +454,15 @@ function VersionPicker({
   id,
   value,
   current,
+  markOlder,
   options,
   onChange
 }: {
   id: string
   value: string
   current: string | null
+  /** Upgrade: a version older than the one running says so in the list. */
+  markOlder: boolean
   options: string[]
   onChange: (v: string) => void
 }) {
@@ -434,10 +523,17 @@ function VersionPicker({
                     aria-hidden
                   />
                   {v}
-                  {v === current && (
+                  {v === current ? (
                     <span className='ml-auto font-sans text-[11px] text-muted-foreground'>
                       runs now
                     </span>
+                  ) : (
+                    markOlder &&
+                    isDowngrade('upgrade', v, current) && (
+                      <span className='ml-auto font-sans text-[11px] text-amber-700 dark:text-amber-300'>
+                        older
+                      </span>
+                    )
                   )}
                 </CommandItem>
               ))}
@@ -517,7 +613,17 @@ function PlanPreview({
                 </td>
                 <td className='px-3 py-1.5'>
                   {a.blockers.length === 0 ? (
-                    <span className='text-emerald-700 dark:text-emerald-300'>Ready</span>
+                    heldByPlan(plan.blockers, a) ? (
+                      // A plan-wide BUSY names this environment: it is held, not ready.
+                      <span
+                        data-tip='Something else holds this environment (see above)'
+                        className='font-medium text-amber-700 dark:text-amber-300'
+                      >
+                        Busy
+                      </span>
+                    ) : (
+                      <span className='text-emerald-700 dark:text-emerald-300'>Ready</span>
+                    )
                   ) : (
                     <ul className='m-0 list-none space-y-1 p-0'>
                       {a.blockers.map((code, i) => (
@@ -573,7 +679,11 @@ function PlannerNote({
   text: string
 }) {
   const t = NOTE_TONE[tone]
-  const detail = text && text !== copy.title && !isRawErrorText(text) ? text : null
+  // One clear sentence per row: the planner's own only when it adds something (a name, a case).
+  const detail =
+    text && text !== copy.title && !isRawErrorText(text) && !restatesTitle(copy.title, text)
+      ? text
+      : null
   return (
     <li className={cn('rounded-md border px-3 py-2', t.box)}>
       <p className={cn('m-0 text-[12px] font-medium', t.title)}>{copy.title}</p>
@@ -615,7 +725,7 @@ function AppBlocker({
       >
         {c.title}
       </p>
-      {note && !isRawErrorText(note) && (
+      {note && !isRawErrorText(note) && !restatesTitle(c.title, note) && (
         <p className='m-0 mt-0.5 text-[11.5px] text-slate-600 dark:text-slate-300'>{note}</p>
       )}
       {overridable && (
@@ -779,29 +889,51 @@ function UpgradeProgress({
                     : 'text-slate-600 dark:text-slate-300'
               )}
             >
-              {isRawErrorText(l.line) ? 'A step reported an error (see the job run).' : l.line}
+              {isRawErrorText(logLineWords(l.line))
+                ? 'A step reported an error (see the job run).'
+                : logLineWords(l.line)}
             </li>
           ))}
         </ol>
       )}
 
-      {d.error && (
-        <p
-          role='status'
-          className='m-0 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[12px] text-red-800 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-200'
-        >
-          {isRawErrorText(runErrorText(d.error))
-            ? 'The run stopped with an error. Its job run has the details.'
-            : runErrorText(d.error)}
-        </p>
-      )}
-      {d.status === 'failed' && (
-        <p className='m-0 text-[12px] text-slate-600 dark:text-slate-300'>
-          Nothing was reverted. Fix what failed and upgrade again, or roll back to{' '}
-          <span className='font-mono'>{d.from_version ?? 'the earlier version'}</span>.
-        </p>
-      )}
+      {d.error && <RunStopped error={d.error} />}
+      {d.status === 'failed' &&
+        (splitRunError(d.error ?? '').code === 'SWARM_ROLLED_BACK' ? (
+          // Swarm itself put the earlier spec back: saying "nothing was reverted" would be wrong.
+          <p className='m-0 text-[12px] text-slate-600 dark:text-slate-300'>
+            Swarm put the previous version back: the apps still run{' '}
+            <span className='font-mono'>{d.from_version ?? 'the earlier version'}</span>. Fix what
+            failed and upgrade again.
+          </p>
+        ) : (
+          <p className='m-0 text-[12px] text-slate-600 dark:text-slate-300'>
+            Nothing was reverted. Fix what failed and upgrade again, or roll back to{' '}
+            <span className='font-mono'>{d.from_version ?? 'the earlier version'}</span>.
+          </p>
+        ))}
       {cancelFailure && <ErrorNotice description={cancelFailure} />}
+    </div>
+  )
+}
+
+/** How a run stopped: plain words for its code, then its own sentence (never the code). */
+function RunStopped({ error }: { error: string }) {
+  const { code } = splitRunError(error)
+  const title = code ? RUN_ERROR_COPY[code]?.title : undefined
+  const sentence = runErrorText(error)
+  const raw = isRawErrorText(sentence)
+  return (
+    <div
+      role='status'
+      className='m-0 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[12px] text-red-800 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-200'
+    >
+      {title && <p className='m-0 font-medium'>{title}</p>}
+      {raw
+        ? !title && (
+            <p className='m-0'>The run stopped with an error. Its job run has the details.</p>
+          )
+        : sentence !== title && <p className='m-0'>{sentence}</p>}
     </div>
   )
 }
@@ -849,7 +981,8 @@ function UpgradeHistory({
               <span className='w-[92px] shrink-0 text-[12px] text-slate-900 dark:text-foreground'>
                 {KIND_WORDS[d.kind] ?? d.kind}
               </span>
-              <span className='min-w-0 flex-1 truncate font-mono text-[12px] text-slate-700 dark:text-slate-300'>
+              {/* Phone: its own full-width line after the rest (it was cut to "0.…"). */}
+              <span className='order-last min-w-0 basis-full break-words font-mono text-[12px] text-slate-700 sm:order-none sm:basis-0 sm:flex-1 sm:truncate dark:text-slate-300'>
                 {d.from_version ? `${d.from_version} → ${d.version}` : d.version}
               </span>
               <span className={cn('text-[12px] font-medium', promotionStatusTone(d.status))}>

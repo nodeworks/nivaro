@@ -393,24 +393,30 @@ export function resolveDb(): typeof _staticDb {
 // #1321 — self-hosted without a replica it IS the `db` proxy (it used to be
 // _staticDb), so a list read inside background work (items readByQuery from a
 // cron, a digest, a queue rebuild) takes the background pool like every other
-// call. Cloud mode keeps the old alias, unchanged. With a replica, list reads
-// share the replica's one pool whatever the context.
-export const dbRead: Database = config.DB_READ_HOST
-  ? knex({
-      client: config.DB_CLIENT,
-      ...mysqlFlavorConfig(config.DB_MARIADB),
-      connection: buildConnection(
-        config.DB_READ_HOST,
-        config.DB_READ_PORT ?? config.DB_PORT ?? DEFAULT_PORTS[config.DB_CLIENT]
-      ),
-      pool: { min: 2, max: config.DB_POOL_MAX, ...sessionUtcPool() },
-      migrations: {
-        migrationSource,
-        tableName: 'nivaro_migrations'
-      }
-    })
-  : multiTenant
-    ? _staticDb
+// call. With a replica, list reads share the replica's one pool whatever the
+// context.
+// Multi-tenant (Nivaro Cloud and a Hub shared deployment; Hub phase 6 ruling P6-32): it IS the
+// `db` proxy too, so a list or count read runs on the request's own tenant knex. It used to be
+// _staticDb, the placeholder with no connections, so every items list and count answered 500
+// "Unable to acquire a connection". Tenants have no read pool of their own, and DB_READ_HOST is
+// one server for the whole process, so it is never used there (it would serve every tenant the
+// same database).
+export const dbRead: Database = multiTenant
+  ? db
+  : config.DB_READ_HOST
+    ? knex({
+        client: config.DB_CLIENT,
+        ...mysqlFlavorConfig(config.DB_MARIADB),
+        connection: buildConnection(
+          config.DB_READ_HOST,
+          config.DB_READ_PORT ?? config.DB_PORT ?? DEFAULT_PORTS[config.DB_CLIENT]
+        ),
+        pool: { min: 2, max: config.DB_POOL_MAX, ...sessionUtcPool() },
+        migrations: {
+          migrationSource,
+          tableName: 'nivaro_migrations'
+        }
+      })
     : db
 
 // The replica's pool opens connections the same way the request pool does and fails the
@@ -428,7 +434,7 @@ export async function closeDb(): Promise<void> {
   if (_backgroundDb) await _backgroundDb.destroy()
   if (probeKnex) await probeKnex.destroy()
   if (migrationKnex) await migrationKnex.destroy()
-  if (config.DB_READ_HOST) {
+  if (!multiTenant && config.DB_READ_HOST) {
     await (dbRead as any).destroy()
   }
 }

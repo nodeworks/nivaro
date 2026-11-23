@@ -78,6 +78,8 @@ const security = await import('../../../services/security.js')
 const retire = await import('../../../services/hub-link/retire.js')
 const { cronTicksEnabled } = await import('../../../services/cron-ticks.js')
 const live = await import('../../../services/maintenance-live.js')
+/** This app's own maintenance key (P6-32: per app, never the plain `nvr:maintenance`). */
+const MK = () => security.maintenanceOverrideKey()
 
 const TOKEN = 'k'.repeat(40)
 const HUMAN_ADMIN: Caller = { isAdmin: true, authMethod: 'session' }
@@ -143,7 +145,7 @@ describe('strict maintenance over the hub link', () => {
       payload: { on: true, message: 'Moving.' }
     })
     expect(on.statusCode).toBe(200)
-    expect(JSON.parse(st.store.get('nvr:maintenance') as string)).toMatchObject({
+    expect(JSON.parse(st.store.get(MK()) as string)).toMatchObject({
       on: true,
       display: 'page',
       strict: true,
@@ -191,7 +193,7 @@ describe('strict maintenance over the hub link', () => {
       payload: { on: false }
     })
     expect(off.statusCode).toBe(200)
-    expect(st.store.has('nvr:maintenance')).toBe(false)
+    expect(st.store.has(MK())).toBe(false)
     expect((await patchAsAdmin(a)).statusCode).toBe(200)
   })
 
@@ -216,7 +218,7 @@ describe('strict maintenance over the hub link', () => {
       payload: { on: true }
     })
     await security.clearMaintenanceOverride()
-    expect(st.store.has('nvr:maintenance')).toBe(true)
+    expect(st.store.has(MK())).toBe(true)
   })
 
   it('refuses a bad body and answers 503 when Redis refuses', async () => {
@@ -328,7 +330,7 @@ describe('boot maintenance (HUB_BOOT_MAINTENANCE)', () => {
   it('sets the strict override once per move id; the release stops a restart setting it again', async () => {
     const env = { ...process.env, HUB_BOOT_MAINTENANCE: '12' } as NodeJS.ProcessEnv
     expect(await security.applyHubBootMaintenance(redis, env)).toBe(true)
-    expect(JSON.parse(st.store.get('nvr:maintenance') as string)).toMatchObject({
+    expect(JSON.parse(st.store.get(MK()) as string)).toMatchObject({
       on: true,
       strict: true,
       hub: true,
@@ -347,11 +349,11 @@ describe('boot maintenance (HUB_BOOT_MAINTENANCE)', () => {
     })
     expect(off.statusCode).toBe(200)
     expect(st.store.has(security.hubBootMaintenanceDoneKey(12))).toBe(true)
-    expect(st.store.has('nvr:maintenance')).toBe(false)
+    expect(st.store.has(MK())).toBe(false)
 
     // The restart after the release does not set it again; another move's id would.
     expect(await security.applyHubBootMaintenance(redis, env)).toBe(false)
-    expect(st.store.has('nvr:maintenance')).toBe(false)
+    expect(st.store.has(MK())).toBe(false)
     expect(
       await security.applyHubBootMaintenance(redis, {
         ...process.env,
@@ -481,14 +483,27 @@ describe('fix round 1', () => {
     stop()
   })
 
-  it("the Hub's maintenance keeps an operator's freeze and puts it back", async () => {
+  // P6-32: the Hub's freeze is in the app's own key; an operator's plain `nvr:maintenance` (a
+  // go-live script) is never touched and holds again once the Hub lifts its own.
+  it("the Hub's maintenance leaves an operator's freeze alone, which holds again after", async () => {
     const op = JSON.stringify({ on: true, message: 'Rebuild' })
     st.store.set('nvr:maintenance', op)
     await security.setHubMaintenance({ on: true, moveId: 8 })
-    const held = JSON.parse(st.store.get('nvr:maintenance') as string)
-    expect(held).toMatchObject({ hub: true, strict: true, move_id: 8, operator: op })
-    await security.setHubMaintenance({ on: false, moveId: 8 })
     expect(st.store.get('nvr:maintenance')).toBe(op)
+    expect(JSON.parse(st.store.get(MK()) as string)).toMatchObject({
+      hub: true,
+      strict: true,
+      move_id: 8
+    })
+    security.bustMaintenanceCache()
+    expect(await security.maintenanceState()).toMatchObject({ on: true, strict: true })
+    await security.setHubMaintenance({ on: false, moveId: 8 })
+    expect(st.store.has(MK())).toBe(false)
+    expect(st.store.get('nvr:maintenance')).toBe(op)
+    security.bustMaintenanceCache()
+    const after = await security.maintenanceState()
+    expect(after).toMatchObject({ on: true, message: 'Rebuild' })
+    expect(after.strict).toBeUndefined()
   })
 
   it('a release naming another move leaves the freeze on (409)', async () => {
@@ -507,7 +522,7 @@ describe('fix round 1', () => {
     })
     expect(r.statusCode).toBe(409)
     expect(r.json()).toMatchObject({ code: 'MAINTENANCE_OTHER_MOVE' })
-    expect(JSON.parse(st.store.get('nvr:maintenance') as string)).toMatchObject({ move_id: 8 })
+    expect(JSON.parse(st.store.get(MK()) as string)).toMatchObject({ move_id: 8 })
     expect(st.store.has(security.hubBootMaintenanceDoneKey(9))).toBe(false)
   })
 

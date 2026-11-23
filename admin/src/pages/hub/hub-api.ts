@@ -34,6 +34,8 @@ export interface HubEnvironment {
   hub_token: string | null
   /** Phase 2: the Hub may promote and roll back this environment (default off). */
   hub_managed?: boolean
+  /** Phase 6: runs on a shared deployment (on the app read, so owners know it too). */
+  on_shared?: boolean
 }
 
 export interface HubOwner {
@@ -489,6 +491,8 @@ export interface PromotionPlan {
   steps: PromotionStep[]
   /** What a start must send back: it starts only if the plan is still exactly this one. */
   plan_hash?: string
+  /** Phase 6: what the person should know but that never holds the run (HUB_URL_PROBLEM). */
+  warnings?: PromotionBlocker[]
 }
 
 export type PromotionStatus =
@@ -1075,4 +1079,39 @@ export function hubDeleteToast(err: unknown, fallback: string) {
       'It cannot reach Redis to make sure no promotion, move or creation is using this. Try again in a moment.'
   }
   toast.error(d.title, errorToastOptions(d))
+}
+
+// ─── Phase 6: stored run errors (`CODE: sentence`) ──────────────────────────────────────────
+
+/**
+ * A stored run error is `CODE: sentence` (shared upgrades, placements; their rows also show in
+ * an environment's Hub deploys). The code maps to plain words; the sentence is shown under them.
+ * Text without a code prefix comes back as the sentence alone.
+ */
+export function splitRunError(text: string): { code: string | null; sentence: string } {
+  const m = /^([A-Z][A-Z0-9_]{2,63}):\s*([\s\S]*)$/.exec(text.trim())
+  return m ? { code: m[1], sentence: m[2].trim() } : { code: null, sentence: text.trim() }
+}
+
+/** How a shared upgrade or a placement run stopped, per code (api shared/upgrade-run, place). */
+export const RUN_ERROR_COPY: Record<string, { title: string }> = {
+  SWARM_ROLLED_BACK: { title: 'Swarm put the previous version back' },
+  SWARM_UPDATE_PAUSED: { title: 'Swarm paused the update' },
+  SWARM_DEGRADED: { title: 'Swarm ran fewer copies of the new version than wanted' },
+  VERSION_TIMEOUT: { title: 'The replicas did not reach the version in time' },
+  SCHEMA_FAILED: { title: "An app's database could not be brought up to date" },
+  SCHEMA_TIMEOUT: { title: "The apps' databases were not up to date in time" },
+  VERIFY_FAILED: { title: 'An app did not answer at the new version' },
+  REPLICAS_BEHIND: { title: 'The replicas did not take the new app list in time' },
+  AGENT_UNREACHABLE: { title: 'The Hub agent did not answer' },
+  AGENT_CHANGED: { title: 'The Hub agent changed since the plan' },
+  APPLY_FAILED: { title: 'The agent could not apply the stack' },
+  KEY_REFUSED: { title: 'The agent would refuse one of the settings' },
+  TOKEN_MISSING: { title: 'The deployment token could not be opened' },
+  NO_DRIVER: { title: 'The deployment has no Docker driver' },
+  LOCK_LOST: { title: 'The run lost its lock' },
+  START_FAILED: { title: 'The run could not be started' },
+  STEP_FAILED: { title: 'The run stopped unexpectedly' },
+  INTERRUPTED: { title: 'The run was interrupted' },
+  CANCELLED: { title: 'Cancelled' }
 }

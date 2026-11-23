@@ -351,4 +351,80 @@ describe('HubShared', () => {
     expect(await screen.findByText('Apps are still placed on this deployment')).toBeInTheDocument()
     expect(shownText()).not.toMatch(/409|status code/)
   })
+
+  it('S13: the list shows every status but Serving: Upgrading, New, Retired', async () => {
+    h.get.mockImplementation(async (url: string) => {
+      if (url === '/hub/shared')
+        return {
+          data: {
+            data: [
+              { ...LIST[0], status: 'upgrading' },
+              { ...LIST[1], status: 'new' },
+              { ...LIST[0], id: 6, key: 'shared-three', name: 'Shared three', status: 'retired' },
+              { ...LIST[0], id: 7, key: 'shared-four', name: 'Shared four', status: 'active' }
+            ]
+          }
+        }
+      throw Object.assign(new Error('not found'), { response: { status: 404, data: {} } })
+    })
+    wrap()
+    const list = await screen.findByRole('list', { name: 'Shared deployments' })
+    const rows = within(list).getAllByRole('listitem')
+    expect(within(rows[0]).getByText('Upgrading')).toBeInTheDocument()
+    expect(within(rows[1]).getByText('New')).toBeInTheDocument()
+    expect(within(rows[2]).getByText('Retired')).toBeInTheDocument()
+    expect(within(rows[3]).queryByText('Serving')).toBeNull()
+  })
+
+  it('S14: on a phone the apps and replicas are stacked lists, the tables from sm up', async () => {
+    wrap('/hub/shared?shared=4')
+    const table = await screen.findByRole('table', { name: 'Apps on this deployment' })
+    expect(table.closest('.hidden.sm\\:block')).not.toBeNull()
+    const apps = screen.getByRole('list', { name: 'Apps on this deployment' })
+    expect(apps.closest('.sm\\:hidden')).not.toBeNull()
+    const items = within(apps).getAllByRole('listitem')
+    expect(items).toHaveLength(2)
+    expect(within(items[0]).getByText('acme-e7')).toBeInTheDocument()
+    expect(await within(items[1]).findByText('Migration failed')).toBeInTheDocument()
+    expect(within(items[1]).getByText('Maintenance')).toBeInTheDocument()
+    expect(within(items[0]).getByText(/Pool max/)).toBeInTheDocument()
+
+    const replicas = screen.getByRole('list', { name: 'Replicas' })
+    expect(replicas.closest('.sm\\:hidden')).not.toBeNull()
+    expect(
+      screen.getByRole('table', { name: 'Replicas' }).closest('.hidden.sm\\:block')
+    ).not.toBeNull()
+    const r = within(replicas).getAllByRole('listitem')
+    expect(within(r[0]).getByText('web-1')).toBeInTheDocument()
+    expect(within(r[1]).getByText(/older list/)).toBeInTheDocument()
+  })
+
+  it('N7: while a new token shows, the placeholder settings block is not shown twice', async () => {
+    h.post.mockResolvedValue({
+      data: {
+        data: {
+          token: TOKEN,
+          previous_token_valid_until: null,
+          reapply: 'manual',
+          reapply_reason: null,
+          env_block: 'HUB_SHARED_DEPLOYMENT=shared-one\nHUB_DEPLOYMENT_TOKEN=x'
+        }
+      }
+    })
+    wrap('/hub/shared?shared=4')
+    expect(await screen.findByRole('region', { name: 'Run it yourself' })).toBeInTheDocument()
+    const card = screen.getByRole('region', { name: 'Deployment token' })
+    fireEvent.click(within(card).getByRole('button', { name: 'Rotate token' }))
+    fireEvent.click(within(card).getByRole('button', { name: 'Rotate now?' }))
+    expect(await screen.findByTestId('shared-token')).toHaveTextContent(TOKEN)
+    expect(screen.queryByRole('region', { name: 'Run it yourself' })).toBeNull()
+  })
+
+  it('N8: Delete waits while an upgrade runs, and says why', async () => {
+    routes({ ...DETAIL, row: { ...ROW, status: 'upgrading' } })
+    wrap('/hub/shared?shared=4')
+    const del = await screen.findByRole('button', { name: 'Delete' })
+    expect(del).toBeDisabled()
+    expect(del.closest('span[data-tip]')?.getAttribute('data-tip')).toMatch(/upgrade/)
+  })
 })
