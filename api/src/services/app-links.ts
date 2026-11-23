@@ -2,8 +2,10 @@ import type { LinkKind, LinkRegistration } from '@nivaro/extension-kit'
 import { adminBaseUrl } from '../admin-base.js'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
+import { tenantOrigin } from '../db/tenant-context.js'
 import { registerAppKeyed } from './app-forget.js'
 import { appKey, dropAppEntries } from './app-keyed.js'
+import { tenantSource } from './deployment-mode.js'
 import { overlaySettings } from './settings-overrides.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
@@ -90,14 +92,38 @@ async function fromSettings(): Promise<LinkRegistration | null> {
   return value
 }
 
-/** The effective portal registration: Settings beats the extension. */
+/** Apps of a Hub shared deployment already told their portal_url is unset (one warning each). */
+const warnedNoPortal = registerAppKeyed(new Set<string>())
+
+/**
+ * The effective portal registration: Settings beats the extension. On a Hub shared deployment
+ * the extension's registration (made at boot, from the deployment's env) is one app's portal:
+ * an app links only to its OWN portal_url there, else to its own admin (adminBase), with one
+ * warning per app. A link that opens this app's admin beats one that opens another app.
+ */
 export async function portalRegistration(): Promise<LinkRegistration | null> {
-  return (await fromSettings()) ?? registered
+  const own = await fromSettings()
+  if (own || !hubShared()) return own ?? registered
+  const app = currentTenantKey()
+  if (registered && app && !warnedNoPortal.has(app)) {
+    warnedNoPortal.add(app)
+    // biome-ignore lint/suspicious/noConsole: an operator must see the unset setting per app
+    console.warn(
+      `[app-links] app ${app}: portal_url is unset — its portal links open its own admin (${adminBase()}). Set Settings → Frontend app.`
+    )
+  }
+  return null
 }
 
+const hubShared = () => tenantSource() === 'hub'
+
 // The same resolver every other admin link uses — ADMIN_URL alone is the
-// portal on deployments where the headless frontend proxies /api.
-const adminBase = () => adminBaseUrl() ?? config.ADMIN_URL.replace(/\/$/, '')
+// portal on deployments where the headless frontend proxies /api. A Hub shared deployment serves
+// many apps: inside one, its own verified origin (the deployment's env names none of them).
+const adminBase = () =>
+  (hubShared() ? tenantOrigin()?.replace(/\/$/, '') : null) ??
+  adminBaseUrl() ??
+  config.ADMIN_URL.replace(/\/$/, '')
 /** The admin app's origin (no trailing slash) — for in-app admin paths that need to be absolute. */
 export const adminPageBase = (): string => adminBase().replace(/\/$/, '')
 

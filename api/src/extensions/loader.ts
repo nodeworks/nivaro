@@ -21,7 +21,7 @@ import { beginChainRoot } from '../services/chain-roots.js'
 import { registerConfigSeed } from '../services/config-seeds.js'
 import { registerDigestSection } from '../services/daily-digest.js'
 import { registerTuningObserver } from '../services/db-tuning/observers/registry.js'
-import { tenantSource } from '../services/deployment-mode.js'
+import { isMultiTenant, tenantSource } from '../services/deployment-mode.js'
 import { registerRefreshDecl } from '../services/env-refresh/directions.js'
 import { registerExtensionKeep } from '../services/env-refresh/registry.js'
 import {
@@ -70,6 +70,7 @@ import { type ValidatorDef, validatorRegistry } from './validators.js'
 import '../plugin-types.js'
 import type { ReadinessResult } from '@nivaro/extension-kit'
 import {
+  CTX_APPS_MARKER,
   deprecationMessage,
   type ExtensionContext,
   type ExtensionDefinition,
@@ -119,6 +120,8 @@ export type {
   FlowTriggerRegistration
 } from '@nivaro/extension-kit'
 
+import { tenantOrigin } from '../db/tenant-context.js'
+import { registerAppKeyed } from '../services/app-forget.js'
 import { appMap } from '../services/app-state.js'
 import {
   addHelpVideoStarterContexts,
@@ -132,11 +135,17 @@ import {
   registerIntegrationErrorExplainers
 } from '../services/integration-error-explain.js'
 import { type JobRunFormatter, registerJobRunFormatter } from '../services/job-run-sentences.js'
+import { currentTenantKey } from '../services/tenant-rooms.js'
 import {
   registerExtensionLens,
   unregisterExtensionLenses
 } from '../services/traffic-actions/ext-lenses.js'
 import { registerTrafficNode, type TrafficNodeDef } from '../services/traffic-taps/nodes.js'
+
+// This core hands extensions ctx.apps: say so before any extension module is imported, so one
+// that keys its state on it may declare `shared: true` (extension-kit CTX_APPS_MARKER).
+;(globalThis as Record<symbol, unknown>)[Symbol.for(CTX_APPS_MARKER)] = true
+
 export type Extension = ExtensionDefinition
 
 /** Every extension call lands in the external API's Call Logs. A caller that
@@ -1389,6 +1398,15 @@ export function registrationMembers(
         ])
         return readLiveUsage(() => measureUsage(db), { maxAgeMs: o?.maxAgeMs })
       }
+    },
+    // Which app a request or job serves (Hub phase 6): a shared deployment runs register() once
+    // for every app, so an extension keys its module state on key() (services/app-state.ts does
+    // the same for core) and registers keyed containers so an app that leaves is forgotten.
+    apps: {
+      key: () => currentTenantKey(),
+      many: () => isMultiTenant(),
+      origin: () => (isMultiTenant() ? tenantOrigin() : null),
+      registerKeyed: (container) => registerAppKeyed(container)
     },
     // A raw write (knex update, procedure) runs no hooks, so the stored rollups on the parent
     // go stale until the next app write there (rollup drift, prod 2026-11-17: MDSi shipment

@@ -71,6 +71,9 @@ export interface AppSchemaDeps {
   workspace?: () => Promise<void>
   /** Extensions whose schema steps run (default: every extension that declared one). */
   extensions?: () => string[]
+  /** The per-app seeds (services/app-seeds.ts), run inside the app after its migrations and when
+   *  a migrated app is adopted here. */
+  seeds?: () => Promise<unknown>
   /** Does the app's database hold the newest migration? true / false, or null when it could not
    *  be read (default: one read of its nivaro_migrations ledger, `ledgerHasMigration`). */
   schemaCurrent?: (t: TenantRecord) => Promise<boolean | null>
@@ -198,6 +201,21 @@ async function defaultWorkspace(): Promise<void> {
   await ensureDefaultWorkspace()
 }
 
+async function defaultSeeds(): Promise<unknown> {
+  const { runAppSeeds } = await import('../app-seeds.js')
+  return runAppSeeds()
+}
+
+/** The per-app seeds inside the app; a failure is logged (runAppSeeds), never thrown. */
+async function seedApp(t: TenantRecord, deps: AppSchemaDeps): Promise<void> {
+  try {
+    await withTenant(t, async () => void (await (deps.seeds ?? defaultSeeds)()), t.origin)
+  } catch (err) {
+    // biome-ignore lint/suspicious/noConsole: an operator must see a failed seed in the server log
+    console.warn(`[tenancy] app ${t.id}: seeds failed — ${scrubDbError(err, secretsOf(t))}`)
+  }
+}
+
 async function defaultExtensions(): Promise<string[]> {
   const { extensionsWithSchemaSteps } = await import('../extension-schema-steps.js')
   return extensionsWithSchemaSteps()
@@ -314,6 +332,8 @@ async function runEnsure(t: TenantRecord, deps: AppSchemaDeps): Promise<AppSchem
         // A failed step is recorded in the app's own ledger and shown by the extension's readiness
         // (as on a self-hosted boot); it does not block the app.
         for (const extId of exts) await steps(extId, k, { timeoutMs })
+        // Boot-time seeds (payload templates…) reach this app's database now (never fail it).
+        await (deps.seeds ?? defaultSeeds)()
       },
       t.origin
     )
@@ -453,6 +473,9 @@ async function migrationPass(
       const current = await checkCurrent(t, deps)
       if (current === undefined) return // another check is reading it: decided there
       if (current !== false) {
+        // The app joins this process: its boot-time seeds first (an efp-ops release that changed
+        // a template reaches every app), then it serves.
+        await seedApp(t, deps)
         adopt(t.id, stored, conn)
         return
       }

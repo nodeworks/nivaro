@@ -246,6 +246,7 @@ const SHARED: Record<string, string> = {
   'routes/erp-submissions.ts :: ERP_STATUSES': FIXED,
   'routes/external-apis.ts :: readinessRegistered': REGISTRY,
   'routes/flows.ts :: flowHealthCheckRegistered': REGISTRY,
+  'services/app-seeds.ts :: seeds': `${REGISTRY}; each seed runs inside the app it seeds`,
   'routes/geocode-suggest.ts :: cache':
     'public geocoder answers keyed by the typed address text; the same for every app',
   'routes/geocode-suggest.ts :: lastCall':

@@ -1,5 +1,8 @@
+import { coreProvidesApps } from '@nivaro/extension-kit'
 import { describe, expect, it, vi } from 'vitest'
+import { runWithTenantDb } from '../../../db/tenant-context.js'
 import { registrationMembers } from '../../../extensions/loader.js'
+import { forgetAppState } from '../../../services/app-state.js'
 import { clearCacheWarmers, listCacheWarmers } from '../../../services/cache-warmers.js'
 import {
   listTuningObservers,
@@ -101,5 +104,68 @@ describe('registrationMembers', () => {
     expect(warn).toHaveBeenCalledTimes(3)
     warn.mockRestore()
     clearCacheWarmers()
+  })
+
+  it('ctx.apps names the app a request or job serves and forgets a keyed container on leave', async () => {
+    const m = registrationMembers(
+      'efp',
+      { app: {} as never, logger: {} as never, database: {} as never },
+      { note: () => {}, own: () => {}, cronPrefix: 'ext:efp:' }
+    )
+    const apps = m.apps
+    if (!apps) throw new Error('ctx.apps missing')
+    // Self-hosted / outside any app: one app, key ''.
+    expect(apps.key()).toBe('')
+    expect(apps.many()).toBe(false)
+    const inApp = (id: string) =>
+      new Promise<string>((resolve) =>
+        runWithTenantDb({} as never, id, () => resolve(apps.key()), id)
+      )
+    expect(await inApp('app-a')).toBe('app-a')
+    expect(await inApp('app-b')).toBe('app-b')
+    const cache = apps.registerKeyed(new Map<string, number>())
+    cache.set('app-a|x', 1)
+    cache.set('app-b|x', 2)
+    cache.set('x', 3)
+    expect(forgetAppState('app-a')).toBeGreaterThanOrEqual(1)
+    expect([...cache.keys()].sort()).toEqual(['app-b|x', 'x'])
+    let dropped = ''
+    apps.registerKeyed({
+      forgetApp: (k) => {
+        dropped = k
+        return 1
+      }
+    })
+    forgetAppState('app-b')
+    expect(dropped).toBe('app-b')
+    expect([...cache.keys()]).toEqual(['x'])
+  })
+
+  it("ctx.apps.origin is the app's own origin on a shared deployment, null self-hosted", async () => {
+    const m = registrationMembers(
+      'efp',
+      { app: {} as never, logger: {} as never, database: {} as never },
+      { note: () => {}, own: () => {}, cronPrefix: 'ext:efp:' }
+    )
+    const apps = m.apps
+    if (!apps) throw new Error('ctx.apps missing')
+    const originIn = (id: string, origin: string) =>
+      new Promise<string | null>((resolve) =>
+        runWithTenantDb({} as never, id, () => resolve(apps.origin()), id, origin)
+      )
+    expect(apps.origin()).toBeNull()
+    expect(await originIn('app-a', 'https://efp-a.example')).toBeNull()
+    vi.stubEnv('HUB_SHARED_DEPLOYMENT', 'shared-a')
+    try {
+      expect(await originIn('app-a', 'https://efp-a.example')).toBe('https://efp-a.example')
+      expect(await originIn('app-b', 'https://efp-b.example')).toBe('https://efp-b.example')
+      expect(apps.origin()).toBeNull()
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('the loader says it provides ctx.apps before any extension is imported', () => {
+    expect(coreProvidesApps()).toBe(true)
   })
 })
