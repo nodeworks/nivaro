@@ -36,6 +36,8 @@ import {
   promotionStatusTone,
   promotionStatusWords,
   RELEASES_ERROR_TEXT,
+  RUN_ERROR_COPY,
+  splitRunError,
   startPromotion
 } from './hub-api'
 import { dangerArmed, dangerGhost, ghostButton, SectionCard } from './hub-parts'
@@ -954,10 +956,30 @@ export function PromotionHistory({
  * error, a status line) becomes one plain sentence with the text under "Details for support".
  */
 export function RunnerError({ text, clamp }: { text: string; clamp?: boolean }) {
-  if (!isRawErrorText(text))
-    return <div className={cn('break-words', clamp && 'line-clamp-2')}>{text}</div>
+  // A stored `CODE: sentence` (shared upgrades, placements): plain words, then the sentence.
+  const { code, sentence } = splitRunError(text)
+  const title = code ? RUN_ERROR_COPY[code]?.title : undefined
+  if (sentence && !isRawErrorText(sentence))
+    return title ? (
+      <div className='break-words'>
+        <div className={cn(clamp && 'line-clamp-1')}>{title}</div>
+        {sentence !== title && (
+          <div
+            className={cn(
+              'text-[11px] text-slate-500 dark:text-muted-foreground',
+              clamp && 'line-clamp-2'
+            )}
+          >
+            {sentence}
+          </div>
+        )}
+      </div>
+    ) : (
+      <div className={cn('break-words', clamp && 'line-clamp-2')}>{sentence}</div>
+    )
+  // Raw text (a driver or SQL error): the plain title, the text only under Details for support.
   const d: ErrorDescription = {
-    title: 'It stopped on an error the Hub could not put in plain words',
+    title: title ?? 'It stopped on an error the Hub could not put in plain words',
     technical: text
   }
   return (

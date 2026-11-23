@@ -1030,3 +1030,62 @@ describe('parked C2: plan warnings', () => {
     expect(document.body.textContent).not.toContain('SOMETHING_ODD')
   })
 })
+
+describe('parked C4: coded run errors in the Hub deploys history', () => {
+  afterEach(() => h.get.mockReset())
+
+  const at = new Date().toISOString()
+  const failed = (id: number, error: string) => ({
+    id,
+    app_id: 1,
+    environment_id: 10,
+    kind: 'shared_upgrade',
+    version: '0.3.208',
+    from_version: '0.3.207',
+    status: 'failed',
+    step: 'wait_version',
+    error,
+    job_run_id: 1,
+    started_by: null,
+    started_at: at,
+    finished_at: at
+  })
+
+  it('a coded error shows plain words and its sentence, never the code', async () => {
+    routes({
+      history: [
+        failed(
+          2,
+          'SWARM_ROLLED_BACK: Swarm rolled shared-east back to its previous spec — the new tasks did not become healthy.'
+        ),
+        failed(1, 'ODD_NEW_CODE: Something the screen has no words for.')
+      ]
+    })
+    wrap(<PromotionHistory env={env} canPromote onRollback={() => {}} onWatch={() => {}} />)
+    const table = await screen.findByRole('table', { name: 'production Hub deploys' })
+    expect(within(table).getByText('Swarm put the previous version back')).toBeInTheDocument()
+    expect(
+      within(table).getByText(
+        'Swarm rolled shared-east back to its previous spec — the new tasks did not become healthy.'
+      )
+    ).toBeInTheDocument()
+    // An unknown code: the sentence alone.
+    expect(within(table).getByText('Something the screen has no words for.')).toBeInTheDocument()
+    const shown = document.body.cloneNode(true) as HTMLElement
+    for (const d of shown.querySelectorAll('[data-error-details]')) d.remove()
+    expect(shown.textContent).not.toContain('SWARM_ROLLED_BACK')
+    expect(shown.textContent).not.toContain('ODD_NEW_CODE')
+  })
+
+  it('splitRunError takes the code off; plain text has none', async () => {
+    const { splitRunError } = await import('./hub-api')
+    expect(splitRunError('START_FAILED: the run could not be started.')).toEqual({
+      code: 'START_FAILED',
+      sentence: 'the run could not be started.'
+    })
+    expect(splitRunError('The deploy job failed')).toEqual({
+      code: null,
+      sentence: 'The deploy job failed'
+    })
+  })
+})

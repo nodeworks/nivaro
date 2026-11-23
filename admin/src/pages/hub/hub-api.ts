@@ -1033,3 +1033,37 @@ Object.assign(BLOCKER_COPY, {
     hint: 'It was placed or moved while this was saved. Nothing was saved. Try again.'
   }
 } satisfies Record<string, { title: string; hint?: string }>)
+
+// ─── Phase 6: stored run errors (`CODE: sentence`) ──────────────────────────────────────────
+
+/**
+ * A stored run error is `CODE: sentence` (shared upgrades, placements; their rows also show in
+ * an environment's Hub deploys). The code maps to plain words; the sentence is shown under them.
+ * Text without a code prefix comes back as the sentence alone.
+ */
+export function splitRunError(text: string): { code: string | null; sentence: string } {
+  const m = /^([A-Z][A-Z0-9_]{2,63}):\s*([\s\S]*)$/.exec(text.trim())
+  return m ? { code: m[1], sentence: m[2].trim() } : { code: null, sentence: text.trim() }
+}
+
+/** How a shared upgrade or a placement run stopped, per code (api shared/upgrade-run, place). */
+export const RUN_ERROR_COPY: Record<string, { title: string }> = {
+  SWARM_ROLLED_BACK: { title: 'Swarm put the previous version back' },
+  SWARM_UPDATE_PAUSED: { title: 'Swarm paused the update' },
+  VERSION_TIMEOUT: { title: 'The replicas did not reach the version in time' },
+  SCHEMA_FAILED: { title: "An app's database could not be brought up to date" },
+  SCHEMA_TIMEOUT: { title: "The apps' databases were not up to date in time" },
+  VERIFY_FAILED: { title: 'An app did not answer at the new version' },
+  REPLICAS_BEHIND: { title: 'The replicas did not take the new app list in time' },
+  AGENT_UNREACHABLE: { title: 'The Hub agent did not answer' },
+  AGENT_CHANGED: { title: 'The Hub agent changed since the plan' },
+  APPLY_FAILED: { title: 'The agent could not apply the stack' },
+  KEY_REFUSED: { title: 'The agent would refuse one of the settings' },
+  TOKEN_MISSING: { title: 'The deployment token could not be opened' },
+  NO_DRIVER: { title: 'The deployment has no Docker driver' },
+  LOCK_LOST: { title: 'The run lost its lock' },
+  START_FAILED: { title: 'The run could not be started' },
+  STEP_FAILED: { title: 'The run stopped unexpectedly' },
+  INTERRUPTED: { title: 'The run was interrupted' },
+  CANCELLED: { title: 'Cancelled' }
+}
