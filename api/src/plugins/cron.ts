@@ -120,8 +120,8 @@ export interface ScheduleOpts {
    *  which wins over this. Self-hosted and cloud ignore it. */
   scope?: CronScope
   /** Hub shared deployment — bind the job to this app (see `boundCronKey`): it runs in that app
-   *  only and never fans out. Scheduling inside an app binds to it without this. Self-hosted and
-   *  cloud ignore it. */
+   *  only and never fans out. Honoured outside any app only: scheduling inside an app always
+   *  binds to that app, whatever this says. Self-hosted and cloud ignore it. */
   tenant?: string
 }
 
@@ -729,6 +729,7 @@ export class CronManager {
     const v = validTimeZone(tz)
     if (tz && !v) throw new Error(`Unknown time zone: ${tz}`)
     const key = this.resolveId(id)
+    if (key === null) return
     if (v) this.tzOverrides.set(key, v)
     else this.tzOverrides.delete(key)
     this.rebuild(key)
@@ -749,13 +750,16 @@ export class CronManager {
     this.pausedIds = new Set(ids)
   }
   pause(id: string): void {
-    this.pausedIds.add(this.resolveId(id))
+    const key = this.resolveId(id)
+    if (key !== null) this.pausedIds.add(key)
   }
   resume(id: string): void {
-    this.pausedIds.delete(this.resolveId(id))
+    const key = this.resolveId(id)
+    if (key !== null) this.pausedIds.delete(key)
   }
   isPaused(id: string): boolean {
-    return this.pausedIds.has(this.resolveId(id))
+    const key = this.resolveId(id)
+    return key !== null && this.pausedIds.has(key)
   }
 
   /** Replace the override map and re-create every job whose effective
@@ -774,18 +778,21 @@ export class CronManager {
     for (const id of [...this.entries.keys()]) this.rebuild(id)
   }
   getOverride(id: string): string | null {
-    return this.overrides.get(this.resolveId(id)) ?? null
+    const key = this.resolveId(id)
+    return key === null ? null : (this.overrides.get(key) ?? null)
   }
   /** Override one job's schedule live. Throws on an invalid expression. */
   override(id: string, expression: string): void {
     assertCronExpression(expression)
     const key = this.resolveId(id)
+    if (key === null) return
     this.overrides.set(key, expression)
     this.rebuild(key)
   }
   /** Back to the schedule the code registered. */
   revert(id: string): void {
     const key = this.resolveId(id)
+    if (key === null) return
     this.overrides.delete(key)
     this.rebuild(key)
   }
@@ -812,13 +819,25 @@ export class CronManager {
    * registered; else `id` itself (a composite `<id>@<tenant>` passed directly, a job not bound,
    * self-hosted, cloud). Every by-id method goes through it, so a route working inside an app
    * reaches that app's own entry under the id its list() shows.
+   *
+   * null = an entry bound to ANOTHER app, named from inside an app (its composite key, e.g. from
+   * request input): unknown there, so no app ever reads, runs or changes another app's entry.
+   * Outside any app (internal chains, catch-ups, the Hub's own code) composite keys still work.
    */
-  private resolveId(id: string): string {
+  private resolveId(id: string): string | null {
     if (!perAppJobs()) return id
     const t = getTenantId()
     if (!t) return id
     const key = boundCronKey(id, t)
-    return this.entries.has(key) ? key : id
+    if (this.entries.has(key)) return key
+    const tenant = this.entries.get(id)?.tenant
+    return tenant && tenant !== t ? null : id
+  }
+
+  /** The entry `id` resolves to (resolveId), or undefined. */
+  private entryOf(id: string): InternalEntry | undefined {
+    const key = this.resolveId(id)
+    return key === null ? undefined : this.entries.get(key)
   }
 
   /** The app behind `tenantId` as the registry lists it now (byId, else the active list), or
@@ -845,7 +864,7 @@ export class CronManager {
       gate?: { flag: string; enabled: boolean }
     }
   ): void {
-    const e = this.entries.get(this.resolveId(id))
+    const e = this.entryOf(id)
     if (!e) return
     if (meta.heavy !== undefined) e.heavy = meta.heavy
     if (meta.idempotent) e.idempotent = meta.idempotent
@@ -928,7 +947,7 @@ export class CronManager {
 
   /** Is this job registered as heavy? One map read: job-runs asks it for every run it starts. */
   isHeavy(id: string): boolean {
-    return this.entries.get(this.resolveId(id))?.heavy === true
+    return this.entryOf(id)?.heavy === true
   }
 
   /** Who holds the heavy slot right now (null = free / unknown). */
@@ -948,7 +967,8 @@ export class CronManager {
     /** The entry's own key when it differs from `id` (a bound entry: `<id>@<tenant>`). */
     entryKey?: string
   ): Promise<ClusterHold | null> {
-    if (this.entries.get(entryKey ?? this.resolveId(id))?.idempotent !== 'unsafe') return null
+    const e = entryKey ? this.entries.get(entryKey) : this.entryOf(id)
+    if (e?.idempotent !== 'unsafe') return null
     const redis = this.leader.client()
     if (!redis) return null
     const key = `${ACTIVE_PREFIX}${slotKey(id, appKey)}`
@@ -972,12 +992,16 @@ export class CronManager {
     this.chains = new Map(Object.entries(map).filter(([k, v]) => k && v && k !== v))
   }
   getAfter(id: string): string | null {
-    return this.chains.get(this.resolveId(id)) ?? null
+    const key = this.resolveId(id)
+    return key === null ? null : (this.chains.get(key) ?? null)
   }
   /** Chain `id` after `afterId` (null = unchain). Refuses cycles. */
-  setAfter(id: string, afterId: string | null): void {
-    id = this.resolveId(id)
-    if (afterId) afterId = this.resolveId(afterId)
+  setAfter(childId: string, parentId: string | null): void {
+    const id = this.resolveId(childId)
+    // Another app's entry, named from inside an app: not this app's to chain.
+    if (id === null) return
+    const afterId = parentId ? this.resolveId(parentId) : null
+    if (parentId && afterId === null) throw new Error(`No scheduled job named "${parentId}"`)
     if (!afterId) {
       this.chains.delete(id)
       return
@@ -1012,12 +1036,12 @@ export class CronManager {
 
   /** A job's watchdog budget (ms): how long a run may take before it reads as hung (#2833). */
   budgetMs(id: string): number {
-    return this.entries.get(this.resolveId(id))?.scheduleOpts?.watchdogMs ?? WATCHDOG_DEFAULT_MS
+    return this.entryOf(id)?.scheduleOpts?.watchdogMs ?? WATCHDOG_DEFAULT_MS
   }
 
   /** #32 — run a job's dry-run handler; null when it has none. */
   async dryRun(id: string): Promise<{ supported: boolean; report: unknown }> {
-    const e = this.entries.get(this.resolveId(id))
+    const e = this.entryOf(id)
     if (!e?.dryRun) return { supported: false, report: null }
     const dry = e.dryRun
     // A dry run reads what the job would touch — background work too (#1321).
@@ -1029,7 +1053,7 @@ export class CronManager {
    *  it from the next two runs' spacing put a weekday job's "expected" run on
    *  Sunday and raised false misses every weekend. */
   expectedPreviousRun(id: string, now = appDate()): Date | null {
-    const e = this.entries.get(this.resolveId(id))
+    const e = this.entryOf(id)
     if (!e) return null
     try {
       const probe = new Cron(e.expression, { timezone: e.timezone })
@@ -1040,9 +1064,11 @@ export class CronManager {
   }
 
   schedule(id: string, expression: string, fn: CronFn, opts?: ScheduleOpts): void {
-    // Hub shared deployment — a job scheduled for one app (opts.tenant, or scheduled inside an
-    // app's request or job) is bound to it: stored under `<id>@<tenant>`, never fanned out.
-    const tenant = perAppJobs() ? opts?.tenant || getTenantId() || '' : ''
+    // Hub shared deployment — a job scheduled for one app (scheduled inside an app's request or
+    // job, or with opts.tenant outside any app) is bound to it: stored under `<id>@<tenant>`,
+    // never fanned out. Inside an app the current app always wins: opts.tenant naming another
+    // app (an extension passes its opts through) is ignored, so no app schedules into another.
+    const tenant = perAppJobs() ? getTenantId() || opts?.tenant || '' : ''
     // Hub phase 5 (P5-9) — a shared deployment leaves out the core jobs that only make sense
     // self-hosted (services/cron-scope.ts SELF_HOSTED_ONLY_CRONS), and notes a job that declares
     // no scope. Self-hosted and cloud register every job exactly as before.
@@ -1498,7 +1524,8 @@ export class CronManager {
   async heldByMaintenanceAt(id: string, slot: Date): Promise<boolean> {
     // Hub phase 5 — the miss detector runs per app on a shared deployment: read that app's slot
     // (a bound entry's slot is its own key).
-    const bound = boundOf(this.entries.get(this.resolveId(id)) ?? {})
+    if (this.resolveId(id) === null) return false
+    const bound = boundOf(this.entryOf(id) ?? {})
     const key = bound ? slotKey(bound.baseId, bound.tenant) : slotKey(id, this.appKeyNow(id))
     const at = slot.getTime() - 60_000
     if ((this.heldSlots.get(key) ?? 0) >= at) return true
@@ -1560,12 +1587,14 @@ export class CronManager {
     how: JobRunTrigger = 'run-now'
   ): Promise<boolean> {
     const key = this.resolveId(id)
-    const entry = this.entries.get(key)
-    if (!entry) return false
+    const entry = key === null ? undefined : this.entries.get(key)
+    if (key === null || !entry) return false
     // Hub shared deployment — a bound entry runs inside its own app, recorded under the id it
-    // was scheduled with. Asked from outside that app (a chain, a catch-up): run it in there.
+    // was scheduled with. Asked from outside any app (a chain, a catch-up): run it in there.
+    // Asked from inside ANOTHER app: never (resolveId already refuses that; kept explicit).
     const bound = boundOf(entry)
     if (bound && getTenantId() !== bound.tenant) {
+      if (getTenantId()) return false
       const t = await this.lookupApp(bound.tenant)
       if (!t) return false
       return withTenant(t, () => this.runNow(key, triggeredBy, how), t.origin)
@@ -1614,7 +1643,7 @@ export class CronManager {
 
   /** Flag an already-registered job for boot catch-up (#328). */
   markCatchUp(id: string, hours: number): void {
-    const entry = this.entries.get(this.resolveId(id))
+    const entry = this.entryOf(id)
     if (entry) entry.catchUpHours = hours
   }
 
@@ -1739,7 +1768,7 @@ export class CronManager {
    */
   skipsMissCheck(id: string): boolean {
     if (!perAppJobs()) return false
-    const e = this.entries.get(this.resolveId(id))
+    const e = this.entryOf(id)
     // A bound entry records its runs in its own app, like an app job.
     if (e && boundOf(e)) return false
     return cronScope(id, e?.scheduleOpts) === 'process'
@@ -1792,7 +1821,7 @@ export class CronManager {
 
   /** Hub phase 5 — whether `id` runs once per app ('app') or once per process ('process'). */
   jobScope(id: string): CronScope {
-    const e = this.entries.get(this.resolveId(id))
+    const e = this.entryOf(id)
     // A bound entry is its one app's own job.
     if (e && boundOf(e)) return 'app'
     return cronScope(id, e?.scheduleOpts)
@@ -1807,7 +1836,8 @@ export class CronManager {
   }
 
   unschedule(id: string): void {
-    this.drop(this.resolveId(id))
+    const key = this.resolveId(id)
+    if (key !== null) this.drop(key)
   }
 
   /** Stop and forget the entry stored under `key`. */
@@ -1820,8 +1850,9 @@ export class CronManager {
 
   /**
    * Hub shared deployment — stop and drop every entry bound to `tenantId` (the app left the
-   * deployment), with any pause, override, zone or chain kept for those keys. Returns how many
-   * entries it dropped. Unbound jobs are untouched.
+   * deployment). Any in-process pause, override, zone or chain kept for those keys is cleared
+   * too, as is any chain that ran after one of them. Returns how many entries it dropped.
+   * Unbound jobs are untouched.
    */
   unscheduleTenant(tenantId: string): number {
     let n = 0
@@ -1833,6 +1864,7 @@ export class CronManager {
       this.overrides.delete(key)
       this.tzOverrides.delete(key)
       this.chains.delete(key)
+      for (const [child, parent] of this.chains) if (parent === key) this.chains.delete(child)
       n++
     }
     return n

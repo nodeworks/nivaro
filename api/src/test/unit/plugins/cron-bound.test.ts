@@ -392,6 +392,99 @@ describe('cron entries bound to one app (shared deployment)', () => {
   })
 })
 
+describe("an app never reaches another app's bound entry", () => {
+  /** B's entry with a dry-run handler, so a reached dry run would show. */
+  function scheduleWithDryRun(m: Manager) {
+    const ran = scheduleBoth(m)
+    const dry: string[] = []
+    inApp('B', () =>
+      m.schedule(
+        'sync-job-3',
+        '0 3 * * *',
+        async () => {
+          ran.push({ app: 'B', tenant: currentTenantKey() })
+        },
+        {
+          dryRun: async () => {
+            dry.push('B')
+            return 'B report'
+          }
+        }
+      )
+    )
+    return { ran, dry }
+  }
+  const snapshotB = (m: Manager) => m.list().find((j) => j.id === 'sync-job-3@B')
+
+  it("inside A, B's composite id is unknown to every by-id method", async () => {
+    const m = make()
+    const { ran, dry } = scheduleWithDryRun(m)
+    const before = snapshotB(m)
+    await withTenant(tenant('A'), async () => {
+      const k = 'sync-job-3@B'
+      expect(await m.runNow(k, 'u1')).toBe(false)
+      expect(await m.dryRun(k)).toEqual({ supported: false, report: null })
+      m.pause(k)
+      expect(m.isPaused(k)).toBe(false)
+      m.override(k, '*/1 * * * *')
+      expect(m.getOverride(k)).toBeNull()
+      m.setTimezone(k, 'UTC')
+      m.annotate(k, { heavy: true, description: 'hijacked' })
+      expect(m.isHeavy(k)).toBe(false)
+      expect(m.expectedPreviousRun(k)).toBeNull()
+      expect(m.getAfter(k)).toBeNull()
+      expect(() => m.setAfter('sync-job-3', k)).toThrow()
+      m.setAfter(k, 'sync-job-3')
+      m.markCatchUp(k, 24)
+      m.unschedule(k)
+      expect(m.list().map((j) => j.id)).toEqual(['sync-job-3'])
+    })
+    expect(ran).toEqual([])
+    expect(dry).toEqual([])
+    expect(state.runs).toEqual([])
+    expect(m.isPaused('sync-job-3@B')).toBe(false)
+    expect(m.getAfter('sync-job-3@B')).toBeNull()
+    const after = snapshotB(m)
+    expect(after).toEqual({ ...before, nextRun: after?.nextRun })
+    expect(after).toMatchObject({ expression: '0 3 * * *', paused: false, tenant: 'B' })
+    expect(after?.description).toBeUndefined()
+    expect(after?.heavy).not.toBe(true)
+    // B's own fire still runs B's handler.
+    await fire(m, 'sync-job-3@B')
+    expect(ran).toEqual([{ app: 'B', tenant: 'B' }])
+  })
+
+  it('outside any app the composite id still runs in its app', async () => {
+    const m = make()
+    const ran = scheduleBoth(m)
+    expect(await m.runNow('sync-job-3@B', null, 'chained')).toBe(true)
+    expect(ran).toEqual([{ app: 'B', tenant: 'B' }])
+  })
+
+  it('opts.tenant naming another app inside an app binds to the current app', () => {
+    const m = make()
+    inApp('A', () => m.schedule('ext-job', '0 3 * * *', async () => {}, { tenant: 'B' }))
+    expect(m.list().map((j) => j.id)).toEqual(['ext-job@A'])
+    inApp('A', () => m.schedule('ext-job-2', '0 3 * * *', async () => {}, { tenant: 'A' }))
+    expect(
+      m
+        .list()
+        .map((j) => j.id)
+        .sort()
+    ).toEqual(['ext-job-2@A', 'ext-job@A'])
+  })
+
+  it('unscheduleTenant drops chains whose parent is a dropped entry', () => {
+    const m = make()
+    scheduleBoth(m)
+    m.schedule('nightly-app-job', '0 3 * * *', async () => {})
+    m.setAfter('nightly-app-job', 'sync-job-3@A')
+    expect(m.getAfter('nightly-app-job')).toBe('sync-job-3@A')
+    m.unscheduleTenant('A')
+    expect(m.getAfter('nightly-app-job')).toBeNull()
+  })
+})
+
 describe('self-hosted and Nivaro Cloud: unchanged', () => {
   it('self-hosted stores the plain id, inside or outside a tenant context', () => {
     delete process.env.HUB_SHARED_DEPLOYMENT
