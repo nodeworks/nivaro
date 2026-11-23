@@ -21,11 +21,14 @@ import { dangerArmed, dangerGhost, SectionCard } from '../hub-parts'
 import { type SharedDeployment, sharedError, sharedKeys, WARNING_COPY } from './shared-api'
 import {
   cancelSharedDeploy,
+  defaultUpgradeVersion,
   fetchSharedDeploy,
   fetchSharedDeploys,
   fetchSharedVersions,
+  isDowngrade,
   isOverridable,
   KIND_WORDS,
+  newestFirst,
   openBlockers,
   overrideId,
   planSharedUpgrade,
@@ -123,6 +126,8 @@ const KIND_LABEL: Record<SharedUpgradeKind, { title: string; verb: string; start
   upgrade: { title: 'Upgrade', verb: 'upgrade', start: 'Start upgrade' },
   rollback: { title: 'Roll back', verb: 'roll back', start: 'Start rollback' }
 }
+/** An upgrade to an older version says what it is (P6-29). */
+const DOWNGRADE_LABEL = { title: 'Downgrade', verb: 'downgrade', start: 'Start downgrade' }
 
 function UpgradeForm({
   shared,
@@ -148,15 +153,21 @@ function UpgradeForm({
     () =>
       kind === 'rollback'
         ? rollbackVersions(runs, shared.version_pin)
-        : (versions.data?.versions ?? []),
+        : newestFirst(versions.data?.versions ?? []),
     [kind, runs, shared.version_pin, versions.data]
   )
+  // What a first load picks: an upgrade the newest published version, and only when it is newer
+  // than what runs (never a downgrade by default, P6-29); a rollback the newest it ran before.
+  const firstPick =
+    kind === 'rollback' ? (choices[0] ?? null) : defaultUpgradeVersion(choices, shared.version_pin)
   const [picked, setPicked] = useState('')
   // Pinned on first load: a refetch listing a newer version never swaps it under a typed key.
   useEffect(() => {
-    if (picked || choices.length === 0) return
-    setPicked(choices.find((v) => v !== shared.version_pin) ?? choices[0])
-  }, [picked, choices, shared.version_pin])
+    if (picked || !firstPick) return
+    setPicked(firstPick)
+  }, [picked, firstPick])
+  const runsNewest =
+    kind === 'upgrade' && !picked && versions.isSuccess && choices.length > 0 && !firstPick
   // Upgrade and roll back offer different versions: switching starts the pick again. Done in the
   // click, not an effect: an effect clearing it in the same commit as the first pick (versions
   // not read yet when the person switched) left nothing picked for good.
@@ -171,6 +182,7 @@ function UpgradeForm({
   const [overrides, setOverrides] = useState<Set<string>>(() => new Set())
   const [changed, setChanged] = useState(false)
   const [failure, setFailure] = useState<ErrorDescription | null>(null)
+  const [downgradeOk, setDowngradeOk] = useState(false)
   // The confirmation names one version and one kind: changing either clears it.
   // biome-ignore lint/correctness/useExhaustiveDependencies: clearing is the point
   useEffect(() => {
@@ -178,6 +190,7 @@ function UpgradeForm({
     setChanged(false)
     setFailure(null)
     setOverrides(new Set())
+    setDowngradeOk(false)
   }, [kind, version])
 
   const plan = useQuery({
@@ -197,6 +210,11 @@ function UpgradeForm({
     if (planHash) shownHash.current = planHash
   }, [planHash])
 
+  // The server's word once the plan is read (it also counts a version that is not semver); the
+  // client's own reading before that.
+  const downgrade = plan.data
+    ? plan.data.downgrade === true
+    : isDowngrade(kind, version, shared.version_pin)
   const start = useMutation({
     mutationFn: () =>
       startSharedUpgrade(shared.id, {
@@ -204,7 +222,8 @@ function UpgradeForm({
         version,
         plan_hash: plan.data?.plan_hash ?? '',
         confirm: confirm.trim(),
-        overrides: [...overrides].sort()
+        overrides: [...overrides].sort(),
+        ...(downgrade && downgradeOk ? { downgrade: true as const } : {})
       }),
     onSuccess: (r) => {
       void qc.invalidateQueries({ queryKey: upgradeKeys.deploys(shared.id) })
@@ -220,6 +239,7 @@ function UpgradeForm({
         setChanged(refused.code === 'PLAN_CHANGED')
         setConfirm('')
         setOverrides(new Set())
+        setDowngradeOk(false)
         setFailure(
           refused.code === 'PLAN_CHANGED'
             ? null
@@ -234,8 +254,13 @@ function UpgradeForm({
 
   const open = plan.data ? openBlockers(plan.data, overrides) : null
   const ready =
-    !!plan.data?.plan_hash && open === 0 && confirm.trim() === shared.key && !start.isPending
-  const label = KIND_LABEL[kind]
+    !!plan.data?.plan_hash &&
+    open === 0 &&
+    confirm.trim() === shared.key &&
+    (!downgrade || downgradeOk) &&
+    !start.isPending
+  const label = downgrade ? DOWNGRADE_LABEL : KIND_LABEL[kind]
+  const downgradeNote = plan.data?.warnings.find((w) => w.code === 'DOWNGRADE')?.text
 
   return (
     <div className='space-y-3'>
@@ -274,6 +299,7 @@ function UpgradeForm({
             id={`${idPrefix}-version`}
             value={version}
             current={shared.version_pin}
+            markOlder={kind === 'upgrade'}
             options={choices}
             onChange={setPicked}
           />
@@ -304,7 +330,51 @@ function UpgradeForm({
         </p>
       )}
 
-      {!version ? (
+      {downgrade && version && (
+        <div
+          role='status'
+          aria-labelledby={`${idPrefix}-downgrade`}
+          className='space-y-1.5 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-900/60 dark:bg-amber-950/40'
+        >
+          <p
+            id={`${idPrefix}-downgrade`}
+            className='m-0 text-[12px] font-semibold text-amber-900 dark:text-amber-200'
+          >
+            This is a downgrade
+          </p>
+          <p className='m-0 text-[12px] text-amber-900 dark:text-amber-200'>
+            <span className='font-mono'>{version}</span> is older than the version it runs (
+            <span className='font-mono'>{shared.version_pin ?? 'unknown'}</span>). Every app on it
+            goes back, and an older version may not read data a newer one wrote. To return to a
+            version this deployment ran before, use Roll back.
+          </p>
+          {downgradeNote && !isRawErrorText(downgradeNote) && (
+            <p className='m-0 text-[11.5px] text-amber-800 dark:text-amber-300/90'>
+              {downgradeNote}
+            </p>
+          )}
+          <div className='flex items-center gap-1.5'>
+            <Checkbox
+              id={`${idPrefix}-downgrade-ok`}
+              checked={downgradeOk}
+              onCheckedChange={(v) => setDowngradeOk(v === true)}
+            />
+            <label
+              htmlFor={`${idPrefix}-downgrade-ok`}
+              className='text-[12px] text-amber-900 dark:text-amber-200'
+            >
+              I mean to downgrade to <span className='font-mono'>{version}</span>
+            </label>
+          </div>
+        </div>
+      )}
+
+      {runsNewest ? (
+        <p className='m-0 text-[12px] text-slate-500 dark:text-muted-foreground'>
+          Runs the newest published version. Pick a version to apply this one again or to go to
+          another.
+        </p>
+      ) : !version ? (
         <p className='m-0 text-[12px] text-slate-500 dark:text-muted-foreground'>
           Pick a version to see what the {label.verb} would do.
         </p>
@@ -374,12 +444,15 @@ function VersionPicker({
   id,
   value,
   current,
+  markOlder,
   options,
   onChange
 }: {
   id: string
   value: string
   current: string | null
+  /** Upgrade: a version older than the one running says so in the list. */
+  markOlder: boolean
   options: string[]
   onChange: (v: string) => void
 }) {
@@ -440,10 +513,17 @@ function VersionPicker({
                     aria-hidden
                   />
                   {v}
-                  {v === current && (
+                  {v === current ? (
                     <span className='ml-auto font-sans text-[11px] text-muted-foreground'>
                       runs now
                     </span>
+                  ) : (
+                    markOlder &&
+                    isDowngrade('upgrade', v, current) && (
+                      <span className='ml-auto font-sans text-[11px] text-amber-700 dark:text-amber-300'>
+                        older
+                      </span>
+                    )
                   )}
                 </CommandItem>
               ))}

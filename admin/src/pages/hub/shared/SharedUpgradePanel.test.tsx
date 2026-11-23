@@ -16,6 +16,14 @@ vi.mock('@/lib/api', () => ({
   }
 }))
 
+// cmdk scrolls the active option into view; jsdom has no scrollIntoView or ResizeObserver.
+Element.prototype.scrollIntoView ??= vi.fn()
+globalThis.ResizeObserver ??= class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+} as unknown as typeof ResizeObserver
+
 const { rollbackVersions, SharedUpgradePanel } = await import('./SharedUpgradePanel')
 
 const SHARED: SharedDeployment = {
@@ -79,17 +87,17 @@ afterEach(() => {
   h.post.mockReset()
 })
 
-const wrap = () =>
+const wrap = (shared: SharedDeployment = SHARED) =>
   render(
     <QueryClientProvider
       client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
     >
-      <SharedUpgradePanel shared={SHARED} />
+      <SharedUpgradePanel shared={shared} />
     </QueryClientProvider>
   )
 
 const start = () => screen.getByRole('button', { name: 'Start upgrade' })
-const confirmBox = () => screen.getByLabelText(/to upgrade$/)
+const confirmBox = () => screen.getByLabelText(/to (up|down)grade$/)
 
 /** The page text a person reads: the collapsed "Details for support" left out. */
 function shownText(): string {
@@ -499,5 +507,140 @@ describe('SharedUpgradePanel', () => {
     expect(cls).toContain('break-words')
     expect(cls).not.toContain('truncate')
     expect(cls).toContain('sm:truncate')
+  })
+
+  describe('B2: never a downgrade by default; an older pick is named and confirmed', () => {
+    const versionsAre = (list: string[]) => {
+      const base = h.get.getMockImplementation() as (url: string) => Promise<unknown>
+      h.get.mockImplementation(async (url: string) =>
+        url === '/hub/shared/4/upgrade/versions'
+          ? { data: { data: { versions: list } } }
+          : base(url)
+      )
+    }
+    const pickVersion = async (v: string) => {
+      fireEvent.click(screen.getByRole('combobox', { name: 'Version' }))
+      fireEvent.click(await screen.findByRole('option', { name: new RegExp(`^${v}`) }))
+    }
+
+    it('defaults to the newest published version, whatever order the registry lists', async () => {
+      versionsAre(['0.3.209', '0.3.211', '0.3.210'])
+      wrap()
+      await waitFor(() =>
+        expect(h.post).toHaveBeenCalledWith('/hub/shared/4/upgrade/plan', {
+          version: '0.3.211',
+          kind: 'upgrade'
+        })
+      )
+    })
+
+    it('runs the newest already: says so and plans nothing', async () => {
+      versionsAre(['0.3.207', '0.3.210'])
+      wrap()
+      expect(await screen.findByText(/Runs the newest published version/)).toBeInTheDocument()
+      expect(h.post).not.toHaveBeenCalled()
+      expect(start()).toBeDisabled()
+    })
+
+    it('an older pick is a downgrade: warned, confirmed, then sent with downgrade: true', async () => {
+      versionsAre(['0.3.207', '0.3.210'])
+      planned = plan({ version: '0.3.207', downgrade: true })
+      wrap()
+      await screen.findByText(/Runs the newest published version/)
+      await pickVersion('0.3.207')
+      const box = await screen.findByRole('status', { name: 'This is a downgrade' })
+      expect(within(box).getByText(/older than the version it runs/)).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Start downgrade' })).toBeDisabled()
+      fireEvent.change(confirmBox(), { target: { value: 'shared-one' } })
+      await screen.findByText('acme-e7')
+      expect(screen.getByRole('button', { name: 'Start downgrade' })).toBeDisabled()
+      fireEvent.click(within(box).getByRole('checkbox', { name: /downgrade to 0\.3\.207/ }))
+      h.post.mockImplementation(async (url: string) =>
+        url === '/hub/shared/4/upgrade/plan'
+          ? { data: { data: planned } }
+          : { data: { data: { shared_deploy_id: 40 } } }
+      )
+      const go = screen.getByRole('button', { name: 'Start downgrade' })
+      expect(go).toBeEnabled()
+      fireEvent.click(go)
+      await waitFor(() =>
+        expect(h.post).toHaveBeenCalledWith(
+          '/hub/shared/4/upgrade',
+          expect.objectContaining({ kind: 'upgrade', version: '0.3.207', downgrade: true })
+        )
+      )
+    })
+
+    it("the server's plan decides: plan.downgrade shows the box with the planner's sentence", async () => {
+      // A version the client cannot order (not x.y.z): only the server's plan says downgrade.
+      versionsAre(['0.3.210'])
+      planned = plan({
+        version: 'nightly-1',
+        downgrade: true,
+        warnings: [
+          {
+            code: 'DOWNGRADE',
+            text: 'nightly-1 is not newer than the 0.3.210 this deployment runs.'
+          }
+        ]
+      })
+      wrap()
+      await screen.findByText(/Runs the newest published version/)
+      fireEvent.click(screen.getByRole('combobox', { name: 'Version' }))
+      fireEvent.change(screen.getByPlaceholderText('Search or type a version…'), {
+        target: { value: 'nightly-1' }
+      })
+      fireEvent.click(await screen.findByRole('option', { name: /Use nightly-1/ }))
+      const box = await screen.findByRole('status', { name: 'This is a downgrade' })
+      expect(
+        within(box).getByText('nightly-1 is not newer than the 0.3.210 this deployment runs.')
+      ).toBeInTheDocument()
+      // Said once, in the box: not again as a plain warning row, and never as a code.
+      expect(screen.getAllByText(/is not newer than the 0\.3\.210/)).toHaveLength(1)
+      expect(shownText()).not.toContain('DOWNGRADE')
+    })
+
+    it('a start refused DOWNGRADE_NEEDS_CONFIRM says so in plain words', async () => {
+      h.post.mockImplementation(async (url: string) => {
+        if (url === '/hub/shared/4/upgrade/plan') return { data: { data: planned } }
+        throw Object.assign(new Error('409'), {
+          response: {
+            status: 409,
+            data: {
+              code: 'DOWNGRADE_NEEDS_CONFIRM',
+              error: '0.4.0 is not newer — confirm the downgrade to start.',
+              plan: { ...planned, downgrade: true }
+            }
+          }
+        })
+      })
+      wrap()
+      await screen.findByText('acme-e7')
+      fireEvent.change(confirmBox(), { target: { value: 'shared-one' } })
+      fireEvent.click(start())
+      expect(
+        await screen.findByText('This version is older than the one the deployment runs')
+      ).toBeInTheDocument()
+      // The plan it carried is on screen now: the downgrade box asks for the confirmation.
+      expect(screen.getByRole('status', { name: 'This is a downgrade' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Start downgrade' })).toBeDisabled()
+    })
+
+    it('a normal upgrade start never sends downgrade', async () => {
+      h.post.mockImplementation(async (url: string) =>
+        url === '/hub/shared/4/upgrade/plan'
+          ? { data: { data: planned } }
+          : { data: { data: { shared_deploy_id: 41 } } }
+      )
+      wrap()
+      await screen.findByText('acme-e7')
+      fireEvent.change(confirmBox(), { target: { value: 'shared-one' } })
+      fireEvent.click(start())
+      await waitFor(() =>
+        expect(h.post).toHaveBeenCalledWith('/hub/shared/4/upgrade', expect.anything())
+      )
+      const body = h.post.mock.calls.find((c) => c[0] === '/hub/shared/4/upgrade')?.[1]
+      expect(body).not.toHaveProperty('downgrade')
+    })
   })
 })

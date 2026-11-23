@@ -38,6 +38,11 @@ export interface SharedUpgradePlan {
   confirm?: string
   /** The per-app codes a Hub admin may override. */
   overridable?: string[]
+  /**
+   * P6-29: an upgrade to an older version (or one either side of which is not semver). The start
+   * needs `downgrade: true`, else 409 DOWNGRADE_NEEDS_CONFIRM. The plan also warns DOWNGRADE.
+   */
+  downgrade?: boolean
   image?: string | null
   stack?: string | null
   hostnames?: string[]
@@ -146,6 +151,8 @@ export const startSharedUpgrade = (
     plan_hash: string
     confirm: string
     overrides: string[]
+    /** Sent (true) only when the person confirmed an upgrade to an older version. */
+    downgrade?: true
   }
 ) =>
   api
@@ -197,7 +204,7 @@ export function openBlockers(plan: SharedUpgradePlan, overrides: ReadonlySet<str
 }
 
 /** Refusals of a start that carry the plan as it stands now. */
-const PLAN_CARRYING = new Set(['PLAN_CHANGED', 'BLOCKED', 'APP_BLOCKED'])
+const PLAN_CARRYING = new Set(['PLAN_CHANGED', 'BLOCKED', 'APP_BLOCKED', 'DOWNGRADE_NEEDS_CONFIRM'])
 
 /** The plan a refused start carried (PLAN_CHANGED, BLOCKED, APP_BLOCKED) and its code. */
 export function refusedPlanOf(err: unknown): { code: string; plan: SharedUpgradePlan } | null {
@@ -215,6 +222,49 @@ export function refusedPlanOf(err: unknown): { code: string; plan: SharedUpgrade
  */
 export const runErrorText = (error: string): string =>
   error.replace(/^[A-Z][A-Z0-9_]{2,63}:\s*/, '').trim()
+
+/**
+ * Numeric x.y.z order: 0.3.10 > 0.3.9. Missing or non-numeric parts count as 0. A twin of the
+ * API's compareVersions (services/hub/promote-plan.ts).
+ */
+export function compareVersions(a: string, b: string): number {
+  const pa = a.split('.').map((n) => Number.parseInt(n, 10) || 0)
+  const pb = b.split('.').map((n) => Number.parseInt(n, 10) || 0)
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0)
+    if (d !== 0) return d
+  }
+  return 0
+}
+
+const XYZ = /^\d+\.\d+\.\d+$/
+
+/** Published versions, newest first (the registry's order is not promised). */
+export const newestFirst = (versions: string[]): string[] =>
+  [...versions].sort((a, b) => compareVersions(b, a))
+
+/** An upgrade to a version older than the one running: a downgrade, never a default. */
+export const isDowngrade = (
+  kind: SharedUpgradeKind,
+  version: string,
+  current: string | null
+): boolean =>
+  kind === 'upgrade' &&
+  !!current &&
+  XYZ.test(version) &&
+  XYZ.test(current) &&
+  compareVersions(version, current) < 0
+
+/**
+ * The version an upgrade starts on: the newest published one when it is newer than what runs
+ * (or nothing runs yet). Null when the deployment already runs the newest: nothing to plan.
+ */
+export function defaultUpgradeVersion(versions: string[], current: string | null): string | null {
+  const newest = newestFirst(versions)[0]
+  if (!newest) return null
+  if (!current || !XYZ.test(current) || !XYZ.test(newest)) return newest === current ? null : newest
+  return compareVersions(newest, current) > 0 ? newest : null
+}
 
 /** The run's step keys, in order (Task 5's run steps 1–5). */
 export const UPGRADE_STEPS: { key: string; label: string }[] = [
@@ -370,6 +420,10 @@ export const UPGRADE_COPY: Record<string, { title: string; hint?: string }> = {
   NOT_RUNNING: {
     title: 'That upgrade is not running any more',
     hint: 'It already finished, failed or was stopped. Reload to see how it ended.'
+  },
+  DOWNGRADE_NEEDS_CONFIRM: {
+    title: 'This version is older than the one the deployment runs',
+    hint: 'Tick that you mean to downgrade, or pick a newer version. To go back to a version it ran before, use Roll back.'
   }
 }
 
@@ -377,8 +431,11 @@ export const UPGRADE_COPY: Record<string, { title: string; hint?: string }> = {
 export const upgradeCopy = (code: string, text?: string): { title: string; hint?: string } =>
   UPGRADE_COPY[code] ?? { title: text || 'Held back by a check the Hub made' }
 
-/** The plan's warning listing every app it touches: the apps table already shows them. */
-export const SILENT_WARNINGS = new Set(['APPS_AFFECTED'])
+/**
+ * Warnings shown elsewhere: APPS_AFFECTED (the apps table lists them), DOWNGRADE (the downgrade
+ * box says it, with the planner's sentence).
+ */
+export const SILENT_WARNINGS = new Set(['APPS_AFFECTED', 'DOWNGRADE'])
 
 export const KIND_WORDS: Record<string, string> = {
   upgrade: 'Upgrade',
