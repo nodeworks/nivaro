@@ -44,6 +44,31 @@ describe('keyed detection', () => {
     expect(keyed(src).m).toBe(false)
   })
 
+  // Hub phase 6 parked wave (T22 R2-M1): a Map that leaves the module by object shorthand, as an
+  // array element or as a return value may be written there with any key.
+  it.each([
+    ['object shorthand', 'const h = { m }'],
+    ['object shorthand, later member', 'const h = { a: 1, m }'],
+    ['array element', 'const all = [m]'],
+    ['array element, later', 'const all = [n, m]'],
+    ['returned', 'return m'],
+    ['returned with a semicolon', 'return m;'],
+    ['returned with a fallback', 'return m ?? null']
+  ])('a Map handed on by %s is never detected', (_why, leak) => {
+    const src = `const m = new Map()\nconst n = 1\nexport function f(k) { m.set(appKey(k), 1) }\nexport function g() { ${leak} }`
+    expect(keyed(src).m).toBe(false)
+  })
+
+  it.each([
+    ['a read returned', 'return m.get(appKey(k))'],
+    ['an index read returned', 'return m[0]'],
+    ['an optional read returned', 'return m?.size'],
+    ['a spread of its keys', 'return [...m.keys()]']
+  ])('%s is not handing it on: still detected', (_why, read) => {
+    const src = `const m = new Map()\nexport function f(k) { m.set(appKey(k), 1) }\nexport function g(k) { ${read} }`
+    expect(keyed(src).m).toBe(true)
+  })
+
   it('dropAppEntries(m) only removes: still detected', () => {
     const src =
       'const m = new Map()\nexport function f(k) { m.set(appKey(k), 1) }\nexport function g() { dropAppEntries(m) }'

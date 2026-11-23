@@ -276,3 +276,33 @@ describe('shared upgrade routes', () => {
     expect(p.statusCode).toBe(404)
   })
 })
+
+// Ruling P6-29 (B2): an upgrade to an older version answers 409 DOWNGRADE_NEEDS_CONFIRM, with the
+// plan, until the request says `downgrade: true`.
+describe('downgrade needs confirm', () => {
+  it('409 DOWNGRADE_NEEDS_CONFIRM carrying the plan; nothing started', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/hub/shared/${sharedId}/upgrade/plan`,
+      headers: asAdmin,
+      payload: { version: '0.3.208' }
+    })
+    const data = res.json().data
+    expect(data.downgrade).toBe(true)
+    const before = await db('nivaro_hub_shared_deploys').where({ shared_deployment_id: sharedId })
+    const refused = await app.inject({
+      method: 'POST',
+      url: `/api/hub/shared/${sharedId}/upgrade`,
+      headers: asAdmin,
+      payload: { version: '0.3.208', plan_hash: data.plan_hash, confirm: key }
+    })
+    expect(refused.statusCode).toBe(409)
+    expect(refused.json()).toMatchObject({
+      code: 'DOWNGRADE_NEEDS_CONFIRM',
+      plan: { plan_hash: data.plan_hash, downgrade: true }
+    })
+    expect(
+      await db('nivaro_hub_shared_deploys').where({ shared_deployment_id: sharedId })
+    ).toHaveLength(before.length)
+  })
+})

@@ -7,6 +7,13 @@ import { rawRows } from '../../db/raw-rows.js'
 import { getTenantId, mysqlTenantTls, withTenant } from '../../db/tenant-context.js'
 import { NIVARO_VERSION } from '../../version.js'
 import { keyFingerprint } from '../app-key-fingerprint.js'
+import {
+  DB_IDENTITY_DEFAULT_PORT,
+  type DbIdentityEngine,
+  dbIdentitySql,
+  formatDbIdentity,
+  oidcIdentity
+} from '../db-identity.js'
 import { scrubDbError } from '../hub/db/connection.js'
 import { objectStorageCounts } from '../hub-transfer/object-counts.js'
 import type { TenantRecord } from './types.js'
@@ -219,36 +226,13 @@ export async function appStatusFor(
   )
 }
 
-/** The deployment's OIDC issuer as the Hub compares it (Decision 13): host, plus the Entra tenant
- *  segment (`login.microsoftonline.com/<tenant>/v2.0`); null when no issuer is set. */
-export function oidcIdentity(issuer: string | null | undefined): DeploymentStatus['oidc'] {
-  const raw = (issuer ?? '').trim()
-  if (!raw) return null
-  try {
-    const u = new URL(raw)
-    const first = u.pathname.split('/').filter(Boolean)[0] ?? ''
-    const tenant = first && !/^v\d/i.test(first) ? first.toLowerCase() : null
-    return { issuer_host: u.host.toLowerCase(), tenant }
-  } catch {
-    return null
-  }
-}
+/** The deployment's OIDC issuer as the Hub compares it (Decision 13): services/db-identity.ts. */
+export { oidcIdentity }
 
 // ─── Database check (the Hub asks before it lists an app's database here) ───────────────────
 
 export const DB_CHECK_CLIENTS = new Set(['mssql', 'pg', 'mysql2', 'mariadb'])
 const DB_CHECK_TIMEOUT_MS = 10_000
-
-/** The same read-only statements as the Hub's phase-3 IDENTITY_SQL (services/hub/db/databases.ts):
- *  which server and database the connection really reached. */
-const IDENTITY_SQL: Record<string, string> = {
-  mssql: 'SELECT CAST(@@SERVERNAME AS nvarchar(256)) AS s, CAST(NULL AS int) AS p, DB_NAME() AS d',
-  pg: "SELECT COALESCE(host(inet_server_addr()), '') AS s, inet_server_port() AS p, current_database() AS d",
-  mysql2: 'SELECT @@hostname AS s, @@port AS p, DATABASE() AS d',
-  mariadb: 'SELECT @@hostname AS s, @@port AS p, DATABASE() AS d'
-}
-
-const DEFAULT_PORT: Record<string, number> = { mssql: 1433, pg: 5432, mysql2: 3306, mariadb: 3306 }
 
 /**
  * What the check saw of nivaro_migrations (ruling P6-11b): no table, a table with no rows, rows
@@ -321,13 +305,16 @@ async function readIdentity(k: Knex, client: string, connection: string): Promis
   } catch {
     // identity from the server only
   }
+  // Which server and database the connection really reached: services/db-identity.ts.
+  const sql = dbIdentitySql(client)
+  if (!sql) return null
   try {
-    const [r] = rawRows<{ s: unknown; p: unknown; d: unknown }>(await k.raw(IDENTITY_SQL[client]))
-    const server = String(r?.s ?? '').trim() || fallback.host || ''
-    const port =
-      r?.p != null && r.p !== '' ? Number(r.p) : (fallback.port ?? DEFAULT_PORT[client] ?? null)
-    const database = String(r?.d ?? '').trim() || fallback.database || ''
-    return `${client}|${server}|${port}|${database}`.toLowerCase()
+    const [r] = rawRows<{ s: unknown; p: unknown; d: unknown }>(await k.raw(sql))
+    return formatDbIdentity(client, r, {
+      server: fallback.host || '',
+      port: fallback.port ?? DB_IDENTITY_DEFAULT_PORT[client as DbIdentityEngine] ?? null,
+      database: fallback.database || ''
+    })
   } catch {
     return null
   }

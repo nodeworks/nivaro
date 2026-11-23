@@ -21,11 +21,11 @@ const { HubAppKeyField } = await import('./HubAppKeyField')
 
 const KEY = 'a'.repeat(64)
 
-function renderField() {
+function renderField(shared = false) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={qc}>
-      <HubAppKeyField envId={10} idPrefix='k' />
+      <HubAppKeyField envId={10} idPrefix='k' shared={shared} />
     </QueryClientProvider>
   )
 }
@@ -133,5 +133,17 @@ describe('HubAppKeyField', () => {
     })
     renderField()
     expect(await screen.findByText(/saved key can no longer be opened/)).toBeInTheDocument()
+  })
+})
+
+describe('HubAppKeyField on a shared environment (design S12)', () => {
+  it('a missing key is a lost key: no "enter it to place or move", and the support path', async () => {
+    h.get.mockResolvedValue({
+      data: { data: { known: false, key: null, fp: null, source: null, code: 'APP_KEY_UNKNOWN' } }
+    })
+    renderField(true)
+    expect(await screen.findByText(/already runs on a shared deployment/)).toBeInTheDocument()
+    expect(screen.queryByText(/to place or move it onto a shared deployment/)).toBeNull()
+    expect(screen.getByText(/There is no override for a lost key/)).toBeInTheDocument()
   })
 })

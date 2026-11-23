@@ -741,6 +741,18 @@ describe('HubMovePanel — before start', () => {
     expect(screen.getByRole('button', { name: 'Start move' })).toBeDisabled()
   })
 
+  it('files read as unknown when the source never answered (design N4)', async () => {
+    plan = {
+      ...basePlan,
+      files: { count: 0, bytes: 0 },
+      blockers: [{ code: 'LINK_UNREACHABLE', text: '' }]
+    }
+    renderPanel()
+    await pickTarget(/Shared · east/)
+    expect(await screen.findByText('Files: unknown until the source answers')).toBeInTheDocument()
+    expect(screen.queryByText(/0 files/)).toBeNull()
+  })
+
   it('an unknown app key blocker offers the app key field right there', async () => {
     plan = { ...basePlan, checklist: [], blockers: [{ code: 'APP_KEY_UNKNOWN', text: '' }] }
     renderPanel()
@@ -1039,6 +1051,12 @@ describe('HubMovePanel — a move that ended (ruling P6-17 I-1)', () => {
     expect(
       screen.getByRole('checkbox', { name: /Retire the old home by hand/ })
     ).toBeInTheDocument()
+    // The retire step is not shown done while its item is open (design S11).
+    const stepsList = screen.getByRole('list', { name: 'Move steps' })
+    expect(within(stepsList).getByText('Retire the old home').closest('li')).toHaveAttribute(
+      'data-state',
+      'waiting'
+    )
     // Succeeded with an error: a warning (amber), not a failure.
     expect(
       screen
@@ -1063,5 +1081,63 @@ describe('HubMovePanel — a move that ended (ruling P6-17 I-1)', () => {
     // Dismissed stays dismissed in this browser.
     renderPanel()
     expect(await screen.findByRole('combobox', { name: 'Move to' })).toBeInTheDocument()
+  })
+})
+
+describe('HubMovePanel — a rolled-back move whose name must be pointed back (design B3)', () => {
+  beforeEach(() => window.localStorage.clear())
+
+  it('shows the repoint step first, makes no "serves again" claim and offers no Dismiss until it is ticked', async () => {
+    const say =
+      'Point fieldops-uat.acme.test back to the Docker stack fieldops-uat: the move was rolled back and the target no longer serves this app.'
+    const rolled = (done: boolean) => ({
+      status: 'rolled_back',
+      step: 'check',
+      routing: 'manual',
+      steps: {
+        list: steps.map((key) => ({
+          key,
+          state: ['route', 'verify'].includes(key) ? 'done' : 'undone'
+        })),
+        phase: 'rollback'
+      },
+      error: `The target did not get ready in time. — ${say}`,
+      checklist: [
+        { id: 'old_stack_stopped', text: 'Stop the old stack.', required: false, done: false },
+        { id: 'repoint_name', text: say, required: true, done }
+      ]
+    })
+    openMove(rolled(false))
+    h.post.mockImplementation(async (url: string) => {
+      if (url === '/hub/moves/77/checklist') {
+        openMove(rolled(true))
+        return { data: { data: [] } }
+      }
+      throw new Error(url)
+    })
+    renderPanel()
+    const box = await screen.findByRole('region', { name: 'Point the name back' })
+    expect(within(box).getByText(/Until then the app does not answer/)).toBeInTheDocument()
+    expect(within(box).getByRole('button', { name: 'Copy the instruction' })).toBeInTheDocument()
+    expect(screen.queryByText(/serves from its old home again/)).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Dismiss' })).toBeNull()
+    // The error box keeps only its own sentence; the address steps are not shown as done.
+    expect(screen.getByText('The target did not get ready in time.')).toBeInTheDocument()
+    const list = screen.getByRole('list', { name: 'Move steps' })
+    expect(within(list).getByText('Point the address at the target').closest('li')).toHaveAttribute(
+      'data-state',
+      'waiting'
+    )
+    // The plan's after-the-move reminder does not apply to a rolled-back move.
+    expect(screen.queryByText('Stop the old stack.')).toBeNull()
+    fireEvent.click(within(box).getByRole('checkbox', { name: /points back to the old home/ }))
+    await waitFor(() =>
+      expect(h.post).toHaveBeenCalledWith('/hub/moves/77/checklist', {
+        item: 'repoint_name',
+        done: true
+      })
+    )
+    expect(await screen.findByText(/serves from its old home again/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Dismiss' })).toBeInTheDocument()
   })
 })

@@ -1032,10 +1032,16 @@ export function tenantHook(req: FastifyRequest, reply: FastifyReply, done: (err?
         return
       }
 
-      // The phone app's probe answers on a blocked tenant (name + why) instead of a 503.
+      // The phone app's probe answers on a blocked tenant (name + why) instead of a 503. A Hub
+      // shared deployment's app in maintenance (an update or a move) says maintenance, not
+      // suspended; Nivaro Cloud is unchanged.
       if ((result.suspended || result.provisioning) && isAppInfoPath(req.url)) {
         req.nvrTenantBlock = {
-          kind: result.suspended ? 'suspended' : 'provisioning',
+          kind: result.suspended
+            ? !cloud && result.row.status === 'maintenance'
+              ? 'maintenance'
+              : 'suspended'
+            : 'provisioning',
           name: result.row.name,
           origin: result.origin
         }

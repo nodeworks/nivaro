@@ -238,7 +238,13 @@ declare module 'fastify' {
     workspaceId: string | null
     /** The request id (= its trace id), stamped by plugins/request-trace.ts on /api requests. */
     requestId?: string
-    /** Cloud: set by the tenant hook when /api/app-info is let through a suspended or provisioning tenant. */
-    nvrTenantBlock?: { kind: 'suspended' | 'provisioning'; name: string; origin?: string }
+    /** Cloud: set by the tenant hook when /api/app-info is let through a suspended or provisioning
+     *  tenant. `maintenance`: a Hub shared deployment's app the Hub is updating or moving (never
+     *  in Nivaro Cloud). */
+    nvrTenantBlock?: {
+      kind: 'suspended' | 'provisioning' | 'maintenance'
+      name: string
+      origin?: string
+    }
   }
 }
