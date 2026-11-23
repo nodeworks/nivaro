@@ -1175,3 +1175,145 @@ describe('final fix wave FW-1 — I-1: an environment that serves elsewhere is n
     expect((await db('nivaro_hub_environments').where({ id: envId }).first()).status).toBe('active')
   })
 })
+
+describe('final fix wave FW-1 — a Docker shared deployment (I-3, M-6)', () => {
+  let dockerShared = 0
+  let dockerDriver = 0
+  const traefik = vi.fn(async () => ({ edge: 'traefik' }))
+  const publish = vi.fn(async () => ({ edge: 'publish' }))
+  /** fakeClient, its refresh making the one replica of THIS deployment hold the list. */
+  function dockerClient() {
+    const fake = fakeClient()
+    fake.client.refresh.mockImplementation(async () => {
+      const shared = await Store.getShared(dockerShared)
+      if (!shared) return
+      const { etag } = await tenantsBody(shared)
+      await Sightings.recordSighting(dockerShared, {
+        instance: 'web-1',
+        version: '0.3.210',
+        etag,
+        at: new Date(t).toISOString()
+      })
+    })
+    return fake.factory
+  }
+
+  beforeAll(async () => {
+    dockerDriver = await insertId('nivaro_hub_drivers', {
+      kind: 'docker',
+      name: `swarm${++seq}`,
+      config: JSON.stringify({
+        agent_url: 'https://agent.example.com',
+        dns_mode: 'automatic',
+        wildcard_domain: 'apps.example.com',
+        edge_target: null
+      }),
+      secret: sealSecret('agent-Token-Value-0123456789-abcdefghij')
+    })
+    const v = Store.validateSharedInput({
+      key: 'shared-docker',
+      name: 'Shared docker',
+      link_url: 'https://shared-docker.internal.example.com',
+      mode: 'docker',
+      driver_id: dockerDriver,
+      stack: 'shared-docker',
+      host_pattern: '*.apps.example.com',
+      extensions: []
+    })
+    if (!v.ok) throw new Error(v.code)
+    dockerShared = (await Store.createShared(v.row, null)).row.id
+    await db('nivaro_hub_shared_deployments')
+      .where({ id: dockerShared })
+      .update({ version_pin: '0.3.210', status: 'active', pool_budget: 1000 })
+  })
+
+  it('I-3: a name outside host_pattern on the traefik edge → 409 NAME_NOT_ROUTED, nothing written', async () => {
+    const app = await newApp()
+    const envId = await newEnv(app.id, { base_url: 'https://crm.acme-corp.com' })
+    const err = await refusal(
+      place(
+        envId,
+        { shared_id: dockerShared, database_id: await newDb() },
+        { client: fakeClient().factory, agentHealth: traefik }
+      )
+    )
+    expect(err).toMatchObject({ code: 'NAME_NOT_ROUTED', statusCode: 409 })
+    expect((err as unknown as Error).message).toContain('crm.acme-corp.com')
+    expect(
+      (await db('nivaro_hub_environments').where({ id: envId }).first()).placement_id
+    ).toBeNull()
+    // An extra hostname outside it too.
+    const two = await newEnv(app.id, { hostnames: JSON.stringify(['www.other.org']) })
+    expect(
+      (
+        await refusal(
+          place(
+            two,
+            { shared_id: dockerShared, database_id: await newDb() },
+            { client: fakeClient().factory, agentHealth: traefik }
+          )
+        )
+      ).code
+    ).toBe('NAME_NOT_ROUTED')
+    // The agent cannot say which edge it runs: never assume the names are routed.
+    const down = vi.fn(async () => {
+      throw new Error('agent down')
+    })
+    expect(
+      (
+        await refusal(
+          place(
+            envId,
+            { shared_id: dockerShared, database_id: await newDb() },
+            { client: fakeClient().factory, agentHealth: down }
+          )
+        )
+      ).code
+    ).toBe('NAME_NOT_ROUTED')
+  })
+
+  it('I-3: names under the pattern, a name the last run already routed, or the publish edge place', async () => {
+    const app = await newApp()
+    const covered = await newEnv(app.id)
+    TENANTS = [Store.tenantIdFor(app, { id: covered })]
+    await place(
+      covered,
+      { shared_id: dockerShared, database_id: await newDb() },
+      { client: dockerClient(), startJobRun: fakeRun().start, agentHealth: traefik }
+    )
+    await Place.awaitPlacement(covered)
+    expect((await db('nivaro_hub_environments').where({ id: covered }).first()).status).toBe(
+      'active'
+    )
+    await db('nivaro_hub_shared_deploys').insert({
+      shared_deployment_id: dockerShared,
+      kind: 'upgrade',
+      version: '0.3.210',
+      status: 'success',
+      plan: JSON.stringify({ plan: { hostnames: ['crm.routed.com'] } }),
+      started_at: new Date(t)
+    })
+    const routed = await newEnv(app.id, { base_url: 'https://crm.routed.com' })
+    TENANTS = [Store.tenantIdFor(app, { id: routed })]
+    await place(
+      routed,
+      { shared_id: dockerShared, database_id: await newDb() },
+      { client: dockerClient(), startJobRun: fakeRun().start, agentHealth: traefik }
+    )
+    await Place.awaitPlacement(routed)
+    expect((await db('nivaro_hub_environments').where({ id: routed }).first()).status).toBe(
+      'active'
+    )
+    const published = await newEnv(app.id, { base_url: 'https://crm.elsewhere.net' })
+    TENANTS = [Store.tenantIdFor(app, { id: published })]
+    await place(
+      published,
+      { shared_id: dockerShared, database_id: await newDb() },
+      { client: dockerClient(), startJobRun: fakeRun().start, agentHealth: publish }
+    )
+    await Place.awaitPlacement(published)
+    expect((await db('nivaro_hub_environments').where({ id: published }).first()).status).toBe(
+      'active'
+    )
+  })
+})

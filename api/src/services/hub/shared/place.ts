@@ -6,14 +6,18 @@ import { runInBackgroundPool } from '../../../db/pool-context.js'
 import { logActivity } from '../../activity.js'
 import { getApp } from '../../io-holder.js'
 import { type JobRunHandle, startJobRun } from '../../job-runs.js'
-import { readApp } from '../apps.js'
+import { environmentFromRow, readApp } from '../apps.js'
 import { connectionUrl } from '../db/connection.js'
 import { attachDatabase, getDatabase, openDatabaseConnection } from '../db/databases.js'
 import { HubDbError } from '../db/servers.js'
+import { agentHealth as realAgentHealth } from '../docker/agent-client.js'
+import { environmentNames } from '../docker/render-spec.js'
 import { stackEditRefusal } from '../docker/stack-guards.js'
 import {
   createPlacement,
   DEFAULT_POOL_MAX,
+  type DockerDriverRow,
+  getDriver,
   getPlacement,
   type HubPlacementRow,
   MAX_SHARED_POOL_MAX,
@@ -39,6 +43,7 @@ import { type HubEnvStatus, readEnvironmentStatus } from '../status.js'
 import { APP_KEY_UNKNOWN_MESSAGE } from './app-key-check.js'
 import { DeploymentLinkError, deploymentClient } from './deployment-client.js'
 import { replicasHolding } from './sightings.js'
+import { patternCovers } from './stack-render.js'
 import { getShared, openAppKey, type SharedDeployment, setAppKey, tenantIdFor } from './store.js'
 import { tenantsBody } from './tenants.js'
 
@@ -139,6 +144,8 @@ export interface PlaceSharedDeps {
   startJobRun?: (label: string, envId: number, by: string | null) => Promise<JobRunHandle>
   /** How often the run renews its environment lock (tests shorten it). */
   renewMs?: number
+  /** Final review I-3: the shared deployment's agent health (its edge); tests fake it. */
+  agentHealth?: (driver: DockerDriverRow) => Promise<{ edge?: string | null }>
   /** Final review I-1: asks an environment's own hub link whether its app runs (tests fake it). */
   probeLink?: (env: { id: number; base_url: string; hub_token: string }) => Promise<HubEnvStatus>
 }
@@ -356,6 +363,60 @@ function sharedStateRefusal(shared: SharedDeployment): PlaceSharedError | null {
       'The shared deployment is busy: an upgrade or rollback is running — wait for it to end.'
     )
   return null
+}
+
+const SHARED_DEPLOYS = 'nivaro_hub_shared_deploys'
+
+/** The explicit names the newest successful run of the deployment routed (beside its pattern). */
+async function lastRoutedNames(sharedId: number): Promise<string[]> {
+  const row = (await db(SHARED_DEPLOYS)
+    .where({ shared_deployment_id: sharedId, status: 'success' })
+    .orderBy('id', 'desc')
+    .first('plan')) as { plan: string | null } | undefined
+  try {
+    const p = JSON.parse(String(row?.plan ?? '')) as { plan?: { hostnames?: unknown } }
+    const names = p.plan?.hostnames
+    return Array.isArray(names)
+      ? names.filter((n): n is string => typeof n === 'string').map((n) => n.toLowerCase())
+      : []
+  } catch {
+    return []
+  }
+}
+
+/**
+ * A Docker shared deployment the Hub runs: it must have been deployed (M-6 NOT_DEPLOYED — else
+ * the run waits 2 minutes for replicas that never come), and every name of the environment must
+ * already be routed by its stack (I-3 NAME_NOT_ROUTED): the traefik edge routes the host pattern
+ * plus the explicit names its last run placed, and a place never re-applies the stack (that would
+ * restart every app on it). The agent tells the edge; an agent that does not answer is never
+ * read as "routed". A published-port edge routes no names.
+ */
+async function assertDockerReady(
+  shared: SharedDeployment,
+  envRow: Record<string, unknown>,
+  deps: PlaceSharedDeps
+): Promise<void> {
+  if (shared.mode !== 'docker') return
+  const names = environmentNames(environmentFromRow(envRow))
+  const routed = new Set(await lastRoutedNames(shared.id))
+  const outside = names.filter((n) => !patternCovers(shared.host_pattern, n) && !routed.has(n))
+  if (!outside.length) return
+  let edge: string | null = null
+  try {
+    const driver = await getDriver(shared.driver_id)
+    if (driver?.kind === 'docker')
+      edge = (await (deps.agentHealth ?? realAgentHealth)(driver)).edge ?? 'traefik'
+  } catch {
+    edge = null
+  }
+  if (edge === 'publish') return
+  throw refuse(
+    'NAME_NOT_ROUTED',
+    `The shared deployment's stack does not route ${outside.slice(0, 5).join(', ')}${
+      edge === null ? ' (the Hub agent did not answer, so the Hub cannot tell how it routes)' : ''
+    }. Use a name under ${shared.host_pattern ?? 'its host pattern'}, or set a host pattern that covers it, then place the environment again.`
+  )
 }
 
 function hexKey(): string {
@@ -698,6 +759,7 @@ async function checkAndWrite(
   if (!shared0) throw refuse('NOT_FOUND', 'No such shared deployment.', 404)
   const stateRefusal = sharedStateRefusal(shared0)
   if (stateRefusal) throw stateRefusal
+  await assertDockerReady(shared0, env, deps)
   if (app.signin_mode === 'hub')
     throw refuse(
       'SIGNIN_VIA_HUB',
