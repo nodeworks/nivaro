@@ -28,6 +28,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { getTenantId } from '../db/tenant-context.js'
 import type { User } from '../types.js'
+import { registerAppKeyed } from './app-forget.js'
 import {
   choicesOf,
   type ProposalChange,
@@ -84,7 +85,7 @@ export class ProposalError extends Error {
   }
 }
 
-const tableCache = new Map<string, Promise<boolean>>()
+const tableCache = registerAppKeyed(new Map<string, Promise<boolean>>())
 /** Whether migration 527 ran on this (tenant's) database. */
 export function proposalsTableExists(): Promise<boolean> {
   const k = getTenantId() ?? ''

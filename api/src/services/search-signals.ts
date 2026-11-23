@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
+import { registerAppKeyed } from './app-forget.js'
 import { cleanQuery, logSearch, markOpened } from './search-analytics.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
@@ -24,8 +25,10 @@ const LEARNED_DAYS = 90
 const RECENT_DAYS = 30
 const CACHE_MAX = 500
 
-const learnedCache = new Map<string, { at: number; value: Promise<Map<string, number>> }>()
-const recentCache = new Map<string, { at: number; value: Promise<Set<string>> }>()
+const learnedCache = registerAppKeyed(
+  new Map<string, { at: number; value: Promise<Map<string, number>> }>()
+)
+const recentCache = registerAppKeyed(new Map<string, { at: number; value: Promise<Set<string>> }>())
 
 export const hitKey = (collection: string, id: unknown) => `${collection}:${String(id)}`
 

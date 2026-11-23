@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { onConfigWrite } from '../db/config-epoch.js'
+import { registerAppKeyed } from './app-forget.js'
 import { cacheSetting } from './cache-config.js'
 import { registerCache } from './cache-registry.js'
 import { onCollectionTouched, onItemEvent } from './item-events.js'
@@ -41,7 +42,7 @@ const ROWS_MAX = 5000
 /** Ids one label lookup may carry and still use the cache. */
 export const LABEL_LOOKUP_MAX_IDS = 500
 
-const epochs = new Map<string, number>()
+const epochs = registerAppKeyed(new Map<string, number>())
 let globalEpoch = 0
 let wired = false
 
@@ -161,7 +162,7 @@ interface TotalEntry {
   epoch: string
   expires: number
 }
-const totals = new Map<string, TotalEntry>()
+const totals = registerAppKeyed(new Map<string, TotalEntry>())
 
 export function totalKey(collection: string, statement: string, tenant = currentTenantKey()) {
   return `${scopeKey(tenant, collection)}|${statement}`
@@ -209,7 +210,7 @@ interface RowEntry {
   epoch: string
   expires: number
 }
-const rows = new Map<string, RowEntry>()
+const rows = registerAppKeyed(new Map<string, RowEntry>())
 
 // Ids compare case-blind: SQL Server prints a uniqueidentifier upper-case, callers often send
 // it lower-case, and the database matches either.

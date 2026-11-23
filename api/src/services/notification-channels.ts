@@ -4,6 +4,7 @@ import { config } from '../config.js'
 import { insertReturningRow } from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
 import { emitNotification } from '../plugins/socketio.js'
+import { registerAppKeyed } from './app-forget.js'
 import { withChainStep } from './chain.js'
 import { chainFields } from './chain-columns.js'
 import { sendMail } from './mail.js'
@@ -259,7 +260,7 @@ interface PersonPrefsEntry {
   legacyEmailDigest: unknown
 }
 // Tenant-keyed: two cloud tenants never share an entry.
-const prefsCache = new Map<string, PersonPrefsEntry>()
+const prefsCache = registerAppKeyed(new Map<string, PersonPrefsEntry>())
 const prefsKey = (userId: string) => `${currentTenantKey()}:${userId.toUpperCase()}`
 
 async function personPrefs(userId: string): Promise<PersonPrefsEntry> {

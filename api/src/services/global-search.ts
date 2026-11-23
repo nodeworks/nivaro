@@ -2,6 +2,7 @@ import { infoColumns } from '../db/dialect/users-ai-config.js'
 import { db } from '../db/index.js'
 import { getTenantId } from '../db/tenant-context.js'
 import type { User } from '../types.js'
+import { registerAppKeyed } from './app-forget.js'
 import { getCollection, getFields } from './collections.js'
 import { selectInChunks } from './db-batch.js'
 import { resolveDisplayValue } from './display-value.js'
@@ -121,7 +122,9 @@ export function scoreRow(
  * is limited to the tables that have a registered text field.
  */
 const TEXT_COLUMNS_TTL_MS = 30_000
-const textColumnsCache = new Map<string, { at: number; value: Map<string, string[]> }>()
+const textColumnsCache = registerAppKeyed(
+  new Map<string, { at: number; value: Map<string, string[]> }>()
+)
 
 export function clearSearchableTextColumnsCache(): void {
   textColumnsCache.clear()

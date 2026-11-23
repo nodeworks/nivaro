@@ -17,6 +17,7 @@ import {
   activeAddendumInstancesForCollection,
   addendumSummaryBatch
 } from './addendum-summary.js'
+import { registerAppKeyed } from './app-forget.js'
 import { getCollection, getRelations } from './collections.js'
 import {
   matchesColumnFilterOp,
@@ -3757,7 +3758,7 @@ export async function resolveOwnedBySource(
 
 // ─── Orchestrator ───────────────────────────────────────────────────────────────
 
-const cacheRebuildAskedAt = new Map<string, number>()
+const cacheRebuildAskedAt = registerAppKeyed(new Map<string, number>())
 const CACHE_REBUILD_GAP_MS = 5 * 60_000
 
 /** Enqueue a backfill for a materialized worklist found with an empty cache,

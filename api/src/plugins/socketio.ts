@@ -249,7 +249,7 @@ export function usersOnPathPrefix(prefixes: string[]): string[] {
   return [...new Set([...local, ...boardUsersOnPathPrefix(prefixes, currentTenantKey())])]
 }
 
-import { isMultiTenant, isNivaroCloud } from '../services/deployment-mode.js'
+import { isMultiTenant, isNivaroCloud, tenantSource } from '../services/deployment-mode.js'
 import { noteSocket } from '../services/traffic-map.js'
 import {
   noteRoomBroadcast,
@@ -314,10 +314,34 @@ export function recordRoomHasViewers(room: string): boolean {
  * (services/lock-presence.ts) voids a lock only on a definite false.
  */
 export function isUserConnected(userId: string): boolean | null {
-  const want = String(userId).toUpperCase()
-  for (const m of socketMeta.values()) if (m.user && m.user.id.toUpperCase() === want) return true
+  // Hub phase 6 final review (rest) Minor 4: on a Hub shared deployment copied apps share user
+  // ids, so only the asking app's sockets count; the realtime board is not per app there, so a
+  // miss on this process is "cannot tell" whenever the board would have to answer.
+  if (tenantSource() === 'hub') {
+    const app = currentTenantKey()
+    if (!app) return null
+    if (userConnectedLocally(socketMeta, userId, app, socketTenantKey)) return true
+    if (!boardKnowsEveryone()) return null
+    return boardMergeOn() ? null : false
+  }
+  if (userConnectedLocally(socketMeta, userId, null, socketTenantKey)) return true
   if (!boardKnowsEveryone()) return null
   return boardMergeOn() ? boardHasUser(userId, true) : false
+}
+
+/** Has `userId` a signed-in socket on this process — of the app `app` when it is given (the
+ *  socket's tenant, `tenantOf(socketId)`), of any app when null. Pure, for tests. */
+export function userConnectedLocally(
+  sockets: Iterable<[string, { user: { id: string } | null }]>,
+  userId: string,
+  app: string | null,
+  tenantOf: (socketId: string) => string | null
+): boolean {
+  const want = String(userId).toUpperCase()
+  for (const [sid, m] of sockets)
+    if (m.user && m.user.id.toUpperCase() === want && (app === null || tenantOf(sid) === app))
+      return true
+  return false
 }
 setLockPresenceProbe(isUserConnected)
 

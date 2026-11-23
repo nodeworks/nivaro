@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { registerAppKeyed } from './app-forget.js'
 import { appEnvironment } from './app-info-environment.js'
 import { isMultiTenant } from './deployment-mode.js'
 import { instanceKey } from './instance-key.js'
@@ -124,7 +125,7 @@ export function resolveNotice(
 }
 
 // ── Storage (30 s cache per tenant; the PATCH route busts it) ─────────────────
-const cache = new Map<string, { at: number; value: EnvironmentNoticeSettings }>()
+const cache = registerAppKeyed(new Map<string, { at: number; value: EnvironmentNoticeSettings }>())
 
 export function bustNoticeCache(): void {
   cache.clear()

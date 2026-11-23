@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { registerAppKeyed } from './app-forget.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
 /**
@@ -55,7 +56,7 @@ export async function fieldSignalSockets(
 // repeats the signal every few seconds and the answer does not change between beats.
 const READ_TTL_MS = 30_000
 const READ_MAX = 2000
-const readCache = new Map<string, { at: number; fields: Set<string> | '*' }>()
+const readCache = registerAppKeyed(new Map<string, { at: number; fields: Set<string> | '*' }>())
 
 async function readableFields(userId: string, collection: string): Promise<Set<string> | '*'> {
   const key = `${currentTenantKey()}\u0001${userId.toUpperCase()}\u0001${collection}`

@@ -1,4 +1,5 @@
 import type { User } from '../../types.js'
+import { registerAppKeyed } from '../app-forget.js'
 import { currentTenantKey } from '../tenant-rooms.js'
 import { narrowToRegion } from './work-math.js'
 
@@ -103,10 +104,10 @@ interface MemoEntry<T> {
 }
 /** The shared (viewer-independent) entries: a fixed set of names per tenant, never evicted. */
 const PINNED = new Set(['cc:open-work', 'cc:coverage-gaps', 'cc:workload-owners'])
-const pinnedMemos = new Map<string, MemoEntry<unknown>>()
+const pinnedMemos = registerAppKeyed(new Map<string, MemoEntry<unknown>>())
 /** Request-keyed entries (viewer, region, instant…): a small LRU of their own. */
 const REQUEST_MEMO_CAP = 500
-const memos = new Map<string, MemoEntry<unknown>>()
+const memos = registerAppKeyed(new Map<string, MemoEntry<unknown>>())
 
 export async function tenantMemo<T>(
   name: string,

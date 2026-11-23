@@ -3,6 +3,7 @@ import type { FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { getTenantId } from '../db/tenant-context.js'
 import { hasColumn } from '../lib/column-probe.js'
+import { registerAppKeyed } from './app-forget.js'
 import { overlaySettings } from './settings-overrides.js'
 
 /**
@@ -491,7 +492,7 @@ function lenient(raw: unknown): McpSettings {
   return out
 }
 
-const cache = new Map<string, { at: number; value: McpSettings }>()
+const cache = registerAppKeyed(new Map<string, { at: number; value: McpSettings }>())
 
 /**
  * The settings this process last read for the current tenant, without waiting (null = none read

@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { registerAppKeyed } from './app-forget.js'
 import { type NotifyRules, sanitizeNotifyRules } from './notification-layers.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
@@ -19,7 +20,7 @@ export interface RoleDefaultsRow {
 }
 
 type CacheEntry = { at: number; rows: Map<string, RoleDefaultsRow> | null }
-const cache = new Map<string, CacheEntry>()
+const cache = registerAppKeyed(new Map<string, CacheEntry>())
 
 function parseRules(raw: unknown): NotifyRules {
   try {

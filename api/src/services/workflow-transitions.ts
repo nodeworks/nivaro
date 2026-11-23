@@ -4,6 +4,7 @@ import { emitTrigger } from '../flows/registry.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { actingForLabel, resolveOnBehalfOf } from './acting-for.js'
 import { logActivity } from './activity.js'
+import { registerAppKeyed } from './app-forget.js'
 import { appKey, dropAppEntries } from './app-keyed.js'
 import { buildApprovalBrief } from './approval-brief.js'
 import { buildApprovalChain } from './approval-chain.js'
@@ -1308,7 +1309,7 @@ const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
  * records each collection's human id column; unregistered collections (or a
  * missing value) fall back to the internal id. Never throws.
  */
-const friendlyFieldCache = new Map<string, { at: number; field: string | null }>()
+const friendlyFieldCache = registerAppKeyed(new Map<string, { at: number; field: string | null }>())
 const FRIENDLY_FIELD_TTL_MS = 60_000
 
 /** Drop the cached human-id columns: the current app's, or every app's outside one. */

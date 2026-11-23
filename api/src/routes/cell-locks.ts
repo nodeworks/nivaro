@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { requireAuth } from '../middleware/authenticate.js'
 import { accessStamp } from '../services/access-stamp.js'
+import { registerAppKeyed } from '../services/app-forget.js'
 import {
   type CellLockRedis,
   type CellLockStore,
@@ -40,7 +41,7 @@ const IDENT = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/
 const ID = /^[A-Za-z0-9_.:-]{1,64}$/
 
 const VISIBLE_TTL_MS = 30_000
-const visibleCache = new Map<string, { at: number; ids: Set<string> }>()
+const visibleCache = registerAppKeyed(new Map<string, { at: number; ids: Set<string> }>())
 
 /** For tests. */
 export function resetCellLockCaches() {

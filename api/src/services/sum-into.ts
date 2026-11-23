@@ -22,6 +22,7 @@
  */
 
 import { db } from '../db/index.js'
+import { registerAppKeyed } from './app-forget.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
 const MONTHS = [
@@ -135,7 +136,7 @@ export function isGridTotal(sum: SumInto, totals: GridTotals): boolean {
 
 const TOTALS_TTL_MS = 60_000
 /** Parsed totals per tenant + collection. A failed page read is never kept. */
-const totalsCache = new Map<string, { at: number; totals: Promise<GridTotals> }>()
+const totalsCache = registerAppKeyed(new Map<string, { at: number; totals: Promise<GridTotals> }>())
 
 /** The grid totals configured for `collection` (page layouts, cached a minute per tenant). */
 export async function gridTotalsFor(collection: string): Promise<GridTotals> {

@@ -175,6 +175,10 @@ export async function startHubTenantSource(deps: Deps): Promise<TenantRegistry> 
     // moved away at retire_source): its per-app module state goes with it.
     const listed = new Set(list.map((t) => t.id))
     for (const t of tenants) if (!listed.has(t.id)) forgetAppState(t.id)
+    // Final review I-1: an app that (re)appears starts clean too, so a leave this process never
+    // saw (it was not listed in between) cannot hand a returning app its old cached state.
+    const before = new Set(tenants.map((t) => t.id))
+    for (const t of list) if (!before.has(t.id)) forgetAppState(t.id)
     tenants = list.map(withListedOrigin)
     setAppKeys(tenants)
     const m = new Map<string, TenantRecord>()

@@ -60,6 +60,7 @@ import {
   sameAliasLink,
   withoutReAddedRemovals
 } from './alias-links.js'
+import { registerAppKeyed } from './app-forget.js'
 import {
   APPROVAL_CHANGED_FIELD,
   approvalChangedWanted,
@@ -321,7 +322,7 @@ function toFormulaDate(v: unknown): Date | null {
 // (currentTenantKey()): each app on a shared deployment has its own constants and fiscal year.
 type FormulaSnapshot = { constants: Record<string, number>; fiscalStartMonth: number }
 const EMPTY_FORMULA_SNAPSHOT: FormulaSnapshot = { constants: {}, fiscalStartMonth: 1 }
-const _formulaSnapshots = new Map<string, FormulaSnapshot>()
+const _formulaSnapshots = registerAppKeyed(new Map<string, FormulaSnapshot>())
 const formulaSnapshot = (): FormulaSnapshot =>
   _formulaSnapshots.get(currentTenantKey()) ?? EMPTY_FORMULA_SNAPSHOT
 function refreshFormulaSnapshot(): void {
@@ -452,7 +453,7 @@ async function finalProjection(
   return systemProjection(collection, out, allowedFields)
 }
 
-const tableColumnsCache = new Map<string, { at: number; cols: Set<string> }>()
+const tableColumnsCache = registerAppKeyed(new Map<string, { at: number; cols: Set<string> }>())
 
 /** A table's physical column names (lower-cased), cached a minute per table and app. */
 async function tableColumns(collection: string): Promise<Set<string>> {
@@ -465,7 +466,9 @@ async function tableColumns(collection: string): Promise<Set<string>> {
   return cols
 }
 
-const columnShapesCache = new Map<string, { at: number; shapes: Map<string, ColumnShape> }>()
+const columnShapesCache = registerAppKeyed(
+  new Map<string, { at: number; shapes: Map<string, ColumnShape> }>()
+)
 
 /** A table's column types (+ decimal precision/scale) by lower-cased name,
  *  cached a minute per tenant + table. Empty for what is not a table. */
@@ -1217,7 +1220,7 @@ const INTEGRATIONS_FIELD = '$integrations'
 // COLUMN_CACHE_TTL_MS old. Capped so a stream of made-up table names cannot grow it unbounded.
 const COLUMN_CACHE_TTL_MS = 5 * 60_000
 const COLUMN_CACHE_MAX = 5_000
-const columnCache = new Map<string, { at: number; set: Set<string> }>()
+const columnCache = registerAppKeyed(new Map<string, { at: number; set: Set<string> }>())
 const columnCacheKey = (table: string) => `${getTenantId() ?? ''}:${table}`
 
 /** Forget one table's cached columns (this tenant) — a column added since it was read. */
@@ -1262,7 +1265,9 @@ export async function actualColumnName(table: string, column: string): Promise<s
 
 const NON_UNICODE_TYPES = new Set(['varchar', 'char', 'text'])
 const COLUMN_TYPE_TTL_MS = 60_000
-const columnTypeCache = new Map<string, { at: number; types: Map<string, string> }>()
+const columnTypeCache = registerAppKeyed(
+  new Map<string, { at: number; types: Map<string, string> }>()
+)
 
 /** Column name → lower-case DATA_TYPE, per tenant; a minute old at most, so a
  *  field added in the schema editor becomes searchable without a restart. */
@@ -1480,7 +1485,7 @@ const WORKSPACE_COLUMN = 'workspace_id'
 
 // 60s TTL cache — workspace_id columns can be added at runtime via the data model. Per tenant,
 // and capped (a collection name comes from the request path).
-const wsColumnCache = new Map<string, { exists: boolean; at: number }>()
+const wsColumnCache = registerAppKeyed(new Map<string, { exists: boolean; at: number }>())
 const WS_COLUMN_TTL_MS = 60_000
 const WS_COLUMN_MAX = 5_000
 
@@ -2019,7 +2024,7 @@ export async function applyFieldRules(
 
 // 60s TTL cache of inheritable field names per collection — keeps the read
 // path at zero extra queries for collections without inheritable fields.
-const inheritableFieldsCache = new Map<string, { fields: string[]; at: number }>()
+const inheritableFieldsCache = registerAppKeyed(new Map<string, { fields: string[]; at: number }>())
 const INHERITABLE_TTL_MS = 60_000
 
 async function getInheritableFields(collection: string): Promise<string[]> {
@@ -2155,7 +2160,7 @@ async function applyInheritedFields(
 
 /** Cache of relations per collection to avoid redundant DB calls within a request */
 /** Per-process read-log throttle: one 'read' row per user/record/hour. */
-const readLogThrottle = new Map<string, number>()
+const readLogThrottle = registerAppKeyed(new Map<string, number>())
 /**
  * Relations per collection, filled during a read. List reads empty it as they start; a single-
  * record read does not, so a schema change (clearMetadataCache: a renamed table, a new or removed
@@ -2197,7 +2202,7 @@ class RelationCache extends Map<string, CMSRelation[]> {
     return super.delete(this.k(key))
   }
 }
-const relCache = new RelationCache()
+const relCache = registerAppKeyed(new RelationCache())
 
 /** A collection's relations, minus any whose table (a junction, a related
  *  collection) does not exist — nivaro_relations is a claim, not truth. A
@@ -2221,7 +2226,7 @@ async function getRelations(collection: string): Promise<CMSRelation[]> {
 
 /** `<tenant>:<collection>` → to-many alias fields whose relation runs through
  *  a table that does not exist (getRelations dropped it). */
-const unbuiltAliases = new Map<string, Set<string>>()
+const unbuiltAliases = registerAppKeyed(new Map<string, Set<string>>())
 
 /** A requested field list minus aliases whose relation has no table: such a
  *  field reads as absent rather than refusing the read as an unknown field. */

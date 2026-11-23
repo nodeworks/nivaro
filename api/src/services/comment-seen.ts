@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { registerAppKeyed } from './app-forget.js'
 import { currentTenantKey } from './tenant-rooms.js'
 import { applyDirectoryListingRules } from './user-directory-cols.js'
 
@@ -170,7 +171,7 @@ interface Verdict {
   allowed: string[] | null
   fieldsJudged: boolean
 }
-const verdicts = new Map<string, Verdict>()
+const verdicts = registerAppKeyed(new Map<string, Verdict>())
 
 /** Test seam: forget cached verdicts. */
 export function clearSeenVerdicts(): void {

@@ -75,3 +75,35 @@ describe('keyed detection', () => {
     expect(keyed(src).m).toBe(true)
   })
 })
+
+// Final review (rest) I-1: a keyed Map registered with registerAppKeyed (app-forget.ts) is still a
+// finding, still checked for its keys, and marked as forgotten when its app leaves.
+describe('registered for forgetAppState', () => {
+  const forgets = (src: string) =>
+    Object.fromEntries(scanStateFile('services/x.ts', src).map((f) => [f.name, f.forgets]))
+
+  it('registerAppKeyed(new Map()) is a Map, detected keyed, and forgets', () => {
+    const src =
+      'const m = registerAppKeyed(new Map<string, number>())\nexport function f(k) { m.set(appKey(k), 1) }'
+    expect(kinds(src)).toEqual({ m: 'Map' })
+    expect(keyed(src).m).toBe(true)
+    expect(forgets(src).m).toBe(true)
+  })
+
+  it('a registered Map whose writes do not name the app is still not keyed', () => {
+    const src = 'const m = registerAppKeyed(new Map())\nexport function f(k) { m.set(k, 1) }'
+    expect(keyed(src).m).toBe(false)
+  })
+
+  it('an unregistered keyed Map does not forget (a separate forgetApp store is not that Map)', () => {
+    const plain = 'const m = new Map()\nexport function f(k) { m.set(appKey(k), 1) }'
+    expect(forgets(plain).m).toBe(false)
+    expect(forgets(`${plain}\nregisterAppKeyed({ forgetApp: (a) => dropFor(m, a) })`).m).toBe(false)
+  })
+
+  it('a class instance registered (RelationCache shape) forgets', () => {
+    const src =
+      'const c = registerAppKeyed(new RelationCache())\nexport function f() { c.set("a", 1) }'
+    expect(forgets(src).c).toBe(true)
+  })
+})

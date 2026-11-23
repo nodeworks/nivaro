@@ -1,3 +1,4 @@
+import { forgetAppEntries } from './app-forget.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
 /**
@@ -29,16 +30,18 @@ import { currentTenantKey } from './tenant-rooms.js'
 const registered = new Set<Map<string, unknown>>()
 
 /**
- * Drops every per-app slot of `tenantKey` in every appMap / appSet / appBox of this process: an
- * app that left it (unplaced from a shared deployment, or moved away — its tenant no longer
- * listed) leaves no cached state behind, and a later return starts clean. The deployment's own
- * '' slot is never dropped. Answers how many slots were dropped.
+ * Drops every per-app slot of `tenantKey` in every appMap / appSet / appBox of this process, and
+ * every entry of it in the hand-keyed module caches registered with registerAppKeyed()
+ * (app-forget.ts: appKey maps, Map<tenant, …>, tenantState()): an app that left it (unplaced from
+ * a shared deployment, or moved away — its tenant no longer listed) leaves no cached state
+ * behind, and a later return starts clean. The deployment's own '' slot is never dropped.
+ * Answers how many slots and entries were dropped.
  */
 export function forgetAppState(tenantKey: string): number {
   if (!tenantKey) return 0
   let n = 0
   for (const byApp of registered) if (byApp.delete(tenantKey)) n++
-  return n
+  return n + forgetAppEntries(tenantKey)
 }
 
 function slots<T>(make: () => T) {

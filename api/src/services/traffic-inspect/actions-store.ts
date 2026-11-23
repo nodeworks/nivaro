@@ -7,6 +7,7 @@
  */
 import { db } from '../../db/index.js'
 import { getTenantId } from '../../db/tenant-context.js'
+import { registerAppKeyed } from '../app-forget.js'
 import { currentStoreId } from '../traffic-taps.js'
 
 export const INVESTIGATIONS_TABLE = 'nivaro_traffic_investigations'
@@ -15,7 +16,7 @@ const PROBE_MISS_MS = 60_000
 /** A hit is re-probed too, so a rolled-back table (down(), a pre-390 restore) turns into the designed 503 within minutes rather than raw SQL errors for the life of the process. */
 const PROBE_HIT_MS = 5 * 60_000
 
-const ready = new Map<string, { ok: boolean; at: number }>()
+const ready = registerAppKeyed(new Map<string, { ok: boolean; at: number }>())
 
 /** True once migration 390 has run here (a hit is re-probed after 5 min, a miss after 60 s). */
 export async function investigationsReady(): Promise<boolean> {

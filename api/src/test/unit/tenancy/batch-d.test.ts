@@ -17,8 +17,12 @@ const SHARED: NodeJS.ProcessEnv = {
 describe('batch D: classified cloud-flag sites', () => {
   it('chaos gate (T5): refused on cloud and shared, open on self-hosted', () => {
     expect(chaosRefusal(SELF)).toBeNull()
-    expect(chaosRefusal(CLOUD)).toBe('Chaos drills never run in cloud mode')
-    expect(chaosRefusal(SHARED)).toBe('Chaos drills never run in cloud mode')
+    // Final review (rest) Minor 2: the reason names the deployment kind, not "cloud mode" (a Hub
+    // shared deployment is not cloud).
+    const why =
+      'Chaos drills never run on a multi-tenant deployment (cloud mode or a Hub shared deployment)'
+    expect(chaosRefusal(CLOUD)).toBe(why)
+    expect(chaosRefusal(SHARED)).toBe(why)
   })
 
   it('import hand-off drain (T4): off on cloud and shared', () => {

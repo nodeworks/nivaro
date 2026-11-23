@@ -1,5 +1,6 @@
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
+import { registerAppKeyed } from './app-forget.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
 /**
@@ -12,8 +13,8 @@ import { currentTenantKey } from './tenant-rooms.js'
  */
 export const HOLDS = 'nivaro_legal_holds'
 
-const ready = new Map<string, { ok: boolean; at: number }>()
-const heldCache = new Map<string, { at: number; set: Set<string> }>()
+const ready = registerAppKeyed(new Map<string, { ok: boolean; at: number }>())
+const heldCache = registerAppKeyed(new Map<string, { at: number; set: Set<string> }>())
 const HELD_TTL_MS = 30_000
 
 export async function legalHoldsReady(): Promise<boolean> {

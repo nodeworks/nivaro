@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { registerAppKeyed } from './app-forget.js'
 import { previewMailBody } from './mail.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
@@ -18,7 +19,7 @@ import { currentTenantKey } from './tenant-rooms.js'
 
 // Per app (keyed by currentTenantKey()): on a shared deployment each app words its own
 // notifications.
-const cache = new Map<string, { at: number; map: Map<string, string> }>()
+const cache = registerAppKeyed(new Map<string, { at: number; map: Map<string, string> }>())
 const TTL = 60_000
 
 async function loadOverrides(): Promise<Map<string, string>> {

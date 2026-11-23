@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
+import { registerAppKeyed } from './app-forget.js'
 import { isMultiTenant, tenantSource } from './deployment-mode.js'
 import { hubLinkToken } from './hub/mode.js'
 import { hubLinkKeyTag } from './hub-link/retire.js'
@@ -200,7 +201,7 @@ function hubLinkedPlainKey(env: NodeJS.ProcessEnv): boolean {
 /** The cached state per tenant (`currentTenantKey()`; '' = self-hosted, one entry). One process
  *  serves many apps in cloud and on a Hub shared deployment: a single module variable let one
  *  app's maintenance mode (or its absence) answer for another for up to 15 s (ruling P5-6). */
-const maintCache = new Map<string, { at: number } & MaintenanceState>()
+const maintCache = registerAppKeyed(new Map<string, { at: number } & MaintenanceState>())
 
 /** Forget the cached maintenance state: one tenant's (`currentTenantKey()` value) when named,
  *  else every tenant's. */
@@ -433,9 +434,15 @@ export async function setHubMaintenance(input: {
  * release (`maintenance {on:false, move_id}`) the done marker stops a restart from setting it
  * again. Only where the hub link is mounted. Returns whether it set the freeze.
  *
- * Escape hatch when the Hub cannot release it (the move is lost): remove HUB_BOOT_MAINTENANCE from
- * the stack, then lift the freeze (the Hub's maintenance {on:false}, or delete the app's own key,
- * `maintenanceOverrideKey()` = `<prefix>nvr:maintenance:<hub-link tag>`, in its Redis). An administrator cannot lift it from the app: strict refuses their write.
+ * The release marker lives only in the app's Redis, and HUB_BOOT_MAINTENANCE stays in the stack's
+ * environment until the stack is applied again (final review M8). So a restart after the app's
+ * Redis lost the marker (no RDB save yet, a new volume) freezes the app again, with no move left
+ * to release it. Escape hatch, the same as when the Hub cannot release it (the move is lost):
+ * remove HUB_BOOT_MAINTENANCE from the stack (apply it again), then lift the freeze — the Hub's
+ * maintenance {on:false, move_id}, or delete the app's own key `maintenanceOverrideKey()` =
+ * `<REDIS_CHANNEL_PREFIX>nvr:maintenance:<hub-link tag>` in its Redis (never the plain
+ * `nvr:maintenance`, which is an operator's freeze). An administrator cannot lift it from the app:
+ * strict refuses their write.
  */
 export async function applyHubBootMaintenance(
   redis: any,

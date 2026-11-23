@@ -1,6 +1,7 @@
 import { db } from '../db/index.js'
 import { getTenantId } from '../db/tenant-context.js'
 import { hasColumn } from '../lib/column-probe.js'
+import { registerAppKeyed } from './app-forget.js'
 
 /**
  * Role tool kits (#3214): a named set of MCP tools for one kind of job, picked when a person
@@ -268,7 +269,7 @@ function rowToKit(r: KitRow): ToolKit {
   }
 }
 
-const cache = new Map<string, { at: number; kits: ToolKit[] }>()
+const cache = registerAppKeyed(new Map<string, { at: number; kits: ToolKit[] }>())
 const KIT_TTL_MS = 15_000
 
 /** Every kit: built-in first, then the stored ones by sort + name. 15 s cache per tenant. */

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { db } from '../../db/index.js'
+import { registerAppKeyed } from '../app-forget.js'
 import { selectInChunks, whereInList } from '../db-batch.js'
 import { cosineSim, embedText } from '../embeddings.js'
 import { groupSimilarIssues } from '../issue-groups.js'
@@ -214,7 +215,7 @@ async function linkCandidates(connection: number, exclude: number | null): Promi
 // least recently used first out, 6 hours at most (an embedder switch is picked up), tenant-keyed.
 const VECTOR_CACHE_MAX = 2000
 const VECTOR_TTL_MS = 6 * 3600_000
-const vectorCache = new Map<string, { at: number; vec: number[] }>()
+const vectorCache = registerAppKeyed(new Map<string, { at: number; vec: number[] }>())
 
 async function candidateVector(connection: number, p: Pending): Promise<number[]> {
   const who = p.link_id != null ? `l${p.link_id}` : `g${p.project_id}:${p.iid}`

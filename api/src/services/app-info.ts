@@ -4,6 +4,7 @@ import { db } from '../db/index.js'
 import { tenantOrigin } from '../db/tenant-context.js'
 import { mobileClients, mobileSignInEnabled } from '../lib/mobile-clients.js'
 import { NIVARO_VERSION } from '../version.js'
+import { registerAppKeyed } from './app-forget.js'
 import { appEnvironment } from './app-info-environment.js'
 import { chaosAllowed } from './chaos/gate.js'
 import { isMultiTenant, isNivaroCloud } from './deployment-mode.js'
@@ -72,7 +73,7 @@ async function readBranding(): Promise<{
 /** Push mode per tenant for a short while: the probe is anonymous and the relay key a read. */
 const PUSH_MODE_TTL_MS = 30_000
 const PUSH_MODE_MAX = 1000
-const pushModes = new Map<string, { at: number; mode: AppInfo['push']['mode'] }>()
+const pushModes = registerAppKeyed(new Map<string, { at: number; mode: AppInfo['push']['mode'] }>())
 
 async function cachedPushMode(): Promise<AppInfo['push']['mode']> {
   const key = currentTenantKey()

@@ -19,6 +19,7 @@ import { resolveDb } from '../db/index.js'
 import { runInBackgroundPool } from '../db/pool-context.js'
 import { rawRows } from '../db/raw-rows.js'
 import { sqlDialect } from '../db/sql-dialect.js'
+import { registerAppKeyed } from './app-forget.js'
 import { boundedRaw, StatementCancelled } from './bounded-sql.js'
 import { startJobRun } from './job-runs.js'
 import {
@@ -136,7 +137,7 @@ export interface CheckList {
   skipped: SkippedLink[]
   built_at: number
 }
-const listCache = new Map<string, CheckList>()
+const listCache = registerAppKeyed(new Map<string, CheckList>())
 
 export async function loadOrphanChecks(opts: { fresh?: boolean } = {}): Promise<CheckList> {
   const tenant = currentTenantKey()
@@ -282,7 +283,7 @@ const stateKey = () => `nvr:orphans:${tenantPart()}:sweep`
 const leaseKey = () => `nvr:orphans:${tenantPart()}:lease`
 const cancelKey = (id: string) => `nvr:orphans:${tenantPart()}:cancel:${id}`
 
-const mem = new Map<string, { v: string; exp: number }>()
+const mem = registerAppKeyed(new Map<string, { v: string; exp: number }>())
 function memGet(k: string): string | null {
   const e = mem.get(k)
   if (!e) return null

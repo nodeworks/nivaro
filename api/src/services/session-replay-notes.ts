@@ -11,6 +11,7 @@
 import { randomUUID } from 'node:crypto'
 import { db } from '../db/index.js'
 import { getTenantId } from '../db/tenant-context.js'
+import { registerAppKeyed } from './app-forget.js'
 import { announceRecordAspect } from './record-events.js'
 import { commentWritten } from './trackers/comment-out-hook.js'
 
@@ -24,7 +25,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  *  ids are checked to be exactly a uuid before any query. */
 export const isUuid = (v: unknown): v is string => typeof v === 'string' && UUID_RE.test(v)
 
-const ready = new Map<string, { ok: boolean; at: number }>()
+const ready = registerAppKeyed(new Map<string, { ok: boolean; at: number }>())
 
 /** True once migration 423 has run here (re-probed after a minute, either way). */
 export async function notesReady(): Promise<boolean> {

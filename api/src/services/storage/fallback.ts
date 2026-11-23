@@ -33,16 +33,29 @@ export function fallbackPath(key: string, env: NodeJS.ProcessEnv = process.env):
   return full
 }
 
-/** The fallback file's path when it exists and is a regular file. */
+/** A stat error that means "not there" (as opposed to "could not look"). */
+function isNotThere(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code
+  return code === 'ENOENT' || code === 'ENOTDIR'
+}
+
+/**
+ * The fallback file's path when it exists and is a regular file. By default any stat error reads
+ * as no copy (the app's reads then answer 404 as before). `strict` (a move's file chain, R7-M-1):
+ * only ENOENT / ENOTDIR mean no copy; any other error (EACCES, EIO, ESTALE on an NFS mount) is
+ * thrown, so a file the fallback still holds is never counted as missing.
+ */
 export async function existingFallback(
-  key: string
+  key: string,
+  opts: { strict?: boolean } = {}
 ): Promise<{ path: string; size: number } | null> {
   const p = fallbackPath(key)
   if (!p) return null
   try {
     const s = await stat(p)
     return s.isFile() ? { path: p, size: s.size } : null
-  } catch {
+  } catch (err) {
+    if (opts.strict && !isNotThere(err)) throw err
     return null
   }
 }

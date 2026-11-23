@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { db } from '../../db/index.js'
 import { logActivity } from '../activity.js'
+import { registerAppKeyed } from '../app-forget.js'
 import { bodySecretNames } from '../body-secrets.js'
 import { parseJson, toJsonStr } from '../pipeline-engine.js'
 import { currentTenantKey } from '../tenant-rooms.js'
@@ -260,7 +261,7 @@ function checkBody(
 
 // ─── registry (in process, per tenant) ───────────────────────────────────────
 
-const registries = new Map<string, Map<string, RegisteredPayloadTemplate>>()
+const registries = registerAppKeyed(new Map<string, Map<string, RegisteredPayloadTemplate>>())
 
 function tenantRegistry(): Map<string, RegisteredPayloadTemplate> {
   const t = currentTenantKey()
@@ -1054,7 +1055,7 @@ type PublishedTemplate = {
   lookups: Record<string, unknown> | null
 }
 type CacheEntry = { at: number; row: PublishedTemplate | null }
-const publishedCache = new Map<string, Map<string, CacheEntry>>()
+const publishedCache = registerAppKeyed(new Map<string, Map<string, CacheEntry>>())
 
 /** Drop every tenant's cached published bodies (another process wrote; the config epoch). */
 export function bustPayloadTemplateCache(): void {

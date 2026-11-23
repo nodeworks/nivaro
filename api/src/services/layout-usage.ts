@@ -4,6 +4,7 @@ import { rawRows } from '../db/raw-rows.js'
 import { dateAdd } from '../db/sql-dialect.js'
 import { getTenantId } from '../db/tenant-context.js'
 import { isUniqueViolation } from '../lib/unique-violation.js'
+import { registerAppKeyed } from './app-forget.js'
 import { addArm, emptyArm, parseArm } from './layout-ab.js'
 import { sharedGatedRead } from './read-gate.js'
 
@@ -494,7 +495,7 @@ export function coChangePairs(
 
 // ─── Database ───────────────────────────────────────────────────────────────
 
-const readyCache = new Map<string, { at: number; ok: boolean }>()
+const readyCache = registerAppKeyed(new Map<string, { at: number; ok: boolean }>())
 
 /** Do migration 461's tables exist (per tenant; a miss is re-probed after 10 min)? */
 export async function usageTablesReady(): Promise<boolean> {
@@ -511,10 +512,9 @@ export async function usageTablesReady(): Promise<boolean> {
   return ok
 }
 
-const layoutCollections = new Map<
-  string,
-  { at: number; collection: string | null; conditions: unknown }
->()
+const layoutCollections = registerAppKeyed(
+  new Map<string, { at: number; collection: string | null; conditions: unknown }>()
+)
 
 /** A layout's collection and role conditions (cached 60 s); null = no such layout. */
 export async function layoutUsageInfo(
@@ -638,7 +638,7 @@ export async function usageToday(layoutId: number): Promise<UsageToday> {
 }
 
 const TTL_MS = 10 * 60_000
-const memo = new Map<string, { at: number; value: unknown }>()
+const memo = registerAppKeyed(new Map<string, { at: number; value: unknown }>())
 
 /** A read-gated, 10-minute cached usage read (per tenant). */
 export async function cachedUsageRead<T>(

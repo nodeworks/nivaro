@@ -331,6 +331,17 @@ describe('cloud-flag inventory (ratchet)', () => {
     expect(problems).toEqual([])
   })
 
+  // Hub phase 6 final review: the skeleton script prints 0 sites now (every batch converted), and
+  // the inventory holds the converted sites check (c) counts. An inventory regenerated from that
+  // output would be empty and check (c) blind: it must keep every converted entry.
+  it('(f) the inventory keeps the converted sites check (c) counts', () => {
+    expect(INVENTORY.length).toBeGreaterThan(300)
+    expect(INVENTORY.every((e) => CONVERTED.includes(e.batch as Batch))).toBe(true)
+    const files = new Set(listSourceFiles(SRC))
+    const gone = [...new Set(INVENTORY.map((e) => e.file))].filter((f) => !files.has(f))
+    expect(gone, 'inventory files no longer in api/src').toEqual([])
+  })
+
   it('(a) keeps the ratchet for a converted file: a raw read added back is refused', () => {
     const converted = INVENTORY.find((e) => CONVERTED.includes(e.batch as Batch))!
     const added = scanFile(converted.file, 'if (process.env.CLOUD_META_DB_URL) go()')

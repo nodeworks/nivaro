@@ -1,5 +1,6 @@
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
+import { registerAppKeyed } from '../services/app-forget.js'
 import { isMultiTenant } from '../services/deployment-mode.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
 import type { Role } from '../types.js'
@@ -22,7 +23,7 @@ export function isDefaultWorkspace(id: string | null | undefined): boolean {
 
 // Keyed by tenant: in cloud mode one process serves many tenants, and a
 // tenant without the seeded row falls back to its own oldest workspace.
-const _defaultWorkspaceIds = new Map<string, string>()
+const _defaultWorkspaceIds = registerAppKeyed(new Map<string, string>())
 
 /**
  * Returns the default workspace id from the DB, cached for the process lifetime

@@ -12,11 +12,12 @@
  * entry at once. Self-hosted and Nivaro Cloud never read this module.
  */
 import { getTenantId } from '../db/tenant-context.js'
+import { registerAppKeyed } from './app-forget.js'
 
 const TTL_MS = 60_000
 const MAX_ENTRIES = 5000
 
-const cache = new Map<string, { at: number; ids: Set<string> }>()
+const cache = registerAppKeyed(new Map<string, { at: number; ids: Set<string> }>())
 
 /** The cache key for the current request or job: the tenant id ('' outside a tenant). */
 function tenantKey(): string {

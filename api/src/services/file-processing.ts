@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { Redis } from 'ioredis'
 import { db } from '../db/index.js'
+import { registerAppKeyed } from './app-forget.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
 /**
@@ -87,7 +88,7 @@ export function processingPlan(file: {
 
 // ── Status store ─────────────────────────────────────────────────────────────
 
-const memory = new Map<string, { state: FileProcessingState; exp: number }>()
+const memory = registerAppKeyed(new Map<string, { state: FileProcessingState; exp: number }>())
 const keyOf = (fileId: string, tenant = currentTenantKey()) =>
   `${tenant}:${String(fileId).toLowerCase()}`
 

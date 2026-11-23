@@ -52,6 +52,7 @@
 import type { FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { registerAppKeyed } from './app-forget.js'
 import { excludeBranchChildren } from './branch-instances.js'
 import { pickInstance } from './record-state.js'
 import { currentTenantKey } from './tenant-rooms.js'
@@ -185,7 +186,7 @@ interface LockPlan {
 }
 
 const PLAN_TTL_MS = 30_000
-const planCache = new Map<string, { at: number; plan: Promise<LockPlan> }>()
+const planCache = registerAppKeyed(new Map<string, { at: number; plan: Promise<LockPlan> }>())
 const SYSTEM_TABLE = /^(nivaro_|directus_)/i
 
 interface RelationRow {

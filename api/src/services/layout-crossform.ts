@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { likeEscape } from '../db/sql-dialect.js'
 import { getTenantId } from '../db/tenant-context.js'
 import { titleCase } from './ai-design/model.js'
+import { registerAppKeyed } from './app-forget.js'
 
 /**
  * Looking across the forms of a collection (layout editor overview):
@@ -420,7 +421,7 @@ function toPlacement(r: Row): CrossformPlacement {
   }
 }
 
-const memo = new Map<string, { at: number; value: unknown }>()
+const memo = registerAppKeyed(new Map<string, { at: number; value: unknown }>())
 const MEMO_MAX = 200
 const MEMO_TTL_MS = 10 * 60_000
 

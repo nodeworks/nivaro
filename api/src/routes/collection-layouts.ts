@@ -7,6 +7,7 @@ import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { buildAddendumRenderOverlay } from '../services/addendum-render.js'
+import { registerAppKeyed } from '../services/app-forget.js'
 import { cacheSetting } from '../services/cache-config.js'
 import { registerCache } from '../services/cache-registry.js'
 import { markConfigRead, nameConfigCollection } from '../services/config-live.js'
@@ -104,8 +105,8 @@ export { parseConditions, parseRecordConditions, type RecordConditionRule, roleA
  * Callers get a copy.
  */
 const BUNDLE_MAX = 2_000
-const layoutBundles = new Map<string, { at: number; value: unknown }>()
-const layoutBundleInflight = new Map<string, Promise<unknown>>()
+const layoutBundles = registerAppKeyed(new Map<string, { at: number; value: unknown }>())
+const layoutBundleInflight = registerAppKeyed(new Map<string, Promise<unknown>>())
 let layoutBundleGen = 0
 let layoutBundleWired = false
 const layoutBundleCounters = { hits: 0, misses: 0 }

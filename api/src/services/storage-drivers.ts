@@ -24,6 +24,7 @@ import { stat } from 'node:fs/promises'
 import { Readable } from 'node:stream'
 import { db } from '../db/index.js'
 import { getTenantId } from '../db/tenant-context.js'
+import { registerAppKeyed } from './app-forget.js'
 import { tenantSource } from './deployment-mode.js'
 import { scopedStorage } from './storage/app-scope.js'
 import { readFallback } from './storage/fallback.js'
@@ -568,7 +569,7 @@ export function buildDriver(
 
 // One cached driver per app on a Hub shared deployment (each app has its own settings row and
 // may name its own bucket); one for the process everywhere else ('' — the old single slot).
-const _cache = new Map<string, { fetched: number; driver: StorageDriver }>()
+const _cache = registerAppKeyed(new Map<string, { fetched: number; driver: StorageDriver }>())
 const CACHE_TTL_MS = 60_000
 
 /** A settings driver whose keys live under the current app's apps/<tenantId>/ (hub source). */

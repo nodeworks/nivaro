@@ -2,6 +2,7 @@ import type { Knex } from 'knex'
 import { dialectOf, idText } from '../db/dialect/items-query.js'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { registerAppKeyed } from './app-forget.js'
 import { applyRowFilter, getRowFilter } from './permissions.js'
 import { currentTenantKey } from './tenant-rooms.js'
 import {
@@ -88,7 +89,7 @@ export function applyQueueGate(q: Knex.QueryBuilder, gate: QueueGate | null, use
 // per read; every query then filters on the cache's own key.
 
 const PK_TYPES = new Set(['int', 'bigint', 'smallint', 'uniqueidentifier'])
-const pkTypes = new Map<string, Promise<string | null>>()
+const pkTypes = registerAppKeyed(new Map<string, Promise<string | null>>())
 
 /** The SQL type of a table's `id` when it is a number or uuid (null for a
  *  text key, which compares as text). Read once per tenant + table. */

@@ -7,6 +7,7 @@ import { db } from '../db/index.js'
 import { getTenantId } from '../db/tenant-context.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
+import { registerAppKeyed } from './app-forget.js'
 
 /**
  * Ops actions the chat assistant proposes (#2015): pause a background job,
@@ -50,7 +51,7 @@ export interface OpsProposal {
 }
 
 const TTL_SECONDS = 24 * 60 * 60
-const memory = new Map<string, { at: number; value: OpsProposal }>()
+const memory = registerAppKeyed(new Map<string, { at: number; value: OpsProposal }>())
 const memoryClaims = new Set<string>()
 
 function redisOf(app: FastifyInstance): Redis | null {

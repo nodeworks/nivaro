@@ -2,6 +2,7 @@ import { createHash, createHmac } from 'node:crypto'
 import type { CallOptions, CallResult } from '@nivaro/extension-kit'
 import { db } from '../db/index.js'
 import { fetchGuardedInCloud } from '../lib/ssrf.js'
+import { registerAppKeyed } from './app-forget.js'
 import { isRecord, responseLogScrubber, substituteBodySecrets } from './body-secrets.js'
 import { chainFields } from './chain-columns.js'
 import { partnerChaosFetch, partnerFault, readChaosResponse } from './chaos/faults/partner.js'
@@ -297,7 +298,7 @@ export async function writeApiCallLog(entry: ApiCallLogEntry): Promise<void> {
 // health probes (kind 'token_probe') always fetch fresh — they test the token server.
 const TOKEN_REUSE_MARGIN_S = 60
 const TOKEN_MAX_REUSE_S = 3600
-const oauthTokens = new Map<string, { token: string; until: number }>()
+const oauthTokens = registerAppKeyed(new Map<string, { token: string; until: number }>())
 /** OAUTH_TOKEN_CACHE=off turns reuse off (every call fetches a token, as before). */
 function oauthTokenCacheOn(): boolean {
   return (process.env.OAUTH_TOKEN_CACHE ?? '').trim().toLowerCase() !== 'off'

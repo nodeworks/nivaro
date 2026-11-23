@@ -1,3 +1,5 @@
+import { registerAppKeyed } from './app-forget.js'
+
 /**
  * Export paging (fix round 1). An export reads LIST_READ_MAX rows per read. Its default order is
  * `id` alone, and then it pages by KEYSET — the next page is `id > <last id of this page>` —
@@ -11,7 +13,7 @@
  */
 
 const INTEGER_TYPES = new Set(['int', 'bigint', 'smallint', 'tinyint'])
-const eligibleCache = new Map<string, { at: number; ok: boolean }>()
+const eligibleCache = registerAppKeyed(new Map<string, { at: number; ok: boolean }>())
 
 /**
  * Is `collection` a base table whose primary key is exactly one integer column named `id`?

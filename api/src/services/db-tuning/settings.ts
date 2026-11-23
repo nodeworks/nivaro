@@ -1,6 +1,7 @@
 import { db } from '../../db/index.js'
 import { getTenantId } from '../../db/tenant-context.js'
 import { hasColumn } from '../../lib/column-probe.js'
+import { registerAppKeyed } from '../app-forget.js'
 import { overlaySettings } from '../settings-overrides.js'
 
 export interface TuningSettings {
@@ -64,7 +65,7 @@ export function validateTuningSettings(raw: unknown): TuningSettings {
 }
 
 /** One entry per tenant (cloud: the request's tenant ALS; self-hosted: the one key ''). */
-const cache = new Map<string, { at: number; value: TuningSettings }>()
+const cache = registerAppKeyed(new Map<string, { at: number; value: TuningSettings }>())
 
 /** Lenient read: a malformed stored value reads as the defaults (never throws). 60 s cache. */
 export async function readTuningSettings(): Promise<TuningSettings> {

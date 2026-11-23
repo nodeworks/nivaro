@@ -3,6 +3,7 @@ import type { NotificationTargetSpec } from '@nivaro/extension-kit'
 import { db } from '../db/index.js'
 import { getTenantId } from '../db/tenant-context.js'
 import type { User } from '../types.js'
+import { registerAppKeyed } from './app-forget.js'
 import { canUserReadQueue } from './queue-access.js'
 import { collectionTitle } from './record-label-fallback.js'
 
@@ -121,7 +122,7 @@ export interface SendViewRedis {
   get(key: string): Promise<string | null>
 }
 
-const memory = new Map<string, { value: StoredSentView; until: number }>()
+const memory = registerAppKeyed(new Map<string, { value: StoredSentView; until: number }>())
 
 function storeKey(id: string): string {
   return `nvr:sentview:${getTenantId() ?? ''}:${id}`

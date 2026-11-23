@@ -2,6 +2,7 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypt
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { registerAppKeyed } from './app-forget.js'
 import { publicLinkBase } from './instance-links.js'
 import { appBoundSigInput } from './tenancy/credential-binding.js'
 import { currentTenantKey } from './tenant-rooms.js'
@@ -411,7 +412,7 @@ export const FREE_MAIL_DOMAINS = new Set([
 ])
 
 /** Per tenant ('' = self-hosted): every cloud tenant has its own sending domains. */
-const ownDomainsCache = new Map<string, { at: number; value: Set<string> }>()
+const ownDomainsCache = registerAppKeyed(new Map<string, { at: number; value: Set<string> }>())
 
 /** The mail domains this instance (tenant) sends from (MAIL_FROM, Settings → Email "from"),
  *  free-mail providers left out. */

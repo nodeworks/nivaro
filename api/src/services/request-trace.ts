@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { randomUUID } from 'node:crypto'
+import { registerAppKeyed } from './app-forget.js'
 // Leaf (one constant list, no db import).
 import { SECRET_COLUMN_NAMES } from './system-collections.js'
 import { currentTenantKey } from './tenant-rooms.js'
@@ -785,7 +786,7 @@ export function requestStatements(req: unknown, limit = 40): string[] {
 // ─── Follow-this-user (#309) ─────────────────────────────────────────────────
 /** Followed people per app (Hub phase 6 Task 22, I-4): an app's admin follows, lists and spends
  *  their own app's people only — copied apps share user ids. Key `<app>\u0000<USER>`. */
-const followBudget = new Map<string, { remaining: number; until: number }>()
+const followBudget = registerAppKeyed(new Map<string, { remaining: number; until: number }>())
 const followKey = (app: string, userId: string) => `${app}\u0000${userId.toUpperCase()}`
 
 export function followUser(userId: string, requests = 50): void {

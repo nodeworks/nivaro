@@ -5,6 +5,7 @@ import { insertReturningRow } from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
 import { emitNotification } from '../plugins/socketio.js'
 import { resolveActivityStamp } from '../services/activity-scope.js'
+import { registerAppKeyed } from '../services/app-forget.js'
 import { recordLink } from '../services/app-links.js'
 import { isNoticeBurst } from '../services/bulk-change-notice.js'
 import { chainFields } from '../services/chain-columns.js'
@@ -246,10 +247,9 @@ export async function parentOfRow(
 
 /** Child collection → parent M2O relations, so a write to a line rolls up to
  *  the parent record's watchers. 60s cache; relations change in Data Model. */
-const parentRelCache = new Map<
-  string,
-  { at: number; rels: Array<{ parent: string; fk: string }> }
->()
+const parentRelCache = registerAppKeyed(
+  new Map<string, { at: number; rels: Array<{ parent: string; fk: string }> }>()
+)
 async function parentRelationsOf(child: string): Promise<Array<{ parent: string; fk: string }>> {
   // Keyed per tenant: module state is shared by every app on a shared deployment.
   const cacheKey = `${currentTenantKey()}\u0000${child}`
@@ -281,7 +281,7 @@ async function parentRelationsOf(child: string): Promise<Array<{ parent: string;
  * vendor, location) are links, not ownership, so a watch on a workflow stays
  * on the workflow (2026-10-26: it was filed and opened under its PROJECT).
  */
-const boundCache = new Map<string, { at: number; bound: boolean }>()
+const boundCache = registerAppKeyed(new Map<string, { at: number; bound: boolean }>())
 async function rowOwnerRelationsOf(
   collection: string
 ): Promise<Array<{ parent: string; fk: string }>> {

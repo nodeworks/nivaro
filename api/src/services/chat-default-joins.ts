@@ -1,4 +1,5 @@
 import { runInBackgroundPool } from '../db/pool-context.js'
+import { registerAppKeyed } from './app-forget.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
 /**
@@ -28,7 +29,7 @@ const MEMO_MAX = 50_000
 
 /** tenant|USER|ROLE → when the default channels were last checked for that person and role.
  *  Tenant-keyed: module state is shared by every cloud tenant. */
-const checked = new Map<string, number>()
+const checked = registerAppKeyed(new Map<string, number>())
 
 function memoKey(userId: unknown, role: unknown): string {
   return `${currentTenantKey()}|${String(userId).toUpperCase()}|${String(role).toUpperCase()}`

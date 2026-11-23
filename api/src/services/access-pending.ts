@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { registerAppKeyed } from './app-forget.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
 /**
@@ -55,7 +56,9 @@ export function accessPendingOf(
  *  new-user roles shows within SETTINGS_TTL_MS. */
 const SETTINGS_TTL_MS = 30_000
 const SETTINGS_MAX = 1000
-const settingsCache = new Map<string, { at: number; value: FlowSettings | null }>()
+const settingsCache = registerAppKeyed(
+  new Map<string, { at: number; value: FlowSettings | null }>()
+)
 
 async function flowSettings(): Promise<FlowSettings | null> {
   const key = currentTenantKey()

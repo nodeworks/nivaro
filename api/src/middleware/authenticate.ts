@@ -11,6 +11,7 @@ import {
   accessPendingRefusals,
   accessPendingRouteAllowed
 } from '../services/access-pending.js'
+import { registerAppKeyed } from '../services/app-forget.js'
 import { rateWindowKey } from '../services/app-redis-keys.js'
 import { withAuthDeadline } from '../services/auth-deadline.js'
 import { cacheSetting } from '../services/cache-config.js'
@@ -181,7 +182,7 @@ export async function enforceRateLimit(
  *  touch the TARGET (the admin is the one active); API-key requests track
  *  last_used_at on the key instead. */
 const LAST_ACCESS_TOUCH_MS = 5 * 60_000
-const lastAccessTouched = new Map<string, number>()
+const lastAccessTouched = registerAppKeyed(new Map<string, number>())
 function touchLastAccess(userId: string) {
   const now = Date.now()
   const key = `${currentTenantKey()}|${userId}`
@@ -215,8 +216,8 @@ function touchLastAccess(userId: string) {
  */
 const IDENTITY_MAX = 5_000
 type IdentityEntry = { at: number; row: User }
-const identityRows = new Map<string, IdentityEntry>()
-const identityInflight = new Map<string, Promise<User | undefined>>()
+const identityRows = registerAppKeyed(new Map<string, IdentityEntry>())
+const identityInflight = registerAppKeyed(new Map<string, Promise<User | undefined>>())
 let identityGen = 0
 const identityCounters = { hits: 0, misses: 0, busts: 0 }
 
@@ -597,7 +598,7 @@ export function delegatedWriteRefusal(req: FastifyRequest): string | null {
  * per admin and tenant so a busy View-as tab does not read two rows per request.
  */
 const ADMIN_RECHECK_MS = 15_000
-const adminRecheck = new Map<string, { ok: boolean; at: number }>()
+const adminRecheck = registerAppKeyed(new Map<string, { ok: boolean; at: number }>())
 export async function issuingAdminStillAdmin(adminId: string | null | undefined): Promise<boolean> {
   if (!adminId) return false
   const key = `${currentTenantKey()}|${String(adminId).toUpperCase()}`

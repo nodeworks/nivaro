@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import { tenantOrigin } from '../db/tenant-context.js'
+import { registerAppKeyed } from './app-forget.js'
 import { routePush } from './channel-test-mode.js'
 import { isNivaroCloud } from './deployment-mode.js'
 import {
@@ -326,7 +327,7 @@ export async function instanceOrigin(): Promise<string> {
 
 /** "Relay not connected" is said at most once an hour per tenant (it repeats per alert). */
 const RELAY_WARN_EVERY_MS = 3_600_000
-const relayWarnedAt = new Map<string, number>()
+const relayWarnedAt = registerAppKeyed(new Map<string, number>())
 function relayWarnDue(): boolean {
   const key = currentTenantKey()
   const last = relayWarnedAt.get(key)

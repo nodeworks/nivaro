@@ -1,6 +1,7 @@
 import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { sqlDialect } from '../db/sql-dialect.js'
+import { registerAppKeyed } from './app-forget.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
 /**
@@ -18,7 +19,7 @@ import { currentTenantKey } from './tenant-rooms.js'
  */
 
 const TTL_MS = 30_000
-const cache = new Map<string, { at: number; cols: Set<string> }>()
+const cache = registerAppKeyed(new Map<string, { at: number; cols: Set<string> }>())
 
 function needed(): boolean {
   const d = sqlDialect(db)

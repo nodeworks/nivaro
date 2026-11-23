@@ -1,6 +1,7 @@
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { accessStamp, onAccessStampBump } from './access-stamp.js'
+import { registerAppKeyed } from './app-forget.js'
 import { getFields, getRelations } from './collections.js'
 import { getEncryptedFields } from './encryption.js'
 import { getAllowedFields } from './permissions.js'
@@ -46,11 +47,11 @@ interface Cached<T> {
 }
 
 /** Person → their readable field list (null = every field). */
-const readCache = new Map<string, Cached<Set<string> | null>>()
+const readCache = registerAppKeyed(new Map<string, Cached<Set<string> | null>>())
 /** Person → their row (null = not an active person who may be sent anything). */
-const userCache = new Map<string, Cached<User | null>>()
+const userCache = registerAppKeyed(new Map<string, Cached<User | null>>())
 /** Collection → the fields whose typed value may travel at all. */
-const valueFieldCache = new Map<string, Cached<Set<string>>>()
+const valueFieldCache = registerAppKeyed(new Map<string, Cached<Set<string>>>())
 
 export interface RelayDeps {
   loadUser: (id: string) => Promise<User | null>

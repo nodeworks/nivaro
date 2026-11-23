@@ -2,6 +2,7 @@ import { likeOp } from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
 import { castText } from '../db/sql-dialect.js'
 import type { User } from '../types.js'
+import { registerAppKeyed } from './app-forget.js'
 import { autoJoinDue, markAutoJoinChecked } from './chat-default-joins.js'
 import { selectInChunks, whereInList } from './db-batch.js'
 import { readItems } from './items.js'
@@ -234,7 +235,7 @@ interface ChatRegistryCache {
   /** Keys read through and not found, with when. */
   misses: Map<string, number>
 }
-const registry = new Map<string, ChatRegistryCache>()
+const registry = registerAppKeyed(new Map<string, ChatRegistryCache>())
 
 function registryFor(tenant = currentTenantKey()): ChatRegistryCache {
   let c = registry.get(tenant)
@@ -920,7 +921,7 @@ async function unreadMentionsPerRoom(
   return out
 }
 
-const columnMemo = new Map<string, { at: number; v: boolean }>()
+const columnMemo = registerAppKeyed(new Map<string, { at: number; v: boolean }>())
 async function hasColumnCached(table: string, col: string): Promise<boolean> {
   const k = `${currentTenantKey()}|${table}.${col}`
   const hit = columnMemo.get(k)

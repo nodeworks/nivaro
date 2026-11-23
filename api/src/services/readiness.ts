@@ -1,6 +1,7 @@
 import type { ReadinessCheck, ReadinessStatus } from '@nivaro/extension-kit'
 import type { Redis } from 'ioredis'
 import { NIVARO_VERSION } from '../version.js'
+import { registerAppKeyed } from './app-forget.js'
 import { appMap } from './app-state.js'
 import { emitOps } from './ops-live.js'
 import { currentTenantKey } from './tenant-rooms.js'
@@ -220,7 +221,7 @@ function scopeKey(): string {
 const storeKey = (scope: string) => `nvr:readiness:v1:${scope}`
 const lockKey = (scope: string) => `nvr:readiness:lock:${scope}`
 
-const memory = new Map<string, Map<string, CachedReadinessResult>>()
+const memory = registerAppKeyed(new Map<string, Map<string, CachedReadinessResult>>())
 
 function parseEntry(raw: unknown): CachedReadinessResult | null {
   if (typeof raw !== 'string') return null
@@ -292,7 +293,7 @@ interface FreshRun {
   started_at: number
   finished_at: number
 }
-const freshRuns = new Map<string, FreshRun>()
+const freshRuns = registerAppKeyed(new Map<string, FreshRun>())
 const freshRunKey = (scope: string) => `nvr:readiness:fresh:${scope}`
 
 async function recordFreshRun(scope: string, run: FreshRun): Promise<void> {
@@ -322,7 +323,7 @@ async function lastFreshRun(scope: string): Promise<FreshRun | null> {
 
 /** In flight per scope + check: a fresh run joins a background refresh's
  *  evaluation of the same check instead of starting a second one. */
-const inflight = new Map<string, Promise<CachedReadinessResult>>()
+const inflight = registerAppKeyed(new Map<string, Promise<CachedReadinessResult>>())
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -449,7 +450,7 @@ export function assembleReadinessReport(
 }
 
 /** One background refresh per scope per process. */
-const refreshing = new Map<string, Promise<void>>()
+const refreshing = registerAppKeyed(new Map<string, Promise<void>>())
 
 function startRefresh(scope: string, due: ReadinessCheck[]): Promise<void> {
   const running = refreshing.get(scope)
@@ -510,7 +511,7 @@ export async function readReadiness(opts: { fresh?: boolean } = {}): Promise<Rea
   return report
 }
 
-const freshFlights = new Map<string, Promise<ReadinessReport>>()
+const freshFlights = registerAppKeyed(new Map<string, Promise<ReadinessReport>>())
 
 /** Run every registered check live, store the results and score them. A run
  *  already in flight in this process is joined. `reuseMs` (the route's

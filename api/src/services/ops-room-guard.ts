@@ -2,6 +2,7 @@ import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { getTenantId } from '../db/tenant-context.js'
 import { hasColumn } from '../lib/column-probe.js'
+import { registerAppKeyed } from './app-forget.js'
 
 /**
  * Keeping the assistant's ops posts with administrators (#1967/#2015/#2016).
@@ -25,7 +26,7 @@ export const OPS_ONLY_MESSAGE =
   'Only administrators can be in this channel — it holds the assistant’s operations posts.'
 
 const TTL_MS = 30_000
-const guardCache = new Map<string, { at: number; guarded: boolean }>()
+const guardCache = registerAppKeyed(new Map<string, { at: number; guarded: boolean }>())
 
 export function bustOpsGuard(): void {
   guardCache.clear()

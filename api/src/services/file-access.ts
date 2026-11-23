@@ -1,6 +1,7 @@
 import type { FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { registerAppKeyed } from './app-forget.js'
 import { extractFileIds } from './config-review/pure.js'
 import {
   adminAuthors,
@@ -55,7 +56,7 @@ interface RefSite {
  *  references a non-admin is refused a change rather than judged row by row. */
 const MAX_REFS = 50
 const SITE_TTL_MS = 60_000
-const siteCache = new Map<string, { at: number; sites: RefSite[] }>()
+const siteCache = registerAppKeyed(new Map<string, { at: number; sites: RefSite[] }>())
 
 async function refSites(): Promise<RefSite[]> {
   const key = currentTenantKey()

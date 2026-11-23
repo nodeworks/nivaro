@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
+import { registerAppKeyed } from './app-forget.js'
 import { normalizeScopes, PEOPLE_SCOPE } from './search-query.js'
 import { overlaySettings } from './settings-overrides.js'
 import { currentTenantKey } from './tenant-rooms.js'
@@ -25,7 +26,9 @@ export function registerSearchScopes(map: Record<string, string>): void {
   cache.clear()
 }
 
-const cache = new Map<string, { at: number; value: Promise<Record<string, string>> }>()
+const cache = registerAppKeyed(
+  new Map<string, { at: number; value: Promise<Record<string, string>> }>()
+)
 
 function removals(raw: unknown): string[] {
   let obj = raw

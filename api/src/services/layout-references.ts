@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import { getTenantId } from '../db/tenant-context.js'
+import { registerAppKeyed } from './app-forget.js'
 import type { OverviewReference } from './layout-overview.js'
 
 /**
@@ -69,7 +70,7 @@ function pageDrillIds(node: unknown, out: Set<number>, depth = 0): void {
 // or field-config drops it (routes/index.ts, beside clearMetadataCache);
 // references held elsewhere (queues, share links, forms, pages) wait out the TTL.
 const REFS_TTL_MS = 30_000
-const refsMemo = new Map<string, { at: number; refs: Promise<Refs> }>()
+const refsMemo = registerAppKeyed(new Map<string, { at: number; refs: Promise<Refs> }>())
 
 export function bustLayoutReferences(): void {
   refsMemo.clear()

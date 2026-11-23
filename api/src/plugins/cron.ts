@@ -1493,6 +1493,9 @@ export class CronManager {
       const r = await forEachApp(async (t) => {
         // Hub phase 6: an app the Hub put in maintenance catches up after it is released.
         if (t.status === 'maintenance') return 'maintenance'
+        // Final review M1: nor one whose database is not migrated at this version yet (or failed
+        // to migrate), as the ticks (withoutHubMaintenance); its next scheduled run covers it.
+        if (!appReadyForRequests(t.id)) return 'not_ready'
         if (await appPaused(id)) return 'paused'
         if (await this.heldByMaintenance(id, t.id)) return 'maintenance'
         const recent = await db('nivaro_job_runs')

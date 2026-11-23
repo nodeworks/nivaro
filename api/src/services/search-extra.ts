@@ -6,6 +6,7 @@ import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { hasColumn } from '../lib/column-probe.js'
 import type { User } from '../types.js'
+import { registerAppKeyed } from './app-forget.js'
 import type { DocsIndexSection } from './docs-search.js'
 import { hasFieldCommentColumns, recordCommentsOnly } from './field-comments.js'
 import { excerpt, searchTerms } from './help-video-search-rank.js'
@@ -182,7 +183,7 @@ async function commentRows(
 // arm sits out (the same budget global search keeps for record tables).
 const HISTORY_ROW_BUDGET = 500_000
 const ROWS_TTL_MS = 10 * 60_000
-const rowsCache = new Map<string, { at: number; rows: number }>()
+const rowsCache = registerAppKeyed(new Map<string, { at: number; rows: number }>())
 
 async function tableRows(table: string): Promise<number> {
   const { currentTenantKey } = await import('./tenant-rooms.js')

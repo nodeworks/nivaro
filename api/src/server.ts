@@ -79,6 +79,7 @@ import { enrichErrorPayload, noteDbRefusal } from './services/error-enrich.js'
 import { logRouteError } from './services/error-log-level.js'
 import { stableIssueKey, trackError } from './services/error-tracking.js'
 import { callExternalApi } from './services/external-apis.js'
+import { hubLinkToken } from './services/hub/mode.js'
 import { importerServes } from './services/import-handoff.js'
 import { maintenanceFreezeHook, retiredRequestHook } from './services/maintenance-freeze.js'
 import { markMcpInnerRequest } from './services/mcp-config.js'
@@ -255,6 +256,16 @@ export async function buildServer() {
 
   // ─── Redis ─────────────────────────────────────────────────────────────────
   await app.register(redisPlugin)
+
+  // Hub phase 6 final review (core) M4: a hub-linked dedicated app (HUB_TOKEN, one app in this
+  // process) reads its retired flag (moved away by the Hub) before the scheduler lease election
+  // (cron plugin) and the drainers below start, so a retired app that restarts never ticks or
+  // drains into the moved app's database, not even for the moment before index.ts read it. An
+  // unanswered read leaves the state unknown, which acts retired (services/hub-link/retire.ts).
+  if (hubLinkToken() && tenantSource() === null && app.redis) {
+    const { startRetiredWatch } = await import('./services/hub-link/retire.js')
+    await startRetiredWatch(app.redis)
+  }
 
   // A Hub shared deployment's tenant list (the tenant hook above reads it): sealed Redis copy
   // first, then the Hub. Started here because it needs Redis; it never throws on a Hub outage.

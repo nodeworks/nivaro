@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { registerAppKeyed } from './app-forget.js'
 import { newestUnansweredSendFor } from './erp-unanswered.js'
 import { getApp } from './io-holder.js'
 import { type JobRunHandle, type JobRunKind, startJobRun } from './job-runs.js'
@@ -354,7 +355,7 @@ async function liveRun(jobId: string): Promise<RunRow | null> {
 }
 
 /** Per tenant: this module's state is shared by every tenant of the process. */
-const lastSweep = new Map<string, number>()
+const lastSweep = registerAppKeyed(new Map<string, number>())
 
 /**
  * Close every abandoned run, whichever record it is on: a run nobody looks at

@@ -155,7 +155,8 @@ async function openLocalChain(key: string, rangeHeader?: string): Promise<Opened
     try {
       return openedFromFile(path, (await stat(path)).size, rangeHeader)
     } catch (err) {
-      if ((err as { code?: unknown } | null)?.code !== 'ENOENT') throw err
+      const code = (err as { code?: unknown } | null)?.code
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') throw err
     }
   } else {
     // An env provider that is not local disk (a move refuses it: ENV_OBJECT_STORAGE).
@@ -166,7 +167,9 @@ async function openLocalChain(key: string, rangeHeader?: string): Promise<Opened
       if (!isStoredObjectMissing(err) && !isMissingObject(err)) throw err
     }
   }
-  const copy = await existingFallback(key)
+  // Strict (R7-M-1): an unreadable fallback folder (EACCES / EIO / ESTALE) is a read error, never
+  // "missing".
+  const copy = await existingFallback(key, { strict: true })
   if (copy) return openedFromFile(copy.path, copy.size, rangeHeader)
   const remote = await openFallbackUrl(key, rangeHeader, { throwOnTrouble: true })
   if (remote) return remote

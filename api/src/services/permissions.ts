@@ -3,6 +3,7 @@ import { whereLikeCi } from '../db/dialect/items-query.js'
 import { db } from '../db/index.js'
 import { likeContains } from '../lib/filter-like.js'
 import type { Policy, Role, User } from '../types.js'
+import { registerAppKeyed } from './app-forget.js'
 import { appKey } from './app-keyed.js'
 import { type AccessCompute, cachedAccess } from './permission-cache.js'
 import { isSystemCollection, systemReadableColumns } from './system-collections.js'
@@ -339,7 +340,7 @@ async function roleAllowedFields(
   return fields === null ? readable : readable.filter((c) => fields.includes(c))
 }
 
-const readableColumnsCache = new Map<string, Promise<string[]>>()
+const readableColumnsCache = registerAppKeyed(new Map<string, Promise<string[]>>())
 /** The fallback lists handed out when the column read failed. */
 const degradedColumns = new WeakSet<string[]>()
 
