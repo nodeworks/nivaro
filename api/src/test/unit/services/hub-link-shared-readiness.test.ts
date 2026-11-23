@@ -113,6 +113,7 @@ beforeAll(async () => {
     t.string('directory_graph_tenant_id')
     t.string('directory_graph_client_id')
     t.text('directory_graph_client_secret')
+    t.boolean('teams_bot_enabled')
   })
   await db.schema.createTable('nivaro_push_subscriptions', (t) => {
     t.increments('id')
@@ -164,6 +165,7 @@ beforeEach(async () => {
   delete process.env.STORAGE_PROVIDER
   delete process.env.SMTP_HOST
   delete process.env.MOBILE_PUSH_RELAY_KEY
+  delete process.env.TEAMS_BOT
   process.env.ENCRYPTION_KEY = KEY
 })
 
@@ -334,6 +336,25 @@ describe('computeSharedReadiness', () => {
     expect(codeOf(await computeSharedReadiness(), 'TEAMS_BOT_ENV_CREDENTIALS')).toBeUndefined()
     h.teams = false
     h.teamsSource = 'env'
+    expect(codeOf(await computeSharedReadiness(), 'TEAMS_BOT_ENV_CREDENTIALS')).toBeUndefined()
+  })
+
+  it('a saved bot switched on only by TEAMS_BOT=on → TEAMS_BOT_ENV_CREDENTIALS (shared ignores that switch)', async () => {
+    const DETAIL =
+      "This app's bot is set by the server environment; save the bot in Settings before the move"
+    h.teams = true
+    h.teamsSource = 'settings'
+    process.env.TEAMS_BOT = 'On'
+    await db('nivaro_settings').update({ teams_bot_enabled: false })
+    expect(codeOf(await computeSharedReadiness(), 'TEAMS_BOT_ENV_CREDENTIALS')?.detail).toBe(DETAIL)
+    await db('nivaro_settings').update({ teams_bot_enabled: null })
+    expect(codeOf(await computeSharedReadiness(), 'TEAMS_BOT_ENV_CREDENTIALS')?.detail).toBe(DETAIL)
+    // Its own switch saved on: it keeps answering on a shared deployment.
+    await db('nivaro_settings').update({ teams_bot_enabled: true })
+    expect(codeOf(await computeSharedReadiness(), 'TEAMS_BOT_ENV_CREDENTIALS')).toBeUndefined()
+    // Switched on by its saved switch alone (no env switch): nothing to warn.
+    await db('nivaro_settings').update({ teams_bot_enabled: false })
+    delete process.env.TEAMS_BOT
     expect(codeOf(await computeSharedReadiness(), 'TEAMS_BOT_ENV_CREDENTIALS')).toBeUndefined()
   })
 

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { rmSync } from 'node:fs'
 import type { Knex } from 'knex'
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 // Nivaro Hub phase 6 Task 9 fix round 1 (review Minor 7): a warning check that throws is left
 // out of the report, so a wrong column name would hide it. These checks run over tables made by
@@ -84,6 +84,11 @@ beforeAll(async () => {
   }
 })
 
+// The env relay key a test sets never outlives it, whatever fails first.
+afterEach(() => {
+  delete process.env.MOBILE_PUSH_RELAY_KEY
+})
+
 afterAll(async () => {
   await db.destroy()
   if (h.dir) rmSync(h.dir, { recursive: true, force: true })
@@ -134,7 +139,6 @@ describe('warnings over the real migrated columns', () => {
     })
 
     const r = await computeSharedReadiness()
-    delete process.env.MOBILE_PUSH_RELAY_KEY
     const codes = Object.fromEntries(r.codes.map((c) => [c.code, c]))
     // Directory sync and phone push run per app on a shared deployment now: only the server's own
     // credentials they use today are warned about.

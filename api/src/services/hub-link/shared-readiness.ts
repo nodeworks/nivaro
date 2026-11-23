@@ -180,14 +180,26 @@ async function directoryEnvCredentials(): Promise<string | null> {
     : "This app reads the directory with the server's Microsoft app; save its own app registration in Settings before the move"
 }
 
-/** The bot is on with an env family (TEAMS_BOT_* / MICROSOFT_APP_*) or the sign-in app: on a
- *  shared deployment an app's bot is only the one it saved in Settings. */
+/**
+ * The bot is on with an env family (TEAMS_BOT_* / MICROSOFT_APP_*) or the sign-in app, or its
+ * saved bot is on only through env TEAMS_BOT=on (its own saved switch is not): on a shared
+ * deployment an app's bot is only the one it saved in Settings, switched on by its own switch
+ * (teams-bot/config.ts ignores TEAMS_BOT=on there).
+ */
 async function teamsBotEnvCredentials(): Promise<string | null> {
   const { getTeamsBotConfig } = await import('../teams-bot/config.js')
   const c = await getTeamsBotConfig()
-  return c.enabled && (c.source === 'env' || c.source === 'sign_in_app')
-    ? "This app's bot is set by the server environment; save the bot in Settings before the move"
-    : null
+  if (!c.enabled) return null
+  const detail =
+    "This app's bot is set by the server environment; save the bot in Settings before the move"
+  if (c.source === 'env' || c.source === 'sign_in_app') return detail
+  if ((process.env.TEAMS_BOT ?? '').trim().toLowerCase() !== 'on') return null
+  if (!(await db.schema.hasColumn('nivaro_settings', 'teams_bot_enabled'))) return detail
+  const row = (await db('nivaro_settings').orderBy('id', 'asc').first('teams_bot_enabled')) as
+    | { teams_bot_enabled?: unknown }
+    | undefined
+  const savedOn = row?.teams_bot_enabled === true || row?.teams_bot_enabled === 1
+  return savedOn ? null : detail
 }
 
 /** Phones on the relay sent with the env relay key (it beats a stored one): on a shared
