@@ -199,6 +199,14 @@ describe('Environment row (Hub admin)', () => {
     expect(within(table).queryByText('Promote')).toBeNull()
     const actions = within(table).getByRole('button', { name: 'Move production' }).closest('td')
     expect(actions?.className).toContain('overflow-hidden')
+    // Design S1: on a phone the actions sit on their own line, never on the name line, and the
+    // placement chip keeps its words.
+    const phone = screen.getByRole('list', { name: 'Environments' })
+    const first = within(phone).getAllByRole('listitem')[0]
+    const nameLine = first.firstElementChild as HTMLElement
+    expect(within(nameLine).queryByRole('button')).toBeNull()
+    expect(within(first).getByRole('button', { name: 'Move production' })).toBeInTheDocument()
+    expect(within(first).getByText('Shared · east')).toBeInTheDocument()
     // A shared-placed environment's Promote says why instead of opening a panel that refuses.
     const promote = within(table).getByRole('button', { name: 'Promote production' })
     expect(promote).toBeDisabled()

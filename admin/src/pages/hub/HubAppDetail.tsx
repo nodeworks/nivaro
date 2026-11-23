@@ -462,7 +462,7 @@ function PlacementChip({ text, shared }: { text: string | null; shared: boolean 
           : 'Runs on its own stack or pipeline'
       }
       className={cn(
-        'inline-flex max-w-full items-center gap-1 truncate rounded-full border px-1.5 py-px font-sans text-[10px] font-medium',
+        'inline-flex min-w-0 max-w-full shrink-0 items-center gap-1 truncate rounded-full border px-1.5 py-px font-sans text-[10px] font-medium',
         shared
           ? 'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-900/60 dark:bg-sky-950/40 dark:text-sky-300'
           : 'border-slate-200 bg-slate-50 text-slate-600 dark:border-border dark:bg-muted dark:text-slate-300'
@@ -831,17 +831,20 @@ function EnvItem({
   const s = row.status.data
   return (
     <li className='px-4 py-2.5'>
-      <div className='flex items-center gap-2'>
+      {/* Design S1: name and status on the first line, chips wrap below at their full width,
+          the actions get a line of their own under the facts (nothing runs off the card). */}
+      <div className='flex flex-wrap items-center gap-x-2 gap-y-1'>
         <span className='font-mono text-[12px] font-medium text-slate-800 dark:text-foreground'>
           {env.key}
         </span>
         <EnvStatus status={row.status} />
-        <PlacementChip text={row.placementText} shared={row.isShared} />
-        <MoveBadgeChip env={env} row={row} />
-        <div className='ml-auto'>
-          <EnvActions env={env} row={row} isAdmin={isAdmin} canPromote={canPromote} />
-        </div>
       </div>
+      {(row.placementText || row.badge) && (
+        <div className='mt-1 flex flex-wrap items-center gap-1'>
+          <PlacementChip text={row.placementText} shared={row.isShared} />
+          <MoveBadgeChip env={env} row={row} />
+        </div>
+      )}
       <p className='m-0 mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-slate-500 dark:text-muted-foreground'>
         <a
           href={env.base_url}
@@ -857,6 +860,9 @@ function EnvItem({
         <span className='shrink-0'>{s?.checked_at ? formatRelative(s.checked_at) : '—'}</span>
       </p>
       <EnvStatusHint status={row.status} className='mt-0.5' />
+      <div className='mt-1 flex justify-start [&>div]:justify-start'>
+        <EnvActions env={env} row={row} isAdmin={isAdmin} canPromote={canPromote} />
+      </div>
       {env.placement_id != null && !row.isShared && !row.placementPending && (
         <HubStackPanel env={env} appId={app.id} isAdmin={isAdmin} layout='card' idPrefix='-m' />
       )}
