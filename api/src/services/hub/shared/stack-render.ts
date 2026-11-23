@@ -13,10 +13,16 @@ import type { SharedDeployment } from './store.js'
  *
  * What it holds:
  *  - owner `{shared: key}`, environment `shared` (preflight: the field is unspecified for shared).
- *  - ONE service, role `all` (no NIVARO_ROLE: every process serves, ticks crons through the
- *    leader lease and drains its own hand-offs), replicas small 1 / medium 2 / large 3. A shared
- *    deployment never runs a realtime role (the agent refuses ROLE_NOT_SHARED); a `web` role alone
- *    would leave exports, media and renders with nobody to drain them.
+ *  - roles by size (sharedRoles, Task 14): small is ONE service, role `all` (no NIVARO_ROLE:
+ *    every process serves, ticks crons through the leader lease and drains its own hand-offs).
+ *    Medium and large split it as a dedicated stack does (docker/templates.ts): `web` (CRON_TICKS
+ *    off), `worker` (the only role that ticks crons, so every app's scheduled jobs and its 10 s
+ *    import fan-out tick there) and `importer` (drains every app's staged imports: the
+ *    deployment's kicks and its own per-app pass, services/staged-import-worker.ts). Every role
+ *    serves every app: one env block, one set of secrets, the role by NIVARO_ROLE (the agent).
+ *    Still no `realtime` role: the API refuses NIVARO_ROLE=realtime on a deployment that serves
+ *    many apps (index.ts, realtime-server.ts) and keeps sockets on every process there
+ *    (process-role.ts socketsServed), and the agent refuses it on a shared owner (ROLE_NOT_SHARED).
  *  - env: HUB_SHARED_DEPLOYMENT=<key> (the agent checks it equals owner.shared), HUB_URL,
  *    HUB_SHARED_EXTENSIONS (the allow-list, sorted), TRUST_PROXY=1 (behind the edge), its own
  *    REDIS_CHANNEL_PREFIX (a shared Redis never mixes it with another deployment's channels),
@@ -74,11 +80,30 @@ export const SHARED_HUB_ENV_KEYS: readonly string[] = [
   'COOKIE_SECURE'
 ]
 
-/** Replicas of the one service, per size. */
-export const SHARED_REPLICAS: Record<StackSize, number> = { small: 1, medium: 2, large: 3 }
-/** Per replica: a shared process serves many apps. */
+/** Per replica: a shared process serves many apps (so 4 GB where a dedicated web takes 3 GB). */
 const SHARED_CPUS = 2
 const SHARED_MEMORY_MB = 4096
+
+/**
+ * THE list of roles a shared stack runs, per size (Task 14). Replicas and CPUs mirror the
+ * dedicated template (docker/templates.ts); memory is the shared per-replica 4 GB. A role added
+ * later (the exporter) goes here and nowhere else.
+ *  - small: one `all` process — exactly the stack before the split (its spec hash is pinned).
+ *  - medium: web ×2, worker ×1, importer ×1.
+ *  - large: web ×3, worker ×1, importer ×1. (A dedicated large stack also runs `realtime` ×2 with
+ *    web SOCKETS=off; a shared one cannot yet — see the header.)
+ * `web` says CRON_TICKS=off so the worker is the only process that ticks crons; the importer
+ * ticks none by its role (services/cron-ticks.ts). A fresh copy on every call.
+ */
+export function sharedRoles(size: StackSize): StackSpec['roles'] {
+  const limits = { cpus: SHARED_CPUS, memory_mb: SHARED_MEMORY_MB }
+  if (size === 'small') return [{ role: 'all', replicas: 1, ...limits }]
+  return [
+    { role: 'web', replicas: size === 'large' ? 3 : 2, ...limits, env: { CRON_TICKS: 'off' } },
+    { role: 'worker', replicas: 1, ...limits },
+    { role: 'importer', replicas: 1, ...limits }
+  ]
+}
 
 /** The environment label of a shared stack (the agent's owner rule allows it). */
 export const SHARED_STACK_ENVIRONMENT = 'shared'
@@ -281,14 +306,7 @@ export function renderSharedSpec(input: RenderSharedInput): StackSpec {
     owner: { shared: shared.key },
     environment: SHARED_STACK_ENVIRONMENT,
     image: input.image,
-    roles: [
-      {
-        role: 'all',
-        replicas: SHARED_REPLICAS[settings.size],
-        cpus: SHARED_CPUS,
-        memory_mb: SHARED_MEMORY_MB
-      }
-    ],
+    roles: sharedRoles(settings.size),
     env,
     secrets,
     hostnames,

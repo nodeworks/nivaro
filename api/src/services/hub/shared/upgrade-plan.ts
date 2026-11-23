@@ -27,6 +27,7 @@ import {
   renderSharedSpec,
   SharedRenderError,
   sharedExtensionPins,
+  sharedRoles,
   sharedStackSettings
 } from './stack-render.js'
 import { getShared, type SharedDeployment, tenantIdFor } from './store.js'
@@ -56,7 +57,9 @@ import { type SharedTenantRow, tenantsOf } from './tenants.js'
  * EXTENSION_MISSING (final review I-4) — the app uses an extension the deployment does not load;
  * never overridable, checked for every kind.
  *
- * Warnings: ROLLBACK_SCHEMA_AHEAD (a rollback keeps the newer schema; final review M-8);
+ * Warnings: ROLES_CHANGE (Task 14: the run adds or removes services — a size change between
+ * small's one `all` and the medium / large split; `roles` and `roles_from` say which);
+ * ROLLBACK_SCHEMA_AHEAD (a rollback keeps the newer schema; final review M-8);
  * HUB_URL_PROBLEM (the Hub's own HUB_URL is ignored, hubUrlBootWarning), MULTI_NODE_
  * VOLUMES (the agent's swarm has several nodes and volumes are local), APPS_AFFECTED (every app
  * the run restarts). Confirm text: the deployment key. `plan_hash` covers everything the run does.
@@ -97,6 +100,13 @@ export interface SharedUpgradePlan {
   stack: string | null
   /** Names routed besides the pattern. */
   hostnames: string[]
+  /** The services the run deploys (sharedRoles of the deployment's size), in order (Task 14). */
+  roles: Array<{ role: string; replicas: number }>
+  /**
+   * The roles the last successful run deployed; null when the Hub never deployed this one. A run
+   * recorded before the split carries none and counts as one `all` service.
+   */
+  roles_from: string[] | null
   /**
    * An upgrade to a version older than the one deployed (or either version unparseable): the
    * start needs `downgrade: true` (409 DOWNGRADE_NEEDS_CONFIRM, ruling P6-29). Never a rollback.
@@ -268,6 +278,33 @@ async function recordedRun(
     }
   }
   return { image: null, extensions: null }
+}
+
+/**
+ * The roles the newest successful run of this deployment deployed (its stored plan's `roles`);
+ * ['all'] for a run recorded before the split (Task 14), null when none succeeded. Observed runs
+ * (a registered deployment's version) deploy nothing and never count.
+ */
+async function deployedRoles(sharedId: number): Promise<string[] | null> {
+  const row = (await db(SHARED_DEPLOYS)
+    .where({ shared_deployment_id: sharedId, status: 'success' })
+    .whereNot({ kind: 'observed' })
+    .orderBy('id', 'desc')
+    .first('plan')) as { plan: string | null } | undefined
+  if (!row) return null
+  try {
+    const stored = JSON.parse(String(row.plan ?? '')) as { plan?: { roles?: unknown } }
+    const roles = stored?.plan?.roles
+    if (Array.isArray(roles)) {
+      const names = roles
+        .map((r) => (r && typeof r === 'object' ? (r as { role?: unknown }).role : null))
+        .filter((r): r is string => typeof r === 'string')
+      if (names.length) return names
+    }
+  } catch {
+    /* an unreadable plan: a run before the split */
+  }
+  return ['all']
 }
 
 /** Runs `fn` over `items`, at most `n` at once, in order of the answers. */
@@ -673,6 +710,24 @@ export async function gatherSharedUpgrade(
       code: 'ROLLBACK_SCHEMA_AHEAD',
       text: `Apps that ${from_version} already migrated keep its newer database schema under ${version}; an older version may not read data a newer one wrote.`
     })
+  // Task 14: the services the run deploys, and what changes against the last run that applied.
+  const roles = sharedRoles(settings.size).map((r) => ({ role: r.role, replicas: r.replicas }))
+  const roles_from = shared.mode === 'docker' ? await deployedRoles(shared.id) : null
+  if (roles_from) {
+    const to = roles.map((r) => r.role)
+    const added = to.filter((r) => !roles_from.includes(r))
+    const removed = roles_from.filter((r) => !to.includes(r))
+    if (added.length || removed.length)
+      warnings.push({
+        code: 'ROLES_CHANGE',
+        text: `The stack's services change (size ${settings.size}): ${[
+          added.length ? `adds ${added.join(', ')}` : '',
+          removed.length ? `removes ${removed.join(', ')}` : ''
+        ]
+          .filter(Boolean)
+          .join('; ')}. The agent creates the new services before it removes the old ones.`
+      })
+  }
   const stack = shared.stack && STACK_NAME_RE.test(shared.stack) ? shared.stack : null
   const plan_hash = hashOf({
     shared: shared.id,
@@ -687,6 +742,8 @@ export async function gatherSharedUpgrade(
     pattern: shared.host_pattern,
     hostnames,
     settings,
+    roles,
+    roles_from,
     allow: [...shared.extensions].sort(),
     apps: apps.map((a) => [a.env_id, a.tenant_id, a.blockers, a.status, a.placed]),
     blockers: blockers.map((b) => b.code)
@@ -705,6 +762,8 @@ export async function gatherSharedUpgrade(
     image,
     stack,
     hostnames,
+    roles,
+    roles_from,
     downgrade
   }
   return { plan, facts: { shared, driver, health, edge, image, extensions, hostnames, rows } }
