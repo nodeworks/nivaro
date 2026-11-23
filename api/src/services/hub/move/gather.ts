@@ -107,7 +107,11 @@ export interface MoveGatherDeps {
    * P6-20 / R2-M-1: a file of a Hub target's template project at its pinned ref (null = cannot
    * be read). Default: GitLab readFile in the template project.
    */
-  templateFile?: (targetId: number, path: string) => Promise<string | null>
+  templateFile?: (targetId: number, path: string, ref?: string) => Promise<string | null>
+  /** F4-I-1: the CI configuration path the app's own deploy project runs (null = unreadable). */
+  appCiConfigPath?: (envId: number) => Promise<string | null>
+  /** F4-I-1: the target's template project and ref (null = no target). */
+  targetTemplate?: (targetId: number) => Promise<{ project: string; ref: string } | null>
   /** What a Docker environment's stack last deployed at a version (stack-gather). */
   deployedBuild?: StackGatherDeps['deployedBuild']
   /** The identity-collision pass: how many other apps, how many at once, its total budget. */
@@ -777,14 +781,59 @@ export const BOOT_MAINTENANCE_PROOF: Readonly<Record<string, string>> = Object.f
   'manager/docker-stack.yml': 'HUB_BOOT_MAINTENANCE: ${HUB_BOOT_MAINTENANCE'
 })
 
-async function defaultTemplateFile(targetId: number, path: string): Promise<string | null> {
+async function defaultTemplateFile(
+  targetId: number,
+  path: string,
+  ref?: string
+): Promise<string | null> {
   const [{ getTargetRow, targetCtx }, { readFile }] = await Promise.all([
     import('../create/targets.js'),
     import('../gitlab-write.js')
   ])
   const row = await getTargetRow(targetId)
   if (!row?.config?.template_ref) return null
-  return readFile(targetCtx(row), path, row.config.template_ref)
+  return readFile(targetCtx(row), path, ref ?? row.config.template_ref)
+}
+
+async function defaultTargetTemplate(
+  targetId: number
+): Promise<{ project: string; ref: string } | null> {
+  const { getTargetRow } = await import('../create/targets.js')
+  const row = await getTargetRow(targetId)
+  const project = row?.config?.template_project
+  const ref = row?.config?.template_ref
+  return typeof project === 'string' && typeof ref === 'string' ? { project, ref } : null
+}
+
+/** F4-I-1: the ci_config_path the app's own deploy project has in GitLab (null = unreadable). */
+async function defaultAppCiConfigPath(envId: number): Promise<string | null> {
+  const app = (await db(`${ENVS} as e`)
+    .join('nivaro_hub_apps as a', 'a.id', 'e.app_id')
+    .where('e.id', envId)
+    .first('a.id as id', 'a.target_id as target_id', 'a.deploy_project as deploy_project')) as
+    | { id: number; target_id: number | null; deploy_project: string | null }
+    | undefined
+  if (app?.target_id == null) return null
+  const [{ getTargetRow, targetCtx }, { gitlabCall }, { appMade }] = await Promise.all([
+    import('../create/targets.js'),
+    import('../gitlab-write.js'),
+    import('../create/store.js')
+  ])
+  const target = await getTargetRow(Number(app.target_id))
+  if (!target) return null
+  const made = await appMade(Number(app.id))
+  const project =
+    made.project_id != null ? String(made.project_id) : app.deploy_project?.trim() || null
+  if (!project) return null
+  const res = await gitlabCall(targetCtx(target, project), 'readProject', '')
+  const path = (res.body as { ci_config_path?: unknown } | null)?.ci_config_path
+  return typeof path === 'string' ? path : null
+}
+
+/** `ci/deploy.yml@<project>:<ref>` → its project and ref; null for anything else. */
+function parseCiConfigPath(path: string): { file: string; project: string; ref: string } | null {
+  const m = /^([^@\s]+)@([^:\s]+):([^\s]+)$/.exec(path.trim())
+  return m ? { file: m[1], project: m[2], ref: m[3] } : null
 }
 
 /**
@@ -802,9 +851,20 @@ export async function bootMaintenanceForwarded(
       .where('e.id', ctx.envId)
       .first('a.target_id as target_id')) as { target_id: number | null } | undefined
     if (row?.target_id == null) return 'unproven'
+    const targetId = Number(row.target_id)
     const read = ctx.deps.templateFile ?? defaultTemplateFile
+    // F4-I-1 (P6-39): the deploy job is the one the app's OWN project runs (its ci_config_path),
+    // never only the target's current template: a re-sync that failed or is still pending leaves
+    // the app on an older deploy.yml that ignores the pin line. Anything unreadable, not the
+    // template's deploy file, or another project's template: unproven.
+    const template = await (ctx.deps.targetTemplate ?? defaultTargetTemplate)(targetId)
+    const ci = await (ctx.deps.appCiConfigPath ?? defaultAppCiConfigPath)(ctx.envId)
+    const pinned = ci ? parseCiConfigPath(ci) : null
+    if (!template || !pinned || pinned.file !== 'ci/deploy.yml') return 'unproven'
+    if (pinned.project !== template.project) return 'unproven'
     for (const [path, marker] of Object.entries(BOOT_MAINTENANCE_PROOF)) {
-      const text = await read(Number(row.target_id), path)
+      // The deploy job at the app's own ref; the manager files at the target's (host side).
+      const text = await read(targetId, path, path === 'ci/deploy.yml' ? pinned.ref : undefined)
       if (!text?.includes(marker)) return 'unproven'
     }
     return 'forwarded'
