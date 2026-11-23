@@ -1,7 +1,7 @@
 import { cronTicksEnabled } from './cron-ticks.js'
-import { isMultiTenant } from './deployment-mode.js'
+import { isNivaroCloud } from './deployment-mode.js'
 import { isRetiredSync } from './hub-link/retire.js'
-import { handoffDbScope, handoffPrefix } from './import-handoff.js'
+import { handoffDbScope, handoffPrefix, kickPayload } from './import-handoff.js'
 import { processRole } from './process-role.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
@@ -26,6 +26,13 @@ import { currentTenantKey } from './tenant-rooms.js'
  *   importer <prefix>nvr:export-worker:<db>:importer       an importer draining exports, 90 s TTL
  *   fallback <prefix>nvr:export-worker:<db>:fallback       any other drainer, 90 s TTL
  *
+ * Hub shared deployment (one process, many apps, one Redis; Task 15, as Task 4 did for imports):
+ * inside an app every key but the kick channel carries the app after `<db>`
+ * (`…:export-handoff:<db>:<app>`, `…:export-worker:<db>:<app>`), and the kick, on the one
+ * deployment channel, says which app: `<app>|<run id>` (import-handoff.ts kickPayload / parseKick).
+ * Each app's drainers beat on its own keys, so the importer and the worker stand in for the
+ * exporter app by app. Self-hosted keys and payloads are byte-identical to before.
+ *
  * Every script names all its keys in KEYS (Redis Cluster / Dragonfly refuse undeclared keys):
  * leases are fields of one hash with their expiry in the value, not keys with a TTL.
  *
@@ -40,7 +47,7 @@ import { currentTenantKey } from './tenant-rooms.js'
  * drainer beats any more it takes the job back (LREM — atomic against the drainer's LPOP) and
  * runs it itself.
  *
- * Never in cloud mode (a cloud export runs where it started). EXPORT_HANDOFF=off runs every
+ * Never in Nivaro Cloud (a cloud export runs where it started). EXPORT_HANDOFF=off runs every
  * export where it started.
  */
 
@@ -80,18 +87,27 @@ export const EXPORT_TAKE_BACK_MS = 15_000
 /** Readiness warns when an export has waited this long with nothing draining. */
 export const EXPORT_STUCK_MS = 2 * 60_000
 
-const base = () => `${handoffPrefix()}nvr:export-handoff:${handoffDbScope()}`
+/** `:<app>` inside an app on a multi-app process; '' self-hosted, so its keys stay identical. */
+const appScope = () => {
+  const t = currentTenantKey()
+  return t ? `:${t}` : ''
+}
+const deploymentBase = () => `${handoffPrefix()}nvr:export-handoff:${handoffDbScope()}`
+const base = () => `${deploymentBase()}${appScope()}`
 export const exportQueueKey = () => base()
-export const exportKickChannel = () => `${base()}:kick`
+/** One channel for the deployment: the payload names the app (kickPayload / parseKick). */
+export const exportKickChannel = () => `${deploymentBase()}:kick`
 export const exportClaimedKey = () => `${base()}:claimed`
 export const exportLeasesKey = () => `${base()}:leases`
-export const exportWorkerKey = () => `${handoffPrefix()}nvr:export-worker:${handoffDbScope()}`
+export const exportWorkerKey = () =>
+  `${handoffPrefix()}nvr:export-worker:${handoffDbScope()}${appScope()}`
 export const exportImporterBeatKey = () => `${exportWorkerKey()}:importer`
 export const exportFallbackKey = () => `${exportWorkerKey()}:fallback`
 
-/** Hand-offs are possible at all: self-hosted, and not switched off. */
+/** Hand-offs are possible at all: self-hosted or a Hub shared deployment (per app), and not
+ *  switched off. Never in Nivaro Cloud. */
 export function exportHandoffEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  if (isMultiTenant(env)) return false
+  if (isNivaroCloud(env)) return false
   return (env.EXPORT_HANDOFF ?? '').trim().toLowerCase() !== 'off'
 }
 
@@ -105,6 +121,10 @@ export function exportHandoffEnabled(env: NodeJS.ProcessEnv = process.env): bool
  *   inline    a single process (no NIVARO_ROLE) that ticks crons
  *   off       EXPORT_WORKER=off, EXPORT_HANDOFF=off, cloud, web / realtime / canary, a process
  *             whose crons do not tick
+ *
+ * A Hub shared deployment reads the same modes; every drainer there runs a per-app pass (the
+ * exporter's own, export-worker.ts drainEveryAppExports) and hears the deployment's kicks, and
+ * the importer / fallback stand down per app, only where that app's exporter beats.
  */
 export type ExportDrainMode = 'exporter' | 'enabled' | 'importer' | 'fallback' | 'inline' | 'off'
 
@@ -198,7 +218,7 @@ export function runIdOf(raw: string | null | undefined): number | null {
 export async function enqueueExport(r: ExportRedis, job: ExportJob): Promise<string> {
   const raw = JSON.stringify({ ...job, queued_at: job.queued_at ?? Date.now() })
   await r.rpush(exportQueueKey(), raw)
-  await r.publish(exportKickChannel(), String(job.run_id)).catch(() => 0)
+  await r.publish(exportKickChannel(), kickPayload(String(job.run_id))).catch(() => 0)
   return raw
 }
 

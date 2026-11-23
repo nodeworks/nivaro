@@ -1889,11 +1889,12 @@
       "line": 92,
       "text": "if (env.CLOUD_META_DB_URL) return false",
       "form": "env-param",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T4",
-      "why": "export hand-off worker is process-wide",
-      "batch": "D"
+      "why": "exportHandoffEnabled. Now isNivaroCloud() (EXTRA_CALLS): a Hub shared deployment hands exports off per app (app-keyed list and beats, kick `<app>|<run id>`)",
+      "batch": "D",
+      "phase6": "done: per-app export hand-off keys, kicks and drain pass (Hub shared features Task 15)"
     },
     {
       "id": "services/export-limits.ts:39",
@@ -1985,11 +1986,12 @@
       "line": 323,
       "text": "cloud: !!process.env.CLOUD_META_DB_URL,",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T4",
-      "why": "export worker judgement (wire field `cloud`)",
-      "batch": "D"
+      "why": "export worker judgement (wire field `cloud`). Now isNivaroCloud() (EXTRA_CALLS): a Hub shared deployment judges each app's own export drainers",
+      "batch": "D",
+      "phase6": "done: per-app export hand-off (Hub shared features Task 15)"
     },
     {
       "id": "services/flow-executor.ts:182",

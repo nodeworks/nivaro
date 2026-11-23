@@ -426,10 +426,11 @@ export async function buildServer() {
       void startImportDrainer(app).catch((err) =>
         app.log.warn({ err }, '[import-worker] did not start')
       )
-      // Background exports handed off by web processes run on the same drainers
-      // (services/export-handoff.ts; EXPORT_HANDOFF=off keeps every export where it started).
-      // Self-hosted only: the export hand-off is not per app yet.
-      if (!perAppJobs()) {
+      // Background exports handed off by web processes run on the exporter, else the same
+      // drainers (services/export-handoff.ts; EXPORT_HANDOFF=off keeps every export where it
+      // started). A Hub shared deployment drains per app: a pass over every app plus the
+      // deployment's kicks, started once here, outside any app (services/export-worker.ts).
+      {
         const { startExportDrainer } = await import('./services/export-worker.js')
         void startExportDrainer(app).catch((err) =>
           app.log.warn({ err }, '[export-worker] did not start')

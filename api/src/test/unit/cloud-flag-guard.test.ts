@@ -64,6 +64,11 @@ const EXTRA_CALLS: Record<string, { multiTenant?: number; nivaroCloud?: number }
   // shared deployment queues, kicks, leases and drains inside each app.
   'services/import-handoff.ts': { nivaroCloud: 3 },
   'routes/imports.ts': { nivaroCloud: 1 },
+  // Exports per app (Task 15): exportHandoffEnabled and the export worker's judgement refuse in
+  // Nivaro Cloud only (their T4 entries are weight 0); a Hub shared deployment hands off, beats and
+  // drains inside each app.
+  'services/export-handoff.ts': { nivaroCloud: 1 },
+  'services/export-worker.ts': { nivaroCloud: 1 },
   // Retention pass and digests per app: the Monday AI summary (audience + register-once) and the
   // Log retention page's `cloud` field refuse in Nivaro Cloud only (their T6 entries are weight 0);
   // a Hub shared deployment runs each inside its apps. (The Traffic Map digest stays off on shared.)

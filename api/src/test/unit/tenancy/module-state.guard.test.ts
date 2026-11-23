@@ -73,8 +73,6 @@ const OFF_CHANGEWARM =
 const OFF_DOCKER = 'Docker sources answer nothing on a multi-tenant deployment (docker-source.ts)'
 const OFF_STORED_LIMITS =
   'stored export limits are never read on a multi-tenant deployment (env + defaults only)'
-const OFF_EXPORT_HANDOFF =
-  'export hand-offs are off on any multi-tenant deployment (exportHandoffEnabled)'
 const OFF_MEDIA_HANDOFF =
   'media hand-offs are off on any multi-tenant deployment (media-handoff.ts)'
 const OFF_FILES_FALLBACK =
@@ -549,8 +547,8 @@ const SHARED: Record<string, string> = {
   'services/export-limits.ts :: stored': OFF_STORED_LIMITS,
   'services/export-worker.ts :: closing': 'set once the process is stopping',
   'services/export-worker.ts :: drainer': 'the process drain loop handle',
-  'services/export-worker.ts :: runningHere': OFF_EXPORT_HANDOFF,
-  'services/export-worker.ts :: ticking': OFF_EXPORT_HANDOFF,
+  'services/export-worker.ts :: passing':
+    "a drainer's per-app pass in flight on this process (it walks every app; one at a time)",
   'services/extension-events.ts :: handlers': REGISTRY,
   'services/extension-schema-steps.ts :: declared': REGISTRY,
   'services/extension-tools.ts :: isEnabled': FN_SLOT,
@@ -1309,6 +1307,7 @@ const LEFT_ON_LEAVE: Record<string, string> = {
     'a `let` filled lazily; each entry lives 60 s (LIVE_CACHE_MS) and is rebuilt after',
   'services/db-tuning/observe-run.ts :: running': INFLIGHT,
   'services/export-runs.ts :: local': INFLIGHT,
+  'services/export-worker.ts :: runningHere': INFLIGHT,
   'services/flow-executor.ts :: runningFlows': INFLIGHT,
   'services/help-video-render.ts :: queueStates': INFLIGHT,
   'services/hub-transfer/pull.ts :: runs': INFLIGHT,
