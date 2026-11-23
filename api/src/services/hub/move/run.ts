@@ -45,6 +45,7 @@ import {
   type MoveFilesSummary,
   type MoveStatus,
   type MoveSteps,
+  mergeChecklist,
   mergeSteps,
   OPEN_MOVE_STATUSES,
   openMoveOf,
@@ -1175,16 +1176,15 @@ async function dropTempName(ctx: Ctx): Promise<void> {
     // E2E B3: where to check, on the public scheme and port it was served on.
     const at = move?.steps.addresses?.target_link_base ?? host
     ctx.run.log(`the per-move name ${host} is still on the target stack (${se.code})`, 'warn')
-    const checklist = (move?.checklist ?? []).filter((c) => c.id !== 'temp_host')
-    checklist.push({
+    const item = {
       id: 'temp_host',
       text: safeLine(
         `Still to do: remove the per-move name ${host} from the target stack. Apply the environment's stack again (Apply now renders only the environment's own names), then check that ${at} no longer serves the app.`
       ),
       required: false,
       done: false
-    })
-    await patchMove(ctx.moveId, { checklist })
+    }
+    await mergeChecklist(ctx.moveId, (c) => [...c.filter((x) => x.id !== 'temp_host'), item])
   }
 }
 
@@ -1218,18 +1218,18 @@ async function finishSuccess(ctx: Ctx, warning: string | null): Promise<void> {
 
 /** After release a failing retire_source never rolls back: success with the item open. */
 async function finishRetireFailed(ctx: Ctx, steps: MoveSteps, err: MoveStepError): Promise<void> {
-  const move = await readMove(ctx.moveId)
-  const checklist = [...(move?.checklist ?? [])]
-  const item = checklist.find((c) => c.id === 'retire_source')
-  if (item) item.done = false
-  else
-    checklist.push({
-      id: 'retire_source',
-      text: 'Retire the old placement by hand: the Hub could not (see the move log).',
-      required: false,
-      done: false
-    })
-  await patchMove(ctx.moveId, { checklist })
+  await mergeChecklist(ctx.moveId, (checklist) => {
+    const item = checklist.find((c) => c.id === 'retire_source')
+    if (item) item.done = false
+    else
+      checklist.push({
+        id: 'retire_source',
+        text: 'Retire the old placement by hand: the Hub could not (see the move log).',
+        required: false,
+        done: false
+      })
+    return checklist
+  })
   // The steps after retire_source (done) still count as done.
   for (const s of steps.list) if (s.key === 'done') s.state = 'done'
   await saveSteps(ctx, steps)
@@ -1312,9 +1312,6 @@ async function targetStopText(move: HubMoveRow, sourceFrozen: boolean): Promise<
  */
 async function halt(ctx: Ctx, move: HubMoveRow, sourceFrozen: boolean): Promise<void> {
   const say = await targetStopText(move, sourceFrozen)
-  const fresh = (await readMove(ctx.moveId)) ?? move
-  const checklist = fresh.checklist.filter((c) => c.id !== 'target_stopped')
-  checklist.push({ id: 'target_stopped', text: say, required: true, done: false })
   // R5-I-1: worded from the source's real state, never "stays in maintenance" when it serves.
   // FW-4 I-1: and what the Hub did to the target, never more: it set its maintenance after the
   // deploy (target_maint_set), or the target was deployed to start in it (a Docker stack's boot
@@ -1330,14 +1327,18 @@ async function halt(ctx: Ctx, move: HubMoveRow, sourceFrozen: boolean): Promise<
   const ours = await patchMoveIfHolder(ctx.moveId, ctx.held.envToken, {
     status: 'interrupted',
     error: safeLine(error),
-    checklist,
     heartbeat_at: null
   })
   if (!ours) {
     ctx.run.log('stopped: this run no longer holds the move', 'error')
     await ctx.run.fail(new Error('Interrupted: the run lost its locks.'))
     return
-  }
+  } // A tick made meanwhile is kept (compare-and-set); a tick of an earlier halt's item is reset.
+  await mergeChecklist(ctx.moveId, (c) => [
+    ...c.filter((x) => x.id !== 'target_stopped'),
+    { id: 'target_stopped', text: say, required: true, done: false }
+  ])
+
   await closeDeployRow(ctx, 'interrupted', error)
   ctx.run.log(error, 'error')
   await logActivity({
@@ -1466,9 +1467,10 @@ async function rollBack(
   const repoint = said?.sure ? said.text : null
   if (said) {
     ctx.run.log(said.text, said.sure ? 'error' : 'warn')
-    const checklist = (move.checklist ?? []).filter((c) => c.id !== 'repoint_name')
-    checklist.push({ id: 'repoint_name', text: said.text, required: said.sure, done: false })
-    await patchMove(ctx.moveId, { checklist })
+    await mergeChecklist(ctx.moveId, (c) => [
+      ...c.filter((x) => x.id !== 'repoint_name'),
+      { id: 'repoint_name', text: said.text, required: said.sure, done: false }
+    ])
   }
   const recover =
     failed.includes('route') || failed.includes('maintenance_on')
@@ -1476,10 +1478,10 @@ async function rollBack(
       : null
   if (recover) {
     ctx.run.log(recover, 'error')
-    const fresh = (await readMove(ctx.moveId)) ?? move
-    const checklist = fresh.checklist.filter((c) => c.id !== 'restore_source')
-    checklist.push({ id: 'restore_source', text: safeLine(recover), required: true, done: false })
-    await patchMove(ctx.moveId, { checklist })
+    await mergeChecklist(ctx.moveId, (c) => [
+      ...c.filter((x) => x.id !== 'restore_source'),
+      { id: 'restore_source', text: safeLine(recover), required: true, done: false }
+    ])
   }
   // The recovery goes first: the stored error is cut at 1000 characters.
   const base = failed.length
@@ -1748,11 +1750,18 @@ export async function setMoveChecklist(
   if (!move) throw new MoveError('NOT_FOUND', 'No such move.', 404)
   if (typeof item !== 'string' || typeof done !== 'boolean')
     throw new MoveError('BAD_ITEM', 'Send {item, done}: an item id and true or false.', 400)
-  const checklist = [...move.checklist]
-  const found = checklist.find((c) => c.id === item)
-  if (!found) throw new MoveError('UNKNOWN_ITEM', 'This move has no such checklist item.', 400)
-  found.done = done
-  await patchMove(id, { checklist })
+  let checklist: MoveChecklistState[] = []
+  let known = false
+  // Final review moves Minor 2: compare-and-set, so a tick never drops an item the run adds.
+  await mergeChecklist(id, (stored) => {
+    const found = stored.find((c) => c.id === item)
+    known = !!found
+    if (!found) return null
+    found.done = done
+    checklist = stored
+    return stored
+  })
+  if (!known) throw new MoveError('UNKNOWN_ITEM', 'This move has no such checklist item.', 400)
   await logActivity({
     action: 'hub-move-checklist',
     user: by,

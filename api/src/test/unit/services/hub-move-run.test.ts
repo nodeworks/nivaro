@@ -2083,6 +2083,33 @@ describe('step list writes are atomic (R3-M-1)', () => {
   })
 })
 
+// Final review moves Minor 2 (FW-4): a person's tick and the run's own checklist items are
+// compare-and-set writes, so neither drops the other.
+describe('checklist writes are atomic (FW-4)', () => {
+  it('a tick and an item the run adds at the same time both land', async () => {
+    plan = planOf('to_shared')
+    const w = await world('docker')
+    const { move_id } = await start(w, toFor('to_shared', w))
+    await Run.awaitMove(move_id)
+    const { mergeChecklist } = await import('../../../services/hub/move/rows.js')
+    await Promise.all([
+      Run.setMoveChecklist(move_id, 'callbacks_registered', false, 'u'),
+      mergeChecklist(move_id, (c) => [
+        ...c.filter((x) => x.id !== 'target_stopped'),
+        { id: 'target_stopped', text: 'Stop it.', required: true, done: false }
+      ]),
+      mergeChecklist(move_id, (c) => [
+        ...c,
+        { id: 'temp_host', text: 'Still to do.', required: false, done: false }
+      ])
+    ])
+    const m = await readMove(move_id)
+    const ids = m?.checklist.map((c) => c.id) ?? []
+    expect(ids).toEqual(expect.arrayContaining(['target_stopped', 'temp_host']))
+    expect(m?.checklist.find((c) => c.id === 'callbacks_registered')?.done).toBe(false)
+  })
+})
+
 // Ruling P6-27: the per-move name never stays on a live target after the move.
 describe('per-move name removed at the end (P6-27)', () => {
   const TEMP = 'hub-move-9-e1.example.com'

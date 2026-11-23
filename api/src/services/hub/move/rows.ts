@@ -288,6 +288,33 @@ export async function patchMoveIfHolder(
   return false
 }
 
+/**
+ * Final review moves Minor 2 (FW-4): an atomic change of a move's checklist — compare-and-set on
+ * the stored text, retried — like mergeSteps. A person's tick (setMoveChecklist) and the items the
+ * run adds (target_stopped, repoint_name, restore_source, temp_host, retire_source) never drop
+ * each other. `change` answers the new list, or null for no write. Answers whether it wrote.
+ */
+export async function mergeChecklist(
+  id: number,
+  change: (stored: MoveChecklistState[]) => MoveChecklistState[] | null
+): Promise<boolean> {
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const row = (await db(MOVES).where({ id }).first('checklist')) as
+      | { checklist: unknown }
+      | undefined
+    if (!row) return false
+    const raw = row.checklist == null ? null : String(row.checklist)
+    const stored = moveFromRow({ id, checklist: raw }).checklist
+    const next = change(structuredClone(stored))
+    if (!next) return false
+    const q = db(MOVES).where({ id })
+    if (raw === null) q.whereNull('checklist')
+    else q.where({ checklist: raw })
+    if (Number(await q.update({ checklist: JSON.stringify(next) }))) return true
+  }
+  throw new Error('the move checklist kept changing under this write')
+}
+
 /** The step list a plan's steps start as. */
 export function freshSteps(keys: readonly MoveStepKey[]): MoveSteps {
   return { list: keys.map((key) => ({ key, state: 'pending' as const })), phase: 'forward' }
