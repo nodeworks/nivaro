@@ -16,7 +16,13 @@ import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn, formatRelative } from '@/lib/utils'
-import { isLivePromotion, promotionStatusTone, promotionStatusWords } from '../hub-api'
+import {
+  isLivePromotion,
+  promotionStatusTone,
+  promotionStatusWords,
+  RUN_ERROR_COPY,
+  splitRunError
+} from '../hub-api'
 import { dangerArmed, dangerGhost, SectionCard } from '../hub-parts'
 import { type SharedDeployment, sharedError, sharedKeys, WARNING_COPY } from './shared-api'
 import {
@@ -25,14 +31,17 @@ import {
   fetchSharedDeploy,
   fetchSharedDeploys,
   fetchSharedVersions,
+  heldByPlan,
   isDowngrade,
   isOverridable,
   KIND_WORDS,
+  logLineWords,
   newestFirst,
   openBlockers,
   overrideId,
   planSharedUpgrade,
   refusedPlanOf,
+  restatesTitle,
   runErrorText,
   type SharedDeploy,
   type SharedUpgradeKind,
@@ -603,7 +612,17 @@ function PlanPreview({
                 </td>
                 <td className='px-3 py-1.5'>
                   {a.blockers.length === 0 ? (
-                    <span className='text-emerald-700 dark:text-emerald-300'>Ready</span>
+                    heldByPlan(plan.blockers, a) ? (
+                      // A plan-wide BUSY names this environment: it is held, not ready.
+                      <span
+                        data-tip='Something else holds this environment (see above)'
+                        className='font-medium text-amber-700 dark:text-amber-300'
+                      >
+                        Busy
+                      </span>
+                    ) : (
+                      <span className='text-emerald-700 dark:text-emerald-300'>Ready</span>
+                    )
                   ) : (
                     <ul className='m-0 list-none space-y-1 p-0'>
                       {a.blockers.map((code, i) => (
@@ -659,7 +678,11 @@ function PlannerNote({
   text: string
 }) {
   const t = NOTE_TONE[tone]
-  const detail = text && text !== copy.title && !isRawErrorText(text) ? text : null
+  // One clear sentence per row: the planner's own only when it adds something (a name, a case).
+  const detail =
+    text && text !== copy.title && !isRawErrorText(text) && !restatesTitle(copy.title, text)
+      ? text
+      : null
   return (
     <li className={cn('rounded-md border px-3 py-2', t.box)}>
       <p className={cn('m-0 text-[12px] font-medium', t.title)}>{copy.title}</p>
@@ -701,7 +724,7 @@ function AppBlocker({
       >
         {c.title}
       </p>
-      {note && !isRawErrorText(note) && (
+      {note && !isRawErrorText(note) && !restatesTitle(c.title, note) && (
         <p className='m-0 mt-0.5 text-[11.5px] text-slate-600 dark:text-slate-300'>{note}</p>
       )}
       {overridable && (
@@ -865,29 +888,51 @@ function UpgradeProgress({
                     : 'text-slate-600 dark:text-slate-300'
               )}
             >
-              {isRawErrorText(l.line) ? 'A step reported an error (see the job run).' : l.line}
+              {isRawErrorText(logLineWords(l.line))
+                ? 'A step reported an error (see the job run).'
+                : logLineWords(l.line)}
             </li>
           ))}
         </ol>
       )}
 
-      {d.error && (
-        <p
-          role='status'
-          className='m-0 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[12px] text-red-800 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-200'
-        >
-          {isRawErrorText(runErrorText(d.error))
-            ? 'The run stopped with an error. Its job run has the details.'
-            : runErrorText(d.error)}
-        </p>
-      )}
-      {d.status === 'failed' && (
-        <p className='m-0 text-[12px] text-slate-600 dark:text-slate-300'>
-          Nothing was reverted. Fix what failed and upgrade again, or roll back to{' '}
-          <span className='font-mono'>{d.from_version ?? 'the earlier version'}</span>.
-        </p>
-      )}
+      {d.error && <RunStopped error={d.error} />}
+      {d.status === 'failed' &&
+        (splitRunError(d.error ?? '').code === 'SWARM_ROLLED_BACK' ? (
+          // Swarm itself put the earlier spec back: saying "nothing was reverted" would be wrong.
+          <p className='m-0 text-[12px] text-slate-600 dark:text-slate-300'>
+            Swarm put the previous version back: the apps still run{' '}
+            <span className='font-mono'>{d.from_version ?? 'the earlier version'}</span>. Fix what
+            failed and upgrade again.
+          </p>
+        ) : (
+          <p className='m-0 text-[12px] text-slate-600 dark:text-slate-300'>
+            Nothing was reverted. Fix what failed and upgrade again, or roll back to{' '}
+            <span className='font-mono'>{d.from_version ?? 'the earlier version'}</span>.
+          </p>
+        ))}
       {cancelFailure && <ErrorNotice description={cancelFailure} />}
+    </div>
+  )
+}
+
+/** How a run stopped: plain words for its code, then its own sentence (never the code). */
+function RunStopped({ error }: { error: string }) {
+  const { code } = splitRunError(error)
+  const title = code ? RUN_ERROR_COPY[code]?.title : undefined
+  const sentence = runErrorText(error)
+  const raw = isRawErrorText(sentence)
+  return (
+    <div
+      role='status'
+      className='m-0 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[12px] text-red-800 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-200'
+    >
+      {title && <p className='m-0 font-medium'>{title}</p>}
+      {raw
+        ? !title && (
+            <p className='m-0'>The run stopped with an error. Its job run has the details.</p>
+          )
+        : sentence !== title && <p className='m-0'>{sentence}</p>}
     </div>
   )
 }

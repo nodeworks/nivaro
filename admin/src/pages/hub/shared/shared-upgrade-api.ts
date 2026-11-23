@@ -301,7 +301,7 @@ export const UPGRADE_COPY: Record<string, { title: string; hint?: string }> = {
   },
   BUSY: {
     title: 'Something else holds this deployment or one of its apps',
-    hint: 'A move, a placement or another upgrade is running. Wait for it to finish, then plan again.'
+    hint: 'Wait for it to finish, then plan again.'
   },
   VERSION_UNKNOWN: {
     title: 'That version is not in the image registry',
@@ -441,4 +441,60 @@ export const KIND_WORDS: Record<string, string> = {
   upgrade: 'Upgrade',
   rollback: 'Rollback',
   observed: 'Seen running'
+}
+
+// ─── Design review P6-29: words, not codes ──────────────────────────────────────────────────
+
+const STATUS_LINE_WORDS: Record<string, string> = {
+  failed: 'Failed',
+  cancelled: 'Cancelled',
+  interrupted: 'Interrupted'
+}
+
+/**
+ * One run log line for people: a stop line (`failed: CODE: sentence`) loses its code; a line
+ * that starts with a step key (`render: …`) starts with the step's name instead. Anything else
+ * (the run's own numbered lines) stays as written.
+ */
+export function logLineWords(line: string): string {
+  const stop = /^(failed|cancelled|interrupted):\s*[A-Z][A-Z0-9_]{2,63}:\s*([\s\S]*)$/.exec(line)
+  if (stop) return `${STATUS_LINE_WORDS[stop[1]]}: ${stop[2].trim()}`
+  const step = /^([a-z_]+):\s*([\s\S]*)$/.exec(line)
+  const label = step && UPGRADE_STEPS.find((s) => s.key === step[1])?.label
+  return label ? `${label}: ${step[2].trim()}` : line
+}
+
+const STOP_WORDS = new Set(['the', 'a', 'an', 'its', 'this'])
+const words = (t: string): string[] =>
+  t
+    .toLowerCase()
+    .replace(/\b(does|did|do)(n't| not)\b/g, ' not ')
+    .replace(/[^a-z0-9/ ]+/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w && !STOP_WORDS.has(w))
+
+/**
+ * The planner's sentence says nothing the title does not ("The Hub agent does not answer." under
+ * "The Hub agent did not answer"): every word of it is in the title, tense aside.
+ */
+export function restatesTitle(title: string, text: string): boolean {
+  const t = new Set(words(title))
+  const d = words(text)
+  return d.length > 0 && d.every((w) => t.has(w))
+}
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/**
+ * A plan-wide BUSY (or LOCK_UNAVAILABLE) row names the environment it holds as `app/env`: that
+ * app is not ready, even with no blocker of its own.
+ */
+export function heldByPlan(
+  blockers: { code: string; text: string }[],
+  app: { app: string; env: string }
+): boolean {
+  const name = new RegExp(`(^|[\\s(])${escapeRe(`${app.app}/${app.env}`)}($|[\\s:,.)—])`)
+  return blockers.some(
+    (b) => (b.code === 'BUSY' || b.code === 'LOCK_UNAVAILABLE') && name.test(b.text)
+  )
 }

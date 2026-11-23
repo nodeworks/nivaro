@@ -643,4 +643,73 @@ describe('SharedUpgradePanel', () => {
       expect(body).not.toHaveProperty('downgrade')
     })
   })
+
+  describe('design review S5 + S8 on screen', () => {
+    const failedRun = (error: string): SharedDeploy => ({
+      id: 33,
+      shared_deployment_id: 4,
+      kind: 'upgrade',
+      version: '0.4.0',
+      from_version: '0.3.210',
+      status: 'failed',
+      step: 'wait_version',
+      error,
+      job_run_id: 1,
+      started_by: null,
+      started_at: '2026-11-20T10:00:00.000Z',
+      finished_at: '2026-11-20T10:10:00.000Z'
+    })
+    const openRun = async () => {
+      const list = await screen.findByRole('list', { name: 'Upgrade history' })
+      fireEvent.click(within(list).getByRole('button', { name: 'Details' }))
+      return screen.findByRole('list', { name: 'Upgrade steps' })
+    }
+
+    it('S5: a swarm rollback says the earlier version runs again, never "Nothing was reverted"', async () => {
+      history = [
+        failedRun(
+          'SWARM_ROLLED_BACK: Swarm rolled shared-one back to its previous spec — the new tasks did not become healthy.'
+        )
+      ]
+      wrap()
+      await openRun()
+      expect(screen.getByText('Swarm put the previous version back')).toBeInTheDocument()
+      expect(screen.getByText(/the apps still run/)).toHaveTextContent(
+        'Swarm put the previous version back: the apps still run 0.3.210. Fix what failed and upgrade again.'
+      )
+      expect(screen.queryByText(/Nothing was reverted/)).toBeNull()
+      expect(shownText()).not.toContain('SWARM_ROLLED_BACK')
+    })
+
+    it('S5: another failure keeps "Nothing was reverted" under plain words', async () => {
+      history = [failedRun('VERSION_TIMEOUT: 1 of 2 replicas still run 0.3.210.')]
+      wrap()
+      await openRun()
+      expect(screen.getByText('The replicas did not reach the version in time')).toBeInTheDocument()
+      expect(screen.getByText('1 of 2 replicas still run 0.3.210.')).toBeInTheDocument()
+      expect(screen.getByText(/Nothing was reverted/)).toBeInTheDocument()
+    })
+
+    it('S8: an app a plan-wide BUSY holds shows Busy, not Ready', async () => {
+      planned = plan({
+        blockers: [{ code: 'BUSY', text: 'acme/prod: a promotion holds this environment.' }]
+      })
+      wrap()
+      const table = await screen.findByRole('table', { name: 'Apps this upgrade touches' })
+      const rows = within(table).getAllByRole('row')
+      expect(within(rows[1]).getByText('Busy')).toBeInTheDocument()
+      expect(within(rows[1]).queryByText('Ready')).toBeNull()
+      expect(within(rows[2]).getByText('Ready')).toBeInTheDocument()
+    })
+
+    it('S7: an agent row says it once', async () => {
+      planned = plan({
+        blockers: [{ code: 'AGENT_UNREACHABLE', text: 'The Hub agent does not answer.' }]
+      })
+      wrap()
+      const list = await screen.findByRole('list', { name: 'What holds it back' })
+      expect(within(list).getByText('The Hub agent did not answer')).toBeInTheDocument()
+      expect(within(list).queryByText('The Hub agent does not answer.')).toBeNull()
+    })
+  })
 })
