@@ -1340,3 +1340,41 @@ describe('final fix wave FW-1 — a Docker shared deployment (I-3, M-6)', () => 
     }
   })
 })
+
+describe('re-review FW1-I-1: a retry naming another database is judged like a first place', () => {
+  it('the same database skips the checks; a different, live one is refused USE_MOVE', async () => {
+    const app = await newApp()
+    const envId = await newEnv(app.id)
+    TENANTS = [Store.tenantIdFor(app, { id: envId })]
+    const failing = fakeClient({ schema: () => ({ state: 'failed', error: 'boom' }) })
+    await place(
+      envId,
+      { database_id: await newDb() },
+      { client: failing.factory, startJobRun: fakeRun().start }
+    )
+    await Place.awaitPlacement(envId)
+    const env = await db('nivaro_hub_environments').where({ id: envId }).first()
+    expect(env.status).toBe('provisioning')
+    // Another database that holds a live install (an adopted app's unattached record).
+    const live = fakeClient()
+    live.client.dbCheck.mockResolvedValue({
+      reachable: true,
+      ledger: { count: 600, latest: '553_hub_moves' },
+      ledger_state: 'present',
+      db_identity: null,
+      error: null
+    })
+    const err = await refusal(
+      place(envId, { database_id: await newDb() }, { client: live.factory })
+    )
+    expect(err).toMatchObject({ code: 'USE_MOVE', statusCode: 409 })
+    expect(live.client.dbCheck).toHaveBeenCalledTimes(1)
+    const after = await db('nivaro_hub_environments').where({ id: envId }).first()
+    expect(after.db_ref).toBe(env.db_ref)
+    // One that cannot be looked at: unknown, never a pass.
+    live.client.dbCheck.mockRejectedValueOnce(new DeploymentLinkError('LINK_UNREACHABLE'))
+    expect(
+      (await refusal(place(envId, { database_id: await newDb() }, { client: live.factory }))).code
+    ).toBe('SERVING_UNKNOWN')
+  })
+})

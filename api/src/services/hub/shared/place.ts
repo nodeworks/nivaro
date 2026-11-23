@@ -12,6 +12,7 @@ import { attachDatabase, getDatabase, openDatabaseConnection } from '../db/datab
 import { HubDbError } from '../db/servers.js'
 import { agentHealth as realAgentHealth } from '../docker/agent-client.js'
 import { environmentNames } from '../docker/render-spec.js'
+import { databaseRecordId } from '../docker/stack-env.js'
 import { stackEditRefusal } from '../docker/stack-guards.js'
 import {
   createPlacement,
@@ -801,15 +802,19 @@ async function checkAndWrite(
       'USE_MOVE',
       'This environment has a dedicated placement: it runs, or ran, there. Move it to the shared deployment instead. If it never ran there, clear its placement first.'
     )
-  if (!sharedRetry && env.hub_token) await assertLinkSilent(env, deps)
+  // Re-review FW1-I-1: only a retry that names the database its first run attached skips the
+  // checks; a retry naming another database is judged as a first placement (it could be a live
+  // app's record).
+  const sameRetry = sharedRetry && databaseRecordId(env.db_ref) === input.database_id
+  if (!sameRetry && env.hub_token) await assertLinkSilent(env, deps)
 
   // Ruling P6-11 (I-3): a key is generated only for a database known to be empty, looked at
   // live from the shared deployment (no nivaro_migrations table or rows). One that holds an
   // install, or cannot be looked at, needs the app's own key entered first. I-1: with a known
   // key, a database that already holds an install is an app that has served → USE_MOVE.
   const known = await openAppKey(envId)
-  if (!known) await assertDatabaseEmpty(input.database_id, shared0, deps, sharedRetry)
-  else if (!sharedRetry) await assertDatabaseUnserved(input.database_id, shared0, deps)
+  if (!known) await assertDatabaseEmpty(input.database_id, shared0, deps, sameRetry)
+  else if (!sameRetry) await assertDatabaseUnserved(input.database_id, shared0, deps)
 
   const sharedLock = deps.sharedLock ?? defaultSharedLock()
   const held = await sharedLock.take(input.shared_id, 'place')
