@@ -1075,7 +1075,7 @@ describe('HubMovePanel — a move in progress', () => {
         phase: 'forward'
       }),
       error:
-        'LINK_UNREACHABLE: The Hub could not reach the new home to check its key (it did not answer) — Resume to try again.'
+        'APP_KEY_UNCHECKED_UNREACHABLE: The Hub could not reach the new home to check its key (LINK_UNREACHABLE: it did not answer) — Resume to try again.'
     })
     renderPanel()
     expect(await screen.findByRole('button', { name: 'Resume' })).toBeInTheDocument()

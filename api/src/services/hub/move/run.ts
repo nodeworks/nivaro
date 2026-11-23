@@ -1327,6 +1327,12 @@ class RetireKeyStop extends MoveStepError {
   }
 }
 
+/**
+ * Round 1b: the stored code of a retire_source stop whose new home could not be asked (the
+ * admin recognises the case by this code, never by text). The link's own code is in the sentence.
+ */
+export const RETIRE_UNREACHABLE_CODE = 'APP_KEY_UNCHECKED_UNREACHABLE'
+
 /** The two ways out of a stop at retire_source (ruling P6-43 (c)). */
 const RETIRE_STOP_WAYS =
   'Either enter the key the new home runs under App key on this environment (the Hub takes it only when its fingerprint matches the one the new home reports), then Resume: the move checks again and retires the old home. Or choose Finish and keep the old home (typed confirm): the move ends, the old home is not retired and stays in maintenance, and retiring it stays on the checklist.'
@@ -1344,7 +1350,7 @@ async function stopRetireKey(ctx: Ctx, err: RetireKeyStop): Promise<void> {
   const error = safeLine(
     err.kind === 'key'
       ? `${err.code}: ${err.message} The app serves from its new home, but the old home was not retired: the new home must seal this app's values with the app's own key first. ${RETIRE_STOP_WAYS}`
-      : `${err.code}: The Hub could not reach the new home to check its key (${err.message}) — Resume to try again. The app serves from its new home; the old home was not retired. Finish and keep the old home ends the move without retiring it.`
+      : `${RETIRE_UNREACHABLE_CODE}: The Hub could not reach the new home to check its key (${err.code}: ${err.message}) — Resume to try again. The app serves from its new home; the old home was not retired. Finish and keep the old home ends the move without retiring it.`
   )
   const ours = await patchMoveIfHolder(ctx.moveId, ctx.held.envToken, {
     status: 'interrupted',
@@ -1356,7 +1362,7 @@ async function stopRetireKey(ctx: Ctx, err: RetireKeyStop): Promise<void> {
   const item = safeLine(
     err.kind === 'key'
       ? `Do not retire the old home yet: the new home does not seal this app's values with its key (${err.code}). ${RETIRE_STOP_WAYS}`
-      : `Do not retire the old home yet: the Hub could not reach the new home to check its key (${err.code}). Resume to try again.`
+      : `Do not retire the old home yet: the Hub could not reach the new home to check its key (${RETIRE_UNREACHABLE_CODE}, ${err.code}). Resume to try again.`
   )
   await mergeChecklist(ctx.moveId, (checklist) => {
     const found = checklist.find((c) => c.id === 'retire_source')

@@ -633,7 +633,9 @@ describe('M-1: the new home cannot be reached to check its key', () => {
     const id = await startMove(w, 'to_shared')
     const m = await readMove(id)
     expect(m?.status).toBe('interrupted')
-    expect(m?.error).toMatch(/^LINK_UNREACHABLE: /)
+    // Round 1b: its own code (the admin recognises the case by it); the link's code inside.
+    expect(m?.error).toMatch(/^APP_KEY_UNCHECKED_UNREACHABLE: /)
+    expect(m?.error).toContain('(LINK_UNREACHABLE: ')
     expect(m?.error).toContain('could not reach the new home to check its key')
     expect(m?.error).toContain('Resume to try again')
     const item = m?.checklist.find((c) => c.id === 'retire_source')?.text ?? ''

@@ -978,6 +978,10 @@ export const MOVE_CODE_COPY: Record<string, Copy> = {
     title: 'That move has already ended',
     hint: 'Its result is shown here. Dismiss it to plan a new move.'
   },
+  APP_KEY_UNCHECKED_UNREACHABLE: {
+    title: 'The Hub could not reach the new home to check its key',
+    hint: 'The old home was not retired. Resume to try again; Finish and keep the old home ends the move without retiring it.'
+  },
   NOT_RELEASED: {
     title: 'The move has not reached its new home yet',
     hint: 'Before release the old home still serves the app: Resume or Roll back the move instead.'
@@ -1173,6 +1177,9 @@ export const REPOINT_ITEM = 'repoint_name'
 export const isHaltedTargetLive = (m: Pick<HubMove, 'status' | 'error'>) =>
   m.status === 'interrupted' && splitRunError(m.error ?? '').code === 'HALTED_TARGET_LIVE'
 
+/** The code the run stores when the new home could not be asked at retire_source (run.ts). */
+export const RETIRE_UNREACHABLE_CODE = 'APP_KEY_UNCHECKED_UNREACHABLE'
+
 /**
  * Untested path 2 (rulings P6-42 / P6-43, review I-2 / M-1): a released move that THIS attempt
  * stopped at retire_source because the new home's key did not check (`key`) or the new home could
@@ -1188,8 +1195,8 @@ export function retireStopKind(
   if (retire?.state !== 'failed') return null
   const code = splitRunError(m.error).code
   if (!code || code === 'HALTED_TARGET_LIVE') return null
-  if (/^APP_KEY_(MISMATCH|UNKNOWN)$/.test(code)) return 'key'
-  return m.error.includes('could not reach the new home to check its key') ? 'unreachable' : null
+  if (code === 'APP_KEY_MISMATCH' || code === 'APP_KEY_UNKNOWN') return 'key'
+  return code === RETIRE_UNREACHABLE_CODE ? 'unreachable' : null
 }
 
 /** Finish and keep the old home (P6-43 (b)): typed confirm `<app>/<env>`. */

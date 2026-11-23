@@ -359,7 +359,7 @@ describe('retireStopKind', () => {
       retireStopKind(
         move({
           error:
-            'LINK_UNREACHABLE: The Hub could not reach the new home to check its key (x) — Resume to try again.'
+            'APP_KEY_UNCHECKED_UNREACHABLE: The Hub could not reach the new home to check its key (LINK_UNREACHABLE: x) — Resume to try again.'
         })
       )
     ).toBe('unreachable')
@@ -384,6 +384,21 @@ describe('retireStopKind', () => {
     ).toBeNull()
     // Even with an old error left on an older row: the step is not the failed stop.
     expect(retireStopKind(move({ steps: { list: list('running'), phase: 'forward' } }))).toBeNull()
+  })
+
+  it('round 1b: the unreachable case is the code, never the text', async () => {
+    const { retireStopKind } = await import('./move-api')
+    // The sentence alone (another code) is not it.
+    expect(
+      retireStopKind(
+        move({
+          error:
+            'LINK_UNREACHABLE: The Hub could not reach the new home to check its key — Resume to try again.'
+        })
+      )
+    ).toBeNull()
+    // The code alone (any sentence) is.
+    expect(retireStopKind(move({ error: 'APP_KEY_UNCHECKED_UNREACHABLE: x' }))).toBe('unreachable')
   })
 
   it('a halt or a running move is not one', async () => {
