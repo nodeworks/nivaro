@@ -345,6 +345,10 @@ const SHARED: Record<string, string> = {
   'services/ai-watches.ts :: digestRegistered': REGISTRY,
   'services/ai-watches.ts :: evaluator': FN_SLOT,
   'services/alert-fired.ts :: listeners': REGISTRY,
+  'services/app-boot-passes.ts :: bootPassQueue':
+    "the process-wide turn queue for every app's boot passes (code scheduling: at most two apps at once on this process); it holds wake-up callbacks, no app data",
+  'services/app-boot-passes.ts :: bootQueryWarmQueue':
+    'the process-wide turn queue for the boot query warms (code scheduling: at most two at once on this process); it holds wake-up callbacks, no app data',
   'services/app-forget.ts :: registered':
     'the hand-keyed containers themselves (forgetAppState walks them); holds no app data',
   'services/app-links.ts :: registered': REGISTRY,

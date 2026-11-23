@@ -38,6 +38,9 @@ export async function warmIntegrityChecks(app: FastifyInstance): Promise<void> {
   app.log.info(`integrity: warmed checks for ${n} collection(s)`)
 }
 
+/** The phase name of the query warm (the part of warmCaches that holds the heavy slot). */
+const QUERY_WARM_PHASE = 'Warm query caches'
+
 /**
  * #2445 — metadata, then the query caches and the buffer pool behind them once per cluster per
  * version (nvr:warm:<version>; on a shared deployment once per app per version). The query warm
@@ -45,7 +48,12 @@ export async function warmIntegrityChecks(app: FastifyInstance): Promise<void> {
  */
 export async function warmCaches(
   app: FastifyInstance,
-  phase: BootPhaseRunner = inBackground
+  phase: BootPhaseRunner = inBackground,
+  opts: {
+    /** Hub shared deployment: hand the query warm (it waits on the app's heavy slot, up to two
+     *  hours) to the caller to start later instead of awaiting it here. */
+    deferQueryWarm?: (start: () => Promise<void>) => void
+  } = {}
 ): Promise<void> {
   if (noDatabase()) return
   const m = await import('./cache-warm.js')
@@ -55,18 +63,21 @@ export async function warmCaches(
   const { INSTANCE_ID } = await import('./instance-roster.js')
   if (!(await m.takeBootWarm(app.redis, NIVARO_VERSION, INSTANCE_ID))) return
   const appKey = currentTenantKey() || undefined
-  await app.cron.withHeavySlot(
-    'cache-warm (boot)',
-    async () => {
-      await phase('Warm query caches', () =>
-        m.runCacheWarm({
-          redis: app.redis,
-          log: (summary, line) => app.log.info(summary, line)
-        })
-      )
-    },
-    appKey
-  )
+  const queryWarm = () =>
+    app.cron.withHeavySlot(
+      'cache-warm (boot)',
+      async () => {
+        await phase(QUERY_WARM_PHASE, () =>
+          m.runCacheWarm({
+            redis: app.redis,
+            log: (summary, line) => app.log.info(summary, line)
+          })
+        )
+      },
+      appKey
+    )
+  if (opts.deferQueryWarm) opts.deferQueryWarm(queryWarm)
+  else await queryWarm()
 }
 
 /** Readiness results for this version (the cache is keyed by version, so a deploy starts empty):
@@ -145,43 +156,131 @@ export async function warnIfPortalIsAdmin(app: FastifyInstance): Promise<void> {
     )
 }
 
+/** How long after the server is ready the per-app boot passes start (self-hosted waits as long
+ *  before its readiness warm), so they never compete with the first requests. */
+export const APP_BOOT_PASS_DELAY_MS = 15_000
+/** At most this many apps run their boot passes at once in one process, and at most this many
+ *  boot query warms run at once. */
+const APP_BOOT_PASS_PARALLEL = 2
+
+/** A process-wide turn queue: `running` holders at most `limit`, the rest wait in arrival order. */
+interface TurnQueue {
+  running: number
+  waiting: Array<() => void>
+}
+// Hub shared deployment: one queue for every app's boot passes and one for the boot query warms
+// on this process (code scheduling; the work itself runs inside each app).
+const bootPassQueue: TurnQueue = { running: 0, waiting: [] }
+const bootQueryWarmQueue: TurnQueue = { running: 0, waiting: [] }
+
+/** Wait for a turn. The caller's async context (the app it runs in) is kept across the wait. */
+async function takeTurn(q: TurnQueue): Promise<void> {
+  if (q.running < APP_BOOT_PASS_PARALLEL) {
+    q.running++
+    return
+  }
+  // The turn is handed over by giveTurn (running stays the same).
+  await new Promise<void>((resolve) => q.waiting.push(resolve))
+}
+function giveTurn(q: TurnQueue): void {
+  const next = q.waiting.shift()
+  if (next) next()
+  else q.running--
+}
+
+/** Test seam: the boot-pass queue as it stands. */
+export function _bootPassQueueForTests(): { running: number; waiting: number } {
+  return { running: bootPassQueue.running, waiting: bootPassQueue.waiting.length }
+}
+/** Test seam: empty both queues. */
+export function _resetBootPassQueueForTests(): void {
+  bootPassQueue.running = 0
+  bootPassQueue.waiting = []
+  bootQueryWarmQueue.running = 0
+  bootQueryWarmQueue.waiting = []
+}
+
 /**
  * Hub shared deployment: run every boot pass once per app when the app becomes ready, inside it,
- * in order — each on its own, one warn line naming a pass that fails. The passes wait until this
- * process is ready (every route registered: the REST inventory is complete). Registers nothing
- * elsewhere. Call it before the app migrations start: an app that is ready already never fires
- * its ready event again.
+ * in order — each on its own, one warn line naming a pass that fails. The passes start a short
+ * while (APP_BOOT_PASS_DELAY_MS) after this process is ready (every route registered: the REST
+ * inventory is complete), and go through one process-wide queue: at most two apps run theirs at
+ * once, however many become ready together. The boot query warm waits on the app's heavy slot
+ * (up to two hours), so it is started last and not awaited — it never holds a turn in the queue
+ * nor blocks the app's other passes; it takes a turn in a queue of its own (at most two query
+ * warms at once) only once it holds that heavy slot. Registers nothing elsewhere. Call it before the app migrations start: an
+ * app that is ready already never fires its ready event again.
  */
-export function registerAppBootPasses(app: FastifyInstance, opts: { restRoutes: string[] }): void {
+export function registerAppBootPasses(
+  app: FastifyInstance,
+  opts: { restRoutes: string[]; startDelayMs?: number }
+): void {
   if (!perAppJobs()) return
+  const delayMs = opts.startDelayMs ?? APP_BOOT_PASS_DELAY_MS
   let markReady: () => void = () => {}
   const serverReady = new Promise<void>((resolve) => {
     markReady = resolve
   })
+  const started = serverReady.then(
+    () =>
+      new Promise<void>((resolve) => {
+        if (delayMs <= 0) return resolve()
+        setTimeout(resolve, delayMs).unref()
+      })
+  )
   app.addHook('onReady', async () => markReady())
 
-  const passes: Array<[string, () => Promise<void>]> = [
-    ['owner-groups', () => runInBackgroundPool(() => warmOwnerGroups(app))],
-    ['integrity-checks', () => runInBackgroundPool(() => warmIntegrityChecks(app))],
-    ['cache-warm', () => warmCaches(app)],
-    ['readiness', () => runInBackgroundPool(() => warmReadinessResults(app))],
-    ['db-tuning-twins', () => runInBackgroundPool(() => sweepTuningTwins(app))],
-    ['rest-routes', () => recordRestRouteInventory(opts.restRoutes)],
-    ['extension-registry', () => recordExtensionRegistryVersions(app)],
-    ['portal-url', () => warnIfPortalIsAdmin(app)]
-  ]
+  // The query warm takes a turn of its own once it holds the app's heavy slot: waiting for the
+  // slot holds no turn, and at most two apps' query warms run at once.
+  const warmPhase: BootPhaseRunner = async (name, fn) => {
+    if (name !== QUERY_WARM_PHASE) return runInBackgroundPool(fn)
+    await takeTurn(bootQueryWarmQueue)
+    try {
+      return await runInBackgroundPool(fn)
+    } finally {
+      giveTurn(bootQueryWarmQueue)
+    }
+  }
 
   onAppReady('boot-passes', async (t) => {
-    await serverReady
-    for (const [name, run] of passes) {
-      try {
-        await run()
-      } catch (err) {
-        app.log.warn(
-          { app: t.id, err: err instanceof Error ? err.message : String(err) },
-          `[boot-passes] app ${t.id}: ${name} failed`
-        )
+    await started
+    const warn = (name: string, err: unknown) =>
+      app.log.warn(
+        { app: t.id, err: err instanceof Error ? err.message : String(err) },
+        `[boot-passes] app ${t.id}: ${name} failed`
+      )
+    let queryWarm: (() => Promise<void>) | null = null
+    const passes: Array<[string, () => Promise<void>]> = [
+      ['owner-groups', () => runInBackgroundPool(() => warmOwnerGroups(app))],
+      ['integrity-checks', () => runInBackgroundPool(() => warmIntegrityChecks(app))],
+      [
+        'cache-warm',
+        () =>
+          warmCaches(app, warmPhase, {
+            deferQueryWarm: (start) => {
+              queryWarm = start
+            }
+          })
+      ],
+      ['readiness', () => runInBackgroundPool(() => warmReadinessResults(app))],
+      ['db-tuning-twins', () => runInBackgroundPool(() => sweepTuningTwins(app))],
+      ['rest-routes', () => recordRestRouteInventory(opts.restRoutes)],
+      ['extension-registry', () => recordExtensionRegistryVersions(app)],
+      ['portal-url', () => warnIfPortalIsAdmin(app)]
+    ]
+    await takeTurn(bootPassQueue)
+    try {
+      for (const [name, run] of passes) {
+        try {
+          await run()
+        } catch (err) {
+          warn(name, err)
+        }
       }
+    } finally {
+      giveTurn(bootPassQueue)
     }
+    const start = queryWarm as (() => Promise<void>) | null
+    if (start) void start().catch((err) => warn('cache-warm (query caches)', err))
   })
 }

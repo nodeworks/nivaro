@@ -10,7 +10,12 @@ const state = vi.hoisted(() => ({
   calls: [] as Array<{ pass: string; app: string }>,
   fail: new Set<string>(),
   bootWarmTaken: new Set<string>(),
-  portal: 'https://a.example.com' as string | null
+  portal: 'https://a.example.com' as string | null,
+  /** While set, owner-groups waits on it (to hold apps inside their boot passes). */
+  gate: null as Promise<void> | null,
+  /** The app of every runInBackgroundPool call, in order. */
+  pool: [] as string[],
+  maxRunning: 0
 }))
 
 async function note(pass: string) {
@@ -24,6 +29,21 @@ vi.mock('../../../services/pipeline-engine.js', () => ({
     return 3
   })
 }))
+// The background-pool wrapper is imported statically (no lazy-import race under vitest): the
+// queue tests hold apps at it and watch how many hold a turn.
+vi.mock('../../../db/pool-context.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../../db/pool-context.js')>()
+  return {
+    ...real,
+    runInBackgroundPool: async <T>(fn: () => Promise<T>): Promise<T> => {
+      state.pool.push(currentTenantKey())
+      const q = (await import('../../../services/app-boot-passes.js'))._bootPassQueueForTests()
+      state.maxRunning = Math.max(state.maxRunning, q.running)
+      if (state.gate) await state.gate
+      return fn()
+    }
+  }
+})
 vi.mock('../../../services/config-conformance.js', () => ({
   warmCompiledChecks: vi.fn(async () => {
     await note('integrity-checks')
@@ -148,20 +168,25 @@ const until = async (n: number) => {
   for (let i = 0; i < 200 && state.calls.length < n; i++) await new Promise((r) => setTimeout(r, 5))
 }
 
+// The query warm waits on the app's heavy slot, so it is started last and not awaited.
 const ORDER = [
   'owner-groups',
   'integrity-checks',
   'metadata',
-  'query-caches',
   'readiness',
   'db-tuning-twins',
   'rest-routes:2',
   'extension-registry',
-  'portal-url'
+  'portal-url',
+  'query-caches'
 ]
 
 beforeEach(() => {
   lc._resetAppLifecycleForTests()
+  passes._resetBootPassQueueForTests()
+  state.gate = null
+  state.pool = []
+  state.maxRunning = 0
   state.calls = []
   state.fail.clear()
   state.bootWarmTaken.clear()
@@ -176,7 +201,7 @@ afterEach(() => {
 describe('registerAppBootPasses on a shared deployment', () => {
   it('runs every pass once, in order, inside the app that became ready', async () => {
     const f = fakeApp()
-    passes.registerAppBootPasses(f.app, { restRoutes: ['GET /a', 'POST /b'] })
+    passes.registerAppBootPasses(f.app, { restRoutes: ['GET /a', 'POST /b'], startDelayMs: 0 })
     await f.ready()
     lc.fireAppReady(tenant('A'))
     await until(ORDER.length)
@@ -188,7 +213,7 @@ describe('registerAppBootPasses on a shared deployment', () => {
 
   it('two apps with copied data: each runs its own passes, never the other app', async () => {
     const f = fakeApp()
-    passes.registerAppBootPasses(f.app, { restRoutes: ['GET /a', 'POST /b'] })
+    passes.registerAppBootPasses(f.app, { restRoutes: ['GET /a', 'POST /b'], startDelayMs: 0 })
     await f.ready()
     // One after the other: under vitest's module mocks a second concurrent dynamic import of one
     // mocked module stalls (the passes import their services lazily; Node's own cache does not).
@@ -207,7 +232,7 @@ describe('registerAppBootPasses on a shared deployment', () => {
 
   it('waits for the server to be ready before any pass runs (the route list is complete)', async () => {
     const f = fakeApp()
-    passes.registerAppBootPasses(f.app, { restRoutes: ['GET /a', 'POST /b'] })
+    passes.registerAppBootPasses(f.app, { restRoutes: ['GET /a', 'POST /b'], startDelayMs: 0 })
     lc.fireAppReady(tenant('A'))
     await settle()
     expect(state.calls).toEqual([])
@@ -220,7 +245,7 @@ describe('registerAppBootPasses on a shared deployment', () => {
     state.fail.add('integrity-checks')
     state.fail.add('readiness')
     const f = fakeApp()
-    passes.registerAppBootPasses(f.app, { restRoutes: ['GET /a', 'POST /b'] })
+    passes.registerAppBootPasses(f.app, { restRoutes: ['GET /a', 'POST /b'], startDelayMs: 0 })
     await f.ready()
     lc.fireAppReady(tenant('A'))
     await until(ORDER.length)
@@ -236,7 +261,7 @@ describe('registerAppBootPasses on a shared deployment', () => {
 
   it('the boot query warm runs once per app and version, not once per deployment', async () => {
     const f = fakeApp()
-    passes.registerAppBootPasses(f.app, { restRoutes: [] })
+    passes.registerAppBootPasses(f.app, { restRoutes: [], startDelayMs: 0 })
     await f.ready()
     lc.fireAppReady(tenant('A'))
     await until(ORDER.length)
@@ -250,7 +275,7 @@ describe('registerAppBootPasses on a shared deployment', () => {
 
   it("warns when the app's portal is its own admin, naming the app", async () => {
     const f = fakeApp()
-    passes.registerAppBootPasses(f.app, { restRoutes: [] })
+    passes.registerAppBootPasses(f.app, { restRoutes: [], startDelayMs: 0 })
     await f.ready()
     lc.fireAppReady(tenant('A'))
     await until(ORDER.length)
@@ -270,6 +295,89 @@ describe('registerAppBootPasses on a shared deployment', () => {
     await passes.warnIfPortalIsAdmin(f.app)
     expect(state.calls).toEqual([])
     expect(f.warn).not.toHaveBeenCalled()
+  })
+})
+
+describe('shared deployment: boot passes go through one process-wide queue', () => {
+  // Under vitest concurrent dynamic imports of one mocked module can hand back the real module
+  // (see plugins/cron.ts loadSecurity), and the passes import their services lazily: these tests
+  // watch the statically imported pool wrapper and a ready hook registered after the passes'
+  // (it runs once an app's boot-passes hook has returned), not the lazily imported services.
+  function watchDone(): string[] {
+    const done: string[] = []
+    lc.onAppReady('zz-done', (t) => {
+      done.push(t.id)
+    })
+    return done
+  }
+
+  it('starts a short while after the server is ready (15 s by default, as self-hosted)', async () => {
+    expect(passes.APP_BOOT_PASS_DELAY_MS).toBe(15_000)
+    const f = fakeApp()
+    passes.registerAppBootPasses(f.app, { restRoutes: [], startDelayMs: 80 })
+    const done = watchDone()
+    await f.ready()
+    lc.fireAppReady(tenant('A'))
+    await settle()
+    expect(state.pool).toEqual([])
+    await vi.waitFor(() => expect(done).toEqual(['A']))
+    expect(state.pool.length).toBeGreaterThan(0)
+  })
+
+  it('six apps ready at once: at most two run their passes together, and every app runs', async () => {
+    let open!: () => void
+    state.gate = new Promise<void>((r) => {
+      open = r
+    })
+    const f = fakeApp()
+    passes.registerAppBootPasses(f.app, { restRoutes: [], startDelayMs: 0 })
+    const done = watchDone()
+    await f.ready()
+    const ids = ['A', 'B', 'C', 'D', 'E', 'F']
+    for (const id of ids) lc.fireAppReady(tenant(id))
+    // two apps are held inside their first pass; the other four wait their turn
+    await vi.waitFor(() =>
+      expect(passes._bootPassQueueForTests()).toEqual({ running: 2, waiting: 4 })
+    )
+    await settle()
+    expect(state.pool).toEqual(['A', 'B'])
+    open()
+    state.gate = null
+    await vi.waitFor(() => expect([...done].sort()).toEqual(ids))
+    expect(state.maxRunning).toBeLessThanOrEqual(2)
+    for (const id of ids) expect(state.pool, id).toContain(id)
+    expect(passes._bootPassQueueForTests()).toEqual({ running: 0, waiting: 0 })
+  })
+
+  it("a held heavy slot never blocks the app's later passes, nor the next app", async () => {
+    const f = fakeApp()
+    // every app's heavy slot is held (another heavy job runs): the boot query warm waits on it
+    const held: string[] = []
+    ;(f.app as unknown as { cron: { withHeavySlot: unknown } }).cron.withHeavySlot = (
+      _label: string,
+      _work: unknown,
+      appKey?: string
+    ) => {
+      held.push(appKey ?? '')
+      return new Promise(() => {})
+    }
+    passes.registerAppBootPasses(f.app, { restRoutes: [], startDelayMs: 0 })
+    const done = watchDone()
+    await f.ready()
+    for (const id of ['A', 'B', 'C']) lc.fireAppReady(tenant(id))
+    // every app's hook returns (all its passes ran) though its query warm still waits
+    await vi.waitFor(() => expect([...done].sort()).toEqual(['A', 'B', 'C']))
+    expect(passes._bootPassQueueForTests()).toEqual({ running: 0, waiting: 0 })
+    expect(state.maxRunning).toBeLessThanOrEqual(2)
+  })
+
+  it("the query warm waits for the app's other passes and is not awaited by them", async () => {
+    const f = fakeApp()
+    passes.registerAppBootPasses(f.app, { restRoutes: [], startDelayMs: 0 })
+    await f.ready()
+    lc.fireAppReady(tenant('A'))
+    await until(ORDER.length)
+    expect(state.calls.map((c) => c.pass)).toEqual(ORDER.map((p) => (p === 'rest-routes:2' ? 'rest-routes:0' : p)))
   })
 })
 
