@@ -1,4 +1,5 @@
 import { db } from '../../../db/index.js'
+import type { PullFailReasons } from '../../hub-transfer/fail-reasons.js'
 import type { PullStatus } from '../shared/deployment-client.js'
 import type { MoveAddresses } from './addresses.js'
 import type { MovePlan, MoveStepKey, RouteAction } from './types.js'
@@ -81,6 +82,20 @@ export interface MoveSteps {
   target_placement_unused?: boolean
   /** Refusals the operator overrode at start (P6-20 #2: LINK_URL_NOT_PULLABLE). */
   overrides?: string[]
+  /**
+   * retire_source: when the new home's key checked (ISO time). Written before the step column
+   * says retire_source (which drops the app from a shared source's list), so a run that stops
+   * after it finishes the retire on Resume without checking again: a failed check never follows
+   * a retire that started (review M-2).
+   */
+  retire_key_checked_at?: string | null
+  /**
+   * P6-45: a person chose "Finish and stop the old home" (typed confirm) at a retire_source key
+   * stop after release; the run stops the old home (proven) and ends the move.
+   */
+  finish_stop?: { by: string | null; at: string }
+  /** P6-45: the last Finish was refused (the old home's stop not proven): its plain reason. */
+  finish_refused?: { at: string; text: string } | null
   /** The run's own lock tokens (env + shared), which heal frees by compare-and-delete. */
   locks?: { env: string; shared: Array<{ id: number; token: string }> }
   /** Where each dedicated side is reached (addresses.ts), resolved and probed at start. */
@@ -111,6 +126,8 @@ export interface MoveFilesSummary {
   failed: number
   missing: number
   size_mismatch: number
+  /** Failed rows per plain reason (hub-transfer/fail-reasons.ts); only when some failed. */
+  failed_reasons?: PullFailReasons
   bytes: number
   at: string
 }
@@ -233,7 +250,7 @@ export async function patchMove(
     heartbeat_at: Date | null
     job_run_id: number | null
   }>,
-  where: { status?: readonly MoveStatus[] } = {}
+  where: { status?: readonly MoveStatus[]; stepsText?: string } = {}
 ): Promise<number> {
   const row: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(patch)) {
@@ -248,7 +265,15 @@ export async function patchMove(
   if (!Object.keys(row).length) return 0
   const q = db(MOVES).where({ id })
   if (where.status) q.whereIn('status', where.status as string[])
+  // Review N-8: compare-and-set on the step list text the caller read.
+  if (where.stepsText !== undefined) q.where({ steps: where.stepsText })
   return Number(await q.update(row))
+}
+
+/** The stored step list text as it is (for a compare-and-set write), or null. */
+export async function readStepsText(id: number): Promise<string | null> {
+  const row = (await db(MOVES).where({ id }).first('steps')) as { steps: unknown } | undefined
+  return row?.steps == null ? null : String(row.steps)
 }
 
 /**

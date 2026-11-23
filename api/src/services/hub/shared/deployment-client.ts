@@ -1,3 +1,4 @@
+import { type PullFailReasons, pullFailReasonsFrom } from '../../hub-transfer/fail-reasons.js'
 import type {
   DeploymentAppStatus,
   DeploymentStatus,
@@ -143,6 +144,8 @@ export interface PullStatus {
   size_mismatch?: number
   /** Ids of the rows that failed, ≤ 50 (Task 16); absent from older apps. */
   failed_ids?: string[]
+  /** Failed rows per plain reason (hub-transfer/fail-reasons.ts); absent from older apps. */
+  failed_reasons?: PullFailReasons
 }
 
 export interface DbCheckAnswer {
@@ -590,7 +593,8 @@ export function deploymentClient(
         size_mismatch: isNum(b.size_mismatch) ? b.size_mismatch : 0,
         failed_ids: Array.isArray(b.failed_ids)
           ? b.failed_ids.filter((x): x is string => isStr(x) && x.length <= 64).slice(0, 50)
-          : []
+          : [],
+        failed_reasons: pullFailReasonsFrom(b.failed_reasons)
       }
     },
 

@@ -287,6 +287,37 @@ describe('moveBadge (design B4)', () => {
       tone: 'attention'
     })
     expect(moveBadge({ ...base, status: 'interrupted' })?.text).toBe('Move interrupted')
+    // Untested path 2: the new home's key did not check at retire_source; the old home is kept.
+    const stopped = {
+      ...base,
+      status: 'interrupted' as const,
+      step: 'release',
+      steps: {
+        list: [
+          { key: 'check', state: 'done' },
+          { key: 'release', state: 'done' },
+          { key: 'retire_source', state: 'failed' },
+          { key: 'done', state: 'pending' }
+        ],
+        phase: 'forward'
+      }
+    }
+    expect(
+      moveBadge({
+        ...stopped,
+        error: 'APP_KEY_MISMATCH: Another key.',
+        retire_stop: {
+          kind: 'key',
+          case: 'key_entry',
+          finish: true,
+          key_entry: true,
+          finish_refused: null
+        }
+      })
+    ).toEqual({
+      text: 'Waiting for the app key',
+      tone: 'attention'
+    })
     expect(
       moveBadge({ ...base, status: 'interrupted', error: 'HALTED_TARGET_LIVE: x' })?.tone
     ).toBe('halted')
@@ -296,5 +327,74 @@ describe('moveBadge (design B4)', () => {
     ).toBe('To do after move')
     expect(moveBadge({ ...base, status: 'success' })).toBeNull()
     expect(moveBadge(undefined)).toBeNull()
+  })
+})
+
+// Review N-7: the admin never judges the stop itself: it reads the server's one predicate.
+describe('retireStopKind', () => {
+  const stop = (over: Record<string, unknown> = {}) => ({
+    kind: 'key' as const,
+    case: 'key_entry' as const,
+    finish: true,
+    key_entry: true,
+    finish_refused: null,
+    ...over
+  })
+  const move = (over: Record<string, unknown>) =>
+    ({ status: 'interrupted', error: 'APP_KEY_MISMATCH: x', retire_stop: stop(), ...over }) as never
+
+  it('reads the server’s retire_stop, nothing else', async () => {
+    const { retireStopKind } = await import('./move-api')
+    expect(retireStopKind(move({}))).toBe('key')
+    expect(retireStopKind(move({ retire_stop: stop({ kind: 'unreachable' }) }))).toBe('unreachable')
+    // The server says it is not a stop (a pre-release rollback, a resumed run cut off, a run cut
+    // mid-retire after the key passed): never one, whatever the error says.
+    expect(retireStopKind(move({ retire_stop: null }))).toBeNull()
+    expect(
+      retireStopKind(move({ retire_stop: null, error: 'APP_KEY_UNCHECKED_UNREACHABLE: x' }))
+    ).toBeNull()
+    // Only while interrupted.
+    expect(retireStopKind(move({ status: 'running' }))).toBeNull()
+  })
+})
+
+// Round 1c / review N-6: the error box's own words, each way once, only where it can work.
+describe('retireStopCopy', () => {
+  it('a Docker new home: enter the key it runs; never "then plan again"', async () => {
+    const { runErrorCopy } = await import('./move-api')
+    const c = runErrorCopy('APP_KEY_MISMATCH', {
+      retireStop: { kind: 'key', case: 'key_entry', finish: true }
+    })
+    expect(c?.title).toBe('The move is waiting for the app key')
+    expect(c?.hint).toContain('Enter the key the new home runs under App key')
+    // Finish is the control's own line, never repeated in the hint.
+    expect(c?.hint).not.toMatch(/finish|plan again/i)
+  })
+
+  it('no key and a shared new home: no "enter the key"', async () => {
+    const { runErrorCopy } = await import('./move-api')
+    const nk = runErrorCopy('APP_KEY_UNKNOWN', {
+      retireStop: { kind: 'key', case: 'no_key', finish: true }
+    })
+    expect(nk?.hint).toContain("Make it report the app's key, then Resume")
+    expect(nk?.hint).not.toMatch(/App key on this environment/)
+    const sh = runErrorCopy('APP_KEY_MISMATCH', {
+      retireStop: { kind: 'key', case: 'shared', finish: true }
+    })
+    expect(sh?.hint).toContain("The shared deployment's key is already set by the Hub")
+    expect(sh?.hint).not.toMatch(/App key on this environment/)
+  })
+
+  it('unreachable: Resume to try again; an old home the Hub cannot stop says so', async () => {
+    const { runErrorCopy } = await import('./move-api')
+    const u = runErrorCopy('APP_KEY_UNCHECKED_UNREACHABLE', {
+      retireStop: { kind: 'unreachable', case: 'unreachable', finish: false }
+    })
+    expect(u?.title).toBe('The move is waiting to check the app key')
+    expect(u?.hint).toContain('Resume to try again')
+    expect(u?.hint).toContain('The Hub cannot stop this old home itself')
+    expect(u?.hint).not.toMatch(/enter|plan again/i)
+    // Outside the stop the plan blocker's words stay (a target_ready rollback, a plan).
+    expect(runErrorCopy('APP_KEY_MISMATCH')?.hint).toMatch(/plan again/)
   })
 })

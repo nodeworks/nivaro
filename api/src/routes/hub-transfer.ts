@@ -10,6 +10,7 @@ import {
   ticketTenant,
   transferTicketFromHeader
 } from '../services/hub-transfer/tickets.js'
+import { FallbackFolderUnavailable } from '../services/storage/fallback.js'
 import { isStoredObjectMissing } from '../services/storage/missing.js'
 import { openTransferObject, sendOpenedObject } from '../services/stored-object-stream.js'
 import { getTenantRegistry } from '../services/tenancy/registry.js'
@@ -44,11 +45,23 @@ import type { TenantRecord } from '../services/tenancy/types.js'
  * It serves the object the app itself reads (P6-36): the row's saved-settings driver, then the env
  * provider's file, the FILES_FALLBACK_DIR copy and FILES_FALLBACK_URL, with
  * `X-Nivaro-Filename-Disk` (the key, percent-encoded) and `Content-Length`; never compressed. A
- * missing row, or an object none of them has, is 404; any other read error is 503
- * SOURCE_READ_FAILED.
+ * missing row, or an object none of them has, is 404 with `X-Nivaro-Transfer-Missing: 1` (the
+ * pull counts only that as missing); any other read error is 503 SOURCE_READ_FAILED (with
+ * `reason: FALLBACK_FOLDER_UNAVAILABLE` when FILES_FALLBACK_DIR is gone or empty).
  */
 
 export const TRANSFER_REFUSED = 'TRANSFER_REFUSED'
+
+/**
+ * Review M-5: the header only this route's own "not found" carries. The pull counts a 404 as
+ * `missing` only with it: a proxy's or another route's 404 is a read error, never "missing".
+ */
+export const TRANSFER_MISSING_HEADER = 'X-Nivaro-Transfer-Missing'
+
+function missing(reply: FastifyReply, message: string) {
+  reply.header(TRANSFER_MISSING_HEADER, '1')
+  return refuse(reply, 404, 'NOT_FOUND', message)
+}
 
 function refuse(reply: FastifyReply, status: number, code: string, message: string) {
   return reply
@@ -152,7 +165,7 @@ export async function hubTransferRoutes(app: FastifyInstance): Promise<void> {
       if (!found) return refuse(reply, 401, TRANSFER_REFUSED, 'Unauthorized')
       const serve = async () => {
         const row = await fileRow(req.params.id)
-        if (!row?.filename_disk) return refuse(reply, 404, 'NOT_FOUND', 'Not found')
+        if (!row?.filename_disk) return missing(reply, 'Not found')
         const key = row.filename_disk
         reply.header('X-Nivaro-Filename-Disk', encodeURIComponent(key).replace(/%2F/gi, '/'))
         let opened: Awaited<ReturnType<typeof openTransferObject>>
@@ -165,8 +178,7 @@ export async function hubTransferRoutes(app: FastifyInstance): Promise<void> {
           // R6-I-1: only a real not-found is "missing" (404, never blocks a move). Any other read
           // error (throttling, a timeout, a refused credential) is a 5xx: the target counts the
           // row as failed, which blocks inside maintenance, so a move never releases without it.
-          if (isStoredObjectMissing(err))
-            return refuse(reply, 404, 'NOT_FOUND', 'Stored object not found')
+          if (isStoredObjectMissing(err)) return missing(reply, 'Stored object not found')
           req.log.warn(
             {
               err_name: (err as { name?: unknown } | null)?.name ?? null,
@@ -174,6 +186,16 @@ export async function hubTransferRoutes(app: FastifyInstance): Promise<void> {
             },
             'hub transfer: a stored object could not be read'
           )
+          // C-1: the fallback folder is gone or empty (an unmounted share) — said apart, so the
+          // move can name the remedy. Still no path.
+          if (err instanceof FallbackFolderUnavailable)
+            return reply.code(503).header('Cache-Control', 'no-store').send({
+              statusCode: 503,
+              error: 'The files fallback folder is not available here',
+              message: 'The files fallback folder is not available here',
+              code: 'SOURCE_READ_FAILED',
+              reason: 'FALLBACK_FOLDER_UNAVAILABLE'
+            })
           return refuse(
             reply,
             503,

@@ -80,6 +80,18 @@ export interface MoveFiles {
 }
 
 /** One move (`nivaro_hub_moves`, migration 553) as `GET /hub/moves/:id` answers it. */
+/** A retire_source key stop (the server's retireStopOf). */
+export interface RetireStop {
+  kind: 'key' | 'unreachable'
+  /** key_entry: the PUT can take the key · no_key · shared: the Hub sets it · unreachable. */
+  case: 'key_entry' | 'no_key' | 'shared' | 'unreachable'
+  /** Finish and stop the old home is possible (the Hub can stop this old home and prove it). */
+  finish: boolean
+  key_entry: boolean
+  /** The last Finish was refused: its plain reason. */
+  finish_refused: string | null
+}
+
 export interface HubMove {
   id: number
   app_id: number
@@ -100,6 +112,11 @@ export interface HubMove {
   /** Checklist state: `{id: done}` or `[{id, text, required, done}]` (stored as JSON text). */
   checklist: unknown
   error: string | null
+  /**
+   * The retire_source key stop and its ways out, as the server judges it (run.ts retireStopOf,
+   * the ONE predicate, review N-7); null or absent when the move is not stopped there.
+   */
+  retire_stop?: RetireStop | null
   placed_at?: string | null
   job_run_id?: number | null
   started_by?: string | null
@@ -599,6 +616,9 @@ export function moveBadge(m: HubMove | undefined): MoveBadge | null {
   if (!m) return null
   if (m.status === 'waiting') return { text: 'Waiting for you', tone: 'attention' }
   if (isHaltedTargetLive(m)) return { text: 'Halted: stop the new home', tone: 'halted' }
+  const stop = retireStopKind(m)
+  if (stop === 'key') return { text: 'Waiting for the app key', tone: 'attention' }
+  if (stop === 'unreachable') return { text: 'Key not checked: Resume', tone: 'attention' }
   if (m.status === 'interrupted') return { text: 'Move interrupted', tone: 'attention' }
   if (isLiveMove(m.status)) {
     const rows = moveStepRows(m)
@@ -975,6 +995,31 @@ export const MOVE_CODE_COPY: Record<string, Copy> = {
     title: 'That move has already ended',
     hint: 'Its result is shown here. Dismiss it to plan a new move.'
   },
+  // Only ever stored by a retire_source stop (its copy comes from retireStopCopy there).
+  APP_KEY_UNCHECKED_UNREACHABLE: {
+    title: 'The move is waiting to check the app key',
+    hint: 'The Hub could not reach the new home to check its key, so the old home was not retired. Resume to try again.'
+  },
+  NOT_RELEASED: {
+    title: 'The move has not reached its new home yet',
+    hint: 'Before release the old home still serves the app: Resume or Roll back the move instead.'
+  },
+  NOT_STOPPED_AT_RETIRE: {
+    title: 'This move is not waiting on its old home',
+    hint: 'Finish and stop the old home is only for a move stopped at retiring the old home because its key did not check. If the retire had already started, Resume finishes it.'
+  },
+  CANNOT_STOP_OLD_HOME: {
+    title: 'The Hub cannot stop this old home',
+    hint: 'It is not a Docker stack or a shared deployment, so the Hub cannot stop it and prove it stopped. Enter the key the new home runs under App key, then Resume.'
+  },
+  NEW_HOME_NOT_SERVING: {
+    title: 'The new home does not answer right now',
+    hint: 'The old home is the only other copy, so it is not stopped while the new home cannot be seen serving. Resume once the new home answers, or try Finish again then.'
+  },
+  MOVE_CHANGED: {
+    title: 'The move changed meanwhile',
+    hint: 'Reload the move and try again.'
+  },
   ROLLING_BACK: {
     title: 'The move is already rolling back',
     hint: 'Wait for it to finish undoing its steps; the app stays on its old home.'
@@ -1162,6 +1207,23 @@ export const REPOINT_ITEM = 'repoint_name'
 export const isHaltedTargetLive = (m: Pick<HubMove, 'status' | 'error'>) =>
   m.status === 'interrupted' && splitRunError(m.error ?? '').code === 'HALTED_TARGET_LIVE'
 
+/** The code the run stores when the new home could not be asked at retire_source (run.ts). */
+export const RETIRE_UNREACHABLE_CODE = 'APP_KEY_UNCHECKED_UNREACHABLE'
+
+/**
+ * The retire_source key stop's kind, read from the server's own predicate (`retire_stop`, review
+ * N-7): never judged here again. Null when the move is not stopped there.
+ */
+export function retireStopKind(
+  m: Pick<HubMove, 'status' | 'retire_stop'>
+): 'key' | 'unreachable' | null {
+  return m.status === 'interrupted' ? (m.retire_stop?.kind ?? null) : null
+}
+
+/** Finish and stop the old home (ruling P6-45): typed confirm `<app>/<env>`. */
+export const finishStopSource = (id: number, confirm: string) =>
+  api.post(`/hub/moves/${id}/finish-stop-source`, { confirm })
+
 /** The target the `target_stopped` item names ("Stop <target>: …"), else a plain stand-in. */
 export function haltedTargetName(itemText: string | undefined): string {
   const m = itemText ? /^Stop (.+?):\s/.exec(itemText) : null
@@ -1169,8 +1231,40 @@ export function haltedTargetName(itemText: string | undefined): string {
 }
 
 /** Plain words for a run error's code, from the move tables then the Hub's own. */
-export function runErrorCopy(code: string | null): { title: string; hint?: string } | null {
+/**
+ * Round 1c / review N-6: the error box's own words at a retire_source stop, never the plan
+ * blocker's ("… then plan again"). Each way out is stated once and only where it can work: the
+ * hint carries the key way for this case (none for a new home that reports no key or a shared
+ * one), and the Finish control below states the Finish way, so the hint never repeats it; when
+ * the Hub cannot stop the old home, the hint says the move ends only once the key checks.
+ */
+export function retireStopCopy(stop: Pick<RetireStop, 'kind' | 'case' | 'finish'>): Copy {
+  const way =
+    stop.case === 'key_entry'
+      ? 'Enter the key the new home runs under App key on this environment (the Hub takes it only when it matches what the new home reports), then Resume.'
+      : stop.case === 'no_key'
+        ? "The new home reports no key. Make it report the app's key, then Resume."
+        : stop.case === 'shared'
+          ? "The shared deployment's key is already set by the Hub. Wait until its replicas report it, then Resume."
+          : 'The Hub could not reach the new home. Resume to try again.'
+  return {
+    title:
+      stop.kind === 'unreachable'
+        ? 'The move is waiting to check the app key'
+        : 'The move is waiting for the app key',
+    // Review R2-5: the stored sentence under it already says the old home was not retired.
+    hint: stop.finish
+      ? way
+      : `${way} The Hub cannot stop this old home itself, so the move ends only once the key checks.`
+  }
+}
+
+export function runErrorCopy(
+  code: string | null,
+  opts: { retireStop?: Pick<RetireStop, 'kind' | 'case' | 'finish'> | null } = {}
+): { title: string; hint?: string } | null {
   if (!code) return null
+  if (opts.retireStop) return retireStopCopy(opts.retireStop)
   return (
     MOVE_CODE_COPY[code] ??
     MOVE_BLOCKER_COPY[code] ??

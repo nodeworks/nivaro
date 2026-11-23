@@ -343,7 +343,7 @@ export const hubSharedDocs: DocSection = {
         ],
         [
           '`GET`, `PUT /api/hub/environments/:envId/app-key`',
-          'Reads the fingerprint, or saves the key (64 hex). The body never reaches the API log or the Traffic Map capture.'
+          "Reads the fingerprint, or saves the key (64 hex). The body never reaches the API log or the Traffic Map capture. While the environment's move is stopped at `retire_source`, the key is judged against what the new home reports (see Moving an environment)."
         ],
         ['`POST /api/hub/environments/:envId/place-shared`', 'Places a new environment (above).']
       ]
@@ -622,6 +622,8 @@ export const hubMovesDocs: DocSection = {
       items: [
         "The target pulls the files. They never go through the Hub: bytes flow from the source app to the target app. The source authorises the pull with a transfer ticket (`nvt_…`, valid 6 hours) it minted on the Hub's request. The ticket is bound to one app, never appears in a log or an error, and the Hub revokes it after each copy and again when the move ends (a revoke that fails is kept for the move end).",
         "What is copied: every file in the app's files table whose provider is the deployment-storage (`local`) provider. Objects keep their keys. An object already there at the same size is skipped, so a copy is resumable. The first warm copy of a move is always a full copy (a manifest left by an earlier move would make a delta skip rows); later ones are deltas. An object over 5 GB fails that file. A file the source says is missing (404) is listed as missing (up to 50 ids) and never blocks: it was gone before the move. A file whose stored size was stale is copied as the source has it and counted, not failed.",
+        'A file that failed is named (up to 50 ids) and counted under a plain reason: the source could not read it (`503 SOURCE_READ_FAILED`), the source\'s `FILES_FALLBACK_DIR` is missing or empty, the source did not answer, the answer was not usable, the bytes arrived incomplete, the target\'s temporary folder could not take them (full or not writable), or the target could not store it. Only the transfer route\'s own "not found" (it carries `X-Nivaro-Transfer-Missing: 1`) counts as missing: a 404 from anything else on the way (a proxy, another route) fails the file. A source on 0.3.209 answers a plain 404 without the marker: a move never pairs it with a newer target (the plan refuses `VERSION_DIFFERS`), and if it ever did, its missing files would fail and the move would roll back, never release without them. A failure in the warm copy is only a warning (the delta inside maintenance tries it again); inside maintenance it stops the move with `FILES_NOT_COPIED`, which names the files and the reasons ("3 file(s) could not be copied (…): the source could not read 3"), and the move rolls back. A failed file is never stored on the target or counted as copied, so the next move copies it again.',
+        "A source that reads files through `FILES_FALLBACK_DIR` (after an environment refresh): only a key that is not in a readable fallback folder is missing. A file or folder there that cannot be read (`EACCES`, `EIO`, `ESTALE`) is a read error: `503 SOURCE_READ_FAILED` with no path. So is a fallback folder that is not there, or that is there but EMPTY: an unmounted share or volume usually leaves its mount point behind as an empty folder (`reason: FALLBACK_FOLDER_UNAVAILABLE`). Either way the move rolls back instead of moving on without those files. Fix the mount or the permissions, then start the move again. If the source's uploads really are empty while its files table has rows, unset `FILES_FALLBACK_DIR` on the source; the move's text says so.",
         'Not copied: objects in an env-driven S3 or Azure provider (a blocker, `ENV_OBJECT_STORAGE`), session replays and image transform caches (replays warn `REPLAYS_NOT_MOVED`; transforms are made again).',
         "Saved-settings S3 or Azure bucket. On a shared deployment every object of such an app sits under `apps/<id>/` in its bucket; on a dedicated stack it sits at the bucket root. A move to or from a shared deployment therefore changes every key, so the pull copies those objects too (files whose provider is `s3` or `azure-blob`), written through the target's own saved-settings driver, whether or not both sides name the same bucket. The plan warns `STORAGE_PREFIX_CHANGES`: the objects are copied, not shared, and the bucket holds both copies until the old ones are removed. A move between two shared deployments keeps the prefix (one app id) and copies nothing there. Files on any other provider block the move with `STORAGE_LAYOUT_DIFFERS` (the copy cannot handle them), and an app that does not say which storage its files are on blocks it with `STORAGE_COUNT_UNKNOWN`.",
         'A pull stalls if nothing moves for 10 minutes, and then fails. A failed pull keeps what it copied; Resume continues.',
@@ -641,12 +643,20 @@ export const hubMovesDocs: DocSection = {
         "The pin keeps the `boot-maintenance` line after the move. The Hub ignores that line when it compares pins, so it never blocks or forces a promotion, and the next promotion writes a pin without it. A redeploy of the move's own pin commit (a restart, a re-run of its job, a rollback to that build) still forwards the line, but the app finds the move's done marker in its Redis (`<REDIS_CHANNEL_PREFIX>nvr:hub:boot-maintenance-done:<tag>:<move id>`, written when the Hub released the move) and boots normally. If that marker is lost (a new or emptied Redis), the app boots in maintenance: lift it with the recovery steps below."
       ]
     },
-    { type: 'h2', id: 'hub-moves-rollback', text: 'Rollback, resume and interrupted runs' },
+    {
+      type: 'h2',
+      id: 'hub-moves-rollback',
+      text: 'Rollback, resume and interrupted runs'
+    },
     {
       type: 'ul',
       items: [
         "Any failure or Cancel before `release` rolls the move back, in a fixed order whatever order the steps ran in (ruling P6-26): (1) the target is frozen, and the Hub must prove it; (2) the target-side route changes are undone, without ever applying the target app's own stack again; (3) the target is stopped or removed (a Docker stack is removed with its volumes kept; a GitLab target is retired over its hub link; a shared target is unplaced and every replica must hold the list without it); (4) the source-side route changes are undone (the source gets its names back); (5) only then the source leaves maintenance and the environment returns to the status it had before. The step that failed is undone too (it may have half happened). Every route change is recorded before it is applied, so one that never converged is undone as well. Copied files stay on the target. The move ends `rolled_back` (or `cancelled`). A dedicated placement made for the target stays for reuse and is not deleted.",
         'After `release` nothing is rolled back (Cancel answers `409 TOO_LATE`). If `retire_source` fails the move is `success` with a warning, and the checklist item `retire_source` stays open: retire or stop the old placement yourself.',
+        "One exception: `retire_source` first checks that the new home seals this app's values with the app's own key (its key fingerprint, retried for about a minute). If that check fails (`APP_KEY_MISMATCH`, `APP_KEY_UNKNOWN`), or the new home cannot be asked at all (a link error, a timeout), the old home is not retired (a shared source keeps listing the app, in maintenance) and the move stays open: `interrupted`, with that code and what to do, so other actions on the environment are refused with `409 MOVE_OPEN` and Roll back answers `409 TOO_LATE`. A new home that could not be asked is stored as `APP_KEY_UNCHECKED_UNREACHABLE` and only needs Resume. Every move answered carries `retire_stop` (`{kind, case, finish, key_entry, finish_refused}` or null): the one rule the Hub and the panel both use for whether the move is at this stop and which ways out can work. A run cut off mid-retire after the key had checked is not at this stop: Resume finishes it. Each way out is offered only where it can work (rulings P6-43, P6-45).",
+        "Way 1, the key: enter the key the new home runs under App key on the environment. While a move is stopped here the App key PUT judges the key against what the NEW home reports, on a Docker and a shared target alike, and takes it only when the fingerprints match; this is how the Hub gets a verified copy of the key the app really runs. On a Docker target an accepted key also becomes the environment's sealed stack secret `ENCRYPTION_KEY` when that differs (the same sealed path the Stack panel saves through; nothing is deployed), so a later Apply now keeps the key the app runs; the answer says `stack_key: 'set'`. A mismatch is refused (`APP_KEY_MISMATCH`) naming the fingerprint the new home reports, the one entered and the one the Hub holds, never a key; a new home that reports no key, or cannot be asked, is `APP_KEY_UNVERIFIED`. On a shared target a key that differs from the one the Hub holds is still `APP_KEY_IMMUTABLE`: there, wait until the deployment's replicas re-read the Hub's list and report its key. Then Resume: the move checks again and, once it matches, retires the old home and ends `success`. The panel offers this way only for a dedicated new home that reports another key (`case: key_entry`); for a new home that reports no key the way is to make it report the app's key, and for a shared new home to wait for its replicas.",
+        "Way 2, Finish and stop the old home (`POST /api/hub/moves/:id/finish-stop-source {confirm}`, typed `<app>/<env>`, ruling P6-45): the Hub STOPS the old home and proves it before the move ends; the old home is not deleted: its database, and on a Docker stack its volumes, stay, and it comes back only by moving the environment back to it. A shared old home: the app is dropped from that deployment's list (every replica must hold the list without it), so nothing there serves, upgrades or migrates it. A Docker old home: the agent (0.2.1 or later) removes the app's services first and the stack's Redis last (volumes kept; the Hub's stack settings and secrets kept), and its leftovers must show no service and no container of the stack still running or shutting down (`tasks_active` 0) within five minutes. An older agent cannot prove that, so Finish is refused until it is updated. A remove that fails part way, or a stop not proven in time, refuses Finish saying the old home is partly stopped and what still runs; Finish again (or a later retire) completes it. At a stop where the Hub could not reach the new home, Finish first checks that the public name answers from the new home (409 `NEW_HOME_NOT_SERVING` otherwise). Only then does the move end `success` with a warning, `MOVE_OPEN` lifts and the checklist item `retire_source` says to remove the old home when you are sure. A stop the Hub cannot prove refuses Finish with a plain reason (shown on the move, `finish_refused`) and nothing ends: the move stays at the stop, and a shared old home lists the app again. An old home the Hub cannot stop and prove stopped (a GitLab placement) has no Finish (409 `CANNOT_STOP_OLD_HOME`): enter the key the new home runs, then Resume. Refusals: 409 `NOT_RELEASED` before release, `NOT_STOPPED_AT_RETIRE` when the move is not at this stop, `MOVE_CHANGED` when it changed while asked.",
+        "After a run stopped once the key had checked (the Hub restarted while retiring), Resume finishes the retire without checking again: the check is stored before the old home's retire starts.",
         "A run that has stopped reporting for 2 minutes (the Hub restarted, or the process died) shows as `interrupted`, with Resume (continues from the stored step) and Roll back. Restarting the Hub marks such runs by itself, and frees the dead run's lock so resume or rollback is not `BUSY` for minutes. A run that loses its locks stops at once and never undoes beside another runner: it is interrupted, and you roll back after it heals.",
         'Cancel is a two-press confirm. A running move rolls back at its next step boundary; an interrupted one rolls back at once. `409 MOVE_ENDED` once it ended, `ROLLING_BACK` while it undoes.',
         "Never two writers: a freeze is proven, not assumed. A shared target counts as frozen only when the Hub has written the environment as `maintenance` on its list and every replica it has seen holds that list (a refresh of a list that still says `active` is not a freeze, and no replica seen means keep waiting). A dedicated Docker target counts as frozen when its maintenance is switched on over its own address and read back. A GitLab target: the same, or a retire read back. Before `release` the target is frozen by construction (a Docker target boots in maintenance, a GitLab target is held right after its deploy, a shared target lists the placed app as maintenance), so it is not frozen again. Switching a target's maintenance on also drops the boot-maintenance done marker for this move in the target's Redis, so a stack that ever came back would boot in maintenance rather than writable.",
@@ -657,12 +667,20 @@ export const hubMovesDocs: DocSection = {
         "The source and the target of a move must not share one Redis database with the same key prefix (and the same `HUB_TOKEN`). They would read each other's retire and maintenance markers. The plan checks this (`REDIS_SHARED`, or `REDIS_UNVERIFIED` when it cannot see)."
       ]
     },
-    { type: 'h2', id: 'hub-moves-retire', text: 'Retiring the old placement' },
+    {
+      type: 'h2',
+      id: 'hub-moves-retire',
+      text: 'Retiring the old placement'
+    },
     {
       type: 'p',
       text: 'A dedicated source is retired over its hub link, whatever driver runs it. A retired app stops running scheduled jobs and its background drainers (renders, imports, exports, media, reminders), closes open sockets and streams, refuses new socket connections, and answers `503 APP_MOVED` on every path except `/api/hub-link/*`, `/api/hub-transfer/*`, `/api/version`, `/api/ready` and `/api/health`. The state is kept in its Redis, so a restart stays retired. A Docker source stack is then removed with its volumes kept; a GitLab source is never stopped by the Hub, and the checklist item `old_stack_stopped` ("Stop the old stack") stays. A move back to the same process clears the marker first (`DELETE /api/hub-link/retire`). The retire state reads as retired while it cannot be read, so an unknown state never serves.'
     },
-    { type: 'h2', id: 'hub-moves-checklist', text: 'Checklist' },
+    {
+      type: 'h2',
+      id: 'hub-moves-checklist',
+      text: 'Checklist'
+    },
     {
       type: 'p',
       text: 'Each item is a statement you vouch for. The panel shows the checklist before the typed confirmation; the move starts only when every required item is ticked, and you can also tick later ones while it runs.'
@@ -723,7 +741,7 @@ export const hubMovesDocs: DocSection = {
         ],
         [
           '`retire_source`',
-          'Added by the run when the old placement could not be retired (the move is a success with a warning). Retire or stop it yourself.',
+          "Added by the run when the old placement could not be retired (the move is a success with a warning): retire or stop it yourself. When the new home's key did not check, the move stays interrupted instead and the item names the ways out that can work; the Hub ticks it once it retires the old home. After Finish and stop the old home the item says to remove the stopped old home when you are sure.",
           'no'
         ],
         [
@@ -743,7 +761,11 @@ export const hubMovesDocs: DocSection = {
         ]
       ]
     },
-    { type: 'h2', id: 'hub-moves-blockers', text: 'Blockers' },
+    {
+      type: 'h2',
+      id: 'hub-moves-blockers',
+      text: 'Blockers'
+    },
     {
       type: 'p',
       text: 'Blockers keep the Start button disabled. A blocker names plain facts (versions, counts, kinds, names), never a record, token, ticket, key or connection.'
@@ -807,7 +829,11 @@ export const hubMovesDocs: DocSection = {
       type: 'p',
       text: 'A failing preflight on the new home is not a plan blocker: it fails `target_ready` (`PREFLIGHT_FAILING`) and the move rolls back.'
     },
-    { type: 'h2', id: 'hub-moves-warnings', text: 'Warnings' },
+    {
+      type: 'h2',
+      id: 'hub-moves-warnings',
+      text: 'Warnings'
+    },
     {
       type: 'table',
       head: ['Code', 'Plain meaning'],
@@ -843,7 +869,11 @@ export const hubMovesDocs: DocSection = {
         ]
       ]
     },
-    { type: 'h2', id: 'hub-moves-notice', text: 'What people notice' },
+    {
+      type: 'h2',
+      id: 'hub-moves-notice',
+      text: 'What people notice'
+    },
     {
       type: 'ul',
       items: [
@@ -853,7 +883,11 @@ export const hubMovesDocs: DocSection = {
         'The names stay the same. With automatic routing nobody has to do anything.'
       ]
     },
-    { type: 'h2', id: 'hub-moves-routes', text: 'Routes' },
+    {
+      type: 'h2',
+      id: 'hub-moves-routes',
+      text: 'Routes'
+    },
     {
       type: 'table',
       head: ['Route (Hub administrators)', 'Does'],
@@ -882,7 +916,11 @@ export const hubMovesDocs: DocSection = {
           '`POST /api/hub/moves/:id/confirm-route`',
           'Check the public name now (manual routing). Answers `{serving}`; 409 `NOT_WAITING`.'
         ],
-        ['`POST /api/hub/moves/:id/checklist`', 'Body `{item, done}`. Answers the checklist.']
+        ['`POST /api/hub/moves/:id/checklist`', 'Body `{item, done}`. Answers the checklist.'],
+        [
+          '`POST /api/hub/moves/:id/finish-stop-source`',
+          'Finish and stop the old home: body `{confirm}` (`<app>/<env>`). 202. 400 `CONFIRM_MISMATCH`; 409 `NOT_RELEASED`, `NOT_STOPPED_AT_RETIRE`, `CANNOT_STOP_OLD_HOME`, `NEW_HOME_NOT_SERVING`, `MOVE_CHANGED`, `MOVE_ENDED`.'
+        ]
       ]
     },
     {
@@ -891,7 +929,7 @@ export const hubMovesDocs: DocSection = {
     },
     {
       type: 'note',
-      text: 'The move activity rows are `hub-move-start` (also a resume), `hub-move-done`, `hub-move-rolled-back`, `hub-move-cancel` (also a Roll back of an interrupted move), `hub-move-route-confirm` and `hub-move-checklist`. None contains a token, ticket, key or connection. After a move ends the Move… panel keeps showing its result until you dismiss it (per browser); an ended move stays in the environment history as "Moved".'
+      text: 'The move activity rows are `hub-move-start` (also a resume), `hub-move-done`, `hub-move-rolled-back`, `hub-move-cancel` (also a Roll back of an interrupted move), `hub-move-finish-stop` (Finish and stop the old home), `hub-move-route-confirm` and `hub-move-checklist`. None contains a token, ticket, key or connection. After a move ends the Move… panel keeps showing its result until you dismiss it (per browser); an ended move stays in the environment history as "Moved".'
     }
   ]
 }

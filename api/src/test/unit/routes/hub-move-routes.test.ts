@@ -105,6 +105,8 @@ function ops(): MoveOps {
     freezeTarget: r('freezeTarget', undefined),
     dropTempHost: r('dropTempHost', null),
     verifyTargetKey: r('verifyTargetKey', undefined),
+    stopSource: r('stopSource', undefined),
+    targetKeyFp: r('targetKeyFp', 'a'.repeat(32)),
     sourceBusy: r('sourceBusy', { imports: 0, exports: 0, renders: 0 }),
     pullFiles: async () => ({
       state: 'done',

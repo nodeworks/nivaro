@@ -85,7 +85,29 @@ type ServiceRow = {
 type SecretRow = { ID: string; Spec?: { Name?: string; Labels?: Labels } }
 type NetworkRow = { Id?: string; Name?: string; Labels?: Labels }
 type VolumeRow = { Name?: string; Labels?: Labels }
-type TaskRow = { ServiceID?: string; DesiredState?: string; Status?: { State?: string } }
+type TaskRow = {
+  ServiceID?: string
+  DesiredState?: string
+  Status?: { State?: string }
+  Spec?: { ContainerSpec?: { Labels?: Record<string, string> } }
+}
+
+/**
+ * Task states before a task has ended: its container may still be running (or starting, or
+ * draining after its service was removed). Swarm keeps a removed service's tasks, desired state
+ * `remove`, until their containers have stopped; their actual state stays one of these till then.
+ */
+export const ACTIVE_TASK_STATES: readonly string[] = [
+  'new',
+  'allocated',
+  'pending',
+  'assigned',
+  'accepted',
+  'preparing',
+  'ready',
+  'starting',
+  'running'
+]
 
 export type StackDeps = {
   /** The agent's swarm node id (extension placement). */
@@ -957,6 +979,12 @@ export type Leftovers = {
   volumes: string[]
   /** The stack's extensions folder still exists on the agent's host. */
   extensions: boolean
+  /**
+   * 0.2.1: tasks of this stack (by the container labels the agent sets) whose actual state has
+   * not ended, whatever Docker still wants for them: a removed service's containers that are
+   * still shutting down count. 0 = nothing of the stack runs anywhere in the swarm.
+   */
+  tasks_active: number
 }
 
 /**
@@ -980,13 +1008,32 @@ export async function stackLeftovers(
     secrets: names(objects.secrets),
     networks: names(objects.networks),
     volumes: names(objects.volumes),
-    extensions: await extensionFolderExists(cfg, name)
+    extensions: await extensionFolderExists(cfg, name),
+    tasks_active: await activeTasks(engine, name)
   }
 }
 
 /**
- * Services → secrets → network → (volumes, only with the flag) → extension
- * folders. Only managed objects of this stack, by name. Answers the names.
+ * How many tasks of this stack have not ended (ACTIVE_TASK_STATES), across the swarm: every task
+ * is read (a removed service can no longer be named in a filter) and matched on the container
+ * labels the agent sets (managed + stack namespace). Reads only.
+ */
+async function activeTasks(engine: Engine, stack: string): Promise<number> {
+  const body = await read<unknown>(engine, '/tasks', { filters: '{}' })
+  const tasks = (Array.isArray(body) ? body : []) as TaskRow[]
+  return tasks.filter((t) => {
+    const l = t?.Spec?.ContainerSpec?.Labels
+    return (
+      isManaged(l) &&
+      (l as Record<string, string>)[LABEL_NAMESPACE] === stack &&
+      ACTIVE_TASK_STATES.includes(String(t.Status?.State ?? ''))
+    )
+  }).length
+}
+
+/**
+ * Services (the app's first, Redis last) → secrets → network → (volumes, only with the flag) →
+ * extension folders. Only managed objects of this stack, by name. Answers the names.
  */
 export async function removeStack(
   engine: Engine,
@@ -1002,7 +1049,13 @@ export async function removeStack(
   const network = `nvh_${name}`
   const removed: RemoveResult['removed'] = { services: [], secrets: [], networks: [], volumes: [] }
 
-  for (const s of mine) {
+  // 0.2.1: the app's services first, the stack's Redis LAST: a remove that fails part way never
+  // leaves an app process running without the Redis that holds its maintenance freeze.
+  const order = [...mine].sort(
+    (a, b) =>
+      Number(labelsOf(a)[LABEL_ROLE] === 'redis') - Number(labelsOf(b)[LABEL_ROLE] === 'redis')
+  )
+  for (const s of order) {
     const n = nameOf(s)
     const r = await engine.call('DELETE', `/services/${n}`)
     if (ok(r.status)) removed.services.push(n)
@@ -1033,5 +1086,7 @@ export async function removeStack(
   }
 
   await removeExtensionFolders(cfg, name)
+  // The answer names stay sorted (the order removed in is Redis last, above).
+  removed.services.sort()
   return { removed }
 }

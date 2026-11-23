@@ -153,7 +153,7 @@ async function openLocalChain(key: string, rangeHeader?: string): Promise<Opened
   if (env instanceof LocalStorage) {
     const path = env.resolveKey(key)
     try {
-      return openedFromFile(path, (await stat(path)).size, rangeHeader)
+      return await openedFromFile(path, rangeHeader)
     } catch (err) {
       const code = (err as { code?: unknown } | null)?.code
       if (code !== 'ENOENT' && code !== 'ENOTDIR') throw err
@@ -170,17 +170,34 @@ async function openLocalChain(key: string, rangeHeader?: string): Promise<Opened
   // Strict (R7-M-1): an unreadable fallback folder (EACCES / EIO / ESTALE) is a read error, never
   // "missing".
   const copy = await existingFallback(key, { strict: true })
-  if (copy) return openedFromFile(copy.path, copy.size, rangeHeader)
+  if (copy) return openedFromFile(copy.path, rangeHeader)
   const remote = await openFallbackUrl(key, rangeHeader, { throwOnTrouble: true })
   if (remote) return remote
   throw new StoredObjectMissing()
 }
 
-function openedFromFile(path: string, size: number, rangeHeader?: string): OpenedObject {
+/**
+ * The file is OPENED before anything is answered: a file that stats but cannot be opened (mode
+ * 000, EACCES / EIO on an NFS fallback mount) throws here, inside the route's own read-error
+ * answer (503 SOURCE_READ_FAILED, no path), instead of failing the stream after the reply started
+ * (a 500 whose message named the server path). The size is the open file's own.
+ */
+async function openedFromFile(path: string, rangeHeader?: string): Promise<OpenedObject> {
+  const fh = await open(path, 'r')
+  let size: number
+  try {
+    size = (await fh.stat()).size
+  } catch (err) {
+    await fh.close().catch(() => {})
+    throw err
+  }
   const r = parseRange(rangeHeader, size)
-  if (r === 'unsatisfiable')
+  if (r === 'unsatisfiable') {
+    await fh.close().catch(() => {})
     return { size, range: null, unsatisfiable: true, stream: Readable.from([]) }
-  const stream = r ? createReadStream(path, { start: r.start, end: r.end }) : createReadStream(path)
+  }
+  // autoClose (the default): the handle closes when the stream ends, fails or is destroyed.
+  const stream = r ? fh.createReadStream({ start: r.start, end: r.end }) : fh.createReadStream()
   return { size, range: r, unsatisfiable: false, stream }
 }
 

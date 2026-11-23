@@ -43,6 +43,7 @@ import {
   fetchMovePlan,
   fetchMoves,
   fetchPlacement,
+  finishStopSource,
   formatBytes,
   type HubMove,
   type HubPlacement,
@@ -70,8 +71,10 @@ import {
   newestMove,
   pastRelease,
   REPOINT_ITEM,
+  type RetireStop,
   readDismissedMove,
   resumeMove,
+  retireStopKind,
   rollbackMove,
   runErrorCopy,
   STACK_NAME_RE,
@@ -200,9 +203,16 @@ export function OptionCombobox({
  * A stored run error (`CODE: sentence`): the code's plain words when known, the sentence under
  * them (raw text stays under "Details for support" via RunnerError); never the code itself.
  */
-export function MoveRunError({ text }: { text: string }) {
+export function MoveRunError({
+  text,
+  retireStop = null
+}: {
+  text: string
+  /** Round 1c: the move is stopped at retire_source (`retire_stop`): that stop's own words. */
+  retireStop?: Pick<RetireStop, 'kind' | 'case' | 'finish'> | null
+}) {
   const { code, sentence } = splitRunError(text)
-  const copy = runErrorCopy(code)
+  const copy = runErrorCopy(code, { retireStop })
   if (!copy) return <RunnerError text={sentence || text} />
   return (
     <div className='space-y-0.5'>
@@ -298,7 +308,12 @@ export function HubMovePanel({
           onRetry={() => void moves.refetch()}
         />
       ) : watching != null ? (
-        <MoveProgress moveId={watching} env={env} onDismiss={() => dismiss(watching)} />
+        <MoveProgress
+          moveId={watching}
+          appKey={appKey}
+          env={env}
+          onDismiss={() => dismiss(watching)}
+        />
       ) : (
         <MoveForm
           appKey={appKey}
@@ -1077,10 +1092,13 @@ const MAX_READ_FAILURES = 3
 
 function MoveProgress({
   moveId,
+  appKey,
   env,
   onDismiss
 }: {
   moveId: number
+  /** The app's key: "Finish and stop the old home" is confirmed by typing `<app>/<env>`. */
+  appKey: string
   env: HubEnvironment
   /** The move ended and the person is done with it: show the form for a new move. */
   onDismiss: () => void
@@ -1129,6 +1147,16 @@ function MoveProgress({
     mutationFn: () => rollbackMove(moveId),
     onSuccess: refresh,
     onError: (err) => moveToast(err, 'Could not roll the move back')
+  })
+  // P6-43 (b): ends a move stopped at retire_source without retiring the old home.
+  const [stopConfirm, setStopConfirm] = useState('')
+  const finishStop = useMutation({
+    mutationFn: () => finishStopSource(moveId, stopConfirm.trim()),
+    onSuccess: () => {
+      setStopConfirm('')
+      refresh()
+    },
+    onError: (err) => moveToast(err, 'Could not finish the move')
   })
   const checkRoute = useMutation({
     mutationFn: () => confirmMoveRoute(moveId),
@@ -1200,6 +1228,9 @@ function MoveProgress({
   const undoing = live && isRollingBack(m)
   const checklist = moveChecklistOf(m)
   const halted = isHaltedTargetLive(m)
+  // The server's one predicate (review N-7): the stop, its case and whether Finish can work.
+  const retireStop = retireStopKind(m) ? (m.retire_stop ?? null) : null
+  const stopExpected = `${appKey}/${env.key}`
   const ended = !live && m.status !== 'interrupted'
   // After a success, every open item is still to do. After a rollback only the repoint step is
   // (shown first, on its own): the plan's after-the-move reminders no longer apply.
@@ -1389,7 +1420,7 @@ function MoveProgress({
           )}
           data-tone={m.status === 'success' ? 'warning' : 'error'}
         >
-          <MoveRunError text={errorText ?? m.error} />
+          <MoveRunError text={errorText ?? m.error} retireStop={retireStop} />
         </div>
       )}
       {m.status === 'rolled_back' && !repoint && (
@@ -1447,20 +1478,31 @@ function MoveProgress({
 
       {m.status === 'interrupted' && !halted && (
         <div className='space-y-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-900/60 dark:bg-amber-950/40'>
-          <p className='m-0 text-[12px] text-amber-900 dark:text-amber-200'>
-            The Hub stopped hearing from this move (it restarted, or the run was cut off).{' '}
-            {past
-              ? 'The app already serves from its new home; Resume finishes what is left.'
-              : isRollingBack(m)
-                ? 'It was rolling back when it stopped. Resume and Roll back both go on undoing its steps; the app ends on its old home.'
-                : 'Resume goes on from the step it stopped at; Roll back puts the app back on its old home.'}
-          </p>
+          {/* At a retire_source stop the error box above already says what happened and the way
+              out (review N-6: each way once); the amber text here is for a run cut off. */}
+          {retireStop ? (
+            retireStop.finish_refused && (
+              <p className='m-0 text-[12px] text-amber-900 dark:text-amber-200'>
+                {retireStop.finish_refused}
+              </p>
+            )
+          ) : (
+            <p className='m-0 text-[12px] text-amber-900 dark:text-amber-200'>
+              {`The Hub stopped hearing from this move (it restarted, or the run was cut off). ${
+                past
+                  ? 'The app already serves from its new home; Resume finishes what is left.'
+                  : isRollingBack(m)
+                    ? 'It was rolling back when it stopped. Resume and Roll back both go on undoing its steps; the app ends on its old home.'
+                    : 'Resume goes on from the step it stopped at; Roll back puts the app back on its old home.'
+              }`}
+            </p>
+          )}
           <div className='flex flex-wrap items-center gap-2'>
             <Button
               size='sm'
               aria-label='Resume'
               className='h-8 bg-nvr-cyan text-white hover:bg-nvr-cyan/90'
-              disabled={resume.isPending || rollback.isPending}
+              disabled={resume.isPending || rollback.isPending || finishStop.isPending}
               onClick={() => resume.mutate()}
             >
               <Play className='h-3.5 w-3.5' aria-hidden /> Resume
@@ -1478,6 +1520,40 @@ function MoveProgress({
               </ConfirmButton>
             )}
           </div>
+          {retireStop?.finish && (
+            <div className='space-y-1.5 border-t border-amber-200 pt-2 dark:border-amber-900/60'>
+              <label
+                htmlFor={`move-${moveId}-stop-confirm`}
+                className='block text-[12px] text-amber-900 dark:text-amber-200'
+              >
+                Or finish the move and stop the old home: it is stopped, not removed, and comes back
+                only by moving the environment back to it; removing it stays on the checklist. Type{' '}
+                <code className='font-mono font-semibold'>{stopExpected}</code> to confirm.
+              </label>
+              <div className='flex flex-wrap items-center gap-2'>
+                <Input
+                  id={`move-${moveId}-stop-confirm`}
+                  value={stopConfirm}
+                  onChange={(e) => setStopConfirm(e.target.value)}
+                  autoComplete='off'
+                  spellCheck={false}
+                  placeholder='Type it here'
+                  className='h-8 max-w-[320px] bg-white font-mono text-[13px] dark:bg-background'
+                />
+                {/* Review R2-4: it stops a home: the danger tone Roll back has in this block. */}
+                <button
+                  type='button'
+                  className={dangerGhost}
+                  disabled={
+                    stopConfirm.trim() !== stopExpected || finishStop.isPending || resume.isPending
+                  }
+                  onClick={() => finishStop.mutate()}
+                >
+                  {finishStop.isPending ? 'Stopping the old home…' : 'Finish and stop the old home'}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

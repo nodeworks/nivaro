@@ -75,6 +75,12 @@ export class FakeEngine implements Engine {
   private version = 10
   private updateKnob: 'rollback' | 'out-of-sequence' | 'error' | null = null
   private taskStates = new Map<string, string>()
+  /** Tasks of removed services whose containers are still shutting down (until drained). */
+  draining: Obj[] = []
+  /** When false, a removed service's tasks are gone at once (nothing left to drain). */
+  drainOnDelete = true
+  /** Services whose DELETE fails with a 500 (an engine failure part way through a remove). */
+  failDelete = new Set<string>()
   private pullFailures = new Set<string>()
   private unreachable = false
   private secretsInUse = new Set<string>()
@@ -104,6 +110,10 @@ export class FakeEngine implements Engine {
   }
   taskState(service: string, state: string): void {
     this.taskStates.set(service, state)
+  }
+  /** The removed services' containers finish stopping. */
+  finishDraining(): void {
+    this.draining = []
   }
   failPull(ref: string): void {
     this.pullFailures.add(ref)
@@ -227,7 +237,8 @@ export class FakeEngine implements Engine {
           ID: `${s.ID}-t${i}`,
           ServiceID: s.ID,
           DesiredState: 'running',
-          Status: { State: state }
+          Status: { State: state },
+          Spec: { ContainerSpec: { Labels: clone(s.Spec.TaskTemplate?.ContainerSpec?.Labels) } }
         })
       }
       // A shut-down task of an earlier version, as Docker keeps them.
@@ -235,9 +246,12 @@ export class FakeEngine implements Engine {
         ID: `${s.ID}-old`,
         ServiceID: s.ID,
         DesiredState: 'shutdown',
-        Status: { State: 'running' }
+        Status: { State: 'running' },
+        Spec: { ContainerSpec: { Labels: clone(s.Spec.TaskTemplate?.ContainerSpec?.Labels) } }
       })
     }
+    // Swarm keeps a removed service's tasks (desired state remove) until their containers stop.
+    if (!wanted.length) out.push(...this.draining.map(clone))
     return out
   }
 
@@ -492,7 +506,22 @@ export class FakeEngine implements Engine {
       case 'DELETE /services': {
         const svc = this.findService(seg[1])
         if (!svc) return { status: 404, body: { message: 'service not found' } }
+        if (this.failDelete.has(svc.Spec.Name))
+          return { status: 500, body: { message: 'engine failed' } }
         this.services.delete(svc.ID)
+        if (this.drainOnDelete) {
+          const n = svc.Spec.Mode?.Replicated?.Replicas ?? 0
+          for (let i = 0; i < n; i++)
+            this.draining.push({
+              ID: `${svc.ID}-drain${i}`,
+              ServiceID: svc.ID,
+              DesiredState: 'remove',
+              Status: { State: 'running' },
+              Spec: {
+                ContainerSpec: { Labels: clone(svc.Spec.TaskTemplate?.ContainerSpec?.Labels) }
+              }
+            })
+        }
         return { status: 200, body: null }
       }
       case 'DELETE /secrets': {

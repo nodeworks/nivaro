@@ -1,3 +1,4 @@
+import { pullFailReasonsFrom } from '../../hub-transfer/fail-reasons.js'
 import type { PullRequest, PullStatus } from '../shared/deployment-client.js'
 import { parseReadiness } from './readiness-parse.js'
 
@@ -343,7 +344,8 @@ export function hubLinkClient(
         size_mismatch: isNum(b.size_mismatch) ? b.size_mismatch : 0,
         failed_ids: Array.isArray(b.failed_ids)
           ? (b.failed_ids as unknown[]).filter(isStr).slice(0, 50)
-          : []
+          : [],
+        failed_reasons: pullFailReasonsFrom(b.failed_reasons)
       }
     }
   }

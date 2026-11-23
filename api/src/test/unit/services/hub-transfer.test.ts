@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -110,6 +111,12 @@ const noName = new Set<string>()
 const noLength = new Set<string>()
 /** R6-I-1: ids the source cannot read right now (its storage throttles): 503. */
 const readFails = new Set<string>()
+/** Review M-5: ids answered by "a proxy's" 404 (no transfer-route marker). */
+const proxy404 = new Set<string>()
+/** C-1: ids whose 503 says the source's FILES_FALLBACK_DIR is gone or empty. */
+const fallbackGone = new Set<string>()
+/** Review N-3: ids whose body the source cuts off mid-way (the connection drops). */
+const cutMidBody = new Set<string>()
 const sourceSeen: string[] = []
 let server: Server
 let SOURCE = ''
@@ -127,6 +134,10 @@ beforeAll(async () => {
       res.writeHead(302, { location: `${SOURCE}/redirect-target` })
       return res.end()
     }
+    if (fallbackGone.has(id)) {
+      res.writeHead(503, { 'content-type': 'application/json' })
+      return res.end('{"code":"SOURCE_READ_FAILED","reason":"FALLBACK_FOLDER_UNAVAILABLE"}')
+    }
     if (readFails.has(id)) {
       res.writeHead(503, { 'content-type': 'application/json' })
       return res.end('{"code":"SOURCE_READ_FAILED"}')
@@ -137,13 +148,23 @@ beforeAll(async () => {
     }
     const body = objects.get(id)
     if (!body) {
-      res.writeHead(404, { 'content-type': 'application/json' })
+      // The transfer route's own "not found" marker (only that counts as missing).
+      res.writeHead(404, {
+        'content-type': 'application/json',
+        ...(proxy404.has(id) ? {} : { 'x-nivaro-transfer-missing': '1' })
+      })
       return res.end('{"code":"NOT_FOUND"}')
     }
     const headers: Record<string, string> = { 'content-type': 'application/octet-stream' }
     if (!noLength.has(id)) headers['content-length'] = String(body.length)
     if (!noName.has(id)) headers['x-nivaro-filename-disk'] = `${id}.bin`
     res.writeHead(200, headers)
+    if (cutMidBody.has(id)) {
+      // Half the bytes, then the connection drops.
+      res.write(body.subarray(0, Math.floor(body.length / 2)))
+      setTimeout(() => res.socket?.destroy(), 20)
+      return
+    }
     if (noLength.has(id)) {
       res.write(body)
       return res.end()
@@ -219,6 +240,9 @@ beforeEach(() => {
   noName.clear()
   noLength.clear()
   readFails.clear()
+  proxy404.clear()
+  fallbackGone.clear()
+  cutMidBody.clear()
   sourceSeen.length = 0
   logs.length = 0
   resetPullsForTests()
@@ -415,6 +439,7 @@ describe('pull', () => {
       (await startPull({ source: SOURCE, ticket: TICKET, mode: 'full' })).run_id
     )
     expect(s).toMatchObject({ state: 'done', copied: 1, failed: 1 })
+    expect(s.failed_reasons).toEqual({ unreachable: 1 })
     expect(sourceSeen).not.toContain('redirect-target')
     expect(() => statSync(join(root, 'f2.bin'))).toThrow()
   })
@@ -432,10 +457,69 @@ describe('pull', () => {
     )
     expect(s).toMatchObject({ state: 'done', copied: 2, failed: 2, size_mismatch: 1 })
     expect([...(s?.failed_ids ?? [])].sort()).toEqual(['n1', 'n2'])
+    expect(s.failed_reasons).toEqual({ bad_answer: 2 })
     for (const id of ['n1', 'n2']) expect(() => statSync(join(root, `${id}.bin`))).toThrow()
     expect(readFileSync(join(root, 'n3.bin'), 'utf8')).toBe('body-n3')
     expect(readFileSync(join(root, 'n4.bin'), 'utf8')).toBe('body-n4')
   })
+
+  // Review M-5: only the transfer route's own "not found" (its marker) is missing.
+  it('a 404 without the transfer route marker (a proxy) fails its row, never "missing"', async () => {
+    rows.push(row('p1', 4), row('p2', 4))
+    proxy404.add('p1')
+    const s = await finished(
+      (await startPull({ source: SOURCE, ticket: TICKET, mode: 'full' })).run_id
+    )
+    expect(s).toMatchObject({ state: 'done', failed: 1, missing: ['p2'] })
+    expect(s.failed_ids).toEqual(['p1'])
+    expect(s.failed_reasons).toEqual({ bad_answer: 1 })
+  })
+
+  // C-1: a source whose FILES_FALLBACK_DIR is gone or empty says so; the reason is its own.
+  it('a 503 naming FALLBACK_FOLDER_UNAVAILABLE counts as source_fallback_unavailable', async () => {
+    rows.push(row('g1', 4))
+    fallbackGone.add('g1')
+    const s = await finished(
+      (await startPull({ source: SOURCE, ticket: TICKET, mode: 'full' })).run_id
+    )
+    expect(s.failed_reasons).toEqual({ source_fallback_unavailable: 1 })
+  })
+
+  // Review N-3: a source that drops the connection mid-body is incomplete, never the target's
+  // temp folder (pipeline destroys the temp file's stream with the source's error too).
+  it('a body the source cuts off mid-way is incomplete, not a temp-folder failure', async () => {
+    objects.set('c1', Buffer.alloc(64 * 1024, 7))
+    rows.push(row('c1', 64 * 1024))
+    cutMidBody.add('c1')
+    const s = await finished(
+      (await startPull({ source: SOURCE, ticket: TICKET, mode: 'full' })).run_id
+    )
+    expect(s).toMatchObject({ failed: 1, copied: 0 })
+    expect(s.failed_reasons).toEqual({ incomplete: 1 })
+    expect(() => statSync(join(root, 'c1.bin'))).toThrow()
+  })
+
+  // Review M-5: a full or unwritable temporary folder on the target is its own reason.
+  it.skipIf(typeof process.getuid === 'function' && process.getuid() === 0)(
+    'a temporary folder that cannot be written fails the row as temp_write_failed',
+    async () => {
+      objects.set('t1', Buffer.from('four'))
+      rows.push(row('t1', 4))
+      const ro = join(tmp, 'read-only')
+      mkdirSync(ro)
+      chmodSync(ro, 0o500)
+      pullDeps.tmpDir = () => ro
+      try {
+        const s = await finished(
+          (await startPull({ source: SOURCE, ticket: TICKET, mode: 'full' })).run_id
+        )
+        expect(s).toMatchObject({ failed: 1, copied: 0 })
+        expect(s.failed_reasons).toEqual({ temp_write_failed: 1 })
+      } finally {
+        chmodSync(ro, 0o755)
+      }
+    }
+  )
 
   it('an answer over the per-object cap fails that row', async () => {
     pullDeps.limits = { ...pullDeps.defaultLimits, maxObjectBytes: 8 }
@@ -810,6 +894,8 @@ describe('pull: saved-settings objects (P6-31)', () => {
     expect(s).toMatchObject({ state: 'done', total: 1, copied: 0, failed: 1 })
     expect(s.missing).toEqual([])
     expect(s.failed_ids).toEqual(['o4'])
+    // The plain reason the move repeats (hub-transfer/fail-reasons.ts).
+    expect(s.failed_reasons).toEqual({ source_read_failed: 1 })
   })
 
   it('without objects (the prefix stays) a saved-settings row is never copied', async () => {

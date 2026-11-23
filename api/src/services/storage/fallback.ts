@@ -11,7 +11,7 @@
  * storage), so the source's folder is never changed. Off in cloud mode — tenants have no shared
  * host folders, and a tenant must never read another environment's files.
  */
-import { readFile, stat } from 'node:fs/promises'
+import { opendir, readFile, stat } from 'node:fs/promises'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { isMultiTenant } from '../deployment-mode.js'
 
@@ -40,10 +40,29 @@ function isNotThere(err: unknown): boolean {
 }
 
 /**
+ * The fallback folder is set but is not there as a folder (an NFS mount that is gone, a volume
+ * that was not mounted), or it is EMPTY — an unmounted share or volume usually leaves its mount
+ * point behind as an empty folder (ruling C-1). Strict mode only: never "missing" (`code` is not
+ * ENOENT), so a move's copy fails the row instead of skipping it for good. Carries no path.
+ * Cost of the rule: a source whose uploads really are empty while file rows exist fails its move;
+ * the remedy is to unset FILES_FALLBACK_DIR on it (the move's text says so).
+ */
+export class FallbackFolderUnavailable extends Error {
+  readonly code = 'FALLBACK_FOLDER_UNAVAILABLE'
+  constructor() {
+    super('The files fallback folder is not available.')
+    this.name = 'FallbackFolderUnavailable'
+  }
+}
+
+/**
  * The fallback file's path when it exists and is a regular file. By default any stat error reads
  * as no copy (the app's reads then answer 404 as before). `strict` (a move's file chain, R7-M-1):
  * only ENOENT / ENOTDIR mean no copy; any other error (EACCES, EIO, ESTALE on an NFS mount) is
- * thrown, so a file the fallback still holds is never counted as missing.
+ * thrown, so a file the fallback still holds is never counted as missing. A key that is not there
+ * counts as missing only while the folder itself is there: a fallback folder that is gone or not
+ * a folder (an unmounted volume answers ENOENT for every key), or one with no entries at all (an
+ * empty mount point), throws FallbackFolderUnavailable.
  */
 export async function existingFallback(
   key: string,
@@ -56,7 +75,29 @@ export async function existingFallback(
     return s.isFile() ? { path: p, size: s.size } : null
   } catch (err) {
     if (opts.strict && !isNotThere(err)) throw err
+    if (opts.strict) await assertFallbackFolder()
     return null
+  }
+}
+
+/** Strict mode: the fallback folder itself must be there, readable and not empty for a miss to
+ *  count. Reads at most one entry (opendir), never the whole folder. */
+async function assertFallbackFolder(): Promise<void> {
+  const root = filesFallbackDir()
+  if (!root) return
+  let dir: Awaited<ReturnType<typeof stat>>
+  try {
+    dir = await stat(root)
+  } catch (err) {
+    if (isNotThere(err)) throw new FallbackFolderUnavailable()
+    throw err
+  }
+  if (!dir.isDirectory()) throw new FallbackFolderUnavailable()
+  const handle = await opendir(root)
+  try {
+    if ((await handle.read()) === null) throw new FallbackFolderUnavailable()
+  } finally {
+    await handle.close().catch(() => {})
   }
 }
 

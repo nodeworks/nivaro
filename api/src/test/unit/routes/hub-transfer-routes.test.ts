@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -270,10 +270,51 @@ describe('GET /api/hub-transfer/files/:id on a dedicated app', () => {
     const a = await build()
     const { ticket } = await mintTransferTicket(null)
     const h = { authorization: `Transfer ${ticket}` }
-    expect((await get(a, FILE_GONE, h)).statusCode).toBe(404)
-    expect((await get(a, '99999999-2222-4333-8444-555555555555', h)).statusCode).toBe(404)
+    const gone = await get(a, FILE_GONE, h)
+    expect(gone.statusCode).toBe(404)
+    // Review M-5: the route's own "not found" marker (only that is "missing" to the pull).
+    expect(gone.headers['x-nivaro-transfer-missing']).toBe('1')
+    const noRow = await get(a, '99999999-2222-4333-8444-555555555555', h)
+    expect(noRow.statusCode).toBe(404)
+    expect(noRow.headers['x-nivaro-transfer-missing']).toBe('1')
     expect((await get(a, 'not-a-uuid', h)).statusCode).toBe(404)
   })
+
+  // Hub phase 6 untested path 1: a file that stats but cannot be opened (mode 000, an EACCES on
+  // an NFS fallback mount) failed the stream after the reply started: a 500 whose message named
+  // the server path. It is opened before anything is answered now: 503 SOURCE_READ_FAILED.
+  it.skipIf(typeof process.getuid === 'function' && process.getuid() === 0)(
+    'a stored file that cannot be opened is 503 SOURCE_READ_FAILED, never a 500 naming the path',
+    async () => {
+      dedicated()
+      const locked = '88888888-2222-4333-8444-555555555555'
+      writeFileSync(join(root, 'ab/locked.pdf'), 'secret-bytes')
+      chmodSync(join(root, 'ab/locked.pdf'), 0o000)
+      st.files.get('')?.push({
+        id: locked,
+        filename_disk: 'ab/locked.pdf',
+        type: 'application/pdf',
+        filesize: 12
+      })
+      try {
+        const a = await build()
+        const { ticket } = await mintTransferTicket(null)
+        const res = await get(a, locked, { authorization: `Transfer ${ticket}` })
+        expect(res.statusCode).toBe(503)
+        expect(res.json().code).toBe('SOURCE_READ_FAILED')
+        expect(res.headers['x-nivaro-filename-disk']).toBeUndefined()
+        expect(res.body).not.toContain(root)
+        expect(logLines.join('\n')).not.toContain(root)
+      } finally {
+        chmodSync(join(root, 'ab/locked.pdf'), 0o644)
+        const rows = st.files.get('') ?? []
+        rows.splice(
+          rows.findIndex((f) => f.id === locked),
+          1
+        )
+      }
+    }
+  )
 
   it('a ticket minted for an app of a shared deployment never opens a dedicated app', async () => {
     shared()

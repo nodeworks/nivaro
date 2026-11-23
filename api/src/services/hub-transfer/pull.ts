@@ -17,6 +17,7 @@ import { getApp } from '../io-holder.js'
 import { getStorage, type StorageProvider } from '../storage/index.js'
 import { appKeyPart } from '../tenancy/credential-binding.js'
 import { COPYABLE_OBJECT_STORAGE } from './copyable.js'
+import type { PullFailReason, PullFailReasons } from './fail-reasons.js'
 import { TRANSFER_TICKET_RE } from './tickets.js'
 
 /**
@@ -34,10 +35,12 @@ import { TRANSFER_TICKET_RE } from './tickets.js'
  *  - Per row: skipped when the object is already here at the row's size (resumable); otherwise
  *    fetched (`redirect: 'error'`, 10 min per object, 4 at a time) into a temp file, then
  *    `putFile(filename_disk)`. Streams go through `pipeline()`, never `.pipe()`.
- *  - A 404 is `missing` (≤ 50 ids listed; neither copied nor failed: total − copied − skipped −
- *    failed = how many were missing). An answer over 5 GB, a redirect, another status, an answer
+ *  - A 404 carrying the route's `X-Nivaro-Transfer-Missing: 1` is `missing` (≤ 50 ids listed;
+ *    neither copied nor failed: total − copied − skipped − failed = how many were missing); a 404
+ *    without it (a proxy, another route) fails the row. An answer over 5 GB, a redirect, another status, an answer
  *    without `X-Nivaro-Filename-Disk` (or naming another key) or without `Content-Length`, or a
- *    streamed size that differs from Content-Length fails that row (its id in `failed_ids`, ≤ 50).
+ *    streamed size that differs from Content-Length fails that row (its id in `failed_ids`, ≤ 50;
+ *    every failed row counted under its plain reason in `failed_reasons`, fail-reasons.ts).
  *    A Content-Length that differs from the row's stored filesize is copied anyway and counted in
  *    `size_mismatch` (Task 16: a stale filesize must not fail the row on every run). A 401/403 (the ticket refused) or no
  *    progress for 10 minutes fails the run.
@@ -87,6 +90,8 @@ export interface PullStatus {
   size_mismatch?: number
   /** Task 16: the file ids that failed (at most 50), so a move can say which. */
   failed_ids?: string[]
+  /** How many rows failed for each plain reason (every failed row, not only the 50 ids). */
+  failed_reasons?: PullFailReasons
 }
 
 export interface FileRow {
@@ -133,6 +138,8 @@ export function errorShape(err: unknown): { err_name: string | null; err_code: s
 }
 
 export const TRANSFER_FILES_PATH = '/api/hub-transfer/files'
+/** The transfer route's own "not found" marker (routes/hub-transfer.ts TRANSFER_MISSING_HEADER). */
+const TRANSFER_MISSING_HEADER = 'x-nivaro-transfer-missing'
 const MAX_MISSING = 50
 const RUN_TTL_MS = 24 * 60 * 60 * 1000
 const MANIFEST_TTL_MS = 7 * 24 * 60 * 60 * 1000
@@ -287,6 +294,49 @@ export function transferSource(raw: unknown): string | null {
   return null
 }
 
+/** The temp file's own write failure: an open/write syscall error with a disk or access code. */
+const TEMP_WRITE_CODES = new Set(['ENOSPC', 'EDQUOT', 'EACCES', 'EPERM', 'EROFS', 'EIO'])
+function isOwnTempWriteError(err: unknown): boolean {
+  const e = err as { syscall?: unknown; code?: unknown } | null
+  return (
+    (e?.syscall === 'open' || e?.syscall === 'write') &&
+    typeof e.code === 'string' &&
+    TEMP_WRITE_CODES.has(e.code)
+  )
+}
+
+/** `code` and `reason` of a small JSON body (≤ 2 KB; a bigger one is cut off unread). */
+async function smallJsonCode(
+  body: ReadableStream<Uint8Array>
+): Promise<{ code: string | null; reason: string | null } | null> {
+  const reader = body.getReader()
+  const parts: Uint8Array[] = []
+  let n = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      n += value.length
+      if (n > 2048) return null
+      parts.push(value)
+    }
+  } finally {
+    void reader.cancel().catch(() => {})
+  }
+  try {
+    const b = JSON.parse(Buffer.concat(parts).toString('utf8')) as {
+      code?: unknown
+      reason?: unknown
+    } | null
+    return {
+      code: typeof b?.code === 'string' ? b.code : null,
+      reason: typeof b?.reason === 'string' ? b.reason : null
+    }
+  } catch {
+    return null
+  }
+}
+
 // ─── runs ────────────────────────────────────────────────────────────────────────────────────
 
 interface Run {
@@ -316,7 +366,8 @@ function copyStatus(s: PullStatus): PullStatus {
     missing: [...s.missing],
     // A mirror an older process wrote has neither field.
     size_mismatch: Number(s.size_mismatch) || 0,
-    failed_ids: Array.isArray(s.failed_ids) ? [...s.failed_ids] : []
+    failed_ids: Array.isArray(s.failed_ids) ? [...s.failed_ids] : [],
+    failed_reasons: { ...(s.failed_reasons ?? {}) }
   }
 }
 
@@ -456,7 +507,8 @@ export async function startPull(req: PullRequest): Promise<{ run_id: string }> {
       bytes: 0,
       error: null,
       size_mismatch: 0,
-      failed_ids: []
+      failed_ids: [],
+      failed_reasons: {}
     }
   }
   runs.set(mapKey(sc, runId), run)
@@ -636,13 +688,31 @@ async function execute(
     // A private literal is the only plain fetch (see the header); every host name is guarded.
     const guarded = !plainHttpHost(new URL(req.source).hostname)
 
-    const failRow = (id?: string) => {
+    const failRow = (id: string, reason: PullFailReason) => {
       if (!fatal) {
         st.failed++
         if (!st.failed_ids) st.failed_ids = []
         if (id && st.failed_ids.length < MAX_MISSING) st.failed_ids.push(id)
+        if (!st.failed_reasons) st.failed_reasons = {}
+        st.failed_reasons[reason] = (st.failed_reasons[reason] ?? 0) + 1
       }
       progress()
+    }
+
+    /** A non-200 answer's reason: the source's own SOURCE_READ_FAILED (a small JSON body, read
+     *  at most 2 KB), a gateway on the way, or not a Nivaro source's answer. */
+    const answerReason = async (res: Response): Promise<PullFailReason> => {
+      if (res.status === 503 && res.body) {
+        const b = await smallJsonCode(res.body).catch(() => null)
+        if (b?.code !== 'SOURCE_READ_FAILED') return 'unreachable'
+        return b.reason === 'FALLBACK_FOLDER_UNAVAILABLE'
+          ? 'source_fallback_unavailable'
+          : 'source_read_failed'
+      }
+      void res.body?.cancel().catch(() => {})
+      return res.status === 502 || res.status === 503 || res.status === 504
+        ? 'unreachable'
+        : 'bad_answer'
     }
 
     const copyOne = async (row: FileRow, changed: boolean): Promise<void> => {
@@ -653,7 +723,7 @@ async function execute(
       try {
         store = await storeFor(row)
       } catch {
-        return failRow(id)
+        return failRow(id, 'write_failed')
       }
       if (!changed && expected !== null && store.size) {
         const have = await store.size(key).catch(() => null)
@@ -677,7 +747,7 @@ async function execute(
         res = guarded ? await pullDeps.safeFetch(url, init) : await pullDeps.fetch(url, init)
       } catch {
         // unreachable, timed out, or a redirect (redirect: 'error')
-        return failRow(id)
+        return failRow(id, 'unreachable')
       }
       const drop = () => {
         void res.body?.cancel().catch(() => {})
@@ -688,25 +758,25 @@ async function execute(
       }
       if (res.status === 404) {
         drop()
+        // Review M-5: only the transfer route's own "not found" (its marker header) is missing;
+        // a proxy's or another route's 404 would make every row "missing" and never block.
+        if (res.headers.get(TRANSFER_MISSING_HEADER) !== '1') return failRow(id, 'bad_answer')
         if (st.missing.length < MAX_MISSING) st.missing.push(id)
         progress()
         return
       }
-      if (res.status !== 200 || !res.body) {
-        drop()
-        return failRow(id)
-      }
+      if (res.status !== 200 || !res.body) return failRow(id, await answerReason(res))
       // A Nivaro source always names the object and its length: an answer without both is not
       // one (another endpoint at that path) and is never written over the row's key.
       const declared = toNumber(res.headers.get('content-length'))
       if (declared === null || declared > limits.maxObjectBytes) {
         drop()
-        return failRow(id)
+        return failRow(id, 'bad_answer')
       }
       const named = res.headers.get('x-nivaro-filename-disk')
       if (named === null || decodeHeader(named) !== key) {
         drop()
-        return failRow(id)
+        return failRow(id, 'bad_answer')
       }
       // The row's stored size disagrees with what the source serves (a stale filesize, T10
       // review N-1): the source's object is the one the row names (same key), so it is copied
@@ -714,23 +784,38 @@ async function execute(
       const mismatch = expected !== null && declared !== expected
       const tmp = join(tmpDir, `${run.id}-${randomUUID()}`)
       let got = 0
+      let tooBig = false
       const max = limits.maxObjectBytes
       const counter = new Transform({
         transform(chunk: Buffer, _enc, cb) {
           got += chunk.length
           run.lastProgress = Date.now()
-          if (got > max) cb(new Error('object too large'))
-          else cb(null, chunk)
+          if (got > max) {
+            tooBig = true
+            cb(new Error('object too large'))
+          } else cb(null, chunk)
         }
+      })
+      // Which part failed decides the reason: the bytes coming in, this side's temporary file
+      // (a full or unwritable temp folder, review M-5), or this side storing them.
+      let stage: 'incomplete' | 'write_failed' = 'incomplete'
+      let tempFailed = false
+      const sink = createWriteStream(tmp)
+      // Review N-3: only the temp file's OWN failure (its open or write syscall with a disk or
+      // permission code) is the target's temp folder. pipeline() destroys every stream with the
+      // first error, so a source cut mid-body also reaches this listener: that stays incomplete.
+      sink.once('error', (err) => {
+        tempFailed = isOwnTempWriteError(err)
       })
       try {
         await pipeline(
           Readable.fromWeb(res.body as unknown as WebReadableStream<Uint8Array>),
           counter,
-          createWriteStream(tmp),
+          sink,
           { signal }
         )
-        if (got !== declared) return failRow(id)
+        if (got !== declared) return failRow(id, 'incomplete')
+        stage = 'write_failed'
         await store.putFile(key, tmp, row.type || 'application/octet-stream', {
           signal: ac.signal
         })
@@ -740,7 +825,7 @@ async function execute(
         progress()
         await remember(id)
       } catch {
-        return failRow(id)
+        return failRow(id, tooBig ? 'bad_answer' : tempFailed ? 'temp_write_failed' : stage)
       } finally {
         await unlink(tmp).catch(() => {})
       }

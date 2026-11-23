@@ -90,3 +90,45 @@ describe('the move file chain (openTransferObject)', () => {
     expect((err as { code?: string }).code).toBe('EACCES')
   })
 })
+
+// Hub phase 6 untested path 1: a fallback folder that is gone (an unmounted NFS volume answers
+// ENOENT for every key) made every file of a move "missing", so the move released without them.
+describe('a fallback folder that is not there', () => {
+  it('strict: thrown as FALLBACK_FOLDER_UNAVAILABLE (never "missing"); default: no copy', async () => {
+    process.env.FILES_FALLBACK_DIR = join(root, 'not-mounted')
+    try {
+      expect(await existingFallback('ok/a.bin')).toBeNull()
+      const err = await existingFallback('ok/a.bin', { strict: true }).catch((e) => e)
+      expect(err).toMatchObject({ code: 'FALLBACK_FOLDER_UNAVAILABLE' })
+      expect(String((err as Error).message)).not.toContain(root)
+      const opened = await openTransferObject('ok/a.bin', 'local').catch((e) => e)
+      expect(isStoredObjectMissing(opened)).toBe(false)
+      // A file, not a folder, is not there either.
+      process.env.FILES_FALLBACK_DIR = join(root, 'file.txt')
+      await expect(existingFallback('x.bin', { strict: true })).rejects.toMatchObject({
+        code: 'FALLBACK_FOLDER_UNAVAILABLE'
+      })
+    } finally {
+      process.env.FILES_FALLBACK_DIR = root
+    }
+  })
+  // Ruling C-1: an unmounted share usually leaves its mount point as an EMPTY folder that exists.
+  it('strict: an existing but empty fallback folder (the mount point) is unavailable too', async () => {
+    const mountPoint = join(root, 'mount-point')
+    mkdirSync(mountPoint)
+    process.env.FILES_FALLBACK_DIR = mountPoint
+    try {
+      expect(await existingFallback('ok/a.bin')).toBeNull()
+      await expect(existingFallback('ok/a.bin', { strict: true })).rejects.toMatchObject({
+        code: 'FALLBACK_FOLDER_UNAVAILABLE'
+      })
+      const opened = await openTransferObject('ok/a.bin', 'local').catch((e) => e)
+      expect(isStoredObjectMissing(opened)).toBe(false)
+      // One entry is enough: a key missing from a folder that holds something is missing.
+      writeFileSync(join(mountPoint, 'other.bin'), 'x')
+      expect(await existingFallback('ok/a.bin', { strict: true })).toBeNull()
+    } finally {
+      process.env.FILES_FALLBACK_DIR = root
+    }
+  })
+})

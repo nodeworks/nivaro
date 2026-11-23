@@ -8,11 +8,12 @@ import {
   AgentError,
   agentApply,
   agentHealth,
+  agentLeftovers,
   agentRemove,
   agentStack,
   describeAgentError
 } from '../docker/agent-client.js'
-import type { StackSpec } from '../docker/agent-types.js'
+import type { StackLeftovers, StackSpec } from '../docker/agent-types.js'
 import { agentOrigin } from '../docker/driver-config.js'
 import { type DockerOpsDeps, prepareStackSpec } from '../docker/run-step.js'
 import { databaseRecordId } from '../docker/stack-env.js'
@@ -97,6 +98,8 @@ export const STACK_CONVERGE_MS = 30 * 60_000
 export const PULL_STATUS_GIVE_UP_MS = 10 * 60_000
 const POLL_MS = 5_000
 const STACK_POLL_MS = 10_000
+/** P6-45: how long a stopped old Docker stack may take to show nothing running. */
+export const SOURCE_STOP_MS = 5 * 60_000
 /** P6-27: how long the per-move name may keep answering after the stack dropped it. */
 const TEMP_HOST_GONE_MS = 2 * 60_000
 const REFRESH_AGAIN_MS = 30_000
@@ -145,11 +148,26 @@ export interface MoveOps {
   verifyName(expect: { version: string; shared: string | null }): Promise<boolean>
   retireSource(): Promise<void>
   /**
+   * P6-45 "Finish and stop the old home": STOPS the old home, proven, without deleting it (its
+   * data and the Hub's settings stay; it comes back only by a move back). Shared: the caller has dropped the app from the
+   * deployment's list (step column); every replica must hold that list. Docker: the agent removes
+   * the old stack's services (volumes kept; the Hub's stack settings rows are untouched) and the
+   * agent's status must show nothing running. Any other kind: CANNOT_STOP_OLD_HOME. Throws
+   * OLD_HOME_NOT_STOPPED when the stop cannot be proven.
+   */
+  stopSource(): Promise<void>
+  /**
    * E2E B4 (P6-38): after release, the target reports the app's own key fingerprint (the shared
    * deployment's app status, or the dedicated target's readiness report). Throws APP_KEY_UNKNOWN /
    * APP_KEY_MISMATCH otherwise; the source is not retired then.
    */
   verifyTargetKey(): Promise<void>
+  /**
+   * The key fingerprint the new home reports for this app (the shared deployment's app status,
+   * or the dedicated target's readiness report); null = it reports none. Throws when it cannot
+   * be asked. The one reader verifyTargetKey and the App key PUT at retire_source share.
+   */
+  targetKeyFp(): Promise<string | null>
   /**
    * P6-27: once rollback is no longer possible, a Docker target stack is applied again with only
    * the environment's own names and the per-move name is proven gone (the agent converged on a
@@ -191,6 +209,7 @@ export interface MoveOpsDeps {
     agentStack: typeof agentStack
     agentApply: typeof agentApply
     agentRemove: typeof agentRemove
+    agentLeftovers: typeof agentLeftovers
   }>
   docker?: DockerOpsDeps
   imageDigest?: typeof imageDigest
@@ -285,12 +304,36 @@ const originOf = (url: string): string | null => {
   }
 }
 
+/**
+ * Review R2-2: a stop that did not finish, in plain words: what of the old stack still runs. The
+ * stack is named; services are said by what they are (`<stack>_redis` = its Redis).
+ */
+export function partlyStopped(stack: string, left: StackLeftovers | null): string {
+  if (!left)
+    return `The Hub agent did not answer for the old Docker stack ${stack}, so its stop could not be proven. Finish again to complete it.`
+  const parts = left.services.map((name) => {
+    const role = name.startsWith(`${stack}_`) ? name.slice(stack.length + 1) : name
+    return role === 'redis' ? 'its Redis' : `its ${role} process`
+  })
+  const tasks = Number(left.tasks_active) || 0
+  if (tasks > 0) parts.push(`${tasks} container${tasks === 1 ? '' : 's'} still shutting down`)
+  const still = parts.length ? parts.join(', ') : 'nothing the agent can see'
+  return `The old Docker stack ${stack} is partly stopped; still running: ${still}. Finish again to complete the stop.`
+}
+
 export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDeps = {}): MoveOps {
   const sleep = deps.sleep ?? realSleep
   const now = deps.now ?? Date.now
   const clientFor = deps.client ?? ((s: SharedDeployment) => deploymentClient(s))
   const linkFor = deps.link ?? ((b: string, t: string | null) => hubLinkClient(b, t))
-  const agent = { agentHealth, agentStack, agentApply, agentRemove, ...deps.agent }
+  const agent = {
+    agentHealth,
+    agentStack,
+    agentApply,
+    agentRemove,
+    agentLeftovers,
+    ...deps.agent
+  }
   const log = (line: string, level: 'info' | 'warn' | 'error' = 'info') => {
     try {
       deps.log?.(line, level)
@@ -1212,16 +1255,19 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
       return temp
     },
 
-    async verifyTargetKey() {
+    async targetKeyFp() {
       const l = await load()
+      return l.to.kind === 'shared'
+        ? (await clientFor(l.to.shared).appStatus(l.tenantId)).key_fp
+        : (await (await targetLink()).sharedReadiness()).key_fp
+    },
+
+    async verifyTargetKey() {
       const appKey = await openAppKey(envId)
       if (!appKey)
         throw new MoveStepError('APP_KEY_UNKNOWN', 'The Hub holds no encryption key for this app.')
       const want = keyFingerprint(appKey)
-      const got =
-        l.to.kind === 'shared'
-          ? (await clientFor(l.to.shared).appStatus(l.tenantId)).key_fp
-          : (await (await targetLink()).sharedReadiness()).key_fp
+      const got = await ops.targetKeyFp()
       if (!got)
         throw new MoveStepError(
           'APP_KEY_UNKNOWN',
@@ -1306,6 +1352,61 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
           'SOURCE_NOT_RETIRED',
           'The GitLab source could not be retired over its hub link; stop it in GitLab.'
         )
+    },
+
+    async stopSource() {
+      const l = await load()
+      const from = l.from
+      if (from.kind === 'shared') {
+        try {
+          await ops.waitReplicas(from.shared.id)
+        } catch (err) {
+          throw new MoveStepError(
+            'OLD_HOME_NOT_STOPPED',
+            `Not every replica of the shared deployment ${from.shared.key} has dropped the app yet (${asStepError(err, '').message || 'no answer'}).`
+          )
+        }
+        log(`the shared deployment ${from.shared.key} no longer lists the app`)
+        return
+      }
+      if (from.kind !== 'docker')
+        throw new MoveStepError(
+          'CANNOT_STOP_OLD_HOME',
+          'The Hub cannot stop this old home and prove it stopped (it is not a Docker stack or a shared deployment).'
+        )
+      // The agent removes the app's services first and the stack's Redis last (0.2.1), so a
+      // remove that fails part way never leaves an app process without its freeze.
+      let removeFailed = false
+      try {
+        await removeStack(from, l.envKey, l.app)
+      } catch (err) {
+        removeFailed = true
+        log(`the old Docker stack ${from.stack} was not fully removed (${codeOf(err)})`, 'warn')
+      }
+      // Review R2-1: proven only when no container of the stack still runs or shuts down,
+      // across the swarm (the agent's `tasks_active`, 0.2.1), not only when its services are gone.
+      const owner = { app: l.app.key, environment: l.envKey }
+      const by = now() + SOURCE_STOP_MS
+      for (;;) {
+        let left: StackLeftovers | null = null
+        try {
+          left = await agent.agentLeftovers(from.driver, from.stack, owner)
+        } catch {
+          left = null
+        }
+        if (left && typeof left.tasks_active !== 'number')
+          throw new MoveStepError(
+            'OLD_HOME_NOT_STOPPED',
+            `The Hub agent for the old Docker stack ${from.stack} is older than 0.2.1 and cannot report whether its containers have stopped, so the stop is not proven. Update the agent, then Finish again.`
+          )
+        if (!removeFailed && left && left.services.length === 0 && left.tasks_active === 0) {
+          log(`the old Docker stack ${from.stack} is stopped (no container running; volumes kept)`)
+          return
+        }
+        if (removeFailed || now() >= by)
+          throw new MoveStepError('OLD_HOME_NOT_STOPPED', partlyStopped(from.stack, left))
+        await sleep(STACK_POLL_MS)
+      }
     },
 
     async databaseIdentity(which) {
