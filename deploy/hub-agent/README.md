@@ -189,4 +189,6 @@ matches the image being pulled, never anywhere else.
 
 The container healthcheck is a TCP connect to the listen port (every 30 s, 15 s
 timeout, 3 retries, 30 s start period: a short timeout got the agent killed on a
-loaded host). `GET /v1/health` needs the token and is what the Hub uses.
+loaded host). `GET /v1/health` needs the token and is what the Hub uses. It
+answers `traefik_version` too, so a shared deployment's upgrade plan refuses a
+host pattern on a Traefik v2 agent before anything is applied.

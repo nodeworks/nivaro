@@ -486,6 +486,12 @@ export async function gatherSharedUpgrade(
         'EXTENSION_NOT_ALLOWED',
         `The Hub agent does not allow the image of extension ${disallowed.join(', ')}.`
       )
+    // Final review M-7: the pattern router is v3 HostRegexp — a v2 agent refuses it at apply.
+    if (edge === 'traefik' && shared.host_pattern && health.traefik_version === 2)
+      block(
+        'PATTERN_NOT_ALLOWED',
+        `The Hub agent sets labels for Traefik v2, which cannot route the host pattern ${shared.host_pattern}: set HUB_AGENT_TRAEFIK_VERSION=3 on the agent (Traefik v3), or remove the pattern and route explicit names.`
+      )
     if (edge === 'traefik' && shared.host_pattern) {
       const base = shared.host_pattern.slice(2)
       const suffixes = Array.isArray(health.host_suffixes) ? health.host_suffixes : []

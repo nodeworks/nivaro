@@ -1592,3 +1592,26 @@ describe('final review M-8: a rollback says the schema stays ahead', () => {
     expect(codes(up.warnings)).not.toContain('ROLLBACK_SCHEMA_AHEAD')
   })
 })
+
+describe("final review M-7: the plan sees the agent's Traefik version", () => {
+  it('a host pattern on a Traefik v2 agent → PATTERN_NOT_ALLOWED in the plan, not at apply', async () => {
+    const id = await newShared()
+    await newApp(id, [{ key: 'production', placed: true }])
+    const v2 = await Plan.planSharedUpgrade(
+      id,
+      '0.3.210',
+      'upgrade',
+      planDeps({ agentHealth: async () => health({ traefik_version: 2 }) })
+    )
+    expect(v2.blockers.find((b) => b.code === 'PATTERN_NOT_ALLOWED')?.text).toMatch(/Traefik v2/)
+    for (const t of [3, undefined] as const) {
+      const ok = await Plan.planSharedUpgrade(
+        id,
+        '0.3.210',
+        'upgrade',
+        planDeps({ agentHealth: async () => health({ traefik_version: t }) })
+      )
+      expect(codes(ok.blockers)).toEqual([])
+    }
+  })
+})
