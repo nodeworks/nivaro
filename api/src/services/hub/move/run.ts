@@ -1920,6 +1920,8 @@ async function finishKept(ctx: Ctx): Promise<void> {
       s.note = 'Kept: the move was finished without retiring the old home.'
     }
   }
+  // Round 1b: what tenants.ts rule 4 selects on (until the retire item is ticked).
+  steps.kept_source_open = true
   await saveSteps(ctx, steps)
   if (ctx.lockLost) return notOurs(ctx)
   const item = safeLine(
@@ -2057,6 +2059,11 @@ export async function setMoveChecklist(
     return stored
   })
   if (!known) throw new MoveError('UNKNOWN_ITEM', 'This move has no such checklist item.', 400)
+  // Round 1b: a kept old home stays in its shared list only while its retire item is open.
+  if (item === 'retire_source' && move.steps.finish_keep)
+    await mergeSteps(id, (stored) =>
+      stored.kept_source_open === !done ? null : { ...stored, kept_source_open: !done }
+    )
   await logActivity({
     action: 'hub-move-checklist',
     user: by,

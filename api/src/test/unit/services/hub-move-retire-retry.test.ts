@@ -610,6 +610,7 @@ describe('APP_KEY_UNKNOWN: the new home reports no key', () => {
     const item = done?.checklist.find((c) => c.id === 'retire_source')
     expect(item?.done).toBe(false)
     expect(item?.text).toMatch(/^The old home was kept on purpose/)
+    expect(done?.steps.kept_source_open).toBe(true)
     // MOVE_OPEN lifts; the move cannot be finished twice or cancelled.
     expect(await moveOpenRefusal({ envIds: [w.envId] })).toBeNull()
     expect((await finishKeep(id, `${w.appKey}/prod`)).json().code).toBe('MOVE_ENDED')
@@ -623,6 +624,22 @@ describe('APP_KEY_UNKNOWN: the new home reports no key', () => {
     })
     expect(tick.statusCode).toBe(200)
     expect(await listedOnSource(w)).toBeNull()
+    // Round 1b: the list reads this move through one flag, kept in step with the item.
+    expect((await readMove(id))?.steps.kept_source_open).toBe(false)
+    const untick = await http.inject({
+      method: 'POST',
+      url: `/api/hub/moves/${id}/checklist`,
+      payload: { item: 'retire_source', done: false }
+    })
+    expect(untick.statusCode).toBe(200)
+    expect((await readMove(id))?.steps.kept_source_open).toBe(true)
+    expect(await listedOnSource(w)).toBe('maintenance')
+    // Only flagged moves are read: the other finished moves out of this deployment are not.
+    const flagged = await db('nivaro_hub_moves')
+      .where({ status: 'success' })
+      .where('steps', 'like', '%"kept_source_open":true%')
+      .pluck('id')
+    expect(flagged.map(Number)).toEqual([id])
   })
 })
 

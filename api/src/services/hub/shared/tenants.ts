@@ -29,7 +29,8 @@ import { openAppKey, type SharedDeployment, tenantIdFor } from './store.js'
  *  4. P6-43 (b): an environment whose move OUT of here ended by "Finish and keep the old home"
  *     (a success whose steps carry `finish_keep`) while its `retire_source` checklist item is not
  *     ticked: the old home was kept on purpose, so it stays listed as `maintenance` until a person
- *     ticks that item (they retired it).
+ *     ticks that item (they retired it). Only those moves are read: their steps carry
+ *     `kept_source_open: true` until the item is ticked (matched in SQL).
  * Archived environments are never listed. Only rule 1 rows are `placedHere` (they run this
  * deployment's version; an observed upgrade re-pins only them).
  *
@@ -132,11 +133,13 @@ export async function tenantsOf(shared: SharedDeployment): Promise<SharedTenantR
     if (placements.has(to) && m.placed_at != null)
       pick.set(envId, { placementId: to, forced: 'maintenance' })
   }
-  // Rule 4: a kept old home (a success with a warning; parsed here, never matched in SQL).
+  // Rule 4: a kept old home whose retire item is still open. Selected in SQL on the one flag the
+  // run keeps for exactly that (`"kept_source_open":true` in the steps text; longText on every
+  // engine), so only those moves are read; the checklist is still confirmed below.
   const kept = (await db(MOVES)
     .where({ status: 'success' })
     .whereIn('from_placement_id', ids)
-    .whereNotNull('error')
+    .where('steps', 'like', '%"kept_source_open":true%')
     .select('environment_id', 'from_placement_id', 'steps', 'checklist')) as Record<
     string,
     unknown

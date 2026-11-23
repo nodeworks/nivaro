@@ -91,6 +91,12 @@ export interface MoveSteps {
   retire_key_checked_at?: string | null
   /** P6-43 (b): a person chose "Finish and keep the old home" (typed confirm) after release. */
   finish_keep?: { by: string | null; at: string }
+  /**
+   * Round 1b: true while a finished-and-kept move's manual retire item is open (set by
+   * finishKept, flipped by setMoveChecklist). The one fact tenants.ts rule 4 selects on in SQL:
+   * the stored JSON text holds `"kept_source_open":true` exactly then.
+   */
+  kept_source_open?: boolean
   /** The run's own lock tokens (env + shared), which heal frees by compare-and-delete. */
   locks?: { env: string; shared: Array<{ id: number; token: string }> }
   /** Where each dedicated side is reached (addresses.ts), resolved and probed at start. */
