@@ -1,6 +1,7 @@
 import { db } from '../db/index.js'
 import { getTenantId } from '../db/tenant-context.js'
 import type { User } from '../types.js'
+import { registerAppKeyed } from './app-forget.js'
 
 /**
  * Field comments (#3232, migration 521): a normal record comment tagged with the
@@ -10,7 +11,9 @@ import type { User } from '../types.js'
  */
 
 const MISS_TTL_MS = 60_000
-const probes = new Map<string, { hit: boolean; at: number; inflight: Promise<boolean> | null }>()
+const probes = registerAppKeyed(
+  new Map<string, { hit: boolean; at: number; inflight: Promise<boolean> | null }>()
+)
 
 /** Does this database have the field-comment columns yet? Cached per tenant (a miss for a minute). */
 export async function hasFieldCommentColumns(): Promise<boolean> {

@@ -1,6 +1,7 @@
 import { config } from '../config.js'
 import { cronTicksEnabled } from './cron-ticks.js'
 import { isMultiTenant } from './deployment-mode.js'
+import { isRetiredSync } from './hub-link/retire.js'
 import { processRole } from './process-role.js'
 
 /**
@@ -150,6 +151,8 @@ export const isFinalStatus = (s: unknown) => FINAL.has(String(s ?? '').toLowerCa
 /** May this process drain the import queue, and on what terms? */
 export function importDrainMode(env: NodeJS.ProcessEnv = process.env): ImportDrainMode {
   if (isMultiTenant(env)) return 'off'
+  // Hub phase 6: a retired app (moved away) drains nothing; read on every tick.
+  if (isRetiredSync()) return 'off'
   const flag = (env.IMPORT_WORKER ?? '').trim().toLowerCase()
   if (flag === 'off') return 'off'
   const role = processRole(env)

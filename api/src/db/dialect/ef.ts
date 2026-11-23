@@ -1,5 +1,7 @@
 import type { Knex } from 'knex'
+import { registerAppKeyed } from '../../services/app-forget.js'
 import { collateCiAs, sqlDialect, tryCastNumber } from '../sql-dialect.js'
+import { getTenantId } from '../tenant-context.js'
 
 /**
  * Cross-dialect SQL fragments for the workflows / dashboards / communication area (P2 E+F).
@@ -207,11 +209,16 @@ export function escapeLikeFor(knex: Knex, v: string): string {
   return v.replace(/[\\%_]/g, (c) => `\\${c}`)
 }
 
-const idKinds = new Map<string, Promise<'auto' | 'text'>>()
+/** Per app + table + key column (final review M6): the app names the database (each app on a
+ *  shared deployment has its own; self-hosted the app is ''), so the answer holds for every handle
+ *  on it — the `db` proxy, a pinned connection, every transaction (a new handle each time, which a
+ *  cache per handle re-read for every insert). An app that leaves the process forgets its answers
+ *  (registerAppKeyed). */
+const idKinds = registerAppKeyed(new Map<string, Promise<'auto' | 'text'>>())
 
 /** MySQL: whether `table`'s key is an auto-increment number or text (a uuid with a default). */
 function mysqlIdKind(knex: Knex, table: string, idCol: string): Promise<'auto' | 'text'> {
-  const key = `${table}\u0000${idCol}`
+  const key = `${getTenantId() ?? ''}\u0000${table}\u0000${idCol}`
   let kind = idKinds.get(key)
   if (!kind) {
     kind = knex(table)
@@ -220,6 +227,10 @@ function mysqlIdKind(knex: Knex, table: string, idCol: string): Promise<'auto' |
         const t = String((info as { type?: string })?.type ?? '').toLowerCase()
         return /char|text/.test(t) ? ('text' as const) : ('auto' as const)
       })
+    // A failed read is not an answer: the next insert asks again.
+    kind.catch(() => {
+      if (idKinds.get(key) === kind) idKinds.delete(key)
+    })
     idKinds.set(key, kind)
   }
   return kind

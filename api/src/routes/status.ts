@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { appBox } from '../services/app-state.js'
 import { NIVARO_VERSION } from '../version.js'
 
 // ─── Public status page (#658) ───────────────────────────────────────────────
@@ -17,7 +18,7 @@ interface StatusSnapshot {
 }
 
 const CACHE_MS = 10_000
-let cached: { at: number; promise: Promise<StatusSnapshot> } | null = null
+const cached = appBox<{ at: number; promise: Promise<StatusSnapshot> } | null>(() => null)
 
 async function probe(app: FastifyInstance): Promise<StatusSnapshot> {
   const [dbOk, redisOk] = await Promise.all([
@@ -44,10 +45,10 @@ async function probe(app: FastifyInstance): Promise<StatusSnapshot> {
 function snapshot(app: FastifyInstance): Promise<StatusSnapshot> {
   // Cache the PROMISE, not just the result — concurrent cold hits share one
   // probe instead of each opening a DB round trip.
-  if (!cached || Date.now() - cached.at >= CACHE_MS) {
-    cached = { at: Date.now(), promise: probe(app) }
+  if (!cached.value || Date.now() - cached.value.at >= CACHE_MS) {
+    cached.value = { at: Date.now(), promise: probe(app) }
   }
-  return cached.promise
+  return cached.value.promise
 }
 
 function fmtUptime(s: number): string {

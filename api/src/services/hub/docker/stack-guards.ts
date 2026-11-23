@@ -1,6 +1,6 @@
 import { db } from '../../../db/index.js'
 import { type DockerDriverRow, getDriver, getPlacement, STACK_NAME_RE } from '../drivers.js'
-import { defaultPromoteLock, type LockHolder } from '../promote-lock.js'
+import { defaultPromoteLock, type LockHolder, lockHolderRefusal } from '../promote-lock.js'
 import { AgentError, agentLeftovers, agentStack } from './agent-client.js'
 import type { StackStatus } from './agent-types.js'
 import { strictPinMap } from './stack-gather.js'
@@ -29,6 +29,12 @@ export interface DockerTarget {
   /** The keys the agent's labels must name for the stack to be this environment's. */
   appKey: string
   envKey: string
+  /**
+   * Phase 6: when an administrator told the Hub this stack is gone although its agent could not
+   * confirm it (POST /placements/:id/forget-stack): the guards then ignore every deploy recorded
+   * before it. Absent when never forgotten.
+   */
+  forgottenAt?: string
 }
 
 /**
@@ -41,17 +47,43 @@ export async function dockerTargetOf(envId: number): Promise<DockerTarget | null
     | undefined
   if (!env?.placement_id) return null
   const placement = await getPlacement(Number(env.placement_id))
-  if (!placement) return null
+  // Phase 6: a shared placement has no stack of its own (routes answer SHARED_PLACEMENT).
+  if (!placement || placement.kind === 'shared') return null
   const driver = await getDriver(placement.driver_id)
   if (driver?.kind !== 'docker') return null
   const app = (await db(APPS).where({ id: env.app_id }).first('key')) as { key: string } | undefined
   const name = placement.target.stack
+  const forgotten = placement.target.forgotten_at
   return {
     driver,
     stackName: typeof name === 'string' && STACK_NAME_RE.test(name) ? name : null,
     appKey: String(app?.key ?? ''),
-    envKey: String(env.key)
+    envKey: String(env.key),
+    ...(typeof forgotten === 'string' && forgotten ? { forgottenAt: forgotten } : {})
   }
+}
+
+/** Milliseconds of a stored time (Date, epoch number or text); null when unreadable. */
+function timeOf(v: unknown): number | null {
+  if (v === null || v === undefined || v === '') return null
+  const t =
+    v instanceof Date
+      ? v.getTime()
+      : typeof v === 'number' || /^\d{12,}$/.test(String(v))
+        ? Number(v)
+        : Date.parse(String(v))
+  return Number.isFinite(t) ? t : null
+}
+
+/**
+ * A deploy row started after the stack was forgotten (`since`); every row when nothing was
+ * forgotten. An unreadable start time counts (fail closed: the guard then asks the agent).
+ */
+function startedAfter(row: { started_at?: unknown }, since: string | undefined): boolean {
+  if (!since) return true
+  const forgot = timeOf(since)
+  const at = timeOf(row.started_at)
+  return forgot === null || at === null || at > forgot
 }
 
 /** The agent's status names this app and environment (ruling P4-21). */
@@ -89,14 +121,24 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
  * merge: phase 2's fix wave records the deployed state as an event + recorded plan; read it
  * from there when it lands.
  */
-export async function deployedStack(envId: number, stackName: string): Promise<DeployedStack> {
+export async function deployedStack(
+  envId: number,
+  stackName: string,
+  /** Phase 6: only deploys started after this time (the stack was forgotten then). */
+  since?: string
+): Promise<DeployedStack> {
   const rows = (await db(DEPLOYS)
     .where({ environment_id: envId })
     .whereNotNull('plan')
     .orderBy('id', 'desc')
     .limit(200)
-    .select('version', 'plan')) as Array<{ version: string | null; plan: string | null }>
+    .select('version', 'plan', 'started_at')) as Array<{
+    version: string | null
+    plan: string | null
+    started_at?: unknown
+  }>
   for (const r of rows) {
+    if (!startedAfter(r, since)) continue
     let plan: unknown
     try {
       plan = JSON.parse(String(r.plan ?? ''))
@@ -164,18 +206,25 @@ export async function recordedRunningStack(envId: number): Promise<string | null
   if (!env?.version_pin) return null
   const target = await dockerTargetOf(envId)
   if (!target?.stackName) return null
-  return (await deployedStack(envId, target.stackName)).state === 'none' ? null : target.stackName
+  return (await deployedStack(envId, target.stackName, target.forgottenAt)).state === 'none'
+    ? null
+    : target.stackName
 }
 
 /** The newest deploy row of this environment whose stored plan has a docker step for `name`. */
-async function deployedThisStackOnce(envId: number, name: string): Promise<boolean> {
+async function deployedThisStackOnce(
+  envId: number,
+  name: string,
+  since?: string
+): Promise<boolean> {
   const rows = (await db(DEPLOYS)
     .where({ environment_id: envId })
     .whereNotNull('plan')
     .orderBy('id', 'desc')
     .limit(200)
-    .select('plan')) as Array<{ plan: string | null }>
+    .select('plan', 'started_at')) as Array<{ plan: string | null; started_at?: unknown }>
   for (const r of rows) {
+    if (!startedAfter(r, since)) continue
     let plan: unknown
     try {
       plan = JSON.parse(String(r.plan ?? ''))
@@ -211,7 +260,7 @@ export async function stackRunsHere(envId: number): Promise<string | null> {
   if (recorded) return recorded
   const target = await dockerTargetOf(envId)
   if (!target?.stackName) return null
-  if (!(await deployedThisStackOnce(envId, target.stackName))) return null
+  if (!(await deployedThisStackOnce(envId, target.stackName, target.forgottenAt))) return null
   try {
     const status = await agentStack(target.driver, target.stackName)
     return status && ownsStack(status, target) ? target.stackName : null
@@ -274,6 +323,22 @@ export async function dockerEnvironmentDeleteRefusal(envId: number): Promise<Del
   const target = await dockerTargetOf(envId)
   if (!target?.stackName) return null
   const name = target.stackName
+  // Phase 6: forgotten (the agent is gone and an administrator said so) and not deployed again
+  // since — nothing of this environment is known to run there.
+  // The agent is still asked (M-6): one that came back reporting the stack as this
+  // environment's refuses the delete; no answer, or no stack, lets it go.
+  if (
+    target.forgottenAt &&
+    !(await deployedThisStackOnce(envId, name, target.forgottenAt).catch(() => true))
+  ) {
+    const status = await agentStack(target.driver, name).catch(() => null)
+    if (status && ownsStack(status, target))
+      return {
+        code: 'STACK_STILL_RUNNING',
+        message: `The agent reports stack ${name} again although it was forgotten — remove the stack before deleting this environment`
+      }
+    return null
+  }
   let readingStatus = true
   try {
     const status = await agentStack(target.driver, name)
@@ -320,4 +385,113 @@ export async function dockerEnvironmentDeleteRefusal(envId: number): Promise<Del
       message: `The Hub agent could not say whether stack ${name} still runs — try again when it answers`
     }
   }
+}
+
+export type ForgetStackOutcome =
+  | { ok: true; forgotten_at: string; stack: string; agent: 'absent' | 'not_ours' | 'unknown' }
+  | { ok: false; status: 400 | 404 | 409; code: string; message: string }
+
+/**
+ * Phase 6, "forget stack" (POST /placements/:id/forget-stack): an administrator tells the Hub a
+ * Docker placement's stack is gone when its agent cannot confirm it (a removed host, a lost
+ * agent). `confirm` must be the stack name (400 CONFIRM_REQUIRED). The agent is asked first: when
+ * it answers with the stack, labelled for this environment (or no environment names the
+ * placement, so ownership cannot be told), it is refused 409 STACK_RUNNING — remove it instead.
+ * Otherwise (absent, another owner's, or no answer) `target.forgotten_at` is set and the stack
+ * guards stop counting deploys recorded before it. Held under the environment's lock (`stack`).
+ * Never changes the environment or anything on the Docker host.
+ */
+export async function forgetPlacementStack(
+  placementId: number,
+  confirm: unknown
+): Promise<ForgetStackOutcome> {
+  const placement = await getPlacement(placementId)
+  if (!placement) return { ok: false, status: 404, code: 'NOT_FOUND', message: 'Not found' }
+  if (placement.kind === 'shared')
+    return {
+      ok: false,
+      status: 409,
+      code: 'SHARED_PLACEMENT',
+      message: 'A shared placement has no stack of its own to forget.'
+    }
+  const driver = await getDriver(placement.driver_id)
+  if (driver?.kind !== 'docker')
+    return {
+      ok: false,
+      status: 409,
+      code: 'NOT_DOCKER',
+      message: 'This placement is not deployed through a Docker driver'
+    }
+  const name = placement.target.stack
+  if (typeof name !== 'string' || !STACK_NAME_RE.test(name))
+    return {
+      ok: false,
+      status: 409,
+      code: 'NO_STACK_NAME',
+      message: 'The placement names no swarm stack'
+    }
+  if (confirm !== name)
+    return {
+      ok: false,
+      status: 400,
+      code: 'CONFIRM_REQUIRED',
+      message: `Type the stack name (${name}) to forget it`
+    }
+  const env = (await db(ENVS).where({ placement_id: placementId }).first('id')) as
+    | { id: number }
+    | undefined
+  const work = async (): Promise<ForgetStackOutcome> => {
+    const target = env ? await dockerTargetOf(Number(env.id)) : null
+    let agent: 'absent' | 'not_ours' | 'unknown' = 'absent'
+    try {
+      const status = await agentStack(driver, name)
+      if (status) {
+        if (!target || ownsStack(status, target))
+          return {
+            ok: false,
+            status: 409,
+            code: 'STACK_RUNNING',
+            message: `The agent reports stack ${name} is there — remove the stack instead of forgetting it`
+          }
+        agent = 'not_ours'
+      }
+    } catch (err) {
+      agent =
+        err instanceof AgentError &&
+        (err.code === 'STACK_NOT_FOUND' ||
+          err.code === 'STACK_NOT_HUB' ||
+          err.code === 'STACK_OWNER_MISMATCH')
+          ? err.code === 'STACK_NOT_FOUND'
+            ? 'absent'
+            : 'not_ours'
+          : 'unknown'
+    }
+    const at = new Date().toISOString()
+    // Read again: the placement may have changed while the agent was asked.
+    const fresh = await getPlacement(placementId)
+    if (!fresh || fresh.kind === 'shared' || fresh.target.stack !== name)
+      return {
+        ok: false,
+        status: 409,
+        code: 'PLACEMENT_CHANGED',
+        message: 'The placement changed meanwhile — look at it again'
+      }
+    await db('nivaro_hub_placements')
+      .where({ id: placementId })
+      .update({
+        target: JSON.stringify({ ...fresh.target, forgotten_at: at }),
+        updated_at: new Date()
+      })
+    return { ok: true, forgotten_at: at, stack: name, agent }
+  }
+  if (!env) return work()
+  const done = await withEnvironmentLock(Number(env.id), work)
+  if (!done.held) {
+    const r = lockHolderRefusal(done.holder, {
+      code: 'PROMOTION_RUNNING',
+      message: 'A promotion of this environment is running — wait for it to end.'
+    })
+    return { ok: false, status: 409, code: r.code, message: r.message }
+  }
+  return done.value
 }

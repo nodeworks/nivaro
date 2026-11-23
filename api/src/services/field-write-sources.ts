@@ -1,3 +1,4 @@
+import { registerAppKeyed } from './app-forget.js'
 import type { RawWriteAnnouncement } from './raw-write-announcer.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
@@ -56,7 +57,7 @@ async function redisNow(): Promise<SourceRedis | null> {
   }
 }
 
-const mem = new Map<string, Record<string, string>>()
+const mem = registerAppKeyed(new Map<string, Record<string, string>>())
 
 function keyOf(collection: string, item: string): string {
   return `nvr:fsrc:${currentTenantKey()}:${collection}:${item}`

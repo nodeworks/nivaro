@@ -8,6 +8,7 @@ import { rawRows } from '../db/raw-rows.js'
 import { orderByNullsLikeMssql, sqlDialect } from '../db/sql-dialect.js'
 import { getTenantId } from '../db/tenant-context.js'
 import type { CMSCollection, CMSField, CMSRelation } from '../types.js'
+import { registerAppKeyed } from './app-forget.js'
 import { clearVirtualSqlCache } from './virtual-sql.js'
 
 function parseJson<T>(val: unknown): T | null {
@@ -91,11 +92,15 @@ const SYNTHETIC_COLLECTIONS: Record<string, Partial<CMSCollection>> = {
 // only through the data-model/collections/field-config routes, which call
 // clearMetadataCache() — the short TTL is just a backstop for direct DB edits.
 const META_TTL_MS = 30_000
-const collectionCache = new Map<string, { value: CMSCollection | undefined; at: number }>()
-const fieldsCache = new Map<string, { value: CMSField[]; at: number }>()
+// Keyed per app (metaKey = app + name): one shared-deployment process serves many apps' schemas.
+const metaKey = (name: string) => `${getTenantId() ?? ''}\u0000${name}`
+const collectionCache = registerAppKeyed(
+  new Map<string, { value: CMSCollection | undefined; at: number }>()
+)
+const fieldsCache = registerAppKeyed(new Map<string, { value: CMSField[]; at: number }>())
 
 // #1224 — the table's real columns, keyed per tenant (cloud shared tier).
-const physicalColumnsCache = new Map<string, { value: Set<string>; at: number }>()
+const physicalColumnsCache = registerAppKeyed(new Map<string, { value: Set<string>; at: number }>())
 
 /** Counts clearMetadataCache calls: per-read caches built from metadata (the items service's
  *  relation cache) compare it to know a schema change happened since they filled. */
@@ -116,9 +121,11 @@ export function clearMetadataCache(collection?: string): void {
   if (!isRemoteEpochClear()) void dropMetadataL2()
   clearVirtualSqlCache()
   physicalColumnsCache.clear()
+  // One collection: its entry in every app (cheap and safe — a refetch); all: every app.
   if (collection) {
-    collectionCache.delete(collection)
-    fieldsCache.delete(collection)
+    const tail = `\u0000${collection}`
+    for (const k of [...collectionCache.keys()]) if (k.endsWith(tail)) collectionCache.delete(k)
+    for (const k of [...fieldsCache.keys()]) if (k.endsWith(tail)) fieldsCache.delete(k)
     return
   }
   collectionCache.clear()
@@ -153,18 +160,19 @@ export async function getPhysicalColumns(
 }
 
 export async function getCollection(name: string): Promise<CMSCollection | undefined> {
-  const hit = collectionCache.get(name)
+  const key = metaKey(name)
+  const hit = collectionCache.get(key)
   if (hit && Date.now() - hit.at < META_TTL_MS) return hit.value
   try {
     const value = await loadCollection(name)
-    collectionCache.set(name, { value, at: Date.now() })
+    collectionCache.set(key, { value, at: Date.now() })
     return value
   } catch (err) {
     // Stale-while-revalidate (#331): a refresh failure (DB blip) serves the
     // last-known-good metadata flagged fresh for one more TTL, instead of
     // failing every request that needed it.
     if (hit) {
-      collectionCache.set(name, { ...hit, at: Date.now() })
+      collectionCache.set(key, { ...hit, at: Date.now() })
       return hit.value
     }
     throw err
@@ -241,16 +249,17 @@ export async function deleteCollection(name: string): Promise<void> {
 // ─── Fields ───────────────────────────────────────────────────────────────────
 
 export async function getFields(collection: string): Promise<CMSField[]> {
-  const hit = fieldsCache.get(collection)
+  const key = metaKey(collection)
+  const hit = fieldsCache.get(key)
   if (hit && Date.now() - hit.at < META_TTL_MS) return hit.value
   try {
     const value = await loadFields(collection)
-    fieldsCache.set(collection, { value, at: Date.now() })
+    fieldsCache.set(key, { value, at: Date.now() })
     return value
   } catch (err) {
     // Stale-while-revalidate (#331) — same rationale as getCollection.
     if (hit) {
-      fieldsCache.set(collection, { ...hit, at: Date.now() })
+      fieldsCache.set(key, { ...hit, at: Date.now() })
       return hit.value
     }
     throw err

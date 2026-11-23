@@ -17,6 +17,12 @@ vi.mock('@/lib/api', () => ({
   }
 }))
 
+// Radix select in jsdom (the Traefik version picker).
+const proto = Element.prototype as unknown as Record<string, unknown>
+proto.scrollIntoView ??= vi.fn()
+proto.hasPointerCapture ??= () => false
+proto.releasePointerCapture ??= vi.fn()
+
 const { HubTargets, targetDraftErrors } = await import('./HubTargets')
 const { syncSummary, TEMPLATE_REF_RE } = await import('./create-api')
 
@@ -90,6 +96,24 @@ describe('HubTargets', () => {
     expect(body).not.toHaveProperty('secret')
     expect(JSON.stringify(body)).not.toContain('••••••')
     expect(await screen.findByText(/1 app updated, 1 finishing in the background/)).toBeTruthy()
+  })
+
+  it('P6-35: the Traefik version is saved (3 for a target saved before it), 2 when picked', async () => {
+    h.get.mockResolvedValue({ data: { data: [target] } })
+    h.patch.mockResolvedValue({ data: { data: target, sync: [] } })
+    mount()
+    fireEvent.click(await screen.findByText('Swarm one'))
+    const pick = await screen.findByRole('combobox', { name: 'Traefik version' })
+    expect(pick.textContent).toMatch(/3/)
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(h.patch).toHaveBeenCalledTimes(1))
+    expect(h.patch.mock.calls[0][1].config.traefik_version).toBe(3)
+    // Radix select by keyboard: open, move to the v2 option, pick it.
+    fireEvent.keyDown(pick, { key: 'Enter' })
+    fireEvent.click(await screen.findByRole('option', { name: /^Traefik 2/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(h.patch).toHaveBeenCalledTimes(2))
+    expect(h.patch.mock.calls[1][1].config.traefik_version).toBe(2)
   })
 
   it('a sync that could not start says so', async () => {
@@ -175,7 +199,8 @@ describe('target rules', () => {
       edge_address: '',
       scheme: 'https',
       port: '',
-      cert_note: ''
+      cert_note: '',
+      traefik_version: '3'
     })
     expect(errs.wildcard_domain).toBeTruthy()
   })

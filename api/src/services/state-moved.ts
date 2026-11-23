@@ -1,10 +1,11 @@
 import { db } from '../db/index.js'
 import { runInBackgroundPool } from '../db/pool-context.js'
+import { registerAppKeyed } from './app-forget.js'
 import { announceRawWrites } from './raw-write-announcer.js'
 import { announceAddendumChange, announceRecordAspect } from './record-events.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
-const mirrorCache = new Map<string, { at: number; field: string | null }>()
+const mirrorCache = registerAppKeyed(new Map<string, { at: number; field: string | null }>())
 const MIRROR_TTL_MS = 15_000
 
 /** Tests: forget the cached bindings. */

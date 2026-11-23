@@ -2,6 +2,7 @@ import { configEpochForRead } from '../db/config-epoch.js'
 import { db } from '../db/index.js'
 import { getTenantId } from '../db/tenant-context.js'
 import type { User } from '../types.js'
+import { registerAppKeyed } from './app-forget.js'
 import {
   isFormLayout,
   type LintContext,
@@ -46,7 +47,7 @@ const truthy = (v: unknown) => v === true || v === 1 || v === '1' || v === 'true
 
 // ── Small TTL memo keyed by tenant + collection + config epoch ───────────────
 
-const memo = new Map<string, { at: number; value: unknown }>()
+const memo = registerAppKeyed(new Map<string, { at: number; value: unknown }>())
 const MEMO_MAX = 200
 
 async function memoKey(kind: string, collection: string): Promise<string> {

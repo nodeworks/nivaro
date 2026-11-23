@@ -4,6 +4,7 @@ import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { sqlDialect } from '../db/sql-dialect.js'
 import type { CMSField, CMSRelation } from '../types.js'
+import { registerAppKeyed } from './app-forget.js'
 import { getFields, getRelations } from './collections.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
@@ -41,7 +42,9 @@ const SYSTEM_FIELDS = new Set([
 ])
 const ALIAS_SPECIAL = new Set(['alias', 'o2m', 'm2m', 'm2a', 'no-data', 'group'])
 
-const cache = new Map<string, { at: number; data: Record<string, CollectionStat> }>()
+const cache = registerAppKeyed(
+  new Map<string, { at: number; data: Record<string, CollectionStat> }>()
+)
 
 // ─── Pure helpers ─────────────────────────────────────────────────────────────
 

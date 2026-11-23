@@ -19,6 +19,7 @@ import {
   blockersOf,
   cancelPromotion,
   changedPlanOf,
+  deployKindWords,
   fetchPromotableReleases,
   fetchPromotion,
   fetchPromotionPlan,
@@ -29,6 +30,7 @@ import {
   hubKeys,
   hubToast,
   isLivePromotion,
+  isPromotionKind,
   type PromotionBlocker,
   type PromotionKind,
   type PromotionPlan,
@@ -36,6 +38,8 @@ import {
   promotionStatusTone,
   promotionStatusWords,
   RELEASES_ERROR_TEXT,
+  RUN_ERROR_COPY,
+  splitRunError,
   startPromotion
 } from './hub-api'
 import { dangerArmed, dangerGhost, ghostButton, SectionCard } from './hub-parts'
@@ -48,7 +52,6 @@ import { dangerArmed, dangerGhost, ghostButton, SectionCard } from './hub-parts'
 
 const KIND_VERB: Record<PromotionKind, string> = { promote: 'promote', rollback: 'roll back' }
 const KIND_TITLE: Record<PromotionKind, string> = { promote: 'Promote', rollback: 'Roll back' }
-const KIND_NOUN: Record<PromotionKind, string> = { promote: 'Promote', rollback: 'Rollback' }
 
 export function HubPromotePanel({
   env,
@@ -314,7 +317,7 @@ function PromoteForm({
           onChange={(e) => setConfirm(e.target.value)}
           autoComplete='off'
           spellCheck={false}
-          placeholder={env.key}
+          placeholder='Type it here'
           className='h-8 max-w-[280px] bg-white font-mono text-[13px] dark:bg-background'
         />
       </div>
@@ -336,12 +339,27 @@ function PromoteForm({
   )
 }
 
+/**
+ * The plan's lines without the ones that only carry a warning (`warning CODE: text`): those show
+ * in plain words in the warning box, never with their code.
+ */
+export function planLinesShown(plan: PromotionPlan): string[] {
+  const codes = new Set((plan.warnings ?? []).map((w) => w.code))
+  if (codes.size === 0) return plan.lines
+  return plan.lines.filter((line) => {
+    const m = /^warning ([A-Z][A-Z0-9_]*):/.exec(line)
+    return !(m && codes.has(m[1]))
+  })
+}
+
 function PlanPreview({ plan, blockers }: { plan: PromotionPlan; blockers: PromotionBlocker[] }) {
+  const lines = planLinesShown(plan)
+  const warnings = plan.warnings ?? []
   return (
     <div className='space-y-2'>
-      {plan.lines.length > 0 && (
+      {lines.length > 0 && (
         <ul className='m-0 list-none space-y-1 p-0 text-[12px] text-slate-700 dark:text-slate-300'>
-          {plan.lines.map((line, i) => (
+          {lines.map((line, i) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: lines are plain text and may repeat
             <li key={i} className='flex gap-2'>
               <ArrowRight className='mt-0.5 h-3 w-3 shrink-0 text-slate-400' aria-hidden />
@@ -349,6 +367,45 @@ function PlanPreview({ plan, blockers }: { plan: PromotionPlan; blockers: Promot
             </li>
           ))}
         </ul>
+      )}
+      {warnings.length > 0 && (
+        <div
+          role='status'
+          aria-labelledby='hub-plan-warnings'
+          className='rounded-md border border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-900/60 dark:bg-amber-950/40'
+        >
+          <p
+            id='hub-plan-warnings'
+            className='m-0 text-[12px] font-semibold text-amber-900 dark:text-amber-200'
+          >
+            Before you start
+          </p>
+          <p className='m-0 text-[11.5px] text-amber-800 dark:text-amber-300/90'>
+            These do not hold the run back.
+          </p>
+          <ul className='m-0 mt-1 list-none space-y-1.5 p-0'>
+            {warnings.map((w, i) => {
+              const copy = blockerCopy(w)
+              const detail = blockerDetailLine(w, copy.title)
+              return (
+                // biome-ignore lint/suspicious/noArrayIndexKey: the planner may repeat a code
+                <li key={i} className='text-[12px]'>
+                  <span className='block font-medium text-amber-900 dark:text-amber-200'>
+                    {isRawErrorText(copy.title) ? 'The plan has a warning' : copy.title}
+                  </span>
+                  {copy.hint && (
+                    <span className='block text-amber-800 dark:text-amber-300/90'>{copy.hint}</span>
+                  )}
+                  {detail && !isRawErrorText(detail) && (
+                    <span className='mt-0.5 block break-words text-[11px] text-slate-600 dark:text-slate-400'>
+                      {detail}
+                    </span>
+                  )}
+                </li>
+              )
+            })}
+          </ul>
+        </div>
       )}
       {blockers.length > 0 && (
         <div
@@ -767,6 +824,8 @@ export function PromotionHistory({
   const offered = new Set<number>()
   const seen = new Set<string>()
   for (const r of q.data ?? []) {
+    // Phase 6: a move or shared-upgrade row never offers a rollback of its own.
+    if (!isPromotionKind(r.kind)) continue
     if (r.status !== 'success' || seen.has(r.version)) continue
     seen.add(r.version)
     if (rollbackTo.has(r.version)) offered.add(r.id)
@@ -810,13 +869,13 @@ export function PromotionHistory({
               <span className='font-mono text-[12px] font-medium text-slate-900 dark:text-foreground'>
                 {r.version}
               </span>
-              {r.from_version && (
+              {r.from_version && r.from_version !== r.version && (
                 <span className='font-mono text-[11px] text-slate-500 dark:text-slate-400'>
                   from {r.from_version}
                 </span>
               )}
               <span className='text-[11px] text-slate-500 dark:text-muted-foreground'>
-                {r.apply ? 'Apply settings' : (KIND_NOUN[r.kind] ?? r.kind)}
+                {deployKindWords(r)}
               </span>
               <span className={cn('text-[12px] font-medium', promotionStatusTone(r.status))}>
                 {promotionStatusWords(r.status)}
@@ -855,14 +914,14 @@ export function PromotionHistory({
               <tr key={r.id} className='border-b border-slate-100 last:border-0 dark:border-border'>
                 <td className='min-w-[104px] max-w-[220px] break-all py-2 pr-4 font-mono font-medium text-slate-900 dark:text-foreground'>
                   {r.version}
-                  {r.from_version && (
+                  {r.from_version && r.from_version !== r.version && (
                     <span className='block text-[11px] font-normal text-slate-500 dark:text-slate-400'>
                       from {r.from_version}
                     </span>
                   )}
                 </td>
                 <td className='py-2 pr-4 text-slate-600 dark:text-slate-300'>
-                  {r.apply ? 'Apply settings' : (KIND_NOUN[r.kind] ?? r.kind)}
+                  {deployKindWords(r)}
                 </td>
                 <td className={cn('py-2 pr-4 font-medium', promotionStatusTone(r.status))}>
                   {promotionStatusWords(r.status)}
@@ -900,10 +959,30 @@ export function PromotionHistory({
  * error, a status line) becomes one plain sentence with the text under "Details for support".
  */
 export function RunnerError({ text, clamp }: { text: string; clamp?: boolean }) {
-  if (!isRawErrorText(text))
-    return <div className={cn('break-words', clamp && 'line-clamp-2')}>{text}</div>
+  // A stored `CODE: sentence` (shared upgrades, placements): plain words, then the sentence.
+  const { code, sentence } = splitRunError(text)
+  const title = code ? RUN_ERROR_COPY[code]?.title : undefined
+  if (sentence && !isRawErrorText(sentence))
+    return title ? (
+      <div className='break-words'>
+        <div className={cn(clamp && 'line-clamp-1')}>{title}</div>
+        {sentence !== title && (
+          <div
+            className={cn(
+              'text-[11px] text-slate-500 dark:text-muted-foreground',
+              clamp && 'line-clamp-2'
+            )}
+          >
+            {sentence}
+          </div>
+        )}
+      </div>
+    ) : (
+      <div className={cn('break-words', clamp && 'line-clamp-2')}>{sentence}</div>
+    )
+  // Raw text (a driver or SQL error): the plain title, the text only under Details for support.
   const d: ErrorDescription = {
-    title: 'It stopped on an error the Hub could not put in plain words',
+    title: title ?? 'It stopped on an error the Hub could not put in plain words',
     technical: text
   }
   return (
@@ -937,7 +1016,7 @@ function RowActions({
 }) {
   return (
     <div className='flex flex-nowrap items-center justify-end gap-0.5'>
-      {isLivePromotion(row.status) && (
+      {isLivePromotion(row.status) && isPromotionKind(row.kind) && (
         <button
           type='button'
           aria-label={`Watch ${row.version}`}
@@ -979,11 +1058,12 @@ export function PromotionsCard({
   return (
     <SectionCard
       title='Hub deploys'
-      description='Promotions and rollbacks the Hub ran, newest first.'
+      description='Promotions, rollbacks and moves the Hub ran, newest first.'
     >
       <div className='divide-y divide-slate-200 dark:divide-border'>
         {managed.map((env) => (
-          <EnvPromotions key={env.id} env={env} canPromote={canPromote} />
+          // A shared environment's version follows its deployment: no Roll back from here.
+          <EnvPromotions key={env.id} env={env} canPromote={canPromote && env.on_shared !== true} />
         ))}
       </div>
     </SectionCard>

@@ -68,6 +68,7 @@ Secrets are read from files only (`*_FILE`). All values are read once at start.
 | `HUB_AGENT_IMAGES` | `nodeworks/nivaro` | Comma list of image repositories (no tag, no digest) a stack may name. Extension images share this list. |
 | `HUB_AGENT_EDGE` | `traefik` | `traefik` or `publish`. |
 | `HUB_AGENT_EDGE_NETWORK` | required for traefik | Overlay network Traefik routes over. |
+| `HUB_AGENT_TRAEFIK_VERSION` | `3` | `3` or `2`: which Traefik reads the labels. `3` sets `traefik.swarm.network` (the v3 swarm provider); `2` sets `traefik.docker.network` (the v2 docker provider in swarm mode). Any other value refuses to start (`TRAEFIK_VERSION_BAD`). |
 | `HUB_AGENT_ENTRYPOINTS` | `websecure` | Traefik entrypoints for app routers. |
 | `HUB_AGENT_CERT_RESOLVER` | none | Traefik certificate resolver for app routers. |
 | `HUB_AGENT_HOST_SUFFIXES` | required for traefik | Comma list such as `.apps.example.com`; an app host must end in one. |
@@ -118,15 +119,30 @@ any refused key or refused prefix, and the Hub ignores such a prefix too.
 ## Edge modes
 
 - **`traefik`**: the agent adds the router, service and TLS labels and attaches
-  the app to `HUB_AGENT_EDGE_NETWORK`. It sets **both** `traefik.docker.network`
-  and `traefik.swarm.network` to that network, so Traefik with either provider
-  picks the right one. Hosts outside `HUB_AGENT_HOST_SUFFIXES` are refused.
+  the app to `HUB_AGENT_EDGE_NETWORK`. It sets exactly **one** network label to
+  that network, chosen by `HUB_AGENT_TRAEFIK_VERSION`: `traefik.swarm.network`
+  for Traefik v3 (the default), `traefik.docker.network` for v2. Never both:
+  Traefik v3 skips a service that carries both ("both Docker and Swarm labels
+  are defined"), so it would route nothing. Hosts outside
+  `HUB_AGENT_HOST_SUFFIXES` are refused. A shared deployment's host pattern is a
+  v3 `HostRegexp` router, so with `HUB_AGENT_TRAEFIK_VERSION=2` a `host_pattern`
+  is refused (`HOSTNAME_NOT_ALLOWED`).
   A `large` stack runs web with sockets off and a `realtime` role: the
   realtime router takes `/socket.io/`, `/api/graphql-ws`, `/api/graphql/stream`,
   `/api/events/stream` and `/api/events/views/<id>/stream` (the same paths as
-  `deploy/realtime`). It uses `PathRegexp`, so it needs Traefik v3.
+  `deploy/realtime`). It uses `PathRegexp`, so it needs Traefik v3: with
+  `HUB_AGENT_TRAEFIK_VERSION=2` a `realtime` role is refused
+  (`ROLE_NEEDS_TRAEFIK_V3`) instead of deploying without its realtime routes.
 - **`publish`**: no labels; the app publishes a host port from
   `HUB_AGENT_PUBLISH_PORTS`.
+
+**Upgrading the agent to 0.2.0 changes every stack hash.** The Traefik version
+is part of each stack's hash, so after the upgrade every existing stack reads as
+another spec: Restart answers `SPEC_MISMATCH` until the stack is applied again.
+Apply each stack once after upgrading the agent (Apply now on a dedicated
+environment; an upgrade or re-apply at the same version on a shared
+deployment). That apply is also what removes the second network label older
+agents set, which Traefik 3.5 and later skip the whole service for.
 
 ## Secrets in the app
 
@@ -173,4 +189,6 @@ matches the image being pulled, never anywhere else.
 
 The container healthcheck is a TCP connect to the listen port (every 30 s, 15 s
 timeout, 3 retries, 30 s start period: a short timeout got the agent killed on a
-loaded host). `GET /v1/health` needs the token and is what the Hub uses.
+loaded host). `GET /v1/health` needs the token and is what the Hub uses. It
+answers `traefik_version` too, so a shared deployment's upgrade plan refuses a
+host pattern on a Traefik v2 agent before anything is applied.

@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
+import { registerAppKeyed } from '../services/app-forget.js'
 import {
   esc,
   publicLiveCsp,
@@ -29,7 +30,7 @@ import { overWindowLimit } from '../services/windowed-limit.js'
 
 const PAGE_VIEWS_PER_10_MIN = 120
 const STREAMS_PER_IP = 10
-const sigs = new Map<string, { at: number; sig: Promise<string | null> }>()
+const sigs = registerAppKeyed(new Map<string, { at: number; sig: Promise<string | null> }>())
 
 const ORDER: PublicStage[] = ['received', 'in_review', 'decided']
 

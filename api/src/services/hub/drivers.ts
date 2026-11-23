@@ -43,7 +43,8 @@ export type HubDriverKind = HubDriverRow['kind']
 /** A driver as the API shows it: the secret is only ever a mask. */
 export type HubDriver = HubDriverRow
 
-export interface HubPlacementRow {
+/** A placement on one driver: the app runs on its own (GitLab branch, or a Docker stack). */
+export interface DedicatedPlacementRow {
   id: number
   kind: 'dedicated'
   driver_id: number
@@ -51,7 +52,35 @@ export interface HubPlacementRow {
   target: PlacementTarget
 }
 
-export type PlacementTarget = { branch?: string; stack?: string }
+/**
+ * Phase 6: a placement on a shared deployment (one process serving many apps). It names the
+ * deployment, never a driver; `pool_max` (1–20, default 5) is the connections the app may take
+ * there (Decision 16).
+ */
+export interface SharedPlacementRow {
+  id: number
+  kind: 'shared'
+  shared_deployment_id: number
+  driver_id: null
+  target: SharedPlacementTarget
+}
+
+export type HubPlacementRow = DedicatedPlacementRow | SharedPlacementRow
+
+/**
+ * `forgotten_at` (phase 6, Docker placements): an administrator told the Hub the stack is gone
+ * although its agent could not confirm it (POST /placements/:id/forget-stack). The stack guards
+ * then stop refusing edits for deploys recorded before it. Only that route writes it.
+ */
+export type PlacementTarget = { branch?: string; stack?: string; forgotten_at?: string }
+
+export type SharedPlacementTarget = { pool_max?: number }
+
+/** A shared placement's connections when none are named (Decision 16). */
+export const DEFAULT_POOL_MAX = 5
+/** Fewer than this and one app request can starve its own background work (T8 carry). */
+export const MIN_SHARED_POOL_MAX = 2
+export const MAX_SHARED_POOL_MAX = 20
 
 /** A Docker placement's stack name (also the agent's `:name`). */
 export const STACK_NAME_RE = /^[a-z][a-z0-9-]{1,40}$/
@@ -214,10 +243,24 @@ export function driverCtx(row: HubDriverRow): GitCtx {
   }
 }
 
-export function validatePlacementInput(
-  body: Record<string, unknown>
-): Validation<{ kind: 'dedicated'; driver_id: number; target: PlacementTarget }> {
-  if (body.kind !== 'dedicated') return fail('BAD_KIND', 'Placement kind must be dedicated.')
+type DedicatedFields = { kind: 'dedicated'; driver_id: number; target: PlacementTarget }
+type SharedFields = {
+  kind: 'shared'
+  shared_deployment_id: number
+  driver_id: null
+  target: SharedPlacementTarget
+}
+export type PlacementFields = DedicatedFields | SharedFields
+
+/**
+ * A placement as sent. Dedicated: a driver and its target (branch / stack). Shared (phase 6): a
+ * shared deployment, no driver, and `target.pool_max` (whole number; under 2 is POOL_TOO_SMALL,
+ * over 20 BAD_TARGET). `forgotten_at` is never taken from a body.
+ */
+export function validatePlacementInput(body: Record<string, unknown>): Validation<PlacementFields> {
+  if (body.kind === 'shared') return validateSharedPlacementInput(body)
+  if (body.kind !== 'dedicated')
+    return fail('BAD_KIND', 'Placement kind must be dedicated or shared.')
   const driverId = body.driver_id
   if (typeof driverId !== 'number' || !Number.isInteger(driverId)) {
     return fail('BAD_DRIVER', 'driver_id must be a number.')
@@ -245,14 +288,63 @@ export function validatePlacementInput(
   return { ok: true, row: { kind: 'dedicated', driver_id: driverId, target: out } }
 }
 
+function validateSharedPlacementInput(body: Record<string, unknown>): Validation<SharedFields> {
+  // A driver belongs to a dedicated placement: a shared one names a deployment instead.
+  if (body.driver_id !== undefined && body.driver_id !== null)
+    return fail(
+      'BAD_KIND',
+      'A shared placement names a shared deployment, never a driver; leave driver_id out.'
+    )
+  const sharedId = body.shared_deployment_id
+  if (typeof sharedId !== 'number' || !Number.isInteger(sharedId) || sharedId < 1)
+    return fail('BAD_SHARED', 'shared_deployment_id must name a shared deployment.')
+  const target = (body.target ?? {}) as Record<string, unknown>
+  if (typeof target !== 'object' || target === null || Array.isArray(target))
+    return fail('BAD_TARGET', 'target must be an object.')
+  const refused = placementTargetRefusal('shared', target as PlacementTarget)
+  if (refused) return refused
+  const out: SharedPlacementTarget = {}
+  if (target.pool_max !== undefined) {
+    const n = target.pool_max
+    if (typeof n !== 'number' || !Number.isInteger(n) || n > MAX_SHARED_POOL_MAX)
+      return fail(
+        'BAD_TARGET',
+        `target.pool_max must be a whole number of connections, at most ${MAX_SHARED_POOL_MAX}.`
+      )
+    if (n < MIN_SHARED_POOL_MAX)
+      return fail(
+        'POOL_TOO_SMALL',
+        `An app on a shared deployment needs at least ${MIN_SHARED_POOL_MAX} database connections.`
+      )
+    out.pool_max = n
+  }
+  return {
+    ok: true,
+    row: { kind: 'shared', shared_deployment_id: sharedId, driver_id: null, target: out }
+  }
+}
+
+/** A shared placement's `pool_max`, or the default when none is set. */
+export function sharedPoolMax(target: SharedPlacementTarget | null | undefined): number {
+  const n = target?.pool_max
+  return typeof n === 'number' && Number.isInteger(n) && n >= 1 && n <= MAX_SHARED_POOL_MAX
+    ? n
+    : DEFAULT_POOL_MAX
+}
+
 /**
  * The target fields a driver kind takes (phase 4): `branch` on a GitLab driver, `stack` on a
  * Docker one. The other one is refused (BAD_TARGET).
  */
 export function placementTargetRefusal(
-  kind: HubDriverKind,
+  kind: HubDriverKind | 'shared',
   target: PlacementTarget
 ): { ok: false; code: string; message: string } | null {
+  // Phase 6: a shared placement runs on the deployment's own stack — no branch or stack of its own.
+  if (kind === 'shared')
+    return target.branch !== undefined || target.stack !== undefined
+      ? fail('BAD_TARGET', 'A shared placement has no target.branch or target.stack.')
+      : null
   if (kind === 'docker' && target.branch !== undefined)
     return fail('BAD_TARGET', 'A Docker placement has no target.branch; name its target.stack.')
   if (kind !== 'docker' && target.stack !== undefined)
@@ -313,9 +405,17 @@ function toDriverRow(r: Record<string, unknown>): HubDriverRow {
 }
 
 function toPlacementRow(r: Record<string, unknown>): HubPlacementRow {
+  if (r.kind === 'shared')
+    return {
+      id: Number(r.id),
+      kind: 'shared',
+      shared_deployment_id: Number(r.shared_deployment_id),
+      driver_id: null,
+      target: parseObj<SharedPlacementTarget>(r.target, {})
+    }
   return {
     id: Number(r.id),
-    kind: r.kind as 'dedicated',
+    kind: 'dedicated',
     driver_id: Number(r.driver_id),
     target: parseObj(r.target, {})
   }
@@ -331,7 +431,8 @@ export async function listDrivers(): Promise<HubDriverRow[]> {
   return rows.map(toDriverRow)
 }
 
-export async function getDriver(id: number): Promise<HubDriverRow | null> {
+export async function getDriver(id: number | null): Promise<HubDriverRow | null> {
+  if (id == null) return null
   const r = (await db('nivaro_hub_drivers').where({ id }).first()) as
     | Record<string, unknown>
     | undefined
@@ -401,15 +502,28 @@ async function dropPlacement(trx: Knex.Transaction, id: number): Promise<void> {
   await trx('nivaro_hub_placements').where({ id }).del()
 }
 
-/** Deletes a placement no environment names; IN_USE while one does. */
+/**
+ * Deletes a placement no environment names; IN_USE while one does, PLACEMENT_IN_USE while an
+ * open move (running, waiting or interrupted) names it as its source or target (phase 6, ruling
+ * P6-21: the move's rollback still needs it).
+ */
 export async function deletePlacement(
   id: number
-): Promise<{ ok: true } | { ok: false; code: 'IN_USE' | 'NOT_FOUND' }> {
+): Promise<{ ok: true } | { ok: false; code: 'IN_USE' | 'PLACEMENT_IN_USE' | 'NOT_FOUND' }> {
   return db.transaction(async (trx) => {
     if (!(await trx('nivaro_hub_placements').where({ id }).first('id')))
       return { ok: false, code: 'NOT_FOUND' as const }
     if (await trx('nivaro_hub_environments').where({ placement_id: id }).first('id'))
       return { ok: false, code: 'IN_USE' as const }
+    // The moves table exists from migration 553 on (a database behind it has no moves).
+    if (
+      (await trx.schema.hasTable('nivaro_hub_moves')) &&
+      (await trx('nivaro_hub_moves')
+        .whereIn('status', ['running', 'waiting', 'interrupted'])
+        .where((q) => q.where({ from_placement_id: id }).orWhere({ to_placement_id: id }))
+        .first('id'))
+    )
+      return { ok: false, code: 'PLACEMENT_IN_USE' as const }
     await dropPlacement(trx, id)
     return { ok: true as const }
   })
@@ -425,34 +539,55 @@ export async function releasePlacement(trx: Knex.Transaction, id: number | null)
   await dropPlacement(trx, id)
 }
 
-type PlacementFields = { kind: 'dedicated'; driver_id: number; target: PlacementTarget }
-
-export async function createPlacement(row: PlacementFields): Promise<HubPlacementRow> {
-  const id = await insertReturningId(db, 'nivaro_hub_placements', {
+/** The columns a placement write sets (shared_deployment_id only for the shared kind). */
+function placementCols(row: PlacementFields): Record<string, unknown> {
+  return {
     kind: row.kind,
     driver_id: row.driver_id,
     target: JSON.stringify(row.target),
+    ...(row.kind === 'shared' ? { shared_deployment_id: row.shared_deployment_id } : {})
+  }
+}
+
+export async function createPlacement(
+  row: PlacementFields,
+  k: Knex = db
+): Promise<HubPlacementRow> {
+  const id = await insertReturningId(k, 'nivaro_hub_placements', {
+    ...placementCols(row),
     created_at: now(),
     updated_at: now()
   })
-  return { id: Number(id), ...row }
+  return { id: Number(id), ...row } as HubPlacementRow
 }
 
 export async function updatePlacement(
   id: number,
-  patch: PlacementFields
+  patch: PlacementFields,
+  k: Knex = db
 ): Promise<HubPlacementRow | null> {
-  const n = await db('nivaro_hub_placements')
+  const n = await k('nivaro_hub_placements')
     .where({ id })
-    .update({
-      kind: patch.kind,
-      driver_id: patch.driver_id,
-      target: JSON.stringify(patch.target),
-      updated_at: now()
-    })
+    .update({ ...placementCols(patch), updated_at: now() })
   if (!n) return null
-  return { id, ...patch }
+  return { id, ...patch } as HubPlacementRow
 }
+
+/**
+ * Phase 6: the environment's placement is on a shared deployment (Decision 17: promotions, stack
+ * actions and creation then answer SHARED_PLACEMENT — upgrade the deployment instead).
+ */
+export async function placedOnShared(envId: number, k: Knex = db): Promise<boolean> {
+  const row = (await k('nivaro_hub_environments as e')
+    .join('nivaro_hub_placements as p', 'p.id', 'e.placement_id')
+    .where('e.id', envId)
+    .first('p.kind')) as { kind: string } | undefined
+  return row?.kind === 'shared'
+}
+
+/** The sentence every SHARED_PLACEMENT refusal uses. */
+export const SHARED_PLACEMENT_MESSAGE =
+  'This environment runs on a shared deployment, which owns its stack and version. Upgrade or change the shared deployment instead, or move the environment off it.'
 
 export async function getPlacement(id: number): Promise<HubPlacementRow | null> {
   const r = (await db('nivaro_hub_placements').where({ id }).first()) as

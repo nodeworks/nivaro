@@ -29,6 +29,7 @@ import { perAppJobs } from '../services/deployment-mode.js'
 import { INSTANCE_ID } from '../services/instance-roster.js'
 import { stableIssueKey } from '../services/issue-key.js'
 import { type JobRunTrigger, startJobRun } from '../services/job-runs.js'
+import { appReadyForRequests } from '../services/tenancy/app-migrations.js'
 import { runAsTrafficSource, type TrafficSource } from '../services/traffic-source.js'
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
@@ -115,6 +116,27 @@ export interface ScheduleOpts {
 
 /** How one scheduled tick ended (runScheduledTick). */
 type TickOutcome = 'ran' | AppSkipWhy | { failed: unknown }
+
+/** Hub phase 6: the listed apps the fan-out may run; each app whose Hub status is `maintenance`
+ *  (the Hub is moving or updating it) is recorded in `skipped` with why 'maintenance', and each
+ *  app whose database is not migrated at this version yet (or failed to migrate,
+ *  services/tenancy/app-migrations.ts) with why 'not_ready'. */
+function withoutHubMaintenance<T extends { id: string; status: string }>(
+  apps: T[],
+  skipped: AppFanOutResult['skipped']
+): T[] {
+  return apps.filter((t) => {
+    if (t.status === 'maintenance') {
+      skipped.push({ tenant: t.id, why: 'maintenance' })
+      return false
+    }
+    if (!appReadyForRequests(t.id)) {
+      skipped.push({ tenant: t.id, why: 'not_ready' })
+      return false
+    }
+    return true
+  })
+}
 
 /** services/security.js, imported lazily as before, through one shared promise. The promise is
  *  there for test determinism: under vitest 4, parallel first-time dynamic imports of a mocked
@@ -1086,8 +1108,10 @@ export class CronManager {
     let result: AppFanOutResult
     const claimedElsewhere: AppFanOutResult['skipped'] = []
     try {
-      const apps = await listApps()
-      if (apps.length === 0) this.warnNoApps(id)
+      const listed = await listApps()
+      if (listed.length === 0) this.warnNoApps(id)
+      // Hub phase 6: an app the Hub put in maintenance (being moved or updated) runs nothing.
+      const apps = withoutHubMaintenance(listed, claimedElsewhere)
       const mine = this.leader.active
         ? (
             await Promise.all(
@@ -1125,12 +1149,16 @@ export class CronManager {
             const since = this.lastProgress.get(slot) ?? this.runningSince.get(slot)
             if (skipWorthAnIssue(since, Date.now(), budget)) {
               const mins = since ? Math.round((Date.now() - since) / 60_000) : 0
-              void withTenant(t, async () =>
-                this.issue(
-                  `Cron "${id}" tick skipped — the previous tick has been running for ${mins} minute(s)`,
-                  'medium',
-                  stableIssueKey('cron-skip', id)
-                )
+              void withTenant(
+                t,
+                async () =>
+                  this.issue(
+                    `Cron "${id}" tick skipped — the previous tick has been running for ${mins} minute(s)`,
+                    'medium',
+                    stableIssueKey('cron-skip', id)
+                  ),
+                // the app's own origin: the issue's notice links into that app
+                t.origin
               ).catch(() => {})
             }
             return 'busy'
@@ -1463,6 +1491,11 @@ export class CronManager {
   ): Promise<void> {
     try {
       const r = await forEachApp(async (t) => {
+        // Hub phase 6: an app the Hub put in maintenance catches up after it is released.
+        if (t.status === 'maintenance') return 'maintenance'
+        // Final review M1: nor one whose database is not migrated at this version yet (or failed
+        // to migrate), as the ticks (withoutHubMaintenance); its next scheduled run covers it.
+        if (!appReadyForRequests(t.id)) return 'not_ready'
         if (await appPaused(id)) return 'paused'
         if (await this.heldByMaintenance(id, t.id)) return 'maintenance'
         const recent = await db('nivaro_job_runs')

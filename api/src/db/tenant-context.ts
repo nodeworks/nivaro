@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import knex, { type Knex } from 'knex'
+import { tenantSource } from '../services/deployment-mode.js'
 import { normaliseSslMode } from './connection-url.js'
 import { mysqlFlavorConfig } from './mysql-flavor.js'
 import { MYSQL_SESSION_SQL, mysqlTypeCast } from './mysql-session.js'
@@ -197,11 +198,17 @@ export function verifiedTenantOrigin(
  * request: crons, flows, timers) its canonical origin from the slug — or null outside any
  * tenant. Cloud code that names "this instance" uses this, never PUBLIC_URL (the shared
  * process's own).
+ *
+ * A Hub shared deployment (Hub phase 6) has no canonical origin: `<slug>.<CLOUD_BASE_DOMAIN>` is
+ * a Nivaro Cloud host, never the app's. A context opened there without an origin (a captured
+ * context re-entered later: catalog-impact, raw-write-announcer, related-announce) answers null,
+ * and callers fall back to the configured address. Nivaro Cloud is unchanged.
  */
 export function tenantOrigin(): string | null {
   const st = store.getStore()
   if (!st) return null
   if (st.origin) return st.origin
+  if (tenantSource() === 'hub') return null
   return st.slug ? canonicalTenantOrigin(st.slug) : null
 }
 

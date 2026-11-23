@@ -291,3 +291,111 @@ describe('DbConnectionForm', () => {
     expect((screen.getByLabelText('Port') as HTMLInputElement).readOnly).toBe(true)
   })
 })
+
+// Ruling P6-32 (E2E BUG-1): attach this record to an existing environment, or detach it.
+describe('DatabaseDetail environment attach (P6-32)', () => {
+  const openSelect = (el: HTMLElement) => fireEvent.keyDown(el, { key: 'Enter' })
+  // Radix Select scrolls the picked option into view; jsdom has no scrollIntoView.
+  if (!Element.prototype.scrollIntoView) Element.prototype.scrollIntoView = () => {}
+  const nivaroCheck = {
+    state: 'unreachable',
+    ok: false,
+    version: null,
+    migrations: null,
+    last_migration: null,
+    text: 'connect ECONNREFUSED',
+    at: new Date().toISOString()
+  }
+
+  function setupAttach(row: Record<string, unknown>) {
+    h.get.mockImplementation(async (url: string) => {
+      if (url.startsWith('/hub/db-servers')) return { data: { data: [server('automatic')] } }
+      if (url === '/hub/apps') return { data: { data: [{ id: 4, key: 'shop', name: 'Shop' }] } }
+      if (url === '/hub/apps/4')
+        return {
+          data: {
+            data: {
+              id: 4,
+              key: 'shop',
+              name: 'Shop',
+              owners: [],
+              environments: [{ id: 41, app_id: 4, key: 'production' }]
+            }
+          }
+        }
+      return { data: { data: { ...base, ...row } } }
+    })
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    return render(
+      <QueryClientProvider client={qc}>
+        <DatabaseDetail id={9} onDeleted={() => {}} />
+      </QueryClientProvider>
+    )
+  }
+
+  async function pickProduction() {
+    fireEvent.click(await screen.findByRole('button', { name: 'Attach to environment…' }))
+    await waitFor(() =>
+      expect((screen.getByRole('combobox', { name: 'App' }) as HTMLButtonElement).disabled).toBe(
+        false
+      )
+    )
+    openSelect(screen.getByRole('combobox', { name: 'App' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'Shop' }))
+    await waitFor(() =>
+      expect(
+        (screen.getByRole('combobox', { name: 'Environment' }) as HTMLButtonElement).disabled
+      ).toBe(false)
+    )
+    openSelect(screen.getByRole('combobox', { name: 'Environment' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'production' }))
+  }
+
+  it('attaches the record to the picked environment', async () => {
+    h.put.mockResolvedValue({
+      data: { data: { database: base, check: null, changed: true, warning: null } }
+    })
+    setupAttach({ adopted: true, created_by_hub: false })
+    await pickProduction()
+    fireEvent.click(screen.getByRole('button', { name: 'Attach to environment' }))
+    await waitFor(() =>
+      expect(h.put).toHaveBeenCalledWith('/hub/environments/41/database', { database_id: 9 })
+    )
+  })
+
+  it('a refused attach says why in words and shows the check the Hub ran', async () => {
+    h.put.mockRejectedValue({
+      isAxiosError: true,
+      response: {
+        status: 409,
+        data: {
+          code: 'DATABASE_UNREACHABLE',
+          error: 'The Hub could not use this database with its stored connection; see the check.',
+          check: nivaroCheck
+        }
+      }
+    })
+    setupAttach({ adopted: true, created_by_hub: false })
+    await pickProduction()
+    fireEvent.click(screen.getByRole('button', { name: 'Attach to environment' }))
+    expect(await screen.findByText('The Hub could not use this database')).toBeTruthy()
+    expect(screen.getAllByRole('status').length).toBeGreaterThan(0)
+    expect(document.body.textContent).not.toContain('DATABASE_UNREACHABLE:')
+  })
+
+  it('detach during an open move shows the refusal copy', async () => {
+    h.delete.mockRejectedValue({
+      isAxiosError: true,
+      response: {
+        status: 409,
+        data: { code: 'MOVE_OPEN', error: 'A move of this environment is open.' }
+      }
+    })
+    setupAttach({ environment: { id: 41, app_id: 4, app_key: 'shop', env_key: 'production' } })
+    const detach = await screen.findByRole('button', { name: 'Detach from environment' })
+    fireEvent.click(detach)
+    fireEvent.click(await screen.findByRole('button', { name: /Detach from shop\/production\?/ }))
+    expect(await screen.findByText('A move of this environment is open')).toBeTruthy()
+    expect(h.delete).toHaveBeenCalledWith('/hub/environments/41/database', undefined)
+  })
+})

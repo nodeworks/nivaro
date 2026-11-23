@@ -415,6 +415,13 @@ describe('renderAppEnv', () => {
     expect(v('OIDC_REDIRECT_URI')).toBe('https://demo--staging.apps.example.com/api/auth/callback')
     expect(v('PROXY_NETWORK')).toBe('proxy')
     expect(v('TRUST_PROXY')).toBe('1')
+    // P6-35: the target's Traefik version picks the stack's one network label; 3 by default.
+    expect(v('TRAEFIK_VERSION')).toBe('3')
+    const v2 = parse(renderAppEnv({ ...input, target: { ...input.target, traefik_version: 2 } }))
+    expect(v2.get('TRAEFIK_VERSION')?.[0]).toBe('2')
+    expect(() =>
+      renderAppEnv({ ...input, target: { ...input.target, traefik_version: 4 as never } })
+    ).toThrow()
   })
 
   it('holds no secret value, whatever extra fields the input carries', () => {

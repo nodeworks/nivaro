@@ -43,6 +43,7 @@
  */
 
 import type { Redis } from 'ioredis'
+import { registerAppKeyed } from './app-forget.js'
 import { cacheSetting } from './cache-config.js'
 import {
   type QueuePhaseDeps,
@@ -304,7 +305,9 @@ interface ApiLogUsageRow {
  * person — ONE range scan per run, shared by the slug ranking and the viewer
  * phase (memoized for 5 minutes). Development instances excluded.
  */
-const usageMemo = new Map<string, { at: number; p: Promise<ApiLogUsageRow[] | null> }>()
+const usageMemo = registerAppKeyed(
+  new Map<string, { at: number; p: Promise<ApiLogUsageRow[] | null> }>()
+)
 const USAGE_MEMO_MS = 5 * 60_000
 
 /** The memo key: the app (on a Hub shared deployment each app warms from its OWN request log;
@@ -511,7 +514,9 @@ const defaultViewerDeps: ViewerPhaseDeps = {
  * query string and person — its own scan (the query column is not part of
  * the shared one), memoized for 5 minutes. Development instances excluded.
  */
-const queueUsageMemo = new Map<string, { at: number; p: Promise<QueueUsageLogRow[] | null> }>()
+const queueUsageMemo = registerAppKeyed(
+  new Map<string, { at: number; p: Promise<QueueUsageLogRow[] | null> }>()
+)
 function queueApiLogUsage(since: Date): Promise<QueueUsageLogRow[] | null> {
   const k = usageMemoKey(since)
   const hit = queueUsageMemo.get(k)

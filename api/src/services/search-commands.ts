@@ -2,6 +2,7 @@ import type { FastifyRequest } from 'fastify'
 import { sqlText } from '../db/dialect/items-query.js'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { registerAppKeyed } from './app-forget.js'
 import { safeRecordLabel } from './record-label-fallback.js'
 
 /**
@@ -589,7 +590,7 @@ async function prefillFor(
 }
 
 const LABEL_TTL_MS = 60_000
-const labelCache = new Map<string, { at: number; labels: string[] }>()
+const labelCache = registerAppKeyed(new Map<string, { at: number; labels: string[] }>())
 
 async function transitionLabels(): Promise<string[]> {
   const { currentTenantKey } = await import('./tenant-rooms.js')

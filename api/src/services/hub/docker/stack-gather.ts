@@ -1,4 +1,5 @@
 import { db } from '../../../db/index.js'
+import { hubUrlBootWarning } from '../../deployment-mode.js'
 import { parseJson } from '../../pipeline-engine.js'
 import type { HubApp } from '../apps.js'
 import { type DockerDriverRow, getPlacement, STACK_NAME_RE } from '../drivers.js'
@@ -78,6 +79,11 @@ export interface StackGatherDeps {
    * ready), null when it names none. The plan never opens the connection; the run does.
    */
   databaseRecord?(envId: number): Promise<{ name: string; ready: boolean } | null>
+  /**
+   * Phase 6 (Task 5, X-7): the Hub's own HUB_URL problem (deployment-mode.ts hubUrlBootWarning),
+   * null when none. The plan warns HUB_URL_PROBLEM: the stack then gets PUBLIC_URL's origin.
+   */
+  hubUrlWarning?(): string | null
 }
 
 /** The database record an environment's db_ref names, read masked (no connection opened). */
@@ -180,7 +186,8 @@ export function defaultStackGatherDeps(): StackGatherDeps {
     otherEnvironmentNames,
     stackName: async (placementId) => {
       if (!placementId) return null
-      const name = (await getPlacement(placementId))?.target.stack
+      const p = await getPlacement(placementId)
+      const name = p && p.kind !== 'shared' ? p.target.stack : undefined
       return typeof name === 'string' && STACK_NAME_RE.test(name) ? name : null
     },
     extensionPins: readExtensionPins,
@@ -436,6 +443,9 @@ export async function gatherStackFacts(
         facts.renderProblem = { code: err.code, text: err.message }
     }
   }
+
+  const hubWarning = (deps.hubUrlWarning ?? (() => hubUrlBootWarning()))()
+  if (hubWarning) facts.warnings = [{ code: 'HUB_URL_PROBLEM', text: hubWarning }]
 
   if (health && stackName) {
     try {

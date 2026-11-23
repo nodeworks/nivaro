@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { buildPromotionPlan, compareVersions } from '../../../services/hub/promote-plan.js'
+import {
+  buildPromotionPlan,
+  compareVersions,
+  pinContent
+} from '../../../services/hub/promote-plan.js'
 import type {
   HubComponent,
   HubEnvironmentRow,
@@ -900,5 +904,42 @@ describe('hub promotion planner — stack components (phase 4)', () => {
       expect(s.driver).toBeUndefined()
       expect(s.stack).toBeUndefined()
     }
+  })
+})
+
+describe('a pin with a move boot-maintenance line (FW-4 / P6-37)', () => {
+  const BOOT = 'boot-maintenance=42'
+  it('the line is never read as a digest, nor as a changed image', () => {
+    const OLD = `sha256:${'c'.repeat(64)}`
+    // No slim digest on the target: the boot line used to read as "slim image boot-mainte…".
+    const changed = buildPromotionPlan(
+      input({
+        targetVersion: '0.3.10',
+        sourceOnTarget: { 1: true },
+        pinOnTarget: { 1: `0.3.10\n${OLD}\n${BOOT}\n` },
+        recordedDeploys: { 1: ['f00d'] }
+      })
+    )
+    expect(codes(changed)).toEqual(['PIN_CHANGED'])
+    expect(changed.blockers[0].text).toContain('production pins 0.3.10 image cccccccccccc, the')
+    expect(changed.blockers[0].text).not.toContain('boot')
+    // The same image with the boot line: not a changed pin. Not a no-op either — the pin commit
+    // lands and drops the line (a later restart never boots into that move's maintenance).
+    const same = buildPromotionPlan(
+      input({
+        targetVersion: '0.3.10',
+        sourceOnTarget: { 1: true },
+        pinOnTarget: { 1: `0.3.10\n${DIGEST}\n${SLIM}\n${BOOT}\n` },
+        recordedDeploys: { 1: ['f00d'] }
+      })
+    )
+    expect(codes(same)).toEqual([])
+    expect(same.steps.find((st) => st.kind === 'api')?.noop).toBeUndefined()
+  })
+
+  it('pinContent drops only boot-maintenance lines', () => {
+    expect(pinContent(`0.3.10\n${DIGEST}\n${BOOT}\n`)).toBe(`0.3.10\n${DIGEST}\n`)
+    expect(pinContent(`0.3.10\n${DIGEST}\n${SLIM}\n`)).toBe(`0.3.10\n${DIGEST}\n${SLIM}\n`)
+    expect(pinContent(null)).toBeNull()
   })
 })

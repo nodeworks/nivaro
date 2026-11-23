@@ -17,6 +17,8 @@
 import { db } from '../db/index.js'
 import { getTenantId } from '../db/tenant-context.js'
 import { hasColumn } from '../lib/column-probe.js'
+import { registerAppKeyed } from './app-forget.js'
+import { appMap } from './app-state.js'
 import {
   buildCurl,
   EMPTY_REDACTION,
@@ -30,7 +32,7 @@ import { instanceKey } from './settings-overrides.js'
 
 // ─── Per-API redaction rules (60 s cache) ──────────────────────────────────
 
-const redactionCache = new Map<string, { at: number; rules: RedactionRules }>()
+const redactionCache = registerAppKeyed(new Map<string, { at: number; rules: RedactionRules }>())
 const REDACTION_TTL_MS = 60_000
 
 export function bustRedactionCache(apiId?: number): void {
@@ -440,7 +442,7 @@ export async function recorderDetail(
 
 const RECORD_RULE_CAP = 200
 const RECORD_BODY_CAP = 64_000
-const recordChains = new Map<number, Promise<void>>()
+const recordChains = appMap<number, Promise<void>>()
 
 interface MockInstanceLike {
   enabled?: boolean

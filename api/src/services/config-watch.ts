@@ -1,5 +1,6 @@
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
+import { registerAppKeyed } from './app-forget.js'
 import { getIo } from './io-holder.js'
 import { opsRoom } from './ops-live.js'
 import { currentTenantKey } from './tenant-rooms.js'
@@ -340,7 +341,7 @@ interface PokeState {
   pending: ConfigPoke | null
   timer: ReturnType<typeof setTimeout>
 }
-const pokes = new Map<string, PokeState>()
+const pokes = registerAppKeyed(new Map<string, PokeState>())
 
 /** Two pokes in one window: the same part stays, different parts read "several". */
 export function mergePokes(a: ConfigPoke | null, b: ConfigPoke): ConfigPoke {

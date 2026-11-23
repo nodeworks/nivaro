@@ -1,5 +1,7 @@
 import type { Redis } from 'ioredis'
 import { db } from '../db/index.js'
+import { appBox } from './app-state.js'
+import { appKeyPart } from './tenancy/credential-binding.js'
 
 /**
  * Transition double-fire guard.
@@ -22,10 +24,10 @@ let _redis: Redis | null = null
 export function setTransitionGuardRedis(redis: Redis | null): void {
   _redis = redis
 }
-let cached: { at: number; seconds: number } | null = null
+const cached = appBox<{ at: number; seconds: number } | null>(() => null)
 
 export async function transitionGuardSeconds(): Promise<number> {
-  if (cached && Date.now() - cached.at < 60_000) return cached.seconds
+  if (cached.value && Date.now() - cached.value.at < 60_000) return cached.value.seconds
   let seconds = DEFAULT_SECONDS
   const env = process.env.TRANSITION_GUARD_SECONDS
   if (env != null && env !== '' && Number.isFinite(Number(env))) seconds = Number(env)
@@ -38,12 +40,12 @@ export async function transitionGuardSeconds(): Promise<number> {
     // column not there yet — the default stands
   }
   seconds = Math.max(0, Math.min(300, Math.round(seconds)))
-  cached = { at: Date.now(), seconds }
+  cached.value = { at: Date.now(), seconds }
   return seconds
 }
 
 export function bustTransitionGuardCache(): void {
-  cached = null
+  cached.value = null
 }
 
 export interface TransitionTwin {
@@ -118,6 +120,11 @@ export interface TransitionClaim {
 
 const NOOP: TransitionClaim = { release: async () => {} }
 
+/** The claim's key: per app on a Hub shared deployment (copied apps share instance ids). */
+export function transitionClaimKey(instanceId: string, transitionId: string): string {
+  return `nvr:transition:${appKeyPart()}${String(instanceId).toUpperCase()}:${String(transitionId).toUpperCase()}`
+}
+
 /**
  * Claim the right to make this transition now. Throws
  * TransitionDuplicateError when a twin holds the claim or just finished.
@@ -129,7 +136,7 @@ export async function claimTransition(opts: {
 }): Promise<TransitionClaim> {
   const seconds = await transitionGuardSeconds()
   if (seconds <= 0) return NOOP
-  const key = `nvr:transition:${String(opts.instanceId).toUpperCase()}:${String(opts.transitionId).toUpperCase()}`
+  const key = transitionClaimKey(opts.instanceId, opts.transitionId)
   let claimed = false
   const redis = _redis
   if (redis) {

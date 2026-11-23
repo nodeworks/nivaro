@@ -1,4 +1,6 @@
 import { db } from '../db/index.js'
+import { registerAppKeyed } from './app-forget.js'
+import { appKey } from './app-keyed.js'
 import { selectInChunks } from './db-batch.js'
 import { daysFromToday } from './liquid-dates.js'
 import { ADDENDUM_COLLECTION, resolvePipelineSubject } from './pipeline-subject.js'
@@ -347,9 +349,10 @@ function applyClause(
 // Child M2O hop → target collection, resolved via nivaro_relations. Junction
 // legs carry junction_field as their pairing marker, so it is NOT filtered
 // (the documented computeFormulaRollup / user-scopes trap).
-const hopTargetCache = new Map<string, { target: string | null; at: number }>()
+const hopTargetCache = registerAppKeyed(new Map<string, { target: string | null; at: number }>())
 async function resolveHopTarget(child: string, hop: string): Promise<string | null> {
-  const key = `${child}.${hop}`
+  // Per app (appKey): apps on one shared deployment have their own relations.
+  const key = appKey(`${child}.${hop}`)
   const hit = hopTargetCache.get(key)
   if (hit && Date.now() - hit.at < 60_000) return hit.target
   let target: string | null = null

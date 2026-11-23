@@ -209,7 +209,7 @@ case "$VERB" in
     check_stack "$ARG"
     major=$(sed -n 's/^# nivaro-hub-stack-major: \([0-9][0-9]*\)$/\1/p' "$STACK_FILE" | head -n 1)
     [ -n "$major" ] || refuse "the stack file has no nivaro-hub-stack-major line: update the stack file on the manager"
-    ALLOWED="APP_KEY ENV_KEY STACK_NAME APP_HOSTS PUBLIC_URL ADMIN_URL HUB_URL NIVARO_ENVIRONMENT DB_CLIENT OIDC_ISSUER OIDC_CLIENT_ID OIDC_REDIRECT_URI PROXY_NETWORK TRUST_PROXY NIVARO_IMAGE_REF NIVARO_VERSION SECRET_DB_URL SECRET_HUB_TOKEN SECRET_SESSION_SECRET SECRET_ENCRYPTION_KEY SECRET_OIDC_SECRET TEMPLATE_MAJOR WAIT_TRIES"
+    ALLOWED="APP_KEY ENV_KEY STACK_NAME APP_HOSTS PUBLIC_URL ADMIN_URL HUB_URL NIVARO_ENVIRONMENT DB_CLIENT OIDC_ISSUER OIDC_CLIENT_ID OIDC_REDIRECT_URI PROXY_NETWORK TRUST_PROXY TRAEFIK_VERSION NIVARO_IMAGE_REF NIVARO_VERSION SECRET_DB_URL SECRET_HUB_TOKEN SECRET_SESSION_SECRET SECRET_ENCRYPTION_KEY SECRET_OIDC_SECRET TEMPLATE_MAJOR WAIT_TRIES HUB_BOOT_MAINTENANCE"
     CR=$(printf '\r')
     seen=' '
     count=0
@@ -231,6 +231,8 @@ case "$VERB" in
     done
     for k in $ALLOWED; do
       [ "$k" = WAIT_TRIES ] && continue
+      [ "$k" = HUB_BOOT_MAINTENANCE ] && continue
+      [ "$k" = TRAEFIK_VERSION ] && continue
       case "$seen" in *" $k "*) ;; *) refuse "missing $k" ;; esac
     done
 
@@ -257,6 +259,28 @@ case "$VERB" in
       http://*) TRAEFIK_TLS=false TRAEFIK_ENTRYPOINT=$ENTRYPOINT_HTTP ;;
       *) refuse "PUBLIC_URL must be http(s)" ;;
     esac
+    # Hub phase 6: a move's target boots in strict maintenance until the Hub releases the move.
+    HUB_BOOT_MAINTENANCE=${HUB_BOOT_MAINTENANCE:-}
+    case "$HUB_BOOT_MAINTENANCE" in '' | [1-9] | [1-9]*[0-9]) ;; *) refuse "HUB_BOOT_MAINTENANCE must be a move id" ;; esac
+    case "$HUB_BOOT_MAINTENANCE" in *[!0-9]*) refuse "HUB_BOOT_MAINTENANCE must be a move id" ;; esac
+    # A stack file from before this setting would drop it silently: the app would boot writable.
+    if [ -n "$HUB_BOOT_MAINTENANCE" ] && ! grep -q 'HUB_BOOT_MAINTENANCE: \${HUB_BOOT_MAINTENANCE' "$STACK_FILE"; then
+      refuse "the stack file does not pass HUB_BOOT_MAINTENANCE: update the stack file on the manager"
+    fi
+    export HUB_BOOT_MAINTENANCE
+    # P6-34/35: ONE Traefik network label (v3 skips a service carrying both). Absent = 3.
+    TRAEFIK_SENT=${TRAEFIK_VERSION:-}
+    TRAEFIK_VERSION=${TRAEFIK_VERSION:-3}
+    case "$TRAEFIK_VERSION" in
+      3) TRAEFIK_NETWORK_LABEL=traefik.swarm.network ;;
+      2) TRAEFIK_NETWORK_LABEL=traefik.docker.network ;;
+      *) refuse "TRAEFIK_VERSION must be 2 or 3" ;;
+    esac
+    # A stack file from before this setting carries both labels: never ignore an explicit one.
+    if [ -n "$TRAEFIK_SENT" ] && ! grep -q -- '- \${TRAEFIK_NETWORK_LABEL' "$STACK_FILE"; then
+      refuse "the stack file does not use TRAEFIK_NETWORK_LABEL: update the stack file on the manager"
+    fi
+    export TRAEFIK_VERSION TRAEFIK_NETWORK_LABEL
     WAIT_TRIES=${WAIT_TRIES:-40}
     case "$WAIT_TRIES" in '' | *[!0-9]*) refuse "WAIT_TRIES must be a number" ;; esac
     [ "$WAIT_TRIES" -ge 1 ] && [ "$WAIT_TRIES" -le 80 ] || refuse "WAIT_TRIES must be 1-80"

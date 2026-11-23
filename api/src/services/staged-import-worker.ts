@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { runInBackgroundPool } from '../db/pool-context.js'
 import { NIVARO_VERSION } from '../version.js'
 import { activityGroupKey, withActivityScope } from './activity-scope.js'
+import { appBox, appSet } from './app-state.js'
 import { withBackgroundWork } from './background-inflight.js'
 import { newChainId, startChain } from './chain.js'
 import { isMultiTenant } from './deployment-mode.js'
@@ -137,7 +138,7 @@ function afterImportCompleted(
  * each other's rows.
  */
 
-let ticking = false
+const ticking = appBox(() => false)
 
 const importRedis = (app: FastifyInstance): ImportRedis | null =>
   asImportRedis((app as unknown as { redis?: unknown }).redis)
@@ -150,8 +151,8 @@ const importRedis = (app: FastifyInstance): ImportRedis | null =>
  */
 export async function drainImportsTick(app: FastifyInstance): Promise<void> {
   // Guards overlapping ticks in this process; the row's own claim covers other replicas.
-  if (ticking) return
-  ticking = true
+  if (ticking.value) return
+  ticking.value = true
   try {
     const mode = importDrainMode()
     const r = importRedis(app)
@@ -168,7 +169,7 @@ export async function drainImportsTick(app: FastifyInstance): Promise<void> {
   } catch (err) {
     app.log.error({ err }, 'staged-import worker tick failed')
   } finally {
-    ticking = false
+    ticking.value = false
   }
 }
 
@@ -400,7 +401,7 @@ export async function publishStanding(): Promise<void> {
 }
 
 /** Run ids this process is driving right now. */
-const driving = new Set<string>()
+const driving = appSet<string>()
 
 type QueueRow = Record<string, any>
 

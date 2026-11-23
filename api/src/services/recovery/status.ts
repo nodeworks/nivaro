@@ -1,6 +1,7 @@
 import { config } from '../../config.js'
 import { errorText } from '../../lib/db-refusal.js'
 import { scrubText } from '../ai-explain.js'
+import { registerAppKeyed } from '../app-forget.js'
 import { withReadGate } from '../read-gate.js'
 import { currentTenantKey } from '../tenant-rooms.js'
 import {
@@ -76,18 +77,20 @@ export interface RecoveryStatus {
 
 export const DRILL_SCHEDULE = '30 2 * * *'
 
-const slow = new Map<
-  string,
-  {
-    at: number
-    db: RecoveryStatus['db_backups']
-    chaos: RecoveryStatus['chaos']
-    chaosError: string | null
-    uploads: RecoveryStatus['uploads']
-  }
->()
+const slow = registerAppKeyed(
+  new Map<
+    string,
+    {
+      at: number
+      db: RecoveryStatus['db_backups']
+      chaos: RecoveryStatus['chaos']
+      chaosError: string | null
+      uploads: RecoveryStatus['uploads']
+    }
+  >()
+)
 /** One refresh at a time per tenant: concurrent callers share it. */
-const refreshing = new Map<string, Promise<void>>()
+const refreshing = registerAppKeyed(new Map<string, Promise<void>>())
 
 /** Manual runs waiting for the heavy slot on this process (cleared when the run row exists). */
 const queued = new Map<string, number>()

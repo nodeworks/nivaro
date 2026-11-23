@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import type { Socket } from 'socket.io'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { registerAppKeyed } from './app-forget.js'
 import { normalizeWidgetFilters } from './dashboard-widgets.js'
 import { collectionChangeOf, onJournalEntry } from './journal-listeners.js'
 import { can } from './permissions.js'
@@ -371,7 +372,7 @@ const budget = { windowStart: 0, used: 0 }
  * least 10 a minute), so one tenant's busy dashboards cannot spend every other tenant's live
  * recomputes. Self-hosted ('' tenant) only the process budget applies, as before.
  */
-const tenantBudgets = new Map<string, { windowStart: number; used: number }>()
+const tenantBudgets = registerAppKeyed(new Map<string, { windowStart: number; used: number }>())
 
 function tenantShare(): number {
   return Math.max(10, Math.ceil(maxPerMinute() / 4))

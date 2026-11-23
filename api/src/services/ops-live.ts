@@ -1,5 +1,6 @@
 import { onOpsWrite } from '../db/ops-signal.js'
 import { onOwnersChanged } from '../db/owner-signal.js'
+import { registerAppKeyed } from './app-forget.js'
 import { getIo } from './io-holder.js'
 import { parseListViewTopic } from './list-viewer-topics.js'
 import { currentTenantKey, tenantScopedRoom } from './tenant-rooms.js'
@@ -141,7 +142,7 @@ interface PokeState {
   dirty: boolean
   timer: ReturnType<typeof setTimeout>
 }
-const pokes = new Map<string, PokeState>()
+const pokes = registerAppKeyed(new Map<string, PokeState>())
 
 function fire(tenant: string, topic: string): void {
   try {

@@ -5,7 +5,7 @@ environment branch: the Hub rewrites them, and a promotion compares against them
 
 | File | What it holds |
 |---|---|
-| `app.env` | The environment's settings, one `KEY=value` per line (APP_KEY, ENV_KEY, STACK_NAME, APP_HOSTS, PUBLIC_URL, ADMIN_URL, HUB_URL, NIVARO_ENVIRONMENT, DB_CLIENT, OIDC_ISSUER, OIDC_CLIENT_ID, OIDC_REDIRECT_URI, PROXY_NETWORK, TRUST_PROXY). Never a secret. The deploy job refuses any other key. |
+| `app.env` | The environment's settings, one `KEY=value` per line (APP_KEY, ENV_KEY, STACK_NAME, APP_HOSTS, PUBLIC_URL, ADMIN_URL, HUB_URL, NIVARO_ENVIRONMENT, DB_CLIENT, OIDC_ISSUER, OIDC_CLIENT_ID, OIDC_REDIRECT_URI, PROXY_NETWORK, TRUST_PROXY, and TRAEFIK_VERSION, which an app.env written before it may lack: then 3). Never a secret. The deploy job refuses any other key. |
 | `nivaro-version` | The pin: line 1 the Nivaro version, line 2 the image digest (`sha256:` + 64 hex, required). `latest` and a pin without a digest are refused. |
 
 The project's CI configuration path is set by the Hub to `ci/deploy.yml@<template>:<ref>`, so the

@@ -1,3 +1,4 @@
+import { registerAppKeyed } from './app-forget.js'
 /**
  * A live feed of what changed across a set of related records (realtime program 2026-11-14,
  * idea 21: the Project 360 activity stream).
@@ -176,7 +177,7 @@ interface CacheEntry {
   at: number
   scope: Promise<FeedScope>
 }
-const scopeCache = new Map<string, CacheEntry>()
+const scopeCache = registerAppKeyed(new Map<string, CacheEntry>())
 const SCOPE_CACHE_MAX = 500
 
 /**

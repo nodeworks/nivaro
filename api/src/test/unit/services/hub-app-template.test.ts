@@ -42,6 +42,11 @@ const code = (text: string) =>
 /** A compose interpolation as written in the stack file: ${NAME}. */
 const compose = (name: string) => `\${${name}}`
 const DIGEST_RE = /@sha256:[0-9a-f]{64}$/
+/** docker stack deploy's interpolation of ${NAME} and ${NAME:-default} (enough for labels). */
+const interpolate = (s: string, env: Record<string, string>) =>
+  s.replace(/\$\{([A-Z_][A-Z0-9_]*)(?::-([^}]*))?\}/g, (_, k: string, d?: string) =>
+    env[k] !== undefined && env[k] !== '' ? env[k] : (d ?? '')
+  )
 
 function allFiles(dir: string): string[] {
   const out: string[] = []
@@ -208,6 +213,11 @@ describe('manager/docker-stack.yml', () => {
     for (const k of HUB_APP_ENV_KEYS) expect(code(text), k).toContain(compose(k))
   })
 
+  it('passes HUB_BOOT_MAINTENANCE (phase 6 move target) into the app, empty by default', () => {
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: a compose placeholder, literally
+    expect(code(text)).toContain('HUB_BOOT_MAINTENANCE: ${HUB_BOOT_MAINTENANCE:-}')
+  })
+
   it('names every secret variable and reads each secret through <SETTING>_FILE', () => {
     for (const k of HUB_APP_SECRET_VARS) expect(text, k).toContain(k)
     for (const svc of ['web', 'worker']) {
@@ -240,6 +250,29 @@ describe('manager/docker-stack.yml', () => {
     expect(stack.networks.proxy).toEqual({ external: true, name: compose('PROXY_NETWORK') })
     expect(stack.services.web.networks).toContain('proxy')
     expect(stack.services.worker.deploy?.labels ?? []).not.toContain('traefik.enable=true')
+  })
+
+  it('P6-35: web carries exactly ONE Traefik network label, the one the manager picks', () => {
+    const labels = stack.services.web.deploy?.labels ?? []
+    const nets = labels.filter((l) => /network\}?=/.test(l))
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: a compose placeholder, literally
+    expect(nets).toEqual(['${TRAEFIK_NETWORK_LABEL:-traefik.swarm.network}=${PROXY_NETWORK}'])
+    expect(code(text)).not.toContain('traefik.docker.network=')
+    // Rendered with each value the manager can pick: one label, the right provider.
+    for (const label of ['traefik.swarm.network', 'traefik.docker.network']) {
+      const rendered = labels.map((l) =>
+        interpolate(l, {
+          TRAEFIK_NETWORK_LABEL: label,
+          PROXY_NETWORK: 'proxy',
+          TRAEFIK_VERSION: '3'
+        })
+      )
+      expect(rendered.filter((l) => /^traefik\.(docker|swarm)\./.test(l))).toEqual([
+        `${label}=proxy`
+      ])
+    }
+    // An older wrapper that sets nothing: the v3 swarm label.
+    expect(interpolate(nets[0], { PROXY_NETWORK: 'proxy' })).toBe('traefik.swarm.network=proxy')
   })
 
   it('has no host bind mounts, no privileged settings, no published ports', () => {
@@ -438,7 +471,7 @@ case "$1 $2" in
   "secret inspect") [ -f "$S/secrets/$last.labels" ] || exit 1; cat "$S/secrets/$last.labels"; echo; exit 0 ;;
   "secret create") cat > "$S/secrets/$prev2"; printf '%s %s' "$ls" "$lk" > "$S/secrets/$prev2.labels"; exit 0 ;;
   "network inspect") [ "$last" = proxy ]; exit $? ;;
-  "stack deploy") printf 'deployed RULE=%s TLS=%s EP=%s IMAGE=%s DB=%s KEY=%s FILE=%s STACK=%s\\n' "$TRAEFIK_RULE" "$TRAEFIK_TLS" "$TRAEFIK_ENTRYPOINT" "$NIVARO_IMAGE_REF" "$SECRET_DB_URL" "$NIVARO_HUB_KEY" "$prev2" "$last" >> '${log}'; exit 0 ;;
+  "stack deploy") printf 'deployed RULE=%s TLS=%s EP=%s IMAGE=%s DB=%s KEY=%s FILE=%s STACK=%s NET=%s TV=%s BOOT=%s\\n' "$TRAEFIK_RULE" "$TRAEFIK_TLS" "$TRAEFIK_ENTRYPOINT" "$NIVARO_IMAGE_REF" "$SECRET_DB_URL" "$NIVARO_HUB_KEY" "$prev2" "$last" "\${TRAEFIK_NETWORK_LABEL:-}" "\${TRAEFIK_VERSION:-}" "\${HUB_BOOT_MAINTENANCE:-}" >> '${log}'; exit 0 ;;
   "run --rm") echo '{"version":"0.3.300","react":"x"}'; exit 0 ;;
 esac
 exit 0
@@ -694,6 +727,74 @@ describe('manager/nivaro-hub-deploy (forced command)', () => {
     expect(dockerCalls(box).join('\n')).not.toContain('secret create')
   })
 
+  it('deploy: HUB_BOOT_MAINTENANCE is optional and only ever a move id', () => {
+    const ok = manager({ secrets: ownSecrets() })
+    const r = forced(ok, `deploy ${STACK}`, deploySettings({ HUB_BOOT_MAINTENANCE: '7' }))
+    expect(r.status, r.out).toBe(0)
+    expect(ok.calls()).toMatch(/^deployed .* BOOT=7$/m)
+    // R2-M-1: a manager whose stack file does not pass it into the app refuses it (never a
+    // silent boot without maintenance).
+    const oldStack = read('manager/docker-stack.yml')
+      .split('\n')
+      .filter((l) => !l.includes('HUB_BOOT_MAINTENANCE'))
+      .join('\n')
+    const stale = manager({ secrets: ownSecrets(), stackFile: oldStack })
+    const r2 = forced(stale, `deploy ${STACK}`, deploySettings({ HUB_BOOT_MAINTENANCE: '7' }))
+    expect(r2.status).not.toBe(0)
+    expect(r2.out).toContain('the stack file does not pass HUB_BOOT_MAINTENANCE')
+    expect(dockerCalls(stale).join('\n')).not.toContain('stack deploy')
+    // Without the variable, an old stack file still deploys (promotions are unchanged).
+    expect(
+      forced(
+        manager({ secrets: ownSecrets(), stackFile: oldStack }),
+        `deploy ${STACK}`,
+        deploySettings()
+      ).status
+    ).toBe(0)
+    for (const bad of ['0', 'abc', '7 8']) {
+      const box = manager({ secrets: ownSecrets() })
+      const b = forced(box, `deploy ${STACK}`, deploySettings({ HUB_BOOT_MAINTENANCE: bad }))
+      expect(b.status, bad).not.toBe(0)
+      expect(dockerCalls(box).join('\n')).not.toContain('stack deploy')
+    }
+  })
+
+  it('P6-35: deploy picks one Traefik network label from TRAEFIK_VERSION (3 when absent)', () => {
+    const at = (over: Record<string, string>) => {
+      const box = manager({ secrets: ownSecrets() })
+      const r = forced(box, `deploy ${STACK}`, deploySettings(over))
+      return { r, calls: box.calls(), box }
+    }
+    expect(at({}).calls).toMatch(/^deployed .* NET=traefik\.swarm\.network TV=3 BOOT=$/m)
+    expect(at({ TRAEFIK_VERSION: '3' }).calls).toMatch(/ NET=traefik\.swarm\.network TV=3 /)
+    expect(at({ TRAEFIK_VERSION: '2' }).calls).toMatch(/ NET=traefik\.docker\.network TV=2 /)
+    for (const bad of ['1', '4', 'v3', '3 ']) {
+      const b = at({ TRAEFIK_VERSION: bad })
+      expect(b.r.status, bad).not.toBe(0)
+      expect(dockerCalls(b.box).join('\n'), bad).not.toContain('stack deploy')
+    }
+    // A stack file from before this setting (both labels): an explicit version is refused, not
+    // silently ignored; without one it deploys as it always did.
+    const oldStack = read('manager/docker-stack.yml').replace(
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: a compose placeholder, literally
+      '- ${TRAEFIK_NETWORK_LABEL:-traefik.swarm.network}=${PROXY_NETWORK}',
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: a compose placeholder, literally
+      '- traefik.swarm.network=${PROXY_NETWORK}\n        - traefik.docker.network=${PROXY_NETWORK}'
+    )
+    expect(oldStack).toContain('traefik.docker.network=')
+    const stale = manager({ secrets: ownSecrets(), stackFile: oldStack })
+    const r2 = forced(stale, `deploy ${STACK}`, deploySettings({ TRAEFIK_VERSION: '3' }))
+    expect(r2.status).not.toBe(0)
+    expect(r2.out).toContain('the stack file does not use TRAEFIK_NETWORK_LABEL')
+    expect(
+      forced(
+        manager({ secrets: ownSecrets(), stackFile: oldStack }),
+        `deploy ${STACK}`,
+        deploySettings()
+      ).status
+    ).toBe(0)
+  })
+
   it("deploy: first deploy binds the stack to this key; the stack file is the manager's", () => {
     const box = manager({ secrets: ownSecrets() })
     const r = forced(box, `deploy ${STACK}`, deploySettings())
@@ -889,10 +990,19 @@ describe('scripts/deploy.sh run (through the real wrapper)', () => {
       services?: string[]
       removeConf?: boolean
       timeoutMs?: number
+      /** A manager installed before TRAEFIK_VERSION / HUB_BOOT_MAINTENANCE (final review E-2). */
+      oldManager?: boolean
     } = {}
   ) {
     const box = manager({ services: o.services })
     if (o.removeConf) rmSync(join(box.etc, 'keys/demo.conf'))
+    if (o.oldManager) {
+      const w = join(box.dir, 'nivaro-hub-deploy')
+      const text = readFileSync(w, 'utf8')
+      const older = text.replace(' TRAEFIK_VERSION ', ' ').replace(' HUB_BOOT_MAINTENANCE"', '"')
+      expect(older).not.toBe(text)
+      writeFileSync(w, older)
+    }
     const repo = join(box.dir, 'repo')
     mkdirSync(join(repo, '.hub'), { recursive: true })
     writeFileSync(join(repo, 'deploy.sh'), read('scripts/deploy.sh'))
@@ -962,6 +1072,81 @@ describe('scripts/deploy.sh run (through the real wrapper)', () => {
       expect(r.out).not.toContain(Buffer.from(v).toString('base64'))
       expect(r.out).not.toContain(sha8(v))
     }
+  })
+
+  // Hub phase 6 (ruling P6-20): a move's target deploy gets the pipeline variable
+  // HUB_BOOT_MAINTENANCE=<move id>; the template forwards it to the manager, which puts it into
+  // the app's environment. Without it nothing is sent and the app boots normally.
+  it('P6-35: forwards TRAEFIK_VERSION from app.env; an app.env without it (older app) deploys v3', () => {
+    const v2 = run({ appEnv: [...APP_ENV, 'TRAEFIK_VERSION=2'] })
+    expect(v2.status, v2.out).toBe(0)
+    expect(v2.calls).toMatch(/ NET=traefik\.docker\.network TV=2 /)
+    const v3 = run({ appEnv: [...APP_ENV, 'TRAEFIK_VERSION=3'] })
+    expect(v3.status, v3.out).toBe(0)
+    expect(v3.calls).toMatch(/ NET=traefik\.swarm\.network TV=3 /)
+    const older = run()
+    expect(older.status, older.out).toBe(0)
+    expect(older.calls).toMatch(/ NET=traefik\.swarm\.network TV=3 /)
+    for (const bad of ['4', 'v2', '']) {
+      const b = run({ appEnv: [...APP_ENV, `TRAEFIK_VERSION=${bad}`] })
+      expect(b.status, bad).not.toBe(0)
+      expect(b.calls, bad).not.toContain('stack deploy')
+    }
+  })
+
+  it('final review E-2: a manager older than the template says to update the manager', () => {
+    for (const r of [
+      run({ oldManager: true, appEnv: [...APP_ENV, 'TRAEFIK_VERSION=3'] }),
+      run({ oldManager: true, env: { HUB_BOOT_MAINTENANCE: '42' } })
+    ]) {
+      expect(r.status).not.toBe(0)
+      expect(r.out).toContain('is not a deploy setting')
+      expect(r.out).toMatch(/update the manager/i)
+    }
+    // A deploy that sends nothing new still deploys on the old manager.
+    expect(run({ oldManager: true }).status).toBe(0)
+    // Any other refusal keeps its plain line.
+    const other = run({
+      services: [
+        'other--prod_web|other--prod|SHA256:x0123456789|portal.example.org,demo--staging.apps.example.com'
+      ]
+    })
+    expect(other.out).toContain('already served by another stack')
+    expect(other.status).not.toBe(0)
+    expect(other.out).not.toMatch(/update the manager/i)
+  })
+
+  it('forwards HUB_BOOT_MAINTENANCE (a move id) into the stack; absent → nothing sent', () => {
+    const on = run({ env: { HUB_BOOT_MAINTENANCE: '42' } })
+    expect(on.status).toBe(0)
+    expect(on.calls).toMatch(/^deployed .* BOOT=42$/m)
+    const off = run()
+    expect(off.status).toBe(0)
+    expect(off.calls).toMatch(/^deployed .* BOOT=$/m)
+    for (const bad of ['0', 'x1', '1;rm', '12a'])
+      expect(run({ env: { HUB_BOOT_MAINTENANCE: bad } }).status, bad).not.toBe(0)
+  })
+
+  // FW-4 I-1 (ruling P6-37): the template's deploy job runs by itself on the pin commit, so a
+  // pipeline variable never reaches it. The move id rides the pin file instead: a line
+  // `boot-maintenance=<move id>` (after the version, the digest and an optional slim digest).
+  it('FW-4 I-1: reads boot-maintenance=<move id> from the pin when no pipeline variable is set', () => {
+    const pinned = run({ pin: `0.3.300\n${DIGEST}\nboot-maintenance=42\n` })
+    expect(pinned.status, pinned.out).toBe(0)
+    expect(pinned.calls).toMatch(/^deployed .* BOOT=42$/m)
+    // After a slim digest line too.
+    const slim = run({ pin: `0.3.300\n${DIGEST}\n${DIGEST}\nboot-maintenance=43\n` })
+    expect(slim.status, slim.out).toBe(0)
+    expect(slim.calls).toMatch(/^deployed .* BOOT=43$/m)
+    // The pipeline variable still wins when it is set.
+    const both = run({
+      pin: `0.3.300\n${DIGEST}\nboot-maintenance=42\n`,
+      env: { HUB_BOOT_MAINTENANCE: '44' }
+    })
+    expect(both.calls).toMatch(/^deployed .* BOOT=44$/m)
+    // Only a move id: anything else in that line stops the deploy before ssh.
+    for (const bad of ['0', 'x1', '1;rm', '12a', ''])
+      expect(run({ pin: `0.3.300\n${DIGEST}\nboot-maintenance=${bad}\n` }).status, bad).not.toBe(0)
   })
 
   const refusedBeforeSsh = (r: { status: number | null; calls: string }) => {

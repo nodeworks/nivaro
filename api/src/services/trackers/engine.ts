@@ -5,6 +5,7 @@ import { db } from '../../db/index.js'
 import { rawRows } from '../../db/raw-rows.js'
 import { sqlDialect } from '../../db/sql-dialect.js'
 import { NIVARO_VERSION } from '../../version.js'
+import { registerAppKeyed } from '../app-forget.js'
 import { appEnvironment } from '../app-info-environment.js'
 import { selectInChunks, whereInList } from '../db-batch.js'
 import { groupSimilarIssues } from '../issue-groups.js'
@@ -777,7 +778,7 @@ function withEarlierIssue(rule: TrackerRule, link: Row): TrackerRule {
 
 const HOME_MISS_MS = 15 * 60_000
 const HOME_MISS_MAX = 5000
-const homeMisses = new Map<string, number>()
+const homeMisses = registerAppKeyed(new Map<string, number>())
 const homeMissKey = (kind: string, id: number | string, connection: number) =>
   `${currentTenantKey()}|${kind}:${id}|${connection}`
 

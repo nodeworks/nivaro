@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { registerAppKeyed } from './app-forget.js'
 import { instanceKey } from './instance-key.js'
 import {
   type JargonTerm,
@@ -143,7 +144,7 @@ async function readRow(): Promise<{ id: number; data: Record<string, unknown> } 
 }
 
 // Per tenant: a cloud process serves many tenants' databases.
-const cache = new Map<string, { at: number; value: StoredLayoutStyle }>()
+const cache = registerAppKeyed(new Map<string, { at: number; value: StoredLayoutStyle }>())
 const TTL_MS = 30_000
 
 export function bustLayoutStyleCache(): void {

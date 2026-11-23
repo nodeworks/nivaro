@@ -2,6 +2,8 @@ import { foreignKeyColumnsTo } from '../db/dialect/h2.js'
 import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { likeCi, likeEscape, qi } from '../db/sql-dialect.js'
+import { registerAppKeyed } from './app-forget.js'
+import { appBox } from './app-state.js'
 import { selectInChunks } from './db-batch.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
@@ -21,17 +23,17 @@ export interface FileRef {
   column: string
 }
 
-let refCache: { refs: FileRef[]; at: number } | null = null
+const refCache = appBox<{ refs: FileRef[]; at: number } | null>(() => null)
 const REF_TTL_MS = 60_000
 
 export async function getFileRefColumns(): Promise<FileRef[]> {
-  if (refCache && Date.now() - refCache.at < REF_TTL_MS) return refCache.refs
+  if (refCache.value && Date.now() - refCache.value.at < REF_TTL_MS) return refCache.value.refs
   const rows = (await foreignKeyColumnsTo(db, 'nivaro_files')).map((r) => ({
     tbl: r.table_name,
     col: r.column_name
   }))
   const refs = rows.map((r) => ({ table: r.tbl, column: r.col }))
-  refCache = { refs, at: Date.now() }
+  refCache.value = { refs, at: Date.now() }
   return refs
 }
 
@@ -128,7 +130,7 @@ export async function fileIdsAttachedTo(
  * minutes; `fresh` forces a rescan (the purge always takes one).
  */
 const UNUSED_CACHE_MS = 5 * 60_000
-const unusedCache = new Map<string, { at: number; ids: string[] }>()
+const unusedCache = registerAppKeyed(new Map<string, { at: number; ids: string[] }>())
 
 export async function unusedFileIds(fresh = false): Promise<string[]> {
   const key = currentTenantKey()

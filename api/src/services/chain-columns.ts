@@ -1,6 +1,7 @@
 import type { ChainTable } from '@nivaro/extension-kit'
 import { db } from '../db/index.js'
 import { getTenantId } from '../db/tenant-context.js'
+import { registerAppKeyed } from './app-forget.js'
 import { currentChain } from './chain.js'
 
 export type { ChainTable } from '@nivaro/extension-kit'
@@ -13,7 +14,7 @@ interface ProbeState {
   inflight: Promise<boolean> | null
 }
 
-const probes = new Map<string, ProbeState>()
+const probes = registerAppKeyed(new Map<string, ProbeState>())
 
 export async function hasChainColumns(table: ChainTable): Promise<boolean> {
   const key = `${getTenantId() ?? ''}\u0000${table}`

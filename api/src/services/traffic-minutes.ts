@@ -28,6 +28,7 @@ import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { logActivity } from './activity.js'
+import { appBox } from './app-state.js'
 import { isMultiTenant } from './deployment-mode.js'
 import { getApp } from './io-holder.js'
 import { runLongSql } from './run-long.js'
@@ -90,13 +91,14 @@ export function parseMinuteSettings(raw: unknown): MinuteStoreSettings {
   }
 }
 
-let settingsCache: { at: number; value: MinuteStoreSettings } | null = null
+const settingsCache = appBox<{ at: number; value: MinuteStoreSettings } | null>(() => null)
 /** The live switch the tap reads (refreshed every minute; never awaited per request). */
 let recording = false
 let recordEdges = true
 
 export async function readMinuteSettings(fresh = false): Promise<MinuteStoreSettings> {
-  if (!fresh && settingsCache && Date.now() - settingsCache.at < 60_000) return settingsCache.value
+  if (!fresh && settingsCache.value && Date.now() - settingsCache.value.at < 60_000)
+    return settingsCache.value.value
   let value = { ...MINUTE_DEFAULTS }
   try {
     if (await hasColumn('nivaro_settings', 'traffic_history')) {
@@ -108,7 +110,7 @@ export async function readMinuteSettings(fresh = false): Promise<MinuteStoreSett
   } catch {
     /* keep the defaults */
   }
-  settingsCache = { at: Date.now(), value }
+  settingsCache.value = { at: Date.now(), value }
   recording = value.enabled && !isMultiTenant()
   recordEdges = value.edges
   return value
@@ -130,7 +132,7 @@ export async function saveMinuteSettings(
   await db('nivaro_settings')
     .where('id', 1)
     .update({ traffic_history: JSON.stringify(next) })
-  settingsCache = { at: Date.now(), value: next }
+  settingsCache.value = { at: Date.now(), value: next }
   recording = next.enabled && !isMultiTenant()
   recordEdges = next.edges
   const changed: string[] = []
@@ -307,17 +309,20 @@ function redis(): ListRedis | null {
   return r && typeof r.rpush === 'function' ? r : null
 }
 
-let tableProbe: { at: number; ok: boolean } | null = null
+const tableProbe = appBox<{ at: number; ok: boolean } | null>(() => null)
 export async function minuteTableReady(): Promise<boolean> {
-  if (tableProbe && Date.now() - tableProbe.at < (tableProbe.ok ? 3600_000 : 60_000))
-    return tableProbe.ok
+  if (
+    tableProbe.value &&
+    Date.now() - tableProbe.value.at < (tableProbe.value.ok ? 3600_000 : 60_000)
+  )
+    return tableProbe.value.ok
   let ok = false
   try {
     ok = await db.schema.hasTable(TABLE)
   } catch {
     ok = false
   }
-  tableProbe = { at: Date.now(), ok }
+  tableProbe.value = { at: Date.now(), ok }
   return ok
 }
 

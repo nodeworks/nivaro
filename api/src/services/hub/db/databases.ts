@@ -24,6 +24,7 @@ import type { Knex } from 'knex'
 import type { SslMode } from '../../../db/connection-url.js'
 import { insertReturningId } from '../../../db/dialect/ef.js'
 import { db } from '../../../db/index.js'
+import { DB_IDENTITY_SQL, formatDbIdentity } from '../../db-identity.js'
 import { HubSecretError, maskSecret } from '../secrets.js'
 import type { HubDbCode } from './codes.js'
 import { connectionFromInput, type HubDbConnection, type HubDbEngine } from './connection.js'
@@ -397,23 +398,16 @@ async function refuseDuplicate(
     )
 }
 
-// Read-only: which server and database the connection really reached (an alias, an IP and a
-// name for the same server all resolve to one identity). Fixed statements, no input.
-const IDENTITY_SQL: Record<HubDbEngine, string> = {
-  mssql: 'SELECT CAST(@@SERVERNAME AS nvarchar(256)) AS s, CAST(NULL AS int) AS p, DB_NAME() AS d',
-  pg: "SELECT COALESCE(host(inet_server_addr()), '') AS s, inet_server_port() AS p, current_database() AS d",
-  mysql2: 'SELECT @@hostname AS s, @@port AS p, DATABASE() AS d',
-  mariadb: 'SELECT @@hostname AS s, @@port AS p, DATABASE() AS d'
-}
-
-/** `engine|server|port|database`, lower-cased; null when it cannot be read. */
+/** `engine|server|port|database`, lower-cased; null when it cannot be read. Which server and
+ *  database the connection really reached: services/db-identity.ts (one copy). */
 async function readIdentity(conn: HubDbConnection, k: Knex): Promise<string | null> {
   try {
-    const [r] = await run<{ s: unknown; p: unknown; d: unknown }>(k, IDENTITY_SQL[conn.engine])
-    const server = String(r?.s ?? '').trim() || conn.host
-    const port = r?.p != null && r.p !== '' ? Number(r.p) : normPort(conn.engine, conn.port)
-    const database = String(r?.d ?? '').trim() || conn.database
-    return `${conn.engine}|${server}|${port}|${database}`.toLowerCase()
+    const [r] = await run<{ s: unknown; p: unknown; d: unknown }>(k, DB_IDENTITY_SQL[conn.engine])
+    return formatDbIdentity(conn.engine, r, {
+      server: conn.host,
+      port: normPort(conn.engine, conn.port),
+      database: conn.database
+    })
   } catch {
     return null
   }
@@ -810,6 +804,17 @@ export async function setConnection(
  * conditional on the status read, so it never undoes a concurrent change.
  */
 export async function checkDatabase(id: number): Promise<DbCheck> {
+  return (await checkDatabaseIdentity(id)).check
+}
+
+/**
+ * checkDatabase, also answering the server identity the check read (`engine|server|port|database`,
+ * db-identity.ts; null when unreachable). Attaching a record to an existing environment compares
+ * it with what the app itself reports (P6-32). Never answered over the API.
+ */
+export async function checkDatabaseIdentity(
+  id: number
+): Promise<{ check: DbCheck; identity: string | null }> {
   const row = await getRow(id)
   if (!row) throw new HubDbError('NOT_FOUND', 'Database not found.', 404)
   if (row.status === 'dropping')
@@ -841,7 +846,7 @@ export async function checkDatabase(id: number): Promise<DbCheck> {
         updated_at: now()
       })
   })
-  return check
+  return { check, identity }
 }
 
 // ─── Adopt ───────────────────────────────────────────────────────────────────

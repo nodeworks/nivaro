@@ -1,4 +1,5 @@
 import { db } from '../../db/index.js'
+import { registerAppKeyed } from '../app-forget.js'
 import { isMultiTenant } from '../deployment-mode.js'
 import { instanceKey } from '../instance-key.js'
 import { currentTenantKey } from '../tenant-rooms.js'
@@ -242,7 +243,7 @@ export function effectiveRecovery(
 
 // ── Storage (30 s cache per tenant; the PATCH route busts it) ─────────────────
 
-const cache = new Map<string, { at: number; value: RecoverySettings }>()
+const cache = registerAppKeyed(new Map<string, { at: number; value: RecoverySettings }>())
 let testOverride: RecoverySettings | null = null
 
 export function bustRecoverySettingsCache(): void {

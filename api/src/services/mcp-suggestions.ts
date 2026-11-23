@@ -1,6 +1,7 @@
 import { db } from '../db/index.js'
 import { getTenantId } from '../db/tenant-context.js'
 import { hasColumn } from '../lib/column-probe.js'
+import { registerAppKeyed } from './app-forget.js'
 import { hasChainColumns } from './chain-columns.js'
 import { selectInChunks } from './db-batch.js'
 import { WINDOW_DAYS } from './mcp-activity.js'
@@ -274,7 +275,9 @@ export async function undismiss(key: string): Promise<boolean> {
   return Number(n) > 0
 }
 
-const cache = new Map<string, { at: number; value: Omit<Suggestion, 'prefill'>[] }>()
+const cache = registerAppKeyed(
+  new Map<string, { at: number; value: Omit<Suggestion, 'prefill'>[] }>()
+)
 const CACHE_MS = 5 * 60_000
 
 /** The window's patterns with their collections (no prefill, no dismissal filter). Cached 5 min. */

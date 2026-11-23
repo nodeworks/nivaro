@@ -28,6 +28,11 @@
 #   HUB_PIN_FILE          optional, default .hub/nivaro-version
 #   HUB_IMAGE             optional, default nodeworks/nivaro (the manager allows one image)
 #   DEPLOY_WAIT_TRIES     optional, default 40 (x 15 s) for /api/version
+#   HUB_BOOT_MAINTENANCE  optional pipeline variable the Hub sends when it deploys a move's
+#                         target (phase 6): a move id, forwarded so the app boots in strict
+#                         maintenance until the Hub releases that move. A job that runs by
+#                         itself (the pin commit starts it) gets no variable: the Hub then writes
+#                         the move id into the pin as a line boot-maintenance=<move id>
 set -eu
 # No globbing: hostnames and keys are split on commas / spaces below.
 set -f
@@ -44,7 +49,10 @@ IMAGE_REPO=${HUB_IMAGE:-nodeworks/nivaro}
 WAIT_TRIES=${DEPLOY_WAIT_TRIES:-40}
 
 # Twin of HUB_APP_ENV_KEYS in api/src/services/hub/create/app-config.ts.
-APP_ENV_KEYS="APP_KEY ENV_KEY STACK_NAME APP_HOSTS PUBLIC_URL ADMIN_URL HUB_URL NIVARO_ENVIRONMENT DB_CLIENT OIDC_ISSUER OIDC_CLIENT_ID OIDC_REDIRECT_URI PROXY_NETWORK TRUST_PROXY"
+APP_ENV_KEYS="APP_KEY ENV_KEY STACK_NAME APP_HOSTS PUBLIC_URL ADMIN_URL HUB_URL NIVARO_ENVIRONMENT DB_CLIENT OIDC_ISSUER OIDC_CLIENT_ID OIDC_REDIRECT_URI PROXY_NETWORK TRUST_PROXY TRAEFIK_VERSION"
+# Settings an app.env written before them may lack (P6-35: apps created earlier keep their
+# app.env when re-pinned). Absent = the manager's default (TRAEFIK_VERSION 3).
+APP_ENV_OPTIONAL="TRAEFIK_VERSION"
 # Twin of HUB_SECRET_FILES: <CI variable>:<swarm secret short name>.
 SECRET_VARS="NIVARO_DB_URL_B64:db_url NIVARO_HUB_TOKEN_B64:hub_token NIVARO_SESSION_SECRET_B64:session_secret NIVARO_ENCRYPTION_KEY_B64:encryption_key NIVARO_OIDC_CLIENT_SECRET_B64:oidc_secret"
 
@@ -77,8 +85,10 @@ while IFS= read -r line || [ -n "$line" ]; do
   export "$key=$value"
 done <"$APP_ENV_FILE"
 for key in $APP_ENV_KEYS; do
+  case " $APP_ENV_OPTIONAL " in *" $key "*) continue ;; esac
   case "$seen" in *" $key "*) ;; *) die "$APP_ENV_FILE has no $key" ;; esac
 done
+case "${TRAEFIK_VERSION:-3}" in 2 | 3) ;; *) die "TRAEFIK_VERSION must be 2 or 3" ;; esac
 
 for k in "$APP_KEY" "$ENV_KEY"; do
   case "$k" in [a-z]*) ;; *) die "APP_KEY / ENV_KEY must be Hub keys" ;; esac
@@ -115,6 +125,17 @@ esac
 case "$DB_CLIENT" in mssql | pg | mysql2 | mariadb) ;; *) die "DB_CLIENT $DB_CLIENT is not supported" ;; esac
 case "$PROXY_NETWORK" in '' | [!A-Za-z0-9]* | *[!A-Za-z0-9_.-]*) die "PROXY_NETWORK is not a network name" ;; esac
 case "$PUBLIC_URL" in https://* | http://*) ;; *) die "PUBLIC_URL must be an http(s) URL" ;; esac
+
+# A move's target deploy (Nivaro Hub phase 6): a move id, checked here so a bad value stops the
+# deploy before anything reaches the manager.
+BOOT_MAINTENANCE=${HUB_BOOT_MAINTENANCE:-}
+if [ -z "$BOOT_MAINTENANCE" ] && grep -q '^boot-maintenance=' "$PIN_FILE" 2>/dev/null; then
+  BOOT_MAINTENANCE=$(sed -n 's/^boot-maintenance=//p' "$PIN_FILE" | head -n 1)
+  [ -n "$BOOT_MAINTENANCE" ] || die "$PIN_FILE: boot-maintenance must be a move id"
+fi
+case "$BOOT_MAINTENANCE" in '' | [1-9] | [1-9]*[0-9]) ;; *) die "HUB_BOOT_MAINTENANCE must be a move id" ;; esac
+case "$BOOT_MAINTENANCE" in *[!0-9]*) die "HUB_BOOT_MAINTENANCE must be a move id" ;; esac
+[ "${#BOOT_MAINTENANCE}" -le 15 ] || die "HUB_BOOT_MAINTENANCE must be a move id"
 
 SUFFIX=${HUB_HOST_SUFFIX:-}
 if [ -n "$SUFFIX" ]; then
@@ -242,7 +263,10 @@ done
 
 # ── 5. deploy ───────────────────────────────────────────────────────────────
 {
-  for key in $APP_ENV_KEYS; do printf '%s=%s\n' "$key" "$(printenv "$key")"; done
+  for key in $APP_ENV_KEYS; do
+    # An optional setting this app.env lacks is not sent (an older manager would refuse it).
+    case "$seen" in *" $key "*) printf '%s=%s\n' "$key" "$(printenv "$key")" ;; esac
+  done
   printf 'NIVARO_IMAGE_REF=%s\n' "$NIVARO_IMAGE_REF"
   printf 'NIVARO_VERSION=%s\n' "$VERSION"
   printf 'TEMPLATE_MAJOR=%s\n' "$HUB_TEMPLATE_MAJOR"
@@ -250,5 +274,14 @@ done
     printf 'SECRET_%s=%s\n' "$s" "$(printenv "SECRET_$s")"
   done
   printf 'WAIT_TRIES=%s\n' "$WAIT_TRIES"
-} | remote deploy "$STACK_NAME" || stop $? "the manager did not deploy $STACK_NAME"
+  [ -z "$BOOT_MAINTENANCE" ] || printf 'HUB_BOOT_MAINTENANCE=%s\n' "$BOOT_MAINTENANCE"
+} | remote deploy "$STACK_NAME" || {
+  rc=$?
+  # A manager installed before a setting this deploy sends (TRAEFIK_VERSION, HUB_BOOT_MAINTENANCE)
+  # refuses it by name: say what to do about it, not only that it failed.
+  if [ "$rc" -ne 77 ] && grep -q 'is not a deploy setting' "$WORK/ssh.err" 2>/dev/null; then
+    die "the manager did not deploy $STACK_NAME: it is older than this template and does not know a setting this deploy sends. Update the manager (install manager/nivaro-hub-deploy and manager/docker-stack.yml from this template on the swarm manager), then deploy again"
+  fi
+  stop "$rc" "the manager did not deploy $STACK_NAME"
+}
 say "done: web answers $VERSION"

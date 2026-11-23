@@ -1,28 +1,7 @@
 import { config } from './config.js'
 import { closeDb, dbServerFlavorProblem, migrationSource, runMigrationsSafely } from './db/index.js'
-import { registerCoreTriggers } from './flows/core-triggers.js'
-import { registerActivityHooks } from './hooks/activity.js'
-import { registerAgentTriggerHooks } from './hooks/agent-triggers.js'
-import { registerAggregateCapHooks, setApp as setAggregateCapApp } from './hooks/aggregate-caps.js'
-import { registerAiValidationHooks, setApp as setAiValidationApp } from './hooks/ai-validation.js'
-import { registerAlertHooks, setApp as setAlertApp } from './hooks/alerts.js'
-import { registerApprovalChangeHooks } from './hooks/approval-changes.js'
-import { registerCrossTriggerHooks, setApp as setCrossTriggerApp } from './hooks/cross-triggers.js'
-import { registerEmbeddingHooks, setApp as setEmbeddingApp } from './hooks/embeddings.js'
-import { registerFieldWatchHooks, setApp as setFieldWatchApp } from './hooks/field-watches.js'
-import { registerInactivePeopleHooks } from './hooks/inactive-people.js'
-import { registerSnoozeWakeHooks } from './hooks/notification-snooze.js'
-import {
-  registerNotificationSubscriptionHooks,
-  setApp as setSubscriptionApp
-} from './hooks/notification-subscriptions.js'
-import { registerPipelineAutostartHooks } from './hooks/pipeline-autostart.js'
-import { registerPresenceTypingStripHooks } from './hooks/presence-typing-strip.js'
-import { registerQueueMaterializationHooks } from './hooks/queue-materialization.js'
-import { registerRecordIntegrityHooks } from './hooks/record-integrity.js'
-import { registerTaskDoneWhenHooks } from './hooks/task-done-when.js'
-import { registerWatchListHooks } from './hooks/watch-list.js'
-import { registerWorkflowAutoHooks } from './hooks/workflow-auto.js'
+import { startTenantEventFlows } from './flows/tenant-event-flows.js'
+import { registerCoreRecordHooks, setCoreHookApps } from './hooks/core-hooks.js'
 import { drainDeadlineMs, endEndlessStreams } from './lib/drain-streams.js'
 import { buildRealtimeServer } from './realtime-server.js'
 import { loadEventFlows } from './routes/flows.js'
@@ -45,9 +24,11 @@ import {
   deploymentModeProblem,
   hubUrlBootWarning,
   isMultiTenant,
-  isNivaroCloud
+  isNivaroCloud,
+  tenantSource
 } from './services/deployment-mode.js'
 import { startDevExtensionWatch } from './services/dev-extension-watch.js'
+import { hubLinkToken } from './services/hub/mode.js'
 import { setInactivePeopleNoticeApp } from './services/inactive-people-notice.js'
 import { installProcessGuards } from './services/process-guards.js'
 import { isRealtimeRole, processRole } from './services/process-role.js'
@@ -100,30 +81,12 @@ async function main() {
     process.exit(1)
   }
 
-  // Hook registrations query the DB immediately at startup — skip in cloud mode.
-  // In cloud mode, per-tenant hooks fire per-request via the tenant middleware.
-  // A realtime process writes no records through the items service: no hooks.
-  if (!isMultiTenant() && !realtime) {
-    registerActivityHooks()
-    registerFieldWatchHooks()
-    registerWatchListHooks()
-    registerInactivePeopleHooks()
-    registerNotificationSubscriptionHooks()
-    registerPipelineAutostartHooks()
-    registerAlertHooks()
-    registerEmbeddingHooks()
-    registerCrossTriggerHooks()
-    registerAiValidationHooks()
-    registerAggregateCapHooks()
-    registerQueueMaterializationHooks()
-    registerRecordIntegrityHooks()
-    registerSnoozeWakeHooks()
-    registerTaskDoneWhenHooks()
-    registerPresenceTypingStripHooks()
-    registerAgentTriggerHooks()
-    registerWorkflowAutoHooks()
-    registerApprovalChangeHooks()
-    registerCoreTriggers()
+  // The core record hooks (activity log, revisions, webhooks, watches, alerts, rules …) are
+  // registered once per process: self-hosted, and on a Hub shared deployment, where each hook
+  // reads the database of the app whose write it runs for (hooks/core-hooks.ts, Hub phase 6).
+  // Nivaro Cloud registers none (unchanged). A realtime process writes no records: no hooks.
+  if ((!isMultiTenant() || tenantSource() === 'hub') && !realtime) {
+    registerCoreRecordHooks()
   }
 
   // Run pending migrations on startup (self-hosted only).
@@ -194,16 +157,40 @@ async function main() {
   // Administrators' people-were-suspended notice goes out through this app (cloud too).
   setInactivePeopleNoticeApp(app)
 
-  // These all query the static DB at startup — skip in cloud mode (and on a realtime process).
-  if (!isMultiTenant() && !realtime) {
-    await bootPhase('Event flows', () => loadEventFlows(app))
-    setFieldWatchApp(app)
-    setSubscriptionApp(app)
-    setAlertApp(app)
-    setEmbeddingApp(app)
-    setCrossTriggerApp(app)
-    setAiValidationApp(app)
-    setAggregateCapApp(app)
+  // Hub phase 6 — a dedicated hub-linked app (HUB_TOKEN, never multi-tenant): read the retired
+  // flag (moved away by the Hub) before serving, then every 5 s; and a dedicated target a move
+  // deployed (HUB_BOOT_MAINTENANCE=<move id>) starts in the Hub's strict maintenance until the
+  // Hub releases that move. Both live in this app's Redis.
+  // tenantSource() === null = one app in this process (never cloud, never a shared deployment).
+  if (hubLinkToken() && tenantSource() === null) {
+    const redis = (app as unknown as { redis?: import('ioredis').Redis }).redis
+    if (redis) {
+      await bootPhase('Hub link: retired flag and boot maintenance', async () => {
+        const { startRetiredWatch, isRetiredSync } = await import('./services/hub-link/retire.js')
+        await startRetiredWatch(redis)
+        if (isRetiredSync())
+          app.log.warn('This app is retired (moved away by the Nivaro Hub): it answers APP_MOVED')
+        const { applyHubBootMaintenance } = await import('./services/security.js')
+        try {
+          if (await applyHubBootMaintenance(redis))
+            app.log.warn(
+              `HUB_BOOT_MAINTENANCE=${process.env.HUB_BOOT_MAINTENANCE}: strict maintenance is on until the Hub releases this move`
+            )
+        } catch {
+          app.log.error('HUB_BOOT_MAINTENANCE: the strict maintenance could not be set (Redis)')
+        }
+      })
+    }
+  }
+
+  // Event flows and the hooks' app references. Self-hosted: every active event flow becomes a
+  // hook (loaded from the one database). A Hub shared deployment has no database of its own:
+  // one dispatcher reads each app's event flows on that app's writes (flows/tenant-event-flows.ts).
+  // Nivaro Cloud: none (unchanged); a realtime process: none.
+  if ((!isMultiTenant() || tenantSource() === 'hub') && !realtime) {
+    if (tenantSource() === 'hub') startTenantEventFlows(app)
+    else await bootPhase('Event flows', () => loadEventFlows(app))
+    setCoreHookApps(app)
   }
 
   // Open a few DB connections before listening, so the first burst after a deploy does not

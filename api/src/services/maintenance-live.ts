@@ -1,3 +1,4 @@
+import { registerAppKeyed } from './app-forget.js'
 import { isMultiTenant } from './deployment-mode.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
@@ -35,8 +36,8 @@ const WATCH_MS = 5_000
 const SECOND_ANNOUNCE_MS = 16_000
 const RECHECK_MS = 250
 
-const lastSeen = new Map<string, string>()
-const lastOn = new Map<string, boolean>()
+const lastSeen = registerAppKeyed(new Map<string, string>())
+const lastOn = registerAppKeyed(new Map<string, boolean>())
 let watchTimer: ReturnType<typeof setInterval> | null = null
 
 type Announce = () => void

@@ -7,9 +7,16 @@ import { runInBackgroundPool } from '../db/pool-context.js'
 import { sqlDialect } from '../db/sql-dialect.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { hasChainColumns } from '../services/chain-columns.js'
+import { tenantSource } from '../services/deployment-mode.js'
 import { mcpCallerKey, mcpLogColumns, mcpStampOf } from '../services/mcp-calls.js'
 import { roomListeners } from '../services/realtime-board.js'
-import { MASK, maskBodySecrets, maskQueryString, maskUrlPath } from '../services/secret-mask.js'
+import {
+  bodyNeverKept,
+  MASK,
+  maskBodySecrets,
+  maskQueryString,
+  maskUrlPath
+} from '../services/secret-mask.js'
 import { instanceKey } from '../services/settings-overrides.js'
 import { requestTenantKey } from '../services/socket-tenant.js'
 import { accessLogEnabled, accessLogLine, noteAccessLine } from '../services/telemetry-store.js'
@@ -88,7 +95,7 @@ function graphqlColumns(req: { __nvrGql?: GraphQLStampLike }): Partial<ApiLogRow
  * fields that merely contain "key" (item_key, sort_key) must survive.
  */
 const LOGGED_BODY_SECRET_KEY =
-  /password|passwd|passphrase|^pass$|secret|token|api[_-]?key|private[_-]?key|relay[_-]?key|authorization|cookie|credential/i
+  /password|passwd|passphrase|^pass$|secret|token|api[_-]?key|private[_-]?key|relay[_-]?key|encryption[_-]?key|^app[_-]?key$|authorization|cookie|credential/i
 
 /** A JSON request body with every credential-named value (any depth) replaced by `••••••`;
  *  anything that is not JSON — or JSON already cut off — goes through the shared masker. */
@@ -119,6 +126,8 @@ export function maskLoggedBody(raw: string): string {
 }
 
 function captureRequestBody(req: {
+  url?: string
+  routeOptions?: { url?: string }
   method: string
   authMethod?: string
   user?: unknown
@@ -126,6 +135,11 @@ function captureRequestBody(req: {
   headers: Record<string, unknown>
 }): string | null {
   if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return null
+  const url = String(req.url ?? '')
+  const mark = url.indexOf('?')
+  // The app-key route's body IS a secret (services/secret-mask.ts bodyNeverKept): judged by the
+  // matched route pattern, so an encoded spelling of the path cannot slip past.
+  if (bodyNeverKept(mark < 0 ? url : url.slice(0, mark), req.routeOptions?.url ?? null)) return null
   if (req.authMethod !== 'token' && req.authMethod !== 'api_key') return null
   // A refused credential is still stamped token / api_key so the failure is
   // attributed — but a payload from a caller nobody recognised is not kept.
@@ -198,7 +212,7 @@ function clientIp(req: { headers: Record<string, unknown>; ip: string }): string
   return req.ip ? String(req.ip).slice(0, 64) : null
 }
 
-function shouldSkip(path: string, method: string): boolean {
+export function shouldSkip(path: string, method: string): boolean {
   if (!path.startsWith('/api/')) return !(LEGACY_ALIASES.has(path) && method === 'POST')
   if (path.startsWith('/api/health')) return true
   // #1088 — a Prometheus scrape every 15s is not traffic anyone reads here.
@@ -207,6 +221,14 @@ function shouldSkip(path: string, method: string): boolean {
   if (path.startsWith('/api/internal/render/')) return true
   // A Nivaro Hub polling this app's health (routes/hub-link.ts) is not traffic anyone reads here.
   if (path.startsWith('/api/hub-link/')) return true
+  // A Hub shared deployment's processes polling their tenant list (routes/hub-shared-tenants.ts).
+  if (/^\/api\/hub\/shared\/[^/?]+\/tenants([?]|$)/.test(path)) return true
+  // Its shared twin (routes/hub-deployment-link.ts) runs on no app: nowhere to log it. Only where
+  // it is mounted (a Hub shared deployment).
+  if (path.startsWith('/api/hub-deployment/') && tenantSource() === 'hub') return true
+  // A move's file transfer (routes/hub-transfer.ts): thousands of reads by the target, on a
+  // shared deployment outside any app's context — not traffic anyone reads here.
+  if (path.startsWith('/api/hub-transfer/')) return true
   if (path.startsWith('/api/api-analytics')) return true
   return false
 }
@@ -465,6 +487,8 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
       query: mark < 0 ? null : maskQueryString(rawUrl.slice(mark + 1), path),
       request_body: captureRequestBody(
         req as unknown as {
+          url?: string
+          routeOptions?: { url?: string }
           method: string
           authMethod?: string
           user?: unknown

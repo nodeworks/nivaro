@@ -1,6 +1,10 @@
 import type { Redis } from 'ioredis'
-import { cleanTenantHost } from '../../db/tenant-context.js'
+import { cleanTenantHost, runWithoutTenant } from '../../db/tenant-context.js'
+import { NIVARO_VERSION } from '../../version.js'
+import { forgetAppState } from '../app-state.js'
 import { hubSharedConfig } from '../deployment-mode.js'
+import { INSTANCE_ID } from '../instance-roster.js'
+import { resetAppKeysForTests, setAppKeys } from './app-keys.js'
 import { HUB_TENANTS_PATH, parseHubTenants } from './hub-contract.js'
 import { HubBodyTooLargeError, hubFetch, readCappedText } from './hub-fetch.js'
 import type {
@@ -16,10 +20,15 @@ import type {
  *
  * A Hub outage never empties the deployment: a 5xx, a timeout, a refused token or a body that is
  * not a tenant list keeps the last good list. That list is also kept in Redis
- * (`nvr:tenancy:hub:<deployment>`, sealed with encryptValue: it carries every app's database
- * connection), so a restart during an outage still serves. Without ENCRYPTION_KEY the copy is
- * memory-only (readiness warns). The token and connections never reach a log, an error or a
- * readiness text.
+ * (`nvr:tenancy:hub:<deployment>`, sealed with encryptForDeployment: it carries every app's
+ * database connection and key), so a restart during an outage still serves. Without
+ * ENCRYPTION_KEY the copy is memory-only (readiness warns). The token, connections and keys never
+ * reach a log, an error or a readiness text.
+ *
+ * Phase 6: each list hands the apps' own ENCRYPTION_KEYs to tenancy/app-keys.ts (encryptValue
+ * inside an app uses them), and a tenant the Hub listed without an `origin` gets its first
+ * hostname's (`https://host[:listed port]`), the origin its jobs name. A request keeps the origin
+ * of the host it came on (resolve).
  */
 
 const FETCH_TIMEOUT_MS = 10_000
@@ -34,6 +43,16 @@ const LOCAL_HOST = /^(localhost|127\.0\.0\.1|\[::1\]|[a-z0-9.-]+\.localhost)(:\d
 
 export const hubCacheKey = (deployment: string) => `nvr:tenancy:hub:${deployment}`
 
+/** Phase 6: a message on this channel makes every replica of the deployment refresh its list at
+ *  once (the deployment link's POST /refresh publishes it). Pub/sub ignores the db index, so the
+ *  channel carries REDIS_CHANNEL_PREFIX, and the deployment key, so two shared deployments on one
+ *  Redis never kick each other. */
+export const tenancyRefreshChannel = (deployment: string) =>
+  `${process.env.REDIS_CHANNEL_PREFIX ?? ''}nvr:tenancy:refresh:${deployment}`
+
+/** Refresh kicks closer together than this fold into one trailing refresh. */
+const KICK_GAP_MS = 1_000
+
 /** What the readiness check judges (services/tenancy/readiness.ts). */
 export interface HubSourceDetails {
   /** Last time the Hub confirmed the list (200 or 304), or the stored copy's time after a boot. */
@@ -46,6 +65,8 @@ export interface HubSourceDetails {
   fetchError: string | null
   /** Tenants the Hub listed that this deployment cannot serve. */
   dropped: { id: string; why: string }[]
+  /** The ETag of the list held (phase 6: the Hub tells replicas apart by it). */
+  etag: string | null
   /** The last good list is kept in Redis (sealed); false = memory only. */
   sealedCopy: boolean
   /** Why there is no sealed copy, when there is none. */
@@ -55,6 +76,11 @@ export interface HubSourceDetails {
 export interface HubTenantRegistry extends TenantRegistry {
   details(): HubSourceDetails
   refresh(): Promise<void>
+  /** A refresh asked for by the Hub (a channel message, or POST /refresh with no Redis): folded,
+   *  at least KICK_GAP_MS apart, and always a fetch that starts after the kick. */
+  kick(): void
+  byId(id: string): Promise<TenantRecord | null>
+  listAll(): Promise<TenantRecord[]>
 }
 
 interface Deps {
@@ -100,6 +126,15 @@ function originOf(h: { bare: string; clean: string }, t: TenantRecord): string {
   return `https://${h.bare}${port ? `:${port}` : ''}`
 }
 
+/** The tenant with its origin: the Hub's, else its first listed hostname's (the same rule as a
+ *  request on that host). A local host keeps its listed port (a request would carry its own). */
+function withListedOrigin(t: TenantRecord): TenantRecord {
+  if (t.origin || !t.hostnames[0]) return t
+  const h = t.hostnames[0]
+  const port = t.originPorts?.[h]
+  return { ...t, origin: originOf({ bare: h, clean: port ? `${h}:${port}` : h }, t) }
+}
+
 /** Plain text for a failed fetch: the error's kind only, never its message. */
 function fetchFailureText(err: unknown): string {
   const name = (err as { name?: unknown } | null)?.name
@@ -136,9 +171,18 @@ export async function startHubTenantSource(deps: Deps): Promise<TenantRegistry> 
   let lastForced = Number.NEGATIVE_INFINITY
 
   const setList = (list: TenantRecord[]) => {
-    tenants = list
+    // Task 22 M-2 (via Task 16): an app no longer listed has left this process (unplaced, or
+    // moved away at retire_source): its per-app module state goes with it.
+    const listed = new Set(list.map((t) => t.id))
+    for (const t of tenants) if (!listed.has(t.id)) forgetAppState(t.id)
+    // Final review I-1: an app that (re)appears starts clean too, so a leave this process never
+    // saw (it was not listed in between) cannot hand a returning app its old cached state.
+    const before = new Set(tenants.map((t) => t.id))
+    for (const t of list) if (!before.has(t.id)) forgetAppState(t.id)
+    tenants = list.map(withListedOrigin)
+    setAppKeys(tenants)
     const m = new Map<string, TenantRecord>()
-    for (const t of list) for (const h of t.hostnames) m.set(h, t)
+    for (const t of tenants) for (const h of t.hostnames) m.set(h, t)
     byHost = m
     loaded = true
   }
@@ -160,9 +204,10 @@ export async function startHubTenantSource(deps: Deps): Promise<TenantRegistry> 
     try {
       const raw = await redis.get(hubCacheKey(deployment))
       if (!raw) return
-      const { decryptValue, isEncrypted } = await import('../encryption.js')
+      const { decryptForDeployment, isEncrypted } = await import('../encryption.js')
       if (!isEncrypted(raw)) return // never trust a plaintext copy
-      const copy = JSON.parse(decryptValue(raw)) as {
+      // The deployment's own key, never an app's (decryptValue inside an app would use the app's).
+      const copy = JSON.parse(decryptForDeployment(raw)) as {
         tenants?: TenantRecord[]
         etag?: string | null
         confirmedAt?: number
@@ -182,8 +227,8 @@ export async function startHubTenantSource(deps: Deps): Promise<TenantRegistry> 
   const writeCopy = async () => {
     if (!redis || sealProblem) return
     try {
-      const { encryptValue } = await import('../encryption.js')
-      const sealed = encryptValue(JSON.stringify({ tenants, etag, confirmedAt, dropped }))
+      const { encryptForDeployment } = await import('../encryption.js')
+      const sealed = encryptForDeployment(JSON.stringify({ tenants, etag, confirmedAt, dropped }))
       await redis.set(hubCacheKey(deployment), sealed)
       writeFailed = false
     } catch {
@@ -196,7 +241,11 @@ export async function startHubTenantSource(deps: Deps): Promise<TenantRegistry> 
     try {
       const headers: Record<string, string> = {
         Authorization: `Bearer ${token}`,
-        Accept: 'application/json'
+        Accept: 'application/json',
+        // Phase 6: the Hub keeps a sighting per process (version, list held), so it can wait
+        // until every live replica holds a new list. INSTANCE_ID is per process (ruling B4).
+        'X-Nivaro-Version': NIVARO_VERSION,
+        'X-Nivaro-Instance': INSTANCE_ID
       }
       if (etag && loaded) headers['If-None-Match'] = etag
       // The signal ends a normal request; the race is the backstop for one that ignores it, so a
@@ -264,7 +313,9 @@ export async function startHubTenantSource(deps: Deps): Promise<TenantRegistry> 
 
   const refresh = (): Promise<void> => {
     if (!inFlight) {
-      inFlight = fetchOnce()
+      // Never inside an app: the sealed copy (every app's connection and key) is sealed with the
+      // deployment's own key, whichever request or job asked for the refresh (review minor 7).
+      inFlight = runWithoutTenant(() => fetchOnce())
         .catch(() => {
           fetchError = 'the tenant list could not be read'
         })
@@ -279,6 +330,47 @@ export async function startHubTenantSource(deps: Deps): Promise<TenantRegistry> 
         })
     }
     return inFlight
+  }
+
+  // A fetch that starts AFTER now: one already in flight may predate the Hub's change, so the
+  // kick waits for it and fetches once more (one follow-up however many kicks meet it).
+  let followUp: Promise<void> | null = null
+  const freshRefresh = (): Promise<void> => {
+    if (!inFlight) return refresh()
+    followUp ??= inFlight.then(() => {
+      followUp = null
+      return refresh()
+    })
+    return followUp
+  }
+
+  // Kicks at least KICK_GAP_MS apart each refresh at once; kicks inside the gap fold into ONE
+  // trailing refresh at the gap's end, so a change made just after a refresh started is not left
+  // to the timer.
+  let lastKick = Number.NEGATIVE_INFINITY
+  let trailing: ReturnType<typeof setTimeout> | null = null
+  let kicksStopped = false
+  const kick = () => {
+    if (kicksStopped) return
+    const since = now() - lastKick
+    if (since >= KICK_GAP_MS) {
+      lastKick = now()
+      void freshRefresh().catch(() => {})
+      return
+    }
+    if (trailing) return
+    trailing = setTimeout(() => {
+      trailing = null
+      if (kicksStopped) return
+      lastKick = now()
+      void freshRefresh().catch(() => {})
+    }, KICK_GAP_MS - since)
+    trailing.unref?.()
+  }
+  const stopKicking = () => {
+    kicksStopped = true
+    if (trailing) clearTimeout(trailing)
+    trailing = null
   }
 
   const find = (host: string): TenantResolution | null => {
@@ -305,6 +397,12 @@ export async function startHubTenantSource(deps: Deps): Promise<TenantRegistry> 
     async listActive(): Promise<TenantRecord[]> {
       return tenants.filter((t) => t.status === 'active' || t.status === 'maintenance')
     },
+    async byId(id: string): Promise<TenantRecord | null> {
+      return tenants.find((t) => t.id === id) ?? null
+    },
+    async listAll(): Promise<TenantRecord[]> {
+      return [...tenants]
+    },
     status(): TenantRegistryStatus {
       const age = confirmedAt === null ? null : now() - confirmedAt
       const droppedText = dropped.length
@@ -326,12 +424,14 @@ export async function startHubTenantSource(deps: Deps): Promise<TenantRegistry> 
         count: tenants.length,
         fetchError,
         dropped: [...dropped],
+        etag,
         sealedCopy: !sealProblem && !writeFailed,
         sealedCopyProblem:
           sealProblem ?? (writeFailed ? 'the last copy could not be written to Redis' : null)
       }
     },
-    refresh
+    refresh,
+    kick
   }
 
   // Boot: the sealed copy first (a Hub that is down still leaves the apps served), then the Hub.
@@ -340,11 +440,56 @@ export async function startHubTenantSource(deps: Deps): Promise<TenantRegistry> 
 
   const timer = setInterval(() => void refresh(), refreshInterval(deps.refreshMs))
   timer.unref?.()
-  active = { registry, stop: () => clearInterval(timer) }
+  const stopListening = listenForRefreshKicks(redis, tenancyRefreshChannel(deployment), kick)
+  active = {
+    registry,
+    stop: () => {
+      clearInterval(timer)
+      stopKicking()
+      stopListening()
+    }
+  }
 
   const { registerTenantRegistryReadiness } = await import('./readiness.js')
   registerTenantRegistryReadiness()
   return registry
+}
+
+/**
+ * Phase 6: kick the source when the Hub publishes on its channel, on a connection of its own (a
+ * subscribed connection can do nothing else). No Redis (or one that cannot duplicate) = no
+ * listener: POST /refresh then kicks this process only, and the timer still refreshes. A failed
+ * subscribe is warned about once (the link's /refresh sees no subscriber and says so).
+ */
+function listenForRefreshKicks(redis: Redis | null, channel: string, kick: () => void): () => void {
+  if (!redis || typeof (redis as { duplicate?: unknown }).duplicate !== 'function') return () => {}
+  let sub: Redis
+  try {
+    sub = redis.duplicate()
+  } catch {
+    return () => {}
+  }
+  let warned = false
+  const warnOnce = () => {
+    if (warned) return
+    warned = true
+    // biome-ignore lint/suspicious/noConsole: an operator must know the Hub's kicks are not heard
+    console.warn(
+      '[tenancy] Hub refresh kicks: could not subscribe; the list refreshes on its timer'
+    )
+  }
+  sub.on('message', (ch: string) => {
+    if (ch === channel) kick()
+  })
+  sub.on('error', () => {})
+  Promise.resolve()
+    .then(() => sub.subscribe(channel))
+    .catch(warnOnce)
+  return () => {
+    Promise.resolve()
+      .then(() => sub.quit())
+      .catch(() => {})
+  }
 }
 
 /** Stops the refresh timer only: work during shutdown (preClose) still resolves from the list. */
@@ -356,4 +501,5 @@ export function stopHubTenantSource(): void {
 export function resetHubTenantSourceForTests(): void {
   active?.stop()
   active = null
+  resetAppKeysForTests()
 }

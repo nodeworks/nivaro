@@ -4,6 +4,8 @@ import { emitTrigger } from '../flows/registry.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { actingForLabel, resolveOnBehalfOf } from './acting-for.js'
 import { logActivity } from './activity.js'
+import { registerAppKeyed } from './app-forget.js'
+import { appKey, dropAppEntries } from './app-keyed.js'
 import { buildApprovalBrief } from './approval-brief.js'
 import { buildApprovalChain } from './approval-chain.js'
 import { autoSweepWidth, runWithWidth } from './auto-sweep-width.js'
@@ -1307,11 +1309,12 @@ const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
  * records each collection's human id column; unregistered collections (or a
  * missing value) fall back to the internal id. Never throws.
  */
-const friendlyFieldCache = new Map<string, { at: number; field: string | null }>()
+const friendlyFieldCache = registerAppKeyed(new Map<string, { at: number; field: string | null }>())
 const FRIENDLY_FIELD_TTL_MS = 60_000
 
+/** Drop the cached human-id columns: the current app's, or every app's outside one. */
 export function bustFriendlyIdFieldCache(): void {
-  friendlyFieldCache.clear()
+  dropAppEntries(friendlyFieldCache)
 }
 
 /**
@@ -1321,7 +1324,8 @@ export function bustFriendlyIdFieldCache(): void {
  * readers fall back to the display label, then the internal id.
  */
 export async function friendlyIdField(collection: string): Promise<string | null> {
-  const hit = friendlyFieldCache.get(collection)
+  // Per app (appKey): one shared-deployment process serves many apps.
+  const hit = friendlyFieldCache.get(appKey(collection))
   if (hit && Date.now() - hit.at < FRIENDLY_FIELD_TTL_MS) return hit.field
   let field: string | null = null
   try {
@@ -1344,7 +1348,7 @@ export async function friendlyIdField(collection: string): Promise<string | null
       /* no registry */
     }
   }
-  friendlyFieldCache.set(collection, { at: Date.now(), field })
+  friendlyFieldCache.set(appKey(collection), { at: Date.now(), field })
   return field
 }
 
@@ -1512,8 +1516,7 @@ export async function applyTransition(opts: ApplyTransitionOpts): Promise<ApplyT
         : {})
     })
   }
-  const key = flightKey(opts.instance.collection, opts.instance.item)
-  transitionsInFlight.set(key, (transitionsInFlight.get(key) ?? 0) + 1)
+  const release = holdTransitionFlight(opts.instance.collection, opts.instance.item)
   try {
     const applied = await applyTransitionInner(opts)
     await run?.moved(applied.newStateObj?.label ?? null)
@@ -1522,9 +1525,7 @@ export async function applyTransition(opts: ApplyTransitionOpts): Promise<ApplyT
     await run?.refused(err)
     throw err
   } finally {
-    const left = (transitionsInFlight.get(key) ?? 1) - 1
-    if (left > 0) transitionsInFlight.set(key, left)
-    else transitionsInFlight.delete(key)
+    release()
   }
 }
 
@@ -1586,15 +1587,31 @@ export function flushChainEvents(events: DeferredTransitionEvent[]): void {
 // twice. While a record is in flight its hook-driven re-evaluation is skipped;
 // whoever applied the transition re-evaluates once it has landed (the manual
 // endpoint chains runAutoTransitions, runAutoTransitions re-reads after each
-// hop). Per process — the writes and their hooks run in the same process.
+// hop). Per process — the writes and their hooks run in the same process — and per app: on a
+// shared deployment two apps may hold the same record id, and one app's transition in flight must
+// never skip another's.
 const transitionsInFlight = new Map<string, number>()
 
 function flightKey(collection: string, item: string | number): string {
-  return `${collection}:${String(item).toUpperCase()}`
+  return appKey(`${collection}:${String(item).toUpperCase()}`)
 }
 
 export function isTransitionInFlight(collection: string, item: string | number): boolean {
   return (transitionsInFlight.get(flightKey(collection, item)) ?? 0) > 0
+}
+
+/** Mark a record's transition in flight (in the current app); the returned function ends it. */
+export function holdTransitionFlight(collection: string, item: string | number): () => void {
+  const key = flightKey(collection, item)
+  transitionsInFlight.set(key, (transitionsInFlight.get(key) ?? 0) + 1)
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    const left = (transitionsInFlight.get(key) ?? 1) - 1
+    if (left > 0) transitionsInFlight.set(key, left)
+    else transitionsInFlight.delete(key)
+  }
 }
 
 async function applyTransitionInner(opts: ApplyTransitionOpts): Promise<ApplyTransitionResult> {

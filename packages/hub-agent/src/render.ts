@@ -24,6 +24,8 @@ import type { Role, StackSpec } from './spec.js'
 export type RenderConfig = {
   edge: 'traefik' | 'publish'
   edgeNetwork: string
+  /** 3 when absent (the agent's default): see AgentConfig.traefikVersion. */
+  traefikVersion?: 2 | 3
   entrypoints: readonly string[]
   certResolver?: string | null
   extensionsShared: boolean
@@ -165,14 +167,32 @@ export const realtimePathRule = (): string => `(${REALTIME_PATHS.map(pathMatcher
 
 export const webRouterName = (stack: string) => `nvh_web_${stack}`
 export const realtimeRouterName = (stack: string) => `nvh_rt_${stack}`
+/** A shared deployment's catch-all router (phase 6); it serves through the web service. */
+export const patternRouterName = (stack: string) => `nvh_pat_${stack}`
+
+/** `*.<name>`, <name> a lowercase DNS name of ≥ 2 labels (the validator also checks suffixes). */
+const HOST_PATTERN_RE =
+  /^\*\.(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/
+
+/**
+ * The pattern router's rule: Traefik v3 HostRegexp syntax (a Go regexp; v2 used `{name:re}`
+ * templates and would read this differently — shared deployments need Traefik v3). One DNS
+ * label in front of the escaped name, anchored both ends: `*.apps.corp` matches `x.apps.corp`,
+ * never `a.b.apps.corp` or `x.apps.corp.evil.com`.
+ */
+export function patternRule(pattern: string): string {
+  const name = pattern.slice(2).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return `HostRegexp(\`^[a-z0-9-]+\\.${name}$\`)`
+}
 
 function traefikLabels(
   stack: string,
   role: Role,
   hostnames: string[],
+  pattern: string | undefined,
   cfg: RenderConfig
 ): Record<string, string> {
-  if (cfg.edge !== 'traefik' || hostnames.length === 0) return {}
+  if (cfg.edge !== 'traefik' || (hostnames.length === 0 && !pattern)) return {}
   const hosts = hostnames.map((h) => `Host(\`${h}\`)`).join(' || ')
   const tls = (router: string): Record<string, string> => {
     const out: Record<string, string> = {
@@ -182,22 +202,43 @@ function traefikLabels(
     if (cfg.certResolver) out[`traefik.http.routers.${router}.tls.certresolver`] = cfg.certResolver
     return out
   }
-  // Both provider spellings: v2 docker / v3 docker read the first, v3 swarm the second.
+  // Exactly one provider spelling (ruling P6-34): Traefik v3 skips a service carrying both
+  // ("both Docker and Swarm labels are defined"). v3 reads swarm services through its swarm
+  // provider; v2's docker provider (swarm mode) reads the docker one.
   const base = {
     'traefik.enable': 'true',
-    'traefik.docker.network': cfg.edgeNetwork,
-    'traefik.swarm.network': cfg.edgeNetwork
+    [cfg.traefikVersion === 2 ? 'traefik.docker.network' : 'traefik.swarm.network']: cfg.edgeNetwork
   }
   if (role === 'web' || role === 'all') {
     const r = webRouterName(stack)
-    return {
+    const out: Record<string, string> = {
       ...base,
-      [`traefik.http.routers.${r}.rule`]: hosts,
-      ...tls(r),
-      [`traefik.http.routers.${r}.service`]: r,
       [`traefik.http.services.${r}.loadbalancer.server.port`]: String(APP_PORT)
     }
+    if (hostnames.length > 0) {
+      Object.assign(out, {
+        [`traefik.http.routers.${r}.rule`]: hosts,
+        ...tls(r),
+        [`traefik.http.routers.${r}.service`]: r
+      })
+    }
+    if (pattern) {
+      // priority=1: any Host() router (Traefik ranks by rule length, always > 1 here) beats it,
+      // so an app with its own name on another stack keeps that name.
+      const p = patternRouterName(stack)
+      Object.assign(out, {
+        [`traefik.http.routers.${p}.rule`]: patternRule(pattern),
+        [`traefik.http.routers.${p}.priority`]: '1',
+        ...tls(p),
+        [`traefik.http.routers.${p}.service`]: r
+      })
+      // HostRegexp gives ACME no name to ask for: a wildcard certificate (DNS challenge on the
+      // resolver) covers every name the pattern matches.
+      if (cfg.certResolver) out[`traefik.http.routers.${p}.tls.domains[0].main`] = pattern
+    }
+    return out
   }
+  if (hostnames.length === 0) return {}
   if (role === 'realtime') {
     const r = realtimeRouterName(stack)
     const lb = `traefik.http.services.${r}.loadbalancer`
@@ -229,6 +270,12 @@ export function renderServices(
   if (!isStackName(stack)) throw new Error('renderServices: bad stack name')
   for (const h of spec.hostnames) {
     if (!HOSTNAME_RE.test(h)) throw new Error('renderServices: bad hostname')
+  }
+  if (spec.host_pattern !== undefined) {
+    if (!('shared' in spec.owner)) throw new Error('renderServices: a pattern needs a shared owner')
+    if (!HOST_PATTERN_RE.test(spec.host_pattern)) {
+      throw new Error('renderServices: bad host pattern')
+    }
   }
   const bundled = spec.redis === 'bundled'
   if (bundled && !cfg.redisImage) throw new Error('renderServices: no redis image configured')
@@ -302,7 +349,7 @@ export function renderServices(
       Name: serviceName(stack, r.role),
       Labels: {
         ...labels,
-        ...traefikLabels(stack, r.role, spec.hostnames, cfg),
+        ...traefikLabels(stack, r.role, spec.hostnames, spec.host_pattern, cfg),
         // The host claim the template's forced command reads (LABEL_HOSTS), on the service that
         // serves the names, whatever the edge.
         ...((r.role === 'web' || r.role === 'all') && spec.hostnames.length > 0

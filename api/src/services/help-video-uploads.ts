@@ -5,7 +5,9 @@ import { join } from 'node:path'
 import { db } from '../db/index.js'
 import { getTenantId } from '../db/tenant-context.js'
 import type { User } from '../types.js'
+import { appMap } from './app-state.js'
 import { storageChaos } from './chaos/faults/storage.js'
+import { tenantSource } from './deployment-mode.js'
 import {
   canUseFfmpeg,
   hasFfmpeg,
@@ -40,6 +42,7 @@ import {
 } from './help-video-walk.js'
 import { listInstances } from './instance-roster.js'
 import { peerFileOp } from './render-peer.js'
+import { appScopePrefix } from './storage/app-scope.js'
 import { deleteStoredObject, getActiveStorageDriver, readStoredObject } from './storage-drivers.js'
 
 // The host name, not the per-boot INSTANCE_ID: a restarted container keeps its
@@ -152,6 +155,15 @@ function fail(statusCode: number, code: string, message: string): Error {
 export function videoWorkDir(): string {
   return process.env.VIDEO_WORK_DIR || join(tmpdir(), 'nivaro-video')
 }
+
+/** Upload scratch files (parts, joined parts, conversion output). On a Hub shared deployment
+ *  each app has its own folder (uploads/apps/<tenantId>/), so two apps that are copies of one
+ *  database never share a path and a sweep in one never removes another's files. */
+export function uploadsWorkDir(): string {
+  const dir = join(videoWorkDir(), 'uploads')
+  if (tenantSource() !== 'hub') return dir
+  return join(dir, appScopePrefix(getTenantId() ?? null).slice(0, -1))
+}
 // SQL Server compares a string to a uniqueidentifier after truncating it, so
 // a caller id like '<uuid>/../x' would still match a row. Reject anything that
 // is not exactly a uuid BEFORE querying, and build every path from the row's id.
@@ -163,11 +175,11 @@ function assertId(id: string): string {
 }
 /** A legacy upload's parts: one file on the host that opened it. */
 function partPath(id: string): string {
-  return join(videoWorkDir(), 'uploads', `${assertId(id)}.part`)
+  return join(uploadsWorkDir(), `${assertId(id)}.part`)
 }
 /** A stored-parts upload joined back into one file for finalize. */
 function joinedPath(id: string): string {
-  return join(videoWorkDir(), 'uploads', `${assertId(id)}.joined`)
+  return join(uploadsWorkDir(), `${assertId(id)}.joined`)
 }
 
 const PARTS_PREFIX = 'help-video-parts'
@@ -221,7 +233,7 @@ async function joinParts(row: Record<string, unknown>, dest: string): Promise<vo
       (buf) => ({ buf }),
       () => ({ buf: null })
     )
-  await mkdir(join(videoWorkDir(), 'uploads'), { recursive: true })
+  await mkdir(uploadsWorkDir(), { recursive: true })
   const out = await open(dest, 'w')
   let total = 0
   try {
@@ -289,7 +301,7 @@ async function holdHere(row: Record<string, unknown>): Promise<Record<string, un
 // Per-upload serialization inside this process (a part and a finalize of one
 // upload never interleave here). Across processes the conditional updates on
 // next_part / status decide: only one request can claim a part or the finalize.
-const locks = new Map<string, Promise<unknown>>()
+const locks = appMap<string, Promise<unknown>>()
 async function withLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
   const prev = locks.get(id) ?? Promise.resolve()
   const run = prev.then(fn, fn)
@@ -471,7 +483,7 @@ export async function appendPart(
     if (hit) await hit
     if (base) return storePart(row, base, n, body, sniffed)
     const path = partPath(String(row.id))
-    await mkdir(join(videoWorkDir(), 'uploads'), { recursive: true })
+    await mkdir(uploadsWorkDir(), { recursive: true })
     await appendFile(path, body)
     const updated = await db('nivaro_help_video_uploads')
       .where({ id: row.id, next_part: n })
@@ -616,7 +628,7 @@ export async function finalizeUpload(
   const stored = !!partsBase(row)
   const raw = stored ? joinedPath(String(dbId)) : partPath(String(dbId))
   const ext = row.mime === 'video/mp4' ? '.mp4' : '.webm'
-  const fixed = join(videoWorkDir(), 'uploads', `${String(dbId).toLowerCase()}.fixed${ext}`)
+  const fixed = join(uploadsWorkDir(), `${String(dbId).toLowerCase()}.fixed${ext}`)
   // The new file row is listable (nothing guards it yet) until the upload row
   // names it, so every failure between the two must delete it again.
   let createdFile: string | null = null
@@ -735,7 +747,7 @@ export interface ProcessingUpload {
 }
 
 /** Uploaded files being checked or converted on this process, by upload id. */
-const processing = new Map<string, AbortController>()
+const processing = appMap<string, AbortController>()
 
 /** How many uploaded files this process is still working on (the background job, including
  *  the clean-up after its final status is written). Tests wait on it. */
@@ -930,7 +942,7 @@ export async function processFile(
       converted = await convertUploadedFile(raw, mime, {
         signal,
         outPath: (ext) => {
-          out = join(videoWorkDir(), 'uploads', `${String(dbId).toLowerCase()}.fixed${ext}`)
+          out = join(uploadsWorkDir(), `${String(dbId).toLowerCase()}.fixed${ext}`)
           return out
         },
         onPhase: (phase, progress) =>
@@ -940,7 +952,7 @@ export async function processFile(
       // The slim image (#2789): the render peer probes and converts; the file
       // goes there and back. No progress from it, so a heartbeat keeps the
       // finalizing claim fresh while it works.
-      out = join(videoWorkDir(), 'uploads', `${String(dbId).toLowerCase()}.fixed.peer`)
+      out = join(uploadsWorkDir(), `${String(dbId).toLowerCase()}.fixed.peer`)
       await setFileMeta(dbId, { ...keep, phase: 'converting', progress: null })
       const beat = setInterval(() => {
         void setFileMeta(dbId, { ...keep, phase: 'converting', progress: null }).catch(
@@ -1356,7 +1368,7 @@ export async function purgeStaleUploads(): Promise<number> {
  *  for longer than an open upload is kept (its row was discarded or purged
  *  by a process that cannot see this disk). */
 export async function purgeTempFiles(now = Date.now()): Promise<number> {
-  const dir = join(videoWorkDir(), 'uploads')
+  const dir = uploadsWorkDir()
   const names = await readdir(dir).catch(() => [] as string[])
   let removed = 0
   for (const name of names) {

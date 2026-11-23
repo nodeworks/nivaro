@@ -5,6 +5,7 @@ import { whereLikeCi } from '../db/dialect/h2.js'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
+import { appBox, appMap } from './app-state.js'
 import type { InstanceIdentity } from './branch-instances.js'
 import { appNowForAuth } from './chaos/clock.js'
 import {
@@ -54,6 +55,7 @@ import {
 } from './help-video-walk.js'
 import { getApp } from './io-holder.js'
 import { grantKey } from './oauth-store.js'
+import { appBoundSigInput } from './tenancy/credential-binding.js'
 
 // Help videos: who may author and watch, and the video/version lifecycle.
 // A video has one published version (what viewers get) and at most one draft
@@ -322,18 +324,18 @@ export async function forgetHelpVideoRole(roleId: string): Promise<void> {
   }
 }
 
-let authorCache: { at: number; ids: string[] } | null = null
+const authorCache = appBox<{ at: number; ids: string[] } | null>(() => null)
 export function bustAuthorRoleCache(): void {
-  authorCache = null
+  authorCache.value = null
 }
 export async function authorRoleIds(): Promise<string[]> {
-  if (authorCache && Date.now() - authorCache.at < 30_000) return authorCache.ids
+  if (authorCache.value && Date.now() - authorCache.value.at < 30_000) return authorCache.value.ids
   const row = await db('nivaro_settings')
     .where({ id: 1 })
     .first('help_video_author_roles')
     .catch(() => null)
   const ids = json<unknown[]>(row?.help_video_author_roles, []).map(up).filter(Boolean)
-  authorCache = { at: Date.now(), ids }
+  authorCache.value = { at: Date.now(), ids }
   return ids
 }
 export async function isAuthor(user: User, isAdmin: boolean): Promise<boolean> {
@@ -555,8 +557,11 @@ function ticketSig(
   tag: string | null
 ): string {
   const tail = tag ? `|${tag}` : ''
+  // A Hub shared deployment signs every app's tickets with one SESSION_SECRET: the app is part
+  // of the signed input there, so a ticket minted for app A never opens app B's copy of the
+  // same video id (unchanged elsewhere, services/tenancy/credential-binding.ts).
   return createHmac('sha256', config.SESSION_SECRET)
-    .update(`hv|${low(videoId)}|${up(userId)}|${scope}|${exp}${tail}`)
+    .update(appBoundSigInput(`hv|${low(videoId)}|${up(userId)}|${scope}|${exp}${tail}`))
     .digest('base64url')
     .slice(0, 32)
 }
@@ -1920,10 +1925,10 @@ export async function listVideos(
   return { data, total: visible.length, categories, can_author: author }
 }
 
-const pageWrites = new Map<string, number>()
-const labelWrites = new Map<string, number>()
+const pageWrites = appMap<string, number>()
+const labelWrites = appMap<string, number>()
 const PAGE_WRITE_GAP_MS = 10 * 60_000
-let labelsColumn: { at: number; ok: boolean } | null = null
+const labelsColumn = appBox<{ at: number; ok: boolean } | null>(() => null)
 
 function throttled(map: Map<string, number>, key: string): boolean {
   const now = Date.now()
@@ -1977,7 +1982,8 @@ export async function registerPage(
 }
 
 async function pageLabelsColumn(): Promise<boolean> {
-  if (labelsColumn && Date.now() - labelsColumn.at < 60_000) return labelsColumn.ok
+  if (labelsColumn.value && Date.now() - labelsColumn.value.at < 60_000)
+    return labelsColumn.value.ok
   let ok = false
   try {
     const { hasColumn } = await import('../lib/column-probe.js')
@@ -1985,7 +1991,7 @@ async function pageLabelsColumn(): Promise<boolean> {
   } catch {
     ok = false
   }
-  labelsColumn = { at: Date.now(), ok }
+  labelsColumn.value = { at: Date.now(), ok }
   return ok
 }
 

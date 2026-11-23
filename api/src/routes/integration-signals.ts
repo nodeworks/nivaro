@@ -12,6 +12,7 @@ import { qi } from '../db/sql-dialect.js'
 import { isUniqueViolation } from '../lib/unique-violation.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { appMap } from '../services/app-state.js'
 import { chunkArray } from '../services/db-batch.js'
 import {
   bustSignalSettings,
@@ -49,7 +50,7 @@ const ACTION_REFRESH_WAIT_MS = 5_000
  * every poll. Mutates the rows in place; `openRows()` already builds a fresh
  * object per request, so there's no snapshot to corrupt.
  */
-const recordLabelCache = new Map<string, { label: string; at: number }>()
+const recordLabelCache = appMap<string, { label: string; at: number }>()
 
 export async function fillRecordLabels(
   signals: Array<{ rows: SignalRow[]; snoozed: SignalRow[] }>,

@@ -34,13 +34,21 @@ export interface StackSpec {
   env: Record<string, string>
   /** Same key rule, ≤ 50, values ≤ 64 KB. Mounted as swarm secrets at /run/secrets/<KEY>. */
   secrets: Record<string, string>
-  /** ≤ 10 DNS names, each ending with an agent suffix (traefik mode). */
+  /** ≤ 10 DNS names, each ending with an agent suffix (traefik mode); may be empty (B5). */
   hostnames: string[]
   redis: 'bundled' | 'external'
   /** ^[a-z0-9][a-z0-9-]{0,62}$ → <repo>@sha256:<64 hex>. */
   extensions: Record<string, string>
   /** Publish mode only, inside HUB_AGENT_PUBLISH_PORTS. */
   publish_port?: number
+  /**
+   * Phase 6, `owner.shared` + traefik edge only: `*.<name>` with <name> equal to or under an agent
+   * suffix (e.g. '*.apps.example.com'). The agent renders a Traefik v3 HostRegexp router with
+   * priority=1 (any Host() router beats it) and, with a cert resolver, a wildcard TLS domain
+   * (needs a DNS challenge). Not a host claim. On a shared owner the traefik edge takes
+   * `hostnames: []` only with a pattern (ruling B5); app owners may send `[]` (no router).
+   */
+  host_pattern?: string
 }
 
 /** `GET /v1/health` */
@@ -63,6 +71,8 @@ export interface AgentHealth {
    * app's known config keys. Absent on an agent before P4-23 = none.
    */
   env_prefixes?: string[]
+  /** HUB_AGENT_TRAEFIK_VERSION (final review M-7). Absent on an older agent (= 3, its default). */
+  traefik_version?: 2 | 3
 }
 
 /** One row of `GET /v1/stacks` (Hub-managed stacks only). */

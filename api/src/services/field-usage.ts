@@ -4,6 +4,7 @@ import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { qi } from '../db/sql-dialect.js'
 import { getTenantId } from '../db/tenant-context.js'
+import { registerAppKeyed } from './app-forget.js'
 import { sharedGatedRead } from './read-gate.js'
 
 /**
@@ -21,7 +22,7 @@ export interface FieldUsage {
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
 const TTL_MS = 5 * 60_000
-const cache = new Map<string, { at: number; value: FieldUsage }>()
+const cache = registerAppKeyed(new Map<string, { at: number; value: FieldUsage }>())
 
 export function isUsageTable(table: string): boolean {
   return IDENT.test(table) && !/^nivaro_|^directus_/i.test(table)

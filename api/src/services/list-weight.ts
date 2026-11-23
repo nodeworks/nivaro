@@ -1,6 +1,7 @@
 import type { Knex } from 'knex'
 import { db, resolveDb } from '../db/index.js'
 import type { CMSField, CMSRelation } from '../types.js'
+import { appMap } from './app-state.js'
 import { boundedRaw, StatementCancelled } from './bounded-sql.js'
 import { getFields, getRelations } from './collections.js'
 import { fieldLabel } from './collections-overview.js'
@@ -350,9 +351,9 @@ export function measureSql(mssql: boolean): string {
   )
 }
 
-const measureCache = new Map<string, { at: number; value: Measure }>()
-const reportCache = new Map<string, { at: number; ttl: number; value: ListWeightReport }>()
-const sweepCache = new Map<
+const measureCache = appMap<string, { at: number; value: Measure }>()
+const reportCache = appMap<string, { at: number; ttl: number; value: ListWeightReport }>()
+const sweepCache = appMap<
   string,
   { at: number; ttl: number; value: { data: Record<string, HeavyListFlag>; partial: boolean } }
 >()

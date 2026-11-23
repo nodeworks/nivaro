@@ -2,6 +2,7 @@ import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { sqlDialect } from '../db/sql-dialect.js'
+import { registerAppKeyed } from './app-forget.js'
 import { selectInChunks } from './db-batch.js'
 import { withDeadlockRetry } from './deadlock-retry.js'
 import { noteDerivedWrite } from './request-trace.js'
@@ -696,9 +697,18 @@ interface RollupFieldRow {
   computed_store: boolean | number | null
 }
 
-// Per-process cache of childCollection → contributor entries. Built once from
-// nivaro_fields; bustRollupContributorCache() clears it after config changes.
-let contributorCache: Map<string, RollupContributorEntry[]> | null = null
+// Per-process cache of childCollection → contributor entries, one per app (currentTenantKey()):
+// built from that app's nivaro_fields; bustRollupContributorCache() clears it after config changes.
+const contributorCaches = registerAppKeyed(new Map<string, Map<string, RollupContributorEntry[]>>())
+async function contributorCacheOf(): Promise<Map<string, RollupContributorEntry[]>> {
+  const app = currentTenantKey()
+  let map = contributorCaches.get(app)
+  if (!map) {
+    map = await buildContributorCache()
+    contributorCaches.set(app, map)
+  }
+  return map
+}
 
 async function buildContributorCache(): Promise<Map<string, RollupContributorEntry[]>> {
   const map = new Map<string, RollupContributorEntry[]>()
@@ -738,18 +748,14 @@ async function buildContributorCache(): Promise<Map<string, RollupContributorEnt
 export async function getAllRollupContributors(): Promise<
   ReadonlyMap<string, RollupContributorEntry[]>
 > {
-  if (!contributorCache) contributorCache = await buildContributorCache()
-  return contributorCache
+  return contributorCacheOf()
 }
 
 /** Contributor entries for rollup fields affected by a write to `childCollection`. */
 export async function getRollupContributors(
   childCollection: string
 ): Promise<RollupContributorEntry[]> {
-  if (!contributorCache) {
-    contributorCache = await buildContributorCache()
-  }
-  return contributorCache.get(childCollection) ?? []
+  return (await contributorCacheOf()).get(childCollection) ?? []
 }
 
 /**
@@ -763,7 +769,7 @@ export async function recalcStoredRollupsForRecords(
   parentIds: unknown[]
 ): Promise<{ fields: string[]; records: number }> {
   if (!parentIds.length) return { fields: [], records: 0 }
-  if (!contributorCache) contributorCache = await buildContributorCache()
+  const contributorCache = await contributorCacheOf()
   const byField = new Map<string, RollupContributorEntry>()
   for (const list of contributorCache.values()) {
     for (const entry of list) {
@@ -787,7 +793,7 @@ export async function recalcStoredRollupsForRecords(
 export async function ownParentFilterRollups(
   collection: string
 ): Promise<Array<{ field: string; filterFields: string[] }>> {
-  if (!contributorCache) contributorCache = await buildContributorCache()
+  const contributorCache = await contributorCacheOf()
   const seen = new Map<string, string[]>()
   for (const list of contributorCache.values()) {
     for (const entry of list) {
@@ -809,7 +815,7 @@ export async function ownParentFilterRollups(
  * their parent_filter reads (projects.pub_amount + pub_amount_follows_cars).
  */
 export async function cloneDerivedFields(collection: string): Promise<string[]> {
-  if (!contributorCache) contributorCache = await buildContributorCache()
+  const contributorCache = await contributorCacheOf()
   const out: string[] = []
   for (const list of contributorCache.values()) {
     for (const entry of list) {
@@ -842,7 +848,7 @@ export async function recalcOwnFilteredRollups(
     if (own.length === 0) return []
     const fields = new Set(own.map((r) => r.field))
     const done: string[] = []
-    for (const list of contributorCache?.values() ?? []) {
+    for (const list of contributorCaches.get(currentTenantKey())?.values() ?? []) {
       for (const entry of list) {
         if (entry.parentCollection !== collection || !fields.has(entry.rollupField)) continue
         if (done.includes(entry.rollupField)) continue
@@ -875,8 +881,11 @@ export async function rollupFieldsFedBy(
 }
 
 /** Clears the cached contributor map; the next lookup rebuilds it from nivaro_fields. */
+/** Drop the contributor map: the current app's, or every app's outside one. */
 export function bustRollupContributorCache(): void {
-  contributorCache = null
+  const app = currentTenantKey()
+  if (app) contributorCaches.delete(app)
+  else contributorCaches.clear()
 }
 
 /**
@@ -902,7 +911,7 @@ export function roundToScale(v: number, scale: number): number {
 }
 
 const DECIMAL_TYPES = new Set(['decimal', 'numeric', 'money', 'smallmoney'])
-const scaleCache = new Map<string, Promise<number | null>>()
+const scaleCache = registerAppKeyed(new Map<string, Promise<number | null>>())
 
 /** The scale of a decimal / numeric / money column; null for any other type or when unknown. */
 export function decimalScaleOf(collection: string, column: string): Promise<number | null> {

@@ -14,6 +14,7 @@ import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { qi } from '../db/sql-dialect.js'
+import { registerAppKeyed } from './app-forget.js'
 import { chunkArray } from './db-batch.js'
 import {
   isSnoozed,
@@ -444,7 +445,7 @@ export interface CycleSummary {
 // One cycle at a time PER APP: on a Hub shared deployment the job fans out to every app at
 // once, and a process-wide promise handed app B the cycle app A was running (B's signals never
 // ran). Self-hosted has one key ('').
-const inFlight = new Map<string, Promise<CycleSummary>>()
+const inFlight = registerAppKeyed(new Map<string, Promise<CycleSummary>>())
 
 export function runSignalsCycle(opts: { only?: string[] } = {}): Promise<CycleSummary> {
   const key = currentTenantKey()

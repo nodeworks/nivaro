@@ -1,6 +1,7 @@
 import { db } from '../../db/index.js'
 import { getTenantId } from '../../db/tenant-context.js'
 import { hasColumn } from '../../lib/column-probe.js'
+import { registerAppKeyed } from '../app-forget.js'
 import { overlaySettings } from '../settings-overrides.js'
 
 /** `nivaro_settings.sql_checks` (#2562). */
@@ -89,7 +90,7 @@ export function nightlyEnabled(s: SqlCheckSettings): boolean {
   return sqlChecksEnvOverride() ?? s.enabled
 }
 
-const cache = new Map<string, { at: number; value: SqlCheckSettings }>()
+const cache = registerAppKeyed(new Map<string, { at: number; value: SqlCheckSettings }>())
 
 /** Keeps only known keys whose value is valid (a bad one reads as its default). */
 function lenient(parsed: unknown): Partial<SqlCheckSettings> {

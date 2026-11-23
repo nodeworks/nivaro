@@ -1,6 +1,9 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
-import { isMultiTenant } from './deployment-mode.js'
+import { registerAppKeyed } from './app-forget.js'
+import { isMultiTenant, tenantSource } from './deployment-mode.js'
+import { hubLinkToken } from './hub/mode.js'
+import { hubLinkKeyTag } from './hub-link/retire.js'
 import { getApp } from './io-holder.js'
 import { observeMaintenance, recheckMaintenanceSoon } from './maintenance-live.js'
 import { notifyUser } from './notification-channels.js'
@@ -100,6 +103,30 @@ export function maintenanceExplainer(display: MaintenanceDisplay): string {
   return display === 'page' ? MAINTENANCE_PAGE_EXPLAINER : MAINTENANCE_EXPLAINER
 }
 
+/**
+ * The `maintenance` block GET /api/announcements/active puts on its maintenance row: how hosts
+ * present the freeze. `strict` (Hub phase 6, a move's maintenance) is present only when true: no
+ * caller is exempt, administrators included, so hosts show EVERYONE the page — the strip they
+ * give exempt admins would leave them in an app whose every save answers 503.
+ */
+export function maintenanceBlock(
+  maint: Pick<MaintenanceState, 'display' | 'until' | 'message' | 'strict'>
+): {
+  display: MaintenanceDisplay
+  until: string | null
+  headline: string
+  explainer: string
+  strict?: true
+} {
+  return {
+    display: maint.display,
+    until: maint.until,
+    headline: (maint.message || MAINTENANCE_DEFAULT_MESSAGE).trim(),
+    explainer: maintenanceExplainer(maint.display),
+    ...(maint.strict ? { strict: true as const } : {})
+  }
+}
+
 export const MAINTENANCE_DEFAULT_MESSAGE = 'Maintenance in progress.'
 
 export interface MaintenanceState {
@@ -114,6 +141,13 @@ export interface MaintenanceState {
    *  operator or a rebuild job set (`MAINTENANCE_OVERRIDE_KEY`), which wins
    *  while present — it is the one thing that survives a database restore. */
   source: 'settings' | 'override'
+  /** Hub phase 6 (Decision 19): the override was written with `strict: true` — no caller is
+   *  exempt from the write freeze, administrators on their own session included. Present only
+   *  when true. */
+  strict?: true
+  /** The override was set by the Nivaro Hub over the hub link (a move); an admin's End
+   *  maintenance leaves it alone. Present only when true. */
+  hub?: true
 }
 
 /**
@@ -126,10 +160,48 @@ export interface MaintenanceState {
  */
 export const MAINTENANCE_OVERRIDE_KEY = 'nvr:maintenance'
 
+/**
+ * The override key THIS process writes and reads first (Hub phase 6 ruling P6-32). Several apps
+ * may share one Redis database (each with its own REDIS_CHANNEL_PREFIX), so a key one app writes
+ * must never freeze another:
+ *  - a dedicated app linked to a Hub (HUB_TOKEN): `<prefix>nvr:maintenance:<hub-link tag>`, the
+ *    same app part as its retire flag. The Hub's strict maintenance of a move lands here.
+ *  - a Hub shared deployment: `<prefix>nvr:maintenance`, the operator's freeze of the whole
+ *    deployment (rule T7; with no prefix it is the old key).
+ *  - Nivaro Cloud and a self-hosted process without HUB_TOKEN: exactly `nvr:maintenance` (the EFP
+ *    go-live chain writes it with redis-cli), unchanged.
+ */
+export function maintenanceOverrideKey(env: NodeJS.ProcessEnv = process.env): string {
+  const source = tenantSource(env)
+  if (source === 'cloud-meta') return MAINTENANCE_OVERRIDE_KEY
+  const prefix = (env.REDIS_CHANNEL_PREFIX ?? '').trim()
+  if (source === 'hub') return `${prefix}${MAINTENANCE_OVERRIDE_KEY}`
+  if (hubLinkToken(env)) return `${prefix}${MAINTENANCE_OVERRIDE_KEY}:${hubLinkKeyTag(env)}`
+  return MAINTENANCE_OVERRIDE_KEY
+}
+
+/** Every key whose freeze this process honours, own key first. A hub-linked app also honours an
+ *  operator's plain `nvr:maintenance` (a go-live script that writes it by hand) — never a Hub
+ *  override found there: since P6-32 the Hub's freeze of an app is in that app's own key, and one
+ *  left in the plain key by an older version may be another app's. */
+function overrideKeys(env: NodeJS.ProcessEnv = process.env): string[] {
+  const own = maintenanceOverrideKey(env)
+  return own === MAINTENANCE_OVERRIDE_KEY
+    ? [own]
+    : hubLinkedPlainKey(env)
+      ? [own, MAINTENANCE_OVERRIDE_KEY]
+      : [own]
+}
+
+/** A hub-linked dedicated app (not a shared deployment, not cloud): it also reads the plain key. */
+function hubLinkedPlainKey(env: NodeJS.ProcessEnv): boolean {
+  return tenantSource(env) === null && hubLinkToken(env) !== null
+}
+
 /** The cached state per tenant (`currentTenantKey()`; '' = self-hosted, one entry). One process
  *  serves many apps in cloud and on a Hub shared deployment: a single module variable let one
  *  app's maintenance mode (or its absence) answer for another for up to 15 s (ruling P5-6). */
-const maintCache = new Map<string, { at: number } & MaintenanceState>()
+const maintCache = registerAppKeyed(new Map<string, { at: number } & MaintenanceState>())
 
 /** Forget the cached maintenance state: one tenant's (`currentTenantKey()` value) when named,
  *  else every tenant's. */
@@ -160,22 +232,41 @@ function redisClient(): any {
 async function readOverride(): Promise<Omit<MaintenanceState, 'source'> | null> {
   const redis = redisClient()
   if (!redis) return null
+  const keys = overrideKeys()
+  for (const key of keys) {
+    const found = await readOverrideAt(redis, key, key !== keys[0])
+    if (found) return found
+  }
+  return null
+}
+
+/** One key's freeze; `operatorOnly` (the plain key on a hub-linked app) ignores a Hub override. */
+async function readOverrideAt(
+  redis: any,
+  key: string,
+  operatorOnly: boolean
+): Promise<Omit<MaintenanceState, 'source'> | null> {
   try {
-    const raw = (await redis.get(MAINTENANCE_OVERRIDE_KEY)) as string | null
+    const raw = (await redis.get(key)) as string | null
     if (!raw) return null
     const j = JSON.parse(raw) as {
       on?: unknown
       message?: unknown
       display?: unknown
       until?: unknown
+      strict?: unknown
+      hub?: unknown
     }
     if (j?.on !== true) return null
+    if (operatorOnly && j.hub === true) return null
     const until = typeof j.until === 'string' && j.until ? new Date(j.until) : null
     return {
       on: true,
       message: typeof j.message === 'string' && j.message.trim() ? j.message.trim() : null,
       display: normalizeMaintenanceDisplay(j.display),
-      until: until && !Number.isNaN(until.getTime()) ? until.toISOString() : null
+      until: until && !Number.isNaN(until.getTime()) ? until.toISOString() : null,
+      ...(j.strict === true ? { strict: true as const } : {}),
+      ...(j.hub === true ? { hub: true as const } : {})
     }
   } catch {
     return null
@@ -198,11 +289,174 @@ export async function clearMaintenanceOverride(): Promise<void> {
   const redis = redisClient()
   if (!redis) return
   try {
-    await redis.del(MAINTENANCE_OVERRIDE_KEY)
+    // Hub phase 6: a freeze the Hub set for a move is the Hub's to lift (POST
+    // /api/hub-link/maintenance {on:false}); an admin's End maintenance leaves it.
+    for (const key of overrideKeys()) if (!(await hubOverrideSet(redis, key))) await redis.del(key)
   } catch {
     /* best-effort */
   }
   maintenanceWritten()
+}
+
+async function hubOverrideSet(redis: any, key: string): Promise<boolean> {
+  const raw = (await redis.get(key)) as string | null
+  if (!raw) return false
+  try {
+    return (JSON.parse(raw) as { hub?: unknown })?.hub === true
+  } catch {
+    return false
+  }
+}
+
+// ─── Hub phase 6: strict maintenance over the hub link (a move) ─────────────────────────────
+
+/** Marker that a move's boot maintenance was released (HUB_BOOT_MAINTENANCE=<move id>). Per app
+ *  (REDIS_CHANNEL_PREFIX + the hub-link key tag), so a shared Redis db never releases another
+ *  app's boot maintenance. */
+export function hubBootMaintenanceDoneKey(
+  moveId: number,
+  env: NodeJS.ProcessEnv = process.env
+): string {
+  return `${(env.REDIS_CHANNEL_PREFIX ?? '').trim()}nvr:hub:boot-maintenance-done:${hubLinkKeyTag(env)}:${moveId}`
+}
+
+export const HUB_MAINTENANCE_DEFAULT_MESSAGE =
+  'This app is moving to a new home. It will be back in a few minutes.'
+
+interface OverrideJson {
+  on?: unknown
+  hub?: unknown
+  move_id?: unknown
+  /** The operator's own freeze the Hub's covered (raw JSON), put back when the Hub lifts its own. */
+  operator?: unknown
+}
+
+async function readOverrideJson(
+  redis: any,
+  key: string = maintenanceOverrideKey()
+): Promise<OverrideJson | null> {
+  const raw = (await redis.get(key)) as string | null
+  if (!raw) return null
+  try {
+    const j = JSON.parse(raw) as OverrideJson
+    return j && typeof j === 'object' ? j : null
+  } catch {
+    return null
+  }
+}
+
+/** The Hub's override, keeping an operator's freeze it covers so lifting it puts that one back. */
+async function hubOverrideJson(
+  redis: any,
+  message: string | null,
+  moveId: number | null,
+  key: string = maintenanceOverrideKey()
+): Promise<string> {
+  const cur = await readOverrideJson(redis, key)
+  const operator =
+    cur && cur.hub !== true
+      ? JSON.stringify(cur)
+      : cur?.hub === true && typeof cur.operator === 'string'
+        ? cur.operator
+        : null
+  return JSON.stringify({
+    on: true,
+    display: 'page',
+    strict: true,
+    hub: true,
+    message: message || HUB_MAINTENANCE_DEFAULT_MESSAGE,
+    ...(moveId ? { move_id: moveId } : {}),
+    ...(operator ? { operator } : {}),
+    set_by: 'hub'
+  })
+}
+
+/** A release for one move met the Hub freeze of another move (409 MAINTENANCE_OTHER_MOVE). */
+export class HubMaintenanceMoveMismatch extends Error {
+  code = 'MAINTENANCE_OTHER_MOVE'
+  constructor(readonly heldBy: number) {
+    super(`The maintenance here belongs to move ${heldBy}`)
+  }
+}
+
+/**
+ * Set or clear the Hub's strict maintenance (POST /api/hub-link/maintenance).
+ *  - On: the override `{on, display:'page', strict, hub, message, move_id?}`. An operator's own
+ *    freeze already there is kept inside it (`operator`) and comes back when the Hub lifts its own.
+ *  - Off: only the Hub's own override is lifted (an operator's freeze stays). With `moveId` it must
+ *    be that move's (else HubMaintenanceMoveMismatch, nothing changed), and the move's boot
+ *    maintenance is released: a restart carrying HUB_BOOT_MAINTENANCE=<moveId> does not set it
+ *    again. **Every rollback must send `move_id`** — otherwise a restart re-enters it.
+ * Busts this process's cached state at once (ruling R14); other replicas follow within 15 s.
+ * Throws without Redis: a freeze that is not stored would hold on one replica only.
+ */
+export async function setHubMaintenance(input: {
+  on: boolean
+  message?: string | null
+  moveId?: number | null
+}): Promise<void> {
+  const redis = redisClient()
+  if (!redis) throw new Error('Redis is not available')
+  const key = maintenanceOverrideKey()
+  if (input.on) {
+    await redis.set(key, await hubOverrideJson(redis, input.message ?? null, input.moveId ?? null))
+    // Hub phase 6 (P6-26): a move freezing its target again (rollback) invalidates that move's
+    // boot-maintenance done marker, so the app — restarted or re-created — boots in maintenance.
+    if (input.moveId) await redis.del(hubBootMaintenanceDoneKey(input.moveId))
+  } else {
+    const cur = await readOverrideJson(redis)
+    if (cur?.hub === true) {
+      const held = Number(cur.move_id)
+      if (input.moveId && Number.isSafeInteger(held) && held > 0 && held !== input.moveId)
+        throw new HubMaintenanceMoveMismatch(held)
+      if (typeof cur.operator === 'string' && cur.operator) await redis.set(key, cur.operator)
+      else await redis.del(key)
+    }
+    // A freeze an older version left in the plain key for THIS move (move ids are the Hub's, one
+    // per move): lifted too, so an app upgraded mid-move is not stuck. Another move's is left.
+    if (input.moveId && key !== MAINTENANCE_OVERRIDE_KEY && hubLinkedPlainKey(process.env)) {
+      const legacy = await readOverrideJson(redis, MAINTENANCE_OVERRIDE_KEY)
+      if (legacy?.hub === true && Number(legacy.move_id) === input.moveId) {
+        if (typeof legacy.operator === 'string' && legacy.operator)
+          await redis.set(MAINTENANCE_OVERRIDE_KEY, legacy.operator)
+        else await redis.del(MAINTENANCE_OVERRIDE_KEY)
+      }
+    }
+    if (input.moveId)
+      await redis.set(hubBootMaintenanceDoneKey(input.moveId), new Date().toISOString())
+  }
+  maintenanceWritten()
+}
+
+/**
+ * Boot (index.ts): a dedicated target a move deployed carries HUB_BOOT_MAINTENANCE=<move id> and
+ * starts in strict maintenance until the Hub releases it. Applies once per value: after the
+ * release (`maintenance {on:false, move_id}`) the done marker stops a restart from setting it
+ * again. Only where the hub link is mounted. Returns whether it set the freeze.
+ *
+ * The release marker lives only in the app's Redis, and HUB_BOOT_MAINTENANCE stays in the stack's
+ * environment until the stack is applied again (final review M8). So a restart after the app's
+ * Redis lost the marker (no RDB save yet, a new volume) freezes the app again, with no move left
+ * to release it. Escape hatch, the same as when the Hub cannot release it (the move is lost):
+ * remove HUB_BOOT_MAINTENANCE from the stack (apply it again), then lift the freeze — the Hub's
+ * maintenance {on:false, move_id}, or delete the app's own key `maintenanceOverrideKey()` =
+ * `<REDIS_CHANNEL_PREFIX>nvr:maintenance:<hub-link tag>` in its Redis (never the plain
+ * `nvr:maintenance`, which is an operator's freeze). An administrator cannot lift it from the app:
+ * strict refuses their write.
+ */
+export async function applyHubBootMaintenance(
+  redis: any,
+  env: NodeJS.ProcessEnv = process.env
+): Promise<boolean> {
+  const raw = (env.HUB_BOOT_MAINTENANCE ?? '').trim()
+  if (!/^[1-9]\d{0,15}$/.test(raw)) return false
+  const moveId = Number(raw)
+  if (!redis) return false
+  if (await redis.get(hubBootMaintenanceDoneKey(moveId, env))) return false
+  const key = maintenanceOverrideKey(env)
+  await redis.set(key, await hubOverrideJson(redis, null, moveId, key))
+  maintenanceWritten()
+  return true
 }
 
 export function normalizeMaintenanceDisplay(v: unknown): MaintenanceDisplay {

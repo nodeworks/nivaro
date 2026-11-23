@@ -1,4 +1,5 @@
 import { getTenantId } from '../db/tenant-context.js'
+import { registerAppKeyed } from './app-forget.js'
 
 /**
  * Fixed-window counters for per-user rate limits: Redis first (cluster-wide), this
@@ -20,7 +21,7 @@ const INCR_WITH_TTL = `local v = redis.call('INCRBY', KEYS[1], ARGV[1])
 if redis.call('TTL', KEYS[1]) < 0 then redis.call('EXPIRE', KEYS[1], ARGV[2]) end
 return v`
 
-const memory = new Map<string, { n: number; until: number }>()
+const memory = registerAppKeyed(new Map<string, { n: number; until: number }>())
 
 /**
  * Take up to `n` units from the window `key` (at most `max` per `windowS` seconds) and

@@ -2,6 +2,7 @@
  * Daily operations report — storage (`nivaro_ops_reports`, migration 525). JSON columns are text.
  */
 import { db } from '../../db/index.js'
+import { appBox } from '../app-state.js'
 import type {
   OpsAnalysis,
   OpsComparison,
@@ -16,11 +17,12 @@ export const TABLE = 'nivaro_ops_reports'
 
 export class OpsReportUnavailable extends Error {}
 
-let tableOk: { ok: boolean; at: number } | null = null
+const tableOk = appBox<{ ok: boolean; at: number } | null>(() => null)
 export async function reportsTableReady(): Promise<boolean> {
-  if (tableOk && (tableOk.ok || Date.now() - tableOk.at < 60_000)) return tableOk.ok
+  if (tableOk.value && (tableOk.value.ok || Date.now() - tableOk.value.at < 60_000))
+    return tableOk.value.ok
   const ok = await db.schema.hasTable(TABLE).catch(() => false)
-  tableOk = { ok, at: Date.now() }
+  tableOk.value = { ok, at: Date.now() }
   return ok
 }
 

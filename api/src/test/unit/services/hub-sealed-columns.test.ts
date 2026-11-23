@@ -14,7 +14,9 @@ const COLS: Record<string, string[]> = {
     'base_url',
     'hub_token',
     'hub_token_lookup',
-    'placement_id'
+    'placement_id',
+    'encryption_key',
+    'encryption_key_fp'
   ],
   nivaro_hub_stack_settings: ['id', 'environment_id', 'size', 'settings', 'secrets'],
   nivaro_hub_oidc_keys: ['id', 'kid', 'alg', 'public_jwk', 'private_jwk', 'created_at'],
@@ -22,7 +24,18 @@ const COLS: Record<string, string[]> = {
   nivaro_hub_apps: ['id', 'key', 'name', 'oidc', 'oidc_secret'],
   nivaro_hub_db_servers: ['id', 'name', 'engine', 'host', 'admin_secret'],
   nivaro_hub_databases: ['id', 'host', 'database_name', 'connection'],
-  nivaro_hub_targets: ['id', 'kind', 'name', 'config', 'secret']
+  nivaro_hub_targets: ['id', 'kind', 'name', 'config', 'secret'],
+  nivaro_hub_shared_deployments: [
+    'id',
+    'key',
+    'name',
+    'link_url',
+    'secrets',
+    'token',
+    'token_lookup',
+    'prev_token',
+    'prev_token_lookup'
+  ]
 }
 
 const rec = vi.hoisted(() => ({ selects: [] as Array<{ table: string; cols: unknown[] }> }))
@@ -87,8 +100,18 @@ const SEALED: Record<string, string> = {
   nivaro_hub_apps: 'oidc_secret',
   nivaro_hub_db_servers: 'admin_secret',
   nivaro_hub_databases: 'connection',
-  nivaro_hub_targets: 'secret'
+  nivaro_hub_targets: 'secret',
+  nivaro_hub_shared_deployments: 'token'
 }
+// Phase 6 (552): more than one sealed column on a table.
+const SEALED_MORE: Array<[string, string]> = [
+  ['nivaro_hub_environments', 'encryption_key'],
+  ['nivaro_hub_environments', 'encryption_key_fp'],
+  ['nivaro_hub_shared_deployments', 'prev_token'],
+  ['nivaro_hub_shared_deployments', 'token_lookup'],
+  ['nivaro_hub_shared_deployments', 'prev_token_lookup'],
+  ['nivaro_hub_shared_deployments', 'secrets']
+]
 const selected = (table: string) =>
   rec.selects.filter((s) => s.table === table).flatMap((s) => s.cols.map(String))
 
@@ -111,7 +134,12 @@ describe('hub sealed columns through /items', () => {
     expect(sensitiveColumns('nivaro_hub_targets')).toContain('secret')
   })
 
-  for (const [table, col] of Object.entries(SEALED)) {
+  it('lists the phase-6 sealed columns', () => {
+    for (const [t, c] of [...SEALED_MORE, ['nivaro_hub_shared_deployments', 'token']])
+      expect(sensitiveColumns(t)).toContain(c)
+  })
+
+  for (const [table, col] of [...Object.entries(SEALED), ...SEALED_MORE]) {
     it(`${table}: an administrator never selects ${col}, even by name`, async () => {
       await readItems(admin, table, {}).catch(() => undefined)
       await readItems(admin, table, { fields: [col] }).catch(() => undefined)

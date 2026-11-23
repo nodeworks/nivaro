@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import type {
   HubComponent,
+  HubDeployKind,
   PlanInput,
   PromotionBlocker,
   PromotionBlockerCode,
@@ -42,7 +43,7 @@ const realDigest = (d: string | 'present' | null): d is string => !!d && d !== '
  */
 export function runOrder<T extends { position: number; kind: 'api' | 'frontend' | 'stack' }>(
   steps: T[],
-  kind: 'promote' | 'rollback'
+  kind: HubDeployKind
 ): T[] {
   const rank = (s: T) => (kind === 'rollback' && s.kind === 'frontend' ? 0 : 1)
   return [...steps].sort((a, b) => rank(a) - rank(b) || a.position - b.position)
@@ -95,7 +96,13 @@ export function buildPromotionPlan(input: PlanInput): PromotionPlan {
     )
   if (input.running) block('PROMOTION_RUNNING', `a promotion of ${target.key} is already running`)
   if (!versionOk) block('BAD_VERSION', `"${version}" is not a version (x.y.z)`)
-  if (!components.length) block('NO_COMPONENTS', `${target.key} has no components to deploy`)
+  // Phase 6 (Decision 17): a shared-placed environment runs the deployment's version.
+  if (input.sharedPlacement)
+    block(
+      'SHARED_PLACEMENT',
+      `${target.key} runs on a shared deployment — upgrade the shared deployment instead`
+    )
+  else if (!components.length) block('NO_COMPONENTS', `${target.key} has no components to deploy`)
 
   // Apply now (P4-30): the running version again, through the Hub agent only — no promotion
   // checks (it is not a promotion), but every stack check below still applies.
@@ -184,7 +191,8 @@ export function buildPromotionPlan(input: PlanInput): PromotionPlan {
     c.kind === 'stack' ? stackStepFor(c, input) : stepFor(c, input)
   )
   for (const s of steps) {
-    const onTarget = input.pinOnTarget?.[s.position]
+    // A move's boot-maintenance line is not the build: never a changed image (FW-4).
+    const onTarget = pinContent(input.pinOnTarget?.[s.position])
     if (
       s.kind === 'api' &&
       kind === 'promote' &&
@@ -259,13 +267,22 @@ export function buildPromotionPlan(input: PlanInput): PromotionPlan {
 
   stackBlockers(input, components, block)
 
+  // Phase 6 (Task 5): stack warnings, once each (never part of the hash: nothing the run does).
+  const warnings: { code: string; text: string }[] = []
+  for (const c of components)
+    for (const w of input.stacks?.[c.position]?.warnings ?? [])
+      if (!warnings.some((x) => x.code === w.code)) warnings.push(w)
+  const lines = stackAwareLines(input, components, steps, blockers.length > 0)
+  for (const w of warnings) lines.push(`warning ${w.code}: ${w.text}`)
+
   return {
     ok: blockers.length === 0,
     blockers,
-    lines: stackAwareLines(input, components, steps, blockers.length > 0),
+    lines,
     steps,
     plan_hash: planHash(input, steps),
-    ...(input.apply ? { apply: true } : {})
+    ...(input.apply ? { apply: true } : {}),
+    ...(warnings.length ? { warnings } : {})
   }
 }
 
@@ -338,9 +355,24 @@ function unfinished(input: PlanInput, components: HubComponent[]): boolean {
   return false
 }
 
+/**
+ * A pin file without the lines that are not the build: a move's `boot-maintenance=<move id>`
+ * (FW-4, P6-37: a GitLab move target boots in maintenance from its pin commit). Compared and
+ * shown with this; null stays null.
+ */
+export function pinContent<T extends string | null | undefined>(pin: T): T {
+  if (typeof pin !== 'string') return pin
+  return pin
+    .split('\n')
+    .filter((l) => !l.trim().startsWith('boot-maintenance='))
+    .join('\n') as T
+}
+
 /** A pin file in plain words: version, short image digest, short slim digest. */
 function pinWords(pin: string): string {
-  const [v, d, slim] = pin.split('\n').filter((l) => l.trim())
+  const [v, d, slim] = pinContent(pin)
+    .split('\n')
+    .filter((l) => l.trim())
   const dig = (x: string) => x.replace(/^sha256:/, '').slice(0, 12)
   return `${v ?? '(nothing)'} ${d ? `image ${dig(d)}` : 'with no image digest'}${slim ? `, slim image ${dig(slim)}` : ''}`
 }

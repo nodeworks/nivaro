@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
+import { registerAppKeyed } from '../services/app-forget.js'
 import { getCollection, getFields } from '../services/collections.js'
 import { selectInChunks } from '../services/db-batch.js'
 import { readItems } from '../services/items.js'
@@ -37,10 +38,12 @@ import { currentTenantKey } from '../services/tenant-rooms.js'
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/
 const FACTS_TTL_MS = 30_000
-const factsCache = new Map<
-  string,
-  { at: number; facts: BadgeTableFacts; columns: Set<string>; template: string | null }
->()
+const factsCache = registerAppKeyed(
+  new Map<
+    string,
+    { at: number; facts: BadgeTableFacts; columns: Set<string>; template: string | null }
+  >()
+)
 
 async function tableFacts(collection: string) {
   const key = `${currentTenantKey()}\u0001${collection}`

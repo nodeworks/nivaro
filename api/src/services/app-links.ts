@@ -2,7 +2,10 @@ import type { LinkKind, LinkRegistration } from '@nivaro/extension-kit'
 import { adminBaseUrl } from '../admin-base.js'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
+import { registerAppKeyed } from './app-forget.js'
+import { appKey, dropAppEntries } from './app-keyed.js'
 import { overlaySettings } from './settings-overrides.js'
+import { currentTenantKey } from './tenant-rooms.js'
 
 export type { LinkKind, LinkRegistration } from '@nivaro/extension-kit'
 
@@ -47,13 +50,21 @@ export function registerPortalLinks(reg: LinkRegistration): void {
   registered = { base: reg.base.replace(/\/$/, ''), routes: { ...reg.routes } }
 }
 
-let settingsCache: { at: number; value: LinkRegistration | null } | null = null
+// Per app: on a shared deployment each app has its own portal (keyed by currentTenantKey()).
+const settingsCache = registerAppKeyed(
+  new Map<string, { at: number; value: LinkRegistration | null }>()
+)
+/** Drop the cached portal settings: the current app's, or every app's outside one. */
 export function bustPortalLinkCache(): void {
-  settingsCache = null
+  const app = currentTenantKey()
+  if (app) settingsCache.delete(app)
+  else settingsCache.clear()
 }
 
 async function fromSettings(): Promise<LinkRegistration | null> {
-  if (settingsCache && Date.now() - settingsCache.at < 30_000) return settingsCache.value
+  const app = currentTenantKey()
+  const hit = settingsCache.get(app)
+  if (hit && Date.now() - hit.at < 30_000) return hit.value
   let value: LinkRegistration | null = null
   try {
     // Per-instance overlay: dev + staging share one settings row, so the
@@ -75,7 +86,7 @@ async function fromSettings(): Promise<LinkRegistration | null> {
   } catch {
     value = null
   }
-  settingsCache = { at: Date.now(), value }
+  settingsCache.set(app, { at: Date.now(), value })
   return value
 }
 
@@ -97,14 +108,30 @@ function fill(template: string, params: LinkParams): string {
   })
 }
 
-const appCache = new Map<string, { at: number; app: 'portal' | 'admin' }>()
+// Per app (appKey): two apps on one shared deployment may hold the same user id or address.
+const appCache = registerAppKeyed(new Map<string, { at: number; app: 'portal' | 'admin' }>())
+
+/** Entries kept per cache across every app (people x apps grows without end otherwise; Hub
+ *  phase 6 Task 22). Each answer lives 60 s, so a cut entry is only read again sooner. */
+export const LINK_CACHE_MAX = 5000
+
+/** Store with a bound: an existing key moves to the back; past the cap the oldest go. */
+function remember<V>(map: Map<string, V>, key: string, value: V): void {
+  map.delete(key)
+  map.set(key, value)
+  while (map.size > LINK_CACHE_MAX) {
+    const oldest = map.keys().next().value
+    if (oldest === undefined) break
+    map.delete(oldest)
+  }
+}
 
 /** Which app a recipient should be sent to. */
 export async function appForUser(userId?: string | null): Promise<'portal' | 'admin'> {
   const portal = await portalRegistration()
   if (!portal) return 'admin'
   if (!userId) return 'portal'
-  const key = String(userId).toUpperCase()
+  const key = appKey(String(userId).toUpperCase())
   const hit = appCache.get(key)
   if (hit && Date.now() - hit.at < 60_000) return hit.app
   let app: 'portal' | 'admin' = 'portal'
@@ -130,16 +157,16 @@ export async function appForUser(userId?: string | null): Promise<'portal' | 'ad
   } catch {
     app = 'portal'
   }
-  appCache.set(key, { at: Date.now(), app })
+  remember(appCache, key, { at: Date.now(), app })
   return app
 }
+/** Drop cached link apps / addresses: the current app's, or every app's outside one. */
 export function bustAppCache(userId?: string): void {
-  if (userId) appCache.delete(String(userId).toUpperCase())
-  else appCache.clear()
-  emailCache.clear()
+  dropAppEntries(appCache, userId ? String(userId).toUpperCase() : undefined)
+  dropAppEntries(emailCache)
 }
 
-const emailCache = new Map<string, { at: number; id: string | null }>()
+const emailCache = registerAppKeyed(new Map<string, { at: number; id: string | null }>())
 /** The user behind an address — a mail sent BY EMAIL (flow ops, raw sends)
  *  still resolves its links and footer for the person, when there is one.
  *  Only a single, exact, active address matches; anything else is null. */
@@ -148,7 +175,7 @@ export async function userIdForEmail(email: string | null | undefined): Promise<
     .trim()
     .toLowerCase()
   if (!key.includes('@')) return null
-  const hit = emailCache.get(key)
+  const hit = emailCache.get(appKey(key))
   if (hit && Date.now() - hit.at < 60_000) return hit.id
   let id: string | null = null
   try {
@@ -160,7 +187,7 @@ export async function userIdForEmail(email: string | null | undefined): Promise<
   } catch {
     id = null
   }
-  emailCache.set(key, { at: Date.now(), id })
+  remember(emailCache, appKey(key), { at: Date.now(), id })
   return id
 }
 

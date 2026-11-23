@@ -138,7 +138,7 @@ export const deploymentModesDocs: DocSection = {
       type: 'ul',
       items: [
         'Huddle media servers come from the platform `HUDDLE_LIVEKIT_URL`, `HUDDLE_TURN_URLS` and `HUDDLE_STUN_URLS`; an app cannot set its own.',
-        'There is no env push-relay key: `MOBILE_PUSH_RELAY_KEY` is ignored, and nothing on a shared deployment can store a per-app relay key yet, so phone push stays off until phase 6.',
+        'There is no env push-relay key: `MOBILE_PUSH_RELAY_KEY` is ignored, and nothing on a shared deployment can store a per-app relay key yet, so phone push stays off on a shared deployment.',
         'The SSRF guard applies to URLs an app admin sets (webhooks, link preview, the flow webhook operation): pinned address, every redirect re-checked.',
         'Ending maintenance in one app does not end the operator deployment-wide freeze (see Per-app jobs and maintenance below).'
       ]
@@ -190,7 +190,7 @@ export const deploymentModesDocs: DocSection = {
     { type: 'h2', id: 'deployment-modes-hub-source', text: 'The Hub tenants contract' },
     {
       type: 'p',
-      text: 'A shared deployment asks its Hub which apps it serves: `GET {HUB_URL}/api/hub/shared/{deployment}/tenants` with `Authorization: Bearer <HUB_DEPLOYMENT_TOKEN>`. The Hub side of this call arrives with phase 6; the contract is fixed here so the two meet.'
+      text: 'A shared deployment asks its Hub which apps it serves: `GET {HUB_URL}/api/hub/shared/{deployment}/tenants` with `Authorization: Bearer <HUB_DEPLOYMENT_TOKEN>`. The Hub serves it from its shared deployments (see Shared deployments), which also adds two optional fields (`origin`, `encryption_key`).'
     },
     {
       type: 'pre',
@@ -263,8 +263,8 @@ export const deploymentModesDocs: DocSection = {
       type: 'ul',
       items: [
         "App jobs read or write one app's database, files or people. The job fires once, and the fan-out runs it once for every active app, each run inside that app's tenant context, at most `TENANT_JOB_CONCURRENCY` apps at a time. One app failing or hanging never stops the others. Job-run rows land in that app's own database. An app in maintenance mode is skipped, and an app whose previous run is still going is skipped.",
-        "No deployment-wide (`process`) core job runs on a shared deployment yet. The two there are (the pool monitor and the socket-count sample) only write to the static database, so they are registered self-hosted only until phase 6 gives them a deployment store. Every job's scope is listed in `services/cron-scope.ts`; a test fails when a core job is missing from it, and the boot log names any job registered without a scope.",
-        'Some core jobs only make sense self-hosted and are not registered on a shared deployment (`SELF_HOSTED_ONLY_CRONS` in `services/cron-scope.ts`, each with its reason): the restore drill, fault drills, Docker host and Traffic Map history jobs, huddle crons, the import drainer, the outside-write watch, live SLA flips, the cumulative-flow rollup, automatic mail retry (off on multi-tenant, as in cloud), the help-video render sweep (no app owns a queue there: each publish renders its own video in its own app, and publishes from two apps render one after the other through the deployment-wide heavy slot), and three storage jobs (file cleanup, the storage snapshot, session recording tiering) because local storage is not keyed per app yet. The boot warn line `[cron] shared deployment` counts the app jobs and the jobs left out.',
+        "No deployment-wide (`process`) core job runs on a shared deployment yet. The two there are (the pool monitor and the socket-count sample) only write to the static database, so they are registered self-hosted only until a deployment store exists for them. Every job's scope is listed in `services/cron-scope.ts`; a test fails when a core job is missing from it, and the boot log names any job registered without a scope.",
+        "Some core jobs only make sense self-hosted and are not registered on a shared deployment (`SELF_HOSTED_ONLY_CRONS` in `services/cron-scope.ts`, each with its reason): the restore drill, fault drills, Docker host and Traffic Map history jobs, huddle crons, the import drainer, the outside-write watch, live SLA flips, the cumulative-flow rollup, automatic mail retry (off on multi-tenant, as in cloud), the help-video render sweep (no app owns a queue there: each publish renders its own video in its own app, and publishes from two apps render one after the other through the deployment-wide heavy slot), and the storage snapshot (it walks the upload folder on disk, outside the per-app scope). File cleanup and session recording tiering run per app, because every object key is under that app's own prefix. The boot warn line `[cron] shared deployment` counts the app jobs and the jobs left out.",
         "Extension jobs default to `app`. An extension job that serves the process passes `scope: 'process'` in `ctx.cron.schedule(id, expression, fn, { scope })`. The option is ignored in cloud and self-hosted, so existing extensions need no change.",
         "An app admin can pause and resume a job for their own app only. The pause is that app's own `paused_crons` setting; the process-wide paused set is never touched. Pausing a process-scoped job answers 409.",
         "Schedules, time zones, chains and overrides are deployment-wide: `PATCH /api/cron/:id` and the revert route answer 409 `SCHEDULE_IS_DEPLOYMENT_WIDE`, and an app's `sla_timezone` does not move the cron zone.",
@@ -276,33 +276,26 @@ export const deploymentModesDocs: DocSection = {
     },
     {
       type: 'p',
-      text: "Maintenance is per app: an app admin turns their own maintenance banner or page on and off with their own settings, and the cached answer is kept per tenant. The operator can still freeze the whole deployment (the `nvr:maintenance` flag). On a multi-tenant process an app admin's End maintenance only ends their app's own setting; it never deletes the operator's deployment-wide freeze."
+      text: "Maintenance is per app: an app admin turns their own maintenance banner or page on and off with their own settings, and the cached answer is kept per tenant. The operator can still freeze the whole deployment with the Redis key `<REDIS_CHANNEL_PREFIX>nvr:maintenance` (just `nvr:maintenance` when the deployment sets no prefix). On a multi-tenant process an app admin's End maintenance only ends their app's own setting; it never deletes the operator's deployment-wide freeze."
     },
     { type: 'h2', id: 'deployment-modes-not-yet', text: 'Not yet on shared deployments' },
     {
       type: 'p',
-      text: 'These stay off on a shared deployment, as they are off in cloud today. Each needs per-app work that is planned for phase 6. The inventory of every site is `api/src/test/fixtures/cloud-flag-inventory.json` (look for `phase6`).'
+      text: "Phase 6 closed the gaps that made a shared deployment unsafe or lossy: each app is migrated on its own, with its own default workspace and the allowed extensions' schema steps; the extension allow-list; core record hooks (activity log, revisions, webhooks, alerts) and event flows per app; files under a per-app prefix; the app's own encryption key and origin; credentials bound to their app; and a per-app copy of the config caches. What is still off is a short deferred list. It is kept in one place, with the check the Hub makes when an app that uses the feature is moved in: see What a shared app cannot do yet in Shared deployments. The inventory of every site is `api/src/test/fixtures/cloud-flag-inventory.json` (look for `phase6`)."
     },
     {
       type: 'ul',
       items: [
-        "Boot-time work against a database: hook registration per app, flow loading per app, extension allow-list per app, default workspace row on demand, and migrations. Boot never migrates an app's database; each app database must already be migrated and carry its default workspace.",
-        'Config epochs per tenant (`CACHE_EPOCH`).',
-        'DB-defined row schedules (retention policies, scheduled reports, sync jobs, scheduled flows): per-app hydration is missing.',
-        'Boot passes against a database, which do not run on a shared deployment: the daily retention purge (activity, revisions, logs), row-schedule hydration, the boot cache and readiness warms, and the REST changelog. Also the self-hosted-only jobs above.',
-        'GitLab issue sync (connections, webhook to app, app-scoped crons).',
-        'The flow `exec-script` operation (needs a per-app sandbox).',
-        'Phone app sign-in, phone push and the MCP/OAuth issuer: a shared deployment gives the self-hosted admin origin for every app, so these need a per-app origin first.',
-        'Local file storage keyed per app.',
-        "Microsoft directory lookups and nightly directory sync: one app never uses the deployment's own Microsoft app registration, and no app setting holds one yet, so the directory reads as not configured and directory sync skips the app.",
-        'Automatic mail retry (`MAIL_RETRY`): never on a multi-tenant process, as in cloud.',
-        'Staged imports (upload a file, the import drainer runs it): the upload and requeue answer 409 `IMPORTS_NOT_ON_SHARED`, because no drainer runs per app yet. Collection imports, which run in the request, still work.',
-        'A per-app help-video render sweep: a publish renders its own video, but a video left queued by a restart or a crash waits until it is rendered again from the editor.'
+        'Staged imports, row schedules (retention policies, scheduled reports, sync jobs, scheduled flows), GitLab issue sync and the flow `exec-script` operation.',
+        'Phone app sign-in, phone push and the MCP/OAuth issuer use a per-app origin only where the app origin is known; the push relay key and the Microsoft directory registration have no per-app home yet.',
+        'Automatic mail retry (`MAIL_RETRY`), the Teams bot and huddle relay settings: off on a multi-tenant process, as in cloud.',
+        'Config epochs per tenant (`CACHE_EPOCH`): the metadata caches expire on their own TTL.',
+        'Boot passes against a database (the daily retention purge, row-schedule hydration, the boot cache and readiness warms, the REST changelog) and the self-hosted-only jobs above.'
       ]
     },
     {
       type: 'note',
-      text: 'A few messages still say "cloud mode" on a shared deployment too (the Teams bot reason, and the leak-audit, socket-capture and export-limit refusals). The behaviour is correct; the wording is tidied in phase 6.'
+      text: 'A few messages still say "cloud mode" on a shared deployment too (the Teams bot reason, and the leak-audit, socket-capture and export-limit refusals). The behaviour is correct; only the wording is still to be tidied.'
     },
     { type: 'h2', id: 'deployment-modes-guard', text: 'For developers: the cloud-flag ratchet' },
     {

@@ -1,6 +1,7 @@
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { errorText } from '../lib/db-refusal.js'
+import { registerAppKeyed } from './app-forget.js'
 import { cronTicksEnabled } from './cron-ticks.js'
 import { instanceKey } from './instance-key.js'
 import { INSTANCE_ID } from './instance-roster.js'
@@ -116,7 +117,9 @@ const LOG_KEEP = 300
 const LOG_TTL_SECONDS = 24 * 60 * 60
 const LOG_LINE_MAX = 500
 /** run id → its recent lines on THIS node (the Redis list is the cross-node copy). */
-const logMemory = new Map<string, { at: number; seq: number; lines: JobLogLine[] }>()
+const logMemory = registerAppKeyed(
+  new Map<string, { at: number; seq: number; lines: JobLogLine[] }>()
+)
 
 const logKey = (id: number, tenant: string = currentTenantKey()) => `${tenant || '-'}:${id}`
 

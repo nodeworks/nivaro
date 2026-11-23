@@ -6,16 +6,20 @@
  * under the TARGET's identity by design.
  */
 import type { Redis } from 'ioredis'
+import { registerAppKeyed } from './app-forget.js'
+import { appKeyPart } from './tenancy/credential-binding.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
 const TTL_SECONDS = 120
 const THROTTLE_MS = 20_000
 /** Throttle stamps, per tenant + target + admin; capped (expired stamps go first). */
 const LAST_TOUCH_MAX = 5_000
-const lastTouch = new Map<string, number>()
+const lastTouch = registerAppKeyed(new Map<string, number>())
 
 export function masqueradeMarkerKey(userId: string): string {
-  return `nvr:masq:active:${String(userId).toUpperCase()}`
+  // Per app on a Hub shared deployment (one Redis, copied user ids): app A's View-as is never
+  // shown in app B's Online list. Unchanged elsewhere (Hub phase 6 Task 12).
+  return `nvr:masq:active:${appKeyPart()}${String(userId).toUpperCase()}`
 }
 
 /** Refresh the marker (throttled per target+admin, fire-and-forget). */

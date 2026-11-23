@@ -1,7 +1,7 @@
 import { readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { isMainThread } from 'node:worker_threads'
-import knex from 'knex'
+import knex, { type Knex } from 'knex'
 import { config } from '../config.js'
 import { isMultiTenant } from '../services/deployment-mode.js'
 import { attachChaosSeam } from './chaos-seam.js'
@@ -393,24 +393,30 @@ export function resolveDb(): typeof _staticDb {
 // #1321 — self-hosted without a replica it IS the `db` proxy (it used to be
 // _staticDb), so a list read inside background work (items readByQuery from a
 // cron, a digest, a queue rebuild) takes the background pool like every other
-// call. Cloud mode keeps the old alias, unchanged. With a replica, list reads
-// share the replica's one pool whatever the context.
-export const dbRead: Database = config.DB_READ_HOST
-  ? knex({
-      client: config.DB_CLIENT,
-      ...mysqlFlavorConfig(config.DB_MARIADB),
-      connection: buildConnection(
-        config.DB_READ_HOST,
-        config.DB_READ_PORT ?? config.DB_PORT ?? DEFAULT_PORTS[config.DB_CLIENT]
-      ),
-      pool: { min: 2, max: config.DB_POOL_MAX, ...sessionUtcPool() },
-      migrations: {
-        migrationSource,
-        tableName: 'nivaro_migrations'
-      }
-    })
-  : multiTenant
-    ? _staticDb
+// call. With a replica, list reads share the replica's one pool whatever the
+// context.
+// Multi-tenant (Nivaro Cloud and a Hub shared deployment; Hub phase 6 ruling P6-32): it IS the
+// `db` proxy too, so a list or count read runs on the request's own tenant knex. It used to be
+// _staticDb, the placeholder with no connections, so every items list and count answered 500
+// "Unable to acquire a connection". Tenants have no read pool of their own, and DB_READ_HOST is
+// one server for the whole process, so it is never used there (it would serve every tenant the
+// same database).
+export const dbRead: Database = multiTenant
+  ? db
+  : config.DB_READ_HOST
+    ? knex({
+        client: config.DB_CLIENT,
+        ...mysqlFlavorConfig(config.DB_MARIADB),
+        connection: buildConnection(
+          config.DB_READ_HOST,
+          config.DB_READ_PORT ?? config.DB_PORT ?? DEFAULT_PORTS[config.DB_CLIENT]
+        ),
+        pool: { min: 2, max: config.DB_POOL_MAX, ...sessionUtcPool() },
+        migrations: {
+          migrationSource,
+          tableName: 'nivaro_migrations'
+        }
+      })
     : db
 
 // The replica's pool opens connections the same way the request pool does and fails the
@@ -428,7 +434,7 @@ export async function closeDb(): Promise<void> {
   if (_backgroundDb) await _backgroundDb.destroy()
   if (probeKnex) await probeKnex.destroy()
   if (migrationKnex) await migrationKnex.destroy()
-  if (config.DB_READ_HOST) {
+  if (!multiTenant && config.DB_READ_HOST) {
     await (dbRead as any).destroy()
   }
 }
@@ -513,8 +519,12 @@ export function poolerNotice(): string | null {
  * through PgBouncer it would stay with a server connection nobody owns. The transaction keeps
  * one connection (one server connection behind a pooler) until it commits, which frees it.
  */
-async function underPgMigrationLock<R>(timeoutMs: number, fn: () => Promise<R>): Promise<R> {
-  return migrationDb().transaction(async (trx) => {
+async function underPgMigrationLock<R>(
+  k: Knex,
+  timeoutMs: number,
+  fn: () => Promise<R>
+): Promise<R> {
+  return k.transaction(async (trx) => {
     await trx.raw(`SET LOCAL lock_timeout = ${Math.max(1, Math.floor(timeoutMs))}`)
     try {
       await trx.raw('SELECT pg_advisory_xact_lock(?)', [PG_LOCK_KEY])
@@ -539,63 +549,96 @@ export const MIGRATION_LOCK_NAME = 'nivaro_migrations'
 // Stable integer key for pg_advisory_lock, derived from the lock name
 export const PG_LOCK_KEY = 793_416_204
 
-/**
- * Run pending migrations, optionally guarded by a database advisory lock so
- * multiple instances starting in a rolling deploy never run migrations
- * concurrently (MIGRATION_SAFE_MODE=true). The instance that loses the race
- * waits for the winner, then sees an empty pending list and continues.
- */
-export async function runMigrationsSafely(): Promise<[number, string[]]> {
-  if (config.DB_CLIENT === 'sqlite') {
-    // One process owns the file (db/sqlite.ts). Then text columns compare case-insensitively.
-    const ran = await migrateLatestFreeingStaleLock()
-    await sqliteAfterMigrations()
-    return ran
-  }
-  if (!config.MIGRATION_SAFE_MODE) {
-    return migrateLatestFreeingStaleLock()
-  }
-  if (config.DB_CLIENT === 'mssql') {
-    // Take, hold and release the session lock on ONE pinned connection (underSessionAppLock).
-    const { withLongConnection } = await import('../services/run-long.js')
-    return withLongConnection((session) =>
-      underSessionAppLock(
-        session,
-        { resource: MIGRATION_LOCK_NAME, timeoutMs: config.MIGRATION_LOCK_TIMEOUT_MS },
-        migrateLatestFreeingStaleLock
-      )
-    )
-  }
-  if (config.DB_CLIENT === 'pg')
-    return underPgMigrationLock(config.MIGRATION_LOCK_TIMEOUT_MS, migrateLatestFreeingStaleLock)
-  // MySQL / MariaDB: GET_LOCK and RELEASE_LOCK are session-owned, so both run on ONE pinned
-  // connection held for the whole run (a release sent through the pool can land on another
-  // connection, fail quietly and leave the lock with an idle one). The migrations themselves run
-  // on other connections of the same pool.
-  return underKnexSessionLock(
-    migrationDb(),
-    { name: MIGRATION_LOCK_NAME, timeoutMs: config.MIGRATION_LOCK_TIMEOUT_MS },
-    migrateLatestFreeingStaleLock
-  )
+/** The knex migrator settings every Nivaro database uses (the static pools carry the same). */
+const NIVARO_MIGRATIONS = {
+  migrationSource,
+  tableName: 'nivaro_migrations',
+  disableMigrationsListValidation: true
+}
+
+/** One knex client name as a lock family: SQL Server, Postgres, MySQL / MariaDB or SQLite. */
+function migrationFamily(client: string): 'mssql' | 'pg' | 'mysql' | 'sqlite' | null {
+  const c = client.toLowerCase()
+  if (c === 'mssql') return 'mssql'
+  if (c === 'pg' || c === 'postgres' || c === 'postgresql') return 'pg'
+  if (c === 'mysql' || c === 'mysql2' || c === 'mariadb') return 'mysql'
+  if (c.includes('sqlite')) return 'sqlite'
+  return null
 }
 
 /**
+ * Run pending migrations on `k` (a knex whose client is `client`), optionally guarded by the
+ * database's advisory lock so several processes starting together never migrate one database
+ * at once (`safe`, default MIGRATION_SAFE_MODE). The process that loses the race waits for the
+ * winner, then sees an empty pending list and continues. knex's own migration-table lock is
+ * freed when it outlives a dead process (migrateFreeingStaleLock). SQLite: one process owns the
+ * file (db/sqlite.ts), so there is no advisory lock.
+ *
+ * The self-hosted boot runs it on its own database (runMigrationsSafely); a Hub shared
+ * deployment runs it on each app's database (services/tenancy/app-migrations.ts), always safe.
+ */
+export async function runMigrationsOn(
+  k: Knex,
+  client: string,
+  opts: { timeoutMs: number; safe?: boolean }
+): Promise<[number, string[]]> {
+  const latest = async (): Promise<[number, string[]]> =>
+    (await migrateFreeingStaleLock({
+      latest: () => k.migrate.latest(NIVARO_MIGRATIONS),
+      forceFree: () => k.migrate.forceFreeMigrationsLock(NIVARO_MIGRATIONS),
+      budgetMs: config.MIGRATION_LOCK_STALE_MS
+    })) as [number, string[]]
+  const family = migrationFamily(client)
+  if (family === 'sqlite' || !(opts.safe ?? config.MIGRATION_SAFE_MODE)) return latest()
+  if (family === 'mssql') {
+    // Take, hold and release the session lock on ONE pinned connection (underSessionAppLock).
+    const { withLongConnection } = await import('../services/run-long.js')
+    return withLongConnection(
+      (session) =>
+        underSessionAppLock(
+          session,
+          { resource: MIGRATION_LOCK_NAME, timeoutMs: opts.timeoutMs },
+          latest
+        ),
+      { knex: k }
+    )
+  }
+  if (family === 'pg') return underPgMigrationLock(k, opts.timeoutMs, latest)
+  if (family === 'mysql')
+    // MySQL / MariaDB: GET_LOCK and RELEASE_LOCK are session-owned, so both run on ONE pinned
+    // connection held for the whole run (a release sent through the pool can land on another
+    // connection, fail quietly and leave the lock with an idle one). The migrations themselves
+    // run on other connections of the same pool.
+    return underKnexSessionLock(k, { name: MIGRATION_LOCK_NAME, timeoutMs: opts.timeoutMs }, latest)
+  throw new Error(`Migrations cannot run on a "${client}" database.`)
+}
+
+/**
+ * Run pending migrations on this process's own database (DB_MIGRATION_URL's when set),
+ * optionally guarded by a database advisory lock so multiple instances starting in a rolling
+ * deploy never run migrations concurrently (MIGRATION_SAFE_MODE=true). The instance that loses
+ * the race waits for the winner, then sees an empty pending list and continues. SQLite: text
+ * columns then compare case-insensitively.
+ */
+export async function runMigrationsSafely(): Promise<[number, string[]]> {
+  const ran = await runMigrationsOn(migrationDb(), config.DB_CLIENT, {
+    timeoutMs: config.MIGRATION_LOCK_TIMEOUT_MS
+  })
+  if (config.DB_CLIENT === 'sqlite') await sqliteAfterMigrations()
+  return ran
+}
+
+/*
  * knex takes a row lock in nivaro_migrations_lock for the batch and frees it
  * in a finally — which a SIGTERM/SIGKILL mid-migration never reaches. The
  * lock then outlives its process, and EVERY later boot of every instance on
  * that database dies "Migration table is already locked" until someone runs
  * migrate:unlock by hand (2026-09-22: dev API down for an hour, staging one
  * deploy away from the same). A genuine in-progress migration on another
- * instance is the only reason to wait, so wait MIGRATION_LOCK_STALE_MS for it,
- * then free the lock loudly and run. The migrations themselves are guarded
- * (hasTable / IF NOT EXISTS), so a second runner re-applies nothing.
+ * instance is the only reason to wait, so runMigrationsOn waits
+ * MIGRATION_LOCK_STALE_MS for it, then frees the lock loudly and runs. The
+ * migrations themselves are guarded (hasTable / IF NOT EXISTS), so a second
+ * runner re-applies nothing.
  */
-async function migrateLatestFreeingStaleLock(): Promise<[number, string[]]> {
-  return (await migrateFreeingStaleLock({
-    latest: () => migrationDb().migrate.latest(),
-    forceFree: () => migrationDb().migrate.forceFreeMigrationsLock(),
-    budgetMs: config.MIGRATION_LOCK_STALE_MS
-  })) as [number, string[]]
-}
 
 export type Database = typeof db

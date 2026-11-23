@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { runInBackgroundPool } from '../db/pool-context.js'
 import type { User } from '../types.js'
+import { appMap, appSet } from './app-state.js'
 import {
   claimRunSlot,
   estimateRead,
@@ -208,9 +209,9 @@ interface RunHere {
 const local = new Map<string, RunHere>()
 const localKey = (runId: number) => `${currentTenantKey() || '-'}:${runId}`
 /** Test seam: the job promise per run id. */
-const running = new Map<number, Promise<void>>()
+const running = appMap<number, Promise<void>>()
 /** Jobs this process handed off and still watches (take-back when nobody drains). */
-const waiting = new Map<number, ReturnType<typeof setInterval>>()
+const waiting = appMap<number, ReturnType<typeof setInterval>>()
 
 export const SHUTDOWN_EXPORT_NOTE =
   'The process running this export stopped (a restart) before the file was finished. Start the export again.'
@@ -502,7 +503,7 @@ export function stopExportForShutdown(runId: number, mode: ShutdownMode): boolea
 /** Did a run this process executed stop for a shutdown without writing (it may go back)? */
 export const exportStoppedUntouched = (runId: number) => untouched.delete(runId)
 /** Runs that stopped in `requeue` mode — their row untouched (cleared when read). */
-const untouched = new Set<number>()
+const untouched = appSet<number>()
 
 /**
  * While a handed-off job waits on the list, check that someone is there to run it: once no

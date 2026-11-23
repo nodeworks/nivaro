@@ -635,6 +635,11 @@ describe('spec hash', () => {
       stackHash(spec({ hostnames: [] }), cfg, NODE)
     )
   })
+
+  it('E2E B1: covers the Traefik version (it picks the network label)', () => {
+    const v2 = makeCfg({ HUB_AGENT_TRAEFIK_VERSION: '2' })
+    expect(stackHash(spec(), v2, NODE)).not.toBe(stackHash(spec(), cfg, NODE))
+  })
 })
 
 describe('restartStack', () => {
@@ -919,5 +924,54 @@ describe('stackLeftovers', () => {
     ).toBe('STACK_OWNER_MISMATCH')
     fake.preexisting('efp_web', { 'com.docker.stack.namespace': 'efp' })
     expect(await codeOf(stackLeftovers(fake, cfg, 'efp', OWNER))).toBe('STACK_NOT_HUB')
+  })
+})
+
+describe('shared deployment host pattern (phase 6)', () => {
+  const sharedSpec = (over: Partial<StackSpec> = {}): StackSpec =>
+    spec({
+      owner: { shared: 'tools' },
+      environment: 'shared',
+      hostnames: [],
+      host_pattern: '*.apps.corp',
+      ...over
+    })
+
+  it("a stack's Host() name under another stack's pattern is not HOSTNAME_TAKEN", async () => {
+    await applyStack(fake, cfg, 'tools-sh', sharedSpec(), deps)
+    await expect(
+      applyStack(fake, cfg, S, spec({ hostnames: ['a.apps.corp'] }), deps)
+    ).resolves.toBeTruthy()
+  })
+
+  it('a pattern over names other stacks already route applies (it takes none of them)', async () => {
+    await applyStack(fake, cfg, S, spec({ hostnames: ['a.apps.corp'] }), deps)
+    await expect(applyStack(fake, cfg, 'tools-sh', sharedSpec(), deps)).resolves.toBeTruthy()
+  })
+
+  it('the same pattern on a second stack is HOSTNAME_TAKEN on host_pattern, before any write', async () => {
+    await applyStack(fake, cfg, 'tools-sh', sharedSpec(), deps)
+    fake.calls.length = 0
+    const err = await applyStack(
+      fake,
+      cfg,
+      'other-sh',
+      sharedSpec({ owner: { shared: 'other' } }),
+      deps
+    ).catch((e) => e)
+    expect(err).toBeInstanceOf(StackError)
+    expect(err.code).toBe('HOSTNAME_TAKEN')
+    expect(err.fields).toEqual([{ field: 'host_pattern', code: 'HOSTNAME_TAKEN' }])
+    expect(fake.writes()).toEqual([])
+    // The stack that already carries the pattern may keep it.
+    await expect(
+      applyStack(fake, cfg, 'tools-sh', sharedSpec({ image: IMAGE2 }), deps)
+    ).resolves.toBeTruthy()
+  })
+
+  it('B5: an app stack with no hostnames applies with no router', async () => {
+    await applyStack(fake, cfg, S, spec({ hostnames: [] }), deps)
+    const labels = creates(fake).flatMap((c) => Object.keys((c.body as any)?.Labels ?? {}))
+    expect(labels.some((k) => k.startsWith('traefik.http.routers.'))).toBe(false)
   })
 })

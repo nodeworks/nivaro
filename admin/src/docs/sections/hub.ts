@@ -11,7 +11,7 @@ export const hubOverviewDocs: DocSection = {
     },
     {
       type: 'warn',
-      text: 'The Hub is built in phases. It adopts apps that already run and shows their status and deploy history, promotes and rolls back builds of GitLab-driven apps, keeps database servers and databases and creates new apps, runs apps as Docker swarm stacks through the Hub agent, and signs people in to apps that choose sign-in via the Hub (with direct Microsoft sign-in as the fallback and an app switcher). It does not yet place an app on a shared deployment; that arrives in a later phase.'
+      text: 'The Hub is built in phases. It adopts apps that already run and shows their status and deploy history, promotes and rolls back builds of GitLab-driven apps, keeps database servers and databases and creates new apps, runs apps as Docker swarm stacks through the Hub agent, and signs people in to apps that choose sign-in via the Hub (with direct Microsoft sign-in as the fallback and an app switcher). It places new apps on shared deployments (one process serving many apps), moves an environment between a dedicated stack and a shared deployment in either direction, and upgrades a shared deployment (see Shared deployments and Moving an environment).'
     },
     { type: 'h2', id: 'hub-overview-on', text: 'Turning hub mode on' },
     {
@@ -274,7 +274,7 @@ export const hubLinkDocs: DocSection = {
     },
     {
       type: 'note',
-      text: 'Phase 1 only reads. Maintenance on and off, seeding a first admin and sign-in events over the link belong to later phases and are not available now. An app that does not set HUB_TOKEN has no hub link at all: the route answers 404, which the Hub shows as `link_refused` / `HUB_LINK_MISSING` for an environment saved with a token. An environment saved without a token is read through the public version and health routes instead.'
+      text: 'The link started read-only. Later phases added seeding a first administrator and, for moves, strict maintenance on and off, retiring an app, a shared-readiness report and file transfer (see Moving an environment). An app that does not set HUB_TOKEN has no hub link at all: the route answers 404, which the Hub shows as `link_refused` / `HUB_LINK_MISSING` for an environment saved with a token. An environment saved without a token is read through the public version and health routes instead.'
     }
   ]
 }
@@ -585,9 +585,9 @@ export const hubDockerDocs: DocSection = {
           'Comma list of image repositories (no tag, no digest) a stack may name. The Nivaro image and every extension image share this one list.'
         ],
         [
-          '`HUB_AGENT_EDGE`, `HUB_AGENT_EDGE_NETWORK`, `HUB_AGENT_ENTRYPOINTS`, `HUB_AGENT_CERT_RESOLVER`, `HUB_AGENT_HOST_SUFFIXES`',
+          '`HUB_AGENT_EDGE`, `HUB_AGENT_EDGE_NETWORK`, `HUB_AGENT_TRAEFIK_VERSION`, `HUB_AGENT_ENTRYPOINTS`, `HUB_AGENT_CERT_RESOLVER`, `HUB_AGENT_HOST_SUFFIXES`',
           '`traefik`',
-          'Edge `traefik` (needs the overlay network and the host suffixes, for example `.apps.example.com`; an app host must end in one; the agent sets both `traefik.docker.network` and `traefik.swarm.network` to that network, so either Traefik provider picks the right one) or `publish` (needs `HUB_AGENT_PUBLISH_PORTS`, a range inside 1024 to 65535).'
+          'Edge `traefik` (needs the overlay network and the host suffixes, for example `.apps.example.com`; an app host must end in one; the agent sets exactly one network label to that network: `traefik.swarm.network` for Traefik v3, the default, or `traefik.docker.network` with `HUB_AGENT_TRAEFIK_VERSION=2`; Traefik v3 skips a service carrying both; the host pattern of a shared deployment and a separate `realtime` role need v3: on v2 the agent refuses the role (`ROLE_NEEDS_TRAEFIK_V3`) and the shared upgrade plan blocks the pattern) or `publish` (needs `HUB_AGENT_PUBLISH_PORTS`, a range inside 1024 to 65535).'
         ],
         [
           '`HUB_AGENT_REDIS_IMAGE`',
@@ -889,7 +889,7 @@ export const hubDockerDocs: DocSection = {
     },
     {
       type: 'p',
-      text: 'Agent refusals passed through as they are: `HOSTNAME_TAKEN` (another stack routes the name), `SPEC_INVALID` (with the refused fields, each as `field (code)`: `UNKNOWN_FIELD`, `REQUIRED`, `BAD_KEY`, `IMAGE_NOT_ALLOWED`, `IMAGE_NOT_PINNED`, `ENV_FORBIDDEN`, `ENV_NOT_ALLOWED`, `ROLE_BAD`, `REPLICAS_BAD`, `LIMIT_BAD`, `HOSTNAME_NOT_ALLOWED`, `TOO_MANY`, `TOO_LONG`, `PORT_NOT_ALLOWED`, `REDIS_NOT_CONFIGURED`, `EXTENSION_ID_BAD`, `SETTING_INVALID`), `SPEC_MISMATCH` (a restart: the stack does not run the spec sent), `STACK_NAME_INVALID`, `STACK_NOT_FOUND`, `STACK_NOT_HUB`, `STACK_OWNER_MISMATCH`, `EXPECT_INVALID`, `ENGINE_FORBIDDEN` (the agent guard refused an Engine call it built, so nothing reached Docker), `ENGINE_ERROR` (Docker refused a call), `REDIS_NOT_CONFIGURED`, `EXTENSION_INVALID` and `IMAGE_PULL_FAILED`. The Hub turns each into one plain sentence and never shows the agent body text.'
+      text: 'Agent refusals passed through as they are: `HOSTNAME_TAKEN` (another stack routes the name), `SPEC_INVALID` (with the refused fields, each as `field (code)`: `UNKNOWN_FIELD`, `REQUIRED`, `BAD_KEY`, `IMAGE_NOT_ALLOWED`, `IMAGE_NOT_PINNED`, `ENV_FORBIDDEN`, `ENV_NOT_ALLOWED`, `ROLE_BAD`, `REPLICAS_BAD`, `LIMIT_BAD`, `HOSTNAME_NOT_ALLOWED`, `TOO_MANY`, `TOO_LONG`, `PORT_NOT_ALLOWED`, `REDIS_NOT_CONFIGURED`, `EXTENSION_ID_BAD`, `SETTING_INVALID`, `SHARED_KEY_MISMATCH` (a shared stack names another key than its owner), `ROLE_NOT_SHARED` (a shared stack has no realtime role)), `SPEC_MISMATCH` (a restart: the stack does not run the spec sent), `STACK_NAME_INVALID`, `STACK_NOT_FOUND`, `STACK_NOT_HUB`, `STACK_OWNER_MISMATCH`, `EXPECT_INVALID`, `ENGINE_FORBIDDEN` (the agent guard refused an Engine call it built, so nothing reached Docker), `ENGINE_ERROR` (Docker refused a call), `REDIS_NOT_CONFIGURED`, `EXTENSION_INVALID` and `IMAGE_PULL_FAILED`. The Hub turns each into one plain sentence and never shows the agent body text.'
     },
     {
       type: 'warn',
@@ -1404,6 +1404,24 @@ export const hubDatabasesDocs: DocSection = {
       type: 'p',
       text: 'Adopt a database records one that already exists (Databases → Adopt a database): engine, host, port, database, login, password, TLS. The Hub checks it and accepts only an empty database or an existing Nivaro install; a database with other tables is refused (`DATABASE_NOT_NIVARO`). An existing Nivaro install is accepted with a plain warning (`warning` in the answer, and on Create app a warning line in the preview, never a blocker): an app given that database starts on its data and users, and its first administrator is made only if it has none, so make sure no other app still uses it. Adopting never creates or changes anything on the server. An adopted database is linked to a server row when its engine, host and port match one. Two records may never point at the same database: the Hub compares host and name, and also the server identity the database itself reports (so an alias, an IP and a name for the same server count as one), and refuses with `DATABASE_IN_USE`.'
     },
+    { type: 'h2', id: 'hub-databases-attach', text: 'Attach to an existing environment' },
+    {
+      type: 'p',
+      text: 'An app the Hub did not create has no database record, and a move onto a shared deployment needs one: its plan blocks with `NO_DATABASE_RECORD`. In the Databases tab open the database the app runs on (adopt it first when the Hub does not record it yet). Its Environment card shows Attach to environment…: pick the app and the environment, then Attach to environment (Cancel closes the picker). On an attached database the card names the environment and offers Detach from environment, a two-press confirm; detaching keeps the record and the database, and the environment then has no record. Hub administrators only. Both write an activity row (`hub-env-db-attach`, `hub-env-db-detach`), and the app page and any move plan on screen for that environment are read again.'
+    },
+    {
+      type: 'ul',
+      items: [
+        "Attach and detach run under the environment's lock. Both are refused while a move or a creation of the environment is open (`MOVE_OPEN`, `CREATION_OPEN`) and for an environment on a shared deployment (`SHARED_PLACEMENT`: the deployment serves it from its record; move the environment to change it). Another action holding the environment answers with its own code (for example `PROMOTION_RUNNING`, `MOVE_RUNNING` or `ENVIRONMENT_BUSY`): try again when it ends. `STATE_CHANGED`: the environment changed meanwhile, try again.",
+        '`database_id` must be the id of a Hub database (400 `BAD_DATABASE`); an environment or database that does not exist answers 404 `NOT_FOUND`.',
+        'The environment must have no record yet (`ALREADY_ATTACHED`: detach that one first), and the database must be ready (`DATABASE_NOT_READY`) and attached to no other environment (`IN_USE`). Attaching the record the environment already has changes nothing (`changed: false`).',
+        'The Hub asks the app over its hub link which database it runs on. Another engine family is `ENGINE_MISMATCH` (attach the record of the database the app really uses); an app that cannot be asked is `ENGINE_UNVERIFIED` (link it to the Hub and make sure it runs).',
+        "The Hub then checks the record's stored connection. A failed check refuses with `DATABASE_UNREACHABLE`, and the answer carries the check, shown under the refusal: fix the connection on the database page and try again.",
+        "When the server identity the Hub reads through the record differs from the one the app reports, the answer carries a warning (shown on the card): the Hub may reach the same server under another name or address. A move's plan checks it again from the target's side (`DATABASE_DIFFERS`), and that is what blocks a wrong database.",
+        "An environment on a Docker stack is stricter, because its next deploy writes the attached record into the stack's database settings: a different identity, or one the Hub cannot read, refuses with `DATABASE_IDENTITY_DIFFERS`. When you know it is the same database under another address, press Attach anyway (a two-press confirm). It sends `override: true`, and the activity row is `hub-env-db-attach-override`.",
+        'A database attached to an environment cannot be removed from the Hub (`IN_USE`): detach it here first.'
+      ]
+    },
     { type: 'h2', id: 'hub-databases-delete', text: 'Detach and drop' },
     {
       type: 'p',
@@ -1454,7 +1472,15 @@ export const hubDatabasesDocs: DocSection = {
           '`POST /databases/:id/check`',
           'Check now. App owners: own app only, own server only, rate limited. Answers `{ data, creation }`.'
         ],
-        ['`DELETE /databases/:id`', 'Body `{ confirm, drop? }`: detach, or detach and drop.']
+        ['`DELETE /databases/:id`', 'Body `{ confirm, drop? }`: detach, or detach and drop.'],
+        [
+          '`PUT /environments/:envId/database`',
+          'Body `{ database_id, override? }`: attach this record to an existing environment (`override: true` only after `DATABASE_IDENTITY_DIFFERS`). Answers `{ data: { database, check, changed, warning, overridden } }`. Hub administrators; refusals in Attach to an existing environment.'
+        ],
+        [
+          '`DELETE /environments/:envId/database`',
+          "Detach the environment's record; the record and the database stay. Answers `{ data: { database_id, changed } }`. Hub administrators."
+        ]
       ]
     },
     { type: 'h2', id: 'hub-databases-errors', text: 'Every refusal code' },
@@ -1690,6 +1716,10 @@ export const hubCreateDocs: DocSection = {
         ],
         ['`proxy_network`', 'The external overlay network Traefik reads. Default `proxy`.'],
         [
+          '`traefik_version`',
+          'The Traefik on that swarm: `3` (default) or `2`. A created app gets exactly one network label from it (`traefik.swarm.network` or `traefik.docker.network`); Traefik v3 skips a service that carries both. Apps created earlier keep their pinned template and app.env until their template is re-pinned (and the manager stack file updated); without the setting they deploy as v3.'
+        ],
+        [
           '`dns_mode`',
           '`automatic`: the Hub derives every hostname under a wildcard domain. `manual`: you give each hostname and the Hub waits until a person has made the DNS name.'
         ],
@@ -1757,12 +1787,12 @@ export const hubCreateDocs: DocSection = {
         "Nothing the app repository changes can decide what runs. At fork the Hub sets the app project's CI configuration path to `ci/deploy.yml@<template_project>:<template_ref>`, so GitLab reads the deploy job from the Hub-owned template at the pinned ref and ignores the app repository's own `.gitlab-ci.yml`. It also sets the project so nobody may set pipeline variables by hand. These are checked again before every deploy and whenever the target changes; a project that does not keep them stops with `CI_CONFIG_REFUSED`.",
         "One deploy key per app. The Hub makes an ed25519 key pair when it creates the repository and pushes the private half once as the project's masked, protected variable `DEPLOY_SSH_KEY`. It is never stored by the Hub. The public half and its fingerprint are what an operator installs on the manager. A key can reach only that app's stacks and hostnames.",
         "The manager runs a forced command. The key may run only `nivaro-hub-deploy`, with three verbs (check who owns a stack, create a secret, deploy a stack) for the exact stack names and hostnames in that app's key file, one proxy network and one image by digest. There is no shell and no Docker socket forwarding.",
-        'The image is pinned by digest. The pin file holds the Nivaro version and the image digest; `latest` and a pin without a digest are refused.'
+        'The image is pinned by digest. The pin file holds the Nivaro version and the image digest; `latest` and a pin without a digest are refused. A move onto the app adds a last line `boot-maintenance=<move id>`, which the deploy job forwards so the app boots in maintenance (see One writer at a time in Moving an environment).'
       ]
     },
     {
       type: 'p',
-      text: "What the Hub sets on each app repository. Project variables for every environment (protected): `DEPLOY_HOST`, `DEPLOY_KNOWN_HOSTS` (base64, masked), `HUB_HOST_SUFFIX` (the wildcard domain, only when the target has one) and `HUB_PIN_FILE` when the pin file is not the default. Per environment (scoped to it, masked, protected, each the base64 of its value): `NIVARO_DB_URL_B64`, `NIVARO_HUB_TOKEN_B64`, `NIVARO_SESSION_SECRET_B64`, `NIVARO_ENCRYPTION_KEY_B64`, `NIVARO_OIDC_CLIENT_SECRET_B64`. The deploy turns each into a swarm secret and the app reads it through its `<SETTING>_FILE`, so no value reaches a command line, an environment or a log. On the environment branch the Hub commits `.hub/app.env` with only these settings (never a secret), the version pin and the app's `.gitlab-ci.yml`: `APP_KEY`, `ENV_KEY`, `STACK_NAME`, `APP_HOSTS`, `PUBLIC_URL`, `ADMIN_URL`, `HUB_URL`, `NIVARO_ENVIRONMENT`, `DB_CLIENT`, `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_REDIRECT_URI`, `PROXY_NETWORK`, `TRUST_PROXY`. The deploy refuses any other key in that file."
+      text: "What the Hub sets on each app repository. Project variables for every environment (protected): `DEPLOY_HOST`, `DEPLOY_KNOWN_HOSTS` (base64, masked), `HUB_HOST_SUFFIX` (the wildcard domain, only when the target has one) and `HUB_PIN_FILE` when the pin file is not the default. Per environment (scoped to it, masked, protected, each the base64 of its value): `NIVARO_DB_URL_B64`, `NIVARO_HUB_TOKEN_B64`, `NIVARO_SESSION_SECRET_B64`, `NIVARO_ENCRYPTION_KEY_B64`, `NIVARO_OIDC_CLIENT_SECRET_B64`. The deploy turns each into a swarm secret and the app reads it through its `<SETTING>_FILE`, so no value reaches a command line, an environment or a log. On the environment branch the Hub commits `.hub/app.env` with only these settings (never a secret), the version pin and the app's `.gitlab-ci.yml`: `APP_KEY`, `ENV_KEY`, `STACK_NAME`, `APP_HOSTS`, `PUBLIC_URL`, `ADMIN_URL`, `HUB_URL`, `NIVARO_ENVIRONMENT`, `DB_CLIENT`, `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_REDIRECT_URI`, `PROXY_NETWORK`, `TRUST_PROXY`, `TRAEFIK_VERSION` (the target's `traefik_version`, `3` or `2`: the manager reads it to give the stack its one Traefik network label, and it is never passed into the app). The deploy refuses any other key in that file."
     },
     {
       type: 'warn',

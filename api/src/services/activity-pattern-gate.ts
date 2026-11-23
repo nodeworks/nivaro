@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import { runInBackgroundPool } from '../db/pool-context.js'
+import { registerAppKeyed } from './app-forget.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
 /**
@@ -121,8 +122,8 @@ interface RuleIndex {
 }
 
 const TTL_MS = 60_000
-const indexes = new Map<string, RuleIndex>()
-const loading = new Map<string, Promise<RuleIndex>>()
+const indexes = registerAppKeyed(new Map<string, RuleIndex>())
+const loading = registerAppKeyed(new Map<string, Promise<RuleIndex>>())
 
 /** Drop the cached rules of the current tenant (rule saved / deleted). */
 export function invalidateActivityPatternRules(): void {

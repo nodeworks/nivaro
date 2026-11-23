@@ -27,6 +27,7 @@
  */
 import type { Server as SocketIOServer } from 'socket.io'
 import { NIVARO_VERSION } from '../version.js'
+import { registerAppKeyed } from './app-forget.js'
 import { type ClientVersion, judgeable } from './client-version.js'
 import { listInstances } from './instance-roster.js'
 import { tenantScopedRoom } from './tenant-rooms.js'
@@ -136,7 +137,7 @@ export async function listClusterClients(
 // Presence polls every 15 s per open admin panel; one cluster read serves them all for a few
 // seconds. Keyed by tenant (module state is shared by every cloud tenant).
 const CACHE_MS = 5000
-const cache = new Map<string, { at: number; value: Promise<ClusterClients> }>()
+const cache = registerAppKeyed(new Map<string, { at: number; value: Promise<ClusterClients> }>())
 
 export function listClusterClientsCached(
   io: SocketIOServer | null,

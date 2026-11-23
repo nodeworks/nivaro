@@ -28,6 +28,12 @@ export type AgentConfig = {
   images: string[]
   edge: 'traefik' | 'publish'
   edgeNetwork: string
+  /**
+   * HUB_AGENT_TRAEFIK_VERSION (ruling P6-34): which Traefik reads the labels. 3 (default) = the
+   * swarm provider (`traefik.swarm.network`); 2 = the docker provider (`traefik.docker.network`).
+   * Never both: Traefik v3 skips a service that carries both providers' labels.
+   */
+  traefikVersion: 2 | 3
   entrypoints: string[]
   certResolver?: string
   /** Lower-case, each starting with a dot. Empty in publish mode. */
@@ -202,6 +208,9 @@ export function loadAgentConfig(env: NodeJS.ProcessEnv, readFile: ReadFile): Age
   const edge: AgentConfig['edge'] = edgeRaw
 
   const edgeNetwork = env.HUB_AGENT_EDGE_NETWORK?.trim() ?? ''
+  const traefikRaw = env.HUB_AGENT_TRAEFIK_VERSION?.trim() || '3'
+  if (traefikRaw !== '2' && traefikRaw !== '3') throw new ConfigError('TRAEFIK_VERSION_BAD')
+  const traefikVersion: AgentConfig['traefikVersion'] = traefikRaw === '2' ? 2 : 3
   const entrypoints =
     env.HUB_AGENT_ENTRYPOINTS === undefined ? ['websecure'] : list(env.HUB_AGENT_ENTRYPOINTS)
   const certResolver = env.HUB_AGENT_CERT_RESOLVER?.trim() || undefined
@@ -279,6 +288,7 @@ export function loadAgentConfig(env: NodeJS.ProcessEnv, readFile: ReadFile): Age
     images,
     edge,
     edgeNetwork,
+    traefikVersion,
     entrypoints,
     ...(certResolver ? { certResolver } : {}),
     hostSuffixes,

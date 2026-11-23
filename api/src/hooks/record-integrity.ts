@@ -1,6 +1,10 @@
+import { AsyncResource } from 'node:async_hooks'
 import { db } from '../db/index.js'
+import { tenantState } from '../services/ai-tenant-state.js'
+import { registerAppKeyed } from '../services/app-forget.js'
 import { checkRecord, hasChecks, storeRecordResult } from '../services/config-conformance.js'
 import { noteDerivedWrite } from '../services/request-trace.js'
+import { currentTenantKey } from '../services/tenant-rooms.js'
 import { hooks } from './registry.js'
 
 /**
@@ -19,13 +23,22 @@ const QUIET_MS = 1500
 const CONCURRENCY = 2
 const QUEUE_CAP = 1000
 const pending = new Map<string, ReturnType<typeof setTimeout>>()
-const queue: Array<{ collection: string; id: string }> = []
+/** One queue for the process (CONCURRENCY is per process). On a Hub shared deployment it holds
+ *  several apps' records: each entry carries its app (tenant) and runs its check in that app's
+ *  context, whichever write's drain picks it up. */
+const queue: Array<{
+  tenant: string
+  collection: string
+  id: string
+  inContext: <T>(fn: () => T) => T
+}> = []
 let running = 0
 
 function schedule(collection: string, id: string): void {
   // Counted when queued, inside the write's request (the check itself runs after the response).
   noteDerivedWrite('integrity')
-  const key = `${collection}:${id}`
+  const tenant = currentTenantKey()
+  const key = `${tenant}\u0000${collection}:${id}`
   const prior = pending.get(key)
   if (prior) clearTimeout(prior)
   pending.set(
@@ -36,8 +49,13 @@ function schedule(collection: string, id: string): void {
       // not pile up hours of background checks — past the cap the sweep and
       // the on-load check own the tail.
       if (queue.length >= QUEUE_CAP) return
-      if (!queue.some((q) => q.collection === collection && q.id === id))
-        queue.push({ collection, id })
+      if (!queue.some((q) => q.tenant === tenant && q.collection === collection && q.id === id))
+        queue.push({
+          tenant,
+          collection,
+          id,
+          inContext: AsyncResource.bind(<T>(fn: () => T): T => fn())
+        })
       void drain()
     }, QUIET_MS)
   )
@@ -49,8 +67,10 @@ async function drain(): Promise<void> {
   if (!next) return
   running += 1
   try {
-    const result = await checkRecord(next.collection, next.id)
-    if (result) await storeRecordResult(next.collection, next.id, result.findings, 'write')
+    await next.inContext(async () => {
+      const result = await checkRecord(next.collection, next.id)
+      if (result) await storeRecordResult(next.collection, next.id, result.findings, 'write')
+    })
   } catch (err) {
     console.warn(`record integrity refresh failed for ${next.collection}/${next.id}:`, err)
   } finally {
@@ -60,11 +80,13 @@ async function drain(): Promise<void> {
 }
 
 // M2O parents of a collection (junction legs included): a write to a child
-// row re-checks the record it belongs to. 60s cache — relations are config.
-let parentsCache: { at: number; map: Map<string, Array<{ parent: string; fk: string }>> } | null =
-  null
+// row re-checks the record it belongs to. 60s cache per app — relations are config.
+const parentsState = tenantState<{
+  cache: { at: number; map: Map<string, Array<{ parent: string; fk: string }>> } | null
+}>(() => ({ cache: null }))
 async function parentsOf(collection: string): Promise<Array<{ parent: string; fk: string }>> {
-  if (!parentsCache || Date.now() - parentsCache.at > 60_000) {
+  const st = parentsState()
+  if (!st.cache || Date.now() - st.cache.at > 60_000) {
     const rows = (await db('nivaro_relations')
       .whereNotNull('one_collection')
       .select('many_collection', 'many_field', 'one_collection')
@@ -79,17 +101,18 @@ async function parentsOf(collection: string): Promise<Array<{ parent: string; fk
       if (!map.has(r.many_collection)) map.set(r.many_collection, [])
       map.get(r.many_collection)?.push({ parent: r.one_collection, fk: r.many_field })
     }
-    parentsCache = { at: Date.now(), map }
+    st.cache = { at: Date.now(), map }
   }
-  return parentsCache.map.get(collection) ?? []
+  return st.cache.map.get(collection) ?? []
 }
 
-const checkable = new Map<string, { at: number; value: Promise<boolean> }>()
+const checkable = registerAppKeyed(new Map<string, { at: number; value: Promise<boolean> }>())
 function collectionHasChecks(collection: string): Promise<boolean> {
-  const hit = checkable.get(collection)
+  const key = `${currentTenantKey()}\u0000${collection}`
+  const hit = checkable.get(key)
   if (hit && Date.now() - hit.at < 60_000) return hit.value
   const value = hasChecks(collection).catch(() => false)
-  checkable.set(collection, { at: Date.now(), value })
+  checkable.set(key, { at: Date.now(), value })
   return value
 }
 

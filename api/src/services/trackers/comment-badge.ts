@@ -1,5 +1,6 @@
 import { db } from '../../db/index.js'
 import { getTenantId } from '../../db/tenant-context.js'
+import { registerAppKeyed } from '../app-forget.js'
 
 /**
  * A comment mirrored in from GitLab carries `meta = {"tracker":{link, note_id, author}}` (written
@@ -33,7 +34,7 @@ export function trackerBadgeOf(meta: unknown): CommentTrackerBadge | null {
 }
 
 const MISS_TTL_MS = 60_000
-const probes = new Map<string, { hit: boolean; at: number }>()
+const probes = registerAppKeyed(new Map<string, { hit: boolean; at: number }>())
 
 /** Does nivaro_comments have the `meta` column (migration 532)? A hit is kept; a miss for 60 s. */
 export async function hasCommentMetaColumn(): Promise<boolean> {

@@ -91,7 +91,8 @@ const MAX_EXTENSIONS = 20
 
 const EXTENSION_ID_RE = /^[a-z0-9][a-z0-9-]{0,62}$/
 /** `<repo>@sha256:<64 lowercase hex>`, the repo in the Docker reference grammar (the agent's). */
-const PINNED_RE =
+/** An extension image pinned by digest: `<repo>@sha256:<64 hex>` (shared deployments use it too). */
+export const PINNED_RE =
   /^([a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:\.[a-z0-9-]+)*(?::[0-9]{1,5})?(?:\/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*)@sha256:[0-9a-f]{64}$/
 
 const HEX64_RE = /^[0-9a-fA-F]{64}$/

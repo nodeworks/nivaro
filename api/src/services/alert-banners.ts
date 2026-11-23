@@ -1,7 +1,9 @@
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { ACTIVITY_PATTERN_KIND } from './activity-pattern-gate.js'
+import { registerAppKeyed } from './app-forget.js'
 import { CORE_EXT } from './core-switches.js'
+import { currentTenantKey } from './tenant-rooms.js'
 
 /**
  * Threshold banners (realtime round 9, item 20): "Project 4471 just crossed 90%".
@@ -58,7 +60,8 @@ export interface AlertBanner {
 
 // ── Which definitions show banners ─────────────────────────────────────────
 
-let memo: { at: number; ids: Set<number> } | null = null
+// Per app (currentTenantKey()): each app on a shared deployment picks its own banners.
+const memos = registerAppKeyed(new Map<string, { at: number; ids: Set<number> }>())
 
 export function parseBannerIds(value: unknown): Set<number> {
   let raw: unknown = value
@@ -74,6 +77,7 @@ export function parseBannerIds(value: unknown): Set<number> {
 }
 
 export async function bannerDefinitionIds(): Promise<Set<number>> {
+  const memo = memos.get(currentTenantKey())
   if (memo && Date.now() - memo.at < 30_000) return memo.ids
   let ids = new Set<number>()
   try {
@@ -84,14 +88,21 @@ export async function bannerDefinitionIds(): Promise<Set<number>> {
   } catch {
     ids = new Set()
   }
-  memo = { at: Date.now(), ids }
+  memos.set(currentTenantKey(), { at: Date.now(), ids })
   return ids
 }
 
+/** Drop the memo: inside an app that app's, outside any app every app's (final review Minor 1). */
+export function forgetBannerMemo(): void {
+  const app = currentTenantKey()
+  if (app) memos.delete(app)
+  else memos.clear()
+}
+
 export async function setDefinitionBanner(defId: number, on: boolean): Promise<void> {
-  memo = null
+  forgetBannerMemo()
   const current = await bannerDefinitionIds()
-  memo = null
+  forgetBannerMemo()
   const next = new Set(current)
   if (on) next.add(defId)
   else next.delete(defId)

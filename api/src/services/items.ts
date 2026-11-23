@@ -60,6 +60,7 @@ import {
   sameAliasLink,
   withoutReAddedRemovals
 } from './alias-links.js'
+import { registerAppKeyed } from './app-forget.js'
 import {
   APPROVAL_CHANGED_FIELD,
   approvalChangedWanted,
@@ -300,13 +301,13 @@ _exprParser.functions.networkdays = (a: unknown, b: unknown) => {
 _exprParser.functions.fiscal_year = (d: unknown) => {
   const dt = toFormulaDate(d)
   if (!dt) return null
-  const start = _formulaSnapshot.fiscalStartMonth
+  const start = formulaSnapshot().fiscalStartMonth
   return dt.getMonth() + 1 >= start ? dt.getFullYear() + (start > 1 ? 1 : 0) : dt.getFullYear()
 }
 _exprParser.functions.fiscal_quarter = (d: unknown) => {
   const dt = toFormulaDate(d)
   if (!dt) return null
-  const start = _formulaSnapshot.fiscalStartMonth
+  const start = formulaSnapshot().fiscalStartMonth
   const offset = (dt.getMonth() + 1 - start + 12) % 12
   return Math.floor(offset / 3) + 1
 }
@@ -317,15 +318,18 @@ function toFormulaDate(v: unknown): Date | null {
   return Number.isNaN(d.getTime()) ? null : d
 }
 // Sync snapshot of the formula context — refreshed fire-and-forget wherever
-// computed fields are about to run (evalFormula itself is synchronous).
-let _formulaSnapshot: { constants: Record<string, number>; fiscalStartMonth: number } = {
-  constants: {},
-  fiscalStartMonth: 1
-}
+// computed fields are about to run (evalFormula itself is synchronous). One per app
+// (currentTenantKey()): each app on a shared deployment has its own constants and fiscal year.
+type FormulaSnapshot = { constants: Record<string, number>; fiscalStartMonth: number }
+const EMPTY_FORMULA_SNAPSHOT: FormulaSnapshot = { constants: {}, fiscalStartMonth: 1 }
+const _formulaSnapshots = registerAppKeyed(new Map<string, FormulaSnapshot>())
+const formulaSnapshot = (): FormulaSnapshot =>
+  _formulaSnapshots.get(currentTenantKey()) ?? EMPTY_FORMULA_SNAPSHOT
 function refreshFormulaSnapshot(): void {
+  const app = currentTenantKey()
   getFormulaContext()
     .then((ctx) => {
-      _formulaSnapshot = ctx
+      _formulaSnapshots.set(app, ctx)
     })
     .catch(() => {})
 }
@@ -449,19 +453,22 @@ async function finalProjection(
   return systemProjection(collection, out, allowedFields)
 }
 
-const tableColumnsCache = new Map<string, { at: number; cols: Set<string> }>()
+const tableColumnsCache = registerAppKeyed(new Map<string, { at: number; cols: Set<string> }>())
 
-/** A table's physical column names (lower-cased), cached a minute per table. */
+/** A table's physical column names (lower-cased), cached a minute per table and app. */
 async function tableColumns(collection: string): Promise<Set<string>> {
-  const hit = tableColumnsCache.get(collection)
+  const key = columnCacheKey(collection)
+  const hit = tableColumnsCache.get(key)
   if (hit && Date.now() - hit.at < 60_000) return hit.cols
   const info = await db(collection).columnInfo()
   const cols = new Set(Object.keys(info ?? {}).map((c) => c.toLowerCase()))
-  tableColumnsCache.set(collection, { at: Date.now(), cols })
+  tableColumnsCache.set(key, { at: Date.now(), cols })
   return cols
 }
 
-const columnShapesCache = new Map<string, { at: number; shapes: Map<string, ColumnShape> }>()
+const columnShapesCache = registerAppKeyed(
+  new Map<string, { at: number; shapes: Map<string, ColumnShape> }>()
+)
 
 /** A table's column types (+ decimal precision/scale) by lower-cased name,
  *  cached a minute per tenant + table. Empty for what is not a table. */
@@ -1213,7 +1220,7 @@ const INTEGRATIONS_FIELD = '$integrations'
 // COLUMN_CACHE_TTL_MS old. Capped so a stream of made-up table names cannot grow it unbounded.
 const COLUMN_CACHE_TTL_MS = 5 * 60_000
 const COLUMN_CACHE_MAX = 5_000
-const columnCache = new Map<string, { at: number; set: Set<string> }>()
+const columnCache = registerAppKeyed(new Map<string, { at: number; set: Set<string> }>())
 const columnCacheKey = (table: string) => `${getTenantId() ?? ''}:${table}`
 
 /** Forget one table's cached columns (this tenant) — a column added since it was read. */
@@ -1258,7 +1265,9 @@ export async function actualColumnName(table: string, column: string): Promise<s
 
 const NON_UNICODE_TYPES = new Set(['varchar', 'char', 'text'])
 const COLUMN_TYPE_TTL_MS = 60_000
-const columnTypeCache = new Map<string, { at: number; types: Map<string, string> }>()
+const columnTypeCache = registerAppKeyed(
+  new Map<string, { at: number; types: Map<string, string> }>()
+)
 
 /** Column name → lower-case DATA_TYPE, per tenant; a minute old at most, so a
  *  field added in the schema editor becomes searchable without a restart. */
@@ -1476,7 +1485,7 @@ const WORKSPACE_COLUMN = 'workspace_id'
 
 // 60s TTL cache — workspace_id columns can be added at runtime via the data model. Per tenant,
 // and capped (a collection name comes from the request path).
-const wsColumnCache = new Map<string, { exists: boolean; at: number }>()
+const wsColumnCache = registerAppKeyed(new Map<string, { exists: boolean; at: number }>())
 const WS_COLUMN_TTL_MS = 60_000
 const WS_COLUMN_MAX = 5_000
 
@@ -1548,7 +1557,7 @@ function evalFormula(formula: string, item: Record<string, unknown>): unknown {
   try {
     // expr-eval's Value type is narrower than Record<string,unknown> but handles nested objects fine at runtime
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const result = _exprParser.evaluate(formula, { item, ..._formulaSnapshot.constants } as any)
+    const result = _exprParser.evaluate(formula, { item, ...formulaSnapshot().constants } as any)
     // NaN means a field reference resolved to undefined (e.g. missing field in payload).
     // Treat as formula failure so we don't overwrite a valid client value with NaN,
     // which tedious rejects as "Invalid number" for numeric columns.
@@ -2015,11 +2024,12 @@ export async function applyFieldRules(
 
 // 60s TTL cache of inheritable field names per collection — keeps the read
 // path at zero extra queries for collections without inheritable fields.
-const inheritableFieldsCache = new Map<string, { fields: string[]; at: number }>()
+const inheritableFieldsCache = registerAppKeyed(new Map<string, { fields: string[]; at: number }>())
 const INHERITABLE_TTL_MS = 60_000
 
 async function getInheritableFields(collection: string): Promise<string[]> {
-  const hit = inheritableFieldsCache.get(collection)
+  const key = columnCacheKey(collection)
+  const hit = inheritableFieldsCache.get(key)
   if (hit && Date.now() - hit.at < INHERITABLE_TTL_MS) return hit.fields
   let fields: string[] = []
   try {
@@ -2030,7 +2040,7 @@ async function getInheritableFields(collection: string): Promise<string[]> {
     // Column may not exist before migration 059 — feature inactive.
     fields = []
   }
-  inheritableFieldsCache.set(collection, { fields, at: Date.now() })
+  inheritableFieldsCache.set(key, { fields, at: Date.now() })
   return fields
 }
 
@@ -2150,7 +2160,7 @@ async function applyInheritedFields(
 
 /** Cache of relations per collection to avoid redundant DB calls within a request */
 /** Per-process read-log throttle: one 'read' row per user/record/hour. */
-const readLogThrottle = new Map<string, number>()
+const readLogThrottle = registerAppKeyed(new Map<string, number>())
 /**
  * Relations per collection, filled during a read. List reads empty it as they start; a single-
  * record read does not, so a schema change (clearMetadataCache: a renamed table, a new or removed
@@ -2164,6 +2174,8 @@ function relationGeneration(): number {
     return 0 // a test double of collections.js without it
   }
 }
+/** Relations per collection, per app (Hub phase 6 Task 22): two apps of a shared deployment
+ *  hold the same collection names with different relations, so every key names the app. */
 class RelationCache extends Map<string, CMSRelation[]> {
   private gen = relationGeneration()
   private fresh(): void {
@@ -2172,16 +2184,25 @@ class RelationCache extends Map<string, CMSRelation[]> {
     this.gen = g
     super.clear()
   }
+  private k(key: string): string {
+    return `${getTenantId() ?? ''}\u0000${key}`
+  }
   override get(key: string): CMSRelation[] | undefined {
     this.fresh()
-    return super.get(key)
+    return super.get(this.k(key))
   }
   override has(key: string): boolean {
     this.fresh()
-    return super.has(key)
+    return super.has(this.k(key))
+  }
+  override set(key: string, value: CMSRelation[]): this {
+    return super.set(this.k(key), value)
+  }
+  override delete(key: string): boolean {
+    return super.delete(this.k(key))
   }
 }
-const relCache = new RelationCache()
+const relCache = registerAppKeyed(new RelationCache())
 
 /** A collection's relations, minus any whose table (a junction, a related
  *  collection) does not exist — nivaro_relations is a claim, not truth. A
@@ -2205,7 +2226,7 @@ async function getRelations(collection: string): Promise<CMSRelation[]> {
 
 /** `<tenant>:<collection>` → to-many alias fields whose relation runs through
  *  a table that does not exist (getRelations dropped it). */
-const unbuiltAliases = new Map<string, Set<string>>()
+const unbuiltAliases = registerAppKeyed(new Map<string, Set<string>>())
 
 /** A requested field list minus aliases whose relation has no table: such a
  *  field reads as absent rather than refusing the read as an unknown field. */
@@ -6258,7 +6279,7 @@ export async function readOne(
   // drown the log), throttled to one row per user/record/hour, and strictly
   // fire-and-forget — visibility must never slow the read it observes.
   if ((col as { read_logging?: boolean | number }).read_logging) {
-    const throttleKey = `read:${collection}:${id}:${user?.id}`
+    const throttleKey = `${getTenantId() ?? ''}:read:${collection}:${id}:${user?.id}`
     const now = Date.now()
     const seenUntil = readLogThrottle.get(throttleKey)
     if (!seenUntil || seenUntil < now) {

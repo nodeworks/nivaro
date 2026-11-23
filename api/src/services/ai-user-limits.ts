@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { registerAppKeyed } from './app-forget.js'
 import { currentTraceMeta } from './request-trace.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
@@ -55,9 +56,11 @@ export class AiUserLimitError extends Error {
   }
 }
 
-const calls = new Map<string, number[]>()
-const tokens = new Map<string, { day: string; at: number; base: number; local: number }>()
-const inflight = new Map<string, Promise<number>>()
+const calls = registerAppKeyed(new Map<string, number[]>())
+const tokens = registerAppKeyed(
+  new Map<string, { day: string; at: number; base: number; local: number }>()
+)
+const inflight = registerAppKeyed(new Map<string, Promise<number>>())
 
 const keyFor = (userId: string) => `${currentTenantKey()}|${userId.toUpperCase()}`
 const dayOf = (d: Date) => d.toISOString().slice(0, 10)
@@ -151,7 +154,7 @@ export function tokensOf(res: unknown): number {
 
 // ─── per-person slots (one feature, a few at once) ───────────────────────────
 
-const slots = new Map<string, number>()
+const slots = registerAppKeyed(new Map<string, number>())
 
 /**
  * Take one of `max` concurrent slots for (feature, person). Returns the
@@ -172,7 +175,7 @@ export function takeUserSlot(feature: string, userId: string, max = 1): (() => v
   }
 }
 
-const featureWindows = new Map<string, number[]>()
+const featureWindows = registerAppKeyed(new Map<string, number[]>())
 
 /** A per-person per-feature minute window (e.g. briefs: 10 a minute). True = allowed. */
 export function allowUserFeatureCall(

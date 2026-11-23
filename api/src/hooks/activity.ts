@@ -1,8 +1,11 @@
 import { db } from '../db/index.js'
 import { logActivity } from '../services/activity.js'
-import { deferEffect } from '../services/unit-of-work.js'
+import { registerAppKeyed } from '../services/app-forget.js'
+import { dropAppEntries } from '../services/app-keyed.js'
 import { originForWrite } from '../services/note-authorship.js'
 import { computeDelta, writeRevision } from '../services/revisions.js'
+import { currentTenantKey } from '../services/tenant-rooms.js'
+import { deferEffect } from '../services/unit-of-work.js'
 import { fireWebhooks } from '../services/webhook-dispatch.js'
 import { hooks } from './registry.js'
 
@@ -23,12 +26,15 @@ import { hooks } from './registry.js'
 type AuditLevel = 'all' | 'activity' | 'none'
 
 const CACHE_TTL_MS = 60_000
-const levelCache = new Map<string, { level: AuditLevel; at: number }>()
+// Keyed per app (tenant + collection): one shared-deployment process serves many apps, and two
+// apps may name a collection alike with different audit levels.
+const levelCache = registerAppKeyed(new Map<string, { level: AuditLevel; at: number }>())
+const levelKey = (collection: string) => `${currentTenantKey()}\u0000${collection}`
 
-/** Drop cached audit levels — call after a collection's accountability changes. */
+/** Drop cached audit levels — call after a collection's accountability changes. Inside an app
+ *  that app's; outside any app (a cache reset, another process's change) every app's. */
 export function clearAccountabilityCache(collection?: string): void {
-  if (collection) levelCache.delete(collection)
-  else levelCache.clear()
+  dropAppEntries(levelCache, collection)
 }
 
 /** How much history a collection keeps: all (activity + revision), activity, none. */
@@ -37,7 +43,8 @@ export async function auditLevelOf(collection: string): Promise<AuditLevel> {
 }
 
 async function auditLevel(collection: string): Promise<AuditLevel> {
-  const hit = levelCache.get(collection)
+  const key = levelKey(collection)
+  const hit = levelCache.get(key)
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.level
   let level: AuditLevel = 'all'
   try {
@@ -55,7 +62,7 @@ async function auditLevel(collection: string): Promise<AuditLevel> {
   } catch {
     level = 'all'
   }
-  levelCache.set(collection, { level, at: Date.now() })
+  levelCache.set(key, { level, at: Date.now() })
   return level
 }
 
@@ -77,7 +84,9 @@ export function registerActivityHooks() {
     const origin = originForWrite(ctx.user, ctx.changeReason)
     const meta = { origin, changed_fields: [] as string[] }
     if (level === 'none') {
-      await deferEffect('webhooks:create', () => fireWebhooks(ctx.collection, 'create', ctx.result, meta))
+      await deferEffect('webhooks:create', () =>
+        fireWebhooks(ctx.collection, 'create', ctx.result, meta)
+      )
       return
     }
     const activityId = await logActivity({
@@ -100,7 +109,9 @@ export function registerActivityHooks() {
         delta: null
       })
     }
-    await deferEffect('webhooks:create', () => fireWebhooks(ctx.collection, 'create', ctx.result, meta))
+    await deferEffect('webhooks:create', () =>
+      fireWebhooks(ctx.collection, 'create', ctx.result, meta)
+    )
   })
 
   hooks.after('*', 'update', async (ctx) => {
@@ -113,7 +124,9 @@ export function registerActivityHooks() {
       : null
     const meta = { origin, changed_fields: changedFieldNames(delta) }
     if (level === 'none') {
-      await deferEffect('webhooks:update', () => fireWebhooks(ctx.collection, 'update', ctx.result, meta))
+      await deferEffect('webhooks:update', () =>
+        fireWebhooks(ctx.collection, 'update', ctx.result, meta)
+      )
       return
     }
     const activityId = await logActivity({
@@ -135,7 +148,9 @@ export function registerActivityHooks() {
         delta
       })
     }
-    await deferEffect('webhooks:update', () => fireWebhooks(ctx.collection, 'update', ctx.result, meta))
+    await deferEffect('webhooks:update', () =>
+      fireWebhooks(ctx.collection, 'update', ctx.result, meta)
+    )
   })
 
   hooks.after('*', 'delete', async (ctx) => {
@@ -143,7 +158,9 @@ export function registerActivityHooks() {
     const level = await auditLevel(ctx.collection)
     const meta = { origin: originForWrite(ctx.user, null), changed_fields: [] as string[] }
     if (level === 'none') {
-      await deferEffect('webhooks:delete', () => fireWebhooks(ctx.collection, 'delete', ctx.previousData, meta))
+      await deferEffect('webhooks:delete', () =>
+        fireWebhooks(ctx.collection, 'delete', ctx.previousData, meta)
+      )
       return
     }
     const activityId = await logActivity({
@@ -163,6 +180,8 @@ export function registerActivityHooks() {
         delta: null
       })
     }
-    await deferEffect('webhooks:delete', () => fireWebhooks(ctx.collection, 'delete', ctx.previousData, meta))
+    await deferEffect('webhooks:delete', () =>
+      fireWebhooks(ctx.collection, 'delete', ctx.previousData, meta)
+    )
   })
 }

@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { registerAppKeyed } from './app-forget.js'
 import { type ClientVersion, judgeable } from './client-version.js'
 import type { BuildJudge } from './client-versions-cluster.js'
 import { DURABLE_RETENTION_HOURS } from './event-journal-store.js'
@@ -66,7 +67,7 @@ export function effectiveIdleReload(stored: IdleReloadSettings): IdleReloadSetti
 }
 
 // ── Storage (30 s cache per tenant; the PATCH route busts it) ─────────────────
-const cache = new Map<string, { at: number; value: IdleReloadSettings }>()
+const cache = registerAppKeyed(new Map<string, { at: number; value: IdleReloadSettings }>())
 
 export function bustIdleReloadSettingsCache(): void {
   cache.clear()

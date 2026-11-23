@@ -35,7 +35,8 @@ import {
   saveStackSettings,
   validateStackSettings
 } from '../services/hub/docker/stack-settings.js'
-import { getDriver } from '../services/hub/drivers.js'
+import { getDriver, placedOnShared, SHARED_PLACEMENT_MESSAGE } from '../services/hub/drivers.js'
+import { moveOpenRefusal } from '../services/hub/move-open.js'
 import { markNameServing } from '../services/hub/name-check.js'
 import { type LockHolder, lockHolderRefusal, PromotionError } from '../services/hub/promote-lock.js'
 import { startStackApply } from '../services/hub/promote-run.js'
@@ -73,8 +74,16 @@ function fail(reply: FastifyReply, status: number, code: string, error: string) 
 const notFound = (reply: FastifyReply) => fail(reply, 404, 'NOT_FOUND', 'Not found')
 const adminOnly = (reply: FastifyReply) =>
   fail(reply, 403, 'ADMIN_ONLY', 'Only a Hub administrator may do this')
-const notDocker = (reply: FastifyReply) =>
-  fail(reply, 409, 'NOT_DOCKER', 'This environment is not deployed through a Docker driver')
+/**
+ * Not deployed through a Docker driver: 409 NOT_DOCKER — or, phase 6 (Decision 17), 409
+ * SHARED_PLACEMENT for an environment placed on a shared deployment (its stack is the
+ * deployment's).
+ */
+async function notDocker(reply: FastifyReply, envId: number) {
+  if (await placedOnShared(envId))
+    return fail(reply, 409, 'SHARED_PLACEMENT', SHARED_PLACEMENT_MESSAGE)
+  return fail(reply, 409, 'NOT_DOCKER', 'This environment is not deployed through a Docker driver')
+}
 
 function userId(req: FastifyRequest): string {
   return String(req.user?.id ?? '')
@@ -433,7 +442,7 @@ export function hubDockerRoutes(app: FastifyInstance) {
     if (!row) return notFound(reply)
     const envId = Number(row.id)
     const target = await dockerTargetOf(envId)
-    if (!target) return notDocker(reply)
+    if (!target) return notDocker(reply, envId)
     const config = target.driver.config
     const env = environmentFromRow(row)
     let status: StackStatus | null = null
@@ -520,7 +529,7 @@ export function hubDockerRoutes(app: FastifyInstance) {
       if (!row) return notFound(reply)
       if (!req.isAdmin) return adminOnly(reply)
       const envId = Number(row.id)
-      if (!(await dockerTargetOf(envId))) return notDocker(reply)
+      if (!(await dockerTargetOf(envId))) return notDocker(reply, envId)
       return { data: settingsAnswer(envId, await readStackSettings(envId), row) }
     }
   )
@@ -534,7 +543,7 @@ export function hubDockerRoutes(app: FastifyInstance) {
       if (!req.isAdmin) return adminOnly(reply)
       const envId = Number(row.id)
       const target = await dockerTargetOf(envId)
-      if (!target) return notDocker(reply)
+      if (!target) return notDocker(reply, envId)
       const sent = body(req)
       const existing = await readStackSettings(envId)
       const env = environmentFromRow(row) as HubEnvironmentRow
@@ -589,12 +598,17 @@ export function hubDockerRoutes(app: FastifyInstance) {
       if (!row) return notFound(reply)
       const envId = Number(row.id)
       const target = await dockerTargetOf(envId)
-      if (!target) return notDocker(reply)
+      if (!target) return notDocker(reply, envId)
       const key = String(row.key)
       if (body(req).confirm !== key)
         return fail(reply, 400, 'CONFIRM_REQUIRED', `Type the environment key (${key}) to restart`)
       const name = target.stackName
       if (!name) return fail(reply, 409, 'NO_STACK_NAME', 'The placement names no swarm stack')
+      // Final review moves I-2 (P6-37): a restart re-renders the stack with the names a move
+      // (an interrupted one holds no lock) may have taken off it. The move's own stack work
+      // goes through prepareStackSpec + the agent, never this route.
+      const open = await moveOpenRefusal({ envIds: [envId] })
+      if (open) return fail(reply, open.status, open.code, open.message)
       try {
         const done = await withEnvironmentLock(envId, async (): Promise<RestartOutcome> => {
           // Ruling P4-16: never rebuilt from an inspect — the spec the stack runs, rendered fresh
@@ -662,7 +676,7 @@ export function hubDockerRoutes(app: FastifyInstance) {
     if (!row) return notFound(reply)
     const envId = Number(row.id)
     const target = await dockerTargetOf(envId)
-    if (!target) return notDocker(reply)
+    if (!target) return notDocker(reply, envId)
     const key = String(row.key)
     if (body(req).confirm !== key)
       return fail(reply, 400, 'CONFIRM_REQUIRED', `Type the environment key (${key}) to apply`)
@@ -697,7 +711,7 @@ export function hubDockerRoutes(app: FastifyInstance) {
     if (!req.isAdmin) return adminOnly(reply)
     const envId = Number(row.id)
     const target = await dockerTargetOf(envId)
-    if (!target) return notDocker(reply)
+    if (!target) return notDocker(reply, envId)
     const name = target.stackName
     if (!name) return fail(reply, 409, 'NO_STACK_NAME', 'The placement names no swarm stack')
     const b = body(req)
@@ -711,6 +725,12 @@ export function hubDockerRoutes(app: FastifyInstance) {
         'CONFIRM_REQUIRED',
         `Type "delete ${name} data" to remove the stack's volumes too`
       )
+    // Re-review FW1-M-1: an open move may still copy this stack's uploads (files_delta) —
+    // its volumes stay. A plain remove stays allowed (a halted move's checklist asks for it).
+    if (removeVolumes) {
+      const open = await moveOpenRefusal({ envIds: [envId] })
+      if (open) return fail(reply, open.status, open.code, open.message)
+    }
     try {
       // Its own hold on the environment's promotion lock: no promotion starts while the
       // stack is being taken down, and none is running when it starts.
@@ -758,7 +778,7 @@ export function hubDockerRoutes(app: FastifyInstance) {
       const row = await readableEnvironment(req)
       if (!row) return notFound(reply)
       const envId = Number(row.id)
-      if (!(await dockerTargetOf(envId))) return notDocker(reply)
+      if (!(await dockerTargetOf(envId))) return notDocker(reply, envId)
       // Owners only while the environment waits for its name; admins any time.
       if (!req.isAdmin && row.status !== 'waiting_for_name')
         return fail(

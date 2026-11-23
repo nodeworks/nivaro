@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { db } from '../db/index.js'
+import { registerAppKeyed } from './app-forget.js'
 import {
   BlockError,
   type BlockGroup,
@@ -255,7 +256,7 @@ export function rebaseEdited(
 // ─── Store ──────────────────────────────────────────────────────────────────
 
 // Per tenant (cloud): one tenant may run the migration before another.
-const ready = new Map<string, true>()
+const ready = registerAppKeyed(new Map<string, true>())
 
 /** Is migration 508 there? A database without it simply has no links. */
 export async function linksReady(): Promise<boolean> {

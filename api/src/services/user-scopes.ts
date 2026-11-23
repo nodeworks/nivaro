@@ -1,6 +1,7 @@
 import { infoSelect, infoTables } from '../db/dialect/users-ai-config.js'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { appBox, appMap } from './app-state.js'
 import { whereInList } from './db-batch.js'
 import { cachedAccess, onPermissionCacheReset } from './permission-cache.js'
 import { timeAccess, timeAccessSync } from './request-trace.js'
@@ -72,16 +73,16 @@ const TTL = 60_000
  *  fill whose read straddled a reset is answered but not kept. */
 let resetGen = 0
 /** The same, for one person's scope rows (a reset for one person leaves the rest alone). */
-const userResetGen = new Map<string, number>()
+const userResetGen = appMap<string, number>()
 
-let dimCache: { at: number; rows: ScopeDimension[] } | null = null
+const dimCache = appBox<{ at: number; rows: ScopeDimension[] } | null>(() => null)
 export function bustScopeDimensionCache() {
-  dimCache = null
+  dimCache.value = null
   pathCache.clear()
 }
 
 export async function listScopeDimensions(activeOnly = true): Promise<ScopeDimension[]> {
-  if (!dimCache || Date.now() - dimCache.at > TTL) {
+  if (!dimCache.value || Date.now() - dimCache.value.at > TTL) {
     const g0 = resetGen
     const rows = (await db('nivaro_scope_dimensions').orderBy('name')) as Array<
       Record<string, unknown>
@@ -101,13 +102,13 @@ export async function listScopeDimensions(activeOnly = true): Promise<ScopeDimen
         is_active: !!r.is_active
       }))
     }
-    if (g0 === resetGen) dimCache = fresh
+    if (g0 === resetGen) dimCache.value = fresh
     return activeOnly ? fresh.rows.filter((d) => d.is_active) : fresh.rows
   }
-  return activeOnly ? dimCache.rows.filter((d) => d.is_active) : dimCache.rows
+  return activeOnly ? dimCache.value.rows.filter((d) => d.is_active) : dimCache.value.rows
 }
 
-const userScopeCache = new Map<string, { at: number; rows: UserScopeRow[] }>()
+const userScopeCache = appMap<string, { at: number; rows: UserScopeRow[] }>()
 export function bustUserScopeCache(userId?: string) {
   if (userId) userScopeCache.delete(userId.toLowerCase())
   else userScopeCache.clear()
@@ -171,10 +172,10 @@ interface Edge {
   hop: ScopeHop
 }
 
-let adjCache: { at: number; adj: Map<string, Edge[]> } | null = null
+const adjCache = appBox<{ at: number; adj: Map<string, Edge[]> } | null>(() => null)
 
 async function getAdjacency(): Promise<Map<string, Edge[]>> {
-  if (adjCache && Date.now() - adjCache.at < TTL) return adjCache.adj
+  if (adjCache.value && Date.now() - adjCache.value.at < TTL) return adjCache.value.adj
   const g0 = resetGen
   const [rels, tableRows] = await Promise.all([
     db('nivaro_relations').select(
@@ -309,14 +310,14 @@ async function getAdjacency(): Promise<Map<string, Edge[]>> {
       `[user-scopes] ignoring relations to ${missing.size} non-existent table(s): ${[...missing].sort().join(', ')}`
     )
   }
-  if (g0 === resetGen) adjCache = { at: Date.now(), adj }
+  if (g0 === resetGen) adjCache.value = { at: Date.now(), adj }
   return adj
 }
 
-const pathCache = new Map<string, ScopeHop[] | null>()
+const pathCache = appMap<string, ScopeHop[] | null>()
 export function bustScopePathCache() {
   pathCache.clear()
-  adjCache = null
+  adjCache.value = null
 }
 
 const MAX_DEPTH = 3
@@ -649,7 +650,7 @@ async function segmentsToHops(collection: string, segments: string[]): Promise<S
 
 // ── Enforcement (restrict mode) ──────────────────────────────────────────────
 
-const roleAdminCache = new Map<string, { at: number; admin: boolean }>()
+const roleAdminCache = appMap<string, { at: number; admin: boolean }>()
 
 export async function isAdminRole(roleId: string | null | undefined): Promise<boolean> {
   if (!roleId) return false

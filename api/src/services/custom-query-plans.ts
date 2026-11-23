@@ -1,3 +1,4 @@
+import { appMap } from './app-state.js'
 // api/src/services/custom-query-plans.ts
 /**
  * #90 — the plan captured for a SLOW run of a saved custom query (per process, in memory). The
@@ -16,7 +17,7 @@ export interface CapturedPlan {
   }
 }
 
-const capturedPlans = new Map<number, CapturedPlan>()
+const capturedPlans = appMap<number, CapturedPlan>()
 
 /** Keep (replace) the plan of query `id`'s latest slow run. */
 export function rememberCapturedPlan(id: number, plan: CapturedPlan): void {

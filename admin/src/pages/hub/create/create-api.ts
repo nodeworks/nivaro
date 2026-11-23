@@ -41,6 +41,8 @@ export interface HubTargetConfig {
   scheme: 'https' | 'http'
   port: number | null
   cert_note: string | null
+  /** P6-35: the Traefik on that swarm; a created app gets one network label from it. Absent = 3. */
+  traefik_version?: 2 | 3
 }
 
 export interface HubTarget {
@@ -657,7 +659,12 @@ export const CREATE_COPY: Record<string, Copy> = {
     hint: 'Set ENCRYPTION_KEY on the Hub server, restart it, then try again.'
   },
   HUB_SECRET_NOT_SEALED: { title: "A saved secret can't be read", hint: 'Enter it again.' },
-  HUB_SECRET_UNREADABLE: { title: "A saved secret can't be read", hint: 'Enter it again.' }
+  HUB_SECRET_UNREADABLE: { title: "A saved secret can't be read", hint: 'Enter it again.' },
+  // Phase 6 (Task 4): creation refuses an environment placed on a shared deployment.
+  SHARED_PLACEMENT: {
+    title: 'This environment runs on a shared deployment',
+    hint: 'A shared deployment runs the app for it, so there is nothing to create. Place it with Place on shared deployment… instead.'
+  }
 }
 
 /**

@@ -16,9 +16,16 @@
  * not. Integrations must stay paused while the database is being converted.
  */
 import type { FastifyReply, FastifyRequest } from 'fastify'
+import { tenantSource } from './deployment-mode.js'
+import {
+  isHubLinkFirstAdmin,
+  isRetiredSync,
+  retiredExemptPath,
+  retiredRefusalBody
+} from './hub-link/retire.js'
 
 /** Paths whose writes stay open during maintenance (sign-in, telemetry heartbeats, …). */
-export function maintenanceExemptPath(url: string): boolean {
+export function maintenanceExemptPath(url: string, routeUrl?: string | null): boolean {
   return (
     url.startsWith('/api/auth') ||
     // Settings (the maintenance switch itself) are NOT exempt by path (REVIEW-R5 L2): an
@@ -38,11 +45,22 @@ export function maintenanceExemptPath(url: string): boolean {
     // The render peer (#2789) renders for another process's request, which
     // that process already judged; it carries a bearer, never a person.
     url.startsWith('/api/internal/render/') ||
+    // A Hub's deployment link (phase 6, routes/hub-deployment-link.ts): a bearer, never a person,
+    // on no app; its first-admin call checks the app's own switch inside that app.
+    (url.startsWith('/api/hub-deployment/') && tenantSource() === 'hub') ||
     // The Hub's OpenID provider (phase 7): apps sign people in through it during maintenance.
     url.startsWith('/api/hub/oidc/') ||
     // Apps report sign-ins to the Hub's switcher (and ask it, a read carrying the identity in a
     // body) with their hub token, never a person.
     /^\/api\/hub\/app-link\/(signins|switcher)(\?|$)/.test(url) ||
+    // Hub phase 6: the Hub's own calls over the hub link (HUB_TOKEN bearer, never a person) —
+    // switching the strict maintenance of a move off again, retire, file tickets — and the
+    // file transfer a move's target pulls from. The first administrator stays frozen (a person
+    // account is written there).
+    // judged on the matched route or the decoded path, so `first%2Dadmin` or `//first-admin`
+    // stays frozen too (services/hub-link/retire.ts isHubLinkFirstAdmin).
+    (url.startsWith('/api/hub-link/') && !isHubLinkFirstAdmin(url, routeUrl)) ||
+    url.startsWith('/api/hub-transfer/') ||
     // Teams calls the bot with a Connector JWT, never a person; the route judges its own
     // activities (message/install stay answerable, invokes say "in maintenance" themselves).
     url.startsWith('/api/teams/messages') ||
@@ -121,14 +139,17 @@ export async function maintenanceRefusal(
   )
   const maint = await maintenanceState()
   if (!maint.on) return false
-  // An app-level hook runs BEFORE the routes' own authenticate preHandler, so
-  // identity isn't resolved yet — resolve it here (only while maintenance is
-  // actually on) so a signed-in administrator stays exempt.
-  if (!req.user) {
-    const { authenticate } = await import('../middleware/authenticate.js')
-    await authenticate(req, reply).catch(() => {})
+  // Hub phase 6: the Hub's strict freeze (a move) exempts nobody, administrators included.
+  if (!maint.strict) {
+    // An app-level hook runs BEFORE the routes' own authenticate preHandler, so
+    // identity isn't resolved yet — resolve it here (only while maintenance is
+    // actually on) so a signed-in administrator stays exempt.
+    if (!req.user) {
+      const { authenticate } = await import('../middleware/authenticate.js')
+      await authenticate(req, reply).catch(() => {})
+    }
+    if (maintenanceExemptCaller(req)) return false
   }
-  if (maintenanceExemptCaller(req)) return false
   const message = `${(maint.message || MAINTENANCE_DEFAULT_MESSAGE).trim()} ${MAINTENANCE_EXPLAINER}`
   reply.code(503).header('Retry-After', '300')
   if (opts.graphql) {
@@ -144,9 +165,35 @@ export async function maintenanceRefusal(
   return true
 }
 
+/**
+ * Hub phase 6 (Decision 10): a retired app (moved away by the Hub) answers 503 APP_MOVED on
+ * every method and path except the hub link, the file transfer and the probes (APP_STATE_UNKNOWN
+ * while its Redis has not answered since boot). Returns true when it answered. Used by the web
+ * root preHandler and the realtime process's onRequest (realtime-server.ts).
+ */
+export function retiredRefusal(req: FastifyRequest, reply: FastifyReply): boolean {
+  if (!isRetiredSync()) return false
+  if (req.method === 'OPTIONS' || retiredExemptPath(req.url, req.routeOptions?.url)) return false
+  reply.code(503).header('Retry-After', '60').header('Cache-Control', 'no-store')
+  void reply.send(retiredRefusalBody())
+  return true
+}
+
+/**
+ * The root onRequest (server.ts, ruling M17): a retired app refuses before routing has any say,
+ * so a path with no route (the SPA fallback, a 404) and a route whose own onRequest would answer
+ * first (a bearer check → 401) both answer APP_MOVED too. The preHandler below keeps the same
+ * check for an app built without this hook (tests, the realtime process has its own).
+ */
+export async function retiredRequestHook(req: FastifyRequest, reply: FastifyReply) {
+  if (retiredRefusal(req, reply)) return reply
+}
+
 /** The root preHandler (server.ts). */
 export async function maintenanceFreezeHook(req: FastifyRequest, reply: FastifyReply) {
+  // Before the read early return below: a retired app refuses reads too (ruling M17).
+  if (retiredRefusal(req, reply)) return reply
   if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return
-  if (maintenanceExemptPath(req.url)) return
+  if (maintenanceExemptPath(req.url, req.routeOptions?.url)) return
   if (await maintenanceRefusal(req, reply)) return reply
 }

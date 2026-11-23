@@ -4,6 +4,7 @@ import { db } from '../db/index.js'
 import { tenantOrigin } from '../db/tenant-context.js'
 import { mobileClients, mobileSignInEnabled } from '../lib/mobile-clients.js'
 import { NIVARO_VERSION } from '../version.js'
+import { registerAppKeyed } from './app-forget.js'
 import { appEnvironment } from './app-info-environment.js'
 import { chaosAllowed } from './chaos/gate.js'
 import { isMultiTenant, isNivaroCloud } from './deployment-mode.js'
@@ -16,7 +17,7 @@ import { currentTenantKey } from './tenant-rooms.js'
 export interface AppInfo {
   name: string
   /** Where this instance is reached: adminBaseUrl() self-hosted, the tenant's canonical (or
-   *  verified) origin in cloud. */
+   *  verified) origin in cloud, the app's own origin on a Hub shared deployment. */
   origin: string
   color: string | null
   logo_url: string | null
@@ -72,7 +73,7 @@ async function readBranding(): Promise<{
 /** Push mode per tenant for a short while: the probe is anonymous and the relay key a read. */
 const PUSH_MODE_TTL_MS = 30_000
 const PUSH_MODE_MAX = 1000
-const pushModes = new Map<string, { at: number; mode: AppInfo['push']['mode'] }>()
+const pushModes = registerAppKeyed(new Map<string, { at: number; mode: AppInfo['push']['mode'] }>())
 
 async function cachedPushMode(): Promise<AppInfo['push']['mode']> {
   const key = currentTenantKey()
@@ -103,13 +104,15 @@ export async function buildAppInfo(opts: { block?: AppInfoBlock | null } = {}): 
   // A blocked tenant has no database to read: the hook hands over its name.
   const brand = block ? { name: block.name, color: null, logo: null } : await readBranding()
   const base = adminBaseUrl() ?? ''
-  const origin = isNivaroCloud() ? (block?.origin ?? tenantOrigin() ?? '') : base
+  // Multi-tenant (Nivaro Cloud, a Hub shared deployment): the app's own origin, never the
+  // shared process's address.
+  const origin = isMultiTenant() ? (block?.origin ?? tenantOrigin() ?? '') : base
   return {
     name: brand.name ?? 'Nivaro',
     origin,
     color: brand.color,
-    // Cloud: on the tenant's own origin, never the shared process's address.
-    logo_url: brand.logo ? `${isNivaroCloud() ? origin : base}/api/files/${brand.logo}` : null,
+    // Multi-tenant: on the tenant's own origin, never the shared process's address.
+    logo_url: brand.logo ? `${isMultiTenant() ? origin : base}/api/files/${brand.logo}` : null,
     version: NIVARO_VERSION,
     cloud: isNivaroCloud(),
     environment: appEnvironment(),

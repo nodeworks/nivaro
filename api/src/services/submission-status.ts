@@ -2,7 +2,9 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypt
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { registerAppKeyed } from './app-forget.js'
 import { publicLinkBase } from './instance-links.js'
+import { appBoundSigInput } from './tenancy/credential-binding.js'
 import { currentTenantKey } from './tenant-rooms.js'
 import { overWindowLimit } from './windowed-limit.js'
 
@@ -116,7 +118,11 @@ function statusKey(): Buffer {
   return createHmac('sha256', config.SESSION_SECRET).update('nivaro:submission-status:v1').digest()
 }
 
-const sig = (body: string) => createHmac('sha256', statusKey()).update(body).digest()
+// On a Hub shared deployment the app is part of the signed input: its apps share one
+// SESSION_SECRET and are often copies (same submission ids, same stored hashes), so a link made
+// for app A must not verify in app B (Hub phase 6 Task 12). Unchanged elsewhere.
+const sig = (body: string) =>
+  createHmac('sha256', statusKey()).update(appBoundSigInput(body)).digest()
 
 export const hashStatusToken = (token: string) =>
   createHash('sha256').update(token, 'utf8').digest('hex')
@@ -406,7 +412,7 @@ export const FREE_MAIL_DOMAINS = new Set([
 ])
 
 /** Per tenant ('' = self-hosted): every cloud tenant has its own sending domains. */
-const ownDomainsCache = new Map<string, { at: number; value: Set<string> }>()
+const ownDomainsCache = registerAppKeyed(new Map<string, { at: number; value: Set<string> }>())
 
 /** The mail domains this instance (tenant) sends from (MAIL_FROM, Settings → Email "from"),
  *  free-mail providers left out. */

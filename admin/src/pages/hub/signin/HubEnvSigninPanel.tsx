@@ -7,7 +7,14 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import { hubKeys, hubToast } from '../hub-api'
-import { dangerArmed, ghostButton, SectionCard, smallButton } from '../hub-parts'
+import {
+  dangerArmed,
+  ghostButton,
+  NO_RECORD_ATTRS,
+  NO_RECORD_CLASS,
+  SectionCard,
+  smallButton
+} from '../hub-parts'
 import {
   createEnvClient,
   type EnvLines,
@@ -23,7 +30,7 @@ import {
 type Mode = 'direct' | 'hub'
 
 /** One minted secret with the lines an app sets; lives only in the panel's state. */
-interface Minted {
+export interface Minted {
   secret: string
   lines: EnvLines
   clientId: string
@@ -291,7 +298,7 @@ export function HubEnvSigninPanel({ env, mode }: { env: { id: number; key: strin
 }
 
 /** The env lines and the secret, once. Component state only — never cached, stored or in a URL. */
-function OneTimeSecret({ minted, onClose }: { minted: Minted; onClose: () => void }) {
+export function OneTimeSecret({ minted, onClose }: { minted: Minted; onClose: () => void }) {
   const text = envLinesText(minted.lines, minted.secret)
   const copy = async () => {
     try {
@@ -304,7 +311,9 @@ function OneTimeSecret({ minted, onClose }: { minted: Minted; onClose: () => voi
   return (
     <div
       role='status'
-      className='rounded-md border border-amber-200 bg-amber-50 p-3 dark:border-amber-900/60 dark:bg-amber-950/40'
+      // Never recorded: replay and screenshots get a blank box in its place (final review I-1).
+      {...NO_RECORD_ATTRS}
+      className={`${NO_RECORD_CLASS} rounded-md border border-amber-200 bg-amber-50 p-3 dark:border-amber-900/60 dark:bg-amber-950/40`}
     >
       <div className='flex flex-wrap items-center gap-2'>
         <p className='m-0 flex-1 text-[12px] font-medium text-amber-900 dark:text-amber-200'>

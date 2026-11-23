@@ -5,9 +5,11 @@ import { getOrCreateTenantPool, runWithTenantDb } from '../db/tenant-context.js'
 import { isAppInfoPath } from '../lib/app-info-path.js'
 import { trustedRequestHost } from '../lib/trust-proxy.js'
 import { isNivaroCloud } from '../services/deployment-mode.js'
+import { appReadyForRequests, nudgeAppMigrations } from '../services/tenancy/app-migrations.js'
 import { blockedPage, notReadyPage, unknownHostPage } from '../services/tenancy/blocked-page.js'
 import { getMetaDb } from '../services/tenancy/cloud-meta-source.js'
 import { getTenantRegistry } from '../services/tenancy/registry.js'
+import type { TenantRecord } from '../services/tenancy/types.js'
 
 export { getMetaDb }
 
@@ -24,6 +26,21 @@ const TENANT_FREE_PATHS = [
   '/admin/push-relay',
   '/admin/traffic-tenants'
 ]
+// A Hub shared deployment (phase 6) also frees its deployment link (the Hub calls it on the
+// deployment's own address, bearer-only, routes/hub-deployment-link.ts) and the file transfer
+// routes (the ticket decides the app, ruling R16). Never in Nivaro Cloud.
+const HUB_TENANT_FREE_PATHS = [
+  ...SHARED_TENANT_FREE_PATHS,
+  '/api/hub-deployment',
+  '/api/hub-transfer'
+]
+
+/** GET /api/version (B3): on a Hub shared deployment it answers for an app in maintenance or not
+ *  ready yet, so a move or an upgrade can verify the version before the app is released. */
+function isVersionProbe(req: FastifyRequest): boolean {
+  if (req.method !== 'GET' && req.method !== 'HEAD') return false
+  return req.url === '/api/version' || req.url.startsWith('/api/version?')
+}
 
 // ---------------------------------------------------------------------------
 // HTML error pages
@@ -817,6 +834,7 @@ type TenantResult =
       suspended: true
       origin: string
       row: { name: string; slug: string; status: string }
+      tenant: TenantRecord
     }
   | {
       found: true
@@ -824,6 +842,7 @@ type TenantResult =
       provisioning: true
       origin: string
       row: { name: string; slug: string }
+      tenant: TenantRecord
     }
   | {
       found: true
@@ -833,6 +852,8 @@ type TenantResult =
       slug: string
       tenantId: string
       origin: string
+      /** The app's name (the "getting ready" page names it). */
+      name: string
     }
 
 /**
@@ -845,6 +866,8 @@ export async function resolveReadyTenant(
 ): Promise<{ db: Knex; slug: string; tenantId: string; origin: string } | null> {
   const r = await resolveTenant(hostname, customHost)
   if (!r.found || r.suspended || r.provisioning) return null
+  // A Hub shared deployment: an app whose database is not migrated yet takes no socket either.
+  if (!appReadyForRequests(r.tenantId)) return null
   return { db: r.db, slug: r.slug, tenantId: r.tenantId, origin: r.origin }
 }
 
@@ -861,7 +884,8 @@ async function resolveTenant(hostname: string, customHost?: string | null): Prom
       suspended: false,
       provisioning: true,
       origin,
-      row: { name: tenant.name, slug: tenant.slug }
+      row: { name: tenant.name, slug: tenant.slug },
+      tenant
     }
   }
 
@@ -870,7 +894,8 @@ async function resolveTenant(hostname: string, customHost?: string | null): Prom
       found: true,
       suspended: true,
       origin,
-      row: { name: tenant.name, slug: tenant.slug, status: tenant.status }
+      row: { name: tenant.name, slug: tenant.slug, status: tenant.status },
+      tenant
     }
   }
 
@@ -881,7 +906,8 @@ async function resolveTenant(hostname: string, customHost?: string | null): Prom
     db: getOrCreateTenantPool(tenant.dbConnection, tenant.dbClient, tenant.poolMax ?? undefined),
     slug: tenant.slug,
     tenantId: tenant.id,
-    origin
+    origin,
+    name: tenant.name
   }
 }
 
@@ -930,7 +956,7 @@ export function tenantHook(req: FastifyRequest, reply: FastifyReply, done: (err?
     ? ((req.headers['x-tenant-custom-host'] as string | undefined) ?? null)
     : null
   // Tenant-free paths bypass resolution entirely
-  const freePaths = cloud ? TENANT_FREE_PATHS : SHARED_TENANT_FREE_PATHS
+  const freePaths = cloud ? TENANT_FREE_PATHS : HUB_TENANT_FREE_PATHS
   if (freePaths.some((p) => req.url === p || req.url.startsWith(p + '/'))) {
     return done()
   }
@@ -980,14 +1006,66 @@ export function tenantHook(req: FastifyRequest, reply: FastifyReply, done: (err?
         return
       }
 
-      // The phone app's probe answers on a blocked tenant (name + why) instead of a 503.
+      // A Hub shared deployment (ruling B3): GET /api/version still answers, inside the app, for
+      // an app in maintenance or not ready yet, so a move or an upgrade can verify it before
+      // release. Every other path of such an app stays 503; a suspended app answers nothing.
+      const versionTenant =
+        !cloud && isVersionProbe(req)
+          ? result.suspended
+            ? result.row.status === 'maintenance'
+              ? result.tenant
+              : null
+            : result.provisioning
+              ? result.tenant
+              : null
+          : null
+      if (versionTenant) {
+        const t = versionTenant
+        ;(req as unknown as { nvrTenantId?: string }).nvrTenantId = t.id || t.slug
+        runWithTenantDb(
+          getOrCreateTenantPool(t.dbConnection, t.dbClient, t.poolMax ?? undefined),
+          t.slug,
+          done,
+          t.id,
+          result.origin
+        )
+        return
+      }
+
+      // The phone app's probe answers on a blocked tenant (name + why) instead of a 503. A Hub
+      // shared deployment's app in maintenance (an update or a move) says maintenance, not
+      // suspended; Nivaro Cloud is unchanged.
       if ((result.suspended || result.provisioning) && isAppInfoPath(req.url)) {
         req.nvrTenantBlock = {
-          kind: result.suspended ? 'suspended' : 'provisioning',
+          kind: result.suspended
+            ? !cloud && result.row.status === 'maintenance'
+              ? 'maintenance'
+              : 'suspended'
+            : 'provisioning',
           name: result.row.name,
           origin: result.origin
         }
         done()
+        return
+      }
+
+      // A Hub shared deployment (phase 6): the Hub is updating or moving this app.
+      if (!cloud && result.suspended && result.row.status === 'maintenance') {
+        const { row } = result
+        reply.code(503).header('retry-after', '30').header('cache-control', 'no-store')
+        if (wantsHtml(req))
+          reply
+            .header('content-type', 'text/html; charset=utf-8')
+            .send(blockedPage(row.name, 'maintenance'))
+        else {
+          const message = `${row.name.trim() || 'This app'} is being updated. Try again in a few minutes.`
+          reply.send({
+            statusCode: 503,
+            error: 'App is being updated',
+            message,
+            code: 'APP_MAINTENANCE'
+          })
+        }
         return
       }
 
@@ -1020,6 +1098,31 @@ export function tenantHook(req: FastifyRequest, reply: FastifyReply, done: (err?
             status: 'provisioning'
           })
         }
+        return
+      }
+      // A Hub shared deployment (phase 6): the app's database is not migrated at this version yet
+      // (or its migration failed). Every path but GET /api/version answers "getting ready";
+      // the other apps keep serving (services/tenancy/app-migrations.ts).
+      if (!cloud && !appReadyForRequests(result.tenantId) && !isVersionProbe(req)) {
+        nudgeAppMigrations(result.tenantId)
+        const name = (result.name ?? '').trim() || 'This app'
+        if (isAppInfoPath(req.url)) {
+          req.nvrTenantBlock = { kind: 'provisioning', name, origin: result.origin }
+          done()
+          return
+        }
+        reply.code(503).header('retry-after', '15').header('cache-control', 'no-store')
+        if (wantsHtml(req))
+          reply
+            .header('content-type', 'text/html; charset=utf-8')
+            .send(blockedPage(name, 'provisioning'))
+        else
+          reply.send({
+            statusCode: 503,
+            error: 'App is getting ready',
+            message: `${name} is getting ready. Try again in a few minutes.`,
+            code: 'APP_NOT_READY'
+          })
         return
       }
       // The Traffic Map records a finished request into its tenant's store (#1132); onResponse

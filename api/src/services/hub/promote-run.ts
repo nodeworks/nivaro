@@ -9,6 +9,7 @@ import { hubDeploysKeys } from './deploys.js'
 import { type DockerStepOps, defaultDockerOps, type StackDeployed } from './docker/run-step.js'
 import { DriverMisconfiguredError, repositoryIdentity } from './drivers.js'
 import * as gitlab from './gitlab-write.js'
+import { moveOpenRefusal } from './move-open.js'
 import {
   currentVersionReader,
   gatherPlanInput,
@@ -28,6 +29,7 @@ import {
   isLiveHere,
   liveHereFor,
   markLive,
+  PROMOTION_KINDS,
   unmarkLive,
   withoutFreshHeartbeat
 } from './promote-heal.js'
@@ -993,6 +995,42 @@ export async function executePlan(
   }
 }
 
+/**
+ * Phase 6 (Task 16, Decision 9): deploy ONE component at `version` the way a promotion does — the
+ * pin write (an api step: the release commit merged in and the pin committed, or the pin straight
+ * on a branch that already holds the commit) and the deploy job, waited for, played when manual.
+ * A move deploys a GitLab dedicated target with it. It runs the step through `executePlan`
+ * unchanged (a one-step plan, kind `promote`), so it is the promotion's own code path, never a
+ * copy of it: a refusal, a cancel or a lost lock answers the same RunOutcome a promotion's would.
+ * Log lines go to `log` (scrubbed of any token the step opened, as every promotion line is).
+ */
+export async function deployComponentAt(
+  component: PromotionStep,
+  version: string,
+  ctx: Omit<RunContext, 'version' | 'kind'>,
+  log: (line: string, level?: 'info' | 'warn' | 'error') => void,
+  opts: { signal?: AbortSignal; deps?: ExecuteDeps } = {}
+): Promise<RunOutcome> {
+  const plan: PromotionPlan = {
+    ok: true,
+    blockers: [],
+    lines: [],
+    steps: [component],
+    plan_hash: ''
+  }
+  return executePlan(
+    plan,
+    { ...ctx, version, kind: 'promote' },
+    {
+      ...(opts.signal ? { signal: opts.signal } : {}),
+      ...(opts.deps ? { deps: opts.deps } : {}),
+      onEvent: (e) => {
+        if (e.kind === 'log') log(e.line, e.level)
+      }
+    }
+  )
+}
+
 // ── start / cancel / recover ─────────────────────────────────────────────────────────────────
 
 /** The final status write of a deploy row; answers how many rows it changed. */
@@ -1065,6 +1103,11 @@ export async function startPromotion(
     | { id: number; key: string; app_id: number }
     | undefined
   if (!env) throw new PromotionError('NOT_FOUND', 'Not found', 404)
+  // Final review moves I-2 (P6-37): promote, rollback and Apply now (startStackApply) all start
+  // here; an open move (an interrupted one holds no lock) refuses them. A move's own deploys use
+  // deployComponentAt, never this.
+  const open = await moveOpenRefusal({ envIds: [envId] })
+  if (open) throw new PromotionError(open.code, open.message, open.status)
   if (req.kind !== 'promote' && req.kind !== 'rollback')
     throw new PromotionError('BAD_KIND', 'kind must be promote or rollback')
   const apply = req.apply === true
@@ -1428,6 +1471,8 @@ export async function cancelPromotion(
 ): Promise<CancelResult> {
   const row = (await db(DEPLOYS)
     .where({ id: deployId })
+    // A move / shared mirror row is not a promotion (R8): cancelled through its own routes.
+    .whereIn('kind', PROMOTION_KINDS)
     .first('id', 'status', 'environment_id', 'step', 'plan', 'job_run_id', 'started_at')) as
     | {
         id: number
@@ -1508,8 +1553,9 @@ export async function recoverInterruptedPromotions(
 ): Promise<number> {
   const heal = healDeps(deps)
   // A fresh heartbeat = a runner alive in some process (its lock may be gone): left alone.
+  // Promotion rows only (R8): a move / shared mirror row is healed by its own runner.
   const rows = (await withoutFreshHeartbeat(
-    db(DEPLOYS).where({ status: 'running' }),
+    db(DEPLOYS).where({ status: 'running' }).whereIn('kind', PROMOTION_KINDS),
     heal.now?.()
   ).select('id', 'environment_id', 'step', 'plan', 'job_run_id', 'started_at')) as Array<{
     id: number
@@ -1552,6 +1598,8 @@ export function recoverOnceAtBoot(logger?: {
 
 // ── history reads (routes) ───────────────────────────────────────────────────────────────────
 
+const DEPLOY_KINDS: readonly HubDeployKind[] = ['promote', 'rollback', 'move', 'shared']
+
 export type HubDeployListRow = HubDeployRow & { started_by_name: string | null }
 
 function toDeployRow(r: Record<string, unknown>): HubDeployRow {
@@ -1560,7 +1608,10 @@ function toDeployRow(r: Record<string, unknown>): HubDeployRow {
     id: Number(r.id),
     app_id: Number(r.app_id),
     environment_id: Number(r.environment_id),
-    kind: r.kind === 'rollback' ? 'rollback' : 'promote',
+    // Phase 6: move / shared mirror rows keep their kind (history labels them).
+    kind: (DEPLOY_KINDS as readonly string[]).includes(String(r.kind))
+      ? (r.kind as HubDeployKind)
+      : 'promote',
     version: String(r.version),
     from_version: s(r.from_version),
     status: String(r.status) as HubDeployStatus,

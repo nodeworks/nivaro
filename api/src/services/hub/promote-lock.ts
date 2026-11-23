@@ -51,10 +51,30 @@ export function hubPromoteCancelKey(deployId: number | string): string {
  * Who holds an environment's lock (ruling X-6b): the lock value starts with it
  * (`<holder>:<uuid>`), so a refusal names the real holder. Creation legs, promotions (and Apply
  * now, a promotion run), Docker stack actions (restart, remove) and Hub deletes take the same
- * per-environment lock.
+ * per-environment lock. Phase 6: a move of the environment (`move`) and an upgrade of the shared
+ * deployment it is placed on (`shared`) take it too.
  */
-export type LockHolder = 'creation' | 'promotion' | 'stack' | 'delete'
-const HOLDERS: readonly LockHolder[] = ['creation', 'promotion', 'stack', 'delete']
+export type LockHolder =
+  | 'creation'
+  | 'promotion'
+  | 'stack'
+  | 'delete'
+  | 'move'
+  | 'shared'
+  // Phase 6: an app-key entry being checked and saved (seconds; routes/hub-shared.ts).
+  | 'app-key'
+  // Phase 6 (P6-32): a database record being attached to or detached from the environment.
+  | 'database'
+const HOLDERS: readonly LockHolder[] = [
+  'creation',
+  'promotion',
+  'stack',
+  'delete',
+  'move',
+  'shared',
+  'app-key',
+  'database'
+]
 
 const tokenFor = (holder: LockHolder | undefined) => `${holder ?? 'promotion'}:${randomUUID()}`
 
@@ -91,7 +111,41 @@ export function lockHolderRefusal(
       message:
         'A stack action (restart or remove) is running on this environment — wait for it to end.'
     }
+  if (holder === 'move')
+    return {
+      code: 'MOVE_RUNNING',
+      message: 'A move of this environment is running — wait for it to end or roll it back.'
+    }
+  if (holder === 'app-key')
+    return {
+      code: 'APP_KEY_BUSY',
+      message: "This environment's encryption key is being saved — try again in a moment."
+    }
+  if (holder === 'database')
+    return {
+      code: 'DATABASE_BUSY',
+      message:
+        "This environment's database record is being attached or detached — try again in a moment."
+    }
+  if (holder === 'shared')
+    return {
+      code: 'SHARED_UPGRADE_RUNNING',
+      message:
+        'The shared deployment this environment runs on is being upgraded — wait for it to end.'
+    }
   return fallback
+}
+
+/**
+ * A lock holder read that failed (Redis down): 503 LOCK_UNAVAILABLE. holder() throws this rather
+ * than answer null, which every caller reads as "nobody holds it".
+ */
+export function lockUnreadable(): PromotionError {
+  return new PromotionError(
+    'LOCK_UNAVAILABLE',
+    'The Hub cannot reach Redis to tell who holds this lock — try again shortly',
+    503
+  )
 }
 
 /** The slice of ioredis the lock needs. */
@@ -109,10 +163,18 @@ export interface PromoteLock {
    * `holder` is recorded in the lock value (default 'promotion').
    */
   take(envId: number, holder?: LockHolder): Promise<string | null>
-  /** Who holds the environment's lock now; null when no one, or it cannot be told. */
+  /**
+   * Who holds the environment's lock now; null when no one (or an older value that names no
+   * holder). A Redis error throws PromotionError LOCK_UNAVAILABLE (503): never read as free.
+   */
   holder?(envId: number): Promise<LockHolder | null>
   /** Extends the lock while `token` still holds it; false when it no longer does. */
   renew(envId: number, token: string): Promise<boolean>
+  /**
+   * Phase 6 (move run, R2-M-5): as renew, but a Redis error answers false (lost) instead of
+   * "held". Optional: a lock without it is renewed with renew.
+   */
+  renewStrict?(envId: number, token: string): Promise<boolean>
   /** Deletes the lock only while `token` still holds it. */
   release(envId: number, token: string): Promise<void>
   /** Someone holds the environment's lock; 'unknown' when it cannot be read (never stolen then). */
@@ -159,6 +221,17 @@ export function redisPromoteLock(redis: PromoteRedis): PromoteLock {
         return true // a Redis blink is not a lost lock; the next renewal tries again
       }
     },
+    async renewStrict(envId, token) {
+      try {
+        return (
+          Number(
+            await redis.eval(RENEW_SCRIPT, 1, hubPromoteLockKey(envId), token, LOCK_TTL_MS)
+          ) === 1
+        )
+      } catch {
+        return false
+      }
+    },
     async release(envId, token) {
       await Promise.resolve(redis.eval(RELEASE_SCRIPT, 1, hubPromoteLockKey(envId), token)).catch(
         () => undefined
@@ -172,11 +245,14 @@ export function redisPromoteLock(redis: PromoteRedis): PromoteLock {
       }
     },
     async holder(envId) {
+      let value: string | null
       try {
-        return holderOf(await redis.get(hubPromoteLockKey(envId)))
+        value = await redis.get(hubPromoteLockKey(envId))
       } catch {
-        return null
+        // Never null ("free"): a holder that cannot be read refuses (T15 round 2).
+        throw lockUnreadable()
       }
+      return holderOf(value)
     },
     async requestCancel(deployId) {
       await Promise.resolve(
@@ -244,4 +320,150 @@ export function appPromoteRedis(): PromoteRedis | null {
 export function defaultPromoteLock(): PromoteLock {
   const redis = appPromoteRedis()
   return redis ? redisPromoteLock(redis) : memoryPromoteLock
+}
+
+/**
+ * Phase 6 (preflight R10): one lock per shared deployment, nvr:hub:shared:<id>. A move holds the
+ * lock of every shared deployment it touches (`move`), a shared upgrade or rollback its own
+ * (`shared`), and placing a new environment on a shared deployment takes it briefly (`place`), as
+ * does deleting or retiring the deployment (`delete`, ruling P6-2).
+ * Same shape as the environment lock: SET NX PX, renewed by its runner, compare-and-pexpire and
+ * compare-and-delete with the same two fixed scripts, the holder named in the value.
+ */
+export type SharedLockHolder = 'move' | 'shared' | 'place' | 'delete' | 'app-key'
+const SHARED_HOLDERS: readonly SharedLockHolder[] = ['move', 'shared', 'place', 'delete', 'app-key']
+
+export function hubSharedLockKey(sharedId: number | string): string {
+  return `nvr:hub:shared:${sharedId}`
+}
+
+/** The holder a shared lock value names; null for none. */
+export function sharedHolderOf(value: string | null | undefined): SharedLockHolder | null {
+  const kind = String(value ?? '').split(':', 1)[0]
+  return (SHARED_HOLDERS as readonly string[]).includes(kind) ? (kind as SharedLockHolder) : null
+}
+
+/** The refusal for a shared deployment someone else holds (409 SHARED_BUSY), naming why. */
+export function sharedLockRefusal(holder: SharedLockHolder | null): {
+  code: 'SHARED_BUSY'
+  message: string
+} {
+  const why =
+    holder === 'shared'
+      ? 'an upgrade or rollback of this shared deployment is running'
+      : holder === 'move'
+        ? 'a move into or out of this shared deployment is running'
+        : holder === 'place'
+          ? 'an environment is being placed on this shared deployment'
+          : holder === 'delete'
+            ? 'this shared deployment is being deleted or retired'
+            : holder === 'app-key'
+              ? "an app's encryption key is being saved"
+              : 'another action holds this shared deployment'
+  return {
+    code: 'SHARED_BUSY',
+    message: `The shared deployment is busy: ${why} — wait for it to end.`
+  }
+}
+
+export interface SharedLock {
+  /** A token when this caller now holds the deployment's lock; null when someone else does. */
+  take(sharedId: number, holder: SharedLockHolder): Promise<string | null>
+  /** Who holds the deployment's lock now; null when no one. A Redis error throws
+   *  PromotionError LOCK_UNAVAILABLE (503): never read as free. */
+  holder(sharedId: number): Promise<SharedLockHolder | null>
+  /** Extends the lock while `token` still holds it; false when it no longer does. */
+  renew(sharedId: number, token: string): Promise<boolean>
+  /** As renew, but a Redis error answers false (lost) instead of "held" (move run, R2-M-5). */
+  renewStrict?(sharedId: number, token: string): Promise<boolean>
+  /** Deletes the lock only while `token` still holds it. */
+  release(sharedId: number, token: string): Promise<void>
+}
+
+const memShared = new Map<string, { token: string; until: number }>()
+
+/**
+ * The shared lock on Redis, or in this process only when there is no Redis (a single-process dev
+ * Hub). A Redis that fails while taking it refuses (503 LOCK_UNAVAILABLE), as the environment lock.
+ */
+export function sharedLock(redis: PromoteRedis | null): SharedLock {
+  const tokenOf = (holder: SharedLockHolder) => `${holder}:${randomUUID()}`
+  if (!redis)
+    return {
+      async take(id, holder) {
+        const key = hubSharedLockKey(id)
+        const held = memShared.get(key)
+        if (held && held.until > Date.now()) return null
+        const token = tokenOf(holder)
+        memShared.set(key, { token, until: Date.now() + LOCK_TTL_MS })
+        return token
+      },
+      async holder(id) {
+        const held = memShared.get(hubSharedLockKey(id))
+        return held && held.until > Date.now() ? sharedHolderOf(held.token) : null
+      },
+      async renew(id, token) {
+        const held = memShared.get(hubSharedLockKey(id))
+        if (held?.token !== token) return false
+        held.until = Date.now() + LOCK_TTL_MS
+        return true
+      },
+      async release(id, token) {
+        const key = hubSharedLockKey(id)
+        if (memShared.get(key)?.token === token) memShared.delete(key)
+      }
+    }
+  return {
+    async take(id, holder) {
+      const token = tokenOf(holder)
+      let ok: unknown
+      try {
+        ok = await redis.set(hubSharedLockKey(id), token, 'PX', LOCK_TTL_MS, 'NX')
+      } catch {
+        throw new PromotionError(
+          'LOCK_UNAVAILABLE',
+          'The Hub cannot reach Redis to make sure only one action runs on this shared deployment — try again shortly',
+          503
+        )
+      }
+      return ok === 'OK' ? token : null
+    },
+    async holder(id) {
+      let value: string | null
+      try {
+        value = await redis.get(hubSharedLockKey(id))
+      } catch {
+        // Never null ("free"): a holder that cannot be read refuses (T15 round 2).
+        throw lockUnreadable()
+      }
+      return sharedHolderOf(value)
+    },
+    async renew(id, token) {
+      try {
+        return (
+          Number(await redis.eval(RENEW_SCRIPT, 1, hubSharedLockKey(id), token, LOCK_TTL_MS)) === 1
+        )
+      } catch {
+        return true // a Redis blink is not a lost lock; the next renewal tries again
+      }
+    },
+    async renewStrict(id, token) {
+      try {
+        return (
+          Number(await redis.eval(RENEW_SCRIPT, 1, hubSharedLockKey(id), token, LOCK_TTL_MS)) === 1
+        )
+      } catch {
+        return false
+      }
+    },
+    async release(id, token) {
+      await Promise.resolve(redis.eval(RELEASE_SCRIPT, 1, hubSharedLockKey(id), token)).catch(
+        () => undefined
+      )
+    }
+  }
+}
+
+export function defaultSharedLock(): SharedLock {
+  return sharedLock(appPromoteRedis())
 }

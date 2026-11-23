@@ -8,6 +8,7 @@ import {
   questionsAskedBy,
   questionView
 } from '../services/agent-questions.js'
+import { registerAppKeyed } from '../services/app-forget.js'
 import { mcpConnOf } from '../services/mcp-calls.js'
 import { span } from '../services/request-trace.js'
 import { taskColumns } from '../services/tasks.js'
@@ -39,7 +40,7 @@ export interface MyWorkCounts {
 // Short on purpose: it only collapses same-instant reads of several tabs. A poke-triggered
 // refetch (>= 1.5 s debounce + 0.4 s settle after the change) must not get a pre-change answer.
 const COUNTS_TTL_MS = 2_000
-const countsCache = new Map<string, { at: number; p: Promise<MyWorkCounts> }>()
+const countsCache = registerAppKeyed(new Map<string, { at: number; p: Promise<MyWorkCounts> }>())
 
 /** One person's waiting counts, shared for a few seconds so many tabs of one person cost one read. */
 export async function waitingCountsFor(userId: string): Promise<MyWorkCounts> {

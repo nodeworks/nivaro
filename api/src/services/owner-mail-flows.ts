@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { registerAppKeyed } from './app-forget.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
 /**
@@ -28,7 +29,7 @@ export interface OwnerMailFlow {
 }
 
 const CACHE_MS = 60_000
-const cache = new Map<string, { at: number; flows: OwnerMailFlow[] }>()
+const cache = registerAppKeyed(new Map<string, { at: number; flows: OwnerMailFlow[] }>())
 
 const JUDGED_FIELDS = new Set(['collection', 'subject_collection', 'to_state.key'])
 const OWNER_LIST = /\{\{\s*owner_emails\s*\}\}/

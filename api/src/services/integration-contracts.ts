@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { db } from '../db/index.js'
+import { appBox } from './app-state.js'
 import { noteIssueWrite } from './issue-raise.js'
 
 /**
@@ -31,15 +32,15 @@ interface ContractRow {
   is_active: boolean
 }
 
-let cache: { at: number; byCollection: Map<string, ContractRow[]> } | null = null
+const cache = appBox<{ at: number; byCollection: Map<string, ContractRow[]> } | null>(() => null)
 const TTL = 60_000
 
 export function bustContractCache(): void {
-  cache = null
+  cache.value = null
 }
 
 async function contractsFor(collection: string): Promise<ContractRow[]> {
-  if (!cache || Date.now() - cache.at > TTL) {
+  if (!cache.value || Date.now() - cache.value.at > TTL) {
     try {
       const rows = (await db('nivaro_integration_contracts').where(
         'is_active',
@@ -47,13 +48,13 @@ async function contractsFor(collection: string): Promise<ContractRow[]> {
       )) as ContractRow[]
       const m = new Map<string, ContractRow[]>()
       for (const r of rows) m.set(r.collection, [...(m.get(r.collection) ?? []), r])
-      cache = { at: Date.now(), byCollection: m }
+      cache.value = { at: Date.now(), byCollection: m }
     } catch {
       // table missing mid-migration — contracts simply don't apply
-      cache = { at: Date.now(), byCollection: new Map() }
+      cache.value = { at: Date.now(), byCollection: new Map() }
     }
   }
-  return cache.byCollection.get(collection) ?? []
+  return cache.value.byCollection.get(collection) ?? []
 }
 
 function typeOk(value: unknown, expected: string): boolean {

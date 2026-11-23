@@ -1,5 +1,7 @@
 import { db } from '../db/index.js'
+import { registerAppKeyed } from './app-forget.js'
 import { previewMailBody } from './mail.js'
+import { currentTenantKey } from './tenant-rooms.js'
 
 /**
  * Notification templates (#126): per-event wording overrides, stored as
@@ -15,12 +17,15 @@ import { previewMailBody } from './mail.js'
  * notification.
  */
 
-let cache: Map<string, string> | null = null
-let cachedAt = 0
+// Per app (keyed by currentTenantKey()): on a shared deployment each app words its own
+// notifications.
+const cache = registerAppKeyed(new Map<string, { at: number; map: Map<string, string> }>())
 const TTL = 60_000
 
 async function loadOverrides(): Promise<Map<string, string>> {
-  if (cache && Date.now() - cachedAt < TTL) return cache
+  const app = currentTenantKey()
+  const hit = cache.get(app)
+  if (hit && Date.now() - hit.at < TTL) return hit.map
   const m = new Map<string, string>()
   try {
     const rows = (await db('nivaro_mail_templates')
@@ -30,13 +35,15 @@ async function loadOverrides(): Promise<Map<string, string>> {
   } catch {
     // table missing — no overrides
   }
-  cache = m
-  cachedAt = Date.now()
+  cache.set(app, { at: Date.now(), map: m })
   return m
 }
 
+/** Drop cached overrides: the current app's, or every app's outside one. */
 export function bustNotificationTemplateCache(): void {
-  cache = null
+  const app = currentTenantKey()
+  if (app) cache.delete(app)
+  else cache.clear()
 }
 
 export async function renderNotificationTemplate(

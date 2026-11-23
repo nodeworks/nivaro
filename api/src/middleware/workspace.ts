@@ -1,5 +1,6 @@
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
+import { registerAppKeyed } from '../services/app-forget.js'
 import { isMultiTenant } from '../services/deployment-mode.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
 import type { Role } from '../types.js'
@@ -22,7 +23,7 @@ export function isDefaultWorkspace(id: string | null | undefined): boolean {
 
 // Keyed by tenant: in cloud mode one process serves many tenants, and a
 // tenant without the seeded row falls back to its own oldest workspace.
-const _defaultWorkspaceIds = new Map<string, string>()
+const _defaultWorkspaceIds = registerAppKeyed(new Map<string, string>())
 
 /**
  * Returns the default workspace id from the DB, cached for the process lifetime
@@ -63,6 +64,17 @@ export async function fetchDefaultWorkspaceId(): Promise<string> {
     // Table missing (pre-migration) — fall back to the constant without caching.
     return DEFAULT_WORKSPACE
   }
+}
+
+/**
+ * A database with no workspace at all gets the seeded default one (the row a fresh self-hosted
+ * install creates on first use, above). A Hub shared deployment runs it for each app once its
+ * migrations are done (services/tenancy/app-migrations.ts), inside that app's context; a
+ * database that has any workspace is left as it is.
+ */
+export async function ensureDefaultWorkspace(): Promise<void> {
+  const any = await db('nivaro_workspaces').select('id').first()
+  if (!any) await ensureDefaultWorkspaceRow()
 }
 
 /** Insert the seeded default workspace row when missing; a concurrent insert is fine. */

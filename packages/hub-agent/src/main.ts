@@ -14,7 +14,7 @@ import { makeHandlers } from './handlers.js'
 import { createLog, type Log } from './log.js'
 import { createServer, type HandlerResult, type Handlers } from './server.js'
 
-export const AGENT_VERSION = '0.1.0'
+export const AGENT_VERSION = '0.2.0'
 export const MIN_ENGINE_API = [1, 44] as const
 
 export type StartResult =
@@ -97,7 +97,10 @@ export function baseHandlers(cfg: AgentConfig, facts: EngineFacts, engine?: Engi
         publish_ports: cfg.publishPorts,
         extensions_shared: cfg.extensionsShared,
         redis_bundled: cfg.redisImage !== null,
-        env_prefixes: cfg.envPrefixes
+        env_prefixes: cfg.envPrefixes,
+        // Final review M-7: which Traefik reads the labels (HUB_AGENT_TRAEFIK_VERSION), so the
+        // Hub's plans refuse a host pattern on v2 before any apply.
+        traefik_version: cfg.traefikVersion
       }
     }),
     listStacks: notYet,

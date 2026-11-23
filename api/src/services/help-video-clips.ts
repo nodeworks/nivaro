@@ -6,6 +6,7 @@ import { pipeline } from 'node:stream/promises'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import type { User } from '../types.js'
+import { appMap } from './app-state.js'
 import { hasFfmpeg, isLockedMime, lockedInputArgs, probeVideo, runFfmpeg } from './ffmpeg.js'
 import { getFile, uploadFileFromPath } from './files.js'
 import {
@@ -339,7 +340,7 @@ function readEdits(version: Record<string, unknown>): VideoEdits {
 // process can read storage).
 
 let chain: Promise<void> = Promise.resolve()
-const active = new Map<string, AbortController>()
+const active = appMap<string, AbortController>()
 
 export function enqueueClip(id: string): void {
   const run = async () => {

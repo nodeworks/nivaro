@@ -16,10 +16,11 @@ import { db } from '../db/index.js'
 import { getTenantId } from '../db/tenant-context.js'
 import { hasColumn } from '../lib/column-probe.js'
 import type { User } from '../types.js'
+import { registerAppKeyed } from './app-forget.js'
 import { readItems } from './items.js'
 
 const TTL = 30_000
-const cache = new Map<string, { at: number; on: boolean }>()
+const cache = registerAppKeyed(new Map<string, { at: number; on: boolean }>())
 
 export function clearGraphqlStrictCache(): void {
   cache.clear()

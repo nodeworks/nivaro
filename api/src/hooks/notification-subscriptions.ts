@@ -1,9 +1,11 @@
+import { AsyncResource } from 'node:async_hooks'
 import type { FastifyInstance } from 'fastify'
 import { adminBaseUrl } from '../admin-base.js'
 import { insertReturningRow } from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
 import { emitNotification } from '../plugins/socketio.js'
 import { resolveActivityStamp } from '../services/activity-scope.js'
+import { registerAppKeyed } from '../services/app-forget.js'
 import { recordLink } from '../services/app-links.js'
 import { isNoticeBurst } from '../services/bulk-change-notice.js'
 import { chainFields } from '../services/chain-columns.js'
@@ -245,12 +247,13 @@ export async function parentOfRow(
 
 /** Child collection → parent M2O relations, so a write to a line rolls up to
  *  the parent record's watchers. 60s cache; relations change in Data Model. */
-const parentRelCache = new Map<
-  string,
-  { at: number; rels: Array<{ parent: string; fk: string }> }
->()
+const parentRelCache = registerAppKeyed(
+  new Map<string, { at: number; rels: Array<{ parent: string; fk: string }> }>()
+)
 async function parentRelationsOf(child: string): Promise<Array<{ parent: string; fk: string }>> {
-  const hit = parentRelCache.get(child)
+  // Keyed per tenant: module state is shared by every app on a shared deployment.
+  const cacheKey = `${currentTenantKey()}\u0000${child}`
+  const hit = parentRelCache.get(cacheKey)
   if (hit && Date.now() - hit.at < 60_000) return hit.rels
   let rels: Array<{ parent: string; fk: string }> = []
   try {
@@ -267,7 +270,7 @@ async function parentRelationsOf(child: string): Promise<Array<{ parent: string;
   } catch {
     rels = []
   }
-  parentRelCache.set(child, { at: Date.now(), rels })
+  parentRelCache.set(cacheKey, { at: Date.now(), rels })
   return rels
 }
 
@@ -278,7 +281,7 @@ async function parentRelationsOf(child: string): Promise<Array<{ parent: string;
  * vendor, location) are links, not ownership, so a watch on a workflow stays
  * on the workflow (2026-10-26: it was filed and opened under its PROJECT).
  */
-const boundCache = new Map<string, { at: number; bound: boolean }>()
+const boundCache = registerAppKeyed(new Map<string, { at: number; bound: boolean }>())
 async function rowOwnerRelationsOf(
   collection: string
 ): Promise<Array<{ parent: string; fk: string }>> {
@@ -335,6 +338,9 @@ type Pending = {
   startedAt: number
   /** Bulk action / import burst key the first write belonged to. */
   burst: string | null
+  /** Runs a function in the tenant context of the writes (their app's database), so a flush
+   *  from outside that context (shutdown, tests) still sends through the right app. */
+  inContext: <T>(fn: () => T) => T
 }
 const pendingRecordChanges = new Map<string, Pending>()
 
@@ -344,16 +350,20 @@ async function flushRecordChanges(key: string) {
   pendingRecordChanges.delete(key)
   if (p.timer) clearTimeout(p.timer)
   if (p.bundle.changes.length === 0) return
-  await fireSubscriptionNotifications(
-    p.collection,
-    'update',
-    p.item,
-    { id: p.item },
-    p.actorUserId,
-    undefined,
-    null,
-    { scope: 'record', bundle: p.bundle, burst: p.burst }
-  ).catch(() => undefined)
+  await p
+    .inContext(() =>
+      fireSubscriptionNotifications(
+        p.collection,
+        'update',
+        p.item,
+        { id: p.item },
+        p.actorUserId,
+        undefined,
+        null,
+        { scope: 'record', bundle: p.bundle, burst: p.burst }
+      )
+    )
+    .catch(() => undefined)
 }
 
 /** Test/ops hook: flush everything now (unit tests, graceful shutdown). */
@@ -370,7 +380,8 @@ function enqueueRecordChange(
   burst?: string | null
 ) {
   if (changes.length === 0) return
-  const key = `${collection}:${item}:${actorUserId ?? ''}`
+  // Per app: two apps on one shared deployment may hold the same record and person ids.
+  const key = `${currentTenantKey()}\u0000${collection}:${item}:${actorUserId ?? ''}`
   let p = pendingRecordChanges.get(key)
   if (!p) {
     p = {
@@ -380,7 +391,8 @@ function enqueueRecordChange(
       bundle: { changes: [], children: [], writes: 0 },
       timer: null,
       startedAt: Date.now(),
-      burst: burst ?? null
+      burst: burst ?? null,
+      inContext: AsyncResource.bind(<T>(fn: () => T): T => fn())
     }
     pendingRecordChanges.set(key, p)
   }

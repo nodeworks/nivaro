@@ -17,6 +17,7 @@ import { infoColumns, infoSelect } from '../db/dialect/users-ai-config.js'
 import { db } from '../db/index.js'
 import { getTenantId } from '../db/tenant-context.js'
 import { relatedNoteRegistry } from '../extensions/related-notes.js'
+import { registerAppKeyed } from './app-forget.js'
 import { hasFieldCommentColumns, recordCommentsOnly } from './field-comments.js'
 import { accountKindOf } from './machine-accounts.js'
 import { originOfRow } from './note-authorship.js'
@@ -94,7 +95,7 @@ export function listNoteSources(): string[] {
   ]
 }
 
-const colCache = new Map<string, Promise<boolean>>()
+const colCache = registerAppKeyed(new Map<string, Promise<boolean>>())
 function hasColumn(table: string, col: string): Promise<boolean> {
   // Per tenant: in cloud mode `db` is a per-tenant proxy, and a hit on one
   // migrated tenant must not be trusted for an un-migrated one.

@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { appBox } from './app-state.js'
 import { cosineSim, embedText } from './embeddings.js'
 
 /**
@@ -223,7 +224,7 @@ export function clusterByVectors<T extends { vec: number[] }>(
   return groups
 }
 
-let cache: { at: number; value: IssueGroup[] } | null = null
+const cache = appBox<{ at: number; value: IssueGroup[] } | null>(() => null)
 
 /** The automatic clustering with the admin's split/merge overrides applied. */
 export async function groupSimilarIssues(threshold = 0.8): Promise<IssueGroup[]> {
@@ -232,7 +233,7 @@ export async function groupSimilarIssues(threshold = 0.8): Promise<IssueGroup[]>
 }
 
 async function clusterOpenIssues(threshold: number): Promise<IssueGroup[]> {
-  if (cache && Date.now() - cache.at < 10 * 60_000) return cache.value
+  if (cache.value && Date.now() - cache.value.at < 10 * 60_000) return cache.value.value
   const rows = (await db('nivaro_issues')
     .whereIn('status', ['open', 'in_progress'])
     .orderBy('occurrence_count', 'desc')
@@ -274,6 +275,6 @@ async function clusterOpenIssues(threshold: number): Promise<IssueGroup[]> {
       }
     })
     .sort((a, b) => b.total_occurrences - a.total_occurrences)
-  cache = { at: Date.now(), value: out }
+  cache.value = { at: Date.now(), value: out }
   return out
 }

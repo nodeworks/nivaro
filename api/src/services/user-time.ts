@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import { zonedWallTime } from './ai-local-dates.js'
+import { appBox } from './app-state.js'
 
 /**
  * The time zone a person reads times in: their own profile setting
@@ -21,15 +22,16 @@ function validZone(z: unknown): string | null {
   }
 }
 
-let instanceZone: { value: string; at: number } | null = null
+const instanceZone = appBox<{ value: string; at: number } | null>(() => null)
 
 async function instanceTimeZone(): Promise<string> {
-  if (instanceZone && Date.now() - instanceZone.at < 60_000) return instanceZone.value
+  if (instanceZone.value && Date.now() - instanceZone.value.at < 60_000)
+    return instanceZone.value.value
   const row = (await db('nivaro_settings')
     .first('sla_timezone')
     .catch(() => null)) as { sla_timezone?: unknown } | null
   const value = validZone(row?.sla_timezone) ?? FALLBACK_ZONE
-  instanceZone = { value, at: Date.now() }
+  instanceZone.value = { value, at: Date.now() }
   return value
 }
 

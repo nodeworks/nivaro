@@ -1,6 +1,8 @@
 import { gunzipSync } from 'node:zlib'
 import { db } from '../db/index.js'
 import { runInBackgroundPool } from '../db/pool-context.js'
+import { registerAppKeyed } from './app-forget.js'
+import { appKey, dropAppEntries } from './app-keyed.js'
 import { getPhysicalColumns } from './collections.js'
 import { selectInChunks, whereInList } from './db-batch.js'
 import {
@@ -11,6 +13,7 @@ import {
 } from './pipeline-subject.js'
 import { bustRecordHeaderSignals } from './record-header-signals.js'
 import { markSpan, span } from './request-trace.js'
+import { currentTenantKey } from './tenant-rooms.js'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -331,32 +334,39 @@ export interface PreparedOwnerGroups {
 // processes re-read the matrix ~1,500 times in four hours (EFP 2026-11-16:
 // 1.0-1.3 s and ~10k reads each, up to 5.3 s, beside /api/my-work's bursts).
 export const OWNER_GROUP_CACHE_TTL = 10 * 60_000
-const ownerGroupCache = new Map<
-  string,
-  { groups: OwnerGroup[]; prepared: PreparedOwnerGroups; at: number }
->()
+const ownerGroupCache = registerAppKeyed(
+  new Map<string, { groups: OwnerGroup[]; prepared: PreparedOwnerGroups; at: number }>()
+)
 
 // state→template + collection bindings ride the same TTL/bust — they answer
 // the owner-fallback question and change through the same admin surface.
-const fallbackMetaCache = new Map<string, { templateByState: Map<string, string>; at: number }>()
-const bindingsCache = new Map<
-  string,
-  {
-    rows: Array<{ collection: string; template: string; owner_fallback_field?: string | null }>
-    at: number
-  }
->()
+const fallbackMetaCache = registerAppKeyed(
+  new Map<string, { templateByState: Map<string, string>; at: number }>()
+)
+const bindingsCache = registerAppKeyed(
+  new Map<
+    string,
+    {
+      rows: Array<{ collection: string; template: string; owner_fallback_field?: string | null }>
+      at: number
+    }
+  >()
+)
 
 // Bumped on every bust: a fetch that STARTED before an admin edit must not
 // write its (pre-edit) rows into the cache after the bust cleared it.
+// (One counter for every app: a bust in any app only makes in-flight fills refetch.)
 let ownerCacheGen = 0
 
+// All three caches are keyed per app (appKey): on a shared deployment two apps (dev = a copy of
+// prod) share state ids and collection names but each has its own owner matrix and bindings.
+/** Drop the owner matrix caches: the current app's, or every app's outside one. */
 export function bustOwnerGroupCache(): void {
   bustRecordHeaderSignals()
   ownerCacheGen++
-  ownerGroupCache.clear()
-  fallbackMetaCache.clear()
-  bindingsCache.clear()
+  dropAppEntries(ownerGroupCache)
+  dropAppEntries(fallbackMetaCache)
+  dropAppEntries(bindingsCache)
 }
 
 /**
@@ -402,40 +412,51 @@ async function fetchOwnerGroupRows(states: string[], database: typeof db): Promi
   return out
 }
 
-let refreshing: Promise<void> | null = null
-const refreshQueue = new Set<string>()
+/** One behind-the-request refresh per app: it runs in that app's context (its database) and
+ *  drains only that app's expired states. */
+const ownerRefreshes = new Map<string, { running: Promise<void> | null; queue: Set<string> }>()
+function ownerRefresh(): { running: Promise<void> | null; queue: Set<string> } {
+  const app = currentTenantKey()
+  let r = ownerRefreshes.get(app)
+  if (!r) {
+    r = { running: null, queue: new Set() }
+    ownerRefreshes.set(app, r)
+  }
+  return r
+}
 /**
  * Refresh expired states behind the request that found them. Background work: it runs on the
  * background pool, never holding one of the connections requests wait on (the refresh started
  * inside a request's async context and inherited its pool).
  */
 function refreshOwnerGroupsBehind(stateIds: string[]): void {
-  for (const id of stateIds) refreshQueue.add(id)
-  if (refreshing) return
-  refreshing = runInBackgroundPool(async () => {
+  const r = ownerRefresh()
+  for (const id of stateIds) r.queue.add(id)
+  if (r.running) return
+  r.running = runInBackgroundPool(async () => {
     try {
-      while (refreshQueue.size > 0) {
-        const batch = [...refreshQueue]
-        refreshQueue.clear()
+      while (r.queue.size > 0) {
+        const batch = [...r.queue]
+        r.queue.clear()
         // Drop the expired entries so the fetch below treats them as missing.
-        const keep = new Map(batch.map((id) => [id, ownerGroupCache.get(id)]))
-        for (const id of batch) ownerGroupCache.delete(id)
+        const keep = new Map(batch.map((id) => [appKey(id), ownerGroupCache.get(appKey(id))]))
+        for (const id of batch) ownerGroupCache.delete(appKey(id))
         try {
           await getOwnerGroupsForStates(batch, db)
         } catch {
           // Refresh failed — put the last-known-good entries back.
-          for (const [id, v] of keep) if (v && !ownerGroupCache.has(id)) ownerGroupCache.set(id, v)
+          for (const [k, v] of keep) if (v && !ownerGroupCache.has(k)) ownerGroupCache.set(k, v)
         }
       }
     } finally {
-      refreshing = null
+      r.running = null
     }
   })
 }
 
-/** Test seam: the refresh in flight, if any. */
+/** Test seam: the current app's refresh in flight, if any. */
 export function ownerGroupRefreshInFlight(): Promise<void> | null {
-  return refreshing
+  return ownerRefresh().running
 }
 
 /**
@@ -468,7 +489,7 @@ export async function getOwnerGroupsForStates(
   const expired: string[] = []
   const now = Date.now()
   for (const id of stateIds) {
-    const hit = cacheable ? ownerGroupCache.get(id) : undefined
+    const hit = cacheable ? ownerGroupCache.get(appKey(id)) : undefined
     if (hit && now - hit.at < OWNER_GROUP_CACHE_TTL) {
       out.set(id, { groups: hit.groups, prepared: hit.prepared })
     } else if (hit) {
@@ -494,13 +515,13 @@ export async function getOwnerGroupsForStates(
       if (cacheable) {
         let covered = true
         for (const id of missing) {
-          const stale = ownerGroupCache.get(id)
+          const stale = ownerGroupCache.get(appKey(id))
           if (!stale) {
             covered = false
             break
           }
           out.set(id, { groups: stale.groups, prepared: stale.prepared })
-          ownerGroupCache.set(id, { ...stale, at: now })
+          ownerGroupCache.set(appKey(id), { ...stale, at: now })
         }
         if (covered) return out
       }
@@ -516,7 +537,8 @@ export async function getOwnerGroupsForStates(
       const groups = byState.get(id) ?? []
       const prepared = prepareOwnerGroups(groups)
       out.set(id, { groups, prepared })
-      if (cacheable && gen === ownerCacheGen) ownerGroupCache.set(id, { groups, prepared, at: now })
+      if (cacheable && gen === ownerCacheGen)
+        ownerGroupCache.set(appKey(id), { groups, prepared, at: now })
     }
   }
   return out
@@ -868,7 +890,7 @@ export async function resolveStateOwnersBatch(
   const fallbackFieldByKey = new Map<string, string>()
   if (stateIds.length > 0) {
     const cacheable = database === db
-    const stateCacheKey = [...stateIds].sort().join(',')
+    const stateCacheKey = appKey([...stateIds].sort().join(','))
     let templateByState: Map<string, string>
     const metaHit = cacheable ? fallbackMetaCache.get(stateCacheKey) : undefined
     if (metaHit && Date.now() - metaHit.at < OWNER_GROUP_CACHE_TTL) {
@@ -887,7 +909,7 @@ export async function resolveStateOwnersBatch(
     // column name" on EVERY owner resolution, taking down queues, panels and
     // notifications over a feature that is opt-in and null by default. Absent
     // column reads as undefined, which is exactly "no fallback configured".
-    const collectionsKey = [...new Set(requests.map((r) => r.collection))].sort().join(',')
+    const collectionsKey = appKey([...new Set(requests.map((r) => r.collection))].sort().join(','))
     let allBindings: Array<{
       collection: string
       template: string

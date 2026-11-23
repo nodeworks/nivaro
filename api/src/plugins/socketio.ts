@@ -57,6 +57,7 @@ import {
   mayReadSignalField
 } from '../services/field-signal-gate.js'
 import { registerGridPresence } from '../services/grid-presence.js'
+import { APP_MOVED, isRetiredSync, onRetired } from '../services/hub-link/retire.js'
 import { fullHuddleDeps, registerHuddle } from '../services/huddle.js'
 import { defaultHuddleCollabDeps, registerHuddleCollab } from '../services/huddle-collab.js'
 import { INSTANCE_ID } from '../services/instance-roster.js'
@@ -248,7 +249,7 @@ export function usersOnPathPrefix(prefixes: string[]): string[] {
   return [...new Set([...local, ...boardUsersOnPathPrefix(prefixes, currentTenantKey())])]
 }
 
-import { isMultiTenant, isNivaroCloud } from '../services/deployment-mode.js'
+import { isMultiTenant, isNivaroCloud, tenantSource } from '../services/deployment-mode.js'
 import { noteSocket } from '../services/traffic-map.js'
 import {
   noteRoomBroadcast,
@@ -313,10 +314,34 @@ export function recordRoomHasViewers(room: string): boolean {
  * (services/lock-presence.ts) voids a lock only on a definite false.
  */
 export function isUserConnected(userId: string): boolean | null {
-  const want = String(userId).toUpperCase()
-  for (const m of socketMeta.values()) if (m.user && m.user.id.toUpperCase() === want) return true
+  // Hub phase 6 final review (rest) Minor 4: on a Hub shared deployment copied apps share user
+  // ids, so only the asking app's sockets count; the realtime board is not per app there, so a
+  // miss on this process is "cannot tell" whenever the board would have to answer.
+  if (tenantSource() === 'hub') {
+    const app = currentTenantKey()
+    if (!app) return null
+    if (userConnectedLocally(socketMeta, userId, app, socketTenantKey)) return true
+    if (!boardKnowsEveryone()) return null
+    return boardMergeOn() ? null : false
+  }
+  if (userConnectedLocally(socketMeta, userId, null, socketTenantKey)) return true
   if (!boardKnowsEveryone()) return null
   return boardMergeOn() ? boardHasUser(userId, true) : false
+}
+
+/** Has `userId` a signed-in socket on this process — of the app `app` when it is given (the
+ *  socket's tenant, `tenantOf(socketId)`), of any app when null. Pure, for tests. */
+export function userConnectedLocally(
+  sockets: Iterable<[string, { user: { id: string } | null }]>,
+  userId: string,
+  app: string | null,
+  tenantOf: (socketId: string) => string | null
+): boolean {
+  const want = String(userId).toUpperCase()
+  for (const [sid, m] of sockets)
+    if (m.user && m.user.id.toUpperCase() === want && (app === null || tenantOf(sid) === app))
+      return true
+  return false
 }
 setLockPresenceProbe(isUserConnected)
 
@@ -855,6 +880,23 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     perMessageDeflate: socketCompressionOn() ? { threshold: 1024 } : false
   })
   _ioRef = io
+  // Hub phase 6 (ruling M17): a retired app (moved away by the Hub) takes no new socket; its
+  // clients reach the app at its new home after a reload.
+  io.use((_socket, next) => (isRetiredSync() ? next(new Error(APP_MOVED)) : next()))
+  // …and the ones already open are closed on retire, at the transport (an ordinary drop, like the
+  // drain below): their reconnect meets the refusal above, so presence heartbeats stop too.
+  const stopRetireClose = onRetired(() => {
+    for (const s of io.sockets.sockets.values()) {
+      try {
+        s.conn.close()
+      } catch {
+        /* already gone */
+      }
+    }
+  })
+  app.addHook('onClose', async () => {
+    stopRetireClose()
+  })
   // Cloud: personal `user:<id>` rooms are per tenant (services/cloud-user-rooms.ts).
   scopeUserRoomsPerTenant(io)
   // #2460 / #2488 / #2779 / #2462 — buffer growth samples and this process's figures for the
@@ -1613,6 +1655,8 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       changedWhen?: (qb: Knex.QueryBuilder) => void,
       onInsert?: Record<string, unknown>
     ) => {
+      // Hub phase 6: a retired app writes no presence (its database is the app's new home's).
+      if (isRetiredSync()) return
       try {
         let changed = true
         let updated = 0
@@ -1789,28 +1833,10 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         app.log.warn({ err }, 'Socket auth failed')
       }
     }
-    /**
-     * Cloud: a ws-token / View-as entry that names the tenant it was minted under (`t` or
-     * `tenant` in its JSON) signs a socket in only on that tenant's host. One that names none
-     * (older minting code) is judged by the socket's own tenant database alone, as before.
-     * A Hub shared deployment (ruling P5-16) refuses one that names no app: its apps are
-     * copies of each other, so their databases cannot tell one app's user from another's.
-     */
-    const mintedForThisTenant = async (raw: string): Promise<boolean> => {
-      if (!cloud) return true
-      // Untagged: accepted in Nivaro Cloud (as before), refused on a Hub shared deployment.
-      const untaggedOk = isNivaroCloud()
-      let named: unknown = null
-      try {
-        const v = JSON.parse(raw) as { t?: unknown; tenant?: unknown }
-        named = v?.t ?? v?.tenant ?? null
-      } catch {
-        return untaggedOk
-      }
-      if (named == null || named === '') return untaggedOk
-      const t = await socketTenant(socket)
-      return !!t && [t.tenantId, t.slug].map(String).includes(String(named))
-    }
+    // A ws-token / View-as entry signs this socket in only on the tenant it was minted under
+    // (wsEntryMintedForTenant, below the plugin).
+    const mintedForThisTenant = (raw: string): Promise<boolean> =>
+      wsEntryMintedForTenant(raw, cloud, () => socketTenant(socket))
 
     // Cloud: auth runs in the socket's tenant context (#1132); self-hosted: unchanged.
     socket.on('auth', (payload: { token?: string }) => {
@@ -2935,3 +2961,32 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     io.close()
   })
 })
+
+/**
+ * The ws-token / View-as entry reader's tenant rule (the socket `auth` handler above).
+ * Cloud: an entry that names the tenant it was minted under (`t` or `tenant` in its JSON) signs a
+ * socket in only on that tenant's host. One that names none (older minting code) is judged by the
+ * socket's own tenant database alone, as before. A Hub shared deployment (ruling P5-16) refuses
+ * one that names no app: its apps are copies of each other, so their databases cannot tell one
+ * app's user from another's. Self-hosted (`multiTenant` false): always true.
+ * `tenant` = the socket's own resolved tenant (socketTenant); read only when the entry names one.
+ */
+export async function wsEntryMintedForTenant(
+  raw: string,
+  multiTenant: boolean,
+  tenant: () => Promise<{ tenantId: string; slug: string } | null>
+): Promise<boolean> {
+  if (!multiTenant) return true
+  // Untagged: accepted in Nivaro Cloud (as before), refused on a Hub shared deployment.
+  const untaggedOk = isNivaroCloud()
+  let named: unknown = null
+  try {
+    const v = JSON.parse(raw) as { t?: unknown; tenant?: unknown }
+    named = v?.t ?? v?.tenant ?? null
+  } catch {
+    return untaggedOk
+  }
+  if (named == null || named === '') return untaggedOk
+  const t = await tenant()
+  return !!t && [t.tenantId, t.slug].map(String).includes(String(named))
+}

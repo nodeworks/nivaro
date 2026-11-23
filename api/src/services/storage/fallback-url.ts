@@ -198,18 +198,28 @@ function parseContentRange(
  */
 export async function openFallbackUrl(
   key: string,
-  rangeHeader?: string
+  rangeHeader?: string,
+  /** P6-36: throw (status 502) on trouble instead of answering null, so "not there" and "could
+   *  not ask" stay apart; a 404, a known miss or no configured source are still null. */
+  opts: { throwOnTrouble?: boolean } = {}
 ): Promise<RemoteObject | null> {
+  const trouble = (why: string): null => {
+    if (opts.throwOnTrouble)
+      throw Object.assign(new Error(`The fallback source could not be read (${why})`), {
+        status: 502
+      })
+    return null
+  }
   const origin = filesFallbackUrl()
   const token = filesFallbackToken()
   if (!origin || !token || !key) return null
   if (knownMiss(key)) return null
-  if (Date.now() < troubleUntil) return null
+  if (Date.now() < troubleUntil) return trouble('backing off')
   let id: string | null
   try {
     id = await fallbackUrlDeps.fileIdForKey(key)
   } catch {
-    return null
+    return trouble('lookup')
   }
   if (!id) {
     rememberMiss(key)
@@ -224,7 +234,7 @@ export async function openFallbackUrl(
     })
   } catch (err) {
     noteTrouble('unreachable', { origin, code: (err as { code?: string }).code ?? null })
-    return null
+    return trouble('unreachable')
   }
   const status = res.statusCode ?? 0
   const drop = () => res.resume()
@@ -246,7 +256,7 @@ export async function openFallbackUrl(
   if (status !== 200 && status !== 206) {
     drop()
     noteTrouble(status === 401 ? 'token refused (401)' : `answered ${status}`, { origin, status })
-    return null
+    return trouble(`answered ${status}`)
   }
   let size: number
   let range: RemoteObject['range'] = null
@@ -255,7 +265,7 @@ export async function openFallbackUrl(
     if (!cr) {
       res.destroy()
       noteTrouble('206 without a Content-Range', { origin })
-      return null
+      return trouble('206 without a Content-Range')
     }
     size = cr.size
     range = { start: cr.start, end: cr.end }

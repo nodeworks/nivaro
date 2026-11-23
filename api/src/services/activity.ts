@@ -5,10 +5,12 @@ import { hasColumn } from '../lib/column-probe.js'
 import { noteActivityForPatterns } from './activity-pattern-gate.js'
 import { actorJson, resolveActivityStamp } from './activity-scope.js'
 import type { ActivityActor } from './activity-sentence.js'
+import { registerAppKeyed } from './app-forget.js'
 import { noteBulkWrite } from './bulk-change-notice.js'
 import { chainFields } from './chain-columns.js'
 import { attributionColumns } from './mcp-attribution.js'
 import { currentTraceCaller, currentTraceRequestObject, noteDerivedWrite } from './request-trace.js'
+import { appKeyPart } from './tenancy/credential-binding.js'
 import { tenantScopedRoom } from './tenant-rooms.js'
 
 // Mission-control pulse: logActivity broadcasts each entry to the admin-only
@@ -25,7 +27,7 @@ export function pulseApp(): FastifyInstance | null {
 // The origin column arrives with migration 340; until an instance has run it,
 // writing the key would fail every activity insert. Probe once per tenant
 // (cloud mode: one tenant may be migrated while another is not) per process.
-const hasOriginCol = new Map<string, Promise<boolean>>()
+const hasOriginCol = registerAppKeyed(new Map<string, Promise<boolean>>())
 async function originColumn(
   origin: string | null | undefined,
   comment: string | undefined
@@ -237,7 +239,15 @@ export async function logActivityThrottled(
 ): Promise<number | null> {
   if (redis) {
     try {
-      const acquired = await redis.set(`actlog:${dedupeKey}`, '1', 'EX', windowSeconds, 'NX')
+      // The app is in the key (Hub phase 6 Task 22): on a shared deployment one app's audit row
+      // must never suppress another's (copies share record ids). Self-hosted it is unchanged.
+      const acquired = await redis.set(
+        `actlog:${appKeyPart()}${dedupeKey}`,
+        '1',
+        'EX',
+        windowSeconds,
+        'NX'
+      )
       if (acquired === null) return null // already logged inside the window
     } catch {
       /* fall through and log — never trade audit coverage for cache health */

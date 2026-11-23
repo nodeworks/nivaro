@@ -8,6 +8,7 @@ import { pipeline } from 'node:stream/promises'
 import { db } from '../db/index.js'
 import { gatewayBearer, gatewayFromSettings, parseAiModels, settingsRow } from './ai-client.js'
 import { recordAiCall } from './ai-log.js'
+import { appMap } from './app-state.js'
 import { hasFfmpeg, isLockedMime, lockedInputArgs, runFfmpeg } from './ffmpeg.js'
 import { getFile } from './files.js'
 import { type Caption, EDIT_LIMITS } from './help-video-edits.js'
@@ -439,7 +440,7 @@ export async function captionProvider(): Promise<CaptionProvider> {
 
 // ─── the job store (Redis for 24 h, else this process) ───────────────────────
 
-const memory = new Map<string, { job: CaptionJob; exp: number }>()
+const memory = appMap<string, { job: CaptionJob; exp: number }>()
 const key = (versionId: string) => `${JOB_PREFIX}${String(versionId).toLowerCase()}`
 
 function redis(): {

@@ -45,6 +45,7 @@ import {
 import {
   type DeleteRefusal,
   dockerEnvironmentDeleteRefusal,
+  forgetPlacementStack,
   type StackEditRefusal,
   stackEditRefusal
 } from '../services/hub/docker/stack-guards.js'
@@ -60,6 +61,7 @@ import {
   placementTargetRefusal,
   publicDriver,
   releasePlacement,
+  SHARED_PLACEMENT_MESSAGE,
   updateDriver,
   updatePlacement,
   validateDriverInput,
@@ -68,6 +70,7 @@ import {
 import { GitlabWriteError } from '../services/hub/gitlab-write.js'
 import { hubTokenColumns, linkTokenInUse } from '../services/hub/link-token.js'
 import { hubModeEnabled } from '../services/hub/mode.js'
+import { moveOpenRefusal } from '../services/hub/move-open.js'
 import {
   gatherPlanInput,
   PromotionError,
@@ -84,6 +87,12 @@ import {
 } from '../services/hub/promote-run.js'
 import { HUB_MASK, HubSecretError } from '../services/hub/secrets.js'
 import {
+  PlaceSharedError,
+  patchSharedPlacement,
+  recoverPlacementsOnceAtBoot
+} from '../services/hub/shared/place.js'
+import { getShared } from '../services/hub/shared/store.js'
+import {
   hubStatusKey,
   readAppStatus,
   readEnvironmentStatus,
@@ -92,6 +101,10 @@ import {
 import { readJobLog } from '../services/job-runs.js'
 import { hubPhase3Routes } from './hub-create.js'
 import { hubDockerRoutes } from './hub-docker.js'
+import { hubMoveRoutes } from './hub-move.js'
+import { hubSharedRoutes } from './hub-shared.js'
+import { hubSharedTenantsRoutes } from './hub-shared-tenants.js'
+import { hubSharedUpgradeRoutes } from './hub-shared-upgrade.js'
 
 /**
  * Nivaro Hub API, mounted at /api/hub. Nothing is registered unless hub mode is on (HUB=on,
@@ -106,6 +119,8 @@ export async function hubRoutes(app: FastifyInstance) {
   if (!hubModeEnabled()) return
   // Once per process start: promotions a previous process left `running` become `interrupted`.
   app.addHook('onReady', async () => recoverOnceAtBoot(app.log))
+  // Phase 6: placement runs a previous process left running (services/hub/shared/place.ts).
+  app.addHook('onReady', async () => recoverPlacementsOnceAtBoot(app.log))
   appRoutes(app)
   ownerRoutes(app)
   environmentRoutes(app)
@@ -117,6 +132,10 @@ export async function hubRoutes(app: FastifyInstance) {
   promotionRoutes(app)
   hubDockerRoutes(app) // phase 4
   hubPhase3Routes(app)
+  hubSharedRoutes(app) // phase 6
+  app.register(hubSharedTenantsRoutes) // phase 6: GET /shared/:key/tenants (deployment bearer)
+  hubSharedUpgradeRoutes(app) // phase 6: shared stack deploy/upgrade/rollback (Task 5)
+  hubMoveRoutes(app) // phase 6: moves between shared and dedicated placements (+ boot heal)
 }
 
 const APPS = 'nivaro_hub_apps'
@@ -241,12 +260,16 @@ async function creationEnvironments(appId: number): Promise<number[]> {
   ]
 }
 
-/** Runs a delete holding these environments' locks; CREATION_RUNNING (409) while one is held. */
+/**
+ * Runs a delete holding these environments' locks; CREATION_RUNNING (409) while one is held. A
+ * lock the Hub cannot take or read (Redis down) answers its own status: 503 LOCK_UNAVAILABLE.
+ */
 async function quiet(reply: FastifyReply, envIds: number[], run: () => Promise<unknown>) {
   try {
     return await withEnvironmentsQuiet(envIds, run)
   } catch (e) {
     if (e instanceof CreationError) return fail(reply, e.status, e.code, e.message)
+    if (e instanceof PromotionError) return fail(reply, e.status, e.code, e.message)
     throw e
   }
 }
@@ -568,6 +591,13 @@ async function placementRefusal(
   return null
 }
 
+/** Phase 6: the kind of placement `id` (null = none, or no such placement). */
+async function placementKind(id: number | null | undefined): Promise<string | null> {
+  if (id == null) return null
+  const row = (await db(PLACEMENTS).where({ id }).first('kind')) as { kind: string } | undefined
+  return row?.kind ?? null
+}
+
 async function readEnvironmentRow(id: number): Promise<Record<string, unknown> | undefined> {
   return db(ENVS).where({ id }).first()
 }
@@ -586,6 +616,14 @@ function environmentRoutes(app: FastifyInstance) {
       return fail(reply, 409, 'KEY_TAKEN', `This app already has an environment "${patch.key}"`)
     const refused = await placementRefusal(patch.placement_id, null)
     if (refused) return fail(reply, refused.status, refused.code, refused.error)
+    // Phase 6: an environment reaches a shared deployment only through place-shared (or a move).
+    if ((await placementKind(patch.placement_id as number | null | undefined)) === 'shared')
+      return fail(
+        reply,
+        409,
+        'USE_PLACE_SHARED',
+        'Create the environment without a placement, then place it on the shared deployment.'
+      )
     if (await linkTokenInUse(incoming.token, null))
       return fail(reply, 409, 'TOKEN_IN_USE', 'Another environment already uses this hub token')
     return guarded(reply, async () => {
@@ -626,9 +664,41 @@ function environmentRoutes(app: FastifyInstance) {
     const checked = environmentPatch(b, false)
     if ('error' in checked) return fail(reply, 400, checked.code, checked.error)
     const { patch } = checked
+    // Final review moves I-2 (P6-37): an open move (an interrupted one holds no lock) relies on
+    // the environment's placement, stack and names staying as it found them.
+    if (
+      ['placement_id', 'key', 'hostnames', 'base_url', 'version_pin'].some(
+        (f) => patch[f as keyof typeof patch] !== undefined
+      ) ||
+      (b.hub_token !== undefined && b.hub_token !== HUB_MASK)
+    ) {
+      const open = await moveOpenRefusal({ envIds: [id] })
+      if (open) return fail(reply, open.status, open.code, open.message)
+    }
     // P4-31: a running stack's labels name the environment key, and the Hub finds it through
     // the placement: neither may change while the stack runs.
     const before = current.placement_id == null ? null : Number(current.placement_id)
+    // Phase 6: onto or off a shared deployment is a move (it copies files, switches routing and
+    // checks the version), never a placement edit; a shared deployment owns the version pin.
+    if (patch.placement_id !== undefined && (patch.placement_id ?? null) !== before) {
+      const kinds = [
+        await placementKind(before),
+        await placementKind(patch.placement_id as number | null)
+      ]
+      if (kinds.includes('shared'))
+        return fail(
+          reply,
+          409,
+          'USE_MOVE',
+          'Moving an environment onto or off a shared deployment is a move: use Move instead.'
+        )
+    }
+    if (
+      patch.version_pin !== undefined &&
+      (patch.version_pin ?? null) !== (current.version_pin ?? null) &&
+      (await placementKind(before)) === 'shared'
+    )
+      return fail(reply, 409, 'SHARED_PLACEMENT', SHARED_PLACEMENT_MESSAGE)
     const stackEdit =
       patch.key !== undefined && patch.key !== current.key
         ? await stackEditRefusal([id], 'key')
@@ -708,6 +778,10 @@ function environmentRoutes(app: FastifyInstance) {
     // stack this environment still runs must be removed first (STACK_*); then its creation row
     // (phase 3) and its sign-in client and switcher rows (phase 7, ruling P7-18) go with it.
     return quiet(reply, [id], async () => {
+      // Re-review FW1-M-2: an open move (an interrupted one holds no lock) needs the
+      // environment and its placements to resume or roll back.
+      const open = await moveOpenRefusal({ envIds: [id] })
+      if (open) return fail(reply, open.status, open.code, open.message)
       let stackRefusal: DeleteRefusal | null
       try {
         stackRefusal = await dockerEnvironmentDeleteRefusal(id)
@@ -763,7 +837,9 @@ function statusTarget(row: Record<string, unknown>) {
     id: Number(row.id),
     key: String(row.key),
     base_url: String(row.base_url),
-    hub_token: (row.hub_token as string | null) ?? null
+    hub_token: (row.hub_token as string | null) ?? null,
+    // Phase 6 (R3): a shared-placed environment is read through its deployment.
+    placement_id: row.placement_id == null ? null : Number(row.placement_id)
   }
 }
 
@@ -848,6 +924,29 @@ function placementRoutes(app: FastifyInstance) {
   app.post('/placements', { preHandler: requireAdmin }, async (req, reply) => {
     const checked = validatePlacementInput(body(req))
     if (!checked.ok) return fail(reply, 400, checked.code, checked.message)
+    // Phase 6: a placement on a shared deployment (no driver). Its pool is judged against the
+    // deployment's budget when an environment is placed on it (place-shared or a move).
+    if (checked.row.kind === 'shared') {
+      const shared = await getShared(checked.row.shared_deployment_id)
+      if (!shared)
+        return fail(reply, 400, 'BAD_SHARED', 'shared_deployment_id must name a shared deployment')
+      if (shared.status === 'retired')
+        return fail(
+          reply,
+          409,
+          'SHARED_RETIRED',
+          'This shared deployment is retired; nothing can be placed on it.'
+        )
+      const made = await createPlacement(checked.row)
+      await logActivity({
+        action: 'create',
+        user: userId(req),
+        collection: PLACEMENTS,
+        item: String(made.id),
+        req
+      })
+      return { data: { id: made.id } }
+    }
     const driver = await getDriver(checked.row.driver_id)
     if (!driver) return noDriver(reply)
     const badTarget = placementTargetRefusal(driver.kind, checked.row.target)
@@ -877,12 +976,47 @@ function placementRoutes(app: FastifyInstance) {
     const existing = id === null ? null : await getPlacement(id)
     if (id === null || !existing) return notFound(reply)
     const b = body(req)
+    // Phase 6: a placement keeps its kind — dedicated ↔ shared is a move.
+    if (b.kind !== undefined && b.kind !== existing.kind)
+      return fail(
+        reply,
+        409,
+        'USE_MOVE',
+        'A placement keeps its kind: moving onto or off a shared deployment is a move.'
+      )
+    if (existing.kind === 'shared') {
+      const checkedShared = validatePlacementInput({
+        kind: 'shared',
+        shared_deployment_id: b.shared_deployment_id ?? existing.shared_deployment_id,
+        target: b.target ?? existing.target
+      })
+      if (!checkedShared.ok) return fail(reply, 400, checkedShared.code, checkedShared.message)
+      if (checkedShared.row.kind !== 'shared') return notFound(reply)
+      try {
+        const updated = await patchSharedPlacement(existing, checkedShared.row)
+        await logActivity({
+          action: 'update',
+          user: userId(req),
+          collection: PLACEMENTS,
+          item: String(id),
+          req,
+          changed_fields: ['target'].filter((k) => b[k] !== undefined)
+        })
+        return { data: updated }
+      } catch (err) {
+        if (err instanceof PlaceSharedError)
+          return fail(reply, err.statusCode, err.code, err.message)
+        if (err instanceof PromotionError) return fail(reply, err.status, err.code, err.message)
+        throw err
+      }
+    }
     const checked = validatePlacementInput({
-      kind: b.kind ?? existing.kind,
+      kind: 'dedicated',
       driver_id: b.driver_id ?? existing.driver_id,
       target: b.target ?? existing.target
     })
     if (!checked.ok) return fail(reply, 400, checked.code, checked.message)
+    if (checked.row.kind === 'shared') return notFound(reply)
     const moved = checked.row.driver_id !== existing.driver_id
     const driver = await getDriver(checked.row.driver_id)
     if (moved && !driver) return noDriver(reply)
@@ -905,6 +1039,10 @@ function placementRoutes(app: FastifyInstance) {
       )
       if (running) return stackRunning(reply, running)
     }
+    // Phase 6: a forgotten stack stays forgotten while the placement names the same stack on
+    // the same driver (validation never takes forgotten_at from a body).
+    const forgotten = existing.target.forgotten_at
+    if (forgotten && !moved && !stackMoved) checked.row.target.forgotten_at = forgotten
     const updated = await updatePlacement(id, checked.row)
     if (!updated) return notFound(reply)
     if (moved) await followPlacementDriver(id, checked.row.driver_id)
@@ -928,6 +1066,8 @@ function placementRoutes(app: FastifyInstance) {
     if (!done.ok) {
       if (done.code === 'IN_USE')
         return fail(reply, 409, 'IN_USE', 'An environment still uses this placement')
+      if (done.code === 'PLACEMENT_IN_USE')
+        return fail(reply, 409, 'PLACEMENT_IN_USE', 'A move in progress uses this placement')
       return notFound(reply)
     }
     await logActivity({
@@ -938,6 +1078,31 @@ function placementRoutes(app: FastifyInstance) {
       req
     })
     return reply.code(204).send()
+  })
+
+  // Phase 6: the agent is gone and the stack with it — the Hub stops guarding a stack it can no
+  // longer see. {confirm: <stack name>}; 409 STACK_RUNNING while the agent reports it there.
+  app.post('/placements/:id/forget-stack', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = idParam((req.params as { id: string }).id)
+    if (id === null) return notFound(reply)
+    try {
+      const out = await forgetPlacementStack(id, body(req).confirm)
+      if (!out.ok) return fail(reply, out.status, out.code, out.message)
+      await logActivity({
+        action: 'hub-stack-forget',
+        user: userId(req),
+        collection: PLACEMENTS,
+        item: String(id),
+        req,
+        comment: JSON.stringify({ stack: out.stack, agent: out.agent })
+      })
+      const envIds = await environmentsUsing({ placement: id })
+      for (const envId of envIds) await forgetEnvironment(app, envId)
+      return { data: { id, stack: out.stack, forgotten_at: out.forgotten_at, agent: out.agent } }
+    } catch (err) {
+      if (err instanceof PromotionError) return fail(reply, err.status, err.code, err.message)
+      throw err
+    }
   })
 }
 
@@ -1230,6 +1395,9 @@ function promotionRoutes(app: FastifyInstance) {
     if (!row) return notFound(reply)
     const input = promoteInput(req)
     if (!input) return fail(reply, 400, 'BAD_KIND', 'kind must be promote or rollback')
+    // Final review moves I-2 (P6-37): owners too — a promotion re-deploys what a move relies on.
+    const open = await moveOpenRefusal({ envIds: [Number(row.id)] })
+    if (open) return fail(reply, open.status, open.code, open.message)
     try {
       return {
         data: answeredPlan(buildPromotionPlan(await gatherPlanInput(Number(row.id), input)))

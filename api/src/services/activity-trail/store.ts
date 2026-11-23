@@ -3,6 +3,7 @@ import { isMssql } from '../../db/dialect.js'
 import { db } from '../../db/index.js'
 import { getTenantId } from '../../db/tenant-context.js'
 import { hasColumn } from '../../lib/column-probe.js'
+import { registerAppKeyed } from '../app-forget.js'
 import { allCanonicalColumns, GENESIS_HASH } from './canonical.js'
 import type { Anchor, Bridge, WalkRow } from './chain.js'
 
@@ -12,7 +13,7 @@ export const ACTIVITY = 'nivaro_activity'
 export const SEALS = 'nivaro_activity_seals'
 export const BRIDGES = 'nivaro_activity_seal_bridges'
 
-const tableProbe = new Map<string, { ok: boolean; at: number }>()
+const tableProbe = registerAppKeyed(new Map<string, { ok: boolean; at: number }>())
 const MISS_TTL_MS = 60_000
 
 async function hasTableCached(table: string): Promise<boolean> {
@@ -38,7 +39,7 @@ export async function trailReady(): Promise<boolean> {
 
 /** Migration 518's filtered index of the rows still to seal (SQL Server only). */
 export const UNSEALED_INDEX = 'ix_nivaro_activity_unsealed'
-const indexProbe = new Map<string, { ok: boolean; at: number }>()
+const indexProbe = registerAppKeyed(new Map<string, { ok: boolean; at: number }>())
 /** A present index is re-checked now and then (a rollback can drop it under a running API). */
 const HIT_TTL_MS = 10 * 60_000
 

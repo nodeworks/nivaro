@@ -5,6 +5,7 @@ import { REVOKED_PREFIX } from '../auth/session.js'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { bumpAccessStamp } from './access-stamp.js'
+import { registerAppKeyed } from './app-forget.js'
 import { canSeeRoom } from './chat.js'
 import { isMultiTenant } from './deployment-mode.js'
 import { getIo } from './io-holder.js'
@@ -303,7 +304,7 @@ export async function userWithApiKey(user: User, keyId: number): Promise<User | 
 // ── Gates ──────────────────────────────────────────────────────────────────
 
 const COLLECTION_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
-const knownTables = new Map<string, { ok: boolean; at: number }>()
+const knownTables = registerAppKeyed(new Map<string, { ok: boolean; at: number }>())
 const KNOWN_TTL_MS = 5 * 60_000
 
 /**
@@ -630,7 +631,7 @@ export async function recheckSocketRooms(
  */
 const JOIN_VERDICT_TTL_MS = 10_000
 const JOIN_VERDICT_MAX = 20_000
-const joinVerdicts = new Map<string, { at: number; ok: Promise<boolean> }>()
+const joinVerdicts = registerAppKeyed(new Map<string, { at: number; ok: Promise<boolean> }>())
 
 /** Drop cached join verdicts — everyone's, or one person's. */
 export function forgetJoinVerdicts(userId?: string): void {

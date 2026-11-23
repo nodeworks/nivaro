@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { db } from '../db/index.js'
+import { registerAppKeyed } from './app-forget.js'
 import { readSetOf } from './sql-read-set.js'
 import { currentTenantKey } from './tenant-rooms.js'
 import {
@@ -55,7 +56,7 @@ export class QueryNotScopedError extends Error {
 // with its SQL (part of the key); relation changes reach it within the TTL.
 const REACH_TTL = 5 * 60_000
 const REACH_MAX = 2000
-const reachMemo = new Map<string, { at: number; value: Promise<boolean> }>()
+const reachMemo = registerAppKeyed(new Map<string, { at: number; value: Promise<boolean> }>())
 
 function sqlKey(sql: string): string {
   return createHash('sha1').update(sql).digest('hex')

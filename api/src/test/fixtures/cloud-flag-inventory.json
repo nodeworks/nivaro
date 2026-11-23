@@ -1402,11 +1402,10 @@
       "text": "const origin = process.env.CLOUD_META_DB_URL ? (block?.origin ?? tenantOrigin() ?? '') : base",
       "form": "raw",
       "weight": 1,
-      "meaning": "nivaroCloud",
-      "rule": "C4",
-      "why": "tenant canonical origin (CLOUD_BASE_DOMAIN / custom domain) for the phone app",
-      "batch": "A",
-      "phase6": "shared deployment answers the self-hosted admin origin to the phone app for every app; per-app phone sign-in needs a per-app origin"
+      "meaning": "multiTenant",
+      "rule": "T3",
+      "why": "the app's own origin for the phone app: the tenant's verified/canonical origin (cloud) or its listed origin (Hub shared deployment, phase 6 Task 14), never the shared process's address",
+      "batch": "A"
     },
     {
       "id": "services/app-info.ts:110",
@@ -1415,9 +1414,9 @@
       "text": "? `${process.env.CLOUD_META_DB_URL ? origin : base}/api/files/${brand.logo}`",
       "form": "raw",
       "weight": 1,
-      "meaning": "nivaroCloud",
-      "rule": "C4",
-      "why": "tenant canonical origin (CLOUD_BASE_DOMAIN / custom domain) for the phone app",
+      "meaning": "multiTenant",
+      "rule": "T3",
+      "why": "the logo URL on the app's own origin (cloud and Hub shared deployment, phase 6 Task 14)",
       "batch": "A"
     },
     {
@@ -2730,11 +2729,10 @@
       "text": "if (process.env.CLOUD_META_DB_URL) return tenantOrigin() ?? mcpPublicOrigin()",
       "form": "raw",
       "weight": 1,
-      "meaning": "nivaroCloud",
-      "rule": "C4",
-      "why": "OAuth issuer = tenant canonical origin",
-      "batch": "A",
-      "phase6": "shared deployment keeps the self-hosted issuer (request host / MCP_PUBLIC_URL), one for every app; a per-app OAuth issuer needs a per-app origin"
+      "meaning": "multiTenant",
+      "rule": "T3",
+      "why": "OAuth issuer = the app's own origin: tenant canonical origin (cloud) or the listed host the request came on (Hub shared deployment, phase 6 Task 14)",
+      "batch": "A"
     },
     {
       "id": "services/row-schedules.ts:93",

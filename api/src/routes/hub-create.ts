@@ -54,7 +54,13 @@ import {
   validateServerInput
 } from '../services/hub/db/servers.js'
 import { placeOf, samePlace } from '../services/hub/db/stored-connection.js'
+import {
+  attachEnvDatabase,
+  detachEnvDatabase,
+  EnvDatabaseError
+} from '../services/hub/env-database.js'
 import { GitlabWriteError } from '../services/hub/gitlab-write.js'
+import { PromotionError } from '../services/hub/promote-lock.js'
 import { HUB_MASK, HubSecretError } from '../services/hub/secrets.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
 
@@ -104,6 +110,7 @@ export function hubPhase3Routes(app: FastifyInstance) {
   })
   dbServerRoutes(app)
   databaseRoutes(app)
+  envDatabaseRoutes(app)
   targetRoutes(app)
   creationRoutes(app)
 }
@@ -546,6 +553,77 @@ function databaseRoutes(app: FastifyInstance) {
       })
       return { data: { id, dropped: out.dropped } }
     })
+  })
+}
+
+// ─── Attach a record to an existing environment (ruling P6-32) ───────────────
+
+/**
+ * PUT    /environments/:envId/database {database_id, override?} → {data: {database, check, changed,
+ *        warning, overridden}} — override: true attaches a record whose identity differs on a
+ *        Docker placement (DATABASE_IDENTITY_DIFFERS otherwise), logged as hub-env-db-attach-override
+ * DELETE /environments/:envId/database               → {data: {database_id, changed}}
+ * Hub admin only. Refusals: services/hub/env-database.ts (a failed check answers its `check`).
+ */
+function envDatabaseRoutes(app: FastifyInstance) {
+  const envRefusal = (reply: FastifyReply, err: unknown) => {
+    if (err instanceof EnvDatabaseError)
+      return reply
+        .code(err.status)
+        .send({ error: err.message, code: err.code, ...(err.check ? { check: err.check } : {}) })
+    if (err instanceof PromotionError)
+      return fail(reply, err.status === 503 ? 503 : 409, err.code, err.message)
+    return refusal(reply, err)
+  }
+
+  app.put('/environments/:envId/database', { preHandler: requireAdmin }, async (req, reply) => {
+    const envId = idOf(req, 'envId')
+    if (envId === null) return notFound(reply)
+    try {
+      const b = body(req)
+      const out = await attachEnvDatabase(
+        envId,
+        b.database_id,
+        {},
+        { override: b.override === true }
+      )
+      if (out.changed)
+        await logActivity({
+          action: out.overridden ? 'hub-env-db-attach-override' : 'hub-env-db-attach',
+          user: userId(req),
+          collection: ENVS,
+          item: String(envId),
+          comment: `Attached database record ${out.database.id} (${out.database.database_name}, ${out.database.engine})${
+            out.overridden
+              ? ' by override: the Hub reads another database identity than the app reports'
+              : ''
+          }`,
+          req
+        })
+      return { data: out }
+    } catch (err) {
+      return envRefusal(reply, err)
+    }
+  })
+
+  app.delete('/environments/:envId/database', { preHandler: requireAdmin }, async (req, reply) => {
+    const envId = idOf(req, 'envId')
+    if (envId === null) return notFound(reply)
+    try {
+      const out = await detachEnvDatabase(envId)
+      if (out.changed)
+        await logActivity({
+          action: 'hub-env-db-detach',
+          user: userId(req),
+          collection: ENVS,
+          item: String(envId),
+          comment: `Detached database record ${out.database_id} (the record and the database stay)`,
+          req
+        })
+      return { data: out }
+    } catch (err) {
+      return envRefusal(reply, err)
+    }
   })
 }
 

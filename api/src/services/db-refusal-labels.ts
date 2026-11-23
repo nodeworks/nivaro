@@ -9,6 +9,7 @@ import {
   refusalDetail
 } from '../lib/db-refusal.js'
 import { humanCollection, fieldLabel as humanField } from './access-words.js'
+import { registerAppKeyed } from './app-forget.js'
 import { getCollection, getFields } from './collections.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
@@ -31,7 +32,7 @@ export interface LabelledRefusal {
 type Context = 'record' | 'import'
 
 /** Constraint → its columns (and, for a foreign key, the table that holds them). */
-const columnCache = new Map<string, { table: string | null; columns: string[] }>()
+const columnCache = registerAppKeyed(new Map<string, { table: string | null; columns: string[] }>())
 const CACHE_MAX = 500
 const LOOKUP_TIMEOUT_MS = 1500
 

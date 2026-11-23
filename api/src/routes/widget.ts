@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { registerAppKeyed } from '../services/app-forget.js'
 import { SignalStreamRoute, sharedSignature } from '../services/public-signal-stream.js'
 import type { QueueRow } from '../services/queues.js'
 import { fetchQueueItems } from '../services/queues.js'
@@ -480,7 +481,7 @@ const FEED_STREAM_COALESCE_MS = 2_000
  * widget recompute budget (WIDGET_LIVE_MAX_PER_MIN). A stream signals only when this changes, so
  * it never says more than a reload of the public feed would.
  */
-const feedSigs = new Map<string, { at: number; sig: Promise<string | null> }>()
+const feedSigs = registerAppKeyed(new Map<string, { at: number; sig: Promise<string | null> }>())
 function feedSignature(token: string, feed: Record<string, unknown>): Promise<string | null> {
   const tenant = currentTenantKey()
   return sharedSignature(

@@ -320,7 +320,9 @@ function statusTarget(r: Record<string, unknown>): HubStatusTarget {
     id: Number(r.id),
     key: String(r.key),
     base_url: String(r.base_url),
-    hub_token: (r.hub_token as string | null) ?? null
+    hub_token: (r.hub_token as string | null) ?? null,
+    // Phase 6 (R3): a shared-placed environment is read through its deployment.
+    placement_id: r.placement_id == null ? null : Number(r.placement_id)
   }
 }
 
@@ -350,7 +352,7 @@ export interface StoredRun {
 }
 
 /** The Hub's runs of one environment, newest first, with their stored steps. */
-async function storedRuns(envId: number): Promise<StoredRun[]> {
+export async function storedRuns(envId: number): Promise<StoredRun[]> {
   const rows = (await db(DEPLOYS)
     .where({ environment_id: envId })
     .orderBy('id', 'desc')
@@ -451,8 +453,11 @@ export async function unrecordedComponents(
   return planned.some((c) => !recorded(c))
 }
 
-/** Versions the previous environment ran through the Hub successfully (any record). */
-const successfulVersions = (runs: StoredRun[]) =>
+/**
+ * Versions the previous environment ran through the Hub successfully (any record). Exported for
+ * the shared upgrade's ORDER rule (phase 6, preflight M14): a `shared` success row counts too.
+ */
+export const successfulVersions = (runs: StoredRun[]) =>
   runs.filter((r) => r.status === 'success').map((r) => r.version)
 
 /**
@@ -493,6 +498,8 @@ async function componentsForGather(placementId: number | null): Promise<HubCompo
     listComponents(placementId),
     getPlacement(placementId)
   ])
+  // Phase 6: a shared placement has no components (the shared deployment deploys the app).
+  if (placement?.kind === 'shared') return []
   return list.map((c) => ({ ...c, target_branch: componentTargetBranch(c, placement) }))
 }
 
@@ -528,6 +535,9 @@ export async function gatherPlanInput(
   const previous = previousRaw ? (environmentFromRow(previousRaw) as HubEnvironmentRow) : null
 
   const components = await componentsForGather(target.placement_id)
+  // Phase 6: the planner refuses SHARED_PLACEMENT for an environment on a shared deployment.
+  const sharedPlacement =
+    target.placement_id != null && (await getPlacement(target.placement_id))?.kind === 'shared'
   const previousComponents =
     previous && kind === 'promote' ? await componentsForGather(previous.placement_id) : []
 
@@ -696,6 +706,7 @@ export async function gatherPlanInput(
 
   return {
     ...(opts.apply ? { apply: true } : {}),
+    ...(sharedPlacement ? { sharedPlacement: true } : {}),
     app,
     target,
     previous,
