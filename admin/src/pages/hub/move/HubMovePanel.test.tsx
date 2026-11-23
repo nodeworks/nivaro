@@ -942,7 +942,7 @@ describe('HubMovePanel — a move in progress', () => {
 
   it('a halted rollback (HALTED_TARGET_LIVE): stop the target, tick, then Roll back', async () => {
     const say =
-      'Stop the Docker stack efp-production-k3x9 (driver Docker east): remove it on that swarm (docker stack rm efp-production-k3x9) or put the app in maintenance. Then tick "target stopped" and Roll back: the Hub then lifts the source\'s maintenance.'
+      "Stop the Docker stack efp-production-k3x9 (driver Docker east): remove it on that swarm (docker stack rm efp-production-k3x9) and do not deploy it again. Then tick this box and Roll back, once no process of this app runs there and none can restart: the Hub then lifts the source's maintenance."
     const halted = (done: boolean) => ({
       status: 'interrupted',
       step: 'release',

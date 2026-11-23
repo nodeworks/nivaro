@@ -1267,27 +1267,39 @@ async function locksHeld(ctx: Ctx): Promise<boolean> {
  */
 async function targetStopText(move: HubMoveRow, sourceFrozen: boolean): Promise<string> {
   const p = await getPlacement(move.to_placement_id)
-  let target = `placement ${move.to_placement_id}`
+  let target = 'the new home'
   let how = 'stop every process of this app there and keep it from starting again'
   if (p?.kind === 'shared') {
+    // Design R2-S1: stopping a shared deployment stops every other app on it; say so, with how many.
     const shared = await getShared(p.shared_deployment_id)
     const key = shared?.key ?? String(p.shared_deployment_id)
-    target = `the shared deployment ${key}`
-    how = `remove the app from the shared deployment ${key}: stop that deployment (scale its services to 0) until this rollback is done; the rollback then drops the app from its list and the deployment can start again`
+    const others = Number(
+      (
+        (await db(ENVS)
+          .join('nivaro_hub_placements as p', 'p.id', `${ENVS}.placement_id`)
+          .where('p.shared_deployment_id', p.shared_deployment_id)
+          .whereNot(`${ENVS}.id`, move.environment_id)
+          .count({ n: '*' })
+          .first()) as { n?: unknown } | undefined
+      )?.n ?? 0
+    )
+    target = key
+    how = `scale its services to 0. This stops every app on ${key} (${others} other app${others === 1 ? '' : 's'}) until the rollback is done; the rollback then drops this app from its list and you can start ${key} again`
   } else if (p) {
     const driver = await getDriver(p.driver_id)
     const stack = (p.target as { stack?: unknown }).stack
     if (driver?.kind === 'docker' && typeof stack === 'string') {
       target = `the Docker stack ${stack} (driver ${driver.name})`
-      how = `remove the stack on that swarm (docker stack rm ${stack}) and do not deploy it again`
+      how = `remove it on that swarm (docker stack rm ${stack}) and do not deploy it again`
     } else {
       const at = move.steps.addresses?.target_link_base
-      target = `the GitLab-deployed app${at ? ` at ${at}` : ''} (placement ${p.id})`
+      target = at ? `the GitLab-deployed app at ${at}` : 'the GitLab-deployed app'
       how =
         'remove its stack on its swarm manager (docker stack rm) and stop its pipeline from deploying it again'
     }
   }
-  return `Make sure no process of this app runs at ${target}, and none can restart: ${how}. Then tick "target stopped" (it states that no process of this app runs at ${target}, and none can restart) and Roll back again: the Hub then ${sourceFrozen ? "lifts the source's maintenance" : 'finishes the rollback'}.`
+  // "Stop <target>: …" is what the admin reads the target's name from (haltedTargetName).
+  return `Stop ${target}: ${how}. Then tick this box and Roll back, once no process of this app runs there and none can restart: the Hub then ${sourceFrozen ? "lifts the source's maintenance" : 'finishes the rollback'}.`
 }
 
 /**

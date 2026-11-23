@@ -686,8 +686,17 @@ describe('rolls back from every step before release', () => {
     const m = await readMove(move_id)
     expect(m?.status).toBe('interrupted')
     expect(m?.error).toMatch(/^HALTED_TARGET_LIVE/)
-    expect(m?.error).toMatch(/remove the app from the shared deployment/)
     expect(undoCalls(fake.calls)).not.toContainEqual(['sourceMaintenance', false])
+    // Design R2-S1: the item names the deployment, says plainly that stopping it stops every other
+    // app on it, never quotes its own internal name and says each thing once.
+    const item = m?.checklist.find((c) => c.id === 'target_stopped')?.text ?? ''
+    expect(item).toMatch(/^Stop [^:]+: scale its services to 0\./)
+    expect(item).toMatch(
+      /This stops every app on \S+ \(\d+ other apps?\) until the rollback is done/
+    )
+    expect(item).toMatch(/Then tick this box and Roll back/)
+    expect(item).not.toMatch(/"target stopped"|placement \d/)
+    expect(item.split('none can restart').length).toBeLessThanOrEqual(2)
   })
 
   it('a source undo that fails ends the move failed, naming it (the source is still lifted)', async () => {
