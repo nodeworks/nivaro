@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
+import { isEncrypted } from '../services/encryption.js'
 import { idParam } from '../services/hub/apps.js'
 import { healMoves } from '../services/hub/move/heal.js'
 import { type HubMoveRow, listMoves, readMove } from '../services/hub/move/rows.js'
@@ -75,10 +76,26 @@ async function guarded(reply: FastifyReply, run: () => Promise<unknown>) {
   }
 }
 
-/** A move as answered: the stored row without the run's own lock tokens (heal's business). */
+/** Anything sealed with the Hub key, at any depth, is left out of an answer (R6-M-1). */
+function withoutSealed(v: unknown): unknown {
+  if (Array.isArray(v)) return v.filter((x) => !isEncrypted(x)).map(withoutSealed)
+  const proto = v && typeof v === 'object' ? Object.getPrototypeOf(v) : undefined
+  // Plain objects only: a Date (or any other class) is answered as it is.
+  if (proto === Object.prototype || proto === null) {
+    const out: Record<string, unknown> = {}
+    for (const [k, x] of Object.entries(v as object)) if (!isEncrypted(x)) out[k] = withoutSealed(x)
+    return out
+  }
+  return v
+}
+
+/**
+ * A move as answered: the stored row without the run's own lock tokens (heal's business), the
+ * sealed transfer tickets (R2-M-6) and any other sealed value (R6-M-1).
+ */
 function publicMove(m: HubMoveRow) {
-  const { locks: _locks, ...steps } = m.steps
-  return { ...m, steps }
+  const { locks: _locks, open_tickets: _tickets, ...steps } = m.steps
+  return withoutSealed({ ...m, steps }) as HubMoveRow
 }
 
 export function hubMoveRoutes(app: FastifyInstance) {

@@ -353,6 +353,43 @@ describe('hub move routes', () => {
     expect(late.json().code).toBe('MOVE_ENDED')
   })
 
+  // R6-M-1: no sealed value (open transfer tickets, anything sealed with the Hub key) and no lock
+  // token ever leaves in a move answer, one move or the list.
+  it('R6-M-1: GET /moves/:id and the list hold no sealed value and no lock token', async () => {
+    const r = await inject('POST', `/environments/${envId}/move`, startBody())
+    const id = r.json().data.move_id as number
+    await Run.awaitMove(id)
+    const { sealSecret } = await import('../../../services/hub/secrets.js')
+    const { isEncrypted } = await import('../../../services/encryption.js')
+    const row = await db('nivaro_hub_moves').where({ id }).first()
+    const steps = JSON.parse(String(row.steps))
+    steps.open_tickets = [sealSecret(`nvt_${'Q'.repeat(43)}`)]
+    steps.addresses = { ...(steps.addresses ?? {}), note: sealSecret('anything sealed') }
+    steps.locks = { env: 'env-token-1', shared: [{ id: 1, token: 'shared-token-1' }] }
+    await db('nivaro_hub_moves')
+      .where({ id })
+      .update({ steps: JSON.stringify(steps) })
+    const sealedIn = (v: unknown): boolean =>
+      isEncrypted(v) ||
+      (Array.isArray(v)
+        ? v.some(sealedIn)
+        : !!v && typeof v === 'object' && Object.values(v).some(sealedIn))
+    for (const body of [
+      (await inject('GET', `/moves/${id}`)).json().data,
+      (await inject('GET', `/environments/${envId}/moves`)).json().data
+    ]) {
+      expect(sealedIn(body)).toBe(false)
+      const text = JSON.stringify(body)
+      expect(text).not.toContain('open_tickets')
+      expect(text).not.toContain('env-token-1')
+      expect(text).not.toContain('shared-token-1')
+    }
+    // Dates and the rest of the move are answered as they were.
+    const one = (await inject('GET', `/moves/${id}`)).json().data
+    expect(typeof one.started_at).toBe('string')
+    expect(one.steps.list.length).toBeGreaterThan(0)
+  })
+
   it('a move that ran to the end answers success; confirm-route on it is 409 NOT_WAITING', async () => {
     const r = await inject('POST', `/environments/${envId}/move`, startBody())
     const id = r.json().data.move_id as number
