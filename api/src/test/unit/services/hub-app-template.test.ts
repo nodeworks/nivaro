@@ -1115,10 +1115,7 @@ describe('scripts/deploy.sh run (through the real wrapper)', () => {
     expect(both.calls).toMatch(/^deployed .* BOOT=44$/m)
     // Only a move id: anything else in that line stops the deploy before ssh.
     for (const bad of ['0', 'x1', '1;rm', '12a', ''])
-      expect(
-        run({ pin: `0.3.300\n${DIGEST}\nboot-maintenance=${bad}\n` }).status,
-        bad
-      ).not.toBe(0)
+      expect(run({ pin: `0.3.300\n${DIGEST}\nboot-maintenance=${bad}\n` }).status, bad).not.toBe(0)
   })
 
   const refusedBeforeSsh = (r: { status: number | null; calls: string }) => {
