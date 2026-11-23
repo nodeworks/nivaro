@@ -823,7 +823,7 @@ export const MOVE_WARNING_COPY: Record<string, Copy> = {
   },
   GITLAB_BOOT_WINDOW: {
     title: 'The Hub cannot prove the new app starts in maintenance',
-    hint: 'For a few seconds it could take writes while the old one still runs on the same database. Make sure its deploy job passes the Hub’s boot maintenance, or move at a quiet time, then tick that item in the checklist.'
+    hint: 'It may start without maintenance, so the old one goes into maintenance while it deploys, until the Hub has switched the new one’s maintenance on. Make sure its deploy job passes the Hub’s boot maintenance, or move at a quiet time, then tick that item in the checklist.'
   },
   STORAGE_PREFIX_CHANGES: {
     title: 'Files in S3 or Azure are copied to a new folder',

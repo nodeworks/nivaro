@@ -526,7 +526,7 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
   if (input.target_facts.boot_maintenance === 'unproven')
     add(
       'GITLAB_BOOT_WINDOW',
-      `The Hub cannot prove that ${sideName(to)} starts in maintenance: its deploy job may not pass the Hub's boot maintenance into the app (an adopted app, or an older template). For the seconds between the new app starting and the Hub switching its maintenance on, it could take writes while the old placement still runs on the same database.`
+      `The Hub cannot prove that ${sideName(to)} starts in maintenance: its deploy job may not pass the Hub's boot maintenance into the app (an adopted app, or an older template). So the old placement goes into maintenance while it deploys, until the Hub has switched the new app's maintenance on: people see the maintenance page for the length of the deploy, even when the route is changed by hand later.`
     )
   if (from.kind === 'gitlab')
     add(
@@ -607,7 +607,7 @@ function checklistOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Mov
   if (input.target_facts.boot_maintenance === 'unproven')
     out.push({
       id: 'gitlab_boot_window',
-      text: 'I accept that the new GitLab-deployed app may run for a few seconds without maintenance while the old one still writes to the same database (nobody uses the app during the move, or its deploy job passes HUB_BOOT_MAINTENANCE into the app).',
+      text: 'I accept that the app is in maintenance while the new GitLab-deployed app deploys (it may start without maintenance, so the old one pauses until the Hub has switched it on), or its deploy job passes HUB_BOOT_MAINTENANCE into the app.',
       required: true
     })
   if (input.target_facts.multi_node_unread)
