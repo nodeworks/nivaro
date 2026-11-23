@@ -266,3 +266,13 @@ export function CopyButton({
     </Button>
   )
 }
+
+/**
+ * Spread on the box that shows a secret once (a deployment token, an agent token, a sign-in
+ * client secret), together with `NO_RECORD_CLASS` in its className: session replay
+ * (`[data-replay-block]`, REPLAY_BLOCK_SELECTOR) records a blank box of the same size in its place,
+ * and a Report-a-problem screenshot blanks `.nvr-no-record`. Only inputs are masked otherwise, so
+ * a value shown as text would be kept in clear for anyone who may open replays.
+ */
+export const NO_RECORD_ATTRS = { 'data-replay-block': '' } as const
+export const NO_RECORD_CLASS = 'nvr-no-record'
