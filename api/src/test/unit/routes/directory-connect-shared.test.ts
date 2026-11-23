@@ -45,7 +45,7 @@ const sessions: Session[] = []
 
 async function buildApp() {
   const app = Fastify()
-  app.decorateRequest('session', null as unknown as Session)
+  app.decorateRequest('session', null as never)
   app.addHook('onRequest', async (req) => {
     const s: Session = {}
     sessions.push(s)

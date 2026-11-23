@@ -77,12 +77,12 @@ const bot = (id: string) => ({
   teams_bot_tenant_id: MS_TENANT
 })
 
-let privateKey: CryptoKey
+let privateKey: Awaited<ReturnType<typeof generateKeyPair>>['privateKey']
 const savedEnv = { ...process.env }
 
 beforeAll(async () => {
   const pair = await generateKeyPair('RS256')
-  privateKey = pair.privateKey as CryptoKey
+  privateKey = pair.privateKey
   const jwk = { ...(await exportJWK(pair.publicKey)), kid: 'k1', alg: 'RS256', use: 'sig' }
   vi.stubGlobal(
     'fetch',
