@@ -1786,7 +1786,7 @@ export const hubCreateDocs: DocSection = {
         "Nothing the app repository changes can decide what runs. At fork the Hub sets the app project's CI configuration path to `ci/deploy.yml@<template_project>:<template_ref>`, so GitLab reads the deploy job from the Hub-owned template at the pinned ref and ignores the app repository's own `.gitlab-ci.yml`. It also sets the project so nobody may set pipeline variables by hand. These are checked again before every deploy and whenever the target changes; a project that does not keep them stops with `CI_CONFIG_REFUSED`.",
         "One deploy key per app. The Hub makes an ed25519 key pair when it creates the repository and pushes the private half once as the project's masked, protected variable `DEPLOY_SSH_KEY`. It is never stored by the Hub. The public half and its fingerprint are what an operator installs on the manager. A key can reach only that app's stacks and hostnames.",
         "The manager runs a forced command. The key may run only `nivaro-hub-deploy`, with three verbs (check who owns a stack, create a secret, deploy a stack) for the exact stack names and hostnames in that app's key file, one proxy network and one image by digest. There is no shell and no Docker socket forwarding.",
-        'The image is pinned by digest. The pin file holds the Nivaro version and the image digest; `latest` and a pin without a digest are refused.'
+        'The image is pinned by digest. The pin file holds the Nivaro version and the image digest; `latest` and a pin without a digest are refused. A move onto the app adds a last line `boot-maintenance=<move id>`, which the deploy job forwards so the app boots in maintenance (see One writer at a time in Moving an environment).'
       ]
     },
     {
