@@ -31,6 +31,7 @@ const SECRET_KEYS = [
   'sms_auth_token',
   'directory_password',
   'directory_refresh_token',
+  'directory_graph_client_secret',
   'vapid_private_key',
   'storage_s3_access_key',
   'storage_s3_secret',
@@ -155,6 +156,11 @@ const allowedSettingsKeys = [
   'directory_username',
   'directory_password',
   'directory_refresh_token',
+  // An app's own Microsoft app registration (migration 554): read only on a Hub shared
+  // deployment; the secret is sealed on save and masked via SECRET_KEYS.
+  'directory_graph_tenant_id',
+  'directory_graph_client_id',
+  'directory_graph_client_secret',
   // SMTP / email
   'smtp_host',
   'smtp_port',
@@ -606,6 +612,32 @@ export async function settingsRoutes(app: FastifyInstance) {
 
     // Preserve secrets if masked value re-submitted
     for (const k of SECRET_KEYS) if (patch[k] === MASK) delete patch[k]
+    // An app's own Microsoft app registration (554): ids as typed (blank = none, at most the
+    // column's 64), the secret sealed with this app's key (encryptValue: the app's own key on a
+    // Hub shared deployment, ENCRYPTION_KEY otherwise) and never stored in clear.
+    for (const k of ['directory_graph_tenant_id', 'directory_graph_client_id'] as const) {
+      if (!(k in patch)) continue
+      const v = patch[k] == null ? '' : String(patch[k]).trim()
+      if (v.length > 64) return reply.code(400).send({ error: `${k} is at most 64 characters` })
+      patch[k] = v || null
+    }
+    if ('directory_graph_client_secret' in patch) {
+      const v =
+        patch.directory_graph_client_secret == null
+          ? ''
+          : String(patch.directory_graph_client_secret).trim()
+      const { AppKeyMissingError, encryptValue } = await import('../services/encryption.js')
+      try {
+        patch.directory_graph_client_secret = v ? encryptValue(v) : null
+      } catch (err) {
+        if (err instanceof AppKeyMissingError) throw err
+        // No ENCRYPTION_KEY on this server: refuse rather than keep the secret in clear.
+        return reply.code(400).send({
+          error: 'The client secret cannot be saved: ENCRYPTION_KEY is not set on this server',
+          code: 'encryption_key_missing'
+        })
+      }
+    }
     if ('directory_auth_mode' in patch) {
       patch.directory_auth_mode =
         patch.directory_auth_mode === 'service_account' || patch.directory_auth_mode === 'connected'

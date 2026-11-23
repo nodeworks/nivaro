@@ -2,8 +2,10 @@ import { randomBytes } from 'node:crypto'
 import type { FastifyInstance, FastifyReply } from 'fastify'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
+import { tenantOrigin } from '../db/tenant-context.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { perAppJobs } from '../services/deployment-mode.js'
 import { checkDirectory } from '../services/directory-sync.js'
 import {
   DirectoryError,
@@ -198,8 +200,20 @@ export async function directoryRoutes(app: FastifyInstance) {
   // `returnTo` is the Settings page to land back on (allowlisted origins only).
   app.get('/connect', { preHandler: requireAdmin }, async (req, reply) => {
     const q = req.query as { returnTo?: string; login_hint?: string }
+    // A Hub shared deployment serves many apps: the only allowed origin is this app's own (the
+    // listed host the request came on), never the deployment's configured addresses.
+    const appOrigin = perAppJobs() ? tenantOrigin() : null
+    if (perAppJobs() && !appOrigin) {
+      return reply
+        .code(400)
+        .send({ error: 'This app has no address to return to', code: 'directory_no_origin' })
+    }
+    const base = appOrigin ?? config.ADMIN_URL
     const allowed = new Set(
-      [config.ADMIN_URL, config.PUBLIC_URL, ...config.APP_URLS.split(',')]
+      (appOrigin
+        ? [appOrigin]
+        : [config.ADMIN_URL, config.PUBLIC_URL, ...config.APP_URLS.split(',')]
+      )
         .map((u) => u.trim())
         .filter(Boolean)
         .map((u) => {
@@ -210,9 +224,9 @@ export async function directoryRoutes(app: FastifyInstance) {
           }
         })
     )
-    let returnTo = `${config.ADMIN_URL}/settings`
+    let returnTo = `${base}/settings`
     try {
-      const parsed = new URL(q.returnTo ?? '', config.ADMIN_URL)
+      const parsed = new URL(q.returnTo ?? '', base)
       if (allowed.has(parsed.origin)) returnTo = `${parsed.origin}${parsed.pathname}`
     } catch {
       /* default */
@@ -221,7 +235,7 @@ export async function directoryRoutes(app: FastifyInstance) {
     const redirectUri = `${new URL(returnTo).origin}/api/auth/callback`
     let url: string
     try {
-      url = directoryConnectUrl({ state, redirectUri, loginHint: q.login_hint ?? null })
+      url = await directoryConnectUrl({ state, redirectUri, loginHint: q.login_hint ?? null })
     } catch (err) {
       return sendDirectoryError(reply, err)
     }

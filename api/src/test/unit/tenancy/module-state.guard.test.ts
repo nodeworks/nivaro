@@ -568,8 +568,6 @@ const SHARED: Record<string, string> = {
   'services/gitlab-client.ts :: commitCache':
     'commit titles by commit sha (immutable, public to whoever reads that repository); no app records',
   'services/gitlab-health.ts :: fetchImpl': FN_SLOT,
-  'services/graph-directory.ts :: cachedToken':
-    'one slot whose key names the app and the identity (directoryTokenKey); a hit needs the same app, another app only replaces it',
   'services/graphql-nested-access.ts :: perRequest': WEAK,
   'services/graphql-nested-guard.ts :: budgets': WEAK,
   'services/grid-presence.ts :: readersCache':
