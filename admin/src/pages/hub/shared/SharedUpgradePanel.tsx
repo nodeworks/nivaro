@@ -69,7 +69,10 @@ export function SharedUpgradePanel({ shared }: { shared: SharedDeployment }) {
     queryFn: () => fetchSharedDeploys(shared.id),
     refetchInterval: (q) => ((q.state.data ?? []).some((d) => isLiveRun(d.status)) ? 10_000 : false)
   })
-  const live = (history.data ?? []).find((d) => isLiveRun(d.status))
+  // Runs the person closed with Done: the history can still list one as live for a moment after
+  // its own read says it ended, and must not latch it again (one click closes it).
+  const closed = useRef(new Set<number>())
+  const live = (history.data ?? []).find((d) => isLiveRun(d.status) && !closed.current.has(d.id))
   // A run found running stays on screen after it ends, until the person closes it.
   useEffect(() => {
     if (live && watching == null) setWatching(live.id)
@@ -86,7 +89,10 @@ export function SharedUpgradePanel({ shared }: { shared: SharedDeployment }) {
           <UpgradeProgress
             sharedId={shared.id}
             deployId={current}
-            onClose={() => setWatching(null)}
+            onClose={() => {
+              closed.current.add(current)
+              setWatching(null)
+            }}
           />
         ) : history.isPending ? (
           // Until the history answers, a run may be going: the form (and its plan read, which
@@ -206,7 +212,10 @@ function UpgradeForm({
     queryKey: upgradeKeys.plan(shared.id, kind, version),
     queryFn: () => planSharedUpgrade(shared.id, kind, version),
     enabled: !!version,
-    staleTime: 0
+    staleTime: 0,
+    // A plan reads the registry and every app live: only a version pick or Plan again asks again.
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false
   })
   // The confirmation and the overrides name one plan: a re-read that plans differently clears them.
   const shownHash = useRef<string | undefined>(undefined)
@@ -270,6 +279,11 @@ function UpgradeForm({
     !start.isPending
   const label = downgrade ? DOWNGRADE_LABEL : KIND_LABEL[kind]
   const downgradeNote = plan.data?.warnings.find((w) => w.code === 'DOWNGRADE')?.text
+  // The planner's own sentence only when the client cannot order the versions itself.
+  const plannerSaysWhy =
+    !!downgradeNote &&
+    !isRawErrorText(downgradeNote) &&
+    !isDowngrade(kind, version, shared.version_pin)
 
   return (
     <div className='space-y-3'>
@@ -351,17 +365,21 @@ function UpgradeForm({
           >
             This is a downgrade
           </p>
-          <p className='m-0 text-[12px] text-amber-900 dark:text-amber-200'>
-            <span className='font-mono'>{version}</span> is older than the version it runs (
-            <span className='font-mono'>{shared.version_pin ?? 'unknown'}</span>). Every app on it
-            goes back, and an older version may not read data a newer one wrote. To return to a
-            version this deployment ran before, use Roll back.
-          </p>
-          {downgradeNote && !isRawErrorText(downgradeNote) && (
-            <p className='m-0 text-[11.5px] text-amber-800 dark:text-amber-300/90'>
-              {downgradeNote}
+          {/* Said once (design N-r2-1): the client's sentence when it can order the two
+              versions, else the planner's (a version that is not x.y.z), never both. */}
+          {!plannerSaysWhy && (
+            <p className='m-0 text-[12px] text-amber-900 dark:text-amber-200'>
+              <span className='font-mono'>{version}</span> is older than the version it runs (
+              <span className='font-mono'>{shared.version_pin ?? 'unknown'}</span>).
             </p>
           )}
+          {plannerSaysWhy && (
+            <p className='m-0 text-[12px] text-amber-900 dark:text-amber-200'>{downgradeNote}</p>
+          )}
+          <p className='m-0 text-[12px] text-amber-900 dark:text-amber-200'>
+            Every app on it goes back, and an older version may not read data a newer one wrote. To
+            return to a version this deployment ran before, use Roll back.
+          </p>
           <div className='flex items-center gap-1.5'>
             <Checkbox
               id={`${idPrefix}-downgrade-ok`}
@@ -597,7 +615,7 @@ function PlanPreview({
           <thead className='bg-slate-50 text-left text-[11px] text-slate-500 dark:bg-muted/40 dark:text-muted-foreground'>
             <tr>
               <th className='px-3 py-1.5 font-medium'>App</th>
-              <th className='px-3 py-1.5 font-medium'>Tenant</th>
+              <th className='hidden px-3 py-1.5 font-medium sm:table-cell'>Tenant</th>
               <th className='px-3 py-1.5 font-medium'>Holds it back</th>
             </tr>
           </thead>
@@ -605,10 +623,17 @@ function PlanPreview({
             {plan.apps.map((a) => (
               <tr key={a.env_id}>
                 <td className='px-3 py-1.5 text-slate-900 dark:text-foreground'>
-                  {a.app} <span className='text-slate-400 dark:text-muted-foreground'>/</span>{' '}
-                  {a.env}
+                  <span className='whitespace-nowrap'>
+                    {a.app} <span className='text-slate-400 dark:text-muted-foreground'>/</span>{' '}
+                    {a.env}
+                  </span>
+                  {/* Design N-r2-7: on a phone the tenant goes under the app (its column is
+                      for wider screens), so the app and environment never wrap word by word. */}
+                  <span className='block break-all font-mono text-[11px] text-slate-500 sm:hidden dark:text-muted-foreground'>
+                    {`Tenant ${a.tenant_id}`}
+                  </span>
                 </td>
-                <td className='px-3 py-1.5 font-mono text-slate-600 dark:text-slate-300'>
+                <td className='hidden px-3 py-1.5 font-mono text-slate-600 sm:table-cell dark:text-slate-300'>
                   {a.tenant_id}
                 </td>
                 <td className='px-3 py-1.5'>
@@ -869,8 +894,9 @@ function UpgradeProgress({
           )
         })}
       </ol>
-      {d.step && !UPGRADE_STEPS.some((s) => s.key === d.step) && (
-        <p className='m-0 text-[12px] text-slate-600 dark:text-slate-300'>Now: {d.step}</p>
+      {live && d.step && !UPGRADE_STEPS.some((s) => s.key === d.step) && (
+        // A step this screen does not know (a newer server): never its raw key.
+        <p className='m-0 text-[12px] text-slate-600 dark:text-slate-300'>Working…</p>
       )}
 
       {d.log && d.log.length > 0 && (
