@@ -504,3 +504,37 @@ describe('locks (preflight R10)', () => {
     expect(L.sharedLockRefusal('move').code).toBe('SHARED_BUSY')
   })
 })
+
+describe('final review M-2 / M-3', () => {
+  it('M-2: a Docker shared deployment refuses a version pin on create (the Hub owns it)', async () => {
+    const d = await driver('docker')
+    const v = S.validateSharedInput({ ...base, mode: 'docker', driver_id: d, version_pin: '0.3.1' })
+    expect(v.ok ? 'ok' : v.code).toBe('BAD_VERSION')
+    expect(v.ok ? '' : v.message).toMatch(/upgrade/)
+    // Registered: the operator says which version it runs.
+    expect(S.validateSharedInput({ ...base, version_pin: '0.3.1' }).ok).toBe(true)
+    // Docker without a pin is fine.
+    expect(S.validateSharedInput({ ...base, mode: 'docker', driver_id: d }).ok).toBe(true)
+  })
+
+  it('M-3: a failed update never rethrows the engine error (it inlines the sealed values)', async () => {
+    const { row } = await S.createShared(fields({ key: 'shared-m3' }), null)
+    const sealed = sealSecret('{"REDIS_URL":"redis://secret-host:6379"}')
+    await db.raw(
+      `CREATE TRIGGER t_m3 BEFORE UPDATE ON nivaro_hub_shared_deployments WHEN NEW.id = ${row.id} BEGIN INSERT INTO no_such_table_m3 VALUES (1); END`
+    )
+    try {
+      let caught: unknown = null
+      try {
+        await S.updateSharedWithSecrets(row.id, { name: 'Renamed' }, { expect: null, next: sealed })
+      } catch (err) {
+        caught = err
+      }
+      expect((caught as Error).message).toBe('Saving the shared deployment failed')
+      expect(JSON.stringify(caught)).not.toContain(sealed)
+      expect(String((caught as Error).stack)).not.toContain(sealed)
+    } finally {
+      await db.raw('DROP TRIGGER t_m3')
+    }
+  })
+})

@@ -1273,3 +1273,105 @@ describe('GET: REDIS_URL stored, not applied', () => {
     expect(JSON.stringify(w)).not.toContain('Pw-0123456789')
   })
 })
+
+describe('final review I-4: an extension a placed app uses', () => {
+  it('PATCH that drops it → 409 EXTENSION_IN_USE naming the app; one nobody uses goes', async () => {
+    const made = await create({ extensions: ['efp-ops', 'reports'] })
+    await db('nivaro_hub_apps')
+      .where({ id: 1 })
+      .update({ extensions: JSON.stringify(['efp-ops']) })
+    await placeEnv(made.row.id, 7)
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/hub/shared/${made.row.id}`,
+      headers: asAdmin,
+      payload: { extensions: ['reports'] }
+    })
+    expect(res.statusCode).toBe(409)
+    expect(res.json().code).toBe('EXTENSION_IN_USE')
+    expect(res.json().error).toContain('acme/env7')
+    expect(res.json().error).toContain('efp-ops')
+    const row = await db('nivaro_hub_shared_deployments').where({ id: made.row.id }).first()
+    expect(JSON.parse(row.extensions)).toEqual(['efp-ops', 'reports'])
+    const ok = await app.inject({
+      method: 'PATCH',
+      url: `/api/hub/shared/${made.row.id}`,
+      headers: asAdmin,
+      payload: { extensions: ['efp-ops'] }
+    })
+    expect(ok.statusCode).toBe(200)
+    expect(ok.json().data.extensions).toEqual(['efp-ops'])
+  })
+})
+
+describe('final review M-5: a rotated token no run has applied', () => {
+  it('GET warns TOKEN_NOT_APPLIED until a successful run started after the rotation', async () => {
+    const made = await create({ key: 'shared-m5', mode: 'docker', driver_id: 3 })
+    const id = made.row.id
+    await db('nivaro_hub_shared_deployments').where({ id }).update({ version_pin: '0.3.210' })
+    await db('nivaro_hub_shared_deploys').insert({
+      shared_deployment_id: id,
+      kind: 'upgrade',
+      version: '0.3.210',
+      status: 'success',
+      started_at: new Date(Date.now() - 3_600_000)
+    })
+    const get = async () =>
+      (await app.inject({ method: 'GET', url: `/api/hub/shared/${id}`, headers: asAdmin }))
+        .json()
+        .data.warnings.map((w: { code: string }) => w.code) as string[]
+    expect(await get()).not.toContain('TOKEN_NOT_APPLIED')
+    // Rotated; the re-apply was not started (no hook): the stack still holds the old token.
+    await app.inject({ method: 'POST', url: `/api/hub/shared/${id}/token`, headers: asAdmin })
+    expect(await get()).toContain('TOKEN_NOT_APPLIED')
+    await db('nivaro_hub_shared_deploys').insert({
+      shared_deployment_id: id,
+      kind: 'upgrade',
+      version: '0.3.210',
+      status: 'success',
+      started_at: new Date(Date.now() + 1000)
+    })
+    expect(await get()).not.toContain('TOKEN_NOT_APPLIED')
+  })
+})
+
+describe('re-review FW1-M-3: dropping an extension holds the deployment lock', () => {
+  it('a held lock refuses the drop (never judged while a place may write); other edits are not locked', async () => {
+    const { defaultSharedLock } = await import('../../../services/hub/promote-lock.js')
+    const made = await create({ extensions: ['efp-ops', 'reports'] })
+    const lock = defaultSharedLock()
+    const token = await lock.take(made.row.id, 'place')
+    try {
+      const drop = await app.inject({
+        method: 'PATCH',
+        url: `/api/hub/shared/${made.row.id}`,
+        headers: asAdmin,
+        payload: { extensions: ['efp-ops'] }
+      })
+      expect(drop.statusCode).toBe(409)
+      expect(drop.json().code).not.toBe('EXTENSION_IN_USE')
+      const row = await db('nivaro_hub_shared_deployments').where({ id: made.row.id }).first()
+      expect(JSON.parse(row.extensions)).toEqual(['efp-ops', 'reports'])
+      const rename = await app.inject({
+        method: 'PATCH',
+        url: `/api/hub/shared/${made.row.id}`,
+        headers: asAdmin,
+        payload: { name: 'Renamed' }
+      })
+      expect(rename.statusCode).toBe(200)
+    } finally {
+      if (token) await lock.release(made.row.id, token)
+    }
+    const ok = await app.inject({
+      method: 'PATCH',
+      url: `/api/hub/shared/${made.row.id}`,
+      headers: asAdmin,
+      payload: { extensions: ['efp-ops'] }
+    })
+    expect(ok.statusCode).toBe(200)
+    // Released: the lock is free again.
+    const again = await lock.take(made.row.id, 'place')
+    expect(again).toBeTruthy()
+    if (again) await lock.release(made.row.id, again)
+  })
+})

@@ -74,6 +74,7 @@ export type FieldCode =
   | 'SETTING_INVALID'
   | 'SHARED_KEY_MISMATCH'
   | 'ROLE_NOT_SHARED'
+  | 'ROLE_NEEDS_TRAEFIK_V3'
 
 export type FieldError = { field: string; code: FieldCode }
 
@@ -487,6 +488,10 @@ export function validateStackSpec(body: unknown, cfg: SpecConfig): SpecResult {
       } else if (seen.has(role)) bad(`${p}.role`, 'ROLE_BAD')
       // A shared deployment runs no separate realtime role (phase 6).
       else if (sharedKey !== null && role === 'realtime') bad(`${p}.role`, 'ROLE_NOT_SHARED')
+      // Final review E-1: the realtime router's path rule is Traefik v3 PathRegexp syntax; v2
+      // would never route it (realtime lost without a word). The publish edge routes no paths.
+      else if (role === 'realtime' && cfg.edge === 'traefik' && cfg.traefikVersion === 2)
+        bad(`${p}.role`, 'ROLE_NEEDS_TRAEFIK_V3')
       else {
         seen.add(role)
         okRole = true

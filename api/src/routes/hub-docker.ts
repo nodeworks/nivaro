@@ -36,6 +36,7 @@ import {
   validateStackSettings
 } from '../services/hub/docker/stack-settings.js'
 import { getDriver, placedOnShared, SHARED_PLACEMENT_MESSAGE } from '../services/hub/drivers.js'
+import { moveOpenRefusal } from '../services/hub/move-open.js'
 import { markNameServing } from '../services/hub/name-check.js'
 import { type LockHolder, lockHolderRefusal, PromotionError } from '../services/hub/promote-lock.js'
 import { startStackApply } from '../services/hub/promote-run.js'
@@ -603,6 +604,11 @@ export function hubDockerRoutes(app: FastifyInstance) {
         return fail(reply, 400, 'CONFIRM_REQUIRED', `Type the environment key (${key}) to restart`)
       const name = target.stackName
       if (!name) return fail(reply, 409, 'NO_STACK_NAME', 'The placement names no swarm stack')
+      // Final review moves I-2 (P6-37): a restart re-renders the stack with the names a move
+      // (an interrupted one holds no lock) may have taken off it. The move's own stack work
+      // goes through prepareStackSpec + the agent, never this route.
+      const open = await moveOpenRefusal({ envIds: [envId] })
+      if (open) return fail(reply, open.status, open.code, open.message)
       try {
         const done = await withEnvironmentLock(envId, async (): Promise<RestartOutcome> => {
           // Ruling P4-16: never rebuilt from an inspect — the spec the stack runs, rendered fresh
@@ -719,6 +725,12 @@ export function hubDockerRoutes(app: FastifyInstance) {
         'CONFIRM_REQUIRED',
         `Type "delete ${name} data" to remove the stack's volumes too`
       )
+    // Re-review FW1-M-1: an open move may still copy this stack's uploads (files_delta) —
+    // its volumes stay. A plain remove stays allowed (a halted move's checklist asks for it).
+    if (removeVolumes) {
+      const open = await moveOpenRefusal({ envIds: [envId] })
+      if (open) return fail(reply, open.status, open.code, open.message)
+    }
     try {
       // Its own hold on the environment's promotion lock: no promotion starts while the
       // stack is being taken down, and none is running when it starts.

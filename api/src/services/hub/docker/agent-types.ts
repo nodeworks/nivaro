@@ -71,6 +71,8 @@ export interface AgentHealth {
    * app's known config keys. Absent on an agent before P4-23 = none.
    */
   env_prefixes?: string[]
+  /** HUB_AGENT_TRAEFIK_VERSION (final review M-7). Absent on an older agent (= 3, its default). */
+  traefik_version?: 2 | 3
 }
 
 /** One row of `GET /v1/stacks` (Hub-managed stacks only). */

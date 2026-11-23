@@ -26,6 +26,18 @@ vi.mock('../../../services/activity.js', () => ({
   })
 }))
 
+// Final review I-2: a test can make the open-move check miss (a move that opened after the
+// plan was gathered), to show the run's own verify still skips a name routed elsewhere.
+const moveOpen = vi.hoisted(() => ({ miss: false }))
+vi.mock('../../../services/hub/move-open.js', async (orig) => {
+  const real = await orig<typeof import('../../../services/hub/move-open.js')>()
+  return {
+    ...real,
+    openMoveFor: async (...a: Parameters<typeof real.openMoveFor>) =>
+      moveOpen.miss ? null : real.openMoveFor(...a)
+  }
+})
+
 const { db } = (await import('../../../db/index.js')) as unknown as { db: Knex }
 const migrations = [
   await import('../../../db/migrations/542_hub_tables.js'),
@@ -1424,5 +1436,182 @@ describe('downgrade needs confirm (ruling P6-29, B2)', () => {
     )
     await Run.awaitSharedUpgrade(out.shared_deploy_id)
     expect((await Run.readSharedDeploy(out.shared_deploy_id))?.status).toBe('success')
+  })
+})
+
+describe('final review I-2: an open move into the deployment', () => {
+  async function movingIn(id: number) {
+    const appKey = `app${++seq}`
+    const appId = await insertId('nivaro_hub_apps', { key: appKey, name: appKey })
+    const from = await insertId('nivaro_hub_placements', {
+      kind: 'dedicated',
+      driver_id: driverId,
+      target: JSON.stringify({ stack: `stk${seq}` })
+    })
+    const to = await insertId('nivaro_hub_placements', {
+      kind: 'shared',
+      shared_deployment_id: id,
+      target: JSON.stringify({ pool_max: 5 })
+    })
+    const envId = await insertId('nivaro_hub_environments', {
+      app_id: appId,
+      key: 'production',
+      status: 'maintenance',
+      base_url: `https://${appKey}.apps.example.com`,
+      hostnames: '[]',
+      placement_id: from,
+      version_pin: '0.3.209'
+    })
+    const moveId = await insertId('nivaro_hub_moves', {
+      app_id: appId,
+      environment_id: envId,
+      from_placement_id: from,
+      to_placement_id: to,
+      kind: 'to_shared',
+      routing: 'manual',
+      status: 'interrupted',
+      steps: '[]',
+      placed_at: new Date(START)
+    })
+    return { appKey, envId, moveId }
+  }
+
+  it('an interrupted to_shared move with placed_at set → the plan is blocked MOVE_OPEN', async () => {
+    const id = await newShared()
+    await newApp(id, [{ key: 'production', placed: true }])
+    const m = await movingIn(id)
+    const plan = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', planDeps())
+    expect(codes(plan.blockers)).toContain('MOVE_OPEN')
+    expect(plan.blockers.find((b) => b.code === 'MOVE_OPEN')?.text).toContain(`move ${m.moveId}`)
+    // Listed (maintenance, not placed) all the same.
+    expect(plan.apps.find((a) => a.env_id === m.envId)).toMatchObject({
+      placed: false,
+      status: 'maintenance'
+    })
+  })
+
+  it('verify checks only apps placed here: a name a move still routes elsewhere never fails it', async () => {
+    const id = await newShared()
+    const a = await newApp(id, [{ key: 'staging', placed: true }])
+    const m = await movingIn(id)
+    const f = fakes()
+    const ta = Store.tenantIdFor({ key: a.appKey }, { id: a.envIds[0] })
+    const tm = Store.tenantIdFor({ key: m.appKey }, { id: m.envId })
+    f.schema = { [ta]: { state: 'ok', error: null }, [tm]: { state: 'ok', error: null } }
+    // The moving app's name still answers its dedicated side's version.
+    f.served = {
+      [`https://${a.appKey}-staging.apps.example.com/api/version`]: '0.3.210',
+      [`https://${m.appKey}.apps.example.com/api/version`]: '0.3.209'
+    }
+    const { deps, out } = runDeps(f)
+    moveOpen.miss = true
+    try {
+      const { row } = await start(id, deps)
+      expect(out.failed).toBeNull()
+      expect(row?.status).toBe('success')
+    } finally {
+      moveOpen.miss = false
+    }
+    const urls = deps.readServedField.mock.calls.map((c) => String(c[0]))
+    expect(urls).not.toContain(`https://${m.appKey}.apps.example.com/api/version`)
+  })
+})
+
+describe('final review I-4: an app needs an extension the deployment does not load', () => {
+  it('per-app blocker EXTENSION_MISSING, never overridable; a re-apply is not started', async () => {
+    const id = await newShared()
+    const a = await newApp(id, [{ key: 'production', placed: true }])
+    await db('nivaro_hub_apps')
+      .where({ id: a.appId })
+      .update({ extensions: JSON.stringify(['efp-ops']) })
+    const plan = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', planDeps())
+    const row = plan.apps.find((x) => x.env_id === a.envIds[0])
+    expect(row?.blockers).toContain('EXTENSION_MISSING')
+    expect(row?.notes.join(' ')).toContain('efp-ops')
+    expect(plan.overridable).not.toContain('EXTENSION_MISSING')
+    const key = (await Store.getShared(id))?.key as string
+    const err = await refusal(
+      Run.startSharedUpgrade(
+        id,
+        {
+          version: '0.3.210',
+          plan_hash: plan.plan_hash,
+          confirm: key,
+          overrides: [`EXTENSION_MISSING:${a.envIds[0]}`]
+        },
+        'admin-1',
+        runDeps(fakes()).deps
+      )
+    )
+    expect(err.code).toBe('APP_BLOCKED')
+    // Same version (a re-apply): still checked — the apply would strip the extension.
+    const same = await Plan.planSharedUpgrade(id, '0.3.209', 'upgrade', planDeps())
+    expect(same.apps.find((x) => x.env_id === a.envIds[0])?.blockers).toContain('EXTENSION_MISSING')
+    const sh = await Store.getShared(id)
+    expect(
+      await Run.startSharedReapply(sh as NonNullable<typeof sh>, 'admin-1', runDeps(fakes()).deps)
+    ).toEqual({ started: false, reason: 'APP_BLOCKED' })
+  })
+})
+
+describe('final review M-1: the run renews its shared lock strictly', () => {
+  it('a renewal Redis cannot answer is a lost lock (LOCK_LOST), never "still held"', async () => {
+    const id = await newShared()
+    await newApp(id, [{ key: 'production', placed: true }])
+    const f = fakes()
+    f.statusVersion = '0.3.209' // never reaches the new version: the run keeps waiting
+    const blinking = {
+      ...locks.shared,
+      renew: async () => true,
+      renewStrict: async () => false
+    }
+    const { deps } = runDeps(f, { sharedLock: blinking, renewMs: 1 })
+    onSleep = () => new Promise<void>((r) => setTimeout(r, 5))
+    const { row } = await start(id, deps)
+    expect(row?.status).toBe('interrupted')
+    expect(row?.error).toMatch(/LOCK_LOST/)
+  })
+})
+
+describe('final review M-8: a rollback says the schema stays ahead', () => {
+  it('ROLLBACK_SCHEMA_AHEAD names both versions; an upgrade never carries it', async () => {
+    const id = await newShared({ version_pin: '0.3.210' })
+    await newApp(id, [{ key: 'production', placed: true }])
+    await db('nivaro_hub_shared_deploys').insert({
+      shared_deployment_id: id,
+      kind: 'upgrade',
+      version: '0.3.209',
+      status: 'success',
+      plan: JSON.stringify({ image: `nodeworks/nivaro@sha256:${'7'.repeat(64)}`, extensions: {} })
+    })
+    const plan = await Plan.planSharedUpgrade(id, '0.3.209', 'rollback', planDeps())
+    const w = plan.warnings.find((x) => x.code === 'ROLLBACK_SCHEMA_AHEAD')
+    expect(w?.text).toContain('0.3.210')
+    expect(w?.text).toContain('0.3.209')
+    const up = await Plan.planSharedUpgrade(id, '0.3.211', 'upgrade', planDeps())
+    expect(codes(up.warnings)).not.toContain('ROLLBACK_SCHEMA_AHEAD')
+  })
+})
+
+describe("final review M-7: the plan sees the agent's Traefik version", () => {
+  it('a host pattern on a Traefik v2 agent → PATTERN_NOT_ALLOWED in the plan, not at apply', async () => {
+    const id = await newShared()
+    await newApp(id, [{ key: 'production', placed: true }])
+    const v2 = await Plan.planSharedUpgrade(
+      id,
+      '0.3.210',
+      'upgrade',
+      planDeps({ agentHealth: async () => health({ traefik_version: 2 }) })
+    )
+    expect(v2.blockers.find((b) => b.code === 'PATTERN_NOT_ALLOWED')?.text).toMatch(/Traefik v2/)
+    for (const t of [3, undefined] as const) {
+      const ok = await Plan.planSharedUpgrade(
+        id,
+        '0.3.210',
+        'upgrade',
+        planDeps({ agentHealth: async () => health({ traefik_version: t }) })
+      )
+      expect(codes(ok.blockers)).toEqual([])
+    }
   })
 })

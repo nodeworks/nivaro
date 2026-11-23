@@ -191,7 +191,8 @@ export function buildPromotionPlan(input: PlanInput): PromotionPlan {
     c.kind === 'stack' ? stackStepFor(c, input) : stepFor(c, input)
   )
   for (const s of steps) {
-    const onTarget = input.pinOnTarget?.[s.position]
+    // A move's boot-maintenance line is not the build: never a changed image (FW-4).
+    const onTarget = pinContent(input.pinOnTarget?.[s.position])
     if (
       s.kind === 'api' &&
       kind === 'promote' &&
@@ -354,9 +355,24 @@ function unfinished(input: PlanInput, components: HubComponent[]): boolean {
   return false
 }
 
+/**
+ * A pin file without the lines that are not the build: a move's `boot-maintenance=<move id>`
+ * (FW-4, P6-37: a GitLab move target boots in maintenance from its pin commit). Compared and
+ * shown with this; null stays null.
+ */
+export function pinContent<T extends string | null | undefined>(pin: T): T {
+  if (typeof pin !== 'string') return pin
+  return pin
+    .split('\n')
+    .filter((l) => !l.trim().startsWith('boot-maintenance='))
+    .join('\n') as T
+}
+
 /** A pin file in plain words: version, short image digest, short slim digest. */
 function pinWords(pin: string): string {
-  const [v, d, slim] = pin.split('\n').filter((l) => l.trim())
+  const [v, d, slim] = pinContent(pin)
+    .split('\n')
+    .filter((l) => l.trim())
   const dig = (x: string) => x.replace(/^sha256:/, '').slice(0, 12)
   return `${v ?? '(nothing)'} ${d ? `image ${dig(d)}` : 'with no image digest'}${slim ? `, slim image ${dig(slim)}` : ''}`
 }

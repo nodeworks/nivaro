@@ -8,7 +8,7 @@ import {
 } from './db/databases.js'
 import type { DbCheck } from './db/provision-common.js'
 import { databaseRecordId } from './docker/stack-env.js'
-import { getPlacement } from './drivers.js'
+import { getDriver, getPlacement } from './drivers.js'
 import { type ReadinessRead, readSharedReadiness } from './move/gather.js'
 import { OPEN_MOVE_STATUSES } from './move/rows.js'
 import { defaultPromoteLock, lockHolderRefusal, type PromoteLock } from './promote-lock.js'
@@ -26,9 +26,11 @@ import { openSecret } from './secrets.js'
  *   - nothing attached yet (detach first), the record ready and attached nowhere else (IN_USE);
  *   - the app's own report (its hub link) names the database it runs on: the engine must match
  *     (ENGINE_MISMATCH); an app that cannot be asked → ENGINE_UNVERIFIED. When the Hub's own check
- *     of the record reads another server identity, the answer warns (never refuses: the Hub may
- *     reach the same server by another address); the move plan's DB_IDENTITY check, made from the
- *     target's side, is what blocks a wrong database;
+ *     of the record reads another server identity (or none), the answer warns — the Hub may reach
+ *     the same server by another address; the move plan's DB_IDENTITY check, made from the
+ *     target's side, blocks a wrong database. On a Docker placement it refuses
+ *     DATABASE_IDENTITY_DIFFERS instead (the record becomes the stack's DB_* on the next apply)
+ *     unless the caller passes `override: true`, which the route logs;
  *   - the record's connection check passes (a failed check refuses DATABASE_UNREACHABLE and the
  *     answer carries the check).
  * Detach: same lock and refusals (no open move or creation, not shared); the record stays.
@@ -152,15 +154,26 @@ async function appIdentity(env: EnvRow, deps: EnvDatabaseDeps): Promise<string> 
   return read.report.db_identity
 }
 
+/** Does the environment run on a Docker stack the Hub renders (its DB_* come from the record)? */
+async function onDockerStack(env: EnvRow): Promise<boolean> {
+  if (env.placement_id == null) return false
+  const p = await getPlacement(env.placement_id)
+  if (p?.kind !== 'dedicated' || p.driver_id == null) return false
+  return (await getDriver(p.driver_id))?.kind === 'docker'
+}
+
 export async function attachEnvDatabase(
   envId: number,
   databaseId: unknown,
-  deps: EnvDatabaseDeps = {}
+  deps: EnvDatabaseDeps = {},
+  opts: { override?: boolean } = {}
 ): Promise<{
   database: HubDatabase
   check: DbCheck | null
   changed: boolean
   warning: string | null
+  /** The identity differed on a Docker placement and an administrator attached it anyway. */
+  overridden: boolean
 }> {
   const id = typeof databaseId === 'number' ? databaseId : Number.NaN
   if (!Number.isSafeInteger(id) || id <= 0)
@@ -172,7 +185,8 @@ export async function attachEnvDatabase(
     const current = databaseRecordId(env.db_ref)
     const record = await getDatabase(id)
     if (!record) throw new EnvDatabaseError('NOT_FOUND', 'No such database.', 404)
-    if (current === id) return { database: record, check: null, changed: false, warning: null }
+    if (current === id)
+      return { database: record, check: null, changed: false, warning: null, overridden: false }
     if (env.db_ref)
       throw new EnvDatabaseError(
         'ALREADY_ATTACHED',
@@ -203,12 +217,31 @@ export async function attachEnvDatabase(
         409,
         check
       )
+    const differs = !identity || identity !== app
+    // Final fix wave (parked Wave B): on a Docker stack the record is what the next apply writes
+    // as the stack's DB_* — a different database would be live after the next promotion. Refused
+    // unless an administrator says it is the same one (`override: true`, logged by the route).
+    let overridden = false
+    if (differs && (await onDockerStack(env))) {
+      if (opts.override !== true)
+        throw new EnvDatabaseError(
+          'DATABASE_IDENTITY_DIFFERS',
+          `The Hub reaches this record's database ${identity ? 'under another server name, address or database' : 'but could not read which server it is'} than the app reports. This environment runs on a Docker stack, whose next deploy would point the app at the record's database. If it is the same database (another address for the same server), attach it again with override.`
+        )
+      overridden = true
+    }
     await attachDatabase(id, envId, undefined, { expect: ['ready'] })
     const warning =
       identity && identity !== app
         ? "The Hub reaches this record's database under another server name or address than the app reports. If it is the same database, nothing is wrong; a move's plan checks it again from the target's side."
         : null
-    return { database: (await getDatabase(id)) ?? record, check, changed: true, warning }
+    return {
+      database: (await getDatabase(id)) ?? record,
+      check,
+      changed: true,
+      warning,
+      overridden
+    }
   })
 }
 
