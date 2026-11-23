@@ -1,9 +1,10 @@
 import type { Knex } from 'knex'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-// Hub shared deployments, Task 6: the Traffic Map digest and the Monday AI summary run inside each
-// app's daily-digest fan-out. Their audiences read that app's own administrators (copied apps,
-// same user id), the traffic section is cached per app, and Nivaro Cloud still sends neither.
+// Hub shared deployments, Task 6: the Monday AI summary runs inside each app's daily-digest
+// fan-out; its audience reads that app's own administrators (copied apps, same user id). The
+// Traffic Map digest stays off on a shared deployment (its links and opt-out live on the Traffic
+// Map page, which a shared deployment refuses), and Nivaro Cloud sends neither.
 
 const h = vi.hoisted(() => ({
   users: new Map<string, Array<{ id: string; preferences: string }>>(),
@@ -35,26 +36,9 @@ vi.mock('../../../db/index.js', async () => {
   )
   return { db }
 })
-vi.mock('../../../services/traffic-window.js', async () => {
-  const { getTenantId } = await import('../../../db/tenant-context.js')
-  return {
-    readWindowGrouped: async () => ({ rows: [], truncated: false }),
-    summarizeWindow: () => {
-      const app = getTenantId() ?? ''
-      return {
-        callers: [{ key: `u${app}-CALLER`, req: 10, error: 0 }],
-        entities: [],
-        totals: { req: 10, error: 0 }
-      }
-    },
-    labelCallers: async () => ({})
-  }
-})
 
 const { runWithTenantDb } = await import('../../../db/tenant-context.js')
-const { buildTrafficDigestSection, trafficDigestAudience } = await import(
-  '../../../services/traffic-digest.js'
-)
+const { trafficDigestAudience } = await import('../../../services/traffic-digest.js')
 const { weeklyAudience } = await import('../../../services/ai-explain-weekly.js')
 
 function inApp<T>(app: string, fn: () => Promise<T>): Promise<T> {
@@ -95,11 +79,11 @@ afterEach(() => {
 })
 
 describe('digest audiences on a shared deployment', () => {
-  it("the traffic digest reads each app's own opted-in admins", async () => {
+  it('the traffic digest stays off: no audience in any app, no database read', async () => {
     useEnv(SHARED)
-    expect(await inApp('A', () => trafficDigestAudience())).toEqual(['ADMIN-1'])
-    expect(await inApp('B', () => trafficDigestAudience())).toEqual(['ADMIN-1', 'ADMIN-2'])
-    expect(h.reads.every((r) => r.tenant === 'A' || r.tenant === 'B')).toBe(true)
+    expect(await inApp('A', () => trafficDigestAudience())).toEqual([])
+    expect(await inApp('B', () => trafficDigestAudience())).toEqual([])
+    expect(h.reads).toEqual([])
   })
 
   it("the Monday AI summary reads each app's own opted-in admins", async () => {
@@ -113,16 +97,5 @@ describe('digest audiences on a shared deployment', () => {
     expect(await inApp('A', () => trafficDigestAudience())).toEqual([])
     expect(await inApp('A', () => weeklyAudience())).toEqual([])
     expect(h.reads).toEqual([])
-  })
-
-  it("the traffic section is cached per app: B never gets A's section", async () => {
-    useEnv(SHARED)
-    const a = await inApp('A', () => buildTrafficDigestSection())
-    const b = await inApp('B', () => buildTrafficDigestSection())
-    expect(JSON.stringify(a)).toContain('uA-CALLER')
-    expect(JSON.stringify(b)).toContain('uB-CALLER')
-    expect(JSON.stringify(b)).not.toContain('uA-CALLER')
-    // and A's cache still answers A
-    expect(await inApp('A', () => buildTrafficDigestSection())).toEqual(a)
   })
 })

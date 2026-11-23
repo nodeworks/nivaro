@@ -6,10 +6,9 @@
  * that went silent. Read from the request log (traffic-window.ts), computed once per digest run.
  */
 import { db } from '../db/index.js'
-import { tenantState } from './ai-tenant-state.js'
 import type { DigestLine, DigestSection } from './daily-digest.js'
 import { selectInChunks } from './db-batch.js'
-import { isNivaroCloud } from './deployment-mode.js'
+import { isMultiTenant } from './deployment-mode.js'
 import { callerKeyFor } from './traffic-entities.js'
 import {
   labelCallers,
@@ -110,11 +109,7 @@ export function digestSectionOf(
   return { title: 'Traffic in the last day', lines }
 }
 
-// Per app: each app's digest reads its own request log (a Hub shared deployment runs the daily
-// summary inside each app).
-const digestCache = tenantState<{ v: { at: number; section: DigestSection | null } | null }>(
-  () => ({ v: null })
-)
+let cache: { at: number; section: DigestSection | null } | null = null
 
 async function priorCallerCounts(from: Date, to: Date): Promise<Map<string, number>> {
   const rows = (await db('nivaro_api_logs')
@@ -152,7 +147,6 @@ async function machineCallers(keys: string[]): Promise<Set<string>> {
 
 /** The section for the current digest run (shared by every opted-in admin, 10 min cache). */
 export async function buildTrafficDigestSection(now = new Date()): Promise<DigestSection | null> {
-  const cache = digestCache().v
   if (cache && now.getTime() - cache.at < CACHE_MS) return cache.section
   const dayFrom = new Date(now.getTime() - DAY_MS)
   const [grouped, prior] = await Promise.all([
@@ -165,7 +159,7 @@ export async function buildTrafficDigestSection(now = new Date()): Promise<Diges
   const keys = [...new Set([...facts.top, ...facts.fresh, ...facts.silent].map((c) => c.key))]
   const labels = await labelCallers(keys).catch(() => ({}) as Record<string, string>)
   const section = digestSectionOf(facts, labels)
-  digestCache().v = { at: now.getTime(), section }
+  cache = { at: now.getTime(), section }
   return section
 }
 
@@ -179,9 +173,9 @@ function prefOn(raw: unknown): boolean {
   }
 }
 
-/** Opted-in administrators (active, not redacted) of the current app. Nivaro Cloud sends none. */
+/** Opted-in administrators (active, not redacted). */
 export async function trafficDigestAudience(): Promise<string[]> {
-  if (isNivaroCloud()) return []
+  if (isMultiTenant()) return []
   const rows = (await db('nivaro_users as u')
     .join('nivaro_roles as r', 'r.id', 'u.role')
     .where('r.admin_access', true)
@@ -195,7 +189,7 @@ export async function trafficDigestAudience(): Promise<string[]> {
 let registered = false
 /** Register the section + its audience with the daily summary (once per process). */
 export async function registerTrafficDigest(): Promise<void> {
-  if (registered || isNivaroCloud()) return
+  if (registered || isMultiTenant()) return
   registered = true
   const { registerDigestAudience, registerDigestSection } = await import('./daily-digest.js')
   registerDigestAudience(trafficDigestAudience)

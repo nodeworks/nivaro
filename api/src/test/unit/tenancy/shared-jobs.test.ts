@@ -194,7 +194,7 @@ describe('server.ts: per-app housekeeping on a shared deployment (P5-10)', () =>
     // the self-hosted chain (the needle above) stays !multiTenant; the process part of the pass
     // (help-video import sweep: process memory + work dir) gets its own daily timer on shared
     expect(guardsOf('void runInBackgroundPool(runRetentionPurge)')).toEqual(['!multiTenant', OUTER])
-    expect(guardsOf('startStaleImportSweep(app.log)')).toEqual(['multiTenant', OUTER])
+    expect(guardsOf('startStaleImportSweep(app.log)')).toEqual(['perAppJobs()', OUTER])
   })
 
   it('the restart clean-ups run per app on shared, inline self-hosted', () => {

@@ -1157,7 +1157,7 @@ export async function buildServer() {
       // process part here: the help-video import sweep (this process's memory + work dir), daily,
       // outside any app.
       if (!multiTenant) void runInBackgroundPool(runRetentionPurge)
-      if (multiTenant) startStaleImportSweep(app.log)
+      if (perAppJobs()) startStaleImportSweep(app.log)
 
       // ── Tamper-evident activity trail (#16) ──
       // Sealer: chains new (and, in capped batches, existing) activity rows; never on the

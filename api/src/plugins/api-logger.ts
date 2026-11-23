@@ -8,7 +8,7 @@ import { sqlDialect } from '../db/sql-dialect.js'
 import { withTenant } from '../db/tenant-context.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { hasChainColumns } from '../services/chain-columns.js'
-import { tenantSource } from '../services/deployment-mode.js'
+import { perAppJobs, tenantSource } from '../services/deployment-mode.js'
 import { mcpCallerKey, mcpLogColumns, mcpStampOf } from '../services/mcp-calls.js'
 import { roomListeners } from '../services/realtime-board.js'
 import {
@@ -245,9 +245,11 @@ export function shouldSkip(path: string, method: string): boolean {
 const INSTANCE = instanceKey().slice(0, 60)
 
 export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
-  // One buffer per app ('' = no app: self-hosted, where it is the only one). On a shared
-  // deployment the flush may start from any app's request or from the timer, so each app's rows
-  // are written inside that app (its own nivaro_api_logs), never the context the flush runs in.
+  // A Hub shared deployment keeps one buffer per app: the flush may start from any app's request
+  // or from the timer, so each app's rows are written inside that app (its own nivaro_api_logs),
+  // never the context the flush runs in; rows with no app are dropped. Self-hosted and Nivaro
+  // Cloud keep the one '' buffer, written in the current context as before (Cloud: that context
+  // can be another tenant's request — a known cross-tenant log issue, out of scope here).
   const buffers = new Map<string, ApiLogRow[]>()
   let flushing = false
 
@@ -268,13 +270,20 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
       for (const [key, rows] of batches) {
         if (rows.length === 0) continue
         if (!key) {
-          await writeRows(rows)
+          // Shared: a request no app was stamped on (unknown host, refused before the tenant
+          // middleware) has no nivaro_api_logs to go to; never the flushing app's.
+          if (!perAppJobs()) await writeRows(rows)
           continue
         }
-        const t = await appOf(key)
-        // An app that has left the deployment: its database is gone from here, drop its rows.
-        if (!t) continue
-        await withTenant(t, () => writeRows(rows), t.origin)
+        // One app's failure (lookup, pool) never costs another app its rows.
+        try {
+          const t = await appOf(key)
+          // An app that has left the deployment: its database is gone from here, drop its rows.
+          if (!t) continue
+          await withTenant(t, () => writeRows(rows), t.origin)
+        } catch (err) {
+          app.log.warn({ err, tenant: key }, 'Failed to flush API logs')
+        }
       }
     } finally {
       flushing = false
@@ -538,7 +547,7 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
       request_id: req.requestId ?? null,
       ...mcpLogColumns(mcp)
     }
-    const key = requestTenantKey(req)
+    const key = perAppJobs() ? requestTenantKey(req) : ''
     let bucket = buffers.get(key)
     if (!bucket) {
       bucket = []
