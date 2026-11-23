@@ -1156,7 +1156,14 @@ function MoveProgress({
     )
 
   const m = q.data
-  const rows = moveStepRows(m)
+  const checklistNow = moveChecklistOf(m)
+  // A move that succeeded but could not retire its old home leaves retire_source open: that
+  // step is not done (amber, waiting on a person), whatever the run stored (design S11).
+  const retireOpen =
+    m.status === 'success' && checklistNow.some((c) => c.id === 'retire_source' && !c.done)
+  const rows = moveStepRows(m).map((r) =>
+    retireOpen && r.key === 'retire_source' ? { ...r, state: 'waiting' as const } : r
+  )
   const plan = movePlanOf(m)
   const files = moveFilesOf(m)
   const past = pastRelease(m)

@@ -1039,6 +1039,12 @@ describe('HubMovePanel — a move that ended (ruling P6-17 I-1)', () => {
     expect(
       screen.getByRole('checkbox', { name: /Retire the old home by hand/ })
     ).toBeInTheDocument()
+    // The retire step is not shown done while its item is open (design S11).
+    const stepsList = screen.getByRole('list', { name: 'Move steps' })
+    expect(within(stepsList).getByText('Retire the old home').closest('li')).toHaveAttribute(
+      'data-state',
+      'waiting'
+    )
     // Succeeded with an error: a warning (amber), not a failure.
     expect(
       screen
