@@ -126,7 +126,9 @@ function idToken(claims: Record<string, unknown> = {}, drop: string[] = []): str
 
 describe('evidenceFromTokens', () => {
   it('copies the raw token, oid, tid, exp, auth_time, email and the names', () => {
-    const t = idToken()
+    // Pin the times in the token: reading the clock twice can cross a second boundary.
+    const authTime = Math.floor(Date.now() / 1000) - 5
+    const t = idToken({ auth_time: authTime })
     const ev = evidenceFromTokens({ id_token: t })
     expect(ev).toMatchObject({
       id_token: t,
@@ -137,14 +139,15 @@ describe('evidenceFromTokens', () => {
       given_name: 'Pat',
       family_name: 'Entra'
     })
-    expect(ev?.auth_time).toBe(Math.floor(Date.now() / 1000) - 5)
+    expect(ev?.auth_time).toBe(authTime)
   })
 
   it('falls back to iat for auth_time and upn for email', () => {
+    const iat = Math.floor(Date.now() / 1000)
     const ev = evidenceFromTokens({
-      id_token: idToken({ upn: 'pat@upn.example.com' }, ['auth_time', 'email'])
+      id_token: idToken({ upn: 'pat@upn.example.com', iat }, ['auth_time', 'email'])
     })
-    expect(ev?.auth_time).toBe(Math.floor(Date.now() / 1000))
+    expect(ev?.auth_time).toBe(iat)
     expect(ev?.email).toBe('pat@upn.example.com')
   })
 
