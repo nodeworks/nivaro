@@ -62,7 +62,7 @@ function StrictMaintenancePage({ row, fallback }: { row: StrictMaintenance; fall
           ref={heading}
           id='nvr-strict-maintenance-title'
           tabIndex={-1}
-          className='mt-2 text-[16px] font-semibold text-slate-900 outline-none dark:text-foreground'
+          className='mt-2 rounded text-[16px] font-semibold text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:text-foreground'
         >
           {row.headline?.trim() || fallback}
         </h1>

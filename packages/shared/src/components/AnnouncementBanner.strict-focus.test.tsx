@@ -75,6 +75,9 @@ describe('strict maintenance page and the keyboard', () => {
     const heading = host.querySelector('#nvr-strict-maintenance-title') as HTMLElement
     expect(heading).not.toBeNull()
     expect(heading.getAttribute('tabindex')).toBe('-1')
+    // Re-review FW3-M2: the focused heading keeps a visible focus ring.
+    expect(heading.className.split(/\s+/)).not.toContain('outline-none')
+    expect(heading.className).toMatch(/focus-visible:ring/)
     expect(document.activeElement).toBe(heading)
     behind.remove()
   })
