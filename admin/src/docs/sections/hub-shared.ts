@@ -355,22 +355,12 @@ export const hubSharedDocs: DocSection = {
     { type: 'h2', id: 'hub-shared-not-yet', text: 'What a shared app cannot do yet' },
     {
       type: 'p',
-      text: 'Each item below is deferred. The Hub enforces it when a dedicated app moves in: a blocker stops the move, a warning is shown in the plan. A new environment placed straight on a shared deployment has none of these features from the start.'
+      text: 'Each item below is deferred. The Hub enforces it when a dedicated app moves in: a blocker stops the move, a warning is shown in the plan. A new environment placed straight on a shared deployment has none of these features from the start. Staged imports, row schedules, directory lookups, the Teams bot, phone push, mail retry and the other per-app jobs are not in this table: they work per app (see Per app on a shared deployment below).'
     },
     {
       type: 'table',
       head: ['Gap', 'What happens', 'Move check'],
       rows: [
-        [
-          'Staged imports (file upload, import drainer)',
-          'The upload answers 409 `IMPORTS_NOT_ON_SHARED`. Imports that run inside the request still work.',
-          'blocker `STAGED_IMPORTS`'
-        ],
-        [
-          'Row schedules (scheduled reports, retention policies, sync jobs, scheduled flows)',
-          'Per-app hydration is missing. Silent loss is worse than no move.',
-          'blocker `ROW_SCHEDULES`'
-        ],
         ['GitLab issue sync', 'Off.', 'blocker `ISSUE_TRACKERS`'],
         [
           'Flows with the `exec-script` operation',
@@ -398,16 +388,6 @@ export const hubSharedDocs: DocSection = {
           'checklist item `callbacks_registered`'
         ],
         [
-          'Microsoft directory lookups and sync',
-          'The directory reads as not configured.',
-          'warning `DIRECTORY_SYNC`'
-        ],
-        [
-          'Phone sign-in and push, Teams bot, automatic mail retry, huddle relay (TURN)',
-          'Off on shared, as in cloud.',
-          'warnings `PHONE_PUSH`, `TEAMS_BOT`, `MAIL_RETRY`, `HUDDLE_TURN`'
-        ],
-        [
           'Mail settings from the environment (`SMTP_*`)',
           'An app uses its own saved mail settings.',
           'warning `ENV_SMTP`'
@@ -418,14 +398,24 @@ export const hubSharedDocs: DocSection = {
           'warnings `SESSION_REPLAYS`, `REPLAYS_NOT_MOVED`'
         ],
         [
+          'Outside-write watch (the SQL Server change tracker)',
+          'Off on shared: it needs a deployment-wide watcher.',
+          '-'
+        ],
+        [
+          'Traffic digest section and the Traffic Map page',
+          'Off on shared. The daily digest keeps its other sections.',
+          '-'
+        ],
+        [
+          'Huddle relay (TURN)',
+          'Off on shared, as in cloud.',
+          'warning `HUDDLE_TURN`'
+        ],
+        [
           'Help-video renders queued before a restart',
           'They render again on the next publish.',
           'warning `HELP_VIDEO_RENDERS`'
-        ],
-        [
-          'Live SLA status changes, weekly digests, the per-app retention pass, boot passes against a database',
-          'Off on multi-tenant processes. The move plan has no code for these: nothing warns before a move, so tell the people who rely on SLA alerts or weekly digests.',
-          '-'
         ],
         [
           'Deployment-wide process jobs (pool monitor, socket sample)',
@@ -450,6 +440,31 @@ export const hubSharedDocs: DocSection = {
           'warning `MULTI_NODE_VOLUMES`'
         ]
       ]
+    },
+    { type: 'h2', id: 'hub-shared-per-app', text: 'Per app on a shared deployment' },
+    {
+      type: 'p',
+      text: "These work on a shared deployment, each app with its own data, settings and schedule. A move no longer reports them as blockers or warnings when the app runs 0.3.211 or later."
+    },
+    {
+      type: 'ul',
+      items: [
+        'Staged file imports (upload and drainer). Rows load with inserts: the bulk loader (`IMPORT_LOADER=bulk`, SMB share) is not available on shared. Each app keeps its own queue, attempts and leases.',
+        'Row schedules (scheduled reports, retention policies, scheduled audit and activity views, sync jobs, scheduled flows). An edit reaches every replica, and a 5-minute `row-schedules-resync` job per app is the backstop. An app that leaves the deployment loses its jobs.',
+        'Automatic mail retry (`MAIL_RETRY=off` still turns it off for the whole deployment), live SLA status changes, the cumulative-flow rollup and the weekly AI summary in the daily digest. The traffic digest section stays off.',
+        'The daily retention pass (03:30, one job per app) and the boot passes (owner-group warm, integrity checks, cache warms, readiness warm, db-tuning sweep). They run once per app when it becomes ready. Retention status shows per app.',
+        'Microsoft directory lookups and sync. The app uses its own Microsoft app registration, saved in Settings → Microsoft directory (tenant id, client id, client secret; the secret is sealed with the app key). The server `GRAPH_*` and `OIDC_*` variables and the directory keys of `NIVARO_SETTINGS_OVERRIDES` are never used on shared.',
+        'The Teams bot. The app uses only the bot saved in its own Settings. `TEAMS_BOT_*`, `MICROSOFT_APP_*`, the sign-in app fallback and the `teams_bot_*` override keys are ignored. `TEAMS_BOT=off` still disables the bot on the whole deployment, but `TEAMS_BOT=on` does not switch an app on: each app saves its own switch. Register each bot with that app host as its messaging endpoint.',
+        'Phone push. An app admin connects the app push relay in Settings → Mobile app. The server `MOBILE_PUSH_RELAY_KEY` is not used on shared. Phone sign-in was already per app.'
+      ]
+    },
+    {
+      type: 'p',
+      text: 'Nivaro Cloud is unchanged: the Teams bot, phone push and mail retry stay off there, and push stays cloud-managed.'
+    },
+    {
+      type: 'p',
+      text: 'Before or after a move, save what the app needs on its own. The plan warns `DIRECTORY_ENV_CREDENTIALS` when the directory credentials come only from the environment, `TEAMS_BOT_ENV_CREDENTIALS` when the bot comes from the environment (or is on only by `TEAMS_BOT=on`), and `PUSH_RELAY_ENV` when push uses the server relay key. `SAME_APP_ON_DEPLOYMENT` notes that a copy carries the original saved Teams bot and directory registration.'
     },
     {
       type: 'note',
@@ -820,8 +835,8 @@ export const hubMovesDocs: DocSection = {
           'The Hub could not read part of what it needs to plan. Plan again shortly.'
         ],
         [
-          '`STAGED_IMPORTS`, `ROW_SCHEDULES`, `ISSUE_TRACKERS`, `EXEC_SCRIPT_FLOWS`, `SQLITE`, `ENV_OBJECT_STORAGE`',
-          'The app uses something a shared app cannot do yet (see Shared deployments), or keeps files in env-driven object storage. Detail gives counts and kinds, never records.'
+          '`ISSUE_TRACKERS`, `EXEC_SCRIPT_FLOWS`, `SQLITE`, `ENV_OBJECT_STORAGE`',
+          'The app uses something a shared app cannot do yet (see Shared deployments), or keeps files in env-driven object storage. Detail gives counts and kinds, never records. `STAGED_IMPORTS` and `ROW_SCHEDULES` still apply only when the target deployment runs a version before 0.3.211 or one the Hub cannot read.'
         ]
       ]
     },
@@ -864,8 +879,8 @@ export const hubMovesDocs: DocSection = {
           'A check could not be made. Each comes with a required checklist item (above).'
         ],
         [
-          '`DIRECTORY_SYNC`, `PHONE_PUSH`, `TEAMS_BOT`, `MAIL_RETRY`, `HUDDLE_TURN`, `ENV_SMTP`, `SESSION_REPLAYS`, `HELP_VIDEO_RENDERS`',
-          'Features a shared app does not have, or that behave differently (see Shared deployments).'
+          '`DIRECTORY_ENV_CREDENTIALS`, `TEAMS_BOT_ENV_CREDENTIALS`, `PUSH_RELAY_ENV`, `HUDDLE_TURN`, `ENV_SMTP`, `SESSION_REPLAYS`, `HELP_VIDEO_RENDERS`',
+          'Features a shared app does not have, or that behave differently (see Shared deployments). `DIRECTORY_SYNC`, `PHONE_PUSH`, `TEAMS_BOT` and `MAIL_RETRY` are reported only for a target before 0.3.211 or one the Hub cannot read.'
         ]
       ]
     },
