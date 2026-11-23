@@ -8,6 +8,7 @@ import { logActivity } from '../services/activity.js'
 import { ensureAutoWatch } from '../services/auto-watch.js'
 import { findRecordInstance } from '../services/branch-instances.js'
 import { commentTextForPreview } from '../services/comment-images.js'
+import { commentCreated } from '../services/comment-listeners.js'
 import { commentSeenBy } from '../services/comment-seen.js'
 import {
   cleanCommentField,
@@ -672,6 +673,17 @@ export async function commentsRoutes(app: FastifyInstance) {
     // GitLab sync: a whole-issue comment on a linked issue goes to GitLab (outbox, background
     // pool; never slows or fails this request).
     void commentWritten(id, body.collection, field || null)
+    // Extensions listening for comments (ctx.comments.onCreated): off the request, never fails it.
+    void commentCreated({
+      id,
+      collection: body.collection,
+      item: String(body.item),
+      field: field || null,
+      text: body.text,
+      author: userId,
+      writtenBy: userId,
+      source: 'comment'
+    })
     // Auto-watch (#400): commenting subscribes the commenter when their
     // preference says so — fire-and-forget.
     void ensureAutoWatch(userId, body.collection, body.item, 'commented')

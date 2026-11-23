@@ -58,6 +58,7 @@ import {
   upsertMembership
 } from '../services/chat-send.js'
 import { parseTimeRefs } from '../services/chat-time-refs.js'
+import { commentCreated } from '../services/comment-listeners.js'
 import { embeddingProvider } from '../services/embeddings.js'
 import { mcpAppLabel } from '../services/mcp-config.js'
 import {
@@ -2118,6 +2119,17 @@ export async function chatRoutes(app: FastifyInstance) {
       (await mayCommentOnRecord(req, rec.collection, rec.id))
     )
       void commentWritten(id, rec.collection, null)
+    // Extensions listening for comments (ctx.comments.onCreated): off the request, never fails it.
+    void commentCreated({
+      id,
+      collection: rec.collection,
+      item: String(rec.id),
+      field: null,
+      text,
+      author,
+      writtenBy: String(req.user!.id),
+      source: 'chat-copy'
+    })
     // Ids only — never who wrote it (realtime gaps B4 review).
     emitRecordEvent(rec.collection, rec.id, 'record:comment')
     // Realtime gaps 2026-11-17 (minor): list comment columns and other Notes panels hear it too.
