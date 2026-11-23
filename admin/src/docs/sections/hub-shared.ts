@@ -36,7 +36,7 @@ export const hubSharedDocs: DocSection = {
     },
     {
       type: 'p',
-      text: 'Mode and key cannot be changed after the deployment is created. Create the deployment on the Shared deployments tab of the Apps hub (the tab after Apps; Hub administrators only): the New button opens an inline panel in the detail pane, and editing uses the same panel. The key is 2 to 63 characters (lowercase letters, digits and dashes) and starts with a letter. The link address must be https, with no user, password or path. Plain http is accepted only for a loopback or private address, and only when the Hub does not run with `NODE_ENV=production`: on a production Hub an http link address is refused, so use https (or a name with a certificate).'
+      text: 'Mode and key cannot be changed after the deployment is created. A Docker deployment is created without a version (`BAD_VERSION` otherwise): its first upgrade sets it. Create the deployment on the Shared deployments tab of the Apps hub (the tab after Apps; Hub administrators only): the New button opens an inline panel in the detail pane, and editing uses the same panel. The key is 2 to 63 characters (lowercase letters, digits and dashes) and starts with a letter. The link address must be https, with no user, password or path. Plain http is accepted only for a loopback or private address, and only when the Hub does not run with `NODE_ENV=production`: on a production Hub an http link address is refused, so use https (or a name with a certificate).'
     },
     { type: 'h2', id: 'hub-shared-token', text: 'The token and the environment block' },
     {
@@ -75,7 +75,7 @@ export const hubSharedDocs: DocSection = {
     },
     {
       type: 'p',
-      text: 'Rotating the token shows the new one once. The previous token keeps working for 24 hours so replicas can be rolled over. In docker mode the Hub applies the stack again with the new token. After 24 hours a replica that still sends the old token is refused, and the failed-token brake counts per address: replicas behind one egress address that all send an expired token lock that address out for a minute at a time (20 tries). Rotate, then roll the new token out to every replica inside the 24 hours. In docker mode the stack only learns the new token when it is applied again, so the rotation answer carries `reapply` and `reapply_reason`: the Hub starts that apply itself (`started`), or says why it did not (`reapply_reason`: for example `NOT_DEPLOYED` before the first deploy, `LAST_RUN_FAILED` after a failed or interrupted run, when applying the pin again would be an unasked rollback, or the first plan blocker). A registered deployment answers `manual`: you apply the new token yourself.'
+      text: 'Rotating the token shows the new one once. The previous token keeps working for 24 hours so replicas can be rolled over. In docker mode the Hub applies the stack again with the new token. After 24 hours a replica that still sends the old token is refused, and the failed-token brake counts per address: replicas behind one egress address that all send an expired token lock that address out for a minute at a time (20 tries). Rotate, then roll the new token out to every replica inside the 24 hours. In docker mode the stack only learns the new token when it is applied again, so the rotation answer carries `reapply` and `reapply_reason`: the Hub starts that apply itself (`started`), or says why it did not (`reapply_reason`: for example `NOT_DEPLOYED` before the first deploy, `LAST_RUN_FAILED` after a failed or interrupted run, when applying the pin again would be an unasked rollback, or the first plan blocker). A registered deployment answers `manual`: you apply the new token yourself. While the stack of a Docker deployment still runs with the old token, its page warns `TOKEN_NOT_APPLIED` until a run started after the rotation succeeds: upgrade it at the version it runs before the 24 hours end, or it loses its app list and its link.'
     },
     { type: 'h2', id: 'hub-shared-extensions', text: 'Extensions: HUB_SHARED_EXTENSIONS' },
     {
@@ -85,6 +85,7 @@ export const hubSharedDocs: DocSection = {
         'On a shared deployment the extension folder must be named by the extension id. A listed folder whose extension declares another id is not loaded.',
         'A listed extension must also declare `shared: true` in its definition. It promises that every cache, module variable and connection it keeps is held per app. An unflagged listed extension is refused: it is not loaded, the extension registry shows it as an error, and the readiness check `shared-extensions` fails and names it with the reason.',
         'The contents of a listed folder are trusted. Its module is imported before its id and flag are compared, so list only folders you control.',
+        'An edit that drops an extension an app on the deployment still uses is refused (`EXTENSION_IN_USE`, naming the app and the extension): move that app off first, or keep the extension.',
         'An app whose extensions are not all in the list cannot be placed (`EXTENSION_NOT_ALLOWED`). An app that pins another version of a listed extension than the deployment runs gets `EXTENSION_VERSION_DIFFERS`. The deployment reports what it loaded; the detail page warns when that differs from the Hub list.',
         'efp-ops is not safe on a shared deployment yet. Its module caches are not held per app (erp-record, integration-user, forecast-worksheet, send-back-flag and priority-guard), so it does not declare `shared: true`, and an app that uses it cannot be placed on a shared deployment until it is audited and flagged.',
         'The `shared` field is part of `@nivaro/extension-kit`. A kit release has to be published (or the kit rebuilt) wherever an extension type-checks against a released kit, before it can declare the flag.',
@@ -141,7 +142,7 @@ export const hubSharedDocs: DocSection = {
       items: [
         "Storage scope. Where files live in the deployment storage (the env-driven provider), every object key is prefixed `apps/<tenant id>/`. The prefix applies to saved-settings S3 and Azure drivers too: an app with its own bucket keeps its objects under `apps/<tenant id>/` in that bucket while it runs on a shared deployment, and at the bucket root while it runs on a dedicated stack. So two apps with copied databases (a development copy of production) can never read or delete each other's objects. New keys are flat inside the scope. A key with `..`, a leading `/`, a backslash or a NUL is refused.",
         "Encryption key. Each app's sealed values (stored credentials, tokens) were written with that app's `ENCRYPTION_KEY`. On a shared deployment the app's own key is used, from the Hub's tenant list. If an app has no key a seal or open fails with `APP_KEY_MISSING` (503). It never falls back to the deployment's key or to another app's. A value that belongs to the deployment itself, like the sealed copy of the tenant list in Redis, uses the deployment key (`encryptForDeployment`).",
-        'Where the Hub gets the key: the key entered for the environment first; then, once, the Docker stack settings key (copied into the entry); a new key is generated only for a database known to be empty (made by the Hub, or without a `nivaro_migrations` table). An adopted database that already holds an installation, with no known key, is refused (`APP_KEY_UNKNOWN`): an administrator enters the key. A GitLab-created app has to have its key entered.',
+        'Where the Hub gets the key: the key entered for the environment first; then, once, the Docker stack settings key (copied into the entry); a new key is generated only for a database known to be empty (made by the Hub, or without a `nivaro_migrations` table). A database that already holds an installation has served an app, so placing it is refused (`USE_MOVE`), with or without a known key: move the environment instead (Moving an environment). A GitLab-created app has to have its key entered.',
         'Fingerprints. The Hub and the app compare `keyFingerprint(key)` (a keyed hash, first 32 hex characters). The key itself never crosses the hub link. Saving a key that differs from the one the app reports is refused (`APP_KEY_MISMATCH`); replacing a stored key needs a positive match (`APP_KEY_UNVERIFIED` otherwise); an app that has already served on a shared deployment refuses a different key (`APP_KEY_IMMUTABLE`). There is no operator override in this phase, on purpose: everything the app sealed with its old key (stored credentials, tokens, partner secrets) becomes unreadable under a new one. If you hit `APP_KEY_IMMUTABLE`, do not look for a way around it. Enter the key the app really runs with (check it against the fingerprint the page shows), or, if the key is lost or has to change, contact support: re-keying a live shared app is a support action, and the people who use the app will have to enter its stored credentials again.',
         "Origin. Links in job mail, the phone app and the OAuth issuer use the app's own origin (the origin of its Hub base URL), not the deployment's.",
         'Credentials. Sessions, run-as keys, socket tickets, media tickets, export links and similar signed values are bound to their app, so a value minted in one app is refused in another even when the two databases are copies. The scan that proves it lists every Redis key and every signing site.',
@@ -221,6 +222,9 @@ export const hubSharedDocs: DocSection = {
     {
       type: 'ul',
       items: [
+        'Only an environment that has never served: no Hub deploy that succeeded, no finished creation (`CREATION_RUNNING` while one is open), no current dedicated placement (clear it first if it never ran), and, when it has a hub token, an app that does not answer over its hub link. Any answer from that link (even a refused token) means it runs, and so does a database that already holds an install: both answer `USE_MOVE`, so move it instead. No answer, or a database the Hub cannot look at, is `SERVING_UNKNOWN` and never a pass: if the app is gone for good, clear its hub token, then place it again.',
+        'A Docker shared deployment must have been deployed first (`NOT_DEPLOYED`: upgrade it to a version), and every name of the environment must already be routed by its stack, under its host pattern or among the names its last run routed (`NAME_NOT_ROUTED`; a place never re-applies the stack, which would restart every app on it). An agent that does not answer is never read as routed. A published-port edge routes no names.',
+        'An open move of the environment refuses it (`MOVE_OPEN`, naming the move: resume it or roll it back first).',
         'Before anything is written: the deployment must exist, not be retired and not be busy (`SHARED_RETIRED`, `SHARED_BUSY`); the app must not sign in via the Hub (`SIGNIN_VIA_HUB`) and its extensions must be allowed (`EXTENSION_NOT_ALLOWED`); the database record must be ready and not in use by another environment (`DATABASE_NOT_READY`, `DATABASE_IN_USE`); the pool must be 2 or more (`POOL_TOO_SMALL`) and inside the budget (`POOL_BUDGET`). A Hub database record is never SQLite.',
         "The run (a job run): make the placement and set the environment's database, pin and status `provisioning`; ask every replica to re-read; wait up to 2 minutes for every live replica to hold the list that names the app; wait up to 10 minutes for the app's schema to be `ok` (a failed schema stops the run and names the app's own error); seed the first administrator; set the environment `active`.",
         'A failed run leaves the environment `provisioning` on its placement: place it again to retry.',
@@ -230,7 +234,7 @@ export const hubSharedDocs: DocSection = {
     { type: 'h2', id: 'hub-shared-guards', text: 'What a shared-placed environment refuses' },
     {
       type: 'p',
-      text: "An environment placed on a shared deployment is never promoted, stacked or created directly. Promote plans block with `SHARED_PLACEMENT`; the stack routes, and creation on it, answer 409 `SHARED_PLACEMENT`. Change its version by upgrading the deployment, or move it. Changing its placement through the environment edit answers `USE_MOVE`. 'Forget stack' (`POST /api/hub/placements/:id/forget-stack` with `{confirm: <stack name>}`) lets an environment drop a Docker stack that is gone for good: it answers 409 `STACK_RUNNING` while the agent still reports the stack."
+      text: "An environment placed on a shared deployment is never promoted, stacked or created directly. Promote plans block with `SHARED_PLACEMENT`; the stack routes, and creation on it, answer 409 `SHARED_PLACEMENT`. While a move of an environment is open (running, waiting or interrupted), everything that would re-deploy or re-route it answers 409 `MOVE_OPEN` and names the move: a promotion or rollback (plan and start, owners included), Apply now, Restart, an environment edit of its placement, key, names, base URL, version pin or hub token, and placing it on a shared deployment. Removing its stack is not refused, because a halted move may ask for it. The move's own run is never refused by its own move. Change its version by upgrading the deployment, or move it. Changing its placement through the environment edit answers `USE_MOVE`. 'Forget stack' (`POST /api/hub/placements/:id/forget-stack` with `{confirm: <stack name>}`) lets an environment drop a Docker stack that is gone for good: it answers 409 `STACK_RUNNING` while the agent still reports the stack."
     },
     { type: 'h2', id: 'hub-shared-upgrade', text: 'Upgrades and rollback' },
     {
@@ -259,11 +263,19 @@ export const hubSharedDocs: DocSection = {
         ],
         [
           '`PATTERN_NOT_ALLOWED`, `HOSTNAME_NOT_ALLOWED`, `TOO_MANY_HOSTNAMES`, `NO_ROUTE`, `PUBLISH_PORT_NOT_ALLOWED`',
-          'The routing the stack would get is not one the agent accepts (see Host pattern and explicit hosts).'
+          'The routing the stack would get is not one the agent accepts (see Host pattern and explicit hosts). An agent set for Traefik v2 (`HUB_AGENT_TRAEFIK_VERSION=2`) cannot route a host pattern: the plan blocks `PATTERN_NOT_ALLOWED` until the agent is on Traefik v3 or the pattern is removed.'
         ],
         [
           '`REDIS_NOT_AVAILABLE`, `REDIS_URL_MISSING`, `HUB_URL_UNUSABLE`',
           'Bundled Redis asked for but the agent has no Redis image, external Redis chosen without its address, or the Hub address the stack would get is not a usable https origin.'
+        ],
+        [
+          '`MOVE_OPEN`',
+          'A move into or out of this deployment is running, waiting or interrupted; the plan names it. Resume it or roll it back first. The start refuses with 409 `MOVE_OPEN`, and a token rotation does not re-apply the stack meanwhile.'
+        ],
+        [
+          'Per app: `EXTENSION_MISSING`',
+          "The app uses an extension the deployment does not load. Never overridable, checked for every kind (a re-apply answers `APP_BLOCKED`): add the extension to the deployment's list."
         ],
         [
           'Per app: `ORDER`',
@@ -274,8 +286,8 @@ export const hubSharedDocs: DocSection = {
           "The app's own preflight fails on the deployment now, before the upgrade. Overridable per app and logged; not checked for a rollback."
         ],
         [
-          'Warnings: `HUB_URL_PROBLEM`, `MULTI_NODE_VOLUMES`, `APPS_AFFECTED`',
-          "The Hub's own `HUB_URL` is ignored; the swarm has several nodes with local volumes; every app listed is restarted by the run."
+          'Warnings: `HUB_URL_PROBLEM`, `MULTI_NODE_VOLUMES`, `APPS_AFFECTED`, `ROLLBACK_SCHEMA_AHEAD`',
+          "The Hub's own `HUB_URL` is ignored; the swarm has several nodes with local volumes; every app listed is restarted by the run; a rollback restores the build, not the schema, so apps the newer version migrated keep its schema under the older one."
         ]
       ]
     },
