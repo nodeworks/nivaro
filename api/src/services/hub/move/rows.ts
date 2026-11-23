@@ -238,6 +238,43 @@ export async function patchMove(
   return Number(await q.update(row))
 }
 
+/**
+ * R4-M-1: writes `patch` only while the move still names `envToken` as its env lock holder (a
+ * compare on the stored step list) and is still open. A run that lost its locks to another
+ * runner (heal + resume wrote new tokens) never writes over that runner's move. Answers whether
+ * the write happened.
+ */
+export async function patchMoveIfHolder(
+  id: number,
+  envToken: string,
+  patch: Parameters<typeof patchMove>[1]
+): Promise<boolean> {
+  const open: MoveStatus[] = ['running', 'waiting', 'interrupted']
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const row = (await db(MOVES).where({ id }).first('steps', 'status')) as
+      | { steps: unknown; status: string }
+      | undefined
+    if (!row || !open.includes(row.status as MoveStatus)) return false
+    const raw = row.steps == null ? null : String(row.steps)
+    if (moveFromRow({ id, steps: raw }).steps.locks?.env !== envToken) return false
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(patch)) {
+      if (v === undefined) continue
+      out[k] =
+        k === 'steps' || k === 'files' || k === 'checklist'
+          ? JSON.stringify(v)
+          : k === 'error' && typeof v === 'string'
+            ? v.slice(0, 1000)
+            : v
+    }
+    const q = db(MOVES).where({ id }).whereIn('status', open)
+    if (raw === null) q.whereNull('steps')
+    else q.where({ steps: raw })
+    if (Number(await q.update(out))) return true
+  }
+  return false
+}
+
 /** The step list a plan's steps start as. */
 export function freshSteps(keys: readonly MoveStepKey[]): MoveSteps {
   return { list: keys.map((key) => ({ key, state: 'pending' as const })), phase: 'forward' }

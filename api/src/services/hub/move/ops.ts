@@ -94,6 +94,8 @@ export const STACK_CONVERGE_MS = 30 * 60_000
 export const PULL_STATUS_GIVE_UP_MS = 10 * 60_000
 const POLL_MS = 5_000
 const STACK_POLL_MS = 10_000
+/** P6-27: how long the per-move name may keep answering after the stack dropped it. */
+const TEMP_HOST_GONE_MS = 2 * 60_000
 const REFRESH_AGAIN_MS = 30_000
 
 /** A step's refusal: a code and a plain sentence (never a value). */
@@ -122,11 +124,25 @@ export interface MoveOps {
   /** Schema ok + preflight ok + key fingerprint, ≤ 10 min. */
   targetReady(): Promise<void>
   deployTarget(): Promise<void>
+  /**
+   * P6-26 Rule 1 (dedicated target only): hub-link maintenance on over the target's own address
+   * (never the public name), read back; a GitLab target that will not take it is retired, read
+   * back. Throws TARGET_NOT_FROZEN when neither is proven.
+   */
+  freezeTarget(): Promise<void>
+  /** Docker: stack removed (volumes kept). GitLab: retired, read back. Shared: nothing. */
   removeTarget(): Promise<void>
   route(a: RouteAction): Promise<void>
   unroute(a: RouteAction): Promise<void>
   verifyName(expect: { version: string; shared: string | null }): Promise<boolean>
   retireSource(): Promise<void>
+  /**
+   * P6-27: once rollback is no longer possible, a Docker target stack is applied again with only
+   * the environment's own names and the per-move name is proven gone (the agent converged on a
+   * spec without it, and the name no longer serves the app). Answers the name removed, or null
+   * when the target never had one.
+   */
+  dropTempHost(): Promise<string | null>
   /** T10 carry: revokes any transfer ticket this move still holds (move end, rollback). */
   revokeTickets(): Promise<void>
   /**
@@ -679,18 +695,50 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
         await refresh(l.to.shared)
         return
       }
-      // A Docker target boots in strict maintenance (HUB_BOOT_MAINTENANCE): `on` is sent only
-      // once its release started (R2-I-2: a rollback freezes a lifted target again, over the
-      // verified public name). A GitLab target is set both ways (M18).
-      const releaseStarted = !!(await readMove(move.id))?.steps.release_prev
-      if (l.to.kind === 'docker' && on && !releaseStarted) return
-      if (on && releaseStarted) {
-        await (await verifiedTargetLink()).maintenance(true, move.id)
-        return
-      }
+      // A Docker target boots in strict maintenance (HUB_BOOT_MAINTENANCE): `on` is never sent
+      // here. A GitLab target is set both ways (M18). A rollback freezes a lifted target through
+      // freezeTarget (P6-26 Rule 1), never through this.
+      if (l.to.kind === 'docker' && on) return
       // `off` happens at release, after verify saw the name serve the target.
       const link = !on ? await verifiedTargetLink() : await targetLink()
       await link.maintenance(on, move.id)
+    },
+
+    async freezeTarget() {
+      const l = await load()
+      if (l.to.kind === 'shared')
+        throw new MoveStepError('TARGET_NOT_FROZEN', 'A shared target is frozen through its list.')
+      let link: HubLinkClient
+      try {
+        link = await targetLink()
+      } catch (err) {
+        throw new MoveStepError(
+          'TARGET_NOT_FROZEN',
+          `The target cannot be reached on its own address (${codeOf(err)}).`
+        )
+      }
+      try {
+        await link.maintenance(true, move.id)
+        if ((await link.status()).maintenance === true) {
+          log('the target is back in maintenance (read back)')
+          return
+        }
+        log('the target did not report maintenance after the freeze', 'warn')
+      } catch (err) {
+        log(`the target did not take maintenance (${codeOf(err)})`, 'warn')
+      }
+      if (l.to.kind === 'gitlab') {
+        try {
+          await link.retire(move.id)
+          if ((await link.status()).retired === true) {
+            log('the GitLab target is retired (read back)')
+            return
+          }
+        } catch (err) {
+          log(`the GitLab target did not take the retire (${codeOf(err)})`, 'warn')
+        }
+      }
+      throw new MoveStepError('TARGET_NOT_FROZEN', 'The target could not be proven frozen.')
     },
 
     async sourceBusy() {
@@ -971,14 +1019,20 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
       }
       // A GitLab target cannot be removed by the Hub: retire it so it serves and runs nothing.
       // R3-I-1: a retire that fails is never "stopped" — the caller decides (a release undo halts).
+      let retired = false
+      let why = 'it did not report retired'
       try {
-        await (await targetLink()).retire(move.id)
+        const link = await targetLink()
+        await link.retire(move.id)
+        retired = (await link.status()).retired === true
       } catch (err) {
+        why = codeOf(err)
+      }
+      if (!retired)
         throw new MoveStepError(
           'TARGET_NOT_STOPPED',
-          `The GitLab target could not be retired (${codeOf(err)}); stop its stack by hand.`
+          `The GitLab target could not be retired (${why}); stop its stack by hand.`
         )
-      }
       log('the GitLab target is retired (its pipeline keeps the stack; stop it there)', 'warn')
     },
 
@@ -998,10 +1052,15 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
         throw new MoveStepError('ROUTE_UNSUPPORTED', 'A GitLab placement is routed by hand.')
       if (a.op === 'remove_stack') return removeStack(side, l.envKey, l.app)
       const want = await runningWant(side)
-      // apply_stack (target): the environment's own names; drop_host (source): none.
+      // apply_stack (target): the environment's own names plus the per-move name (the Hub keeps
+      // reaching it there until release); drop_host (source): none.
+      const temp = a.side === 'target' ? await tempHost() : null
       await applyStack(side, want, (spec) => {
         if (a.op === 'drop_host') spec.hostnames = []
-        if (a.side === 'target') spec.env.HUB_BOOT_MAINTENANCE = String(move.id)
+        if (a.side === 'target') {
+          if (temp && !spec.hostnames.includes(temp)) spec.hostnames = [...spec.hostnames, temp]
+          spec.env.HUB_BOOT_MAINTENANCE = String(move.id)
+        }
       })
     },
 
@@ -1033,6 +1092,52 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
         spec.hostnames = temp ? [temp] : []
         spec.env.HUB_BOOT_MAINTENANCE = String(move.id)
       })
+    },
+
+    async dropTempHost() {
+      const l = await load()
+      const temp = await tempHost()
+      if (!temp || l.to.kind !== 'docker') return null
+      const to = l.to
+      const want = await runningWant(to)
+      let sent: string[] = []
+      await applyStack(to, want, (spec) => {
+        // The environment's own names only; the app was released, so no boot maintenance either.
+        spec.hostnames = spec.hostnames.filter((h) => h.toLowerCase() !== temp.toLowerCase())
+        delete spec.env.HUB_BOOT_MAINTENANCE
+        sent = [...spec.hostnames]
+      })
+      if (sent.some((h) => h.toLowerCase() === temp.toLowerCase()))
+        throw new MoveStepError('TEMP_HOST_KEPT', `The stack spec still names ${temp}.`)
+      // The edge drops the name once the stack converged; it must stop serving the app there.
+      const by = now() + TEMP_HOST_GONE_MS
+      for (;;) {
+        const ctl = new AbortController()
+        const timer = setTimeout(() => ctl.abort(), 8_000)
+        let served = false
+        try {
+          const res = await (deps.fetch ?? fetch)(`https://${temp}/api/version`, {
+            headers: { Accept: 'application/json' },
+            redirect: 'manual',
+            signal: ctl.signal
+          })
+          served = res.status === 200
+          void res.body?.cancel().catch(() => {})
+        } catch {
+          served = false
+        } finally {
+          clearTimeout(timer)
+        }
+        if (!served) break
+        if (now() >= by)
+          throw new MoveStepError(
+            'TEMP_HOST_STILL_SERVED',
+            `${temp} still serves the app two minutes after the stack dropped it.`
+          )
+        await sleep(STACK_POLL_MS)
+      }
+      log(`the per-move name ${temp} is gone from the target stack ${to.stack}`)
+      return temp
     },
 
     async verifyName(expect) {
