@@ -49,6 +49,7 @@ import {
   OPEN_MOVE_STATUSES,
   openMoveOf,
   patchMove,
+  patchMoveIfHolder,
   readMove,
   setEnvStatus,
   stepDone
@@ -664,11 +665,23 @@ async function boundary(ctx: Ctx, allowCancel = true): Promise<void> {
  */
 async function saveSteps(ctx: Ctx, steps: MoveSteps, extra: Partial<{ step: MoveStepKey }> = {}) {
   // R3-M-1: one atomic merge — the run's list wins, a key it lacks is kept from the stored one.
+  // R4-M-1: never over a move another runner holds now (its tokens in `locks`), and the lock
+  // tokens are always the stored ones (a run's copy may be older).
+  let theirs = false
   await mergeSteps(ctx.moveId, (stored) => {
+    if (stored.locks?.env && stored.locks.env !== ctx.held.envToken) {
+      theirs = true
+      return null
+    }
     for (const [k, v] of Object.entries(stored))
       if (k !== 'list' && !(k in steps)) (steps as unknown as Record<string, unknown>)[k] = v
+    if (stored.locks) steps.locks = stored.locks
     return steps
   })
+  if (theirs) {
+    ctx.lockLost = true
+    return
+  }
   if (extra.step !== undefined) await patchMove(ctx.moveId, { step: extra.step })
 }
 
@@ -1179,12 +1192,17 @@ async function halt(ctx: Ctx, move: HubMoveRow): Promise<void> {
   const checklist = fresh.checklist.filter((c) => c.id !== 'target_stopped')
   checklist.push({ id: 'target_stopped', text: say, required: true, done: false })
   const error = `HALTED_TARGET_LIVE: The rollback stopped: the target could not be frozen or stopped, so the source stays in maintenance (never two writers). ${say}`
-  await patchMove(ctx.moveId, {
+  const ours = await patchMoveIfHolder(ctx.moveId, ctx.held.envToken, {
     status: 'interrupted',
     error: safeLine(error),
     checklist,
     heartbeat_at: null
   })
+  if (!ours) {
+    ctx.run.log('stopped: this run no longer holds the move', 'error')
+    await ctx.run.fail(new Error('Interrupted: the run lost its locks.'))
+    return
+  }
   await closeDeployRow(ctx, 'interrupted', error)
   ctx.run.log(error, 'error')
   await logActivity({
@@ -1203,8 +1221,14 @@ async function halt(ctx: Ctx, move: HubMoveRow): Promise<void> {
 }
 
 async function interrupt(ctx: Ctx): Promise<void> {
-  await patchMove(ctx.moveId, { status: 'interrupted', heartbeat_at: null })
-  await closeDeployRow(ctx, 'interrupted', null)
+  // R4-M-1: only while this run is still the move's lock holder (a resumed run owns it now).
+  if (
+    await patchMoveIfHolder(ctx.moveId, ctx.held.envToken, {
+      status: 'interrupted',
+      heartbeat_at: null
+    })
+  )
+    await closeDeployRow(ctx, 'interrupted', null)
   ctx.run.log('stopped: this run lost its locks; resume or roll back the move', 'error')
   await ctx.run.fail(
     new Error('Interrupted: the run lost its locks. Resume or roll back the move.')

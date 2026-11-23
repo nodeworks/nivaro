@@ -1494,6 +1494,38 @@ describe('heal and resume', () => {
     expect(undoCalls(fake.calls)).toEqual([['unroute', plan.route[1]]])
   })
 
+  // R4-M-1: a runner that lost its locks never writes `interrupted` over a move another runner
+  // took meanwhile (heal freed the locks, Resume wrote its own tokens and set it running).
+  it('R4-M-1: an old runner that lost its lock does not mark a resumed move interrupted', async () => {
+    plan = planOf('to_shared')
+    const w = await world('docker')
+    let took = false
+    let newToken = ''
+    fake.state.during = async (name) => {
+      if (name === 'unroute' && !took) {
+        took = true
+        const m = await readMove(move_id)
+        await lock.release(w.envId, m?.steps.locks?.env as string)
+        newToken = (await lock.take(w.envId, 'move')) as string
+        const steps = { ...(m?.steps ?? {}), locks: { env: newToken, shared: [] } }
+        await db('nivaro_hub_moves')
+          .where({ id: move_id })
+          .update({ status: 'running', steps: JSON.stringify(steps) })
+      }
+    }
+    fake.state.failOn = (name) => name === 'verifyName'
+    let move_id = 0
+    const out = await start(w, toFor('to_shared', w))
+    move_id = out.move_id
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    // The new holder's move: still running, its tokens untouched.
+    expect(m?.status).toBe('running')
+    expect(m?.steps.locks?.env).toBe(newToken)
+    await db('nivaro_hub_moves').where({ id: move_id }).update({ status: 'cancelled' })
+    await lock.release(w.envId, newToken)
+  })
+
   it('a fresh heartbeat is never healed', async () => {
     plan = planOf('to_shared')
     const w = await world('docker')
