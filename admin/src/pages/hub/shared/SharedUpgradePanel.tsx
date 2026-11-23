@@ -76,6 +76,11 @@ export function SharedUpgradePanel({ shared }: { shared: SharedDeployment }) {
             deployId={current}
             onClose={() => setWatching(null)}
           />
+        ) : history.isPending ? (
+          // Until the history answers, a run may be going: the form (and its plan read, which
+          // calls the registry) waits for it. A failed history read still shows the form; the
+          // server refuses a second run at start.
+          <Skeleton className='h-24 w-full' />
         ) : (
           <UpgradeForm shared={shared} runs={history.data ?? []} onStarted={setWatching} />
         )}
@@ -152,13 +157,14 @@ function UpgradeForm({
     if (picked || choices.length === 0) return
     setPicked(choices.find((v) => v !== shared.version_pin) ?? choices[0])
   }, [picked, choices, shared.version_pin])
-  // Upgrade and roll back offer different versions: switching starts the pick again.
-  const shownKind = useRef(kind)
-  useEffect(() => {
-    if (shownKind.current === kind) return
-    shownKind.current = kind
+  // Upgrade and roll back offer different versions: switching starts the pick again. Done in the
+  // click, not an effect: an effect clearing it in the same commit as the first pick (versions
+  // not read yet when the person switched) left nothing picked for good.
+  const chooseKind = (k: SharedUpgradeKind) => {
+    if (k === kind) return
+    setKind(k)
     setPicked('')
-  }, [kind])
+  }
   const version = picked.trim()
 
   const [confirm, setConfirm] = useState('')
@@ -244,7 +250,7 @@ function UpgradeForm({
                 key={k}
                 type='button'
                 aria-pressed={kind === k}
-                onClick={() => setKind(k)}
+                onClick={() => chooseKind(k)}
                 className={cn(
                   'h-7 rounded px-2.5 text-[12px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50',
                   kind === k

@@ -304,7 +304,8 @@ describe('SharedUpgradePanel', () => {
     const steps = await screen.findByRole(
       'list',
       { name: 'Upgrade steps' },
-      // Two reads in a row (history, then the run): slow on a loaded machine.
+      // Two reads in a row (history, then the run): slow on a loaded machine. The form never
+      // shows before the history answers, so no plan is asked for (see the test below).
       { timeout: 5000 }
     )
     const items = within(steps).getAllByRole('listitem')
@@ -317,6 +318,46 @@ describe('SharedUpgradePanel', () => {
     await waitFor(() => expect(h.post).toHaveBeenCalledWith('/hub/shared-deploys/31/cancel', {}), {
       timeout: 5000
     })
+  })
+
+  it('nothing is planned while the history is still being read (a running run may be there)', async () => {
+    // The race behind the flaky test above: the versions answer came before the history one, so
+    // the form showed for a moment and asked for a plan of a deployment that was mid-upgrade.
+    let answerHistory: (v: unknown) => void = () => {}
+    const historyRead = new Promise((resolve) => {
+      answerHistory = resolve
+    })
+    const run: SharedDeploy = {
+      id: 31,
+      shared_deployment_id: 4,
+      kind: 'upgrade',
+      version: '0.4.0',
+      from_version: '0.3.210',
+      status: 'running',
+      step: 'wait_version',
+      error: null,
+      job_run_id: 1,
+      started_by: null,
+      started_at: new Date().toISOString(),
+      finished_at: null
+    }
+    h.get.mockImplementation(async (url: string) => {
+      if (url === '/hub/shared/4/upgrade/versions')
+        return { data: { data: { versions: ['0.4.0', '0.3.210'] } } }
+      if (url === '/hub/shared/4/deploys') return historyRead
+      if (url === '/hub/shared-deploys/31') return { data: { data: run } }
+      throw Object.assign(new Error('nope'), { response: { status: 404, data: {} } })
+    })
+    wrap()
+    // Give the versions read every chance to answer and a plan to be asked for.
+    await new Promise((r) => setTimeout(r, 50))
+    expect(h.post).not.toHaveBeenCalled()
+    expect(screen.queryByRole('button', { name: 'Start upgrade' })).toBeNull()
+    answerHistory({ data: { data: [run] } })
+    expect(
+      await screen.findByRole('list', { name: 'Upgrade steps' }, { timeout: 5000 })
+    ).toBeInTheDocument()
+    expect(h.post).not.toHaveBeenCalled()
   })
 
   it('roll back offers only versions a finished Hub run deployed here, not the registry', async () => {
@@ -374,6 +415,39 @@ describe('SharedUpgradePanel', () => {
       })
     )
     expect(rollbackVersions(history, '0.3.210')).toEqual(['0.3.200'])
+  })
+
+  it('roll back picked before the versions answer still picks a version it ran before', async () => {
+    history = [
+      {
+        id: 30,
+        shared_deployment_id: 4,
+        kind: 'upgrade',
+        version: '0.3.200',
+        from_version: null,
+        status: 'success',
+        step: 'verify',
+        error: null,
+        job_run_id: 1,
+        started_by: null,
+        started_at: '2026-11-19T10:00:00.000Z',
+        finished_at: '2026-11-19T10:10:00.000Z'
+      }
+    ]
+    h.get.mockImplementation(async (url: string) => {
+      if (url === '/hub/shared/4/upgrade/versions') return new Promise(() => {})
+      if (url === '/hub/shared/4/deploys') return { data: { data: history } }
+      throw Object.assign(new Error('nope'), { response: { status: 404, data: {} } })
+    })
+    wrap()
+    await screen.findByRole('list', { name: 'Upgrade history' })
+    fireEvent.click(screen.getByRole('button', { name: 'Roll back' }))
+    await waitFor(() =>
+      expect(h.post).toHaveBeenCalledWith('/hub/shared/4/upgrade/plan', {
+        version: '0.3.200',
+        kind: 'rollback'
+      })
+    )
   })
 
   it('history lists earlier runs', async () => {
