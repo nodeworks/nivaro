@@ -912,7 +912,9 @@ describe('stackLeftovers', () => {
       secrets: [],
       networks: [],
       volumes: [],
-      extensions: false
+      extensions: false,
+      // 0.2.1: nothing of the stack runs (its services were gone before the remove).
+      tasks_active: 0
     })
   })
 

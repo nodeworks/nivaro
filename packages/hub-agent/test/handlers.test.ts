@@ -316,6 +316,77 @@ describe('stack routes', () => {
   })
 })
 
+// Hub P6-45 round 3 (agent 0.2.1): a Finish that stops an old stack must see its containers stop,
+// not only its services go, and a remove that fails part way must never leave an app process
+// running without its Redis (the maintenance freeze).
+describe('0.2.1: stopping a stack — tasks_active and Redis last', () => {
+  const owner = '?app=acme&environment=staging'
+  it('leftovers counts the stack’s tasks that have not ended, draining ones included', async () => {
+    expect((await req('PUT', '/v1/stacks/acme-st', body())).status).toBe(202)
+    // Another app's stack: never counted.
+    expect(
+      (await req('PUT', '/v1/stacks/other-st', body({ owner: { app: 'other' }, hostnames: [] })))
+        .status
+    ).toBe(202)
+    const before = await req('GET', `/v1/stacks/acme-st/leftovers${owner}`)
+    // web + redis, one replica each (the shut-down task of an earlier version is running too).
+    expect(before.body.tasks_active).toBeGreaterThanOrEqual(2)
+
+    const del = await req(
+      'DELETE',
+      `/v1/stacks/acme-st?confirm=acme-st&app=acme&environment=staging`
+    )
+    expect(del.status).toBe(200)
+    // The services are gone, their containers still shutting down: not stopped yet.
+    const draining = await req('GET', `/v1/stacks/acme-st/leftovers${owner}`)
+    expect(draining.body.services).toEqual([])
+    expect(draining.body.tasks_active).toBe(2)
+    expect((await req('GET', '/v1/stacks/acme-st')).status).toBe(404)
+    fake.finishDraining()
+    const done = await req('GET', `/v1/stacks/acme-st/leftovers${owner}`)
+    expect(done.body.tasks_active).toBe(0)
+    // Volumes kept (remove_volumes not asked).
+    expect(done.body.volumes).toEqual(['nvh_acme-st_redis', 'nvh_acme-st_uploads'])
+  })
+
+  it('removes the app services first and Redis last; a failure part way keeps Redis', async () => {
+    expect(
+      (
+        await req(
+          'PUT',
+          '/v1/stacks/acme-st',
+          body({
+            roles: [
+              { role: 'web', replicas: 1 },
+              { role: 'worker', replicas: 1 }
+            ]
+          })
+        )
+      ).status
+    ).toBe(202)
+    fake.failDelete.add('acme-st_worker')
+    const del = await req(
+      'DELETE',
+      `/v1/stacks/acme-st?confirm=acme-st&app=acme&environment=staging`
+    )
+    expect(del.status).toBe(502)
+    // Redis is still there: the surviving worker can still read its freeze.
+    expect(fake.serviceNames()).toEqual(['acme-st_redis', 'acme-st_worker'])
+    fake.failDelete.clear()
+    expect(
+      (await req('DELETE', `/v1/stacks/acme-st?confirm=acme-st&app=acme&environment=staging`))
+        .status
+    ).toBe(200)
+    const order = fake.calls
+      .filter((c) => c.method === 'DELETE' && c.path.startsWith('/services/'))
+      .map((c) => c.path)
+    expect(order.at(-1)).toBe('/services/acme-st_redis')
+    expect(order.indexOf('/services/acme-st_redis')).toBeGreaterThan(
+      order.indexOf('/services/acme-st_web')
+    )
+  })
+})
+
 describe('P4-33: health says how many nodes the swarm has and the volume driver', () => {
   it('one node, local volumes', async () => {
     const r = await req('GET', '/v1/health')

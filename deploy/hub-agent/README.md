@@ -144,6 +144,13 @@ environment; an upgrade or re-apply at the same version on a shared
 deployment). That apply is also what removes the second network label older
 agents set, which Traefik 3.5 and later skip the whole service for.
 
+**0.2.1 (Hub move "Finish and stop the old home").** `GET /v1/stacks/:name/leftovers`
+also answers `tasks_active`: the stack's tasks, across the swarm, whose containers
+have not ended yet (a removed service's containers that are still shutting down
+count). Removing a stack now deletes the app's services first and the stack's
+Redis last. Stack hashes do not change. A Hub refuses "Finish and stop the old
+home" for a Docker old home whose agent is older (it cannot prove the stop).
+
 ## Secrets in the app
 
 Secret files the agent creates for an app are owned by uid and gid 1000 with

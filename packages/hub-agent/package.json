@@ -1,6 +1,6 @@
 {
   "name": "@nivaro/hub-agent",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "Nivaro Hub agent — the only process that holds the Docker socket for writes; turns a validated StackSpec into allow-listed Engine API calls.",
   "type": "module",

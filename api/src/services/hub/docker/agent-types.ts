@@ -151,6 +151,11 @@ export interface StackLeftovers {
   networks: string[]
   volumes: string[]
   extensions: boolean
+  /**
+   * Agent 0.2.1: the stack's tasks whose containers have not ended (draining ones included),
+   * across the swarm. Absent from an older agent.
+   */
+  tasks_active?: number
 }
 
 /** One refused field of a 400 `SPEC_INVALID`. */

@@ -266,26 +266,52 @@ function reportOf() {
 const fakeClient = (() => ({ appStatus: async () => reportOf() })) as never
 const fakeLink = (() => ({ sharedReadiness: async () => reportOf() })) as never
 
-/** A fake Hub agent for an old Docker stack: its services and what each runs. */
+/**
+ * A fake Hub agent (0.2.1) for an old Docker stack: its services, and its containers that have
+ * not ended (`tasks_active`, draining after a remove until `drainReads` leftovers reads).
+ */
 const agentState = {
-  running: 0,
-  /** After the remove: running drops to 0 at the next status read (or never). */
-  stopsAfterRemove: true,
-  unreadable: false,
-  removed: [] as Array<{ stack: string; removeVolumes: unknown }>
+  services: [] as string[],
+  tasks: 0,
+  /** Leftovers reads after the remove before the draining containers have stopped (-1 = never). */
+  drainReads: 1,
+  /** The remove fails after deleting the app's web service (Redis is removed last). */
+  failPartway: false,
+  /** An agent older than 0.2.1 (no tasks_active). */
+  old: false,
+  removed: [] as Array<{ stack: string; removeVolumes: unknown }>,
+  leftoverReads: 0,
+  sinceRemove: -1
 }
 const fakeAgent = {
   agentRemove: async (_d: unknown, stack: string, o: { removeVolumes?: unknown }) => {
     agentState.removed.push({ stack, removeVolumes: o?.removeVolumes })
-    return { removed: [] } as never
+    // App services first, Redis last (agent 0.2.1).
+    const order = [...agentState.services].sort(
+      (x, y) => Number(x.endsWith('_redis')) - Number(y.endsWith('_redis'))
+    )
+    for (const name of order) {
+      if (agentState.failPartway && !name.endsWith('_web'))
+        throw Object.assign(new Error('engine failed'), { code: 'ENGINE_ERROR' })
+      agentState.services = agentState.services.filter((x) => x !== name)
+    }
+    agentState.sinceRemove = 0
+    return { removed: {} } as never
   },
-  agentStack: async (_d: unknown, stack: string) => {
-    if (agentState.unreadable) throw Object.assign(new Error('no answer'), { code: 'X' })
-    if (agentState.removed.length && agentState.stopsAfterRemove) agentState.running = 0
-    if (agentState.running === 0 && agentState.removed.length) return null
+  agentLeftovers: async () => {
+    agentState.leftoverReads++
+    if (agentState.sinceRemove >= 0) {
+      if (agentState.drainReads >= 0 && agentState.sinceRemove >= agentState.drainReads)
+        agentState.tasks = agentState.services.length
+      agentState.sinceRemove++
+    }
     return {
-      name: stack,
-      services: [{ name: 'api', replicas: { desired: 1, running: agentState.running } }]
+      services: [...agentState.services],
+      secrets: [],
+      networks: [],
+      volumes: ['nvh_x_uploads'],
+      extensions: false,
+      ...(agentState.old ? {} : { tasks_active: agentState.tasks })
     } as never
   }
 }
@@ -442,10 +468,14 @@ beforeEach(() => {
   home.unreachable = false
   home.onCheck = null
   home.realStop = false
-  agentState.running = 0
-  agentState.stopsAfterRemove = true
-  agentState.unreadable = false
+  agentState.services = []
+  agentState.tasks = 0
+  agentState.drainReads = 1
+  agentState.failPartway = false
+  agentState.old = false
   agentState.removed = []
+  agentState.leftoverReads = 0
+  agentState.sinceRemove = -1
   fake = fakeOps()
   runOut.failed = []
   runOut.completed = []
@@ -737,44 +767,79 @@ describe('P6-45 Finish and stop the old home: a shared old home', () => {
 })
 
 describe('P6-45 Finish and stop the old home: a Docker old home', () => {
-  it('the agent removes its services (volumes and the Hub rows kept), proven at 0 running', async () => {
+  const dockerStop = async () => {
     const w = await world('docker')
     await stackWithKey(w.envId, SECRET_KEY)
     const id = await startMove(w, 'to_shared')
     expect((await getMove(id)).retire_stop).toMatchObject({ case: 'shared', finish: true })
     home.realStop = true
-    agentState.running = 2
+    agentState.services = [`acme-prod${seq}_web`, `acme-prod${seq}_worker`, `acme-prod${seq}_redis`]
+    agentState.tasks = 3
     fake = fakeOps()
     useDeps()
+    return { w, id }
+  }
+
+  it('R2-1: proven only once no container of the stack runs or shuts down (volumes and Hub rows kept)', async () => {
+    const { w, id } = await dockerStop()
+    agentState.drainReads = 2
     expect((await finishStop(id, `${w.appKey}/prod`)).statusCode).toBe(202)
     await Run.awaitMove(id)
     const done = await readMove(id)
     expect(done?.status).toBe('success')
     expect(agentState.removed).toEqual([{ stack: `acme-prod${seq}`, removeVolumes: false }])
-    // Its settings and sealed secrets stay so it can be restored by hand.
+    // The services were gone at once; the stop waited for the draining containers (3 reads).
+    expect(agentState.leftoverReads).toBeGreaterThanOrEqual(3)
     expect((await stackSecrets(w.envId)).ENCRYPTION_KEY).toBe(SECRET_KEY)
-    expect(done?.checklist.find((c) => c.id === 'retire_source')?.text).toContain(
-      'its Docker stack has no service left (volumes kept)'
-    )
     expect(fake.calls).not.toContain('retireSource')
   })
 
-  it('a stack that keeps running: refused after five minutes with a plain reason, nothing ends', async () => {
-    const w = await world('docker')
-    const id = await startMove(w, 'to_shared')
-    home.realStop = true
-    agentState.running = 1
-    agentState.stopsAfterRemove = false
-    fake = fakeOps()
-    useDeps()
+  it('R2-1: an agent older than 0.2.1 cannot prove the stop: refused, saying to update it', async () => {
+    const { w, id } = await dockerStop()
+    agentState.old = true
+    expect((await finishStop(id, `${w.appKey}/prod`)).statusCode).toBe(202)
+    await Run.awaitMove(id)
+    expect((await readMove(id))?.status).toBe('interrupted')
+    expect((await getMove(id)).retire_stop?.finish_refused).toContain(
+      'is older than 0.2.1 and cannot report whether its containers have stopped'
+    )
+  })
+
+  it('R2-2: a remove that fails part way: refused as partly stopped, naming what runs; Finish again completes it', async () => {
+    const { w, id } = await dockerStop()
+    agentState.failPartway = true
     expect((await finishStop(id, `${w.appKey}/prod`)).statusCode).toBe(202)
     await Run.awaitMove(id)
     const m = await readMove(id)
     expect(m?.status).toBe('interrupted')
     expect(m?.error).toMatch(/^APP_KEY_MISMATCH: /)
     const refused = (await getMove(id)).retire_stop?.finish_refused ?? ''
-    expect(refused).toContain('still runs 1 task(s) five minutes after it was asked to stop')
+    // The app's web process went first; its worker and its Redis (last) still run: the worker
+    // still reads its freeze.
+    expect(refused).toContain(`The old Docker stack acme-prod${seq} is partly stopped`)
+    expect(refused).toContain('still running: its worker process, its Redis')
+    expect(refused).toContain('Finish again to complete the stop')
+    expect(agentState.services).toEqual([`acme-prod${seq}_worker`, `acme-prod${seq}_redis`])
     expect(await moveOpenRefusal({ envIds: [w.envId] })).toMatchObject({ code: 'MOVE_OPEN' })
+    // Finish again: the remove finishes the job.
+    agentState.failPartway = false
+    fake = fakeOps()
+    useDeps()
+    expect((await finishStop(id, `${w.appKey}/prod`)).statusCode).toBe(202)
+    await Run.awaitMove(id)
+    expect((await readMove(id))?.status).toBe('success')
+    expect(agentState.services).toEqual([])
+  })
+
+  it('a stack whose containers never stop: refused after five minutes, naming them', async () => {
+    const { w, id } = await dockerStop()
+    agentState.drainReads = -1
+    expect((await finishStop(id, `${w.appKey}/prod`)).statusCode).toBe(202)
+    await Run.awaitMove(id)
+    expect((await readMove(id))?.status).toBe('interrupted')
+    expect((await getMove(id)).retire_stop?.finish_refused ?? '').toContain(
+      'still running: 3 containers still shutting down'
+    )
   })
 })
 
