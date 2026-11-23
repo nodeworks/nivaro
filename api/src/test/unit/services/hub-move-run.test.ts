@@ -2309,12 +2309,38 @@ describe('the app key across moves (E2E B4, P6-38)', () => {
     const w = await world('docker')
     const Store = await import('../../../services/hub/shared/store.js')
     await Store.setAppKey(w.envId, 'd8'.repeat(32))
-    fake.state.failOn = (name) => name === 'verifyTargetKey'
+    fake.state.during = (name) => {
+      if (name === 'verifyTargetKey') throw new MoveStepError('APP_KEY_MISMATCH', 'Another key.')
+    }
     const { move_id } = await start(w, toFor('to_shared', w))
     await Run.awaitMove(move_id)
     const m = await readMove(move_id)
     expect(m?.status).toBe('success')
-    expect(m?.checklist.find((c) => c.id === 'retire_source')).toMatchObject({ done: false })
+    const item = m?.checklist.find((c) => c.id === 'retire_source')
+    expect(item).toMatchObject({ done: false })
     expect(fake.names()).not.toContain('retireSource')
+    // F4-1 (P6-39): what to do, not "retire by hand".
+    expect(item?.text).toContain(
+      "Do not retire the old home yet. Enter the app's key on the new home (Hub → app → App key), then retire."
+    )
+    expect(item?.text).not.toMatch(/^Retire the old placement by hand/)
+    // Retried with backoff for about a minute before giving up.
+    expect(fake.names().filter((n) => n === 'verifyTargetKey').length).toBeGreaterThanOrEqual(3)
+  })
+
+  it('F4-1: a key check that passes on a retry retires the source', async () => {
+    plan = planOf('to_shared')
+    const w = await world('docker')
+    let n = 0
+    fake.state.during = (name) => {
+      if (name === 'verifyTargetKey' && n++ < 2)
+        throw new MoveStepError('APP_KEY_UNKNOWN', 'Not yet.')
+    }
+    const { move_id } = await start(w, toFor('to_shared', w))
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    expect(m?.status).toBe('success')
+    expect(m?.error).toBeNull()
+    expect(fake.names()).toContain('retireSource')
   })
 })

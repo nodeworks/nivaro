@@ -831,6 +831,29 @@ async function liftSource(ctx: Ctx): Promise<void> {
 }
 
 /**
+ * F4-1 (P6-39): the new home's key check, retried with backoff for about a minute (a shared
+ * deployment's replicas re-read the list every 30 s; one link error is not an answer) before the
+ * source is left unretired.
+ */
+async function verifyTargetKeyWithRetry(ctx: Ctx): Promise<void> {
+  const waits = [5_000, 10_000, 15_000, 30_000]
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await ctx.ops.verifyTargetKey()
+      return
+    } catch (err) {
+      const se = asStepError(err, "The new home's key could not be checked.")
+      if (attempt >= waits.length) throw se
+      ctx.run.log(
+        `retire_source: the new home's key does not check yet (${se.code}); trying again`,
+        'warn'
+      )
+      await ctx.e.sleep(waits[attempt])
+    }
+  }
+}
+
+/**
  * R5-I-1: the post-deploy maintenance call, retried with backoff (5, 15, 30, then every 60 s).
  * Final review moves Minor 3: within target_ready's own 10 minutes (TARGET_READY_MS), since an
  * app that runs its migrations at boot can take longer than 2 minutes to answer.
@@ -1006,7 +1029,7 @@ async function doStep(ctx: Ctx, key: MoveStepKey, steps: MoveSteps): Promise<voi
       return release(ctx, steps)
     case 'retire_source':
       // E2E B4 (P6-38): the new home seals with the app's own key before the old one is retired.
-      await ops.verifyTargetKey()
+      await verifyTargetKeyWithRetry(ctx)
       return ops.retireSource()
     case 'done':
       return
@@ -1252,9 +1275,15 @@ async function finishRetireFailed(ctx: Ctx, steps: MoveSteps, err: MoveStepError
   await mergeChecklist(ctx.moveId, (checklist) => {
     // Final review moves Minor 4: the source's own instruction (a Docker source never retired
     // says to remove its stack now), not only "see the log".
-    const text = safeLine(
-      `Retire the old placement by hand: the Hub could not (${err.code}). ${err.message}`
-    )
+    // F4-1 (P6-39): a key that does not check is not a retire to do by hand: the old home must
+    // keep the app until the new one seals with its key.
+    const text = err.code.startsWith('APP_KEY_')
+      ? safeLine(
+          `Do not retire the old home yet. Enter the app's key on the new home (Hub → app → App key), then retire. (${err.code}: ${err.message})`
+        )
+      : safeLine(
+          `Retire the old placement by hand: the Hub could not (${err.code}). ${err.message}`
+        )
     const item = checklist.find((c) => c.id === 'retire_source')
     if (item) {
       item.done = false
