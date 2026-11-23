@@ -733,3 +733,11 @@ export function creationErrorDescription(
   else delete d.hint
   return d
 }
+
+// Phase 6 (Task 4): creation refuses an environment placed on a shared deployment.
+Object.assign(CREATE_COPY, {
+  SHARED_PLACEMENT: {
+    title: 'This environment runs on a shared deployment',
+    hint: 'A shared deployment runs the app for it, so there is nothing to create. Place it with Place on shared deployment… instead.'
+  }
+} satisfies Record<string, Copy>)

@@ -64,11 +64,15 @@ const copyLines = (lines: string[]) => {
 
 const rowText = 'text-[12px] text-slate-700 dark:text-slate-300'
 
+/** Refusals that mean "no stack of its own here": the panel renders nothing and never polls. */
+const NO_STACK_CODES = new Set(['NOT_DOCKER', 'SHARED_PLACEMENT'])
+
 /** Polling pace: none for a non-Docker environment, fast while updating, slow otherwise. */
 export function stackRefetchInterval(q: {
   state: { error: unknown; data?: { status?: { state?: string } | null } }
 }): number | false {
-  if (q.state.error && refusalOf(q.state.error).code === 'NOT_DOCKER') return false
+  // Not a Docker environment, or one on a shared deployment (phase 6): nothing to poll.
+  if (q.state.error && NO_STACK_CODES.has(refusalOf(q.state.error).code ?? '')) return false
   return q.state.data?.status?.state === 'updating' ? 5000 : 30000
 }
 
@@ -97,7 +101,7 @@ export function HubStackPanel({
   if (stack.isPending) return null
   const refusal = stack.isError ? refusalOf(stack.error) : null
   // Not a Docker environment: no panel.
-  if (refusal?.code === 'NOT_DOCKER') return null
+  if (NO_STACK_CODES.has(refusal?.code ?? '')) return null
   // An owner whose read failed without a code (Hub unreachable) gets a short notice, not a gap.
   const ownerBlind = !!refusal && !refusal.code && !isAdmin
   const body = ownerBlind ? (
