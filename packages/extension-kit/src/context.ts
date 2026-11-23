@@ -733,6 +733,12 @@ export interface ExtensionContext {
    *  would have done. Answers how many records were recomputed. Optional — an older API
    *  does not provide it. */
   rollups?: { recalc(collection: string, ids: Array<string | number>): Promise<number> }
+  /** Which app the current request or job serves (Nivaro Hub shared deployments, Nivaro Cloud).
+   *  One process of a shared deployment serves many apps — often copies of each other, with the
+   *  same record and user ids — and `register()` runs once for all of them. A module-level cache,
+   *  memo, guard or in-flight promise must therefore keep each app's entries apart: put `key()`
+   *  into the cache key, or keep one slot per key. Optional — an older API does not provide it. */
+  apps?: ExtensionAppsMembers
   /** Auth middleware — use as Fastify `onRequest` / `preHandler` handlers. */
   auth: {
     authenticate: (req: FastifyRequest, reply: FastifyReply) => Promise<void>
@@ -748,6 +754,27 @@ export interface ExtensionContext {
     /** Knex client connected to the Nivaro Cloud meta database. */
     metaDb: Knex
   }
+}
+
+/** `ctx.apps` — the app a request or job serves (see ExtensionContext.apps). */
+export interface ExtensionAppsMembers {
+  /** The current app's key: '' self-hosted (one app, so nothing changes there) and outside any
+   *  app; the tenant id inside a request or job of a multi-tenant deployment. */
+  key(): string
+  /** Whether this process serves many apps (Nivaro Cloud, or a Hub shared deployment). */
+  many(): boolean
+  /** Registers a container whose entries name the app — a Map / Set whose string keys carry
+   *  `key()` between separators (`<app>|…`, `<app>\u0000…`), or a store with its own
+   *  `forgetApp(appKey)` — so the core drops that app's entries when the app leaves this process
+   *  (unplaced or moved away) and a later return starts clean. Answers the container. */
+  registerKeyed<T extends Map<unknown, unknown> | Set<unknown> | ExtensionForgetsApp>(
+    container: T
+  ): T
+}
+
+/** A store that drops one app's entries itself (`ctx.apps.registerKeyed`). */
+export interface ExtensionForgetsApp {
+  forgetApp(appKey: string): number
 }
 
 export interface ExtensionSettingDeclInput {
@@ -881,7 +908,7 @@ export interface ExtensionDefinition {
   /** Safe to run on a Nivaro Hub shared deployment, where ONE process serves many apps:
    *  `register()` runs once and every route, hook and job then serves every app. Set it only
    *  when no module-level state (cache, memo, guard, in-flight promise) can carry one app's data
-   *  into another — key such state on the app (`ctx` tenant helpers) or keep none. A shared
+   *  into another — key such state on the app (`ctx.apps`) or keep none. A shared
    *  deployment refuses a listed extension without it (readiness `shared-extensions` fails
    *  naming it). Self-hosted and Nivaro Cloud ignore it. */
   shared?: true
