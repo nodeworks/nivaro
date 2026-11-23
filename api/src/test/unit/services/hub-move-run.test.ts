@@ -212,6 +212,7 @@ function fakeOps() {
     unroute: rec('unroute', (_a: RouteAction) => undefined),
     verifyName: rec('verifyName', (_e: unknown) => state.serving),
     retireSource: rec('retireSource', () => undefined),
+    dropTempHost: rec('dropTempHost', () => null as string | null),
     revokeTickets: rec('revokeTickets', () => undefined),
     databaseIdentity: rec('databaseIdentity', (side: 'source' | 'target') => state.identity[side])
   }
@@ -355,6 +356,7 @@ const ORDER: Record<MoveKind, string[]> = {
     'targetMaintenance', // release: target serves for real
     'waitReplicas', // release: every target replica has it active
     'retireSource',
+    'dropTempHost',
     'revokeTickets'
   ],
   to_dedicated: [
@@ -374,6 +376,7 @@ const ORDER: Record<MoveKind, string[]> = {
     'verifyName',
     'targetMaintenance',
     'retireSource',
+    'dropTempHost',
     'revokeTickets'
   ],
   between_shared: [
@@ -395,6 +398,7 @@ const ORDER: Record<MoveKind, string[]> = {
     'targetMaintenance',
     'waitReplicas',
     'retireSource',
+    'dropTempHost',
     'revokeTickets'
   ]
 }
@@ -1786,5 +1790,64 @@ describe('step list writes are atomic (R3-M-1)', () => {
       await mergeSteps(move_id, (s) => ({ ...s, route_confirmed_at: 'z' }), { status: ['waiting'] })
     ).toBe(false)
     expect((await readMove(move_id))?.steps.route_confirmed_at).toBe('a')
+  })
+})
+
+// Ruling P6-27: the per-move name never stays on a live target after the move.
+describe('per-move name removed at the end (P6-27)', () => {
+  const TEMP = 'hub-move-9-e1.example.com'
+  const withTemp = () =>
+    useDeps({
+      addresses: async () => ({
+        source_link_base: 'https://src.direct.example.com',
+        source_link_public: false,
+        pull_source: 'https://src.direct.example.com',
+        target_link_base: `https://${TEMP}`,
+        target_publish_host: null,
+        target_temp_host: TEMP
+      })
+    })
+
+  it('done → the per-move name is removed after retire_source; no checklist item', async () => {
+    plan = planOf('to_dedicated')
+    withTemp()
+    const w = await world('shared')
+    const { move_id } = await start(w, toFor('to_dedicated', w))
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    expect(m?.status).toBe('success')
+    const names = fake.names()
+    expect(names).toContain('dropTempHost')
+    expect(names.indexOf('dropTempHost')).toBeGreaterThan(names.indexOf('retireSource'))
+    expect(m?.checklist.find((c) => c.id === 'temp_host')).toBeUndefined()
+  })
+
+  it('the removal fails → a Still to do item naming the name; the move still ends success, nothing undone', async () => {
+    plan = planOf('to_dedicated')
+    withTemp()
+    const w = await world('shared')
+    fake.state.failOn = (name) => name === 'dropTempHost'
+    const { move_id } = await start(w, toFor('to_dedicated', w))
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    expect(m?.status).toBe('success')
+    const item = m?.checklist.find((c) => c.id === 'temp_host')
+    expect(item).toMatchObject({ required: false, done: false })
+    expect(item?.text).toMatch(/^Still to do/)
+    expect(item?.text).toContain(TEMP)
+    expect(undoCalls(fake.calls)).toEqual([])
+    expect(fake.names()).not.toContain('freezeTarget')
+    expect(run.out.completed).toMatch(/done/)
+  })
+
+  it('a retire that fails still drops the per-move name (the target stays live)', async () => {
+    plan = planOf('to_dedicated')
+    withTemp()
+    const w = await world('shared')
+    fake.state.failOn = (name) => name === 'retireSource'
+    const { move_id } = await start(w, toFor('to_dedicated', w))
+    await Run.awaitMove(move_id)
+    expect((await readMove(move_id))?.status).toBe('success')
+    expect(fake.names()).toContain('dropTempHost')
   })
 })

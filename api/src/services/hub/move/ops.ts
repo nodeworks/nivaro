@@ -94,6 +94,8 @@ export const STACK_CONVERGE_MS = 30 * 60_000
 export const PULL_STATUS_GIVE_UP_MS = 10 * 60_000
 const POLL_MS = 5_000
 const STACK_POLL_MS = 10_000
+/** P6-27: how long the per-move name may keep answering after the stack dropped it. */
+const TEMP_HOST_GONE_MS = 2 * 60_000
 const REFRESH_AGAIN_MS = 30_000
 
 /** A step's refusal: a code and a plain sentence (never a value). */
@@ -134,6 +136,13 @@ export interface MoveOps {
   unroute(a: RouteAction): Promise<void>
   verifyName(expect: { version: string; shared: string | null }): Promise<boolean>
   retireSource(): Promise<void>
+  /**
+   * P6-27: once rollback is no longer possible, a Docker target stack is applied again with only
+   * the environment's own names and the per-move name is proven gone (the agent converged on a
+   * spec without it, and the name no longer serves the app). Answers the name removed, or null
+   * when the target never had one.
+   */
+  dropTempHost(): Promise<string | null>
   /** T10 carry: revokes any transfer ticket this move still holds (move end, rollback). */
   revokeTickets(): Promise<void>
   /**
@@ -1083,6 +1092,52 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
         spec.hostnames = temp ? [temp] : []
         spec.env.HUB_BOOT_MAINTENANCE = String(move.id)
       })
+    },
+
+    async dropTempHost() {
+      const l = await load()
+      const temp = await tempHost()
+      if (!temp || l.to.kind !== 'docker') return null
+      const to = l.to
+      const want = await runningWant(to)
+      let sent: string[] = []
+      await applyStack(to, want, (spec) => {
+        // The environment's own names only; the app was released, so no boot maintenance either.
+        spec.hostnames = spec.hostnames.filter((h) => h.toLowerCase() !== temp.toLowerCase())
+        delete spec.env.HUB_BOOT_MAINTENANCE
+        sent = [...spec.hostnames]
+      })
+      if (sent.some((h) => h.toLowerCase() === temp.toLowerCase()))
+        throw new MoveStepError('TEMP_HOST_KEPT', `The stack spec still names ${temp}.`)
+      // The edge drops the name once the stack converged; it must stop serving the app there.
+      const by = now() + TEMP_HOST_GONE_MS
+      for (;;) {
+        const ctl = new AbortController()
+        const timer = setTimeout(() => ctl.abort(), 8_000)
+        let served = false
+        try {
+          const res = await (deps.fetch ?? fetch)(`https://${temp}/api/version`, {
+            headers: { Accept: 'application/json' },
+            redirect: 'manual',
+            signal: ctl.signal
+          })
+          served = res.status === 200
+          void res.body?.cancel().catch(() => {})
+        } catch {
+          served = false
+        } finally {
+          clearTimeout(timer)
+        }
+        if (!served) break
+        if (now() >= by)
+          throw new MoveStepError(
+            'TEMP_HOST_STILL_SERVED',
+            `${temp} still serves the app two minutes after the stack dropped it.`
+          )
+        await sleep(STACK_POLL_MS)
+      }
+      log(`the per-move name ${temp} is gone from the target stack ${to.stack}`)
+      return temp
     },
 
     async verifyName(expect) {

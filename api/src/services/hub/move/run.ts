@@ -1079,7 +1079,34 @@ async function closeDeployRow(
     .catch(() => null)
 }
 
+/**
+ * P6-27: a move that ends with the target live (success, a retire that failed included) drops
+ * the per-move name from the target stack. A failure never rolls back: it is an open checklist
+ * item naming the name.
+ */
+async function dropTempName(ctx: Ctx): Promise<void> {
+  try {
+    await ctx.ops.dropTempHost()
+  } catch (err) {
+    const se = asStepError(err, 'The per-move name could not be removed.')
+    const move = await readMove(ctx.moveId)
+    const host = move?.steps.addresses?.target_temp_host ?? 'the per-move name'
+    ctx.run.log(`the per-move name ${host} is still on the target stack (${se.code})`, 'warn')
+    const checklist = (move?.checklist ?? []).filter((c) => c.id !== 'temp_host')
+    checklist.push({
+      id: 'temp_host',
+      text: safeLine(
+        `Still to do: remove the per-move name ${host} from the target stack. Apply the environment's stack again (Apply now renders only the environment's own names), then check that ${host} no longer serves the app.`
+      ),
+      required: false,
+      done: false
+    })
+    await patchMove(ctx.moveId, { checklist })
+  }
+}
+
 async function finishSuccess(ctx: Ctx, warning: string | null): Promise<void> {
+  await dropTempName(ctx)
   await ctx.ops.revokeTickets().catch(() => undefined)
   // Review minor 6: the shared placement the environment left goes when nothing uses it.
   if (!warning) await dropUnusedSharedPlacement(ctx.moveId).catch(() => undefined)

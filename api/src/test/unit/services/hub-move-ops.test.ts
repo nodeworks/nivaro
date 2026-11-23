@@ -541,7 +541,7 @@ describe('databaseIdentity and verifyName', () => {
 })
 
 describe('deployTarget on Docker (R9: the target gets the app key, never a fresh one)', () => {
-  async function dockerTarget(stackKey?: string) {
+  async function dockerTarget(stackKey?: string, fetchImpl?: typeof fetch) {
     const w = await setup(true)
     TENANT = w.tenant
     const driver = await insertId('nivaro_hub_drivers', {
@@ -607,7 +607,8 @@ describe('deployTarget on Docker (R9: the target gets the app key, never a fresh
         now,
         agent: agent as never,
         docker: { agent: agent as never, hubPublicUrl: () => 'https://hub.example.com' },
-        imageDigest: async () => `sha256:${'b'.repeat(64)}`
+        imageDigest: async () => `sha256:${'b'.repeat(64)}`,
+        fetch: fetchImpl
       }
     )
     return { w, ops, applied }
@@ -679,6 +680,48 @@ describe('deployTarget on Docker (R9: the target gets the app key, never a fresh
     const spec = applied[1].spec as { env: Record<string, string>; hostnames: string[] }
     expect(spec.hostnames).toContain(`hub-move-e${w.envId}-x.example.com`)
     expect(spec.env.HUB_BOOT_MAINTENANCE).toBe(String(w.move.id))
+  })
+
+  async function mirrorRow(w: Awaited<ReturnType<typeof dockerTarget>>['w']) {
+    await db('nivaro_hub_deploys').insert({
+      app_id: w.move.app_id,
+      environment_id: w.envId,
+      kind: 'move',
+      move_id: w.move.id,
+      version: '0.3.210',
+      from_version: '0.3.210',
+      status: 'running',
+      step: 'deploy_target',
+      plan: JSON.stringify({ move_id: w.move.id, steps: [] }),
+      started_at: new Date(),
+      heartbeat_at: new Date()
+    })
+  }
+
+  it('P6-27: dropTempHost re-applies with only the environment’s names, no boot maintenance, and waits until the name stops serving', async () => {
+    let answers = 2
+    const probe = vi.fn(
+      async (_url: string) => new Response('{}', { status: answers-- > 0 ? 200 : 404 })
+    )
+    const { w, ops, applied } = await dockerTarget(undefined, probe as never)
+    await mirrorRow(w)
+    await ops.deployTarget()
+    const temp = `hub-move-e${w.envId}-x.example.com`
+    expect(await ops.dropTempHost()).toBe(temp)
+    const spec = applied.at(-1)?.spec as { env: Record<string, string>; hostnames: string[] }
+    expect(spec.hostnames).not.toContain(temp)
+    expect(spec.hostnames.length).toBeGreaterThan(0)
+    expect(spec.env.HUB_BOOT_MAINTENANCE).toBeUndefined()
+    expect(probe).toHaveBeenCalledTimes(3)
+    expect(String(probe.mock.calls[0][0])).toBe(`https://${temp}/api/version`)
+  })
+
+  it('P6-27: a name that keeps serving after two minutes → TEMP_HOST_STILL_SERVED', async () => {
+    const probe = vi.fn(async () => new Response('{}', { status: 200 }))
+    const { w, ops } = await dockerTarget(undefined, probe as never)
+    await mirrorRow(w)
+    await ops.deployTarget()
+    expect((await ops.dropTempHost().catch((e) => e))?.code).toBe('TEMP_HOST_STILL_SERVED')
   })
 
   it('stack settings holding another key → APP_KEY_MISMATCH, nothing applied', async () => {
