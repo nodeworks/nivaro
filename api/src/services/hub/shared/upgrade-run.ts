@@ -66,7 +66,8 @@ import {
  *   2. apply   — PUT to the agent (cancel asked once more just before).
  *   3. wait_version ≤ 30 min — every replica the Hub saw in the last 2 min reports the version
  *                (an old replica drops out of that window once it is gone) and swarm says the
- *                stack converged; swarm rolling back or pausing the update fails at once.
+ *                stack converged; swarm rolling back or pausing the update fails at once,
+ *                `degraded` without a break for DEGRADED_FAIL_MS fails SWARM_DEGRADED.
  *   4. wait_schema ≤ 10 min — the deployment says every app's schema is `ok` on the version; an
  *                app whose migration failed fails the run, named by its tenant id (the others keep
  *                serving: the deployment blocks only that app).
@@ -93,6 +94,12 @@ const ENVS = 'nivaro_hub_environments'
 export const VERSION_WAIT_MS = 30 * 60_000
 export const SCHEMA_WAIT_MS = 10 * 60_000
 export const VERIFY_WAIT_MS = 5 * 60_000
+/**
+ * How long swarm may say `degraded` without a break (the spec applied, the update done, fewer
+ * tasks running than wanted: a node down, a placement or resource limit) before the run fails
+ * SWARM_DEGRADED instead of waiting out VERSION_WAIT_MS (parked wave, Task 5 N-4).
+ */
+export const DEGRADED_FAIL_MS = 5 * 60_000
 const POLL_MS = 10_000
 const SCHEMA_POLL_MS = 5_000
 const VERIFY_POLL_MS = 15_000
@@ -664,6 +671,8 @@ async function runUpgrade(c: RunCtx, deps: SharedRunDeps): Promise<void> {
     const versionBy = now() + VERSION_WAIT_MS
     let misses = 0
     let lastLine = ''
+    /** When swarm started saying `degraded` without a break (null: it does not now). */
+    let degradedSince: number | null = null
     for (;;) {
       await checkpoint()
       let st: StackStatus | null | undefined
@@ -691,6 +700,15 @@ async function runUpgrade(c: RunCtx, deps: SharedRunDeps): Promise<void> {
           'SWARM_UPDATE_PAUSED',
           `Swarm paused the update of ${stackName} — a new task failed.`
         )
+      if (st?.state === 'degraded') {
+        degradedSince ??= now()
+        if (now() - degradedSince >= DEGRADED_FAIL_MS)
+          throw new Stop(
+            'failed',
+            'SWARM_DEGRADED',
+            `Swarm says ${stackName} is degraded: the new spec is applied but fewer tasks run than wanted, for ${Math.round(DEGRADED_FAIL_MS / 60_000)} minutes now (a node down, or a placement or resource limit). Fix that in swarm, then upgrade again.`
+          )
+      } else if (st !== undefined) degradedSince = null
       let seen: Sighting[] = []
       try {
         seen = await (deps.liveSightings ?? ((id) => liveSightings(id)))(sharedId)

@@ -1260,3 +1260,52 @@ describe('REDIS_URL stored, not applied (N-3)', () => {
     expect(await Run.redisUrlNotApplied(id)).toBe(true)
   })
 })
+
+describe('a stack stuck degraded (N-4)', () => {
+  const stackAt = (state: string) => ({
+    name: 'x',
+    owner: { shared: 'x' },
+    environment: 'shared',
+    spec_hash: 'f'.repeat(64),
+    image: null,
+    state: state as 'degraded',
+    published_port: null,
+    services: []
+  })
+
+  it('fails after a few minutes of steady degraded, naming degraded, not after 30 minutes', async () => {
+    const id = await newShared()
+    const { deps, out } = runDeps(fakes())
+    deps.agentStack = vi.fn(async () => stackAt('degraded')) as never
+    const { row } = await start(id, deps)
+    expect(row?.status).toBe('failed')
+    expect(row?.error).toMatch(/^SWARM_DEGRADED: /)
+    expect(row?.error).toMatch(/degraded/)
+    expect(out.failed).toMatch(/SWARM_DEGRADED/)
+    expect(t - START).toBeLessThan(10 * 60_000)
+    expect((await Store.getShared(id))?.version_pin).toBe('0.3.209')
+  })
+
+  it('a short degraded spell that converges still succeeds', async () => {
+    const id = await newShared()
+    const { deps } = runDeps(fakes())
+    const states = ['degraded', 'degraded', 'updating', 'degraded', 'converged']
+    deps.agentStack = vi.fn(async () => stackAt(states.shift() ?? 'converged')) as never
+    expect((await start(id, deps)).row?.status).toBe('success')
+  })
+
+  it('degraded spells broken by updating never fail early: the version wait decides', async () => {
+    const id = await newShared()
+    const f = fakes()
+    // Never seen on the version: the run waits out the version timeout.
+    f.sightings = [
+      { instance: 'i1', version: '0.3.209', etag: null, at: new Date(START).toISOString() }
+    ]
+    const { deps } = runDeps(f)
+    let n = 0
+    // degraded, then updating, alternating: never steady long enough to fail early.
+    deps.agentStack = vi.fn(async () => stackAt(n++ % 2 ? 'updating' : 'degraded')) as never
+    const { row } = await start(id, deps)
+    expect(row?.error).toMatch(/^VERSION_TIMEOUT: /)
+  })
+})
