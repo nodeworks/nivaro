@@ -259,7 +259,12 @@ function ListRow({
           <span className='min-w-0 flex-1 truncate text-[13px] font-medium text-slate-900 dark:text-foreground'>
             {row.name}
           </span>
-          {row.status === 'retired' && <Chip tone='quiet'>Retired</Chip>}
+          {/* Serving is the usual case; every other status says itself (an upgrade running). */}
+          {row.status !== 'active' && (
+            <Chip tone={row.status === 'upgrading' ? 'busy' : 'quiet'}>
+              {STATUS_WORDS[row.status] ?? row.status}
+            </Chip>
+          )}
         </span>
         <span className='mt-0.5 block truncate font-mono text-[11px] text-slate-500 dark:text-muted-foreground'>
           {row.key}
@@ -745,6 +750,46 @@ function Warnings({ notes }: { notes: SharedNote[] }) {
   )
 }
 
+function SchemaChip({ schema }: { schema: ReturnType<typeof schemaOf> }) {
+  if (!schema) return <span className='text-slate-400 dark:text-muted-foreground'>—</span>
+  return (
+    <Chip
+      tone={SCHEMA_TONE[schema.state] ?? 'quiet'}
+      tip={
+        schema.error && !isRawErrorText(schema.error)
+          ? schema.error
+          : schema.state === 'failed'
+            ? "The deployment's status names the error"
+            : undefined
+      }
+    >
+      {SCHEMA_WORDS[schema.state] ?? schema.state}
+    </Chip>
+  )
+}
+
+function PoolMax({ value }: { value: number | null }) {
+  return value != null ? (
+    <span>{value}</span>
+  ) : (
+    <span data-tip='The default' className='text-slate-400 dark:text-muted-foreground'>
+      {DEFAULT_POOL_MAX}
+    </span>
+  )
+}
+
+function AppName({ a }: { a: SharedDetail['apps'][number] }) {
+  return (
+    <>
+      {a.app_name} <span className='text-slate-400 dark:text-muted-foreground'>/</span>{' '}
+      <span className='font-mono'>{a.env_key}</span>
+      {!a.placed_here && (
+        <span className='ml-1.5 text-[11px] text-sky-700 dark:text-sky-300'>moving</span>
+      )}
+    </>
+  )
+}
+
 function AppsCard({ detail, link }: { detail: SharedDetail; link: SharedLinkStatus | undefined }) {
   return (
     <SectionCard
@@ -756,31 +801,51 @@ function AppsCard({ detail, link }: { detail: SharedDetail; link: SharedLinkStat
           No apps yet. Place a new environment here from its app's page.
         </p>
       ) : (
-        <div className='overflow-x-auto'>
-          <table aria-label='Apps on this deployment' className='w-full text-[12px]'>
-            <thead className='border-b border-slate-200 text-left text-[11px] text-slate-500 dark:border-border dark:text-muted-foreground'>
-              <tr>
-                <th className='px-4 py-1.5 font-medium'>App</th>
-                <th className='px-3 py-1.5 font-medium'>Tenant id</th>
-                <th className='px-3 py-1.5 font-medium'>Status</th>
-                <th className='px-3 py-1.5 font-medium'>Database</th>
-                <th className='px-3 py-1.5 text-right font-medium'>Pool max</th>
-              </tr>
-            </thead>
-            <tbody className='divide-y divide-slate-100 dark:divide-border'>
-              {detail.apps.map((a) => {
-                const schema = schemaOf(link, a.tenant_id)
-                return (
+        <>
+          {/* Phone: one stacked entry per app (the table's five columns do not fit). */}
+          <ul
+            aria-label='Apps on this deployment'
+            className='m-0 list-none divide-y divide-slate-100 p-0 text-[12px] sm:hidden dark:divide-border'
+          >
+            {detail.apps.map((a) => (
+              <li key={a.env_id} className='space-y-1 px-4 py-2'>
+                <p className='m-0 break-words text-slate-900 dark:text-foreground'>
+                  <AppName a={a} />
+                </p>
+                <p className='m-0 flex flex-wrap items-center gap-1.5'>
+                  <Chip tone={WIRE_TONE[a.status] ?? 'quiet'}>
+                    {WIRE_WORDS[a.status] ?? a.status}
+                  </Chip>
+                  <SchemaChip schema={schemaOf(link, a.tenant_id)} />
+                </p>
+                <p className='m-0 flex flex-wrap gap-x-3 text-[11px] text-slate-500 dark:text-muted-foreground'>
+                  <span className='break-all font-mono'>{a.tenant_id}</span>
+                  <span>
+                    Pool max{' '}
+                    <span className='font-mono text-slate-700 dark:text-slate-300'>
+                      <PoolMax value={a.pool_max} />
+                    </span>
+                  </span>
+                </p>
+              </li>
+            ))}
+          </ul>
+          <div className='hidden overflow-x-auto sm:block'>
+            <table aria-label='Apps on this deployment' className='w-full text-[12px]'>
+              <thead className='border-b border-slate-200 text-left text-[11px] text-slate-500 dark:border-border dark:text-muted-foreground'>
+                <tr>
+                  <th className='px-4 py-1.5 font-medium'>App</th>
+                  <th className='px-3 py-1.5 font-medium'>Tenant id</th>
+                  <th className='px-3 py-1.5 font-medium'>Status</th>
+                  <th className='px-3 py-1.5 font-medium'>Database</th>
+                  <th className='px-3 py-1.5 text-right font-medium'>Pool max</th>
+                </tr>
+              </thead>
+              <tbody className='divide-y divide-slate-100 dark:divide-border'>
+                {detail.apps.map((a) => (
                   <tr key={a.env_id}>
                     <td className='px-4 py-1.5 text-slate-900 dark:text-foreground'>
-                      {a.app_name}{' '}
-                      <span className='text-slate-400 dark:text-muted-foreground'>/</span>{' '}
-                      <span className='font-mono'>{a.env_key}</span>
-                      {!a.placed_here && (
-                        <span className='ml-1.5 text-[11px] text-sky-700 dark:text-sky-300'>
-                          moving
-                        </span>
-                      )}
+                      <AppName a={a} />
                     </td>
                     <td className='px-3 py-1.5 font-mono text-slate-600 dark:text-slate-300'>
                       {a.tenant_id}
@@ -791,41 +856,35 @@ function AppsCard({ detail, link }: { detail: SharedDetail; link: SharedLinkStat
                       </Chip>
                     </td>
                     <td className='px-3 py-1.5'>
-                      {schema ? (
-                        <Chip
-                          tone={SCHEMA_TONE[schema.state] ?? 'quiet'}
-                          tip={
-                            schema.error && !isRawErrorText(schema.error)
-                              ? schema.error
-                              : schema.state === 'failed'
-                                ? "The deployment's status names the error"
-                                : undefined
-                          }
-                        >
-                          {SCHEMA_WORDS[schema.state] ?? schema.state}
-                        </Chip>
-                      ) : (
-                        <span className='text-slate-400 dark:text-muted-foreground'>—</span>
-                      )}
+                      <SchemaChip schema={schemaOf(link, a.tenant_id)} />
                     </td>
                     <td className='px-3 py-1.5 text-right font-mono text-slate-700 dark:text-slate-300'>
-                      {a.pool_max ?? (
-                        <span
-                          data-tip='The default'
-                          className='text-slate-400 dark:text-muted-foreground'
-                        >
-                          {DEFAULT_POOL_MAX}
-                        </span>
-                      )}
+                      <PoolMax value={a.pool_max} />
                     </td>
                   </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
     </SectionCard>
+  )
+}
+
+function HoldsLatest({ holds, words }: { holds: boolean | null; words: 'short' | 'long' }) {
+  if (holds === null)
+    return (
+      <span className='text-slate-500 dark:text-muted-foreground'>
+        {words === 'long' ? 'List unknown' : 'Unknown'}
+      </span>
+    )
+  return holds ? (
+    <Chip tone='ok'>{words === 'long' ? 'Holds the latest list' : 'Yes'}</Chip>
+  ) : (
+    <Chip tone='warn' tip='It still serves an older list of apps'>
+      {words === 'long' ? 'Serves an older list' : 'No'}
+    </Chip>
   )
 }
 
@@ -845,20 +904,40 @@ function ReplicasCard({ detail }: { detail: SharedDetail }) {
           No process asked for its list in the last 2 minutes.
         </p>
       ) : (
-        <div className='overflow-x-auto'>
-          <table aria-label='Replicas' className='w-full text-[12px]'>
-            <thead className='border-b border-slate-200 text-left text-[11px] text-slate-500 dark:border-border dark:text-muted-foreground'>
-              <tr>
-                <th className='px-4 py-1.5 font-medium'>Instance</th>
-                <th className='px-3 py-1.5 font-medium'>Version</th>
-                <th className='px-3 py-1.5 font-medium'>Holds the latest list</th>
-                <th className='px-3 py-1.5 font-medium'>Seen</th>
-              </tr>
-            </thead>
-            <tbody className='divide-y divide-slate-100 dark:divide-border'>
-              {sightings.map((s) => {
-                const holds = holdsLatest(s, detail.list_etag)
-                return (
+        <>
+          <ul
+            aria-label='Replicas'
+            className='m-0 list-none divide-y divide-slate-100 p-0 text-[12px] sm:hidden dark:divide-border'
+          >
+            {sightings.map((s) => (
+              <li key={s.instance} className='space-y-1 px-4 py-2'>
+                <p className='m-0 flex flex-wrap items-baseline gap-x-2'>
+                  <span className='break-all font-mono text-slate-900 dark:text-foreground'>
+                    {s.instance}
+                  </span>
+                  <span className='font-mono text-slate-700 dark:text-slate-300'>
+                    {s.version ?? '—'}
+                  </span>
+                </p>
+                <p className='m-0 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500 dark:text-muted-foreground'>
+                  <HoldsLatest holds={holdsLatest(s, detail.list_etag)} words='long' />
+                  <span>seen {formatRelative(s.at)}</span>
+                </p>
+              </li>
+            ))}
+          </ul>
+          <div className='hidden overflow-x-auto sm:block'>
+            <table aria-label='Replicas' className='w-full text-[12px]'>
+              <thead className='border-b border-slate-200 text-left text-[11px] text-slate-500 dark:border-border dark:text-muted-foreground'>
+                <tr>
+                  <th className='px-4 py-1.5 font-medium'>Instance</th>
+                  <th className='px-3 py-1.5 font-medium'>Version</th>
+                  <th className='px-3 py-1.5 font-medium'>Holds the latest list</th>
+                  <th className='px-3 py-1.5 font-medium'>Seen</th>
+                </tr>
+              </thead>
+              <tbody className='divide-y divide-slate-100 dark:divide-border'>
+                {sightings.map((s) => (
                   <tr key={s.instance}>
                     <td className='px-4 py-1.5 font-mono text-slate-900 dark:text-foreground'>
                       {s.instance}
@@ -867,25 +946,17 @@ function ReplicasCard({ detail }: { detail: SharedDetail }) {
                       {s.version ?? '—'}
                     </td>
                     <td className='px-3 py-1.5'>
-                      {holds === null ? (
-                        <span className='text-slate-500 dark:text-muted-foreground'>Unknown</span>
-                      ) : holds ? (
-                        <Chip tone='ok'>Yes</Chip>
-                      ) : (
-                        <Chip tone='warn' tip='It still serves an older list of apps'>
-                          No
-                        </Chip>
-                      )}
+                      <HoldsLatest holds={holdsLatest(s, detail.list_etag)} words='short' />
                     </td>
                     <td className='px-3 py-1.5 text-slate-500 dark:text-muted-foreground'>
                       {formatRelative(s.at)}
                     </td>
                   </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
     </SectionCard>
   )
