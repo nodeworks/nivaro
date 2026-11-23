@@ -262,6 +262,13 @@ export function validateSharedInput(
   }
 
   const pin = pick('version_pin')
+  // Final review M-2: a Docker shared deployment's version is the Hub's own record of what it
+  // deployed (downgrade check, re-apply, the pins of apps placed on it) — never claimed.
+  if (mode === 'docker' && has('version_pin') && body.version_pin !== null && !existing)
+    return fail(
+      'BAD_VERSION',
+      "A Docker shared deployment's version is set by its upgrade: create it without a version, then upgrade it."
+    )
   if (pin !== undefined && pin !== null && (typeof pin !== 'string' || !VERSION_PIN_RE.test(pin)))
     return fail(
       'BAD_VERSION',
@@ -558,7 +565,9 @@ async function writeShared(
     changed = await q.update({ ...cols, updated_at: new Date() })
   } catch (err) {
     if (isUniqueViolation(err)) throw keyTaken()
-    throw err
+    // Final review M-3: never rethrow the engine's error — knex inlines the bindings (the sealed
+    // secrets) into its message, as createShared already says.
+    throw new Error('Saving the shared deployment failed')
   }
   if (Number(changed) === 1) return 'written'
   return (await db(TABLE).where({ id }).first('id')) ? (swap ? 'raced' : 'written') : 'missing'

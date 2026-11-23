@@ -56,7 +56,8 @@ import { SharedUpgradeError } from '../services/hub/shared/upgrade-plan.js'
 import {
   redisUrlNotApplied,
   setSharedSecrets,
-  sharedSecretsShown
+  sharedSecretsShown,
+  tokenNotApplied
 } from '../services/hub/shared/upgrade-run.js'
 
 /**
@@ -442,14 +443,16 @@ export function hubSharedRoutes(app: FastifyInstance): void {
     const id = idParam((req.params as { id: string }).id)
     const row = id === null ? null : await getShared(id)
     if (id === null || !row) return notFound(reply)
-    const [apps, sightings, prevUntil, listEtag, secrets, redisPending] = await Promise.all([
-      appsPlaced(row),
-      sightingsOrNull(id),
-      previousTokenUntil(id),
-      listEtagOrNull(row),
-      sharedSecretsShown(id),
-      row.mode === 'docker' ? redisUrlNotApplied(id) : false
-    ])
+    const [apps, sightings, prevUntil, listEtag, secrets, redisPending, tokenPending] =
+      await Promise.all([
+        appsPlaced(row),
+        sightingsOrNull(id),
+        previousTokenUntil(id),
+        listEtagOrNull(row),
+        sharedSecretsShown(id),
+        row.mode === 'docker' ? redisUrlNotApplied(id) : false,
+        row.mode === 'docker' ? tokenNotApplied(id) : false
+      ])
     const warnings = blockWarnings(row)
     if (sightings === null)
       warnings.push({
@@ -461,6 +464,12 @@ export function hubSharedRoutes(app: FastifyInstance): void {
       warnings.push({
         code: 'REDIS_URL_NOT_APPLIED',
         text: 'A REDIS_URL is stored for this deployment, but its stack has not been applied with it yet. Upgrade the deployment (at the same version to apply it again) so it uses that Redis.'
+      })
+    // Final review M-5: a rotation whose re-apply was refused (BUSY, LAST_RUN_FAILED) or failed.
+    if (tokenPending)
+      warnings.push({
+        code: 'TOKEN_NOT_APPLIED',
+        text: 'The deployment token was rotated, but its stack has not been applied with the new one yet. The old token stops working 24 hours after the rotation, and then the deployment loses its app list and its link: upgrade the deployment (at the same version to apply it again).'
       })
     return {
       data: {
@@ -540,6 +549,28 @@ export function hubSharedRoutes(app: FastifyInstance): void {
     return guarded(reply, async () => {
       const checked = validateSharedInput(fields, existing)
       if (!checked.ok) return refuse(reply, 400, checked.code, checked.message)
+      // Final review I-4: an extension a listed app uses never leaves the deployment (its next
+      // apply would restart that app without its hooks and routes).
+      if (b.extensions !== undefined) {
+        const dropped = existing.extensions.filter((x) => !checked.row.extensions.includes(x))
+        if (dropped.length) {
+          const users = (await tenantsOf(existing))
+            .map((r) => ({ r, uses: r.app.extensions.filter((x) => dropped.includes(x)) }))
+            .filter((u) => u.uses.length)
+          if (users.length)
+            return refuse(
+              reply,
+              409,
+              'EXTENSION_IN_USE',
+              `${users
+                .slice(0, 5)
+                .map((u) => `${u.r.app.key}/${u.r.env.key} uses ${u.uses.join(', ')}`)
+                .join(
+                  '; '
+                )}${users.length > 5 ? '; …' : ''}. Move those apps off the deployment, or remove the extension from them, first.`
+            )
+        }
+      }
       const changes: Partial<SharedFields> = {}
       const changed: string[] = []
       for (const k of PATCHABLE) {

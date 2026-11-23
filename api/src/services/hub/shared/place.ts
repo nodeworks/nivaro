@@ -6,14 +6,18 @@ import { runInBackgroundPool } from '../../../db/pool-context.js'
 import { logActivity } from '../../activity.js'
 import { getApp } from '../../io-holder.js'
 import { type JobRunHandle, startJobRun } from '../../job-runs.js'
-import { readApp } from '../apps.js'
+import { environmentFromRow, readApp } from '../apps.js'
 import { connectionUrl } from '../db/connection.js'
 import { attachDatabase, getDatabase, openDatabaseConnection } from '../db/databases.js'
 import { HubDbError } from '../db/servers.js'
+import { agentHealth as realAgentHealth } from '../docker/agent-client.js'
+import { environmentNames } from '../docker/render-spec.js'
 import { stackEditRefusal } from '../docker/stack-guards.js'
 import {
   createPlacement,
   DEFAULT_POOL_MAX,
+  type DockerDriverRow,
+  getDriver,
   getPlacement,
   type HubPlacementRow,
   MAX_SHARED_POOL_MAX,
@@ -24,6 +28,7 @@ import {
   sharedPoolMax,
   updatePlacement
 } from '../drivers.js'
+import { moveOpenRefusal } from '../move-open.js'
 import { HEARTBEAT_FRESH_MS, withoutFreshHeartbeat } from '../promote-heal.js'
 import {
   defaultPromoteLock,
@@ -34,9 +39,11 @@ import {
   type SharedLock,
   sharedLockRefusal
 } from '../promote-lock.js'
+import { type HubEnvStatus, readEnvironmentStatus } from '../status.js'
 import { APP_KEY_UNKNOWN_MESSAGE } from './app-key-check.js'
 import { DeploymentLinkError, deploymentClient } from './deployment-client.js'
 import { replicasHolding } from './sightings.js'
+import { patternCovers } from './stack-render.js'
 import { getShared, openAppKey, type SharedDeployment, setAppKey, tenantIdFor } from './store.js'
 import { tenantsBody } from './tenants.js'
 
@@ -137,6 +144,10 @@ export interface PlaceSharedDeps {
   startJobRun?: (label: string, envId: number, by: string | null) => Promise<JobRunHandle>
   /** How often the run renews its environment lock (tests shorten it). */
   renewMs?: number
+  /** Final review I-3: the shared deployment's agent health (its edge); tests fake it. */
+  agentHealth?: (driver: DockerDriverRow) => Promise<{ edge?: string | null }>
+  /** Final review I-1: asks an environment's own hub link whether its app runs (tests fake it). */
+  probeLink?: (env: { id: number; base_url: string; hub_token: string }) => Promise<HubEnvStatus>
 }
 
 const realSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
@@ -354,8 +365,147 @@ function sharedStateRefusal(shared: SharedDeployment): PlaceSharedError | null {
   return null
 }
 
+const SHARED_DEPLOYS = 'nivaro_hub_shared_deploys'
+
+/** The explicit names the newest successful run of the deployment routed (beside its pattern). */
+async function lastRoutedNames(sharedId: number): Promise<string[]> {
+  const row = (await db(SHARED_DEPLOYS)
+    .where({ shared_deployment_id: sharedId, status: 'success' })
+    .orderBy('id', 'desc')
+    .first('plan')) as { plan: string | null } | undefined
+  try {
+    const p = JSON.parse(String(row?.plan ?? '')) as { plan?: { hostnames?: unknown } }
+    const names = p.plan?.hostnames
+    return Array.isArray(names)
+      ? names.filter((n): n is string => typeof n === 'string').map((n) => n.toLowerCase())
+      : []
+  } catch {
+    return []
+  }
+}
+
+/**
+ * A Docker shared deployment the Hub runs: it must have been deployed (M-6 NOT_DEPLOYED — else
+ * the run waits 2 minutes for replicas that never come), and every name of the environment must
+ * already be routed by its stack (I-3 NAME_NOT_ROUTED): the traefik edge routes the host pattern
+ * plus the explicit names its last run placed, and a place never re-applies the stack (that would
+ * restart every app on it). The agent tells the edge; an agent that does not answer is never
+ * read as "routed". A published-port edge routes no names.
+ */
+async function assertDockerReady(
+  shared: SharedDeployment,
+  envRow: Record<string, unknown>,
+  deps: PlaceSharedDeps
+): Promise<void> {
+  if (shared.mode !== 'docker') return
+  if (shared.status === 'new' || !shared.version_pin)
+    throw refuse(
+      'NOT_DEPLOYED',
+      'This shared deployment has not been deployed yet: upgrade it to a version first, then place apps on it.'
+    )
+  const names = environmentNames(environmentFromRow(envRow))
+  const routed = new Set(await lastRoutedNames(shared.id))
+  const outside = names.filter((n) => !patternCovers(shared.host_pattern, n) && !routed.has(n))
+  if (!outside.length) return
+  let edge: string | null = null
+  try {
+    const driver = await getDriver(shared.driver_id)
+    if (driver?.kind === 'docker')
+      edge = (await (deps.agentHealth ?? realAgentHealth)(driver)).edge ?? 'traefik'
+  } catch {
+    edge = null
+  }
+  if (edge === 'publish') return
+  throw refuse(
+    'NAME_NOT_ROUTED',
+    `The shared deployment's stack does not route ${outside.slice(0, 5).join(', ')}${
+      edge === null ? ' (the Hub agent did not answer, so the Hub cannot tell how it routes)' : ''
+    }. Use a name under ${shared.host_pattern ?? 'its host pattern'}, or set a host pattern that covers it, then place the environment again.`
+  )
+}
+
 function hexKey(): string {
   return randomBytes(32).toString('hex')
+}
+
+/**
+ * Final review I-1: an environment with a hub token is asked through it whether its app runs.
+ * Any answer (ok, degraded, even a refused token) = it runs → USE_MOVE. No answer is unknown,
+ * and unknown never passes (SERVING_UNKNOWN): the token is cleared by an administrator once the
+ * app is gone for good.
+ */
+async function assertLinkSilent(
+  env: Record<string, unknown>,
+  deps: PlaceSharedDeps
+): Promise<void> {
+  const target = {
+    id: Number(env.id),
+    base_url: String(env.base_url ?? ''),
+    hub_token: String(env.hub_token)
+  }
+  let status: HubEnvStatus
+  try {
+    status = await (deps.probeLink ?? ((e) => readEnvironmentStatus(e, { fresh: true })))(target)
+  } catch {
+    status = {
+      state: 'unreachable',
+      version: null,
+      preflight: null,
+      checked_at: new Date().toISOString(),
+      source: 'hub-link'
+    }
+  }
+  const answered =
+    status.state === 'ok' ||
+    status.state === 'degraded' ||
+    (status.state === 'link_refused' &&
+      (status.error === 'HUB_LINK_REFUSED' || status.error === 'HUB_LINK_MISSING'))
+  if (answered)
+    throw refuse(
+      'USE_MOVE',
+      'This environment runs: its app answers at its address. Move it to the shared deployment instead.'
+    )
+  throw refuse(
+    'SERVING_UNKNOWN',
+    `This environment has a hub token, but its app did not answer (${status.error ?? status.state}), so the Hub cannot tell that it no longer runs. If it runs, move it instead; if it is gone for good, clear its hub token, then place it again.`
+  )
+}
+
+/**
+ * Final review I-1: with the app's key known, the database is still looked at. One that already
+ * holds a Nivaro install is an app that has served → USE_MOVE; one that cannot be looked at is
+ * unknown → SERVING_UNKNOWN (never a pass).
+ */
+async function assertDatabaseUnserved(
+  databaseId: number,
+  shared: SharedDeployment,
+  deps: PlaceSharedDeps
+): Promise<void> {
+  const unknown = (why: string) =>
+    refuse(
+      'SERVING_UNKNOWN',
+      `The Hub could not tell whether the database already serves an app (${why}). Place it again once the shared deployment can reach the database.`
+    )
+  let answer: Awaited<ReturnType<ReturnType<typeof deploymentClient>['dbCheck']>>
+  try {
+    const c = await openDatabaseConnection(databaseId)
+    answer = await (deps.client ?? deploymentClient)(shared).dbCheck({
+      client: c.engine,
+      connection: connectionUrl(c)
+    })
+  } catch (err) {
+    throw unknown(
+      err instanceof DeploymentLinkError || err instanceof HubDbError ? err.code : 'UNREACHABLE'
+    )
+  }
+  if (!answer.reachable) throw unknown('UNREACHABLE')
+  if (answer.ledger_state === 'present' || (answer.ledger && answer.ledger.count > 0))
+    throw refuse(
+      'USE_MOVE',
+      'The database already holds a Nivaro install: the app has served from it. Move the environment to the shared deployment instead.'
+    )
+  if (answer.ledger_state !== 'absent' && answer.ledger_state !== 'empty')
+    throw unknown('NO_LEDGER_ANSWER')
 }
 
 /**
@@ -368,7 +518,8 @@ function hexKey(): string {
 async function assertDatabaseEmpty(
   databaseId: number,
   shared: SharedDeployment,
-  deps: PlaceSharedDeps
+  deps: PlaceSharedDeps,
+  sharedRetry = false
 ): Promise<void> {
   const unknownKey = (why: string) =>
     refuse(
@@ -392,10 +543,18 @@ async function assertDatabaseEmpty(
   // P6-11b: only a positive "no ledger table" or "an empty ledger" lets a key be made. A read
   // error, or an answer that does not say (an older deployment), is unknown.
   const state = answer.ledger_state
-  if (state === 'present' || (answer.ledger && answer.ledger.count > 0))
+  if (state === 'present' || (answer.ledger && answer.ledger.count > 0)) {
+    // Final review I-1: an install is an app that has served — it moves, a key entered later
+    // would not change that. (A retry of a shared placement always has its key; kept as before.)
+    if (!sharedRetry)
+      throw refuse(
+        'USE_MOVE',
+        'The database already holds a Nivaro install: the app has served from it. Move the environment to the shared deployment instead.'
+      )
     throw unknownKey(
       'The database already holds a Nivaro install, sealed with its own key: a new key would leave its values unreadable.'
     )
+  }
   if (state !== 'absent' && state !== 'empty')
     throw unknownKey(
       'The shared deployment could not tell whether the database already holds a Nivaro install.'
@@ -578,6 +737,11 @@ async function checkAndWrite(
 ): Promise<Placed> {
   const env = (await db(ENVS).where({ id: envId }).first()) as Record<string, unknown> | undefined
   if (!env) throw refuse('NOT_FOUND', 'No such environment.', 404)
+  // Final review moves I-2 (P6-37): an open move of this environment (an interrupted one holds
+  // no lock). A placement never re-renders the deployment, so a move into or out of the
+  // deployment by another environment does not refuse it.
+  const open = await moveOpenRefusal({ envIds: [envId] })
+  if (open) throw refuse(open.code, open.message, open.status)
   const current = env.placement_id == null ? null : await getPlacement(Number(env.placement_id))
   // Ruling P6-11 (I-1): a placed, serving environment is never placed again (a second place
   // would take it offline and switch its database or deployment without a move).
@@ -600,6 +764,7 @@ async function checkAndWrite(
   if (!shared0) throw refuse('NOT_FOUND', 'No such shared deployment.', 404)
   const stateRefusal = sharedStateRefusal(shared0)
   if (stateRefusal) throw stateRefusal
+  await assertDockerReady(shared0, env, deps)
   if (app.signin_mode === 'hub')
     throw refuse(
       'SIGNIN_VIA_HUB',
@@ -626,11 +791,25 @@ async function checkAndWrite(
   const stack = await stackEditRefusal([envId], 'placement_id')
   if (stack) throw refuse(stack.code, stack.message, stack.status)
 
+  // Final review I-1: "never served" is judged from what runs, not only from Hub records. An
+  // adopted environment (phase 1) can serve on its own stack without one Hub deploy: placing it
+  // would give its database a second writer. A retry of a shared placement that never succeeded
+  // is the one placement kept (the earlier run already judged all of this).
+  const sharedRetry = current?.kind === 'shared'
+  if (current && !sharedRetry)
+    throw refuse(
+      'USE_MOVE',
+      'This environment has a dedicated placement: it runs, or ran, there. Move it to the shared deployment instead. If it never ran there, clear its placement first.'
+    )
+  if (!sharedRetry && env.hub_token) await assertLinkSilent(env, deps)
+
   // Ruling P6-11 (I-3): a key is generated only for a database known to be empty, looked at
   // live from the shared deployment (no nivaro_migrations table or rows). One that holds an
-  // install, or cannot be looked at, needs the app's own key entered first.
+  // install, or cannot be looked at, needs the app's own key entered first. I-1: with a known
+  // key, a database that already holds an install is an app that has served → USE_MOVE.
   const known = await openAppKey(envId)
-  if (!known) await assertDatabaseEmpty(input.database_id, shared0, deps)
+  if (!known) await assertDatabaseEmpty(input.database_id, shared0, deps, sharedRetry)
+  else if (!sharedRetry) await assertDatabaseUnserved(input.database_id, shared0, deps)
 
   const sharedLock = deps.sharedLock ?? defaultSharedLock()
   const held = await sharedLock.take(input.shared_id, 'place')

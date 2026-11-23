@@ -426,7 +426,9 @@ describe('startAgent', () => {
           publish_ports: [3110, 3119],
           extensions_shared: false,
           redis_bundled: false,
-          env_prefixes: []
+          env_prefixes: [],
+          // Final review M-7: the Hub's plans see which Traefik reads the labels.
+          traefik_version: 3
         })
       } finally {
         await new Promise((res) => r.server.close(res))

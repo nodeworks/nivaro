@@ -30,6 +30,7 @@ import { liveSightings, type Sighting } from './sightings.js'
 import { renderSharedSpec, SharedRenderError } from './stack-render.js'
 import {
   openSharedToken,
+  PREV_TOKEN_GRACE_MS,
   type SharedDeployment,
   type SharedFields,
   type SharedStatus,
@@ -267,6 +268,30 @@ export async function redisUrlNotApplied(sharedId: number): Promise<boolean> {
   }
 }
 
+/**
+ * True while a Docker deployment's token was rotated after its newest successful run started
+ * (final review M-5): the stack still holds the old token, which stops working when the 24 h
+ * grace ends (the deployment then loses its list refresh and its link). The rotation time is
+ * prev_token_until − the grace. Never deployed = nothing to apply.
+ */
+export async function tokenNotApplied(sharedId: number): Promise<boolean> {
+  const row = (await db(SHARED)
+    .where({ id: sharedId })
+    .first('mode', 'version_pin', 'prev_token_until')) as
+    | { mode: string; version_pin: string | null; prev_token_until: unknown }
+    | undefined
+  if (row?.mode !== 'docker' || !row.version_pin || row.prev_token_until == null) return false
+  const until = new Date(row.prev_token_until as string | Date).getTime()
+  if (!Number.isFinite(until)) return false
+  const rotatedAt = new Date(until - PREV_TOKEN_GRACE_MS)
+  const applied = await db(SHARED_DEPLOYS)
+    .where({ shared_deployment_id: sharedId, status: 'success' })
+    .whereNot({ kind: 'observed' })
+    .where('started_at', '>=', rotatedAt)
+    .first('id')
+  return !applied
+}
+
 /** Which writable secrets are set: the mask, or null. Never a value. */
 export async function sharedSecretsShown(
   sharedId: number
@@ -368,6 +393,9 @@ export async function startSharedUpgrade(
       409,
       plan
     )
+  // Final review moves I-2 (P6-37): an open move answers its own code, naming the move.
+  const moveOpen = plan.blockers.find((b) => b.code === 'MOVE_OPEN')
+  if (moveOpen) throw new SharedUpgradeError('MOVE_OPEN', moveOpen.text, 409, plan)
   if (plan.blockers.length)
     throw new SharedUpgradeError(
       'BLOCKED',
@@ -588,8 +616,18 @@ async function runUpgrade(c: RunCtx, deps: SharedRunDeps): Promise<void> {
 
   const beat = async () => {
     try {
-      if (!(await c.sharedLock.renew(sharedId, c.sharedToken))) lockLost = true
-      for (const [envId, t] of c.envTokens) if (!(await c.envLock.renew(envId, t))) lockLost = true
+      // Final review M-1: strict renewals (as the move run, R2-M-5) — a renewal Redis cannot
+      // answer is a lost lock: one that expired during the outage may be someone else's now.
+      const sharedHeld = c.sharedLock.renewStrict
+        ? await c.sharedLock.renewStrict(sharedId, c.sharedToken)
+        : await c.sharedLock.renew(sharedId, c.sharedToken)
+      if (!sharedHeld) lockLost = true
+      for (const [envId, t] of c.envTokens) {
+        const held = c.envLock.renewStrict
+          ? await c.envLock.renewStrict(envId, t)
+          : await c.envLock.renew(envId, t)
+        if (!held) lockLost = true
+      }
       await db(SHARED_DEPLOYS)
         .where({ id: deployId, status: 'running' })
         .update({ heartbeat_at: new Date(now()) })
@@ -823,7 +861,11 @@ async function runUpgrade(c: RunCtx, deps: SharedRunDeps): Promise<void> {
     }
 
     // 5. each app's public name answers the version
-    const toVerify = plan.apps.filter((a) => a.status === 'active' || a.status === 'maintenance')
+    // Final review I-2: only apps placed here (a name a move still routes to the other side
+    // answers the other side's version — defense in depth beside the MOVE_OPEN blocker).
+    const toVerify = plan.apps.filter(
+      (a) => a.placed && (a.status === 'active' || a.status === 'maintenance')
+    )
     await step('verify', `5. verify ${toVerify.length} app name(s) answer ${version}`)
     const read = deps.readServedField ?? ((u: string, f: string) => readServedField(u, f))
     const verifyBy = now() + VERIFY_WAIT_MS

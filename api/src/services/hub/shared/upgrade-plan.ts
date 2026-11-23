@@ -6,6 +6,7 @@ import { AgentError, agentHealth } from '../docker/agent-client.js'
 import type { AgentHealth } from '../docker/agent-types.js'
 import { environmentNames, hostnameRefusals, type StackEdge } from '../docker/render-spec.js'
 import { type DockerDriverRow, getDriver, STACK_NAME_RE } from '../drivers.js'
+import { openMoveFor } from '../move-open.js'
 import { storedRuns, successfulVersions } from '../promote-gather.js'
 import {
   defaultPromoteLock,
@@ -35,7 +36,8 @@ import { type SharedTenantRow, tenantsOf } from './tenants.js'
  * Nivaro Hub phase 6 (Task 5): the plan of a Docker shared deployment's upgrade (or rollback).
  * Reads only: never applies anything, never writes a row, never opens a secret into an answer.
  *
- * Blockers (the plan's whole-deployment refusals): SHARED_RETIRED; SHARED_NOT_HUB_DEPLOYED
+ * Blockers (the plan's whole-deployment refusals): SHARED_RETIRED; MOVE_OPEN (a move into or out
+ * of this deployment is running, waiting or interrupted — final review I-2); SHARED_NOT_HUB_DEPLOYED
  * (registered mode: the operator upgrades it); BAD_VERSION; BUSY (the shared lock, or any placed
  * environment's lock, is held); VERSION_UNKNOWN (no image digest in the registry for the tag);
  * NOT_DEPLOYED_BEFORE (a rollback to a version this deployment never ran); NO_DRIVER;
@@ -51,8 +53,11 @@ import { type SharedTenantRow, tenantsOf } from './tenants.js'
  * previous environment placed on this same deployment is upgraded in the same run and never
  * counts. PREFLIGHT_FAILING (preflight R17) — the app's own preflight fails on the deployment now.
  * Neither is checked when the version does not change (a re-apply), nor for a rollback.
+ * EXTENSION_MISSING (final review I-4) — the app uses an extension the deployment does not load;
+ * never overridable, checked for every kind.
  *
- * Warnings: HUB_URL_PROBLEM (the Hub's own HUB_URL is ignored, hubUrlBootWarning), MULTI_NODE_
+ * Warnings: ROLLBACK_SCHEMA_AHEAD (a rollback keeps the newer schema; final review M-8);
+ * HUB_URL_PROBLEM (the Hub's own HUB_URL is ignored, hubUrlBootWarning), MULTI_NODE_
  * VOLUMES (the agent's swarm has several nodes and volumes are local), APPS_AFFECTED (every app
  * the run restarts). Confirm text: the deployment key. `plan_hash` covers everything the run does.
  */
@@ -370,6 +375,16 @@ export async function gatherSharedUpgrade(
     )
   }
 
+  // Final review I-2 (P6-37): an open move into or out of this deployment — an interrupted one
+  // holds no lock — would be migrated, re-routed and verified behind its back. Resume it or roll
+  // it back first.
+  const move = await openMoveFor({ sharedId: shared.id })
+  if (move)
+    block(
+      'MOVE_OPEN',
+      `The move of ${move.label} (move ${move.id}) into or out of this deployment is ${move.status === 'interrupted' ? 'interrupted' : 'under way'}: resume it or roll it back first.`
+    )
+
   // The image and extension pins the run deploys.
   let image: string | null = null
   let extensions: Record<string, string> = {}
@@ -470,6 +485,12 @@ export async function gatherSharedUpgrade(
       block(
         'EXTENSION_NOT_ALLOWED',
         `The Hub agent does not allow the image of extension ${disallowed.join(', ')}.`
+      )
+    // Final review M-7: the pattern router is v3 HostRegexp — a v2 agent refuses it at apply.
+    if (edge === 'traefik' && shared.host_pattern && health.traefik_version === 2)
+      block(
+        'PATTERN_NOT_ALLOWED',
+        `The Hub agent sets labels for Traefik v2, which cannot route the host pattern ${shared.host_pattern}: set HUB_AGENT_TRAEFIK_VERSION=3 on the agent (Traefik v3), or remove the pattern and route explicit names.`
       )
     if (edge === 'traefik' && shared.host_pattern) {
       const base = shared.host_pattern.slice(2)
@@ -577,6 +598,16 @@ export async function gatherSharedUpgrade(
     const tenant = tenantIdFor(r.app, r.env)
     const codes: string[] = []
     const notes: string[] = []
+    // Final review I-4: the run renders the deployment's extension list; an app that uses one
+    // not on it would restart without its hooks and routes. Never overridable; checked on a
+    // re-apply and a rollback too.
+    const missing = r.app.extensions.filter((x) => !shared.extensions.includes(x))
+    if (missing.length) {
+      codes.push('EXTENSION_MISSING')
+      notes.push(
+        `it uses ${missing.slice(0, 10).join(', ')}, which the deployment does not load — add it to the deployment's extensions`
+      )
+    }
     if (versionOk && !sameVersion && kind === 'upgrade' && r.placedHere) {
       const order = await orderProblem(r, version, placedHere)
       if (order) {
@@ -635,6 +666,12 @@ export async function gatherSharedUpgrade(
     warnings.push({
       code: 'DOWNGRADE',
       text: `${version} is not newer than the ${from_version} this deployment runs. Every app on it goes back to ${version}; an older version may not read data a newer one wrote. Confirm the downgrade to start.`
+    })
+  // Final review M-8: a rollback restores the build, not the schema — said as DOWNGRADE says it.
+  if (kind === 'rollback' && from_version && from_version !== version)
+    warnings.push({
+      code: 'ROLLBACK_SCHEMA_AHEAD',
+      text: `Apps that ${from_version} already migrated keep its newer database schema under ${version}; an older version may not read data a newer one wrote.`
     })
   const stack = shared.stack && STACK_NAME_RE.test(shared.stack) ? shared.stack : null
   const plan_hash = hashOf({

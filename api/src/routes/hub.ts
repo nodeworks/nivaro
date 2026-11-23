@@ -70,6 +70,7 @@ import {
 import { GitlabWriteError } from '../services/hub/gitlab-write.js'
 import { hubTokenColumns, linkTokenInUse } from '../services/hub/link-token.js'
 import { hubModeEnabled } from '../services/hub/mode.js'
+import { moveOpenRefusal } from '../services/hub/move-open.js'
 import {
   gatherPlanInput,
   PromotionError,
@@ -663,6 +664,17 @@ function environmentRoutes(app: FastifyInstance) {
     const checked = environmentPatch(b, false)
     if ('error' in checked) return fail(reply, 400, checked.code, checked.error)
     const { patch } = checked
+    // Final review moves I-2 (P6-37): an open move (an interrupted one holds no lock) relies on
+    // the environment's placement, stack and names staying as it found them.
+    if (
+      ['placement_id', 'key', 'hostnames', 'base_url', 'version_pin'].some(
+        (f) => patch[f as keyof typeof patch] !== undefined
+      ) ||
+      (b.hub_token !== undefined && b.hub_token !== HUB_MASK)
+    ) {
+      const open = await moveOpenRefusal({ envIds: [id] })
+      if (open) return fail(reply, open.status, open.code, open.message)
+    }
     // P4-31: a running stack's labels name the environment key, and the Hub finds it through
     // the placement: neither may change while the stack runs.
     const before = current.placement_id == null ? null : Number(current.placement_id)
@@ -1379,6 +1391,9 @@ function promotionRoutes(app: FastifyInstance) {
     if (!row) return notFound(reply)
     const input = promoteInput(req)
     if (!input) return fail(reply, 400, 'BAD_KIND', 'kind must be promote or rollback')
+    // Final review moves I-2 (P6-37): owners too — a promotion re-deploys what a move relies on.
+    const open = await moveOpenRefusal({ envIds: [Number(row.id)] })
+    if (open) return fail(reply, open.status, open.code, open.message)
     try {
       return {
         data: answeredPlan(buildPromotionPlan(await gatherPlanInput(Number(row.id), input)))

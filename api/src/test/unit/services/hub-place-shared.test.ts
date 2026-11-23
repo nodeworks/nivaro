@@ -637,7 +637,9 @@ describe('fix round 1', () => {
     expect(await getPlacement(pid)).not.toBeNull()
   })
 
-  it('I-3: no key known and the database holds a Nivaro install → 409 APP_KEY_UNKNOWN', async () => {
+  // Final review I-1 (ruling P6-37) changed the first answer: an install is an app that has
+  // served → USE_MOVE (was APP_KEY_UNKNOWN, whose "enter the key and place again" led nowhere).
+  it('I-3: no key known and the database holds a Nivaro install → 409 USE_MOVE', async () => {
     const app = await newApp()
     const envId = await newEnv(app.id)
     const fake = fakeClient()
@@ -651,8 +653,8 @@ describe('fix round 1', () => {
     const err = await refusal(
       place(envId, { database_id: await newDb() }, { client: fake.factory })
     )
-    expect(err).toMatchObject({ code: 'APP_KEY_UNKNOWN', statusCode: 409 })
-    expect((err as unknown as Error).message).toMatch(/encryption key/)
+    expect(err).toMatchObject({ code: 'USE_MOVE', statusCode: 409 })
+    expect((err as unknown as Error).message).toMatch(/Nivaro install/)
     const env = await db('nivaro_hub_environments').where({ id: envId }).first()
     expect(env).toMatchObject({ encryption_key: null, placement_id: null, db_ref: null })
     // The database cannot be looked at: the same refusal (never "assume empty").
@@ -708,7 +710,9 @@ describe('fix round 1', () => {
       { client: fake2.factory, startJobRun: fakeRun().start }
     )
     await Place.awaitPlacement(known)
-    expect(fake2.client.dbCheck).not.toHaveBeenCalled()
+    // Final review I-1 (ruling P6-37): a known key no longer skips the look — a database that
+    // already holds an install is an app that has served. An empty one still places.
+    expect(fake2.client.dbCheck).toHaveBeenCalledTimes(1)
     expect(await Store.openAppKey(known)).toBe(STACK_KEY)
   })
 
@@ -1029,5 +1033,310 @@ describe('parked wave', () => {
     expect(await status(lockedRow)).toBe('interrupted')
     expect(await status(freshRow)).toBe('running')
     await db('nivaro_hub_deploys').whereIn('id', [freshRow, lockedRow]).del()
+  })
+})
+
+describe('final fix wave FW-1 — I-1: an environment that serves elsewhere is never placed', () => {
+  async function gitlabPlacement(): Promise<number> {
+    const driverId = await insertId('nivaro_hub_drivers', {
+      kind: 'gitlab',
+      name: `gl${++seq}`,
+      config: JSON.stringify({ api_url: 'https://gitlab.example.com/api/v4', project: 'g/p' }),
+      secret: sealSecret('gitlab-Token-Value-0123456789-abcdefghij')
+    })
+    return insertId('nivaro_hub_placements', {
+      kind: 'dedicated',
+      driver_id: driverId,
+      target: JSON.stringify({ branch: 'main' })
+    })
+  }
+  const live = vi.fn(async () => ({
+    state: 'ok' as const,
+    version: '0.3.200',
+    preflight: 'ok',
+    checked_at: new Date(t).toISOString(),
+    source: 'hub-link' as const
+  }))
+
+  it('a GitLab placement and a live hub link → USE_MOVE, even with its key stored', async () => {
+    const app = await newApp()
+    const envId = await newEnv(app.id, {
+      placement_id: await gitlabPlacement(),
+      hub_token: sealSecret('hub-Token-Value-0123456789-abcdefghijklmn')
+    })
+    await Store.setAppKey(envId, STACK_KEY)
+    const fake = fakeClient()
+    const err = await refusal(
+      place(envId, { database_id: await newDb() }, { client: fake.factory, probeLink: live })
+    )
+    expect(err).toMatchObject({ code: 'USE_MOVE', statusCode: 409 })
+    const env = await db('nivaro_hub_environments').where({ id: envId }).first()
+    expect(env.db_ref).toBeNull()
+  })
+
+  it('no placement but a hub link that answers → USE_MOVE; one that does not answer → SERVING_UNKNOWN', async () => {
+    const app = await newApp()
+    const envId = await newEnv(app.id, {
+      hub_token: sealSecret('hub-Token-Value-0123456789-abcdefghijklmn')
+    })
+    await Store.setAppKey(envId, STACK_KEY)
+    const fake = fakeClient()
+    const answered = await refusal(
+      place(envId, { database_id: await newDb() }, { client: fake.factory, probeLink: live })
+    )
+    expect(answered.code).toBe('USE_MOVE')
+    expect(live).toHaveBeenCalled()
+    // A link that refuses the token still answers: the app runs.
+    const refused = vi.fn(async () => ({
+      state: 'link_refused' as const,
+      version: null,
+      preflight: null,
+      checked_at: new Date(t).toISOString(),
+      source: 'hub-link' as const,
+      error: 'HUB_LINK_REFUSED'
+    }))
+    expect(
+      (
+        await refusal(
+          place(envId, { database_id: await newDb() }, { client: fake.factory, probeLink: refused })
+        )
+      ).code
+    ).toBe('USE_MOVE')
+    const down = vi.fn(async () => ({
+      state: 'unreachable' as const,
+      version: null,
+      preflight: null,
+      checked_at: new Date(t).toISOString(),
+      source: 'hub-link' as const,
+      error: 'TIMEOUT'
+    }))
+    const unknown = await refusal(
+      place(envId, { database_id: await newDb() }, { client: fake.factory, probeLink: down })
+    )
+    expect(unknown).toMatchObject({ code: 'SERVING_UNKNOWN', statusCode: 409 })
+    expect((unknown as unknown as Error).message).toMatch(/hub token/)
+    expect(
+      (await db('nivaro_hub_environments').where({ id: envId }).first()).placement_id
+    ).toBeNull()
+  })
+
+  it('a known key and a database that already holds an install → USE_MOVE (never a second writer)', async () => {
+    const app = await newApp()
+    const envId = await newEnv(app.id)
+    await Store.setAppKey(envId, STACK_KEY)
+    const fake = fakeClient()
+    fake.client.dbCheck.mockResolvedValueOnce({
+      reachable: true,
+      ledger: { count: 512, latest: '551_hub_signins' },
+      ledger_state: 'present',
+      db_identity: null,
+      error: null
+    })
+    const err = await refusal(
+      place(envId, { database_id: await newDb() }, { client: fake.factory })
+    )
+    expect(err).toMatchObject({ code: 'USE_MOVE', statusCode: 409 })
+    // A known key and a database that cannot be looked at: unknown is never a pass.
+    fake.client.dbCheck.mockRejectedValueOnce(new DeploymentLinkError('LINK_UNREACHABLE'))
+    expect(
+      (await refusal(place(envId, { database_id: await newDb() }, { client: fake.factory }))).code
+    ).toBe('SERVING_UNKNOWN')
+  })
+
+  it('a retry of a shared placement that never succeeded is not asked again (it migrated itself)', async () => {
+    const app = await newApp()
+    const envId = await newEnv(app.id)
+    TENANTS = [Store.tenantIdFor(app, { id: envId })]
+    const failing = fakeClient({ schema: () => ({ state: 'failed', error: 'boom' }) })
+    await place(
+      envId,
+      { database_id: await newDb() },
+      { client: failing.factory, startJobRun: fakeRun().start }
+    )
+    await Place.awaitPlacement(envId)
+    const env = await db('nivaro_hub_environments').where({ id: envId }).first()
+    expect(env.status).toBe('provisioning')
+    const again = fakeClient()
+    // The deployment now sees its own install in the database: still a retry, not a second app.
+    again.client.dbCheck.mockResolvedValue({
+      reachable: true,
+      ledger: { count: 600, latest: '553_hub_moves' },
+      ledger_state: 'present',
+      db_identity: null,
+      error: null
+    })
+    await place(
+      envId,
+      { database_id: Number(String(env.db_ref).slice(7)) },
+      { client: again.factory, startJobRun: fakeRun().start }
+    )
+    await Place.awaitPlacement(envId)
+    expect(again.client.dbCheck).not.toHaveBeenCalled()
+    expect((await db('nivaro_hub_environments').where({ id: envId }).first()).status).toBe('active')
+  })
+})
+
+describe('final fix wave FW-1 — a Docker shared deployment (I-3, M-6)', () => {
+  let dockerShared = 0
+  let dockerDriver = 0
+  const traefik = vi.fn(async () => ({ edge: 'traefik' }))
+  const publish = vi.fn(async () => ({ edge: 'publish' }))
+  /** fakeClient, its refresh making the one replica of THIS deployment hold the list. */
+  function dockerClient() {
+    const fake = fakeClient()
+    fake.client.refresh.mockImplementation(async () => {
+      const shared = await Store.getShared(dockerShared)
+      if (!shared) return
+      const { etag } = await tenantsBody(shared)
+      await Sightings.recordSighting(dockerShared, {
+        instance: 'web-1',
+        version: '0.3.210',
+        etag,
+        at: new Date(t).toISOString()
+      })
+    })
+    return fake.factory
+  }
+
+  beforeAll(async () => {
+    dockerDriver = await insertId('nivaro_hub_drivers', {
+      kind: 'docker',
+      name: `swarm${++seq}`,
+      config: JSON.stringify({
+        agent_url: 'https://agent.example.com',
+        dns_mode: 'automatic',
+        wildcard_domain: 'apps.example.com',
+        edge_target: null
+      }),
+      secret: sealSecret('agent-Token-Value-0123456789-abcdefghij')
+    })
+    const v = Store.validateSharedInput({
+      key: 'shared-docker',
+      name: 'Shared docker',
+      link_url: 'https://shared-docker.internal.example.com',
+      mode: 'docker',
+      driver_id: dockerDriver,
+      stack: 'shared-docker',
+      host_pattern: '*.apps.example.com',
+      extensions: []
+    })
+    if (!v.ok) throw new Error(v.code)
+    dockerShared = (await Store.createShared(v.row, null)).row.id
+    await db('nivaro_hub_shared_deployments')
+      .where({ id: dockerShared })
+      .update({ version_pin: '0.3.210', status: 'active', pool_budget: 1000 })
+  })
+
+  it('I-3: a name outside host_pattern on the traefik edge → 409 NAME_NOT_ROUTED, nothing written', async () => {
+    const app = await newApp()
+    const envId = await newEnv(app.id, { base_url: 'https://crm.acme-corp.com' })
+    const err = await refusal(
+      place(
+        envId,
+        { shared_id: dockerShared, database_id: await newDb() },
+        { client: fakeClient().factory, agentHealth: traefik }
+      )
+    )
+    expect(err).toMatchObject({ code: 'NAME_NOT_ROUTED', statusCode: 409 })
+    expect((err as unknown as Error).message).toContain('crm.acme-corp.com')
+    expect(
+      (await db('nivaro_hub_environments').where({ id: envId }).first()).placement_id
+    ).toBeNull()
+    // An extra hostname outside it too.
+    const two = await newEnv(app.id, { hostnames: JSON.stringify(['www.other.org']) })
+    expect(
+      (
+        await refusal(
+          place(
+            two,
+            { shared_id: dockerShared, database_id: await newDb() },
+            { client: fakeClient().factory, agentHealth: traefik }
+          )
+        )
+      ).code
+    ).toBe('NAME_NOT_ROUTED')
+    // The agent cannot say which edge it runs: never assume the names are routed.
+    const down = vi.fn(async () => {
+      throw new Error('agent down')
+    })
+    expect(
+      (
+        await refusal(
+          place(
+            envId,
+            { shared_id: dockerShared, database_id: await newDb() },
+            { client: fakeClient().factory, agentHealth: down }
+          )
+        )
+      ).code
+    ).toBe('NAME_NOT_ROUTED')
+  })
+
+  it('I-3: names under the pattern, a name the last run already routed, or the publish edge place', async () => {
+    const app = await newApp()
+    const covered = await newEnv(app.id)
+    TENANTS = [Store.tenantIdFor(app, { id: covered })]
+    await place(
+      covered,
+      { shared_id: dockerShared, database_id: await newDb() },
+      { client: dockerClient(), startJobRun: fakeRun().start, agentHealth: traefik }
+    )
+    await Place.awaitPlacement(covered)
+    expect((await db('nivaro_hub_environments').where({ id: covered }).first()).status).toBe(
+      'active'
+    )
+    await db('nivaro_hub_shared_deploys').insert({
+      shared_deployment_id: dockerShared,
+      kind: 'upgrade',
+      version: '0.3.210',
+      status: 'success',
+      plan: JSON.stringify({ plan: { hostnames: ['crm.routed.com'] } }),
+      started_at: new Date(t)
+    })
+    const routed = await newEnv(app.id, { base_url: 'https://crm.routed.com' })
+    TENANTS = [Store.tenantIdFor(app, { id: routed })]
+    await place(
+      routed,
+      { shared_id: dockerShared, database_id: await newDb() },
+      { client: dockerClient(), startJobRun: fakeRun().start, agentHealth: traefik }
+    )
+    await Place.awaitPlacement(routed)
+    expect((await db('nivaro_hub_environments').where({ id: routed }).first()).status).toBe(
+      'active'
+    )
+    const published = await newEnv(app.id, { base_url: 'https://crm.elsewhere.net' })
+    TENANTS = [Store.tenantIdFor(app, { id: published })]
+    await place(
+      published,
+      { shared_id: dockerShared, database_id: await newDb() },
+      { client: dockerClient(), startJobRun: fakeRun().start, agentHealth: publish }
+    )
+    await Place.awaitPlacement(published)
+    expect((await db('nivaro_hub_environments').where({ id: published }).first()).status).toBe(
+      'active'
+    )
+  })
+
+  it('M-6: a Docker shared deployment never deployed → 409 NOT_DEPLOYED at once', async () => {
+    await db('nivaro_hub_shared_deployments')
+      .where({ id: dockerShared })
+      .update({ status: 'new', version_pin: null })
+    try {
+      const app = await newApp()
+      const envId = await newEnv(app.id)
+      const err = await refusal(
+        place(
+          envId,
+          { shared_id: dockerShared, database_id: await newDb() },
+          { client: fakeClient().factory, agentHealth: traefik }
+        )
+      )
+      expect(err).toMatchObject({ code: 'NOT_DEPLOYED', statusCode: 409 })
+      expect(sleep).not.toHaveBeenCalled()
+    } finally {
+      await db('nivaro_hub_shared_deployments')
+        .where({ id: dockerShared })
+        .update({ status: 'active', version_pin: '0.3.210' })
+    }
   })
 })

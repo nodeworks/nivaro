@@ -1027,6 +1027,21 @@ describe('validateStackSpec — shared deployment owners (phase 6)', () => {
     expect(validateStackSpec({ ...base(), roles }, cfg()).ok).toBe(true)
   })
 
+  it('final review E-1: a realtime role on Traefik v2 → ROLE_NEEDS_TRAEFIK_V3 (its router is v3 PathRegexp)', () => {
+    const roles = [
+      { role: 'web', replicas: 2 },
+      { role: 'realtime', replicas: 1 }
+    ]
+    expect(codeOf({ ...base(), roles }, 'roles[1].role', cfg({ traefikVersion: 2 }))).toBe(
+      'ROLE_NEEDS_TRAEFIK_V3'
+    )
+    expect(validateStackSpec({ ...base(), roles }, cfg({ traefikVersion: 3 })).ok).toBe(true)
+    // The publish edge routes no paths: v2 does not matter there.
+    const pub = cfg({ edge: 'publish', publishPorts: [31000, 31010], traefikVersion: 2 })
+    const r = validateStackSpec({ ...base(), roles, hostnames: [], publish_port: 31000 }, pub)
+    expect(r.ok ? [] : r.fields.filter((f) => f.code === 'ROLE_NEEDS_TRAEFIK_V3')).toEqual([])
+  })
+
   it('the spec hash of a spec without a pattern is unchanged (no host_pattern key)', () => {
     const r = validateStackSpec(base(), cfg())
     expect(r.ok && 'host_pattern' in r.spec).toBe(false)

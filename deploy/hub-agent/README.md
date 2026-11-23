@@ -130,9 +130,19 @@ any refused key or refused prefix, and the Hub ignores such a prefix too.
   A `large` stack runs web with sockets off and a `realtime` role: the
   realtime router takes `/socket.io/`, `/api/graphql-ws`, `/api/graphql/stream`,
   `/api/events/stream` and `/api/events/views/<id>/stream` (the same paths as
-  `deploy/realtime`). It uses `PathRegexp`, so it needs Traefik v3.
+  `deploy/realtime`). It uses `PathRegexp`, so it needs Traefik v3: with
+  `HUB_AGENT_TRAEFIK_VERSION=2` a `realtime` role is refused
+  (`ROLE_NEEDS_TRAEFIK_V3`) instead of deploying without its realtime routes.
 - **`publish`**: no labels; the app publishes a host port from
   `HUB_AGENT_PUBLISH_PORTS`.
+
+**Upgrading the agent to 0.2.0 changes every stack hash.** The Traefik version
+is part of each stack's hash, so after the upgrade every existing stack reads as
+another spec: Restart answers `SPEC_MISMATCH` until the stack is applied again.
+Apply each stack once after upgrading the agent (Apply now on a dedicated
+environment; an upgrade or re-apply at the same version on a shared
+deployment). That apply is also what removes the second network label older
+agents set, which Traefik 3.5 and later skip the whole service for.
 
 ## Secrets in the app
 
@@ -179,4 +189,6 @@ matches the image being pulled, never anywhere else.
 
 The container healthcheck is a TCP connect to the listen port (every 30 s, 15 s
 timeout, 3 retries, 30 s start period: a short timeout got the agent killed on a
-loaded host). `GET /v1/health` needs the token and is what the Hub uses.
+loaded host). `GET /v1/health` needs the token and is what the Hub uses. It
+answers `traefik_version` too, so a shared deployment's upgrade plan refuses a
+host pattern on a Traefik v2 agent before anything is applied.
