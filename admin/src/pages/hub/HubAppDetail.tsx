@@ -709,6 +709,7 @@ function EnvRow({
             idPrefix={`hub-env-${env.id}`}
             taken={envs.filter((e) => e.id !== env.id).map((e) => e.key)}
             onClose={() => row.setEditing(false)}
+            shared={row.isShared}
           />
         </td>
       </tr>
@@ -824,6 +825,7 @@ function EnvItem({
           idPrefix={`hub-env-${env.id}-m`}
           taken={envs.filter((e) => e.id !== env.id).map((e) => e.key)}
           onClose={() => row.setEditing(false)}
+          shared={row.isShared}
         />
       </li>
     )
@@ -907,10 +909,13 @@ function EditEnvironment({
   env,
   idPrefix,
   taken,
-  onClose
+  onClose,
+  shared = false
 }: {
   app: HubAppFull
   env: HubEnvironment
+  /** It runs on a shared deployment (the key field then speaks of a lost key). */
+  shared?: boolean
   /** Unique per layout (the table and the phone list can both hold a form). */
   idPrefix: string
   taken: string[]
@@ -988,7 +993,7 @@ function EditEnvironment({
         own as you change them.
       </p>
       <HubComponentsEditor appId={app.id} env={env} idPrefix={idPrefix} />
-      <HubAppKeyField envId={env.id} idPrefix={idPrefix} />
+      <HubAppKeyField envId={env.id} idPrefix={idPrefix} shared={shared} />
     </div>
   )
 }
