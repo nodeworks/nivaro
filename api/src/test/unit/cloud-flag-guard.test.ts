@@ -316,7 +316,8 @@ describe('cloud-flag token backstop', () => {
   })
 })
 
-describe('cloud-flag inventory (ratchet)', () => {
+// The inventory scan walks all of api/src: ~2 s alone, past 5 s under a loaded CI runner.
+describe('cloud-flag inventory (ratchet)', { timeout: 60_000 }, () => {
   const scanned = scanTree(SRC)
 
   it('(a) every scanned site is in the inventory and every entry is still there', () => {
