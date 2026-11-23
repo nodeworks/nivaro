@@ -1017,11 +1017,23 @@ export type {
   SharedMode
 } from './shared/shared-api'
 
-/** Phase 6: refusals the shared placement guards (Task 4) and the app-key route (Task 3) add. */
+// ─── Phase 6: shared placements, moves ───────────────────────────────────────
+
+/** A Hub deploy row's kind: phase 6 adds the mirror rows of a move and of a shared upgrade. */
+export type HubDeployKind = PromotionKind | 'move' | 'shared'
+
+/** Why a promotion, a stack change or a creation step refuses a shared-placed environment. */
+export const SHARED_PLACEMENT_TIP =
+  'Runs on a shared deployment, so its version follows the deployment. Upgrade the shared deployment instead.'
+
 Object.assign(BLOCKER_COPY, {
   SHARED_PLACEMENT: {
     title: 'This environment runs on a shared deployment',
-    hint: 'Its version moves with the deployment: upgrade the shared deployment instead.'
+    hint: 'Its version follows the deployment. Upgrade the shared deployment instead (Apps hub → Shared deployments).'
+  },
+  USE_MOVE: {
+    title: 'This change needs a move',
+    hint: 'An environment goes onto or off a shared deployment only through Move….'
   },
   // Task 5: a warning on an environment's stack plan (HUB_URL on this Hub is not usable).
   HUB_URL_PROBLEM: {
@@ -1030,9 +1042,44 @@ Object.assign(BLOCKER_COPY, {
   },
   PLACEMENT_CHANGED: {
     title: "The environment's placement changed meanwhile",
-    hint: 'It was placed or moved while this was saved. Nothing was saved. Try again.'
+    hint: 'Nothing was changed. Reload, check where it runs now, then try again.'
   }
 } satisfies Record<string, { title: string; hint?: string }>)
+
+/** A Hub deploy row's kind in words (history): `move` = "Moved", `shared` = "Shared upgrade". */
+export function deployKindWords(r: { kind: string; apply?: boolean }): string {
+  if (r.apply) return 'Apply settings'
+  switch (r.kind) {
+    case 'promote':
+      return 'Promote'
+    case 'rollback':
+      return 'Rollback'
+    case 'move':
+      return 'Moved'
+    case 'shared':
+      return 'Shared upgrade'
+    default:
+      return r.kind
+  }
+}
+
+/** Promotions and rollbacks are watched and rolled back here; move and shared rows are not. */
+export const isPromotionKind = (k: string): k is PromotionKind =>
+  k === 'promote' || k === 'rollback'
+
+/**
+ * A delete refused because the Hub could not take or read the environments' locks (Redis down,
+ * 503 LOCK_UNAVAILABLE): nothing was deleted. Other refusals keep the Hub's own words.
+ */
+export function hubDeleteToast(err: unknown, fallback: string) {
+  const d = hubError(err, fallback)
+  if (d.code === 'LOCK_UNAVAILABLE') {
+    d.title = 'Nothing was deleted: the Hub cannot check what is running right now'
+    d.hint =
+      'It cannot reach Redis to make sure no promotion, move or creation is using this. Try again in a moment.'
+  }
+  toast.error(d.title, errorToastOptions(d))
+}
 
 // ─── Phase 6: stored run errors (`CODE: sentence`) ──────────────────────────────────────────
 

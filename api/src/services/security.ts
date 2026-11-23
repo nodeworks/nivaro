@@ -101,6 +101,30 @@ export function maintenanceExplainer(display: MaintenanceDisplay): string {
   return display === 'page' ? MAINTENANCE_PAGE_EXPLAINER : MAINTENANCE_EXPLAINER
 }
 
+/**
+ * The `maintenance` block GET /api/announcements/active puts on its maintenance row: how hosts
+ * present the freeze. `strict` (Hub phase 6, a move's maintenance) is present only when true: no
+ * caller is exempt, administrators included, so hosts show EVERYONE the page — the strip they
+ * give exempt admins would leave them in an app whose every save answers 503.
+ */
+export function maintenanceBlock(
+  maint: Pick<MaintenanceState, 'display' | 'until' | 'message' | 'strict'>
+): {
+  display: MaintenanceDisplay
+  until: string | null
+  headline: string
+  explainer: string
+  strict?: true
+} {
+  return {
+    display: maint.display,
+    until: maint.until,
+    headline: (maint.message || MAINTENANCE_DEFAULT_MESSAGE).trim(),
+    explainer: maintenanceExplainer(maint.display),
+    ...(maint.strict ? { strict: true as const } : {})
+  }
+}
+
 export const MAINTENANCE_DEFAULT_MESSAGE = 'Maintenance in progress.'
 
 export interface MaintenanceState {
@@ -319,6 +343,9 @@ export async function setHubMaintenance(input: {
       MAINTENANCE_OVERRIDE_KEY,
       await hubOverrideJson(redis, input.message ?? null, input.moveId ?? null)
     )
+    // Hub phase 6 (P6-26): a move freezing its target again (rollback) invalidates that move's
+    // boot-maintenance done marker, so the app — restarted or re-created — boots in maintenance.
+    if (input.moveId) await redis.del(hubBootMaintenanceDoneKey(input.moveId))
   } else {
     const cur = await readOverrideJson(redis)
     if (cur?.hub === true) {

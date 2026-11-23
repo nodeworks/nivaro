@@ -80,7 +80,7 @@ import { logRouteError } from './services/error-log-level.js'
 import { stableIssueKey, trackError } from './services/error-tracking.js'
 import { callExternalApi } from './services/external-apis.js'
 import { importerServes } from './services/import-handoff.js'
-import { maintenanceFreezeHook } from './services/maintenance-freeze.js'
+import { maintenanceFreezeHook, retiredRequestHook } from './services/maintenance-freeze.js'
 import { markMcpInnerRequest } from './services/mcp-config.js'
 import { processRole } from './services/process-role.js'
 import { registerQueueSnapshotCron } from './services/queue-snapshots.js'
@@ -309,6 +309,10 @@ export async function buildServer() {
 
   // ─── Sessions ─────────────────────────────────────────────────────────────
   await registerSession(app)
+
+  // Hub phase 6 (ruling M17): a retired app answers APP_MOVED before routing has a say — paths
+  // with no route and routes whose own onRequest answers first included (maintenance-freeze.ts).
+  app.addHook('onRequest', retiredRequestHook)
 
   // ─── Abuse limits that need to know who is signed in (M15 / M20) ──────────
   // After the session plugin: a verified session is known here, a cookie alone is not.

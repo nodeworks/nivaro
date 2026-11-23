@@ -22,8 +22,28 @@ import { currentTenantKey } from './tenant-rooms.js'
  *    flags in the context that set them.
  */
 
+/**
+ * Every per-app slot map made here, so an app that leaves this process can be forgotten in one
+ * call (forgetAppState). Process-wide by design: it holds the containers, not any app's data.
+ */
+const registered = new Set<Map<string, unknown>>()
+
+/**
+ * Drops every per-app slot of `tenantKey` in every appMap / appSet / appBox of this process: an
+ * app that left it (unplaced from a shared deployment, or moved away — its tenant no longer
+ * listed) leaves no cached state behind, and a later return starts clean. The deployment's own
+ * '' slot is never dropped. Answers how many slots were dropped.
+ */
+export function forgetAppState(tenantKey: string): number {
+  if (!tenantKey) return 0
+  let n = 0
+  for (const byApp of registered) if (byApp.delete(tenantKey)) n++
+  return n
+}
+
 function slots<T>(make: () => T) {
   const byApp = new Map<string, T>()
+  registered.add(byApp as Map<string, unknown>)
   return {
     byApp,
     mine(): T {

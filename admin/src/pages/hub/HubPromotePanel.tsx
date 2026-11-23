@@ -19,6 +19,7 @@ import {
   blockersOf,
   cancelPromotion,
   changedPlanOf,
+  deployKindWords,
   fetchPromotableReleases,
   fetchPromotion,
   fetchPromotionPlan,
@@ -29,6 +30,7 @@ import {
   hubKeys,
   hubToast,
   isLivePromotion,
+  isPromotionKind,
   type PromotionBlocker,
   type PromotionKind,
   type PromotionPlan,
@@ -50,7 +52,6 @@ import { dangerArmed, dangerGhost, ghostButton, SectionCard } from './hub-parts'
 
 const KIND_VERB: Record<PromotionKind, string> = { promote: 'promote', rollback: 'roll back' }
 const KIND_TITLE: Record<PromotionKind, string> = { promote: 'Promote', rollback: 'Roll back' }
-const KIND_NOUN: Record<PromotionKind, string> = { promote: 'Promote', rollback: 'Rollback' }
 
 export function HubPromotePanel({
   env,
@@ -316,7 +317,6 @@ function PromoteForm({
           onChange={(e) => setConfirm(e.target.value)}
           autoComplete='off'
           spellCheck={false}
-          // Not the required text itself: a grey copy of it reads as already filled in.
           placeholder='Type it here'
           className='h-8 max-w-[280px] bg-white font-mono text-[13px] dark:bg-background'
         />
@@ -824,6 +824,8 @@ export function PromotionHistory({
   const offered = new Set<number>()
   const seen = new Set<string>()
   for (const r of q.data ?? []) {
+    // Phase 6: a move or shared-upgrade row never offers a rollback of its own.
+    if (!isPromotionKind(r.kind)) continue
     if (r.status !== 'success' || seen.has(r.version)) continue
     seen.add(r.version)
     if (rollbackTo.has(r.version)) offered.add(r.id)
@@ -867,13 +869,13 @@ export function PromotionHistory({
               <span className='font-mono text-[12px] font-medium text-slate-900 dark:text-foreground'>
                 {r.version}
               </span>
-              {r.from_version && (
+              {r.from_version && r.from_version !== r.version && (
                 <span className='font-mono text-[11px] text-slate-500 dark:text-slate-400'>
                   from {r.from_version}
                 </span>
               )}
               <span className='text-[11px] text-slate-500 dark:text-muted-foreground'>
-                {r.apply ? 'Apply settings' : (KIND_NOUN[r.kind] ?? r.kind)}
+                {deployKindWords(r)}
               </span>
               <span className={cn('text-[12px] font-medium', promotionStatusTone(r.status))}>
                 {promotionStatusWords(r.status)}
@@ -912,14 +914,14 @@ export function PromotionHistory({
               <tr key={r.id} className='border-b border-slate-100 last:border-0 dark:border-border'>
                 <td className='min-w-[104px] max-w-[220px] break-all py-2 pr-4 font-mono font-medium text-slate-900 dark:text-foreground'>
                   {r.version}
-                  {r.from_version && (
+                  {r.from_version && r.from_version !== r.version && (
                     <span className='block text-[11px] font-normal text-slate-500 dark:text-slate-400'>
                       from {r.from_version}
                     </span>
                   )}
                 </td>
                 <td className='py-2 pr-4 text-slate-600 dark:text-slate-300'>
-                  {r.apply ? 'Apply settings' : (KIND_NOUN[r.kind] ?? r.kind)}
+                  {deployKindWords(r)}
                 </td>
                 <td className={cn('py-2 pr-4 font-medium', promotionStatusTone(r.status))}>
                   {promotionStatusWords(r.status)}
@@ -1014,7 +1016,7 @@ function RowActions({
 }) {
   return (
     <div className='flex flex-nowrap items-center justify-end gap-0.5'>
-      {isLivePromotion(row.status) && (
+      {isLivePromotion(row.status) && isPromotionKind(row.kind) && (
         <button
           type='button'
           aria-label={`Watch ${row.version}`}
@@ -1056,7 +1058,7 @@ export function PromotionsCard({
   return (
     <SectionCard
       title='Hub deploys'
-      description='Promotions and rollbacks the Hub ran, newest first.'
+      description='Promotions, rollbacks and moves the Hub ran, newest first.'
     >
       <div className='divide-y divide-slate-200 dark:divide-border'>
         {managed.map((env) => (

@@ -255,6 +255,9 @@ describe('buildMovePlan — one test per blocker', () => {
   it('a registered target that allows x but pins no build → EXTENSION_PIN_UNVERIFIED + item (I-A)', () => {
     const p = buildMovePlan(
       input({
+        // P6-20 (Task 16): a traefik-only Docker source with a manual route is now a blocker
+        // (SOURCE_UNREACHABLE); this case is about the pins, so its source publishes a port.
+        from: dockerSide({ edge: 'publish' }),
         to: sharedSide({ mode: 'registered', driver_id: null, extension_pins: {} }),
         target_facts: tgt({ extension_pins: {} })
       })
@@ -738,5 +741,55 @@ describe('buildMovePlan — nothing identifying leaks into the plan text', () =>
       )
     )
     expect(q).not.toContain('hunter2')
+  })
+})
+
+// Ruling P6-20 (Task 16 owns this plan change): a GitLab target whose deploy job cannot be proven
+// to forward HUB_BOOT_MAINTENANCE gets a warning, a required checklist item and a plan hash of
+// its own.
+describe('GITLAB_BOOT_WINDOW', () => {
+  const gl = (boot: 'forwarded' | 'unproven' | undefined) =>
+    buildMovePlan(
+      input({
+        kind: 'to_dedicated',
+        from: sharedSide(),
+        to: gitlabSide(),
+        target: { kind: 'dedicated', placement_id: 9 },
+        target_facts: tgt({ boot_maintenance: boot })
+      })
+    )
+
+  it('an unproven template → warning plus a required item naming the risk; part of the hash', () => {
+    const p = gl('unproven')
+    expect(p.warnings.map((w) => w.code)).toContain('GITLAB_BOOT_WINDOW')
+    const item = p.checklist.find((c) => c.id === 'gitlab_boot_window')
+    expect(item).toMatchObject({ required: true })
+    expect(item?.text).toMatch(/without maintenance/)
+    expect(gl('forwarded').plan_hash).not.toBe(p.plan_hash)
+  })
+
+  it('a template that forwards it (or a non-GitLab target) → neither', () => {
+    for (const p of [gl('forwarded'), gl(undefined)]) {
+      expect(p.warnings.map((w) => w.code)).not.toContain('GITLAB_BOOT_WINDOW')
+      expect(p.checklist.find((c) => c.id === 'gitlab_boot_window')).toBeUndefined()
+    }
+  })
+})
+
+// Ruling P6-20 (Task 16): the start's SOURCE_UNREACHABLE for a Traefik-only Docker source with a
+// manual route is already a plan blocker.
+describe('SOURCE_UNREACHABLE (Docker traefik source, manual route)', () => {
+  it('blocks a manual move from a Docker source on the traefik edge; not an automatic one', () => {
+    const manual = buildMovePlan(
+      input({ from: dockerSide({ edge: 'traefik' }), to: sharedSide({ mode: 'registered' }) })
+    )
+    expect(manual.routing).toBe('manual')
+    expect(codes(manual)).toContain('SOURCE_UNREACHABLE')
+    const publish = buildMovePlan(
+      input({ from: dockerSide({ edge: 'publish' }), to: sharedSide({ mode: 'registered' }) })
+    )
+    expect(codes(publish)).not.toContain('SOURCE_UNREACHABLE')
+    const auto = buildMovePlan(input())
+    if (auto.routing === 'automatic') expect(codes(auto)).not.toContain('SOURCE_UNREACHABLE')
   })
 })

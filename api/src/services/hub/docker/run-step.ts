@@ -129,6 +129,12 @@ export interface DockerOpsDeps {
    * default: services/hub/db openDatabaseConnection. Only the run opens it, never a plan.
    */
   openDatabase?: (id: number) => Promise<DatabaseRecordEnv>
+  /**
+   * Phase 6 (Task 16, ruling R4): render for this placement instead of the environment's current
+   * one — a move's Docker target before release. It must still be a dedicated placement on
+   * `want.driverId` naming `want.name`.
+   */
+  placementId?: number
 }
 
 /** Opens a database record for the run; its errors become PromotionErrors with their code. */
@@ -260,7 +266,8 @@ export async function prepareStackSpec(
   const app = await readApp(env.app_id)
   if (!app) throw new PromotionError('NOT_FOUND', 'The app no longer exists', 404)
 
-  const placement = env.placement_id ? await getPlacement(env.placement_id) : null
+  const placementId = deps.placementId ?? env.placement_id
+  const placement = placementId ? await getPlacement(placementId) : null
   if (
     !placement ||
     placement.kind === 'shared' ||

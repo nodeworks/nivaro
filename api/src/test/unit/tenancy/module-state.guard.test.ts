@@ -349,6 +349,8 @@ const SHARED: Record<string, string> = {
   'services/ai-watches.ts :: evaluator': FN_SLOT,
   'services/alert-fired.ts :: listeners': REGISTRY,
   'services/app-links.ts :: registered': REGISTRY,
+  'services/app-state.ts :: registered':
+    'the per-app containers themselves (forgetAppState walks them); holds no app data',
   'services/approval-brief-lines.ts :: providers': REGISTRY,
   'services/approval-changes.ts :: resolvedIds': WEAK,
   'services/background-inflight.ts :: running':
@@ -634,6 +636,11 @@ const SHARED: Record<string, string> = {
   'services/hub/oidc/keys.ts :: creating': HUB_ONLY,
   'services/hub/oidc/keys.ts :: keyCache': HUB_ONLY,
   'services/hub/oidc/keys.ts :: testClock': HUB_ONLY,
+  'services/hub/move/heal.ts :: liveHere': HUB_ONLY,
+  'services/hub/move/ops.ts :: sharedStackRouter': HUB_ONLY,
+  'services/hub/move/plan-port.ts :: override': HUB_ONLY,
+  'services/hub/move/run.ts :: base': HUB_ONLY,
+  'services/hub/move/run.ts :: running': HUB_ONLY,
   'services/hub/promote-heal.ts :: liveHere': HUB_ONLY,
   'services/hub/promote-lock.ts :: memCancels': HUB_ONLY,
   'services/hub/promote-lock.ts :: memLocks': HUB_ONLY,
@@ -961,6 +968,7 @@ const SHARED: Record<string, string> = {
   'services/tenancy/app-migrations.ts :: newestMigration':
     'the newest migration file in this image',
   'services/tenancy/app-migrations.ts :: nowFn': FN_SLOT,
+  'services/tenancy/app-migrations.ts :: randomFn': FN_SLOT,
   'services/tenancy/app-migrations.ts :: readinessRegistered': REGISTRY,
   'services/tenancy/app-migrations.ts :: redisRef': CONN,
   'services/tenancy/app-migrations.ts :: states':

@@ -208,6 +208,11 @@ describe('manager/docker-stack.yml', () => {
     for (const k of HUB_APP_ENV_KEYS) expect(code(text), k).toContain(compose(k))
   })
 
+  it('passes HUB_BOOT_MAINTENANCE (phase 6 move target) into the app, empty by default', () => {
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: a compose placeholder, literally
+    expect(code(text)).toContain('HUB_BOOT_MAINTENANCE: ${HUB_BOOT_MAINTENANCE:-}')
+  })
+
   it('names every secret variable and reads each secret through <SETTING>_FILE', () => {
     for (const k of HUB_APP_SECRET_VARS) expect(text, k).toContain(k)
     for (const svc of ['web', 'worker']) {
@@ -438,7 +443,7 @@ case "$1 $2" in
   "secret inspect") [ -f "$S/secrets/$last.labels" ] || exit 1; cat "$S/secrets/$last.labels"; echo; exit 0 ;;
   "secret create") cat > "$S/secrets/$prev2"; printf '%s %s' "$ls" "$lk" > "$S/secrets/$prev2.labels"; exit 0 ;;
   "network inspect") [ "$last" = proxy ]; exit $? ;;
-  "stack deploy") printf 'deployed RULE=%s TLS=%s EP=%s IMAGE=%s DB=%s KEY=%s FILE=%s STACK=%s\\n' "$TRAEFIK_RULE" "$TRAEFIK_TLS" "$TRAEFIK_ENTRYPOINT" "$NIVARO_IMAGE_REF" "$SECRET_DB_URL" "$NIVARO_HUB_KEY" "$prev2" "$last" >> '${log}'; exit 0 ;;
+  "stack deploy") printf 'deployed RULE=%s TLS=%s EP=%s IMAGE=%s DB=%s KEY=%s FILE=%s STACK=%s BOOT=%s\\n' "$TRAEFIK_RULE" "$TRAEFIK_TLS" "$TRAEFIK_ENTRYPOINT" "$NIVARO_IMAGE_REF" "$SECRET_DB_URL" "$NIVARO_HUB_KEY" "$prev2" "$last" "\${HUB_BOOT_MAINTENANCE:-}" >> '${log}'; exit 0 ;;
   "run --rm") echo '{"version":"0.3.300","react":"x"}'; exit 0 ;;
 esac
 exit 0
@@ -692,6 +697,38 @@ describe('manager/nivaro-hub-deploy (forced command)', () => {
     const k = 'NIVARO_DB_URL_B64'
     expect(forced(box, `secret-create ${secretName(STACK, k)}`, SECRETS[k]).status).not.toBe(0)
     expect(dockerCalls(box).join('\n')).not.toContain('secret create')
+  })
+
+  it('deploy: HUB_BOOT_MAINTENANCE is optional and only ever a move id', () => {
+    const ok = manager({ secrets: ownSecrets() })
+    const r = forced(ok, `deploy ${STACK}`, deploySettings({ HUB_BOOT_MAINTENANCE: '7' }))
+    expect(r.status, r.out).toBe(0)
+    expect(ok.calls()).toMatch(/^deployed .* BOOT=7$/m)
+    // R2-M-1: a manager whose stack file does not pass it into the app refuses it (never a
+    // silent boot without maintenance).
+    const oldStack = read('manager/docker-stack.yml')
+      .split('\n')
+      .filter((l) => !l.includes('HUB_BOOT_MAINTENANCE'))
+      .join('\n')
+    const stale = manager({ secrets: ownSecrets(), stackFile: oldStack })
+    const r2 = forced(stale, `deploy ${STACK}`, deploySettings({ HUB_BOOT_MAINTENANCE: '7' }))
+    expect(r2.status).not.toBe(0)
+    expect(r2.out).toContain('the stack file does not pass HUB_BOOT_MAINTENANCE')
+    expect(dockerCalls(stale).join('\n')).not.toContain('stack deploy')
+    // Without the variable, an old stack file still deploys (promotions are unchanged).
+    expect(
+      forced(
+        manager({ secrets: ownSecrets(), stackFile: oldStack }),
+        `deploy ${STACK}`,
+        deploySettings()
+      ).status
+    ).toBe(0)
+    for (const bad of ['0', 'abc', '7 8']) {
+      const box = manager({ secrets: ownSecrets() })
+      const b = forced(box, `deploy ${STACK}`, deploySettings({ HUB_BOOT_MAINTENANCE: bad }))
+      expect(b.status, bad).not.toBe(0)
+      expect(dockerCalls(box).join('\n')).not.toContain('stack deploy')
+    }
   })
 
   it("deploy: first deploy binds the stack to this key; the stack file is the manager's", () => {
@@ -962,6 +999,20 @@ describe('scripts/deploy.sh run (through the real wrapper)', () => {
       expect(r.out).not.toContain(Buffer.from(v).toString('base64'))
       expect(r.out).not.toContain(sha8(v))
     }
+  })
+
+  // Hub phase 6 (ruling P6-20): a move's target deploy gets the pipeline variable
+  // HUB_BOOT_MAINTENANCE=<move id>; the template forwards it to the manager, which puts it into
+  // the app's environment. Without it nothing is sent and the app boots normally.
+  it('forwards HUB_BOOT_MAINTENANCE (a move id) into the stack; absent → nothing sent', () => {
+    const on = run({ env: { HUB_BOOT_MAINTENANCE: '42' } })
+    expect(on.status).toBe(0)
+    expect(on.calls).toMatch(/^deployed .* BOOT=42$/m)
+    const off = run()
+    expect(off.status).toBe(0)
+    expect(off.calls).toMatch(/^deployed .* BOOT=$/m)
+    for (const bad of ['0', 'x1', '1;rm', '12a'])
+      expect(run({ env: { HUB_BOOT_MAINTENANCE: bad } }).status, bad).not.toBe(0)
   })
 
   const refusedBeforeSsh = (r: { status: number | null; calls: string }) => {

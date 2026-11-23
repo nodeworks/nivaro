@@ -313,10 +313,14 @@ export function scanStateFile(rel: string, src: string): StateFinding[] {
       if (!kind) continue
       let keyed = false
       // A Map handed to another function or aliased may be written there with any key: never
-      // detected as keyed, it must be listed (review I-3). dropAppEntries() only removes.
+      // detected as keyed, it must be listed (review I-3). dropAppEntries() only removes. Also
+      // handed on (R2-M1): object shorthand `{ m }`, an array element `[m]`, and `return m`
+      // (a read through it — `return m.get(…)`, `m[k]`, `m?.size` — is not).
       const handedOn =
         new RegExp(`(?<!dropAppEntries)\\(\\s*${n}\\s*[,)]|,\\s*${n}\\s*[,)]`).test(src) ||
-        new RegExp(`[=:]\\s*${n}\\s*(?:[,;)}\\n]|$)`, 'm').test(after)
+        new RegExp(`[=:]\\s*${n}\\s*(?:[,;)}\\n]|$)`, 'm').test(after) ||
+        new RegExp(`[{,[]\\s*${n}\\s*[,}\\]]`).test(src) ||
+        new RegExp(`\\breturn\\s+${n}\\b(?!\\s*(?:\\.|\\[|\\?\\.))`).test(src)
       if (coll && kind !== 'WeakMap' && kind !== 'WeakSet' && !handedOn) {
         const keys = writeKeys(sf, name, d)
         keyed = !!keys && keys.length > 0 && keys.every((k) => namesApp(k, k.getText(sf), sf, fns))

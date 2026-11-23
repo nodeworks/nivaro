@@ -994,6 +994,42 @@ export async function executePlan(
   }
 }
 
+/**
+ * Phase 6 (Task 16, Decision 9): deploy ONE component at `version` the way a promotion does — the
+ * pin write (an api step: the release commit merged in and the pin committed, or the pin straight
+ * on a branch that already holds the commit) and the deploy job, waited for, played when manual.
+ * A move deploys a GitLab dedicated target with it. It runs the step through `executePlan`
+ * unchanged (a one-step plan, kind `promote`), so it is the promotion's own code path, never a
+ * copy of it: a refusal, a cancel or a lost lock answers the same RunOutcome a promotion's would.
+ * Log lines go to `log` (scrubbed of any token the step opened, as every promotion line is).
+ */
+export async function deployComponentAt(
+  component: PromotionStep,
+  version: string,
+  ctx: Omit<RunContext, 'version' | 'kind'>,
+  log: (line: string, level?: 'info' | 'warn' | 'error') => void,
+  opts: { signal?: AbortSignal; deps?: ExecuteDeps } = {}
+): Promise<RunOutcome> {
+  const plan: PromotionPlan = {
+    ok: true,
+    blockers: [],
+    lines: [],
+    steps: [component],
+    plan_hash: ''
+  }
+  return executePlan(
+    plan,
+    { ...ctx, version, kind: 'promote' },
+    {
+      ...(opts.signal ? { signal: opts.signal } : {}),
+      ...(opts.deps ? { deps: opts.deps } : {}),
+      onEvent: (e) => {
+        if (e.kind === 'log') log(e.line, e.level)
+      }
+    }
+  )
+}
+
 // ── start / cancel / recover ─────────────────────────────────────────────────────────────────
 
 /** The final status write of a deploy row; answers how many rows it changed. */
