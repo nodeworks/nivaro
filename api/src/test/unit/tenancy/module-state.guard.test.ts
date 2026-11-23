@@ -348,6 +348,8 @@ const SHARED: Record<string, string> = {
   'services/ai-watches.ts :: digestRegistered': REGISTRY,
   'services/ai-watches.ts :: evaluator': FN_SLOT,
   'services/alert-fired.ts :: listeners': REGISTRY,
+  'services/app-forget.ts :: registered':
+    'the hand-keyed containers themselves (forgetAppState walks them); holds no app data',
   'services/app-links.ts :: registered': REGISTRY,
   'services/app-state.ts :: registered':
     'the per-app containers themselves (forgetAppState walks them); holds no app data',
@@ -1276,6 +1278,90 @@ const KEYED: Record<string, string> = {
   'services/widget-live.ts :: tenantBudgets': 'keyed by tenant'
 }
 
+// ── Final review (rest) I-1: an app that leaves keeps nothing behind ──
+// A keyed module state must also be DROPPED when its app leaves the process (unplaced, or moved
+// away; forgetAppState from services/tenancy/hub-source.ts), or a later return reads entries
+// cached before it left: rollups, relations and columns added while it ran elsewhere stay
+// unknown here. appMap / appSet / appBox / tenantState() do it by construction; a hand-keyed Map
+// / Set does it by `registerAppKeyed(new Map…())` (services/app-forget.ts). A createShortCache
+// expires by construction. Every other keyed state is listed here with why it may stay.
+const INFLIGHT =
+  'work running in this process now (a run flag, a claim, a queued flush and its timer): it ends by itself, and dropping it mid-run could start the same work twice'
+const LIVE =
+  'state of open sockets, sessions or live watches of this process: they close when the app leaves'
+const GATE =
+  'a concurrency lane or gate holding queued callers: dropping it mid-wait would strand them; it holds no app data'
+const TELEM =
+  'telemetry of this process (counters, Traffic Map stores, trace / log lines tagged with their app), never read as app data'
+const LEFT_ON_LEAVE: Record<string, string> = {
+  'db/dialect/ef.ts :: idKinds':
+    'a WeakMap per knex handle, not iterable, so it cannot be forgotten here (final review M6 replaces it)',
+  'functions/queue-materialization-jobs.ts :: runningHere': INFLIGHT,
+  'functions/queue-materialization-jobs.ts :: rerunHere': INFLIGHT,
+  'hooks/notification-subscriptions.ts :: pendingRecordChanges': INFLIGHT,
+  'hooks/record-integrity.ts :: pending': INFLIGHT,
+  'hooks/task-done-when.ts :: pending': INFLIGHT,
+  'plugins/socketio.ts :: recordViewers': LIVE,
+  'routes/activity-trail.ts :: verifyRunning': INFLIGHT,
+  'routes/presence.ts :: broadcastPending': INFLIGHT,
+  'routes/traffic-map.ts :: catalogCaches': TELEM,
+  'routes/traffic-map.ts :: catalogInflights': TELEM,
+  'flows/registry.ts :: orderChains': INFLIGHT,
+  'services/activity-undo-deps.ts :: localClaims': INFLIGHT,
+  'services/ai-tool-lane.ts :: lanes': GATE,
+  'services/approval-changes.ts :: bursts': INFLIGHT,
+  'services/approval-changes.ts :: localGate': INFLIGHT,
+  'services/bulk-change-notice.ts :: bursts': INFLIGHT,
+  'services/catalog-impact.ts :: pending': INFLIGHT,
+  'services/collection-live-mode.ts :: batches': INFLIGHT,
+  'services/config-conformance.ts :: liveRowRuleCache':
+    'a `let` filled lazily; each entry lives 60 s (LIVE_CACHE_MS) and is rebuilt after',
+  'services/db-tuning/observe-run.ts :: running': INFLIGHT,
+  'services/export-runs.ts :: local': INFLIGHT,
+  'services/flow-executor.ts :: runningFlows': INFLIGHT,
+  'services/help-video-render.ts :: queueStates': INFLIGHT,
+  'services/hub-transfer/pull.ts :: runs': INFLIGHT,
+  'services/huddle-marks.ts :: invalidated': LIVE,
+  'services/huddle-ring.ts :: timers': INFLIGHT,
+  'services/log-ring.ts :: ring': TELEM,
+  'services/maintenance-live.ts :: recheckTimers': INFLIGHT,
+  'services/mcp-sessions.ts :: localStreams': LIVE,
+  'services/mcp-sessions.ts :: mem': LIVE,
+  'services/ops-proposals.ts :: memoryClaims': INFLIGHT,
+  'services/ops-report/run.ts :: running': INFLIGHT,
+  'services/owner-change-live.ts :: pending': INFLIGHT,
+  'services/owner-change-live.ts :: running': INFLIGHT,
+  'services/people-live.ts :: pending': INFLIGHT,
+  'services/pipeline-engine.ts :: ownerRefreshes': INFLIGHT,
+  'services/queue-owner-refresh.ts :: pending': INFLIGHT,
+  'services/raw-write-announcer.ts :: queue': INFLIGHT,
+  'services/read-gate.ts :: gates': GATE,
+  'services/recovery/drill.ts :: running': INFLIGHT,
+  'services/recovery/status.ts :: queued': INFLIGHT,
+  'services/related-announce.ts :: forwards': INFLIGHT,
+  'services/related-announce.ts :: pending': INFLIGHT,
+  'services/relay-retry-queue.ts :: queues': INFLIGHT,
+  'services/request-trace.ts :: buffer': TELEM,
+  'services/session-replay-cost.ts :: pendings': INFLIGHT,
+  'services/session-replay-index.ts :: queue': INFLIGHT,
+  'services/snooze-wake.ts :: perTenant': INFLIGHT,
+  'services/snooze-wake.ts :: timers': INFLIGHT,
+  'services/socket-health.ts :: scopes': TELEM,
+  'services/socket-transport.ts :: byTenant': LIVE,
+  'services/socket-transport.ts :: scopes': TELEM,
+  'services/sql-checks/run.ts :: running': INFLIGHT,
+  'services/traffic-actions/temp-cache.ts :: entries':
+    'keys are hashes of the Traffic Map store and the request (no app key to match); every entry expires with its TTL',
+  'services/traffic-map-batch.ts :: states': TELEM,
+  'services/traffic-map.ts :: mapStores': TELEM,
+  'services/traffic-taps.ts :: stores': TELEM,
+  'services/trackers/crons.ts :: recurAgain': INFLIGHT,
+  'services/trackers/crons.ts :: recurInFlight': INFLIGHT,
+  'services/unit-of-work.ts :: lanes': GATE,
+  'services/widget-live.ts :: groups': LIVE,
+  'services/workflow-transitions.ts :: transitionsInFlight': INFLIGHT
+}
+
 describe('module-level state on a shared deployment (Task 22 guard)', () => {
   const found = scanModuleState(SRC)
   const byId = new Map(found.map((f) => [f.id, f]))
@@ -1325,7 +1411,35 @@ describe('module-level state on a shared deployment (Task 22 guard)', () => {
   })
 
   it('every entry says why', () => {
-    for (const [id, why] of [...Object.entries(SHARED), ...Object.entries(KEYED)])
+    for (const [id, why] of [
+      ...Object.entries(SHARED),
+      ...Object.entries(KEYED),
+      ...Object.entries(LEFT_ON_LEAVE)
+    ])
       expect(why.length, id).toBeGreaterThan(10)
+  })
+
+  it('every keyed state is dropped when its app leaves (registerAppKeyed) or listed with why it stays', () => {
+    const keyedHere = found.filter((f) => f.keyed || KEYED[f.id])
+    const missing = keyedHere
+      .filter((f) => !f.forgets && f.kind !== 'createShortCache' && !LEFT_ON_LEAVE[f.id])
+      .map((f) => `${f.id} (${f.kind}, line ${f.line})`)
+    expect(
+      missing,
+      `wrap it: registerAppKeyed(new Map…()) (services/app-forget.ts), or list it in LEFT_ON_LEAVE:\n${missing.join('\n')}`
+    ).toEqual([])
+  })
+
+  it('LEFT_ON_LEAVE lists only keyed states that are not registered', () => {
+    const stale = Object.keys(LEFT_ON_LEAVE).filter((id) => {
+      const f = byId.get(id)
+      return !f || !(f.keyed || KEYED[id]) || f.forgets
+    })
+    expect(stale, `remove from LEFT_ON_LEAVE:\n${stale.join('\n')}`).toEqual([])
+  })
+
+  it('a registered state is keyed per app (its keys name the app)', () => {
+    const unkeyed = found.filter((f) => f.forgets && !f.keyed && !KEYED[f.id]).map((f) => f.id)
+    expect(unkeyed).toEqual([])
   })
 })

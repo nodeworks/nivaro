@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
+import { registerAppKeyed } from './app-forget.js'
 import { isMultiTenant, tenantSource } from './deployment-mode.js'
 import { hubLinkToken } from './hub/mode.js'
 import { hubLinkKeyTag } from './hub-link/retire.js'
@@ -200,7 +201,7 @@ function hubLinkedPlainKey(env: NodeJS.ProcessEnv): boolean {
 /** The cached state per tenant (`currentTenantKey()`; '' = self-hosted, one entry). One process
  *  serves many apps in cloud and on a Hub shared deployment: a single module variable let one
  *  app's maintenance mode (or its absence) answer for another for up to 15 s (ruling P5-6). */
-const maintCache = new Map<string, { at: number } & MaintenanceState>()
+const maintCache = registerAppKeyed(new Map<string, { at: number } & MaintenanceState>())
 
 /** Forget the cached maintenance state: one tenant's (`currentTenantKey()` value) when named,
  *  else every tenant's. */

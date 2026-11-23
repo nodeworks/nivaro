@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import { logActivity } from '../services/activity.js'
+import { registerAppKeyed } from '../services/app-forget.js'
 import { originForWrite } from '../services/note-authorship.js'
 import { computeDelta, writeRevision } from '../services/revisions.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
@@ -26,7 +27,7 @@ type AuditLevel = 'all' | 'activity' | 'none'
 const CACHE_TTL_MS = 60_000
 // Keyed per app (tenant + collection): one shared-deployment process serves many apps, and two
 // apps may name a collection alike with different audit levels.
-const levelCache = new Map<string, { level: AuditLevel; at: number }>()
+const levelCache = registerAppKeyed(new Map<string, { level: AuditLevel; at: number }>())
 const levelKey = (collection: string) => `${currentTenantKey()}\u0000${collection}`
 
 /** Drop cached audit levels — call after a collection's accountability changes. */

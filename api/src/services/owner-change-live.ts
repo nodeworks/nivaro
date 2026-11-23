@@ -2,6 +2,7 @@ import { AsyncResource } from 'node:async_hooks'
 import { db } from '../db/index.js'
 import { type OwnerChangeKind, onOwnersChanged } from '../db/owner-signal.js'
 import { runInBackgroundPool } from '../db/pool-context.js'
+import { registerAppKeyed } from './app-forget.js'
 import { appBox } from './app-state.js'
 import { selectInChunks, whereInList } from './db-batch.js'
 import { announceRecordAspect, emitToTenant } from './record-events.js'
@@ -104,7 +105,7 @@ export function changedOwnerRecords(
 
 // ── memo ─────────────────────────────────────────────────────────────────────
 
-const memos = new Map<string, Map<string, { fp: string; at: number }>>()
+const memos = registerAppKeyed(new Map<string, Map<string, { fp: string; at: number }>>())
 
 function memoFor(tenant: string): Map<string, { fp: string; at: number }> {
   let m = memos.get(tenant)
@@ -350,7 +351,7 @@ interface PendingRun {
   collections: Set<string> | null
 }
 const pending = new Map<string, PendingRun>()
-const lastRun = new Map<string, number>()
+const lastRun = registerAppKeyed(new Map<string, number>())
 const running = new Set<string>()
 
 /**

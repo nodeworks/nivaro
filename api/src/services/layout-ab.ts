@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import { getTenantId } from '../db/tenant-context.js'
+import { registerAppKeyed } from './app-forget.js'
 import { selectInChunks } from './db-batch.js'
 import { parseConditions } from './layout-patch.js'
 
@@ -140,7 +141,7 @@ export interface CollectionAbTest extends AbTest {
   variant_id: number
 }
 
-const testsMemo = new Map<string, { at: number; tests: CollectionAbTest[] }>()
+const testsMemo = registerAppKeyed(new Map<string, { at: number; tests: CollectionAbTest[] }>())
 const TESTS_TTL_MS = 60_000
 
 /** Live tests on a collection's record forms (cached 60 s per tenant). */

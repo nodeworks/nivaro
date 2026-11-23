@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import { getTenantId } from '../db/tenant-context.js'
+import { registerAppKeyed } from './app-forget.js'
 import { currentChain, newChainId, startChain } from './chain.js'
 import { selectInChunks } from './db-batch.js'
 
@@ -7,7 +8,7 @@ import { selectInChunks } from './db-batch.js'
  * nivaro_chain_roots — event rows that live in tables we must not alter
  * (extension feeds, replays) mapped to the chain they started.
  */
-const tableProbe = new Map<string, Promise<boolean>>()
+const tableProbe = registerAppKeyed(new Map<string, Promise<boolean>>())
 
 async function rootsTableExists(): Promise<boolean> {
   const key = getTenantId() ?? ''

@@ -13,6 +13,7 @@
  * marker registration to stay out of the Notes thread.
  */
 import { relatedNoteRegistry } from '../extensions/related-notes.js'
+import { registerAppKeyed } from './app-forget.js'
 import { accountKindOf } from './machine-accounts.js'
 
 export type NoteOrigin = 'person' | 'machine' | 'import' | 'integration'
@@ -67,7 +68,7 @@ export function originOfRow(row: {
 // The origin column arrives with migration 340; an instance that has not run
 // it yet must keep writing history. Probed once per table per TENANT (cloud
 // mode: one tenant may be migrated while another is not), per process.
-const hasOrigin = new Map<string, Promise<boolean>>()
+const hasOrigin = registerAppKeyed(new Map<string, Promise<boolean>>())
 
 /** `['<alias>.origin']` for a select from `table`, or `[]` before migration 340 ran. */
 export async function originSelect(table: string, alias = table): Promise<string[]> {

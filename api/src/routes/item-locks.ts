@@ -5,6 +5,7 @@ import { db } from '../db/index.js'
 import { castText, qi, sqlDialect } from '../db/sql-dialect.js'
 import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { registerAppKeyed } from '../services/app-forget.js'
 import { EDIT_LOCKED, lockHolderVerdict } from '../services/edit-lock.js'
 import { isAuthor, isUuid } from '../services/help-videos.js'
 import { isLockingEnabled, lockHolderName } from '../services/item-lock-guard.js'
@@ -456,7 +457,7 @@ function emitLockEvent(
 // this process's only: a release served by another replica never clears it,
 // so a lock newly TAKEN (`fresh`) is always news (army v3 — viewers were never
 // told a new holder had the record).
-const announcedLocks = new Map<string, boolean>()
+const announcedLocks = registerAppKeyed(new Map<string, boolean>())
 const ANNOUNCED_MAX = 5000
 
 function noteLockAnnounced(collection: string, item: string, locked: boolean, fresh = false) {
@@ -478,7 +479,7 @@ function noteLockAnnounced(collection: string, item: string, locked: boolean, fr
  * everything. A yes is remembered a minute per person + record: heartbeats
  * ask every few seconds.
  */
-const readableCache = new Map<string, number>()
+const readableCache = registerAppKeyed(new Map<string, number>())
 const READABLE_TTL_MS = 60_000
 
 async function callerCanReadRecord(
@@ -522,7 +523,7 @@ async function callerCanReadRecord(
  * judged by the help-video author gate (lockRefusal). A yes is remembered a
  * minute per person + record: heartbeats ask every few seconds.
  */
-const editableCache = new Map<string, number>()
+const editableCache = registerAppKeyed(new Map<string, number>())
 
 export async function callerCanEditRecord(req: FastifyRequest, collection: string, item: string) {
   if (collection === HELP_VIDEO_LOCK_COLLECTION) return true

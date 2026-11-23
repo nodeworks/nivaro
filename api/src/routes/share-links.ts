@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { registerAppKeyed } from '../services/app-forget.js'
 import { CC_KIOSK_ITEM, isKioskItem } from '../services/command-center/kiosk.js'
 import { loadFormLayout } from '../services/form-layout.js'
 import { readOne } from '../services/items.js'
@@ -353,7 +354,7 @@ export function shareCsp(nonce: string): string {
 const SHARE_STREAM_PER_IP = 20
 const SHARE_STREAM_HEARTBEAT_MS = 25_000
 const SHARE_STREAM_COALESCE_MS = 1_000
-const shareSigs = new Map<string, { at: number; sig: Promise<string | null> }>()
+const shareSigs = registerAppKeyed(new Map<string, { at: number; sig: Promise<string | null> }>())
 
 /** Fingerprint of the record part of the page, shared per token for a moment, budgeted. */
 function shareSignature(token: string): Promise<string | null> {

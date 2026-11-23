@@ -1,6 +1,7 @@
 import type { ReadinessResult } from '@nivaro/extension-kit'
 import { db } from '../db/index.js'
 import { NIVARO_VERSION } from '../version.js'
+import { registerAppKeyed } from './app-forget.js'
 import { type RoleFieldAccess, roleFieldAccess } from './layout-field-access.js'
 import { parseConditions, parseRecordConditions } from './layout-patch.js'
 import { getReadinessRedis, registerReadinessCheck } from './readiness.js'
@@ -350,7 +351,7 @@ export async function seenNow(
 
 // ─── Store ──────────────────────────────────────────────────────────────────
 
-const memory = new Map<string, SeenState>()
+const memory = registerAppKeyed(new Map<string, SeenState>())
 const storeKey = () => `nvr:layout-test-seen:v1:${currentTenantKey()}`
 const KEEP_S = 180 * 86_400
 

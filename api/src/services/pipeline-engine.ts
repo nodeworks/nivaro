@@ -1,6 +1,7 @@
 import { gunzipSync } from 'node:zlib'
 import { db } from '../db/index.js'
 import { runInBackgroundPool } from '../db/pool-context.js'
+import { registerAppKeyed } from './app-forget.js'
 import { appKey, dropAppEntries } from './app-keyed.js'
 import { getPhysicalColumns } from './collections.js'
 import { selectInChunks, whereInList } from './db-batch.js'
@@ -333,21 +334,24 @@ export interface PreparedOwnerGroups {
 // processes re-read the matrix ~1,500 times in four hours (EFP 2026-11-16:
 // 1.0-1.3 s and ~10k reads each, up to 5.3 s, beside /api/my-work's bursts).
 export const OWNER_GROUP_CACHE_TTL = 10 * 60_000
-const ownerGroupCache = new Map<
-  string,
-  { groups: OwnerGroup[]; prepared: PreparedOwnerGroups; at: number }
->()
+const ownerGroupCache = registerAppKeyed(
+  new Map<string, { groups: OwnerGroup[]; prepared: PreparedOwnerGroups; at: number }>()
+)
 
 // state→template + collection bindings ride the same TTL/bust — they answer
 // the owner-fallback question and change through the same admin surface.
-const fallbackMetaCache = new Map<string, { templateByState: Map<string, string>; at: number }>()
-const bindingsCache = new Map<
-  string,
-  {
-    rows: Array<{ collection: string; template: string; owner_fallback_field?: string | null }>
-    at: number
-  }
->()
+const fallbackMetaCache = registerAppKeyed(
+  new Map<string, { templateByState: Map<string, string>; at: number }>()
+)
+const bindingsCache = registerAppKeyed(
+  new Map<
+    string,
+    {
+      rows: Array<{ collection: string; template: string; owner_fallback_field?: string | null }>
+      at: number
+    }
+  >()
+)
 
 // Bumped on every bust: a fetch that STARTED before an admin edit must not
 // write its (pre-edit) rows into the cache after the bust cleared it.

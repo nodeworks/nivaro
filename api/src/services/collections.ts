@@ -8,6 +8,7 @@ import { rawRows } from '../db/raw-rows.js'
 import { orderByNullsLikeMssql, sqlDialect } from '../db/sql-dialect.js'
 import { getTenantId } from '../db/tenant-context.js'
 import type { CMSCollection, CMSField, CMSRelation } from '../types.js'
+import { registerAppKeyed } from './app-forget.js'
 import { clearVirtualSqlCache } from './virtual-sql.js'
 
 function parseJson<T>(val: unknown): T | null {
@@ -93,11 +94,13 @@ const SYNTHETIC_COLLECTIONS: Record<string, Partial<CMSCollection>> = {
 const META_TTL_MS = 30_000
 // Keyed per app (metaKey = app + name): one shared-deployment process serves many apps' schemas.
 const metaKey = (name: string) => `${getTenantId() ?? ''}\u0000${name}`
-const collectionCache = new Map<string, { value: CMSCollection | undefined; at: number }>()
-const fieldsCache = new Map<string, { value: CMSField[]; at: number }>()
+const collectionCache = registerAppKeyed(
+  new Map<string, { value: CMSCollection | undefined; at: number }>()
+)
+const fieldsCache = registerAppKeyed(new Map<string, { value: CMSField[]; at: number }>())
 
 // #1224 — the table's real columns, keyed per tenant (cloud shared tier).
-const physicalColumnsCache = new Map<string, { value: Set<string>; at: number }>()
+const physicalColumnsCache = registerAppKeyed(new Map<string, { value: Set<string>; at: number }>())
 
 /** Counts clearMetadataCache calls: per-read caches built from metadata (the items service's
  *  relation cache) compare it to know a schema change happened since they filled. */

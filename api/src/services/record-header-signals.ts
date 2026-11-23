@@ -18,12 +18,13 @@
  * check answers yes: the header shows what it always showed.
  */
 import { db } from '../db/index.js'
+import { registerAppKeyed } from './app-forget.js'
 import { allObligationKinds } from './integration-obligations.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
 const TTL_MS = 60_000
-const ownerSetup = new Map<string, { value: boolean; at: number }>()
-const partnerPush = new Map<string, { value: boolean; at: number }>()
+const ownerSetup = registerAppKeyed(new Map<string, { value: boolean; at: number }>())
+const partnerPush = registerAppKeyed(new Map<string, { value: boolean; at: number }>())
 
 export function bustRecordHeaderSignals(): void {
   ownerSetup.clear()

@@ -21,6 +21,7 @@ import { adminBaseUrl } from '../admin-base.js'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { authenticate } from '../middleware/authenticate.js'
+import { registerAppKeyed } from '../services/app-forget.js'
 import { markBootPhase } from '../services/boot-phases.js'
 import { isMultiTenant } from '../services/deployment-mode.js'
 import { isRetiredSync, onRetired } from '../services/hub-link/retire.js'
@@ -47,10 +48,10 @@ import { graphqlSseRoutes } from './graphql-sse.js'
  * map is bounded: the least recently used tenant schema is dropped past SCHEMA_CACHE_MAX.
  */
 const SCHEMA_CACHE_MAX = 64
-const _schemas = new Map<string, GraphQLSchema>()
+const _schemas = registerAppKeyed(new Map<string, GraphQLSchema>())
 // One build at a time per tenant: a request arriving mid-build awaits the same promise
 // instead of starting a second scan of every collection.
-const _building = new Map<string, Promise<GraphQLSchema>>()
+const _building = registerAppKeyed(new Map<string, Promise<GraphQLSchema>>())
 let _everBuilt = false
 
 function rememberSchema(key: string, schema: GraphQLSchema): void {
@@ -105,7 +106,7 @@ async function getSchema(): Promise<GraphQLSchema> {
 // Stored queries are cached in-process for 60s.
 
 const PQ_CACHE_TTL_MS = 60_000
-const pqCache = new Map<string, { query: string | null; expires: number }>()
+const pqCache = registerAppKeyed(new Map<string, { query: string | null; expires: number }>())
 
 async function lookupPersistedQuery(key: { id?: unknown; hash?: string }): Promise<string | null> {
   // Per tenant (H15): each tenant's registry lives in its own database.

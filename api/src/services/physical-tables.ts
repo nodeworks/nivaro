@@ -3,6 +3,7 @@ import { rawRows } from '../db/raw-rows.js'
 import { sqlDialect } from '../db/sql-dialect.js'
 import { getTenantId } from '../db/tenant-context.js'
 import type { CMSRelation } from '../types.js'
+import { registerAppKeyed } from './app-forget.js'
 
 /**
  * Which registered names have a table behind them. `nivaro_collections` and
@@ -19,9 +20,9 @@ import type { CMSRelation } from '../types.js'
 const TTL_MS = 60_000
 /** How long a confirmed-missing name is believed before the catalog is asked again. */
 const CONFIRM_MS = 10_000
-const cache = new Map<string, { at: number; names: Set<string> }>()
+const cache = registerAppKeyed(new Map<string, { at: number; names: Set<string> }>())
 /** `<tenant>:<name>` → when a fresh catalog read confirmed it missing. */
-const confirmedMissing = new Map<string, number>()
+const confirmedMissing = registerAppKeyed(new Map<string, number>())
 
 /** Every table/view/synonym as `schema.name`, plus the bare `name` for what
  *  an unqualified collection resolves to: SQL Server looks in the login's
@@ -64,7 +65,7 @@ async function loadNames(): Promise<Set<string> | null> {
 
 /** One catalog read per tenant at a time: a cold or expired cache under load
  *  otherwise sent one read per concurrent request (4 at once on one export). */
-const inflight = new Map<string, Promise<Set<string> | null>>()
+const inflight = registerAppKeyed(new Map<string, Promise<Set<string> | null>>())
 
 async function names(): Promise<Set<string> | null> {
   const key = getTenantId() ?? ''

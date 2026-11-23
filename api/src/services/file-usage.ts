@@ -2,6 +2,7 @@ import { foreignKeyColumnsTo } from '../db/dialect/h2.js'
 import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { likeCi, likeEscape, qi } from '../db/sql-dialect.js'
+import { registerAppKeyed } from './app-forget.js'
 import { appBox } from './app-state.js'
 import { selectInChunks } from './db-batch.js'
 import { currentTenantKey } from './tenant-rooms.js'
@@ -129,7 +130,7 @@ export async function fileIdsAttachedTo(
  * minutes; `fresh` forces a rescan (the purge always takes one).
  */
 const UNUSED_CACHE_MS = 5 * 60_000
-const unusedCache = new Map<string, { at: number; ids: string[] }>()
+const unusedCache = registerAppKeyed(new Map<string, { at: number; ids: string[] }>())
 
 export async function unusedFileIds(fresh = false): Promise<string[]> {
   const key = currentTenantKey()

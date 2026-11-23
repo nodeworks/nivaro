@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { GraphQLSchema } from 'graphql'
 import { db } from '../db/index.js'
+import { registerAppKeyed } from './app-forget.js'
 import { chainFields } from './chain-columns.js'
 import { cronTicksEnabled } from './cron-ticks.js'
 import { getApp } from './io-holder.js'
@@ -134,7 +135,7 @@ interface RedisLike {
   set(k: string, v: string, ...args: (string | number)[]): Promise<unknown>
 }
 
-const lastNotified = new Map<string, string>()
+const lastNotified = registerAppKeyed(new Map<string, string>())
 const BREAK_NOTICE_TTL_S = 90 * 24 * 3600
 
 /**

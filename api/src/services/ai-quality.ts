@@ -2,6 +2,7 @@ import { db } from '../db/index.js'
 import type { AiSettingsRow } from './ai-client.js'
 import { costOf, featureFromRoute, setPriceOverrides } from './ai-log.js'
 import { normalizeRouting, type RoutingConfig } from './ai-routing.js'
+import { registerAppKeyed } from './app-forget.js'
 import { isMultiTenant } from './deployment-mode.js'
 import { getIo } from './io-holder.js'
 import { roomListeners } from './realtime-board.js'
@@ -327,8 +328,8 @@ export function budgetMessage(cap: BudgetCap, resetsAt: Date): string {
   return `AI is paused: ${scope} of $${cap.daily_usd.toFixed(2)} has been reached. It resets at ${resetsAt.toISOString().slice(0, 16).replace('T', ' ')} UTC.`
 }
 
-const spendCache = new Map<string, { at: number; value: number }>()
-const roleCache = new Map<string, { at: number; role: string | null }>()
+const spendCache = registerAppKeyed(new Map<string, { at: number; value: number }>())
+const roleCache = registerAppKeyed(new Map<string, { at: number; role: string | null }>())
 const SPEND_TTL_MS = 15_000
 
 export function bustAiBudgetCache(): void {
@@ -638,7 +639,7 @@ export interface LiveAiCall {
   error?: string | null
 }
 
-const nameCache = new Map<string, { at: number; name: string }>()
+const nameCache = registerAppKeyed(new Map<string, { at: number; name: string }>())
 
 async function nameOf(userId: string): Promise<string> {
   const ck = `${currentTenantKey()}|${userId}`

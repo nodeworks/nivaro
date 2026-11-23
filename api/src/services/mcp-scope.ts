@@ -2,6 +2,7 @@ import type { FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { getTenantId } from '../db/tenant-context.js'
 import { hasColumn } from '../lib/column-probe.js'
+import { registerAppKeyed } from './app-forget.js'
 import { mcpConnOf } from './mcp-calls.js'
 import { normalizedPath } from './mcp-config.js'
 import {
@@ -237,7 +238,7 @@ export function rowFromDb(r: DbRow): ScopeRow {
 }
 
 /** Per tenant + connection; a miss is cached too, so an unscoped connection costs nothing. */
-const cache = new Map<string, { at: number; row: ScopeRow | null }>()
+const cache = registerAppKeyed(new Map<string, { at: number; row: ScopeRow | null }>())
 const SCOPE_TTL_MS = 10_000
 const CACHE_MAX = 5_000
 

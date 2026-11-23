@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import type { HookAction, HookContext, HookTiming } from '../hooks/registry.js'
 import { hooks } from '../hooks/registry.js'
+import { registerAppKeyed } from '../services/app-forget.js'
 import { executeFlow } from '../services/flow-executor.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
 import { deferEffect } from '../services/unit-of-work.js'
@@ -123,7 +124,7 @@ export async function runEventFlow(
 // ─── Per-app cache ───────────────────────────────────────────────────────────
 
 const CACHE_TTL_MS = 30_000
-const cache = new Map<string, { at: number; specs: Promise<EventFlowSpec[]> }>()
+const cache = registerAppKeyed(new Map<string, { at: number; specs: Promise<EventFlowSpec[]> }>())
 let started: FastifyInstance | null = null
 
 async function loadSpecs(log: FastifyInstance['log'] | null): Promise<EventFlowSpec[]> {

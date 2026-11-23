@@ -18,6 +18,7 @@ import { MIGRATION_LOCK_NAME, PG_LOCK_KEY } from '../db/index.js'
 import { diffSchema, listSchema, summarizeEffects } from '../db/migration-effects.js'
 import { getTenantDb } from '../db/tenant-context.js'
 import { NIVARO_VERSION } from '../version.js'
+import { registerAppKeyed } from './app-forget.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
 export const SCHEMA_STEPS_TABLE = 'nivaro_extension_schema_steps'
@@ -53,9 +54,9 @@ const declared = new Map<string, SchemaStepDef[]>()
 /** The database each extension's steps run against (its ctx.database), per app: on a Hub
  *  shared deployment every app's steps run on its own database (services/tenancy/
  *  app-migrations.ts), so these two maps are keyed by the current tenant ('' self-hosted). */
-const databases = new Map<string, Knex>()
+const databases = registerAppKeyed(new Map<string, Knex>())
 /** Last known ledger rows per extension and app (refreshed by runSchemaSteps / checks). */
-const lastRows = new Map<string, SchemaStepRow[]>()
+const lastRows = registerAppKeyed(new Map<string, SchemaStepRow[]>())
 
 /** The two maps' key: the current app (tenant) and the extension. */
 function slot(extId: string): string {

@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { registerAppKeyed } from './app-forget.js'
 import { parseRecalcRollups } from './import-rollups.js'
 import { getIo } from './io-holder.js'
 import type { ImportDefinition } from './staged-imports.js'
@@ -128,10 +129,9 @@ async function processorRegisteredFn(): Promise<(name: string) => boolean> {
 }
 
 // Per tenant (cloud tenants share this process): the queue + definitions read, a few seconds old.
-const caches = new Map<
-  string,
-  { at: number; rows: Array<Record<string, unknown>>; defs: ImportDefinition[] }
->()
+const caches = registerAppKeyed(
+  new Map<string, { at: number; rows: Array<Record<string, unknown>>; defs: ImportDefinition[] }>()
+)
 
 /** The runs for one collection's pages. One small queue read per process every few seconds. */
 export async function listCollectionImportRuns(

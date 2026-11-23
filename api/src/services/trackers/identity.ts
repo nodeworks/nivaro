@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { db } from '../../db/index.js'
+import { registerAppKeyed } from '../app-forget.js'
 import { currentTenantKey } from '../tenant-rooms.js'
 
 export const TRACKER_EMAIL = 'gitlab-sync@nivaro.local'
@@ -12,7 +13,7 @@ const firstRow = async (): Promise<Row | undefined> =>
     | undefined
 
 /** One lookup-or-create at a time per tenant in this process (final review: create race). */
-const inflight = new Map<string, Promise<string>>()
+const inflight = registerAppKeyed(new Map<string, Promise<string>>())
 
 /**
  * The machine identity that authors comments imported from the tracker.

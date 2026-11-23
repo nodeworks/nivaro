@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import type { Redis } from 'ioredis'
 import { onConfigWrite } from '../db/config-epoch.js'
 import { onOwnersChanged } from '../db/owner-signal.js'
+import { registerAppKeyed } from './app-forget.js'
 import { registerCache } from './cache-registry.js'
 import { onCollectionTouched, onItemEvent } from './item-events.js'
 import { currentTenantKey } from './tenant-rooms.js'
@@ -40,7 +41,7 @@ const FIELDS_CAP = 60
 /** When this process started listening for changes; nothing older is trusted. */
 let listeningSince = Number.POSITIVE_INFINITY
 /** `${tenant}|${collection}` → when it last changed; `${tenant}|*` = any collection. */
-const changedAt = new Map<string, number>()
+const changedAt = registerAppKeyed(new Map<string, number>())
 let everythingChangedAt = 0
 let wired = false
 
@@ -137,7 +138,7 @@ export interface ToolReuse {
   ): void
 }
 
-const memory = new Map<string, { expires: number; fields: Map<string, string> }>()
+const memory = registerAppKeyed(new Map<string, { expires: number; fields: Map<string, string> }>())
 
 /**
  * The store for one conversation of one asker. Redis when there is one (any

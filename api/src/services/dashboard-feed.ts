@@ -3,6 +3,7 @@ import { infoColumns, infoSelect } from '../db/dialect/users-ai-config.js'
 import { db } from '../db/index.js'
 import { castText, qi } from '../db/sql-dialect.js'
 import type { User } from '../types.js'
+import { registerAppKeyed } from './app-forget.js'
 import { recordLink } from './app-links.js'
 import { getCollection, parseSpecial } from './collections.js'
 import { selectInChunks, whereInList } from './db-batch.js'
@@ -1867,7 +1868,7 @@ const PULSE_ZONES = 12
 const PULSE_SCAN = 20_000
 const PULSE_BREACH_CAP = 2000
 const RECENT_COLUMNS = ['date_updated', 'changed', 'updated_at']
-const pulseCache = new Map<string, { at: number; value: ZonePulse }>()
+const pulseCache = registerAppKeyed(new Map<string, { at: number; value: ZonePulse }>())
 /** Both caches are per process and keyed per viewer / scope signature: capped, expired first. */
 const PULSE_CACHE_MAX = 2_000
 
@@ -1890,7 +1891,7 @@ interface CollectionTally {
   recent: Map<string, number>
   truncated: boolean
 }
-const tallyCache = new Map<string, { at: number; value: CollectionTally }>()
+const tallyCache = registerAppKeyed(new Map<string, { at: number; value: CollectionTally }>())
 
 /** An in-flight addendum per PARENT record id (only its ids matter here). */
 export type PulseAddendumReader = (

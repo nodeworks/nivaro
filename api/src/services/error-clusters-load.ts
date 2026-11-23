@@ -8,6 +8,7 @@
  * few seconds of a stored occurrence (issues keep no request id of their own).
  */
 import { db } from '../db/index.js'
+import { registerAppKeyed } from './app-forget.js'
 import { selectInChunks } from './db-batch.js'
 import {
   buildClusters,
@@ -36,7 +37,7 @@ interface Loaded {
 }
 
 /** Tenant-keyed (cloud tenants share module state). */
-const cache = new Map<string, Loaded>()
+const cache = registerAppKeyed(new Map<string, Loaded>())
 
 export async function loadErrorClusters(opts: {
   days: number

@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { registerAppKeyed } from '../services/app-forget.js'
 import { getEmbeddableFields, upsertItemEmbedding } from '../services/embeddings.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
 import { hooks } from './registry.js'
@@ -14,7 +15,7 @@ export function setApp(app: FastifyInstance) {
 // hook doesn't hit nivaro_fields on every mutation. Keyed per app (tenant + collection):
 // a shared-deployment process serves many apps.
 const CACHE_TTL_MS = 5 * 60_000
-const fieldCache = new Map<string, { fields: string[]; at: number }>()
+const fieldCache = registerAppKeyed(new Map<string, { fields: string[]; at: number }>())
 
 async function embeddableFields(collection: string): Promise<string[]> {
   const key = `${currentTenantKey()}\u0000${collection}`

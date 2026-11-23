@@ -1,6 +1,7 @@
 import type { Knex } from 'knex'
 import { isMssql } from '../db/dialect.js'
 import { rawRows } from '../db/raw-rows.js'
+import { registerAppKeyed } from './app-forget.js'
 import { pokeOps } from './ops-live.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
@@ -41,7 +42,7 @@ interface Entry {
   readGen: number
   flight?: Promise<LiveUsage>
 }
-const cache = new Map<string, Entry>()
+const cache = registerAppKeyed(new Map<string, Entry>())
 
 const num = (v: unknown): number => {
   const n = Number(v)

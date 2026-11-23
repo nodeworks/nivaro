@@ -19,6 +19,9 @@ import { listSourceFiles } from '../cloud-flag-scan.js'
 // A top-level `const x = tenantState(…)` / `appMap()` / `appSet()` / `appBox(…)` is per app by
 // construction and is never a finding.
 //
+// `const x = registerAppKeyed(new X(…))` (app-forget.ts) is the same finding as `new X(…)`, marked
+// `forgets`: forgetAppState() drops the app's entries when it leaves the process (final review I-1).
+//
 // A Map / Set (or a `let` that only ever holds a fresh Map / Set) is DETECTED as keyed per app
 // when the module writes it at least once and every write's key names the app: the key text calls
 // a tenant helper (TENANT_HELPER), a function of this module whose body does, or uses a variable
@@ -51,6 +54,8 @@ export interface StateFinding {
   kind: string
   /** Every write's key names the app (see above). */
   keyed: boolean
+  /** Registered with registerAppKeyed(): forgetAppState() drops the app's entries. */
+  forgets: boolean
   line: number
   text: string
 }
@@ -237,6 +242,19 @@ function writeKeys(sf: ts.SourceFile, name: string, decl: ts.Node): ts.Node[] | 
   return otherAssign ? null : keys
 }
 
+/** `registerAppKeyed(<x>)` → `<x>` (app-forget.ts); anything else as it is. */
+function unwrapRegistered(init: ts.Expression | undefined): ts.Expression | undefined {
+  if (
+    init &&
+    ts.isCallExpression(init) &&
+    ts.isIdentifier(init.expression) &&
+    init.expression.text === 'registerAppKeyed' &&
+    init.arguments.length === 1
+  )
+    return init.arguments[0]
+  return init
+}
+
 function isFreshCollection(init: ts.Expression | undefined): string | null {
   if (!init || !ts.isNewExpression(init) || !ts.isIdentifier(init.expression)) return null
   return COLLECTION_CLASS.test(init.expression.text) ? init.expression.text : null
@@ -275,7 +293,8 @@ export function scanStateFile(rel: string, src: string): StateFinding[] {
     for (const d of st.declarationList.declarations) {
       if (!ts.isIdentifier(d.name)) continue
       const name = d.name.text
-      const init = d.initializer
+      const init = unwrapRegistered(d.initializer)
+      const forgets = init !== d.initializer
       if (
         !isLet &&
         init &&
@@ -332,6 +351,7 @@ export function scanStateFile(rel: string, src: string): StateFinding[] {
         name,
         kind,
         keyed,
+        forgets,
         line,
         text: d.getText(sf).split('\n')[0]?.slice(0, 140) ?? ''
       })

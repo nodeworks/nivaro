@@ -3,6 +3,7 @@ import { infoColumns, infoSelect } from '../db/dialect/users-ai-config.js'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { registerAppKeyed } from '../services/app-forget.js'
 import { builtinAllowed } from '../services/bulk-actions.js'
 import { getFields, getRelations } from '../services/collections.js'
 import { ForbiddenError, ItemNotFoundError, readOne } from '../services/items.js'
@@ -387,7 +388,7 @@ const DIRECT_NOTICE_LIMITS = [
   { windowMs: 60_000, max: 30 },
   { windowMs: 3_600_000, max: 200 }
 ]
-const directNoticeLog = new Map<string, number[]>()
+const directNoticeLog = registerAppKeyed(new Map<string, number[]>())
 export function directNoticeAllowed(senderId: string, now = Date.now()): boolean {
   const key = `${currentTenantKey()}:${String(senderId).toUpperCase()}`
   const longest = Math.max(...DIRECT_NOTICE_LIMITS.map((l) => l.windowMs))

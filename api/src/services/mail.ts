@@ -4,6 +4,7 @@ import { Liquid } from 'liquidjs'
 import nodemailer from 'nodemailer'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
+import { registerAppKeyed } from './app-forget.js'
 import { chainFields } from './chain-columns.js'
 import { encodeDeferredSnippet } from './deferred-snippet.js'
 import { useZonedDates } from './liquid-dates.js'
@@ -113,7 +114,7 @@ export function registerMailTemplateRoot(dir: string): void {
 // template of the same name — rebranding an email no longer needs a deploy.
 // 60s cache; busted by the mail-templates routes on save/revert. Per app (currentTenantKey()):
 // on a shared deployment each app brands its own mail.
-const overrideCache = new Map<string, { at: number; map: Map<string, string> }>()
+const overrideCache = registerAppKeyed(new Map<string, { at: number; map: Map<string, string> }>())
 /** Drop cached overrides: the current app's, or every app's outside one. */
 export function bustMailTemplateOverrides(): void {
   const app = currentTenantKey()

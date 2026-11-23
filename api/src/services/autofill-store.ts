@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import type { Redis } from 'ioredis'
+import { registerAppKeyed } from './app-forget.js'
 import type { DocumentProposal } from './document-autofill.js'
 import { appKeyPart } from './tenancy/credential-binding.js'
 
@@ -11,7 +12,7 @@ import { appKeyPart } from './tenancy/credential-binding.js'
  */
 
 const TTL_SECONDS = 24 * 60 * 60
-const memory = new Map<string, { at: number; value: StoredProposal }>()
+const memory = registerAppKeyed(new Map<string, { at: number; value: StoredProposal }>())
 
 /** Where a proposal is kept: per app on a Hub shared deployment (copied apps share user ids, so
  *  the owner check alone would open app A's proposal in app B). Unchanged elsewhere. */

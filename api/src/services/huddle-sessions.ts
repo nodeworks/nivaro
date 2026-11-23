@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { registerAppKeyed } from './app-forget.js'
 import { channelByKey, channels, parseRoom } from './chat.js'
 
 /**
@@ -126,7 +127,7 @@ export interface SessionStore {
 }
 
 const TABLE = 'nivaro_chat_huddle_sessions'
-const tableSeen = new Map<string, { at: number; has: boolean }>()
+const tableSeen = registerAppKeyed(new Map<string, { at: number; has: boolean }>())
 
 export function resetSessionTableCache(): void {
   tableSeen.clear()

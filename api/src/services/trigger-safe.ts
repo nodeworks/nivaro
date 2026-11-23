@@ -1,6 +1,7 @@
 import { db, isMssql } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { getTenantId } from '../db/tenant-context.js'
+import { registerAppKeyed } from './app-forget.js'
 
 /**
  * SQL Server refuses `INSERT/UPDATE/DELETE … OUTPUT` without `INTO` on a table
@@ -22,8 +23,8 @@ export const TRIGGER_SAFE = { includeTriggerModifications: true } as const
 export type TriggerSafeOptions = typeof TRIGGER_SAFE | undefined
 
 const TTL_MS = 60_000
-const cache = new Map<string, { at: number; tables: Set<string> }>()
-const inflight = new Map<string, Promise<Set<string> | null>>()
+const cache = registerAppKeyed(new Map<string, { at: number; tables: Set<string> }>())
+const inflight = registerAppKeyed(new Map<string, Promise<Set<string> | null>>())
 
 const norm = (name: string) => name.toLowerCase().replace(/[[\]]/g, '')
 

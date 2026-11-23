@@ -1,5 +1,6 @@
 import { createHmac } from 'node:crypto'
 import { db } from '../db/index.js'
+import { registerAppKeyed } from './app-forget.js'
 import { validIceUrl, validLiveKitUrl, withPlatformDestinations } from './huddle-destinations.js'
 import { instanceKey } from './instance-key.js'
 import { currentTenantKey } from './tenant-rooms.js'
@@ -181,7 +182,7 @@ export function mergeHuddlePatch(stored: HuddleSettings, patch: unknown): Huddle
 
 // ── Storage (30 s cache per tenant; the PATCH route busts it) ─────────────────
 // Keyed by tenant: in cloud mode one process serves many tenants, each with its own row.
-const cache = new Map<string, { at: number; value: HuddleSettings }>()
+const cache = registerAppKeyed(new Map<string, { at: number; value: HuddleSettings }>())
 
 export function bustHuddleSettingsCache(): void {
   cache.clear()

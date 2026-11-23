@@ -7,6 +7,7 @@ import {
   runWithoutTenant,
   runWithTenantDb
 } from '../db/tenant-context.js'
+import { registerAppKeyed } from './app-forget.js'
 import { selectInChunks, whereInList } from './db-batch.js'
 import { getApp } from './io-holder.js'
 import { currentTenantKey } from './tenant-rooms.js'
@@ -189,7 +190,7 @@ export function priceDiffers(lineValue: unknown, catalogValue: unknown): boolean
 
 // ─── Discovery (cached per tenant) ───────────────────────────────────────────
 
-const sourcesCache = new Map<string, { at: number; list: CatalogSource[] }>()
+const sourcesCache = registerAppKeyed(new Map<string, { at: number; list: CatalogSource[] }>())
 
 export async function catalogSources(): Promise<CatalogSource[]> {
   const key = currentTenantKey() ?? ''
@@ -537,7 +538,7 @@ export function newSinceLastLook(
 
 // The last look per source: Redis (shared by every process, 30 days) or this process.
 const BASELINE_TTL_S = 30 * 86_400
-const memoryBaselines = new Map<string, Map<string, string>>()
+const memoryBaselines = registerAppKeyed(new Map<string, Map<string, string>>())
 const baselineKey = (src: CatalogSource) =>
   `nvr:catimpact:${currentTenantKey() || '-'}:${src.parent}.${src.field}`
 

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import type { Redis } from 'ioredis'
+import { registerAppKeyed } from './app-forget.js'
 import { appKeyPart } from './tenancy/credential-binding.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
@@ -16,7 +17,7 @@ import { currentTenantKey } from './tenant-rooms.js'
 const TTL_SECONDS = 24 * 60 * 60
 const MEMORY_MAX_ENTRIES = 200
 const MEMORY_MAX_CHARS = 20_000_000
-const memory = new Map<string, { at: number; value: AskAttachment }>()
+const memory = registerAppKeyed(new Map<string, { at: number; value: AskAttachment }>())
 
 /** Where an attachment is kept: per app on a Hub shared deployment (copied apps share user ids,
  *  so the owner check alone would open app A's attachment in app B). Unchanged elsewhere. */
@@ -25,7 +26,7 @@ const slot = (id: string) => `${appKeyPart()}${id}`
 /** Uploads per person per window (#1842 S2). */
 export const UPLOADS_PER_WINDOW = 10
 export const UPLOAD_WINDOW_SECONDS = 5 * 60
-const uploadHits = new Map<string, { start: number; count: number }>()
+const uploadHits = registerAppKeyed(new Map<string, { start: number; count: number }>())
 
 export interface AskAttachment {
   id: string

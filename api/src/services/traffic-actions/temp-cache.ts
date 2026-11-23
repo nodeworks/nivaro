@@ -35,6 +35,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { SESSION_COOKIE } from '../../auth/session.js'
 import { logActivity } from '../activity.js'
+import { registerAppKeyed } from '../app-forget.js'
 import { currentStoreId, DEFAULT_STORE, tenantStoreId } from '../traffic-taps.js'
 import {
   activeRules,
@@ -209,7 +210,7 @@ const entries = new Map<string, Entry>()
 let totalBytes = 0
 /** `<store>|<collection>` → epoch; `<store>|*` → any-write epoch; ALL → access epoch (every
  *  entry depends on it). */
-const epochs = new Map<string, number>()
+const epochs = registerAppKeyed(new Map<string, number>())
 const local = new Map<string, { hit: number; miss: number; bypass: number; stored: number }>()
 const ALL = '#all'
 let trailing: NodeJS.Timeout | null = null

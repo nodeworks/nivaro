@@ -1,6 +1,7 @@
 import { adminBaseUrl } from '../admin-base.js'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { registerAppKeyed } from './app-forget.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
 /**
@@ -70,7 +71,7 @@ export function shapeRequestCard(
 // per tenant (cloud: the lookup reads the tenant's own request log, so one
 // tenant's answer never serves another).
 const MEMO_MS = 60_000
-const memo = new Map<string, { at: number; v: RequestCardDetails | null }>()
+const memo = registerAppKeyed(new Map<string, { at: number; v: RequestCardDetails | null }>())
 
 export const requestMemoKey = (id: string, tenant: string = currentTenantKey()): string =>
   `${tenant}|${id}`

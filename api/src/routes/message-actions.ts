@@ -5,6 +5,7 @@ import { db } from '../db/index.js'
 import { isSessionLike } from '../lib/auth-method.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { registerAppKeyed } from '../services/app-forget.js'
 import {
   type ApprovalLinkState,
   linkHeadline,
@@ -357,7 +358,7 @@ async function judgeDecision(
 /** Per-address cap on decision-link page loads (a link scanner or a guesser, not a person). */
 const LINK_VIEWS_PER_10_MIN = 120
 const LINK_STREAMS_PER_IP = 10
-const linkSigs = new Map<string, { at: number; sig: Promise<string | null> }>()
+const linkSigs = registerAppKeyed(new Map<string, { at: number; sig: Promise<string | null> }>())
 
 /** The reader's live setting (Calm / Off) when signed in; Normal otherwise. */
 async function liveModeOf(user: User | null): Promise<LiveMode> {

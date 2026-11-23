@@ -1,5 +1,6 @@
-import { Liquid } from 'liquidjs'
+import type { Liquid } from 'liquidjs'
 import { db } from '../db/index.js'
+import { registerAppKeyed } from './app-forget.js'
 import {
   currentTimezone,
   dayInZone,
@@ -17,7 +18,7 @@ import { currentTenantKey } from './tenant-rooms.js'
 // (liquid-dates.ts); with no database they count Eastern days.
 
 /** Per tenant (cloud tenants share this module): each tenant's own nivaro_blackout_dates. */
-const blackoutCache = new Map<string, { dates: Set<string>; loadedAt: number }>()
+const blackoutCache = registerAppKeyed(new Map<string, { dates: Set<string>; loadedAt: number }>())
 async function blackoutDates(): Promise<Set<string>> {
   const tenant = currentTenantKey()
   const hit = blackoutCache.get(tenant)

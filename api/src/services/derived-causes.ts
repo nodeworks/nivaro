@@ -1,5 +1,6 @@
 import type { Redis } from 'ioredis'
 import type { User } from '../types.js'
+import { registerAppKeyed } from './app-forget.js'
 import { getApp } from './io-holder.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
@@ -51,7 +52,9 @@ export const CAUSE_TTL_S = 7 * 24 * 3600
 const MEMORY_MAX = 2000
 const MAX_INPUTS = 6
 
-const memory = new Map<string, { expires: number; causes: Record<string, StoredCause> }>()
+const memory = registerAppKeyed(
+  new Map<string, { expires: number; causes: Record<string, StoredCause> }>()
+)
 
 const keyOf = (tenant: string, collection: string, id: string) =>
   `nvr:dcause:${tenant}:${collection}:${id}`

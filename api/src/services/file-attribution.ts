@@ -2,6 +2,7 @@ import { infoColumns, infoSelect } from '../db/dialect/users-ai-config.js'
 import { db } from '../db/index.js'
 import { runInBackgroundPool } from '../db/pool-context.js'
 import { sqlDialect } from '../db/sql-dialect.js'
+import { registerAppKeyed } from './app-forget.js'
 import {
   CONFIG_FILE_TABLES,
   extractFileIds,
@@ -98,7 +99,7 @@ interface TenantState {
   touched: number
 }
 
-const tenants = new Map<string, TenantState>()
+const tenants = registerAppKeyed(new Map<string, TenantState>())
 
 function state(): TenantState {
   const key = currentTenantKey()

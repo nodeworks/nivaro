@@ -1,4 +1,5 @@
 import { onOwnersChanged } from '../db/owner-signal.js'
+import { registerAppKeyed } from './app-forget.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
 /**
@@ -11,7 +12,9 @@ import { currentTenantKey } from './tenant-rooms.js'
  * Exposed to extensions as `ctx.pipelines.ownedItemIds` (Forecasts' Mine only).
  */
 const TTL_MS = 60_000
-const cache = new Map<string, { at: number; value: Promise<Map<string, string[]>> }>()
+const cache = registerAppKeyed(
+  new Map<string, { at: number; value: Promise<Map<string, string[]>> }>()
+)
 
 onOwnersChanged(() => cache.clear())
 

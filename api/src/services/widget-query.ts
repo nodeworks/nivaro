@@ -18,6 +18,7 @@ import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { sqlDialect } from '../db/sql-dialect.js'
 import { getTenantId } from '../db/tenant-context.js'
+import { registerAppKeyed } from './app-forget.js'
 import { customQueryCacheKey } from './custom-query-cache.js'
 import { applyScopeParams } from './custom-query-scope.js'
 import { substituteDialectOf, substituteParams } from './custom-query-substitute.js'
@@ -197,7 +198,7 @@ export async function runWidgetSql(
 // ── recorded param sets (what the warm replays) ──────────────────────────────
 
 const RECORD_EVERY_MS = 10 * 60_000
-const recorded = new Map<string, number>()
+const recorded = registerAppKeyed(new Map<string, number>())
 
 /**
  * Remember a cached widget's bound params (BEFORE scope injection — the

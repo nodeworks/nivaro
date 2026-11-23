@@ -1,5 +1,6 @@
 import type { Server, Socket } from 'socket.io'
 import type { User } from '../types.js'
+import { registerAppKeyed } from './app-forget.js'
 import {
   cachedPerson,
   cachedShareTicket,
@@ -78,7 +79,7 @@ function ticketOf(p: unknown): number | null {
 }
 
 /** A share read once per ~2 s per process while frames stream (the key holds the truth). */
-const shareCache = new Map<string, { v: ShareState | null; exp: number }>()
+const shareCache = registerAppKeyed(new Map<string, { v: ShareState | null; exp: number }>())
 
 export function __resetScreenShareSocket(): void {
   shareCache.clear()

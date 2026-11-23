@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { runInBackgroundPool } from '../db/pool-context.js'
+import { registerAppKeyed } from './app-forget.js'
 import { exportLimit, readExportLimit } from './export-limits.js'
 import { emitJobProgress } from './live-progress.js'
 import { currentTenantKey } from './tenant-rooms.js'
@@ -110,7 +111,7 @@ interface Duration {
   n: number
   at: number
 }
-const durations = new Map<string, Duration>()
+const durations = registerAppKeyed(new Map<string, Duration>())
 const MAX_DURATIONS = 2000
 const durationKey = (kind: string, subject: string) =>
   `${currentTenantKey()}|${kind}:${subject}`.slice(0, 200)

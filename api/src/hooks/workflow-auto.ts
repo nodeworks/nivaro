@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { registerAppKeyed } from '../services/app-forget.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
 import { deferEffect } from '../services/unit-of-work.js'
 import { parseConditionRules } from '../services/workflow-conditions.js'
@@ -24,7 +25,7 @@ type AutoState = {
   bound: { set: Set<string>; loadedAt: number } | null
   childWatch: { map: Map<string, ChildWatch[]>; loadedAt: number } | null
 }
-const autoStates = new Map<string, AutoState>()
+const autoStates = registerAppKeyed(new Map<string, AutoState>())
 function autoState(): AutoState {
   const key = currentTenantKey()
   let st = autoStates.get(key)

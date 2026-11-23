@@ -1,4 +1,5 @@
 import { runInBackgroundPool } from '../db/pool-context.js'
+import { registerAppKeyed } from './app-forget.js'
 import { liveModeNow } from './collection-live-mode.js'
 import { publishItemEvent } from './item-events.js'
 import { currentTenantKey } from './tenant-rooms.js'
@@ -228,14 +229,16 @@ export interface FanoutDeps {
   evaluateAlerts(collection: string, row: Record<string, unknown>, id: string): Promise<void>
 }
 
-const tenantCache = new Map<
-  string,
-  {
-    webhooks?: { at: number; v: Promise<OutsideWebhook[]> }
-    flows?: { at: number; v: Promise<OutsideFlow[]> }
-    alerts: Map<string, { at: number; v: Promise<boolean> }>
-  }
->()
+const tenantCache = registerAppKeyed(
+  new Map<
+    string,
+    {
+      webhooks?: { at: number; v: Promise<OutsideWebhook[]> }
+      flows?: { at: number; v: Promise<OutsideFlow[]> }
+      alerts: Map<string, { at: number; v: Promise<boolean> }>
+    }
+  >()
+)
 
 function cacheFor(tenant: string) {
   let c = tenantCache.get(tenant)

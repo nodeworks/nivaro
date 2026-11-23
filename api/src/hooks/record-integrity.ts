@@ -1,6 +1,7 @@
 import { AsyncResource } from 'node:async_hooks'
 import { db } from '../db/index.js'
 import { tenantState } from '../services/ai-tenant-state.js'
+import { registerAppKeyed } from '../services/app-forget.js'
 import { checkRecord, hasChecks, storeRecordResult } from '../services/config-conformance.js'
 import { noteDerivedWrite } from '../services/request-trace.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
@@ -105,7 +106,7 @@ async function parentsOf(collection: string): Promise<Array<{ parent: string; fk
   return st.cache.map.get(collection) ?? []
 }
 
-const checkable = new Map<string, { at: number; value: Promise<boolean> }>()
+const checkable = registerAppKeyed(new Map<string, { at: number; value: Promise<boolean> }>())
 function collectionHasChecks(collection: string): Promise<boolean> {
   const key = `${currentTenantKey()}\u0000${collection}`
   const hit = checkable.get(key)

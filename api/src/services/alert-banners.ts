@@ -1,6 +1,7 @@
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { ACTIVITY_PATTERN_KIND } from './activity-pattern-gate.js'
+import { registerAppKeyed } from './app-forget.js'
 import { CORE_EXT } from './core-switches.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
@@ -60,7 +61,7 @@ export interface AlertBanner {
 // ── Which definitions show banners ─────────────────────────────────────────
 
 // Per app (currentTenantKey()): each app on a shared deployment picks its own banners.
-const memos = new Map<string, { at: number; ids: Set<number> }>()
+const memos = registerAppKeyed(new Map<string, { at: number; ids: Set<number> }>())
 
 export function parseBannerIds(value: unknown): Set<number> {
   let raw: unknown = value

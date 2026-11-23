@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { registerAppKeyed } from './app-forget.js'
 import { accessSigFor } from './queue-snapshot-access.js'
 import { isUnowned, type QueueItem, type QueueRow } from './queues.js'
 import { compileAccessGates, visibleIds } from './record-access.js'
@@ -21,7 +22,7 @@ interface OwnerSet {
   at: number
   items: Promise<QueueItem[] | null>
 }
-const ownerSets = new Map<string, OwnerSet>()
+const ownerSets = registerAppKeyed(new Map<string, OwnerSet>())
 
 /** Test seam: forget cached owner sets. */
 export function resetViewerBadgeCache(): void {

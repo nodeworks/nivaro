@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import { getTenantId } from '../db/tenant-context.js'
+import { registerAppKeyed } from './app-forget.js'
 import { whereInList } from './db-batch.js'
 
 /**
@@ -18,7 +19,7 @@ interface ProbeState {
   at: number
   inflight: Promise<boolean> | null
 }
-const probes = new Map<string, ProbeState>()
+const probes = registerAppKeyed(new Map<string, ProbeState>())
 
 export async function hasResendColumns(): Promise<boolean> {
   const key = getTenantId() ?? ''

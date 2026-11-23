@@ -14,6 +14,7 @@
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { logActivity } from './activity.js'
+import { registerAppKeyed } from './app-forget.js'
 import {
   AUDIENCE_TABLE,
   type AudienceKind,
@@ -62,7 +63,7 @@ async function readRow(): Promise<{ id: number; data: Record<string, unknown> } 
 }
 
 // Per tenant: a cloud process serves many tenants' databases.
-const cache = new Map<string, { at: number; value: AudienceConfirmSettings }>()
+const cache = registerAppKeyed(new Map<string, { at: number; value: AudienceConfirmSettings }>())
 const TTL_MS = 30_000
 
 export function bustAudienceSettingsCache(): void {

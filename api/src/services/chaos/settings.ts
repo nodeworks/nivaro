@@ -1,4 +1,5 @@
 import { db } from '../../db/index.js'
+import { registerAppKeyed } from '../app-forget.js'
 import { instanceKey } from '../instance-key.js'
 import { currentTenantKey } from '../tenant-rooms.js'
 import { ChaosError } from './gate.js'
@@ -261,7 +262,7 @@ export function capsFor(settings: ChaosSettings, key = instanceKey()): ChaosEnvC
 
 // ── Storage (30 s cache per tenant; the PATCH route busts it) ─────────────────
 
-const cache = new Map<string, { at: number; value: ChaosSettings }>()
+const cache = registerAppKeyed(new Map<string, { at: number; value: ChaosSettings }>())
 let testOverride: ChaosSettings | null = null
 
 export function bustChaosSettingsCache(): void {

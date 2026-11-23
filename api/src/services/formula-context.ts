@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { registerAppKeyed } from './app-forget.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
 /**
@@ -8,10 +9,12 @@ import { currentTenantKey } from './tenant-rooms.js'
  */
 
 // Per app (currentTenantKey()): each app on a shared deployment has its own settings row.
-const cache = new Map<
-  string,
-  { at: number; value: { constants: Record<string, number>; fiscalStartMonth: number } }
->()
+const cache = registerAppKeyed(
+  new Map<
+    string,
+    { at: number; value: { constants: Record<string, number>; fiscalStartMonth: number } }
+  >()
+)
 const TTL = 60_000
 
 export async function getFormulaContext(): Promise<{

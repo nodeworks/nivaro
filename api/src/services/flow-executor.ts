@@ -5,6 +5,7 @@ import { db } from '../db/index.js'
 import { errorText } from '../lib/db-refusal.js'
 import { assertSafeUrl, fetchGuardedInCloud } from '../lib/ssrf.js'
 import { activityGroupKey, withActivityScope } from './activity-scope.js'
+import { registerAppKeyed } from './app-forget.js'
 import { appKey } from './app-keyed.js'
 import {
   protectTemplatePlaceholders,
@@ -1659,7 +1660,7 @@ const runningFlows = new Set<string>()
 
 // ── Flow error notifications (#622) ──────────────────────────────────────────
 // At most one notification per flow per hour, in-process, per app (appKey).
-const lastErrorNotifyAt = new Map<string, number>()
+const lastErrorNotifyAt = registerAppKeyed(new Map<string, number>())
 
 export async function resolveFlowCreator(flowId: string): Promise<string | null> {
   // nivaro_flows carries no creator column (base schema) — read one off the

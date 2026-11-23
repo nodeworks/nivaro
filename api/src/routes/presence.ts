@@ -4,6 +4,7 @@ import { config } from '../config.js'
 import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
+import { registerAppKeyed } from '../services/app-forget.js'
 import { withDeadlockRetry } from '../services/deadlock-retry.js'
 import { isMultiTenant } from '../services/deployment-mode.js'
 import { activeMasquerades } from '../services/masquerade-marker.js'
@@ -48,7 +49,7 @@ const DEFAULT_PING_INTERVAL = 10_000
 
 // Simple 30s in-process cache so every ping doesn't hit the DB. Per tenant: in cloud mode one
 // process serves many tenants, each with its own presence settings.
-const _cfg = new Map<string, { ttl: number; sweep: number; cachedAt: number }>()
+const _cfg = registerAppKeyed(new Map<string, { ttl: number; sweep: number; cachedAt: number }>())
 
 async function getPresenceCfg() {
   const now = Date.now()

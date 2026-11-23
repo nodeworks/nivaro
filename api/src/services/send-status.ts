@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { registerAppKeyed } from './app-forget.js'
 import { selectInChunks, whereInList } from './db-batch.js'
 import { answerDeadline, SENDING_STATUS } from './erp-unanswered.js'
 import { planRetries, type RetrySweep, type SweepSchedule } from './send-retry.js'
@@ -133,7 +134,7 @@ export function usualAnswerMs(
 }
 
 // Per tenant: api id → { at, ms }. One small read per partner per ten minutes.
-const usualCache = new Map<string, { at: number; ms: number | null }>()
+const usualCache = registerAppKeyed(new Map<string, { at: number; ms: number | null }>())
 
 async function usualAnswerFor(apiIds: number[]): Promise<Map<number, number | null>> {
   const out = new Map<number, number | null>()

@@ -2,6 +2,7 @@ import { approxRowCount, listColumnNames } from '../db/dialect/catalog.js'
 import { db } from '../db/index.js'
 import { likeCi } from '../db/sql-dialect.js'
 import { integrityChangedFor } from '../lib/integrity-notify.js'
+import { registerAppKeyed } from './app-forget.js'
 import { appKey, dropAppEntries } from './app-keyed.js'
 import { selectInChunks } from './db-batch.js'
 import { RowRuleLookupCache } from './field-rules.js'
@@ -216,7 +217,7 @@ function parseDay(v: unknown): number | null {
 }
 
 // Per app (appKey): apps on one shared deployment may sit at different schema versions.
-const physicalColsCache = new Map<string, Set<string>>()
+const physicalColsCache = registerAppKeyed(new Map<string, Set<string>>())
 async function hasPhysicalColumn(table: string, column: string): Promise<boolean> {
   const key = appKey(table)
   let cols = physicalColsCache.get(key)
@@ -1703,7 +1704,7 @@ interface Compiled {
 }
 // Per app (appKey): one shared-deployment process judges many apps' records, each by its own
 // field config and layouts.
-const compiledCache = new Map<string, { at: number; value: Promise<Compiled> }>()
+const compiledCache = registerAppKeyed(new Map<string, { at: number; value: Promise<Compiled> }>())
 const COMPILED_FRESH_MS = 5 * 60_000
 /** Drop compiled checks: inside an app only that app's, outside any app every app's. */
 export function bustCompiledChecks(collection?: string): void {

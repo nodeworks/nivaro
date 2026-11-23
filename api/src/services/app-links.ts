@@ -2,6 +2,7 @@ import type { LinkKind, LinkRegistration } from '@nivaro/extension-kit'
 import { adminBaseUrl } from '../admin-base.js'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
+import { registerAppKeyed } from './app-forget.js'
 import { appKey, dropAppEntries } from './app-keyed.js'
 import { overlaySettings } from './settings-overrides.js'
 import { currentTenantKey } from './tenant-rooms.js'
@@ -50,7 +51,9 @@ export function registerPortalLinks(reg: LinkRegistration): void {
 }
 
 // Per app: on a shared deployment each app has its own portal (keyed by currentTenantKey()).
-const settingsCache = new Map<string, { at: number; value: LinkRegistration | null }>()
+const settingsCache = registerAppKeyed(
+  new Map<string, { at: number; value: LinkRegistration | null }>()
+)
 /** Drop the cached portal settings: the current app's, or every app's outside one. */
 export function bustPortalLinkCache(): void {
   const app = currentTenantKey()
@@ -106,7 +109,7 @@ function fill(template: string, params: LinkParams): string {
 }
 
 // Per app (appKey): two apps on one shared deployment may hold the same user id or address.
-const appCache = new Map<string, { at: number; app: 'portal' | 'admin' }>()
+const appCache = registerAppKeyed(new Map<string, { at: number; app: 'portal' | 'admin' }>())
 
 /** Entries kept per cache across every app (people x apps grows without end otherwise; Hub
  *  phase 6 Task 22). Each answer lives 60 s, so a cut entry is only read again sooner. */
@@ -163,7 +166,7 @@ export function bustAppCache(userId?: string): void {
   dropAppEntries(emailCache)
 }
 
-const emailCache = new Map<string, { at: number; id: string | null }>()
+const emailCache = registerAppKeyed(new Map<string, { at: number; id: string | null }>())
 /** The user behind an address — a mail sent BY EMAIL (flow ops, raw sends)
  *  still resolves its links and footer for the person, when there is one.
  *  Only a single, exact, active address matches; anything else is null. */

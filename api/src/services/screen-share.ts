@@ -27,6 +27,7 @@
  * watcher's first look are written to the ticket's history (nivaro_activity).
  */
 import { db } from '../db/index.js'
+import { registerAppKeyed } from './app-forget.js'
 
 // Mirrors support-tickets.ts (importing it here would pull the socket plugin into a cycle).
 const SUPPORT_KIND = 'support'
@@ -359,8 +360,10 @@ export async function readWatchers(
 
 const TICKET_TTL_MS = 5_000
 const PERSON_TTL_MS = 10_000
-const ticketCache = new Map<string, { v: ShareTicket | null; exp: number }>()
-const personCache = new Map<string, { v: { active: boolean; teams: number[] }; exp: number }>()
+const ticketCache = registerAppKeyed(new Map<string, { v: ShareTicket | null; exp: number }>())
+const personCache = registerAppKeyed(
+  new Map<string, { v: { active: boolean; teams: number[] }; exp: number }>()
+)
 
 function capped<K, V>(m: Map<K, V>): Map<K, V> {
   if (m.size > 2_000) m.clear()

@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { registerAppKeyed } from './app-forget.js'
 import { parseRoom } from './chat.js'
 import { roomTypes } from './chat-records.js'
 import { emitRecordEvent } from './record-events.js'
@@ -28,7 +29,7 @@ const CACHE_MAX = 500
 /** Two records sharing one token is a data problem; never fan out past a few. */
 const MAX_RECORDS = 3
 
-const cache = new Map<string, { at: number; refs: RoomRecordRef[] }>()
+const cache = registerAppKeyed(new Map<string, { at: number; refs: RoomRecordRef[] }>())
 
 export interface RecordChatDeps {
   types: () => Promise<Array<{ prefix: string; collection: string; match_field: string }>>

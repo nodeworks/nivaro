@@ -5,6 +5,7 @@ import { db } from '../db/index.js'
 import { emitNotification } from '../plugins/socketio.js'
 import { getAiClient, getAiModelSettings } from '../services/ai-client.js'
 import { asData, UNTRUSTED_DATA_RULE } from '../services/ai-untrusted.js'
+import { registerAppKeyed } from '../services/app-forget.js'
 import { chainFields } from '../services/chain-columns.js'
 import { embedText, getEmbeddableFields, searchEmbeddings } from '../services/embeddings.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
@@ -89,7 +90,9 @@ export interface AiCollectionSettings {
 
 const CACHE_TTL_MS = 60_000
 // Keyed by tenant + collection: cloud mode serves many tenants from one process.
-const settingsCache = new Map<string, { value: AiCollectionSettings; expires: number }>()
+const settingsCache = registerAppKeyed(
+  new Map<string, { value: AiCollectionSettings; expires: number }>()
+)
 const settingsKey = (collection: string) => `${currentTenantKey()}|${collection}`
 
 export const AI_SETTINGS_DEFAULTS: Omit<AiCollectionSettings, 'collection'> = {

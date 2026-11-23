@@ -1,3 +1,4 @@
+import { registerAppKeyed } from './app-forget.js'
 import { journaledEmit } from './event-journal.js'
 import { mergeUpdates } from './socket-transport.js'
 import { currentTenantKey, tenantScopedRoom } from './tenant-rooms.js'
@@ -37,8 +38,8 @@ export function parseLiveMode(browserConfig: unknown): LiveMode {
   return v === 'off' || v === 'batched' ? v : 'on'
 }
 
-const cache = new Map<string, { mode: LiveMode; at: number }>()
-const loading = new Map<string, Promise<LiveMode>>()
+const cache = registerAppKeyed(new Map<string, { mode: LiveMode; at: number }>())
+const loading = registerAppKeyed(new Map<string, Promise<LiveMode>>())
 const keyOf = (collection: string, tenant = currentTenantKey()) => `${tenant}\u0000${collection}`
 
 function load(collection: string): Promise<LiveMode> {
@@ -192,7 +193,7 @@ interface Rate {
   /** Batching until this second has passed under the rate. */
   hot: boolean
 }
-const rates = new Map<string, Rate>()
+const rates = registerAppKeyed(new Map<string, Rate>())
 
 /**
  * Count one write to `collection` and say whether it should go out batched. The write that
