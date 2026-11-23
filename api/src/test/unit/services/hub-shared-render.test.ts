@@ -150,7 +150,7 @@ describe('renderSharedSpec', () => {
     expect(sharedRoles('small')).toEqual(spec.roles)
   })
 
-  it('medium and large split the roles: web, worker (the only cron ticker), importer', () => {
+  it('medium and large split the roles: web, worker (the only cron ticker), importer, exporter', () => {
     for (const [size, web] of [
       ['medium', 2],
       ['large', 3]
@@ -159,7 +159,8 @@ describe('renderSharedSpec', () => {
       expect(spec.roles, size).toEqual([
         { role: 'web', replicas: web, cpus: 2, memory_mb: 4096, env: { CRON_TICKS: 'off' } },
         { role: 'worker', replicas: 1, cpus: 2, memory_mb: 4096 },
-        { role: 'importer', replicas: 1, cpus: 2, memory_mb: 4096 }
+        { role: 'importer', replicas: 1, cpus: 2, memory_mb: 4096 },
+        { role: 'exporter', replicas: 1, cpus: 2, memory_mb: 4096 }
       ])
       expect(spec.roles.some((r) => r.role === 'all' || r.role === 'realtime')).toBe(false)
       // Every role serves every app: one env block (the deployment key included), one set of
@@ -167,10 +168,11 @@ describe('renderSharedSpec', () => {
       expect(spec.env.HUB_SHARED_DEPLOYMENT).toBe('shared-one')
       for (const r of spec.roles)
         expect(Object.keys(r.env ?? {}).every((k) => k === 'CRON_TICKS')).toBe(true)
-      // The worker is the one role that ticks crons: the importer is role-gated (cron-ticks.ts),
-      // every other role says CRON_TICKS=off.
-      for (const r of spec.roles)
-        if (r.role !== 'worker' && r.role !== 'importer') expect(r.env?.CRON_TICKS).toBe('off')
+      // The worker is the one role that ticks crons: the importer and the exporter are
+      // role-gated (cron-ticks.ts), every other role says CRON_TICKS=off.
+      for (const r of spec.roles) if (r.role === 'web') expect(r.env?.CRON_TICKS).toBe('off')
+      for (const r of ['importer', 'exporter'])
+        expect(spec.roles.find((x) => x.role === r)?.env).toBeUndefined()
       expect(spec.roles.find((r) => r.role === 'worker')?.env).toBeUndefined()
     }
   })

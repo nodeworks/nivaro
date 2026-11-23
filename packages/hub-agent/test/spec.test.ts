@@ -514,11 +514,25 @@ describe('validateStackSpec — roles, replicas, limits', () => {
       )
     ).toBe('ROLE_BAD')
   })
-  for (const role of ['exporter', 'admin', 'redis', 'WEB', '', 7]) {
+  for (const role of ['canary', 'admin', 'redis', 'WEB', 'Exporter', '', 7]) {
     it(`refuses role ${JSON.stringify(role)}`, () => {
       expect(codeOf(roles([{ role, replicas: 1 }]), 'roles[0].role')).toBe('ROLE_BAD')
     })
   }
+  it('Task 15: accepts an exporter role (NIVARO_ROLE=exporter) beside the others, optional', () => {
+    const large = [
+      { role: 'web', replicas: 3, env: { SOCKETS: 'off' } },
+      { role: 'worker', replicas: 1 },
+      { role: 'realtime', replicas: 2 },
+      { role: 'importer', replicas: 1 },
+      { role: 'exporter', replicas: 1, cpus: 2, memory_mb: 4096 }
+    ]
+    const r = validateStackSpec(roles(large), cfg())
+    expect(r).toMatchObject({ ok: true })
+    if (r.ok) expect(r.spec.roles).toEqual(large)
+    // Without one, as before.
+    expect(validateStackSpec(roles(large.slice(0, 4)), cfg()).ok).toBe(true)
+  })
   for (const replicas of [-1, 11, 1.5, '2', null]) {
     it(`refuses replicas ${JSON.stringify(replicas)}`, () => {
       expect(codeOf(roles([{ role: 'web', replicas }]), 'roles[0].replicas')).toBe('REPLICAS_BAD')
@@ -1066,8 +1080,43 @@ describe('validateStackSpec — shared deployment owners (phase 6)', () => {
     expect(validateStackSpec({ ...base(), roles: noWorker }, cfg()).ok).toBe(true)
   })
 
+  it('Task 15: a shared split may add an exporter; it is optional, and never enough alone', () => {
+    const limits = { cpus: 2, memory_mb: 4096 }
+    for (const roles of [
+      [
+        { role: 'web', replicas: 2, ...limits, env: { CRON_TICKS: 'off' } },
+        { role: 'worker', replicas: 1, ...limits },
+        { role: 'importer', replicas: 1, ...limits },
+        { role: 'exporter', replicas: 1, ...limits }
+      ],
+      [
+        { role: 'web', replicas: 2, ...limits, env: { CRON_TICKS: 'off' } },
+        { role: 'worker', replicas: 1, ...limits },
+        { role: 'exporter', replicas: 1, ...limits }
+      ]
+    ]) {
+      const r = validateStackSpec(shared({ roles }), cfg())
+      expect(r, JSON.stringify(roles)).toMatchObject({ ok: true })
+      if (r.ok) expect(r.spec.roles).toEqual(roles)
+    }
+    expect(codeOf(shared({ roles: [{ role: 'exporter', replicas: 1 }] }), 'roles')).toBe(
+      'ROLE_NOT_SHARED'
+    )
+    expect(
+      codeOf(
+        shared({
+          roles: [
+            { role: 'web', replicas: 2 },
+            { role: 'exporter', replicas: 1 }
+          ]
+        }),
+        'roles'
+      )
+    ).toBe('ROLE_NOT_SHARED')
+  })
+
   it('Task 14: a role outside the set is still refused on a shared owner', () => {
-    for (const role of ['exporter', 'canary', 'WEB', '', 7]) {
+    for (const role of ['canary', 'admin', 'WEB', '', 7]) {
       const roles = [
         { role: 'web', replicas: 1 },
         { role: 'worker', replicas: 1 },

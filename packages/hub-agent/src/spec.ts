@@ -8,7 +8,7 @@ import { parsePinned } from './image-ref.js'
 import { KNOWN_ENV_KEYS } from './known-env.js'
 import { ENV_KEY_RE } from './names.js'
 
-export type Role = 'all' | 'web' | 'worker' | 'realtime' | 'importer'
+export type Role = 'all' | 'web' | 'worker' | 'realtime' | 'importer' | 'exporter'
 
 export type RoleSpec = {
   role: Role
@@ -83,7 +83,8 @@ export type SpecResult = { ok: true; spec: StackSpec } | { ok: false; fields: Fi
 /** owner.app / owner.shared / environment. */
 export const OWNER_KEY_RE = /^[a-z][a-z0-9-]{1,62}$/
 export const EXTENSION_ID_RE = /^[a-z0-9][a-z0-9-]{0,62}$/
-export const ROLES: readonly Role[] = ['all', 'web', 'worker', 'realtime', 'importer']
+// `exporter` (Nivaro NIVARO_ROLE=exporter, 0.3.184+): background exports only, never routed.
+export const ROLES: readonly Role[] = ['all', 'web', 'worker', 'realtime', 'importer', 'exporter']
 export const ROLE_ENV_KEYS: readonly string[] = [
   'SOCKETS',
   'CRON_TICKS',
@@ -541,7 +542,8 @@ export function validateStackSpec(body: unknown, cfg: SpecConfig): SpecResult {
     if (seen.has('all') && body.roles.length > 1) bad('roles', 'ROLE_BAD')
     // Task 14: a shared stack is `all` alone, or a split with a `web` (someone serves the apps)
     // and a `worker` (the role that ticks every app's crons: its scheduled jobs, its import
-    // fan-out). Checked only when every role was readable (a bad one has its own code).
+    // fan-out); `importer` and `exporter` are optional beside them (Task 15). Checked only when
+    // every role was readable (a bad one has its own code).
     else if (
       sharedKey !== null &&
       seen.size === body.roles.length &&

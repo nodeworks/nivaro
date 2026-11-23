@@ -52,7 +52,7 @@ export const HUB_NAME_PREFIX = 'nvh_'
 const STACK_PART = '[a-z][a-z0-9-]{0,40}'
 /** `<stack>_<role>`: every service the agent creates. */
 export const HUB_SERVICE_NAME_RE = new RegExp(
-  `^(${STACK_PART})_(all|web|worker|realtime|importer|redis)$`
+  `^(${STACK_PART})_(all|web|worker|realtime|importer|exporter|redis)$`
 )
 /** `nvh_<stack>` (network) or `nvh_<stack>_<rest>` (secrets, volumes, containers). */
 export const HUB_OBJECT_NAME_RE = new RegExp(`^nvh_(${STACK_PART})(?:_[A-Za-z0-9_.@-]+)?$`)

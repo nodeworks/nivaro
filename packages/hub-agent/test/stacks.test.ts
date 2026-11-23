@@ -235,6 +235,20 @@ describe('applyStack on an empty swarm', () => {
     expect([...fake.secrets.values()].map((s) => s.Spec.Name)).toContain(oldName)
   })
 
+  it('Task 15: an exporter is created with the stack and removed when a spec drops it', async () => {
+    const roles: StackSpec['roles'] = [
+      { role: 'web', replicas: 2 },
+      { role: 'worker', replicas: 1 },
+      { role: 'exporter', replicas: 1 }
+    ]
+    await applyStack(fake, cfg, S, spec({ roles }), deps)
+    expect(fake.serviceNames()).toEqual([`${S}_exporter`, `${S}_redis`, `${S}_web`, `${S}_worker`])
+    await applyStack(fake, cfg, S, spec({ roles: roles.slice(0, 2) }), deps)
+    expect(fake.serviceNames()).toEqual([`${S}_redis`, `${S}_web`, `${S}_worker`])
+    const deletes = fake.calls.filter((c) => c.method === 'DELETE').map((c) => c.path)
+    expect(deletes).toContain(`/services/${S}_exporter`)
+  })
+
   it('a large → small change removes the services no longer rendered', async () => {
     const large = spec({
       roles: [

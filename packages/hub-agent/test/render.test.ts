@@ -105,6 +105,25 @@ describe('renderServices — services and env', () => {
     }
   })
 
+  it('Task 15: an exporter is a plain internal service: NIVARO_ROLE=exporter, the uploads volume, no edge', () => {
+    const roles = [
+      ...large().roles,
+      { role: 'exporter' as const, replicas: 1, cpus: 2, memory_mb: 4096 }
+    ]
+    const svcs = renderServices('st', large({ roles }), cfg(), ctx())
+    const ex = byName(svcs, 'st_exporter')
+    const imp = byName(svcs, 'st_importer')
+    expect(envOf(ex).NIVARO_ROLE).toBe('exporter')
+    expect(envOf(ex).STORAGE_LOCAL_ROOT).toBe('/app/uploads')
+    // The same mounts, networks and limits shape as the importer: it writes the person's file to
+    // the uploads volume the web tasks serve it from.
+    expect(ex.TaskTemplate.ContainerSpec.Mounts).toEqual(imp.TaskTemplate.ContainerSpec.Mounts)
+    expect(ex.TaskTemplate.Networks).toEqual([{ Target: 'nvh_st' }])
+    expect(ex.TaskTemplate.Resources).toEqual(imp.TaskTemplate.Resources)
+    expect(Object.keys(ex.Labels).some((k) => k.startsWith('traefik.'))).toBe(false)
+    expect(ex.EndpointSpec).toBeUndefined()
+  })
+
   it("'all' gets no NIVARO_ROLE; external redis adds no service and no REDIS_URL", () => {
     const small = large({ roles: [{ role: 'all', replicas: 1 }], redis: 'external' })
     const svcs = renderServices('st', small, cfg(), ctx())

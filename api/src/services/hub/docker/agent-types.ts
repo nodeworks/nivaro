@@ -7,7 +7,7 @@
 /** The agent API version this Hub speaks. `GET /v1/health` answering another one is refused. */
 export const AGENT_API_VERSION = 1
 
-export type StackRoleName = 'all' | 'web' | 'worker' | 'realtime' | 'importer'
+export type StackRoleName = 'all' | 'web' | 'worker' | 'realtime' | 'importer' | 'exporter'
 
 export interface StackRole {
   role: StackRoleName

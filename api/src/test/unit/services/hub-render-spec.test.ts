@@ -37,9 +37,11 @@ const withRow = (over: Partial<StackSettingsRow>) =>
 
 describe('templateFor', () => {
   it('picks the highest template at or below the version', () => {
-    expect(templateFor('0.3.208')).toBe(STACK_TEMPLATES.find((t) => t.from === '0.3.0'))
+    expect(templateFor('0.3.183')).toBe(STACK_TEMPLATES.find((t) => t.from === '0.3.0'))
     expect(templateFor('0.3.0').from).toBe('0.3.0')
-    expect(templateFor('1.0.0').from).toBe('0.3.0')
+    expect(templateFor('0.3.184').from).toBe('0.3.184')
+    expect(templateFor('0.3.208').from).toBe('0.3.184')
+    expect(templateFor('1.0.0').from).toBe('0.3.184')
   })
 
   it('refuses a version below every template with TEMPLATE_NONE', () => {
@@ -47,7 +49,7 @@ describe('templateFor', () => {
   })
 
   it('has the Decision 7 sizes', () => {
-    const t = templateFor('0.3.208').sizes
+    const t = templateFor('0.3.183').sizes
     expect(t.small).toEqual([{ role: 'all', replicas: 1, cpus: 2, memory_mb: 3072 }])
     expect(t.medium).toEqual([
       { role: 'web', replicas: 2, cpus: 2, memory_mb: 3072 },
@@ -58,6 +60,18 @@ describe('templateFor', () => {
       { role: 'worker', replicas: 1, cpus: 2, memory_mb: 4096 },
       { role: 'realtime', replicas: 2, cpus: 1, memory_mb: 1024 },
       { role: 'importer', replicas: 1, cpus: 2, memory_mb: 4096 }
+    ])
+  })
+
+  it('Task 15: from 0.3.184 (NIVARO_ROLE=exporter) large adds an exporter; small and medium unchanged', () => {
+    const before = templateFor('0.3.183').sizes
+    const t = templateFor('0.3.208').sizes
+    expect(t.small).toEqual(before.small)
+    expect(t.medium).toEqual(before.medium)
+    // Limits like the importer's; one replica; no role env (it ticks no crons by its role).
+    expect(t.large).toEqual([
+      ...before.large,
+      { role: 'exporter', replicas: 1, cpus: 2, memory_mb: 4096 }
     ])
   })
 })
@@ -126,7 +140,8 @@ describe('renderStackSpec', () => {
       'webx3',
       'workerx1',
       'realtimex2',
-      'importerx1'
+      'importerx1',
+      'exporterx1'
     ])
     spec.roles[0].replicas = 9
     if (spec.roles[0].env) spec.roles[0].env.SOCKETS = 'on'

@@ -563,7 +563,8 @@ describe('Task 14: the role split is a normal shared upgrade', () => {
     expect(plan.roles).toEqual([
       { role: 'web', replicas: 2 },
       { role: 'worker', replicas: 1 },
-      { role: 'importer', replicas: 1 }
+      { role: 'importer', replicas: 1 },
+      { role: 'exporter', replicas: 1 }
     ])
     expect(plan.roles_from).toBeNull()
     expect(codes(plan.warnings)).not.toContain('ROLES_CHANGE')
@@ -576,9 +577,9 @@ describe('Task 14: the role split is a normal shared upgrade', () => {
     await success(id, { plan: {}, image: `nodeworks/nivaro@${DIGEST}`, extensions: {} })
     const plan = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', planDeps())
     expect(plan.roles_from).toEqual(['all'])
-    expect(names(plan.roles)).toEqual(['web', 'worker', 'importer'])
+    expect(names(plan.roles)).toEqual(['web', 'worker', 'importer', 'exporter'])
     const w = plan.warnings.find((x) => x.code === 'ROLES_CHANGE')
-    expect(w?.text).toContain('adds web, worker, importer')
+    expect(w?.text).toContain('adds web, worker, importer, exporter')
     expect(w?.text).toContain('removes all')
     expect(plan.blockers).toEqual([])
   })
@@ -591,12 +592,13 @@ describe('Task 14: the role split is a normal shared upgrade', () => {
         roles: [
           { role: 'web', replicas: 2 },
           { role: 'worker', replicas: 1 },
-          { role: 'importer', replicas: 1 }
+          { role: 'importer', replicas: 1 },
+          { role: 'exporter', replicas: 1 }
         ]
       }
     })
     const same = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', planDeps())
-    expect(same.roles_from).toEqual(['web', 'worker', 'importer'])
+    expect(same.roles_from).toEqual(['web', 'worker', 'importer', 'exporter'])
     expect(codes(same.warnings)).not.toContain('ROLES_CHANGE')
     await db('nivaro_hub_shared_deployments')
       .where({ id })
@@ -605,8 +607,28 @@ describe('Task 14: the role split is a normal shared upgrade', () => {
     expect(names(back.roles)).toEqual(['all'])
     const w = back.warnings.find((x) => x.code === 'ROLES_CHANGE')
     expect(w?.text).toContain('adds all')
-    expect(w?.text).toContain('removes web, worker, importer')
+    expect(w?.text).toContain('removes web, worker, importer, exporter')
     expect(back.plan_hash).not.toBe(same.plan_hash)
+  })
+
+  it('Task 15: a stack that runs the Task 14 split gains the exporter only through an upgrade', async () => {
+    const id = await newShared({ settings: JSON.stringify({ size: 'medium' }) })
+    await newApp(id, [{ key: 'production', placed: true }])
+    await success(id, {
+      plan: {
+        roles: [
+          { role: 'web', replicas: 2 },
+          { role: 'worker', replicas: 1 },
+          { role: 'importer', replicas: 1 }
+        ]
+      }
+    })
+    const plan = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', planDeps())
+    expect(plan.roles_from).toEqual(['web', 'worker', 'importer'])
+    expect(names(plan.roles)).toEqual(['web', 'worker', 'importer', 'exporter'])
+    const w = plan.warnings.find((x) => x.code === 'ROLES_CHANGE')
+    expect(w?.text).toContain('(size medium): adds exporter.')
+    expect(plan.blockers).toEqual([])
   })
 
   it('the run applies the split and records the roles it deployed', async () => {
@@ -622,11 +644,11 @@ describe('Task 14: the role split is a normal shared upgrade', () => {
     expect(out.failed).toBeNull()
     expect(row?.status).toBe('success')
     expect(codes(plan.warnings)).toContain('ROLES_CHANGE')
-    expect(names(f.applied[0].roles)).toEqual(['web', 'worker', 'importer'])
+    expect(names(f.applied[0].roles)).toEqual(['web', 'worker', 'importer', 'exporter'])
     expect(f.applied[0].roles[0]).toMatchObject({ replicas: 3, env: { CRON_TICKS: 'off' } })
     // The next plan reads the roles this run recorded: nothing changes any more.
     const next = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', planDeps())
-    expect(next.roles_from).toEqual(['web', 'worker', 'importer'])
+    expect(next.roles_from).toEqual(['web', 'worker', 'importer', 'exporter'])
     expect(codes(next.warnings)).not.toContain('ROLES_CHANGE')
   })
 })
@@ -672,6 +694,34 @@ describe('Task 14 ruling I2: only an upgrade changes the roles; every apply reco
     expect(codes(plan.warnings)).toContain('ROLES_CHANGE')
   })
 
+  it('Task 15: a re-apply of a stack that runs web, worker, importer keeps it (no exporter)', async () => {
+    const id = await newShared({ settings: JSON.stringify({ size: 'large' }) })
+    await db('nivaro_hub_shared_deploys').insert({
+      shared_deployment_id: id,
+      kind: 'upgrade',
+      version: '0.3.209',
+      status: 'success',
+      plan: JSON.stringify({
+        plan: {
+          roles: [
+            { role: 'web', replicas: 3 },
+            { role: 'worker', replicas: 1 },
+            { role: 'importer', replicas: 1 }
+          ]
+        },
+        image: `nodeworks/nivaro@${DIGEST}`,
+        extensions: {}
+      })
+    })
+    const { f, deployId } = await reapply(id)
+    expect(names(f.applied[0].roles)).toEqual(['web', 'worker', 'importer'])
+    expect(await recordedRoles(deployId)).toEqual([
+      { role: 'web', replicas: 3 },
+      { role: 'worker', replicas: 1 },
+      { role: 'importer', replicas: 1 }
+    ])
+  })
+
   it('a re-apply with nothing recorded at all renders the pre-split shape', async () => {
     const id = await newShared({ settings: JSON.stringify({ size: 'large' }) })
     const { f } = await reapply(id)
@@ -699,7 +749,8 @@ describe('Task 14 ruling I2: only an upgrade changes the roles; every apply reco
     expect(await recordedRoles(row?.id as number)).toEqual([
       { role: 'web', replicas: 2 },
       { role: 'worker', replicas: 1 },
-      { role: 'importer', replicas: 1 }
+      { role: 'importer', replicas: 1 },
+      { role: 'exporter', replicas: 1 }
     ])
     const next = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', planDeps())
     expect(codes(next.warnings)).not.toContain('ROLES_CHANGE')
@@ -714,7 +765,7 @@ describe('Task 14 ruling I2: only an upgrade changes the roles; every apply reco
     const r = await Run.startSharedReapply(shared as NonNullable<typeof shared>, 'admin-1', d2)
     expect(r.started).toBe(true)
     await Run.awaitSharedUpgrade(r.shared_deploy_id as number)
-    expect(names(g.applied[0].roles)).toEqual(['web', 'worker', 'importer'])
+    expect(names(g.applied[0].roles)).toEqual(['web', 'worker', 'importer', 'exporter'])
     expect(g.applied[0].roles[0]).toMatchObject({ replicas: 2, env: { CRON_TICKS: 'off' } })
   })
 })

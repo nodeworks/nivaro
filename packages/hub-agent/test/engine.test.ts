@@ -210,6 +210,18 @@ const ALLOWED_CALLS: Array<[string, string, Record<string, unknown>?]> = [
   ['GET', `/containers/${UNPACK}/json`]
 ]
 
+describe('Task 15: the exporter service', () => {
+  it('`<stack>_exporter` is a Hub service name the guard lets through; an unknown role is not', async () => {
+    const engine = createEngine(cfg, transport)
+    const body = { ...service(), Name: 's_exporter' }
+    const r = await engine.call('POST', '/services/create', { body } as never)
+    expect(r.status).toBeLessThan(500)
+    await expect(
+      engine.call('POST', '/services/create', { body: { ...service(), Name: 's_canary' } } as never)
+    ).rejects.toThrow(EngineForbiddenError)
+  })
+})
+
 describe('P4-34: pinned images with an informational tag', () => {
   it('a service image repo:tag@sha256 from the allow-list passes the guard; a tag alone does not', async () => {
     const engine = createEngine(cfg, transport)

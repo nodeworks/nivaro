@@ -17,8 +17,11 @@ import type { SharedDeployment } from './store.js'
  *    every process serves, ticks crons through the leader lease and drains its own hand-offs).
  *    Medium and large split it as a dedicated stack does (docker/templates.ts): `web` (CRON_TICKS
  *    off), `worker` (the only role that ticks crons, so every app's scheduled jobs and its 10 s
- *    import fan-out tick there) and `importer` (drains every app's staged imports: the
- *    deployment's kicks and its own per-app pass, services/staged-import-worker.ts). Every role
+ *    import fan-out tick there), `importer` (drains every app's staged imports: the
+ *    deployment's kicks and its own per-app pass, services/staged-import-worker.ts) and
+ *    `exporter` (Task 15: runs every app's background exports the same way, kicks plus its own
+ *    per-app pass, services/export-worker.ts; while it is down each app's importer, then the
+ *    worker, run them). Every role
  *    serves every app: one env block, one set of secrets, the role by NIVARO_ROLE (the agent).
  *    Still no `realtime` role: the API refuses NIVARO_ROLE=realtime on a deployment that serves
  *    many apps (index.ts, realtime-server.ts) and keeps sockets on every process there
@@ -91,11 +94,12 @@ const SHARED_ROLE_SHAPE: Partial<
   Record<SharedRole['role'], Omit<SharedRole, 'role' | 'replicas'>>
 > = {
   all: {},
-  // CRON_TICKS=off: the worker is the only process that ticks crons; the importer ticks none
-  // by its role (services/cron-ticks.ts).
+  // CRON_TICKS=off: the worker is the only process that ticks crons; the importer and the
+  // exporter tick none by their role (services/cron-ticks.ts).
   web: { env: { CRON_TICKS: 'off' } },
   worker: {},
-  importer: {}
+  importer: {},
+  exporter: {}
 }
 
 /** One role of a shared stack: 2 CPUs and 4 GB per replica, plus its role env. A fresh object. */
@@ -109,11 +113,11 @@ function sharedRole(role: SharedRole['role'], replicas: number): SharedRole {
 /**
  * THE list of roles a shared stack runs, per size (Task 14). Replicas and CPUs mirror the
  * dedicated template (docker/templates.ts); memory is the shared per-replica 4 GB. A role added
- * later (the exporter) goes here and in SHARED_ROLE_SHAPE, nowhere else.
+ * later goes here and in SHARED_ROLE_SHAPE, nowhere else.
  *  - small: one `all` process — exactly the stack before the split (its spec hash is pinned).
- *  - medium: web ×2, worker ×1, importer ×1.
- *  - large: web ×3, worker ×1, importer ×1. (A dedicated large stack also runs `realtime` ×2 with
- *    web SOCKETS=off; a shared one cannot yet — see the header.)
+ *  - medium: web ×2, worker ×1, importer ×1, exporter ×1.
+ *  - large: web ×3, worker ×1, importer ×1, exporter ×1. (A dedicated large stack also runs
+ *    `realtime` ×2 with web SOCKETS=off; a shared one cannot yet — see the header.)
  * Only an upgrade moves a deployment to this shape (its plan says ROLES_CHANGE); a re-apply keeps
  * the shape the deployment runs (deployedSharedRoles in upgrade-plan.ts). A fresh copy per call.
  */
@@ -122,7 +126,8 @@ export function sharedRoles(size: StackSize): StackSpec['roles'] {
   return [
     sharedRole('web', size === 'large' ? 3 : 2),
     sharedRole('worker', 1),
-    sharedRole('importer', 1)
+    sharedRole('importer', 1),
+    sharedRole('exporter', 1)
   ]
 }
 
