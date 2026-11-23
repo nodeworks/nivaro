@@ -1572,3 +1572,23 @@ describe('final review M-1: the run renews its shared lock strictly', () => {
     expect(row?.error).toMatch(/LOCK_LOST/)
   })
 })
+
+describe('final review M-8: a rollback says the schema stays ahead', () => {
+  it('ROLLBACK_SCHEMA_AHEAD names both versions; an upgrade never carries it', async () => {
+    const id = await newShared({ version_pin: '0.3.210' })
+    await newApp(id, [{ key: 'production', placed: true }])
+    await db('nivaro_hub_shared_deploys').insert({
+      shared_deployment_id: id,
+      kind: 'upgrade',
+      version: '0.3.209',
+      status: 'success',
+      plan: JSON.stringify({ image: `nodeworks/nivaro@sha256:${'7'.repeat(64)}`, extensions: {} })
+    })
+    const plan = await Plan.planSharedUpgrade(id, '0.3.209', 'rollback', planDeps())
+    const w = plan.warnings.find((x) => x.code === 'ROLLBACK_SCHEMA_AHEAD')
+    expect(w?.text).toContain('0.3.210')
+    expect(w?.text).toContain('0.3.209')
+    const up = await Plan.planSharedUpgrade(id, '0.3.211', 'upgrade', planDeps())
+    expect(codes(up.warnings)).not.toContain('ROLLBACK_SCHEMA_AHEAD')
+  })
+})

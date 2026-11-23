@@ -56,7 +56,8 @@ import { type SharedTenantRow, tenantsOf } from './tenants.js'
  * EXTENSION_MISSING (final review I-4) — the app uses an extension the deployment does not load;
  * never overridable, checked for every kind.
  *
- * Warnings: HUB_URL_PROBLEM (the Hub's own HUB_URL is ignored, hubUrlBootWarning), MULTI_NODE_
+ * Warnings: ROLLBACK_SCHEMA_AHEAD (a rollback keeps the newer schema; final review M-8);
+ * HUB_URL_PROBLEM (the Hub's own HUB_URL is ignored, hubUrlBootWarning), MULTI_NODE_
  * VOLUMES (the agent's swarm has several nodes and volumes are local), APPS_AFFECTED (every app
  * the run restarts). Confirm text: the deployment key. `plan_hash` covers everything the run does.
  */
@@ -659,6 +660,12 @@ export async function gatherSharedUpgrade(
     warnings.push({
       code: 'DOWNGRADE',
       text: `${version} is not newer than the ${from_version} this deployment runs. Every app on it goes back to ${version}; an older version may not read data a newer one wrote. Confirm the downgrade to start.`
+    })
+  // Final review M-8: a rollback restores the build, not the schema — said as DOWNGRADE says it.
+  if (kind === 'rollback' && from_version && from_version !== version)
+    warnings.push({
+      code: 'ROLLBACK_SCHEMA_AHEAD',
+      text: `Apps that ${from_version} already migrated keep its newer database schema under ${version}; an older version may not read data a newer one wrote.`
     })
   const stack = shared.stack && STACK_NAME_RE.test(shared.stack) ? shared.stack : null
   const plan_hash = hashOf({
