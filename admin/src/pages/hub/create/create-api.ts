@@ -660,10 +660,10 @@ export const CREATE_COPY: Record<string, Copy> = {
   },
   HUB_SECRET_NOT_SEALED: { title: "A saved secret can't be read", hint: 'Enter it again.' },
   HUB_SECRET_UNREADABLE: { title: "A saved secret can't be read", hint: 'Enter it again.' },
-  // Phase 6 (Task 4): an environment placed on a shared deployment is not created here.
+  // Phase 6 (Task 4): creation refuses an environment placed on a shared deployment.
   SHARED_PLACEMENT: {
     title: 'This environment runs on a shared deployment',
-    hint: 'The shared deployment serves it; nothing is created for it here.'
+    hint: 'A shared deployment runs the app for it, so there is nothing to create. Place it with Place on shared deployment… instead.'
   }
 }
 
@@ -735,11 +735,3 @@ export function creationErrorDescription(
   else delete d.hint
   return d
 }
-
-// Phase 6 (Task 4): creation refuses an environment placed on a shared deployment.
-Object.assign(CREATE_COPY, {
-  SHARED_PLACEMENT: {
-    title: 'This environment runs on a shared deployment',
-    hint: 'A shared deployment runs the app for it, so there is nothing to create. Place it with Place on shared deployment… instead.'
-  }
-} satisfies Record<string, Copy>)
