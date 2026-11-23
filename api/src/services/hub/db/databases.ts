@@ -804,6 +804,17 @@ export async function setConnection(
  * conditional on the status read, so it never undoes a concurrent change.
  */
 export async function checkDatabase(id: number): Promise<DbCheck> {
+  return (await checkDatabaseIdentity(id)).check
+}
+
+/**
+ * checkDatabase, also answering the server identity the check read (`engine|server|port|database`,
+ * db-identity.ts; null when unreachable). Attaching a record to an existing environment compares
+ * it with what the app itself reports (P6-32). Never answered over the API.
+ */
+export async function checkDatabaseIdentity(
+  id: number
+): Promise<{ check: DbCheck; identity: string | null }> {
   const row = await getRow(id)
   if (!row) throw new HubDbError('NOT_FOUND', 'Database not found.', 404)
   if (row.status === 'dropping')
@@ -835,7 +846,7 @@ export async function checkDatabase(id: number): Promise<DbCheck> {
         updated_at: now()
       })
   })
-  return check
+  return { check, identity }
 }
 
 // ─── Adopt ───────────────────────────────────────────────────────────────────
