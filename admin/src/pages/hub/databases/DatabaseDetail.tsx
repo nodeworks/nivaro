@@ -721,6 +721,9 @@ function EnvironmentAttach({ d, onChanged }: { d: HubDatabaseRow; onChanged: () 
   const [failure, setFailure] = useState<EnvDbFailure | null>(null)
   const [warning, setWarning] = useState<string | null>(null)
   const [picking, setPicking] = useState(false)
+  // The environment an identity refusal was about (re-review FW3-I1): "Attach anyway" overrides
+  // for that one environment only, and any new pick drops the refusal with it.
+  const [refusedEnv, setRefusedEnv] = useState<number | null>(null)
   const apps = useQuery({
     queryKey: hubKeys.apps(),
     queryFn: fetchHubApps,
@@ -741,21 +744,34 @@ function EnvironmentAttach({ d, onChanged }: { d: HubDatabaseRow; onChanged: () 
     setAppId('')
     setEnvId('')
     setFailure(null)
+    setRefusedEnv(null)
   }
   const fail = (err: unknown, fallback: string) =>
     setFailure(
       err instanceof EnvDbFailure ? err : new EnvDbFailure(envDbError(err, fallback), null)
     )
+  const clearRefusal = () => {
+    setFailure(null)
+    setRefusedEnv(null)
+  }
   const attach = useMutation({
-    mutationFn: (opts: { override?: boolean } = {}) => attachEnvDatabase(Number(envId), d.id, opts),
-    onSuccess: (out) => {
+    mutationFn: (v: { envId: number; appId: number; override?: boolean }) =>
+      attachEnvDatabase(v.envId, d.id, v.override ? { override: true } : {}),
+    onSuccess: (out, v) => {
       setWarning(out.warning)
       setPicking(false)
-      done(appId && envId ? { appId: Number(appId), envId: Number(envId) } : null)
+      setRefusedEnv(null)
+      done({ appId: v.appId, envId: v.envId })
       toast.success(`Attached ${d.database_name}`)
     },
-    onError: (err) => fail(err, 'Could not attach the database')
+    onError: (err, v) => {
+      fail(err, 'Could not attach the database')
+      setRefusedEnv(v.envId)
+    }
   })
+  const attachPicked = () => {
+    if (appId && envId) attach.mutate({ appId: Number(appId), envId: Number(envId) })
+  }
   const detach = useMutation({
     mutationFn: (env: { appId: number; envId: number }) => detachEnvDatabase(env.envId),
     onSuccess: (_out, env) => {
@@ -775,20 +791,24 @@ function EnvironmentAttach({ d, onChanged }: { d: HubDatabaseRow; onChanged: () 
       )}
       {failure && <ErrorNotice description={failure.description} />}
       {failure?.check && <CheckResult check={failure.check} />}
-      {failure?.description.code === 'DATABASE_IDENTITY_DIFFERS' && envId && (
-        // On a Docker stack the record becomes the stack's database on the next deploy: attach it
-        // only when the administrator knows it is the same database (the Hub logs the override).
-        <ConfirmButton
-          title='Attach anyway'
-          confirmLabel='It is the same database: attach?'
-          className={dangerGhost}
-          armedClassName={dangerArmed}
-          disabled={attach.isPending}
-          onConfirm={() => attach.mutate({ override: true })}
-        >
-          Attach anyway
-        </ConfirmButton>
-      )}
+      {failure?.description.code === 'DATABASE_IDENTITY_DIFFERS' &&
+        refusedEnv !== null &&
+        refusedEnv === Number(envId) && (
+          // On a Docker stack the record becomes the stack's database on the next deploy: attach it
+          // only when the administrator knows it is the same database (the Hub logs the override).
+          <ConfirmButton
+            title='Attach anyway'
+            confirmLabel='It is the same database: attach?'
+            className={dangerGhost}
+            armedClassName={dangerArmed}
+            disabled={attach.isPending}
+            onConfirm={() =>
+              attach.mutate({ appId: Number(appId), envId: refusedEnv, override: true })
+            }
+          >
+            Attach anyway
+          </ConfirmButton>
+        )}
     </>
   )
 
@@ -839,6 +859,7 @@ function EnvironmentAttach({ d, onChanged }: { d: HubDatabaseRow; onChanged: () 
                 onChange={(v) => {
                   setAppId(v)
                   setEnvId('')
+                  clearRefusal()
                 }}
                 ariaLabel='App'
                 className='h-8 w-[200px] text-[13px]'
@@ -852,7 +873,10 @@ function EnvironmentAttach({ d, onChanged }: { d: HubDatabaseRow; onChanged: () 
             <Field id={`hub-db-attach-env-${d.id}`} label='Environment'>
               <SimpleSelect
                 value={envId}
-                onChange={setEnvId}
+                onChange={(v) => {
+                  setEnvId(v)
+                  clearRefusal()
+                }}
                 ariaLabel='Environment'
                 className='h-8 w-[180px] text-[13px]'
                 disabled={!appId || app.isPending}
@@ -869,7 +893,7 @@ function EnvironmentAttach({ d, onChanged }: { d: HubDatabaseRow; onChanged: () 
               size='sm'
               className='h-8 bg-nvr-cyan text-white hover:bg-nvr-cyan/90'
               disabled={!envId || attach.isPending}
-              onClick={() => attach.mutate({})}
+              onClick={attachPicked}
             >
               {attach.isPending ? 'Attaching…' : 'Attach to environment'}
             </Button>
