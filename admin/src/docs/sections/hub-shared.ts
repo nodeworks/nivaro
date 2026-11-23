@@ -25,7 +25,7 @@ export const hubSharedDocs: DocSection = {
         [
           '`docker`',
           'The Hub, through the agent, on a Docker driver.',
-          'Writes the stack (role `all` at small, separate web, worker and importer services at medium and large; bundled or external Redis), applies it, and upgrades and rolls it back. The stack is owned by the deployment key, never by an app. The Hub makes `SESSION_SECRET` and `ENCRYPTION_KEY` once and keeps them sealed.'
+          'Writes the stack (role `all` at small, separate web, worker, importer and exporter services at medium and large; bundled or external Redis), applies it, and upgrades and rolls it back. The stack is owned by the deployment key, never by an app. The Hub makes `SESSION_SECRET` and `ENCRYPTION_KEY` once and keeps them sealed.'
         ],
         [
           '`registered`',
@@ -124,10 +124,14 @@ export const hubSharedDocs: DocSection = {
         ],
         [
           'medium',
-          '`web` ×2, `worker` ×1, `importer` ×1',
-          "Web runs with `CRON_TICKS=off`. The worker is the only process that ticks crons, so every app's scheduled jobs, row schedules and 10-second import tick run there. The importer runs every app's staged imports."
+          '`web` ×2, `worker` ×1, `importer` ×1, `exporter` ×1',
+          "Web runs with `CRON_TICKS=off`. The worker is the only process that ticks crons, so every app's scheduled jobs, row schedules and 10-second import tick run there. The importer runs every app's staged imports, the exporter every app's background exports."
         ],
-        ['large', '`web` ×3, `worker` ×1, `importer` ×1', 'As medium, with a third web replica.']
+        [
+          'large',
+          '`web` ×3, `worker` ×1, `importer` ×1, `exporter` ×1',
+          'As medium, with a third web replica.'
+        ]
       ]
     },
     {
@@ -135,8 +139,9 @@ export const hubSharedDocs: DocSection = {
       items: [
         'Every service serves every app on the deployment: the same variables (`HUB_SHARED_DEPLOYMENT` and the deployment-wide `settings.env` included), the same secrets and the same extensions. Only `NIVARO_ROLE` differs. Each service gets 2 CPUs and 4 GB per replica.',
         "The importer drains an app when an upload kicks it, and also passes over every ready app every 10 seconds, so a run put back after its process died starts without a new upload. It runs no migrations: it drains an app only once the migrating services have stored that app's schema as ok at this version. While it checks in for an app, the worker leaves that app's imports to it; when it stops, the worker takes over within 90 seconds.",
+        "The exporter runs background exports the same way, app by app: a web process hands an app's export to it while it checks in for that app, a kick starts it at once, and it passes over every ready app every 10 seconds. Like the importer it runs no migrations and reads each app's stored schema state. While it checks in for an app, the importer and the worker leave that app's exports to it; when it stops, the importer takes them over, then the worker, within 90 seconds.",
         'There is no `realtime` service, even at large: a process that serves many apps keeps its own sockets (`NIVARO_ROLE=realtime` is for single-app deployments), so web keeps sockets on. A dedicated large stack differs here.',
-        'Changing the size is an upgrade: the plan lists the services it deploys (`roles`), what the last run deployed (`roles_from`, `all` for a run before the split) and warns `ROLES_CHANGE` with the services added and removed. The agent creates the new services before it removes the old ones. Only an upgrade changes the services: an apply that is not one (after a token rotation or a new Redis address, or a move adding or removing a name) keeps the services the stack runs, and every successful run records the services it applied. Stats such as live replicas count every process, importer and worker included.'
+        'Changing the size is an upgrade: the plan lists the services it deploys (`roles`), what the last run deployed (`roles_from`, `all` for a run before the split) and warns `ROLES_CHANGE` with the services added and removed. The agent creates the new services before it removes the old ones. Only an upgrade changes the services: an apply that is not one (after a token rotation or a new Redis address, or a move adding or removing a name) keeps the services the stack runs, and every successful run records the services it applied. A stack that runs web, worker and importer gains the exporter on its next upgrade (`ROLES_CHANGE` adds exporter). Stats such as live replicas count every process, importer, exporter and worker included.'
       ]
     },
     {
