@@ -1,10 +1,231 @@
 {
-  "generated_at": "2026-11-23T07:53:24.226Z",
+  "generated_at": "2026-11-23T09:57:26.883Z",
   "releases": [
+    {
+      "version": "0.3.210",
+      "tag": "v0.3.210",
+      "date": "2026-11-23T04:57:09-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "the Finish button has the danger tone; the stop's copy says each thing once and truly",
+              "hash": "3e3d62c6c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "Finish at an unreachable key stop waits for the new home to answer",
+              "hash": "f6266c493"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a Docker old home is stopped only when no container runs, Redis removed last",
+              "hash": "dc1c65f09"
+            },
+            {
+              "section": "Fixed",
+              "scope": "extensions",
+              "text": "a shared-deployment app never links to another app's portal",
+              "hash": "a3e53538d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "extensions",
+              "text": "the inject wrap keeps each instance and every error path",
+              "hash": "dbcea6008"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "Finish stops the old home, proven; one predicate and plain copy for the key stop",
+              "hash": "131725919"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a source cut off mid-file is incomplete, not a full temp folder",
+              "hash": "e7d9bed5d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "extensions",
+              "text": "document LinX obligation kinds as registered once per app",
+              "hash": "c1ce68ccb"
+            },
+            {
+              "section": "Fixed",
+              "scope": "extensions",
+              "text": "say exactly what is per app on a shared deployment",
+              "hash": "0db5c102d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "extensions",
+              "text": "ctx.apps.origin and a marker so an older core refuses",
+              "hash": "e76a5f769"
+            },
+            {
+              "section": "Fixed",
+              "scope": "extensions",
+              "text": "seed boot-time registrations into each app of a shared deployment",
+              "hash": "46d39d7f0"
+            },
+            {
+              "section": "Fixed",
+              "scope": "extensions",
+              "text": "every in-process call on a shared deployment reaches its own app",
+              "hash": "1973704ee"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "the retire_source key stop's error box has its own title and hint",
+              "hash": "a6af711f7"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "the kept-old-home list rule reads only moves with an open retire item",
+              "hash": "ab8a08cda"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "the unreachable retire_source stop has its own code",
+              "hash": "53bda97b5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "an App key accepted at the retire_source stop also becomes the Docker stack's key",
+              "hash": "29cba1181"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a retire_source stop has two real ways out and says only what is true",
+              "hash": "ee124c505"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "an empty fallback mount point, a proxy 404 and a full temp folder in a move's copy",
+              "hash": "b9e598e80"
+            },
+            {
+              "section": "Fixed",
+              "scope": "extensions",
+              "text": "document efp-ops as shared-safe, ctx.apps and in-process calls",
+              "hash": "bd718b95b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "extensions",
+              "text": "an extension's in-process call reaches its own app",
+              "hash": "2b65cd192"
+            },
+            {
+              "section": "Fixed",
+              "scope": "extensions",
+              "text": "ctx.apps names the app a request or job serves",
+              "hash": "e6ff6c60c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a failed key check at retire_source keeps the move open",
+              "hash": "77d598242"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a move says why its files were not copied",
+              "hash": "0f9df3554"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "an unreadable stored file is 503 SOURCE_READ_FAILED on the transfer route",
+              "hash": "81a8b9ec9"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a missing fallback folder never reads as missing files in a move",
+              "hash": "5be30c2d1"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "moves round 3 — how a Docker old home is proven stopped, the unreachable check",
+              "hash": "85ce56a6e"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "moves round 2 — Finish and stop the old home, one predicate, the 0.3.209 marker",
+              "hash": "89d841967"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "moves round 1b — the stack secret follows an accepted key, the unreachable code",
+              "hash": "cdfdd31a4"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "moves round 1 — empty fallback mount point, the key stop's two ways out",
+              "hash": "cb17691bd"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "moves — unreadable fallback folder and the retire key check",
+              "hash": "c39dc9f7a"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "pin token times in the OIDC evidence test so it never crosses a second",
+              "hash": "4df9e31eb"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "the retire_source key check fails, then the key is fixed",
+              "hash": "293cf9c3f"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "a move whose source fallback folder cannot be read",
+              "hash": "2e7a78c6e"
+            }
+          ]
+        }
+      ],
+      "count": 33
+    },
     {
       "version": "0.3.209",
       "tag": "v0.3.209",
-      "date": "2026-11-23T02:52:50-05:00",
+      "date": "2026-11-23T02:53:24-05:00",
       "sections": [
         {
           "label": "Added",
