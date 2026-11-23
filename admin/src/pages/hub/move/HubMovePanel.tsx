@@ -1,7 +1,6 @@
 import { ConfirmButton, ErrorNotice } from '@nivaro/shared'
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  ArrowRight,
   Ban,
   Check,
   ChevronsUpDown,
@@ -1542,8 +1541,8 @@ function MoveProgress({
         ) : null}
         {plan && (
           <span className='ml-auto flex items-center gap-1 text-[11px] text-slate-500 dark:text-muted-foreground'>
-            <span className='font-mono'>{plan.version}</span>
-            <ArrowRight className='h-3 w-3' aria-hidden />
+            Version <span className='font-mono'>{plan.version}</span>
+            <span aria-hidden>·</span>
             {plan.hostnames.join(', ') || env.base_url}
           </span>
         )}
