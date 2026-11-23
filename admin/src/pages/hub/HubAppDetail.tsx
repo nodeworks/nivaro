@@ -391,7 +391,8 @@ function useEnvRow(app: HubAppFull, env: HubEnvironment, isAdmin: boolean) {
   const status = useEnvStatus(env.id)
   // Phase 6: where the environment runs (Hub admins only — placements are an admin read).
   const placement = usePlacement(env.placement_id, isAdmin)
-  const isShared = placement.data?.kind === 'shared'
+  // Owners cannot read placements: the app read's own `on_shared` says it for them (parked C3).
+  const isShared = placement.data?.kind === 'shared' || env.on_shared === true
   // Admins: until the placement is read, neither Promote nor the stack panel can be judged.
   const placementPending = isAdmin && env.placement_id != null && placement.isPending
   const shared = useSharedList(isAdmin && isShared)

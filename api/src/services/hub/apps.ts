@@ -31,6 +31,11 @@ export interface HubEnvironment {
   /** Masked ('••••••') when one is stored, else null. */
   hub_token: string | null
   hub_managed: boolean
+  /**
+   * Phase 6: the environment runs on a shared deployment. On the app read owners get (they
+   * cannot read placements), so Promote can say why it is off. Absent on other reads.
+   */
+  on_shared?: boolean
 }
 
 export interface HubOwner {
@@ -138,11 +143,14 @@ export async function listApps(userId: string, isAdmin: boolean): Promise<HubApp
 }
 
 export async function listEnvironments(appId: number): Promise<HubEnvironment[]> {
-  const rows = (await db('nivaro_hub_environments')
-    .where({ app_id: appId })
-    .orderBy('position', 'asc')
-    .orderBy('id', 'asc')) as Array<Record<string, unknown>>
-  return rows.map(environmentFromRow)
+  const rows = (await db('nivaro_hub_environments as e')
+    .leftJoin('nivaro_hub_placements as p', 'p.id', 'e.placement_id')
+    .where('e.app_id', appId)
+    .orderBy('e.position', 'asc')
+    .orderBy('e.id', 'asc')
+    .select('e.*', 'p.kind as placement_kind')) as Array<Record<string, unknown>>
+  // Only the yes/no leaves this read: the placement itself stays admin-only.
+  return rows.map((r) => ({ ...environmentFromRow(r), on_shared: r.placement_kind === 'shared' }))
 }
 
 function personName(u: Record<string, unknown> | undefined, id: string): string {
