@@ -966,7 +966,7 @@ describe('parseReadiness', () => {
       { code: 'DIRECTORY_ENV_CREDENTIALS', level: 'warning', detail: 'd' },
       { code: 'TEAMS_BOT_ENV_CREDENTIALS', level: 'warning', detail: 't' },
       { code: 'PUSH_RELAY_ENV', level: 'warning', detail: 'p' },
-      // An app before 0.3.211 still sends these; the plan decides by the target's version.
+      // An app before 0.3.212 still sends these; the plan decides by the target's version.
       { code: 'STAGED_IMPORTS', level: 'blocker', detail: 's' },
       { code: 'ROW_SCHEDULES', level: 'blocker', detail: 'r' },
       { code: 'DIRECTORY_SYNC', level: 'warning', detail: 'ds' },

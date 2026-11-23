@@ -154,7 +154,7 @@ export const hubSharedDocs: DocSection = {
     },
     {
       type: 'note',
-      text: 'Placing two environments of one app on one deployment is allowed (the usual case is development, staging and production together). The plan warns `SAME_APP_ON_DEPLOYMENT` and nothing more: the protections above are what keep copied databases apart.'
+      text: 'Placing two environments of one app on one deployment is allowed (the usual case is development, staging and production together). The plan warns `SAME_APP_ON_DEPLOYMENT` and nothing more: the protections above are what keep copied databases apart. A copy carries the original\'s saved Teams bot and directory registration, so turn the bot off on the copy if it should not answer.'
     },
     { type: 'h2', id: 'hub-shared-maintenance', text: 'Maintenance and not-ready apps' },
     {
@@ -444,18 +444,18 @@ export const hubSharedDocs: DocSection = {
     { type: 'h2', id: 'hub-shared-per-app', text: 'Per app on a shared deployment' },
     {
       type: 'p',
-      text: "These work on a shared deployment, each app with its own data, settings and schedule. A move no longer reports them as blockers or warnings when the app runs 0.3.211 or later."
+      text: "These work on a shared deployment, each app with its own data, settings and schedule. A move no longer reports them as blockers or warnings when the app runs 0.3.212 or later."
     },
     {
       type: 'ul',
       items: [
-        'Staged file imports (upload and drainer). Rows load with inserts: the bulk loader (`IMPORT_LOADER=bulk`, SMB share) is not available on shared. Each app keeps its own queue, attempts and leases.',
+        'Staged file imports (upload and drainer). Rows load with inserts: the bulk loader (`IMPORT_LOADER=bulk`, SMB share) is not available on shared, so a `bulk` loader falls back to inserts with a note and a `bulk_only` import fails saying so. Each app keeps its own queue, attempts and leases.',
         'Row schedules (scheduled reports, retention policies, scheduled audit and activity views, sync jobs, scheduled flows). An edit reaches every replica, and a 5-minute `row-schedules-resync` job per app is the backstop. An app that leaves the deployment loses its jobs.',
         'Automatic mail retry (`MAIL_RETRY=off` still turns it off for the whole deployment), live SLA status changes, the cumulative-flow rollup and the weekly AI summary in the daily digest. The traffic digest section stays off.',
-        'The daily retention pass (03:30, one job per app) and the boot passes (owner-group warm, integrity checks, cache warms, readiness warm, db-tuning sweep). They run once per app when it becomes ready. Retention status shows per app.',
+        'The daily retention pass (03:30, one job per app) and the boot passes (owner-group warm, integrity checks, cache warms, readiness warm, db-tuning sweep). They run once per app when it becomes ready. Retention status shows per app. Stale help-video import folders are swept once a day per process (deployment-wide, not per app).',
         'Microsoft directory lookups and sync. The app uses its own Microsoft app registration, saved in Settings → Microsoft directory (tenant id, client id, client secret; the secret is sealed with the app key). The server `GRAPH_*` and `OIDC_*` variables and the directory keys of `NIVARO_SETTINGS_OVERRIDES` are never used on shared.',
-        'The Teams bot. The app uses only the bot saved in its own Settings. `TEAMS_BOT_*`, `MICROSOFT_APP_*`, the sign-in app fallback and the `teams_bot_*` override keys are ignored. `TEAMS_BOT=off` still disables the bot on the whole deployment, but `TEAMS_BOT=on` does not switch an app on: each app saves its own switch. Register each bot with that app host as its messaging endpoint.',
-        'Phone push. An app admin connects the app push relay in Settings → Mobile app. The server `MOBILE_PUSH_RELAY_KEY` is not used on shared. Phone sign-in was already per app.'
+        'The Teams bot. The app uses only the bot saved in its own Settings. `TEAMS_BOT_*`, `MICROSOFT_APP_*`, the sign-in app fallback and the `teams_bot_*` override keys are ignored. `TEAMS_BOT=off` still disables the bot on the whole deployment, but `TEAMS_BOT=on` does not switch an app on: each app saves its own switch. Register each bot with that app\'s host as its messaging endpoint.',
+        'Phone push. An app admin connects the app\'s push relay in Settings → Mobile app. The server `MOBILE_PUSH_RELAY_KEY` is not used on shared. Phone sign-in was already per app.'
       ]
     },
     {
@@ -836,7 +836,7 @@ export const hubMovesDocs: DocSection = {
         ],
         [
           '`ISSUE_TRACKERS`, `EXEC_SCRIPT_FLOWS`, `SQLITE`, `ENV_OBJECT_STORAGE`',
-          'The app uses something a shared app cannot do yet (see Shared deployments), or keeps files in env-driven object storage. Detail gives counts and kinds, never records. `STAGED_IMPORTS` and `ROW_SCHEDULES` still apply only when the target deployment runs a version before 0.3.211 or one the Hub cannot read.'
+          'The app uses something a shared app cannot do yet (see Shared deployments), or keeps files in env-driven object storage. Detail gives counts and kinds, never records. `STAGED_IMPORTS` and `ROW_SCHEDULES` still apply only when the target deployment runs a version before 0.3.212 or one the Hub cannot read.'
         ]
       ]
     },
@@ -863,7 +863,7 @@ export const hubMovesDocs: DocSection = {
         ],
         [
           '`SAME_APP_ON_DEPLOYMENT`',
-          'Another environment of the same app is already on the target deployment.'
+          'Another environment of the same app is already on the target deployment. A copy carries the original\'s saved Teams bot and directory registration: turn the bot off on the copy if it should not answer.'
         ],
         ['`REPLAYS_NOT_MOVED`', 'Session replays and image transform caches stay behind.'],
         [
@@ -880,7 +880,7 @@ export const hubMovesDocs: DocSection = {
         ],
         [
           '`DIRECTORY_ENV_CREDENTIALS`, `TEAMS_BOT_ENV_CREDENTIALS`, `PUSH_RELAY_ENV`, `HUDDLE_TURN`, `ENV_SMTP`, `SESSION_REPLAYS`, `HELP_VIDEO_RENDERS`',
-          'Features a shared app does not have, or that behave differently (see Shared deployments). `DIRECTORY_SYNC`, `PHONE_PUSH`, `TEAMS_BOT` and `MAIL_RETRY` are reported only for a target before 0.3.211 or one the Hub cannot read.'
+          'Features a shared app does not have, or that behave differently (see Shared deployments). `DIRECTORY_SYNC`, `PHONE_PUSH`, `TEAMS_BOT` and `MAIL_RETRY` are reported only for a target before 0.3.212 or one the Hub cannot read.'
         ]
       ]
     },

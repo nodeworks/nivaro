@@ -89,9 +89,9 @@ describe('move copy covers every code', () => {
     // An older app's codes keep their words: they show when the target runs a version before
     // shared apps ran them.
     for (const code of ['STAGED_IMPORTS', 'ROW_SCHEDULES'])
-      expect(MOVE_BLOCKER_COPY[code]?.hint, code).toMatch(/0\.3\.211/)
+      expect(MOVE_BLOCKER_COPY[code]?.hint, code).toMatch(/0\.3\.212/)
     for (const code of ['DIRECTORY_SYNC', 'TEAMS_BOT', 'PHONE_PUSH', 'MAIL_RETRY'])
-      expect(MOVE_WARNING_COPY[code]?.hint, code).toMatch(/0\.3\.211/)
+      expect(MOVE_WARNING_COPY[code]?.hint, code).toMatch(/0\.3\.212/)
     // A copy of an app carries the original's Teams bot and directory registration.
     expect(MOVE_WARNING_COPY.SAME_APP_ON_DEPLOYMENT.hint).toMatch(/Teams bot/)
   })

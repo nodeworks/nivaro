@@ -438,7 +438,7 @@ function blockersOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Bloc
  * directory sync, the Teams bot, phone push and mail retry per app. An app before it still
  * reports them (two as blockers); they hold only for a target before it.
  */
-export const SHARED_FEATURES_SINCE = '0.3.211'
+export const SHARED_FEATURES_SINCE = '0.3.212'
 
 /** Codes an app before SHARED_FEATURES_SINCE reports for what shared deployments now run. */
 const PER_APP_SINCE_SHARED_FEATURES: readonly SharedReadinessCode[] = [
@@ -475,16 +475,16 @@ function readinessFor(input: MovePlanInput): SharedReadinessItem[] {
 }
 
 const READINESS_TITLES: Record<string, string> = {
-  STAGED_IMPORTS: 'Staged imports do not run on a shared deployment before 0.3.211',
-  ROW_SCHEDULES: 'Schedules kept in table rows do not run on a shared deployment before 0.3.211',
+  STAGED_IMPORTS: 'Staged imports do not run on a shared deployment before 0.3.212',
+  ROW_SCHEDULES: 'Schedules kept in table rows do not run on a shared deployment before 0.3.212',
   ISSUE_TRACKERS: 'Issue tracker sync does not run on a shared deployment yet',
   EXEC_SCRIPT_FLOWS: 'Flows that run scripts do not run on a shared deployment yet',
   SQLITE: 'A SQLite database cannot be served by a shared deployment',
   ENV_OBJECT_STORAGE: 'Files in object storage set by environment variables are not copied',
-  DIRECTORY_SYNC: 'Directory sync is off on a shared deployment before 0.3.211',
-  PHONE_PUSH: 'Phone push is off on a shared deployment before 0.3.211',
-  TEAMS_BOT: 'The Teams bot is off on a shared deployment before 0.3.211',
-  MAIL_RETRY: 'Automatic mail retry is off on a shared deployment before 0.3.211',
+  DIRECTORY_SYNC: 'Directory sync is off on a shared deployment before 0.3.212',
+  PHONE_PUSH: 'Phone push is off on a shared deployment before 0.3.212',
+  TEAMS_BOT: 'The Teams bot is off on a shared deployment before 0.3.212',
+  MAIL_RETRY: 'Automatic mail retry is off on a shared deployment before 0.3.212',
   HUDDLE_TURN: "Huddles use the deployment's media servers",
   ENV_SMTP: "Mail set by environment variables uses the deployment's settings",
   SESSION_REPLAYS: 'Session replays are not moved',

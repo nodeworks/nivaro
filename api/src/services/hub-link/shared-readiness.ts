@@ -28,7 +28,7 @@ import { objectStorageCounts } from '../hub-transfer/object-counts.js'
  * an unreadable check must never read as "nothing to lose". A warning that cannot be read is
  * left out.
  *
- * Shared features (0.3.211): staged imports, row schedules, directory sync, the Teams bot, phone
+ * Shared features (0.3.212): staged imports, row schedules, directory sync, the Teams bot, phone
  * push and mail retry run per app on a shared deployment, so this version no longer reports
  * STAGED_IMPORTS, ROW_SCHEDULES, DIRECTORY_SYNC, TEAMS_BOT, PHONE_PUSH or MAIL_RETRY. They stay in
  * the type because older apps still send them; the Hub's plan decides by the target's version
@@ -48,7 +48,7 @@ export type SharedReadinessCode =
   | 'DIRECTORY_ENV_CREDENTIALS'
   | 'TEAMS_BOT_ENV_CREDENTIALS'
   | 'PUSH_RELAY_ENV'
-  // Sent only by apps before 0.3.211 (blockers there: the first two).
+  // Sent only by apps before 0.3.212 (blockers there: the first two).
   | 'STAGED_IMPORTS'
   | 'ROW_SCHEDULES'
   | 'DIRECTORY_SYNC'

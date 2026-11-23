@@ -827,14 +827,14 @@ export const MOVE_BLOCKER_COPY: Record<string, Copy> = {
     hint: 'Retiring the old home would also stop the new one. Give the target its own Redis database (or channel prefix), then plan again.'
   },
   // The app's own readiness report (Task 9): what a shared deployment cannot run. Staged imports
-  // and row schedules come only from an app before 0.3.211, and block only a target before it.
+  // and row schedules come only from an app before 0.3.212, and block only a target before it.
   STAGED_IMPORTS: {
     title: 'The app has staged imports set up',
-    hint: 'This shared deployment runs a version before 0.3.211, or one the Hub cannot read, which does not run staged imports. Upgrade it (and the app) to 0.3.211 or later, or finish or remove them first.'
+    hint: 'This shared deployment runs a version before 0.3.212, or one the Hub cannot read, which does not run staged imports. Upgrade it (and the app) to 0.3.212 or later, or finish or remove them first.'
   },
   ROW_SCHEDULES: {
     title: 'The app has schedules stored in its data',
-    hint: 'This shared deployment runs a version before 0.3.211, or one the Hub cannot read, which does not run per-app schedules, so they would silently stop. Upgrade it (and the app) to 0.3.211 or later, or turn them off first.'
+    hint: 'This shared deployment runs a version before 0.3.212, or one the Hub cannot read, which does not run per-app schedules, so they would silently stop. Upgrade it (and the app) to 0.3.212 or later, or turn them off first.'
   },
   ISSUE_TRACKERS: {
     title: 'GitLab issue sync is on in this app',
@@ -928,22 +928,22 @@ export const MOVE_WARNING_COPY: Record<string, Copy> = {
     title: 'The old stack keeps running until someone stops it',
     hint: 'The Hub retires it (it answers only "moved"); stop it in its own pipeline afterwards.'
   },
-  // From an app before 0.3.211, shown only when the target runs a version before it.
+  // From an app before 0.3.212, shown only when the target runs a version before it.
   DIRECTORY_SYNC: {
     title: 'Directory sync does not run on this shared deployment',
-    hint: 'It runs a version before 0.3.211, or one the Hub cannot read. People still sign in; new people are not added ahead of their first sign-in. Upgrade it to 0.3.211 or later to keep the sync.'
+    hint: 'It runs a version before 0.3.212, or one the Hub cannot read. People still sign in; new people are not added ahead of their first sign-in. Upgrade it to 0.3.212 or later to keep the sync.'
   },
   PHONE_PUSH: {
     title: 'Phone alerts do not run on this shared deployment',
-    hint: 'It runs a version before 0.3.211, or one the Hub cannot read. In-app and email notifications still work. Upgrade it to 0.3.211 or later to keep phone alerts.'
+    hint: 'It runs a version before 0.3.212, or one the Hub cannot read. In-app and email notifications still work. Upgrade it to 0.3.212 or later to keep phone alerts.'
   },
   TEAMS_BOT: {
     title: 'The Teams bot does not run on this shared deployment',
-    hint: 'It runs a version before 0.3.211, or one the Hub cannot read. Tell the people who use it that alerts arrive in the app and by email instead, or upgrade it to 0.3.211 or later.'
+    hint: 'It runs a version before 0.3.212, or one the Hub cannot read. Tell the people who use it that alerts arrive in the app and by email instead, or upgrade it to 0.3.212 or later.'
   },
   MAIL_RETRY: {
     title: 'Failed emails are not retried on this shared deployment',
-    hint: 'It runs a version before 0.3.211, or one the Hub cannot read. They stay in the mail log and can be resent by hand. Upgrade it to 0.3.211 or later to keep the retries.'
+    hint: 'It runs a version before 0.3.212, or one the Hub cannot read. They stay in the mail log and can be resent by hand. Upgrade it to 0.3.212 or later to keep the retries.'
   },
   // What an app on a shared deployment brings itself (the server's own settings are not used).
   DIRECTORY_ENV_CREDENTIALS: {

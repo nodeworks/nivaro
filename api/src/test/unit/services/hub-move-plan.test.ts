@@ -318,7 +318,7 @@ describe('buildMovePlan — one test per blocker', () => {
 
   it('every one of the four readiness blockers becomes a plan blocker, on any target version', () => {
     expect(SHARED_READINESS_BLOCKERS).toHaveLength(4)
-    for (const version of ['0.3.210', '0.3.211'])
+    for (const version of ['0.3.210', '0.3.212'])
       for (const code of SHARED_READINESS_BLOCKERS) {
         const p = buildMovePlan(
           input({
@@ -330,8 +330,8 @@ describe('buildMovePlan — one test per blocker', () => {
       }
   })
 
-  it("an older app's staged imports and row schedules block only a target before 0.3.211", () => {
-    expect(SHARED_FEATURES_SINCE).toBe('0.3.211')
+  it("an older app's staged imports and row schedules block only a target before 0.3.212", () => {
+    expect(SHARED_FEATURES_SINCE).toBe('0.3.212')
     const readiness = [
       { code: 'ROW_SCHEDULES' as const, level: 'blocker' as const, detail: '3 scheduled reports' },
       { code: 'STAGED_IMPORTS' as const, level: 'blocker' as const, detail: '1 import definition' }
@@ -345,8 +345,9 @@ describe('buildMovePlan — one test per blocker', () => {
       )
     // Target 0.3.210: a shared deployment that does not run them yet.
     expect(codes(at('0.3.210'))).toEqual(['ROW_SCHEDULES', 'STAGED_IMPORTS'])
-    // Target 0.3.211 and later: they run per app there, so neither a blocker nor a warning.
-    for (const v of ['0.3.211', '0.3.212', '0.4.0', '1.0.0']) {
+    expect(codes(at('0.3.211'))).toEqual(['ROW_SCHEDULES', 'STAGED_IMPORTS'])
+    // Target 0.3.212 and later: they run per app there, so neither a blocker nor a warning.
+    for (const v of ['0.3.212', '0.3.213', '0.4.0', '1.0.0']) {
       const p = at(v)
       expect(codes(p), v).toEqual([])
       expect(
@@ -357,13 +358,13 @@ describe('buildMovePlan — one test per blocker', () => {
     // A target version the Hub cannot read is taken as older (the safe side).
     expect(codes(at(null))).toEqual(expect.arrayContaining(['ROW_SCHEDULES', 'STAGED_IMPORTS']))
     expect(codes(at('latest'))).toEqual(expect.arrayContaining(['ROW_SCHEDULES', 'STAGED_IMPORTS']))
-    // A pre-release of 0.3.211 is still before it.
-    expect(codes(at('0.3.211-rc.1'))).toEqual(
+    // A pre-release of 0.3.212 is still before it.
+    expect(codes(at('0.3.212-rc.1'))).toEqual(
       expect.arrayContaining(['ROW_SCHEDULES', 'STAGED_IMPORTS'])
     )
   })
 
-  it("an older app's directory, Teams bot, phone and mail retry warnings show only for a target before 0.3.211", () => {
+  it("an older app's directory, Teams bot, phone and mail retry warnings show only for a target before 0.3.212", () => {
     const old = ['DIRECTORY_SYNC', 'TEAMS_BOT', 'PHONE_PUSH', 'MAIL_RETRY'] as const
     const readiness = old.map((code) => ({ code, level: 'warning' as const, detail: 'today' }))
     const warned = (version: string) =>
@@ -371,21 +372,22 @@ describe('buildMovePlan — one test per blocker', () => {
         .warnings.map((w) => w.code)
         .filter((c) => (old as readonly string[]).includes(c))
     expect(warned('0.3.210')).toEqual([...old])
-    expect(warned('0.3.211')).toEqual([])
+    expect(warned('0.3.211')).toEqual([...old])
+    expect(warned('0.3.212')).toEqual([])
   })
 
   it('the env-credential warnings read as "<title>: <detail>" and never block', () => {
     const p = buildMovePlan(
       input({
         source: src({
-          version: '0.3.211',
+          version: '0.3.212',
           readiness: [
             { code: 'DIRECTORY_ENV_CREDENTIALS', level: 'warning', detail: 'dir detail' },
             { code: 'TEAMS_BOT_ENV_CREDENTIALS', level: 'warning', detail: 'bot detail' },
             { code: 'PUSH_RELAY_ENV', level: 'warning', detail: 'relay detail' }
           ]
         }),
-        target_facts: tgt({ version: '0.3.211' })
+        target_facts: tgt({ version: '0.3.212' })
       })
     )
     expect(codes(p)).toEqual([])
