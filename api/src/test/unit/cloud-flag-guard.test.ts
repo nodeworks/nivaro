@@ -232,6 +232,27 @@ describe('cloud-flag token backstop', () => {
     ])
   })
 
+  it('allows the shared stack renderer its two Hub-owned key names, and only those strings', () => {
+    const keys =
+      "export const SHARED_ENV_KEY = 'HUB_SHARED_DEPLOYMENT'\nexport const SHARED_SECRET_KEY = 'HUB_DEPLOYMENT_TOKEN'"
+    expect(stray(keys, 'services/hub/shared/stack-render.ts')).toEqual([])
+    // the same lines in any other file are still flagged
+    expect(stray(keys, 'services/hub/shared/other.ts')).toEqual([
+      [1, 'HUB_SHARED_DEPLOYMENT'],
+      [2, 'HUB_DEPLOYMENT_TOKEN']
+    ])
+    // and a real read inside the renderer still is
+    expect(
+      stray(
+        'const { HUB_DEPLOYMENT_TOKEN } = process.env\nexport const t = HUB_DEPLOYMENT_TOKEN',
+        'services/hub/shared/stack-render.ts'
+      )
+    ).toEqual([
+      [1, 'HUB_DEPLOYMENT_TOKEN'],
+      [2, 'HUB_DEPLOYMENT_TOKEN']
+    ])
+  })
+
   it('catches the read forms the scanner does not know', () => {
     expect(stray('const { CLOUD_META_DB_URL } = process.env\nif (CLOUD_META_DB_URL) x()')).toEqual([
       [1, 'CLOUD_META_DB_URL'],

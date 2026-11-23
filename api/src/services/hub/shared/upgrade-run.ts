@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto'
+import { createHmac, randomBytes } from 'node:crypto'
 import { insertReturningId } from '../../../db/dialect/ef.js'
 import { db } from '../../../db/index.js'
 import { runInBackgroundPool } from '../../../db/pool-context.js'
@@ -28,11 +28,18 @@ import { HUB_MASK, sealSecret } from '../secrets.js'
 import { DeploymentLinkError, deploymentClient } from './deployment-client.js'
 import { liveSightings, type Sighting } from './sightings.js'
 import { renderSharedSpec, SharedRenderError } from './stack-render.js'
-import { openSharedToken, type SharedDeployment, type SharedStatus } from './store.js'
+import {
+  openSharedToken,
+  type SharedDeployment,
+  type SharedFields,
+  type SharedStatus,
+  updateSharedWithSecrets
+} from './store.js'
 import {
   defaultSharedPlanDeps,
   gatherSharedUpgrade,
   OVERRIDABLE_CODES,
+  openSharedSecrets,
   readSharedSecrets,
   type SharedFacts,
   type SharedPlanDeps,
@@ -47,7 +54,9 @@ import {
  * Start: the confirm text is the deployment key (400 CONFIRM_MISMATCH); the plan is made again
  * and must have the hash the admin saw (409 PLAN_CHANGED, carrying the new plan); no blocker
  * (409 BLOCKED); every per-app blocker overridden (`<CODE>:<env_id>` for ORDER / PREFLIGHT_FAILING,
- * else 409 APP_BLOCKED — each override is logged). Then the deployment's shared lock (holder
+ * else 409 APP_BLOCKED — each override is logged); an upgrade to an older version (or one that
+ * is not semver) needs `downgrade: true` (409 DOWNGRADE_NEEDS_CONFIRM, ruling P6-29; a rollback
+ * never does). Then the deployment's shared lock (holder
  * `shared`, R10) and every listed environment's lock (holder `shared`) are taken, a
  * `nivaro_hub_shared_deploys` row (status running) and one `shared` mirror row in
  * `nivaro_hub_deploys` per environment placed here (`shared_deploy_id` set) are written, the
@@ -59,7 +68,8 @@ import {
  *   2. apply   — PUT to the agent (cancel asked once more just before).
  *   3. wait_version ≤ 30 min — every replica the Hub saw in the last 2 min reports the version
  *                (an old replica drops out of that window once it is gone) and swarm says the
- *                stack converged; swarm rolling back or pausing the update fails at once.
+ *                stack converged; swarm rolling back or pausing the update fails at once,
+ *                `degraded` without a break for DEGRADED_FAIL_MS fails SWARM_DEGRADED.
  *   4. wait_schema ≤ 10 min — the deployment says every app's schema is `ok` on the version; an
  *                app whose migration failed fails the run, named by its tenant id (the others keep
  *                serving: the deployment blocks only that app).
@@ -86,6 +96,12 @@ const ENVS = 'nivaro_hub_environments'
 export const VERSION_WAIT_MS = 30 * 60_000
 export const SCHEMA_WAIT_MS = 10 * 60_000
 export const VERIFY_WAIT_MS = 5 * 60_000
+/**
+ * How long swarm may say `degraded` without a break (the spec applied, the update done, fewer
+ * tasks running than wanted: a node down, a placement or resource limit) before the run fails
+ * SWARM_DEGRADED instead of waiting out VERSION_WAIT_MS (parked wave, Task 5 N-4).
+ */
+export const DEGRADED_FAIL_MS = 5 * 60_000
 const POLL_MS = 10_000
 const SCHEMA_POLL_MS = 5_000
 const VERIFY_POLL_MS = 15_000
@@ -184,34 +200,71 @@ export async function ensureSharedSecrets(sharedId: number): Promise<Record<stri
 
 /**
  * Writes (or with null clears) the deployment's own secrets, sealed with the rest (PATCH
- * `secrets`, ruling P6-16). Compare-and-set on the sealed text, retried, so a run making
- * SESSION_SECRET / ENCRYPTION_KEY at the same moment never loses either write.
+ * `secrets`, ruling P6-16), together with any other `fields` of the same PATCH in ONE statement
+ * (parked wave, Task 5 N-1: all or nothing). Compare-and-set on the sealed text, retried, so a run
+ * making SESSION_SECRET / ENCRYPTION_KEY at the same moment never loses either write. Five lost
+ * races → SECRETS_CHANGED (409) with nothing written.
  */
 export async function setSharedSecrets(
   sharedId: number,
-  patch: Record<string, string | null>
+  patch: Record<string, string | null>,
+  fields: Partial<SharedFields> = {}
 ): Promise<void> {
   for (let i = 0; i < 5; i++) {
     const row = await db(SHARED).where({ id: sharedId }).first('secrets')
     if (!row) return
-    const next = { ...(await readSharedSecrets(sharedId)) }
+    const expect = (row.secrets as string | null) ?? null
+    const next = { ...openSharedSecrets(expect) }
     for (const [k, v] of Object.entries(patch)) {
       if (v === null) delete next[k]
       else next[k] = v
     }
-    const q = db(SHARED).where({ id: sharedId })
-    if (row.secrets == null) q.whereNull('secrets')
-    else q.where({ secrets: row.secrets })
-    const changed = await q.update({
-      secrets: Object.keys(next).length ? sealSecret(JSON.stringify(next)) : null,
-      updated_at: new Date()
+    const r = await updateSharedWithSecrets(sharedId, fields, {
+      expect,
+      next: Object.keys(next).length ? sealSecret(JSON.stringify(next)) : null
     })
-    if (Number(changed) === 1) return
+    if (r !== 'raced') return
   }
   throw new SharedUpgradeError(
     'SECRETS_CHANGED',
     'The deployment secrets changed at the same moment — try again.'
   )
+}
+
+/**
+ * A fingerprint of the REDIS_URL a run rendered ('' when none): HMAC keyed by the deployment's
+ * own SESSION_SECRET (256 random bits, sealed), so the stored plan holds nothing that reveals or
+ * lets anyone test a guess at the URL. null before the deployment has its secrets.
+ */
+function redisUrlFp(secrets: Record<string, string>): string | null {
+  if (!secrets.SESSION_SECRET) return null
+  return createHmac('sha256', secrets.SESSION_SECRET)
+    .update(`nivaro-shared-redis-url\n${secrets.REDIS_URL ?? ''}`)
+    .digest('hex')
+    .slice(0, 32)
+}
+
+/**
+ * True while a REDIS_URL is stored that no successful run has applied (parked wave, Task 5 N-3):
+ * a re-apply answered BUSY / LAST_RUN_FAILED / failed, or the run that rendered it failed. The
+ * mark lasts until a run that rendered this URL succeeds. Never the value.
+ */
+export async function redisUrlNotApplied(sharedId: number): Promise<boolean> {
+  const s = await readSharedSecrets(sharedId)
+  if (!s.REDIS_URL) return false
+  const fp = redisUrlFp(s)
+  if (!fp) return true
+  const last = await db(SHARED_DEPLOYS)
+    .where({ shared_deployment_id: sharedId, status: 'success' })
+    .whereNot({ kind: 'observed' })
+    .orderBy('id', 'desc')
+    .first('plan')
+  if (!last) return true
+  try {
+    return (JSON.parse(String(last.plan ?? '{}')) as { redis_url_fp?: unknown }).redis_url_fp !== fp
+  } catch {
+    return true
+  }
 }
 
 /** Which writable secrets are set: the mask, or null. Never a value. */
@@ -230,6 +283,8 @@ export interface StartBody {
   confirm: string
   overrides?: string[]
   kind?: SharedUpgradeKind
+  /** Confirms an upgrade to an older version (ruling P6-29). */
+  downgrade?: boolean
 }
 
 function checkBody(raw: unknown): StartBody {
@@ -243,6 +298,8 @@ function checkBody(raw: unknown): StartBody {
     throw new SharedUpgradeError('BAD_PLAN_HASH', 'Send the plan_hash of the plan you saw.', 400)
   if (b.kind !== undefined && b.kind !== 'upgrade' && b.kind !== 'rollback')
     throw new SharedUpgradeError('BAD_KIND', 'kind is upgrade or rollback.', 400)
+  if (b.downgrade !== undefined && typeof b.downgrade !== 'boolean')
+    throw new SharedUpgradeError('BAD_DOWNGRADE', 'downgrade is true or false.', 400)
   let overrides: string[] = []
   if (b.overrides !== undefined) {
     if (
@@ -262,7 +319,8 @@ function checkBody(raw: unknown): StartBody {
     plan_hash: b.plan_hash,
     confirm: typeof b.confirm === 'string' ? b.confirm : '',
     overrides,
-    kind: (b.kind as SharedUpgradeKind | undefined) ?? 'upgrade'
+    kind: (b.kind as SharedUpgradeKind | undefined) ?? 'upgrade',
+    downgrade: b.downgrade === true
   }
 }
 
@@ -325,6 +383,14 @@ export async function startSharedUpgrade(
       409,
       plan
     )
+  // Ruling P6-29 (B2): going to an older version is said out loud, never a slip of the picker.
+  if (plan.downgrade && !body.downgrade)
+    throw new SharedUpgradeError(
+      'DOWNGRADE_NEEDS_CONFIRM',
+      `${plan.version} is not newer than the ${plan.from_version ?? 'unknown version'} this deployment runs — confirm the downgrade to start.`,
+      409,
+      plan
+    )
 
   const sharedLock = planDeps.sharedLock
   const envLock = planDeps.envLock
@@ -337,6 +403,8 @@ export async function startSharedUpgrade(
   let handedOff = false
   /** Set once the run row exists: a start that breaks after it closes it (review minor 7). */
   let written: { id: number; prior: SharedStatus } | null = null
+  /** Set once the job run exists: a start that breaks after it fails it too (round 2 N-5). */
+  let startedRun: JobRunHandle | null = null
   try {
     for (const a of plan.apps) {
       const t = await envLock.take(a.env_id, 'shared')
@@ -399,6 +467,7 @@ export async function startSharedUpgrade(
       sharedId,
       by
     )
+    startedRun = run
     if (run.id != null)
       await db(SHARED_DEPLOYS).where({ id: deployId }).update({ job_run_id: run.id })
     await logActivity({
@@ -451,11 +520,14 @@ export async function startSharedUpgrade(
   } finally {
     if (!handedOff) {
       if (written) await abandonStart(written.id, sharedId, written.prior).catch(() => undefined)
+      if (startedRun) await startedRun.fail(new Error(START_FAILED)).catch(() => undefined)
       for (const [envId, t] of envTokens) await envLock.release(envId, t)
       await sharedLock.release(sharedId, sharedToken)
     }
   }
 }
+
+const START_FAILED = 'START_FAILED: the run could not be started; nothing was applied.'
 
 /** A start that broke after its rows were written: closed at once, not left for the heal. */
 async function abandonStart(
@@ -463,7 +535,7 @@ async function abandonStart(
   sharedId: number,
   prior: SharedStatus
 ): Promise<void> {
-  const msg = 'START_FAILED: the run could not be started; nothing was applied.'
+  const msg = START_FAILED
   const when = new Date()
   await db.transaction(async (trx) => {
     await trx(SHARED_DEPLOYS)
@@ -613,13 +685,15 @@ async function runUpgrade(c: RunCtx, deps: SharedRunDeps): Promise<void> {
           : 'The agent did not apply the stack.'
       )
     }
-    await recordApplied(deployId, specHash)
+    await recordApplied(deployId, specHash, redisUrlFp(secrets))
 
     // 3. every live replica runs the version
     await step('wait_version', `3. waiting for every replica to run ${version} (≤ 30 min)`)
     const versionBy = now() + VERSION_WAIT_MS
     let misses = 0
     let lastLine = ''
+    /** When swarm started saying `degraded` without a break (null: it does not now). */
+    let degradedSince: number | null = null
     for (;;) {
       await checkpoint()
       let st: StackStatus | null | undefined
@@ -647,6 +721,15 @@ async function runUpgrade(c: RunCtx, deps: SharedRunDeps): Promise<void> {
           'SWARM_UPDATE_PAUSED',
           `Swarm paused the update of ${stackName} — a new task failed.`
         )
+      if (st?.state === 'degraded') {
+        degradedSince ??= now()
+        if (now() - degradedSince >= DEGRADED_FAIL_MS)
+          throw new Stop(
+            'failed',
+            'SWARM_DEGRADED',
+            `Swarm says ${stackName} is degraded: the new spec is applied but fewer tasks run than wanted, for ${Math.round(DEGRADED_FAIL_MS / 60_000)} minutes now (a node down, or a placement or resource limit). Fix that in swarm, then upgrade again.`
+          )
+      } else if (st !== undefined) degradedSince = null
       let seen: Sighting[] = []
       try {
         seen = await (deps.liveSightings ?? ((id) => liveSightings(id)))(sharedId)
@@ -789,8 +872,15 @@ async function runUpgrade(c: RunCtx, deps: SharedRunDeps): Promise<void> {
   }
 }
 
-/** Notes what the agent applied in the stored plan (the spec hash; never the spec). */
-async function recordApplied(deployId: number, specHash: string): Promise<void> {
+/**
+ * Notes what the agent applied in the stored plan: the spec hash and the REDIS_URL fingerprint
+ * (redisUrlFp; never the spec or a secret).
+ */
+async function recordApplied(
+  deployId: number,
+  specHash: string,
+  redisFp: string | null
+): Promise<void> {
   const row = await db(SHARED_DEPLOYS).where({ id: deployId }).first('plan')
   let stored: Record<string, unknown> = {}
   try {
@@ -799,6 +889,7 @@ async function recordApplied(deployId: number, specHash: string): Promise<void> 
     /* keep going */
   }
   stored.spec_hash = /^[0-9a-f]{1,128}$/i.test(specHash) ? specHash : null
+  stored.redis_url_fp = redisFp
   await db(SHARED_DEPLOYS)
     .where({ id: deployId })
     .update({ plan: JSON.stringify(stored) })
@@ -1117,12 +1208,35 @@ export async function listSharedDeploys(
 
 // ── re-apply after a token rotation (routes/hub-shared.ts setSharedReapply) ────────────────────
 
+/** How many recent runs the re-apply looks through for the newest one that reached apply. */
+const APPLIED_LOOKBACK = 50
+
+/**
+ * True when the newest run of the deployment that reached apply (the agent took its spec:
+ * `spec_hash` recorded) ended failed, interrupted or cancelled. Runs that never reached apply are
+ * skipped: they changed nothing on the stack.
+ */
+async function lastAppliedRunFailed(sharedId: number): Promise<boolean> {
+  const rows = (await db(SHARED_DEPLOYS)
+    .where({ shared_deployment_id: sharedId })
+    .whereNot({ kind: 'observed' })
+    .orderBy('id', 'desc')
+    .limit(APPLIED_LOOKBACK)
+    .select('status', 'plan')) as Array<{ status: string; plan: unknown }>
+  for (const r of rows) {
+    if (!/"spec_hash":"[0-9a-f]/i.test(String(r.plan ?? ''))) continue
+    return r.status === 'failed' || r.status === 'interrupted' || r.status === 'cancelled'
+  }
+  return false
+}
+
 /**
  * Applies the stack again at the version it runs, so the deployment gets the new token (preflight
  * R7). The same run as an upgrade (kind `upgrade`, same version: no per-app checks). Not started
  * when the plan has a blocker (reason = its code), the deployment was never deployed, or its
- * newest run failed or was interrupted (LAST_RUN_FAILED: the stack may run another version than
- * the pin, so re-applying the pin would roll it back unannounced).
+ * newest run that reached apply failed, was interrupted or was cancelled (LAST_RUN_FAILED: the
+ * stack may run another version than the pin, so re-applying the pin would roll it back
+ * unannounced).
  */
 export async function startSharedReapply(
   shared: SharedDeployment,
@@ -1131,22 +1245,12 @@ export async function startSharedReapply(
 ): Promise<{ started: boolean; reason?: string; shared_deploy_id?: number }> {
   if (shared.mode !== 'docker') return { started: false, reason: 'SHARED_NOT_HUB_DEPLOYED' }
   if (!shared.version_pin) return { started: false, reason: 'NOT_DEPLOYED' }
-  // After a failed or interrupted run the stack may run another version than the pin: applying
-  // the pin again would be a rollback nobody asked for (review minor 4). Upgrade or roll back.
-  const last = await db(SHARED_DEPLOYS)
-    .where({ shared_deployment_id: shared.id })
-    .whereNot({ kind: 'observed' })
-    .orderBy('id', 'desc')
-    .first('status', 'plan')
-  // A cancel after the agent applied (spec_hash recorded) leaves the stack on the new image too.
-  const applied = /"spec_hash":"[0-9a-f]/i.test(String(last?.plan ?? ''))
-  if (
-    last &&
-    (last.status === 'failed' ||
-      last.status === 'interrupted' ||
-      (last.status === 'cancelled' && applied))
-  )
-    return { started: false, reason: 'LAST_RUN_FAILED' }
+  // After a run that reached apply and then failed, was interrupted or was cancelled, the stack
+  // may run another version than the pin: applying the pin again would be a rollback nobody asked
+  // for (review minor 4). Upgrade or roll back instead. Runs that never reached apply (no
+  // spec_hash: START_FAILED, a render step that failed) changed nothing, so the newest run that
+  // DID apply decides (round 2 N-2).
+  if (await lastAppliedRunFailed(shared.id)) return { started: false, reason: 'LAST_RUN_FAILED' }
   const plan = (await gatherSharedUpgrade(shared.id, shared.version_pin, 'upgrade', deps)).plan
   if (plan.blockers.length) return { started: false, reason: plan.blockers[0].code }
   const overrides = plan.apps.flatMap((a) => a.blockers.map((b) => `${b}:${a.env_id}`))

@@ -52,7 +52,12 @@ import {
   tenantsBody,
   tenantsOf
 } from '../services/hub/shared/tenants.js'
-import { setSharedSecrets, sharedSecretsShown } from '../services/hub/shared/upgrade-run.js'
+import { SharedUpgradeError } from '../services/hub/shared/upgrade-plan.js'
+import {
+  redisUrlNotApplied,
+  setSharedSecrets,
+  sharedSecretsShown
+} from '../services/hub/shared/upgrade-run.js'
 
 /**
  * Nivaro Hub phase 6 (Task 3): shared deployments and app keys, mounted under /api/hub by hub.ts
@@ -200,6 +205,7 @@ async function guarded(reply: FastifyReply, run: () => Promise<unknown>) {
     if (e instanceof PromotionError)
       return refuse(reply, e.status === 503 ? 503 : 409, e.code, e.message)
     if (e instanceof HubSecretError) return refuse(reply, 400, e.code, e.message)
+    if (e instanceof SharedUpgradeError) return refuse(reply, e.statusCode, e.code, e.message)
     throw e
   }
 }
@@ -436,18 +442,25 @@ export function hubSharedRoutes(app: FastifyInstance): void {
     const id = idParam((req.params as { id: string }).id)
     const row = id === null ? null : await getShared(id)
     if (id === null || !row) return notFound(reply)
-    const [apps, sightings, prevUntil, listEtag, secrets] = await Promise.all([
+    const [apps, sightings, prevUntil, listEtag, secrets, redisPending] = await Promise.all([
       appsPlaced(row),
       sightingsOrNull(id),
       previousTokenUntil(id),
       listEtagOrNull(row),
-      sharedSecretsShown(id)
+      sharedSecretsShown(id),
+      row.mode === 'docker' ? redisUrlNotApplied(id) : false
     ])
     const warnings = blockWarnings(row)
     if (sightings === null)
       warnings.push({
         code: 'SIGHTINGS_UNAVAILABLE',
         text: 'The Hub could not read which processes of this deployment it has seen (Redis did not answer).'
+      })
+    // Parked wave (Task 5 N-3): lasts until a run that rendered this REDIS_URL succeeds.
+    if (redisPending)
+      warnings.push({
+        code: 'REDIS_URL_NOT_APPLIED',
+        text: 'A REDIS_URL is stored for this deployment, but its stack has not been applied with it yet. Upgrade the deployment (at the same version to apply it again) so it uses that Redis.'
       })
     return {
       data: {
@@ -534,12 +547,14 @@ export function hubSharedRoutes(app: FastifyInstance): void {
         ;(changes as Record<string, unknown>)[k] = checked.row[k]
         changed.push(k)
       }
-      const updated = await updateShared(id, changes)
-      if (!updated) return notFound(reply)
+      // With secrets, the fields and the sealed secrets are one compare-and-set write: both land
+      // or neither (parked wave, Task 5 N-1).
       if (secrets) {
-        await setSharedSecrets(id, secrets)
+        await setSharedSecrets(id, secrets, changes)
         for (const k of Object.keys(secrets)) changed.push(`secrets.${k}`)
       }
+      const updated = secrets ? await getShared(id) : await updateShared(id, changes)
+      if (!updated) return notFound(reply)
       await logActivity({
         action: 'hub-shared-update',
         user: userId(req),

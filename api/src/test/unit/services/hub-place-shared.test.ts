@@ -953,3 +953,81 @@ describe('fix round 1 — P6-11b: a key only on a positive "empty"', () => {
     }
   })
 })
+
+// ── parked wave (Task 4 round 2 N-1, N-2) ─────────────────────────────────────────────────────
+
+describe('parked wave', () => {
+  const placeDeploys = (envId: number) =>
+    db('nivaro_hub_deploys').where({ environment_id: envId, kind: 'shared' }).orderBy('id')
+
+  async function runningRow(appId: number, envId: number, heartbeat: Date | null) {
+    const [r] = (await db('nivaro_hub_deploys')
+      .insert({
+        app_id: appId,
+        environment_id: envId,
+        kind: 'shared',
+        version: '0.3.210',
+        status: 'running',
+        plan: JSON.stringify({ place: { shared_id: sharedId, shared: 'shared-one' } }),
+        started_at: new Date(Date.now() - 3_600_000),
+        heartbeat_at: heartbeat
+      })
+      .returning('id')) as Array<{ id: number } | number>
+    return Number(typeof r === 'object' ? r.id : r)
+  }
+  const status = async (id: number) => (await db('nivaro_hub_deploys').where({ id }).first()).status
+
+  it('N-1: a job run that cannot start closes the place row (never left running) and frees the lock', async () => {
+    const app = await newApp()
+    const envId = await newEnv(app.id)
+    TENANTS = [Store.tenantIdFor(app, { id: envId })]
+    const fake = fakeClient()
+    const startJobRun = vi.fn(async () => {
+      throw new Error('job runs table is gone')
+    })
+    await expect(
+      place(
+        envId,
+        { database_id: await newDb() },
+        { client: fake.factory, startJobRun, lock: memoryPromoteLock }
+      )
+    ).rejects.toThrow()
+    const rows = await placeDeploys(envId)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ status: 'failed' })
+    expect(rows[0].error).toMatch(/^START_FAILED: /)
+    expect(rows[0].finished_at).not.toBeNull()
+    expect(await memoryPromoteLock.held(envId)).toBe(false)
+    // Still provisioning on its placement: placing again resumes and ends active.
+    const env = await db('nivaro_hub_environments').where({ id: envId }).first()
+    expect(env.status).toBe('provisioning')
+    await place(
+      envId,
+      { database_id: Number(String(env.db_ref).slice(7)) },
+      { client: fakeClient().factory, startJobRun: fakeRun().start }
+    )
+    await Place.awaitPlacement(envId)
+    expect((await db('nivaro_hub_environments').where({ id: envId }).first()).status).toBe('active')
+  })
+
+  it('N-2: the heal leaves a row with a fresh heartbeat, or whose environment lock is held, running', async () => {
+    const app = await newApp()
+    const fresh = await newEnv(app.id, { status: 'provisioning' })
+    const locked = await newEnv(app.id, { status: 'provisioning' })
+    const freshRow = await runningRow(app.id, fresh, new Date())
+    const lockedRow = await runningRow(app.id, locked, null)
+    const token = await memoryPromoteLock.take(locked, 'creation')
+    try {
+      expect(await Place.recoverInterruptedPlacements({ lock: memoryPromoteLock })).toBe(0)
+      expect(await status(freshRow)).toBe('running')
+      expect(await status(lockedRow)).toBe('running')
+    } finally {
+      if (token) await memoryPromoteLock.release(locked, token)
+    }
+    // Once the lock is free the stale row is healed; the fresh one still is not.
+    expect(await Place.recoverInterruptedPlacements({ lock: memoryPromoteLock })).toBe(1)
+    expect(await status(lockedRow)).toBe('interrupted')
+    expect(await status(freshRow)).toBe('running')
+    await db('nivaro_hub_deploys').whereIn('id', [freshRow, lockedRow]).del()
+  })
+})
