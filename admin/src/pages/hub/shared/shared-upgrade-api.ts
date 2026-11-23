@@ -374,7 +374,7 @@ export const UPGRADE_COPY: Record<string, { title: string; hint?: string }> = {
   },
   PATTERN_NOT_ALLOWED: {
     title: 'The agent does not allow this host pattern',
-    hint: "Use a pattern under the agent's host suffixes, or change them on the agent."
+    hint: "Use a pattern under the agent's host suffixes, or change them on the agent. An agent set for Traefik v2 cannot route a host pattern: set it to Traefik v3, or route explicit names instead."
   },
   HOSTNAME_NOT_ALLOWED: {
     title: 'The agent does not allow one of the app names',
@@ -413,6 +413,10 @@ export const UPGRADE_COPY: Record<string, { title: string; hint?: string }> = {
     hint: 'A start must carry the plan you checked. Read the plan again, then start.'
   },
   BAD_KIND: { title: 'Pick upgrade or roll back' },
+  BAD_DOWNGRADE: {
+    title: 'The downgrade confirmation was not understood',
+    hint: 'Reload the page and confirm the downgrade again.'
+  },
   BAD_OVERRIDES: {
     title: 'An override is not one the plan offers',
     hint: 'Read the plan again and tick only what it offers.'

@@ -37,3 +37,44 @@ describe('final wave codes have plain words', () => {
     plain(SHARED_COPY.EXTENSION_IN_USE, 'EXTENSION_IN_USE')
   })
 })
+
+describe('hubError names the open move and the refused spec field', () => {
+  it('MOVE_OPEN says which move, then where to follow it', () => {
+    const d = hubError(
+      {
+        response: {
+          status: 409,
+          data: {
+            code: 'MOVE_OPEN',
+            error:
+              'The move of shop/production (move 12) is interrupted: resume it or roll it back first.',
+            move_id: 12
+          }
+        }
+      },
+      'Could not promote'
+    )
+    expect(d.title).toBe(BLOCKER_COPY.MOVE_OPEN.title)
+    expect(d.hint).toMatch(/^The move of shop\/production \(move 12\) is interrupted/)
+    expect(d.hint).toMatch(/Open Move… on that environment/)
+  })
+
+  it('SPEC_INVALID with ROLE_NEEDS_TRAEFIK_V3 says what to change, never the code', () => {
+    const d = hubError(
+      {
+        response: {
+          status: 400,
+          data: {
+            code: 'SPEC_INVALID',
+            error: 'the agent refused the stack spec: roles.realtime (ROLE_NEEDS_TRAEFIK_V3)',
+            fields: [{ field: 'roles.realtime', code: 'ROLE_NEEDS_TRAEFIK_V3' }]
+          }
+        }
+      },
+      'Could not apply the stack'
+    )
+    expect(d.title).toBe('The Hub agent refused the stack spec')
+    expect(d.hint).toMatch(/Traefik v3/)
+    expect(`${d.title} ${d.hint}`).not.toContain('ROLE_NEEDS_TRAEFIK_V3')
+  })
+})

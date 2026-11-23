@@ -382,6 +382,14 @@ export const WARNING_COPY: Record<string, { title: string; hint?: string }> = {
     title: 'The deployment left some apps out of its list',
     hint: 'It refused their entries (see each app below). Fix the app, then refresh.'
   },
+  TOKEN_NOT_APPLIED: {
+    title: 'The new token is not in use yet',
+    hint: 'The stack still runs with the old token, which stops working 24 hours after the rotation; the deployment then loses its app list and its link. Upgrade the deployment at the version it runs to apply it.'
+  },
+  ROLLBACK_SCHEMA_AHEAD: {
+    title: 'A rollback keeps the newer database schema',
+    hint: 'Apps the newer version already migrated keep its schema; an older version may not read data a newer one wrote.'
+  },
   REDIS_URL_NOT_APPLIED: {
     title: 'The stored Redis address is not in use yet',
     hint: 'The stack has not been applied with it yet. Upgrade the deployment at the version it runs to apply it.'
@@ -439,7 +447,10 @@ export const SHARED_COPY: Record<string, { title: string; hint?: string }> = {
     title: 'The stack name is not valid',
     hint: '2–41 lower-case letters, digits and hyphens, starting with a letter.'
   },
-  BAD_VERSION: { title: 'The version is not valid', hint: 'A version or image tag (no spaces).' },
+  BAD_VERSION: {
+    title: 'The version is not valid',
+    hint: 'A version or image tag (no spaces). A Docker deployment takes no version here: create it, then upgrade it.'
+  },
   BAD_SETTINGS: { title: 'The settings are too large' },
   DRIVER_NOT_DOCKER: {
     title: 'Pick a Docker driver',
