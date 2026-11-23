@@ -1738,11 +1738,12 @@
       "line": 304,
       "text": "if (unrestricted && spanDays > CFD_LIVE_MAX_DAYS && redis && !inCloud()) {",
       "form": "helper-call",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T3",
-      "why": "CFD rollup Redis key is not tenant-keyed",
-      "batch": "E"
+      "why": "CFD rollup read runs per app on a shared deployment (Redis key carries the app); Nivaro Cloud still refuses (isNivaroCloud)",
+      "batch": "E",
+      "phase6": "done: per app on a shared deployment"
     },
     {
       "id": "services/cumulative-flow.ts:370",
@@ -1750,11 +1751,12 @@
       "line": 370,
       "text": "if (!redis || inCloud()) return { stored: 0 }",
       "form": "helper-call",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T3",
-      "why": "CFD rollup Redis key is not tenant-keyed",
-      "batch": "E"
+      "why": "CFD rollup runs per app on a shared deployment (Redis key carries the app); Nivaro Cloud still refuses (isNivaroCloud)",
+      "batch": "E",
+      "phase6": "done: per app on a shared deployment"
     },
     {
       "id": "services/db-outage.ts:45",
@@ -2189,12 +2191,12 @@
       "line": 18,
       "text": "if (process.env.CLOUD_META_DB_URL) return false",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T6",
-      "why": "mail-retry cron has no per-tenant core crons",
+      "why": "mail retry runs per app on a shared deployment; Nivaro Cloud still refuses (isNivaroCloud)",
       "batch": "D",
-      "phase6": "mail-retry cron per app (Task 10 fan-out)"
+      "phase6": "done: per app on a shared deployment"
     },
     {
       "id": "services/maintenance-live.ts:60",
@@ -2757,12 +2759,12 @@
       "line": 198,
       "text": "if (process.env.CLOUD_META_DB_URL) return { collections: 0, announced: 0 }",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T6",
-      "why": "SLA flip cron pass has no tenant context",
+      "why": "SLA flip pass is per app on a shared deployment; Nivaro Cloud still returns at once (isNivaroCloud)",
       "batch": "E",
-      "phase6": "SLA flip pass per app (job fan-out)"
+      "phase6": "done: per app on a shared deployment"
     },
     {
       "id": "services/socket-access.ts:480",

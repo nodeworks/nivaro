@@ -1,7 +1,7 @@
 import { db } from '../db/index.js'
 import { getTenantId } from '../db/tenant-context.js'
 import { registerAppKeyed } from './app-forget.js'
-import { isMultiTenant } from './deployment-mode.js'
+import { isNivaroCloud } from './deployment-mode.js'
 import { classifyMailError, nextRetryDelayMs } from './mail-retry-policy.js'
 
 /**
@@ -15,9 +15,9 @@ import { classifyMailError, nextRetryDelayMs } from './mail-retry-policy.js'
  * a database behind 536 logs and resends as before and simply never retries.
  */
 
-/** On unless MAIL_RETRY=off. Self-hosted only: cloud mode has no per-tenant core crons. */
+/** On unless MAIL_RETRY=off. Self-hosted and Hub shared deployments (per app); never Nivaro Cloud. */
 export function mailRetryEnabled(): boolean {
-  if (isMultiTenant()) return false
+  if (isNivaroCloud()) return false
   const v = String(process.env.MAIL_RETRY ?? '')
     .trim()
     .toLowerCase()

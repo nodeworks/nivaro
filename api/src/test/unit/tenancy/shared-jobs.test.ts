@@ -271,7 +271,7 @@ describe('multi-tenant boot roster', () => {
   it('finds the core jobs', () => expect(ids.length).toBeGreaterThan(120))
 
   it('the P5-10 jobs are left out on a shared deployment', () => {
-    for (const id of ['help-video-render-sweep', 'mail-retry'])
+    for (const id of ['help-video-render-sweep'])
       expect(SELF_HOSTED_ONLY_CRONS[id], id).toBeTruthy()
   })
 

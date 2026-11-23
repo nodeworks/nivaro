@@ -54,6 +54,11 @@ const EXTRA_CALLS: Record<string, { multiTenant?: number; nivaroCloud?: number }
   // Row schedules per app: resyncSchedules refuses in Nivaro Cloud only (its T1 entry is weight 0);
   // a Hub shared deployment reconciles inside an app, so each entry binds to it.
   'services/row-schedules.ts': { nivaroCloud: 1 },
+  // Mail retry, the cumulative-flow rollup and the live SLA flip pass run per app on a shared
+  // deployment: each now refuses in Nivaro Cloud only (their T1/T3/T6 entries are weight 0).
+  'services/mail-retry-state.ts': { nivaroCloud: 1 },
+  'services/cumulative-flow.ts': { nivaroCloud: 2 },
+  'services/sla-flips.ts': { nivaroCloud: 1 },
   // Staged imports per app: the hand-off (enqueueImportJob, importDrainMode, enqueueImportRun) and
   // the collection-import lease refuse in Nivaro Cloud only (their T4 entries are weight 0); a Hub
   // shared deployment queues, kicks, leases and drains inside each app.

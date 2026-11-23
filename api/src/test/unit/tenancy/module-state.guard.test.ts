@@ -901,8 +901,6 @@ const SHARED: Record<string, string> = {
   'services/single-flight.ts :: flights':
     "generic single-flight helper: every caller's key names its scope (read-gate keys carry the tenant; short caches key per caller)",
   'services/single-flight.ts :: stats': DIAG,
-  'services/sla-flips.ts :: pass':
-    'the live SLA flip pass, which never runs on a multi-tenant deployment (runSlaFlipPass returns at once)',
   'services/socket-access.ts :: pending':
     'a process recheck request over sockets; each socket is judged as its own app (Task 13)',
   'services/socket-access.ts :: pendingTimer': TIMER,

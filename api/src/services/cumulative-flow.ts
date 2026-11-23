@@ -3,7 +3,7 @@ import { dayText } from '../db/dialect/h2.js'
 import { db } from '../db/index.js'
 import { castText, qi, sqlDialect } from '../db/sql-dialect.js'
 import type { User } from '../types.js'
-import { isMultiTenant } from './deployment-mode.js'
+import { isNivaroCloud } from './deployment-mode.js'
 import { appKeyPart } from './tenancy/credential-binding.js'
 
 /**
@@ -306,7 +306,7 @@ export async function getCumulativeFlow(
     const unrestricted = !filtered && (await viewerUnrestricted(user, collection))
 
     // Long ranges for an unrestricted viewer: the nightly rollup
-    if (unrestricted && spanDays > CFD_LIVE_MAX_DAYS && redis && !isMultiTenant()) {
+    if (unrestricted && spanDays > CFD_LIVE_MAX_DAYS && redis && !isNivaroCloud()) {
       const hit = await redis.get(rollupKey(params.template, collection)).catch(() => null)
       if (hit) {
         try {
@@ -372,7 +372,7 @@ function applyCondition(
 
 /** Nightly: store an unrestricted year of deltas per template + collection. */
 export async function runCfdRollup(redis: Redis | null | undefined): Promise<{ stored: number }> {
-  if (!redis || isMultiTenant()) return { stored: 0 }
+  if (!redis || isNivaroCloud()) return { stored: 0 }
   const to = new Date()
   const back = new Date(to.getTime() - CFD_ROLLUP_DAYS * DAY_MS)
   const from = new Date(Date.UTC(back.getUTCFullYear(), back.getUTCMonth(), back.getUTCDate()))
