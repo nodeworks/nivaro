@@ -422,7 +422,8 @@ function UpgradeForm({
           onChange={(e) => setConfirm(e.target.value)}
           autoComplete='off'
           spellCheck={false}
-          placeholder={shared.key}
+          // Not the required text itself: a grey copy of it reads as already filled in.
+          placeholder='Type it here'
           className='h-8 max-w-[280px] bg-white font-mono text-[13px] dark:bg-background'
         />
       </div>

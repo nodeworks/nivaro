@@ -390,16 +390,25 @@ function SharedDetailView({
             <button type='button' className={ghostButton} onClick={() => onEdit(true)}>
               <Pencil className='h-3.5 w-3.5' aria-hidden /> Edit
             </button>
-            <ConfirmButton
-              onConfirm={() => remove.mutate()}
-              title='Delete'
-              confirmLabel='Delete now?'
-              disabled={remove.isPending}
-              className={dangerGhost}
-              armedClassName={cn(dangerGhost, dangerArmed)}
+            <span
+              data-tip={
+                row.status === 'upgrading'
+                  ? 'Wait for the upgrade to finish, then delete.'
+                  : undefined
+              }
+              className='inline-flex'
             >
-              Delete
-            </ConfirmButton>
+              <ConfirmButton
+                onConfirm={() => remove.mutate()}
+                title='Delete'
+                confirmLabel='Delete now?'
+                disabled={remove.isPending || row.status === 'upgrading'}
+                className={dangerGhost}
+                armedClassName={cn(dangerGhost, dangerArmed)}
+              >
+                Delete
+              </ConfirmButton>
+            </span>
           </div>
         )}
       </header>
@@ -421,7 +430,8 @@ function SharedDetailView({
         onRevealDone={onRevealDone}
       />
 
-      {d.env_block && <RunItYourself block={d.env_block} />}
+      {/* While a new token shows, its own block (with the token) is the one to copy. */}
+      {d.env_block && !reveal && <RunItYourself block={d.env_block} />}
 
       <LinkCard
         link={link}

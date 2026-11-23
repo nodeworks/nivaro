@@ -398,4 +398,33 @@ describe('HubShared', () => {
     expect(within(r[0]).getByText('web-1')).toBeInTheDocument()
     expect(within(r[1]).getByText(/older list/)).toBeInTheDocument()
   })
+
+  it('N7: while a new token shows, the placeholder settings block is not shown twice', async () => {
+    h.post.mockResolvedValue({
+      data: {
+        data: {
+          token: TOKEN,
+          previous_token_valid_until: null,
+          reapply: 'manual',
+          reapply_reason: null,
+          env_block: 'HUB_SHARED_DEPLOYMENT=shared-one\nHUB_DEPLOYMENT_TOKEN=x'
+        }
+      }
+    })
+    wrap('/hub/shared?shared=4')
+    expect(await screen.findByRole('region', { name: 'Run it yourself' })).toBeInTheDocument()
+    const card = screen.getByRole('region', { name: 'Deployment token' })
+    fireEvent.click(within(card).getByRole('button', { name: 'Rotate token' }))
+    fireEvent.click(within(card).getByRole('button', { name: 'Rotate now?' }))
+    expect(await screen.findByTestId('shared-token')).toHaveTextContent(TOKEN)
+    expect(screen.queryByRole('region', { name: 'Run it yourself' })).toBeNull()
+  })
+
+  it('N8: Delete waits while an upgrade runs, and says why', async () => {
+    routes({ ...DETAIL, row: { ...ROW, status: 'upgrading' } })
+    wrap('/hub/shared?shared=4')
+    const del = await screen.findByRole('button', { name: 'Delete' })
+    expect(del).toBeDisabled()
+    expect(del.closest('span[data-tip]')?.getAttribute('data-tip')).toMatch(/upgrade/)
+  })
 })
