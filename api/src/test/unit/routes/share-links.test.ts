@@ -319,31 +319,33 @@ describe('share links never reach past the creator’s own access', () => {
   })
 })
 
-function readStream(
+/** An open SSE stream read as it arrives (Hub phase 6 final review Minor 3: tests wait for what
+ *  the stream says, never a fixed window). */
+function openStream(
   app: FastifyInstance,
-  path: string,
-  ms: number
-): Promise<{ status: number; body: string }> {
+  path: string
+): { status: () => number; body: () => string; close: () => void } {
   const { port } = app.server.address() as AddressInfo
-  return new Promise((resolve, reject) => {
-    const req = httpRequest({ host: '127.0.0.1', port, path }, (res) => {
-      let body = ''
-      res.setEncoding('utf8')
-      res.on('data', (c: string) => {
-        body += c
-      })
-      res.on('end', () => resolve({ status: res.statusCode ?? 0, body }))
-      setTimeout(() => {
-        req.destroy()
-        resolve({ status: res.statusCode ?? 0, body })
-      }, ms)
+  let status = 0
+  let body = ''
+  const req = httpRequest({ host: '127.0.0.1', port, path }, (res) => {
+    status = res.statusCode ?? 0
+    res.setEncoding('utf8')
+    res.on('data', (c: string) => {
+      body += c
     })
-    req.on('error', (e) => {
-      if ((e as NodeJS.ErrnoException).code === 'ECONNRESET') return
-      reject(e)
-    })
-    req.end()
   })
+  req.on('error', () => {})
+  req.end()
+  return { status: () => status, body: () => body, close: () => req.destroy() }
+}
+
+async function until(fn: () => boolean, ms = 20_000) {
+  const t0 = Date.now()
+  while (!fn()) {
+    if (Date.now() - t0 > ms) throw new Error('timed out')
+    await new Promise((r) => setTimeout(r, 10))
+  }
 }
 
 // Realtime round 3 #4 — an open share page updates live: a token-scoped stream that carries a
@@ -377,25 +379,33 @@ describe('share link live stream', () => {
     const app = Fastify()
     await app.register(sharePublicRoutes)
     await app.listen({ port: 0, host: '127.0.0.1' })
-    const pending = readStream(app, '/share/live/stream', 3_200)
-    await new Promise((r) => setTimeout(r, 200))
+    const stream = openStream(app, '/share/live/stream')
+    // The stream subscribes in the same turn it writes `: connected`, after reading the page once.
+    await until(() => stream.body().includes(': connected'))
     // Another record of the same collection, another collection: ignored even though the
     // page would read differently now.
     m.readable = { id: 42, name: 'PO 42 renamed' }
     publishSseEvent({ collection: 'orders', item: 43, action: 'update', changed_fields: ['name'] })
     publishSseEvent({ collection: 'lines', item: 42, action: 'update' })
-    await new Promise((r) => setTimeout(r, 1_400))
+    // At least the page-signature memo's life (1.5 s) past the open, so the next check reads the
+    // page again: a lower bound, never a race.
+    await new Promise((r) => setTimeout(r, 1_600))
+    expect(stream.body()).not.toContain('event: changed')
     // Its own record: one signal (two writes coalesce).
     publishSseEvent({ collection: 'orders', item: 42, action: 'update', changed_fields: ['name'] })
     publishSseEvent({ collection: 'orders', item: '42', action: 'update' })
-    const { status, body } = await pending
+    await until(() => stream.body().includes('event: changed'))
+    // Past the coalescing window (1 s): still one.
+    await new Promise((r) => setTimeout(r, 1_200))
+    const body = stream.body()
+    stream.close()
     await app.close()
-    expect(status).toBe(200)
+    expect(stream.status()).toBe(200)
     expect(body.match(/event: changed/g)?.length).toBe(1)
     expect(body).not.toContain('orders')
     expect(body).not.toContain('PO 42')
     expect(body).not.toContain('name')
-  }, 10_000)
+  }, 60_000)
 
   it('the page carries its live script under a nonce, and a refresh is not a view', async () => {
     m.link = { ...liveLink }

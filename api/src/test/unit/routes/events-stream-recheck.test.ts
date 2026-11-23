@@ -55,7 +55,10 @@ afterAll(async () => {
   await app.close()
 })
 
-async function until(fn: () => boolean, ms = 2000) {
+// Hub phase 6 final review (rest) Minor 3: no fixed sleeps — every wait is for something the
+// stream itself says (its `: connected` line, the heartbeat's `: hb` written once the re-check is
+// done, a sentinel event), with a generous deadline, so a loaded machine only makes it slower.
+async function until(fn: () => boolean, ms = 10_000) {
   const t0 = Date.now()
   while (!fn()) {
     if (Date.now() - t0 > ms) throw new Error('timed out')
@@ -66,26 +69,35 @@ async function until(fn: () => boolean, ms = 2000) {
 describe('events stream permission re-check', () => {
   it('stops delivering a collection once the refreshed identity loses read on it', async () => {
     const got: string[] = []
+    let connected = false
+    let beats = 0
     const req = request(`${base}/stream`, (res) => {
       res.setEncoding('utf8')
       res.on('data', (chunk: string) => {
-        for (const line of chunk.split('\n'))
+        for (const line of chunk.split('\n')) {
+          if (line.startsWith(': connected')) connected = true
+          if (line.startsWith(': hb')) beats++
           if (line.startsWith('data: ')) got.push(JSON.parse(line.slice(6)).item)
+        }
       })
     })
     req.end()
-    await new Promise((r) => setTimeout(r, 100))
+    // Subscribed once the stream says so (it subscribes in the same turn it writes this line).
+    await until(() => connected)
     publishSseEvent({ collection: 'orders', item: 'before', tenant: '' })
     await until(() => got.includes('before'))
 
-    // The role changes; the next heartbeat refreshes the identity and drops cached answers.
+    // The role changes; the next heartbeat refreshes the identity and drops cached answers. Its
+    // `: hb` is written only once that re-check is done.
     state.role = 'R2'
-    state.readable = new Set()
+    state.readable = new Set(['tasks'])
     vi.advanceTimersByTime(25_000)
-    await new Promise((r) => setTimeout(r, 50))
+    await until(() => beats >= 1)
     publishSseEvent({ collection: 'orders', item: 'after', tenant: '' })
-    await new Promise((r) => setTimeout(r, 100))
-    expect(got).toEqual(['before'])
+    // A sentinel the new role may read, sent after: once it is here, 'after' would be too.
+    publishSseEvent({ collection: 'tasks', item: 'sentinel', tenant: '' })
+    await until(() => got.includes('sentinel'))
+    expect(got).toEqual(['before', 'sentinel'])
     req.destroy()
-  })
+  }, 60_000)
 })

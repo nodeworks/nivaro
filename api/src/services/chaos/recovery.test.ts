@@ -51,6 +51,17 @@ function fakeIo(values: number[], r: ChaosRun | null = run()) {
 }
 
 const fast = { intervalMs: 1, settleMs: 1, maxMs: 200 }
+/** Hub phase 6 final review (rest) Minor 3: a watch that must reach its verdict on a loaded
+ *  machine gets a cap it never meets (it stops on recovery anyway); waits poll for the samples
+ *  with a deadline instead of sleeping a fixed 40 ms. */
+const roomy = { ...fast, maxMs: 60_000 }
+async function until(fn: () => boolean, ms = 20_000) {
+  const t0 = Date.now()
+  while (!fn()) {
+    if (Date.now() - t0 > ms) throw new Error('timed out')
+    await new Promise((r) => setTimeout(r, 5))
+  }
+}
 
 beforeEach(() => {
   delete process.env.CLOUD_META_DB_URL
@@ -82,7 +93,7 @@ describe('recovery watch', () => {
 
   it('samples after the fault until two samples in a row are back in the baseline', async () => {
     const { io, events } = fakeIo([900, 600, 230, 210, 205])
-    expect(await watchRecovery('run-1', { ...fast, io })).toBe('recovered')
+    expect(await watchRecovery('run-1', { ...roomy, io })).toBe('recovered')
     expect(events.map((e) => (e.s as Record<string, number>)['http.p95_ms'])).toEqual([
       900, 600, 230, 210
     ])
@@ -99,21 +110,24 @@ describe('recovery watch', () => {
 
   it('does nothing while nothing ends, and starts when a fault armed here ends', async () => {
     const { io, sampled } = fakeIo([210, 205])
-    wireRecoveryWatch({ ...fast, io })
+    wireRecoveryWatch({ ...roomy, io })
     const f = await armFault({ fault_key: 'slow', seconds: 30, run_id: 'run-1' })
     await new Promise((r) => setTimeout(r, 20))
     expect(sampled()).toBe(0)
     await disarm(f.id, 'test')
-    await new Promise((r) => setTimeout(r, 40))
-    expect(sampled()).toBeGreaterThanOrEqual(2)
+    await until(() => sampled() >= 2)
   })
 
   it('starts on Stop all too, once per run', async () => {
-    const { io, sampled } = fakeIo([210, 205])
-    wireRecoveryWatch({ ...fast, io })
+    const { io, sampled, events } = fakeIo([210, 205])
+    wireRecoveryWatch({ ...roomy, io })
     await armFault({ fault_key: 'slow', seconds: 30, run_id: 'run-1' })
     await stopAll('test')
-    await new Promise((r) => setTimeout(r, 40))
+    // Two samples in a row back in the baseline end the watch right after its second event; a
+    // second watch of the same run (the bug this guards) would sample again after it, so give it
+    // a moment (a lower bound, never a race) before counting.
+    await until(() => events.length >= 2)
+    await new Promise((r) => setTimeout(r, 50))
     expect(sampled()).toBe(2)
   })
 })
