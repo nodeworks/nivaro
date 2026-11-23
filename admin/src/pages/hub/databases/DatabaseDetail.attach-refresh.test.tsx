@@ -90,7 +90,7 @@ function mount(row: Record<string, unknown>) {
   return { invalidate }
 }
 
-const invalidatedKeys = (spy: ReturnType<typeof vi.spyOn>) =>
+const invalidatedKeys = (spy: { mock: { calls: unknown[][] } }) =>
   spy.mock.calls.map((c) => JSON.stringify((c[0] as { queryKey?: unknown } | undefined)?.queryKey))
 
 afterEach(() => {
