@@ -64,7 +64,8 @@ export function HubPlaceSharedForm({
     .filter((s) => s.status !== 'retired')
     .map((s) => ({
       value: String(s.id),
-      label: s.key,
+      // Named as the move picker names it (design N9).
+      label: `Shared · ${s.key}`,
       hint: [s.name, s.version_pin, s.status === 'active' ? null : s.status]
         .filter(Boolean)
         .join(' · ')
