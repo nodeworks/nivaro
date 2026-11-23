@@ -843,13 +843,19 @@ export class CronManager {
   /** The app behind `tenantId` as the registry lists it now (byId, else the active list), or
    *  null: not listed (it left the deployment), no registry, or the registry could not answer. */
   private async lookupApp(tenantId: string): Promise<TenantRecord | null> {
+    const found = await this.findApp(tenantId)
+    return found === 'unknown' ? null : found
+  }
+  /** lookupApp, telling "not listed" (null) apart from "no registry, or it could not answer"
+   *  ('unknown'). */
+  private async findApp(tenantId: string): Promise<TenantRecord | null | 'unknown'> {
     try {
       const registry = getTenantRegistry()
-      if (!registry) return null
+      if (!registry) return 'unknown'
       if (registry.byId) return await registry.byId(tenantId)
       return (await registry.listActive()).find((t) => t.id === tenantId) ?? null
     } catch {
-      return null
+      return 'unknown'
     }
   }
   /** Post-registration metadata (#136/#305) — one annotation block in
@@ -1334,11 +1340,21 @@ export class CronManager {
     opts: ScheduleOpts | undefined,
     budget: number
   ): Promise<BoundTickOutcome> {
-    const t = await this.lookupApp(bound.tenant)
+    const found = await this.findApp(bound.tenant)
     // Dropped while the app was looked up (the app left): nothing to run.
     if (this.entries.get(key) !== entry) return 'gone'
-    if (!t) return 'gone'
+    // The registry answered and no longer lists the app: it left the deployment without this
+    // process hearing it (onAppLeft drops its entries otherwise). Drop this entry rather than
+    // tick for nothing forever; should the app come back, its ready hook schedules it again.
+    if (found === null) {
+      this.forgetKey(key)
+      return 'gone'
+    }
+    // No registry, or it could not answer: keep the entry for the next fire.
+    if (found === 'unknown') return 'gone'
+    const t = found
     if (t.status === 'maintenance') return 'maintenance'
+    // Listed but suspended or provisioning: it may come back, so the entry stays.
     if (t.status !== 'active') return 'gone'
     if (!appReadyForRequests(t.id)) return 'not_ready'
     try {
@@ -1688,7 +1704,9 @@ export class CronManager {
   }
 
   /** Hub shared deployment — a bound entry's catch-up, inside its app, skipped as its ticks are
-   *  (app not listed or not active, not ready, paused there, maintenance mode). */
+   *  (app not listed or not active, not ready, paused there, maintenance mode). Rarely reached:
+   *  row schedules (the bound entries) set no catchUpHours today, and catch-ups run once, 30 s
+   *  after boot; kept so a bound job that opts in catches up in its own app. */
   private async catchUpBound(
     key: string,
     bound: Bound,
@@ -1858,16 +1876,22 @@ export class CronManager {
     let n = 0
     for (const [key, e] of this.entries) {
       if (e.tenant !== tenantId) continue
-      e.job.stop()
-      this.entries.delete(key)
-      this.pausedIds.delete(key)
-      this.overrides.delete(key)
-      this.tzOverrides.delete(key)
-      this.chains.delete(key)
-      for (const [child, parent] of this.chains) if (parent === key) this.chains.delete(child)
+      this.forgetKey(key)
       n++
     }
     return n
+  }
+
+  /** Stop and drop the entry under `key` with any in-process pause, override, zone or chain kept
+   *  for it, and any chain that ran after it. */
+  private forgetKey(key: string): void {
+    this.entries.get(key)?.job.stop()
+    this.entries.delete(key)
+    this.pausedIds.delete(key)
+    this.overrides.delete(key)
+    this.tzOverrides.delete(key)
+    this.chains.delete(key)
+    for (const [child, parent] of this.chains) if (parent === key) this.chains.delete(child)
   }
 
   unscheduleByExtension(extensionId: string): void {

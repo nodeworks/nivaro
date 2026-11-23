@@ -279,6 +279,8 @@ describe('cron entries bound to one app (shared deployment)', () => {
     await expect(fire(m, 'sync-job-3@A')).resolves.not.toThrow()
     expect(ran).toEqual([])
     expect(state.runs).toEqual([])
+    // its entry is dropped (it would tick for nothing forever); the other app's stays
+    expect(keys(m)).toEqual(['sync-job-3@B'])
   })
 
   it('a registry that cannot list apps: the tick skips without throwing', async () => {
@@ -294,6 +296,8 @@ describe('cron entries bound to one app (shared deployment)', () => {
     })
     await fire(m, 'sync-job-3@A')
     expect(ran).toEqual([])
+    // the registry could not answer: the entry stays for the next fire
+    expect(keys(m)).toEqual(['sync-job-3@A', 'sync-job-3@B'])
   })
 
   it('byId wins over listActive for the lookup; a suspended app runs nothing', async () => {
@@ -309,6 +313,8 @@ describe('cron entries bound to one app (shared deployment)', () => {
     await fire(m, 'sync-job-3@A')
     await fire(m, 'sync-job-3@B')
     expect(ran.map((r) => r.app)).toEqual(['A'])
+    // still listed (suspended, it may come back): its entry stays
+    expect(keys(m)).toEqual(['sync-job-3@A', 'sync-job-3@B'])
   })
 
   it("unscheduleTenant drops only that app's entries", () => {
