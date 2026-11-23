@@ -265,6 +265,13 @@ describe('computeSharedReadiness', () => {
     ])
       expect(codeOf(r, code)?.level, code).toBe('warning')
     expect(codeOf(r, 'SESSION_REPLAYS')?.detail).toBe('2 session replays stay behind')
+    // E2E B M1: the move plan shows "<title>: <detail>" ("Automatic mail retry is off on a shared
+    // deployment: …"), so the detail says what this app does today, never "… is on".
+    expect(codeOf(r, 'MAIL_RETRY')?.detail).toBe('This app retries failed mail automatically today')
+    expect(codeOf(r, 'TEAMS_BOT')?.detail).toBe('This app answers in Teams through its bot today')
+    expect(codeOf(r, 'DIRECTORY_SYNC')?.detail).toBe(
+      'This app syncs people from the directory today'
+    )
     expect(codeOf(r, 'HUDDLE_TURN')?.detail).toContain('2 TURN servers')
     expect(JSON.stringify(r)).not.toContain('smtp.internal')
     // SMTP saved in Settings travels with the database: no warning.
