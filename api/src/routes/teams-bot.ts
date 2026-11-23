@@ -4,7 +4,8 @@ import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { linkTo } from '../services/app-links.js'
-import { isMultiTenant } from '../services/deployment-mode.js'
+import { appSet } from '../services/app-state.js'
+import { isNivaroCloud, perAppJobs } from '../services/deployment-mode.js'
 import { bustNotifyPrefsCache } from '../services/notification-channels.js'
 import { handleInvoke } from '../services/teams-bot/actions.js'
 import { messageText, type TeamsActivity } from '../services/teams-bot/activity.js'
@@ -24,8 +25,10 @@ import {
   upsertLink
 } from '../services/teams-bot/links.js'
 import { buildTeamsPackage } from '../services/teams-bot/manifest.js'
+import { teamsBotOrigin } from '../services/teams-bot/origin.js'
 import { deliverTeams } from '../services/teams-bot/send.js'
 import { readTeamsStat } from '../services/teams-bot/stats.js'
+import { appKeyPart } from '../services/tenancy/credential-binding.js'
 import { canSignIn, getUser } from '../services/users.js'
 import type { User } from '../types.js'
 import { NIVARO_VERSION } from '../version.js'
@@ -38,11 +41,13 @@ const CARD = 'application/vnd.microsoft.card.adaptive'
 const DEDUPE_TTL_S = 600
 const LRU_MAX = 1000
 
-const seen = new Map<string, true>()
+// Per app: on a Hub shared deployment each app's bot hears its own conversations (copies of one
+// app share ids). appKeyPart() is '' elsewhere, so the Redis key bytes are unchanged.
+const seen = appSet<string>()
 function rememberLocal(id: string): boolean {
   if (seen.has(id)) return false
-  seen.set(id, true)
-  if (seen.size > LRU_MAX) seen.delete(seen.keys().next().value as string)
+  seen.add(id)
+  if (seen.size > LRU_MAX) seen.delete(seen.values().next().value as string)
   return true
 }
 
@@ -51,7 +56,10 @@ async function firstTime(app: FastifyInstance, id: string): Promise<boolean> {
   const redis = (app as { redis?: { set: (...a: unknown[]) => Promise<unknown> } }).redis
   if (redis) {
     try {
-      return (await redis.set(`nvr:teams:act:${id}`, '1', 'EX', DEDUPE_TTL_S, 'NX')) === 'OK'
+      return (
+        (await redis.set(`nvr:teams:act:${appKeyPart()}${id}`, '1', 'EX', DEDUPE_TTL_S, 'NX')) ===
+        'OK'
+      )
     } catch {
       // Redis trouble: fall through to this process's own memory.
     }
@@ -218,9 +226,10 @@ async function handleInstall(activity: TeamsActivity): Promise<void> {
   )
 }
 
-/** The person-facing routes exist only where the bot is on (never in cloud mode). */
+/** The person-facing routes exist only where the bot is on (never in Nivaro Cloud; on a Hub
+ *  shared deployment, per app). */
 async function botAvailable(): Promise<boolean> {
-  if (isMultiTenant()) return false
+  if (isNivaroCloud()) return false
   return (await getTeamsBotConfig()).enabled
 }
 
@@ -242,9 +251,9 @@ const TEST_TEXT: Record<string, string> = {
 }
 
 export async function teamsBotRoutes(app: FastifyInstance) {
-  // ─── Admin: status, test message, app package (off in cloud mode) ───
+  // ─── Admin: status, test message, app package (off in Nivaro Cloud; per app on shared) ───
   app.get('/status', { preHandler: requireAdmin }, async (_req, reply) => {
-    if (isMultiTenant()) return reply.code(404).send({ error: 'Not found' })
+    if (isNivaroCloud()) return reply.code(404).send({ error: 'Not found' })
     const cfg = await getTeamsBotConfig()
     const setup = await teamsBotSetup()
     const links = (await db('nivaro_teams_links')
@@ -287,7 +296,7 @@ export async function teamsBotRoutes(app: FastifyInstance) {
   })
 
   app.post('/test', { preHandler: requireAdmin }, async (req, reply) => {
-    if (isMultiTenant()) return reply.code(404).send({ error: 'Not found' })
+    if (isNivaroCloud()) return reply.code(404).send({ error: 'Not found' })
     const outcome = await deliverTeams(
       app,
       (req.user as User).id,
@@ -297,14 +306,21 @@ export async function teamsBotRoutes(app: FastifyInstance) {
   })
 
   app.get('/package', { preHandler: requireAdmin, compress: false }, async (_req, reply) => {
-    if (isMultiTenant()) return reply.code(404).send({ error: 'Not found' })
+    if (isNivaroCloud()) return reply.code(404).send({ error: 'Not found' })
     const appId = await configuredAppId()
     if (!appId)
       return reply
         .code(409)
         .send({ error: 'Save the app (client) ID first', code: 'NOT_CONFIGURED' })
-    const publicHost = hostOf(config.PUBLIC_URL)
-    const adminHost = hostOf(config.ADMIN_URL)
+    // The app's own origin on a Hub shared deployment (the package's valid domain and developer
+    // URL); PUBLIC_URL / ADMIN_URL self-hosted, as before.
+    const origin = teamsBotOrigin()
+    if (perAppJobs() && !origin)
+      return reply
+        .code(409)
+        .send({ error: 'This app has no address on this deployment', code: 'NO_ORIGIN' })
+    const publicHost = hostOf(origin)
+    const adminHost = perAppJobs() ? publicHost : hostOf(config.ADMIN_URL)
     const row = (await db('nivaro_settings').first('environment_label')) as
       | { environment_label?: string | null }
       | undefined
@@ -321,7 +337,7 @@ export async function teamsBotRoutes(app: FastifyInstance) {
         'Get your Nivaro notifications in Teams, approve or reject from the card, and ask questions about your records. Everything you see in Teams is limited to what your Nivaro account may see.',
       publicHost,
       extraDomains: adminHost && adminHost !== publicHost ? [adminHost] : [],
-      developerUrl: config.PUBLIC_URL.replace(/\/$/, ''),
+      developerUrl: origin,
       version: NIVARO_VERSION
     })
     return reply
@@ -410,10 +426,9 @@ export async function teamsBotRoutes(app: FastifyInstance) {
 
     const userId = (req as { session?: { userId?: string } }).session?.userId
     if (!userId) {
-      const back = `${config.PUBLIC_URL.replace(/\/$/, '')}/api/teams/connect?t=${encodeURIComponent(String(req.query.t))}`
-      return reply.redirect(
-        `${config.PUBLIC_URL.replace(/\/$/, '')}/api/auth/login?returnTo=${encodeURIComponent(back)}`
-      )
+      const origin = teamsBotOrigin()
+      const back = `${origin}/api/teams/connect?t=${encodeURIComponent(String(req.query.t))}`
+      return reply.redirect(`${origin}/api/auth/login?returnTo=${encodeURIComponent(back)}`)
     }
     const user = await getUser(userId)
     if (!user || !canSignIn(user)) return send(page(403, 'This account cannot be connected.'))

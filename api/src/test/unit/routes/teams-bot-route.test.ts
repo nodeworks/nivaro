@@ -55,6 +55,8 @@ vi.mock('../../../services/teams-bot/links.js', () => ({
     st.tokenOk && t === 'SIGNED' ? { aadObjectId: 'oid-1', tenantId: 'tid' } : null
 }))
 
+import type { Knex } from 'knex'
+import { runWithTenantDb } from '../../../db/tenant-context.js'
 import { teamsBotRoutes } from '../../../routes/teams-bot.js'
 import { beginTrace, currentTraceCaller } from '../../../services/request-trace.js'
 
@@ -364,6 +366,34 @@ describe('GET /api/teams/connect', () => {
       expect(st.upsert).not.toHaveBeenCalled()
     } finally {
       delete process.env.CLOUD_META_DB_URL
+    }
+  })
+
+  it("available on a Hub shared deployment; the sign-in round trip stays on the app's origin", async () => {
+    Object.assign(process.env, {
+      HUB_SHARED_DEPLOYMENT: 'shared-a',
+      HUB_URL: 'https://hub.example.com',
+      HUB_DEPLOYMENT_TOKEN: 'x'.repeat(40)
+    })
+    try {
+      const app = await build()
+      const r = await new Promise<Awaited<ReturnType<typeof get>>>((resolve, reject) =>
+        runWithTenantDb(
+          {} as Knex,
+          'a',
+          () => void get(app).then(resolve, reject),
+          'A',
+          'https://app-a.example.com'
+        )
+      )
+      expect(r.statusCode).toBe(302)
+      const loc = decodeURIComponent(String(r.headers.location))
+      expect(loc.startsWith('https://app-a.example.com/api/auth/login?returnTo=')).toBe(true)
+      expect(loc).toContain('https://app-a.example.com/api/teams/connect?t=SIGNED')
+      expect(loc).not.toContain('nivaro.test')
+    } finally {
+      for (const k of ['HUB_SHARED_DEPLOYMENT', 'HUB_URL', 'HUB_DEPLOYMENT_TOKEN'])
+        delete process.env[k]
     }
   })
 })

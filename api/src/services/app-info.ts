@@ -45,7 +45,9 @@ export function enabledFeatures(env: NodeJS.ProcessEnv = process.env): string[] 
   out.push('session_replay')
   if (!multiTenant) out.push('infrastructure')
   if (chaosAllowed(env)) out.push('chaos')
-  if (!multiTenant && (env.TEAMS_BOT ?? '').trim().toLowerCase() !== 'off') out.push('teams_bot')
+  // Per app on a Hub shared deployment (Settings → Teams); never in Nivaro Cloud.
+  if (!isNivaroCloud(env) && (env.TEAMS_BOT ?? '').trim().toLowerCase() !== 'off')
+    out.push('teams_bot')
   out.push('traffic_map')
   if (hubModeEnabled(env)) out.push('hub')
   // Hub phase 7: this app can ask the Hub for the person's other apps (GET /api/hub-switcher).

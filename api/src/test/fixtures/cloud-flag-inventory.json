@@ -1094,11 +1094,12 @@
       "line": 224,
       "text": "if (inCloud()) return false",
       "form": "helper-call",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T4",
-      "why": "Teams bot registration is process config one app cannot own",
-      "batch": "D"
+      "why": "the Teams bot runs per app on a shared deployment (each app's own saved bot); Nivaro Cloud still refuses (isNivaroCloud)",
+      "batch": "D",
+      "phase6": "done: per app on a shared deployment"
     },
     {
       "id": "routes/teams-bot.ts:248",
@@ -1106,11 +1107,12 @@
       "line": 248,
       "text": "if (inCloud()) return reply.code(404).send({ error: 'Not found' })",
       "form": "helper-call",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T4",
-      "why": "Teams bot registration is process config one app cannot own",
-      "batch": "D"
+      "why": "the Teams bot runs per app on a shared deployment (each app's own saved bot); Nivaro Cloud still refuses (isNivaroCloud)",
+      "batch": "D",
+      "phase6": "done: per app on a shared deployment"
     },
     {
       "id": "routes/teams-bot.ts:291",
@@ -1118,11 +1120,12 @@
       "line": 291,
       "text": "if (inCloud()) return reply.code(404).send({ error: 'Not found' })",
       "form": "helper-call",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T4",
-      "why": "Teams bot registration is process config one app cannot own",
-      "batch": "D"
+      "why": "the Teams bot runs per app on a shared deployment (each app's own saved bot); Nivaro Cloud still refuses (isNivaroCloud)",
+      "batch": "D",
+      "phase6": "done: per app on a shared deployment"
     },
     {
       "id": "routes/teams-bot.ts:301",
@@ -1130,11 +1133,12 @@
       "line": 301,
       "text": "if (inCloud()) return reply.code(404).send({ error: 'Not found' })",
       "form": "helper-call",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T4",
-      "why": "Teams bot registration is process config one app cannot own",
-      "batch": "D"
+      "why": "the Teams bot runs per app on a shared deployment (each app's own saved bot); Nivaro Cloud still refuses (isNivaroCloud)",
+      "batch": "D",
+      "phase6": "done: per app on a shared deployment"
     },
     {
       "id": "routes/traffic-map-extras/baselines.ts:41",
@@ -1393,7 +1397,7 @@
       "weight": 1,
       "meaning": "multiTenant",
       "rule": "T5",
-      "why": "local const gates `infrastructure` (T5) and `teams_bot` (T4) in enabledFeatures: both multiTenant",
+      "why": "local const gates `infrastructure` (T5) in enabledFeatures; `teams_bot` (T4) now refuses in Nivaro Cloud only (isNivaroCloud, Task 9: per app on a shared deployment)",
       "batch": "A"
     },
     {
@@ -2904,11 +2908,12 @@
       "line": 121,
       "text": "if (process.env.CLOUD_META_DB_URL) return null",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T4",
-      "why": "Teams bot registration is process config (reason stays `cloud`)",
-      "batch": "D"
+      "why": "Teams bot setup per app on a shared deployment (saved settings only, never the env or the sign-in app); Nivaro Cloud still answers none (isNivaroCloud)",
+      "batch": "D",
+      "phase6": "done: per app on a shared deployment"
     },
     {
       "id": "services/teams-bot/config.ts:133",
@@ -2916,11 +2921,12 @@
       "line": 133,
       "text": "if (process.env.CLOUD_META_DB_URL) return { ...none, enabled: false, reason: 'cloud' }",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T4",
-      "why": "Teams bot registration is process config (reason stays `cloud`)",
-      "batch": "D"
+      "why": "Teams bot config per app on a shared deployment (saved settings only, never the env or the sign-in app); Nivaro Cloud keeps reason `cloud` (isNivaroCloud)",
+      "batch": "D",
+      "phase6": "done: per app on a shared deployment"
     },
     {
       "id": "services/telemetry-status.ts:119",

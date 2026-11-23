@@ -1,6 +1,7 @@
 import { config } from '../../config.js'
 import { db } from '../../db/index.js'
-import { isMultiTenant } from '../deployment-mode.js'
+import { appBox } from '../app-state.js'
+import { isNivaroCloud, perAppJobs } from '../deployment-mode.js'
 import { overlaySettings } from '../settings-overrides.js'
 
 export type TeamsBotSource = 'env' | 'settings' | 'sign_in_app'
@@ -21,15 +22,19 @@ export interface TeamsBotConfig {
 }
 
 const TTL_MS = 30_000
-let cached: { at: number; value: TeamsBotConfig } | null = null
-let inflight: Promise<TeamsBotConfig> | null = null
-let epoch = 0
 
-/** Called by the settings PATCH so a change applies at once on this process. */
+// One cache per app (a Hub shared deployment serves many apps from this process, each with its
+// own bot). A bust swaps the slot object, so a load that started before it never fills the new.
+interface Slot {
+  cached: { at: number; value: TeamsBotConfig } | null
+  inflight: Promise<TeamsBotConfig> | null
+}
+const slot = appBox<Slot>(() => ({ cached: null, inflight: null }))
+
+/** Called by the settings PATCH so a change applies at once on this process: the current app's
+ *  cache inside an app, every app's outside one. */
 export function bustTeamsBotConfig(): void {
-  cached = null
-  inflight = null
-  epoch++
+  slot.reset()
 }
 
 const clean = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
@@ -82,13 +87,28 @@ async function readRow(): Promise<Record<string, unknown> | undefined> {
   }
 }
 
+function savedSource(row: Record<string, unknown> | undefined): Picked | null {
+  if (!clean(row?.teams_bot_app_id)) return null
+  return {
+    appId: clean(row?.teams_bot_app_id),
+    appSecret: clean(row?.teams_bot_app_secret),
+    tenantId: clean(row?.teams_bot_tenant_id),
+    appType: parseAppType(row?.teams_bot_app_type) ?? 'MultiTenant',
+    source: 'settings'
+  }
+}
+
 /**
  * The one source pick, independent of the enable switch: first source that supplies an app id
  * wins and its secret, tenant and app type come with it (env TEAMS_BOT_* family, else the Bot
  * Framework SDK's MICROSOFT_APP_* family, else settings, else the sign-in app). Families never
  * mix: an id from one is never paired with a secret, tenant or type from another.
+ *
+ * On a Hub shared deployment the process env and its sign-in app are the deployment's, not any
+ * app's: each app's bot is only what that app saved in Settings.
  */
 function pickSource(row: Record<string, unknown> | undefined): Picked | null {
+  if (perAppJobs()) return savedSource(row)
   if (clean(process.env.TEAMS_BOT_APP_ID))
     return {
       appId: clean(process.env.TEAMS_BOT_APP_ID),
@@ -105,21 +125,15 @@ function pickSource(row: Record<string, unknown> | undefined): Picked | null {
       appType: parseAppType(process.env.MICROSOFT_APP_TYPE) ?? 'MultiTenant',
       source: 'env'
     }
-  if (clean(row?.teams_bot_app_id))
-    return {
-      appId: clean(row?.teams_bot_app_id),
-      appSecret: clean(row?.teams_bot_app_secret),
-      tenantId: clean(row?.teams_bot_tenant_id),
-      appType: parseAppType(row?.teams_bot_app_type) ?? 'MultiTenant',
-      source: 'settings'
-    }
+  const saved = savedSource(row)
+  if (saved) return saved
   const s = signInApp()
   return s?.appId ? { ...s, appType: 'SingleTenant', source: 'sign_in_app' } : null
 }
 
 /** What is saved/supplied for the bot, whether or not it is switched on (admin status, package). */
 export async function teamsBotSetup(): Promise<Picked | null> {
-  if (isMultiTenant()) return null
+  if (isNivaroCloud()) return null
   return pickSource(await readRow())
 }
 
@@ -131,12 +145,17 @@ async function load(): Promise<TeamsBotConfig> {
     appType: 'MultiTenant' as const,
     source: null
   }
-  if (isMultiTenant()) return { ...none, enabled: false, reason: 'cloud' }
+  if (isNivaroCloud()) return { ...none, enabled: false, reason: 'cloud' }
+  // TEAMS_BOT=off turns the bot off for the whole deployment (every app of a shared one). Its
+  // `on` forces this process's one app on; on a shared deployment each app's own switch decides.
   const flag = clean(process.env.TEAMS_BOT).toLowerCase()
   if (flag === 'off') return { ...none, enabled: false, reason: 'off' }
 
   const row = await readRow()
-  const on = flag === 'on' || row?.teams_bot_enabled === true || row?.teams_bot_enabled === 1
+  const on =
+    (flag === 'on' && !perAppJobs()) ||
+    row?.teams_bot_enabled === true ||
+    row?.teams_bot_enabled === 1
   if (!on) return { ...none, enabled: false, reason: 'disabled' }
 
   const picked = pickSource(row)
@@ -147,20 +166,21 @@ async function load(): Promise<TeamsBotConfig> {
 }
 
 export async function getTeamsBotConfig(): Promise<TeamsBotConfig> {
-  if (cached && Date.now() - cached.at < TTL_MS) return cached.value
-  if (!inflight) {
-    const mine = epoch
+  const s = slot.value
+  if (s.cached && Date.now() - s.cached.at < TTL_MS) return s.cached.value
+  if (!s.inflight) {
     const p = load()
       .then((value) => {
-        if (mine === epoch) cached = { at: Date.now(), value }
+        // A bust since this load started replaced the slot: its answer may be stale.
+        if (slot.value === s) s.cached = { at: Date.now(), value }
         return value
       })
       .finally(() => {
-        if (inflight === p) inflight = null
+        if (s.inflight === p) s.inflight = null
       })
-    inflight = p
+    s.inflight = p
   }
-  return inflight
+  return s.inflight
 }
 
 /** The app id the package should carry (an admin downloads it while still setting up). */

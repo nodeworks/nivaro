@@ -1,3 +1,4 @@
+import { appMap } from '../app-state.js'
 import { getTeamsBotConfig, type TeamsBotConfig } from './config.js'
 
 // Outbound auth: https://learn.microsoft.com/en-us/azure/bot-service/rest-api/bot-framework-rest-connector-authentication
@@ -41,8 +42,10 @@ interface TokenEntry {
   token: string
   expiresAt: number
 }
-const tokens = new Map<string, TokenEntry>()
-const inflight = new Map<string, Promise<string>>()
+// Per app (a Hub shared deployment's apps each keep their own bot token, even for the same
+// registration); self-hosted there is one app, so this is the plain cache it was.
+const tokens = appMap<string, TokenEntry>()
+const inflight = appMap<string, Promise<string>>()
 
 /** Test seam. */
 export function resetConnectorCache(): void {

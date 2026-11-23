@@ -68,7 +68,13 @@ const EXTRA_CALLS: Record<string, { multiTenant?: number; nivaroCloud?: number }
   // Log retention page's `cloud` field refuse in Nivaro Cloud only (their T6 entries are weight 0);
   // a Hub shared deployment runs each inside its apps. (The Traffic Map digest stays off on shared.)
   'services/ai-explain-weekly.ts': { nivaroCloud: 2 },
-  'services/log-retention.ts': { nivaroCloud: 1 }
+  'services/log-retention.ts': { nivaroCloud: 1 },
+  // The Teams bot per app: its admin routes, person routes and config refuse in Nivaro Cloud only
+  // (their T4 entries are weight 0); a Hub shared deployment runs each app's own saved bot. The
+  // phone app's `teams_bot` feature follows (its T5 `multiTenant` const still gates infrastructure).
+  'routes/teams-bot.ts': { nivaroCloud: 4 },
+  'services/teams-bot/config.ts': { nivaroCloud: 2 },
+  'services/app-info.ts': { nivaroCloud: 1 }
 }
 
 type Rule = 'T1' | 'T2' | 'T3' | 'T4' | 'T5' | 'T6' | 'T7' | 'C1' | 'C2' | 'C3' | 'C4' | 'C5'

@@ -65,7 +65,27 @@ vi.mock('../../../services/teams-bot/send.js', () => ({ deliverTeams: async () =
 vi.mock('../../../services/users.js', () => ({ canSignIn: () => true, getUser: async () => null }))
 vi.mock('../../../services/teams-bot/connector.js', () => ({ sendActivity: async () => ({}) }))
 
+import type { Knex } from 'knex'
+import { runWithTenantDb } from '../../../db/tenant-context.js'
 import { teamsBotRoutes } from '../../../routes/teams-bot.js'
+
+const SHARED = {
+  HUB_SHARED_DEPLOYMENT: 'shared-a',
+  HUB_URL: 'https://hub.example.com',
+  HUB_DEPLOYMENT_TOKEN: 'x'.repeat(40)
+}
+/** Run as app A of a Hub shared deployment, reached at its own origin. */
+function inAppA<T>(fn: () => Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) =>
+    runWithTenantDb(
+      {} as Knex,
+      'a',
+      () => void fn().then(resolve, reject),
+      'A',
+      'https://app-a.example.com'
+    )
+  )
+}
 
 async function app() {
   const a = Fastify()
@@ -82,6 +102,7 @@ beforeEach(() => {
 })
 afterEach(() => {
   delete process.env.CLOUD_META_DB_URL
+  for (const k of Object.keys(SHARED)) delete process.env[k]
 })
 
 describe('teams admin routes', () => {
@@ -137,5 +158,30 @@ describe('teams admin routes', () => {
       ['GET', '/teams/package']
     ] as const)
       expect((await a.inject({ method, url })).statusCode).toBe(404)
+  })
+
+  it('a Hub shared deployment answers an admin: status, test and package (its own origin)', async () => {
+    h.admin = true
+    Object.assign(process.env, SHARED)
+    const a = await app()
+    const s = await inAppA(() => a.inject({ method: 'GET', url: '/teams/status' }))
+    expect(s.statusCode).toBe(200)
+    expect(s.json()).toMatchObject({ enabled: true, source: 'settings', linked: 2 })
+    const t = await inAppA(() => a.inject({ method: 'POST', url: '/teams/test' }))
+    expect(t.json()).toMatchObject({ outcome: 'sent' })
+    const p = await inAppA(() => a.inject({ method: 'GET', url: '/teams/package' }))
+    expect(p.statusCode).toBe(200)
+    expect(p.headers['content-type']).toBe('application/zip')
+    const zip = p.rawPayload.toString('latin1')
+    expect(zip).toContain('app-a.example.com')
+    expect(zip).not.toContain('n.example.com')
+  })
+
+  it('the package needs the app origin on a shared deployment', async () => {
+    h.admin = true
+    Object.assign(process.env, SHARED)
+    const p = await (await app()).inject({ method: 'GET', url: '/teams/package' })
+    expect(p.statusCode).toBe(409)
+    expect(p.json()).toMatchObject({ code: 'NO_ORIGIN' })
   })
 })

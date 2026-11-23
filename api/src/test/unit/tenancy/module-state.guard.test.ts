@@ -61,7 +61,6 @@ const TM_ACTIONS =
 const CACHE_CFG =
   'stored cache config is never read on a multi-tenant deployment (env + defaults only)'
 const OFF_HUBSIGNIN = 'Hub sign-in is off on any multi-tenant deployment (hub-signin/config.ts)'
-const OFF_TEAMS = 'the Teams bot is off on any multi-tenant deployment (teams-bot/config.ts)'
 const OFF_TRACKERS =
   'issue trackers are always off on a multi-tenant deployment (trackers/feature.ts)'
 const OFF_PERMCACHE =
@@ -288,7 +287,6 @@ const SHARED: Record<string, string> = {
   'routes/stream.ts :: hooksRegistered': REGISTRY,
   'routes/support.ts :: sendClaims':
     'fallback (Redis down) for the claim key nvr:support-send:<tenant>:…, which already carries the app',
-  'routes/teams-bot.ts :: seen': OFF_TEAMS,
   'routes/tracker-hooks.ts :: verified': WEAK,
   'routes/traffic-map-extras/topology.ts :: providersRegistered': REGISTRY,
   'routes/user-scopes.ts :: rawSqlCheckRegistered': REGISTRY,
@@ -936,14 +934,8 @@ const SHARED: Record<string, string> = {
   'services/submission-status.ts :: FREE_MAIL_DOMAINS': FIXED,
   'services/support-ticket-events.ts :: listeners': REGISTRY,
   'services/swallow-counter.ts :: stats': DIAG,
-  'services/teams-bot/actions.ts :: local': OFF_TEAMS,
-  'services/teams-bot/config.ts :: cached': OFF_TEAMS,
-  'services/teams-bot/config.ts :: epoch': OFF_TEAMS,
-  'services/teams-bot/config.ts :: inflight': OFF_TEAMS,
-  'services/teams-bot/connector.ts :: inflight': OFF_TEAMS,
-  'services/teams-bot/connector.ts :: tokens': OFF_TEAMS,
-  'services/teams-bot/jwt.ts :: jwkDocs': OFF_TEAMS,
-  'services/teams-bot/stats.ts :: mem': OFF_TEAMS,
+  'services/teams-bot/jwt.ts :: jwkDocs':
+    "Microsoft's public Bot Framework signing keys (one metadata URL for every bot): no app data",
   'services/telemetry-ai.ts :: ASK_TOOL_NAMES': FIXED,
   'services/telemetry-ai.ts :: ROLLUP_METRICS': FIXED,
   'services/telemetry-ai.ts :: TELEMETRY_TOOL_NAMES': FIXED,

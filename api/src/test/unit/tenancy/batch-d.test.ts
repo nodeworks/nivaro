@@ -5,7 +5,8 @@ import { filesFallbackDir } from '../../../services/storage/fallback.js'
 import { bustTeamsBotConfig, getTeamsBotConfig } from '../../../services/teams-bot/config.js'
 
 // Batch D (infrastructure, storage, chaos, imports, exports, Teams bot, trackers): every site is
-// multiTenant. Cloud and self-hosted behave as before; a shared Hub deployment behaves like cloud.
+// multiTenant. Cloud and self-hosted behave as before; a shared Hub deployment behaves like cloud,
+// except the Teams bot (Task 9: per app on shared, from each app's own saved settings).
 const SELF: NodeJS.ProcessEnv = {}
 const CLOUD: NodeJS.ProcessEnv = { CLOUD_META_DB_URL: 'postgres://meta' }
 const SHARED: NodeJS.ProcessEnv = {
@@ -38,7 +39,7 @@ describe('batch D: classified cloud-flag sites', () => {
     expect(filesFallbackDir({ ...SHARED, ...dir })).toBeNull()
   })
 
-  describe('Teams bot reason stays "cloud" on shared (T4)', () => {
+  describe('Teams bot: off on cloud (reason "cloud"); per app on shared (T4)', () => {
     const saved = { ...process.env }
     beforeEach(() => bustTeamsBotConfig())
     afterEach(() => {
@@ -54,12 +55,18 @@ describe('batch D: classified cloud-flag sites', () => {
       expect(c.reason).toBe('cloud')
     })
 
-    it('shared', async () => {
+    it('shared: not refused as cloud; an app without its own saved bot is not on', async () => {
       delete process.env.CLOUD_META_DB_URL
       Object.assign(process.env, SHARED)
+      // The deployment's env registration is never an app's bot (task 9 ruling 2).
+      process.env.TEAMS_BOT_APP_ID = 'env-id'
+      process.env.TEAMS_BOT_APP_SECRET = 'env-secret'
+      process.env.TEAMS_BOT_TENANT_ID = 'env-tenant'
+      process.env.TEAMS_BOT = 'on'
       const c = await getTeamsBotConfig()
       expect(c.enabled).toBe(false)
-      expect(c.reason).toBe('cloud')
+      expect(c.reason).not.toBe('cloud')
+      expect(c.appId).toBe('')
     })
   })
 })
