@@ -153,9 +153,14 @@ export class SharedUpgradeError extends Error {
 /** The opened `secrets` JSON of a deployment; {} when none or unreadable. Never answered. */
 export async function readSharedSecrets(sharedId: number): Promise<Record<string, string>> {
   const row = await db(SHARED).where({ id: sharedId }).first('secrets')
-  if (!row?.secrets) return {}
+  return openSharedSecrets((row?.secrets as string | null | undefined) ?? null)
+}
+
+/** One sealed `secrets` value opened; {} when none or unreadable. Never answered. */
+export function openSharedSecrets(sealed: string | null): Record<string, string> {
+  if (!sealed) return {}
   try {
-    const v = JSON.parse(openSecret(row.secrets as string) ?? '{}') as unknown
+    const v = JSON.parse(openSecret(sealed) ?? '{}') as unknown
     if (!v || typeof v !== 'object' || Array.isArray(v)) return {}
     const out: Record<string, string> = {}
     for (const [k, x] of Object.entries(v)) if (typeof x === 'string') out[k] = x

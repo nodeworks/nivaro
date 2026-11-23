@@ -52,6 +52,7 @@ import {
   tenantsBody,
   tenantsOf
 } from '../services/hub/shared/tenants.js'
+import { SharedUpgradeError } from '../services/hub/shared/upgrade-plan.js'
 import { setSharedSecrets, sharedSecretsShown } from '../services/hub/shared/upgrade-run.js'
 
 /**
@@ -200,6 +201,7 @@ async function guarded(reply: FastifyReply, run: () => Promise<unknown>) {
     if (e instanceof PromotionError)
       return refuse(reply, e.status === 503 ? 503 : 409, e.code, e.message)
     if (e instanceof HubSecretError) return refuse(reply, 400, e.code, e.message)
+    if (e instanceof SharedUpgradeError) return refuse(reply, e.statusCode, e.code, e.message)
     throw e
   }
 }
@@ -534,12 +536,14 @@ export function hubSharedRoutes(app: FastifyInstance): void {
         ;(changes as Record<string, unknown>)[k] = checked.row[k]
         changed.push(k)
       }
-      const updated = await updateShared(id, changes)
-      if (!updated) return notFound(reply)
+      // With secrets, the fields and the sealed secrets are one compare-and-set write: both land
+      // or neither (parked wave, Task 5 N-1).
       if (secrets) {
-        await setSharedSecrets(id, secrets)
+        await setSharedSecrets(id, secrets, changes)
         for (const k of Object.keys(secrets)) changed.push(`secrets.${k}`)
       }
+      const updated = secrets ? await getShared(id) : await updateShared(id, changes)
+      if (!updated) return notFound(reply)
       await logActivity({
         action: 'hub-shared-update',
         user: userId(req),

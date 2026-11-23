@@ -507,25 +507,61 @@ export async function updateShared(
   id: number,
   f: Partial<SharedFields>
 ): Promise<SharedDeployment | null> {
+  const r = await writeShared(id, f, null)
+  return r === 'missing' ? null : getShared(id)
+}
+
+/**
+ * The sealed `secrets` column as it was read (`expect`) and what goes in its place (`next`; null
+ * clears it). Callers seal; this module never opens it.
+ */
+export interface SecretsSwap {
+  expect: string | null
+  next: string | null
+}
+
+/**
+ * updateShared and a compare-and-set of the sealed `secrets` in ONE statement (parked wave,
+ * Task 5 N-1): both are written or neither. `raced` = the secrets changed since they were read
+ * (nothing written; read again and retry), `missing` = no such deployment.
+ */
+export async function updateSharedWithSecrets(
+  id: number,
+  f: Partial<SharedFields>,
+  swap: SecretsSwap
+): Promise<'written' | 'raced' | 'missing'> {
+  return writeShared(id, f, swap)
+}
+
+async function writeShared(
+  id: number,
+  f: Partial<SharedFields>,
+  swap: SecretsSwap | null
+): Promise<'written' | 'raced' | 'missing'> {
   const existing = await getShared(id)
-  if (!existing) return null
+  if (!existing) return 'missing'
   if (f.mode !== undefined || f.driver_id !== undefined)
     await assertDriver({
       mode: f.mode ?? existing.mode,
       driver_id: f.driver_id !== undefined ? f.driver_id : existing.driver_id
     })
   const cols = writeCols(f)
-  if (Object.keys(cols).length) {
-    try {
-      await db(TABLE)
-        .where({ id })
-        .update({ ...cols, updated_at: new Date() })
-    } catch (err) {
-      if (isUniqueViolation(err)) throw keyTaken()
-      throw err
-    }
+  if (swap) cols.secrets = swap.next
+  if (!Object.keys(cols).length) return 'written'
+  const q = db(TABLE).where({ id })
+  if (swap) {
+    if (swap.expect == null) q.whereNull('secrets')
+    else q.where({ secrets: swap.expect })
   }
-  return getShared(id)
+  let changed: unknown
+  try {
+    changed = await q.update({ ...cols, updated_at: new Date() })
+  } catch (err) {
+    if (isUniqueViolation(err)) throw keyTaken()
+    throw err
+  }
+  if (Number(changed) === 1) return 'written'
+  return (await db(TABLE).where({ id }).first('id')) ? (swap ? 'raced' : 'written') : 'missing'
 }
 
 /** Sets a deployment's status (the runners' writes). */

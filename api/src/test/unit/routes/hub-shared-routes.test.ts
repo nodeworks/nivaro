@@ -1194,3 +1194,54 @@ describe('PATCH secrets: external Redis', () => {
     )
   })
 })
+
+// Parked wave (Task 5 round 2 N-1): a PATCH that writes secrets is all-or-nothing, and a secrets
+// write that keeps losing its compare-and-set answers 409 SECRETS_CHANGED, never a 500 after the
+// other fields were written.
+describe('PATCH secrets: all or nothing', () => {
+  const URL_ = 'rediss://:Redis-Pass-0123456789@redis.internal.example.com:6380/2'
+
+  it('a secrets write that keeps losing its race → 409 SECRETS_CHANGED, no other field written', async () => {
+    const made = await create({ key: 'shared-r9', mode: 'docker', driver_id: 3 })
+    // Every write of the sealed secrets is skipped (as if another writer won each time).
+    await db.raw(
+      `CREATE TRIGGER parked_b_secrets_race BEFORE UPDATE OF secrets ON nivaro_hub_shared_deployments
+       WHEN NEW.secrets IS NOT OLD.secrets BEGIN SELECT RAISE(IGNORE); END`
+    )
+    try {
+      const res = await app.inject({
+        method: 'PATCH',
+        url: `/api/hub/shared/${made.row.id}`,
+        headers: asAdmin,
+        payload: { name: 'Renamed', pool_budget: 77, secrets: { REDIS_URL: URL_ } }
+      })
+      expect(res.statusCode).toBe(409)
+      expect(res.json().code).toBe('SECRETS_CHANGED')
+      expect(res.body).not.toContain('Redis-Pass')
+      const row = await db('nivaro_hub_shared_deployments').where({ id: made.row.id }).first()
+      expect(row.name).toBe('Shared one')
+      expect(row.pool_budget).not.toBe(77)
+      expect(row.secrets).toBeNull()
+    } finally {
+      await db.raw('DROP TRIGGER parked_b_secrets_race')
+    }
+  })
+
+  it('fields and secrets land together', async () => {
+    const made = await create({ key: 'shared-r10', mode: 'docker', driver_id: 3 })
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/hub/shared/${made.row.id}`,
+      headers: asAdmin,
+      payload: { name: 'Renamed', secrets: { REDIS_URL: URL_ } }
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toMatchObject({
+      data: { name: 'Renamed' },
+      secrets: { REDIS_URL: HUB_MASK }
+    })
+    const row = await db('nivaro_hub_shared_deployments').where({ id: made.row.id }).first()
+    expect(row.name).toBe('Renamed')
+    expect(JSON.parse(openSecret(row.secrets) as string).REDIS_URL).toBe(URL_)
+  })
+})

@@ -28,11 +28,18 @@ import { HUB_MASK, sealSecret } from '../secrets.js'
 import { DeploymentLinkError, deploymentClient } from './deployment-client.js'
 import { liveSightings, type Sighting } from './sightings.js'
 import { renderSharedSpec, SharedRenderError } from './stack-render.js'
-import { openSharedToken, type SharedDeployment, type SharedStatus } from './store.js'
+import {
+  openSharedToken,
+  type SharedDeployment,
+  type SharedFields,
+  type SharedStatus,
+  updateSharedWithSecrets
+} from './store.js'
 import {
   defaultSharedPlanDeps,
   gatherSharedUpgrade,
   OVERRIDABLE_CODES,
+  openSharedSecrets,
   readSharedSecrets,
   type SharedFacts,
   type SharedPlanDeps,
@@ -184,29 +191,30 @@ export async function ensureSharedSecrets(sharedId: number): Promise<Record<stri
 
 /**
  * Writes (or with null clears) the deployment's own secrets, sealed with the rest (PATCH
- * `secrets`, ruling P6-16). Compare-and-set on the sealed text, retried, so a run making
- * SESSION_SECRET / ENCRYPTION_KEY at the same moment never loses either write.
+ * `secrets`, ruling P6-16), together with any other `fields` of the same PATCH in ONE statement
+ * (parked wave, Task 5 N-1: all or nothing). Compare-and-set on the sealed text, retried, so a run
+ * making SESSION_SECRET / ENCRYPTION_KEY at the same moment never loses either write. Five lost
+ * races → SECRETS_CHANGED (409) with nothing written.
  */
 export async function setSharedSecrets(
   sharedId: number,
-  patch: Record<string, string | null>
+  patch: Record<string, string | null>,
+  fields: Partial<SharedFields> = {}
 ): Promise<void> {
   for (let i = 0; i < 5; i++) {
     const row = await db(SHARED).where({ id: sharedId }).first('secrets')
     if (!row) return
-    const next = { ...(await readSharedSecrets(sharedId)) }
+    const expect = (row.secrets as string | null) ?? null
+    const next = { ...openSharedSecrets(expect) }
     for (const [k, v] of Object.entries(patch)) {
       if (v === null) delete next[k]
       else next[k] = v
     }
-    const q = db(SHARED).where({ id: sharedId })
-    if (row.secrets == null) q.whereNull('secrets')
-    else q.where({ secrets: row.secrets })
-    const changed = await q.update({
-      secrets: Object.keys(next).length ? sealSecret(JSON.stringify(next)) : null,
-      updated_at: new Date()
+    const r = await updateSharedWithSecrets(sharedId, fields, {
+      expect,
+      next: Object.keys(next).length ? sealSecret(JSON.stringify(next)) : null
     })
-    if (Number(changed) === 1) return
+    if (r !== 'raced') return
   }
   throw new SharedUpgradeError(
     'SECRETS_CHANGED',
