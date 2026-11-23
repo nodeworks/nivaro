@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { sessionForeign } from '../auth/session.js'
 import { db } from '../db/index.js'
 import { onOwnersChanged } from '../db/owner-signal.js'
+import { appMap } from './app-state.js'
 import { dndActive, presenceOverrideAway, stuckForViewer } from './presence-stuck.js'
 import { listScopeDimensions, resolveScopeLabelsForUsers } from './user-scopes.js'
 
@@ -618,7 +619,7 @@ export async function computeUserStats(userId: string) {
 // Owner resolution over every open instance costs seconds (the My Work
 // profile), so one answer per person is kept for two minutes and shared by
 // concurrent callers — a second tab or a refetch never pays twice.
-const workingOnCache = new Map<string, { at: number; value: Promise<WorkingOnRaw> }>()
+const workingOnCache = appMap<string, { at: number; value: Promise<WorkingOnRaw> }>()
 const WORKING_ON_TTL_MS = 120_000
 type WorkingOnRaw = Array<{
   collection: string

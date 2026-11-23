@@ -1,6 +1,7 @@
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { describeNarrowing, type NarrowingFacts } from './access-words.js'
+import { appMap } from './app-state.js'
 import { getAllowedFields } from './permissions.js'
 import { compileAccessGates } from './record-access.js'
 import { isAdminRole } from './user-scopes.js'
@@ -19,7 +20,7 @@ import { isAdminRole } from './user-scopes.js'
  */
 
 const TTL = 60_000
-const cache = new Map<string, { at: number; facts: NarrowingFacts | null }>()
+const cache = appMap<string, { at: number; facts: NarrowingFacts | null }>()
 
 export function bustNarrowingCache(): void {
   cache.clear()

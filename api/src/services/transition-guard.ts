@@ -1,5 +1,6 @@
 import type { Redis } from 'ioredis'
 import { db } from '../db/index.js'
+import { appBox } from './app-state.js'
 import { appKeyPart } from './tenancy/credential-binding.js'
 
 /**
@@ -23,10 +24,10 @@ let _redis: Redis | null = null
 export function setTransitionGuardRedis(redis: Redis | null): void {
   _redis = redis
 }
-let cached: { at: number; seconds: number } | null = null
+const cached = appBox<{ at: number; seconds: number } | null>(() => null)
 
 export async function transitionGuardSeconds(): Promise<number> {
-  if (cached && Date.now() - cached.at < 60_000) return cached.seconds
+  if (cached.value && Date.now() - cached.value.at < 60_000) return cached.value.seconds
   let seconds = DEFAULT_SECONDS
   const env = process.env.TRANSITION_GUARD_SECONDS
   if (env != null && env !== '' && Number.isFinite(Number(env))) seconds = Number(env)
@@ -39,12 +40,12 @@ export async function transitionGuardSeconds(): Promise<number> {
     // column not there yet — the default stands
   }
   seconds = Math.max(0, Math.min(300, Math.round(seconds)))
-  cached = { at: Date.now(), seconds }
+  cached.value = { at: Date.now(), seconds }
   return seconds
 }
 
 export function bustTransitionGuardCache(): void {
-  cached = null
+  cached.value = null
 }
 
 export interface TransitionTwin {

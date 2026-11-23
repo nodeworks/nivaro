@@ -196,6 +196,15 @@ export class S3Storage implements StorageProvider {
     }
   }
 
+  async size(key: string): Promise<number | null> {
+    try {
+      const res = await this.client.send(new HeadObjectCommand({ Bucket: this.bucket, Key: key }))
+      return typeof res.ContentLength === 'number' ? res.ContentLength : null
+    } catch {
+      return null
+    }
+  }
+
   async delete(key: string): Promise<void> {
     await this.client
       .send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }))

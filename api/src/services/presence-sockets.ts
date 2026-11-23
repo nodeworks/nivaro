@@ -1,4 +1,5 @@
 import type { Knex } from 'knex'
+import { appMap } from './app-state.js'
 
 /**
  * Live signed-in sockets per person, for THIS process (presence bookkeeping in
@@ -22,7 +23,7 @@ export const PRESENCE_ONLINE_WINDOW_MS = 70_000
 /** How long a person's last socket may be gone before they are written offline (reconnects). */
 export const PRESENCE_OFFLINE_GRACE_MS = 4_000
 
-const live = new Map<string, Set<string>>()
+const live = appMap<string, Set<string>>()
 
 const keyOf = (userId: string) => userId.toUpperCase()
 

@@ -5,6 +5,7 @@ import { likeCi, likeEscape } from '../db/sql-dialect.js'
 import type { User } from '../types.js'
 import type { ChatTraceEntry } from './ai-chat-loop.js'
 import { hashToolResult } from './ai-result-hash.js'
+import { appMap } from './app-state.js'
 import { isReplayableExtensionTool } from './extension-tools.js'
 
 /**
@@ -191,7 +192,7 @@ export type ReplayFn = (
   input: Record<string, unknown>
 ) => Promise<{ result: unknown }>
 
-const verdicts = new Map<string, { visible: boolean; at: number }>()
+const verdicts = appMap<string, { visible: boolean; at: number }>()
 // Short: a verdict must not outlive a change to the viewer's access by long.
 const VERDICT_TTL_MS = 60_000
 

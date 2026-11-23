@@ -7,6 +7,7 @@ import {
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity, logActivityThrottled } from '../services/activity.js'
+import { appSet } from '../services/app-state.js'
 import {
   customQueryCacheKey,
   customQueryCacheValue,
@@ -170,7 +171,7 @@ export function parsePlanXml(xml: string) {
 // memory): when a slug execute takes longer than SLOW_PLAN_MS the plan is
 // fetched right after, so the editor can show WHY without re-running it.
 const SLOW_PLAN_MS = Number(process.env.CUSTOM_QUERY_SLOW_PLAN_MS ?? 5000)
-const capturing = new Set<number>()
+const capturing = appSet<number>()
 function captureSlowPlan(
   id: number,
   sqlText: string,

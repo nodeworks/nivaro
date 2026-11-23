@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { randomUUID } from 'node:crypto'
 // Leaf (one constant list, no db import).
 import { SECRET_COLUMN_NAMES } from './system-collections.js'
+import { currentTenantKey } from './tenant-rooms.js'
 import { exportReason, queueTraceExport, traceExportConfig } from './trace-export.js'
 
 /**
@@ -218,6 +219,13 @@ const SLOW_MS = Number(process.env.TRACE_SLOW_MS ?? 1000)
 const CAPACITY = Number(process.env.TRACE_BUFFER ?? 200)
 
 const buffer: TraceRecord[] = []
+/** The app each kept trace ran in (Hub phase 6 Task 22). A trace carries the full URL (filter
+ *  values), the user id and the SQL with its bindings for Explain: on a shared deployment an
+ *  app's admins see and replay their own app's traces only. Self-hosted every trace is ''. */
+const appOfTrace = new WeakMap<TraceRecord, string>()
+function isThisApps(t: TraceRecord): boolean {
+  return (appOfTrace.get(t) ?? '') === currentTenantKey()
+}
 
 /** request object → its trace context, so onResponse readers never depend on the ALS chain. */
 const byRequest = new WeakMap<object, TraceContext>()
@@ -775,21 +783,29 @@ export function requestStatements(req: unknown, limit = 40): string[] {
 }
 
 // ─── Follow-this-user (#309) ─────────────────────────────────────────────────
+/** Followed people per app (Hub phase 6 Task 22, I-4): an app's admin follows, lists and spends
+ *  their own app's people only — copied apps share user ids. Key `<app>\u0000<USER>`. */
 const followBudget = new Map<string, { remaining: number; until: number }>()
+const followKey = (app: string, userId: string) => `${app}\u0000${userId.toUpperCase()}`
 
 export function followUser(userId: string, requests = 50): void {
-  followBudget.set(userId.toUpperCase(), { remaining: requests, until: Date.now() + 3600_000 })
+  followBudget.set(followKey(currentTenantKey(), userId), {
+    remaining: requests,
+    until: Date.now() + 3600_000
+  })
 }
 
 export function followedUsers(): Array<{ user: string; remaining: number }> {
   const now = Date.now()
+  const head = `${currentTenantKey()}\u0000`
   return [...followBudget.entries()]
-    .filter(([, v]) => v.remaining > 0 && v.until > now)
-    .map(([user, v]) => ({ user, remaining: v.remaining }))
+    .filter(([k, v]) => k.startsWith(head) && v.remaining > 0 && v.until > now)
+    .map(([k, v]) => ({ user: k.slice(head.length), remaining: v.remaining }))
 }
 
-function consumeFollow(userId: string): boolean {
-  const f = followBudget.get(userId.toUpperCase())
+/** `app` = the app the finished request ran in (finishTrace's meta; '' self-hosted). */
+function consumeFollow(userId: string, app: string): boolean {
+  const f = followBudget.get(followKey(app, userId))
   if (!f || f.remaining <= 0 || f.until < Date.now()) return false
   f.remaining--
   return true
@@ -843,6 +859,8 @@ export function finishTrace(meta: {
   url: string
   status: number
   user: string | null
+  /** The app the request ran in ('' = none; always '' self-hosted). */
+  app?: string
 }): boolean {
   const ctx = als.getStore()
   if (!ctx) return false
@@ -850,7 +868,7 @@ export function finishTrace(meta: {
   // #309 — follow-this-user: a flagged user's requests are kept regardless of
   // speed (their next N, whatever they touch), so a "it's slow for Beth"
   // report can be traced without waiting for a threshold breach.
-  const followed = meta.user && consumeFollow(meta.user)
+  const followed = meta.user && consumeFollow(meta.user, meta.app ?? currentTenantKey())
   // Keep-next arms (Traffic Map "Trace next call" / "Capture next"): every matcher is offered
   // every request, so each can count its own matches even when the request is slow anyway.
   let forced = false
@@ -929,6 +947,7 @@ export function finishTrace(meta: {
       ? { emits: [...ctx.emits].map(([event, n]) => ({ event, n })) }
       : {})
   })
+  appOfTrace.set(buffer[buffer.length - 1] as TraceRecord, meta.app ?? '')
   while (buffer.length > CAPACITY) buffer.shift()
   if (keptListeners.size > 0) {
     const rec = buffer[buffer.length - 1]
@@ -944,7 +963,7 @@ export function finishTrace(meta: {
 }
 
 export function listTraces(limit = 50): TraceRecord[] {
-  return buffer.slice(-limit).reverse()
+  return buffer.filter(isThisApps).slice(-limit).reverse()
 }
 
 const traceFallbacks = new Map<string, (id: string) => TraceRecord | null>()
@@ -958,7 +977,7 @@ export function setTraceFallback(id: string, fn: (traceId: string) => TraceRecor
 }
 
 export function getTrace(id: string): TraceRecord | null {
-  const hit = buffer.find((t) => t.id === id)
+  const hit = buffer.find((t) => t.id === id && isThisApps(t))
   if (hit) return hit
   for (const fn of traceFallbacks.values()) {
     try {

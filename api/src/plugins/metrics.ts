@@ -6,6 +6,7 @@ import { requireAdmin } from '../middleware/authenticate.js'
 import { isDbHealthy } from '../services/db-health.js'
 import { INSTANCE_ID } from '../services/instance-roster.js'
 import { poolNow, poolPressure } from '../services/pool-attribution.js'
+import { refuseOnSharedDeployment } from '../services/shared-operator.js'
 import { accessLineStats } from '../services/telemetry-store.js'
 import { traceExportStats } from '../services/trace-export.js'
 import { NIVARO_VERSION } from '../version.js'
@@ -291,7 +292,13 @@ export const metricsPlugin = fp(async (app: FastifyInstance) => {
 
   app.get('/api/metrics', async (req: FastifyRequest, reply: FastifyReply) => {
     const token = process.env.METRICS_TOKEN
-    if (!(token && bearerMatches(req, token))) await requireAdmin(req, reply)
+    if (!(token && bearerMatches(req, token))) {
+      await requireAdmin(req, reply)
+      if (reply.sent) return reply
+      // The whole shared process's series: an app admin is refused on a shared deployment; the
+      // operator's scraper uses METRICS_TOKEN (P6-13).
+      if (await refuseOnSharedDeployment(req, reply)) return reply
+    }
     let cronLeader: boolean | null = null
     try {
       cronLeader = app.cron ? app.cron.mayTick() : null

@@ -226,6 +226,9 @@ export function shouldSkip(path: string, method: string): boolean {
   // Its shared twin (routes/hub-deployment-link.ts) runs on no app: nowhere to log it. Only where
   // it is mounted (a Hub shared deployment).
   if (path.startsWith('/api/hub-deployment/') && tenantSource() === 'hub') return true
+  // A move's file transfer (routes/hub-transfer.ts): thousands of reads by the target, on a
+  // shared deployment outside any app's context — not traffic anyone reads here.
+  if (path.startsWith('/api/hub-transfer/')) return true
   if (path.startsWith('/api/api-analytics')) return true
   return false
 }

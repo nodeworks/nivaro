@@ -173,6 +173,7 @@ import { hubLinkRoutes } from './hub-link.js'
 import { hubOidcRoutes } from './hub-oidc.js'
 import { hubSigninAdminRoutes } from './hub-signin-admin.js'
 import { hubSwitcherRoutes } from './hub-switcher.js'
+import { hubTransferRoutes } from './hub-transfer.js'
 import { ideasRoutes } from './ideas.js'
 import { importTemplatesRoutes } from './import-templates.js'
 import { importsRoutes } from './imports.js'
@@ -486,6 +487,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(hubLinkRoutes, { prefix: '/hub-link' })
   // Hub phase 6 deployment link: mounted only on a Hub shared deployment (bearer-only).
   await app.register(hubDeploymentLinkRoutes, { prefix: '/hub-deployment' })
+  // Hub phase 6 file transfer (ticket-only): where the hub link is, or on a Hub shared deployment.
+  await app.register(hubTransferRoutes, { prefix: '/hub-transfer' })
   // File source: mounted only where FILE_SOURCE_TOKEN is set (bearer-only) — lower environments
   // read the files a refresh did not copy from here (FILES_FALLBACK_URL on their side).
   await app.register(internalFileSourceRoutes)

@@ -85,7 +85,11 @@ import {
   startPromotion
 } from '../services/hub/promote-run.js'
 import { HUB_MASK, HubSecretError } from '../services/hub/secrets.js'
-import { PlaceSharedError, patchSharedPlacement } from '../services/hub/shared/place.js'
+import {
+  PlaceSharedError,
+  patchSharedPlacement,
+  recoverPlacementsOnceAtBoot
+} from '../services/hub/shared/place.js'
 import { getShared } from '../services/hub/shared/store.js'
 import {
   hubStatusKey,
@@ -98,6 +102,7 @@ import { hubPhase3Routes } from './hub-create.js'
 import { hubDockerRoutes } from './hub-docker.js'
 import { hubSharedRoutes } from './hub-shared.js'
 import { hubSharedTenantsRoutes } from './hub-shared-tenants.js'
+import { hubSharedUpgradeRoutes } from './hub-shared-upgrade.js'
 
 /**
  * Nivaro Hub API, mounted at /api/hub. Nothing is registered unless hub mode is on (HUB=on,
@@ -112,6 +117,8 @@ export async function hubRoutes(app: FastifyInstance) {
   if (!hubModeEnabled()) return
   // Once per process start: promotions a previous process left `running` become `interrupted`.
   app.addHook('onReady', async () => recoverOnceAtBoot(app.log))
+  // Phase 6: placement runs a previous process left running (services/hub/shared/place.ts).
+  app.addHook('onReady', async () => recoverPlacementsOnceAtBoot(app.log))
   appRoutes(app)
   ownerRoutes(app)
   environmentRoutes(app)
@@ -125,6 +132,7 @@ export async function hubRoutes(app: FastifyInstance) {
   hubPhase3Routes(app)
   hubSharedRoutes(app) // phase 6
   app.register(hubSharedTenantsRoutes) // phase 6: GET /shared/:key/tenants (deployment bearer)
+  hubSharedUpgradeRoutes(app) // phase 6: shared stack deploy/upgrade/rollback (Task 5)
 }
 
 const APPS = 'nivaro_hub_apps'
@@ -249,12 +257,16 @@ async function creationEnvironments(appId: number): Promise<number[]> {
   ]
 }
 
-/** Runs a delete holding these environments' locks; CREATION_RUNNING (409) while one is held. */
+/**
+ * Runs a delete holding these environments' locks; CREATION_RUNNING (409) while one is held. A
+ * lock the Hub cannot take or read (Redis down) answers its own status: 503 LOCK_UNAVAILABLE.
+ */
 async function quiet(reply: FastifyReply, envIds: number[], run: () => Promise<unknown>) {
   try {
     return await withEnvironmentsQuiet(envIds, run)
   } catch (e) {
     if (e instanceof CreationError) return fail(reply, e.status, e.code, e.message)
+    if (e instanceof PromotionError) return fail(reply, e.status, e.code, e.message)
     throw e
   }
 }

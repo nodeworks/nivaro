@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
+import { appBox } from './app-state.js'
 
 // Instance-wide help-video settings, stored as one JSON object in
 // nivaro_settings.help_video_settings (migration 410; NULL = every default).
@@ -226,10 +227,10 @@ export function serializeSettings(
 // ── storage ────────────────────────────────────────────────────────────────
 
 const TTL_MS = 30_000
-let cache: { at: number; value: { migrated: boolean; stored: Raw } } | null = null
+const cache = appBox<{ at: number; value: { migrated: boolean; stored: Raw } } | null>(() => null)
 
 export function bustHelpVideoSettings(): void {
-  cache = null
+  cache.value = null
 }
 
 async function columnExists(): Promise<boolean> {
@@ -242,7 +243,7 @@ async function columnExists(): Promise<boolean> {
 
 /** The stored settings (30 s cache). Never throws: a failed read = defaults. */
 export async function loadHelpVideoSettings(): Promise<{ migrated: boolean; stored: Raw }> {
-  if (cache && Date.now() - cache.at < TTL_MS) return cache.value
+  if (cache.value && Date.now() - cache.value.at < TTL_MS) return cache.value.value
   let value: { migrated: boolean; stored: Raw } = { migrated: false, stored: {} }
   try {
     if (await columnExists()) {
@@ -254,7 +255,7 @@ export async function loadHelpVideoSettings(): Promise<{ migrated: boolean; stor
   } catch {
     // degraded: defaults
   }
-  cache = { at: Date.now(), value }
+  cache.value = { at: Date.now(), value }
   return value
 }
 

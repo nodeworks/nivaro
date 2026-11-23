@@ -1,10 +1,11 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { isIP } from 'node:net'
+import type { Knex } from 'knex'
 import { insertReturningId } from '../../../db/dialect/ef.js'
 import { db } from '../../../db/index.js'
 import { APP_KEY_RE, keyFingerprint } from '../../app-key-fingerprint.js'
 import { isHubKey } from '../apps.js'
-import { openStackSecrets, readStackSettings } from '../docker/stack-settings.js'
+import { openStackSecrets, PINNED_RE, readStackSettings } from '../docker/stack-settings.js'
 import { STACK_NAME_RE, type Validation } from '../drivers.js'
 import { tokenLookupHash } from '../link-token.js'
 import { defaultSharedLock, type SharedLock, sharedLockRefusal } from '../promote-lock.js'
@@ -160,7 +161,9 @@ function checkPins(v: unknown, extensions: string[]): Record<string, string> | n
   const out: Record<string, string> = {}
   for (const [id, pin] of Object.entries(v)) {
     if (!extensions.includes(id)) return null
-    if (typeof pin !== 'string' || !VERSION_PIN_RE.test(pin)) return null
+    // The agent's image pin (ruling P6-16): what the shared stack installs, the same rule as
+    // phase-4 stack settings. A version string was never deployable, and nothing reads one.
+    if (typeof pin !== 'string' || !PINNED_RE.test(pin)) return null
     out[id] = pin
   }
   return out
@@ -275,7 +278,7 @@ export function validateSharedInput(
   if (!pins)
     return fail(
       'BAD_EXTENSIONS',
-      'Extension pins name a listed extension and a version of at most 64 characters.'
+      'Extension pins name a listed extension and its image pinned as <repo>@sha256:<64 hex> (a tag is not enough).'
     )
 
   const pattern = pick('host_pattern')
@@ -697,17 +700,22 @@ export function tenantIdFor(app: { key: string }, env: { id: number }): string {
 }
 
 /** Stores an app's ENCRYPTION_KEY on its environment, sealed, with its fingerprint. */
-export async function setAppKey(envId: number, hexKey: string): Promise<{ fp: string }> {
+export async function setAppKey(
+  envId: number,
+  hexKey: string,
+  /** A transaction to write in (Task 4 places and keys an environment in one). */
+  k: Knex = db
+): Promise<{ fp: string }> {
   if (typeof hexKey !== 'string' || !APP_KEY_RE.test(hexKey))
     throw new SharedError(
       'BAD_KEY',
       "The app's encryption key is 64 hex characters (its ENCRYPTION_KEY)."
     )
   const key = hexKey.toLowerCase()
-  const env = await db(ENVS).where({ id: envId }).first('id')
+  const env = await k(ENVS).where({ id: envId }).first('id')
   if (!env) throw new SharedError('NOT_FOUND', 'No such environment.')
   const fp = keyFingerprint(key)
-  await db(ENVS)
+  await k(ENVS)
     .where({ id: envId })
     .update({ encryption_key: sealSecret(key), encryption_key_fp: fp, updated_at: new Date() })
   return { fp }

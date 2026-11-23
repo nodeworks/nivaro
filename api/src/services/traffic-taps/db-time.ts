@@ -19,6 +19,7 @@
 
 import { _backgroundDb, _staticDb, db, dbRead } from '../../db/index.js'
 import { datePart } from '../../db/sql-dialect.js'
+import { appBox } from '../app-state.js'
 import { isMultiTenant } from '../deployment-mode.js'
 import { getApp } from '../io-holder.js'
 import { currentTraceCaller, requestMeasure } from '../request-trace.js'
@@ -307,12 +308,13 @@ export function hourIn(d: Date, zone: string): number {
   }
 }
 
-let loadCache: { at: number; byUtcHour: number[] } | null = null
+const loadCache = appBox<{ at: number; byUtcHour: number[] } | null>(() => null)
 const LOAD_TTL_MS = 30 * 60_000
 
 /** Average requests per UTC hour of the day over 7 days of the api log (cached 30 min). */
 async function loadByUtcHour(): Promise<number[]> {
-  if (loadCache && Date.now() - loadCache.at < LOAD_TTL_MS) return loadCache.byUtcHour
+  if (loadCache.value && Date.now() - loadCache.value.at < LOAD_TTL_MS)
+    return loadCache.value.byUtcHour
   const since = new Date(Date.now() - 7 * 86_400_000)
   const rows = (await db('nivaro_api_logs')
     .where('created_at', '>=', since)
@@ -324,7 +326,7 @@ async function loadByUtcHour(): Promise<number[]> {
     const h = Number(r.h)
     if (h >= 0 && h < 24) out[h] = Number(r.n) / 7
   }
-  loadCache = { at: Date.now(), byUtcHour: out }
+  loadCache.value = { at: Date.now(), byUtcHour: out }
   return out
 }
 

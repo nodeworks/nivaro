@@ -54,6 +54,7 @@ const { up: up550 } = await import('../../../db/migrations/550_hub_oidc.js')
 const { up: up551 } = await import('../../../db/migrations/551_hub_signins.js')
 const { logActivity } = await import('../../../services/activity.js')
 const { hubRoutes } = await import('../../../routes/hub.js')
+const { setAppRef } = await import('../../../services/io-holder.js')
 
 const ADMIN = 'AAAAAAAA-0000-4000-8000-000000000001'
 const OWNER = 'BBBBBBBB-0000-4000-8000-000000000002'
@@ -286,6 +287,53 @@ describe('hub apps', () => {
       (await req('PATCH', `/hub/apps/${a.id}`, asAdmin, { signin_mode: 'x' })).statusCode
     ).toBe(400)
     expect((await req('PATCH', '/hub/apps/999', asAdmin, { name: 'Z' })).statusCode).toBe(404)
+  })
+
+  it('DELETE of an environment whose lock holder cannot be read → 503 LOCK_UNAVAILABLE, not 500', async () => {
+    const a = await createApp('lockdown')
+    const env = await req('POST', `/hub/apps/${a.id}/environments`, asAdmin, {
+      key: 'prod',
+      base_url: 'https://lockdown.example.com'
+    })
+    const envId = env.json().data.id
+    // The lock is held by someone (SET NX misses) and Redis cannot be read for its holder.
+    setAppRef({
+      redis: {
+        set: async () => null,
+        get: async () => {
+          throw new Error('ECONNREFUSED')
+        },
+        del: async () => 0,
+        exists: async () => 1,
+        eval: async () => 0
+      }
+    })
+    // An app whose environment is gone but whose creation row still names it: its delete takes
+    // that environment's lock too.
+    const b = await createApp('lockdown2')
+    await db('nivaro_hub_creations').insert({
+      app_id: b.id,
+      environment_id: 987654,
+      status: 'failed',
+      steps: '[]',
+      version: '0.3.210',
+      first_admin: '{}'
+    })
+    try {
+      for (const path of [`/hub/environments/${envId}`, `/hub/apps/${b.id}`]) {
+        const res = await req('DELETE', path, asAdmin)
+        expect(res.statusCode).toBe(503)
+        // The route's own refusal shape (quiet maps it), never the generic error handler's.
+        expect(res.json()).toEqual({
+          code: 'LOCK_UNAVAILABLE',
+          error: expect.stringMatching(/Redis/)
+        })
+      }
+    } finally {
+      setAppRef(null)
+    }
+    expect(await db('nivaro_hub_environments').where({ id: envId }).first('id')).toBeTruthy()
+    expect(await db('nivaro_hub_apps').where({ id: b.id }).first('id')).toBeTruthy()
   })
 
   it('DELETE refuses an app with environments (409 HAS_ENVIRONMENTS), then deletes', async () => {

@@ -20,6 +20,7 @@ import { likeCi, likeEscape } from '../../db/sql-dialect.js'
 import { hasColumn } from '../../lib/column-probe.js'
 import { errorText, reasonWithoutSql } from '../../lib/db-refusal.js'
 import { INTERNAL_DISPATCH_HEADER, internalDispatchTokens } from '../../plugins/api-logger.js'
+import { appBox } from '../app-state.js'
 import { instanceKey } from '../instance-key.js'
 import { INSTANCE_ID } from '../instance-roster.js'
 import { getTrace, type TraceRecord, traceConfig, unaccountedMs } from '../request-trace.js'
@@ -379,11 +380,12 @@ interface Suggestion {
   reasons: string[]
   create_sql: string
 }
-let adviceCache: { at: number; list: Suggestion[] } | null = null
+const adviceCache = appBox<{ at: number; list: Suggestion[] } | null>(() => null)
 const ADVICE_TTL_MS = 5 * 60_000
 
 async function indexAdvice(ctx: InspectCtx): Promise<Suggestion[] | null> {
-  if (adviceCache && Date.now() - adviceCache.at < ADVICE_TTL_MS) return adviceCache.list
+  if (adviceCache.value && Date.now() - adviceCache.value.at < ADVICE_TTL_MS)
+    return adviceCache.value.list
   const server = (ctx.req as unknown as { server?: { inject?: unknown } }).server as
     | {
         inject(opts: {
@@ -409,7 +411,7 @@ async function indexAdvice(ctx: InspectCtx): Promise<Suggestion[] | null> {
       : Array.isArray(data?.suggestions)
         ? data.suggestions
         : []
-    adviceCache = { at: Date.now(), list }
+    adviceCache.value = { at: Date.now(), list }
     return list
   } catch {
     return null

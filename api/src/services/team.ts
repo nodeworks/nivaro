@@ -15,6 +15,7 @@ import { boolLit, qi } from '../db/sql-dialect.js'
 import { hasColumn } from '../lib/column-probe.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
+import { appBox } from './app-state.js'
 import { selectInChunks } from './db-batch.js'
 
 export interface Viewer {
@@ -26,15 +27,15 @@ export interface Viewer {
 // ── Settings ─────────────────────────────────────────────────────────────────
 
 const DEFAULT_STUCK_HOURS = 240
-let stuckCache: { at: number; value: number } | null = null
+const stuckCache = appBox<{ at: number; value: number } | null>(() => null)
 
 export function bustTeamSettings(): void {
-  stuckCache = null
+  stuckCache.value = null
 }
 
 /** Hours an open record may sit in one state before the team view calls it stuck. */
 export async function teamStuckHours(): Promise<number> {
-  if (stuckCache && Date.now() - stuckCache.at < 60_000) return stuckCache.value
+  if (stuckCache.value && Date.now() - stuckCache.value.at < 60_000) return stuckCache.value.value
   let value = DEFAULT_STUCK_HOURS
   if (await hasColumn('nivaro_settings', 'team_stuck_hours')) {
     const row = (await db('nivaro_settings')
@@ -44,7 +45,7 @@ export async function teamStuckHours(): Promise<number> {
     const n = Number(row?.team_stuck_hours)
     if (Number.isInteger(n) && n > 0) value = n
   }
-  stuckCache = { at: Date.now(), value }
+  stuckCache.value = { at: Date.now(), value }
   return value
 }
 

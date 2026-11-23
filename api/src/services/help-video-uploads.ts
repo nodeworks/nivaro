@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { db } from '../db/index.js'
 import { getTenantId } from '../db/tenant-context.js'
 import type { User } from '../types.js'
+import { appMap } from './app-state.js'
 import { storageChaos } from './chaos/faults/storage.js'
 import { tenantSource } from './deployment-mode.js'
 import {
@@ -300,7 +301,7 @@ async function holdHere(row: Record<string, unknown>): Promise<Record<string, un
 // Per-upload serialization inside this process (a part and a finalize of one
 // upload never interleave here). Across processes the conditional updates on
 // next_part / status decide: only one request can claim a part or the finalize.
-const locks = new Map<string, Promise<unknown>>()
+const locks = appMap<string, Promise<unknown>>()
 async function withLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
   const prev = locks.get(id) ?? Promise.resolve()
   const run = prev.then(fn, fn)
@@ -746,7 +747,7 @@ export interface ProcessingUpload {
 }
 
 /** Uploaded files being checked or converted on this process, by upload id. */
-const processing = new Map<string, AbortController>()
+const processing = appMap<string, AbortController>()
 
 /** How many uploaded files this process is still working on (the background job, including
  *  the clean-up after its final status is written). Tests wait on it. */

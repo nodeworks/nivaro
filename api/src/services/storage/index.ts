@@ -37,6 +37,9 @@ export interface StorageProvider {
   /** Cheap existence check — never downloads the object. Used by the
    *  dead-file-link detection (nightly sweep + on-demand verify). */
   exists?(key: string): Promise<boolean>
+  /** The stored object's size in bytes, or null when it is missing — never downloads it (Hub
+   *  phase 6: a move's file pull skips objects already present at the same size). */
+  size?(key: string): Promise<number | null>
 }
 
 let _storage: StorageProvider | null = null

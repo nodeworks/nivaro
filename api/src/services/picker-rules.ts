@@ -23,6 +23,7 @@
  * service calls it); the filter compiler is imported when first needed.
  */
 import { db } from '../db/index.js'
+import { appBox, appMap } from './app-state.js'
 
 export interface CascadeRule {
   parent_field: string
@@ -54,11 +55,11 @@ interface Alias {
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
 const TTL = 60_000
-let cache: { at: number; byCollection: Map<string, Rule[]> } | null = null
-const aliasCache = new Map<string, { at: number; aliases: Map<string, Alias> }>()
+const cache = appBox<{ at: number; byCollection: Map<string, Rule[]> } | null>(() => null)
+const aliasCache = appMap<string, { at: number; aliases: Map<string, Alias> }>()
 
 export function clearPickerRuleCache(): void {
-  cache = null
+  cache.value = null
   aliasCache.clear()
 }
 
@@ -161,8 +162,9 @@ async function build(): Promise<Map<string, Rule[]>> {
 }
 
 async function rulesFor(collection: string): Promise<Rule[]> {
-  if (!cache || Date.now() - cache.at > TTL) cache = { at: Date.now(), byCollection: await build() }
-  return cache.byCollection.get(collection) ?? []
+  if (!cache.value || Date.now() - cache.value.at > TTL)
+    cache.value = { at: Date.now(), byCollection: await build() }
+  return cache.value.byCollection.get(collection) ?? []
 }
 
 /** The collection's many-to-many fields as junction legs (bulk-field-rules reads parents with it). */

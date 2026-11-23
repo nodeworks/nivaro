@@ -134,6 +134,11 @@ export interface StackFacts {
     text: string
   } | null
   agentOrigin: string | null
+  /**
+   * Phase 6 (Task 5): what the plan should say but never blocks on — HUB_URL_PROBLEM when the
+   * Hub's own HUB_URL is ignored (the stack then gets PUBLIC_URL's origin). Absent when none.
+   */
+  warnings?: { code: string; text: string }[]
 }
 
 /** Everything the planner needs, gathered beforehand (promote-gather.ts) so planning stays pure. */
@@ -345,4 +350,6 @@ export interface PromotionPlan {
   plan_hash: string
   /** phase 4: an Apply now run (P4-30) — the saved stack settings onto the running version. */
   apply?: boolean
+  /** Phase 6 (Task 5): the stack facts' warnings (HUB_URL_PROBLEM); absent when none. */
+  warnings?: { code: string; text: string }[]
 }

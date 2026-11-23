@@ -2,6 +2,7 @@ import { adminBaseUrl } from '../admin-base.js'
 import { db } from '../db/index.js'
 import { isActiveAdmin } from '../middleware/authenticate.js'
 import { logActivity } from './activity.js'
+import { appBox } from './app-state.js'
 import { clearMetadataCache } from './collections.js'
 import { announceConfigChanged } from './config-live.js'
 import { getApp } from './io-holder.js'
@@ -80,16 +81,17 @@ function startHeartbeat(id: number): () => void {
 
 // Migration 457 creates the table; until it has run, scheduling answers 503
 // and the cron does nothing. Present is remembered; missing is re-checked.
-let tableCheck: { has: boolean; at: number } | null = null
+const tableCheck = appBox<{ has: boolean; at: number } | null>(() => null)
 export async function schedulesAvailable(): Promise<boolean> {
-  if (tableCheck && (tableCheck.has || Date.now() - tableCheck.at < 60_000)) return tableCheck.has
+  if (tableCheck.value && (tableCheck.value.has || Date.now() - tableCheck.value.at < 60_000))
+    return tableCheck.value.has
   let has = false
   try {
     has = await db.schema.hasTable(TABLE)
   } catch {
     has = false
   }
-  tableCheck = { has, at: Date.now() }
+  tableCheck.value = { has, at: Date.now() }
   return has
 }
 

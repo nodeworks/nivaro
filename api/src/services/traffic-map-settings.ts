@@ -14,6 +14,7 @@
  */
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
+import { appBox } from './app-state.js'
 import { envSampleRps, SAMPLE_RPS_MAX } from './traffic-overhead.js'
 
 export const TRAFFIC_MAP_SETTINGS_COLUMN = 'traffic_map_settings'
@@ -186,7 +187,7 @@ interface Loaded {
   stored: Raw
   settings: MapSettings
 }
-let cache: { at: number; value: Loaded } | null = null
+const cache = appBox<{ at: number; value: Loaded } | null>(() => null)
 const listeners = new Set<(s: MapSettings) => void>()
 
 /** Called with the settings every time they are (re)read, so hot paths can hold the figure. */
@@ -194,7 +195,7 @@ export function onMapSettings(fn: (s: MapSettings) => void): void {
   listeners.add(fn)
 }
 export function bustMapSettings(): void {
-  cache = null
+  cache.value = null
 }
 
 async function columnExists(): Promise<boolean> {
@@ -207,7 +208,7 @@ async function columnExists(): Promise<boolean> {
 
 /** The settings (30 s cache). Never throws: a failed read = defaults. */
 export async function loadMapSettings(): Promise<Loaded> {
-  if (cache && Date.now() - cache.at < TTL_MS) return cache.value
+  if (cache.value && Date.now() - cache.value.at < TTL_MS) return cache.value.value
   let stored: Raw = {}
   let migrated = false
   try {
@@ -222,7 +223,7 @@ export async function loadMapSettings(): Promise<Loaded> {
     // degraded: defaults
   }
   const value: Loaded = { migrated, stored, settings: effectiveSettings(stored) }
-  cache = { at: Date.now(), value }
+  cache.value = { at: Date.now(), value }
   for (const fn of listeners) {
     try {
       fn(value.settings)
