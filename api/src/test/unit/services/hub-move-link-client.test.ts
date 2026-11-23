@@ -52,3 +52,37 @@ describe('move hub-link client: shared readiness (R2-M-9)', () => {
     expect(err?.code).toBe('LINK_BAD_ANSWER')
   })
 })
+
+// Hub phase 6 untested path 1: the failed rows' plain reasons cross both links (only known
+// reasons, only whole counts), so the move can say why a file was not copied.
+describe('pull status: failed rows per reason', () => {
+  const status = {
+    state: 'done',
+    total: 4,
+    copied: 1,
+    skipped: 0,
+    failed: 3,
+    missing: [],
+    bytes: 10,
+    error: null,
+    failed_ids: ['a', 'b', 'c'],
+    failed_reasons: {
+      source_read_failed: 2,
+      write_failed: 1,
+      bad_answer: 0,
+      made_up: 9,
+      incomplete: '4',
+      unreachable: 1.5
+    }
+  }
+
+  it('hub link: known reasons with whole counts only', async () => {
+    const s = await clientAnswering(status).pullStatus('run-1')
+    expect(s.failed_reasons).toEqual({ source_read_failed: 2, write_failed: 1 })
+  })
+
+  it('an older app without the field reads as no reasons', async () => {
+    const { failed_reasons: _r, ...older } = status
+    expect((await clientAnswering(older).pullStatus('run-1')).failed_reasons).toEqual({})
+  })
+})

@@ -361,10 +361,11 @@ describe('deploymentClient — each route', () => {
         total: 4,
         copied: 1,
         skipped: 1,
-        failed: 0,
+        failed: 1,
         missing: [],
         bytes: 10,
-        error: null
+        error: null,
+        failed_reasons: { source_read_failed: 1, made_up: 3 }
       })
     })
     expect((await c.fileTicket('acme-e7')).ticket).toBe(TICKET)
@@ -375,7 +376,10 @@ describe('deploymentClient — each route', () => {
         mode: 'full'
       })
     ).toEqual({ run_id: 'run-1' })
-    expect((await c.pullStatus('acme-e7', 'run-1')).copied).toBe(1)
+    const st = await c.pullStatus('acme-e7', 'run-1')
+    expect(st.copied).toBe(1)
+    // Only the known plain reasons cross (hub-transfer/fail-reasons.ts).
+    expect(st.failed_reasons).toEqual({ source_read_failed: 1 })
     expect(calls.map((x) => new URL(x.url).pathname)).toEqual([
       '/api/hub-deployment/apps/acme-e7/files/ticket',
       '/api/hub-deployment/apps/acme-e7/files/pull',

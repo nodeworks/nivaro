@@ -3,6 +3,7 @@ import { insertReturningId } from '../../../db/dialect/ef.js'
 import { db } from '../../../db/index.js'
 import { runInBackgroundPool } from '../../../db/pool-context.js'
 import { logActivity } from '../../activity.js'
+import { pullFailReasonsFrom, pullFailSentence } from '../../hub-transfer/fail-reasons.js'
 import { getApp } from '../../io-holder.js'
 import { type JobRunHandle, startJobRun } from '../../job-runs.js'
 import { readApp } from '../apps.js'
@@ -761,6 +762,7 @@ function summary(mode: 'full' | 'delta', s: PullStatus, at: number): MoveFilesSu
     failed: s.failed,
     missing: s.missing.length,
     size_mismatch: Number(s.size_mismatch) || 0,
+    ...(s.failed ? { failed_reasons: pullFailReasonsFrom(s.failed_reasons) } : {}),
     bytes: s.bytes,
     at: new Date(at).toISOString()
   }
@@ -790,16 +792,18 @@ async function copyFiles(ctx: Ctx, slot: keyof MoveFiles, blocking: boolean): Pr
       'FILES_FAILED',
       `The file copy failed${s.error ? `: ${s.error.slice(0, 200)}` : ''}.`
     )
+  // Why, in plain words (hub-transfer/fail-reasons.ts): never a path, a URL or an error's text.
+  const why = pullFailSentence(s.failed_reasons)
   if (blocking && s.failed > 0) {
     const ids = (s.failed_ids ?? []).slice(0, 5)
     throw new MoveStepError(
       'FILES_NOT_COPIED',
-      `${s.failed} file(s) could not be copied${ids.length ? ` (${ids.join(', ')}${s.failed > ids.length ? ', …' : ''})` : ''}; the move rolls back so none is lost.`
+      `${s.failed} file(s) could not be copied${ids.length ? ` (${ids.join(', ')}${s.failed > ids.length ? ', …' : ''})` : ''}${why ? `: ${why}` : ''}; the move rolls back so none is lost.`
     )
   }
   if (!blocking && s.failed > 0)
     ctx.run.log(
-      `${s.failed} file(s) failed in the warm copy; copied again inside maintenance`,
+      `${s.failed} file(s) failed in the warm copy${why ? ` (${why})` : ''}; copied again inside maintenance`,
       'warn'
     )
 }

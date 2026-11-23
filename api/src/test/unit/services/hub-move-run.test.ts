@@ -657,7 +657,8 @@ describe('rolls back from every step before release', () => {
       bytes: 3,
       error: null,
       size_mismatch: 0,
-      failed_ids: mode === 'delta' ? ['f2'] : []
+      failed_ids: mode === 'delta' ? ['f2'] : [],
+      failed_reasons: mode === 'delta' ? { source_read_failed: 1 } : {}
     })
     const { move_id } = await start(w, toFor('to_shared', w))
     await Run.awaitMove(move_id)
@@ -665,6 +666,9 @@ describe('rolls back from every step before release', () => {
     expect(m?.status).toBe('rolled_back')
     expect(m?.error).toMatch(/FILES_NOT_COPIED/)
     expect(m?.error).toContain('f2')
+    // Why, in plain words (hub-transfer/fail-reasons.ts).
+    expect(m?.error).toContain('(f2): the source could not read 1; the move rolls back')
+    expect(m?.files.delta?.failed_reasons).toEqual({ source_read_failed: 1 })
     expect(m?.files.warm?.missing).toBe(1)
   })
 

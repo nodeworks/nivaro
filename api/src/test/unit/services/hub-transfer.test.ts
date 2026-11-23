@@ -415,6 +415,7 @@ describe('pull', () => {
       (await startPull({ source: SOURCE, ticket: TICKET, mode: 'full' })).run_id
     )
     expect(s).toMatchObject({ state: 'done', copied: 1, failed: 1 })
+    expect(s.failed_reasons).toEqual({ unreachable: 1 })
     expect(sourceSeen).not.toContain('redirect-target')
     expect(() => statSync(join(root, 'f2.bin'))).toThrow()
   })
@@ -432,6 +433,7 @@ describe('pull', () => {
     )
     expect(s).toMatchObject({ state: 'done', copied: 2, failed: 2, size_mismatch: 1 })
     expect([...(s?.failed_ids ?? [])].sort()).toEqual(['n1', 'n2'])
+    expect(s.failed_reasons).toEqual({ bad_answer: 2 })
     for (const id of ['n1', 'n2']) expect(() => statSync(join(root, `${id}.bin`))).toThrow()
     expect(readFileSync(join(root, 'n3.bin'), 'utf8')).toBe('body-n3')
     expect(readFileSync(join(root, 'n4.bin'), 'utf8')).toBe('body-n4')
@@ -810,6 +812,8 @@ describe('pull: saved-settings objects (P6-31)', () => {
     expect(s).toMatchObject({ state: 'done', total: 1, copied: 0, failed: 1 })
     expect(s.missing).toEqual([])
     expect(s.failed_ids).toEqual(['o4'])
+    // The plain reason the move repeats (hub-transfer/fail-reasons.ts).
+    expect(s.failed_reasons).toEqual({ source_read_failed: 1 })
   })
 
   it('without objects (the prefix stays) a saved-settings row is never copied', async () => {

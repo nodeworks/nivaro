@@ -17,6 +17,7 @@ import { getApp } from '../io-holder.js'
 import { getStorage, type StorageProvider } from '../storage/index.js'
 import { appKeyPart } from '../tenancy/credential-binding.js'
 import { COPYABLE_OBJECT_STORAGE } from './copyable.js'
+import type { PullFailReason, PullFailReasons } from './fail-reasons.js'
 import { TRANSFER_TICKET_RE } from './tickets.js'
 
 /**
@@ -37,7 +38,8 @@ import { TRANSFER_TICKET_RE } from './tickets.js'
  *  - A 404 is `missing` (≤ 50 ids listed; neither copied nor failed: total − copied − skipped −
  *    failed = how many were missing). An answer over 5 GB, a redirect, another status, an answer
  *    without `X-Nivaro-Filename-Disk` (or naming another key) or without `Content-Length`, or a
- *    streamed size that differs from Content-Length fails that row (its id in `failed_ids`, ≤ 50).
+ *    streamed size that differs from Content-Length fails that row (its id in `failed_ids`, ≤ 50;
+ *    every failed row counted under its plain reason in `failed_reasons`, fail-reasons.ts).
  *    A Content-Length that differs from the row's stored filesize is copied anyway and counted in
  *    `size_mismatch` (Task 16: a stale filesize must not fail the row on every run). A 401/403 (the ticket refused) or no
  *    progress for 10 minutes fails the run.
@@ -87,6 +89,8 @@ export interface PullStatus {
   size_mismatch?: number
   /** Task 16: the file ids that failed (at most 50), so a move can say which. */
   failed_ids?: string[]
+  /** How many rows failed for each plain reason (every failed row, not only the 50 ids). */
+  failed_reasons?: PullFailReasons
 }
 
 export interface FileRow {
@@ -287,6 +291,30 @@ export function transferSource(raw: unknown): string | null {
   return null
 }
 
+/** The `code` of a small JSON body (≤ 2 KB; a bigger one is cut off unread), or null. */
+async function smallJsonCode(body: ReadableStream<Uint8Array>): Promise<string | null> {
+  const reader = body.getReader()
+  const parts: Uint8Array[] = []
+  let n = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      n += value.length
+      if (n > 2048) return null
+      parts.push(value)
+    }
+  } finally {
+    void reader.cancel().catch(() => {})
+  }
+  try {
+    const b = JSON.parse(Buffer.concat(parts).toString('utf8')) as { code?: unknown } | null
+    return typeof b?.code === 'string' ? b.code : null
+  } catch {
+    return null
+  }
+}
+
 // ─── runs ────────────────────────────────────────────────────────────────────────────────────
 
 interface Run {
@@ -316,7 +344,8 @@ function copyStatus(s: PullStatus): PullStatus {
     missing: [...s.missing],
     // A mirror an older process wrote has neither field.
     size_mismatch: Number(s.size_mismatch) || 0,
-    failed_ids: Array.isArray(s.failed_ids) ? [...s.failed_ids] : []
+    failed_ids: Array.isArray(s.failed_ids) ? [...s.failed_ids] : [],
+    failed_reasons: { ...(s.failed_reasons ?? {}) }
   }
 }
 
@@ -456,7 +485,8 @@ export async function startPull(req: PullRequest): Promise<{ run_id: string }> {
       bytes: 0,
       error: null,
       size_mismatch: 0,
-      failed_ids: []
+      failed_ids: [],
+      failed_reasons: {}
     }
   }
   runs.set(mapKey(sc, runId), run)
@@ -636,13 +666,28 @@ async function execute(
     // A private literal is the only plain fetch (see the header); every host name is guarded.
     const guarded = !plainHttpHost(new URL(req.source).hostname)
 
-    const failRow = (id?: string) => {
+    const failRow = (id: string, reason: PullFailReason) => {
       if (!fatal) {
         st.failed++
         if (!st.failed_ids) st.failed_ids = []
         if (id && st.failed_ids.length < MAX_MISSING) st.failed_ids.push(id)
+        if (!st.failed_reasons) st.failed_reasons = {}
+        st.failed_reasons[reason] = (st.failed_reasons[reason] ?? 0) + 1
       }
       progress()
+    }
+
+    /** A non-200 answer's reason: the source's own SOURCE_READ_FAILED (a small JSON body, read
+     *  at most 2 KB), a gateway on the way, or not a Nivaro source's answer. */
+    const answerReason = async (res: Response): Promise<PullFailReason> => {
+      if (res.status === 503 && res.body) {
+        const code = await smallJsonCode(res.body).catch(() => null)
+        return code === 'SOURCE_READ_FAILED' ? 'source_read_failed' : 'unreachable'
+      }
+      void res.body?.cancel().catch(() => {})
+      return res.status === 502 || res.status === 503 || res.status === 504
+        ? 'unreachable'
+        : 'bad_answer'
     }
 
     const copyOne = async (row: FileRow, changed: boolean): Promise<void> => {
@@ -653,7 +698,7 @@ async function execute(
       try {
         store = await storeFor(row)
       } catch {
-        return failRow(id)
+        return failRow(id, 'write_failed')
       }
       if (!changed && expected !== null && store.size) {
         const have = await store.size(key).catch(() => null)
@@ -677,7 +722,7 @@ async function execute(
         res = guarded ? await pullDeps.safeFetch(url, init) : await pullDeps.fetch(url, init)
       } catch {
         // unreachable, timed out, or a redirect (redirect: 'error')
-        return failRow(id)
+        return failRow(id, 'unreachable')
       }
       const drop = () => {
         void res.body?.cancel().catch(() => {})
@@ -692,21 +737,18 @@ async function execute(
         progress()
         return
       }
-      if (res.status !== 200 || !res.body) {
-        drop()
-        return failRow(id)
-      }
+      if (res.status !== 200 || !res.body) return failRow(id, await answerReason(res))
       // A Nivaro source always names the object and its length: an answer without both is not
       // one (another endpoint at that path) and is never written over the row's key.
       const declared = toNumber(res.headers.get('content-length'))
       if (declared === null || declared > limits.maxObjectBytes) {
         drop()
-        return failRow(id)
+        return failRow(id, 'bad_answer')
       }
       const named = res.headers.get('x-nivaro-filename-disk')
       if (named === null || decodeHeader(named) !== key) {
         drop()
-        return failRow(id)
+        return failRow(id, 'bad_answer')
       }
       // The row's stored size disagrees with what the source serves (a stale filesize, T10
       // review N-1): the source's object is the one the row names (same key), so it is copied
@@ -714,15 +756,20 @@ async function execute(
       const mismatch = expected !== null && declared !== expected
       const tmp = join(tmpDir, `${run.id}-${randomUUID()}`)
       let got = 0
+      let tooBig = false
       const max = limits.maxObjectBytes
       const counter = new Transform({
         transform(chunk: Buffer, _enc, cb) {
           got += chunk.length
           run.lastProgress = Date.now()
-          if (got > max) cb(new Error('object too large'))
-          else cb(null, chunk)
+          if (got > max) {
+            tooBig = true
+            cb(new Error('object too large'))
+          } else cb(null, chunk)
         }
       })
+      // Which part failed decides the reason: the bytes coming in, or this side storing them.
+      let stage: 'incomplete' | 'write_failed' = 'incomplete'
       try {
         await pipeline(
           Readable.fromWeb(res.body as unknown as WebReadableStream<Uint8Array>),
@@ -730,7 +777,8 @@ async function execute(
           createWriteStream(tmp),
           { signal }
         )
-        if (got !== declared) return failRow(id)
+        if (got !== declared) return failRow(id, 'incomplete')
+        stage = 'write_failed'
         await store.putFile(key, tmp, row.type || 'application/octet-stream', {
           signal: ac.signal
         })
@@ -740,7 +788,7 @@ async function execute(
         progress()
         await remember(id)
       } catch {
-        return failRow(id)
+        return failRow(id, tooBig ? 'bad_answer' : stage)
       } finally {
         await unlink(tmp).catch(() => {})
       }

@@ -1,4 +1,5 @@
 import { db } from '../../../db/index.js'
+import type { PullFailReasons } from '../../hub-transfer/fail-reasons.js'
 import type { PullStatus } from '../shared/deployment-client.js'
 import type { MoveAddresses } from './addresses.js'
 import type { MovePlan, MoveStepKey, RouteAction } from './types.js'
@@ -111,6 +112,8 @@ export interface MoveFilesSummary {
   failed: number
   missing: number
   size_mismatch: number
+  /** Failed rows per plain reason (hub-transfer/fail-reasons.ts); only when some failed. */
+  failed_reasons?: PullFailReasons
   bytes: number
   at: string
 }
