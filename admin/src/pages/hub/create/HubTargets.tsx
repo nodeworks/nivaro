@@ -198,6 +198,7 @@ interface Draft {
   scheme: 'https' | 'http'
   port: string
   cert_note: string
+  traefik_version: '3' | '2'
 }
 
 function draftOf(t: HubTarget | null): Draft {
@@ -218,7 +219,8 @@ function draftOf(t: HubTarget | null): Draft {
     edge_address: c.edge_address ?? '',
     scheme: c.scheme ?? 'https',
     port: c.port != null ? String(c.port) : '',
-    cert_note: c.cert_note ?? ''
+    cert_note: c.cert_note ?? '',
+    traefik_version: c.traefik_version === 2 ? '2' : '3'
   }
 }
 
@@ -247,6 +249,10 @@ export function targetDraftErrors(d: Draft): Partial<Record<keyof Draft, string>
 const DNS_OPTIONS = [
   { value: 'automatic', label: 'Automatic (wildcard domain)' },
   { value: 'manual', label: 'By hand (a ticket per name)' }
+]
+const TRAEFIK_OPTIONS = [
+  { value: '3', label: 'Traefik 3 (swarm provider)' },
+  { value: '2', label: 'Traefik 2 (docker provider)' }
 ]
 const SCHEME_OPTIONS = [
   { value: 'https', label: 'https' },
@@ -299,7 +305,8 @@ function TargetForm({
           edge_address: opt(d.edge_address),
           scheme: d.scheme,
           port: d.port.trim() ? Number(d.port.trim()) : null,
-          cert_note: opt(d.cert_note)
+          cert_note: opt(d.cert_note),
+          traefik_version: d.traefik_version === '2' ? 2 : 3
         },
         // Unchanged = not sent (the stored token stays); cleared = removed.
         ...(token !== (stored ? HUB_MASK : '') ? { secret: token.trim() } : {})
@@ -452,6 +459,20 @@ function TargetForm({
             onChange={(e) => set({ proxy_network: e.target.value })}
             placeholder='proxy'
             className={mono}
+          />
+        </Field>
+        <Field
+          id={id('traefik')}
+          label='Traefik version'
+          hint='Picks the one network label a created app gets. Apps made earlier keep theirs until re-pinned.'
+        >
+          <SimpleSelect
+            value={d.traefik_version}
+            onChange={(v) => set({ traefik_version: v === '2' ? '2' : '3' })}
+            options={TRAEFIK_OPTIONS}
+            ariaLabel='Traefik version'
+            className='h-8 text-left text-[13px]'
+            triggerProps={{ id: id('traefik') }}
           />
         </Field>
         <div className='sm:col-span-2'>

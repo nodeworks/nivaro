@@ -203,10 +203,23 @@ describe('validateTargetInput', () => {
       edge_address: null,
       scheme: 'https',
       port: null,
-      cert_note: null
+      cert_note: null,
+      traefik_version: 3
     })
     expect(r.row.secret).not.toContain('glpat')
     expect(r.row.secret).toBeTruthy()
+  })
+
+  it('P6-35: traefik_version is 2 or 3 (3 when absent), anything else BAD_CONFIG', () => {
+    const tv = (v: unknown) => {
+      const r = valid({}, { traefik_version: v })
+      return r.ok ? r.row.config.traefik_version : r.code
+    }
+    expect(tv(undefined)).toBe(3)
+    expect(tv(null)).toBe(3)
+    expect(tv(2)).toBe(2)
+    expect(tv(3)).toBe(3)
+    for (const bad of [1, 4, '3', 'v3', 2.5]) expect(tv(bad), String(bad)).toBe('BAD_CONFIG')
   })
 
   it('BAD_KIND / BAD_NAME', () => {

@@ -24,6 +24,8 @@ import type { Role, StackSpec } from './spec.js'
 export type RenderConfig = {
   edge: 'traefik' | 'publish'
   edgeNetwork: string
+  /** 3 when absent (the agent's default): see AgentConfig.traefikVersion. */
+  traefikVersion?: 2 | 3
   entrypoints: readonly string[]
   certResolver?: string | null
   extensionsShared: boolean
@@ -200,11 +202,12 @@ function traefikLabels(
     if (cfg.certResolver) out[`traefik.http.routers.${router}.tls.certresolver`] = cfg.certResolver
     return out
   }
-  // Both provider spellings: v2 docker / v3 docker read the first, v3 swarm the second.
+  // Exactly one provider spelling (ruling P6-34): Traefik v3 skips a service carrying both
+  // ("both Docker and Swarm labels are defined"). v3 reads swarm services through its swarm
+  // provider; v2's docker provider (swarm mode) reads the docker one.
   const base = {
     'traefik.enable': 'true',
-    'traefik.docker.network': cfg.edgeNetwork,
-    'traefik.swarm.network': cfg.edgeNetwork
+    [cfg.traefikVersion === 2 ? 'traefik.docker.network' : 'traefik.swarm.network']: cfg.edgeNetwork
   }
   if (role === 'web' || role === 'all') {
     const r = webRouterName(stack)

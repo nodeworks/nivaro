@@ -39,6 +39,12 @@ export interface HubTargetConfig {
   scheme: 'https' | 'http'
   port: number | null
   cert_note: string | null
+  /**
+   * Ruling P6-35: the Traefik on this target's swarm. It picks the created app's ONE network
+   * label (3 = traefik.swarm.network, 2 = traefik.docker.network; v3 skips a service with both).
+   * Absent on targets saved before it: 3.
+   */
+  traefik_version?: 2 | 3
 }
 
 /** A target as stored: config parsed, token still sealed. */
@@ -82,7 +88,8 @@ const CONFIG_KEYS = [
   'edge_address',
   'scheme',
   'port',
-  'cert_note'
+  'cert_note',
+  'traefik_version'
 ] as const
 
 const DEFAULTS = {
@@ -331,6 +338,11 @@ export function validateTargetInput(
   const certNote = optText(pick('cert_note'), 1000)
   if (certNote === undefined) return fail('BAD_CONFIG', 'Config cert_note must be short text.')
 
+  const tvRaw = pick('traefik_version')
+  const traefikVersion = tvRaw === undefined || tvRaw === null || tvRaw === '' ? 3 : tvRaw
+  if (traefikVersion !== 2 && traefikVersion !== 3)
+    return fail('BAD_CONFIG', 'Config traefik_version must be 2 or 3.')
+
   const wildRaw = pick('wildcard_domain')
   let wildcard: string | null = null
   if (wildRaw !== undefined && wildRaw !== null && wildRaw !== '') {
@@ -380,7 +392,8 @@ export function validateTargetInput(
     edge_address: edge,
     scheme,
     port,
-    cert_note: certNote
+    cert_note: certNote,
+    traefik_version: traefikVersion
   }
   return { ok: true, row: { kind: 'gitlab', name: name.trim(), config, secret } }
 }

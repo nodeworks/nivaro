@@ -50,6 +50,8 @@ export type SpecConfig = {
    * top of the Nivaro app's known config keys. Absent = none.
    */
   envPrefixes?: readonly string[]
+  /** HUB_AGENT_TRAEFIK_VERSION (P6-34); absent = 3. A host_pattern needs v3 (HostRegexp). */
+  traefikVersion?: 2 | 3
 }
 
 export type FieldCode =
@@ -559,11 +561,17 @@ export function validateStackSpec(body: unknown, cfg: SpecConfig): SpecResult {
     })
   }
 
-  // host_pattern: shared owners on the traefik edge only, inside the agent's suffixes.
+  // host_pattern: shared owners on the traefik edge only, inside the agent's suffixes, and only
+  // for Traefik v3 (the pattern router is v3 HostRegexp syntax; v2 would never route it).
   let hostPattern: string | undefined
   if (has('host_pattern')) {
     const p = body.host_pattern
-    if (sharedKey === null || cfg.edge !== 'traefik' || !hostPatternOk(p, cfg.hostSuffixes)) {
+    if (
+      sharedKey === null ||
+      cfg.edge !== 'traefik' ||
+      cfg.traefikVersion === 2 ||
+      !hostPatternOk(p, cfg.hostSuffixes)
+    ) {
       bad('host_pattern', 'HOSTNAME_NOT_ALLOWED')
     } else hostPattern = p
   }

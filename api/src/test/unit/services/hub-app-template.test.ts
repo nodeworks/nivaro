@@ -42,6 +42,11 @@ const code = (text: string) =>
 /** A compose interpolation as written in the stack file: ${NAME}. */
 const compose = (name: string) => `\${${name}}`
 const DIGEST_RE = /@sha256:[0-9a-f]{64}$/
+/** docker stack deploy's interpolation of ${NAME} and ${NAME:-default} (enough for labels). */
+const interpolate = (s: string, env: Record<string, string>) =>
+  s.replace(/\$\{([A-Z_][A-Z0-9_]*)(?::-([^}]*))?\}/g, (_, k: string, d?: string) =>
+    env[k] !== undefined && env[k] !== '' ? env[k] : (d ?? '')
+  )
 
 function allFiles(dir: string): string[] {
   const out: string[] = []
@@ -247,6 +252,29 @@ describe('manager/docker-stack.yml', () => {
     expect(stack.services.worker.deploy?.labels ?? []).not.toContain('traefik.enable=true')
   })
 
+  it('P6-35: web carries exactly ONE Traefik network label, the one the manager picks', () => {
+    const labels = stack.services.web.deploy?.labels ?? []
+    const nets = labels.filter((l) => /network\}?=/.test(l))
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: a compose placeholder, literally
+    expect(nets).toEqual(['${TRAEFIK_NETWORK_LABEL:-traefik.swarm.network}=${PROXY_NETWORK}'])
+    expect(code(text)).not.toContain('traefik.docker.network=')
+    // Rendered with each value the manager can pick: one label, the right provider.
+    for (const label of ['traefik.swarm.network', 'traefik.docker.network']) {
+      const rendered = labels.map((l) =>
+        interpolate(l, {
+          TRAEFIK_NETWORK_LABEL: label,
+          PROXY_NETWORK: 'proxy',
+          TRAEFIK_VERSION: '3'
+        })
+      )
+      expect(rendered.filter((l) => /^traefik\.(docker|swarm)\./.test(l))).toEqual([
+        `${label}=proxy`
+      ])
+    }
+    // An older wrapper that sets nothing: the v3 swarm label.
+    expect(interpolate(nets[0], { PROXY_NETWORK: 'proxy' })).toBe('traefik.swarm.network=proxy')
+  })
+
   it('has no host bind mounts, no privileged settings, no published ports', () => {
     for (const [name, s] of Object.entries(stack.services)) {
       expect(s.privileged, name).toBeUndefined()
@@ -443,7 +471,7 @@ case "$1 $2" in
   "secret inspect") [ -f "$S/secrets/$last.labels" ] || exit 1; cat "$S/secrets/$last.labels"; echo; exit 0 ;;
   "secret create") cat > "$S/secrets/$prev2"; printf '%s %s' "$ls" "$lk" > "$S/secrets/$prev2.labels"; exit 0 ;;
   "network inspect") [ "$last" = proxy ]; exit $? ;;
-  "stack deploy") printf 'deployed RULE=%s TLS=%s EP=%s IMAGE=%s DB=%s KEY=%s FILE=%s STACK=%s BOOT=%s\\n' "$TRAEFIK_RULE" "$TRAEFIK_TLS" "$TRAEFIK_ENTRYPOINT" "$NIVARO_IMAGE_REF" "$SECRET_DB_URL" "$NIVARO_HUB_KEY" "$prev2" "$last" "\${HUB_BOOT_MAINTENANCE:-}" >> '${log}'; exit 0 ;;
+  "stack deploy") printf 'deployed RULE=%s TLS=%s EP=%s IMAGE=%s DB=%s KEY=%s FILE=%s STACK=%s NET=%s TV=%s BOOT=%s\\n' "$TRAEFIK_RULE" "$TRAEFIK_TLS" "$TRAEFIK_ENTRYPOINT" "$NIVARO_IMAGE_REF" "$SECRET_DB_URL" "$NIVARO_HUB_KEY" "$prev2" "$last" "\${TRAEFIK_NETWORK_LABEL:-}" "\${TRAEFIK_VERSION:-}" "\${HUB_BOOT_MAINTENANCE:-}" >> '${log}'; exit 0 ;;
   "run --rm") echo '{"version":"0.3.300","react":"x"}'; exit 0 ;;
 esac
 exit 0
@@ -731,6 +759,42 @@ describe('manager/nivaro-hub-deploy (forced command)', () => {
     }
   })
 
+  it('P6-35: deploy picks one Traefik network label from TRAEFIK_VERSION (3 when absent)', () => {
+    const at = (over: Record<string, string>) => {
+      const box = manager({ secrets: ownSecrets() })
+      const r = forced(box, `deploy ${STACK}`, deploySettings(over))
+      return { r, calls: box.calls(), box }
+    }
+    expect(at({}).calls).toMatch(/^deployed .* NET=traefik\.swarm\.network TV=3 BOOT=$/m)
+    expect(at({ TRAEFIK_VERSION: '3' }).calls).toMatch(/ NET=traefik\.swarm\.network TV=3 /)
+    expect(at({ TRAEFIK_VERSION: '2' }).calls).toMatch(/ NET=traefik\.docker\.network TV=2 /)
+    for (const bad of ['1', '4', 'v3', '3 ']) {
+      const b = at({ TRAEFIK_VERSION: bad })
+      expect(b.r.status, bad).not.toBe(0)
+      expect(dockerCalls(b.box).join('\n'), bad).not.toContain('stack deploy')
+    }
+    // A stack file from before this setting (both labels): an explicit version is refused, not
+    // silently ignored; without one it deploys as it always did.
+    const oldStack = read('manager/docker-stack.yml').replace(
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: a compose placeholder, literally
+      '- ${TRAEFIK_NETWORK_LABEL:-traefik.swarm.network}=${PROXY_NETWORK}',
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: a compose placeholder, literally
+      '- traefik.swarm.network=${PROXY_NETWORK}\n        - traefik.docker.network=${PROXY_NETWORK}'
+    )
+    expect(oldStack).toContain('traefik.docker.network=')
+    const stale = manager({ secrets: ownSecrets(), stackFile: oldStack })
+    const r2 = forced(stale, `deploy ${STACK}`, deploySettings({ TRAEFIK_VERSION: '3' }))
+    expect(r2.status).not.toBe(0)
+    expect(r2.out).toContain('the stack file does not use TRAEFIK_NETWORK_LABEL')
+    expect(
+      forced(
+        manager({ secrets: ownSecrets(), stackFile: oldStack }),
+        `deploy ${STACK}`,
+        deploySettings()
+      ).status
+    ).toBe(0)
+  })
+
   it("deploy: first deploy binds the stack to this key; the stack file is the manager's", () => {
     const box = manager({ secrets: ownSecrets() })
     const r = forced(box, `deploy ${STACK}`, deploySettings())
@@ -1004,6 +1068,23 @@ describe('scripts/deploy.sh run (through the real wrapper)', () => {
   // Hub phase 6 (ruling P6-20): a move's target deploy gets the pipeline variable
   // HUB_BOOT_MAINTENANCE=<move id>; the template forwards it to the manager, which puts it into
   // the app's environment. Without it nothing is sent and the app boots normally.
+  it('P6-35: forwards TRAEFIK_VERSION from app.env; an app.env without it (older app) deploys v3', () => {
+    const v2 = run({ appEnv: [...APP_ENV, 'TRAEFIK_VERSION=2'] })
+    expect(v2.status, v2.out).toBe(0)
+    expect(v2.calls).toMatch(/ NET=traefik\.docker\.network TV=2 /)
+    const v3 = run({ appEnv: [...APP_ENV, 'TRAEFIK_VERSION=3'] })
+    expect(v3.status, v3.out).toBe(0)
+    expect(v3.calls).toMatch(/ NET=traefik\.swarm\.network TV=3 /)
+    const older = run()
+    expect(older.status, older.out).toBe(0)
+    expect(older.calls).toMatch(/ NET=traefik\.swarm\.network TV=3 /)
+    for (const bad of ['4', 'v2', '']) {
+      const b = run({ appEnv: [...APP_ENV, `TRAEFIK_VERSION=${bad}`] })
+      expect(b.status, bad).not.toBe(0)
+      expect(b.calls, bad).not.toContain('stack deploy')
+    }
+  })
+
   it('forwards HUB_BOOT_MAINTENANCE (a move id) into the stack; absent → nothing sent', () => {
     const on = run({ env: { HUB_BOOT_MAINTENANCE: '42' } })
     expect(on.status).toBe(0)

@@ -712,7 +712,7 @@ export const MOVE_BLOCKER_COPY: Record<string, Copy> = {
   },
   NO_DATABASE_RECORD: {
     title: "The Hub has no record of this app's database",
-    hint: 'Adopt the database on the Databases tab and attach it to the environment.'
+    hint: "On the Databases tab, adopt the app's database if it is not listed, open it and use Attach to environment."
   },
   SQLITE_NOT_SHARED: {
     title: 'The app runs on SQLite',
@@ -1024,6 +1024,10 @@ export const MOVE_CODE_COPY: Record<string, Copy> = {
   },
   APP_KEY_BUSY: {
     title: "This environment's encryption key is being saved",
+    hint: 'Try again in a moment.'
+  },
+  DATABASE_BUSY: {
+    title: "This environment's database record is being attached or detached",
     hint: 'Try again in a moment.'
   },
   SHARED_UPGRADE_RUNNING: {

@@ -373,7 +373,7 @@ function repoOfImage(image: string): string | null {
 /**
  * The stack hash answered as `spec_hash` and stamped on every service: the
  * spec hash (secret values replaced by keyed digests) plus every agent setting
- * that changes what is rendered — edge mode and network, entrypoints, cert
+ * that changes what is rendered — edge mode, network and Traefik version, entrypoints, cert
  * resolver, redis image, volume driver and options, the extension root and
  * placement. A config change therefore re-applies (ruling P4-5).
  */
@@ -382,6 +382,8 @@ export function stackHash(spec: StackSpec, cfg: AgentConfig, nodeId: string): st
   const agent = {
     edge: cfg.edge,
     edgeNetwork: cfg.edgeNetwork,
+    // It picks the network label (P6-34), so it is part of what is rendered.
+    traefikVersion: cfg.traefikVersion,
     entrypoints: cfg.entrypoints,
     certResolver: cfg.certResolver ?? null,
     redisImage: cfg.redisImage,
