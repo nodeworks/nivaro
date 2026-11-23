@@ -1160,8 +1160,6 @@ const KEYED: Record<string, string> = {
     'totalKey() = scopeKey(tenant, collection) + statement, tenant = currentTenantKey()',
   'services/read-caches.ts :: rows':
     'the row key starts with scopeKey(tenant, collection), tenant = currentTenantKey()',
-  'db/dialect/ef.ts :: idKinds':
-    'per knex handle, and the inner key starts with getTenantId(): callers pass the shared db proxy, so the app is in the key',
   'flows/registry.ts :: orderChains': 'key starts with currentTenantKey()',
   'plugins/graphql.ts :: _schemas':
     'rememberSchema(key) with key = schemaTenantKey() = currentTenantKey()',
@@ -1294,8 +1292,6 @@ const GATE =
 const TELEM =
   'telemetry of this process (counters, Traffic Map stores, trace / log lines tagged with their app), never read as app data'
 const LEFT_ON_LEAVE: Record<string, string> = {
-  'db/dialect/ef.ts :: idKinds':
-    'a WeakMap per knex handle, not iterable, so it cannot be forgotten here (final review M6 replaces it)',
   'functions/queue-materialization-jobs.ts :: runningHere': INFLIGHT,
   'functions/queue-materialization-jobs.ts :: rerunHere': INFLIGHT,
   'hooks/notification-subscriptions.ts :: pendingRecordChanges': INFLIGHT,
