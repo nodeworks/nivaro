@@ -1,10 +1,3822 @@
 {
-  "generated_at": "2026-11-21T19:16:18.282Z",
+  "generated_at": "2026-11-23T07:53:24.226Z",
   "releases": [
+    {
+      "version": "0.3.209",
+      "tag": "v0.3.209",
+      "date": "2026-11-23T02:52:50-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "attach a database record to an environment",
+              "hash": "ca8e97079"
+            },
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "override a link name the Hub cannot verify",
+              "hash": "cebee0457"
+            },
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "Redis address re-apply result and removal on shared deployments",
+              "hash": "93402b829"
+            },
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "wire the shared upgrade panel to Task 5's routes",
+              "hash": "eeebaae6b"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "write-only external Redis URL for a Docker shared deployment",
+              "hash": "cf7a9c6c5"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "shared stack routes for moves, ops and route tests",
+              "hash": "e345119da"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "move run wired to the move planner, routes and boot heal",
+              "hash": "07e4990e2"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "deploy and upgrade shared deployments through the agent",
+              "hash": "56404eff8"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "move environments between shared and dedicated placements",
+              "hash": "fca211bc3"
+            },
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "shared deployments in the Apps hub",
+              "hash": "ea23acd6e"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "the shared deployment detail names the tenants list ETag",
+              "hash": "d4344bd5c"
+            },
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "move environments and place them on shared deployments",
+              "hash": "03471bb4b"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "move planner (blockers, route actions, checklist)",
+              "hash": "8afd97652"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "revoke a transfer ticket when a move ends",
+              "hash": "a8a265414"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "shared placements, place a new environment on a shared deployment",
+              "hash": "143db8e24"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "ticketed file transfer between placements",
+              "hash": "912980b87"
+            },
+            {
+              "section": "Added",
+              "scope": "tenancy",
+              "text": "per-app origin in jobs, per-app encryption key on shared deployments",
+              "hash": "add1aa277"
+            },
+            {
+              "section": "Added",
+              "scope": "tenancy",
+              "text": "migrate each app on a shared deployment; extension allow-list",
+              "hash": "d0acd15e2"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "shared deployment admin routes and deployment link client",
+              "hash": "7079d7b54"
+            },
+            {
+              "section": "Added",
+              "scope": "hub-link",
+              "text": "strict maintenance, retire, shared readiness for moves",
+              "hash": "76ce5c194"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "serve the shared tenants contract, record replica sightings",
+              "hash": "a8b6fb17c"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "replica sightings of shared deployments",
+              "hash": "1ddbf0621"
+            },
+            {
+              "section": "Added",
+              "scope": "tenancy",
+              "text": "record hooks and event flows run per app on shared deployments",
+              "hash": "2ef370a0f"
+            },
+            {
+              "section": "Added",
+              "scope": "tenancy",
+              "text": "deployment link, contract origin/key fields, maintenance page",
+              "hash": "aecbecebd"
+            },
+            {
+              "section": "Added",
+              "scope": "storage",
+              "text": "per-app storage scope on shared deployments",
+              "hash": "8375a7984"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "shared deployments and moves tables (552–553), shared store",
+              "hash": "79987bc07"
+            },
+            {
+              "section": "Added",
+              "scope": "hub-agent",
+              "text": "shared deployment stacks (owned keys, host pattern)",
+              "hash": "983c0c2f2"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "app key fingerprint leaf for phase 6",
+              "hash": "fbfb7a9b6"
+            },
+            {
+              "section": "Added",
+              "scope": "shared",
+              "text": "className prop on the Hub app switcher trigger",
+              "hash": "b194c9c89"
+            },
+            {
+              "section": "Added",
+              "scope": "react",
+              "text": "export the Hub app switcher",
+              "hash": "852c556c6"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "create an app from the Apps hub",
+              "hash": "3f8acae69"
+            },
+            {
+              "section": "Added",
+              "scope": "jobs",
+              "text": "per-app pause; schedules stay deployment-wide on shared deployments",
+              "hash": "3ad02affb"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "Databases tab",
+              "hash": "56183a7af"
+            },
+            {
+              "section": "Added",
+              "scope": "jobs",
+              "text": "run app-scoped jobs once per app on shared deployments",
+              "hash": "3abe08a51"
+            },
+            {
+              "section": "Added",
+              "scope": "tenancy",
+              "text": "Hub tenant source (contract, sealed cache, readiness)",
+              "hash": "7a0eb1357"
+            },
+            {
+              "section": "Added",
+              "scope": "auth",
+              "text": "app switcher, direct sign-in link, Hub sign-out",
+              "hash": "32e1ef83c"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "database, target and app-creation routes",
+              "hash": "166a6be81"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "sign-in settings in the Apps hub",
+              "hash": "9e43ada7d"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "docker stack panel",
+              "hash": "087942e22"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "docker drivers and stack components in the Apps hub",
+              "hash": "9ea123076"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "operator step waits for the manager key",
+              "hash": "ed6794e24"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "app switcher API and sign-in reports",
+              "hash": "f5950dc1f"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "create an app end to end",
+              "hash": "f2b42dfe6"
+            },
+            {
+              "section": "Added",
+              "scope": "auth",
+              "text": "sign in through the Hub with direct fallback",
+              "hash": "e4b8b453e"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "docker stack routes",
+              "hash": "341faade3"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "deploy, verify and heal docker stacks",
+              "hash": "4e5562e0d"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "creation planner and name check",
+              "hash": "0fd01d599"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "sign-in reports and switcher answers",
+              "hash": "c450a63e0"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "plan docker stack deploys",
+              "hash": "2a83b5eed"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "database servers, databases, DBA checklist",
+              "hash": "e1060c2c2"
+            },
+            {
+              "section": "Added",
+              "scope": "hub-agent",
+              "text": "apply, status, restart and remove stacks",
+              "hash": "20b38b866"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "OIDC provider for apps",
+              "hash": "d3be6a0ca"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "app settings, hostnames and the deploy-repo template",
+              "hash": "9ceddd318"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "stack settings and stack spec rendering",
+              "hash": "f558ce45f"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "database provisioners for SQL Server, Postgres, MySQL and MariaDB",
+              "hash": "10e28da7b"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "sign-in clients and admin routes",
+              "hash": "74010a4de"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "docker driver, agent client and stack components",
+              "hash": "0a3f86871"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "creation targets and GitLab provisioning calls",
+              "hash": "ebfce02ab"
+            },
+            {
+              "section": "Added",
+              "scope": "hub-agent",
+              "text": "config, engine allow-list and authenticated server",
+              "hash": "fb688bb9c"
+            },
+            {
+              "section": "Added",
+              "scope": "hub-agent",
+              "text": "stack spec schema and service rendering",
+              "hash": "8235ad61b"
+            },
+            {
+              "section": "Added",
+              "scope": "hub-link",
+              "text": "seed the first administrator",
+              "hash": "95a384ea7"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "OIDC signing keys and ID tokens",
+              "hash": "fc8ac5e05"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "database connection model and names",
+              "hash": "b476d4ee5"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "sign-in tables (migrations 550, 551)",
+              "hash": "ff1df96df"
+            },
+            {
+              "section": "Added",
+              "scope": "tenancy",
+              "text": "deployment-mode predicates",
+              "hash": "2934b9034"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "database, target and creation tables (migrations 544, 545)",
+              "hash": "22988f501"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "stack settings table (migration 546)",
+              "hash": "5e8871e03"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "promotion routes",
+              "hash": "ce686fb30"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "run promotions through GitLab",
+              "hash": "1c8f00869"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "placement components",
+              "hash": "a02457d5f"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "promote and roll back from the Apps hub",
+              "hash": "ea955acda"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "GitLab write client for promotions",
+              "hash": "dad284114"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "promotion planner",
+              "hash": "4bad8e912"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "promotion tables (migration 543)",
+              "hash": "ca3912304"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "read image digests for pins",
+              "hash": "41e67bf10"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "status says why",
+              "hash": "535c6251f"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "driver, placement, status and deploy routes",
+              "hash": "2763b0ecd"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "read-only deploy history (service)",
+              "hash": "26b90a9b6"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "GitLab drivers and dedicated placements (service)",
+              "hash": "2d77e21cb"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "hub link on apps and environment status",
+              "hash": "4aa4871ce"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "apps, environments and owners API",
+              "hash": "01e45362d"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "Apps hub in admin",
+              "hash": "2f5814c94"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "sealed secrets for hub tokens",
+              "hash": "cc85b85f3"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "hub tables (migration 542)",
+              "hash": "1a5d42e27"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "gitlab jobs reader",
+              "hash": "7b55c1020"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "hub mode switch",
+              "hash": "aafde0171"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "dropping a shared deployment's extension holds its lock",
+              "hash": "383274f41"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub-admin",
+              "text": "plain words for every code FW-1 answers, guarded at the source",
+              "hash": "bdb41cda0"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "deleting an environment refuses MOVE_OPEN",
+              "hash": "32c415ef6"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "stack remove with its volumes refuses MOVE_OPEN",
+              "hash": "afddb58d8"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a placement retry naming another database is checked like a first place",
+              "hash": "726f99f63"
+            },
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "the strict maintenance heading shows a focus ring",
+              "hash": "fb22582c3"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub-admin",
+              "text": "Attach anyway overrides only the environment that was refused",
+              "hash": "9b7d3bcd5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "test",
+              "text": "admin stream cluster test waits for signals, not fixed sleeps",
+              "hash": "fb85ce998"
+            },
+            {
+              "section": "Fixed",
+              "scope": "socketio",
+              "text": "edit-lock presence probe looks at the asking app's sockets",
+              "hash": "136b5f3d4"
+            },
+            {
+              "section": "Fixed",
+              "scope": "chaos",
+              "text": "refusal text names a multi-tenant deployment, not cloud mode",
+              "hash": "16a63c445"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a failed key check retries, then says not to retire the old home yet",
+              "hash": "0afd0821c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a rotated token no run has applied shows TOKEN_NOT_APPLIED",
+              "hash": "a0b28483c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a move proves boot maintenance against the deploy job the app's project runs",
+              "hash": "b6c9186ca"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "the shared upgrade plan refuses a host pattern on a Traefik v2 agent",
+              "hash": "36018a567"
+            },
+            {
+              "section": "Fixed",
+              "scope": "guard",
+              "text": "cloud-flag inventory script explains 0 sites; guard keeps the inventory",
+              "hash": "e15640d70"
+            },
+            {
+              "section": "Fixed",
+              "scope": "storage",
+              "text": "a move's fallback read error is never \"missing\"",
+              "hash": "d74ee97c9"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub-link",
+              "text": "read the retired flag before the scheduler and drainers start",
+              "hash": "f38879641"
+            },
+            {
+              "section": "Fixed",
+              "scope": "cron",
+              "text": "boot catch-up skips an app whose database is not migrated yet",
+              "hash": "dacee3b47"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a shared rollback plan warns that the schema stays ahead",
+              "hash": "27d234366"
+            },
+            {
+              "section": "Fixed",
+              "scope": "test",
+              "text": "events stream, share-link stream and chaos recovery wait for signals",
+              "hash": "6f0692e32"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "outside-app busts of audit levels and banner memo reach every app",
+              "hash": "27b3611e1"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a pin's boot-maintenance line is never read as part of the build",
+              "hash": "7c0d715e6"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "app-migration loop runs one pass at a time",
+              "hash": "6f7a47d9d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db",
+              "text": "MySQL id-kind cache per app and table, not per knex handle",
+              "hash": "acbb9c5d9"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "forgetAppState drops hand-keyed per-app caches",
+              "hash": "262d490d7"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "MOVE_OPEN lets a move's own run through",
+              "hash": "09899dbf5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub-admin",
+              "text": "plain words for the codes FW-1 adds",
+              "hash": "0341208b0"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a Docker shared deployment is created without a version pin",
+              "hash": "71f69a01f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a failed shared deployment update never rethrows the engine error",
+              "hash": "ae8078e2b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a shared upgrade renews its locks strictly",
+              "hash": "6d81ab85d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a deploy refused by an older manager says to update the manager",
+              "hash": "16e353cef"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub-admin",
+              "text": "attach whose database identity differs offers Attach anyway",
+              "hash": "5538b4f4d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub-agent",
+              "text": "a realtime role on Traefik v2 is refused",
+              "hash": "bb6fbef95"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a source that could not be retired says to remove its stack now",
+              "hash": "56f0f2024"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "attaching a database record with another identity to a Docker stack is refused",
+              "hash": "37e9a7635"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "the move file route's comments say what it reads",
+              "hash": "6621dea21"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a move onto shared carries the app key into its entry",
+              "hash": "d8e658942"
+            },
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "strict maintenance page holds keyboard focus",
+              "hash": "2be9c2efa"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "an extension a placed app uses never leaves its shared deployment",
+              "hash": "63aa64d27"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub-admin",
+              "text": "on a phone the off Promote says why in a visible line",
+              "hash": "39cea7e71"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "place on a never-deployed Docker shared deployment refuses NOT_DEPLOYED",
+              "hash": "1a2d4365d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "place on a Docker shared deployment refuses a name its stack does not route",
+              "hash": "0c00d949c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub-admin",
+              "text": "a shared deployment warning says its point once",
+              "hash": "def4e1e15"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a move retries the target's maintenance call for target_ready's 10 minutes",
+              "hash": "e81e524c9"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub-admin",
+              "text": "SHARED_PLACEMENT creation copy defined once",
+              "hash": "4f4cfc946"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a move's checklist is written by compare-and-set",
+              "hash": "044b9284d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "shared upgrade verifies only the apps placed on the deployment",
+              "hash": "2e2b8ac95"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub-admin",
+              "text": "upgrade panel closes in one click and stops re-planning on focus",
+              "hash": "e231c36dc"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "an open move refuses the actions it relies on (MOVE_OPEN)",
+              "hash": "44f83c470"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "the move runner marks its own actions for the MOVE_OPEN guards",
+              "hash": "53cf4c27b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "the move plan warns that unsaved form drafts are dropped",
+              "hash": "b2111a54f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a halted move says that stopping a shared deployment stops every app on it",
+              "hash": "e16d7e843"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub-admin",
+              "text": "database attach and detach refresh the app page and move plan",
+              "hash": "0e5ebcaa2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "the source recovery text names the app's own maintenance key per mode",
+              "hash": "032fba674"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub-admin",
+              "text": "secrets shown once are never recorded by session replay",
+              "hash": "b47610e79"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a move's GitLab target boots in maintenance from the pin commit",
+              "hash": "82e062361"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "place-on-shared refuses an environment that serves elsewhere",
+              "hash": "905deb4fc"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "created-app stack uses one Traefik network label",
+              "hash": "15cc249ed"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a move counts an object missing only when no source the app reads has it",
+              "hash": "4c7ca62c4"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "shared readiness details say what the app does today",
+              "hash": "336e0c27b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub-agent",
+              "text": "emit exactly one Traefik network label",
+              "hash": "42d1630b2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a move's per-move address keeps the public address's scheme and port",
+              "hash": "36057f471"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "attach a database record to an existing environment",
+              "hash": "34a5fb3f5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a crash inside the deploy-window lift never leaves a redeploy beside a live source",
+              "hash": "5c5e8d894"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a move whose object-storage count is unknown is blocked, not warned",
+              "hash": "90d36157d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a move answer never carries a sealed value",
+              "hash": "7f0b23ae6"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a move's file source streams saved-settings objects, never whole",
+              "hash": "40dca828e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a move's file source answers 404 only for an object that is really gone",
+              "hash": "364dc3fbe"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "the Hub's strict maintenance freezes only the app it is for",
+              "hash": "237a735de"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db",
+              "text": "list and count reads run on the tenant's own database",
+              "hash": "1fc74667d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "one reader for an app's shared-readiness report",
+              "hash": "22a09cb0c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a move's route apply waits only for the route step's 10 minutes",
+              "hash": "a9ff30e4c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a cancel reaches a move's GitLab target deploy",
+              "hash": "3e0540fa3"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "design review nice-to-haves on the shared screens",
+              "hash": "1644ee8c3"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a transfer ticket a dead move run left behind is revoked by the next run",
+              "hash": "5734658a0"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a manual move cancelled before the self-check still says to point the name back",
+              "hash": "bd47b77bc"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "shared list shows Upgrading; detail tables fit a phone",
+              "hash": "b2491ceed"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "the GitLab boot-window plan text says the source pauses for the deploy",
+              "hash": "253078997"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a move to or from a shared deployment copies saved-settings S3/Azure objects",
+              "hash": "996435769"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "the place form names shared deployments as the move picker does",
+              "hash": "5faf5ea72"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "upgrade panel says each outcome once, in words",
+              "hash": "68e4e630d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "a Moved history row does not repeat its own version as 'from'",
+              "hash": "13d5e50df"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "a move plan keeps each issue's own sentence behind Why",
+              "hash": "0e6e88eac"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "on a phone the address request keeps its full width",
+              "hash": "e291cf108"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "plain words for the shared codes List B added",
+              "hash": "51a55b8ee"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "the move footer names the version as a version",
+              "hash": "5f4c11bc8"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "a move plan says files are unknown when the source never answered",
+              "hash": "47c98074a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "typed confirmations no longer look pre-filled",
+              "hash": "b669f6cb7"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "type the app-info probe test's request",
+              "hash": "5095ccff8"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "a shared upgrade never defaults to a downgrade",
+              "hash": "91896615c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "move plan text says why in words and names drivers by name",
+              "hash": "4c3031814"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "a shared environment's missing key reads as a lost key",
+              "hash": "99090449f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "the phone environment entry keeps its actions and chips on the card",
+              "hash": "40738a3cf"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a move's final status and mirror row are written only by its lock holder",
+              "hash": "7e36bbe70"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "the environment row shows its move and holds Promote while it is open",
+              "hash": "58757de89"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a rollback that cannot give the source its names back names the recovery",
+              "hash": "5d95e2ec5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a GitLab move target without proven boot maintenance never deploys beside a live source",
+              "hash": "24dfe1e2a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "upgrade history keeps the version pair whole on a phone",
+              "hash": "541e53c36"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "a rolled-back move says to point the name back before anything else",
+              "hash": "6d459761a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "Hub deploys history words coded run errors",
+              "hash": "f2b489598"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "a moved environment whose old home is not retired never ticks that step green",
+              "hash": "25dc0932f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "module-state scanner sees a Map handed on by shorthand, array or return",
+              "hash": "4bcb76def"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "an interrupted move shows the step it stopped on, not a spinner",
+              "hash": "08b8b66f6"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "spread and parallelise the 5-minute app ledger checks",
+              "hash": "80d8a104e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a shared upgrade to an older version needs downgrade: true",
+              "hash": "eaf925f94"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "an owner sees Promote off on a shared environment",
+              "hash": "a4ee339c4"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "no cloud canonical origin on a Hub shared deployment",
+              "hash": "0a1afed48"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "the phone app-info probe says maintenance for a Hub update or move",
+              "hash": "8d5893622"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "TARGET_IN_USE counts open moves onto the placement",
+              "hash": "33d4fd300"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "environment row actions fit their column at every desktop width",
+              "hash": "5aab1daee"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a placement whose job run cannot start closes its row",
+              "hash": "6099c12de"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "APP_MOVED says the app moved, not that the server is busy",
+              "hash": "e2c723837"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "an abandoned shared upgrade start fails its job run too",
+              "hash": "1422d20e7"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "the promote panel shows plan warnings in plain words",
+              "hash": "1e40c85ae"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "the upgrade form waits for the run history",
+              "hash": "96aa9bcde"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "admins see the full page under the Hub's strict maintenance",
+              "hash": "59e8f52aa"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a shared upgrade fails early on a stack stuck degraded",
+              "hash": "25318ab81"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "mark a stored REDIS_URL until a run applies it",
+              "hash": "054b787ee"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a finished move drops its per-move hostname",
+              "hash": "d56ade38d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a retired app refuses from a root onRequest",
+              "hash": "284123797"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a shared re-apply skips runs that never reached apply",
+              "hash": "bd9e36a64"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "shared PATCH writes fields and secrets in one compare-and-set",
+              "hash": "63bd3f7fc"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a move run that lost its locks never writes over the new holder",
+              "hash": "eb0a9361d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a move rollback follows written invariants: proven freeze, fixed undo order, halt",
+              "hash": "f1ea28668"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a re-frozen move target drops its boot-maintenance done marker",
+              "hash": "a027b7b5a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "a halted move rollback says to stop the new home, tick, then Roll back",
+              "hash": "350812ac0"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "a new stack option shows the name its request was sent with",
+              "hash": "b7eabfcb7"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "Plan again resets the link override box",
+              "hash": "f5943708b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "plain words for STACK_REAPPLY_ALL, now in the move warning type",
+              "hash": "2e82c88db"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a move's step list is written atomically",
+              "hash": "92ffc32b9"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "a one-word stored error code is split and worded too",
+              "hash": "342fe5328"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "the environment row stays still while a move or place request is out",
+              "hash": "a519ab215"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a halted move rollback is actionable, and a run without its locks never undoes",
+              "hash": "1ac032063"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a GitLab move target whose retire fails is never counted as stopped",
+              "hash": "8b8e766d6"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "mark the literal compose placeholders in the boot maintenance tests",
+              "hash": "505706d4e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "the GitLab boot maintenance counts as forwarded only with a matching manager",
+              "hash": "6eaa1dd9f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "LINK_URL_NOT_PULLABLE copy promises no override the panel lacks",
+              "hash": "781803304"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a Redis error while renewing a move's locks counts as lost",
+              "hash": "cefbf0bd3"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "prove a long converge keeps a move's heartbeat fresh",
+              "hash": "42f399908"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a move rollback restores the environment's extension pins",
+              "hash": "1a1783d4e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "the move-back picker offers a placement a rolled-back move kept",
+              "hash": "7ebfee54f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "release lifts the target only after its switch commits; rollback freezes it first",
+              "hash": "c3e386fc9"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "plain words for the move start's address refusals and boot window",
+              "hash": "dfbac1b66"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "the move panel reads shared deployments through Task 17's key and fetcher",
+              "hash": "ccb18fa8f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a move rollback never deletes a dedicated target placement",
+              "hash": "efd31450c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "a stored move error shows plain words, never its code",
+              "hash": "df4e346aa"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "plain words for lock-holder refusals on place and app key",
+              "hash": "9f61410ea"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "no Dismiss while a moved environment still has items to do",
+              "hash": "daecbf4c2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "a re-read move plan with a new hash clears the ticks and confirmation",
+              "hash": "365fba405"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "a pending start or stack placement keeps the move panel open",
+              "hash": "ea4f172b9"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "placement delete reads moves only where the moves table exists; test types",
+              "hash": "153f714f4"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "the shown deployment token leaves memory on Done",
+              "hash": "8326fc894"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "move placements are kept while a move needs them, and a never-used target goes on rollback",
+              "hash": "c7c155031"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "the move plan blocks a manual route from a Traefik-only Docker source",
+              "hash": "8c0489499"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a move may override LINK_URL_NOT_PULLABLE",
+              "hash": "d08e12189"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a GitLab move target boots in maintenance through its deploy job",
+              "hash": "f7849895d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "test a retired delete and a deployment that does not answer",
+              "hash": "de68a1340"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "name the shared pool default (twin of DEFAULT_POOL_MAX)",
+              "hash": "2b1e2b912"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "plain words for every move route refusal",
+              "hash": "abeef3352"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "BAD_EXTENSIONS names the digest pin form",
+              "hash": "8f6ab64ef"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "a size or Redis change says when it applies",
+              "hash": "eb26fe79e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "hub-api re-exports the shared deployment types only",
+              "hash": "668818e0a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "roll back offers only versions a Hub run deployed here",
+              "hash": "def175d44"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "copy for the HUB_URL_PROBLEM stack plan warning",
+              "hash": "faceb6254"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "a delete refused for an unreadable lock says nothing was deleted",
+              "hash": "73e118835"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "plain words for unverifiable extension builds and swarm nodes",
+              "hash": "5ffc87e7a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "re-apply wording names any holder and the version to re-apply",
+              "hash": "f72be6984"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "no refusal code in a shared upgrade's visible text",
+              "hash": "61f26ab67"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "a deployment token is shown once and kept nowhere",
+              "hash": "73f10c65c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "say why planner and warning rows key by index",
+              "hash": "80cd0de02"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "a disabled Promote on a shared environment says why to everyone",
+              "hash": "3f7eb32ea"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a move to a Docker stack installs the source's extension builds",
+              "hash": "94c64ffec"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a Docker source's extension builds are read from its last deploy",
+              "hash": "6c0030b01"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "planner rows keep their own sentence and repeat safely",
+              "hash": "71ed1acf2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "merge fixes for the tenant source test type and the module-state list",
+              "hash": "b50992dc3"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "the move plan hash names the unverified and differing extensions",
+              "hash": "b21701f20"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "an extension the shared target lists but does not pin is unverified",
+              "hash": "491db5f57"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "no move form while the moves list cannot be read",
+              "hash": "70c4295be"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "a move that succeeded with an error shows it as a warning",
+              "hash": "28318cd2c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "move minors from review (placement leaks, ticket keys, target refusals, reapply warning)",
+              "hash": "650dc418b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "an interrupted rollback says both buttons go on undoing",
+              "hash": "c8fb88a4b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "every move blocker and warning says what to do",
+              "hash": "5b032b37d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a move rollback undoes route intents newest first; tests for the manual orders",
+              "hash": "a339a217f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "a failed placement's raw error stays under Details for support",
+              "hash": "49d05af57"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "the move plan compares extension builds as image pins",
+              "hash": "5e8f9ae1e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a rollback after a manual name change says to point the name back",
+              "hash": "741858f40"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "the app key field keeps no copy of a refused key",
+              "hash": "0c99803b2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "heal frees a dead move run's own locks",
+              "hash": "ab30c3126"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a move reaches each dedicated side on an address resolved at start",
+              "hash": "d09fb4fd9"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "an app or environment delete answers a lock it cannot read with 503",
+              "hash": "949cbb780"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "a new connections count clears the move checklist and confirmation",
+              "hash": "5d445718c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "move client matches the Task 16 route answers",
+              "hash": "568601036"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a dedicated move target is in maintenance from its first deploy",
+              "hash": "08c750d59"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "move an environment born on shared to a new Docker stack",
+              "hash": "1dfddb085"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a move records each route action before applying it and undoes every intent",
+              "hash": "326c1927d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a move refuses to start with a required checklist item open",
+              "hash": "24658439f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "an app no longer listed on a shared deployment drops its per-app state",
+              "hash": "62b699ce0"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a move plan warns when it cannot read a shared target's agent",
+              "hash": "ce58d641c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a move plan read stays under 40 s",
+              "hash": "4baf0e54c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "no stack panel or stack polling on a shared-placed environment",
+              "hash": "62d25841a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "no cancel once a move has released",
+              "hash": "3445b304e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a lock holder read that fails is never \"free\"",
+              "hash": "61ae2adfe"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "required move items grouped, plan read on demand with progress",
+              "hash": "f1bf05ba2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "shared Redis address from the detail answer, digest-only pins",
+              "hash": "e8ecb5c5f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "plain words for the planner's unverified facts and start refusals",
+              "hash": "c689b5334"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a shared upgrade that fails to start leaves nothing running",
+              "hash": "32ff8c54e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "a move's result stays on screen until it is dismissed",
+              "hash": "cbb3d37f6"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a shared upgrade waits for swarm to converge",
+              "hash": "485214d8b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a shared rollback is never blocked by the current preflight",
+              "hash": "6f4f580a9"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "the guard scans the files at api/src itself",
+              "hash": "470098209"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a cancel after apply also stops the shared re-apply",
+              "hash": "dfb427ac1"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "no stack re-apply after a failed shared upgrade",
+              "hash": "cc449008d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "KEYED claims must name a tenant helper; pool-holders reason",
+              "hash": "2e8385a24"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a shared stack's HUB_URL is always the Hub's origin",
+              "hash": "7fa4d2aab"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a shared spec is never rendered without its deployment secrets",
+              "hash": "37ea80ec1"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a move plan warns when it cannot read the source's sign-in issuer",
+              "hash": "0369321e8"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "move plan reads that fail say so instead of 'missing'",
+              "hash": "224344fdb"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "appBox reset() for object caches; the outside-an-app rules in the helper",
+              "hash": "4a58aa956"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "the readiness read stops at 256 KB",
+              "hash": "ad70b1ad4"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "two-tenant tests for the permission, session and settings caches",
+              "hash": "f964c1c66"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a malformed issuer tenant rejects the readiness report",
+              "hash": "dbc481a4f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "shared extension pins are image pins the agent installs",
+              "hash": "90e9db8a8"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "the move plan hashes and shows its names normalized",
+              "hash": "2b8175126"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a move never targets a docker shared deployment the Hub has not deployed",
+              "hash": "a0c006459"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "in-flight requests and the other process panels are operator-only on shared",
+              "hash": "1c997f79e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "the manual route request asks a person only for what the Hub cannot do",
+              "hash": "acd9ea30c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a name under both shared patterns gets an explicit route on the target",
+              "hash": "3909d02c0"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a move plan reads a lock it cannot read as busy",
+              "hash": "972d815a8"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a move plan warns when it cannot see a side's Redis or storage",
+              "hash": "7cd7fd37f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "guard sees counted and compound-assigned literals, handed-on Maps",
+              "hash": "4f0335d2c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "the move plan's database collision check never passes unchecked",
+              "hash": "26d8b60a6"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "follow-this-user per app",
+              "hash": "a098a4691"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "origin scan compares with the tenant it opens, sees dynamic imports",
+              "hash": "9858a3fa0"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "encrypted-field cache per app",
+              "hash": "9fe6635ad"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a move plan blocks when the target never checked the app's database",
+              "hash": "1e0d441dd"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "move panel reads the stored move as Task 16 writes it",
+              "hash": "1ea848eda"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "process-wide operator routes are operator-only on a shared deployment",
+              "hash": "509d7c239"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "same-app warning only when a sibling environment is on the deployment",
+              "hash": "c6be2b990"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "restart is operator-only on a shared deployment",
+              "hash": "560e94232"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "heap snapshot is operator-only on a shared deployment",
+              "hash": "2110f4e95"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "plain words for SHARED_PLACEMENT and PLACEMENT_CHANGED",
+              "hash": "002b77a66"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "classify the module state merged from Task 4",
+              "hash": "017407c7b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "move panel follows the Task 15 planner",
+              "hash": "27362abdc"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a move places the app on a shared target before copying files",
+              "hash": "135e1c216"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "place-shared never generates a key when the ledger read fails",
+              "hash": "ab827166e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a forgotten stack still asks the agent before a delete",
+              "hash": "f9c2db283"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "an archived environment takes no shared pool",
+              "hash": "e918e1c02"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "the replica wait builds the tenant list once per kick",
+              "hash": "457e529c3"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a placement leaves a served record; placing again refuses ALREADY_PLACED",
+              "hash": "d68f3ec90"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "carried items (audit dedupe, credential guard per site, schema-step database, origin scan) and two-tenant tests",
+              "hash": "edf859a8f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "session replay counts and index per app",
+              "hash": "509f143bc"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "diagnostics an app admin reads per app",
+              "hash": "7f5464f6f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "presence and people state per app",
+              "hash": "e6fbec93a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "job runs and in-flight flags per app",
+              "hash": "15f472333"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "settings and config caches per app",
+              "hash": "b88aa8ad0"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "metadata and schema caches per app",
+              "hash": "8a3e05d11"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "per-app module state helpers",
+              "hash": "6a8d8162c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "place-shared generates a key only for an empty database",
+              "hash": "77e11d170"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "place-shared refuses an environment whose stack still runs",
+              "hash": "cf27de01d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "file transfer opens each app with its own origin",
+              "hash": "ea913ab59"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "log the name and code of an unexpected file pull error",
+              "hash": "d8f3cc94b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a file pull runs on the background pool",
+              "hash": "a57972f4f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a file pull renews its lock only while it still holds it",
+              "hash": "590883027"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a file pull sweeps temp files a crashed run left behind",
+              "hash": "54b2ee922"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a delta pull re-copies changed rows without the size skip",
+              "hash": "ada941137"
+            },
+            {
+              "section": "Fixed",
+              "scope": "storage",
+              "text": "local putFile never leaves a truncated object at a live key",
+              "hash": "ae4dc4dd2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "file pull requires the disk name and length of each answer",
+              "hash": "348a44714"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "file pull fetches https host names through safeFetch",
+              "hash": "2951c61ef"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a stalled file pull fails at once and frees its lock",
+              "hash": "59d30708b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "cover the app key and origin through the tenant hook",
+              "hash": "5303a3859"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "a local first hostname keeps its listed port in the job origin",
+              "hash": "1bcd60ad1"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "APP_KEY_MISSING keeps its code on the 503 and files no route issue",
+              "hash": "87eca8e64"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "every hub-source tenant context carries the app origin",
+              "hash": "97c98b3e8"
+            },
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "partner-order move buttons keep their configured colour",
+              "hash": "98bb8d9b5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub-link",
+              "text": "renders set aside on retire resume on un-retire",
+              "hash": "5c57ca006"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "app-key save judges the environment as it is once the lock is held",
+              "hash": "ddc68c0e5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub-link",
+              "text": "first-admin stays shut however its path is spelled",
+              "hash": "698b476ab"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a retired shared deployment refuses PATCH with SHARED_RETIRED",
+              "hash": "1e5d0f6e9"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "the never-kept body rule follows the matched route, not the raw path",
+              "hash": "002b384db"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "fold not-ready nudges, stable app-state fingerprint, no help videos outside apps",
+              "hash": "29815a558"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "re-migrate an app whose database was replaced behind its connection",
+              "hash": "8f8bd3d38"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "app-key saves under a lock, logged with fingerprint; retired deployments stay as they are",
+              "hash": "63fec2a9a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "shared deployments load only extensions that declare shared: true",
+              "hash": "a6d4b5c41"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub-link",
+              "text": "a retired app serves and drains nothing",
+              "hash": "3b5a9557f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "schema-step readiness reads the app's own ledger on every replica",
+              "hash": "a26bb6fe7"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "the app-key body never reaches the request log",
+              "hash": "0e4e8ea6d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a stored app key is never replaced on faith",
+              "hash": "ce54b22e1"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "every Redis pointer key is per app on shared deployments",
+              "hash": "0a4432788"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "shared deployment pages list Task 2's served tenants",
+              "hash": "d3cc8151c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "tenants list holding and move listing",
+              "hash": "cc2dd5567"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "every app credential is bound to its app on multi-tenant processes",
+              "hash": "11cb3f612"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hooks",
+              "text": "every cache a shared app's hooks reach is per app",
+              "hash": "aff6a6a32"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "single-flight app status and hub-only exemptions",
+              "hash": "c6acb4a8b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "storage",
+              "text": "settings drivers are app-scoped on shared deployments",
+              "hash": "15019ccd2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "shared deployments retire instead of losing history",
+              "hash": "600c9e87a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "hub token input rules and wording after integration re-review",
+              "hash": "3c814f793"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a Hub's own sign-in returns to its public address after integration review",
+              "hash": "8419d6be4"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "promotion blocker codes include the other lock holders after integration review",
+              "hash": "fbb93ded2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "stack settings on delete, lock holders, secret columns, docs, formatted fixture after integration review",
+              "hash": "803a076f2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "one Hub public address for issuer, created apps and stacks after integration review",
+              "hash": "fc6d7c10a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "every hub token is written with its app-link lookup after integration review",
+              "hash": "cfd6d6e3b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "stack settings save fits phase 3's typed secret errors",
+              "hash": "e5852a21f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "Apps hub tab order after merging phase 3",
+              "hash": "3f1cdf881"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "guards know phase 3's creation job and the X-2 deny list",
+              "hash": "0c40443f1"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "Hub-owned and secret-only keys are refused on both sides (ruling X-2)",
+              "hash": "6fda08201"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "app creation reads HUB_URL through the one HUB_URL rule after merging phase 3",
+              "hash": "a0b6615ef"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "Docker stacks take their database from phase 3's records after merging phase 3",
+              "hash": "7650bfe9a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "one host-claim label on both deploy paths after merging phase 3",
+              "hash": "a9678a601"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "one name check (phase 3's) after merging phase 3",
+              "hash": "07d838c66"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "phase 7's job, env reads and delete fit phases 4 and 5 after merging phase 7",
+              "hash": "e760a84ba"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a healed creation closes its job run (P3-34 3)",
+              "hash": "e82c34164"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "first admin makes the role only on an app with no roles (P3-34 1)",
+              "hash": "520127dfd"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "prove Hub sign-ins stamp the session app after merging phase 7",
+              "hash": "949adae91"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "Hub sign-in follows isMultiTenant and the one HUB_URL rule after merging phase 7",
+              "hash": "b483d008c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "target selects keep a truncated label left-aligned",
+              "hash": "0a057e76c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a server test keeps its own words (P3-33 4)",
+              "hash": "4051f55ac"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a stopped creation is marked at boot and on read (P3-33 3)",
+              "hash": "dd4624308"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "the creation commit is a promotion's source commit (P3-33 2)",
+              "hash": "9891034d0"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "first admin on a fresh app makes the Administrator role (P3-33 1)",
+              "hash": "ebc5f2654"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "final-review minors (P3-32)",
+              "hash": "da22c4ca0"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "server validation answers HUB_DB_CODES (P3-26 b)",
+              "hash": "fb51e6c83"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db-tuning",
+              "text": "stuck-claim clocks are kept per app",
+              "hash": "debecf242"
+            },
+            {
+              "section": "Fixed",
+              "scope": "jobs",
+              "text": "the job-run prune keeps the newest 50 per job on every engine",
+              "hash": "24f14214b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "one HUB_URL rule, and the guard allows phase 4's env-name list",
+              "hash": "018c3b439"
+            },
+            {
+              "section": "Fixed",
+              "scope": "auth",
+              "text": "a session belongs to one app on a shared deployment",
+              "hash": "6a78711bc"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "redact stack secrets in config snapshots",
+              "hash": "ada3bd210"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "targets tab, server TLS default and Check now (P3-29)",
+              "hash": "c37279f56"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "logins, codes and the Check now draft (P3-26)",
+              "hash": "3beda3907"
+            },
+            {
+              "section": "Fixed",
+              "scope": "help-videos",
+              "text": "a publish on a shared deployment renders in its own app",
+              "hash": "32bf1e01e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "jobs",
+              "text": "single-flight guards and memos are kept per app",
+              "hash": "c437a3695"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a live creation run proves it is alive",
+              "hash": "38849df91"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "fix-wave screens design polish",
+              "hash": "f4d2686d2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "image",
+              "text": "a shared deployment healthcheck probes /api/ready",
+              "hash": "8ed618aa6"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "the stack guard covers version_pin and unconverged stacks",
+              "hash": "2e9098a10"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "apply now after a failed verify",
+              "hash": "b1c754c0a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "promotions re-check a created app's CI settings",
+              "hash": "e2dbf1424"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "end-to-end findings",
+              "hash": "ad7efdd6b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "jobs",
+              "text": "per-app directory, report labels and first-row pause on shared",
+              "hash": "1fedff070"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "agent token docs say how to generate one",
+              "hash": "6f390ec00"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "design leftovers (recovery, table, leftovers, select)",
+              "hash": "48baf660b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "limiter matches the route, docs on shared addresses",
+              "hash": "2aa4e033a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "warn about local volumes on a multi-node swarm",
+              "hash": "d6e272318"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "databases and create-app design polish (connection card wording)",
+              "hash": "de8986a1b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "jobs",
+              "text": "staged imports refuse on a shared deployment",
+              "hash": "5758b5bfc"
+            },
+            {
+              "section": "Fixed",
+              "scope": "jobs",
+              "text": "per-app job-run prune and restart clean-ups on shared",
+              "hash": "7dd20f26d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "databases and create-app design polish",
+              "hash": "cfd0009d1"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "\"served before\" comes from deploy history",
+              "hash": "fcc69b5ae"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "no Hub edit orphans a running stack",
+              "hash": "92dfbf48f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "jobs",
+              "text": "incident checks and trigger prunes keep their marks per app",
+              "hash": "d22146a5b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "jobs",
+              "text": "no deployment-wide or process-state job runs on shared yet",
+              "hash": "09d64aebc"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "Apply now deploys saved stack settings",
+              "hash": "46c0ac4cb"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "sign-in small closes from the final review",
+              "hash": "7c00a1450"
+            },
+            {
+              "section": "Fixed",
+              "scope": "jobs",
+              "text": "an app's first pause creates its settings row",
+              "hash": "140bca302"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "an origin the Hub has not registered signs in directly",
+              "hash": "1eb67618f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a stack rollback deploys the recorded image",
+              "hash": "66c52dbab"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "swarm's own rollback clears for a Hub rollback",
+              "hash": "4d587253a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "the ping answers ok only when the Hub can finish a sign-in",
+              "hash": "aef54c614"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "large stacks route every realtime path",
+              "hash": "30556fdc4"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "app-server calls to the Hub count only when their credentials fail",
+              "hash": "a7b3895c6"
+            },
+            {
+              "section": "Fixed",
+              "scope": "jobs",
+              "text": "a shared deployment schedules its app jobs",
+              "hash": "5251dd3be"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "rename the sign-in link-client test",
+              "hash": "b00c94eb1"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "one copy button for the hub",
+              "hash": "37ab15efc"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "sign-in tables scroll instead of crushing on phones",
+              "hash": "594215b1c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "create-app uses the databases tab's forms and copy",
+              "hash": "b66787214"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "design review pass on Hub sign-in screens",
+              "hash": "cc493e8bb"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "docker screens design polish",
+              "hash": "3f844d085"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "create-app errors, stale blockers, copy fallback",
+              "hash": "cd2a2eda6"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "key removal and rotation hold under concurrency",
+              "hash": "1060064ef"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "databases tab review fixes",
+              "hash": "877d75d1d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a half-retyped login is refused",
+              "hash": "c260b6376"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "signing keys are published before they sign",
+              "hash": "2fb276669"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "try limit, owner gate and target sync closes",
+              "hash": "e92f638a9"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "owner notice in the table row, real reseed test",
+              "hash": "14dc37bfa"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "hub fetch never throws outside its promise",
+              "hash": "f7c4be10a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "per-app jobs respect the lease, maintenance per app",
+              "hash": "f532cccf5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "route minors",
+              "hash": "4a9fe2389"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "settings refusals name their field",
+              "hash": "4410228b0"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "hub source hardening",
+              "hash": "3290113e3"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "sign-in through the Hub works during maintenance",
+              "hash": "c9141e4e9"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "owners point database checks only at their server",
+              "hash": "c6b2965fa"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "env scan and prefix rules tightened",
+              "hash": "16438dbff"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "known env list from real reads, prefixes can't open loaders",
+              "hash": "87577eafd"
+            },
+            {
+              "section": "Fixed",
+              "scope": "auth",
+              "text": "login tests prove no auto sign-in",
+              "hash": "89b9c8518"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "runner minors",
+              "hash": "204779547"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "batch E test restores env, mode.ts ends with a newline",
+              "hash": "d2e766e04"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "stack panel review fixes",
+              "hash": "af57aef95"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "sign-ins count people once",
+              "hash": "e381bc4f2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "portal reruns only for a recorded different build",
+              "hash": "f7f177c59"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "docker driver form review fixes",
+              "hash": "0af9b9042"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "stack env is an allow-list",
+              "hash": "d0a948457"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "sign-in push retries sooner, switcher links strict",
+              "hash": "8d1e42daf"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "rollback refusal codes, wording and identity",
+              "hash": "da418732d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "promoting after a rollback deploys again",
+              "hash": "65acb1b29"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "remove clears leftovers, loader paths refused",
+              "hash": "52cd5e8e6"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "runner secrets, made writes and orphans",
+              "hash": "0c31ce0a3"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "adoption needs the creation's own secret marker",
+              "hash": "7705c58e5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "auth",
+              "text": "hub sign-in small closes",
+              "hash": "b50c152d0"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "promote panel wording",
+              "hash": "6cdab44f7"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "email proof portable and app-proof",
+              "hash": "bd4c3d02c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "agent remove checks the owner, samba values stay one line",
+              "hash": "ce162e469"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "promotion polish",
+              "hash": "c8dc23010"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "batch A split test reads server.ts",
+              "hash": "67b92274a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "auth",
+              "text": "hub-down only from what the server saw",
+              "hash": "ff4ca2291"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a run refuses a driver edited mid-run",
+              "hash": "4760cdf82"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "stack routes check stack ownership",
+              "hash": "f5c3026fc"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "staging deploys from the release chain count",
+              "hash": "920c27217"
+            },
+            {
+              "section": "Fixed",
+              "scope": "auth",
+              "text": "hub sign-in state and linking outcomes",
+              "hash": "af4594af9"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a stopped run is marked on read and cancel",
+              "hash": "1a9c64446"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "drop unused import in tenant middleware",
+              "hash": "c344905d3"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a lost lock never starts a second promotion",
+              "hash": "1e1262777"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "batch C keeps file headers as they were",
+              "hash": "08d296185"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "stack specs never pick a program",
+              "hash": "3aed8537d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "registry keeps its last list, guard records the moved read",
+              "hash": "827c4cc10"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "tenant-admin protections hold on shared deployments",
+              "hash": "1a0a01fdd"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "stored components keep the placement branch",
+              "hash": "e506f00a7"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "roll back the portal before the API",
+              "hash": "6de6b10bd"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "rollback redeploys the recorded build",
+              "hash": "8879df67b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "planner minors",
+              "hash": "13056ff54"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "scanner reads past strings, token backstop",
+              "hash": "7ab5ab9f2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "promote panel design polish",
+              "hash": "73391c350"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub-agent",
+              "text": "packaging review fixes",
+              "hash": "64cba086e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a live name gone dark fails the deploy",
+              "hash": "79c775209"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "manual DNS deploys still verify a live name",
+              "hash": "1d2416a23"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a shared email proves nobody to the switcher",
+              "hash": "f3558857d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub-agent",
+              "text": "startup sweep spares live unpacks",
+              "hash": "d4e1d4d17"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "switcher never lists another account under a shared email",
+              "hash": "a3736fe42"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "sha template refs deploy",
+              "hash": "c41132259"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub-agent",
+              "text": "unpack never hangs, restart creates nothing",
+              "hash": "bc82e6927"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "plan hash covers who deploys",
+              "hash": "391424c1e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "switcher answers only Hub-proven people, bounded reports",
+              "hash": "02cc6b290"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "database markers bound to their host, fenced drops",
+              "hash": "1ad212b9e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "rollback pins fail closed",
+              "hash": "d2c813cbf"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "one key per app on the manager",
+              "hash": "9f917503b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub-agent",
+              "text": "guard reads ownership before writes, restart renders fresh",
+              "hash": "c71dd776c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "start only the plan you saw, show every blocker's reason",
+              "hash": "7057f4424"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "deploy template trusts nothing the app repo can change",
+              "hash": "aace8f216"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "finish stopped promotions from the page, refuse moved heads",
+              "hash": "67c936acc"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "authorize follows the session policy, evidence pinned to our tenant",
+              "hash": "cbf2d4395"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "scrub passwords before masking logins",
+              "hash": "aa3c9c50c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "rendered specs always pass the agent",
+              "hash": "4765244bc"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "provisioners never touch a database they did not make",
+              "hash": "72957954d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "promotions move each branch once and roll back what they deployed",
+              "hash": "2f478e216"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "sign-in client writes are own-session only",
+              "hash": "023cbf225"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub-agent",
+              "text": "allow NFS volumes, never bind",
+              "hash": "3d3adecfb"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub-agent",
+              "text": "engine guard covers queries, volume drivers, networks",
+              "hash": "6bbc1b15f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "one GitLab call path, resumable fork",
+              "hash": "cbcd14c08"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "placement driver kind is fixed by its components",
+              "hash": "56684957a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub-agent",
+              "text": "env deny-list, agent-owned keys, router names",
+              "hash": "1e7991a60"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "first admin never re-enables a disabled person",
+              "hash": "49772530a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "signing key errors never carry key material",
+              "hash": "cfdf86189"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "db connection hardening",
+              "hash": "d3393cc06"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "plain plan text, refused plans, history layout",
+              "hash": "2f74a3476"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "short promotion lock, heal cleans up",
+              "hash": "f717fec85"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "real frontend rollback, lock-owned recovery",
+              "hash": "e84642fe4"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "promote panel recovery and safety",
+              "hash": "9e7bb1ef4"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "component ownership and cleanup",
+              "hash": "19950a290"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "GitLab merge must really merge; resume, no-op pins, job variables",
+              "hash": "5d421f816"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "planner parity with promote-production.mjs",
+              "hash": "b5a27eeda"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "classify hub tables for environment refresh",
+              "hash": "b6328b80b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "sealed hub columns never read through items",
+              "hash": "9bf4e397d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "environment token and placement validation",
+              "hash": "65317ae1d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "environments release their placement; driver delete works",
+              "hash": "75e185f2b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "GitLab token never follows a redirect",
+              "hash": "db7533290"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "Apps hub phone layout, status labels and polish",
+              "hash": "d3e987dda"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "read the version from promote commit subjects",
+              "hash": "d6be8084b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "hub token never follows a changed address",
+              "hash": "d036af26d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "hub link answers in time; status edge cases",
+              "hash": "bb5a0f840"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "Apps hub refresh errors, key rule and copy",
+              "hash": "e70990ed2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "driver secret guard cannot be bypassed",
+              "hash": "6ecdbbb81"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "driver token never re-targeted; deploy limit and bad config handled",
+              "hash": "f05e9ae09"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "owners refuse ids that are not user ids",
+              "hash": "861c71118"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "sealed secrets refuse unreadable or plain values",
+              "hash": "eaa73bd9f"
+            }
+          ]
+        },
+        {
+          "label": "Performance",
+          "entries": [
+            {
+              "section": "Performance",
+              "scope": "hub",
+              "text": "cache GitLab deploy evidence",
+              "hash": "a5aece273"
+            },
+            {
+              "section": "Performance",
+              "scope": "hub",
+              "text": "cache deploy history 60 s",
+              "hash": "8769588bd"
+            }
+          ]
+        },
+        {
+          "label": "Changed",
+          "entries": [
+            {
+              "section": "Changed",
+              "scope": "hub",
+              "text": "one copy of the database and sign-in identity rules",
+              "hash": "114ecdff0"
+            },
+            {
+              "section": "Changed",
+              "scope": "hub",
+              "text": "drop the unreachable dedicated-to-dedicated SAME_PLACEMENT branch",
+              "hash": "a29e63f7e"
+            },
+            {
+              "section": "Changed",
+              "scope": "tenancy",
+              "text": "batch E + no raw cloud-flag reads remain",
+              "hash": "01fc4885c"
+            },
+            {
+              "section": "Changed",
+              "scope": "tenancy",
+              "text": "batch A — classify cloud-flag sites (core boot path)",
+              "hash": "99412c8aa"
+            },
+            {
+              "section": "Changed",
+              "scope": "tenancy",
+              "text": "batch C — classify cloud-flag sites (traffic + ops)",
+              "hash": "64bc31f0f"
+            },
+            {
+              "section": "Changed",
+              "scope": "tenancy",
+              "text": "batch D — classify cloud-flag sites (infra + storage)",
+              "hash": "860a2f2d8"
+            },
+            {
+              "section": "Changed",
+              "scope": "tenancy",
+              "text": "batch B — classify cloud-flag sites (realtime)",
+              "hash": "75060fd59"
+            },
+            {
+              "section": "Changed",
+              "scope": "tenancy",
+              "text": "tenant registry interface, cloud meta source",
+              "hash": "e4d02b703"
+            },
+            {
+              "section": "Changed",
+              "scope": "environments",
+              "text": "shared GitLab client",
+              "hash": "ab8c5cb38"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "FW-1 refusals for place, open moves, extensions, tokens and Traefik v2",
+              "hash": "835be5cdd"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "attach docs name BAD_DATABASE and NOT_FOUND",
+              "hash": "3b9e11708"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "the pin's boot-maintenance line never forces a promotion",
+              "hash": "26d4d6c13"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub-agent",
+              "text": "re-apply every stack after upgrading the agent to 0.2.0",
+              "hash": "46f8bffec"
+            },
+            {
+              "section": "Documentation",
+              "scope": "security",
+              "text": "boot-maintenance release marker loss and its escape hatch",
+              "hash": "bbb7a0bfd"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "moves match FW-4 (pin-line boot maintenance, recovery keys, halt cost, drafts)",
+              "hash": "27f0eb5e9"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "a Docker stack refuses an attach whose identity differs, unless overridden",
+              "hash": "d83206eab"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "maintenance key per mode, database attach/detach, New button, TRAEFIK_VERSION",
+              "hash": "1b3891b79"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "what a move does with saved-settings S3/Azure objects (P6-31)",
+              "hash": "4f1aa04f5"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "fix round 1 for shared and move docs",
+              "hash": "c27331c73"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "check phase 6 shared and move docs against the merged code",
+              "hash": "3850e2700"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "shared deployments and moves",
+              "hash": "819c7846c"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "name the transfer route as the one help-video file exception",
+              "hash": "6ce915a38"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "two Hubs never share one Redis database (P3-33 5)",
+              "hash": "b7e785e83"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "shared deployments do not use the deployment's directory credentials",
+              "hash": "23ed3dd4b"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "target refusals and corrections",
+              "hash": "bd7fd47bb"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "databases and creating apps",
+              "hash": "70d06770a"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "deployment modes match the code",
+              "hash": "7b546c9a9"
+            },
+            {
+              "section": "Documentation",
+              "scope": "tenancy",
+              "text": "deployment modes, shared-deployment jobs",
+              "hash": "55e8ff097"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "key rotation and removal",
+              "hash": "af194f26d"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "docker driver and Hub agent",
+              "hash": "6659e33dc"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "sign-in via the Hub",
+              "hash": "456c0de3b"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub-agent",
+              "text": "doc comments above their functions",
+              "hash": "ad164371c"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "promotion runbook matches the Hub",
+              "hash": "4aac61f25"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "promotion fixes, rollback availability, cutover runbook",
+              "hash": "e14c3f42d"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "promotions",
+              "hash": "899f644da"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "regenerate www docs after the final fixes",
+              "hash": "83b2a8460"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "match hub docs to the built routes",
+              "hash": "77db19abf"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "hub mode and hub link",
+              "hash": "3bf3a0c84"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "biome format of tokenNotApplied",
+              "hash": "280ae3a9d"
+            },
+            {
+              "section": "Other",
+              "scope": "hub-admin",
+              "text": "type the invalidate-spy helper (admin tsc)",
+              "hash": "c3828b4de"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "biome format of the pin-line template test",
+              "hash": "824741c94"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "the shared-stack router stops at the route deadline",
+              "hash": "7c2e16f83"
+            },
+            {
+              "section": "Other",
+              "scope": "guard",
+              "text": "stack-render lists shared env names as data",
+              "hash": "9612ab849"
+            },
+            {
+              "section": "Other",
+              "scope": "realtime",
+              "text": "the ws-token reader's tenant rule, tested on a shared deployment",
+              "hash": "235653361"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "a move plan whose deployed-build read throws warns",
+              "hash": "c2e128955"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "the placement heal leaves live rows alone",
+              "hash": "d786738d3"
+            },
+            {
+              "section": "Other",
+              "scope": "tenancy",
+              "text": "classify the Hub-only shared upgrade state after merging task 5",
+              "hash": "3f20764e8"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "type the wrapped status fake in the converge test",
+              "hash": "49bb234a8"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "a shared rollback redeploys its recorded image and pins",
+              "hash": "4b096edde"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "the move plan's leak test checks facts the input really carries",
+              "hash": "76d5e18d2"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "format the move routes",
+              "hash": "9e4c6f9ed"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "place-shared busy, Redis down, schema timeout, refused admin, move-only pool patch",
+              "hash": "80f1aa916"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "the tenant hook, retire gate and freeze let the file transfer through",
+              "hash": "21fa2384e"
+            },
+            {
+              "section": "Other",
+              "scope": "tenancy",
+              "text": "module-state guard",
+              "hash": "8830e723b"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "regenerate the known env list after merging task 9 (HUB_BOOT_MAINTENANCE)",
+              "hash": "210920363"
+            },
+            {
+              "section": "Other",
+              "scope": "tenancy",
+              "text": "classify the per-app schema state key after merging task 8",
+              "hash": "c1a858d68"
+            },
+            {
+              "section": "Other",
+              "scope": "tenancy",
+              "text": "classify the Hub shared-deployment status cache key after merging task 3",
+              "hash": "e27adf8a6"
+            },
+            {
+              "section": "Other",
+              "scope": "tenancy",
+              "text": "classify the Hub shared-deployment sighting keys after merging task 12",
+              "hash": "8e6d2b5a9"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "the first-admin seed stays frozen in maintenance after merging phase 3",
+              "hash": "46cfbfc49"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "pin docker-source.ts after phase 5's cloud-flag change (ruling X-3)",
+              "hash": "8e39f6b8e"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "the freeze test matches the promote plan exemption (P3-34 2)",
+              "hash": "0a88c1b13"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "copy and comments say multi-tenant, not cloud only",
+              "hash": "9aeebe22c"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "the heartbeat_at migration test stands on its own",
+              "hash": "a52933862"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "mode problem messages and env hygiene",
+              "hash": "29bd1681e"
+            },
+            {
+              "section": "Other",
+              "scope": "hub-agent",
+              "text": "image, example stack and CI",
+              "hash": "0d07f5ea9"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "mode parity with Hub variables, blank HUB_URL",
+              "hash": "3aa223b57"
+            },
+            {
+              "section": "Other",
+              "scope": "tenancy",
+              "text": "classify every cloud-flag site + ratchet guard",
+              "hash": "584a0fe7a"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "type the registry fetch mock",
+              "hash": "12c949fe3"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "typecheck fixes",
+              "hash": "dd63ad374"
+            }
+          ]
+        }
+      ],
+      "count": 629
+    },
     {
       "version": "0.3.208",
       "tag": "v0.3.208",
-      "date": "2026-11-21T14:15:59-05:00",
+      "date": "2026-11-21T14:16:18-05:00",
       "sections": [
         {
           "label": "Added",
