@@ -24,6 +24,18 @@ function validZone(z: unknown): string | null {
 
 const instanceZone = appBox<{ value: string; at: number } | null>(() => null)
 
+/** Forget the current app's cached business zone (a settings save changed it). Inside an app:
+ *  that app's only. */
+export function bustAppTimeZone(): void {
+  instanceZone.value = null
+}
+
+/** The current app's business time zone (nivaro_settings.sla_timezone, else US Eastern), cached
+ *  a minute per app. Hub shared deployments evaluate each app's row schedules in it. */
+export async function appTimeZone(): Promise<string> {
+  return instanceTimeZone()
+}
+
 async function instanceTimeZone(): Promise<string> {
   if (instanceZone.value && Date.now() - instanceZone.value.at < 60_000)
     return instanceZone.value.value

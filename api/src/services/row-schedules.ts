@@ -21,6 +21,7 @@ import type { Redis } from 'ioredis'
 import { bumpEpoch, SCHEDULES_EPOCH } from '../db/config-epoch.js'
 import { db } from '../db/index.js'
 import { getTenantId, withTenant } from '../db/tenant-context.js'
+import { appBox } from './app-state.js'
 import { isNivaroCloud, perAppJobs } from './deployment-mode.js'
 import { onAppLeft, onAppReady } from './tenancy/app-lifecycle.js'
 import { appReadyForRequests } from './tenancy/app-migrations.js'
@@ -43,17 +44,22 @@ export interface ReconcileResult {
 
 /** Pure planning step, exported for tests. */
 export function planReconcile(
-  current: Array<{ id: string; expression: string }>,
-  desired: Map<string, { expression: string }>,
+  current: Array<{ id: string; expression: string; timezone?: string; timezone_source?: string }>,
+  desired: Map<string, { expression: string; timezone?: string }>,
   prefix: string
 ): { add: string[]; change: string[]; remove: string[] } {
   const mine = current.filter((c) => c.id.startsWith(prefix))
-  const have = new Map(mine.map((c) => [c.id, c.expression]))
+  const have = new Map(mine.map((c) => [c.id, c]))
   const add: string[] = []
   const change: string[] = []
   for (const [id, d] of desired) {
-    if (!have.has(id)) add.push(id)
-    else if (have.get(id) !== d.expression) change.push(id)
+    const c = have.get(id)
+    if (!c) add.push(id)
+    else if (c.expression !== d.expression) change.push(id)
+    // A wanted zone (Hub shared: the app's own) that the entry is not in is a reschedule — unless
+    // an admin pinned the entry's zone (that override wins either way).
+    else if (d.timezone && c.timezone_source !== 'override' && c.timezone !== d.timezone)
+      change.push(id)
   }
   const remove = mine.filter((c) => !desired.has(c.id)).map((c) => c.id)
   return { add, change, remove }
@@ -69,20 +75,28 @@ export function reconcile(
   const current = app.cron.list().map((j) => ({
     id: j.id,
     // The expression the row asked for — an admin's override of it is kept.
-    expression: j.defaultExpression ?? j.expression
+    expression: j.defaultExpression ?? j.expression,
+    timezone: j.timezone,
+    timezone_source: j.timezone_source
   }))
-  const plan = planReconcile(current, desired, prefix)
+  // Hub shared deployment, inside an app: the app's own business zone (loaded by resyncSchedules)
+  // — the deployment's cron zone is not any one app's. Self-hosted and cloud: none, as before.
+  const zone = perAppJobs() && getTenantId() ? (appZone.value ?? undefined) : undefined
+  const wanted = new Map<string, DesiredSchedule & { timezone?: string }>()
+  for (const [id, d] of desired) wanted.set(id, zone ? { ...d, timezone: zone } : d)
+  const plan = planReconcile(current, wanted, prefix)
   for (const id of plan.remove) {
     app.cron.unschedule(id)
     out.unscheduled.push(id)
   }
   for (const id of [...plan.add, ...plan.change]) {
-    const d = desired.get(id) as DesiredSchedule
+    const d = wanted.get(id) as DesiredSchedule & { timezone?: string }
     try {
       if (plan.change.includes(id)) app.cron.unschedule(id)
       app.cron.schedule(id, d.expression, d.run, {
         ...(d.description ? { description: d.description } : {}),
-        ...(d.idempotent ? { idempotent: d.idempotent } : {})
+        ...(d.idempotent ? { idempotent: d.idempotent } : {}),
+        ...(d.timezone ? { timezone: d.timezone } : {})
       })
       ;(plan.change.includes(id) ? out.rescheduled : out.scheduled).push(id)
     } catch (err) {
@@ -91,6 +105,10 @@ export function reconcile(
   }
   return out
 }
+
+/** Hub shared deployment: the app's business zone, read by resyncSchedules before a source runs
+ *  and used by reconcile (which is synchronous) inside that app. Per app; unused elsewhere. */
+const appZone = appBox<string | null>(() => null)
 
 type Resync = (app: FastifyInstance) => Promise<ReconcileResult>
 const resyncers = new Map<string, Resync>()
@@ -117,6 +135,10 @@ export async function resyncSchedules(
   if (!fn || !app.cron || isNivaroCloud()) return null
   if (perAppJobs() && !getTenantId()) return null
   try {
+    if (perAppJobs()) {
+      const { appTimeZone } = await import('./user-time.js')
+      appZone.value = await appTimeZone()
+    }
     const res = await fn(app)
     const n = res.scheduled.length + res.rescheduled.length + res.unscheduled.length
     if (n > 0 || res.invalid.length > 0) app.log.info({ name, ...res }, 'Schedules brought in step')

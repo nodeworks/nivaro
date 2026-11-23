@@ -274,6 +274,88 @@ describe('resyncSchedules by deployment', () => {
   })
 })
 
+describe("row schedules follow each app's own time zone (shared deployment)", () => {
+  const inAppAsync = <T>(id: string, fn: () => Promise<T>) =>
+    new Promise<T>((resolve, reject) =>
+      runWithTenantDb(fakeKnex, id, () => void fn().then(resolve, reject), id)
+    )
+  const zoneOf = (m: Manager, key: string) => m.list().find((j) => j.id === key)?.timezone
+  // Each app's zone is cached a minute; outside any app a bust forgets every app's.
+  beforeEach(async () => (await import('../../../services/user-time.js')).bustAppTimeZone())
+
+  it("A in London and B in Los Angeles: each app's entries are evaluated in its own zone", async () => {
+    const app = makeApp()
+    app.cron.setInstanceTimezone('America/New_York')
+    state.rows.set('A', {
+      nivaro_settings: [{ sla_timezone: 'Europe/London' }],
+      nivaro_scheduled_reports: [report(1)]
+    })
+    state.rows.set('B', {
+      nivaro_settings: [{ sla_timezone: 'America/Los_Angeles' }],
+      nivaro_scheduled_reports: [report(1)]
+    })
+    await inAppAsync('A', () => rs.resyncSchedules(asApp(app), 'scheduled-reports'))
+    await inAppAsync('B', () => rs.resyncSchedules(asApp(app), 'scheduled-reports'))
+    expect(zoneOf(app.cron, 'scheduled-report-1@A')).toBe('Europe/London')
+    expect(zoneOf(app.cron, 'scheduled-report-1@B')).toBe('America/Los_Angeles')
+  })
+
+  it("a changed app zone reschedules that app's entries on the next resync (the other app's stay)", async () => {
+    const app = makeApp()
+    state.rows.set('A', {
+      nivaro_settings: [{ sla_timezone: 'Europe/London' }],
+      nivaro_scheduled_reports: [report(1)]
+    })
+    state.rows.set('B', {
+      nivaro_settings: [{ sla_timezone: 'America/Los_Angeles' }],
+      nivaro_scheduled_reports: [report(1)]
+    })
+    await inAppAsync('A', () => rs.resyncSchedules(asApp(app), 'scheduled-reports'))
+    await inAppAsync('B', () => rs.resyncSchedules(asApp(app), 'scheduled-reports'))
+    state.rows.set('A', {
+      nivaro_settings: [{ sla_timezone: 'Asia/Tokyo' }],
+      nivaro_scheduled_reports: [report(1)]
+    })
+    const { bustAppTimeZone } = await import('../../../services/user-time.js')
+    await inAppAsync('A', async () => bustAppTimeZone())
+    const res = await inAppAsync('A', () => rs.resyncSchedules(asApp(app), 'scheduled-reports'))
+    expect(res?.rescheduled).toEqual(['scheduled-report-1'])
+    expect(zoneOf(app.cron, 'scheduled-report-1@A')).toBe('Asia/Tokyo')
+    expect(zoneOf(app.cron, 'scheduled-report-1@B')).toBe('America/Los_Angeles')
+  })
+
+  it('self-hosted: no zone is passed, the entry follows the instance zone as before', async () => {
+    delete process.env.HUB_SHARED_DEPLOYMENT
+    const app = makeApp()
+    app.cron.setInstanceTimezone('America/Chicago')
+    state.rows.set('', {
+      nivaro_settings: [{ sla_timezone: 'Europe/London' }],
+      nivaro_scheduled_reports: [report(4)]
+    })
+    await rs.resyncSchedules(asApp(app), 'scheduled-reports')
+    const e = app.cron.list().find((j) => j.id === 'scheduled-report-4')
+    expect(e?.timezone).toBe('America/Chicago')
+    expect(e?.timezone_source).toBe('instance')
+    expect(state.reads.some((r) => r.table === 'nivaro_settings')).toBe(false)
+  })
+})
+
+describe('planReconcile and time zones', () => {
+  it('a zone change is a reschedule; no wanted zone, or an admin zone override, is not', () => {
+    const cur = [
+      { id: 'r-1', expression: '0 7 * * *', timezone: 'Europe/London', timezone_source: 'job' },
+      { id: 'r-2', expression: '0 7 * * *', timezone: 'UTC', timezone_source: 'override' },
+      { id: 'r-3', expression: '0 7 * * *', timezone: 'America/New_York', timezone_source: 'instance' }
+    ] as const
+    const want = new Map([
+      ['r-1', { expression: '0 7 * * *', timezone: 'Asia/Tokyo' }],
+      ['r-2', { expression: '0 7 * * *', timezone: 'Asia/Tokyo' }],
+      ['r-3', { expression: '0 7 * * *' }]
+    ])
+    expect(rs.planReconcile([...cur], want, 'r-')).toEqual({ add: [], change: ['r-1'], remove: [] })
+  })
+})
+
 describe('registerRowScheduleLifecycle', () => {
   it('an app that becomes ready has every registered source hydrated inside it', async () => {
     const app = makeApp()

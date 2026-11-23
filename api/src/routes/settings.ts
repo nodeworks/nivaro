@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
@@ -345,9 +346,26 @@ export async function settingsRoutes(app: FastifyInstance) {
         }
       }
       // Hub phase 5 — on a shared deployment the cron zone is set for the whole deployment: one
-      // app's time zone never moves every app's schedules (Decision 11).
+      // app's time zone never moves every app's schedules (Decision 11). This app's row schedules
+      // (reports, retention, sync jobs, flows, views) follow its own zone instead: once the write
+      // lands they are re-evaluated in it here, and every replica is told.
       if (!perAppJobs()) {
         reply.raw.once('finish', () => app.cron?.setInstanceTimezone(tz || 'America/New_York'))
+      } else {
+        const inThisApp = AsyncLocalStorage.snapshot()
+        reply.raw.once('finish', () =>
+          inThisApp(() => {
+            void (async () => {
+              const { bustAppTimeZone } = await import('../services/user-time.js')
+              const { resyncAllSchedules, announceScheduleChange } = await import(
+                '../services/row-schedules.js'
+              )
+              bustAppTimeZone()
+              await resyncAllSchedules(app)
+              announceScheduleChange('*')
+            })().catch((err) => app.log.warn({ err }, 'Row schedules kept their time zone'))
+          })
+        )
       }
     }
 

@@ -44,6 +44,22 @@ vi.mock('../../../services/security.js', () => ({
   clearMaintenanceOverride: vi.fn(async () => {})
 }))
 
+/** Calls into services/row-schedules.js a settings save makes, with the app each ran in. */
+const rsCalls = vi.hoisted(() => [] as Array<{ fn: string; tenant: string | null; arg?: unknown }>)
+vi.mock('../../../services/row-schedules.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../../services/row-schedules.js')>()
+  const tc = await import('../../../db/tenant-context.js')
+  return {
+    ...real,
+    resyncAllSchedules: vi.fn(async () => {
+      rsCalls.push({ fn: 'resyncAllSchedules', tenant: tc.getTenantId() ?? null })
+    }),
+    announceScheduleChange: vi.fn((name?: string) => {
+      rsCalls.push({ fn: 'announceScheduleChange', tenant: tc.getTenantId() ?? null, arg: name })
+    })
+  }
+})
+
 /** Each app's settings row ('' = the one self-hosted / cloud-static row). */
 const sql = vi.hoisted(() => ({
   rows: new Map<string, Record<string, unknown>>(),
@@ -231,6 +247,24 @@ describe('shared deployment: pause and resume are per app', () => {
     expect(res.statusCode).toBe(200)
     expect(manager.setInstanceTimezone).not.toHaveBeenCalled()
   })
+
+  it("a settings sla_timezone save re-evaluates that app's row schedules and tells every replica", async () => {
+    rsCalls.length = 0
+    const app = await build()
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/settings',
+      headers: { 'x-app': 'A' },
+      payload: { sla_timezone: 'America/Chicago' }
+    })
+    expect(res.statusCode).toBe(200)
+    await vi.waitFor(() =>
+      expect(rsCalls).toEqual([
+        { fn: 'resyncAllSchedules', tenant: 'A' },
+        { fn: 'announceScheduleChange', tenant: 'A', arg: '*' }
+      ])
+    )
+  })
 })
 
 describe('self-hosted and Nivaro Cloud are unchanged', () => {
@@ -274,6 +308,7 @@ describe('self-hosted and Nivaro Cloud are unchanged', () => {
 
     it(`${label}: a settings sla_timezone save still moves the cron zone`, async () => {
       Object.assign(process.env, env)
+      rsCalls.length = 0
       const app = await build()
       const res = await app.inject({
         method: 'PATCH',
@@ -284,6 +319,7 @@ describe('self-hosted and Nivaro Cloud are unchanged', () => {
       await vi.waitFor(() =>
         expect(manager.setInstanceTimezone).toHaveBeenCalledWith('America/Chicago')
       )
+      expect(rsCalls).toEqual([])
     })
   }
 })
