@@ -72,7 +72,8 @@ function randomKeys(n: number, seed = 20261121): string[] {
   return out
 }
 
-describe('hub known env list (P4-23)', () => {
+// The generator walks all of api/src: about 6 s on a CI runner, past vitest's 5 s default.
+describe('hub known env list (P4-23)', { timeout: 60_000 }, () => {
   it('every checked-in copy equals a fresh run of the generator', async () => {
     const gen = await load<Generator>(GENERATOR)
     const out = gen.renderOutputs(gen.buildKnownEnv())
