@@ -410,6 +410,25 @@ describe('Task 14: the importer role on a shared deployment', () => {
       expect(app.redis.strings.has(`p1:nvr:import-worker:${db}:${id}`)).toBe(true)
   })
 
+  it('fix M4: a listed app that is neither active nor in maintenance is skipped as not ready', async () => {
+    const list = [tenant('A'), tenant('P', 'provisioning'), tenant('M', 'maintenance')]
+    useRegistry(list)
+    setTenantRegistryForTests({
+      ...(await import('../../../services/tenancy/registry.js')).getTenantRegistry()!,
+      listActive: async () => list
+    })
+    const app = makeApp()
+    for (const t of list) schemaOk(app.redis, t)
+    const out = await worker.drainEveryAppImports(app)
+    expect(out?.ran).toEqual(['A'])
+    expect(out?.skipped).toEqual(
+      expect.arrayContaining([
+        { tenant: 'P', why: 'not_ready' },
+        { tenant: 'M', why: 'maintenance' }
+      ])
+    )
+  })
+
   it('a run whose worker died is put back and run by the pass, with no kick', async () => {
     useRegistry([tenant('A')])
     const old = new Date(Date.now() - 30 * 60_000)

@@ -513,10 +513,16 @@ async function migrationPass(
       due.push(t)
     }),
     ...toVerify.map(({ t, conn }) => async () => {
-      if ((await checkCurrent(t, deps)) === false) {
+      const current = await checkCurrent(t, deps)
+      if (current === false) {
         await dropOk(t.id, conn)
         due.push(t)
+        return
       }
+      // Still migrated: write the stored `ok` again so it never runs out of its TTL while the
+      // app is served (Task 14 fix M3: an importer, which runs no loop, reads only that key).
+      const e = states.get(t.id)
+      if (current !== undefined && e?.state === 'ok' && e.conn === conn) await writeStored(t.id, e)
     })
   ]
   let next = 0

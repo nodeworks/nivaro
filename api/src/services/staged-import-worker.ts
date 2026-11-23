@@ -370,8 +370,10 @@ export async function drainEveryAppImports(app: FastifyInstance): Promise<AppFan
   passing = true
   try {
     return await forEachApp(async (t) => {
-      if (t.status !== 'active') return 'maintenance'
-      if (!(await importAppReady(app, t))) return 'not_ready'
+      // The Hub is moving or updating it: maintenance. Any other status (provisioning, suspended)
+      // is an app not ready to run anything.
+      if (t.status === 'maintenance') return 'maintenance'
+      if (t.status !== 'active' || !(await importAppReady(app, t))) return 'not_ready'
       await runInBackgroundPool(() => drainImportsTick(app))
       return 'ran'
     })
