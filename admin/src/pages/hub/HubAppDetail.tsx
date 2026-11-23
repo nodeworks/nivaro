@@ -478,6 +478,10 @@ function PlacementChip({ text, shared }: { text: string | null; shared: boolean 
 const MOVE_OPEN_TIP =
   'A move of this environment is open: Promote waits until it ends (open Move… to follow it).'
 
+/** Why Promote is off on this row, or null when it is not held. */
+const promoteBlockedReason = (row: EnvRowState): string | null =>
+  row.isShared ? SHARED_PLACEMENT_TIP : row.moveOpen ? MOVE_OPEN_TIP : null
+
 const BADGE_TONE = {
   live: 'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-900/60 dark:bg-sky-950/40 dark:text-sky-300',
   attention:
@@ -570,7 +574,7 @@ function EnvActions({
 }) {
   // The table row and the phone entry both render actions: ids unique per mount.
   const whyId = useId()
-  const promoteBlocked = row.isShared ? SHARED_PLACEMENT_TIP : row.moveOpen ? MOVE_OPEN_TIP : null
+  const promoteBlocked = promoteBlockedReason(row)
   return (
     <div className='flex flex-wrap items-center justify-end gap-0'>
       {canPromote && env.placement_id != null && promoteBlocked && (
@@ -866,6 +870,17 @@ function EnvItem({
       <div className='mt-1 flex justify-start [&>div]:justify-start'>
         <EnvActions env={env} row={row} isAdmin={isAdmin} canPromote={canPromote} />
       </div>
+      {canPromote && env.placement_id != null && promoteBlockedReason(row) && (
+        // Design N-r2-6: a phone has no hover, so the off Promote's reason is a line of its own
+        // (assistive tech already reads it as the button's description).
+        <p
+          aria-hidden
+          data-testid='promote-blocked-line'
+          className='m-0 mt-0.5 text-[11px] leading-snug text-slate-500 dark:text-muted-foreground'
+        >
+          {promoteBlockedReason(row)}
+        </p>
+      )}
       {env.placement_id != null && !row.isShared && !row.placementPending && (
         <HubStackPanel env={env} appId={app.id} isAdmin={isAdmin} layout='card' idPrefix='-m' />
       )}
