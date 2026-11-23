@@ -86,6 +86,12 @@ interface LoopOptions extends AppSchemaDeps {
 export const APP_SCHEMA_RETRY_MS = 5 * 60_000
 /** An `ok` app's ledger is checked against the newest migration file this often (P6-8 I-3). */
 export const APP_SCHEMA_VERIFY_MS = 5 * 60_000
+/** Up to this much earlier, at random, so apps adopted together do not all come due on one pass. */
+export const APP_SCHEMA_VERIFY_JITTER_MS = 30_000
+/** Ledger checks run at once in one pass, and the most one pass starts (the rest stay due and are
+ *  taken by the next pass, 5 s later): an unreachable database holds one lane, not the pass. */
+export const APP_SCHEMA_VERIFY_CONCURRENCY = 3
+export const APP_SCHEMA_VERIFY_PER_PASS = 12
 /** Another process held the migration lock: tried again after this long. */
 const BUSY_RETRY_MS = 30_000
 const DEFAULT_INTERVAL_MS = 5_000
@@ -102,6 +108,7 @@ const verifying = new Set<string>()
 let gateOn = false
 let redisRef: RedisLike | null = null
 let nowFn: () => number = Date.now
+let randomFn: () => number = Math.random
 let loop: {
   registry: TenantRegistry
   opts: LoopOptions
@@ -311,7 +318,7 @@ async function runEnsure(t: TenantRecord, deps: AppSchemaDeps): Promise<AppSchem
       error: null,
       conn,
       nextTry: 0,
-      verifyAt: nowFn() + APP_SCHEMA_VERIFY_MS
+      verifyAt: nextVerifyAt(nowFn())
     }
     await writeStored(t.id, ok)
     return setState(t.id, ok)
@@ -353,6 +360,7 @@ export async function appMigrationPass(
   for (const id of [...states.keys()]) if (!listed.has(id) && !inFlight.has(id)) states.delete(id)
   const now = nowFn()
   const due: TenantRecord[] = []
+  const toVerify: Array<{ t: TenantRecord; conn: string }> = []
   for (const t of list) {
     if (!MIGRATED_STATUSES.has(t.status) || inFlight.has(t.id)) continue
     const conn = connFingerprint(t)
@@ -362,11 +370,12 @@ export async function appMigrationPass(
         // Every APP_SCHEMA_VERIFY_MS: is the database behind this connection still migrated? A
         // database restored from a backup or replaced by an environment refresh is not (I-3).
         if (now < (e.verifyAt ?? 0)) continue
-        const current = await checkCurrent(t, deps)
-        if (current === false) {
-          await dropOk(t.id, conn)
-          due.push(t)
-        } else e.verifyAt = now + APP_SCHEMA_VERIFY_MS
+        // Checked below, a few at a time and at most APP_SCHEMA_VERIFY_PER_PASS per pass; the
+        // next check is set now, so an overlapping pass never takes the same app (review N2).
+        if (toVerify.length < APP_SCHEMA_VERIFY_PER_PASS) {
+          e.verifyAt = nextVerifyAt(now)
+          toVerify.push({ t, conn })
+        }
         continue
       }
       if (now < e.nextTry) {
@@ -415,6 +424,21 @@ export async function appMigrationPass(
     }
     due.push(t)
   }
+  // The 5-minute ledger checks: APP_SCHEMA_VERIFY_CONCURRENCY lanes, so one unreachable app
+  // database (held up to the pool's acquire timeout) never holds every other check.
+  let next = 0
+  const lane = async () => {
+    while (next < toVerify.length) {
+      const { t, conn } = toVerify[next++]
+      if ((await checkCurrent(t, deps)) === false) {
+        await dropOk(t.id, conn)
+        due.push(t)
+      }
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(APP_SCHEMA_VERIFY_CONCURRENCY, toVerify.length) }, lane)
+  )
   // Checked and taken with no await between, so two passes never start more than `max` together.
   const max = Math.max(1, Math.floor(deps.concurrency ?? DEFAULT_CONCURRENCY))
   const runs: Promise<AppSchemaStatus>[] = []
@@ -433,6 +457,12 @@ async function dropOk(tenantId: string, conn: string): Promise<void> {
   await writeStored(tenantId, pending)
 }
 
+/** When an `ok` app's ledger is next checked: APP_SCHEMA_VERIFY_MS from now, minus up to
+ *  APP_SCHEMA_VERIFY_JITTER_MS at random (never later than the 5 minutes). */
+function nextVerifyAt(from: number): number {
+  return from + APP_SCHEMA_VERIFY_MS - Math.floor(randomFn() * APP_SCHEMA_VERIFY_JITTER_MS)
+}
+
 function adopt(tenantId: string, stored: StoredState, conn: string): void {
   setState(tenantId, {
     state: 'ok',
@@ -441,7 +471,7 @@ function adopt(tenantId: string, stored: StoredState, conn: string): void {
     error: null,
     conn,
     nextTry: 0,
-    verifyAt: nowFn() + APP_SCHEMA_VERIFY_MS
+    verifyAt: nextVerifyAt(nowFn())
   })
 }
 
@@ -556,9 +586,11 @@ export function _configureAppMigrationsForTests(o: {
   redis?: RedisLike | null
   now?: () => number
   gate?: boolean
+  random?: () => number
 }): void {
   if (o.redis !== undefined) redisRef = o.redis
   if (o.now) nowFn = o.now
+  if (o.random) randomFn = o.random
   if (o.gate !== undefined) gateOn = o.gate
 }
 
@@ -571,4 +603,5 @@ export function _resetAppMigrationsForTests(): void {
   gateOn = false
   redisRef = null
   nowFn = Date.now
+  randomFn = Math.random
 }

@@ -961,6 +961,7 @@ const SHARED: Record<string, string> = {
   'services/tenancy/app-migrations.ts :: newestMigration':
     'the newest migration file in this image',
   'services/tenancy/app-migrations.ts :: nowFn': FN_SLOT,
+  'services/tenancy/app-migrations.ts :: randomFn': FN_SLOT,
   'services/tenancy/app-migrations.ts :: readinessRegistered': REGISTRY,
   'services/tenancy/app-migrations.ts :: redisRef': CONN,
   'services/tenancy/app-migrations.ts :: states':
