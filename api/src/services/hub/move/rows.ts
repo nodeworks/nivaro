@@ -93,6 +93,11 @@ export interface MoveSteps {
    * target's maintenance is set (then lifted again), so a rollback knows to lift it.
    */
   boot_freeze?: 'on' | 'lifted'
+  /**
+   * R2-M-6: transfer tickets minted for this move and not revoked yet, SEALED (secrets.ts), so a
+   * later run revokes what a dead one left. Written by the ops only (never by a run's step copy).
+   */
+  open_tickets?: string[]
 }
 
 export interface MoveFilesSummary {

@@ -378,6 +378,37 @@ describe('pullFiles', () => {
     expect(c.calls.find((x) => x[1] === 'pullFiles')?.[2]).toMatchObject({ objects: true })
   })
 
+  // R2-M-6: a ticket a dead run could not revoke is revoked by the next run (heal + resume or
+  // roll back), not left to its 6 h expiry. It is kept with the move sealed, never in clear.
+  it('R2-M-6: a dead run’s un-revoked ticket is revoked by a fresh ops instance at the move end', async () => {
+    const w = await setup(true)
+    TENANT = w.tenant
+    const c = clients()
+    const factory = (fail: boolean) => (s: { id: number }) => {
+      const cl = (c.factory as (s: { id: number }) => Record<string, unknown>)(s)
+      const orig = cl.revokeTicket as (...a: unknown[]) => Promise<unknown>
+      cl.revokeTicket = async (...a: unknown[]) => {
+        if (fail) throw new Error('unreachable')
+        return orig(...a)
+      }
+      return cl as never
+    }
+    const dead = defaultMoveOps(w.move, w.plan, { client: factory(true), sleep, now })
+    await dead.pullFiles('delta')
+    const kept = (await db('nivaro_hub_moves').where({ id: w.move.id }).first()).steps as string
+    expect(kept).not.toContain(TICKET)
+    expect(JSON.parse(kept).open_tickets).toHaveLength(1)
+    // The process died; a new run (a new ops instance) ends the move.
+    const fresh = defaultMoveOps((await readMove(w.move.id)) as never, w.plan, {
+      client: factory(false),
+      sleep,
+      now
+    })
+    await fresh.revokeTickets()
+    expect(c.calls.filter((x) => x[1] === 'revokeTicket')).toEqual([[w.a, 'revokeTicket', true]])
+    expect((await readMove(w.move.id))?.steps.open_tickets ?? []).toEqual([])
+  })
+
   it('a ticket that could not be revoked is revoked at the move end', async () => {
     const w = await setup(true)
     TENANT = w.tenant

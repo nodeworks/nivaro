@@ -289,6 +289,27 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
   const tickets = new Map<string, () => Promise<unknown>>()
   let ticketSeq = 0
 
+  /** Revokes `ticket` on the source (where it was minted). */
+  const revokeAtSource = async (ticket: string): Promise<void> => {
+    const l = await load()
+    if (l.from.kind === 'shared') await clientFor(l.from.shared).revokeTicket(l.tenantId, ticket)
+    else await (await sourceLink()).revokeTicket(ticket)
+  }
+
+  /**
+   * R2-M-6: every minted ticket is also kept with the move, sealed (never in clear), until it is
+   * revoked: a run that dies holding one leaves it to the next run's revokeTickets instead of
+   * its 6 h expiry.
+   */
+  const keepSealed = (sealed: string) =>
+    mergeSteps(move.id, (st) => ({ ...st, open_tickets: [...(st.open_tickets ?? []), sealed] }))
+  const dropSealed = (sealed: string) =>
+    mergeSteps(move.id, (st) =>
+      st.open_tickets?.includes(sealed)
+        ? { ...st, open_tickets: st.open_tickets.filter((x) => x !== sealed) }
+        : null
+    )
+
   let loaded: Promise<Loaded> | null = null
   const load = (): Promise<Loaded> => {
     loaded ??= (async () => {
@@ -776,6 +797,13 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
       }
       // Review minor 3: a counter, never the map's size (a kept un-revoked entry would collide).
       const key = String(++ticketSeq)
+      const sealed = sealSecret(ticket)
+      await keepSealed(sealed)
+      const mintedRevoke = revoke
+      revoke = async () => {
+        await mintedRevoke()
+        await dropSealed(sealed).catch(() => false)
+      }
       tickets.set(key, revoke)
       // P6-31: to or from a shared deployment the key prefix changes (apps/<tenantId>/ there,
       // the bucket root elsewhere): saved-settings S3/Azure objects are copied too, same bucket
@@ -1241,6 +1269,25 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
         } catch (err) {
           log(
             `a transfer ticket could not be revoked (${codeOf(err)}); it expires within 6 h`,
+            'warn'
+          )
+        }
+      }
+      // R2-M-6: tickets an earlier run of this move minted and never revoked (it died).
+      const left = (await readMove(move.id))?.steps.open_tickets ?? []
+      for (const sealed of left) {
+        let ticket: string | null = null
+        try {
+          ticket = openSecret(sealed)
+        } catch {
+          ticket = null
+        }
+        try {
+          if (ticket) await revokeAtSource(ticket)
+          await dropSealed(sealed)
+        } catch (err) {
+          log(
+            `an earlier run's transfer ticket could not be revoked (${codeOf(err)}); it expires within 6 h`,
             'warn'
           )
         }

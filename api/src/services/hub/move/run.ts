@@ -676,6 +676,9 @@ async function saveSteps(ctx: Ctx, steps: MoveSteps, extra: Partial<{ step: Move
     for (const [k, v] of Object.entries(stored))
       if (k !== 'list' && !(k in steps)) (steps as unknown as Record<string, unknown>)[k] = v
     if (stored.locks) steps.locks = stored.locks
+    // R2-M-6: the ops alone write open_tickets; a run's older copy never puts one back.
+    if (stored.open_tickets !== undefined) steps.open_tickets = stored.open_tickets
+    else delete steps.open_tickets
     return steps
   })
   if (theirs) {
