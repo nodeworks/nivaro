@@ -1309,3 +1309,23 @@ describe('a stack stuck degraded (N-4)', () => {
     expect(row?.error).toMatch(/^VERSION_TIMEOUT: /)
   })
 })
+
+describe('a start whose job run began but could not be linked (N-5)', () => {
+  it('fails the job run too, not only the deploy rows', async () => {
+    const id = await newShared()
+    const { deps, out } = runDeps(fakes())
+    await db.raw(
+      `CREATE TRIGGER parked_b_job_link BEFORE UPDATE OF job_run_id ON nivaro_hub_shared_deploys
+       BEGIN SELECT RAISE(ABORT, 'job link refused'); END`
+    )
+    try {
+      await expect(start(id, deps)).rejects.toThrow()
+    } finally {
+      await db.raw('DROP TRIGGER parked_b_job_link')
+    }
+    const row = await db('nivaro_hub_shared_deploys').where({ shared_deployment_id: id }).first()
+    expect(row.status).toBe('failed')
+    expect(out.failed).toMatch(/^START_FAILED: /)
+    expect((await Store.getShared(id))?.status).toBe('active')
+  })
+})

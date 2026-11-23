@@ -388,6 +388,8 @@ export async function startSharedUpgrade(
   let handedOff = false
   /** Set once the run row exists: a start that breaks after it closes it (review minor 7). */
   let written: { id: number; prior: SharedStatus } | null = null
+  /** Set once the job run exists: a start that breaks after it fails it too (round 2 N-5). */
+  let startedRun: JobRunHandle | null = null
   try {
     for (const a of plan.apps) {
       const t = await envLock.take(a.env_id, 'shared')
@@ -450,6 +452,7 @@ export async function startSharedUpgrade(
       sharedId,
       by
     )
+    startedRun = run
     if (run.id != null)
       await db(SHARED_DEPLOYS).where({ id: deployId }).update({ job_run_id: run.id })
     await logActivity({
@@ -502,11 +505,14 @@ export async function startSharedUpgrade(
   } finally {
     if (!handedOff) {
       if (written) await abandonStart(written.id, sharedId, written.prior).catch(() => undefined)
+      if (startedRun) await startedRun.fail(new Error(START_FAILED)).catch(() => undefined)
       for (const [envId, t] of envTokens) await envLock.release(envId, t)
       await sharedLock.release(sharedId, sharedToken)
     }
   }
 }
+
+const START_FAILED = 'START_FAILED: the run could not be started; nothing was applied.'
 
 /** A start that broke after its rows were written: closed at once, not left for the heal. */
 async function abandonStart(
@@ -514,7 +520,7 @@ async function abandonStart(
   sharedId: number,
   prior: SharedStatus
 ): Promise<void> {
-  const msg = 'START_FAILED: the run could not be started; nothing was applied.'
+  const msg = START_FAILED
   const when = new Date()
   await db.transaction(async (trx) => {
     await trx(SHARED_DEPLOYS)
