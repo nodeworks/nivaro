@@ -294,6 +294,17 @@ export function transferSource(raw: unknown): string | null {
   return null
 }
 
+/** The temp file's own write failure: an open/write syscall error with a disk or access code. */
+const TEMP_WRITE_CODES = new Set(['ENOSPC', 'EDQUOT', 'EACCES', 'EPERM', 'EROFS', 'EIO'])
+function isOwnTempWriteError(err: unknown): boolean {
+  const e = err as { syscall?: unknown; code?: unknown } | null
+  return (
+    (e?.syscall === 'open' || e?.syscall === 'write') &&
+    typeof e.code === 'string' &&
+    TEMP_WRITE_CODES.has(e.code)
+  )
+}
+
 /** `code` and `reason` of a small JSON body (≤ 2 KB; a bigger one is cut off unread). */
 async function smallJsonCode(
   body: ReadableStream<Uint8Array>
@@ -790,8 +801,11 @@ async function execute(
       let stage: 'incomplete' | 'write_failed' = 'incomplete'
       let tempFailed = false
       const sink = createWriteStream(tmp)
-      sink.once('error', () => {
-        tempFailed = true
+      // Review N-3: only the temp file's OWN failure (its open or write syscall with a disk or
+      // permission code) is the target's temp folder. pipeline() destroys every stream with the
+      // first error, so a source cut mid-body also reaches this listener: that stays incomplete.
+      sink.once('error', (err) => {
+        tempFailed = isOwnTempWriteError(err)
       })
       try {
         await pipeline(

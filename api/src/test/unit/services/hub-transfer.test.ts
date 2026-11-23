@@ -115,6 +115,8 @@ const readFails = new Set<string>()
 const proxy404 = new Set<string>()
 /** C-1: ids whose 503 says the source's FILES_FALLBACK_DIR is gone or empty. */
 const fallbackGone = new Set<string>()
+/** Review N-3: ids whose body the source cuts off mid-way (the connection drops). */
+const cutMidBody = new Set<string>()
 const sourceSeen: string[] = []
 let server: Server
 let SOURCE = ''
@@ -157,6 +159,12 @@ beforeAll(async () => {
     if (!noLength.has(id)) headers['content-length'] = String(body.length)
     if (!noName.has(id)) headers['x-nivaro-filename-disk'] = `${id}.bin`
     res.writeHead(200, headers)
+    if (cutMidBody.has(id)) {
+      // Half the bytes, then the connection drops.
+      res.write(body.subarray(0, Math.floor(body.length / 2)))
+      setTimeout(() => res.socket?.destroy(), 20)
+      return
+    }
     if (noLength.has(id)) {
       res.write(body)
       return res.end()
@@ -234,6 +242,7 @@ beforeEach(() => {
   readFails.clear()
   proxy404.clear()
   fallbackGone.clear()
+  cutMidBody.clear()
   sourceSeen.length = 0
   logs.length = 0
   resetPullsForTests()
@@ -474,6 +483,20 @@ describe('pull', () => {
       (await startPull({ source: SOURCE, ticket: TICKET, mode: 'full' })).run_id
     )
     expect(s.failed_reasons).toEqual({ source_fallback_unavailable: 1 })
+  })
+
+  // Review N-3: a source that drops the connection mid-body is incomplete, never the target's
+  // temp folder (pipeline destroys the temp file's stream with the source's error too).
+  it('a body the source cuts off mid-way is incomplete, not a temp-folder failure', async () => {
+    objects.set('c1', Buffer.alloc(64 * 1024, 7))
+    rows.push(row('c1', 64 * 1024))
+    cutMidBody.add('c1')
+    const s = await finished(
+      (await startPull({ source: SOURCE, ticket: TICKET, mode: 'full' })).run_id
+    )
+    expect(s).toMatchObject({ failed: 1, copied: 0 })
+    expect(s.failed_reasons).toEqual({ incomplete: 1 })
+    expect(() => statSync(join(root, 'c1.bin'))).toThrow()
   })
 
   // Review M-5: a full or unwritable temporary folder on the target is its own reason.
