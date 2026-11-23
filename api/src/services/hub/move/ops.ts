@@ -97,6 +97,8 @@ export const STACK_CONVERGE_MS = 30 * 60_000
 export const PULL_STATUS_GIVE_UP_MS = 10 * 60_000
 const POLL_MS = 5_000
 const STACK_POLL_MS = 10_000
+/** P6-45: how long a stopped old Docker stack may take to show nothing running. */
+export const SOURCE_STOP_MS = 5 * 60_000
 /** P6-27: how long the per-move name may keep answering after the stack dropped it. */
 const TEMP_HOST_GONE_MS = 2 * 60_000
 const REFRESH_AGAIN_MS = 30_000
@@ -144,6 +146,15 @@ export interface MoveOps {
   unroute(a: RouteAction): Promise<void>
   verifyName(expect: { version: string; shared: string | null }): Promise<boolean>
   retireSource(): Promise<void>
+  /**
+   * P6-45 "Finish and stop the old home": STOPS the old home, proven, without deleting it (its
+   * data, settings and sealed secrets stay). Shared: the caller has dropped the app from the
+   * deployment's list (step column); every replica must hold that list. Docker: the agent removes
+   * the old stack's services (volumes kept; the Hub's stack settings rows are untouched) and the
+   * agent's status must show nothing running. Any other kind: CANNOT_STOP_OLD_HOME. Throws
+   * OLD_HOME_NOT_STOPPED when the stop cannot be proven.
+   */
+  stopSource(): Promise<void>
   /**
    * E2E B4 (P6-38): after release, the target reports the app's own key fingerprint (the shared
    * deployment's app status, or the dedicated target's readiness report). Throws APP_KEY_UNKNOWN /
@@ -1315,6 +1326,52 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
           'SOURCE_NOT_RETIRED',
           'The GitLab source could not be retired over its hub link; stop it in GitLab.'
         )
+    },
+
+    async stopSource() {
+      const l = await load()
+      const from = l.from
+      if (from.kind === 'shared') {
+        try {
+          await ops.waitReplicas(from.shared.id)
+        } catch (err) {
+          throw new MoveStepError(
+            'OLD_HOME_NOT_STOPPED',
+            `Not every replica of the shared deployment ${from.shared.key} has dropped the app yet (${asStepError(err, '').message || 'no answer'}).`
+          )
+        }
+        log(`the shared deployment ${from.shared.key} no longer lists the app`)
+        return
+      }
+      if (from.kind !== 'docker')
+        throw new MoveStepError(
+          'CANNOT_STOP_OLD_HOME',
+          'The Hub cannot stop this old home and prove it stopped (it is not a Docker stack or a shared deployment).'
+        )
+      await removeStack(from, l.envKey, l.app)
+      const by = now() + SOURCE_STOP_MS
+      for (;;) {
+        let read = true
+        let running = 0
+        try {
+          const st = await agent.agentStack(from.driver, from.stack)
+          running = st ? st.services.reduce((n, x) => n + (x.replicas?.running ?? 0), 0) : 0
+        } catch {
+          read = false
+        }
+        if (read && running === 0) {
+          log(`the old Docker stack ${from.stack} is stopped (nothing running; volumes kept)`)
+          return
+        }
+        if (now() >= by)
+          throw new MoveStepError(
+            'OLD_HOME_NOT_STOPPED',
+            read
+              ? `The old Docker stack ${from.stack} still runs ${running} task(s) five minutes after it was asked to stop.`
+              : `The Hub agent did not answer for the old Docker stack ${from.stack}, so its stop could not be proven.`
+          )
+        await sleep(STACK_POLL_MS)
+      }
     },
 
     async databaseIdentity(which) {

@@ -53,6 +53,7 @@ import {
   patchMove,
   patchMoveIfHolder,
   readMove,
+  readStepsText,
   setEnvStatus,
   stepDone
 } from './rows.js'
@@ -94,7 +95,7 @@ import { withMoveRun } from './run-context.js'
  * open; it is never rolled back. One exception: when the new home's key does not check
  * (or the new home cannot be asked), the old home is not retired and the move stays open —
  * `interrupted`, MOVE_OPEN refusing — until a Resume finds the key right, or a person chooses
- * Finish and keep the old home (stopRetireKey, finishKeepSource; rulings P6-42 / P6-43). Tickets
+ * Finish and stop the old home (stopRetireKey, finishStopSource; rulings P6-42 / P6-43 / P6-45). Tickets
  * are revoked after each copy and at the end.
  *
  * Stored error, job-run and activity text: codes and plain sentences only (MoveStepError and the
@@ -649,7 +650,7 @@ async function drive(
     await beat()
     const m = await readMove(moveId)
     if (m?.steps.phase === 'rollback') await rollBack(ctx, m.steps.undo_reason ?? 'failed', null)
-    else if (m?.steps.finish_keep) await finishKept(ctx)
+    else if (m?.steps.finish_stop) await finishStopped(ctx)
     else await forward(ctx)
   } finally {
     clearInterval(timer)
@@ -1329,28 +1330,119 @@ class RetireKeyStop extends MoveStepError {
 
 /**
  * Round 1b: the stored code of a retire_source stop whose new home could not be asked (the
- * admin recognises the case by this code, never by text). The link's own code is in the sentence.
+ * admin and the server recognise the case by this code, never by text).
  */
 export const RETIRE_UNREACHABLE_CODE = 'APP_KEY_UNCHECKED_UNREACHABLE'
 
-/** The two ways out of a stop at retire_source (ruling P6-43 (c)). */
-const RETIRE_STOP_WAYS =
-  'Either enter the key the new home runs under App key on this environment (the Hub takes it only when its fingerprint matches the one the new home reports), then Resume: the move checks again and retires the old home. Or choose Finish and keep the old home (typed confirm): the move ends, the old home is not retired and stays in maintenance, and retiring it stays on the checklist.'
+/** The codes a retire_source key stop stores (retireStopped reads them back). */
+const RETIRE_STOP_CODES: readonly string[] = [
+  'APP_KEY_MISMATCH',
+  'APP_KEY_UNKNOWN',
+  RETIRE_UNREACHABLE_CODE
+]
 
 /**
- * Untested path 2 (F4-1 / P6-39, rulings P6-42 / P6-43): the new home's key does not check, so
- * the old home keeps the app — it is NOT retired, and a shared source keeps listing it (the step
- * column is put back to `release`, review M-2). The move stays OPEN: `interrupted`, so MOVE_OPEN
- * keeps refusing person-started actions; Cancel / Roll back answer TOO_LATE (released). Ways out:
- * Resume (checks again, retires once it passes; an App key PUT at this state is taken only when
- * it matches what the new home reports), or Finish and keep the old home (finishKeepSource).
- * Everything here happens only while this run holds the move (M-3).
+ * Which way out a retire_source stop has (review N-6), so each is stated once and only where it
+ * can work: `key_entry` (a dedicated new home reports another key: the App key PUT can take it),
+ * `no_key` (the new home reports none: no PUT can match), `shared` (a shared new home's key is
+ * the one the Hub lists: wait for its replicas), `unreachable` (Resume to try again).
+ */
+export type RetireStopCase = 'key_entry' | 'no_key' | 'shared' | 'unreachable'
+
+/** P6-45 / review N-7: the ONE answer server and admin use for a retire_source stop. */
+export interface RetireStop {
+  kind: 'key' | 'unreachable'
+  case: RetireStopCase
+  /** "Finish and stop the old home" is possible: the Hub can stop this old home and prove it. */
+  finish: boolean
+  /** "Enter the key the new home runs" can succeed. */
+  key_entry: boolean
+  /** The last Finish was refused (the stop was not proven): its plain reason, else null. */
+  finish_refused: string | null
+}
+
+function stopCode(error: string | null): string | null {
+  const m = /^([A-Z][A-Z0-9_]{1,63}): /.exec(error ?? '')
+  return m ? m[1] : null
+}
+
+/**
+ * The sync half of the one predicate: THIS attempt stopped at retire_source because the new
+ * home's key did not check (or could not be asked). Interrupted, released, going forward, the
+ * retire_source step failed with one of the stop's codes, and the key never checked in this
+ * move: a run cut off mid-retire after the key passed (retire_key_checked_at) is Resume only.
+ */
+export function retireStopped(move: HubMoveRow | null | undefined): boolean {
+  if (move?.status !== 'interrupted' || move.steps.phase === 'rollback') return false
+  if (!stepDone(move.steps, 'release') || move.steps.retire_key_checked_at) return false
+  if (move.steps.list.find((x) => x.key === 'retire_source')?.state !== 'failed') return false
+  const code = stopCode(move.error)
+  return code !== null && RETIRE_STOP_CODES.includes(code)
+}
+
+/** P6-45: how the Hub can stop an old home and prove it, or null when it cannot. */
+export async function oldHomeStopKind(placementId: number): Promise<'shared' | 'docker' | null> {
+  const p = await getPlacement(placementId)
+  if (p?.kind === 'shared') return 'shared'
+  if (p?.kind !== 'dedicated' || p.driver_id == null) return null
+  return (await getDriver(p.driver_id))?.kind === 'docker' ? 'docker' : null
+}
+
+/** The one predicate (review N-7): the stop and its ways out, or null when it is not one. */
+export async function retireStopOf(
+  move: HubMoveRow | null | undefined
+): Promise<RetireStop | null> {
+  if (!move || !retireStopped(move)) return null
+  const code = stopCode(move.error)
+  const to = await getPlacement(move.to_placement_id)
+  const kase: RetireStopCase =
+    code === RETIRE_UNREACHABLE_CODE
+      ? 'unreachable'
+      : to?.kind === 'shared'
+        ? 'shared'
+        : code === 'APP_KEY_UNKNOWN'
+          ? 'no_key'
+          : 'key_entry'
+  return {
+    kind: kase === 'unreachable' ? 'unreachable' : 'key',
+    case: kase,
+    finish: (await oldHomeStopKind(move.from_placement_id)) !== null,
+    key_entry: kase === 'key_entry',
+    finish_refused: move.steps.finish_refused?.text ?? null
+  }
+}
+
+/** The ways out of a stop, each once and only where it can work (the checklist item's text). */
+export function retireStopWays(stop: Pick<RetireStop, 'case' | 'finish'>): string {
+  const key =
+    stop.case === 'key_entry'
+      ? 'Enter the key the new home runs under App key on this environment (the Hub takes it only when it matches what the new home reports), then Resume.'
+      : stop.case === 'no_key'
+        ? "The new home reports no key: make it report the app's key, then Resume."
+        : stop.case === 'shared'
+          ? "The shared deployment's key is set by the Hub: wait until its replicas report it, then Resume."
+          : 'Resume to try again.'
+  return stop.finish
+    ? `${key} Or Finish and stop the old home: the old home is stopped, its data, settings and secrets kept.`
+    : `${key} The Hub cannot stop this old home itself, so the move ends only once the key checks.`
+}
+
+/**
+ * Untested path 2 (F4-1 / P6-39, rulings P6-42 / P6-43 / P6-45): the new home's key does not
+ * check, so the old home keeps the app — it is NOT retired, and a shared source keeps listing it
+ * (the step column is put back to `release`, review M-2). The move stays OPEN: `interrupted`, so
+ * MOVE_OPEN keeps refusing person-started actions; Cancel / Roll back answer TOO_LATE (released).
+ * Ways out (retireStopWays): Resume, the App key PUT judged against the new home, or Finish and
+ * stop the old home (finishStopSource). The stored error says only what happened, with its code
+ * first and no other code (N-5, N-6). Everything happens only while this run holds the move (M-3).
  */
 async function stopRetireKey(ctx: Ctx, err: RetireKeyStop): Promise<void> {
+  if (err.kind === 'unreachable')
+    ctx.run.log(`retire_source: the new home could not be asked for its key (${err.code})`, 'warn')
   const error = safeLine(
     err.kind === 'key'
-      ? `${err.code}: ${err.message} The app serves from its new home, but the old home was not retired: the new home must seal this app's values with the app's own key first. ${RETIRE_STOP_WAYS}`
-      : `${RETIRE_UNREACHABLE_CODE}: The Hub could not reach the new home to check its key (${err.code}: ${err.message}) — Resume to try again. The app serves from its new home; the old home was not retired. Finish and keep the old home ends the move without retiring it.`
+      ? `${err.code}: ${err.message} The old home was not retired.`
+      : `${RETIRE_UNREACHABLE_CODE}: The Hub could not reach the new home to check its key; the old home was not retired.`
   )
   const ours = await patchMoveIfHolder(ctx.moveId, ctx.held.envToken, {
     status: 'interrupted',
@@ -1359,10 +1451,9 @@ async function stopRetireKey(ctx: Ctx, err: RetireKeyStop): Promise<void> {
     step: 'release'
   })
   if (!ours) return notOurs(ctx)
+  const stop = await retireStopOf(await readMove(ctx.moveId))
   const item = safeLine(
-    err.kind === 'key'
-      ? `Do not retire the old home yet: the new home does not seal this app's values with its key (${err.code}). ${RETIRE_STOP_WAYS}`
-      : `Do not retire the old home yet: the Hub could not reach the new home to check its key (${RETIRE_UNREACHABLE_CODE}, ${err.code}). Resume to try again.`
+    `Do not remove the old home yet. ${stop ? retireStopWays(stop) : 'Resume to try again.'}`
   )
   await mergeChecklist(ctx.moveId, (checklist) => {
     const found = checklist.find((c) => c.id === 'retire_source')
@@ -1822,27 +1913,15 @@ export async function resumeMove(id: number, by: string, over: MoveRunDeps = {})
   await restart(move, by, e, move.steps.phase === 'rollback' ? 'rollback' : 'forward')
 }
 
-/**
- * The interrupted move stopped at retire_source after release (the only state "Finish and keep
- * the old home" and the App key PUT's new-home check apply to): release done, going forward,
- * retire_source not done. Null otherwise.
- */
-export function retireStopOf(move: HubMoveRow | null | undefined): HubMoveRow | null {
-  if (move?.status !== 'interrupted' || move.steps.phase === 'rollback') return null
-  if (!stepDone(move.steps, 'release')) return null
-  const retire = move.steps.list.find((x) => x.key === 'retire_source')
-  return retire && retire.state !== 'done' ? move : null
-}
-
-/** The environment's move stopped at retire_source (retireStopOf), or null. */
+/** The environment's move stopped at retire_source (the one predicate, retireStopOf), or null. */
 export async function retireStopFor(envId: number): Promise<HubMoveRow | null> {
   const rows = (await db('nivaro_hub_moves')
     .where({ environment_id: envId, status: 'interrupted' })
     .orderBy('id', 'desc')
     .pluck('id')) as Array<number | string>
   for (const id of rows) {
-    const m = retireStopOf(await readMove(Number(id)))
-    if (m) return m
+    const m = await readMove(Number(id))
+    if (await retireStopOf(m)) return m
   }
   return null
 }
@@ -1867,13 +1946,17 @@ export async function newHomeKeyFp(
 }
 
 /**
- * P6-43 (b): "Finish and keep the old home". A move stopped at retire_source (retireStopOf) ends
- * `success` by a person's typed choice: the old home is NOT retired (a shared source keeps listing
- * the app in maintenance until the checklist item is ticked, tenants.ts), a manual retire item
- * stays open and MOVE_OPEN lifts. Never before release (Cancel stays TOO_LATE after it). Typed
- * confirm `<app key>/<env key>` (400 CONFIRM_MISMATCH).
+ * P6-45 (replaces P6-43 (b)): "Finish and stop the old home". A retire_source key stop (the one
+ * predicate, retireStopOf) whose old home the Hub can stop and prove stopped — a shared
+ * deployment (the app dropped from its list, every replica holding that) or a Docker stack (its
+ * services removed through the agent, volumes and the Hub's stack settings and secrets kept,
+ * the agent's status showing nothing running). The run proves the stop BEFORE the move ends
+ * `success` (so MOVE_OPEN lifts only then); a stop it cannot prove leaves the move at the stop
+ * with a plain reason (finish_refused). Never before release (Cancel stays TOO_LATE after it); a
+ * kind the Hub cannot stop (a GitLab placement) is refused CANNOT_STOP_OLD_HOME. Typed confirm
+ * `<app key>/<env key>` (400 CONFIRM_MISMATCH).
  */
-export async function finishKeepSource(
+export async function finishStopSource(
   id: number,
   confirm: unknown,
   by: string,
@@ -1889,11 +1972,13 @@ export async function finishKeepSource(
       'NOT_RELEASED',
       'Before release the old home still serves the app: Resume or Roll back the move instead.'
     )
-  if (!retireStopOf(move))
+  const stop = await retireStopOf(move)
+  if (!stop)
     throw new MoveError(
       'NOT_STOPPED_AT_RETIRE',
-      'Only a move stopped at retiring the old home can be finished this way (it is running, or the old home is already retired).'
+      "Only a move stopped at retiring the old home because the new home's key did not check can be finished this way. If the old home's retire had already started, Resume finishes it."
     )
+  if (!stop.finish) throw cannotStop()
   const env = (await db(ENVS).where({ id: move.environment_id }).first('key', 'app_id')) as
     | { key: string; app_id: number }
     | undefined
@@ -1902,30 +1987,60 @@ export async function finishKeepSource(
   if (!confirmText || confirm !== confirmText)
     throw new MoveError(
       'CONFIRM_MISMATCH',
-      `Type ${confirmText ?? 'the app and environment keys'} to finish the move and keep the old home.`,
+      `Type ${confirmText ?? 'the app and environment keys'} to finish the move and stop the old home.`,
       400
     )
-  await restart(move, by, e, 'keep')
+  await restart(move, by, e, 'stop')
 }
 
-/** The run side of finishKeepSource: the manual retire item, then success with a warning. */
-async function finishKept(ctx: Ctx): Promise<void> {
+function cannotStop(): MoveError {
+  return new MoveError(
+    'CANNOT_STOP_OLD_HOME',
+    'The Hub cannot stop this old home and prove it stopped (it is not a Docker stack or a shared deployment), so the move cannot end this way. Enter the key the new home runs under App key, then Resume.'
+  )
+}
+
+/**
+ * The run side of finishStopSource: stop the old home and prove it, then the manual "remove it"
+ * item and success with a warning. A stop it cannot prove: refuseFinish (the move goes back to
+ * the stop, nothing ended).
+ */
+async function finishStopped(ctx: Ctx): Promise<void> {
   const move = await readMove(ctx.moveId)
   if (!move) return
-  const steps = structuredClone(move.steps)
+  const kind = await oldHomeStopKind(move.from_placement_id)
+  try {
+    if (!kind) throw new MoveStepError('CANNOT_STOP_OLD_HOME', cannotStop().message)
+    // A shared old home stops serving the app once its list drops it: the step column says so
+    // (tenants.ts), only while this run holds the move; stopSource proves every replica has it.
+    if (
+      kind === 'shared' &&
+      !(await patchMoveIfHolder(ctx.moveId, ctx.held.envToken, { step: 'retire_source' }))
+    ) {
+      ctx.lockLost = true
+      return notOurs(ctx)
+    }
+    await ctx.ops.stopSource()
+  } catch (err) {
+    return refuseFinish(ctx, asStepError(err, 'The old home could not be proven stopped.'))
+  }
+  const steps = structuredClone((await readMove(ctx.moveId))?.steps ?? move.steps)
   for (const s of steps.list) {
     if (s.key === 'done') s.state = 'done'
-    if (s.key === 'retire_source' && s.state !== 'done') {
-      s.state = 'failed'
-      s.note = 'Kept: the move was finished without retiring the old home.'
+    if (s.key === 'retire_source') {
+      s.state = 'done'
+      s.note = 'Stopped by Finish and stop the old home; not removed.'
     }
   }
-  // Round 1b: what tenants.ts rule 4 selects on (until the retire item is ticked).
-  steps.kept_source_open = true
+  steps.finish_refused = null
   await saveSteps(ctx, steps)
   if (ctx.lockLost) return notOurs(ctx)
+  const what =
+    kind === 'shared'
+      ? 'its shared deployment no longer lists the app'
+      : 'its Docker stack has no service left (volumes kept)'
   const item = safeLine(
-    "The old home was kept on purpose (Finish and keep the old home): it was not retired and stays in maintenance. Retire it yourself once the new home seals this app's values with the app's own key, then tick this."
+    `Remove the old home when you're sure: it is stopped (${what}); its data, settings and sealed secrets are kept so it can be restored by hand.`
   )
   await mergeChecklist(ctx.moveId, (checklist) => {
     const found = checklist.find((c) => c.id === 'retire_source')
@@ -1935,18 +2050,48 @@ async function finishKept(ctx: Ctx): Promise<void> {
     } else checklist.push({ id: 'retire_source', text: item, required: false, done: false })
     return checklist
   })
-  ctx.run.log('finished by a person without retiring the old home (Finish and keep the old home)')
+  ctx.run.log(`the old home is stopped (${what}); the move ends without retiring it`)
   return finishSuccess(
     ctx,
-    'The environment moved; the old home was kept and not retired (Finish and keep the old home). Retire it yourself: see the checklist.'
+    'The environment moved; the old home was stopped, not removed (Finish and stop the old home). Remove it when you are sure: see the checklist.'
   )
+}
+
+/**
+ * P6-45: the old home's stop could not be proven. The move goes back to the stop exactly as it
+ * was (interrupted, its stop error kept, the step column back at `release` so a shared old home
+ * lists the app again), with the plain reason kept as finish_refused for the panel.
+ */
+async function refuseFinish(ctx: Ctx, err: MoveStepError): Promise<void> {
+  const text = safeLine(
+    `Finish and stop the old home was refused: ${err.message} The move still waits at retiring the old home; the new home serves the app.`
+  ).slice(0, 500)
+  const move = await readMove(ctx.moveId)
+  if (move) {
+    const steps = structuredClone(move.steps)
+    // undefined, not delete: saveSteps keeps a key the run's copy lacks from the stored list.
+    steps.finish_stop = undefined
+    steps.finish_refused = { at: new Date(ctx.e.now()).toISOString(), text }
+    await saveSteps(ctx, steps)
+  }
+  if (ctx.lockLost) return notOurs(ctx)
+  const ours = await patchMoveIfHolder(ctx.moveId, ctx.held.envToken, {
+    status: 'interrupted',
+    heartbeat_at: null,
+    step: 'release'
+  })
+  if (!ours) return notOurs(ctx)
+  const error = (await readMove(ctx.moveId))?.error ?? null
+  await closeDeployRow(ctx, 'interrupted', error)
+  ctx.run.log(`${text} (${err.code})`, 'error')
+  await ctx.run.fail(new Error(text))
 }
 
 async function restart(
   move: HubMoveRow,
   by: string,
   e: Env,
-  way: 'forward' | 'rollback' | 'keep'
+  way: 'forward' | 'rollback' | 'stop'
 ): Promise<void> {
   const ids = await sharedIdsOf(move.from_placement_id, move.to_placement_id)
   const held = await takeLocks(
@@ -1956,31 +2101,54 @@ async function restart(
   )
   let handedOff = false
   try {
-    const steps = structuredClone(move.steps)
-    steps.locks = lockTokens(held)
-    if (way === 'rollback' && steps.phase !== 'rollback') {
-      steps.phase = 'rollback'
-      steps.undo_reason = 'cancelled'
+    // Review N-8: the step list is written with a compare-and-set on the text read here, inside
+    // the lock: a write over a list that changed since (a Resume that stopped again) is refused,
+    // read again and tried once more.
+    let changed = 0
+    for (let attempt = 0; attempt < 2 && !changed; attempt++) {
+      const raw = await readStepsText(move.id)
+      const fresh = await readMove(move.id)
+      if (!fresh || raw === null) throw new MoveError('NOT_FOUND', 'No such move.', 404)
+      if (!OPEN_MOVE_STATUSES.includes(fresh.status))
+        throw new MoveError('MOVE_ENDED', `This move has ended (${fresh.status}).`)
+      if (way === 'stop' && !(await retireStopOf(fresh)))
+        throw new MoveError(
+          'NOT_STOPPED_AT_RETIRE',
+          'The move is no longer stopped at retiring the old home; reload it.'
+        )
+      const steps = structuredClone(fresh.steps)
+      steps.locks = lockTokens(held)
+      if (way === 'rollback' && steps.phase !== 'rollback') {
+        steps.phase = 'rollback'
+        steps.undo_reason = 'cancelled'
+      }
+      if (way === 'stop')
+        steps.finish_stop = { by: by || null, at: new Date(e.now()).toISOString() }
+      if (way !== 'rollback') steps.finish_refused = null
+      changed = await patchMove(
+        move.id,
+        {
+          status: 'running',
+          steps,
+          heartbeat_at: new Date(e.now()),
+          // Review I-2: a resume clears the stop it resumes from (a rollback keeps its reason;
+          // Finish keeps the stop's error, so a refused Finish leaves the stop as it was).
+          ...(way === 'forward' ? { error: null } : {})
+        },
+        {
+          status: way === 'stop' ? ['interrupted'] : ['interrupted', 'running', 'waiting'],
+          stepsText: raw
+        }
+      )
     }
-    if (way === 'keep') steps.finish_keep = { by: by || null, at: new Date(e.now()).toISOString() }
-    const changed = await patchMove(
-      move.id,
-      {
-        status: 'running',
-        steps,
-        heartbeat_at: new Date(e.now()),
-        // Review I-2: a resume clears the stop it resumes from (a rollback keeps its reason).
-        ...(way === 'rollback' ? {} : { error: null })
-      },
-      { status: way === 'keep' ? ['interrupted'] : ['interrupted', 'running', 'waiting'] }
-    )
-    if (!changed) throw new MoveError('MOVE_ENDED', 'This move has ended meanwhile.')
+    if (!changed)
+      throw new MoveError('MOVE_CHANGED', 'The move changed while this was being asked; reload it.')
     await db(DEPLOYS)
       .where({ move_id: move.id })
       .update({ status: 'running', heartbeat_at: new Date(e.now()), finished_at: null })
       .catch(() => null)
     const run = await e.startRun(
-      `${way === 'rollback' ? 'Roll back' : way === 'keep' ? 'Finish (old home kept)' : 'Resume'} move ${move.id}`,
+      `${way === 'rollback' ? 'Roll back' : way === 'stop' ? 'Finish (stop the old home)' : 'Resume'} move ${move.id}`,
       move.id,
       by
     )
@@ -1989,8 +2157,8 @@ async function restart(
       action:
         way === 'rollback'
           ? 'hub-move-cancel'
-          : way === 'keep'
-            ? 'hub-move-finish-keep'
+          : way === 'stop'
+            ? 'hub-move-finish-stop'
             : 'hub-move-start',
       user: by,
       collection: ENVS,
@@ -2059,11 +2227,6 @@ export async function setMoveChecklist(
     return stored
   })
   if (!known) throw new MoveError('UNKNOWN_ITEM', 'This move has no such checklist item.', 400)
-  // Round 1b: a kept old home stays in its shared list only while its retire item is open.
-  if (item === 'retire_source' && move.steps.finish_keep)
-    await mergeSteps(id, (stored) =>
-      stored.kept_source_open === !done ? null : { ...stored, kept_source_open: !done }
-    )
   await logActivity({
     action: 'hub-move-checklist',
     user: by,

@@ -26,11 +26,6 @@ import { openAppKey, type SharedDeployment, tenantIdFor } from './store.js'
  *     release). Never by ranking the step: B8's manual order runs place_on_target before
  *     files_warm / maintenance_on / wait_idle / files_delta. Listed as `maintenance` until
  *     release.
- *  4. P6-43 (b): an environment whose move OUT of here ended by "Finish and keep the old home"
- *     (a success whose steps carry `finish_keep`) while its `retire_source` checklist item is not
- *     ticked: the old home was kept on purpose, so it stays listed as `maintenance` until a person
- *     ticks that item (they retired it). Only those moves are read: their steps carry
- *     `kept_source_open: true` until the item is ticked (matched in SQL).
  * Archived environments are never listed. Only rule 1 rows are `placedHere` (they run this
  * deployment's version; an observed upgrade re-pins only them).
  *
@@ -133,22 +128,6 @@ export async function tenantsOf(shared: SharedDeployment): Promise<SharedTenantR
     if (placements.has(to) && m.placed_at != null)
       pick.set(envId, { placementId: to, forced: 'maintenance' })
   }
-  // Rule 4: a kept old home whose retire item is still open. Selected in SQL on the one flag the
-  // run keeps for exactly that (`"kept_source_open":true` in the steps text; longText on every
-  // engine), so only those moves are read; the checklist is still confirmed below.
-  const kept = (await db(MOVES)
-    .where({ status: 'success' })
-    .whereIn('from_placement_id', ids)
-    .where('steps', 'like', '%"kept_source_open":true%')
-    .select('environment_id', 'from_placement_id', 'steps', 'checklist')) as Record<
-    string,
-    unknown
-  >[]
-  for (const m of kept) {
-    const envId = Number(m.environment_id)
-    if (pick.has(envId) || !keptOldHome(m)) continue
-    pick.set(envId, { placementId: Number(m.from_placement_id), forced: 'maintenance' })
-  }
   if (!pick.size) return []
 
   const envRows = (await db(ENVS).whereIn('id', [...pick.keys()])) as Record<string, unknown>[]
@@ -173,27 +152,6 @@ export async function tenantsOf(shared: SharedDeployment): Promise<SharedTenantR
     out.push({ env, app, placement, wireStatus, placedHere: p.forced === null })
   }
   return out.sort((a, b) => tenantIdFor(a.app, a.env).localeCompare(tenantIdFor(b.app, b.env)))
-}
-
-function parsed(v: unknown): unknown {
-  if (typeof v !== 'string') return v ?? null
-  try {
-    return JSON.parse(v)
-  } catch {
-    return null
-  }
-}
-
-/** Rule 4: the move kept its old home on purpose and nobody has ticked the retire item yet. */
-function keptOldHome(m: Record<string, unknown>): boolean {
-  const steps = parsed(m.steps) as { finish_keep?: unknown } | null
-  if (!steps || typeof steps !== 'object' || !steps.finish_keep) return false
-  const list = parsed(m.checklist)
-  if (!Array.isArray(list)) return true
-  const item = list.find((c) => (c as { id?: unknown } | null)?.id === 'retire_source') as
-    | { done?: unknown }
-    | undefined
-  return item?.done !== true
 }
 
 /** The database row id an environment's db_ref names (`hub-db:<id>`, phase 3), or null. */

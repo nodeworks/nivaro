@@ -8,10 +8,11 @@ import { type HubMoveRow, listMoves, readMove } from '../services/hub/move/rows.
 import {
   cancelMove,
   confirmRoute,
-  finishKeepSource,
+  finishStopSource,
   MoveError,
   planFor,
   resumeMove,
+  retireStopOf,
   type StartBody,
   setMoveChecklist,
   startMove
@@ -39,11 +40,14 @@ import { HubSecretError } from '../services/hub/secrets.js'
  *   POST /moves/:id/resume                       → 202 (interrupted only)
  *   POST /moves/:id/confirm-route                → {data: {serving}}
  *   POST /moves/:id/checklist {item, done}       → {data: checklist}
- *   POST /moves/:id/finish-keep-source {confirm}  → 202; P6-43 (b) "Finish and keep the old home":
- *                                                a move stopped at retire_source ends success
- *                                                without retiring the old home (400
- *                                                CONFIRM_MISMATCH; 409 NOT_RELEASED |
- *                                                NOT_STOPPED_AT_RETIRE | MOVE_ENDED)
+ *   POST /moves/:id/finish-stop-source {confirm}  → 202; P6-45 "Finish and stop the old home":
+ *                                                a retire_source key stop whose old home the
+ *                                                Hub can stop ends success once that stop is
+ *                                                proven (400 CONFIRM_MISMATCH; 409 NOT_RELEASED
+ *                                                | NOT_STOPPED_AT_RETIRE | CANNOT_STOP_OLD_HOME
+ *                                                | MOVE_CHANGED | MOVE_ENDED)
+ * A move answered carries `retire_stop` (run.ts retireStopOf, the one predicate the admin reads):
+ * the retire_source key stop and its ways out, or null.
  *
  * Reads heal first: a move whose run stopped elsewhere shows `interrupted`. At boot the Hub heals
  * every stale move (beside the phase-2 promotion heal). Refusals are `{statusCode, error,
@@ -104,6 +108,11 @@ function publicMove(m: HubMoveRow) {
   return withoutSealed({ ...m, steps }) as HubMoveRow
 }
 
+/** A move as answered, with its retire_source stop (the one predicate, review N-7). */
+async function answeredMove(m: HubMoveRow) {
+  return { ...publicMove(m), retire_stop: await retireStopOf(m) }
+}
+
 export function hubMoveRoutes(app: FastifyInstance) {
   // Once per process start, beside the promotion heal: moves a dead process left open.
   app.addHook('onReady', async () => {
@@ -139,7 +148,7 @@ export function hubMoveRoutes(app: FastifyInstance) {
     await healMoves({}, id).catch(() => 0)
     const m = await readMove(id)
     if (!m) return refuse(reply, 404, 'NOT_FOUND', 'No such move.')
-    return reply.send({ data: publicMove(m) })
+    return reply.send({ data: await answeredMove(m) })
   })
 
   app.get('/environments/:envId/moves', { preHandler: requireAdmin }, async (req, reply) => {
@@ -148,7 +157,7 @@ export function hubMoveRoutes(app: FastifyInstance) {
     if (!(await db(ENVS).where({ id: envId }).first('id')))
       return refuse(reply, 404, 'NOT_FOUND', 'No such environment.')
     await healMoves().catch(() => 0)
-    return reply.send({ data: (await listMoves(envId)).map(publicMove) })
+    return reply.send({ data: await Promise.all((await listMoves(envId)).map(answeredMove)) })
   })
 
   app.post('/moves/:id/cancel', { preHandler: requireAdmin }, async (req, reply) => {
@@ -171,12 +180,12 @@ export function hubMoveRoutes(app: FastifyInstance) {
     })
   })
 
-  app.post('/moves/:id/finish-keep-source', { preHandler: requireAdmin }, async (req, reply) => {
+  app.post('/moves/:id/finish-stop-source', { preHandler: requireAdmin }, async (req, reply) => {
     const id = idOf(req)
     if (id === null) return refuse(reply, 404, 'NOT_FOUND', 'No such move.')
     await healMoves({}, id).catch(() => 0)
     return guarded(reply, async () => {
-      await finishKeepSource(id, body(req).confirm, userId(req))
+      await finishStopSource(id, body(req).confirm, userId(req))
       return reply.code(202).send({ data: { finishing: true } })
     })
   })

@@ -15,9 +15,14 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 //
 // Round 1 (rulings P6-43, I-2, M-1, M-2): the key check is the REAL one (ops.ts verifyTargetKey /
 // targetKeyFp over fake deployment and hub-link clients that report what the new home runs), the
-// fix goes through the REAL App key PUT route (taken only when it matches the new home's report),
-// and "Finish and keep the old home" (POST /moves/:id/finish-keep-source, typed confirm) ends a
-// move whose key never checks without retiring the old home.
+// fix goes through the REAL App key PUT route (taken only when it matches the new home's report).
+//
+// Round 2 (ruling P6-45, review N-5..N-8): "Finish and stop the old home" (POST
+// /moves/:id/finish-stop-source, typed confirm) STOPS the old home, proven — a shared old home
+// drops the app from its list, a Docker one has its services removed through the agent (real
+// ops.ts stopSource over a fake agent) and shows nothing running — and only then ends the move; a
+// stop it cannot prove leaves the move at the stop; a kind it cannot stop (GitLab) is refused.
+// Every move answered carries `retire_stop`, the one predicate the admin reads.
 
 vi.mock('../../../db/index.js', async () => {
   const knex = (await import('knex')).default
@@ -192,6 +197,8 @@ function planOf(kind: MoveKind): MovePlan {
 const home = {
   fp: null as string | null,
   unreachable: false,
+  /** Use the REAL ops.ts stopSource (a Docker old home) over the fake agent below. */
+  realStop: false,
   /** Runs before each real key check (a test looks at the stored move then). */
   onCheck: null as null | (() => Promise<void>)
 }
@@ -232,6 +239,7 @@ function fakeOps() {
     unroute: rec('unroute', () => undefined),
     verifyName: rec('verifyName', () => true),
     retireSource: rec('retireSource', () => undefined),
+    stopSource: rec('stopSource', () => undefined),
     // Replaced by the real ones in useDeps (realKeyOps).
     verifyTargetKey: rec('verifyTargetKey', () => undefined),
     targetKeyFp: rec('targetKeyFp', () => home.fp),
@@ -258,11 +266,46 @@ function reportOf() {
 const fakeClient = (() => ({ appStatus: async () => reportOf() })) as never
 const fakeLink = (() => ({ sharedReadiness: async () => reportOf() })) as never
 
+/** A fake Hub agent for an old Docker stack: its services and what each runs. */
+const agentState = {
+  running: 0,
+  /** After the remove: running drops to 0 at the next status read (or never). */
+  stopsAfterRemove: true,
+  unreadable: false,
+  removed: [] as Array<{ stack: string; removeVolumes: unknown }>
+}
+const fakeAgent = {
+  agentRemove: async (_d: unknown, stack: string, o: { removeVolumes?: unknown }) => {
+    agentState.removed.push({ stack, removeVolumes: o?.removeVolumes })
+    return { removed: [] } as never
+  },
+  agentStack: async (_d: unknown, stack: string) => {
+    if (agentState.unreadable) throw Object.assign(new Error('no answer'), { code: 'X' })
+    if (agentState.removed.length && agentState.stopsAfterRemove) agentState.running = 0
+    if (agentState.running === 0 && agentState.removed.length) return null
+    return {
+      name: stack,
+      services: [{ name: 'api', replicas: { desired: 1, running: agentState.running } }]
+    } as never
+  }
+}
+
 /** The fake ops, with the REAL key check (ops.ts) over the fake clients. */
 function realKeyOps(move: Parameters<typeof defaultMoveOps>[0], p: MovePlan): MoveOps {
-  const real = defaultMoveOps(move, p, { client: fakeClient, link: fakeLink, sleep })
+  const real = defaultMoveOps(move, p, {
+    client: fakeClient,
+    link: fakeLink,
+    sleep,
+    now,
+    agent: fakeAgent as never
+  })
   return {
     ...fake.ops,
+    stopSource: async () => {
+      if (!home.realStop) return fake.ops.stopSource()
+      fake.calls.push('stopSource')
+      return real.stopSource()
+    },
     targetKeyFp: async () => {
       fake.calls.push('targetKeyFp')
       return real.targetKeyFp()
@@ -370,12 +413,17 @@ async function buildHttp() {
 }
 const putKey = (envId: number, key: string) =>
   http.inject({ method: 'PUT', url: `/api/hub/environments/${envId}/app-key`, payload: { key } })
-const finishKeep = (id: number, confirm: string) =>
+const finishStop = (id: number, confirm: string) =>
   http.inject({
     method: 'POST',
-    url: `/api/hub/moves/${id}/finish-keep-source`,
+    url: `/api/hub/moves/${id}/finish-stop-source`,
     payload: { confirm }
   })
+/** The move as the admin reads it (with `retire_stop`, the one predicate). */
+const getMove = async (id: number) =>
+  (await http.inject({ method: 'GET', url: `/api/hub/moves/${id}` })).json().data
+/** Review N-5: the only code in a sentence people read is the leading one. */
+const codesIn = (text: string) => text.match(/\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b/g) ?? []
 
 const fp = (k: string) => keyFingerprint(k)
 
@@ -393,6 +441,11 @@ beforeEach(() => {
   home.fp = fp(NEW_KEY)
   home.unreachable = false
   home.onCheck = null
+  home.realStop = false
+  agentState.running = 0
+  agentState.stopsAfterRemove = true
+  agentState.unreadable = false
+  agentState.removed = []
   fake = fakeOps()
   runOut.failed = []
   runOut.completed = []
@@ -406,12 +459,13 @@ async function listedOnSource(w: World): Promise<string | null> {
 
 async function stoppedAtRetire(w: World, kind: MoveKind, id: number) {
   const m = await readMove(id)
-  // Open, with a clear reason: the code, what it means, both ways out (P6-43 (c)).
+  // Open, with a clear reason: the code, then only what happened (N-6: the ways out are in the
+  // item and the admin's copy, once each), and no other code (N-5).
   expect(m?.status).toBe('interrupted')
   expect(m?.error).toMatch(/^APP_KEY_MISMATCH: /)
-  expect(m?.error).toContain('the old home was not retired')
-  expect(m?.error).toContain('then Resume')
-  expect(m?.error).toContain('Finish and keep the old home')
+  expect(m?.error).toContain('The old home was not retired.')
+  expect(m?.error).not.toMatch(/Resume|Finish/)
+  expect(codesIn(m?.error ?? '')).toEqual(['APP_KEY_MISMATCH'])
   expect(m?.finished_at).toBeNull()
   // The real check was retried (about a minute) before the run stopped.
   expect(fake.calls.filter((c) => c === 'verifyTargetKey').length).toBeGreaterThanOrEqual(3)
@@ -422,7 +476,12 @@ async function stoppedAtRetire(w: World, kind: MoveKind, id: number) {
   expect(m?.step).toBe('release')
   const item = m?.checklist.find((c) => c.id === 'retire_source')
   expect(item?.done).toBe(false)
-  expect(item?.text).toMatch(/^Do not retire the old home yet: /)
+  expect(item?.text).toMatch(/^Do not remove the old home yet\. /)
+  expect(codesIn(item?.text ?? '')).toEqual([])
+  // The one predicate, as the admin reads it.
+  const answered = await getMove(id)
+  expect(answered.retire_stop).toMatchObject({ kind: 'key', finish: true })
+  expect(answered.retire_stop.case).toBe(kind === 'to_dedicated' ? 'key_entry' : 'shared')
   expect((await db('nivaro_hub_deploys').where({ move_id: id }).first()).status).toBe('interrupted')
   expect(runOut.completed).toEqual([])
   expect(runOut.failed.at(-1)).toMatch(/APP_KEY_MISMATCH/)
@@ -576,47 +635,60 @@ for (const kind of ['to_shared', 'between_shared'] as MoveKind[]) {
 
 // ── no key reported, or the new home cannot be reached ───────────────────────────────────────
 
-describe('APP_KEY_UNKNOWN: the new home reports no key', () => {
-  it('no PUT can match it; Finish and keep the old home ends the move without retiring it', async () => {
+describe('P6-45 Finish and stop the old home: a shared old home', () => {
+  it('APP_KEY_UNKNOWN: no PUT matches; Finish drops the app from the old list, proven, then ends', async () => {
     home.fp = null
     const w = await world('shared')
     const id = await startMove(w, 'to_dedicated')
     const m = await readMove(id)
     expect(m?.status).toBe('interrupted')
     expect(m?.error).toMatch(/^APP_KEY_UNKNOWN: /)
-    expect(m?.error).toContain('Finish and keep the old home')
+    expect((await getMove(id)).retire_stop).toMatchObject({
+      kind: 'key',
+      case: 'no_key',
+      finish: true,
+      key_entry: false
+    })
+    // The item states the ways that can work, each once: no "enter the key" for no_key.
+    const item = m?.checklist.find((c) => c.id === 'retire_source')?.text ?? ''
+    expect(item).toContain("make it report the app's key, then Resume")
+    expect(item).not.toContain('App key on this environment')
+    expect(item).toContain('Or Finish and stop the old home')
     const put = await putKey(w.envId, SECRET_KEY)
     expect(put.statusCode).toBe(409)
     expect(put.json()).toMatchObject({ code: 'APP_KEY_UNVERIFIED', reason: 'NO_KEY_FP' })
-    expect(put.json().message).toContain('Finish and keep the old home')
+    expect(codesIn(put.json().message)).toEqual([])
 
     // A wrong typed confirm is refused; nothing changes.
-    const bad = await finishKeep(id, 'nope')
+    const bad = await finishStop(id, 'nope')
     expect(bad.statusCode).toBe(400)
     expect(bad.json().code).toBe('CONFIRM_MISMATCH')
     expect((await readMove(id))?.status).toBe('interrupted')
+    expect(await listedOnSource(w)).toBe('maintenance')
 
-    // Finish and keep the old home.
+    // Finish and stop the old home.
     fake = fakeOps()
     useDeps()
-    const fin = await finishKeep(id, `${w.appKey}/prod`)
+    const fin = await finishStop(id, `${w.appKey}/prod`)
     expect(fin.statusCode).toBe(202)
     await Run.awaitMove(id)
     const done = await readMove(id)
     expect(done?.status).toBe('success')
-    expect(done?.error).toContain('the old home was kept and not retired')
+    expect(done?.error).toContain('the old home was stopped, not removed')
+    // Stopped, proven (every replica holds the list without the app), never retired or removed.
+    expect(fake.calls).toContain('stopSource')
     expect(fake.calls).not.toContain('retireSource')
     expect(fake.calls).not.toContain('verifyTargetKey')
-    const item = done?.checklist.find((c) => c.id === 'retire_source')
-    expect(item?.done).toBe(false)
-    expect(item?.text).toMatch(/^The old home was kept on purpose/)
-    expect(done?.steps.kept_source_open).toBe(true)
-    // MOVE_OPEN lifts; the move cannot be finished twice or cancelled.
+    expect(await listedOnSource(w)).toBeNull()
+    const kept = done?.checklist.find((c) => c.id === 'retire_source')
+    expect(kept?.done).toBe(false)
+    expect(kept?.text).toMatch(/^Remove the old home when you're sure: it is stopped/)
+    expect(kept?.text).toContain('data, settings and sealed secrets are kept')
+    // MOVE_OPEN lifts (only now); the move cannot be finished twice or cancelled.
     expect(await moveOpenRefusal({ envIds: [w.envId] })).toBeNull()
-    expect((await finishKeep(id, `${w.appKey}/prod`)).json().code).toBe('MOVE_ENDED')
+    expect((await finishStop(id, `${w.appKey}/prod`)).json().code).toBe('MOVE_ENDED')
     expect(await refusal(Run.cancelMove(id, 'u'))).toMatchObject({ code: 'MOVE_ENDED' })
-    // The shared old home is still in place (listed, maintenance) until the item is ticked.
-    expect(await listedOnSource(w)).toBe('maintenance')
+    // Ticking the remove item changes nothing on the list (no list rule reads finished moves).
     const tick = await http.inject({
       method: 'POST',
       url: `/api/hub/moves/${id}/checklist`,
@@ -624,22 +696,115 @@ describe('APP_KEY_UNKNOWN: the new home reports no key', () => {
     })
     expect(tick.statusCode).toBe(200)
     expect(await listedOnSource(w)).toBeNull()
-    // Round 1b: the list reads this move through one flag, kept in step with the item.
-    expect((await readMove(id))?.steps.kept_source_open).toBe(false)
-    const untick = await http.inject({
-      method: 'POST',
-      url: `/api/hub/moves/${id}/checklist`,
-      payload: { item: 'retire_source', done: false }
-    })
-    expect(untick.statusCode).toBe(200)
-    expect((await readMove(id))?.steps.kept_source_open).toBe(true)
+  })
+
+  it('a stop the Hub cannot prove: Finish is refused, the move stays at the stop, the app listed again', async () => {
+    home.fp = null
+    const w = await world('shared')
+    const id = await startMove(w, 'to_dedicated')
+    const before = await readMove(id)
+    fake = fakeOps()
+    useDeps()
+    fake.ops.stopSource = async () => {
+      fake.calls.push('stopSource')
+      throw new MoveStepError(
+        'OLD_HOME_NOT_STOPPED',
+        'Not every replica of the shared deployment has dropped the app yet.'
+      )
+    }
+    expect((await finishStop(id, `${w.appKey}/prod`)).statusCode).toBe(202)
+    await Run.awaitMove(id)
+    const m = await readMove(id)
+    expect(m?.status).toBe('interrupted')
+    expect(m?.error).toBe(before?.error)
+    expect(m?.step).toBe('release')
+    expect(m?.steps.finish_stop).toBeUndefined()
     expect(await listedOnSource(w)).toBe('maintenance')
-    // Only flagged moves are read: the other finished moves out of this deployment are not.
-    const flagged = await db('nivaro_hub_moves')
-      .where({ status: 'success' })
-      .where('steps', 'like', '%"kept_source_open":true%')
-      .pluck('id')
-    expect(flagged.map(Number)).toEqual([id])
+    const answered = await getMove(id)
+    expect(answered.retire_stop?.finish_refused).toContain(
+      'Finish and stop the old home was refused: Not every replica'
+    )
+    expect(codesIn(answered.retire_stop?.finish_refused ?? '')).toEqual([])
+    expect(await moveOpenRefusal({ envIds: [w.envId] })).toMatchObject({ code: 'MOVE_OPEN' })
+    // Once the replicas answer: Finish again ends it, and the refusal is gone.
+    fake = fakeOps()
+    useDeps()
+    expect((await finishStop(id, `${w.appKey}/prod`)).statusCode).toBe(202)
+    await Run.awaitMove(id)
+    expect((await readMove(id))?.status).toBe('success')
+    expect((await readMove(id))?.steps.finish_refused ?? null).toBeNull()
+  })
+})
+
+describe('P6-45 Finish and stop the old home: a Docker old home', () => {
+  it('the agent removes its services (volumes and the Hub rows kept), proven at 0 running', async () => {
+    const w = await world('docker')
+    await stackWithKey(w.envId, SECRET_KEY)
+    const id = await startMove(w, 'to_shared')
+    expect((await getMove(id)).retire_stop).toMatchObject({ case: 'shared', finish: true })
+    home.realStop = true
+    agentState.running = 2
+    fake = fakeOps()
+    useDeps()
+    expect((await finishStop(id, `${w.appKey}/prod`)).statusCode).toBe(202)
+    await Run.awaitMove(id)
+    const done = await readMove(id)
+    expect(done?.status).toBe('success')
+    expect(agentState.removed).toEqual([{ stack: `acme-prod${seq}`, removeVolumes: false }])
+    // Its settings and sealed secrets stay so it can be restored by hand.
+    expect((await stackSecrets(w.envId)).ENCRYPTION_KEY).toBe(SECRET_KEY)
+    expect(done?.checklist.find((c) => c.id === 'retire_source')?.text).toContain(
+      'its Docker stack has no service left (volumes kept)'
+    )
+    expect(fake.calls).not.toContain('retireSource')
+  })
+
+  it('a stack that keeps running: refused after five minutes with a plain reason, nothing ends', async () => {
+    const w = await world('docker')
+    const id = await startMove(w, 'to_shared')
+    home.realStop = true
+    agentState.running = 1
+    agentState.stopsAfterRemove = false
+    fake = fakeOps()
+    useDeps()
+    expect((await finishStop(id, `${w.appKey}/prod`)).statusCode).toBe(202)
+    await Run.awaitMove(id)
+    const m = await readMove(id)
+    expect(m?.status).toBe('interrupted')
+    expect(m?.error).toMatch(/^APP_KEY_MISMATCH: /)
+    const refused = (await getMove(id)).retire_stop?.finish_refused ?? ''
+    expect(refused).toContain('still runs 1 task(s) five minutes after it was asked to stop')
+    expect(await moveOpenRefusal({ envIds: [w.envId] })).toMatchObject({ code: 'MOVE_OPEN' })
+  })
+})
+
+describe('P6-45: an old home the Hub cannot stop (GitLab)', () => {
+  it('Finish is not offered and the server refuses it: enter the key, then Resume', async () => {
+    const w = await world('docker')
+    const gitlab = await insertId('nivaro_hub_drivers', {
+      kind: 'gitlab',
+      name: `gitlab${seq}`,
+      config: JSON.stringify({})
+    })
+    const gl = await insertId('nivaro_hub_placements', {
+      kind: 'dedicated',
+      driver_id: gitlab,
+      target: JSON.stringify({ project: 'acme/app' })
+    })
+    await db('nivaro_hub_environments').where({ id: w.envId }).update({ placement_id: gl })
+    const id = await startMove(w, 'to_shared')
+    const stop = (await getMove(id)).retire_stop
+    expect(stop).toMatchObject({ case: 'shared', finish: false })
+    expect((await readMove(id))?.checklist.find((c) => c.id === 'retire_source')?.text).toContain(
+      'The Hub cannot stop this old home itself'
+    )
+    const res = await finishStop(id, `${w.appKey}/prod`)
+    expect(res.statusCode).toBe(409)
+    expect(res.json().code).toBe('CANNOT_STOP_OLD_HOME')
+    expect(res.json().message).toContain(
+      'Enter the key the new home runs under App key, then Resume'
+    )
+    expect((await readMove(id))?.status).toBe('interrupted')
   })
 })
 
@@ -650,11 +815,17 @@ describe('M-1: the new home cannot be reached to check its key', () => {
     const id = await startMove(w, 'to_shared')
     const m = await readMove(id)
     expect(m?.status).toBe('interrupted')
-    // Round 1b: its own code (the admin recognises the case by it); the link's code inside.
+    // Round 1b: its own code (the admin recognises the case by it); N-5: no other code.
     expect(m?.error).toMatch(/^APP_KEY_UNCHECKED_UNREACHABLE: /)
-    expect(m?.error).toContain('(LINK_UNREACHABLE: ')
+    expect(codesIn(m?.error ?? '')).toEqual(['APP_KEY_UNCHECKED_UNREACHABLE'])
     expect(m?.error).toContain('could not reach the new home to check its key')
-    expect(m?.error).toContain('Resume to try again')
+    expect((await getMove(id)).retire_stop).toMatchObject({
+      kind: 'unreachable',
+      case: 'unreachable'
+    })
+    expect(m?.checklist.find((c) => c.id === 'retire_source')?.text).toContain(
+      'Resume to try again'
+    )
     const item = m?.checklist.find((c) => c.id === 'retire_source')?.text ?? ''
     for (const text of [m?.error ?? '', item]) {
       expect(text).not.toMatch(/enter (the|its|this) (app's )?key/i)
@@ -690,7 +861,7 @@ describe('I-2: a resumed stop no longer carries its old error', () => {
     expect((await readMove(id))?.error).toMatch(/^APP_KEY_MISMATCH/)
   })
 
-  it('Finish and keep is refused before release and on a rollback that stopped', async () => {
+  it('Finish and stop is refused before release and on a rollback that stopped', async () => {
     const w = await world('docker')
     const id = await startMove(w, 'to_shared')
     // Rewind the stored move to an interrupted ROLLBACK before release carrying an APP_KEY error
@@ -709,8 +880,8 @@ describe('I-2: a resumed stop no longer carries its old error', () => {
         step: 'target_ready',
         error: 'APP_KEY_MISMATCH: Another key.'
       })
-    expect(Run.retireStopOf(await readMove(id))).toBeNull()
-    expect((await finishKeep(id, `${w.appKey}/prod`)).json().code).toBe('NOT_RELEASED')
+    expect(await Run.retireStopOf(await readMove(id))).toBeNull()
+    expect((await finishStop(id, `${w.appKey}/prod`)).json().code).toBe('NOT_RELEASED')
     // And the App key PUT is judged as usual there (not against a "new home").
     expect(await Run.retireStopFor(w.envId)).toBeNull()
   })
@@ -734,6 +905,11 @@ describe('M-2: a run that stopped after the key checked', () => {
     await db('nivaro_hub_moves')
       .where({ id })
       .update({ status: 'interrupted', step: 'retire_source', steps: JSON.stringify(steps) })
+    // Review N-7: a run cut off mid-retire after the key passed is Resume only: no stop, no
+    // Finish, and the App key PUT is judged as usual.
+    expect((await getMove(id)).retire_stop).toBeNull()
+    expect((await finishStop(id, `${w.appKey}/prod`)).json().code).toBe('NOT_STOPPED_AT_RETIRE')
+    expect(await Run.retireStopFor(w.envId)).toBeNull()
     // Meanwhile the deployment reports another key: it is not asked again.
     home.fp = fp(NEW_KEY)
     await resumeAndWait(id)
@@ -790,5 +966,30 @@ describe('other retire outcomes', () => {
     expect(m?.status).toBe('success')
     expect(m?.error).toMatch(/not retired \(SOURCE_NOT_RETIRED\)/)
     expect(m?.checklist.find((c) => c.id === 'retire_source')?.done).toBe(false)
+  })
+})
+
+describe('N-8: Finish and Resume write the step list by compare-and-set', () => {
+  it('a write over a step list that changed since it was read writes nothing', async () => {
+    const w = await world('docker')
+    const id = await startMove(w, 'to_shared')
+    const { patchMove, readStepsText } = await import('../../../services/hub/move/rows.js')
+    const raw = (await readStepsText(id)) as string
+    // Another writer changes the list.
+    await db('nivaro_hub_moves')
+      .where({ id })
+      .update({ steps: raw.replace('"phase":"forward"', '"phase":"forward","x":1') })
+    expect(await patchMove(id, { status: 'running' }, { stepsText: raw })).toBe(0)
+    expect((await readMove(id))?.status).toBe('interrupted')
+    // Read again: the write goes through.
+    expect(
+      await patchMove(
+        id,
+        { error: (await readMove(id))?.error ?? null },
+        {
+          stepsText: (await readStepsText(id)) as string
+        }
+      )
+    ).toBe(1)
   })
 })

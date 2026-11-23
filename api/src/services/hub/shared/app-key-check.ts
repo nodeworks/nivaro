@@ -151,7 +151,7 @@ async function decideAtRetireStop(
       action: 'refuse',
       fp,
       code: 'APP_KEY_IMMUTABLE',
-      message: `This app already runs on a shared deployment with the encryption key the Hub holds (fingerprint ${storedFp}). A different key (fingerprint ${fp}) would leave every value it sealed unreadable, so it cannot be changed here. Resume once the deployment reports that key, or Finish and keep the old home.`
+      message: `This app already runs on a shared deployment with the encryption key the Hub holds (fingerprint ${storedFp}). A different key (fingerprint ${fp}) would leave every value it sealed unreadable, so it cannot be changed here. Wait until the deployment reports that key, then Resume the move.`
     }
   if ('code' in newHome)
     return {
@@ -159,7 +159,8 @@ async function decideAtRetireStop(
       fp,
       code: 'APP_KEY_UNVERIFIED',
       reason: newHome.code,
-      message: `The Hub could not ask the new home which key it runs (${newHome.code}), so nothing was changed. Try again, or Finish and keep the old home.`
+      message:
+        'The Hub could not ask the new home which key it runs, so nothing was changed. Try again in a moment.'
     }
   if (newHome.fp === null)
     return {
@@ -167,14 +168,14 @@ async function decideAtRetireStop(
       fp,
       code: 'APP_KEY_UNVERIFIED',
       reason: 'NO_KEY_FP',
-      message: `The new home reports no encryption key for this app, so the key entered (fingerprint ${fp}) cannot be checked against it and nothing was changed.${held} Finish and keep the old home ends the move without retiring it.`
+      message: `The new home reports no encryption key for this app, so the key entered (fingerprint ${fp}) cannot be checked against it and nothing was changed.${held} Make the new home report the app's key, then Resume the move.`
     }
   if (newHome.fp !== fp)
     return {
       action: 'refuse',
       fp,
       code: 'APP_KEY_MISMATCH',
-      message: `The new home reports the key with fingerprint ${newHome.fp}; the key entered has fingerprint ${fp}, so nothing was changed.${held} Enter the key the new home runs, or Finish and keep the old home.`
+      message: `The new home reports the key with fingerprint ${newHome.fp}; the key entered has fingerprint ${fp}, so nothing was changed.${held} Enter the key the new home runs.`
     }
   if (storedFp === fp) return { action: 'unchanged', fp }
   return { action: 'save', fp, verified: newHome.source }

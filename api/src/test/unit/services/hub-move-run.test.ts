@@ -217,6 +217,7 @@ function fakeOps() {
     verifyName: rec('verifyName', (_e: unknown) => state.serving),
     retireSource: rec('retireSource', () => undefined),
     verifyTargetKey: rec('verifyTargetKey', () => undefined),
+    stopSource: rec('stopSource', () => undefined),
     targetKeyFp: rec('targetKeyFp', () => null as string | null),
     dropTempHost: rec('dropTempHost', () => null as string | null),
     revokeTickets: rec('revokeTickets', () => undefined),
@@ -2331,8 +2332,8 @@ describe('the app key across moves (E2E B4, P6-38)', () => {
     expect(item).toMatchObject({ done: false })
     expect(fake.names()).not.toContain('retireSource')
     // F4-1 (P6-39): what to do, not "retire by hand".
-    expect(item?.text).toMatch(/^Do not retire the old home yet: /)
-    expect(item?.text).toContain('Finish and keep the old home')
+    expect(item?.text).toMatch(/^Do not remove the old home yet\. /)
+    expect(item?.text).toContain('Or Finish and stop the old home')
     expect(item?.text).not.toMatch(/^Retire the old placement by hand/)
     // Retried with backoff for about a minute before giving up.
     expect(fake.names().filter((n) => n === 'verifyTargetKey').length).toBeGreaterThanOrEqual(3)

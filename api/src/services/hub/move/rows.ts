@@ -89,14 +89,13 @@ export interface MoveSteps {
    * a retire that started (review M-2).
    */
   retire_key_checked_at?: string | null
-  /** P6-43 (b): a person chose "Finish and keep the old home" (typed confirm) after release. */
-  finish_keep?: { by: string | null; at: string }
   /**
-   * Round 1b: true while a finished-and-kept move's manual retire item is open (set by
-   * finishKept, flipped by setMoveChecklist). The one fact tenants.ts rule 4 selects on in SQL:
-   * the stored JSON text holds `"kept_source_open":true` exactly then.
+   * P6-45: a person chose "Finish and stop the old home" (typed confirm) at a retire_source key
+   * stop after release; the run stops the old home (proven) and ends the move.
    */
-  kept_source_open?: boolean
+  finish_stop?: { by: string | null; at: string }
+  /** P6-45: the last Finish was refused (the old home's stop not proven): its plain reason. */
+  finish_refused?: { at: string; text: string } | null
   /** The run's own lock tokens (env + shared), which heal frees by compare-and-delete. */
   locks?: { env: string; shared: Array<{ id: number; token: string }> }
   /** Where each dedicated side is reached (addresses.ts), resolved and probed at start. */
@@ -251,7 +250,7 @@ export async function patchMove(
     heartbeat_at: Date | null
     job_run_id: number | null
   }>,
-  where: { status?: readonly MoveStatus[] } = {}
+  where: { status?: readonly MoveStatus[]; stepsText?: string } = {}
 ): Promise<number> {
   const row: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(patch)) {
@@ -266,7 +265,15 @@ export async function patchMove(
   if (!Object.keys(row).length) return 0
   const q = db(MOVES).where({ id })
   if (where.status) q.whereIn('status', where.status as string[])
+  // Review N-8: compare-and-set on the step list text the caller read.
+  if (where.stepsText !== undefined) q.where({ steps: where.stepsText })
   return Number(await q.update(row))
+}
+
+/** The stored step list text as it is (for a compare-and-set write), or null. */
+export async function readStepsText(id: number): Promise<string | null> {
+  const row = (await db(MOVES).where({ id }).first('steps')) as { steps: unknown } | undefined
+  return row?.steps == null ? null : String(row.steps)
 }
 
 /**
