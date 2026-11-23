@@ -1005,9 +1005,16 @@ function IssueList({ issues, level }: { issues: MoveIssue[]; level: 'blocker' | 
               </span>
             )}
             {copy.detail && (
-              <span className='mt-0.5 block break-words text-[11px] text-slate-600 dark:text-slate-400'>
-                {copy.detail}
-              </span>
+              // Design N3: the planner's own sentence repeats the plain words more often than not;
+              // it sits behind "Why" so a long plan stays readable (a phone especially).
+              <details className='mt-0.5 text-[11px]'>
+                <summary className='cursor-pointer select-none text-slate-600 dark:text-slate-400'>
+                  Why
+                </summary>
+                <span className='block break-words text-slate-600 dark:text-slate-400'>
+                  {copy.detail}
+                </span>
+              </details>
             )}
           </li>
         )
