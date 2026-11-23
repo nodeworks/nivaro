@@ -1124,8 +1124,8 @@ export async function takeBootWarm(
 ): Promise<boolean> {
   if (!redis) return true
   // Inside an app (Hub shared deployment): once per app per version. Self-hosted: unchanged.
-  const app = currentTenantKey()
-  const key = app ? `nvr:warm:${app}:${version}` : `nvr:warm:${version}`
+  const tenant = currentTenantKey()
+  const key = `nvr:warm:${tenant ? `${tenant}:` : ''}${version}`
   const res = await redis.set(key, holder, 'EX', BOOT_WARM_HOLD_SECONDS, 'NX')
   return res === 'OK'
 }

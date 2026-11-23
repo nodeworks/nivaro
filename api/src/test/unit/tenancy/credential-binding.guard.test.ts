@@ -366,8 +366,6 @@ const NVR_ALLOW: Record<string, string> = {
   'services/huddle-turn-monitor.ts :: nvr:huddle:probe:history': PROC,
   'services/huddle-turn-monitor.ts :: nvr:huddle:probe:state': PROC,
   'services/infra-swarm/health.ts :: nvr:infra:health:': PROC,
-  'services/cache-warm.ts :: nvr:warm:':
-    'once per cluster per version by design: the boot warm runs outside any app, and on a multi-tenant deployment it skips the per-app query and viewer phases (runCacheWarm: cq: keys carry no app), so there is nothing per app to warm (Task 22 checked)',
   'services/traffic-actions/temp-cache.ts :: nvr:tm:cache:stats:': TM,
   'services/traffic-actions/timed-rules.ts :: nvr:tm:actions': TM,
   'services/traffic-actions/timed-rules.ts :: nvr:tm:actions:end:': TM,
