@@ -123,7 +123,11 @@ export interface MoveOps {
   targetUnretire(): Promise<void>
   /** Schema ok + preflight ok + key fingerprint, ≤ 10 min. */
   targetReady(): Promise<void>
-  deployTarget(): Promise<void>
+  /**
+   * R2-M-7: `stopRequested` is the run's cancel check; a GitLab deploy polls it at every wait
+   * and before playing a manual job (a stopped deploy throws ABORTED).
+   */
+  deployTarget(opts?: { stopRequested?: () => Promise<boolean> }): Promise<void>
   /**
    * P6-26 Rule 1 (dedicated target only): hub-link maintenance on over the target's own address
    * (never the public name), read back; a GitLab target that will not take it is retired, read
@@ -628,7 +632,11 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
       write.playJob(ctx, jobId, { ...variables, ...boot })) as typeof gitlabPlayJob
   }
 
-  const deployGitlab = async (side: Extract<Side, { kind: 'gitlab' }>, l: Loaded) => {
+  const deployGitlab = async (
+    side: Extract<Side, { kind: 'gitlab' }>,
+    l: Loaded,
+    stopRequested?: () => Promise<boolean>
+  ) => {
     const version = plan.version
     const comps = (await listComponents(side.placement.id)).filter((c) => c.kind === 'api')
     if (!comps.length)
@@ -677,8 +685,13 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
           envId
         },
         (line, level) => log(line, level),
-        { deps: { gitlab: bootVariables } }
+        { deps: { gitlab: bootVariables, ...(stopRequested ? { stopRequested } : {}) } }
       )
+      if (out.status === 'cancelled')
+        throw new MoveStepError(
+          'ABORTED',
+          `${c.name}: the deploy was stopped (the move was cancelled).`
+        )
       if (out.status !== 'success')
         throw new MoveStepError(
           out.code ?? 'DEPLOY_FAILED',
@@ -1008,11 +1021,11 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
       }
     },
 
-    async deployTarget() {
+    async deployTarget(opts = {}) {
       const l = await load()
       const to = l.to
       if (to.kind === 'shared') return
-      if (to.kind === 'gitlab') return deployGitlab(to, l)
+      if (to.kind === 'gitlab') return deployGitlab(to, l, opts.stopRequested)
       await seedStackKey()
       const image = await imageFor(plan.version)
       const extensions = await extensionPins(l.app, l.from)

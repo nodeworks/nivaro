@@ -919,7 +919,13 @@ async function doStep(ctx: Ctx, key: MoveStepKey, steps: MoveSteps): Promise<voi
             'warn'
           )
         )
-      await ops.deployTarget()
+      try {
+        // R2-M-7: a cancel reaches a GitLab deploy (it polls this at every wait).
+        await ops.deployTarget({ stopRequested: () => cancelAsked(ctx) })
+      } catch (err) {
+        if (await cancelAsked(ctx)) throw new Halt('cancel')
+        throw err
+      }
       await targetMaintenanceWithRetry(ctx)
       if (steps.boot_freeze === 'on') {
         await liftSource(ctx)

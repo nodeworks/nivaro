@@ -1005,3 +1005,71 @@ describe('freezeTarget on GitLab (P6-26 Rule 1)', () => {
     expect((await ops.removeTarget().catch((e) => e))?.code).toBe('TARGET_NOT_STOPPED')
   })
 })
+
+// R2-M-7: a cancel reaches the GitLab target's deploy (the promotion runner polls stopRequested
+// at every wait and before playing a manual job), instead of waiting for the whole deploy job.
+describe('deployTarget on GitLab is cancellable (R2-M-7)', () => {
+  it('passes the run’s cancel check to the deploy as stopRequested; a stopped deploy is ABORTED', async () => {
+    const w = await setup(true)
+    TENANT = w.tenant
+    const driver = await insertId('nivaro_hub_drivers', {
+      kind: 'gitlab',
+      name: `gl-c${w.envId}`,
+      config: JSON.stringify({
+        api: 'https://gitlab.example.com',
+        project: 'acme/acme-deploy',
+        branch: 'prod',
+        deploy_job: 'deploy',
+        pin_file: '.hub/nivaro-version'
+      })
+    })
+    const pd = await insertId('nivaro_hub_placements', {
+      kind: 'dedicated',
+      driver_id: driver,
+      target: '{}'
+    })
+    await insertId('nivaro_hub_components', {
+      placement_id: pd,
+      position: 0,
+      name: 'api',
+      kind: 'api',
+      driver_id: driver,
+      source_branch: 'main',
+      verify_url: 'https://acme-direct.example.com/api/version'
+    })
+    await db('nivaro_hub_moves').where({ id: w.move.id }).update({ to_placement_id: pd })
+    const move = (await readMove(w.move.id)) as NonNullable<Awaited<ReturnType<typeof readMove>>>
+    let asked = 0
+    const ops = defaultMoveOps(
+      move,
+      { ...w.plan, kind: 'to_dedicated' },
+      {
+        client: clients().factory,
+        sleep,
+        now,
+        imageDigest: async () => `sha256:${'b'.repeat(64)}`,
+        deployComponent: (async (
+          _step: unknown,
+          _v: string,
+          _ctx: unknown,
+          _log: unknown,
+          opts?: { deps?: { stopRequested?: () => Promise<boolean> } }
+        ) => {
+          if (await opts?.deps?.stopRequested?.())
+            return { status: 'cancelled', step: 'deploy api', error: 'Stopped', code: 'ABORTED' }
+          return { status: 'success', step: 'deploy api', error: null }
+        }) as never
+      }
+    )
+    const err = await ops
+      .deployTarget({
+        stopRequested: async () => {
+          asked++
+          return true
+        }
+      })
+      .catch((e) => e)
+    expect(asked).toBeGreaterThan(0)
+    expect(err?.code).toBe('ABORTED')
+  })
+})

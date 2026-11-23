@@ -833,6 +833,27 @@ describe('manual routing', () => {
     expect(iSource).toBeGreaterThan(iVerify)
   })
 
+  // R2-M-7: a cancel reaches the target deploy (its stopRequested), and ends the move cancelled.
+  it('R2-M-7: a cancel during the GitLab target deploy stops it and ends cancelled', async () => {
+    plan = planOf('to_dedicated', 'manual')
+    const w = await world('shared')
+    let id = 0
+    let saw: boolean | null = null
+    fake.state.during = async (name, arg) => {
+      if (name === 'deployTarget') {
+        await Run.cancelMove(id, 'u')
+        saw = await (arg as { stopRequested: () => Promise<boolean> }).stopRequested()
+        throw new MoveStepError('ABORTED', 'api: the deploy was stopped.')
+      }
+    }
+    const out = await start(w, toFor('to_dedicated', w))
+    id = out.move_id
+    await Run.awaitMove(id)
+    expect(saw).toBe(true)
+    expect((await readMove(id))?.status).toBe('cancelled')
+    expect(undoCalls(fake.calls)).toContainEqual(['removeTarget'])
+  })
+
   it('a cancel during the manual wait undoes the target actions already applied → cancelled', async () => {
     plan = planOf('to_shared', 'manual')
     const w = await world('docker')
