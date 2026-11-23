@@ -1,6 +1,6 @@
 import { createReadStream } from 'node:fs'
 import { open, stat } from 'node:fs/promises'
-import { Readable } from 'node:stream'
+import { PassThrough, pipeline, Readable } from 'node:stream'
 import type { FastifyReply } from 'fastify'
 import { storageChaos } from './chaos/faults/storage.js'
 import { dispositionMode, storedFileSecurityHeaders } from './file-serving-safety.js'
@@ -149,6 +149,15 @@ export async function openTransferObject(
   const active = await getActiveStorageDriver()
   // The row's driver is no longer the active one: this environment cannot read it at all.
   if (active.name === 'local') throw new StoredObjectMissing()
+  // R6-M-3: streamed from the driver with the range passed through, never read whole (a live
+  // source, maybe a shared one serving every app, copies a whole bucket four objects at a time).
+  if (active.openStream) {
+    const o = await active.openStream(key, rangeHeader)
+    // pipeline: an error on either side destroys both (never .pipe(), see gotchas).
+    const out = new PassThrough()
+    pipeline(o.stream, out, () => {})
+    return { ...o, stream: out }
+  }
   const buf = await active.get(key)
   return openedFromBuffer(buf, rangeHeader)
 }

@@ -57,6 +57,76 @@ export interface StorageDriver {
   get(key: string): Promise<Buffer>
   delete(key: string): Promise<void>
   exists(key: string): Promise<boolean>
+  /**
+   * R6-M-3: the object as a stream (never read whole), a single-range `Range` header passed
+   * through. Throws StoredObjectMissing for a 404, an error carrying `status` otherwise.
+   * Remote drivers only; the local provider streams from its file.
+   */
+  openStream?(key: string, rangeHeader?: string): Promise<StreamedObject>
+}
+
+export interface StreamedObject {
+  size: number
+  range: { start: number; end: number } | null
+  unsatisfiable: boolean
+  stream: Readable
+}
+
+/** One `bytes=a-b` / `bytes=a-` / `bytes=-n` range, or null (no range is passed on). */
+function singleRange(header: string | undefined): string | null {
+  const v = String(header ?? '').trim()
+  return /^bytes=(\d+-\d*|-\d+)$/.test(v) ? v : null
+}
+
+/** How long a streamed read may take to answer with its headers (the body then has no cap). */
+const STREAM_HEADERS_MS = 30_000
+
+/** A remote GET answer as a stream: 206 / 416 / 200 read from Content-Range / Content-Length. */
+async function streamedAnswer(res: Response, what: string): Promise<StreamedObject> {
+  const drop = () => void res.body?.cancel().catch(() => {})
+  if (res.status === 404) {
+    drop()
+    throw new StoredObjectMissing(`${what}: not found`)
+  }
+  const total = (cr: string | null) => {
+    const m = /\/(\d+)\s*$/.exec(String(cr ?? ''))
+    return m ? Number(m[1]) : null
+  }
+  if (res.status === 416) {
+    drop()
+    return {
+      size: total(res.headers.get('content-range')) ?? 0,
+      range: null,
+      unsatisfiable: true,
+      stream: Readable.from([])
+    }
+  }
+  if ((res.status !== 200 && res.status !== 206) || !res.body) {
+    drop()
+    throw Object.assign(new Error(`${what} failed: ${res.status}`), { status: res.status })
+  }
+  const stream = Readable.fromWeb(res.body as unknown as import('node:stream/web').ReadableStream)
+  if (res.status === 206) {
+    const m = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(
+      String(res.headers.get('content-range') ?? '').trim()
+    )
+    if (!m) {
+      stream.destroy()
+      throw Object.assign(new Error(`${what}: a partial answer without its range`), { status: 502 })
+    }
+    return {
+      size: Number(m[3]),
+      range: { start: Number(m[1]), end: Number(m[2]) },
+      unsatisfiable: false,
+      stream
+    }
+  }
+  const len = Number(res.headers.get('content-length'))
+  if (!Number.isFinite(len) || len < 0) {
+    stream.destroy()
+    throw Object.assign(new Error(`${what}: an answer without its length`), { status: 502 })
+  }
+  return { size: len, range: null, unsatisfiable: false, stream }
 }
 
 // ─── SigV4 S3 driver (raw fetch, no SDK) ─────────────────────────────────────
@@ -154,7 +224,8 @@ class SettingsS3Driver implements StorageDriver {
     key: string,
     body?: Buffer | FileBody,
     mime?: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    extra: { range?: string; noTimeout?: boolean } = {}
   ): Promise<Response> {
     const { url, host, path } = this.target(key)
     const now = new Date()
@@ -197,12 +268,16 @@ class SettingsS3Driver implements StorageDriver {
       headers: {
         ...sendHeaders,
         ...sent.headers,
+        // A Range header may stay unsigned in SigV4.
+        ...(extra.range ? { range: extra.range } : {}),
         Authorization: `AWS4-HMAC-SHA256 Credential=${this.cfg.access_key_id}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`
       },
       ...(sent.init as RequestInit),
-      signal: signal
-        ? AbortSignal.any([signal, AbortSignal.timeout(sent.timeoutMs)])
-        : AbortSignal.timeout(sent.timeoutMs)
+      signal: extra.noTimeout
+        ? signal
+        : signal
+          ? AbortSignal.any([signal, AbortSignal.timeout(sent.timeoutMs)])
+          : AbortSignal.timeout(sent.timeoutMs)
     })
   }
 
@@ -250,6 +325,24 @@ class SettingsS3Driver implements StorageDriver {
     return Buffer.from(await res.arrayBuffer())
   }
 
+  async openStream(key: string, rangeHeader?: string): Promise<StreamedObject> {
+    // Only the answer's headers are timed (a large body may take long); a reader that goes away
+    // destroys the stream, which cancels the body.
+    const ac = new AbortController()
+    const timer = setTimeout(() => ac.abort(), STREAM_HEADERS_MS)
+    let res: Response
+    try {
+      const range = singleRange(rangeHeader)
+      res = await this.signedFetch('GET', key, undefined, undefined, ac.signal, {
+        ...(range ? { range } : {}),
+        noTimeout: true
+      })
+    } finally {
+      clearTimeout(timer)
+    }
+    return streamedAnswer(res, `S3 GET ${key}`)
+  }
+
   async delete(key: string): Promise<void> {
     const res = await this.signedFetch('DELETE', key)
     // 404 = already gone; that's a successful delete.
@@ -295,7 +388,8 @@ class SettingsAzureBlobDriver implements StorageDriver {
     key: string,
     body?: Buffer | FileBody,
     mime?: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    extra: { range?: string; noTimeout?: boolean } = {}
   ): Promise<Response> {
     const date = new Date().toUTCString()
     const msHeaders: Record<string, string> = {
@@ -303,6 +397,8 @@ class SettingsAzureBlobDriver implements StorageDriver {
       'x-ms-version': '2021-08-06'
     }
     if (method === 'PUT') msHeaders['x-ms-blob-type'] = 'BlockBlob'
+    // x-ms-range is a canonicalized x-ms-* header, so it is signed with the rest.
+    if (extra.range) msHeaders['x-ms-range'] = extra.range
 
     const bodyBytes = !body ? 0 : Buffer.isBuffer(body) ? body.length : body.size
     const contentLength = bodyBytes > 0 ? String(bodyBytes) : ''
@@ -345,9 +441,11 @@ class SettingsAzureBlobDriver implements StorageDriver {
       method,
       headers: { ...headers, ...sent.headers },
       ...(sent.init as RequestInit),
-      signal: signal
-        ? AbortSignal.any([signal, AbortSignal.timeout(sent.timeoutMs)])
-        : AbortSignal.timeout(sent.timeoutMs)
+      signal: extra.noTimeout
+        ? signal
+        : signal
+          ? AbortSignal.any([signal, AbortSignal.timeout(sent.timeoutMs)])
+          : AbortSignal.timeout(sent.timeoutMs)
     })
   }
 
@@ -394,6 +492,24 @@ class SettingsAzureBlobDriver implements StorageDriver {
       )
     }
     return Buffer.from(await res.arrayBuffer())
+  }
+
+  async openStream(key: string, rangeHeader?: string): Promise<StreamedObject> {
+    // Only the answer's headers are timed (a large body may take long); a reader that goes away
+    // destroys the stream, which cancels the body.
+    const ac = new AbortController()
+    const timer = setTimeout(() => ac.abort(), STREAM_HEADERS_MS)
+    let res: Response
+    try {
+      const range = singleRange(rangeHeader)
+      res = await this.signedFetch('GET', key, undefined, undefined, ac.signal, {
+        ...(range ? { range } : {}),
+        noTimeout: true
+      })
+    } finally {
+      clearTimeout(timer)
+    }
+    return streamedAnswer(res, `Azure GET ${key}`)
   }
 
   async delete(key: string): Promise<void> {

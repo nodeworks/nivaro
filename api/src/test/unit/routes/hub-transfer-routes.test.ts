@@ -302,6 +302,52 @@ describe('GET /api/hub-transfer/files/:id for a saved-settings object', () => {
     st.driver = null
   })
 
+  // R6-M-3: streamed from the driver, the Range passed through; never read whole (get throws).
+  it('streams it from the driver, passing a Range through (206)', async () => {
+    const { Readable } = await import('node:stream')
+    const asked: Array<[string, string | undefined]> = []
+    st.driver = {
+      name: 's3',
+      get: async () => {
+        throw new Error('never buffered whole')
+      },
+      openStream: async (key: string, range?: string) => {
+        asked.push([key, range])
+        return {
+          size: 10,
+          range: { start: 2, end: 5 },
+          unsatisfiable: false,
+          stream: Readable.from([Buffer.from('cdef')])
+        }
+      }
+    }
+    dedicated()
+    const a = await build()
+    const { ticket } = await mintTransferTicket(null)
+    const res = await get(a, FILE_S3, { authorization: `Transfer ${ticket}`, range: 'bytes=2-5' })
+    expect(res.statusCode).toBe(206)
+    expect(res.body).toBe('cdef')
+    expect(res.headers['content-range']).toBe('bytes 2-5/10')
+    expect(asked).toEqual([['cd/photo.jpg', 'bytes=2-5']])
+  })
+
+  it('R6-M-3: a streamed read that fails before any byte is a 5xx too', async () => {
+    st.driver = {
+      name: 's3',
+      get: async () => {
+        throw new Error('never buffered whole')
+      },
+      openStream: async () => {
+        throw Object.assign(new Error('S3 GET failed: 503'), { status: 503 })
+      }
+    }
+    dedicated()
+    const a = await build()
+    const { ticket } = await mintTransferTicket(null)
+    const res = await get(a, FILE_S3, { authorization: `Transfer ${ticket}` })
+    expect(res.statusCode).toBe(503)
+  })
+
   it('a real not-found is 404 (missing)', async () => {
     const { StoredObjectMissing } = await import('../../../services/storage/missing.js')
     st.driver = {

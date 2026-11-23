@@ -74,7 +74,17 @@ export function appScopedKey(key: unknown, tenantId: string | null | undefined):
 
 // Methods whose first argument is an object key. Async ones refuse with a rejection (callers
 // chain `.catch()`); sync ones throw. `size` is the optional stat a provider may add (M9).
-const ASYNC_KEYED = new Set(['put', 'putFile', 'get', 'delete', 'exists', 'getUploadUrl', 'size'])
+const ASYNC_KEYED = new Set([
+  'put',
+  'putFile',
+  'get',
+  'delete',
+  'exists',
+  'getUploadUrl',
+  'size',
+  // R6-M-3: a saved-settings driver's streamed read
+  'openStream'
+])
 const SYNC_KEYED = new Set(['resolveKey'])
 
 /**
