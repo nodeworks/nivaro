@@ -826,7 +826,11 @@ async function runUpgrade(c: RunCtx, deps: SharedRunDeps): Promise<void> {
     }
 
     // 5. each app's public name answers the version
-    const toVerify = plan.apps.filter((a) => a.status === 'active' || a.status === 'maintenance')
+    // Final review I-2: only apps placed here (a name a move still routes to the other side
+    // answers the other side's version — defense in depth beside the MOVE_OPEN blocker).
+    const toVerify = plan.apps.filter(
+      (a) => a.placed && (a.status === 'active' || a.status === 'maintenance')
+    )
     await step('verify', `5. verify ${toVerify.length} app name(s) answer ${version}`)
     const read = deps.readServedField ?? ((u: string, f: string) => readServedField(u, f))
     const verifyBy = now() + VERIFY_WAIT_MS
