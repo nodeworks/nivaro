@@ -960,6 +960,23 @@ describe('parked wave', () => {
   const placeDeploys = (envId: number) =>
     db('nivaro_hub_deploys').where({ environment_id: envId, kind: 'shared' }).orderBy('id')
 
+  async function runningRow(appId: number, envId: number, heartbeat: Date | null) {
+    const [r] = (await db('nivaro_hub_deploys')
+      .insert({
+        app_id: appId,
+        environment_id: envId,
+        kind: 'shared',
+        version: '0.3.210',
+        status: 'running',
+        plan: JSON.stringify({ place: { shared_id: sharedId, shared: 'shared-one' } }),
+        started_at: new Date(Date.now() - 3_600_000),
+        heartbeat_at: heartbeat
+      })
+      .returning('id')) as Array<{ id: number } | number>
+    return Number(typeof r === 'object' ? r.id : r)
+  }
+  const status = async (id: number) => (await db('nivaro_hub_deploys').where({ id }).first()).status
+
   it('N-1: a job run that cannot start closes the place row (never left running) and frees the lock', async () => {
     const app = await newApp()
     const envId = await newEnv(app.id)
@@ -991,5 +1008,26 @@ describe('parked wave', () => {
     )
     await Place.awaitPlacement(envId)
     expect((await db('nivaro_hub_environments').where({ id: envId }).first()).status).toBe('active')
+  })
+
+  it('N-2: the heal leaves a row with a fresh heartbeat, or whose environment lock is held, running', async () => {
+    const app = await newApp()
+    const fresh = await newEnv(app.id, { status: 'provisioning' })
+    const locked = await newEnv(app.id, { status: 'provisioning' })
+    const freshRow = await runningRow(app.id, fresh, new Date())
+    const lockedRow = await runningRow(app.id, locked, null)
+    const token = await memoryPromoteLock.take(locked, 'creation')
+    try {
+      expect(await Place.recoverInterruptedPlacements({ lock: memoryPromoteLock })).toBe(0)
+      expect(await status(freshRow)).toBe('running')
+      expect(await status(lockedRow)).toBe('running')
+    } finally {
+      if (token) await memoryPromoteLock.release(locked, token)
+    }
+    // Once the lock is free the stale row is healed; the fresh one still is not.
+    expect(await Place.recoverInterruptedPlacements({ lock: memoryPromoteLock })).toBe(1)
+    expect(await status(lockedRow)).toBe('interrupted')
+    expect(await status(freshRow)).toBe('running')
+    await db('nivaro_hub_deploys').whereIn('id', [freshRow, lockedRow]).del()
   })
 })
