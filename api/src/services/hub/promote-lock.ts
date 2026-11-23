@@ -63,6 +63,8 @@ export type LockHolder =
   | 'shared'
   // Phase 6: an app-key entry being checked and saved (seconds; routes/hub-shared.ts).
   | 'app-key'
+  // Phase 6 (P6-32): a database record being attached to or detached from the environment.
+  | 'database'
 const HOLDERS: readonly LockHolder[] = [
   'creation',
   'promotion',
@@ -70,7 +72,8 @@ const HOLDERS: readonly LockHolder[] = [
   'delete',
   'move',
   'shared',
-  'app-key'
+  'app-key',
+  'database'
 ]
 
 const tokenFor = (holder: LockHolder | undefined) => `${holder ?? 'promotion'}:${randomUUID()}`
@@ -117,6 +120,12 @@ export function lockHolderRefusal(
     return {
       code: 'APP_KEY_BUSY',
       message: "This environment's encryption key is being saved — try again in a moment."
+    }
+  if (holder === 'database')
+    return {
+      code: 'DATABASE_BUSY',
+      message:
+        "This environment's database record is being attached or detached — try again in a moment."
     }
   if (holder === 'shared')
     return {

@@ -310,7 +310,7 @@ function blockersOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Bloc
     if (!input.database)
       add(
         'NO_DATABASE_RECORD',
-        "This environment names no Hub database record. A shared deployment learns each app's database from the Hub: adopt the database first."
+        "This environment names no Hub database record. A shared deployment learns each app's database from the Hub: on the Databases tab, adopt the app's database if it is not listed, open it and use Attach to environment."
       )
     else if (!input.database.ready)
       add('NO_DATABASE_RECORD', "This environment's Hub database record is not ready.")

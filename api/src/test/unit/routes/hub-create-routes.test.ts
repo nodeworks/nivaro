@@ -1362,3 +1362,37 @@ describe('maintenance freeze', () => {
     expect(plan.json().data.ok).toBe(true)
   })
 })
+
+// Ruling P6-32 (E2E BUG-1): attach / detach a database record on an existing environment —
+// the routes are Hub-admin only and answer the service's refusals (the checks themselves are
+// tested in hub-move-gather.test.ts, with the move tables).
+describe('environment database record (P6-32)', () => {
+  it('admin only; 404 for an unknown environment; 400 for a bad database_id', async () => {
+    for (const method of ['PUT', 'DELETE'] as const) {
+      const owner = await app.inject({
+        method,
+        url: '/api/hub/environments/1/database',
+        headers: asOwner,
+        payload: { database_id: 1 }
+      })
+      expect(owner.statusCode).toBe(403)
+      const missing = await app.inject({
+        method,
+        url: '/api/hub/environments/999999/database',
+        headers: asAdmin,
+        payload: { database_id: 1 }
+      })
+      expect(missing.statusCode).toBe(404)
+      expect(missing.json().code).toBe('NOT_FOUND')
+    }
+    const bad = await app.inject({
+      method: 'PUT',
+      url: '/api/hub/environments/1/database',
+      headers: asAdmin,
+      payload: { database_id: 'one' }
+    })
+    expect(bad.statusCode).toBe(400)
+    expect(bad.json().code).toBe('BAD_DATABASE')
+    expect(activity.filter((a) => String(a.action).startsWith('hub-env-db'))).toEqual([])
+  })
+})

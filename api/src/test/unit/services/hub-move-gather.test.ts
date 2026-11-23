@@ -1077,3 +1077,171 @@ describe('parked wave', () => {
     expect((await gather()).target_facts.in_use_by).toBeNull()
   })
 })
+
+// ── ruling P6-32 (E2E BUG-1): attach a database record to an existing environment ─────────────
+
+describe('attach a database record to an environment (P6-32)', () => {
+  const EnvDb = () => import('../../../services/hub/env-database.js')
+  const okCheck = (identity: string | null = IDENTITY) =>
+    vi.fn(async () => ({
+      check: {
+        state: 'nivaro' as const,
+        ok: true,
+        version: '16',
+        migrations: 553,
+        last_migration: '553_hub_moves',
+        text: 'ok',
+        at: new Date().toISOString()
+      },
+      identity
+    }))
+  const reports = (identity: string | null = IDENTITY) =>
+    vi.fn(async () => ({ ok: true as const, report: report({ db_identity: identity }) as never }))
+  const ref = async (envId: number) =>
+    (await db('nivaro_hub_environments').where({ id: envId }).first('db_ref')).db_ref
+  async function err(p: Promise<unknown>): Promise<{ code: string; status: number }> {
+    try {
+      await p
+    } catch (e) {
+      return e as { code: string; status: number }
+    }
+    throw new Error('expected a refusal')
+  }
+
+  it('attaches a ready record; after it the move plan has no NO_DATABASE_RECORD', async () => {
+    const { attachEnvDatabase } = await EnvDb()
+    const sharedId = await newShared()
+    const e = await newEnv({ placement_id: await dockerPlacement('shop-attach') })
+    const before = buildMovePlan(
+      await Gather.gatherMovePlanInput(e.id, { kind: 'shared', shared_id: sharedId }, deps())
+    )
+    expect(before.blockers.map((b) => b.code)).toContain('NO_DATABASE_RECORD')
+    expect(before.blockers.find((b) => b.code === 'NO_DATABASE_RECORD')?.text).toMatch(
+      /Attach to environment/
+    )
+    const dbId = await newDb()
+    const check = okCheck()
+    const out = await attachEnvDatabase(e.id, dbId, {
+      lock: memoryPromoteLock,
+      readiness: reports(),
+      check
+    })
+    expect(out).toMatchObject({ changed: true, warning: null, check: { state: 'nivaro' } })
+    expect(out.database.environment).toMatchObject({ id: e.id })
+    expect(JSON.stringify(out)).not.toContain('Secret')
+    expect(await ref(e.id)).toBe(`hub-db:${dbId}`)
+    expect(await memoryPromoteLock.held(e.id)).toBe(false)
+    const after = buildMovePlan(
+      await Gather.gatherMovePlanInput(e.id, { kind: 'shared', shared_id: sharedId }, deps())
+    )
+    expect(after.blockers.map((b) => b.code)).not.toContain('NO_DATABASE_RECORD')
+    // Again with the same record: nothing to do.
+    expect(
+      (
+        await attachEnvDatabase(e.id, dbId, {
+          lock: memoryPromoteLock,
+          readiness: reports(),
+          check
+        })
+      ).changed
+    ).toBe(false)
+    // Another identity read by the Hub: attached, with a warning (never a refusal).
+    const f = await newEnv({ placement_id: await dockerPlacement('shop-attach-2') })
+    const other = await attachEnvDatabase(f.id, await newDb(), {
+      lock: memoryPromoteLock,
+      readiness: reports(),
+      check: okCheck('pg|db.internal|5432|shop')
+    })
+    expect(other.warning).toMatch(/another server name or address/)
+  })
+
+  it('refuses a record another environment uses, and the other checks', async () => {
+    const { attachEnvDatabase } = await EnvDb()
+    const used = await newDb()
+    await newEnv({ placement_id: await dockerPlacement('shop-owner'), db_ref: `hub-db:${used}` })
+    const e = await newEnv({ placement_id: await dockerPlacement('shop-taker') })
+    const run = (id: unknown, o: Record<string, unknown> = {}) =>
+      attachEnvDatabase(e.id, id, {
+        lock: memoryPromoteLock,
+        readiness: reports(),
+        check: okCheck(),
+        ...o
+      })
+    expect(await err(run(used))).toMatchObject({ code: 'IN_USE', status: 409 })
+    expect(await err(run('7'))).toMatchObject({ code: 'BAD_DATABASE', status: 400 })
+    expect(await err(run(999_999))).toMatchObject({ code: 'NOT_FOUND', status: 404 })
+    const free = await newDb()
+    expect(await err(run(free, { readiness: reports('mssql|sql1|1433|shop') }))).toMatchObject({
+      code: 'ENGINE_MISMATCH'
+    })
+    expect(
+      await err(
+        run(free, { readiness: vi.fn(async () => ({ ok: false, code: 'LINK_UNREACHABLE' })) })
+      )
+    ).toMatchObject({ code: 'ENGINE_UNVERIFIED' })
+    const failed = okCheck()
+    failed.mockResolvedValueOnce({
+      check: { ...(await okCheck()()).check, state: 'unreachable' as never, ok: false },
+      identity: null
+    })
+    const refused = (await err(run(free, { check: failed }))) as { code: string; check?: unknown }
+    expect(refused).toMatchObject({ code: 'DATABASE_UNREACHABLE', check: { ok: false } })
+    expect(await ref(e.id)).toBeNull()
+    // A held environment lock refuses naming its holder; nothing written.
+    const token = await memoryPromoteLock.take(e.id, 'promotion')
+    expect(await err(run(free))).toMatchObject({ code: 'PROMOTION_RUNNING' })
+    if (token) await memoryPromoteLock.release(e.id, token)
+    // A shared placement changes its record only by a move.
+    const s = await newEnv({ placement_id: await sharedPlacement(await newShared()) })
+    expect(
+      await err(attachEnvDatabase(s.id, free, { lock: memoryPromoteLock, readiness: reports() }))
+    ).toMatchObject({ code: 'SHARED_PLACEMENT' })
+    expect(await ref(e.id)).toBeNull()
+  })
+
+  it('detach is refused while a move is open, then works; the record stays', async () => {
+    const { attachEnvDatabase, detachEnvDatabase } = await EnvDb()
+    const dbId = await newDb()
+    const e = await newEnv({ placement_id: await dockerPlacement('shop-detach') })
+    await attachEnvDatabase(e.id, dbId, {
+      lock: memoryPromoteLock,
+      readiness: reports(),
+      check: okCheck()
+    })
+    const move = await insertId('nivaro_hub_moves', {
+      app_id: e.appId,
+      environment_id: e.id,
+      from_placement_id: await dockerPlacement('shop-detach-from'),
+      to_placement_id: await sharedPlacement(await newShared()),
+      kind: 'to_shared',
+      routing: 'automatic',
+      status: 'waiting',
+      steps: '[]'
+    })
+    expect(await err(detachEnvDatabase(e.id, { lock: memoryPromoteLock }))).toMatchObject({
+      code: 'MOVE_OPEN',
+      status: 409
+    })
+    expect(
+      await err(
+        attachEnvDatabase(e.id, await newDb(), {
+          lock: memoryPromoteLock,
+          readiness: reports(),
+          check: okCheck()
+        })
+      )
+    ).toMatchObject({ code: 'MOVE_OPEN' })
+    expect(await ref(e.id)).toBe(`hub-db:${dbId}`)
+    await db('nivaro_hub_moves').where({ id: move }).update({ status: 'rolled_back' })
+    expect(await detachEnvDatabase(e.id, { lock: memoryPromoteLock })).toEqual({
+      database_id: dbId,
+      changed: true
+    })
+    expect(await ref(e.id)).toBeNull()
+    expect(await db('nivaro_hub_databases').where({ id: dbId }).first('id')).toBeTruthy()
+    expect(await detachEnvDatabase(e.id, { lock: memoryPromoteLock })).toEqual({
+      database_id: null,
+      changed: false
+    })
+  })
+})
