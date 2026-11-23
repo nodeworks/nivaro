@@ -141,6 +141,32 @@ export function appReadyForRequests(tenantId: string): boolean {
   return e?.state === 'ok' && e.version === NIVARO_VERSION
 }
 
+/**
+ * Task 14: is this app's schema `ok` at this version by the state the migrating replicas keep in
+ * Redis (appSchemaKey), for this app's database (its connection fingerprint)? For a process that
+ * runs no migration loop of its own (an importer). Nothing stored, another version or database,
+ * no Redis, or anything unreadable: false.
+ */
+export async function storedAppSchemaOk(
+  t: TenantRecord,
+  redis: Pick<RedisLike, 'get'> | null
+): Promise<boolean> {
+  if (!redis) return false
+  try {
+    const raw = await redis.get(appSchemaKey(t.id))
+    if (!raw) return false
+    const s = JSON.parse(raw) as Partial<StoredState> | null
+    return s?.state === 'ok' && s.version === NIVARO_VERSION && s.conn === connFingerprint(t)
+  } catch {
+    return false
+  }
+}
+
+/** The database an app's state is about (connFingerprint), for the stored-state readers. */
+export function appConnFingerprint(t: TenantRecord): string {
+  return connFingerprint(t)
+}
+
 /** The database an app's state is about: an HMAC of client + connection (never the connection). */
 function connFingerprint(t: TenantRecord): string {
   // Keyed by the deployment's ENCRYPTION_KEY (required on a shared deployment, rarely rotated),

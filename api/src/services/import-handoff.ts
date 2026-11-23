@@ -41,8 +41,9 @@ import { currentTenantKey } from './tenant-rooms.js'
  *              whose crons do not tick
  *
  * A Hub shared deployment has no process loop: each app's 10 s `staged-imports` cron drains it
- * inside the app, and a kick drains the app it names at once. So no `enabled` there, and an
- * importer (which ticks no crons) drains only on kicks.
+ * inside the app, and a kick drains the app it names at once. So no `enabled` there; an importer
+ * (which ticks no crons) drains on kicks and on its own 10 s pass over every ready app
+ * (staged-import-worker.ts drainEveryAppImports), beating per app as it goes.
  */
 
 export type ImportDrainMode = 'importer' | 'enabled' | 'fallback' | 'inline' | 'off'
@@ -187,7 +188,8 @@ export function importDrainMode(env: NodeJS.ProcessEnv = process.env): ImportDra
   if (flag === 'off') return 'off'
   const role = processRole(env)
   if (perAppJobs(env)) {
-    // No process loop on a shared deployment: each app's cron drains it (and kicks).
+    // No process loop on a shared deployment: each app's cron drains it (and kicks); an importer
+    // runs a per-app pass of its own (staged-import-worker.ts).
     if (role === 'importer') return 'importer'
     if (role === 'web' || role === 'realtime' || role === 'canary') return 'off'
     if (!cronTicksEnabled()) return 'off'

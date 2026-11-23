@@ -17,7 +17,7 @@ const h = vi.hoisted(() => ({
 vi.mock('../../../db/index.js', async () => {
   const { makeMemoryDb } = await import('../../helpers/memory-db.js')
   const tc = await import('../../../db/tenant-context.js')
-  h.mems = { A: makeMemoryDb(), B: makeMemoryDb(), '-': makeMemoryDb() }
+  h.mems = { A: makeMemoryDb(), B: makeMemoryDb(), N: makeMemoryDb(), '-': makeMemoryDb() }
   // The real `db` follows the tenant context; so does this one.
   const db = (table: string) => h.mems[tc.getTenantId() || '-'](table)
   return { db }
@@ -54,6 +54,7 @@ const worker = await import('../../../services/staged-import-worker.js')
 const { bulkUnavailableReason } = await import('../../../services/staged-imports.js')
 const { setTenantRegistryForTests } = await import('../../../services/tenancy/registry.js')
 const migrations = await import('../../../services/tenancy/app-migrations.js')
+const { NIVARO_VERSION } = await import('../../../version.js')
 type TenantRecord = import('../../../services/tenancy/types.js').TenantRecord
 
 const SHARED = {
@@ -357,6 +358,132 @@ describe('two apps, copied queues', () => {
     expect(status('A')).toBe('queued')
     expect(h.mems.A.reads).toEqual([])
     expect(h.defs).toEqual([])
+  })
+})
+
+describe('Task 14: the importer role on a shared deployment', () => {
+  const status = (app: string) => h.mems[app].rows('nivaro_import_queue')[0]?.status
+  /** What the migrating replicas keep in Redis for an app whose schema is ok at this version. */
+  const schemaOk = (r: ReturnType<typeof fakeRedis>, t: TenantRecord) =>
+    r.strings.set(
+      migrations.appSchemaKey(t.id),
+      JSON.stringify({
+        version: NIVARO_VERSION,
+        state: 'ok',
+        at: new Date().toISOString(),
+        error: null,
+        conn: migrations.appConnFingerprint(t)
+      })
+    )
+
+  beforeEach(() => {
+    Object.assign(process.env, SHARED, { NIVARO_ROLE: 'importer' })
+    h.mems.A.rows('nivaro_import_queue').push(queued(1))
+    h.mems.B.rows('nivaro_import_queue').push(queued(1))
+  })
+
+  it('drains on kicks and on its own per-app pass', () => {
+    expect(handoff.importDrainMode()).toBe('importer')
+  })
+
+  it('its pass drains every listed, ready app without a kick, each inside its own app', async () => {
+    const all = [tenant('A'), tenant('B'), tenant('M', 'maintenance'), tenant('N')]
+    useRegistry(all)
+    h.mems.N.rows('nivaro_import_queue').push(queued(1))
+    const app = makeApp()
+    for (const t of [all[0], all[1], all[2]]) schemaOk(app.redis, t) // N: never migrated
+    const out = await worker.drainEveryAppImports(app)
+    expect(out?.ran.sort()).toEqual(['A', 'B'])
+    expect(out?.skipped).toEqual(
+      expect.arrayContaining([
+        { tenant: 'M', why: 'maintenance' },
+        { tenant: 'N', why: 'not_ready' }
+      ])
+    )
+    await vi.waitFor(() => expect([status('A'), status('B')]).toEqual(['error', 'error']))
+    expect(status('N')).toBe('queued')
+    expect(h.mems.N.reads).toEqual([])
+    expect(h.defs.sort()).toEqual(['A:invoices', 'B:invoices'])
+    // Each app's importer beat is its own key: its fallback stands down only while it beats.
+    const db = handoff.handoffDbScope()
+    for (const id of ['A', 'B'])
+      expect(app.redis.strings.has(`p1:nvr:import-worker:${db}:${id}`)).toBe(true)
+  })
+
+  it('a run whose worker died is put back and run by the pass, with no kick', async () => {
+    useRegistry([tenant('A')])
+    const old = new Date(Date.now() - 30 * 60_000)
+    h.mems.A.reset()
+    h.mems.A.rows('nivaro_import_queue').push({
+      ...queued(1),
+      status: 'running',
+      started_at: old,
+      updated_at: old
+    })
+    const app = makeApp()
+    schemaOk(app.redis, tenant('A'))
+    await worker.drainEveryAppImports(app)
+    // Put back in the queue (lease recovery), then claimed and run (no definition: error).
+    await vi.waitFor(() => expect(status('A')).toBe('error'))
+    expect(h.defs).toEqual(['A:invoices'])
+  })
+
+  it('a kick on the importer reads readiness from the stored state (it runs no migration loop)', async () => {
+    useRegistry()
+    const app = makeApp()
+    await worker.onImportKick(app, 'A|1')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(status('A')).toBe('queued')
+    expect(h.mems.A.reads).toEqual([])
+    // Stored for another database (a replaced connection) is not this app's state either.
+    app.redis.strings.set(
+      migrations.appSchemaKey('A'),
+      JSON.stringify({ version: NIVARO_VERSION, state: 'ok', conn: 'other' })
+    )
+    await worker.onImportKick(app, 'A|1')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(status('A')).toBe('queued')
+    schemaOk(app.redis, tenant('A'))
+    await worker.onImportKick(app, 'A|1')
+    await vi.waitFor(() => expect(status('A')).toBe('error'))
+    expect(status('B')).toBe('queued')
+  })
+
+  it('startImportDrainer runs the pass at once and every 10 s; a worker role starts none', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    try {
+      useRegistry()
+      const hooks: Array<() => Promise<void>> = []
+      const app = Object.assign(makeApp(), {
+        addHook: (_n: string, fn: () => Promise<void>) => hooks.push(fn)
+      })
+      schemaOk(app.redis, tenant('A'))
+      schemaOk(app.redis, tenant('B'))
+      expect(await worker.startImportDrainer(app)).toBe('importer')
+      await vi.waitFor(() => expect([status('A'), status('B')]).toEqual(['error', 'error']))
+      h.mems.A.rows('nivaro_import_queue').push(queued(2))
+      await vi.advanceTimersByTimeAsync(10_000)
+      await vi.waitFor(() =>
+        expect(h.mems.A.rows('nivaro_import_queue').map((r) => r.status)).toEqual([
+          'error',
+          'error'
+        ])
+      )
+      for (const fn of hooks) await fn()
+
+      // The worker (fallback) keeps draining from its per-app cron only: no loop of its own.
+      process.env.NIVARO_ROLE = 'worker'
+      const w = Object.assign(makeApp(), {
+        addHook: (_n: string, fn: () => Promise<void>) => hooks.push(fn)
+      })
+      h.mems.B.rows('nivaro_import_queue').push(queued(3))
+      expect(await worker.startImportDrainer(w)).toBe('fallback')
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(h.mems.B.rows('nivaro_import_queue').map((r) => r.status)).toEqual(['error', 'queued'])
+      for (const fn of hooks) await fn()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

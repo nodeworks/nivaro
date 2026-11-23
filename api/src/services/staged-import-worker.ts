@@ -4,6 +4,7 @@ import { runInBackgroundPool } from '../db/pool-context.js'
 import { withTenant } from '../db/tenant-context.js'
 import { NIVARO_VERSION } from '../version.js'
 import { activityGroupKey, withActivityScope } from './activity-scope.js'
+import { type AppFanOutResult, forEachApp } from './app-jobs.js'
 import { appBox, appSet } from './app-state.js'
 import { withBackgroundWork } from './background-inflight.js'
 import { newChainId, startChain } from './chain.js'
@@ -40,6 +41,7 @@ import { rememberRunRows } from './import-run-rows.js'
 import { INSTANCE_ID } from './instance-roster.js'
 import { emitImportProgress, emitJobProgress } from './live-progress.js'
 import { notifyUser } from './notification-channels.js'
+import { processRole } from './process-role.js'
 import { validateStagedRows } from './staged-import-validation.js'
 import type { ImportDefinition } from './staged-imports.js'
 import {
@@ -52,7 +54,7 @@ import {
   runStagedImport,
   scrubSecrets
 } from './staged-imports.js'
-import { appReadyForRequests } from './tenancy/app-migrations.js'
+import { appReadyForRequests, storedAppSchemaOk } from './tenancy/app-migrations.js'
 import { getTenantRegistry } from './tenancy/registry.js'
 import type { TenantRecord } from './tenancy/types.js'
 import { runAsTrafficSource, type TrafficSource, withTrafficSource } from './traffic-source.js'
@@ -311,10 +313,24 @@ async function subscribeImportKicks(
 }
 
 /**
+ * May app `t`'s imports run on this process now (Hub shared deployment)? Listed `active` (never an
+ * app the Hub is moving or updating) and its schema ok at this version: this process's own
+ * migration state, or — on an importer, which runs no migration loop (server.ts) — the state the
+ * migrating replicas keep in Redis, so it never drains into a half-migrated database (Task 14).
+ */
+async function importAppReady(app: FastifyInstance, t: TenantRecord): Promise<boolean> {
+  if (t.status !== 'active') return false
+  if (!appReadyForRequests(t.id)) return false
+  if (processRole() !== 'importer') return true
+  return storedAppSchemaOk(t, importRedis(app))
+}
+
+/**
  * Hub shared deployment: one kick heard on the deployment's channel. Resolves the app it names
  * and, when this process lists it, it is active and its schema is ready, runs one drain pass
  * inside it. Anything else is skipped silently: an app this process has not listed yet (another
- * replica took the upload) is drained by its own 10 s `staged-imports` tick.
+ * replica took the upload) is drained by its own 10 s `staged-imports` tick, or the importer's
+ * own pass (drainEveryAppImports).
  */
 export async function onImportKick(app: FastifyInstance, payload: string): Promise<void> {
   const { tenant } = parseKick(payload)
@@ -329,8 +345,7 @@ export async function onImportKick(app: FastifyInstance, payload: string): Promi
     return
   }
   // Like the per-app fan-out: never an app the Hub is moving or updating, nor a half-migrated one.
-  if (t?.status !== 'active') return
-  if (!appReadyForRequests(t.id)) return
+  if (!t || !(await importAppReady(app, t))) return
   try {
     await withTenant(t, () => runInBackgroundPool(() => drainImportsTick(app)), t.origin)
   } catch (err) {
@@ -338,8 +353,39 @@ export async function onImportKick(app: FastifyInstance, payload: string): Promi
   }
 }
 
+/** One importer pass at a time on this process (the 10 s timer never stacks passes). */
+let passing = false
+
+/**
+ * Task 14 — the importer's own pass on a Hub shared deployment: one drain pass inside every
+ * listed app that is active and ready (importAppReady), at most TENANT_JOB_CONCURRENCY at once.
+ * An importer ticks no crons, so without it the importer drained only on kicks while its beat
+ * made each app's fallback (the worker's per-app tick) stand down for up to 90 s: a run put back
+ * by lease recovery, or a kick lost while the importer restarted, waited. Each pass beats for
+ * the apps it drains, recovers their lost runs, then claims their queued rows. Null when a pass
+ * is already running.
+ */
+export async function drainEveryAppImports(app: FastifyInstance): Promise<AppFanOutResult | null> {
+  if (passing) return null
+  passing = true
+  try {
+    return await forEachApp(async (t) => {
+      if (t.status !== 'active') return 'maintenance'
+      if (!(await importAppReady(app, t))) return 'not_ready'
+      await runInBackgroundPool(() => drainImportsTick(app))
+      return 'ran'
+    })
+  } catch (err) {
+    app.log.warn({ err }, 'staged-import worker: per-app pass failed')
+    return null
+  } finally {
+    passing = false
+  }
+}
+
 /** The process drain loop and kick subscriber (self-hosted), or the deployment's kick subscriber
- *  (shared). Process-wide: started once at boot, outside any app. */
+ *  and, on an importer, its per-app pass (shared). Process-wide: started once at boot, outside
+ *  any app. */
 let drainer: { stop: () => Promise<void> } | null = null
 
 /**
@@ -347,8 +393,9 @@ let drainer: { stop: () => Promise<void> } | null = null
  * own 10 s loop (it may tick no crons); every drainer also hears the upload's kick, so a run
  * starts at once instead of at the next tick. Returns the mode it runs in.
  *
- * Hub shared deployment: no loop (each app's `staged-imports` cron drains it, inside the app);
- * only the kick subscriber, which drains the app a kick names (onImportKick).
+ * Hub shared deployment: the kick subscriber, which drains the app a kick names (onImportKick);
+ * each app's `staged-imports` cron drains it on the cron-ticking process, and an importer (which
+ * ticks no crons) runs its own 10 s pass over every app (drainEveryAppImports).
  */
 export async function startImportDrainer(app: FastifyInstance): Promise<ImportDrainMode> {
   const mode = importDrainMode()
@@ -357,9 +404,14 @@ export async function startImportDrainer(app: FastifyInstance): Promise<ImportDr
     const sub = await subscribeImportKicks(app, (payload) => {
       void onImportKick(app, payload).catch(() => {})
     })
+    const pass = () => void drainEveryAppImports(app)
+    const timer = mode === 'importer' ? setInterval(pass, 10_000) : null
+    timer?.unref?.()
+    if (timer) pass()
     app.log.info({ mode }, '[import-worker] draining staged imports per app on kicks and ticks')
     drainer = {
       stop: async () => {
+        if (timer) clearInterval(timer)
         const conn = sub
         if (conn) await (conn.quit?.() ?? Promise.resolve()).catch(() => conn.disconnect?.())
         drainer = null
