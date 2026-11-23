@@ -1,4 +1,4 @@
-import Fastify from 'fastify'
+import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Hub phase 6 parked wave (T7): the phone app's /api/app-info probe on a Hub shared deployment's
@@ -56,12 +56,12 @@ function registry(source: 'hub' | 'cloud-meta'): TenantRegistry {
 }
 
 const savedEnv = { ...process.env }
-let app: ReturnType<typeof Fastify>
+let app: FastifyInstance
 
 beforeAll(async () => {
   app = Fastify()
   app.addHook('onRequest', tenantHook)
-  app.get('/api/app-info', async (req) => ({ block: req.nvrTenantBlock ?? null }))
+  app.get('/api/app-info', async (req: FastifyRequest) => ({ block: req.nvrTenantBlock ?? null }))
   await app.ready()
 })
 afterAll(() => app.close())
