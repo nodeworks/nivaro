@@ -109,6 +109,8 @@ export type MoveBlockerCode =
   // P6-31: the key prefix changes and the source keeps objects on a provider the copy cannot
   // handle.
   | 'STORAGE_LAYOUT_DIFFERS'
+  // R6-M-2: the key prefix changes and the source's per-provider object count could not be read.
+  | 'STORAGE_COUNT_UNKNOWN'
   // Fix round 1 (P6-15: a check that could not run is never a pass).
   | 'GATHER_FAILED'
   | SharedReadinessCode

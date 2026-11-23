@@ -85,7 +85,7 @@ function input(o: Partial<MovePlanInput> = {}): MovePlanInput {
       oidc: { issuer_host: 'login.microsoftonline.com', tenant: 'corp-tenant' },
       signin_hub: false,
       db_identity: 'pg|10.0.0.5|5432|shop',
-      files: { count: 40, bytes: 123456, local: 38 },
+      files: { count: 40, bytes: 123456, local: 38, objects: {} },
       extensions: { x: '1.2.0' },
       extension_pins: { x: PIN_A },
       readiness: [],
@@ -708,7 +708,9 @@ describe('buildMovePlan — plan hash', () => {
     )
     expect(buildMovePlan(input({ target_facts: tgt({ multi_node: 2 }) })).plan_hash).not.toBe(base)
     expect(
-      buildMovePlan(input({ source: src({ files: { count: 41, bytes: 1, local: 39 } }) })).plan_hash
+      buildMovePlan(
+        input({ source: src({ files: { count: 41, bytes: 1, local: 39, objects: {} } }) })
+      ).plan_hash
     ).toBe(base)
   })
 })
@@ -836,10 +838,22 @@ describe('object storage key prefix (P6-31)', () => {
     expect(warns(p)).toContain('STORAGE_PREFIX_CHANGES')
   })
 
-  it('not reported (an older report) while the prefix changes → still warned', () => {
-    expect(warns(buildMovePlan(input({ source: withObjects(undefined) })))).toContain(
-      'STORAGE_PREFIX_CHANGES'
+  // R6-M-2: a count the Hub could not read may hide a provider the copy cannot handle.
+  it('a count that could not be read while the prefix changes → STORAGE_COUNT_UNKNOWN blocks', () => {
+    const p = buildMovePlan(input({ source: withObjects(undefined) }))
+    expect(codes(p)).toContain('STORAGE_COUNT_UNKNOWN')
+    expect(warns(p)).not.toContain('STORAGE_PREFIX_CHANGES')
+  })
+
+  it('a count that could not be read between two shared deployments blocks nothing', () => {
+    const p = buildMovePlan(
+      input({
+        kind: 'between_shared',
+        from: sharedSide({ id: 8, key: 'pool-b' }),
+        source: withObjects(undefined)
+      })
     )
+    expect(codes(p)).not.toContain('STORAGE_COUNT_UNKNOWN')
   })
 
   it('between two shared deployments the prefix is the same → no warning', () => {

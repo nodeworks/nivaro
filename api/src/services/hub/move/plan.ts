@@ -309,6 +309,12 @@ function blockersOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Bloc
   // P6-31: on a shared deployment every object key lives under apps/<tenantId>/; to or from one
   // the prefix changes, so saved-settings objects are copied — which the pull can do only for the
   // saved-settings drivers it knows.
+  if (prefixChanges(input) && !s.files?.objects)
+    // R6-M-2: unknown is never "nothing to copy": a provider the copy cannot handle may hide in it.
+    add(
+      'STORAGE_COUNT_UNKNOWN',
+      "This move changes where stored files are kept (a shared deployment keeps each app's files in its own folder), and the app did not say which storage its files are on. Plan again once it answers."
+    )
   if (prefixChanges(input)) {
     const odd = Object.entries(s.files?.objects ?? {})
       .filter(([p, n]) => n > 0 && !(COPYABLE_OBJECT_STORAGE as readonly string[]).includes(p))
@@ -514,13 +520,14 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
     )
   if (prefixChanges(input)) {
     const objects = input.source.files?.objects
+    // An unknown count blocks (STORAGE_COUNT_UNKNOWN), so it needs no warning here.
     const copyable = objects
       ? COPYABLE_OBJECT_STORAGE.reduce((n, p) => n + (objects[p] ?? 0), 0)
-      : null
-    if (copyable === null || copyable > 0)
+      : 0
+    if (copyable > 0)
       add(
         'STORAGE_PREFIX_CHANGES',
-        `${copyable === null ? 'Any files' : `${copyable} file(s)`} kept in S3 or Azure storage saved in Settings are copied to a new folder in the same bucket (a shared deployment keeps each app's files under apps/<app>/; elsewhere they sit at the bucket root). They are copied, not shared: the bucket holds both copies until the old ones are removed.`
+        `${copyable} file(s) kept in S3 or Azure storage saved in Settings are copied to a new folder in the same bucket (a shared deployment keeps each app's files under apps/<app>/; elsewhere they sit at the bucket root). They are copied, not shared: the bucket holds both copies until the old ones are removed.`
       )
   }
   if (input.target_facts.boot_maintenance === 'unproven')

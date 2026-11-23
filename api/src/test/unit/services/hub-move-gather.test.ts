@@ -154,7 +154,7 @@ function report(o: Record<string, unknown> = {}) {
     signin_hub: false,
     db_identity: IDENTITY,
     busy: { imports: 0, exports: 0, renders: 0 },
-    files: { count: 3, bytes: 300, local: 2 },
+    files: { count: 3, bytes: 300, local: 2, objects: {} },
     version: '0.3.210',
     extensions: { x: '1.2.0' },
     ...o
@@ -186,7 +186,7 @@ function fakeClient(
         preflight: { status: 'ok', failing: [] },
         readiness_score: null,
         busy: { imports: 0, exports: 0, renders: 0 },
-        files: { count: 5, bytes: 500, local: 5 },
+        files: { count: 5, bytes: 500, local: 5, objects: {} },
         key_fp: keyFingerprint(APP_KEY),
         maintenance: false
       })),

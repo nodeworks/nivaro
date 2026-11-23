@@ -831,6 +831,10 @@ export const MOVE_BLOCKER_COPY: Record<string, Copy> = {
     title: 'Files are stored in S3 or Azure set by environment variables',
     hint: 'A move copies only files stored on disk, so these would be lost. Move the storage settings into the app (Settings → Files) first.'
   },
+  STORAGE_COUNT_UNKNOWN: {
+    title: 'The app did not say which storage its files are on',
+    hint: 'This move changes the folder files are kept in, so the Hub must know which storage they use before it copies them. Check that the app answers, then plan again.'
+  },
   STORAGE_LAYOUT_DIFFERS: {
     title: 'Some files are on storage the move cannot copy',
     hint: 'This move changes the folder files are kept in, and the move copies only local, S3 and Azure files. Move those files to one of them first.'
