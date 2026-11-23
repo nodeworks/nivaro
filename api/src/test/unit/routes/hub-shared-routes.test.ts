@@ -1303,3 +1303,34 @@ describe('final review I-4: an extension a placed app uses', () => {
     expect(ok.json().data.extensions).toEqual(['efp-ops'])
   })
 })
+
+describe('final review M-5: a rotated token no run has applied', () => {
+  it('GET warns TOKEN_NOT_APPLIED until a successful run started after the rotation', async () => {
+    const made = await create({ key: 'shared-m5', mode: 'docker', driver_id: 3 })
+    const id = made.row.id
+    await db('nivaro_hub_shared_deployments').where({ id }).update({ version_pin: '0.3.210' })
+    await db('nivaro_hub_shared_deploys').insert({
+      shared_deployment_id: id,
+      kind: 'upgrade',
+      version: '0.3.210',
+      status: 'success',
+      started_at: new Date(Date.now() - 3_600_000)
+    })
+    const get = async () =>
+      (await app.inject({ method: 'GET', url: `/api/hub/shared/${id}`, headers: asAdmin }))
+        .json()
+        .data.warnings.map((w: { code: string }) => w.code) as string[]
+    expect(await get()).not.toContain('TOKEN_NOT_APPLIED')
+    // Rotated; the re-apply was not started (no hook): the stack still holds the old token.
+    await app.inject({ method: 'POST', url: `/api/hub/shared/${id}/token`, headers: asAdmin })
+    expect(await get()).toContain('TOKEN_NOT_APPLIED')
+    await db('nivaro_hub_shared_deploys').insert({
+      shared_deployment_id: id,
+      kind: 'upgrade',
+      version: '0.3.210',
+      status: 'success',
+      started_at: new Date(Date.now() + 1000)
+    })
+    expect(await get()).not.toContain('TOKEN_NOT_APPLIED')
+  })
+})

@@ -30,6 +30,7 @@ import { liveSightings, type Sighting } from './sightings.js'
 import { renderSharedSpec, SharedRenderError } from './stack-render.js'
 import {
   openSharedToken,
+  PREV_TOKEN_GRACE_MS,
   type SharedDeployment,
   type SharedFields,
   type SharedStatus,
@@ -265,6 +266,31 @@ export async function redisUrlNotApplied(sharedId: number): Promise<boolean> {
   } catch {
     return true
   }
+}
+
+/**
+ * True while a Docker deployment's token was rotated after its newest successful run started
+ * (final review M-5): the stack still holds the old token, which stops working when the 24 h
+ * grace ends (the deployment then loses its list refresh and its link). The rotation time is
+ * prev_token_until − the grace. Never deployed = nothing to apply.
+ */
+export async function tokenNotApplied(sharedId: number): Promise<boolean> {
+  const row = (await db(SHARED)
+    .where({ id: sharedId })
+    .first('mode', 'version_pin', 'prev_token_until')) as
+    | { mode: string; version_pin: string | null; prev_token_until: unknown }
+    | undefined
+  if (row?.mode !== 'docker' || !row.version_pin || row.prev_token_until == null)
+    return false
+  const until = new Date(row.prev_token_until as string | Date).getTime()
+  if (!Number.isFinite(until)) return false
+  const rotatedAt = new Date(until - PREV_TOKEN_GRACE_MS)
+  const applied = await db(SHARED_DEPLOYS)
+    .where({ shared_deployment_id: sharedId, status: 'success' })
+    .whereNot({ kind: 'observed' })
+    .where('started_at', '>=', rotatedAt)
+    .first('id')
+  return !applied
 }
 
 /** Which writable secrets are set: the mask, or null. Never a value. */
