@@ -315,7 +315,7 @@ function PromoteForm({
           onChange={(e) => setConfirm(e.target.value)}
           autoComplete='off'
           spellCheck={false}
-          placeholder={env.key}
+          placeholder='Type it here'
           className='h-8 max-w-[280px] bg-white font-mono text-[13px] dark:bg-background'
         />
       </div>
