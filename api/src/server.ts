@@ -1102,11 +1102,15 @@ export async function buildServer() {
   // cleared on close so a short-lived process never starts it.
   let cacheWarmTimer: ReturnType<typeof setTimeout> | null = null
   let readinessWarmTimer: ReturnType<typeof setTimeout> | null = null
+  // Hub shared deployment: the daily help-video import sweep (set in the onReady block below).
+  let staleImportSweepTimer: ReturnType<typeof setInterval> | null = null
   app.addHook('onClose', async () => {
     if (cacheWarmTimer) clearTimeout(cacheWarmTimer)
     cacheWarmTimer = null
     if (readinessWarmTimer) clearTimeout(readinessWarmTimer)
     readinessWarmTimer = null
+    if (staleImportSweepTimer) clearInterval(staleImportSweepTimer)
+    staleImportSweepTimer = null
   })
 
   // ─── Core scheduled jobs + boot passes (self-hosted, and Hub shared deployments) ──
@@ -1138,7 +1142,7 @@ export async function buildServer() {
       // process part here: the help-video import sweep (this process's memory + work dir), daily,
       // outside any app.
       if (!multiTenant) void runInBackgroundPool(runRetentionPurge)
-      if (perAppJobs()) startStaleImportSweep(app.log)
+      if (perAppJobs()) staleImportSweepTimer = startStaleImportSweep(app.log)
 
       // ── Tamper-evident activity trail (#16) ──
       // Sealer: chains new (and, in capped batches, existing) activity rows; never on the
