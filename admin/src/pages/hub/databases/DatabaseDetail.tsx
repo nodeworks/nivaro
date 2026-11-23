@@ -652,7 +652,7 @@ function DatabaseBody({
           title='Remove from the Hub'
           description={
             d.environment
-              ? `Used by ${environmentWords(d)}, so it cannot be detached or dropped here.`
+              ? `Used by ${environmentWords(d)}. Detach it first (above), then remove it here.`
               : 'Detaching forgets the record; the database stays on the server.'
           }
         >
@@ -727,10 +727,20 @@ function EnvironmentAttach({ d, onChanged }: { d: HubDatabaseRow; onChanged: () 
     enabled: picking && !d.environment && d.status === 'ready'
   })
   const app = useHubApp(appId ? Number(appId) : null)
-  const done = () => {
+  /** The environment's app page and any move plan on screen for it name its database record:
+   *  both are read again (detach takes them from the record, before it changes). */
+  const done = (env: { appId: number; envId: number } | null) => {
     setFailure(null)
     onChanged()
-    if (appId) void qc.invalidateQueries({ queryKey: hubKeys.app(Number(appId)) })
+    if (!env) return
+    void qc.invalidateQueries({ queryKey: hubKeys.app(env.appId) })
+    void qc.invalidateQueries({ queryKey: ['hub', 'move-plan', env.envId] })
+  }
+  const closePicker = () => {
+    setPicking(false)
+    setAppId('')
+    setEnvId('')
+    setFailure(null)
   }
   const fail = (err: unknown, fallback: string) =>
     setFailure(
@@ -741,16 +751,16 @@ function EnvironmentAttach({ d, onChanged }: { d: HubDatabaseRow; onChanged: () 
     onSuccess: (out) => {
       setWarning(out.warning)
       setPicking(false)
-      done()
+      done(appId && envId ? { appId: Number(appId), envId: Number(envId) } : null)
       toast.success(`Attached ${d.database_name}`)
     },
     onError: (err) => fail(err, 'Could not attach the database')
   })
   const detach = useMutation({
-    mutationFn: () => detachEnvDatabase(d.environment?.id as number),
-    onSuccess: () => {
+    mutationFn: (env: { appId: number; envId: number }) => detachEnvDatabase(env.envId),
+    onSuccess: (_out, env) => {
       setWarning(null)
-      done()
+      done(env)
       toast.success(`Detached ${d.database_name}`)
     },
     onError: (err) => fail(err, 'Could not detach the database')
@@ -781,7 +791,10 @@ function EnvironmentAttach({ d, onChanged }: { d: HubDatabaseRow; onChanged: () 
             className={dangerGhost}
             armedClassName={dangerArmed}
             disabled={detach.isPending}
-            onConfirm={() => detach.mutate()}
+            onConfirm={() => {
+              const env = d.environment
+              if (env) detach.mutate({ appId: env.app_id, envId: env.id })
+            }}
           >
             {detach.isPending ? 'Detaching…' : 'Detach from environment'}
           </ConfirmButton>
@@ -845,6 +858,15 @@ function EnvironmentAttach({ d, onChanged }: { d: HubDatabaseRow; onChanged: () 
               onClick={() => attach.mutate()}
             >
               {attach.isPending ? 'Attaching…' : 'Attach to environment'}
+            </Button>
+            <Button
+              size='sm'
+              variant='outline'
+              className='h-8'
+              disabled={attach.isPending}
+              onClick={closePicker}
+            >
+              Cancel
             </Button>
           </div>
         )}
