@@ -371,7 +371,7 @@ describe('how many runs one process drives at once', () => {
   // and one app holds at most MAX_PARALLEL - 1 of them (2), so it never starves the others.
   const keys = ['invoices', 'orders', 'receipts', 'vendors']
   const statuses = (app: string) =>
-    h.mems[app].rows('nivaro_import_queue').map((r: { status: string }) => r.status)
+    h.mems[app].rows('nivaro_import_queue').map((r) => String(r.status))
   let open: () => void = () => {}
   beforeEach(() => {
     h.gate = new Promise<void>((r) => {
