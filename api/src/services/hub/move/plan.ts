@@ -585,12 +585,25 @@ function unknownSides(
   return parts.length ? parts.join(' and ') : null
 }
 
+/**
+ * E2E B3: `name` on the environment's public scheme and port (every name of the environment is
+ * served on the same edge entrypoint); plain https://<name> when the public address is not known.
+ */
+function addressOf(input: MovePlanInput, name: string): string {
+  try {
+    const u = new URL(String(input.env.public_origin ?? ''))
+    return `${u.protocol}//${name}${u.port ? `:${u.port}` : ''}`
+  } catch {
+    return `https://${name}`
+  }
+}
+
 function checklistOf(input: MovePlanInput, routing: 'automatic' | 'manual'): MovePlan['checklist'] {
   const out: MovePlan['checklist'] = []
   if (toShared(input.kind) && input.to.kind === 'shared')
     out.push({
       id: 'callbacks_registered',
-      text: `The sign-in app of ${input.to.shared.key} lists each of these redirect addresses: ${input.names.map((n) => `https://${n}/api/auth/callback`).join(', ')}.`,
+      text: `The sign-in app of ${input.to.shared.key} lists each of these redirect addresses: ${input.names.map((n) => `${addressOf(input, n)}/api/auth/callback`).join(', ')}.`,
       required: true
     })
   if (input.from.kind === 'gitlab')

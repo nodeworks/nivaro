@@ -239,7 +239,14 @@ export interface MoveTargetFacts {
 export interface MovePlanInput {
   kind: MoveKind
   app: { id: number; key: string; signin_mode: 'direct' | 'hub'; extensions: string[] }
-  env: { id: number; key: string; hub_linked: boolean; version_pin: string | null }
+  env: {
+    id: number
+    key: string
+    hub_linked: boolean
+    version_pin: string | null
+    /** E2E B3: the origin of the environment's public address (scheme + port kept). */
+    public_origin?: string | null
+  }
   from: PlacementSide
   to: PlacementSide
   target: MoveTarget

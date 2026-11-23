@@ -388,6 +388,16 @@ function healthOf(ctx: Ctx, driver: DockerDriverRow) {
   return p
 }
 
+/** E2E B3: the origin (scheme, host, port) of an environment's public address, or null. */
+function publicOriginOf(baseUrl: string): string | null {
+  try {
+    const u = new URL(String(baseUrl ?? '').trim())
+    return u.protocol === 'https:' || u.protocol === 'http:' ? u.origin : null
+  } catch {
+    return null
+  }
+}
+
 /** The settings a side may carry into the plan input: the stack shape only. Anything else an
  *  operator put there (an address with a password, say) stays out. */
 const SAFE_SHARED_SETTINGS = ['size', 'redis', 'publish_port'] as const
@@ -1016,7 +1026,13 @@ export async function gatherMovePlanInput(
       signin_mode: app.signin_mode,
       extensions: [...app.extensions]
     },
-    env: { id: env.id, key: env.key, hub_linked: !!row.hub_token, version_pin: env.version_pin },
+    env: {
+      id: env.id,
+      key: env.key,
+      hub_linked: !!row.hub_token,
+      version_pin: env.version_pin,
+      public_origin: publicOriginOf(env.base_url)
+    },
     from,
     to: toSide,
     target,

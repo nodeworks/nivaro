@@ -84,13 +84,13 @@ async function placementOf(
   return p
 }
 
-async function envOn(placement: number): Promise<number> {
+async function envOn(placement: number, baseUrl = 'https://acme.example.com'): Promise<number> {
   const app = await insertId('nivaro_hub_apps', { key: `a${++n}`, name: 'A' })
   return insertId('nivaro_hub_environments', {
     app_id: app,
     key: 'prod',
     status: 'active',
-    base_url: 'https://acme.example.com',
+    base_url: baseUrl,
     hostnames: '[]',
     placement_id: placement,
     hub_token: sealSecret(TOKEN)
@@ -287,6 +287,21 @@ describe('target addresses (P6-18 #1)', () => {
       )
     )
     expect(e?.code).toBe('TARGET_UNREACHABLE')
+  })
+
+  // E2E B3: the per-move name is served on the edge entrypoint of the public name, so it keeps
+  // the public address's scheme and port (an edge that is not on 443).
+  it('B3: the per-move address keeps the public address’s scheme and port (an edge off 443)', async () => {
+    const env = await envOn(await placementOf('shared'), 'https://acme.example.com:18443/app')
+    const target = await placementOf('docker')
+    const a = await resolveMoveAddresses(
+      env,
+      { kind: 'dedicated', placement_id: target },
+      { routing: 'automatic' },
+      deps().deps
+    )
+    expect(a.target_temp_host).toBe(`hub-move-e${env}-abcd1234.apps.example.com`)
+    expect(a.target_link_base).toBe(`https://hub-move-e${env}-abcd1234.apps.example.com:18443`)
   })
 
   it('a GitLab target with no check address of its own → TARGET_UNREACHABLE', async () => {

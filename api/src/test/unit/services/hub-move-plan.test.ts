@@ -879,3 +879,25 @@ describe('object storage key prefix (P6-31)', () => {
     expect(p.blockers.find((b) => b.code === 'STORAGE_LAYOUT_DIFFERS')?.text).toMatch(/gcs/)
   })
 })
+
+// E2E B3: the redirect addresses the checklist names keep the public address's scheme and port.
+describe('callback addresses (E2E B3)', () => {
+  it('an environment on a port other than 443 → its callbacks name that port', () => {
+    const p = buildMovePlan(
+      input({ env: { ...input().env, public_origin: 'https://shop.apps.example.com:18443' } })
+    )
+    expect(p.checklist.find((c) => c.id === 'callbacks_registered')?.text).toContain(
+      'https://shop.apps.example.com:18443/api/auth/callback'
+    )
+  })
+
+  it('the default port (or no origin known) → plain https://<name>', () => {
+    for (const env of [
+      { ...input().env, public_origin: 'https://shop.apps.example.com' },
+      input().env
+    ])
+      expect(
+        buildMovePlan(input({ env })).checklist.find((c) => c.id === 'callbacks_registered')?.text
+      ).toContain('https://shop.apps.example.com/api/auth/callback')
+  })
+})

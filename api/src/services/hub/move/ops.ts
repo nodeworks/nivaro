@@ -1174,13 +1174,15 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
       if (sent.some((h) => h.toLowerCase() === temp.toLowerCase()))
         throw new MoveStepError('TEMP_HOST_KEPT', `The stack spec still names ${temp}.`)
       // The edge drops the name once the stack converged; it must stop serving the app there.
+      // E2E B3: on the address recorded for it (the public scheme and port kept).
+      const probeBase = (await addresses()).target_link_base ?? `https://${temp}`
       const by = now() + TEMP_HOST_GONE_MS
       for (;;) {
         const ctl = new AbortController()
         const timer = setTimeout(() => ctl.abort(), 8_000)
         let served = false
         try {
-          const res = await (deps.fetch ?? fetch)(`https://${temp}/api/version`, {
+          const res = await (deps.fetch ?? fetch)(`${probeBase}/api/version`, {
             headers: { Accept: 'application/json' },
             redirect: 'manual',
             signal: ctl.signal

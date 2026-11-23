@@ -1165,12 +1165,14 @@ async function dropTempName(ctx: Ctx): Promise<void> {
     const se = asStepError(err, 'The per-move name could not be removed.')
     const move = await readMove(ctx.moveId)
     const host = move?.steps.addresses?.target_temp_host ?? 'the per-move name'
+    // E2E B3: where to check, on the public scheme and port it was served on.
+    const at = move?.steps.addresses?.target_link_base ?? host
     ctx.run.log(`the per-move name ${host} is still on the target stack (${se.code})`, 'warn')
     const checklist = (move?.checklist ?? []).filter((c) => c.id !== 'temp_host')
     checklist.push({
       id: 'temp_host',
       text: safeLine(
-        `Still to do: remove the per-move name ${host} from the target stack. Apply the environment's stack again (Apply now renders only the environment's own names), then check that ${host} no longer serves the app.`
+        `Still to do: remove the per-move name ${host} from the target stack. Apply the environment's stack again (Apply now renders only the environment's own names), then check that ${at} no longer serves the app.`
       ),
       required: false,
       done: false
