@@ -978,9 +978,10 @@ export const MOVE_CODE_COPY: Record<string, Copy> = {
     title: 'That move has already ended',
     hint: 'Its result is shown here. Dismiss it to plan a new move.'
   },
+  // Only ever stored by a retire_source stop: the same words as that stop's own copy.
   APP_KEY_UNCHECKED_UNREACHABLE: {
-    title: 'The Hub could not reach the new home to check its key',
-    hint: 'The old home was not retired. Resume to try again; Finish and keep the old home ends the move without retiring it.'
+    title: 'The move is waiting to check the app key',
+    hint: 'The Hub could not reach the new home to check its key, so the old home was not retired. Resume to try again, or finish the move and keep the old home.'
   },
   NOT_RELEASED: {
     title: 'The move has not reached its new home yet',
@@ -1210,8 +1211,25 @@ export function haltedTargetName(itemText: string | undefined): string {
 }
 
 /** Plain words for a run error's code, from the move tables then the Hub's own. */
-export function runErrorCopy(code: string | null): { title: string; hint?: string } | null {
+/**
+ * Round 1c: the error box's own words at a retire_source stop (retireStopKind), never the plan
+ * blocker's ("… then plan again"): the move waits for the app key, and the hint names the two ways
+ * out, as the panel's amber sentence does.
+ */
+export const RETIRE_STOP_COPY: Record<'key' | 'unreachable', Copy> = {
+  key: {
+    title: 'The move is waiting for the app key',
+    hint: "The new home does not seal this app's values with the app's own key yet, so the old home was not retired. Enter the key the new home runs under App key on this environment (the Hub takes it only when it matches what the new home reports), then Resume. Or finish the move and keep the old home."
+  },
+  unreachable: MOVE_CODE_COPY.APP_KEY_UNCHECKED_UNREACHABLE
+}
+
+export function runErrorCopy(
+  code: string | null,
+  opts: { retireStop?: 'key' | 'unreachable' | null } = {}
+): { title: string; hint?: string } | null {
   if (!code) return null
+  if (opts.retireStop) return RETIRE_STOP_COPY[opts.retireStop]
   return (
     MOVE_CODE_COPY[code] ??
     MOVE_BLOCKER_COPY[code] ??

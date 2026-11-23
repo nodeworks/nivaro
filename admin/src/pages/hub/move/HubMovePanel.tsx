@@ -202,9 +202,16 @@ export function OptionCombobox({
  * A stored run error (`CODE: sentence`): the code's plain words when known, the sentence under
  * them (raw text stays under "Details for support" via RunnerError); never the code itself.
  */
-export function MoveRunError({ text }: { text: string }) {
+export function MoveRunError({
+  text,
+  retireStop = null
+}: {
+  text: string
+  /** Round 1c: the move is stopped at retire_source (retireStopKind): that stop's own words. */
+  retireStop?: 'key' | 'unreachable' | null
+}) {
   const { code, sentence } = splitRunError(text)
-  const copy = runErrorCopy(code)
+  const copy = runErrorCopy(code, { retireStop })
   if (!copy) return <RunnerError text={sentence || text} />
   return (
     <div className='space-y-0.5'>
@@ -1411,7 +1418,7 @@ function MoveProgress({
           )}
           data-tone={m.status === 'success' ? 'warning' : 'error'}
         >
-          <MoveRunError text={errorText ?? m.error} />
+          <MoveRunError text={errorText ?? m.error} retireStop={retireStop} />
         </div>
       )}
       {m.status === 'rolled_back' && !repoint && (

@@ -1024,9 +1024,14 @@ describe('HubMovePanel — a move in progress', () => {
     expect(await screen.findByRole('button', { name: 'Resume' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Roll back' })).toBeNull()
     expect(
-      screen.getByText(/Enter the key the new home runs under App key on this environment/)
-    ).toBeInTheDocument()
+      screen.getAllByText(/Enter the key the new home runs under App key on this environment/)
+        .length
+    ).toBeGreaterThan(0)
     expect(screen.queryByText(/The Hub stopped hearing from this move/)).toBeNull()
+    // Round 1c: the error box has the stop's own title and hint, never the plan blocker's.
+    expect(screen.getByText('The move is waiting for the app key')).toBeInTheDocument()
+    expect(screen.queryByText(/then plan again/)).toBeNull()
+    expect(screen.queryByText('The key the Hub holds is not the one the app runs with')).toBeNull()
   })
 
   // P6-43 (b): Finish and keep the old home, typed confirm.
@@ -1083,6 +1088,10 @@ describe('HubMovePanel — a move in progress', () => {
       screen.getAllByText(/could not reach the new home to check its key/).length
     ).toBeGreaterThan(0)
     expect(screen.queryByText(/Enter the key the new home runs/)).toBeNull()
+    // Round 1c: the error box's own words: waiting to check the key, Resume to try again.
+    expect(screen.getByText('The move is waiting to check the app key')).toBeInTheDocument()
+    expect(screen.getByText(/Resume to try again, or finish the move/)).toBeInTheDocument()
+    expect(screen.queryByText(/then plan again/)).toBeNull()
   })
 
   // Review I-2 A: an interrupted ROLLBACK that carries an APP_KEY error keeps the rollback text.

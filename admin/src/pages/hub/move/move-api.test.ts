@@ -407,3 +407,23 @@ describe('retireStopKind', () => {
     expect(retireStopKind(move({ status: 'running' }))).toBeNull()
   })
 })
+
+// Round 1c: at a retire_source stop the error box never reuses the plan blocker's words.
+describe('runErrorCopy at a retire_source stop', () => {
+  it('names the waiting key and both ways out, for every stop code', async () => {
+    const { runErrorCopy } = await import('./move-api')
+    for (const code of ['APP_KEY_MISMATCH', 'APP_KEY_UNKNOWN']) {
+      const c = runErrorCopy(code, { retireStop: 'key' })
+      expect(c?.title).toBe('The move is waiting for the app key')
+      expect(c?.hint).toContain('then Resume')
+      expect(c?.hint).toContain('finish the move and keep the old home')
+      expect(c?.hint).not.toMatch(/plan again/)
+    }
+    const u = runErrorCopy('APP_KEY_UNCHECKED_UNREACHABLE', { retireStop: 'unreachable' })
+    expect(u?.title).toBe('The move is waiting to check the app key')
+    expect(u?.hint).toContain('Resume to try again')
+    expect(u?.hint).not.toMatch(/enter|plan again/i)
+    // Outside the stop the plan blocker's words stay (a target_ready rollback, a plan).
+    expect(runErrorCopy('APP_KEY_MISMATCH')?.hint).toMatch(/plan again/)
+  })
+})
