@@ -194,6 +194,11 @@ describe('Environment row (Hub admin)', () => {
       within(table).getByRole('button', { name: 'Place dev on a shared deployment' })
     ).toBeInTheDocument()
     expect(within(table).queryByRole('button', { name: 'Move dev' })).toBeNull()
+    // Design B1: icon actions only, in a column that clips rather than paint over Checked.
+    expect(within(table).queryByText('Move…')).toBeNull()
+    expect(within(table).queryByText('Promote')).toBeNull()
+    const actions = within(table).getByRole('button', { name: 'Move production' }).closest('td')
+    expect(actions?.className).toContain('overflow-hidden')
     // A shared-placed environment's Promote says why instead of opening a panel that refuses.
     const promote = within(table).getByRole('button', { name: 'Promote production' })
     expect(promote).toBeDisabled()

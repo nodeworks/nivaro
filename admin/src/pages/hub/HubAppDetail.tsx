@@ -342,12 +342,14 @@ function EnvironmentsCard({
             <table className='w-full min-w-[640px] table-fixed text-[12px]'>
               <thead>
                 <tr className='border-b border-slate-200 text-left text-[11px] uppercase tracking-wide text-slate-500 dark:border-border dark:text-muted-foreground'>
-                  <th className='w-[18%] px-4 py-2 font-medium'>Environment</th>
+                  <th className='w-[20%] px-4 py-2 font-medium'>Environment</th>
                   <th className='px-4 py-2 font-medium'>Address</th>
-                  <th className='w-[12%] px-4 py-2 font-medium'>Version</th>
-                  <th className='w-[22%] px-4 py-2 font-medium'>Status</th>
-                  <th className='w-[11%] px-4 py-2 font-medium'>Checked</th>
-                  <th className='w-[200px] px-4 py-2'>
+                  <th className='w-[11%] px-4 py-2 font-medium'>Version</th>
+                  <th className='w-[20%] px-4 py-2 font-medium'>Status</th>
+                  <th className='w-[10%] px-4 py-2 font-medium'>Checked</th>
+                  {/* Design B1: icons only (each has its name and a tip), five at most, so the
+                      column always holds them; it never paints over Checked. */}
+                  <th className='w-[192px] px-2 py-2'>
                     <span className='sr-only'>Actions</span>
                   </th>
                 </tr>
@@ -513,7 +515,7 @@ function EnvActions({
   // The table row and the phone entry both render actions: ids unique per mount.
   const whyId = useId()
   return (
-    <div className='flex items-center justify-end gap-0.5'>
+    <div className='flex flex-wrap items-center justify-end gap-0'>
       {canPromote && env.placement_id != null && row.isShared && (
         // A shared-placed environment's version follows its deployment: say so, don't open a
         // panel that can only refuse.
@@ -526,7 +528,6 @@ function EnvActions({
             disabled
           >
             <Rocket className='h-3.5 w-3.5' aria-hidden />
-            <span className='hidden lg:inline'>Promote</span>
           </button>
           {/* The reason for assistive tech too (the tip is pointer-only). */}
           <span id={whyId} className='sr-only'>
@@ -543,7 +544,6 @@ function EnvActions({
           disabled
         >
           <Rocket className='h-3.5 w-3.5' aria-hidden />
-          <span className='hidden lg:inline'>Promote</span>
         </button>
       )}
       {canPromote && env.placement_id != null && !row.isShared && !row.placementPending && (
@@ -556,7 +556,6 @@ function EnvActions({
           onClick={() => row.setPromoting(!row.promoting)}
         >
           <Rocket className='h-3.5 w-3.5' aria-hidden />
-          <span className='hidden lg:inline'>Promote</span>
         </button>
       )}
       <button
@@ -583,7 +582,6 @@ function EnvActions({
           onClick={() => row.setMoving(!row.moving)}
         >
           <ArrowRightLeft className='h-3.5 w-3.5' aria-hidden />
-          <span className='hidden lg:inline'>Move…</span>
         </button>
       )}
       {isAdmin && placeable(env) && (
@@ -597,7 +595,6 @@ function EnvActions({
           onClick={() => row.setPlacing(!row.placing)}
         >
           <Layers className='h-3.5 w-3.5' aria-hidden />
-          <span className='hidden lg:inline'>Place…</span>
         </button>
       )}
       {isAdmin && (
@@ -697,7 +694,7 @@ function EnvRow({
         >
           {s?.checked_at ? formatRelative(s.checked_at) : '—'}
         </td>
-        <td className='px-4 py-2.5'>
+        <td className='overflow-hidden px-2 py-2.5'>
           <EnvActions env={env} row={row} isAdmin={isAdmin} canPromote={canPromote} />
         </td>
       </tr>
