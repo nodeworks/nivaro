@@ -1328,8 +1328,9 @@ function MoveProgress({
             up after 24 hours.
           </p>
           {plan?.manual_request && (
-            <div className='flex flex-wrap items-start gap-2'>
-              <pre className='m-0 min-w-0 flex-1 whitespace-pre-wrap break-words rounded bg-white px-2 py-1.5 font-mono text-[11px] text-slate-800 dark:bg-card dark:text-slate-200'>
+            // Design N10: on a phone Copy sits above the request, which keeps the full width.
+            <div className='flex flex-col-reverse items-start gap-2 sm:flex-row'>
+              <pre className='m-0 w-full min-w-0 flex-1 whitespace-pre-wrap break-words rounded bg-white px-2 py-1.5 font-mono text-[11px] text-slate-800 dark:bg-card dark:text-slate-200'>
                 {plan.manual_request}
               </pre>
               <CopyButton value={plan.manual_request} label='Copy the request' />
