@@ -14,7 +14,7 @@ import { makeHandlers } from './handlers.js'
 import { createLog, type Log } from './log.js'
 import { createServer, type HandlerResult, type Handlers } from './server.js'
 
-export const AGENT_VERSION = '0.2.1'
+export const AGENT_VERSION = '0.2.2'
 export const MIN_ENGINE_API = [1, 44] as const
 
 export type StartResult =

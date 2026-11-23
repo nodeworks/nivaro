@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { type AgentConfig, loadAgentConfig } from '../src/config.js'
 import type { Transport } from '../src/engine.js'
-import { isEntryPoint, startAgent } from '../src/main.js'
+import { AGENT_VERSION, isEntryPoint, startAgent } from '../src/main.js'
 import { createServer, type Handlers } from '../src/server.js'
 
 const TOKEN = 'Server-Token-0123456789-ABCDEFGHIJ-xyz'
@@ -143,6 +143,19 @@ function req(
     r.end()
   })
 }
+
+describe('the version the agent reports', () => {
+  it('is 0.2.2 (exporter role, split shared owners) and matches package.json', () => {
+    const pkg = JSON.parse(
+      fs.readFileSync(
+        path.join(path.dirname(new URL(import.meta.url).pathname), '../package.json'),
+        'utf8'
+      )
+    ) as { version: string }
+    expect(AGENT_VERSION).toBe('0.2.2')
+    expect(pkg.version).toBe(AGENT_VERSION)
+  })
+})
 
 describe('auth', () => {
   it('no bearer, a wrong bearer or another scheme → 401', async () => {

@@ -9,7 +9,9 @@ import type { StackSpec } from './agent-types.js'
  * Task 15: Nivaro 0.3.184 brought NIVARO_ROLE=exporter (background exports only, ticks no crons;
  * services/export-handoff.ts). From that version a large stack adds one `exporter` with the
  * importer's limits; while it is down the importer, then the worker, run exports in its place.
- * Small and medium are the same in both templates. An older image never gets the role.
+ * Small and medium are the same in both templates. An older image never gets the role, and nor
+ * does an agent older than EXPORTER_AGENT_MIN_VERSION (it refuses the role): stackRoles leaves it
+ * out there, so the importer keeps running exports.
  */
 
 export type StackSize = 'small' | 'medium' | 'large'
@@ -76,4 +78,34 @@ export function templateFor(version: string): StackTemplate {
     )
   }
   return best
+}
+
+/** Hub agents from this version accept the `exporter` role (and a split shared owner). */
+export const EXPORTER_AGENT_MIN_VERSION = '0.2.2'
+
+/**
+ * Is the version an agent reports (GET /v1/health `agent_version`) at least `min`? `v0.2.2`,
+ * `0.2.2-rc.1` read as 0.2.2; anything that is not `x.y.z…` (unknown, `dev`) is false.
+ */
+export function agentVersionAtLeast(v: unknown, min: string): boolean {
+  if (typeof v !== 'string') return false
+  const m = /^v?(\d+\.\d+\.\d+)/.exec(v.trim())
+  return !!m && compareVersions(m[1], min) >= 0
+}
+
+/**
+ * The roles a dedicated stack runs: the template's for the version and size, as a fresh copy,
+ * without the `exporter` when the target agent is older than EXPORTER_AGENT_MIN_VERSION or its
+ * version is unknown (it would refuse the role; the importer drains exports instead). Throws
+ * StackTemplateError like templateFor.
+ */
+export function stackRoles(
+  version: string,
+  size: StackSize,
+  agentVersion: string | null | undefined
+): StackSpec['roles'] {
+  const roles = structuredClone(templateFor(version).sizes[size])
+  return agentVersionAtLeast(agentVersion, EXPORTER_AGENT_MIN_VERSION)
+    ? roles
+    : roles.filter((r) => r.role !== 'exporter')
 }

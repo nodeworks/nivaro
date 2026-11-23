@@ -14,7 +14,13 @@ import {
   databaseRecordId
 } from '../../../services/hub/docker/stack-env.js'
 import type { StackSettingsRow } from '../../../services/hub/docker/stack-settings.js'
-import { STACK_TEMPLATES, templateFor } from '../../../services/hub/docker/templates.js'
+import {
+  agentVersionAtLeast,
+  EXPORTER_AGENT_MIN_VERSION,
+  STACK_TEMPLATES,
+  stackRoles,
+  templateFor
+} from '../../../services/hub/docker/templates.js'
 import type { HubEnvironmentRow } from '../../../services/hub/promote-types.js'
 
 // Nivaro Hub phase 4, Task 7: the Hub-side renderer. Its output for the fixture input must be
@@ -134,8 +140,23 @@ describe('renderStackSpec', () => {
     expect(renderStackSpec(input({ edge: 'publish', row })).publish_port).toBe(31000)
   })
 
+  it('controller ruling: the exporter only for an agent at 0.2.2 or later; unknown or older → none', () => {
+    expect(EXPORTER_AGENT_MIN_VERSION).toBe('0.2.2')
+    const names = (agentVersion: string | null | undefined) =>
+      renderStackSpec({ ...withRow({ size: 'large' }), agentVersion }).roles.map((r) => r.role)
+    for (const v of [undefined, null, '', 'garbage', '0.2.1', '0.1.0'])
+      expect(names(v), String(v)).toEqual(['web', 'worker', 'realtime', 'importer'])
+    for (const v of ['0.2.2', '0.2.10', '0.3.0', '0.2.2-rc.1', 'v0.2.2'])
+      expect(names(v), v).toEqual(['web', 'worker', 'realtime', 'importer', 'exporter'])
+    // Small and medium never change, whatever the agent.
+    for (const size of ['small', 'medium'] as const)
+      expect(stackRoles('0.3.208', size, '0.2.2')).toEqual(stackRoles('0.3.208', size, null))
+    expect(agentVersionAtLeast('0.2.2', '0.2.2')).toBe(true)
+    expect(agentVersionAtLeast(7, '0.2.2')).toBe(false)
+  })
+
   it('takes roles from the template for the version and size, as copies', () => {
-    const spec = renderStackSpec(withRow({ size: 'large' }))
+    const spec = renderStackSpec({ ...withRow({ size: 'large' }), agentVersion: '0.2.2' })
     expect(spec.roles.map((r) => `${r.role}x${r.replicas}`)).toEqual([
       'webx3',
       'workerx1',

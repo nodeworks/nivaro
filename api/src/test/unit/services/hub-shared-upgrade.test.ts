@@ -109,7 +109,7 @@ async function insertId(table: string, row: Record<string, unknown>): Promise<nu
 function health(over: Partial<AgentHealth> = {}): AgentHealth {
   return {
     api: 1,
-    agent_version: '0.2.0',
+    agent_version: '0.2.2',
     engine_api: '1.44',
     swarm: { manager: true, node_id: 'n1', nodes: 1 },
     images: ['nodeworks/nivaro', 'registry.example.com/acme/reports'],
@@ -609,6 +609,47 @@ describe('Task 14: the role split is a normal shared upgrade', () => {
     expect(w?.text).toContain('adds all')
     expect(w?.text).toContain('removes web, worker, importer, exporter')
     expect(back.plan_hash).not.toBe(same.plan_hash)
+  })
+
+  it('controller ruling: a split needs agent 0.2.2 (AGENT_TOO_OLD); small keeps the 0.2.0 floor', async () => {
+    const id = await newShared({ settings: JSON.stringify({ size: 'medium' }) })
+    await newApp(id, [{ key: 'production', placed: true }])
+    const at = (agent_version: string) =>
+      planDeps({ agentHealth: async () => health({ agent_version }) })
+    const old = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', at('0.2.1'))
+    expect(codes(old.blockers)).toEqual(['AGENT_TOO_OLD'])
+    expect(old.blockers[0].text).toBe(
+      'The Hub agent is 0.2.1; a shared deployment split into web, worker, importer, exporter needs 0.2.2 or later.'
+    )
+    // Unknown is too old for anything (one blocker, the 0.2.0 sentence).
+    const unknown = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', at('dev'))
+    expect(codes(unknown.blockers)).toEqual(['AGENT_TOO_OLD'])
+    expect(unknown.blockers[0].text).toContain('need 0.2.0 or later')
+    expect(
+      codes((await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', at('0.2.2'))).blockers)
+    ).toEqual([])
+    // A re-apply of a split that runs is held to it too (the agent re-sends every service).
+    await success(id, {
+      plan: {
+        roles: [
+          { role: 'web', replicas: 2 },
+          { role: 'worker', replicas: 1 },
+          { role: 'importer', replicas: 1 }
+        ]
+      }
+    })
+    const reapply = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', {
+      ...at('0.2.1'),
+      roleShape: 'deployed'
+    })
+    expect(codes(reapply.blockers)).toContain('AGENT_TOO_OLD')
+    // Small: one `all`, which every shared-capable agent takes.
+    await db('nivaro_hub_shared_deployments')
+      .where({ id })
+      .update({ settings: JSON.stringify({ size: 'small' }) })
+    expect(
+      codes((await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', at('0.2.0'))).blockers)
+    ).toEqual([])
   })
 
   it('Task 15: a stack that runs the Task 14 split gains the exporter only through an upgrade', async () => {

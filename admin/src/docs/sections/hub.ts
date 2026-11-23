@@ -681,7 +681,7 @@ export const hubDockerDocs: DocSection = {
         ],
         [
           '`large`',
-          '`web` 3 replicas with sockets off (2 CPUs, 3072 MB), `worker` 1 (2 CPUs, 4096 MB), `realtime` 2 (1 CPU, 1024 MB), `importer` 1 (2 CPUs, 4096 MB) and, from Nivaro 0.3.184, `exporter` 1 (2 CPUs, 4096 MB), which runs background exports; while it is down the importer, then the worker, run them.'
+          '`web` 3 replicas with sockets off (2 CPUs, 3072 MB), `worker` 1 (2 CPUs, 4096 MB), `realtime` 2 (1 CPU, 1024 MB), `importer` 1 (2 CPUs, 4096 MB) and, from Nivaro 0.3.184 with Hub agent 0.2.2 or later, `exporter` 1 (2 CPUs, 4096 MB), which runs background exports; while it is down the importer, then the worker, run them. With an older agent (or one whose version is unknown) the stack has no exporter and the importer runs exports; nothing fails.'
         ]
       ]
     },

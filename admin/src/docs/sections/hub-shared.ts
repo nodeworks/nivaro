@@ -111,7 +111,7 @@ export const hubSharedDocs: DocSection = {
     },
     {
       type: 'p',
-      text: 'The Hub agent image has to be 0.2.0 or later (`nodeworks/nivaro-hub-agent`; publish the tag `@hub-agent-0.2.0` first, the release step is in Docker driver and Hub agent). A plan against an older agent stops with `AGENT_TOO_OLD`. The stack size sets the services (`settings.size`, default small). The stack sets no sticky cookie on a multi-replica service: clients connect over websockets first, and the long-polling fallback may bounce between replicas. If you front the stack with a proxy that needs stickiness, add it there.'
+      text: 'The Hub agent image has to be 0.2.0 or later (`nodeworks/nivaro-hub-agent`; publish the tag `@hub-agent-0.2.0` first, the release step is in Docker driver and Hub agent). A plan against an older agent stops with `AGENT_TOO_OLD`. A medium or large stack (split into web, worker, importer and exporter) needs agent 0.2.2 or later (`@hub-agent-0.2.2`): an older agent refuses the split and the exporter role, so its plan stops with `AGENT_TOO_OLD` too; small (one `all`) still needs only 0.2.0. The stack size sets the services (`settings.size`, default small). The stack sets no sticky cookie on a multi-replica service: clients connect over websockets first, and the long-polling fallback may bounce between replicas. If you front the stack with a proxy that needs stickiness, add it there.'
     },
     {
       type: 'table',
@@ -288,7 +288,7 @@ export const hubSharedDocs: DocSection = {
         ],
         [
           '`VERSION_UNKNOWN`, `AGENT_UNREACHABLE`, `AGENT_TOO_OLD`',
-          'The version has no image in the registry the Hub watches, the agent does not answer, or the agent is older than 0.2.0.'
+          'The version has no image in the registry the Hub watches, the agent does not answer, or the agent is older than 0.2.0 (0.2.2 for a medium or large stack).'
         ],
         [
           '`NO_DRIVER`, `NO_STACK_NAME`, `IMAGE_NOT_ALLOWED`, `EXTENSION_NOT_ALLOWED`, `EXTENSION_UNPINNED`',

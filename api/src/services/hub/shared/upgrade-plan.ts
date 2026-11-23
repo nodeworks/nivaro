@@ -5,6 +5,7 @@ import { environmentFromRow } from '../apps.js'
 import { AgentError, agentHealth } from '../docker/agent-client.js'
 import type { AgentHealth, StackSpec } from '../docker/agent-types.js'
 import { environmentNames, hostnameRefusals, type StackEdge } from '../docker/render-spec.js'
+import { agentVersionAtLeast } from '../docker/templates.js'
 import { type DockerDriverRow, getDriver, STACK_NAME_RE } from '../drivers.js'
 import { openMoveFor } from '../move-open.js'
 import { storedRuns, successfulVersions } from '../promote-gather.js'
@@ -44,7 +45,8 @@ import { type SharedTenantRow, tenantsOf } from './tenants.js'
  * (registered mode: the operator upgrades it); BAD_VERSION; BUSY (the shared lock, or any placed
  * environment's lock, is held); VERSION_UNKNOWN (no image digest in the registry for the tag);
  * NOT_DEPLOYED_BEFORE (a rollback to a version this deployment never ran); NO_DRIVER;
- * NO_STACK_NAME; AGENT_UNREACHABLE; AGENT_TOO_OLD (an agent before shared owners, < 0.2.0);
+ * NO_STACK_NAME; AGENT_UNREACHABLE; AGENT_TOO_OLD (an agent before shared owners, < 0.2.0; or,
+ * for a split role shape — anything but one `all` — before split shared owners, < 0.2.2);
  * IMAGE_NOT_ALLOWED / EXTENSION_NOT_ALLOWED (the agent's allow-list); EXTENSION_UNPINNED;
  * PATTERN_NOT_ALLOWED / HOSTNAME_NOT_ALLOWED / TOO_MANY_HOSTNAMES / NO_ROUTE (routing);
  * PUBLISH_PORT_NOT_ALLOWED; REDIS_NOT_AVAILABLE / REDIS_URL_MISSING; HUB_URL_UNUSABLE (the
@@ -122,6 +124,9 @@ export const OVERRIDABLE_CODES = ['ORDER', 'PREFLIGHT_FAILING'] as const
 
 /** Agents from this version accept shared owners, host_pattern and an empty hostnames list. */
 export const SHARED_AGENT_MIN_VERSION = '0.2.0'
+/** Agents from this version accept a split shared owner (web, worker, importer, exporter; Tasks
+ *  14–15). One `all` (small) needs only SHARED_AGENT_MIN_VERSION. */
+export const SHARED_SPLIT_AGENT_MIN_VERSION = '0.2.2'
 
 const VERSION_RE = /^\d+\.\d+\.\d+$/
 const SEMVER_RE =
@@ -612,6 +617,19 @@ export async function gatherSharedUpgrade(
     deps.roleShape === 'deployed' && deployed ? deployed.roles : sharedRoles(settings.size)
   const roles = toDeploy.map((r) => ({ role: r.role, replicas: r.replicas }))
   const roles_from = deployed && !deployed.never ? deployed.roles.map((r) => r.role) : null
+  // An agent before 0.2.2 refuses a split shared owner and the exporter role: the run would fail
+  // at apply. (An unreadable version is already too old for any shared owner, above.)
+  const split = !(toDeploy.length === 1 && toDeploy[0].role === 'all')
+  if (
+    health &&
+    split &&
+    !agentTooOld(health.agent_version) &&
+    !agentVersionAtLeast(health.agent_version, SHARED_SPLIT_AGENT_MIN_VERSION)
+  )
+    block(
+      'AGENT_TOO_OLD',
+      `The Hub agent is ${String(health.agent_version).slice(0, 32)}; a shared deployment split into ${roles.map((r) => r.role).join(', ')} needs ${SHARED_SPLIT_AGENT_MIN_VERSION} or later.`
+    )
   if (roles_from) {
     const to = roles.map((r) => r.role)
     const added = to.filter((r) => !roles_from.includes(r))
