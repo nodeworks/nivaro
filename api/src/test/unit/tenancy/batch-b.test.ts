@@ -103,19 +103,25 @@ describe('batch B: T7 sites (tenant-admin protections hold on shared)', () => {
 })
 
 describe('batch B: T7 relay route', () => {
-  it('a tenant admin cannot connect or set the relay in cloud or on shared', async () => {
+  it('a tenant admin cannot connect or set the relay in cloud (CLOUD_MANAGED); on shared the app owns its relay', async () => {
     const app = fastify()
     await app.register(pushRoutes)
-    for (const m of ['cloud', 'shared'] as const) {
-      setMode(m)
-      const res = await app.inject({
-        method: 'POST',
-        url: '/relay',
-        payload: { relay_key: 'k'.repeat(40) }
-      })
-      expect(res.statusCode).toBe(403)
-      expect(res.json().code).toBe('CLOUD_MANAGED')
-    }
+    setMode('cloud')
+    const res = await app.inject({
+      method: 'POST',
+      url: '/relay',
+      payload: { relay_key: 'k'.repeat(40) }
+    })
+    expect(res.statusCode).toBe(403)
+    expect(res.json().code).toBe('CLOUD_MANAGED')
+    // Shared: no CLOUD_MANAGED refusal (the write itself is covered in push-relay-shared.test.ts).
+    setMode('shared')
+    const shared = await app.inject({
+      method: 'POST',
+      url: '/relay',
+      payload: { relay_key: 'k'.repeat(40) }
+    })
+    expect(shared.json().code).not.toBe('CLOUD_MANAGED')
     await app.close()
   })
 })

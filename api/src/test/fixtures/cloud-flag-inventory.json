@@ -998,11 +998,12 @@
       "line": 364,
       "text": "process.env.CLOUD_META_DB_URL &&",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T7",
-      "why": "a tenant admin must not set the process-wide push-relay key/url (CLOUD_MANAGED)",
-      "batch": "B"
+      "why": "Nivaro Cloud owns an app's push-relay key/url (CLOUD_MANAGED); an app on a shared deployment connects its own relay (isNivaroCloud)",
+      "batch": "B",
+      "phase6": "done: per app on a shared deployment"
     },
     {
       "id": "routes/realtime-verify.ts:118",
@@ -2484,12 +2485,12 @@
       "line": 317,
       "text": "if (process.env.CLOUD_META_DB_URL) return tenantOrigin() ?? ''",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "nivaroCloud",
       "rule": "C4",
-      "why": "tenant canonical origin for push links",
+      "why": "the app's own origin is the relay instance and registration address on every multi-tenant process (isMultiTenant)",
       "batch": "B",
-      "phase6": "shared deployment names the self-hosted admin origin as the relay instance for every app; a per-app relay identity needs a per-app origin; shared mode needs a per-tenant origin before phone push can be turned on"
+      "phase6": "done: per app on a shared deployment"
     },
     {
       "id": "services/pool-attribution.ts:187",
@@ -2574,7 +2575,7 @@
       "rule": "T7",
       "why": "process-wide push-relay key never from env: one tenant admin must not get or set it on a shared process",
       "batch": "B",
-      "phase6": "shared deployment ignores the env relay key (MOBILE_PUSH_RELAY_KEY); a per-app key needs per-app storage that nothing on shared writes yet, as cloud provisioning does, so phone push stays off"
+      "phase6": "done: the env relay key stays ignored on shared; each app connects its own relay and stores its own key (POST /push/relay)"
     },
     {
       "id": "services/push-relay.ts:100",

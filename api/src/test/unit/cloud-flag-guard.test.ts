@@ -74,7 +74,12 @@ const EXTRA_CALLS: Record<string, { multiTenant?: number; nivaroCloud?: number }
   // phone app's `teams_bot` feature follows (its T5 `multiTenant` const still gates infrastructure).
   'routes/teams-bot.ts': { nivaroCloud: 4 },
   'services/teams-bot/config.ts': { nivaroCloud: 2 },
-  'services/app-info.ts': { nivaroCloud: 1 }
+  'services/app-info.ts': { nivaroCloud: 1 },
+  // The push relay per app: POST /push/relay refuses in Nivaro Cloud only (its T7 entry is weight
+  // 0); a Hub shared deployment connects each app's own relay. instanceOrigin() (its C4 entry is
+  // weight 0) names the app's own origin on every multi-tenant process.
+  'routes/push.ts': { nivaroCloud: 1 },
+  'services/phone-push.ts': { multiTenant: 1 }
 }
 
 type Rule = 'T1' | 'T2' | 'T3' | 'T4' | 'T5' | 'T6' | 'T7' | 'C1' | 'C2' | 'C3' | 'C4' | 'C5'
