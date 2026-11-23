@@ -947,10 +947,12 @@ describe('startSharedUpgrade — the run', () => {
   })
 
   it('no re-apply after a failed or interrupted run: it would quietly roll back (review minor 4)', async () => {
+    // Runs that reached apply (spec_hash recorded); one that never did is the N-2 test below.
+    const applied = JSON.stringify({ spec_hash: 'f'.repeat(64) })
     for (const [last, plan] of [
-      ['failed', null],
-      ['interrupted', null],
-      ['cancelled', JSON.stringify({ spec_hash: 'f'.repeat(64) })]
+      ['failed', applied],
+      ['interrupted', applied],
+      ['cancelled', applied]
     ]) {
       const id = await newShared()
       await db('nivaro_hub_shared_deploys').insert({
@@ -1170,5 +1172,257 @@ describe('env stack plan: HUB_URL_PROBLEM', () => {
     // Without a problem the facts carry no warnings key at all (older plans stay byte-equal).
     const input = await gather.gatherPlanInput(envId, { kind: 'promote', version: '0.3.210' }, deps)
     expect(Object.values(input.stacks ?? {})[0]?.warnings).toBeUndefined()
+  })
+})
+
+// ── parked wave (Task 5 round 2 N-2..N-5) ──────────────────────────────────────────────────────
+
+describe('re-apply after a run that never reached apply (N-2)', () => {
+  it('a failed / interrupted run with no spec_hash does not block; one that applied still does', async () => {
+    for (const [status, error] of [
+      ['failed', 'START_FAILED: the run could not be started; nothing was applied.'],
+      ['failed', 'AGENT_UNREACHABLE: The Hub agent does not answer.'],
+      ['interrupted', 'LOCK_LOST: The run lost its lock; plan again.'],
+      ['cancelled', 'CANCELLED: Cancelled.']
+    ]) {
+      const id = await newShared()
+      await db('nivaro_hub_shared_deploys').insert({
+        shared_deployment_id: id,
+        kind: 'upgrade',
+        version: '0.3.210',
+        from_version: '0.3.209',
+        status,
+        error,
+        plan: JSON.stringify({ plan: { version: '0.3.210' } })
+      })
+      const f = fakes()
+      f.sightings = [
+        { instance: 'i1', version: '0.3.209', etag: null, at: new Date(START).toISOString() }
+      ]
+      f.statusVersion = '0.3.209'
+      const { deps } = runDeps(f)
+      const shared = await Store.getShared(id)
+      const r = await Run.startSharedReapply(shared as NonNullable<typeof shared>, 'a', deps)
+      expect(r, `${status} ${error}`).toMatchObject({ started: true })
+      await Run.awaitSharedUpgrade(r.shared_deploy_id as number)
+    }
+    // An older run that applied and failed, then a newer one that never applied: still refused
+    // (the stack may run the older run's version).
+    const id = await newShared()
+    for (const plan of [JSON.stringify({ spec_hash: 'f'.repeat(64) }), null])
+      await db('nivaro_hub_shared_deploys').insert({
+        shared_deployment_id: id,
+        kind: 'upgrade',
+        version: '0.3.210',
+        from_version: '0.3.209',
+        status: 'failed',
+        plan
+      })
+    const { deps } = runDeps(fakes())
+    const shared = await Store.getShared(id)
+    expect(await Run.startSharedReapply(shared as NonNullable<typeof shared>, 'a', deps)).toEqual({
+      started: false,
+      reason: 'LAST_RUN_FAILED'
+    })
+  })
+})
+
+describe('REDIS_URL stored, not applied (N-3)', () => {
+  it('marked from the PATCH until a run that rendered that URL succeeds; never the value', async () => {
+    const id = await newShared({ settings: JSON.stringify({ redis: 'external' }) })
+    expect(await Run.redisUrlNotApplied(id)).toBe(false)
+    const url1 = 'rediss://:Pw-One-0123456789@redis.internal.example.com:6380/1'
+    await Run.setSharedSecrets(id, { REDIS_URL: url1 })
+    expect(await Run.redisUrlNotApplied(id)).toBe(true)
+    // A run that rendered it but failed (swarm rolled back) does not clear the mark.
+    const failing = runDeps(fakes())
+    failing.deps.agentStack = vi.fn(async () => ({
+      name: 'x',
+      owner: { shared: 'x' },
+      environment: 'shared',
+      spec_hash: 'f'.repeat(64),
+      image: null,
+      state: 'rolled_back' as const,
+      published_port: null,
+      services: []
+    })) as never
+    expect((await start(id, failing.deps)).row?.status).toBe('failed')
+    expect(await Run.redisUrlNotApplied(id)).toBe(true)
+    // A successful run clears it; the stored plan holds no URL.
+    await db('nivaro_hub_shared_deploys').where({ shared_deployment_id: id }).del()
+    const { row } = await start(id, runDeps(fakes()).deps)
+    expect(row?.status).toBe('success')
+    expect(await Run.redisUrlNotApplied(id)).toBe(false)
+    const stored = (await db('nivaro_hub_shared_deploys').where({ id: row?.id }).first()).plan
+    expect(stored).not.toContain('Pw-One')
+    // A new URL is pending again until the next successful apply.
+    await Run.setSharedSecrets(id, { REDIS_URL: url1.replace('One', 'Two') })
+    expect(await Run.redisUrlNotApplied(id)).toBe(true)
+  })
+})
+
+describe('a stack stuck degraded (N-4)', () => {
+  const stackAt = (state: string) => ({
+    name: 'x',
+    owner: { shared: 'x' },
+    environment: 'shared',
+    spec_hash: 'f'.repeat(64),
+    image: null,
+    state: state as 'degraded',
+    published_port: null,
+    services: []
+  })
+
+  it('fails after a few minutes of steady degraded, naming degraded, not after 30 minutes', async () => {
+    const id = await newShared()
+    const { deps, out } = runDeps(fakes())
+    deps.agentStack = vi.fn(async () => stackAt('degraded')) as never
+    const { row } = await start(id, deps)
+    expect(row?.status).toBe('failed')
+    expect(row?.error).toMatch(/^SWARM_DEGRADED: /)
+    expect(row?.error).toMatch(/degraded/)
+    expect(out.failed).toMatch(/SWARM_DEGRADED/)
+    expect(t - START).toBeLessThan(10 * 60_000)
+    expect((await Store.getShared(id))?.version_pin).toBe('0.3.209')
+  })
+
+  it('a short degraded spell that converges still succeeds', async () => {
+    const id = await newShared()
+    const { deps } = runDeps(fakes())
+    const states = ['degraded', 'degraded', 'updating', 'degraded', 'converged']
+    deps.agentStack = vi.fn(async () => stackAt(states.shift() ?? 'converged')) as never
+    expect((await start(id, deps)).row?.status).toBe('success')
+  })
+
+  it('degraded spells broken by updating never fail early: the version wait decides', async () => {
+    const id = await newShared()
+    const f = fakes()
+    // Never seen on the version: the run waits out the version timeout.
+    f.sightings = [
+      { instance: 'i1', version: '0.3.209', etag: null, at: new Date(START).toISOString() }
+    ]
+    const { deps } = runDeps(f)
+    let n = 0
+    // degraded, then updating, alternating: never steady long enough to fail early.
+    deps.agentStack = vi.fn(async () => stackAt(n++ % 2 ? 'updating' : 'degraded')) as never
+    const { row } = await start(id, deps)
+    expect(row?.error).toMatch(/^VERSION_TIMEOUT: /)
+  })
+})
+
+describe('a start whose job run began but could not be linked (N-5)', () => {
+  it('fails the job run too, not only the deploy rows', async () => {
+    const id = await newShared()
+    const { deps, out } = runDeps(fakes())
+    await db.raw(
+      `CREATE TRIGGER parked_b_job_link BEFORE UPDATE OF job_run_id ON nivaro_hub_shared_deploys
+       BEGIN SELECT RAISE(ABORT, 'job link refused'); END`
+    )
+    try {
+      await expect(start(id, deps)).rejects.toThrow()
+    } finally {
+      await db.raw('DROP TRIGGER parked_b_job_link')
+    }
+    const row = await db('nivaro_hub_shared_deploys').where({ shared_deployment_id: id }).first()
+    expect(row.status).toBe('failed')
+    expect(out.failed).toMatch(/^START_FAILED: /)
+    expect((await Store.getShared(id))?.status).toBe('active')
+  })
+})
+
+describe('downgrade needs confirm (ruling P6-29, B2)', () => {
+  it('isSharedDowngrade compares semver-aware and treats an unparseable version as a downgrade', () => {
+    const d = Plan.isSharedDowngrade
+    expect(d('0.3.210', '0.3.209')).toBe(true)
+    expect(d('0.3.210', '0.3.21')).toBe(true)
+    expect(d('0.3.9', '0.3.10')).toBe(false)
+    expect(d('1.0.0', '0.99.99')).toBe(true)
+    expect(d('0.3.210', '0.3.210')).toBe(false)
+    expect(d('0.3.210', '0.3.211')).toBe(false)
+    // Pre-releases come before their release.
+    expect(d('0.3.210', '0.3.210-rc.1')).toBe(true)
+    expect(d('0.3.210-rc.1', '0.3.210')).toBe(false)
+    expect(d('0.3.210-rc.10', '0.3.210-rc.9')).toBe(true)
+    expect(d('0.3.210-rc.1', '0.3.210-rc.2')).toBe(false)
+    expect(d('v0.3.210', '0.3.211')).toBe(false)
+    // Unparseable either side: the flag is required.
+    expect(d('latest', '0.3.211')).toBe(true)
+    expect(d('0.3.210', 'next')).toBe(true)
+    expect(d('0.3', '0.3.211')).toBe(true)
+    // Nothing deployed yet: nothing to go down from.
+    expect(d(null, '0.3.211')).toBe(false)
+  })
+
+  it('an upgrade to an older version → 409 DOWNGRADE_NEEDS_CONFIRM unless downgrade: true', async () => {
+    const id = await newShared({ version_pin: '0.3.211' })
+    const { deps } = runDeps(fakes())
+    const plan = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', deps)
+    expect(plan.downgrade).toBe(true)
+    expect(codes(plan.warnings)).toContain('DOWNGRADE')
+    const key = (await Store.getShared(id))?.key as string
+    const body = { version: '0.3.210', plan_hash: plan.plan_hash, confirm: key }
+    const refused = await refusal(Run.startSharedUpgrade(id, body, 'admin-1', deps))
+    expect(refused).toMatchObject({ code: 'DOWNGRADE_NEEDS_CONFIRM', statusCode: 409 })
+    expect(await db('nivaro_hub_shared_deploys').where({ shared_deployment_id: id })).toHaveLength(
+      0
+    )
+    expect(await locks.shared.holder(id)).toBeNull()
+    for (const bad of ['yes', 1])
+      expect(
+        await refusal(Run.startSharedUpgrade(id, { ...body, downgrade: bad }, 'admin-1', deps))
+      ).toMatchObject({ code: 'BAD_DOWNGRADE', statusCode: 400 })
+    const out = await Run.startSharedUpgrade(id, { ...body, downgrade: true }, 'admin-1', deps)
+    await Run.awaitSharedUpgrade(out.shared_deploy_id)
+    expect((await Run.readSharedDeploy(out.shared_deploy_id))?.kind).toBe('upgrade')
+  })
+
+  it('a newer or the same version needs no flag; an unparseable current version does', async () => {
+    const id = await newShared()
+    const { deps } = runDeps(fakes())
+    const plan = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', deps)
+    expect(plan.downgrade).toBe(false)
+    expect(codes(plan.warnings)).not.toContain('DOWNGRADE')
+    const odd = await newShared({ version_pin: 'nightly' })
+    const oddPlan = await Plan.planSharedUpgrade(odd, '0.3.210', 'upgrade', deps)
+    expect(oddPlan.downgrade).toBe(true)
+    const key = (await Store.getShared(odd))?.key as string
+    expect(
+      await refusal(
+        Run.startSharedUpgrade(
+          odd,
+          { version: '0.3.210', plan_hash: oddPlan.plan_hash, confirm: key },
+          'admin-1',
+          deps
+        )
+      )
+    ).toMatchObject({ code: 'DOWNGRADE_NEEDS_CONFIRM' })
+  })
+
+  it('a rollback to the recorded previous build needs no flag', async () => {
+    const id = await newShared({ version_pin: '0.3.210' })
+    await db('nivaro_hub_shared_deploys').insert({
+      shared_deployment_id: id,
+      kind: 'upgrade',
+      version: '0.3.209',
+      status: 'success',
+      plan: JSON.stringify({ image: `nodeworks/nivaro@sha256:${'7'.repeat(64)}`, extensions: {} })
+    })
+    const f = fakes()
+    f.sightings = [
+      { instance: 'i1', version: '0.3.209', etag: null, at: new Date(START).toISOString() }
+    ]
+    f.statusVersion = '0.3.209'
+    const { deps } = runDeps(f)
+    const plan = await Plan.planSharedUpgrade(id, '0.3.209', 'rollback', deps)
+    expect(plan.downgrade).toBe(false)
+    const key = (await Store.getShared(id))?.key as string
+    const out = await Run.startSharedUpgrade(
+      id,
+      { version: '0.3.209', kind: 'rollback', plan_hash: plan.plan_hash, confirm: key },
+      'admin-1',
+      deps
+    )
+    await Run.awaitSharedUpgrade(out.shared_deploy_id)
+    expect((await Run.readSharedDeploy(out.shared_deploy_id))?.status).toBe('success')
   })
 })
