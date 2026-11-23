@@ -376,10 +376,14 @@ export const EXPORT_OK: Record<string, string[]> = {
  *   - services/hub/docker/stack-env.ts: the Hub's copy of the agent's env deny-list
  *     (AGENT_ENV_RULES); ruling X-2 names HUB_SHARED_DEPLOYMENT there as a key a stack may
  *     never set. It reads no environment variable.
+ *   - services/hub/shared/stack-render.ts: SHARED_ENV_KEY / SHARED_SECRET_KEY, the env and secret
+ *     NAMES the Hub writes into a shared stack's spec (twins of the agent's spec.ts keys, parked
+ *     wave P6-28). The Hub never reads either variable; it renders them for the deployment.
  */
 export const ENV_NAME_LISTS: ReadonlySet<string> = new Set([
   'services/hub/docker/known-env.ts',
-  'services/hub/docker/stack-env.ts'
+  'services/hub/docker/stack-env.ts',
+  'services/hub/shared/stack-render.ts'
 ])
 
 export interface StrayToken {
