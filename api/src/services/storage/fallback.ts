@@ -40,10 +40,25 @@ function isNotThere(err: unknown): boolean {
 }
 
 /**
+ * The fallback folder is set but is not there as a folder (an NFS mount that is gone, a volume
+ * that was not mounted). Strict mode only: never "missing" (`code` is not ENOENT), so a move's
+ * copy fails the row instead of skipping it for good. Carries no path.
+ */
+export class FallbackFolderUnavailable extends Error {
+  readonly code = 'FALLBACK_FOLDER_UNAVAILABLE'
+  constructor() {
+    super('The files fallback folder is not available.')
+    this.name = 'FallbackFolderUnavailable'
+  }
+}
+
+/**
  * The fallback file's path when it exists and is a regular file. By default any stat error reads
  * as no copy (the app's reads then answer 404 as before). `strict` (a move's file chain, R7-M-1):
  * only ENOENT / ENOTDIR mean no copy; any other error (EACCES, EIO, ESTALE on an NFS mount) is
- * thrown, so a file the fallback still holds is never counted as missing.
+ * thrown, so a file the fallback still holds is never counted as missing. A key that is not there
+ * counts as missing only while the folder itself is there: a fallback folder that is gone or not
+ * a folder (an unmounted volume answers ENOENT for every key) throws FallbackFolderUnavailable.
  */
 export async function existingFallback(
   key: string,
@@ -56,8 +71,23 @@ export async function existingFallback(
     return s.isFile() ? { path: p, size: s.size } : null
   } catch (err) {
     if (opts.strict && !isNotThere(err)) throw err
+    if (opts.strict) await assertFallbackFolder()
     return null
   }
+}
+
+/** Strict mode: the fallback folder itself must be there (and readable) for a miss to count. */
+async function assertFallbackFolder(): Promise<void> {
+  const root = filesFallbackDir()
+  if (!root) return
+  let dir: Awaited<ReturnType<typeof stat>>
+  try {
+    dir = await stat(root)
+  } catch (err) {
+    if (isNotThere(err)) throw new FallbackFolderUnavailable()
+    throw err
+  }
+  if (!dir.isDirectory()) throw new FallbackFolderUnavailable()
 }
 
 /** The fallback copy's bytes, or null. */
