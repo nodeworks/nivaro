@@ -37,9 +37,13 @@ import {
  *   5. lift the source: its prior status, sourceMaintenance(false) with the move id.
  *
  * Rule 3 — halt: when 1, 2 or 3 cannot be proven (and the operator has not ticked
- * `target_stopped`), the rollback halts with the source still in maintenance; the caller ends the
- * move `interrupted` HALTED_TARGET_LIVE with an instruction the operator can carry out for that
- * target kind. Roll back again retries from the step that halted (never skips it).
+ * `target_stopped`), the rollback halts and leaves the source as it is; the caller ends the move
+ * `interrupted` HALTED_TARGET_LIVE with an instruction the operator can carry out for that target
+ * kind, worded from the source's real state (`sourceFrozen`). A source that was never frozen
+ * means the target was last proven in maintenance (Docker boot maintenance, a GitLab target set
+ * after its deploy; one whose boot maintenance is not proven froze the source for its deploy,
+ * R5-I-1), so the source is the one writer. Roll back again retries from the step that halted
+ * (never skips it).
  *
  * Also: before every action the run re-checks it still holds its locks (R3-I-3); each finished
  * phase is written before the next, so an interrupted rollback resumes without redoing a phase.
@@ -70,8 +74,10 @@ export interface UndoContext {
 
 export interface UndoResult {
   failed: MoveStepKey[]
-  /** Stopped before the end: `halted` (Rule 3, source kept frozen) or `lost` (locks). */
+  /** Stopped before the end: `halted` (Rule 3, source left as it is) or `lost` (locks). */
   stopped: 'halted' | 'lost' | null
+  /** At a halt: is the source in maintenance (maintenance_on, or the R5-I-1 deploy freeze)? */
+  sourceFrozen: boolean
 }
 
 function codeOf(err: unknown): string {
@@ -106,13 +112,18 @@ export async function undoMove(ctx: UndoContext): Promise<UndoResult> {
       }
     await ctx.save(steps)
   }
+  const sourceFrozen = () => ran('maintenance_on') || steps.boot_freeze === 'on'
   const halt = async (key: MoveStepKey, why: string): Promise<UndoResult> => {
     failed.push(key)
-    ctx.log(`undo: ${why}; the source stays in maintenance (HALTED_TARGET_LIVE)`, 'error')
+    const frozen = sourceFrozen()
+    ctx.log(
+      `undo: ${why}; ${frozen ? 'the source stays in maintenance' : 'the source keeps serving'} (HALTED_TARGET_LIVE)`,
+      'error'
+    )
     await mark(key, 'undo_failed', `${why} (HALTED_TARGET_LIVE)`)
-    return { failed, stopped: 'halted' }
+    return { failed, stopped: 'halted', sourceFrozen: frozen }
   }
-  const lost = (): UndoResult => ({ failed, stopped: 'lost' })
+  const lost = (): UndoResult => ({ failed, stopped: 'lost', sourceFrozen: sourceFrozen() })
   const sharedTarget = ctx.shared.to !== null
   const route = ctx.move.plan?.route ?? []
   /** Route intents of one side, newest first (record order). */
@@ -249,7 +260,7 @@ export async function undoMove(ctx: UndoContext): Promise<UndoResult> {
   }
 
   // ── 5. lift the source ─────────────────────────────────────────────────────────────────────
-  if (ran('maintenance_on')) {
+  if (ran('maintenance_on') || steps.boot_freeze === 'on') {
     if (!(await ctx.stillHeld())) return lost()
     try {
       if (ctx.move.prior_status) await setEnvStatus(ctx.move.environment_id, ctx.move.prior_status)
@@ -266,12 +277,17 @@ export async function undoMove(ctx: UndoContext): Promise<UndoResult> {
         }
       }
       ctx.log('undo: maintenance at the source undone')
-      await mark('maintenance_on', 'undone')
+      if (steps.boot_freeze === 'on') {
+        steps.boot_freeze = 'lifted'
+        await ctx.save(steps)
+      }
+      if (ran('maintenance_on')) await mark('maintenance_on', 'undone')
     } catch (err) {
       failed.push('maintenance_on')
       ctx.log(`undo: the source's maintenance could not be lifted (${codeOf(err)})`, 'error')
-      await mark('maintenance_on', 'undo_failed', `could not be undone (${codeOf(err)})`)
+      if (ran('maintenance_on'))
+        await mark('maintenance_on', 'undo_failed', `could not be undone (${codeOf(err)})`)
     }
   }
-  return { failed, stopped: null }
+  return { failed, stopped: null, sourceFrozen: false }
 }

@@ -798,6 +798,51 @@ async function copyFiles(ctx: Ctx, slot: keyof MoveFiles, blocking: boolean): Pr
     )
 }
 
+/** Puts the source in maintenance and waits until every replica holds it (maintenance_on). */
+async function freezeSource(ctx: Ctx): Promise<void> {
+  // B1 names shared sides; a dedicated source's env status says it too (Hub-only meaning,
+  // nothing reads it from the app; the rollback puts the prior status back).
+  await setEnvStatus(ctx.envId, 'maintenance')
+  await ctx.ops.sourceMaintenance(true)
+  // Review Focus #2: no step after this until every live replica holds the new list.
+  if (ctx.shared.from !== null) await ctx.ops.waitReplicas(ctx.shared.from)
+}
+
+/** Lifts the source's maintenance again (the R5-I-1 deploy window): its prior status first. */
+async function liftSource(ctx: Ctx): Promise<void> {
+  const move = await readMove(ctx.moveId)
+  if (move?.prior_status) await setEnvStatus(ctx.envId, move.prior_status)
+  await ctx.ops.sourceMaintenance(false)
+  if (ctx.shared.from !== null)
+    await ctx.ops
+      .waitReplicas(ctx.shared.from)
+      .catch((err) =>
+        ctx.run.log(
+          `not every replica of the source has the lifted maintenance yet (${asStepError(err, '').code})`,
+          'warn'
+        )
+      )
+}
+
+/** R5-I-1: the post-deploy maintenance call, retried with backoff (about 2 minutes in all). */
+async function targetMaintenanceWithRetry(ctx: Ctx): Promise<void> {
+  const waits = [5_000, 15_000, 30_000, 60_000]
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await ctx.ops.targetMaintenance(true)
+      return
+    } catch (err) {
+      const se = asStepError(err, 'The target did not take maintenance.')
+      if (attempt >= waits.length) throw se
+      ctx.run.log(
+        `deploy_target: the target did not take maintenance yet (${se.code}); trying again`,
+        'warn'
+      )
+      await ctx.e.sleep(waits[attempt])
+    }
+  }
+}
+
 async function doStep(ctx: Ctx, key: MoveStepKey, steps: MoveSteps): Promise<void> {
   const { ops, plan, e } = ctx
   switch (key) {
@@ -824,15 +869,8 @@ async function doStep(ctx: Ctx, key: MoveStepKey, steps: MoveSteps): Promise<voi
     }
     case 'files_warm':
       return copyFiles(ctx, 'warm', false)
-    case 'maintenance_on': {
-      // B1 names shared sides; a dedicated source's env status says it too (Hub-only meaning,
-      // nothing reads it from the app; the rollback puts the prior status back).
-      await setEnvStatus(ctx.envId, 'maintenance')
-      await ops.sourceMaintenance(true)
-      // Review Focus #2: no step after this until every live replica holds the new list.
-      if (ctx.shared.from !== null) await ops.waitReplicas(ctx.shared.from)
-      return
-    }
+    case 'maintenance_on':
+      return freezeSource(ctx)
     case 'wait_idle': {
       const by = e.now() + WAIT_IDLE_MS
       for (;;) {
@@ -856,6 +894,20 @@ async function doStep(ctx: Ctx, key: MoveStepKey, steps: MoveSteps): Promise<voi
       // deploy until release: a Docker target boots in it (HUB_BOOT_MAINTENANCE); a GitLab one is
       // asked before the deploy (it keeps it in its own Redis across the redeploy, when it already
       // runs) and again right after it, before anything else happens.
+      // R5-I-1 (P6-30): when its boot maintenance is not proven (GITLAB_BOOT_WINDOW), it may
+      // start writable: the source is put in maintenance before the deploy (the automatic order
+      // already did), and lifted again only once the target's maintenance is set.
+      const window =
+        plan.warnings.some((w) => w.code === 'GITLAB_BOOT_WINDOW') &&
+        !stepDone(steps, 'maintenance_on')
+      if (window && steps.boot_freeze !== 'on') {
+        steps.boot_freeze = 'on'
+        await saveSteps(ctx, steps)
+        ctx.run.log(
+          'deploy_target: the target may start without maintenance, so the source goes into maintenance for its deploy'
+        )
+        await freezeSource(ctx)
+      }
       await ops
         .targetMaintenance(true)
         .catch((err) =>
@@ -865,7 +917,13 @@ async function doStep(ctx: Ctx, key: MoveStepKey, steps: MoveSteps): Promise<voi
           )
         )
       await ops.deployTarget()
-      await ops.targetMaintenance(true)
+      await targetMaintenanceWithRetry(ctx)
+      if (steps.boot_freeze === 'on') {
+        await liftSource(ctx)
+        steps.boot_freeze = 'lifted'
+        await saveSteps(ctx, steps)
+        ctx.run.log('deploy_target: the target is in maintenance; the source serves again')
+      }
       return
     }
     case 'place_on_target': {
@@ -1182,7 +1240,7 @@ async function locksHeld(ctx: Ctx): Promise<boolean> {
  * Where the target runs and how to stop it, in plain words (R3-I-2, R4-M-2): one thing the
  * operator can carry out for that target kind, and what ticking `target_stopped` states.
  */
-async function targetStopText(move: HubMoveRow): Promise<string> {
+async function targetStopText(move: HubMoveRow, sourceFrozen: boolean): Promise<string> {
   const p = await getPlacement(move.to_placement_id)
   let target = `placement ${move.to_placement_id}`
   let how = 'stop every process of this app there and keep it from starting again'
@@ -1204,7 +1262,7 @@ async function targetStopText(move: HubMoveRow): Promise<string> {
         'remove its stack on its swarm manager (docker stack rm) and stop its pipeline from deploying it again'
     }
   }
-  return `Make sure no process of this app runs at ${target}, and none can restart: ${how}. Then tick "target stopped" (it states that no process of this app runs at ${target}, and none can restart) and Roll back again: the Hub then lifts the source's maintenance.`
+  return `Make sure no process of this app runs at ${target}, and none can restart: ${how}. Then tick "target stopped" (it states that no process of this app runs at ${target}, and none can restart) and Roll back again: the Hub then ${sourceFrozen ? "lifts the source's maintenance" : 'finishes the rollback'}.`
 }
 
 /**
@@ -1213,12 +1271,16 @@ async function targetStopText(move: HubMoveRow): Promise<string> {
  * retries the freeze, and goes on once the operator ticked target_stopped), and the error, the job
  * log, the activity and a required checklist item all say the same thing.
  */
-async function halt(ctx: Ctx, move: HubMoveRow): Promise<void> {
-  const say = await targetStopText(move)
+async function halt(ctx: Ctx, move: HubMoveRow, sourceFrozen: boolean): Promise<void> {
+  const say = await targetStopText(move, sourceFrozen)
   const fresh = (await readMove(ctx.moveId)) ?? move
   const checklist = fresh.checklist.filter((c) => c.id !== 'target_stopped')
   checklist.push({ id: 'target_stopped', text: say, required: true, done: false })
-  const error = `HALTED_TARGET_LIVE: The rollback stopped: the target could not be frozen or stopped, so the source stays in maintenance (never two writers). ${say}`
+  // R5-I-1: worded from the source's real state, never "stays in maintenance" when it serves.
+  const state = sourceFrozen
+    ? 'so the source stays in maintenance (never two writers)'
+    : 'and the source keeps serving: it was not put in maintenance, and the target was last set to maintenance by the Hub'
+  const error = `HALTED_TARGET_LIVE: The rollback stopped: the target could not be frozen or stopped, ${state}. ${say}`
   const ours = await patchMoveIfHolder(ctx.moveId, ctx.held.envToken, {
     status: 'interrupted',
     error: safeLine(error),
@@ -1274,7 +1336,7 @@ async function rollBack(
   if (err) await patchMove(ctx.moveId, { error: safeLine(`${err.code}: ${err.message}`) })
   ctx.run.log(why === 'cancelled' ? 'cancelled: rolling back' : 'rolling back', 'warn')
   const move = (await readMove(ctx.moveId)) as HubMoveRow
-  const { failed, stopped } = await undoMove({
+  const { failed, stopped, sourceFrozen } = await undoMove({
     move,
     ops: ctx.ops,
     shared: { from: ctx.shared.from, to: ctx.shared.to },
@@ -1287,7 +1349,7 @@ async function rollBack(
   // R3-I-3: a run that lost its locks never goes on undoing (another runner may own the move).
   if (stopped === 'lost') return interrupt(ctx)
   // R3-I-2: the target could not be stopped: interrupted (Roll back again once it is stopped).
-  if (stopped === 'halted') return halt(ctx, move)
+  if (stopped === 'halted') return halt(ctx, move, sourceFrozen)
   await ctx.ops.revokeTickets().catch(() => undefined)
   // A placement this move made for the target goes again, unless something else uses it.
   if (move.steps.created_placement) await dropCreatedPlacement(ctx.moveId, move.to_placement_id)

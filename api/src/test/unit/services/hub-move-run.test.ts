@@ -1109,6 +1109,88 @@ describe('rollback from release: exactly one writer at every point (P6-22)', () 
 
   // R3-I-1 / R3-I-2: a lifted GitLab target that can be neither frozen nor retired halts the
   // rollback with the source frozen; the operator stops it, ticks target_stopped, rolls back.
+  // R5-I-1 (P6-30): a GitLab target whose boot maintenance is not proven (GITLAB_BOOT_WINDOW)
+  // may start writable; the source is frozen before its deploy, in both orders.
+  const bootWindow = () => {
+    plan.warnings = [
+      { code: 'GITLAB_BOOT_WINDOW', text: 'The Hub cannot prove it starts in maintenance.' }
+    ]
+  }
+
+  it('R5-I-1: manual GitLab, unproven boot maintenance, maintenance call fails, retire unreachable → no point with two writers; the halt says the source stays frozen', async () => {
+    plan = planOf('to_dedicated', 'manual')
+    bootWindow()
+    const w = await world('shared')
+    fake.state.serving = true
+    const ws = fresh()
+    fake.state.during = (name, arg) => {
+      if (name === 'targetMaintenance' && arg === true)
+        throw new MoveStepError('LINK_UNREACHABLE', 'No answer.')
+      if (name === 'removeTarget')
+        throw new MoveStepError('TARGET_NOT_STOPPED', 'The GitLab target could not be retired.')
+    }
+    writers(ws, false)
+    const { move_id } = await start(w, toFor('to_dedicated', w))
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    expect(m?.status).toBe('interrupted')
+    expect(m?.error).toMatch(/^HALTED_TARGET_LIVE/)
+    expect(m?.error).toMatch(/the source stays in maintenance/)
+    expect(ws.bad).toEqual([])
+    expect(ws.sourceLive).toBe(false)
+    // The source froze before the deploy; the maintenance call was retried with backoff.
+    const names = fake.names()
+    expect(names.indexOf('sourceMaintenance')).toBeLessThan(names.indexOf('deployTarget'))
+    const after = fake.calls.slice(names.indexOf('deployTarget'))
+    expect(
+      after.filter((c) => c[0] === 'targetMaintenance' && c[1] === true).length
+    ).toBeGreaterThanOrEqual(3)
+  })
+
+  for (const routing of ['manual', 'automatic'] as const)
+    it(`R5-I-1: ${routing} GitLab, unproven boot maintenance, the maintenance call succeeds on a retry → one writer throughout, success`, async () => {
+      plan = planOf('to_dedicated', routing)
+      bootWindow()
+      const w = await world('shared')
+      fake.state.serving = true
+      const ws = fresh()
+      let n = 0
+      const iDeploy = () => fake.names().indexOf('deployTarget')
+      fake.state.during = (name, arg) => {
+        if (name === 'targetMaintenance' && arg === true && iDeploy() >= 0 && n++ < 2)
+          throw new MoveStepError('LINK_UNREACHABLE', 'No answer.')
+      }
+      writers(ws, false)
+      const { move_id } = await start(w, toFor('to_dedicated', w))
+      await Run.awaitMove(move_id)
+      expect((await readMove(move_id))?.status).toBe('success')
+      expect(ws.bad).toEqual([])
+      const names = fake.names()
+      expect(names.indexOf('sourceMaintenance')).toBeLessThan(iDeploy())
+    })
+
+  it('R5-I-1: a halt with the source never frozen says the source keeps serving (never that it stays in maintenance)', async () => {
+    plan = planOf('to_dedicated', 'manual')
+    const w = await world('shared')
+    fake.state.serving = true
+    const ws = fresh()
+    fake.state.failOn = (name) => name === 'pullFiles'
+    fake.state.during = (name) => {
+      if (name === 'removeTarget')
+        throw new MoveStepError('TARGET_NOT_STOPPED', 'The GitLab target could not be retired.')
+    }
+    writers(ws, false)
+    const { move_id } = await start(w, toFor('to_dedicated', w))
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    expect(m?.status).toBe('interrupted')
+    expect(m?.error).toMatch(/^HALTED_TARGET_LIVE/)
+    expect(m?.error).not.toMatch(/stays in maintenance/)
+    expect(m?.error).toMatch(/source keeps serving/)
+    expect(ws.bad).toEqual([])
+    expect(ws.sourceLive).toBe(true)
+  })
+
   it('halt: a GitLab target that cannot be frozen or retired → interrupted HALTED_TARGET_LIVE; tick, Roll back → source serving, one writer throughout', async () => {
     plan = planOf('to_dedicated', 'manual')
     const w = await world('shared')
