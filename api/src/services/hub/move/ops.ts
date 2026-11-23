@@ -122,6 +122,13 @@ export interface MoveOps {
   /** Schema ok + preflight ok + key fingerprint, ≤ 10 min. */
   targetReady(): Promise<void>
   deployTarget(): Promise<void>
+  /**
+   * P6-26 Rule 1 (dedicated target only): hub-link maintenance on over the target's own address
+   * (never the public name), read back; a GitLab target that will not take it is retired, read
+   * back. Throws TARGET_NOT_FROZEN when neither is proven.
+   */
+  freezeTarget(): Promise<void>
+  /** Docker: stack removed (volumes kept). GitLab: retired, read back. Shared: nothing. */
   removeTarget(): Promise<void>
   route(a: RouteAction): Promise<void>
   unroute(a: RouteAction): Promise<void>
@@ -679,18 +686,50 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
         await refresh(l.to.shared)
         return
       }
-      // A Docker target boots in strict maintenance (HUB_BOOT_MAINTENANCE): `on` is sent only
-      // once its release started (R2-I-2: a rollback freezes a lifted target again, over the
-      // verified public name). A GitLab target is set both ways (M18).
-      const releaseStarted = !!(await readMove(move.id))?.steps.release_prev
-      if (l.to.kind === 'docker' && on && !releaseStarted) return
-      if (on && releaseStarted) {
-        await (await verifiedTargetLink()).maintenance(true, move.id)
-        return
-      }
+      // A Docker target boots in strict maintenance (HUB_BOOT_MAINTENANCE): `on` is never sent
+      // here. A GitLab target is set both ways (M18). A rollback freezes a lifted target through
+      // freezeTarget (P6-26 Rule 1), never through this.
+      if (l.to.kind === 'docker' && on) return
       // `off` happens at release, after verify saw the name serve the target.
       const link = !on ? await verifiedTargetLink() : await targetLink()
       await link.maintenance(on, move.id)
+    },
+
+    async freezeTarget() {
+      const l = await load()
+      if (l.to.kind === 'shared')
+        throw new MoveStepError('TARGET_NOT_FROZEN', 'A shared target is frozen through its list.')
+      let link: HubLinkClient
+      try {
+        link = await targetLink()
+      } catch (err) {
+        throw new MoveStepError(
+          'TARGET_NOT_FROZEN',
+          `The target cannot be reached on its own address (${codeOf(err)}).`
+        )
+      }
+      try {
+        await link.maintenance(true, move.id)
+        if ((await link.status()).maintenance === true) {
+          log('the target is back in maintenance (read back)')
+          return
+        }
+        log('the target did not report maintenance after the freeze', 'warn')
+      } catch (err) {
+        log(`the target did not take maintenance (${codeOf(err)})`, 'warn')
+      }
+      if (l.to.kind === 'gitlab') {
+        try {
+          await link.retire(move.id)
+          if ((await link.status()).retired === true) {
+            log('the GitLab target is retired (read back)')
+            return
+          }
+        } catch (err) {
+          log(`the GitLab target did not take the retire (${codeOf(err)})`, 'warn')
+        }
+      }
+      throw new MoveStepError('TARGET_NOT_FROZEN', 'The target could not be proven frozen.')
     },
 
     async sourceBusy() {
@@ -971,14 +1010,20 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
       }
       // A GitLab target cannot be removed by the Hub: retire it so it serves and runs nothing.
       // R3-I-1: a retire that fails is never "stopped" — the caller decides (a release undo halts).
+      let retired = false
+      let why = 'it did not report retired'
       try {
-        await (await targetLink()).retire(move.id)
+        const link = await targetLink()
+        await link.retire(move.id)
+        retired = (await link.status()).retired === true
       } catch (err) {
+        why = codeOf(err)
+      }
+      if (!retired)
         throw new MoveStepError(
           'TARGET_NOT_STOPPED',
-          `The GitLab target could not be retired (${codeOf(err)}); stop its stack by hand.`
+          `The GitLab target could not be retired (${why}); stop its stack by hand.`
         )
-      }
       log('the GitLab target is retired (its pipeline keeps the stack; stop it there)', 'warn')
     },
 
@@ -998,10 +1043,15 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
         throw new MoveStepError('ROUTE_UNSUPPORTED', 'A GitLab placement is routed by hand.')
       if (a.op === 'remove_stack') return removeStack(side, l.envKey, l.app)
       const want = await runningWant(side)
-      // apply_stack (target): the environment's own names; drop_host (source): none.
+      // apply_stack (target): the environment's own names plus the per-move name (the Hub keeps
+      // reaching it there until release); drop_host (source): none.
+      const temp = a.side === 'target' ? await tempHost() : null
       await applyStack(side, want, (spec) => {
         if (a.op === 'drop_host') spec.hostnames = []
-        if (a.side === 'target') spec.env.HUB_BOOT_MAINTENANCE = String(move.id)
+        if (a.side === 'target') {
+          if (temp && !spec.hostnames.includes(temp)) spec.hostnames = [...spec.hostnames, temp]
+          spec.env.HUB_BOOT_MAINTENANCE = String(move.id)
+        }
       })
     },
 

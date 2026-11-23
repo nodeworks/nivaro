@@ -102,6 +102,7 @@ function ops(): MoveOps {
   return {
     sourceMaintenance: r('sourceMaintenance', undefined),
     targetMaintenance: r('targetMaintenance', undefined),
+    freezeTarget: r('freezeTarget', undefined),
     sourceBusy: r('sourceBusy', { imports: 0, exports: 0, renders: 0 }),
     pullFiles: async () => ({
       state: 'done',

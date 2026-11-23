@@ -656,6 +656,31 @@ describe('deployTarget on Docker (R9: the target gets the app key, never a fresh
     )
   })
 
+  it('P6-26: the target route keeps the per-move name (the freeze address) and boot maintenance; targetMaintenance(true) sends nothing', async () => {
+    const { w, ops, applied } = await dockerTarget()
+    // The move's mirror deploy row: deployTarget records what the stack runs on it.
+    await db('nivaro_hub_deploys').insert({
+      app_id: w.move.app_id,
+      environment_id: w.envId,
+      kind: 'move',
+      move_id: w.move.id,
+      version: '0.3.210',
+      from_version: '0.3.210',
+      status: 'running',
+      step: 'deploy_target',
+      plan: JSON.stringify({ move_id: w.move.id, steps: [] }),
+      started_at: new Date(),
+      heartbeat_at: new Date()
+    })
+    await ops.deployTarget()
+    await ops.targetMaintenance(true)
+    await ops.route({ side: 'target', op: 'apply_stack' } as never)
+    expect(applied).toHaveLength(2)
+    const spec = applied[1].spec as { env: Record<string, string>; hostnames: string[] }
+    expect(spec.hostnames).toContain(`hub-move-e${w.envId}-x.example.com`)
+    expect(spec.env.HUB_BOOT_MAINTENANCE).toBe(String(w.move.id))
+  })
+
   it('stack settings holding another key → APP_KEY_MISMATCH, nothing applied', async () => {
     const { ops, applied } = await dockerTarget('cd'.repeat(32))
     const err = await ops.deployTarget().catch((e) => e)
@@ -782,5 +807,95 @@ describe('removeTarget on GitLab (R3-I-1)', () => {
     const err = await ops.removeTarget().catch((e) => e)
     expect(retire).toHaveBeenCalledWith(w.move.id)
     expect(err?.code).toBe('TARGET_NOT_STOPPED')
+  })
+})
+
+// P6-26 Rule 1: a dedicated target is frozen on its own address and the freeze is read back.
+describe('freezeTarget on GitLab (P6-26 Rule 1)', () => {
+  async function gitlabTarget(link: Record<string, unknown>) {
+    const w = await setup(true)
+    TENANT = w.tenant
+    await db('nivaro_hub_environments')
+      .where({ id: w.envId })
+      .update({
+        hub_token: (await import('../../../services/hub/secrets.js')).sealSecret('t'.repeat(40))
+      })
+    const steps = {
+      ...w.move.steps,
+      addresses: { ...w.move.steps.addresses, target_link_base: 'https://acme-direct.example.com' }
+    }
+    const driver = await insertId('nivaro_hub_drivers', {
+      kind: 'gitlab',
+      name: `glf${w.envId}`,
+      config: JSON.stringify({ api: 'https://gitlab.example.com', project: 'a/b' })
+    })
+    const pd = await insertId('nivaro_hub_placements', {
+      kind: 'dedicated',
+      driver_id: driver,
+      target: '{}'
+    })
+    await db('nivaro_hub_moves')
+      .where({ id: w.move.id })
+      .update({ to_placement_id: pd, steps: JSON.stringify(steps) })
+    const move = (await readMove(w.move.id)) as NonNullable<Awaited<ReturnType<typeof readMove>>>
+    const bases: string[] = []
+    const ops = defaultMoveOps(move, w.plan, {
+      client: clients().factory,
+      link: (base: string) => {
+        bases.push(base)
+        return link as never
+      },
+      sleep,
+      now
+    })
+    return { w, ops, bases }
+  }
+  const status = (s: { maintenance: boolean | null; retired: boolean }) =>
+    vi.fn(async () => ({ version: '0.3.210', preflight: { status: 'ok', failing: [] }, ...s }))
+
+  it('maintenance on with the move id, read back, on the target’s own address (never the public name)', async () => {
+    const maintenance = vi.fn(async () => undefined)
+    const retire = vi.fn(async () => undefined)
+    const { w, ops, bases } = await gitlabTarget({
+      maintenance,
+      retire,
+      status: status({ maintenance: true, retired: false })
+    })
+    await ops.freezeTarget()
+    expect(maintenance).toHaveBeenCalledWith(true, w.move.id)
+    expect(retire).not.toHaveBeenCalled()
+    expect(bases).toEqual(['https://acme-direct.example.com'])
+  })
+
+  it('maintenance not read back → retire, read back retired → frozen', async () => {
+    const retire = vi.fn(async () => undefined)
+    const st = vi
+      .fn()
+      .mockResolvedValueOnce({ maintenance: false, retired: false })
+      .mockResolvedValueOnce({ maintenance: false, retired: true })
+    const { w, ops } = await gitlabTarget({
+      maintenance: vi.fn(async () => undefined),
+      retire,
+      status: st
+    })
+    await ops.freezeTarget()
+    expect(retire).toHaveBeenCalledWith(w.move.id)
+  })
+
+  it('neither proven → TARGET_NOT_FROZEN (an accepted call alone is never a freeze)', async () => {
+    const { ops } = await gitlabTarget({
+      maintenance: vi.fn(async () => undefined),
+      retire: vi.fn(async () => undefined),
+      status: status({ maintenance: false, retired: false })
+    })
+    expect((await ops.freezeTarget().catch((e) => e))?.code).toBe('TARGET_NOT_FROZEN')
+  })
+
+  it('removeTarget: a retire answered but not read back retired → TARGET_NOT_STOPPED', async () => {
+    const { ops } = await gitlabTarget({
+      retire: vi.fn(async () => undefined),
+      status: status({ maintenance: null, retired: false })
+    })
+    expect((await ops.removeTarget().catch((e) => e))?.code).toBe('TARGET_NOT_STOPPED')
   })
 })

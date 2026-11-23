@@ -1138,29 +1138,33 @@ async function locksHeld(ctx: Ctx): Promise<boolean> {
   return ok
 }
 
-/** Where the target runs and how to stop it, in plain words (R3-I-2). */
+/**
+ * Where the target runs and how to stop it, in plain words (R3-I-2, R4-M-2): one thing the
+ * operator can carry out for that target kind, and what ticking `target_stopped` states.
+ */
 async function targetStopText(move: HubMoveRow): Promise<string> {
   const p = await getPlacement(move.to_placement_id)
   let target = `placement ${move.to_placement_id}`
-  let how = 'stop it'
+  let how = 'stop every process of this app there and keep it from starting again'
   if (p?.kind === 'shared') {
     const shared = await getShared(p.shared_deployment_id)
-    target = `the app on the shared deployment ${shared?.key ?? p.shared_deployment_id}`
-    how =
-      'make sure every replica of that deployment lists the app as maintenance (or stop the deployment)'
+    const key = shared?.key ?? String(p.shared_deployment_id)
+    target = `the shared deployment ${key}`
+    how = `remove the app from the shared deployment ${key}: stop that deployment (scale its services to 0) until this rollback is done; the rollback then drops the app from its list and the deployment can start again`
   } else if (p) {
     const driver = await getDriver(p.driver_id)
     const stack = (p.target as { stack?: unknown }).stack
     if (driver?.kind === 'docker' && typeof stack === 'string') {
       target = `the Docker stack ${stack} (driver ${driver.name})`
-      how = `remove it on that swarm (docker stack rm ${stack}) or put the app in maintenance`
+      how = `remove the stack on that swarm (docker stack rm ${stack}) and do not deploy it again`
     } else {
       const at = move.steps.addresses?.target_link_base
       target = `the GitLab-deployed app${at ? ` at ${at}` : ''} (placement ${p.id})`
-      how = 'stop its stack on its swarm manager, or put the app in maintenance'
+      how =
+        'remove its stack on its swarm manager (docker stack rm) and stop its pipeline from deploying it again'
     }
   }
-  return `Stop ${target}: ${how}. Then tick "target stopped" and Roll back: the Hub then lifts the source's maintenance.`
+  return `Make sure no process of this app runs at ${target}, and none can restart: ${how}. Then tick "target stopped" (it states that no process of this app runs at ${target}, and none can restart) and Roll back again: the Hub then lifts the source's maintenance.`
 }
 
 /**
