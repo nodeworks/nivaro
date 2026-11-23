@@ -25,7 +25,7 @@ import {
   resolveMoveAddresses
 } from './addresses.js'
 import { isMoveLiveHere, markMoveLive, unmarkMoveLive } from './heal.js'
-import { asStepError, defaultMoveOps, type MoveOps, MoveStepError } from './ops.js'
+import { asStepError, defaultMoveOps, type MoveOps, MoveStepError, TARGET_READY_MS } from './ops.js'
 import {
   checkTarget,
   type MovePlan,
@@ -830,21 +830,28 @@ async function liftSource(ctx: Ctx): Promise<void> {
       )
 }
 
-/** R5-I-1: the post-deploy maintenance call, retried with backoff (about 2 minutes in all). */
+/**
+ * R5-I-1: the post-deploy maintenance call, retried with backoff (5, 15, 30, then every 60 s).
+ * Final review moves Minor 3: within target_ready's own 10 minutes (TARGET_READY_MS), since an
+ * app that runs its migrations at boot can take longer than 2 minutes to answer.
+ */
 async function targetMaintenanceWithRetry(ctx: Ctx): Promise<void> {
-  const waits = [5_000, 15_000, 30_000, 60_000]
+  const waits = [5_000, 15_000, 30_000]
+  const by = ctx.e.now() + TARGET_READY_MS
   for (let attempt = 0; ; attempt++) {
     try {
       await ctx.ops.targetMaintenance(true)
       return
     } catch (err) {
       const se = asStepError(err, 'The target did not take maintenance.')
-      if (attempt >= waits.length) throw se
+      const wait = waits[attempt] ?? 60_000
+      if (ctx.e.now() + wait > by) throw se
       ctx.run.log(
         `deploy_target: the target did not take maintenance yet (${se.code}); trying again`,
         'warn'
       )
-      await ctx.e.sleep(waits[attempt])
+      await boundary(ctx)
+      await ctx.e.sleep(wait)
     }
   }
 }

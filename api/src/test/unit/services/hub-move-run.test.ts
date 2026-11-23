@@ -1318,6 +1318,29 @@ describe('rollback from release: exactly one writer at every point (P6-22)', () 
     expect(ws.bad).toEqual([])
   })
 
+  // Final review moves Minor 3 (FW-4): an app that migrates at boot may take longer than 2
+  // minutes to answer; the maintenance call is retried within target_ready's 10 minutes.
+  it('FW-4: a target that answers its maintenance call only after 5 minutes still moves', async () => {
+    plan = planOf('to_dedicated', 'manual')
+    bootWindow()
+    const w = await world('shared')
+    fake.state.serving = true
+    let deployedAt: number | null = null
+    fake.state.during = (name, arg) => {
+      if (name === 'deployTarget') deployedAt = t
+      if (
+        name === 'targetMaintenance' &&
+        arg === true &&
+        deployedAt !== null &&
+        t - deployedAt < 5 * 60_000
+      )
+        throw new MoveStepError('LINK_UNREACHABLE', 'Still migrating.')
+    }
+    const { move_id } = await start(w, toFor('to_dedicated', w))
+    await Run.awaitMove(move_id)
+    expect((await readMove(move_id))?.status).toBe('success')
+  })
+
   it('R5-I-1: a halt with the source never frozen says the source keeps serving (never that it stays in maintenance)', async () => {
     plan = planOf('to_dedicated', 'manual')
     const w = await world('shared')
