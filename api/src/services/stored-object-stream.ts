@@ -10,6 +10,7 @@ import { getStorage } from './storage/index.js'
 import { LocalStorage } from './storage/local.js'
 import { isStoredObjectMissing, StoredObjectMissing } from './storage/missing.js'
 import { getActiveStorageDriver, readOwnStoredObject } from './storage-drivers.js'
+import { isMissingObject } from './traffic-taps/storage.js'
 
 // Streaming reads and byte ranges for stored objects. Local disk streams from
 // the file; remote drivers (S3/Azure settings drivers) fall back to reading the
@@ -111,11 +112,13 @@ export async function openStoredObject(
 }
 
 /**
- * Hub phase 6 move file route (R6-I-1): this environment's own copy of the object a files row
- * names, read by the row's provider. `local` (or none): the env provider's file (or the
- * FILES_FALLBACK_DIR copy). A saved-settings provider (s3 / azure-blob): the active saved-settings
- * driver. Throws StoredObjectMissing only when the object is really not there; every other read
- * error is thrown as it is (the route answers 5xx, never "missing"). Never FILES_FALLBACK_URL.
+ * Hub phase 6 move file route (R6-I-1, R6-M-3, P6-36): this environment's own copy of the
+ * object a files row names. A saved-settings row (s3 / azure-blob) is asked of the active
+ * saved-settings driver first (streamed). When the driver says it is not there, or for a
+ * `local` row, the same chain the app reads with: the env provider's file, the
+ * FILES_FALLBACK_DIR copy, then FILES_FALLBACK_URL. Throws StoredObjectMissing only when every
+ * one of them says not-found; any other read error, on any of them, is thrown as it is (the
+ * route answers 5xx, never "missing"), so a move never counts as missing bytes it can still read.
  */
 export async function openTransferObject(
   key: string,
@@ -123,43 +126,51 @@ export async function openTransferObject(
   rangeHeader?: string
 ): Promise<OpenedObject> {
   const provider = String(storage ?? 'local').toLowerCase() || 'local'
-  if (provider === 'local') {
-    const env = getStorage()
-    if (env instanceof LocalStorage) {
-      let path = env.resolveKey(key)
-      let size: number
+  if (provider !== 'local') {
+    const active = await getActiveStorageDriver()
+    // A driver that is not the active one cannot be asked; the chain below still can.
+    if (active.name !== 'local') {
       try {
-        size = (await stat(path)).size
+        if (active.openStream) {
+          const o = await active.openStream(key, rangeHeader)
+          // pipeline: an error on either side destroys both (never .pipe(), see gotchas).
+          const out = new PassThrough()
+          pipeline(o.stream, out, () => {})
+          return { ...o, stream: out }
+        }
+        return openedFromBuffer(await active.get(key), rangeHeader)
       } catch (err) {
-        if ((err as { code?: unknown } | null)?.code !== 'ENOENT') throw err
-        const copy = await existingFallback(key)
-        if (!copy) throw new StoredObjectMissing()
-        path = copy.path
-        size = (await stat(path)).size
+        if (!isStoredObjectMissing(err)) throw err
       }
-      return openedFromFile(path, size, rangeHeader)
     }
+  }
+  return openLocalChain(key, rangeHeader)
+}
+
+/** The env provider's file, the FILES_FALLBACK_DIR copy, then FILES_FALLBACK_URL (P6-36). */
+async function openLocalChain(key: string, rangeHeader?: string): Promise<OpenedObject> {
+  const env = getStorage()
+  if (env instanceof LocalStorage) {
+    const path = env.resolveKey(key)
+    try {
+      return openedFromFile(path, (await stat(path)).size, rangeHeader)
+    } catch (err) {
+      if ((err as { code?: unknown } | null)?.code !== 'ENOENT') throw err
+    }
+  } else {
     // An env provider that is not local disk (a move refuses it: ENV_OBJECT_STORAGE).
     try {
-      return await openStoredObject(key, rangeHeader, { remote: false })
+      return openedFromBuffer(await env.get(key), rangeHeader)
     } catch (err) {
-      throw isStoredObjectMissing(err) ? new StoredObjectMissing() : err
+      // The env S3/Azure providers report a miss their own way (NoSuchKey, BlobNotFound, 404).
+      if (!isStoredObjectMissing(err) && !isMissingObject(err)) throw err
     }
   }
-  const active = await getActiveStorageDriver()
-  // The row's driver is no longer the active one: this environment cannot read it at all.
-  if (active.name === 'local') throw new StoredObjectMissing()
-  // R6-M-3: streamed from the driver with the range passed through, never read whole (a live
-  // source, maybe a shared one serving every app, copies a whole bucket four objects at a time).
-  if (active.openStream) {
-    const o = await active.openStream(key, rangeHeader)
-    // pipeline: an error on either side destroys both (never .pipe(), see gotchas).
-    const out = new PassThrough()
-    pipeline(o.stream, out, () => {})
-    return { ...o, stream: out }
-  }
-  const buf = await active.get(key)
-  return openedFromBuffer(buf, rangeHeader)
+  const copy = await existingFallback(key)
+  if (copy) return openedFromFile(copy.path, copy.size, rangeHeader)
+  const remote = await openFallbackUrl(key, rangeHeader, { throwOnTrouble: true })
+  if (remote) return remote
+  throw new StoredObjectMissing()
 }
 
 function openedFromFile(path: string, size: number, rangeHeader?: string): OpenedObject {

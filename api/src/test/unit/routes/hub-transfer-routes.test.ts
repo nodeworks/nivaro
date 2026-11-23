@@ -289,14 +289,25 @@ describe('GET /api/hub-transfer/files/:id on a dedicated app', () => {
 // maintenance, so the move never releases without the object).
 describe('GET /api/hub-transfer/files/:id for a saved-settings object', () => {
   const FILE_S3 = '55555555-2222-4333-8444-555555555555'
+  /** A saved-settings row whose bytes sit on the local disk (the driver was switched back). */
+  const FILE_S3_LOCAL = '66666666-2222-4333-8444-555555555555'
   beforeAll(() => {
-    st.files.get('')?.push({
-      id: FILE_S3,
-      filename_disk: 'cd/photo.jpg',
-      type: 'image/jpeg',
-      filesize: 10,
-      storage: 's3'
-    })
+    st.files.get('')?.push(
+      {
+        id: FILE_S3,
+        filename_disk: 'cd/photo.jpg',
+        type: 'image/jpeg',
+        filesize: 10,
+        storage: 's3'
+      },
+      {
+        id: FILE_S3_LOCAL,
+        filename_disk: 'ab/report.pdf',
+        type: 'application/pdf',
+        filesize: 14,
+        storage: 's3'
+      }
+    )
   })
   afterEach(() => {
     st.driver = null
@@ -359,6 +370,28 @@ describe('GET /api/hub-transfer/files/:id for a saved-settings object', () => {
     dedicated()
     const a = await build()
     const { ticket } = await mintTransferTicket(null)
+    expect((await get(a, FILE_S3, { authorization: `Transfer ${ticket}` })).statusCode).toBe(404)
+  })
+
+  // P6-36: a driver 404 is not yet "missing": the local disk / fallback chain is asked too.
+  it('P6-36: the driver answers 404 and the bytes sit on the local disk → the object is streamed', async () => {
+    const { StoredObjectMissing } = await import('../../../services/storage/missing.js')
+    st.driver = {
+      name: 's3',
+      openStream: async () => {
+        throw new StoredObjectMissing()
+      },
+      get: async () => {
+        throw new StoredObjectMissing()
+      }
+    }
+    dedicated()
+    const a = await build()
+    const { ticket } = await mintTransferTicket(null)
+    const res = await get(a, FILE_S3_LOCAL, { authorization: `Transfer ${ticket}` })
+    expect(res.statusCode).toBe(200)
+    expect(res.body).toBe('%PDF-dedicated')
+    // Not there anywhere → 404.
     expect((await get(a, FILE_S3, { authorization: `Transfer ${ticket}` })).statusCode).toBe(404)
   })
 
