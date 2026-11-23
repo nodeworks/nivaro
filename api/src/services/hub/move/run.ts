@@ -1370,17 +1370,23 @@ async function interrupt(ctx: Ctx): Promise<void> {
  */
 async function sourceRecoveryText(move: HubMoveRow): Promise<string> {
   const p = await getPlacement(move.from_placement_id)
-  let names = 'Put the names back on the source by hand.'
   if (p?.kind === 'shared') {
+    // A shared source is frozen through the Hub's list (the environment's status), never a key of
+    // its own: its deployment's plain nvr:maintenance key would freeze every app on it.
     const shared = await getShared(p.shared_deployment_id)
-    names = `Apply now on the shared deployment ${shared?.key ?? p.shared_deployment_id} (its stack then carries this app's names again).`
-  } else if (p) {
+    const key = shared?.key ?? String(p.shared_deployment_id)
+    return `To recover: Apply now on the shared deployment ${key} (its stack then carries this app's names again). If the app still shows maintenance there, set the environment's status back to active on the Hub: the deployment's replicas re-read the Hub list within 30 seconds. Never clear the deployment's own maintenance key: that is the freeze of every app on ${key}.`
+  }
+  let names = 'Put the names back on the source by hand.'
+  if (p) {
     const stack = (p.target as { stack?: unknown }).stack
     const driver = await getDriver(p.driver_id)
     if (driver?.kind === 'docker' && typeof stack === 'string')
       names = `Apply now on the source stack ${stack} (driver ${driver.name}): it renders the environment's own names again.`
   }
-  return `To recover: ${names} If the source still shows maintenance, lift it on the source app with POST /api/hub-link/maintenance {"on":false} without move_id, or delete the nvr:maintenance key in its Redis (remove HUB_BOOT_MAINTENANCE from its stack first if it is set).`
+  // P6-32: a hub-linked app freezes on its OWN key (security.ts maintenanceOverrideKey), never
+  // the plain nvr:maintenance (that one is honoured, never written, by the Hub's freeze).
+  return `To recover: ${names} If the source still shows maintenance, lift it on the source app with POST /api/hub-link/maintenance {"on":false} without move_id (its hub token as the bearer). If that cannot be reached, delete the app's own key <REDIS_CHANNEL_PREFIX>nvr:maintenance:<tag> in its Redis, where <tag> is the first 16 hex characters of the sha256 of its HUB_TOKEN (redis-cli --scan --pattern '*nvr:maintenance:*' lists it); remove HUB_BOOT_MAINTENANCE from its stack first if it is set.`
 }
 
 async function rollBack(

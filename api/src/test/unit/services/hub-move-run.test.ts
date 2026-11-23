@@ -711,11 +711,34 @@ describe('rolls back from every step before release', () => {
       .target
     const name = JSON.parse(String(stack)).stack as string
     expect(m?.error).toContain(`Apply now on the source stack ${name}`)
-    expect(m?.error).toMatch(/nvr:maintenance/)
     const item = m?.checklist.find((c) => c.id === 'restore_source')
     expect(item).toMatchObject({ required: true, done: false })
     expect(item?.text).toContain(`Apply now on the source stack ${name}`)
     expect(item?.text).toMatch(/\{"on":false\} without move_id/)
+    // FW-4 (P6-32): a hub-linked app freezes on its OWN key, never the plain nvr:maintenance;
+    // the hub-link call comes first.
+    expect(item?.text).toMatch(/<REDIS_CHANNEL_PREFIX>nvr:maintenance:<tag>/)
+    expect(item?.text).toMatch(/sha256 of its HUB_TOKEN/)
+    expect(item?.text).not.toMatch(/delete the nvr:maintenance key/)
+    expect(item?.text?.indexOf('{"on":false}')).toBeLessThan(
+      item?.text?.indexOf('nvr:maintenance:') ?? -1
+    )
+  })
+
+  it('FW-4: a shared source that stays frozen is lifted through the Hub list, never a Redis key', async () => {
+    plan = planOf('between_shared')
+    const w = await world('shared')
+    fake.state.during = (name, arg) => {
+      if (name === 'verifyName') throw new MoveStepError('X_FAILED', 'This failed.')
+      if (name === 'sourceMaintenance' && arg === false)
+        throw new MoveStepError('LINK_UNREACHABLE', 'No answer.')
+    }
+    const { move_id } = await start(w, toFor('between_shared', w))
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    const item = m?.checklist.find((c) => c.id === 'restore_source')
+    expect(item?.text).toMatch(/Hub/)
+    expect(item?.text).not.toMatch(/delete|redis/i)
   })
 })
 
