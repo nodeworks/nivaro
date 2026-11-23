@@ -1404,6 +1404,22 @@ export const hubDatabasesDocs: DocSection = {
       type: 'p',
       text: 'Adopt a database records one that already exists (Databases → Adopt a database): engine, host, port, database, login, password, TLS. The Hub checks it and accepts only an empty database or an existing Nivaro install; a database with other tables is refused (`DATABASE_NOT_NIVARO`). An existing Nivaro install is accepted with a plain warning (`warning` in the answer, and on Create app a warning line in the preview, never a blocker): an app given that database starts on its data and users, and its first administrator is made only if it has none, so make sure no other app still uses it. Adopting never creates or changes anything on the server. An adopted database is linked to a server row when its engine, host and port match one. Two records may never point at the same database: the Hub compares host and name, and also the server identity the database itself reports (so an alias, an IP and a name for the same server count as one), and refuses with `DATABASE_IN_USE`.'
     },
+    { type: 'h2', id: 'hub-databases-attach', text: 'Attach to an existing environment' },
+    {
+      type: 'p',
+      text: 'An app the Hub did not create has no database record, and a move onto a shared deployment needs one: its plan blocks with `NO_DATABASE_RECORD`. In the Databases tab open the database the app runs on (adopt it first when the Hub does not record it yet). Its Environment card shows Attach to environment…: pick the app and the environment, then Attach to environment (Cancel closes the picker). On an attached database the card names the environment and offers Detach from environment, a two-press confirm; detaching keeps the record and the database, and the environment then has no record. Hub administrators only. Both write an activity row (`hub-env-db-attach`, `hub-env-db-detach`), and the app page and any move plan on screen for that environment are read again.'
+    },
+    {
+      type: 'ul',
+      items: [
+        "Attach and detach run under the environment's lock. Both are refused while a move or a creation of the environment is open (`MOVE_OPEN`, `CREATION_OPEN`) and for an environment on a shared deployment (`SHARED_PLACEMENT`: the deployment serves it from its record; move the environment to change it). Another action holding the environment answers with its own code (for example `PROMOTION_RUNNING`, `MOVE_RUNNING` or `ENVIRONMENT_BUSY`): try again when it ends. `STATE_CHANGED`: the environment changed meanwhile, try again.",
+        'The environment must have no record yet (`ALREADY_ATTACHED`: detach that one first), and the database must be ready (`DATABASE_NOT_READY`) and attached to no other environment (`IN_USE`). Attaching the record the environment already has changes nothing (`changed: false`).',
+        'The Hub asks the app over its hub link which database it runs on. Another engine family is `ENGINE_MISMATCH` (attach the record of the database the app really uses); an app that cannot be asked is `ENGINE_UNVERIFIED` (link it to the Hub and make sure it runs).',
+        "The Hub then checks the record's stored connection. A failed check refuses with `DATABASE_UNREACHABLE`, and the answer carries the check, shown under the refusal: fix the connection on the database page and try again.",
+        "When the server identity the Hub reads through the record differs from the one the app reports, the answer carries a warning (shown on the card): the Hub may reach the same server under another name or address. A move's plan checks it again from the target's side (`DATABASE_DIFFERS`), and that is what blocks a wrong database.",
+        'A database attached to an environment cannot be removed from the Hub (`IN_USE`): detach it here first.'
+      ]
+    },
     { type: 'h2', id: 'hub-databases-delete', text: 'Detach and drop' },
     {
       type: 'p',
@@ -1454,7 +1470,15 @@ export const hubDatabasesDocs: DocSection = {
           '`POST /databases/:id/check`',
           'Check now. App owners: own app only, own server only, rate limited. Answers `{ data, creation }`.'
         ],
-        ['`DELETE /databases/:id`', 'Body `{ confirm, drop? }`: detach, or detach and drop.']
+        ['`DELETE /databases/:id`', 'Body `{ confirm, drop? }`: detach, or detach and drop.'],
+        [
+          '`PUT /environments/:envId/database`',
+          'Body `{ database_id }`: attach this record to an existing environment. Answers `{ data: { database, check, changed, warning } }`. Hub administrators; refusals in Attach to an existing environment.'
+        ],
+        [
+          '`DELETE /environments/:envId/database`',
+          "Detach the environment's record; the record and the database stay. Answers `{ data: { database_id, changed } }`. Hub administrators."
+        ]
       ]
     },
     { type: 'h2', id: 'hub-databases-errors', text: 'Every refusal code' },
@@ -1766,7 +1790,7 @@ export const hubCreateDocs: DocSection = {
     },
     {
       type: 'p',
-      text: "What the Hub sets on each app repository. Project variables for every environment (protected): `DEPLOY_HOST`, `DEPLOY_KNOWN_HOSTS` (base64, masked), `HUB_HOST_SUFFIX` (the wildcard domain, only when the target has one) and `HUB_PIN_FILE` when the pin file is not the default. Per environment (scoped to it, masked, protected, each the base64 of its value): `NIVARO_DB_URL_B64`, `NIVARO_HUB_TOKEN_B64`, `NIVARO_SESSION_SECRET_B64`, `NIVARO_ENCRYPTION_KEY_B64`, `NIVARO_OIDC_CLIENT_SECRET_B64`. The deploy turns each into a swarm secret and the app reads it through its `<SETTING>_FILE`, so no value reaches a command line, an environment or a log. On the environment branch the Hub commits `.hub/app.env` with only these settings (never a secret), the version pin and the app's `.gitlab-ci.yml`: `APP_KEY`, `ENV_KEY`, `STACK_NAME`, `APP_HOSTS`, `PUBLIC_URL`, `ADMIN_URL`, `HUB_URL`, `NIVARO_ENVIRONMENT`, `DB_CLIENT`, `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_REDIRECT_URI`, `PROXY_NETWORK`, `TRUST_PROXY`. The deploy refuses any other key in that file."
+      text: "What the Hub sets on each app repository. Project variables for every environment (protected): `DEPLOY_HOST`, `DEPLOY_KNOWN_HOSTS` (base64, masked), `HUB_HOST_SUFFIX` (the wildcard domain, only when the target has one) and `HUB_PIN_FILE` when the pin file is not the default. Per environment (scoped to it, masked, protected, each the base64 of its value): `NIVARO_DB_URL_B64`, `NIVARO_HUB_TOKEN_B64`, `NIVARO_SESSION_SECRET_B64`, `NIVARO_ENCRYPTION_KEY_B64`, `NIVARO_OIDC_CLIENT_SECRET_B64`. The deploy turns each into a swarm secret and the app reads it through its `<SETTING>_FILE`, so no value reaches a command line, an environment or a log. On the environment branch the Hub commits `.hub/app.env` with only these settings (never a secret), the version pin and the app's `.gitlab-ci.yml`: `APP_KEY`, `ENV_KEY`, `STACK_NAME`, `APP_HOSTS`, `PUBLIC_URL`, `ADMIN_URL`, `HUB_URL`, `NIVARO_ENVIRONMENT`, `DB_CLIENT`, `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_REDIRECT_URI`, `PROXY_NETWORK`, `TRUST_PROXY`, `TRAEFIK_VERSION` (the target's `traefik_version`, `3` or `2`: the manager reads it to give the stack its one Traefik network label, and it is never passed into the app). The deploy refuses any other key in that file."
     },
     {
       type: 'warn',
