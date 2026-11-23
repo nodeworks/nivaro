@@ -34,7 +34,8 @@ export const HUB_APP_ENV_KEYS: readonly string[] = Object.freeze([
   'OIDC_CLIENT_ID',
   'OIDC_REDIRECT_URI',
   'PROXY_NETWORK',
-  'TRUST_PROXY'
+  'TRUST_PROXY',
+  'TRAEFIK_VERSION'
 ])
 
 /**
@@ -129,6 +130,9 @@ const SECRET_WORD = /(SECRET|PASSWORD|PASSWD|TOKEN|PRIVATE|CREDENTIAL)/
  */
 export function appEnvKeyRefusal(key: string): string | null {
   if (!ENV_NAME.test(key)) return 'not an environment variable name'
+  // P6-35: read by the manager to pick the stack's one Traefik network label; never passed into
+  // the app (the stack file uses it only for labels), so the TRAEFIK_ prefix rule does not apply.
+  if (key === 'TRAEFIK_VERSION') return null
   if (key.endsWith('_FILE')) return 'a file indirection (secrets travel as CI variables)'
   if (key.endsWith('_B64')) return 'a secret CI variable'
   if (SECRET_WORD.test(key)) return 'named like a secret'
@@ -406,6 +410,11 @@ export function renderAppEnv(o: {
   if (typeof network !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$/.test(network))
     throw new AppConfigError('The target proxy network is not a Docker network name.')
 
+  // P6-35: the stack's one Traefik network label follows the target's Traefik (3 when unset).
+  const traefikVersion = o.target.traefik_version ?? 3
+  if (traefikVersion !== 2 && traefikVersion !== 3)
+    throw new AppConfigError('The target Traefik version must be 2 or 3.')
+
   const values: Record<string, string> = {
     APP_KEY: o.app.key,
     ENV_KEY: o.envKey,
@@ -421,7 +430,8 @@ export function renderAppEnv(o: {
     OIDC_REDIRECT_URI: redirectUriFor(base),
     PROXY_NETWORK: network,
     // One hop: the swarm's Traefik. Trusting the whole chain would let a client set its address.
-    TRUST_PROXY: '1'
+    TRUST_PROXY: '1',
+    TRAEFIK_VERSION: String(traefikVersion)
   }
 
   const keys = Object.keys(values).sort()

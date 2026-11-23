@@ -1690,6 +1690,10 @@ export const hubCreateDocs: DocSection = {
         ],
         ['`proxy_network`', 'The external overlay network Traefik reads. Default `proxy`.'],
         [
+          '`traefik_version`',
+          'The Traefik on that swarm: `3` (default) or `2`. A created app gets exactly one network label from it (`traefik.swarm.network` or `traefik.docker.network`); Traefik v3 skips a service that carries both. Apps created earlier keep their pinned template and app.env until their template is re-pinned (and the manager stack file updated); without the setting they deploy as v3.'
+        ],
+        [
           '`dns_mode`',
           '`automatic`: the Hub derives every hostname under a wildcard domain. `manual`: you give each hostname and the Hub waits until a person has made the DNS name.'
         ],
