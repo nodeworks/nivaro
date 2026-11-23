@@ -34,6 +34,8 @@ export interface HubEnvironment {
   hub_token: string | null
   /** Phase 2: the Hub may promote and roll back this environment (default off). */
   hub_managed?: boolean
+  /** Phase 6: runs on a shared deployment (on the app read, so owners know it too). */
+  on_shared?: boolean
 }
 
 export interface HubOwner {

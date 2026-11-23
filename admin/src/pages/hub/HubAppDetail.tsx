@@ -1,7 +1,7 @@
 import { ConfirmButton, ErrorNotice, QueryErrorState, useOverflowTip } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ExternalLink, Pencil, Plus, RefreshCw, Rocket, Trash2, X } from 'lucide-react'
-import { Fragment, useState } from 'react'
+import { Fragment, useId, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -423,6 +423,13 @@ function EnvStatusHint({
   )
 }
 
+/**
+ * Phase 6: why Promote is off on an environment that runs on a shared deployment. The same words
+ * as Task 18's SHARED_PLACEMENT_TIP (hub-api); fold into it when the two meet.
+ */
+const ON_SHARED_TIP =
+  'Runs on a shared deployment, so its version follows the deployment. Upgrade the shared deployment instead.'
+
 function EnvActions({
   env,
   row,
@@ -434,9 +441,32 @@ function EnvActions({
   isAdmin: boolean
   canPromote: boolean
 }) {
+  // The table row and the phone entry both render actions: ids unique per mount.
+  const whyId = useId()
+  // From the app read itself (owners cannot read placements): a shared environment's version
+  // follows its deployment, so Promote says so instead of opening a panel that can only refuse.
+  const onShared = env.on_shared === true
   return (
     <div className='flex items-center justify-end gap-0.5'>
-      {canPromote && env.placement_id != null && (
+      {canPromote && env.placement_id != null && onShared && (
+        <span data-tip={ON_SHARED_TIP} className='inline-flex'>
+          <button
+            type='button'
+            aria-label={`Promote ${env.key}`}
+            aria-describedby={whyId}
+            className={ghostButton}
+            disabled
+          >
+            <Rocket className='h-3.5 w-3.5' aria-hidden />
+            <span className='hidden lg:inline'>Promote</span>
+          </button>
+          {/* The reason for assistive tech too (the tip is pointer-only). */}
+          <span id={whyId} className='sr-only'>
+            {ON_SHARED_TIP}
+          </span>
+        </span>
+      )}
+      {canPromote && env.placement_id != null && !onShared && (
         <button
           type='button'
           aria-label={`Promote ${env.key}`}

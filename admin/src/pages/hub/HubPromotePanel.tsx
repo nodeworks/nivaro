@@ -1037,7 +1037,8 @@ export function PromotionsCard({
     >
       <div className='divide-y divide-slate-200 dark:divide-border'>
         {managed.map((env) => (
-          <EnvPromotions key={env.id} env={env} canPromote={canPromote} />
+          // A shared environment's version follows its deployment: no Roll back from here.
+          <EnvPromotions key={env.id} env={env} canPromote={canPromote && env.on_shared !== true} />
         ))}
       </div>
     </SectionCard>
