@@ -17,6 +17,58 @@ function videoOf(a: unknown): { path: string; title: string } | null {
   return v && typeof v.path === 'string' ? { path: v.path, title: String(v.title ?? '') } : null
 }
 
+/** The maintenance row's block when it is STRICT (a Nivaro Hub move): nobody is exempt from the
+ *  freeze, administrators included, so everyone gets the full page instead of the strip. */
+type StrictMaintenance = { headline?: string; explainer?: string; until?: string | null }
+function strictMaintenanceOf(a: unknown): StrictMaintenance | null {
+  const m = (a as { maintenance?: StrictMaintenance & { strict?: unknown } }).maintenance
+  return m && m.strict === true ? m : null
+}
+
+/** "Expected back around 3:40 PM", or null when nobody said or the time is unreadable. */
+function backAround(until: string | null | undefined): string | null {
+  if (!until) return null
+  const d = new Date(until)
+  if (Number.isNaN(d.getTime())) return null
+  return `Expected back around ${d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}.`
+}
+
+function StrictMaintenancePage({ row, fallback }: { row: StrictMaintenance; fallback: string }) {
+  const back = backAround(row.until)
+  return (
+    <div
+      role='alertdialog'
+      aria-modal='true'
+      aria-labelledby='nvr-strict-maintenance-title'
+      data-strict-maintenance
+      className='fixed inset-0 z-[150] flex items-center justify-center bg-slate-50 p-6 dark:bg-background'
+    >
+      <div className='w-full max-w-[520px] rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-border dark:bg-card'>
+        <p className='text-[11px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400'>
+          Maintenance
+        </p>
+        <h1
+          id='nvr-strict-maintenance-title'
+          className='mt-2 text-[16px] font-semibold text-slate-900 dark:text-foreground'
+        >
+          {row.headline?.trim() || fallback}
+        </h1>
+        {row.explainer && (
+          <p className='mt-2 text-[13px] leading-relaxed text-slate-600 dark:text-muted-foreground'>
+            {row.explainer}
+          </p>
+        )}
+        {back && (
+          <p className='mt-2 text-[12.5px] text-slate-500 dark:text-muted-foreground'>{back}</p>
+        )}
+        <p className='mt-4 text-[12px] text-slate-400 dark:text-muted-foreground'>
+          This page goes away by itself when the app is back.
+        </p>
+      </div>
+    </div>
+  )
+}
+
 export function AnnouncementBanner() {
   const client = useOptionalNivaroClient()
   const qc = useQueryClient()
@@ -53,7 +105,13 @@ export function AnnouncementBanner() {
   // Must-acknowledge rows (#90) render a BLOCKING overlay — the app is usable
   // again only after every one of them is explicitly acknowledged.
   const mustAck = items.filter((a) => (a as { require_ack?: boolean }).require_ack)
-  const strip = items.filter((a) => !(a as { require_ack?: boolean }).require_ack)
+  // Strict maintenance (a Hub move) replaces the app for everyone, administrators included: the
+  // strip it would give an exempt admin leaves them in an app whose every save is refused.
+  const strictRow = items.find((a) => strictMaintenanceOf(a))
+  const strict = strictRow ? strictMaintenanceOf(strictRow) : null
+  const strip = items.filter(
+    (a) => !(a as { require_ack?: boolean }).require_ack && a !== strictRow
+  )
   // The banner leaves THIS tab at once; the server then tells the person's other tabs and
   // devices (`announcements:changed`), which drop it through the same re-read. A failed ack
   // re-reads, so the banner comes back rather than silently staying "dismissed".
@@ -80,6 +138,7 @@ export function AnnouncementBanner() {
   }
   return (
     <div data-announcements data-nvr-recording-hide className='shrink-0'>
+      {strict && strictRow && <StrictMaintenancePage row={strict} fallback={strictRow.message} />}
       {mustAck.length > 0 && (
         <div className='fixed inset-0 z-[140] flex items-center justify-center bg-black/50 p-6'>
           <div className='w-full max-w-[520px] rounded-xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-border dark:bg-card'>

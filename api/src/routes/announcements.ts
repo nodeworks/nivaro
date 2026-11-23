@@ -719,19 +719,18 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
     })
     // Maintenance mode rides the same banner surface — synthetic row, not
     // dismissable (acking it would make the freeze invisible while it holds).
-    const {
-      maintenanceState,
-      maintenanceExplainer,
-      MAINTENANCE_EXPLAINER,
-      MAINTENANCE_DEFAULT_MESSAGE
-    } = await import('../services/security.js')
+    const { maintenanceState, maintenanceBlock, MAINTENANCE_EXPLAINER } = await import(
+      '../services/security.js'
+    )
     const maint = await maintenanceState()
     if (maint.on) {
       // `display`/`until` ride beside the strip fields: a host that knows the
       // full-page mode replaces its app for non-exempt viewers; an older host
       // just renders the strip as before. Admins are exempt from the freeze,
-      // so hosts show THEM the strip whatever `display` says.
-      const headline = (maint.message || MAINTENANCE_DEFAULT_MESSAGE).trim()
+      // so hosts show THEM the strip whatever `display` says — except under
+      // `strict` (a Hub move), where nobody is exempt and everyone gets the page.
+      const block = maintenanceBlock(maint)
+      const { headline } = block
       data.unshift({
         id: -1,
         // The strip gets the whole story in one line: the admin's headline,
@@ -745,14 +744,7 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
         ends_at: maint.until,
         dismissable: false,
         require_ack: false,
-        ...({
-          maintenance: {
-            display: maint.display,
-            until: maint.until,
-            headline,
-            explainer: maintenanceExplainer(maint.display)
-          }
-        } as object)
+        ...({ maintenance: block } as object)
       })
     } else {
       // Upcoming-window countdown (#218): a scheduled window starting within
