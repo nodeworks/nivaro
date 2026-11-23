@@ -713,7 +713,9 @@ describe('P6-45 Finish and stop the old home: a shared old home', () => {
     const kept = done?.checklist.find((c) => c.id === 'retire_source')
     expect(kept?.done).toBe(false)
     expect(kept?.text).toMatch(/^Remove the old home when you're sure: it is stopped/)
-    expect(kept?.text).toContain('data, settings and sealed secrets are kept')
+    // Review R2-5: it comes back only by moving the environment back, never "by hand".
+    expect(kept?.text).toContain('comes back only by moving the environment back to it')
+    expect(kept?.text).not.toMatch(/by hand/)
     // MOVE_OPEN lifts (only now); the move cannot be finished twice or cancelled.
     expect(await moveOpenRefusal({ envIds: [w.envId] })).toBeNull()
     expect((await finishStop(id, `${w.appKey}/prod`)).json().code).toBe('MOVE_ENDED')

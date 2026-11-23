@@ -149,7 +149,7 @@ export interface MoveOps {
   retireSource(): Promise<void>
   /**
    * P6-45 "Finish and stop the old home": STOPS the old home, proven, without deleting it (its
-   * data, settings and sealed secrets stay). Shared: the caller has dropped the app from the
+   * data and the Hub's settings stay; it comes back only by a move back). Shared: the caller has dropped the app from the
    * deployment's list (step column); every replica must hold that list. Docker: the agent removes
    * the old stack's services (volumes kept; the Hub's stack settings rows are untouched) and the
    * agent's status must show nothing running. Any other kind: CANNOT_STOP_OLD_HOME. Throws

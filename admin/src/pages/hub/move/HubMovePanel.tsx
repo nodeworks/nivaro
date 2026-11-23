@@ -1526,8 +1526,8 @@ function MoveProgress({
                 htmlFor={`move-${moveId}-stop-confirm`}
                 className='block text-[12px] text-amber-900 dark:text-amber-200'
               >
-                Or finish the move and stop the old home: it is stopped, not removed (its data,
-                settings and secrets are kept), and removing it stays on the checklist. Type{' '}
+                Or finish the move and stop the old home: it is stopped, not removed, and comes back
+                only by moving the environment back to it; removing it stays on the checklist. Type{' '}
                 <code className='font-mono font-semibold'>{stopExpected}</code> to confirm.
               </label>
               <div className='flex flex-wrap items-center gap-2'>
@@ -1540,17 +1540,17 @@ function MoveProgress({
                   placeholder='Type it here'
                   className='h-8 max-w-[320px] bg-white font-mono text-[13px] dark:bg-background'
                 />
-                <Button
-                  size='sm'
-                  variant='outline'
-                  className='h-8'
+                {/* Review R2-4: it stops a home: the danger tone Roll back has in this block. */}
+                <button
+                  type='button'
+                  className={dangerGhost}
                   disabled={
                     stopConfirm.trim() !== stopExpected || finishStop.isPending || resume.isPending
                   }
                   onClick={() => finishStop.mutate()}
                 >
                   {finishStop.isPending ? 'Stopping the old home…' : 'Finish and stop the old home'}
-                </Button>
+                </button>
               </div>
             </div>
           )}

@@ -1423,7 +1423,7 @@ export function retireStopWays(stop: Pick<RetireStop, 'case' | 'finish'>): strin
           ? "The shared deployment's key is set by the Hub: wait until its replicas report it, then Resume."
           : 'Resume to try again.'
   return stop.finish
-    ? `${key} Or Finish and stop the old home: the old home is stopped, its data, settings and secrets kept.`
+    ? `${key} Or Finish and stop the old home: the old home is stopped, not removed, and comes back only by moving the environment back to it.`
     : `${key} The Hub cannot stop this old home itself, so the move ends only once the key checks.`
 }
 
@@ -2062,7 +2062,7 @@ async function finishStopped(ctx: Ctx): Promise<void> {
       ? 'its shared deployment no longer lists the app'
       : 'its Docker stack has no service left (volumes kept)'
   const item = safeLine(
-    `Remove the old home when you're sure: it is stopped (${what}); its data, settings and sealed secrets are kept so it can be restored by hand.`
+    `Remove the old home when you're sure: it is stopped (${what}), not removed. It comes back only by moving the environment back to it.`
   )
   await mergeChecklist(ctx.moveId, (checklist) => {
     const found = checklist.find((c) => c.id === 'retire_source')

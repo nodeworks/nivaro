@@ -1252,9 +1252,10 @@ export function retireStopCopy(stop: Pick<RetireStop, 'kind' | 'case' | 'finish'
       stop.kind === 'unreachable'
         ? 'The move is waiting to check the app key'
         : 'The move is waiting for the app key',
+    // Review R2-5: the stored sentence under it already says the old home was not retired.
     hint: stop.finish
-      ? `The old home was not retired. ${way}`
-      : `The old home was not retired. ${way} The Hub cannot stop this old home itself, so the move ends only once the key checks.`
+      ? way
+      : `${way} The Hub cannot stop this old home itself, so the move ends only once the key checks.`
   }
 }
 

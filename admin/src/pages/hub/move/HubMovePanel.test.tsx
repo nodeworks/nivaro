@@ -1044,6 +1044,13 @@ describe('HubMovePanel — a move in progress', () => {
     expect(screen.queryByText(/The Hub stopped hearing from this move/)).toBeNull()
     expect(screen.queryByText(/then plan again/)).toBeNull()
     expect(screen.queryByText(/keep the old home/i)).toBeNull()
+    // Review R2-5: the error box says "not retired" once (the stored sentence), not twice.
+    expect(screen.getAllByText(/old home was not retired/i)).toHaveLength(1)
+    expect(screen.queryByText(/by hand/)).toBeNull()
+    // Review R2-4: Finish stops a home: the danger tone, as Roll back.
+    expect(
+      screen.getByRole('button', { name: 'Finish and stop the old home' }).className
+    ).toContain('text-red-600')
   })
 
   it('a shared new home or no key: never "enter the key"', async () => {
