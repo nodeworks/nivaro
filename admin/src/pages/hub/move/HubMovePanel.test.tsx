@@ -1003,6 +1003,31 @@ describe('HubMovePanel — a move in progress', () => {
     expect(await screen.findByRole('button', { name: 'Resume' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Roll back' })).toBeNull()
   })
+
+  // Untested path 2: the key check at retire_source failed; the move stays open, the old home
+  // kept, until the key is entered and Resume checks it again.
+  it('a released move stopped by the key check says to enter the key, then Resume', async () => {
+    openMove({
+      status: 'interrupted',
+      step: 'release',
+      steps: JSON.stringify({
+        list: steps.map((key) => ({
+          key,
+          state: key === 'retire_source' ? 'failed' : key === 'done' ? 'pending' : 'done'
+        })),
+        phase: 'forward'
+      }),
+      error:
+        "APP_KEY_MISMATCH: The new home seals this app's values with another key than the app's own. The app serves from its new home, but the old home was not retired."
+    })
+    renderPanel()
+    expect(await screen.findByRole('button', { name: 'Resume' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Roll back' })).toBeNull()
+    expect(
+      screen.getByText(/Enter the key under App key on this environment, then Resume/)
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/The Hub stopped hearing from this move/)).toBeNull()
+  })
 })
 
 describe('HubMovePanel — a move that ended (ruling P6-17 I-1)', () => {

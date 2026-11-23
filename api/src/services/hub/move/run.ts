@@ -91,7 +91,10 @@ import { withMoveRun } from './run-context.js'
  * (`failed` when an undo itself failed). `release` is the point of no return: the environment's
  * placement_id, version_pin and (Docker target) hub_managed move to the target. After it, a
  * failing `retire_source` ends `success` with a warning and the checklist item `retire_source`
- * open; it is never rolled back. Tickets are revoked after each copy and at the end.
+ * open; it is never rolled back. One exception: when the new home's key does not check
+ * (APP_KEY_*), the old home is not retired and the move stays open — `interrupted`, MOVE_OPEN
+ * refusing — until a Resume finds the key right (stopKeyNotChecked). Tickets are revoked after
+ * each copy and at the end.
  *
  * Stored error, job-run and activity text: codes and plain sentences only (MoveStepError and the
  * clients' own safe messages); any other error becomes a generic sentence and only its name is
@@ -709,7 +712,9 @@ async function forward(ctx: Ctx): Promise<void> {
     entry.state = 'running'
     entry.started_at = new Date(ctx.e.now()).toISOString()
     entry.note = null
-    await saveSteps(ctx, steps, { step: entry.key })
+    // A shared source drops the app from its list once the move's step column says
+    // retire_source (tenants.ts): that is written only after the new home's key checks (doStep).
+    await saveSteps(ctx, steps, entry.key === 'retire_source' ? {} : { step: entry.key })
     await db(DEPLOYS)
       .where({ id: ctx.deployId })
       .update({ step: entry.key })
@@ -741,6 +746,7 @@ async function forward(ctx: Ctx): Promise<void> {
       entry.note = safeLine(`${se.code}: ${se.message}`).slice(0, 300)
       await saveSteps(ctx, steps)
       ctx.run.log(`${entry.key}: ${se.code}: ${se.message}`, 'error')
+      if (err instanceof KeyNotChecked) return stopKeyNotChecked(ctx, se)
       if (entry.key === 'retire_source' || released) return finishRetireFailed(ctx, steps, se)
       // R3-I-3: a run that lost its locks never undoes (the failure may be the same outage).
       if (!(await locksHeld(ctx))) return interrupt(ctx)
@@ -1033,7 +1039,14 @@ async function doStep(ctx: Ctx, key: MoveStepKey, steps: MoveSteps): Promise<voi
       return release(ctx, steps)
     case 'retire_source':
       // E2E B4 (P6-38): the new home seals with the app's own key before the old one is retired.
-      await verifyTargetKeyWithRetry(ctx)
+      // A check that never passes keeps the move open (stopKeyNotChecked), the old home as it is.
+      try {
+        await verifyTargetKeyWithRetry(ctx)
+      } catch (err) {
+        throw new KeyNotChecked(asStepError(err, "The new home's key could not be checked."))
+      }
+      // Only now: a shared source's list drops the app at this step (tenants.ts).
+      await patchMove(ctx.moveId, { step: 'retire_source' })
       return ops.retireSource()
     case 'done':
       return
@@ -1247,6 +1260,14 @@ async function dropTempName(ctx: Ctx): Promise<void> {
 }
 
 async function finishSuccess(ctx: Ctx, warning: string | null): Promise<void> {
+  // A resumed move whose key check stopped it earlier: the old home is retired now.
+  if (!warning)
+    await mergeChecklist(ctx.moveId, (checklist) => {
+      const found = checklist.find((c) => c.id === 'retire_source' && !c.done)
+      if (!found) return null
+      found.done = true
+      return checklist
+    })
   await dropTempName(ctx)
   await ctx.ops.revokeTickets().catch(() => undefined)
   // Review minor 6: the shared placement the environment left goes when nothing uses it.
@@ -1272,6 +1293,50 @@ async function finishSuccess(ctx: Ctx, warning: string | null): Promise<void> {
   await ctx.run.complete(
     warning ? `Move ${ctx.moveId}: done, with a warning` : `Move ${ctx.moveId}: done`
   )
+}
+
+/** retire_source's key check never passed (APP_KEY_MISMATCH / APP_KEY_UNKNOWN …). */
+class KeyNotChecked extends MoveStepError {
+  constructor(err: MoveStepError) {
+    super(err.code, err.message)
+    this.name = 'KeyNotChecked'
+  }
+}
+
+/**
+ * Untested path 2 (F4-1 / P6-39 followed through): the new home's key does not check, so the old
+ * home must keep the app — it is NOT retired, and a shared source keeps listing it (the step
+ * column never reached retire_source). The move stays OPEN: `interrupted`, so MOVE_OPEN keeps
+ * refusing person-started actions; Cancel / Roll back answer TOO_LATE (released); Resume checks
+ * the key again and retires the old home once it passes. Never a success with a "retire by hand"
+ * item: a retire done by hand would retire the one home that still seals with the right key.
+ */
+async function stopKeyNotChecked(ctx: Ctx, err: MoveStepError): Promise<void> {
+  const item = safeLine(
+    `Do not retire the old home yet. Enter the app's key on the new home (Hub → app → App key), then resume the move: it checks the key again and retires the old home. (${err.code}: ${err.message})`
+  )
+  await mergeChecklist(ctx.moveId, (checklist) => {
+    const found = checklist.find((c) => c.id === 'retire_source')
+    if (found) {
+      found.done = false
+      found.text = item
+    } else checklist.push({ id: 'retire_source', text: item, required: false, done: false })
+    return checklist
+  })
+  // No copy is left to make: the transfer tickets go now (a resume mints none).
+  await ctx.ops.revokeTickets().catch(() => undefined)
+  const error = safeLine(
+    `${err.code}: ${err.message} The app serves from its new home, but the old home was not retired: the new home must seal this app's values with the app's own key first. Enter the app's key on the new home (Hub → app → App key), then Resume the move.`
+  )
+  const ours = await patchMoveIfHolder(ctx.moveId, ctx.held.envToken, {
+    status: 'interrupted',
+    error,
+    heartbeat_at: null
+  })
+  if (!ours) return notOurs(ctx)
+  await closeDeployRow(ctx, 'interrupted', error)
+  ctx.run.log(error, 'error')
+  await ctx.run.fail(new Error(error))
 }
 
 /** After release a failing retire_source never rolls back: success with the item open. */

@@ -2319,13 +2319,16 @@ describe('the app key across moves (E2E B4, P6-38)', () => {
     const { move_id } = await start(w, toFor('to_shared', w))
     await Run.awaitMove(move_id)
     const m = await readMove(move_id)
-    expect(m?.status).toBe('success')
+    // Untested path 2: the move stays open (interrupted, MOVE_OPEN) until a Resume retires the
+    // old home after the key checks (hub-move-retire-retry.test.ts), never a success.
+    expect(m?.status).toBe('interrupted')
+    expect(m?.error).toMatch(/^APP_KEY_MISMATCH: /)
     const item = m?.checklist.find((c) => c.id === 'retire_source')
     expect(item).toMatchObject({ done: false })
     expect(fake.names()).not.toContain('retireSource')
     // F4-1 (P6-39): what to do, not "retire by hand".
     expect(item?.text).toContain(
-      "Do not retire the old home yet. Enter the app's key on the new home (Hub → app → App key), then retire."
+      "Do not retire the old home yet. Enter the app's key on the new home (Hub → app → App key), then resume the move"
     )
     expect(item?.text).not.toMatch(/^Retire the old placement by hand/)
     // Retried with backoff for about a minute before giving up.

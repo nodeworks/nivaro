@@ -599,6 +599,7 @@ export function moveBadge(m: HubMove | undefined): MoveBadge | null {
   if (!m) return null
   if (m.status === 'waiting') return { text: 'Waiting for you', tone: 'attention' }
   if (isHaltedTargetLive(m)) return { text: 'Halted: stop the new home', tone: 'halted' }
+  if (isKeyNotChecked(m)) return { text: 'Waiting for the app key', tone: 'attention' }
   if (m.status === 'interrupted') return { text: 'Move interrupted', tone: 'attention' }
   if (isLiveMove(m.status)) {
     const rows = moveStepRows(m)
@@ -1161,6 +1162,14 @@ export const REPOINT_ITEM = 'repoint_name'
 
 export const isHaltedTargetLive = (m: Pick<HubMove, 'status' | 'error'>) =>
   m.status === 'interrupted' && splitRunError(m.error ?? '').code === 'HALTED_TARGET_LIVE'
+
+/**
+ * Untested path 2: a released move whose new home's key did not check at retire_source. It
+ * stays interrupted (MOVE_OPEN) with the old home kept until the key is entered and Resume
+ * checks it again.
+ */
+export const isKeyNotChecked = (m: Pick<HubMove, 'status' | 'error'>) =>
+  m.status === 'interrupted' && /^APP_KEY_(MISMATCH|UNKNOWN): /.test(m.error ?? '')
 
 /** The target the `target_stopped` item names ("Stop <target>: …"), else a plain stand-in. */
 export function haltedTargetName(itemText: string | undefined): string {

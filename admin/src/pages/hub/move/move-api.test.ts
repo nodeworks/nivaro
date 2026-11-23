@@ -287,6 +287,10 @@ describe('moveBadge (design B4)', () => {
       tone: 'attention'
     })
     expect(moveBadge({ ...base, status: 'interrupted' })?.text).toBe('Move interrupted')
+    // Untested path 2: the new home's key did not check at retire_source; the old home is kept.
+    expect(
+      moveBadge({ ...base, status: 'interrupted', error: 'APP_KEY_MISMATCH: Another key.' })
+    ).toEqual({ text: 'Waiting for the app key', tone: 'attention' })
     expect(
       moveBadge({ ...base, status: 'interrupted', error: 'HALTED_TARGET_LIVE: x' })?.tone
     ).toBe('halted')

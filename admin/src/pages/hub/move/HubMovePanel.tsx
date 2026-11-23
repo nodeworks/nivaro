@@ -48,6 +48,7 @@ import {
   type HubPlacement,
   haltedTargetName,
   isHaltedTargetLive,
+  isKeyNotChecked,
   isLiveMove,
   isOpenMove,
   isRollingBack,
@@ -1448,12 +1449,15 @@ function MoveProgress({
       {m.status === 'interrupted' && !halted && (
         <div className='space-y-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-900/60 dark:bg-amber-950/40'>
           <p className='m-0 text-[12px] text-amber-900 dark:text-amber-200'>
-            The Hub stopped hearing from this move (it restarted, or the run was cut off).{' '}
-            {past
-              ? 'The app already serves from its new home; Resume finishes what is left.'
-              : isRollingBack(m)
-                ? 'It was rolling back when it stopped. Resume and Roll back both go on undoing its steps; the app ends on its old home.'
-                : 'Resume goes on from the step it stopped at; Roll back puts the app back on its old home.'}
+            {isKeyNotChecked(m)
+              ? "The app serves from its new home, but the old home was not retired: the new home does not seal this app's values with the app's own key yet. Enter the key under App key on this environment, then Resume: the Hub checks it again and retires the old home."
+              : `The Hub stopped hearing from this move (it restarted, or the run was cut off). ${
+                  past
+                    ? 'The app already serves from its new home; Resume finishes what is left.'
+                    : isRollingBack(m)
+                      ? 'It was rolling back when it stopped. Resume and Roll back both go on undoing its steps; the app ends on its old home.'
+                      : 'Resume goes on from the step it stopped at; Roll back puts the app back on its old home.'
+                }`}
           </p>
           <div className='flex flex-wrap items-center gap-2'>
             <Button
