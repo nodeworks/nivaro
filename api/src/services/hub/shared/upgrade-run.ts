@@ -368,6 +368,9 @@ export async function startSharedUpgrade(
       409,
       plan
     )
+  // Final review moves I-2 (P6-37): an open move answers its own code, naming the move.
+  const moveOpen = plan.blockers.find((b) => b.code === 'MOVE_OPEN')
+  if (moveOpen) throw new SharedUpgradeError('MOVE_OPEN', moveOpen.text, 409, plan)
   if (plan.blockers.length)
     throw new SharedUpgradeError(
       'BLOCKED',

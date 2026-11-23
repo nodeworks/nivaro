@@ -6,6 +6,7 @@ import { AgentError, agentHealth } from '../docker/agent-client.js'
 import type { AgentHealth } from '../docker/agent-types.js'
 import { environmentNames, hostnameRefusals, type StackEdge } from '../docker/render-spec.js'
 import { type DockerDriverRow, getDriver, STACK_NAME_RE } from '../drivers.js'
+import { openMoveFor } from '../move-open.js'
 import { storedRuns, successfulVersions } from '../promote-gather.js'
 import {
   defaultPromoteLock,
@@ -35,7 +36,8 @@ import { type SharedTenantRow, tenantsOf } from './tenants.js'
  * Nivaro Hub phase 6 (Task 5): the plan of a Docker shared deployment's upgrade (or rollback).
  * Reads only: never applies anything, never writes a row, never opens a secret into an answer.
  *
- * Blockers (the plan's whole-deployment refusals): SHARED_RETIRED; SHARED_NOT_HUB_DEPLOYED
+ * Blockers (the plan's whole-deployment refusals): SHARED_RETIRED; MOVE_OPEN (a move into or out
+ * of this deployment is running, waiting or interrupted — final review I-2); SHARED_NOT_HUB_DEPLOYED
  * (registered mode: the operator upgrades it); BAD_VERSION; BUSY (the shared lock, or any placed
  * environment's lock, is held); VERSION_UNKNOWN (no image digest in the registry for the tag);
  * NOT_DEPLOYED_BEFORE (a rollback to a version this deployment never ran); NO_DRIVER;
@@ -369,6 +371,16 @@ export async function gatherSharedUpgrade(
       }`
     )
   }
+
+  // Final review I-2 (P6-37): an open move into or out of this deployment — an interrupted one
+  // holds no lock — would be migrated, re-routed and verified behind its back. Resume it or roll
+  // it back first.
+  const move = await openMoveFor({ sharedId: shared.id })
+  if (move)
+    block(
+      'MOVE_OPEN',
+      `The move of ${move.label} (move ${move.id}) into or out of this deployment is ${move.status === 'interrupted' ? 'interrupted' : 'under way'}: resume it or roll it back first.`
+    )
 
   // The image and extension pins the run deploys.
   let image: string | null = null

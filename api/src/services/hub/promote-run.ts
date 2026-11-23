@@ -9,6 +9,7 @@ import { hubDeploysKeys } from './deploys.js'
 import { type DockerStepOps, defaultDockerOps, type StackDeployed } from './docker/run-step.js'
 import { DriverMisconfiguredError, repositoryIdentity } from './drivers.js'
 import * as gitlab from './gitlab-write.js'
+import { moveOpenRefusal } from './move-open.js'
 import {
   currentVersionReader,
   gatherPlanInput,
@@ -1102,6 +1103,11 @@ export async function startPromotion(
     | { id: number; key: string; app_id: number }
     | undefined
   if (!env) throw new PromotionError('NOT_FOUND', 'Not found', 404)
+  // Final review moves I-2 (P6-37): promote, rollback and Apply now (startStackApply) all start
+  // here; an open move (an interrupted one holds no lock) refuses them. A move's own deploys use
+  // deployComponentAt, never this.
+  const open = await moveOpenRefusal({ envIds: [envId] })
+  if (open) throw new PromotionError(open.code, open.message, open.status)
   if (req.kind !== 'promote' && req.kind !== 'rollback')
     throw new PromotionError('BAD_KIND', 'kind must be promote or rollback')
   const apply = req.apply === true

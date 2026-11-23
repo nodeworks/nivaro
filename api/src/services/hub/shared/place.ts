@@ -24,6 +24,7 @@ import {
   sharedPoolMax,
   updatePlacement
 } from '../drivers.js'
+import { moveOpenRefusal } from '../move-open.js'
 import { HEARTBEAT_FRESH_MS, withoutFreshHeartbeat } from '../promote-heal.js'
 import {
   defaultPromoteLock,
@@ -670,6 +671,11 @@ async function checkAndWrite(
 ): Promise<Placed> {
   const env = (await db(ENVS).where({ id: envId }).first()) as Record<string, unknown> | undefined
   if (!env) throw refuse('NOT_FOUND', 'No such environment.', 404)
+  // Final review moves I-2 (P6-37): an open move of this environment (an interrupted one holds
+  // no lock). A placement never re-renders the deployment, so a move into or out of the
+  // deployment by another environment does not refuse it.
+  const open = await moveOpenRefusal({ envIds: [envId] })
+  if (open) throw refuse(open.code, open.message, open.status)
   const current = env.placement_id == null ? null : await getPlacement(Number(env.placement_id))
   // Ruling P6-11 (I-1): a placed, serving environment is never placed again (a second place
   // would take it offline and switch its database or deployment without a move).
