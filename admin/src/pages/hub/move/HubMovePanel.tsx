@@ -815,6 +815,9 @@ function PlanReading() {
   )
 }
 
+/** Blockers that mean the plan never heard from the source (its file counts are not real). */
+const SOURCE_UNREAD = new Set(['LINK_UNREACHABLE', 'NOT_HUB_LINKED', 'GATHER_FAILED'])
+
 const ROUTING_BADGE = {
   automatic: {
     label: 'Automatic address change',
@@ -842,6 +845,11 @@ function MovePlanView({
   onCheck: (id: string, v: boolean) => void
 }) {
   const badge = ROUTING_BADGE[plan.routing] ?? ROUTING_BADGE.manual
+  // Design N4: a source the Hub could not read reports no files; "0 files · 0 B" would be a guess.
+  const filesUnknown =
+    plan.files.count === 0 &&
+    plan.files.bytes === 0 &&
+    plan.blockers.some((b) => SOURCE_UNREAD.has(b.code))
   const needsKey = plan.blockers.some(
     (b) => b.code === 'APP_KEY_UNKNOWN' || b.code === 'APP_KEY_MISMATCH'
   )
@@ -861,8 +869,14 @@ function MovePlanView({
           Version <span className='font-mono'>{plan.version}</span> (unchanged)
         </span>
         <span>
-          {plan.files.count.toLocaleString()} {plan.files.count === 1 ? 'file' : 'files'} ·{' '}
-          {formatBytes(plan.files.bytes)}
+          {filesUnknown ? (
+            'Files: unknown until the source answers'
+          ) : (
+            <>
+              {plan.files.count.toLocaleString()} {plan.files.count === 1 ? 'file' : 'files'} ·{' '}
+              {formatBytes(plan.files.bytes)}
+            </>
+          )}
         </span>
       </div>
 

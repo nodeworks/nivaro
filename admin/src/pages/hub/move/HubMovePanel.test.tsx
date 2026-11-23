@@ -741,6 +741,18 @@ describe('HubMovePanel — before start', () => {
     expect(screen.getByRole('button', { name: 'Start move' })).toBeDisabled()
   })
 
+  it('files read as unknown when the source never answered (design N4)', async () => {
+    plan = {
+      ...basePlan,
+      files: { count: 0, bytes: 0 },
+      blockers: [{ code: 'LINK_UNREACHABLE', text: '' }]
+    }
+    renderPanel()
+    await pickTarget(/Shared · east/)
+    expect(await screen.findByText('Files: unknown until the source answers')).toBeInTheDocument()
+    expect(screen.queryByText(/0 files/)).toBeNull()
+  })
+
   it('an unknown app key blocker offers the app key field right there', async () => {
     plan = { ...basePlan, checklist: [], blockers: [{ code: 'APP_KEY_UNKNOWN', text: '' }] }
     renderPanel()
