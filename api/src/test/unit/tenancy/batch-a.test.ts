@@ -19,6 +19,43 @@ vi.mock('../../../services/tenancy/hub-source.js', async (orig) => ({
   stopHubTenantSource: vi.fn()
 }))
 
+// CI has no Redis: building the realtime server connects one (adapter, realtime board). A client
+// whose every command resolves empty stands in — these tests only ask whether the server builds.
+const fakeRedis = vi.hoisted(() => {
+  const make = (): unknown =>
+    new Proxy(
+      {},
+      {
+        get(_t, k, self) {
+          // not a thenable, nor a Fastify getter/setter descriptor (decorate reads both)
+          if (typeof k === 'symbol' || k === 'then' || k === 'getter' || k === 'setter')
+            return undefined
+          if (k === 'status') return 'ready'
+          if (k === 'options') return {}
+          if (k === 'on' || k === 'once' || k === 'off' || k === 'removeListener') return () => self
+          if (k === 'duplicate') return () => make()
+          // answered on a timer: a polling loop (blpop, xread) never spins the event loop
+          return () => new Promise((r) => setTimeout(() => r(null), 20).unref())
+        }
+      }
+    )
+  return { make }
+})
+vi.mock('ioredis', () => {
+  const Redis = function Redis() {
+    return fakeRedis.make()
+  }
+  return { Redis, default: Redis }
+})
+vi.mock('../../../plugins/redis.js', async () => {
+  const fp = (await import('fastify-plugin')).default
+  return {
+    redisPlugin: fp(async (app: import('fastify').FastifyInstance) => {
+      app.decorate('redis', fakeRedis.make() as never)
+    })
+  }
+})
+
 // The three deployments every pick runs under (Hub phase 5, batch A).
 const SELF_HOSTED: Record<string, string> = {}
 const CLOUD: Record<string, string> = { CLOUD_META_DB_URL: 'postgres://meta/x' }
