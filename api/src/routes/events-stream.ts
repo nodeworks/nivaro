@@ -147,6 +147,10 @@ export async function eventsStreamRoutes(app: FastifyInstance) {
     // Cloud: the hub is process-global and serves several tenants — this stream takes only the
     // events of the tenant it was opened under (the request's tenant context, captured here).
     const tenant = currentTenantKey()
+    // Deliveries fire in the WRITER's context — a local write's request, or no app at all for a
+    // change another process made (the event stream, the journal fallback: every change on a
+    // realtime process). The permission reads run in this stream's own app.
+    const inTenant = captureTenant()
 
     const deliver = async (ev: SseEvent): Promise<void> => {
       if (closed) return
@@ -158,7 +162,7 @@ export async function eventsStreamRoutes(app: FastifyInstance) {
         let check = lazyCan.get(ev.collection)
         if (check === undefined) {
           const reader = user
-          check = can(reader, 'read', ev.collection).catch(() => false)
+          check = inTenant(() => can(reader, 'read', ev.collection)).catch(() => false)
           lazyCan.set(ev.collection, check)
         }
         if (!(await check)) return
@@ -207,7 +211,6 @@ export async function eventsStreamRoutes(app: FastifyInstance) {
 
     const streamBind = bind
     const userId = String(user.id)
-    const inTenant = captureTenant()
     let last: StreamIdentity = { user, isAdmin: req.isAdmin ?? false }
     // Every heartbeat re-reads the identity (sign-in, account, role, API key narrowing); the
     // per-collection read answers are dropped then, so a role or policy change applies to this
