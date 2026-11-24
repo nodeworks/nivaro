@@ -25,7 +25,7 @@
  * process does (realtime-server.ts). Never Nivaro Cloud: every Cloud process serves its own
  * sockets and NIVARO_ROLE=realtime is refused there (realtimeRoleProblem).
  */
-import { isNivaroCloud } from './deployment-mode.js'
+import { isNivaroCloud, tenantSource } from './deployment-mode.js'
 
 type Env = Record<string, string | undefined>
 
@@ -279,6 +279,24 @@ export async function probeRealtimeRouting(
   } catch {
     return null
   }
+}
+
+/**
+ * Where the routing probe (probeRealtimeRouting) asks. Self-hosted: PUBLIC_URL. A Hub shared
+ * deployment sets no PUBLIC_URL, and its fallback (http://localhost:<PORT>) is the web process
+ * itself, whose tenant hook refuses the host `localhost` with no X-Nivaro-Role — every app would
+ * read "the proxy does not route". There the probe asks the app's own origin (`appOrigin`: the
+ * verified origin the request runs in, tenantOrigin()), the address the proxy routes; with no app
+ * origin (a check run outside an app) nothing is probed (undefined: the probe answers null, "cannot
+ * tell", never a failure). Nivaro Cloud serves its own sockets and never probes.
+ */
+export function realtimeProbeBase(
+  publicUrl: string | undefined,
+  appOrigin: string | null | undefined,
+  env: Env = process.env
+): string | undefined {
+  if (tenantSource(env) === 'hub') return appOrigin || undefined
+  return publicUrl
 }
 
 /** Roles that run one queue only and answer nothing but health (importer, exporter). */

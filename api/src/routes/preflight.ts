@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
 import { db, migrationSource } from '../db/index.js'
+import { tenantOrigin } from '../db/tenant-context.js'
 import { extensionRegistry, missingExtensionEnv } from '../extensions/loader.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { isMultiTenant } from '../services/deployment-mode.js'
@@ -15,7 +16,12 @@ import {
   readMediaWorker
 } from '../services/media-handoff.js'
 import { hasLocalChromium } from '../services/pdf-layout.js'
-import { judgeRealtimeTier, probeRealtimeRouting, socketsServed } from '../services/process-role.js'
+import {
+  judgeRealtimeTier,
+  probeRealtimeRouting,
+  realtimeProbeBase,
+  socketsServed
+} from '../services/process-role.js'
 import { registerReadinessCheck } from '../services/readiness.js'
 import {
   canaryLenient,
@@ -333,8 +339,9 @@ async function checkExportWorker(app: FastifyInstance): Promise<Check> {
   }
 }
 
-/** Post-mortem 3.3 — SOCKETS=off needs a realtime process (NIVARO_ROLE=realtime) alive. */
-async function checkRealtime(app: FastifyInstance): Promise<Check> {
+/** Post-mortem 3.3 — SOCKETS=off needs a realtime process (NIVARO_ROLE=realtime) alive.
+ *  Exported for tests. */
+export async function checkRealtime(app: FastifyInstance): Promise<Check> {
   const served = socketsServed()
   const v = judgeRealtimeTier({
     served,
@@ -342,7 +349,10 @@ async function checkRealtime(app: FastifyInstance): Promise<Check> {
     roster: served ? [] : await listInstances(),
     instance: instanceKey(),
     stream: streamEnabled(),
-    routed: served ? null : await probeRealtimeRouting(config.PUBLIC_URL)
+    // A shared deployment: the app's own origin (PUBLIC_URL is unset there).
+    routed: served
+      ? null
+      : await probeRealtimeRouting(realtimeProbeBase(config.PUBLIC_URL, tenantOrigin()))
   })
   const c = canaryLenient(v)
   return {
