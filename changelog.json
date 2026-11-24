@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-11-24T19:12:24.249Z",
+  "generated_at": "2026-11-24T19:48:21.363Z",
   "releases": [
+    {
+      "version": "0.3.213",
+      "tag": "v0.3.213",
+      "date": "2026-11-24T14:47:56-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "edit-lock",
+              "text": "fields open in every locked step (edit_lock.open_fields)",
+              "hash": "3fb39b7f1"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "edit-lock",
+              "text": "an open-field lock at an approval step gives way to the step",
+              "hash": "c3fe69535"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.3.212",
       "tag": "v0.3.212",
-      "date": "2026-11-24T14:12:02-05:00",
+      "date": "2026-11-24T14:12:24-05:00",
       "sections": [
         {
           "label": "Added",
