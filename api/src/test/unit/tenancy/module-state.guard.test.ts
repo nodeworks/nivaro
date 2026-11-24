@@ -955,6 +955,8 @@ const SHARED: Record<string, string> = {
   'services/tenancy/app-lifecycle.ts :: readyHooks': REGISTRY,
   'services/tenancy/app-keys.ts :: keys':
     'Task 14: app keys by tenant id (the map is keyed by the app)',
+  'services/tenancy/app-migrations.ts :: follower':
+    "the realtime process's re-read loop over every app's stored state (a process mode; the states it writes are keyed by tenant id)",
   'services/tenancy/app-migrations.ts :: gateOn':
     'Task 8: whether this process gates requests on app migrations (a process mode)',
   'services/tenancy/app-migrations.ts :: inFlight':

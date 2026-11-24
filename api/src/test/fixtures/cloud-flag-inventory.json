@@ -271,10 +271,10 @@
       "line": 54,
       "text": "if (realtime && process.env.CLOUD_META_DB_URL) {",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T2",
-      "why": "realtime-role refusal",
+      "why": "realtime-role refusal. Now Nivaro Cloud only, through realtimeRoleProblem() (services/process-role.ts, EXTRA_CALLS): a Hub shared deployment may run NIVARO_ROLE=realtime",
       "batch": "A"
     },
     {
@@ -623,10 +623,10 @@
       "line": 65,
       "text": "if (process.env.CLOUD_META_DB_URL)",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T2",
-      "why": "realtime-role refusal: the realtime tier cannot resolve a tenant per request",
+      "why": "realtime-role refusal: the realtime tier cannot resolve a tenant per request. Now Nivaro Cloud only, through realtimeRoleProblem() (services/process-role.ts, EXTRA_CALLS): a Hub shared deployment runs a realtime process that resolves the app per request and per socket",
       "batch": "A"
     },
     {
@@ -2548,10 +2548,10 @@
       "line": 41,
       "text": "if (isRealtimeRole(env) || env.CLOUD_META_DB_URL) return true",
       "form": "env-param",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T4",
-      "why": "socket roles: every multi-tenant process serves sockets",
+      "why": "socket roles: every multi-tenant process serves sockets. Now isNivaroCloud(env) (EXTRA_CALLS): a Hub shared deployment honours SOCKETS=off, its realtime service holding the sockets",
       "batch": "A"
     },
     {

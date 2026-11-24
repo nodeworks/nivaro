@@ -90,7 +90,12 @@ const EXTRA_CALLS: Record<string, { multiTenant?: number; nivaroCloud?: number }
   // pushRelayConfig's stored url without a stored key counts in Nivaro Cloud only (its T7 entry
   // is weight 0): on a shared deployment the url travels with the app's own key (final fix F10).
   'services/push-relay.ts': { nivaroCloud: 1 },
-  'services/phone-push.ts': { multiTenant: 1 }
+  'services/phone-push.ts': { multiTenant: 1 },
+  // The realtime tier on a Hub shared deployment: socketsServed() always serves sockets in Nivaro
+  // Cloud only (its T4 entry is weight 0), and realtimeRoleProblem() refuses NIVARO_ROLE=realtime
+  // in Nivaro Cloud only — the one refusal index.ts and realtime-server.ts now share (their T2
+  // entries are weight 0).
+  'services/process-role.ts': { nivaroCloud: 2 }
 }
 
 type Rule = 'T1' | 'T2' | 'T3' | 'T4' | 'T5' | 'T6' | 'T7' | 'C1' | 'C2' | 'C3' | 'C4' | 'C5'

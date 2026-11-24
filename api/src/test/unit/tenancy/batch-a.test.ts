@@ -12,6 +12,12 @@ vi.mock('../../../middleware/authenticate.js', () => ({
   cidrMatch: vi.fn(() => true),
   checkApiKeyScope: vi.fn(() => true)
 }))
+// The realtime server on shared starts the Hub tenant source: no Hub is called from a test.
+vi.mock('../../../services/tenancy/hub-source.js', async (orig) => ({
+  ...(await orig<object>()),
+  startHubTenantSource: vi.fn(async () => {}),
+  stopHubTenantSource: vi.fn()
+}))
 
 // The three deployments every pick runs under (Hub phase 5, batch A).
 const SELF_HOSTED: Record<string, string> = {}
@@ -142,7 +148,7 @@ describe('fetchGuardedInCloud (P5-5: guarded in every multi-tenant process)', ()
     expect(await outcome(SHARED)).toEqual({ refused: true, plainFetchUsed: false }))
 })
 
-describe('realtime-server refuses in a multi-tenant process', () => {
+describe('realtime-server refuses on Nivaro Cloud only', () => {
   async function build(env: Record<string, string>) {
     setEnv(env)
     const { buildRealtimeServer } = await import('../../../realtime-server.js')
@@ -154,10 +160,12 @@ describe('realtime-server refuses in a multi-tenant process', () => {
       (e: Error) => e.message
     )
   }
-  it('self-hosted does not refuse', async () =>
-    expect(await build(SELF_HOSTED)).not.toMatch(/self-hosted only/))
-  it('refuses in cloud', async () => expect(await build(CLOUD)).toMatch(/self-hosted only/))
-  it('refuses on shared', async () => expect(await build(SHARED)).toMatch(/self-hosted only/))
+  it('self-hosted does not refuse', async () => expect(await build(SELF_HOSTED)).toBe('built'))
+  it('refuses in cloud', async () =>
+    expect(await build(CLOUD)).toMatch(/not available on Nivaro Cloud/))
+  // A Hub shared deployment's realtime service serves every app the Hub lists
+  // (realtime-tier-shared.test.ts).
+  it('builds on shared', async () => expect(await build(SHARED)).toBe('built'))
 })
 
 describe('server.ts: tenant hook vs operator routes (split block)', () => {

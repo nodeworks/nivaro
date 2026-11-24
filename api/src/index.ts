@@ -31,17 +31,17 @@ import { startDevExtensionWatch } from './services/dev-extension-watch.js'
 import { hubLinkToken } from './services/hub/mode.js'
 import { setInactivePeopleNoticeApp } from './services/inactive-people-notice.js'
 import { installProcessGuards } from './services/process-guards.js'
-import { isRealtimeRole, processRole } from './services/process-role.js'
+import { isRealtimeRole, processRole, realtimeRoleProblem } from './services/process-role.js'
 import { NIVARO_VERSION } from './version.js'
 
 async function main() {
   // Post-mortem 3.3 — NIVARO_ROLE=realtime holds live connections only (realtime-server.ts):
-  // no hooks, no migrations, no event flows. Self-hosted only (never multi-tenant).
+  // no hooks, no migrations, no event flows. Self-hosted, and a Hub shared deployment (its
+  // realtime service serves every app the Hub lists); refused on Nivaro Cloud only.
   const realtime = isRealtimeRole()
-  if (realtime && isMultiTenant()) {
-    console.error(
-      'NIVARO_ROLE=realtime is self-hosted only — unset it on a deployment that serves many apps (Nivaro Cloud or a Hub shared deployment).'
-    )
+  const realtimeProblem = realtime ? realtimeRoleProblem() : null
+  if (realtimeProblem) {
+    console.error(realtimeProblem)
     process.exit(1)
   }
   const modeProblem = deploymentModeProblem()

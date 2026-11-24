@@ -19,8 +19,13 @@
  * A web process with SOCKETS=off serves no /socket.io; what it emits reaches the clients on the
  * realtime processes through the Socket.io Redis adapter and the event stream. Nothing set =
  * one process that does everything, sockets included (the historic behaviour).
+ *
+ * Where: self-hosted (one app), and a Hub shared deployment (many apps), where a realtime
+ * process resolves the app per connection and per stream request exactly as a shared web
+ * process does (realtime-server.ts). Never Nivaro Cloud: every Cloud process serves its own
+ * sockets and NIVARO_ROLE=realtime is refused there (realtimeRoleProblem).
  */
-import { isMultiTenant } from './deployment-mode.js'
+import { isNivaroCloud } from './deployment-mode.js'
 
 type Env = Record<string, string | undefined>
 
@@ -35,12 +40,24 @@ export function isRealtimeRole(env: Env = process.env): boolean {
 }
 
 /**
- * Does this process serve socket connections? Realtime: always. Cloud mode: always (the
- * realtime tier is self-hosted only). Otherwise unless SOCKETS=off.
+ * Does this process serve socket connections? Realtime: always. Nivaro Cloud: always (it has no
+ * realtime tier). Otherwise — self-hosted, and a Hub shared deployment whose realtime service
+ * holds the sockets — unless SOCKETS=off.
  */
 export function socketsServed(env: Env = process.env): boolean {
-  if (isRealtimeRole(env) || isMultiTenant(env)) return true
+  if (isRealtimeRole(env) || isNivaroCloud(env)) return true
   return (env.SOCKETS ?? '').trim().toLowerCase() !== 'off'
+}
+
+/**
+ * Why this deployment cannot run a realtime process (NIVARO_ROLE=realtime), or null when it can.
+ * Self-hosted and a Hub shared deployment can; Nivaro Cloud cannot (every Cloud process serves
+ * its own sockets, and its edge routes no path to a realtime tier). index.ts refuses the boot
+ * with this sentence and buildRealtimeServer() throws it.
+ */
+export function realtimeRoleProblem(env: Env = process.env): string | null {
+  if (!isNivaroCloud(env)) return null
+  return 'NIVARO_ROLE=realtime is not available on Nivaro Cloud: every Cloud process serves its own live connections. Unset NIVARO_ROLE.'
 }
 
 /**

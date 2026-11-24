@@ -632,7 +632,12 @@ let lastRequestNudge = Number.NEGATIVE_INFINITY
  */
 export function nudgeAppMigrations(tenantId?: string): void {
   const l = loop
-  if (!l || l.kick) return
+  if (!l) {
+    // A process that follows instead of migrating (a realtime process): read again soon.
+    if (follower && tenantId !== undefined) nudgeFollower()
+    return
+  }
+  if (l.kick) return
   if (tenantId !== undefined) {
     const e = states.get(tenantId)
     if (e && e.state !== 'ok' && nowFn() < e.nextTry) return
@@ -668,6 +673,121 @@ function stopLoop(): void {
   clearInterval(loop.timer)
   if (loop.kick) clearTimeout(loop.kick)
   loop = null
+}
+
+// ─── Following the stored states (a process that never migrates) ────────────────────────────
+// A realtime process (NIVARO_ROLE=realtime) on a Hub shared deployment serves every app's
+// sockets and streams but runs no migration: the web and worker processes do. It gates exactly as
+// they do — an app answers "getting ready" and takes no socket until its database is migrated at
+// this version — by reading the state those processes keep in Redis (appSchemaKey), for each
+// listed app's current database (its connection fingerprint). No migration, no seeds, no ledger
+// read, no app-ready hooks (a realtime process registers no per-app jobs).
+
+let follower: {
+  registry: () => TenantRegistry | null
+  timer: ReturnType<typeof setInterval>
+  kick: ReturnType<typeof setTimeout> | null
+  running: boolean
+} | null = null
+
+/** One look: every listed app's stored state at this version, for its current database. */
+async function followPass(registry: TenantRegistry): Promise<void> {
+  const list = await (registry.listAll ? registry.listAll() : registry.listActive())
+  const listed = new Set(list.map((t) => t.id))
+  for (const id of [...states.keys()]) if (!listed.has(id)) states.delete(id)
+  await Promise.all(
+    list.map(async (t) => {
+      if (!MIGRATED_STATUSES.has(t.status)) return
+      const conn = connFingerprint(t)
+      const stored = await readStored(t.id)
+      const current = stored?.version === NIVARO_VERSION && stored.conn === conn
+      const before = states.get(t.id)
+      if (current && stored?.state === 'ok') {
+        if (before?.state === 'ok' && before.conn === conn) return
+        setState(t.id, {
+          state: 'ok',
+          version: NIVARO_VERSION,
+          at: typeof stored.at === 'string' ? stored.at : null,
+          error: null,
+          conn,
+          nextTry: 0
+        })
+        return
+      }
+      // Not (or no longer) migrated here: what this process cached from the app's database may
+      // be from a database that was replaced (dropOk's rule on the migrating replicas).
+      if (before?.state === 'ok') forgetAppState(t.id)
+      setState(t.id, {
+        state: current && stored?.state === 'failed' ? 'failed' : 'pending',
+        version: current ? NIVARO_VERSION : null,
+        at: current && typeof stored?.at === 'string' ? stored.at : null,
+        error: current && typeof stored?.error === 'string' ? stored.error : null,
+        conn,
+        nextTry: 0
+      })
+    })
+  )
+}
+
+function runFollowPass(): void {
+  const f = follower
+  if (!f || f.running) return
+  const registry = f.registry()
+  if (!registry) return
+  f.running = true
+  void runWithoutTenant(() =>
+    followPass(registry)
+      .catch(() => {})
+      .finally(() => {
+        f.running = false
+      })
+  )
+}
+
+/** A request reached an app that is not ready: read again soon, at most once a second. */
+function nudgeFollower(): void {
+  const f = follower
+  if (!f || f.kick) return
+  if (Date.now() - lastRequestNudge < REQUEST_NUDGE_GAP_MS) return
+  lastRequestNudge = Date.now()
+  f.kick = setTimeout(() => {
+    f.kick = null
+    runFollowPass()
+  }, 50)
+  f.kick.unref?.()
+}
+
+/**
+ * Gate requests and sockets on each app's migrated state without migrating anything: a pass now,
+ * then every `intervalMs` (default 5 s), and soon after a request reaches an app that is not
+ * ready. For a process that serves apps but never migrates them (NIVARO_ROLE=realtime). The
+ * registry is read on every pass (the Hub source is started before, but may load later). Returns
+ * the stop function.
+ */
+export function startAppSchemaFollower(
+  registry: () => TenantRegistry | null,
+  opts: { redis?: RedisLike | null; intervalMs?: number } = {}
+): () => void {
+  stopFollower()
+  gateOn = true
+  if (opts.redis !== undefined) redisRef = opts.redis
+  const timer = setInterval(runFollowPass, Math.max(50, opts.intervalMs ?? DEFAULT_INTERVAL_MS))
+  timer.unref?.()
+  follower = { registry, timer, kick: null, running: false }
+  runFollowPass()
+  return stopFollower
+}
+
+function stopFollower(): void {
+  if (!follower) return
+  clearInterval(follower.timer)
+  if (follower.kick) clearTimeout(follower.kick)
+  follower = null
+}
+
+/** Tests: one follower pass now, awaited. */
+export async function _followPassForTests(registry: TenantRegistry): Promise<void> {
+  await runWithoutTenant(() => followPass(registry))
 }
 
 /** Readiness `app-schemas`: inside an app, that app's own state; outside, the failed apps. */
@@ -734,6 +854,7 @@ export function _configureAppMigrationsForTests(o: {
 
 export function _resetAppMigrationsForTests(): void {
   stopLoop()
+  stopFollower()
   states.clear()
   inFlight.clear()
   verifying.clear()
