@@ -491,7 +491,8 @@ const READINESS_TITLES: Record<string, string> = {
   HELP_VIDEO_RENDERS: 'Queued help-video renders redo on the next publish',
   DIRECTORY_ENV_CREDENTIALS: 'A shared app reads the directory with its own saved app registration',
   TEAMS_BOT_ENV_CREDENTIALS: "A shared app's Teams bot uses the bot saved in its Settings",
-  PUSH_RELAY_ENV: 'A shared app connects its own push relay'
+  PUSH_RELAY_ENV: 'A shared app connects its own push relay',
+  SETTINGS_ENV_OVERRIDES: "A shared deployment does not apply the app's server setting overrides"
 }
 
 function readinessTitle(code: string): string {

@@ -13,6 +13,7 @@ import {
 import {
   bustInstanceOverridesCache,
   describeEnvOverrides,
+  envKeyAppliesHere,
   envOverrideKeys,
   envOverrideMap,
   INSTANCE_RESERVED_KEYS,
@@ -742,8 +743,9 @@ export async function settingsRoutes(app: FastifyInstance) {
     }
     // The env layer (NIVARO_SETTINGS_OVERRIDES) wins over the row above but is set on the
     // server, not here: shown read-only so an admin can tell why a value is not what they
-    // saved. Secrets masked like GET /settings; `shadows_db` = the row names the same key.
-    const env = describeEnvOverrides(envOverrideMap(), data, SECRET_KEYS, MASK)
+    // saved. Secrets masked like GET /settings; `shadows_db` = the row names the same key;
+    // `ignored` = a shared deployment never applies it (an app's own setting).
+    const env = describeEnvOverrides(envOverrideMap(), data, SECRET_KEYS, MASK, envKeyAppliesHere)
     return reply.send({
       data: {
         instance_key: instanceKey(),

@@ -91,7 +91,8 @@ describe('GET /settings/instance-overrides — server-set (env) overrides', () =
       key: 'smtp_host',
       value: 'relay.server.local',
       secret: false,
-      shadows_db: true
+      shadows_db: true,
+      ignored: false
     })
     expect(byKey.smtp_pass).toMatchObject({ value: '••••••', secret: true, shadows_db: false })
     expect(byKey.custom_api_token).toMatchObject({ value: '••••••', secret: true })
@@ -104,6 +105,35 @@ describe('GET /settings/instance-overrides — server-set (env) overrides', () =
     for (const s of ['ENV-SMTP-PASSWORD', 'ENV-CUSTOM-TOKEN', 'ENV-RELAY-KEY'])
       expect(text).not.toContain(s)
     await app.close()
+  })
+
+  it('on a shared deployment, app-owned keys show as ignored and shadow nothing', async () => {
+    const keys = ['HUB_SHARED_DEPLOYMENT', 'HUB_URL', 'HUB_DEPLOYMENT_TOKEN']
+    Object.assign(process.env, {
+      HUB_SHARED_DEPLOYMENT: 'shared-a',
+      HUB_URL: 'https://hub.example',
+      HUB_DEPLOYMENT_TOKEN: 'x'.repeat(32)
+    })
+    try {
+      const app = await buildApp()
+      const res = await app.inject({
+        url: '/settings/instance-overrides',
+        headers: { 'x-test-user': 'admin' }
+      })
+      const data = res.json().data
+      const byKey = Object.fromEntries(
+        (data.env_overrides as Array<{ key: string }>).map((e) => [e.key, e])
+      )
+      expect(byKey.smtp_host).toMatchObject({ ignored: true, shadows_db: false })
+      expect(byKey.smtp_pass).toMatchObject({ ignored: true, value: '••••••' })
+      expect(byKey.custom_api_token).toMatchObject({ ignored: true })
+      expect(byKey.mail_test_mode).toMatchObject({ ignored: false })
+      expect(byKey.environment_label).toMatchObject({ ignored: false })
+      expect(data.shadowed).toEqual([])
+      await app.close()
+    } finally {
+      for (const k of keys) delete process.env[k]
+    }
   })
 
   it('is admin-only', async () => {
@@ -121,8 +151,22 @@ describe('describeEnvOverrides', () => {
   it('masks an empty secret as cleared and sorts keys', () => {
     const out = describeEnvOverrides({ smtp_pass: '', a: 1 }, {}, ['smtp_pass'], '*')
     expect(out).toEqual([
-      { key: 'a', value: '1', secret: false, shadows_db: false },
-      { key: 'smtp_pass', value: null, secret: true, shadows_db: false }
+      { key: 'a', value: '1', secret: false, shadows_db: false, ignored: false },
+      { key: 'smtp_pass', value: null, secret: true, shadows_db: false, ignored: false }
+    ])
+  })
+
+  it('a key this process never applies is marked ignored and shadows nothing', () => {
+    const out = describeEnvOverrides(
+      { smtp_host: 'relay', mail_test_mode: true },
+      { smtp_host: 'saved' },
+      [],
+      '*',
+      (k) => k === 'mail_test_mode'
+    )
+    expect(out).toEqual([
+      { key: 'mail_test_mode', value: 'true', secret: false, shadows_db: false, ignored: false },
+      { key: 'smtp_host', value: 'relay', secret: false, shadows_db: false, ignored: true }
     ])
   })
 

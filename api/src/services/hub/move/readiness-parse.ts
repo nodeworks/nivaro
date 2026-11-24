@@ -23,6 +23,7 @@ const READINESS_CODES: Record<SharedReadinessCode, true> = {
   DIRECTORY_ENV_CREDENTIALS: true,
   TEAMS_BOT_ENV_CREDENTIALS: true,
   PUSH_RELAY_ENV: true,
+  SETTINGS_ENV_OVERRIDES: true,
   // Older apps (before 0.3.212) still send these: kept known, so their report stays readable;
   // the plan decides by the target's version (plan.ts SHARED_FEATURES_SINCE).
   STAGED_IMPORTS: true,

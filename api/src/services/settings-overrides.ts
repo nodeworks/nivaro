@@ -118,45 +118,54 @@ export async function getInstanceOverrides(): Promise<Record<string, unknown> | 
   return map
 }
 
-export interface OverlayOptions {
-  /**
-   * Keys starting with this prefix are the app's own credentials (its Teams bot, its directory
-   * sign-in). On a Hub shared deployment NIVARO_SETTINGS_OVERRIDES belongs to the whole
-   * deployment, so such a key there would become every app's credential: the env layer never
-   * supplies them there. The DB layer lives in the app's own database and still applies.
-   * Self-hosted and Nivaro Cloud ignore this.
-   */
-  appOwnPrefix?: string
+/**
+ * On a Hub shared deployment NIVARO_SETTINGS_OVERRIDES belongs to the whole deployment, so any key
+ * it applied would become every app's value: every app's mail relay and password, SMS account, AI
+ * key, storage bucket, push keys, Teams bot, directory sign-in — even its name and portal URL. There
+ * the env layer supplies only deployment-wide switches: the channel test modes (with their test
+ * recipient, allowlist and Teams test webhook) and the environment label. Every other key it names
+ * is ignored there (Settings → This Instance shows it as not used). The DB layer lives in the app's
+ * own database and still applies. Self-hosted and Nivaro Cloud: every key, as before.
+ */
+const DEPLOYMENT_WIDE_KEY =
+  /^(?:(?:mail|sms|push|teams)_test_(?:mode|recipient|allowlist)|teams_test_webhook_url|environment_label)$/
+
+/** Whether a shared deployment applies this env-layer key (a deployment-wide switch). */
+export function envKeyAppliesOnShared(key: string): boolean {
+  return DEPLOYMENT_WIDE_KEY.test(key)
 }
 
-/** The env layer for this read: without the app's own keys on a shared deployment. */
-function envLayerFor(opts?: OverlayOptions): Record<string, unknown> | null {
+/** Whether this process uses an env-layer key (false only for app-owned keys on shared). */
+export function envKeyAppliesHere(key: string): boolean {
+  return !perAppJobs() || envKeyAppliesOnShared(key)
+}
+
+/** The env layer for this process: on a shared deployment, its deployment-wide keys only. */
+function envLayer(): Record<string, unknown> | null {
   const env = envOverrides()
-  const prefix = opts?.appOwnPrefix
-  if (!env || !prefix || !perAppJobs()) return env
+  if (!env || !perAppJobs()) return env
   const out: Record<string, unknown> = {}
-  for (const [k, v] of Object.entries(env)) if (!k.startsWith(prefix)) out[k] = v
+  for (const [k, v] of Object.entries(env)) if (envKeyAppliesHere(k)) out[k] = v
   return Object.keys(out).length ? out : null
 }
 
 /** Overlay this instance's overrides (DB row, then env on top) onto a
  *  nivaro_settings row or partial row. */
 export async function overlaySettings<T extends Record<string, unknown> | undefined>(
-  row: T,
-  opts?: OverlayOptions
+  row: T
 ): Promise<T> {
   const dbLayer = await getInstanceOverrides()
-  const envLayer = envLayerFor(opts)
-  if (!dbLayer && !envLayer) return row
+  const env = envLayer()
+  if (!dbLayer && !env) return row
   const base: Record<string, unknown> = row ? { ...row } : {}
   for (const [k, v] of Object.entries(dbLayer ?? {})) base[k] = v
-  for (const [k, v] of Object.entries(envLayer ?? {})) base[k] = v
+  for (const [k, v] of Object.entries(env ?? {})) base[k] = v
   return base as NonNullable<T>
 }
 
 /** Synchronous env-only overlay — for call sites that cannot await. */
 export function overlayEnvSettings<T extends Record<string, unknown> | undefined>(row: T): T {
-  const o = envOverrides()
+  const o = envLayer()
   if (!o) return row
   const base: Record<string, unknown> = row ? { ...row } : {}
   for (const [k, v] of Object.entries(o)) base[k] = v
@@ -165,7 +174,7 @@ export function overlayEnvSettings<T extends Record<string, unknown> | undefined
 
 /** The override keys active on this instance (env layer — for provenance). */
 export function envOverrideKeys(): string[] {
-  const o = envOverrides()
+  const o = envLayer()
   return o ? Object.keys(o) : []
 }
 
@@ -188,6 +197,8 @@ export interface EnvOverrideView {
   secret: boolean
   /** The DB override row on this instance names the same key — the env value wins over it. */
   shadows_db: boolean
+  /** A shared deployment never uses this key (an app's own setting): shown, never applied. */
+  ignored: boolean
 }
 
 // Names that read as credentials even when they are not in the settings secret list
@@ -220,7 +231,8 @@ export function describeEnvOverrides(
   envMap: Record<string, unknown>,
   dbMap: Record<string, unknown>,
   secretKeys: readonly string[],
-  mask: string
+  mask: string,
+  applies: (key: string) => boolean = () => true
 ): EnvOverrideView[] {
   return Object.keys(envMap)
     .sort()
@@ -232,6 +244,7 @@ export function describeEnvOverrides(
       else if (secret) value = raw === '' ? null : mask
       else if (typeof raw === 'object') value = JSON.stringify(maskDeep(raw, mask))
       else value = String(raw)
-      return { key, value, secret, shadows_db: Object.hasOwn(dbMap, key) }
+      const ignored = !applies(key)
+      return { key, value, secret, shadows_db: !ignored && Object.hasOwn(dbMap, key), ignored }
     })
 }

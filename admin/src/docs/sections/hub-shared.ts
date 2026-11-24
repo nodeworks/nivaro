@@ -491,7 +491,7 @@ export const hubSharedDocs: DocSection = {
     },
     {
       type: 'p',
-      text: 'Before or after a move, save what the app needs on its own. The plan warns `DIRECTORY_ENV_CREDENTIALS` when the directory credentials come only from the environment, `TEAMS_BOT_ENV_CREDENTIALS` when the bot comes from the environment (or is on only by `TEAMS_BOT=on`), and `PUSH_RELAY_ENV` when push uses the server relay key. `SAME_APP_ON_DEPLOYMENT` notes that a copy carries the original saved Teams bot and directory registration.'
+      text: 'Before or after a move, save what the app needs on its own. The plan warns `DIRECTORY_ENV_CREDENTIALS` when the directory credentials come only from the environment, `TEAMS_BOT_ENV_CREDENTIALS` when the bot comes from the environment (or is on only by `TEAMS_BOT=on`), `PUSH_RELAY_ENV` when push uses the server relay key, and `SETTINGS_ENV_OVERRIDES` when the app’s `NIVARO_SETTINGS_OVERRIDES` sets keys a shared deployment does not apply. `SAME_APP_ON_DEPLOYMENT` notes that a copy carries the original saved Teams bot and directory registration.'
     },
     {
       type: 'note',
@@ -906,7 +906,7 @@ export const hubMovesDocs: DocSection = {
           'A check could not be made. Each comes with a required checklist item (above).'
         ],
         [
-          '`DIRECTORY_ENV_CREDENTIALS`, `TEAMS_BOT_ENV_CREDENTIALS`, `PUSH_RELAY_ENV`, `HUDDLE_TURN`, `ENV_SMTP`, `SESSION_REPLAYS`, `HELP_VIDEO_RENDERS`',
+          '`DIRECTORY_ENV_CREDENTIALS`, `TEAMS_BOT_ENV_CREDENTIALS`, `PUSH_RELAY_ENV`, `SETTINGS_ENV_OVERRIDES`, `HUDDLE_TURN`, `ENV_SMTP`, `SESSION_REPLAYS`, `HELP_VIDEO_RENDERS`',
           'Features a shared app does not have, or that behave differently (see Shared deployments). `DIRECTORY_SYNC`, `PHONE_PUSH`, `TEAMS_BOT` and `MAIL_RETRY` are reported only for a target before 0.3.212 or one the Hub cannot read.'
         ]
       ]

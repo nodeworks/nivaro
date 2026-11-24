@@ -301,6 +301,8 @@ interface EnvOverride {
   value: string | null
   secret: boolean
   shadows_db: boolean
+  /** A Hub shared deployment never applies this key (an app's own setting). */
+  ignored?: boolean
 }
 
 function InstanceOverridesSection() {
@@ -319,7 +321,7 @@ function InstanceOverridesSection() {
         .then((r) => r.data.data)
   })
   const envOverrides = data?.env_overrides ?? []
-  const envKeys = new Set(envOverrides.map((e) => e.key))
+  const envKeys = new Set(envOverrides.filter((e) => !e.ignored).map((e) => e.key))
   const [rows, setRows] = useState<Array<{ key: string; value: string }>>([])
   const [hydrated, setHydrated] = useState(false)
   if (data && !hydrated) {
@@ -393,6 +395,15 @@ function InstanceOverridesSection() {
                     className='shrink-0 border-amber-300 text-[10.5px] text-amber-800 dark:border-amber-500/40 dark:text-amber-200'
                   >
                     replaces this page's value
+                  </Badge>
+                )}
+                {e.ignored && (
+                  <Badge
+                    variant='outline'
+                    data-tip="A shared deployment's server settings never set an app's own values; only test modes and the environment label apply"
+                    className='shrink-0 border-slate-300 text-[10.5px] text-slate-600 dark:border-slate-500/40 dark:text-muted-foreground'
+                  >
+                    not used on a shared deployment
                   </Badge>
                 )}
               </div>

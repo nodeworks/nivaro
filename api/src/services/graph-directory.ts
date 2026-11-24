@@ -91,7 +91,7 @@ export async function directoryIdentity(): Promise<DirectoryIdentity> {
       .first()) as Record<string, unknown> | undefined
     // On a shared deployment the deployment's NIVARO_SETTINGS_OVERRIDES never supplies an app's
     // directory sign-in (service account, refresh token): each app's is its own.
-    const row = await overlaySettings(raw ?? {}, { appOwnPrefix: 'directory_' })
+    const row = await overlaySettings(raw ?? {})
     const username = typeof row.directory_username === 'string' ? row.directory_username.trim() : ''
     const password = typeof row.directory_password === 'string' ? row.directory_password : ''
     const refreshToken =

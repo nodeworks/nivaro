@@ -33,7 +33,8 @@ import { objectStorageCounts } from '../hub-transfer/object-counts.js'
  * STAGED_IMPORTS, ROW_SCHEDULES, DIRECTORY_SYNC, TEAMS_BOT, PHONE_PUSH or MAIL_RETRY. They stay in
  * the type because older apps still send them; the Hub's plan decides by the target's version
  * (services/hub/move/plan.ts SHARED_FEATURES_SINCE). What a shared app must bring itself is
- * warned instead: the server's own Microsoft app registration, Teams bot or push relay key.
+ * warned instead: the server's own Microsoft app registration, Teams bot or push relay key, and
+ * any NIVARO_SETTINGS_OVERRIDES key a shared deployment does not apply (SETTINGS_ENV_OVERRIDES).
  */
 
 export type SharedReadinessCode =
@@ -48,6 +49,7 @@ export type SharedReadinessCode =
   | 'DIRECTORY_ENV_CREDENTIALS'
   | 'TEAMS_BOT_ENV_CREDENTIALS'
   | 'PUSH_RELAY_ENV'
+  | 'SETTINGS_ENV_OVERRIDES'
   // Sent only by apps before 0.3.212 (blockers there: the first two).
   | 'STAGED_IMPORTS'
   | 'ROW_SCHEDULES'
@@ -216,6 +218,21 @@ async function pushRelayEnv(): Promise<string | null> {
     : null
 }
 
+/** NIVARO_SETTINGS_OVERRIDES keys this app uses that a shared deployment never applies (there it
+ *  is the deployment's, so only its test switches and environment label apply). Names only. */
+async function settingsEnvOverrides(): Promise<string | null> {
+  const { perAppJobs } = await import('../deployment-mode.js')
+  if (perAppJobs()) return null // already on shared: these keys are not used here either
+  const { envKeyAppliesOnShared, envOverrideKeys } = await import('../settings-overrides.js')
+  const lost = envOverrideKeys()
+    .filter((k) => !envKeyAppliesOnShared(k))
+    .sort()
+  if (lost.length === 0) return null
+  const shown = lost.slice(0, 6).join(', ')
+  const more = lost.length > 6 ? ` and ${lost.length - 6} more` : ''
+  return `NIVARO_SETTINGS_OVERRIDES sets ${shown}${more}; a shared deployment does not apply them`
+}
+
 async function huddleTurn(): Promise<string | null> {
   const { getHuddleSettings, sfuConfigured } = await import('../huddle-settings.js')
   const s = await getHuddleSettings()
@@ -256,6 +273,7 @@ const CHECKS: Array<[SharedReadinessCode, () => Promise<string | null> | string 
   ['DIRECTORY_ENV_CREDENTIALS', directoryEnvCredentials],
   ['TEAMS_BOT_ENV_CREDENTIALS', teamsBotEnvCredentials],
   ['PUSH_RELAY_ENV', pushRelayEnv],
+  ['SETTINGS_ENV_OVERRIDES', settingsEnvOverrides],
   ['HUDDLE_TURN', huddleTurn],
   ['ENV_SMTP', envSmtp],
   ['SESSION_REPLAYS', sessionReplays],

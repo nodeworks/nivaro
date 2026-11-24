@@ -958,6 +958,10 @@ export const MOVE_WARNING_COPY: Record<string, Copy> = {
     title: 'A shared app connects its own push relay',
     hint: 'After the move, connect the app’s own push relay in Settings → Mobile app so phones keep getting alerts.'
   },
+  SETTINGS_ENV_OVERRIDES: {
+    title: 'A shared deployment does not apply the app’s server setting overrides',
+    hint: 'NIVARO_SETTINGS_OVERRIDES on a shared deployment applies only test modes and the environment label. Before the move, save the listed values in the app’s Settings (or Settings → This Instance).'
+  },
   HUDDLE_TURN: {
     title: 'Huddles use the deployment’s media servers, not the app’s own',
     hint: 'If your network allows only the app’s own media servers, ask for the deployment’s to be allowed too.'

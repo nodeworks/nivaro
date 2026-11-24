@@ -84,7 +84,7 @@ async function readRow(): Promise<Record<string, unknown> | undefined> {
       .first()) as Record<string, unknown> | undefined
     await sealSavedSecret(raw)
     // On a shared deployment the deployment's NIVARO_SETTINGS_OVERRIDES never names an app's bot.
-    return await overlaySettings(raw, { appOwnPrefix: 'teams_bot_' })
+    return await overlaySettings(raw)
   } catch {
     return undefined
   }

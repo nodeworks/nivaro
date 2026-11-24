@@ -379,6 +379,40 @@ describe('computeSharedReadiness', () => {
     expect(codeOf(await computeSharedReadiness(), 'PUSH_RELAY_ENV')).toBeUndefined()
   })
 
+  it('server setting overrides a shared deployment never applies → SETTINGS_ENV_OVERRIDES', async () => {
+    const { resetEnvOverridesForTest } = await import('../../../services/settings-overrides.js')
+    const saved = process.env.NIVARO_SETTINGS_OVERRIDES
+    try {
+      // Only deployment-wide switches: nothing to lose.
+      process.env.NIVARO_SETTINGS_OVERRIDES = JSON.stringify({ mail_test_mode: true })
+      resetEnvOverridesForTest()
+      expect(codeOf(await computeSharedReadiness(), 'SETTINGS_ENV_OVERRIDES')).toBeUndefined()
+      process.env.NIVARO_SETTINGS_OVERRIDES = JSON.stringify({
+        smtp_pass: SECRET,
+        smtp_host: 'relay',
+        mail_test_mode: true,
+        a1: 1,
+        a2: 1,
+        a3: 1,
+        a4: 1,
+        a5: 1
+      })
+      resetEnvOverridesForTest()
+      const r = await computeSharedReadiness()
+      expect(codeOf(r, 'SETTINGS_ENV_OVERRIDES')).toEqual({
+        code: 'SETTINGS_ENV_OVERRIDES',
+        level: 'warning',
+        detail:
+          'NIVARO_SETTINGS_OVERRIDES sets a1, a2, a3, a4, a5, smtp_host and 1 more; a shared deployment does not apply them'
+      })
+      expect(JSON.stringify(r)).not.toContain(SECRET)
+    } finally {
+      if (saved === undefined) delete process.env.NIVARO_SETTINGS_OVERRIDES
+      else process.env.NIVARO_SETTINGS_OVERRIDES = saved
+      resetEnvOverridesForTest()
+    }
+  })
+
   it('counts files (local ones apart) and lists loaded extensions with their version', async () => {
     await db('nivaro_files').insert([
       { id: '1', title: SECRET, filesize: 100, storage_provider: null },
