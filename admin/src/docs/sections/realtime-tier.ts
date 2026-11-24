@@ -11,7 +11,7 @@ export const realtimeTierDocs: DocSection = {
     },
     {
       type: 'note',
-      text: 'Self-hosted and Nivaro Hub shared deployments. A realtime process refuses to start in cloud mode, and cloud mode ignores `SOCKETS`. On a shared deployment one realtime process serves every app the Hub lists: each connection and stream resolves its app by the host it was opened on (an unknown host gets 404, an app in maintenance or not yet migrated 503), it runs no migrations and follows each app\'s migrated state from Redis. Its presence and record-viewer lists are per process there (the realtime board stays off on shared).'
+      text: 'Self-hosted and Nivaro Hub shared deployments. A realtime process refuses to start in cloud mode, and cloud mode ignores `SOCKETS`. On a shared deployment one realtime process serves every app the Hub lists: each connection and stream resolves its app by the host it was opened on (an unknown host gets 404, an app in maintenance or not yet migrated 503), it runs no migrations and follows each app\'s migrated state from Redis. The realtime board runs there too, for room counts named per app; answers keyed by a user id alone stay off, because copied apps share user ids.'
     },
     { type: 'h2', id: 'realtime-tier-roles', text: 'Roles and settings' },
     {
