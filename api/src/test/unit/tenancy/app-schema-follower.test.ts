@@ -62,7 +62,10 @@ function registry(list: TenantRecord[]): TenantRegistry {
 class FakeRedis {
   store = new Map<string, string>()
   sets = 0
+  /** GET fails (Redis away) while set. */
+  down = false
   async get(k: string) {
+    if (this.down) throw new Error('connect ECONNREFUSED')
     return this.store.get(k) ?? null
   }
   async set(k: string, v: string) {
@@ -182,6 +185,104 @@ describe('app schema follower (a realtime process on a shared deployment)', () =
       while (!m.appReadyForRequests('a') && Date.now() < until)
         await new Promise((r) => setTimeout(r, 10))
       expect(m.appReadyForRequests('a')).toBe(true)
+    } finally {
+      stop()
+    }
+  })
+
+  it('a Redis error keeps what this process knows, for each of two copied apps', async () => {
+    // Two copies of one app (same user and row ids), each with its own database.
+    const a = rec('a')
+    const b = rec('b', { dbConnection: 'postgres://db.internal/app_b_copy' })
+    const redis = new FakeRedis()
+    redis.store.set(m.appSchemaKey('a'), stored(a, 'ok'))
+    const reg = registry([a, b])
+    const stop = m.startAppSchemaFollower(() => reg, { redis, intervalMs: 60_000 })
+    try {
+      await m._followPassForTests(reg)
+      expect(m.appReadyForRequests('a')).toBe(true)
+      expect(m.appReadyForRequests('b')).toBe(false)
+      redis.down = true
+      await m._followPassForTests(reg)
+      await m._followPassForTests(reg)
+      // A blip is not "not migrated": A keeps serving, nothing it cached is wiped; B stays out.
+      expect(m.appReadyForRequests('a')).toBe(true)
+      expect(m.appReadyForRequests('b')).toBe(false)
+      expect(forgot).toEqual([])
+      // Redis back with B migrated meanwhile: B follows, A unchanged.
+      redis.down = false
+      redis.store.set(m.appSchemaKey('b'), stored(b, 'ok'))
+      await m._followPassForTests(reg)
+      expect(m.appReadyForRequests('a')).toBe(true)
+      expect(m.appReadyForRequests('b')).toBe(true)
+      // An unreadable value is no answer either.
+      redis.store.set(m.appSchemaKey('a'), '{not json')
+      await m._followPassForTests(reg)
+      expect(m.appReadyForRequests('a')).toBe(true)
+    } finally {
+      stop()
+    }
+  })
+
+  it('an absent key keeps an `ok` for the grace period, then drops it (two copied apps)', async () => {
+    const a = rec('a')
+    const b = rec('b', { dbConnection: 'postgres://db.internal/app_b_copy' })
+    const redis = new FakeRedis()
+    redis.store.set(m.appSchemaKey('a'), stored(a, 'ok'))
+    redis.store.set(m.appSchemaKey('b'), stored(b, 'ok'))
+    let now = 1_000_000
+    const reg = registry([a, b])
+    const stop = m.startAppSchemaFollower(() => reg, {
+      redis,
+      intervalMs: 60_000,
+      now: () => now
+    })
+    try {
+      await m._followPassForTests(reg)
+      expect(m.appReadyForRequests('a')).toBe(true)
+      // A's key is gone (Redis flushed); B's is there.
+      redis.store.delete(m.appSchemaKey('a'))
+      await m._followPassForTests(reg)
+      now += m.FOLLOW_ABSENT_GRACE_MS - 1_000
+      await m._followPassForTests(reg)
+      expect(m.appReadyForRequests('a')).toBe(true)
+      expect(forgot).toEqual([])
+      // A migrating process's 5-minute check writes it again: the grace starts over.
+      redis.store.set(m.appSchemaKey('a'), stored(a, 'ok'))
+      await m._followPassForTests(reg)
+      redis.store.delete(m.appSchemaKey('a'))
+      now += 10_000
+      await m._followPassForTests(reg)
+      now += m.FOLLOW_ABSENT_GRACE_MS - 1_000
+      await m._followPassForTests(reg)
+      expect(m.appReadyForRequests('a')).toBe(true)
+      // Absent for longer than the grace: dropped, and what was cached from it forgotten.
+      now += 2_000
+      await m._followPassForTests(reg)
+      expect(m.appReadyForRequests('a')).toBe(false)
+      expect(forgot).toEqual(['a'])
+      // B, a copy with the same ids, was never touched.
+      expect(m.appReadyForRequests('b')).toBe(true)
+      // A key naming another database drops an `ok` at once, with no grace.
+      redis.store.set(m.appSchemaKey('b'), stored(b, 'ok', { conn: 'other-db' }))
+      await m._followPassForTests(reg)
+      expect(m.appReadyForRequests('b')).toBe(false)
+      expect(forgot).toEqual(['a', 'b'])
+    } finally {
+      stop()
+    }
+  })
+
+  it('an absent key never makes an app ready that was not', async () => {
+    const a = rec('a')
+    const redis = new FakeRedis()
+    const reg = registry([a])
+    const stop = m.startAppSchemaFollower(() => reg, { redis, intervalMs: 60_000 })
+    try {
+      await m._followPassForTests(reg)
+      await m._followPassForTests(reg)
+      expect(m.appReadyForRequests('a')).toBe(false)
+      expect(m.appSchemaStatus('a').state).toBe('pending')
     } finally {
       stop()
     }

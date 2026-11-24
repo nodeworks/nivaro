@@ -55,6 +55,9 @@ interface Entry extends AppSchemaStatus {
   nextTry: number
   /** `ok` only: when the app's ledger is next checked against the newest migration file. */
   verifyAt?: number
+  /** A following process (startAppSchemaFollower), `ok` only: since when the stored state has
+   *  been absent (no key), for FOLLOW_ABSENT_GRACE_MS. */
+  absentSince?: number
 }
 
 interface StoredState {
@@ -203,6 +206,30 @@ async function readStored(tenantId: string): Promise<StoredState | null> {
     return raw ? (JSON.parse(raw) as StoredState) : null
   } catch {
     return null
+  }
+}
+
+/**
+ * The stored state as a following process reads it: `error` when Redis could not answer (no
+ * Redis, a failed GET, a value that does not parse) — nothing is known, so nothing changes —
+ * apart from `absent` (no key) and `found`. readStored folds the first two into null.
+ */
+async function readStoredFollowed(
+  tenantId: string
+): Promise<{ kind: 'error' } | { kind: 'absent' } | { kind: 'found'; stored: StoredState }> {
+  if (!redisRef) return { kind: 'error' }
+  let raw: string | null
+  try {
+    raw = await redisRef.get(appSchemaKey(tenantId))
+  } catch {
+    return { kind: 'error' }
+  }
+  if (raw == null || raw === '') return { kind: 'absent' }
+  try {
+    const stored = JSON.parse(raw) as StoredState | null
+    return stored && typeof stored === 'object' ? { kind: 'found', stored } : { kind: 'error' }
+  } catch {
+    return { kind: 'error' }
   }
 }
 
@@ -682,6 +709,17 @@ function stopLoop(): void {
 // this version — by reading the state those processes keep in Redis (appSchemaKey), for each
 // listed app's current database (its connection fingerprint). No migration, no seeds, no ledger
 // read, no app-ready hooks (a realtime process registers no per-app jobs).
+//
+// What a read says (ruling, final review of the realtime tier on shared deployments):
+//   Redis error (or no Redis, or an unreadable value)  keep the last known state, whatever it is
+//   another version or another database, or not `ok`    drop an `ok` at once (as before)
+//   no key                                              keep an `ok` for FOLLOW_ABSENT_GRACE_MS
+//                                                       (6 min), then drop it
+// The grace outlasts the migrating processes' 5-minute ledger check, which writes a served app's
+// `ok` again when its key is gone; a database that is behind is written `pending`, not deleted.
+
+/** How long a following process keeps an app `ok` while its stored state is absent (no key). */
+export const FOLLOW_ABSENT_GRACE_MS = APP_SCHEMA_VERIFY_MS + 60_000
 
 let follower: {
   registry: () => TenantRegistry | null
@@ -699,11 +737,31 @@ async function followPass(registry: TenantRegistry): Promise<void> {
     list.map(async (t) => {
       if (!MIGRATED_STATUSES.has(t.status)) return
       const conn = connFingerprint(t)
-      const stored = await readStored(t.id)
-      const current = stored?.version === NIVARO_VERSION && stored.conn === conn
+      const read = await readStoredFollowed(t.id)
+      // Redis did not answer: keep what this process knows (a blip must not 503 every app).
+      if (read.kind === 'error') return
       const before = states.get(t.id)
+      if (read.kind === 'absent') {
+        // No key: keep an `ok` for this database at this version for a while. A replaced or
+        // behind database is written as `pending` by the migrating processes (dropOk), never
+        // deleted; a key that is gone (Redis flushed or restarted empty) is written again by
+        // their next 5-minute check of a served app.
+        if (before?.state === 'ok' && before.conn === conn && before.version === NIVARO_VERSION) {
+          const now = nowFn()
+          const since = before.absentSince ?? now
+          if (now - since <= FOLLOW_ABSENT_GRACE_MS) {
+            if (before.absentSince === undefined) before.absentSince = since
+            return
+          }
+        }
+      }
+      const stored = read.kind === 'found' ? read.stored : null
+      const current = stored?.version === NIVARO_VERSION && stored.conn === conn
       if (current && stored?.state === 'ok') {
-        if (before?.state === 'ok' && before.conn === conn) return
+        if (before?.state === 'ok' && before.conn === conn) {
+          before.absentSince = undefined
+          return
+        }
         setState(t.id, {
           state: 'ok',
           version: NIVARO_VERSION,
@@ -766,11 +824,12 @@ function nudgeFollower(): void {
  */
 export function startAppSchemaFollower(
   registry: () => TenantRegistry | null,
-  opts: { redis?: RedisLike | null; intervalMs?: number } = {}
+  opts: { redis?: RedisLike | null; intervalMs?: number; now?: () => number } = {}
 ): () => void {
   stopFollower()
   gateOn = true
   if (opts.redis !== undefined) redisRef = opts.redis
+  if (opts.now) nowFn = opts.now
   const timer = setInterval(runFollowPass, Math.max(50, opts.intervalMs ?? DEFAULT_INTERVAL_MS))
   timer.unref?.()
   follower = { registry, timer, kick: null, running: false }
