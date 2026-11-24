@@ -143,6 +143,7 @@ async function withPinnedConnection<R>(
   ) => Promise<R>
 ): Promise<R> {
   const client = clientOf(knex)
+  // lint-traps-ok: only closures are defined before the try; nothing awaits or throws in between
   const conn = await client.acquireConnection()
   const onConn = (sql: string, bindings?: unknown[]) =>
     (bindings ? knex.raw(sql, bindings as never) : knex.raw(sql)).connection(conn)

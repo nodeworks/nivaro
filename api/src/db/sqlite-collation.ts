@@ -267,11 +267,16 @@ export function sqliteTextNocase(conn: RawConn): CollationResult {
 /** Run sqliteTextNocase on one of knex's connections, holding the write lock; logs what it did. */
 export async function ensureSqliteTextNocase(knex: Knex): Promise<CollationResult> {
   const client = knex.client as {
-    acquireConnection(): Promise<RawConn>
+    acquireConnection(): Promise<RawConn> // lint-traps-ok: a type, not a call
     releaseConnection(c: RawConn): Promise<void>
   }
   const conn = await client.acquireConnection()
-  await sqliteWriteLock.acquire(conn)
+  try {
+    await sqliteWriteLock.acquire(conn)
+  } catch (err) {
+    await client.releaseConnection(conn)
+    throw err
+  }
   try {
     const result = sqliteTextNocase(conn)
     if (result.converted.length > 0)

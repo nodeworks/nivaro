@@ -129,6 +129,7 @@ async function withKnexSessionLock<R>(
   const kind = String(client?.config?.client ?? '')
   const pg = kind === 'pg' || kind === 'postgres' || kind === 'postgresql'
   const wait = Math.max(0, Math.floor(timeoutMs))
+  // lint-traps-ok: only a closure is defined before the try; nothing awaits or throws in between
   const conn = await client.acquireConnection()
   const run = async (sql: string, bindings: unknown[]) => {
     const res = (await knex.raw(sql, bindings as never).connection(conn)) as unknown

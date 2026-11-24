@@ -36,6 +36,7 @@ const idOf = (r: unknown[]) => {
 
 describe('listEnvironments: on_shared', () => {
   it('is true only on a shared placement, false on a dedicated one or none', async () => {
+    // lint-traps-ok: the .then maps each row through idOf, so appId is a number
     const [appId] = await db('nivaro_hub_apps')
       .insert({ key: 'acme', name: 'Acme' })
       .returning('id')
