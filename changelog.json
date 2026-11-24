@@ -1,10 +1,404 @@
 {
-  "generated_at": "2026-11-24T19:48:21.363Z",
+  "generated_at": "2026-11-24T20:56:16.421Z",
   "releases": [
+    {
+      "version": "0.3.214",
+      "tag": "v0.3.214",
+      "date": "2026-11-24T15:55:52-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "serve every app of a Hub shared deployment",
+              "hash": "e36862c02"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "a large shared stack runs a realtime role",
+              "hash": "75d6d0114"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "the split and the exporter need Hub agent 0.2.2",
+              "hash": "7f2da45f0"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "an exporter on large dedicated stacks and split shared stacks",
+              "hash": "7ddde4092"
+            },
+            {
+              "section": "Added",
+              "scope": "exports",
+              "text": "the export hand-off runs per app on a shared deployment",
+              "hash": "5b30a5fa1"
+            },
+            {
+              "section": "Added",
+              "scope": "imports",
+              "text": "the importer on a shared deployment runs its own per-app pass",
+              "hash": "c74457ea4"
+            },
+            {
+              "section": "Added",
+              "scope": "hub-agent",
+              "text": "a shared split needs a web and a worker",
+              "hash": "743f85a97"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "medium and large shared stacks split into web, worker and importer",
+              "hash": "53890fa95"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "moves onto shared keep imports, schedules and Microsoft features",
+              "hash": "6158c69f4"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "an app on a shared deployment connects its own push relay",
+              "hash": "a1dcbe92b"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "the Teams bot works per app on a shared deployment",
+              "hash": "b555c2054"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "directory lookups and sync with each app's own app registration on shared",
+              "hash": "da946072a"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "boot passes run per app when an app is ready on shared",
+              "hash": "9661d2a67"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "retention pass and digests run per app on shared",
+              "hash": "c5f9ab38a"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "mail retry, SLA flips and flow rollup run per app on shared",
+              "hash": "c52d6e03e"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "staged imports run per app on a shared deployment",
+              "hash": "16e077115"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "row schedules run per app on a shared deployment",
+              "hash": "ef1c0031b"
+            },
+            {
+              "section": "Added",
+              "scope": "cron",
+              "text": "jobs bound to one app on a shared deployment",
+              "hash": "18ca2a50f"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "app ready and app left hooks on shared deployments",
+              "hash": "8720d19bd"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "run the realtime board on Hub shared deployments",
+              "hash": "fd6d8cad4"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "a Redis blip no longer takes apps off the shared realtime process",
+              "hash": "c07c3918f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "probe the app's own address on a Hub shared deployment",
+              "hash": "d9731e4e1"
+            },
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "final-review minors on the hub shared follow-ups",
+              "hash": "bd4b6b2ea"
+            },
+            {
+              "section": "Fixed",
+              "scope": "events-stream",
+              "text": "check a delivery's collection access in the stream's own app",
+              "hash": "0a9b73b84"
+            },
+            {
+              "section": "Fixed",
+              "scope": "settings",
+              "text": "ignored env overrides read as unused",
+              "hash": "c1f384611"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "one stack, one Redis database",
+              "hash": "b5991241c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "settings",
+              "text": "a shared deployment's env overrides never set an app's own values",
+              "hash": "95b52bd60"
+            },
+            {
+              "section": "Fixed",
+              "scope": "teams-bot",
+              "text": "seal the bot app secret at rest",
+              "hash": "d1dbdb491"
+            },
+            {
+              "section": "Fixed",
+              "scope": "api-logger",
+              "text": "write Cloud request-log rows inside their own tenant",
+              "hash": "428b8d36e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "imports",
+              "text": "reserve the process import slot before the first await",
+              "hash": "496048a51"
+            },
+            {
+              "section": "Fixed",
+              "scope": "cron",
+              "text": "drop a bound entry whose app is no longer listed",
+              "hash": "ae3995cf5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "clear the stale import sweep interval on close",
+              "hash": "d24a48c36"
+            },
+            {
+              "section": "Fixed",
+              "scope": "push",
+              "text": "a shared app's stored relay url needs its stored key",
+              "hash": "9659acb34"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "importer and exporter processes skip row-schedule upkeep",
+              "hash": "ee7fe44d5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "imports",
+              "text": "one app keeps a fair share of the import slots",
+              "hash": "270078460"
+            },
+            {
+              "section": "Fixed",
+              "scope": "imports",
+              "text": "cap import runs per process on shared, judge stuck ones",
+              "hash": "5c5008acb"
+            },
+            {
+              "section": "Fixed",
+              "scope": "directory",
+              "text": "a cached Graph token is only served for its tenant",
+              "hash": "05b213ed5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "each app has its own directory refresh throttle",
+              "hash": "7dd2f0d3e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "per-app boot passes take turns, two apps at a time",
+              "hash": "8e38696a9"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "row schedules follow each app's own time zone",
+              "hash": "251e37d16"
+            },
+            {
+              "section": "Fixed",
+              "scope": "exports",
+              "text": "read the stored schema state through the export Redis",
+              "hash": "6a55dea8b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tenancy",
+              "text": "refresh a stored schema ok only when confirmed and its own",
+              "hash": "07308d11a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "imports",
+              "text": "keep the stored schema state alive; name the skip reason",
+              "hash": "f4662eb4a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "only an upgrade changes a shared stack's roles",
+              "hash": "a5f0bcd02"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "warn when a shared app's bot is on only by TEAMS_BOT=on",
+              "hash": "dae2a21d0"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "the deployment env overrides never supply an app's bot or directory sign-in",
+              "hash": "01536f1ba"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "request log buffers per app on shared only; digest stays off",
+              "hash": "dbeef499c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "cron",
+              "text": "an app never reaches another app's bound entry",
+              "hash": "1c12d8c50"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "realtime board runs on Hub shared deployments; sync docs",
+              "hash": "c0b132a4f"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "realtime tier on Hub shared deployments; sync docs",
+              "hash": "f8ebe3bdf"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "the exporter on large dedicated and split shared stacks",
+              "hash": "aeb2ff681"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "shared deployment sizes and the services each runs",
+              "hash": "de45ceefc"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "shared features ship in 0.3.212; docs fixes",
+              "hash": "5af0a5d46"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "shared apps keep imports, schedules and Microsoft features",
+              "hash": "946f6ee46"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "boot-pass queue waits give the full suite's load 10 s",
+              "hash": "130ad3a91"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "the shared-jobs guard reads the kept sweep handle",
+              "hash": "48cbffff3"
+            },
+            {
+              "section": "Other",
+              "scope": "imports",
+              "text": "the import-slot test typechecks",
+              "hash": "236e94a06"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "biome check on the files this branch changed",
+              "hash": "0cc455ced"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "the boot warm key reads as app-keyed in the guard",
+              "hash": "dc133e094"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "the shared directory and Teams tests typecheck",
+              "hash": "c6fe63410"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "cover the adopt-path ready hook and the setList left hook",
+              "hash": "2c70cffd1"
+            }
+          ]
+        }
+      ],
+      "count": 61
+    },
     {
       "version": "0.3.213",
       "tag": "v0.3.213",
-      "date": "2026-11-24T14:47:56-05:00",
+      "date": "2026-11-24T14:48:21-05:00",
       "sections": [
         {
           "label": "Added",
