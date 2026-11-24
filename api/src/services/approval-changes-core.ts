@@ -78,6 +78,7 @@ export interface ApprovalChangesConfig {
 interface RulesLike {
   edit_lock?: {
     states?: string[]
+    open_fields?: string[]
     admin_only?: { states?: string[]; open_fields?: string[] }
   }
   changed_after_approval?: ChangedAfterApprovalSetting
@@ -97,7 +98,15 @@ export function approvalChangesConfigOf(
   return {
     states,
     approvalStates: stateList(rules.edit_lock?.states),
-    ignore: Array.isArray(adminOnly?.open_fields) ? adminOnly.open_fields.map(String) : []
+    // Fields the lock leaves open, in that tier or in every one (edit_lock.open_fields).
+    ignore: [
+      ...new Set(
+        [
+          ...(Array.isArray(adminOnly?.open_fields) ? adminOnly.open_fields : []),
+          ...(Array.isArray(rules.edit_lock?.open_fields) ? rules.edit_lock.open_fields : [])
+        ].map(String)
+      )
+    ]
   }
 }
 

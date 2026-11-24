@@ -45,6 +45,8 @@ export interface SummaryModeRules {
   edit_lock?: {
     states: string[]
     children: string[]
+    /** Fields anyone who may update the record still changes in every locked state. */
+    open_fields?: string[]
     /** Post-approval states: only administrators change the record, except
      *  the fields / child collections listed as open. */
     admin_only?: {

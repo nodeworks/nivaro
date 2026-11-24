@@ -41,7 +41,18 @@
  * (`adminOnlyTier: false`): they move the record forward, which is how it
  * leaves these states — the approval tier still judges them. A person-held
  * edit lock stays usable when the tier leaves open fields (the save itself is
- * judged per payload). In either tier, the values a move's own requirements
+ * judged per payload).
+ *
+ * Always-open fields (2026-11-24, Rob: "Internal contact should be able to be
+ * edited by any user role in any state") —
+ *
+ *   open_fields: ['internal_contact']   // top level, beside states
+ *
+ * Fields anyone who may update the record can still change in EVERY locked
+ * state: both tiers, and a finished (Completed, Canceled) admin-only record
+ * too. They join the admin-only tier's own `open_fields`; the approval tier
+ * gains them as its only open fields. Same rule as there: an update that
+ * writes nothing but open fields passes, anything more is judged as before. In either tier, the values a move's own requirements
  * dialog saves pass for whoever may run that move (requirement-writes.ts).
  *
  * Judged on REQUEST writes only (the items service is handed the request):
@@ -79,6 +90,8 @@ export interface EditLockConfig {
   /** approval states (creator, step owners, admins); may be [] with admin_only */
   states: string[]
   children: string[]
+  /** record fields anyone who may update the record still writes in every locked state */
+  open_fields?: string[]
   admin_only?: EditLockAdminOnly
 }
 
@@ -117,13 +130,20 @@ function parseAdminOnly(raw: unknown): EditLockAdminOnly | null {
 /** Lenient read of the `edit_lock` key; null = no lock configured. */
 export function parseEditLock(raw: unknown): EditLockConfig | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
-  const o = raw as { states?: unknown; children?: unknown; admin_only?: unknown }
+  const o = raw as {
+    states?: unknown
+    children?: unknown
+    open_fields?: unknown
+    admin_only?: unknown
+  }
   const states = list(o.states, STATE_KEY_RE)
   const adminOnly = parseAdminOnly(o.admin_only)
   if (states.length === 0 && !adminOnly) return null
+  const openFields = list(o.open_fields, IDENT)
   return {
     states,
     children: list(o.children, IDENT),
+    ...(openFields.length > 0 ? { open_fields: openFields } : {}),
     ...(adminOnly ? { admin_only: adminOnly } : {})
   }
 }
@@ -135,7 +155,12 @@ export function validateEditLock(
   if (raw == null) return { value: null }
   if (typeof raw !== 'object' || Array.isArray(raw))
     return { error: 'summary_mode_rules.edit_lock must be an object' }
-  const o = raw as { states?: unknown; children?: unknown; admin_only?: unknown }
+  const o = raw as {
+    states?: unknown
+    children?: unknown
+    open_fields?: unknown
+    admin_only?: unknown
+  }
   const checkList = (path: string, v: unknown, re: RegExp, what: string) => {
     if (v === undefined) return null
     if (!Array.isArray(v) || v.length > MAX_LIST)
@@ -146,7 +171,8 @@ export function validateEditLock(
   }
   for (const [key, re, what] of [
     ['states', STATE_KEY_RE, 'state keys'],
-    ['children', IDENT, 'collection names']
+    ['children', IDENT, 'collection names'],
+    ['open_fields', IDENT, 'field names']
   ] as const) {
     const error = checkList(key, o[key], re, what)
     if (error) return { error }
@@ -322,7 +348,7 @@ export interface EditLockVerdict {
   message: string
   /** which tier locked it (absent when open) */
   tier?: 'approval' | 'admin_only'
-  /** the fields a non-admin may still write (tier 'admin_only' only) */
+  /** the fields a non-admin may still write (either tier; empty = none) */
   open_fields?: string[]
 }
 
@@ -522,7 +548,12 @@ export async function editLockVerdictFor(
         // A FINISHED run (Completed, Canceled) leaves nothing open: putting a finished
         // record on hold means nothing (army 8 b14: Put On Hold was offered to a creator
         // on a Completed, admin-locked workflow). Open fields apply while the run waits.
-        open_fields: latest.completed_at == null ? cfg.admin_only.open_fields : []
+        open_fields: [
+          ...new Set([
+            ...(cfg.open_fields ?? []),
+            ...(latest.completed_at == null ? cfg.admin_only.open_fields : [])
+          ])
+        ]
       }
   }
   if (cfg.states.length === 0) return OPEN
@@ -557,7 +588,8 @@ export async function editLockVerdictFor(
     locked: true,
     allowed: false,
     message: `This record is at ${step} — only the person who created it, the owners of that step and administrators can change it.`,
-    tier: 'approval'
+    tier: 'approval',
+    open_fields: cfg.open_fields ?? []
   }
 }
 
@@ -587,7 +619,7 @@ export async function lockHolderVerdict(
     if (await isAdminRole(user)) return OPEN
     const verdict = await editLockVerdictFor(user, collection, String(item), cfg)
     // A form with open fields is still worth holding: each save is judged.
-    if (verdict.tier === 'admin_only' && (verdict.open_fields?.length ?? 0) > 0)
+    if (!verdict.allowed && (verdict.open_fields?.length ?? 0) > 0)
       return { ...verdict, allowed: true, message: '' }
     return verdict
   } catch {
@@ -695,7 +727,7 @@ export async function assertNotEditLocked(
   if (links && currentFailed)
     throw new EditLockedError('Could not confirm you may change this record while it waits.')
 
-  // Admin-only tier: an update of the record that writes nothing but open
+  // Either tier: an update of the record that writes nothing but open
   // fields (a delete has no payload; `id` and `_` keys are not fields).
   const written = Object.keys(opts.payload ?? {}).filter((k) => k !== 'id' && !k.startsWith('_'))
   const onlyOpenFields = (open: string[] | undefined) =>
@@ -732,7 +764,7 @@ export async function assertNotEditLocked(
     const planned = plan.locks.get(t.parent)
     const lock =
       planned && (tiers.adminOnlyTier === false || skipsAdminOnlyTier(tiers.allowWhenLocked))
-        ? { states: planned.states, children: planned.children }
+        ? { states: planned.states, children: planned.children, open_fields: planned.open_fields }
         : planned
     let verdict: EditLockVerdict
     try {
@@ -741,10 +773,13 @@ export async function assertNotEditLocked(
       throw new EditLockedError('Could not confirm you may change this record while it waits.')
     }
     if (verdict.allowed) continue
-    if (verdict.tier === 'admin_only') {
-      if (t.child && lock?.admin_only?.open_children.includes(collection)) continue
-      if (!t.child && onlyOpenFields(verdict.open_fields)) continue
-    }
+    if (!t.child && onlyOpenFields(verdict.open_fields)) continue
+    if (
+      verdict.tier === 'admin_only' &&
+      t.child &&
+      lock?.admin_only?.open_children.includes(collection)
+    )
+      continue
     if (await forTheMove(t.parent, t.id)) continue
     throw new EditLockedError(verdict.message)
   }

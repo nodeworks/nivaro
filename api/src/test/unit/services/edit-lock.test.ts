@@ -846,6 +846,112 @@ describe('admin-only tier', () => {
   })
 })
 
+// 2026-11-24, Rob: "Internal contact should be able to be edited by any user role in
+// any state" — edit_lock.open_fields stay open in BOTH tiers, finished runs included.
+describe('always-open fields (edit_lock.open_fields)', () => {
+  beforeEach(() => {
+    seed()
+    t.tables.nivaro_collections = [
+      {
+        collection: 'workflows',
+        summary_mode_rules: JSON.stringify({
+          edit_lock: {
+            states: ['waiting_l1'],
+            children: ['workflow_line_items'],
+            open_fields: ['internal_contact'],
+            admin_only: {
+              states: ['waiting_po', 'completed'],
+              open_fields: ['is_on_hold']
+            }
+          }
+        })
+      }
+    ]
+    forgetEditLockPlan()
+  })
+  const write = (who: string, payload?: Record<string, unknown>) =>
+    assertNotEditLocked(userOf(who), 'workflows', { ids: [100], payload }, reqAs(who))
+
+  it('approval tier: anyone writes the open field alone; anything more is still refused', async () => {
+    t.tables.nivaro_workflow_instances = [
+      { id: 'i1', current_state: 's1', key: 'waiting_l1', label: 'Level 1 Approval' }
+    ]
+    expect(await editLockVerdictFor(userOf('U-RODNEY'), 'workflows', '100')).toMatchObject({
+      allowed: false,
+      tier: 'approval',
+      open_fields: ['internal_contact']
+    })
+    await expect(write('U-RODNEY', { internal_contact: 'U-NEW' })).resolves.toBeUndefined()
+    await expect(write('U-RODNEY', { internal_contact: 'U-NEW', project: 5 })).rejects.toThrow(
+      /Level 1 Approval/
+    )
+    await expect(write('U-RODNEY')).rejects.toBeInstanceOf(EditLockedError)
+    expect(
+      (await lockHolderVerdict({ id: 'U-RODNEY', role: 'R' }, 'workflows', '100')).allowed
+    ).toBe(true)
+  })
+
+  it("admin-only tier, waiting: the tier's own open fields plus the always-open ones", async () => {
+    t.tables.nivaro_workflow_instances = [
+      { id: 'i2', current_state: 's9', key: 'waiting_po', label: 'Waiting on PO' }
+    ]
+    expect(await editLockVerdictFor(userOf('U-CJ'), 'workflows', '100')).toMatchObject({
+      tier: 'admin_only',
+      open_fields: ['internal_contact', 'is_on_hold']
+    })
+    await expect(
+      write('U-CJ', { internal_contact: 'U-NEW', is_on_hold: true })
+    ).resolves.toBeUndefined()
+  })
+
+  it('admin-only tier, finished: only the always-open fields stay open', async () => {
+    t.tables.nivaro_workflow_instances = [
+      { id: 'i3', current_state: 's10', key: 'completed', label: 'Completed', completed_at: 'x' }
+    ]
+    expect(await editLockVerdictFor(userOf('U-CJ'), 'workflows', '100')).toMatchObject({
+      tier: 'admin_only',
+      open_fields: ['internal_contact']
+    })
+    await expect(write('U-CJ', { internal_contact: 'U-NEW' })).resolves.toBeUndefined()
+    await expect(write('U-CJ', { is_on_hold: true })).rejects.toBeInstanceOf(EditLockedError)
+    expect(
+      await recordWriteRefusal(reqAs('U-CJ'), 'workflows', 100, { fields: ['internal_contact'] })
+    ).toBeNull()
+  })
+
+  it('an open field never opens a child row', async () => {
+    t.tables.nivaro_workflow_instances = [
+      { id: 'i1', current_state: 's1', key: 'waiting_l1', label: 'Level 1 Approval' }
+    ]
+    await expect(
+      assertNotEditLocked(
+        userOf('U-RODNEY'),
+        'workflow_line_items',
+        { payload: { workflow: 100, internal_contact: 'x' } },
+        reqAs('U-RODNEY')
+      )
+    ).rejects.toBeInstanceOf(EditLockedError)
+  })
+
+  it('config: kept by parse and the Form UX round trip; junk refused strictly', () => {
+    expect(
+      parseEditLock({ states: ['a'], open_fields: ['internal_contact', 'bad name', 3] })
+    ).toMatchObject({ open_fields: ['internal_contact'] })
+    expect(parseEditLock({ states: ['a'] })).not.toHaveProperty('open_fields')
+    expect(validateEditLock({ states: ['a'], open_fields: ['bad name'] }).error).toMatch(
+      /open_fields entries must be field names/
+    )
+    const rules = parseSummaryModeRules(
+      JSON.stringify({
+        default: 'edit',
+        rules: [],
+        edit_lock: { states: ['a'], open_fields: ['x'] }
+      })
+    )
+    expect(rules?.edit_lock?.open_fields).toEqual(['x'])
+  })
+})
+
 // The move's own requirements dialog (requirement-writes.ts): a value the move
 // asks for saves for whoever may run it, in either tier; nothing else does.
 describe('move-requirement writes', () => {
