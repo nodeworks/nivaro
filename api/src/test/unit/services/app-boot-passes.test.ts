@@ -160,12 +160,16 @@ function fakeApp() {
   return { app: app as never, hooks, warn, info, heavy, ready }
 }
 
+// vi.waitFor's 1 s default runs out under the full suite's load (0.3.214 preflight).
+const WAIT = { timeout: 10_000 }
+
 const settle = async () => {
   for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 1))
 }
-/** Until `n` passes have been recorded (or a second has gone by). */
+/** Until `n` passes have been recorded (or ten seconds have gone by). */
 const until = async (n: number) => {
-  for (let i = 0; i < 200 && state.calls.length < n; i++) await new Promise((r) => setTimeout(r, 5))
+  for (let i = 0; i < 2000 && state.calls.length < n; i++)
+    await new Promise((r) => setTimeout(r, 5))
 }
 
 // The query warm waits on the app's heavy slot, so it is started last and not awaited.
@@ -298,7 +302,9 @@ describe('registerAppBootPasses on a shared deployment', () => {
   })
 })
 
-describe('shared deployment: boot passes go through one process-wide queue', () => {
+describe('shared deployment: boot passes go through one process-wide queue', {
+  timeout: 30_000
+}, () => {
   // Under vitest concurrent dynamic imports of one mocked module can hand back the real module
   // (see plugins/cron.ts loadSecurity), and the passes import their services lazily: these tests
   // watch the statically imported pool wrapper and a ready hook registered after the passes'
@@ -320,7 +326,7 @@ describe('shared deployment: boot passes go through one process-wide queue', () 
     lc.fireAppReady(tenant('A'))
     await settle()
     expect(state.pool).toEqual([])
-    await vi.waitFor(() => expect(done).toEqual(['A']))
+    await vi.waitFor(() => expect(done).toEqual(['A']), WAIT)
     expect(state.pool.length).toBeGreaterThan(0)
   })
 
@@ -336,14 +342,15 @@ describe('shared deployment: boot passes go through one process-wide queue', () 
     const ids = ['A', 'B', 'C', 'D', 'E', 'F']
     for (const id of ids) lc.fireAppReady(tenant(id))
     // two apps are held inside their first pass; the other four wait their turn
-    await vi.waitFor(() =>
-      expect(passes._bootPassQueueForTests()).toEqual({ running: 2, waiting: 4 })
+    await vi.waitFor(
+      () => expect(passes._bootPassQueueForTests()).toEqual({ running: 2, waiting: 4 }),
+      WAIT
     )
     await settle()
     expect(state.pool).toEqual(['A', 'B'])
     open()
     state.gate = null
-    await vi.waitFor(() => expect([...done].sort()).toEqual(ids))
+    await vi.waitFor(() => expect([...done].sort()).toEqual(ids), WAIT)
     expect(state.maxRunning).toBeLessThanOrEqual(2)
     for (const id of ids) expect(state.pool, id).toContain(id)
     expect(passes._bootPassQueueForTests()).toEqual({ running: 0, waiting: 0 })
@@ -366,7 +373,7 @@ describe('shared deployment: boot passes go through one process-wide queue', () 
     await f.ready()
     for (const id of ['A', 'B', 'C']) lc.fireAppReady(tenant(id))
     // every app's hook returns (all its passes ran) though its query warm still waits
-    await vi.waitFor(() => expect([...done].sort()).toEqual(['A', 'B', 'C']))
+    await vi.waitFor(() => expect([...done].sort()).toEqual(['A', 'B', 'C']), WAIT)
     expect(passes._bootPassQueueForTests()).toEqual({ running: 0, waiting: 0 })
     expect(state.maxRunning).toBeLessThanOrEqual(2)
   })
