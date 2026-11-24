@@ -1,10 +1,63 @@
 {
-  "generated_at": "2026-11-23T21:23:15.161Z",
+  "generated_at": "2026-11-24T19:12:24.249Z",
   "releases": [
+    {
+      "version": "0.3.212",
+      "tag": "v0.3.212",
+      "date": "2026-11-24T14:12:02-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "addendums",
+              "text": "\"Must change\" fields an addendum cannot leave as they are",
+              "hash": "6b0a7c703"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "the pull override also covers a dedicated source (SOURCE_NOT_PULLABLE)",
+              "hash": "2d7df41ea"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "db",
+              "text": "release the SQLite connection when its write lock is refused",
+              "hash": "65df849a2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "addendums",
+              "text": "ask before dropping a draft or creating one that changes nothing",
+              "hash": "ae51f6950"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "give the cron-scope scan and the cold /api/health load 60 s",
+              "hash": "ad7ede5a2"
+            }
+          ]
+        }
+      ],
+      "count": 5
+    },
     {
       "version": "0.3.211",
       "tag": "v0.3.211",
-      "date": "2026-11-23T16:22:57-05:00",
+      "date": "2026-11-23T16:23:15-05:00",
       "sections": [
         {
           "label": "Added",
