@@ -350,6 +350,8 @@ export interface EditLockVerdict {
   tier?: 'approval' | 'admin_only'
   /** the fields a non-admin may still write (either tier; empty = none) */
   open_fields?: string[]
+  /** lockHolderVerdict only: allowed to hold the lock for the open fields alone */
+  open_only?: true
 }
 
 const OPEN: EditLockVerdict = { locked: false, allowed: true, message: '' }
@@ -620,7 +622,7 @@ export async function lockHolderVerdict(
     const verdict = await editLockVerdictFor(user, collection, String(item), cfg)
     // A form with open fields is still worth holding: each save is judged.
     if (!verdict.allowed && (verdict.open_fields?.length ?? 0) > 0)
-      return { ...verdict, allowed: true, message: '' }
+      return { ...verdict, allowed: true, message: '', open_only: true }
     return verdict
   } catch {
     return OPEN

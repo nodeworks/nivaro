@@ -124,6 +124,7 @@ import {
   validateEditLock
 } from '../../../services/edit-lock.js'
 import { recordRefusal } from '../../../services/erp-record-gate.js'
+import { openOnlyLockYields } from '../../../services/open-only-lock.js'
 import { parseSummaryModeRules, validateSummaryModeRules } from '../../../services/summary-mode.js'
 
 describe('edit_lock config', () => {
@@ -917,6 +918,28 @@ describe('always-open fields (edit_lock.open_fields)', () => {
     expect(
       await recordWriteRefusal(reqAs('U-CJ'), 'workflows', 100, { fields: ['internal_contact'] })
     ).toBeNull()
+  })
+
+  it('a lock held for open fields alone gives way to the creator at an approval step only', async () => {
+    t.tables.nivaro_workflow_instances = [
+      { id: 'i1', current_state: 's1', key: 'waiting_l1', label: 'Level 1 Approval' }
+    ]
+    const held = await lockHolderVerdict({ id: 'U-RODNEY', role: 'R' }, 'workflows', '100')
+    expect(held).toMatchObject({ allowed: true, open_only: true, tier: 'approval' })
+    expect(await openOnlyLockYields(held, { id: t.creator, role: 'R' }, 'workflows', '100')).toBe(
+      true
+    )
+    expect(await openOnlyLockYields(held, { id: 'U-NOBODY', role: 'R' }, 'workflows', '100')).toBe(
+      false
+    )
+    t.tables.nivaro_workflow_instances = [
+      { id: 'i2', current_state: 's9', key: 'waiting_po', label: 'Waiting on PO' }
+    ]
+    const adminOnly = await lockHolderVerdict({ id: 'U-RODNEY', role: 'R' }, 'workflows', '100')
+    expect(adminOnly).toMatchObject({ allowed: true, tier: 'admin_only' })
+    expect(
+      await openOnlyLockYields(adminOnly, { id: t.creator, role: 'R' }, 'workflows', '100')
+    ).toBe(false)
   })
 
   it('an open field never opens a child row', async () => {

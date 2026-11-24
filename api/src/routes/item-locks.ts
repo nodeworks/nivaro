@@ -155,7 +155,22 @@ async function getCurrentLock(
   // approval step they do not own (army v3 — the creator was locked out of
   // their own record by an approver's lock). Dropped like an expiry, and the
   // holder is told why.
-  const verdict = await lockHolderVerdict(lock.user, collection, item)
+  let verdict = await lockHolderVerdict(lock.user, collection, item)
+  // Held for open fields alone at an approval step: it gives way to the
+  // creator, the step's owners and admins (open-only-lock.ts).
+  if (
+    verdict.allowed &&
+    askedBy &&
+    askedBy.toUpperCase() !== String(lock.user).toUpperCase() &&
+    (await (
+      await import('../services/open-only-lock.js')
+    ).openOnlyLockYields(verdict, askedBy, collection, item))
+  )
+    verdict = {
+      ...verdict,
+      allowed: false,
+      message: 'Someone who works this step needs to change the record.'
+    }
   if (!verdict.allowed) {
     await db('nivaro_item_locks').where({ id: lock.id }).delete()
     if (_app) {

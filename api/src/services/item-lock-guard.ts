@@ -94,7 +94,21 @@ export async function editLockRefusal(
   if (String(lock.user).toUpperCase() === String(me).toUpperCase()) return null
   if (!(await isLockingEnabled(collection))) return null
   const { lockHolderVerdict } = await import('./edit-lock.js')
-  if (!(await lockHolderVerdict(lock.user, collection, String(item))).allowed) return null
+  const { openOnlyLockYields } = await import('./open-only-lock.js')
+  const holderVerdict = await lockHolderVerdict(lock.user, collection, String(item))
+  if (!holderVerdict.allowed) return null
+  // A lock held for open fields alone at an approval step never holds off the
+  // creator, the step's owners or an admin (open-only-lock.ts).
+  if (
+    req.user &&
+    (await openOnlyLockYields(
+      holderVerdict,
+      req.user as { id: string; role?: string | null },
+      collection,
+      String(item)
+    ))
+  )
+    return null
   // a10-5: someone the approval edit lock refuses could not save this record
   // even once the holder lets go — "ask them to release it" sent them to wait
   // for nothing. The approval gate that runs next (assertNotEditLocked, 403
