@@ -2007,6 +2007,15 @@
     "layout_types": ["addendum"]
   },
   {
+    "key": "field.require_change",
+    "label": "Addendum must change this field",
+    "home": "inspector",
+    "tab_or_section": "Rules",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["addendum"]
+  },
+  {
     "key": "inspector.enforcement_note",
     "label": "Note \"enforced on the default form only\" on server-enforced keys of other layouts",
     "home": "inspector",

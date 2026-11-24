@@ -36,6 +36,8 @@ export function proposedLineChanges(current: Row[], prefilled: Row[], fkField: s
 export interface DraftChanges {
   /** Fields whose proposed value differs from the record's. */
   fields: number
+  /** Every field the draft changes (plain fields and line tables with a change). */
+  changedFields: string[]
   /** Line rows added, changed or removed, over every line table on the form. */
   lines: number
   /** The author typed or attached something (title, notes, files) — worth asking before dropping. */
@@ -47,3 +49,30 @@ export const draftProposes = (c: DraftChanges) => c.fields + c.lines > 0
 
 /** Closing would lose work the author did. */
 export const draftHasWork = (c: DraftChanges) => c.typed || draftProposes(c)
+
+/**
+ * Fields the addendum layout marks "Must change" (assignment override `require_change`) that
+ * the draft leaves as the record has them — Create stays off while any remain. The server
+ * refuses the same (api services/addendum-required.ts, 422 ADDENDUM_NO_CHANGE).
+ */
+export function missingRequiredChanges(
+  assignments: Array<{ field: string; overrides?: unknown; label_override?: string | null }>,
+  changedFields: string[],
+  label: (field: string) => string
+): Array<{ field: string; label: string }> {
+  const changed = new Set(changedFields)
+  return assignments
+    .filter((a) => {
+      let ov = a.overrides
+      if (typeof ov === 'string') {
+        try {
+          ov = JSON.parse(ov)
+        } catch {
+          ov = {}
+        }
+      }
+      return (ov as Record<string, unknown> | null)?.require_change === true
+    })
+    .filter((a) => !changed.has(a.field))
+    .map((a) => ({ field: a.field, label: a.label_override?.trim() || label(a.field) }))
+}

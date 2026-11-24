@@ -463,6 +463,21 @@ export function RulesTab() {
           }
         />
       )}
+      {env.layoutType === 'addendum' && (
+        <Toggle
+          k='field.require_change'
+          label='Must change'
+          effect='An addendum is created only when it changes this field — for a line table, when it adds, changes or removes a line.'
+          checked={ov.require_change === true}
+          onChange={(v) =>
+            ctx.setOverride(
+              'require_change',
+              v ? true : undefined,
+              v ? `Require addendums to change ${name}` : `Let addendums leave ${name} as it is`
+            )
+          }
+        />
+      )}
     </div>
   )
 }

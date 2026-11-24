@@ -524,6 +524,21 @@ export async function addendumsRoutes(app: FastifyInstance) {
       )
     }
 
+    // Fields the addendum layout says must change (require_change) — refused before anything
+    // is stored (services/addendum-required.ts).
+    {
+      const { missingRequiredChanges, noChangeRefusal } = await import(
+        '../services/addendum-required.js'
+      )
+      const missing = await missingRequiredChanges(
+        body.parent_collection,
+        String(body.parent_id),
+        body.addendum_layout_id ?? null,
+        sanitizedData
+      )
+      if (missing.length > 0) return reply.code(422).send(noChangeRefusal(missing))
+    }
+
     // Attach only files the writer can open (file-access.ts — admins and the uploader pass).
     if (Array.isArray(body.attachments) && body.attachments.length > 0) {
       const { assertFileIdsReadable } = await import('../services/file-access.js')
@@ -758,6 +773,17 @@ export async function addendumsRoutes(app: FastifyInstance) {
       } else {
         patch.data = null
       }
+      // The same "must change" rule as create: an edit may not take the change back out.
+      const { missingRequiredChanges, noChangeRefusal } = await import(
+        '../services/addendum-required.js'
+      )
+      const missing = await missingRequiredChanges(
+        String(existing.parent_collection),
+        String(existing.parent_id),
+        (existing.addendum_layout_id as number | null) ?? null,
+        patch.data ? (JSON.parse(String(patch.data)) as Record<string, unknown>) : null
+      )
+      if (missing.length > 0) return reply.code(422).send(noChangeRefusal(missing))
     }
     if ('cost_impact' in body) patch.cost_impact = body.cost_impact ?? null
     if ('timeline_impact_days' in body)

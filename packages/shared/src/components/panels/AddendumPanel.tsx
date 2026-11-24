@@ -13,6 +13,7 @@ import {
 import { toast } from 'sonner'
 import { useItemEditAuth, useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
+import { toastError } from '../../lib/error-toast'
 import { queryKeys } from '../../lib/query-keys'
 import { sanitizeHtml } from '../../lib/sanitize-html'
 import { useUnsavedWork } from '../../lib/unsaved-work'
@@ -51,6 +52,7 @@ import {
   type DraftChanges,
   draftHasWork,
   draftProposes,
+  missingRequiredChanges,
   proposedFieldChanges,
   proposedLineChanges
 } from './addendum-draft'
@@ -757,18 +759,26 @@ function AddendumCreateSheet({
   )
   const changes = useMemo<DraftChanges>(() => {
     let lines = 0
+    const changedFields: string[] = []
     for (const l of lineRelations) {
-      lines += proposedLineChanges(
-        pendingO2MRows.get(l.key) ?? [],
-        prefilledRowsRef.current.get(l.key) ?? [],
-        l.fk
-      )
-      lines += (pendingO2MEdits.get(l.key)?.size ?? 0) + (pendingO2MDeletes.get(l.key)?.size ?? 0)
+      const n =
+        proposedLineChanges(
+          pendingO2MRows.get(l.key) ?? [],
+          prefilledRowsRef.current.get(l.key) ?? [],
+          l.fk
+        ) +
+        (pendingO2MEdits.get(l.key)?.size ?? 0) +
+        (pendingO2MDeletes.get(l.key)?.size ?? 0)
+      lines += n
+      if (n > 0) changedFields.push(l.field)
     }
     const lineFields = new Set(lineRelations.map((l) => l.field))
     const scalar = Object.fromEntries(Object.entries(formData).filter(([k]) => !lineFields.has(k)))
+    const fields = proposedFieldChanges(scalar, parentData, isDerived)
+    changedFields.push(...fields)
     return {
-      fields: proposedFieldChanges(scalar, parentData, isDerived).length,
+      fields: fields.length,
+      changedFields,
       lines,
       typed: !!title.trim() || !!description.trim() || attachments.length > 0
     }
@@ -789,6 +799,11 @@ function AddendumCreateSheet({
     onWorkChange(hasWork)
   }, [hasWork, onWorkChange])
   useUnsavedWork(hasWork, 'Unsaved addendum')
+  // Fields this layout says must change (require_change): Create stays off until they do.
+  const mustChange = useMemo(
+    () => missingRequiredChanges(configuredFields, changes.changedFields, titleCase),
+    [configuredFields, changes.changedFields]
+  )
   // Create on a draft that changes nothing asks first (workflow 368943 went to review that way).
   const [askEmpty, setAskEmpty] = useState(false)
   useEffect(() => {
@@ -839,7 +854,7 @@ function AddendumCreateSheet({
       onCreated(res?.data?.id != null ? String(res.data.id) : null)
       onDone()
     },
-    onError: () => toast.error('Failed to create addendum')
+    onError: (err) => toastError(err, 'Failed to create addendum')
   })
 
   return (
@@ -1011,13 +1026,21 @@ function AddendumCreateSheet({
             </div>
           ) : (
             <div className='shrink-0 flex items-center justify-end gap-2 border-t border-slate-200 px-5 py-3 dark:border-border'>
+              {mustChange.length > 0 && (
+                <p
+                  className='mr-auto text-[12px] text-amber-700 dark:text-amber-300'
+                  data-addendum-must-change=''
+                >
+                  Change {mustChange.map((m) => m.label).join(', ')} to create this addendum.
+                </p>
+              )}
               <Button variant='outline' size='sm' className='h-8 text-[12px]' onClick={onClose}>
                 Cancel
               </Button>
               <Button
                 size='sm'
                 className='h-8 bg-nvr-cyan text-[12px] font-medium text-white hover:bg-nvr-cyan/90'
-                disabled={!title.trim() || createMut.isPending}
+                disabled={!title.trim() || createMut.isPending || mustChange.length > 0}
                 onClick={() => (draftProposes(changes) ? createMut.mutate() : setAskEmpty(true))}
               >
                 {createMut.isPending ? 'Creating…' : 'Create Addendum'}

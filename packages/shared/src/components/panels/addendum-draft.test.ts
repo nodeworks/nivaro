@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   draftHasWork,
   draftProposes,
+  missingRequiredChanges,
   proposedFieldChanges,
   proposedLineChanges
 } from './addendum-draft'
@@ -59,13 +60,31 @@ describe('proposedFieldChanges', () => {
 
 describe('draft verdicts', () => {
   it('typed notes are work but not a proposal', () => {
-    const c = { fields: 0, lines: 0, typed: true }
+    const c = { fields: 0, changedFields: [], lines: 0, typed: true }
     expect(draftHasWork(c)).toBe(true)
     expect(draftProposes(c)).toBe(false)
   })
   it('an untouched sheet has neither', () => {
-    const c = { fields: 0, lines: 0, typed: false }
+    const c = { fields: 0, changedFields: [], lines: 0, typed: false }
     expect(draftHasWork(c)).toBe(false)
     expect(draftProposes(c)).toBe(false)
+  })
+})
+
+describe('missingRequiredChanges', () => {
+  const label = (f: string) => f.toUpperCase()
+  const assignments = [
+    { field: 'workflow_lines', overrides: '{"require_change":true}' },
+    { field: 'requisition_amount', overrides: { prefill_from_parent: true } },
+    { field: 'notes', overrides: { require_change: true }, label_override: 'Why' }
+  ]
+  it('lists required fields the draft leaves alone, with their labels', () => {
+    expect(missingRequiredChanges(assignments, [], label)).toEqual([
+      { field: 'workflow_lines', label: 'WORKFLOW_LINES' },
+      { field: 'notes', label: 'Why' }
+    ])
+  })
+  it('a changed required field drops off', () => {
+    expect(missingRequiredChanges(assignments, ['workflow_lines', 'notes'], label)).toEqual([])
   })
 })

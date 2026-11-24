@@ -769,10 +769,12 @@ describe('Inspector', () => {
     await mount(field('title'), { bundle: makeBundle({ layout_type: 'addendum' }) })
     await click(host.querySelector('[data-inspector-tab="rules"]'))
     expect(host.querySelector('[data-setting="field.prefill_from_parent"]')).not.toBeNull()
+    expect(host.querySelector('[data-setting="field.require_change"]')).not.toBeNull()
 
     await mount(field('title'))
     await click(host.querySelector('[data-inspector-tab="rules"]'))
     expect(host.querySelector('[data-setting="field.prefill_from_parent"]')).toBeNull()
+    expect(host.querySelector('[data-setting="field.require_change"]')).toBeNull()
   })
 
   it('inherited placements are read-only with Override here and Edit in parent', async () => {

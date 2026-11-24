@@ -1494,7 +1494,7 @@ export const contentOpsAddendums: DocSection = {
     },
     {
       type: 'p',
-      text: "The **New Addendum** sheet asks before it drops a draft: closing it (the X, Escape, a click outside or Cancel) once the draft holds a title, notes, a file or a proposed change offers **Keep editing** or **Discard**. **Create Addendum** on a draft whose fields and lines all still match the record asks too — make the change first (for example **Close Out Lines**) or choose **Create anyway**."
+      text: "The **New Addendum** sheet asks before it drops a draft: closing it (the X, Escape, a click outside or Cancel) once the draft holds a title, notes, a file or a proposed change offers **Keep editing** or **Discard**. **Create Addendum** on a draft whose fields and lines all still match the record asks too — make the change first (for example **Close Out Lines**) or choose **Create anyway**. A field the addendum layout marks **Must change** (layout editor → Rules) leaves no such choice: Create stays off until the draft changes it — for a line table, adds, changes or removes a line — and the API refuses a create or draft edit that leaves it as the record has it (422 `ADDENDUM_NO_CHANGE`, naming the fields)."
     },
     { type: 'h3', text: 'Reading an addendum' },
     {
