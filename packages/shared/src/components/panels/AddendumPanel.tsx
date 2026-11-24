@@ -15,6 +15,7 @@ import { useItemEditAuth, useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
 import { queryKeys } from '../../lib/query-keys'
 import { sanitizeHtml } from '../../lib/sanitize-html'
+import { useUnsavedWork } from '../../lib/unsaved-work'
 import { useStartsOpen } from '../../lib/use-starts-open'
 import { titleCase } from '../../lib/utils'
 import {
@@ -46,6 +47,13 @@ import { Skeleton } from '../ui/skeleton'
 import { Textarea } from '../ui/textarea'
 import { AddendumCompare } from './AddendumCompare'
 import { AddendumLinesDiff } from './AddendumLinesDiff'
+import {
+  type DraftChanges,
+  draftHasWork,
+  draftProposes,
+  proposedFieldChanges,
+  proposedLineChanges
+} from './addendum-draft'
 import { type AddendumAmounts, resolveAddendumAmounts } from './addendum-summary'
 
 interface AddendumLayout {
@@ -497,7 +505,12 @@ function AddendumCreateSheet({
   relations,
   parentData,
   onClose,
-  onCreated
+  onDone,
+  onCreated,
+  onWorkChange,
+  confirmingClose,
+  onKeepEditing,
+  onDiscard
 }: {
   collection: string
   itemId: string
@@ -507,8 +520,17 @@ function AddendumCreateSheet({
   fields: CMSField[]
   relations: CMSRelation[]
   parentData: Record<string, unknown>
+  /** Cancel / the sheet's own close: the host asks first while the draft holds work. */
   onClose: () => void
+  /** Closes without asking (after a create). */
+  onDone: () => void
   onCreated: (addendumId: string | null) => void
+  /** The draft holds work that closing would lose (typed text, files, proposed changes). */
+  onWorkChange: (hasWork: boolean) => void
+  /** The host is asking whether to drop the draft. */
+  confirmingClose: boolean
+  onKeepEditing: () => void
+  onDiscard: () => void
 }) {
   const client = useNivaroClient()
 
@@ -613,6 +635,9 @@ function AddendumCreateSheet({
   useEffect(() => {
     pendingO2MRowsRef.current = pendingO2MRows
   }, [pendingO2MRows])
+  // The record's lines as the sheet pre-filled them (per `<collection>.<fk>`): what the author
+  // changed is read against these (addendum-draft.ts).
+  const prefilledRowsRef = useRef<Map<string, Record<string, unknown>[]>>(new Map())
 
   // The sheet's grids publish live rows HERE, not into the record form —
   // see useLocalLiveRows for the loop that mounting both grids caused.
@@ -620,13 +645,20 @@ function AddendumCreateSheet({
   const o2mStagingCtx = useMemo<O2MStagingCtx>(
     () => ({
       getPendingRows: (rc, mf) => pendingO2MRows.get(`${rc}.${mf}`) ?? [],
-      queueRow: (rc, mf, data) =>
+      queueRow: (rc, mf, data) => {
+        if (data.__prefilled) {
+          const key = `${rc}.${mf}`
+          const seen = prefilledRowsRef.current.get(key) ?? []
+          if (!seen.some((r) => data.id != null && String(r.id) === String(data.id)))
+            prefilledRowsRef.current.set(key, [...seen, data])
+        }
         setPendingO2MRows((prev) => {
           const next = new Map(prev)
           const key = `${rc}.${mf}`
           next.set(key, [...(next.get(key) ?? []), data])
           return next
-        }),
+        })
+      },
       removeRow: (rc, mf, idx) =>
         setPendingO2MRows((prev) => {
           const next = new Map(prev)
@@ -695,6 +727,74 @@ function AddendumCreateSheet({
     [pendingO2MRows, pendingO2MEdits, pendingO2MDeletes]
   )
 
+  const isDerived = useCallback(
+    (key: string) => {
+      const meta = fieldMap[key]
+      return meta?.computed_type === 'rollup' || meta?.computed_type === 'write'
+    },
+    [fieldMap]
+  )
+  const lineRelations = useMemo(
+    () =>
+      configuredFields.flatMap((a) => {
+        const rel = relations.find(
+          (r) =>
+            r.one_collection === collection &&
+            !r.junction_field &&
+            (r.one_field === a.field || r.many_collection === a.field)
+        )
+        return rel?.many_collection && rel.many_field
+          ? [
+              {
+                field: a.field,
+                key: `${rel.many_collection}.${rel.many_field}`,
+                fk: rel.many_field
+              }
+            ]
+          : []
+      }),
+    [configuredFields, relations, collection]
+  )
+  const changes = useMemo<DraftChanges>(() => {
+    let lines = 0
+    for (const l of lineRelations) {
+      lines += proposedLineChanges(
+        pendingO2MRows.get(l.key) ?? [],
+        prefilledRowsRef.current.get(l.key) ?? [],
+        l.fk
+      )
+      lines += (pendingO2MEdits.get(l.key)?.size ?? 0) + (pendingO2MDeletes.get(l.key)?.size ?? 0)
+    }
+    const lineFields = new Set(lineRelations.map((l) => l.field))
+    const scalar = Object.fromEntries(Object.entries(formData).filter(([k]) => !lineFields.has(k)))
+    return {
+      fields: proposedFieldChanges(scalar, parentData, isDerived).length,
+      lines,
+      typed: !!title.trim() || !!description.trim() || attachments.length > 0
+    }
+  }, [
+    lineRelations,
+    pendingO2MRows,
+    pendingO2MEdits,
+    pendingO2MDeletes,
+    formData,
+    parentData,
+    isDerived,
+    title,
+    description,
+    attachments
+  ])
+  const hasWork = draftHasWork(changes)
+  useEffect(() => {
+    onWorkChange(hasWork)
+  }, [hasWork, onWorkChange])
+  useUnsavedWork(hasWork, 'Unsaved addendum')
+  // Create on a draft that changes nothing asks first (workflow 368943 went to review that way).
+  const [askEmpty, setAskEmpty] = useState(false)
+  useEffect(() => {
+    if (draftProposes(changes)) setAskEmpty(false)
+  }, [changes])
+
   const createMut = useMutation({
     mutationFn: () => {
       // Only REAL proposals are stored: a value equal to the parent's is not a
@@ -703,13 +803,8 @@ function AddendumCreateSheet({
       // from the proposed rows, and storing the pre-filled figure showed the
       // OLD total as if it were the amendment.
       const mergedData: Record<string, unknown> = {}
-      for (const [key, value] of Object.entries(formData)) {
-        const meta = fieldMap[key]
-        if (meta?.computed_type === 'rollup' || meta?.computed_type === 'write') continue
-        if (value === undefined) continue
-        if (String(value ?? '') === String(parentData[key] ?? '')) continue
-        mergedData[key] = value
-      }
+      for (const key of proposedFieldChanges(formData, parentData, isDerived))
+        mergedData[key] = formData[key]
       // Merge O2M staging rows into formData before submit
       for (const a of configuredFields) {
         const rel = relations.find(
@@ -742,7 +837,7 @@ function AddendumCreateSheet({
     onSuccess: (res) => {
       toast.success('Addendum created')
       onCreated(res?.data?.id != null ? String(res.data.id) : null)
-      onClose()
+      onDone()
     },
     onError: () => toast.error('Failed to create addendum')
   })
@@ -854,19 +949,81 @@ function AddendumCreateSheet({
             />
           </div>
 
-          <div className='shrink-0 flex items-center justify-end gap-2 border-t border-slate-200 px-5 py-3 dark:border-border'>
-            <Button variant='outline' size='sm' className='h-8 text-[12px]' onClick={onClose}>
-              Cancel
-            </Button>
-            <Button
-              size='sm'
-              className='h-8 bg-nvr-cyan text-[12px] font-medium text-white hover:bg-nvr-cyan/90'
-              disabled={!title.trim() || createMut.isPending}
-              onClick={() => createMut.mutate()}
+          {confirmingClose ? (
+            <div
+              className='shrink-0 flex flex-wrap items-center justify-end gap-2 border-t border-amber-200 bg-amber-50 px-5 py-3 dark:border-amber-900/60 dark:bg-amber-950/40'
+              data-addendum-discard=''
+              role='alertdialog'
+              aria-label='Close without creating the addendum?'
             >
-              {createMut.isPending ? 'Creating…' : 'Create Addendum'}
-            </Button>
-          </div>
+              <p className='mr-auto text-[12px] text-amber-900 dark:text-amber-200'>
+                Close without creating the addendum? What you changed here will be lost.
+              </p>
+              <Button
+                variant='outline'
+                size='sm'
+                className='h-8 text-[12px]'
+                onClick={onKeepEditing}
+                autoFocus
+              >
+                Keep editing
+              </Button>
+              <Button
+                variant='outline'
+                size='sm'
+                className='h-8 border-red-300 text-[12px] text-red-700 hover:bg-red-50 hover:text-red-800 dark:border-red-900 dark:text-red-300 dark:hover:bg-red-950/40'
+                onClick={onDiscard}
+                data-addendum-discard-confirm=''
+              >
+                Discard
+              </Button>
+            </div>
+          ) : askEmpty ? (
+            <div
+              className='shrink-0 flex flex-wrap items-center justify-end gap-2 border-t border-amber-200 bg-amber-50 px-5 py-3 dark:border-amber-900/60 dark:bg-amber-950/40'
+              data-addendum-empty=''
+              role='alertdialog'
+              aria-label='This addendum changes nothing'
+            >
+              <p className='mr-auto text-[12px] text-amber-900 dark:text-amber-200'>
+                This addendum changes nothing yet: the fields and lines match the record. Make the
+                change first (for example Close Out Lines), or create it anyway.
+              </p>
+              <Button
+                variant='outline'
+                size='sm'
+                className='h-8 text-[12px]'
+                onClick={() => setAskEmpty(false)}
+                autoFocus
+              >
+                Back to the form
+              </Button>
+              <Button
+                variant='outline'
+                size='sm'
+                className='h-8 text-[12px]'
+                disabled={createMut.isPending}
+                onClick={() => createMut.mutate()}
+                data-addendum-create-anyway=''
+              >
+                {createMut.isPending ? 'Creating…' : 'Create anyway'}
+              </Button>
+            </div>
+          ) : (
+            <div className='shrink-0 flex items-center justify-end gap-2 border-t border-slate-200 px-5 py-3 dark:border-border'>
+              <Button variant='outline' size='sm' className='h-8 text-[12px]' onClick={onClose}>
+                Cancel
+              </Button>
+              <Button
+                size='sm'
+                className='h-8 bg-nvr-cyan text-[12px] font-medium text-white hover:bg-nvr-cyan/90'
+                disabled={!title.trim() || createMut.isPending}
+                onClick={() => (draftProposes(changes) ? createMut.mutate() : setAskEmpty(true))}
+              >
+                {createMut.isPending ? 'Creating…' : 'Create Addendum'}
+              </Button>
+            </div>
+          )}
         </div>
       </O2MStagingContext.Provider>
     </LiveRowsContext.Provider>
@@ -1858,6 +2015,20 @@ export function AddendumPanel({
   const client = useNivaroClient()
   const qc = useQueryClient()
   const [sheetOpen, setSheetOpen] = useState(false)
+  // The X, Escape, a click outside and Cancel all ask first while the draft holds work
+  // (prod 2026-11-24: a closed sheet dropped "Close Out Lines" and the re-made addendum
+  // changed nothing).
+  const [sheetHasWork, setSheetHasWork] = useState(false)
+  const [confirmingClose, setConfirmingClose] = useState(false)
+  const closeSheet = useCallback(() => {
+    setSheetOpen(false)
+    setConfirmingClose(false)
+    setSheetHasWork(false)
+  }, [])
+  const requestCloseSheet = useCallback(() => {
+    if (sheetHasWork) setConfirmingClose(true)
+    else closeSheet()
+  }, [sheetHasWork, closeSheet])
   const [expandedState, setExpandedState] = useStartsOpen(defaultExpanded, true)
   const collapsed = !expandedState
   const setCollapsed = (v: boolean | ((c: boolean) => boolean)) =>
@@ -2126,7 +2297,13 @@ export function AddendumPanel({
           ))}
       </div>
 
-      <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
+      <Sheet
+        open={sheetOpen}
+        onOpenChange={(open) => {
+          if (open) setSheetOpen(true)
+          else requestCloseSheet()
+        }}
+      >
         <SheetContent side='right' className='w-[80vw] sm:max-w-[80vw] p-0 flex flex-col'>
           {sheetOpen && (isParentLoading || sheetConfigLoading) ? (
             <div className='flex flex-col gap-3 p-6'>
@@ -2146,8 +2323,13 @@ export function AddendumPanel({
               fields={collectionFields}
               relations={relations}
               parentData={parentItem}
-              onClose={() => setSheetOpen(false)}
+              onClose={requestCloseSheet}
+              onDone={closeSheet}
               onCreated={handleCreated}
+              onWorkChange={setSheetHasWork}
+              confirmingClose={confirmingClose}
+              onKeepEditing={() => setConfirmingClose(false)}
+              onDiscard={closeSheet}
             />
           ) : null}
         </SheetContent>
