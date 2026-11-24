@@ -487,9 +487,8 @@ export function validateStackSpec(body: unknown, cfg: SpecConfig): SpecResult {
       if (typeof role !== 'string' || !(ROLES as readonly string[]).includes(role)) {
         bad(`${p}.role`, 'ROLE_BAD')
       } else if (seen.has(role)) bad(`${p}.role`, 'ROLE_BAD')
-      // A shared deployment runs no separate realtime role (phase 6): Nivaro refuses
-      // NIVARO_ROLE=realtime on a process that serves many apps.
-      else if (sharedKey !== null && role === 'realtime') bad(`${p}.role`, 'ROLE_NOT_SHARED')
+      // A shared deployment may run a realtime role (0.2.2: Nivaro's realtime process serves
+      // every app of the deployment from 0.3.212; the Hub renders it on large stacks only).
       // Final review E-1: the realtime router's path rule is Traefik v3 PathRegexp syntax; v2
       // would never route it (realtime lost without a word). The publish edge routes no paths.
       else if (role === 'realtime' && cfg.edge === 'traefik' && cfg.traefikVersion === 2)

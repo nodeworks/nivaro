@@ -183,6 +183,8 @@ export const webRouterName = (stack: string) => `nvh_web_${stack}`
 export const realtimeRouterName = (stack: string) => `nvh_rt_${stack}`
 /** A shared deployment's catch-all router (phase 6); it serves through the web service. */
 export const patternRouterName = (stack: string) => `nvh_pat_${stack}`
+/** A shared deployment's catch-all for the live paths (0.2.2); it serves through realtime. */
+export const realtimePatternRouterName = (stack: string) => `nvh_rtpat_${stack}`
 
 /** `*.<name>`, <name> a lowercase DNS name of ≥ 2 labels (the validator also checks suffixes). */
 const HOST_PATTERN_RE =
@@ -252,21 +254,37 @@ function traefikLabels(
     }
     return out
   }
-  if (hostnames.length === 0) return {}
   if (role === 'realtime') {
     const r = realtimeRouterName(stack)
     const lb = `traefik.http.services.${r}.loadbalancer`
-    return {
-      ...base,
-      [`traefik.http.routers.${r}.rule`]: `(${hosts}) && ${realtimePathRule()}`,
-      ...tls(r),
-      [`traefik.http.routers.${r}.service`]: r,
+    // Label order as before 0.2.2 for an app stack (routers, then the service).
+    const out: Record<string, string> = { ...base }
+    if (hostnames.length > 0)
+      Object.assign(out, {
+        [`traefik.http.routers.${r}.rule`]: `(${hosts}) && ${realtimePathRule()}`,
+        ...tls(r),
+        [`traefik.http.routers.${r}.service`]: r
+      })
+    Object.assign(out, {
       [`${lb}.server.port`]: String(APP_PORT),
       [`${lb}.sticky.cookie`]: 'true',
       [`${lb}.sticky.cookie.name`]: 'nvh_rt',
       [`${lb}.sticky.cookie.secure`]: 'true',
       [`${lb}.sticky.cookie.httponly`]: 'true'
+    })
+    if (pattern) {
+      // A shared deployment's names under its pattern: the pattern router's live paths.
+      // priority=2 beats the web pattern router (1) and, like it, loses to any Host() router
+      // (ranked by rule length), so an app with its own name on another stack keeps that name.
+      const p = realtimePatternRouterName(stack)
+      Object.assign(out, {
+        [`traefik.http.routers.${p}.rule`]: `${patternRule(pattern)} && ${realtimePathRule()}`,
+        [`traefik.http.routers.${p}.priority`]: '2',
+        ...tls(p),
+        [`traefik.http.routers.${p}.service`]: r
+      })
     }
+    return out
   }
   return {}
 }

@@ -694,6 +694,27 @@ describe('Task 14: the role split is a normal shared upgrade', () => {
   })
 })
 
+describe('realtime on a large shared stack', () => {
+  const names = (roles: Array<{ role: string }>) => roles.map((r) => r.role)
+  it('an upgrade to 0.3.212 on Traefik v3 adds realtime; older images, v2 and medium do not', async () => {
+    const id = await newShared({ settings: JSON.stringify({ size: 'large' }) })
+    const plan = await Plan.planSharedUpgrade(id, '0.3.212', 'upgrade', planDeps())
+    expect(names(plan.roles)).toEqual(['web', 'worker', 'realtime', 'importer', 'exporter'])
+    const older = await Plan.planSharedUpgrade(id, '0.3.211', 'upgrade', planDeps())
+    expect(names(older.roles)).not.toContain('realtime')
+    const v2 = await Plan.planSharedUpgrade(
+      id,
+      '0.3.212',
+      'upgrade',
+      planDeps({ agentHealth: async () => health({ traefik_version: 2 }) })
+    )
+    expect(names(v2.roles)).not.toContain('realtime')
+    const medium = await newShared({ settings: JSON.stringify({ size: 'medium' }) })
+    const m = await Plan.planSharedUpgrade(medium, '0.3.212', 'upgrade', planDeps())
+    expect(names(m.roles)).not.toContain('realtime')
+  })
+})
+
 describe('Task 14 ruling I2: only an upgrade changes the roles; every apply records them', () => {
   const names = (roles: Array<{ role: string }>) => roles.map((r) => r.role)
   const recordedRoles = async (deployId: number) =>

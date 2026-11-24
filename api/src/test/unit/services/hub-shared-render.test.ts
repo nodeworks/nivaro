@@ -8,7 +8,9 @@ import {
   patternCovers,
   type RenderSharedInput,
   renderSharedSpec,
+  recordedSharedRoles,
   SharedRenderError,
+  sharedRealtimeFits,
   sharedRedisPrefix,
   sharedRoles
 } from '../../../services/hub/shared/stack-render.js'
@@ -237,6 +239,61 @@ describe('renderSharedSpec', () => {
           const v = agent.validateStackSpec(JSON.parse(JSON.stringify(spec)), cfg(edge))
           expect(v, `${size}/${edge}/${redis}: ${JSON.stringify(v)}`).toMatchObject({ ok: true })
         }
+  })
+
+  it('large with realtime: realtime ×2 (1 CPU, 2 GB), web SOCKETS=off; the agent takes it', () => {
+    const roles = sharedRoles('large', { realtime: true })
+    expect(roles).toEqual([
+      {
+        role: 'web',
+        replicas: 3,
+        cpus: 2,
+        memory_mb: 4096,
+        env: { CRON_TICKS: 'off', SOCKETS: 'off' }
+      },
+      { role: 'worker', replicas: 1, cpus: 2, memory_mb: 4096 },
+      { role: 'realtime', replicas: 2, cpus: 1, memory_mb: 2048 },
+      { role: 'importer', replicas: 1, cpus: 2, memory_mb: 4096 },
+      { role: 'exporter', replicas: 1, cpus: 2, memory_mb: 4096 }
+    ])
+    // Medium never runs realtime; without the flag large keeps sockets on web.
+    expect(sharedRoles('medium', { realtime: true }).map((r) => r.role)).not.toContain('realtime')
+    expect(sharedRoles('large')[0].env).toEqual({ CRON_TICKS: 'off' })
+    for (const explicitHosts of [['a.example.com'], []]) {
+      const spec = renderSharedSpec(
+        input({ shared: shared({ settings: { size: 'large' } }), explicitHosts, roles })
+      )
+      expect(
+        agent.validateStackSpec(JSON.parse(JSON.stringify(spec)), cfg('traefik'))
+      ).toMatchObject({ ok: true })
+    }
+  })
+
+  it('sharedRealtimeFits: image from 0.3.212, Traefik edge, not v2', () => {
+    expect(sharedRealtimeFits('0.3.212', 'traefik', 3)).toBe(true)
+    expect(sharedRealtimeFits('0.3.300', 'traefik', null)).toBe(true)
+    expect(sharedRealtimeFits('v0.4.0', 'traefik')).toBe(true)
+    expect(sharedRealtimeFits('0.3.211', 'traefik', 3)).toBe(false)
+    expect(sharedRealtimeFits('0.3.212', 'traefik', 2)).toBe(false)
+    expect(sharedRealtimeFits('0.3.212', 'publish', 3)).toBe(false)
+    expect(sharedRealtimeFits('latest', 'traefik', 3)).toBe(false)
+    expect(sharedRealtimeFits(null, 'traefik', 3)).toBe(false)
+  })
+
+  it('recorded roles with realtime rebuild web with SOCKETS=off', () => {
+    const roles = recordedSharedRoles([
+      { role: 'web', replicas: 3 },
+      { role: 'worker', replicas: 1 },
+      { role: 'realtime', replicas: 2 }
+    ])
+    expect(roles?.[0].env).toEqual({ CRON_TICKS: 'off', SOCKETS: 'off' })
+    expect(roles?.[2]).toEqual({ role: 'realtime', replicas: 2, cpus: 1, memory_mb: 2048 })
+    expect(
+      recordedSharedRoles([
+        { role: 'web', replicas: 3 },
+        { role: 'worker', replicas: 1 }
+      ])?.[0].env
+    ).toEqual({ CRON_TICKS: 'off' })
   })
 
   it('a pattern-only stack (no explicit names) passes the agent too', () => {

@@ -1031,14 +1031,40 @@ describe('validateStackSpec — shared deployment owners (phase 6)', () => {
     expect(validateStackSpec(hostOnly, cfg()).ok).toBe(true)
   })
 
-  it('a realtime role on a shared owner → ROLE_NOT_SHARED', () => {
+  it('0.2.2: a shared owner takes a realtime role beside web and worker', () => {
     const roles = [
-      { role: 'web', replicas: 2 },
-      { role: 'realtime', replicas: 1 }
+      { role: 'web', replicas: 3, env: { SOCKETS: 'off' } },
+      { role: 'worker', replicas: 1 },
+      { role: 'realtime', replicas: 2 },
+      { role: 'importer', replicas: 1 },
+      { role: 'exporter', replicas: 1 }
     ]
-    expect(codeOf(shared({ roles }), 'roles[1].role')).toBe('ROLE_NOT_SHARED')
+    expect(validateStackSpec(shared({ roles }), cfg()).ok).toBe(true)
+    // Still a split with a worker: web + realtime alone ticks no app's crons.
+    expect(
+      codeOf(
+        shared({
+          roles: [
+            { role: 'web', replicas: 2 },
+            { role: 'realtime', replicas: 1 }
+          ]
+        }),
+        'roles'
+      )
+    ).toBe('ROLE_NOT_SHARED')
     // An app owner keeps its realtime role.
-    expect(validateStackSpec({ ...base(), roles }, cfg()).ok).toBe(true)
+    expect(
+      validateStackSpec(
+        {
+          ...base(),
+          roles: [
+            { role: 'web', replicas: 2 },
+            { role: 'realtime', replicas: 1 }
+          ]
+        },
+        cfg()
+      ).ok
+    ).toBe(true)
   })
 
   it('Task 14: a shared owner takes the role split the Hub sends (web, worker, importer) and all alone', () => {

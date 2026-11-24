@@ -31,6 +31,7 @@ import {
   renderSharedSpec,
   SharedRenderError,
   sharedExtensionPins,
+  sharedRealtimeFits,
   sharedRoles,
   sharedStackSettings
 } from './stack-render.js'
@@ -627,7 +628,11 @@ export async function gatherSharedUpgrade(
   // upgrade takes the deployment's size; a re-apply (roleShape `deployed`) keeps what runs.
   const deployed = shared.mode === 'docker' ? await deployedSharedRoles(shared) : null
   const toDeploy =
-    deps.roleShape === 'deployed' && deployed ? deployed.roles : sharedRoles(settings.size)
+    deps.roleShape === 'deployed' && deployed
+      ? deployed.roles
+      : sharedRoles(settings.size, {
+          realtime: sharedRealtimeFits(version, edge, health?.traefik_version ?? null)
+        })
   const roles = toDeploy.map((r) => ({ role: r.role, replicas: r.replicas }))
   const roles_from = deployed && !deployed.never ? deployed.roles.map((r) => r.role) : null
   // An agent before 0.2.2 refuses a split shared owner and the exporter role: the run would fail

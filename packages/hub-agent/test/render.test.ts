@@ -6,6 +6,7 @@ import {
   type EngineServiceSpec,
   patternRouterName,
   REALTIME_PATHS,
+  realtimePatternRouterName,
   type RenderConfig,
   type RenderContext,
   realtimeRouterName,
@@ -683,6 +684,35 @@ describe('renderServices — shared deployment host pattern (phase 6)', () => {
     expect(t['traefik.http.services.nvh_web_sh.loadbalancer.server.port']).toBe('3055')
     expect(t['traefik.http.routers.nvh_web_sh.rule']).toBeUndefined()
     expect(web.TaskTemplate.Networks).toEqual([{ Target: 'nvh_st' }, { Target: 'edge' }])
+  })
+
+  it('0.2.2: a shared realtime role routes the live paths of the pattern and of its names', () => {
+    const roles: StackSpec['roles'] = [
+      { role: 'web', replicas: 3, env: { SOCKETS: 'off' } },
+      { role: 'worker', replicas: 1 },
+      { role: 'realtime', replicas: 2 }
+    ]
+    const rt = byName(renderServices('sh', sharedSpec({ roles }), cfg(), ctx()), 'sh_realtime')
+    const t = traefik(rt)
+    expect(realtimePatternRouterName('sh')).toBe('nvh_rtpat_sh')
+    const paths = t['traefik.http.routers.nvh_rt_sh.rule'].split(' && ')[1]
+    expect(t['traefik.http.routers.nvh_rt_sh.rule']).toBe(`(Host(\`a.apps.corp\`)) && ${paths}`)
+    expect(t['traefik.http.routers.nvh_rtpat_sh.rule']).toBe(
+      `HostRegexp(\`^[a-z0-9-]+\\.apps\\.corp$\`) && ${paths}`
+    )
+    // Above the web pattern router (1); below any Host() router (ranked by rule length).
+    expect(t['traefik.http.routers.nvh_rtpat_sh.priority']).toBe('2')
+    expect(t['traefik.http.routers.nvh_rtpat_sh.service']).toBe('nvh_rt_sh')
+    expect(t['traefik.http.routers.nvh_rtpat_sh.tls']).toBe('true')
+    expect(t['traefik.http.services.nvh_rt_sh.loadbalancer.sticky.cookie.name']).toBe('nvh_rt')
+    for (const p of REALTIME_PATHS) expect(paths).toContain(p.split('/:')[0])
+    // A pattern alone (no names yet): the pattern's live paths still reach realtime.
+    const alone = traefik(
+      byName(renderServices('sh', sharedSpec({ roles, hostnames: [] }), cfg(), ctx()), 'sh_realtime')
+    )
+    expect(alone['traefik.http.routers.nvh_rt_sh.rule']).toBeUndefined()
+    expect(alone['traefik.http.routers.nvh_rtpat_sh.service']).toBe('nvh_rt_sh')
+    expect(alone['traefik.http.services.nvh_rt_sh.loadbalancer.server.port']).toBe('3055')
   })
 
   it('a pattern is not a host claim (no LABEL_HOSTS from it)', () => {

@@ -3,6 +3,7 @@ import type { DockerDriverConfig } from '../docker/driver-config.js'
 import { isAgentDnsName, MAX_STACK_HOSTNAMES, type StackEdge } from '../docker/render-spec.js'
 import { agentAcceptsEnvKey, ENV_KEY_RE } from '../docker/stack-env.js'
 import type { StackSize } from '../docker/templates.js'
+import { compareVersions } from '../promote-plan.js'
 import type { SharedDeployment } from './store.js'
 
 /**
@@ -23,9 +24,10 @@ import type { SharedDeployment } from './store.js'
  *    per-app pass, services/export-worker.ts; while it is down each app's importer, then the
  *    worker, run them). Every role
  *    serves every app: one env block, one set of secrets, the role by NIVARO_ROLE (the agent).
- *    Still no `realtime` role: the API refuses NIVARO_ROLE=realtime on a deployment that serves
- *    many apps (index.ts, realtime-server.ts) and keeps sockets on every process there
- *    (process-role.ts socketsServed), and the agent refuses it on a shared owner (ROLE_NOT_SHARED).
+ *    `realtime` (large, image ≥ SHARED_REALTIME_SINCE, Traefik v3 edge): the live connections of
+ *    every app (Socket.io, graphql-ws, the SSE streams), each resolved to its app by host; the
+ *    web role then runs SOCKETS=off. Medium, the publish edge, Traefik v2 or an older image keep
+ *    sockets on the web role (the realtime router needs v3 path rules and a routed edge).
  *  - env: HUB_SHARED_DEPLOYMENT=<key> (the agent checks it equals owner.shared), HUB_URL,
  *    HUB_SHARED_EXTENSIONS (the allow-list, sorted), TRUST_PROXY=1 (behind the edge), its own
  *    REDIS_CHANNEL_PREFIX (a shared Redis never mixes it with another deployment's channels),
@@ -98,16 +100,53 @@ const SHARED_ROLE_SHAPE: Partial<
   // exporter tick none by their role (services/cron-ticks.ts).
   web: { env: { CRON_TICKS: 'off' } },
   worker: {},
+  // Live connections only (realtime-server.ts): 1 CPU like the dedicated role, 2 GB because it
+  // holds every app's sockets and streams.
+  realtime: { cpus: 1, memory_mb: 2048 },
   importer: {},
   exporter: {}
 }
 
-/** One role of a shared stack: 2 CPUs and 4 GB per replica, plus its role env. A fresh object. */
+/** One role of a shared stack: 2 CPUs and 4 GB per replica unless its shape says otherwise, plus
+ *  its role env. A fresh object. */
 function sharedRole(role: SharedRole['role'], replicas: number): SharedRole {
   const shape = SHARED_ROLE_SHAPE[role] ?? {}
-  const out: SharedRole = { role, replicas, cpus: SHARED_CPUS, memory_mb: SHARED_MEMORY_MB }
+  const out: SharedRole = {
+    role,
+    replicas,
+    cpus: shape.cpus ?? SHARED_CPUS,
+    memory_mb: shape.memory_mb ?? SHARED_MEMORY_MB
+  }
   if (shape.env) out.env = { ...shape.env }
   return out
+}
+
+/** The first image whose realtime process serves many apps (NIVARO_ROLE=realtime on a shared
+ *  deployment; older images refuse it at boot). */
+export const SHARED_REALTIME_SINCE = '0.3.212'
+
+/**
+ * Whether a large shared stack runs a `realtime` role: an image from SHARED_REALTIME_SINCE, on the
+ * Traefik edge with v3 labels (the realtime router is a v3 path rule; the publish edge routes no
+ * paths, so sockets stay on the web role there). An unknown Traefik version counts as v3, as the
+ * agent's own default does.
+ */
+export function sharedRealtimeFits(
+  version: string | null | undefined,
+  edge: StackEdge,
+  traefikVersion?: 2 | 3 | null
+): boolean {
+  const v = String(version ?? '').replace(/^v/, '')
+  if (!/^\d+\.\d+\.\d+/.test(v)) return false
+  if (compareVersions(v.replace(/[^\d.].*$/, ''), SHARED_REALTIME_SINCE) < 0) return false
+  return edge === 'traefik' && traefikVersion !== 2
+}
+
+/** The web role's sockets go to the realtime role when the stack runs one (SOCKETS=off). */
+function socketsToRealtime(roles: SharedRole[]): SharedRole[] {
+  if (!roles.some((r) => r.role === 'realtime')) return roles
+  for (const r of roles) if (r.role === 'web') r.env = { ...(r.env ?? {}), SOCKETS: 'off' }
+  return roles
 }
 
 /**
@@ -116,19 +155,24 @@ function sharedRole(role: SharedRole['role'], replicas: number): SharedRole {
  * later goes here and in SHARED_ROLE_SHAPE, nowhere else.
  *  - small: one `all` process — exactly the stack before the split (its spec hash is pinned).
  *  - medium: web ×2, worker ×1, importer ×1, exporter ×1.
- *  - large: web ×3, worker ×1, importer ×1, exporter ×1. (A dedicated large stack also runs
- *    `realtime` ×2 with web SOCKETS=off; a shared one cannot yet — see the header.)
+ *  - large: web ×3, worker ×1, importer ×1, exporter ×1, and `realtime` ×2 with web SOCKETS=off
+ *    when `realtime` is true (sharedRealtimeFits: the image, the edge and Traefik allow it).
  * Only an upgrade moves a deployment to this shape (its plan says ROLES_CHANGE); a re-apply keeps
  * the shape the deployment runs (deployedSharedRoles in upgrade-plan.ts). A fresh copy per call.
  */
-export function sharedRoles(size: StackSize): StackSpec['roles'] {
+export function sharedRoles(
+  size: StackSize,
+  opts: { realtime?: boolean } = {}
+): StackSpec['roles'] {
   if (size === 'small') return [sharedRole('all', 1)]
-  return [
+  const roles = [
     sharedRole('web', size === 'large' ? 3 : 2),
     sharedRole('worker', 1),
+    ...(size === 'large' && opts.realtime ? [sharedRole('realtime', 2)] : []),
     sharedRole('importer', 1),
     sharedRole('exporter', 1)
   ]
+  return socketsToRealtime(roles)
 }
 
 /** The shape every shared stack ran before the split: one `all` service, 1 / 2 / 3 by size. */
@@ -158,7 +202,7 @@ export function recordedSharedRoles(raw: unknown): StackSpec['roles'] | null {
     if (out.some((x) => x.role === role)) return null
     out.push(sharedRole(role as SharedRole['role'], replicas))
   }
-  return out
+  return socketsToRealtime(out)
 }
 
 /** The environment label of a shared stack (the agent's owner rule allows it). */
@@ -241,7 +285,8 @@ export interface RenderSharedInput {
   hubPublicUrl: string
   /** Names placed here that the pattern does not cover (explicitHostsFor). */
   explicitHosts: string[]
-  /** The roles to run; absent = sharedRoles(size). A re-apply passes the shape the stack runs. */
+  /** The roles to run; absent = sharedRoles(size) without realtime (the run always passes the
+   *  plan's roles). A re-apply passes the shape the stack runs. */
   roles?: StackSpec['roles']
 }
 
