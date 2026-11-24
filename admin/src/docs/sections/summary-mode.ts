@@ -93,6 +93,19 @@ export const summaryMode: DocSection = {
   }
 }`
     },
+    { type: 'h3', id: 'summary-mode-open-fields', text: 'Fields open in every locked step' },
+    {
+      type: 'p',
+      text: '`edit_lock.open_fields` (top level, beside `states`) lists record fields that stay writable in every locked step, in both tiers, for everyone who may update the record. A finished record (Completed, Canceled) keeps them open too, while the admin-only tier\u2019s own `open_fields` close when its run finishes. As with the admin-only list, an update that writes nothing but open fields passes and anything more is judged as before; the form stays editable for those fields and shows the lock sentence on the rest, and the person-held edit lock is still granted. Changing an open field never sets the \u201cChanged after approval\u201d badge. Use it for a field the whole team must keep current whatever the step, for example the internal contact of a workflow; mark the field required as well if it must never be left empty.'
+    },
+    {
+      type: 'pre',
+      code: `"edit_lock": {
+  "states": ["waiting_on_manager_approval"],
+  "open_fields": ["internal_contact"],
+  "admin_only": { "states": ["approved", "completed"], "open_fields": ["po_number"] }
+}`
+    },
     {
       type: 'p',
       text: 'The move-requirements dialog is the one exception: its PATCH carries the header `x-nivaro-requirements-for: <transition id>`, and the fields that move declares as requirements are let through both lock tiers and the admin-only field option, but only when the caller may run that move now on that record (its conditions are still evaluated). The SDK sends it through `withHeaders` on a command.'

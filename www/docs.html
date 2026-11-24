@@ -12318,7 +12318,7 @@ POST &lt;enrich_endpoint&gt; { "ids": ["1", "2"] }
         </div>
 
         <!-- SUMMARY MODE -->
-        <div class="doc-section" id="s-summary-mode" data-toc='[{"id":"summary-mode","label":"Summary Mode"},{"id":"summary-mode-edit-lock","label":"Edit lock while a record waits"},{"id":"summary-mode-admin-only","label":"Admin-only steps (post-approval)"},{"id":"summary-mode-switch","label":"Switching a yes/no field from Summary view"}]'>
+        <div class="doc-section" id="s-summary-mode" data-toc='[{"id":"summary-mode","label":"Summary Mode"},{"id":"summary-mode-edit-lock","label":"Edit lock while a record waits"},{"id":"summary-mode-admin-only","label":"Admin-only steps (post-approval)"},{"id":"summary-mode-open-fields","label":"Fields open in every locked step"},{"id":"summary-mode-switch","label":"Switching a yes/no field from Summary view"}]'>
           <!-- SYNC:summary-mode -->
           <h1 class="doc-h1" id="summary-mode">Summary Mode</h1>
           <p class="doc-p">Summary mode is the record form rendered as a read-only presentation: the active grouped layout as section cards and definition grids, child tables instead of editable grids, related records as labels and drill links. Nothing on the record itself can be changed until the viewer switches to Edit — but the Notes and Tasks slots stay live, so a reviewer can comment on or assign work from the summary without leaving it.</p>
@@ -12366,6 +12366,13 @@ POST &lt;enrich_endpoint&gt; { "ids": ["1", "2"] }
     "open_fields": ["po_number"],
     "open_children": ["workflow_notes"]
   }
+}</code></pre>
+          <h3 class="doc-h3" id="summary-mode-open-fields">Fields open in every locked step</h3>
+          <p class="doc-p"><code class="doc-code">edit_lock.open_fields</code> (top level, beside <code class="doc-code">states</code>) lists record fields that stay writable in every locked step, in both tiers, for everyone who may update the record. A finished record (Completed, Canceled) keeps them open too, while the admin-only tier’s own <code class="doc-code">open_fields</code> close when its run finishes. As with the admin-only list, an update that writes nothing but open fields passes and anything more is judged as before; the form stays editable for those fields and shows the lock sentence on the rest, and the person-held edit lock is still granted. Changing an open field never sets the “Changed after approval” badge. Use it for a field the whole team must keep current whatever the step, for example the internal contact of a workflow; mark the field required as well if it must never be left empty.</p>
+          <pre class="doc-pre"><code>"edit_lock": {
+  "states": ["waiting_on_manager_approval"],
+  "open_fields": ["internal_contact"],
+  "admin_only": { "states": ["approved", "completed"], "open_fields": ["po_number"] }
 }</code></pre>
           <p class="doc-p">The move-requirements dialog is the one exception: its PATCH carries the header <code class="doc-code">x-nivaro-requirements-for: &lt;transition id&gt;</code>, and the fields that move declares as requirements are let through both lock tiers and the admin-only field option, but only when the caller may run that move now on that record (its conditions are still evaluated). The SDK sends it through <code class="doc-code">withHeaders</code> on a command.</p>
           <h3 class="doc-h3" id="summary-mode-switch">Switching a yes/no field from Summary view</h3>
