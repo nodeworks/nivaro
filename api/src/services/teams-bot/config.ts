@@ -2,6 +2,7 @@ import { config } from '../../config.js'
 import { db } from '../../db/index.js'
 import { appBox } from '../app-state.js'
 import { isNivaroCloud, perAppJobs } from '../deployment-mode.js'
+import { decryptValue, encryptValue, isEncrypted } from '../encryption.js'
 import { overlaySettings } from '../settings-overrides.js'
 
 export type TeamsBotSource = 'env' | 'settings' | 'sign_in_app'
@@ -71,21 +72,50 @@ type Picked = {
 
 async function readRow(): Promise<Record<string, unknown> | undefined> {
   try {
-    return await overlaySettings(
-      (await db('nivaro_settings')
-        .select(
-          'teams_bot_enabled',
-          'teams_bot_app_id',
-          'teams_bot_app_secret',
-          'teams_bot_tenant_id',
-          'teams_bot_app_type'
-        )
-        .first()) as Record<string, unknown> | undefined,
-      // On a shared deployment the deployment's NIVARO_SETTINGS_OVERRIDES never names an app's bot.
-      { appOwnPrefix: 'teams_bot_' }
-    )
+    const raw = (await db('nivaro_settings')
+      .select(
+        'id',
+        'teams_bot_enabled',
+        'teams_bot_app_id',
+        'teams_bot_app_secret',
+        'teams_bot_tenant_id',
+        'teams_bot_app_type'
+      )
+      .first()) as Record<string, unknown> | undefined
+    await sealSavedSecret(raw)
+    // On a shared deployment the deployment's NIVARO_SETTINGS_OVERRIDES never names an app's bot.
+    return await overlaySettings(raw, { appOwnPrefix: 'teams_bot_' })
   } catch {
     return undefined
+  }
+}
+
+/** A secret saved before it was sealed on save (clear text) is sealed in place, once, when the
+ *  server has the key. The update matches the clear value, so a save in between is never undone;
+ *  a failure (no key, read-only database) leaves the row as it was and the clear value works. */
+async function sealSavedSecret(raw: Record<string, unknown> | undefined): Promise<void> {
+  const v = raw?.teams_bot_app_secret
+  if (typeof v !== 'string' || !v.trim() || isEncrypted(v) || raw?.id == null) return
+  try {
+    const sealed = encryptValue(v.trim())
+    await db('nivaro_settings')
+      .where({ id: raw.id, teams_bot_app_secret: v })
+      .update({ teams_bot_app_secret: sealed })
+    raw.teams_bot_app_secret = sealed
+  } catch {
+    /* left in clear; read as before */
+  }
+}
+
+/** The saved secret in clear: sealed (enc:v1) or legacy clear text. One this server cannot open
+ *  (another key) reads as no secret, so the bot reports itself not configured. */
+function openSecret(v: unknown): string {
+  const s = clean(v)
+  if (!s) return ''
+  try {
+    return clean(decryptValue(s))
+  } catch {
+    return ''
   }
 }
 
@@ -93,7 +123,7 @@ function savedSource(row: Record<string, unknown> | undefined): Picked | null {
   if (!clean(row?.teams_bot_app_id)) return null
   return {
     appId: clean(row?.teams_bot_app_id),
-    appSecret: clean(row?.teams_bot_app_secret),
+    appSecret: openSecret(row?.teams_bot_app_secret),
     tenantId: clean(row?.teams_bot_tenant_id),
     appType: parseAppType(row?.teams_bot_app_type) ?? 'MultiTenant',
     source: 'settings'

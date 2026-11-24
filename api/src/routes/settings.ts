@@ -185,7 +185,7 @@ const allowedSettingsKeys = [
   'push_test_allowlist',
   'teams_test_mode',
   'teams_test_webhook_url',
-  // Teams bot (migration 505); the secret is masked via SECRET_KEYS
+  // Teams bot (migration 505); the secret is sealed on save (enc:v1) and masked via SECRET_KEYS
   'teams_bot_enabled',
   'teams_bot_app_id',
   'teams_bot_app_secret',
@@ -654,6 +654,25 @@ export async function settingsRoutes(app: FastifyInstance) {
           error: 'The client secret cannot be saved: ENCRYPTION_KEY is not set on this server',
           code: 'encryption_key_missing'
         })
+      }
+    }
+    if ('teams_bot_app_secret' in patch) {
+      const v =
+        patch.teams_bot_app_secret == null ? '' : String(patch.teams_bot_app_secret).trim()
+      const { AppKeyMissingError, encryptValue } = await import('../services/encryption.js')
+      try {
+        patch.teams_bot_app_secret = v ? encryptValue(v) : null
+      } catch (err) {
+        if (err instanceof AppKeyMissingError) throw err
+        // No ENCRYPTION_KEY on this server. A shared deployment refuses rather than keep an app's
+        // secret in clear; a self-hosted server without the key keeps it as it always did.
+        if (perAppJobs()) {
+          return reply.code(400).send({
+            error: 'The bot app secret cannot be saved: ENCRYPTION_KEY is not set on this server',
+            code: 'encryption_key_missing'
+          })
+        }
+        patch.teams_bot_app_secret = v || null
       }
     }
     if ('directory_auth_mode' in patch) {
