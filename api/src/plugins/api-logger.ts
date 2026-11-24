@@ -8,7 +8,7 @@ import { sqlDialect } from '../db/sql-dialect.js'
 import { withTenant } from '../db/tenant-context.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { hasChainColumns } from '../services/chain-columns.js'
-import { perAppJobs, tenantSource } from '../services/deployment-mode.js'
+import { isMultiTenant, tenantSource } from '../services/deployment-mode.js'
 import { mcpCallerKey, mcpLogColumns, mcpStampOf } from '../services/mcp-calls.js'
 import { roomListeners } from '../services/realtime-board.js'
 import {
@@ -245,11 +245,10 @@ export function shouldSkip(path: string, method: string): boolean {
 const INSTANCE = instanceKey().slice(0, 60)
 
 export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
-  // A Hub shared deployment keeps one buffer per app: the flush may start from any app's request
-  // or from the timer, so each app's rows are written inside that app (its own nivaro_api_logs),
-  // never the context the flush runs in; rows with no app are dropped. Self-hosted and Nivaro
-  // Cloud keep the one '' buffer, written in the current context as before (Cloud: that context
-  // can be another tenant's request — a known cross-tenant log issue, out of scope here).
+  // A multi-tenant process (Hub shared deployment, Nivaro Cloud) keeps one buffer per app: the
+  // flush may start from any app's request or from the timer, so each app's rows are written
+  // inside that app (its own nivaro_api_logs), never the context the flush runs in; rows with no
+  // app are dropped. Self-hosted keeps the one '' buffer, written in the current context.
   const buffers = new Map<string, ApiLogRow[]>()
   let flushing = false
 
@@ -266,18 +265,27 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
     flushing = true
     const batches = [...buffers]
     buffers.clear()
+    // One registry list per flush at most (Cloud's listActive reads the meta database).
+    let listed: Promise<TenantRecord[]> | null = null
+    const activeList = () => {
+      if (!listed) {
+        const registry = getTenantRegistry()
+        listed = registry ? registry.listActive() : Promise.resolve([])
+      }
+      return listed
+    }
     try {
       for (const [key, rows] of batches) {
         if (rows.length === 0) continue
         if (!key) {
-          // Shared: a request no app was stamped on (unknown host, refused before the tenant
-          // middleware) has no nivaro_api_logs to go to; never the flushing app's.
-          if (!perAppJobs()) await writeRows(rows)
+          // Multi-tenant: a request no app was stamped on (unknown host, refused before the
+          // tenant middleware) has no nivaro_api_logs to go to; never the flushing app's.
+          if (!isMultiTenant()) await writeRows(rows)
           continue
         }
         // One app's failure (lookup, pool) never costs another app its rows.
         try {
-          const t = await appOf(key)
+          const t = await appOf(key, activeList)
           // An app that has left the deployment: its database is gone from here, drop its rows.
           if (!t) continue
           await withTenant(t, () => writeRows(rows), t.origin)
@@ -291,12 +299,15 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
   }
 
   /** The app behind a buffer key as the registry lists it now (byId, else the active list). */
-  async function appOf(key: string): Promise<TenantRecord | null> {
+  async function appOf(
+    key: string,
+    activeList: () => Promise<TenantRecord[]>
+  ): Promise<TenantRecord | null> {
     try {
       const registry = getTenantRegistry()
       if (!registry) return null
       const byId = registry.byId ? await registry.byId(key) : null
-      return byId ?? (await registry.listActive()).find((t) => t.id === key) ?? null
+      return byId ?? (await activeList()).find((t) => t.id === key) ?? null
     } catch {
       return null
     }
@@ -547,7 +558,7 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
       request_id: req.requestId ?? null,
       ...mcpLogColumns(mcp)
     }
-    const key = perAppJobs() ? requestTenantKey(req) : ''
+    const key = requestTenantKey(req)
     let bucket = buffers.get(key)
     if (!bucket) {
       bucket = []

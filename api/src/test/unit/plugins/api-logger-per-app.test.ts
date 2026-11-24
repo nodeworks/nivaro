@@ -6,7 +6,8 @@ import type { TenantRecord } from '../../../services/tenancy/types.js'
 // Hub shared deployments, Task 6: the request log is buffered per app. Two apps A and B (copies:
 // same paths, same user id) share one process; each flush writes A's rows into A's own
 // nivaro_api_logs and B's into B's — whichever request or timer starts the flush — and the rows
-// of an app that has left the deployment are dropped. Self-hosted keeps its one buffer.
+// of an app that has left the deployment are dropped. Nivaro Cloud does the same per tenant.
+// Self-hosted keeps its one buffer.
 
 const inserted = vi.hoisted(() => [] as Array<{ tenant: string; row: Record<string, unknown> }>)
 const failFor = vi.hoisted(() => new Set<string>())
@@ -174,30 +175,62 @@ describe('request log per app on a shared deployment', () => {
   })
 })
 
-describe('request log in Nivaro Cloud (unchanged)', () => {
-  // Known: Cloud keeps its one process buffer, written in whatever context the flush runs in
-  // (out of scope here). Pinned so the per-app buffers stay a shared-deployment change.
-  it('one buffer, flushed in the current context; the registry is never asked', async () => {
+describe('request log in Nivaro Cloud', () => {
+  // Cloud used to keep one process buffer and write it in whatever context the flush ran in —
+  // one tenant's request could carry another tenant's rows into its own database. Now each
+  // tenant's rows land in that tenant only, the meta list is read once per flush, and rows with
+  // no tenant are dropped.
+  function useCloud(list: TenantRecord[]) {
     Object.assign(process.env, { CLOUD_META_DB_URL: 'postgres://meta/x' })
-    const listed = vi.fn(async () => [tenant('A'), tenant('B')])
+    const listed = vi.fn(async () => list)
     setTenantRegistryForTests({
       source: 'cloud-meta',
       resolve: async () => null,
       listActive: listed,
       status: () => ({
         source: 'cloud-meta',
-        count: 2,
+        count: list.length,
         loadedAt: null,
         stale: false,
         lastError: null
       })
     })
+    return listed
+  }
+
+  it("each tenant's rows land in that tenant only; one meta read per flush", async () => {
+    const listed = useCloud([tenant('A'), tenant('B')])
     const a = await server()
     await a.inject({ method: 'GET', url: '/api/items/things?app=A' })
     await a.inject({ method: 'GET', url: '/api/items/things?app=B' })
-    await a.close() // flushes outside any app
-    expect(inserted.map((x) => x.tenant)).toEqual(['', ''])
-    expect(listed).not.toHaveBeenCalled()
+    await a.inject({ method: 'GET', url: '/api/items/things?app=B' })
+    await a.close() // flushes outside any tenant
+    const by = (t: string) => inserted.filter((x) => x.tenant === t).map((x) => x.row.query)
+    expect(by('A')).toEqual(['app=A'])
+    expect(by('B')).toEqual(['app=B', 'app=B'])
+    expect(inserted).toHaveLength(3)
+    expect(listed).toHaveBeenCalledTimes(1)
+  })
+
+  it('a flush started inside tenant B never writes A\'s rows into B', async () => {
+    useCloud([tenant('A'), tenant('B')])
+    const a = await server()
+    await a.inject({ method: 'GET', url: '/api/items/things?app=A' })
+    // 50 rows from B: the threshold flush starts inside B's request.
+    for (let i = 0; i < 50; i++) await a.inject({ method: 'GET', url: '/api/items/things?app=B' })
+    await a.close()
+    expect(inserted.filter((x) => x.row.query === 'app=A').map((x) => x.tenant)).toEqual(['A'])
+    expect(inserted.filter((x) => x.row.query === 'app=B').every((x) => x.tenant === 'B')).toBe(true)
+  })
+
+  it('a row with no tenant is dropped; a tenant no longer listed is dropped', async () => {
+    useCloud([tenant('A')])
+    const a = await server()
+    await a.inject({ method: 'GET', url: '/api/items/things' })
+    await a.inject({ method: 'GET', url: '/api/items/things?app=GONE' })
+    await a.inject({ method: 'GET', url: '/api/items/things?app=A' })
+    await a.close()
+    expect(inserted.map((x) => x.tenant)).toEqual(['A'])
   })
 })
 
