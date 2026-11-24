@@ -299,6 +299,18 @@ export function realtimeProbeBase(
   return publicUrl
 }
 
+/**
+ * Does this process take part in the realtime board (services/realtime-board.ts)? Self-hosted,
+ * and a Hub shared deployment, whose web processes with SOCKETS=off hold no sockets: without the
+ * board every "is anyone watching?" gate in front of an emit (roomListeners, recordRoomHasViewers)
+ * reads 0 there and the Traffic Map feed, flow watch, live AI calls and agent presence never fire.
+ * Every room the board carries on a shared deployment is app-scoped (`t:<app>:`); its answers keyed
+ * by a user id alone stay off there (boardAnswersUsers). Never Nivaro Cloud (per-process answers).
+ */
+export function realtimeBoardRuns(env: Env = process.env): boolean {
+  return !isNivaroCloud(env)
+}
+
 /** Roles that run one queue only and answer nothing but health (importer, exporter). */
 export function isWorkerOnlyRole(env: Env = process.env): boolean {
   const r = processRole(env)

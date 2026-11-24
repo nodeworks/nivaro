@@ -535,13 +535,16 @@ describe('realtime tier on a Hub shared deployment (NIVARO_ROLE=realtime, many a
     else process.env.SOCKETS = saved.sockets
   })
 
-  it('boots on a shared deployment: the Hub list, the realtime routes only, no board, no schema poll', async () => {
+  it('boots on a shared deployment: the Hub list, the realtime routes only, the board, no schema poll', async () => {
     const { servedRealtimeRoutes } = await import('../../realtime-server.js')
     const { REALTIME_HTTP_ROUTES } = await import('../../services/process-role.js')
     expect([...servedRealtimeRoutes()].sort()).toEqual([...REALTIME_HTTP_ROUTES].sort())
     expect(hub.started).toBe(1)
-    // No realtime board on a shared deployment (it is not per app), as on a shared web process.
-    expect([...bus.zsets.keys()].some((k) => k.startsWith('nvr:rt:board:'))).toBe(false)
+    // The realtime board runs (the SOCKETS=off web processes' emit gates read its room counts),
+    // in a slot that names the shared deployment.
+    await waitFor(() =>
+      [...bus.zsets.keys()].some((k) => k.startsWith('nvr:rt:board:') && k.includes('@shared-rt:'))
+    )
     // No schema fingerprint against a default database that does not exist.
     expect(schemaBuilds.n).toBe(0)
     // The process migrates nothing: the app that is not migrated stays not ready.
@@ -754,6 +757,151 @@ describe('realtime tier on a Hub shared deployment (NIVARO_ROLE=realtime, many a
     } finally {
       setIo(realtime.io as never)
       for (const s of [A, B, X, C]) s.ws.close()
+    }
+  })
+
+  it("carries app-scoped room counts on the board: A's watchers wake A's emits only (copies)", async () => {
+    const board = await import('../../services/realtime-board.js')
+    const sock = await import('../../plugins/socketio.js')
+    const { setIo } = await import('../../services/io-holder.js')
+    const { withTenant } = await import('../../db/tenant-context.js')
+    const { tenantScopedRoom } = await import('../../services/tenant-rooms.js')
+    const { emitAiCallLive } = await import('../../services/ai-quality.js')
+    const inApp = <T>(id: string, fn: () => T | Promise<T>) =>
+      withTenant(
+        { id, slug: id, dbClient: 'pg', dbConnection: `postgres://db-${id}`, poolMax: null },
+        async () => fn()
+      )
+    const before = new Set(realtime.io.sockets.sockets.keys())
+    const A = await connect(realtimePort, 'a.example.com')
+    const B = await connect(realtimePort, 'b.example.com')
+    try {
+      await waitFor(() => realtime.io.sockets.sockets.size >= before.size + 2)
+      const mine = [...realtime.io.sockets.sockets.values()].filter((s) => !before.has(s.id))
+      await waitFor(() => mine.every((s) => typeof s.data.nvrTenantKey === 'string'))
+      const sa = mine.find((s) => s.data.nvrTenantKey === 'app-a')
+      const sb = mine.find((s) => s.data.nvrTenantKey === 'app-b')
+      if (!sa || !sb) throw new Error('sockets did not resolve their apps')
+      // The same person (copies share user ids) on a different page in each app; an admin of A
+      // watches the live AI calls; each app has a different collection open.
+      for (const [s, app, path, coll] of [
+        [sa, 'app-a', '/collections/orders', 'orders'],
+        [sb, 'app-b', '/users', 'invoices']
+      ] as const) {
+        s.data[board.PAGE_AT_KEY] = {
+          user: { id: 'u-1', name: 'Ada' },
+          path,
+          since: 1000,
+          app: 'admin',
+          tenant: app
+        }
+        s.join(tenantScopedRoom(`collection:${coll}`, app))
+      }
+      sa.join(tenantScopedRoom('watch:ai-calls', 'app-a'))
+
+      // The realtime process publishes; the SOCKETS=off web process reads (one test process).
+      board.startBoardPublisher(realtime.redis as never, sock.localBoardCollector(realtime.io))
+      board.startBoardReader(web.redis as never, { includeOwn: true })
+      await waitFor(() => board.boardFresh() && board.boardStats().length > 0)
+
+      // Emit gates: A's watch room has a listener, B's (same name in its own app) none.
+      expect(board.roomListeners(web.io, 't:app-a:watch:ai-calls')).toBeGreaterThanOrEqual(1)
+      expect(board.roomListeners(web.io, 't:app-b:watch:ai-calls')).toBe(0)
+      // ...so a call made in A reaches A's watcher from the web process; one in B is dropped.
+      setIo(web.io as never)
+      const call = (feature: string) => ({
+        id: feature,
+        at: new Date().toISOString(),
+        feature,
+        model: 'm',
+        provider: 'p',
+        user: null,
+        status: 'ok' as const,
+        latency_ms: 1,
+        cost_usd: null,
+        input_tokens: null,
+        output_tokens: null
+      })
+      await inApp('app-a', () => emitAiCallLive(call('in-a') as never))
+      await inApp('app-b', () => emitAiCallLive(call('in-b') as never))
+      const heard = (e: Array<[string, unknown]>, f: string) =>
+        e.some(([ev, p]) => ev === 'ai:call' && (p as { feature?: string }).feature === f)
+      await waitFor(() => heard(A.events, 'in-a'))
+      await sleep(150)
+      expect(heard(A.events, 'in-b')).toBe(false)
+      expect(heard(B.events, 'in-a')).toBe(false)
+      expect(heard(B.events, 'in-b')).toBe(false)
+
+      // Page presence and live collections per app, never the copy's.
+      expect(await inApp('app-a', () => sock.usersOnPath('/collections/orders'))).toHaveLength(1)
+      expect(await inApp('app-a', () => sock.usersOnPath('/users'))).toEqual([])
+      expect(await inApp('app-b', () => sock.usersOnPath('/users'))).toHaveLength(1)
+      expect([...(sock.getLiveCollectionNames('app-a') ?? [])]).toEqual(['orders'])
+      expect([...(sock.getLiveCollectionNames('app-b') ?? [])]).toEqual(['invoices'])
+      // No app named on a shared deployment: "cannot tell", never every app's collections.
+      expect(sock.getLiveCollectionNames()).toBeNull()
+
+      // The socket list and rooms from the board: the caller's app only; none outside an app.
+      const statsA = await inApp('app-a', () => sock.getRealtimeStats())
+      expect(statsA.sockets.map((s) => s.id)).toContain(sa.id)
+      expect(statsA.sockets.map((s) => s.id)).not.toContain(sb.id)
+      expect(statsA.rooms.every((r) => r.room.startsWith('t:app-a:'))).toBe(true)
+      expect(sock.getRealtimeStats().sockets).toEqual([])
+
+      // Answers keyed by a user id alone stay off: copies share u-1.
+      expect(board.boardHasUser('u-1')).toBe(false)
+      expect(await inApp('app-a', () => sock.isUserConnected('u-1'))).toBeNull()
+    } finally {
+      setIo(realtime.io as never)
+      board.resetBoard()
+      for (const s of [A, B]) s.ws.close()
+    }
+  })
+
+  it('starts the board on every process of a shared deployment, never on Nivaro Cloud', async () => {
+    const { realtimeBoardRuns } = await import('../../services/process-role.js')
+    expect(realtimeBoardRuns()).toBe(true)
+    expect(realtimeBoardRuns({ HUB_SHARED_DEPLOYMENT: 'shared-rt' })).toBe(true)
+    expect(realtimeBoardRuns({})).toBe(true)
+    expect(realtimeBoardRuns({ CLOUD_META_DB_URL: 'postgres://meta' })).toBe(false)
+    // The web / worker processes (server.ts) start it on the same predicate.
+    const src = readFileSync(
+      join(fileURLToPath(new URL('.', import.meta.url)), '../../server.ts'),
+      'utf8'
+    )
+    expect(src).toMatch(/if \(realtimeBoardRuns\(\) && app\.redis\) \{\s*const \{ startBoard \}/)
+  })
+
+  it('publishes no bare user ids on a shared deployment, and reads none', async () => {
+    const board = await import('../../services/realtime-board.js')
+    const sock = await import('../../plugins/socketio.js')
+    try {
+      expect(sock.localBoardCollector(realtime.io).live().users).toEqual([])
+      // An entry that carries some (an older or misconfigured publisher) is not believed.
+      board.setBoardsForTests([
+        {
+          node: 'other',
+          at: Date.now(),
+          sockets: 1,
+          users: ['u-1'],
+          viewers: {},
+          pages: []
+        }
+      ])
+      expect(board.boardAnswersUsers()).toBe(false)
+      expect(board.boardHasUser('u-1')).toBe(false)
+      expect(board.boardConcurrency({ sockets: 0, users: [] })).toEqual({ sockets: 1, users: 0 })
+      // Self-hosted the same entry answers, as before.
+      const key = process.env.HUB_SHARED_DEPLOYMENT
+      delete process.env.HUB_SHARED_DEPLOYMENT
+      try {
+        expect(board.boardHasUser('u-1')).toBe(true)
+        expect(board.boardConcurrency({ sockets: 0, users: [] })).toEqual({ sockets: 1, users: 1 })
+      } finally {
+        process.env.HUB_SHARED_DEPLOYMENT = key
+      }
+    } finally {
+      board.resetBoard()
     }
   })
 

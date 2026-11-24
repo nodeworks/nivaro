@@ -1281,10 +1281,10 @@
       "line": 424,
       "text": "if (!process.env.CLOUD_META_DB_URL && app.redis) {",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T3",
-      "why": "realtime board is per process in multi-tenant (cloud keeps per-process answers)",
+      "why": "realtime board is per process in multi-tenant (cloud keeps per-process answers). Now Nivaro Cloud only, through realtimeBoardRuns() (services/process-role.ts, EXTRA_CALLS): a Hub shared deployment runs the board (app-scoped rooms; answers by user id alone stay off), so a SOCKETS=off web process's emit gates see the realtime processes' watchers",
       "batch": "A"
     },
     {

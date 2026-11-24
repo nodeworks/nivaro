@@ -470,9 +470,10 @@ export async function buildServer() {
       // Post-mortem 3.3 — the realtime board: what every process's sockets know (viewers, page
       // pings, socket lists), shared once a second process is around (services/realtime-board.ts):
       // replicas that all serve sockets, a realtime tier, SOCKETS=off readers. A lone process
-      // only registers itself every 5 s. Self-hosted only (cloud keeps per-process answers).
-      if (!isMultiTenant() && app.redis) {
-        const { socketsServed } = await import('./services/process-role.js')
+      // only registers itself every 5 s. Self-hosted and a Hub shared deployment (app-scoped
+      // rooms; no answers by user id alone); never Nivaro Cloud (per-process answers).
+      const { realtimeBoardRuns, socketsServed } = await import('./services/process-role.js')
+      if (realtimeBoardRuns() && app.redis) {
         const { startBoard } = await import('./services/realtime-board.js')
         const { localBoardCollector } = await import('./plugins/socketio.js')
         const stopBoard = startBoard(app.redis, {

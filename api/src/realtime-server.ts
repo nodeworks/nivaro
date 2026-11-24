@@ -26,7 +26,7 @@ import { trackError } from './services/error-tracking.js'
 import { instanceKey } from './services/instance-key.js'
 import { INSTANCE_ID } from './services/instance-roster.js'
 import { retiredRefusal } from './services/maintenance-freeze.js'
-import { realtimeRoleProblem } from './services/process-role.js'
+import { realtimeBoardRuns, realtimeRoleProblem } from './services/process-role.js'
 import {
   DB_BUDGET_MS,
   judgeReady,
@@ -67,8 +67,9 @@ import { NIVARO_VERSION } from './version.js'
  * the handshake host (services/socket-tenant.ts), and every room, topic and stream is keyed by the
  * app (services/tenant-rooms.ts). It runs no migration: it follows the state the migrating
  * processes keep in Redis (startAppSchemaFollower). There is no default database there, so
- * nothing below reads one: the schema watcher and the realtime board stay off as on a shared web
- * process, and /api/ready checks no database. Nivaro Cloud refuses it (realtimeRoleProblem).
+ * nothing below reads one: the schema watcher stays off as on a shared web process, and /api/ready
+ * checks no database. The realtime board runs (app-scoped rooms; the web processes' emit gates read
+ * it), as on a shared web process. Nivaro Cloud refuses it (realtimeRoleProblem).
  */
 /** Every `METHOD path` the realtime server registered (tests hold it to REALTIME_HTTP_ROUTES). */
 const served: string[] = []
@@ -248,10 +249,11 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
       }
     }
     // Publishes once a reader or another realtime process is registered; reads the other
-    // realtime processes' viewers so `record:viewers` lists everyone on the record. Self-hosted
-    // only, as on web (server.ts): a shared deployment keeps per-process answers, which never
-    // mix apps (the board is not per app; isUserConnected says "cannot tell" without it).
-    if (!shared) {
+    // realtime processes' viewers so `record:viewers` lists everyone on the record. As on web
+    // (server.ts realtimeBoardRuns): on a Hub shared deployment too, where the web processes
+    // (SOCKETS=off) read the room counts their emit gates need from it. Its rooms are app-scoped
+    // there; answers keyed by a user id alone stay off (realtime-board.ts boardAnswersUsers).
+    if (realtimeBoardRuns()) {
       const { startBoard } = await import('./services/realtime-board.js')
       const stopBoard = startBoard(app.redis, {
         serves: true,

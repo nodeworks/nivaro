@@ -102,6 +102,7 @@ import {
 import { emitterOnlyAdapter, socketsServed } from '../services/process-role.js'
 import {
   type BoardCollector,
+  boardAnswersUsers,
   boardConcurrency,
   boardHasUser,
   boardIsViewing,
@@ -470,8 +471,11 @@ function tenantSocketsRoom(tenant: string): string {
 
 export function getRealtimeStats(): ReturnType<typeof localRealtimeStats> {
   // Post-mortem 3.3 — SOCKETS=off: every realtime process's sockets (the board).
+  // A Hub shared deployment: the caller's app only (boardRealtimeStats).
   if (boardReaderOn())
-    return boardRealtimeStats() as unknown as ReturnType<typeof localRealtimeStats>
+    return boardRealtimeStats(currentTenantKey()) as unknown as ReturnType<
+      typeof localRealtimeStats
+    >
   return localRealtimeStats()
 }
 
@@ -610,6 +614,8 @@ function socketTenantKey(socketId: string): string | null {
  */
 export function getLiveCollectionNames(tenantKey?: string): Set<string> | null {
   if (!boardKnowsEveryone()) return null
+  // A Hub shared deployment with no app named: the board holds every app's rooms, so "cannot tell".
+  if (!tenantKey && tenantSource() === 'hub') return null
   const rooms: string[] = []
   for (const [room] of _ioRef?.sockets.adapter.rooms ?? []) rooms.push(room)
   for (const b of boardLive()) rooms.push(...Object.keys(b.viewers ?? {}))
@@ -670,7 +676,8 @@ function collectLocalLive(io: SocketIOServer | null): LocalBoard['live'] {
   }
   return {
     sockets: io?.engine?.clientsCount ?? socketMeta.size,
-    users: [...users],
+    // Bare user ids name no app: none on a Hub shared deployment (boardAnswersUsers).
+    users: boardAnswersUsers() ? [...users] : [],
     viewers,
     pages,
     rooms,

@@ -94,8 +94,10 @@ const EXTRA_CALLS: Record<string, { multiTenant?: number; nivaroCloud?: number }
   // The realtime tier on a Hub shared deployment: socketsServed() always serves sockets in Nivaro
   // Cloud only (its T4 entry is weight 0), and realtimeRoleProblem() refuses NIVARO_ROLE=realtime
   // in Nivaro Cloud only — the one refusal index.ts and realtime-server.ts now share (their T2
-  // entries are weight 0).
-  'services/process-role.ts': { nivaroCloud: 2 }
+  // entries are weight 0). realtimeBoardRuns() (+1): the realtime board runs everywhere but Nivaro
+  // Cloud — server.ts and realtime-server.ts start it on a shared deployment too (server.ts's T3
+  // entry is weight 0).
+  'services/process-role.ts': { nivaroCloud: 3 }
 }
 
 type Rule = 'T1' | 'T2' | 'T3' | 'T4' | 'T5' | 'T6' | 'T7' | 'C1' | 'C2' | 'C3' | 'C4' | 'C5'
