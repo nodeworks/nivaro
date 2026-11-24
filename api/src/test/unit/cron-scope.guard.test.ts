@@ -74,7 +74,8 @@ function constValue(name: string): string | null {
   return null
 }
 
-describe('cron scope guard', () => {
+// Scans the source tree: about 1.5 s alone, past 5 s under the full suite's load.
+describe('cron scope guard', { timeout: 60_000 }, () => {
   const calls = scheduleCalls()
 
   it('finds the core schedule calls', () => {

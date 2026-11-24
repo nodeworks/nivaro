@@ -42,7 +42,8 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe('/api/health reports cloud and multi_tenant', () => {
+// The first case loads db/index + routes/health cold: past 5 s under the full suite's load.
+describe('/api/health reports cloud and multi_tenant', { timeout: 60_000 }, () => {
   async function health(env: Record<string, string>) {
     setEnv(env)
     vi.doMock('../../../config.js', () => ({
