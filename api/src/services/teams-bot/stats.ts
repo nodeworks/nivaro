@@ -1,10 +1,13 @@
 import type { FastifyInstance } from 'fastify'
+import { appMap } from '../app-state.js'
+import { appKeyPart } from '../tenancy/credential-binding.js'
 
 // Per-day send counters for the admin status strip. Redis when the app has it (shared by every
-// replica), this process's memory otherwise. A UTC day, expiring after two.
+// replica), this process's memory otherwise. A UTC day, expiring after two. Each app of a Hub
+// shared deployment counts its own (appKeyPart() is '' elsewhere: keys unchanged).
 
 type Kind = 'sent' | 'failed'
-const mem = new Map<string, number>()
+const mem = appMap<string, number>()
 const TTL_S = 2 * 24 * 60 * 60
 
 type RedisLike = {
@@ -14,7 +17,8 @@ type RedisLike = {
 }
 const redisOf = (app: FastifyInstance) => (app as { redis?: RedisLike }).redis
 
-const key = (kind: Kind) => `nvr:teams:stat:${new Date().toISOString().slice(0, 10)}:${kind}`
+const key = (kind: Kind) =>
+  `nvr:teams:stat:${appKeyPart()}${new Date().toISOString().slice(0, 10)}:${kind}`
 
 export async function bumpTeamsStat(app: FastifyInstance, kind: Kind): Promise<void> {
   const k = key(kind)

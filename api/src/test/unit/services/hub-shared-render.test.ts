@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -7,8 +8,11 @@ import {
   patternCovers,
   type RenderSharedInput,
   renderSharedSpec,
+  recordedSharedRoles,
   SharedRenderError,
-  sharedRedisPrefix
+  sharedRealtimeFits,
+  sharedRedisPrefix,
+  sharedRoles
 } from '../../../services/hub/shared/stack-render.js'
 import { type SharedDeployment, validateSharedInput } from '../../../services/hub/shared/store.js'
 
@@ -142,17 +146,79 @@ describe('renderSharedSpec', () => {
     expect(spec.hostnames).toEqual(['crm.example.com'])
   })
 
-  it('one all-role service by size, never a realtime role', () => {
-    for (const [size, replicas] of [
-      ['small', 1],
+  it('small: one all-role service, exactly as before', () => {
+    const spec = renderSharedSpec(input({ shared: shared({ settings: { size: 'small' } }) }))
+    expect(spec.roles).toEqual([{ role: 'all', replicas: 1, cpus: 2, memory_mb: 4096 }])
+    expect(sharedRoles('small')).toEqual(spec.roles)
+  })
+
+  it('medium and large split the roles: web, worker (the only cron ticker), importer, exporter', () => {
+    for (const [size, web] of [
       ['medium', 2],
       ['large', 3]
     ] as const) {
       const spec = renderSharedSpec(input({ shared: shared({ settings: { size } }) }))
-      expect(spec.roles).toHaveLength(1)
-      expect(spec.roles[0]).toMatchObject({ role: 'all', replicas })
-      expect(spec.roles.some((r) => r.role === 'realtime')).toBe(false)
+      expect(spec.roles, size).toEqual([
+        { role: 'web', replicas: web, cpus: 2, memory_mb: 4096, env: { CRON_TICKS: 'off' } },
+        { role: 'worker', replicas: 1, cpus: 2, memory_mb: 4096 },
+        { role: 'importer', replicas: 1, cpus: 2, memory_mb: 4096 },
+        { role: 'exporter', replicas: 1, cpus: 2, memory_mb: 4096 }
+      ])
+      expect(spec.roles.some((r) => r.role === 'all' || r.role === 'realtime')).toBe(false)
+      // Every role serves every app: one env block (the deployment key included), one set of
+      // secrets; a role carries only its own role keys.
+      expect(spec.env.HUB_SHARED_DEPLOYMENT).toBe('shared-one')
+      for (const r of spec.roles)
+        expect(Object.keys(r.env ?? {}).every((k) => k === 'CRON_TICKS')).toBe(true)
+      // The worker is the one role that ticks crons: the importer and the exporter are
+      // role-gated (cron-ticks.ts), every other role says CRON_TICKS=off.
+      for (const r of spec.roles) if (r.role === 'web') expect(r.env?.CRON_TICKS).toBe('off')
+      for (const r of ['importer', 'exporter'])
+        expect(spec.roles.find((x) => x.role === r)?.env).toBeUndefined()
+      expect(spec.roles.find((r) => r.role === 'worker')?.env).toBeUndefined()
     }
+  })
+
+  it('sharedRoles is the one list, and every render gets its own copy', () => {
+    for (const size of ['small', 'medium', 'large'] as const)
+      expect(renderSharedSpec(input({ shared: shared({ settings: { size } }) })).roles).toEqual(
+        sharedRoles(size)
+      )
+    const a = renderSharedSpec(input({ shared: shared({ settings: { size: 'medium' } }) }))
+    a.roles[0].replicas = 9
+    if (a.roles[0].env) a.roles[0].env.CRON_TICKS = 'on'
+    expect(sharedRoles('medium')[0]).toMatchObject({ replicas: 2, env: { CRON_TICKS: 'off' } })
+  })
+
+  it('golden: a small stack renders byte-for-byte as before the role split', () => {
+    const sha = (spec: StackSpec) => createHash('sha256').update(JSON.stringify(spec)).digest('hex')
+    expect(sha(renderSharedSpec(input()))).toBe(
+      '66bf884c6a31ef245749048b288dc53ff94893440c4dd810bf24808f584e8af2'
+    )
+    expect(
+      sha(
+        renderSharedSpec(
+          input({ shared: shared({ settings: { size: 'small', env: { MAIL_FROM: 'a@b.c' } } }) })
+        )
+      )
+    ).toBe('865025cf07b9a57091dfddf0f92f9533efe7b680821e1ef9a87028e5405bc1b1')
+    expect(
+      sha(
+        renderSharedSpec(
+          input({
+            edge: 'publish',
+            shared: shared({
+              settings: { size: 'small', redis: 'external', publish_port: 31005 }
+            }),
+            secrets: {
+              SESSION_SECRET: SESSION,
+              ENCRYPTION_KEY: ENC,
+              REDIS_URL: 'redis://:pw@redis.internal:6379'
+            }
+          })
+        )
+      )
+    ).toBe('ed6cf0c2f27147928f165acf00e4bd700b3bc7b146ebb06b28da4e31086c70d9')
   })
 
   it('every spec passes the agent’s own validator (sizes × edges × redis modes)', () => {
@@ -173,6 +239,61 @@ describe('renderSharedSpec', () => {
           const v = agent.validateStackSpec(JSON.parse(JSON.stringify(spec)), cfg(edge))
           expect(v, `${size}/${edge}/${redis}: ${JSON.stringify(v)}`).toMatchObject({ ok: true })
         }
+  })
+
+  it('large with realtime: realtime ×2 (1 CPU, 2 GB), web SOCKETS=off; the agent takes it', () => {
+    const roles = sharedRoles('large', { realtime: true })
+    expect(roles).toEqual([
+      {
+        role: 'web',
+        replicas: 3,
+        cpus: 2,
+        memory_mb: 4096,
+        env: { CRON_TICKS: 'off', SOCKETS: 'off' }
+      },
+      { role: 'worker', replicas: 1, cpus: 2, memory_mb: 4096 },
+      { role: 'realtime', replicas: 2, cpus: 1, memory_mb: 2048 },
+      { role: 'importer', replicas: 1, cpus: 2, memory_mb: 4096 },
+      { role: 'exporter', replicas: 1, cpus: 2, memory_mb: 4096 }
+    ])
+    // Medium never runs realtime; without the flag large keeps sockets on web.
+    expect(sharedRoles('medium', { realtime: true }).map((r) => r.role)).not.toContain('realtime')
+    expect(sharedRoles('large')[0].env).toEqual({ CRON_TICKS: 'off' })
+    for (const explicitHosts of [['a.example.com'], []]) {
+      const spec = renderSharedSpec(
+        input({ shared: shared({ settings: { size: 'large' } }), explicitHosts, roles })
+      )
+      expect(
+        agent.validateStackSpec(JSON.parse(JSON.stringify(spec)), cfg('traefik'))
+      ).toMatchObject({ ok: true })
+    }
+  })
+
+  it('sharedRealtimeFits: image from 0.3.212, Traefik edge, not v2', () => {
+    expect(sharedRealtimeFits('0.3.212', 'traefik', 3)).toBe(true)
+    expect(sharedRealtimeFits('0.3.300', 'traefik', null)).toBe(true)
+    expect(sharedRealtimeFits('v0.4.0', 'traefik')).toBe(true)
+    expect(sharedRealtimeFits('0.3.211', 'traefik', 3)).toBe(false)
+    expect(sharedRealtimeFits('0.3.212', 'traefik', 2)).toBe(false)
+    expect(sharedRealtimeFits('0.3.212', 'publish', 3)).toBe(false)
+    expect(sharedRealtimeFits('latest', 'traefik', 3)).toBe(false)
+    expect(sharedRealtimeFits(null, 'traefik', 3)).toBe(false)
+  })
+
+  it('recorded roles with realtime rebuild web with SOCKETS=off', () => {
+    const roles = recordedSharedRoles([
+      { role: 'web', replicas: 3 },
+      { role: 'worker', replicas: 1 },
+      { role: 'realtime', replicas: 2 }
+    ])
+    expect(roles?.[0].env).toEqual({ CRON_TICKS: 'off', SOCKETS: 'off' })
+    expect(roles?.[2]).toEqual({ role: 'realtime', replicas: 2, cpus: 1, memory_mb: 2048 })
+    expect(
+      recordedSharedRoles([
+        { role: 'web', replicas: 3 },
+        { role: 'worker', replicas: 1 }
+      ])?.[0].env
+    ).toEqual({ CRON_TICKS: 'off' })
   })
 
   it('a pattern-only stack (no explicit names) passes the agent too', () => {

@@ -125,7 +125,7 @@ describe('server.ts: which deployments schedule the core jobs', () => {
 
   it('boot work against the static database stays self-hosted only inside the job block', () => {
     for (const needle of [
-      "void import('./services/app-links.js')",
+      'void bootPasses.warnIfPortalIsAdmin(app)',
       'void runInBackgroundPool(runRetentionPurge)',
       "void import('./services/row-schedules.js')",
       "void import('./services/help-video-render.js')",
@@ -133,8 +133,8 @@ describe('server.ts: which deployments schedule the core jobs', () => {
       'void bootPhase(',
       'cacheWarmTimer = setTimeout',
       'readinessWarmTimer = setTimeout',
-      'void Promise.all([', // the db-tuning twin sweep
-      "const { recordRestRoutes } = await import('./services/api-changelog.js')",
+      'void bootPasses.sweepTuningTwins(app)', // the db-tuning twin sweep
+      'void bootPasses.recordRestRouteInventory(collectedRoutes)',
       "const row = (await db('nivaro_settings').orderBy('id', 'asc').first('paused_crons'))",
       "await import('./services/restart-cleanups.js')"
     ]) {
@@ -142,6 +142,47 @@ describe('server.ts: which deployments schedule the core jobs', () => {
       expect(g, needle).toContain('!multiTenant')
       expect(g.at(-1), needle).toBe(OUTER)
     }
+  })
+})
+
+describe('server.ts: boot passes per app on a shared deployment', () => {
+  it('self-hosted calls each pass inline; shared registers them on app-ready', () => {
+    // the self-hosted inline calls are the needles above (all `!multiTenant`); the extension
+    // registry versioning sits in the self-hosted extensions block
+    expect(guardsOf('void bootPasses.recordExtensionRegistryVersions(app)')).toEqual(['selfHosted'])
+    // a shared deployment registers the per-app passes, before the app migrations start
+    expect(guardsOf('registerAppBootPasses(app,')).toEqual(['perAppJobs()', 'hubShared'])
+    const src = readFileSync(serverFile, 'utf8')
+    expect(src.indexOf('registerAppBootPasses(app,')).toBeLessThan(
+      src.indexOf('startAppMigrations(registry')
+    )
+    // every pass the shared hook runs is the same named function self-hosted calls
+    for (const pass of [
+      'warmOwnerGroups',
+      'warmIntegrityChecks',
+      'warmCaches',
+      'warmReadinessResults',
+      'sweepTuningTwins',
+      'recordRestRouteInventory',
+      'recordExtensionRegistryVersions',
+      'warnIfPortalIsAdmin'
+    ])
+      expect(src, pass).toContain(`bootPasses.${pass}(`)
+  })
+})
+
+describe('server.ts: row schedules per app on a shared deployment', () => {
+  it('the static-database boot resync stays self-hosted; shared hydrates per app instead', () => {
+    // the boot resync (needle above) reads a static database: self-hosted only
+    expect(guardsOf("void import('./services/row-schedules.js')")).toEqual(['!multiTenant', OUTER])
+    // a shared deployment registers its per-app lifecycle, before the app migrations start
+    expect(guardsOf('registerRowScheduleLifecycle(app)')).toEqual(['perAppJobs()', 'hubShared'])
+    const src = readFileSync(serverFile, 'utf8')
+    expect(src.indexOf('registerRowScheduleLifecycle(app)')).toBeLessThan(
+      src.indexOf('startAppMigrations(registry')
+    )
+    // the scheduled-flows boot loader stays self-hosted only
+    expect(guardsOf("await bootPhase('Scheduled flows'")).toEqual(['selfHosted'])
   })
 })
 
@@ -171,6 +212,18 @@ describe('server.ts: per-app housekeeping on a shared deployment (P5-10)', () =>
   it('a daily job-run prune runs per app on shared only', () => {
     expect(CORE_CRON_SCOPES['job-runs-prune']).toBe('app')
     expect(guardsOf("app.cron.schedule('job-runs-prune'")).toEqual(['multiTenant', OUTER])
+  })
+
+  it('the retention pass runs per app on shared (its job), inline self-hosted (its timer)', () => {
+    expect(CORE_CRON_SCOPES['retention-pass']).toBe('app')
+    expect(guardsOf("app.cron.schedule('retention-pass'")).toEqual(['perAppJobs()', OUTER])
+    // the self-hosted chain (the needle above) stays !multiTenant; the process part of the pass
+    // (help-video import sweep: process memory + work dir) gets its own daily timer on shared
+    expect(guardsOf('void runInBackgroundPool(runRetentionPurge)')).toEqual(['!multiTenant', OUTER])
+    expect(guardsOf('staleImportSweepTimer = startStaleImportSweep(app.log)')).toEqual([
+      'perAppJobs()',
+      OUTER
+    ])
   })
 
   it('the restart clean-ups run per app on shared, inline self-hosted', () => {
@@ -256,7 +309,7 @@ describe('multi-tenant boot roster', () => {
   it('finds the core jobs', () => expect(ids.length).toBeGreaterThan(120))
 
   it('the P5-10 jobs are left out on a shared deployment', () => {
-    for (const id of ['help-video-render-sweep', 'mail-retry'])
+    for (const id of ['help-video-render-sweep'])
       expect(SELF_HOSTED_ONLY_CRONS[id], id).toBeTruthy()
   })
 

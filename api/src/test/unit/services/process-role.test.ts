@@ -7,6 +7,7 @@ import {
   judgeRealtimeTier,
   probeRealtimeRouting,
   processRole,
+  realtimeRoleProblem,
   refuseExtensionSocketHandlers,
   socketsServed
 } from '../../../services/process-role.js'
@@ -37,6 +38,68 @@ describe('process roles (post-mortem 3.3)', () => {
   it('always serves sockets on a realtime process and in cloud mode', () => {
     expect(socketsServed({ NIVARO_ROLE: 'realtime', SOCKETS: 'off' })).toBe(true)
     expect(socketsServed({ SOCKETS: 'off', CLOUD_META_DB_URL: 'postgres://x' })).toBe(true)
+  })
+
+  it('socketsServed truth table: self-hosted, Hub shared deployment, Nivaro Cloud', () => {
+    const shared = {
+      HUB_SHARED_DEPLOYMENT: 'shared-a',
+      HUB_URL: 'https://hub.example',
+      HUB_DEPLOYMENT_TOKEN: 't'.repeat(40)
+    }
+    const cloud = { CLOUD_META_DB_URL: 'postgres://meta' }
+    const rows: Array<[string, Record<string, string>, boolean]> = [
+      ['self-hosted, nothing set', {}, true],
+      ['self-hosted, SOCKETS=off', { SOCKETS: 'off' }, false],
+      ['self-hosted realtime', { NIVARO_ROLE: 'realtime', SOCKETS: 'off' }, true],
+      ['shared web, nothing set', { ...shared }, true],
+      ['shared web, SOCKETS=on', { ...shared, SOCKETS: 'on' }, true],
+      // The realtime service holds the sockets of a large shared stack.
+      ['shared web, SOCKETS=off', { ...shared, NIVARO_ROLE: 'web', SOCKETS: 'off' }, false],
+      ['shared worker, SOCKETS=off', { ...shared, NIVARO_ROLE: 'worker', SOCKETS: 'off' }, false],
+      ['shared realtime', { ...shared, NIVARO_ROLE: 'realtime', SOCKETS: 'off' }, true],
+      ['cloud, nothing set', { ...cloud }, true],
+      ['cloud, SOCKETS=off', { ...cloud, SOCKETS: 'off' }, true],
+      ['cloud web, SOCKETS=off', { ...cloud, NIVARO_ROLE: 'web', SOCKETS: 'off' }, true]
+    ]
+    for (const [name, env, served] of rows)
+      expect([name, socketsServed(env)]).toEqual([name, served])
+    // isRealtimeRole is the role alone, whatever the deployment.
+    expect(isRealtimeRole({ ...shared, NIVARO_ROLE: 'realtime' })).toBe(true)
+    expect(isRealtimeRole({ ...cloud, NIVARO_ROLE: 'realtime' })).toBe(true)
+  })
+
+  it('refuses NIVARO_ROLE=realtime on Nivaro Cloud only', () => {
+    expect(realtimeRoleProblem({ NIVARO_ROLE: 'realtime' })).toBeNull()
+    expect(
+      realtimeRoleProblem({
+        NIVARO_ROLE: 'realtime',
+        HUB_SHARED_DEPLOYMENT: 'shared-a',
+        HUB_URL: 'https://hub.example',
+        HUB_DEPLOYMENT_TOKEN: 't'.repeat(40)
+      })
+    ).toBeNull()
+    expect(
+      realtimeRoleProblem({ NIVARO_ROLE: 'realtime', CLOUD_META_DB_URL: 'postgres://meta' })
+    ).toMatch(/not available on Nivaro Cloud/)
+  })
+
+  it('an extension socket handler stops the boot of a SOCKETS=off shared web process', () => {
+    const shared = {
+      HUB_SHARED_DEPLOYMENT: 'shared-a',
+      HUB_URL: 'https://hub.example',
+      HUB_DEPLOYMENT_TOKEN: 't'.repeat(40)
+    }
+    expect(() =>
+      refuseExtensionSocketHandlers(1, 2, socketsServed({ ...shared, SOCKETS: 'off' }))
+    ).toThrow(/SOCKETS=off/)
+    expect(() => refuseExtensionSocketHandlers(1, 2, socketsServed({ ...shared }))).not.toThrow()
+    expect(() =>
+      refuseExtensionSocketHandlers(
+        1,
+        2,
+        socketsServed({ CLOUD_META_DB_URL: 'postgres://meta', SOCKETS: 'off' })
+      )
+    ).not.toThrow()
   })
 })
 

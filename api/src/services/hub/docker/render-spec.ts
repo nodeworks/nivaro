@@ -4,7 +4,7 @@ import type { StackSpec } from './agent-types.js'
 import type { DockerDriverConfig } from './driver-config.js'
 import { type DatabaseRecordEnv, databaseEnvFor, databaseKey } from './stack-env.js'
 import type { StackSettingsRow } from './stack-settings.js'
-import { templateFor } from './templates.js'
+import { stackRoles } from './templates.js'
 
 /**
  * The Hub-side StackSpec renderer (Hub phase 4): one environment's stored settings + the version
@@ -40,6 +40,8 @@ export interface RenderStackInput {
   hubPublicUrl: string | null
   /** The environment's phase 3 database record, opened by the run only (never by a plan). */
   database?: DatabaseRecordEnv | null
+  /** The target agent's version (GET /v1/health `agent_version`); unknown = no exporter role. */
+  agentVersion?: string | null
 }
 
 export type StackRenderCode =
@@ -113,7 +115,7 @@ export function stackHostnames(
 
 export function renderStackSpec(input: RenderStackInput): StackSpec {
   const { env: environment, row, edge } = input
-  const roles = structuredClone(templateFor(input.version).sizes[row.size])
+  const roles = stackRoles(input.version, row.size, input.agentVersion)
   const base = noTrailingSlash(environment.base_url)
 
   const hostnames = stackHostnames(environment, edge)

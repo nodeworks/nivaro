@@ -40,7 +40,7 @@ import {
   deploymentClient
 } from '../shared/deployment-client.js'
 import { sharedPoolUsed } from '../shared/place.js'
-import { sharedRedisPrefix, sharedStackSettings } from '../shared/stack-render.js'
+import { sharedStackSettings } from '../shared/stack-render.js'
 import { getShared, openAppKey, type SharedDeployment, tenantIdFor } from '../shared/store.js'
 import { tenantsOf } from '../shared/tenants.js'
 import { parseReadiness } from './readiness-parse.js'
@@ -165,14 +165,20 @@ function codeOf(err: unknown, fallback: string): string {
   return typeof c === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(c) ? c : fallback
 }
 
-/** A Redis db + channel prefix as a hash (never the address or its password). */
-export function redisIdentity(url: string | null | undefined, prefix: string | null | undefined) {
+/**
+ * A Redis database (host, port, db number) as a hash, never the address or its password. The
+ * channel prefix is left out on purpose: it keeps pub/sub channels apart (pub/sub ignores the db
+ * number), but most keys carry no prefix (the cron leader lease, locks, caches), so two stacks on
+ * one Redis database collide whatever their prefixes. One stack, one Redis database.
+ */
+export function redisIdentity(url: string | null | undefined) {
   if (!url) return null
   try {
     const u = new URL(url)
     const db = u.pathname.replace(/^\//, '') || '0'
-    const port = u.port || (u.protocol === 'rediss:' ? '6380' : '6379')
-    return sha(`redis|${u.hostname.toLowerCase()}|${port}|${db}|${prefix ?? ''}`)
+    // Redis listens on 6379 with or without TLS unless told otherwise (redis:// and rediss://).
+    const port = u.port || '6379'
+    return sha(`redis|${u.hostname.toLowerCase()}|${port}|${db}`)
   } catch {
     return null
   }
@@ -181,14 +187,14 @@ export function redisIdentity(url: string | null | undefined, prefix: string | n
 /**
  * A shared deployment's Redis as a hash. bundled = its own (never shared). external = its
  * REDIS_URL from the deployment's sealed secrets (Task 5: one sealed JSON of plain values,
- * readSharedSecrets) with the channel prefix every shared stack runs with (sharedRedisPrefix).
- * null = the Hub cannot see it: registered, or no REDIS_URL it can open (REDIS_UNVERIFIED).
+ * readSharedSecrets). null = the Hub cannot see it: registered, or no REDIS_URL it can open
+ * (REDIS_UNVERIFIED).
  */
 async function sharedRedis(s: SharedDeployment): Promise<string | null> {
   if (s.mode !== 'docker') return null
   if (sharedStackSettings(s).redis !== 'external') return sha(`bundled|shared|${s.id}`)
   const url = (await readSharedSecrets(s.id)).REDIS_URL
-  return redisIdentity(url, sharedRedisPrefix(s.key))
+  return redisIdentity(url)
 }
 
 /** STORAGE_PROVIDER of a Hub-deployed shared stack: the renderer sets none, so env storage is
@@ -222,10 +228,7 @@ async function stackFacts(
   const redis =
     row.redis === 'bundled'
       ? sha(`bundled|docker|${driverId}|${stack}`)
-      : redisIdentity(
-          row.settings.REDIS_URL ?? secrets.REDIS_URL,
-          row.settings.REDIS_CHANNEL_PREFIX ?? null
-        )
+      : redisIdentity(row.settings.REDIS_URL ?? secrets.REDIS_URL)
   const key = secrets.ENCRYPTION_KEY
   return {
     redis,

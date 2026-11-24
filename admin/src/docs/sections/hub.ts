@@ -681,7 +681,7 @@ export const hubDockerDocs: DocSection = {
         ],
         [
           '`large`',
-          '`web` 3 replicas with sockets off (2 CPUs, 3072 MB), `worker` 1 (2 CPUs, 4096 MB), `realtime` 2 (1 CPU, 1024 MB) and `importer` 1 (2 CPUs, 4096 MB).'
+          '`web` 3 replicas with sockets off (2 CPUs, 3072 MB), `worker` 1 (2 CPUs, 4096 MB), `realtime` 2 (1 CPU, 1024 MB), `importer` 1 (2 CPUs, 4096 MB) and, from Nivaro 0.3.184 with Hub agent 0.2.2 or later, `exporter` 1 (2 CPUs, 4096 MB), which runs background exports; while it is down the importer, then the worker, run them. With an older agent (or one whose version is unknown) the stack has no exporter and the importer runs exports; nothing fails.'
         ]
       ]
     },
@@ -894,7 +894,7 @@ export const hubDockerDocs: DocSection = {
     },
     {
       type: 'p',
-      text: 'Agent refusals passed through as they are: `HOSTNAME_TAKEN` (another stack routes the name), `SPEC_INVALID` (with the refused fields, each as `field (code)`: `UNKNOWN_FIELD`, `REQUIRED`, `BAD_KEY`, `IMAGE_NOT_ALLOWED`, `IMAGE_NOT_PINNED`, `ENV_FORBIDDEN`, `ENV_NOT_ALLOWED`, `ROLE_BAD`, `REPLICAS_BAD`, `LIMIT_BAD`, `HOSTNAME_NOT_ALLOWED`, `TOO_MANY`, `TOO_LONG`, `PORT_NOT_ALLOWED`, `REDIS_NOT_CONFIGURED`, `EXTENSION_ID_BAD`, `SETTING_INVALID`, `SHARED_KEY_MISMATCH` (a shared stack names another key than its owner), `ROLE_NOT_SHARED` (a shared stack has no realtime role)), `SPEC_MISMATCH` (a restart: the stack does not run the spec sent), `STACK_NAME_INVALID`, `STACK_NOT_FOUND`, `STACK_NOT_HUB`, `STACK_OWNER_MISMATCH`, `EXPECT_INVALID`, `ENGINE_FORBIDDEN` (the agent guard refused an Engine call it built, so nothing reached Docker), `ENGINE_ERROR` (Docker refused a call), `REDIS_NOT_CONFIGURED`, `EXTENSION_INVALID` and `IMAGE_PULL_FAILED`. The Hub turns each into one plain sentence and never shows the agent body text.'
+      text: 'Agent refusals passed through as they are: `HOSTNAME_TAKEN` (another stack routes the name), `SPEC_INVALID` (with the refused fields, each as `field (code)`: `UNKNOWN_FIELD`, `REQUIRED`, `BAD_KEY`, `IMAGE_NOT_ALLOWED`, `IMAGE_NOT_PINNED`, `ENV_FORBIDDEN`, `ENV_NOT_ALLOWED`, `ROLE_BAD`, `REPLICAS_BAD`, `LIMIT_BAD`, `HOSTNAME_NOT_ALLOWED`, `TOO_MANY`, `TOO_LONG`, `PORT_NOT_ALLOWED`, `REDIS_NOT_CONFIGURED`, `EXTENSION_ID_BAD`, `SETTING_INVALID`, `SHARED_KEY_MISMATCH` (a shared stack names another key than its owner), `ROLE_NOT_SHARED` (a shared stack has no realtime role, and a split needs a web and a worker)), `SPEC_MISMATCH` (a restart: the stack does not run the spec sent), `STACK_NAME_INVALID`, `STACK_NOT_FOUND`, `STACK_NOT_HUB`, `STACK_OWNER_MISMATCH`, `EXPECT_INVALID`, `ENGINE_FORBIDDEN` (the agent guard refused an Engine call it built, so nothing reached Docker), `ENGINE_ERROR` (Docker refused a call), `REDIS_NOT_CONFIGURED`, `EXTENSION_INVALID` and `IMAGE_PULL_FAILED`. The Hub turns each into one plain sentence and never shows the agent body text.'
     },
     {
       type: 'warn',

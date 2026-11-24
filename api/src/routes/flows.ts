@@ -10,7 +10,7 @@ import { logActivity } from '../services/activity.js'
 import { checkAudienceConfirm, logAudienceConfirm } from '../services/audience-gate.js'
 import { type AudiencePreview, isSendingFlowOperation } from '../services/audience-preview.js'
 import { staleConfigRefusal } from '../services/config-watch.js'
-import { tenantSource } from '../services/deployment-mode.js'
+import { perAppJobs, tenantSource } from '../services/deployment-mode.js'
 import { executeFlow } from '../services/flow-executor.js'
 import { flowHealth } from '../services/flow-health.js'
 import { registerReadinessCheck } from '../services/readiness.js'
@@ -351,7 +351,11 @@ registerScheduleResync('flows', async (app) => {
   return reconcile(app, FLOW_CRON_PREFIX, desired)
 })
 
+/** Self-hosted boot: schedule every active scheduled flow. Never on a Hub shared deployment —
+ *  no database outside an app; each app's flows are bound to it by the flows resync when the app
+ *  becomes ready (services/row-schedules.ts registerRowScheduleLifecycle). */
 export async function loadScheduledFlows(app: FastifyInstance) {
+  if (perAppJobs()) return
   const flows = await db<Flow>('nivaro_flows').where({ trigger: 'schedule', status: 'active' })
   for (const flow of flows) {
     try {
@@ -544,7 +548,7 @@ export async function flowsRoutes(app: FastifyInstance) {
   app.addHook('onResponse', async (req, reply) => {
     if (req.method === 'GET' || reply.statusCode >= 400) return
     if (/\/(test|test-send|run|replay|webhook)(\/|$|\?)/.test(req.url)) return
-    announceScheduleChange()
+    announceScheduleChange('flows')
   })
   if (!flowHealthCheckRegistered) {
     flowHealthCheckRegistered = true

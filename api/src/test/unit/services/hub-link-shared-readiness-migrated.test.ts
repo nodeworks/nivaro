@@ -1,12 +1,13 @@
 import { randomUUID } from 'node:crypto'
 import { rmSync } from 'node:fs'
 import type { Knex } from 'knex'
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 // Nivaro Hub phase 6 Task 9 fix round 1 (review Minor 7): a warning check that throws is left
 // out of the report, so a wrong column name would hide it. These checks run over tables made by
 // the REAL migrations (149 push subscriptions, 154 session recordings, 313 directory sync, 407
-// help videos), with only the base tables they reference stubbed.
+// help videos, 554 the app's own directory app registration), with only the base tables they
+// reference stubbed.
 
 const h = vi.hoisted(() => ({ dir: '', db: null as unknown }))
 
@@ -28,7 +29,15 @@ vi.mock('../../../db/index.js', async () => {
   return { db: h.db }
 })
 vi.mock('../../../config.js', () => ({
-  config: { NODE_ENV: 'production', DB_CLIENT: 'pg', DB_MARIADB: false, OIDC_ISSUER: '' }
+  config: {
+    NODE_ENV: 'production',
+    DB_CLIENT: 'pg',
+    DB_MARIADB: false,
+    OIDC_ISSUER: '',
+    GRAPH_TENANT_ID: 'graph-tenant',
+    GRAPH_CLIENT_ID: 'graph-client',
+    GRAPH_CLIENT_SECRET: 'graph-secret'
+  }
 }))
 vi.mock('../../../services/trackers/feature.js', () => ({ trackersEnabled: async () => false }))
 vi.mock('../../../services/teams-bot/config.js', () => ({
@@ -48,7 +57,8 @@ const MIGRATIONS = [
   '149_push_subscriptions',
   '154_session_recordings',
   '313_directory_sync',
-  '407_help_videos'
+  '407_help_videos',
+  '554_directory_graph_app'
 ]
 
 beforeAll(async () => {
@@ -74,13 +84,19 @@ beforeAll(async () => {
   }
 })
 
+// The env relay key a test sets never outlives it, whatever fails first.
+afterEach(() => {
+  delete process.env.MOBILE_PUSH_RELAY_KEY
+})
+
 afterAll(async () => {
   await db.destroy()
   if (h.dir) rmSync(h.dir, { recursive: true, force: true })
 })
 
 describe('warnings over the real migrated columns', () => {
-  it('directory sync, phone push, session replays, help videos and queued renders are seen', async () => {
+  it('env directory and relay credentials, session replays, help videos and queued renders are seen', async () => {
+    process.env.MOBILE_PUSH_RELAY_KEY = 'relay-key'
     const user = randomUUID()
     const file = randomUUID()
     const video = randomUUID()
@@ -103,7 +119,7 @@ describe('warnings over the real migrated columns', () => {
     await db('nivaro_settings').insert({ id: 1, directory_sync_enabled: true })
     await db('nivaro_push_subscriptions').insert({
       user,
-      endpoint: 'expo:ExponentPushToken[abc]',
+      endpoint: 'relay:device-1',
       endpoint_hash: 'h1',
       keys_p256dh: '-',
       keys_auth: '-'
@@ -124,8 +140,13 @@ describe('warnings over the real migrated columns', () => {
 
     const r = await computeSharedReadiness()
     const codes = Object.fromEntries(r.codes.map((c) => [c.code, c]))
-    expect(codes.DIRECTORY_SYNC?.level).toBe('warning')
-    expect(codes.PHONE_PUSH?.detail).toBe('1 phone gets alerts from this app')
+    // Directory sync and phone push run per app on a shared deployment now: only the server's own
+    // credentials they use today are warned about.
+    expect(codes.DIRECTORY_SYNC).toBeUndefined()
+    expect(codes.PHONE_PUSH).toBeUndefined()
+    expect(codes.DIRECTORY_ENV_CREDENTIALS?.level).toBe('warning')
+    expect(codes.PUSH_RELAY_ENV?.level).toBe('warning')
+    expect(JSON.stringify(r)).not.toMatch(/graph-secret|relay-key/)
     expect(codes.SESSION_REPLAYS?.detail).toBe('1 session replay stays behind')
     expect(codes.HELP_VIDEO_RENDERS?.level).toBe('warning')
     expect(r.busy.renders).toBe(1)

@@ -339,6 +339,10 @@ export const UPGRADE_COPY: Record<string, { title: string; hint?: string }> = {
     title: 'This deployment uses external Redis, but no Redis address is stored',
     hint: 'Edit the deployment and enter its Redis address, or set Redis to Bundled, then plan again.'
   },
+  REDIS_DB_SHARED: {
+    title: 'Another stack already uses this Redis database',
+    hint: 'Give this deployment its own Redis database (another database number at the end of its Redis address, or its own Redis), then plan again.'
+  },
   REDIS_NOT_AVAILABLE: {
     title: 'The Docker host cannot run the Redis this deployment needs',
     hint: 'Allow bundled Redis on the agent, or use external Redis, then plan again.'

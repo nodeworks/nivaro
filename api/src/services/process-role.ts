@@ -19,8 +19,13 @@
  * A web process with SOCKETS=off serves no /socket.io; what it emits reaches the clients on the
  * realtime processes through the Socket.io Redis adapter and the event stream. Nothing set =
  * one process that does everything, sockets included (the historic behaviour).
+ *
+ * Where: self-hosted (one app), and a Hub shared deployment (many apps), where a realtime
+ * process resolves the app per connection and per stream request exactly as a shared web
+ * process does (realtime-server.ts). Never Nivaro Cloud: every Cloud process serves its own
+ * sockets and NIVARO_ROLE=realtime is refused there (realtimeRoleProblem).
  */
-import { isMultiTenant } from './deployment-mode.js'
+import { isNivaroCloud, tenantSource } from './deployment-mode.js'
 
 type Env = Record<string, string | undefined>
 
@@ -35,12 +40,24 @@ export function isRealtimeRole(env: Env = process.env): boolean {
 }
 
 /**
- * Does this process serve socket connections? Realtime: always. Cloud mode: always (the
- * realtime tier is self-hosted only). Otherwise unless SOCKETS=off.
+ * Does this process serve socket connections? Realtime: always. Nivaro Cloud: always (it has no
+ * realtime tier). Otherwise — self-hosted, and a Hub shared deployment whose realtime service
+ * holds the sockets — unless SOCKETS=off.
  */
 export function socketsServed(env: Env = process.env): boolean {
-  if (isRealtimeRole(env) || isMultiTenant(env)) return true
+  if (isRealtimeRole(env) || isNivaroCloud(env)) return true
   return (env.SOCKETS ?? '').trim().toLowerCase() !== 'off'
+}
+
+/**
+ * Why this deployment cannot run a realtime process (NIVARO_ROLE=realtime), or null when it can.
+ * Self-hosted and a Hub shared deployment can; Nivaro Cloud cannot (every Cloud process serves
+ * its own sockets, and its edge routes no path to a realtime tier). index.ts refuses the boot
+ * with this sentence and buildRealtimeServer() throws it.
+ */
+export function realtimeRoleProblem(env: Env = process.env): string | null {
+  if (!isNivaroCloud(env)) return null
+  return 'NIVARO_ROLE=realtime is not available on Nivaro Cloud: every Cloud process serves its own live connections. Unset NIVARO_ROLE.'
 }
 
 /**
@@ -262,6 +279,36 @@ export async function probeRealtimeRouting(
   } catch {
     return null
   }
+}
+
+/**
+ * Where the routing probe (probeRealtimeRouting) asks. Self-hosted: PUBLIC_URL. A Hub shared
+ * deployment sets no PUBLIC_URL, and its fallback (http://localhost:<PORT>) is the web process
+ * itself, whose tenant hook refuses the host `localhost` with no X-Nivaro-Role — every app would
+ * read "the proxy does not route". There the probe asks the app's own origin (`appOrigin`: the
+ * verified origin the request runs in, tenantOrigin()), the address the proxy routes; with no app
+ * origin (a check run outside an app) nothing is probed (undefined: the probe answers null, "cannot
+ * tell", never a failure). Nivaro Cloud serves its own sockets and never probes.
+ */
+export function realtimeProbeBase(
+  publicUrl: string | undefined,
+  appOrigin: string | null | undefined,
+  env: Env = process.env
+): string | undefined {
+  if (tenantSource(env) === 'hub') return appOrigin || undefined
+  return publicUrl
+}
+
+/**
+ * Does this process take part in the realtime board (services/realtime-board.ts)? Self-hosted,
+ * and a Hub shared deployment, whose web processes with SOCKETS=off hold no sockets: without the
+ * board every "is anyone watching?" gate in front of an emit (roomListeners, recordRoomHasViewers)
+ * reads 0 there and the Traffic Map feed, flow watch, live AI calls and agent presence never fire.
+ * Every room the board carries on a shared deployment is app-scoped (`t:<app>:`); its answers keyed
+ * by a user id alone stay off there (boardAnswersUsers). Never Nivaro Cloud (per-process answers).
+ */
+export function realtimeBoardRuns(env: Env = process.env): boolean {
+  return !isNivaroCloud(env)
 }
 
 /** Roles that run one queue only and answer nothing but health (importer, exporter). */

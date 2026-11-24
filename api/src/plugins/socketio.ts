@@ -102,6 +102,7 @@ import {
 import { emitterOnlyAdapter, socketsServed } from '../services/process-role.js'
 import {
   type BoardCollector,
+  boardAnswersUsers,
   boardConcurrency,
   boardHasUser,
   boardIsViewing,
@@ -470,8 +471,11 @@ function tenantSocketsRoom(tenant: string): string {
 
 export function getRealtimeStats(): ReturnType<typeof localRealtimeStats> {
   // Post-mortem 3.3 — SOCKETS=off: every realtime process's sockets (the board).
+  // A Hub shared deployment: the caller's app only (boardRealtimeStats).
   if (boardReaderOn())
-    return boardRealtimeStats() as unknown as ReturnType<typeof localRealtimeStats>
+    return boardRealtimeStats(currentTenantKey()) as unknown as ReturnType<
+      typeof localRealtimeStats
+    >
   return localRealtimeStats()
 }
 
@@ -605,15 +609,18 @@ function socketTenantKey(socketId: string): string | null {
  * Realtime round 2 — the collections a list, queue or open record is watching right now, across
  * every process this one can see (its own socket rooms + the realtime board). Null when this
  * process cannot see every socket (no board, Redis away, cloud mode): callers then treat every
- * collection as watched rather than skip one somebody has open.
+ * collection as watched rather than skip one somebody has open. With `tenantKey` (a Hub shared
+ * deployment) only that app's rooms count.
  */
-export function getLiveCollectionNames(): Set<string> | null {
+export function getLiveCollectionNames(tenantKey?: string): Set<string> | null {
   if (!boardKnowsEveryone()) return null
+  // A Hub shared deployment with no app named: the board holds every app's rooms, so "cannot tell".
+  if (!tenantKey && tenantSource() === 'hub') return null
   const rooms: string[] = []
   for (const [room] of _ioRef?.sockets.adapter.rooms ?? []) rooms.push(room)
   for (const b of boardLive()) rooms.push(...Object.keys(b.viewers ?? {}))
   for (const s of boardStats()) for (const r of s.rooms ?? []) rooms.push(r.room)
-  return liveCollectionsFrom(rooms)
+  return liveCollectionsFrom(rooms, tenantKey)
 }
 
 /** Local concurrency snapshot for the sampling cron (#275). */
@@ -669,7 +676,8 @@ function collectLocalLive(io: SocketIOServer | null): LocalBoard['live'] {
   }
   return {
     sockets: io?.engine?.clientsCount ?? socketMeta.size,
-    users: [...users],
+    // Bare user ids name no app: none on a Hub shared deployment (boardAnswersUsers).
+    users: boardAnswersUsers() ? [...users] : [],
     viewers,
     pages,
     rooms,

@@ -3,7 +3,7 @@ import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { sqlDialect } from '../db/sql-dialect.js'
 import { hasColumn } from '../lib/column-probe.js'
-import { isMultiTenant } from './deployment-mode.js'
+import { isNivaroCloud } from './deployment-mode.js'
 import { getApp } from './io-holder.js'
 import { retentionPassSchedule } from './retention-schedule.js'
 
@@ -514,7 +514,10 @@ export async function logRetentionInventory(): Promise<{
     existingTables(tables),
     rowCounts(tables)
   ])
-  const pass = retentionPassSchedule()
+  // A shared deployment's pass is its `retention-pass` job: before this app's first run there,
+  // the job's next fire time is the next run (self-hosted has no such job: unchanged).
+  const noted = retentionPassSchedule()
+  const pass = { ...noted, next_run_at: noted.next_run_at ?? cronNext('retention-pass') }
   const entries: LogRetentionEntry[] = []
   // Oldest-row reads a few at a time — each is one seek, but they add up.
   const oldestAt = new Map<string, string | null>()
@@ -551,5 +554,6 @@ export async function logRetentionInventory(): Promise<{
       present: isPresent
     })
   }
-  return { entries, retention_pass: pass, cloud: isMultiTenant() }
+  // `cloud`: the pass never runs here (Nivaro Cloud). A Hub shared deployment runs it per app.
+  return { entries, retention_pass: pass, cloud: isNivaroCloud() }
 }

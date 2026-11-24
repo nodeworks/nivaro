@@ -8,7 +8,7 @@ import { parsePinned } from './image-ref.js'
 import { KNOWN_ENV_KEYS } from './known-env.js'
 import { ENV_KEY_RE } from './names.js'
 
-export type Role = 'all' | 'web' | 'worker' | 'realtime' | 'importer'
+export type Role = 'all' | 'web' | 'worker' | 'realtime' | 'importer' | 'exporter'
 
 export type RoleSpec = {
   role: Role
@@ -83,7 +83,8 @@ export type SpecResult = { ok: true; spec: StackSpec } | { ok: false; fields: Fi
 /** owner.app / owner.shared / environment. */
 export const OWNER_KEY_RE = /^[a-z][a-z0-9-]{1,62}$/
 export const EXTENSION_ID_RE = /^[a-z0-9][a-z0-9-]{0,62}$/
-export const ROLES: readonly Role[] = ['all', 'web', 'worker', 'realtime', 'importer']
+// `exporter` (Nivaro NIVARO_ROLE=exporter, 0.3.184+): background exports only, never routed.
+export const ROLES: readonly Role[] = ['all', 'web', 'worker', 'realtime', 'importer', 'exporter']
 export const ROLE_ENV_KEYS: readonly string[] = [
   'SOCKETS',
   'CRON_TICKS',
@@ -486,8 +487,8 @@ export function validateStackSpec(body: unknown, cfg: SpecConfig): SpecResult {
       if (typeof role !== 'string' || !(ROLES as readonly string[]).includes(role)) {
         bad(`${p}.role`, 'ROLE_BAD')
       } else if (seen.has(role)) bad(`${p}.role`, 'ROLE_BAD')
-      // A shared deployment runs no separate realtime role (phase 6).
-      else if (sharedKey !== null && role === 'realtime') bad(`${p}.role`, 'ROLE_NOT_SHARED')
+      // A shared deployment may run a realtime role (0.2.2: Nivaro's realtime process serves
+      // every app of the deployment from 0.3.212; the Hub renders it on large stacks only).
       // Final review E-1: the realtime router's path rule is Traefik v3 PathRegexp syntax; v2
       // would never route it (realtime lost without a word). The publish edge routes no paths.
       else if (role === 'realtime' && cfg.edge === 'traefik' && cfg.traefikVersion === 2)
@@ -538,6 +539,17 @@ export function validateStackSpec(body: unknown, cfg: SpecConfig): SpecResult {
       roles.push(out)
     })
     if (seen.has('all') && body.roles.length > 1) bad('roles', 'ROLE_BAD')
+    // Task 14: a shared stack is `all` alone, or a split with a `web` (someone serves the apps)
+    // and a `worker` (the role that ticks every app's crons: its scheduled jobs, its import
+    // fan-out); `importer` and `exporter` are optional beside them (Task 15). Checked only when
+    // every role was readable (a bad one has its own code).
+    else if (
+      sharedKey !== null &&
+      seen.size === body.roles.length &&
+      !seen.has('all') &&
+      !(seen.has('web') && seen.has('worker'))
+    )
+      bad('roles', 'ROLE_NOT_SHARED')
     if (total > MAX_TOTAL_REPLICAS) bad('roles', 'REPLICAS_BAD')
   }
 

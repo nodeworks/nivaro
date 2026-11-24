@@ -109,7 +109,7 @@ async function insertId(table: string, row: Record<string, unknown>): Promise<nu
 function health(over: Partial<AgentHealth> = {}): AgentHealth {
   return {
     api: 1,
-    agent_version: '0.2.0',
+    agent_version: '0.2.2',
     engine_api: '1.44',
     swarm: { manager: true, node_id: 'n1', nodes: 1 },
     images: ['nodeworks/nivaro', 'registry.example.com/acme/reports'],
@@ -541,6 +541,294 @@ describe('planSharedUpgrade', () => {
       })
     )
     expect(codes(plan.warnings).sort()).toEqual(['HUB_URL_PROBLEM', 'MULTI_NODE_VOLUMES'])
+  })
+})
+
+describe('Task 14: the role split is a normal shared upgrade', () => {
+  const names = (roles: Array<{ role: string }>) => roles.map((r) => r.role)
+  const success = (id: number, plan: unknown) =>
+    db('nivaro_hub_shared_deploys').insert({
+      shared_deployment_id: id,
+      kind: 'upgrade',
+      version: '0.3.209',
+      status: 'success',
+      plan: JSON.stringify(plan)
+    })
+
+  it('the plan lists the services it deploys; a first deploy has nothing to change from', async () => {
+    const id = await newShared({ settings: JSON.stringify({ size: 'medium' }) })
+    await newApp(id, [{ key: 'production', placed: true }])
+    const plan = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', planDeps())
+    expect(plan.blockers).toEqual([])
+    expect(plan.roles).toEqual([
+      { role: 'web', replicas: 2 },
+      { role: 'worker', replicas: 1 },
+      { role: 'importer', replicas: 1 },
+      { role: 'exporter', replicas: 1 }
+    ])
+    expect(plan.roles_from).toBeNull()
+    expect(codes(plan.warnings)).not.toContain('ROLES_CHANGE')
+  })
+
+  it('small (a run before the split: one all) → medium: ROLES_CHANGE names the services added and removed', async () => {
+    const id = await newShared({ settings: JSON.stringify({ size: 'medium' }) })
+    await newApp(id, [{ key: 'production', placed: true }])
+    // A run recorded before the split carries no roles: it deployed one `all` service.
+    await success(id, { plan: {}, image: `nodeworks/nivaro@${DIGEST}`, extensions: {} })
+    const plan = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', planDeps())
+    expect(plan.roles_from).toEqual(['all'])
+    expect(names(plan.roles)).toEqual(['web', 'worker', 'importer', 'exporter'])
+    const w = plan.warnings.find((x) => x.code === 'ROLES_CHANGE')
+    expect(w?.text).toContain('adds web, worker, importer, exporter')
+    expect(w?.text).toContain('removes all')
+    expect(plan.blockers).toEqual([])
+  })
+
+  it('the same roles as the last run: no ROLES_CHANGE; back to small names the split going away', async () => {
+    const id = await newShared({ settings: JSON.stringify({ size: 'medium' }) })
+    await newApp(id, [{ key: 'production', placed: true }])
+    await success(id, {
+      plan: {
+        roles: [
+          { role: 'web', replicas: 2 },
+          { role: 'worker', replicas: 1 },
+          { role: 'importer', replicas: 1 },
+          { role: 'exporter', replicas: 1 }
+        ]
+      }
+    })
+    const same = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', planDeps())
+    expect(same.roles_from).toEqual(['web', 'worker', 'importer', 'exporter'])
+    expect(codes(same.warnings)).not.toContain('ROLES_CHANGE')
+    await db('nivaro_hub_shared_deployments')
+      .where({ id })
+      .update({ settings: JSON.stringify({ size: 'small' }) })
+    const back = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', planDeps())
+    expect(names(back.roles)).toEqual(['all'])
+    const w = back.warnings.find((x) => x.code === 'ROLES_CHANGE')
+    expect(w?.text).toContain('adds all')
+    expect(w?.text).toContain('removes web, worker, importer, exporter')
+    expect(back.plan_hash).not.toBe(same.plan_hash)
+  })
+
+  it('controller ruling: a split needs agent 0.2.2 (AGENT_TOO_OLD); small keeps the 0.2.0 floor', async () => {
+    const id = await newShared({ settings: JSON.stringify({ size: 'medium' }) })
+    await newApp(id, [{ key: 'production', placed: true }])
+    const at = (agent_version: string) =>
+      planDeps({ agentHealth: async () => health({ agent_version }) })
+    const old = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', at('0.2.1'))
+    expect(codes(old.blockers)).toEqual(['AGENT_TOO_OLD'])
+    expect(old.blockers[0].text).toBe(
+      'The Hub agent is 0.2.1; a shared deployment split into web, worker, importer, exporter needs 0.2.2 or later.'
+    )
+    // Unknown is too old for anything (one blocker, the 0.2.0 sentence).
+    const unknown = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', at('dev'))
+    expect(codes(unknown.blockers)).toEqual(['AGENT_TOO_OLD'])
+    expect(unknown.blockers[0].text).toContain('need 0.2.0 or later')
+    expect(
+      codes((await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', at('0.2.2'))).blockers)
+    ).toEqual([])
+    // A re-apply of a split that runs is held to it too (the agent re-sends every service).
+    await success(id, {
+      plan: {
+        roles: [
+          { role: 'web', replicas: 2 },
+          { role: 'worker', replicas: 1 },
+          { role: 'importer', replicas: 1 }
+        ]
+      }
+    })
+    const reapply = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', {
+      ...at('0.2.1'),
+      roleShape: 'deployed'
+    })
+    expect(codes(reapply.blockers)).toContain('AGENT_TOO_OLD')
+    // Small: one `all`, which every shared-capable agent takes.
+    await db('nivaro_hub_shared_deployments')
+      .where({ id })
+      .update({ settings: JSON.stringify({ size: 'small' }) })
+    expect(
+      codes((await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', at('0.2.0'))).blockers)
+    ).toEqual([])
+  })
+
+  it('Task 15: a stack that runs the Task 14 split gains the exporter only through an upgrade', async () => {
+    const id = await newShared({ settings: JSON.stringify({ size: 'medium' }) })
+    await newApp(id, [{ key: 'production', placed: true }])
+    await success(id, {
+      plan: {
+        roles: [
+          { role: 'web', replicas: 2 },
+          { role: 'worker', replicas: 1 },
+          { role: 'importer', replicas: 1 }
+        ]
+      }
+    })
+    const plan = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', planDeps())
+    expect(plan.roles_from).toEqual(['web', 'worker', 'importer'])
+    expect(names(plan.roles)).toEqual(['web', 'worker', 'importer', 'exporter'])
+    const w = plan.warnings.find((x) => x.code === 'ROLES_CHANGE')
+    expect(w?.text).toContain('(size medium): adds exporter.')
+    expect(plan.blockers).toEqual([])
+  })
+
+  it('the run applies the split and records the roles it deployed', async () => {
+    const id = await newShared({ settings: JSON.stringify({ size: 'large' }) })
+    const a = await newApp(id, [{ key: 'staging', placed: true }])
+    await success(id, { plan: {}, image: `nodeworks/nivaro@${DIGEST}`, extensions: {} })
+    const f = fakes()
+    const ta = Store.tenantIdFor({ key: a.appKey }, { id: a.envIds[0] })
+    f.schema = { [ta]: { state: 'ok', error: null } }
+    f.served = { [`https://${a.appKey}-staging.apps.example.com/api/version`]: '0.3.210' }
+    const { deps, out } = runDeps(f)
+    const { row, plan } = await start(id, deps)
+    expect(out.failed).toBeNull()
+    expect(row?.status).toBe('success')
+    expect(codes(plan.warnings)).toContain('ROLES_CHANGE')
+    expect(names(f.applied[0].roles)).toEqual(['web', 'worker', 'importer', 'exporter'])
+    expect(f.applied[0].roles[0]).toMatchObject({ replicas: 3, env: { CRON_TICKS: 'off' } })
+    // The next plan reads the roles this run recorded: nothing changes any more.
+    const next = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', planDeps())
+    expect(next.roles_from).toEqual(['web', 'worker', 'importer', 'exporter'])
+    expect(codes(next.warnings)).not.toContain('ROLES_CHANGE')
+  })
+})
+
+describe('realtime on a large shared stack', () => {
+  const names = (roles: Array<{ role: string }>) => roles.map((r) => r.role)
+  it('an upgrade to 0.3.212 on Traefik v3 adds realtime; older images, v2 and medium do not', async () => {
+    const id = await newShared({ settings: JSON.stringify({ size: 'large' }) })
+    const plan = await Plan.planSharedUpgrade(id, '0.3.212', 'upgrade', planDeps())
+    expect(names(plan.roles)).toEqual(['web', 'worker', 'realtime', 'importer', 'exporter'])
+    const older = await Plan.planSharedUpgrade(id, '0.3.211', 'upgrade', planDeps())
+    expect(names(older.roles)).not.toContain('realtime')
+    const v2 = await Plan.planSharedUpgrade(
+      id,
+      '0.3.212',
+      'upgrade',
+      planDeps({ agentHealth: async () => health({ traefik_version: 2 }) })
+    )
+    expect(names(v2.roles)).not.toContain('realtime')
+    const medium = await newShared({ settings: JSON.stringify({ size: 'medium' }) })
+    const m = await Plan.planSharedUpgrade(medium, '0.3.212', 'upgrade', planDeps())
+    expect(names(m.roles)).not.toContain('realtime')
+  })
+})
+
+describe('Task 14 ruling I2: only an upgrade changes the roles; every apply records them', () => {
+  const names = (roles: Array<{ role: string }>) => roles.map((r) => r.role)
+  const recordedRoles = async (deployId: number) =>
+    JSON.parse(String((await db('nivaro_hub_shared_deploys').where({ id: deployId }).first()).plan))
+      .plan.roles
+
+  async function reapply(id: number) {
+    const f = fakes()
+    f.sightings = [
+      { instance: 'i1', version: '0.3.209', etag: null, at: new Date(START).toISOString() }
+    ]
+    f.statusVersion = '0.3.209'
+    const { deps } = runDeps(f)
+    await Store.rotateSharedToken(id)
+    const shared = await Store.getShared(id)
+    const r = await Run.startSharedReapply(shared as NonNullable<typeof shared>, 'admin-1', deps)
+    expect(r.started).toBe(true)
+    await Run.awaitSharedUpgrade(r.shared_deploy_id as number)
+    expect((await Run.readSharedDeploy(r.shared_deploy_id as number))?.status).toBe('success')
+    return { f, deployId: r.shared_deploy_id as number }
+  }
+
+  it('a re-apply of a medium deployment last deployed as `all` stays `all` and records it', async () => {
+    const id = await newShared({ settings: JSON.stringify({ size: 'medium' }) })
+    await db('nivaro_hub_shared_deploys').insert({
+      shared_deployment_id: id,
+      kind: 'upgrade',
+      version: '0.3.209',
+      status: 'success',
+      plan: JSON.stringify({ plan: {}, image: `nodeworks/nivaro@${DIGEST}`, extensions: {} })
+    })
+    const { f, deployId } = await reapply(id)
+    // The pre-split shape, exactly as it rendered before the split: `all` ×2 at medium.
+    expect(f.applied[0].roles).toEqual([{ role: 'all', replicas: 2, cpus: 2, memory_mb: 4096 }])
+    expect(await recordedRoles(deployId)).toEqual([{ role: 'all', replicas: 2 }])
+    // The next upgrade plan still says the truth: the split is a change from `all`.
+    const plan = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', planDeps())
+    expect(plan.roles_from).toEqual(['all'])
+    expect(codes(plan.warnings)).toContain('ROLES_CHANGE')
+  })
+
+  it('Task 15: a re-apply of a stack that runs web, worker, importer keeps it (no exporter)', async () => {
+    const id = await newShared({ settings: JSON.stringify({ size: 'large' }) })
+    await db('nivaro_hub_shared_deploys').insert({
+      shared_deployment_id: id,
+      kind: 'upgrade',
+      version: '0.3.209',
+      status: 'success',
+      plan: JSON.stringify({
+        plan: {
+          roles: [
+            { role: 'web', replicas: 3 },
+            { role: 'worker', replicas: 1 },
+            { role: 'importer', replicas: 1 }
+          ]
+        },
+        image: `nodeworks/nivaro@${DIGEST}`,
+        extensions: {}
+      })
+    })
+    const { f, deployId } = await reapply(id)
+    expect(names(f.applied[0].roles)).toEqual(['web', 'worker', 'importer'])
+    expect(await recordedRoles(deployId)).toEqual([
+      { role: 'web', replicas: 3 },
+      { role: 'worker', replicas: 1 },
+      { role: 'importer', replicas: 1 }
+    ])
+  })
+
+  it('a re-apply with nothing recorded at all renders the pre-split shape', async () => {
+    const id = await newShared({ settings: JSON.stringify({ size: 'large' }) })
+    const { f } = await reapply(id)
+    expect(f.applied[0].roles).toEqual([{ role: 'all', replicas: 3, cpus: 2, memory_mb: 4096 }])
+  })
+
+  it('the upgrade switches and records; a later re-apply keeps the split', async () => {
+    const id = await newShared({ settings: JSON.stringify({ size: 'medium' }) })
+    const a = await newApp(id, [{ key: 'staging', placed: true }])
+    await db('nivaro_hub_shared_deploys').insert({
+      shared_deployment_id: id,
+      kind: 'upgrade',
+      version: '0.3.209',
+      status: 'success',
+      plan: JSON.stringify({ plan: {}, image: `nodeworks/nivaro@${DIGEST}`, extensions: {} })
+    })
+    const f = fakes()
+    const ta = Store.tenantIdFor({ key: a.appKey }, { id: a.envIds[0] })
+    f.schema = { [ta]: { state: 'ok', error: null } }
+    f.served = { [`https://${a.appKey}-staging.apps.example.com/api/version`]: '0.3.210' }
+    const { deps } = runDeps(f)
+    const { row, plan } = await start(id, deps)
+    expect(row?.status).toBe('success')
+    expect(codes(plan.warnings)).toContain('ROLES_CHANGE')
+    expect(await recordedRoles(row?.id as number)).toEqual([
+      { role: 'web', replicas: 2 },
+      { role: 'worker', replicas: 1 },
+      { role: 'importer', replicas: 1 },
+      { role: 'exporter', replicas: 1 }
+    ])
+    const next = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', planDeps())
+    expect(codes(next.warnings)).not.toContain('ROLES_CHANGE')
+    // A re-apply (here: the size set back to small without an upgrade) keeps what runs.
+    await db('nivaro_hub_shared_deployments')
+      .where({ id })
+      .update({ settings: JSON.stringify({ size: 'small' }) })
+    const g = fakes()
+    const { deps: d2 } = runDeps(g)
+    await Store.rotateSharedToken(id)
+    const shared = await Store.getShared(id)
+    const r = await Run.startSharedReapply(shared as NonNullable<typeof shared>, 'admin-1', d2)
+    expect(r.started).toBe(true)
+    await Run.awaitSharedUpgrade(r.shared_deploy_id as number)
+    expect(names(g.applied[0].roles)).toEqual(['web', 'worker', 'importer', 'exporter'])
+    expect(g.applied[0].roles[0]).toMatchObject({ replicas: 2, env: { CRON_TICKS: 'off' } })
   })
 })
 
@@ -1239,11 +1527,60 @@ describe('re-apply after a run that never reached apply (N-2)', () => {
   })
 })
 
+describe('one stack, one Redis database (REDIS_DB_SHARED)', () => {
+  it('refuses a REDIS_URL naming the database another shared deployment uses, whatever the password', async () => {
+    const first = await newShared({ settings: JSON.stringify({ redis: 'external' }) })
+    await Run.setSharedSecrets(first, {
+      REDIS_URL: 'redis://:pw-a@redis-shared-db.example.com:6379/5'
+    })
+    const firstName = (await db('nivaro_hub_shared_deployments').where({ id: first }).first()).name
+    const id = await newShared({ settings: JSON.stringify({ redis: 'external' }) })
+    await Run.setSharedSecrets(id, { REDIS_URL: 'redis://:pw-b@REDIS-SHARED-DB.example.com/5' })
+    const plan = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', planDeps())
+    const b = plan.blockers.find((x) => x.code === 'REDIS_DB_SHARED')
+    expect(b?.text).toContain(`shared deployment ${firstName}`)
+    expect(JSON.stringify(plan)).not.toContain('pw-a')
+    expect(JSON.stringify(plan)).not.toContain('redis-shared-db')
+    // Another database number on the same Redis: nothing shared.
+    await Run.setSharedSecrets(id, { REDIS_URL: 'redis://:pw-b@redis-shared-db.example.com:6379/6' })
+    const ok = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', planDeps())
+    expect(codes(ok.blockers)).not.toContain('REDIS_DB_SHARED')
+    // A retired deployment holds nothing.
+    await Run.setSharedSecrets(id, { REDIS_URL: 'redis://:pw-b@redis-shared-db.example.com:6379/5' })
+    await db('nivaro_hub_shared_deployments').where({ id: first }).update({ status: 'retired' })
+    const retired = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', planDeps())
+    expect(codes(retired.blockers)).not.toContain('REDIS_DB_SHARED')
+  })
+})
+
+describe('REDIS_DB_SHARED: ports and the Hub itself', () => {
+  it('rediss:// without a port is 6379; the Hub\'s own Redis database counts too', async () => {
+    const { config } = await import('../../../config.js')
+    const first = await newShared({ settings: JSON.stringify({ redis: 'external' }) })
+    await Run.setSharedSecrets(first, { REDIS_URL: 'rediss://:a@tls-redis.example.com/7' })
+    const id = await newShared({ settings: JSON.stringify({ redis: 'external' }) })
+    await Run.setSharedSecrets(id, { REDIS_URL: 'rediss://:b@tls-redis.example.com:6379/7' })
+    const plan = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', planDeps())
+    expect(codes(plan.blockers)).toContain('REDIS_DB_SHARED')
+    await db('nivaro_hub_shared_deployments').where({ id: first }).update({ status: 'retired' })
+    const saved = config.REDIS_URL
+    try {
+      ;(config as { REDIS_URL: string }).REDIS_URL = 'redis://tls-redis.example.com:6379/7'
+      const hub = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', planDeps())
+      expect(hub.blockers.find((b) => b.code === 'REDIS_DB_SHARED')?.text).toContain(
+        'the Nivaro Hub itself'
+      )
+    } finally {
+      ;(config as { REDIS_URL: string }).REDIS_URL = saved
+    }
+  })
+})
+
 describe('REDIS_URL stored, not applied (N-3)', () => {
   it('marked from the PATCH until a run that rendered that URL succeeds; never the value', async () => {
     const id = await newShared({ settings: JSON.stringify({ redis: 'external' }) })
     expect(await Run.redisUrlNotApplied(id)).toBe(false)
-    const url1 = 'rediss://:Pw-One-0123456789@redis.internal.example.com:6380/1'
+    const url1 = 'rediss://:Pw-One-0123456789@redis.internal.example.com:6380/3'
     await Run.setSharedSecrets(id, { REDIS_URL: url1 })
     expect(await Run.redisUrlNotApplied(id)).toBe(true)
     // A run that rendered it but failed (swarm rolled back) does not clear the mark.

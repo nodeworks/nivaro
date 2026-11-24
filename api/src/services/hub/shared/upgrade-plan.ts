@@ -3,8 +3,9 @@ import { db } from '../../../db/index.js'
 import { hubPublicOrigin, hubUrlBootWarning, hubUrlCheck } from '../../deployment-mode.js'
 import { environmentFromRow } from '../apps.js'
 import { AgentError, agentHealth } from '../docker/agent-client.js'
-import type { AgentHealth } from '../docker/agent-types.js'
+import type { AgentHealth, StackSpec } from '../docker/agent-types.js'
 import { environmentNames, hostnameRefusals, type StackEdge } from '../docker/render-spec.js'
+import { agentVersionAtLeast } from '../docker/templates.js'
 import { type DockerDriverRow, getDriver, STACK_NAME_RE } from '../drivers.js'
 import { openMoveFor } from '../move-open.js'
 import { storedRuns, successfulVersions } from '../promote-gather.js'
@@ -22,11 +23,16 @@ import type { HubEnvironmentRow } from '../promote-types.js'
 import { hubImage, imageDigest } from '../registry.js'
 import { HUB_MASK, openSecret } from '../secrets.js'
 import { DeploymentLinkError, deploymentClient } from './deployment-client.js'
+import { stacksOnRedisDatabase } from './redis-databases.js'
 import {
   explicitHostsFor,
+  preSplitRoles,
+  recordedSharedRoles,
   renderSharedSpec,
   SharedRenderError,
   sharedExtensionPins,
+  sharedRealtimeFits,
+  sharedRoles,
   sharedStackSettings
 } from './stack-render.js'
 import { getShared, type SharedDeployment, tenantIdFor } from './store.js'
@@ -41,10 +47,11 @@ import { type SharedTenantRow, tenantsOf } from './tenants.js'
  * (registered mode: the operator upgrades it); BAD_VERSION; BUSY (the shared lock, or any placed
  * environment's lock, is held); VERSION_UNKNOWN (no image digest in the registry for the tag);
  * NOT_DEPLOYED_BEFORE (a rollback to a version this deployment never ran); NO_DRIVER;
- * NO_STACK_NAME; AGENT_UNREACHABLE; AGENT_TOO_OLD (an agent before shared owners, < 0.2.0);
+ * NO_STACK_NAME; AGENT_UNREACHABLE; AGENT_TOO_OLD (an agent before shared owners, < 0.2.0; or,
+ * for a split role shape — anything but one `all` — before split shared owners, < 0.2.2);
  * IMAGE_NOT_ALLOWED / EXTENSION_NOT_ALLOWED (the agent's allow-list); EXTENSION_UNPINNED;
  * PATTERN_NOT_ALLOWED / HOSTNAME_NOT_ALLOWED / TOO_MANY_HOSTNAMES / NO_ROUTE (routing);
- * PUBLISH_PORT_NOT_ALLOWED; REDIS_NOT_AVAILABLE / REDIS_URL_MISSING; HUB_URL_UNUSABLE (the
+ * PUBLISH_PORT_NOT_ALLOWED; REDIS_NOT_AVAILABLE / REDIS_URL_MISSING / REDIS_DB_SHARED; HUB_URL_UNUSABLE (the
  * address the stack would get is not one a deployment in production accepts as HUB_URL).
  *
  * Per app (`apps[].blockers`, each overridable by a Hub admin at start, `<CODE>:<env_id>` in
@@ -56,7 +63,9 @@ import { type SharedTenantRow, tenantsOf } from './tenants.js'
  * EXTENSION_MISSING (final review I-4) — the app uses an extension the deployment does not load;
  * never overridable, checked for every kind.
  *
- * Warnings: ROLLBACK_SCHEMA_AHEAD (a rollback keeps the newer schema; final review M-8);
+ * Warnings: ROLES_CHANGE (Task 14: the run adds or removes services — a size change between
+ * small's one `all` and the medium / large split; `roles` and `roles_from` say which);
+ * ROLLBACK_SCHEMA_AHEAD (a rollback keeps the newer schema; final review M-8);
  * HUB_URL_PROBLEM (the Hub's own HUB_URL is ignored, hubUrlBootWarning), MULTI_NODE_
  * VOLUMES (the agent's swarm has several nodes and volumes are local), APPS_AFFECTED (every app
  * the run restarts). Confirm text: the deployment key. `plan_hash` covers everything the run does.
@@ -97,6 +106,14 @@ export interface SharedUpgradePlan {
   stack: string | null
   /** Names routed besides the pattern. */
   hostnames: string[]
+  /** The services the run deploys, in order (Task 14): sharedRoles of the deployment's size, or
+   *  on a re-apply the shape it runs now. */
+  roles: Array<{ role: string; replicas: number }>
+  /**
+   * The roles the last successful run deployed; null when the Hub never deployed this one. A run
+   * recorded before the split carries none and counts as one `all` service.
+   */
+  roles_from: string[] | null
   /**
    * An upgrade to a version older than the one deployed (or either version unparseable): the
    * start needs `downgrade: true` (409 DOWNGRADE_NEEDS_CONFIRM, ruling P6-29). Never a rollback.
@@ -109,6 +126,9 @@ export const OVERRIDABLE_CODES = ['ORDER', 'PREFLIGHT_FAILING'] as const
 
 /** Agents from this version accept shared owners, host_pattern and an empty hostnames list. */
 export const SHARED_AGENT_MIN_VERSION = '0.2.0'
+/** Agents from this version accept a split shared owner (web, worker, importer, exporter; Tasks
+ *  14–15). One `all` (small) needs only SHARED_AGENT_MIN_VERSION. */
+export const SHARED_SPLIT_AGENT_MIN_VERSION = '0.2.2'
 
 const VERSION_RE = /^\d+\.\d+\.\d+$/
 const SEMVER_RE =
@@ -169,6 +189,12 @@ export interface SharedPlanDeps {
   hubPublicUrl(): string | null
   /** hubUrlBootWarning(): the Hub's own HUB_URL is ignored. */
   hubUrlWarning(): string | null
+  /**
+   * Which roles the run deploys (Task 14, ruling I2): `size` (an upgrade: the deployment's size,
+   * ROLES_CHANGE when that differs from what runs) or `deployed` (a re-apply that is no upgrade:
+   * the shape the stack runs now, never a role change). Default `size`.
+   */
+  roleShape?: 'size' | 'deployed'
 }
 
 export function defaultSharedPlanDeps(over: Partial<SharedPlanDeps> = {}): SharedPlanDeps {
@@ -231,6 +257,8 @@ export interface SharedFacts {
   extensions: Record<string, string>
   hostnames: string[]
   rows: SharedTenantRow[]
+  /** The roles the run renders (plan.roles with their limits and role env). */
+  roles: StackSpec['roles']
 }
 
 export interface GatheredPlan {
@@ -268,6 +296,33 @@ async function recordedRun(
     }
   }
   return { image: null, extensions: null }
+}
+
+/**
+ * What the stack runs now (Task 14, ruling I2): the roles the newest successful run of this
+ * deployment recorded (its stored plan's `roles`), or — a run recorded before the split, or a
+ * record that cannot be read — the pre-split shape, one `all` service with replicas by size.
+ * `never` when no run of it ever succeeded. Observed runs (a registered deployment's version)
+ * deploy nothing and never count.
+ */
+export async function deployedSharedRoles(
+  shared: Pick<SharedDeployment, 'id' | 'settings'>
+): Promise<{ never: boolean; roles: StackSpec['roles'] }> {
+  const size = sharedStackSettings(shared).size
+  const row = (await db(SHARED_DEPLOYS)
+    .where({ shared_deployment_id: shared.id, status: 'success' })
+    .whereNot({ kind: 'observed' })
+    .orderBy('id', 'desc')
+    .first('plan')) as { plan: string | null } | undefined
+  if (!row) return { never: true, roles: preSplitRoles(size) }
+  let recorded: StackSpec['roles'] | null = null
+  try {
+    const stored = JSON.parse(String(row.plan ?? '')) as { plan?: { roles?: unknown } }
+    recorded = recordedSharedRoles(stored?.plan?.roles)
+  } catch {
+    /* an unreadable plan: a run before the split */
+  }
+  return { never: false, roles: recorded ?? preSplitRoles(size) }
 }
 
 /** Runs `fn` over `items`, at most `n` at once, in order of the answers. */
@@ -538,12 +593,24 @@ export async function gatherSharedUpgrade(
       })
   }
 
-  // The deployment's own secrets: only whether REDIS_URL is there (never its value).
-  if (settings.redis === 'external' && !(await readSharedSecrets(shared.id)).REDIS_URL)
-    block(
-      'REDIS_URL_MISSING',
-      'The shared deployment uses external Redis but has no REDIS_URL secret.'
-    )
+  // The deployment's own secrets: only whether REDIS_URL is there (never its value), and that no
+  // other stack the Hub runs uses the same Redis database (redis-databases.ts: one stack, one db).
+  if (settings.redis === 'external') {
+    const url = (await readSharedSecrets(shared.id)).REDIS_URL
+    if (!url)
+      block(
+        'REDIS_URL_MISSING',
+        'The shared deployment uses external Redis but has no REDIS_URL secret.'
+      )
+    else {
+      const others = await stacksOnRedisDatabase(url, shared.id)
+      if (others.length)
+        block(
+          'REDIS_DB_SHARED',
+          `REDIS_URL names the Redis database ${others.join(', ')} also uses. Most keys carry no channel prefix, so the stacks would stop each other's scheduled jobs: give this deployment its own database number (redis://…/N) or its own Redis.`
+        )
+    }
+  }
 
   const hubUrl = deps.hubPublicUrl()
   if (
@@ -556,6 +623,46 @@ export async function gatherSharedUpgrade(
     )
   const hubWarn = deps.hubUrlWarning()
   if (hubWarn) warnings.push({ code: 'HUB_URL_PROBLEM', text: hubWarn })
+
+  // Task 14: the services the run deploys, and what changes against what the stack runs now. An
+  // upgrade takes the deployment's size; a re-apply (roleShape `deployed`) keeps what runs.
+  const deployed = shared.mode === 'docker' ? await deployedSharedRoles(shared) : null
+  const toDeploy =
+    deps.roleShape === 'deployed' && deployed
+      ? deployed.roles
+      : sharedRoles(settings.size, {
+          realtime: sharedRealtimeFits(version, edge, health?.traefik_version ?? null)
+        })
+  const roles = toDeploy.map((r) => ({ role: r.role, replicas: r.replicas }))
+  const roles_from = deployed && !deployed.never ? deployed.roles.map((r) => r.role) : null
+  // An agent before 0.2.2 refuses a split shared owner and the exporter role: the run would fail
+  // at apply. (An unreadable version is already too old for any shared owner, above.)
+  const split = !(toDeploy.length === 1 && toDeploy[0].role === 'all')
+  if (
+    health &&
+    split &&
+    !agentTooOld(health.agent_version) &&
+    !agentVersionAtLeast(health.agent_version, SHARED_SPLIT_AGENT_MIN_VERSION)
+  )
+    block(
+      'AGENT_TOO_OLD',
+      `The Hub agent is ${String(health.agent_version).slice(0, 32)}; a shared deployment split into ${roles.map((r) => r.role).join(', ')} needs ${SHARED_SPLIT_AGENT_MIN_VERSION} or later.`
+    )
+  if (roles_from) {
+    const to = roles.map((r) => r.role)
+    const added = to.filter((r) => !roles_from.includes(r))
+    const removed = roles_from.filter((r) => !to.includes(r))
+    if (added.length || removed.length)
+      warnings.push({
+        code: 'ROLES_CHANGE',
+        text: `The stack's services change (size ${settings.size}): ${[
+          added.length ? `adds ${added.join(', ')}` : '',
+          removed.length ? `removes ${removed.join(', ')}` : ''
+        ]
+          .filter(Boolean)
+          .join('; ')}. The agent creates the new services before it removes the old ones.`
+      })
+  }
 
   // A dry render over masked values: routing and settings make a spec the agent takes.
   if (shared.mode === 'docker' && hubUrl) {
@@ -579,7 +686,8 @@ export async function gatherSharedUpgrade(
         image: image ?? `${hubImage()}@${DRY}`,
         extensions,
         hubPublicUrl: hubUrl,
-        explicitHosts: hostnames
+        explicitHosts: hostnames,
+        roles: toDeploy
       })
     } catch (err) {
       if (!(err instanceof SharedRenderError)) throw err
@@ -687,6 +795,8 @@ export async function gatherSharedUpgrade(
     pattern: shared.host_pattern,
     hostnames,
     settings,
+    roles,
+    roles_from,
     allow: [...shared.extensions].sort(),
     apps: apps.map((a) => [a.env_id, a.tenant_id, a.blockers, a.status, a.placed]),
     blockers: blockers.map((b) => b.code)
@@ -705,9 +815,14 @@ export async function gatherSharedUpgrade(
     image,
     stack,
     hostnames,
+    roles,
+    roles_from,
     downgrade
   }
-  return { plan, facts: { shared, driver, health, edge, image, extensions, hostnames, rows } }
+  return {
+    plan,
+    facts: { shared, driver, health, edge, image, extensions, hostnames, rows, roles: toDeploy }
+  }
 }
 
 export async function planSharedUpgrade(

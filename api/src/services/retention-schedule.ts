@@ -1,18 +1,29 @@
+import { tenantState } from './ai-tenant-state.js'
+
 /**
- * When this process's daily retention pass (server.ts runRetentionPurge) last ran and runs
- * next — read by the Log retention inventory (#17). The pass is a per-process timer (self-hosted
- * only, never cloud), so this is process state, not tenant state.
+ * When the daily retention pass (services/retention-pass.ts) last ran and runs next — read by the
+ * Log retention inventory (#17). Held per app: self-hosted the one app ('' key) and its boot timer;
+ * on a Hub shared deployment each app's run of the `retention-pass` job keeps its own status.
+ * Nivaro Cloud never runs the pass.
  */
-let lastRunAt: Date | null = null
-let nextRunAt: Date | null = null
-let lastResult: { activity_deleted: number; activity_bridged: number; error?: string } | null = null
+interface PassStatus {
+  lastRunAt: Date | null
+  nextRunAt: Date | null
+  lastResult: { activity_deleted: number; activity_bridged: number; error?: string } | null
+}
+
+const status = tenantState<PassStatus>(() => ({
+  lastRunAt: null,
+  nextRunAt: null,
+  lastResult: null
+}))
 
 export function noteRetentionPassStarted(at = new Date()): void {
-  lastRunAt = at
+  status().lastRunAt = at
 }
 
 export function noteRetentionPassScheduled(next: Date): void {
-  nextRunAt = next
+  status().nextRunAt = next
 }
 
 export function noteRetentionPassResult(r: {
@@ -20,17 +31,18 @@ export function noteRetentionPassResult(r: {
   activity_bridged: number
   error?: string
 }): void {
-  lastResult = r
+  status().lastResult = r
 }
 
 export function retentionPassSchedule(): {
   last_run_at: string | null
   next_run_at: string | null
-  last_result: typeof lastResult
+  last_result: PassStatus['lastResult']
 } {
+  const s = status()
   return {
-    last_run_at: lastRunAt?.toISOString() ?? null,
-    next_run_at: nextRunAt?.toISOString() ?? null,
-    last_result: lastResult
+    last_run_at: s.lastRunAt?.toISOString() ?? null,
+    next_run_at: s.nextRunAt?.toISOString() ?? null,
+    last_result: s.lastResult
   }
 }

@@ -700,7 +700,8 @@ async function runUpgrade(c: RunCtx, deps: SharedRunDeps): Promise<void> {
         image: facts.image ?? '',
         extensions: facts.extensions,
         hubPublicUrl: hubUrl ?? '',
-        explicitHosts: facts.hostnames
+        explicitHosts: facts.hostnames,
+        roles: facts.roles
       })
     } catch (err) {
       if (err instanceof SharedRenderError) throw new Stop('failed', err.code, err.message)
@@ -1293,7 +1294,11 @@ export async function startSharedReapply(
   // spec_hash: START_FAILED, a render step that failed) changed nothing, so the newest run that
   // DID apply decides (round 2 N-2).
   if (await lastAppliedRunFailed(shared.id)) return { started: false, reason: 'LAST_RUN_FAILED' }
-  const plan = (await gatherSharedUpgrade(shared.id, shared.version_pin, 'upgrade', deps)).plan
+  // Ruling I2 (Task 14): a re-apply keeps the roles the stack runs; only an upgrade the admin
+  // plans changes them (its plan warns ROLES_CHANGE).
+  const reapplyDeps: SharedRunDeps = { ...deps, roleShape: 'deployed' }
+  const plan = (await gatherSharedUpgrade(shared.id, shared.version_pin, 'upgrade', reapplyDeps))
+    .plan
   if (plan.blockers.length) return { started: false, reason: plan.blockers[0].code }
   const overrides = plan.apps.flatMap((a) => a.blockers.map((b) => `${b}:${a.env_id}`))
   try {
@@ -1301,7 +1306,7 @@ export async function startSharedReapply(
       shared.id,
       { version: plan.version, plan_hash: plan.plan_hash, confirm: shared.key, overrides },
       by,
-      deps
+      reapplyDeps
     )
     return { started: true, shared_deploy_id }
   } catch (err) {

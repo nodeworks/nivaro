@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
@@ -12,6 +13,7 @@ import {
 import {
   bustInstanceOverridesCache,
   describeEnvOverrides,
+  envKeyAppliesHere,
   envOverrideKeys,
   envOverrideMap,
   INSTANCE_RESERVED_KEYS,
@@ -31,6 +33,7 @@ const SECRET_KEYS = [
   'sms_auth_token',
   'directory_password',
   'directory_refresh_token',
+  'directory_graph_client_secret',
   'vapid_private_key',
   'storage_s3_access_key',
   'storage_s3_secret',
@@ -155,6 +158,11 @@ const allowedSettingsKeys = [
   'directory_username',
   'directory_password',
   'directory_refresh_token',
+  // An app's own Microsoft app registration (migration 554): read only on a Hub shared
+  // deployment; the secret is sealed on save and masked via SECRET_KEYS.
+  'directory_graph_tenant_id',
+  'directory_graph_client_id',
+  'directory_graph_client_secret',
   // SMTP / email
   'smtp_host',
   'smtp_port',
@@ -178,7 +186,7 @@ const allowedSettingsKeys = [
   'push_test_allowlist',
   'teams_test_mode',
   'teams_test_webhook_url',
-  // Teams bot (migration 505); the secret is masked via SECRET_KEYS
+  // Teams bot (migration 505); the secret is sealed on save (enc:v1) and masked via SECRET_KEYS
   'teams_bot_enabled',
   'teams_bot_app_id',
   'teams_bot_app_secret',
@@ -339,9 +347,26 @@ export async function settingsRoutes(app: FastifyInstance) {
         }
       }
       // Hub phase 5 — on a shared deployment the cron zone is set for the whole deployment: one
-      // app's time zone never moves every app's schedules (Decision 11).
+      // app's time zone never moves every app's schedules (Decision 11). This app's row schedules
+      // (reports, retention, sync jobs, flows, views) follow its own zone instead: once the write
+      // lands they are re-evaluated in it here, and every replica is told.
       if (!perAppJobs()) {
         reply.raw.once('finish', () => app.cron?.setInstanceTimezone(tz || 'America/New_York'))
+      } else {
+        const inThisApp = AsyncLocalStorage.snapshot()
+        reply.raw.once('finish', () =>
+          inThisApp(() => {
+            void (async () => {
+              const { bustAppTimeZone } = await import('../services/user-time.js')
+              const { resyncAllSchedules, announceScheduleChange } = await import(
+                '../services/row-schedules.js'
+              )
+              bustAppTimeZone()
+              await resyncAllSchedules(app)
+              announceScheduleChange('*')
+            })().catch((err) => app.log.warn({ err }, 'Row schedules kept their time zone'))
+          })
+        )
       }
     }
 
@@ -606,6 +631,51 @@ export async function settingsRoutes(app: FastifyInstance) {
 
     // Preserve secrets if masked value re-submitted
     for (const k of SECRET_KEYS) if (patch[k] === MASK) delete patch[k]
+    // An app's own Microsoft app registration (554): ids as typed (blank = none, at most the
+    // column's 64), the secret sealed with this app's key (encryptValue: the app's own key on a
+    // Hub shared deployment, ENCRYPTION_KEY otherwise) and never stored in clear.
+    for (const k of ['directory_graph_tenant_id', 'directory_graph_client_id'] as const) {
+      if (!(k in patch)) continue
+      const v = patch[k] == null ? '' : String(patch[k]).trim()
+      if (v.length > 64) return reply.code(400).send({ error: `${k} is at most 64 characters` })
+      patch[k] = v || null
+    }
+    if ('directory_graph_client_secret' in patch) {
+      const v =
+        patch.directory_graph_client_secret == null
+          ? ''
+          : String(patch.directory_graph_client_secret).trim()
+      const { AppKeyMissingError, encryptValue } = await import('../services/encryption.js')
+      try {
+        patch.directory_graph_client_secret = v ? encryptValue(v) : null
+      } catch (err) {
+        if (err instanceof AppKeyMissingError) throw err
+        // No ENCRYPTION_KEY on this server: refuse rather than keep the secret in clear.
+        return reply.code(400).send({
+          error: 'The client secret cannot be saved: ENCRYPTION_KEY is not set on this server',
+          code: 'encryption_key_missing'
+        })
+      }
+    }
+    if ('teams_bot_app_secret' in patch) {
+      const v =
+        patch.teams_bot_app_secret == null ? '' : String(patch.teams_bot_app_secret).trim()
+      const { AppKeyMissingError, encryptValue } = await import('../services/encryption.js')
+      try {
+        patch.teams_bot_app_secret = v ? encryptValue(v) : null
+      } catch (err) {
+        if (err instanceof AppKeyMissingError) throw err
+        // No ENCRYPTION_KEY on this server. A shared deployment refuses rather than keep an app's
+        // secret in clear; a self-hosted server without the key keeps it as it always did.
+        if (perAppJobs()) {
+          return reply.code(400).send({
+            error: 'The bot app secret cannot be saved: ENCRYPTION_KEY is not set on this server',
+            code: 'encryption_key_missing'
+          })
+        }
+        patch.teams_bot_app_secret = v || null
+      }
+    }
     if ('directory_auth_mode' in patch) {
       patch.directory_auth_mode =
         patch.directory_auth_mode === 'service_account' || patch.directory_auth_mode === 'connected'
@@ -673,8 +743,9 @@ export async function settingsRoutes(app: FastifyInstance) {
     }
     // The env layer (NIVARO_SETTINGS_OVERRIDES) wins over the row above but is set on the
     // server, not here: shown read-only so an admin can tell why a value is not what they
-    // saved. Secrets masked like GET /settings; `shadows_db` = the row names the same key.
-    const env = describeEnvOverrides(envOverrideMap(), data, SECRET_KEYS, MASK)
+    // saved. Secrets masked like GET /settings; `shadows_db` = the row names the same key;
+    // `ignored` = a shared deployment never applies it (an app's own setting).
+    const env = describeEnvOverrides(envOverrideMap(), data, SECRET_KEYS, MASK, envKeyAppliesHere)
     return reply.send({
       data: {
         instance_key: instanceKey(),
@@ -756,7 +827,7 @@ export async function settingsRoutes(app: FastifyInstance) {
     { preHandler: requireAdmin },
     async (req, reply) => {
       const { to } = req.body
-      if (!to || !to.includes('@')) {
+      if (!to?.includes('@')) {
         return reply.code(400).send({ error: 'Valid email address required' })
       }
       try {

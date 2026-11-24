@@ -197,3 +197,107 @@ describe('checks a few at a time, bounded per pass', () => {
     expect(m.appSchemaStatus('b').state).toBe('ok')
   })
 })
+
+describe('Task 14 fix M3: a passing check keeps the stored `ok` alive', () => {
+  it('rewrites the stored state with a fresh TTL, so an importer reading it never goes idle', async () => {
+    const sets: Array<{ key: string; value: string; ttl: number }> = []
+    const store = new Map<string, string>()
+    const redis = {
+      get: async (k: string) => store.get(k) ?? null,
+      set: async (k: string, v: string, _mode: 'EX', ttl: number) => {
+        sets.push({ key: k, value: v, ttl })
+        store.set(k, v)
+        return 'OK'
+      }
+    }
+    m._configureAppMigrationsForTests({ now, gate: true, random: () => 0, redis })
+    await allOk([rec('a')])
+    sets.length = 0
+    // 29 days on: the key written at migration is about to expire.
+    clock += 29 * 24 * 3_600_000
+    store.delete(m.appSchemaKey('a')) // as if it had expired already
+    await m.appMigrationPass(registry([rec('a')]), {
+      ...base,
+      schemaCurrent: vi.fn(async () => true)
+    })
+    expect(sets.map((s) => s.key)).toEqual([m.appSchemaKey('a')])
+    expect(sets[0].ttl).toBeGreaterThanOrEqual(30 * 24 * 3600)
+    expect(JSON.parse(sets[0].value)).toMatchObject({ state: 'ok' })
+    expect(await m.storedAppSchemaOk(rec('a'), redis)).toBe(true)
+  })
+
+  it('a check that finds the database behind does not write `ok`', async () => {
+    const store = new Map<string, string>()
+    const redis = {
+      get: async (k: string) => store.get(k) ?? null,
+      set: async (k: string, v: string) => {
+        store.set(k, v)
+        return 'OK'
+      }
+    }
+    m._configureAppMigrationsForTests({ now, gate: true, random: () => 0, redis })
+    await allOk([rec('a')])
+    clock += m.APP_SCHEMA_VERIFY_MS
+    await m.appMigrationPass(registry([rec('a')]), {
+      ...base,
+      migrate: vi.fn(async () => {
+        throw new Error('down')
+      }),
+      schemaCurrent: vi.fn(async () => false)
+    })
+    expect(await m.storedAppSchemaOk(rec('a'), redis)).toBe(false)
+  })
+})
+
+describe('Task 14 fix round 2: the refresh writes only a confirmed `ok` over nothing or its own `ok`', () => {
+  function memRedis() {
+    const store = new Map<string, string>()
+    const sets: string[] = []
+    return {
+      store,
+      sets,
+      get: async (k: string) => store.get(k) ?? null,
+      set: async (k: string, v: string) => {
+        sets.push(k)
+        store.set(k, v)
+        return 'OK'
+      }
+    }
+  }
+
+  it('a ledger that cannot be read (null) writes nothing: a `pending` another replica wrote stays', async () => {
+    const redis = memRedis()
+    m._configureAppMigrationsForTests({ now, gate: true, random: () => 0, redis })
+    await allOk([rec('a')])
+    // Another replica found the database behind (dropOk): `pending` for this version.
+    const pending = JSON.stringify({ version: null, state: 'pending', at: null, error: null })
+    redis.store.set(m.appSchemaKey('a'), pending)
+    redis.sets.length = 0
+    clock += m.APP_SCHEMA_VERIFY_MS
+    await m.appMigrationPass(registry([rec('a')]), {
+      ...base,
+      schemaCurrent: vi.fn(async () => {
+        throw new Error('ledger unreadable')
+      })
+    })
+    expect(redis.sets).toEqual([])
+    expect(redis.store.get(m.appSchemaKey('a'))).toBe(pending)
+  })
+
+  it('a confirmed check never overwrites a state written by another version or another state', async () => {
+    const redis = memRedis()
+    m._configureAppMigrationsForTests({ now, gate: true, random: () => 0, redis })
+    await allOk([rec('a')])
+    const key = m.appSchemaKey('a')
+    const other = JSON.stringify({ version: '9.9.9', state: 'ok', at: null, error: null })
+    redis.store.set(key, other)
+    redis.sets.length = 0
+    clock += m.APP_SCHEMA_VERIFY_MS
+    await m.appMigrationPass(registry([rec('a')]), {
+      ...base,
+      schemaCurrent: vi.fn(async () => true)
+    })
+    expect(redis.sets).toEqual([])
+    expect(redis.store.get(key)).toBe(other)
+  })
+})

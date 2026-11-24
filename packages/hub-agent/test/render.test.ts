@@ -6,6 +6,7 @@ import {
   type EngineServiceSpec,
   patternRouterName,
   REALTIME_PATHS,
+  realtimePatternRouterName,
   type RenderConfig,
   type RenderContext,
   realtimeRouterName,
@@ -103,6 +104,25 @@ describe('renderServices — services and env', () => {
     for (const n of ['st_worker', 'st_realtime', 'st_importer']) {
       expect(envOf(byName(s2, n)).SOCKETS).toBeUndefined()
     }
+  })
+
+  it('Task 15: an exporter is a plain internal service: NIVARO_ROLE=exporter, the uploads volume, no edge', () => {
+    const roles = [
+      ...large().roles,
+      { role: 'exporter' as const, replicas: 1, cpus: 2, memory_mb: 4096 }
+    ]
+    const svcs = renderServices('st', large({ roles }), cfg(), ctx())
+    const ex = byName(svcs, 'st_exporter')
+    const imp = byName(svcs, 'st_importer')
+    expect(envOf(ex).NIVARO_ROLE).toBe('exporter')
+    expect(envOf(ex).STORAGE_LOCAL_ROOT).toBe('/app/uploads')
+    // The same mounts, networks and limits shape as the importer: it writes the person's file to
+    // the uploads volume the web tasks serve it from.
+    expect(ex.TaskTemplate.ContainerSpec.Mounts).toEqual(imp.TaskTemplate.ContainerSpec.Mounts)
+    expect(ex.TaskTemplate.Networks).toEqual([{ Target: 'nvh_st' }])
+    expect(ex.TaskTemplate.Resources).toEqual(imp.TaskTemplate.Resources)
+    expect(Object.keys(ex.Labels).some((k) => k.startsWith('traefik.'))).toBe(false)
+    expect(ex.EndpointSpec).toBeUndefined()
   })
 
   it("'all' gets no NIVARO_ROLE; external redis adds no service and no REDIS_URL", () => {
@@ -664,6 +684,36 @@ describe('renderServices — shared deployment host pattern (phase 6)', () => {
     expect(t['traefik.http.services.nvh_web_sh.loadbalancer.server.port']).toBe('3055')
     expect(t['traefik.http.routers.nvh_web_sh.rule']).toBeUndefined()
     expect(web.TaskTemplate.Networks).toEqual([{ Target: 'nvh_st' }, { Target: 'edge' }])
+  })
+
+  it('0.2.2: a shared realtime role routes the live paths of the pattern and of its names', () => {
+    const roles: StackSpec['roles'] = [
+      { role: 'web', replicas: 3, env: { SOCKETS: 'off' } },
+      { role: 'worker', replicas: 1 },
+      { role: 'realtime', replicas: 2 }
+    ]
+    const rt = byName(renderServices('sh', sharedSpec({ roles }), cfg(), ctx()), 'sh_realtime')
+    const t = traefik(rt)
+    expect(realtimePatternRouterName('sh')).toBe('nvh_rtpat_sh')
+    const paths = t['traefik.http.routers.nvh_rt_sh.rule'].split(' && ')[1]
+    expect(t['traefik.http.routers.nvh_rt_sh.rule']).toBe(`(Host(\`a.apps.corp\`)) && ${paths}`)
+    expect(t['traefik.http.routers.nvh_rtpat_sh.rule']).toBe(
+      `HostRegexp(\`^[a-z0-9-]+\\.apps\\.corp$\`) && ${paths}`
+    )
+    // Above the web pattern router (1); below any Host() router (ranked by rule length).
+    expect(t['traefik.http.routers.nvh_rtpat_sh.priority']).toBe('2')
+    expect(t['traefik.http.routers.nvh_rtpat_sh.service']).toBe('nvh_rt_sh')
+    expect(t['traefik.http.routers.nvh_rtpat_sh.tls']).toBe('true')
+    expect(t['traefik.http.routers.nvh_rtpat_sh.tls.domains[0].main']).toBe('*.apps.corp')
+    expect(t['traefik.http.services.nvh_rt_sh.loadbalancer.sticky.cookie.name']).toBe('nvh_rt')
+    for (const p of REALTIME_PATHS) expect(paths).toContain(p.split('/:')[0])
+    // A pattern alone (no names yet): the pattern's live paths still reach realtime.
+    const alone = traefik(
+      byName(renderServices('sh', sharedSpec({ roles, hostnames: [] }), cfg(), ctx()), 'sh_realtime')
+    )
+    expect(alone['traefik.http.routers.nvh_rt_sh.rule']).toBeUndefined()
+    expect(alone['traefik.http.routers.nvh_rtpat_sh.service']).toBe('nvh_rt_sh')
+    expect(alone['traefik.http.services.nvh_rt_sh.loadbalancer.server.port']).toBe('3055')
   })
 
   it('a pattern is not a host claim (no LABEL_HOSTS from it)', () => {

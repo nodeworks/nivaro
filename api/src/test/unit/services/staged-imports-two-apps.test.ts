@@ -1,0 +1,666 @@
+import type { FastifyInstance } from 'fastify'
+import type { Knex } from 'knex'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { MemoryDb } from '../../helpers/memory-db.js'
+
+// Hub shared deployment: staged imports run per app. Apps A and B are copies (same import key,
+// same run id 1): each app's tick drains only its own queue, every hand-off key but the kick
+// channel names the app, a kick `A|7` drains A only, and a kick for an app this process does not
+// list, or one that is not ready, does nothing. Self-hosted keys stay byte-identical; Nivaro Cloud
+// stays off.
+
+const h = vi.hoisted(() => ({
+  mems: {} as Record<string, MemoryDb>,
+  defs: [] as string[],
+  /** While set, every run waits on it before it reads its definition (it stays in flight). */
+  gate: null as Promise<void> | null,
+  /** While set, reading an uploaded file waits on it (the drain is mid-row, before its claim). */
+  fileGate: null as Promise<void> | null,
+  /** Set: the next claim update on the import queue throws. */
+  failClaim: false
+}))
+
+vi.mock('../../../db/index.js', async () => {
+  const { makeMemoryDb } = await import('../../helpers/memory-db.js')
+  const tc = await import('../../../db/tenant-context.js')
+  h.mems = { A: makeMemoryDb(), B: makeMemoryDb(), N: makeMemoryDb(), '-': makeMemoryDb() }
+  // The real `db` follows the tenant context; so does this one.
+  const db = (table: string) => {
+    const b = h.mems[tc.getTenantId() || '-'](table) as unknown as Record<string, unknown>
+    if (table === 'nivaro_import_queue' && h.failClaim) {
+      const real = (b.update as (p: Record<string, unknown>) => Promise<number>).bind(b)
+      b.update = async (patch: Record<string, unknown>) => {
+        if (patch.status === 'running' && h.failClaim) {
+          h.failClaim = false
+          throw new Error('claim update failed')
+        }
+        return real(patch)
+      }
+    }
+    return b
+  }
+  return { db }
+})
+vi.mock('../../../services/files.js', async (orig) => ({
+  ...(await orig<object>()),
+  getFile: vi.fn(async (id: string) => {
+    if (h.fileGate) await h.fileGate
+    return { id, filename_disk: id }
+  }),
+  readFileBuffer: vi.fn(async () => Buffer.from('a,b\n1,2\n'))
+}))
+vi.mock('../../../services/staged-imports.js', async (orig) => {
+  const tc = await import('../../../db/tenant-context.js')
+  return {
+    ...(await orig<object>()),
+    listImportDefinitions: vi.fn(async () => []),
+    // No definition: the run claims, then fails at once with a sentence (no file work).
+    getImportDefinition: vi.fn(async (key: string) => {
+      h.defs.push(`${tc.getTenantId() ?? '-'}:${key}`)
+      if (h.gate) await h.gate
+      return null
+    })
+  }
+})
+vi.mock('../../../services/import-queue-standing.js', () => ({
+  loadQueueStanding: vi.fn(async () => ({ entries: [], standing: new Map() })),
+  publishQueueStanding: vi.fn()
+}))
+vi.mock('../../../services/notification-channels.js', () => ({ notifyUser: vi.fn(async () => {}) }))
+vi.mock('../../../services/live-progress.js', () => ({
+  emitImportProgress: vi.fn(),
+  emitJobProgress: vi.fn()
+}))
+vi.mock('../../../services/traffic-taps/sources.js', () => ({ noteImportRun: vi.fn() }))
+vi.mock('../../../services/import-collection-runs.js', () => ({
+  announceCollectionImportRun: vi.fn(async () => {})
+}))
+
+const { runWithTenantDb } = await import('../../../db/tenant-context.js')
+const handoff = await import('../../../services/import-handoff.js')
+const worker = await import('../../../services/staged-import-worker.js')
+const { bulkUnavailableReason } = await import('../../../services/staged-imports.js')
+const { setTenantRegistryForTests } = await import('../../../services/tenancy/registry.js')
+const migrations = await import('../../../services/tenancy/app-migrations.js')
+const { NIVARO_VERSION } = await import('../../../version.js')
+type TenantRecord = import('../../../services/tenancy/types.js').TenantRecord
+
+const SHARED = {
+  HUB_SHARED_DEPLOYMENT: 'shared-1',
+  HUB_URL: 'https://hub.example.com',
+  HUB_DEPLOYMENT_TOKEN: 'x'.repeat(40)
+}
+
+const tenant = (id: string, status: TenantRecord['status'] = 'active'): TenantRecord => ({
+  id,
+  slug: id.toLowerCase(),
+  name: `App ${id}`,
+  status,
+  dbClient: 'pg',
+  dbConnection: `postgres://u@127.0.0.1:1/app_${id.toLowerCase()}`,
+  poolMax: 1,
+  hostnames: []
+})
+
+function useRegistry(list: TenantRecord[] = [tenant('A'), tenant('B')]) {
+  setTenantRegistryForTests({
+    source: 'hub',
+    resolve: async () => null,
+    listActive: async () => list.filter((t) => t.status === 'active' || t.status === 'maintenance'),
+    byId: async (id: string) => list.find((t) => t.id === id) ?? null,
+    status: () => ({
+      source: 'hub',
+      count: list.length,
+      loadedAt: null,
+      stale: false,
+      lastError: null
+    })
+  })
+}
+
+const fakeKnex = {} as Knex
+/** Run `fn` inside app `id`; the context lasts as long as the promise fn returns. */
+function inApp<T>(id: string, fn: () => T): T {
+  let out!: T
+  runWithTenantDb(
+    fakeKnex,
+    id.toLowerCase(),
+    () => {
+      out = fn()
+    },
+    id
+  )
+  return out
+}
+
+/** In-memory Redis with the calls the hand-off makes; every key it touched is kept. */
+function fakeRedis() {
+  const lists = new Map<string, string[]>()
+  const strings = new Map<string, string>()
+  const hashes = new Map<string, Map<string, number>>()
+  const published: Array<[string, string]> = []
+  const touched = new Set<string>()
+  const t = (k: string) => touched.add(k)
+  return {
+    lists,
+    strings,
+    published,
+    touched,
+    rpush: async (k: string, v: string) => {
+      t(k)
+      const l = lists.get(k) ?? []
+      l.push(v)
+      lists.set(k, l)
+      return l.length
+    },
+    lrange: async (k: string, a: number, b: number) => {
+      t(k)
+      return (lists.get(k) ?? []).slice(a, b + 1)
+    },
+    lrem: async (k: string, _n: number, v: string) => {
+      t(k)
+      const l = lists.get(k) ?? []
+      const i = l.indexOf(v)
+      if (i >= 0) l.splice(i, 1)
+      return i >= 0 ? 1 : 0
+    },
+    llen: async (k: string) => (lists.get(k) ?? []).length,
+    publish: async (c: string, m: string) => {
+      published.push([c, m])
+      return 1
+    },
+    set: async (k: string, v: string) => {
+      t(k)
+      strings.set(k, v)
+      return 'OK'
+    },
+    get: async (k: string) => {
+      t(k)
+      return strings.get(k) ?? null
+    },
+    hget: async (k: string, f: string) => {
+      t(k)
+      const n = hashes.get(k)?.get(f)
+      return n == null ? null : String(n)
+    },
+    hincrby: async (k: string, f: string, by: number) => {
+      t(k)
+      const m = hashes.get(k) ?? new Map<string, number>()
+      m.set(f, (m.get(f) ?? 0) + by)
+      hashes.set(k, m)
+      return m.get(f) as number
+    },
+    hdel: async (k: string, f: string) => {
+      t(k)
+      return hashes.get(k)?.delete(f) ? 1 : 0
+    }
+  }
+}
+
+const log = { warn: vi.fn(), info: vi.fn(), error: vi.fn() }
+const makeApp = (redis = fakeRedis()) =>
+  ({ log, redis }) as unknown as FastifyInstance & { redis: ReturnType<typeof fakeRedis> }
+
+const queued = (id: number, key = 'invoices') => ({
+  id,
+  import_key: key,
+  status: 'queued',
+  sort: 0,
+  file: null,
+  created_by: null,
+  created_at: new Date()
+})
+
+const saved = { ...process.env }
+beforeEach(() => {
+  for (const m of Object.values(h.mems)) m.reset()
+  h.defs.length = 0
+  h.gate = null
+  h.fileGate = null
+  h.failClaim = false
+  delete process.env.CLOUD_META_DB_URL
+  delete process.env.HUB_SHARED_DEPLOYMENT
+  delete process.env.NIVARO_ROLE
+  delete process.env.IMPORT_WORKER
+  process.env.REDIS_CHANNEL_PREFIX = 'p1:'
+  process.env.CRON_TICKS = 'on'
+  migrations._resetAppMigrationsForTests()
+})
+afterEach(() => {
+  process.env = { ...saved }
+  setTenantRegistryForTests(null)
+  migrations._resetAppMigrationsForTests()
+})
+
+describe('hand-off keys', () => {
+  it('self-hosted: every key and the kick channel are byte-identical', () => {
+    const db = handoff.handoffDbScope()
+    const base = `p1:nvr:import-handoff:${db}`
+    expect(handoff.importQueueKey()).toBe(base)
+    expect(handoff.importAttemptsKey()).toBe(`${base}:attempts`)
+    expect(handoff.importKickChannel()).toBe(`${base}:kick`)
+    expect(handoff.importWorkerKey()).toBe(`p1:nvr:import-worker:${db}`)
+    expect(handoff.importFallbackKey()).toBe(`p1:nvr:import-worker:${db}:fallback`)
+    expect(handoff.importJobQueueKey()).toBe(`${base}:jobs`)
+    expect(handoff.importJobAttemptsKey()).toBe(`${base}:jobs:attempts`)
+    expect(handoff.importJobLeaseKey('u1')).toBe(`${base}:jobs:lease:u1`)
+  })
+
+  it('inside an app every key names the app; the kick channel stays deployment-wide', () => {
+    Object.assign(process.env, SHARED)
+    const db = handoff.handoffDbScope()
+    const base = `p1:nvr:import-handoff:${db}`
+    const keys = inApp('A', () => ({
+      queue: handoff.importQueueKey(),
+      attempts: handoff.importAttemptsKey(),
+      kick: handoff.importKickChannel(),
+      worker: handoff.importWorkerKey(),
+      fallback: handoff.importFallbackKey(),
+      jobs: handoff.importJobQueueKey(),
+      jobAttempts: handoff.importJobAttemptsKey(),
+      lease: handoff.importJobLeaseKey('u1')
+    }))
+    expect(keys).toEqual({
+      queue: `${base}:A`,
+      attempts: `${base}:A:attempts`,
+      kick: `${base}:kick`,
+      worker: `p1:nvr:import-worker:${db}:A`,
+      fallback: `p1:nvr:import-worker:${db}:A:fallback`,
+      jobs: `${base}:A:jobs`,
+      jobAttempts: `${base}:A:jobs:attempts`,
+      lease: `${base}:A:jobs:lease:u1`
+    })
+    expect(inApp('B', () => handoff.importQueueKey())).toBe(`${base}:B`)
+  })
+})
+
+describe('kicks', () => {
+  it('self-hosted: the payload is the bare run id or job:<id>', async () => {
+    const r = fakeRedis()
+    await handoff.enqueueImportRun(r, 7)
+    await handoff.enqueueImportJob(r, 'u1')
+    expect(r.published).toEqual([
+      [handoff.importKickChannel(), '7'],
+      [handoff.importKickChannel(), 'job:u1']
+    ])
+  })
+
+  it('shared, inside an app: the payload names the app, on the one deployment channel', async () => {
+    Object.assign(process.env, SHARED)
+    const r = fakeRedis()
+    await inApp('A', () => handoff.enqueueImportRun(r, 7))
+    await inApp('B', () => handoff.enqueueImportJob(r, 'u1'))
+    const channel = handoff.importKickChannel()
+    expect(r.published).toEqual([
+      [channel, 'A|7'],
+      [channel, 'B|job:u1']
+    ])
+    expect(r.lists.get(`${handoff.importQueueKey()}:A`)?.map((e) => JSON.parse(e).id)).toEqual([7])
+    expect(r.lists.get(`${handoff.importQueueKey()}:B:jobs`)?.map((e) => JSON.parse(e).id)).toEqual(
+      ['u1']
+    )
+  })
+
+  it('Nivaro Cloud queues nothing (the tenant process runs its own work)', async () => {
+    process.env.CLOUD_META_DB_URL = 'postgres://meta/x'
+    const r = fakeRedis()
+    expect(await handoff.enqueueImportRun(r, 7)).toBe(false)
+    expect(await handoff.enqueueImportJob(r, 'u1')).toBe(false)
+    expect(r.published).toEqual([])
+  })
+
+  it('parseKick reads the app and the target', () => {
+    expect(handoff.parseKick('A|7')).toEqual({ tenant: 'A', target: '7' })
+    expect(handoff.parseKick('A|job:u1')).toEqual({ tenant: 'A', target: 'job:u1' })
+    expect(handoff.parseKick('7')).toEqual({ tenant: null, target: '7' })
+    expect(handoff.parseKick('job:u1')).toEqual({ tenant: null, target: 'job:u1' })
+    expect(handoff.parseKick('|7')).toEqual({ tenant: null, target: '7' })
+  })
+})
+
+describe('who drains', () => {
+  it('Nivaro Cloud is off; a shared deployment drains from its cron; web roles never', () => {
+    expect(handoff.importDrainMode({ CLOUD_META_DB_URL: 'postgres://meta' })).toBe('off')
+    expect(handoff.importDrainMode({ ...SHARED })).not.toBe('off')
+    expect(handoff.importDrainMode({ ...SHARED })).toBe('inline')
+    expect(handoff.importDrainMode({ ...SHARED, NIVARO_ROLE: 'worker' })).toBe('fallback')
+    expect(handoff.importDrainMode({ ...SHARED, NIVARO_ROLE: 'web' })).toBe('off')
+    expect(handoff.importDrainMode({ ...SHARED, IMPORT_WORKER: 'off' })).toBe('off')
+    // No process loop on a shared deployment: IMPORT_WORKER=on does not turn one on.
+    expect(handoff.importDrainMode({ ...SHARED, IMPORT_WORKER: 'on' })).toBe('inline')
+  })
+})
+
+describe('two apps, copied queues', () => {
+  beforeEach(() => {
+    Object.assign(process.env, SHARED)
+    h.mems.A.rows('nivaro_import_queue').push(queued(1))
+    h.mems.B.rows('nivaro_import_queue').push(queued(1))
+  })
+
+  const status = (app: string) => h.mems[app].rows('nivaro_import_queue')[0]?.status
+
+  it("each app's tick drains only its own run 1", async () => {
+    const app = makeApp()
+    await inApp('A', () => worker.drainImportsTick(app))
+    await vi.waitFor(() => expect(status('A')).toBe('error'))
+    expect(status('B')).toBe('queued')
+    expect(h.mems.B.reads).toEqual([])
+    expect(h.mems['-'].reads).toEqual([])
+    expect(h.defs).toEqual(['A:invoices'])
+    // A's beat and its hand-off entries are A's own keys.
+    const touched = [...app.redis.touched]
+    expect(touched.length).toBeGreaterThan(0)
+    for (const k of touched) expect(k).toMatch(/:A(:|$)/)
+
+    await inApp('B', () => worker.drainImportsTick(app))
+    await vi.waitFor(() => expect(status('B')).toBe('error'))
+    expect(h.defs).toEqual(['A:invoices', 'B:invoices'])
+  })
+
+  it('a kick `A|1` drains A only', async () => {
+    useRegistry()
+    const app = makeApp()
+    await worker.onImportKick(app, 'A|1')
+    await vi.waitFor(() => expect(status('A')).toBe('error'))
+    expect(status('B')).toBe('queued')
+    expect(h.mems.B.reads).toEqual([])
+    expect(h.defs).toEqual(['A:invoices'])
+  })
+
+  it('a kick for an app this process does not list, or a malformed one, does nothing', async () => {
+    useRegistry()
+    const app = makeApp()
+    for (const raw of ['Z|1', '1', '|1', 'garbage', ''])
+      await expect(worker.onImportKick(app, raw)).resolves.toBeUndefined()
+    await new Promise((r) => setTimeout(r, 20))
+    expect(status('A')).toBe('queued')
+    expect(status('B')).toBe('queued')
+    expect(h.defs).toEqual([])
+  })
+
+  it('a kick for an app that is not ready, in maintenance or suspended is skipped', async () => {
+    useRegistry([tenant('A'), tenant('M', 'maintenance'), tenant('S', 'suspended')])
+    migrations._configureAppMigrationsForTests({ gate: true }) // nothing migrated: A not ready
+    const app = makeApp()
+    for (const raw of ['A|1', 'M|1', 'S|1'])
+      await expect(worker.onImportKick(app, raw)).resolves.toBeUndefined()
+    await new Promise((r) => setTimeout(r, 20))
+    expect(status('A')).toBe('queued')
+    expect(h.mems.A.reads).toEqual([])
+    expect(h.defs).toEqual([])
+  })
+})
+
+describe('how many runs one process drives at once', () => {
+  // IMPORT_MAX_PARALLEL (default 3): a shared deployment counts it across every app of the
+  // process, not per app — N apps x 3 runs in one process is how an importer runs out of memory —
+  // and one app holds at most MAX_PARALLEL - 1 of them (2), so it never starves the others.
+  const keys = ['invoices', 'orders', 'receipts', 'vendors']
+  const statuses = (app: string) =>
+    h.mems[app].rows('nivaro_import_queue').map((r) => String(r.status))
+  let open: () => void = () => {}
+  beforeEach(() => {
+    h.gate = new Promise<void>((r) => {
+      open = r
+    })
+  })
+  afterEach(() => open())
+
+  it('shared: one app holds at most 2 of the 3 slots; the third is left for another app', async () => {
+    Object.assign(process.env, SHARED)
+    const keys5 = [...keys, 'shipments']
+    keys5.forEach((k, i) => {
+      h.mems.A.rows('nivaro_import_queue').push(queued(i + 1, k))
+    })
+    h.mems.B.rows('nivaro_import_queue').push(queued(1, 'invoices'))
+    h.mems.N.rows('nivaro_import_queue').push(queued(1, 'invoices'))
+    const app = makeApp()
+    await inApp('A', () => worker.drainImportsTick(app))
+    await vi.waitFor(() => expect(h.defs).toHaveLength(2))
+    expect(statuses('A').filter((x) => x === 'running')).toHaveLength(2)
+    // A's next tick takes no more: its share is 2
+    await inApp('A', () => worker.drainImportsTick(app))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(statuses('A').filter((x) => x === 'running')).toHaveLength(2)
+    // B gets the third slot
+    await inApp('B', () => worker.drainImportsTick(app))
+    await vi.waitFor(() => expect(statuses('B')).toEqual(['running']))
+    // the process is full (3): a third app waits
+    await inApp('N', () => worker.drainImportsTick(app))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(statuses('N')).toEqual(['queued'])
+    expect(h.defs.sort()).toEqual(['A:invoices', 'A:orders', 'B:invoices'])
+    // runs finish (no definition: error); the waiting app then gets its turn
+    open()
+    h.gate = new Promise<void>((r) => {
+      open = r
+    })
+    await vi.waitFor(() => expect(statuses('B')).toEqual(['error']))
+    await vi.waitFor(() => expect(statuses('A').filter((x) => x === 'error')).toHaveLength(2))
+    await new Promise((r) => setTimeout(r, 20))
+    await inApp('N', () => worker.drainImportsTick(app))
+    await vi.waitFor(() => expect(statuses('N')).toEqual(['running']))
+  })
+
+  it('shared: two apps draining at the same time never pass the process cap', async () => {
+    Object.assign(process.env, SHARED)
+    // each row has a file: the drain reserves its slot, then waits to read the file
+    for (const a of ['A', 'B'])
+      ['invoices', 'orders'].forEach((k, i) => {
+        h.mems[a].rows('nivaro_import_queue').push({ ...queued(i + 1, k), file: `f-${a}-${i}` })
+      })
+    let openFiles!: () => void
+    h.fileGate = new Promise<void>((r) => {
+      openFiles = r
+    })
+    const app = makeApp()
+    const a = inApp('A', () => worker.drainImportsTick(app))
+    const b = inApp('B', () => worker.drainImportsTick(app))
+    await new Promise((r) => setTimeout(r, 20))
+    openFiles()
+    h.fileGate = null
+    await Promise.all([a, b])
+    await new Promise((r) => setTimeout(r, 20))
+    const running = [...statuses('A'), ...statuses('B')].filter((x) => x === 'running')
+    expect(running).toHaveLength(3)
+    expect(worker._processImportSlotsForTests()).toBe(3)
+    open()
+    await vi.waitFor(() => expect(worker._processImportSlotsForTests()).toBe(0))
+  })
+
+  it('shared: a claim that throws gives its reserved slot back', async () => {
+    Object.assign(process.env, SHARED)
+    h.mems.A.rows('nivaro_import_queue').push(queued(1, 'invoices'))
+    h.failClaim = true
+    const app = makeApp()
+    await inApp('A', () => worker.drainImportsTick(app))
+    expect(statuses('A')).toEqual(['queued'])
+    expect(worker._processImportSlotsForTests()).toBe(0)
+  })
+
+  it('self-hosted: the one app drives 3 at once, as before', async () => {
+    keys.forEach((k, i) => {
+      h.mems['-'].rows('nivaro_import_queue').push(queued(i + 1, k))
+    })
+    const app = makeApp()
+    await worker.drainImportsTick(app)
+    await vi.waitFor(() => expect(h.defs).toHaveLength(3))
+    expect(statuses('-').filter((x) => x === 'running')).toHaveLength(3)
+  })
+})
+
+describe("readiness: is something draining this app's imports?", () => {
+  it('shared: stuck imports with no drainer are flagged (a shared deployment is not Nivaro Cloud)', async () => {
+    Object.assign(process.env, SHARED, { NIVARO_ROLE: 'web' })
+    const long = new Date(Date.now() - 60 * 60_000)
+    h.mems.A.rows('nivaro_import_queue').push({ ...queued(1), created_at: long })
+    const app = makeApp()
+    const j = await inApp('A', () => worker.importWorkerJudgement(app.redis))
+    expect(j.status).not.toBe('ok')
+    expect(j.summary).not.toContain('Cloud mode')
+  })
+
+  it('Nivaro Cloud: still "Cloud mode: ok"', async () => {
+    process.env.CLOUD_META_DB_URL = 'postgres://meta'
+    const app = makeApp()
+    const j = await worker.importWorkerJudgement(app.redis)
+    expect(j).toEqual({ status: 'ok', summary: 'Cloud mode: imports run on the tenant process.' })
+  })
+})
+
+describe('Task 14: the importer role on a shared deployment', () => {
+  const status = (app: string) => h.mems[app].rows('nivaro_import_queue')[0]?.status
+  /** What the migrating replicas keep in Redis for an app whose schema is ok at this version. */
+  const schemaOk = (r: ReturnType<typeof fakeRedis>, t: TenantRecord) =>
+    r.strings.set(
+      migrations.appSchemaKey(t.id),
+      JSON.stringify({
+        version: NIVARO_VERSION,
+        state: 'ok',
+        at: new Date().toISOString(),
+        error: null,
+        conn: migrations.appConnFingerprint(t)
+      })
+    )
+
+  beforeEach(() => {
+    Object.assign(process.env, SHARED, { NIVARO_ROLE: 'importer' })
+    h.mems.A.rows('nivaro_import_queue').push(queued(1))
+    h.mems.B.rows('nivaro_import_queue').push(queued(1))
+  })
+
+  it('drains on kicks and on its own per-app pass', () => {
+    expect(handoff.importDrainMode()).toBe('importer')
+  })
+
+  it('its pass drains every listed, ready app without a kick, each inside its own app', async () => {
+    const all = [tenant('A'), tenant('B'), tenant('M', 'maintenance'), tenant('N')]
+    useRegistry(all)
+    h.mems.N.rows('nivaro_import_queue').push(queued(1))
+    const app = makeApp()
+    for (const t of [all[0], all[1], all[2]]) schemaOk(app.redis, t) // N: never migrated
+    const out = await worker.drainEveryAppImports(app)
+    expect(out?.ran.sort()).toEqual(['A', 'B'])
+    expect(out?.skipped).toEqual(
+      expect.arrayContaining([
+        { tenant: 'M', why: 'maintenance' },
+        { tenant: 'N', why: 'not_ready' }
+      ])
+    )
+    await vi.waitFor(() => expect([status('A'), status('B')]).toEqual(['error', 'error']))
+    expect(status('N')).toBe('queued')
+    expect(h.mems.N.reads).toEqual([])
+    expect(h.defs.sort()).toEqual(['A:invoices', 'B:invoices'])
+    // Each app's importer beat is its own key: its fallback stands down only while it beats.
+    const db = handoff.handoffDbScope()
+    for (const id of ['A', 'B'])
+      expect(app.redis.strings.has(`p1:nvr:import-worker:${db}:${id}`)).toBe(true)
+  })
+
+  it('fix M4: a listed app that is neither active nor in maintenance is skipped as not ready', async () => {
+    const list = [tenant('A'), tenant('P', 'provisioning'), tenant('M', 'maintenance')]
+    useRegistry(list)
+    setTenantRegistryForTests({
+      ...(await import('../../../services/tenancy/registry.js')).getTenantRegistry()!,
+      listActive: async () => list
+    })
+    const app = makeApp()
+    for (const t of list) schemaOk(app.redis, t)
+    const out = await worker.drainEveryAppImports(app)
+    expect(out?.ran).toEqual(['A'])
+    expect(out?.skipped).toEqual(
+      expect.arrayContaining([
+        { tenant: 'P', why: 'not_ready' },
+        { tenant: 'M', why: 'maintenance' }
+      ])
+    )
+  })
+
+  it('a run whose worker died is put back and run by the pass, with no kick', async () => {
+    useRegistry([tenant('A')])
+    const old = new Date(Date.now() - 30 * 60_000)
+    h.mems.A.reset()
+    h.mems.A.rows('nivaro_import_queue').push({
+      ...queued(1),
+      status: 'running',
+      started_at: old,
+      updated_at: old
+    })
+    const app = makeApp()
+    schemaOk(app.redis, tenant('A'))
+    await worker.drainEveryAppImports(app)
+    // Put back in the queue (lease recovery), then claimed and run (no definition: error).
+    await vi.waitFor(() => expect(status('A')).toBe('error'))
+    expect(h.defs).toEqual(['A:invoices'])
+  })
+
+  it('a kick on the importer reads readiness from the stored state (it runs no migration loop)', async () => {
+    useRegistry()
+    const app = makeApp()
+    await worker.onImportKick(app, 'A|1')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(status('A')).toBe('queued')
+    expect(h.mems.A.reads).toEqual([])
+    // Stored for another database (a replaced connection) is not this app's state either.
+    app.redis.strings.set(
+      migrations.appSchemaKey('A'),
+      JSON.stringify({ version: NIVARO_VERSION, state: 'ok', conn: 'other' })
+    )
+    await worker.onImportKick(app, 'A|1')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(status('A')).toBe('queued')
+    schemaOk(app.redis, tenant('A'))
+    await worker.onImportKick(app, 'A|1')
+    await vi.waitFor(() => expect(status('A')).toBe('error'))
+    expect(status('B')).toBe('queued')
+  })
+
+  it('startImportDrainer runs the pass at once and every 10 s; a worker role starts none', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    try {
+      useRegistry()
+      const hooks: Array<() => Promise<void>> = []
+      const app = Object.assign(makeApp(), {
+        addHook: (_n: string, fn: () => Promise<void>) => hooks.push(fn)
+      })
+      schemaOk(app.redis, tenant('A'))
+      schemaOk(app.redis, tenant('B'))
+      expect(await worker.startImportDrainer(app)).toBe('importer')
+      await vi.waitFor(() => expect([status('A'), status('B')]).toEqual(['error', 'error']))
+      h.mems.A.rows('nivaro_import_queue').push(queued(2))
+      await vi.advanceTimersByTimeAsync(10_000)
+      await vi.waitFor(() =>
+        expect(h.mems.A.rows('nivaro_import_queue').map((r) => r.status)).toEqual([
+          'error',
+          'error'
+        ])
+      )
+      for (const fn of hooks) await fn()
+
+      // The worker (fallback) keeps draining from its per-app cron only: no loop of its own.
+      process.env.NIVARO_ROLE = 'worker'
+      const w = Object.assign(makeApp(), {
+        addHook: (_n: string, fn: () => Promise<void>) => hooks.push(fn)
+      })
+      h.mems.B.rows('nivaro_import_queue').push(queued(3))
+      expect(await worker.startImportDrainer(w)).toBe('fallback')
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(h.mems.B.rows('nivaro_import_queue').map((r) => r.status)).toEqual(['error', 'queued'])
+      for (const fn of hooks) await fn()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('the bulk loader on a shared deployment', () => {
+  it('is unavailable, so the run loads with inserts', () => {
+    const err = new Error('Bulk load data conversion error (type mismatch)')
+    expect(bulkUnavailableReason(err)).toBeNull() // self-hosted: a file problem fails the run
+    Object.assign(process.env, SHARED)
+    expect(bulkUnavailableReason(err)).toBe(
+      "The bulk loader uses the server's file share, which a shared deployment does not give each app; rows load with inserts."
+    )
+  })
+})

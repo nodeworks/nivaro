@@ -391,4 +391,27 @@ describe('gates', () => {
     expect(await takeBootWarm(redis as never, '0.2.53', 'b')).toBe(true)
     expect(redis.set).toHaveBeenCalledWith('nvr:warm:0.2.52', 'a', 'EX', 14400, 'NX')
   })
+
+  it('inside an app (Hub shared deployment) the boot warm is taken once per app per version', async () => {
+    const { withTenant } = await import('../../../db/tenant-context.js')
+    const t = (id: string) =>
+      ({
+        id,
+        slug: id,
+        name: id,
+        status: 'active',
+        dbClient: 'pg',
+        dbConnection: `postgres://u@127.0.0.1:1/app_${id}`,
+        poolMax: 1,
+        hostnames: []
+      }) as never
+    const redis = fakeRedis()
+    const take = (app: string, holder: string) =>
+      withTenant(t(app), () => takeBootWarm(redis as never, '0.2.52', holder))
+    expect(await take('A', 'a')).toBe(true)
+    expect(await take('A', 'b')).toBe(false)
+    expect(await take('B', 'b')).toBe(true)
+    expect(redis.set).toHaveBeenCalledWith('nvr:warm:A:0.2.52', 'a', 'EX', 14400, 'NX')
+    expect(redis.set).toHaveBeenCalledWith('nvr:warm:B:0.2.52', 'b', 'EX', 14400, 'NX')
+  })
 })

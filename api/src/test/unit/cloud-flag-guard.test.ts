@@ -50,7 +50,54 @@ const EXTRA_CALLS: Record<string, { multiTenant?: number; nivaroCloud?: number }
   // deployment (T4) — a shared deployment always has HUB_URL for its tenant list. hubUrl() (+1)
   // and hubSigninConfig() / hubSigninProblems() (+2).
   'services/hub/mode.ts': { multiTenant: 1 },
-  'services/hub-signin/config.ts': { multiTenant: 2 }
+  'services/hub-signin/config.ts': { multiTenant: 2 },
+  // Row schedules per app: resyncSchedules refuses in Nivaro Cloud only (its T1 entry is weight 0);
+  // a Hub shared deployment reconciles inside an app, so each entry binds to it.
+  'services/row-schedules.ts': { nivaroCloud: 1 },
+  // Mail retry, the cumulative-flow rollup and the live SLA flip pass run per app on a shared
+  // deployment: each now refuses in Nivaro Cloud only (their T1/T3/T6 entries are weight 0).
+  'services/mail-retry-state.ts': { nivaroCloud: 1 },
+  'services/cumulative-flow.ts': { nivaroCloud: 2 },
+  'services/sla-flips.ts': { nivaroCloud: 1 },
+  // Staged imports per app: the hand-off (enqueueImportJob, importDrainMode, enqueueImportRun) and
+  // the collection-import lease refuse in Nivaro Cloud only (their T4 entries are weight 0); a Hub
+  // shared deployment queues, kicks, leases and drains inside each app.
+  'services/import-handoff.ts': { nivaroCloud: 3 },
+  'routes/imports.ts': { nivaroCloud: 1 },
+  // The import worker's judgement (its T4 entry is weight 0): only Nivaro Cloud answers "Cloud
+  // mode"; a shared deployment's stuck imports are flagged (final fix F7).
+  'services/staged-import-worker.ts': { nivaroCloud: 1 },
+  // Exports per app (Task 15): exportHandoffEnabled and the export worker's judgement refuse in
+  // Nivaro Cloud only (their T4 entries are weight 0); a Hub shared deployment hands off, beats and
+  // drains inside each app.
+  'services/export-handoff.ts': { nivaroCloud: 1 },
+  'services/export-worker.ts': { nivaroCloud: 1 },
+  // Retention pass and digests per app: the Monday AI summary (audience + register-once) and the
+  // Log retention page's `cloud` field refuse in Nivaro Cloud only (their T6 entries are weight 0);
+  // a Hub shared deployment runs each inside its apps. (The Traffic Map digest stays off on shared.)
+  'services/ai-explain-weekly.ts': { nivaroCloud: 2 },
+  'services/log-retention.ts': { nivaroCloud: 1 },
+  // The Teams bot per app: its admin routes, person routes and config refuse in Nivaro Cloud only
+  // (their T4 entries are weight 0); a Hub shared deployment runs each app's own saved bot. The
+  // phone app's `teams_bot` feature follows (its T5 `multiTenant` const still gates infrastructure).
+  'routes/teams-bot.ts': { nivaroCloud: 4 },
+  'services/teams-bot/config.ts': { nivaroCloud: 2 },
+  'services/app-info.ts': { nivaroCloud: 1 },
+  // The push relay per app: POST /push/relay refuses in Nivaro Cloud only (its T7 entry is weight
+  // 0); a Hub shared deployment connects each app's own relay. instanceOrigin() (its C4 entry is
+  // weight 0) names the app's own origin on every multi-tenant process.
+  'routes/push.ts': { nivaroCloud: 1 },
+  // pushRelayConfig's stored url without a stored key counts in Nivaro Cloud only (its T7 entry
+  // is weight 0): on a shared deployment the url travels with the app's own key (final fix F10).
+  'services/push-relay.ts': { nivaroCloud: 1 },
+  'services/phone-push.ts': { multiTenant: 1 },
+  // The realtime tier on a Hub shared deployment: socketsServed() always serves sockets in Nivaro
+  // Cloud only (its T4 entry is weight 0), and realtimeRoleProblem() refuses NIVARO_ROLE=realtime
+  // in Nivaro Cloud only — the one refusal index.ts and realtime-server.ts now share (their T2
+  // entries are weight 0). realtimeBoardRuns() (+1): the realtime board runs everywhere but Nivaro
+  // Cloud — server.ts and realtime-server.ts start it on a shared deployment too (server.ts's T3
+  // entry is weight 0).
+  'services/process-role.ts': { nivaroCloud: 3 }
 }
 
 type Rule = 'T1' | 'T2' | 'T3' | 'T4' | 'T5' | 'T6' | 'T7' | 'C1' | 'C2' | 'C3' | 'C4' | 'C5'

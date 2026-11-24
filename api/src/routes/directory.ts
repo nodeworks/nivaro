@@ -2,8 +2,11 @@ import { randomBytes } from 'node:crypto'
 import type { FastifyInstance, FastifyReply } from 'fastify'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
+import { tenantOrigin } from '../db/tenant-context.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { appBox } from '../services/app-state.js'
+import { perAppJobs } from '../services/deployment-mode.js'
 import { checkDirectory } from '../services/directory-sync.js'
 import {
   DirectoryError,
@@ -59,6 +62,10 @@ async function nivaroMatch(u: DirectoryUser) {
   return row ?? null
 }
 
+/** When this app last forced a directory token refresh (`?fresh=1`): each app on a shared
+ *  deployment has its own 30 s throttle, so one app's refresh never holds back another's. */
+const lastForcedRefresh = appBox(() => 0)
+
 export async function directoryRoutes(app: FastifyInstance) {
   // What the app token can do — the card and the Add-user dialog gate on this.
   // `?fresh=1` drops the cached token first: a consent granted in Azure only
@@ -66,13 +73,12 @@ export async function directoryRoutes(app: FastifyInstance) {
   // and rate-limited — every forced refresh is a call to Microsoft's token
   // endpoint on the tenant's behalf, not something any signed-in user should
   // be able to repeat in a loop.
-  let lastForcedRefresh = 0
   app.get<{ Querystring: { fresh?: string } }>(
     '/status',
     { preHandler: requireAuth },
     async (req) => {
-      if (req.query.fresh === '1' && req.isAdmin && Date.now() - lastForcedRefresh > 30_000) {
-        lastForcedRefresh = Date.now()
+      if (req.query.fresh === '1' && req.isAdmin && Date.now() - lastForcedRefresh.value > 30_000) {
+        lastForcedRefresh.value = Date.now()
         resetDirectoryToken()
       }
       return { data: await directoryStatus() }
@@ -198,8 +204,20 @@ export async function directoryRoutes(app: FastifyInstance) {
   // `returnTo` is the Settings page to land back on (allowlisted origins only).
   app.get('/connect', { preHandler: requireAdmin }, async (req, reply) => {
     const q = req.query as { returnTo?: string; login_hint?: string }
+    // A Hub shared deployment serves many apps: the only allowed origin is this app's own (the
+    // listed host the request came on), never the deployment's configured addresses.
+    const appOrigin = perAppJobs() ? tenantOrigin() : null
+    if (perAppJobs() && !appOrigin) {
+      return reply
+        .code(400)
+        .send({ error: 'This app has no address to return to', code: 'directory_no_origin' })
+    }
+    const base = appOrigin ?? config.ADMIN_URL
     const allowed = new Set(
-      [config.ADMIN_URL, config.PUBLIC_URL, ...config.APP_URLS.split(',')]
+      (appOrigin
+        ? [appOrigin]
+        : [config.ADMIN_URL, config.PUBLIC_URL, ...config.APP_URLS.split(',')]
+      )
         .map((u) => u.trim())
         .filter(Boolean)
         .map((u) => {
@@ -210,9 +228,9 @@ export async function directoryRoutes(app: FastifyInstance) {
           }
         })
     )
-    let returnTo = `${config.ADMIN_URL}/settings`
+    let returnTo = `${base}/settings`
     try {
-      const parsed = new URL(q.returnTo ?? '', config.ADMIN_URL)
+      const parsed = new URL(q.returnTo ?? '', base)
       if (allowed.has(parsed.origin)) returnTo = `${parsed.origin}${parsed.pathname}`
     } catch {
       /* default */
@@ -221,7 +239,7 @@ export async function directoryRoutes(app: FastifyInstance) {
     const redirectUri = `${new URL(returnTo).origin}/api/auth/callback`
     let url: string
     try {
-      url = directoryConnectUrl({ state, redirectUri, loginHint: q.login_hint ?? null })
+      url = await directoryConnectUrl({ state, redirectUri, loginHint: q.login_hint ?? null })
     } catch (err) {
       return sendDirectoryError(reply, err)
     }

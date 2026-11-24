@@ -913,6 +913,29 @@ describe('prepareStackSpec (restart, ruling P4-16)', () => {
     expect(a.calls).toEqual(['health'])
   })
 
+  it('controller ruling: a large stack renders the exporter only when the agent reports 0.2.2+', async () => {
+    await db('nivaro_hub_stack_settings').where({ environment_id: 2 }).update({ size: 'large' })
+    const roles = async (agent_version: string) => {
+      const a = fakeAgent(['converged'], () => health({ agent_version }))
+      const p = await RS.prepareStackSpec(
+        2,
+        {
+          name: 'acme-prod',
+          driverId: 3,
+          version: '0.3.208',
+          image: IMAGE,
+          extensions: { 'efp-ops': STG_PIN }
+        },
+        { agent: a.agent as never }
+      )
+      return p.spec.roles.map((r) => r.role)
+    }
+    // Older or unreadable: no exporter (the importer keeps running exports), and no failure.
+    expect(await roles('0.2.1')).toEqual(['web', 'worker', 'realtime', 'importer'])
+    expect(await roles('dev')).toEqual(['web', 'worker', 'realtime', 'importer'])
+    expect(await roles('0.2.2')).toEqual(['web', 'worker', 'realtime', 'importer', 'exporter'])
+  })
+
   it('refuses malformed pins (fails closed)', async () => {
     await expect(
       RS.prepareStackSpec(2, {

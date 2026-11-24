@@ -1,7 +1,9 @@
 import { config } from '../config.js'
 import { db } from '../db/index.js'
+import { appBox } from './app-state.js'
 import { graphChaos } from './chaos/outbound-points.js'
 import { perAppJobs } from './deployment-mode.js'
+import { decryptValue } from './encryption.js'
 import { overlaySettings } from './settings-overrides.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
@@ -50,6 +52,8 @@ export type DirectoryUser = {
 
 export type DirectoryStatus = {
   configured: boolean
+  /** A Hub shared deployment: the app registration is the app's own (Settings), never the env. */
+  shared_deployment: boolean
   granted: boolean
   roles: string[]
   tenant: string | null
@@ -85,6 +89,8 @@ export async function directoryIdentity(): Promise<DirectoryIdentity> {
       )
       .orderBy('id', 'asc')
       .first()) as Record<string, unknown> | undefined
+    // On a shared deployment the deployment's NIVARO_SETTINGS_OVERRIDES never supplies an app's
+    // directory sign-in (service account, refresh token): each app's is its own.
     const row = await overlaySettings(raw ?? {})
     const username = typeof row.directory_username === 'string' ? row.directory_username.trim() : ''
     const password = typeof row.directory_password === 'string' ? row.directory_password : ''
@@ -131,12 +137,12 @@ const GRAPH_SCOPE = 'https://graph.microsoft.com/.default'
  * forces a fresh sign-in (as the service account, not whoever is browsing),
  * `offline_access` is what yields the refresh token.
  */
-export function directoryConnectUrl(args: {
+export async function directoryConnectUrl(args: {
   state: string
   redirectUri: string
   loginHint?: string | null
-}): string {
-  const c = credentials()
+}): Promise<string> {
+  const c = await credentials()
   if (!c.tenant || !c.clientId) {
     throw new DirectoryError(
       'Directory lookups are not configured (no Microsoft tenant or app credentials)',
@@ -173,7 +179,7 @@ export async function completeDirectoryConnect(args: {
   code: string
   redirectUri: string
 }): Promise<{ user: string; granted: boolean }> {
-  const c = credentials()
+  const c = await credentials()
   if (!c.tenant || !c.clientId || !c.secret) {
     throw new DirectoryError(
       'Directory lookups are not configured (no Microsoft tenant or app credentials)',
@@ -314,11 +320,51 @@ function tenantId(): string | null {
   return m?.[1] ?? null
 }
 
-function credentials() {
-  // Hub phase 5 (P5-10): on a shared deployment one app never uses the deployment's own Microsoft
-  // app registration (env). No app setting holds one yet (phase 6), so the directory reads as not
-  // configured there and directory-sync skips the app.
-  if (perAppJobs()) return { tenant: null, clientId: '', secret: '' }
+export type GraphCredentials = { tenant: string | null; clientId: string; secret: string }
+
+const NO_CREDENTIALS: GraphCredentials = { tenant: null, clientId: '', secret: '' }
+const SAVED_CREDENTIALS_TTL_MS = 60_000
+
+/** The current app's saved app registration (shared only), for a minute; resetDirectoryToken
+ *  drops it. */
+const savedCreds = appBox<{ at: number; creds: GraphCredentials } | null>(() => null)
+
+/**
+ * The app's own Microsoft app registration from its settings row (migration 554): tenant id,
+ * client id and the sealed client secret, opened with the app's own key. Any missing piece, an
+ * absent column or a secret that does not open = not configured (a failure is not cached).
+ */
+async function savedCredentials(): Promise<GraphCredentials> {
+  const hit = savedCreds.value
+  if (hit && Date.now() - hit.at < SAVED_CREDENTIALS_TTL_MS) return hit.creds
+  let creds: GraphCredentials
+  try {
+    const row = (await db('nivaro_settings')
+      .select(
+        'directory_graph_tenant_id',
+        'directory_graph_client_id',
+        'directory_graph_client_secret'
+      )
+      .orderBy('id', 'asc')
+      .first()) as Record<string, unknown> | undefined
+    const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '')
+    const sealed = str(row?.directory_graph_client_secret)
+    creds = {
+      tenant: str(row?.directory_graph_tenant_id) || null,
+      clientId: str(row?.directory_graph_client_id),
+      secret: sealed ? decryptValue(sealed) : ''
+    }
+  } catch {
+    return NO_CREDENTIALS
+  }
+  savedCreds.value = { at: Date.now(), creds }
+  return creds
+}
+
+/** The server's own Microsoft app registration (env GRAPH_*, else the OIDC sign-in app): what
+ *  the directory uses everywhere but on a shared deployment. The Hub's shared-readiness report
+ *  reads it to warn before a move (DIRECTORY_ENV_CREDENTIALS). */
+export function envGraphCredentials(): GraphCredentials {
   return {
     tenant: tenantId(),
     clientId: config.GRAPH_CLIENT_ID || config.OIDC_CLIENT_ID,
@@ -326,12 +372,29 @@ function credentials() {
   }
 }
 
-export function directoryConfigured(): boolean {
-  const c = credentials()
+async function credentials(): Promise<GraphCredentials> {
+  // Hub phase 5 (P5-10) + shared features (554): on a shared deployment one app never uses the
+  // deployment's own Microsoft app registration (env) — only the one saved in its own settings.
+  // Without one the directory reads as not configured there and directory-sync skips the app.
+  if (perAppJobs()) return savedCredentials()
+  return envGraphCredentials()
+}
+
+export async function directoryConfigured(): Promise<boolean> {
+  const c = await credentials()
   return Boolean(c.tenant && c.clientId && c.secret)
 }
 
-let cachedToken: { key: string; token: string; expiresAt: number; roles: string[] } | null = null
+/** The Graph token, per app; `client` and `tenant` are the client id and Entra tenant it was
+ *  minted for (a token is never served for another registration or tenant). */
+const cachedToken = appBox<{
+  key: string
+  client: string
+  tenant: string | null
+  token: string
+  expiresAt: number
+  roles: string[]
+} | null>(() => null)
 
 /** The Graph token cache key: the app (tenant id, '' self-hosted) and the identity it signs in
  *  as, so two apps of one process never share a token. */
@@ -360,7 +423,7 @@ export function grantsFromJwt(token: string): string[] {
  * app, or the password grant for a configured service account.
  */
 async function appToken(): Promise<{ token: string; roles: string[] }> {
-  const c = credentials()
+  const c = await credentials()
   if (!c.tenant || !c.clientId || !c.secret) {
     throw new DirectoryError(
       'Directory lookups are not configured (no Microsoft tenant or app credentials)',
@@ -370,8 +433,15 @@ async function appToken(): Promise<{ token: string; roles: string[] }> {
   }
   const identity = await directoryIdentity()
   const key = directoryTokenKey(identity)
-  if (cachedToken && cachedToken.key === key && cachedToken.expiresAt > Date.now()) {
-    return { token: cachedToken.token, roles: cachedToken.roles }
+  const hit = cachedToken.value
+  if (
+    hit &&
+    hit.key === key &&
+    hit.client === c.clientId &&
+    hit.tenant === c.tenant &&
+    hit.expiresAt > Date.now()
+  ) {
+    return { token: hit.token, roles: hit.roles }
   }
   const body =
     identity.mode === 'connected'
@@ -457,31 +527,37 @@ async function appToken(): Promise<{ token: string; roles: string[] }> {
       )
       .catch(() => undefined)
   }
-  cachedToken = {
+  const minted = {
     key,
+    client: c.clientId,
+    tenant: c.tenant,
     token: json.access_token,
     expiresAt: Date.now() + Math.max(60, (json.expires_in ?? 3600) - 60) * 1000,
     roles: grantsFromJwt(json.access_token)
   }
-  return { token: cachedToken.token, roles: cachedToken.roles }
+  cachedToken.value = minted
+  return { token: minted.token, roles: minted.roles }
 }
 
-/** Forget the cached token — a consent change in Azure shows up on the next call. */
+/** Forget the cached token and saved credentials — a consent change in Azure or a new app
+ *  registration shows up on the next call. Inside an app: that app's; outside: every app's. */
 export function resetDirectoryToken(): void {
-  cachedToken = null
+  cachedToken.reset()
+  savedCreds.reset()
 }
 
 export async function directoryStatus(): Promise<DirectoryStatus> {
-  const tenant = tenantId()
+  const c = await credentials()
   const identity = await directoryIdentity()
   const base = {
-    tenant,
+    tenant: c.tenant,
+    shared_deployment: perAppJobs(),
     auth_mode: identity.mode,
     username: identity.username,
     connected_user: identity.connectedUser,
     connected_at: identity.connectedAt
   }
-  if (!directoryConfigured()) {
+  if (!(c.tenant && c.clientId && c.secret)) {
     return {
       ...base,
       configured: false,

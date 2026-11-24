@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto'
 import { config } from '../../config.js'
 import { db } from '../../db/index.js'
 import type { User } from '../../types.js'
+import { appBoundSigInput } from '../tenancy/credential-binding.js'
 import { canSignIn, getUser } from '../users.js'
 
 // Who is who: one nivaro_teams_links row per Teams person linked to a Nivaro user (spec §4).
@@ -178,7 +179,10 @@ export async function noteLinkError(aadObjectId: string, error: string): Promise
 // ─── Connect token: proves "this Teams person" through the sign-in round trip ───
 
 const b64url = (buf: Buffer) => buf.toString('base64url')
-const hmac = (data: string) => createHmac('sha256', config.SESSION_SECRET).update(data).digest()
+// The app is in the HMAC input on a Hub shared deployment (one SESSION_SECRET, many apps): a link
+// minted while app A serves does not verify while app B does. Unchanged elsewhere.
+const hmac = (data: string) =>
+  createHmac('sha256', config.SESSION_SECRET).update(appBoundSigInput(data)).digest()
 
 export function signConnectToken(aadObjectId: string, tenantId: string): string {
   const body = b64url(

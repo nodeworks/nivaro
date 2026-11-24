@@ -3,7 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { isMultiTenant } from '../services/deployment-mode.js'
+import { isNivaroCloud } from '../services/deployment-mode.js'
 import {
   credentialLive,
   deletePushRowsOrKeep,
@@ -359,11 +359,12 @@ export async function pushRoutes(app: FastifyInstance) {
         .send({ error: "content must be 'full' or 'minimal'", code: 'RELAY_CONTENT_INVALID' })
     }
     const body = (req.body ?? {}) as Record<string, unknown>
-    // Multi-tenant (Nivaro Cloud or a Hub shared deployment, rule T7): the platform owns an app's
-    // relay key and url (cloud: POST /admin/push-relay): an admin here may choose the content,
-    // never connect, set, point elsewhere or drop the key.
+    // Nivaro Cloud: the platform owns an app's relay key and url (POST /admin/push-relay): an
+    // admin here may choose the content, never connect, set, point elsewhere or drop the key. On
+    // a Hub shared deployment each app connects its own relay (stored in its own database); the
+    // env relay key is never used there (envRelayKey() is null on any multi-tenant process).
     if (
-      isMultiTenant() &&
+      isNivaroCloud() &&
       (connect || disconnect || relay_key !== undefined || body.relay_url !== undefined)
     ) {
       return reply.code(403).send({

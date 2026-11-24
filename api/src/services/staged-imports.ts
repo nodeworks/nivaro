@@ -11,6 +11,7 @@ import * as XLSX from 'xlsx'
 import { describeColumns } from '../db/dialect/catalog.js'
 import { db } from '../db/index.js'
 import { sqlDialect } from '../db/sql-dialect.js'
+import { perAppJobs } from './deployment-mode.js'
 import { getImportProcessor, runImportProcessor } from './import-processors.js'
 import { describeRollupRecalc, parseRecalcRollups, recalcRollupsFedBy } from './import-rollups.js'
 import {
@@ -584,10 +585,20 @@ function keepsStaging(raw: unknown): boolean {
   }
 }
 
+/** Why a Hub shared deployment never bulk loads (and a 'bulk' definition loads with inserts). */
+export const SHARED_BULK_REASON =
+  "The bulk loader uses the server's file share, which a shared deployment does not give each app; rows load with inserts."
+/** What a 'bulk_only' definition fails with there (it never falls back). */
+const SHARED_BULK_REFUSAL =
+  'The bulk loader is not available on a shared deployment: it uses the server\'s file share, which a shared deployment does not give each app. Set the import\'s loader to "insert" or "bulk".'
+
 /** Why a bulk load could not happen on THIS host — the share, smbclient or
  *  BULK INSERT itself — as opposed to a problem with the file (an unknown
- *  column, a conversion error), which the insert loader would hit too. */
+ *  column, a conversion error), which the insert loader would hit too. A Hub
+ *  shared deployment never reaches the share (loadViaShare refuses first), so
+ *  there every bulk failure is that one. */
 export function bulkUnavailableReason(err: unknown): string | null {
+  if (perAppJobs()) return SHARED_BULK_REASON
   const msg = describeSqlError(err)
   const patterns: Array<[RegExp, string]> = [
     [/needs SAMBA_USER/i, 'the SMB share is not configured on this host'],
@@ -636,7 +647,10 @@ async function loadStaging(
       // the insert loader must never append to a half-written load.
       await db(table).del()
       await loadChunked(table, rows, columns)
-      note = `Bulk load unavailable (${why}) — loaded with batched inserts instead.`
+      note =
+        why === SHARED_BULK_REASON
+          ? why
+          : `Bulk load unavailable (${why}) — loaded with batched inserts instead.`
     }
   } else {
     await loadChunked(table, rows, columns)
@@ -649,6 +663,9 @@ async function loadViaShare(
   rows: Array<Record<string, string>>,
   columns: string[]
 ): Promise<void> {
+  // The share (SAMBA_*) and the temp folder are the deployment's, not one app's: never on a
+  // Hub shared deployment ('bulk' falls back to inserts there, 'bulk_only' fails saying so).
+  if (perAppJobs()) throw new Error(SHARED_BULK_REFUSAL)
   // BULK INSERT from an SMB share is SQL Server's; 'bulk' falls back to batched inserts
   if (sqlDialect(db as unknown as Knex) !== 'mssql')
     throw new Error('BULK INSERT needs SQL Server — the bulk load is unavailable on this database')

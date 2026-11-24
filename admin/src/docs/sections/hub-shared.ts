@@ -25,7 +25,7 @@ export const hubSharedDocs: DocSection = {
         [
           '`docker`',
           'The Hub, through the agent, on a Docker driver.',
-          'Writes the stack (one service with role `all`, replicas by size, bundled or external Redis), applies it, and upgrades and rolls it back. The stack is owned by the deployment key, never by an app. The Hub makes `SESSION_SECRET` and `ENCRYPTION_KEY` once and keeps them sealed.'
+          'Writes the stack (role `all` at small, separate web, worker, importer and exporter services at medium and large; bundled or external Redis), applies it, and upgrades and rolls it back. The stack is owned by the deployment key, never by an app. The Hub makes `SESSION_SECRET` and `ENCRYPTION_KEY` once and keeps them sealed.'
         ],
         [
           '`registered`',
@@ -105,17 +105,48 @@ export const hubSharedDocs: DocSection = {
         'Shared deployments need Traefik v3. The pattern is a Traefik v3 `HostRegexp` rule with priority 1, so any exact `Host()` rule from another stack wins over it.',
         "A wildcard name needs a wildcard certificate. If the stack's router uses a certificate resolver, the wildcard needs a DNS-01 challenge (an HTTP challenge cannot issue a wildcard). Or make the wildcard certificate Traefik's default certificate, as the Hub does for apps it creates.",
         'The pattern must sit under the agent host suffixes (`HUB_AGENT_HOST_SUFFIXES`). A second stack that claims the same pattern is refused (`HOSTNAME_TAKEN`, field `host_pattern`).',
-        "A shared stack has no `realtime` role (`ROLE_NOT_SHARED`), and the stack's environment must name its own key (`SHARED_KEY_MISMATCH`). These two agent field codes join the others in Docker driver and Hub agent.",
+        "A shared stack's roles are `all` alone or a split with both `web` and `worker`, a `realtime` role allowed beside them from agent 0.2.2 (`ROLE_NOT_SHARED`); the stack's environment must name its own key (`SHARED_KEY_MISMATCH`). These two agent field codes join the others in Docker driver and Hub agent.",
         'An agent older than 0.2.0 answers `UNKNOWN_FIELD` for `host_pattern` and `REQUIRED` for an empty `hostnames` list. Update the agent before deploying a shared stack.'
       ]
     },
     {
       type: 'p',
-      text: 'The Hub agent image has to be 0.2.0 or later (`nodeworks/nivaro-hub-agent`; publish the tag `@hub-agent-0.2.0` first, the release step is in Docker driver and Hub agent). A plan against an older agent stops with `AGENT_TOO_OLD`. The rendered stack is one service with role `all` (replicas: small 1, medium 2, large 3). There is never a `realtime` role, and no `web` role either, because a web-only process would leave exports, media and renders with nobody to drain them. The stack sets no sticky cookie on a multi-replica service: clients connect over websockets first, and the long-polling fallback may bounce between replicas. If you front the stack with a proxy that needs stickiness, add it there.'
+      text: 'The Hub agent image has to be 0.2.0 or later (`nodeworks/nivaro-hub-agent`; publish the tag `@hub-agent-0.2.0` first, the release step is in Docker driver and Hub agent). A plan against an older agent stops with `AGENT_TOO_OLD`. A medium or large stack (split into web, worker, importer and exporter) needs agent 0.2.2 or later (`@hub-agent-0.2.2`): an older agent refuses the split and the exporter role, so its plan stops with `AGENT_TOO_OLD` too; small (one `all`) still needs only 0.2.0. The stack size sets the services (`settings.size`, default small). The stack sets no sticky cookie on a multi-replica service: clients connect over websockets first, and the long-polling fallback may bounce between replicas. If you front the stack with a proxy that needs stickiness, add it there.'
+    },
+    {
+      type: 'table',
+      head: ['Size', 'Services (replicas)', 'Notes'],
+      rows: [
+        [
+          'small',
+          '`all` ×1',
+          'One process does everything: serves, ticks crons, drains imports and media.'
+        ],
+        [
+          'medium',
+          '`web` ×2, `worker` ×1, `importer` ×1, `exporter` ×1',
+          "Web runs with `CRON_TICKS=off`. The worker is the only process that ticks crons, so every app's scheduled jobs, row schedules and 10-second import tick run there. The importer runs every app's staged imports, the exporter every app's background exports."
+        ],
+        [
+          'large',
+          '`web` ×3, `worker` ×1, `importer` ×1, `exporter` ×1',
+          'As medium, with a third web replica.'
+        ]
+      ]
+    },
+    {
+      type: 'ul',
+      items: [
+        'Every service serves every app on the deployment: the same variables (`HUB_SHARED_DEPLOYMENT` and the deployment-wide `settings.env` included), the same secrets and the same extensions. Only `NIVARO_ROLE` differs. Each service gets 2 CPUs and 4 GB per replica.',
+        "The importer drains an app when an upload kicks it, and also passes over every ready app every 10 seconds, so a run put back after its process died starts without a new upload. It runs no migrations: it drains an app only once the migrating services have stored that app's schema as ok at this version. While it checks in for an app, the worker leaves that app's imports to it; when it stops, the worker takes over within 90 seconds.",
+        "The exporter runs background exports the same way, app by app: a web process hands an app's export to it while it checks in for that app, a kick starts it at once, and it passes over every ready app every 10 seconds. Like the importer it runs no migrations and reads each app's stored schema state. While it checks in for an app, the importer and the worker leave that app's exports to it; when it stops, the importer takes them over, then the worker, within 90 seconds.",
+        'A large stack also runs `realtime` ×2 (1 CPU and 2 GB per replica): the live connections of every app (Socket.io, graphql-ws and the event streams), each resolved to its app by the host it was opened on, while web runs `SOCKETS=off`. It needs an image from 0.3.212, the Traefik edge with v3 labels and agent 0.2.2; otherwise (and at medium) web keeps sockets on. The agent routes the live paths of the host pattern to it with a pattern router of its own (priority 2, above the web pattern router, below any explicit name).',
+        'Changing the size is an upgrade: the plan lists the services it deploys (`roles`), what the last run deployed (`roles_from`, `all` for a run before the split) and warns `ROLES_CHANGE` with the services added and removed. The agent creates the new services before it removes the old ones. Only an upgrade changes the services: an apply that is not one (after a token rotation or a new Redis address, or a move adding or removing a name) keeps the services the stack runs, and every successful run records the services it applied. A stack that runs web, worker and importer gains the exporter on its next upgrade (`ROLES_CHANGE` adds exporter). Stats such as live replicas count every process, importer, exporter and worker included.'
+      ]
     },
     {
       type: 'p',
-      text: 'Bundled Redis is the default. With external Redis (stack setting `redis: external`) set the address as a write-only secret: `PATCH /api/hub/shared/:id` with `{secrets: {REDIS_URL: "rediss://…"}}` (a `redis://` or `rediss://` address; `null` or an empty string clears it). It is kept sealed, read back only as `••••••`, never logged, and it applies on the next stack apply (the PATCH starts one, like a token rotation). Give each shared deployment its own Redis database: the maintenance flags and other per-database keys are not scoped to a deployment, so two deployments (or a deployment and an app) on one database would read each other\'s. Without the secret an external-Redis plan stops with `REDIS_URL_MISSING`.'
+      text: 'Bundled Redis is the default. With external Redis (stack setting `redis: external`) set the address as a write-only secret: `PATCH /api/hub/shared/:id` with `{secrets: {REDIS_URL: "rediss://…"}}` (a `redis://` or `rediss://` address; `null` or an empty string clears it). It is kept sealed, read back only as `••••••`, never logged, and it applies on the next stack apply (the PATCH starts one, like a token rotation). Give each shared deployment its own Redis database: the maintenance flags and other per-database keys are not scoped to a deployment, so two deployments (or a deployment and an app) on one database would read each other\'s, and one would stop the other\'s scheduled jobs. A different channel prefix does not help: most keys carry none. The plan stops with `REDIS_DB_SHARED` when another stack the Hub runs uses the same database (host, port and database number), and with `REDIS_URL_MISSING` without the secret.'
     },
     {
       type: 'p',
@@ -154,7 +185,7 @@ export const hubSharedDocs: DocSection = {
     },
     {
       type: 'note',
-      text: 'Placing two environments of one app on one deployment is allowed (the usual case is development, staging and production together). The plan warns `SAME_APP_ON_DEPLOYMENT` and nothing more: the protections above are what keep copied databases apart.'
+      text: "Placing two environments of one app on one deployment is allowed (the usual case is development, staging and production together). The plan warns `SAME_APP_ON_DEPLOYMENT` and nothing more: the protections above are what keep copied databases apart. A copy carries the original's saved Teams bot and directory registration, so turn the bot off on the copy if it should not answer."
     },
     { type: 'h2', id: 'hub-shared-maintenance', text: 'Maintenance and not-ready apps' },
     {
@@ -257,7 +288,7 @@ export const hubSharedDocs: DocSection = {
         ],
         [
           '`VERSION_UNKNOWN`, `AGENT_UNREACHABLE`, `AGENT_TOO_OLD`',
-          'The version has no image in the registry the Hub watches, the agent does not answer, or the agent is older than 0.2.0.'
+          'The version has no image in the registry the Hub watches, the agent does not answer, or the agent is older than 0.2.0 (0.2.2 for a medium or large stack).'
         ],
         [
           '`NO_DRIVER`, `NO_STACK_NAME`, `IMAGE_NOT_ALLOWED`, `EXTENSION_NOT_ALLOWED`, `EXTENSION_UNPINNED`',
@@ -268,7 +299,7 @@ export const hubSharedDocs: DocSection = {
           'The routing the stack would get is not one the agent accepts (see Host pattern and explicit hosts). An agent set for Traefik v2 (`HUB_AGENT_TRAEFIK_VERSION=2`) cannot route a host pattern: the plan blocks `PATTERN_NOT_ALLOWED` until the agent is on Traefik v3 or the pattern is removed.'
         ],
         [
-          '`REDIS_NOT_AVAILABLE`, `REDIS_URL_MISSING`, `HUB_URL_UNUSABLE`',
+          '`REDIS_NOT_AVAILABLE`, `REDIS_URL_MISSING`, `REDIS_DB_SHARED`, `HUB_URL_UNUSABLE`',
           'Bundled Redis asked for but the agent has no Redis image, external Redis chosen without its address, or the Hub address the stack would get is not a usable https origin.'
         ],
         [
@@ -355,22 +386,12 @@ export const hubSharedDocs: DocSection = {
     { type: 'h2', id: 'hub-shared-not-yet', text: 'What a shared app cannot do yet' },
     {
       type: 'p',
-      text: 'Each item below is deferred. The Hub enforces it when a dedicated app moves in: a blocker stops the move, a warning is shown in the plan. A new environment placed straight on a shared deployment has none of these features from the start.'
+      text: 'Each item below is deferred. The Hub enforces it when a dedicated app moves in: a blocker stops the move, a warning is shown in the plan. A new environment placed straight on a shared deployment has none of these features from the start. Staged imports, row schedules, directory lookups, the Teams bot, phone push, mail retry and the other per-app jobs are not in this table: they work per app (see Per app on a shared deployment below).'
     },
     {
       type: 'table',
       head: ['Gap', 'What happens', 'Move check'],
       rows: [
-        [
-          'Staged imports (file upload, import drainer)',
-          'The upload answers 409 `IMPORTS_NOT_ON_SHARED`. Imports that run inside the request still work.',
-          'blocker `STAGED_IMPORTS`'
-        ],
-        [
-          'Row schedules (scheduled reports, retention policies, sync jobs, scheduled flows)',
-          'Per-app hydration is missing. Silent loss is worse than no move.',
-          'blocker `ROW_SCHEDULES`'
-        ],
         ['GitLab issue sync', 'Off.', 'blocker `ISSUE_TRACKERS`'],
         [
           'Flows with the `exec-script` operation',
@@ -398,16 +419,6 @@ export const hubSharedDocs: DocSection = {
           'checklist item `callbacks_registered`'
         ],
         [
-          'Microsoft directory lookups and sync',
-          'The directory reads as not configured.',
-          'warning `DIRECTORY_SYNC`'
-        ],
-        [
-          'Phone sign-in and push, Teams bot, automatic mail retry, huddle relay (TURN)',
-          'Off on shared, as in cloud.',
-          'warnings `PHONE_PUSH`, `TEAMS_BOT`, `MAIL_RETRY`, `HUDDLE_TURN`'
-        ],
-        [
           'Mail settings from the environment (`SMTP_*`)',
           'An app uses its own saved mail settings.',
           'warning `ENV_SMTP`'
@@ -418,14 +429,20 @@ export const hubSharedDocs: DocSection = {
           'warnings `SESSION_REPLAYS`, `REPLAYS_NOT_MOVED`'
         ],
         [
+          'Outside-write watch (the SQL Server change tracker)',
+          'Off on shared: it needs a deployment-wide watcher.',
+          '-'
+        ],
+        [
+          'Traffic digest section and the Traffic Map page',
+          'Off on shared. The daily digest keeps its other sections.',
+          '-'
+        ],
+        ['Huddle relay (TURN)', 'Off on shared, as in cloud.', 'warning `HUDDLE_TURN`'],
+        [
           'Help-video renders queued before a restart',
           'They render again on the next publish.',
           'warning `HELP_VIDEO_RENDERS`'
-        ],
-        [
-          'Live SLA status changes, weekly digests, the per-app retention pass, boot passes against a database',
-          'Off on multi-tenant processes. The move plan has no code for these: nothing warns before a move, so tell the people who rely on SLA alerts or weekly digests.',
-          '-'
         ],
         [
           'Deployment-wide process jobs (pool monitor, socket sample)',
@@ -450,6 +467,31 @@ export const hubSharedDocs: DocSection = {
           'warning `MULTI_NODE_VOLUMES`'
         ]
       ]
+    },
+    { type: 'h2', id: 'hub-shared-per-app', text: 'Per app on a shared deployment' },
+    {
+      type: 'p',
+      text: 'These work on a shared deployment, each app with its own data, settings and schedule. A move no longer reports them as blockers or warnings when the app runs 0.3.212 or later.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Staged file imports (upload and drainer). Rows load with inserts: the bulk loader (`IMPORT_LOADER=bulk`, SMB share) is not available on shared, so a `bulk` loader falls back to inserts with a note and a `bulk_only` import fails saying so. Each app keeps its own queue, attempts and leases.',
+        'Row schedules (scheduled reports, retention policies, scheduled audit and activity views, sync jobs, scheduled flows). An edit reaches every replica, and a 5-minute `row-schedules-resync` job per app is the backstop. An app that leaves the deployment loses its jobs.',
+        'Automatic mail retry (`MAIL_RETRY=off` still turns it off for the whole deployment), live SLA status changes, the cumulative-flow rollup and the weekly AI summary in the daily digest. The traffic digest section stays off.',
+        'The daily retention pass (03:30, one job per app) and the boot passes (owner-group warm, integrity checks, cache warms, readiness warm, db-tuning sweep). They run once per app when it becomes ready. Retention status shows per app. Stale help-video import folders are swept once a day per process (deployment-wide, not per app).',
+        'Microsoft directory lookups and sync. The app uses its own Microsoft app registration, saved in Settings → Microsoft directory (tenant id, client id, client secret; the secret is sealed with the app key). The server `GRAPH_*` and `OIDC_*` variables and the directory keys of `NIVARO_SETTINGS_OVERRIDES` are never used on shared.',
+        "The Teams bot. The app uses only the bot saved in its own Settings. `TEAMS_BOT_*`, `MICROSOFT_APP_*`, the sign-in app fallback and the `teams_bot_*` override keys are ignored. `TEAMS_BOT=off` still disables the bot on the whole deployment, but `TEAMS_BOT=on` does not switch an app on: each app saves its own switch. Register each bot with that app's host as its messaging endpoint.",
+        "Phone push. An app admin connects the app's push relay in Settings → Mobile app. The server `MOBILE_PUSH_RELAY_KEY` is not used on shared. Phone sign-in was already per app."
+      ]
+    },
+    {
+      type: 'p',
+      text: 'Nivaro Cloud is unchanged: the Teams bot, phone push and mail retry stay off there, and push stays cloud-managed.'
+    },
+    {
+      type: 'p',
+      text: 'Before or after a move, save what the app needs on its own. The plan warns `DIRECTORY_ENV_CREDENTIALS` when the directory credentials come only from the environment, `TEAMS_BOT_ENV_CREDENTIALS` when the bot comes from the environment (or is on only by `TEAMS_BOT=on`), `PUSH_RELAY_ENV` when push uses the server relay key, and `SETTINGS_ENV_OVERRIDES` when the app’s `NIVARO_SETTINGS_OVERRIDES` sets keys a shared deployment does not apply. `SAME_APP_ON_DEPLOYMENT` notes that a copy carries the original saved Teams bot and directory registration.'
     },
     {
       type: 'note',
@@ -664,7 +706,7 @@ export const hubMovesDocs: DocSection = {
         "Before you tick `target_stopped`, make sure that no process of this app runs at the target and that none can restart. Check it: open the target's public or link address and see that it no longer answers for this app (the stack is gone, the deployment is stopped, or the app is listed as maintenance on every replica). Ticking is taken as proof, with nothing re-checked: the Hub then restores the environment to the source and lifts the source's maintenance. A wrong tick opens writes on the old placement while the new one may still accept them, two writers on one database. After the tick press Roll back; the Hub retries the freeze first. `TARGET_NOT_STOPPED` is a different, narrower code: a GitLab target's retire call failed, so stop its stack by hand.",
         'Every rollback and every release carries the move id with its maintenance-off call. If the Hub has lost the move and a dedicated container stays stuck in maintenance: remove `HUB_BOOT_MAINTENANCE` from the stack (and the `boot-maintenance` line from a GitLab pin), then send `POST /api/hub-link/maintenance` with `{"on": false}` and no move id, with its hub token as the bearer. A move id that is not the held one answers 409 `MAINTENANCE_OTHER_MOVE` and lifts nothing. The halted or rolled-back move shows the same recovery text, worded for its source.',
         "If that call cannot reach the app, delete its maintenance key in its Redis. Which key depends on how the process runs (ruling P6-32). A dedicated app linked to the Hub (`HUB_TOKEN` set) keeps the Hub's freeze in its own key, `<REDIS_CHANNEL_PREFIX>nvr:maintenance:<tag>`, where `<tag>` is the first 16 hex characters of the SHA-256 of its hub token (`printf %s \"$HUB_TOKEN\" | sha256sum | cut -c1-16`; `redis-cli --scan --pattern '*nvr:maintenance:*'` lists it); deleting the plain `nvr:maintenance` there lifts nothing. On a shared deployment one app is in maintenance because the Hub lists it so, never through a key: use Apply now on the deployment (its stack carries the app's names again) and, if the app still shows maintenance, set the environment's status back to active on the Hub (the replicas re-read the list within 30 seconds). Never clear the deployment's own key, `<REDIS_CHANNEL_PREFIX>nvr:maintenance` (`nvr:maintenance` with no prefix): that is the operator's freeze of every app on it. Nivaro Cloud and a self-hosted app without `HUB_TOKEN` use exactly `nvr:maintenance`.",
-        "The source and the target of a move must not share one Redis database with the same key prefix (and the same `HUB_TOKEN`). They would read each other's retire and maintenance markers. The plan checks this (`REDIS_SHARED`, or `REDIS_UNVERIFIED` when it cannot see)."
+        "The source and the target of a move must not share one Redis database, whatever their key prefixes (and they hold the same `HUB_TOKEN`). They would read each other's retire and maintenance markers and share one scheduled-jobs leader. The plan checks this (`REDIS_SHARED`, or `REDIS_UNVERIFIED` when it cannot see)."
       ]
     },
     {
@@ -814,14 +856,14 @@ export const hubMovesDocs: DocSection = {
           'The target or source cannot be reached (also the Traefik-only Docker source with a manual route); a dedicated target placement is used by another environment; the driver cannot do this kind of move.'
         ],
         ['`HOSTNAME_TAKEN`', 'Another environment of the Hub already claims one of the names.'],
-        ['`REDIS_SHARED`', 'Source and target use the same Redis database and channel prefix.'],
+        ['`REDIS_SHARED`', 'Source and target use the same Redis database.'],
         [
           '`GATHER_FAILED`',
           'The Hub could not read part of what it needs to plan. Plan again shortly.'
         ],
         [
-          '`STAGED_IMPORTS`, `ROW_SCHEDULES`, `ISSUE_TRACKERS`, `EXEC_SCRIPT_FLOWS`, `SQLITE`, `ENV_OBJECT_STORAGE`',
-          'The app uses something a shared app cannot do yet (see Shared deployments), or keeps files in env-driven object storage. Detail gives counts and kinds, never records.'
+          '`ISSUE_TRACKERS`, `EXEC_SCRIPT_FLOWS`, `SQLITE`, `ENV_OBJECT_STORAGE`',
+          'The app uses something a shared app cannot do yet (see Shared deployments), or keeps files in env-driven object storage. Detail gives counts and kinds, never records. `STAGED_IMPORTS` and `ROW_SCHEDULES` still apply only when the target deployment runs a version before 0.3.212 or one the Hub cannot read.'
         ]
       ]
     },
@@ -848,7 +890,7 @@ export const hubMovesDocs: DocSection = {
         ],
         [
           '`SAME_APP_ON_DEPLOYMENT`',
-          'Another environment of the same app is already on the target deployment.'
+          "Another environment of the same app is already on the target deployment. A copy carries the original's saved Teams bot and directory registration: turn the bot off on the copy if it should not answer."
         ],
         ['`REPLAYS_NOT_MOVED`', 'Session replays and image transform caches stay behind.'],
         [
@@ -864,8 +906,8 @@ export const hubMovesDocs: DocSection = {
           'A check could not be made. Each comes with a required checklist item (above).'
         ],
         [
-          '`DIRECTORY_SYNC`, `PHONE_PUSH`, `TEAMS_BOT`, `MAIL_RETRY`, `HUDDLE_TURN`, `ENV_SMTP`, `SESSION_REPLAYS`, `HELP_VIDEO_RENDERS`',
-          'Features a shared app does not have, or that behave differently (see Shared deployments).'
+          '`DIRECTORY_ENV_CREDENTIALS`, `TEAMS_BOT_ENV_CREDENTIALS`, `PUSH_RELAY_ENV`, `SETTINGS_ENV_OVERRIDES`, `HUDDLE_TURN`, `ENV_SMTP`, `SESSION_REPLAYS`, `HELP_VIDEO_RENDERS`',
+          'Features a shared app does not have, or that behave differently (see Shared deployments). `DIRECTORY_SYNC`, `PHONE_PUSH`, `TEAMS_BOT` and `MAIL_RETRY` are reported only for a target before 0.3.212 or one the Hub cannot read.'
         ]
       ]
     },

@@ -1,12 +1,14 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { runInBackgroundPool } from '../db/pool-context.js'
+import { withTenant } from '../db/tenant-context.js'
 import { NIVARO_VERSION } from '../version.js'
 import { activityGroupKey, withActivityScope } from './activity-scope.js'
+import { type AppFanOutResult, forEachApp } from './app-jobs.js'
 import { appBox, appSet } from './app-state.js'
 import { withBackgroundWork } from './background-inflight.js'
 import { newChainId, startChain } from './chain.js'
-import { isMultiTenant } from './deployment-mode.js'
+import { isNivaroCloud, perAppJobs } from './deployment-mode.js'
 import { getFile, readFileBuffer } from './files.js'
 import { announceCollectionImportRun } from './import-collection-runs.js'
 import {
@@ -27,6 +29,7 @@ import {
   LEASE_FAIL_NOTE,
   LEASE_RENEW_MS,
   LEASE_RETRY_NOTE,
+  parseKick,
   pruneFinishedEntries,
   type RunningRow,
   readImportBeat,
@@ -38,6 +41,7 @@ import { rememberRunRows } from './import-run-rows.js'
 import { INSTANCE_ID } from './instance-roster.js'
 import { emitImportProgress, emitJobProgress } from './live-progress.js'
 import { notifyUser } from './notification-channels.js'
+import { processRole } from './process-role.js'
 import { validateStagedRows } from './staged-import-validation.js'
 import type { ImportDefinition } from './staged-imports.js'
 import {
@@ -50,6 +54,9 @@ import {
   runStagedImport,
   scrubSecrets
 } from './staged-imports.js'
+import { appReadyForRequests, storedAppSchemaOk } from './tenancy/app-migrations.js'
+import { getTenantRegistry } from './tenancy/registry.js'
+import type { TenantRecord } from './tenancy/types.js'
 import { runAsTrafficSource, type TrafficSource, withTrafficSource } from './traffic-source.js'
 import { noteImportRun } from './traffic-taps/sources.js'
 
@@ -286,10 +293,11 @@ interface KickSubscriber {
   disconnect?: () => void
 }
 
-/** The upload's kick, heard on a duplicated connection; null without one (the loop drains). */
+/** The upload's kick, heard on a duplicated connection; null without one (the loop drains).
+ *  `onKick` gets the payload (a run id, `job:<id>`, or `<app>|…` on a shared deployment). */
 async function subscribeImportKicks(
   app: FastifyInstance,
-  onKick: () => void
+  onKick: (payload: string) => void
 ): Promise<KickSubscriber | null> {
   try {
     const dup = (app as unknown as { redis?: { duplicate?: () => unknown } }).redis?.duplicate?.()
@@ -297,23 +305,123 @@ async function subscribeImportKicks(
     const conn = dup as KickSubscriber
     conn.on('error', () => {})
     await conn.subscribe(importKickChannel())
-    conn.on('message', () => onKick())
+    conn.on('message', (_channel: unknown, payload: unknown) => onKick(String(payload ?? '')))
     return conn
   } catch {
     return null
   }
 }
 
+/**
+ * May app `t`'s imports run on this process now (Hub shared deployment)? Listed `active` (never an
+ * app the Hub is moving or updating) and its schema ok at this version: this process's own
+ * migration state, or — on an importer, which runs no migration loop (server.ts) — the state the
+ * migrating replicas keep in Redis, so it never drains into a half-migrated database (Task 14).
+ */
+async function importAppReady(app: FastifyInstance, t: TenantRecord): Promise<boolean> {
+  if (t.status !== 'active') return false
+  if (!appReadyForRequests(t.id)) return false
+  if (processRole() !== 'importer') return true
+  return storedAppSchemaOk(t, importRedis(app))
+}
+
+/**
+ * Hub shared deployment: one kick heard on the deployment's channel. Resolves the app it names
+ * and, when this process lists it, it is active and its schema is ready, runs one drain pass
+ * inside it. Anything else is skipped silently: an app this process has not listed yet (another
+ * replica took the upload) is drained by its own 10 s `staged-imports` tick, or the importer's
+ * own pass (drainEveryAppImports).
+ */
+export async function onImportKick(app: FastifyInstance, payload: string): Promise<void> {
+  const { tenant } = parseKick(payload)
+  if (!tenant) return
+  const registry = getTenantRegistry()
+  if (!registry) return
+  let t: TenantRecord | null = null
+  try {
+    t = (await registry.byId?.(tenant)) ?? null
+    if (!t) t = (await registry.listActive()).find((x) => x.id === tenant) ?? null
+  } catch {
+    return
+  }
+  // Like the per-app fan-out: never an app the Hub is moving or updating, nor a half-migrated one.
+  if (!t || !(await importAppReady(app, t))) return
+  try {
+    await withTenant(t, () => runInBackgroundPool(() => drainImportsTick(app)), t.origin)
+  } catch (err) {
+    app.log.warn({ err, tenant: t.id }, 'staged-import worker: kick drain failed')
+  }
+}
+
+/** One importer pass at a time on this process (the 10 s timer never stacks passes). */
+let passing = false
+
+/**
+ * Task 14 — the importer's own pass on a Hub shared deployment: one drain pass inside every
+ * listed app that is active and ready (importAppReady), at most TENANT_JOB_CONCURRENCY at once.
+ * An importer ticks no crons, so without it the importer drained only on kicks while its beat
+ * made each app's fallback (the worker's per-app tick) stand down for up to 90 s: a run put back
+ * by lease recovery, or a kick lost while the importer restarted, waited. Each pass beats for
+ * the apps it drains, recovers their lost runs, then claims their queued rows. Null when a pass
+ * is already running.
+ */
+export async function drainEveryAppImports(app: FastifyInstance): Promise<AppFanOutResult | null> {
+  if (passing) return null
+  passing = true
+  try {
+    return await forEachApp(async (t) => {
+      // The Hub is moving or updating it: maintenance. Any other status (provisioning, suspended)
+      // is an app not ready to run anything.
+      if (t.status === 'maintenance') return 'maintenance'
+      if (t.status !== 'active' || !(await importAppReady(app, t))) return 'not_ready'
+      await runInBackgroundPool(() => drainImportsTick(app))
+      return 'ran'
+    })
+  } catch (err) {
+    app.log.warn({ err }, 'staged-import worker: per-app pass failed')
+    return null
+  } finally {
+    passing = false
+  }
+}
+
+/** The process drain loop and kick subscriber (self-hosted), or the deployment's kick subscriber
+ *  and, on an importer, its per-app pass (shared). Process-wide: started once at boot, outside
+ *  any app. */
 let drainer: { stop: () => Promise<void> } | null = null
 
 /**
  * Start draining on this process when it may: an importer or IMPORT_WORKER=on process runs its
  * own 10 s loop (it may tick no crons); every drainer also hears the upload's kick, so a run
  * starts at once instead of at the next tick. Returns the mode it runs in.
+ *
+ * Hub shared deployment: the kick subscriber, which drains the app a kick names (onImportKick);
+ * each app's `staged-imports` cron drains it on the cron-ticking process, and an importer (which
+ * ticks no crons) runs its own 10 s pass over every app (drainEveryAppImports).
  */
 export async function startImportDrainer(app: FastifyInstance): Promise<ImportDrainMode> {
   const mode = importDrainMode()
   if (mode === 'off' || drainer) return mode
+  if (perAppJobs()) {
+    const sub = await subscribeImportKicks(app, (payload) => {
+      void onImportKick(app, payload).catch(() => {})
+    })
+    const pass = () => void drainEveryAppImports(app)
+    const timer = mode === 'importer' ? setInterval(pass, 10_000) : null
+    timer?.unref?.()
+    if (timer) pass()
+    app.log.info({ mode }, '[import-worker] draining staged imports per app on kicks and ticks')
+    drainer = {
+      stop: async () => {
+        if (timer) clearInterval(timer)
+        const conn = sub
+        if (conn) await (conn.quit?.() ?? Promise.resolve()).catch(() => conn.disconnect?.())
+        drainer = null
+      }
+    }
+    app.addHook('onClose', async () => drainer?.stop())
+    return mode
+  }
   const r = importRedis(app)
   const tick = () => void runInBackgroundPool(() => drainImportsTick(app))
   const sub = await subscribeImportKicks(app, tick)
@@ -337,7 +445,9 @@ export async function startImportDrainer(app: FastifyInstance): Promise<ImportDr
 
 export function registerStagedImportWorker(app: FastifyInstance): void {
   // Registered everywhere (the roster, run-now); a tick drains only where importDrainMode()
-  // allows it, and an importer, which ticks no crons, runs the same pass on its own loop.
+  // allows it, and an importer, which ticks no crons, runs the same pass on its own loop. On a
+  // Hub shared deployment the job is per app (services/cron-scope.ts): each tick runs inside one
+  // app and drains that app's queue.
   app.cron.schedule('staged-imports', '*/10 * * * * *', async () => {
     const mode = importDrainMode()
     if (mode === 'importer' || mode === 'enabled') return // its own loop drains
@@ -400,13 +510,34 @@ export async function publishStanding(): Promise<void> {
   publishQueueStanding(entries, standing, labelOf)
 }
 
-/** Run ids this process is driving right now. */
+/** Run ids this process is driving right now (per app). */
 const driving = appSet<string>()
+
+/** Hub shared deployment: runs this process drives across every app. MAX_PARALLEL caps the
+ *  process, not each app: N apps x MAX_PARALLEL runs in one process is how it runs out of memory.
+ *  Process-wide by design (a count, no app data). */
+const processDriving = { count: 0 }
+
+/** Hub shared deployment: the most runs one app may hold at once, so one app never takes every
+ *  slot of the process and starves the others (default 3 → 2 per app, 1 left for another). */
+const APP_SHARE = Math.max(1, MAX_PARALLEL - 1)
+
+/** Test seam: the runs (and reservations) this process counts across every app. */
+export function _processImportSlotsForTests(): number {
+  return processDriving.count
+}
+
+/** No room for another run. Self-hosted / cloud: this app's own MAX_PARALLEL, as before. Shared:
+ *  the app's fair share (APP_SHARE) and the process-wide total (MAX_PARALLEL across every app). */
+function atCapacity(): boolean {
+  if (!perAppJobs()) return driving.size >= MAX_PARALLEL
+  return driving.size >= APP_SHARE || processDriving.count >= MAX_PARALLEL
+}
 
 type QueueRow = Record<string, any>
 
 async function drainOnce(app: FastifyInstance): Promise<void> {
-  if (driving.size >= MAX_PARALLEL) return
+  if (atCapacity()) return
 
   // #802 — runs serialise per LOCK GROUP (default: the staging table), not
   // globally: procedures truncate a shared staging table, so two runs of one
@@ -434,52 +565,67 @@ async function drainOnce(app: FastifyInstance): Promise<void> {
   // table must never overtake an earlier one that is waiting on its file.
   const blocked = new Set<string>()
   for (const row of queued) {
-    if (driving.size >= MAX_PARALLEL) return
+    if (atCapacity()) return
     const group = groupOf(row.import_key)
     if (busy.has(group) || blocked.has(group)) continue
 
-    let buffer: Buffer | null = null
-    if (row.file) {
-      try {
-        const stored = await getFile(String(row.file))
-        // A deleted file row: claim and report — no host will do better.
-        if (stored) buffer = await readFileBuffer(stored)
-      } catch {
-        // Can't read the bytes from THIS host — leave it for the worker that
-        // can, unless it has been unreadable for so long that no one can.
-        const age = Date.now() - new Date((row.created_at as string) ?? Date.now()).getTime()
-        if (age > UNREADABLE_GRACE_MS) {
-          await db('nivaro_import_queue').where('id', row.id).update({
-            status: 'error',
-            finished_at: new Date(),
-            updated_at: new Date(),
-            logs: 'No import worker could read the uploaded file within an hour — it was likely uploaded to a host whose worker is not running, or its storage was lost. Re-upload the file.'
-          })
-          await notifyCreator(
-            app,
-            row,
-            `${label(row)} import failed`,
-            'No import worker could read the uploaded file. Re-upload it from the Import Console.'
-          )
-        } else {
-          blocked.add(group)
+    // Reserve this row's process slot now, before its first await: apps drain concurrently (the
+    // importer's per-app lanes, kicks), and a slot counted only after the file read and the
+    // claim lets several apps pass the check together. Given back on every path that does not
+    // hand the row to runOne (whose own finally releases it then). Per app, drainImportsTick is
+    // single-flight (`ticking`), so the per-app share needs no reservation.
+    processDriving.count++
+    let handedOff = false
+    try {
+      let buffer: Buffer | null = null
+      if (row.file) {
+        try {
+          const stored = await getFile(String(row.file))
+          // A deleted file row: claim and report — no host will do better.
+          if (stored) buffer = await readFileBuffer(stored)
+        } catch {
+          // Can't read the bytes from THIS host — leave it for the worker that
+          // can, unless it has been unreadable for so long that no one can.
+          const age = Date.now() - new Date((row.created_at as string) ?? Date.now()).getTime()
+          if (age > UNREADABLE_GRACE_MS) {
+            await db('nivaro_import_queue').where('id', row.id).update({
+              status: 'error',
+              finished_at: new Date(),
+              updated_at: new Date(),
+              logs: 'No import worker could read the uploaded file within an hour — it was likely uploaded to a host whose worker is not running, or its storage was lost. Re-upload the file.'
+            })
+            await notifyCreator(
+              app,
+              row,
+              `${label(row)} import failed`,
+              'No import worker could read the uploaded file. Re-upload it from the Import Console.'
+            )
+          } else {
+            blocked.add(group)
+          }
+          // Keep scanning: a row of another group must not starve behind it.
+          continue
         }
-        // Keep scanning: a row of another group must not starve behind it.
-        continue
       }
-    }
 
-    // Claim atomically: another worker process may be scanning the same queue.
-    const claimed = await db('nivaro_import_queue')
-      .where({ id: row.id, status: 'queued' })
-      .update({ status: 'running', started_at: new Date(), updated_at: new Date() })
-    if (Number(claimed) !== 1) continue
-    busy.add(group)
-    const id = String(row.id)
-    driving.add(id)
-    void withBackgroundWork('import', `${row.import_key ?? 'staged'} #${id}`, () =>
-      runOne(app, row, buffer)
-    ).finally(() => driving.delete(id))
+      // Claim atomically: another worker process may be scanning the same queue.
+      const claimed = await db('nivaro_import_queue')
+        .where({ id: row.id, status: 'queued' })
+        .update({ status: 'running', started_at: new Date(), updated_at: new Date() })
+      if (Number(claimed) !== 1) continue
+      busy.add(group)
+      const id = String(row.id)
+      driving.add(id)
+      handedOff = true
+      void withBackgroundWork('import', `${row.import_key ?? 'staged'} #${id}`, () =>
+        runOne(app, row, buffer)
+      ).finally(() => {
+        driving.delete(id)
+        processDriving.count--
+      })
+    } finally {
+      if (!handedOff) processDriving.count--
+    }
   }
 }
 
@@ -761,7 +907,9 @@ export async function importWorkerJudgement(redis: unknown): Promise<ImportJudge
     .map((at) => now - new Date(at ?? now).getTime())
     .filter((n) => Number.isFinite(n))
   return judgeImportWorker({
-    cloud: isMultiTenant(),
+    // Only Nivaro Cloud runs imports on the tenant process; a shared deployment drains its apps'
+    // queues itself, so stuck imports there must be flagged like self-hosted ones.
+    cloud: isNivaroCloud(),
     redis: !!r,
     importer: await readImportBeat(r, 'importer'),
     fallback: await readImportBeat(r, 'fallback'),

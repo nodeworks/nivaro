@@ -107,6 +107,9 @@ export const SETTINGS_KEEP: readonly string[] = [
   'directory_refresh_token',
   'directory_connected_user',
   'directory_connected_at',
+  'directory_graph_tenant_id',
+  'directory_graph_client_id',
+  'directory_graph_client_secret',
   'oidc_primary_disabled',
   // maintenance state of THIS environment
   'maintenance_mode',
@@ -240,6 +243,7 @@ export const CORE_KEEPS: readonly EnvKeepEntry[] = [
       'provision_secret',
       'directory_password',
       'directory_refresh_token',
+      'directory_graph_client_secret',
       // Not named like secrets, but each carries one (a webhook URL is its own key; storage and
       // MCP settings hold keys and tokens inside their JSON).
       'teams_webhook_url',

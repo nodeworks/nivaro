@@ -12,20 +12,26 @@ import { parseObjectCounts } from '../../hub-transfer/copyable.js'
  */
 
 const READINESS_CODES: Record<SharedReadinessCode, true> = {
-  STAGED_IMPORTS: true,
-  ROW_SCHEDULES: true,
   ISSUE_TRACKERS: true,
   EXEC_SCRIPT_FLOWS: true,
   SQLITE: true,
   ENV_OBJECT_STORAGE: true,
-  DIRECTORY_SYNC: true,
-  PHONE_PUSH: true,
-  TEAMS_BOT: true,
-  MAIL_RETRY: true,
   HUDDLE_TURN: true,
   ENV_SMTP: true,
   SESSION_REPLAYS: true,
-  HELP_VIDEO_RENDERS: true
+  HELP_VIDEO_RENDERS: true,
+  DIRECTORY_ENV_CREDENTIALS: true,
+  TEAMS_BOT_ENV_CREDENTIALS: true,
+  PUSH_RELAY_ENV: true,
+  SETTINGS_ENV_OVERRIDES: true,
+  // Older apps (before 0.3.212) still send these: kept known, so their report stays readable;
+  // the plan decides by the target's version (plan.ts SHARED_FEATURES_SINCE).
+  STAGED_IMPORTS: true,
+  ROW_SCHEDULES: true,
+  DIRECTORY_SYNC: true,
+  PHONE_PUSH: true,
+  TEAMS_BOT: true,
+  MAIL_RETRY: true
 }
 
 export const isObj = (v: unknown): v is Record<string, unknown> =>

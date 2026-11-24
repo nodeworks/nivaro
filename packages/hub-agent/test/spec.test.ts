@@ -514,11 +514,25 @@ describe('validateStackSpec — roles, replicas, limits', () => {
       )
     ).toBe('ROLE_BAD')
   })
-  for (const role of ['exporter', 'admin', 'redis', 'WEB', '', 7]) {
+  for (const role of ['canary', 'admin', 'redis', 'WEB', 'Exporter', '', 7]) {
     it(`refuses role ${JSON.stringify(role)}`, () => {
       expect(codeOf(roles([{ role, replicas: 1 }]), 'roles[0].role')).toBe('ROLE_BAD')
     })
   }
+  it('Task 15: accepts an exporter role (NIVARO_ROLE=exporter) beside the others, optional', () => {
+    const large = [
+      { role: 'web', replicas: 3, env: { SOCKETS: 'off' } },
+      { role: 'worker', replicas: 1 },
+      { role: 'realtime', replicas: 2 },
+      { role: 'importer', replicas: 1 },
+      { role: 'exporter', replicas: 1, cpus: 2, memory_mb: 4096 }
+    ]
+    const r = validateStackSpec(roles(large), cfg())
+    expect(r).toMatchObject({ ok: true })
+    if (r.ok) expect(r.spec.roles).toEqual(large)
+    // Without one, as before.
+    expect(validateStackSpec(roles(large.slice(0, 4)), cfg()).ok).toBe(true)
+  })
   for (const replicas of [-1, 11, 1.5, '2', null]) {
     it(`refuses replicas ${JSON.stringify(replicas)}`, () => {
       expect(codeOf(roles([{ role: 'web', replicas }]), 'roles[0].replicas')).toBe('REPLICAS_BAD')
@@ -1017,14 +1031,125 @@ describe('validateStackSpec — shared deployment owners (phase 6)', () => {
     expect(validateStackSpec(hostOnly, cfg()).ok).toBe(true)
   })
 
-  it('a realtime role on a shared owner → ROLE_NOT_SHARED', () => {
+  it('0.2.2: a shared owner takes a realtime role beside web and worker', () => {
     const roles = [
-      { role: 'web', replicas: 2 },
-      { role: 'realtime', replicas: 1 }
+      { role: 'web', replicas: 3, env: { SOCKETS: 'off' } },
+      { role: 'worker', replicas: 1 },
+      { role: 'realtime', replicas: 2 },
+      { role: 'importer', replicas: 1 },
+      { role: 'exporter', replicas: 1 }
     ]
-    expect(codeOf(shared({ roles }), 'roles[1].role')).toBe('ROLE_NOT_SHARED')
+    expect(validateStackSpec(shared({ roles }), cfg()).ok).toBe(true)
+    // Still a split with a worker: web + realtime alone ticks no app's crons.
+    expect(
+      codeOf(
+        shared({
+          roles: [
+            { role: 'web', replicas: 2 },
+            { role: 'realtime', replicas: 1 }
+          ]
+        }),
+        'roles'
+      )
+    ).toBe('ROLE_NOT_SHARED')
     // An app owner keeps its realtime role.
-    expect(validateStackSpec({ ...base(), roles }, cfg()).ok).toBe(true)
+    expect(
+      validateStackSpec(
+        {
+          ...base(),
+          roles: [
+            { role: 'web', replicas: 2 },
+            { role: 'realtime', replicas: 1 }
+          ]
+        },
+        cfg()
+      ).ok
+    ).toBe(true)
+  })
+
+  it('Task 14: a shared owner takes the role split the Hub sends (web, worker, importer) and all alone', () => {
+    const limits = { cpus: 2, memory_mb: 4096 }
+    for (const roles of [
+      [{ role: 'all', replicas: 1, ...limits }],
+      [
+        { role: 'web', replicas: 2, ...limits, env: { CRON_TICKS: 'off' } },
+        { role: 'worker', replicas: 1, ...limits },
+        { role: 'importer', replicas: 1, ...limits }
+      ],
+      [
+        { role: 'web', replicas: 3, ...limits, env: { CRON_TICKS: 'off' } },
+        { role: 'worker', replicas: 1, ...limits },
+        { role: 'importer', replicas: 1, ...limits }
+      ]
+    ]) {
+      const r = validateStackSpec(shared({ roles }), cfg())
+      expect(r, JSON.stringify(roles)).toMatchObject({ ok: true })
+      if (r.ok) expect(r.spec.roles).toEqual(roles)
+    }
+  })
+
+  it('Task 14: a shared split without a web or a worker → ROLE_NOT_SHARED (nobody serves, or no app ticks)', () => {
+    const noWorker = [
+      { role: 'web', replicas: 2 },
+      { role: 'importer', replicas: 1 }
+    ]
+    const noWeb = [
+      { role: 'worker', replicas: 1 },
+      { role: 'importer', replicas: 1 }
+    ]
+    expect(codeOf(shared({ roles: noWorker }), 'roles')).toBe('ROLE_NOT_SHARED')
+    expect(codeOf(shared({ roles: noWeb }), 'roles')).toBe('ROLE_NOT_SHARED')
+    expect(codeOf(shared({ roles: [{ role: 'importer', replicas: 1 }] }), 'roles')).toBe(
+      'ROLE_NOT_SHARED'
+    )
+    // An app owner is not held to it (a dedicated stack's roles are the Hub template's).
+    expect(validateStackSpec({ ...base(), roles: noWorker }, cfg()).ok).toBe(true)
+  })
+
+  it('Task 15: a shared split may add an exporter; it is optional, and never enough alone', () => {
+    const limits = { cpus: 2, memory_mb: 4096 }
+    for (const roles of [
+      [
+        { role: 'web', replicas: 2, ...limits, env: { CRON_TICKS: 'off' } },
+        { role: 'worker', replicas: 1, ...limits },
+        { role: 'importer', replicas: 1, ...limits },
+        { role: 'exporter', replicas: 1, ...limits }
+      ],
+      [
+        { role: 'web', replicas: 2, ...limits, env: { CRON_TICKS: 'off' } },
+        { role: 'worker', replicas: 1, ...limits },
+        { role: 'exporter', replicas: 1, ...limits }
+      ]
+    ]) {
+      const r = validateStackSpec(shared({ roles }), cfg())
+      expect(r, JSON.stringify(roles)).toMatchObject({ ok: true })
+      if (r.ok) expect(r.spec.roles).toEqual(roles)
+    }
+    expect(codeOf(shared({ roles: [{ role: 'exporter', replicas: 1 }] }), 'roles')).toBe(
+      'ROLE_NOT_SHARED'
+    )
+    expect(
+      codeOf(
+        shared({
+          roles: [
+            { role: 'web', replicas: 2 },
+            { role: 'exporter', replicas: 1 }
+          ]
+        }),
+        'roles'
+      )
+    ).toBe('ROLE_NOT_SHARED')
+  })
+
+  it('Task 14: a role outside the set is still refused on a shared owner', () => {
+    for (const role of ['canary', 'admin', 'WEB', '', 7]) {
+      const roles = [
+        { role: 'web', replicas: 1 },
+        { role: 'worker', replicas: 1 },
+        { role, replicas: 1 }
+      ]
+      expect(codeOf(shared({ roles }), 'roles[2].role'), String(role)).toBe('ROLE_BAD')
+    }
   })
 
   it('final review E-1: a realtime role on Traefik v2 → ROLE_NEEDS_TRAEFIK_V3 (its router is v3 PathRegexp)', () => {

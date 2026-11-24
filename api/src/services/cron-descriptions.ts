@@ -8,8 +8,12 @@
  */
 export const CRON_DESCRIPTIONS: Record<string, string> = {
   // ── Scheduler self-checks ──
+  'row-schedules-resync':
+    'Every 5 minutes, shared deployments only — brings this app’s row schedules (scheduled reports, retention policies, activity views, sync jobs, flows) in step with its rows, in case a change announcement was missed. Each schedule runs in its own app only.',
   'job-runs-prune':
     'Daily 04:25, shared deployments only — removes this app’s old job-run rows (older than 30 days, and all but the newest 50 per job), the same rule a self-hosted install applies in its boot retention purge.',
+  'retention-pass':
+    'Daily 03:30, shared deployments only — this app’s retention pass, the same one a self-hosted install runs from boot every 24 hours: activity past its retention window (legal holds, imported history and the trail head kept), revisions past the kept count, expired trash and recordings, stale help-video uploads and old renders, ERP payload bytes, landed integration obligations, AI call log, Ask AI conversations, chat edit history and admin journeys.',
   'cron-miss-detector':
     "Every 30 minutes — compares each registered job's expected previous fire time (from its schedule) with nivaro_job_runs; a job with no run since then, past a grace of 10% of its period (5 min minimum), raises one deduped issue naming the missed window. Paused and chained jobs are exempt. Dry run lists the misses without raising.",
   'external-api-health-probes':

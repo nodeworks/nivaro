@@ -2,7 +2,7 @@ import { db } from '../db/index.js'
 import { tenantOrigin } from '../db/tenant-context.js'
 import { registerAppKeyed } from './app-forget.js'
 import { routePush } from './channel-test-mode.js'
-import { isNivaroCloud } from './deployment-mode.js'
+import { isMultiTenant } from './deployment-mode.js'
 import {
   EXPO_PREFIX,
   type PushRelayConfig,
@@ -312,11 +312,12 @@ export async function instanceName(): Promise<string> {
 
 /**
  * The address this instance is reached on, for the relay's `instance` field and its registration.
- * Cloud: the current tenant's origin (its host or custom domain) — never PUBLIC_URL, the shared
- * process's own address; '' when the work has no tenant host (nothing better to name).
+ * On a multi-tenant process (Nivaro Cloud or a Hub shared deployment): the current app's own
+ * origin (its host or custom domain) — never PUBLIC_URL or the admin address, the shared
+ * process's own; '' when the work has no app origin (nothing better to name).
  */
 export async function instanceOrigin(): Promise<string> {
-  if (isNivaroCloud()) return tenantOrigin() ?? ''
+  if (isMultiTenant()) return tenantOrigin() ?? ''
   try {
     const { adminBaseUrl } = await import('../admin-base.js')
     return adminBaseUrl() ?? ''

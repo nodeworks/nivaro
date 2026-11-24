@@ -1108,7 +1108,8 @@ export async function warmMetadata(limit = 15): Promise<number> {
 }
 
 /**
- * Boot warm, once per cluster per running version: N replicas booting together
+ * Boot warm, once per cluster per running version (on a Hub shared deployment, once per app per
+ * version): N replicas booting together
  * (or a rolling deploy) warm once. The key outlives the warm so a restart of the
  * same build within hours does not warm again; a nightly-rebuild restart later
  * in the day does. Not the cron leader lease — the old process still holds it
@@ -1122,6 +1123,9 @@ export async function takeBootWarm(
   holder: string
 ): Promise<boolean> {
   if (!redis) return true
-  const res = await redis.set(`nvr:warm:${version}`, holder, 'EX', BOOT_WARM_HOLD_SECONDS, 'NX')
+  // Inside an app (Hub shared deployment): once per app per version. Self-hosted: unchanged.
+  const tenant = currentTenantKey()
+  const key = `nvr:warm:${tenant ? `${tenant}:` : ''}${version}`
+  const res = await redis.set(key, holder, 'EX', BOOT_WARM_HOLD_SECONDS, 'NX')
   return res === 'OK'
 }

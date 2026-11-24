@@ -1,7 +1,9 @@
 import { db } from '../db/index.js'
+import { tenantState } from './ai-tenant-state.js'
 import { appDate } from './chaos/clock.js'
 import { whereInList } from './db-batch.js'
-import { isMultiTenant } from './deployment-mode.js'
+import { isNivaroCloud } from './deployment-mode.js'
+import { currentTenantKey } from './tenant-rooms.js'
 
 /**
  * Time-based SLA flips (realtime round 2). An SLA clock turns amber and then red with no write
@@ -192,23 +194,28 @@ async function loadDeadlinesFromDb(collection: string): Promise<FlipRow[]> {
   return out
 }
 
-let pass: SlaFlipPass | null = null
+/** One pass per app: a shared deployment's apps hold copies (same collection, same record id). */
+const passHolder = tenantState(() => ({ pass: null as SlaFlipPass | null }))
 
-/** One tick of the cron. Never in cloud mode. */
-export async function runSlaFlipPass(): Promise<{ collections: number; announced: number }> {
-  if (isMultiTenant()) return { collections: 0, announced: 0 }
-  if (!pass) {
+/** One tick of the cron, in the current app. Never in Nivaro Cloud. `overrides` is for tests. */
+export async function runSlaFlipPass(
+  overrides: Partial<SlaFlipDeps> = {}
+): Promise<{ collections: number; announced: number }> {
+  if (isNivaroCloud()) return { collections: 0, announced: 0 }
+  const held = passHolder()
+  if (!held.pass) {
     const [{ getLiveCollectionNames }, { announceRecordAspect }] = await Promise.all([
       import('../plugins/socketio.js'),
       import('./record-events.js')
     ])
-    pass = createSlaFlipPass({
-      liveCollections: getLiveCollectionNames,
+    held.pass = createSlaFlipPass({
+      liveCollections: () => getLiveCollectionNames(currentTenantKey() || undefined),
       slaCollections: slaCollectionsFromDb,
       loadDeadlines: loadDeadlinesFromDb,
       announce: (c, item) => announceRecordAspect(c, item, '$sla'),
-      now: () => appDate().getTime()
+      now: () => appDate().getTime(),
+      ...overrides
     })
   }
-  return pass.run()
+  return held.pass.run()
 }

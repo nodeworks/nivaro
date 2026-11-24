@@ -14,6 +14,8 @@ const { forgetAppState } = await import('../../../services/app-state.js')
 const { keyNamesApp, registerAppKeyed } = await import('../../../services/app-forget.js')
 const { appKey } = await import('../../../services/app-keyed.js')
 const { tenantState } = await import('../../../services/ai-tenant-state.js')
+const fireAppLeft = vi.fn()
+vi.mock('../../../services/tenancy/app-lifecycle.js', () => ({ fireAppLeft }))
 const { resetHubTenantSourceForTests, startHubTenantSource } = await import(
   '../../../services/tenancy/hub-source.js'
 )
@@ -157,5 +159,22 @@ describe('the Hub tenant source forgets an app that (re)appears in its list', ()
     expect(fetchFn).toHaveBeenCalledTimes(2)
     expect(inApp('appa-e1', () => cache.get(appKey('relations')))).toBeUndefined()
     expect(inApp('appb-e2', () => cache.get(appKey('relations')))).toBe('B')
+  })
+  it('fires app left for an app that left the list, not for one that appears or stays', async () => {
+    const answers = [
+      list([tenant('appa-e1', 'a.example.com'), tenant('appb-e2', 'b.example.com')]),
+      list([tenant('appb-e2', 'b.example.com'), tenant('appc-e3', 'c.example.com')])
+    ]
+    let i = 0
+    const fetchFn = vi.fn(async () => answers[Math.min(i++, answers.length - 1)].clone())
+    const reg = (await startHubTenantSource({
+      redis: null,
+      fetch: fetchFn as unknown as typeof fetch,
+      now: () => 1_000,
+      refreshMs: 600_000
+    })) as unknown as { refresh(): Promise<void> }
+    fireAppLeft.mockClear()
+    await reg.refresh()
+    expect(fireAppLeft.mock.calls).toEqual([['appa-e1']])
   })
 })

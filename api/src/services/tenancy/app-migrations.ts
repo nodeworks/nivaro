@@ -6,9 +6,10 @@ import type { runMigrationsOn } from '../../db/index.js'
 import { getTenantDb, getTenantId, runWithoutTenant, withTenant } from '../../db/tenant-context.js'
 import { NIVARO_VERSION } from '../../version.js'
 import { forgetAppState } from '../app-state.js'
-import { hubSharedConfig, tenantSource } from '../deployment-mode.js'
+import { hubSharedConfig, perAppJobs, tenantSource } from '../deployment-mode.js'
 import type { runSchemaSteps } from '../extension-schema-steps.js'
 import { scrubDbError } from '../hub/db/connection.js'
+import { fireAppReady } from './app-lifecycle.js'
 import type { AppSchemaState } from './app-status.js'
 import type { TenantRecord, TenantRegistry } from './types.js'
 
@@ -54,6 +55,9 @@ interface Entry extends AppSchemaStatus {
   nextTry: number
   /** `ok` only: when the app's ledger is next checked against the newest migration file. */
   verifyAt?: number
+  /** A following process (startAppSchemaFollower), `ok` only: since when the stored state has
+   *  been absent (no key), for FOLLOW_ABSENT_GRACE_MS. */
+  absentSince?: number
 }
 
 interface StoredState {
@@ -140,6 +144,32 @@ export function appReadyForRequests(tenantId: string): boolean {
   return e?.state === 'ok' && e.version === NIVARO_VERSION
 }
 
+/**
+ * Task 14: is this app's schema `ok` at this version by the state the migrating replicas keep in
+ * Redis (appSchemaKey), for this app's database (its connection fingerprint)? For a process that
+ * runs no migration loop of its own (an importer). Nothing stored, another version or database,
+ * no Redis, or anything unreadable: false.
+ */
+export async function storedAppSchemaOk(
+  t: TenantRecord,
+  redis: Pick<RedisLike, 'get'> | null
+): Promise<boolean> {
+  if (!redis) return false
+  try {
+    const raw = await redis.get(appSchemaKey(t.id))
+    if (!raw) return false
+    const s = JSON.parse(raw) as Partial<StoredState> | null
+    return s?.state === 'ok' && s.version === NIVARO_VERSION && s.conn === connFingerprint(t)
+  } catch {
+    return false
+  }
+}
+
+/** The database an app's state is about (connFingerprint), for the stored-state readers. */
+export function appConnFingerprint(t: TenantRecord): string {
+  return connFingerprint(t)
+}
+
 /** The database an app's state is about: an HMAC of client + connection (never the connection). */
 function connFingerprint(t: TenantRecord): string {
   // Keyed by the deployment's ENCRYPTION_KEY (required on a shared deployment, rarely rotated),
@@ -176,6 +206,30 @@ async function readStored(tenantId: string): Promise<StoredState | null> {
     return raw ? (JSON.parse(raw) as StoredState) : null
   } catch {
     return null
+  }
+}
+
+/**
+ * The stored state as a following process reads it: `error` when Redis could not answer (no
+ * Redis, a failed GET, a value that does not parse) — nothing is known, so nothing changes —
+ * apart from `absent` (no key) and `found`. readStored folds the first two into null.
+ */
+async function readStoredFollowed(
+  tenantId: string
+): Promise<{ kind: 'error' } | { kind: 'absent' } | { kind: 'found'; stored: StoredState }> {
+  if (!redisRef) return { kind: 'error' }
+  let raw: string | null
+  try {
+    raw = await redisRef.get(appSchemaKey(tenantId))
+  } catch {
+    return { kind: 'error' }
+  }
+  if (raw == null || raw === '') return { kind: 'absent' }
+  try {
+    const stored = JSON.parse(raw) as StoredState | null
+    return stored && typeof stored === 'object' ? { kind: 'found', stored } : { kind: 'error' }
+  } catch {
+    return { kind: 'error' }
   }
 }
 
@@ -347,7 +401,9 @@ async function runEnsure(t: TenantRecord, deps: AppSchemaDeps): Promise<AppSchem
       verifyAt: nextVerifyAt(nowFn())
     }
     await writeStored(t.id, ok)
-    return setState(t.id, ok)
+    const status = setState(t.id, ok)
+    if (perAppJobs()) fireAppReady(t)
+    return status
   } catch (err) {
     const at = nowFn()
     if (lockBusy(err)) {
@@ -476,7 +532,7 @@ async function migrationPass(
         // The app joins this process: its boot-time seeds first (an efp-ops release that changed
         // a template reaches every app), then it serves.
         await seedApp(t, deps)
-        adopt(t.id, stored, conn)
+        adopt(t, stored, conn)
         return
       }
       if (kind === 'waiting') return
@@ -484,10 +540,26 @@ async function migrationPass(
       due.push(t)
     }),
     ...toVerify.map(({ t, conn }) => async () => {
-      if ((await checkCurrent(t, deps)) === false) {
+      const current = await checkCurrent(t, deps)
+      if (current === false) {
         await dropOk(t.id, conn)
         due.push(t)
+        return
       }
+      // Confirmed migrated: write the stored `ok` again so it never runs out of its TTL while the
+      // app is served (Task 14 fix M3: an importer, which runs no loop, reads only that key).
+      // Only on a confirmed check (an unreadable ledger proves nothing), and only over nothing or
+      // this version's own `ok` for this database: never over a `pending` another replica's
+      // dropOk wrote, nor a state another version wrote.
+      const e = states.get(t.id)
+      if (current !== true || e?.state !== 'ok' || e.conn !== conn) return
+      const stored = await readStored(t.id)
+      if (
+        stored &&
+        !(stored.state === 'ok' && stored.version === NIVARO_VERSION && stored.conn === conn)
+      )
+        return
+      await writeStored(t.id, e)
     })
   ]
   let next = 0
@@ -535,8 +607,8 @@ function nextVerifyAt(from: number): number {
   return from + APP_SCHEMA_VERIFY_MS - Math.floor(randomFn() * APP_SCHEMA_VERIFY_JITTER_MS)
 }
 
-function adopt(tenantId: string, stored: StoredState, conn: string): void {
-  setState(tenantId, {
+function adopt(t: TenantRecord, stored: StoredState, conn: string): void {
+  setState(t.id, {
     state: 'ok',
     version: NIVARO_VERSION,
     at: typeof stored.at === 'string' ? stored.at : null,
@@ -545,6 +617,7 @@ function adopt(tenantId: string, stored: StoredState, conn: string): void {
     nextTry: 0,
     verifyAt: nextVerifyAt(nowFn())
   })
+  if (perAppJobs()) fireAppReady(t)
 }
 
 /** A loop pass is deciding now; `passAgain` = one more was asked for meanwhile (final review M2:
@@ -586,7 +659,12 @@ let lastRequestNudge = Number.NEGATIVE_INFINITY
  */
 export function nudgeAppMigrations(tenantId?: string): void {
   const l = loop
-  if (!l || l.kick) return
+  if (!l) {
+    // A process that follows instead of migrating (a realtime process): read again soon.
+    if (follower && tenantId !== undefined) nudgeFollower()
+    return
+  }
+  if (l.kick) return
   if (tenantId !== undefined) {
     const e = states.get(tenantId)
     if (e && e.state !== 'ok' && nowFn() < e.nextTry) return
@@ -622,6 +700,153 @@ function stopLoop(): void {
   clearInterval(loop.timer)
   if (loop.kick) clearTimeout(loop.kick)
   loop = null
+}
+
+// ─── Following the stored states (a process that never migrates) ────────────────────────────
+// A realtime process (NIVARO_ROLE=realtime) on a Hub shared deployment serves every app's
+// sockets and streams but runs no migration: the web and worker processes do. It gates exactly as
+// they do — an app answers "getting ready" and takes no socket until its database is migrated at
+// this version — by reading the state those processes keep in Redis (appSchemaKey), for each
+// listed app's current database (its connection fingerprint). No migration, no seeds, no ledger
+// read, no app-ready hooks (a realtime process registers no per-app jobs).
+//
+// What a read says (ruling, final review of the realtime tier on shared deployments):
+//   Redis error (or no Redis, or an unreadable value)  keep the last known state, whatever it is
+//   another version or another database, or not `ok`    drop an `ok` at once (as before)
+//   no key                                              keep an `ok` for FOLLOW_ABSENT_GRACE_MS
+//                                                       (6 min), then drop it
+// The grace outlasts the migrating processes' 5-minute ledger check, which writes a served app's
+// `ok` again when its key is gone; a database that is behind is written `pending`, not deleted.
+
+/** How long a following process keeps an app `ok` while its stored state is absent (no key). */
+export const FOLLOW_ABSENT_GRACE_MS = APP_SCHEMA_VERIFY_MS + 60_000
+
+let follower: {
+  registry: () => TenantRegistry | null
+  timer: ReturnType<typeof setInterval>
+  kick: ReturnType<typeof setTimeout> | null
+  running: boolean
+} | null = null
+
+/** One look: every listed app's stored state at this version, for its current database. */
+async function followPass(registry: TenantRegistry): Promise<void> {
+  const list = await (registry.listAll ? registry.listAll() : registry.listActive())
+  const listed = new Set(list.map((t) => t.id))
+  for (const id of [...states.keys()]) if (!listed.has(id)) states.delete(id)
+  await Promise.all(
+    list.map(async (t) => {
+      if (!MIGRATED_STATUSES.has(t.status)) return
+      const conn = connFingerprint(t)
+      const read = await readStoredFollowed(t.id)
+      // Redis did not answer: keep what this process knows (a blip must not 503 every app).
+      if (read.kind === 'error') return
+      const before = states.get(t.id)
+      if (read.kind === 'absent') {
+        // No key: keep an `ok` for this database at this version for a while. A replaced or
+        // behind database is written as `pending` by the migrating processes (dropOk), never
+        // deleted; a key that is gone (Redis flushed or restarted empty) is written again by
+        // their next 5-minute check of a served app.
+        if (before?.state === 'ok' && before.conn === conn && before.version === NIVARO_VERSION) {
+          const now = nowFn()
+          const since = before.absentSince ?? now
+          if (now - since <= FOLLOW_ABSENT_GRACE_MS) {
+            if (before.absentSince === undefined) before.absentSince = since
+            return
+          }
+        }
+      }
+      const stored = read.kind === 'found' ? read.stored : null
+      const current = stored?.version === NIVARO_VERSION && stored.conn === conn
+      if (current && stored?.state === 'ok') {
+        if (before?.state === 'ok' && before.conn === conn) {
+          before.absentSince = undefined
+          return
+        }
+        setState(t.id, {
+          state: 'ok',
+          version: NIVARO_VERSION,
+          at: typeof stored.at === 'string' ? stored.at : null,
+          error: null,
+          conn,
+          nextTry: 0
+        })
+        return
+      }
+      // Not (or no longer) migrated here: what this process cached from the app's database may
+      // be from a database that was replaced (dropOk's rule on the migrating replicas).
+      if (before?.state === 'ok') forgetAppState(t.id)
+      setState(t.id, {
+        state: current && stored?.state === 'failed' ? 'failed' : 'pending',
+        version: current ? NIVARO_VERSION : null,
+        at: current && typeof stored?.at === 'string' ? stored.at : null,
+        error: current && typeof stored?.error === 'string' ? stored.error : null,
+        conn,
+        nextTry: 0
+      })
+    })
+  )
+}
+
+function runFollowPass(): void {
+  const f = follower
+  if (!f || f.running) return
+  const registry = f.registry()
+  if (!registry) return
+  f.running = true
+  void runWithoutTenant(() =>
+    followPass(registry)
+      .catch(() => {})
+      .finally(() => {
+        f.running = false
+      })
+  )
+}
+
+/** A request reached an app that is not ready: read again soon, at most once a second. */
+function nudgeFollower(): void {
+  const f = follower
+  if (!f || f.kick) return
+  if (Date.now() - lastRequestNudge < REQUEST_NUDGE_GAP_MS) return
+  lastRequestNudge = Date.now()
+  f.kick = setTimeout(() => {
+    f.kick = null
+    runFollowPass()
+  }, 50)
+  f.kick.unref?.()
+}
+
+/**
+ * Gate requests and sockets on each app's migrated state without migrating anything: a pass now,
+ * then every `intervalMs` (default 5 s), and soon after a request reaches an app that is not
+ * ready. For a process that serves apps but never migrates them (NIVARO_ROLE=realtime). The
+ * registry is read on every pass (the Hub source is started before, but may load later). Returns
+ * the stop function.
+ */
+export function startAppSchemaFollower(
+  registry: () => TenantRegistry | null,
+  opts: { redis?: RedisLike | null; intervalMs?: number; now?: () => number } = {}
+): () => void {
+  stopFollower()
+  gateOn = true
+  if (opts.redis !== undefined) redisRef = opts.redis
+  if (opts.now) nowFn = opts.now
+  const timer = setInterval(runFollowPass, Math.max(50, opts.intervalMs ?? DEFAULT_INTERVAL_MS))
+  timer.unref?.()
+  follower = { registry, timer, kick: null, running: false }
+  runFollowPass()
+  return stopFollower
+}
+
+function stopFollower(): void {
+  if (!follower) return
+  clearInterval(follower.timer)
+  if (follower.kick) clearTimeout(follower.kick)
+  follower = null
+}
+
+/** Tests: one follower pass now, awaited. */
+export async function _followPassForTests(registry: TenantRegistry): Promise<void> {
+  await runWithoutTenant(() => followPass(registry))
 }
 
 /** Readiness `app-schemas`: inside an app, that app's own state; outside, the failed apps. */
@@ -688,6 +913,7 @@ export function _configureAppMigrationsForTests(o: {
 
 export function _resetAppMigrationsForTests(): void {
   stopLoop()
+  stopFollower()
   states.clear()
   inFlight.clear()
   verifying.clear()

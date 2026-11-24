@@ -138,7 +138,7 @@ export const deploymentModesDocs: DocSection = {
       type: 'ul',
       items: [
         'Huddle media servers come from the platform `HUDDLE_LIVEKIT_URL`, `HUDDLE_TURN_URLS` and `HUDDLE_STUN_URLS`; an app cannot set its own.',
-        'There is no env push-relay key: `MOBILE_PUSH_RELAY_KEY` is ignored, and nothing on a shared deployment can store a per-app relay key yet, so phone push stays off on a shared deployment.',
+        "There is no env push-relay key: `MOBILE_PUSH_RELAY_KEY` is ignored on a shared deployment. An app admin connects the app's own push relay in Settings → Mobile app, and phone push runs per app.",
         'The SSRF guard applies to URLs an app admin sets (webhooks, link preview, the flow webhook operation): pinned address, every redirect re-checked.',
         'Ending maintenance in one app does not end the operator deployment-wide freeze (see Per-app jobs and maintenance below).'
       ]
@@ -264,7 +264,7 @@ export const deploymentModesDocs: DocSection = {
       items: [
         "App jobs read or write one app's database, files or people. The job fires once, and the fan-out runs it once for every active app, each run inside that app's tenant context, at most `TENANT_JOB_CONCURRENCY` apps at a time. One app failing or hanging never stops the others. Job-run rows land in that app's own database. An app in maintenance mode is skipped, and an app whose previous run is still going is skipped.",
         "No deployment-wide (`process`) core job runs on a shared deployment yet. The two there are (the pool monitor and the socket-count sample) only write to the static database, so they are registered self-hosted only until a deployment store exists for them. Every job's scope is listed in `services/cron-scope.ts`; a test fails when a core job is missing from it, and the boot log names any job registered without a scope.",
-        "Some core jobs only make sense self-hosted and are not registered on a shared deployment (`SELF_HOSTED_ONLY_CRONS` in `services/cron-scope.ts`, each with its reason): the restore drill, fault drills, Docker host and Traffic Map history jobs, huddle crons, the import drainer, the outside-write watch, live SLA flips, the cumulative-flow rollup, automatic mail retry (off on multi-tenant, as in cloud), the help-video render sweep (no app owns a queue there: each publish renders its own video in its own app, and publishes from two apps render one after the other through the deployment-wide heavy slot), and the storage snapshot (it walks the upload folder on disk, outside the per-app scope). File cleanup and session recording tiering run per app, because every object key is under that app's own prefix. The boot warn line `[cron] shared deployment` counts the app jobs and the jobs left out.",
+        "Some core jobs only make sense self-hosted and are not registered on a shared deployment (`SELF_HOSTED_ONLY_CRONS` in `services/cron-scope.ts`, each with its reason): the restore drill, fault drills, Docker host and Traffic Map history jobs, huddle crons, the outside-write watch, the help-video render sweep (no app owns a queue there: each publish renders its own video in its own app, and publishes from two apps render one after the other through the deployment-wide heavy slot), and the storage snapshot (it walks the upload folder on disk, outside the per-app scope). File cleanup and session recording tiering run per app, because every object key is under that app's own prefix. The import drainer, live SLA flips, the cumulative-flow rollup, automatic mail retry and the daily retention pass run per app. The boot warn line `[cron] shared deployment` counts the app jobs and the jobs left out.",
         "Extension jobs default to `app`. An extension job that serves the process passes `scope: 'process'` in `ctx.cron.schedule(id, expression, fn, { scope })`. The option is ignored in cloud and self-hosted, so existing extensions need no change.",
         "An app admin can pause and resume a job for their own app only. The pause is that app's own `paused_crons` setting; the process-wide paused set is never touched. Pausing a process-scoped job answers 409.",
         "Schedules, time zones, chains and overrides are deployment-wide: `PATCH /api/cron/:id` and the revert route answer 409 `SCHEDULE_IS_DEPLOYMENT_WIDE`, and an app's `sla_timezone` does not move the cron zone.",
@@ -286,11 +286,10 @@ export const deploymentModesDocs: DocSection = {
     {
       type: 'ul',
       items: [
-        'Staged imports, row schedules (retention policies, scheduled reports, sync jobs, scheduled flows), GitLab issue sync and the flow `exec-script` operation.',
-        'Phone app sign-in, phone push and the MCP/OAuth issuer use a per-app origin only where the app origin is known; the push relay key and the Microsoft directory registration have no per-app home yet.',
-        'Automatic mail retry (`MAIL_RETRY`), the Teams bot and huddle relay settings: off on a multi-tenant process, as in cloud.',
+        'GitLab issue sync and the flow `exec-script` operation. Staged imports, row schedules, the Microsoft directory, the Teams bot, phone push and automatic mail retry work per app on a shared deployment (each app saves its own directory registration, bot and push relay); they stay off in Nivaro Cloud.',
+        'The huddle relay (TURN) settings: off on a multi-tenant process, as in cloud.',
         'Config epochs per tenant (`CACHE_EPOCH`): the metadata caches expire on their own TTL.',
-        'Boot passes against a database (the daily retention purge, row-schedule hydration, the boot cache and readiness warms, the REST changelog) and the self-hosted-only jobs above.'
+        'The self-hosted-only jobs above. Boot passes against a database run once per app when it becomes ready.'
       ]
     },
     {

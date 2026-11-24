@@ -271,10 +271,10 @@
       "line": 54,
       "text": "if (realtime && process.env.CLOUD_META_DB_URL) {",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T2",
-      "why": "realtime-role refusal",
+      "why": "realtime-role refusal. Now Nivaro Cloud only, through realtimeRoleProblem() (services/process-role.ts, EXTRA_CALLS): a Hub shared deployment may run NIVARO_ROLE=realtime",
       "batch": "A"
     },
     {
@@ -623,10 +623,10 @@
       "line": 65,
       "text": "if (process.env.CLOUD_META_DB_URL)",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T2",
-      "why": "realtime-role refusal: the realtime tier cannot resolve a tenant per request",
+      "why": "realtime-role refusal: the realtime tier cannot resolve a tenant per request. Now Nivaro Cloud only, through realtimeRoleProblem() (services/process-role.ts, EXTRA_CALLS): a Hub shared deployment runs a realtime process that resolves the app per request and per socket",
       "batch": "A"
     },
     {
@@ -768,11 +768,12 @@
       "line": 442,
       "text": "if (process.env.CLOUD_META_DB_URL) return null",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T4",
-      "why": "import hand-off workers / lease Redis are process-wide",
-      "batch": "D"
+      "why": "collection-import lease Redis. Now isNivaroCloud() (EXTRA_CALLS): a Hub shared deployment keeps the lease, keyed per app, so the app's drainers never recover a live run",
+      "batch": "D",
+      "phase6": "done: per-app collection-job lease (Hub shared features Task 4)"
     },
     {
       "id": "routes/imports.ts:1013",
@@ -997,11 +998,12 @@
       "line": 364,
       "text": "process.env.CLOUD_META_DB_URL &&",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T7",
-      "why": "a tenant admin must not set the process-wide push-relay key/url (CLOUD_MANAGED)",
-      "batch": "B"
+      "why": "Nivaro Cloud owns an app's push-relay key/url (CLOUD_MANAGED); an app on a shared deployment connects its own relay (isNivaroCloud)",
+      "batch": "B",
+      "phase6": "done: per app on a shared deployment"
     },
     {
       "id": "routes/realtime-verify.ts:118",
@@ -1093,11 +1095,12 @@
       "line": 224,
       "text": "if (inCloud()) return false",
       "form": "helper-call",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T4",
-      "why": "Teams bot registration is process config one app cannot own",
-      "batch": "D"
+      "why": "the Teams bot runs per app on a shared deployment (each app's own saved bot); Nivaro Cloud still refuses (isNivaroCloud)",
+      "batch": "D",
+      "phase6": "done: per app on a shared deployment"
     },
     {
       "id": "routes/teams-bot.ts:248",
@@ -1105,11 +1108,12 @@
       "line": 248,
       "text": "if (inCloud()) return reply.code(404).send({ error: 'Not found' })",
       "form": "helper-call",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T4",
-      "why": "Teams bot registration is process config one app cannot own",
-      "batch": "D"
+      "why": "the Teams bot runs per app on a shared deployment (each app's own saved bot); Nivaro Cloud still refuses (isNivaroCloud)",
+      "batch": "D",
+      "phase6": "done: per app on a shared deployment"
     },
     {
       "id": "routes/teams-bot.ts:291",
@@ -1117,11 +1121,12 @@
       "line": 291,
       "text": "if (inCloud()) return reply.code(404).send({ error: 'Not found' })",
       "form": "helper-call",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T4",
-      "why": "Teams bot registration is process config one app cannot own",
-      "batch": "D"
+      "why": "the Teams bot runs per app on a shared deployment (each app's own saved bot); Nivaro Cloud still refuses (isNivaroCloud)",
+      "batch": "D",
+      "phase6": "done: per app on a shared deployment"
     },
     {
       "id": "routes/teams-bot.ts:301",
@@ -1129,11 +1134,12 @@
       "line": 301,
       "text": "if (inCloud()) return reply.code(404).send({ error: 'Not found' })",
       "form": "helper-call",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T4",
-      "why": "Teams bot registration is process config one app cannot own",
-      "batch": "D"
+      "why": "the Teams bot runs per app on a shared deployment (each app's own saved bot); Nivaro Cloud still refuses (isNivaroCloud)",
+      "batch": "D",
+      "phase6": "done: per app on a shared deployment"
     },
     {
       "id": "routes/traffic-map-extras/baselines.ts:41",
@@ -1266,7 +1272,7 @@
       "weight": 1,
       "meaning": "multiTenant",
       "rule": "T4",
-      "why": "staged-import drainer is a process-wide worker",
+      "why": "staged-import drainer start: self-hosted, and on a Hub shared deployment (`|| perAppJobs()`) only the deployment's kick subscriber (each app's cron drains); the export drainer inside stays self-hosted (`!perAppJobs()`)",
       "batch": "A"
     },
     {
@@ -1275,10 +1281,10 @@
       "line": 424,
       "text": "if (!process.env.CLOUD_META_DB_URL && app.redis) {",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T3",
-      "why": "realtime board is per process in multi-tenant (cloud keeps per-process answers)",
+      "why": "realtime board is per process in multi-tenant (cloud keeps per-process answers). Now Nivaro Cloud only, through realtimeBoardRuns() (services/process-role.ts, EXTRA_CALLS): a Hub shared deployment runs the board (app-scoped rooms; answers by user id alone stay off), so a SOCKETS=off web process's emit gates see the realtime processes' watchers",
       "batch": "A"
     },
     {
@@ -1305,7 +1311,7 @@
       "rule": "T1",
       "why": "core jobs (file cleanup, queue snapshots, staged imports, trackers) registered self-hosted; also on a Hub shared deployment (`|| perAppJobs()`, P5-9), never in Nivaro Cloud",
       "batch": "A",
-      "phase6": "the self-hosted-only jobs of services/cron-scope.ts SELF_HOSTED_ONLY_CRONS (file-cleanup, staged-imports) need per-app storage keys / drainers"
+      "phase6": "the self-hosted-only jobs of services/cron-scope.ts SELF_HOSTED_ONLY_CRONS need per-app storage keys / drainers (staged-imports runs per app since Hub shared features Task 4)"
     },
     {
       "id": "server.ts:951",
@@ -1351,12 +1357,12 @@
       "line": 210,
       "text": "if (process.env.CLOUD_META_DB_URL) return []",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T6",
-      "why": "weekly AI summary audience read from the static DB by the digest job",
+      "why": "weekly AI summary audience runs per app on a shared deployment (daily-digest fan-out); Nivaro Cloud still sends none (isNivaroCloud)",
       "batch": "E",
-      "phase6": "digest audience per app (daily-digest job fan-out)"
+      "phase6": "done: per app on a shared deployment"
     },
     {
       "id": "services/ai-explain-weekly.ts:255",
@@ -1364,12 +1370,12 @@
       "line": 255,
       "text": "if (registered || process.env.CLOUD_META_DB_URL) return",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T6",
-      "why": "weekly AI summary audience read from the static DB by the digest job",
+      "why": "weekly AI summary registers on a shared deployment (its audience and section run per app); Nivaro Cloud still never registers (isNivaroCloud)",
       "batch": "E",
-      "phase6": "digest audience per app (daily-digest job fan-out)"
+      "phase6": "done: per app on a shared deployment"
     },
     {
       "id": "services/ai-quality.ts:663",
@@ -1392,7 +1398,7 @@
       "weight": 1,
       "meaning": "multiTenant",
       "rule": "T5",
-      "why": "local const gates `infrastructure` (T5) and `teams_bot` (T4) in enabledFeatures: both multiTenant",
+      "why": "local const gates `infrastructure` (T5) in enabledFeatures; `teams_bot` (T4) now refuses in Nivaro Cloud only (isNivaroCloud, Task 9: per app on a shared deployment)",
       "batch": "A"
     },
     {
@@ -1737,11 +1743,12 @@
       "line": 304,
       "text": "if (unrestricted && spanDays > CFD_LIVE_MAX_DAYS && redis && !inCloud()) {",
       "form": "helper-call",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T3",
-      "why": "CFD rollup Redis key is not tenant-keyed",
-      "batch": "E"
+      "why": "CFD rollup read runs per app on a shared deployment (Redis key carries the app); Nivaro Cloud still refuses (isNivaroCloud)",
+      "batch": "E",
+      "phase6": "done: per app on a shared deployment"
     },
     {
       "id": "services/cumulative-flow.ts:370",
@@ -1749,11 +1756,12 @@
       "line": 370,
       "text": "if (!redis || inCloud()) return { stored: 0 }",
       "form": "helper-call",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T3",
-      "why": "CFD rollup Redis key is not tenant-keyed",
-      "batch": "E"
+      "why": "CFD rollup runs per app on a shared deployment (Redis key carries the app); Nivaro Cloud still refuses (isNivaroCloud)",
+      "batch": "E",
+      "phase6": "done: per app on a shared deployment"
     },
     {
       "id": "services/db-outage.ts:45",
@@ -1881,11 +1889,12 @@
       "line": 92,
       "text": "if (env.CLOUD_META_DB_URL) return false",
       "form": "env-param",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T4",
-      "why": "export hand-off worker is process-wide",
-      "batch": "D"
+      "why": "exportHandoffEnabled. Now isNivaroCloud() (EXTRA_CALLS): a Hub shared deployment hands exports off per app (app-keyed list and beats, kick `<app>|<run id>`)",
+      "batch": "D",
+      "phase6": "done: per-app export hand-off keys, kicks and drain pass (Hub shared features Task 15)"
     },
     {
       "id": "services/export-limits.ts:39",
@@ -1977,11 +1986,12 @@
       "line": 323,
       "text": "cloud: !!process.env.CLOUD_META_DB_URL,",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T4",
-      "why": "export worker judgement (wire field `cloud`)",
-      "batch": "D"
+      "why": "export worker judgement (wire field `cloud`). Now isNivaroCloud() (EXTRA_CALLS): a Hub shared deployment judges each app's own export drainers",
+      "batch": "D",
+      "phase6": "done: per-app export hand-off (Hub shared features Task 15)"
     },
     {
       "id": "services/flow-executor.ts:182",
@@ -2075,11 +2085,12 @@
       "line": 91,
       "text": "if (!r || process.env.CLOUD_META_DB_URL) return false",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T4",
-      "why": "import hand-off queue/workers are process-wide",
-      "batch": "D"
+      "why": "import hand-off: enqueueImportJob. Now isNivaroCloud() (EXTRA_CALLS): a Hub shared deployment queues per app (app-keyed list, kick `<app>|job:<id>`)",
+      "batch": "D",
+      "phase6": "done: per-app import hand-off keys and kicks (Hub shared features Task 4)"
     },
     {
       "id": "services/import-handoff.ts:151",
@@ -2087,11 +2098,12 @@
       "line": 151,
       "text": "if (env.CLOUD_META_DB_URL) return 'off'",
       "form": "env-param",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T4",
-      "why": "import hand-off queue/workers are process-wide",
-      "batch": "D"
+      "why": "importDrainMode. Now isNivaroCloud() (EXTRA_CALLS): a Hub shared deployment drains per app from the `staged-imports` cron (scope 'app') and kicks, no process loop",
+      "batch": "D",
+      "phase6": "done: per-app draining (Hub shared features Task 4)"
     },
     {
       "id": "services/import-handoff.ts:202",
@@ -2099,11 +2111,12 @@
       "line": 202,
       "text": "if (!r || process.env.CLOUD_META_DB_URL) return false",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T4",
-      "why": "import hand-off queue/workers are process-wide",
-      "batch": "D"
+      "why": "import hand-off: enqueueImportRun. Now isNivaroCloud() (EXTRA_CALLS): a Hub shared deployment queues per app (app-keyed list, kick `<app>|<run id>`)",
+      "batch": "D",
+      "phase6": "done: per-app import hand-off keys and kicks (Hub shared features Task 4)"
     },
     {
       "id": "services/infra-drift/store.ts:48",
@@ -2172,12 +2185,12 @@
       "line": 553,
       "text": "return { entries, retention_pass: pass, cloud: !!process.env.CLOUD_META_DB_URL }",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T6",
-      "why": "wire field `cloud`: the retention pass does not run in this process",
+      "why": "wire field `cloud`: the retention pass never runs here, Nivaro Cloud only (isNivaroCloud); a Hub shared deployment runs it per app (the retention-pass job)",
       "batch": "C",
-      "phase6": "per-app retention pass (job fan-out) and shared-deployment wording"
+      "phase6": "done: per app on a shared deployment"
     },
     {
       "id": "services/mail-retry-state.ts:18",
@@ -2185,12 +2198,12 @@
       "line": 18,
       "text": "if (process.env.CLOUD_META_DB_URL) return false",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T6",
-      "why": "mail-retry cron has no per-tenant core crons",
+      "why": "mail retry runs per app on a shared deployment; Nivaro Cloud still refuses (isNivaroCloud)",
       "batch": "D",
-      "phase6": "mail-retry cron per app (Task 10 fan-out)"
+      "phase6": "done: per app on a shared deployment"
     },
     {
       "id": "services/maintenance-live.ts:60",
@@ -2474,12 +2487,12 @@
       "line": 317,
       "text": "if (process.env.CLOUD_META_DB_URL) return tenantOrigin() ?? ''",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "nivaroCloud",
       "rule": "C4",
-      "why": "tenant canonical origin for push links",
+      "why": "the app's own origin is the relay instance and registration address on every multi-tenant process (isMultiTenant)",
       "batch": "B",
-      "phase6": "shared deployment names the self-hosted admin origin as the relay instance for every app; a per-app relay identity needs a per-app origin; shared mode needs a per-tenant origin before phone push can be turned on"
+      "phase6": "done: per app on a shared deployment"
     },
     {
       "id": "services/pool-attribution.ts:187",
@@ -2535,10 +2548,10 @@
       "line": 41,
       "text": "if (isRealtimeRole(env) || env.CLOUD_META_DB_URL) return true",
       "form": "env-param",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T4",
-      "why": "socket roles: every multi-tenant process serves sockets",
+      "why": "socket roles: every multi-tenant process serves sockets. Now isNivaroCloud(env) (EXTRA_CALLS): a Hub shared deployment honours SOCKETS=off, its realtime service holding the sockets",
       "batch": "A"
     },
     {
@@ -2564,7 +2577,7 @@
       "rule": "T7",
       "why": "process-wide push-relay key never from env: one tenant admin must not get or set it on a shared process",
       "batch": "B",
-      "phase6": "shared deployment ignores the env relay key (MOBILE_PUSH_RELAY_KEY); a per-app key needs per-app storage that nothing on shared writes yet, as cloud provisioning does, so phone push stays off"
+      "phase6": "done: the env relay key stays ignored on shared; each app connects its own relay and stores its own key (POST /push/relay)"
     },
     {
       "id": "services/push-relay.ts:100",
@@ -2572,11 +2585,12 @@
       "line": 100,
       "text": "const storedUrl = cloudMode() || (!envKey && storedKey) ? cleanRelayUrl(stored.relay_url) : null",
       "form": "helper-call",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T7",
-      "why": "process-wide push-relay key never from env: one tenant admin must not get or set it on a shared process",
-      "batch": "B"
+      "why": "process-wide push-relay key never from env: one tenant admin must not get or set it on a shared process. Now isNivaroCloud() (EXTRA_CALLS): only cloud provisioning's stored url counts without a stored key",
+      "batch": "B",
+      "phase6": "done: on a shared deployment an app's stored relay url travels with its own stored key only"
     },
     {
       "id": "services/realtime-ack-sample.ts:92",
@@ -2740,12 +2754,12 @@
       "line": 93,
       "text": "if (!fn || !app.cron || process.env.CLOUD_META_DB_URL) return null",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T1",
-      "why": "DB-defined row schedules (Decision 12)",
+      "why": "DB-defined row schedules (Decision 12). Now isNivaroCloud() (EXTRA_CALLS): a Hub shared deployment resyncs inside an app, bound to it",
       "batch": "A",
-      "phase6": "per-app row-schedule hydration"
+      "phase6": "done: per-app row-schedule hydration (registerRowScheduleLifecycle: app ready / app left hooks, row-schedules-resync, the nvr:row-schedules channel)"
     },
     {
       "id": "services/sla-flips.ts:198",
@@ -2753,12 +2767,12 @@
       "line": 198,
       "text": "if (process.env.CLOUD_META_DB_URL) return { collections: 0, announced: 0 }",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T6",
-      "why": "SLA flip cron pass has no tenant context",
+      "why": "SLA flip pass is per app on a shared deployment; Nivaro Cloud still returns at once (isNivaroCloud)",
       "batch": "E",
-      "phase6": "SLA flip pass per app (job fan-out)"
+      "phase6": "done: per app on a shared deployment"
     },
     {
       "id": "services/socket-access.ts:480",
@@ -2850,11 +2864,12 @@
       "line": 762,
       "text": "cloud: !!process.env.CLOUD_META_DB_URL,",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T4",
-      "why": "import worker judgement (wire field `cloud`)",
-      "batch": "D"
+      "why": "import worker judgement (wire field `cloud`). Now isNivaroCloud() (EXTRA_CALLS): a Hub shared deployment drains its apps' queues itself, so stuck imports there are judged like self-hosted ones",
+      "batch": "D",
+      "phase6": "done: importWorkerJudgement reads each app's own queue and beats; only Nivaro Cloud answers 'Cloud mode'"
     },
     {
       "id": "services/stall-causes.ts:193",
@@ -2898,11 +2913,12 @@
       "line": 121,
       "text": "if (process.env.CLOUD_META_DB_URL) return null",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T4",
-      "why": "Teams bot registration is process config (reason stays `cloud`)",
-      "batch": "D"
+      "why": "Teams bot setup per app on a shared deployment (saved settings only, never the env or the sign-in app); Nivaro Cloud still answers none (isNivaroCloud)",
+      "batch": "D",
+      "phase6": "done: per app on a shared deployment"
     },
     {
       "id": "services/teams-bot/config.ts:133",
@@ -2910,11 +2926,12 @@
       "line": 133,
       "text": "if (process.env.CLOUD_META_DB_URL) return { ...none, enabled: false, reason: 'cloud' }",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T4",
-      "why": "Teams bot registration is process config (reason stays `cloud`)",
-      "batch": "D"
+      "why": "Teams bot config per app on a shared deployment (saved settings only, never the env or the sign-in app); Nivaro Cloud keeps reason `cloud` (isNivaroCloud)",
+      "batch": "D",
+      "phase6": "done: per app on a shared deployment"
     },
     {
       "id": "services/telemetry-status.ts:119",

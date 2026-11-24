@@ -243,8 +243,8 @@ const REDIS_SITES: Record<string, Entry> = {
   'services/hub/promote-lock.ts :: hubSharedLockKey(id)': P(
     'a Hub-side lock (HUB=on only), not a credential'
   ),
-  'services/teams-bot/actions.ts :: KEY(nonce)': P(
-    'Teams bot card nonce: the bot is off on any multi-tenant deployment (teams-bot/config.ts)'
+  'services/teams-bot/actions.ts :: KEY(nonce)': K(
+    "Teams bot card nonce: KEY() names the app (appKeyPart, Task 9), so a press in app A never claims or replays app B's card"
   )
 }
 
@@ -300,7 +300,9 @@ const SECRET_SITES: Record<string, Entry & { reads: number }> = {
   },
   'services/teams-bot/links.ts': {
     reads: 1,
-    ...P('Teams connect token: the bot is off on any multi-tenant deployment (teams-bot/config.ts)')
+    ...T(
+      'Teams connect token: the app is in the HMAC input (appBoundSigInput, Task 9), so a link minted in app A does not verify in app B'
+    )
   },
   'services/chaos/push-stop.ts': {
     reads: 1,
@@ -321,7 +323,7 @@ const LABEL =
   'a key-family label or SCAN prefix (Traffic Map / chaos key families), never a key itself'
 const HUB = 'Hub-only (HUB=on), which a shared deployment refuses (deploymentModeProblem)'
 const OFF =
-  'the feature is off on any multi-tenant deployment (Teams bot, Hub sign-in, outside-write watch, change warms, chaos test job)'
+  'the feature is off on any multi-tenant deployment (Hub sign-in, outside-write watch, change warms, chaos test job)'
 
 const NVR_ALLOW: Record<string, string> = {
   'plugins/socketio.ts :: nvr:ping': PROC,
@@ -364,8 +366,6 @@ const NVR_ALLOW: Record<string, string> = {
   'services/huddle-turn-monitor.ts :: nvr:huddle:probe:history': PROC,
   'services/huddle-turn-monitor.ts :: nvr:huddle:probe:state': PROC,
   'services/infra-swarm/health.ts :: nvr:infra:health:': PROC,
-  'services/cache-warm.ts :: nvr:warm:':
-    'once per cluster per version by design: the boot warm runs outside any app, and on a multi-tenant deployment it skips the per-app query and viewer phases (runCacheWarm: cq: keys carry no app), so there is nothing per app to warm (Task 22 checked)',
   'services/traffic-actions/temp-cache.ts :: nvr:tm:cache:stats:': TM,
   'services/traffic-actions/timed-rules.ts :: nvr:tm:actions': TM,
   'services/traffic-actions/timed-rules.ts :: nvr:tm:actions:end:': TM,
@@ -414,9 +414,6 @@ const NVR_ALLOW: Record<string, string> = {
   'services/hub/promote-lock.ts :: nvr:hub:promote-cancel:': HUB,
   'services/hub/promote-lock.ts :: nvr:hub:shared:': HUB,
   'services/hub/status.ts :: nvr:hub:status:': HUB,
-  'routes/teams-bot.ts :: nvr:teams:act:': OFF,
-  'services/teams-bot/actions.ts :: nvr:teams:nonce:': OFF,
-  'services/teams-bot/stats.ts :: nvr:teams:stat:': OFF,
   'services/hub-signin/link-client.ts :: nvr:hub-signin-push:': OFF,
   'services/hub-signin/link-client.ts :: nvr:hub-switcher:': OFF,
   'services/outside-write-watch.ts :: nvr:rt:outside:': OFF,

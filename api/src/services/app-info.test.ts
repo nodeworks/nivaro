@@ -203,6 +203,17 @@ describe('enabledFeatures', () => {
     expect(f).not.toContain('teams_bot')
     expect(f).toContain('chat')
   })
+  it('keeps the Teams bot on a Hub shared deployment (per app), not infrastructure', () => {
+    const shared = {
+      HUB_SHARED_DEPLOYMENT: 'shared-a',
+      HUB_URL: 'https://hub.example.com',
+      HUB_DEPLOYMENT_TOKEN: 'x'.repeat(40)
+    } as NodeJS.ProcessEnv
+    const f = enabledFeatures(shared)
+    expect(f).toContain('teams_bot')
+    expect(f).not.toContain('infrastructure')
+    expect(enabledFeatures({ ...shared, TEAMS_BOT: 'off' })).not.toContain('teams_bot')
+  })
   it('honours TEAMS_BOT=off and production chaos gate', () => {
     const f = enabledFeatures({ TEAMS_BOT: 'off', NODE_ENV: 'production' } as NodeJS.ProcessEnv)
     expect(f).not.toContain('teams_bot')

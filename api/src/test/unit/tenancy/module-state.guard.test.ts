@@ -61,7 +61,6 @@ const TM_ACTIONS =
 const CACHE_CFG =
   'stored cache config is never read on a multi-tenant deployment (env + defaults only)'
 const OFF_HUBSIGNIN = 'Hub sign-in is off on any multi-tenant deployment (hub-signin/config.ts)'
-const OFF_TEAMS = 'the Teams bot is off on any multi-tenant deployment (teams-bot/config.ts)'
 const OFF_TRACKERS =
   'issue trackers are always off on a multi-tenant deployment (trackers/feature.ts)'
 const OFF_PERMCACHE =
@@ -74,8 +73,6 @@ const OFF_CHANGEWARM =
 const OFF_DOCKER = 'Docker sources answer nothing on a multi-tenant deployment (docker-source.ts)'
 const OFF_STORED_LIMITS =
   'stored export limits are never read on a multi-tenant deployment (env + defaults only)'
-const OFF_EXPORT_HANDOFF =
-  'export hand-offs are off on any multi-tenant deployment (exportHandoffEnabled)'
 const OFF_MEDIA_HANDOFF =
   'media hand-offs are off on any multi-tenant deployment (media-handoff.ts)'
 const OFF_FILES_FALLBACK =
@@ -288,7 +285,6 @@ const SHARED: Record<string, string> = {
   'routes/stream.ts :: hooksRegistered': REGISTRY,
   'routes/support.ts :: sendClaims':
     'fallback (Redis down) for the claim key nvr:support-send:<tenant>:…, which already carries the app',
-  'routes/teams-bot.ts :: seen': OFF_TEAMS,
   'routes/tracker-hooks.ts :: verified': WEAK,
   'routes/traffic-map-extras/topology.ts :: providersRegistered': REGISTRY,
   'routes/user-scopes.ts :: rawSqlCheckRegistered': REGISTRY,
@@ -349,6 +345,10 @@ const SHARED: Record<string, string> = {
   'services/ai-watches.ts :: digestRegistered': REGISTRY,
   'services/ai-watches.ts :: evaluator': FN_SLOT,
   'services/alert-fired.ts :: listeners': REGISTRY,
+  'services/app-boot-passes.ts :: bootPassQueue':
+    "the process-wide turn queue for every app's boot passes (code scheduling: at most two apps at once on this process); it holds wake-up callbacks, no app data",
+  'services/app-boot-passes.ts :: bootQueryWarmQueue':
+    'the process-wide turn queue for the boot query warms (code scheduling: at most two at once on this process); it holds wake-up callbacks, no app data',
   'services/app-forget.ts :: registered':
     'the hand-keyed containers themselves (forgetAppState walks them); holds no app data',
   'services/app-links.ts :: registered': REGISTRY,
@@ -551,8 +551,8 @@ const SHARED: Record<string, string> = {
   'services/export-limits.ts :: stored': OFF_STORED_LIMITS,
   'services/export-worker.ts :: closing': 'set once the process is stopping',
   'services/export-worker.ts :: drainer': 'the process drain loop handle',
-  'services/export-worker.ts :: runningHere': OFF_EXPORT_HANDOFF,
-  'services/export-worker.ts :: ticking': OFF_EXPORT_HANDOFF,
+  'services/export-worker.ts :: passing':
+    "a drainer's per-app pass in flight on this process (it walks every app; one at a time)",
   'services/extension-events.ts :: handlers': REGISTRY,
   'services/extension-schema-steps.ts :: declared': REGISTRY,
   'services/extension-tools.ts :: isEnabled': FN_SLOT,
@@ -570,8 +570,6 @@ const SHARED: Record<string, string> = {
   'services/gitlab-client.ts :: commitCache':
     'commit titles by commit sha (immutable, public to whoever reads that repository); no app records',
   'services/gitlab-health.ts :: fetchImpl': FN_SLOT,
-  'services/graph-directory.ts :: cachedToken':
-    'one slot whose key names the app and the identity (directoryTokenKey); a hit needs the same app, another app only replaces it',
   'services/graphql-nested-access.ts :: perRequest': WEAK,
   'services/graphql-nested-guard.ts :: budgets': WEAK,
   'services/grid-presence.ts :: readersCache':
@@ -864,12 +862,7 @@ const SHARED: Record<string, string> = {
   'services/request-trace.ts :: traceFallbacks': DIAG,
   'services/request-trace.ts :: wideTables': DIAG,
   'services/requirement-writes.ts :: memo': WEAK,
-  'services/retention-schedule.ts :: lastResult':
-    'the per-process retention timer, started only when not multi-tenant (server.ts runRetentionPurge)',
-  'services/retention-schedule.ts :: lastRunAt':
-    'the per-process retention timer, started only when not multi-tenant (server.ts runRetentionPurge)',
-  'services/retention-schedule.ts :: nextRunAt':
-    'the per-process retention timer, started only when not multi-tenant (server.ts runRetentionPurge)',
+  'services/row-schedules.ts :: publisher': CONN,
   'services/row-schedules.ts :: resyncers': REGISTRY,
   'services/run-long.ts :: touched': WEAK,
   'services/runtime-monitor.ts :: breachStreak': PROC,
@@ -902,8 +895,6 @@ const SHARED: Record<string, string> = {
   'services/single-flight.ts :: flights':
     "generic single-flight helper: every caller's key names its scope (read-gate keys carry the tenant; short caches key per caller)",
   'services/single-flight.ts :: stats': DIAG,
-  'services/sla-flips.ts :: pass':
-    'the live SLA flip pass, which never runs on a multi-tenant deployment (runSlaFlipPass returns at once)',
   'services/socket-access.ts :: pending':
     'a process recheck request over sockets; each socket is judged as its own app (Task 13)',
   'services/socket-access.ts :: pendingTimer': TIMER,
@@ -928,7 +919,12 @@ const SHARED: Record<string, string> = {
   'services/sse-hub.ts :: listeners':
     'open SSE subscribers of this process; each carries its own app filter',
   'services/sse-hub.ts :: seq': GEN,
-  'services/staged-import-worker.ts :: drainer': 'the process drain loop handle',
+  'services/staged-import-worker.ts :: drainer':
+    "the process drain loop handle (a shared deployment: the deployment's kick subscriber)",
+  'services/staged-import-worker.ts :: processDriving':
+    'the count of import runs this process drives across every app (a shared deployment caps the process at IMPORT_MAX_PARALLEL, not each app); a number, no app data',
+  'services/staged-import-worker.ts :: passing':
+    "the importer's per-app pass in flight on this process (it walks every app; one at a time)",
   'services/staged-imports.ts :: xlsxEntry': 'where the xlsx worker file sits in this image',
   'services/stall-causes.ts :: book': PROC,
   'services/stall-causes.ts :: onCaptured': FN_SLOT,
@@ -946,14 +942,8 @@ const SHARED: Record<string, string> = {
   'services/submission-status.ts :: FREE_MAIL_DOMAINS': FIXED,
   'services/support-ticket-events.ts :: listeners': REGISTRY,
   'services/swallow-counter.ts :: stats': DIAG,
-  'services/teams-bot/actions.ts :: local': OFF_TEAMS,
-  'services/teams-bot/config.ts :: cached': OFF_TEAMS,
-  'services/teams-bot/config.ts :: epoch': OFF_TEAMS,
-  'services/teams-bot/config.ts :: inflight': OFF_TEAMS,
-  'services/teams-bot/connector.ts :: inflight': OFF_TEAMS,
-  'services/teams-bot/connector.ts :: tokens': OFF_TEAMS,
-  'services/teams-bot/jwt.ts :: jwkDocs': OFF_TEAMS,
-  'services/teams-bot/stats.ts :: mem': OFF_TEAMS,
+  'services/teams-bot/jwt.ts :: jwkDocs':
+    "Microsoft's public Bot Framework signing keys (one metadata URL for every bot): no app data",
   'services/telemetry-ai.ts :: ASK_TOOL_NAMES': FIXED,
   'services/telemetry-ai.ts :: ROLLUP_METRICS': FIXED,
   'services/telemetry-ai.ts :: TELEMETRY_TOOL_NAMES': FIXED,
@@ -961,8 +951,12 @@ const SHARED: Record<string, string> = {
   'services/telemetry-store.ts :: accessLines': DIAG,
   'services/telemetry-store.ts :: statusCache': TELEMETRY,
   'services/telemetry-store.ts :: transport': FN_SLOT,
+  'services/tenancy/app-lifecycle.ts :: leftHooks': REGISTRY,
+  'services/tenancy/app-lifecycle.ts :: readyHooks': REGISTRY,
   'services/tenancy/app-keys.ts :: keys':
     'Task 14: app keys by tenant id (the map is keyed by the app)',
+  'services/tenancy/app-migrations.ts :: follower':
+    "the realtime process's re-read loop over every app's stored state (a process mode; the states it writes are keyed by tenant id)",
   'services/tenancy/app-migrations.ts :: gateOn':
     'Task 8: whether this process gates requests on app migrations (a process mode)',
   'services/tenancy/app-migrations.ts :: inFlight':
@@ -1321,6 +1315,7 @@ const LEFT_ON_LEAVE: Record<string, string> = {
     'a `let` filled lazily; each entry lives 60 s (LIVE_CACHE_MS) and is rebuilt after',
   'services/db-tuning/observe-run.ts :: running': INFLIGHT,
   'services/export-runs.ts :: local': INFLIGHT,
+  'services/export-worker.ts :: runningHere': INFLIGHT,
   'services/flow-executor.ts :: runningFlows': INFLIGHT,
   'services/help-video-render.ts :: queueStates': INFLIGHT,
   'services/hub-transfer/pull.ts :: runs': INFLIGHT,

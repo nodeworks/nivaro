@@ -13,6 +13,7 @@ import { PromotionError } from '../promote-lock.js'
 import { renderSharedSpec, SharedRenderError } from '../shared/stack-render.js'
 import { openSharedToken, type SharedDeployment } from '../shared/store.js'
 import { tenantsOf } from '../shared/tenants.js'
+import { deployedSharedRoles } from '../shared/upgrade-plan.js'
 import { ensureSharedSecrets } from '../shared/upgrade-run.js'
 
 /**
@@ -141,7 +142,10 @@ export function sharedStackRouter(deps: SharedRouteDeps = {}) {
         image: recorded.image,
         extensions: { ...shared.extension_pins, ...recorded.extensions },
         hubPublicUrl: hubPublicOrigin() ?? '',
-        explicitHosts: [...names]
+        explicitHosts: [...names],
+        // Ruling I2 (Task 14): a name change keeps the roles the stack runs; only an upgrade
+        // changes them.
+        roles: (await deployedSharedRoles(shared)).roles
       })
     } catch (err) {
       if (err instanceof SharedRenderError) throw new PromotionError(err.code, err.message)

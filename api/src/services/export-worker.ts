@@ -1,9 +1,13 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { runInBackgroundPool } from '../db/pool-context.js'
+import { withTenant } from '../db/tenant-context.js'
 import { NIVARO_VERSION } from '../version.js'
+import { type AppFanOutResult, forEachApp, listApps } from './app-jobs.js'
+import { appBox } from './app-state.js'
 import { releaseRunSlot, renewRunSlot } from './background-runs.js'
-import { isMultiTenant } from './deployment-mode.js'
+import { isNivaroCloud, perAppJobs } from './deployment-mode.js'
 import {
   asExportRedis,
   beatExportWorker,
@@ -38,9 +42,15 @@ import {
   staleQueuedExports,
   takeBackExport
 } from './export-handoff.js'
+import { parseKick } from './import-handoff.js'
 import { INSTANCE_ID } from './instance-roster.js'
 import { EXPORT_HANDOFF_MARK } from './job-run-sweeps.js'
 import { emitJobProgress } from './live-progress.js'
+import { isWorkerOnlyRole } from './process-role.js'
+import { appReadyForRequests, storedAppSchemaOk } from './tenancy/app-migrations.js'
+import { getTenantRegistry } from './tenancy/registry.js'
+import type { TenantRecord } from './tenancy/types.js'
+import { currentTenantKey } from './tenant-rooms.js'
 
 /**
  * The export drainer (services/export-handoff.ts): runs background exports other processes
@@ -49,27 +59,52 @@ import { emitJobProgress } from './live-progress.js'
  * while neither beats, a single process; a tick every few seconds and on every kick. Each tick
  * beats, fails runs whose drainer died and entries that waited too long, then claims jobs up to
  * exportWorkerConcurrency().
+ *
+ * Hub shared deployment (Task 15): a tick runs inside one app and drains that app's list only;
+ * every drainer runs a pass over every listed, ready app every SHARED_PASS_MS
+ * (drainEveryAppExports) and drains the app a kick names at once (onExportKick). The jobs this
+ * process holds are keyed `<app>:<run id>` (copied apps share run ids); the concurrency limit is
+ * the process's, over every app.
  */
 
 const TICK_MS = 5_000
+/** Shared deployment: how often a drainer passes over every app (kicks start a run at once). */
+const SHARED_PASS_MS = 10_000
 /** A stopping process waits this long for its runs to stop before putting jobs back. */
 /** A stopping process waits this long for its runs to stop (inside index.ts's 8 s exit deadline). */
 const SHUTDOWN_WAIT_MS = 4_000
 /** The lease holder value this process writes. */
 const BY = INSTANCE_ID
 
-/** Jobs this process is running from the list: lease renewal + the whole run (claim release included). */
+type InApp = ReturnType<typeof AsyncLocalStorage.snapshot>
+
+/** Jobs this process is running from the list: lease renewal + the whole run (claim release
+ *  included). Keyed `<app|->:<run id>` (hereKey); each entry keeps its app's context (inApp), so a
+ *  stopping process ends it inside that app. */
 const runningHere = new Map<
-  number,
+  string,
   {
     job: ExportJob
+    /** The app the job belongs to (currentTenantKey, '-' self-hosted). */
+    app: string
+    inApp: InApp
     renew: ReturnType<typeof setInterval>
     done: Promise<void>
     settled: boolean
     skipped: boolean
   }
 >()
-let ticking = false
+const appPart = () => currentTenantKey() || '-'
+const hereKey = (runId: number) => `${currentTenantKey() || '-'}:${runId}`
+/** The run ids this process holds for the app it is in. */
+function runIdsHere(): Set<number> {
+  const mine = appPart()
+  const out = new Set<number>()
+  for (const e of runningHere.values()) if (e.app === mine) out.add(e.job.run_id)
+  return out
+}
+/** One pass per app at a time (overlapping ticks); another app's pass is never held up. */
+const ticking = appBox(() => false)
 /** Set once the process is stopping: no new claims, no re-tick. */
 let closing = false
 
@@ -83,10 +118,13 @@ function beatOf(mode: ExportDrainMode): ExportWorkerBeat {
   }
 }
 
-/** One pass: beat, recover lost runs, claim what fits. Single-flight per process. */
+/** One pass: beat, recover lost runs, claim what fits. Single-flight per process (per app on a
+ *  shared deployment, inside that app). */
 export async function drainExportsTick(app: FastifyInstance): Promise<void> {
-  if (ticking || closing) return
-  ticking = true
+  // A shared deployment drains inside an app only: outside one there is no app's list to read.
+  if (perAppJobs() && !currentTenantKey()) return
+  if (ticking.value || closing) return
+  ticking.value = true
   try {
     const mode = exportDrainMode()
     const r = asExportRedis(app.redis)
@@ -110,7 +148,7 @@ export async function drainExportsTick(app: FastifyInstance): Promise<void> {
   } catch (err) {
     app.log.error({ err }, '[export-worker] tick failed')
   } finally {
-    ticking = false
+    ticking.value = false
   }
 }
 
@@ -156,6 +194,8 @@ async function startClaimed(app: FastifyInstance, r: ExportRedis, job: ExportJob
   renew.unref?.()
   const entry = {
     job,
+    app: appPart(),
+    inApp: AsyncLocalStorage.snapshot(),
     renew,
     settled: false,
     /** True when the process began stopping before the run started: the job is untouched. */
@@ -180,14 +220,14 @@ async function startClaimed(app: FastifyInstance, r: ExportRedis, job: ExportJob
     })
     .finally(async () => {
       clearInterval(renew)
-      runningHere.delete(job.run_id)
+      runningHere.delete(hereKey(job.run_id))
       // Only while the claim is still ours (a job put back and claimed elsewhere keeps its claim).
       await releaseExportClaim(r, job.run_id, BY)
       entry.settled = true
       // A slot is free again: take the next waiting job now rather than at the next tick.
       if (!closing) void runInBackgroundPool(() => drainExportsTick(app))
     })
-  runningHere.set(job.run_id, entry)
+  runningHere.set(hereKey(job.run_id), entry)
 }
 
 /**
@@ -198,7 +238,7 @@ async function startClaimed(app: FastifyInstance, r: ExportRedis, job: ExportJob
  * are taken off and failed too.
  */
 async function failLostRuns(app: FastifyInstance, r: ExportRedis): Promise<void> {
-  for (const lost of await lostExportClaims(r, new Set(runningHere.keys()))) {
+  for (const lost of await lostExportClaims(r, runIdsHere())) {
     // Exactly the claim we judged (a renewal in between keeps it).
     if (!(await releaseLostExportClaim(r, lost.runId, lost.lease))) continue
     if (lost.job) await failRun(app, lost.job, LOST_EXPORT_NOTE, { releaseSlot: false })
@@ -263,7 +303,7 @@ export async function stopExportDrainerRuns(app: FastifyInstance): Promise<void>
   const r = asExportRedis(app.redis)
   // Stop beating at once: the importer (or the worker) takes exports over without waiting for
   // this process's beat to expire. Only our own beat is removed.
-  if (r) await dropOwnBeat(r).catch(() => {})
+  if (r) await dropOwnBeats(r).catch(() => {})
   const {
     exportRowsDoneHere,
     exportStoppedUntouched,
@@ -272,11 +312,15 @@ export async function stopExportDrainerRuns(app: FastifyInstance): Promise<void>
   } = await import('./export-runs.js')
   const plans: Array<{
     job: ExportJob
-    entry: { done: Promise<void>; settled: boolean; skipped: boolean }
+    entry: { done: Promise<void>; settled: boolean; skipped: boolean; inApp: InApp }
   }> = []
-  for (const [runId, entry] of runningHere) {
-    const mode = (exportRowsDoneHere(runId) ?? 0) === 0 ? 'requeue' : 'fail'
-    stopExportForShutdown(runId, mode)
+  for (const entry of runningHere.values()) {
+    // Inside the job's own app: its local run, its rows and its row are that app's.
+    entry.inApp(() => {
+      const runId = entry.job.run_id
+      const mode = (exportRowsDoneHere(runId) ?? 0) === 0 ? 'requeue' : 'fail'
+      stopExportForShutdown(runId, mode)
+    })
     plans.push({ job: entry.job, entry })
   }
   if (plans.length === 0) return
@@ -284,33 +328,42 @@ export async function stopExportDrainerRuns(app: FastifyInstance): Promise<void>
     Promise.all(plans.map((p) => p.entry.done)),
     new Promise((resolve) => setTimeout(resolve, SHUTDOWN_WAIT_MS))
   ])
-  const someoneElse = r ? await exportDrainerAlive(r, INSTANCE_ID) : false
   for (const p of plans) {
-    // Put back only a job whose run fully stopped (its claim released) without writing a row —
-    // never started, or stopped in time — and only while someone else will run it. Everything
-    // else fails now rather than waiting on a lease.
-    const untouched = p.entry.skipped || exportStoppedUntouched(p.job.run_id)
-    if (p.entry.settled && untouched && someoneElse && r) {
-      try {
-        const { markHandedOff } = await import('./export-runs.js')
-        // Waiting on the list again: no process's sweep may end it meanwhile.
-        await markHandedOff(p.job.run_id, EXPORT_HANDOFF_MARK)
-        await enqueueExport(r, p.job)
-        continue
-      } catch (err) {
-        app.log.warn({ err, run: p.job.run_id }, '[export-worker] could not put an export back')
+    await p.entry.inApp(async () => {
+      // Put back only a job whose run fully stopped (its claim released) without writing a row —
+      // never started, or stopped in time — and only while someone else (for this app) will run
+      // it. Everything else fails now rather than waiting on a lease.
+      const untouched = p.entry.skipped || exportStoppedUntouched(p.job.run_id)
+      const someoneElse = r ? await exportDrainerAlive(r, INSTANCE_ID) : false
+      if (p.entry.settled && untouched && someoneElse && r) {
+        try {
+          const { markHandedOff } = await import('./export-runs.js')
+          // Waiting on the list again: no process's sweep may end it meanwhile.
+          await markHandedOff(p.job.run_id, EXPORT_HANDOFF_MARK)
+          await enqueueExport(r, p.job)
+          return
+        } catch (err) {
+          app.log.warn({ err, run: p.job.run_id }, '[export-worker] could not put an export back')
+        }
       }
-    }
-    await failRun(app, p.job, SHUTDOWN_EXPORT_NOTE, { releaseSlot: true })
+      await failRun(app, p.job, SHUTDOWN_EXPORT_NOTE, { releaseSlot: true })
+    })
   }
 }
 
-/** Remove this process's export beat (whichever role key holds it). */
+/** Remove this process's export beat (whichever role key holds it) in the app it is in. */
 async function dropOwnBeat(r: ExportRedis): Promise<void> {
   for (const role of ['exporter', 'importer', 'fallback'] as const) {
     const b = await readExportBeat(r, role)
     if (b?.instance === INSTANCE_ID) await r.del(beatKeyOf(role))
   }
+}
+
+/** Self-hosted: this process's beat. Shared: its beat in every listed app. */
+async function dropOwnBeats(r: ExportRedis): Promise<void> {
+  if (!perAppJobs()) return dropOwnBeat(r)
+  for (const t of await listApps().catch(() => [] as TenantRecord[]))
+    await withTenant(t, () => dropOwnBeat(r), t.origin).catch(() => {})
 }
 
 /**
@@ -321,7 +374,7 @@ export async function exportWorkerJudgement(redis: unknown): Promise<ExportJudge
   const r = asExportRedis(redis)
   const ages = r ? await queuedExportAges(r) : []
   return judgeExportWorker({
-    cloud: isMultiTenant(),
+    cloud: isNivaroCloud(),
     handoff: exportHandoffEnabled(),
     redis: !!r,
     exporter: await readExportBeat(r, 'exporter'),
@@ -340,11 +393,82 @@ interface KickSubscriber {
   disconnect?: () => void
 }
 
+/** The process drain loop and kick subscriber (self-hosted), or the per-app pass and the
+ *  deployment's kick subscriber (shared). Process-wide: started once at boot, outside any app. */
 let drainer: { stop: () => Promise<void> } | null = null
+
+/**
+ * May app `t`'s exports run on this process now (Hub shared deployment)? Listed `active` (never an
+ * app the Hub is moving or updating) and its schema ok at this version: this process's own
+ * migration state, or — on an exporter or importer, which run no migration loop (server.ts) —
+ * the state the migrating replicas keep in Redis, so it never exports from a half-migrated
+ * database (as staged-import-worker.ts importAppReady).
+ */
+async function exportAppReady(app: FastifyInstance, t: TenantRecord): Promise<boolean> {
+  if (t.status !== 'active') return false
+  if (!appReadyForRequests(t.id)) return false
+  if (!isWorkerOnlyRole()) return true
+  return storedAppSchemaOk(t, asExportRedis(app.redis))
+}
+
+/**
+ * Hub shared deployment: one kick heard on the deployment's channel (`<app>|<run id>`). Resolves
+ * the app it names and, when this process lists it, it is active and its schema is ready, runs one
+ * drain pass inside it. Anything else is skipped: an app this process has not listed yet is
+ * drained by the next pass (drainEveryAppExports), or the starter runs the job itself.
+ */
+export async function onExportKick(app: FastifyInstance, payload: string): Promise<void> {
+  const { tenant } = parseKick(payload)
+  if (!tenant) return
+  const registry = getTenantRegistry()
+  if (!registry) return
+  let t: TenantRecord | null = null
+  try {
+    t = (await registry.byId?.(tenant)) ?? null
+    if (!t) t = (await registry.listActive()).find((x) => x.id === tenant) ?? null
+  } catch {
+    return
+  }
+  if (!t || !(await exportAppReady(app, t))) return
+  try {
+    await withTenant(t, () => runInBackgroundPool(() => drainExportsTick(app)), t.origin)
+  } catch (err) {
+    app.log.warn({ err, tenant: t.id }, '[export-worker] kick drain failed')
+  }
+}
+
+/** One per-app pass at a time on this process (the timer never stacks passes). */
+let passing = false
+
+/**
+ * Task 15 — a drainer's pass on a Hub shared deployment: one drain pass inside every listed app
+ * that is active and ready (exportAppReady), at most TENANT_JOB_CONCURRENCY at once. Inside each
+ * app the drain mode decides as self-hosted, on that app's beats: the importer and the worker
+ * drain an app only while no exporter beats for it. Null when a pass is already running.
+ */
+export async function drainEveryAppExports(app: FastifyInstance): Promise<AppFanOutResult | null> {
+  if (passing) return null
+  passing = true
+  try {
+    return await forEachApp(async (t) => {
+      if (t.status === 'maintenance') return 'maintenance'
+      if (t.status !== 'active' || !(await exportAppReady(app, t))) return 'not_ready'
+      await runInBackgroundPool(() => drainExportsTick(app))
+      return 'ran'
+    })
+  } catch (err) {
+    app.log.warn({ err }, '[export-worker] per-app pass failed')
+    return null
+  } finally {
+    passing = false
+  }
+}
 
 /**
  * Start draining exports on this process when it may (exportDrainMode). Hears the starter's
  * kick on a duplicated connection, so a handed-off export starts at once. Returns the mode.
+ * Hub shared deployment: a pass over every app every SHARED_PASS_MS and the deployment's kicks
+ * (onExportKick), instead of the process loop.
  */
 export async function startExportDrainer(app: FastifyInstance): Promise<ExportDrainMode> {
   const mode = exportDrainMode()
@@ -357,8 +481,11 @@ export async function startExportDrainer(app: FastifyInstance): Promise<ExportDr
     )
   })
   app.addHook('onClose', async () => drainer?.stop())
-  const tick = () => void runInBackgroundPool(() => drainExportsTick(app))
-  const timer = setInterval(tick, TICK_MS)
+  const shared = perAppJobs()
+  const tick = shared
+    ? () => void drainEveryAppExports(app)
+    : () => void runInBackgroundPool(() => drainExportsTick(app))
+  const timer = setInterval(tick, shared ? SHARED_PASS_MS : TICK_MS)
   timer.unref?.()
   let sub: KickSubscriber | null = null
   drainer = {
@@ -375,7 +502,10 @@ export async function startExportDrainer(app: FastifyInstance): Promise<ExportDr
       sub = dup as KickSubscriber
       sub.on('error', () => {})
       await sub.subscribe(exportKickChannel())
-      sub.on('message', () => tick())
+      sub.on('message', (_channel: unknown, payload: unknown) => {
+        if (shared) void onExportKick(app, String(payload ?? '')).catch(() => {})
+        else tick()
+      })
     }
   } catch {
     sub = null
@@ -387,9 +517,10 @@ export async function startExportDrainer(app: FastifyInstance): Promise<ExportDr
 
 /** Test seams. */
 export function __exportRunsHere(): number[] {
-  return [...runningHere.keys()]
+  return [...runningHere.values()].map((e) => e.job.run_id)
 }
 export function __resetExportWorker(): void {
   closing = false
-  ticking = false
+  ticking.value = false
+  passing = false
 }

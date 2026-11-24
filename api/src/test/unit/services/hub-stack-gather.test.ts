@@ -835,6 +835,28 @@ describe('gatherStackFacts', () => {
     expect(agentCalls).toEqual(['health'])
   })
 
+  it('controller ruling: the planned roles carry the exporter only for an agent at 0.2.2+', async () => {
+    await db('nivaro_hub_stack_settings')
+      .where({ environment_id: env.id })
+      .update({ size: 'large' })
+    const names = (f: Awaited<ReturnType<typeof facts>>) => f.roles?.map((r) => r.role)
+    agent.health = async () => health({ agent_version: '0.2.1' })
+    expect(names(await facts({}, { version: '0.3.208' }))).toEqual([
+      'web',
+      'worker',
+      'realtime',
+      'importer'
+    ])
+    agent.health = async () => health({ agent_version: '0.2.2' })
+    expect(names(await facts({}, { version: '0.3.208' }))).toEqual([
+      'web',
+      'worker',
+      'realtime',
+      'importer',
+      'exporter'
+    ])
+  })
+
   it('a version older than every template; a secret that clashes with a rendered env key', async () => {
     const old = await facts({}, { version: '0.2.9' })
     expect(old.renderProblem?.code).toBe('TEMPLATE_NONE')

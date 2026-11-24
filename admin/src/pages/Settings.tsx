@@ -301,7 +301,12 @@ interface EnvOverride {
   value: string | null
   secret: boolean
   shadows_db: boolean
+  /** A Hub shared deployment never applies this key (an app's own setting). */
+  ignored?: boolean
 }
+
+const IGNORED_ENV_TIP =
+  'This server runs several apps, so it only applies test modes and the environment label. Save this value in the app’s own Settings instead.'
 
 function InstanceOverridesSection() {
   const queryClient = useQueryClient()
@@ -319,7 +324,7 @@ function InstanceOverridesSection() {
         .then((r) => r.data.data)
   })
   const envOverrides = data?.env_overrides ?? []
-  const envKeys = new Set(envOverrides.map((e) => e.key))
+  const envKeys = new Set(envOverrides.filter((e) => !e.ignored).map((e) => e.key))
   const [rows, setRows] = useState<Array<{ key: string; value: string }>>([])
   const [hydrated, setHydrated] = useState(false)
   if (data && !hydrated) {
@@ -367,22 +372,37 @@ function InstanceOverridesSection() {
             These come from the server's environment and can only be changed there. Secret values
             are hidden.
           </p>
+          {envOverrides.some((e) => e.ignored) && (
+            <p className='mb-2 text-[11.5px] text-amber-800/80 dark:text-amber-200/70'>
+              On this shared server, only test modes and the environment label apply. Other keys are
+              shown but not used.
+            </p>
+          )}
           <div className='divide-y divide-amber-200/70 rounded-md border border-amber-200/70 bg-white dark:divide-amber-500/20 dark:border-amber-500/20 dark:bg-card'>
             {envOverrides.map((e) => (
               <div
                 key={e.key}
-                className='flex flex-wrap items-center gap-x-3 gap-y-0.5 px-2.5 py-1.5 text-[12px]'
+                className='flex flex-wrap items-center gap-x-3 gap-y-1 px-2.5 py-1.5 text-[12px]'
               >
-                <span className='w-40 max-w-full shrink-0 truncate font-mono text-slate-700 dark:text-slate-300'>
+                <span
+                  className={cn(
+                    'w-40 max-w-full shrink-0 truncate font-mono',
+                    e.ignored
+                      ? 'text-slate-500 dark:text-muted-foreground'
+                      : 'text-slate-700 dark:text-slate-300'
+                  )}
+                >
                   {e.key}
                 </span>
                 <span
                   data-tip={e.value ?? undefined}
                   className={cn(
                     'min-w-0 flex-1 truncate font-mono',
-                    e.value == null
-                      ? 'italic text-slate-400 dark:text-muted-foreground'
-                      : 'text-slate-900 dark:text-foreground'
+                    e.ignored
+                      ? 'text-slate-500 line-through decoration-slate-400 dark:text-muted-foreground dark:decoration-slate-500'
+                      : e.value == null
+                        ? 'italic text-slate-400 dark:text-muted-foreground'
+                        : 'text-slate-900 dark:text-foreground'
                   )}
                 >
                   {e.value == null ? 'cleared (env fallback)' : e.value}
@@ -393,6 +413,18 @@ function InstanceOverridesSection() {
                     className='shrink-0 border-amber-300 text-[10.5px] text-amber-800 dark:border-amber-500/40 dark:text-amber-200'
                   >
                     replaces this page's value
+                  </Badge>
+                )}
+                {e.ignored && (
+                  <Badge
+                    variant='outline'
+                    tabIndex={0}
+                    role='note'
+                    aria-label={`not used here. ${IGNORED_ENV_TIP}`}
+                    data-tip={IGNORED_ENV_TIP}
+                    className='shrink-0 border-slate-300 text-[10.5px] text-slate-600 dark:border-slate-500/40 dark:text-muted-foreground'
+                  >
+                    not used here
                   </Badge>
                 )}
               </div>

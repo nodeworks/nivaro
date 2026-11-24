@@ -126,4 +126,21 @@ describe('DELETE /teams/link', () => {
       delete process.env.CLOUD_META_DB_URL
     }
   })
+
+  it('available on a Hub shared deployment', async () => {
+    Object.assign(process.env, {
+      HUB_SHARED_DEPLOYMENT: 'shared-a',
+      HUB_URL: 'https://hub.example.com',
+      HUB_DEPLOYMENT_TOKEN: 'x'.repeat(40)
+    })
+    h.link = { aad_object_id: 'oid-1' }
+    try {
+      const r = await (await app()).inject({ method: 'DELETE', url: '/teams/link' })
+      expect(r.statusCode).toBe(200)
+      expect(h.marked).toHaveLength(1)
+    } finally {
+      for (const k of ['HUB_SHARED_DEPLOYMENT', 'HUB_URL', 'HUB_DEPLOYMENT_TOKEN'])
+        delete process.env[k]
+    }
+  })
 })

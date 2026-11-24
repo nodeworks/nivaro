@@ -4,6 +4,7 @@ import { applyApprovalDecision } from '../../routes/approvals.js'
 import type { User } from '../../types.js'
 import { isAdminUser } from '../ai-plan-steps.js'
 import { recordLink } from '../app-links.js'
+import { appMap } from '../app-state.js'
 import {
   assertInstanceAccess,
   InstanceAccessError,
@@ -12,6 +13,7 @@ import {
 import { acknowledgeNotification } from '../notification-ack.js'
 import { runRecordTransition } from '../record-transition.js'
 import { maintenanceState } from '../security.js'
+import { appKeyPart } from '../tenancy/credential-binding.js'
 import { userTimeZone } from '../user-time.js'
 import type { TeamsActivity } from './activity.js'
 import { type AdaptiveCard, resultCard } from './cards.js'
@@ -28,7 +30,9 @@ const PENDING = '__pending__'
 const PENDING_TTL_S = 60
 const POLL_STEP_MS = 250
 const POLL_MAX_MS = 8000
-const KEY = (n: string) => `nvr:teams:nonce:${n}`
+// Per app on a Hub shared deployment (copies share nonce strings): a press in app A never claims
+// or replays app B's card. appKeyPart() is '' elsewhere, so the key bytes are unchanged.
+const KEY = (n: string) => `nvr:teams:nonce:${appKeyPart()}${n}`
 
 type RedisLike = {
   set: (...a: unknown[]) => Promise<unknown>
@@ -37,7 +41,7 @@ type RedisLike = {
 }
 const redisOf = (app: FastifyInstance) => (app as { redis?: RedisLike }).redis
 
-const local = new Map<string, string>()
+const local = appMap<string, string>()
 
 /** Claims the nonce; null = ours, otherwise the stored value of whoever claimed it first. */
 async function claim(app: FastifyInstance, nonce: string): Promise<string | null> {

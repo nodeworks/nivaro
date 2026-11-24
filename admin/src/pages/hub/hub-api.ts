@@ -1113,7 +1113,7 @@ export const AGENT_FIELD_COPY: Record<string, string> = {
   EXTENSION_ID_BAD: 'An extension id is not one the agent accepts.',
   SETTING_INVALID: 'A stack setting has a value the agent cannot use.',
   SHARED_KEY_MISMATCH: 'The stack belongs to another shared deployment.',
-  ROLE_NOT_SHARED: 'That process role cannot run on a shared deployment.',
+  ROLE_NOT_SHARED: 'That process role, or that set of roles, cannot run on a shared deployment.',
   ROLE_NEEDS_TRAEFIK_V3:
     'A separate realtime role needs Traefik v3: set the agent to Traefik v3 (HUB_AGENT_TRAEFIK_VERSION=3), or run without a separate realtime role.'
 }

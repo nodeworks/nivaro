@@ -54,12 +54,11 @@ import { formStatusPublicRoutes } from './routes/form-status.js'
 import { registerRoutes } from './routes/index.js'
 import { oauthPublicRoutes } from './routes/oauth.js'
 import { presencePublicRoutes } from './routes/presence.js'
-import { purgeExpiredRecordings } from './routes/session-recordings.js'
 import { sharePublicRoutes } from './routes/share-links.js'
 import { statusPublicRoutes } from './routes/status.js'
 import { setPulseApp } from './services/activity.js'
 import { registerAgentPresence } from './services/agent-presence.js'
-import { pruneAiCalls } from './services/ai-log.js'
+import type { BootPhaseRunner } from './services/app-boot-passes.js'
 import { installAppInject } from './services/app-inject-host.js'
 import { bootPhase } from './services/boot-phases.js'
 import { CRON_DESCRIPTIONS } from './services/cron-descriptions.js'
@@ -86,6 +85,12 @@ import { maintenanceFreezeHook, retiredRequestHook } from './services/maintenanc
 import { markMcpInnerRequest } from './services/mcp-config.js'
 import { processRole } from './services/process-role.js'
 import { registerQueueSnapshotCron } from './services/queue-snapshots.js'
+import {
+  RETENTION_PASS_CRON,
+  runAppRetentionPass,
+  runSelfHostedRetentionPass,
+  startStaleImportSweep
+} from './services/retention-pass.js'
 import { maskUrlQuery } from './services/secret-mask.js'
 import { noteAccessDenied } from './services/security-alerts.js'
 import { registerStagedImportWorker } from './services/staged-import-worker.js'
@@ -97,7 +102,6 @@ import {
 import { registerTrackerCrons } from './services/trackers/crons.js'
 import { registerTrackerFlows } from './services/trackers/flow-ops.js'
 import { registerTrackerHealthReadiness } from './services/trackers/health-readiness.js'
-import { purgeExpiredTrash } from './services/trash.js'
 import { NIVARO_VERSION } from './version.js'
 
 export async function buildServer() {
@@ -415,17 +419,23 @@ export async function buildServer() {
     }
     // Staged imports run on the importer (NIVARO_ROLE=importer); the cron worker drains only
     // while no importer beats; a single process drains itself (services/import-handoff.ts).
-    if (!isMultiTenant()) {
+    // A Hub shared deployment drains per app (each app's `staged-imports` tick); here it starts
+    // only the deployment's kick subscriber, once, outside any app. Nivaro Cloud: neither.
+    if (!isMultiTenant() || perAppJobs()) {
       const { startImportDrainer } = await import('./services/staged-import-worker.js')
       void startImportDrainer(app).catch((err) =>
         app.log.warn({ err }, '[import-worker] did not start')
       )
-      // Background exports handed off by web processes run on the same drainers
-      // (services/export-handoff.ts; EXPORT_HANDOFF=off keeps every export where it started).
-      const { startExportDrainer } = await import('./services/export-worker.js')
-      void startExportDrainer(app).catch((err) =>
-        app.log.warn({ err }, '[export-worker] did not start')
-      )
+      // Background exports handed off by web processes run on the exporter, else the same
+      // drainers (services/export-handoff.ts; EXPORT_HANDOFF=off keeps every export where it
+      // started). A Hub shared deployment drains per app: a pass over every app plus the
+      // deployment's kicks, started once here, outside any app (services/export-worker.ts).
+      {
+        const { startExportDrainer } = await import('./services/export-worker.js')
+        void startExportDrainer(app).catch((err) =>
+          app.log.warn({ err }, '[export-worker] did not start')
+        )
+      }
     }
     // Export temp files a stopped process left behind: swept at boot and every hour
     // (services/export-files.ts).
@@ -460,9 +470,10 @@ export async function buildServer() {
       // Post-mortem 3.3 — the realtime board: what every process's sockets know (viewers, page
       // pings, socket lists), shared once a second process is around (services/realtime-board.ts):
       // replicas that all serve sockets, a realtime tier, SOCKETS=off readers. A lone process
-      // only registers itself every 5 s. Self-hosted only (cloud keeps per-process answers).
-      if (!isMultiTenant() && app.redis) {
-        const { socketsServed } = await import('./services/process-role.js')
+      // only registers itself every 5 s. Self-hosted and a Hub shared deployment (app-scoped
+      // rooms; no answers by user id alone); never Nivaro Cloud (per-process answers).
+      const { realtimeBoardRuns, socketsServed } = await import('./services/process-role.js')
+      if (realtimeBoardRuns() && app.redis) {
         const { startBoard } = await import('./services/realtime-board.js')
         const { localBoardCollector } = await import('./plugins/socketio.js')
         const stopBoard = startBoard(app.redis, {
@@ -543,7 +554,9 @@ export async function buildServer() {
         'Configuration changed elsewhere — caches cleared'
       )
     })
-    // A schedule was created, edited or removed by another process.
+    // A schedule was created, edited or removed by another process. Self-hosted only: the epoch
+    // is off on a multi-tenant deployment, and a shared one announces each app's changes on its
+    // own channel (services/row-schedules.ts registerRowScheduleLifecycle).
     onEpoch(SCHEDULES_EPOCH, async () => {
       if (isMultiTenant() || !app.cron) return
       const { resyncAllSchedules } = await import('./services/row-schedules.js')
@@ -700,8 +713,8 @@ export async function buildServer() {
   }
   // Core jobs: self-hosted, and a Hub shared deployment, where each job runs once per app or once
   // for the deployment by its scope (services/cron-scope.ts; Hub phase 5, P5-9). Nivaro Cloud
-  // registers none of them. The ones that only make sense self-hosted (the import drainer…,
-  // SELF_HOSTED_ONLY_CRONS) are left out on a shared deployment by the manager itself.
+  // registers none of them. The ones that only make sense self-hosted (SELF_HOSTED_ONLY_CRONS)
+  // are left out on a shared deployment by the manager itself.
   if (!isMultiTenant() || perAppJobs()) {
     registerFileCleanup(app.cron)
     // digest-daily/weekly crons retired 2026-09-10 — the notification digest
@@ -1033,6 +1046,17 @@ export async function buildServer() {
     refuseExtensionSocketHandlers(coreSocketHandlers, connectionHandlerCount(app.io as never))
   }
   if (hubShared) {
+    // Row schedules per app (services/row-schedules.ts): hydrated when an app becomes ready,
+    // dropped when it leaves, announced across replicas. Its ready hook must be registered before
+    // the app migrations below start: an app that is ready already never fires it again.
+    if (perAppJobs()) {
+      const { registerRowScheduleLifecycle } = await import('./services/row-schedules.js')
+      registerRowScheduleLifecycle(app)
+      // The boot passes (warms, db-tuning twin sweep, REST inventory, extension registry
+      // versions, portal-URL warning) run per app when it becomes ready — same ordering rule.
+      const { registerAppBootPasses } = await import('./services/app-boot-passes.js')
+      registerAppBootPasses(app, { restRoutes: collectedRoutes })
+    }
     // Each app's database: migrations, default workspace, the loaded extensions' schema steps —
     // after the extensions above declared their steps. In the background: it never holds up the
     // boot, and an app answers "getting ready" until its own run is done (Hub phase 6, Task 8).
@@ -1051,22 +1075,11 @@ export async function buildServer() {
     await bootPhase('Scheduled flows', () => loadScheduledFlows(app))
     // #530 — fingerprint what each extension registered this boot; a changed
     // ledger becomes a new version so "when did this check appear?" has an answer.
-    void (async () => {
-      const { extensionRegistry, describeExtensionRegistry } = await import(
-        './extensions/loader.js'
-      )
-      const { recordRegistryVersion } = await import('./services/extension-registry-versions.js')
-      for (const id of extensionRegistry.keys()) {
-        const desc = await describeExtensionRegistry(id, app.cron).catch(() => null)
-        if (!desc) continue
-        const r = await recordRegistryVersion(id, desc)
-        if (r?.changed)
-          app.log.info(
-            { extension: id, version: r.version },
-            '[extension-registry] new registry version'
-          )
-      }
-    })().catch((err) => app.log.warn({ err }, '[extension-registry] versioning failed'))
+    // (A Hub shared deployment records it per app: services/app-boot-passes.ts.)
+    const bootPasses = await import('./services/app-boot-passes.js')
+    const versioningFailed = (err: unknown) =>
+      app.log.warn({ err }, '[extension-registry] versioning failed')
+    void bootPasses.recordExtensionRegistryVersions(app).catch(versioningFailed)
   }
 
   // ─── Cloud extensions ─────────────────────────────────────────────────────
@@ -1090,11 +1103,15 @@ export async function buildServer() {
   // cleared on close so a short-lived process never starts it.
   let cacheWarmTimer: ReturnType<typeof setTimeout> | null = null
   let readinessWarmTimer: ReturnType<typeof setTimeout> | null = null
+  // Hub shared deployment: the daily help-video import sweep (set in the onReady block below).
+  let staleImportSweepTimer: ReturnType<typeof setInterval> | null = null
   app.addHook('onClose', async () => {
     if (cacheWarmTimer) clearTimeout(cacheWarmTimer)
     cacheWarmTimer = null
     if (readinessWarmTimer) clearTimeout(readinessWarmTimer)
     readinessWarmTimer = null
+    if (staleImportSweepTimer) clearInterval(staleImportSweepTimer)
+    staleImportSweepTimer = null
   })
 
   // ─── Core scheduled jobs + boot passes (self-hosted, and Hub shared deployments) ──
@@ -1105,161 +1122,28 @@ export async function buildServer() {
   if (!isMultiTenant() || perAppJobs())
     app.addHook('onReady', async () => {
       // A Hub shared deployment has no static database: boot passes that read or write one
-      // (retention, row schedules, warms, restart impact…) run self-hosted only. Per-app boot
-      // passes are phase 6.
+      // (retention, row schedules, warms, restart impact…) run inline here self-hosted only. On
+      // shared the same named passes run per app when it becomes ready (registerAppBootPasses).
       const multiTenant = isMultiTenant()
-      // Admin links (replay button, task/approval notifications, record_url
-      // fallbacks) all resolve through adminBaseUrl(). When that answer IS the
-      // registered portal, every such link lands on the headless frontend's
-      // router instead of the admin page — say so once at boot, since no env
-      // rule can tell a genuine admin host from a mis-pointed ADMIN_URL.
-      if (!multiTenant)
-        void import('./services/app-links.js')
-          .then(async ({ portalRegistration }) => {
-            const { adminBaseUrl } = await import('./admin-base.js')
-            const portal = (await portalRegistration())?.base?.replace(/\/$/, '')
-            const admin = adminBaseUrl()
-            if (portal && admin && portal === admin)
-              app.log.warn(
-                { admin_url: admin, portal_url: portal },
-                'adminBaseUrl() resolves to the registered portal — set ADMIN_URL to the host that serves the admin build or admin links will open the portal'
-              )
-          })
-          .catch(() => {})
+      const bootPasses = await import('./services/app-boot-passes.js')
+      const warnOn = (msg: string) => (err: unknown) => app.log.warn({ err }, msg)
+      // Admin links resolving to the registered portal: said once at boot.
+      if (!multiTenant) void bootPasses.warnIfPortalIsAdmin(app).catch(() => {})
 
+      // The daily retention pass (services/retention-pass.ts). Self-hosted: this chain, at boot and
+      // every 24 h after, the help-video import sweep in its old place.
       async function runRetentionPurge() {
-        const { noteRetentionPassStarted, noteRetentionPassScheduled, noteRetentionPassResult } =
-          await import('./services/retention-schedule.js')
-        noteRetentionPassStarted()
-        try {
-          {
-            const { pruneJobRuns } = await import('./services/job-runs.js')
-            await pruneJobRuns().catch(() => {})
-          }
-
-          const row = await db('nivaro_settings')
-            .first('activity_retention_days', 'revision_retention_count')
-            .catch(() => null)
-
-          // #16/#17 — activity rows go only through purgeActivityRows: records under legal
-          // hold, rows a revision points at, imported history (legacy_id) and the trail head
-          // stay; deleted sealed rows leave a bridge so the trail still verifies.
-          const { purgeActivityRows } = await import('./services/activity-trail/purge.js')
-          let activityDeleted = 0
-          let activityBridged = 0
-          // Per-collection retention overrides (#257): a collection with its own
-          // activity_retention_days purges on ITS schedule; the global setting
-          // covers the rest. Overridden collections are excluded from the
-          // global pass so a longer override actually keeps rows longer.
-          const overrides = (await db('nivaro_collections')
-            .whereNotNull('activity_retention_days')
-            .select('collection', 'activity_retention_days')
-            .catch(() => [])) as Array<{ collection: string; activity_retention_days: number }>
-          for (const o of overrides) {
-            const cutoff = new Date(Date.now() - o.activity_retention_days * 86_400_000)
-            const r = await purgeActivityRows((q) => {
-              void q
-                .where('collection', o.collection)
-                .where('timestamp', '<', cutoff)
-                .whereNull('legacy_id')
-            }).catch((err) => {
-              app.log.warn({ err, collection: o.collection }, '[retention] activity purge failed')
-              return null
-            })
-            activityDeleted += r?.deleted ?? 0
-            activityBridged += r?.bridged ?? 0
-          }
-          if (row?.activity_retention_days) {
-            const cutoff = new Date(Date.now() - row.activity_retention_days * 86_400_000)
-            // Imported legacy history (legacy_id NOT NULL) is permanent — retention applies to organic rows only.
-            const r = await purgeActivityRows((q) => {
-              void q.where('timestamp', '<', cutoff).whereNull('legacy_id')
-              // Null-safe: NOT IN alone would keep every row with no collection forever.
-              if (overrides.length > 0)
-                void q.where((w) => {
-                  void w.whereNull('collection').orWhereNotIn(
-                    'collection',
-                    overrides.map((o) => o.collection)
-                  )
-                })
-            }).catch((err) => {
-              // The rest of the pass (revisions, trash, AI log …) still runs.
-              app.log.warn({ err }, '[retention] activity purge failed')
-              return null
-            })
-            activityDeleted += r?.deleted ?? 0
-            activityBridged += r?.bridged ?? 0
-          }
-          noteRetentionPassResult({
-            activity_deleted: activityDeleted,
-            activity_bridged: activityBridged
-          })
-
-          if (row?.revision_retention_count) {
-            // Imported legacy history is permanent; records under legal hold keep every
-            // revision (#17).
-            const { pruneRevisionsByCount } = await import('./services/revision-retention.js')
-            await pruneRevisionsByCount(Number(row.revision_retention_count))
-          }
-          await purgeExpiredTrash()
-          await purgeExpiredRecordings().catch(() => {})
-          await import('./services/help-video-uploads.js')
-            .then((m) => m.purgeStaleUploads())
-            .catch(() => 0)
-          await import('./services/help-video-render.js')
-            .then((m) => m.pruneOldRenders())
-            .catch(() => 0)
-          await import('./services/help-video-package.js')
-            .then((m) => m.purgeStaleImports())
-            .catch(() => 0)
-          // #528 — ERP push payloads/responses past the configured window lose their bytes, never their history.
-          await import('./services/erp-retention.js')
-            .then((m) => m.pruneErpSubmissionPayloads())
-            .then((r) => {
-              if (r.blanked)
-                app.log.info(
-                  { blanked: r.blanked, days: r.days, more: r.more },
-                  '[retention] erp submission payloads blanked'
-                )
-            })
-            .catch((err) => app.log.warn({ err }, '[retention] erp payload prune failed'))
-          // Landed integration obligations (sent/superseded) are history after
-          // 180 days; failed/missing/overdue/pending never expire.
-          await import('./services/integration-obligations.js')
-            .then((m) => m.pruneObligations())
-            .then((n) => {
-              if (n) app.log.info({ pruned: n }, '[retention] integration obligations pruned')
-            })
-            .catch((err) =>
-              app.log.warn({ err }, '[retention] integration obligations prune failed')
-            )
-          await pruneAiCalls().catch(() => 0)
-          // #1833 — Ask AI conversations past ai_conversation_retention_days (pinned kept).
-          await import('./services/ai-conversations.js')
-            .then((m) => m.pruneConversations())
-            .catch(() => 0)
-          // Edited/deleted chat message history past chat_history_retention_days.
-          await import('./services/chat-send.js')
-            .then((m) => m.pruneChatMessageHistory())
-            .catch(() => 0)
-          await db('nivaro_admin_journeys')
-            .where('entered_at', '<', new Date(Date.now() - 30 * 86_400_000))
-            .del()
-            .catch(() => 0)
-        } catch (err) {
-          app.log.warn({ err }, '[retention] purge failed')
-          noteRetentionPassResult({
-            activity_deleted: 0,
-            activity_bridged: 0,
-            error: err instanceof Error ? err.message.slice(0, 300) : String(err).slice(0, 300)
-          })
-        }
+        const { noteRetentionPassScheduled } = await import('./services/retention-schedule.js')
+        await runSelfHostedRetentionPass(app.log)
         noteRetentionPassScheduled(new Date(Date.now() + 24 * 60 * 60 * 1000))
         setTimeout(() => void runInBackgroundPool(runRetentionPurge), 24 * 60 * 60 * 1000)
       }
-      // Bookkeeping, not a request: its deletes borrow the background pool (#1321). Self-hosted
-      // only: a per-app retention pass is phase 6.
+      // Bookkeeping, not a request: its deletes borrow the background pool (#1321). A Hub shared
+      // deployment runs the app part per app (the `retention-pass` job below) and keeps only the
+      // process part here: the help-video import sweep (this process's memory + work dir), daily,
+      // outside any app.
       if (!multiTenant) void runInBackgroundPool(runRetentionPurge)
+      if (perAppJobs()) staleImportSweepTimer = startStaleImportSweep(app.log)
 
       // ── Tamper-evident activity trail (#16) ──
       // Sealer: chains new (and, in capped batches, existing) activity rows; never on the
@@ -1302,7 +1186,8 @@ export async function buildServer() {
       // ── Schedules that live in rows: retention policies, scheduled reports ──
       // Registered here at boot and again whenever a row changes (the routes
       // and the schedules epoch call the same reconcile).
-      // Off on every multi-tenant process (Decision 12: per-app hydration is phase 6).
+      // Self-hosted only. Nivaro Cloud has none; a Hub shared deployment hydrates each app when
+      // it becomes ready (registerRowScheduleLifecycle, before the app migrations start).
       if (!multiTenant)
         void import('./services/row-schedules.js').then(async (m) => {
           await m.resyncSchedules(app, 'retention')
@@ -2558,73 +2443,26 @@ export async function buildServer() {
         }
       })
 
-      // Warm the compiled integrity checks for every laid-out collection so
-      // the FIRST record form after a boot gets a sub-second live check
-      // instead of paying the ~6s compile. Best-effort, never awaited.
-      // Owner groups for every bound template (#481): the first queue read
-      // after a deploy used to fetch ~1.9MB of group filters cold (~3s).
-      // Boot warms read the static database: self-hosted only (per-app warms are phase 6).
+      // Boot warms (services/app-boot-passes.ts): owner groups, compiled integrity checks, then
+      // metadata + query caches and readiness results a while after listen so they never compete
+      // with the boot's first requests. Best-effort, never awaited, never a readiness check.
+      // They read the static database: inline self-hosted only (shared: per app when ready).
       if (!multiTenant) {
-        void bootPhase(
-          'Warm owner groups',
-          async () => {
-            const m = await import('./services/pipeline-engine.js')
-            const n = await m.warmOwnerGroupCache()
-            app.log.info(`owners: warmed owner groups for ${n} state(s)`)
-          },
-          { background: true }
-        ).catch(() => {})
-        void bootPhase(
-          'Warm integrity checks',
-          async () => {
-            const m = await import('./services/config-conformance.js')
-            const n = await m.warmCompiledChecks()
-            app.log.info(`integrity: warmed checks for ${n} collection(s)`)
-          },
-          { background: true }
-        ).catch(() => {})
-        // #2445 — query caches and the buffer pool behind them, once per cluster
-        // per version (nvr:warm:<version>), a while after listen so it never
-        // competes with the boot's first requests. Never a readiness check.
-        // Metadata warms on every process. The query warm holds the cluster's
-        // heavy-job slot, like the 06:30 cron.
+        const inBootPhase: BootPhaseRunner = (name, fn) => bootPhase(name, fn, { background: true })
+        void bootPhase('Warm owner groups', () => bootPasses.warmOwnerGroups(app), {
+          background: true
+        }).catch(() => {})
+        void bootPhase('Warm integrity checks', () => bootPasses.warmIntegrityChecks(app), {
+          background: true
+        }).catch(() => {})
         cacheWarmTimer = setTimeout(() => {
           cacheWarmTimer = null
-          void import('./services/cache-warm.js')
-            .then(async (m) => {
-              if (!m.cacheWarmAllowed()) return
-              await bootPhase('Warm metadata', () => m.warmMetadata(), { background: true })
-              const { NIVARO_VERSION } = await import('./version.js')
-              const { INSTANCE_ID } = await import('./services/instance-roster.js')
-              if (!(await m.takeBootWarm(app.redis, NIVARO_VERSION, INSTANCE_ID))) return
-              await app.cron.withHeavySlot('cache-warm (boot)', async () => {
-                await bootPhase(
-                  'Warm query caches',
-                  () =>
-                    m.runCacheWarm({
-                      redis: app.redis,
-                      log: (summary, line) => app.log.info(summary, line)
-                    }),
-                  { background: true }
-                )
-              })
-            })
-            .catch((err) => app.log.warn({ err }, 'cache warm failed'))
+          void bootPasses.warmCaches(app, inBootPhase).catch(warnOn('cache warm failed'))
         }, 20_000)
         cacheWarmTimer.unref()
-        // Readiness results for this version (the cache is keyed by version, so
-        // a deploy starts empty): evaluate them once, on one replica, so the
-        // first dashboard reads a scorecard instead of 'pending'. Same switch as
-        // the cache warm — dev never runs the heavy checks unprompted.
         readinessWarmTimer = setTimeout(() => {
           readinessWarmTimer = null
-          void (async () => {
-            const { cacheWarmAllowed } = await import('./services/cache-warm.js')
-            if (!cacheWarmAllowed()) return
-            const { warmReadiness } = await import('./services/readiness.js')
-            const n = await warmReadiness()
-            if (n > 0) app.log.info(`readiness: evaluated ${n} check(s) for this version`)
-          })().catch((err) => app.log.warn({ err }, 'readiness warm failed'))
+          void bootPasses.warmReadinessResults(app).catch(warnOn('readiness warm failed'))
         }, 15_000)
         readinessWarmTimer.unref()
       }
@@ -2918,18 +2756,7 @@ export async function buildServer() {
       // proof leaves its `<proc>__tune_<hex>` twin behind, so boot sweeps the ones older than any
       // live proof — fire-and-forget: the sweep must never fail or hold up boot.
       if (!multiTenant) {
-        void Promise.all([
-          import('./services/db-tuning/twin.js'),
-          import('./services/db-tuning/settings.js')
-        ])
-          .then(async ([{ sweepTwinLeftovers }, { readTuningSettings }]) =>
-            sweepTwinLeftovers((await readTuningSettings()).proc_timeout_minutes)
-          )
-          .then((dropped) => {
-            if (dropped.length)
-              app.log.warn(`db-tuning: dropped leftover twin procedure(s) ${dropped.join(', ')}`)
-          })
-          .catch((err) => app.log.warn({ err }, 'db-tuning: twin sweep failed'))
+        void bootPasses.sweepTuningTwins(app).catch(warnOn('db-tuning: twin sweep failed'))
       }
       app.cron.schedule(
         'db-tuning-observe',
@@ -3344,11 +3171,7 @@ export async function buildServer() {
       // diff against the previous release (removed routes = breaking).
       if (!multiTenant) {
         setTimeout(() => {
-          void (async () => {
-            const { recordRestRoutes } = await import('./services/api-changelog.js')
-            const { NIVARO_VERSION } = await import('./version.js')
-            await recordRestRoutes(NIVARO_VERSION, collectedRoutes)
-          })()
+          void bootPasses.recordRestRouteInventory(collectedRoutes).catch(() => {})
         }, 10_000)
       }
 
@@ -3438,6 +3261,16 @@ export async function buildServer() {
           const { pruneJobRuns } = await import('./services/job-runs.js')
           await pruneJobRuns()
         })
+
+      // Shared deployment: the daily retention pass runs per app (fan-out; apps not ready or in
+      // Hub maintenance are skipped). Self-hosted runs the same pass from its boot chain above.
+      if (perAppJobs()) {
+        const runPass = async () => {
+          await runAppRetentionPass(app.log)
+        }
+        const watchdogMs = 2 * 3_600_000 // a first pass over a long-lived app can take a while
+        app.cron.schedule('retention-pass', RETENTION_PASS_CRON, runPass, { watchdogMs })
+      }
 
       // Shared deployment (P5-10): the restart clean-ups once per app, through the fan-out, after
       // the app list has loaded. Best-effort: never fails boot.

@@ -29,7 +29,7 @@ import {
   readStackSettings,
   type StackSettingsRow
 } from './stack-settings.js'
-import { StackTemplateError, templateFor } from './templates.js'
+import { StackTemplateError, stackRoles } from './templates.js'
 
 /**
  * The planner's facts for one stack component (Hub phase 4): what the Hub agent says about itself
@@ -413,7 +413,8 @@ export async function gatherStackFacts(
 
   if (row && versionOk) {
     try {
-      facts.roles = structuredClone(templateFor(version).sizes[row.size])
+      // The agent decides whether a large stack gets its exporter (stackRoles).
+      facts.roles = stackRoles(version, row.size, health?.agent_version)
     } catch (err) {
       if (!(err instanceof StackTemplateError)) throw err
       facts.renderProblem = { code: 'TEMPLATE_NONE', text: err.message }
@@ -435,7 +436,8 @@ export async function gatherStackFacts(
         version,
         image: `${imageRepo}@${DRY_DIGEST}`,
         extensions,
-        hubPublicUrl: null
+        hubPublicUrl: null,
+        agentVersion: health.agent_version
       })
     } catch (err) {
       if (!(err instanceof StackRenderError)) throw err

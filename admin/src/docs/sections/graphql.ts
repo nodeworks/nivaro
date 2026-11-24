@@ -1007,7 +1007,7 @@ export const graphqlRebuild: DocSection = {
     { type: 'h1', id: 'graphql-rebuild', text: 'Schema Rebuild' },
     {
       type: 'p',
-      text: 'When you register a new collection or field via the Collections API, the GraphQL schema is not automatically updated — it was built at server startup. Call the rebuild endpoint to pick up the changes without restarting.'
+      text: "When you register a new collection or field via the Collections API, the GraphQL schema is not automatically updated — it was built at server startup (on a shared deployment, it is built per app on that app's first request). Call the rebuild endpoint to pick up the changes without restarting."
     },
     {
       type: 'pre',

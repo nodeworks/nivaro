@@ -6,8 +6,13 @@ turn sockets off (`SOCKETS=off`); what they emit reaches people through Redis (t
 Redis adapter and the record-event stream). `docker-compose.yml` here runs web x4, realtime x2
 and worker x1 behind Traefik.
 
-Nothing set = one process does everything, sockets included. The tier is self-hosted only: a
-realtime process refuses to boot in cloud mode, and cloud mode ignores `SOCKETS`.
+Nothing set = one process does everything, sockets included. The tier runs self-hosted and on a
+Nivaro Hub shared deployment (`HUB_SHARED_DEPLOYMENT`): there a realtime process serves every app
+the Hub lists, each apart, exactly as a shared web process does — the app is resolved per stream
+request (an unknown host answers 404, an app in maintenance or not migrated yet 503) and per
+socket / graphql-ws handshake host, and every room, topic and stream is keyed by the app. It runs
+no migration: it reads each app's migrated state from Redis, which the web and worker processes
+keep. Nivaro Cloud refuses a realtime process, and ignores `SOCKETS` there.
 
 ## Roles
 
@@ -116,7 +121,13 @@ not care. So:
   5 s; a process publishes and reads only once another one is registered, so a lone process
   costs one heartbeat. An in-app notification is skipped for another process's viewer only on
   a board entry younger than 3 s (a deliver beats a wrong skip), and a process takes its
-  entries off the board as its drain starts. Self-hosted only.
+  entries off the board as its drain starts. A Hub shared deployment runs the board too (never
+  Nivaro Cloud): every room on it names its app (`t:<app>:`), so the web processes' "is anyone
+  watching?" checks, page presence, viewers and the socket list answer per app; the slot also
+  names the shared deployment (`<slot>@<key>`). Answers keyed by a user id alone (is this person
+  signed in anywhere, the people count) stay off there, because copied apps share user ids: the
+  board carries no bare user ids, the edit-lock check answers "cannot tell", and the AI stream
+  check asks the adapter for the app's own room.
 - The admin `/api/stream` also hears the writes made on the other processes (their journaled
   record changes, stamped with the write time); before, it heard only the writes of the
   process it connected to. An admin API key narrowed to named collections sees only those.

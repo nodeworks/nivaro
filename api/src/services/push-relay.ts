@@ -1,7 +1,7 @@
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { safeFetch } from '../lib/ssrf.js'
-import { isMultiTenant } from './deployment-mode.js'
+import { isMultiTenant, isNivaroCloud } from './deployment-mode.js'
 import { instanceKey } from './instance-key.js'
 
 /**
@@ -70,7 +70,7 @@ async function storedConfig(): Promise<Record<string, unknown>> {
 
 /** The env relay key, or null. Never on a multi-tenant process (Nivaro Cloud or a Hub shared
  *  deployment, rule T7): one process serves many apps, and each sends only with the key stored
- *  for it (cloud provisioning; nothing stores one per app on a shared deployment yet). */
+ *  for it (cloud provisioning stores it; an app on a shared deployment connects its own relay). */
 export function envRelayKey(): string | null {
   if (isMultiTenant()) return null
   return process.env.MOBILE_PUSH_RELAY_KEY?.trim() || null
@@ -96,9 +96,10 @@ export async function pushRelayConfig(): Promise<PushRelayConfig> {
   const key = envKey || storedKey
   // A stored url travels with the stored key (cloud provisioning stores both): never with the
   // env key, and never before a key exists (a url that came in by a config restore would
-  // otherwise receive this instance's key or its registration).
+  // otherwise receive this instance's key or its registration). Nivaro Cloud provisioning is the
+  // one exception; an app on a shared deployment connects its own relay (url with its key).
   const storedUrl =
-    isMultiTenant() || (!envKey && storedKey) ? cleanRelayUrl(stored.relay_url) : null
+    isNivaroCloud() || (!envKey && storedKey) ? cleanRelayUrl(stored.relay_url) : null
   const url = (storedUrl || process.env.MOBILE_PUSH_RELAY_URL || DEFAULT_RELAY_URL).replace(
     /\/+$/,
     ''

@@ -31,7 +31,9 @@ const REDACTED: Record<string, string[]> = {
     'storage_s3_secret',
     'provision_secret',
     'directory_password',
-    'directory_refresh_token'
+    'directory_refresh_token',
+    // 554: an app's own Microsoft app registration secret (sealed enc:v1) on a shared deployment.
+    'directory_graph_client_secret'
   ],
   nivaro_external_apis: ['auth_config'],
   nivaro_environment_components: ['api_token', 'git_token'],

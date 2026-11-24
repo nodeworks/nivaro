@@ -1,4 +1,5 @@
 import type { Redis } from 'ioredis'
+import { hubSharedConfig, tenantSource } from './deployment-mode.js'
 import { instanceKey } from './instance-key.js'
 import { INSTANCE_ID } from './instance-roster.js'
 
@@ -31,6 +32,18 @@ import { INSTANCE_ID } from './instance-roster.js'
  * a realtime peer, a SOCKETS=off reader); a lone process never does more than that heartbeat.
  * So a single-role deployment with several replicas gets cluster-wide viewers, page presence and
  * notification suppression too, not only the realtime tier.
+ *
+ * Where (process-role.ts realtimeBoardRuns): self-hosted, and a Hub shared deployment, never
+ * Nivaro Cloud. On a shared deployment one process serves many apps, often copies of each other
+ * (same user and row ids), so everything read from the board must name its app:
+ *   - rooms are tenant-scoped (`t:<app>:`, services/tenant-rooms.ts): record viewers, gate rooms
+ *     (watch:*), ops topics, and the stats room list; page pings carry their `tenant`; the stats
+ *     socket list carries each socket's `tenant` and is read for the caller's app only
+ *     (boardRealtimeStats);
+ *   - answers keyed by a user id alone (boardHasUser, the `users` list, the people count of
+ *     boardConcurrency) are off (boardAnswersUsers): a publisher sends no `users` and a reader
+ *     answers "not known" — callers fall back to their conservative path;
+ *   - the slot names the shared deployment too (beside the one-stack-one-Redis-database rule).
  */
 
 // 1 s, not 2: an entry is then at most ~2 s old when read (publish + read interval), inside the
@@ -47,10 +60,24 @@ const FRESH_MS = 6_000
 export const VIEWING_MAX_AGE_MS = 3_000
 /** The deployment slot. In development every API on the laptop is its own deployment (Rob's
  *  API and a throwaway on another port share Redis and NODE_ENV): the port tells them apart. */
-const boardSlot = () =>
-  process.env.NODE_ENV === 'development'
-    ? `${instanceKey()}-${process.env.PORT ?? ''}`
-    : instanceKey()
+const boardSlot = () => {
+  const slot =
+    process.env.NODE_ENV === 'development'
+      ? `${instanceKey()}-${process.env.PORT ?? ''}`
+      : instanceKey()
+  // A Hub shared deployment: its key too, so two shared stacks can never read each other's board
+  // even on one Redis database (which the Hub refuses: one stack, one Redis database).
+  const shared = hubSharedConfig()?.deployment
+  return shared ? `${slot}@${shared}` : slot
+}
+
+/**
+ * Does the board answer questions keyed by a user id alone (who is signed in anywhere)? Not on a
+ * Hub shared deployment: copied apps share user ids, and the board's `users` list names no app.
+ */
+export function boardAnswersUsers(): boolean {
+  return tenantSource() !== 'hub'
+}
 const keyPrefix = () => `nvr:rt:board:${boardSlot()}:`
 const registryKey = () => `${keyPrefix()}nodes`
 const partKey = (node: string, part: 'live' | 'stats') => `${keyPrefix()}${node}:${part}`
@@ -650,16 +677,24 @@ export function boardUsersOnPathPrefix(prefixes: string[], tenant: string): stri
   return [...ids]
 }
 
-/** Every realtime process's socket list and room sizes (rooms summed by name). */
-export function boardRealtimeStats(): {
+/**
+ * Every realtime process's socket list and room sizes (rooms summed by name). On a Hub shared
+ * deployment only the sockets and rooms of `tenant` (the caller's app; none without one).
+ */
+export function boardRealtimeStats(tenant?: string | null): {
   sockets: Array<Record<string, unknown> & { id: string }>
   rooms: Array<{ room: string; size: number }>
 } {
   const sockets: Array<Record<string, unknown> & { id: string }> = []
   const rooms = new Map<string, number>()
+  const app = tenantSource() === 'hub' ? (tenant ?? '') : null
+  if (app === '') return { sockets, rooms: [] }
   for (const b of statsView()) {
-    for (const s of b.sockets ?? []) sockets.push({ ...s, node: b.node })
-    for (const r of b.rooms ?? []) rooms.set(r.room, (rooms.get(r.room) ?? 0) + r.size)
+    for (const s of b.sockets ?? [])
+      if (app === null || s.tenant === app) sockets.push({ ...s, node: b.node })
+    for (const r of b.rooms ?? [])
+      if (app === null || TENANT_ROOM.exec(r.room)?.[1] === app)
+        rooms.set(r.room, (rooms.get(r.room) ?? 0) + r.size)
   }
   const list = [...rooms].map(([room, size]) => ({ room, size }))
   list.sort((a, b) => b.size - a.size)
@@ -686,8 +721,10 @@ export function boardRoomSize(room: string): number {
   return n
 }
 
-/** Is `userId` signed in on a realtime process? (`anyCase`: compare ids case-insensitively.) */
+/** Is `userId` signed in on a realtime process? (`anyCase`: compare ids case-insensitively.)
+ *  Always false on a Hub shared deployment (boardAnswersUsers): "not known", never "yes". */
 export function boardHasUser(userId: string, anyCase = false): boolean {
+  if (!boardAnswersUsers()) return false
   const want = String(userId).toUpperCase()
   for (const b of liveView()) {
     if (b.users?.includes(userId)) return true
@@ -709,15 +746,17 @@ export function roomListeners(
   return readerOn || peersOn ? local + boardRoomSize(room) : local
 }
 
-/** Sockets and signed-in people across the other processes, plus this one's (`own`). */
+/** Sockets and signed-in people across the other processes, plus this one's (`own`). People
+ *  from the board only where it answers by user id (boardAnswersUsers). */
 export function boardConcurrency(
   own: { sockets: number; users: Iterable<string> } = { sockets: 0, users: [] }
 ): { sockets: number; users: number } {
   let sockets = own.sockets
   const users = new Set<string>(own.users)
+  const byUser = boardAnswersUsers()
   for (const b of liveView()) {
     sockets += Number(b.sockets) || 0
-    for (const u of b.users ?? []) users.add(u)
+    if (byUser) for (const u of b.users ?? []) users.add(u)
   }
   return { sockets, users: users.size }
 }

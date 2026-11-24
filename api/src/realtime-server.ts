@@ -4,10 +4,12 @@ import fastify, { type FastifyInstance } from 'fastify'
 import { registerSession } from './auth/session.js'
 import { config } from './config.js'
 import { db } from './db/index.js'
+import { getTenantId } from './db/tenant-context.js'
 import { registerJsonBodyParser } from './lib/json-body.js'
 import { applySecurityHeaders } from './lib/security-headers.js'
 import { fastifyTrustProxy, trustProxyFromEnv } from './lib/trust-proxy.js'
 import { authenticate } from './middleware/authenticate.js'
+import { tenantHook } from './middleware/tenant.js'
 import { resolveWorkspace } from './middleware/workspace.js'
 import { apiLoggerPlugin } from './plugins/api-logger.js'
 import { graphqlPlugin, rebuildGraphQLSchema } from './plugins/graphql.js'
@@ -18,12 +20,13 @@ import { eventsStreamRoutes } from './routes/events-stream.js'
 import { viewStreamRoutes } from './routes/view-stream.js'
 import { bootState } from './services/boot-phases.js'
 import { answerDbUnavailable, noteCutStatement, sendDbUnavailable } from './services/db-outage.js'
-import { isMultiTenant } from './services/deployment-mode.js'
+import { hubSharedConfig, tenantSource } from './services/deployment-mode.js'
 import { logRouteError } from './services/error-log-level.js'
 import { trackError } from './services/error-tracking.js'
 import { instanceKey } from './services/instance-key.js'
 import { INSTANCE_ID } from './services/instance-roster.js'
 import { retiredRefusal } from './services/maintenance-freeze.js'
+import { realtimeBoardRuns, realtimeRoleProblem } from './services/process-role.js'
 import {
   DB_BUDGET_MS,
   judgeReady,
@@ -56,6 +59,17 @@ import { NIVARO_VERSION } from './version.js'
  *
  * The wiring below mirrors the realtime part of buildServer() (server.ts) — a service the
  * socket handlers start to need goes in both.
+ *
+ * Self-hosted it serves the one app. On a Hub shared deployment (HUB_SHARED_DEPLOYMENT) it serves
+ * every app the Hub lists, each apart, exactly as a shared web process does: every request passes
+ * the tenant hook (middleware/tenant.ts: the app by host, an unknown host 404, an app in
+ * maintenance or not migrated yet 503), sockets and graphql-ws connections resolve their app from
+ * the handshake host (services/socket-tenant.ts), and every room, topic and stream is keyed by the
+ * app (services/tenant-rooms.ts). It runs no migration: it follows the state the migrating
+ * processes keep in Redis (startAppSchemaFollower). There is no default database there, so
+ * nothing below reads one: the schema watcher stays off as on a shared web process, and /api/ready
+ * checks no database. The realtime board runs (app-scoped rooms; the web processes' emit gates read
+ * it), as on a shared web process. Nivaro Cloud refuses it (realtimeRoleProblem).
  */
 /** Every `METHOD path` the realtime server registered (tests hold it to REALTIME_HTTP_ROUTES). */
 const served: string[] = []
@@ -64,10 +78,10 @@ export function servedRealtimeRoutes(): readonly string[] {
 }
 
 export async function buildRealtimeServer(): Promise<FastifyInstance> {
-  if (isMultiTenant())
-    throw new Error(
-      'NIVARO_ROLE=realtime is self-hosted only: a deployment that serves many apps (Nivaro Cloud or a Hub shared deployment) resolves the app per request and keeps sockets on every process.'
-    )
+  const refused = realtimeRoleProblem()
+  if (refused) throw new Error(refused)
+  // A Hub shared deployment: many apps, each with its own database, none outside an app.
+  const shared = tenantSource() === 'hub'
 
   const app = fastify({
     trustProxy: fastifyTrustProxy(trustProxyFromEnv().value),
@@ -116,6 +130,11 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
     return payload
   })
 
+  // A Hub shared deployment: every request runs inside the app its host names (first, as on a
+  // shared web process — every later hook, the session store included, reads the app from it).
+  // /api/ready answers about the process and needs no app.
+  if (shared) app.addHook('onRequest', tenantHook)
+
   // POST /api/graphql/stream carries a JSON body; same parser as server.ts (empty = no body,
   // prototype keys stripped).
   registerJsonBodyParser(app)
@@ -132,6 +151,24 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
   )
 
   await app.register(redisPlugin)
+  if (shared) {
+    // The deployment's app list (the tenant hook and the socket resolver read it) and each app's
+    // own ENCRYPTION_KEY (services/tenancy/app-keys.ts): sealed Redis copy first, then the Hub,
+    // as on a shared web process. Never throws on a Hub outage (every host answers 503 until a
+    // list is loaded).
+    const { startHubTenantSource, stopHubTenantSource } = await import(
+      './services/tenancy/hub-source.js'
+    )
+    await startHubTenantSource({ redis: app.redis ?? null })
+    app.addHook('preClose', async () => stopHubTenantSource())
+    // Each app's migrated state, read from Redis: an app whose database is not migrated at this
+    // version yet answers "getting ready" and takes no socket, here as on the web processes. This
+    // process migrates nothing and registers no per-app jobs (no app-ready hooks).
+    const { startAppSchemaFollower } = await import('./services/tenancy/app-migrations.js')
+    const { getTenantRegistry } = await import('./services/tenancy/registry.js')
+    const stopFollower = startAppSchemaFollower(getTenantRegistry, { redis: app.redis ?? null })
+    app.addHook('preClose', async () => stopFollower())
+  }
   // The request log (stream opens, health) and Prometheus, as on web.
   await app.register(apiLoggerPlugin)
   await app.register(metricsPlugin)
@@ -212,14 +249,19 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
       }
     }
     // Publishes once a reader or another realtime process is registered; reads the other
-    // realtime processes' viewers so `record:viewers` lists everyone on the record.
-    const { startBoard } = await import('./services/realtime-board.js')
-    const stopBoard = startBoard(app.redis, {
-      serves: true,
-      collect: localBoardCollector(app.io)
-    })
-    // Off the board as soon as the drain starts, so nobody trusts this process's viewers.
-    app.addHook('preClose', async () => stopBoard())
+    // realtime processes' viewers so `record:viewers` lists everyone on the record. As on web
+    // (server.ts realtimeBoardRuns): on a Hub shared deployment too, where the web processes
+    // (SOCKETS=off) read the room counts their emit gates need from it. Its rooms are app-scoped
+    // there; answers keyed by a user id alone stay off (realtime-board.ts boardAnswersUsers).
+    if (realtimeBoardRuns()) {
+      const { startBoard } = await import('./services/realtime-board.js')
+      const stopBoard = startBoard(app.redis, {
+        serves: true,
+        collect: localBoardCollector(app.io)
+      })
+      // Off the board as soon as the drain starts, so nobody trusts this process's viewers.
+      app.addHook('preClose', async () => stopBoard())
+    }
   }
 
   {
@@ -234,21 +276,26 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
     // A configuration change elsewhere: drop caches, and rebuild the GraphQL schema the
     // subscriptions run on only when what it is built from changed (collections, fields,
     // relations, pipeline bindings) — most moves are layout autosaves, rules, settings. One check
-    // at a time; a move during a check runs one more after it.
-    const { schemaInputsFingerprint } = await import('./services/schema-builder.js')
-    const { createSchemaWatcher } = await import('./services/schema-watch.js')
-    const schemaWatch = createSchemaWatcher({
-      fingerprint: schemaInputsFingerprint,
-      rebuild: rebuildGraphQLSchema,
-      warn: (err) =>
-        app.log.warn({ err }, 'GraphQL schema check after a configuration change failed')
-    })
-    const rebuildSchemaSoon = () => schemaWatch.moved()
-    // Baseline once the boot build has run.
-    app.addHook('onReady', async () => {
-      void schemaWatch.baseline()
-    })
-    app.addHook('onClose', async () => schemaWatch.stop())
+    // at a time; a move during a check runs one more after it. A Hub shared deployment has no
+    // database outside an app (and no config epoch, config-epoch.ts ENABLED): each app's schema
+    // is built on its first subscription, inside the app, as on a shared web process.
+    let rebuildSchemaSoon = () => {}
+    if (!shared) {
+      const { schemaInputsFingerprint } = await import('./services/schema-builder.js')
+      const { createSchemaWatcher } = await import('./services/schema-watch.js')
+      const schemaWatch = createSchemaWatcher({
+        fingerprint: schemaInputsFingerprint,
+        rebuild: rebuildGraphQLSchema,
+        warn: (err) =>
+          app.log.warn({ err }, 'GraphQL schema check after a configuration change failed')
+      })
+      rebuildSchemaSoon = () => schemaWatch.moved()
+      // Baseline once the boot build has run.
+      app.addHook('onReady', async () => {
+        void schemaWatch.baseline()
+      })
+      app.addHook('onClose', async () => schemaWatch.stop())
+    }
     onEpoch(CONFIG_EPOCH, () => {
       bustAllCaches()
       rebuildSchemaSoon()
@@ -319,7 +366,7 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
     })
   })
 
-  await app.register(realtimeHealthRoutes, { prefix: '/api' })
+  await app.register(realtimeHealthRoutes, { prefix: '/api', shared })
   await app.register(eventsStreamRoutes, { prefix: '/api/events' })
   await app.register(viewStreamRoutes, { prefix: '/api/events/views' })
   await app.register(graphqlPlugin, { prefix: '/api', streamsOnly: true })
@@ -331,19 +378,41 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
     })
   )
 
-  app.log.info('Realtime process: sockets and streams only (NIVARO_ROLE=realtime)')
+  app.log.info(
+    shared
+      ? 'Realtime process: sockets and streams only (NIVARO_ROLE=realtime), for every app of this shared deployment'
+      : 'Realtime process: sockets and streams only (NIVARO_ROLE=realtime)'
+  )
   return app
 }
 
-/** /version, /ready and /health for a realtime process: no migrations, no extensions. */
-async function realtimeHealthRoutes(app: FastifyInstance): Promise<void> {
-  app.get('/version', async () => ({
-    version: NIVARO_VERSION,
-    environment: config.NODE_ENV,
-    instance: instanceKey(),
-    role: 'realtime',
-    cloud: false
-  }))
+/** /version, /ready and /health for a realtime process: no migrations, no extensions. On a Hub
+ *  shared deployment /version and /health answer inside the app the host names (the tenant hook),
+ *  and /ready about the process. */
+async function realtimeHealthRoutes(
+  app: FastifyInstance,
+  opts: { shared?: boolean }
+): Promise<void> {
+  const shared = opts.shared === true
+  app.get('/version', async () => {
+    // As on a shared web process (routes/health.ts): which deployment serves this app, and which
+    // app the address resolved to.
+    const hub = shared ? hubSharedConfig() : null
+    return {
+      version: NIVARO_VERSION,
+      environment: config.NODE_ENV,
+      instance: instanceKey(),
+      role: 'realtime',
+      cloud: false,
+      ...(shared
+        ? {
+            multi_tenant: true,
+            shared_deployment: hub?.deployment ?? null,
+            tenant: getTenantId() ?? null
+          }
+        : {})
+    }
+  })
 
   app.get('/ready', async (_req, reply) => {
     const state = bootState()
@@ -357,7 +426,15 @@ async function realtimeHealthRoutes(app: FastifyInstance): Promise<void> {
       summary: state.ready ? 'Boot finished.' : 'Still booting.'
     }
     const [database, redis] = await Promise.all([
-      timedCheck('database', 'Database', DB_BUDGET_MS, () => db.raw('SELECT 1')),
+      // A Hub shared deployment has no database of its own (each app brings one, reached inside
+      // its requests): nothing to check, as on a shared web process.
+      shared
+        ? Promise.resolve<ReadyCheck>({
+            id: 'database',
+            ok: true,
+            summary: 'Shared deployment: each app brings its own database.'
+          })
+        : timedCheck('database', 'Database', DB_BUDGET_MS, () => db.raw('SELECT 1')),
       timedCheck('redis', 'Redis', REDIS_BUDGET_MS, () => app.redis.ping())
     ])
     // Redis carries every event a realtime process delivers: without it, it is not ready. A slow

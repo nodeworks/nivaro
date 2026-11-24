@@ -4,7 +4,7 @@ import { parseQualityConfig } from './ai-quality.js'
 import { weeklySpendFacts } from './ai-spend.js'
 import { tenantState } from './ai-tenant-state.js'
 import type { DigestSection } from './daily-digest.js'
-import { isMultiTenant } from './deployment-mode.js'
+import { isNivaroCloud } from './deployment-mode.js'
 
 /**
  * Monday summaries for administrators (#1868 issues, #1908 operations). Same pattern as every
@@ -207,8 +207,10 @@ export function isMonday(now = new Date()): boolean {
   return now.getDay() === 1
 }
 
+/** Opted-in admins of the current app: the daily summary asks inside each app (a Hub shared
+ *  deployment fans it out per app). Nivaro Cloud sends no weekly summary. */
 export async function weeklyAudience(): Promise<string[]> {
-  if (isMultiTenant()) return []
+  if (isNivaroCloud()) return []
   if (!isMonday()) return []
   const rows = (await db('nivaro_users as u')
     .join('nivaro_roles as r', 'r.id', 'u.role')
@@ -253,7 +255,7 @@ export async function buildWeeklySection(
 
 let registered = false
 export async function registerWeeklySummaries(): Promise<void> {
-  if (registered || isMultiTenant()) return
+  if (registered || isNivaroCloud()) return
   registered = true
   const { registerDigestAudience, registerDigestSection } = await import('./daily-digest.js')
   registerDigestAudience(weeklyAudience)

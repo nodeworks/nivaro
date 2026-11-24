@@ -14,7 +14,13 @@ import {
   databaseRecordId
 } from '../../../services/hub/docker/stack-env.js'
 import type { StackSettingsRow } from '../../../services/hub/docker/stack-settings.js'
-import { STACK_TEMPLATES, templateFor } from '../../../services/hub/docker/templates.js'
+import {
+  agentVersionAtLeast,
+  EXPORTER_AGENT_MIN_VERSION,
+  STACK_TEMPLATES,
+  stackRoles,
+  templateFor
+} from '../../../services/hub/docker/templates.js'
 import type { HubEnvironmentRow } from '../../../services/hub/promote-types.js'
 
 // Nivaro Hub phase 4, Task 7: the Hub-side renderer. Its output for the fixture input must be
@@ -37,9 +43,11 @@ const withRow = (over: Partial<StackSettingsRow>) =>
 
 describe('templateFor', () => {
   it('picks the highest template at or below the version', () => {
-    expect(templateFor('0.3.208')).toBe(STACK_TEMPLATES.find((t) => t.from === '0.3.0'))
+    expect(templateFor('0.3.183')).toBe(STACK_TEMPLATES.find((t) => t.from === '0.3.0'))
     expect(templateFor('0.3.0').from).toBe('0.3.0')
-    expect(templateFor('1.0.0').from).toBe('0.3.0')
+    expect(templateFor('0.3.184').from).toBe('0.3.184')
+    expect(templateFor('0.3.208').from).toBe('0.3.184')
+    expect(templateFor('1.0.0').from).toBe('0.3.184')
   })
 
   it('refuses a version below every template with TEMPLATE_NONE', () => {
@@ -47,7 +55,7 @@ describe('templateFor', () => {
   })
 
   it('has the Decision 7 sizes', () => {
-    const t = templateFor('0.3.208').sizes
+    const t = templateFor('0.3.183').sizes
     expect(t.small).toEqual([{ role: 'all', replicas: 1, cpus: 2, memory_mb: 3072 }])
     expect(t.medium).toEqual([
       { role: 'web', replicas: 2, cpus: 2, memory_mb: 3072 },
@@ -58,6 +66,18 @@ describe('templateFor', () => {
       { role: 'worker', replicas: 1, cpus: 2, memory_mb: 4096 },
       { role: 'realtime', replicas: 2, cpus: 1, memory_mb: 1024 },
       { role: 'importer', replicas: 1, cpus: 2, memory_mb: 4096 }
+    ])
+  })
+
+  it('Task 15: from 0.3.184 (NIVARO_ROLE=exporter) large adds an exporter; small and medium unchanged', () => {
+    const before = templateFor('0.3.183').sizes
+    const t = templateFor('0.3.208').sizes
+    expect(t.small).toEqual(before.small)
+    expect(t.medium).toEqual(before.medium)
+    // Limits like the importer's; one replica; no role env (it ticks no crons by its role).
+    expect(t.large).toEqual([
+      ...before.large,
+      { role: 'exporter', replicas: 1, cpus: 2, memory_mb: 4096 }
     ])
   })
 })
@@ -120,13 +140,29 @@ describe('renderStackSpec', () => {
     expect(renderStackSpec(input({ edge: 'publish', row })).publish_port).toBe(31000)
   })
 
+  it('controller ruling: the exporter only for an agent at 0.2.2 or later; unknown or older → none', () => {
+    expect(EXPORTER_AGENT_MIN_VERSION).toBe('0.2.2')
+    const names = (agentVersion: string | null | undefined) =>
+      renderStackSpec({ ...withRow({ size: 'large' }), agentVersion }).roles.map((r) => r.role)
+    for (const v of [undefined, null, '', 'garbage', '0.2.1', '0.1.0'])
+      expect(names(v), String(v)).toEqual(['web', 'worker', 'realtime', 'importer'])
+    for (const v of ['0.2.2', '0.2.10', '0.3.0', '0.2.2-rc.1', 'v0.2.2'])
+      expect(names(v), v).toEqual(['web', 'worker', 'realtime', 'importer', 'exporter'])
+    // Small and medium never change, whatever the agent.
+    for (const size of ['small', 'medium'] as const)
+      expect(stackRoles('0.3.208', size, '0.2.2')).toEqual(stackRoles('0.3.208', size, null))
+    expect(agentVersionAtLeast('0.2.2', '0.2.2')).toBe(true)
+    expect(agentVersionAtLeast(7, '0.2.2')).toBe(false)
+  })
+
   it('takes roles from the template for the version and size, as copies', () => {
-    const spec = renderStackSpec(withRow({ size: 'large' }))
+    const spec = renderStackSpec({ ...withRow({ size: 'large' }), agentVersion: '0.2.2' })
     expect(spec.roles.map((r) => `${r.role}x${r.replicas}`)).toEqual([
       'webx3',
       'workerx1',
       'realtimex2',
-      'importerx1'
+      'importerx1',
+      'exporterx1'
     ])
     spec.roles[0].replicas = 9
     if (spec.roles[0].env) spec.roles[0].env.SOCKETS = 'on'

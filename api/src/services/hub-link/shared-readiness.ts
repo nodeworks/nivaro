@@ -27,29 +27,40 @@ import { objectStorageCounts } from '../hub-transfer/object-counts.js'
  * A blocker whose check cannot be read is reported as that blocker ("could not be checked"):
  * an unreadable check must never read as "nothing to lose". A warning that cannot be read is
  * left out.
+ *
+ * Shared features (0.3.212): staged imports, row schedules, directory sync, the Teams bot, phone
+ * push and mail retry run per app on a shared deployment, so this version no longer reports
+ * STAGED_IMPORTS, ROW_SCHEDULES, DIRECTORY_SYNC, TEAMS_BOT, PHONE_PUSH or MAIL_RETRY. They stay in
+ * the type because older apps still send them; the Hub's plan decides by the target's version
+ * (services/hub/move/plan.ts SHARED_FEATURES_SINCE). What a shared app must bring itself is
+ * warned instead: the server's own Microsoft app registration, Teams bot or push relay key, and
+ * any NIVARO_SETTINGS_OVERRIDES key a shared deployment does not apply (SETTINGS_ENV_OVERRIDES).
  */
 
 export type SharedReadinessCode =
-  | 'STAGED_IMPORTS'
-  | 'ROW_SCHEDULES'
   | 'ISSUE_TRACKERS'
   | 'EXEC_SCRIPT_FLOWS'
   | 'SQLITE'
   | 'ENV_OBJECT_STORAGE'
-  | 'DIRECTORY_SYNC'
-  | 'PHONE_PUSH'
-  | 'TEAMS_BOT'
-  | 'MAIL_RETRY'
   | 'HUDDLE_TURN'
   | 'ENV_SMTP'
   | 'SESSION_REPLAYS'
   | 'HELP_VIDEO_RENDERS'
+  | 'DIRECTORY_ENV_CREDENTIALS'
+  | 'TEAMS_BOT_ENV_CREDENTIALS'
+  | 'PUSH_RELAY_ENV'
+  | 'SETTINGS_ENV_OVERRIDES'
+  // Sent only by apps before 0.3.212 (blockers there: the first two).
+  | 'STAGED_IMPORTS'
+  | 'ROW_SCHEDULES'
+  | 'DIRECTORY_SYNC'
+  | 'PHONE_PUSH'
+  | 'TEAMS_BOT'
+  | 'MAIL_RETRY'
 
 /** Ruling R1 adds ENV_OBJECT_STORAGE: objects under an env-driven S3/Azure provider are never
  *  pulled by a move (only `local` rows), so they would be lost. */
 export const SHARED_READINESS_BLOCKERS: readonly SharedReadinessCode[] = [
-  'STAGED_IMPORTS',
-  'ROW_SCHEDULES',
   'ISSUE_TRACKERS',
   'EXEC_SCRIPT_FLOWS',
   'SQLITE',
@@ -104,37 +115,6 @@ async function countIf(
 
 // ─── Blockers ────────────────────────────────────────────────────────────────────────────
 
-async function stagedImports(): Promise<string | null> {
-  const n = await countIf('nivaro_import_definitions', (q) => q.where('is_active', true))
-  return n > 0
-    ? `${plural(n, 'import definition uses', 'import definitions use')} staged imports`
-    : null
-}
-
-/** The schedules that live in table rows (services/row-schedules.ts and its sources). */
-async function rowSchedules(): Promise<string | null> {
-  const nonEmpty = (col: string) => (q: Knex.QueryBuilder) => q.whereNotNull(col).whereNot(col, '')
-  const [reports, retention, views, syncJobs, flows] = await Promise.all([
-    countIf('nivaro_scheduled_reports', (q) =>
-      nonEmpty('cron_schedule')(q.where('is_active', true))
-    ),
-    countIf('nivaro_retention_policies', (q) =>
-      nonEmpty('cron_schedule')(q.where('is_active', true))
-    ),
-    countIf('nivaro_activity_views', nonEmpty('schedule')),
-    countIf('nivaro_sync_jobs', (q) => nonEmpty('schedule')(q.where('is_active', true))),
-    countIf('nivaro_flows', (q) => q.where({ trigger: 'schedule', status: 'active' }))
-  ])
-  const parts = [
-    reports && plural(reports, 'scheduled report', 'scheduled reports'),
-    retention && plural(retention, 'retention policy', 'retention policies'),
-    views && plural(views, 'scheduled audit view', 'scheduled audit views'),
-    syncJobs && plural(syncJobs, 'scheduled sync job', 'scheduled sync jobs'),
-    flows && plural(flows, 'scheduled flow', 'scheduled flows')
-  ].filter(Boolean)
-  return parts.length ? parts.join(', ') : null
-}
-
 async function issueTrackers(): Promise<string | null> {
   const { trackersEnabled } = await import('../trackers/feature.js')
   if (!(await trackersEnabled())) return null
@@ -171,30 +151,86 @@ function envObjectStorage(): string | null {
 // A detail follows its title in the move plan ("<title>: <detail>", the title saying how it is on
 // a shared deployment), so it says what THIS app does today, never "… is on" (E2E B M1).
 
-async function directorySync(): Promise<string | null> {
+const DIRECTORY_GRAPH_COLUMNS = [
+  'directory_graph_tenant_id',
+  'directory_graph_client_id',
+  'directory_graph_client_secret'
+] as const
+
+/**
+ * Directory sync on with the server's own Microsoft app registration (env GRAPH_*, else the OIDC
+ * sign-in app: graph-directory.ts credentials() everywhere but shared) and no complete one saved
+ * in Settings (migration 554): on a shared deployment the app reads only its saved one.
+ */
+async function directoryEnvCredentials(): Promise<string | null> {
   if (!(await db.schema.hasColumn('nivaro_settings', 'directory_sync_enabled'))) return null
-  const row = (await db('nivaro_settings').first('directory_sync_enabled')) as
-    | { directory_sync_enabled?: unknown }
-    | undefined
-  return row?.directory_sync_enabled ? 'This app syncs people from the directory today' : null
+  const { envGraphCredentials } = await import('../graph-directory.js')
+  const env = envGraphCredentials()
+  if (!env.tenant || !env.clientId || !env.secret) return null
+  const saved: string[] = []
+  for (const col of DIRECTORY_GRAPH_COLUMNS)
+    if (await db.schema.hasColumn('nivaro_settings', col)) saved.push(col)
+  const row = (await db('nivaro_settings')
+    .orderBy('id', 'asc')
+    .first('directory_sync_enabled', ...saved)) as Record<string, unknown> | undefined
+  if (!row?.directory_sync_enabled) return null
+  const complete =
+    saved.length === DIRECTORY_GRAPH_COLUMNS.length &&
+    saved.every((c) => typeof row[c] === 'string' && (row[c] as string).trim() !== '')
+  return complete
+    ? null
+    : "This app reads the directory with the server's Microsoft app; save its own app registration in Settings before the move"
 }
 
-async function phonePush(): Promise<string | null> {
-  if (!(await hasTable('nivaro_push_subscriptions'))) return null
-  const n = await countIf('nivaro_push_subscriptions', (q) => q.where('endpoint', 'like', 'expo:%'))
-  return n > 0 ? `${plural(n, 'phone gets', 'phones get')} alerts from this app` : null
-}
-
-async function teamsBot(): Promise<string | null> {
+/**
+ * The bot is on with an env family (TEAMS_BOT_* / MICROSOFT_APP_*) or the sign-in app, or its
+ * saved bot is on only through env TEAMS_BOT=on (its own saved switch is not): on a shared
+ * deployment an app's bot is only the one it saved in Settings, switched on by its own switch
+ * (teams-bot/config.ts ignores TEAMS_BOT=on there).
+ */
+async function teamsBotEnvCredentials(): Promise<string | null> {
   const { getTeamsBotConfig } = await import('../teams-bot/config.js')
-  return (await getTeamsBotConfig()).enabled
-    ? 'This app answers in Teams through its bot today'
+  const c = await getTeamsBotConfig()
+  if (!c.enabled) return null
+  const detail =
+    "This app's bot is set by the server environment; save the bot in Settings before the move"
+  if (c.source === 'env' || c.source === 'sign_in_app') return detail
+  if ((process.env.TEAMS_BOT ?? '').trim().toLowerCase() !== 'on') return null
+  if (!(await db.schema.hasColumn('nivaro_settings', 'teams_bot_enabled'))) return detail
+  const row = (await db('nivaro_settings').orderBy('id', 'asc').first('teams_bot_enabled')) as
+    | { teams_bot_enabled?: unknown }
+    | undefined
+  const savedOn = row?.teams_bot_enabled === true || row?.teams_bot_enabled === 1
+  return savedOn ? null : detail
+}
+
+/** Phones on the relay sent with the env relay key (it beats a stored one): on a shared
+ *  deployment the env key is never read, so the app connects its own relay. A phone on the app's
+ *  own Expo build (`expo:`) is sent to Expo directly, without the relay. */
+async function pushRelayEnv(): Promise<string | null> {
+  const { envRelayKey, RELAY_PREFIX } = await import('../push-relay.js')
+  if (!envRelayKey()) return null
+  const n = await countIf('nivaro_push_subscriptions', (q) =>
+    q.where('endpoint', 'like', `${RELAY_PREFIX}%`)
+  )
+  return n > 0
+    ? "Phones get alerts through the server's relay key; connect this app's own relay in Settings after the move"
     : null
 }
 
-async function mailRetry(): Promise<string | null> {
-  const { mailRetryEnabled } = await import('../mail-retry-state.js')
-  return mailRetryEnabled() ? 'This app retries failed mail automatically today' : null
+/** NIVARO_SETTINGS_OVERRIDES keys this app uses that a shared deployment never applies (there it
+ *  is the deployment's, so only its test switches and environment label apply). Names only. */
+async function settingsEnvOverrides(): Promise<string | null> {
+  const { perAppJobs } = await import('../deployment-mode.js')
+  if (perAppJobs()) return null // already on shared: these keys are not used here either
+  const { envKeyAppliesOnShared, envOverrideKeys } = await import('../settings-overrides.js')
+  const lost = envOverrideKeys()
+    .filter((k) => !envKeyAppliesOnShared(k))
+    .sort()
+  if (lost.length === 0) return null
+  const shown = lost.slice(0, 6).join(', ')
+  const more = lost.length > 6 ? ` and ${lost.length - 6} more` : ''
+  return `NIVARO_SETTINGS_OVERRIDES sets ${shown}${more}; a shared deployment does not apply them`
 }
 
 async function huddleTurn(): Promise<string | null> {
@@ -230,16 +266,14 @@ async function helpVideoRenders(): Promise<string | null> {
 }
 
 const CHECKS: Array<[SharedReadinessCode, () => Promise<string | null> | string | null]> = [
-  ['STAGED_IMPORTS', stagedImports],
-  ['ROW_SCHEDULES', rowSchedules],
   ['ISSUE_TRACKERS', issueTrackers],
   ['EXEC_SCRIPT_FLOWS', execScriptFlows],
   ['SQLITE', sqlite],
   ['ENV_OBJECT_STORAGE', envObjectStorage],
-  ['DIRECTORY_SYNC', directorySync],
-  ['PHONE_PUSH', phonePush],
-  ['TEAMS_BOT', teamsBot],
-  ['MAIL_RETRY', mailRetry],
+  ['DIRECTORY_ENV_CREDENTIALS', directoryEnvCredentials],
+  ['TEAMS_BOT_ENV_CREDENTIALS', teamsBotEnvCredentials],
+  ['PUSH_RELAY_ENV', pushRelayEnv],
+  ['SETTINGS_ENV_OVERRIDES', settingsEnvOverrides],
   ['HUDDLE_TURN', huddleTurn],
   ['ENV_SMTP', envSmtp],
   ['SESSION_REPLAYS', sessionReplays],

@@ -11,7 +11,6 @@ import { db } from '../db/index.js'
 import { castText, likeCi, likeEscape, sqlDialect } from '../db/sql-dialect.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { perAppJobs } from '../services/deployment-mode.js'
 import { uploadFileBuffer } from '../services/files.js'
 import {
   getImportProcessor,
@@ -109,13 +108,6 @@ export function ownRuns(
     if (!req.isAdmin) qb.where(column, String(req.user?.id ?? '__none__'))
   }
 }
-
-/** Hub phase 5 (P5-10): staged imports run on the import drainer, which a shared deployment does
- *  not run (per-app draining is phase 6). Queueing there would answer "queued" forever. */
-const IMPORTS_NOT_ON_SHARED = {
-  error: 'Staged imports are not available on a shared deployment yet.',
-  code: 'IMPORTS_NOT_ON_SHARED'
-} as const
 
 /** Queue entry + kick for the importer (services/import-handoff.ts). Never fails a request. */
 async function handOffRun(app: FastifyInstance, id: number | string): Promise<void> {
@@ -1569,7 +1561,6 @@ export async function stagedImportRoutes(app: FastifyInstance) {
    * dialog already refuses to queue a file whose preview fails validation.
    */
   app.post('/', { preHandler: requireAdmin }, async (req, reply) => {
-    if (perAppJobs()) return reply.code(409).send(IMPORTS_NOT_ON_SHARED)
     const multipart = await req.file()
     if (!multipart) return reply.code(400).send({ error: 'A file upload is required' })
 
@@ -1634,7 +1625,6 @@ export async function stagedImportRoutes(app: FastifyInstance) {
     '/:id/requeue',
     { preHandler: requireAdmin },
     async (req, reply) => {
-      if (perAppJobs()) return reply.code(409).send(IMPORTS_NOT_ON_SHARED)
       const row = await db('nivaro_import_queue').where('id', req.params.id).first()
       if (!row) return reply.code(404).send({ error: 'Not found' })
       if (row.status === 'running') {

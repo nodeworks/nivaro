@@ -17,10 +17,16 @@ const h = vi.hoisted(() => ({
     DB_HOST: 'db-host',
     DB_PORT: undefined as number | undefined,
     DB_DATABASE: 'app_db',
-    OIDC_ISSUER: 'https://login.microsoftonline.com/ABC-tenant/v2.0'
+    OIDC_ISSUER: 'https://login.microsoftonline.com/ABC-tenant/v2.0',
+    OIDC_CLIENT_ID: '',
+    OIDC_CLIENT_SECRET: '',
+    GRAPH_TENANT_ID: '',
+    GRAPH_CLIENT_ID: '',
+    GRAPH_CLIENT_SECRET: ''
   },
   trackers: async () => false as boolean,
   teams: false,
+  teamsSource: null as string | null,
   mailRetry: false,
   huddle: { turn_urls: [] as string[] },
   signin: null as unknown,
@@ -49,7 +55,7 @@ vi.mock('../../../services/trackers/feature.js', () => ({
   trackersEnabled: () => h.trackers()
 }))
 vi.mock('../../../services/teams-bot/config.js', () => ({
-  getTeamsBotConfig: async () => ({ enabled: h.teams })
+  getTeamsBotConfig: async () => ({ enabled: h.teams, source: h.teamsSource })
 }))
 vi.mock('../../../services/mail-retry-state.js', () => ({ mailRetryEnabled: () => h.mailRetry }))
 vi.mock('../../../services/huddle-settings.js', () => ({
@@ -104,6 +110,14 @@ beforeAll(async () => {
     t.integer('id')
     t.string('smtp_host')
     t.boolean('directory_sync_enabled')
+    t.string('directory_graph_tenant_id')
+    t.string('directory_graph_client_id')
+    t.text('directory_graph_client_secret')
+    t.boolean('teams_bot_enabled')
+  })
+  await db.schema.createTable('nivaro_push_subscriptions', (t) => {
+    t.increments('id')
+    t.string('endpoint')
   })
   await db.schema.createTable('nivaro_session_recordings', (t) => {
     t.increments('id')
@@ -125,6 +139,7 @@ beforeEach(async () => {
     'nivaro_flow_operations',
     'nivaro_files',
     'nivaro_settings',
+    'nivaro_push_subscriptions',
     'nivaro_session_recordings'
   ])
     await db(t).del()
@@ -132,6 +147,16 @@ beforeEach(async () => {
   h.config.DB_CLIENT = 'pg'
   h.trackers = async () => false
   h.teams = false
+  h.teamsSource = null
+  for (const k of [
+    'OIDC_CLIENT_ID',
+    'OIDC_CLIENT_SECRET',
+    'GRAPH_TENANT_ID',
+    'GRAPH_CLIENT_ID',
+    'GRAPH_CLIENT_SECRET'
+  ] as const)
+    h.config[k] = ''
+  h.config.OIDC_ISSUER = 'https://login.microsoftonline.com/ABC-tenant/v2.0'
   h.mailRetry = false
   h.huddle = { turn_urls: [] }
   h.signin = null
@@ -139,6 +164,8 @@ beforeEach(async () => {
   process.env = { ...saved }
   delete process.env.STORAGE_PROVIDER
   delete process.env.SMTP_HOST
+  delete process.env.MOBILE_PUSH_RELAY_KEY
+  delete process.env.TEAMS_BOT
   process.env.ENCRYPTION_KEY = KEY
 })
 
@@ -163,44 +190,23 @@ describe('computeSharedReadiness', () => {
     expect((await computeSharedReadiness()).key_fp).toBeNull()
   })
 
-  it('an active import definition → blocker STAGED_IMPORTS', async () => {
-    await db('nivaro_import_definitions').insert([
-      { key: 'po', label: SECRET, is_active: true },
-      { key: 'old', label: 'x', is_active: false }
-    ])
-    const r = await computeSharedReadiness()
-    expect(codeOf(r, 'STAGED_IMPORTS')).toEqual({
-      code: 'STAGED_IMPORTS',
-      level: 'blocker',
-      detail: '1 import definition uses staged imports'
-    })
-  })
-
-  it('scheduled reports and a retention policy → ROW_SCHEDULES with counts, names never sent', async () => {
-    await db('nivaro_scheduled_reports').insert([
-      { name: SECRET, is_active: true, cron_schedule: '0 9 * * 1' },
-      { name: 'b', is_active: true, cron_schedule: '0 9 * * 2' },
-      { name: 'c', is_active: true, cron_schedule: '0 9 * * 3' },
-      { name: 'off', is_active: false, cron_schedule: '0 9 * * 4' },
-      { name: 'manual', is_active: true, cron_schedule: '' }
-    ])
-    await db('nivaro_retention_policies').insert({
-      name: 'r',
-      is_active: true,
-      cron_schedule: '0 2 * * *'
-    })
-    await db('nivaro_flows').insert({
-      id: 'f1',
+  it('staged imports and row schedules run per app on a shared deployment: no longer reported', async () => {
+    await db('nivaro_import_definitions').insert({ key: 'po', label: SECRET, is_active: true })
+    await db('nivaro_scheduled_reports').insert({
       name: SECRET,
-      status: 'active',
-      trigger: 'schedule'
+      is_active: true,
+      cron_schedule: '0 9 * * 1'
     })
+    await db('nivaro_flows').insert({ id: 'f1', name: 'f', status: 'active', trigger: 'schedule' })
     const r = await computeSharedReadiness()
-    expect(codeOf(r, 'ROW_SCHEDULES')).toEqual({
-      code: 'ROW_SCHEDULES',
-      level: 'blocker',
-      detail: '3 scheduled reports, 1 retention policy, 1 scheduled flow'
-    })
+    expect(codeOf(r, 'STAGED_IMPORTS')).toBeUndefined()
+    expect(codeOf(r, 'ROW_SCHEDULES')).toBeUndefined()
+    expect([...SHARED_READINESS_BLOCKERS]).toEqual([
+      'ISSUE_TRACKERS',
+      'EXEC_SCRIPT_FLOWS',
+      'SQLITE',
+      'ENV_OBJECT_STORAGE'
+    ])
   })
 
   it('an active flow with a script step → EXEC_SCRIPT_FLOWS; an inactive one does not count', async () => {
@@ -247,36 +253,164 @@ describe('computeSharedReadiness', () => {
     expect(JSON.stringify(r)).not.toContain('locked')
   })
 
-  it('warnings: env SMTP, mail retry, Teams bot, huddle TURN, directory sync, replays', async () => {
+  it('warnings: env SMTP, huddle TURN, replays; mail retry, Teams bot, directory sync and phones run per app now', async () => {
     process.env.SMTP_HOST = 'smtp.internal'
     h.mailRetry = true
     h.teams = true
+    h.teamsSource = 'settings'
     h.huddle = { turn_urls: ['turn:a', 'turn:b'] }
     await db('nivaro_settings').update({ directory_sync_enabled: true })
+    await db('nivaro_push_subscriptions').insert({ endpoint: 'relay:dev-1' })
     await db('nivaro_session_recordings').insert([{ page: SECRET }, { page: 'b' }])
     const r = await computeSharedReadiness()
-    for (const code of [
-      'ENV_SMTP',
-      'MAIL_RETRY',
-      'TEAMS_BOT',
-      'HUDDLE_TURN',
-      'DIRECTORY_SYNC',
-      'SESSION_REPLAYS'
-    ])
+    for (const code of ['ENV_SMTP', 'HUDDLE_TURN', 'SESSION_REPLAYS'])
       expect(codeOf(r, code)?.level, code).toBe('warning')
+    for (const code of ['MAIL_RETRY', 'TEAMS_BOT', 'DIRECTORY_SYNC', 'PHONE_PUSH'])
+      expect(codeOf(r, code), code).toBeUndefined()
+    // Nothing set by the server environment here: no env-credential warnings either.
+    for (const code of ['DIRECTORY_ENV_CREDENTIALS', 'TEAMS_BOT_ENV_CREDENTIALS', 'PUSH_RELAY_ENV'])
+      expect(codeOf(r, code), code).toBeUndefined()
     expect(codeOf(r, 'SESSION_REPLAYS')?.detail).toBe('2 session replays stay behind')
-    // E2E B M1: the move plan shows "<title>: <detail>" ("Automatic mail retry is off on a shared
-    // deployment: …"), so the detail says what this app does today, never "… is on".
-    expect(codeOf(r, 'MAIL_RETRY')?.detail).toBe('This app retries failed mail automatically today')
-    expect(codeOf(r, 'TEAMS_BOT')?.detail).toBe('This app answers in Teams through its bot today')
-    expect(codeOf(r, 'DIRECTORY_SYNC')?.detail).toBe(
-      'This app syncs people from the directory today'
-    )
     expect(codeOf(r, 'HUDDLE_TURN')?.detail).toContain('2 TURN servers')
     expect(JSON.stringify(r)).not.toContain('smtp.internal')
     // SMTP saved in Settings travels with the database: no warning.
     await db('nivaro_settings').update({ smtp_host: 'smtp.saved' })
     expect(codeOf(await computeSharedReadiness(), 'ENV_SMTP')).toBeUndefined()
+  })
+
+  it('directory sync with the server env app registration and none saved → DIRECTORY_ENV_CREDENTIALS', async () => {
+    const DETAIL =
+      "This app reads the directory with the server's Microsoft app; save its own app registration in Settings before the move"
+    h.config.GRAPH_TENANT_ID = 'graph-tenant'
+    h.config.GRAPH_CLIENT_ID = 'graph-client'
+    h.config.GRAPH_CLIENT_SECRET = SECRET
+    // Sync off: nothing reads the directory on a schedule.
+    expect(codeOf(await computeSharedReadiness(), 'DIRECTORY_ENV_CREDENTIALS')).toBeUndefined()
+    await db('nivaro_settings').update({ directory_sync_enabled: true })
+    const r = await computeSharedReadiness()
+    expect(codeOf(r, 'DIRECTORY_ENV_CREDENTIALS')).toEqual({
+      code: 'DIRECTORY_ENV_CREDENTIALS',
+      level: 'warning',
+      detail: DETAIL
+    })
+    expect(JSON.stringify(r)).not.toContain(SECRET)
+    expect(JSON.stringify(r)).not.toContain('graph-client')
+    // The OIDC sign-in app is the fallback the directory uses when GRAPH_* is not set.
+    h.config.GRAPH_TENANT_ID = ''
+    h.config.GRAPH_CLIENT_ID = ''
+    h.config.GRAPH_CLIENT_SECRET = ''
+    h.config.OIDC_CLIENT_ID = 'oidc-client'
+    h.config.OIDC_CLIENT_SECRET = 'oidc-secret'
+    expect(codeOf(await computeSharedReadiness(), 'DIRECTORY_ENV_CREDENTIALS')?.detail).toBe(DETAIL)
+    // A complete saved registration travels with the database: no warning.
+    await db('nivaro_settings').update({
+      directory_graph_tenant_id: 't',
+      directory_graph_client_id: 'c',
+      directory_graph_client_secret: 'enc:v1:sealed'
+    })
+    expect(codeOf(await computeSharedReadiness(), 'DIRECTORY_ENV_CREDENTIALS')).toBeUndefined()
+    // No env registration at all: the directory does not work today either.
+    await db('nivaro_settings').update({
+      directory_graph_tenant_id: null,
+      directory_graph_client_id: null,
+      directory_graph_client_secret: null
+    })
+    h.config.OIDC_CLIENT_ID = ''
+    h.config.OIDC_CLIENT_SECRET = ''
+    expect(codeOf(await computeSharedReadiness(), 'DIRECTORY_ENV_CREDENTIALS')).toBeUndefined()
+  })
+
+  it('a Teams bot from an env family or the sign-in app → TEAMS_BOT_ENV_CREDENTIALS; one saved in Settings → none', async () => {
+    const DETAIL =
+      "This app's bot is set by the server environment; save the bot in Settings before the move"
+    h.teams = true
+    for (const source of ['env', 'sign_in_app']) {
+      h.teamsSource = source
+      expect(codeOf(await computeSharedReadiness(), 'TEAMS_BOT_ENV_CREDENTIALS'), source).toEqual({
+        code: 'TEAMS_BOT_ENV_CREDENTIALS',
+        level: 'warning',
+        detail: DETAIL
+      })
+    }
+    h.teamsSource = 'settings'
+    expect(codeOf(await computeSharedReadiness(), 'TEAMS_BOT_ENV_CREDENTIALS')).toBeUndefined()
+    h.teams = false
+    h.teamsSource = 'env'
+    expect(codeOf(await computeSharedReadiness(), 'TEAMS_BOT_ENV_CREDENTIALS')).toBeUndefined()
+  })
+
+  it('a saved bot switched on only by TEAMS_BOT=on → TEAMS_BOT_ENV_CREDENTIALS (shared ignores that switch)', async () => {
+    const DETAIL =
+      "This app's bot is set by the server environment; save the bot in Settings before the move"
+    h.teams = true
+    h.teamsSource = 'settings'
+    process.env.TEAMS_BOT = 'On'
+    await db('nivaro_settings').update({ teams_bot_enabled: false })
+    expect(codeOf(await computeSharedReadiness(), 'TEAMS_BOT_ENV_CREDENTIALS')?.detail).toBe(DETAIL)
+    await db('nivaro_settings').update({ teams_bot_enabled: null })
+    expect(codeOf(await computeSharedReadiness(), 'TEAMS_BOT_ENV_CREDENTIALS')?.detail).toBe(DETAIL)
+    // Its own switch saved on: it keeps answering on a shared deployment.
+    await db('nivaro_settings').update({ teams_bot_enabled: true })
+    expect(codeOf(await computeSharedReadiness(), 'TEAMS_BOT_ENV_CREDENTIALS')).toBeUndefined()
+    // Switched on by its saved switch alone (no env switch): nothing to warn.
+    await db('nivaro_settings').update({ teams_bot_enabled: false })
+    delete process.env.TEAMS_BOT
+    expect(codeOf(await computeSharedReadiness(), 'TEAMS_BOT_ENV_CREDENTIALS')).toBeUndefined()
+  })
+
+  it("phones on the relay with the server's env relay key → PUSH_RELAY_ENV", async () => {
+    const DETAIL =
+      "Phones get alerts through the server's relay key; connect this app's own relay in Settings after the move"
+    process.env.MOBILE_PUSH_RELAY_KEY = SECRET
+    // No phones: nothing to lose. A phone on the app's own Expo build is sent to Expo directly.
+    expect(codeOf(await computeSharedReadiness(), 'PUSH_RELAY_ENV')).toBeUndefined()
+    await db('nivaro_push_subscriptions').insert({ endpoint: 'expo:ExponentPushToken[x]' })
+    expect(codeOf(await computeSharedReadiness(), 'PUSH_RELAY_ENV')).toBeUndefined()
+    await db('nivaro_push_subscriptions').insert({ endpoint: 'relay:dev-1' })
+    const r = await computeSharedReadiness()
+    expect(codeOf(r, 'PUSH_RELAY_ENV')).toEqual({
+      code: 'PUSH_RELAY_ENV',
+      level: 'warning',
+      detail: DETAIL
+    })
+    expect(JSON.stringify(r)).not.toContain(SECRET)
+    // A key stored in the app's settings travels with the database.
+    delete process.env.MOBILE_PUSH_RELAY_KEY
+    expect(codeOf(await computeSharedReadiness(), 'PUSH_RELAY_ENV')).toBeUndefined()
+  })
+
+  it('server setting overrides a shared deployment never applies → SETTINGS_ENV_OVERRIDES', async () => {
+    const { resetEnvOverridesForTest } = await import('../../../services/settings-overrides.js')
+    const saved = process.env.NIVARO_SETTINGS_OVERRIDES
+    try {
+      // Only deployment-wide switches: nothing to lose.
+      process.env.NIVARO_SETTINGS_OVERRIDES = JSON.stringify({ mail_test_mode: true })
+      resetEnvOverridesForTest()
+      expect(codeOf(await computeSharedReadiness(), 'SETTINGS_ENV_OVERRIDES')).toBeUndefined()
+      process.env.NIVARO_SETTINGS_OVERRIDES = JSON.stringify({
+        smtp_pass: SECRET,
+        smtp_host: 'relay',
+        mail_test_mode: true,
+        a1: 1,
+        a2: 1,
+        a3: 1,
+        a4: 1,
+        a5: 1
+      })
+      resetEnvOverridesForTest()
+      const r = await computeSharedReadiness()
+      expect(codeOf(r, 'SETTINGS_ENV_OVERRIDES')).toEqual({
+        code: 'SETTINGS_ENV_OVERRIDES',
+        level: 'warning',
+        detail:
+          'NIVARO_SETTINGS_OVERRIDES sets a1, a2, a3, a4, a5, smtp_host and 1 more; a shared deployment does not apply them'
+      })
+      expect(JSON.stringify(r)).not.toContain(SECRET)
+    } finally {
+      if (saved === undefined) delete process.env.NIVARO_SETTINGS_OVERRIDES
+      else process.env.NIVARO_SETTINGS_OVERRIDES = saved
+      resetEnvOverridesForTest()
+    }
   })
 
   it('counts files (local ones apart) and lists loaded extensions with their version', async () => {

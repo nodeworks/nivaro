@@ -31,7 +31,6 @@ export const CORE_CRON_SCOPES: Record<string, CronScope> = {
   'chaos-gamedays': 'process', // fault drills against this deployment
   'chaos-monkey': 'process', // random fault drills against this deployment
   'chaos-test-overlap': 'process', // the chaos lease-split drill's own sleeping job
-  'staged-imports': 'process', // drains the process-wide import hand-off queue
   'huddle-turn-probe': 'process', // probes the deployment's TURN servers
   'huddle-sessions-sweep': 'process', // deployment-wide Redis huddle session keys (no tenant)
   'huddle-sessions-prune': 'process', // same store, pruned with no tenant
@@ -128,6 +127,7 @@ export const CORE_CRON_SCOPES: Record<string, CronScope> = {
   'report-studio-alerts': 'app',
   'report-studio-daily': 'app',
   'report-studio-weekly': 'app',
+  'retention-pass': 'app', // shared deployments only: self-hosted runs the pass from its boot chain
   'rollup-drift-sweep': 'app',
   'scheduled-broadcasts': 'app',
   'scheduled-changes-apply': 'app',
@@ -138,6 +138,9 @@ export const CORE_CRON_SCOPES: Record<string, CronScope> = {
   'sla-live-flips': 'app',
   'sql-checks': 'app',
   'staged-import-staging-purge': 'app',
+  // drains the app's own import queue and hand-off keys (services/import-handoff.ts); the kick
+  // subscriber started at boot drains the app a kick names at once
+  'staged-imports': 'app',
   'storage-snapshot': 'app',
   'subscription-integrity': 'app',
   'task-done-when-sweep': 'app',
@@ -154,7 +157,11 @@ export const CORE_CRON_SCOPES: Record<string, CronScope> = {
   'watch-list-overdue': 'app',
   'workflow-auto-sweep': 'app',
 
-  // ── row schedules (services/row-schedules.ts; off in every multi-tenant process today) ─────
+  // ── row schedules (services/row-schedules.ts) ──────────────────────────────────────────────
+  // Never in Nivaro Cloud. On a shared deployment each one is bound to the app whose row it is
+  // (scheduled inside that app: plugins/cron.ts boundCronKey) and runs in that app only, never
+  // fanned out; 'app' below is the scope of its id, not a fan-out.
+  'row-schedules-resync': 'app', // shared deployments only: re-reads each app's schedule rows
   'retention-policy-*': 'app',
   'scheduled-report-*': 'app',
   'activity-view-*': 'app',
@@ -184,18 +191,14 @@ export const SELF_HOSTED_ONLY_CRONS: Record<string, string> = {
   'huddle-turn-probe': 'huddle crons are off on multi-tenant (operator TURN hosts)',
   'huddle-sessions-sweep': 'huddle crons are off on multi-tenant',
   'huddle-sessions-prune': 'huddle crons are off on multi-tenant',
-  'staged-imports': 'the import hand-off drainer is off on multi-tenant',
   'outside-write-watch': 'returns at once on multi-tenant (process-local change tracking)',
-  'sla-live-flips': 'returns at once on multi-tenant (process-local live collections)',
-  'cumulative-flow-rollup': 'returns at once on multi-tenant',
   // file-cleanup and session-replay-tiering run per app since Hub phase 6: every storage call
   // they make goes through getStorage() / the app's own settings driver, which a shared
   // deployment scopes to apps/<tenantId>/ (services/storage/app-scope.ts).
   'storage-snapshot':
     "walks the upload folder on disk directly (UPLOAD_DIR), outside the per-app storage scope: it would record the whole deployment's files as one app's",
   'help-video-render-sweep':
-    'the render pump state is process-wide; a per-app render queue is phase 6 (a publish still renders its own video in the request)',
-  'mail-retry': 'automatic mail retry is off on multi-tenant processes, as in cloud (MAIL_RETRY)'
+    'the render pump state is process-wide; a per-app render queue is phase 6 (a publish still renders its own video in the request)'
 }
 
 /**
