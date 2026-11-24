@@ -824,7 +824,7 @@ export const MOVE_BLOCKER_COPY: Record<string, Copy> = {
   },
   REDIS_SHARED: {
     title: 'The old and the new home share one Redis database',
-    hint: 'Retiring the old home would also stop the new one. Give the target its own Redis database (or channel prefix), then plan again.'
+    hint: 'Retiring the old home would also stop the new one. Give the target its own Redis database (a channel prefix is not enough), then plan again.'
   },
   // The app's own readiness report (Task 9): what a shared deployment cannot run. Staged imports
   // and row schedules come only from an app before 0.3.212, and block only a target before it.

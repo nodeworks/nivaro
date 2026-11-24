@@ -608,7 +608,7 @@ describe('gatherMovePlanInput — to_shared from a Docker stack', () => {
     expect(input.target_facts.pool).toEqual({ used: 7, budget: 60, asked: 5 })
   })
 
-  it('the same external Redis db and prefix on both sides → REDIS_SHARED (Task 5 sealed secrets)', async () => {
+  it('the same external Redis db on both sides → REDIS_SHARED (Task 5 sealed secrets)', async () => {
     const sharedId = await newShared({ settings: { redis: 'external' } })
     const shared = await Store.getShared(sharedId)
     // Task 5's format: one sealed JSON of plain values.
@@ -638,7 +638,7 @@ describe('gatherMovePlanInput — to_shared from a Docker stack', () => {
     expect(JSON.stringify(input)).not.toContain(':pw@')
   })
 
-  it('the same Redis host with another prefix → no REDIS_SHARED, nothing unverified', async () => {
+  it('the same Redis database with another prefix → still REDIS_SHARED (keys carry no prefix)', async () => {
     const sharedId = await newShared({ settings: { redis: 'external' } })
     await db('nivaro_hub_shared_deployments')
       .where({ id: sharedId })
@@ -657,9 +657,31 @@ describe('gatherMovePlanInput — to_shared from a Docker stack', () => {
     const plan = buildMovePlan(
       await Gather.gatherMovePlanInput(e.id, { kind: 'shared', shared_id: sharedId }, deps())
     )
-    expect(plan.blockers.map((b) => b.code)).not.toContain('REDIS_SHARED')
+    expect(plan.blockers.map((b) => b.code)).toContain('REDIS_SHARED')
     expect(plan.warnings.map((w) => w.code)).not.toContain('REDIS_UNVERIFIED')
     expect(plan.warnings.map((w) => w.code)).not.toContain('STORAGE_UNVERIFIED')
+  })
+
+  it('another database number on the same Redis → no REDIS_SHARED', async () => {
+    const sharedId = await newShared({ settings: { redis: 'external' } })
+    await db('nivaro_hub_shared_deployments')
+      .where({ id: sharedId })
+      .update({
+        secrets: sealSecret(JSON.stringify({ REDIS_URL: 'redis://redis1.example.com:6379/2' }))
+      })
+    const placement = await dockerPlacement('shop-e3')
+    const e = await newEnv({ placement_id: placement, db_ref: `hub-db:${await newDb()}` })
+    await db('nivaro_hub_stack_settings').insert({
+      environment_id: e.id,
+      size: 'small',
+      redis: 'external',
+      settings: JSON.stringify({})
+    })
+    stack.secrets = { REDIS_URL: 'redis://redis1.example.com:6379/3' }
+    const plan = buildMovePlan(
+      await Gather.gatherMovePlanInput(e.id, { kind: 'shared', shared_id: sharedId }, deps())
+    )
+    expect(plan.blockers.map((b) => b.code)).not.toContain('REDIS_SHARED')
   })
 
   it('external Redis with no REDIS_URL the Hub can read → REDIS_UNVERIFIED', async () => {

@@ -291,12 +291,13 @@ function blockersOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Bloc
   if (input.names_taken.length)
     add('HOSTNAME_TAKEN', `Another environment already claims ${list(input.names_taken)}.`)
 
-  // Redis: source and target hold the same hub token, so they must not share a Redis db and
-  // prefix (the retire and maintenance keys would collide). Judged only when both are known.
+  // Redis: source and target must not share a Redis database. Most keys carry no channel prefix
+  // (the cron leader lease, the retire and maintenance keys, locks), so a different prefix does
+  // not keep them apart (gather.ts redisIdentity). Judged only when both are known.
   if (s.redis && t.redis && s.redis === t.redis)
     add(
       'REDIS_SHARED',
-      `The source and ${sideName(to)} use the same Redis database and channel prefix. Give the target its own Redis (or prefix) first.`
+      `The source and ${sideName(to)} use the same Redis database. Give the target its own Redis database (another database number, or its own Redis) first.`
     )
 
   // Object storage the move cannot copy (ruling R1).

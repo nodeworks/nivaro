@@ -1506,11 +1506,37 @@ describe('re-apply after a run that never reached apply (N-2)', () => {
   })
 })
 
+describe('one stack, one Redis database (REDIS_DB_SHARED)', () => {
+  it('refuses a REDIS_URL naming the database another shared deployment uses, whatever the password', async () => {
+    const first = await newShared({ settings: JSON.stringify({ redis: 'external' }) })
+    await Run.setSharedSecrets(first, {
+      REDIS_URL: 'redis://:pw-a@redis-shared-db.example.com:6379/5'
+    })
+    const firstName = (await db('nivaro_hub_shared_deployments').where({ id: first }).first()).name
+    const id = await newShared({ settings: JSON.stringify({ redis: 'external' }) })
+    await Run.setSharedSecrets(id, { REDIS_URL: 'redis://:pw-b@REDIS-SHARED-DB.example.com/5' })
+    const plan = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', planDeps())
+    const b = plan.blockers.find((x) => x.code === 'REDIS_DB_SHARED')
+    expect(b?.text).toContain(`shared deployment ${firstName}`)
+    expect(JSON.stringify(plan)).not.toContain('pw-a')
+    expect(JSON.stringify(plan)).not.toContain('redis-shared-db')
+    // Another database number on the same Redis: nothing shared.
+    await Run.setSharedSecrets(id, { REDIS_URL: 'redis://:pw-b@redis-shared-db.example.com:6379/6' })
+    const ok = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', planDeps())
+    expect(codes(ok.blockers)).not.toContain('REDIS_DB_SHARED')
+    // A retired deployment holds nothing.
+    await Run.setSharedSecrets(id, { REDIS_URL: 'redis://:pw-b@redis-shared-db.example.com:6379/5' })
+    await db('nivaro_hub_shared_deployments').where({ id: first }).update({ status: 'retired' })
+    const retired = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', planDeps())
+    expect(codes(retired.blockers)).not.toContain('REDIS_DB_SHARED')
+  })
+})
+
 describe('REDIS_URL stored, not applied (N-3)', () => {
   it('marked from the PATCH until a run that rendered that URL succeeds; never the value', async () => {
     const id = await newShared({ settings: JSON.stringify({ redis: 'external' }) })
     expect(await Run.redisUrlNotApplied(id)).toBe(false)
-    const url1 = 'rediss://:Pw-One-0123456789@redis.internal.example.com:6380/1'
+    const url1 = 'rediss://:Pw-One-0123456789@redis.internal.example.com:6380/3'
     await Run.setSharedSecrets(id, { REDIS_URL: url1 })
     expect(await Run.redisUrlNotApplied(id)).toBe(true)
     // A run that rendered it but failed (swarm rolled back) does not clear the mark.

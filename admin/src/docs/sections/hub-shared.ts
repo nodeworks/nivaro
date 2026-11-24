@@ -146,7 +146,7 @@ export const hubSharedDocs: DocSection = {
     },
     {
       type: 'p',
-      text: 'Bundled Redis is the default. With external Redis (stack setting `redis: external`) set the address as a write-only secret: `PATCH /api/hub/shared/:id` with `{secrets: {REDIS_URL: "rediss://…"}}` (a `redis://` or `rediss://` address; `null` or an empty string clears it). It is kept sealed, read back only as `••••••`, never logged, and it applies on the next stack apply (the PATCH starts one, like a token rotation). Give each shared deployment its own Redis database: the maintenance flags and other per-database keys are not scoped to a deployment, so two deployments (or a deployment and an app) on one database would read each other\'s. Without the secret an external-Redis plan stops with `REDIS_URL_MISSING`.'
+      text: 'Bundled Redis is the default. With external Redis (stack setting `redis: external`) set the address as a write-only secret: `PATCH /api/hub/shared/:id` with `{secrets: {REDIS_URL: "rediss://…"}}` (a `redis://` or `rediss://` address; `null` or an empty string clears it). It is kept sealed, read back only as `••••••`, never logged, and it applies on the next stack apply (the PATCH starts one, like a token rotation). Give each shared deployment its own Redis database: the maintenance flags and other per-database keys are not scoped to a deployment, so two deployments (or a deployment and an app) on one database would read each other\'s, and one would stop the other\'s scheduled jobs. A different channel prefix does not help: most keys carry none. The plan stops with `REDIS_DB_SHARED` when another stack the Hub runs uses the same database (host, port and database number), and with `REDIS_URL_MISSING` without the secret.'
     },
     {
       type: 'p',
@@ -299,7 +299,7 @@ export const hubSharedDocs: DocSection = {
           'The routing the stack would get is not one the agent accepts (see Host pattern and explicit hosts). An agent set for Traefik v2 (`HUB_AGENT_TRAEFIK_VERSION=2`) cannot route a host pattern: the plan blocks `PATTERN_NOT_ALLOWED` until the agent is on Traefik v3 or the pattern is removed.'
         ],
         [
-          '`REDIS_NOT_AVAILABLE`, `REDIS_URL_MISSING`, `HUB_URL_UNUSABLE`',
+          '`REDIS_NOT_AVAILABLE`, `REDIS_URL_MISSING`, `REDIS_DB_SHARED`, `HUB_URL_UNUSABLE`',
           'Bundled Redis asked for but the agent has no Redis image, external Redis chosen without its address, or the Hub address the stack would get is not a usable https origin.'
         ],
         [
@@ -706,7 +706,7 @@ export const hubMovesDocs: DocSection = {
         "Before you tick `target_stopped`, make sure that no process of this app runs at the target and that none can restart. Check it: open the target's public or link address and see that it no longer answers for this app (the stack is gone, the deployment is stopped, or the app is listed as maintenance on every replica). Ticking is taken as proof, with nothing re-checked: the Hub then restores the environment to the source and lifts the source's maintenance. A wrong tick opens writes on the old placement while the new one may still accept them, two writers on one database. After the tick press Roll back; the Hub retries the freeze first. `TARGET_NOT_STOPPED` is a different, narrower code: a GitLab target's retire call failed, so stop its stack by hand.",
         'Every rollback and every release carries the move id with its maintenance-off call. If the Hub has lost the move and a dedicated container stays stuck in maintenance: remove `HUB_BOOT_MAINTENANCE` from the stack (and the `boot-maintenance` line from a GitLab pin), then send `POST /api/hub-link/maintenance` with `{"on": false}` and no move id, with its hub token as the bearer. A move id that is not the held one answers 409 `MAINTENANCE_OTHER_MOVE` and lifts nothing. The halted or rolled-back move shows the same recovery text, worded for its source.',
         "If that call cannot reach the app, delete its maintenance key in its Redis. Which key depends on how the process runs (ruling P6-32). A dedicated app linked to the Hub (`HUB_TOKEN` set) keeps the Hub's freeze in its own key, `<REDIS_CHANNEL_PREFIX>nvr:maintenance:<tag>`, where `<tag>` is the first 16 hex characters of the SHA-256 of its hub token (`printf %s \"$HUB_TOKEN\" | sha256sum | cut -c1-16`; `redis-cli --scan --pattern '*nvr:maintenance:*'` lists it); deleting the plain `nvr:maintenance` there lifts nothing. On a shared deployment one app is in maintenance because the Hub lists it so, never through a key: use Apply now on the deployment (its stack carries the app's names again) and, if the app still shows maintenance, set the environment's status back to active on the Hub (the replicas re-read the list within 30 seconds). Never clear the deployment's own key, `<REDIS_CHANNEL_PREFIX>nvr:maintenance` (`nvr:maintenance` with no prefix): that is the operator's freeze of every app on it. Nivaro Cloud and a self-hosted app without `HUB_TOKEN` use exactly `nvr:maintenance`.",
-        "The source and the target of a move must not share one Redis database with the same key prefix (and the same `HUB_TOKEN`). They would read each other's retire and maintenance markers. The plan checks this (`REDIS_SHARED`, or `REDIS_UNVERIFIED` when it cannot see)."
+        "The source and the target of a move must not share one Redis database, whatever their key prefixes (and they hold the same `HUB_TOKEN`). They would read each other's retire and maintenance markers and share one scheduled-jobs leader. The plan checks this (`REDIS_SHARED`, or `REDIS_UNVERIFIED` when it cannot see)."
       ]
     },
     {
@@ -856,7 +856,7 @@ export const hubMovesDocs: DocSection = {
           'The target or source cannot be reached (also the Traefik-only Docker source with a manual route); a dedicated target placement is used by another environment; the driver cannot do this kind of move.'
         ],
         ['`HOSTNAME_TAKEN`', 'Another environment of the Hub already claims one of the names.'],
-        ['`REDIS_SHARED`', 'Source and target use the same Redis database and channel prefix.'],
+        ['`REDIS_SHARED`', 'Source and target use the same Redis database.'],
         [
           '`GATHER_FAILED`',
           'The Hub could not read part of what it needs to plan. Plan again shortly.'

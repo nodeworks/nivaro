@@ -23,6 +23,7 @@ import type { HubEnvironmentRow } from '../promote-types.js'
 import { hubImage, imageDigest } from '../registry.js'
 import { HUB_MASK, openSecret } from '../secrets.js'
 import { DeploymentLinkError, deploymentClient } from './deployment-client.js'
+import { stacksOnRedisDatabase } from './redis-databases.js'
 import {
   explicitHostsFor,
   preSplitRoles,
@@ -49,7 +50,7 @@ import { type SharedTenantRow, tenantsOf } from './tenants.js'
  * for a split role shape — anything but one `all` — before split shared owners, < 0.2.2);
  * IMAGE_NOT_ALLOWED / EXTENSION_NOT_ALLOWED (the agent's allow-list); EXTENSION_UNPINNED;
  * PATTERN_NOT_ALLOWED / HOSTNAME_NOT_ALLOWED / TOO_MANY_HOSTNAMES / NO_ROUTE (routing);
- * PUBLISH_PORT_NOT_ALLOWED; REDIS_NOT_AVAILABLE / REDIS_URL_MISSING; HUB_URL_UNUSABLE (the
+ * PUBLISH_PORT_NOT_ALLOWED; REDIS_NOT_AVAILABLE / REDIS_URL_MISSING / REDIS_DB_SHARED; HUB_URL_UNUSABLE (the
  * address the stack would get is not one a deployment in production accepts as HUB_URL).
  *
  * Per app (`apps[].blockers`, each overridable by a Hub admin at start, `<CODE>:<env_id>` in
@@ -591,12 +592,24 @@ export async function gatherSharedUpgrade(
       })
   }
 
-  // The deployment's own secrets: only whether REDIS_URL is there (never its value).
-  if (settings.redis === 'external' && !(await readSharedSecrets(shared.id)).REDIS_URL)
-    block(
-      'REDIS_URL_MISSING',
-      'The shared deployment uses external Redis but has no REDIS_URL secret.'
-    )
+  // The deployment's own secrets: only whether REDIS_URL is there (never its value), and that no
+  // other stack the Hub runs uses the same Redis database (redis-databases.ts: one stack, one db).
+  if (settings.redis === 'external') {
+    const url = (await readSharedSecrets(shared.id)).REDIS_URL
+    if (!url)
+      block(
+        'REDIS_URL_MISSING',
+        'The shared deployment uses external Redis but has no REDIS_URL secret.'
+      )
+    else {
+      const others = await stacksOnRedisDatabase(url, shared.id)
+      if (others.length)
+        block(
+          'REDIS_DB_SHARED',
+          `REDIS_URL names the Redis database ${others.join(', ')} also uses. Most keys carry no channel prefix, so the stacks would stop each other's scheduled jobs: give this deployment its own database number (redis://…/N) or its own Redis.`
+        )
+    }
+  }
 
   const hubUrl = deps.hubPublicUrl()
   if (
