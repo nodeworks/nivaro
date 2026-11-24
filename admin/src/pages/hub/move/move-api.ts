@@ -960,7 +960,7 @@ export const MOVE_WARNING_COPY: Record<string, Copy> = {
   },
   SETTINGS_ENV_OVERRIDES: {
     title: 'A shared deployment does not apply the app’s server setting overrides',
-    hint: 'NIVARO_SETTINGS_OVERRIDES on a shared deployment applies only test modes and the environment label. Before the move, save the listed values in the app’s Settings (or Settings → This Instance).'
+    hint: 'NIVARO_SETTINGS_OVERRIDES on a shared deployment applies only test modes and the environment label. Before the move, save the listed values in the app’s own Settings.'
   },
   HUDDLE_TURN: {
     title: 'Huddles use the deployment’s media servers, not the app’s own',

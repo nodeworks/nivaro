@@ -1553,6 +1553,29 @@ describe('one stack, one Redis database (REDIS_DB_SHARED)', () => {
   })
 })
 
+describe('REDIS_DB_SHARED: ports and the Hub itself', () => {
+  it('rediss:// without a port is 6379; the Hub\'s own Redis database counts too', async () => {
+    const { config } = await import('../../../config.js')
+    const first = await newShared({ settings: JSON.stringify({ redis: 'external' }) })
+    await Run.setSharedSecrets(first, { REDIS_URL: 'rediss://:a@tls-redis.example.com/7' })
+    const id = await newShared({ settings: JSON.stringify({ redis: 'external' }) })
+    await Run.setSharedSecrets(id, { REDIS_URL: 'rediss://:b@tls-redis.example.com:6379/7' })
+    const plan = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', planDeps())
+    expect(codes(plan.blockers)).toContain('REDIS_DB_SHARED')
+    await db('nivaro_hub_shared_deployments').where({ id: first }).update({ status: 'retired' })
+    const saved = config.REDIS_URL
+    try {
+      ;(config as { REDIS_URL: string }).REDIS_URL = 'redis://tls-redis.example.com:6379/7'
+      const hub = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', planDeps())
+      expect(hub.blockers.find((b) => b.code === 'REDIS_DB_SHARED')?.text).toContain(
+        'the Nivaro Hub itself'
+      )
+    } finally {
+      ;(config as { REDIS_URL: string }).REDIS_URL = saved
+    }
+  })
+})
+
 describe('REDIS_URL stored, not applied (N-3)', () => {
   it('marked from the PATCH until a run that rendered that URL succeeds; never the value', async () => {
     const id = await newShared({ settings: JSON.stringify({ redis: 'external' }) })

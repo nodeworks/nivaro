@@ -252,6 +252,23 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
   const buffers = new Map<string, ApiLogRow[]>()
   let flushing = false
 
+  // The active list for a registry with no byId (Nivaro Cloud: listActive reads the meta
+  // database), kept 30 s; a key missing from a list older than 5 s reads it again (a new tenant).
+  let listed: { at: number; list: Promise<TenantRecord[]> } | null = null
+  function activeList(fresh = false): Promise<TenantRecord[]> {
+    const age = listed ? Date.now() - listed.at : Number.POSITIVE_INFINITY
+    if (!listed || age > 30_000 || (fresh && age > 5_000)) {
+      const registry = getTenantRegistry()
+      const list = registry ? registry.listActive() : Promise.resolve([])
+      listed = { at: Date.now(), list }
+      // A failed read is not kept: the next flush asks again.
+      list.catch(() => {
+        if (listed?.list === list) listed = null
+      })
+    }
+    return listed.list
+  }
+
   // The flush starts from a request's onResponse (or the timer), so left alone it
   // borrowed a REQUEST-pool connection for its insert and prune. Under load those
   // writes waited in the same queue as the people they were logging (staging load
@@ -265,15 +282,6 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
     flushing = true
     const batches = [...buffers]
     buffers.clear()
-    // One registry list per flush at most (Cloud's listActive reads the meta database).
-    let listed: Promise<TenantRecord[]> | null = null
-    const activeList = () => {
-      if (!listed) {
-        const registry = getTenantRegistry()
-        listed = registry ? registry.listActive() : Promise.resolve([])
-      }
-      return listed
-    }
     try {
       for (const [key, rows] of batches) {
         if (rows.length === 0) continue
@@ -285,7 +293,7 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
         }
         // One app's failure (lookup, pool) never costs another app its rows.
         try {
-          const t = await appOf(key, activeList)
+          const t = await appOf(key)
           // An app that has left the deployment: its database is gone from here, drop its rows.
           if (!t) continue
           await withTenant(t, () => writeRows(rows), t.origin)
@@ -299,15 +307,14 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
   }
 
   /** The app behind a buffer key as the registry lists it now (byId, else the active list). */
-  async function appOf(
-    key: string,
-    activeList: () => Promise<TenantRecord[]>
-  ): Promise<TenantRecord | null> {
+  async function appOf(key: string): Promise<TenantRecord | null> {
     try {
       const registry = getTenantRegistry()
       if (!registry) return null
       const byId = registry.byId ? await registry.byId(key) : null
-      return byId ?? (await activeList()).find((t) => t.id === key) ?? null
+      if (byId) return byId
+      const hit = (await activeList()).find((t) => t.id === key)
+      return hit ?? (await activeList(true)).find((t) => t.id === key) ?? null
     } catch {
       return null
     }

@@ -306,7 +306,7 @@ interface EnvOverride {
 }
 
 const IGNORED_ENV_TIP =
-  'This server runs several apps, so it only applies test modes and the environment label. Set this value on this page instead.'
+  'This server runs several apps, so it only applies test modes and the environment label. Save this value in the app’s own Settings instead.'
 
 function InstanceOverridesSection() {
   const queryClient = useQueryClient()

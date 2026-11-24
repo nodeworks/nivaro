@@ -283,6 +283,8 @@ function traefikLabels(
         ...tls(p),
         [`traefik.http.routers.${p}.service`]: r
       })
+      // As the web pattern router: the wildcard name to ask the resolver for.
+      if (cfg.certResolver) out[`traefik.http.routers.${p}.tls.domains[0].main`] = pattern
     }
     return out
   }

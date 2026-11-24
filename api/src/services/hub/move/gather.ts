@@ -176,7 +176,8 @@ export function redisIdentity(url: string | null | undefined) {
   try {
     const u = new URL(url)
     const db = u.pathname.replace(/^\//, '') || '0'
-    const port = u.port || (u.protocol === 'rediss:' ? '6380' : '6379')
+    // Redis listens on 6379 with or without TLS unless told otherwise (redis:// and rediss://).
+    const port = u.port || '6379'
     return sha(`redis|${u.hostname.toLowerCase()}|${port}|${db}`)
   } catch {
     return null

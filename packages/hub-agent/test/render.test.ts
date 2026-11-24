@@ -704,6 +704,7 @@ describe('renderServices — shared deployment host pattern (phase 6)', () => {
     expect(t['traefik.http.routers.nvh_rtpat_sh.priority']).toBe('2')
     expect(t['traefik.http.routers.nvh_rtpat_sh.service']).toBe('nvh_rt_sh')
     expect(t['traefik.http.routers.nvh_rtpat_sh.tls']).toBe('true')
+    expect(t['traefik.http.routers.nvh_rtpat_sh.tls.domains[0].main']).toBe('*.apps.corp')
     expect(t['traefik.http.services.nvh_rt_sh.loadbalancer.sticky.cookie.name']).toBe('nvh_rt')
     for (const p of REALTIME_PATHS) expect(paths).toContain(p.split('/:')[0])
     // A pattern alone (no names yet): the pattern's live paths still reach realtime.

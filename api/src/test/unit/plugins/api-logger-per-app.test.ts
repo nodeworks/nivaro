@@ -182,7 +182,7 @@ describe('request log in Nivaro Cloud', () => {
   // no tenant are dropped.
   function useCloud(list: TenantRecord[]) {
     Object.assign(process.env, { CLOUD_META_DB_URL: 'postgres://meta/x' })
-    const listed = vi.fn(async () => list)
+    const listed = vi.fn(async () => [...list])
     setTenantRegistryForTests({
       source: 'cloud-meta',
       resolve: async () => null,
@@ -221,6 +221,28 @@ describe('request log in Nivaro Cloud', () => {
     await a.close()
     expect(inserted.filter((x) => x.row.query === 'app=A').map((x) => x.tenant)).toEqual(['A'])
     expect(inserted.filter((x) => x.row.query === 'app=B').every((x) => x.tenant === 'B')).toBe(true)
+  })
+
+  it('the meta list is kept 30 s across flushes; a new tenant is read again', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const list = [tenant('A')]
+      const listed = useCloud(list)
+      const a = await server()
+      await a.inject({ method: 'GET', url: '/api/items/things?app=A' })
+      for (let i = 0; i < 50; i++) await a.inject({ method: 'GET', url: '/api/items/things?app=A' })
+      await vi.waitFor(() => expect(inserted.length).toBeGreaterThanOrEqual(50))
+      expect(listed).toHaveBeenCalledTimes(1)
+      // A tenant created since: not on the cached list, read again once it is 5 s old.
+      list.push(tenant('B'))
+      vi.setSystemTime(Date.now() + 6_000)
+      await a.inject({ method: 'GET', url: '/api/items/things?app=B' })
+      await a.close()
+      expect(inserted.filter((x) => x.tenant === 'B')).toHaveLength(1)
+      expect(listed).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('a row with no tenant is dropped; a tenant no longer listed is dropped', async () => {
