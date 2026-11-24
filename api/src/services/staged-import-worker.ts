@@ -522,6 +522,11 @@ const processDriving = { count: 0 }
  *  slot of the process and starves the others (default 3 → 2 per app, 1 left for another). */
 const APP_SHARE = Math.max(1, MAX_PARALLEL - 1)
 
+/** Test seam: the runs (and reservations) this process counts across every app. */
+export function _processImportSlotsForTests(): number {
+  return processDriving.count
+}
+
 /** No room for another run. Self-hosted / cloud: this app's own MAX_PARALLEL, as before. Shared:
  *  the app's fair share (APP_SHARE) and the process-wide total (MAX_PARALLEL across every app). */
 function atCapacity(): boolean {
@@ -564,52 +569,63 @@ async function drainOnce(app: FastifyInstance): Promise<void> {
     const group = groupOf(row.import_key)
     if (busy.has(group) || blocked.has(group)) continue
 
-    let buffer: Buffer | null = null
-    if (row.file) {
-      try {
-        const stored = await getFile(String(row.file))
-        // A deleted file row: claim and report — no host will do better.
-        if (stored) buffer = await readFileBuffer(stored)
-      } catch {
-        // Can't read the bytes from THIS host — leave it for the worker that
-        // can, unless it has been unreadable for so long that no one can.
-        const age = Date.now() - new Date((row.created_at as string) ?? Date.now()).getTime()
-        if (age > UNREADABLE_GRACE_MS) {
-          await db('nivaro_import_queue').where('id', row.id).update({
-            status: 'error',
-            finished_at: new Date(),
-            updated_at: new Date(),
-            logs: 'No import worker could read the uploaded file within an hour — it was likely uploaded to a host whose worker is not running, or its storage was lost. Re-upload the file.'
-          })
-          await notifyCreator(
-            app,
-            row,
-            `${label(row)} import failed`,
-            'No import worker could read the uploaded file. Re-upload it from the Import Console.'
-          )
-        } else {
-          blocked.add(group)
-        }
-        // Keep scanning: a row of another group must not starve behind it.
-        continue
-      }
-    }
-
-    // Claim atomically: another worker process may be scanning the same queue.
-    const claimed = await db('nivaro_import_queue')
-      .where({ id: row.id, status: 'queued' })
-      .update({ status: 'running', started_at: new Date(), updated_at: new Date() })
-    if (Number(claimed) !== 1) continue
-    busy.add(group)
-    const id = String(row.id)
-    driving.add(id)
+    // Reserve this row's process slot now, before its first await: apps drain concurrently (the
+    // importer's per-app lanes, kicks), and a slot counted only after the file read and the
+    // claim lets several apps pass the check together. Given back on every path that does not
+    // hand the row to runOne (whose own finally releases it then). Per app, drainImportsTick is
+    // single-flight (`ticking`), so the per-app share needs no reservation.
     processDriving.count++
-    void withBackgroundWork('import', `${row.import_key ?? 'staged'} #${id}`, () =>
-      runOne(app, row, buffer)
-    ).finally(() => {
-      driving.delete(id)
-      processDriving.count--
-    })
+    let handedOff = false
+    try {
+      let buffer: Buffer | null = null
+      if (row.file) {
+        try {
+          const stored = await getFile(String(row.file))
+          // A deleted file row: claim and report — no host will do better.
+          if (stored) buffer = await readFileBuffer(stored)
+        } catch {
+          // Can't read the bytes from THIS host — leave it for the worker that
+          // can, unless it has been unreadable for so long that no one can.
+          const age = Date.now() - new Date((row.created_at as string) ?? Date.now()).getTime()
+          if (age > UNREADABLE_GRACE_MS) {
+            await db('nivaro_import_queue').where('id', row.id).update({
+              status: 'error',
+              finished_at: new Date(),
+              updated_at: new Date(),
+              logs: 'No import worker could read the uploaded file within an hour — it was likely uploaded to a host whose worker is not running, or its storage was lost. Re-upload the file.'
+            })
+            await notifyCreator(
+              app,
+              row,
+              `${label(row)} import failed`,
+              'No import worker could read the uploaded file. Re-upload it from the Import Console.'
+            )
+          } else {
+            blocked.add(group)
+          }
+          // Keep scanning: a row of another group must not starve behind it.
+          continue
+        }
+      }
+
+      // Claim atomically: another worker process may be scanning the same queue.
+      const claimed = await db('nivaro_import_queue')
+        .where({ id: row.id, status: 'queued' })
+        .update({ status: 'running', started_at: new Date(), updated_at: new Date() })
+      if (Number(claimed) !== 1) continue
+      busy.add(group)
+      const id = String(row.id)
+      driving.add(id)
+      handedOff = true
+      void withBackgroundWork('import', `${row.import_key ?? 'staged'} #${id}`, () =>
+        runOne(app, row, buffer)
+      ).finally(() => {
+        driving.delete(id)
+        processDriving.count--
+      })
+    } finally {
+      if (!handedOff) processDriving.count--
+    }
   }
 }
 

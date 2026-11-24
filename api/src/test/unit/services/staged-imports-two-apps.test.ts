@@ -13,7 +13,11 @@ const h = vi.hoisted(() => ({
   mems: {} as Record<string, MemoryDb>,
   defs: [] as string[],
   /** While set, every run waits on it before it reads its definition (it stays in flight). */
-  gate: null as Promise<void> | null
+  gate: null as Promise<void> | null,
+  /** While set, reading an uploaded file waits on it (the drain is mid-row, before its claim). */
+  fileGate: null as Promise<void> | null,
+  /** Set: the next claim update on the import queue throws. */
+  failClaim: false
 }))
 
 vi.mock('../../../db/index.js', async () => {
@@ -21,9 +25,30 @@ vi.mock('../../../db/index.js', async () => {
   const tc = await import('../../../db/tenant-context.js')
   h.mems = { A: makeMemoryDb(), B: makeMemoryDb(), N: makeMemoryDb(), '-': makeMemoryDb() }
   // The real `db` follows the tenant context; so does this one.
-  const db = (table: string) => h.mems[tc.getTenantId() || '-'](table)
+  const db = (table: string) => {
+    const b = h.mems[tc.getTenantId() || '-'](table) as unknown as Record<string, unknown>
+    if (table === 'nivaro_import_queue' && h.failClaim) {
+      const real = (b.update as (p: Record<string, unknown>) => Promise<number>).bind(b)
+      b.update = async (patch: Record<string, unknown>) => {
+        if (patch.status === 'running' && h.failClaim) {
+          h.failClaim = false
+          throw new Error('claim update failed')
+        }
+        return real(patch)
+      }
+    }
+    return b
+  }
   return { db }
 })
+vi.mock('../../../services/files.js', async (orig) => ({
+  ...(await orig<object>()),
+  getFile: vi.fn(async (id: string) => {
+    if (h.fileGate) await h.fileGate
+    return { id, filename_disk: id }
+  }),
+  readFileBuffer: vi.fn(async () => Buffer.from('a,b\n1,2\n'))
+}))
 vi.mock('../../../services/staged-imports.js', async (orig) => {
   const tc = await import('../../../db/tenant-context.js')
   return {
@@ -191,6 +216,8 @@ beforeEach(() => {
   for (const m of Object.values(h.mems)) m.reset()
   h.defs.length = 0
   h.gate = null
+  h.fileGate = null
+  h.failClaim = false
   delete process.env.CLOUD_META_DB_URL
   delete process.env.HUB_SHARED_DEPLOYMENT
   delete process.env.NIVARO_ROLE
@@ -414,6 +441,42 @@ describe('how many runs one process drives at once', () => {
     await new Promise((r) => setTimeout(r, 20))
     await inApp('N', () => worker.drainImportsTick(app))
     await vi.waitFor(() => expect(statuses('N')).toEqual(['running']))
+  })
+
+  it('shared: two apps draining at the same time never pass the process cap', async () => {
+    Object.assign(process.env, SHARED)
+    // each row has a file: the drain reserves its slot, then waits to read the file
+    for (const a of ['A', 'B'])
+      ['invoices', 'orders'].forEach((k, i) => {
+        h.mems[a].rows('nivaro_import_queue').push({ ...queued(i + 1, k), file: `f-${a}-${i}` })
+      })
+    let openFiles!: () => void
+    h.fileGate = new Promise<void>((r) => {
+      openFiles = r
+    })
+    const app = makeApp()
+    const a = inApp('A', () => worker.drainImportsTick(app))
+    const b = inApp('B', () => worker.drainImportsTick(app))
+    await new Promise((r) => setTimeout(r, 20))
+    openFiles()
+    h.fileGate = null
+    await Promise.all([a, b])
+    await new Promise((r) => setTimeout(r, 20))
+    const running = [...statuses('A'), ...statuses('B')].filter((x) => x === 'running')
+    expect(running).toHaveLength(3)
+    expect(worker._processImportSlotsForTests()).toBe(3)
+    open()
+    await vi.waitFor(() => expect(worker._processImportSlotsForTests()).toBe(0))
+  })
+
+  it('shared: a claim that throws gives its reserved slot back', async () => {
+    Object.assign(process.env, SHARED)
+    h.mems.A.rows('nivaro_import_queue').push(queued(1, 'invoices'))
+    h.failClaim = true
+    const app = makeApp()
+    await inApp('A', () => worker.drainImportsTick(app))
+    expect(statuses('A')).toEqual(['queued'])
+    expect(worker._processImportSlotsForTests()).toBe(0)
   })
 
   it('self-hosted: the one app drives 3 at once, as before', async () => {
