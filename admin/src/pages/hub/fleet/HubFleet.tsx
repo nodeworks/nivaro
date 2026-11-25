@@ -13,6 +13,8 @@ import {
 import { type ReactNode, useMemo, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
+import { envTone } from '@/components/hub-brand/env-tone'
+import { HubEnvTag } from '@/components/hub-brand/HubBits'
 import { Input } from '@/components/ui/input'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -431,7 +433,10 @@ function FleetTableRow({
         : 'text-red-700 dark:text-red-300'
   const neverProbed = r.uptime_24h == null && r.uptime_30d == null
   return (
-    <tr className='border-b border-slate-100 align-top last:border-b-0 hover:bg-slate-50 dark:border-border dark:hover:bg-muted'>
+    <tr
+      className='border-b border-slate-100 align-top last:border-b-0 hover:bg-slate-50 dark:border-border dark:hover:bg-muted'
+      data-env-tone={envTone(r.env_key)}
+    >
       <td className='px-3 py-2'>
         <button
           type='button'
@@ -447,6 +452,7 @@ function FleetTableRow({
             />
           </span>
         </button>
+        <HubEnvTag envKey={r.env_key} className='ml-1.5 align-[1px]' />
         {r.env_status !== 'active' && (
           <p className='m-0 text-[11px] text-slate-500 dark:text-muted-foreground'>
             {r.env_status}
@@ -469,7 +475,9 @@ function FleetTableRow({
         )}
       </td>
       <td className='px-3 py-2'>
-        <code className='font-mono text-slate-800 dark:text-foreground'>{r.version ?? '—'}</code>
+        <code className='hub-fact font-mono text-slate-800 dark:text-foreground'>
+          {r.version ?? '—'}
+        </code>
         {r.version_unverified && (
           <p
             className='m-0 whitespace-nowrap text-[11px] text-amber-800 dark:text-amber-300'

@@ -221,7 +221,7 @@ const tabClass = (active: boolean) =>
   cn(
     'relative flex items-center whitespace-nowrap px-3 text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan',
     active
-      ? 'text-white after:absolute after:inset-x-3 after:bottom-0 after:h-[2px] after:rounded-full after:bg-nvr-cyan'
+      ? 'text-white after:absolute after:inset-x-3 after:bottom-0 after:h-[2px] after:rounded-full after:bg-[var(--hub-op-on-chrome,var(--nvr-cyan))]'
       : 'text-[var(--hub-chrome-text)] hover:text-white'
   )
 
@@ -303,7 +303,7 @@ function MenuLink({
       className={cn(
         'flex min-h-10 items-center gap-2.5 rounded-md px-3 text-[14px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
         active
-          ? 'bg-white/[0.08] font-medium text-white shadow-[inset_2px_0_0_var(--nvr-cyan)]'
+          ? 'bg-white/[0.08] font-medium text-white shadow-[inset_2px_0_0_var(--hub-op-on-chrome,var(--nvr-cyan))]'
           : 'text-[var(--hub-chrome-text)] hover:bg-white/[0.05] hover:text-white'
       )}
     >

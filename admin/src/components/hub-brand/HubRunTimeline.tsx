@@ -61,6 +61,7 @@ export function HubRunTimeline({
   const on = useHubProductFlag()
   const box = useRef<HTMLDivElement>(null)
   const [more, setMore] = useState(false)
+  const [moreLeft, setMoreLeft] = useState(false)
   const at = focusStep(steps)
   // A track wider than its box (a phone): keep the current step in view, and fade the edge
   // that has more steps behind it.
@@ -70,7 +71,10 @@ export function HubRunTimeline({
     const node = el.querySelectorAll<HTMLElement>('[data-track-step]')[Math.max(0, at)]
     if (node && el.scrollWidth > el.clientWidth)
       el.scrollLeft = Math.max(0, node.offsetLeft - el.clientWidth / 2 + node.offsetWidth / 2)
-    const update = () => setMore(el.scrollLeft + el.clientWidth < el.scrollWidth - 4)
+    const update = () => {
+      setMore(el.scrollLeft + el.clientWidth < el.scrollWidth - 4)
+      setMoreLeft(el.scrollLeft > 4)
+    }
     update()
     el.addEventListener('scroll', update, { passive: true })
     return () => el.removeEventListener('scroll', update)
@@ -85,9 +89,10 @@ export function HubRunTimeline({
       ref={box}
       data-hub-run-timeline=''
       data-more={more ? '' : undefined}
+      data-more-left={moreLeft ? '' : undefined}
       role='img'
       aria-label={summary}
-      className='hub-track-scroll overflow-x-auto pb-1'
+      className='hub-track-scroll w-full min-w-0 max-w-full overflow-x-auto pb-1'
     >
       <ol aria-hidden className='m-0 flex min-w-max list-none items-start p-0'>
         {steps.map((s, i) => (

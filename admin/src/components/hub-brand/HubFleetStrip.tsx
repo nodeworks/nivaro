@@ -2,7 +2,7 @@ import { type DataTag, useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router'
 import { api } from '@/lib/api'
 import { useServerFeatures } from '@/lib/useServerFeatures'
-import { cn } from '@/lib/utils'
+import { cn, formatRelative } from '@/lib/utils'
 import { ENV_TONE_LABEL, envTone } from './env-tone'
 import { type HubHealth, HubStatusDot } from './HubBits'
 
@@ -134,7 +134,8 @@ export function HubFleetStrip() {
 function FleetDot({ entry }: { entry: FleetStripEntry }) {
   const health = healthOf(entry.state)
   const tone = envTone(entry.env_key)
-  const tip = `${entry.app_key} · ${entry.env_key} (${ENV_TONE_LABEL[tone].toLowerCase()}): ${HEALTH_WORDS[health]}${entry.version ? ` · ${entry.version}` : ''}`
+  const age = entry.checked_at ? ` · checked ${formatRelative(entry.checked_at)}` : ''
+  const tip = `${entry.app_key} · ${entry.env_key} (${ENV_TONE_LABEL[tone].toLowerCase()}): ${HEALTH_WORDS[health]}${entry.version ? ` · ${entry.version}` : ''}${age}`
   return (
     <Link
       to={`/hub?app=${entry.app_id}`}
@@ -142,7 +143,7 @@ function FleetDot({ entry }: { entry: FleetStripEntry }) {
       aria-label={tip}
       data-env-dot={tone}
       className={cn(
-        'group flex h-6 items-center gap-1 rounded px-1 hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
+        'group flex h-8 items-center gap-1 rounded px-1 sm:h-6 hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
       )}
     >
       <HubStatusDot health={health} size={9} />

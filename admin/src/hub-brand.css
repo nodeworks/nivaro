@@ -36,14 +36,14 @@
   --hub-env-production-ink: #a8400c;
   --hub-env-staging: #7c4ddb;
   --hub-env-staging-ink: #5b2fb3;
-  --hub-env-development: #0f9384;
-  --hub-env-development-ink: #0a6a60;
+  --hub-env-development: #0e7a8f;
+  --hub-env-development-ink: #0b5f70;
   --hub-env-other: #64748b;
   --hub-env-other-ink: #475569;
   /* The same tones on the (always dark) chrome. */
   --hub-env-production-ink-on-chrome: #ff9a5c;
   --hub-env-staging-ink-on-chrome: #bba5ff;
-  --hub-env-development-ink-on-chrome: #52d7c5;
+  --hub-env-development-ink-on-chrome: #5fd0e6;
   --hub-env-other-ink-on-chrome: #a7b4c6;
 
   /* Health. Warn is a yellow, not the accent amber; down is red AND a diamond (never only a
@@ -77,8 +77,8 @@
   --hub-env-production-ink: #ffa366;
   --hub-env-staging: #a98bff;
   --hub-env-staging-ink: #c3adff;
-  --hub-env-development: #2fc8b4;
-  --hub-env-development-ink: #6fdccd;
+  --hub-env-development: #38c4dc;
+  --hub-env-development-ink: #6fd6ea;
   --hub-env-other: #94a3b8;
   --hub-env-other-ink: #b6c2d2;
 
@@ -266,11 +266,14 @@
   box-shadow: none;
   color: #fff;
 }
+/* The live step: a neutral node with the accent ring (amber fill would read as "warn"). */
 [data-product='hub'] .hub-track-node[data-state='running'],
 [data-product='hub'] .hub-track-node[data-state='waiting'] {
-  background: var(--nvr-cyan);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--nvr-cyan) 28%, transparent);
-  color: var(--nvr-on-accent, #14110a);
+  background: hsl(var(--card));
+  box-shadow:
+    inset 0 0 0 2px var(--nvr-cyan),
+    0 0 0 3px color-mix(in srgb, var(--nvr-cyan) 24%, transparent);
+  color: hsl(var(--foreground));
 }
 [data-product='hub'] .hub-track-node[data-state='failed'] {
   background: var(--hub-down);
@@ -344,7 +347,28 @@
   --tw-ring-color: var(--nvr-cyan);
 }
 
-/* A run track wider than its box fades out on the side that has more steps. */
+/* A run track wider than its box fades out on the side(s) that have more steps. */
 [data-product='hub'] .hub-track-scroll[data-more] {
   mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent);
+}
+[data-product='hub'] .hub-track-scroll[data-more-left] {
+  mask-image: linear-gradient(to right, transparent, #000 36px);
+}
+[data-product='hub'] .hub-track-scroll[data-more][data-more-left] {
+  mask-image: linear-gradient(to right, transparent, #000 36px, #000 calc(100% - 36px), transparent);
+}
+
+/* The Apps hub's own tabs that are also top-bar sections (Fleet, Shared) are not repeated in
+   its tab strip: the top bar is the one place to reach them. */
+[data-product='hub'] #hub-tab-hub-fleet,
+[data-product='hub'] #hub-tab-hub-shared {
+  display: none;
+}
+
+/* Older Hub controls: their cyan focus ring and cyan text become AA on light surfaces. */
+[data-product='hub'] .focus-visible\:ring-nvr-cyan\/50:focus-visible {
+  --tw-ring-color: hsl(var(--ring));
+}
+[data-product='hub']:not(.dark) main .text-nvr-cyan {
+  color: var(--hub-accent-ink);
 }

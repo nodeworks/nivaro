@@ -312,7 +312,9 @@ export function operatorAccentTokens(color: string): Record<string, string> | nu
     '--hub-op-primary-fg': readableOn(color) === '#ffffff' ? '0 0% 100%' : '32 45% 6%',
     '--hub-op-ring-light': hexToHslTriplet(inkOnWhite(color, 3)) ?? primary,
     '--hub-op-ink-light': inkOnWhite(color, 4.5),
-    '--hub-op-ink-dark': color
+    '--hub-op-ink-dark': color,
+    // On the (always dark) chrome a dark operator colour would vanish: white there instead.
+    '--hub-op-on-chrome': contrast(color, '#0d1726') >= 3 ? color : '#ffffff'
   }
 }
 
@@ -321,5 +323,6 @@ export const OPERATOR_ACCENT_PROPS = [
   '--hub-op-primary-fg',
   '--hub-op-ring-light',
   '--hub-op-ink-light',
-  '--hub-op-ink-dark'
+  '--hub-op-ink-dark',
+  '--hub-op-on-chrome'
 ] as const
