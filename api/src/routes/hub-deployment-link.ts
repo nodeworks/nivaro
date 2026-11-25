@@ -4,6 +4,7 @@ import { getTenantDb, withTenant } from '../db/tenant-context.js'
 import { failedAuthLimiter } from '../lib/auth-fail-limiter.js'
 import { hubSharedConfig, tenantSource } from '../services/deployment-mode.js'
 import { seedFirstAdmin } from '../services/hub-link/first-admin.js'
+import { instanceKey } from '../services/instance-key.js'
 import { INSTANCE_ID } from '../services/instance-roster.js'
 import { poolCounters } from '../services/pool-attribution.js'
 import { bearerMatches } from '../services/render-peer.js'
@@ -164,6 +165,7 @@ export async function hubDeploymentLinkRoutes(app: FastifyInstance): Promise<voi
     const body: DeploymentStatus = {
       version: NIVARO_VERSION,
       instance: INSTANCE_ID,
+      instance_key: instanceKey(),
       registry: {
         count: st.count,
         loaded_at: st.loadedAt,

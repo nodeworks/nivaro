@@ -238,9 +238,21 @@ export async function hubLinkRoutes(app: FastifyInstance) {
   // once; other replicas within 15 s (the move waits 16 s, ruling R14). An operator's own freeze
   // is kept under the Hub's and put back when it lifts; {on:false, move_id} for another move's
   // freeze answers 409 MAINTENANCE_OTHER_MOVE. Every rollback must send move_id (boot maintenance).
+  // 0.3.215, a move to a shared deployment: {on: true, move_id, target_instance, keep_env_mail?}
+  // first carries this app's own per-instance settings row to the row keyed `target_instance`
+  // (the shared deployment's NIVARO_INSTANCE), and with keep_env_mail the mail settings it takes
+  // from its server environment into that row (services/move-carry.ts). Any failure answers 503
+  // (INSTANCE_ROW_NOT_CARRIED / ENV_MAIL_NOT_KEPT) before maintenance is set, so the move stops.
+  // Answers `instance_row` {result, keys, differed} and `env_mail` kept|none_needed (names only).
   app.post('/maintenance', async (req, reply) => {
     reply.header('Cache-Control', 'no-store')
-    const b = (req.body ?? {}) as { on?: unknown; message?: unknown; move_id?: unknown }
+    const b = (req.body ?? {}) as {
+      on?: unknown
+      message?: unknown
+      move_id?: unknown
+      keep_env_mail?: unknown
+      target_instance?: unknown
+    }
     if (typeof b.on !== 'boolean')
       return fail(reply, 400, 'BAD_MAINTENANCE', 'on must be true or false')
     if (b.message != null && (typeof b.message !== 'string' || b.message.length > 500))
@@ -248,6 +260,47 @@ export async function hubLinkRoutes(app: FastifyInstance) {
     const moveId = b.move_id == null ? null : positiveId(b.move_id)
     if (b.move_id != null && moveId == null)
       return fail(reply, 400, 'BAD_MOVE_ID', 'move_id must be a positive whole number')
+    const carry = await import('../services/move-carry.js')
+    if (b.target_instance != null && !carry.validTargetInstance(b.target_instance))
+      return fail(reply, 400, 'BAD_TARGET_INSTANCE', 'target_instance must be an instance name')
+    const extra: Record<string, unknown> = {}
+    if (b.on === true && moveId != null && carry.validTargetInstance(b.target_instance)) {
+      const target = b.target_instance
+      try {
+        const row = await carry.carryInstanceRow(target)
+        extra.instance_row = row
+        if (row.keys.length || row.differed.length)
+          app.log.info(
+            { move_id: moveId, result: row.result, keys: row.keys, differed: row.differed },
+            'hub link: per-instance settings carried for the move'
+          )
+      } catch {
+        return fail(
+          reply,
+          503,
+          'INSTANCE_ROW_NOT_CARRIED',
+          "This app's per-instance settings could not be copied for the new home"
+        )
+      }
+      if (b.keep_env_mail === true) {
+        try {
+          const kept = await carry.keepEnvMail(target)
+          extra.env_mail = kept.env_mail
+          if (kept.env_mail === 'kept')
+            app.log.info(
+              { move_id: moveId, fields: kept.fields },
+              'hub link: mail settings from the environment kept for the move'
+            )
+        } catch {
+          return fail(
+            reply,
+            503,
+            'ENV_MAIL_NOT_KEPT',
+            "The mail settings from this server's environment could not be saved for the new home"
+          )
+        }
+      }
+    }
     const { setHubMaintenance, HubMaintenanceMoveMismatch } = await import(
       '../services/security.js'
     )
@@ -267,7 +320,7 @@ export async function hubLinkRoutes(app: FastifyInstance) {
         )
       return fail(reply, 503, 'REDIS_UNAVAILABLE', 'Maintenance could not be stored (Redis)')
     }
-    return reply.send({ on: b.on })
+    return reply.send({ on: b.on, ...extra })
   })
 
   // Retire this app after a move away (Decision 10): {move_id} → 200 {retired: true}. Every

@@ -2073,10 +2073,10 @@
       "line": 25,
       "text": "return !!env.CLOUD_META_DB_URL",
       "form": "env-param",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T7",
-      "why": "platform-supplied HUDDLE_* media servers replace tenant settings: a tenant admin must not choose outbound hosts on a shared process",
+      "why": "platform-supplied HUDDLE_* media servers replace tenant settings in Nivaro Cloud only (isNivaroCloud); a Hub shared deployment uses each app's own saved servers (0.3.215), the API's own calls to them SSRF-guarded",
       "batch": "B"
     },
     {
@@ -2379,10 +2379,10 @@
       "line": 189,
       "text": "const cloud = isCloudMode()",
       "form": "helper-call",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T1",
-      "why": "outside-write watch scans the static DB from a cron with no tenant",
+      "why": "outside-write watch runs per app on a Hub shared deployment (0.3.215, cron fan-out); Nivaro Cloud still refuses (isNivaroCloud)",
       "batch": "B"
     },
     {
@@ -2391,10 +2391,10 @@
       "line": 848,
       "text": "if (isCloudMode() || !isMssql(db)) return null",
       "form": "helper-call",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T1",
-      "why": "outside-write watch scans the static DB from a cron with no tenant",
+      "why": "outside-write watch runs per app on a Hub shared deployment (0.3.215, cron fan-out); Nivaro Cloud still refuses (isNivaroCloud)",
       "batch": "B"
     },
     {

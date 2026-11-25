@@ -53,36 +53,39 @@ describe('move hub-link client: shared readiness (R2-M-9)', () => {
   })
 })
 
-// Hub phase 6 untested path 1: the failed rows' plain reasons cross both links (only known
-// reasons, only whole counts), so the move can say why a file was not copied.
-describe('pull status: failed rows per reason', () => {
-  const status = {
-    state: 'done',
-    total: 4,
-    copied: 1,
-    skipped: 0,
-    failed: 3,
-    missing: [],
-    bytes: 10,
-    error: null,
-    failed_ids: ['a', 'b', 'c'],
-    failed_reasons: {
-      source_read_failed: 2,
-      write_failed: 1,
-      bad_answer: 0,
-      made_up: 9,
-      incomplete: '4',
-      unreachable: 1.5
+// Hub gap watch (0.3.215): the move asks a source to carry its per-instance row (and its env mail)
+// only on the way into maintenance, and reads back what it carried (names only).
+describe('maintenance: carry for a move to shared', () => {
+  it('sends target_instance / keep_env_mail with on=true only, and returns the answer', async () => {
+    const bodies: unknown[] = []
+    let answer: Record<string, unknown> = { on: true }
+    const client = hubLinkClient('https://app.example.com', 't'.repeat(40), {
+      fetch: (async (_url: string, init: { body?: string }) => {
+        bodies.push(JSON.parse(String(init.body ?? '{}')))
+        return new Response(JSON.stringify(answer), {
+          status: 200,
+          headers: { 'content-type': 'application/json' }
+        })
+      }) as never
+    })
+    answer = {
+      on: true,
+      instance_row: { result: 'created', keys: ['huddle'], differed: [] },
+      env_mail: 'kept'
     }
-  }
-
-  it('hub link: known reasons with whole counts only', async () => {
-    const s = await clientAnswering(status).pullStatus('run-1')
-    expect(s.failed_reasons).toEqual({ source_read_failed: 2, write_failed: 1 })
-  })
-
-  it('an older app without the field reads as no reasons', async () => {
-    const { failed_reasons: _r, ...older } = status
-    expect((await clientAnswering(older).pullStatus('run-1')).failed_reasons).toEqual({})
+    expect(
+      await client.maintenance(true, 5, undefined, { targetInstance: 'pool-a', keepEnvMail: true })
+    ).toEqual({
+      instance_row: { result: 'created', keys: ['huddle'], differed: [] },
+      env_mail: 'kept'
+    })
+    answer = { on: true }
+    expect(await client.maintenance(true, 5)).toEqual({ instance_row: null, env_mail: null })
+    await client.maintenance(false, 5, undefined, { targetInstance: 'pool-a', keepEnvMail: true })
+    expect(bodies).toEqual([
+      { on: true, move_id: 5, target_instance: 'pool-a', keep_env_mail: true },
+      { on: true, move_id: 5 },
+      { on: false, move_id: 5 }
+    ])
   })
 })

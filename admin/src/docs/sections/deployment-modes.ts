@@ -137,7 +137,7 @@ export const deploymentModesDocs: DocSection = {
     {
       type: 'ul',
       items: [
-        'Huddle media servers come from the platform `HUDDLE_LIVEKIT_URL`, `HUDDLE_TURN_URLS` and `HUDDLE_STUN_URLS`; an app cannot set its own.',
+        'Huddle media servers: in Nivaro Cloud they come from the platform `HUDDLE_LIVEKIT_URL`, `HUDDLE_TURN_URLS` and `HUDDLE_STUN_URLS`. A shared deployment (0.3.215) is run by one operator for their own apps, so each app uses the servers it saved; what the deployment itself dials (the media server test and clean-up calls, Test TURN) goes through the SSRF guard, and `ws://` to the same computer is refused.',
         "There is no env push-relay key: `MOBILE_PUSH_RELAY_KEY` is ignored on a shared deployment. An app admin connects the app's own push relay in Settings → Mobile app, and phone push runs per app.",
         'The SSRF guard applies to URLs an app admin sets (webhooks, link preview, the flow webhook operation): pinned address, every redirect re-checked.',
         'Ending maintenance in one app does not end the operator deployment-wide freeze (see Per-app jobs and maintenance below).'
@@ -287,7 +287,6 @@ export const deploymentModesDocs: DocSection = {
       type: 'ul',
       items: [
         'The flow `exec-script` operation. Staged imports, row schedules, the Microsoft directory, the Teams bot, phone push, automatic mail retry and GitLab issue sync work per app on a shared deployment (each app saves its own directory registration, bot, push relay and GitLab connections and switch); they stay off in Nivaro Cloud.',
-        'The huddle relay (TURN) settings: off on a multi-tenant process, as in cloud.',
         'The self-hosted-only jobs above. Boot passes against a database run once per app when it becomes ready.'
       ]
     },

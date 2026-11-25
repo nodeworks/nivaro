@@ -67,8 +67,6 @@ const HUBSIGNIN_PUBLIC =
 const OFF_PERMCACHE =
   'the permission cache is off on any multi-tenant deployment (cache-config permission.enabled)'
 const OFF_EPOCH = 'the config epoch is off on any multi-tenant deployment (config-epoch.ts ENABLED)'
-const OFF_OUTSIDE_WRITE =
-  'the outside-write watch never runs on a multi-tenant deployment (isMultiTenant gates)'
 const OFF_CHANGEWARM =
   'change warms never run on a multi-tenant deployment (cache-warm-on-change.ts)'
 const OFF_DOCKER = 'Docker sources answer nothing on a multi-tenant deployment (docker-source.ts)'
@@ -745,18 +743,6 @@ const SHARED: Record<string, string> = {
   'services/ops-tasks.ts :: tasks': REGISTRY,
   'services/outbox.ts :: handlers': REGISTRY,
   'services/outside-write-system.ts :: COLUMN_TRACKED': FIXED,
-  'services/outside-write-watch.ts :: catalogCache': OFF_OUTSIDE_WRITE,
-  'services/outside-write-watch.ts :: countsLocal': OFF_OUTSIDE_WRITE,
-  'services/outside-write-watch.ts :: journalCursor': OFF_OUTSIDE_WRITE,
-  'services/outside-write-watch.ts :: lastMine': OFF_OUTSIDE_WRITE,
-  'services/outside-write-watch.ts :: lastReport': OFF_OUTSIDE_WRITE,
-  'services/outside-write-watch.ts :: lastTickAt': OFF_OUTSIDE_WRITE,
-  'services/outside-write-watch.ts :: recent': OFF_OUTSIDE_WRITE,
-  'services/outside-write-watch.ts :: seenRows': OFF_OUTSIDE_WRITE,
-  'services/outside-write-watch.ts :: settingsCache': OFF_OUTSIDE_WRITE,
-  'services/outside-write-watch.ts :: states': OFF_OUTSIDE_WRITE,
-  'services/outside-write-watch.ts :: statusLocal': OFF_OUTSIDE_WRITE,
-  'services/outside-write-watch.ts :: trackedCache': OFF_OUTSIDE_WRITE,
   'services/owner-change-live.ts :: deps': FN_SLOT,
   'services/owner-change-live.ts :: openRecordsLoader': FN_SLOT,
   'services/owner-change-live.ts :: wired': REGISTRY,

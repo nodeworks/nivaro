@@ -413,21 +413,10 @@ export const hubSharedDocs: DocSection = {
           'checklist item `callbacks_registered`'
         ],
         [
-          'Mail settings from the environment (`SMTP_*`)',
-          'An app uses its own saved mail settings.',
-          'warning `ENV_SMTP`'
-        ],
-        [
           'Session replays',
           'Not moved by a move.',
           'warnings `SESSION_REPLAYS`, `REPLAYS_NOT_MOVED`'
         ],
-        [
-          'Outside-write watch (the SQL Server change tracker)',
-          'Off on shared: it needs a deployment-wide watcher.',
-          '-'
-        ],
-        ['Huddle relay (TURN)', 'Off on shared, as in cloud.', 'warning `HUDDLE_TURN`'],
         [
           'Help-video renders queued before a restart',
           'They render again on the next publish.',
@@ -470,7 +459,11 @@ export const hubSharedDocs: DocSection = {
         "The Traffic Map, for the app's administrators: the map, its live frames, the inspector and the traffic section of the daily summary show only that app's requests, callers, partners, sockets and people, read from the app's own store and its own request log. The parts that read the process as a whole stay with the operator, as in Nivaro Cloud: minute history and baselines, the investigation and request-trace lenses, database, Redis, node and capacity panels, circuit breakers and timed actions. They answer 404 inside an app.",
         "Configuration changes reach every replica at once. A configuration write in an app (fields, relations, layouts, roles, rules, pipelines and the other configuration tables) is announced on the deployment's own Redis channel (`<REDIS_CHANNEL_PREFIX>nvr:app-config:<deployment key>`, the app id and the process only) as soon as it starts and again 2 seconds after the last write of the run; every other process of the deployment, realtime processes included, clears its caches for that app only (other apps keep theirs). A bust from Database → Caches is announced the same way. `CACHE_EPOCH=off` turns it off; without Redis the caches expire on their TTL. The database's own configuration number (`nivaro_cache_epochs`) stays off on a shared deployment.",
         "Heavy reads share the process fairly. The apps of one process share its heavy-read budget (`HEAVY_READ_CONCURRENCY`). One app holds at most `HEAVY_READ_PER_APP` slots (default half the budget, at least 1) and never more than its own pool size minus one, and a freed slot goes to the waiting app that holds the fewest. So one busy app cannot take every slot, and another app's first heavy read waits for at most one release.",
-        "Pool and socket figures. Each app's own pool is judged every 5 minutes (`app-pool-monitor`, the self-hosted pool-monitor rule) and an issue is raised in that app's issue log when it is under pressure; each app's own sockets and people are sampled into its Realtime console chart (`app-concurrency-sample`). The process's own figures (sockets and people across every app, the heavy-read budget in use, every app pool summed; counts only, no app named) are on the deployment link status, for the Hub operator."
+        "Pool and socket figures. Each app's own pool is judged every 5 minutes (`app-pool-monitor`, the self-hosted pool-monitor rule) and an issue is raised in that app's issue log when it is under pressure; each app's own sockets and people are sampled into its Realtime console chart (`app-concurrency-sample`). The process's own figures (sockets and people across every app, the heavy-read budget in use, every app pool summed; counts only, no app named) are on the deployment link status, for the Hub operator.",
+        'From 0.3.215 — the outside-write watch (the safety net that notices rows other systems wrote straight into the database). The process that runs scheduled jobs walks the SQL Server apps in turn, each in its own database with its own Realtime → Outside writes setting and counts; Postgres and MySQL apps are skipped as on a dedicated stack. One look of one app is held to about 4 seconds as a whole (collections, the tables that belong to open records and file lookups; each read waits at most 1 second on a lock) and carries on with what it did not read at its next look, and an app that leaves the deployment is no longer walked. Each app’s look reads the deployment-wide realtime journal and keeps only its own entries (there is no per-app index yet).',
+        'From 0.3.215 — huddle media servers. Each app uses the STUN, TURN and media server (LiveKit) it saved in Settings → Huddles, as on a dedicated stack; the TURN secret, TURN password and LiveKit secret are stored sealed with the app key. The platform variables `HUDDLE_LIVEKIT_URL`, `HUDDLE_TURN_URLS` and `HUDDLE_STUN_URLS` stay Nivaro Cloud only. What the deployment itself dials stays guarded: the media server test and the room clean-up calls go through the SSRF guard, and Test TURN resolves each address once, refuses a private or reserved one the operator has not allowed with `SSRF_ALLOW_HOSTS` (browsers still use it), and connects to exactly the address it checked. The every-5-minutes TURN probe stays off on shared; Server health shows the last manual test.',
+        "From 0.3.215 — per-instance settings (Settings → This instance: huddle media servers, the outside-write watch, the daily report, caches …). A shared deployment reads an app's row under the deployment's own instance name (`NIVARO_INSTANCE`). When a move from a dedicated stack puts the app in maintenance, the Hub passes that name and the app copies its OWN row to it (never another environment's row in the same database); a row already there keeps its values (only empty keys are filled, and the run log names the keys that differ). The app's own row is left as it was, so a rollback changes nothing. The plan says `INSTANCE_SETTINGS_CARRIED`, or `INSTANCE_SETTINGS_STAY` when a side is older or the move is from a shared deployment (then enter them again).",
+        "From 0.3.215 — mail from an app that sent with its server's `SMTP_*` / `MAIL_FROM` (or a mail test mode its environment forces, `MAIL_TEST_MODE` / `MAIL_TEST_RECIPIENT`). In the same maintenance call the app saves what it sends with into the carried instance row (only what nothing saved already holds; the password sealed with the app key; a forced test mode stays on with its recipient), never into the settings row other instances of the same database read. A failure stops the move before maintenance (503). The plan shows `ENV_SMTP_KEPT` instead of `ENV_SMTP` when both the app and the target run 0.3.215 or later, with a checklist item to confirm it in the run log; if the app does not confirm, the run log says `ENV_SMTP`. On shared an app with a saved relay signs in only with its own saved user and password, never the deployment's `SMTP_USER` / `SMTP_PASSWORD`; an app with nothing saved at all still uses the deployment's own `SMTP_*`."
       ]
     },
     {
@@ -898,7 +891,11 @@ export const hubMovesDocs: DocSection = {
         ],
         [
           '`DIRECTORY_ENV_CREDENTIALS`, `TEAMS_BOT_ENV_CREDENTIALS`, `PUSH_RELAY_ENV`, `SETTINGS_ENV_OVERRIDES`, `HUDDLE_TURN`, `ENV_SMTP`, `SESSION_REPLAYS`, `HELP_VIDEO_RENDERS`',
-          'Features a shared app does not have, or that behave differently (see Shared deployments). `DIRECTORY_SYNC`, `PHONE_PUSH`, `TEAMS_BOT` and `MAIL_RETRY` are reported only for a target before 0.3.212 or one the Hub cannot read.'
+          'Features a shared app does not have, or that behave differently (see Shared deployments). `DIRECTORY_SYNC`, `PHONE_PUSH`, `TEAMS_BOT` and `MAIL_RETRY` are reported only for a target before 0.3.212 or one the Hub cannot read; `HUDDLE_TURN` only for a target before 0.3.215; `ENV_SMTP` unless both the app and the target run 0.3.215 or later.'
+        ],
+        [
+          '`ENV_SMTP_KEPT`, `INSTANCE_SETTINGS_CARRIED`, `INSTANCE_SETTINGS_STAY`',
+          "The app's per-instance settings row is copied to the shared deployment's instance name when the move puts it in maintenance (or, `STAY`, not carried: enter them again), and its environment mail settings are kept in that row (the password sealed with the app key, a forced test mode kept on)."
         ]
       ]
     },
