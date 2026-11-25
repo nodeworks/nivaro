@@ -394,11 +394,6 @@ export const hubSharedDocs: DocSection = {
       rows: [
         ['GitLab issue sync', 'Off.', 'blocker `ISSUE_TRACKERS`'],
         [
-          'Flows with the `exec-script` operation',
-          'Needs a per-app sandbox.',
-          'blocker `EXEC_SCRIPT_FLOWS`'
-        ],
-        [
           'SQLite apps',
           'A shared deployment serves SQL Server, Postgres, MySQL and MariaDB.',
           'blocker `SQLITE`'
@@ -482,12 +477,13 @@ export const hubSharedDocs: DocSection = {
         'The daily retention pass (03:30, one job per app) and the boot passes (owner-group warm, integrity checks, cache warms, readiness warm, db-tuning sweep). They run once per app when it becomes ready. Retention status shows per app. Stale help-video import folders are swept once a day per process (deployment-wide, not per app).',
         'Microsoft directory lookups and sync. The app uses its own Microsoft app registration, saved in Settings → Microsoft directory (tenant id, client id, client secret; the secret is sealed with the app key). The server `GRAPH_*` and `OIDC_*` variables and the directory keys of `NIVARO_SETTINGS_OVERRIDES` are never used on shared.',
         "The Teams bot. The app uses only the bot saved in its own Settings. `TEAMS_BOT_*`, `MICROSOFT_APP_*`, the sign-in app fallback and the `teams_bot_*` override keys are ignored. `TEAMS_BOT=off` still disables the bot on the whole deployment, but `TEAMS_BOT=on` does not switch an app on: each app saves its own switch. Register each bot with that app's host as its messaging endpoint.",
-        "Phone push. An app admin connects the app's push relay in Settings → Mobile app. The server `MOBILE_PUSH_RELAY_KEY` is not used on shared. Phone sign-in was already per app."
+        "Phone push. An app admin connects the app's push relay in Settings → Mobile app. The server `MOBILE_PUSH_RELAY_KEY` is not used on shared. Phone sign-in was already per app.",
+        'From 0.3.215: flows with the `exec-script` operation. Each script step runs in a short-lived child process of its own (the permission model on: no files, no child processes; an empty environment; no network; the same sandbox as a dedicated app inside it), capped by `FLOW_SCRIPT_MEMORY_MB` (default 64), the step timeout (at most 30 s), `FLOW_SCRIPT_CONCURRENCY` steps at once per process (default 4) and `FLOW_SCRIPT_PER_APP` per app (default 2); a step that waits `FLOW_SCRIPT_MAX_WAIT_MS` (default 30 s) for a slot fails. A move to a deployment before 0.3.215 is still blocked (`EXEC_SCRIPT_FLOWS`); from 0.3.215 it is a warning naming these limits. See Flows → Script operations.'
       ]
     },
     {
       type: 'p',
-      text: 'Nivaro Cloud is unchanged: the Teams bot, phone push and mail retry stay off there, and push stays cloud-managed.'
+      text: 'Nivaro Cloud is unchanged: the Teams bot, phone push, mail retry and script steps stay off there, and push stays cloud-managed.'
     },
     {
       type: 'p',

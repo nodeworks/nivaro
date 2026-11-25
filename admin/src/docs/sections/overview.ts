@@ -264,7 +264,11 @@ export const userFlows: DocSection = {
           '⚙️ Stub',
           'Branch on a condition expression (not yet implemented — resolves forward).'
         ],
-        ['exec-script', '⚙️ Stub', 'Run arbitrary Node.js code (not yet implemented).'],
+        [
+          'exec-script',
+          '✅ Live',
+          'Run a short JavaScript body against the flow data (`data`, `log`): change `data` or return a new object. Sandboxed, no network; see Script operations below. Off in Nivaro Cloud.'
+        ],
         [
           'mail',
           '✅ Live',
@@ -287,6 +291,19 @@ export const userFlows: DocSection = {
       items: [
         '**Message** — the text written to the server log. Defaults to the operation name if left blank.',
         '**Level** — `info`, `warn`, `error`, or `debug`. Log output appears in the API process stdout (visible in `pnpm dev:api`).'
+      ]
+    },
+    { type: 'h3', id: 'flow-exec-script', text: 'Script operations (exec-script)' },
+    {
+      type: 'p',
+      text: 'Options: `code` (the body of a function of `data` and `log`) and `timeout_ms` (default 5000, at most 30000). Return an object to replace the data, or change `data` and return nothing; a returned promise is awaited. Data crosses as JSON (dates stay dates; functions drop out). `log.info/warn/error/debug` and `console` write to the server log. The script has the language built-ins only: no `process`, `require`, `import()`, timers, `fetch`, `eval` or `new Function`. Call partners with a Webhook or External API operation instead.'
+    },
+    {
+      type: 'ul',
+      items: [
+        '**Dedicated app** — the script runs in an isolated context inside the API process, stopped at its timeout.',
+        '**Hub shared deployment (0.3.215 or later)** — every step runs in a short-lived child process of its own: no file access, no child processes, an empty environment, no network, a lower CPU priority. Limits per deployment: `FLOW_SCRIPT_MEMORY_MB` (heap, default 64), the step timeout, 8 MB of output, 200 log lines, `FLOW_SCRIPT_CONCURRENCY` steps at once per process (default 4) and `FLOW_SCRIPT_PER_APP` per app (default 2). A step waits at most `FLOW_SCRIPT_MAX_WAIT_MS` (default 30 s) for a slot, then fails ("Too many script steps are running for this app"). Starting the process adds roughly 50–100 ms of CPU to each step.',
+        '**Nivaro Cloud** — refused: the step rejects with a message to use a Transform, Condition or Item operation.'
       ]
     },
     { type: 'h2', id: 'flow-silence', text: 'Flows that go quiet' },

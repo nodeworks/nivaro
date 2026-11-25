@@ -286,7 +286,7 @@ export const deploymentModesDocs: DocSection = {
     {
       type: 'ul',
       items: [
-        'GitLab issue sync and the flow `exec-script` operation. Staged imports, row schedules, the Microsoft directory, the Teams bot, phone push and automatic mail retry work per app on a shared deployment (each app saves its own directory registration, bot and push relay); they stay off in Nivaro Cloud.',
+        'GitLab issue sync. Staged imports, row schedules, the Microsoft directory, the Teams bot, phone push, automatic mail retry and (from 0.3.215) the flow `exec-script` operation, each step in a child process of its own, work per app on a shared deployment (each app saves its own directory registration, bot and push relay); they stay off in Nivaro Cloud.',
         'The huddle relay (TURN) settings: off on a multi-tenant process, as in cloud.',
         'Config epochs per tenant (`CACHE_EPOCH`): the metadata caches expire on their own TTL.',
         'The self-hosted-only jobs above. Boot passes against a database run once per app when it becomes ready.'
