@@ -222,7 +222,7 @@ describe('change calendar', () => {
     expect(within(panel).getByText('Promote acme · production to 0.3.215')).toBeTruthy()
     // Week view shows the open hours of the window, and its legend chip.
     fireEvent.click(within(calendar).getByRole('button', { name: 'week' }))
-    expect(await within(calendar).findAllByText(/^Open 7:00 AM–5:00 PM/)).not.toHaveLength(0)
+    expect(await within(calendar).findAllByText(/^Open 7 AM–5 PM/)).not.toHaveLength(0)
     expect(within(calendar).getByRole('button', { name: 'Deploy window' })).toBeTruthy()
   })
 
@@ -329,7 +329,7 @@ describe('pre-deploy checklist block', () => {
       'disabled',
       true
     )
-    expect(screen.getByText('Ticked by: Dee Bea')).toBeTruthy()
+    expect(screen.getByText('Only Dee Bea can tick this.')).toBeTruthy()
     fireEvent.change(screen.getByLabelText('Note for “Support told about the release”'), {
       target: { value: 'Posted in #support' }
     })

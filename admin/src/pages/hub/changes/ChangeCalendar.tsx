@@ -116,18 +116,27 @@ export function eventsOn(events: CalendarEvent[], day: Date): CalendarEvent[] {
   })
 }
 
-const time = (iso: string) =>
-  new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+/** 7 AM, 9:12 AM — minutes only when there are some (narrow week columns). */
+const time = (iso: string) => {
+  const d = new Date(iso)
+  return d.toLocaleTimeString([], {
+    hour: 'numeric',
+    ...(d.getMinutes() ? { minute: '2-digit' } : {})
+  })
+}
 
 function spanWords(e: CalendarEvent, day: Date): string {
   const s = Date.parse(e.start)
   const end = e.end ? Date.parse(e.end) : null
   const dayStart = day.getTime()
   const dayEnd = addDays(day, 1).getTime()
+  if (end == null) return time(e.start)
+  const fromStart = s <= dayStart
+  const toEnd = end >= dayEnd
+  if (fromStart && toEnd) return 'all day'
   const from = s < dayStart ? 'earlier' : time(e.start)
-  if (end == null) return from
-  const to = end > dayEnd ? 'later' : time(e.end as string)
-  return s < dayStart && end > dayEnd ? 'all day' : `${from}–${to}`
+  const to = end > dayEnd ? 'later' : end === dayEnd ? 'midnight' : time(e.end as string)
+  return `${from}–${to}`
 }
 
 function EventRow({ e, day, dense }: { e: CalendarEvent; day: Date; dense?: boolean }) {
@@ -136,40 +145,56 @@ function EventRow({ e, day, dense }: { e: CalendarEvent; day: Date; dense?: bool
   const tip = [`${KIND_WORDS[e.kind]} · ${STATUS_WORDS[e.status]}`, where || null, e.detail]
     .filter(Boolean)
     .join(' — ')
+  const title = (
+    <span
+      className={cn(
+        'min-w-0 text-[11.5px] leading-snug text-slate-700 [overflow-wrap:anywhere] dark:text-slate-200',
+        dense ? 'line-clamp-3' : 'flex-1',
+        e.status === 'cancelled' && 'line-through',
+        e.status === 'failed' && 'text-red-700 dark:text-red-300'
+      )}
+    >
+      {e.title}
+      {e.status === 'failed' && <span className='sr-only'> (failed)</span>}
+      {e.status === 'on' && (
+        <span className='ml-1 text-[10.5px] font-medium text-sky-700 dark:text-sky-300'>
+          on now
+        </span>
+      )}
+      {e.status === 'running' && (
+        <span className='ml-1 text-[10.5px] font-medium text-nvr-navy dark:text-nvr-cyan'>
+          running
+        </span>
+      )}
+    </span>
+  )
+  const when = (
+    <span className='shrink-0 pt-px text-[10.5px] tabular-nums text-slate-500 dark:text-slate-400'>
+      {spanWords(e, day)}
+    </span>
+  )
   return (
     <div
       data-tip={tip}
       className={cn(
         'flex items-start gap-1.5 rounded-md px-1.5 py-1',
-        (e.status === 'cancelled' || e.status === 'done') && 'opacity-70'
+        e.status === 'cancelled' && 'opacity-70'
       )}
     >
       <span className={cn('w-[3px] shrink-0 self-stretch rounded-full', meta.bar)} aria-hidden />
       <span className='sr-only'>{KIND_WORDS[e.kind]}: </span>
-      <span
-        className={cn(
-          'min-w-0 flex-1 text-[11.5px] leading-snug text-slate-700 [overflow-wrap:anywhere] dark:text-slate-200',
-          dense && 'line-clamp-2',
-          e.status === 'cancelled' && 'line-through',
-          e.status === 'failed' && 'text-red-700 dark:text-red-300'
-        )}
-      >
-        {e.title}
-        {e.status === 'failed' && <span className='sr-only'> (failed)</span>}
-        {e.status === 'on' && (
-          <span className='ml-1 text-[10.5px] font-medium text-sky-700 dark:text-sky-300'>
-            on now
-          </span>
-        )}
-        {e.status === 'running' && (
-          <span className='ml-1 text-[10.5px] font-medium text-nvr-navy dark:text-nvr-cyan'>
-            running
-          </span>
-        )}
-      </span>
-      <span className='shrink-0 pt-px text-[10.5px] tabular-nums text-slate-500 dark:text-slate-400'>
-        {spanWords(e, day)}
-      </span>
+      {dense ? (
+        // A narrow week column: the time above the title, never squeezed beside it.
+        <span className='flex min-w-0 flex-1 flex-col'>
+          {when}
+          {title}
+        </span>
+      ) : (
+        <>
+          {title}
+          {when}
+        </>
+      )}
     </div>
   )
 }
@@ -187,7 +212,12 @@ function DayHead({ day, compact }: { day: Date; compact?: boolean }) {
         undefined,
         compact ? { day: 'numeric' } : { weekday: 'short', month: 'short', day: 'numeric' }
       )}
-      {today && <span className='ml-1.5 text-[10px] font-medium uppercase'>today</span>}
+      {today &&
+        (compact ? (
+          <span className='sr-only'> (today)</span>
+        ) : (
+          <span className='ml-1.5 text-[10px] font-medium uppercase'>today</span>
+        ))}
     </div>
   )
 }

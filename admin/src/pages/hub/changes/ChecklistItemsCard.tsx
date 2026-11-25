@@ -257,7 +257,7 @@ function ItemForm({
 }
 
 function whoWords(i: ChecklistItem): string {
-  if (i.tick_by !== 'people') return TICK_BY_WORDS[i.tick_by]
+  if (i.tick_by !== 'people') return TICK_BY_WORDS[i.tick_by].toLowerCase()
   const named = (i.tick_people_names ?? []).filter(Boolean)
   return named.length ? named.join(', ') : `${i.tick_people.length} named people`
 }
@@ -335,7 +335,7 @@ export function ChecklistItemsCard({
                         <div className='text-[11px] text-slate-500 dark:text-muted-foreground'>
                           {envKey(i.environment_id)} ·{' '}
                           {i.actions.map((x) => ACTION_WORDS[x].toLowerCase()).join(', ')} · ticked
-                          by {whoWords(i).toLowerCase()}
+                          by {whoWords(i)}
                         </div>
                       </div>
                       {isAdmin && (

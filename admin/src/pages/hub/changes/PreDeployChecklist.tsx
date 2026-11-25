@@ -16,7 +16,6 @@ import {
   fetchChecklist,
   fetchRun,
   openChecklist,
-  TICK_BY_WORDS,
   tickItem
 } from './changes-api'
 
@@ -171,9 +170,10 @@ export function PreDeployChecklist({
 }
 
 function whoMay(e: ChecklistEntry): string {
-  if (e.tick_by !== 'people') return TICK_BY_WORDS[e.tick_by]
+  if (e.tick_by === 'admin') return 'Only a Hub administrator can tick this.'
+  if (e.tick_by === 'owner') return 'Only a Hub administrator or an app owner can tick this.'
   const names = e.tick_people.map((_, i) => e.tick_people_names[i] ?? 'a named person')
-  return names.join(', ')
+  return `Only ${names.join(', ')} can tick this.`
 }
 
 function ChecklistRow({
@@ -235,7 +235,7 @@ function ChecklistRow({
           />
         ) : (
           <p className='m-0 text-[11px] text-slate-500 dark:text-muted-foreground'>
-            Ticked by: {whoMay(entry)}
+            {whoMay(entry)}
           </p>
         )}
       </div>
