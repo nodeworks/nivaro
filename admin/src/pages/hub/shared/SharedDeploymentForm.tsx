@@ -394,7 +394,7 @@ export function SharedDeploymentForm({
       }}
     >
       <div>
-        <h2 className='m-0 text-[15px] font-semibold text-slate-900 dark:text-foreground'>
+        <h2 className='m-0 text-[18px] font-semibold tracking-[-0.015em] text-slate-900 dark:text-foreground'>
           {creating ? 'New shared deployment' : `Edit ${shared.name}`}
         </h2>
         <p className='m-0 mt-1 max-w-[72ch] text-[12px] text-slate-500 dark:text-muted-foreground'>

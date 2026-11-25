@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import { MonCombobox } from '@/components/filter-combobox'
 import { envTone } from '@/components/hub-brand/env-tone'
 import { HubEnvTag } from '@/components/hub-brand/HubBits'
+import { HubToolbar } from '@/components/hub-page'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { SimpleSelect } from '@/components/ui/simple-select'
@@ -60,19 +61,11 @@ export default function HubReleases() {
         : 60_000
   })
   return (
-    <section aria-labelledby='hub-releases-title' className='flex flex-1 min-h-0 flex-col'>
-      <header className='flex shrink-0 flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-4 py-2.5 dark:border-border dark:bg-card'>
-        <h2
-          id='hub-releases-title'
-          className='m-0 min-w-0 flex-1 truncate text-[13px] font-semibold text-slate-900 dark:text-foreground'
-        >
-          Releases
-        </h2>
-        <span className='text-[11px] text-slate-500 dark:text-muted-foreground'>
-          Times in {viewerTimeZone()}
-        </span>
-      </header>
-      <div className='flex-1 overflow-y-auto bg-slate-50 p-4 dark:bg-background'>
+    <section aria-label='Releases' className='flex flex-1 min-h-0 flex-col'>
+      <HubToolbar
+        description={`Release trains, scheduled promotions, freezes and automatic rollbacks. Times in ${viewerTimeZone()}.`}
+      />
+      <div className='flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
         {q.isPending ? (
           <Skeleton className='h-40 w-full' />
         ) : q.isError ? (
@@ -400,7 +393,6 @@ function TrainRow({ t, data, isAdmin }: { t: HubTrain; data: ReleasesOverview; i
         {t.steps.map((s, i) => (
           <li
             key={s.environment_id}
-            data-env-tone={envTone(s.key)}
             className={cn(
               'min-w-[150px] flex-1 rounded-md border px-2.5 py-1.5 text-[11px]',
               i === t.step_index && t.status === 'running'
@@ -412,6 +404,7 @@ function TrainRow({ t, data, isAdmin }: { t: HubTrain; data: ReleasesOverview; i
               <span className='font-mono font-medium text-slate-900 dark:text-foreground'>
                 {s.key}
               </span>
+              <HubEnvTag envKey={s.key} />
               <span className={cn('ml-auto font-medium', tone(s.status))}>
                 {TRAIN_STEP_WORDS[s.status]}
               </span>
@@ -664,11 +657,6 @@ function SchedulesCard({ data, isAdmin }: { data: ReleasesOverview; isAdmin: boo
                   runs as {s.created_by_name}
                 </span>
               )}
-              {(s.error || s.note) && (
-                <span className='basis-full text-[11px] text-slate-600 dark:text-slate-300'>
-                  {s.error ?? s.note}
-                </span>
-              )}
               {isAdmin && (s.status === 'scheduled' || s.status === 'waiting') && (
                 <button
                   type='button'
@@ -678,6 +666,11 @@ function SchedulesCard({ data, isAdmin }: { data: ReleasesOverview; isAdmin: boo
                 >
                   Cancel
                 </button>
+              )}
+              {(s.error || s.note) && (
+                <span className='basis-full text-[11px] text-slate-600 dark:text-slate-300'>
+                  {s.error ?? s.note}
+                </span>
               )}
             </li>
           ))}
@@ -1157,7 +1150,7 @@ function RollbackCard({ data, isAdmin }: { data: ReleasesOverview; isAdmin: bool
             if (!mine.length) return null
             return (
               <div key={a.id}>
-                <div className='bg-slate-50 px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:bg-muted/40 dark:text-muted-foreground'>
+                <div className='bg-slate-50 px-4 py-1.5 text-[11px] font-medium text-slate-600 dark:bg-muted/40 dark:text-muted-foreground'>
                   {a.key}
                 </div>
                 <div className='divide-y divide-slate-100 dark:divide-border'>
