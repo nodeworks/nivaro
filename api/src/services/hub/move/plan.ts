@@ -9,6 +9,7 @@ import { MIN_SHARED_POOL_MAX } from '../drivers.js'
 import { holderOf, lockHolderRefusal, sharedHolderOf, sharedLockRefusal } from '../promote-lock.js'
 import { compareVersions } from '../promote-plan.js'
 import { runsSharedHubSignin, SHARED_HUB_SIGNIN_SINCE } from '../shared/hub-signin-floor.js'
+import { sqliteSharedRefusal, sqliteStorageRefusal } from '../shared/sqlite-apps.js'
 import { routeActions } from './route-actions.js'
 import { runsStorageCopy } from './storage-floor.js'
 import type {
@@ -82,6 +83,130 @@ export const MOVE_STEPS: Record<MoveKind, MoveStepKey[]> = {
     'retire_source',
     'done'
   ]
+}
+
+/**
+ * Hub gap sqlite: the steps of a SQLite app's move (automatic routing only). The database file is
+ * copied once the source is frozen and idle (`db_copy`), so there is no warm copy: the target has
+ * no rows to read until then, and the files are copied in full after it. A shared target is
+ * placed first (it lists the app in maintenance, so its deployment link serves it); a Docker
+ * target is deployed first (it boots in maintenance and installs the copy at a restart).
+ */
+export const SQLITE_MOVE_STEPS: Record<MoveKind, MoveStepKey[]> = {
+  to_shared: [
+    'check',
+    'place_on_target',
+    'maintenance_on',
+    'wait_idle',
+    'db_copy',
+    'files_full',
+    'target_ready',
+    'route',
+    'verify',
+    'release',
+    'retire_source',
+    'done'
+  ],
+  to_dedicated: [
+    'check',
+    'maintenance_on',
+    'wait_idle',
+    'deploy_target',
+    'db_copy',
+    'target_ready',
+    'files_full',
+    'route',
+    'verify',
+    'release',
+    'retire_source',
+    'done'
+  ],
+  between_shared: [
+    'check',
+    'place_on_target',
+    'maintenance_on',
+    'wait_idle',
+    'db_copy',
+    'files_full',
+    'target_ready',
+    'route',
+    'verify',
+    'release',
+    'retire_source',
+    'done'
+  ]
+}
+
+/** Is the app's database a SQLite file (its record, or the dedicated source's own report)? */
+export function sqliteMove(input: MovePlanInput): boolean {
+  if (input.database?.sqlite) return true
+  return input.from.kind !== 'shared' && input.source.readiness.some((r) => r.code === 'SQLITE')
+}
+
+/**
+ * Why this SQLite app cannot move this way (hub gap sqlite), or null. Automatic routing only (a
+ * manual route verifies the target serving before the source freezes, which an empty copy cannot);
+ * onto a Docker shared deployment of size small at 0.3.215+, or a Docker stack of size small;
+ * never onto a GitLab placement (its deploy cannot receive the file).
+ */
+export function sqliteMoveRefusal(
+  input: MovePlanInput,
+  routing: 'automatic' | 'manual'
+): { code: MoveBlockerCode; text: string } | null {
+  if (!sqliteMove(input)) return null
+  // L5: a dedicated source that runs on SQLite but whose environment names a server database
+  // record: the tenant list would name that server database, never the copied file.
+  if (input.database && !input.database.sqlite)
+    return {
+      code: 'SQLITE_MOVE',
+      text: 'This app runs on SQLite, but its environment names a server database record. Detach that record first (the move gives the app a SQLite record of its own).'
+    }
+  if (routing === 'manual')
+    return {
+      code: 'SQLITE_MOVE',
+      text: "This app's database is a SQLite file, copied while the app is in maintenance: it moves only where the Hub routes the names itself (a manual route would have the new home answer before its database is there)."
+    }
+  const to = input.to
+  if (to.kind === 'gitlab')
+    return {
+      code: 'SQLITE_MOVE',
+      text: "This app's database is a SQLite file: it moves onto a Docker stack or a Docker shared deployment, not onto a GitLab-deployed placement."
+    }
+  if (to.kind === 'shared') {
+    const no = sqliteSharedRefusal(to.shared, {
+      version: input.target_facts.version ?? to.shared.version_pin
+    })
+    if (no)
+      return {
+        code: no.code,
+        text: `${no.message} A SQLite app moves only onto a Docker shared deployment of size small running 0.3.215 or later.`
+      }
+  }
+  if (to.kind === 'docker') {
+    const size = input.target_facts.stack_size
+    if (size && size !== 'small')
+      return {
+        code: 'SQLITE_ONE_PROCESS',
+        text: `The target stack is size ${size}; a SQLite database allows one writer process, so its stack must be size small.`
+      }
+  }
+  // M5 / H2: the file's volume must be local to one node (never NFS, never several nodes).
+  if (to.kind === 'shared' || to.kind === 'docker') {
+    const t = input.target_facts
+    const no = sqliteStorageRefusal(
+      to.kind === 'shared' ? to.shared.key : to.stack,
+      t.multi_node_unread
+        ? null
+        : {
+            uploads_network: t.uploads_network,
+            volume_driver: t.volume_driver,
+            multi_node: t.multi_node,
+            nodes_unknown: t.nodes_unknown === true
+          }
+    )
+    if (no) return { code: no.code, text: no.message }
+  }
+  return null
 }
 
 const MANUAL_TAIL: MoveStepKey[] = [
@@ -209,6 +334,11 @@ function blockersOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Bloc
   // The placement and what holds it.
   if (from.kind === 'shared' && to.kind === 'shared' && from.shared.id === to.shared.id)
     add('SAME_PLACEMENT', `This environment already runs on ${sideName(to)}.`)
+  // Hub gap sqlite (0.3.215): a SQLite app's file is copied by the db_copy step, only where
+  // that can work (sqliteMoveRefusal).
+  const sqlite = sqliteMove(input)
+  const sqliteNo = sqliteMoveRefusal(input, routing)
+  if (sqliteNo) add(sqliteNo.code, sqliteNo.text)
   if (input.locks.env !== null || input.locks.open_move)
     add('BUSY', busyText(input.locks.env, input.locks.open_move))
   for (const l of input.locks.shared) {
@@ -377,13 +507,13 @@ function blockersOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Bloc
         'EXTENSION_VERSION_DIFFERS',
         `${target.key} installs another build of ${list(differ)} than this app runs now.`
       )
-    // The database the tenant list will name.
-    if (!input.database)
+    // The database the tenant list will name (a SQLite app gets its record when it is placed).
+    if (!input.database && !sqlite)
       add(
         'NO_DATABASE_RECORD',
         "This environment names no Hub database record. A shared deployment learns each app's database from the Hub: on the Databases tab, adopt the app's database if it is not listed, open it and use Attach to environment."
       )
-    else if (!input.database.ready)
+    else if (input.database && !input.database.ready)
       add('NO_DATABASE_RECORD', "This environment's Hub database record is not ready.")
     // Sign-in (Decision 13). From SHARED_HUB_SIGNIN_SINCE a shared deployment signs each app in
     // through the Hub with the app's own client (from the tenant list); only an app in `hub` mode
@@ -424,12 +554,13 @@ function blockersOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Bloc
     }
     // The same database, seen from the target (ruling R2; T9 carry on colliding identities).
     // A ready record the target was never asked about is not a pass (R2, P6-15).
-    if (!t.db && t.reachable && input.database?.ready)
+    // A SQLite app gets a COPY of its database (db_copy): there is no shared database to prove.
+    if (!sqlite && !t.db && t.reachable && input.database?.ready)
       add(
         'DB_UNREACHABLE_FROM_TARGET',
         `The Hub did not get ${target.key} to check this app's database, so it cannot tell that the deployment reaches it.`
       )
-    if (t.db) {
+    if (t.db && !sqlite) {
       if (!t.db.reachable)
         add(
           'DB_UNREACHABLE_FROM_TARGET',
@@ -448,7 +579,7 @@ function blockersOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Bloc
           `${target.key} reaches another database (another server or name) than the one the app serves now. Check the database record.`
         )
     }
-    if (t.identity_shared_with.length)
+    if (t.identity_shared_with.length && !sqlite)
       add(
         'DB_IDENTITY_SHARED',
         `On ${target.key}, ${list(t.identity_shared_with)} report${t.identity_shared_with.length === 1 ? 's' : ''} the same database identity as this app, so the Hub cannot prove which database each one reaches. Give the databases distinct servers or names first.`
@@ -458,7 +589,7 @@ function blockersOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Bloc
   // What shared would lose (Task 9): every blocker code is a blocker, whatever level it was sent
   // with (an unreadable check is sent as its blocker).
   if (kind === 'to_shared')
-    for (const r of readinessFor(input))
+    for (const r of readinessFor(input, routing))
       if (isReadinessBlocker(r.code, input))
         add(r.code, `${readinessTitle(r.code, input)}: ${clean(r.detail)}`)
 
@@ -579,8 +710,15 @@ export function keepsEnvMail(input: MovePlanInput): boolean {
 }
 
 /** The source's readiness codes the target's version makes real (ruling: target version). */
-function readinessFor(input: MovePlanInput): SharedReadinessItem[] {
+function readinessFor(
+  input: MovePlanInput,
+  routing: 'automatic' | 'manual'
+): SharedReadinessItem[] {
   let list = input.source.readiness
+  // Hub gap sqlite: a SQLite app whose file this move copies no longer reports SQLITE; one this
+  // move cannot copy keeps it beside sqliteMoveRefusal's own code.
+  if (sqliteMove(input) && !sqliteMoveRefusal(input, routing))
+    list = list.filter((r) => r.code !== 'SQLITE')
   if (targetRunsSharedFeatures(input.target_facts.version))
     list = list.filter((r) => !PER_APP_SINCE_SHARED_FEATURES.includes(r.code))
   if (runsAtLeast(input.target_facts.version, HUDDLE_MAIL_SINCE))
@@ -602,7 +740,7 @@ const READINESS_TITLES: Record<string, string> = {
   ROW_SCHEDULES: 'Schedules kept in table rows do not run on a shared deployment before 0.3.212',
   ISSUE_TRACKERS: 'Issue tracker sync does not run on a shared deployment before 0.3.215',
   EXEC_SCRIPT_FLOWS: 'Flows that run scripts do not run on a shared deployment before 0.3.215',
-  SQLITE: 'A SQLite database cannot be served by a shared deployment',
+  SQLITE: 'The app runs on SQLite',
   ENV_OBJECT_STORAGE: 'Files in object storage set by environment variables are not copied',
   DIRECTORY_SYNC: 'Directory sync is off on a shared deployment before 0.3.212',
   PHONE_PUSH: 'Phone push is off on a shared deployment before 0.3.212',
@@ -703,6 +841,11 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
       'MULTI_NODE_VOLUMES',
       `The target swarm has ${t.multi_node} nodes and its volumes are local (one copy per node): files copied in can be missing on another node.`
     )
+  if (sqliteMove(input))
+    add(
+      'SQLITE_COPY',
+      "This app's database is a SQLite file: it is copied while the app is in maintenance (the old home frozen, its checksum checked, the copy checked read-only at the new home before it serves). The old home keeps its file until it is retired."
+    )
   if (routing === 'manual')
     add(
       'MANUAL_ROUTE',
@@ -731,7 +874,7 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
       'The old GitLab-deployed app is retired (it answers "moved"), not stopped. Stop its stack afterwards; it is on the checklist.'
     )
   if (kind === 'to_shared')
-    for (const r of readinessFor(input))
+    for (const r of readinessFor(input, routing))
       if (!isReadinessBlocker(r.code, input))
         add(r.code, `${readinessTitle(r.code, input)}: ${clean(r.detail)}`)
   if (carriesInstanceRow(input))
@@ -902,6 +1045,7 @@ function planHash(
 ): string {
   const body = {
     kind: input.kind,
+    ...(sqliteMove(input) ? { sqlite: true } : {}),
     env: input.env.id,
     from: sideId(input.from),
     to: sideId(input.to),
@@ -927,13 +1071,19 @@ function normalNames(names: string[]): string[] {
 export function buildMovePlan(raw: MovePlanInput): MovePlan {
   const input: MovePlanInput = { ...raw, names: normalNames(raw.names) }
   const r = routeActions(input.from, input.to, input.names)
-  const steps = [...(r.routing === 'manual' ? MANUAL_MOVE_STEPS : MOVE_STEPS)[input.kind]]
+  const sqlite = sqliteMove(input)
+  const steps = [
+    ...(sqlite ? SQLITE_MOVE_STEPS : r.routing === 'manual' ? MANUAL_MOVE_STEPS : MOVE_STEPS)[
+      input.kind
+    ]
+  ]
   const version = input.source.version ?? input.env.version_pin ?? ''
   const blockers = blockersOf(input, r.routing)
   const warnings = warningsOf(input, r.routing)
   const files = input.source.files
   return {
     kind: input.kind,
+    ...(sqlite ? { sqlite: true as const } : {}),
     routing: r.routing,
     steps,
     route: r.actions,

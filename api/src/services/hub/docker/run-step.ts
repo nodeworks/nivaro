@@ -26,7 +26,7 @@ import {
   StackRenderError,
   stackHostnames
 } from './render-spec.js'
-import { type DatabaseRecordEnv, databaseRecordId } from './stack-env.js'
+import { type DatabaseRecordEnv, databaseRecordId, sqliteStackFile } from './stack-env.js'
 import { publishPortProblem, strictPinMap } from './stack-gather.js'
 import {
   missingSettings,
@@ -139,12 +139,12 @@ export interface DockerOpsDeps {
 
 /** Opens a database record for the run; its errors become PromotionErrors with their code. */
 async function openDatabaseRecord(id: number): Promise<DatabaseRecordEnv> {
-  const [{ openDatabaseConnection }, { connectionUrl }] = await Promise.all([
-    import('../db/databases.js'),
-    import('../db/connection.js')
-  ])
-  const conn = await openDatabaseConnection(id)
-  return { client: conn.engine, url: connectionUrl(conn) }
+  const { openDatabaseWire } = await import('../db/databases.js')
+  const w = await openDatabaseWire(id)
+  // Hub gap sqlite: a SQLite record names its file; the stack keeps it in the app's own folder
+  // (prepareStackSpec places it).
+  if (w.client === 'sqlite') return { client: 'sqlite', url: '', file: w.connection }
+  return { client: w.client, url: w.connection }
 }
 
 const realSleep = (ms: number) =>
@@ -324,6 +324,21 @@ export async function prepareStackSpec(
         `${env.key}'s database (record ${dbId}) cannot be used: ${(err as Error)?.message ?? 'unknown error'}`,
         409
       )
+    }
+  }
+  // Hub gap sqlite: a SQLite record's file goes in the app's own folder of the uploads volume,
+  // and SQLite allows one writer process: the stack is size small.
+  if (database?.client === 'sqlite') {
+    if (row.size !== 'small')
+      throw new PromotionError(
+        'SQLITE_ONE_PROCESS',
+        `${env.key}'s database is a SQLite file, which one process writes: its stack must be size small.`,
+        409
+      )
+    const { tenantIdFor } = await import('../shared/store.js')
+    database = {
+      ...database,
+      file: sqliteStackFile(tenantIdFor(app, env), database.file ?? 'app.sqlite')
     }
   }
   const missing = missingSettings(row, secrets, { databaseRecord: database !== null })

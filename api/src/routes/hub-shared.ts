@@ -33,7 +33,11 @@ import {
 } from '../services/hub/shared/deployment-client.js'
 import { PlaceSharedError, placeOnShared } from '../services/hub/shared/place.js'
 import { liveSightings, type Sighting } from '../services/hub/shared/sightings.js'
-import { checkSharedSecretsInput } from '../services/hub/shared/stack-render.js'
+import { sqliteAppsAmong, sqliteSharedRefusal } from '../services/hub/shared/sqlite-apps.js'
+import {
+  checkSharedSecretsInput,
+  sharedStackSettings
+} from '../services/hub/shared/stack-render.js'
 import {
   createShared,
   deleteShared,
@@ -588,8 +592,24 @@ export function hubSharedRoutes(app: FastifyInstance): void {
     const patchShared = async (
       checked: Extract<ReturnType<typeof validateSharedInput>, { ok: true }>,
       dropped: string[],
-      current: SharedDeployment = existing
+      current: SharedDeployment,
+      growsPastSmall: boolean
     ) => {
+      // 0.3.215: a deployment that serves a SQLite app stays one process (sqlite-apps.ts).
+      if (growsPastSmall) {
+        const lite = await sqliteAppsAmong(await tenantsOf(current))
+        if (lite.length) {
+          const size = sharedStackSettings({ settings: checked.row.settings }).size
+          const no = sqliteSharedRefusal(current, { size })
+          if (no)
+            return refuse(
+              reply,
+              409,
+              no.code,
+              `${lite.slice(0, 5).join(', ')}${lite.length > 5 ? ', …' : ''} ${lite.length === 1 ? 'uses' : 'use'} a SQLite database: ${no.message} Keep the deployment at size small, or move ${lite.length === 1 ? 'that app' : 'those apps'} off it first.`
+            )
+        }
+      }
       if (dropped.length) {
         const users = (await tenantsOf(current))
           .map((r) => ({ r, uses: r.app.extensions.filter((x) => dropped.includes(x)) }))
@@ -646,8 +666,11 @@ export function hubSharedRoutes(app: FastifyInstance): void {
       // Re-review FW1-M-3: dropping an extension is judged and written under the deployment's
       // lock (holder `place`), which a placement holds while it writes and re-checks its app's
       // extensions — so a place at the same moment never passes the check. Other edits take no
-      // lock, as before.
-      if (!dropped.length) return patchShared(checked, dropped)
+      // lock, as before. A size past small is judged under the same lock (0.3.215: a placement of
+      // a SQLite app holds it too).
+      const nextSize = sharedStackSettings({ settings: checked.row.settings }).size
+      const growsPastSmall = b.settings !== undefined && nextSize !== 'small'
+      if (!dropped.length && !growsPastSmall) return patchShared(checked, dropped, existing, false)
       const lock = defaultSharedLock()
       const token = await lock.take(id, 'place')
       if (!token) {
@@ -658,7 +681,7 @@ export function hubSharedRoutes(app: FastifyInstance): void {
         const fresh = await getShared(id)
         if (!fresh) return notFound(reply)
         if (fresh.status === 'retired') return retired(reply)
-        return await patchShared(checked, dropped, fresh)
+        return await patchShared(checked, dropped, fresh, growsPastSmall)
       } finally {
         await lock.release(id, token)
       }

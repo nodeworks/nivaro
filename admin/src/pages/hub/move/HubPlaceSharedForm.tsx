@@ -75,7 +75,10 @@ export function HubPlaceSharedForm({
     .map((d) => ({
       value: String(d.id),
       label: d.database_name,
-      hint: [d.server_name ?? d.host, d.engine].filter(Boolean).join(' · ')
+      hint:
+        d.engine === 'sqlite'
+          ? 'SQLite file · a shared deployment of size small only'
+          : [d.server_name ?? d.host, d.engine].filter(Boolean).join(' · ')
     }))
 
   const place = useMutation({

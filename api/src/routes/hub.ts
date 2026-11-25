@@ -71,6 +71,7 @@ import { GitlabWriteError } from '../services/hub/gitlab-write.js'
 import { hubTokenColumns, linkTokenInUse } from '../services/hub/link-token.js'
 import { hubModeEnabled } from '../services/hub/mode.js'
 import { moveOpenRefusal } from '../services/hub/move-open.js'
+import { ownerGuardOnRoute } from '../services/hub/owner-access.js'
 import {
   gatherPlanInput,
   PromotionError,
@@ -104,6 +105,7 @@ import { hubPhase3Routes } from './hub-create.js'
 import { hubDataRoutes } from './hub-data.js'
 import { hubDockerRoutes } from './hub-docker.js'
 import { hubMoveRoutes } from './hub-move.js'
+import { hubPeopleRoutes } from './hub-people.js'
 import { hubReleaseRoutes } from './hub-releases.js'
 import { hubSharedRoutes } from './hub-shared.js'
 import { hubSharedTenantsRoutes } from './hub-shared-tenants.js'
@@ -120,6 +122,8 @@ import { hubSharedUpgradeRoutes } from './hub-shared-upgrade.js'
  */
 export async function hubRoutes(app: FastifyInstance) {
   if (!hubModeEnabled()) return
+  // Owners: deploy-class actions on non-production only (services/hub/owner-access.ts).
+  app.addHook('onRoute', ownerGuardOnRoute)
   // Once per process start: promotions a previous process left `running` become `interrupted`.
   app.addHook('onReady', async () => recoverOnceAtBoot(app.log))
   // Phase 6: placement runs a previous process left running (services/hub/shared/place.ts).
@@ -139,6 +143,7 @@ export async function hubRoutes(app: FastifyInstance) {
   app.register(hubSharedTenantsRoutes) // phase 6: GET /shared/:key/tenants (deployment bearer)
   hubSharedUpgradeRoutes(app) // phase 6: shared stack deploy/upgrade/rollback (Task 5)
   hubMoveRoutes(app) // phase 6: moves between shared and dedicated placements (+ boot heal)
+  hubPeopleRoutes(app) // people directory + offboarding, owner policy, phone (hub-people.ts)
   hubCapacityRoutes(app) // capacity view, move advisor, per-app limits, rebalance
   hubReleaseRoutes(app) // release trains, schedules, freezes, auto-rollback, release notes
   hubDataRoutes(app) // data care: backups, restore drills, refreshes, move rehearsals

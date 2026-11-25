@@ -572,6 +572,36 @@ describe('Task 14: the role split is a normal shared upgrade', () => {
       plan: JSON.stringify(plan)
     })
 
+  it('hub gap sqlite: a SQLite app keeps the deployment one process at 0.3.215 or later', async () => {
+    const lite = async (sharedId: number) => {
+      const { envIds } = await newApp(sharedId, [{ key: 'production', placed: true }])
+      const rec = await insertId('nivaro_hub_databases', {
+        engine: 'sqlite',
+        host: '',
+        database_name: 'app.sqlite',
+        status: 'ready',
+        created_by_hub: true
+      })
+      await db('nivaro_hub_environments')
+        .where({ id: envIds[0] })
+        .update({ db_ref: `hub-db:${rec}` })
+    }
+    const medium = await newShared({ settings: JSON.stringify({ size: 'medium' }) })
+    await lite(medium)
+    const split = await Plan.planSharedUpgrade(medium, '0.3.215', 'upgrade', planDeps())
+    expect(codes(split.blockers)).toContain('SQLITE_ONE_PROCESS')
+    const small = await newShared({
+      settings: JSON.stringify({ size: 'small' }),
+      version_pin: '0.3.215'
+    })
+    await lite(small)
+    const back = await Plan.planSharedUpgrade(small, '0.3.214', 'rollback', planDeps())
+    expect(codes(back.blockers)).toContain('SQLITE_SHARED_VERSION')
+    const up = await Plan.planSharedUpgrade(small, '0.3.216', 'upgrade', planDeps())
+    expect(codes(up.blockers)).not.toContain('SQLITE_ONE_PROCESS')
+    expect(codes(up.blockers)).not.toContain('SQLITE_SHARED_VERSION')
+  })
+
   it('the plan lists the services it deploys; a first deploy has nothing to change from', async () => {
     const id = await newShared({ settings: JSON.stringify({ size: 'medium' }) })
     await newApp(id, [{ key: 'production', placed: true }])

@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs'
 import knex, { type Knex } from 'knex'
 import { parseDbUrl } from '../../db/connection-url.js'
 import { db } from '../../db/index.js'
@@ -5,6 +6,8 @@ import { mssqlUrlConnection } from '../../db/mssql-url-connection.js'
 import { mysqlFlavorConfig } from '../../db/mysql-flavor.js'
 import { MYSQL_SESSION_SQL, mysqlTypeCast } from '../../db/mysql-session.js'
 import { rawRows } from '../../db/raw-rows.js'
+import { SQLITE_KNEX_CLIENT } from '../../db/sqlite.js'
+import { sqliteTenantPath, sqliteTenantProblem } from '../../db/sqlite-tenant.js'
 import { getTenantId, mysqlTenantTls, withTenant } from '../../db/tenant-context.js'
 import { NIVARO_VERSION } from '../../version.js'
 import { keyFingerprint } from '../app-key-fingerprint.js'
@@ -377,6 +380,67 @@ export async function checkDatabase(client: string, connection: string): Promise
     work.catch(() => {})
     const opened = k as Knex | null
     if (opened) void opened.destroy().catch(() => {})
+  }
+}
+
+/**
+ * A SQLite app's database identity (0.3.215): its file in this deployment's volume. Lower case,
+ * the same shape every reader compares (`engine|server|port|database`): the deployment key stands
+ * where a server would.
+ */
+export function sqliteDbIdentity(deployment: string, tenantId: string, file: string): string {
+  return `sqlite|${deployment}||${tenantId}/${file}`.toLowerCase()
+}
+
+/**
+ * The db-check for a SQLite app (0.3.215): its file `<root>/<tenantId>/<file>` on this deployment.
+ * No file yet = reachable with no ledger (`absent`: SQLite makes it when the app first opens). An
+ * existing file is read through a read-only connection (never the app's own pool, never a write:
+ * the app may be serving from it), one connection, destroyed after. A process that may not serve
+ * SQLite apps (a split stack's role, Nivaro Cloud) answers unreachable with why.
+ */
+export async function checkSqliteDatabase(
+  deployment: string,
+  tenantId: string,
+  file: string
+): Promise<DbCheckResult> {
+  const unreachable = (error: string): DbCheckResult => ({
+    reachable: false,
+    ledger: null,
+    ledger_state: null,
+    db_identity: null,
+    error
+  })
+  const problem = sqliteTenantProblem()
+  if (problem) return unreachable(`${problem}.`)
+  let path: string
+  try {
+    path = sqliteTenantPath(tenantId, file)
+  } catch (err) {
+    return unreachable((err as Error).message)
+  }
+  const db_identity = sqliteDbIdentity(deployment, tenantId, file)
+  if (!existsSync(path))
+    return { reachable: true, ledger: null, ledger_state: 'absent', db_identity, error: null }
+  const k = knex({
+    client: SQLITE_KNEX_CLIENT,
+    useNullAsDefault: true,
+    connection: { filename: path, options: { readonly: true } } as never,
+    pool: { min: 0, max: 1 }
+  })
+  try {
+    const ledger = await readLedger(k)
+    return {
+      reachable: true,
+      ledger: ledger.ledger,
+      ledger_state: ledger.state,
+      db_identity,
+      error: null
+    }
+  } catch {
+    return unreachable('The database file could not be read.')
+  } finally {
+    void k.destroy().catch(() => {})
   }
 }
 

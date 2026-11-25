@@ -230,6 +230,8 @@ export async function hubLinkRoutes(app: FastifyInstance) {
     return reply.send({
       version: NIVARO_VERSION,
       environment: config.NODE_ENV,
+      // The owner gate's production signal (services/hub/owner-access.ts): what this app says it is.
+      app_environment: (process.env.NIVARO_ENVIRONMENT ?? '').trim().toLowerCase() || null,
       instance: instanceKey(),
       preflight,
       readiness_score,
@@ -365,6 +367,13 @@ export async function hubLinkRoutes(app: FastifyInstance) {
         message: typeof b.message === 'string' ? b.message.trim() || null : null,
         moveId
       })
+      // Hub gap sqlite: the move lifted its freeze (a rollback): a SQLite database it froze for
+      // its copy takes writes again (db/sqlite-transfer.ts).
+      if (!b.on) {
+        const { thawSqliteFile } = await import('../db/sqlite-transfer.js')
+        const { config: cfg } = await import('../config.js')
+        if (cfg.DB_CLIENT === 'sqlite') thawSqliteFile(cfg.DB_DATABASE)
+      }
     } catch (err) {
       if (err instanceof HubMaintenanceMoveMismatch)
         return fail(
@@ -421,6 +430,45 @@ export async function hubLinkRoutes(app: FastifyInstance) {
         'hub link: the shared-readiness report failed'
       )
       return fail(reply, 503, 'READINESS_FAILED', 'The shared-readiness report could not be read')
+    }
+  })
+
+  // ─── Hub people directory + "Offboard everywhere" (services/hub-link/people.ts) ───────────
+  // POSTs so the identity travels in the body, never the URL. Matched by email or Entra object
+  // id only; suspend only (never delete), refused 409 LAST_ADMIN. Exempt from the maintenance
+  // freeze like every hub-link call but first-admin: offboarding must not wait for a freeze.
+  app.post('/people/lookup', async (req, reply) => {
+    reply.header('Cache-Control', 'no-store')
+    const { lookupPeople } = await import('../services/hub-link/people.js')
+    try {
+      const out = await lookupPeople(req.body)
+      if (!out.ok) return fail(reply, 400, 'BAD_PERSON', 'Give up to 5 emails and/or Entra ids')
+      return reply.send({ accounts: out.accounts })
+    } catch (err) {
+      app.log.error(
+        { code: (err as { code?: unknown } | null)?.code ?? null },
+        'hub link: a people lookup failed'
+      )
+      return fail(reply, 500, 'LOOKUP_FAILED', 'The person could not be looked up')
+    }
+  })
+
+  app.post('/people/suspend', async (req, reply) => {
+    reply.header('Cache-Control', 'no-store')
+    const { suspendPeople } = await import('../services/hub-link/people.js')
+    try {
+      const out = await suspendPeople(req.body, {
+        redis: (app as unknown as { redis?: unknown }).redis,
+        app
+      })
+      if (!out.ok) return fail(reply, out.status, out.code, out.message)
+      return reply.send({ state: out.state, accounts: out.accounts })
+    } catch (err) {
+      app.log.error(
+        { code: (err as { code?: unknown } | null)?.code ?? null },
+        'hub link: suspending a person failed'
+      )
+      return fail(reply, 500, 'SUSPEND_FAILED', 'The person could not be suspended')
     }
   })
 
@@ -497,5 +545,96 @@ export async function hubLinkRoutes(app: FastifyInstance) {
     const s = await readPullStatus(req.params.runId)
     if (!s) return fail(reply, 404, 'UNKNOWN_RUN', 'No file copy with that id here')
     return reply.send(s)
+  })
+
+  // ─── Hub gap sqlite (0.3.215): a SQLite app's database file in a move ──────────────────────
+  // Review 4 (N2/N3): the copy and the checksum are start-then-poll jobs
+  // (services/hub-transfer/database-jobs.ts).
+  // POST /files/database/pull {source, ticket, move_id} → 202 {job}: the copy is fetched with the
+  //      ticket, checked (checksum, integrity_check in a child process, ledger) and staged; once
+  //      the Hub has read the job's end (or 90 s after it), this app restarts and installs it at
+  //      boot. A pull past its own deadline removes its copy and fails.
+  // POST /files/database/sum → 202 {job}: this app's database checksum (a source, before release)
+  // GET  /files/database/jobs/:job → {job}
+  // GET  /files/database/adopted → {adopted: {sha256, move_id} | null}: what the last boot put in.
+  const databaseFail = (reply: FastifyReply, err: unknown) => {
+    const e = err as { code?: unknown; statusCode?: unknown; message?: unknown; name?: unknown }
+    if (
+      e?.name === 'DatabaseTransferError' ||
+      e?.name === 'SqliteTransferError' ||
+      e?.name === 'DatabaseJobError'
+    )
+      return fail(
+        reply,
+        typeof e.statusCode === 'number' ? e.statusCode : 409,
+        String(e.code),
+        String(e.message)
+      )
+    app.log.error({ err_name: e?.name ?? null }, 'hub link: database copy failed')
+    return fail(reply, 500, 'DATABASE_COPY_FAILED', 'The database copy failed here')
+  }
+
+  app.post('/files/database/pull', async (req, reply) => {
+    reply.header('Cache-Control', 'no-store')
+    const { pullDatabaseDedicated, databaseTransferDeps } = await import(
+      '../services/hub-transfer/database.js'
+    )
+    const { startDatabaseJob } = await import('../services/hub-transfer/database-jobs.js')
+    const b = (req.body ?? {}) as { source?: unknown; ticket?: unknown; move_id?: unknown }
+    const moveId = positiveId(b.move_id)
+    let fallback: NodeJS.Timeout | null = null
+    try {
+      const job = startDatabaseJob(
+        'self',
+        'pull',
+        moveId ? `move:${moveId}` : `pull:${Date.now()}`,
+        async () => {
+          const r = await pullDatabaseDedicated(
+            { source: b.source as string, ticket: b.ticket as string },
+            moveId
+          )
+          // The Hub reads the end, then this app restarts; if it never does, restart anyway.
+          fallback = setTimeout(() => databaseTransferDeps.restart(0), 90_000)
+          fallback.unref?.()
+          return r
+        },
+        {
+          afterRead: () => {
+            if (fallback) clearTimeout(fallback)
+            databaseTransferDeps.restart(2_000)
+          }
+        }
+      )
+      return reply.code(202).send({ job })
+    } catch (err) {
+      return databaseFail(reply, err)
+    }
+  })
+
+  app.post('/files/database/sum', async (_req, reply) => {
+    reply.header('Cache-Control', 'no-store')
+    const { databaseSum } = await import('../services/hub-transfer/database.js')
+    const { startDatabaseJob } = await import('../services/hub-transfer/database-jobs.js')
+    try {
+      return reply
+        .code(202)
+        .send({ job: startDatabaseJob('self', 'sum', 'sum', () => databaseSum(null)) })
+    } catch (err) {
+      return databaseFail(reply, err)
+    }
+  })
+
+  app.get<{ Params: { job: string } }>('/files/database/jobs/:job', async (req, reply) => {
+    reply.header('Cache-Control', 'no-store')
+    const { readDatabaseJob, JOB_ID_RE } = await import('../services/hub-transfer/database-jobs.js')
+    const job = JOB_ID_RE.test(req.params.job) ? readDatabaseJob('self', req.params.job) : null
+    if (!job) return fail(reply, 404, 'UNKNOWN_JOB', 'No such database job here')
+    return reply.send({ job })
+  })
+
+  app.get('/files/database/adopted', async (_req, reply) => {
+    reply.header('Cache-Control', 'no-store')
+    const { databaseAdopted } = await import('../services/hub-transfer/database.js')
+    return reply.send({ adopted: await databaseAdopted() })
   })
 }

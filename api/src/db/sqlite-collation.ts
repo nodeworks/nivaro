@@ -21,7 +21,7 @@
  * checks a CHECK on every later write of the row, so adding it would block edits to those rows).
  */
 import type { Knex } from 'knex'
-import { isTextAffinity, lengthCheck, sizedTextLength, sqliteWriteLock } from './sqlite.js'
+import { isTextAffinity, lengthCheck, sizedTextLength, sqliteWriteLockFor } from './sqlite.js'
 
 interface RawConn {
   prepare(sql: string): {
@@ -272,7 +272,7 @@ export async function ensureSqliteTextNocase(knex: Knex): Promise<CollationResul
   }
   const conn = await client.acquireConnection()
   try {
-    await sqliteWriteLock.acquire(conn)
+    await sqliteWriteLockFor(conn).acquire(conn)
   } catch (err) {
     await client.releaseConnection(conn)
     throw err
@@ -299,7 +299,7 @@ export async function ensureSqliteTextNocase(knex: Knex): Promise<CollationResul
       console.warn(`SQLite: table ${s.table} keeps exact text comparison — ${s.reason}`)
     return result
   } finally {
-    sqliteWriteLock.release(conn)
+    sqliteWriteLockFor(conn).release(conn)
     await client.releaseConnection(conn)
   }
 }

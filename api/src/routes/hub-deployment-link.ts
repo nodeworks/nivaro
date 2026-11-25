@@ -14,6 +14,7 @@ import {
   type AppSchemaState,
   appStatusFor,
   checkDatabase,
+  checkSqliteDatabase,
   DB_CHECK_CLIENTS,
   type DeploymentStatus,
   oidcIdentity,
@@ -35,6 +36,8 @@ import { deploymentLinkDataRoutes } from './hub-link-data.js'
  *   POST /api/hub-deployment/apps/:id/first-admin    → as POST /api/hub-link/first-admin, in that app
  *   POST /api/hub-deployment/refresh                 → 202; every replica re-reads its tenant list
  *   POST /api/hub-deployment/db-check {client, connection} → {reachable, ledger, db_identity, error}
+ *        (SQLite, 0.3.215: {client: 'sqlite', connection: <file name>, tenant: <app id>})
+ *   POST /api/hub-deployment/apps/:id/people/lookup|suspend → as POST /api/hub-link/people/*
  *
  * Mounted only on a Hub shared deployment (tenantSource() === 'hub'), never in Nivaro Cloud and
  * never on a dedicated app (HUB_TOKEN alone). The tenant hook frees `/api/hub-deployment/`, so a
@@ -259,6 +262,49 @@ export async function hubDeploymentLinkRoutes(app: FastifyInstance): Promise<voi
     }
   })
 
+  // Hub people directory + "Offboard everywhere", inside the app (services/hub-link/people.ts):
+  // the same answers as POST /api/hub-link/people/lookup|suspend. Never frozen by the app's own
+  // maintenance switch: offboarding is a security action.
+  app.post<{ Params: { id: string; op: string } }>('/apps/:id/people/:op', async (req, reply) => {
+    const op = req.params.op
+    if (op !== 'lookup' && op !== 'suspend') return refuse(reply, 404, 'Not found', 'NOT_FOUND')
+    const registry = registryOr503(reply)
+    if (!registry) return reply
+    const t = await tenantById(registry, req.params.id)
+    if (!t) return refuse(reply, 404, 'This deployment does not serve that app', 'UNKNOWN_APP')
+    try {
+      const out = await withTenant(
+        t,
+        async () => {
+          const people = await import('../services/hub-link/people.js')
+          if (op === 'lookup') return people.lookupPeople(req.body, getTenantDb())
+          return people.suspendPeople(req.body, {
+            k: getTenantDb(),
+            redis: (app as unknown as { redis?: unknown }).redis,
+            app
+          })
+        },
+        t.origin
+      )
+      if (!out.ok)
+        return refuse(
+          reply,
+          out.status,
+          'message' in out ? out.message : 'Give up to 5 emails and/or Entra ids',
+          out.code
+        )
+      return reply.send(
+        'state' in out ? { state: out.state, accounts: out.accounts } : { accounts: out.accounts }
+      )
+    } catch (err) {
+      app.log.error(
+        { tenant: t.id, code: (err as { code?: unknown } | null)?.code ?? null },
+        'deployment link: a people call failed'
+      )
+      return refuse(reply, 500, 'The people call failed', 'PEOPLE_FAILED')
+    }
+  })
+
   // Every replica re-reads its tenant list (services/tenancy/hub-source.ts listens on the
   // deployment's channel). `every_replica` only when at least one subscriber heard it; otherwise
   // (no Redis, a failed publish, nobody subscribed) this process kicks itself, folded like a
@@ -283,9 +329,17 @@ export async function hubDeploymentLinkRoutes(app: FastifyInstance): Promise<voi
   })
 
   app.post('/db-check', async (req, reply) => {
-    const b = (req.body ?? {}) as { client?: unknown; connection?: unknown }
+    const b = (req.body ?? {}) as { client?: unknown; connection?: unknown; tenant?: unknown }
     const client = typeof b.client === 'string' ? b.client : ''
     const connection = typeof b.connection === 'string' ? b.connection.trim() : ''
+    // 0.3.215: a SQLite app's file — `connection` is its file name, `tenant` the app it belongs to
+    // (the file lives in that app's own folder here).
+    if (client === 'sqlite') {
+      const tenant = typeof b.tenant === 'string' ? b.tenant : ''
+      if (!tenant || !connection)
+        return refuse(reply, 400, 'A SQLite check names the app and its file', 'BAD_DB_CONNECTION')
+      return reply.send(await checkSqliteDatabase(cfg.deployment, tenant, connection))
+    }
     if (!DB_CHECK_CLIENTS.has(client))
       return refuse(reply, 400, 'Unknown database client', 'BAD_DB_CLIENT')
     if (!connection || connection.length > CONNECTION_MAX)
@@ -375,6 +429,110 @@ export async function hubDeploymentLinkRoutes(app: FastifyInstance): Promise<voi
         'deployment link: the file copy could not be started'
       )
       return refuse(reply, 500, 'The file copy could not be started', 'PULL_FAILED')
+    }
+  })
+
+  // ─── Hub gap sqlite (0.3.215): a SQLite app's database file in a move ──────────────────────
+  // Review 4 (N2/N3): the copy and the checksum are start-then-poll jobs
+  // (services/hub-transfer/database-jobs.ts) — they can take longer than one call may stay open.
+  // POST   /apps/:id/database/pull {source, ticket, move_id?} → 202 {job}: fetched with the
+  //        ticket, checked (checksum, integrity_check in a child process, ledger), put in place of
+  //        the app's file; a pull that passes its own deadline removes its copy and fails.
+  // POST   /apps/:id/database/sum → 202 {job} (a source, before release): result {sha256, bytes}
+  // GET    /apps/:id/database/jobs/:job → {job}: state running | done | failed, result, code
+  // DELETE /apps/:id/database {sha256} → {discarded}: a rollback before release throws the copy
+  //        away (only the copy whose checksum it names; under the file's lock).
+  const databaseRefusal = (reply: FastifyReply, err: unknown, what: string) => {
+    const e = err as { code?: unknown; statusCode?: unknown; message?: unknown; name?: unknown }
+    if (
+      e?.name === 'DatabaseTransferError' ||
+      e?.name === 'SqliteTenantError' ||
+      e?.name === 'SqliteTransferError' ||
+      e?.name === 'DatabaseJobError'
+    )
+      return refuse(
+        reply,
+        typeof e.statusCode === 'number' ? e.statusCode : 409,
+        String(e.message),
+        String(e.code)
+      )
+    app.log.error({ err_name: e?.name ?? null }, `deployment link: ${what}`)
+    return refuse(reply, 500, 'The database copy failed here', 'DATABASE_COPY_FAILED')
+  }
+
+  app.post<{ Params: { id: string } }>('/apps/:id/database/pull', async (req, reply) => {
+    const registry = registryOr503(reply)
+    if (!registry) return reply
+    const t = await tenantById(registry, req.params.id)
+    if (!t) return refuse(reply, 404, 'This deployment does not serve that app', 'UNKNOWN_APP')
+    const { pullDatabaseShared } = await import('../services/hub-transfer/database.js')
+    const { startDatabaseJob } = await import('../services/hub-transfer/database-jobs.js')
+    const b = (req.body ?? {}) as { source?: unknown; ticket?: unknown; move_id?: unknown }
+    const moveId =
+      typeof b.move_id === 'number' && Number.isSafeInteger(b.move_id) && b.move_id > 0
+        ? b.move_id
+        : null
+    try {
+      const job = await withTenant(
+        t,
+        async () =>
+          startDatabaseJob(t.id, 'pull', moveId ? `move:${moveId}` : `pull:${Date.now()}`, () =>
+            pullDatabaseShared(t, { source: b.source as string, ticket: b.ticket as string })
+          ),
+        t.origin
+      )
+      return reply.code(202).send({ job })
+    } catch (err) {
+      return databaseRefusal(reply, err, 'the database copy failed')
+    }
+  })
+
+  app.post<{ Params: { id: string } }>('/apps/:id/database/sum', async (req, reply) => {
+    const registry = registryOr503(reply)
+    if (!registry) return reply
+    const t = await tenantById(registry, req.params.id)
+    if (!t) return refuse(reply, 404, 'This deployment does not serve that app', 'UNKNOWN_APP')
+    const { databaseSum } = await import('../services/hub-transfer/database.js')
+    const { startDatabaseJob } = await import('../services/hub-transfer/database-jobs.js')
+    try {
+      const job = await withTenant(
+        t,
+        async () => startDatabaseJob(t.id, 'sum', 'sum', () => databaseSum(t)),
+        t.origin
+      )
+      return reply.code(202).send({ job })
+    } catch (err) {
+      return databaseRefusal(reply, err, 'the database checksum could not be read')
+    }
+  })
+
+  app.get<{ Params: { id: string; job: string } }>(
+    '/apps/:id/database/jobs/:job',
+    async (req, reply) => {
+      const registry = registryOr503(reply)
+      if (!registry) return reply
+      const t = await tenantById(registry, req.params.id)
+      if (!t) return refuse(reply, 404, 'This deployment does not serve that app', 'UNKNOWN_APP')
+      const { readDatabaseJob, JOB_ID_RE } = await import(
+        '../services/hub-transfer/database-jobs.js'
+      )
+      const job = JOB_ID_RE.test(req.params.job) ? readDatabaseJob(t.id, req.params.job) : null
+      if (!job) return refuse(reply, 404, 'No such database job here', 'UNKNOWN_JOB')
+      return reply.send({ job })
+    }
+  )
+
+  app.delete<{ Params: { id: string } }>('/apps/:id/database', async (req, reply) => {
+    const registry = registryOr503(reply)
+    if (!registry) return reply
+    const t = await tenantById(registry, req.params.id)
+    if (!t) return reply.send({ discarded: false })
+    const { discardDatabaseShared } = await import('../services/hub-transfer/database.js')
+    const sha = (req.body as { sha256?: unknown } | null)?.sha256
+    try {
+      return reply.send(await discardDatabaseShared(t, typeof sha === 'string' ? sha : null))
+    } catch (err) {
+      return databaseRefusal(reply, err, 'the database copy could not be discarded')
     }
   })
 

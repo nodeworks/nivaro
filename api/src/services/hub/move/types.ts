@@ -22,6 +22,9 @@ export type MoveStepKey =
   | 'files_warm'
   | 'maintenance_on'
   | 'wait_idle'
+  /** Hub gap sqlite: the SQLite database file is copied (source frozen, checksum, read-only
+   *  check at the target) — between wait_idle and the file copy. */
+  | 'db_copy'
   | 'files_delta'
   | 'deploy_target'
   | 'place_on_target'
@@ -113,6 +116,14 @@ export type MoveBlockerCode =
   | 'STORAGE_COUNT_UNKNOWN'
   // Fix round 1 (P6-15: a check that could not run is never a pass).
   | 'GATHER_FAILED'
+  // Hub gap sqlite (0.3.215): a SQLite app moves only with automatic routing, onto a Docker
+  // shared deployment of size small (SQLITE_ONE_PROCESS / SQLITE_SHARED_VERSION) or a Docker
+  // stack of size small; never onto a GitLab placement or with a manual route (SQLITE_MOVE).
+  | 'SQLITE_MOVE'
+  | 'SQLITE_ONE_PROCESS'
+  | 'SQLITE_SHARED_VERSION'
+  | 'SQLITE_ON_NFS'
+  | 'SQLITE_MULTI_NODE'
   | SharedReadinessCode
 
 /** What a move will cost or change. SIGNED_LINKS_RESET is the T12 carry. */
@@ -136,6 +147,8 @@ export type MoveWarningCode =
   | 'STACK_REAPPLY_ALL'
   // P6-31: saved-settings S3/Azure objects are copied to the new key prefix (never shared).
   | 'STORAGE_PREFIX_CHANGES'
+  // Hub gap sqlite: the SQLite database file is copied inside maintenance.
+  | 'SQLITE_COPY'
   // 0.3.215 (hub-gap watch): the source saves its env mail settings at maintenance_on.
   | 'ENV_SMTP_KEPT'
   | 'INSTANCE_SETTINGS_CARRIED'
@@ -144,6 +157,8 @@ export type MoveWarningCode =
 
 export interface MovePlan {
   kind: MoveKind
+  /** Hub gap sqlite: the app's database is a SQLite file, copied by the db_copy step. */
+  sqlite?: true
   routing: 'automatic' | 'manual'
   steps: MoveStepKey[]
   route: RouteAction[]
@@ -222,8 +237,16 @@ export interface MoveTargetFacts {
   multi_node: number | null
   /** A docker shared target's agent could not be read: the node count is unknown (N-2). */
   multi_node_unread?: boolean
+  /** Hub gap sqlite (M5): the target agent's uploads volume is NFS; null/absent = not said. */
+  uploads_network?: boolean | null
+  /** The target agent's volume driver; null/absent = not said. */
+  volume_driver?: string | null
+  /** Hub gap sqlite (review 4, L1): the agent answered but not its swarm's node count. */
+  nodes_unknown?: boolean
   /** A Docker dedicated target: the ENCRYPTION_KEY fingerprint its stack settings hold. */
   stack_key_fp: string | null
+  /** A Docker dedicated target: the size its stack settings ask for (hub gap sqlite). */
+  stack_size?: string | null
   /** A dedicated target placement another environment uses ("app/env"); null when free. */
   in_use_by: string | null
   /**
@@ -266,8 +289,9 @@ export interface MovePlanInput {
   names: string[]
   /** Those of them another Hub environment claims too. */
   names_taken: string[]
-  /** The Hub database record the environment's db_ref names. */
-  database: { id: number; ready: boolean } | null
+  /** The Hub database record the environment's db_ref names. `sqlite`: a SQLite app's file its
+   *  shared deployment keeps (0.3.215), which a move does not carry yet (SQLITE_MOVE). */
+  database: { id: number; ready: boolean; sqlite?: boolean } | null
   /** `unreadable`: an entry is stored but the Hub cannot open it (M-9). */
   app_key: { known: boolean; fp: string | null; unreadable?: boolean }
   locks: {

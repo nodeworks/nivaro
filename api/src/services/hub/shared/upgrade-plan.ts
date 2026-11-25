@@ -32,6 +32,7 @@ import {
 } from './gitlab-upgrade.js'
 import { runsSharedHubSignin, SHARED_HUB_SIGNIN_SINCE } from './hub-signin-floor.js'
 import { stacksOnRedisDatabase } from './redis-databases.js'
+import { sqliteAppsAmong, sqliteSharedRefusal } from './sqlite-apps.js'
 import {
   explicitHostsFor,
   preSplitRoles,
@@ -716,6 +717,25 @@ export async function gatherSharedUpgrade(
           realtime: sharedRealtimeFits(version, edge, health?.traefik_version ?? null)
         })
   const roles = toDeploy.map((r) => ({ role: r.role, replicas: r.replicas }))
+  // 0.3.215: a SQLite app on the deployment keeps it one process at a version that serves it
+  // (sqlite-apps.ts). Several processes or replicas would be several writers of its file.
+  if (shared.mode === 'docker') {
+    const lite = await sqliteAppsAmong(rows)
+    if (lite.length) {
+      const one = toDeploy.length === 1 && toDeploy[0].role === 'all' && toDeploy[0].replicas <= 1
+      const no = one
+        ? sqliteSharedRefusal(shared, { size: 'small', version: versionOk ? version : null })
+        : {
+            code: 'SQLITE_ONE_PROCESS',
+            message: `${shared.key} would run ${roles.map((r) => `${r.replicas} × ${r.role}`).join(', ')}, and a SQLite database allows one writer process.`
+          }
+      if (no)
+        block(
+          no.code,
+          `${lite.slice(0, 5).join(', ')}${lite.length > 5 ? ', …' : ''} ${lite.length === 1 ? 'uses' : 'use'} a SQLite database: ${no.message}`
+        )
+    }
+  }
   const roles_from = deployed && !deployed.never ? deployed.roles.map((r) => r.role) : null
   // An agent before 0.2.2 refuses a split shared owner and the exporter role: the run would fail
   // at apply. (An unreadable version is already too old for any shared owner, above.)

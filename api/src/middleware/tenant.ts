@@ -1,7 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto'
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import type { Knex } from 'knex'
-import { getOrCreateTenantPool, runWithTenantDb } from '../db/tenant-context.js'
+import { getOrCreateTenantPool, runWithTenantDb, tenantPoolOpts } from '../db/tenant-context.js'
 import { isAppInfoPath } from '../lib/app-info-path.js'
 import { trustedRequestHost } from '../lib/trust-proxy.js'
 import { isNivaroCloud } from '../services/deployment-mode.js'
@@ -903,7 +903,12 @@ async function resolveTenant(hostname: string, customHost?: string | null): Prom
     found: true,
     suspended: false,
     provisioning: false,
-    db: getOrCreateTenantPool(tenant.dbConnection, tenant.dbClient, tenant.poolMax ?? undefined),
+    db: getOrCreateTenantPool(
+      tenant.dbConnection,
+      tenant.dbClient,
+      tenant.poolMax ?? undefined,
+      tenantPoolOpts(tenant)
+    ),
     slug: tenant.slug,
     tenantId: tenant.id,
     origin,
@@ -1023,7 +1028,12 @@ export function tenantHook(req: FastifyRequest, reply: FastifyReply, done: (err?
         const t = versionTenant
         ;(req as unknown as { nvrTenantId?: string }).nvrTenantId = t.id || t.slug
         runWithTenantDb(
-          getOrCreateTenantPool(t.dbConnection, t.dbClient, t.poolMax ?? undefined),
+          getOrCreateTenantPool(
+            t.dbConnection,
+            t.dbClient,
+            t.poolMax ?? undefined,
+            tenantPoolOpts(t)
+          ),
           t.slug,
           done,
           t.id,
@@ -1130,5 +1140,24 @@ export function tenantHook(req: FastifyRequest, reply: FastifyReply, done: (err?
       ;(req as unknown as { nvrTenantId?: string }).nvrTenantId = result.tenantId || result.slug
       runWithTenantDb(result.db, result.slug, done, result.tenantId, result.origin)
     })
-    .catch((err: unknown) => done(err instanceof Error ? err : new Error(String(err))))
+    .catch((err: unknown) => {
+      // Hub gap sqlite: a SQLite app's file that is missing (never made again) or held by another
+      // process (a rolling update) is a 503 with its code, never a 500.
+      const e = err as { name?: unknown; code?: unknown; message?: unknown } | null
+      if (e?.name === 'SqliteTenantError') {
+        const missing = e.code === 'SQLITE_FILE_MISSING'
+        reply
+          .code(503)
+          .header('retry-after', missing ? '300' : '30')
+          .header('cache-control', 'no-store')
+          .send({
+            statusCode: 503,
+            error: missing ? 'Database file missing' : 'Service unavailable',
+            message: String(e.message),
+            code: String(e.code)
+          })
+        return
+      }
+      done(err instanceof Error ? err : new Error(String(err)))
+    })
 }

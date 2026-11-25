@@ -75,9 +75,17 @@ export async function notifyAppPeopleAndAdmins(
  * The ONE place an automatic rollback (or a watch that ended without one) is announced — a single
  * helper so it can be routed through another notifier with a one-line change.
  */
-export function notifyAutoRollback(
+export async function notifyAutoRollback(
   appId: number,
   note: { subject: string; message: string; urgent?: boolean }
 ): Promise<number> {
-  return notifyAppPeople(appId, note)
+  // One Hub event (services/hub/notify-events.ts): Hub admins + the app's owners, once each.
+  const { sendHubEvent } = await import('../notify-events.js')
+  return sendHubEvent({
+    kind: 'auto_rollback',
+    appId,
+    text: note,
+    urgent: note.urgent ?? true,
+    path: '/hub/releases'
+  })
 }

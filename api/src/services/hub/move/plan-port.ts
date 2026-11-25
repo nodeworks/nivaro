@@ -95,6 +95,7 @@ export const MOVE_STEP_KEYS: readonly MoveStepKey[] = [
   'files_warm',
   'maintenance_on',
   'wait_idle',
+  'db_copy',
   'files_delta',
   'deploy_target',
   'place_on_target',

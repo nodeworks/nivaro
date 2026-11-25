@@ -11,6 +11,7 @@ import { type DockerStepOps, defaultDockerOps, type StackDeployed } from './dock
 import { DriverMisconfiguredError, repositoryIdentity } from './drivers.js'
 import * as gitlab from './gitlab-write.js'
 import { moveOpenRefusal } from './move-open.js'
+import { notifyHubEvent } from './notify-events.js'
 import {
   currentVersionReader,
   gatherPlanInput,
@@ -1429,6 +1430,14 @@ async function runPromotion(o: {
   }
   try {
     await closeRow(deployId, outcome, run, deps.finishRow ?? finishRunningRow)
+    // Hub admins + the app's owners hear the outcome (inbox, browser + phone push).
+    if (outcome.status === 'success' || outcome.status === 'failed')
+      notifyHubEvent({
+        kind: outcome.status === 'success' ? 'promote_done' : 'promote_failed',
+        envId,
+        deployId,
+        detail: `${o.plan.apply ? 'apply' : o.kind} ${o.version} on ${o.envKey}`
+      })
     const what = o.plan.apply
       ? `apply stack settings to ${o.envKey} (${o.version})`
       : `${o.kind === 'rollback' ? 'roll back to' : 'promote'} ${o.version} on ${o.envKey}`

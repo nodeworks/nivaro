@@ -192,8 +192,11 @@ function secretsOf(t: TenantRecord): string[] {
   return out
 }
 
-/** The lock held by another process (not this app's failure): runMigrationsOn's own text. */
+/** The lock held by another process (not this app's failure): runMigrationsOn's own text, or a
+ *  SQLite app's file another process still holds (db/sqlite-tenant.ts: a rolling update's old
+ *  process lets go when it stops, so this one tries again in 30 s, not 5 min). */
 function lockBusy(err: unknown): boolean {
+  if ((err as { code?: unknown } | null)?.code === 'SQLITE_FILE_BUSY') return true
   return /could not acquire the migration advisory lock/i.test(
     err instanceof Error ? err.message : String(err)
   )
@@ -419,8 +422,13 @@ async function runEnsure(t: TenantRecord, deps: AppSchemaDeps): Promise<AppSchem
       conn,
       nextTry: at + APP_SCHEMA_RETRY_MS
     }
+    if ((err as { code?: unknown } | null)?.code === 'SQLITE_FILE_MISSING')
+      // biome-ignore lint/suspicious/noConsole: an operator must see a missing database at once
+      console.error(
+        `[tenancy] app ${t.id}: its SQLite database file is MISSING on this deployment; it is not made again. The app answers 503 until the file is restored or the app is moved here again.`
+      )
     // biome-ignore lint/suspicious/noConsole: an operator must see a failed app in the server log
-    console.warn(`[tenancy] app ${t.id}: migrations failed — ${failed.error}`)
+    else console.warn(`[tenancy] app ${t.id}: migrations failed — ${failed.error}`)
     // A replica that failed after another finished (`ok` stored) does not overwrite that.
     const stored = await readStored(t.id)
     if (!(stored?.state === 'ok' && stored.conn === conn)) await writeStored(t.id, failed)
@@ -924,4 +932,20 @@ export function _resetAppMigrationsForTests(): void {
   redisRef = null
   nowFn = Date.now
   randomFn = Math.random
+}
+
+/** Resolves when no migration run of this app is in flight here (a move replacing its file). */
+export async function awaitAppSchemaRun(tenantId: string): Promise<void> {
+  await inFlight.get(tenantId)?.catch(() => undefined)
+}
+
+/**
+ * Hub gap sqlite (0.3.215): a move put another database file in place of this app's. Nothing
+ * cached from the old one may answer the app, and its schema is judged again on the new one (the
+ * next pass: its own ledger, the seeds), here and on every replica (the stored `ok` goes).
+ */
+export async function appDatabaseReplaced(t: TenantRecord): Promise<void> {
+  await awaitAppSchemaRun(t.id)
+  await dropOk(t.id, connFingerprint(t))
+  nudgeAppMigrations(t.id)
 }

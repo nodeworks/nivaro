@@ -338,7 +338,7 @@ const sameId = (a: unknown, b: unknown) => String(a).toUpperCase() === String(b)
  * key for no other account (`via = 'hub'` rows only; app reports never count). Any read failure
  * answers false (fails closed).
  */
-async function emailTheirsAlone(key: string, personId: string): Promise<boolean> {
+export async function emailTheirsAlone(key: string, personId: string): Promise<boolean> {
   try {
     const email = key.slice('email:'.length).trim().toLowerCase()
     if (!email) return false

@@ -1,5 +1,6 @@
+import { existsSync, mkdirSync } from 'node:fs'
 import { readdir } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { isMainThread } from 'node:worker_threads'
 import knex, { type Knex } from 'knex'
 import { config } from '../config.js'
@@ -23,6 +24,7 @@ import { pgSessionUtc, pgUtc } from './pg-utc.js'
 import { inBackgroundPool } from './pool-context.js'
 import {
   claimSqliteFile,
+  guardSqliteConnections,
   holdSqliteFile,
   SQLITE_KNEX_CLIENT,
   sqliteAfterCreate,
@@ -31,6 +33,7 @@ import {
   sqliteDriverProblem,
   sqlitePoolMax
 } from './sqlite.js'
+import { adoptStagedSqliteFile } from './sqlite-transfer.js'
 import { getTenantDb } from './tenant-context.js'
 import { mssqlTlsOptions, sqlSslOption, type TlsSettings } from './tls-options.js'
 
@@ -96,11 +99,59 @@ if (config.DB_CLIENT === 'sqlite') {
   // One process per database file: a second one (another API, a migrate run against a live
   // API) is refused here (db/sqlite.ts claimSqliteFile). Worker threads share their process's.
   if (isMainThread) {
-    const taken = claimSqliteFile(config.DB_DATABASE)
+    // Hub gap sqlite: a Hub stack keeps the file in the app's own folder (made here). The file's
+    // lock is taken FIRST (M4: a second process never swaps the file under a live owner), then a
+    // checked copy a move staged is put in place, then — on a Hub stack (DB_SQLITE_MISSING=refuse)
+    // — a missing file is refused, never made into a fresh install (H2).
+    const file = config.DB_DATABASE
+    const real = !!file && file !== ':memory:' && !/^file::memory:/i.test(file)
+    if (real) mkdirSync(dirname(resolve(file)), { recursive: true })
+    const taken = claimSqliteFile(file)
     if (taken) throw new Error(taken)
-    holdSqliteFile(config.DB_DATABASE)
+    holdSqliteFile(file)
+    if (real) {
+      const adopted = adoptStagedSqliteFile(file)
+      if (adopted !== 'none')
+        // biome-ignore lint/suspicious/noConsole: an operator must see a database swap in the log
+        console.warn(
+          adopted === 'adopted'
+            ? 'SQLite: the database copy a Hub move staged is now in place.'
+            : 'SQLite: a staged database copy failed its checks and was removed; the database is unchanged.'
+        )
+      if ((process.env.DB_SQLITE_MISSING ?? '').trim() === 'refuse' && !existsSync(file))
+        throw new Error(
+          'SQLite: the database file is missing (DB_DATABASE) and this Hub stack never makes a new one (DB_SQLITE_MISSING=refuse). Restore the file, or move the app here again.'
+        )
+    }
   }
   sqliteCompat()
+}
+
+/**
+ * Review 4 N1: on a Hub stack (DB_SQLITE_MISSING set) every connection the pool opens is judged,
+ * not only the boot: `refuse` — a file gone while the app runs is never made again, and a file
+ * with no table is never migrated as a fresh install; `create` — a move's new home may make the
+ * file once (its first connection). Unset (a plain self-hosted SQLite app): SQLite's own rules.
+ */
+function guardDedicatedSqlite(k: { client: unknown }): void {
+  if (config.DB_CLIENT !== 'sqlite') return
+  const mode = (process.env.DB_SQLITE_MISSING ?? '').trim()
+  if (mode !== 'refuse' && mode !== 'create') return
+  const file = config.DB_DATABASE
+  if (!file || file === ':memory:' || /^file::memory:/i.test(file)) return
+  guardSqliteConnections(k, file, {
+    mayCreate: mode === 'create' && !existsSync(file),
+    requireTables: mode === 'refuse',
+    refuse: (why) =>
+      Object.assign(
+        new Error(
+          why === 'empty'
+            ? 'SQLite: the database file has no tables and this Hub stack never sets one up as a fresh install (DB_SQLITE_MISSING=refuse).'
+            : 'SQLite: the database file is missing (DB_DATABASE) and this Hub stack never makes a new one (DB_SQLITE_MISSING=refuse).'
+        ),
+        { code: 'SQLITE_FILE_MISSING', statusCode: 503 }
+      )
+  })
 }
 
 /** True when running against MSSQL — lets services branch on dialect (recursive CTEs etc.). */
@@ -266,13 +317,15 @@ export const _backgroundDb: ReturnType<typeof knex> | null =
 let probeKnex: ReturnType<typeof knex> | null = null
 export function probeDb(): ReturnType<typeof knex> | null {
   if (multiTenant) return null
-  probeKnex ??= knex({
+  if (probeKnex) return probeKnex
+  probeKnex = knex({
     client: config.DB_CLIENT,
     ...mysqlFlavorConfig(config.DB_MARIADB),
     connection: buildConnection(config.DB_HOST, writePort),
     pool: { min: 0, max: 1, acquireTimeoutMillis: 10_000, ...sessionUtcPool() },
     ...sqliteKnex(1)
   })
+  guardDedicatedSqlite(probeKnex)
   return probeKnex
 }
 // Built on first use. The chaos seam patches the driver prototype, so database
@@ -284,6 +337,8 @@ export function probeDb(): ReturnType<typeof knex> | null {
 function activeStaticDb(): typeof _staticDb {
   return _backgroundDb && inBackgroundPool() ? _backgroundDb : _staticDb
 }
+
+if (!multiTenant) guardDedicatedSqlite(_staticDb)
 
 // #1773 — the database fault point (chaos drills); first, so cached config reads skip it.
 if (!multiTenant) attachChaosSeam(_staticDb)
@@ -589,7 +644,16 @@ export async function runMigrationsOn(
       budgetMs: config.MIGRATION_LOCK_STALE_MS
     })) as [number, string[]]
   const family = migrationFamily(client)
-  if (family === 'sqlite' || !(opts.safe ?? config.MIGRATION_SAFE_MODE)) return latest()
+  if (family === 'sqlite') {
+    // One process owns the file (db/sqlite.ts claimSqliteFile): no advisory lock. Text columns a
+    // migration left exact then compare case-insensitively (db/sqlite-collation.ts) — on this
+    // process's own file and on each SQLite app's of a Hub shared deployment alike.
+    const ran = await latest()
+    const { ensureSqliteTextNocase } = await import('./sqlite-collation.js')
+    await ensureSqliteTextNocase(k)
+    return ran
+  }
+  if (!(opts.safe ?? config.MIGRATION_SAFE_MODE)) return latest()
   if (family === 'mssql') {
     // Take, hold and release the session lock on ONE pinned connection (underSessionAppLock).
     const { withLongConnection } = await import('../services/run-long.js')
@@ -621,11 +685,10 @@ export async function runMigrationsOn(
  * columns then compare case-insensitively.
  */
 export async function runMigrationsSafely(): Promise<[number, string[]]> {
-  const ran = await runMigrationsOn(migrationDb(), config.DB_CLIENT, {
+  // SQLite: runMigrationsOn brings text columns in line after the run (sqliteAfterMigrations).
+  return runMigrationsOn(migrationDb(), config.DB_CLIENT, {
     timeoutMs: config.MIGRATION_LOCK_TIMEOUT_MS
   })
-  if (config.DB_CLIENT === 'sqlite') await sqliteAfterMigrations()
-  return ran
 }
 
 /*

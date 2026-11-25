@@ -39,6 +39,8 @@ export interface HubEnvStatus {
   readiness_score?: number
   /** Hub link only: the app's open issue count (apps from 0.3.215); absent when it gave none. */
   open_issues?: number
+  /** NIVARO_ENVIRONMENT as the app's hub link reports it (0.3.215+), for the owner gate. */
+  app_environment?: string
 }
 
 /** The fields of a nivaro_hub_environments row the status read needs. */
@@ -206,6 +208,7 @@ async function readLinked(
     preflight?: { status?: unknown; failing?: unknown }
     readiness_score?: unknown
     open_issues?: unknown
+    app_environment?: unknown
   }
   const preflight = str(body.preflight?.status)
   const failing = failingIds(body.preflight?.failing)
@@ -214,6 +217,7 @@ async function readLinked(
       ? countOf(Math.round(body.readiness_score), 100)
       : undefined
   const issues = countOf(body.open_issues, 1_000_000)
+  const appEnv = str(body.app_environment)
   return {
     state: preflight === 'ok' || preflight === 'warn' ? 'ok' : 'degraded',
     version: str(body.version),
@@ -222,7 +226,8 @@ async function readLinked(
     source: 'hub-link',
     ...(failing.length ? { failing } : {}),
     ...(score !== undefined ? { readiness_score: score } : {}),
-    ...(issues !== undefined ? { open_issues: issues } : {})
+    ...(issues !== undefined ? { open_issues: issues } : {}),
+    ...(appEnv ? { app_environment: appEnv.toLowerCase().slice(0, 32) } : {})
   }
 }
 

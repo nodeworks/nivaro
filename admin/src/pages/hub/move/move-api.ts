@@ -479,6 +479,7 @@ export const MOVE_STEP_WORDS: Record<string, string> = {
   files_warm: 'Copy the files while the app still serves',
   maintenance_on: 'Put the app in maintenance',
   wait_idle: 'Wait for running imports, exports and renders to finish',
+  db_copy: 'Copy the SQLite database file and check it',
   files_delta: 'Copy the files that changed since',
   deploy_target: 'Deploy the new stack',
   place_on_target: 'Place the app on the target',
@@ -846,7 +847,99 @@ export const MOVE_BLOCKER_COPY: Record<string, Copy> = {
   },
   SQLITE: {
     title: 'The app runs on SQLite',
-    hint: 'A shared deployment needs a database server. Move the data to SQL Server, Postgres or MySQL first.'
+    hint: 'Its database file is copied by the move: pick a Docker shared deployment of size small (0.3.215 or later), or a Docker stack of size small.'
+  },
+  SQLITE_MOVE: {
+    title: 'A SQLite app cannot move this way',
+    hint: 'Its database file is copied inside maintenance: it moves with automatic routing, onto a Docker shared deployment or a Docker stack of size small.'
+  },
+  SQLITE_COPY: {
+    title: 'The SQLite database file is copied',
+    hint: 'The old home is frozen, the copy is checked by checksum and read-only at the new home before it serves. The old home keeps its file until it is retired.'
+  },
+  SOURCE_CHANGED: {
+    title: "The source's database changed after it was copied",
+    hint: 'The move rolled back so nothing is lost. Move again.'
+  },
+  SQLITE_CHECKSUM_MISMATCH: {
+    title: "The database copy's checksum was not the source's",
+    hint: 'It changed on the way. The move rolled back; move again.'
+  },
+  SQLITE_TOO_LARGE: {
+    title: 'The SQLite database is too large to copy',
+    hint: 'The refusal names its size and the limit. Make it smaller (an archive or cleanup) or give the app a database server.'
+  },
+  SQLITE_ONE_PROCESS: {
+    title: 'A SQLite app needs a home of one process',
+    hint: 'SQLite allows one writer process: move it onto a Docker shared deployment or a Docker stack of size small.'
+  },
+  SQLITE_SHARED_VERSION: {
+    title: 'That shared deployment is too old for a SQLite app',
+    hint: 'Shared deployments serve SQLite apps from 0.3.215: upgrade it first.'
+  },
+  SQLITE_NOT_INTACT: {
+    title: 'The database copy failed its integrity check',
+    hint: "Check the source's database (PRAGMA integrity_check), then move again."
+  },
+  SQLITE_NO_LEDGER: {
+    title: 'The database copy holds no Nivaro install',
+    hint: 'Check that the source app runs on that file (its DB_DATABASE), then move again.'
+  },
+  SOURCE_NOT_FROZEN: {
+    title: 'The source was not frozen',
+    hint: 'Its database is only copied while the move holds it in maintenance.'
+  },
+  DATABASE_NOT_ADOPTED: {
+    title: 'The new stack did not put the database copy in place',
+    hint: 'Check that the stack restarted and its uploads volume is writable, then resume.'
+  },
+  SQLITE_ON_NFS: {
+    title: 'The new home keeps its uploads on network storage',
+    hint: 'A SQLite file needs a disk on one machine: an NFS export or another volume driver is not safe for it, and an agent that does not say is not trusted. Pick a home whose uploads volume is local, or upgrade its Hub agent so it reports the volume.'
+  },
+  SQLITE_MULTI_NODE: {
+    title: 'The new home runs on several machines with local disks',
+    hint: 'The app could start on a machine that does not hold its file. Pick a home on one machine.'
+  },
+  TARGET_NOT_FROZEN: {
+    title: 'The new home was not in maintenance',
+    hint: 'The database copy is only put in place while the app is held in maintenance there. Resume the move.'
+  },
+  DATABASE_COPY_RUNNING: {
+    title: 'A copy of this database is already running',
+    hint: 'Wait for it to finish, then resume.'
+  },
+  SQLITE_NO_SPACE: {
+    title: 'Not enough free disk for the database copy',
+    hint: 'Free space on the uploads volume (the detail says how much is needed), then resume.'
+  },
+  SQLITE_CHECK_TIMEOUT: {
+    title: 'Checking the database copy took too long',
+    hint: 'Resume the move to check it again.'
+  },
+  SQLITE_NOT_SQLITE: {
+    title: 'The copied file is not a SQLite database',
+    hint: "Check the source app's database file (its DB_DATABASE), then move again."
+  },
+  SQLITE_CHECK_FAILED: {
+    title: 'The check of the database copy stopped before it answered',
+    hint: 'The new home removed its copy. Resume the move to copy and check it again.'
+  },
+  SQLITE_COPY_DEADLINE: {
+    title: 'The database copy took longer than the new home allows',
+    hint: 'It stops a copy after 25 minutes and removes it. Resume the move; for a very large database, move it at a quieter time.'
+  },
+  DATABASE_JOB_TIMEOUT: {
+    title: 'The Hub stopped waiting for the database copy',
+    hint: 'Resume the move. If it happens again, check that the new home is running.'
+  },
+  UNKNOWN_JOB: {
+    title: 'The new home no longer knows the database copy',
+    hint: 'It probably restarted. Resume the move to copy it again.'
+  },
+  SQLITE_FILE_STALE: {
+    title: 'An older database file is in the app’s folder on the new home',
+    hint: 'It is from an earlier stay of the app there and is never opened as this database. Remove it on the new home, then try again.'
   },
   ENV_OBJECT_STORAGE: {
     title: 'Files are stored in S3 or Azure set by environment variables',
@@ -1177,6 +1270,22 @@ export const MOVE_CODE_COPY: Record<string, Copy> = {
   DATABASE_IN_USE: {
     title: 'Another environment already uses that database',
     hint: 'Each environment has its own database.'
+  },
+  SQLITE_ONE_PROCESS: {
+    title: 'A SQLite app needs a shared deployment of one process',
+    hint: 'SQLite allows one writer process: pick a Docker shared deployment of size small, or give the app a database server.'
+  },
+  SQLITE_SHARED_VERSION: {
+    title: 'That shared deployment is too old for a SQLite app',
+    hint: 'A shared deployment serves SQLite apps from 0.3.215: upgrade it first.'
+  },
+  SQLITE_ON_NFS: {
+    title: 'That shared deployment keeps its uploads on network storage',
+    hint: 'A SQLite file needs a disk on one machine. Pick a deployment whose uploads volume is local, or give the app a database server.'
+  },
+  SQLITE_MULTI_NODE: {
+    title: 'That shared deployment runs on several machines with local disks',
+    hint: 'The app could start on a machine that does not hold its file. Pick a deployment on one machine, or give the app a database server.'
   },
   CREATION_RUNNING: {
     title: 'A creation step is running on this environment',

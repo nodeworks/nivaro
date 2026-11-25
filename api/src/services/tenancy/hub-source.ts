@@ -1,8 +1,10 @@
 import type { Redis } from 'ioredis'
+import { thawSqliteFile } from '../../db/sqlite-transfer.js'
 import { cleanTenantHost, runWithoutTenant } from '../../db/tenant-context.js'
 import { NIVARO_VERSION } from '../../version.js'
 import { forgetAppState } from '../app-state.js'
 import { hubSharedConfig } from '../deployment-mode.js'
+import { forgetDatabaseJobs } from '../hub-transfer/database-jobs.js'
 import { INSTANCE_ID } from '../instance-roster.js'
 import { resetAppHubLinksForTests, setAppHubLinks } from './app-hub-links.js'
 import { resetAppKeysForTests, setAppKeys } from './app-keys.js'
@@ -180,11 +182,21 @@ export async function startHubTenantSource(deps: Deps): Promise<TenantRegistry> 
       if (listed.has(t.id)) continue
       forgetAppState(t.id)
       fireAppLeft(t.id)
+      // Hub gap sqlite (M1): a file this process froze as a move's source is thawed when its app
+      // leaves; the app moving back later must be able to migrate and take writes here.
+      if (t.dbClient === 'sqlite') {
+        thawSqliteFile(t.dbConnection)
+        forgetDatabaseJobs(t.id)
+      }
     }
     // Final review I-1: an app that (re)appears starts clean too, so a leave this process never
     // saw (it was not listed in between) cannot hand a returning app its old cached state.
     const before = new Set(tenants.map((t) => t.id))
     for (const t of list) if (!before.has(t.id)) forgetAppState(t.id)
+    // Hub gap sqlite: a SQLite app out of maintenance (a move rolled back, or never froze it) has
+    // its file thawed (db/sqlite-transfer.ts); one still in maintenance stays frozen.
+    for (const t of list)
+      if (t.dbClient === 'sqlite' && t.status !== 'maintenance') thawSqliteFile(t.dbConnection)
     tenants = list.map(withListedOrigin)
     setAppKeys(tenants)
     setAppHubLinks(tenants)
