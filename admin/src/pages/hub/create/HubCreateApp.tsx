@@ -10,7 +10,14 @@ import type { User } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { dbKeys, ENGINE_LABEL, STATUS_LABEL, useDatabases, useDbServers } from '../databases/db-api'
 import { fetchDrivers, HUB_MASK, hubKeys } from '../hub-api'
-import { CopyButton, Field, ghostButton, SectionCard } from '../hub-parts'
+import {
+  CopyButton,
+  Field,
+  ghostButton,
+  SectionCard,
+  segmentButton,
+  segmentGroup
+} from '../hub-parts'
 import { fetchSharedList, sharedKeys } from '../shared/shared-api'
 import { countsLine, fetchTemplates, templateError, templateKeys } from '../templates/templates-api'
 import {
@@ -561,7 +568,7 @@ export function HubCreateApp({
 
         <SectionCard title='Where and which version'>
           <div className='relative px-4 pt-4'>
-            <fieldset className='m-0 inline-flex flex-wrap gap-1 rounded-md border border-slate-200 bg-slate-50 p-0.5 dark:border-border dark:bg-muted'>
+            <fieldset className={segmentGroup}>
               <legend className='sr-only'>Where the app goes</legend>
               {KIND_OPTIONS.map((k) => (
                 <button
@@ -570,12 +577,7 @@ export function HubCreateApp({
                   aria-pressed={kind === k}
                   data-tip={KIND_WORDS[k].hint}
                   onClick={() => touch(setKind)(k)}
-                  className={cn(
-                    'rounded px-3 py-1 text-[12px] font-medium',
-                    kind === k
-                      ? 'bg-white text-slate-900 shadow-sm dark:bg-card dark:text-foreground'
-                      : 'text-slate-600 hover:bg-muted dark:text-slate-300'
-                  )}
+                  className={segmentButton(kind === k)}
                 >
                   {KIND_WORDS[k].label}
                 </button>

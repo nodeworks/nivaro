@@ -291,18 +291,18 @@ export function defaultUpgradeVersion(versions: string[], current: string | null
 }
 
 /** The run's step keys, in order (Task 5's run steps 1–5): a Docker deployment's. */
-export const UPGRADE_STEPS: { key: string; label: string }[] = [
-  { key: 'render', label: 'Write the stack' },
-  { key: 'apply', label: 'Apply it through the agent' },
-  { key: 'wait_version', label: 'Every replica runs the version' },
-  { key: 'wait_schema', label: "Every app's database is up to date" },
-  { key: 'verify', label: 'Each app answers at the version' }
+export const UPGRADE_STEPS: { key: string; label: string; short?: string }[] = [
+  { key: 'render', label: 'Write the stack', short: 'Write stack' },
+  { key: 'apply', label: 'Apply it through the agent', short: 'Apply' },
+  { key: 'wait_version', label: 'Every replica runs the version', short: 'Replicas' },
+  { key: 'wait_schema', label: "Every app's database is up to date", short: 'Databases' },
+  { key: 'verify', label: 'Each app answers at the version', short: 'Verify' }
 ]
 
 /** The steps of a run through the deployment's GitLab pipeline (steps 1–2 differ). */
-export const GITLAB_UPGRADE_STEPS: { key: string; label: string }[] = [
-  { key: 'push', label: 'Merge and pin in GitLab' },
-  { key: 'deploy', label: 'Run the deploy job' },
+export const GITLAB_UPGRADE_STEPS: { key: string; label: string; short?: string }[] = [
+  { key: 'push', label: 'Merge and pin in GitLab', short: 'Merge' },
+  { key: 'deploy', label: 'Run the deploy job', short: 'Deploy' },
   ...UPGRADE_STEPS.slice(2)
 ]
 

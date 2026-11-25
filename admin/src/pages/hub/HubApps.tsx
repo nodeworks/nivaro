@@ -1,6 +1,6 @@
 import { QueryErrorState, useOverflowTip } from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
-import { AppWindow, ChevronLeft } from 'lucide-react'
+import { AppWindow, ChevronLeft, Import, Plus } from 'lucide-react'
 import { useSearchParams } from 'react-router'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useAuth } from '@/lib/auth'
@@ -9,7 +9,7 @@ import { HubCreateApp } from './create/HubCreateApp'
 import { HubAdoptForm } from './HubAdoptForm'
 import { EnvStatusDot, HubAppDetail } from './HubAppDetail'
 import { fetchHubApps, type HubApp, hubKeys, useHubApp } from './hub-api'
-import { ghostButton } from './hub-parts'
+import { countLabel, ghostButton, ListPaneHeader, listPaneClass } from './hub-parts'
 
 /**
  * Apps (Hub tab): master-detail. The list names each app with its environments coloured by
@@ -46,37 +46,32 @@ export default function HubApps() {
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
       <div className='flex flex-1 min-h-0 overflow-hidden'>
-        <aside
-          className={cn(
-            'w-full shrink-0 flex-col overflow-y-auto border-slate-200 bg-white md:flex md:w-[272px] md:border-r dark:border-border dark:bg-card',
-            detailOpen ? 'hidden' : 'flex'
-          )}
-        >
-          <div className='flex items-center gap-1 border-b border-slate-200 py-2 pr-2 pl-3 dark:border-border'>
-            <p className='m-0 min-w-0 flex-1 truncate text-[12px] font-medium text-slate-500 tabular-nums dark:text-muted-foreground'>
-              {apps.data
-                ? `${apps.data.length} ${apps.data.length === 1 ? 'app' : 'apps'}`
-                : 'Apps'}
-            </p>
-            {isAdmin && (
-              <button
-                type='button'
-                className={cn(ghostButton, 'px-2', creating && 'bg-accent')}
-                onClick={() => show({ create: true })}
-              >
-                Create app
-              </button>
-            )}
-            {isAdmin && (
-              <button
-                type='button'
-                className={cn(ghostButton, 'px-2', adopting && 'bg-accent')}
-                onClick={() => show({ adopt: true })}
-              >
-                Adopt app
-              </button>
-            )}
-          </div>
+        <aside className={cn(listPaneClass, detailOpen ? 'hidden' : 'flex')}>
+          <ListPaneHeader
+            label={countLabel(apps.data?.length, 'app', 'apps')}
+            actions={
+              isAdmin && (
+                <>
+                  <button
+                    type='button'
+                    aria-pressed={creating}
+                    className={cn(ghostButton, 'px-2', creating && 'bg-accent')}
+                    onClick={() => show({ create: true })}
+                  >
+                    <Plus className='h-3.5 w-3.5' aria-hidden /> Create app
+                  </button>
+                  <button
+                    type='button'
+                    aria-pressed={adopting}
+                    className={cn(ghostButton, 'px-2', adopting && 'bg-accent')}
+                    onClick={() => show({ adopt: true })}
+                  >
+                    <Import className='h-3.5 w-3.5' aria-hidden /> Adopt app
+                  </button>
+                </>
+              )
+            }
+          />
           {apps.isPending ? (
             <div className='space-y-2 p-3'>
               {[0, 1, 2].map((i) => (

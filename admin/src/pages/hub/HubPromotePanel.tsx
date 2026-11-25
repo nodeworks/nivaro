@@ -747,7 +747,7 @@ function PromotionProgress({
           }))
         ]}
       />
-      <ol aria-label='Promotion steps' className='m-0 list-none space-y-1.5 p-0'>
+      <ol aria-label='Promotion steps' className='hub-run-steps m-0 list-none space-y-1.5 p-0'>
         {rows.map((r, i) => (
           <li
             key={r.key}
@@ -964,7 +964,7 @@ export function PromotionHistory({
       <div className='hidden overflow-x-auto sm:block'>
         <table aria-label={label} className='w-full min-w-[720px] text-[12px]'>
           <thead>
-            <tr className='border-b border-slate-200 text-left text-[11px] uppercase tracking-wide text-slate-500 dark:border-border dark:text-muted-foreground'>
+            <tr className='border-b border-slate-200 text-left text-[11px] font-medium text-slate-500 dark:border-border dark:text-muted-foreground'>
               <th className='py-2 pr-4 font-medium'>Version</th>
               <th className='py-2 pr-4 font-medium'>Kind</th>
               <th className='py-2 pr-4 font-medium'>Status</th>

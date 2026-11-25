@@ -26,8 +26,10 @@ export function HubEnvTag({
   className?: string
 }) {
   const on = useHubProductFlag()
-  if (!on) return null
-  return <EnvChip tone={envTone(envKey)} className={className} />
+  const tone = envTone(envKey)
+  // "Other" says nothing the key does not: an unrecognised environment gets no tag.
+  if (!on || tone === 'other') return null
+  return <EnvChip tone={tone} className={className} />
 }
 
 export function EnvChip({ tone, className }: { tone: EnvTone; className?: string }) {

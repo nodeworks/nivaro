@@ -212,7 +212,7 @@ export const STATUS_COPY: Record<HubStatusState, string> = {
   ok: 'Running',
   degraded: 'Running with warnings',
   unreachable: 'Not answering',
-  link_refused: 'Hub link refused — check HUB_TOKEN'
+  link_refused: 'Hub link refused'
 }
 
 /** Why an environment shows what it shows, by the status read's error code. */
@@ -246,7 +246,7 @@ export const STATUS_TONE: Record<ChipState, string> = {
   unreachable:
     'border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300',
   link_refused:
-    'border-violet-200 bg-violet-50 text-violet-700 dark:border-violet-900/60 dark:bg-violet-950/40 dark:text-violet-300',
+    'border-slate-300 bg-slate-50 text-slate-700 dark:border-border dark:bg-muted dark:text-slate-200',
   checking:
     'border-slate-200 bg-slate-50 text-slate-500 dark:border-border dark:bg-muted dark:text-muted-foreground',
   failed:
@@ -257,7 +257,7 @@ export const STATUS_DOT: Record<ChipState, string> = {
   ok: 'bg-emerald-500',
   degraded: 'bg-amber-500',
   unreachable: 'bg-red-500',
-  link_refused: 'bg-violet-500',
+  link_refused: 'bg-slate-400 dark:bg-slate-500',
   checking: 'bg-slate-300 dark:bg-slate-600',
   failed: 'bg-orange-500'
 }

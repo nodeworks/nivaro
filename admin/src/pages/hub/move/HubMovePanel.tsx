@@ -58,6 +58,7 @@ import {
   isRollingBack,
   LINK_OVERRIDE_TEXT,
   MOVE_KIND_WORDS,
+  MOVE_STEP_SHORT,
   type MoveIssue,
   type MovePlan,
   type MoveStepState,
@@ -1329,8 +1330,12 @@ function MoveProgress({
       )}
 
       {/* Standalone Hub: the move as a track (renders nothing otherwise). */}
-      <HubRunTimeline what='Move' live={live} steps={rows} />
-      <ol aria-label='Move steps' className='m-0 list-none space-y-1.5 p-0'>
+      <HubRunTimeline
+        what='Move'
+        live={live}
+        steps={rows.map((r) => ({ ...r, short: MOVE_STEP_SHORT[r.key] }))}
+      />
+      <ol aria-label='Move steps' className='hub-run-steps m-0 list-none space-y-1.5 p-0'>
         {rows.map((r) => (
           <li
             key={r.key}

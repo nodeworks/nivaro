@@ -14,7 +14,16 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useAuth } from '@/lib/auth'
 import { cn, formatDateTime, formatRelative } from '@/lib/utils'
 import { HUB_MASK } from '../hub-api'
-import { CopyButton, dangerArmed, dangerGhost, ghostButton, SectionCard } from '../hub-parts'
+import {
+  CopyButton,
+  countLabel,
+  dangerArmed,
+  dangerGhost,
+  ghostButton,
+  ListPaneHeader,
+  listPaneClass,
+  SectionCard
+} from '../hub-parts'
 import { SharedDeploymentForm } from './SharedDeploymentForm'
 import { SharedTokenReveal } from './SharedTokenReveal'
 import { SharedUpgradePanel } from './SharedUpgradePanel'
@@ -123,24 +132,21 @@ function SharedAdmin() {
 
   return (
     <div className='flex flex-1 min-h-0 overflow-hidden'>
-      <aside
-        className={cn(
-          'w-full shrink-0 flex-col overflow-y-auto border-slate-200 bg-white md:flex md:w-[300px] md:border-r dark:border-border dark:bg-card',
-          detailOpen ? 'hidden' : 'flex'
-        )}
-      >
-        <div className='flex items-center gap-2 border-b border-slate-200 px-3 py-2 dark:border-border'>
-          <p className='m-0 flex-1 text-[12px] font-medium text-slate-500 dark:text-muted-foreground'>
-            Shared deployments
-          </p>
-          <button
-            type='button'
-            className={cn(ghostButton, creating && 'bg-accent')}
-            onClick={() => show({ create: true })}
-          >
-            <Plus className='h-3.5 w-3.5' aria-hidden /> New
-          </button>
-        </div>
+      <aside className={cn(listPaneClass, detailOpen ? 'hidden' : 'flex')}>
+        <ListPaneHeader
+          label={countLabel(list.data?.length, 'shared deployment', 'shared deployments')}
+          actions={
+            <button
+              type='button'
+              aria-pressed={creating}
+              aria-label='New shared deployment'
+              className={cn(ghostButton, creating && 'bg-accent')}
+              onClick={() => show({ create: true })}
+            >
+              <Plus className='h-3.5 w-3.5' aria-hidden /> New
+            </button>
+          }
+        />
         {list.isPending ? (
           <div className='space-y-2 p-3'>
             {[0, 1].map((i) => (
@@ -380,7 +386,7 @@ function SharedDetailView({
     <div className='space-y-4 p-4 sm:p-6'>
       <header className='flex flex-wrap items-start gap-3'>
         <div className='min-w-0 flex-[1_1_280px]'>
-          <h2 className='m-0 truncate text-[15px] font-semibold text-slate-900 dark:text-foreground'>
+          <h2 className='m-0 truncate text-[18px] font-semibold tracking-[-0.015em] text-slate-900 dark:text-foreground'>
             {row.name}
           </h2>
           <p className='m-0 mt-1 flex flex-wrap items-center gap-1.5 text-[12px] text-slate-500 dark:text-muted-foreground'>
@@ -526,9 +532,13 @@ function MetaGrid({ detail, link }: { detail: SharedDetail; link: SharedLinkStat
     { label: 'Added', value: row.created_at ? formatDateTime(row.created_at) : '—' }
   ]
   return (
-    <dl className='m-0 grid grid-cols-1 gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 sm:grid-cols-2 xl:grid-cols-4 dark:border-border dark:bg-border'>
+    // The dividers are each cell's outline, so a short last row leaves card, not a grey block.
+    <dl className='m-0 grid grid-cols-1 gap-px overflow-hidden rounded-lg border border-slate-200 bg-white sm:grid-cols-2 xl:grid-cols-4 dark:border-border dark:bg-card'>
       {cells.map((c) => (
-        <div key={c.label} className='min-w-0 bg-white px-3 py-2 dark:bg-card'>
+        <div
+          key={c.label}
+          className='min-w-0 bg-white px-3 py-2 outline outline-1 outline-slate-200 dark:bg-card dark:outline-border'
+        >
           <dt className='text-[11px] text-slate-500 dark:text-muted-foreground'>{c.label}</dt>
           <dd
             className={cn(
