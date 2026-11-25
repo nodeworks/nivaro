@@ -278,7 +278,7 @@ export const hubLinkDocs: DocSection = {
     },
     {
       type: 'note',
-      text: 'The link started read-only. Later phases added seeding a first administrator and, for moves, strict maintenance on and off, retiring an app, a shared-readiness report and file transfer (see Moving an environment). An app that does not set HUB_TOKEN has no hub link at all: the route answers 404, which the Hub shows as `link_refused` / `HUB_LINK_MISSING` for an environment saved with a token. An environment saved without a token is read through the public version and health routes instead.'
+      text: 'The link started read-only. Later phases added seeding a first administrator and, for moves, strict maintenance on and off, retiring an app, a shared-readiness report and file transfer (see Moving an environment), and, from 0.3.215, two read-only summaries the Hub collects every 15 minutes: issue and crash groups (`GET /api/hub-link/ops/issues`, see Issues across apps) and stored-files usage (`GET /api/hub-link/ops/files`, see Storage health). An app that does not set HUB_TOKEN has no hub link at all: the route answers 404, which the Hub shows as `link_refused` / `HUB_LINK_MISSING` for an environment saved with a token. An environment saved without a token is read through the public version and health routes instead.'
     }
   ]
 }
