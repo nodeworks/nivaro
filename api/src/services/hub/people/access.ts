@@ -1,5 +1,5 @@
 import { db } from '../../../db/index.js'
-import { flagOf, isProductionEnv } from '../owner-access.js'
+import { type EnvOrder, flagOf, isProductionEnv } from '../owner-access.js'
 import type { PersonIdentity } from './directory.js'
 import {
   callPeople,
@@ -63,7 +63,7 @@ export async function askableEnvironments(): Promise<HubEnvRef[]> {
       'e.placement_id',
       'e.production'
     )) as Array<Record<string, unknown>>
-  const byApp = new Map<number, Array<{ id: number; key: string; position: number }>>()
+  const byApp = new Map<number, EnvOrder[]>()
   for (const r of rows) {
     const list = byApp.get(Number(r.app_id)) ?? []
     list.push({

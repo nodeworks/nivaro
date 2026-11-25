@@ -158,7 +158,14 @@ export interface ParsedIceUrl {
   secure: boolean
 }
 
-const URL_RE = /^(stuns?|turns?):(\[[^\]]+\]|[^:?\s]+)(?::(\d+))?(?:\?transport=(udp|tcp))?$/i
+/**
+ * The ONE reader of a STUN/TURN address (the probe dials it, validIceUrl stores it, the SSRF check
+ * of a shared deployment judges it): the host is a plain host name (letters, digits, dots,
+ * dashes) or a bracketed IPv6 literal, never user info, `#`, `\`, `%` or spaces, so no two readers
+ * can see a different host in the same text.
+ */
+const URL_RE =
+  /^(stuns?|turns?):(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.-]+)(?::(\d{1,5}))?(?:\?transport=(udp|tcp))?$/i
 
 export function parseIceUrl(url: string): ParsedIceUrl | null {
   const m = URL_RE.exec(url.trim())
@@ -166,6 +173,7 @@ export function parseIceUrl(url: string): ParsedIceUrl | null {
   const scheme = m[1].toLowerCase() as ParsedIceUrl['scheme']
   const secure = scheme === 'stuns' || scheme === 'turns'
   const host = m[2].replace(/^\[|\]$/g, '')
+  if (!host || (m[2].startsWith('[') && net.isIP(host) !== 6)) return null
   const port = m[3] ? Number(m[3]) : secure ? 5349 : 3478
   if (!(port > 0 && port < 65536)) return null
   // `turns:` is TLS over TCP; `?transport=tcp` is plain TCP; the default is UDP.
@@ -212,8 +220,14 @@ class Queue {
   }
 }
 
-async function openWire(u: ParsedIceUrl, timeoutMs: number): Promise<Wire> {
-  const addr = await dns.promises.lookup(u.host)
+/** Resolves a host to the one address dialled (a shared deployment passes a checked one). */
+export type IceLookup = (host: string) => Promise<{ address: string; family: number }>
+
+const plainLookup: IceLookup = (host) => dns.promises.lookup(host)
+
+async function openWire(u: ParsedIceUrl, timeoutMs: number, lookup: IceLookup): Promise<Wire> {
+  // Resolved ONCE; the socket connects to exactly this address (no second lookup to rebind).
+  const addr = await lookup(u.host)
   if (u.transport === 'udp') {
     const sock = dgram.createSocket(addr.family === 6 ? 'udp6' : 'udp4')
     const q = new Queue()
@@ -289,6 +303,12 @@ export interface ProbeResult {
 
 export interface ProbeOptions {
   timeoutMs?: number
+  /**
+   * How a host name becomes the address dialled. A Hub shared deployment passes
+   * `guardedIceLookup` (huddle-destinations.ts): one resolution, checked against private and
+   * reserved ranges and SSRF_ALLOW_HOSTS, and that address is the one connected to.
+   */
+  lookup?: IceLookup
 }
 
 function uint32(n: number): Buffer {
@@ -324,7 +344,7 @@ export async function probeStun(url: string, opts: ProbeOptions = {}): Promise<P
   if (!u) return { ...base, ok: false, ms: 0, error: 'Not a valid stun: url.' }
   let wire: Wire | null = null
   try {
-    wire = await openWire(u, timeout)
+    wire = await openWire(u, timeout, opts.lookup ?? plainLookup)
     const txid = randomBytes(12)
     wire.send(encodeStun(BINDING_REQUEST, txid, []))
     const res = await expect(wire, txid, timeout, started + timeout)
@@ -373,7 +393,7 @@ export async function probeTurn(
     error
   })
   try {
-    wire = await openWire(u, timeout)
+    wire = await openWire(u, timeout, opts.lookup ?? plainLookup)
 
     // 1. Allocate with no credentials: a 401 hands us the realm and nonce.
     let txid = randomBytes(12)

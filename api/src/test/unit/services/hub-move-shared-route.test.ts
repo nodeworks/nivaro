@@ -16,7 +16,8 @@ vi.mock('../../../db/index.js', () => {
   }
   return { db: () => chain }
 })
-vi.mock('../../../services/deployment-mode.js', () => ({
+vi.mock('../../../services/deployment-mode.js', async (orig) => ({
+  ...(await orig<typeof import('../../../services/deployment-mode.js')>()),
   hubPublicOrigin: () => 'https://hub.example.com'
 }))
 vi.mock('../../../services/hub/drivers.js', () => ({

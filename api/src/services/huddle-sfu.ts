@@ -1,5 +1,5 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
-import { sfuDestinationAllowed } from './huddle-destinations.js'
+import { huddleFetch, sfuDestinationAllowed } from './huddle-destinations.js'
 
 /**
  * Large huddles (#2859): above a size the mesh (one upload per peer) stops
@@ -251,7 +251,7 @@ export async function sfuRemoveParticipant(
   s: SfuServer,
   room: string,
   identity: string,
-  fetchImpl: typeof fetch = fetch,
+  fetchImpl: typeof fetch = huddleFetch,
   timeoutMs = 5000
 ): Promise<void> {
   const res = await twirp(
@@ -269,7 +269,7 @@ export async function sfuRemoveParticipant(
 export async function sfuDeleteRoom(
   s: SfuServer,
   room: string,
-  fetchImpl: typeof fetch = fetch,
+  fetchImpl: typeof fetch = huddleFetch,
   timeoutMs = 5000
 ): Promise<void> {
   const res = await twirp(s, 'DeleteRoom', { room }, { ...ADMIN, room }, fetchImpl, timeoutMs)
@@ -288,7 +288,7 @@ export type SfuProbe =
  */
 export async function probeLiveKit(
   s: SfuServer,
-  fetchImpl: typeof fetch = fetch,
+  fetchImpl: typeof fetch = huddleFetch,
   timeoutMs = 5000
 ): Promise<SfuProbe> {
   const base = sfuDestinationAllowed(s.livekit_url) ? livekitHttpBase(s.livekit_url) : null

@@ -290,6 +290,8 @@ let current: World
 beforeAll(async () => {
   await m542.up(db)
   await m543.up(db)
+  // Gap `create` (L4): a promotion asks for an open creation of the environment.
+  await (await import('../../../db/migrations/545_hub_creations.js')).up(db)
   await db.schema.createTable('nivaro_users', (t) => {
     t.string('id').primary()
     t.string('first_name')

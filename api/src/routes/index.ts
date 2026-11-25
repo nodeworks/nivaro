@@ -6,7 +6,7 @@ import { clearMetadataCache } from '../services/collections.js'
 import { announceConfigChanged, collectionHint, isConfigWrite } from '../services/config-live.js'
 import { configWatchOnResponse, configWatchPreHandler } from '../services/config-watch.js'
 import { bustDefinitionCache } from '../services/definition-cache.js'
-import { isMultiTenant } from '../services/deployment-mode.js'
+import { isMultiTenant, isNivaroCloud } from '../services/deployment-mode.js'
 import { bustLayoutReferences } from '../services/layout-references.js'
 import { announcePermissionChange, permissionTarget } from '../services/permission-live.js'
 import { clearPickerRuleCache } from '../services/picker-rules.js'
@@ -168,9 +168,12 @@ import { helpVideoMediaRoutes, helpVideosRoutes } from './help-videos.js'
 import { hierarchyRoutes } from './hierarchy.js'
 import { hubRoutes } from './hub.js'
 import { hubAppLinkRoutes } from './hub-app-link.js'
+import { hubDeploymentUsageRoutes, hubLinkUsageRoutes } from './hub-capacity-link.js'
 import { hubDeploymentLinkRoutes } from './hub-deployment-link.js'
 import { hubLinkRoutes } from './hub-link.js'
 import { hubOidcRoutes } from './hub-oidc.js'
+import { hubOpsRoutes } from './hub-ops.js'
+import { hubOpsDeploymentRoutes, hubOpsLinkRoutes } from './hub-ops-link.js'
 import { hubSigninAdminRoutes } from './hub-signin-admin.js'
 import { hubSwitcherRoutes } from './hub-switcher.js'
 import { hubTransferRoutes } from './hub-transfer.js'
@@ -487,6 +490,12 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(hubLinkRoutes, { prefix: '/hub-link' })
   // Hub phase 6 deployment link: mounted only on a Hub shared deployment (bearer-only).
   await app.register(hubDeploymentLinkRoutes, { prefix: '/hub-deployment' })
+  // Hub capacity: GET /usage beside each link (same mount rules, same bearer).
+  await app.register(hubDeploymentUsageRoutes, { prefix: '/hub-deployment' })
+  await app.register(hubLinkUsageRoutes, { prefix: '/hub-link' })
+  // Hub ops (issue rollup, files usage): read-only aggregates over the hub / deployment link.
+  await app.register(hubOpsLinkRoutes, { prefix: '/hub-link' })
+  await app.register(hubOpsDeploymentRoutes, { prefix: '/hub-deployment' })
   // Hub phase 6 file transfer (ticket-only): where the hub link is, or on a Hub shared deployment.
   await app.register(hubTransferRoutes, { prefix: '/hub-transfer' })
   // File source: mounted only where FILE_SOURCE_TOKEN is set (bearer-only) — lower environments
@@ -503,6 +512,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(hubSigninAdminRoutes, { prefix: '/hub/signin' })
   await app.register(hubOidcRoutes, { prefix: '/hub/oidc' })
   await app.register(hubAppLinkRoutes, { prefix: '/hub/app-link' })
+  // Hub ops: cross-app issues, secret rotation helper, storage health (HUB=on only).
+  await app.register(hubOpsRoutes, { prefix: '/hub' })
   // Hub phase 7 (app side): GET /api/hub-switcher + readiness `hub-signin`; 404 without the link.
   await app.register(hubSwitcherRoutes)
   await app.register(releaseRunsRoutes, { prefix: '/release' })
@@ -766,8 +777,9 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(treePermissionsRoutes)
   await app.register(atRiskRoutes, { prefix: '/at-risk' })
   await app.register(retentionRoutes, { prefix: '/retention' })
-  // Issue tracker sync is a self-hosted feature — never mounted in cloud mode.
-  if (!isMultiTenant()) {
+  // Issue tracker sync: self-hosted, and per app on a Hub shared deployment (each app's own
+  // connections, switch and webhook, routed by the app's host) — never mounted in Nivaro Cloud.
+  if (!isNivaroCloud()) {
     await app.register(trackerFeaturePublicRoutes, { prefix: '/trackers' })
     await app.register(trackerRoutes, { prefix: '/trackers' })
     // Create / link from a source: admins, and create_roles members for tickets and records.

@@ -15,6 +15,8 @@ import {
 const OPS: Record<string, StorageOp> = {
   put: 'write',
   putFile: 'write',
+  // 0.3.215: a move's server-side copy (resolves to the bytes copied)
+  copyFrom: 'write',
   get: 'read',
   delete: 'delete',
   exists: 'check',

@@ -124,6 +124,19 @@ const cleanPlan = {
   ]
 }
 
+const dockerDriver = {
+  id: 9,
+  kind: 'docker',
+  name: 'Swarm agent',
+  secret: '••••••',
+  config: {
+    agent_url: 'https://agent.example.com',
+    dns_mode: 'automatic',
+    wildcard_domain: 'apps.example.com',
+    edge_target: null
+  }
+}
+
 function answerGets(targets: unknown[]) {
   h.get.mockImplementation((url: string) => {
     if (url === '/hub/targets') return Promise.resolve({ data: { data: targets } })
@@ -143,6 +156,8 @@ function answerGets(targets: unknown[]) {
         }
       })
     if (url === '/hub/databases') return Promise.resolve({ data: { data: [] } })
+    if (url === '/hub/drivers') return Promise.resolve({ data: { data: [dockerDriver] } })
+    if (url === '/hub/shared') return Promise.resolve({ data: { data: [] } })
     return Promise.reject(new Error(`unexpected ${url}`))
   })
 }
@@ -354,6 +369,45 @@ describe('HubCreateApp', () => {
     await waitFor(() => expect(onDone).toHaveBeenCalledWith(7))
     const created = h.post.mock.calls.find(([u]) => u === '/hub/apps/create')?.[1]
     expect(created.signin.client_secret).toBe('real-secret-123')
+  })
+
+  it('Docker: picks a driver and stack settings; previews mask every secret, Create sends them', async () => {
+    answerGets([baseTarget])
+    answerPlan({ ...cleanPlan, target: { kind: 'docker', name: 'Swarm agent' } })
+    const onDone = mount()
+    await screen.findByRole('option', { name: /Swarm one/ })
+    fireEvent.click(screen.getByRole('button', { name: 'Docker' }))
+    await screen.findByRole('option', { name: /Swarm agent/ })
+    fireEvent.change(screen.getByLabelText('Key'), { target: { value: 'demo' } })
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Demo' } })
+    fireEvent.change(screen.getByLabelText('Docker driver'), { target: { value: '9' } })
+    fireEvent.change(screen.getByLabelText('Version'), { target: { value: '1.2.3' } })
+    fireEvent.change(screen.getByLabelText('Redis'), { target: { value: 'external' } })
+    fireEvent.click(screen.getByRole('button', { name: /Add secret/ }))
+    fireEvent.change(screen.getByLabelText('Secret name'), { target: { value: 'REDIS_URL' } })
+    fireEvent.change(screen.getByLabelText('Value of REDIS_URL'), {
+      target: { value: 'redis://:pw-123@r:6379' }
+    })
+    fireEvent.change(screen.getByLabelText('Client secret'), { target: { value: 'oidc-123' } })
+    await waitFor(() => expect(createButton().disabled).toBe(false), { timeout: 3000 })
+    const sent = planCalls().at(-1)?.[1]
+    expect(sent.target_id).toBeUndefined()
+    expect(sent.target).toMatchObject({
+      kind: 'docker',
+      driver_id: 9,
+      stack: { redis: 'external' }
+    })
+    expect(sent.target.stack.secrets).toEqual({ REDIS_URL: '••••••' })
+    for (const [, body] of planCalls()) expect(JSON.stringify(body)).not.toContain('pw-123')
+    h.post.mockImplementation((url: string) =>
+      url === '/hub/apps/create'
+        ? Promise.resolve({ data: { data: { app_id: 8, environments: [] } } })
+        : Promise.resolve({ data: { data: cleanPlan } })
+    )
+    fireEvent.click(createButton())
+    await waitFor(() => expect(onDone).toHaveBeenCalledWith(8))
+    const created = h.post.mock.calls.find(([u]) => u === '/hub/apps/create')?.[1]
+    expect(created.target.stack.secrets.REDIS_URL).toBe('redis://:pw-123@r:6379')
   })
 
   it("an older preview's blockers leave the environment rows once the form changes", async () => {

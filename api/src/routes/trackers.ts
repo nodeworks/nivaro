@@ -1,7 +1,9 @@
 import type { FastifyInstance } from 'fastify'
 import { adminBaseUrl } from '../admin-base.js'
 import { db } from '../db/index.js'
+import { tenantOrigin } from '../db/tenant-context.js'
 import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
+import { perAppJobs } from '../services/deployment-mode.js'
 import {
   ConnectionInputError,
   getConnection,
@@ -83,7 +85,14 @@ import { type CreateIssueInput, TrackerError } from '../services/trackers/types.
 
 const SAMPLE_TEMPLATE_MAX = 20_000
 
-const webhookUrl = (id: number) => `${adminBaseUrl() ?? ''}/api/tracker-hooks/gitlab/${id}`
+/**
+ * The address GitLab's webhook must call: the admin host self-hosted; on a Hub shared deployment
+ * the app's own origin, never the shared process's address (its env names none of the apps, and
+ * the host is what routes a delivery to its app: the connection id alone never crosses apps).
+ */
+const webhookBase = () =>
+  (perAppJobs() ? (tenantOrigin() ?? '') : (adminBaseUrl() ?? '')).replace(/\/+$/, '')
+const webhookUrl = (id: number) => `${webhookBase()}/api/tracker-hooks/gitlab/${id}`
 
 function hintFor(err: unknown, host: string): string {
   if (err instanceof TrackerError) {
@@ -91,7 +100,9 @@ function hintFor(err: unknown, host: string): string {
       return 'GitLab refused the token. It needs the api scope and Reporter (or higher) access to the project.'
     if (err.kind === 'not_found') return "Project not found or the token can't see it."
     if (/private\/(loopback|reserved)/.test(err.message))
-      return 'This GitLab is on a private address. Add its host to SSRF_ALLOW_HOSTS on the API and restart.'
+      return perAppJobs()
+        ? "This GitLab is on a private address. Ask the shared deployment's operator to add its host to SSRF_ALLOW_HOSTS."
+        : 'This GitLab is on a private address. Add its host to SSRF_ALLOW_HOSTS on the API and restart.'
     if (err.kind === 'network') return `Nivaro could not reach ${host}.`
   }
   return 'GitLab did not answer as expected.'

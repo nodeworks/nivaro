@@ -152,7 +152,13 @@ export const OWNER_UNGUARDED: Record<string, string> = {
   'POST /databases/:id/check': 'a connection check, to the database’s own server only',
   'POST /environments/:envId/creation/check': 're-checks a creation step (a read of its state)',
   'POST /environments/:envId/creation/installed':
-    'the operator says the app is installed (a creation wait), nothing is deployed'
+    'the operator says the app is installed (a creation wait), nothing is deployed',
+  // Release operations (routes/hub-releases.ts): reads that carry a body, nothing deploys.
+  'POST /apps/:id/trains/check': 'a read: what a train would do, its first plan and a freeze now',
+  'POST /environments/:envId/release-notes':
+    'a read: what a promotion or rollback of a version would change (GitLab read-only)',
+  'POST /deploys/:id/release-notes':
+    'works out and stores the release notes of a past run the caller may read; deploys nothing'
 }
 
 export interface OwnerRefusal {

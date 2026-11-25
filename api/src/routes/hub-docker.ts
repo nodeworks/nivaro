@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { environmentFromRow, idParam, isAppOwner } from '../services/hub/apps.js'
+import { creationOpenRefusal } from '../services/hub/create/store.js'
 import { hubDeploysKeys } from '../services/hub/deploys.js'
 import {
   AgentError,
@@ -29,12 +30,14 @@ import {
   withEnvironmentLock
 } from '../services/hub/docker/stack-guards.js'
 import {
+  DEFAULT_STACK_FILES,
   publicStackSettings,
   readStackSettings,
   type StackSettingsRow,
   saveStackSettings,
   validateStackSettings
 } from '../services/hub/docker/stack-settings.js'
+import { volumesPerNode } from '../services/hub/docker/templates.js'
 import { getDriver, placedOnShared, SHARED_PLACEMENT_MESSAGE } from '../services/hub/drivers.js'
 import { moveOpenRefusal } from '../services/hub/move-open.js'
 import { markNameServing } from '../services/hub/name-check.js'
@@ -367,6 +370,9 @@ function changedNames(
   const out: string[] = []
   for (const k of ['size', 'redis', 'publish_port'] as const)
     if ((before?.[k] ?? null) !== after[k] && (before || sent[k] !== undefined)) out.push(k)
+  for (const k of ['uploads_folder', 'files_subfolder', 'run_as'] as const)
+    if ((before?.files?.[k] ?? null) !== (after.files?.[k] ?? null) && sent[k] !== undefined)
+      out.push(k)
   const a = before?.settings ?? {}
   const b = after.settings
   for (const k of new Set([...Object.keys(a), ...Object.keys(b)]))
@@ -393,7 +399,8 @@ function settingsAnswer(envId: number, row: StackSettingsRow | null, env: Record
     redis: 'bundled',
     publish_port: null,
     settings: {},
-    secrets: {}
+    secrets: {},
+    files: { ...DEFAULT_STACK_FILES }
   }
   const pins = pinsOf(env)
   return {
@@ -449,6 +456,9 @@ export function hubDockerRoutes(app: FastifyInstance) {
     let status: StackStatus | null = null
     let agent = 'ok'
     let localVolumesOnNodes: number | null = null
+    /** Agent 0.2.3: uploads on an NFS export (Remove keeps them) and the Redis pin label. */
+    let uploadsOnShare = false
+    let redisPinLabel: string | null = null
     /** P4-35: what Apply now would deploy against what runs (size, pins; never a setting). */
     let applyPreview: ApplyPreview | null = null
     /** P4-25: no service runs, but parts of this stack remain (what Remove stack clears). */
@@ -499,9 +509,9 @@ export function hubDockerRoutes(app: FastifyInstance) {
         // P4-33: local volumes on a swarm of several nodes split the stack's data.
         if (status) {
           const h = await agentHealth(target.driver).catch(() => null)
-          const nodes = h?.swarm?.nodes
-          if (typeof nodes === 'number' && nodes > 1 && (h?.volume_driver ?? 'local') === 'local')
-            localVolumesOnNodes = nodes
+          localVolumesOnNodes = volumesPerNode(h)
+          uploadsOnShare = h?.volume_nfs === true
+          redisPinLabel = typeof h?.redis_pin_label === 'string' ? h.redis_pin_label : null
         }
       } catch (err) {
         const code = err instanceof AgentError ? err.code : null
@@ -516,6 +526,8 @@ export function hubDockerRoutes(app: FastifyInstance) {
         status,
         agent,
         local_volumes_on_nodes: localVolumesOnNodes,
+        uploads_on_share: uploadsOnShare,
+        redis_pin_label: redisPinLabel,
         leftovers,
         apply_preview: status ? applyPreview : null
       }
@@ -611,6 +623,9 @@ export function hubDockerRoutes(app: FastifyInstance) {
       // goes through prepareStackSpec + the agent, never this route.
       const open = await moveOpenRefusal({ envIds: [envId] })
       if (open) return fail(reply, open.status, open.code, open.message)
+      // Gap `create` (review L4): a stack its creation still walks is the creation's.
+      const creating = await creationOpenRefusal(envId)
+      if (creating) return fail(reply, creating.status, creating.code, creating.message)
       try {
         const done = await withEnvironmentLock(envId, async (): Promise<RestartOutcome> => {
           // Ruling P4-16: never rebuilt from an inspect — the spec the stack runs, rendered fresh

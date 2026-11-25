@@ -16,6 +16,7 @@ import {
   applyStack,
   checkStackName,
   fetchStack,
+  fetchStackSettings,
   type RemoveResult,
   refusalOf,
   removedCount,
@@ -403,6 +404,7 @@ function StackBody({
             env={env}
             appId={appId}
             idPrefix={idPrefix}
+            stackName={info.stack_name}
             onApplyNow={s ? () => setOpen('apply') : undefined}
           />
         </Section>
@@ -417,6 +419,7 @@ function StackBody({
           env={env}
           idPrefix={idPrefix}
           name={info.stack_name}
+          uploadsOnShare={info.uploads_on_share === true}
           refresh={refresh}
           onClose={() => setOpen(null)}
           onRemoved={setRemoved}
@@ -645,6 +648,7 @@ function RemoveForm({
   env,
   idPrefix,
   name,
+  uploadsOnShare,
   refresh,
   onClose,
   onRemoved
@@ -652,12 +656,23 @@ function RemoveForm({
   env: HubEnvironment
   idPrefix: string
   name: string
+  /** Agent 0.2.3: the uploads are files on an NFS share; only Redis data can be deleted. */
+  uploadsOnShare: boolean
   refresh: () => void
   onClose: () => void
   onRemoved: (r: RemoveResult) => void
 }) {
   const [typed, setTyped] = useState('')
   const [volumes, setVolumes] = useState(false)
+  // On an NFS share, name the folder whose files stay (the stack's own one, or the adopted one).
+  const files = useQuery({
+    queryKey: stackKeys.settings(env.id),
+    queryFn: () => fetchStackSettings(env.id),
+    enabled: uploadsOnShare,
+    retry: false
+  })
+  const adopted = files.data?.files?.uploads_folder ?? null
+  const keptFolder = adopted ?? `${name}/uploads`
   const [typedVol, setTypedVol] = useState('')
   const phrase = `delete ${name} data`
   const ready = typed === name && (!volumes || typedVol === phrase)
@@ -676,7 +691,10 @@ function RemoveForm({
       <div className='space-y-2 rounded-md border border-red-200 bg-red-50/60 p-2.5 dark:border-red-500/30 dark:bg-red-950/20'>
         <p className={`m-0 ${rowText}`}>
           Stops every service of <span className='font-mono'>{name}</span> and suspends the
-          environment. Its data volumes stay unless you delete them too.
+          environment.{' '}
+          {uploadsOnShare
+            ? 'Its uploads stay on the NFS share whatever you choose; its Redis data stays unless you delete it.'
+            : 'Its data volumes stay unless you delete them too.'}
         </p>
         <div className='flex flex-wrap items-center gap-2'>
           <label htmlFor={`hub-remove-${env.id}${idPrefix}`} className={rowText}>
@@ -694,13 +712,25 @@ function RemoveForm({
         <div className='flex items-center gap-2'>
           <Checkbox id={volId} checked={volumes} onCheckedChange={(v) => setVolumes(v === true)} />
           <label htmlFor={volId} className={rowText}>
-            Also delete the stack's data volumes
+            {uploadsOnShare
+              ? "Also delete the stack's Redis data"
+              : "Also delete the stack's data volumes"}
           </label>
         </div>
         {volumes && (
           <div className='space-y-1.5'>
             <p className='m-0 text-[12px] text-red-700 dark:text-red-300'>
-              The uploads and Redis data go for good. This cannot be undone.
+              {uploadsOnShare ? (
+                <>
+                  The Redis data goes for good; this cannot be undone. The files in{' '}
+                  <span className='font-mono'>{keptFolder}</span> on the NFS share are kept
+                  {adopted
+                    ? '.'
+                    : ': delete that folder on the file server if you no longer need it.'}
+                </>
+              ) : (
+                'The uploads and Redis data go for good. This cannot be undone.'
+              )}
             </p>
             <div className='flex flex-wrap items-center gap-2'>
               <label htmlFor={`hub-remove-vol-${env.id}${idPrefix}`} className={rowText}>

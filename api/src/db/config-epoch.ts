@@ -538,9 +538,34 @@ export async function configEpochForRead(): Promise<number | null> {
   return configEpochNow()
 }
 
-/** True while this process clears caches because ANOTHER process moved the number. */
+/** True while this process clears caches because ANOTHER process moved the number (or, on a Hub
+ *  shared deployment, announced an app's configuration change). */
 export function isRemoteEpochClear(): boolean {
-  return remoteClear
+  return remoteClear || appOnlyClear
+}
+
+/** Set only for the synchronous span of runAppOnlyClear. */
+let appOnlyClear = false
+
+/**
+ * Hub shared deployment: run `fn` (synchronous) as a clear of ONE app's caches, heard from another
+ * process (services/app-config-epoch.ts), inside that app's async context. A cache keyed by hand
+ * across apps drops only that app's entries (isAppOnlyClear); per-app slots (appMap / appBox)
+ * already clear only the current app.
+ */
+export function runAppOnlyClear<T>(fn: () => T): T {
+  const prev = appOnlyClear
+  appOnlyClear = true
+  try {
+    return fn()
+  } finally {
+    appOnlyClear = prev
+  }
+}
+
+/** True inside runAppOnlyClear: clear the current app's entries only. */
+export function isAppOnlyClear(): boolean {
+  return appOnlyClear
 }
 
 const writeListeners = new Set<() => void>()
@@ -632,6 +657,42 @@ function attachEpochDriverSeam(knexInstance: Knex): void {
   }
   if (!proto || proto[EPOCH_SEAM] || typeof proto._query !== 'function') return
   proto[EPOCH_SEAM] = true
+  const original = proto._query
+  proto._query = function patched(this: unknown, connection: unknown, query: { sql?: string }) {
+    try {
+      const sql = typeof query?.sql === 'string' ? query.sql : ''
+      if (sql && movesConfigEpoch(sql)) noteConfigWrite(sql)
+    } catch {
+      /* the note never affects the statement */
+    }
+    return original.call(this, connection, query)
+  }
+}
+
+/**
+ * Hub shared deployment: every app pool's driver tells the configuration-write listeners
+ * (onConfigWrite) about a configuration write, on every engine — SQL Server included, whose
+ * seam (db/metadata-query-cache.ts) is attached only to the static pool, which on a shared
+ * deployment is a stand-in that never runs a statement. The listeners hear it inside the app's
+ * own async context; services/app-config-epoch.ts turns that into the app's epoch. Patches the
+ * driver PROTOTYPE once per driver, so a transaction's cloned client is covered; a prototype the
+ * SQL Server read-cache seam or the epoch seam above already patched is left alone (it notes the
+ * write itself). The epoch (`ENABLED`) stays off: only the listeners hear the note.
+ */
+const APP_EPOCH_SEAM = Symbol.for('nivaro.appConfigEpochSeam')
+const READ_CACHE_SEAM = Symbol.for('nivaro.metadataQueryCache')
+export function attachAppConfigWriteSeam(knexInstance: Knex): void {
+  const client = (knexInstance as unknown as { client?: object }).client
+  if (!client) return
+  const proto = Object.getPrototypeOf(client) as {
+    _query?: (this: unknown, connection: unknown, query: { sql?: string }) => Promise<unknown>
+    [APP_EPOCH_SEAM]?: boolean
+    [READ_CACHE_SEAM]?: boolean
+    [EPOCH_SEAM]?: boolean
+  }
+  if (!proto || typeof proto._query !== 'function') return
+  if (proto[APP_EPOCH_SEAM] || proto[READ_CACHE_SEAM] || proto[EPOCH_SEAM]) return
+  proto[APP_EPOCH_SEAM] = true
   const original = proto._query
   proto._query = function patched(this: unknown, connection: unknown, query: { sql?: string }) {
     try {

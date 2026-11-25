@@ -37,6 +37,10 @@ describe('featureLockReason', () => {
   it('locks the switch for env and cloud, with the reason', () => {
     expect(featureLockReason({ enabled: true, source: 'env' })).toMatch(/ISSUE_TRACKERS/)
     expect(featureLockReason({ enabled: false, source: 'cloud' })).toMatch(/cloud mode/)
+    // a Hub shared deployment: its operator turned it off for every app (no server to change)
+    const shared = featureLockReason({ enabled: false, source: 'env', deployment: true })
+    expect(shared).toMatch(/every app on this shared deployment by its operator/)
+    expect(shared).not.toMatch(/restart/)
   })
   it('leaves it free for a stored setting or the default', () => {
     expect(featureLockReason({ enabled: true, source: 'setting' })).toBeNull()

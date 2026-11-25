@@ -5,6 +5,7 @@ import type { GitCtx } from '../gitlab-client.js'
 import { getApp } from '../io-holder.js'
 import { type JobRunHandle, startJobRun } from '../job-runs.js'
 import { ciConfigVerifier } from './create/promote-ci-check.js'
+import { creationOpenRefusal } from './create/store.js'
 import { hubDeploysKeys } from './deploys.js'
 import { type DockerStepOps, defaultDockerOps, type StackDeployed } from './docker/run-step.js'
 import { DriverMisconfiguredError, repositoryIdentity } from './drivers.js'
@@ -36,7 +37,11 @@ import {
 } from './promote-heal.js'
 import {
   appPromoteRedis,
+  type BranchHold,
+  type BranchLock,
+  defaultBranchLock,
   defaultPromoteLock,
+  holdBranches,
   LOCK_RENEW_MS,
   lockHolderRefusal,
   type PromoteLock,
@@ -53,6 +58,7 @@ import type {
   PromotionPlan,
   PromotionStep
 } from './promote-types.js'
+import { freezeRefusal, rollbackExempt } from './releases/freeze.js'
 import { HubSecretError } from './secrets.js'
 import { hubStatusKey } from './status.js'
 
@@ -1050,6 +1056,8 @@ export interface StartDeps {
   finishRow?: FinishRow
   /** The clock heartbeats are judged by (tests). */
   now?: () => number
+  /** One writer per GitLab branch (review H1): default the Hub's Redis lock. */
+  branchLock?: BranchLock
 }
 
 export function defaultStartDeps(): StartDeps {
@@ -1109,6 +1117,18 @@ export async function startPromotion(
   // deployComponentAt, never this.
   const open = await moveOpenRefusal({ envIds: [envId] })
   if (open) throw new PromotionError(open.code, open.message, open.status)
+  // Gap `create` (review L4): an environment still being created is the creation's.
+  const creating = await creationOpenRefusal(envId)
+  if (creating) throw new PromotionError(creating.code, creating.message, creating.status)
+  // Release operations: a freeze window stops promotions and Apply now. A rollback is judged
+  // after gather (only one to an OLDER version than the running one is exempt).
+  if (req.kind !== 'rollback') {
+    const frozen = await freezeRefusal({
+      appIds: [Number(env.app_id)],
+      action: req.apply === true ? 'apply' : 'promote'
+    })
+    if (frozen) throw new PromotionError(frozen.code, frozen.message, frozen.status)
+  }
   if (req.kind !== 'promote' && req.kind !== 'rollback')
     throw new PromotionError('BAD_KIND', 'kind must be promote or rollback')
   const apply = req.apply === true
@@ -1144,6 +1164,8 @@ export async function startPromotion(
     ])
   }
   let handedOff = false
+  /** Every GitLab branch the run deploys, held for the whole run (review H1). */
+  let branches: BranchHold | null = null
   try {
     // A run of this environment alive in this process (its Redis lock may have vanished).
     if (liveHereFor(envId)) throw alreadyRunning()
@@ -1161,6 +1183,10 @@ export async function startPromotion(
       lockHeld: true,
       ...(apply ? { apply: true } : {})
     })
+    if (req.kind === 'rollback' && !rollbackExempt(req.version, input.targetVersion)) {
+      const frozen = await freezeRefusal({ appIds: [Number(env.app_id)], action: 'promote' })
+      if (frozen) throw new PromotionError(frozen.code, frozen.message, frozen.status)
+    }
     const plan = buildPromotionPlan(input)
     if (!plan.ok)
       throw new PromotionError(plan.blockers[0].code, plan.blockers[0].text, 409, plan.blockers)
@@ -1173,6 +1199,19 @@ export async function startPromotion(
         undefined,
         plan
       )
+
+    // One writer per GitLab branch: a shared deployment upgrade or a move deploying the same
+    // branch refuses this start (BRANCH_BUSY), and this run refuses theirs.
+    branches = await holdBranches(
+      deps.branchLock ?? defaultBranchLock(),
+      plan.steps
+        .filter((s) => s.driver !== 'docker' && s.kind !== 'stack' && !!s.targetBranch)
+        .map((s) => ({
+          identity: s.driverIdentity ?? `driver:${s.driverId}`,
+          branch: s.targetBranch
+        })),
+      'promotion'
+    )
 
     const userId = req.user?.id ?? null
     const verb = req.kind === 'rollback' ? 'Roll back' : 'Promote'
@@ -1229,7 +1268,8 @@ export async function startPromotion(
         plan,
         token,
         entry,
-        deps
+        deps,
+        branches
       })
     )
       .catch((err) =>
@@ -1244,7 +1284,10 @@ export async function startPromotion(
       })
     return { deployId, jobRunId: run.id }
   } finally {
-    if (!handedOff) await deps.lock.release(envId, token)
+    if (!handedOff) {
+      await branches?.release()
+      await deps.lock.release(envId, token)
+    }
   }
 }
 
@@ -1286,6 +1329,7 @@ async function runPromotion(o: {
   token: string
   entry: Live
   deps: StartDeps
+  branches: BranchHold | null
 }): Promise<void> {
   const { deployId, envId, deps, entry } = o
   const { run } = entry
@@ -1367,6 +1411,7 @@ async function runPromotion(o: {
           lastDeployedBuild: deps.execute?.lastDeployedBuild ?? lastDeployedBuildReader(envId),
           verifyCiConfig: deps.execute?.verifyCiConfig ?? ciConfigVerifier(envId),
           lockLost: async () => {
+            if (!entry.lockLost && o.branches?.lost()) lostLock()
             if (!entry.lockLost && !(await deps.lock.renew(envId, o.token))) lostLock()
             await heartbeat()
             return entry.lockLost
@@ -1412,6 +1457,7 @@ async function runPromotion(o: {
       .where({ id: deployId, status: 'running' })
       .update({ heartbeat_at: null })
       .catch(() => undefined)
+    await o.branches?.release().catch(() => undefined)
     await deps.lock.release(envId, o.token)
     await deps.lock.clearCancel(deployId)
     await forgetEnvironmentCaches(envId)

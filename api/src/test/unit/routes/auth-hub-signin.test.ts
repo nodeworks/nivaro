@@ -131,6 +131,10 @@ const { db } = (await import('../../../db/index.js')) as unknown as { db: Knex }
 const { authRoutes } = await import('../../../routes/auth.js')
 const { _resetHubProbeForTests } = await import('../../../services/hub-signin/probe.js')
 const { _resetHubSigninForTests } = await import('../../../auth/hub-signin.js')
+const { runWithTenantDb } = await import('../../../db/tenant-context.js')
+const { _setAppHubLinkForTests, resetAppHubLinksForTests } = await import(
+  '../../../services/tenancy/app-hub-links.js'
+)
 const { trackError } = (await import('../../../services/error-tracking.js')) as unknown as {
   trackError: ReturnType<typeof vi.fn>
 }
@@ -1013,6 +1017,22 @@ describe('GET /callback with the Hub unavailable', () => {
     expect(other.headers.location).toMatch(/^https:\/\/login\.microsoftonline\.com\//)
   })
 
+  it('a client secret rotated while the person was at the Hub (401 invalid_client) → one hop to direct, no issue, Hub not marked down', async () => {
+    hub.token = async () => ({ status: 401, body: { error: 'invalid_client' } })
+    const session = hubSession()
+    const app = await build(session)
+    const res = await app.inject({ method: 'GET', url: cbUrl() })
+    expect(res.headers.location).toBe(
+      `/api/auth/login?direct=1&returnTo=${encodeURIComponent(RETURN_TO)}`
+    )
+    expect(session.userId).toBeUndefined()
+    expect(trackError).not.toHaveBeenCalled()
+    const pings = hub.pingHits
+    const other = await (await build(fakeSession())).inject({ method: 'GET', url: '/login' })
+    expect(new URL(other.headers.location as string).origin).toBe(base)
+    expect(hub.pingHits).toBeGreaterThanOrEqual(pings)
+  })
+
   it('a browser-delivered error=temporarily_unavailable hops that person, the probe stays up (P7-11)', async () => {
     const session = hubSession()
     const app = await build(session)
@@ -1191,5 +1211,111 @@ describe('POST /logout', () => {
     const app = await build(fakeSession({ userId: 'u1', signedInVia: 'hub', hubSid: SID }))
     const res = await app.inject({ method: 'POST', url: '/logout' })
     expect(res.json()).toEqual({ ok: true })
+  })
+})
+
+// 0.3.215: on a Hub shared deployment each app signs in through the Hub with its own client from
+// the tenant list (never the deployment's HUB_CLIENT_*), and calls back on its own origin.
+describe('per app on a Hub shared deployment', () => {
+  const APP_ORIGIN = 'http://localhost:3056'
+  const KEYS = [
+    'HUB_SHARED_DEPLOYMENT',
+    'HUB_DEPLOYMENT_TOKEN',
+    'HUB_CLIENT_ID',
+    'HUB_CLIENT_SECRET',
+    'HUB_IDP_AUDIENCE'
+  ]
+  const kept: Record<string, string | undefined> = {}
+  beforeEach(() => {
+    for (const k of KEYS) kept[k] = process.env[k]
+    process.env.HUB_SHARED_DEPLOYMENT = 'pool-a'
+    process.env.HUB_DEPLOYMENT_TOKEN = `dep-${'t'.repeat(40)}`
+    delete process.env.HUB_CLIENT_ID
+    delete process.env.HUB_CLIENT_SECRET
+    delete process.env.HUB_IDP_AUDIENCE
+    _setAppHubLinkForTests('app-a', {
+      token: null,
+      clientId: CLIENT,
+      clientSecret: SECRET,
+      idpAudience: IDP_AUD
+    })
+  })
+  afterEach(() => {
+    resetAppHubLinksForTests()
+    for (const k of KEYS) {
+      if (kept[k] === undefined) delete process.env[k]
+      else process.env[k] = kept[k]
+    }
+  })
+
+  /** The app harness, every request served inside app `tenant` on APP_ORIGIN (the tenant hook). */
+  async function buildIn(tenant: string, session: Sess) {
+    const app = Fastify({ logger: false })
+    app.decorate('redis', memRedis() as never)
+    app.decorateRequest('session', null as never)
+    app.addHook('onRequest', (req, _reply, done) => {
+      ;(req as unknown as { session: Sess }).session = session
+      runWithTenantDb(db, tenant, done, tenant, APP_ORIGIN)
+    })
+    await app.register(authRoutes)
+    await app.ready()
+    return app
+  }
+
+  it("the app with a client from the Hub: /providers and /login use that client and the app's own callback", async () => {
+    const session = fakeSession()
+    const app = await buildIn('app-a', session)
+    expect((await app.inject({ method: 'GET', url: '/providers' })).json().data.hub).toEqual({
+      configured: true,
+      up: true
+    })
+    expect(hub.pingQueries.at(-1)?.client_id).toBe(CLIENT)
+    const res = await app.inject({
+      method: 'GET',
+      url: `/login?returnTo=${encodeURIComponent(`${APP_ORIGIN}/records/7`)}`
+    })
+    const to = new URL(res.headers.location as string)
+    expect(`${to.origin}${to.pathname}`).toBe(`${issuer}/authorize`)
+    expect(to.searchParams.get('client_id')).toBe(CLIENT)
+    expect(to.searchParams.get('redirect_uri')).toBe(`${APP_ORIGIN}/api/auth/callback`)
+    expect(session.returnTo).toBe(`${APP_ORIGIN}/records/7`)
+    expect(session.hubSignIn).toBe(true)
+  })
+
+  it("a returnTo on another origin (the deployment's own) comes back to the app's origin", async () => {
+    const session = fakeSession()
+    const app = await buildIn('app-a', session)
+    await app.inject({
+      method: 'GET',
+      url: `/login?returnTo=${encodeURIComponent('http://localhost:3055/x')}`
+    })
+    expect(session.returnTo).toBe(`${APP_ORIGIN}/`)
+    expect(session.oidcRedirectUri).toBe(`${APP_ORIGIN}/api/auth/callback`)
+  })
+
+  it('an app the Hub gave no client signs in directly; the Hub is never asked', async () => {
+    const session = fakeSession()
+    const app = await buildIn('app-b', session)
+    expect((await app.inject({ method: 'GET', url: '/providers' })).json().data.hub).toEqual({
+      configured: false,
+      up: false
+    })
+    const res = await app.inject({ method: 'GET', url: '/login' })
+    expect(new URL(res.headers.location as string).hostname).toBe('login.microsoftonline.com')
+    expect(session.hubSignIn).toBeUndefined()
+    expect(hub.pingHits).toBe(0)
+  })
+
+  it("the callback signs in with the app's client and checks the evidence", async () => {
+    await seedUser()
+    answer(await hubToken())
+    const session = hubSession()
+    const app = await buildIn('app-a', session)
+    const res = await app.inject({ method: 'GET', url: cbUrl() })
+    expect(res.statusCode).toBe(302)
+    expect(res.headers.location).toBe(RETURN_TO)
+    expect(session.userId).toBe('u1')
+    expect(session.signedInVia).toBe('hub')
+    expect(trackError).not.toHaveBeenCalled()
   })
 })

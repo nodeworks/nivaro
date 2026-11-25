@@ -838,7 +838,7 @@ export const MOVE_BLOCKER_COPY: Record<string, Copy> = {
   },
   ISSUE_TRACKERS: {
     title: 'GitLab issue sync is on in this app',
-    hint: 'A shared deployment does not sync issues yet. Turn issue sync off first.'
+    hint: 'This shared deployment runs a version before 0.3.215, or one the Hub cannot read, which does not sync issues. Upgrade it to 0.3.215 or later, or turn issue sync off first.'
   },
   EXEC_SCRIPT_FLOWS: {
     title: 'Some of the app’s flows run scripts',
@@ -850,7 +850,7 @@ export const MOVE_BLOCKER_COPY: Record<string, Copy> = {
   },
   ENV_OBJECT_STORAGE: {
     title: 'Files are stored in S3 or Azure set by environment variables',
-    hint: 'A move copies only files stored on disk, so these would be lost. Move the storage settings into the app (Settings → Files) first.'
+    hint: 'Before 0.3.215 a move copies only files stored on disk, so these would be lost. Upgrade the app (both sides) to 0.3.215 or later, or move the storage settings into the app (Settings → Files) first.'
   },
   STORAGE_COUNT_UNKNOWN: {
     title: 'The app did not say which storage its files are on',
@@ -874,7 +874,7 @@ export const MOVE_WARNING_COPY: Record<string, Copy> = {
   },
   SAME_APP_ON_DEPLOYMENT: {
     title: 'Another environment of this app already runs on this deployment',
-    hint: 'Fine for development and staging next to each other; each keeps its own data and files. A copy also carries the original’s saved Teams bot and directory app registration, so it answers in Teams and syncs the directory as that app: turn the bot off on the copy if it should not.'
+    hint: 'Fine for development and staging next to each other; each keeps its own data and files. A copy also carries the original’s saved Teams bot and directory app registration, so it answers in Teams and syncs the directory as that app: turn the bot off on the copy if it should not. It also carries the original’s GitLab connections: turn issue sync off on the copy (Issue trackers tab) unless it should write to the same GitLab project.'
   },
   MULTI_NODE_VOLUMES: {
     title: 'The Docker host has more than one node',
@@ -922,7 +922,7 @@ export const MOVE_WARNING_COPY: Record<string, Copy> = {
   },
   REPLAYS_NOT_MOVED: {
     title: 'Session replays are not moved',
-    hint: 'Replays recorded on the old home stay there.'
+    hint: 'Before 0.3.215, replays kept in file storage stay on the old home. From 0.3.215 a move copies them.'
   },
   OLD_STACK_STOP: {
     title: 'The old stack keeps running until someone stops it',
@@ -946,6 +946,10 @@ export const MOVE_WARNING_COPY: Record<string, Copy> = {
     hint: 'It runs a version before 0.3.212, or one the Hub cannot read. They stay in the mail log and can be resent by hand. Upgrade it to 0.3.212 or later to keep the retries.'
   },
   // What an app on a shared deployment brings itself (the server's own settings are not used).
+  ISSUE_TRACKERS: {
+    title: "GitLab issue sync runs per app on a shared deployment, by the app's own switch",
+    hint: 'Connections, tokens, rules and queued GitLab writes move with the app, and GitLab keeps calling the app’s own address. If the server’s ISSUE_TRACKERS setting switches sync on today, switch it on again on the Issue trackers tab after the move. A GitLab on a private address needs its host in the deployment’s SSRF_ALLOW_HOSTS.'
+  },
   DIRECTORY_ENV_CREDENTIALS: {
     title: 'A shared app reads the directory with its own saved app registration',
     hint: 'Before the move, save the app’s own Microsoft app registration (tenant, client id and secret) in Settings → Microsoft, or directory sync stops after it.'
@@ -964,15 +968,27 @@ export const MOVE_WARNING_COPY: Record<string, Copy> = {
   },
   HUDDLE_TURN: {
     title: 'Huddles use the deployment’s media servers, not the app’s own',
-    hint: 'If your network allows only the app’s own media servers, ask for the deployment’s to be allowed too.'
+    hint: 'The shared deployment runs a version before 0.3.215, or one the Hub cannot read. Upgrade it to 0.3.215 or later to keep the app’s own media servers; otherwise ask for the deployment’s to be allowed on your network.'
   },
   ENV_SMTP: {
     title: 'Mail settings come from environment variables on the old home',
-    hint: 'Enter them in the app (Settings → Email) so mail keeps going after the move.'
+    hint: 'Enter them in the app (Settings → Email) so mail keeps going after the move. From 0.3.215 on both sides the move saves them there itself.'
+  },
+  ENV_SMTP_KEPT: {
+    title: 'The app’s mail settings are kept for the shared deployment at the move',
+    hint: 'It sends mail with its server’s environment settings today. When the move starts they are saved for the shared deployment’s instance (the password sealed with the app’s key; a mail test mode its environment forces stays on), so mail keeps going through the same server. If the run log says ENV_SMTP, enter them in Settings → Email.'
+  },
+  INSTANCE_SETTINGS_CARRIED: {
+    title: 'The app’s per-instance settings are copied at the move',
+    hint: 'Settings → This instance (huddle media servers, the outside-write watch, the daily report, caches …) are copied to the shared deployment’s instance when the move starts. The run log names any value the new home already held.'
+  },
+  INSTANCE_SETTINGS_STAY: {
+    title: 'The app’s per-instance settings are not carried',
+    hint: 'Settings → This instance (huddle media servers, the outside-write watch, the daily report, caches …) stay with the old instance name. Enter them on the new home after the move.'
   },
   SESSION_REPLAYS: {
     title: 'Session replays are not moved',
-    hint: 'Watch any replay you still need before the move; the old ones stay on the old home until it is removed.'
+    hint: 'Before 0.3.215: watch any replay you still need before the move; the old ones stay on the old home until it is removed. From 0.3.215 a move copies them.'
   },
   HELP_VIDEO_RENDERS: {
     title: 'Help-video renders in the queue start again',
@@ -994,6 +1010,18 @@ export const MOVE_WARNING_COPY: Record<string, Copy> = {
 
 /** Refusals of the move, place and app-key routes (non-planner codes), in plain words. */
 export const MOVE_CODE_COPY: Record<string, Copy> = {
+  TARGET_INSTANCE_UNKNOWN: {
+    title: 'The shared deployment does not name its instance',
+    hint: 'The app’s per-instance settings cannot be carried to it. Upgrade the shared deployment to 0.3.215 or later, then resume the move.'
+  },
+  INSTANCE_ROW_NOT_CARRIED: {
+    title: 'The app could not copy its per-instance settings',
+    hint: 'Its database refused the write; the app was not put in maintenance. Check the app’s database, then resume the move.'
+  },
+  ENV_MAIL_NOT_KEPT: {
+    title: 'The app could not keep its mail settings',
+    hint: 'Its database refused the write; the app was not put in maintenance. Check the app’s database, then resume the move.'
+  },
   PLAN_CHANGED: {
     title: 'The plan changed since you read it',
     hint: 'Check the plan as it stands now, then start again.'
@@ -1145,6 +1173,10 @@ export const MOVE_CODE_COPY: Record<string, Copy> = {
   CREATION_RUNNING: {
     title: 'A creation step is running on this environment',
     hint: 'Wait for it to finish, then try again.'
+  },
+  REFRESH_RUNNING: {
+    title: "This environment's database is being refreshed or rolled back",
+    hint: 'Wait for it to end, then try again.'
   },
   BAD_FIRST_ADMIN: {
     title: 'The first administrator needs a valid email address',

@@ -35,6 +35,12 @@ export interface HubEvent {
   /** Short text after the standard subject, e.g. "0.3.215 on staging". */
   detail?: string | null
   deployId?: number | null
+  /** The producer's own words, instead of the standard subject + message for the kind. */
+  text?: { subject: string; message: string } | null
+  /** Overrides the kind's default (failures, rollbacks and outages are urgent). */
+  urgent?: boolean
+  /** Where a click goes instead of the app's page (e.g. `/hub/releases`). */
+  path?: string
 }
 
 const URGENT: ReadonlySet<HubEventKind> = new Set([
@@ -101,27 +107,27 @@ export interface NotifyDeps {
   adminBase?: () => string
 }
 
-/** Sends one event to everyone who looks after the app. Answers how many were asked. */
-export async function sendHubEvent(e: HubEvent, deps: NotifyDeps = {}): Promise<number> {
-  let appId = e.appId ?? null
-  if (appId == null && e.envId != null) {
-    const row = (await db('nivaro_hub_environments').where({ id: e.envId }).first('app_id')) as
-      | { app_id: number }
-      | undefined
-    appId = row ? Number(row.app_id) : null
-  }
-  if (appId == null) return 0
-  const app = (await db('nivaro_hub_apps').where({ id: appId }).first('id', 'key', 'name')) as
-    | { id: number; key: string; name: string }
-    | undefined
-  if (!app) return 0
-  const env =
-    e.envId == null
-      ? undefined
-      : ((await db('nivaro_hub_environments').where({ id: e.envId }).first('key')) as
-          | { key: string }
-          | undefined)
-  const text = hubEventText(e, { app: String(app.name || app.key), env: env?.key ?? null })
+export interface HubNotice {
+  subject: string
+  message: string
+  /** In-app path the notice opens (`/hub?app=3`, `/hub/releases`). */
+  path: string
+  urgent?: boolean
+  source: { kind: string; label?: string | null; id?: string | number | null }
+  why: string
+}
+
+/**
+ * THE delivery of every Hub notice (events here, release operations, ops warnings): each person
+ * once (case-insensitive ids), through notifyUser — inbox, socket, browser and phone push, their
+ * Profile → Notification rules — category `system`, an `external` target on the admin origin.
+ * Never throws; answers how many were handed to notifyUser.
+ */
+export async function deliverHubNotice(
+  userIds: Array<string | null | undefined>,
+  notice: HubNotice,
+  deps: NotifyDeps = {}
+): Promise<number> {
   const notify =
     deps.notify ??
     (async (userId: string, opts: Record<string, unknown>) => {
@@ -138,21 +144,69 @@ export async function sendHubEvent(e: HubEvent, deps: NotifyDeps = {}): Promise<
   } catch {
     base = ''
   }
-  const url = `${base.replace(/\/+$/, '')}/hub?app=${Number(app.id)}`
-  const people = await hubEventRecipients(Number(app.id))
-  for (const userId of people) {
-    await notify(userId, {
-      subject: text.subject,
-      message: text.message,
-      category: 'system',
-      urgent: URGENT.has(e.kind),
-      ...(URGENT.has(e.kind) ? {} : { lane: 'fyi' }),
-      target: { kind: 'external', url },
-      source: { kind: 'hub', label: e.kind, id: e.deployId ?? e.envId ?? appId },
-      why: 'You are a Hub administrator or an owner of this app.'
-    }).catch(() => null)
+  const url = `${base.replace(/\/+$/, '')}${notice.path.startsWith('/') ? '' : '/'}${notice.path}`
+  const seen = new Set<string>()
+  let n = 0
+  for (const raw of userIds) {
+    if (typeof raw !== 'string' || !raw) continue
+    if (seen.has(raw.toUpperCase())) continue
+    seen.add(raw.toUpperCase())
+    try {
+      await notify(raw, {
+        subject: notice.subject.slice(0, 200),
+        message: notice.message.slice(0, 1000),
+        category: 'system',
+        ...(notice.urgent ? { urgent: true } : { lane: 'fyi' }),
+        target: { kind: 'external', url },
+        source: notice.source,
+        why: notice.why
+      })
+      n++
+    } catch {
+      // One person's delivery never stops the others.
+    }
   }
-  return people.length
+  return n
+}
+
+/** Sends one event to everyone who looks after the app. Answers how many were asked. */
+export async function sendHubEvent(e: HubEvent, deps: NotifyDeps = {}): Promise<number> {
+  try {
+    let appId = e.appId ?? null
+    if (appId == null && e.envId != null) {
+      const row = (await db('nivaro_hub_environments').where({ id: e.envId }).first('app_id')) as
+        | { app_id: number }
+        | undefined
+      appId = row ? Number(row.app_id) : null
+    }
+    if (appId == null) return 0
+    const app = (await db('nivaro_hub_apps').where({ id: appId }).first('id', 'key', 'name')) as
+      | { id: number; key: string; name: string }
+      | undefined
+    if (!app) return 0
+    const env =
+      e.envId == null
+        ? undefined
+        : ((await db('nivaro_hub_environments').where({ id: e.envId }).first('key')) as
+            | { key: string }
+            | undefined)
+    const text =
+      e.text ?? hubEventText(e, { app: String(app.name || app.key), env: env?.key ?? null })
+    return await deliverHubNotice(
+      await hubEventRecipients(Number(app.id)),
+      {
+        subject: text.subject,
+        message: text.message,
+        path: e.path ?? `/hub?app=${Number(app.id)}`,
+        urgent: e.urgent ?? URGENT.has(e.kind),
+        source: { kind: 'hub', label: e.kind, id: e.deployId ?? e.envId ?? appId },
+        why: 'You are a Hub administrator or an owner of this app.'
+      },
+      deps
+    )
+  } catch {
+    return 0
+  }
 }
 
 /** Fire-and-forget: never throws, never waits. */

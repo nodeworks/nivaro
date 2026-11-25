@@ -10,7 +10,8 @@ import { buildTrafficDigestSection, registerTrafficDigest } from '../../services
 export async function digestRoutes(app: FastifyInstance): Promise<void> {
   await registerTrafficDigest()
 
-  app.get('/digest/preview', async (req, reply) => {
+  // Per app on a Hub shared deployment: the preview reads the app's own request log.
+  app.get('/digest/preview', { config: { trafficAppAware: true } }, async (req, reply) => {
     try {
       return { data: await buildTrafficDigestSection() }
     } catch (err) {

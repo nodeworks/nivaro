@@ -1,6 +1,8 @@
 import { db } from '../../db/index.js'
 import { runInBackgroundPool } from '../../db/pool-context.js'
+import { appBox } from '../app-state.js'
 import { selectInChunks, whereInList } from '../db-batch.js'
+import { currentTenantKey } from '../tenant-rooms.js'
 import { getConnection, listConnections, type TrackerConnection } from './connections.js'
 import { trackersEnabled } from './feature.js'
 import { TRACKER_EMAIL } from './identity.js'
@@ -830,16 +832,19 @@ async function createQueued(connection: number, issueId: number): Promise<boolea
 // ── Logging ───────────────────────────────────────────────────────────────────
 
 const LOG_EVERY_MS = 10 * 60_000
-let lastLogAt = 0
+// Per app: one app's failures never hold back another's line on a Hub shared deployment.
+const lastLogAt = appBox(() => 0)
+/** ` (app <id>)` on a Hub shared deployment, '' self-hosted: which app a log line is about. */
+const appTag = () => (currentTenantKey() ? ` (app ${currentTenantKey()})` : '')
 
-/** At most one console line per 10 minutes per process — never the issue log (it would loop). */
+/** At most one console line per 10 minutes per app — never the issue log (it would loop). */
 function logOnce(what: string, err: unknown): void {
   const now = Date.now()
-  if (lastLogAt && now - lastLogAt < LOG_EVERY_MS) return
-  lastLogAt = now
+  if (lastLogAt.value && now - lastLogAt.value < LOG_EVERY_MS) return
+  lastLogAt.value = now
   // biome-ignore lint/suspicious/noConsole: a failing outbound sync must show in the server log
   console.warn(
-    `[trackers] outbound sync: ${what} failed: ${err instanceof Error ? err.message : String(err)}`.slice(
+    `[trackers]${appTag()} outbound sync: ${what} failed: ${err instanceof Error ? err.message : String(err)}`.slice(
       0,
       500
     )
@@ -848,5 +853,5 @@ function logOnce(what: string, err: unknown): void {
 
 /** Tests: log the next failure at once. */
 export function resetOutboundLog(): void {
-  lastLogAt = 0
+  lastLogAt.reset()
 }

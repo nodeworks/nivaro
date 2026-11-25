@@ -11,10 +11,11 @@ import {
   plainSettingProblem,
   readStackSettings
 } from '../docker/stack-settings.js'
-import { STACK_NAME_RE, type Validation } from '../drivers.js'
+import { getDriver, STACK_NAME_RE, type Validation } from '../drivers.js'
 import { tokenLookupHash } from '../link-token.js'
 import { defaultSharedLock, type SharedLock, sharedLockRefusal } from '../promote-lock.js'
 import { maskSecret, openSecret, sealSecret } from '../secrets.js'
+import { branchRefOf, gitlabBranchUsers } from './branch-users.js'
 import { SHARED_HUB_ENV_KEYS } from './stack-render.js'
 
 /**
@@ -113,12 +114,19 @@ export type SharedCode =
   // A rotation that lost a race with another one; another action holds the shared lock.
   | 'TOKEN_CHANGED'
   | 'SHARED_BUSY'
+  // A registered deployment the Hub upgrades through GitLab: its driver is not a GitLab one, or
+  // its `settings.gitlab` (branches, pin file, jobs) is missing or malformed.
+  | 'DRIVER_NOT_GITLAB'
+  | 'BAD_GITLAB'
+  // Another placement, component or shared deployment already deploys that GitLab branch.
+  | 'BRANCH_IN_USE'
 
 const STATUS_OF: Partial<Record<SharedCode, number>> = {
   KEY_TAKEN: 409,
   SHARED_IN_USE: 409,
   TOKEN_CHANGED: 409,
   SHARED_BUSY: 409,
+  BRANCH_IN_USE: 409,
   NOT_FOUND: 404
 }
 
@@ -142,6 +150,82 @@ const PATTERN_RE = /^\*\.(?:[a-z0-9-]{1,63}\.)+[a-z0-9-]{1,63}$/
 /** A version or image tag: what a pin may hold (no spaces, ≤ 64). */
 const VERSION_PIN_RE = /^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$/
 const SETTINGS_MAX = 20_000
+
+/**
+ * How the Hub drives the GitLab pipeline of a registered deployment it upgrades (`settings.gitlab`,
+ * with `driver_id` naming a GitLab driver). `source_branch` holds the release commits (subject
+ * ending `nivaro <version>`); `target_branch` is the branch its deploy job runs on — required and
+ * never the driver's own default, so it is a branch nothing else deploys (review H1; checked at
+ * save and by every plan, BRANCH_IN_USE), and never the release branch (review L4). `pin_file`
+ * and `deploy_job` override the driver's (null = the driver's); `before_job` is waited for before
+ * the deploy job, as on a promotion's component.
+ */
+export interface SharedGitlab {
+  source_branch: string
+  target_branch: string
+  pin_file: string | null
+  before_job: string | null
+  deploy_job: string | null
+}
+
+/** Any control character (refused in every GitLab name). */
+const CONTROL_RE = /\p{Cc}/u
+
+/**
+ * A branch name git takes (git check-ref-format, review L5): 1–200 characters, no space, control
+ * character or any of ~ ^ : ? * [ \, no `..`, `//` or `@{`, not `@`, not starting with - or /,
+ * not ending with / or ., no part starting with . or ending with .lock.
+ */
+export function isGitBranchName(t: string): boolean {
+  if (!t || t.length > 200 || CONTROL_RE.test(t) || /[\s~^:?*[\\]/.test(t)) return false
+  if (t === '@' || t.includes('..') || t.includes('//') || t.includes('@{')) return false
+  if (t.startsWith('-') || t.startsWith('/') || t.endsWith('/') || t.endsWith('.')) return false
+  return t.split('/').every((part) => !part.startsWith('.') && !part.endsWith('.lock'))
+}
+
+/** A path inside the repository (no leading slash, no `..` segment). */
+const PIN_FILE_RE = /^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[^\s\\]{1,300}$/
+const JOB_RE = /^.{1,100}$/u
+
+/** The validated `settings.gitlab`, or null when it is not one. */
+export function checkSharedGitlab(v: unknown): SharedGitlab | null {
+  if (!isPlainObject(v)) return null
+  const known = ['source_branch', 'target_branch', 'pin_file', 'before_job', 'deploy_job']
+  if (Object.keys(v).some((k) => !known.includes(k))) return null
+  const opt = (x: unknown, ok: (t: string) => boolean): string | null | undefined => {
+    if (x === undefined || x === null || x === '') return null
+    if (typeof x !== 'string') return undefined
+    const t = x.trim()
+    return t && ok(t) && !CONTROL_RE.test(t) ? t : undefined
+  }
+  const re = (r: RegExp) => (t: string) => r.test(t)
+  const source = opt(v.source_branch, isGitBranchName)
+  const target = opt(v.target_branch, isGitBranchName)
+  const pin = opt(v.pin_file, re(PIN_FILE_RE))
+  const before = opt(v.before_job, re(JOB_RE))
+  const deploy = opt(v.deploy_job, re(JOB_RE))
+  if (!source || !target || source === target || pin === undefined) return null
+  if (before === undefined || deploy === undefined) return null
+  return {
+    source_branch: source,
+    target_branch: target,
+    pin_file: pin,
+    before_job: before,
+    deploy_job: deploy
+  }
+}
+
+/**
+ * The GitLab settings of a deployment the Hub upgrades through GitLab (registered, a driver named,
+ * `settings.gitlab` valid); null for every other deployment (Docker, or registered and watched
+ * only).
+ */
+export function sharedGitlab(
+  shared: Pick<SharedDeployment, 'mode' | 'driver_id' | 'settings'>
+): SharedGitlab | null {
+  if (shared.mode !== 'registered' || shared.driver_id == null) return null
+  return checkSharedGitlab(shared.settings?.gitlab)
+}
 
 type Fail = { ok: false; code: SharedCode; message: string }
 const fail = (code: SharedCode, message: string): Fail => ({ ok: false, code, message })
@@ -265,6 +349,18 @@ export function validateSharedInput(
         'The stack name is 2–41 characters: lower-case letters, digits and hyphens, starting with a letter.'
       )
     stack = s
+  } else {
+    // A registered deployment may name a GitLab driver: the Hub then upgrades it through that
+    // pipeline (settings.gitlab says how). Without one the Hub only watches it, as before.
+    const d = pick('driver_id')
+    if (d !== undefined && d !== null && d !== '') {
+      const n = typeof d === 'number' ? d : typeof d === 'string' ? Number(d) : Number.NaN
+      if (!Number.isInteger(n) || n < 1 || n > 2147483647)
+        return fail('DRIVER_NOT_GITLAB', 'Name the GitLab driver that runs its pipeline.')
+      if (ctx?.driverKind !== undefined && ctx.driverKind !== 'gitlab')
+        return fail('DRIVER_NOT_GITLAB', 'Name the GitLab driver that runs its pipeline.')
+      driverId = n
+    }
   }
 
   const pin = pick('version_pin')
@@ -335,6 +431,30 @@ export function validateSharedInput(
     }
   }
 
+  // A registered deployment the Hub upgrades through GitLab: driver and settings.gitlab together.
+  const gitlabIn = (settings as Record<string, unknown>).gitlab
+  let finalSettings = settings as Record<string, unknown>
+  if (gitlabIn !== undefined && gitlabIn !== null) {
+    if (mode !== 'registered')
+      return fail(
+        'BAD_GITLAB',
+        'Only a shared deployment run elsewhere is upgraded through GitLab; the Hub agent runs a Docker one.'
+      )
+    const g = checkSharedGitlab(gitlabIn)
+    if (!g)
+      return fail(
+        'BAD_GITLAB',
+        'settings.gitlab names the branch that holds the release commits (source_branch) and a different branch its deploy job runs on (target_branch), both valid git branch names, and optionally pin_file, before_job and deploy_job.'
+      )
+    if (driverId === null)
+      return fail('DRIVER_NOT_GITLAB', 'Name the GitLab driver that runs its pipeline.')
+    finalSettings = { ...finalSettings, gitlab: g }
+  } else if (mode === 'registered' && driverId !== null)
+    return fail(
+      'BAD_GITLAB',
+      'Name the branch that holds the release commits (settings.gitlab.source_branch) for the Hub to upgrade it through GitLab.'
+    )
+
   return {
     ok: true,
     row: {
@@ -349,7 +469,7 @@ export function validateSharedInput(
       host_pattern: hostPattern as string | null,
       link_url: link,
       pool_budget: budget,
-      settings
+      settings: finalSettings
     }
   }
 }
@@ -469,12 +589,43 @@ export async function getSharedByKey(key: string): Promise<SharedDeployment | nu
   return row ? sharedFromRow(row) : null
 }
 
-/** Throws DRIVER_NOT_DOCKER unless a docker deployment names an existing Docker driver. */
+/**
+ * Throws DRIVER_NOT_DOCKER unless a docker deployment names an existing Docker driver, and
+ * DRIVER_NOT_GITLAB when a registered one names a driver that is not an existing GitLab one.
+ */
 async function assertDriver(f: Pick<SharedFields, 'mode' | 'driver_id'>): Promise<void> {
-  if (f.mode !== 'docker') return
+  if (f.mode !== 'docker') {
+    if (f.driver_id == null) return
+    const g = await db(DRIVERS).where({ id: f.driver_id }).first('kind')
+    if (g?.kind !== 'gitlab')
+      throw new SharedError('DRIVER_NOT_GITLAB', 'Name the GitLab driver that runs its pipeline.')
+    return
+  }
   const d = f.driver_id ? await db(DRIVERS).where({ id: f.driver_id }).first('kind') : null
   if (d?.kind !== 'docker')
     throw new SharedError('DRIVER_NOT_DOCKER', 'A docker shared deployment needs a Docker driver.')
+}
+
+/**
+ * Review H1: a deployment the Hub upgrades through GitLab deploys a branch nothing else deploys
+ * (an environment's component, another shared deployment). BRANCH_IN_USE (409) names the user.
+ */
+async function assertBranchFree(
+  f: Pick<SharedFields, 'mode' | 'driver_id' | 'settings'>,
+  sharedId: number | null
+): Promise<void> {
+  const g = sharedGitlab(f)
+  if (!g || f.driver_id == null) return
+  const driver = await getDriver(f.driver_id)
+  if (driver?.kind !== 'gitlab') return
+  const users = await gitlabBranchUsers(branchRefOf(driver, g.target_branch), {
+    exceptSharedId: sharedId
+  })
+  if (users.length)
+    throw new SharedError(
+      'BRANCH_IN_USE',
+      `${g.target_branch} of ${driver.config.project} is already deployed by ${users.slice(0, 3).join(', ')} — give this deployment a deploy branch of its own.`
+    )
 }
 
 /** A new deployment token: 32 random bytes, base64url (43 characters). */
@@ -504,6 +655,7 @@ export async function createShared(
   by: string | null
 ): Promise<{ row: SharedDeployment; token: string }> {
   await assertDriver(f)
+  await assertBranchFree(f, null)
   if (await db(TABLE).where({ key: f.key }).first('id')) throw keyTaken()
   const token = newToken()
   let id: string | number | null
@@ -573,6 +725,15 @@ async function writeShared(
       mode: f.mode ?? existing.mode,
       driver_id: f.driver_id !== undefined ? f.driver_id : existing.driver_id
     })
+  if (f.driver_id !== undefined || f.settings !== undefined)
+    await assertBranchFree(
+      {
+        mode: existing.mode,
+        driver_id: f.driver_id !== undefined ? f.driver_id : existing.driver_id,
+        settings: f.settings ?? existing.settings
+      },
+      id
+    )
   const cols = writeCols(f)
   if (swap) cols.secrets = swap.next
   if (!Object.keys(cols).length) return 'written'

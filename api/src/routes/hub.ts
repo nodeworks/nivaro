@@ -100,10 +100,13 @@ import {
   type StatusCache
 } from '../services/hub/status.js'
 import { readJobLog } from '../services/job-runs.js'
+import { hubCapacityRoutes } from './hub-capacity.js'
 import { hubPhase3Routes } from './hub-create.js'
+import { hubDataRoutes } from './hub-data.js'
 import { hubDockerRoutes } from './hub-docker.js'
 import { hubMoveRoutes } from './hub-move.js'
 import { hubPeopleRoutes } from './hub-people.js'
+import { hubReleaseRoutes } from './hub-releases.js'
 import { hubSharedRoutes } from './hub-shared.js'
 import { hubSharedTenantsRoutes } from './hub-shared-tenants.js'
 import { hubSharedUpgradeRoutes } from './hub-shared-upgrade.js'
@@ -141,6 +144,9 @@ export async function hubRoutes(app: FastifyInstance) {
   hubSharedUpgradeRoutes(app) // phase 6: shared stack deploy/upgrade/rollback (Task 5)
   hubMoveRoutes(app) // phase 6: moves between shared and dedicated placements (+ boot heal)
   hubPeopleRoutes(app) // people directory + offboarding, owner policy, phone (hub-people.ts)
+  hubCapacityRoutes(app) // capacity view, move advisor, per-app limits, rebalance
+  hubReleaseRoutes(app) // release trains, schedules, freezes, auto-rollback, release notes
+  hubDataRoutes(app) // data care: backups, restore drills, refreshes, move rehearsals
 }
 
 const APPS = 'nivaro_hub_apps'
@@ -907,6 +913,13 @@ function driverRoutes(app: FastifyInstance) {
     if (!done.ok) {
       if (done.code === 'IN_USE')
         return fail(reply, 409, 'IN_USE', 'An environment still uses this driver')
+      if (done.code === 'DRIVER_IN_USE')
+        return fail(
+          reply,
+          409,
+          'DRIVER_IN_USE',
+          `The shared deployment ${done.shared} deploys through this driver — point it at another driver, or retire it, first`
+        )
       return notFound(reply)
     }
     await logActivity({
@@ -1431,6 +1444,10 @@ function promotionRoutes(app: FastifyInstance) {
         item: String(started.deployId),
         req
       })
+      // Release notes of the run (GitLab compare, build facts): stored once, never awaited.
+      void import('../services/hub/releases/notes.js')
+        .then((m) => m.recordReleaseNotes(started.deployId))
+        .catch(() => undefined)
       return reply
         .code(202)
         .send({ data: { deploy_id: started.deployId, job_run_id: started.jobRunId } })

@@ -97,6 +97,8 @@ beforeAll(async () => {
   await up(db)
   await up543(db)
   await up570(db)
+  // Gap `create` (L4): a promotion asks for an open creation of the environment.
+  await (await import('../../../db/migrations/545_hub_creations.js')).up(db)
   await db.schema.createTable('nivaro_users', (t) => {
     t.string('id').primary()
     t.string('first_name')

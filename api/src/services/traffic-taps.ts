@@ -141,6 +141,11 @@ export function tenantStoreId(tenantId: string): string {
   return `t:${tenantId}`
 }
 
+/** The tenant a store belongs to (`t:<tenantId>` → tenantId), or null for the default store. */
+export function tenantOfStore(storeId: string): string | null {
+  return storeId.startsWith('t:') ? storeId.slice(2) : null
+}
+
 /**
  * The store the current call records into (#1132). Self-hosted: always `default`. Cloud: the
  * request's tenant (`t:<tenantId>`, from the tenant AsyncLocalStorage), or NO_STORE outside a

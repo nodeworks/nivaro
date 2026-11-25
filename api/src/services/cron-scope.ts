@@ -47,6 +47,8 @@ export const CORE_CRON_SCOPES: Record<string, CronScope> = {
   'ai-spend-rollup': 'app',
   'ai-undo-prune': 'app',
   'ai-watch-checks': 'app',
+  'app-concurrency-sample': 'app', // shared deployments only: the app's own sockets and people
+  'app-pool-monitor': 'app', // shared deployments only: the app's own pool (app-pool-pressure.ts)
   'alert-definitions-sweep': 'app',
   'anomaly-checks-daily': 'app',
   'anomaly-checks-weekly': 'app',
@@ -87,8 +89,15 @@ export const CORE_CRON_SCOPES: Record<string, CronScope> = {
   'help-video-render-sweep': 'app',
   'help-video-stale-check': 'app',
   'help-video-storage-sweep': 'app',
+  'hub-capacity-sample': 'app', // Hub capacity: the Hub's own samples (HUB=on only, never shared)
   'hub-creation-waits': 'app', // Hub phase 3: the Hub's own creation rows (HUB=on only, never shared)
+  'hub-rebalance-tick': 'app', // Hub rebalance runs (HUB=on only, never shared)
+  'hub-release-ops': 'app', // Hub release operations: trains, schedules (HUB=on only, never shared)
+  'hub-release-rollback': 'app', // Hub release operations: automatic rollback watches (HUB=on only),
+  'hub-data-tick': 'app', // Hub data care: the Hub's own backup policies and data runs (HUB=on only, never shared)
   'hub-signins-prune': 'app', // Hub phase 7: the Hub's own sign-in rows (HUB=on only, never shared)
+  'hub-ops-collect': 'app', // Hub ops: the Hub's own issue/storage rows (HUB=on only, never shared)
+  'hub-secrets': 'app', // Hub ops: the Hub's own secret rows (HUB=on only, never shared)
   'huddle-schedules': 'app',
   'integration-reconcile': 'app',
   'integration-signals': 'app',
@@ -191,7 +200,6 @@ export const SELF_HOSTED_ONLY_CRONS: Record<string, string> = {
   'huddle-turn-probe': 'huddle crons are off on multi-tenant (operator TURN hosts)',
   'huddle-sessions-sweep': 'huddle crons are off on multi-tenant',
   'huddle-sessions-prune': 'huddle crons are off on multi-tenant',
-  'outside-write-watch': 'returns at once on multi-tenant (process-local change tracking)',
   // file-cleanup and session-replay-tiering run per app since Hub phase 6: every storage call
   // they make goes through getStorage() / the app's own settings driver, which a shared
   // deployment scopes to apps/<tenantId>/ (services/storage/app-scope.ts).
@@ -204,13 +212,16 @@ export const SELF_HOSTED_ONLY_CRONS: Record<string, string> = {
 /**
  * Deployment-wide ('process') core jobs whose only output is the static database: on a shared
  * deployment they would sample and write nothing anywhere, so server.ts registers them self-hosted
- * only (P5-10). No deployment-wide core job runs on a shared deployment until phase 6 gives it a
- * deployment store. They stay 'process' here, so a manager can still run them.
+ * only (P5-10). There the figure that is per app runs as an app job of its own (app-pool-monitor,
+ * app-concurrency-sample: each app's pool and sockets, stored in that app), and the process's own
+ * figures are on the deployment link status (routes/hub-deployment-link.ts). They stay 'process'
+ * here, so a manager can still run them.
  */
 export const NO_DEPLOYMENT_STORE_CRONS: Record<string, string> = {
   'pool-monitor':
-    "reads the process's static pool and raises an issue in the static database; per-app pools are not sampled",
-  'concurrency-sample': 'writes socket counts to the static database; no deployment store yet'
+    "reads the process's static pool and raises an issue in the static database; on a shared deployment each app's own pool is judged by app-pool-monitor, and the process figures are on the deployment link status",
+  'concurrency-sample':
+    "writes socket counts to the static database; on a shared deployment each app's own sockets are sampled by app-concurrency-sample, and the process's total is on the deployment link status"
 }
 
 /** Whether a shared deployment leaves this core job out (SELF_HOSTED_ONLY_CRONS). */

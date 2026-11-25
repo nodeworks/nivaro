@@ -471,7 +471,21 @@ export async function updateDriver(id: number, patch: DriverFields): Promise<Hub
  */
 export async function deleteDriver(
   id: number
-): Promise<{ ok: true } | { ok: false; code: 'IN_USE' | 'NOT_FOUND' }> {
+): Promise<
+  | { ok: true }
+  | { ok: false; code: 'IN_USE' | 'NOT_FOUND' }
+  | { ok: false; code: 'DRIVER_IN_USE'; shared: string }
+> {
+  // Review L5: a shared deployment that is not retired deploys through it (its agent, or the
+  // GitLab pipeline the Hub upgrades it through). Read before the transaction: an install whose
+  // hub schema predates shared deployments has no table to read.
+  const sharedUser = (await db.schema.hasTable('nivaro_hub_shared_deployments'))
+    ? ((await db('nivaro_hub_shared_deployments')
+        .where({ driver_id: id })
+        .whereNot({ status: 'retired' })
+        .first('key')) as { key: string } | undefined)
+    : undefined
+  if (sharedUser) return { ok: false, code: 'DRIVER_IN_USE', shared: String(sharedUser.key) }
   return db.transaction(async (trx) => {
     if (!(await trx('nivaro_hub_drivers').where({ id }).first('id')))
       return { ok: false, code: 'NOT_FOUND' as const }

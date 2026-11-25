@@ -46,11 +46,12 @@ const EXTRA_CALLS: Record<string, { multiTenant?: number; nivaroCloud?: number }
   // P5-16: a ws-token / View-as entry that names no app is still accepted in Nivaro Cloud (as
   // before) and refused on a Hub shared deployment (C4: Nivaro Cloud's edge trust of old tokens).
   'plugins/socketio.ts': { nivaroCloud: 1 },
-  // Hub phase 7 merge: sign-in through the Hub and the app switcher are off on any multi-tenant
-  // deployment (T4) — a shared deployment always has HUB_URL for its tenant list. hubUrl() (+1)
-  // and hubSigninConfig() / hubSigninProblems() (+2).
+  // Hub phase 7 merge: a shared deployment always has HUB_URL for its tenant list, so hubUrl() is
+  // null on any multi-tenant deployment (T4, +1). Since 0.3.215 each app on a Hub shared
+  // deployment signs in through the Hub with its own client from the tenant list: hubSigninConfig()
+  // / hubSigninProblems() refuse in Nivaro Cloud only (+2 nivaroCloud).
   'services/hub/mode.ts': { multiTenant: 1 },
-  'services/hub-signin/config.ts': { multiTenant: 2 },
+  'services/hub-signin/config.ts': { nivaroCloud: 2 },
   // Row schedules per app: resyncSchedules refuses in Nivaro Cloud only (its T1 entry is weight 0);
   // a Hub shared deployment reconciles inside an app, so each entry binds to it.
   'services/row-schedules.ts': { nivaroCloud: 1 },
@@ -74,8 +75,10 @@ const EXTRA_CALLS: Record<string, { multiTenant?: number; nivaroCloud?: number }
   'services/export-worker.ts': { nivaroCloud: 1 },
   // Retention pass and digests per app: the Monday AI summary (audience + register-once) and the
   // Log retention page's `cloud` field refuse in Nivaro Cloud only (their T6 entries are weight 0);
-  // a Hub shared deployment runs each inside its apps. (The Traffic Map digest stays off on shared.)
+  // a Hub shared deployment runs each inside its apps. So does the Traffic Map digest (audience +
+  // register-once; its T5 entries are weight 0): each app's own request log and admins.
   'services/ai-explain-weekly.ts': { nivaroCloud: 2 },
+  'services/traffic-digest.ts': { nivaroCloud: 2 },
   'services/log-retention.ts': { nivaroCloud: 1 },
   // The Teams bot per app: its admin routes, person routes and config refuse in Nivaro Cloud only
   // (their T4 entries are weight 0); a Hub shared deployment runs each app's own saved bot. The
@@ -97,7 +100,22 @@ const EXTRA_CALLS: Record<string, { multiTenant?: number; nivaroCloud?: number }
   // entries are weight 0). realtimeBoardRuns() (+1): the realtime board runs everywhere but Nivaro
   // Cloud — server.ts and realtime-server.ts start it on a shared deployment too (server.ts's T3
   // entry is weight 0).
-  'services/process-role.ts': { nivaroCloud: 3 }
+  'services/process-role.ts': { nivaroCloud: 3 },
+  // GitLab issue sync per app (0.3.215): its routes, switch, jobs, flow op/trigger and the issue
+  // hit counters refuse in Nivaro Cloud only (their T6 entries are weight 0); a Hub shared
+  // deployment runs each app's own sync.
+  'routes/index.ts': { nivaroCloud: 1 },
+  'services/issue-raise.ts': { nivaroCloud: 1 },
+  'services/trackers/crons.ts': { nivaroCloud: 1 },
+  'services/trackers/feature.ts': { nivaroCloud: 1 },
+  'services/trackers/flow-ops.ts': { nivaroCloud: 1 },
+  // Hub gap watch (0.3.215): the outside-write watch runs per app on a shared deployment, so its
+  // effective setting and tick refuse in Nivaro Cloud only (their T1 entries are weight 0).
+  'services/outside-write-watch.ts': { nivaroCloud: 2 },
+  // ...and huddle media servers: the platform's replace an app's in Nivaro Cloud only
+  // (huddleCloudMode, its T7 entry is weight 0); `ws://` to the same computer stays refused on
+  // every multi-tenant process (validLiveKitUrl's default, sfuDestinationAllowed, the save check).
+  'services/huddle-destinations.ts': { multiTenant: 3, nivaroCloud: 1 }
 }
 
 type Rule = 'T1' | 'T2' | 'T3' | 'T4' | 'T5' | 'T6' | 'T7' | 'C1' | 'C2' | 'C3' | 'C4' | 'C5'

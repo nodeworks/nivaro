@@ -728,7 +728,8 @@ function creationRoutes(app: FastifyInstance) {
   app.post('/apps/create/plan', { preHandler: requireAdmin }, async (req, reply) =>
     guarded(reply, async () => {
       const input = body(req) as unknown as CreateAppInput
-      return { data: buildCreationPlan(input, await gatherCreationFacts(input)) }
+      // A preview: the browser sends masks for secrets, which count as given here.
+      return { data: buildCreationPlan(input, await gatherCreationFacts(input, { preview: true })) }
     })
   )
 
