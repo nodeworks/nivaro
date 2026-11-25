@@ -33,6 +33,8 @@ interface Held extends DatabaseJob {
   endedMs: number | null
   /** Runs once the job's end has been read (a dedicated pull restarts only then). */
   afterRead: (() => void) | null
+  /** Review 5 M1: aborts the work (download stopped, check killed, copy dropped). */
+  abort: AbortController
 }
 
 /** Ended jobs are kept this long for a late read. */
@@ -88,7 +90,7 @@ export function startDatabaseJob(
   scope: string,
   kind: DatabaseJobKind,
   key: string,
-  run: () => Promise<unknown>,
+  run: (signal: AbortSignal) => Promise<unknown>,
   opts: { afterRead?: () => void } = {}
 ): DatabaseJob {
   const now = Date.now()
@@ -110,12 +112,13 @@ export function startDatabaseJob(
     scope,
     key,
     endedMs: null,
-    afterRead: opts.afterRead ?? null
+    afterRead: opts.afterRead ?? null,
+    abort: new AbortController()
   }
   jobs.set(`${scope}|${j.id}`, j)
   void (async () => {
     try {
-      j.result = await run()
+      j.result = await run(j.abort.signal)
       j.state = 'done'
     } catch (err) {
       const f = failureOf(err)
@@ -145,9 +148,27 @@ export function readDatabaseJob(scope: string, id: string): DatabaseJob | null {
   return out
 }
 
-/** Forget an app's jobs (it left this process). */
+/**
+ * Forget an app's jobs (it left this process). A job still running is ABORTED first (review 5
+ * M1): a copy for an app that is no longer listed is never put in place.
+ */
 export function forgetDatabaseJobs(scope: string): void {
-  for (const [k, j] of jobs) if (j.scope === scope) jobs.delete(k)
+  for (const [k, j] of jobs)
+    if (j.scope === scope) {
+      if (j.state === 'running') j.abort.abort()
+      jobs.delete(k)
+    }
+}
+
+/**
+ * Cancel this app's job `id` (the Hub gave up on it, or rolls the move back — review 5 M1): a
+ * running job is aborted and ends failed with COPY_CANCELLED. Answers whether it was running.
+ */
+export function cancelDatabaseJob(scope: string, id: string): boolean {
+  const j = jobs.get(`${scope}|${id}`)
+  if (j?.state !== 'running') return false
+  j.abort.abort()
+  return true
 }
 
 /** A job id as the routes accept it. */
