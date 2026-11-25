@@ -3,7 +3,7 @@ import { requireAdmin } from '../middleware/authenticate.js'
 import { idParam } from '../services/hub/apps.js'
 import { startWithChecklist } from '../services/hub/changes/checklist.js'
 import { PromotionError } from '../services/hub/promote-lock.js'
-import { sharedFreezeRefusal } from '../services/hub/releases/freeze.js'
+import { rollbackExempt, sharedFreezeRefusal } from '../services/hub/releases/freeze.js'
 import { HubSecretError } from '../services/hub/secrets.js'
 import { getShared } from '../services/hub/shared/store.js'
 import {
@@ -108,21 +108,27 @@ export function hubSharedUpgradeRoutes(app: FastifyInstance): void {
       const b = body(req)
       const start = () => startSharedUpgrade(id, b, userId(req))
       // An upgrade of a deployment carrying production apps needs their pre-deploy checklist
-      // ticked (services/hub/changes); a rollback never waits on one.
-      const out =
-        b.kind === 'rollback'
-          ? await start()
-          : await startWithChecklist(
-              {
-                target: { kind: 'shared', sharedId: id },
-                action: 'upgrade',
-                version: typeof b.version === 'string' ? b.version : null,
-                runId: b.checklist_run_id
-              },
-              'shared_deploy',
-              start,
-              (o) => o.shared_deploy_id
-            )
+      // ticked (services/hub/changes). Only a rollback BELOW the version the deployment runs
+      // is exempt (rollbackExempt); a "rollback" to the same, a newer or an unknown running
+      // version is gated like an upgrade.
+      const running = (await getShared(id))?.version_pin ?? null
+      const realRollback =
+        b.kind === 'rollback' &&
+        typeof b.version === 'string' &&
+        rollbackExempt(b.version, running == null ? null : String(running))
+      const out = realRollback
+        ? await start()
+        : await startWithChecklist(
+            {
+              target: { kind: 'shared', sharedId: id },
+              action: 'upgrade',
+              version: typeof b.version === 'string' ? b.version : null,
+              runId: b.checklist_run_id
+            },
+            'shared_deploy',
+            start,
+            (o) => o.shared_deploy_id
+          )
       return reply.code(202).send({ data: out })
     })
   })

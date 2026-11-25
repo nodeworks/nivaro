@@ -418,29 +418,38 @@ describe('hub change routes', () => {
     expect(past.json().data.run).toMatchObject({ status: 'used', run_kind: 'deploy', run_id: 4242 })
   })
 
-  it('a rollback and Apply now never wait on a checklist', async () => {
+  it('only a real rollback (to an older version) skips the checklist and the windows', async () => {
     await inject('POST', '/checklist-items', { app_id: appId, text: 'Support told' })
-    const back = await startPromotion(
-      prod,
-      {
-        kind: 'rollback',
-        version: '0.3.214',
-        confirm: 'prod',
-        planHash: 'a'.repeat(64),
-        user: null
-      },
-      {
-        ...defaultStartDeps(),
-        lock: memoryPromoteLock,
-        gather: async () => {
-          throw new PromotionError('GITLAB_UNREACHABLE', 'GitLab did not answer', 503)
+    await closedWindow()
+    const rollback = (version: string, running: string | null) =>
+      startPromotion(
+        prod,
+        { kind: 'rollback', version, confirm: 'prod', planHash: 'a'.repeat(64), user: null },
+        {
+          ...defaultStartDeps(),
+          lock: memoryPromoteLock,
+          gather: async () => ({ targetVersion: running }) as never
         }
-      }
-    ).then(
-      () => ({ code: 'STARTED' }),
-      (e) => e as { code: string }
-    )
-    expect(back.code).toBe('GITLAB_UNREACHABLE')
+      ).then(
+        () => ({ code: 'STARTED' }),
+        (e) => e as { code: string }
+      )
+    // A real rollback: outside the window, no ticks — past both gates (the fake plan input
+    // then stops it, which is not a window or checklist refusal).
+    const real = await rollback('0.3.214', '0.3.215')
+    expect(real.code).not.toBe('OUTSIDE_WINDOW')
+    expect(String(real.code)).not.toMatch(/^CHECKLIST_/)
+    // A "rollback" to a newer or the same version, or with the running version unknown, is a
+    // forward deploy: gated exactly like a promotion.
+    expect((await rollback('0.3.216', '0.3.215')).code).toBe('OUTSIDE_WINDOW')
+    expect((await rollback('0.3.215', '0.3.215')).code).toBe('OUTSIDE_WINDOW')
+    expect((await rollback('0.3.214', null)).code).toBe('OUTSIDE_WINDOW')
+    // With the window open, the checklist still stops it until ticked.
+    await db('nivaro_hub_deploy_windows').del()
+    expect((await rollback('0.3.216', '0.3.215')).code).toBe('CHECKLIST_REQUIRED')
+    expect((await rollback('0.3.214', null)).code).toBe('CHECKLIST_REQUIRED')
+    const ok = await rollback('0.3.214', '0.3.215')
+    expect(String(ok.code)).not.toMatch(/^CHECKLIST_/)
   })
 
   it('an unattended start opens its checklist once, tells people, and passes once ticked', async () => {
@@ -496,12 +505,18 @@ describe('hub change routes', () => {
     const upgrade = await inject('POST', `/shared/${sharedId}/upgrade`, { version: '0.3.215' })
     expect(upgrade.statusCode).toBe(409)
     expect(upgrade.json().code).toBe('CHECKLIST_REQUIRED')
-    // A rollback of the deployment never waits on it.
+    // A rollback below the version the deployment runs (0.3.210) never waits on it; a
+    // "rollback" to a newer version is an upgrade and does.
     const back = await inject('POST', `/shared/${sharedId}/upgrade`, {
       kind: 'rollback',
       version: '0.3.209'
     })
     expect(back.json().code).not.toMatch(/^CHECKLIST_/)
+    const forward = await inject('POST', `/shared/${sharedId}/upgrade`, {
+      kind: 'rollback',
+      version: '0.3.215'
+    })
+    expect(forward.json().code).toBe('CHECKLIST_REQUIRED')
 
     const list = await inject('GET', `/shared/${sharedId}/checklist?version=0.3.215`)
     expect(list.json().data.entries.map((e: { key: string }) => e.key)).toEqual([
