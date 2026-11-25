@@ -10,6 +10,7 @@ import { chaosAllowed } from './chaos/gate.js'
 import { isMultiTenant, isNivaroCloud } from './deployment-mode.js'
 import { currentNotice, type EnvironmentNotice } from './environment-notice.js'
 import { hubLinkToken, hubModeEnabled, hubUrl } from './hub/mode.js'
+import { hubStandalone } from './hub/standalone.js'
 import { phonePushMode } from './phone-push.js'
 import { overlaySettings } from './settings-overrides.js'
 import { currentTenantKey } from './tenant-rooms.js'
@@ -127,7 +128,8 @@ export async function buildAppInfo(opts: { block?: AppInfoBlock | null } = {}): 
     },
     // The relay key may live in the tenant's settings; a blocked tenant sends nothing anyway.
     push: { mode: block ? 'off' : await cachedPushMode() },
-    features: enabledFeatures(),
+    // A standalone Hub (no app data here) also says `hub_only`: the admin keeps Hub pages only.
+    features: [...enabledFeatures(), ...(!block && (await hubStandalone()) ? ['hub_only'] : [])],
     blocked: block ? block.kind : (await maintenanceOn()) ? 'maintenance' : null
   }
 }

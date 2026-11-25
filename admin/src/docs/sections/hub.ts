@@ -19,6 +19,10 @@ export const hubOverviewDocs: DocSection = {
       text: 'Hub mode is off by default. With HUB unset an installation is an ordinary Nivaro: no Hub routes, no Apps item in the navigation, empty Hub tables. Hub mode is refused in cloud mode (CLOUD_META_DB_URL set) and on any shared deployment (HUB_SHARED_DEPLOYMENT set): the routes are not mounted and the hub feature is not advertised.'
     },
     {
+      type: 'p',
+      text: 'A standalone Hub (hub mode on, and no collections of its own beyond the Nivaro system tables) also lists `hub_only` in `GET /api/app-info`. Its admin sidebar then keeps only the pages a Hub needs: Overview, Apps, Users, Roles, Security Center, Activity, Health, Issues, Jobs, Database, API keys, Docs and Settings. The data pages (Collections, Flows, Dashboards and the rest) read data a Hub never holds, so they are left out. An installation that is a Hub and also holds app data keeps the full sidebar.'
+    },
+    {
       type: 'warn',
       text: "Two Hubs must not share one Redis database. The keys of promotion and creation locks (`nvr:hub:promote:<environment id>`), job logs and readiness carry no instance prefix (`REDIS_CHANNEL_PREFIX` covers pub/sub channels only), so two Hubs on one Redis database take each other's locks and read each other's logs by id. Give each Hub its own Redis database (or its own Redis)."
     },
