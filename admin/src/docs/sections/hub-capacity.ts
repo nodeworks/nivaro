@@ -79,15 +79,15 @@ export const hubCapacityDocs: DocSection = {
       rows: [
         [
           'Requests per minute (10–1,000,000)',
-          '429 `APP_RATE_LIMITED` with `Retry-After` until the next minute. Counted in Redis across every web process (`nvr:applimit:rpm:<app>:<minute>`); when Redis does not answer within 250 ms each process counts alone. Probes, the Hub links and the file transfer of a move are never counted.'
+          '429 `APP_RATE_LIMITED` with `Retry-After` until the next minute. Requests that carry a credential (session or `Authorization`) share the app’s budget; requests without one get a budget of the same size per address, so anonymous traffic never uses up the signed-in budget. Counted in Redis across every web process (`nvr:applimit:rpm:<app>:<bucket>:<minute>`); when Redis does not answer within 250 ms each process counts alone for 10 seconds. Only requests that came over HTTP count: batch reads, MCP tool calls and other in-process calls are parts of a request already counted. Probes, sign-in (`/api/auth/*`, it has its own limiter), the Hub links and the file transfer of a move are never counted.'
         ],
         [
           'Background jobs at once (1–16)',
-          'Each turn of a scheduled job for the app waits for one of its slots, first come first served, up to 5 minutes; then it is skipped (`app_limit` in the job run) and runs at its next time. Per process.'
+          'Each turn of a scheduled job for the app takes one of its slots. A turn that finds them all taken holds no lane: the job serves its other apps and comes back, for up to 5 minutes, then skips the app (`app_limit` in the job run); it runs at its next time. The app’s lease, pause and the Hub’s freeze (maintenance for a move or upgrade) are judged only once the slot is held. Per process. Run now, chained runs and the staged-import and export drains take no slot (the drains have their own per-app queue).'
         ],
         [
           'File storage (MB)',
-          '413 `APP_STORAGE_FULL` on an upload that would pass it. Files already stored stay.'
+          '413 `APP_STORAGE_FULL` on an upload, a file replacement (by the size it adds) or a stored layout PDF that would pass it. Files already stored stay. Direct (presigned) uploads to object storage are refused for an app with a storage limit (409 `DIRECT_UPLOAD_OFF_WITH_STORAGE_LIMIT`): their size is never known to the app, so they go through the app instead.'
         ]
       ]
     },
