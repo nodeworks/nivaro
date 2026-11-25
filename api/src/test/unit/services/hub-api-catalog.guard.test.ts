@@ -48,6 +48,10 @@ function registered(): string[] {
     const src = read(file)
     for (const m of src.matchAll(/\bapp\.(get|post|put|patch|delete)(?:<[^>]*>)?\(\s*'([^']+)'/g))
       out.push(`${m[1].toUpperCase()} ${prefix}${m[2]}`)
+    // hub-data.ts registers its run starts through a helper: POST /environments/:envId/data/<name>.
+    if (src.includes('`/environments/:envId/data/${path}`'))
+      for (const m of src.matchAll(/\bstartRoute\(\s*'([^']+)'/g))
+        out.push(`POST ${prefix}/environments/:envId/data/${m[1]}`)
   }
   return [...new Set(out)].sort()
 }

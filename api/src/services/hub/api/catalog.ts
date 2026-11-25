@@ -1185,6 +1185,64 @@ export const HUB_ROUTES: HubRoute[] = [
     }
   ),
   r(
+    'POST',
+    '/environments/:envId/data/backup',
+    'Data care',
+    'admin',
+    'write',
+    'Start a database backup of this environment (answers 202 with the run id)'
+  ),
+  r(
+    'POST',
+    '/environments/:envId/data/files-backup',
+    'Data care',
+    'admin',
+    'write',
+    'Start a files backup of this environment (answers 202 with the run id)'
+  ),
+  r(
+    'POST',
+    '/environments/:envId/data/drill',
+    'Data care',
+    'admin',
+    'write',
+    'Start a restore drill into a scratch database (answers 202 with the run id)'
+  ),
+  r(
+    'POST',
+    '/environments/:envId/data/backup-seen',
+    'Data care',
+    'admin',
+    'write',
+    'Record a backup taken outside the Hub (answers 201)',
+    {
+      body: { at: s('When the backup was taken (ISO time)'), note: s('Optional note') }
+    }
+  ),
+  r(
+    'POST',
+    '/environments/:envId/data/refresh',
+    'Data care',
+    'admin',
+    'write',
+    'Start a refresh planned with refresh/plan (copies another environment’s data over this one)',
+    {
+      sensitive: true,
+      body: { plan_hash: s('The plan_hash from refresh/plan', { required: true }) }
+    }
+  ),
+  r(
+    'POST',
+    '/environments/:envId/data/rehearsal',
+    'Data care',
+    'admin',
+    'write',
+    'Start a move rehearsal on a shared deployment (refused while a move is open)',
+    {
+      body: { shared_id: n('The shared deployment to rehearse on', { required: true }) }
+    }
+  ),
+  r(
     'GET',
     '/environments/:envId/data/runs',
     'Data care',
