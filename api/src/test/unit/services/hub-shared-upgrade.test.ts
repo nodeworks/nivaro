@@ -350,6 +350,23 @@ describe('planSharedUpgrade', () => {
     expect(plan.plan_hash).toMatch(/^[0-9a-f]{64}$/)
   })
 
+  it('a downgrade below 0.3.215 names the apps whose Hub sign-in falls back to direct (review L1)', async () => {
+    const id = await newShared({ version_pin: '0.3.215' })
+    const hub = await newApp(id, [{ key: 'production', placed: true }])
+    await db('nivaro_hub_apps').where({ id: hub.appId }).update({ signin_mode: 'hub' })
+    await newApp(id, [{ key: 'production', placed: true }])
+    const down = await Plan.planSharedUpgrade(id, '0.3.214', 'upgrade', planDeps())
+    const text = down.warnings.find((w) => w.code === 'DOWNGRADE')?.text ?? ''
+    expect(text).toContain(`${hub.appKey}/production falls back to direct Microsoft sign-in`)
+    expect(text).toContain('0.3.215')
+    // Staying at or above the floor says nothing about it.
+    await db('nivaro_hub_shared_deployments').where({ id }).update({ version_pin: '0.3.216' })
+    const still = await Plan.planSharedUpgrade(id, '0.3.215', 'upgrade', planDeps())
+    expect(still.warnings.find((w) => w.code === 'DOWNGRADE')?.text ?? '').not.toContain(
+      'falls back'
+    )
+  })
+
   it('each blocker fires on its input', async () => {
     const id = await newShared()
     await newApp(id, [{ key: 'production', placed: true }])
@@ -1734,6 +1751,16 @@ describe('downgrade needs confirm (ruling P6-29, B2)', () => {
     expect(d('0.3', '0.3.211')).toBe(true)
     // Nothing deployed yet: nothing to go down from.
     expect(d(null, '0.3.211')).toBe(false)
+  })
+
+  it('a downgrade or rollback below 0.3.215 says GitLab issue sync stops for every app', () => {
+    const l = Plan.downgradeLosses
+    expect(l('0.3.215', '0.3.214')).toMatch(/GitLab issue sync stops for every app/)
+    expect(l('0.3.216', '0.3.215-rc.1')).toMatch(/GitLab issue sync stops/)
+    expect(l('0.3.216', 'next')).toMatch(/GitLab issue sync stops/) // unreadable: the safe side
+    expect(l('0.3.216', '0.3.215')).toBe('')
+    expect(l('0.3.214', '0.3.213')).toBe('') // never ran it
+    expect(l(null, '0.3.213')).toBe('')
   })
 
   it('an upgrade to an older version → 409 DOWNGRADE_NEEDS_CONFIRM unless downgrade: true', async () => {

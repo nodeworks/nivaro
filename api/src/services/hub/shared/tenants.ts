@@ -2,11 +2,13 @@ import { createHash } from 'node:crypto'
 import { db } from '../../../db/index.js'
 import type { HubTenantsResponse, HubTenantWire } from '../../tenancy/hub-contract.js'
 import { appFromRow, environmentFromRow, type HubApp } from '../apps.js'
+import { limitsByEnv } from '../capacity/store.js'
 import { openDatabaseWire } from '../db/databases.js'
 import { environmentNames } from '../docker/render-spec.js'
 import type { HubPlacementRow } from '../drivers.js'
 import type { HubEnvironmentRow } from '../promote-types.js'
 import { openAppKey, type SharedDeployment, tenantIdFor } from './store.js'
+import { hubLinksFor, sealHubLink } from './tenant-hub-link.js'
 
 /**
  * Nivaro Hub phase 6: the tenants a shared deployment serves, as the phase-5 contract
@@ -222,6 +224,12 @@ export async function tenantsBody(
         ).map((r) => [Number(r.id), r.db_ref])
       : []
   )
+  // Each app's own Hub link (sign-in through the Hub, the switcher), sealed with its key below.
+  const hubLinks = await hubLinksFor(rows)
+  // Hub capacity: per-app limits (nivaro_hub_app_limits); a table not there yet = none.
+  const limits = rows.length
+    ? await limitsByEnv(rows.map((r) => r.env.id)).catch(() => new Map())
+    : new Map()
   const tenants: HubTenantWire[] = []
   const listed: SharedTenantRow[] = []
   // Hub gap sqlite: a dedicated SQLite app moving in has no record on its environment until
@@ -295,10 +303,20 @@ export async function tenantsBody(
       key = null
     }
     if (key) wire.encryption_key = key
+    const link = hubLinks.get(env.id)
+    if (key && link) wire.hub_link = sealHubLink(link, key)
+    const lim = limits.get(env.id)
+    if (lim && Object.keys(lim).length) wire.limits = lim
     tenants.push(wire)
     listed.push(row)
   }
 
+  // Hub data care: a move rehearsal's temporary app (rh-<run>, maintenance, .invalid host).
+  tenants.push(
+    ...(await import('../data/rehearsal.js')
+      .then((m) => m.rehearsalTenantWires(shared.id))
+      .catch(() => []))
+  )
   const hashed = JSON.stringify({ data: { deployment: shared.key, tenants } })
   const etag = `"${createHash('sha256').update(hashed).digest('hex')}"`
   const body: HubTenantsResponse = {

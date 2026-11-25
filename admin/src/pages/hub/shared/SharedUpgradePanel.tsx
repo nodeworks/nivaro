@@ -1,7 +1,7 @@
 import { ConfirmButton, type ErrorDescription, ErrorNotice, isRawErrorText } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Ban, Check, ChevronsUpDown, Circle, Loader2, X } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -43,6 +43,7 @@ import {
   refusedPlanOf,
   restatesTitle,
   runErrorText,
+  runnerOf,
   type SharedDeploy,
   type SharedUpgradeKind,
   type SharedUpgradePlan,
@@ -50,14 +51,15 @@ import {
   type StepState,
   startSharedUpgrade,
   stepStates,
+  stepsOf,
   UPGRADE_COPY,
-  UPGRADE_STEPS,
   upgradeCopy,
   upgradeKeys
 } from './shared-upgrade-api'
 
 /**
- * Upgrade or roll back a shared deployment the Hub runs (Docker): pick a version, read the plan
+ * Upgrade or roll back a shared deployment the Hub runs (Docker) or upgrades through its GitLab
+ * pipeline (registered with a GitLab driver): pick a version, read the plan
  * (which apps it touches and what holds each back), override an order or preflight hold where a
  * Hub administrator may, type the deployment's key, start; then watch each step. The server
  * re-checks everything at start, so the confirmation is for the person, not the gate.
@@ -563,6 +565,96 @@ function VersionPicker({
   )
 }
 
+/**
+ * What a run through the deployment's GitLab pipeline does, one labelled line per step in the
+ * order it does them (the plan reads in two seconds; every machine value in mono).
+ */
+function GitlabLine({
+  gitlab,
+  plan
+}: {
+  gitlab: NonNullable<SharedUpgradePlan['gitlab']>
+  plan: SharedUpgradePlan
+}) {
+  const sha = gitlab.commit ? gitlab.commit.slice(0, 8) : null
+  const mono = 'font-mono text-[12px] text-slate-900 dark:text-foreground'
+  const rows: { label: string; value: ReactNode }[] = [
+    {
+      label: 'Through',
+      value: (
+        <>
+          {gitlab.driver} · <span className={mono}>{gitlab.project}</span>
+        </>
+      )
+    },
+    ...(plan.kind === 'rollback'
+      ? [
+          {
+            label: 'Rerun',
+            value: (
+              <>
+                <span className={mono}>{gitlab.deploy_job}</span> of pipeline{' '}
+                <span className={mono}>{gitlab.build_pipeline_id ?? '?'}</span>
+                {sha && (
+                  <>
+                    {' '}
+                    (build <span className={mono}>{sha}</span>)
+                  </>
+                )}
+              </>
+            )
+          }
+        ]
+      : [
+          {
+            label: 'Merge',
+            value: (
+              <>
+                <span className={mono}>{sha ?? 'the release commit'}</span> from{' '}
+                <span className={mono}>{gitlab.source_branch}</span> onto{' '}
+                <span className={mono}>{gitlab.target_branch}</span>
+              </>
+            )
+          },
+          {
+            label: 'Pin',
+            value: (
+              <>
+                <span className={mono}>{plan.version}</span> in{' '}
+                <span className={mono}>{gitlab.pin_file}</span>
+              </>
+            )
+          },
+          {
+            label: 'Run',
+            value: (
+              <>
+                {gitlab.before_job && (
+                  <>
+                    <span className={mono}>{gitlab.before_job}</span> first, then{' '}
+                  </>
+                )}
+                <span className={mono}>{gitlab.deploy_job}</span>
+              </>
+            )
+          }
+        ])
+  ]
+  return (
+    <dl
+      aria-label='What GitLab does'
+      className='m-0 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-[12px] text-slate-600 dark:text-slate-300'
+    >
+      {rows.map((r) => (
+        <Fragment key={r.label}>
+          <dt className='text-slate-500 dark:text-muted-foreground'>{r.label}</dt>
+          <dd className='m-0 min-w-0 break-words'>{r.value}</dd>
+        </Fragment>
+      ))}
+    </dl>
+  )
+}
+
 function PlanPreview({
   plan,
   overrides,
@@ -579,6 +671,8 @@ function PlanPreview({
         <span className='font-mono font-semibold'>{plan.version}</span> on{' '}
         {plan.apps.length === 1 ? '1 app' : `${plan.apps.length} apps`}
       </p>
+
+      {plan.runner === 'gitlab' && plan.gitlab && <GitlabLine gitlab={plan.gitlab} plan={plan} />}
 
       {plan.blockers.length > 0 && (
         <ul aria-label='What holds it back' className='m-0 list-none space-y-1.5 p-0'>
@@ -839,6 +933,7 @@ function UpgradeProgress({
     )
 
   const states = stepStates(d)
+  const steps = stepsOf(d)
   const kindWord = KIND_WORDS[d.kind] ?? d.kind
   return (
     <div className='space-y-3'>
@@ -875,7 +970,7 @@ function UpgradeProgress({
       </div>
 
       <ol aria-label='Upgrade steps' className='m-0 list-none space-y-1.5 p-0'>
-        {UPGRADE_STEPS.map((s, i) => {
+        {steps.map((s, i) => {
           const st = states[i]
           const Icon = STEP_ICON[st]
           return (
@@ -894,7 +989,12 @@ function UpgradeProgress({
           )
         })}
       </ol>
-      {live && d.step && !UPGRADE_STEPS.some((s) => s.key === d.step) && (
+      {live && d.step === 'deploy' && runnerOf(d) === 'gitlab' && (
+        <p className='m-0 text-[12px] text-slate-600 dark:text-slate-300'>
+          Cancel stops the Hub waiting. A deploy job GitLab already started keeps running there.
+        </p>
+      )}
+      {live && d.step && !steps.some((s) => s.key === d.step) && (
         // A step this screen does not know (a newer server): never its raw key.
         <p className='m-0 text-[12px] text-slate-600 dark:text-slate-300'>Working…</p>
       )}

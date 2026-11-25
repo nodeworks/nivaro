@@ -81,6 +81,18 @@ export interface SqliteStorageFacts {
 }
 
 /**
+ * Is the agent's uploads volume on network storage? Its `uploads_network` (hub gap sqlite), else
+ * its `volume_nfs` (0.2.3, NFS export), else null: an agent that says neither is unknown.
+ */
+export function uploadsOnNetwork(
+  h: { uploads_network?: unknown; volume_nfs?: unknown } | null | undefined
+): boolean | null {
+  if (typeof h?.uploads_network === 'boolean') return h.uploads_network || h.volume_nfs === true
+  if (typeof h?.volume_nfs === 'boolean') return h.volume_nfs
+  return null
+}
+
+/**
  * Why a SQLite app's file cannot live on this agent's uploads volume, or null (M5, H2): never on
  * an NFS export or a non-local volume driver (SQLite's WAL and its file locks are not safe on a
  * network filesystem), never on a swarm of several nodes with local volumes (a task rescheduled

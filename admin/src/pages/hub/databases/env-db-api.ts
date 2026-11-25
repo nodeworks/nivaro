@@ -61,6 +61,10 @@ export const ENV_DB_COPY: Record<string, { title: string; hint?: string }> = {
     hint: 'Try again in a moment.'
   },
   PROMOTION_RUNNING: { title: 'A promotion of this environment is running' },
+  REFRESH_RUNNING: {
+    title: "This environment's database is being refreshed or rolled back",
+    hint: 'Wait for it to finish, then try again.'
+  },
   MOVE_RUNNING: { title: 'A move of this environment is running' },
   CREATION_RUNNING: { title: 'A creation step is running on this environment' },
   STACK_BUSY: { title: "A stack action is running on this environment's stack" },

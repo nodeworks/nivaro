@@ -7,7 +7,9 @@ vi.mock('../../../db/index.js', () => ({
   db: vi.fn(() => ({ columnInfo }))
 }))
 
+import { runAppOnlyClear } from '../../../db/config-epoch.js'
 import type { db } from '../../../db/index.js'
+import { runWithTenantDb } from '../../../db/tenant-context.js'
 import { clearMetadataCache, getPhysicalColumns } from '../../../services/collections.js'
 
 describe('getPhysicalColumns', () => {
@@ -32,6 +34,21 @@ describe('getPhysicalColumns', () => {
     expect(await getPhysicalColumns('missing')).toBeNull()
     columnInfo.mockResolvedValue({})
     expect(await getPhysicalColumns('empty')).toBeNull()
+  })
+
+  it("an app-only clear (another process announced one app) drops only that app's entries", async () => {
+    const inApp = <T>(app: string, fn: () => Promise<T>) =>
+      new Promise<T>((res, rej) => {
+        runWithTenantDb({} as never, app, () => void fn().then(res, rej), app)
+      })
+    columnInfo.mockResolvedValue({ id: {} })
+    await inApp('A', () => getPhysicalColumns('workflows'))
+    await inApp('B', () => getPhysicalColumns('workflows'))
+    expect(columnInfo).toHaveBeenCalledTimes(2)
+    await inApp('A', async () => runAppOnlyClear(() => clearMetadataCache()))
+    await inApp('A', () => getPhysicalColumns('workflows'))
+    await inApp('B', () => getPhysicalColumns('workflows'))
+    expect(columnInfo).toHaveBeenCalledTimes(3)
   })
 
   it('never caches a non-default database handle', async () => {

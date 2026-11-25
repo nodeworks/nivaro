@@ -81,9 +81,27 @@ export interface HubLinkReadiness {
   version: string | null
 }
 
+/** What the source said it carried (names only; absent = an app before 0.3.215). */
+export interface MaintenanceAnswer {
+  instance_row: { result: string; keys: string[]; differed: string[] } | null
+  env_mail: string | null
+}
+
+const strList = (v: unknown): string[] =>
+  Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string').slice(0, 200) : []
+
 export interface HubLinkClient {
   status(): Promise<HubLinkStatus>
-  maintenance(on: boolean, moveId: number, message?: string): Promise<void>
+  /** `carry` (0.3.215, a move to a shared deployment): the source first copies its per-instance
+   *  settings row to the row keyed `targetInstance`, and with `keepEnvMail` the mail settings it
+   *  takes from its environment into that row (an older app ignores both: its answer then has
+   *  neither `instance_row` nor `env_mail`). */
+  maintenance(
+    on: boolean,
+    moveId: number,
+    message?: string,
+    carry?: { targetInstance: string; keepEnvMail?: boolean }
+  ): Promise<MaintenanceAnswer>
   retire(moveId: number): Promise<void>
   unretire(): Promise<void>
   sharedReadiness(): Promise<HubLinkReadiness>
@@ -278,13 +296,27 @@ export function hubLinkClient(
       }
     },
 
-    async maintenance(on, moveId, message) {
+    async maintenance(on, moveId, message, carry) {
       const a = await call('/maintenance', 'POST', {
         on,
         move_id: moveId,
-        ...(message ? { message } : {})
+        ...(message ? { message } : {}),
+        ...(on && carry ? { target_instance: carry.targetInstance } : {}),
+        ...(on && carry?.keepEnvMail ? { keep_env_mail: true } : {})
       })
       if (!ok(a)) throw refusal(a)
+      const b = (isObj(a.body) ? a.body : {}) as Record<string, unknown>
+      const r = isObj(b.instance_row) ? (b.instance_row as Record<string, unknown>) : null
+      return {
+        instance_row: r
+          ? {
+              result: typeof r.result === 'string' ? r.result.slice(0, 20) : 'unknown',
+              keys: strList(r.keys),
+              differed: strList(r.differed)
+            }
+          : null,
+        env_mail: typeof b.env_mail === 'string' ? b.env_mail.slice(0, 20) : null
+      }
     },
 
     async retire(moveId) {
@@ -336,7 +368,10 @@ export function hubLinkClient(
         source: req.source,
         ticket: req.ticket,
         mode: req.mode,
-        ...(req.objects ? { objects: true } : {})
+        ...(req.objects ? { objects: true } : {}),
+        ...(req.env_objects ? { env_objects: true } : {}),
+        ...(req.replays ? { replays: true } : {}),
+        ...(req.source_scope ? { source_scope: req.source_scope } : {})
       })
       if (!ok(a)) throw refusal(a)
       const b = a.body
@@ -406,6 +441,7 @@ export function hubLinkClient(
         bytes: b.bytes,
         error: isStr(b.error) ? b.error.slice(0, 300) : null,
         size_mismatch: isNum(b.size_mismatch) ? b.size_mismatch : 0,
+        server_copied: isNum(b.server_copied) ? b.server_copied : 0,
         failed_ids: Array.isArray(b.failed_ids)
           ? (b.failed_ids as unknown[]).filter(isStr).slice(0, 50)
           : [],

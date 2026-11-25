@@ -133,6 +133,13 @@ export interface PullRequest {
   mode: 'full' | 'delta'
   /** P6-31: also copy saved-settings S3/Azure objects (the key prefix changes). */
   objects?: boolean
+  /** 0.3.215 (both sides): also copy objects an env S3/Azure provider stored. */
+  env_objects?: boolean
+  /** 0.3.215 (both sides): also copy the cold objects of session replays. */
+  replays?: boolean
+  /** 0.3.215: `root` (dedicated source) or the shared source's tenant id: the only place the
+   *  target may copy an object from inside one bucket. */
+  source_scope?: string
 }
 
 export interface PullStatus {
@@ -147,6 +154,8 @@ export interface PullStatus {
   error: string | null
   /** Rows copied although their stored filesize disagreed (Task 16); absent from older apps. */
   size_mismatch?: number
+  /** 0.3.215: objects the bucket copied itself (counted in `copied` too). */
+  server_copied?: number
   /** Ids of the rows that failed, ≤ 50 (Task 16); absent from older apps. */
   failed_ids?: string[]
   /** Failed rows per plain reason (hub-transfer/fail-reasons.ts); absent from older apps. */
@@ -348,6 +357,7 @@ const SCHEMA_STATES = new Set(['pending', 'running', 'ok', 'failed'])
 
 function isDeploymentStatus(v: unknown): v is DeploymentStatus {
   if (!isObj(v) || !isStr(v.version) || !isStr(v.instance)) return false
+  if (v.instance_key !== undefined && !isStr(v.instance_key)) return false
   const r = v.registry
   if (
     !isObj(r) ||
@@ -585,7 +595,10 @@ export function deploymentClient(
           source: req.source,
           ticket: req.ticket,
           mode: req.mode,
-          ...(req.objects ? { objects: true } : {})
+          ...(req.objects ? { objects: true } : {}),
+          ...(req.env_objects ? { env_objects: true } : {}),
+          ...(req.replays ? { replays: true } : {}),
+          ...(req.source_scope ? { source_scope: req.source_scope } : {})
         }
       })
       if (!ok(a)) throw refusalOf(a, transferRefusal)
@@ -611,6 +624,7 @@ export function deploymentClient(
         bytes: b.bytes,
         error: b.error === null ? null : b.error.slice(0, 300),
         size_mismatch: isNum(b.size_mismatch) ? b.size_mismatch : 0,
+        server_copied: isNum(b.server_copied) ? b.server_copied : 0,
         failed_ids: Array.isArray(b.failed_ids)
           ? b.failed_ids.filter((x): x is string => isStr(x) && x.length <= 64).slice(0, 50)
           : [],

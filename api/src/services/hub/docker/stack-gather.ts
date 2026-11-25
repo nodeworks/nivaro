@@ -437,7 +437,9 @@ export async function gatherStackFacts(
         image: `${imageRepo}@${DRY_DIGEST}`,
         extensions,
         hubPublicUrl: null,
-        agentVersion: health.agent_version
+        agentVersion: health.agent_version,
+        agentVolumeNfs: health.volume_nfs,
+        agentExportMount: health.export_mount
       })
     } catch (err) {
       if (!(err instanceof StackRenderError)) throw err

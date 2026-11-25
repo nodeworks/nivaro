@@ -94,17 +94,43 @@ export function serverTlsWords(tls: CreationServerTls | null | undefined): strin
 
 // ─── Creation ─────────────────────────────────────────────────────────────────
 
+/** Where a created app goes: a GitLab target, a Docker driver (the Hub agent), a shared deployment. */
+export type CreationKind = 'gitlab' | 'docker' | 'shared'
+
+export interface DockerStackInput {
+  size?: string
+  redis?: string
+  settings?: Record<string, string>
+  secrets?: Record<string, string>
+  extension_pins?: Record<string, string>
+}
+
+export type CreateTargetInput =
+  | { kind: 'gitlab'; id: number }
+  | { kind: 'docker'; driver_id: number; stack?: DockerStackInput }
+  | { kind: 'shared'; shared_id: number; pool_max?: number }
+
 export interface CreateAppInput {
   key: string
   name: string
   owners: string[]
   first_admin: { email: string; first_name?: string; last_name?: string }
-  target_id: number
+  /** The phase-3 GitLab form; `target` names any kind and wins. */
+  target_id?: number
+  target?: CreateTargetInput
+  /** Shared: blank = the deployment's version. */
   version: string
-  signin: { issuer: string; client_id: string; client_secret: string }
+  /** Hub enhancement 24: a template from the library, installed after the first admin. */
+  template_id?: number | null
+  /** Shared only: extension ids the deployment loads. */
+  extensions?: string[]
+  /** Optional on a shared deployment (it signs its apps in with its own OIDC). */
+  signin?: { issuer: string; client_id: string; client_secret: string }
   environments: Array<{
     key: string
     hostname?: string | null
+    /** Docker, published-port edge only. */
+    publish_port?: number | null
     database:
       | { server_id: number; database_name?: string; login_name?: string }
       | { database_id: number }
@@ -129,6 +155,8 @@ export interface CreationPlanEnvironment {
   branch: string
   source_branch: string
   stack_name: string | null
+  stack?: { size: string; redis: string; publish_port: number | null }
+  pool_max?: number
   database: {
     mode: 'automatic' | 'manual' | 'existing'
     server_name: string | null
@@ -146,6 +174,7 @@ export interface CreationPlan {
   /** Things to know that do not stop the creation (an existing database with a Nivaro install). */
   warnings?: string[]
   app: { key: string; name: string; project_path: string }
+  target?: { kind: CreationKind; name: string | null }
   environments: CreationPlanEnvironment[]
 }
 
@@ -158,7 +187,11 @@ export type CreationStepKey =
   | 'name'
   | 'link'
   | 'admin'
+  | 'template'
+  | 'stack'
+  | 'place'
 
+/** The GitLab kind's steps. A creation view lists its own kind's steps in order (`steps`). */
 export const STEP_ORDER: readonly CreationStepKey[] = [
   'database',
   'repository',
@@ -167,7 +200,8 @@ export const STEP_ORDER: readonly CreationStepKey[] = [
   'deploy',
   'name',
   'link',
-  'admin'
+  'admin',
+  'template'
 ]
 
 export interface CreationStepState {
@@ -200,6 +234,8 @@ export interface CreationView {
   id: number
   app_id: number
   app_key: string
+  /** Where the app goes (absent from a Hub older than 0.3.215: GitLab). */
+  target?: { kind: CreationKind; name: string | null }
   environment_id: number
   env_key: string
   status: CreationStatus
@@ -368,7 +404,31 @@ export const STEP_LABELS: Record<CreationStepKey, string> = {
   deploy: 'First deploy',
   name: 'Hostname',
   link: 'Hub link',
-  admin: 'First administrator'
+  admin: 'First administrator',
+  template: 'Template',
+  stack: 'Stack and settings',
+  place: 'Place on the shared deployment'
+}
+
+/** The deploy step reads differently on Docker (the Hub agent deploys the stack). */
+export function stepLabel(key: CreationStepKey, kind: CreationKind | undefined): string {
+  if (key === 'deploy' && kind === 'docker') return 'First deploy (Hub agent)'
+  return STEP_LABELS[key] ?? key
+}
+
+export const KIND_WORDS: Record<CreationKind, { label: string; hint: string }> = {
+  gitlab: {
+    label: 'GitLab',
+    hint: 'A deploy repository made from the target’s template; its pipeline deploys each environment.'
+  },
+  docker: {
+    label: 'Docker',
+    hint: 'The Hub agent deploys each environment as a swarm stack. No repository.'
+  },
+  shared: {
+    label: 'Shared deployment',
+    hint: 'Each environment is placed on a shared deployment that runs many apps.'
+  }
 }
 
 export const STEP_STATE_WORDS: Record<CreationStepState['status'], string> = {
@@ -661,6 +721,131 @@ export const CREATE_COPY: Record<string, Copy> = {
   },
   HUB_SECRET_NOT_SEALED: { title: "A saved secret can't be read", hint: 'Enter it again.' },
   HUB_SECRET_UNREADABLE: { title: "A saved secret can't be read", hint: 'Enter it again.' },
+  // Hub enhancement 24: templates on Create app and the creation's Template step.
+  TEMPLATE_UNKNOWN: {
+    title: 'The picked template is not in the library',
+    hint: 'It was archived or deleted. Pick another template, or none.'
+  },
+  TEMPLATE_APP_TOO_OLD: { title: 'This version cannot take a template', detail: true },
+  TEMPLATE_GONE: {
+    title: 'The template was deleted',
+    hint: 'Upload it again on the Templates tab, or install it by hand from Promotion → Blueprints in the app.'
+  },
+  TEMPLATE_UNANSWERED: {
+    title: 'The app did not answer the template install',
+    hint: 'Retry: the app skips what it already made.'
+  },
+  TEMPLATE_FAILED: {
+    title: 'The app could not install the template',
+    hint: "Check the app's server log, then Retry."
+  },
+  APP_NOT_EMPTY: { title: 'The app already has collections of its own', detail: true },
+  BAD_DIGEST: {
+    title: 'The app received a different template than the Hub sent',
+    hint: 'Retry; if it happens again, check what sits between the Hub and the app.'
+  },
+  BAD_BUNDLE: { title: 'That is not an App Blueprint', detail: true },
+  TEMPLATE_PARTIAL: { title: 'The template was installed in part', detail: true },
+  TEMPLATE_NOT_FOR_SHARED: {
+    title: 'An app on a shared deployment takes no template',
+    hint: 'Pick No template, or create the app on its own stack.'
+  },
+  TEMPLATE_INSTALLING: {
+    title: 'A template install is already running in this app',
+    hint: 'Wait for it to end, then Retry.'
+  },
+  BAD_SHAPE: { title: 'The template is not a well-formed blueprint', detail: true },
+  TOO_MANY_PARTS: { title: 'The template is larger than an app takes', detail: true },
+  APP_MOVED: {
+    title: 'The app has moved to another home',
+    hint: 'Nothing was installed there. Install the template from the app’s new home by hand (Promotion → Blueprints).'
+  },
+  UNKNOWN_INSTALL: {
+    title: 'The app lost track of the template install',
+    hint: 'Retry starts it again; the app skips what it already made.'
+  },
+  // Docker and shared creations (gap `create`, 0.3.215)
+  AGENT_UNREACHABLE: {
+    title: 'The Hub agent did not answer',
+    hint: "Check that the agent runs and the driver's address, then try again."
+  },
+  AGENT_REFUSED: {
+    title: 'The Hub agent refused the Hub',
+    hint: "Check the driver's agent token and address."
+  },
+  AGENT_INCOMPATIBLE: {
+    title: 'The Hub agent speaks another version',
+    hint: 'Upgrade the Hub agent, then try again.'
+  },
+  IMAGE_NOT_ALLOWED: {
+    title: "The agent's image list does not allow Nivaro",
+    hint: 'Add the image repository to HUB_AGENT_IMAGES on the agent.'
+  },
+  EXTENSION_NOT_ALLOWED: { title: 'An extension is not allowed there', detail: true },
+  BAD_EXTENSIONS: { title: 'The extensions are not a list of ids' },
+  BAD_EXTENSION_PIN: { title: 'An extension pin is not valid', detail: true },
+  HOSTNAME_NOT_ALLOWED: { title: "The hostname is outside the agent's names", detail: true },
+  STACK_EXISTS: {
+    title: 'The swarm already runs a stack with that name',
+    detail: true
+  },
+  REDIS_NOT_OFFERED: {
+    title: 'The agent offers no bundled Redis',
+    hint: 'Pick external Redis and give REDIS_URL.'
+  },
+  STACK_SETTINGS_MISSING: { title: 'A stack setting is missing', detail: true },
+  PUBLISH_PORT_NOT_ALLOWED: { title: 'The publish port is not allowed', detail: true },
+  BAD_PUBLISH_PORT: { title: 'The publish port is not a port number' },
+  TEMPLATE_NONE: { title: 'This version has no stack template', detail: true },
+  RESERVED_SETTING: { title: 'That setting is set by the Hub', detail: true },
+  SETTING_INVALID: { title: 'A stack setting is not allowed', detail: true },
+  SECRET_IN_SETTINGS: { title: 'A credential is in the plain settings', detail: true },
+  BAD_VALUE: { title: 'A stack setting value is not valid', detail: true },
+  BAD_SIZE: { title: 'Pick a size: small, medium or large' },
+  BAD_REDIS: { title: 'Pick bundled or external Redis' },
+  BAD_DB_CLIENT: { title: 'The database client is not valid', detail: true },
+  SQLITE_ONE_PROCESS: { title: 'SQLite runs in one process only', detail: true },
+  SHARED_RETIRED: { title: 'That shared deployment is retired' },
+  SHARED_BUSY: {
+    title: 'The shared deployment is being upgraded',
+    hint: 'Wait for the upgrade or rollback to end.'
+  },
+  NOT_DEPLOYED: {
+    title: 'The shared deployment has not been deployed yet',
+    hint: 'Upgrade it to a version first.'
+  },
+  VERSION_NOT_SHARED: {
+    title: 'An app on a shared deployment runs its version',
+    hint: 'Leave the version empty.'
+  },
+  BAD_POOL: { title: 'The connection pool is not valid', detail: true },
+  POOL_TOO_SMALL: { title: 'The connection pool is too small', detail: true },
+  POOL_BUDGET: { title: 'The shared deployment has too few connections left', detail: true },
+  NAME_NOT_ROUTED: { title: 'The shared deployment does not route that name', detail: true },
+  DATABASE_HOLDS_NIVARO: {
+    title: 'That database already holds a Nivaro install',
+    hint: 'An app that has served moves to a shared deployment instead.'
+  },
+  USE_MOVE: { title: 'This environment has served: move it instead', detail: true },
+  APP_KEY_UNKNOWN: { title: "The Hub does not know the app's key", detail: true },
+  SERVING_UNKNOWN: { title: 'The Hub cannot tell whether the app still runs', detail: true },
+  REPLICAS_BEHIND: { title: 'The shared deployment did not take the new list', detail: true },
+  SCHEMA_FAILED: { title: 'The app could not be migrated on the shared deployment', detail: true },
+  SCHEMA_TIMEOUT: { title: 'Migrating the app took too long', hint: 'Retry.' },
+  SWARM_ROLLED_BACK: {
+    title: 'Swarm rolled the stack back',
+    hint: 'The new tasks did not become healthy. Check the logs, then Retry.'
+  },
+  SWARM_UPDATE_PAUSED: { title: 'Swarm paused the stack update', detail: true },
+  STACK_DEPLOY_TIMEOUT: { title: 'The stack did not start in time', hint: 'Retry.' },
+  EXTENSION_UNPINNED: { title: "The environment's extension pins cannot be read" },
+  INTERRUPTED: { title: 'The Hub stopped while this ran', hint: 'Retry.' },
+  NO_GITLAB: { title: 'A Docker stack reads no GitLab', hint: 'Retry.' },
+  CREATION_OPEN: {
+    title: 'This environment is still being created',
+    hint: 'Let the creation finish, or cancel it, then try again.'
+  },
+
   // Phase 6 (Task 4): creation refuses an environment placed on a shared deployment.
   SHARED_PLACEMENT: {
     title: 'This environment runs on a shared deployment',

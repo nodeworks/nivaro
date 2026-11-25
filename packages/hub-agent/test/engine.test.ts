@@ -8,6 +8,7 @@ import {
   EngineForbiddenError,
   type Transport
 } from '../src/engine.js'
+import { nfsUploadsName } from '../src/volumes.js'
 
 const D = 'b'.repeat(64)
 const IMAGE = `nodeworks/nivaro@sha256:${D}`
@@ -935,12 +936,115 @@ describe('ruling P4-12: NFS volumes, never bind', () => {
     (p) => (p === '/v' ? JSON.stringify(nfs) : 'agent-token-0123456789-abcdefghij')
   )
 
-  it('an NFS volume matching the config is created', async () => {
+  // 0.2.3: the configured device is the export ROOT; each stack gets <export>/<stack>/uploads.
+  const own = { ...nfs, device: ':/export/uploads/s/uploads' }
+  const ownName = nfsUploadsName('s', 'local', own)
+
+  it("the stack's own NFS folder, under the name its digest gives, is created", async () => {
     const engine = createEngine(nfsCfg, transport)
+    expect(ownName).toMatch(/^nvh_s_uploads-[0-9a-f]{10}$/)
     await engine.call('POST', '/volumes/create', {
-      body: { Name: 'nvh_s_uploads', Driver: 'local', DriverOpts: { ...nfs }, Labels: OWN }
+      body: { Name: ownName, Driver: 'local', DriverOpts: { ...own }, Labels: OWN }
+    })
+    const adopted = { ...nfs, device: ':/export/uploads/legacy/files' }
+    const body = {
+      Name: nfsUploadsName('s', 'local', adopted),
+      Driver: 'local',
+      DriverOpts: adopted,
+      Labels: OWN
+    }
+    // L2: an adopted folder only when the call names it as the stack's folder.
+    await expect(engine.call('POST', '/volumes/create', { body })).rejects.toBeInstanceOf(
+      EngineForbiddenError
+    )
+    await expect(
+      engine.call('POST', '/volumes/create', { body, uploadsFolder: 'other' })
+    ).rejects.toBeInstanceOf(EngineForbiddenError)
+    await engine.call('POST', '/volumes/create', { body, uploadsFolder: 'legacy/files' })
+    // Another stack's own folder, under a name digest made for this stack: refused.
+    const theirs = { ...nfs, device: ':/export/uploads/t/uploads' }
+    await expect(
+      engine.call('POST', '/volumes/create', {
+        body: { ...body, Name: nfsUploadsName('s', 'local', theirs), DriverOpts: theirs }
+      })
+    ).rejects.toBeInstanceOf(EngineForbiddenError)
+    expect(seen).toHaveLength(2)
+    expect(seen[1].body).not.toContain('uploadsFolder')
+  })
+
+  it('the export root, a device outside it, a wrong digest or the old name are refused', async () => {
+    const engine = createEngine(nfsCfg, transport)
+    const cases: Array<[string, Record<string, string>]> = [
+      ['nvh_s_uploads', { ...nfs }],
+      [nfsUploadsName('s', 'local', { ...nfs }), { ...nfs }],
+      [
+        nfsUploadsName('s', 'local', { ...nfs, device: ':/other/s' }),
+        { ...nfs, device: ':/other/s' }
+      ],
+      [
+        nfsUploadsName('s', 'local', { ...nfs, device: ':/export/uploads/../x' }),
+        { ...nfs, device: ':/export/uploads/../x' }
+      ],
+      [ownName, { ...own, device: ':/export/uploads/t/uploads' }],
+      ['nvh_s_uploads', { ...own }],
+      [
+        nfsUploadsName('s', 'local', { ...own, o: 'addr=10.0.0.6' }),
+        { ...own, o: 'addr=10.0.0.6' }
+      ],
+      ['nvh_s_x', { ...own }]
+    ]
+    for (const [Name, DriverOpts] of cases) {
+      await expect(
+        engine.call('POST', '/volumes/create', {
+          body: { Name, Driver: 'local', DriverOpts, Labels: OWN }
+        })
+      ).rejects.toBeInstanceOf(EngineForbiddenError)
+    }
+    expect(transport).not.toHaveBeenCalled()
+  })
+
+  it('Redis gets a local volume beside NFS uploads, never the NFS options', async () => {
+    const engine = createEngine(nfsCfg, transport)
+    expect(nfsCfg.redisVolumeDriver).toBe('local')
+    expect(nfsCfg.redisVolumeOpts).toEqual({})
+    await engine.call('POST', '/volumes/create', {
+      body: { Name: 'nvh_s_redis', Driver: 'local', DriverOpts: {}, Labels: OWN }
     })
     expect(seen).toHaveLength(1)
+    for (const DriverOpts of [{ ...nfs }, { ...own }]) {
+      await expect(
+        engine.call('POST', '/volumes/create', {
+          body: { Name: 'nvh_s_redis', Driver: 'local', DriverOpts, Labels: OWN }
+        })
+      ).rejects.toBeInstanceOf(EngineForbiddenError)
+    }
+  })
+
+  it('a mount DriverConfig must be the one its volume gets', async () => {
+    const engine = createEngine(nfsCfg, transport)
+    const mount = (Source: string, Options: Record<string, string>) =>
+      service({
+        Mounts: [
+          {
+            Type: 'volume',
+            Source,
+            Target: '/app/uploads',
+            VolumeOptions: { Labels: OWN, DriverConfig: { Name: 'local', Options } }
+          }
+        ]
+      })
+    await engine.call('POST', '/services/create', { body: mount(ownName, own) })
+    await engine.call('POST', '/services/create', { body: mount('nvh_s_redis', {}) })
+    expect(seen).toHaveLength(2)
+    for (const [src, opts] of [
+      ['nvh_s_redis', own],
+      [ownName, {}],
+      [ownName, { ...own, device: ':/export/uploads/t/uploads' }]
+    ] as Array<[string, Record<string, string>]>) {
+      await expect(
+        engine.call('POST', '/services/create', { body: mount(src, opts) })
+      ).rejects.toBeInstanceOf(EngineForbiddenError)
+    }
   })
 
   it('options that differ from the config are refused', async () => {
@@ -1307,5 +1411,19 @@ describe('fix round 1: the guard reads ownership before a write', () => {
       engine.call('DELETE', '/services/s_web', { query: { v: true } })
     ).rejects.toBeInstanceOf(EngineForbiddenError)
     expect(seen).toEqual([])
+  })
+})
+
+describe('0.2.3: the service User', () => {
+  it("only the image's own user (run_as: 'app') is taken", async () => {
+    const engine = createEngine(cfg, transport)
+    await engine.call('POST', '/services/create', { body: service({ User: '1000:1000' }) })
+    expect(seen).toHaveLength(1)
+    for (const User of ['0', 'root', '0:0', '1000', '1001:1001', '']) {
+      await expect(
+        engine.call('POST', '/services/create', { body: service({ User }) })
+      ).rejects.toBeInstanceOf(EngineForbiddenError)
+    }
+    expect(seen).toHaveLength(1)
   })
 })

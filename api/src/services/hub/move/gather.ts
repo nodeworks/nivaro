@@ -17,7 +17,7 @@ import {
   otherEnvironmentNames,
   readStackSettings
 } from '../docker/stack-settings.js'
-import { templateFor } from '../docker/templates.js'
+import { templateFor, volumesPerNode } from '../docker/templates.js'
 import {
   DEFAULT_POOL_MAX,
   type DockerDriverRow,
@@ -40,6 +40,7 @@ import {
   deploymentClient
 } from '../shared/deployment-client.js'
 import { sharedPoolUsed } from '../shared/place.js'
+import { sqliteRecordIds, uploadsOnNetwork } from '../shared/sqlite-apps.js'
 import { sharedStackSettings } from '../shared/stack-render.js'
 import { getShared, openAppKey, type SharedDeployment, tenantIdFor } from '../shared/store.js'
 import { tenantsOf } from '../shared/tenants.js'
@@ -245,10 +246,7 @@ async function stackFacts(
 
 /** Swarm nodes when local volumes sit on more than one node (P4-33), else null. */
 function multiNode(h: AgentHealth | null): number | null {
-  const nodes = h?.swarm?.nodes
-  return typeof nodes === 'number' && nodes > 1 && (h?.volume_driver ?? 'local') === 'local'
-    ? nodes
-    : null
+  return volumesPerNode(h)
 }
 
 async function inParallel<T, R>(
@@ -677,7 +675,7 @@ async function sharedTargetFacts(
     if (h) out.multi_node = multiNode(h)
     else out.multi_node_unread = true
     // Hub gap sqlite (M5): what the agent says of its uploads volume (null = not said).
-    out.uploads_network = h && typeof h.uploads_network === 'boolean' ? h.uploads_network : null
+    out.uploads_network = h ? uploadsOnNetwork(h) : null
     out.volume_driver = h?.volume_driver ?? null
   }
 
@@ -741,7 +739,6 @@ async function sharedTargetFacts(
     const lim = ctx.deps.identity ?? {}
     // Hub gap sqlite: a SQLite app's file is its own (app-db/<id>/), never a server another app
     // could share: it is not compared.
-    const { sqliteRecordIds } = await import('../shared/sqlite-apps.js')
     const lite = await sqliteRecordIds(
       [...refs.values()].filter((id): id is number => id != null)
     ).catch(() => new Set<number>())
@@ -923,7 +920,7 @@ async function dedicatedTargetFacts(
     driver?.kind === 'docker' ? await healthOf(ctx, driver) : { h: null, code: 'NO_DRIVER' }
   if (!h) return { ...out, reachable: false, error: code ?? 'AGENT_UNREACHABLE' }
   out.multi_node = multiNode(h)
-  out.uploads_network = typeof h.uploads_network === 'boolean' ? h.uploads_network : null
+  out.uploads_network = uploadsOnNetwork(h)
   out.volume_driver = h.volume_driver ?? null
   if (side.stack) {
     const f = await stackFacts(ctx, side.driverId, side.stack)
@@ -1054,6 +1051,16 @@ export async function gatherMovePlanInput(
   } catch {
     ctx.failed.push("this app's encryption key")
   }
+  // Hub sign-in on a shared target: does this environment have an active client at the Hub?
+  let hubClient: boolean | undefined
+  try {
+    const c = (await db('nivaro_hub_oidc_clients')
+      .where({ environment_id: envId })
+      .first('active')) as { active?: unknown } | undefined
+    hubClient = c?.active === true || c?.active === 1 || c?.active === '1'
+  } catch {
+    if (app.signin_mode === 'hub') ctx.failed.push("this environment's sign-in client")
+  }
   // An entry is stored but does not open (another Hub key, damaged): say so, not "unknown" (M-9).
   let keyUnreadable = false
   if (!appKey && row.encryption_key) {
@@ -1113,6 +1120,7 @@ export async function gatherMovePlanInput(
       id: env.id,
       key: env.key,
       hub_linked: !!row.hub_token,
+      ...(hubClient === undefined ? {} : { hub_client: hubClient }),
       version_pin: env.version_pin,
       public_origin: publicOriginOf(env.base_url)
     },

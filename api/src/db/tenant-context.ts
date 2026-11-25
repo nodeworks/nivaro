@@ -30,6 +30,28 @@ const pools = new Map<string, Knex>()
  *  sizes a tenant's limit from it. */
 export const TENANT_POOL_MAX = 5
 
+/** Code that attaches to every app pool (driver seams): run for each pool made from now on and,
+ *  when registered, for the pools that already exist. Registered at boot. */
+const poolCreatedHooks = new Set<(pool: Knex) => void>()
+
+/** Run `fn` for every tenant pool (existing ones at once, new ones as they are made). A hook that
+ *  throws never stops the pool or the next hook. */
+export function onTenantPoolCreated(fn: (pool: Knex) => void): () => void {
+  poolCreatedHooks.add(fn)
+  for (const pool of pools.values()) runPoolHook(fn, pool)
+  return () => {
+    poolCreatedHooks.delete(fn)
+  }
+}
+
+function runPoolHook(fn: (pool: Knex) => void, pool: Knex): void {
+  try {
+    fn(pool)
+  } catch {
+    /* a seam that cannot attach never costs the app its pool */
+  }
+}
+
 /** `max` (a tenant's own pool size) defaults to TENANT_POOL_MAX; it applies when the pool is
  *  first created for the connection string. */
 export function getOrCreateTenantPool(
@@ -87,8 +109,17 @@ export function getOrCreateTenantPool(
             pool: { min: 0, max }
           })
     )
+    const made = pools.get(connectionString)!
+    for (const fn of poolCreatedHooks) runPoolHook(fn, made)
   }
   return pools.get(connectionString)!
+}
+
+/** The pool already open for this connection string, or undefined. Never opens one: the capacity
+ *  figures (services/capacity/app-usage.ts) read an app's connections in use without creating
+ *  its pool on a replica that has not served it. */
+export function peekTenantPool(connectionString: string): Knex | undefined {
+  return pools.get(connectionString)
 }
 
 /**

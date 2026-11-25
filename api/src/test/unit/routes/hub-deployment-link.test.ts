@@ -26,6 +26,9 @@ vi.mock('../../../routes/preflight.js', () => ({
 }))
 vi.mock('../../../services/readiness.js', () => ({ readReadiness: async () => ({ score: 88 }) }))
 vi.mock('../../../services/pool-attribution.js', () => ({ poolCounters: () => null }))
+vi.mock('../../../plugins/socketio.js', () => ({
+  getLocalConcurrency: () => ({ sockets: 3, users: 2 })
+}))
 vi.mock('../../../services/security.js', () => ({
   maintenanceState: async () => ({ on: state.maintenance })
 }))
@@ -202,6 +205,16 @@ describe('GET /status', () => {
     expect(body.oidc).toEqual({ issuer_host: 'login.microsoftonline.com', tenant: '1111-tenant' })
     expect(res.body).not.toContain('Pa55word')
     expect(res.body).not.toContain(KEY_A)
+  })
+
+  it("carries the process's own figures across every app: counts only, no app named", async () => {
+    const a = await build()
+    const res = await a.inject({ method: 'GET', url: '/api/hub-deployment/status', headers: auth })
+    const p = res.json().process
+    expect(p.heavy_reads).toMatchObject({ active: 0, queued: 0, apps_active: 0 })
+    expect(p.app_pools).toEqual({ apps: 0, used: 0, free: 0, pending: 0, max: 0 })
+    expect(p.sockets).toEqual({ sockets: 3, users: 2 })
+    expect(JSON.stringify(p)).not.toContain('app-a-e1')
   })
 })
 

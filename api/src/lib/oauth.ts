@@ -4,6 +4,7 @@
  * (services/oauth-store.ts) and the routes (routes/oauth.ts) use these.
  */
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
+import { hubModeEnabled } from '../services/hub/mode.js'
 
 /** The base scope: the connected app acts as the signed-in person, with their permissions. */
 export const OAUTH_SCOPE = 'nivaro'
@@ -17,6 +18,18 @@ export const OAUTH_CHAT_SCOPE = 'chat'
 
 export const OAUTH_SCOPES = [OAUTH_SCOPE, OAUTH_CHAT_SCOPE] as const
 
+/**
+ * The Nivaro Hub (Hub mode only, services/hub/api/gate.ts): read the Hub's apps, environments,
+ * status and runs, and make plans. Offered only on a Hub; never part of the base scope — the
+ * person ticks it on the consent page. A connection without it is refused on /api/hub.
+ */
+export const OAUTH_HUB_SCOPE = 'hub:read'
+
+/** The scopes this install offers: the Hub's only on a Hub (HUB=on). */
+export function offeredScopes(env: NodeJS.ProcessEnv = process.env): string[] {
+  return hubModeEnabled(env) ? [...OAUTH_SCOPES, OAUTH_HUB_SCOPE] : [...OAUTH_SCOPES]
+}
+
 /** The scope tokens in a space-separated scope string (empty tokens dropped). */
 export function scopeTokens(scope: string | null | undefined): string[] {
   return (scope ?? '').split(/\s+/).filter(Boolean)
@@ -24,12 +37,15 @@ export function scopeTokens(scope: string | null | undefined): string[] {
 
 /** Whether every token in a requested scope is one Nivaro offers. */
 export function offeredScope(scope: string | null | undefined): boolean {
-  return scopeTokens(scope).every((s) => (OAUTH_SCOPES as readonly string[]).includes(s))
+  const offered = offeredScopes()
+  return scopeTokens(scope).every((s) => offered.includes(s))
 }
 
-/** The scope a grant carries: the base scope, plus chat when the person allowed it. */
-export function grantedScope(chat: boolean): string {
-  return chat ? `${OAUTH_SCOPE} ${OAUTH_CHAT_SCOPE}` : OAUTH_SCOPE
+/** The scope a grant carries: the base scope, plus chat / the Hub when the person allowed it. */
+export function grantedScope(chat: boolean, hub = false): string {
+  return [OAUTH_SCOPE, ...(chat ? [OAUTH_CHAT_SCOPE] : []), ...(hub ? [OAUTH_HUB_SCOPE] : [])].join(
+    ' '
+  )
 }
 
 /** Access tokens start `nvo_`, refresh tokens `nvor_` — authenticate routes on the prefix. */

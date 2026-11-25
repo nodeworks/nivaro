@@ -100,8 +100,15 @@ export function oauthAudienceRefusal(req: FastifyRequest): string | null {
   const m = req.method.toUpperCase()
   if (m !== 'GET' && m !== 'HEAD' && OAUTH_NO_WRITE.test(path))
     return 'A connected app cannot use this route'
+  // The Nivaro Hub (services/hub/api/gate.ts): a connected app reads and plans, never writes.
+  if (m !== 'GET' && m !== 'HEAD' && OAUTH_HUB_WRITE.test(path) && !OAUTH_HUB_PLAN.test(path))
+    return 'A connected app cannot use this route'
   return null
 }
+
+/** Hub routes a connected app may not write to: all of /api/hub except the plans (…/plan). */
+const OAUTH_HUB_WRITE = /^\/api\/hub(\/|$)/
+const OAUTH_HUB_PLAN = /^\/api\/hub\/.*\/plan\/?$/
 
 // ─── Chat consent (#2492) ──────────────────────────────────────────────────
 

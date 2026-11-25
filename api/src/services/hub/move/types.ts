@@ -149,6 +149,10 @@ export type MoveWarningCode =
   | 'STORAGE_PREFIX_CHANGES'
   // Hub gap sqlite: the SQLite database file is copied inside maintenance.
   | 'SQLITE_COPY'
+  // 0.3.215 (hub-gap watch): the source saves its env mail settings at maintenance_on.
+  | 'ENV_SMTP_KEPT'
+  | 'INSTANCE_SETTINGS_CARRIED'
+  | 'INSTANCE_SETTINGS_STAY'
   | SharedReadinessCode
 
 export interface MovePlan {
@@ -264,6 +268,8 @@ export interface MovePlanInput {
     id: number
     key: string
     hub_linked: boolean
+    /** The environment has an active sign-in client at the Hub (absent = not read). */
+    hub_client?: boolean
     version_pin: string | null
     /** E2E B3: the origin of the environment's public address (scheme + port kept). */
     public_origin?: string | null

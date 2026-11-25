@@ -498,6 +498,8 @@ describe('GET /environments/:envId/stack', () => {
       status: stackStatus(),
       agent: 'ok',
       local_volumes_on_nodes: null,
+      uploads_on_share: false,
+      redis_pin_label: null,
       leftovers: null,
       apply_preview: {
         size: 'medium',

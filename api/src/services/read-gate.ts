@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { getTenantId, TENANT_POOL_MAX } from '../db/tenant-context.js'
+import { getTenantDb, getTenantId, TENANT_POOL_MAX } from '../db/tenant-context.js'
+import { perAppJobs } from './deployment-mode.js'
 import { markSpan } from './request-trace.js'
 import { abortError, singleFlight } from './single-flight.js'
 import { inflightNoteWait } from './traffic-inflight.js'
@@ -22,6 +23,14 @@ import { inflightNoteWait } from './traffic-inflight.js'
  *     idle gate may use every slot; under contention, arrival order decides
  *     among the users still under their share.
  *
+ * Hub shared deployment (perAppJobs(): one process, many apps, each with its own pool): the
+ * apps share ONE process budget (HEAVY_READ_CONCURRENCY) and each app has a cap inside it,
+ * HEAVY_READ_PER_APP (default half the budget, at least 1) and never more than its own pool size
+ * minus one. A freed slot goes to the app holding the fewest slots that has someone waiting
+ * (arrival order between equals), so one busy app can never hold every slot and a quiet app's
+ * first heavy read waits for at most one release. Nivaro Cloud keeps its independent per-tenant
+ * gates; self-hosted is unchanged.
+ *
  * It wraps ONLY expensive read bodies — never cache hits, cheap routes, writes
  * or streams. Rules:
  *   - Fail open. A waiter that passes HEAVY_READ_MAX_WAIT_MS proceeds anyway
@@ -41,6 +50,8 @@ interface GateConfig {
   global: number
   perUser: number
   maxWaitMs: number
+  /** Hub shared deployment: the most slots one app may hold. */
+  perApp: number
 }
 
 function envInt(name: string, fallback: number, min: number): number {
@@ -50,12 +61,14 @@ function envInt(name: string, fallback: number, min: number): number {
 
 function defaultConfig(): GateConfig {
   const pool = envInt('DB_POOL_MAX', 60, 2)
+  // A third of the pool: the rest stays free for the cheap reads and writes
+  // the same page makes beside its heavy tiles.
+  const global = envInt('HEAVY_READ_CONCURRENCY', Math.max(4, Math.floor(pool / 3)), 1)
   return {
-    // A third of the pool: the rest stays free for the cheap reads and writes
-    // the same page makes beside its heavy tiles.
-    global: envInt('HEAVY_READ_CONCURRENCY', Math.max(4, Math.floor(pool / 3)), 1),
+    global,
     perUser: envInt('HEAVY_READ_PER_USER', 4, 1),
-    maxWaitMs: envInt('HEAVY_READ_MAX_WAIT_MS', 30_000, 0)
+    maxWaitMs: envInt('HEAVY_READ_MAX_WAIT_MS', 30_000, 0),
+    perApp: Math.min(global, envInt('HEAVY_READ_PER_APP', Math.max(1, Math.floor(global / 2)), 1))
   }
 }
 
@@ -90,6 +103,8 @@ function newStats() {
 
 interface TenantGate {
   tenant: string
+  /** The app's own pool size (Hub shared deployment), read from its pool when a ticket opens. */
+  poolMax: number | null
   active: number
   overflowRunning: number
   byUser: Map<string, number>
@@ -129,6 +144,7 @@ function gateFor(tenant: string): TenantGate {
   if (!g) {
     g = {
       tenant,
+      poolMax: null,
       active: 0,
       overflowRunning: 0,
       byUser: new Map(),
@@ -140,9 +156,29 @@ function gateFor(tenant: string): TenantGate {
   return g
 }
 
+/** Hub shared deployment: the apps share one process budget, fairly (see the module comment). */
+const fairAcrossApps = (): boolean => perAppJobs()
+
 function limitOf(g: TenantGate): number {
-  const global = conf().global
-  return g.tenant ? Math.min(global, Math.max(1, TENANT_POOL_MAX - 1)) : global
+  const c = conf()
+  if (!g.tenant) return c.global
+  if (!fairAcrossApps()) return Math.min(c.global, Math.max(1, TENANT_POOL_MAX - 1))
+  return Math.min(c.perApp, Math.max(1, (g.poolMax ?? TENANT_POOL_MAX) - 1))
+}
+
+/** Slots held by every app of this process (the shared budget). */
+function processActive(): number {
+  let n = 0
+  for (const g of gates.values()) n += g.active
+  return n
+}
+
+/** The current app's pool size, from its pool (null when it cannot be told). */
+function currentPoolMax(): number | null {
+  const pool = (getTenantDb() as { client?: { config?: { pool?: { max?: unknown } } } } | undefined)
+    ?.client?.config?.pool
+  const max = Number(pool?.max)
+  return Number.isFinite(max) && max > 0 ? max : null
 }
 
 // Another person is waiting who is still UNDER their share. Waiters over their
@@ -157,6 +193,9 @@ function underShareUserWaiting(g: TenantGate, w: Waiter): boolean {
 
 function eligible(g: TenantGate, w: Waiter): boolean {
   if (g.active >= limitOf(g)) return false
+  // Hub shared deployment: every gate counts against the one process budget, the no-app gate
+  // ('' — work outside any app) included.
+  if (fairAcrossApps() && processActive() >= conf().global) return false
   return (g.byUser.get(w.who) ?? 0) < conf().perUser || !underShareUserWaiting(g, w)
 }
 
@@ -209,7 +248,7 @@ function grant(w: Waiter, overflow: boolean): void {
         if (n <= 0) g.byUser.delete(w.who)
         else g.byUser.set(w.who, n)
       }
-      pump(g)
+      pumpFrom(g)
     }
   })
 }
@@ -224,6 +263,38 @@ function pump(g: TenantGate): void {
   }
 }
 
+/**
+ * Hub shared deployment: a slot freed in one app (or outside any app) may be the one another app
+ * waits on (the shared budget). Grant across every queue: the gate holding the fewest slots
+ * first, then the oldest request. Elsewhere: this gate only, as before.
+ */
+function pumpFrom(g: TenantGate): void {
+  if (!fairAcrossApps()) {
+    pump(g)
+    return
+  }
+  // Any release (an app's, or one held outside any app) may free the budget others wait on.
+  for (;;) {
+    let pick: Waiter | null = null
+    let pickGate: TenantGate | null = null
+    for (const x of gates.values()) {
+      if (x.queue.length === 0) continue
+      const w = x.queue.find((q) => eligible(x, q))
+      if (!w) continue
+      if (
+        !pickGate ||
+        x.active < pickGate.active ||
+        (x.active === pickGate.active && w.ticket.startedAt < (pick as Waiter).ticket.startedAt)
+      ) {
+        pick = w
+        pickGate = x
+      }
+    }
+    if (!pick) return
+    grant(pick, false)
+  }
+}
+
 function openTicket(tenant = currentTenant()): Ticket {
   let resolve!: (s: ReadSlot) => void
   let reject!: (e: Error) => void
@@ -233,8 +304,11 @@ function openTicket(tenant = currentTenant()): Ticket {
   })
   // Callers of a ticket that was abandoned may never await it.
   promise.catch(() => {})
+  const gate = gateFor(tenant)
+  // The app's own pool caps its share (Hub shared deployment); read in the caller's context.
+  if (tenant && tenant === currentTenant()) gate.poolMax = currentPoolMax() ?? gate.poolMax
   return {
-    gate: gateFor(tenant),
+    gate,
     done: false,
     startedAt: performance.now(),
     waiters: new Set(),
@@ -274,11 +348,11 @@ function addWaiter(t: Ticket, who: string, signal?: AbortSignal): void {
         t.reject(abortError('Client went away while waiting for a read slot'))
       }
       // One user fewer waiting can change who is under their share.
-      pump(g)
+      pumpFrom(g)
     }
     signal.addEventListener('abort', w.onAbort, { once: true })
   }
-  pump(g)
+  pumpFrom(g)
   // #3231 — still queued: the request's status read can say "waiting for a free slot" and
   // where it stands. Noted in the caller's own context; withdrawn when it leaves the queue.
   if (!t.done && g.queue.includes(w))
@@ -491,6 +565,37 @@ export function readGateStats() {
     users_active: g.byUser.size,
     ...g.stats,
     avg_wait_ms: g.stats.waited ? Math.round(g.stats.wait_ms_total / g.stats.waited) : 0
+  }
+}
+
+/**
+ * The process's own figures across every app (Hub shared deployment): for the deployment link
+ * status, which only the Hub operator reads. Counts only — never which app holds what.
+ */
+export function readGateProcessFigures(): {
+  limit: number
+  per_app: number
+  active: number
+  queued: number
+  apps_active: number
+  apps_waiting: number
+} {
+  const c = conf()
+  let queued = 0
+  let appsActive = 0
+  let appsWaiting = 0
+  for (const g of gates.values()) {
+    queued += g.queue.length
+    if (g.active > 0) appsActive++
+    if (g.queue.length > 0) appsWaiting++
+  }
+  return {
+    limit: c.global,
+    per_app: c.perApp,
+    active: processActive(),
+    queued,
+    apps_active: appsActive,
+    apps_waiting: appsWaiting
   }
 }
 

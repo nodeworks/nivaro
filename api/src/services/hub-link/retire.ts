@@ -207,6 +207,20 @@ export function isHubLinkFirstAdmin(url: string, routeUrl?: string | null): bool
 }
 
 /**
+ * The hub-link routes that write the app's own data (a person, a template's schema) rather than
+ * steer a move: the first administrator and, since Hub enhancement 24, the template install
+ * (`/hub-link/template`, its status reads included). Frozen by maintenance and refused once
+ * retired, however the path is spelled; an undecodable path counts as one (never exempt).
+ */
+export function isHubLinkAppWrite(url: string, routeUrl?: string | null): boolean {
+  if (isHubLinkFirstAdmin(url, routeUrl)) return true
+  if (routeUrl && /\/hub-link\/template(\/|$)/i.test(routeUrl)) return true
+  const p = normalizedPath(url)
+  if (p === null) return true
+  return p === '/api/hub-link/template' || p.startsWith('/api/hub-link/template/')
+}
+
+/**
  * Paths a retired app still answers: the Hub's own hub-link calls (status, retire, maintenance,
  * readiness, file tickets — never the first administrator, which writes a person; judged on the
  * matched route or the decoded path), the file transfer the move's target pulls from, and the
@@ -215,7 +229,7 @@ export function isHubLinkFirstAdmin(url: string, routeUrl?: string | null): bool
  */
 export function retiredExemptPath(url: string, routeUrl?: string | null): boolean {
   return (
-    (url.startsWith('/api/hub-link/') && !isHubLinkFirstAdmin(url, routeUrl)) ||
+    (url.startsWith('/api/hub-link/') && !isHubLinkAppWrite(url, routeUrl)) ||
     url.startsWith('/api/hub-transfer/') ||
     /^\/api\/(version|ready|health)(\?|$)/.test(url)
   )

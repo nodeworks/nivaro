@@ -9,6 +9,7 @@ vi.mock('../../../services/settings-overrides.js', () => ({ instanceKey: () => '
 vi.mock('../../../db/tenant-context.js', () => ({ getTenantId: vi.fn(() => undefined) }))
 
 import { getTenantId } from '../../../db/tenant-context.js'
+import { noteTenantSocket } from '../../../services/socket-transport.js'
 import {
   advanceTo,
   buildSnapshot,
@@ -181,6 +182,32 @@ describe('emitter per store (#1132) and across nodes (#1098)', () => {
     expect(emitted.every((e) => e.f.node === 'n1')).toBe(true)
     expect(emitted.some((e) => e.f.entities['items/workflows']?.[0] === 1)).toBe(true)
     expect(trafficRoomFor(DEFAULT_STORE)).toBe('watch:traffic-map')
+  })
+
+  it("a tenant frame counts that app's own sockets, never the whole process's", async () => {
+    process.env.CLOUD_META_DB_URL = 'postgres://meta'
+    noteTenantSocket('acme', 1)
+    noteTenantSocket('acme', 1)
+    for (let i = 0; i < 5; i++) noteTenantSocket('globex', 1)
+    const emitted: Array<{ room: string; f: FrameWire }> = []
+    const rooms = new Map([[trafficRoomFor('t:acme'), new Set(['s1'])]])
+    let clock = T0
+    const stop = startTrafficMapEmitter({
+      intervalMs: 5,
+      io: () => ({ ...fakeIo(rooms, emitted), engine: { clientsCount: 7 } }) as never,
+      now: () => clock * 1000,
+      node: 'n1'
+    })
+    await tick()
+    req({ req: { nvrTenantId: 'acme' }, at: (T0 + 1) * 1000 })
+    advanceTo(T0 + 1)
+    clock = T0 + 2
+    await tick()
+    stop()
+    for (let i = 0; i < 2; i++) noteTenantSocket('acme', -1)
+    for (let i = 0; i < 5; i++) noteTenantSocket('globex', -1)
+    expect(emitted.length).toBeGreaterThan(0)
+    expect(emitted.every((e) => e.f.sockets === 2)).toBe(true)
   })
 
   it('builds and publishes frames while ANOTHER node watches, with no local watcher', async () => {

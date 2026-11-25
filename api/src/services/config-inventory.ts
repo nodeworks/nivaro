@@ -324,6 +324,25 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_hub_shared_deployments', //  Hub phase 6 (552, 553): shared deployments, sealed tokens
   'nivaro_hub_shared_deploys',
   'nivaro_hub_moves',
+  'nivaro_hub_capacity_samples', //    Hub capacity (567): samples, per-app limits, rebalance runs
+  'nivaro_hub_app_limits',
+  'nivaro_hub_rebalances',
+  'nivaro_hub_trains', //  Hub release operations (565): per-Hub runtime state, never promoted
+  'nivaro_hub_schedules',
+  'nivaro_hub_freezes',
+  'nivaro_hub_rollback_rules',
+  'nivaro_hub_rollback_watches',
+  'nivaro_hub_release_notes',
+  'nivaro_hub_version_facts',
+  'nivaro_hub_issue_groups', //        Hub ops (568): cross-app issue rollup, storage health,
+  'nivaro_hub_ops_health', //          secret rotation helper (fingerprints only, never values)
+  'nivaro_hub_secret_policies',
+  'nivaro_hub_secrets',
+  'nivaro_hub_secret_rotations',
+  'nivaro_hub_backup_policies', // Hub data care (569): backup policies (sealed S3 key) and data runs
+  'nivaro_hub_data_runs',
+  'nivaro_hub_app_templates', //       Hub enhancement 24 (571): template library + installs
+  'nivaro_hub_template_installs',
   'nivaro_share_links',
   'nivaro_dashboard_links',
   'nivaro_webhook_deliveries',

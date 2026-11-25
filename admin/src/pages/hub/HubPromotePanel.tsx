@@ -43,6 +43,12 @@ import {
   startPromotion
 } from './hub-api'
 import { dangerArmed, dangerGhost, ghostButton, SectionCard } from './hub-parts'
+import {
+  DeployNotes,
+  DeployNotesButton,
+  FreezeBanner,
+  ReleaseNotesPreview
+} from './releases/ReleaseNotes'
 
 /**
  * Promote and roll back (Hub phase 2): pick a version, read the plan in plain words, type the
@@ -293,6 +299,7 @@ function PromoteForm({
           <code className='font-mono font-semibold'>{env.key}</code> again to start it.
         </p>
       )}
+      <FreezeBanner envId={env.id} kind={kind} />
       {plan.data ? (
         <PlanPreview plan={plan.data} blockers={blockers} />
       ) : plan.isPending ? (
@@ -303,6 +310,8 @@ function PromoteForm({
           onRetry={() => void plan.refetch()}
         />
       )}
+
+      <ReleaseNotesPreview envId={env.id} kind={kind} version={version} />
 
       <div className='space-y-1.5'>
         <label
@@ -819,6 +828,7 @@ export function PromotionHistory({
     staleTime: 15_000,
     enabled: canPromote
   })
+  const [notesFor, setNotesFor] = useState<number | null>(null)
   const rollbackTo = new Set(promotable.data?.rollback ?? [])
   // One Roll back per version: on its newest successful deploy.
   const offered = new Set<number>()
@@ -854,6 +864,7 @@ export function PromotionHistory({
       rollback={offered.has(r.id)}
       onRollback={onRollback}
       onWatch={onWatch}
+      onNotes={setNotesFor}
     />
   )
 
@@ -950,6 +961,9 @@ export function PromotionHistory({
           </tbody>
         </table>
       </div>
+      {notesFor != null && (
+        <DeployNotes key={notesFor} deployId={notesFor} onClose={() => setNotesFor(null)} />
+      )}
     </>
   )
 }
@@ -1006,16 +1020,21 @@ function RowActions({
   canPromote,
   rollback,
   onRollback,
-  onWatch
+  onWatch,
+  onNotes
 }: {
   row: HubPromotion
   canPromote: boolean
   rollback: boolean
   onRollback: (version: string) => void
   onWatch: (deployId: number, kind: PromotionKind) => void
+  onNotes: (deployId: number) => void
 }) {
   return (
     <div className='flex flex-nowrap items-center justify-end gap-0.5'>
+      {isPromotionKind(row.kind) && !row.apply && (
+        <DeployNotesButton deployId={row.id} version={row.version} onOpen={onNotes} />
+      )}
       {isLivePromotion(row.status) && isPromotionKind(row.kind) && (
         <button
           type='button'

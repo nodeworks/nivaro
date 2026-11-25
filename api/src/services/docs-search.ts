@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { excerpt, searchTerms } from './help-video-search-rank.js'
+import { hubModeEnabled } from './hub/mode.js'
 
 // Ask AI's search_docs tool (#1803): the in-app docs — the same sections the
 // admin Docs page renders, flattened by scripts/build-docs-index.ts into
@@ -107,17 +108,25 @@ export function docsPath(sectionId: string): string {
  * must hold at least half the searched words. `answered` says whether the
  * best hit holds enough of them to answer the question (the docs-gaps signal).
  */
+/** A section that describes Hub mode only: the Hub nav group, a hub-* section, the SDK's Hub client. */
+export function isHubOnlyDoc(s: { id: string; group: string }): boolean {
+  return s.group === 'hub' || s.id.startsWith('hub-') || s.id === 'sdk-hub'
+}
+
 export function rankDocs(
   index: DocsIndexSection[],
   query: string,
-  opts: { admin: boolean; limit?: number }
+  opts: { admin: boolean; limit?: number; hub?: boolean }
 ): { terms: string[]; hits: DocsHit[]; answered: boolean } {
+  // The Nivaro Hub's sections are cited only on a Hub (HUB=on), like the Docs page shows them.
+  const hub = opts.hub ?? hubModeEnabled()
   const terms = searchTerms(query)
   if (!terms.length) return { terms, hits: [], answered: false }
   const limit = Math.max(1, Math.min(opts.limit ?? 3, 5))
   const scored: DocsHit[] = []
   for (const p of prepare(index)) {
     if (p.section.audience === 'admin' && !opts.admin) continue
+    if (!hub && isHubOnlyDoc(p.section)) continue
     const inLabel = matched(p.label, terms)
     const inGroup = matched(p.group, terms)
     let best: { block: DocsIndexBlock; score: number; found: Set<string> } | null = null

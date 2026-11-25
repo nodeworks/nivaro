@@ -1,8 +1,9 @@
 import { createHmac } from 'node:crypto'
-import { db } from '../db/index.js'
 import { registerAppKeyed } from './app-forget.js'
+import { perAppJobs } from './deployment-mode.js'
+import { decryptValue, encryptValue, isEncrypted } from './encryption.js'
 import { validIceUrl, validLiveKitUrl, withPlatformDestinations } from './huddle-destinations.js'
-import { instanceKey } from './instance-key.js'
+import { instanceValue, saveInstanceValue } from './instance-row.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
 /**
@@ -19,6 +20,12 @@ import { currentTenantKey } from './tenant-rooms.js'
  * HMAC-SHA1 of that username), minted per request by `iceServersFor`. A plain
  * static TURN username/password is handed out as is — it is already the thing
  * the browser must send.
+ *
+ * Hub shared deployment (0.3.215): each app uses the huddle settings it saved itself (Nivaro Cloud
+ * still replaces the addresses with the platform's: huddle-destinations.ts). They live in the
+ * app's own database, under the deployment's instance key (a move to shared carries the app's
+ * row there: services/move-carry.ts). There the three secrets are stored sealed with the app's own
+ * key (enc:v1, services/encryption.ts); a value that does not open reads as not set.
  */
 
 export const HUDDLE_OVERRIDE_KEY = 'huddle'
@@ -73,7 +80,7 @@ export const HUDDLE_DEFAULTS: HuddleSettings = {
   switch_at: DEFAULT_SWITCH_AT
 }
 
-const SECRET_KEYS: ReadonlySet<keyof HuddleSettings> = new Set([
+const SECRET_KEYS: ReadonlySet<keyof HuddleSettings> = new Set<keyof HuddleSettings>([
   'turn_credential',
   'turn_secret',
   'livekit_api_secret'
@@ -188,17 +195,40 @@ export function bustHuddleSettingsCache(): void {
   cache.clear()
 }
 
-async function readRow(): Promise<{ id: number; data: Record<string, unknown> } | null> {
-  const row = (await db('nivaro_settings_overrides')
-    .where({ instance_key: instanceKey() })
-    .first('id', 'data')) as { id: number; data?: string | null } | undefined
-  if (!row) return null
-  try {
-    const obj = row.data ? JSON.parse(row.data) : {}
-    return { id: row.id, data: obj && typeof obj === 'object' && !Array.isArray(obj) ? obj : {} }
-  } catch {
-    return { id: row.id, data: {} }
+/** Stored secrets opened (sealed on a shared deployment, plain elsewhere); one that does not
+ *  open is dropped (read as not set) rather than handed out as cipher text. */
+export function openHuddleSecrets(raw: unknown): unknown {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw
+  const out: Record<string, unknown> = { ...(raw as Record<string, unknown>) }
+  for (const k of SECRET_KEYS) {
+    const v = out[k]
+    if (!isEncrypted(v)) continue
+    try {
+      out[k] = decryptValue(v as string)
+    } catch {
+      out[k] = null
+    }
   }
+  return out
+}
+
+/** What is stored: on a shared deployment the secrets sealed with the app's key. */
+export function sealHuddleSecrets(s: HuddleSettings): HuddleSettings {
+  if (!perAppJobs()) return s
+  const out = { ...s } as Record<string, unknown>
+  for (const k of SECRET_KEYS) {
+    const v = out[k]
+    if (typeof v === 'string' && v && !isEncrypted(v)) out[k] = encryptValue(v)
+  }
+  return out as unknown as HuddleSettings
+}
+
+async function readStored(): Promise<{
+  row: Awaited<ReturnType<typeof instanceValue>>['row']
+  value: HuddleSettings
+}> {
+  const { row, value } = await instanceValue(HUDDLE_OVERRIDE_KEY)
+  return { row, value: normalizeHuddleSettings(openHuddleSecrets(value)) }
 }
 
 /** This instance's huddle settings (defaults when the table is missing or unreadable). */
@@ -208,9 +238,8 @@ export async function getHuddleSettings(): Promise<HuddleSettings> {
   if (hit && Date.now() - hit.at < 30_000) return hit.value
   let value = HUDDLE_DEFAULTS
   try {
-    const row = await readRow()
     // Cloud mode: the platform's media servers, never a tenant's (huddle-destinations.ts).
-    value = withPlatformDestinations(normalizeHuddleSettings(row?.data[HUDDLE_OVERRIDE_KEY]))
+    value = withPlatformDestinations((await readStored()).value)
   } catch {
     /* table absent / DB not ready — defaults */
     value = withPlatformDestinations(HUDDLE_DEFAULTS)
@@ -220,21 +249,9 @@ export async function getHuddleSettings(): Promise<HuddleSettings> {
 }
 
 export async function saveHuddleSettings(patch: unknown): Promise<HuddleSettings> {
-  const row = await readRow()
-  const stored = normalizeHuddleSettings(row?.data[HUDDLE_OVERRIDE_KEY])
+  const { row, value: stored } = await readStored()
   const next = mergeHuddlePatch(stored, patch)
-  const data = { ...(row?.data ?? {}), [HUDDLE_OVERRIDE_KEY]: next }
-  if (row) {
-    await db('nivaro_settings_overrides')
-      .where({ id: row.id })
-      .update({ data: JSON.stringify(data), updated_at: new Date() })
-  } else {
-    await db('nivaro_settings_overrides').insert({
-      instance_key: instanceKey(),
-      data: JSON.stringify(data),
-      updated_at: new Date()
-    })
-  }
+  await saveInstanceValue(row, HUDDLE_OVERRIDE_KEY, sealHuddleSecrets(next))
   bustHuddleSettingsCache()
   return withPlatformDestinations(next)
 }

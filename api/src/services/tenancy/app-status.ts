@@ -53,6 +53,9 @@ export type AppSchemaState = 'pending' | 'running' | 'ok' | 'failed'
 export interface DeploymentStatus {
   version: string
   instance: string
+  /** 0.3.215: the deployment's NIVARO_INSTANCE (instanceKey()), the key its apps' per-instance
+   *  settings rows are read under; a move to it carries the app's row there. Absent before. */
+  instance_key?: string
   registry: {
     count: number
     loaded_at: string | null

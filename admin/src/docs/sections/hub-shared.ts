@@ -30,7 +30,7 @@ export const hubSharedDocs: DocSection = {
         [
           '`registered`',
           'Someone outside the Hub, for example your own pipeline.',
-          'Gives you the environment block and the token, shows what the deployment reports, and records a version change it notices as an observed deploy. It never deploys or upgrades the deployment. Upgrades driven by GitLab are not built: a deployment run from a GitLab pipeline is registered and upgraded by that pipeline.'
+          'Gives you the environment block and the token, shows what the deployment reports, and records a version change it notices as an observed deploy. Without a driver it never deploys or upgrades the deployment. Name a GitLab driver (Upgrades: By the Hub, through GitLab) and the Hub upgrades and rolls it back through that pipeline: see Upgrades and rollback.'
         ]
       ]
     },
@@ -150,12 +150,12 @@ export const hubSharedDocs: DocSection = {
     },
     {
       type: 'p',
-      text: "Plan blockers about routing: `PATTERN_NOT_ALLOWED` (the pattern is outside the agent host suffixes), `HOSTNAME_NOT_ALLOWED`, `TOO_MANY_HOSTNAMES`, `NO_ROUTE` (no pattern, no explicit name and no publish port), `PUBLISH_PORT_NOT_ALLOWED`, and `HUB_URL_UNUSABLE` (the address the stack would get as `HUB_URL` is not an https origin a deployment accepts). Warnings: `HUB_URL_PROBLEM` (the Hub's own `HUB_URL` is ignored and its public address is used instead) and `MULTI_NODE_VOLUMES` (the swarm has several nodes and local volumes: uploads and bundled Redis stay on the node a task first ran on)."
+      text: "Plan blockers about routing: `PATTERN_NOT_ALLOWED` (the pattern is outside the agent host suffixes), `HOSTNAME_NOT_ALLOWED`, `TOO_MANY_HOSTNAMES`, `NO_ROUTE` (no pattern, no explicit name and no publish port), `PUBLISH_PORT_NOT_ALLOWED`, and `HUB_URL_UNUSABLE` (the address the stack would get as `HUB_URL` is not an https origin a deployment accepts). Warnings: `HUB_URL_PROBLEM` (the Hub's own `HUB_URL` is ignored and its public address is used instead) and `MULTI_NODE_VOLUMES` (the swarm has several nodes and local volumes that are not on an NFS export: uploads and bundled Redis stay on the node a task first ran on; an agent 0.2.3 with an NFS export ends it)."
     },
     { type: 'h2', id: 'hub-shared-pool', text: 'Pool budget' },
     {
       type: 'p',
-      text: 'Each placement on a shared deployment carries a pool size (2 to 20 connections for a shared placement, default 5: one connection holds the migration lock while another migrates, and fewer than 2 is refused with `POOL_TOO_SMALL`). The deployment has a pool budget (default 60, range 1 to 500). A placement that would take the sum of pool sizes over the budget is refused with `POOL_BUDGET`. The budget is per process: with three replicas the database sees up to three times the sizes. Per-process fairness for the heavy-read slots between apps is not built; the budget only caps connections.'
+      text: 'Each placement on a shared deployment carries a pool size (2 to 20 connections for a shared placement, default 5: one connection holds the migration lock while another migrates, and fewer than 2 is refused with `POOL_TOO_SMALL`). The deployment has a pool budget (default 60, range 1 to 500). A placement that would take the sum of pool sizes over the budget is refused with `POOL_BUDGET`. The budget is per process: with three replicas the database sees up to three times the sizes. Inside a process the apps also share the heavy-read slots fairly (see Per app on a shared deployment).'
     },
     { type: 'h2', id: 'hub-shared-migrations', text: 'Per-app migrations and the not-ready page' },
     {
@@ -206,6 +206,10 @@ export const hubSharedDocs: DocSection = {
           'The version, this instance, the list the deployment holds (count, loaded time, etag, stale, apps it dropped and why), every app with its schema state, the extensions it loaded, and the sign-in issuer host and Entra tenant.'
         ],
         [
+          '`GET /api/hub-deployment/usage`',
+          'Capacity figures (0.3.215 or later): every process (CPU, memory) and every app (requests and answering time per minute, connections in use against its pool, job runs, file bytes, the limits it enforces). Counts only; see Capacity and limits.'
+        ],
+        [
           '`GET /api/hub-deployment/apps/:id/status`',
           'One app: version, preflight (status and failing check names), readiness score, busy work counts (imports, exports, renders), files (count, bytes, local), the key fingerprint, and whether it is in maintenance. `404 UNKNOWN_APP`.'
         ],
@@ -250,7 +254,7 @@ export const hubSharedDocs: DocSection = {
     { type: 'h2', id: 'hub-shared-place', text: 'Placing a new environment' },
     {
       type: 'p',
-      text: 'An environment that has never served can be placed straight on a shared deployment: Apps → the app → the environment row → Place… (tooltip "Place on shared deployment…"; shown only for an environment still `provisioning`), or `POST /api/hub/environments/:envId/place-shared` with `{shared_id, database_id, pool_max?, first_admin: {email, first_name?, last_name?}}`. An environment that has served moves instead (Moving an environment); a refusal says `USE_MOVE`.'
+      text: 'An environment that has never served can be placed straight on a shared deployment: Apps → the app → the environment row → Place… (tooltip "Place on shared deployment…"; shown only for an environment still `provisioning`), or `POST /api/hub/environments/:envId/place-shared` with `{shared_id, database_id, pool_max?, first_admin: {email, first_name?, last_name?}}`. An environment that has served moves instead (Moving an environment); a refusal says `USE_MOVE`. A brand-new app can also be created straight onto a shared deployment (Hub 0.3.215 or later): Apps → Create app → Shared deployment makes its databases and runs this placement as the creation’s `place` step for every environment (see Creating on Docker or on a shared deployment). Create app → Docker creates one straight onto a Docker driver instead, no GitLab target needed.'
     },
     {
       type: 'ul',
@@ -258,7 +262,7 @@ export const hubSharedDocs: DocSection = {
         'Only an environment that has never served: no Hub deploy that succeeded, no finished creation (`CREATION_RUNNING` while one is open), no current dedicated placement (clear it first if it never ran), and, when it has a hub token, an app that does not answer over its hub link. Any answer from that link (even a refused token) means it runs, and so does a database that already holds an install: both answer `USE_MOVE`, so move it instead. No answer, or a database the Hub cannot look at, is `SERVING_UNKNOWN` and never a pass: if the app is gone for good, clear its hub token, then place it again.',
         'A Docker shared deployment must have been deployed first (`NOT_DEPLOYED`: upgrade it to a version), and every name of the environment must already be routed by its stack, under its host pattern or among the names its last run routed (`NAME_NOT_ROUTED`; a place never re-applies the stack, which would restart every app on it). An agent that does not answer is never read as routed. A published-port edge routes no names.',
         'An open move of the environment refuses it (`MOVE_OPEN`, naming the move: resume it or roll it back first).',
-        'Before anything is written: the deployment must exist, not be retired and not be busy (`SHARED_RETIRED`, `SHARED_BUSY`); the app must not sign in via the Hub (`SIGNIN_VIA_HUB`) and its extensions must be allowed (`EXTENSION_NOT_ALLOWED`); the database record must be ready and not in use by another environment (`DATABASE_NOT_READY`, `DATABASE_IN_USE`); the pool must be 2 or more (`POOL_TOO_SMALL`) and inside the budget (`POOL_BUDGET`). A SQLite record (0.3.215) only on a Docker deployment of size small at 0.3.215 or later (`SQLITE_ONE_PROCESS`, `SQLITE_SHARED_VERSION`), judged again under the lock of the deployment.',
+        'Before anything is written: the deployment must exist, not be retired and not be busy (`SHARED_RETIRED`, `SHARED_BUSY`); an app that signs in via the Hub needs a deployment at 0.3.215 or later (`SIGNIN_VIA_HUB`) and its extensions must be allowed (`EXTENSION_NOT_ALLOWED`); the database record must be ready and not in use by another environment (`DATABASE_NOT_READY`, `DATABASE_IN_USE`); the pool must be 2 or more (`POOL_TOO_SMALL`) and inside the budget (`POOL_BUDGET`). A SQLite record (0.3.215) only on a Docker deployment of size small at 0.3.215 or later (`SQLITE_ONE_PROCESS`, `SQLITE_SHARED_VERSION`), judged again under the lock of the deployment.',
         "The run (a job run): make the placement and set the environment's database, pin and status `provisioning`; ask every replica to re-read; wait up to 2 minutes for every live replica to hold the list that names the app; wait up to 10 minutes for the app's schema to be `ok` (a failed schema stops the run and names the app's own error); seed the first administrator; set the environment `active`.",
         'A failed run leaves the environment `provisioning` on its placement: place it again to retry.',
         'The Hub keeps no app key it cannot prove: it uses the one it knows, or generates one only for a database known to be empty.'
@@ -272,7 +276,7 @@ export const hubSharedDocs: DocSection = {
     { type: 'h2', id: 'hub-shared-upgrade', text: 'Upgrades and rollback' },
     {
       type: 'p',
-      text: 'In docker mode the Hub upgrades the whole deployment in one run: Apps hub → Shared deployments → the deployment → Upgrade (a version picker, then the plan). A registered deployment is upgraded by whoever runs it; the plan says `SHARED_NOT_HUB_DEPLOYED`. The same panel rolls back: pick Roll back and a version this deployment ran successfully through the Hub. A rollback restores the image and the extension pins of that recorded run, not the stack settings (size, Redis mode, host pattern, publish port): those come from the deployment as it is now. The first deploy of a deployment has nothing to roll back to (`NOT_DEPLOYED_BEFORE`).'
+      text: 'In docker mode the Hub upgrades the whole deployment in one run: Apps hub → Shared deployments → the deployment → Upgrade (a version picker, then the plan). A registered deployment that names a GitLab driver is upgraded the same way, through its GitLab pipeline (below). A registered deployment without one is upgraded by whoever runs it; the plan says `SHARED_NOT_HUB_DEPLOYED`. The same panel rolls back: pick Roll back and a version this deployment ran successfully through the Hub. A rollback restores the image and the extension pins of that recorded run, not the stack settings (size, Redis mode, host pattern, publish port): those come from the deployment as it is now. The first deploy of a deployment has nothing to roll back to (`NOT_DEPLOYED_BEFORE`).'
     },
     {
       type: 'table',
@@ -280,7 +284,7 @@ export const hubSharedDocs: DocSection = {
       rows: [
         [
           '`SHARED_NOT_HUB_DEPLOYED`, `SHARED_RETIRED`, `BAD_VERSION`',
-          'The deployment is registered (the Hub cannot upgrade it) or retired, or the version is not `x.y.z`.'
+          'The deployment is registered without a GitLab driver (the Hub cannot upgrade it) or retired, or the version is not `x.y.z`.'
         ],
         [
           '`BUSY`, `LOCK_UNAVAILABLE`',
@@ -301,6 +305,10 @@ export const hubSharedDocs: DocSection = {
         [
           '`REDIS_NOT_AVAILABLE`, `REDIS_URL_MISSING`, `REDIS_DB_SHARED`, `HUB_URL_UNUSABLE`',
           'Bundled Redis asked for but the agent has no Redis image, external Redis chosen without its address, or the Hub address the stack would get is not a usable https origin.'
+        ],
+        [
+          'GitLab: `NO_DRIVER`, `GITLAB_UNREACHABLE`, `LINK_UNREACHABLE`, `BRANCH_IN_USE`, `BRANCH_BUSY`, `PIPELINE_RUNNING`, `NO_SOURCE_COMMIT`, `VERSION_UNKNOWN`, `PIN_CHANGED`, `ALREADY_RUNS`',
+          "A deployment its GitLab pipeline runs: the GitLab driver is gone or GitLab did not answer (the address or token of the driver), the deployment's link does not answer (the run reads it after the deploy), an environment or another shared deployment deploys the same branch of the same repository, a promotion, move or other upgrade holds that branch now, a pipeline on the deploy branch is not over yet (it may still be deploying), the release branch has no commit whose subject ends `nivaro <version>`, the image has no digest for the pin, the same version again would create or rewrite the pin of the version that runs (never done), or the deploy branch already holds the release commit and its pin (nothing to deploy). A rollback: `NOT_DEPLOYED_BEFORE` (the Hub never deployed that version here; an observed version does not count), `ROLLBACK_NOT_RECORDED`, `ROLLBACK_NO_BUILD` (the recorded commit left the branch, or its deploy job cannot be rerun). The agent, image, routing, Redis and extension-pin checks are not made: its pipeline builds and routes it."
         ],
         [
           '`MOVE_OPEN`',
@@ -336,6 +344,15 @@ export const hubSharedDocs: DocSection = {
         'While a move into or out of the deployment is waiting (a manual route can wait up to 24 hours), the plan is `BUSY` and the deployment page says which move it waits for.'
       ]
     },
+    { type: 'h3', id: 'hub-shared-upgrade-gitlab', text: 'A deployment its GitLab pipeline runs' },
+    {
+      type: 'p',
+      text: "A registered deployment can name a GitLab driver: Edit → Upgrades → By the Hub, through GitLab, then the driver, the release branch (the branch holding the release commits, a subject ending `nivaro <version>`), the deploy branch (required: the branch its deploy job runs on, never the driver's own default and never the release branch), and optionally the pin file and deploy job (empty: the driver's own) and a job to wait for first. Through the API: `driver_id` (a GitLab driver, else `DRIVER_NOT_GITLAB`) and `settings.gitlab` `{source_branch, target_branch, pin_file?, before_job?, deploy_job?}` (`BAD_GITLAB` when one comes without the other, a name is not a git branch name, or the two branches are the same). One writer per branch: a deploy branch an environment's component or another shared deployment already deploys on the same repository is refused at save (409 `BRANCH_IN_USE`) and again by every plan, and every run that writes a GitLab branch (a promotion, a move's GitLab deploy, a shared deployment upgrade) holds a lock on that branch for the whole run (`BRANCH_BUSY` for the other). A driver a shared deployment names cannot be deleted (409 `DRIVER_IN_USE`). Set `driver_id: null` and drop `settings.gitlab` to go back to watching it only. The plan says `runner: 'gitlab'` and what the run merges, pins and deploys (`gitlab`)."
+    },
+    {
+      type: 'p',
+      text: "The run is a promotion's API step on the deployment's own repository, under the same start checks, locks, overrides and downgrade confirm as a Docker upgrade. `push`: the release commit is merged onto the deploy branch with the pin file (`<version>`, the image digest, the slim image digest) committed on top, as one merge request, so the deploy branch moves once. `deploy`: the deploy job of that pipeline is waited for, or played when it is manual (60 minutes); the commit and pipeline it ran on are recorded. The version the deployment link answers (not the stored pin) decides the same-version and downgrade rules, and the pin file now on the deploy branch is part of the plan hash. Before anything is written the run asks the link once more (`LINK_UNREACHABLE`, nothing written). Then, as for Docker, every replica seen in the last 2 minutes must report the version (30 minutes; no swarm to ask), every app's schema must be `ok` (10 minutes) and each app's name must answer the version (5 minutes). A rollback reruns the deploy job of the pipeline the Hub recorded for that version (nothing merged, no pin written); GitLab refusing the rerun (Prevent outdated deployment jobs) stops it with `ROLLBACK_REFUSED_BY_GITLAB`. Cancel stops before the merge into the deploy branch, or during the deploy job wait (a job GitLab already started keeps running, so the next plan says `PIPELINE_RUNNING` until it ends). A run that loses one of its locks stops the same way, before a job is played or during the wait, and ends `interrupted` (`LOCK_LOST`); it stops vouching for its row at once, and a plan refuses `BUSY` while a run of the deployment is still `running`. A failed run names the GitLab code (`DEPLOY_FAILED`, `MERGE_REFUSED`, `HEAD_MOVED`, `DRIVER_CHANGED`, `GITLAB_UNAUTHORIZED` …), leaves the pins unchanged, and a heal after a Hub restart deletes the run's temporary branches (only on the repository the run used). A deployment left `upgrading` by a Hub that stopped is healed on the next tenants call of its replicas, so an upgrade done outside the Hub is still recorded. While the Hub upgrades it the deployment is `upgrading` and no observed version is recorded; the token rotation still answers `manual` (the pipeline holds the token)."
+    },
     {
       type: 'p',
       text: 'Routes (Hub administrator): `POST /api/hub/shared/:id/upgrade/plan` (`{version, kind?}`), `POST /api/hub/shared/:id/upgrade` (`{version, kind?, plan_hash, confirm, overrides?}`; 202; `409 PLAN_CHANGED` carries the new plan, `BLOCKED` and `APP_BLOCKED` say what holds it back, `400 CONFIRM_MISMATCH`), `GET /api/hub/shared/:id/upgrade/versions` (the versions the picker offers), `GET /api/hub/shared/:id/deploys`, `GET /api/hub/shared-deploys/:id`, `POST /api/hub/shared-deploys/:id/cancel` (409 `NOT_RUNNING`).'
@@ -343,7 +360,7 @@ export const hubSharedDocs: DocSection = {
     { type: 'h2', id: 'hub-shared-observed', text: 'Observed versions' },
     {
       type: 'p',
-      text: "A registered deployment tells the Hub its version on every tenants call. When every instance seen in the last 2 minutes agrees on a version different from the deployment's pin, the Hub records one `observed` shared deploy, adds a `shared` deploy row to each placed environment, and moves the pin. During a rolling upgrade, when replicas still disagree, nothing is recorded. The record is written once per version."
+      text: "A registered deployment tells the Hub its version on every tenants call. When every instance seen in the last 2 minutes agrees on a version different from the deployment's pin, the Hub records one `observed` shared deploy, adds a `shared` deploy row to each placed environment, and moves the pin. During a rolling upgrade, when replicas still disagree, nothing is recorded, and nothing while the Hub itself upgrades the deployment through GitLab (status `upgrading`: its own run records the version). The record is written once per version."
     },
     { type: 'h2', id: 'hub-shared-routes', text: 'Routes' },
     {
@@ -358,7 +375,7 @@ export const hubSharedDocs: DocSection = {
         ['`POST /api/hub/shared`', '201 `{row, token, env_block}`. The token is shown once.'],
         [
           '`PATCH /api/hub/shared/:id`',
-          'Name, link address, host pattern, extensions and pins, pool budget, settings. Mode or key: 400 `IMMUTABLE`. A retired deployment: `SHARED_RETIRED`.'
+          "Name, link address, host pattern, extensions and pins, pool budget, settings; on a registered deployment also `driver_id` (its GitLab driver, with `settings.gitlab`). Mode or key: 400 `IMMUTABLE`; a Docker deployment's driver: `NOT_EDITABLE`. A retired deployment: `SHARED_RETIRED`."
         ],
         [
           '`POST /api/hub/shared/:id/token`',
@@ -386,80 +403,26 @@ export const hubSharedDocs: DocSection = {
     { type: 'h2', id: 'hub-shared-not-yet', text: 'What a shared app cannot do yet' },
     {
       type: 'p',
-      text: 'Each item below is deferred. The Hub enforces it when a dedicated app moves in: a blocker stops the move, a warning is shown in the plan. A new environment placed straight on a shared deployment has none of these features from the start. Staged imports, row schedules, directory lookups, the Teams bot, phone push, mail retry and the other per-app jobs are not in this table: they work per app (see Per app on a shared deployment below).'
+      text: 'Each item below is deferred. The Hub enforces it when a dedicated app moves in: a blocker stops the move, a warning is shown in the plan. A new environment placed straight on a shared deployment has none of these features from the start. Staged imports, row schedules, directory lookups, the Teams bot, phone push, mail retry, GitLab issue sync and the other per-app jobs are not in this table: they work per app (see Per app on a shared deployment below).'
     },
     {
       type: 'table',
       head: ['Gap', 'What happens', 'Move check'],
       rows: [
-        ['GitLab issue sync', 'Off.', 'blocker `ISSUE_TRACKERS`'],
         [
           'Flows with the `exec-script` operation',
           'Needs a per-app sandbox.',
           'blocker `EXEC_SCRIPT_FLOWS`'
         ],
         [
-          'Objects in an env-driven S3 or Azure provider',
-          'A move copies the objects the deployment storage holds (the `local` provider). An app with its own saved-settings S3 or Azure bucket is not unaffected: on a shared deployment its objects live under `apps/<id>/` in that bucket, so a move changes the key prefix and the objects must be copied to their new keys (see Files).',
-          'blocker `ENV_OBJECT_STORAGE`'
-        ],
-        [
-          'Sign-in via the Hub, and the switcher pushes',
-          "An app on shared signs in directly with the deployment's primary OIDC.",
-          'blocker `SIGNIN_VIA_HUB`'
-        ],
-        [
-          'Per-app OIDC client',
-          "For now a shared deployment uses one deployment-wide client; the app's own client record is not used. Each app's callback address must be registered on that one Entra app.",
+          'Per-app direct Microsoft sign-in',
+          "Direct sign-in (and the fallback while the Hub is down) uses the deployment's one primary OIDC client: each app's callback address must be registered on that one Entra app. An app that signs in via the Hub (see Per app below) still needs it: it is the fallback while the Hub is down.",
           'checklist item `callbacks_registered`'
         ],
-        [
-          'Mail settings from the environment (`SMTP_*`)',
-          'An app uses its own saved mail settings.',
-          'warning `ENV_SMTP`'
-        ],
-        [
-          'Session replays',
-          'Not moved by a move.',
-          'warnings `SESSION_REPLAYS`, `REPLAYS_NOT_MOVED`'
-        ],
-        [
-          'Outside-write watch (the SQL Server change tracker)',
-          'Off on shared: it needs a deployment-wide watcher.',
-          '-'
-        ],
-        [
-          'Traffic digest section and the Traffic Map page',
-          'Off on shared. The daily digest keeps its other sections.',
-          '-'
-        ],
-        ['Huddle relay (TURN)', 'Off on shared, as in cloud.', 'warning `HUDDLE_TURN`'],
         [
           'Help-video renders queued before a restart',
           'They render again on the next publish.',
           'warning `HELP_VIDEO_RENDERS`'
-        ],
-        [
-          'Deployment-wide process jobs (pool monitor, socket sample)',
-          'No deployment store yet. The figures are live on the deployment link status.',
-          '-'
-        ],
-        ['Config epochs per app', 'The metadata cache expires on its own TTL, as in cloud.', '-'],
-        ['Per-process heavy-read slots per app', 'Only the pool budget caps connections.', '-'],
-        [
-          'Creating a new app on a Docker target (`nivaro_hub_targets` has the GitLab kind only)',
-          'A later phase. Place a new environment, or move an existing one.',
-          '-'
-        ],
-        [
-          'Upgrades driven by GitLab',
-          'A GitLab-run deployment is registered and upgraded by its pipeline.',
-          '-'
-        ],
-        [
-          'More than one swarm node with bundled volumes',
-          'Same limit as dedicated stacks.',
-          'warning `MULTI_NODE_VOLUMES`'
         ]
       ]
     },
@@ -473,21 +436,44 @@ export const hubSharedDocs: DocSection = {
       items: [
         'Staged file imports (upload and drainer). Rows load with inserts: the bulk loader (`IMPORT_LOADER=bulk`, SMB share) is not available on shared, so a `bulk` loader falls back to inserts with a note and a `bulk_only` import fails saying so. Each app keeps its own queue, attempts and leases.',
         'Row schedules (scheduled reports, retention policies, scheduled audit and activity views, sync jobs, scheduled flows). An edit reaches every replica, and a 5-minute `row-schedules-resync` job per app is the backstop. An app that leaves the deployment loses its jobs.',
-        'Automatic mail retry (`MAIL_RETRY=off` still turns it off for the whole deployment), live SLA status changes, the cumulative-flow rollup and the weekly AI summary in the daily digest. The traffic digest section stays off.',
+        'Automatic mail retry (`MAIL_RETRY=off` still turns it off for the whole deployment), live SLA status changes, the cumulative-flow rollup and the weekly AI summary in the daily digest.',
         'The daily retention pass (03:30, one job per app) and the boot passes (owner-group warm, integrity checks, cache warms, readiness warm, db-tuning sweep). They run once per app when it becomes ready. Retention status shows per app. Stale help-video import folders are swept once a day per process (deployment-wide, not per app).',
         'Microsoft directory lookups and sync. The app uses its own Microsoft app registration, saved in Settings → Microsoft directory (tenant id, client id, client secret; the secret is sealed with the app key). The server `GRAPH_*` and `OIDC_*` variables and the directory keys of `NIVARO_SETTINGS_OVERRIDES` are never used on shared.',
         "The Teams bot. The app uses only the bot saved in its own Settings. `TEAMS_BOT_*`, `MICROSOFT_APP_*`, the sign-in app fallback and the `teams_bot_*` override keys are ignored. `TEAMS_BOT=off` still disables the bot on the whole deployment, but `TEAMS_BOT=on` does not switch an app on: each app saves its own switch. Register each bot with that app's host as its messaging endpoint.",
         "Phone push. An app admin connects the app's push relay in Settings → Mobile app. The server `MOBILE_PUSH_RELAY_KEY` is not used on shared. Phone sign-in was already per app.",
-        "SQLite apps (0.3.215). Record a SQLite database on the Databases tab (New SQLite database), then place a new environment with it on a Docker shared deployment of size small. SQLite allows one writer process, so a registered deployment, a medium or large one, or one before 0.3.215 is refused (`SQLITE_ONE_PROCESS`, `SQLITE_SHARED_VERSION`), and while a SQLite app is on it the deployment cannot grow past small or be rolled back below 0.3.215. The file is `/app/uploads/app-db/<app id>/app.sqlite` (pinned to the uploads volume, outside the stored-files folders, never moved by `STORAGE_LOCAL_ROOT` or a files subfolder); the Hub names only the file and the deployment refuses any name or link that would leave the app's folder. Each app gets its own pool (WAL, a few readers, one writer at a time per file), its own migrations and the case-insensitive text pass a self-hosted SQLite gets. A process that runs a role of a split stack never opens one. The uploads volume must be local to one node: an NFS export, another volume driver, an agent that does not say (`SQLITE_ON_NFS`) or a swarm of several nodes with local volumes (`SQLITE_MULTI_NODE`) is refused. A missing file is never made into a fresh install: only a database recorded as New is made, once, at its first placement (a `.created` marker in its folder); afterwards a missing file answers 503 `SQLITE_FILE_MISSING`, the app's schema state fails and the deployment log says so. During a rolling update the new process waits for the old one to let go of the file (about 30 s). Back the volume up like any other uploads volume. A SQLite app moves in from a dedicated stack and out to a Docker stack of size small (or between two small shared deployments): see Moving an environment, SQLite apps."
+        "SQLite apps (0.3.215). Record a SQLite database on the Databases tab (New SQLite database), then place a new environment with it on a Docker shared deployment of size small. SQLite allows one writer process, so a registered deployment, a medium or large one, or one before 0.3.215 is refused (`SQLITE_ONE_PROCESS`, `SQLITE_SHARED_VERSION`), and while a SQLite app is on it the deployment cannot grow past small or be rolled back below 0.3.215. The file is `/app/uploads/app-db/<app id>/app.sqlite` (pinned to the uploads volume, outside the stored-files folders, never moved by `STORAGE_LOCAL_ROOT` or a files subfolder); the Hub names only the file and the deployment refuses any name or link that would leave the app's folder. Each app gets its own pool (WAL, a few readers, one writer at a time per file), its own migrations and the case-insensitive text pass a self-hosted SQLite gets. A process that runs a role of a split stack never opens one. The uploads volume must be local to one node: an NFS export, another volume driver, an agent that does not say (`SQLITE_ON_NFS`) or a swarm of several nodes with local volumes (`SQLITE_MULTI_NODE`) is refused. A missing file is never made into a fresh install: only a database recorded as New is made, once, at its first placement (a `.created` marker in its folder); afterwards a missing file answers 503 `SQLITE_FILE_MISSING`, the app's schema state fails and the deployment log says so. During a rolling update the new process waits for the old one to let go of the file (about 30 s). Back the volume up like any other uploads volume. A SQLite app moves in from a dedicated stack and out to a Docker stack of size small (or between two small shared deployments): see Moving an environment, SQLite apps.",
+        "GitLab issue sync (0.3.215 or later). Each app keeps its own connections (tokens sealed with the app key), rules, links, queued GitLab writes and switch (Issue trackers tab, stored in the app's own database); the sweep, send queue, reconcile and prune jobs run once per app. GitLab's webhook calls the app's own address (`https://<app host>/api/tracker-hooks/gitlab/<id>`, the URL the tab shows): the host picks the app, so a connection id never reaches another app. `ISSUE_TRACKERS=off` on the deployment turns sync off for every app, but `ISSUE_TRACKERS=on` does not switch an app on. GitLab calls go through the SSRF guard: a GitLab on a private address needs its host in the deployment's `SSRF_ALLOW_HOSTS`. A move of an app with sync on warns `ISSUE_TRACKERS` (it blocks only a target before 0.3.215). It also warns when sync is off only by the server's `ISSUE_TRACKERS=off` while the app's own switch is on (sync would start on the shared deployment: store the switch off first, which is allowed while the server keeps it off), and when the switch is stored under a custom `NIVARO_INSTANCE`. A copy of an app carries its GitLab connections (`SAME_APP_ON_DEPLOYMENT` says so), and a downgrade or rollback of the deployment below 0.3.215 says sync stops for every app on it.",
+        "Sign-in via the Hub and the app switcher (from 0.3.215). The Hub hands each app its own sign-in client (only while the app is in Hub mode and the client is on), its environment hub token and the Hub's Microsoft client id in the tenant list (sealed with the app's key, which binds each value to its app; the list itself is what keeps them secret: it is fetched over TLS with the deployment token, never cached or logged). `HUB_CLIENT_*` and `HUB_TOKEN` on the deployment are never used for an app. The app calls back on its own address (the Hub already knows it from the environment), checks the evidence against the deployment's primary `OIDC_ISSUER`, and falls back to direct sign-in through the deployment's primary OIDC. `HUB_SIGNIN=off` on the deployment turns it off for every app. A placed environment gets a hub token when it first serves (one moved in keeps its own). Creating, rotating or switching a client, or changing an app's mode, asks the deployment to re-read its list at once. A move of an app in Hub mode needs the target at 0.3.215 or later and an active client for the environment (`SIGNIN_VIA_HUB` otherwise); `callbacks_registered` stays required: direct sign-in through the deployment's sign-in app is the fallback while the Hub is down, and the only path if the deployment is rolled back below 0.3.215 (the downgrade and rollback plans name the apps that would fall back). A move onto a shared deployment issues a hub token too when the environment has none.",
+        "The Traffic Map, for the app's administrators: the map, its live frames, the inspector and the traffic section of the daily summary show only that app's requests, callers, partners, sockets and people, read from the app's own store and its own request log. The parts that read the process as a whole stay with the operator, as in Nivaro Cloud: minute history and baselines, the investigation and request-trace lenses, database, Redis, node and capacity panels, circuit breakers and timed actions. They answer 404 inside an app.",
+        "Configuration changes reach every replica at once. A configuration write in an app (fields, relations, layouts, roles, rules, pipelines and the other configuration tables) is announced on the deployment's own Redis channel (`<REDIS_CHANNEL_PREFIX>nvr:app-config:<deployment key>`, the app id and the process only) as soon as it starts and again 2 seconds after the last write of the run; every other process of the deployment, realtime processes included, clears its caches for that app only (other apps keep theirs). A bust from Database → Caches is announced the same way. `CACHE_EPOCH=off` turns it off; without Redis the caches expire on their TTL. The database's own configuration number (`nivaro_cache_epochs`) stays off on a shared deployment.",
+        "Heavy reads share the process fairly. The apps of one process share its heavy-read budget (`HEAVY_READ_CONCURRENCY`). One app holds at most `HEAVY_READ_PER_APP` slots (default half the budget, at least 1) and never more than its own pool size minus one, and a freed slot goes to the waiting app that holds the fewest. So one busy app cannot take every slot, and another app's first heavy read waits for at most one release.",
+        "Pool and socket figures. Each app's own pool is judged every 5 minutes (`app-pool-monitor`, the self-hosted pool-monitor rule) and an issue is raised in that app's issue log when it is under pressure; each app's own sockets and people are sampled into its Realtime console chart (`app-concurrency-sample`). The process's own figures (sockets and people across every app, the heavy-read budget in use, every app pool summed; counts only, no app named) are on the deployment link status, for the Hub operator.",
+        'From 0.3.215 — the outside-write watch (the safety net that notices rows other systems wrote straight into the database). The process that runs scheduled jobs walks the SQL Server apps in turn, each in its own database with its own Realtime → Outside writes setting and counts; Postgres and MySQL apps are skipped as on a dedicated stack. One look of one app is held to about 4 seconds as a whole (collections, the tables that belong to open records and file lookups; each read waits at most 1 second on a lock) and carries on with what it did not read at its next look, and an app that leaves the deployment is no longer walked. Each app’s look reads the deployment-wide realtime journal and keeps only its own entries (there is no per-app index yet).',
+        'From 0.3.215 — huddle media servers. Each app uses the STUN, TURN and media server (LiveKit) it saved in Settings → Huddles, as on a dedicated stack; the TURN secret, TURN password and LiveKit secret are stored sealed with the app key. The platform variables `HUDDLE_LIVEKIT_URL`, `HUDDLE_TURN_URLS` and `HUDDLE_STUN_URLS` stay Nivaro Cloud only. What the deployment itself dials stays guarded: the media server test and the room clean-up calls go through the SSRF guard, and Test TURN resolves each address once, refuses a private or reserved one the operator has not allowed with `SSRF_ALLOW_HOSTS` (browsers still use it), and connects to exactly the address it checked. The every-5-minutes TURN probe stays off on shared; Server health shows the last manual test.',
+        "From 0.3.215 — per-instance settings (Settings → This instance: huddle media servers, the outside-write watch, the daily report, caches …). A shared deployment reads an app's row under the deployment's own instance name (`NIVARO_INSTANCE`). When a move from a dedicated stack puts the app in maintenance, the Hub passes that name and the app copies its OWN row to it (never another environment's row in the same database); a row already there keeps its values (only empty keys are filled, and the run log names the keys that differ). The app's own row is left as it was, so a rollback changes nothing. The plan says `INSTANCE_SETTINGS_CARRIED`, or `INSTANCE_SETTINGS_STAY` when a side is older or the move is from a shared deployment (then enter them again).",
+        "From 0.3.215 — mail from an app that sent with its server's `SMTP_*` / `MAIL_FROM` (or a mail test mode its environment forces, `MAIL_TEST_MODE` / `MAIL_TEST_RECIPIENT`). In the same maintenance call the app saves what it sends with into the carried instance row (only what nothing saved already holds; the password sealed with the app key; a forced test mode stays on with its recipient), never into the settings row other instances of the same database read. A failure stops the move before maintenance (503). The plan shows `ENV_SMTP_KEPT` instead of `ENV_SMTP` when both the app and the target run 0.3.215 or later, with a checklist item to confirm it in the run log; if the app does not confirm, the run log says `ENV_SMTP`. On shared an app with a saved relay signs in only with its own saved user and password, never the deployment's `SMTP_USER` / `SMTP_PASSWORD`; an app with nothing saved at all still uses the deployment's own `SMTP_*`.",
+        'Per-app limits (Hub Capacity tab, apps 0.3.215 or later): requests per minute (429 `APP_RATE_LIMITED`), background jobs at once (a turn waits for a slot, then is skipped with `app_limit`) and file storage (413 `APP_STORAGE_FULL`). The Hub lists them with the app; see Capacity and limits.',
+        "Files on a swarm of several nodes. With Hub agent 0.2.3 and an NFS export (`HUB_AGENT_VOLUME_OPTS_FILE` + `HUB_AGENT_VOLUME_EXPORT_MOUNT`), the shared stack keeps its uploads in its own folder on the export, `<export>/<stack>/uploads`, which every node mounts; each app's files sit inside it under `apps/<app>/`, and bundled Redis stays on a local volume on the agent's node. `MULTI_NODE_VOLUMES` then no longer fires; it still does for local volumes on several nodes (Docker driver and Hub agent, Files on an NFS export)."
       ]
     },
     {
       type: 'p',
-      text: 'Nivaro Cloud is unchanged: the Teams bot, phone push and mail retry stay off there, and push stays cloud-managed.'
+      text: 'From 0.3.215 (on both sides of a move) a move also copies what used to block or stay behind:'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Objects in an env-driven S3 or Azure provider (`STORAGE_PROVIDER`), on either side: re-keyed between the bucket root (dedicated) and `apps/<id>/` (shared), streamed, resumable, with the same counts and failure reasons as the other files. Into a dedicated stack on the same bucket, the bucket copies them itself. `ENV_OBJECT_STORAGE` is then a note the app sends, not a blocker; it still blocks while either side runs an older version (see Moving an environment → Files).',
+        'Session replays. A replay still being watched often lives in the database, which the move keeps; an older one sits as one object in file storage, and the move copies that object with the files. `SESSION_REPLAYS` and `REPLAYS_NOT_MOVED` then go away.'
+      ]
     },
     {
       type: 'p',
-      text: 'Before or after a move, save what the app needs on its own. The plan warns `DIRECTORY_ENV_CREDENTIALS` when the directory credentials come only from the environment, `TEAMS_BOT_ENV_CREDENTIALS` when the bot comes from the environment (or is on only by `TEAMS_BOT=on`), `PUSH_RELAY_ENV` when push uses the server relay key, and `SETTINGS_ENV_OVERRIDES` when the app’s `NIVARO_SETTINGS_OVERRIDES` sets keys a shared deployment does not apply. `SAME_APP_ON_DEPLOYMENT` notes that a copy carries the original saved Teams bot and directory registration.'
+      text: 'Nivaro Cloud is unchanged: the Teams bot, phone push, mail retry and GitLab issue sync stay off there, and push stays cloud-managed.'
+    },
+    {
+      type: 'p',
+      text: 'Before or after a move, save what the app needs on its own. The plan warns `DIRECTORY_ENV_CREDENTIALS` when the directory credentials come only from the environment, `TEAMS_BOT_ENV_CREDENTIALS` when the bot comes from the environment (or is on only by `TEAMS_BOT=on`), `PUSH_RELAY_ENV` when push uses the server relay key, `SETTINGS_ENV_OVERRIDES` when the app’s `NIVARO_SETTINGS_OVERRIDES` sets keys a shared deployment does not apply, and `ISSUE_TRACKERS` when GitLab sync is on (its detail says when only the server’s `ISSUE_TRACKERS=on` switches it on: switch it on again on the Issue trackers tab after the move). `SAME_APP_ON_DEPLOYMENT` notes that a copy carries the original saved Teams bot and directory registration.'
     },
     {
       type: 'note',
@@ -686,13 +672,15 @@ export const hubMovesDocs: DocSection = {
         "What is copied: every file in the app's files table whose provider is the deployment-storage (`local`) provider. Objects keep their keys. An object already there at the same size is skipped, so a copy is resumable. The first warm copy of a move is always a full copy (a manifest left by an earlier move would make a delta skip rows); later ones are deltas. An object over 5 GB fails that file. A file the source says is missing (404) is listed as missing (up to 50 ids) and never blocks: it was gone before the move. A file whose stored size was stale is copied as the source has it and counted, not failed.",
         'A file that failed is named (up to 50 ids) and counted under a plain reason: the source could not read it (`503 SOURCE_READ_FAILED`), the source\'s `FILES_FALLBACK_DIR` is missing or empty, the source did not answer, the answer was not usable, the bytes arrived incomplete, the target\'s temporary folder could not take them (full or not writable), or the target could not store it. Only the transfer route\'s own "not found" (it carries `X-Nivaro-Transfer-Missing: 1`) counts as missing: a 404 from anything else on the way (a proxy, another route) fails the file. A source on 0.3.209 answers a plain 404 without the marker: a move never pairs it with a newer target (the plan refuses `VERSION_DIFFERS`), and if it ever did, its missing files would fail and the move would roll back, never release without them. A failure in the warm copy is only a warning (the delta inside maintenance tries it again); inside maintenance it stops the move with `FILES_NOT_COPIED`, which names the files and the reasons ("3 file(s) could not be copied (…): the source could not read 3"), and the move rolls back. A failed file is never stored on the target or counted as copied, so the next move copies it again.',
         "A source that reads files through `FILES_FALLBACK_DIR` (after an environment refresh): only a key that is not in a readable fallback folder is missing. A file or folder there that cannot be read (`EACCES`, `EIO`, `ESTALE`) is a read error: `503 SOURCE_READ_FAILED` with no path. So is a fallback folder that is not there, or that is there but EMPTY: an unmounted share or volume usually leaves its mount point behind as an empty folder (`reason: FALLBACK_FOLDER_UNAVAILABLE`). Either way the move rolls back instead of moving on without those files. Fix the mount or the permissions, then start the move again. If the source's uploads really are empty while its files table has rows, unset `FILES_FALLBACK_DIR` on the source; the move's text says so.",
-        'Not copied: objects in an env-driven S3 or Azure provider (a blocker, `ENV_OBJECT_STORAGE`), session replays and image transform caches (replays warn `REPLAYS_NOT_MOVED`; transforms are made again).',
+        "Env-driven S3 or Azure (`STORAGE_PROVIDER=s3|azure`, 0.3.215 on both sides): files whose provider is `s3` or `azure` are copied too, whichever side keeps them there (source, target or both). The source streams each object from its bucket (never whole in memory) and says which of its stores held it (`X-Nivaro-Transfer-Store: env | settings`), so the target writes it to its own env provider or its own saved-settings driver; `s3` is written by both, and the answer settles which. Keys are re-keyed like every key on a shared deployment: `apps/<id>/<key>` there, `<key>` at the bucket root elsewhere. When the source's bucket is also the target's env bucket (the source sends a hash of endpoint or region and bucket, never the name), the target asks the bucket to copy it (S3 CopyObject, Azure Copy Blob): no byte passes through either app. The target decides from a header-only probe of the source (`X-Nivaro-Transfer-Probe: 1`, answered 204 from a HEAD of the object, which is never opened). An Azure copy that stays pending is polled until the per-object timeout (10 minutes), then cancelled and its blob removed before the object is streamed instead; one that ends in anything but success is handled the same way. The source key is never taken from the source's answer: the target rebuilds it from where the Hub says the source keeps this app's objects (`source_scope`: the bucket root for a dedicated source, `apps/<id>/` for a shared one) and the file's own key, and copies only when the source's stored-key header agrees. Storage itself refuses a copy source with `..`, a leading `/`, a backslash or a control character, a root-form key inside `apps/`, or another app's folder. A shared target never copies server-side (a shared bucket's root and other apps' folders are not its own): it streams. If the bucket refuses (the target's credentials cannot read the source key), the object is streamed instead. The same full key on both sides is already there and is skipped. Counts, failure reasons, the 5 GB cap and resume are the same as for local files. A side before 0.3.215 still blocks with `ENV_OBJECT_STORAGE`.",
+        "Session replays (0.3.215 on both sides): a replay older than the cold-storage setting (default 3 days) keeps its recording as one object in file storage (`session-replays/<year>/<month>/<id>.ndjson.gz`); the pull copies those from the source's `GET /api/hub-transfer/replays/:id` with the files. A failed or missing one is named `replay:<id>`. Newer replays and the 24-hour reload cache live in the database, which the move keeps. Before 0.3.215 the plan warns `REPLAYS_NOT_MOVED` (and the app's `SESSION_REPLAYS`).",
+        'Not copied: image transform caches (generated image sizes are made again when asked for).',
         "Saved-settings S3 or Azure bucket. On a shared deployment every object of such an app sits under `apps/<id>/` in its bucket; on a dedicated stack it sits at the bucket root. A move to or from a shared deployment therefore changes every key, so the pull copies those objects too (files whose provider is `s3` or `azure-blob`), written through the target's own saved-settings driver, whether or not both sides name the same bucket. The plan warns `STORAGE_PREFIX_CHANGES`: the objects are copied, not shared, and the bucket holds both copies until the old ones are removed. A move between two shared deployments keeps the prefix (one app id) and copies nothing there. Files on any other provider block the move with `STORAGE_LAYOUT_DIFFERS` (the copy cannot handle them), and an app that does not say which storage its files are on blocks it with `STORAGE_COUNT_UNKNOWN`.",
         'A pull stalls if nothing moves for 10 minutes, and then fails. A failed pull keeps what it copied; Resume continues.',
         'A pull streams each object into a temporary file under the system temporary folder (`<tmpdir>/nivaro-hub-transfer/`) and only then stores it, so a failed object never leaves a half-written one. Temporary files older than 24 hours are removed when the next pull starts. A stack with a small `/tmp` should give that folder a volume; there is no setting for it yet. Separately, local storage writes each object to `<key>.nvr-part-<random>` beside its final name and renames it; a process killed mid-write leaves that file behind. It is never served and nothing sweeps it: delete leftovers by hand when no process is running.',
         "The one plain fetch (not address-checked) to an address another system named: when the source is a private IP literal (loopback or RFC 1918, for example the Hub's own network), the pull fetches it with no redirects, and a literal cannot be rebound. A source named by an https host name goes through the check that stops a server calling private addresses: a name that resolves to a private address is refused unless the target lists it in its `SSRF_ALLOW_HOSTS` setting. Give the target either an origin that resolves publicly, or a private IP address.",
         '`LINK_URL_NOT_PULLABLE` (between shared deployments, the source deployment\'s link address is a name that resolves to a private address) and `SOURCE_NOT_PULLABLE` (a dedicated source whose own address is such a name — on a company network, most app names) can be overridden: tick "The target deployment allows this host (it is in its SSRF_ALLOW_HOSTS)" (that setting lists hosts the private-address check lets through; on a shared deployment set it in its settings.env) in the start panel. The start then carries the refused code in `overrides` and the activity row records it. If the target does not really allow the host, the first file copy fails and the move rolls back.',
-        "A source with S3 or Azure as the env provider but rows saying `local` (files from before a driver switch) is read through the source's storage, whole objects in memory on the source. Big files make the source use memory."
+        'A source with S3 or Azure as the env provider but rows saying `local` (files from before a driver switch) is read from that bucket too. Before 0.3.215 the source read such an object whole into memory; from 0.3.215 it streams it.'
       ]
     },
     { type: 'h2', id: 'hub-moves-writer', text: 'One writer at a time' },
@@ -753,7 +741,7 @@ export const hubMovesDocs: DocSection = {
       rows: [
         [
           '`callbacks_registered`',
-          "Moving to a shared deployment. Lists `https://<host>/api/auth/callback` for each name; add them to the deployment's Microsoft app registration.",
+          "Moving to a shared deployment. Lists `https://<host>/api/auth/callback` for each name; add them to the deployment's Microsoft app registration. For an app that signs in via the Hub (target 0.3.215 or later, active client) they serve direct sign-in while the Hub is down.",
           'yes'
         ],
         [
@@ -788,7 +776,7 @@ export const hubMovesDocs: DocSection = {
         ],
         [
           '`storage_local`',
-          'The Hub cannot see where one side keeps files (`STORAGE_UNVERIFIED`). You vouch every file is on local storage.',
+          'The Hub cannot see where one side keeps files (`STORAGE_UNVERIFIED`; only before 0.3.215, which copies every provider). You vouch every file is on local storage.',
           'yes'
         ],
         [
@@ -858,7 +846,10 @@ export const hubMovesDocs: DocSection = {
           '`APP_KEY_UNKNOWN`, `APP_KEY_MISMATCH`',
           "The Hub does not know the app's encryption key, or the key it knows does not match the fingerprint the app reports (or the Docker stack settings hold another one). Sealed values would be unreadable."
         ],
-        ['`SIGNIN_VIA_HUB`', 'The app signs in via the Hub. Not supported on shared yet.'],
+        [
+          '`SIGNIN_VIA_HUB`',
+          'The app signs in via the Hub and the target runs before 0.3.215, or the environment has no active sign-in client at the Hub.'
+        ],
         [
           '`ISSUER_DIFFERS`',
           "The deployment's sign-in issuer is in another Entra tenant than the app's, so accounts would not match."
@@ -887,7 +878,7 @@ export const hubMovesDocs: DocSection = {
         ],
         [
           '`ISSUE_TRACKERS`, `EXEC_SCRIPT_FLOWS`, `SQLITE`, `ENV_OBJECT_STORAGE`',
-          'The app uses something a shared app cannot do yet (see Shared deployments), or keeps files in env-driven object storage. Detail gives counts and kinds, never records. `STAGED_IMPORTS` and `ROW_SCHEDULES` still apply only when the target deployment runs a version before 0.3.212 or one the Hub cannot read.'
+          'The app uses something a shared app cannot do yet (see Shared deployments), or keeps files in env-driven object storage. Detail gives counts and kinds, never records. `STAGED_IMPORTS` and `ROW_SCHEDULES` still apply only when the target deployment runs a version before 0.3.212 or one the Hub cannot read; `ENV_OBJECT_STORAGE` only while either side runs a version before 0.3.215 or one the Hub cannot read.'
         ]
       ]
     },
@@ -916,14 +907,17 @@ export const hubMovesDocs: DocSection = {
           '`SAME_APP_ON_DEPLOYMENT`',
           "Another environment of the same app is already on the target deployment. A copy carries the original's saved Teams bot and directory registration: turn the bot off on the copy if it should not answer."
         ],
-        ['`REPLAYS_NOT_MOVED`', 'Session replays and image transform caches stay behind.'],
+        [
+          '`REPLAYS_NOT_MOVED`',
+          'Before 0.3.215: session replays kept in file storage and image transform caches stay behind. From 0.3.215 the replays are copied.'
+        ],
         [
           '`MANUAL_ROUTE`, `OLD_STACK_STOP`, `GITLAB_BOOT_WINDOW`, `STACK_REAPPLY_ALL`',
           'A person has to do the route change; the old GitLab stack must be stopped afterwards; a GitLab target may run briefly without maintenance; new names re-apply the whole shared stack.'
         ],
         [
           '`MULTI_NODE_VOLUMES`, `MULTI_NODE_UNVERIFIED`',
-          'The target stack has local volumes on a swarm with several nodes (or the Hub could not read the agent to tell).'
+          'The target stack has local volumes, not on an NFS export, on a swarm with several nodes (or the Hub could not read the agent to tell).'
         ],
         [
           '`ISSUER_UNVERIFIED`, `REDIS_UNVERIFIED`, `STORAGE_UNVERIFIED`, `DB_IDENTITY_UNCHECKED`, `EXTENSION_PIN_UNVERIFIED`',
@@ -931,7 +925,11 @@ export const hubMovesDocs: DocSection = {
         ],
         [
           '`DIRECTORY_ENV_CREDENTIALS`, `TEAMS_BOT_ENV_CREDENTIALS`, `PUSH_RELAY_ENV`, `SETTINGS_ENV_OVERRIDES`, `HUDDLE_TURN`, `ENV_SMTP`, `SESSION_REPLAYS`, `HELP_VIDEO_RENDERS`',
-          'Features a shared app does not have, or that behave differently (see Shared deployments). `DIRECTORY_SYNC`, `PHONE_PUSH`, `TEAMS_BOT` and `MAIL_RETRY` are reported only for a target before 0.3.212 or one the Hub cannot read.'
+          'Features a shared app does not have, or that behave differently (see Shared deployments). `DIRECTORY_SYNC`, `PHONE_PUSH`, `TEAMS_BOT` and `MAIL_RETRY` are reported only for a target before 0.3.212 or one the Hub cannot read; `HUDDLE_TURN` only for a target before 0.3.215; `ENV_SMTP` unless both the app and the target run 0.3.215 or later.'
+        ],
+        [
+          '`ENV_SMTP_KEPT`, `INSTANCE_SETTINGS_CARRIED`, `INSTANCE_SETTINGS_STAY`',
+          "The app's per-instance settings row is copied to the shared deployment's instance name when the move puts it in maintenance (or, `STAY`, not carried: enter them again), and its environment mail settings are kept in that row (the password sealed with the app key, a forced test mode kept on)."
         ]
       ]
     },

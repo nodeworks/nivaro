@@ -60,14 +60,13 @@ const TM_ACTIONS =
   'Traffic Map breakers / timed rules are deployment operator actions; their Redis sync never starts on a multi-tenant deployment'
 const CACHE_CFG =
   'stored cache config is never read on a multi-tenant deployment (env + defaults only)'
-const OFF_HUBSIGNIN = 'Hub sign-in is off on any multi-tenant deployment (hub-signin/config.ts)'
-const OFF_TRACKERS =
-  'issue trackers are always off on a multi-tenant deployment (trackers/feature.ts)'
+const HUBSIGNIN_PER_CLIENT =
+  "keyed by the Hub + the app's own client id (each app on a shared deployment has its own client from the tenant list; never in Nivaro Cloud)"
+const HUBSIGNIN_PUBLIC =
+  "public signing keys by key-set URL (the Hub's, the deployment's own Microsoft tenant): no app data"
 const OFF_PERMCACHE =
   'the permission cache is off on any multi-tenant deployment (cache-config permission.enabled)'
 const OFF_EPOCH = 'the config epoch is off on any multi-tenant deployment (config-epoch.ts ENABLED)'
-const OFF_OUTSIDE_WRITE =
-  'the outside-write watch never runs on a multi-tenant deployment (isMultiTenant gates)'
 const OFF_CHANGEWARM =
   'change warms never run on a multi-tenant deployment (cache-warm-on-change.ts)'
 const OFF_DOCKER = 'Docker sources answer nothing on a multi-tenant deployment (docker-source.ts)'
@@ -92,9 +91,10 @@ const SHARED: Record<string, string> = {
   'services/event-journal.ts :: replayStats': DIAG,
   'services/related-announce.ts :: stats': DIAG,
   'services/permission-cache.ts :: entries': OFF_PERMCACHE,
-  'auth/hub-signin.ts :: discoveries': OFF_HUBSIGNIN,
-  'auth/hub-signin.ts :: hubRequestTimeoutS': OFF_HUBSIGNIN,
-  'auth/hub-signin.ts :: keySets': OFF_HUBSIGNIN,
+  'auth/hub-signin.ts :: discoveries': HUBSIGNIN_PER_CLIENT,
+  'auth/hub-signin.ts :: hubRequestTimeoutS':
+    'the Hub request timeout in seconds: a constant only tests change (no app data)',
+  'auth/hub-signin.ts :: keySets': HUBSIGNIN_PUBLIC,
   'auth/login-limits.ts :: lastFailOpenWarn': DIAG,
   'auth/oidc.ts :: _dynConfigs':
     "discovery metadata keyed by provider row id but every hit is checked against that row's issuer + client id + secret (sig) before use: an app never gets discovery for another app's provider",
@@ -127,12 +127,14 @@ const SHARED: Record<string, string> = {
   'db/config-epoch.ts :: pollFailing': OFF_EPOCH,
   'db/config-epoch.ts :: primed': OFF_EPOCH,
   'db/config-epoch.ts :: remoteClear': OFF_EPOCH,
+  'db/config-epoch.ts :: appOnlyClear':
+    'a flag set only for the synchronous span of one app-only clear (runAppOnlyClear), inside that app',
   'db/config-epoch.ts :: resetListeners': OFF_EPOCH,
   'db/config-epoch.ts :: run': OFF_EPOCH,
   'db/config-epoch.ts :: seen': OFF_EPOCH,
   'db/config-epoch.ts :: stampListeners': OFF_EPOCH,
   'db/config-epoch.ts :: watcher': OFF_EPOCH,
-  'db/config-epoch.ts :: writeListeners': OFF_EPOCH,
+  'db/config-epoch.ts :: writeListeners': `${REGISTRY} (on a shared deployment: the per-app config announcer, services/app-config-epoch.ts)`,
   'db/config-epoch.ts :: writesSeen': OFF_EPOCH,
   'db/connect-retry.ts :: lastWarnAt': DIAG,
   'db/index.ts :: migrationKnex': STATIC_DB,
@@ -177,6 +179,7 @@ const SHARED: Record<string, string> = {
   'db/sqlite.ts :: likes': 'compiled LIKE patterns by pattern text; no app data',
   'db/sqlite.ts :: patched': PATCH,
   'db/sqlite.ts :: regexps': 'compiled regular expressions by pattern text; no app data',
+  'db/tenant-context.ts :: poolCreatedHooks': `${REGISTRY} (driver seams for every app pool)`,
   'db/tenant-context.ts :: pools':
     'one knex per connection string: each app has its own connection string, so its own pool',
   'extensions/loader.ts :: _app': APP_REF,
@@ -255,6 +258,11 @@ const SHARED: Record<string, string> = {
   'routes/external-apis.ts :: readinessRegistered': REGISTRY,
   'routes/flows.ts :: flowHealthCheckRegistered': REGISTRY,
   'services/app-seeds.ts :: seeds': `${REGISTRY}; each seed runs inside the app it seeds`,
+  'services/app-pool-pressure.ts :: listening': WEAK,
+  'services/app-pool-pressure.ts :: sampler': TIMER,
+  'services/app-config-epoch.ts :: wiring': `${CONN} (its publish function), set once at boot`,
+  'services/app-config-epoch.ts :: announced': DIAG,
+  'services/app-config-epoch.ts :: heard': DIAG,
   'routes/geocode-suggest.ts :: cache':
     'public geocoder answers keyed by the typed address text; the same for every app',
   'routes/geocode-suggest.ts :: lastCall':
@@ -627,16 +635,18 @@ const SHARED: Record<string, string> = {
   'services/hub-link/retire.ts :: state': RETIRE,
   'services/hub-link/retire.ts :: timer': RETIRE,
   'services/hub-link/retire.ts :: watched': RETIRE,
-  'services/hub-signin/link-client.ts :: linkDownUntil': OFF_HUBSIGNIN,
-  'services/hub-signin/probe.ts :: failedUntil': OFF_HUBSIGNIN,
-  'services/hub-signin/probe.ts :: inflight': OFF_HUBSIGNIN,
-  'services/hub-signin/probe.ts :: lastReason': OFF_HUBSIGNIN,
-  'services/hub-signin/probe.ts :: memo': OFF_HUBSIGNIN,
+  'services/hub-signin/link-client.ts :: linkDownUntil':
+    "keyed by a tag of the app's own hub token (each app on a shared deployment has its own, from the tenant list)",
+  'services/hub-signin/probe.ts :: inflight': HUBSIGNIN_PER_CLIENT,
+  'services/hub-signin/probe.ts :: lastReason': HUBSIGNIN_PER_CLIENT,
+  'services/hub-signin/probe.ts :: memo': HUBSIGNIN_PER_CLIENT,
   'services/hub/create/run.ts :: launched': HUB_ONLY,
   'services/hub/create/run.ts :: live': HUB_ONLY,
   'services/hub/create/steps.ts :: syncsInFlight': HUB_ONLY,
   'services/hub/create/store.ts :: memCancels': HUB_ONLY,
   'services/hub/db/db-lock.ts :: memLocks': HUB_ONLY,
+  'services/hub/data/lock.ts :: memLocks': HUB_ONLY,
+  'services/hub/data/app-calls.ts :: fetchImpl': HUB_ONLY,
   'services/hub/shared/upgrade-run.ts :: cancelledHere': HUB_ONLY,
   'services/hub/shared/upgrade-run.ts :: live': HUB_ONLY,
   'services/hub/shared/upgrade-run.ts :: recovered': HUB_ONLY,
@@ -659,6 +669,7 @@ const SHARED: Record<string, string> = {
   'services/hub/promote-lock.ts :: memCancels': HUB_ONLY,
   'services/hub/promote-lock.ts :: memLocks': HUB_ONLY,
   'services/hub/promote-lock.ts :: memShared': HUB_ONLY,
+  'services/hub/promote-lock.ts :: memBranch': HUB_ONLY,
   'services/hub/promote-run.ts :: live': HUB_ONLY,
   'services/hub/promote-run.ts :: recoveryStarted': HUB_ONLY,
   'services/hub/shared/sightings.ts :: deps': HUB_ONLY,
@@ -666,6 +677,15 @@ const SHARED: Record<string, string> = {
   'services/hub/shared/place.ts :: running': HUB_ONLY,
   'services/hub/shared/sightings.ts :: memory': HUB_ONLY,
   'services/hub/shared/tenants.ts :: warned': HUB_ONLY,
+  'services/hub/capacity/advisor.ts :: blockerCache': HUB_ONLY,
+  'services/capacity/app-usage.ts :: cpu': PROC,
+  'services/capacity/app-usage.ts :: redisOverride': FN_SLOT,
+  'services/capacity/app-usage.ts :: timer': TIMER,
+  'services/capacity/enforce.ts :: redisOverride': FN_SLOT,
+  'services/capacity/enforce.ts :: JOB_SLOT_WAIT_MS': FN_SLOT,
+  'services/capacity/enforce.ts :: countInjected': FN_SLOT,
+  'services/capacity/enforce.ts :: redisState': PROC,
+  'services/hub/capacity/sample.ts :: sampling': HUB_ONLY,
   'services/huddle-marks.ts :: markSeq': GEN,
   'services/huddle.ts :: staleEvictor': FN_SLOT,
   'services/import-processors.ts :: processors': REGISTRY,
@@ -746,18 +766,6 @@ const SHARED: Record<string, string> = {
   'services/ops-tasks.ts :: tasks': REGISTRY,
   'services/outbox.ts :: handlers': REGISTRY,
   'services/outside-write-system.ts :: COLUMN_TRACKED': FIXED,
-  'services/outside-write-watch.ts :: catalogCache': OFF_OUTSIDE_WRITE,
-  'services/outside-write-watch.ts :: countsLocal': OFF_OUTSIDE_WRITE,
-  'services/outside-write-watch.ts :: journalCursor': OFF_OUTSIDE_WRITE,
-  'services/outside-write-watch.ts :: lastMine': OFF_OUTSIDE_WRITE,
-  'services/outside-write-watch.ts :: lastReport': OFF_OUTSIDE_WRITE,
-  'services/outside-write-watch.ts :: lastTickAt': OFF_OUTSIDE_WRITE,
-  'services/outside-write-watch.ts :: recent': OFF_OUTSIDE_WRITE,
-  'services/outside-write-watch.ts :: seenRows': OFF_OUTSIDE_WRITE,
-  'services/outside-write-watch.ts :: settingsCache': OFF_OUTSIDE_WRITE,
-  'services/outside-write-watch.ts :: states': OFF_OUTSIDE_WRITE,
-  'services/outside-write-watch.ts :: statusLocal': OFF_OUTSIDE_WRITE,
-  'services/outside-write-watch.ts :: trackedCache': OFF_OUTSIDE_WRITE,
   'services/owner-change-live.ts :: deps': FN_SLOT,
   'services/owner-change-live.ts :: openRecordsLoader': FN_SLOT,
   'services/owner-change-live.ts :: wired': REGISTRY,
@@ -966,6 +974,8 @@ const SHARED: Record<string, string> = {
   'services/tenancy/app-lifecycle.ts :: readyHooks': REGISTRY,
   'services/tenancy/app-keys.ts :: keys':
     'Task 14: app keys by tenant id (the map is keyed by the app)',
+  'services/tenancy/app-hub-links.ts :: links':
+    "each app's Hub link (sign-in client, hub token) by tenant id (the map is keyed by the app)",
   'services/tenancy/app-migrations.ts :: follower':
     "the realtime process's re-read loop over every app's stored state (a process mode; the states it writes are keyed by tenant id)",
   'services/tenancy/app-migrations.ts :: gateOn':
@@ -1010,22 +1020,16 @@ const SHARED: Record<string, string> = {
   'services/trace-export.ts :: sending': TELEMETRY,
   'services/trace-export.ts :: stats': DIAG,
   'services/trace-export.ts :: timer': TIMER,
-  'services/trackers/crons.ts :: unsubscribe': OFF_TRACKERS,
-  'services/trackers/crons.ts :: unsubscribeTickets': OFF_TRACKERS,
-  'services/trackers/engine.ts :: again': OFF_TRACKERS,
-  'services/trackers/engine.ts :: failureLog': OFF_TRACKERS,
-  'services/trackers/engine.ts :: inFlight': OFF_TRACKERS,
-  'services/trackers/engine.ts :: sweepFailures': OFF_TRACKERS,
-  'services/trackers/engine.ts :: ticketAgain': OFF_TRACKERS,
-  'services/trackers/engine.ts :: ticketInFlight': OFF_TRACKERS,
-  'services/trackers/feature.ts :: cache': OFF_TRACKERS,
-  'services/trackers/flow-events.ts :: logger': OFF_TRACKERS,
-  'services/trackers/flow-ops.ts :: registered': OFF_TRACKERS,
-  'services/trackers/inbound.ts :: issueFailures': OFF_TRACKERS,
-  'services/trackers/inbound.ts :: lockRedis': OFF_TRACKERS,
-  'services/trackers/inbound.ts :: reconcileLog': OFF_TRACKERS,
-  'services/trackers/outbound-sync.ts :: lastLogAt': OFF_TRACKERS,
-  'services/trackers/outbox.ts :: autoSend': OFF_TRACKERS,
+  // GitLab sync per app (0.3.215): the issue-write listener is registered once at boot (outside
+  // any app) and each write runs in the writer's app; the per-issue queues, sweep tally, held
+  // reconcile issues, the failure-log limiters and the switch cache are appSet / appMap / appBox
+  // (detected as keyed).
+  'services/trackers/crons.ts :: unsubscribe': REGISTRY,
+  'services/trackers/crons.ts :: unsubscribeTickets': REGISTRY,
+  'services/trackers/flow-events.ts :: logger': APP_REF,
+  'services/trackers/flow-ops.ts :: registered': REGISTRY,
+  'services/trackers/inbound.ts :: lockRedis': CONN,
+  'services/trackers/outbox.ts :: autoSend': FN_SLOT,
   'services/traefik-source.ts :: fetchImpl': FN_SLOT,
   'services/traffic-actions/debug-window.ts :: wired': TELEMETRY,
   'services/traffic-actions/ext-lenses.ts :: inflight': TELEMETRY,
@@ -1052,7 +1056,6 @@ const SHARED: Record<string, string> = {
   'services/traffic-detectors.ts :: loadedAt': TELEMETRY,
   'services/traffic-detectors.ts :: loading': TELEMETRY,
   'services/traffic-detectors.ts :: timer': TELEMETRY,
-  'services/traffic-digest.ts :: cache': TELEMETRY,
   'services/traffic-digest.ts :: registered': TELEMETRY,
   'services/traffic-down-history.ts :: providers': TELEMETRY,
   'services/traffic-entity-history.ts :: OWN_DOWN_NODES': TELEMETRY,
@@ -1160,6 +1163,12 @@ const SHARED: Record<string, string> = {
 
 /** Keyed per app in a way the scan cannot follow (the key comes from a caller or a helper). */
 const KEYED: Record<string, string> = {
+  'services/capacity/app-usage.ts :: storage':
+    'keyed by the tenant id (t.id, read inside withTenant) — "" on a dedicated app',
+  'services/capacity/enforce.ts :: localCounts':
+    'key = `<tenant id>|<minute>`, tenant id = getTenantId() of the request',
+  'services/capacity/enforce.ts :: gates': 'keyed by the tenant id of the fan-out turn (t.id)',
+  'services/capacity/enforce.ts :: stored': 'keyed by the tenant id = getTenantId() of the upload',
   'services/cache-warm.ts :: usageMemo':
     'key = usageMemoKey() = `${currentTenantKey()}|<slice>`; handed to pruneUsageMemo, which only drops expired entries',
   'services/cache-warm.ts :: queueUsageMemo':

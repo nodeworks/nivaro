@@ -17,7 +17,9 @@ vi.mock('../../../db/index.js', () => {
   return { db: () => chain }
 })
 vi.mock('../../../services/deployment-mode.js', () => ({
-  hubPublicOrigin: () => 'https://hub.example.com'
+  hubPublicOrigin: () => 'https://hub.example.com',
+  // Read at module time by db/config-epoch.ts (render-spec → stack-settings → collections).
+  isMultiTenant: () => false
 }))
 vi.mock('../../../services/hub/drivers.js', () => ({
   getDriver: async () => ({ id: 1, kind: 'docker', name: 'Docker east', config: {} })

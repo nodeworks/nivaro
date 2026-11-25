@@ -18,7 +18,7 @@
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { tenantSource } from './deployment-mode.js'
 import {
-  isHubLinkFirstAdmin,
+  isHubLinkAppWrite,
   isRetiredSync,
   retiredExemptPath,
   retiredRefusalBody
@@ -59,7 +59,8 @@ export function maintenanceExemptPath(url: string, routeUrl?: string | null): bo
     // account is written there).
     // judged on the matched route or the decoded path, so `first%2Dadmin` or `//first-admin`
     // stays frozen too (services/hub-link/retire.ts isHubLinkFirstAdmin).
-    (url.startsWith('/api/hub-link/') && !isHubLinkFirstAdmin(url, routeUrl)) ||
+    // Hub enhancement 24: the template install writes schema — frozen like the first admin.
+    (url.startsWith('/api/hub-link/') && !isHubLinkAppWrite(url, routeUrl)) ||
     url.startsWith('/api/hub-transfer/') ||
     // Teams calls the bot with a Connector JWT, never a person; the route judges its own
     // activities (message/install stay answerable, invokes say "in maintenance" themselves).

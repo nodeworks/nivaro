@@ -30,6 +30,7 @@ import {
   rotateSigningKey
 } from '../services/hub/oidc/keys.js'
 import { HUB_MASK, HubSecretError } from '../services/hub/secrets.js'
+import { kickSharedServing } from '../services/hub/shared/tenant-hub-link.js'
 
 /**
  * Nivaro Hub phase 7: sign-in settings, mounted at /api/hub/signin (hub mode only, never cloud).
@@ -322,6 +323,8 @@ export async function hubSigninAdminRoutes(app: FastifyInstance) {
       req,
       changed_fields: ['signin_mode']
     })
+    // Apps on a shared deployment get (or lose) their client through its tenant list.
+    void kickSharedServing({ appId: id })
     return { data: await readApp(id) }
   })
 
@@ -356,6 +359,7 @@ export async function hubSigninAdminRoutes(app: FastifyInstance) {
         comment: `Sign-in client ${made.client_id} created for environment ${env.key}`,
         req
       })
+      void kickSharedServing({ envIds: [env.id] })
       noStore(reply)
       reply.code(201)
       return {
@@ -387,6 +391,7 @@ export async function hubSigninAdminRoutes(app: FastifyInstance) {
           comment: `Secret rotated for sign-in client ${client?.client_id ?? ''}`.trim(),
           req
         })
+        void kickSharedServing({ envIds: [env.id] })
         noStore(reply)
         return { data: { client_secret } }
       })
@@ -411,6 +416,7 @@ export async function hubSigninAdminRoutes(app: FastifyInstance) {
         req,
         changed_fields: ['active']
       })
+      void kickSharedServing({ envIds: [env.id] })
       return { data: { client: client ? await clientView(client) : null } }
     })
   })
