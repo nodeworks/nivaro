@@ -581,16 +581,17 @@ function DatabaseBody({
   })
 
   const sqlite = d.engine === 'sqlite'
+  // A SQLite app's file sits in its own folder of its home's uploads volume (app-db/<app id>/).
+  const liteFolder = d.environment
+    ? `app-db/${d.environment.app_key.slice(0, 48)}-e${d.environment.id}/`
+    : 'app-db/<app id>/'
   const meta: Array<[string, string]> = [
     ['Engine', ENGINE_LABEL[d.engine]],
     ['Server', sqlite ? 'None (a file)' : (d.server_name ?? 'None (adopted)')],
-    [
-      'Address',
-      sqlite
-        ? "The app's own folder on its shared deployment"
-        : `${d.host}${d.port ? `:${d.port}` : ''}`
-    ],
-    ['Login', d.login_name ?? '—'],
+    sqlite
+      ? ['File', `${liteFolder}${d.database_name}`]
+      : ['Address', `${d.host}${d.port ? `:${d.port}` : ''}`],
+    sqlite ? ['Kept by', "The app's home (uploads volume)"] : ['Login', d.login_name ?? '—'],
     ['Used by', environmentWords(d)],
     ['Made by', d.adopted ? 'Adopted' : d.created_by_hub ? 'The Hub' : 'A DBA']
   ]
@@ -640,7 +641,9 @@ function DatabaseBody({
             ) : (
               <p className='m-0 text-[12px] text-slate-500 dark:text-muted-foreground'>
                 {sqlite
-                  ? 'A SQLite database is a file its shared deployment keeps: the Hub has no connection to it. Place a new environment on a shared deployment of size small with it; the deployment makes the file and checks it then.'
+                  ? d.environment
+                    ? 'The Hub has no connection to a SQLite file. Its home checks it when the app is placed or moved there (a move copies the file and checks it read-only).'
+                    : 'The Hub has no connection to a SQLite file. Place a new environment with it on a shared deployment of size small: the deployment makes the file and checks it then.'
                   : d.status === 'requested'
                     ? 'Not checked yet — waiting for the DBA.'
                     : 'Not checked yet.'}
@@ -663,7 +666,9 @@ function DatabaseBody({
           title='Remove from the Hub'
           description={
             d.environment
-              ? `Used by ${environmentWords(d)}. Detach it first (above), then remove it here.`
+              ? sqlite
+                ? `Used by ${environmentWords(d)}: it stays while that environment uses it.`
+                : `Used by ${environmentWords(d)}. Detach it first (above), then remove it here.`
               : sqlite
                 ? 'Detaching forgets the record; a file a deployment already made stays in its volume.'
                 : 'Detaching forgets the record; the database stays on the server.'

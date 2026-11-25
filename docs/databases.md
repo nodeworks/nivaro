@@ -300,7 +300,12 @@ size small: one `all` service; a process with `NIVARO_ROLE` set drops SQLite app
   migration pass tries again in 30 s.
 - The deployment link's `db-check` takes `{client: 'sqlite', connection: <file>, tenant: <id>}`
   and reads the file read-only (no file yet = `absent`).
-- A move does not carry the file yet (`SQLITE` / `SQLITE_MOVE` blockers).
+- A move copies the file (`db_copy`, `db/sqlite-transfer.ts`, `services/hub-transfer/database.ts`):
+  the frozen source checkpoints (`wal_checkpoint(TRUNCATE)`), freezes the file (later writes get
+  `SQLITE_FROZEN`) and snapshots it; the target receives it with its size and sha256, checks it
+  read-only (`integrity_check`, the migrations ledger) and puts it in place (a shared app: pool
+  closed and reopened; a Docker app: staged, installed at the next boot). Automatic routing only,
+  onto a small shared deployment (0.3.215+) or a small Docker stack.
 
 ## SQL Server-only features
 

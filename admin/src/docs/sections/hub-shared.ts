@@ -399,11 +399,6 @@ export const hubSharedDocs: DocSection = {
           'blocker `EXEC_SCRIPT_FLOWS`'
         ],
         [
-          'Moving a SQLite app',
-          'A new SQLite environment is placed on a small shared deployment (see Per app on a shared deployment). A move does not carry its database file yet: a dedicated SQLite app does not move in, and a placed one stays where it is.',
-          'blockers `SQLITE`, `SQLITE_MOVE`'
-        ],
-        [
           'Objects in an env-driven S3 or Azure provider',
           'A move copies the objects the deployment storage holds (the `local` provider). An app with its own saved-settings S3 or Azure bucket is not unaffected: on a shared deployment its objects live under `apps/<id>/` in that bucket, so a move changes the key prefix and the objects must be copied to their new keys (see Files).',
           'blocker `ENV_OBJECT_STORAGE`'
@@ -483,7 +478,7 @@ export const hubSharedDocs: DocSection = {
         'Microsoft directory lookups and sync. The app uses its own Microsoft app registration, saved in Settings → Microsoft directory (tenant id, client id, client secret; the secret is sealed with the app key). The server `GRAPH_*` and `OIDC_*` variables and the directory keys of `NIVARO_SETTINGS_OVERRIDES` are never used on shared.',
         "The Teams bot. The app uses only the bot saved in its own Settings. `TEAMS_BOT_*`, `MICROSOFT_APP_*`, the sign-in app fallback and the `teams_bot_*` override keys are ignored. `TEAMS_BOT=off` still disables the bot on the whole deployment, but `TEAMS_BOT=on` does not switch an app on: each app saves its own switch. Register each bot with that app's host as its messaging endpoint.",
         "Phone push. An app admin connects the app's push relay in Settings → Mobile app. The server `MOBILE_PUSH_RELAY_KEY` is not used on shared. Phone sign-in was already per app.",
-        "SQLite apps (0.3.215). Record a SQLite database on the Databases tab (New SQLite database), then place a new environment with it on a Docker shared deployment of size small. SQLite allows one writer process, so a registered deployment, a medium or large one, or one before 0.3.215 is refused (`SQLITE_ONE_PROCESS`, `SQLITE_SHARED_VERSION`), and while a SQLite app is on it the deployment cannot grow past small or be rolled back below 0.3.215. The file is `app-db/<app id>/app.sqlite` in the deployment's uploads volume, outside the stored-files folders; the Hub names only the file and the deployment refuses any name or link that would leave the app's folder. Each app gets its own pool (WAL, a few readers, one writer at a time per file), its own migrations and the case-insensitive text pass a self-hosted SQLite gets. A process that runs a role of a split stack never opens one. During a rolling update the new process waits for the old one to let go of the file (about 30 s). Back the volume up like any other uploads volume."
+        "SQLite apps (0.3.215). Record a SQLite database on the Databases tab (New SQLite database), then place a new environment with it on a Docker shared deployment of size small. SQLite allows one writer process, so a registered deployment, a medium or large one, or one before 0.3.215 is refused (`SQLITE_ONE_PROCESS`, `SQLITE_SHARED_VERSION`), and while a SQLite app is on it the deployment cannot grow past small or be rolled back below 0.3.215. The file is `app-db/<app id>/app.sqlite` in the deployment's uploads volume, outside the stored-files folders; the Hub names only the file and the deployment refuses any name or link that would leave the app's folder. Each app gets its own pool (WAL, a few readers, one writer at a time per file), its own migrations and the case-insensitive text pass a self-hosted SQLite gets. A process that runs a role of a split stack never opens one. During a rolling update the new process waits for the old one to let go of the file (about 30 s). Back the volume up like any other uploads volume. A SQLite app moves in from a dedicated stack and out to a Docker stack of size small (or between two small shared deployments): see Moving an environment, SQLite apps."
       ]
     },
     {
@@ -537,7 +532,31 @@ export const hubMovesDocs: DocSection = {
         [
           '`to_dedicated`',
           '`check`, `maintenance_on`, `wait_idle`, `deploy_target`, `target_ready`, `files_full`, `route`, `verify`, `release`, `retire_source`, `done`'
+        ],
+        [
+          'A SQLite app, into shared',
+          '`check`, `place_on_target`, `maintenance_on`, `wait_idle`, `db_copy`, `files_full`, `target_ready`, `route`, `verify`, `release`, `retire_source`, `done` (no warm copy: the target has no rows until its database is there)'
+        ],
+        [
+          'A SQLite app, to a Docker stack',
+          '`check`, `maintenance_on`, `wait_idle`, `deploy_target`, `db_copy`, `target_ready`, `files_full`, `route`, `verify`, `release`, `retire_source`, `done`'
         ]
+      ]
+    },
+    { type: 'h3', id: 'hub-moves-sqlite', text: 'SQLite apps (0.3.215)' },
+    {
+      type: 'p',
+      text: "A SQLite app's database is one file, so a move copies it (`db_copy`) instead of proving both homes reach one database. Automatic routing only (a manual route would have the new home answer before its database is there), onto a Docker shared deployment of size small at 0.3.215 or later, or a Docker stack of size small: `SQLITE_MOVE`, `SQLITE_ONE_PROCESS` and `SQLITE_SHARED_VERSION` say which rule a plan breaks. A dedicated SQLite app gets a SQLite database record when it is placed on the target, named on the environment at release."
+    },
+    {
+      type: 'ul',
+      items: [
+        "Only once the source is frozen and idle (`maintenance_on`, `wait_idle`). The source hands the file over only while it is proven frozen (the move's strict maintenance read fresh, or listed in maintenance on a shared deployment): it waits for a write in flight, empties its WAL (`PRAGMA wal_checkpoint(TRUNCATE)`), freezes the file (any later write is refused, `SQLITE_FROZEN`) and snapshots it. The pool stays open for reads.",
+        'The copy goes through the transfer path with a move ticket (`GET /api/hub-transfer/database`), streamed with its size and sha256. The target refuses a copy whose checksum or size is not the source’s (`SQLITE_CHECKSUM_MISMATCH`, `SQLITE_SHORT_COPY`) or past the size cap (`SQLITE_TOO_LARGE`, the size is named), then opens it READ-ONLY: `PRAGMA integrity_check` must be ok and the migrations ledger must hold rows (`SQLITE_NOT_INTACT`, `SQLITE_NO_LEDGER`).',
+        "A shared target closes the app's pool (no pool opens meanwhile) and puts the copy in the app's own `app-db/<app id>/` folder; the app's schema state and caches start again. A Docker target stages the copy and restarts; at boot it checks it again and puts it in place before anything opens the database, and the Hub reads back what it adopted (`DATABASE_NOT_ADOPTED` after 10 minutes). The Docker stack gets `DB_CLIENT=sqlite` and `DB_DATABASE=/app/uploads/app-db/<app id>/app.sqlite` from the record.",
+        "Before release the Hub reads the source's checksum again: a source that changed since the copy (`SOURCE_CHANGED`) rolls the move back.",
+        'A rollback before release discards the target copy (a shared target; a Docker target is removed with its volume kept, as for files) and lifts the source, which takes writes again. After release nothing is rolled back, as for every move; the old home keeps its file until it is retired (and after: the Hub never deletes it).',
+        'A move that stops inside `db_copy` copies again on Resume (the source is still frozen).'
       ]
     },
     {
@@ -859,8 +878,8 @@ export const hubMovesDocs: DocSection = {
         ['`HOSTNAME_TAKEN`', 'Another environment of the Hub already claims one of the names.'],
         ['`REDIS_SHARED`', 'Source and target use the same Redis database.'],
         [
-          '`SQLITE_MOVE`',
-          "The app's database is a SQLite file its shared deployment keeps: a move does not carry it yet."
+          '`SQLITE_MOVE`, `SQLITE_ONE_PROCESS`, `SQLITE_SHARED_VERSION`',
+          'A SQLite app moves only with automatic routing, onto a Docker shared deployment of size small at 0.3.215 or later or a Docker stack of size small; never onto a GitLab placement.'
         ],
         [
           '`GATHER_FAILED`',

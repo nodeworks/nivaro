@@ -479,6 +479,7 @@ export const MOVE_STEP_WORDS: Record<string, string> = {
   files_warm: 'Copy the files while the app still serves',
   maintenance_on: 'Put the app in maintenance',
   wait_idle: 'Wait for running imports, exports and renders to finish',
+  db_copy: 'Copy the SQLite database file and check it',
   files_delta: 'Copy the files that changed since',
   deploy_target: 'Deploy the new stack',
   place_on_target: 'Place the app on the target',
@@ -846,11 +847,51 @@ export const MOVE_BLOCKER_COPY: Record<string, Copy> = {
   },
   SQLITE: {
     title: 'The app runs on SQLite',
-    hint: 'A move does not carry a SQLite database file yet. A new SQLite environment can be placed on a shared deployment of size small (0.3.215 or later); to move this one, move its data to SQL Server, Postgres or MySQL first.'
+    hint: 'Its database file is copied by the move: pick a Docker shared deployment of size small (0.3.215 or later), or a Docker stack of size small.'
   },
   SQLITE_MOVE: {
-    title: "The app's database is a SQLite file on its shared deployment",
-    hint: 'A move does not carry that file yet, so the app stays where it is.'
+    title: 'A SQLite app cannot move this way',
+    hint: 'Its database file is copied inside maintenance: it moves with automatic routing, onto a Docker shared deployment or a Docker stack of size small.'
+  },
+  SQLITE_COPY: {
+    title: 'The SQLite database file is copied',
+    hint: 'The old home is frozen, the copy is checked by checksum and read-only at the new home before it serves. The old home keeps its file until it is retired.'
+  },
+  SOURCE_CHANGED: {
+    title: "The source's database changed after it was copied",
+    hint: 'The move rolled back so nothing is lost. Move again.'
+  },
+  SQLITE_CHECKSUM_MISMATCH: {
+    title: "The database copy's checksum was not the source's",
+    hint: 'It changed on the way. The move rolled back; move again.'
+  },
+  SQLITE_TOO_LARGE: {
+    title: 'The SQLite database is too large to copy',
+    hint: 'The refusal names its size and the limit. Make it smaller (an archive or cleanup) or give the app a database server.'
+  },
+  SQLITE_ONE_PROCESS: {
+    title: 'A SQLite app needs a home of one process',
+    hint: 'SQLite allows one writer process: move it onto a Docker shared deployment or a Docker stack of size small.'
+  },
+  SQLITE_SHARED_VERSION: {
+    title: 'That shared deployment is too old for a SQLite app',
+    hint: 'Shared deployments serve SQLite apps from 0.3.215: upgrade it first.'
+  },
+  SQLITE_NOT_INTACT: {
+    title: 'The database copy failed its integrity check',
+    hint: "Check the source's database (PRAGMA integrity_check), then move again."
+  },
+  SQLITE_NO_LEDGER: {
+    title: 'The database copy holds no Nivaro install',
+    hint: 'Check that the source app runs on that file (its DB_DATABASE), then move again.'
+  },
+  SOURCE_NOT_FROZEN: {
+    title: 'The source was not frozen',
+    hint: 'Its database is only copied while the move holds it in maintenance.'
+  },
+  DATABASE_NOT_ADOPTED: {
+    title: 'The new stack did not put the database copy in place',
+    hint: 'Check that the stack restarted and its uploads volume is writable, then resume.'
   },
   ENV_OBJECT_STORAGE: {
     title: 'Files are stored in S3 or Azure set by environment variables',
