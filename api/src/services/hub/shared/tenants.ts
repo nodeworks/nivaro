@@ -224,10 +224,27 @@ export async function tenantsBody(
   )
   const tenants: HubTenantWire[] = []
   const listed: SharedTenantRow[] = []
+  // Hub gap sqlite: a dedicated SQLite app moving in has no record on its environment until
+  // release; its move names the SQLite record it made (steps.sqlite_record).
+  const moveRecords = new Map<number, number>()
+  const unnamed = rows.filter((r) => databaseId(refs.get(r.env.id)) === null).map((r) => r.env.id)
+  if (unnamed.length)
+    for (const m of (await db(MOVES)
+      .whereIn('environment_id', unnamed)
+      .whereIn('status', OPEN_MOVE)
+      .select('environment_id', 'steps')) as Array<{ environment_id: number; steps: unknown }>) {
+      try {
+        const st = JSON.parse(String(m.steps ?? '{}')) as { sqlite_record?: unknown }
+        if (typeof st.sqlite_record === 'number')
+          moveRecords.set(Number(m.environment_id), st.sqlite_record)
+      } catch {
+        // a damaged step list names nothing
+      }
+    }
   for (const row of rows) {
     const { env, app, placement, wireStatus } = row
     const id = tenantIdFor(app, env)
-    const recordId = databaseId(refs.get(env.id))
+    const recordId = databaseId(refs.get(env.id)) ?? moveRecords.get(env.id) ?? null
     if (recordId === null) {
       warnOnce(
         log,

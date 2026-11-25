@@ -91,6 +91,35 @@ export interface HubLinkClient {
   revokeTicket(ticket: string): Promise<{ revoked: boolean }>
   pullFiles(req: PullRequest): Promise<{ run_id: string }>
   pullStatus(runId: string): Promise<PullStatus>
+  /** Hub gap sqlite: fetch, check and stage the source's database; the app restarts. */
+  pullDatabase?(req: { source: string; ticket: string; move_id: number }): Promise<DatabaseCopied>
+  /** Hub gap sqlite: what this app installed at its last boot, or null. */
+  databaseAdopted?(): Promise<{ sha256: string; move_id: number | null } | null>
+  /** Hub gap sqlite: this app's database checksum now. */
+  databaseSum?(): Promise<{ sha256: string; bytes: number }>
+}
+
+/** What a target answers for a database copy (hub gap sqlite). */
+export interface DatabaseCopied {
+  sha256: string
+  bytes: number
+  migrations: number
+}
+
+/** The longest a database copy call may take (it streams the whole file). */
+export const DATABASE_COPY_TIMEOUT_MS = 30 * 60_000
+
+const SHA_RE = /^[0-9a-f]{64}$/
+
+/** A copy answer as the Hub reads it, or null. */
+export function parseDatabaseCopied(b: unknown): DatabaseCopied | null {
+  if (!b || typeof b !== 'object') return null
+  const o = b as Record<string, unknown>
+  const v = (o.verified ?? {}) as Record<string, unknown>
+  if (typeof o.sha256 !== 'string' || !SHA_RE.test(o.sha256)) return null
+  if (typeof o.bytes !== 'number' || !Number.isSafeInteger(o.bytes) || o.bytes <= 0) return null
+  if (v.integrity !== 'ok' || typeof v.migrations !== 'number' || v.migrations <= 0) return null
+  return { sha256: o.sha256, bytes: o.bytes, migrations: v.migrations }
 }
 
 function plainHttpHost(hostname: string): boolean {
@@ -156,13 +185,14 @@ export function hubLinkClient(
     path: string,
     method: 'GET' | 'POST' | 'DELETE',
     body?: unknown,
-    slow = false
+    slow = false,
+    timeoutMs?: number
   ): Promise<{ status: number; body: unknown }> {
     const base = hubLinkOrigin(baseUrl)
     if (!base) throw new HubLinkError('BAD_BASE_URL')
     const bearer = typeof token === 'string' ? token.trim() : ''
     if (!bearer) throw new HubLinkError('HUB_TOKEN_MISSING')
-    const ms = deps.timeoutMs ?? (slow ? SLOW_MS : HUB_LINK_TIMEOUT_MS)
+    const ms = deps.timeoutMs ?? timeoutMs ?? (slow ? SLOW_MS : HUB_LINK_TIMEOUT_MS)
     const ctl = new AbortController()
     let timer: NodeJS.Timeout | undefined
     const run = async () => {
@@ -313,6 +343,40 @@ export function hubLinkClient(
       if (!isObj(b) || !isStr(b.run_id) || !RUN_ID_RE.test(b.run_id))
         throw new HubLinkError('LINK_BAD_ANSWER', a.status)
       return { run_id: b.run_id }
+    },
+
+    async pullDatabase(req) {
+      const a = await call(
+        '/files/database/pull',
+        'POST',
+        { source: req.source, ticket: req.ticket, move_id: req.move_id },
+        true,
+        DATABASE_COPY_TIMEOUT_MS
+      )
+      if (!ok(a)) throw refusal(a)
+      const c = parseDatabaseCopied(a.body)
+      if (!c) throw new HubLinkError('LINK_BAD_ANSWER', a.status)
+      return c
+    },
+
+    async databaseAdopted() {
+      const a = await call('/files/database/adopted', 'GET')
+      if (!ok(a)) throw refusal(a)
+      const ad = (a.body as { adopted?: unknown } | null)?.adopted
+      if (ad === null || ad === undefined) return null
+      const o = ad as { sha256?: unknown; move_id?: unknown }
+      if (typeof o.sha256 !== 'string' || !SHA_RE.test(o.sha256))
+        throw new HubLinkError('LINK_BAD_ANSWER', a.status)
+      return { sha256: o.sha256, move_id: typeof o.move_id === 'number' ? o.move_id : null }
+    },
+
+    async databaseSum() {
+      const a = await call('/files/database/sum', 'GET', undefined, true)
+      if (!ok(a)) throw refusal(a)
+      const b = a.body as { sha256?: unknown; bytes?: unknown } | null
+      if (typeof b?.sha256 !== 'string' || !SHA_RE.test(b.sha256) || typeof b.bytes !== 'number')
+        throw new HubLinkError('LINK_BAD_ANSWER', a.status)
+      return { sha256: b.sha256, bytes: b.bytes }
     },
 
     async pullStatus(runId) {

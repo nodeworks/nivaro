@@ -240,6 +240,15 @@ async function readOverride(): Promise<Omit<MaintenanceState, 'source'> | null> 
   return null
 }
 
+/**
+ * Hub gap sqlite: is a move's strict maintenance on here right now? Read from Redis, never the
+ * 15 s cache — a source hands its database file over only while it is proven frozen.
+ */
+export async function hubStrictMaintenanceOn(): Promise<boolean> {
+  const o = await readOverride()
+  return !!o?.on && o.strict === true && o.hub === true
+}
+
 /** One key's freeze; `operatorOnly` (the plain key on a hub-linked app) ignores a Hub override. */
 async function readOverrideAt(
   redis: any,

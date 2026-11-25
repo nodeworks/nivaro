@@ -1,5 +1,6 @@
+import { mkdirSync } from 'node:fs'
 import { readdir } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { isMainThread } from 'node:worker_threads'
 import knex, { type Knex } from 'knex'
 import { config } from '../config.js'
@@ -31,6 +32,7 @@ import {
   sqliteDriverProblem,
   sqlitePoolMax
 } from './sqlite.js'
+import { adoptStagedSqliteFile } from './sqlite-transfer.js'
 import { getTenantDb } from './tenant-context.js'
 import { mssqlTlsOptions, sqlSslOption, type TlsSettings } from './tls-options.js'
 
@@ -96,6 +98,19 @@ if (config.DB_CLIENT === 'sqlite') {
   // One process per database file: a second one (another API, a migrate run against a live
   // API) is refused here (db/sqlite.ts claimSqliteFile). Worker threads share their process's.
   if (isMainThread) {
+    // Hub gap sqlite: a Hub stack keeps the file in the app's own folder (made here), and a move
+    // may have staged a checked copy of the database for this boot to put in place.
+    if (config.DB_DATABASE && config.DB_DATABASE !== ':memory:') {
+      mkdirSync(dirname(resolve(config.DB_DATABASE)), { recursive: true })
+      const adopted = adoptStagedSqliteFile(config.DB_DATABASE)
+      if (adopted !== 'none')
+        // biome-ignore lint/suspicious/noConsole: an operator must see a database swap in the log
+        console.warn(
+          adopted === 'adopted'
+            ? 'SQLite: the database copy a Hub move staged is now in place.'
+            : 'SQLite: a staged database copy failed its checks and was removed; the database is unchanged.'
+        )
+    }
     const taken = claimSqliteFile(config.DB_DATABASE)
     if (taken) throw new Error(taken)
     holdSqliteFile(config.DB_DATABASE)

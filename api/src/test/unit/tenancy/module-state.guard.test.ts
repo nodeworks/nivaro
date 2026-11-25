@@ -163,6 +163,8 @@ const SHARED: Record<string, string> = {
   'db/owner-signal.ts :: raised': DIAG,
   'db/people-signal.ts :: listeners': REGISTRY,
   'db/pg-utc.ts :: done': PATCH,
+  'db/sqlite-tenant.ts :: replacing':
+    'database files a move is replacing now, keyed by the file: each SQLite app has its own file',
   'db/sqlite-tenant.ts :: heldFiles':
     'lock releases keyed by the database file: each SQLite app has its own file (app-db/<tenant id>/)',
   'db/sqlite.ts :: fileWriteLocks':

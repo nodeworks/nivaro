@@ -3,7 +3,8 @@ import {
   buildMovePlan,
   MANUAL_MOVE_STEPS,
   MOVE_STEPS,
-  SHARED_FEATURES_SINCE
+  SHARED_FEATURES_SINCE,
+  SQLITE_MOVE_STEPS
 } from '../../../services/hub/move/plan.js'
 import type {
   MoveBlockerCode,
@@ -148,7 +149,7 @@ describe('buildMovePlan — one test per blocker', () => {
     ['EXTENSION_NOT_ALLOWED', input({ target_facts: tgt({ extensions: [] }) })],
     ['EXTENSION_VERSION_DIFFERS', input({ target_facts: tgt({ extension_pins: { x: PIN_B } }) })],
     ['NO_DATABASE_RECORD', input({ database: null })],
-    ['SQLITE_MOVE', input({ database: { id: 21, ready: true, sqlite: true } })],
+    ['SQLITE_SHARED_VERSION', input({ database: { id: 21, ready: true, sqlite: true } })],
     ['APP_KEY_UNKNOWN', input({ app_key: { known: false, fp: null } })],
     ['APP_KEY_MISMATCH', input({ source: src({ key_fp: 'b'.repeat(32) }) })],
     ['SIGNIN_VIA_HUB', input({ app: { ...input().app, signin_mode: 'hub' } })],
@@ -986,5 +987,86 @@ describe('callback addresses (E2E B3)', () => {
       expect(
         buildMovePlan(input({ env })).checklist.find((c) => c.id === 'callbacks_registered')?.text
       ).toContain('https://shop.apps.example.com/api/auth/callback')
+  })
+})
+
+describe('hub gap sqlite: a SQLite app moves with its database file copied', () => {
+  const liteTarget = { version: '0.3.215' }
+  const lite = (o: Partial<MovePlanInput> = {}) =>
+    input({
+      to: sharedSide({ version_pin: '0.3.215' }),
+      database: null,
+      source: src({
+        version: '0.3.215',
+        db_identity: null,
+        readiness: [{ code: 'SQLITE', level: 'blocker', detail: 'SQLite' }]
+      }),
+      target_facts: tgt({ ...liteTarget, db: null }),
+      ...o
+    })
+
+  it('a dedicated SQLite source onto a small shared deployment at 0.3.215: no blocker, the db_copy steps', () => {
+    const p = buildMovePlan(lite())
+    expect(p.blockers).toEqual([])
+    expect(p.sqlite).toBe(true)
+    expect(p.steps).toEqual(SQLITE_MOVE_STEPS.to_shared)
+    expect(p.steps).not.toContain('files_warm')
+    expect(p.steps.indexOf('db_copy')).toBeGreaterThan(p.steps.indexOf('wait_idle'))
+    expect(p.steps.indexOf('db_copy')).toBeLessThan(p.steps.indexOf('release'))
+    expect(p.warnings.map((w) => w.code)).toContain('SQLITE_COPY')
+  })
+
+  it('refuses a split, registered or older target and a manual route, each with its code', () => {
+    const split = lite({ to: sharedSide({ version_pin: '0.3.215', settings: { size: 'medium' } }) })
+    expect(codes(buildMovePlan(split))).toContain('SQLITE_ONE_PROCESS')
+    const registered = lite({
+      to: sharedSide({ version_pin: '0.3.215', mode: 'registered' as never })
+    })
+    // A registered target is routed by hand: refused for that first (SQLITE_MOVE).
+    expect(codes(buildMovePlan(registered))).toContain('SQLITE_MOVE')
+    const older = lite({
+      to: sharedSide({ version_pin: '0.3.214' }),
+      target_facts: tgt({ version: '0.3.214', db: null }),
+      source: src({
+        version: '0.3.214',
+        readiness: [{ code: 'SQLITE', level: 'blocker', detail: 'SQLite' }]
+      })
+    })
+    expect(codes(buildMovePlan(older))).toContain('SQLITE_SHARED_VERSION')
+    const manual = lite({ from: dockerSide({ edge: null }) })
+    expect(buildMovePlan(manual).routing).toBe('manual')
+    expect(codes(buildMovePlan(manual))).toContain('SQLITE_MOVE')
+  })
+
+  it('a shared SQLite source onto a Docker stack of size small: the to_dedicated steps; medium and GitLab refused', () => {
+    const base = {
+      kind: 'to_dedicated' as const,
+      from: sharedSide({ version_pin: '0.3.215' }),
+      to: dockerSide(),
+      target: { kind: 'dedicated' as const, placement_id: 3 },
+      database: { id: 21, ready: true, sqlite: true },
+      source: src({ version: '0.3.215', db_identity: null, readiness: [] })
+    }
+    const ok = buildMovePlan(
+      lite({ ...base, target_facts: tgt({ ...liteTarget, stack_size: 'small' }) })
+    )
+    expect(codes(ok)).not.toContain('SQLITE_ONE_PROCESS')
+    expect(codes(ok)).not.toContain('SQLITE_MOVE')
+    expect(codes(ok)).not.toContain('DATABASE_DIFFERS')
+    expect(ok.steps).toEqual(SQLITE_MOVE_STEPS.to_dedicated)
+    expect(ok.steps.indexOf('db_copy')).toBeGreaterThan(ok.steps.indexOf('deploy_target'))
+    expect(ok.steps.indexOf('db_copy')).toBeLessThan(ok.steps.indexOf('target_ready'))
+    const medium = buildMovePlan(
+      lite({ ...base, target_facts: tgt({ ...liteTarget, stack_size: 'medium' }) })
+    )
+    expect(codes(medium)).toContain('SQLITE_ONE_PROCESS')
+    const gitlab = buildMovePlan(lite({ ...base, to: gitlabSide() }))
+    expect(codes(gitlab)).toContain('SQLITE_MOVE')
+  })
+
+  it('a server database is unchanged: no sqlite flag, the usual steps', () => {
+    const p = buildMovePlan(input())
+    expect(p.sqlite).toBeUndefined()
+    expect(p.steps).not.toContain('db_copy')
   })
 })

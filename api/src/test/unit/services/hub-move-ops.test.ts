@@ -1115,3 +1115,95 @@ describe('verifyTargetKey (E2E B4)', () => {
     expect((await ops.verifyTargetKey().catch((e) => e))?.code).toBe('APP_KEY_UNKNOWN')
   })
 })
+
+describe('hub gap sqlite: copyDatabase, sourceDatabaseSum, unplace', () => {
+  const SUM = '9'.repeat(64)
+  const withDb = (c: ReturnType<typeof clients>, o: { pull?: () => Promise<unknown> } = {}) => {
+    const base = c.factory as unknown as (s: { id: number }) => Record<string, unknown>
+    return ((s: { id: number }) => ({
+      ...base(s),
+      pullDatabase: vi.fn(async (_tid: string, req: { source: string; ticket: string }) => {
+        c.calls.push([s.id, 'pullDatabase', { source: req.source, ticket: req.ticket === TICKET }])
+        if (o.pull) return o.pull()
+        return { sha256: SUM, bytes: 4096, migrations: 560 }
+      }),
+      databaseSum: vi.fn(async () => {
+        c.calls.push([s.id, 'databaseSum'])
+        return { sha256: SUM, bytes: 4096 }
+      }),
+      discardDatabase: vi.fn(async () => {
+        c.calls.push([s.id, 'discardDatabase'])
+        return { discarded: true }
+      })
+    })) as never
+  }
+
+  it('a shared target: ticket at the source, pull at the target, ticket revoked; never in a log line', async () => {
+    const w = await setup(true)
+    TENANT = w.tenant
+    const c = clients()
+    const lines: string[] = []
+    const ops = defaultMoveOps(
+      w.move,
+      { ...w.plan, sqlite: true },
+      { client: withDb(c), sleep, now, log: (l) => lines.push(l) }
+    )
+    const out = await ops.copyDatabase?.()
+    expect(out).toEqual({ sha256: SUM, bytes: 4096, migrations: 560 })
+    expect(c.calls).toEqual([
+      [w.a, 'fileTicket'],
+      [
+        w.b,
+        'pullDatabase',
+        { source: 'https://src.internal.example.com/api/hub-transfer/files', ticket: true }
+      ],
+      [w.a, 'revokeTicket', true]
+    ])
+    expect(lines.join('\n')).not.toContain(TICKET)
+    expect(await ops.sourceDatabaseSum?.()).toBe(SUM)
+  })
+
+  it('a refused copy (checksum mismatch at the target) is a step error with that code; the ticket is revoked', async () => {
+    const w = await setup(true)
+    TENANT = w.tenant
+    const c = clients()
+    const { DeploymentLinkError } = await import(
+      '../../../services/hub/shared/deployment-client.js'
+    )
+    const ops = defaultMoveOps(
+      w.move,
+      { ...w.plan, sqlite: true },
+      {
+        client: withDb(c, {
+          pull: async () => {
+            throw new DeploymentLinkError('TRANSFER_REFUSED', 409, 'SQLITE_CHECKSUM_MISMATCH')
+          }
+        }),
+        sleep,
+        now
+      }
+    )
+    await expect(ops.copyDatabase?.()).rejects.toMatchObject({ code: 'SQLITE_CHECKSUM_MISMATCH' })
+    expect(c.calls.at(-1)).toEqual([w.a, 'revokeTicket', true])
+  })
+
+  it('unplace of a SQLite move discards the target copy first, then removes the record it made', async () => {
+    const w = await setup(false)
+    TENANT = w.tenant
+    const { createSqliteDatabase } = await import('../../../services/hub/db/databases.js')
+    const rec = (await createSqliteDatabase(null)).id
+    await db('nivaro_hub_moves')
+      .where({ id: w.move.id })
+      .update({ steps: JSON.stringify({ ...w.move.steps, sqlite_record: rec }) })
+    const c = clients()
+    const ops = defaultMoveOps(
+      w.move,
+      { ...w.plan, sqlite: true },
+      { client: withDb(c), sleep, now }
+    )
+    await ops.unplace()
+    expect(c.calls[0]).toEqual([w.b, 'discardDatabase'])
+    expect(await db('nivaro_hub_databases').where({ id: rec }).first()).toBeUndefined()
+    expect((await readMove(w.move.id))?.steps.sqlite_record).toBeUndefined()
+  })
+})

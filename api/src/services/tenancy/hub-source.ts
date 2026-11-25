@@ -1,4 +1,5 @@
 import type { Redis } from 'ioredis'
+import { thawSqliteFile } from '../../db/sqlite-transfer.js'
 import { cleanTenantHost, runWithoutTenant } from '../../db/tenant-context.js'
 import { NIVARO_VERSION } from '../../version.js'
 import { forgetAppState } from '../app-state.js'
@@ -184,6 +185,10 @@ export async function startHubTenantSource(deps: Deps): Promise<TenantRegistry> 
     // saw (it was not listed in between) cannot hand a returning app its old cached state.
     const before = new Set(tenants.map((t) => t.id))
     for (const t of list) if (!before.has(t.id)) forgetAppState(t.id)
+    // Hub gap sqlite: a SQLite app out of maintenance (a move rolled back, or never froze it) has
+    // its file thawed (db/sqlite-transfer.ts); one still in maintenance stays frozen.
+    for (const t of list)
+      if (t.dbClient === 'sqlite' && t.status !== 'maintenance') thawSqliteFile(t.dbConnection)
     tenants = list.map(withListedOrigin)
     setAppKeys(tenants)
     const m = new Map<string, TenantRecord>()

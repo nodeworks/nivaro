@@ -909,6 +909,13 @@ async function doStep(ctx: Ctx, key: MoveStepKey, steps: MoveSteps): Promise<voi
           'PLACEMENT_CHANGED',
           'The environment no longer sits on the placement this move started from.'
         )
+      // Hub gap sqlite: the target gets a COPY (db_copy proves it by checksum), not the same
+      // database: there is no server identity to compare.
+      if (plan.sqlite) {
+        steps.source_db = 'sqlite-copy'
+        await saveSteps(ctx, steps)
+        return
+      }
       // R2: which database the source serves, kept (hashed) for the target_ready comparison.
       const identity = await ops.databaseIdentity('source')
       if (!identity)
@@ -937,6 +944,28 @@ async function doStep(ctx: Ctx, key: MoveStepKey, steps: MoveSteps): Promise<voi
         await boundary(ctx)
         await e.sleep(e.pollMs)
       }
+    }
+    case 'db_copy': {
+      // Hub gap sqlite: only once the source is frozen (maintenance_on) and idle (wait_idle).
+      if (!stepDone(steps, 'maintenance_on') || !stepDone(steps, 'wait_idle'))
+        throw new MoveStepError(
+          'SOURCE_NOT_FROZEN',
+          'The source is not frozen and idle; its database is never copied while it can write.'
+        )
+      if (!ops.copyDatabase)
+        throw new MoveStepError('SQLITE_MOVE', 'This Hub cannot copy a SQLite database.')
+      const c = await ops.copyDatabase()
+      steps.db_copy = {
+        sha256: c.sha256,
+        bytes: c.bytes,
+        migrations: c.migrations,
+        at: new Date(e.now()).toISOString()
+      }
+      await saveSteps(ctx, steps)
+      ctx.run.log(
+        `db_copy: ${c.bytes} bytes copied and checked at the target (sha256 ${c.sha256.slice(0, 12)}…)`
+      )
+      return
     }
     case 'files_delta':
       return copyFiles(ctx, 'delta', true)
@@ -1007,6 +1036,15 @@ async function doStep(ctx: Ctx, key: MoveStepKey, steps: MoveSteps): Promise<voi
       await ops.targetMaintenance(true)
       await ops.targetUnretire()
       await ops.targetReady()
+      // Hub gap sqlite: the target serves the copy db_copy checked; never one that was not made.
+      if (plan.sqlite) {
+        if (!steps.db_copy?.sha256)
+          throw new MoveStepError(
+            'DATABASE_DIFFERS',
+            "The target has no checked copy of the source's database; nothing is routed to it."
+          )
+        return
+      }
       // R2: the target opens the very database the source serves.
       const identity = await ops.databaseIdentity('target')
       if (!identity || !steps.source_db || hashIdentity(identity) !== steps.source_db)
@@ -1168,9 +1206,24 @@ async function release(ctx: Ctx, steps: MoveSteps): Promise<void> {
       'SOURCE_NOT_FROZEN',
       'The source is not in maintenance; the target is never lifted while the source can write.'
     )
+  // Hub gap sqlite: the source must be exactly what was copied (frozen since): its checksum now
+  // against the copy's. A difference rolls the move back (before release nothing is lost).
+  if (ctx.plan.sqlite) {
+    if (!steps.db_copy?.sha256)
+      throw new MoveStepError('DATABASE_DIFFERS', "The source's database was never copied.")
+    if (!ctx.ops.sourceDatabaseSum)
+      throw new MoveStepError('SQLITE_MOVE', 'This Hub cannot read the source database checksum.')
+    const current = await ctx.ops.sourceDatabaseSum()
+    if (current !== steps.db_copy.sha256)
+      throw new MoveStepError(
+        'SOURCE_CHANGED',
+        "The source's database changed after it was copied; the move rolls back so nothing written there is lost."
+      )
+    ctx.run.log("release: the source's database is unchanged since the copy")
+  }
   const env = (await db(ENVS)
     .where({ id: ctx.envId })
-    .first('placement_id', 'status', 'hub_managed', 'version_pin')) as
+    .first('placement_id', 'status', 'hub_managed', 'version_pin', 'db_ref')) as
     | Record<string, unknown>
     | undefined
   if (!env) throw new MoveStepError('NOT_FOUND', 'The environment is gone.')
@@ -1180,7 +1233,10 @@ async function release(ctx: Ctx, steps: MoveSteps): Promise<void> {
       placement_id: move.from_placement_id,
       status: String(env.status ?? 'maintenance'),
       hub_managed: env.hub_managed === true || env.hub_managed === 1 || env.hub_managed === '1',
-      version_pin: env.version_pin == null ? null : String(env.version_pin)
+      version_pin: env.version_pin == null ? null : String(env.version_pin),
+      ...(steps.sqlite_record || move.steps.sqlite_record
+        ? { db_ref: env.db_ref == null ? null : String(env.db_ref) }
+        : {})
     }
     await saveSteps(ctx, steps)
   }
@@ -1210,6 +1266,8 @@ async function release(ctx: Ctx, steps: MoveSteps): Promise<void> {
         placement_id: move.to_placement_id,
         version_pin: ctx.plan.version,
         status: 'active',
+        // Hub gap sqlite: the record the move made now names the app's database.
+        ...(move.steps.sqlite_record ? { db_ref: `hub-db:${move.steps.sqlite_record}` } : {}),
         ...(ctx.shared.toDocker ? { hub_managed: true } : {}),
         updated_at: new Date()
       })

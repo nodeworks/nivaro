@@ -183,6 +183,43 @@ export interface MoveOps {
    * `target_ready`: a target on another database never serves the app's name.
    */
   databaseIdentity(side: 'source' | 'target'): Promise<string | null>
+  /**
+   * Hub gap sqlite: copy the SQLite database file from the frozen source to the target (ticketed,
+   * streamed, checksum-checked, read-only check at the target). A shared target puts it in place;
+   * a Docker target stages it, restarts and installs it at boot (read back here).
+   */
+  copyDatabase?(): Promise<{ sha256: string; bytes: number; migrations: number }>
+  /** Hub gap sqlite: the source database's checksum now (the check before release). */
+  sourceDatabaseSum?(): Promise<string>
+}
+
+/** Hub gap sqlite: a deployment client that can copy a database (every real one can). */
+function dbClient<
+  T extends { pullDatabase?: unknown; databaseSum?: unknown; discardDatabase?: unknown }
+>(c: T): T & Required<Pick<T, 'pullDatabase' | 'databaseSum' | 'discardDatabase'>> {
+  if (!c.pullDatabase || !c.databaseSum || !c.discardDatabase)
+    throw new MoveStepError('SQLITE_MOVE', 'This deployment link cannot copy a database.')
+  return c as T & Required<Pick<T, 'pullDatabase' | 'databaseSum' | 'discardDatabase'>>
+}
+
+/** Hub gap sqlite: a hub link client that can copy a database (every real one can). */
+function dbLink(
+  c: HubLinkClient
+): HubLinkClient &
+  Required<Pick<HubLinkClient, 'pullDatabase' | 'databaseAdopted' | 'databaseSum'>> {
+  if (!c.pullDatabase || !c.databaseAdopted || !c.databaseSum)
+    throw new MoveStepError('SQLITE_MOVE', 'This hub link cannot copy a database.')
+  return c as HubLinkClient &
+    Required<Pick<HubLinkClient, 'pullDatabase' | 'databaseAdopted' | 'databaseSum'>>
+}
+
+/** Hub gap sqlite: a transfer refusal's own code (the target's reason), else the link's code. */
+function databaseStepError(err: unknown, fallback: string): MoveStepError {
+  if (err instanceof DeploymentLinkError && err.reason && /^[A-Z][A-Z0-9_]{0,63}$/.test(err.reason))
+    return new MoveStepError(err.reason, `${fallback} (${err.reason}).`)
+  if (err instanceof HubLinkError && err.reason && /^[A-Z][A-Z0-9_]{0,63}$/.test(err.reason))
+    return new MoveStepError(err.reason, `${fallback} (${err.reason}).`)
+  return asStepError(err, fallback)
 }
 
 /**
@@ -840,6 +877,101 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
       return (await (await sourceLink()).sharedReadiness()).busy
     },
 
+    async copyDatabase() {
+      const l = await load()
+      let source: string
+      let ticket: string
+      let revoke: () => Promise<unknown>
+      if (l.from.kind === 'shared') {
+        const sharedFrom = l.from.shared
+        const origin = linkUrlOrigin(sharedFrom.link_url)
+        if (!origin)
+          throw new MoveStepError(
+            'BAD_LINK_URL',
+            "The source deployment's link address is not one the Hub may use."
+          )
+        source = `${origin}/api/hub-transfer/files`
+        ticket = (await clientFor(sharedFrom).fileTicket(l.tenantId)).ticket
+        const t = ticket
+        revoke = () => clientFor(sharedFrom).revokeTicket(l.tenantId, t)
+      } else {
+        source = `${(await addresses()).pull_source}/api/hub-transfer/files`
+        const link = await sourceLink()
+        ticket = (await link.fileTicket()).ticket
+        const t = ticket
+        revoke = () => link.revokeTicket(t)
+      }
+      const key = String(++ticketSeq)
+      const sealed = sealSecret(ticket)
+      await keepSealed(sealed)
+      const mintedRevoke = revoke
+      revoke = async () => {
+        await mintedRevoke()
+        await dropSealed(sealed).catch(() => false)
+      }
+      tickets.set(key, revoke)
+      try {
+        if (l.to.kind === 'shared') {
+          const c = await dbClient(clientFor(l.to.shared))
+            .pullDatabase(l.tenantId, { source, ticket })
+            .catch((err) => {
+              throw databaseStepError(err, 'The database was not copied')
+            })
+          log(
+            `database: ${c.bytes} bytes copied, checksum and integrity checked, ${c.migrations} migrations in its ledger`
+          )
+          return c
+        }
+        if (l.to.kind !== 'docker')
+          throw new MoveStepError('SQLITE_MOVE', 'Only a Docker stack takes a SQLite database.')
+        const link = dbLink(await targetLink())
+        const c = await link.pullDatabase({ source, ticket, move_id: move.id }).catch((err) => {
+          throw databaseStepError(err, 'The database was not copied')
+        })
+        log(`database: ${c.bytes} bytes copied and checked; the target restarts to put it in place`)
+        // The target restarts and installs the staged copy at boot: read back what it adopted.
+        const by = now() + TARGET_READY_MS
+        for (;;) {
+          await sleep(POLL_MS)
+          try {
+            const a = await dbLink(await targetLink()).databaseAdopted()
+            if (a && a.sha256 === c.sha256 && a.move_id === move.id) {
+              log('database: the target put the copy in place at its restart')
+              return c
+            }
+          } catch {
+            // restarting
+          }
+          if (now() >= by)
+            throw new MoveStepError(
+              'DATABASE_NOT_ADOPTED',
+              'The target did not put the database copy in place within 10 minutes of its restart.'
+            )
+        }
+      } finally {
+        try {
+          await revoke()
+          tickets.delete(key)
+        } catch (err) {
+          log(
+            `the transfer ticket could not be revoked yet (${codeOf(err)}); kept for the move end`,
+            'warn'
+          )
+        }
+      }
+    },
+
+    async sourceDatabaseSum() {
+      const l = await load()
+      try {
+        if (l.from.kind === 'shared')
+          return (await dbClient(clientFor(l.from.shared)).databaseSum(l.tenantId)).sha256
+        return (await dbLink(await sourceLink()).databaseSum()).sha256
+      } catch (err) {
+        throw databaseStepError(err, "The source database's checksum could not be read")
+      }
+    },
+
     async pullFiles(mode) {
       const l = await load()
       // The source mints a ticket for its own transfer route.
@@ -920,6 +1052,21 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
     },
 
     async placeOnTarget() {
+      // Hub gap sqlite: a dedicated SQLite app has no database record; the shared target lists it
+      // with a SQLite record the move makes (kept in the move until release names it on the
+      // environment: a source stack re-applied before release keeps its own DB_* settings).
+      if (plan.sqlite) {
+        const env = (await db(ENVS).where({ id: envId }).first('db_ref')) as
+          | { db_ref: string | null }
+          | undefined
+        const have = (await readMove(move.id))?.steps.sqlite_record
+        if (!databaseRecordId(env?.db_ref) && !have) {
+          const { createSqliteDatabase } = await import('../db/databases.js')
+          const rec = await createSqliteDatabase(null)
+          await mergeSteps(move.id, (st) => ({ ...st, sqlite_record: rec.id }))
+          log(`a SQLite database record (${rec.id}) is made for the app on its new home`)
+        }
+      }
       await db(MOVES)
         .where({ id: move.id })
         .update({ placed_at: new Date(now()) })
@@ -928,9 +1075,29 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
     },
 
     async unplace() {
-      await db(MOVES).where({ id: move.id }).update({ placed_at: null })
       const l = await load()
+      // Hub gap sqlite: a rollback before release throws the target's copy away while the app is
+      // still listed there (best effort: an unlisted app's folder is never served again).
+      const toShared = l.to.kind === 'shared' ? l.to.shared : null
+      if (plan.sqlite && toShared)
+        await Promise.resolve()
+          .then(() => dbClient(clientFor(toShared)).discardDatabase(l.tenantId))
+          .then(() => log("the target's copy of the database is discarded"))
+          .catch((err) =>
+            log(`the target's copy of the database was not discarded (${codeOf(err)})`, 'warn')
+          )
+      await db(MOVES).where({ id: move.id }).update({ placed_at: null })
       if (l.to.kind === 'shared') await refresh(l.to.shared)
+      const rec = (await readMove(move.id))?.steps.sqlite_record
+      if (rec) {
+        const used = await db(ENVS)
+          .where({ db_ref: `hub-db:${rec}` })
+          .first('id')
+        if (!used) await db('nivaro_hub_databases').where({ id: rec, engine: 'sqlite' }).del()
+        await mergeSteps(move.id, (st) =>
+          st.sqlite_record ? { ...st, sqlite_record: undefined } : null
+        )
+      }
     },
 
     async waitReplicas(sharedId) {

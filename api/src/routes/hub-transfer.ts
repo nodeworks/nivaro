@@ -213,4 +213,36 @@ export async function hubTransferRoutes(app: FastifyInstance): Promise<void> {
         : serve()
     }
   )
+
+  // Hub gap sqlite (0.3.215): the app's SQLite database file, for a move. Only while the app is
+  // proven frozen (409 SOURCE_NOT_FROZEN); the file is frozen and snapshotted, then streamed
+  // with Content-Length and X-Nivaro-Sha256 (services/hub-transfer/database.ts).
+  app.get('/database', { compress: false, exposeHeadRoute: false }, async (req, reply) => {
+    const found = req.hubTransferApp
+    if (!found) return refuse(reply, 401, TRANSFER_REFUSED, 'Unauthorized')
+    const { databaseSnapshot, snapshotStream, DatabaseTransferError } = await import(
+      '../services/hub-transfer/database.js'
+    )
+    const serve = async () => {
+      try {
+        const snap = await databaseSnapshot(found.kind === 'shared' ? found.tenant : null)
+        return reply
+          .header('Content-Type', 'application/octet-stream')
+          .header('Content-Length', String(snap.bytes))
+          .header('X-Nivaro-Sha256', snap.sha256)
+          .send(snapshotStream(snap.path))
+      } catch (err) {
+        const e = err as { code?: unknown; message?: unknown; statusCode?: unknown }
+        if (err instanceof DatabaseTransferError || (e && typeof e.code === 'string'))
+          return refuse(
+            reply,
+            typeof e.statusCode === 'number' ? e.statusCode : 409,
+            String(e.code),
+            String(e.message)
+          )
+        throw err
+      }
+    }
+    return found.kind === 'shared' ? withTenant(found.tenant, serve, found.tenant.origin) : serve()
+  })
 }

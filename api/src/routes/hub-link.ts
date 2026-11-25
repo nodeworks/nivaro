@@ -257,6 +257,13 @@ export async function hubLinkRoutes(app: FastifyInstance) {
         message: typeof b.message === 'string' ? b.message.trim() || null : null,
         moveId
       })
+      // Hub gap sqlite: the move lifted its freeze (a rollback): a SQLite database it froze for
+      // its copy takes writes again (db/sqlite-transfer.ts).
+      if (!b.on) {
+        const { thawSqliteFile } = await import('../db/sqlite-transfer.js')
+        const { config: cfg } = await import('../config.js')
+        if (cfg.DB_CLIENT === 'sqlite') thawSqliteFile(cfg.DB_DATABASE)
+      }
     } catch (err) {
       if (err instanceof HubMaintenanceMoveMismatch)
         return fail(
@@ -383,5 +390,53 @@ export async function hubLinkRoutes(app: FastifyInstance) {
     const s = await readPullStatus(req.params.runId)
     if (!s) return fail(reply, 404, 'UNKNOWN_RUN', 'No file copy with that id here')
     return reply.send(s)
+  })
+
+  // ─── Hub gap sqlite (0.3.215): a SQLite app's database file in a move ──────────────────────
+  // POST /files/database/pull {source, ticket, move_id} → 200 {sha256, bytes, verified,
+  //      restarting}: the copy is fetched with the ticket, checked (checksum, integrity_check,
+  //      ledger) and staged; this app restarts and installs it at boot.
+  // GET  /files/database/adopted → {adopted: {sha256, move_id} | null}: what the last boot put in.
+  // GET  /files/database/sum → {sha256, bytes}: this app's database checksum now (a source,
+  //      before release).
+  app.post('/files/database/pull', async (req, reply) => {
+    reply.header('Cache-Control', 'no-store')
+    const { pullDatabaseDedicated, DatabaseTransferError } = await import(
+      '../services/hub-transfer/database.js'
+    )
+    const b = (req.body ?? {}) as { source?: unknown; ticket?: unknown; move_id?: unknown }
+    try {
+      return reply.send(
+        await pullDatabaseDedicated(
+          { source: b.source as string, ticket: b.ticket as string },
+          positiveId(b.move_id)
+        )
+      )
+    } catch (err) {
+      if (err instanceof DatabaseTransferError)
+        return fail(reply, err.statusCode, err.code, err.message)
+      app.log.error({ err_name: (err as Error | null)?.name }, 'hub link: database copy failed')
+      return fail(reply, 500, 'DATABASE_COPY_FAILED', 'The database copy failed here')
+    }
+  })
+
+  app.get('/files/database/adopted', async (_req, reply) => {
+    reply.header('Cache-Control', 'no-store')
+    const { databaseAdopted } = await import('../services/hub-transfer/database.js')
+    return reply.send({ adopted: await databaseAdopted() })
+  })
+
+  app.get('/files/database/sum', async (_req, reply) => {
+    reply.header('Cache-Control', 'no-store')
+    const { databaseSum, DatabaseTransferError } = await import(
+      '../services/hub-transfer/database.js'
+    )
+    try {
+      return reply.send(await databaseSum(null))
+    } catch (err) {
+      if (err instanceof DatabaseTransferError)
+        return fail(reply, err.statusCode, err.code, err.message)
+      return fail(reply, 503, 'DATABASE_UNREADABLE', 'The database could not be read here')
+    }
   })
 }

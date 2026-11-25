@@ -323,6 +323,71 @@ export async function hubDeploymentLinkRoutes(app: FastifyInstance): Promise<voi
     }
   })
 
+  // ─── Hub gap sqlite (0.3.215): a SQLite app's database file in a move ──────────────────────
+  // POST   /apps/:id/database/pull {source, ticket} → {sha256, bytes, verified}: fetched with the
+  //        ticket, checked (checksum, integrity_check, ledger), put in place of the app's file.
+  // GET    /apps/:id/database/sum → {sha256, bytes} (a source, before release)
+  // DELETE /apps/:id/database → {discarded}: a rollback before release throws the copy away.
+  const databaseRefusal = (reply: FastifyReply, err: unknown, what: string) => {
+    const e = err as { code?: unknown; statusCode?: unknown; message?: unknown; name?: unknown }
+    if (e?.name === 'DatabaseTransferError' || e?.name === 'SqliteTenantError')
+      return refuse(
+        reply,
+        typeof e.statusCode === 'number' ? e.statusCode : 409,
+        String(e.message),
+        String(e.code)
+      )
+    app.log.error({ err_name: e?.name ?? null }, `deployment link: ${what}`)
+    return refuse(reply, 500, 'The database copy failed here', 'DATABASE_COPY_FAILED')
+  }
+
+  app.post<{ Params: { id: string } }>('/apps/:id/database/pull', async (req, reply) => {
+    const registry = registryOr503(reply)
+    if (!registry) return reply
+    const t = await tenantById(registry, req.params.id)
+    if (!t) return refuse(reply, 404, 'This deployment does not serve that app', 'UNKNOWN_APP')
+    const { pullDatabaseShared } = await import('../services/hub-transfer/database.js')
+    const b = (req.body ?? {}) as { source?: unknown; ticket?: unknown }
+    try {
+      return reply.send(
+        await withTenant(
+          t,
+          () => pullDatabaseShared(t, { source: b.source as string, ticket: b.ticket as string }),
+          t.origin
+        )
+      )
+    } catch (err) {
+      return databaseRefusal(reply, err, 'the database copy failed')
+    }
+  })
+
+  app.get<{ Params: { id: string } }>('/apps/:id/database/sum', async (req, reply) => {
+    const registry = registryOr503(reply)
+    if (!registry) return reply
+    const t = await tenantById(registry, req.params.id)
+    if (!t) return refuse(reply, 404, 'This deployment does not serve that app', 'UNKNOWN_APP')
+    const { databaseSum } = await import('../services/hub-transfer/database.js')
+    try {
+      return reply.send(await withTenant(t, () => databaseSum(t), t.origin))
+    } catch (err) {
+      return databaseRefusal(reply, err, 'the database checksum could not be read')
+    }
+  })
+
+  app.delete<{ Params: { id: string } }>('/apps/:id/database', async (req, reply) => {
+    const registry = registryOr503(reply)
+    if (!registry) return reply
+    const t = await tenantById(registry, req.params.id)
+    if (!t) return reply.send({ discarded: false })
+    const { discardDatabaseShared } = await import('../services/hub-transfer/database.js')
+    try {
+      await discardDatabaseShared(t)
+      return reply.send({ discarded: true })
+    } catch (err) {
+      return databaseRefusal(reply, err, 'the database copy could not be discarded')
+    }
+  })
+
   app.get<{ Params: { id: string; runId: string } }>(
     '/apps/:id/files/pull/:runId',
     async (req, reply) => {

@@ -274,6 +274,14 @@ const isDbKey = (k: string) => k.startsWith('DB_')
 export interface DatabaseRecordEnv {
   client: string
   url: string
+  /** Hub gap sqlite: a SQLite record's file inside the container (the app's own app-db folder of
+   *  the uploads volume); DB_DATABASE, and no DB_URL. */
+  file?: string
+}
+
+/** Where a SQLite app's file sits in a Docker stack (the uploads volume, its own folder). */
+export function sqliteStackFile(tenantId: string, file: string): string {
+  return `/app/uploads/app-db/${tenantId}/${file}`
 }
 
 /** The database row id an environment's db_ref names (`hub-db:<id>`, phase 3), or null. */
@@ -296,6 +304,8 @@ export function databaseEnvFor(
   secrets: Record<string, string>,
   record: DatabaseRecordEnv | null = null
 ): DatabaseEnv {
+  if (record?.client === 'sqlite' && record.file)
+    return { env: { DB_CLIENT: 'sqlite', DB_DATABASE: record.file }, secrets: {} }
   if (record) return { env: { DB_CLIENT: record.client }, secrets: { DB_URL: record.url } }
   const out: DatabaseEnv = { env: {}, secrets: {} }
   for (const [k, v] of Object.entries(settings)) {

@@ -140,6 +140,24 @@ function prepareFolder(path: string, root: string): void {
 /** Release functions of the files this process holds, by path (closeSqliteTenantFile). */
 const heldFiles = new Map<string, () => void>()
 
+/** Files a move is replacing now: no pool opens on them meanwhile (withSqliteFileReplaced). */
+const replacing = new Set<string>()
+
+/**
+ * Run `fn` (close the app's pool, put the copy in place) while no pool may open on `path`: a
+ * request or job that asks for the app's database meanwhile gets SQLITE_FILE_BUSY.
+ */
+export async function withSqliteFileReplaced<T>(path: string, fn: () => Promise<T>): Promise<T> {
+  if (replacing.has(path))
+    throw new SqliteTenantError('SQLITE_FILE_BUSY', 'This database is already being replaced.')
+  replacing.add(path)
+  try {
+    return await fn()
+  } finally {
+    replacing.delete(path)
+  }
+}
+
 /**
  * Open one SQLite app's knex on `path` (already checked by sqliteTenantPath). Takes the file's
  * lock first: another process holding it answers SQLITE_FILE_BUSY (the app tries again; a
@@ -153,6 +171,11 @@ export function openSqliteTenantKnex(
   const problem = sqliteTenantProblem()
   if (problem) throw new SqliteTenantError('SQLITE_NOT_HERE', `${problem}.`)
   assertSqliteTenantPath(path, root)
+  if (replacing.has(path))
+    throw new SqliteTenantError(
+      'SQLITE_FILE_BUSY',
+      "This app's database is being replaced by a move; trying again shortly."
+    )
   prepareFolder(path, root)
   if (!heldFiles.has(path)) {
     const taken = claimSqliteFile(path)

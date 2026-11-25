@@ -424,16 +424,40 @@ export function rewriteInformationSchema(sql: string): string {
 /** How long a write waits for the write lock before it fails. */
 export const SQLITE_WRITE_WAIT_MS = 60_000
 
+/** A write refused because the database file is frozen for a move (db/sqlite-transfer.ts). */
+export class SqliteFrozenError extends Error {
+  code = 'SQLITE_FROZEN'
+  constructor() {
+    super(
+      'SQLite: this database is frozen while it is copied to its new home; no write is taken until the move ends.'
+    )
+    this.name = 'SqliteFrozenError'
+  }
+}
+
 /**
  * The in-process write lock (point 3 above). `holder` is the connection whose write or open
- * transaction holds it.
+ * transaction holds it. `frozen` (a Hub move copying the file, db/sqlite-transfer.ts): every
+ * write is refused with SqliteFrozenError — the ones waiting too — except the copy's own
+ * (`force`), until the move thaws it.
  */
 export class SqliteWriteLock {
   holder: unknown = null
-  private waiters: Array<{ conn: unknown; resolve: () => void }> = []
+  frozen: string | null = null
+  private waiters: Array<{
+    conn: unknown
+    force: boolean
+    resolve: () => void
+    reject: (err: Error) => void
+  }> = []
 
-  async acquire(conn: unknown, timeoutMs = SQLITE_WRITE_WAIT_MS): Promise<void> {
+  async acquire(
+    conn: unknown,
+    timeoutMs = SQLITE_WRITE_WAIT_MS,
+    opts: { force?: boolean } = {}
+  ): Promise<void> {
     if (this.holder === conn) return
+    if (this.frozen && !opts.force) throw new SqliteFrozenError()
     if (this.holder == null) {
       this.holder = conn
       return
@@ -441,9 +465,14 @@ export class SqliteWriteLock {
     await new Promise<void>((resolve, reject) => {
       const w = {
         conn,
+        force: opts.force === true,
         resolve: () => {
           clearTimeout(t)
           resolve()
+        },
+        reject: (err: Error) => {
+          clearTimeout(t)
+          reject(err)
         }
       }
       const t = setTimeout(() => {
@@ -457,6 +486,18 @@ export class SqliteWriteLock {
       t.unref?.()
       this.waiters.push(w)
     })
+  }
+
+  /** Refuse every later write (and every one waiting now) but a forced one. */
+  freeze(reason: string): void {
+    this.frozen = reason
+    const refused = this.waiters.filter((w) => !w.force)
+    this.waiters = this.waiters.filter((w) => w.force)
+    for (const w of refused) w.reject(new SqliteFrozenError())
+  }
+
+  thaw(): void {
+    this.frozen = null
   }
 
   /** Hand the lock to the next waiter (or free it). */
@@ -492,10 +533,16 @@ export function sqliteWriteLockFor(connection: unknown): SqliteWriteLock {
   return lock
 }
 
-/** Drop a closed file's write lock (db/sqlite-tenant.ts, when an app's database is closed). */
+/** Drop a closed file's write lock (db/sqlite-tenant.ts, when an app's database is closed). A
+ *  frozen one is kept: the freeze outlives a pool closed and opened again. */
 export function forgetSqliteWriteLock(file: string): void {
   const lock = fileWriteLocks.get(file)
-  if (lock && lock.holder == null) fileWriteLocks.delete(file)
+  if (lock && lock.holder == null && !lock.frozen) fileWriteLocks.delete(file)
+}
+
+/** The write lock of a database FILE by its path (the same one its connections share). */
+export function sqliteWriteLockOfFile(file: string): SqliteWriteLock {
+  return sqliteWriteLockFor({ name: file })
 }
 
 const BEGIN = /^\s*BEGIN\b(?!\s+(IMMEDIATE|EXCLUSIVE)\b)/i
@@ -926,4 +973,9 @@ export function sqliteCompat(): void {
     }
     if (plain.sql.length) return addColumns.call(this, plain, prefix, ...rest)
   }
+}
+
+/** Thaw a frozen file write lock, if this process has one for it (never makes one). */
+export function thawSqliteWriteLock(file: string): void {
+  fileWriteLocks.get(file)?.thaw()
 }

@@ -928,3 +928,19 @@ export function _resetAppMigrationsForTests(): void {
   nowFn = Date.now
   randomFn = Math.random
 }
+
+/** Resolves when no migration run of this app is in flight here (a move replacing its file). */
+export async function awaitAppSchemaRun(tenantId: string): Promise<void> {
+  await inFlight.get(tenantId)?.catch(() => undefined)
+}
+
+/**
+ * Hub gap sqlite (0.3.215): a move put another database file in place of this app's. Nothing
+ * cached from the old one may answer the app, and its schema is judged again on the new one (the
+ * next pass: its own ledger, the seeds), here and on every replica (the stored `ok` goes).
+ */
+export async function appDatabaseReplaced(t: TenantRecord): Promise<void> {
+  await awaitAppSchemaRun(t.id)
+  await dropOk(t.id, connFingerprint(t))
+  nudgeAppMigrations(t.id)
+}

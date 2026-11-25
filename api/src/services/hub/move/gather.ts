@@ -209,7 +209,12 @@ async function stackFacts(
   ctx: Ctx,
   driverId: number,
   stack: string
-): Promise<{ redis: string | null; storage: string | null; keyFp: string | null }> {
+): Promise<{
+  redis: string | null
+  storage: string | null
+  keyFp: string | null
+  size?: string | null
+}> {
   let row: Awaited<ReturnType<typeof readStackSettings>>
   try {
     row = await readStackSettings(ctx.envId)
@@ -233,7 +238,8 @@ async function stackFacts(
   return {
     redis,
     storage: row.settings.STORAGE_PROVIDER?.trim() || 'local',
-    keyFp: key && APP_KEY_RE.test(key) ? keyFingerprint(key.toLowerCase()) : null
+    keyFp: key && APP_KEY_RE.test(key) ? keyFingerprint(key.toLowerCase()) : null,
+    size: row.size ?? null
   }
 }
 
@@ -730,9 +736,15 @@ async function sharedTargetFacts(
         : []
     )
     const lim = ctx.deps.identity ?? {}
+    // Hub gap sqlite: a SQLite app's file is its own (app-db/<id>/), never a server another app
+    // could share: it is not compared.
+    const { sqliteRecordIds } = await import('../shared/sqlite-apps.js')
+    const lite = await sqliteRecordIds(
+      [...refs.values()].filter((id): id is number => id != null)
+    ).catch(() => new Set<number>())
     const candidates = others.filter((r) => {
       const id = refs.get(r.env.id)
-      return id != null && id !== recordId
+      return id != null && id !== recordId && !lite.has(id)
     })
     const asks = candidates.slice(0, lim.max ?? IDENTITY_CHECK_MAX)
     /** Per ask: a match label, 'no' (compared, differs), or undefined (not compared). */
@@ -913,6 +925,7 @@ async function dedicatedTargetFacts(
     out.redis = f.redis
     out.storage_provider = f.storage
     out.stack_key_fp = f.keyFp
+    if (f.size !== undefined) out.stack_size = f.size
   }
   return out
 }

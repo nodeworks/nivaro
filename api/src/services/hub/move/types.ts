@@ -22,6 +22,9 @@ export type MoveStepKey =
   | 'files_warm'
   | 'maintenance_on'
   | 'wait_idle'
+  /** Hub gap sqlite: the SQLite database file is copied (source frozen, checksum, read-only
+   *  check at the target) — between wait_idle and the file copy. */
+  | 'db_copy'
   | 'files_delta'
   | 'deploy_target'
   | 'place_on_target'
@@ -113,8 +116,12 @@ export type MoveBlockerCode =
   | 'STORAGE_COUNT_UNKNOWN'
   // Fix round 1 (P6-15: a check that could not run is never a pass).
   | 'GATHER_FAILED'
-  // Hub gap sqlite (0.3.215): a SQLite app placed on a shared deployment; its file is not moved.
+  // Hub gap sqlite (0.3.215): a SQLite app moves only with automatic routing, onto a Docker
+  // shared deployment of size small (SQLITE_ONE_PROCESS / SQLITE_SHARED_VERSION) or a Docker
+  // stack of size small; never onto a GitLab placement or with a manual route (SQLITE_MOVE).
   | 'SQLITE_MOVE'
+  | 'SQLITE_ONE_PROCESS'
+  | 'SQLITE_SHARED_VERSION'
   | SharedReadinessCode
 
 /** What a move will cost or change. SIGNED_LINKS_RESET is the T12 carry. */
@@ -138,10 +145,14 @@ export type MoveWarningCode =
   | 'STACK_REAPPLY_ALL'
   // P6-31: saved-settings S3/Azure objects are copied to the new key prefix (never shared).
   | 'STORAGE_PREFIX_CHANGES'
+  // Hub gap sqlite: the SQLite database file is copied inside maintenance.
+  | 'SQLITE_COPY'
   | SharedReadinessCode
 
 export interface MovePlan {
   kind: MoveKind
+  /** Hub gap sqlite: the app's database is a SQLite file, copied by the db_copy step. */
+  sqlite?: true
   routing: 'automatic' | 'manual'
   steps: MoveStepKey[]
   route: RouteAction[]
@@ -222,6 +233,8 @@ export interface MoveTargetFacts {
   multi_node_unread?: boolean
   /** A Docker dedicated target: the ENCRYPTION_KEY fingerprint its stack settings hold. */
   stack_key_fp: string | null
+  /** A Docker dedicated target: the size its stack settings ask for (hub gap sqlite). */
+  stack_size?: string | null
   /** A dedicated target placement another environment uses ("app/env"); null when free. */
   in_use_by: string | null
   /**
