@@ -102,31 +102,40 @@ export function sanitizeAnswer(text: string, adminBase: string): string {
 }
 
 /**
- * A Hub page path, normalised, or null — THE rule for answer links and citations (the admin's
- * SafeAnswer.isHubPath is its twin): after decoding (to a fixed point), the path must be exactly
- * `/hub` or start with `/hub/`, with no `..`, `//`, backslash, control character or quote; a query
- * and hash may follow. `/hub-link`, `/hub-deployment`, `/hub/../api/…` and encoded tricks are
- * refused. Pure.
+ * A Hub page path, resolved, or null — THE rule for answer links and citations (the admin's
+ * SafeAnswer hubLinkPath is its twin, character for character):
+ *  - decoded at most once; anything still holding `%` after that is refused;
+ *  - backslashes and control characters are refused;
+ *  - the path is resolved with `new URL(s, 'http://hub.invalid')`: its origin must stay
+ *    `http://hub.invalid` (so `//evil`, `https:…` are refused) and its pathname must be `/hub` or
+ *    start with `/hub/` (so `/hub-link`, and `/hub/../x` that resolves outside, are refused);
+ *  - the answer is the RESOLVED pathname + search, never the raw input.
+ * Pure.
  */
 export function hubPath(raw: string): string | null {
   let s = String(raw ?? '').trim()
   if (!s.startsWith('/') || s.length > 500) return null
-  for (let i = 0; i < 3; i++) {
-    let d: string
+  // Decode at most once: anything still encoded after that is refused, never decoded further.
+  if (s.includes('%')) {
     try {
-      d = decodeURIComponent(s)
+      s = decodeURIComponent(s)
     } catch {
       return null
     }
-    if (d === s) break
-    s = d
+    if (s.includes('%')) return null
   }
-  if (/[\\\s"'<>`]/.test(s) || [...s].some((c) => c.charCodeAt(0) < 32)) return null
-  const cut = s.search(/[?#]/)
-  const path = cut < 0 ? s : s.slice(0, cut)
-  if (path !== '/hub' && !path.startsWith('/hub/')) return null
-  if (/\/\/|(^|\/)\.\.?(\/|$)/.test(path)) return null
-  return s
+  if (s.includes('\\') || [...s].some((c) => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127))
+    return null
+  // Let the URL parser resolve it (dot segments, `//host`, schemes) against a throwaway origin.
+  let u: URL
+  try {
+    u = new URL(s, 'http://hub.invalid')
+  } catch {
+    return null
+  }
+  if (u.origin !== 'http://hub.invalid') return null
+  if (u.pathname !== '/hub' && !u.pathname.startsWith('/hub/')) return null
+  return `${u.pathname}${u.search}`
 }
 
 export interface AskCall {

@@ -1,7 +1,7 @@
 import { render } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { describe, expect, it } from 'vitest'
-import { isHubPath, SafeAnswer } from './SafeAnswer'
+import { hubLinkPath, isHubPath, SafeAnswer } from './SafeAnswer'
 
 // Ask the Hub's answer is drawn without trusting it: no images, no HTML, and only links to Hub
 // pages are clickable (the server rewrites the answer first; this is the second wall).
@@ -40,16 +40,42 @@ describe('SafeAnswer', () => {
     expect(c.querySelector('td')?.textContent).toBe('EFP')
   })
 
-  it('isHubPath', () => {
-    expect(isHubPath('/hub')).toBe(true)
-    expect(isHubPath('/hub/health')).toBe(true)
-    expect(isHubPath('/hubx')).toBe(false)
-    expect(isHubPath('https://hub.example.com/hub')).toBe(false)
-    expect(isHubPath('/hub//evil')).toBe(false)
-    expect(isHubPath('/hub?app=3')).toBe(true)
-    expect(isHubPath('/hub-link/status')).toBe(false)
-    expect(isHubPath('/hub/../api/auth/logout')).toBe(false)
-    expect(isHubPath('/hub/%2e%2e/api/auth/logout')).toBe(false)
-    expect(isHubPath('/hub/%252e%252e/api')).toBe(false)
+  it('hubLinkPath / isHubPath: the twin of the server rule', () => {
+    expect(hubLinkPath('/hub')).toBe('/hub')
+    expect(hubLinkPath('/hub?app=3')).toBe('/hub?app=3')
+    expect(hubLinkPath('/hub/health')).toBe('/hub/health')
+    expect(hubLinkPath('/hub/apps/3')).toBe('/hub/apps/3')
+    expect(hubLinkPath('/hub/%61pps/3')).toBe('/hub/apps/3')
+    expect(hubLinkPath('/hub/a/../apps/3')).toBe('/hub/apps/3')
+    expect(hubLinkPath('/hub/apps/3#frag')).toBe('/hub/apps/3')
+    for (const bad of [
+      '/hub-link/status',
+      '/hub-deployment/x',
+      '/hubx',
+      '/hub/../x',
+      '/hub/../api/auth/logout',
+      '/hub/%2e%2e/api/auth/logout',
+      '/hub/%252e%252e/api',
+      '/hub/%25252e%25252e/api',
+      '/hub/%2525252e%2525252e/api',
+      '/hub/%5c..%5capi',
+      '/hub\\..\\api',
+      '/hub\\evil',
+      '/hub/%0aevil',
+      '//evil',
+      '//evil.example/hub',
+      'https:',
+      'https://hub.example.com/hub',
+      'hub/apps'
+    ]) {
+      expect(hubLinkPath(bad), bad).toBeNull()
+      expect(isHubPath(bad), bad).toBe(false)
+    }
+    expect(hubLinkPath('/hub//evil')).toBe('/hub//evil')
+  })
+
+  it('a link is drawn with the resolved path, never the raw one', () => {
+    const c = draw('[x](/hub/a/../apps/3) [y](/hub/%252e%252e/api)')
+    expect([...c.querySelectorAll('a')].map((a) => a.getAttribute('href'))).toEqual(['/hub/apps/3'])
   })
 })
