@@ -27,6 +27,7 @@ import {
   fetchShared,
   fetchSharedList,
   fetchSharedStatus,
+  flowScriptsLive,
   flowScriptsSetting,
   holdsLatest,
   linkProblem,
@@ -728,7 +729,7 @@ function ScriptsCard({
   const qc = useQueryClient()
   const [failure, setFailure] = useState<ErrorDescription | null>(null)
   const saved = flowScriptsSetting(row.settings)
-  const live = link?.state === 'ok' ? link.flow_scripts === true : null
+  const live = flowScriptsLive(link)
   const save = useMutation({
     mutationFn: (on: boolean) =>
       updateShared(row.id, { settings: withFlowScripts(row.settings, on) }),
@@ -746,74 +747,91 @@ function ScriptsCard({
     },
     onError: (e) => setFailure(sharedError(e, 'Could not change the script setting'))
   })
+  const pending = live !== 'unknown' && row.mode === 'docker' && saved !== (live === 'on')
+  const action =
+    row.mode !== 'docker' || retired ? null : saved ? (
+      <button
+        type='button'
+        className={ghostButton}
+        disabled={save.isPending}
+        onClick={() => save.mutate(false)}
+      >
+        Turn off
+      </button>
+    ) : (
+      <ConfirmButton
+        onConfirm={() => save.mutate(true)}
+        title='Turn on script steps for every app on this deployment'
+        confirmLabel='Every app here is trusted: turn on?'
+        disabled={save.isPending}
+        className={ghostButton}
+        armedClassName={cn(ghostButton, dangerArmed)}
+      >
+        Turn on
+      </ConfirmButton>
+    )
   return (
     <SectionCard
       title='Flow script steps'
       description='Off by default. When on, each script step of a flow runs in a sandbox process of its own.'
+      actions={action}
     >
-      <div className='space-y-2 px-4 py-3 text-[12px] text-slate-700 dark:text-slate-300'>
-        <p className='m-0 flex items-start gap-1.5 text-amber-800 dark:text-amber-300'>
-          <AlertTriangle className='mt-0.5 h-3.5 w-3.5 shrink-0' aria-hidden />
-          {FLOW_SCRIPTS_RISK}
-        </p>
-        <p className='m-0 flex flex-wrap items-center gap-2'>
-          <span>On the deployment now:</span>
-          {live === null ? (
-            <Chip
-              tone='quiet'
-              tip='The deployment did not answer, or runs a version before 0.3.215.'
-            >
-              Unknown
-            </Chip>
-          ) : (
-            <Chip tone={live ? 'busy' : 'quiet'}>{live ? 'On' : 'Off'}</Chip>
-          )}
-          {row.mode === 'docker' && (
-            <>
-              <span className='text-slate-500 dark:text-muted-foreground'>· saved setting:</span>
-              <Chip tone={saved ? 'busy' : 'quiet'}>{saved ? 'On' : 'Off'}</Chip>
-            </>
-          )}
-        </p>
-        {row.mode === 'docker' ? (
-          !retired && (
-            <div className='flex flex-wrap items-center gap-2'>
-              {saved ? (
-                <button
-                  type='button'
-                  className={ghostButton}
-                  disabled={save.isPending}
-                  onClick={() => save.mutate(false)}
+      <div className='space-y-3 px-4 py-3 text-[12px] text-slate-700 dark:text-slate-300'>
+        <dl className='m-0 flex flex-wrap items-center gap-x-5 gap-y-2'>
+          <div className='flex items-center gap-2'>
+            <dt className='text-slate-500 dark:text-muted-foreground'>Running now</dt>
+            <dd className='m-0'>
+              {live === 'unknown' ? (
+                <Chip
+                  tone='quiet'
+                  tip='The deployment did not answer, or runs a version before 0.3.215.'
                 >
-                  Turn off
-                </button>
+                  Unknown
+                </Chip>
+              ) : live === 'mixed' ? (
+                <Chip
+                  tone='warn'
+                  tip='Some of its processes have script steps on and some off, so it counts as off.'
+                >
+                  Mixed
+                </Chip>
               ) : (
-                <ConfirmButton
-                  onConfirm={() => save.mutate(true)}
-                  title='Turn on script steps'
-                  confirmLabel='Every app here is trusted: turn on?'
-                  disabled={save.isPending}
-                  className={ghostButton}
-                  armedClassName={cn(ghostButton, dangerArmed)}
-                >
-                  Turn on
-                </ConfirmButton>
+                <Chip tone={live === 'on' ? 'busy' : 'quiet'}>{live === 'on' ? 'On' : 'Off'}</Chip>
               )}
-              {saved !== (live ?? saved) && (
-                <span className='text-slate-500 dark:text-muted-foreground'>
-                  The saved setting reaches the processes when the stack is applied again (the next
-                  upgrade, or an upgrade to the version it runs).
-                </span>
-              )}
+            </dd>
+          </div>
+          {row.mode === 'docker' && (
+            <div className='flex items-center gap-2'>
+              <dt className='text-slate-500 dark:text-muted-foreground'>Saved</dt>
+              <dd className='m-0'>
+                <Chip tone={saved ? 'busy' : 'quiet'}>{saved ? 'On' : 'Off'}</Chip>
+              </dd>
             </div>
-          )
-        ) : (
-          <p className='m-0 text-slate-500 dark:text-muted-foreground'>
+          )}
+        </dl>
+        {pending && (
+          <p className='m-0 text-slate-600 dark:text-slate-300'>
+            Saved {saved ? 'on' : 'off'}, not running yet: it takes effect when the stack is applied
+            again (the next upgrade, or an upgrade to the version it runs).
+          </p>
+        )}
+        {row.mode !== 'docker' && (
+          <p className='m-0 text-slate-600 dark:text-slate-300'>
             Whoever runs this deployment sets{' '}
             <span className='font-mono'>{FLOW_SCRIPTS_KEY}=on</span> on every process of it to turn
             them on.
           </p>
         )}
+        <div
+          role='note'
+          className='flex gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-900/60 dark:bg-amber-950/40'
+        >
+          <AlertTriangle
+            className='mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-700 dark:text-amber-300'
+            aria-hidden
+          />
+          <p className='m-0 text-amber-900 dark:text-amber-200'>{FLOW_SCRIPTS_RISK}</p>
+        </div>
         {failure && <ErrorNotice description={failure} />}
       </div>
     </SectionCard>
