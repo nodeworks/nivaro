@@ -7,6 +7,7 @@ import { sqlDialect } from '../../db/sql-dialect.js'
 import { NIVARO_VERSION } from '../../version.js'
 import { registerAppKeyed } from '../app-forget.js'
 import { appEnvironment } from '../app-info-environment.js'
+import { appMap, appSet } from '../app-state.js'
 import { selectInChunks, whereInList } from '../db-batch.js'
 import { groupSimilarIssues } from '../issue-groups.js'
 import { hitCounts, hitKey } from '../issue-raise.js'
@@ -1122,8 +1123,9 @@ async function issueSourceOff(rules: TrackerRule[]): Promise<Set<number>> {
   return off
 }
 
-const inFlight = new Set<number>()
-const again = new Set<number>()
+// Per app: two apps on one shared deployment may hold the same issue id.
+const inFlight = appSet<number>()
+const again = appSet<number>()
 
 /** At most one failure line per this long per process; the line carries the count since. */
 export const FAILURE_LOG_EVERY_MS = 10 * 60_000
@@ -1381,8 +1383,8 @@ export async function evaluateTicket(ticketId: number, now = new Date()): Promis
   return out
 }
 
-const ticketInFlight = new Set<number>()
-const ticketAgain = new Set<number>()
+const ticketInFlight = appSet<number>()
+const ticketAgain = appSet<number>()
 
 /** evaluateTicket, one at a time per ticket (a write meanwhile runs once more). Never throws. */
 export async function evaluateTicketQueued(ticketId: number): Promise<void> {
@@ -1514,7 +1516,8 @@ async function quietDue(
 export const SWEEP_MAX_TRIES = 3
 export const SWEEP_MAX_HOLD_MS = 60 * 60_000
 const SWEEP_FAILURES_MAX = 1000
-const sweepFailures = new Map<number, { count: number; firstAt: number; skipped: boolean }>()
+// Per app (issue ids repeat across apps of one shared deployment).
+const sweepFailures = appMap<number, { count: number; firstAt: number; skipped: boolean }>()
 
 /** Tests: forget the sweep's failure tally. */
 export function resetSweepFailures(): void {

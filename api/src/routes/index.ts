@@ -6,7 +6,7 @@ import { clearMetadataCache } from '../services/collections.js'
 import { announceConfigChanged, collectionHint, isConfigWrite } from '../services/config-live.js'
 import { configWatchOnResponse, configWatchPreHandler } from '../services/config-watch.js'
 import { bustDefinitionCache } from '../services/definition-cache.js'
-import { isMultiTenant } from '../services/deployment-mode.js'
+import { isMultiTenant, isNivaroCloud } from '../services/deployment-mode.js'
 import { bustLayoutReferences } from '../services/layout-references.js'
 import { announcePermissionChange, permissionTarget } from '../services/permission-live.js'
 import { clearPickerRuleCache } from '../services/picker-rules.js'
@@ -766,8 +766,9 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(treePermissionsRoutes)
   await app.register(atRiskRoutes, { prefix: '/at-risk' })
   await app.register(retentionRoutes, { prefix: '/retention' })
-  // Issue tracker sync is a self-hosted feature — never mounted in cloud mode.
-  if (!isMultiTenant()) {
+  // Issue tracker sync: self-hosted, and per app on a Hub shared deployment (each app's own
+  // connections, switch and webhook, routed by the app's host) — never mounted in Nivaro Cloud.
+  if (!isNivaroCloud()) {
     await app.register(trackerFeaturePublicRoutes, { prefix: '/trackers' })
     await app.register(trackerRoutes, { prefix: '/trackers' })
     // Create / link from a source: admins, and create_roles members for tickets and records.

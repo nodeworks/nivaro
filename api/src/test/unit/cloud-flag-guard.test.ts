@@ -97,7 +97,15 @@ const EXTRA_CALLS: Record<string, { multiTenant?: number; nivaroCloud?: number }
   // entries are weight 0). realtimeBoardRuns() (+1): the realtime board runs everywhere but Nivaro
   // Cloud — server.ts and realtime-server.ts start it on a shared deployment too (server.ts's T3
   // entry is weight 0).
-  'services/process-role.ts': { nivaroCloud: 3 }
+  'services/process-role.ts': { nivaroCloud: 3 },
+  // GitLab issue sync per app (0.3.215): its routes, switch, jobs, flow op/trigger and the issue
+  // hit counters refuse in Nivaro Cloud only (their T6 entries are weight 0); a Hub shared
+  // deployment runs each app's own sync.
+  'routes/index.ts': { nivaroCloud: 1 },
+  'services/issue-raise.ts': { nivaroCloud: 1 },
+  'services/trackers/crons.ts': { nivaroCloud: 1 },
+  'services/trackers/feature.ts': { nivaroCloud: 1 },
+  'services/trackers/flow-ops.ts': { nivaroCloud: 1 }
 }
 
 type Rule = 'T1' | 'T2' | 'T3' | 'T4' | 'T5' | 'T6' | 'T7' | 'C1' | 'C2' | 'C3' | 'C4' | 'C5'

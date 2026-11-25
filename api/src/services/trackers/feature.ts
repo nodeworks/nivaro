@@ -1,14 +1,21 @@
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../../db/index.js'
 import { logActivity } from '../activity.js'
-import { isMultiTenant } from '../deployment-mode.js'
+import { appBox } from '../app-state.js'
+import { isNivaroCloud, perAppJobs } from '../deployment-mode.js'
 import { instanceKey } from '../instance-key.js'
 import { bustInstanceOverridesCache } from '../settings-overrides.js'
 
 /**
  * The master switch for GitLab sync. OFF by default, per instance. Order of precedence:
- * cloud mode (always off) > env ISSUE_TRACKERS on|off > the stored setting (key `issue_trackers`
- * on this instance's nivaro_settings_overrides row) > default off.
+ * Nivaro Cloud (always off) > env ISSUE_TRACKERS on|off > the stored setting (key
+ * `issue_trackers` on this instance's nivaro_settings_overrides row) > default off.
+ *
+ * On a Hub shared deployment (one process, many apps) the switch is per app: the stored setting
+ * lives in each app's own database. The process env belongs to the whole deployment there, so
+ * ISSUE_TRACKERS=off turns sync off for every app on it (and locks the switch), while
+ * ISSUE_TRACKERS=on does not switch any app on: each app's own stored switch decides (the same
+ * rule as TEAMS_BOT).
  */
 export type FeatureSource = 'env' | 'setting' | 'default' | 'cloud'
 export interface FeatureState {
@@ -19,10 +26,12 @@ export interface FeatureState {
 export const FEATURE_KEY = 'issue_trackers'
 const TTL_MS = 5000
 
-let cache: { at: number; value: FeatureState } | null = null
+// One cache per app (a Hub shared deployment serves many apps from this process, each with its
+// own switch). A bust inside an app clears that app's; outside one, every app's.
+const cache = appBox<{ at: number; value: FeatureState } | null>(() => null)
 
 export function bustTrackersFeatureCache(): void {
-  cache = null
+  cache.reset()
 }
 
 function envValue(): boolean | null {
@@ -50,9 +59,10 @@ async function readRow(): Promise<{ id: number; data: Record<string, unknown> } 
 }
 
 async function compute(): Promise<FeatureState> {
-  if (isMultiTenant()) return { enabled: false, source: 'cloud' }
+  if (isNivaroCloud()) return { enabled: false, source: 'cloud' }
   const env = envValue()
-  if (env !== null) return { enabled: env, source: 'env' }
+  // A shared deployment's env `on` is not any app's choice: only `off` applies there.
+  if (env !== null && !(env && perAppJobs())) return { enabled: env, source: 'env' }
   try {
     const stored = (await readRow())?.data[FEATURE_KEY] as { enabled?: unknown } | undefined
     if (stored && typeof stored.enabled === 'boolean')
@@ -64,9 +74,10 @@ async function compute(): Promise<FeatureState> {
 }
 
 export async function trackersFeature(): Promise<FeatureState> {
-  if (cache && Date.now() - cache.at < TTL_MS) return cache.value
+  const hit = cache.value
+  if (hit && Date.now() - hit.at < TTL_MS) return hit.value
   const value = await compute()
-  cache = { at: Date.now(), value }
+  cache.value = { at: Date.now(), value }
   return value
 }
 

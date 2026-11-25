@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { db } from '../../db/index.js'
+import { appMap } from '../app-state.js'
 import { selectInChunks, whereInList } from '../db-batch.js'
 import {
   type IssueActor,
@@ -972,7 +973,7 @@ export const RECONCILE_HOLD_RUNS = 3
 export const RECONCILE_LOG_EVERY_MS = 10 * 60_000
 
 /** connection:project:iid → consecutive reconcile runs in which applying that issue failed. */
-const issueFailures = new Map<string, number>()
+const issueFailures = appMap<string, number>()
 const reconcileLog = { lastAt: 0, since: 0 }
 
 /** Tests: forget held issues and the log limiter. */

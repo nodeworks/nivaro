@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../../db/index.js'
 import { runInBackgroundPool } from '../../db/pool-context.js'
-import { isMultiTenant } from '../deployment-mode.js'
+import { isNivaroCloud } from '../deployment-mode.js'
 import { onIssueWrite, pruneHits } from '../issue-raise.js'
 import { onTicketWrite } from '../support-ticket-events.js'
 import { currentTenantKey } from '../tenant-rooms.js'
@@ -25,9 +25,12 @@ import { onRecurrence } from './outbound-sync.js'
 import { processOutbox, pruneOutbox } from './outbox.js'
 
 /**
- * The GitLab sync background work (self-hosted only; every run returns at once while the master
- * switch is off): the rule-engine listener on issue writes, the 5-minute sweep, the outbox worker
- * (every 30 s), the reconcile pass (every 10 min) and the nightly prune.
+ * The GitLab sync background work (self-hosted, and per app on a Hub shared deployment; never in
+ * Nivaro Cloud; every run returns at once while the app's master switch is off): the rule-engine
+ * listener on issue writes, the 5-minute sweep, the outbox worker (every 30 s), the reconcile pass
+ * (every 10 min) and the nightly prune. On a shared deployment the four jobs are 'app' scoped
+ * (services/cron-scope.ts): each runs once per app inside that app (its database, its switch, its
+ * connections and sealed tokens); the listener hears each write inside the writer's app.
  */
 
 const EVENTS_KEEP_DAYS = 30
@@ -145,7 +148,7 @@ export async function pruneTrackers(now = new Date()): Promise<void> {
 }
 
 export function registerTrackerCrons(app: FastifyInstance): void {
-  if (isMultiTenant()) return
+  if (isNivaroCloud()) return
   // the per-note lock of the reconcile pass (same Redis as the webhook's)
   setTrackerRedis((app as { redis?: NoteLockRedis }).redis)
   subscribeEngine()
