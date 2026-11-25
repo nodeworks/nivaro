@@ -4,7 +4,9 @@ import { describe, expect, it, vi } from 'vitest'
 vi.mock('@nivaro/shared', () => ({
   NivaroProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   DbTuningView: () => <div data-testid='tuning-view' />,
-  useOverflowTip: () => ({ current: null })
+  useOverflowTip: () => ({ current: null }),
+  // hub-page → lib/hub-product → lib/api installs the client chaos interceptor at import.
+  clientChaosAxiosInterceptor: () => (config: unknown) => config
 }))
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
 
