@@ -699,6 +699,62 @@ describe('secret rotation helper (enhancement 19)', () => {
     expect(await environmentForLinkToken(HUB_TOKEN)).toBeNull()
   })
 
+  it('the grace ends at once when the token is replaced or cleared, or the address changes', async () => {
+    const { environmentForLinkToken } = await import('../../../services/hub/link-token.js')
+    const { prevSealedHubToken } = await import('../../../services/hub/ops/hub-token-grace.js')
+    const rotate = async (envId: number) =>
+      secrets.rotateHubToken(
+        envId,
+        { id: ADMIN },
+        { lock: freeLock, apply: async () => ({ deployId: 1, jobRunId: null }) }
+      )
+    const envId = await dockerEnv()
+    await rotate(envId)
+    expect((await environmentForLinkToken(HUB_TOKEN))?.environment_id).toBe(envId)
+
+    // An admin types another token (any writer, not the helper): the old one stops working.
+    await db('nivaro_hub_environments')
+      .where({ id: envId })
+      .update(hubTokenColumns('q'.repeat(48)))
+    expect(await environmentForLinkToken(HUB_TOKEN)).toBeNull()
+    expect(await prevSealedHubToken(envId)).toBeNull()
+    expect((await envRow(envId)).hub_token_prev).toBeNull()
+
+    // Cleared token: same.
+    await db('nivaro_hub_environments')
+      .where({ id: envId })
+      .update(hubTokenColumns('r'.repeat(48)))
+    await rotate(envId)
+    await db('nivaro_hub_environments').where({ id: envId }).update(hubTokenColumns(null))
+    expect(await environmentForLinkToken('r'.repeat(48))).toBeNull()
+
+    // A changed address: no request ever carries the previous token there.
+    await db('nivaro_hub_environments')
+      .where({ id: envId })
+      .update(hubTokenColumns('s'.repeat(48)))
+    await rotate(envId)
+    await db('nivaro_hub_environments')
+      .where({ id: envId })
+      .update({ base_url: 'https://elsewhere.example.net' })
+    const auths: string[] = []
+    const { opsTargets } = await import('../../../services/hub/ops/link-read.js')
+    const r = await readOps(
+      (await opsTargets([envId]))[0],
+      'files',
+      {},
+      {
+        fetch: async (_url, headers) => {
+          auths.push(headers.Authorization)
+          return { ok: false, status: 401, body: { code: 'HUB_LINK_REFUSED' } }
+        }
+      }
+    )
+    expect(r.state).toBe('refused')
+    expect(auths).toHaveLength(1)
+    expect(auths[0]).not.toBe(`Bearer ${'s'.repeat(48)}`)
+    expect(await environmentForLinkToken('s'.repeat(48))).toBeNull()
+  })
+
   it('refuses while another holder has the lock or a deploy is planned/running', async () => {
     const envId = await dockerEnv()
     const before = await envRow(envId)

@@ -21,7 +21,8 @@ import { longText } from '../portable-ddl.js'
  *                                 last rotated, the reminder sent, the readiness check after a
  *                                 rotation
  *  - nivaro_hub_secret_rotations  history: one row per rotation (helper or detected)
- *  - nivaro_hub_environments.hub_token_prev / _prev_lookup / _prev_until  the previous hub token
+ *  - nivaro_hub_environments.hub_token_prev / _prev_lookup / _prev_until / _prev_for /
+ *    _prev_origin                 the previous hub token
  *                                 (sealed + its SHA-256 lookup) for 24 h after the Hub rotates
  *                                 it: the Hub's calls fall back to it and the app's calls with it
  *                                 are still accepted until the stack runs the new one
@@ -133,6 +134,15 @@ export async function up(knex: Knex): Promise<void> {
     if (!(await knex.schema.hasColumn(ENVS, 'hub_token_prev_until')))
       await knex.schema.alterTable(ENVS, (t) => {
         t.dateTime('hub_token_prev_until').nullable()
+      })
+    // The grace is bound to the token the rotation wrote and the origin then (security review).
+    if (!(await knex.schema.hasColumn(ENVS, 'hub_token_prev_for')))
+      await knex.schema.alterTable(ENVS, (t) => {
+        t.string('hub_token_prev_for', 64).nullable()
+      })
+    if (!(await knex.schema.hasColumn(ENVS, 'hub_token_prev_origin')))
+      await knex.schema.alterTable(ENVS, (t) => {
+        t.string('hub_token_prev_origin', 500).nullable()
       })
   }
 }

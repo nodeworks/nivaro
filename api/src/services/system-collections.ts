@@ -60,6 +60,7 @@ const SYSTEM_SENSITIVE: Record<string, readonly string[]> = {
     'hub_token_lookup',
     'hub_token_prev',
     'hub_token_prev_lookup',
+    'hub_token_prev_for',
     'encryption_key',
     'encryption_key_fp'
   ],

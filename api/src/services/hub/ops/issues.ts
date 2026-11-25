@@ -1,6 +1,6 @@
 import { db } from '../../../db/index.js'
 import { chunkArray } from '../../db-batch.js'
-import { hubSafeTitle, ISSUE_ROLLUP_CAP, issueTitleTemplate } from '../../hub-link/ops-report.js'
+import { hubSafeTitle, ISSUE_ROLLUP_CAP, safeRoute } from '../../hub-link/ops-report.js'
 import { writeOpsHealth } from './health-row.js'
 import { type LinkReadDeps, type OpsEnvTarget, opsTargets, readOps } from './link-read.js'
 
@@ -87,12 +87,7 @@ export function parseRollup(
       occurrences: int(g.count),
       people: int(g.people, 1_000_000),
       release: short(g.release, 64),
-      screen:
-        kind === 'crash'
-          ? short(g.screen, 200)
-            ? issueTitleTemplate(String(g.screen))
-            : null
-          : null,
+      screen: kind === 'crash' ? (short(g.screen, 200) ? safeRoute(String(g.screen)) : null) : null,
       first_seen: date(g.first_seen),
       last_seen: date(g.last_seen),
       app_issue_id: int(g.issue_id) || null

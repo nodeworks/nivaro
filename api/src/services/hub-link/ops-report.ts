@@ -116,12 +116,26 @@ export function issueTitleTemplate(text: string | null | undefined): string {
   return (one || 'Untitled').slice(0, 200)
 }
 
-/** A whole title (route + message) made safe: the route kept, the message as its template. */
+const ROUTE_SHAPE = /^\/[A-Za-z0-9_/:.-]{0,120}$/
+const GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
+
+/**
+ * A route as the Hub may show it: kept when it looks like a route pattern (a path of plain
+ * segments, no 4+ digit run, no GUID), else templated like a message — a route can carry an
+ * email, a record id or a name (`/api/users/jane@x.com`).
+ */
+export function safeRoute(route: string): string {
+  const r = String(route ?? '').trim()
+  if (ROUTE_SHAPE.test(r) && !/\d{4,}/.test(r) && !GUID.test(r)) return r
+  return issueTitleTemplate(r)
+}
+
+/** A whole title (route + message) made safe: both parts templated (the route when needed). */
 export function hubSafeTitle(text: string | null | undefined): string {
   const t = String(text ?? '')
   const { route, message } = messageOfIssue({ title: t, source: 'server' })
   if (route === 'unknown' || !route.startsWith('/')) return issueTitleTemplate(t)
-  return `${route}: ${issueTitleTemplate(message)}`.slice(0, 200)
+  return `${safeRoute(route)}: ${issueTitleTemplate(message)}`.slice(0, 200)
 }
 
 /** The cross-app signature of one issue row. */
@@ -245,7 +259,7 @@ export async function issueRollup(
         people: 0,
         release: release ? String(release).slice(0, 64) : null,
         // A crash's route is a pattern (`/collections/:id`), never an id.
-        screen: kind === 'crash' && route !== 'unknown' ? issueTitleTemplate(route) : null,
+        screen: kind === 'crash' && route !== 'unknown' ? safeRoute(route) : null,
         first_seen: first,
         last_seen: last,
         // Rows come newest first: the newest row is the one the Hub links to.

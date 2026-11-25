@@ -170,7 +170,8 @@ export async function readOps(
   let res = await call(url, token)
   // Inside the 24 h grace after a rotation the app may still run the previous token.
   if (res && res.status === 401) {
-    const sealed = await prevSealedHubToken(env.id).catch(() => null)
+    // Only to the address the grace was given for (never an origin changed since).
+    const sealed = await prevSealedHubToken(env.id, { origin: base }).catch(() => null)
     let prev: string | null = null
     try {
       prev = sealed ? openSecret(sealed) : null

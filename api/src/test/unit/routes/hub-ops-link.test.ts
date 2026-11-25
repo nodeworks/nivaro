@@ -198,6 +198,19 @@ describe('ops report', () => {
     expect(t).toContain('order=…')
   })
 
+  it('a route carrying an email, a record id or a GUID is scrubbed too', () => {
+    expect(hubSafeTitle('[server] /api/users/jane.smith@example.com: boom')).not.toContain('jane')
+    expect(hubSafeTitle('[server] /api/items/workflows/372787: boom')).toBe(
+      '/api/items/workflows/#: boom'
+    )
+    expect(
+      hubSafeTitle('[server] /api/users/3f2a9c1e-1b2c-4d5e-8f90-123456789abc/roles: boom')
+    ).not.toContain('3f2a9c1e')
+    expect(hubSafeTitle('[server] /api/items/:collection/:id: boom')).toBe(
+      '/api/items/:collection/:id: boom'
+    )
+  })
+
   it('code words stay readable', () => {
     expect(hubSafeTitle("/x: Cannot read properties of undefined (reading 'find')")).toBe(
       "/x: Cannot read properties of undefined (reading 'find')"

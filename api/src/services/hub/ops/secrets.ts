@@ -816,7 +816,7 @@ export async function rotateHubToken(
   user: { id: string },
   deps: RotateDeps = {}
 ): Promise<{ deploy_id: number; job_run_id: number | null }> {
-  const env = (await db(ENVS).where({ id: envId }).first('id', 'key', 'version_pin')) as
+  const env = (await db(ENVS).where({ id: envId }).first('id', 'key', 'version_pin', 'base_url')) as
     | Record<string, unknown>
     | undefined
   if (!env) throw new SecretRotateError('NOT_FOUND', 404, 'Not found')
@@ -855,7 +855,11 @@ export async function rotateHubToken(
     const now = new Date()
     const n = await envWithLookup(envId, old.hub_token_lookup).update({
       ...next,
-      ...prevHubTokenColumns(old.hub_token, old.hub_token_lookup, now),
+      ...prevHubTokenColumns(
+        { sealed: old.hub_token, lookup: old.hub_token_lookup },
+        { forLookup: next.hub_token_lookup, baseUrl: String(env.base_url ?? '') },
+        now
+      ),
       updated_at: now
     })
     if (Number(n) !== 1)
@@ -887,7 +891,7 @@ export async function rotateHubToken(
     if (!(await deployRunning(envId))) {
       const n = await envWithLookup(envId, newLookup).update({
         ...old,
-        ...prevHubTokenColumns(null, null),
+        ...prevHubTokenColumns(null),
         updated_at: new Date()
       })
       undone = Number(n) === 1
