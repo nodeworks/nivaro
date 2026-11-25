@@ -452,7 +452,14 @@ export const CORE_KEEPS: readonly EnvKeepEntry[] = [
       'nivaro_hub_uptime_samples',
       'nivaro_hub_uptime_hours',
       'nivaro_hub_fleet_alerts',
-      'nivaro_hub_slo_reports'
+      'nivaro_hub_slo_reports',
+      'nivaro_hub_access_reviews',
+      'nivaro_hub_access_review_items',
+      'nivaro_hub_security_settings',
+      'nivaro_hub_vuln_scans',
+      'nivaro_hub_vuln_findings',
+      'nivaro_hub_cert_checks',
+      'nivaro_hub_break_glass'
     ] as const
   ).map(
     (table): EnvKeepEntry => ({

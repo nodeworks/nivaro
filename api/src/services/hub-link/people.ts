@@ -205,6 +205,12 @@ async function suspendInTransaction(k: Knex, q: PeopleQuery): Promise<SuspendOut
   )
 }
 
+/** Why the Hub suspends (only the activity text differs): an access review's removal says so. */
+export function readSuspendReason(body: unknown): 'offboard' | 'access_review' {
+  const r = (body as { reason?: unknown } | null)?.reason
+  return r === 'access_review' ? 'access_review' : 'offboard'
+}
+
 /** Suspends every matched account (see the header). Never deletes; never touches a non-person. */
 export async function suspendPeople(body: unknown, deps: SuspendDeps = {}): Promise<SuspendAnswer> {
   const q = readPeopleQuery(body)
@@ -243,7 +249,10 @@ export async function suspendPeople(body: unknown, deps: SuspendDeps = {}): Prom
       user: null,
       collection: 'nivaro_users',
       item: id,
-      comment: 'Suspended by the Nivaro Hub (offboarded everywhere)',
+      comment:
+        readSuspendReason(body) === 'access_review'
+          ? 'Suspended by the Nivaro Hub (removed in an access review)'
+          : 'Suspended by the Nivaro Hub (offboarded everywhere)',
       origin: 'integration'
     })
   }

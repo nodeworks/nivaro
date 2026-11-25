@@ -14,6 +14,7 @@ import {
 import { registerAppKeyed } from '../services/app-forget.js'
 import { rateWindowKey } from '../services/app-redis-keys.js'
 import { withAuthDeadline } from '../services/auth-deadline.js'
+import { breakGlassRoleFor } from '../services/break-glass-role.js'
 import { cacheSetting } from '../services/cache-config.js'
 import { registerCache } from '../services/cache-registry.js'
 import { appNowForAuth } from '../services/chaos/clock.js'
@@ -336,6 +337,11 @@ async function hydrateRole(
   user: User,
   opts?: { touch?: boolean; session?: boolean }
 ) {
+  // A Nivaro Hub break-glass grant that has ended runs as the role it replaced, even before the
+  // app's own job or the Hub puts it back (services/break-glass-role.ts). No query: the mark is
+  // a column of the row already read.
+  const bg = breakGlassRoleFor(user as { role?: unknown; break_glass?: unknown })
+  if (bg.expired) user = { ...user, role: (bg.role ?? null) as User['role'] }
   const role = user.role ? await db<Role>('nivaro_roles').where({ id: user.role }).first() : null
   // A role with sign-in turned off (app_access false) admits no person by any
   // credential — the one place every sign-in path passes (services/users.ts

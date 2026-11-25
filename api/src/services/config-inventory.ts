@@ -350,6 +350,13 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_hub_uptime_hours',
   'nivaro_hub_fleet_alerts',
   'nivaro_hub_slo_reports',
+  'nivaro_hub_access_reviews', //    Hub security (578): access reviews, scans, TLS, break-glass
+  'nivaro_hub_access_review_items',
+  'nivaro_hub_security_settings',
+  'nivaro_hub_vuln_scans',
+  'nivaro_hub_vuln_findings',
+  'nivaro_hub_cert_checks',
+  'nivaro_hub_break_glass',
   'nivaro_share_links',
   'nivaro_dashboard_links',
   'nivaro_webhook_deliveries',
