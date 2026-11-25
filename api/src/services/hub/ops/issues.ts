@@ -1,6 +1,6 @@
 import { db } from '../../../db/index.js'
 import { chunkArray } from '../../db-batch.js'
-import { hubSafeTitle, ISSUE_ROLLUP_CAP } from '../../hub-link/ops-report.js'
+import { hubSafeTitle, ISSUE_ROLLUP_CAP, issueTitleTemplate } from '../../hub-link/ops-report.js'
 import { writeOpsHealth } from './health-row.js'
 import { type LinkReadDeps, type OpsEnvTarget, opsTargets, readOps } from './link-read.js'
 
@@ -66,7 +66,8 @@ export function parseRollup(
 ): { groups: StoredIssueGroup[]; truncated: boolean } | null {
   const b = body as { groups?: unknown; truncated?: unknown } | null
   if (!b || typeof b !== 'object' || !Array.isArray(b.groups)) return null
-  const groups: StoredIssueGroup[] = []
+  // One row per signature (the unique index): an older app may send a signature twice — fold.
+  const bySig = new Map<string, StoredIssueGroup>()
   for (const raw of b.groups.slice(0, ISSUE_ROLLUP_CAP)) {
     const g = raw as Record<string, unknown> | null
     if (!g || typeof g !== 'object') continue
@@ -76,7 +77,7 @@ export function parseRollup(
     if (!kind) continue
     const severity = short(g.severity, 20)?.toLowerCase() ?? null
     const status = short(g.status, 20)?.toLowerCase() ?? null
-    groups.push({
+    const row: StoredIssueGroup = {
       environment_id: envId,
       kind,
       sig,
@@ -87,13 +88,35 @@ export function parseRollup(
       people: int(g.people, 1_000_000),
       release: short(g.release, 64),
       screen:
-        kind === 'crash' ? (short(g.screen, 200) ? hubSafeTitle(String(g.screen)) : null) : null,
+        kind === 'crash'
+          ? short(g.screen, 200)
+            ? issueTitleTemplate(String(g.screen))
+            : null
+          : null,
       first_seen: date(g.first_seen),
       last_seen: date(g.last_seen),
       app_issue_id: int(g.issue_id) || null
-    })
+    }
+    const had = bySig.get(sig)
+    if (!had) {
+      bySig.set(sig, row)
+      continue
+    }
+    had.occurrences += row.occurrences
+    // People of two rows may overlap: the larger count is the floor, never a sum.
+    had.people = Math.max(had.people, row.people)
+    if ((SEV_RANK[row.severity ?? ''] ?? -1) > (SEV_RANK[had.severity ?? ''] ?? -1))
+      had.severity = row.severity
+    if (row.first_seen && (!had.first_seen || row.first_seen < had.first_seen))
+      had.first_seen = row.first_seen
+    if (row.last_seen && (!had.last_seen || row.last_seen > had.last_seen)) {
+      had.last_seen = row.last_seen
+      had.title = row.title
+      had.app_issue_id = row.app_issue_id
+      had.status = row.status
+    }
   }
-  return { groups, truncated: b.truncated === true }
+  return { groups: [...bySig.values()], truncated: b.truncated === true }
 }
 
 /** Replace one environment's groups (one transaction; chunks keep under the parameter cap). */
@@ -267,7 +290,10 @@ export async function listIssueGroups(
   if (f.kind) q.where('g.kind', f.kind)
   const rows = (await q) as Array<Record<string, unknown>>
 
-  const by = new Map<string, IssueGroupSummary & { _apps: Set<number>; _sev: number }>()
+  const by = new Map<
+    string,
+    IssueGroupSummary & { _apps: Set<number>; _envs: Set<number>; _sev: number }
+  >()
   for (const r of rows) {
     const sig = String(r.sig)
     let g = by.get(sig)
@@ -287,11 +313,12 @@ export async function listIssueGroups(
         first_seen: null,
         last_seen: null,
         _apps: new Set<number>(),
+        _envs: new Set<number>(),
         _sev: -1
       }
       by.set(sig, g)
     }
-    g.environments++
+    g._envs.add(Number(r.environment_id))
     g._apps.add(Number(r.app_id))
     if (!g.app_keys.includes(String(r.app_key))) g.app_keys.push(String(r.app_key))
     g.occurrences += Number(r.occurrences) || 0
@@ -316,9 +343,10 @@ export async function listIssueGroups(
   }
 
   const needle = (f.q ?? '').trim().toLowerCase()
-  let list = [...by.values()].map(({ _apps, _sev, ...g }) => ({
+  let list = [...by.values()].map(({ _apps, _envs, _sev, ...g }) => ({
     ...g,
     apps: _apps.size,
+    environments: _envs.size,
     app_keys: g.app_keys.sort(),
     releases: g.releases.sort().reverse().slice(0, 12)
   }))

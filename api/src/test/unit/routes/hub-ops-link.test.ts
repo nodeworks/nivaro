@@ -119,10 +119,25 @@ beforeAll(async () => {
       raised_by: null,
       created_at: new Date(Date.now() - 200 * 86_400_000),
       last_seen_at: new Date(Date.now() - 200 * 86_400_000)
+    },
+    {
+      // The same crash family in the previous release: folds into issue 2's group.
+      id: 5,
+      title: '/collections/:id: x.find is not a function',
+      source: 'client',
+      status: 'resolved',
+      severity: 'critical',
+      fingerprint: 'd'.repeat(64),
+      occurrence_count: 2,
+      details: crashDetails('0.3.214'),
+      raised_by: null,
+      created_at: new Date(Date.now() - 5 * 86_400_000),
+      last_seen_at: new Date(Date.now() - 2 * 86_400_000)
     }
   ])
   await db('nivaro_issue_occurrences').insert([
     { issue: 2, user_id: PERSON_A, build: '0.3.215' },
+    { issue: 5, user_id: PERSON_A, build: '0.3.214' },
     { issue: 2, user_id: PERSON_B, build: '0.3.215' },
     { issue: 1, user_id: PERSON_B, build: '0.3.214' }
   ])
@@ -165,6 +180,30 @@ describe('ops report', () => {
     expect(t).toContain('Workflow #')
   })
 
+  it('the SQL Server duplicate-key message keeps no value', () => {
+    const t = hubSafeTitle(
+      "[server] /api/items/users: Cannot insert duplicate key row in object 'dbo.users' with unique index 'ux_users_email'. The duplicate key value is (Smith, Jane)."
+    )
+    expect(t).toBe(
+      "/api/items/users: Cannot insert duplicate key row in object 'dbo.users' with unique index 'ux_users_email'. The duplicate key value is (…)."
+    )
+  })
+
+  it('an extension title loses its name, its record number, ids and key=value data', () => {
+    const t = hubSafeTitle(
+      '[server] /api/efp/push: MDSi push failed for CM26-79704 (Jane Smith) order=PO-1182 user 3f2a9c1e-1b2c-4d5e-8f90-123456789abc by Jane Smith'
+    )
+    expect(t).not.toMatch(/Jane|Smith|79704|1182|3f2a9c1e/)
+    expect(t).toContain('/api/efp/push: MDSi push failed for CM26-# (…)')
+    expect(t).toContain('order=…')
+  })
+
+  it('code words stay readable', () => {
+    expect(hubSafeTitle("/x: Cannot read properties of undefined (reading 'find')")).toBe(
+      "/x: Cannot read properties of undefined (reading 'find')"
+    )
+  })
+
   it('the same server fingerprint in two apps is one signature; a crash folds across releases', () => {
     const a = issueSignature({ source: 'server', fingerprint: 'F'.repeat(64) })
     const b = issueSignature({ source: 'server', fingerprint: 'f'.repeat(64) })
@@ -180,10 +219,13 @@ describe('ops report', () => {
     const r = await issueRollup({ days: 30 })
     expect(r.groups.map((g) => g.issue_id).sort()).toEqual([1, 2])
     const crash = r.groups.find((g) => g.issue_id === 2)
+    // Issues 2 and 5 are one crash family: one group, hits summed, each person once, the
+    // highest severity, open while any row is, the newest row's release and id.
     expect(crash).toMatchObject({
       kind: 'crash',
+      count: 5,
+      severity: 'critical',
       people: 2,
-      count: 3,
       release: '0.3.215',
       screen: '/collections/:id',
       status: 'acknowledged'

@@ -23,6 +23,17 @@ import { messageOfIssue } from '../error-clusters.js'
  */
 
 export const ISSUE_ROLLUP_CAP = 500
+
+const OPEN = new Set(['open', 'acknowledged'])
+const SEV_RANK: Record<string, number> = {
+  info: 0,
+  low: 0,
+  medium: 1,
+  warning: 1,
+  high: 2,
+  error: 2,
+  critical: 3
+}
 export const ISSUE_ROLLUP_DAYS_MAX = 90
 
 export type IssueGroupKind = 'crash' | 'server'
@@ -77,21 +88,40 @@ function iso(v: unknown): string | null {
   return Number.isNaN(d.getTime()) ? null : d.toISOString()
 }
 
+const CODE_LIKE = /^[a-z_$][\w$.-]{0,59}$/
+
 /**
- * A title the Hub may show: secrets, emails, opaque strings and quoted values gone
- * (scrubCrashText; here also a quoted capitalised word), and digit runs of 4 or more (record
- * ids, amounts) replaced by `#`.
+ * The message an issue was grouped by, with its literals replaced: what the Hub may show. On top
+ * of scrubCrashText (secrets, emails, long opaque strings, quoted values that are not code):
+ *  - GUIDs → `<id>`; digit runs of 4 or more (record ids, amounts) → `#`;
+ *  - a quoted value that is not a lower-case code word ('find', "dbo.users") → `'…'`;
+ *  - a parenthesised list that is not lower-case code words, such as the SQL Server
+ *    "duplicate key value is (Smith, Jane)" → `(…)`;
+ *  - a value after `=` or `:` that holds a digit → `…`;
+ *  - two or more Capitalised words in a row (a person's or a company's name) → `…`.
  */
-export function hubSafeTitle(text: string | null | undefined): string {
+export function issueTitleTemplate(text: string | null | undefined): string {
   const scrubbed = scrubCrashText(text, 600)
-    .replace(/\d{4,}/g, '#')
-    // Stricter than the issue log: a quoted word that does not look like code ('find', "rows.x")
-    // goes too — a capitalised one may be a name ("Jane").
+    .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, '<id>')
     .replace(/(["'`])([^"'`\n]{0,300})\1/g, (m, q: string, inner: string) =>
-      inner === '' || /^[a-z_$][\w$.-]{0,59}$/.test(inner) ? m : `${q}…${q}`
+      inner === '' || CODE_LIKE.test(inner) ? m : `${q}…${q}`
     )
+    .replace(/\(([^()]{0,300})\)/g, (m, inner: string) =>
+      inner.trim() === '' || /^[a-z_$][a-z0-9_$.'"`, -]*$/.test(inner) ? m : '(…)'
+    )
+    .replace(/([=:])\s*([^\s,;)]*\d[^\s,;)]*)/g, (_m, sep: string) => (sep === ':' ? ': …' : '=…'))
+    .replace(/\d{4,}/g, '#')
+    .replace(/\b[A-Z][a-z]+(?:[ ,]+[A-Z][a-z]+)+\b/g, '…')
   const one = scrubbed.replace(/\s+/g, ' ').trim()
   return (one || 'Untitled').slice(0, 200)
+}
+
+/** A whole title (route + message) made safe: the route kept, the message as its template. */
+export function hubSafeTitle(text: string | null | undefined): string {
+  const t = String(text ?? '')
+  const { route, message } = messageOfIssue({ title: t, source: 'server' })
+  if (route === 'unknown' || !route.startsWith('/')) return issueTitleTemplate(t)
+  return `${route}: ${issueTitleTemplate(message)}`.slice(0, 200)
 }
 
 /** The cross-app signature of one issue row. */
@@ -138,7 +168,8 @@ export async function issueRollup(
         .where('last_seen_at', '>=', since)
         .orWhere((x) => void x.whereNull('last_seen_at').where('created_at', '>=', since))
     })
-    .orderBy('last_seen_at', 'desc')
+    // Newest first on every engine (Postgres puts NULLs first on DESC): the same as created_at.
+    .orderByRaw('COALESCE(last_seen_at, created_at) DESC')
     .orderBy('id', 'desc')
     .limit(ISSUE_ROLLUP_CAP + 1)
     .select(
@@ -181,7 +212,10 @@ export async function issueRollup(
     people.set(id, set)
   }
 
-  const groups: IssueGroup[] = issues.map((r) => {
+  // One group per signature in this app: rows of one crash family across releases (or any two
+  // rows with one signature) fold, people counted once each.
+  const bySig = new Map<string, IssueGroup & { _people: Set<string>; _sev: number }>()
+  for (const r of issues) {
     const id = Number(r.id)
     const source = String(r.source ?? 'server')
     const details = (r.details as string | null) ?? null
@@ -194,22 +228,47 @@ export async function issueRollup(
     const meta = kind === 'crash' ? parseCrashMeta(details) : null
     const { route, message } = messageOfIssue({ title: String(r.title ?? ''), source })
     const release = meta?.release && meta.release !== 'unknown' ? meta.release : builds.get(id)
-    return {
-      sig,
-      kind,
-      title: hubSafeTitle(kind === 'crash' ? message : String(r.title ?? '')),
-      severity: String(r.severity ?? 'medium').slice(0, 20),
-      status: String(r.status ?? 'open').slice(0, 20),
-      count: Math.max(1, num(r.occurrence_count)),
-      people: people.get(id)?.size ?? 0,
-      release: release ? String(release).slice(0, 64) : null,
-      // A crash's route is a pattern (`/collections/:id`), never an id.
-      screen: kind === 'crash' && route !== 'unknown' ? hubSafeTitle(route) : null,
-      first_seen: iso(r.created_at),
-      last_seen: iso(r.last_seen_at ?? r.created_at),
-      issue_id: id
+    const severity = String(r.severity ?? 'medium').slice(0, 20)
+    const status = String(r.status ?? 'open').slice(0, 20)
+    const first = iso(r.created_at)
+    const last = iso(r.last_seen_at ?? r.created_at)
+    const who = people.get(id) ?? new Set<string>()
+    const g = bySig.get(sig)
+    if (!g) {
+      bySig.set(sig, {
+        sig,
+        kind,
+        title: kind === 'crash' ? issueTitleTemplate(message) : hubSafeTitle(String(r.title ?? '')),
+        severity,
+        status,
+        count: Math.max(1, num(r.occurrence_count)),
+        people: 0,
+        release: release ? String(release).slice(0, 64) : null,
+        // A crash's route is a pattern (`/collections/:id`), never an id.
+        screen: kind === 'crash' && route !== 'unknown' ? issueTitleTemplate(route) : null,
+        first_seen: first,
+        last_seen: last,
+        // Rows come newest first: the newest row is the one the Hub links to.
+        issue_id: id,
+        _people: new Set(who),
+        _sev: SEV_RANK[severity] ?? 1
+      })
+      continue
     }
-  })
+    g.count += Math.max(1, num(r.occurrence_count))
+    for (const p of who) g._people.add(p)
+    const rank = SEV_RANK[severity] ?? 1
+    if (rank > g._sev) {
+      g._sev = rank
+      g.severity = severity
+    }
+    if (OPEN.has(status) && !OPEN.has(g.status)) g.status = status
+    if (first && (!g.first_seen || first < g.first_seen)) g.first_seen = first
+  }
+  const groups: IssueGroup[] = [...bySig.values()].map(({ _people, _sev, ...g }) => ({
+    ...g,
+    people: _people.size
+  }))
   return { ...empty, truncated, groups }
 }
 
