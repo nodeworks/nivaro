@@ -16,7 +16,7 @@ export const issueTrackers: DocSection = {
     { type: 'h2', id: 'issue-trackers-switch', text: 'Turning it on' },
     {
       type: 'p',
-      text: 'The Issue trackers tab opens with one switch. Order of precedence: Nivaro Cloud (always off), the environment variable `ISSUE_TRACKERS=on|off`, the stored setting (key `issue_trackers` on this instance’s settings overrides row, so it is never promoted between environments), then off. On a Hub shared deployment the switch is per app (each app’s own stored setting); the deployment’s `ISSUE_TRACKERS=off` turns sync off for every app on it, while `ISSUE_TRACKERS=on` switches no app on. With the env variable set the switch is read-only and says why. While off, every `/api/trackers*` route except the switch answers 404 `FEATURE_OFF`, the webhook answers 404, and every GitLab control disappears from the issue log, tickets and records. Queued GitLab writes wait and nothing is deleted; turning it on again resumes the queue and catches up. Each change is written to the activity log.'
+      text: 'The Issue trackers tab opens with one switch. Order of precedence: Nivaro Cloud (always off), the environment variable `ISSUE_TRACKERS=on|off`, the stored setting (key `issue_trackers` on this instance’s settings overrides row, so it is never promoted between environments), then off. On a Hub shared deployment the switch is per app (each app’s own stored setting); the deployment’s `ISSUE_TRACKERS=off` turns sync off for every app on it, while `ISSUE_TRACKERS=on` switches no app on. With the env variable set the switch is read-only and says why; while it keeps sync off, `PUT /api/trackers/feature {"enabled": false}` may still store this instance’s own switch off (so a move to a shared deployment, which does not apply the env, does not start sync). While off, every `/api/trackers*` route except the switch answers 404 `FEATURE_OFF`, the webhook answers 404, and every GitLab control disappears from the issue log, tickets and records. Queued GitLab writes wait and nothing is deleted; turning it on again resumes the queue and catches up. Each change is written to the activity log.'
     },
     { type: 'h2', id: 'issue-trackers-connection', text: 'Connection and webhook' },
     {
@@ -169,7 +169,7 @@ export const issueTrackers: DocSection = {
         [
           '`GET` / `PUT /api/trackers/feature`',
           'Admins',
-          'Read or set the master switch (409 when the environment or cloud mode decides it).'
+          'Read or set the master switch (409 when the environment or cloud mode decides it; storing off while the environment keeps it off is allowed).'
         ],
         [
           '`GET` / `POST /api/trackers`, `PATCH` / `DELETE /api/trackers/:id`',
