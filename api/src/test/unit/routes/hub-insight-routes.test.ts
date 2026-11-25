@@ -29,10 +29,11 @@ vi.mock('../../../middleware/authenticate.js', () => {
     user?: unknown
     isAdmin?: boolean
   }) => {
-    const m = /^Bearer (admin|user):(.+)$/.exec(req.headers.authorization ?? '')
+    const m = /^Bearer (admin|user|key):(.+)$/.exec(req.headers.authorization ?? '')
     if (!m) throw Object.assign(new Error('Unauthorized'), { statusCode: 401 })
     req.user = { id: m[2], status: 'active' }
     req.isAdmin = m[1] === 'admin'
+    ;(req as { authMethod?: string }).authMethod = m[1] === 'key' ? 'api_key' : 'session'
   }
   const admin = async (req: Parameters<typeof sign>[0]) => {
     await sign(req)
@@ -86,6 +87,7 @@ const migrations = [
   await import('../../../db/migrations/567_hub_capacity.js'),
   await import('../../../db/migrations/568_hub_ops.js'),
   await import('../../../db/migrations/569_hub_data.js'),
+  await import('../../../db/migrations/576_hub_incidents.js'),
   await import('../../../db/migrations/577_hub_insight.js')
 ]
 const { hubRoutes } = await import('../../../routes/hub.js')
@@ -178,6 +180,7 @@ beforeEach(async () => {
     'nivaro_hub_digest_prefs',
     'nivaro_hub_digest_sends',
     'nivaro_hub_fleet_status',
+    'nivaro_hub_incidents',
     'nivaro_hub_data_runs',
     'nivaro_hub_databases',
     'nivaro_hub_db_servers',
@@ -405,6 +408,37 @@ describe('health', () => {
       (await app.inject({ url: `/api/hub/insight/health?app=${pole}`, headers: asOwner }))
         .statusCode
     ).toBe(404)
+    expect(p.parts.find((x: { part: string }) => x.part === 'incidents').score).toBe(100)
+  })
+
+  it('an open incident lowers the score, and a weight change reaches every viewer at once', async () => {
+    await db('nivaro_hub_incidents').insert({
+      app_id: efp,
+      environment_id: prod,
+      title: 'Orders failing',
+      severity: 'sev1',
+      status: 'open',
+      opened_at: new Date()
+    })
+    const before = await app.inject({ url: `/api/hub/insight/health?app=${efp}`, headers: asOwner })
+    const p = before
+      .json()
+      .data.environments.find((e: { env_key: string }) => e.env_key === 'production')
+    const inc = p.parts.find((x: { part: string }) => x.part === 'incidents')
+    expect(inc).toMatchObject({ score: 0, figure: '1 open incident (worst sev1)' })
+    const put = await app.inject({
+      method: 'PUT',
+      url: '/api/hub/insight/settings',
+      headers: asAdmin,
+      payload: { weights: { incidents: 0 } }
+    })
+    expect(put.statusCode).toBe(200)
+    const after = await app.inject({ url: `/api/hub/insight/health?app=${efp}`, headers: asOwner })
+    const p2 = after
+      .json()
+      .data.environments.find((e: { env_key: string }) => e.env_key === 'production')
+    expect(p2.parts.find((x: { part: string }) => x.part === 'incidents').weight).toBe(0)
+    expect(p2.score).toBeGreaterThan(p.score)
   })
 })
 
@@ -536,6 +570,48 @@ describe('Ask the Hub', () => {
     expect(results).not.toContain('Pole')
     expect(results).toMatch(/not available here/)
     expect(results).toContain('untrusted_data')
+    // The tool the model asked for that is not offered is logged (names only).
+    const logged = await db('nivaro_activity').where({ action: 'hub-ask-refused' }).first()
+    expect(JSON.parse(String(logged?.comment))).toEqual({ held: [], tools: ['hub_secret_rotate'] })
+  })
+
+  it('works only in a person’s own session: a named API key is refused', async () => {
+    ai.getAiClient.mockResolvedValue({ messages: { create: ai.create } })
+    const r = await app.inject({
+      method: 'POST',
+      url: '/api/hub/insight/ask',
+      headers: { authorization: `Bearer key:${OWNER}` },
+      payload: { question: 'Which apps do I own?' }
+    })
+    expect(r.statusCode).toBe(403)
+    expect(r.json().code).toBe('ASK_OWN_SESSION')
+  })
+
+  it('answers the 12th follow-up after a 5,000-character answer', async () => {
+    const sent: unknown[] = []
+    ai.create.mockReset()
+    ai.create.mockImplementation(async (p: { messages: unknown[] }) => {
+      sent.push(p.messages)
+      return { stop_reason: 'end_turn', content: [{ type: 'text', text: 'Still here.' }] }
+    })
+    ai.getAiClient.mockResolvedValue({ messages: { create: ai.create } })
+    const messages: Array<{ role: string; content: string }> = []
+    for (let i = 0; i < 11; i++) {
+      messages.push({ role: 'user', content: `Question ${i}` })
+      messages.push({ role: 'assistant', content: i === 10 ? 'w'.repeat(5000) : `Answer ${i}` })
+    }
+    messages.push({ role: 'user', content: 'And the next one?' })
+    const r = await app.inject({
+      method: 'POST',
+      url: '/api/hub/insight/ask',
+      headers: asOwner,
+      payload: { messages }
+    })
+    expect(r.statusCode).toBe(200)
+    const m = sent[0] as Array<{ role: string; content: string }>
+    expect(m[0].role).toBe('user')
+    expect(m.length).toBeLessThanOrEqual(20)
+    expect(m[m.length - 1].content).toBe('And the next one?')
   })
 
   it('refuses a bad question and says when AI is not set up', async () => {

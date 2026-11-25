@@ -24,6 +24,8 @@ import {
  *              counted for production environments (THE production rule) and environments with
  *              a database backup policy — elsewhere "no backup" is not a fault
  *   secrets    the rotation state of the environment's secrets (Secrets): overdue / due soon
+ *   incidents  open Hub incidents on the environment or the whole app (Incidents): the worst
+ *              severity counts — sev1 0, sev2 40, sev3 70, none 100
  *
  * A part with no figure is left out and the weights of the others are scaled up (a new or
  * watch-only environment is not punished for what the Hub cannot see); no part at all = no score.
@@ -45,6 +47,8 @@ export interface HealthInputs {
   /** Whether a missing backup counts against the score (production, or a backup policy). */
   backup_expected: boolean
   secrets: { overdue: number; due_soon: number; scheduled: number } | null
+  /** Open incidents on the environment or app-wide, by severity; null = unknown. */
+  incidents: { sev1: number; sev2: number; sev3: number } | null
 }
 
 export interface PartScore {
@@ -126,6 +130,17 @@ export function partScore(
       if (s.due_soon > 0)
         return { score: 60, figure: `${s.due_soon} secret${s.due_soon === 1 ? '' : 's'} due soon` }
       return { score: 100, figure: 'Secrets rotated on time' }
+    }
+    case 'incidents': {
+      const c = i.incidents
+      if (!c) return { score: null, figure: null }
+      const n = c.sev1 + c.sev2 + c.sev3
+      if (n === 0) return { score: 100, figure: 'No open incidents' }
+      const worst = c.sev1 ? 'sev1' : c.sev2 ? 'sev2' : 'sev3'
+      return {
+        score: c.sev1 ? 0 : c.sev2 ? 40 : 70,
+        figure: `${n} open incident${n === 1 ? '' : 's'} (worst ${worst})`
+      }
     }
   }
 }
@@ -212,9 +227,31 @@ export function secretCounts(items: InventoryItem[]): Map<number, HealthInputs['
   return out
 }
 
+/** Open incidents per environment: an app-wide one counts on every environment of the app. */
+export function incidentCounts(
+  open: Array<{ app_id: number; environment_id: number | null; severity: string }>,
+  envs: Array<{ app_id: number; environment_id: number }>
+): Map<number, NonNullable<HealthInputs['incidents']>> {
+  const out = new Map<number, { sev1: number; sev2: number; sev3: number }>()
+  for (const e of envs) out.set(e.environment_id, { sev1: 0, sev2: 0, sev3: 0 })
+  for (const i of open) {
+    const sev = i.severity === 'sev1' ? 'sev1' : i.severity === 'sev2' ? 'sev2' : 'sev3'
+    for (const e of envs) {
+      if (e.app_id !== i.app_id) continue
+      if (i.environment_id != null && i.environment_id !== e.environment_id) continue
+      const c = out.get(e.environment_id)
+      if (c) c[sev]++
+    }
+  }
+  return out
+}
+
 export interface HealthDeps {
   fleet?: (who: { userId: string; isAdmin: boolean }) => Promise<{ rows: FleetRow[] }>
   secrets?: () => Promise<InventoryItem[]>
+  incidents?: () => Promise<
+    Array<{ app_id: number; environment_id: number | null; severity: string }>
+  >
   settings?: InsightSettings
   now?: Date
 }
@@ -247,6 +284,15 @@ export async function gatherHealthInputs(
     for (const r of rows2) policies.add(Number(r.environment_id))
   } catch {
     // No backup policies table (an old Hub): only production expects a backup.
+  }
+
+  let incidents: Map<number, NonNullable<HealthInputs['incidents']>> | null = null
+  try {
+    const open = await (deps.incidents ?? defaultOpenIncidents)()
+    incidents = incidentCounts(open, rows)
+  } catch {
+    // No incident tables (an old Hub): the part is unknown and left out.
+    incidents = null
   }
 
   const production = new Map<number, boolean>()
@@ -284,11 +330,21 @@ export async function gatherHealthInputs(
           ? Math.max(0, (now.getTime() - backupAt.getTime()) / 3_600_000)
           : null,
         backup_expected: isProd || policies.has(id),
-        secrets: secrets.get(id) ?? null
+        secrets: secrets.get(id) ?? null,
+        incidents: incidents ? (incidents.get(id) ?? null) : null
       }
     })
   }
   return out
+}
+
+async function defaultOpenIncidents() {
+  const { openIncidents } = await import('../incident/store.js')
+  return (await openIncidents()).map((i) => ({
+    app_id: Number(i.app_id),
+    environment_id: i.environment_id == null ? null : Number(i.environment_id),
+    severity: String(i.severity)
+  }))
 }
 
 /** The stored daily scores of these environments since `days` ago, oldest first. */

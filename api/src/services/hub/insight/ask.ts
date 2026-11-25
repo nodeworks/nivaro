@@ -78,8 +78,8 @@ export function sanitizeAnswer(text: string, adminBase: string): string {
   const internal = (raw: string): string | null => {
     const url = raw.trim().replace(/^<|>$/g, '').split(/\s+/)[0] ?? ''
     const path =
-      base && url.toLowerCase().startsWith(base.toLowerCase()) ? url.slice(base.length) || '/' : url
-    return /^\/hub(?:[/?#]|$)/.test(path) && !/[\s"'<>]/.test(path) ? path : null
+      base && url.toLowerCase().startsWith(`${base.toLowerCase()}/`) ? url.slice(base.length) : url
+    return hubPath(path)
   }
   let out = String(text ?? '')
   // Images first (Markdown, then any HTML img), so their alt text never turns into a link.
@@ -99,6 +99,34 @@ export function sanitizeAnswer(text: string, adminBase: string): string {
   // Bare URLs and autolinks (<https://…>): never clickable.
   out = out.replace(/<?(https?:\/\/[^\s<>)\]]+)>?/gi, (_m, url: string) => `\`${url}\``)
   return out.replace(/\n{3,}/g, '\n\n').trim()
+}
+
+/**
+ * A Hub page path, normalised, or null — THE rule for answer links and citations (the admin's
+ * SafeAnswer.isHubPath is its twin): after decoding (to a fixed point), the path must be exactly
+ * `/hub` or start with `/hub/`, with no `..`, `//`, backslash, control character or quote; a query
+ * and hash may follow. `/hub-link`, `/hub-deployment`, `/hub/../api/…` and encoded tricks are
+ * refused. Pure.
+ */
+export function hubPath(raw: string): string | null {
+  let s = String(raw ?? '').trim()
+  if (!s.startsWith('/') || s.length > 500) return null
+  for (let i = 0; i < 3; i++) {
+    let d: string
+    try {
+      d = decodeURIComponent(s)
+    } catch {
+      return null
+    }
+    if (d === s) break
+    s = d
+  }
+  if (/[\\\s"'<>`]/.test(s) || [...s].some((c) => c.charCodeAt(0) < 32)) return null
+  const cut = s.search(/[?#]/)
+  const path = cut < 0 ? s : s.slice(0, cut)
+  if (path !== '/hub' && !path.startsWith('/hub/')) return null
+  if (/\/\/|(^|\/)\.\.?(\/|$)/.test(path)) return null
+  return s
 }
 
 export interface AskCall {
@@ -155,8 +183,9 @@ export interface Citation {
  */
 export function citationsOf(value: unknown, adminBase: string, out: Citation[] = []): Citation[] {
   const base = adminBase.replace(/\/+$/, '')
-  const add = (label: unknown, path: string) => {
-    if (out.length >= 30 || !path.startsWith('/hub') || out.some((c) => c.path === path)) return
+  const add = (label: unknown, raw: string) => {
+    const path = hubPath(raw)
+    if (out.length >= 30 || !path || out.some((c) => c.path === path)) return
     out.push({ label: String(label || path).slice(0, 120), path })
   }
   const walk = (v: unknown, label: string | null, parent: string | null, depth: number) => {
@@ -177,7 +206,7 @@ export function citationsOf(value: unknown, adminBase: string, out: Citation[] =
       add(o.app_name, `/hub?app=${Number(o.app_id)}`)
     for (const [k, x] of Object.entries(o)) {
       if ((k === 'link' || k === 'url') && typeof x === 'string') {
-        const path = base && x.startsWith(base) ? x.slice(base.length) || '/' : x
+        const path = base && x.startsWith(`${base}/`) ? x.slice(base.length) : x
         add(name, path)
       } else if (typeof x === 'object')
         walk(x, typeof name === 'string' ? name : null, k, depth + 1)
@@ -200,17 +229,25 @@ export function parseConversation(body: unknown): AskTurn[] | null {
     : typeof b.question === 'string'
       ? [{ role: 'user', content: b.question }]
       : null
-  if (!raw?.length || raw.length > ASK_MAX_TURNS) return null
-  const out: AskTurn[] = []
+  if (!raw?.length || raw.length > 400) return null
+  const all: AskTurn[] = []
   for (const m of raw) {
     const r = (m ?? {}) as Record<string, unknown>
     if (r.role !== 'user' && r.role !== 'assistant') return null
     if (typeof r.content !== 'string') return null
-    const content = r.content.trim()
-    if (!content || content.length > ASK_MAX_CHARS) return null
-    out.push({ role: r.role, content })
+    let content = r.content.trim()
+    if (!content) return null
+    // An earlier answer can be longer than a question may be: it is cut, never refused.
+    if (content.length > ASK_MAX_CHARS) {
+      if (r.role === 'user') return null
+      content = `${content.slice(0, ASK_MAX_CHARS - 1)}…`
+    }
+    all.push({ role: r.role, content })
   }
-  if (out[out.length - 1].role !== 'user') return null
+  if (all[all.length - 1].role !== 'user') return null
+  // The newest ASK_MAX_TURNS turns, starting on a question (the model needs a user turn first).
+  const out = all.slice(-ASK_MAX_TURNS)
+  while (out.length && out[0].role !== 'user') out.shift()
   return out
 }
 
@@ -425,6 +462,8 @@ export interface AskAnswer {
   citations: Citation[]
   tools: string[]
   calls: AskCall[]
+  /** Tools the model asked for that Ask the Hub does not offer (logged by the route). */
+  refused: string[]
   /** The model stopped without a final answer (rounds ran out). */
   partial: boolean
 }
@@ -534,6 +573,7 @@ export async function askHub(
     const messages: Row[] = turns.map((t) => ({ role: t.role, content: t.content }))
     const citations: Citation[] = []
     const used: string[] = []
+    const refused: string[] = []
     for (let round = 0; round < ASK_MAX_ROUNDS; round++) {
       const res = await ai.messages.create({
         ...(model ? { model } : {}),
@@ -558,6 +598,7 @@ export async function askHub(
           citations,
           tools: used,
           calls,
+          refused,
           partial: false
         }
       }
@@ -565,6 +606,7 @@ export async function askHub(
       const results: Row[] = []
       for (const u of toolUses) {
         if (!allowed.has(u.name)) {
+          if (!refused.includes(u.name)) refused.push(String(u.name).slice(0, 80))
           results.push({
             type: 'tool_result',
             tool_use_id: u.id,
@@ -606,6 +648,7 @@ export async function askHub(
       citations,
       tools: used,
       calls,
+      refused,
       partial: true
     }
   } finally {

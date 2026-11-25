@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 
 /**
  * Single-flight and short caches for Hub insight (Hub only — Hub mode is refused on every
@@ -7,7 +7,9 @@ import { randomUUID } from 'node:crypto'
  *  - nvr:hub:insight-collect   held by one usage + dependency collect at a time (the daily cron
  *                              or Collect now); 30 min, longer than the 20 min budget
  *  - nvr:hub:insight-check     the last Collect now: {status, started_at, finished_at, summary}
- *  - nvr:hub:insight-health:   the health answer per viewer (`admin` or the owner's id), 60 s
+ *  - nvr:hub:insight-health:   the health answer per settings epoch and viewer
+ *                              (`<epoch>:admin` or `<epoch>:<owner id>`), 60 s — a weight change
+ *                              makes a new epoch, so no viewer keeps a score under old weights
  *
  * SET NX PX with a token, released by compare-and-delete. Without Redis (a single process) the
  * work simply runs.
@@ -93,5 +95,10 @@ export async function writeCollectState(
   )
 }
 
-export const healthCacheKey = (who: { userId: string; isAdmin: boolean }) =>
-  `${HEALTH_CACHE_PREFIX}${who.isAdmin ? 'admin' : who.userId.toLowerCase()}`
+/** A short fingerprint of what a health answer depends on in the settings (the weights). */
+export function settingsEpoch(weights: Record<string, number>): string {
+  return createHash('sha256').update(JSON.stringify(weights)).digest('hex').slice(0, 12)
+}
+
+export const healthCacheKey = (who: { userId: string; isAdmin: boolean }, epoch: string) =>
+  `${HEALTH_CACHE_PREFIX}${epoch}:${who.isAdmin ? 'admin' : who.userId.toLowerCase()}`

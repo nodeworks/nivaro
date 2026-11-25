@@ -1,8 +1,10 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
+import { runInBackgroundPool } from '../db/pool-context.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { idParam } from '../services/hub/apps.js'
 import {
+  type AskCall,
   AskError,
   askHub,
   connectAskTools,
@@ -12,6 +14,7 @@ import { pruneInsight, runCollect } from '../services/hub/insight/collect.js'
 import {
   buildDigest,
   digestEnabledFor,
+  ownedApps,
   runWeeklyDigest,
   setDigestEnabled
 } from '../services/hub/insight/digest.js'
@@ -24,6 +27,7 @@ import {
   healthCacheKey,
   type InsightRedis,
   readCollectState,
+  settingsEpoch,
   withInsightLock,
   writeCollectState
 } from '../services/hub/insight/lock.js'
@@ -86,6 +90,36 @@ async function appFilter(req: FastifyRequest): Promise<number | undefined | null
   return (await mayReadApp(viewer(req), id)) ? id : null
 }
 
+/** Ask the Hub's one admissible caller: a person's own browser session. */
+export function askOwnSession(req: FastifyRequest): boolean {
+  return (
+    req.authMethod === 'session' &&
+    req.mcpInner !== true &&
+    !req.masqueradeAdminId &&
+    !(req as { oauthScopes?: unknown }).oauthScopes
+  )
+}
+
+/**
+ * A write the model tried (a request askFetch held back) or a tool it asked for that is not
+ * offered — the trace a prompt injection would leave — goes to the activity log (paths and
+ * tool names only, never the conversation).
+ */
+async function logRefused(req: FastifyRequest, calls: AskCall[], tools: string[]) {
+  const held = calls.filter((c) => c.held).map((c) => `${c.method} ${c.path.split('?')[0]}`)
+  if (!held.length && !tools.length) return
+  try {
+    await logActivity({
+      action: 'hub-ask-refused',
+      user: userId(req),
+      comment: JSON.stringify({ held: held.slice(0, 20), tools: tools.slice(0, 20) }),
+      req
+    })
+  } catch {
+    // Logging never fails the answer.
+  }
+}
+
 export async function hubInsightRoutes(app: FastifyInstance) {
   if (!hubModeEnabled()) return
 
@@ -94,7 +128,8 @@ export async function hubInsightRoutes(app: FastifyInstance) {
     if (appId === null) return fail(reply, 404, 'NOT_FOUND', 'Not found')
     const redis = redisOf(app)
     const who = viewer(req)
-    const key = healthCacheKey(who)
+    const settings = await loadInsightSettings()
+    const key = healthCacheKey(who, settingsEpoch(settings.weights))
     let all: Awaited<ReturnType<typeof currentHealth>> | null = null
     if (redis) {
       try {
@@ -105,13 +140,12 @@ export async function hubInsightRoutes(app: FastifyInstance) {
       }
     }
     if (!all) {
-      all = await currentHealth(who)
+      all = await currentHealth(who, { settings })
       if (redis)
         await Promise.resolve(redis.set(key, JSON.stringify(all), 'EX', HEALTH_CACHE_TTL_S)).catch(
           () => {}
         )
     }
-    const settings = await loadInsightSettings()
     return {
       data: {
         weights: settings.weights,
@@ -150,16 +184,12 @@ export async function hubInsightRoutes(app: FastifyInstance) {
     const out = normalizeInsightSettings(req.body, before)
     if (!out.ok) return fail(reply, 400, 'BAD_SETTINGS', out.error)
     await saveInsightSettings(out.settings)
-    await Promise.resolve(redisOf(app)?.del?.(healthCacheKey({ userId: '', isAdmin: true }))).catch(
-      () => {}
-    )
     await logActivity({
       action: 'hub-insight-settings',
       user: userId(req),
       comment: JSON.stringify({
         weights: out.settings.weights,
         floor: out.settings.usage.floor,
-        days: out.settings.usage.days,
         digest: out.settings.digest.enabled
       }),
       req
@@ -174,7 +204,10 @@ export async function hubInsightRoutes(app: FastifyInstance) {
     const started_at = new Date().toISOString()
     await writeCollectState(redis, { status: 'running', started_at })
     await logActivity({ action: 'hub-insight-collect', user: userId(req), req })
-    void withInsightLock(redis, COLLECT_LOCK_KEY, COLLECT_LOCK_TTL_MS, () => runCollect())
+    // Background work: on the background pool, never the request pool (the "two pools" rule).
+    void runInBackgroundPool(() =>
+      withInsightLock(redis, COLLECT_LOCK_KEY, COLLECT_LOCK_TTL_MS, () => runCollect())
+    )
       .then(async (out) => {
         await writeCollectState(redis, {
           status: out.ran ? 'done' : 'failed',
@@ -182,9 +215,6 @@ export async function hubInsightRoutes(app: FastifyInstance) {
           finished_at: new Date().toISOString(),
           summary: out.ran ? { ...out.value } : { busy: true }
         })
-        await Promise.resolve(redis?.del?.(healthCacheKey({ userId: '', isAdmin: true }))).catch(
-          () => {}
-        )
       })
       .catch(async (err) => {
         app.log.warn(
@@ -206,12 +236,12 @@ export async function hubInsightRoutes(app: FastifyInstance) {
 
   app.get('/insight/digest/me', { preHandler: requireAuth }, async (req) => {
     const settings = await loadInsightSettings()
-    const digest = await buildDigest(userId(req)).catch(() => null)
+    const owns = (await ownedApps(userId(req)).catch(() => [])).length > 0
     return {
       data: {
         enabled: await digestEnabledFor(userId(req)),
         delivered: settings.digest.enabled,
-        owns_apps: !!digest
+        owns_apps: owns
       }
     }
   })
@@ -242,9 +272,16 @@ export async function hubInsightRoutes(app: FastifyInstance) {
   })
 
   app.post('/insight/ask', { preHandler: requireAuth }, async (req, reply) => {
-    // An assistant calling Ask the Hub would start a second AI loop inside its own: refused.
-    if (req.mcpInner === true)
-      return fail(reply, 403, 'ASK_NOT_FOR_AGENTS', 'Ask the Hub is for people, not assistants.')
+    // A chat for a person, spending their AI allowance: only their own browser session. Named
+    // API keys, OAuth / MCP connections (and an assistant's inner calls), phone tokens, static
+    // tokens, View-as and run-as keys are all refused.
+    if (!askOwnSession(req))
+      return fail(
+        reply,
+        403,
+        'ASK_OWN_SESSION',
+        'Ask the Hub works only in your own signed-in session in the Hub.'
+      )
     const turns = parseConversation(req.body)
     if (!turns)
       return fail(
@@ -259,11 +296,15 @@ export async function hubInsightRoutes(app: FastifyInstance) {
     } catch {
       adminBase = ''
     }
+    // One list for the tool calls: the refused (held) requests are logged below.
+    const calls: AskCall[] = []
     try {
       const out = await askHub(turns, {
         adminBase,
-        connect: () => connectAskTools(app, req, [], adminBase)
+        calls,
+        connect: () => connectAskTools(app, req, calls, adminBase)
       })
+      await logRefused(req, calls, out.refused)
       return {
         data: {
           answer: out.answer,
@@ -273,6 +314,7 @@ export async function hubInsightRoutes(app: FastifyInstance) {
         }
       }
     } catch (err) {
+      await logRefused(req, calls, [])
       if (err instanceof AskError) return fail(reply, err.statusCode, err.code, err.message)
       const e = err as { statusCode?: number; code?: string; message?: string }
       if (e.statusCode === 429 || e.statusCode === 503)
@@ -313,9 +355,6 @@ export async function hubInsightRoutes(app: FastifyInstance) {
       '25 * * * *',
       async () => {
         const n = await storeDailyScores()
-        await Promise.resolve(
-          redisOf(app)?.del?.(healthCacheKey({ userId: '', isAdmin: true }))
-        ).catch(() => {})
         app.log.info(`hub-insight-health: ${n} environments scored`)
       },
       {

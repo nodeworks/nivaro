@@ -16,8 +16,10 @@ import { loadInsightSettings } from './settings.js'
  *    the (user, week) row in nivaro_hub_digest_sends is CLAIMED before the send (unique index),
  *    so two leaders or a catch-up run can never both send it;
  *  - the email is the `hub_weekly_digest` template, which wears the Hub mail layout on a
- *    standalone Hub (services/mail.ts mailChrome) and is sent under the person's notification
- *    rules (category reports); an in-app notice goes through deliverHubNotice.
+ *    standalone Hub (services/mail.ts mailChrome); it goes out under the person's notification
+ *    rules for Reports (No email and quiet hours apply; cadence 'sender' only skips the
+ *    Daily-summary deferral, since the digest is itself the summary); an in-app notice goes
+ *    through deliverHubNotice.
  *
  * Only owners get it: administrators already get every alert, and the digest names only the
  * apps the person owns, so it never shows them anything their Hub pages would not.
@@ -63,7 +65,7 @@ const iso = (v: unknown): string | null => {
   return Number.isFinite(d.getTime()) ? d.toISOString() : null
 }
 
-async function ownedApps(
+export async function ownedApps(
   userId: string
 ): Promise<Array<{ id: number; name: string; key: string }>> {
   return (
@@ -80,7 +82,7 @@ async function incidentsOf(
   since: Date
 ): Promise<Map<number, DigestApp['incidents']>> {
   const out = new Map<number, DigestApp['incidents']>()
-  // The incident tables arrive with the incident enhancement; a Hub without them has none.
+  // Hub incidents (migration 576); a Hub restored from before it has none.
   if (!appIds.length || !(await db.schema.hasTable('nivaro_hub_incidents'))) return out
   const rows = (await db('nivaro_hub_incidents')
     .whereIn('app_id', appIds)
@@ -359,7 +361,6 @@ export async function runWeeklyDigest(deps: SendDeps = {}): Promise<DigestRunSum
           template: 'hub_weekly_digest',
           category: 'reports',
           cadence: 'sender',
-          skipDigest: true,
           why: 'you own apps in the Hub. Turn the weekly digest off in Apps → Health.',
           text,
           data: {

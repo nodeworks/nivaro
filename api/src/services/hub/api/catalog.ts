@@ -1979,7 +1979,7 @@ export const HUB_ROUTES: HubRoute[] = [
   r('GET', '/insight/usage', 'Insight', 'owner', 'read', 'Usage counts per environment', {
     query: { app: n('Only this app'), days: n('7–400, default 90') },
     notes:
-      'Counts only (people per day and week, adoption, busiest screens); nothing under the privacy floor of at least 5 people.'
+      'Counts only (people per day and week, adoption, busiest screens), completed days, rounded down to 5; nothing under the privacy floor of at least 5 people.'
   }),
   r('GET', '/insight/dependencies', 'Insight', 'owner', 'read', 'The dependency map', {
     query: { app: n('Only this app') },
@@ -1999,7 +1999,7 @@ export const HUB_ROUTES: HubRoute[] = [
   r('PUT', '/insight/settings', 'Insight', 'admin', 'write', 'Save the insight settings', {
     body: {
       weights: o('{uptime, errors, drift, issues, readiness, backups, secrets}: 0–10 each'),
-      usage: o('{floor: 5–100, days: 1–14}'),
+      usage: o('{floor: 5–100}'),
       digest: o('{enabled}')
     }
   }),
@@ -2024,7 +2024,7 @@ export const HUB_ROUTES: HubRoute[] = [
       messages: list('object', 'Or the conversation so far: [{role user|assistant, content}]')
     },
     notes:
-      'Answers from read-only tools that call the Hub back as you (admins: every app; owners: their own) and cite the records used. Never changes anything. Catalogued as a write because it spends the caller’s AI allowance: never for connected apps, assistants, View-as or run-as keys; an API key needs hub:write.'
+      'Answers from read-only tools that call the Hub back as you (admins: every app; owners: their own) and cite the records used. Never changes anything. Only in a person’s own browser session: named API keys, connected apps, assistants, phone tokens, View-as and run-as keys get 403 ASK_OWN_SESSION.'
   }),
   // ─── Incidents, on-call, status pages (routes/hub-incidents.ts, hub-status-public.ts) ───
   r('GET', '/incidents', 'Incidents', 'owner', 'read', 'Incidents (owners: their apps)', {
