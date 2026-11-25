@@ -58,9 +58,11 @@ export const CONFIG_PROMOTION_GROUPS: readonly ConfigGroup[] = [
 
 /**
  * nivaro_settings columns a promotion carries: the env-refresh "follows the source" list minus
- * every column that names roles, widgets, rooms or tools by id (they stay on the target).
+ * every column that names roles, widgets, rooms, tools, files (brand_logo = a file id) or records
+ * (sla_zone_map = record id → time zone) by id: they stay on the target.
  */
-const SETTINGS_ID_COLUMN = /role|^command_center$|^mcp_tools$|^dashboard_headline$|^chat_general$/
+const SETTINGS_ID_COLUMN =
+  /role|^command_center$|^mcp_tools$|^dashboard_headline$|^chat_general$|^brand_logo$|^sla_zone_map$/
 export const SETTINGS_PROMOTED: readonly string[] = SETTINGS_FROM_SOURCE.filter(
   (c) => c !== 'updated_at' && !SETTINGS_ID_COLUMN.test(c)
 )

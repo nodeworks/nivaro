@@ -24,7 +24,9 @@ import type { TenantRecord, TenantRegistry } from '../services/tenancy/types.js'
  *   POST snapshot {tables}                         → {version, environment, snapshot}  (source)
  *   POST plan     {snapshot, tables, deletes, …}   → field diff, plan hash, kept, held  (target)
  *   POST apply    {… + plan_hash, overwrite_prod_changes?} → counts, pre-apply restore point
- *   POST status   {run_key}                        → applied / undone / not_applied (lost answer)
+ *   POST status   {run_key, resume?}               → applying / deploying / applied / failed /
+ *                                                    undoing / undone / not_applied (lost answer);
+ *                                                    resume finishes a stalled run's procedures
  *   POST undo     {run_key, mode, plan_hash?, …}   → preview / put back the rows that run wrote
  *
  * Dedicated app: /api/hub-link/config/* — mounted only where HUB_TOKEN (≥ 32 characters) is set,

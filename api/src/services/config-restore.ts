@@ -199,6 +199,9 @@ export function planTable(
     keys?: Set<string> | null
     /** For GRANT_TABLES: whether the person a row grants to is active now (absent = all are). */
     isActiveUser?: (id: string) => boolean
+    /** Live rows deleted even with `deletes` off (a Hub promotion: steps of a promoted flow the
+     *  source no longer has). */
+    alsoDelete?: Set<string> | null
   }
 ): TablePlan {
   const scope = opts.keys && opts.keys.size > 0 ? opts.keys : null
@@ -250,9 +253,10 @@ export function planTable(
     }
     ops.push({ op: 'update', key, live_hash: current.hash, target_hash: row.hash, fields })
   }
-  if (opts.deletes) {
+  if (opts.deletes || opts.alsoDelete?.size) {
     for (const [key, row] of Object.entries(live)) {
       if (target[key]) continue
+      if (!opts.deletes && !opts.alsoDelete?.has(key)) continue
       if (scope && !scope.has(key)) continue
       if (key.startsWith('#')) {
         skippedKeyless++
@@ -1066,6 +1070,8 @@ export type RestoreSource =
       deletes: boolean
       /** Only these rows of each table (a Hub promotion's undo: exactly the rows it wrote). */
       keys?: Record<string, string[]> | null
+      /** Rows deleted whatever `deletes` says, per table. */
+      alsoDelete?: Record<string, string[]> | null
     }
 
 /** Context a Hub promotion's apply writes its own record from, inside the same transaction. */
@@ -1085,6 +1091,8 @@ const sourceKeys = (s: RestoreSource, table: string): Set<string> | null => {
   if (s.kind !== 'given' || !s.keys) return null
   return new Set(s.keys[table] ?? [])
 }
+const sourceAlsoDelete = (s: RestoreSource, table: string): Set<string> | null =>
+  s.kind === 'given' && s.alsoDelete?.[table]?.length ? new Set(s.alsoDelete[table]) : null
 
 async function computeWith(
   k: Knex,
@@ -1155,6 +1163,7 @@ async function computeWith(
       planTable(table, target.tables[table], live.tables[table], columns.get(table) ?? new Map(), {
         deletes,
         keys: sourceKeys(src, table),
+        alsoDelete: sourceAlsoDelete(src, table),
         isActiveUser
       })
     )
@@ -1235,6 +1244,7 @@ export async function previewGivenSnapshot(
     tables?: string[] | null
     allowCascade?: boolean
     keys?: Record<string, string[]> | null
+    alsoDelete?: Record<string, string[]> | null
   }
 ): Promise<RestorePreview> {
   if (!restoreEngineSupported())
@@ -1244,7 +1254,8 @@ export async function previewGivenSnapshot(
     snapshot,
     ref: opts.ref,
     deletes: opts.deletes,
-    keys: opts.keys ?? null
+    keys: opts.keys ?? null,
+    alsoDelete: opts.alsoDelete ?? null
   }
   return withRestoreDb(
     async (k) => (await computeWith(k, src, opts.tables, opts.allowCascade === true)).preview
@@ -1264,6 +1275,8 @@ export async function computeRestorePlan(
 export interface RestoreResult {
   /** What a Hub promotion's inTransaction hook answered (written in the same transaction). */
   extra?: unknown
+  /** What its afterCommit hook answered (after the commit, on the same connection). */
+  after_commit?: unknown
   snapshot_id: number
   /** The restore point stored just before the write — restore it to undo this. */
   pre_restore_id: number | null
@@ -1304,14 +1317,29 @@ export async function applyGivenSnapshot(
     note: string
     activityNote: string
     keys?: Record<string, string[]> | null
+    alsoDelete?: Record<string, string[]> | null
     /** Runs inside the write's transaction, after the rows are written (its answer = `extra`). */
     inTransaction?: (trx: Knex, ctx: GivenWriteContext) => Promise<unknown>
+    /** Runs right after the commit on the same connection (its answer = `after_commit`). */
+    afterCommit?: (k: Knex, ctx: GivenWriteContext) => Promise<unknown>
   }
 ): Promise<RestoreResult> {
   return applyPlanned(
-    { kind: 'given', snapshot, ref: opts.ref, deletes: opts.deletes, keys: opts.keys ?? null },
+    {
+      kind: 'given',
+      snapshot,
+      ref: opts.ref,
+      deletes: opts.deletes,
+      keys: opts.keys ?? null,
+      alsoDelete: opts.alsoDelete ?? null
+    },
     opts,
-    { note: opts.note, activity: opts.activityNote, inTransaction: opts.inTransaction }
+    {
+      note: opts.note,
+      activity: opts.activityNote,
+      inTransaction: opts.inTransaction,
+      afterCommit: opts.afterCommit
+    }
   )
 }
 
@@ -1322,6 +1350,7 @@ async function applyPlanned(
     note: string
     activity: string
     inTransaction?: (trx: Knex, ctx: GivenWriteContext) => Promise<unknown>
+    afterCommit?: (k: Knex, ctx: GivenWriteContext) => Promise<unknown>
   } | null
 ): Promise<RestoreResult> {
   if (!restoreEngineSupported())
@@ -1367,14 +1396,21 @@ async function applyPlanned(
       }
       const touched = plan.plans.filter((p) => p.ops.length > 0).map((p) => p.table)
       if (touched.length === 0)
-        return { applied: [] as AppliedCounts[], pre: null, touched, extra: undefined as unknown }
+        return {
+          applied: [] as AppliedCounts[],
+          pre: null,
+          touched,
+          extra: undefined as unknown,
+          afterCommit: undefined as unknown
+        }
+      const box: { written: GivenWriteContext | null } = { written: null }
       const hashTables = plan.plans.map((p) => p.table)
       const when = new Date(plan.target.generated_at)
       const note =
         given?.note ??
         `Before restoring ${touched.length} table${touched.length === 1 ? '' : 's'} to snapshot #${id} (${when.toISOString().slice(0, 16).replace('T', ' ')} UTC)`
       try {
-        return await lockedWrite(
+        const res = await lockedWrite(
           k,
           hashTables,
           async (trx, locked) => {
@@ -1391,6 +1427,7 @@ async function applyPlanned(
                 {
                   deletes,
                   keys: sourceKeys(src, t),
+                  alsoDelete: sourceAlsoDelete(src, t),
                   isActiveUser: (u) => active.has(u.toUpperCase())
                 }
               )
@@ -1413,7 +1450,9 @@ async function applyPlanned(
             }
             const pre = await storeConfigSnapshot(
               preSnap,
-              'pre-restore',
+              // A Hub promotion's points keep their own retention (never push out a human
+              // restore's undo point).
+              given ? 'hub-pre-apply' : 'pre-restore',
               { userId: opts.userId ?? null, restoreOf: id || null, note },
               trx as unknown as Knex
             )
@@ -1426,20 +1465,29 @@ async function applyPlanned(
               plan.fks
             )
             let extra: unknown
-            if (given?.inTransaction) {
+            if (given?.inTransaction || given?.afterCommit) {
               const after = await buildConfigSnapshot(
                 { tables: touched, version: NIVARO_VERSION, environment: config.NODE_ENV },
                 trx as unknown as Parameters<typeof buildConfigSnapshot>[1]
               )
-              extra = await given.inTransaction(trx as unknown as Knex, {
-                plans,
-                before: locked.tables,
-                after: after.tables
-              })
+              box.written = { plans, before: locked.tables, after: after.tables }
+              if (given.inTransaction)
+                extra = await given.inTransaction(trx as unknown as Knex, box.written)
             }
             return { applied, pre, touched, extra }
           }
         )
+        // After the commit, on the same connection (never inside the write: a read of another
+        // table there could wait on this transaction's own rows).
+        let afterCommit: unknown
+        if (given?.afterCommit && box.written) {
+          try {
+            afterCommit = await given.afterCommit(k, box.written)
+          } catch (e) {
+            afterCommit = { error: e instanceof Error ? e.message : String(e) }
+          }
+        }
+        return { ...res, afterCommit }
       } catch (err) {
         if (err instanceof StaleInsideTransaction) throw await stale()
         if (err instanceof RestoreError) throw err
@@ -1498,7 +1546,8 @@ async function applyPlanned(
       pre_restore_id: out.pre.id,
       tables: out.applied,
       totals,
-      ...(out.extra !== undefined ? { extra: out.extra } : {})
+      ...(out.extra !== undefined ? { extra: out.extra } : {}),
+      ...(out.afterCommit !== undefined ? { after_commit: out.afterCommit } : {})
     }
   } finally {
     restoring.value = false

@@ -657,6 +657,7 @@ const SHARED: Record<string, string> = {
   'services/hub/data/lock.ts :: memLocks': HUB_ONLY,
   'services/hub/config/channel.ts :: fetchImpl': HUB_ONLY,
   'services/hub-link/config-promote-map.ts :: SPEC_BY_TABLE': FIXED,
+  'services/hub-link/config-promote-map.ts :: SAFE_NUMBER_KEYS': FIXED,
   'services/hub-link/config-promote-secrets.ts :: SECRET_CONTAINERS': FIXED,
   'services/hub-link/config-promote-secrets.ts :: INBOUND_AUTH_KEYS': FIXED,
   'services/hub/data/app-calls.ts :: fetchImpl': HUB_ONLY,

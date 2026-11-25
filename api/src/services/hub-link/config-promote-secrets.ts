@@ -175,11 +175,34 @@ function ownParts(
  * The target's own taken-off values (outbound keys, secrets, embedded secrets) put back under
  * `incoming` at the same path, at every depth.
  */
+const ID_KEYS = ['key', 'name', 'id'] as const
+
+/** An array element's identity: its key / name / id (objects only), else null. */
+function identityOf(v: unknown): string | null {
+  if (!isObj(v)) return null
+  for (const k of ID_KEYS) {
+    const x = (v as Record<string, unknown>)[k]
+    if (typeof x === 'string' || typeof x === 'number') return `${k}:${String(x)}`
+  }
+  return null
+}
+
+/**
+ * The target's own element for an incoming one: objects matched by key / name / id (a header list
+ * reordered or grown on the source keeps each header's own secret), anything else by position.
+ */
+function ownElement(x: unknown, i: number, own: unknown[]): unknown {
+  const id = identityOf(x)
+  if (id) return own.find((o) => identityOf(o) === id)
+  return own[i]
+}
+
 function mergeNested(incoming: unknown, own: unknown): unknown {
   if (Array.isArray(incoming) && Array.isArray(own))
-    return incoming.map((x, i) =>
-      x === null && isEmbeddedSecret(own[i]) ? own[i] : mergeNested(x, own[i])
-    )
+    return incoming.map((x, i) => {
+      const mine = ownElement(x, i, own)
+      return x === null && isEmbeddedSecret(mine) ? mine : mergeNested(x, mine)
+    })
   if (!isObj(incoming) || !isObj(own)) return incoming
   const out: Record<string, unknown> = { ...incoming }
   for (const [k, x] of Object.entries(own)) {

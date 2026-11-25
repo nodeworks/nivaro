@@ -59,6 +59,15 @@ import {
 export const PLAN_TTL_MS = 24 * 60 * 60_000
 /** An `applying` / `undoing` row whose server stopped reads as interrupted after this. */
 export const STUCK_MS = 10 * 60_000
+/** The Hub's own heartbeat on a running promotion (heartbeat_at) and when it counts as gone. */
+export const HUB_HEARTBEAT_MS = 20_000
+export const HUB_STALE_MS = 2 * 60_000
+/** After a lost answer: how often the Hub asks the target, and for how long (lock held). */
+export const POLL_MS = 5_000
+export const POLL_DEADLINE_MS = 15 * 60_000
+/** `not_applied` within this long of sending the apply is not yet an answer (the request may
+ *  still be on its way); after it, the target's word is final. */
+export const NOT_APPLIED_WINDOW_MS = 2 * 60_000
 const PLAN_JSON_CAP = 3_000_000
 /** Codes that mean the Hub has no answer from the target (it may have written). */
 const NO_ANSWER = new Set([
@@ -94,6 +103,10 @@ export interface ConfigDeps {
   }) => Promise<void>
   notify?: (e: HubEvent) => void
   now?: () => number
+  sleep?: (ms: number) => Promise<void>
+  pollMs?: number
+  pollDeadlineMs?: number
+  notAppliedWindowMs?: number
 }
 
 function d(deps: ConfigDeps) {
@@ -106,7 +119,11 @@ function d(deps: ConfigDeps) {
     production: deps.production ?? isProductionTarget,
     outsideWindow: deps.outsideWindow ?? defaultOutsideWindow,
     notify: deps.notify ?? notifyHubEvent,
-    now: deps.now ?? Date.now
+    now: deps.now ?? Date.now,
+    sleep: deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms))),
+    pollMs: deps.pollMs ?? POLL_MS,
+    pollDeadlineMs: deps.pollDeadlineMs ?? POLL_DEADLINE_MS,
+    notAppliedWindowMs: deps.notAppliedWindowMs ?? NOT_APPLIED_WINDOW_MS
   }
 }
 
@@ -168,6 +185,7 @@ export function promotionFromRow(r: Record<string, unknown>): ConfigPromotion {
     result: json<Record<string, unknown> | null>(r.result, null),
     pre_restore_id: r.pre_restore_id == null ? null : Number(r.pre_restore_id),
     run_key: (r.run_key as string | null) ?? null,
+    heartbeat_at: iso(r.heartbeat_at),
     undo_ready: false,
     undo_result: json<Record<string, unknown> | null>(r.undo_result, null),
     source_version: (r.source_version as string | null) ?? null,
@@ -192,13 +210,29 @@ const WROTE = ['applied', 'applying', 'interrupted', 'undoing']
  * promotion `applied` (the target's own record says whether it was undone: reconcile).
  */
 export function healedStatus(
-  p: Pick<ConfigPromotion, 'status' | 'started_at'>,
+  p: Pick<ConfigPromotion, 'status' | 'started_at'> & { heartbeat_at?: string | null },
   now: number
 ): ConfigPromotionStatus | null {
   if (p.status !== 'applying' && p.status !== 'undoing') return null
-  const at = p.started_at ? Date.parse(p.started_at) : 0
-  if (now - at < STUCK_MS) return null
+  // The Hub's own heartbeat says whether the server working it is alive; a row from before the
+  // heartbeat falls back to its start time.
+  const beat = p.heartbeat_at ? Date.parse(p.heartbeat_at) : 0
+  const at = beat || (p.started_at ? Date.parse(p.started_at) : 0)
+  if (now - at < (beat ? HUB_STALE_MS : STUCK_MS)) return null
   return p.status === 'applying' ? 'interrupted' : 'applied'
+}
+
+/** Keeps heartbeat_at fresh while this server works a promotion; the stop function ends it. */
+function hubHeartbeat(id: number, now: () => number): () => void {
+  const beat = () =>
+    db(PROMOTIONS)
+      .where({ id })
+      .whereIn('status', ['applying', 'interrupted', 'undoing'])
+      .update({ heartbeat_at: new Date(now()) })
+      .catch(() => undefined)
+  const timer = setInterval(() => void beat(), HUB_HEARTBEAT_MS)
+  timer.unref?.()
+  return () => clearInterval(timer)
 }
 
 const LOST =
@@ -361,6 +395,32 @@ export function planViewOf(answer: Record<string, unknown>): { view: PlanView; h
         flow: typeof n.flow === 'string' ? n.flow.slice(0, 200) : null,
         step: typeof n.step === 'string' ? n.step.slice(0, 200) : null,
         reason: txt(n.reason)
+      })),
+    orphans: arr<Record<string, unknown>>(answer.orphans)
+      .slice(0, 200)
+      .map((o) => ({
+        key: txt(o.key, 200),
+        flow: txt(o.flow, 200),
+        label: typeof o.label === 'string' ? o.label.slice(0, 120) : null
+      })),
+    flags: arr<Record<string, unknown>>(answer.flags)
+      .slice(0, 100)
+      .filter((f) => f.code === 'RENAME_SUSPECTED')
+      .map((f) => ({
+        code: 'RENAME_SUSPECTED' as const,
+        table: txt(f.table, 128),
+        key: txt(f.key, 200),
+        label: typeof f.label === 'string' ? f.label.slice(0, 120) : null,
+        reason: txt(f.reason, 600)
+      })),
+    stripped_steps: arr<Record<string, unknown>>(answer.stripped_steps)
+      .slice(0, 200)
+      .map((t) => ({
+        key: txt(t.key, 200),
+        label: typeof t.label === 'string' ? t.label.slice(0, 120) : null,
+        paths: arr<unknown>(t.paths)
+          .map((x) => txt(x, 200))
+          .slice(0, 50)
       })),
     cascade: arr<Record<string, unknown>>(preview.cascade).map((c) => ({
       table: txt(c.table, 128),
@@ -644,7 +704,7 @@ function summaryOf(out: Record<string, unknown> | null) {
         step: typeof n.step === 'string' ? n.step.slice(0, 200) : null,
         reason: txt(n.reason)
       })),
-    baseline: out?.baseline === 'moved' ? 'moved' : 'unchanged',
+    baseline: typeof out?.baseline === 'string' ? txt(out.baseline, 300) : 'unchanged',
     pre_restore_id: Number.isSafeInteger(Number(result.pre_restore_id))
       ? Number(result.pre_restore_id) || null
       : null
@@ -660,6 +720,8 @@ function doneText(s: Summary, from: string, to: string) {
   ]
   if (s.procedures.failed.length)
     parts.push(`Procedures that did not deploy: ${s.procedures.failed.slice(0, 5).join(', ')}.`)
+  if (s.baseline.startsWith('not moved'))
+    parts.push(`Changed here on ${to} kept its old baseline (${s.baseline}).`)
   if (s.needs_setup.length)
     parts.push(
       `Switched off until set up here: ${s.needs_setup
@@ -680,6 +742,27 @@ async function markApplied(p: ConfigPromotion, s: Summary, now: number) {
       pre_restore_id: s.pre_restore_id,
       result: JSON.stringify(s)
     })
+}
+
+function notifyApplied(
+  x: ReturnType<typeof d>,
+  p: ConfigPromotion,
+  s: Summary,
+  n: { where: string; source: string; target: string }
+) {
+  x.notify({
+    kind: s.procedures.failed.length ? 'promote_failed' : 'promote_done',
+    appId: p.app_id,
+    envId: p.target_environment_id,
+    path: `/hub/config?promotion=${p.id}`,
+    ...(s.procedures.failed.length || s.needs_setup.length || s.baseline.startsWith('not moved')
+      ? { urgent: true }
+      : {}),
+    text: {
+      subject: `${s.procedures.failed.length ? 'Config promoted with failures' : 'Config promoted'}: ${n.where}`,
+      message: doneText(s, n.source, n.target)
+    }
+  })
 }
 
 export async function applyPromotion(
@@ -769,6 +852,7 @@ export async function applyPromotion(
       .update({
         status: 'applying',
         started_at: new Date(x.now()),
+        heartbeat_at: new Date(x.now()),
         applied_by: i.userId,
         error: null
       })
@@ -776,129 +860,160 @@ export async function applyPromotion(
       await claim?.release().catch(() => undefined)
       throw new ConfigPromotionError('NOT_PLANNED', 'Someone else started this promotion.', 409)
     }
-    if (i.outsideWindow)
-      await x
-        .outsideWindow({
-          appId: p.app_id,
-          envId: p.target_environment_id,
-          promotionId: p.id,
-          where,
-          reason: i.outsideWindow.reason,
-          userId: i.userId
-        })
-        .catch(() => undefined)
-    const [src, dst] = await Promise.all([
-      x.channel(p.source_environment_id),
-      x.channel(p.target_environment_id)
-    ])
-    let out: Record<string, unknown> | null
+    const stopBeat = hubHeartbeat(p.id, x.now)
     try {
-      const snap = snapshotBody(
-        (await src.call('snapshot', { tables: p.tables })) as Record<string, unknown> | null
-      )
-      out = (await dst.call('apply', {
-        ...snap,
-        tables: p.tables,
-        deletes: p.deletes,
-        allow_cascade: p.allow_cascade,
-        plan_hash: p.plan_hash,
-        engine_hash: plan.hashes.engine,
-        procs_hash: plan.hashes.procs,
-        run_key: p.run_key,
-        overwrite_prod_changes: i.overwriteProdChanges,
-        source_label: `${n.app}/${n.source}`,
-        promotion_id: p.id,
-        actor: i.actor
-      })) as Record<string, unknown> | null
-    } catch (err) {
-      const e =
-        err instanceof ConfigPromotionError
-          ? err
-          : new ConfigPromotionError('APP_UNREACHABLE', 'The target did not answer.', 502)
-      if (NO_ANSWER.has(e.code)) {
-        // No answer: the target may have written. Never "nothing written" without its word.
-        await db(PROMOTIONS).where({ id: p.id }).update({ status: 'interrupted', error: LOST })
-        await claim?.link('config', p.id).catch(() => undefined)
-        const settled = await reconcileWith(p, dst, x).catch(() => null)
-        if (!settled || settled.status === 'interrupted')
+      if (i.outsideWindow)
+        await x
+          .outsideWindow({
+            appId: p.app_id,
+            envId: p.target_environment_id,
+            promotionId: p.id,
+            where,
+            reason: i.outsideWindow.reason,
+            userId: i.userId
+          })
+          .catch(() => undefined)
+      const [src, dst] = await Promise.all([
+        x.channel(p.source_environment_id),
+        x.channel(p.target_environment_id)
+      ])
+      let out: Record<string, unknown> | null
+      let sentAt: number | null = null
+      try {
+        const snap = snapshotBody(
+          (await src.call('snapshot', { tables: p.tables })) as Record<string, unknown> | null
+        )
+        sentAt = x.now()
+        out = (await dst.call('apply', {
+          ...snap,
+          tables: p.tables,
+          deletes: p.deletes,
+          allow_cascade: p.allow_cascade,
+          plan_hash: p.plan_hash,
+          engine_hash: plan.hashes.engine,
+          procs_hash: plan.hashes.procs,
+          run_key: p.run_key,
+          overwrite_prod_changes: i.overwriteProdChanges,
+          source_label: `${n.app}/${n.source}`,
+          promotion_id: p.id,
+          actor: i.actor
+        })) as Record<string, unknown> | null
+      } catch (err) {
+        const e =
+          err instanceof ConfigPromotionError
+            ? err
+            : new ConfigPromotionError('APP_UNREACHABLE', 'The target did not answer.', 502)
+        if (NO_ANSWER.has(e.code)) {
+          // No answer: the target may have written. Never "nothing written" without its word.
+          // The Hub keeps the environment's lock and asks the target until it says applied or
+          // failed (it answers `applying` while its run is alive), or the deadline passes.
+          await db(PROMOTIONS).where({ id: p.id }).update({ status: 'interrupted', error: LOST })
+          await claim?.link('config', p.id).catch(() => undefined)
+          const settled = await waitForTarget(
+            { ...p, status: 'interrupted' },
+            dst,
+            x,
+            sentAt ?? x.now()
+          )
+          if (settled?.status === 'applied') {
+            notifyApplied(x, settled, summaryOf(settled.result), {
+              where,
+              source: n.source,
+              target: targetKey
+            })
+            return settled
+          }
+          if (!settled || settled.status === 'interrupted')
+            x.notify({
+              kind: 'promote_failed',
+              appId: p.app_id,
+              envId: p.target_environment_id,
+              path: `/hub/config?promotion=${p.id}`,
+              urgent: true,
+              text: {
+                subject: `Config promotion lost its answer: ${where}`,
+                message: `The Hub could not read ${targetKey}’s answer; it may have written. Open the promotion and check the target.`
+              }
+            })
+          if (settled) return settled
+          throw new ConfigPromotionError('INTERRUPTED', LOST, 502)
+        }
+        // An answer that refused: nothing was written (the target's own word).
+        const stale = e.code === 'STALE'
+        const back = e.code === 'PROD_ONLY_CHANGES' || e.code === 'BUSY' || e.code === 'LOCKED'
+        await db(PROMOTIONS)
+          .where({ id: p.id })
+          .update({
+            status: back ? 'planned' : stale ? 'stale' : 'failed',
+            error: e.message.slice(0, 1000),
+            ...(back ? { started_at: null, applied_by: null } : {})
+          })
+        if (back || !claim) await claim?.release().catch(() => undefined)
+        else await claim.link('config', p.id).catch(() => undefined)
+        if (!back)
           x.notify({
             kind: 'promote_failed',
             appId: p.app_id,
             envId: p.target_environment_id,
             path: `/hub/config?promotion=${p.id}`,
-            urgent: true,
+            urgent: !stale,
             text: {
-              subject: `Config promotion lost its answer: ${where}`,
-              message: `The Hub could not read ${targetKey}’s answer; it may have written. Open the promotion and check the target.`
+              subject: stale
+                ? `Config promotion needs a new plan: ${where}`
+                : `Config promotion refused: ${where}`,
+              message: stale
+                ? `Configuration on ${n.source} or ${targetKey} changed since the plan; ${targetKey} wrote nothing. Plan it again.`
+                : `${targetKey} refused it and wrote nothing: ${e.message.slice(0, 300)}`
             }
           })
-        if (settled) return settled
-        throw new ConfigPromotionError('INTERRUPTED', LOST, 502)
+        throw e
       }
-      // An answer that refused: nothing was written (the target's own word).
-      const stale = e.code === 'STALE'
-      const back = e.code === 'PROD_ONLY_CHANGES' || e.code === 'BUSY' || e.code === 'LOCKED'
-      await db(PROMOTIONS)
-        .where({ id: p.id })
-        .update({
-          status: back ? 'planned' : stale ? 'stale' : 'failed',
-          error: e.message.slice(0, 1000),
-          ...(back ? { started_at: null, applied_by: null } : {})
-        })
-      if (back || !claim) await claim?.release().catch(() => undefined)
-      else await claim.link('config', p.id).catch(() => undefined)
-      if (!back)
-        x.notify({
-          kind: 'promote_failed',
-          appId: p.app_id,
-          envId: p.target_environment_id,
-          path: `/hub/config?promotion=${p.id}`,
-          urgent: !stale,
-          text: {
-            subject: stale
-              ? `Config promotion needs a new plan: ${where}`
-              : `Config promotion refused: ${where}`,
-            message: stale
-              ? `Configuration on ${n.source} or ${targetKey} changed since the plan; ${targetKey} wrote nothing. Plan it again.`
-              : `${targetKey} refused it and wrote nothing: ${e.message.slice(0, 300)}`
-          }
-        })
-      throw e
+      await claim?.link('config', p.id).catch(() => undefined)
+      const s = summaryOf(out)
+      await markApplied(p, s, x.now())
+      notifyApplied(x, p, s, { where, source: n.source, target: targetKey })
+      const done = await getPromotion(p.id, x.now())
+      if (!done)
+        throw new ConfigPromotionError('NOT_FOUND', 'The promotion could not be read back.', 500)
+      return done
+    } finally {
+      stopBeat()
     }
-    await claim?.link('config', p.id).catch(() => undefined)
-    const s = summaryOf(out)
-    await markApplied(p, s, x.now())
-    x.notify({
-      kind: s.procedures.failed.length ? 'promote_failed' : 'promote_done',
-      appId: p.app_id,
-      envId: p.target_environment_id,
-      path: `/hub/config?promotion=${p.id}`,
-      ...(s.procedures.failed.length || s.needs_setup.length ? { urgent: true } : {}),
-      text: {
-        subject: `${s.procedures.failed.length ? 'Config promoted with failures' : 'Config promoted'}: ${where}`,
-        message: doneText(s, n.source, targetKey)
-      }
-    })
-    const done = await getPromotion(p.id, x.now())
-    if (!done)
-      throw new ConfigPromotionError('NOT_FOUND', 'The promotion could not be read back.', 500)
-    return done
   })
 }
 
 // ── reconcile (a lost answer) ───────────────────────────────────────────────
 
+type Reconciled =
+  | { settled: ConfigPromotion }
+  | { pending: 'running' | 'not_yet' | 'unknown'; message: string }
+
+const REFRESHED =
+  'Unknown on the target: it has no record of this promotion (it was refreshed since). Its rows may or may not still be there; this promotion can no longer be undone.'
+
+/**
+ * Asks the target what it did with this promotion. `sentAt` = when the Hub sent the apply
+ * (`not_applied` inside NOT_APPLIED_WINDOW_MS of it is not yet an answer). `resume` lets the
+ * target finish a stalled run's procedures before answering.
+ */
 async function reconcileWith(
   p: ConfigPromotion,
   ch: ConfigChannel,
-  x: ReturnType<typeof d>
-): Promise<ConfigPromotion | null> {
-  if (!p.run_key) return null
-  const st = (await ch.call('status', { run_key: p.run_key })) as {
+  x: ReturnType<typeof d>,
+  o: { sentAt: number | null; resume: boolean }
+): Promise<Reconciled> {
+  if (!p.run_key) return { pending: 'unknown', message: 'This promotion has no run key.' }
+  const st = (await ch.call('status', { run_key: p.run_key, resume: o.resume })) as {
     state?: unknown
     answer?: unknown
+    error?: unknown
   } | null
   const state = st?.state
+  const done = async () => {
+    const back = await getPromotion(p.id, x.now())
+    if (!back) throw new ConfigPromotionError('NOT_FOUND', 'No such config promotion.', 404)
+    return { settled: back } as Reconciled
+  }
   if (state === 'applied' || state === 'undone') {
     const s = summaryOf((st?.answer ?? null) as Record<string, unknown> | null)
     await markApplied(p, s, x.now())
@@ -906,16 +1021,75 @@ async function reconcileWith(
       await db(PROMOTIONS)
         .where({ id: p.id })
         .update({ status: 'undone', undone_at: new Date(x.now()) })
-  } else if (state === 'not_applied') {
+    return done()
+  }
+  if (state === 'applying' || state === 'deploying' || state === 'undoing')
+    return {
+      pending: 'running',
+      message:
+        state === 'deploying'
+          ? 'The target wrote the rows and is deploying procedures — check again in a moment.'
+          : 'The target is still working on this promotion — check again in a moment.'
+    }
+  if (state === 'failed') {
+    if (p.status === 'applied' || p.status === 'undone') return done()
+    await db(PROMOTIONS)
+      .where({ id: p.id })
+      .update({
+        status: 'failed',
+        heartbeat_at: null,
+        error:
+          `The target confirms it wrote nothing for this promotion${typeof st?.error === 'string' && st.error ? ` (${st.error.slice(0, 300)})` : ''}. Plan it again.`.slice(
+            0,
+            1000
+          )
+      })
+    return done()
+  }
+  if (state === 'not_applied') {
+    // The Hub saw it applied, the target has no record: refreshed since. Never "failed".
+    if (p.status === 'applied' || p.status === 'undone') {
+      await db(PROMOTIONS).where({ id: p.id }).update({ error: REFRESHED, run_key: null })
+      return done()
+    }
+    const sent = o.sentAt ?? (p.started_at ? Date.parse(p.started_at) : 0)
+    if (x.now() - sent < x.notAppliedWindowMs)
+      return {
+        pending: 'not_yet',
+        message: 'The target has not received this promotion yet — check again in a moment.'
+      }
     await db(PROMOTIONS).where({ id: p.id }).update({
       status: 'failed',
+      heartbeat_at: null,
       error: 'The target confirms it wrote nothing for this promotion. Plan it again.'
     })
-  } else return null
-  return getPromotion(p.id, x.now())
+    return done()
+  }
+  return { pending: 'unknown', message: 'The target did not say what it did — try again.' }
 }
 
-/** Asks the target what it did with this promotion (interrupted / undoing rows). */
+/** After a lost answer, under the lock: ask until a final answer or the deadline. */
+async function waitForTarget(
+  p: ConfigPromotion,
+  ch: ConfigChannel,
+  x: ReturnType<typeof d>,
+  sentAt: number
+): Promise<ConfigPromotion | null> {
+  const deadline = x.now() + x.pollDeadlineMs
+  for (;;) {
+    const r = await reconcileWith(p, ch, x, { sentAt, resume: true }).catch(() => null)
+    if (r && 'settled' in r) return r.settled
+    if (x.now() >= deadline) return null
+    await db(PROMOTIONS)
+      .where({ id: p.id })
+      .update({ heartbeat_at: new Date(x.now()) })
+      .catch(() => undefined)
+    await x.sleep(x.pollMs)
+  }
+}
+
+/** “Check the target”: what it did with this promotion (interrupted / failed / applied rows);
+ *  a stalled run's procedures are finished there first. */
 export async function reconcilePromotion(
   id: number,
   deps: ConfigDeps = {}
@@ -923,20 +1097,33 @@ export async function reconcilePromotion(
   const x = d(deps)
   const p = await getPromotion(id, x.now())
   if (!p) throw new ConfigPromotionError('NOT_FOUND', 'No such config promotion.', 404)
-  if (!['interrupted', 'applied', 'failed'].includes(p.status) || !p.run_key)
+  if (!['interrupted', 'applied', 'failed', 'undone'].includes(p.status) || !p.run_key)
     throw new ConfigPromotionError(
       'NOTHING_TO_CHECK',
       'There is nothing to check on this promotion.',
       409
     )
-  const out = await reconcileWith(p, await x.channel(p.target_environment_id), x)
-  if (!out)
+  const before = p.status
+  const out = await reconcileWith(p, await x.channel(p.target_environment_id), x, {
+    sentAt: null,
+    resume: true
+  })
+  if ('pending' in out)
     throw new ConfigPromotionError(
-      'APP_UNREACHABLE',
-      'The target did not say what it did — try again.',
-      502
+      out.pending === 'unknown' ? 'APP_UNREACHABLE' : 'STILL_RUNNING',
+      out.message,
+      out.pending === 'unknown' ? 502 : 409
     )
-  return out
+  if (out.settled.status === 'applied' && before !== 'applied') {
+    const n = await names(out.settled)
+    const target = n.target?.key ?? 'the target'
+    notifyApplied(x, out.settled, summaryOf(out.settled.result), {
+      where: `${n.app} · ${target}`,
+      source: n.source,
+      target
+    })
+  }
+  return out.settled
 }
 
 // ── undo ────────────────────────────────────────────────────────────────────
@@ -1009,9 +1196,15 @@ export async function applyUndo(i: UndoInput, deps: ConfigDeps = {}): Promise<Co
     if (moving) throw refusal(moving)
     const claimed = await db(PROMOTIONS)
       .where({ id: p.id, status: 'applied' })
-      .update({ status: 'undoing', started_at: new Date(x.now()), undone_by: i.userId })
+      .update({
+        status: 'undoing',
+        started_at: new Date(x.now()),
+        heartbeat_at: new Date(x.now()),
+        undone_by: i.userId
+      })
     if (Number(claimed) !== 1)
       throw new ConfigPromotionError('NOT_UNDOABLE', 'Someone else is undoing this promotion.', 409)
+    const stopBeat = hubHeartbeat(p.id, x.now)
     try {
       const ch = await x.channel(p.target_environment_id)
       const out = (await ch.call('undo', {
@@ -1038,7 +1231,8 @@ export async function applyUndo(i: UndoInput, deps: ConfigDeps = {}): Promise<Co
             procedures: arr<Record<string, unknown>>(out?.procedures).map((pr) => ({
               name: txt(pr.name, 128),
               ok: pr.ok === true
-            }))
+            })),
+            baseline: typeof out?.baseline === 'string' ? txt(out.baseline, 300) : 'unchanged'
           })
         })
       x.notify({
@@ -1066,6 +1260,8 @@ export async function applyUndo(i: UndoInput, deps: ConfigDeps = {}): Promise<Co
           undo_plan_hash: null
         })
       throw e
+    } finally {
+      stopBeat()
     }
     const done = await getPromotion(p.id, x.now())
     if (!done)

@@ -38,6 +38,10 @@ const app = {
   applyError: null as InstanceType<typeof ConfigPromotionError> | null,
   undoError: null as InstanceType<typeof ConfigPromotionError> | null,
   status: 'applied' as 'applied' | 'not_applied' | 'unreachable',
+  /** When set, each status call takes the next state (the last one repeats). */
+  states: [] as string[],
+  /** Run on each status call (the lock is checked while the Hub waits). */
+  onStatus: null as null | (() => Promise<void>),
   prodOnly: false
 }
 
@@ -114,6 +118,18 @@ const channel = async (env: number) => ({
       return applied
     }
     if (name === 'status') {
+      await app.onStatus?.()
+      if (app.states.length) {
+        const state = app.states.length > 1 ? app.states.shift() : app.states[0]
+        return {
+          state,
+          running: state === 'applying' || state === 'deploying',
+          stalled: false,
+          answer: state === 'applied' ? applied : null,
+          error: state === 'failed' ? 'refused at the door' : null,
+          newest: state === 'applied'
+        }
+      }
       if (app.status === 'unreachable') throw new ConfigPromotionError('APP_UNREACHABLE', 'no', 502)
       return app.status === 'applied'
         ? { state: 'applied', answer: applied, newest: true }
@@ -180,7 +196,14 @@ const deps = (): Deps => ({
     gateCalls.push('outside-recorded')
   },
   notify: (e) => notices.push(e as never),
-  now: () => now
+  now: () => now,
+  // The Hub's wait after a lost answer: each poll moves the clock on (no real sleeping).
+  sleep: async (ms) => {
+    now += ms
+  },
+  pollMs: 5_000,
+  pollDeadlineMs: 15 * 60_000,
+  notAppliedWindowMs: 2 * 60_000
 })
 
 beforeAll(async () => {
@@ -228,6 +251,8 @@ beforeEach(async () => {
   app.applyError = null
   app.undoError = null
   app.status = 'applied'
+  app.states = []
+  app.onStatus = null
   app.prodOnly = false
   now = Date.parse('2026-11-25T12:00:00Z')
 })
@@ -428,7 +453,99 @@ describe('a lost answer (M4)', () => {
     const out = await apply(p.id)
     expect(out.status).toBe('applied')
     expect(calls.map((c) => c.name)).toContain('status')
-    expect(calls.find((c) => c.name === 'status')?.body).toEqual({ run_key: p.run_key })
+    expect(calls.find((c) => c.name === 'status')?.body).toEqual({
+      run_key: p.run_key,
+      resume: true
+    })
+  })
+
+  it('a timeout mid-apply: interrupted while the target runs, then applied — lock held throughout (N1)', async () => {
+    const p = await plan()
+    app.applyError = new ConfigPromotionError('APP_UNREACHABLE', 'timed out', 502)
+    app.states = ['applying', 'applying', 'deploying', 'applied']
+    const seen: Array<{ held: boolean; status: string | undefined }> = []
+    app.onStatus = async () => {
+      seen.push({
+        held: !!(await lock.held(11)),
+        status: (await db(PROMOTIONS).where({ id: p.id }).first('status'))?.status
+      })
+    }
+    const out = await apply(p.id)
+    expect(out.status).toBe('applied')
+    expect(seen.length).toBe(4)
+    expect(seen.every((x) => x.held)).toBe(true)
+    expect(seen.every((x) => x.status === 'interrupted')).toBe(true)
+    expect(await lock.held(11)).toBe(false)
+    // Polls kept the Hub's heartbeat fresh; the done notice went out once.
+    expect(out.heartbeat_at).not.toBeNull()
+    expect(
+      notices.filter((n) => n.kind === 'promote_failed' || n.kind === 'promote_done')
+    ).toHaveLength(1)
+  })
+
+  it('not_applied inside the window is not an answer: the request was still on its way (N1)', async () => {
+    const p = await plan()
+    app.applyError = new ConfigPromotionError('APP_UNREACHABLE', 'timed out', 502)
+    app.states = ['not_applied', 'not_applied', 'applying', 'applied']
+    const out = await apply(p.id)
+    expect(out.status).toBe('applied')
+  })
+
+  it('the target answers failed (nothing committed) → failed with its reason', async () => {
+    const p = await plan()
+    app.applyError = new ConfigPromotionError('APP_UNREACHABLE', 'timed out', 502)
+    app.states = ['applying', 'failed']
+    const out = await apply(p.id)
+    expect(out.status).toBe('failed')
+    expect(out.error).toMatch(/confirms it wrote nothing.*refused at the door/)
+  })
+
+  it('Check the target while it still runs says so; it never marks failed (N1)', async () => {
+    const p = await plan()
+    await db(PROMOTIONS).where({ id: p.id }).update({ status: 'interrupted' })
+    app.states = ['deploying']
+    expect(await code(P.reconcilePromotion(p.id, deps()))).toBe('STILL_RUNNING')
+    expect((await P.getPromotion(p.id))?.status).toBe('interrupted')
+    expect(calls.at(-1)?.body).toMatchObject({ resume: true })
+  })
+
+  it('after an env refresh the check says unknown, never failed; undo is gone', async () => {
+    const p = await apply((await plan()).id)
+    expect(p.undo_ready).toBe(true)
+    app.status = 'not_applied'
+    const out = await P.reconcilePromotion(p.id, deps())
+    expect(out.status).toBe('applied')
+    expect(out.error).toMatch(/Unknown on the target.*refreshed/)
+    expect(out.run_key).toBeNull()
+    expect(out.undo_ready).toBe(false)
+  })
+
+  it('a row whose Hub heartbeat stopped heals to interrupted; a fresh one is left alone', () => {
+    const t = Date.parse('2026-11-25T12:00:00Z')
+    const started = new Date(t - 60 * 60_000).toISOString()
+    expect(
+      P.healedStatus(
+        {
+          status: 'applying',
+          started_at: started,
+          heartbeat_at: new Date(t - 30_000).toISOString()
+        },
+        t
+      )
+    ).toBeNull()
+    expect(
+      P.healedStatus(
+        {
+          status: 'applying',
+          started_at: started,
+          heartbeat_at: new Date(t - 3 * 60_000).toISOString()
+        },
+        t
+      )
+    ).toBe('interrupted')
+    expect(P.healedStatus({ status: 'undoing', started_at: started, heartbeat_at: null }, t)).toBe(
+      'applied'
+    )
   })
 
   it('the target confirms nothing was written → failed, saying so', async () => {

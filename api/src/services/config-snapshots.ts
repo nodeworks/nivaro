@@ -42,6 +42,8 @@ export type SnapshotTrigger =
   // Hub config promotion: the Changed-here baseline with the promoted tables moved forward. Not a
   // point in time — never listed with the restore points and never restorable (config-restore).
   | 'hub-baseline'
+  // Hub config promotion: the rows a promotion (or its undo) is about to write, as they were.
+  | 'hub-pre-apply'
 
 /** Newest N kept per trigger kind (#2803). Unknown kinds keep the default. */
 export const KEEP_BY_TRIGGER: Record<string, number> = {
@@ -51,7 +53,8 @@ export const KEEP_BY_TRIGGER: Record<string, number> = {
   'pre-deploy': 10,
   'pre-restore': 10,
   promote: 10,
-  'hub-baseline': 5
+  'hub-baseline': 5,
+  'hub-pre-apply': 10
 }
 const KEEP_DEFAULT = 10
 /** Every kind at its cap, plus slack: the history list's default length. */

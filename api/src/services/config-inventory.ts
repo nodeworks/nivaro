@@ -358,6 +358,7 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_hub_slo_reports',
   'nivaro_hub_config_promotions', //   Hub config promotion (575): plans, results, undo state
   'nivaro_hub_config_applied', //      the app's own record of each Hub config promotion it applied (575)
+  'nivaro_hub_config_writes', //       the commit marker of each one: rows written, values before (575)
   'nivaro_hub_incidents', //           Hub incidents (576): incidents + timeline, on-call rotas,
   'nivaro_hub_incident_events', //     overrides, pages, status page links (token hashes only)
   'nivaro_hub_oncall_rotas',

@@ -68,6 +68,18 @@ export interface PlanView {
   prod_only: { count: number; lines: string[]; refuse: boolean }
   /** Steps (or webhook flows) that need this environment's own values; their flows arrive off. */
   needs_setup?: Array<{ flow: string | null; step: string | null; reason: string }>
+  /** Steps of a promoted flow the source no longer has: removed with it (undo puts them back). */
+  orphans?: Array<{ key: string; flow: string; label: string | null }>
+  /** Shown before removals: likely renames (same steps, new name). */
+  flags?: Array<{
+    code: 'RENAME_SUSPECTED'
+    table: string
+    key: string
+    label: string | null
+    reason: string
+  }>
+  /** Per step: the outbound / secret option paths the source took off (they stay as set here). */
+  stripped_steps?: Array<{ key: string; label: string | null; paths: string[] }>
 }
 
 export interface ConfigPromotion {
@@ -87,10 +99,12 @@ export interface ConfigPromotion {
     totals?: { inserted: number; updated: number; deleted: number }
     procedures?: { written: number; failed: string[] } | null
     needs_setup?: Array<{ flow: string | null; step: string | null; reason: string }>
-    baseline?: 'moved' | 'unchanged'
+    /** 'moved', 'unchanged …' or 'not moved: <why>' (Changed here kept its old baseline). */
+    baseline?: string
   } | null
   pre_restore_id: number | null
   run_key: string | null
+  heartbeat_at?: string | null
   /** Applied and the newest promotion that wrote to its target. */
   undo_ready: boolean
   undo_result: { totals?: { inserted: number; updated: number; deleted: number } } | null
@@ -255,6 +269,14 @@ const COPY: Record<string, { title: string; hint?: string; serverHint?: boolean 
     hint: 'It may have written. Use “Check the target” on the promotion to read what it says.'
   },
   NOTHING_TO_CHECK: { title: 'There is nothing to check on this promotion' },
+  STILL_RUNNING: {
+    title: 'The target is still working on this promotion',
+    hint: 'It has not finished writing or deploying yet. Check again in a moment — nothing is marked failed meanwhile.'
+  },
+  APPLY_RUNNING: {
+    title: 'The target is applying this promotion right now',
+    hint: 'Wait for it to finish, then check the target.'
+  },
   UNDO_ADMIN_SESSION_ONLY: {
     title: 'Undo needs an administrator on their own session',
     hint: 'Sign in as yourself (not View-as, an API key or a connected app) to undo it.'

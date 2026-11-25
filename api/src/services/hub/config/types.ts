@@ -69,6 +69,19 @@ export interface PlanView {
   prod_only: { count: number; lines: string[]; refuse: boolean }
   /** Steps (or flows) that need this environment's own values; their flows arrive switched off. */
   needs_setup: Array<{ flow: string | null; step: string | null; reason: string }>
+  /** Steps of a promoted flow the source no longer has: removed with it whatever the removal
+   *  setting; an undo puts them back. */
+  orphans: Array<{ key: string; flow: string; label: string | null }>
+  /** Shown before removals: likely renames (same steps, new name). */
+  flags: Array<{
+    code: 'RENAME_SUSPECTED'
+    table: string
+    key: string
+    label: string | null
+    reason: string
+  }>
+  /** Per step: the outbound / secret option paths the source took off (they stay as set here). */
+  stripped_steps: Array<{ key: string; label: string | null; paths: string[] }>
   /** What the target binds the apply to (its engine plan and its procedure plan). */
   hashes: { engine: string; procs: string }
 }
@@ -90,6 +103,8 @@ export interface ConfigPromotion {
   pre_restore_id: number | null
   /** The promotion's key at the target app (idempotency, lost-answer check, undo). */
   run_key: string | null
+  /** The Hub's own heartbeat while a server works this promotion (apply, wait, undo). */
+  heartbeat_at: string | null
   /** Applied and the newest applied promotion of its target: the one that may be undone. */
   undo_ready: boolean
   undo_result: Record<string, unknown> | null

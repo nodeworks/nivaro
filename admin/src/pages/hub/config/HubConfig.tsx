@@ -557,6 +557,16 @@ function Outcome({ p, to }: { p: ConfigPromotion; to: string }) {
       {(p.result?.needs_setup?.length ?? 0) > 0 && (
         <SetupList items={p.result?.needs_setup ?? []} to={to} done />
       )}
+      {p.result?.baseline?.startsWith('not moved') && (
+        <p className='m-0 mt-1 flex gap-1.5 text-amber-800 dark:text-amber-300'>
+          <AlertTriangle className='mt-0.5 h-3.5 w-3.5 shrink-0' aria-hidden />
+          <span>
+            Changed here on {to} kept its old baseline (
+            {p.result.baseline.replace(/^not moved:\s*/, '')}). Rows this promotion wrote may show
+            as changed here until the next promotion.
+          </span>
+        </p>
+      )}
       {u && (
         <p className='m-0 mt-1'>
           Undone: {u.inserted} put back, {u.updated} changed back, {u.deleted} removed again.
@@ -568,7 +578,13 @@ function Outcome({ p, to }: { p: ConfigPromotion; to: string }) {
 
 function Notes({ plan }: { plan: PlanView }) {
   const [open, setOpen] = useState(false)
-  const n = plan.kept.length + plan.refused.length + plan.held.length + plan.switched_off.length
+  const stripped = plan.stripped_steps ?? []
+  const n =
+    plan.kept.length +
+    plan.refused.length +
+    plan.held.length +
+    plan.switched_off.length +
+    stripped.length
   if (!n) return null
   return (
     <div className='rounded-md border border-slate-200 dark:border-border'>
@@ -615,6 +631,12 @@ function Notes({ plan }: { plan: PlanView }) {
               : new here, arrives switched off
             </li>
           ))}
+          {stripped.map((s) => (
+            <li key={`o-${s.key}`} className='text-slate-700 dark:text-foreground'>
+              <span className='font-medium'>Step {s.label ?? `#${s.key}`}</span>: keeps its own{' '}
+              <span className='font-mono text-[11px]'>{s.paths.join(', ')}</span>
+            </li>
+          ))}
         </ul>
       )}
     </div>
@@ -650,6 +672,8 @@ function PlanBody({ plan, to }: { plan: PlanView; to: string }) {
           </ul>
         </div>
       )}
+      {(plan.flags?.length ?? 0) > 0 && <RenameList items={plan.flags ?? []} />}
+      {(plan.orphans?.length ?? 0) > 0 && <OrphanList items={plan.orphans ?? []} to={to} />}
       {(plan.needs_setup?.length ?? 0) > 0 && <SetupList items={plan.needs_setup ?? []} to={to} />}
       {plan.warnings.length > 0 && (
         <ul className='m-0 list-none space-y-1 p-0'>
@@ -1031,6 +1055,45 @@ function RefusalList({ error }: { error: unknown }) {
         </li>
       ))}
     </ul>
+  )
+}
+
+function RenameList({ items }: { items: NonNullable<PlanView['flags']> }) {
+  return (
+    <div className='rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200'>
+      <p className='m-0 font-medium'>Possibly a renamed flow — check before anything is removed</p>
+      <ul className='m-0 mt-1 list-disc space-y-0.5 pl-4'>
+        {items.slice(0, 20).map((f) => (
+          <li key={`${f.table}-${f.key}`}>
+            <span className='font-medium'>{f.label ?? `#${f.key}`}</span>: {f.reason}
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+function OrphanList({ items, to }: { items: NonNullable<PlanView['orphans']>; to: string }) {
+  return (
+    <div className='rounded-md border border-slate-200 bg-white px-3 py-2 text-[12px] text-slate-700 dark:border-border dark:bg-card dark:text-foreground'>
+      <p className='m-0 font-medium'>
+        Removed with their flow on {to}
+        <span className='font-normal text-slate-500 dark:text-muted-foreground'>
+          {' '}
+          — the source no longer has these steps; undo puts them back
+        </span>
+      </p>
+      <ul className='m-0 mt-1 list-disc space-y-0.5 pl-4'>
+        {items.slice(0, 20).map((o) => (
+          <li key={o.key}>{o.label ?? `Step #${o.key}`}</li>
+        ))}
+      </ul>
+      {items.length > 20 && (
+        <p className='m-0 mt-1 text-slate-500 dark:text-muted-foreground'>
+          and {items.length - 20} more
+        </p>
+      )}
+    </div>
   )
 }
 

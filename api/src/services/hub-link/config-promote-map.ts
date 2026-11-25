@@ -43,6 +43,8 @@ export interface TableSpec {
   refs: Record<string, RefKind>
   /** JSON columns whose ids are rewritten (flow step options). */
   jsonRefs?: string[]
+  /** Permission JSON: role ids rewritten, any other uuid / id refused. */
+  policyJson?: string[]
 }
 
 const low = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim().toLowerCase() : null)
@@ -63,7 +65,8 @@ export const SPECS: readonly TableSpec[] = [
         ? `${role}|${low(r.collection)}|${low(r.action)}`
         : null
     },
-    refs: { role: 'role' }
+    refs: { role: 'role' },
+    policyJson: ['fields', 'permissions', 'presets', 'row_filter', 'validation']
   },
   {
     table: 'nivaro_flows',
@@ -114,13 +117,65 @@ export const OPTION_REFS: Record<string, RefKind> = {
   run_as: 'user',
   user: 'user',
   user_id: 'user',
+  users: 'user',
   owner: 'user',
+  owners: 'user',
   assignee: 'user',
+  assignees: 'user',
+  recipient: 'user',
+  recipients: 'user',
+  exclude: 'user',
+  approver: 'user',
+  approvers: 'user',
+  notify_users: 'user',
   role: 'role',
   role_id: 'role',
   roles: 'role'
 }
 const RAW_ID_KEY = /(^|_)(id|ids)$|^items?$|^item_id$/i
+/**
+ * Option keys whose plain digits are a number, never a row (a timeout, a count, an HTTP status).
+ * Any OTHER key holding a uuid or bare-integer string refuses the plan (REF_UNMAPPED) unless a
+ * remap rule above handled it: an id never means the same row in two separately created databases.
+ */
+export const SAFE_NUMBER_KEYS = new Set([
+  'timeout',
+  'timeout_ms',
+  'timeout_seconds',
+  'limit',
+  'retries',
+  'retry',
+  'max_retries',
+  'delay',
+  'delay_ms',
+  'wait',
+  'wait_ms',
+  'interval',
+  'interval_ms',
+  'expect_status',
+  'status_code',
+  'port',
+  'version',
+  'priority',
+  'sort',
+  'days',
+  'hours',
+  'minutes',
+  'seconds',
+  'count',
+  'max',
+  'min',
+  'size',
+  'page',
+  'page_size',
+  'year',
+  'month',
+  'day',
+  'decimals',
+  'precision',
+  'width',
+  'height'
+])
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /** A literal id (never a template like {{ $trigger.key }}). */
@@ -130,6 +185,17 @@ export function isLiteralId(v: unknown): boolean {
   const t = v.trim()
   return /^\d+$/.test(t) || UUID_RE.test(t)
 }
+
+/** A string that is a list of literal ids ("a,b,c"): its parts, else null. */
+export function idList(v: unknown): string[] | null {
+  if (typeof v !== 'string' || !v.includes(',')) return null
+  const parts = v
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean)
+  return parts.length && parts.every(isLiteralId) ? parts : null
+}
+export const isUuid = (v: unknown) => typeof v === 'string' && UUID_RE.test(v.trim())
 
 export interface Refusal {
   code: 'ROW_UNMATCHED' | 'REF_UNMAPPED'
@@ -141,6 +207,9 @@ export interface Refusal {
 
 /** A source / target dictionary: kind → id → name (source) or name → id (target). */
 export type Dict = Partial<Record<RefKind, Record<string, string>>>
+/** Target-dictionary markers: two rows share the name; the person's account cannot be used. */
+export const DUPLICATE = '\u0000duplicate'
+export const UNUSABLE = '\u0000unusable'
 
 function labelOf(d: Record<string, unknown>): string | null {
   for (const k of ['name', 'label', 'key', 'collection']) {
@@ -160,7 +229,7 @@ export function optionRefIds(v: unknown, out: Map<RefKind, Set<string>>): void {
   for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
     const kind = OPTION_REFS[k.toLowerCase()]
     if (kind) {
-      for (const one of Array.isArray(x) ? x : [x])
+      for (const one of Array.isArray(x) ? x : (idList(x) ?? [x]))
         if (isLiteralId(one)) {
           const s = out.get(kind) ?? new Set<string>()
           s.add(String(one).trim())
@@ -372,6 +441,22 @@ export function mapToTarget(input: MapInput): MapOutput {
     }
     const name = input.sourceDict[kind]?.[String(v)]
     const id = name ? input.targetDict[kind]?.[name.toLowerCase()] : undefined
+    if (id === DUPLICATE) {
+      refusals.push({
+        code: 'REF_UNMAPPED',
+        ...where,
+        reason: `${where.what} points at “${name}”, and the target has more than one ${kind.replace('_', ' ')} of that name`
+      })
+      return { ok: false }
+    }
+    if (id === UNUSABLE) {
+      refusals.push({
+        code: 'REF_UNMAPPED',
+        ...where,
+        reason: `${where.what} points at “${name}”, whose account on the target is suspended, redacted or a machine account`
+      })
+      return { ok: false }
+    }
     if (id != null) return { ok: true, value: typeof v === 'number' ? Number(id) : id }
     refusals.push({
       code: 'REF_UNMAPPED',
@@ -399,7 +484,15 @@ export function mapToTarget(input: MapInput): MapOutput {
           isLiteralId(y)
             ? mapRef(kind, y, { ...where, what: `Step option ${p}` })
             : { ok: true, value: y }
-        if (Array.isArray(x)) {
+        const list = idList(x)
+        if (list) {
+          out[k] = list
+            .map((y) => {
+              const r = one(y)
+              return r.ok ? String((r as { value: unknown }).value) : y
+            })
+            .join(',')
+        } else if (Array.isArray(x)) {
           out[k] = x.map((y) => {
             const r = one(y)
             return r.ok ? (r as { value: unknown }).value : y
@@ -410,7 +503,13 @@ export function mapToTarget(input: MapInput): MapOutput {
         }
         continue
       }
-      if (RAW_ID_KEY.test(k) && (isLiteralId(x) || (Array.isArray(x) && x.some(isLiteralId)))) {
+      const literalString = (y: unknown) => typeof y === 'string' && (isLiteralId(y) || !!idList(y))
+      const unsafe =
+        (RAW_ID_KEY.test(k) && (isLiteralId(x) || (Array.isArray(x) && x.some(isLiteralId)))) ||
+        (!SAFE_NUMBER_KEYS.has(k.toLowerCase()) &&
+          (literalString(x) || (Array.isArray(x) && x.some(literalString)))) ||
+        isUuid(x)
+      if (unsafe) {
         refusals.push({
           code: 'REF_UNMAPPED',
           ...where,
@@ -422,6 +521,39 @@ export function mapToTarget(input: MapInput): MapOutput {
       out[k] = mapOptions(x, where, p)
     }
     return out
+  }
+
+  /** Permission JSON: a role id is rewritten to the target's role; any other uuid or id refuses. */
+  const mapPolicy = (
+    v: unknown,
+    where: { table: string; key: string; label: string | null },
+    path: string,
+    key: string
+  ): unknown => {
+    if (Array.isArray(v)) return v.map((x, i) => mapPolicy(x, where, `${path}[${i}]`, key))
+    if (v && typeof v === 'object') {
+      const out: Record<string, unknown> = {}
+      for (const [k, x] of Object.entries(v as Record<string, unknown>))
+        out[k] = mapPolicy(x, where, path ? `${path}.${k}` : k, k)
+      return out
+    }
+    if (isUuid(v)) {
+      const role = ids.nivaro_roles?.get(String(v).trim())
+      if (role) return role
+      refusals.push({
+        code: 'REF_UNMAPPED',
+        ...where,
+        reason: `Permission rule ${path} holds an id (${String(v).slice(0, 8)}…) the Hub cannot map to the target — use $CURRENT_USER / $CURRENT_ROLE, or set it on the target`
+      })
+      return v
+    }
+    if (RAW_ID_KEY.test(key) && isLiteralId(v))
+      refusals.push({
+        code: 'REF_UNMAPPED',
+        ...where,
+        reason: `Permission rule ${path} holds a literal id the Hub cannot map to the target`
+      })
+    return v
   }
 
   // 2. rows rewritten: their own id, every reference, step option ids.
@@ -442,6 +574,13 @@ export function mapToTarget(input: MapInput): MapOutput {
         if (!(col in data)) continue
         const r = mapRef(kind, data[col], { ...where, what: col })
         if (r.ok) data[col] = (r as { value: unknown }).value
+      }
+      for (const col of spec.policyJson ?? []) {
+        const v = data[col]
+        if (typeof v !== 'string' || !v.trim()) continue
+        const parsed = safeParse(v)
+        if (parsed && typeof parsed === 'object')
+          data[col] = JSON.stringify(mapPolicy(parsed, where, col, col))
       }
       for (const col of spec.jsonRefs ?? []) {
         const v = data[col]

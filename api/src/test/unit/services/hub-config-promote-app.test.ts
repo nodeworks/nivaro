@@ -16,11 +16,17 @@ import {
 import { planTable, RESTORE_EXCLUDED } from '../../../services/config-restore.js'
 import { allKeeps, type EnvKeepEntry } from '../../../services/env-refresh/registry.js'
 import {
+  baselineAfter,
   exportSnapshot,
+  heartbeatFresh,
+  orphanSteps,
   PromoteError,
   parsePromoteRequest,
   parseTables,
+  renameSuspects,
+  STALE_MS,
   staleRows,
+  targetDictOf,
   type UndoRow,
   undoRowsOf,
   undoTarget
@@ -32,7 +38,7 @@ import {
   stripKeepSecrets,
   switchOff
 } from '../../../services/hub-link/config-promote-keeps.js'
-import { mapToTarget } from '../../../services/hub-link/config-promote-map.js'
+import { DUPLICATE, mapToTarget, UNUSABLE } from '../../../services/hub-link/config-promote-map.js'
 import { planProcs, procsRef } from '../../../services/hub-link/config-promote-procs.js'
 import {
   deepStrip,
@@ -682,5 +688,249 @@ describe('outbound keys at every depth, embedded secrets anywhere', () => {
     )
     expect(p.tables.nivaro_flows.f.data.status).toBe('inactive')
     expect(p.needs_setup[0].reason).toMatch(/request\.url/)
+  })
+})
+
+// ── round 4 ─────────────────────────────────────────────────────────────────
+
+describe('N4: ids in options and permissions are remapped or refused, never carried', () => {
+  const U1 = '11111111-1111-4111-8111-111111111111'
+  const U2 = '22222222-2222-4222-8222-222222222222'
+  const U3 = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
+  const T1 = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+  const T2 = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+  const flowWith = (options: Record<string, unknown>) => ({
+    nivaro_flows: { f: row({ id: 'f', name: 'F' }) },
+    nivaro_flow_operations: {
+      o: row({ id: 'o', flow: 'f', key: 'notify', options: opts(options) })
+    }
+  })
+  const step = (m: ReturnType<typeof mapToTarget>) =>
+    parsed(
+      m.tables.nivaro_flow_operations[m.ids.nivaro_flow_operations.get('o') as string].data.options
+    )
+
+  it('recipient / exclude / assignee people are remapped by email, lists included', () => {
+    const m = mapToTarget({
+      source: flowWith({ recipients: `${U1},${U2}`, exclude: [U2], assignee: U1, timeout: '30' }),
+      target: {},
+      sourceDict: { user: { [U1]: 'ann@x.test', [U2]: 'bob@x.test' } },
+      targetDict: { user: { 'ann@x.test': T1, 'bob@x.test': T2 } },
+      runKey: RUN
+    })
+    expect(m.refusals).toEqual([])
+    const o = step(m)
+    expect(o.recipients).toBe(`${T1},${T2}`)
+    expect(o.exclude).toEqual([T2])
+    expect(o.assignee).toBe(T1)
+    expect(o.timeout).toBe('30')
+  })
+
+  it('a person missing, duplicated or unusable on the target refuses REF_UNMAPPED', () => {
+    const m = mapToTarget({
+      source: flowWith({ recipient: U1, run_as: U2, owner: U3 }),
+      target: {},
+      sourceDict: { user: { [U1]: 'ann@x.test', [U2]: 'bot@x.test', [U3]: 'dup@x.test' } },
+      targetDict: { user: { 'ann@x.test': UNUSABLE, 'dup@x.test': DUPLICATE } },
+      runKey: RUN
+    })
+    const reasons = m.refusals.filter((r) => r.code === 'REF_UNMAPPED').map((r) => r.reason)
+    expect(reasons.some((r) => /suspended, redacted or a machine/.test(r))).toBe(true)
+    expect(reasons.some((r) => /more than one/.test(r))).toBe(true)
+    expect(reasons.some((r) => /bot@x.test/.test(r))).toBe(true)
+  })
+
+  it('a uuid or bare id under any other key refuses unless the key is a known number', () => {
+    const m = mapToTarget({
+      source: flowWith({ target_record: U1, parent: '4812', limit: '50', note: 'call 555' }),
+      target: {},
+      sourceDict: {},
+      targetDict: {},
+      runKey: RUN
+    })
+    const where = m.refusals.map((r) => r.reason).join(' | ')
+    expect(m.refusals.filter((r) => r.code === 'REF_UNMAPPED')).toHaveLength(2)
+    expect(where).toMatch(/target_record/)
+    expect(where).toMatch(/parent/)
+    expect(where).not.toMatch(/limit/)
+  })
+
+  it('permission JSON: a role id is remapped; any other uuid refuses', () => {
+    const m = mapToTarget({
+      source: {
+        nivaro_roles: { [U2]: row({ id: U2, name: 'Editor' }) },
+        nivaro_policies: {
+          '7': row({
+            id: 7,
+            role: U2,
+            collection: 'units',
+            action: 'read',
+            permissions: JSON.stringify({ _or: [{ role: { _eq: U2 } }, { owner: { _eq: U1 } }] })
+          })
+        }
+      },
+      target: { nivaro_roles: { [T2]: row({ id: T2, name: 'editor' }) } },
+      sourceDict: {},
+      targetDict: {},
+      runKey: RUN
+    })
+    const pol = Object.values(m.tables.nivaro_policies)[0]
+    expect(String(pol.data.permissions)).toContain(`"${T2}"`)
+    expect(String(pol.data.permissions)).not.toContain(U2)
+    expect(
+      m.refusals.some((r) => r.code === 'REF_UNMAPPED' && /Permission rule/.test(r.reason))
+    ).toBe(true)
+  })
+
+  it('the target dictionary marks duplicate names and unusable people', () => {
+    const d = targetDictOf('user', [
+      { id: 'a', name: 'Ann@x.test', status: 'active', account_kind: null, is_redacted: 0 },
+      { id: 'b', name: 'off@x.test', status: 'suspended' },
+      { id: 'c', name: 'gone@x.test', status: 'active', is_redacted: 1 },
+      { id: 'd', name: 'bot@x.test', status: 'active', account_kind: 'service' },
+      { id: 'e', name: 'two@x.test', status: 'active' },
+      { id: 'f', name: 'TWO@x.test', status: 'active' }
+    ])
+    expect(d['ann@x.test']).toBe('a')
+    expect(d['off@x.test']).toBe(UNUSABLE)
+    expect(d['gone@x.test']).toBe(UNUSABLE)
+    expect(d['bot@x.test']).toBe(UNUSABLE)
+    expect(d['two@x.test']).toBe(DUPLICATE)
+    expect(targetDictOf('role', [{ id: 'r', name: 'Editor' }]).editor).toBe('r')
+  })
+
+  it('settings never carry brand_logo or sla_zone_map (they name rows of this environment)', () => {
+    expect(SETTINGS_PROMOTED).not.toContain('brand_logo')
+    expect(SETTINGS_PROMOTED).not.toContain('sla_zone_map')
+  })
+})
+
+describe('N5: steps a promoted flow no longer has are removed with it', () => {
+  const live = {
+    nivaro_flows: { F: row({ id: 'F', name: 'Order' }), G: row({ id: 'G', name: 'Other' }) },
+    nivaro_flow_operations: {
+      keep: row({ id: 'keep', flow: 'F', key: 'post', name: 'Post' }),
+      old: row({ id: 'old', flow: 'F', key: 'legacy', name: 'Legacy step' }),
+      g1: row({ id: 'g1', flow: 'G', key: 'x' })
+    }
+  }
+  const mapped = {
+    nivaro_flows: { F: row({ id: 'F', name: 'Order' }) },
+    nivaro_flow_operations: { keep: row({ id: 'keep', flow: 'F', key: 'post' }) }
+  }
+
+  it('lists them whatever the removal setting; other flows are left alone', () => {
+    expect(orphanSteps(mapped, live)).toEqual([{ key: 'old', flow: 'F', label: 'Legacy step' }])
+    // Steps not promoted at all: nothing is an orphan.
+    expect(orphanSteps({ nivaro_flows: mapped.nivaro_flows }, live)).toEqual([])
+  })
+
+  it('the restore plan deletes exactly them with removals off; undo rows keep them', () => {
+    const cols = new Map(
+      ['id', 'flow', 'key', 'name'].map((c) => [
+        c,
+        { type: 'nvarchar', identity: false, writable: true }
+      ])
+    )
+    const plan = planTable(
+      'nivaro_flow_operations',
+      mapped.nivaro_flow_operations,
+      live.nivaro_flow_operations,
+      cols,
+      { deletes: false, alsoDelete: new Set(['old']) }
+    )
+    expect(plan.ops.filter((o) => o.op === 'delete').map((o) => o.key)).toEqual(['old'])
+    const rows = undoRowsOf({
+      plans: [plan],
+      before: { nivaro_flow_operations: live.nivaro_flow_operations },
+      after: { nivaro_flow_operations: {} }
+    })
+    const del = rows.find((r) => r.key === 'old')
+    expect(del?.op).toBe('delete')
+    expect(del?.before?.name).toBe('Legacy step')
+  })
+})
+
+describe('a likely rename is flagged before removals', () => {
+  it('a new flow with exactly the steps of a target flow the source did not send', () => {
+    const live = {
+      nivaro_flows: { T: row({ id: 'T', name: 'Order submitted' }) },
+      nivaro_flow_operations: {
+        a: row({ id: 'a', flow: 'T', key: 'post' }),
+        b: row({ id: 'b', flow: 'T', key: 'mail' })
+      }
+    }
+    const mapped = {
+      nivaro_flows: { N: row({ id: 'N', name: 'Order sent' }) },
+      nivaro_flow_operations: {
+        x: row({ id: 'x', flow: 'N', key: 'mail' }),
+        y: row({ id: 'y', flow: 'N', key: 'post' })
+      }
+    }
+    const flags = renameSuspects(mapped, live, new Set(['N']))
+    expect(flags).toHaveLength(1)
+    expect(flags[0]).toMatchObject({ code: 'RENAME_SUSPECTED', key: 'N', label: 'Order sent' })
+    expect(flags[0].reason).toMatch(/Order submitted/)
+    expect(renameSuspects(mapped, live, new Set())).toEqual([])
+  })
+})
+
+describe('N2/N3: the Changed-here baseline moves for the written rows only', () => {
+  it('replaces written rows, drops deleted ones, keeps every other row as it was', () => {
+    const old = {
+      nivaro_roles: {
+        a: row({ id: 'a', name: 'A0' }),
+        b: row({ id: 'b', name: 'B0 changed here' }),
+        c: row({ id: 'c', name: 'C0' })
+      },
+      nivaro_flows: { f: row({ id: 'f', name: 'F' }) }
+    }
+    const after = {
+      nivaro_roles: { a: row({ id: 'a', name: 'A1' }), n: row({ id: 'n', name: 'N' }) }
+    }
+    const out = baselineAfter(old, {
+      plans: [
+        {
+          table: 'nivaro_roles',
+          ops: [
+            { key: 'a', op: 'update' },
+            { key: 'n', op: 'insert' },
+            { key: 'c', op: 'delete' }
+          ]
+        }
+      ] as never,
+      before: {},
+      after
+    })
+    expect(out.nivaro_roles.a.data.name).toBe('A1')
+    expect(out.nivaro_roles.n.data.name).toBe('N')
+    expect(out.nivaro_roles.c).toBeUndefined()
+    // Not written by the promotion: still the old baseline (it stays a "changed here" row).
+    expect(out.nivaro_roles.b.data.name).toBe('B0 changed here')
+    expect(out.nivaro_flows).toBe(old.nivaro_flows)
+  })
+})
+
+describe('run heartbeats', () => {
+  it('fresh within STALE_MS, stale after it or when never set', () => {
+    const t = Date.parse('2026-11-25T12:00:00Z')
+    expect(heartbeatFresh(new Date(t - 5_000).toISOString(), t)).toBe(true)
+    expect(heartbeatFresh(new Date(t - STALE_MS - 1).toISOString(), t)).toBe(false)
+    expect(heartbeatFresh(null, t)).toBe(false)
+  })
+})
+
+describe('nested arrays are merged back by identity, not position', () => {
+  it('a list reordered on the source keeps each element’s own secret (outbound keys stay whole)', () => {
+    const own = opts({
+      fields: [
+        { key: 'a', label: 'A' },
+        { key: 'b', label: 'Bearer prod-secret-token-123456' }
+      ]
+    })
+    const incoming = opts({ fields: [{ key: 'b' }, { key: 'a', label: 'A' }] })
+    const out = parsed(mergeOwn(incoming, own, () => false))
+    expect(out.fields[0]).toEqual({ key: 'b', label: 'Bearer prod-secret-token-123456' })
+    expect(out.fields[1]).toEqual({ key: 'a', label: 'A' })
   })
 })
