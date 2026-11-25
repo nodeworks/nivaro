@@ -448,6 +448,20 @@ export async function graphqlPlugin(
     const gqlStamp = describeOperation(schema, document, body.operationName)
     ;(req as unknown as { __nvrGql?: GraphQLStamp }).__nvrGql = gqlStamp
 
+    // A Nivaro Hub break-glass grantee sends no mutation (services/break-glass-guard.ts), judged
+    // on the parsed document — a persisted query (id / APQ hash) included.
+    {
+      const { breakGlassGraphqlRefusal, BREAK_GLASS_ACTIVE } = await import(
+        '../services/break-glass-guard.js'
+      )
+      const why = breakGlassGraphqlRefusal(req, document)
+      if (why)
+        return reply.code(403).send({
+          data: null,
+          errors: [{ message: why, extensions: { code: BREAK_GLASS_ACTIVE, status: 403 } }]
+        })
+    }
+
     // Maintenance write freeze: queries stay open, a mutation is refused unless
     // a signed-in administrator sends it (services/maintenance-freeze.ts; the
     // root hook leaves this path to us because only here is the operation known).

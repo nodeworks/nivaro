@@ -1187,6 +1187,16 @@ export async function buildServer() {
       // process part here: the help-video import sweep (this process's memory + work dir), daily,
       // outside any app.
       if (!multiTenant) void runInBackgroundPool(runRetentionPurge)
+      // Nivaro Hub break-glass: open grants a copied database brought (or ones whose time ran out
+      // while the process was down) end at boot — on EVERY install, linked or not; unlinked ones
+      // keep sweeping hourly while any stay open (services/break-glass-grants.ts). Never fails boot.
+      if (!multiTenant)
+        void runInBackgroundPool(async () => {
+          const bg = await import('./services/break-glass-grants.js')
+          const ended = await bg.sweepOpenGrantsAtBoot()
+          if (ended.length) app.log.warn(`break-glass: ${ended.length} open grant(s) ended at boot`)
+          await bg.startUnlinkedGrantSweep()
+        }).catch(warnOn('break-glass boot sweep failed'))
       if (perAppJobs()) staleImportSweepTimer = startStaleImportSweep(app.log)
 
       // ── Tamper-evident activity trail (#16) ──

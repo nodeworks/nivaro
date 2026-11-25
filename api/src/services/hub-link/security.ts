@@ -3,13 +3,14 @@ import { db } from '../../db/index.js'
 import { logActivity } from '../activity.js'
 import {
   afterGrantEnded,
+  beginGrantMark,
   clearMarkerIfNone,
   endGrantInTrx,
+  endGrantMark,
   expireGrants,
   GRANTS,
   grantFromRow,
-  grantsTableReady,
-  markGrantsOpen
+  grantsTableReady
 } from '../break-glass-grants.js'
 import { grantEnded, grantEndsAt } from '../break-glass-role.js'
 import { matchPeople, readPeopleQuery } from './people.js'
@@ -216,7 +217,7 @@ export async function grantBreakGlass(
   // The open-grants marker goes up BEFORE anything is granted: every replica's request path then
   // judges the grant (within MARKER_TTL_MS); without it the grant is refused.
   try {
-    await markGrantsOpen()
+    await beginGrantMark()
   } catch {
     return refused(
       409,
@@ -302,6 +303,9 @@ export async function grantBreakGlass(
       out = refused(409, 'REF_ENDED', 'This grant was already revoked or ended; ask again')
     else throw err
   }
+  // The row is committed (or nothing was granted): marker set again, pending count down — both
+  // before the app answers.
+  await endGrantMark(out.ok && out.state === 'granted').catch(() => undefined)
   if (!(out.ok && out.state === 'granted')) await clearMarkerIfNone(k)
   if (out.ok && out.state === 'granted') {
     await logActivity({

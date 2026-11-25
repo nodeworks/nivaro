@@ -50,8 +50,11 @@ setAppRef({
   redis: {
     get: async (k: string) => marker.get(k) ?? null,
     set: async (k: string, v: string) => marker.set(k, v),
-    eval: async (_s: string, _n: number, k: string, v: string) =>
-      marker.get(k) === v ? marker.delete(k) : 0
+    incr: async (k: string) => marker.set(k, String(Number(marker.get(k) ?? 0) + 1)),
+    decr: async (k: string) => marker.set(k, String(Number(marker.get(k) ?? 0) - 1)),
+    expire: async () => 1,
+    eval: async (_s: string, _n: number, k: string, p: string, v: string) =>
+      Number(marker.get(p) ?? 0) > 0 ? 0 : marker.get(k) === v ? marker.delete(k) : 0
   }
 })
 

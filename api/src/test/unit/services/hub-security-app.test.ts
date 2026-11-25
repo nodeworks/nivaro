@@ -59,7 +59,20 @@ function fakeRedis() {
       map.set(k, v)
       return 'OK'
     },
-    async eval(_s: string, _n: number, k: string, v: string) {
+    async incr(k: string) {
+      map.set(k, String(Number(map.get(k) ?? 0) + 1))
+      return Number(map.get(k))
+    },
+    async decr(k: string) {
+      map.set(k, String(Number(map.get(k) ?? 0) - 1))
+      return Number(map.get(k))
+    },
+    async expire() {
+      return 1
+    },
+    // The marker's compare-and-delete script (KEYS[1] marker, KEYS[2] pending, ARGV[1] value).
+    async eval(_s: string, _n: number, k: string, pending: string, v: string) {
+      if (Number(map.get(pending) ?? 0) > 0) return 0
       if (map.get(k) === v) map.delete(k)
       return 1
     }
@@ -721,5 +734,88 @@ describe('second review: nothing a grantee makes outlasts the grant', () => {
     } finally {
       await db.schema.dropTable('nivaro_api_keys')
     }
+  })
+})
+
+describe('boot sweep: a copied grant never survives on an install that cannot judge it', () => {
+  const copiedGrant = async (ref: string, endsIn: number) => {
+    await db('nivaro_break_glass_grants').insert({
+      ref,
+      user_id: BEN,
+      role: ADMIN_ROLE,
+      prev_role: STAFF_ROLE,
+      granted_at: new Date(Date.now() - 60_000),
+      ends_at: new Date(Date.now() + endsIn)
+    })
+    await db('nivaro_users').where({ id: BEN }).update({ role: ADMIN_ROLE })
+  }
+
+  it('unlinked install: every open grant ends at boot, role back, keys revoked', async () => {
+    await db.schema.createTable('nivaro_api_keys', (t) => {
+      t.increments('id')
+      t.string('name')
+      t.string('user')
+      t.boolean('is_active')
+      t.dateTime('created_at')
+    })
+    try {
+      // A database copied from a linked app, with a grant still open for hours.
+      await copiedGrant('bg-100', 3 * H)
+      await db('nivaro_api_keys').insert({
+        name: 'own',
+        user: BEN,
+        is_active: true,
+        created_at: new Date()
+      })
+      delete process.env.HUB_TOKEN
+      expect(await grants.sweepOpenGrantsAtBoot()).toEqual([BEN])
+      expect(await role(BEN)).toBe(STAFF_ROLE)
+      expect(await grantRow('bg-100')).toMatchObject({
+        end_reason: 'unlinked',
+        end_state: 'restored'
+      })
+      expect(!!(await db('nivaro_api_keys').first('is_active')).is_active).toBe(false)
+      expect(m.logActivity).toHaveBeenCalledWith(
+        expect.objectContaining({ comment: expect.stringContaining(grants.UNLINKED_WHY) })
+      )
+      // Nothing left open: no hourly timer.
+      expect(await grants.startUnlinkedGrantSweep()).toBe(false)
+    } finally {
+      await db.schema.dropTable('nivaro_api_keys')
+    }
+  })
+
+  it('unlinked install with an open grant left: the hourly sweep starts (and stops)', async () => {
+    await copiedGrant('bg-101', 3 * H)
+    delete process.env.HUB_TOKEN
+    expect(await grants.startUnlinkedGrantSweep()).toBe(true)
+    grants.stopUnlinkedGrantSweep()
+  })
+
+  it('linked install: a live grant stays, one whose time ran out ends at boot', async () => {
+    await copiedGrant('bg-102', 3 * H)
+    expect(await grants.sweepOpenGrantsAtBoot()).toEqual([])
+    expect(await role(BEN)).toBe(ADMIN_ROLE)
+    await db('nivaro_break_glass_grants')
+      .where({ ref: 'bg-102' })
+      .update({ ends_at: new Date(Date.now() - 1000) })
+    expect(await grants.sweepOpenGrantsAtBoot()).toEqual([BEN])
+    expect(await role(BEN)).toBe(STAFF_ROLE)
+  })
+})
+
+describe('marker race (review): a clear never removes the marker of a grant on its way', () => {
+  it('an interleaved clear and grant → the marker stays', async () => {
+    await grants.beginGrantMark()
+    // A clear runs while the grant's row is not committed yet: no open row in the table.
+    await grants.clearMarkerIfNone()
+    expect(redis.map.get(grants.openGrantsKey())).toBeTruthy()
+    // The grant lands and re-sets the marker before it answers; still there.
+    await grants.endGrantMark(true)
+    expect(redis.map.get(grants.openGrantsKey())).toBeTruthy()
+    expect(redis.map.get(grants.pendingGrantsKey())).toBe('0')
+    // A refused grant: count down, and with no open row the next clear removes it.
+    await grants.clearMarkerIfNone()
+    expect(redis.map.get(grants.openGrantsKey())).toBeUndefined()
   })
 })

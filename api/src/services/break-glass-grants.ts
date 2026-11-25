@@ -64,8 +64,18 @@ export function openGrantsKey(): string {
 interface MarkerRedis {
   get(k: string): Promise<string | null>
   set(k: string, v: string): Promise<unknown>
+  incr?(k: string): Promise<unknown>
+  decr?(k: string): Promise<unknown>
+  expire?(k: string, s: number): Promise<unknown>
   eval?(script: string, keys: number, ...args: string[]): Promise<unknown>
 }
+
+/** Grants of this app on their way (between marking and their row's commit). */
+export function pendingGrantsKey(): string {
+  return `nvr:bg-pending:${appKeyPart()}`
+}
+/** A pending count left by a process that died mid-grant lapses (the marker then clears). */
+const PENDING_TTL_S = 120
 
 const markerCopy = appBox<{ v: MarkerState; at: number } | null>(() => null)
 
@@ -111,13 +121,41 @@ export async function markGrantsOpen(): Promise<void> {
   markerCopy.value = { v: 'some', at: Date.now() }
 }
 
+/**
+ * A grant starts: the app's pending count goes up, then the marker is set — a clear that runs
+ * meanwhile sees the count and leaves the marker. Throws when Redis cannot record it.
+ */
+export async function beginGrantMark(): Promise<void> {
+  const r = markerRedis()
+  if (!r || typeof r.incr !== 'function')
+    throw Object.assign(new Error('No Redis to mark the grant'), { code: 'MARKER_UNAVAILABLE' })
+  await r.incr(pendingGrantsKey())
+  await r.expire?.(pendingGrantsKey(), PENDING_TTL_S)
+  await markGrantsOpen()
+}
+
+/** The grant's row committed (or the grant was refused): the marker set again, the count down. */
+export async function endGrantMark(granted: boolean): Promise<void> {
+  const r = markerRedis()
+  if (!r) return
+  try {
+    if (granted) await markGrantsOpen()
+  } finally {
+    await r.decr?.(pendingGrantsKey())
+  }
+}
+
 /** Tests: forget this process's copy of the marker. */
 export function _resetMarkerForTests(): void {
   markerCopy.reset()
 }
 
-const CLEAR_IF_SAME =
-  "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) end return 0"
+/** Deletes the marker only while no grant is pending AND it still holds the value read. */
+const CLEAR_IF_SAME = [
+  "if tonumber(redis.call('get', KEYS[2]) or '0') > 0 then return 0 end",
+  "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) end",
+  'return 0'
+].join(' ')
 
 /**
  * Clears the marker when the app has no open grant left. The value read first is the one
@@ -133,7 +171,8 @@ export async function clearMarkerIfNone(k: Knex = db): Promise<void> {
       | { id: unknown }
       | undefined
     if (open) return
-    if (typeof r.eval === 'function') await r.eval(CLEAR_IF_SAME, 1, openGrantsKey(), seen)
+    if (typeof r.eval === 'function')
+      await r.eval(CLEAR_IF_SAME, 2, openGrantsKey(), pendingGrantsKey(), seen)
     markerCopy.value = null
   } catch {
     // Left set: the request path keeps joining (fail closed) until the next clear.
@@ -263,7 +302,7 @@ export async function withoutLiveGrantees<Q extends Knex.QueryBuilder>(
   ) as Q
 }
 
-export type EndReason = 'expired' | 'revoked' | 'offboarded' | 'unreadable'
+export type EndReason = 'expired' | 'revoked' | 'offboarded' | 'unreadable' | 'unlinked'
 export type EndState = 'restored' | 'restored_over_change' | 'role_changed' | 'none'
 
 export interface RevokedCredentials {
@@ -607,4 +646,80 @@ export async function endDueGrantsOf(userIds: string[], k: Knex = db): Promise<n
     }
   }
   return n
+}
+
+// ─── Boot sweep: a grant never survives on an install that cannot judge it ─────────────────
+
+export const UNLINKED_WHY = 'ended at boot: this install is not linked to the Hub'
+const SWEEP_EVERY_MS = 60 * 60_000
+
+/**
+ * Once per boot on every single-app install (server.ts, background pool, never fails the boot):
+ * when the grants table holds open grants, end them through the one end path (role back,
+ * revocations, log). An install NOT linked to a Hub ends every open grant — nothing there would
+ * judge or expire it (a database copied from a linked app); a linked install ends only the ones
+ * whose time ran out (the others are live, the Hub and the expiry job end them on time).
+ * Answers the account ids put back.
+ */
+export async function sweepOpenGrantsAtBoot(
+  k: Knex = db,
+  now: Date = new Date()
+): Promise<string[]> {
+  if (typeof (k as { schema?: { hasTable?: unknown } }).schema?.hasTable !== 'function') return []
+  if (!(await k.schema.hasTable(GRANTS))) return []
+  const linked = breakGlassPossible()
+  const q = k(GRANTS)
+    .whereNull('ended_at')
+    .whereNotNull('user_id')
+    .select('id', 'ends_at')
+    .limit(500)
+  if (linked) q.where((w) => w.whereNull('ends_at').orWhere('ends_at', '<=', now))
+  const rows = (await q) as Array<{ id: unknown; ends_at: unknown }>
+  const done: string[] = []
+  for (const r of rows) {
+    const reason: EndReason = !linked ? 'unlinked' : iso(r.ends_at) ? 'expired' : 'unreadable'
+    const end = await endGrant(
+      Number(r.id),
+      reason,
+      linked ? 'its time ran out' : UNLINKED_WHY,
+      k,
+      now
+    ).catch(() => null)
+    if (end?.grant.user_id) done.push(end.grant.user_id)
+  }
+  return done
+}
+
+const sweepTimer = appBox<NodeJS.Timeout | null>(() => null)
+
+/**
+ * On an install NOT linked to a Hub, while open grants remain (a sweep that could not end one),
+ * the same sweep every hour as a plain in-process timer — no cron. Stops when none are left.
+ */
+export async function startUnlinkedGrantSweep(k: Knex = db): Promise<boolean> {
+  if (breakGlassPossible() || sweepTimer.value) return false
+  if (typeof (k as { schema?: { hasTable?: unknown } }).schema?.hasTable !== 'function')
+    return false
+  if (!(await k.schema.hasTable(GRANTS))) return false
+  const open = async () =>
+    !!(await k(GRANTS).whereNull('ended_at').whereNotNull('user_id').first('id'))
+  if (!(await open())) return false
+  const t = setInterval(() => {
+    void (async () => {
+      try {
+        await sweepOpenGrantsAtBoot(k)
+        if (!(await open())) stopUnlinkedGrantSweep()
+      } catch {
+        /* next hour */
+      }
+    })()
+  }, SWEEP_EVERY_MS)
+  t.unref?.()
+  sweepTimer.value = t
+  return true
+}
+
+export function stopUnlinkedGrantSweep(): void {
+  if (sweepTimer.value) clearInterval(sweepTimer.value)
+  sweepTimer.value = null
 }

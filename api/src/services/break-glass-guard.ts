@@ -40,9 +40,10 @@ const MORE_ACCESS = /^\/api\/(user-groups|workspaces|settings|security|session-p
 /** Accounts and the credentials of anyone. */
 const ACCOUNTS = /^\/api\/(users|auth\/(me|masquerade|setup|totp|devices))(\/|$)/
 /** Credential mints. */
-const CREDENTIALS = /^\/api\/(api-keys|mcp-connections|oauth|push\/phones|push\/relay)(\/|$)/
-/** System tables through the generic record routes. */
-const SYSTEM_ITEMS = /^\/api\/items\/(nivaro_|directus_)/i
+const CREDENTIALS =
+  /^\/api\/(api-keys|mcp-connections|oauth|push\/phones|push\/relay|persisted-queries|graphql\/persisted)(\/|$)/
+/** System tables through the generic record routes: judged on the DECODED `collection` param. */
+const SYSTEM_COLLECTION = /^(nivaro_|directus_)/i
 
 /** What ending is always allowed (revoke a key or a connection, end a View-as, sign out). */
 const ENDINGS: Array<{ method: string; re: RegExp }> = [
@@ -73,7 +74,13 @@ const PLAIN =
   'While a break-glass grant holds your account you can fix things, but not change who has access, accounts or credentials. Ask another administrator.'
 
 const isWrite = (m: string) => !['GET', 'HEAD', 'OPTIONS'].includes(m.toUpperCase())
-const pathOf = (url: string) => url.split('?')[0].replace(/\/{2,}/g, '/')
+
+/** The route template with its decoded params put in (`/api/users/:id` → `/api/users/42`). */
+function filled(template: string, params: Record<string, unknown>): string {
+  return template.replace(/:([A-Za-z0-9_]+)/g, (m, k: string) =>
+    params[k] == null ? m : String(params[k]).replace(/[/?#]/g, '_')
+  )
+}
 
 function ownPreferences(path: string, method: string, body: unknown): boolean {
   if (method !== 'PATCH' || path !== '/api/users/me/preferences') return false
@@ -89,25 +96,30 @@ function graphqlMutation(body: unknown): boolean {
 }
 
 /**
- * The refusal for one write by a grantee, or null. Judged on the route template AND the request
- * path; either one matching refuses. Pure.
+ * The refusal for one write by a grantee, or null. Judged on the MATCHED route template and the
+ * same template with its decoded params filled in — never on the raw request URL (an encoded or
+ * doubled path cannot slip past). Either one matching refuses. Pure.
  */
 export function breakGlassRefusal(o: {
   method: string
   template: string
-  url: string
+  params?: Record<string, unknown>
   body?: unknown
 }): string | null {
   const method = o.method.toUpperCase()
   if (!isWrite(method)) return null
-  const paths = [o.template, pathOf(o.url)]
+  const params = o.params ?? {}
+  const paths = [o.template, filled(o.template, params)]
   const any = (re: RegExp) => paths.some((p) => re.test(p))
   if (paths.every((p) => ENDINGS.some((e) => e.method === method && e.re.test(p)))) return null
   if (paths.every((p) => ownPreferences(p, method, o.body))) return null
-  if (any(/^\/api\/graphql(\/|$)/)) return graphqlMutation(o.body) ? PLAIN : null
+  if (any(/^\/api\/graphql$/)) return graphqlMutation(o.body) ? PLAIN : null
   // The registry is matched on real paths (its `users/(?!me)…` reads `:id` as an id).
   if (any(ACCESS_ROUTES) || any(MORE_ACCESS) || any(ACCOUNTS) || any(CREDENTIALS)) return PLAIN
-  if (any(SYSTEM_ITEMS)) return PLAIN
+  if (/^\/api\/items\/:collection(\/|$)/.test(o.template)) {
+    const c = String(params.collection ?? '')
+    if (SYSTEM_COLLECTION.test(c.trim())) return PLAIN
+  }
   return null
 }
 
@@ -118,8 +130,9 @@ const guard: preHandlerHookHandler = async function breakGlassWriteGuard(
   if (!req.breakGlass) return
   const why = breakGlassRefusal({
     method: req.method,
-    template: req.routeOptions?.url ?? '',
-    url: req.url,
+    // A route with no matched template is judged as unknown: refused (deny by default).
+    template: req.routeOptions?.url ?? '/api/users',
+    params: (req.params ?? {}) as Record<string, unknown>,
     body: req.body
   })
   if (why) return reply.code(403).send({ error: why, code: BREAK_GLASS_ACTIVE })
@@ -141,3 +154,20 @@ export function installBreakGlassWriteGuard(app: FastifyInstance): void {
 
 /** The guard itself (tests: it is what every write route carries). */
 export const breakGlassWriteGuard = guard
+
+/**
+ * GraphQL, judged where the operation is known (plugins/graphql.ts, after persisted-query
+ * substitution and parse — the same place the maintenance freeze judges mutations): under a
+ * grant, any document that defines a mutation is refused. Pure.
+ */
+export function breakGlassGraphqlRefusal(
+  req: Pick<FastifyRequest, 'breakGlass'>,
+  document: { definitions: ReadonlyArray<{ kind: string; operation?: string }> }
+): string | null {
+  if (!req.breakGlass) return null
+  return document.definitions.some(
+    (d) => d.kind === 'OperationDefinition' && d.operation === 'mutation'
+  )
+    ? PLAIN
+    : null
+}

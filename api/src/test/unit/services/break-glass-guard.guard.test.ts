@@ -100,7 +100,7 @@ describe('break-glass guard covers every access and credential write', () => {
         ACCESS_ROUTES.test(r.template) ||
         CREDENTIAL_OR_ACCOUNT.test(r.template)
       if (!governed || ALLOWED_ENDINGS.has(key)) continue
-      if (!breakGlassRefusal({ method: r.method, template: r.template, url, body: { role: 'x' } }))
+      if (!breakGlassRefusal({ method: r.method, template: r.template, body: { role: 'x' } }))
         open.push(key)
     }
     expect(open).toEqual([])
@@ -109,50 +109,79 @@ describe('break-glass guard covers every access and credential write', () => {
   it('the endings stay open; own preferences only with listed keys', () => {
     for (const k of ALLOWED_ENDINGS) {
       const [method, template] = k.split(' ')
-      expect(breakGlassRefusal({ method, template, url: sample(template) }), k).toBeNull()
+      expect(breakGlassRefusal({ method, template }), k).toBeNull()
     }
-    const prefs = {
-      method: 'PATCH',
-      template: '/api/users/me/preferences',
-      url: '/api/users/me/preferences'
-    }
+    const prefs = { method: 'PATCH', template: '/api/users/me/preferences' }
     expect(breakGlassRefusal({ ...prefs, body: { theme: 'dark' } })).toBeNull()
     expect(breakGlassRefusal({ ...prefs, body: { theme: 'dark', role: 'r' } })).not.toBeNull()
     expect(breakGlassRefusal({ ...prefs, body: {} })).not.toBeNull()
   })
 
-  it('system tables through /items, GraphQL mutations and parser tricks are refused', () => {
-    const items = (c: string) => ({
+  it('system tables through /items: the DECODED param decides (encoded, mixed case)', () => {
+    // Fastify hands the route the decoded param: %6Eivaro_users arrives as nivaro_users.
+    const items = (collection: string) => ({
       method: 'POST',
       template: '/api/items/:collection',
-      url: `/api/items/${c}`
+      params: { collection }
     })
-    expect(breakGlassRefusal(items('nivaro_users'))).not.toBeNull()
-    expect(breakGlassRefusal(items('nivaro_api_keys'))).not.toBeNull()
+    for (const c of [
+      'nivaro_users',
+      'NIVARO_Users',
+      'Nivaro_api_keys',
+      ' nivaro_roles',
+      'DIRECTUS_users'
+    ])
+      expect(breakGlassRefusal(items(c)), c).not.toBeNull()
+    expect(breakGlassRefusal(items(decodeURIComponent('%6Eivaro_users')))).not.toBeNull()
     expect(breakGlassRefusal(items('workflows'))).toBeNull()
+    // The raw URL is never read: only the template and its params.
+    expect(
+      breakGlassRefusal({ method: 'POST', template: '/api/users/:id/token', params: { id: 'x' } })
+    ).not.toBeNull()
+  })
+
+  it('GraphQL: a mutation in the body or in a persisted / parsed document is refused', async () => {
+    const { breakGlassGraphqlRefusal } = await import('../../../services/break-glass-guard.js')
+    const { parse } = await import('graphql')
     expect(
       breakGlassRefusal({
         method: 'POST',
         template: '/api/graphql',
-        url: '/api/graphql',
-        body: { query: 'mutation { update_nivaro_users_item(id: 1, data: {}) { id } }' }
+        body: { query: 'mutation { update_x(id: 1) { id } }' }
       })
     ).not.toBeNull()
     expect(
       breakGlassRefusal({
         method: 'POST',
         template: '/api/graphql',
-        url: '/api/graphql',
-        body: { query: '{ workflows { id } }' }
+        body: { query: '{ x { id } }' }
       })
     ).toBeNull()
-    // A doubled slash or a query string never slips past the template match.
+    // A persisted query (an id, no text) passes the body check; the parsed document is judged.
+    const grant = { breakGlass: { ref: 'bg-1', ends_at: null } }
     expect(
-      breakGlassRefusal({
-        method: 'POST',
-        template: '/api/users/:id/token',
-        url: '//api//users/x/token?a=1'
-      })
+      breakGlassGraphqlRefusal(grant, parse('mutation M { update_x(id: 1) { id } }'))
     ).not.toBeNull()
+    expect(
+      breakGlassGraphqlRefusal(grant, parse('query Q { x { id } } mutation M { y { id } }'))
+    ).not.toBeNull()
+    expect(breakGlassGraphqlRefusal(grant, parse('{ x { id } }'))).toBeNull()
+    expect(
+      breakGlassGraphqlRefusal({ breakGlass: null }, parse('mutation { y { id } }'))
+    ).toBeNull()
+    // Persisted-query writes are credential-like surfaces: refused.
+    expect(breakGlassRefusal({ method: 'POST', template: '/api/persisted-queries' })).not.toBeNull()
+    expect(breakGlassRefusal({ method: 'POST', template: '/api/graphql/persisted' })).not.toBeNull()
+  })
+
+  it('the GraphQL endpoint judges the parsed document AFTER persisted-query substitution', () => {
+    const src = readFileSync(join(import.meta.dirname, '../../../plugins/graphql.ts'), 'utf8')
+    const at = (needle: string) => src.indexOf(needle)
+    const substitution = at('body.query = stored')
+    const parsed = at('document = parse(body.query)')
+    const judged = at('breakGlassGraphqlRefusal(req, document)')
+    expect(substitution).toBeGreaterThan(0)
+    expect(parsed).toBeGreaterThan(substitution)
+    expect(judged).toBeGreaterThan(parsed)
   })
 })
