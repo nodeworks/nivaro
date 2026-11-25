@@ -504,6 +504,11 @@ async function stepOnce(t: Train, deps: TrainDeps): Promise<Step> {
       return 'wait'
     case 'pending': {
       const frozen = await deps.freeze(t.app_id, s.environment_id)
+      // A retired (archived) app never deploys again: the train ends here, it never waits.
+      if (frozen?.code === 'ENV_ARCHIVED') {
+        await failTrain(t, idx, frozen.message, deps)
+        return 'wait'
+      }
       if (frozen) {
         const note =
           frozen.code === 'OUTSIDE_WINDOW'

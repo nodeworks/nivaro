@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowDown, ArrowUp, Eye, Plus, Trash2, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { UserCombobox } from '@/components/user-combobox'
@@ -123,10 +124,13 @@ const DB_MODE_WORDS = {
  */
 export function HubCreateApp({
   onDone,
-  onCancel
+  onCancel,
+  initialTemplateId
 }: {
   onDone: (appId: number) => void
   onCancel: () => void
+  /** Preselected template (Clone & retire → Create app from a structure copy: `?template=`). */
+  initialTemplateId?: number
 }) {
   const qc = useQueryClient()
   const targets = useQuery({ queryKey: createKeys.targets(), queryFn: fetchTargets })
@@ -152,7 +156,9 @@ export function HubCreateApp({
   const [extensionsText, setExtensionsText] = useState('')
   const [version, setVersion] = useState('')
   // Hub enhancement 24: a template from the library ('' = none).
-  const [templateId, setTemplateId] = useState('')
+  const [templateId, setTemplateId] = useState(initialTemplateId ? String(initialTemplateId) : '')
+  // Review M2: template roles that keep their administrator access (ticked one by one).
+  const [keepAdmin, setKeepAdmin] = useState<string[]>([])
   const templates = useQuery({
     queryKey: templateKeys.list(false),
     queryFn: () => fetchTemplates()
@@ -228,6 +234,9 @@ export function HubCreateApp({
       ...(kind === 'gitlab' ? { target_id: Number(targetId) || 0 } : { target: targetInput }),
       version: version.trim(),
       ...(kind !== 'shared' && Number(templateId) ? { template_id: Number(templateId) } : {}),
+      ...(kind !== 'shared' && Number(templateId) && keepAdmin.length
+        ? { keep_admin_roles: keepAdmin }
+        : {}),
       ...(sharedSignin
         ? {}
         : {
@@ -271,6 +280,7 @@ export function HubCreateApp({
       targetInput,
       version,
       templateId,
+      keepAdmin,
       issuer,
       clientId,
       clientSecret,
@@ -835,13 +845,48 @@ export function HubCreateApp({
               >
                 <SimpleSelect
                   value={templateId}
-                  onChange={touch(setTemplateId)}
+                  onChange={touch((v: string) => {
+                    setTemplateId(v)
+                    setKeepAdmin([])
+                  })}
                   options={templateOptions}
                   ariaLabel='App template'
                   className='h-8 text-[13px]'
                   triggerProps={{ id: 'hub-create-template' }}
                 />
               </Field>
+              {(pickedTemplate?.manifest?.review?.admin_roles?.length ?? 0) > 0 && (
+                <fieldset className='m-0 mt-3 space-y-1.5 border-0 p-0'>
+                  <legend className='mb-1 text-[12px] font-medium text-slate-700 dark:text-foreground'>
+                    Roles with administrator access on the source
+                  </legend>
+                  <p className='m-0 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+                    They arrive without it. Tick a role only if everyone given it should be an
+                    administrator of the new app (logged).
+                  </p>
+                  {pickedTemplate?.manifest?.review?.admin_roles?.map((r) => {
+                    const id = `hub-create-keep-admin-${r.id}`
+                    return (
+                      <label
+                        key={r.id}
+                        htmlFor={id}
+                        className='flex items-center gap-1.5 text-[12.5px] text-slate-700 dark:text-slate-200'
+                      >
+                        <Checkbox
+                          id={id}
+                          checked={keepAdmin.includes(r.id)}
+                          onCheckedChange={(v) =>
+                            setKeepAdmin((cur) =>
+                              v === true ? [...cur, r.id] : cur.filter((x) => x !== r.id)
+                            )
+                          }
+                        />
+                        Keep administrator access for {r.name}
+                      </label>
+                    )
+                  })}
+                </fieldset>
+              )}
               {templates.isError && (
                 <div className='mt-2'>
                   <ErrorNotice

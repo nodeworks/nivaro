@@ -767,7 +767,13 @@ export function hubChangeRoutes(app: FastifyInstance): void {
     const action = actionOf(q.action ?? 'promote')
     if (!action || action === 'upgrade')
       return fail(reply, 400, 'BAD_ACTION', 'action is promote or move')
-    const version = action === 'move' ? null : typeof q.version === 'string' ? q.version : null
+    // A move and a retirement have no version of their own (Hub enhancement 47).
+    const version =
+      action === 'move' || action === 'retire'
+        ? null
+        : typeof q.version === 'string'
+          ? q.version
+          : null
     if (action === 'promote' && (!version || !VERSION_RE.test(version)))
       return fail(reply, 400, 'BAD_VERSION', 'version is x.y.z')
     if (action === 'extension_promote' && (!version || !EXT_VERSION_RE.test(version)))
@@ -795,7 +801,12 @@ export function hubChangeRoutes(app: FastifyInstance): void {
       const action = actionOf(b.action ?? 'promote')
       if (!action || action === 'upgrade')
         return fail(reply, 400, 'BAD_ACTION', 'action is promote or move')
-      const version = action === 'move' ? null : typeof b.version === 'string' ? b.version : null
+      const version =
+        action === 'move' || action === 'retire'
+          ? null
+          : typeof b.version === 'string'
+            ? b.version
+            : null
       if (action === 'promote' && (!version || !VERSION_RE.test(version)))
         return fail(reply, 400, 'BAD_VERSION', 'version is x.y.z')
       if (action === 'extension_promote' && (!version || !EXT_VERSION_RE.test(version)))

@@ -176,8 +176,10 @@ import { hubFleetRoutes } from './hub-fleet.js'
 import { hubIncidentRoutes } from './hub-incidents.js'
 import { hubInsightRoutes } from './hub-insight.js'
 import { hubInsightDeploymentRoutes, hubInsightLinkRoutes } from './hub-insight-link.js'
+import { hubLifecycleRoutes } from './hub-lifecycle.js'
 import { hubLinkRoutes } from './hub-link.js'
 import { hubDeploymentBannerRoutes, hubLinkBannerRoutes } from './hub-link-banner.js'
+import { hubDeploymentCloneRoutes, hubLinkCloneRoutes } from './hub-link-clone.js'
 import { hubOidcRoutes } from './hub-oidc.js'
 import { hubOpsRoutes } from './hub-ops.js'
 import { hubOpsDeploymentRoutes, hubOpsLinkRoutes } from './hub-ops-link.js'
@@ -523,6 +525,9 @@ export async function registerRoutes(app: FastifyInstance) {
   // Hub verification (smoke reads as the app's service identity, extension inventory).
   await app.register(hubVerifyLinkRoutes, { prefix: '/hub-link' })
   await app.register(hubVerifyDeploymentRoutes, { prefix: '/hub-deployment' })
+  // Hub app cloning (enhancement 46): the structure export over the hub / deployment link.
+  await app.register(hubLinkCloneRoutes, { prefix: '/hub-link' })
+  await app.register(hubDeploymentCloneRoutes, { prefix: '/hub-deployment' })
   // Hub phase 6 file transfer (ticket-only): where the hub link is, or on a Hub shared deployment.
   await app.register(hubTransferRoutes, { prefix: '/hub-transfer' })
   // File source: mounted only where FILE_SOURCE_TOKEN is set (bearer-only) — lower environments
@@ -554,6 +559,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(hubInsightRoutes, { prefix: '/hub' })
   // Hub verification: post-deploy smoke checks, extension version manager (HUB=on only).
   await app.register(hubVerifyRoutes, { prefix: '/hub' })
+  // Hub app lifecycle: cloning an app's structure, the retirement wizard.
+  await app.register(hubLifecycleRoutes, { prefix: '/hub' })
   // Hub phase 7 (app side): GET /api/hub-switcher + readiness `hub-signin`; 404 without the link.
   await app.register(hubSwitcherRoutes)
   await app.register(releaseRunsRoutes, { prefix: '/release' })

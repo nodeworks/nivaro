@@ -263,6 +263,11 @@ export const STATUS_DOT: Record<ChipState, string> = {
 }
 
 const CODE_COPY: Record<string, { title: string; hint?: string }> = {
+  // Hub enhancement 47: a retired app takes no start (services/hub/releases/archived.ts).
+  ENV_ARCHIVED: {
+    title: 'This app is retired',
+    hint: 'Its environments are archived: nothing is deployed, moved, scaled or restarted there any more.'
+  },
   // Owner self-service (services/hub/owner-access.ts): production is the Hub admins' unless the
   // app's switch says owners may.
   PRODUCTION_ADMIN_ONLY: {

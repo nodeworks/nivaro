@@ -777,7 +777,32 @@ function creationRoutes(app: FastifyInstance) {
       // Hub enhancement 24: a picked template is judged first (and again inside the creation).
       const refusal = await templateRefusal(reply, body(req))
       if (refusal) return refusal
+      // Review M2: keeping a template role's administrator access is a person's own decision.
+      const { keepAdminRolesOf } = await import('../services/hub/templates/choice.js')
+      const keepAdmin = keepAdminRolesOf(body(req))
+      if (keepAdmin.length) {
+        const { ownSession } = await import('../services/hub/changes/emergency.js')
+        if (!ownSession(req))
+          return fail(
+            reply,
+            403,
+            'OWN_SESSION_REQUIRED',
+            'Only an administrator on their own session may keep a role’s administrator access.'
+          )
+      }
       const out = await startCreation(body(req) as unknown as CreateAppInput, { id: userId(req) })
+      if (keepAdmin.length)
+        await logActivity({
+          action: 'hub-template-keep-admin',
+          user: userId(req),
+          collection: APPS,
+          item: String(out.app_id),
+          comment: `Template roles keep administrator access: ${keepAdmin.join(', ')}`.slice(
+            0,
+            400
+          ),
+          req
+        })
       await logActivity({
         action: 'hub-create-start',
         user: userId(req),

@@ -35,6 +35,7 @@ export interface TemplatePayload {
   bundle: unknown
   digest: string
   template: { name: string; version: string }
+  keep_admin_roles?: string[]
 }
 
 /** The start answers once the lock and the fresh check are done; the install runs after it. */

@@ -85,7 +85,9 @@ export async function stepTemplate(ctx: BaseStepContext): Promise<StepResult> {
   const payload = {
     bundle: t.bundle,
     digest: t.digest,
-    template: { name: t.name, version: t.version }
+    template: { name: t.name, version: t.version },
+    // Review M2: roles an administrator ticked to keep their administrator access.
+    ...(choice.keep_admin_roles?.length ? { keep_admin_roles: choice.keep_admin_roles } : {})
   }
   const fail = async (code: string, text: string, report?: Record<string, unknown>) => {
     await setTemplateInstall(ctx.env.id, {

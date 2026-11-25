@@ -174,7 +174,7 @@ export async function pruneDbBackups(
 /** Starts a database backup run (refused at once when the Hub cannot back this one up). */
 export async function startDbBackup(
   envId: number,
-  o: { by: string | null; via?: 'person' | 'schedule' },
+  o: { by: string | null; via?: 'person' | 'schedule'; verify?: boolean },
   deps: BackupDeps = {}
 ): Promise<number> {
   const data = await envData(envId)
@@ -217,7 +217,7 @@ export async function startDbBackup(
         })
         const backupMs = Date.now() - started
         await ctx.step('verify', async () => {
-          if (!policy.db_verify)
+          if (!policy.db_verify && !o.verify)
             return { skipped: true, note: 'Verification is off on the policy.' }
           await exec(verifySql(file))
           return 'The server read the whole file back and its checksums match.'

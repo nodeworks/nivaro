@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import type { Knex } from 'knex'
 import { inThisSchema } from '../db/dialect/h1.js'
 import { db } from '../db/index.js'
@@ -42,6 +43,11 @@ export interface Blueprint {
     states: Array<Record<string, unknown>>
     transitions: Array<Record<string, unknown>>
     bindings: Array<Record<string, unknown>>
+    /**
+     * Hub enhancement 46 (structure export): the pipeline's owner-matrix dimensions, one per
+     * binding (`collection` names the binding; `binding` ids mean nothing on another instance).
+     */
+    dimensions?: Array<Record<string, unknown>>
   }>
   layouts: Array<{
     layout: Record<string, unknown>
@@ -55,6 +61,25 @@ export interface Blueprint {
   rules: Array<Record<string, unknown>>
   /** Templates the workflows' actions reference. Absent on blueprints made before them. */
   payload_templates?: PayloadTemplateBundle[]
+  /**
+   * Hub enhancement 46 (structure export only, `exportBlueprint(…, {structure: true})`): roles
+   * with their policies (no people), keyed by the role's uuid so the role ids that transitions,
+   * layouts and queues name still resolve. Absent on every other blueprint.
+   */
+  roles?: Array<{ role: Record<string, unknown>; policies: Array<Record<string, unknown>> }>
+  /**
+   * Hub enhancement 46 (structure export only): flows with their operations. Always exported and
+   * installed INACTIVE (an administrator turns each one on after review).
+   */
+  flows?: Array<{ flow: Record<string, unknown>; operations: Array<Record<string, unknown>> }>
+}
+
+export interface ExportOptions {
+  /**
+   * Hub enhancement 46 (app cloning): also roles + policies, flows + operations and the
+   * pipelines' owner dimensions — the whole structure of an app, never its people or records.
+   */
+  structure?: boolean
 }
 
 const PHYSICAL_TYPES = new Set([
@@ -100,6 +125,9 @@ export interface BlueprintManifest {
     layouts: number
     queues: number
     rules: number
+    /** Structure exports only (Hub enhancement 46). */
+    roles?: number
+    flows?: number
   }
 }
 
@@ -144,7 +172,9 @@ export function buildManifest(
       workflows: bp.workflows.length,
       layouts: bp.layouts.length,
       queues: bp.queues.length,
-      rules: bp.rules.length
+      rules: bp.rules.length,
+      ...(bp.roles ? { roles: bp.roles.length } : {}),
+      ...(bp.flows ? { flows: bp.flows.length } : {})
     }
   }
 }
@@ -235,7 +265,11 @@ export async function diffBlueprintAgainstInstance(bp: Blueprint): Promise<Bluep
 
 // ─── Export ─────────────────────────────────────────────────────────────────
 
-export async function exportBlueprint(name: string, collections: string[]): Promise<Blueprint> {
+export async function exportBlueprint(
+  name: string,
+  collections: string[],
+  opts: ExportOptions = {}
+): Promise<Blueprint> {
   const set = new Set(collections)
 
   const colRows = await db('nivaro_collections').whereIn('collection', collections)
@@ -286,7 +320,10 @@ export async function exportBlueprint(name: string, collections: string[]): Prom
       ).map((r) => strip(r, ['created_at', 'updated_at'])),
       bindings: bindings
         .filter((b) => String(b.template) === tid)
-        .map((b) => strip(b, ['id', 'created_at', 'updated_at']))
+        .map((b) => strip(b, ['id', 'created_at', 'updated_at'])),
+      ...(opts.structure
+        ? { dimensions: await dimensionsOf(bindings.filter((b) => String(b.template) === tid)) }
+        : {})
     })
   }
 
@@ -350,8 +387,61 @@ export async function exportBlueprint(name: string, collections: string[]): Prom
     layouts,
     queues,
     rules,
-    payload_templates
+    payload_templates,
+    ...(opts.structure ? { roles: await exportRoles(), flows: await exportFlows() } : {})
   }
+}
+
+/** A pipeline's owner dimensions for these bindings, keyed by the binding's collection. */
+async function dimensionsOf(
+  bindings: Array<Record<string, unknown>>
+): Promise<Array<Record<string, unknown>>> {
+  const byId = new Map(bindings.map((b) => [Number(b.id), String(b.collection ?? '')]))
+  const ids = [...byId.keys()].filter((id) => Number.isSafeInteger(id) && id > 0)
+  if (!ids.length) return []
+  try {
+    const rows = (await db('nivaro_pipeline_owner_dimensions')
+      .whereIn('binding', ids)
+      .orderBy('sort')) as Array<Record<string, unknown>>
+    return rows.map((d) => ({
+      ...strip(d, ['id', 'binding']),
+      collection: byId.get(Number(d.binding)) ?? null
+    }))
+  } catch {
+    return [] // an instance without the owner matrix table
+  }
+}
+
+/** Every role with its policies (no people: users are never part of a structure export). */
+async function exportRoles(): Promise<NonNullable<Blueprint['roles']>> {
+  const roles = (await db('nivaro_roles').orderBy('name')) as Array<Record<string, unknown>>
+  const out: NonNullable<Blueprint['roles']> = []
+  for (const role of roles) {
+    const policies = (await db('nivaro_policies').where({ role: role.id as string })) as Array<
+      Record<string, unknown>
+    >
+    out.push({
+      role: strip(role, ['workspace', 'created_at', 'updated_at']),
+      policies: policies.map((p) => strip(p, ['id', 'created_at']))
+    })
+  }
+  return out
+}
+
+/** Every flow with its operations, each flow marked inactive (Hub enhancement 46). */
+async function exportFlows(): Promise<NonNullable<Blueprint['flows']>> {
+  const flows = (await db('nivaro_flows').orderBy('name')) as Array<Record<string, unknown>>
+  const out: NonNullable<Blueprint['flows']> = []
+  for (const flow of flows) {
+    const operations = (await db('nivaro_flow_operations').where({
+      flow: flow.id as string
+    })) as Array<Record<string, unknown>>
+    out.push({
+      flow: { ...strip(flow, ['created_at', 'updated_at']), status: 'inactive' },
+      operations: operations.map((o) => strip(o, ['created_at']))
+    })
+  }
+  return out
 }
 
 /** Every `payload_template_key` named by the actions in these transition `actions` blobs. */
@@ -412,6 +502,11 @@ export interface InstallReport {
   rules: { created: number; skipped: number }
   /** created = new and unpublished; drafted = an existing template's draft replaced. */
   payload_templates: { created: number; drafted: number; skipped: number }
+  /** Structure blueprints only (Hub enhancement 46): roles (with their policies) and flows. */
+  roles?: { created: number; skipped: number }
+  flows?: { created: number; skipped: number }
+  /** Roles installed WITHOUT the administrator access they had on the source (review M2). */
+  roles_admin_removed?: string[]
   errors: string[]
 }
 
@@ -445,6 +540,12 @@ export interface InstallOptions {
   atomic?: boolean
   /** Called once per part with its outcome (`collection:<name>`, `workflow:<id>` …). */
   onPart?: (part: string, ok: boolean) => void
+  /**
+   * Hub review M2: a role that brings administrator access gets it only when its id is named
+   * here (an administrator ticked "keep admin access", on their own session, logged by the
+   * caller). Every other role is installed with admin_access false; app_access is kept.
+   */
+  keepAdminRoles?: string[]
 }
 
 export async function installBlueprint(
@@ -579,6 +680,49 @@ export async function installBlueprint(
     }
   }
 
+  // Roles before everything that names a role id (queues.role_id, transitions, layouts). Skipped
+  // whole when its id or its name is here already (a new app has its own administrator role).
+  if (Array.isArray(bp.roles)) {
+    report.roles = { created: 0, skipped: 0 }
+    for (const r of bp.roles) {
+      const rid = String(r.role?.id ?? '')
+      const rname = String(r.role?.name ?? '')
+      try {
+        const existing =
+          (await db('nivaro_roles').where({ id: rid }).first('id')) ??
+          (await db('nivaro_roles').where({ name: rname }).first('id'))
+        if (!rid || !rname || existing) {
+          report.roles.skipped++
+          part(`role:${rname}`, true)
+          continue
+        }
+        const keepAdmin = (opts.keepAdminRoles ?? []).some(
+          (x) => x.toLowerCase() === rid.toLowerCase()
+        )
+        const roleRow = { ...r.role }
+        if ('admin_access' in roleRow && !keepAdmin) {
+          if (
+            roleRow.admin_access === true ||
+            roleRow.admin_access === 1 ||
+            roleRow.admin_access === '1'
+          )
+            report.roles_admin_removed = [...(report.roles_admin_removed ?? []), rname].slice(0, 50)
+          roleRow.admin_access = false
+        }
+        await atomic(async (k) => {
+          await k('nivaro_roles').insert({ ...roleRow, created_at: now, updated_at: now })
+          for (const p of Array.isArray(r.policies) ? r.policies : [])
+            await k('nivaro_policies').insert({ ...p, role: rid, created_at: now })
+        })
+        report.roles.created++
+        part(`role:${rname}`, true)
+      } catch (e) {
+        err(`role ${rname}: ${e instanceof Error ? e.message.slice(0, 150) : 'failed'}`)
+        part(`role:${rname}`, false)
+      }
+    }
+  }
+
   // Payload templates before the workflows whose actions reference them — as drafts only
   for (const t of Array.isArray(bp.payload_templates) ? bp.payload_templates : []) {
     try {
@@ -619,7 +763,21 @@ export async function installBlueprint(
           const bound = await k('nivaro_workflow_bindings')
             .where({ collection: b.collection as string })
             .first()
-          if (!bound) await k('nivaro_workflow_bindings').insert(b)
+          if (bound) continue
+          await k('nivaro_workflow_bindings').insert(b)
+          // Hub enhancement 46: the pipeline's owner dimensions of this (new) binding.
+          const dims = (Array.isArray(wf.dimensions) ? wf.dimensions : []).filter(
+            (d) => d.collection === b.collection
+          )
+          if (!dims.length) continue
+          const made = (await k('nivaro_workflow_bindings')
+            .where({ collection: b.collection as string, template: tid })
+            .first('id')) as { id: number } | undefined
+          if (!made) continue
+          for (const d of dims) {
+            const { collection: _c, ...row } = d
+            await k('nivaro_pipeline_owner_dimensions').insert({ ...row, binding: Number(made.id) })
+          }
         }
       })
       report.workflows.created++
@@ -704,6 +862,56 @@ export async function installBlueprint(
     } catch (e) {
       err(`rule: ${e instanceof Error ? e.message.slice(0, 120) : 'failed'}`)
       part(`rule:${String(r.collection)}/${String(r.name)}`, false)
+    }
+  }
+
+  // Flows last, always INACTIVE (Hub enhancement 46): a flow can run on a schedule or on every
+  // write, so an administrator turns each one on after reading it. uuid-keyed: skipped when here.
+  if (Array.isArray(bp.flows)) {
+    report.flows = { created: 0, skipped: 0 }
+    for (const f of bp.flows) {
+      const fid = String(f.flow?.id ?? '')
+      try {
+        if (!fid || (await db('nivaro_flows').where({ id: fid }).first('id'))) {
+          report.flows.skipped++
+          part(`flow:${fid}`, true)
+          continue
+        }
+        // A webhook trigger never arrives open: bearer auth with a secret made here (the source's
+        // secret never leaves it; an empty one would be read as "misconfigured").
+        const flowRow: Record<string, unknown> = { ...f.flow }
+        if (String(flowRow.trigger ?? '') === 'webhook') {
+          let opts: Record<string, unknown> = {}
+          try {
+            const raw = flowRow.trigger_options
+            const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed))
+              opts = parsed as Record<string, unknown>
+          } catch {
+            opts = {}
+          }
+          flowRow.trigger_options = JSON.stringify({
+            ...opts,
+            auth_type: 'bearer',
+            secret: randomBytes(24).toString('hex')
+          })
+        }
+        await atomic(async (k) => {
+          await k('nivaro_flows').insert({
+            ...flowRow,
+            status: 'inactive',
+            created_at: now,
+            updated_at: now
+          })
+          for (const op of Array.isArray(f.operations) ? f.operations : [])
+            await k('nivaro_flow_operations').insert({ ...op, flow: fid, created_at: now })
+        })
+        report.flows.created++
+        part(`flow:${fid}`, true)
+      } catch (e) {
+        err(`flow: ${e instanceof Error ? e.message.slice(0, 150) : 'failed'}`)
+        part(`flow:${fid}`, false)
+      }
     }
   }
 

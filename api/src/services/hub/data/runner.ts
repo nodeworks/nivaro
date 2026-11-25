@@ -180,6 +180,12 @@ export async function startDataRun(
     via?: 'person' | 'schedule'
   }
 ): Promise<number> {
+  // A retired (archived) app takes no backup, drill, refresh or rehearsal any more.
+  const { archivedRefusal } = await import('../releases/archived.js')
+  for (const envId of [...new Set(o.envIds)]) {
+    const archived = await archivedRefusal({ envId })
+    if (archived) throw new DataError('ENV_ARCHIVED', archived.message, 409)
+  }
   const lock = o.deps?.lock ?? defaultDataLock()
   const held = await takeLocks(lock, o.envIds)
   let runId: number

@@ -128,7 +128,8 @@ export async function scalePauses(
   }
 
   const frozen = await freezeRefusal({ appIds: t.app_ids, action: 'apply', now: deps.at })
-  if (frozen) {
+  if (frozen?.code === 'ENV_ARCHIVED') blockers.push({ code: frozen.code, text: frozen.message })
+  else if (frozen) {
     const p =
       frozen.code === 'FREEZE_UNKNOWN'
         ? { code: frozen.code, text: frozen.message }

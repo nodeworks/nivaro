@@ -675,6 +675,10 @@ export async function placeOnShared(
   const lock = deps.lock ?? defaultPromoteLock()
   const env0 = await db(ENVS).where({ id: envId }).first('id')
   if (!env0) throw refuse('NOT_FOUND', 'No such environment.', 404)
+  // A retired (archived) app is never placed anywhere again.
+  const { archivedRefusal } = await import('../releases/archived.js')
+  const archived = await archivedRefusal({ envId })
+  if (archived) throw refuse(archived.code, archived.message)
 
   const token = await lock.take(envId, 'creation')
   if (!token) {

@@ -64,7 +64,9 @@ export function PreDeployChecklist({
           version ?? null,
           kind ?? null
         )
-  const enabled = runId != null || (!!target && !!action && (action === 'move' || !!version))
+  const enabled =
+    runId != null ||
+    (!!target && !!action && (action === 'move' || action === 'retire' || !!version))
   const q = useQuery({
     queryKey: key,
     queryFn: () =>

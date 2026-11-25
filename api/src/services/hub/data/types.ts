@@ -110,6 +110,7 @@ export type DataCode =
   | 'NOT_OPTED_IN'
   | 'TARGET_CHANGED'
   | 'TARGET_UNVERIFIED'
+  | 'ENV_ARCHIVED'
   | 'NOT_NEWEST'
 
 export class DataError extends Error {

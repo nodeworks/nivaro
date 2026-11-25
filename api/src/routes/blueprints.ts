@@ -101,7 +101,35 @@ export async function blueprintsRoutes(app: FastifyInstance) {
     if (!bp) {
       return reply.code(400).send({ error: 'Not a nivaro-blueprint artifact' })
     }
-    const report = await installBlueprint(bp, req.user?.id ?? null)
+    // Review M2: roles with administrator access arrive without it, unless the installing
+    // administrator, on their own session, names them in keep_admin_roles (logged).
+    const keepAdmin = Array.isArray((req.body as { keep_admin_roles?: unknown }).keep_admin_roles)
+      ? ((req.body as { keep_admin_roles: unknown[] }).keep_admin_roles.filter(
+          (x): x is string => typeof x === 'string' && /^[0-9a-f-]{36}$/i.test(x)
+        ) as string[])
+      : []
+    if (keepAdmin.length) {
+      const { ownSession } = await import('../services/hub/changes/emergency.js')
+      if (!ownSession(req))
+        return reply.code(403).send({
+          error:
+            'Only an administrator on their own session may keep a role’s administrator access.',
+          code: 'OWN_SESSION_REQUIRED'
+        })
+    }
+    const report = await installBlueprint(bp, req.user?.id ?? null, {
+      keepAdminRoles: keepAdmin
+    })
+    if (keepAdmin.length)
+      await logActivity({
+        action: 'blueprint-keep-admin',
+        user: req.user?.id,
+        comment: `${bp.name}: roles keep administrator access: ${keepAdmin.join(', ')}`.slice(
+          0,
+          400
+        ),
+        req
+      })
     await logActivity({
       action: 'blueprint-install',
       user: req.user?.id,

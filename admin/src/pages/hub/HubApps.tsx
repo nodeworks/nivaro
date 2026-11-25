@@ -33,6 +33,7 @@ export default function HubApps() {
         out.delete('app')
         out.delete('adopt')
         out.delete('create')
+        out.delete('template')
         if (next.app) out.set('app', String(next.app))
         if (next.adopt) out.set('adopt', '1')
         if (next.create) out.set('create', '1')
@@ -125,7 +126,11 @@ export default function HubApps() {
             </div>
           )}
           {creating ? (
-            <HubCreateApp onDone={(id) => show({ app: id })} onCancel={() => show({})} />
+            <HubCreateApp
+              initialTemplateId={Number(params.get('template')) || undefined}
+              onDone={(id) => show({ app: id })}
+              onCancel={() => show({})}
+            />
           ) : adopting ? (
             <HubAdoptForm onDone={(id) => show({ app: id })} onCancel={() => show({})} />
           ) : selected != null ? (

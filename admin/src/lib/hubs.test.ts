@@ -35,6 +35,8 @@ describe('hub registry', () => {
       'Drivers',
       'Targets',
       'Templates',
+      // Hub lifecycle (hub-enh/lifecycle): cloning starts from a template, so it follows them.
+      'Clone & retire',
       'Databases',
       'Backups & data',
       'Sign-in',

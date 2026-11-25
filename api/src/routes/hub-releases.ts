@@ -451,9 +451,28 @@ export function hubReleaseRoutes(app: FastifyInstance): void {
     return reply.code(201).send({ data: (await listFreezes()).find((f) => f.id === id) })
   })
 
+  /** A retirement's own freeze (`retire:<id>`) ends with its retirement, never by hand. */
+  const retirementOwned = async (id: number) => {
+    // An install behind migration 576 has no `source` column: nothing there is a retirement's.
+    const row = (await db(FREEZES)
+      .where({ id })
+      .first('*')
+      .catch(() => undefined)) as { source?: string | null } | undefined
+    return typeof row?.source === 'string' && row.source.startsWith('retire:') ? row.source : null
+  }
+  const ownedRefusal = (reply: FastifyReply, source: string) =>
+    fail(
+      reply,
+      409,
+      'FREEZE_OWNED',
+      `This freeze belongs to retirement #${source.slice('retire:'.length)}: it ends when the retirement is cancelled or archived.`
+    )
+
   app.patch('/freezes/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const id = idParam((req.params as { id: string }).id)
     if (id === null || !(await db(FREEZES).where({ id }).first('id'))) return notFound(reply)
+    const owned = await retirementOwned(id)
+    if (owned) return ownedRefusal(reply, owned)
     const v = validateFreeze(body(req))
     if ('error' in v) return fail(reply, 400, 'BAD_FREEZE', v.error)
     if (v.app_id != null && !(await readApp(v.app_id)))
@@ -475,6 +494,8 @@ export function hubReleaseRoutes(app: FastifyInstance): void {
   app.delete('/freezes/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const id = idParam((req.params as { id: string }).id)
     if (id === null) return notFound(reply)
+    const owned = await retirementOwned(id)
+    if (owned) return ownedRefusal(reply, owned)
     if (!(await db(FREEZES).where({ id }).delete())) return notFound(reply)
     await logActivity({
       action: 'hub-freeze-delete',

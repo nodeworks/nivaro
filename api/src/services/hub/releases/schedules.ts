@@ -343,7 +343,8 @@ export async function runDueSchedules(deps: ScheduleDeps = defaultScheduleDeps()
       // opens for within 14 days: both end here (missed / failed, people told) instead of
       // waiting for a surprise deploy whenever someone edits a window.
       const noOpening = frozen.code === 'OUTSIDE_WINDOW' && frozen.next_opening === null
-      if (noOpening || frozen.code === 'WINDOW_INVALID') {
+      // A retired (archived) app never deploys again: the schedule ends too.
+      if (noOpening || frozen.code === 'WINDOW_INVALID' || frozen.code === 'ENV_ARCHIVED') {
         await settle(s.id, {
           status: 'failed',
           error: (noOpening

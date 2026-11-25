@@ -66,7 +66,13 @@ export const ALLOWED_COLUMNS = {
     column_aliases display_config`),
   queue_sources: T(`type collection filters state_values sort sla_filter extra_fields state_mode
     label_template drilldown column_formats aggregates`),
-  rules: T('name collection trigger conditions actions enabled sort')
+  rules: T('name collection trigger conditions actions enabled sort'),
+  // Hub enhancement 46 (app cloning: structure blueprints only).
+  pipeline_dimensions: T('collection field label sort is_row_axis required'),
+  roles: T('id name description admin_access app_access ui_permissions'),
+  policies: T('role collection action fields permissions validation presets row_filter'),
+  flows: T('id name description trigger trigger_options accountability'),
+  flow_operations: T('id flow name key type position_x position_y options resolve reject')
 } as const
 
 /** The most a template may bring (review L4): each field is a DDL statement plus an insert. */
@@ -82,7 +88,11 @@ export const TEMPLATE_CAPS = {
   assignments_per_layout: 1000,
   queues: 100,
   rules: 300,
-  payload_templates: 100
+  payload_templates: 100,
+  roles: 100,
+  policies: 5000,
+  flows: 200,
+  operations_per_flow: 200
 } as const
 
 const NAME_RE = /^[a-zA-Z0-9_]+$/
@@ -98,6 +108,11 @@ export interface SanitizeReview {
   /** Transition actions and rules the template carries (run on the app once installed). */
   transition_actions: number
   rules: number
+  /**
+   * Hub review M2: roles that had administrator access on the source. They are installed WITHOUT
+   * it unless the install names them in `keepAdminRoles` (an administrator ticked it).
+   */
+  admin_roles?: Array<{ id: string; name: string }>
 }
 
 export interface SanitizeResult {
@@ -229,11 +244,19 @@ export function sanitizeBlueprint(bp: Blueprint): SanitizeResult {
     }
     const tid = String(tpl.id)
     for (const t of transitions) review.transition_actions += countActions(t.actions)
+    const dims = w.dimensions === undefined ? null : rows(w.dimensions, 'pipeline dimensions')
     workflows.push({
       template: keep('workflow_templates', tpl),
       states: states.map((s) => ({ ...keep('workflow_states', s), template: tid })),
       transitions: transitions.map((t) => ({ ...keep('workflow_transitions', t), template: tid })),
-      bindings: bindings.map((b) => ({ ...keep('workflow_bindings', b), template: tid }))
+      bindings: bindings.map((b) => ({ ...keep('workflow_bindings', b), template: tid })),
+      ...(dims
+        ? {
+            dimensions: dims
+              .filter((d) => inside(d.collection))
+              .map((d) => keep('pipeline_dimensions', d))
+          }
+        : {})
     })
   }
 
@@ -291,6 +314,13 @@ export function sanitizeBlueprint(bp: Blueprint): SanitizeResult {
   }
   review.rules = rules.length
 
+  // Hub enhancement 46: roles (with policies on the blueprint's own collections, plus reads of
+  // the system directory tables a working app needs) and flows (always inactive).
+  const roles = sanitizeRoles(bp.roles, keep, refuse, inside, (admin) => {
+    review.admin_roles = admin
+  })
+  const flows = sanitizeFlows(bp.flows, keep, refuse)
+
   const pts = arr(bp.payload_templates, 'payload templates')
   cap(pts.length, TEMPLATE_CAPS.payload_templates, 'payload templates')
 
@@ -306,10 +336,90 @@ export function sanitizeBlueprint(bp: Blueprint): SanitizeResult {
       layouts,
       queues,
       rules,
-      ...(pts.length ? { payload_templates: pts as Blueprint['payload_templates'] } : {})
+      ...(pts.length ? { payload_templates: pts as Blueprint['payload_templates'] } : {}),
+      ...(roles ? { roles } : {}),
+      ...(flows ? { flows } : {})
     },
     review
   }
+}
+
+type Keep = (
+  part: keyof typeof ALLOWED_COLUMNS,
+  row: Record<string, unknown>
+) => Record<string, unknown>
+
+/** System tables a cloned role may READ (a working app shows people and files). */
+const SYSTEM_READS = new Set(['nivaro_users', 'nivaro_files'])
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+function sanitizeRoles(
+  v: unknown,
+  keep: Keep,
+  refuse: (why: string) => void,
+  inside: (c: unknown) => boolean,
+  onAdmin: (roles: Array<{ id: string; name: string }>) => void = () => undefined
+): Blueprint['roles'] | undefined {
+  if (v === undefined || v === null) return undefined
+  const list = rows(v, 'roles')
+  cap(list.length, TEMPLATE_CAPS.roles, 'roles')
+  const out: NonNullable<Blueprint['roles']> = []
+  const adminRoles: Array<{ id: string; name: string }> = []
+  let policyCount = 0
+  for (const r of list) {
+    const role = isObj(r.role) ? r.role : null
+    const id = String(role?.id ?? '')
+    const name = String(role?.name ?? '').slice(0, 255)
+    if (!role || !UUID_RE.test(id) || !name) {
+      refuse('A role without an id or a name')
+      continue
+    }
+    const policies = rows(r.policies, `the policies of ${name}`)
+    policyCount += policies.length
+    const kept = policies
+      .filter((p) => {
+        const c = String(p.collection ?? '')
+        if (inside(c)) return true
+        if (SYSTEM_READS.has(c) && p.action === 'read') return true
+        refuse(`Policy of ${name} on ${c.slice(0, 64)}`)
+        return false
+      })
+      .map((p) => ({ ...keep('policies', p), role: id }))
+    out.push({ role: keep('roles', role), policies: kept })
+    if (truthyFlag(role.admin_access)) adminRoles.push({ id, name })
+  }
+  cap(policyCount, TEMPLATE_CAPS.policies, 'policies')
+  if (adminRoles.length) onAdmin(adminRoles)
+  return out
+}
+
+const truthyFlag = (v: unknown) => v === true || v === 1 || v === '1' || v === 'true'
+
+function sanitizeFlows(
+  v: unknown,
+  keep: Keep,
+  refuse: (why: string) => void
+): Blueprint['flows'] | undefined {
+  if (v === undefined || v === null) return undefined
+  const list = rows(v, 'flows')
+  cap(list.length, TEMPLATE_CAPS.flows, 'flows')
+  const out: NonNullable<Blueprint['flows']> = []
+  for (const f of list) {
+    const flow = isObj(f.flow) ? f.flow : null
+    const id = String(flow?.id ?? '')
+    if (!flow || !UUID_RE.test(id)) {
+      refuse('A flow without an id')
+      continue
+    }
+    const ops = rows(f.operations, `the steps of flow ${String(flow.name ?? id).slice(0, 64)}`)
+    cap(ops.length, TEMPLATE_CAPS.operations_per_flow, 'steps in one flow')
+    out.push({
+      // Always inactive: an administrator turns a flow on after reading it.
+      flow: { ...keep('flows', flow), status: 'inactive' },
+      operations: ops.map((o) => ({ ...keep('flow_operations', o), flow: id }))
+    })
+  }
+  return out
 }
 
 function countActions(v: unknown): number {
@@ -335,6 +445,13 @@ export function reviewNotes(r: SanitizeReview | null | undefined): string[] {
   const stripped = Object.keys(r.stripped)
   if (stripped.length)
     out.push(`Settings removed (not allowed in a template): ${stripped.slice(0, 8).join(', ')}.`)
+  if (r.admin_roles?.length)
+    out.push(
+      `Roles with administrator access arrive without it unless kept on purpose: ${r.admin_roles
+        .slice(0, 5)
+        .map((a) => a.name)
+        .join(', ')}.`
+    )
   if (r.refused.length)
     out.push(
       `Left out (outside the template's own collections): ${r.refused.slice(0, 5).join('; ')}.`

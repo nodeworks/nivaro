@@ -385,6 +385,8 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_hub_vuln_findings',
   'nivaro_hub_cert_checks',
   'nivaro_hub_break_glass',
+  'nivaro_hub_clones', //              Hub lifecycle (579): structure copies, retirements
+  'nivaro_hub_retirements', //         (per-Hub state, never promoted)
   'nivaro_share_links',
   'nivaro_dashboard_links',
   'nivaro_webhook_deliveries',

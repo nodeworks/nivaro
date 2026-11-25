@@ -45,6 +45,7 @@ import { ownerDeployRefusal } from '../services/hub/owner-access.js'
 import { type LockHolder, lockHolderRefusal, PromotionError } from '../services/hub/promote-lock.js'
 import { startStackApply } from '../services/hub/promote-run.js'
 import type { HubEnvironmentRow } from '../services/hub/promote-types.js'
+import { archivedRefusal } from '../services/hub/releases/archived.js'
 import { HUB_MASK, HubSecretError } from '../services/hub/secrets.js'
 import { hubStatusKey } from '../services/hub/status.js'
 
@@ -614,6 +615,9 @@ export function hubDockerRoutes(app: FastifyInstance) {
       const target = await dockerTargetOf(envId)
       if (!target) return notDocker(reply, envId)
       const key = String(row.key)
+      // Hub enhancement 47: a retired (archived) app is never restarted.
+      const archived = await archivedRefusal({ envId })
+      if (archived) return fail(reply, archived.status, archived.code, archived.message)
       if (body(req).confirm !== key)
         return fail(reply, 400, 'CONFIRM_REQUIRED', `Type the environment key (${key}) to restart`)
       const name = target.stackName
