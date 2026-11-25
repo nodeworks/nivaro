@@ -80,7 +80,7 @@ async function readableAppIds(req: FastifyRequest): Promise<number[] | null> {
 /** A retirement with what a person may do next (the wizard reads only this). */
 function view(r: Retirement) {
   const next = r.status === 'open' ? nextStep(r) : null
-  const undo = r.status === 'open' ? undoableStep(r) : null
+  const undo = r.status === 'open' || r.status === 'interrupted' ? undoableStep(r) : null
   const { runner: _runner, ...rest } = r
   return {
     ...rest,
@@ -88,7 +88,7 @@ function view(r: Retirement) {
     next_step: next?.key ?? null,
     undo_step: undo?.key ?? null,
     cancellable:
-      r.status === 'open' &&
+      (r.status === 'open' || r.status === 'interrupted') &&
       r.steps.every((s) =>
         s.key === 'remove' || s.key === 'archive' ? s.state === 'pending' && !s.signed_off_at : true
       )
@@ -240,7 +240,13 @@ export async function hubLifecycleRoutes(app: FastifyInstance): Promise<void> {
     { preHandler: hubRequireAdmin },
     retirementAction(
       'hub-retire-cancel',
-      (id, req) => cancelRetirement(id, userId(req)),
+      (id, req) =>
+        cancelRetirement(
+          id,
+          userId(req),
+          {},
+          typeof body(req).reason === 'string' ? (body(req).reason as string) : null
+        ),
       (r) => `${r.plan?.app.key ?? r.app_id}: cancelled`
     )
   )

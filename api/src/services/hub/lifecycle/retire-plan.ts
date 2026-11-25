@@ -132,10 +132,10 @@ export function planLines(p: RetirePlan): Record<string, string[]> {
       (e) =>
         `${name(e)}: ${e.database ? 'a database backup' : 'no database the Hub knows'} and ${
           e.files_target ? 'a files backup to its backup target' : 'no files backup target'
-        }${!e.database || !e.files_target ? ' — sign off what is skipped with a reason' : ''}.`
+        }${!e.database || !e.files_target ? ' — what cannot be backed up is skipped with a reason and the typed app key' : ' — verified, and checked again before the removal'}.`
     ),
     notice: [
-      'The people who signed in to the app through the Hub, its owners and the Hub administrators get the final notice (in the app and by email); the maintenance page shows it.'
+      'The final notice (at most 500 characters) goes to the Hub inbox and by email of the people who signed in to the app through the Hub, its owners and the Hub administrators, and shows on the maintenance page. People who sign in to the app directly see only the maintenance page.'
     ],
     remove: envs.map((e) =>
       e.kind === 'docker'

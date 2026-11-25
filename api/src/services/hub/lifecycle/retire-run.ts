@@ -63,7 +63,8 @@ import {
   withStep
 } from './retire-store.js'
 
-export const NOTICE_MAX = 2000
+/** One limit for the final notice: what the maintenance page and the inbox show in full. */
+export const NOTICE_MAX = 500
 export const NOTE_MAX = 1000
 export const REASON_MIN = 10
 
@@ -109,14 +110,45 @@ export async function openRetirement(
     notice: notice || null,
     by
   })
-  // Two opens at once: the newer one gives way to the older (one open retirement per app).
-  const first = await openRetirementOf(appId)
-  if (first && first.id !== id) {
+  // One open retirement per app (review M3): the app row's retiring_id is claimed by
+  // compare-and-set; a second open at the same moment loses and closes its own row.
+  const held = await claimApp(appId, id)
+  if (held !== null) {
     const mine = await readRetirement(id)
     if (mine) await casRetirement(id, mine.rev, { status: 'cancelled', finished: true })
-    throw new RetireError('RETIRE_OPEN', `Retirement #${first.id} of this app is already open.`)
+    throw new RetireError('RETIRE_OPEN', `Retirement #${held} of this app is already open.`)
   }
   return (await readRetirement(id)) as Retirement
+}
+
+/** Claims the app for retirement `id`; answers the id holding it instead, or null (claimed). */
+async function claimApp(appId: number, id: number): Promise<number | null> {
+  for (let i = 0; i < 3; i++) {
+    const n = await db('nivaro_hub_apps')
+      .where({ id: appId })
+      .whereNull('retiring_id')
+      .update({ retiring_id: id })
+    if (Number(n) === 1) return null
+    const row = (await db('nivaro_hub_apps').where({ id: appId }).first('retiring_id')) as
+      | { retiring_id: number | null }
+      | undefined
+    const cur = row?.retiring_id == null ? null : Number(row.retiring_id)
+    if (cur === null) continue
+    if (cur === id) return null
+    const other = await readRetirement(cur)
+    if (other && ['open', 'running', 'interrupted'].includes(other.status)) return cur
+    // A claim left by a retirement that has closed: free it (compare-and-set) and try again.
+    await db('nivaro_hub_apps').where({ id: appId, retiring_id: cur }).update({ retiring_id: null })
+  }
+  return -1
+}
+
+/** Frees the app's claim when its retirement closes (done or cancelled). */
+async function releaseApp(appId: number, id: number): Promise<void> {
+  await db('nivaro_hub_apps')
+    .where({ id: appId, retiring_id: id })
+    .update({ retiring_id: null })
+    .catch(() => undefined)
 }
 
 // ─── Gates ───────────────────────────────────────────────────────────────────────────────────
@@ -162,7 +194,17 @@ async function commonGates(r: Retirement): Promise<number[]> {
   const now = new Set(live.environments.map((e) => e.id))
   const named = new Set(envIds)
   const archiving = nextStep(r)?.key === 'archive'
-  if (!archiving && (now.size !== named.size || [...now].some((id) => !named.has(id))))
+  const added = [...now].filter((id) => !named.has(id))
+  if (archiving && added.length) {
+    const keys = live.environments.filter((e) => added.includes(e.id)).map((e) => e.key)
+    throw new RetireError(
+      'NEW_ENVIRONMENT',
+      `${keys.join(', ')} was added after this retirement was planned and was never stopped: archive it on the app page, or remove it, first.`,
+      409,
+      { environments: added }
+    )
+  }
+  if (!archiving && (now.size !== named.size || added.length))
     throw new RetireError(
       'PLAN_STALE',
       'The app’s environments changed since this retirement opened. Cancel it and open a new one.'
@@ -239,6 +281,24 @@ export function validateSignOff(
           .join(', ')}: set it up on Backups & data, or skip it with a reason.`,
         400,
         { missing: unskipped.map((m) => ({ environment_id: m.e.id, what: m.what })) }
+      )
+    // Review M5: only a part the Hub cannot back up may be skipped.
+    const capable = skips.filter((s) => {
+      const e = plan.environments.find((x) => x.id === s.environment_id)
+      return e && (s.what === 'db' ? e.database : e.files_target)
+    })
+    if (capable.length)
+      throw new RetireError(
+        'SKIP_NOT_ALLOWED',
+        'Only a part the Hub cannot back up may be skipped: the others are backed up and verified.',
+        400,
+        { parts: capable }
+      )
+    if (skips.length && b.skip_confirm !== plan.app.key)
+      throw new RetireError(
+        'CONFIRM_REQUIRED',
+        `Type the app key (${plan.app.key}) to retire it without the skipped backups.`,
+        400
       )
     const reason = typeof b.reason === 'string' ? b.reason.trim() : ''
     if (skips.length && reason.length < REASON_MIN)
@@ -399,9 +459,10 @@ async function runLeg(
       status: leg === 'cancel' ? 'cancelled' : finished ? 'done' : 'open',
       step: null,
       runner: null,
-      error: null,
+      error: leg === 'cancel' ? r.error : null,
       finished
     })
+    if (finished) await releaseApp(r.app_id, id)
     if (leg === 'step' && keys[0] === 'archive')
       await notifyTeam(
         r,
@@ -534,9 +595,11 @@ export async function undoLastStep(
   by: string | null,
   deps: RetireDeps = {}
 ): Promise<Retirement> {
+  await healStale().catch(() => [])
   const r = await readRetirement(id)
   if (!r) throw new RetireError('NOT_FOUND', 'Not found', 404)
-  if (r.status !== 'open')
+  // Review M4: going back works from an interrupted retirement too, and never waits on a gate.
+  if (r.status !== 'open' && r.status !== 'interrupted')
     throw new RetireError(
       r.status === 'running' ? 'RETIRE_RUNNING' : 'RETIRE_CLOSED',
       r.status === 'running' ? 'A step is running: wait for it.' : `This retirement is ${r.status}.`
@@ -565,11 +628,14 @@ export async function undoLastStep(
 export async function cancelRetirement(
   id: number,
   by: string | null,
-  deps: RetireDeps = {}
+  deps: RetireDeps = {},
+  reason: string | null = null
 ): Promise<Retirement> {
+  await healStale().catch(() => [])
   const r = await readRetirement(id)
   if (!r) throw new RetireError('NOT_FOUND', 'Not found', 404)
-  if (r.status !== 'open')
+  // Review M4: an interrupted retirement can be cancelled; Cancel never waits on a gate.
+  if (r.status !== 'open' && r.status !== 'interrupted')
     throw new RetireError(
       r.status === 'running' ? 'RETIRE_RUNNING' : 'RETIRE_CLOSED',
       r.status === 'running' ? 'A step is running: wait for it.' : `This retirement is ${r.status}.`
@@ -586,16 +652,18 @@ export async function cancelRetirement(
     .map((d) => d.key)
     .filter((k) => {
       const st = stepOf(r, k).state
-      return st === 'done' || st === 'failed'
+      return st === 'done' || st === 'failed' || st === 'interrupted'
     })
     .reverse()
   const runner = newRunnerToken()
+  const why = (reason ?? '').trim().slice(0, 500)
   const won = await casRetirement(id, r.rev, {
     status: 'running',
     step: 'cancel',
     runner,
     heartbeat: true,
-    error: null
+    // Why it was cancelled stays on the row (shown on the retirement and in the activity log).
+    error: why ? `Cancelled: ${why}` : 'Cancelled.'
   })
   if (!won)
     throw new RetireError('RETIRE_CHANGED', 'The retirement changed a moment ago: look again.')

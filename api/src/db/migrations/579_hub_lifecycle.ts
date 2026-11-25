@@ -18,6 +18,8 @@ import { longText } from '../portable-ddl.js'
  *                            (nivaro_hub_freezes.source `retire:<id>`), the checklists it claimed,
  *                            and the runner's lease + heartbeat (resume after a stopped process)
  *  - nivaro_hub_apps.archived_at / archived_by   set by a retirement's last step
+ *  - nivaro_hub_apps.retiring_id    the one open retirement of the app (set only where null)
+ *  - nivaro_hub_template_installs.keep_admin_roles   role ids a creation keeps admin access for
  */
 export async function up(knex: Knex): Promise<void> {
   if (!(await knex.schema.hasTable('nivaro_hub_clones'))) {
@@ -75,6 +77,29 @@ export async function up(knex: Knex): Promise<void> {
   ) {
     await knex.schema.alterTable('nivaro_hub_apps', (t) => {
       t.uuid('archived_by').nullable()
+    })
+  }
+  await upKeepAdmin(knex)
+}
+
+// Hub review M2: a template role with administrator access arrives WITHOUT it unless an
+// administrator (on their own session) ticked "keep admin access" for it on Create app.
+async function upKeepAdmin(knex: Knex): Promise<void> {
+  if (
+    (await knex.schema.hasTable('nivaro_hub_template_installs')) &&
+    !(await knex.schema.hasColumn('nivaro_hub_template_installs', 'keep_admin_roles'))
+  ) {
+    await knex.schema.alterTable('nivaro_hub_template_installs', (t) => {
+      longText(t, knex, 'keep_admin_roles').nullable()
+    })
+  }
+  if (
+    (await knex.schema.hasTable('nivaro_hub_apps')) &&
+    !(await knex.schema.hasColumn('nivaro_hub_apps', 'retiring_id'))
+  ) {
+    // Review M3: the one open retirement of an app (compare-and-set where null).
+    await knex.schema.alterTable('nivaro_hub_apps', (t) => {
+      t.integer('retiring_id').nullable()
     })
   }
 }

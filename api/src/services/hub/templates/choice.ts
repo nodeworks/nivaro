@@ -15,6 +15,18 @@ export { TEMPLATE_MIN_VERSION }
 
 export type TemplateInstallStatus = 'pending' | 'installing' | 'done' | 'partial' | 'failed'
 
+/** The role ids a creation keeps admin access for (`keep_admin_roles`, uuids only). */
+export function keepAdminRolesOf(input: unknown): string[] {
+  const v = (input as { keep_admin_roles?: unknown } | null)?.keep_admin_roles
+  return Array.isArray(v)
+    ? [
+        ...new Set(
+          v.filter((x): x is string => typeof x === 'string' && /^[0-9a-f-]{36}$/i.test(x))
+        )
+      ].slice(0, 100)
+    : []
+}
+
 export interface TemplateInstallRow {
   id: number
   app_id: number
@@ -24,6 +36,8 @@ export interface TemplateInstallRow {
   note: string | null
   report: Record<string, unknown> | null
   finished_at: string | null
+  /** Role ids that keep administrator access on install (review M2). */
+  keep_admin_roles: string[]
 }
 
 /** A template id as sent: null when none was picked, NaN-safe. */
@@ -85,6 +99,21 @@ export async function templatePlanNotes(input: unknown): Promise<TemplatePlanNot
       `It brings ${review.transition_actions} transition actions and ${review.rules} rules that run on the app once installed.`
     )
   for (const w of reviewNotes(review)) out.warnings.push(w)
+  // Review M2: a role that had administrator access arrives without it unless it was ticked.
+  const admin = review?.admin_roles ?? []
+  if (admin.length) {
+    const kept = new Set(keepAdminRolesOf(input).map((x) => x.toLowerCase()))
+    const keep = admin.filter((a) => kept.has(a.id.toLowerCase()))
+    const drop = admin.filter((a) => !kept.has(a.id.toLowerCase()))
+    if (drop.length)
+      out.lines.push(
+        `These roles had administrator access on the source and arrive WITHOUT it: ${drop.map((a) => a.name).join(', ')}.`
+      )
+    if (keep.length)
+      out.warnings.push(
+        `These roles keep administrator access: ${keep.map((a) => a.name).join(', ')}. Anyone given them is an administrator of the new app.`
+      )
+  }
   const made = t.manifest?.nivaro_version
   if (
     made &&
@@ -137,12 +166,16 @@ export async function recordTemplateChoices(
       409
     )
   const now = new Date()
+  // Only roles the template itself names as administrator roles can be kept as such.
+  const adminIds = new Set((t.manifest?.review?.admin_roles ?? []).map((a) => a.id.toLowerCase()))
+  const keep = keepAdminRolesOf(o.input).filter((x) => adminIds.has(x.toLowerCase()))
   for (const envId of o.envIds)
     await trx(TEMPLATE_INSTALLS).insert({
       app_id: o.appId,
       environment_id: envId,
       template_id: id,
       status: 'pending',
+      ...(keep.length ? { keep_admin_roles: JSON.stringify(keep) } : {}),
       created_by: o.by || null,
       created_at: now,
       updated_at: now
@@ -156,6 +189,16 @@ function parseReport(v: unknown): Record<string, unknown> | null {
     return JSON.parse(String(v)) as Record<string, unknown>
   } catch {
     return null
+  }
+}
+
+function parseList(v: unknown): unknown {
+  if (v == null) return []
+  if (Array.isArray(v)) return v
+  try {
+    return JSON.parse(String(v))
+  } catch {
+    return []
   }
 }
 
@@ -173,7 +216,8 @@ export async function readTemplateInstall(envId: number): Promise<TemplateInstal
     note: r.note == null ? null : String(r.note),
     report: parseReport(r.report),
     finished_at:
-      r.finished_at == null ? null : new Date(r.finished_at as string | Date).toISOString()
+      r.finished_at == null ? null : new Date(r.finished_at as string | Date).toISOString(),
+    keep_admin_roles: keepAdminRolesOf({ keep_admin_roles: parseList(r.keep_admin_roles) })
   }
 }
 

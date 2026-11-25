@@ -264,7 +264,13 @@ export async function startTemplateInstall(
     bundle?: unknown
     digest?: unknown
     template?: { name?: unknown; version?: unknown }
+    keep_admin_roles?: unknown
   }
+  const keepAdminRoles = Array.isArray(b.keep_admin_roles)
+    ? b.keep_admin_roles
+        .filter((x): x is string => typeof x === 'string' && /^[0-9a-f-]{36}$/i.test(x))
+        .slice(0, 100)
+    : []
   const raw = unwrapBlueprint(b.bundle)
   if (!raw)
     return {
@@ -357,7 +363,7 @@ export async function startTemplateInstall(
   }
   const name = typeof b.template?.name === 'string' ? b.template.name.slice(0, 120) : bp.name
   const version = typeof b.template?.version === 'string' ? b.template.version.slice(0, 40) : null
-  void runInBackgroundPool(() => runInstall(run, bp, { name, version }, log))
+  void runInBackgroundPool(() => runInstall(run, bp, { name, version }, log, keepAdminRoles))
   return { ok: true, run, joined: false }
 }
 
@@ -365,7 +371,8 @@ async function runInstall(
   run: TemplateRun,
   bp: ReturnType<typeof sanitizeBlueprint>['blueprint'],
   label: { name: string; version: string | null },
-  log: { warn: (o: object, msg: string) => void }
+  log: { warn: (o: object, msg: string) => void },
+  keepAdminRoles: string[] = []
 ): Promise<void> {
   const beat = setInterval(() => {
     run.heartbeat_at = new Date().toISOString()
@@ -378,6 +385,7 @@ async function runInstall(
   try {
     const report = await installBlueprint(bp, await installOwner(), {
       atomic: true,
+      keepAdminRoles,
       onPart: (part, good) => {
         if (good) ok++
         else if (failed.length < 50) failed.push(part.slice(0, 120))

@@ -505,6 +505,8 @@ export interface InstallReport {
   /** Structure blueprints only (Hub enhancement 46): roles (with their policies) and flows. */
   roles?: { created: number; skipped: number }
   flows?: { created: number; skipped: number }
+  /** Roles installed WITHOUT the administrator access they had on the source (review M2). */
+  roles_admin_removed?: string[]
   errors: string[]
 }
 
@@ -538,6 +540,12 @@ export interface InstallOptions {
   atomic?: boolean
   /** Called once per part with its outcome (`collection:<name>`, `workflow:<id>` …). */
   onPart?: (part: string, ok: boolean) => void
+  /**
+   * Hub review M2: a role that brings administrator access gets it only when its id is named
+   * here (an administrator ticked "keep admin access", on their own session, logged by the
+   * caller). Every other role is installed with admin_access false; app_access is kept.
+   */
+  keepAdminRoles?: string[]
 }
 
 export async function installBlueprint(
@@ -688,8 +696,21 @@ export async function installBlueprint(
           part(`role:${rname}`, true)
           continue
         }
+        const keepAdmin = (opts.keepAdminRoles ?? []).some(
+          (x) => x.toLowerCase() === rid.toLowerCase()
+        )
+        const roleRow = { ...r.role }
+        if ('admin_access' in roleRow && !keepAdmin) {
+          if (
+            roleRow.admin_access === true ||
+            roleRow.admin_access === 1 ||
+            roleRow.admin_access === '1'
+          )
+            report.roles_admin_removed = [...(report.roles_admin_removed ?? []), rname].slice(0, 50)
+          roleRow.admin_access = false
+        }
         await atomic(async (k) => {
-          await k('nivaro_roles').insert({ ...r.role, created_at: now, updated_at: now })
+          await k('nivaro_roles').insert({ ...roleRow, created_at: now, updated_at: now })
           for (const p of Array.isArray(r.policies) ? r.policies : [])
             await k('nivaro_policies').insert({ ...p, role: rid, created_at: now })
         })

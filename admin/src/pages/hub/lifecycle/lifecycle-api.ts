@@ -107,6 +107,7 @@ export interface SignOff {
   manual?: number[]
   skip?: Array<{ environment_id: number; what: 'db' | 'files' }>
   reason?: string
+  skip_confirm?: string
   notice?: string
   checklist_runs?: Record<string, number>
 }
@@ -181,7 +182,35 @@ export const LIFECYCLE_COPY: Record<string, { title: string; hint?: string }> = 
   },
   NOTE_REQUIRED: { title: 'Say in the note how you did it by hand' },
   BAD_NOTE: { title: 'The note is too long', hint: 'At most 1000 characters.' },
-  BAD_NOTICE: { title: 'The notice is too long', hint: 'At most 2000 characters.' },
+  BAD_NOTICE: { title: 'The notice is too long', hint: 'At most 500 characters.' },
+  NEW_ENVIRONMENT: {
+    title: 'An environment was added after the plan',
+    hint: 'It was never stopped: archive or remove it on the app page first.'
+  },
+  MAINTENANCE_NOT_LIVE: {
+    title: 'The app does not report its maintenance on yet',
+    hint: 'Nothing was copied. Retry in a moment, or Undo the freeze and freeze again.'
+  },
+  EXPORT_UNVERIFIED: {
+    title: 'A backup is not verified or not complete',
+    hint: 'The retirement needs a verified database backup and a complete files set.'
+  },
+  EXPORT_CHANGED: {
+    title: 'A backup the export made is gone or changed',
+    hint: 'Nothing was removed. Make the backup again on Backups & data, then Retry.'
+  },
+  SKIP_NOT_ALLOWED: {
+    title: 'That part can be backed up',
+    hint: 'Only a part the Hub cannot back up may be skipped.'
+  },
+  OWN_SESSION_REQUIRED: {
+    title: 'Only on your own session',
+    hint: 'Keeping a role’s administrator access needs an administrator signed in themselves.'
+  },
+  FREEZE_OWNED: {
+    title: 'This freeze belongs to a retirement',
+    hint: 'It ends when the retirement is cancelled or archived.'
+  },
   EXPORT_INCOMPLETE: {
     title: 'Some parts cannot be backed up',
     hint: 'Set them up on Backups & data, or skip them with a reason.'

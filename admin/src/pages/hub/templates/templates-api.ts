@@ -36,6 +36,8 @@ export interface TemplateReview {
   virtual_removed: string[]
   transition_actions: number
   rules: number
+  /** Roles that had administrator access on the source (they arrive without it unless kept). */
+  admin_roles?: Array<{ id: string; name: string }>
 }
 
 /** The largest export the library takes (the Hub stores at most 8 MB). */

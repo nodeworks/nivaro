@@ -52,7 +52,21 @@ const reads = new Map<number, number>()
 const readDataRun = vi.fn(async (id: number) => {
   const n = (reads.get(id) ?? 0) + 1
   reads.set(id, n)
-  return { status: n === 1 ? 'running' : 'done', error: null }
+  // A verified database backup and a complete files set (review M5), the same facts each read.
+  return n === 1
+    ? { status: 'running', error: null }
+    : {
+        status: 'done',
+        error: null,
+        steps: [{ key: 'verify', state: 'done' }],
+        artifact: {
+          file: `/bak/${id}.bak`,
+          size_bytes: 1000 + id,
+          finished_at: 'f',
+          set: `set-${id}`
+        },
+        result: { state: 'done', total: 3, copied: 3, failed: 0, too_large: 0, bytes: 99 }
+      }
 })
 const removeStack = vi.fn(async () => 'removed' as const)
 const deliver = vi.fn(
@@ -60,8 +74,10 @@ const deliver = vi.fn(
     ids.length
 )
 const recipients = vi.fn(async () => ({ team: ['admin-1'], people: ['person-9'] }))
+const linkMaintenance = vi.fn(async () => true as boolean | null)
 const deps = {
   maintenance,
+  linkMaintenance,
   startDbBackup,
   startFilesBackup,
   readDataRun,
@@ -263,11 +279,50 @@ describe('steps, undo and cancel', () => {
         { environment_id: 1, what: 'files' }
       ]
     }
-    await expectCode(run.startStep(retId, 'export', skip, ADMIN, deps), 'REASON_REQUIRED')
+    // Review M5: a part the Hub CAN back up is never skipped.
+    await expectCode(
+      run.startStep(
+        retId,
+        'export',
+        {
+          skip: [...skip.skip, { environment_id: 2, what: 'db' }],
+          reason: 'not needed at all',
+          skip_confirm: 'shop'
+        },
+        ADMIN,
+        deps
+      ),
+      'SKIP_NOT_ALLOWED'
+    )
+    await expectCode(
+      run.startStep(retId, 'export', { ...skip, skip_confirm: 'shop' }, ADMIN, deps),
+      'REASON_REQUIRED'
+    )
+    await expectCode(
+      run.startStep(
+        retId,
+        'export',
+        { ...skip, reason: 'staging holds test data only' },
+        ADMIN,
+        deps
+      ),
+      'CONFIRM_REQUIRED'
+    )
+    // Review M6: a linked app that does not report its maintenance on stops the export.
+    linkMaintenance.mockResolvedValueOnce(false)
     await run.startStep(
       retId,
       'export',
-      { ...skip, reason: 'staging holds test data only' },
+      { ...skip, reason: 'staging holds test data only', skip_confirm: 'shop' },
+      ADMIN,
+      deps
+    )
+    expect(store.stepOf(await current(), 'export')).toMatchObject({ state: 'failed' })
+    expect(String(store.stepOf(await current(), 'export').note)).toContain('maintenance on')
+    await run.startStep(
+      retId,
+      'export',
+      { ...skip, reason: 'staging holds test data only', skip_confirm: 'shop' },
       ADMIN,
       deps
     )
@@ -278,6 +333,7 @@ describe('steps, undo and cancel', () => {
     const envs = s.detail.envs as Record<string, Record<string, unknown>>
     expect(envs['1']).toMatchObject({ db: 'skipped', files: 'skipped' })
     expect(envs['2']).toMatchObject({ db: 'done', files: 'done', db_run: 101, files_run: 102 })
+    expect((envs['2'].db_fact as { fingerprint: string }).fingerprint).toMatch(/^[0-9a-f]{32}$/)
   })
 
   it('notice: to the team and the people who signed in; on the maintenance page', async () => {
@@ -324,7 +380,8 @@ describe('steps, undo and cancel', () => {
         { environment_id: 1, what: 'db' },
         { environment_id: 1, what: 'files' }
       ],
-      reason: 'staging holds test data only'
+      reason: 'staging holds test data only',
+      skip_confirm: 'shop'
     }
     await run.startStep(retId, 'export', skip, ADMIN, deps)
     await run.startStep(retId, 'notice', { notice: 'Shop closes today.' }, ADMIN, deps)
@@ -508,5 +565,123 @@ describe('a retiring app’s freeze never holds back its shared deployment', () 
     await db('nivaro_hub_freezes').insert({ ...freeze, id: 951, name: 'Quarter end' })
     expect((await sharedFreezeRefusal(9))?.code).toBe('FROZEN')
     await db('nivaro_hub_freezes').whereIn('id', [950, 951]).delete()
+  })
+})
+
+describe('review round: one open retirement, cancel from interrupted, export re-check', () => {
+  beforeAll(async () => {
+    await db('nivaro_hub_apps').insert({ id: 3, key: 'desk', name: 'Desk' })
+    await db('nivaro_hub_environments').insert({
+      id: 30,
+      app_id: 3,
+      key: 'production',
+      position: 0,
+      status: 'active',
+      base_url: 'https://desk.test',
+      hub_token: 'sealed',
+      db_ref: 'hub-db:9'
+    })
+    await db('nivaro_hub_backup_policies').insert({
+      environment_id: 30,
+      files_target: JSON.stringify({ kind: 'dir', path: '/srv/backups' })
+    })
+  })
+
+  it('a double-click opens one retirement; the other is refused RETIRE_OPEN', async () => {
+    const p = await plan.retirePlan(3)
+    const out = await Promise.allSettled([
+      run.openRetirement(3, { plan_hash: p.plan_hash }, ADMIN),
+      run.openRetirement(3, { plan_hash: p.plan_hash }, ADMIN)
+    ])
+    expect(out.filter((o) => o.status === 'fulfilled')).toHaveLength(1)
+    const lost = out.find((o) => o.status === 'rejected') as PromiseRejectedResult
+    expect(lost.reason).toMatchObject({ code: expect.stringMatching(/RETIRE_OPEN|PLAN_BLOCKED/) })
+    const open = await db('nivaro_hub_retirements')
+      .where({ app_id: 3 })
+      .whereIn('status', ['open', 'running', 'interrupted'])
+    expect(open).toHaveLength(1)
+    retId = Number(open[0].id)
+  })
+
+  it('an interrupted retirement is cancelled without any gate, lifting maintenance and freeze', async () => {
+    await run.startStep(retId, 'freeze', { confirm: 'desk' }, ADMIN, deps)
+    await db('nivaro_hub_retirements')
+      .where({ id: retId })
+      .update({ status: 'interrupted', step: 'export' })
+    // An incident freeze would stop a forward step — never the way back.
+    const now = Date.now()
+    await db('nivaro_hub_freezes').insert({
+      id: 960,
+      app_id: 3,
+      name: 'Incident',
+      source: 'incident:9',
+      recurrence: 'none',
+      starts_at: new Date(now - 60_000),
+      ends_at: new Date(now + 3600_000)
+    })
+    maintenance.mockClear()
+    await run.cancelRetirement(retId, ADMIN, deps, 'Owner changed their mind')
+    const r = await current()
+    expect(r.status).toBe('cancelled')
+    expect(r.error).toBe('Cancelled: Owner changed their mind')
+    expect(maintenance.mock.calls.map((c) => [c[0].id, c[1]])).toEqual([[30, false]])
+    const live = await db('nivaro_hub_freezes')
+      .where({ source: `retire:${retId}` })
+      .where('ends_at', '>', new Date())
+    expect(live).toHaveLength(0)
+    await db('nivaro_hub_freezes').where({ id: 960 }).delete()
+    // The app's claim is free again: a new retirement opens.
+    const p = await plan.retirePlan(3)
+    retId = (await run.openRetirement(3, { plan_hash: p.plan_hash }, ADMIN)).id
+  })
+
+  it('a backup that changed after the export refuses the removal; a new environment the archive', async () => {
+    await run.startStep(retId, 'freeze', { confirm: 'desk' }, ADMIN, deps)
+    await run.startStep(retId, 'export', {}, ADMIN, deps)
+    await run.startStep(retId, 'notice', {}, ADMIN, deps)
+    const changed = {
+      ...deps,
+      readDataRun: vi.fn(async () => ({
+        status: 'done',
+        error: null,
+        steps: [{ key: 'verify', state: 'done' }],
+        artifact: { file: '/bak/x.bak', size_bytes: 1, finished_at: 'f', deleted_at: 'yesterday' },
+        result: { state: 'done', total: 3, copied: 3, failed: 0, too_large: 0, bytes: 99 }
+      }))
+    }
+    await run.startStep(
+      retId,
+      'remove',
+      { confirm: 'desk', manual: [30], note: 'Stopped by hand' },
+      ADMIN,
+      changed
+    )
+    const failed = store.stepOf(await current(), 'remove')
+    expect(failed.state).toBe('failed')
+    expect(failed.note).toContain('gone or changed')
+    expect((await db('nivaro_hub_environments').where({ id: 30 }).first('status')).status).toBe(
+      'active'
+    )
+    // With the backups intact the removal goes; then an environment added since blocks archive.
+    await run.startStep(
+      retId,
+      'remove',
+      { confirm: 'desk', manual: [30], note: 'Stopped by hand' },
+      ADMIN,
+      deps
+    )
+    expect(store.stepOf(await current(), 'remove').state).toBe('done')
+    await db('nivaro_hub_environments').insert({
+      id: 31,
+      app_id: 3,
+      key: 'dr',
+      position: 1,
+      status: 'active',
+      base_url: 'https://dr.desk.test'
+    })
+    await expectCode(run.startStep(retId, 'archive', {}, ADMIN, deps), 'NEW_ENVIRONMENT')
+    await db('nivaro_hub_environments').where({ id: 31 }).delete()
+    await run.startStep(retId, 'archive', {}, ADMIN, deps)
+    expect((await current()).status).toBe('done')
   })
 })

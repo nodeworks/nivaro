@@ -338,8 +338,10 @@ export function undoableStep(r: Pick<Retirement, 'steps'>): RetireStep | null {
     return s.state !== 'pending' || s.signed_off_at != null
   })
   if (removeStarted) return null
+  // A step left half-way (interrupted or failed) is taken back first; then the last done one.
+  const partial = r.steps.find((s) => s.state === 'interrupted' || s.state === 'failed')
   const done = r.steps.filter((s) => s.state === 'done')
-  const last = done[done.length - 1]
+  const last = partial ?? done[done.length - 1]
   if (!last) return null
   return RETIRE_STEPS.find((d) => d.key === last.key)?.reversible ? last : null
 }

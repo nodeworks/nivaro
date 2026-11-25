@@ -424,6 +424,38 @@ describe('scrubber', () => {
   })
 })
 
+describe('installer: roles with administrator access (review M2)', () => {
+  const role = (id: string, name: string) => ({
+    role: { id, name, admin_access: true, app_access: true },
+    policies: []
+  })
+  const install = async (roles: NonNullable<Blueprint['roles']>, keep?: string[]) => {
+    const b = sanitizeBlueprint({ ...bp(), roles }).blueprint
+    b.collections = []
+    b.workflows = []
+    b.flows = []
+    return installBlueprint(b, null, keep ? { keepAdminRoles: keep } : {})
+  }
+
+  it('the review names them; they arrive without admin access unless kept', async () => {
+    const a = 'bbbbbbbb-1111-4111-8111-000000000001'
+    const k = 'bbbbbbbb-1111-4111-8111-000000000002'
+    const { review } = sanitizeBlueprint({ ...bp(), roles: [role(a, 'Regional Admins')] })
+    expect(review.admin_roles).toEqual([{ id: a, name: 'Regional Admins' }])
+    const r1 = await install([role(a, 'Regional Admins')])
+    expect(r1.roles_admin_removed).toEqual(['Regional Admins'])
+    const r2 = await install([role(k, 'Owners')], [k])
+    expect(r2.roles_admin_removed).toBeUndefined()
+    const rows = await db('nivaro_roles')
+      .whereIn('id', [a, k])
+      .select('id', 'admin_access', 'app_access')
+    const by = new Map(rows.map((r) => [r.id, r]))
+    expect(Number(by.get(a)?.admin_access)).toBe(0)
+    expect(Number(by.get(k)?.admin_access)).toBe(1)
+    expect(Number(by.get(a)?.app_access)).toBe(1)
+  })
+})
+
 describe('installer: a cloned webhook flow', () => {
   it('arrives with bearer auth and a fresh random secret, inactive', async () => {
     const id = '44444444-3333-4444-8555-666666666666'

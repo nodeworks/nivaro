@@ -108,6 +108,11 @@ export interface SanitizeReview {
   /** Transition actions and rules the template carries (run on the app once installed). */
   transition_actions: number
   rules: number
+  /**
+   * Hub review M2: roles that had administrator access on the source. They are installed WITHOUT
+   * it unless the install names them in `keepAdminRoles` (an administrator ticked it).
+   */
+  admin_roles?: Array<{ id: string; name: string }>
 }
 
 export interface SanitizeResult {
@@ -311,7 +316,9 @@ export function sanitizeBlueprint(bp: Blueprint): SanitizeResult {
 
   // Hub enhancement 46: roles (with policies on the blueprint's own collections, plus reads of
   // the system directory tables a working app needs) and flows (always inactive).
-  const roles = sanitizeRoles(bp.roles, keep, refuse, inside)
+  const roles = sanitizeRoles(bp.roles, keep, refuse, inside, (admin) => {
+    review.admin_roles = admin
+  })
   const flows = sanitizeFlows(bp.flows, keep, refuse)
 
   const pts = arr(bp.payload_templates, 'payload templates')
@@ -350,12 +357,14 @@ function sanitizeRoles(
   v: unknown,
   keep: Keep,
   refuse: (why: string) => void,
-  inside: (c: unknown) => boolean
+  inside: (c: unknown) => boolean,
+  onAdmin: (roles: Array<{ id: string; name: string }>) => void = () => undefined
 ): Blueprint['roles'] | undefined {
   if (v === undefined || v === null) return undefined
   const list = rows(v, 'roles')
   cap(list.length, TEMPLATE_CAPS.roles, 'roles')
   const out: NonNullable<Blueprint['roles']> = []
+  const adminRoles: Array<{ id: string; name: string }> = []
   let policyCount = 0
   for (const r of list) {
     const role = isObj(r.role) ? r.role : null
@@ -377,10 +386,14 @@ function sanitizeRoles(
       })
       .map((p) => ({ ...keep('policies', p), role: id }))
     out.push({ role: keep('roles', role), policies: kept })
+    if (truthyFlag(role.admin_access)) adminRoles.push({ id, name })
   }
   cap(policyCount, TEMPLATE_CAPS.policies, 'policies')
+  if (adminRoles.length) onAdmin(adminRoles)
   return out
 }
+
+const truthyFlag = (v: unknown) => v === true || v === 1 || v === '1' || v === 'true'
 
 function sanitizeFlows(
   v: unknown,
@@ -432,6 +445,13 @@ export function reviewNotes(r: SanitizeReview | null | undefined): string[] {
   const stripped = Object.keys(r.stripped)
   if (stripped.length)
     out.push(`Settings removed (not allowed in a template): ${stripped.slice(0, 8).join(', ')}.`)
+  if (r.admin_roles?.length)
+    out.push(
+      `Roles with administrator access arrive without it unless kept on purpose: ${r.admin_roles
+        .slice(0, 5)
+        .map((a) => a.name)
+        .join(', ')}.`
+    )
   if (r.refused.length)
     out.push(
       `Left out (outside the template's own collections): ${r.refused.slice(0, 5).join('; ')}.`

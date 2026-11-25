@@ -18,6 +18,7 @@
 //            stopped it; each environment `suspended`. No undo.
 //   archive  every environment `archived`, the app marked retired (archived_at), the freeze
 //            ended: every start refuses the archived app with ENV_ARCHIVED from here on.
+import { createHash } from 'node:crypto'
 import { insertReturningId } from '../../../db/dialect/ef.js'
 import { db } from '../../../db/index.js'
 import { getApp } from '../../io-holder.js'
@@ -35,7 +36,19 @@ export const EXPORT_DEADLINE_MS = 24 * 3600_000
 
 export const retireFreezeSource = (id: number) => `retire:${id}`
 
-export type DataRunEnd = { status: string; error: string | null } | null
+export type DataRunEnd = {
+  status: string
+  error: string | null
+  /** The data run's steps (the database backup's `verify` must be done, never skipped). */
+  steps?: Array<{ key: string; state: string }>
+  artifact?: Record<string, unknown> | null
+  result?: Record<string, unknown> | null
+} | null
+
+/** How long writes may still land after maintenance goes on (review M6): one hub-link replica
+ *  refresh (the move waits 16 s, ruling R14), or a shared deployment's tenant refresh + 5 s. */
+export const SETTLE_DEDICATED_MS = 16_000
+export const SETTLE_SHARED_MS = 30_000 + 5_000
 
 export interface RetireDeps {
   /** Strict maintenance on / off over a dedicated app's hub link (message shown on the page). */
@@ -43,6 +56,8 @@ export interface RetireDeps {
   startDbBackup?: (envId: number, by: string | null) => Promise<number>
   startFilesBackup?: (envId: number, by: string | null) => Promise<number>
   readDataRun?: (id: number) => Promise<DataRunEnd>
+  /** Whether a dedicated app reports its maintenance on (its hub link status). */
+  linkMaintenance?: (envId: number) => Promise<boolean | null>
   /** Removes an environment's Docker stack (volumes kept). */
   removeStack?: (envId: number) => Promise<'removed' | 'absent' | 'not_ours' | 'locked'>
   deliver?: (ids: string[], notice: HubNotice) => Promise<number>
@@ -102,6 +117,21 @@ async function linkMaintenance(env: { id: number }, on: boolean, message: string
     on,
     ...(on && message ? { message: message.slice(0, 500) } : {})
   })
+}
+
+/** The app's own word on its maintenance (hub link status), null when it cannot be read. */
+async function defaultLinkMaintenance(envId: number): Promise<boolean | null> {
+  const e = (await db('nivaro_hub_environments')
+    .where({ id: envId })
+    .first('base_url', 'hub_token')) as { base_url: string; hub_token: string | null } | undefined
+  if (!e) return null
+  try {
+    const { hubLinkClient } = await import('../move/link-client.js')
+    return (await hubLinkClient(String(e.base_url ?? ''), openSecret(e.hub_token ?? null)).status())
+      .maintenance
+  } catch {
+    return null
+  }
 }
 
 async function defaultRemoveStack(envId: number) {
@@ -174,7 +204,9 @@ export function resolvedDeps(
     maintenance: d.maintenance ?? linkMaintenance,
     startDbBackup:
       d.startDbBackup ??
-      (async (envId, by) => (await import('../data/backup.js')).startDbBackup(envId, { by })),
+      // Review M5: a retirement's database backup is always verified, whatever the policy says.
+      (async (envId, by) =>
+        (await import('../data/backup.js')).startDbBackup(envId, { by, verify: true })),
     startFilesBackup:
       d.startFilesBackup ??
       (async (envId, by) =>
@@ -183,8 +215,17 @@ export function resolvedDeps(
       d.readDataRun ??
       (async (id) => {
         const r = await (await import('../data/runs.js')).readRun(id)
-        return r ? { status: r.status, error: r.error } : null
+        return r
+          ? {
+              status: r.status,
+              error: r.error,
+              steps: r.steps.map((s) => ({ key: s.key, state: s.state })),
+              artifact: r.artifact,
+              result: r.result
+            }
+          : null
       }),
+    linkMaintenance: d.linkMaintenance ?? defaultLinkMaintenance,
     removeStack: d.removeStack ?? defaultRemoveStack,
     deliver: d.deliver ?? ((ids, notice) => deliverHubNotice(ids, notice)),
     recipients: d.recipients ?? defaultRecipients,
@@ -237,7 +278,7 @@ const freezeStep: StepBody = async (ctx) => {
     if (envs[e.id]?.done) continue
     if (e.freeze === 'link') {
       await d.maintenance({ id: e.id }, true, message)
-      envs[e.id] = { how: 'link', done: true }
+      envs[e.id] = { how: 'link', done: true, frozen_at: d.now().toISOString() }
     } else if (e.freeze === 'status') {
       const row = (await db('nivaro_hub_environments').where({ id: e.id }).first('status')) as
         | { status: string }
@@ -247,7 +288,12 @@ const freezeStep: StepBody = async (ctx) => {
         await db('nivaro_hub_environments')
           .where({ id: e.id })
           .update({ status: 'maintenance', updated_at: at })
-      envs[e.id] = { how: 'status', prev: prev === 'maintenance' ? e.status : prev, done: true }
+      envs[e.id] = {
+        how: 'status',
+        prev: prev === 'maintenance' ? e.status : prev,
+        done: true,
+        frozen_at: d.now().toISOString()
+      }
     } else if (e.freeze === 'manual') {
       if (!manual.includes(e.id))
         throw new RetireError('MANUAL_NEEDED', `${e.key}: confirm that you put it in maintenance.`)
@@ -325,6 +371,25 @@ const exportStep: StepBody = async (ctx) => {
     }
     detail.attempt = ctx.input.attempt ?? null
   }
+  // Review M6: the freeze must have reached every replica (or the shared deployment) before the
+  // final copy starts, and a dedicated app must say itself that its maintenance is on.
+  const frozenEnvs = envMap(stepDetail(ctx.ret, 'freeze').envs)
+  for (const e of ctx.plan.environments) {
+    const f = frozenEnvs[e.id]
+    if (!f?.done || (f.how !== 'link' && f.how !== 'status')) continue
+    const at = Date.parse(String(f.frozen_at ?? ''))
+    const settle = f.how === 'link' ? SETTLE_DEDICATED_MS : SETTLE_SHARED_MS
+    const wait = Number.isFinite(at) ? at + settle - d.now().getTime() : settle
+    if (wait > 0) await d.sleep(wait)
+    if (f.how === 'link') {
+      const on = await d.linkMaintenance(e.id)
+      if (on !== true)
+        throw new RetireError(
+          'MAINTENANCE_NOT_LIVE',
+          `${e.key} does not report its maintenance on (${on === null ? 'its hub link did not answer' : 'it says it is off'}): nothing was copied. Retry, or Undo the freeze and freeze again.`
+        )
+    }
+  }
   const started = d.now().getTime()
   const parts: Array<{ env: RetireEnvPlan; what: 'db' | 'files' }> = []
   for (const e of ctx.plan.environments)
@@ -345,7 +410,17 @@ const exportStep: StepBody = async (ctx) => {
       const runId = Number(v[runKey(what)] ?? 0)
       const run = runId ? await d.readDataRun(runId) : null
       if (run?.status === 'done') {
+        // Review M5: only a verified database backup and a complete files set count.
+        const fact = verifiedPart(what, run)
+        if (!fact)
+          throw new RetireError(
+            'EXPORT_UNVERIFIED',
+            what === 'db'
+              ? `${env.key}: the database backup was not verified (RESTORE VERIFYONLY did not run). Retry makes a verified one.`
+              : `${env.key}: the files backup is incomplete (some files failed to copy). Fix it on Backups & data, then Retry.`
+          )
         v[stateKey(what)] = 'done'
+        v[`${what}_fact`] = fact
       } else if (run && !ENDED_BAD.has(run.status)) {
         v[stateKey(what)] = 'running'
         waiting = true
@@ -418,7 +493,15 @@ const noticeStep: StepBody = async (ctx) => {
   const text = String(ctx.input.notice ?? ctx.ret.notice ?? '').trim() || defaultNotice(ctx.plan)
   detail.text = text
   const envIds = ctx.plan.environments.map((e) => e.id)
+  // Review L7: marked before it goes out, so a resumed step never sends it twice.
+  if (detail.sending_at && !detail.sent_at) {
+    detail.sent_at = detail.sending_at
+    detail.resent = false
+    await ctx.save(detail)
+  }
   if (!detail.sent_at) {
+    detail.sending_at = d.now().toISOString()
+    await ctx.save(detail)
     const { team, people } = await d.recipients(ctx.plan.app.id, envIds)
     const base = {
       subject: `${ctx.plan.app.name} is being retired`,
@@ -480,6 +563,9 @@ const removeStep: StepBody = async (ctx) => {
   const detail = { ...ctx.detail }
   const envs = envMap(detail.envs)
   const manual = numList(ctx.input.manual)
+  // Review M5: every backup the export made must still be there, unchanged, before anything
+  // is removed (a retention, a delete on Backups & data, or a new run would show here).
+  if (!Object.keys(envs).length) await recheckExport(ctx, d)
   for (const e of ctx.plan.environments) {
     if (envs[e.id]?.done) continue
     const at = d.now()
@@ -527,10 +613,13 @@ const removeStep: StepBody = async (ctx) => {
 const archiveStep: StepBody = async (ctx) => {
   const d = resolvedDeps(ctx.deps)
   const at = d.now()
-  await db('nivaro_hub_environments')
-    .where({ app_id: ctx.plan.app.id })
-    .whereNot({ status: 'archived' })
-    .update({ status: 'archived', updated_at: at })
+  const planned = ctx.plan.environments.map((e) => e.id)
+  if (planned.length)
+    await db('nivaro_hub_environments')
+      .where({ app_id: ctx.plan.app.id })
+      .whereIn('id', planned)
+      .whereNot({ status: 'archived' })
+      .update({ status: 'archived', updated_at: at })
   await db('nivaro_hub_apps')
     .where({ id: ctx.plan.app.id })
     .update({
@@ -545,6 +634,63 @@ const archiveStep: StepBody = async (ctx) => {
     .where('ends_at', '>', at)
     .update({ ends_at: at, updated_at: at })
   return `${ctx.plan.app.name} is retired: its environments are archived, and every deploy, move, scale or restart of it is refused.`
+}
+
+function stepDetail(r: Retirement, key: RetireStepKey): Record<string, unknown> {
+  return r.steps.find((s) => s.key === key)?.detail ?? {}
+}
+
+/** The facts a verified part is checked against again at removal, or null (not verified). */
+export function verifiedPart(
+  what: 'db' | 'files',
+  run: NonNullable<DataRunEnd>
+): Record<string, unknown> | null {
+  const a = (run.artifact ?? {}) as Record<string, unknown>
+  if (a.deleted_at) return null
+  if (what === 'db') {
+    const verify = run.steps?.find((s) => s.key === 'verify')
+    if (verify?.state !== 'done') return null
+    const fact = {
+      file: a.file ?? null,
+      size_bytes: a.size_bytes ?? null,
+      finished_at: a.finished_at ?? null
+    }
+    return { ...fact, fingerprint: fingerprint(fact) }
+  }
+  const st = (run.result ?? a.counts ?? null) as Record<string, unknown> | null
+  const n = (x: unknown) => (typeof x === 'number' ? x : -1)
+  if (
+    !st ||
+    st.state !== 'done' ||
+    n(st.failed) !== 0 ||
+    n(st.copied) < n(st.total) - Math.max(0, n(st.too_large))
+  )
+    return null
+  const fact = { set: a.set ?? null, total: n(st.total), copied: n(st.copied), bytes: n(st.bytes) }
+  return { ...fact, fingerprint: fingerprint(fact) }
+}
+
+function fingerprint(o: Record<string, unknown>): string {
+  return createHash('sha256').update(JSON.stringify(o)).digest('hex').slice(0, 32)
+}
+
+async function recheckExport(ctx: StepCtx, d: ReturnType<typeof resolvedDeps>): Promise<void> {
+  const exported = envMap(stepDetail(ctx.ret, 'export').envs)
+  for (const e of ctx.plan.environments) {
+    const v = exported[e.id] ?? {}
+    for (const what of ['db', 'files'] as const) {
+      if (v[what] === 'skipped') continue
+      const runId = Number(v[what === 'db' ? 'db_run' : 'files_run'] ?? 0)
+      const before = (v[`${what}_fact`] ?? null) as { fingerprint?: unknown } | null
+      const run = runId ? await d.readDataRun(runId) : null
+      const now = run && run.status === 'done' ? verifiedPart(what, run) : null
+      if (!before || !now || now.fingerprint !== before.fingerprint)
+        throw new RetireError(
+          'EXPORT_CHANGED',
+          `${e.key}: the ${what === 'db' ? 'database' : 'files'} backup the export made is gone or changed since. Nothing was removed — Undo is closed from here, so run the export again by hand on Backups & data and keep it, then Retry.`
+        )
+    }
+  }
 }
 
 export const STEP_BODIES: Record<RetireStepKey, StepBody> = {

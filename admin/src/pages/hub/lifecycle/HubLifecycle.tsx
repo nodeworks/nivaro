@@ -705,7 +705,7 @@ function RetirePlanPanel({ onOpened }: { onOpened: (id: number) => void }) {
                 <Textarea
                   id='lc-retire-notice'
                   value={notice}
-                  maxLength={2000}
+                  maxLength={500}
                   rows={3}
                   onChange={(e) => setNotice(e.target.value)}
                   placeholder={`${p.app.name} is being retired. It no longer takes changes and will be switched off.`}
@@ -803,7 +803,7 @@ function RetirementDetail({ id, isAdmin }: { id: number; isAdmin: boolean }) {
                 <RotateCcw className='mr-1.5 h-3.5 w-3.5' aria-hidden /> Resume
               </Button>
             )}
-            {r.status === 'open' && undo && (
+            {r.status !== 'running' && undo && (
               <Button
                 size='sm'
                 variant='outline'
@@ -814,7 +814,7 @@ function RetirementDetail({ id, isAdmin }: { id: number; isAdmin: boolean }) {
                 <Undo2 className='mr-1.5 h-3.5 w-3.5' aria-hidden /> Undo “{undo.label}”
               </Button>
             )}
-            {r.status === 'open' && r.cancellable && (
+            {r.status !== 'running' && r.cancellable && (
               <ConfirmButton
                 onConfirm={() => act.mutate('cancel')}
                 confirmLabel={
@@ -926,13 +926,14 @@ function SignOffForm({
   const [note, setNote] = useState('')
   const [confirm, setConfirm] = useState('')
   const [manual, setManual] = useState<number[]>([])
-  const [skips, setSkips] = useState<Array<{ environment_id: number; what: 'db' | 'files' }>>(() =>
+  const [skips] = useState<Array<{ environment_id: number; what: 'db' | 'files' }>>(() =>
     envs.flatMap((e) => [
       ...(!e.database ? [{ environment_id: e.id, what: 'db' as const }] : []),
       ...(!e.files_target ? [{ environment_id: e.id, what: 'files' as const }] : [])
     ])
   )
   const [reason, setReason] = useState('')
+  const [skipConfirm, setSkipConfirm] = useState('')
   const [notice, setNotice] = useState(r.notice ?? '')
   const [lists, setLists] = useState<
     Record<number, { required: boolean; ready: boolean; runId: number | null }>
@@ -956,6 +957,7 @@ function SignOffForm({
       if (stepKey === 'export') {
         body.skip = skips
         if (reason.trim()) body.reason = reason.trim()
+        if (skips.length) body.skip_confirm = skipConfirm
       }
       if (stepKey === 'notice' && notice.trim()) body.notice = notice.trim()
       if (firstStep) {
@@ -990,20 +992,14 @@ function SignOffForm({
     [prodEnvs, onList]
   )
   const missingManual = manualEnvs.some((e) => !manual.includes(e.id))
-  const isSkipped = (envId: number, what: 'db' | 'files') =>
-    skips.some((s) => s.environment_id === envId && s.what === what)
-  const toggleSkip = (envId: number, what: 'db' | 'files', on: boolean) =>
-    setSkips((cur) =>
-      on
-        ? [...cur, { environment_id: envId, what }]
-        : cur.filter((s) => !(s.environment_id === envId && s.what === what))
-    )
   const disabled =
     start.isPending ||
     (needsConfirm && confirm !== appKey) ||
     missingManual ||
     (manualEnvs.length > 0 && !note.trim()) ||
-    (stepKey === 'export' && skips.length > 0 && reason.trim().length < 10) ||
+    (stepKey === 'export' &&
+      skips.length > 0 &&
+      (reason.trim().length < 10 || skipConfirm !== appKey)) ||
     checklistBlocks
 
   const guarded = !!plan?.production && (stepKey === 'freeze' || stepKey === 'remove')
@@ -1037,40 +1033,49 @@ function SignOffForm({
               </span>
               {(['db', 'files'] as const).map((what) => {
                 const can = what === 'db' ? e.database : e.files_target
-                const id = `lc-skip-${e.id}-${what}`
+                const word = what === 'db' ? 'Database' : 'Files'
+                // Review M5: what the Hub can back up is always backed up and verified; only what
+                // it cannot is skipped, with a reason and the typed app key.
                 return (
-                  <label
+                  <span
                     key={what}
-                    htmlFor={id}
-                    className='inline-flex items-center gap-1.5 text-slate-700 dark:text-slate-200'
-                  >
-                    <Checkbox
-                      id={id}
-                      checked={isSkipped(e.id, what)}
-                      disabled={!can}
-                      onCheckedChange={(v) => toggleSkip(e.id, what, v === true)}
-                    />
-                    Skip {what === 'db' ? 'database' : 'files'}
-                    {!can && (
-                      <span className='text-slate-500 dark:text-muted-foreground'>
-                        ({what === 'db' ? 'no database record' : 'no files target'})
-                      </span>
+                    className={cn(
+                      'inline-flex items-center gap-1.5',
+                      can
+                        ? 'text-slate-700 dark:text-slate-200'
+                        : 'text-amber-800 dark:text-amber-300'
                     )}
-                  </label>
+                  >
+                    {can
+                      ? `${word}: backed up and verified`
+                      : `${word}: skipped (${what === 'db' ? 'no database record' : 'no files target'})`}
+                  </span>
                 )
               })}
             </div>
           ))}
           {skips.length > 0 && (
-            <Field id='lc-skip-reason' label='Why the skipped parts need no backup'>
-              <Input
-                id='lc-skip-reason'
-                value={reason}
-                onChange={(e) => setReason(e.target.value)}
-                className='h-8 text-[13px]'
-                placeholder='For example: staging holds test data only'
-              />
-            </Field>
+            <>
+              <Field id='lc-skip-reason' label='Why the skipped parts need no backup'>
+                <Input
+                  id='lc-skip-reason'
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  className='h-8 text-[13px]'
+                  placeholder='For example: staging holds test data only'
+                />
+              </Field>
+              <Field id='lc-skip-confirm' label={`Type ${appKey} to retire it without them`}>
+                <Input
+                  id='lc-skip-confirm'
+                  value={skipConfirm}
+                  autoComplete='off'
+                  spellCheck={false}
+                  onChange={(e) => setSkipConfirm(e.target.value)}
+                  className='h-8 max-w-[320px] font-mono text-[13px]'
+                />
+              </Field>
+            </>
           )}
         </fieldset>
       )}
@@ -1083,7 +1088,7 @@ function SignOffForm({
           <Textarea
             id='lc-notice'
             value={notice}
-            maxLength={2000}
+            maxLength={500}
             rows={3}
             onChange={(e) => setNotice(e.target.value)}
             placeholder={`${plan?.app.name ?? 'The app'} is being retired. It no longer takes changes and will be switched off.`}
