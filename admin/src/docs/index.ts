@@ -55,6 +55,7 @@ export * from './sections/hub-fleet.js'
 export * from './sections/hub-ops.js'
 export * from './sections/hub-people.js'
 export * from './sections/hub-releases.js'
+export * from './sections/hub-security.js'
 export * from './sections/hub-shared.js'
 export * from './sections/hub-templates.js'
 export * from './sections/ideas.js'
@@ -345,6 +346,7 @@ import { hubFleetDocs } from './sections/hub-fleet.js'
 import { hubIssuesDocs, hubSecretsDocs, hubStorageDocs } from './sections/hub-ops.js'
 import { hubPeopleDocs } from './sections/hub-people.js'
 import { hubReleasesDocs } from './sections/hub-releases.js'
+import { hubSecurityDocs } from './sections/hub-security.js'
 import { hubMovesDocs, hubSharedDocs } from './sections/hub-shared.js'
 import { hubMcpDocs, hubTemplatesDocs } from './sections/hub-templates.js'
 import { ideasDocs } from './sections/ideas.js'
@@ -1192,7 +1194,8 @@ export const navSections: NavGroup[] = [
       hubTemplatesDocs,
       hubMcpDocs,
       hubFleetDocs,
-      hubPeopleDocs
+      hubPeopleDocs,
+      hubSecurityDocs
     ]
   },
   {
