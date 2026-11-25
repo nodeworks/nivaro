@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { db } from '../../db/index.js'
-import { appMap } from '../app-state.js'
+import { appBox, appMap } from '../app-state.js'
 import { selectInChunks, whereInList } from '../db-batch.js'
 import {
   type IssueActor,
@@ -974,27 +974,31 @@ export const RECONCILE_LOG_EVERY_MS = 10 * 60_000
 
 /** connection:project:iid → consecutive reconcile runs in which applying that issue failed. */
 const issueFailures = appMap<string, number>()
-const reconcileLog = { lastAt: 0, since: 0 }
+// Per app: one app's reconcile failures never hold back another's first line.
+const reconcileLog = appBox(() => ({ lastAt: 0, since: 0 }))
 
 /** Tests: forget held issues and the log limiter. */
 export function resetReconcileState(): void {
   issueFailures.clear()
-  reconcileLog.lastAt = 0
-  reconcileLog.since = 0
+  reconcileLog.reset()
 }
+
+/** ` (app <id>)` on a Hub shared deployment, '' self-hosted: which app a log line is about. */
+const appTag = () => (currentTenantKey() ? ` (app ${currentTenantKey()})` : '')
 
 function warn(line: string): void {
   // biome-ignore lint/suspicious/noConsole: a sync that stopped moving must show in the log
-  console.warn(`[trackers] ${line}`.slice(0, 600))
+  console.warn(`[trackers]${appTag()} ${line}`.slice(0, 600))
 }
 
 /** A failed reconcile of one connection (reconcileAll): logged at most once per 10 minutes. */
 export function noteReconcileFailure(connection: number, err: unknown, now = Date.now()): void {
-  reconcileLog.since++
-  if (reconcileLog.lastAt && now - reconcileLog.lastAt < RECONCILE_LOG_EVERY_MS) return
-  const n = reconcileLog.since
-  reconcileLog.lastAt = now
-  reconcileLog.since = 0
+  const log = reconcileLog.value
+  log.since++
+  if (log.lastAt && now - log.lastAt < RECONCILE_LOG_EVERY_MS) return
+  const n = log.since
+  log.lastAt = now
+  log.since = 0
   warn(
     `GitLab reconcile failed for connection ${connection} (${n} failure${n === 1 ? '' : 's'} since the last report): ${short(err)}`
   )

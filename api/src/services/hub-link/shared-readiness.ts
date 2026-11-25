@@ -120,20 +120,34 @@ async function countIf(
 // ─── Blockers ────────────────────────────────────────────────────────────────────────────
 
 /**
- * GitLab sync on with connections (a warning since 0.3.215; the Hub blocks a target before it).
- * When the server's ISSUE_TRACKERS=on is what switches it on, a shared deployment does not
- * apply that (each app's own switch decides there): the detail says to switch it on again.
+ * GitLab sync with connections (a warning since 0.3.215; the Hub blocks a target before it). On a
+ * shared deployment the server's ISSUE_TRACKERS is not applied and the app's own stored switch
+ * (under this process's instance key) decides, so the detail says what changes:
+ *   - on only by the server's ISSUE_TRACKERS=on: switch it on again after the move;
+ *   - off only by the server's ISSUE_TRACKERS=off while its own switch is on: sync would START
+ *     after the move and write to the real GitLab projects (review I-2): store its switch off first;
+ *   - on by its own switch under a custom NIVARO_INSTANCE: a target with another instance key
+ *     reads the switch as off (review m-6).
  */
 async function issueTrackers(): Promise<string | null> {
-  const { trackersFeature } = await import('../trackers/feature.js')
+  const { storedTrackersSwitch, trackersFeature } = await import('../trackers/feature.js')
+  const { perAppJobs } = await import('../deployment-mode.js')
   const f = await trackersFeature()
-  if (!f.enabled) return null
+  const envDecides = f.source === 'env' && !perAppJobs()
+  const startsAfter = envDecides && !f.enabled && (await storedTrackersSwitch()) === true
+  if (!f.enabled && !startsAfter) return null
   const n = await countIf('nivaro_tracker_connections')
   if (n === 0) return null
-  const on = `GitLab issue sync is on with ${plural(n, 'connection', 'connections')}`
-  const { perAppJobs } = await import('../deployment-mode.js')
-  return f.source === 'env' && !perAppJobs()
-    ? `${on}, switched on by the server's ISSUE_TRACKERS setting; switch it on again on the Issue trackers tab after the move`
+  const conns = plural(n, 'connection', 'connections')
+  if (startsAfter)
+    return `GitLab issue sync is off only by the server's ISSUE_TRACKERS=off and its own switch is on, so on the shared deployment it starts syncing ${conns} to GitLab. Store its switch off first (PUT /api/trackers/feature {"enabled": false} is allowed while the server keeps it off)`
+  const on = `GitLab issue sync is on with ${conns}`
+  if (envDecides)
+    return `${on}, switched on by the server's ISSUE_TRACKERS setting; switch it on again on the Issue trackers tab after the move`
+  const { instanceKey } = await import('../instance-key.js')
+  const key = instanceKey()
+  return !perAppJobs() && key !== 'production'
+    ? `${on}; its switch is stored for instance '${key.slice(0, 40)}', so a deployment with another NIVARO_INSTANCE reads it as off: switch it on again after the move if so`
     : on
 }
 

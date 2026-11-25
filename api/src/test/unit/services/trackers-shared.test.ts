@@ -194,10 +194,49 @@ describe('the GitLab sync switch on a Hub shared deployment', () => {
     shared()
     process.env.ISSUE_TRACKERS = 'off'
     seedApp('A', { on: true, secret: 'a' })
-    expect(await inApp('A', trackersFeature)).toEqual({ enabled: false, source: 'env' })
-    await expect(inApp('A', () => setTrackersEnabled(true, 'u1'))).rejects.toMatchObject({
-      code: 'FEATURE_LOCKED'
+    expect(await inApp('A', trackersFeature)).toEqual({
+      enabled: false,
+      source: 'env',
+      deployment: true
     })
+    // the app admin is told the deployment's operator turned it off (no server they can change)
+    await expect(inApp('A', () => setTrackersEnabled(true, 'u1'))).rejects.toMatchObject({
+      code: 'FEATURE_LOCKED',
+      message: 'Turned off for every app on this shared deployment by its operator'
+    })
+  })
+
+  it("storing an app's own switch OFF is allowed while the env keeps it off (review I-2)", async () => {
+    // a dedicated app: env off, its own stored switch on
+    process.env.ISSUE_TRACKERS = 'off'
+    seedApp('', { on: true, secret: 's' })
+    expect(await setTrackersEnabled(false, 'u1')).toEqual({ enabled: false, source: 'env' })
+    expect(JSON.parse(String(h.tables[''].nivaro_settings_overrides[0].data))).toEqual({
+      issue_trackers: { enabled: false }
+    })
+    // never on: the env lock still refuses
+    await expect(setTrackersEnabled(true, 'u1')).rejects.toMatchObject({ code: 'FEATURE_LOCKED' })
+  })
+
+  it('failure log lines name the app, and one app never holds back another (review m-7)', async () => {
+    shared()
+    const { noteEvaluationFailure, resetFailureLog } = await import(
+      '../../../services/trackers/engine.js'
+    )
+    resetFailureLog()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await inApp('A', () => noteEvaluationFailure(1, new Error('boom'), 1_000))
+      await inApp('A', () => noteEvaluationFailure(2, new Error('boom'), 2_000)) // A held back
+      await inApp('B', () => noteEvaluationFailure(1, new Error('boom'), 3_000)) // B's own first
+      const lines = warn.mock.calls.map((c) => String(c[0]))
+      expect(lines).toHaveLength(2)
+      expect(lines[0]).toMatch(/^\[trackers\] \(app A\) rule evaluation failed for issue 1/)
+      expect(lines[1]).toMatch(/^\[trackers\] \(app B\) rule evaluation failed/)
+    } finally {
+      warn.mockRestore()
+      resetFailureLog()
+    }
   })
 
   it('self-hosted keeps the env rule (on wins); Nivaro Cloud is always off', async () => {

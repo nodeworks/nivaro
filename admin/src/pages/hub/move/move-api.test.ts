@@ -97,6 +97,7 @@ describe('move copy covers every code', () => {
     expect(MOVE_WARNING_COPY.ISSUE_TRACKERS?.hint).toMatch(/Issue trackers tab/)
     // A copy of an app carries the original's Teams bot and directory registration.
     expect(MOVE_WARNING_COPY.SAME_APP_ON_DEPLOYMENT.hint).toMatch(/Teams bot/)
+    expect(MOVE_WARNING_COPY.SAME_APP_ON_DEPLOYMENT.hint).toMatch(/GitLab connections/)
   })
 
   it('an unknown code keeps the planner sentence', () => {

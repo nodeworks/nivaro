@@ -874,7 +874,7 @@ export const MOVE_WARNING_COPY: Record<string, Copy> = {
   },
   SAME_APP_ON_DEPLOYMENT: {
     title: 'Another environment of this app already runs on this deployment',
-    hint: 'Fine for development and staging next to each other; each keeps its own data and files. A copy also carries the original’s saved Teams bot and directory app registration, so it answers in Teams and syncs the directory as that app: turn the bot off on the copy if it should not.'
+    hint: 'Fine for development and staging next to each other; each keeps its own data and files. A copy also carries the original’s saved Teams bot and directory app registration, so it answers in Teams and syncs the directory as that app: turn the bot off on the copy if it should not. It also carries the original’s GitLab connections: turn issue sync off on the copy (Issue trackers tab) unless it should write to the same GitLab project.'
   },
   MULTI_NODE_VOLUMES: {
     title: 'The Docker host has more than one node',

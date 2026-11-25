@@ -1,6 +1,6 @@
 import { db } from '../db/index.js'
 import { runInBackgroundPool } from '../db/pool-context.js'
-import { isNivaroCloud } from './deployment-mode.js'
+import { isNivaroCloud, perAppJobs } from './deployment-mode.js'
 
 /**
  * The issue-write funnel. Every code path that creates an issue or bumps / changes one calls
@@ -125,6 +125,13 @@ export function noteIssueWrite(
   // never take a connection a request is waiting for (final review M6).
   void runInBackgroundPool(async () => {
     try {
+      // A Hub shared deployment has no background pool: an app with GitLab sync off (the only
+      // reader of the counters and the only listener) does no work here at all, so an error
+      // storm never doubles its statements on its small pool.
+      if (perAppJobs()) {
+        const { trackersEnabled } = await import('./trackers/feature.js')
+        if (!(await trackersEnabled())) return
+      }
       let id = issueId != null && Number.isFinite(Number(issueId)) ? Number(issueId) : null
       let fingerprint = opts.fingerprint ?? null
       // Neither id nor fingerprint: a lookup would match `fingerprint IS NULL` — the newest

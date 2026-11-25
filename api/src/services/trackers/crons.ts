@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../../db/index.js'
 import { runInBackgroundPool } from '../../db/pool-context.js'
-import { isNivaroCloud } from '../deployment-mode.js'
+import { isNivaroCloud, perAppJobs } from '../deployment-mode.js'
 import { onIssueWrite, pruneHits } from '../issue-raise.js'
 import { onTicketWrite } from '../support-ticket-events.js'
 import { currentTenantKey } from '../tenant-rooms.js'
@@ -45,13 +45,19 @@ let unsubscribeTickets: (() => void) | null = null
  * or recurred issue then goes to onRecurrence (seen-again note, fingerprint join, reopen) — after
  * the engine, so a join the engine made is seen there as an existing member.
  */
+/** A write heard outside any app on a Hub shared deployment names no database, and its per-app
+ *  queue markers would reach every app's (appSet rule): it is not evaluated. */
+const outsideApp = () => perAppJobs() && !currentTenantKey()
+
 export function subscribeEngine(): void {
   if (unsubscribe) return
   unsubscribe = onIssueWrite((e) => {
+    if (outsideApp()) return
     void runInBackgroundPool(() => handleIssueWrite(e)).catch(() => {})
   })
   // support-ticket rules: each ticket write (raised / changed) evaluates the ticket
   unsubscribeTickets = onTicketWrite((e) => {
+    if (outsideApp()) return
     void runInBackgroundPool(() => evaluateTicketQueued(e.ticketId)).catch(() => {})
   })
 }

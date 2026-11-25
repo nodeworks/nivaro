@@ -534,7 +534,7 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
   if (toShared(kind) && to.kind === 'shared' && t.siblings.length)
     add(
       'SAME_APP_ON_DEPLOYMENT',
-      `${list(t.siblings)} of this app already run${t.siblings.length === 1 ? 's' : ''} on ${to.shared.key}. Environments of one app on one deployment usually hold copied databases: their stored files and sign-ins are kept apart, but test with care. A copied app also carries the original's saved Teams bot and directory app registration, so it answers in Teams and syncs the directory as that app: turn the bot off on the copy if it should not.`
+      `${list(t.siblings)} of this app already run${t.siblings.length === 1 ? 's' : ''} on ${to.shared.key}. Environments of one app on one deployment usually hold copied databases: their stored files and sign-ins are kept apart, but test with care. A copied app also carries the original's saved Teams bot and directory app registration, so it answers in Teams and syncs the directory as that app: turn the bot off on the copy if it should not. It also carries the original's GitLab connections: turn issue sync off on the copy (Issue trackers tab) unless it should write to the same GitLab project.`
     )
   add(
     'SIGNED_LINKS_RESET',

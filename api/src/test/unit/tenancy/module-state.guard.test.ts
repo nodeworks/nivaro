@@ -61,8 +61,6 @@ const TM_ACTIONS =
 const CACHE_CFG =
   'stored cache config is never read on a multi-tenant deployment (env + defaults only)'
 const OFF_HUBSIGNIN = 'Hub sign-in is off on any multi-tenant deployment (hub-signin/config.ts)'
-const TRACKERS_LOG =
-  'GitLab sync failure-log limiter of this process (a count and a time, no app data): per app on a shared deployment since 0.3.215, one log line per process is enough'
 const OFF_PERMCACHE =
   'the permission cache is off on any multi-tenant deployment (cache-config permission.enabled)'
 const OFF_EPOCH = 'the config epoch is off on any multi-tenant deployment (config-epoch.ts ENABLED)'
@@ -1001,15 +999,13 @@ const SHARED: Record<string, string> = {
   'services/trace-export.ts :: timer': TIMER,
   // GitLab sync per app (0.3.215): the issue-write listener is registered once at boot (outside
   // any app) and each write runs in the writer's app; the per-issue queues, sweep tally, held
-  // reconcile issues and the switch cache are appSet / appMap / appBox (detected as keyed).
+  // reconcile issues, the failure-log limiters and the switch cache are appSet / appMap / appBox
+  // (detected as keyed).
   'services/trackers/crons.ts :: unsubscribe': REGISTRY,
   'services/trackers/crons.ts :: unsubscribeTickets': REGISTRY,
-  'services/trackers/engine.ts :: failureLog': TRACKERS_LOG,
   'services/trackers/flow-events.ts :: logger': APP_REF,
   'services/trackers/flow-ops.ts :: registered': REGISTRY,
   'services/trackers/inbound.ts :: lockRedis': CONN,
-  'services/trackers/inbound.ts :: reconcileLog': TRACKERS_LOG,
-  'services/trackers/outbound-sync.ts :: lastLogAt': TRACKERS_LOG,
   'services/trackers/outbox.ts :: autoSend': FN_SLOT,
   'services/traefik-source.ts :: fetchImpl': FN_SLOT,
   'services/traffic-actions/debug-window.ts :: wired': TELEMETRY,

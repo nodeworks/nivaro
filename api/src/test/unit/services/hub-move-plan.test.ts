@@ -619,6 +619,8 @@ describe('buildMovePlan — warnings', () => {
     expect(w?.text).toMatch(/Teams bot/)
     expect(w?.text).toMatch(/directory/)
     expect(w?.text).toMatch(/turn the bot off on the copy/i)
+    // ...and its GitLab connections (a staging copy would write to the production project).
+    expect(w?.text).toMatch(/GitLab connections: turn issue sync off on the copy/)
   })
 
   it('SIGN_IN_AGAIN names phone and MCP sign-ins', () => {

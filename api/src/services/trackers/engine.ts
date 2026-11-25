@@ -7,7 +7,7 @@ import { sqlDialect } from '../../db/sql-dialect.js'
 import { NIVARO_VERSION } from '../../version.js'
 import { registerAppKeyed } from '../app-forget.js'
 import { appEnvironment } from '../app-info-environment.js'
-import { appMap, appSet } from '../app-state.js'
+import { appBox, appMap, appSet } from '../app-state.js'
 import { selectInChunks, whereInList } from '../db-batch.js'
 import { groupSimilarIssues } from '../issue-groups.js'
 import { hitCounts, hitKey } from '../issue-raise.js'
@@ -1127,9 +1127,12 @@ async function issueSourceOff(rules: TrackerRule[]): Promise<Set<number>> {
 const inFlight = appSet<number>()
 const again = appSet<number>()
 
-/** At most one failure line per this long per process; the line carries the count since. */
+/** At most one failure line per this long per app; the line carries the count since. */
 export const FAILURE_LOG_EVERY_MS = 10 * 60_000
-const failureLog = { lastAt: 0, since: 0 }
+// Per app: on a Hub shared deployment one app's failures never hold back another's first line.
+const failureLog = appBox(() => ({ lastAt: 0, since: 0 }))
+/** ` (app <id>)` on a Hub shared deployment, '' self-hosted: which app a log line is about. */
+const appTag = () => (currentTenantKey() ? ` (app ${currentTenantKey()})` : '')
 
 /**
  * Log an evaluation failure, rate limited (never silenced): the first failure logs at once, later
@@ -1137,14 +1140,15 @@ const failureLog = { lastAt: 0, since: 0 }
  * never the issue log, which would feed the engine its own failures.
  */
 export function noteEvaluationFailure(issueId: number, err: unknown, now = Date.now()): void {
-  failureLog.since++
-  if (failureLog.lastAt && now - failureLog.lastAt < FAILURE_LOG_EVERY_MS) return
-  const n = failureLog.since
-  failureLog.lastAt = now
-  failureLog.since = 0
+  const log = failureLog.value
+  log.since++
+  if (log.lastAt && now - log.lastAt < FAILURE_LOG_EVERY_MS) return
+  const n = log.since
+  log.lastAt = now
+  log.since = 0
   // biome-ignore lint/suspicious/noConsole: a broken rule engine must show in the log
   console.warn(
-    `[trackers] rule evaluation failed for issue ${issueId} (${n} failure${n === 1 ? '' : 's'} since the last report): ${errText(err)}`.slice(
+    `[trackers]${appTag()} rule evaluation failed for issue ${issueId} (${n} failure${n === 1 ? '' : 's'} since the last report): ${errText(err)}`.slice(
       0,
       600
     )
@@ -1153,8 +1157,7 @@ export function noteEvaluationFailure(issueId: number, err: unknown, now = Date.
 
 /** Tests: start the failure log afresh. */
 export function resetFailureLog(): void {
-  failureLog.lastAt = 0
-  failureLog.since = 0
+  failureLog.reset()
 }
 
 /** One guarded run; false when an evaluation of this issue threw. */

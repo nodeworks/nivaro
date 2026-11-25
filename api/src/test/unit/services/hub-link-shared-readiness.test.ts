@@ -26,6 +26,7 @@ const h = vi.hoisted(() => ({
   },
   trackers: async () =>
     ({ enabled: false, source: 'default' }) as { enabled: boolean; source: string },
+  trackersStored: null as boolean | null,
   teams: false,
   teamsSource: null as string | null,
   mailRetry: false,
@@ -53,7 +54,8 @@ vi.mock('../../../db/index.js', async () => {
 })
 vi.mock('../../../config.js', () => ({ config: h.config }))
 vi.mock('../../../services/trackers/feature.js', () => ({
-  trackersFeature: () => h.trackers()
+  trackersFeature: () => h.trackers(),
+  storedTrackersSwitch: async () => h.trackersStored
 }))
 vi.mock('../../../services/teams-bot/config.js', () => ({
   getTeamsBotConfig: async () => ({ enabled: h.teams, source: h.teamsSource })
@@ -152,6 +154,7 @@ beforeEach(async () => {
   await db('nivaro_settings').insert({ id: 1, smtp_host: null, directory_sync_enabled: false })
   h.config.DB_CLIENT = 'pg'
   h.trackers = async () => ({ enabled: false, source: 'default' })
+  h.trackersStored = null
   delete process.env.HUB_SHARED_DEPLOYMENT
   h.teams = false
   h.teamsSource = null
@@ -247,6 +250,7 @@ describe('computeSharedReadiness', () => {
   })
 
   it('GitLab sync runs per app on shared (0.3.215): ISSUE_TRACKERS is a warning, env-switched says so', async () => {
+    process.env.NIVARO_INSTANCE = 'production'
     // off, or on with no connection: nothing to say
     expect(codeOf(await computeSharedReadiness(), 'ISSUE_TRACKERS')).toBeUndefined()
     h.trackers = async () => ({ enabled: true, source: 'setting' })
@@ -264,6 +268,25 @@ describe('computeSharedReadiness', () => {
     expect(env?.detail).toContain("switched on by the server's ISSUE_TRACKERS setting")
     expect(env?.detail).toContain('Issue trackers tab')
     expect(JSON.stringify(env)).not.toContain(SECRET)
+    // Review I-2: off only by the server's ISSUE_TRACKERS=off while its own switch is on — on the
+    // shared deployment its own switch decides, so sync would START there: said, as a warning.
+    h.trackers = async () => ({ enabled: false, source: 'env' })
+    h.trackersStored = true
+    const starts = codeOf(await computeSharedReadiness(), 'ISSUE_TRACKERS')
+    expect(starts?.level).toBe('warning')
+    expect(starts?.detail).toMatch(/off only by the server's ISSUE_TRACKERS=off/)
+    expect(starts?.detail).toMatch(/starts syncing 2 connections/)
+    // ...its own switch off (or none stored): stays off there, nothing to say.
+    h.trackersStored = false
+    expect(codeOf(await computeSharedReadiness(), 'ISSUE_TRACKERS')).toBeUndefined()
+    h.trackersStored = null
+    expect(codeOf(await computeSharedReadiness(), 'ISSUE_TRACKERS')).toBeUndefined()
+    // Review m-6: on by its own switch stored under a custom instance key: the detail names it.
+    h.trackers = async () => ({ enabled: true, source: 'setting' })
+    process.env.NIVARO_INSTANCE = 'east-prod'
+    expect(codeOf(await computeSharedReadiness(), 'ISSUE_TRACKERS')?.detail).toMatch(
+      /stored for instance 'east-prod'.*another NIVARO_INSTANCE reads it as off/
+    )
     // A warning that cannot be read is left out (the Hub blocks a target before 0.3.215 anyway).
     h.trackers = async () => {
       throw new Error('settings table locked')
