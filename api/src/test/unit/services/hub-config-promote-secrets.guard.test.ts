@@ -72,7 +72,9 @@ const SECRETS = [
   'DEEP-12',
   'DEEP-13',
   'DEEP-14',
-  'QUERY-15'
+  'QUERY-15',
+  'NESTED-URL-16',
+  'USERINFO-17'
 ]
 /** A key name that holds a credential (plural `tokens` is an AI token count). */
 const SECRET_KEY =
@@ -117,7 +119,10 @@ beforeAll(async () => {
         query: { api_key: 'QUERY-15', page: 1 },
         layers: [{ inner: { clientSecret: 'DEEP-12', note: 'fine' } }, { x: { bearer: 'DEEP-13' } }]
       },
-      vendor_thing: { deeper: { deepest: { sessionToken: 'DEEP-14' } } }
+      vendor_thing: { deeper: { deepest: { sessionToken: 'DEEP-14' } } },
+      // Nested outbound parts and credentials inside plain strings.
+      call: { request: { url: 'https://NESTED-URL-16.example', headers: { Authorization: 'x' } } },
+      mirrors: ['https://bob:USERINFO-17@mirror.example']
     })
   })
   await db('nivaro_external_apis').insert({
@@ -244,7 +249,9 @@ describe('readPromotionSnapshot', () => {
       api_id: 1,
       body: '{"order":"{{id}}"}',
       request: { layers: [{ inner: { note: 'fine' } }, { x: {} }] },
-      vendor_thing: { deeper: { deepest: {} } }
+      vendor_thing: { deeper: { deepest: {} } },
+      call: { request: {} },
+      mirrors: [null]
     })
     expect(
       String(answer.snapshot.tables.nivaro_payload_templates['1'].data.published_body)

@@ -1,6 +1,7 @@
 import { type ConfigSnapshot, hashRow, type SnapshotRow } from '../config-inventory.js'
 import type { EnvKeepEntry } from '../env-refresh/registry.js'
 import {
+  atPath,
   exportStepOptions,
   mergeOwn,
   newInboundAuth,
@@ -246,9 +247,10 @@ export function applyFlowKeeps(
       const own = liveOps[key]?.data
       const data = { ...row.data }
       if ('options' in data) data.options = mergeOwn(data.options, own?.options, stepTop)
-      const top = (stripped[key] ?? []).filter((k) => !k.includes('.') && !k.startsWith('('))
-      const ownTop = parseJsonObject(own?.options) ?? {}
-      const missing = top.filter((k) => !(k in ownTop))
+      // Every path the source took off (top-level or nested) that the target has no value for.
+      const paths = (stripped[key] ?? []).filter((k) => !k.startsWith('('))
+      const ownOpts = parseJsonObject(own?.options) ?? {}
+      const missing = paths.filter((k) => atPath(ownOpts, k) === undefined)
       if (missing.length) {
         const flowId = String(data.flow ?? '')
         const step = typeof data.name === 'string' ? data.name : String(data.key ?? key)

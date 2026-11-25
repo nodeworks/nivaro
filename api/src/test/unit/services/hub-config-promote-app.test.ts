@@ -601,3 +601,86 @@ describe('managed procedures through their own writer', () => {
     expect(procsRef(p.items)).toMatch(/^[0-9a-f]{64}$/)
   })
 })
+
+describe('outbound keys at every depth, embedded secrets anywhere', () => {
+  const nested = {
+    request: {
+      url: 'https://partner.example/x',
+      headers: { Authorization: 'Bearer abc123def456' }
+    },
+    method: 'POST'
+  }
+
+  it('a nested request url + headers never leaves the source — step and trigger alike', () => {
+    const step = exportStepOptions(opts(nested))
+    expect(parsed(step.options)).toEqual({ request: {}, method: 'POST' })
+    expect(step.stripped).toEqual(expect.arrayContaining(['request.url', 'request.headers']))
+    expect(parsed(exportTriggerOptions(opts({ ...nested, auth_type: 'none' })))).toEqual({
+      request: {},
+      method: 'POST'
+    })
+  })
+
+  it('the target keeps its own nested values at the same path', () => {
+    const own = opts({
+      request: { url: 'https://prod.example/x', headers: { Authorization: 'Bearer PROD9999' } },
+      list: ['https://svc:pw9@prod.example', 'plain']
+    })
+    const incoming = exportStepOptions(
+      opts({
+        request: { url: 'https://dev', timeout: 5 },
+        list: ['https://u:p@dev.example', 'plain']
+      })
+    ).options
+    expect(parsed(mergeOwn(incoming, own, stepTop))).toEqual({
+      request: {
+        timeout: 5,
+        url: 'https://prod.example/x',
+        headers: { Authorization: 'Bearer PROD9999' }
+      },
+      list: ['https://svc:pw9@prod.example', 'plain']
+    })
+  })
+
+  it('a userinfo URL deep in an array, or an auth token in any string, is stripped', () => {
+    const e = exportStepOptions(
+      opts({
+        steps: [{ calls: ['https://user:pa55@host.example/a', 'https://host.example/b'] }],
+        note: 'call with Basic dXNlcjpwYXNzMTIz please',
+        message: 'A token is needed for this'
+      })
+    )
+    expect(parsed(e.options)).toEqual({
+      steps: [{ calls: [null, 'https://host.example/b'] }],
+      message: 'A token is needed for this'
+    })
+    expect(e.stripped).toEqual(expect.arrayContaining(['steps.0.calls.0', 'note']))
+  })
+
+  it('a step that lost a nested URL the target lacks needs setup (flow lands inactive)', () => {
+    const keeps = allKeeps([])
+    const live = {
+      nivaro_flows: { f: row({ id: 'f', name: 'F', status: 'active', trigger: 'event' }) },
+      nivaro_flow_operations: {
+        s: row({ id: 's', flow: 'f', key: 'k', name: 'Call', options: opts({ request: {} }) })
+      }
+    }
+    const incoming = {
+      nivaro_flows: { f: row({ id: 'f', name: 'F', status: 'active', trigger: 'event' }) },
+      nivaro_flow_operations: {
+        s: row({ id: 's', flow: 'f', key: 'k', name: 'Call', options: opts({ request: {} }) })
+      }
+    }
+    const p = applyFlowKeeps(
+      applyTargetKeeps(incoming, keeps, live),
+      live,
+      { s: ['request.url'] },
+      {
+        sessionSecret: 'x'.repeat(40),
+        runKey: RUN
+      }
+    )
+    expect(p.tables.nivaro_flows.f.data.status).toBe('inactive')
+    expect(p.needs_setup[0].reason).toMatch(/request\.url/)
+  })
+})

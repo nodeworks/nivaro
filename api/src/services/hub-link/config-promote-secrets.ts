@@ -11,10 +11,15 @@ import { appBoundSigInput } from '../tenancy/credential-binding.js'
  *    is not). Exact `key` counts too (a query `key=…`).
  *  - SECRET_CONTAINERS: an object under one of these keys (headers, query, params, auth,
  *    credentials …) is taken off whole, at any depth: every value in it may be a credential.
- *  - deepStrip: walks every nested object and array and takes off both.
- *  - Flow step options: the TOP-LEVEL outbound part (env-refresh/flow-ops isOutboundOptionKey:
- *    URLs, endpoints, headers, auth, webhook, path override) is taken off as well — it is this
- *    environment's, and the target merges its own back (mergeOwn).
+ *  - outbound keys (env-refresh/flow-ops isOutboundOptionKey: URLs, endpoints, hosts, headers,
+ *    auth, webhook, path override) are this environment's: taken off at EVERY depth, in step AND
+ *    trigger options alike;
+ *  - embedded secrets: a string value that is a URL with userinfo (scheme://user:pass@host) or
+ *    holds an auth-scheme token (Bearer / Basic / Digest / Token / ApiKey + a token; unanchored)
+ *    is taken off wherever it sits (an array element becomes null, keeping positions);
+ *  - deepStrip: walks every nested object and array and takes off all of the above;
+ *  - the target merges its OWN values back at the same path (mergeOwn), so it keeps its own
+ *    nested URLs, headers and secrets.
  *  - Webhook trigger inbound auth (`auth_type`, `secret`, `require_timestamp`, any secret key) is
  *    ONE kept group: it never travels, and the target keeps its own. A webhook flow new on the
  *    target arrives with bearer auth and a fresh secret (newInboundAuth), never `none`.
@@ -41,6 +46,29 @@ export function isSecretKey(k: string): boolean {
   return EXACT_SECRET.has(lk) || SECRET_KEY_RE.test(lk)
 }
 
+/** A key a promotion never carries (a secret, a secret container or an outbound key), any depth. */
+export function isTakenOffKey(k: string): boolean {
+  return isSecretKey(k) || SECRET_CONTAINERS.has(k.toLowerCase()) || isOutboundOptionKey(k)
+}
+
+const URL_USERINFO = /\b[a-z][a-z0-9+.-]*:\/\/[^\s/?#@:]+(?::[^\s/?#@]*)?@/i
+const AUTH_SCHEME = /\b(?:bearer|basic|digest|token|apikey|api-key)\s+([A-Za-z0-9._~+/=-]{8,})/gi
+
+/** A token, not a word: a digit in it, mixed case and 12+ characters, or 20+ characters. */
+function tokenish(t: string): boolean {
+  if (/\d/.test(t)) return true
+  if (t.length >= 12 && /[A-Z]/.test(t) && /[a-z]/.test(t)) return true
+  return t.length >= 20
+}
+
+/** A string that carries a credential inside it (a userinfo URL, an auth-scheme token). */
+export function isEmbeddedSecret(v: unknown): boolean {
+  if (typeof v !== 'string') return false
+  if (URL_USERINFO.test(v)) return true
+  for (const m of v.matchAll(AUTH_SCHEME)) if (tokenish(m[1])) return true
+  return false
+}
+
 const isObj = (v: unknown): v is Record<string, unknown> =>
   !!v && typeof v === 'object' && !Array.isArray(v)
 
@@ -55,19 +83,40 @@ export function parseJsonObject(v: unknown): Record<string, unknown> | null {
   }
 }
 
-/** Every secret key and secret container taken off, through every nested object and array. */
+/**
+ * Every secret key, secret container, outbound key and embedded secret taken off, through every
+ * nested object and array. `found` collects the dotted paths taken off.
+ */
 export function deepStrip(v: unknown, path: string[] = [], found: string[] = []): unknown {
-  if (Array.isArray(v)) return v.map((x, i) => deepStrip(x, [...path, String(i)], found))
+  if (Array.isArray(v))
+    return v.map((x, i) => {
+      if (isEmbeddedSecret(x)) {
+        found.push([...path, String(i)].join('.'))
+        return null
+      }
+      return deepStrip(x, [...path, String(i)], found)
+    })
   if (!isObj(v)) return v
   const out: Record<string, unknown> = {}
   for (const [k, x] of Object.entries(v)) {
-    if (isSecretKey(k) || SECRET_CONTAINERS.has(k.toLowerCase())) {
+    if (isTakenOffKey(k) || isEmbeddedSecret(x)) {
       found.push([...path, k].join('.'))
       continue
     }
     out[k] = deepStrip(x, [...path, k], found)
   }
   return out
+}
+
+/** The value at a dotted path (undefined when it is not there). */
+export function atPath(v: unknown, dotted: string): unknown {
+  let cur: unknown = v
+  for (const part of dotted.split('.')) {
+    if (Array.isArray(cur)) cur = cur[Number(part)]
+    else if (isObj(cur)) cur = cur[part]
+    else return undefined
+  }
+  return cur
 }
 
 /** A JSON text / object column with deepStrip applied; not JSON = dropped (cannot be vouched for). */
@@ -86,28 +135,23 @@ export function stripJsonColumn(v: unknown, found: string[] = []): unknown {
 }
 
 /**
- * Flow step options as they leave the source: the top-level outbound part and every nested
- * secret taken off. `stripped` = the keys taken off (the target uses them to tell a step that
- * needs its own values: a URL, headers).
+ * Flow step options as they leave the source: every outbound key, secret and embedded secret
+ * taken off at every depth. `stripped` = the dotted paths taken off (the target uses them to tell
+ * a step that needs its own values: a URL, headers, a key).
  */
 export function exportStepOptions(v: unknown): { options: unknown; stripped: string[] } {
   if (v === null || v === undefined) return { options: v, stripped: [] }
   const o = parseJsonObject(v)
   if (!o) return { options: null, stripped: typeof v === 'string' && v.trim() ? ['(options)'] : [] }
   const stripped: string[] = []
-  const top: Record<string, unknown> = {}
-  for (const [k, x] of Object.entries(o)) {
-    if (isOutboundOptionKey(k)) {
-      stripped.push(k)
-      continue
-    }
-    top[k] = x
-  }
-  const out = deepStrip(top, [], stripped)
+  const out = deepStrip(o, [], stripped)
   return { options: JSON.stringify(out), stripped }
 }
 
-/** Webhook / any trigger options as they leave the source: inbound auth group + secrets off. */
+/**
+ * Trigger options as they leave the source: the inbound-auth group, and every outbound key,
+ * secret and embedded secret at every depth (exactly like step options).
+ */
 export function exportTriggerOptions(v: unknown): unknown {
   if (v === null || v === undefined) return v
   const o = parseJsonObject(v)
@@ -123,20 +167,24 @@ function ownParts(
   top: (k: string) => boolean
 ): Record<string, unknown> {
   const out: Record<string, unknown> = {}
-  for (const [k, x] of Object.entries(own)) {
-    if (top(k) || isSecretKey(k) || SECRET_CONTAINERS.has(k.toLowerCase())) out[k] = x
-  }
+  for (const [k, x] of Object.entries(own)) if (top(k) || isTakenOffKey(k)) out[k] = x
   return out
 }
 
-/** Nested secrets of `own` put back under `incoming` where both hold an object at the same path. */
+/**
+ * The target's own taken-off values (outbound keys, secrets, embedded secrets) put back under
+ * `incoming` at the same path, at every depth.
+ */
 function mergeNested(incoming: unknown, own: unknown): unknown {
   if (Array.isArray(incoming) && Array.isArray(own))
-    return incoming.map((x, i) => mergeNested(x, own[i]))
+    return incoming.map((x, i) =>
+      x === null && isEmbeddedSecret(own[i]) ? own[i] : mergeNested(x, own[i])
+    )
   if (!isObj(incoming) || !isObj(own)) return incoming
   const out: Record<string, unknown> = { ...incoming }
   for (const [k, x] of Object.entries(own)) {
-    if (isSecretKey(k) || SECRET_CONTAINERS.has(k.toLowerCase())) out[k] = x
+    if (isTakenOffKey(k)) out[k] = x
+    else if (isEmbeddedSecret(x) && !(k in out)) out[k] = x
     else if (k in out) out[k] = mergeNested(out[k], x)
   }
   return out
