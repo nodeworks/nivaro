@@ -226,7 +226,8 @@ export const WINDOW_ACTION_WORDS: Partial<Record<FrozenAction, string>> = {
   move: 'Moves',
   upgrade: 'Shared deployment upgrades',
   config_promote: 'Config promotions',
-  extension_promote: 'Extension promotions'
+  extension_promote: 'Extension promotions',
+  retire: 'Retirements'
 }
 
 const utcWords = (ms: number) => `${new Date(ms).toISOString().slice(0, 16).replace('T', ' ')} UTC`

@@ -33,6 +33,8 @@ export type FrozenAction =
   | 'apply'
   | 'config_promote'
   | 'extension_promote'
+  /** Hub enhancement 47: every step of an app's retirement wizard (services/hub/lifecycle). */
+  | 'retire'
 
 export interface HubFreeze {
   id: number
@@ -149,7 +151,8 @@ const ACTION_WORDS: Record<FrozenAction, string> = {
   upgrade: 'Shared deployment upgrades',
   move: 'Moves',
   config_promote: 'Config promotions',
-  extension_promote: 'Extension promotions'
+  extension_promote: 'Extension promotions',
+  retire: 'Retirements'
 }
 
 export interface FreezeRefusal {

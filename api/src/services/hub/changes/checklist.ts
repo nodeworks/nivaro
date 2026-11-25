@@ -34,12 +34,15 @@ export type ChecklistAction =
   | 'upgrade'
   | 'config_promote'
   | 'extension_promote'
+  /** Hub enhancement 47: an app's retirement (items opt in; claimed when it starts). */
+  | 'retire'
 export const ACTIONS: readonly ChecklistAction[] = [
   'promote',
   'move',
   'upgrade',
   'config_promote',
-  'extension_promote'
+  'extension_promote',
+  'retire'
 ]
 /** The actions a new item covers when none are named (the later ones opt in). */
 export const DEFAULT_ACTIONS: readonly ChecklistAction[] = ['promote', 'move', 'upgrade']
@@ -218,7 +221,8 @@ export function validateItem(b: Record<string, unknown>): ItemInput | { error: s
   const clean = ACTIONS.filter((a) => actions.includes(a))
   if (!clean.length)
     return {
-      error: 'actions has at least one of promote, move, upgrade, config_promote, extension_promote'
+      error:
+        'actions has at least one of promote, move, upgrade, config_promote, extension_promote, retire'
     }
   const position = b.position == null ? 0 : Number(b.position)
   if (!Number.isInteger(position) || position < 0 || position > 10_000)
@@ -504,7 +508,7 @@ export async function voidRun(runId: number): Promise<boolean> {
 export interface ChecklistClaim {
   runId: number
   /** The run the checklist started (`deploy`, `move`, `shared_deploy`). */
-  link(kind: 'deploy' | 'move' | 'shared_deploy', id: number): Promise<void>
+  link(kind: 'deploy' | 'move' | 'shared_deploy' | 'retire', id: number): Promise<void>
   /** The start failed: the checklist is open again (ticks kept). */
   release(): Promise<void>
 }
@@ -549,7 +553,14 @@ export async function checklistGate(o: GateInput): Promise<ChecklistClaim | null
   }
   const required = entries.filter((e) => e.required)
   if (!required.length) return null
-  const verb = o.action === 'move' ? 'move' : o.action === 'upgrade' ? 'upgrade' : 'promotion'
+  const verb =
+    o.action === 'move'
+      ? 'move'
+      : o.action === 'upgrade'
+        ? 'upgrade'
+        : o.action === 'retire'
+          ? 'retirement'
+          : 'promotion'
 
   let run: ChecklistRun | null = null
   const asked = o.runId == null || o.runId === '' ? null : Number(o.runId)

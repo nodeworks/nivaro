@@ -19,6 +19,8 @@
  *           reference; the gate refuses every write to connected apps anyway.
  */
 
+import { LIFECYCLE_ROUTES } from './catalog-lifecycle.js'
+
 export type HubAccess = 'read' | 'plan' | 'write'
 export type HubAuth = 'admin' | 'owner' | 'machine' | 'public'
 export type HubMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
@@ -2163,7 +2165,7 @@ export const HUB_ROUTES: HubRoute[] = [
     'The public status page (HTML; ?format=json for JSON)',
     {
       notes:
-        'No sign-in: the token is the credential. Rate-limited; a wrong, expired or replaced token answers 404. No hostnames, versions or error text.',
+        'No sign-in: the token is the credential. Rate-limited; a wrong, expired or replaced token answers 404. No hostnames, versions or error text.'
     }
   ),
   // ─── Verification: smoke checks, extension versions (routes/hub-verify.ts) ──────────
@@ -2281,7 +2283,9 @@ export const HUB_ROUTES: HubRoute[] = [
   r('GET', '/mobile/summary', 'Phone', 'owner', 'read', 'Fleet at a glance (last known status)'),
   r('GET', '/mobile/runs', 'Phone', 'owner', 'read', 'Recent promotions, rollbacks and applies', {
     query: { limit: n('1–100, default 20') }
-  })
+  }),
+  // ─── App lifecycle: cloning, retirement (routes/hub-lifecycle.ts) ─────────────────────
+  ...LIFECYCLE_ROUTES
 ]
 
 /** Fastify's template for a request (`/api/hub/apps/:id`) → its catalog entry, else null. */

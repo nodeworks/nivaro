@@ -765,7 +765,13 @@ export function hubChangeRoutes(app: FastifyInstance): void {
     const action = actionOf(q.action ?? 'promote')
     if (!action || action === 'upgrade')
       return fail(reply, 400, 'BAD_ACTION', 'action is promote or move')
-    const version = action === 'move' ? null : typeof q.version === 'string' ? q.version : null
+    // A move and a retirement have no version of their own (Hub enhancement 47).
+    const version =
+      action === 'move' || action === 'retire'
+        ? null
+        : typeof q.version === 'string'
+          ? q.version
+          : null
     if (action === 'promote' && (!version || !VERSION_RE.test(version)))
       return fail(reply, 400, 'BAD_VERSION', 'version is x.y.z')
     // A rollback: a real one (older than what runs) needs no checklist; a forward one does.
@@ -791,7 +797,12 @@ export function hubChangeRoutes(app: FastifyInstance): void {
       const action = actionOf(b.action ?? 'promote')
       if (!action || action === 'upgrade')
         return fail(reply, 400, 'BAD_ACTION', 'action is promote or move')
-      const version = action === 'move' ? null : typeof b.version === 'string' ? b.version : null
+      const version =
+        action === 'move' || action === 'retire'
+          ? null
+          : typeof b.version === 'string'
+            ? b.version
+            : null
       if (action === 'promote' && (!version || !VERSION_RE.test(version)))
         return fail(reply, 400, 'BAD_VERSION', 'version is x.y.z')
       const target: ChecklistTarget = { kind: 'environment', envId: Number(env.id) }

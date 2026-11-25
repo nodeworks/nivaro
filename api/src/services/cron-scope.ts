@@ -101,6 +101,7 @@ export const CORE_CRON_SCOPES: Record<string, CronScope> = {
   'hub-secrets': 'app', // Hub ops: the Hub's own secret rows (HUB=on only, never shared)
   'hub-verify-smoke': 'app', // Hub verification: smoke runs (HUB=on only, never shared)
   'hub-verify-extensions': 'app', // Hub verification: extension sightings (HUB=on only, never shared)
+  'hub-lifecycle-tick': 'app', // Hub lifecycle: heals the Hub's own retirement runs (HUB=on only, never shared)
   'hub-fleet-probe': 'app', // Hub fleet: probes the Hub's environments (HUB=on only, never shared)
   'hub-incident-tick': 'app', // Hub incidents: pages, banners, freezes, outage watch (HUB=on only, never shared)
   'hub-fleet-rollup': 'app', // Hub fleet: hourly uptime rollups (HUB=on only, never shared)
