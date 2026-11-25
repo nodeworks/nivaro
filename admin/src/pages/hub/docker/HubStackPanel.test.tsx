@@ -509,3 +509,54 @@ describe('stackRefetchInterval', () => {
     ).toBe(30000)
   })
 })
+
+describe('HubStackPanel: files (Hub agent 0.2.2)', () => {
+  const settings = (files?: Record<string, unknown>) => ({
+    size: 'small',
+    redis: 'bundled',
+    publish_port: null,
+    settings: {},
+    secrets: { SESSION_SECRET: '••••••' },
+    saved: true,
+    extension_pins: {},
+    ...(files ? { files } : {})
+  })
+
+  it('shows the stored folders and sends what was typed', async () => {
+    setup({
+      settings: settings({ uploads_folder: 'efp', files_subfolder: null, run_as: 'image' })
+    })
+    h.put.mockResolvedValue({ data: { data: settings() } })
+    view(true)
+    fireEvent.click(await screen.findByText('Edit settings'))
+    const folder = (await screen.findByLabelText('Uploads folder')) as HTMLInputElement
+    expect(folder.value).toBe('efp')
+    fireEvent.change(screen.getByLabelText('Files sub-folder'), {
+      target: { value: 'directus-uploads' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save settings' }))
+    await vi.waitFor(() => expect(h.put).toHaveBeenCalled())
+    expect(h.put.mock.calls[0][1]).toMatchObject({
+      uploads_folder: 'efp',
+      files_subfolder: 'directus-uploads',
+      run_as: 'image'
+    })
+  })
+
+  it('an older Hub answer without files reads as all default; a refusal lands on its field', async () => {
+    setup({ settings: settings() })
+    h.put.mockRejectedValue({
+      response: {
+        status: 400,
+        data: { code: 'BAD_UPLOADS_FOLDER', error: 'x', field: { kind: 'uploads_folder' } }
+      }
+    })
+    view(true)
+    fireEvent.click(await screen.findByText('Edit settings'))
+    const folder = (await screen.findByLabelText('Uploads folder')) as HTMLInputElement
+    expect(folder.value).toBe('')
+    fireEvent.change(folder, { target: { value: '../x' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save settings' }))
+    expect(await screen.findByText(/The uploads folder is not a valid path/)).toBeTruthy()
+  })
+})

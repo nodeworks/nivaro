@@ -38,6 +38,28 @@ import { STACK_SIZES, type StackSize } from './templates.js'
 export type { StackSize } from './templates.js'
 export type StackRedis = 'bundled' | 'external'
 
+/**
+ * Where the stack keeps its files (Hub agent 0.2.2, migration 555). `uploads_folder`: an
+ * EXISTING folder under the agent's NFS export, used as-is instead of `<stack>/uploads` (the
+ * agent never creates, changes or deletes it). `files_subfolder`: STORAGE_LOCAL_ROOT becomes
+ * `/app/uploads/<files_subfolder>`. `run_as: 'app'`: the app services run as uid 1000 from the
+ * start (an export with root squash). All default: the stack renders as before.
+ */
+export interface StackFiles {
+  uploads_folder: string | null
+  files_subfolder: string | null
+  run_as: 'image' | 'app'
+}
+
+export const DEFAULT_STACK_FILES: StackFiles = {
+  uploads_folder: null,
+  files_subfolder: null,
+  run_as: 'image'
+}
+
+export const stackFilesSet = (f: StackFiles | undefined): boolean =>
+  !!f && (f.uploads_folder !== null || f.files_subfolder !== null || f.run_as === 'app')
+
 export interface StackSettingsRow {
   environment_id: number
   size: StackSize
@@ -47,10 +69,17 @@ export interface StackSettingsRow {
   settings: Record<string, string>
   /** One sealed JSON object of KEY → per-key sealed value, or null. */
   secrets: string | null
+  /** Always set by stackSettingsFromRow; absent (= all default) in hand-built rows. */
+  files?: StackFiles
 }
 
-/** What a save writes: the row's fields, secrets merged and sealed. */
-export type StackSettingsFields = Omit<StackSettingsRow, 'environment_id'>
+/**
+ * What a save writes: the row's fields, secrets merged and sealed. `files` absent = leave the
+ * stored ones alone (a move's or a secret's save).
+ */
+export type StackSettingsFields = Omit<StackSettingsRow, 'environment_id' | 'files'> & {
+  files?: StackFiles
+}
 
 export interface StackSettingsInput {
   fields: StackSettingsFields
@@ -68,6 +97,7 @@ export interface PublicStackSettings {
   secrets: Record<string, string>
   /** Set when the stored secrets cannot be opened (wrong ENCRYPTION_KEY): keys unknown. */
   secrets_error?: string
+  files: StackFiles
 }
 
 const TABLE = 'nivaro_hub_stack_settings'
@@ -97,6 +127,27 @@ export const PINNED_RE =
 
 const HEX64_RE = /^[0-9a-fA-F]{64}$/
 
+/**
+ * A relative folder path under the agent's export: 1–8 segments joined by `/`, each starting with
+ * a letter or digit (so never `.`, `..` or hidden), at most 200 characters. Twin of the agent's
+ * rule (packages/hub-agent/src/volumes.ts folderOk): keep them in step.
+ */
+const FOLDER_SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
+export function folderPathOk(v: unknown): v is string {
+  if (typeof v !== 'string' || v.length === 0 || v.length > 200) return false
+  const segments = v.split('/')
+  return segments.length <= 8 && segments.every((x) => FOLDER_SEGMENT_RE.test(x) && x !== '..')
+}
+
+function filesFromRow(r: Record<string, unknown>): StackFiles {
+  const folder = (v: unknown) => (folderPathOk(v) ? v : null)
+  return {
+    uploads_folder: folder(r.uploads_folder),
+    files_subfolder: folder(r.files_subfolder),
+    run_as: r.run_as === 'app' ? 'app' : 'image'
+  }
+}
+
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   if (v === null || typeof v !== 'object' || Array.isArray(v)) return false
   const proto = Object.getPrototypeOf(v)
@@ -125,7 +176,8 @@ export function stackSettingsFromRow(r: Record<string, unknown>): StackSettingsR
     redis: r.redis === 'external' ? 'external' : 'bundled',
     publish_port: r.publish_port == null ? null : Number(r.publish_port),
     settings: stringMap(r.settings),
-    secrets: r.secrets == null || r.secrets === '' ? null : String(r.secrets)
+    secrets: r.secrets == null || r.secrets === '' ? null : String(r.secrets),
+    files: filesFromRow(r)
   }
 }
 
@@ -179,7 +231,8 @@ export function publicStackSettings(row: StackSettingsRow | null): PublicStackSe
     redis: row.redis,
     publish_port: row.publish_port,
     settings: { ...row.settings },
-    secrets: {}
+    secrets: {},
+    files: { ...(row.files ?? DEFAULT_STACK_FILES) }
   }
   try {
     for (const k of Object.keys(openSealedMap(row.secrets)).sort()) out.secrets[k] = HUB_MASK
@@ -195,7 +248,16 @@ export function publicStackSettings(row: StackSettingsRow | null): PublicStackSe
  * a value; a key longer than 64 characters is left out.
  */
 export type RefusalField = {
-  kind: 'setting' | 'secret' | 'extension_pin' | 'size' | 'redis' | 'publish_port'
+  kind:
+    | 'setting'
+    | 'secret'
+    | 'extension_pin'
+    | 'size'
+    | 'redis'
+    | 'publish_port'
+    | 'uploads_folder'
+    | 'files_subfolder'
+    | 'run_as'
   key?: string
 }
 type Fail = { ok: false; code: string; message: string; field?: RefusalField }
@@ -455,6 +517,27 @@ export async function validateStackSettings(
     }
   }
 
+  // Where the files sit (agent 0.2.2): each key, when sent, replaces; null or '' clears.
+  const files: StackFiles = { ...(existing?.files ?? DEFAULT_STACK_FILES) }
+  for (const k of ['uploads_folder', 'files_subfolder'] as const) {
+    const v = b[k]
+    if (v === undefined) continue
+    if (v === null || v === '') files[k] = null
+    else if (folderPathOk(typeof v === 'string' ? v.trim() : v)) files[k] = (v as string).trim()
+    else {
+      return fail(
+        k === 'uploads_folder' ? 'BAD_UPLOADS_FOLDER' : 'BAD_FILES_SUBFOLDER',
+        `${k === 'uploads_folder' ? 'The uploads folder' : 'The files sub-folder'} must be a relative path such as efp or files/2024: letters, digits, . _ and - per part (each part starting with a letter or digit), parts joined by /, no .. and at most 8 parts.`,
+        { kind: k }
+      )
+    }
+  }
+  if (b.run_as !== undefined) {
+    if (b.run_as === null || b.run_as === 'image') files.run_as = 'image'
+    else if (b.run_as === 'app') files.run_as = 'app'
+    else return fail('BAD_RUN_AS', 'run_as must be image or app.', { kind: 'run_as' })
+  }
+
   let rotate: string[] = []
   if (b.rotate !== undefined && b.rotate !== null) {
     if (
@@ -607,7 +690,7 @@ export async function validateStackSettings(
   return {
     ok: true,
     row: {
-      fields: { size, redis, publish_port: publishPort, settings, secrets: sealed },
+      fields: { size, redis, publish_port: publishPort, settings, secrets: sealed, files },
       extension_pins: extensionPins
     }
   }
@@ -631,7 +714,7 @@ async function writeStackSettings(
   hubToken: { hub_token: string | null; hub_token_lookup: string | null } | null
 ): Promise<void> {
   await db.transaction(async (trx) => {
-    const stored = await trx(TABLE).where({ environment_id: envId }).first('id', 'secrets')
+    const stored = await trx(TABLE).where({ environment_id: envId }).first()
     const map = openSealedMap(fields.secrets)
     let generated = false
     for (const k of GENERATED_SECRET_KEYS) {
@@ -647,6 +730,16 @@ async function writeStackSettings(
       publish_port: fields.publish_port,
       settings: JSON.stringify(fields.settings),
       secrets: generated ? sealMap(map) : fields.secrets,
+      // Migration 555's columns: written when the save names them and either they are set or
+      // the row already has them (a database behind 555 still saves a stack that uses none).
+      ...(fields.files &&
+      (stackFilesSet(fields.files) || (stored && Object.hasOwn(stored, 'uploads_folder')))
+        ? {
+            uploads_folder: fields.files.uploads_folder,
+            files_subfolder: fields.files.files_subfolder,
+            run_as: fields.files.run_as === 'app' ? 'app' : null
+          }
+        : {}),
       updated_at: new Date()
     }
     if (stored) await trx(TABLE).where({ id: stored.id }).update(values)

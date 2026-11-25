@@ -264,6 +264,19 @@ export function AgentCheck({ driverId, dirty }: { driverId: number; dirty: boole
             <AgentFact label='Swarm nodes' value={String(h.swarm.nodes)} />
           )}
           {h.volume_driver && <AgentFact label='Volume driver' value={h.volume_driver} mono />}
+          {h.volume_nfs && (
+            <AgentFact
+              label='Uploads'
+              value={
+                h.export_mount
+                  ? 'NFS export, one folder per stack'
+                  : 'NFS export, not mounted in the agent (deploys refused)'
+              }
+            />
+          )}
+          {h.redis_volume_driver && h.volume_nfs && (
+            <AgentFact label='Redis volume' value={h.redis_volume_driver} mono />
+          )}
         </dl>
       )}
       {h && multiNodeLocal(h) && (

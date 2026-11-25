@@ -55,7 +55,14 @@ interface Draft {
   settings: KvRow[]
   secrets: SecretRow[]
   pins: KvRow[]
+  /** Where the files sit (agent 0.2.2): '' = not set. */
+  uploadsFolder: string
+  filesSubfolder: string
+  runAs: string
 }
+
+/** Field-level refusals for the files settings (one input each, so no row id). */
+const FILE_KINDS = ['uploads_folder', 'files_subfolder', 'run_as']
 
 let nextId = 1
 const rid = () => nextId++
@@ -74,7 +81,10 @@ function draftOf(s: StackSettings): Draft {
       replacing: false,
       cleared: false
     })),
-    pins: Object.entries(s.extension_pins ?? {}).map(([key, value]) => ({ id: rid(), key, value }))
+    pins: Object.entries(s.extension_pins ?? {}).map(([key, value]) => ({ id: rid(), key, value })),
+    uploadsFolder: s.files?.uploads_folder ?? '',
+    filesSubfolder: s.files?.files_subfolder ?? '',
+    runAs: s.files?.run_as ?? 'image'
   }
 }
 
@@ -104,7 +114,10 @@ export function settingsBody(d: Draft, withPort: boolean, pinsKnown: boolean) {
     ),
     secrets,
     ...(rotate.length ? { rotate } : {}),
-    ...(pinsKnown ? { extension_pins: pairs(d.pins) } : {})
+    ...(pinsKnown ? { extension_pins: pairs(d.pins) } : {}),
+    uploads_folder: d.uploadsFolder.trim() || null,
+    files_subfolder: d.filesSubfolder.trim() || null,
+    run_as: d.runAs === 'app' ? 'app' : 'image'
   }
 }
 
@@ -216,6 +229,7 @@ export function StackSettingsEditor({
         setListNotice(null)
         setFieldError({ kind, id, text: rowText(code) })
       }
+      if (field && FILE_KINDS.includes(field.kind)) return onRow(field.kind, 0)
       if (field) {
         // The server names the entry: pick its row by key, never by searching the message.
         const key = field.key?.trim()
@@ -388,6 +402,61 @@ export function StackSettingsEditor({
           </Field>
         )}
       </div>
+
+      <section aria-label='Files' className='space-y-1.5'>
+        <h5 className='m-0 text-[12px] font-semibold text-slate-800 dark:text-foreground'>Files</h5>
+        <div className='grid grid-cols-1 gap-3 sm:grid-cols-3'>
+          <Field
+            id={`${idp}-uploads-folder`}
+            label='Uploads folder'
+            error={rowErr('uploads_folder', 0)}
+            hint={
+              agent.data?.volume_nfs
+                ? "An existing folder on the agent's NFS export, used as it is (never created or changed). Empty: the stack gets its own folder, <stack>/uploads."
+                : 'Only with an agent that keeps uploads on an NFS export.'
+            }
+          >
+            <Input
+              id={`${idp}-uploads-folder`}
+              value={draft.uploadsFolder}
+              placeholder='<stack>/uploads'
+              onChange={(e) => set({ uploadsFolder: e.target.value })}
+              className='h-8 font-mono text-[13px]'
+            />
+          </Field>
+          <Field
+            id={`${idp}-files-subfolder`}
+            label='Files sub-folder'
+            error={rowErr('files_subfolder', 0)}
+            hint='Where the files sit inside the uploads folder (for example directus-uploads). Empty: the folder itself.'
+          >
+            <Input
+              id={`${idp}-files-subfolder`}
+              value={draft.filesSubfolder}
+              onChange={(e) => set({ filesSubfolder: e.target.value })}
+              className='h-8 font-mono text-[13px]'
+            />
+          </Field>
+          <Field
+            id={`${idp}-run-as`}
+            label='Run as'
+            error={rowErr('run_as', 0)}
+            hint='uid 1000 from the start suits an NFS export with root squash, where root in the container can do nothing on the files.'
+          >
+            <SimpleSelect
+              value={draft.runAs}
+              onChange={(v) => set({ runAs: v })}
+              ariaLabel='Run as'
+              className='h-8 text-[13px]'
+              triggerProps={{ id: `${idp}-run-as` }}
+              options={[
+                { value: 'image', label: 'Image default (steps down to uid 1000)' },
+                { value: 'app', label: 'uid 1000 from the start' }
+              ]}
+            />
+          </Field>
+        </div>
+      </section>
 
       <section aria-label='Settings' className='space-y-1.5'>
         <h5 className='m-0 text-[12px] font-semibold text-slate-800 dark:text-foreground'>

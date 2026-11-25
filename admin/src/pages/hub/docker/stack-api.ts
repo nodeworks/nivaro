@@ -63,6 +63,12 @@ export interface StackSettings {
   /** null when the stored pins cannot be read whole. */
   extension_pins: Record<string, string> | null
   extension_pins_error?: string
+  /** Where the files sit (Hub agent 0.2.2); absent on an older Hub = all default. */
+  files?: {
+    uploads_folder: string | null
+    files_subfolder: string | null
+    run_as: 'image' | 'app'
+  }
 }
 
 export const stackKeys = {

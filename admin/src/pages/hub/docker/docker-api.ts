@@ -27,13 +27,25 @@ export interface HubAgentHealth {
   publish_ports: [number, number] | null
   extensions_shared: boolean
   redis_bundled: boolean
+  /** Agent 0.2.2: uploads sit on an NFS export, one folder per stack (shared by every node). */
+  volume_nfs?: boolean
+  /** Agent 0.2.2: the agent sees the export (HUB_AGENT_VOLUME_EXPORT_MOUNT). */
+  export_mount?: boolean
+  /** Agent 0.2.2: bundled Redis's volume driver (never NFS). */
+  redis_volume_driver?: string
 }
 
-/** P4-33: a swarm of more than one node where stack volumes are `local` (one copy per node). */
-export const multiNodeLocal = (h: Pick<HubAgentHealth, 'swarm' | 'volume_driver'>): boolean =>
+/**
+ * P4-33: a swarm of more than one node where stack volumes are `local` (one copy per node) —
+ * not when the agent (0.2.2+) keeps uploads on an NFS export every node mounts.
+ */
+export const multiNodeLocal = (
+  h: Pick<HubAgentHealth, 'swarm' | 'volume_driver' | 'volume_nfs'>
+): boolean =>
   typeof h.swarm?.nodes === 'number' &&
   h.swarm.nodes > 1 &&
-  (h.volume_driver ?? 'local') === 'local'
+  (h.volume_driver ?? 'local') === 'local' &&
+  h.volume_nfs !== true
 
 export const MULTI_NODE_VOLUMES_TEXT =
   "This swarm has more than one node and stack volumes are local: each node keeps its own uploads and Redis data, and Remove stack deletes only the agent node's copies. Pin the stack to one node, or set a shared volume driver on the agent."

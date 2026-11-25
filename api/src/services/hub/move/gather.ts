@@ -17,7 +17,7 @@ import {
   otherEnvironmentNames,
   readStackSettings
 } from '../docker/stack-settings.js'
-import { templateFor } from '../docker/templates.js'
+import { templateFor, volumesPerNode } from '../docker/templates.js'
 import {
   DEFAULT_POOL_MAX,
   type DockerDriverRow,
@@ -239,10 +239,7 @@ async function stackFacts(
 
 /** Swarm nodes when local volumes sit on more than one node (P4-33), else null. */
 function multiNode(h: AgentHealth | null): number | null {
-  const nodes = h?.swarm?.nodes
-  return typeof nodes === 'number' && nodes > 1 && (h?.volume_driver ?? 'local') === 'local'
-    ? nodes
-    : null
+  return volumesPerNode(h)
 }
 
 async function inParallel<T, R>(

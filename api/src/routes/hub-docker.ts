@@ -29,6 +29,7 @@ import {
   withEnvironmentLock
 } from '../services/hub/docker/stack-guards.js'
 import {
+  DEFAULT_STACK_FILES,
   publicStackSettings,
   readStackSettings,
   type StackSettingsRow,
@@ -366,6 +367,9 @@ function changedNames(
   const out: string[] = []
   for (const k of ['size', 'redis', 'publish_port'] as const)
     if ((before?.[k] ?? null) !== after[k] && (before || sent[k] !== undefined)) out.push(k)
+  for (const k of ['uploads_folder', 'files_subfolder', 'run_as'] as const)
+    if ((before?.files?.[k] ?? null) !== (after.files?.[k] ?? null) && sent[k] !== undefined)
+      out.push(k)
   const a = before?.settings ?? {}
   const b = after.settings
   for (const k of new Set([...Object.keys(a), ...Object.keys(b)]))
@@ -392,7 +396,8 @@ function settingsAnswer(envId: number, row: StackSettingsRow | null, env: Record
     redis: 'bundled',
     publish_port: null,
     settings: {},
-    secrets: {}
+    secrets: {},
+    files: { ...DEFAULT_STACK_FILES }
   }
   const pins = pinsOf(env)
   return {
