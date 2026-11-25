@@ -143,6 +143,24 @@ function answerGets(targets: unknown[]) {
         }
       })
     if (url === '/hub/databases') return Promise.resolve({ data: { data: [] } })
+    if (url === '/hub/templates')
+      return Promise.resolve({
+        data: {
+          data: [
+            {
+              id: 9,
+              name: 'Assets',
+              version: '1.0.0',
+              description: null,
+              archived: false,
+              used: 0,
+              manifest: {
+                counts: { collections: 2, workflows: 1, layouts: 0, queues: 0, rules: 0 }
+              }
+            }
+          ]
+        }
+      })
     return Promise.reject(new Error(`unexpected ${url}`))
   })
 }
@@ -227,6 +245,21 @@ describe('HubCreateApp', () => {
     )
     fireEvent.click(createButton())
     await waitFor(() => expect(onDone).toHaveBeenCalledWith(42))
+  })
+
+  it('a picked template is sent as template_id and named in the hint (enhancement 24)', async () => {
+    answerGets([baseTarget])
+    answerPlan(cleanPlan)
+    mount()
+    await fillBasics()
+    await screen.findByRole('option', { name: 'Assets 1.0.0' })
+    fireEvent.change(screen.getByLabelText('App template'), { target: { value: '9' } })
+    expect(await screen.findByText(/2 collections · 1 workflow/)).toBeTruthy()
+    await waitFor(() => expect(planCalls().at(-1)?.[1].template_id).toBe(9), { timeout: 3000 })
+    fireEvent.change(screen.getByLabelText('App template'), { target: { value: '' } })
+    await waitFor(() => expect(planCalls().at(-1)?.[1]).not.toHaveProperty('template_id'), {
+      timeout: 3000
+    })
   })
 
   it('shows the automatic hostnames and the redirect URIs to add', async () => {

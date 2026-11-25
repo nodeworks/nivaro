@@ -101,6 +101,8 @@ export interface CreateAppInput {
   first_admin: { email: string; first_name?: string; last_name?: string }
   target_id: number
   version: string
+  /** Hub enhancement 24: a template from the library, installed after the first admin. */
+  template_id?: number | null
   signin: { issuer: string; client_id: string; client_secret: string }
   environments: Array<{
     key: string
@@ -158,6 +160,7 @@ export type CreationStepKey =
   | 'name'
   | 'link'
   | 'admin'
+  | 'template'
 
 export const STEP_ORDER: readonly CreationStepKey[] = [
   'database',
@@ -167,7 +170,8 @@ export const STEP_ORDER: readonly CreationStepKey[] = [
   'deploy',
   'name',
   'link',
-  'admin'
+  'admin',
+  'template'
 ]
 
 export interface CreationStepState {
@@ -368,7 +372,8 @@ export const STEP_LABELS: Record<CreationStepKey, string> = {
   deploy: 'First deploy',
   name: 'Hostname',
   link: 'Hub link',
-  admin: 'First administrator'
+  admin: 'First administrator',
+  template: 'Template'
 }
 
 export const STEP_STATE_WORDS: Record<CreationStepState['status'], string> = {
@@ -660,6 +665,30 @@ export const CREATE_COPY: Record<string, Copy> = {
   },
   HUB_SECRET_NOT_SEALED: { title: "A saved secret can't be read", hint: 'Enter it again.' },
   HUB_SECRET_UNREADABLE: { title: "A saved secret can't be read", hint: 'Enter it again.' },
+  // Hub enhancement 24: templates on Create app and the creation's Template step.
+  TEMPLATE_UNKNOWN: {
+    title: 'The picked template is not in the library',
+    hint: 'It was archived or deleted. Pick another template, or none.'
+  },
+  TEMPLATE_APP_TOO_OLD: { title: 'This version cannot take a template', detail: true },
+  TEMPLATE_GONE: {
+    title: 'The template was deleted',
+    hint: 'Upload it again on the Templates tab, or install it by hand from Promotion → Blueprints in the app.'
+  },
+  TEMPLATE_UNANSWERED: {
+    title: 'The app did not answer the template install',
+    hint: 'Retry: the app skips what it already made.'
+  },
+  TEMPLATE_FAILED: {
+    title: 'The app could not install the template',
+    hint: "Check the app's server log, then Retry."
+  },
+  APP_NOT_EMPTY: { title: 'The app already has collections of its own', detail: true },
+  BAD_DIGEST: {
+    title: 'The app received a different template than the Hub sent',
+    hint: 'Retry; if it happens again, check what sits between the Hub and the app.'
+  },
+  BAD_BUNDLE: { title: 'That is not an App Blueprint', detail: true },
   // Phase 6 (Task 4): creation refuses an environment placed on a shared deployment.
   SHARED_PLACEMENT: {
     title: 'This environment runs on a shared deployment',

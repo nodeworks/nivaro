@@ -29,6 +29,7 @@ describe('hub registry', () => {
       'Shared deployments',
       'Drivers',
       'Targets',
+      'Templates',
       'Databases',
       'Sign-in'
     ])

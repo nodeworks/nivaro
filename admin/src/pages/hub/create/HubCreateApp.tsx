@@ -11,6 +11,7 @@ import { cn } from '@/lib/utils'
 import { dbKeys, ENGINE_LABEL, STATUS_LABEL, useDatabases, useDbServers } from '../databases/db-api'
 import { HUB_MASK, hubKeys } from '../hub-api'
 import { CopyButton, Field, ghostButton, SectionCard } from '../hub-parts'
+import { countsLine, fetchTemplates, templateError, templateKeys } from '../templates/templates-api'
 import {
   appBlockers,
   automaticHostname,
@@ -93,6 +94,12 @@ export function HubCreateApp({
   const [owners, setOwners] = useState<Array<{ id: string; label: string }>>([])
   const [targetId, setTargetId] = useState('')
   const [version, setVersion] = useState('')
+  // Hub enhancement 24: a template from the library ('' = none).
+  const [templateId, setTemplateId] = useState('')
+  const templates = useQuery({
+    queryKey: templateKeys.list(false),
+    queryFn: () => fetchTemplates()
+  })
   const [issuer, setIssuer] = useState('')
   const [clientId, setClientId] = useState('')
   const [clientSecret, setClientSecret] = useState('')
@@ -117,6 +124,7 @@ export function HubCreateApp({
       },
       target_id: Number(targetId) || 0,
       version: version.trim(),
+      ...(Number(templateId) ? { template_id: Number(templateId) } : {}),
       signin: { issuer: issuer.trim(), client_id: clientId.trim(), client_secret: clientSecret },
       environments: envs.map((e) => ({
         key: e.key.trim(),
@@ -140,6 +148,7 @@ export function HubCreateApp({
       adminLast,
       targetId,
       version,
+      templateId,
       issuer,
       clientId,
       clientSecret,
@@ -295,6 +304,11 @@ export function HubCreateApp({
       label: `${t.name} · ${t.config.namespace}${t.config.dns_mode === 'manual' ? ' · names by hand' : ''}`
     }))
   ]
+  const pickedTemplate = templates.data?.find((t) => String(t.id) === templateId) ?? null
+  const templateOptions = [
+    { value: '', label: 'No template' },
+    ...(templates.data ?? []).map((t) => ({ value: String(t.id), label: `${t.name} ${t.version}` }))
+  ]
 
   return (
     <div className='p-4 sm:p-6'>
@@ -412,6 +426,36 @@ export function HubCreateApp({
                 className='h-8 font-mono text-[13px]'
               />
             </Field>
+          </div>
+          <div className='px-4 pb-4'>
+            <Field
+              id='hub-create-template'
+              label='App template'
+              hint={
+                pickedTemplate
+                  ? `${countsLine(pickedTemplate.manifest)} — installed into every environment after its first administrator.`
+                  : templates.data?.length === 0
+                    ? 'No templates yet: upload an App Blueprint on the Templates tab.'
+                    : 'Optional: an App Blueprint from the Templates tab (schema, workflows, layouts, queues and rules — never data).'
+              }
+            >
+              <SimpleSelect
+                value={templateId}
+                onChange={touch(setTemplateId)}
+                options={templateOptions}
+                ariaLabel='App template'
+                className='h-8 text-[13px]'
+                triggerProps={{ id: 'hub-create-template' }}
+              />
+            </Field>
+            {templates.isError && (
+              <div className='mt-2'>
+                <ErrorNotice
+                  description={templateError(templates.error, 'Could not load the templates')}
+                  onRetry={() => void templates.refetch()}
+                />
+              </div>
+            )}
           </div>
           {targets.isError && (
             <div className='px-4 pb-3'>
