@@ -22,3 +22,9 @@ export function useHubLive(enabled: boolean): void {
   }, [qc])
   useLiveOps('hub', refresh, { enabled, debounceMs: 1000 })
 }
+
+/** useHubLive as a component, for a layout that renders the realtime provider itself. */
+export function HubLiveSync({ enabled }: { enabled: boolean }): null {
+  useHubLive(enabled)
+  return null
+}
