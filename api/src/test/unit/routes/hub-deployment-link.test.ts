@@ -62,6 +62,7 @@ vi.mock('../../../services/hub-link/first-admin.js', async () => {
 
 import { hubDeploymentLinkRoutes } from '../../../routes/hub-deployment-link.js'
 import { keyFingerprint } from '../../../services/app-key-fingerprint.js'
+import { instanceKey } from '../../../services/instance-key.js'
 import { INSTANCE_ID } from '../../../services/instance-roster.js'
 import { _resetAppStatusForTests, appStatusFor } from '../../../services/tenancy/app-status.js'
 import { deploymentLinkBearer } from '../../../services/tenancy/hub-contract.js'
@@ -237,10 +238,13 @@ describe('GET /status', () => {
       })
       expect(all.json().flow_scripts).toBe(true)
       for (const worker of [
-        { id: 'w1', role: 'worker', flow_scripts: false },
-        { id: 'w1', role: 'worker' }
+        { id: 'w1', role: 'worker', flow_scripts: false, instance: instanceKey() },
+        { id: 'w1', role: 'worker', instance: instanceKey() }
       ]) {
-        roster.peers = [{ id: 'other-web', role: 'web', flow_scripts: true }, worker]
+        roster.peers = [
+          { id: 'other-web', role: 'web', flow_scripts: true, instance: instanceKey() },
+          worker
+        ]
         const mixed = await a.inject({
           method: 'GET',
           url: '/api/hub-deployment/status',

@@ -5,6 +5,7 @@ import { failedAuthLimiter } from '../lib/auth-fail-limiter.js'
 import { hubSharedConfig, tenantSource } from '../services/deployment-mode.js'
 import { flowScriptsOnShared } from '../services/flow-script-limits.js'
 import { seedFirstAdmin } from '../services/hub-link/first-admin.js'
+import { instanceKey } from '../services/instance-key.js'
 import { INSTANCE_ID, listInstances } from '../services/instance-roster.js'
 import { poolCounters } from '../services/pool-attribution.js'
 import { bearerMatches } from '../services/render-peer.js'
@@ -136,8 +137,9 @@ export async function hubDeploymentLinkRoutes(app: FastifyInstance): Promise<voi
     // a worker left off would refuse the steps the plan let through. Roster entries before
     // 0.3.215 carry no flag and count as off; realtime processes run no flows.
     const ownScripts = flowScriptsOnShared()
+    // Only this deployment's processes (review N4): a shared external Redis also holds others'.
     const peers = (await listInstances()).filter(
-      (r) => r.id !== INSTANCE_ID && r.role !== 'realtime'
+      (r) => r.id !== INSTANCE_ID && r.role !== 'realtime' && r.instance === instanceKey()
     )
     const scriptFlags = [ownScripts, ...peers.map((r) => r.flow_scripts === true)]
     const scriptsOn = scriptFlags.every(Boolean)
