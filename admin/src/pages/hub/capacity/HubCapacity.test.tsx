@@ -138,7 +138,7 @@ describe('HubCapacity', () => {
       (within(form).getByRole('button', { name: 'Save limits' }) as HTMLButtonElement).disabled
     ).toBe(true)
     fireEvent.change(jobs, { target: { value: '2' } })
-    fireEvent.change(within(form).getByLabelText('Requests per minute (/min)'), {
+    fireEvent.change(within(form).getByLabelText('Requests per minute, each (/min)'), {
       target: { value: '' }
     })
     fireEvent.click(within(form).getByRole('button', { name: 'Save limits' }))

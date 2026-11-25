@@ -79,7 +79,7 @@ export const hubCapacityDocs: DocSection = {
       rows: [
         [
           'Requests per minute (10–1,000,000)',
-          '429 `APP_RATE_LIMITED` with `Retry-After` until the next minute. Requests that carry a credential (session or `Authorization`) share the app’s budget; requests without one get a budget of the same size per address, so anonymous traffic never uses up the signed-in budget. Counted in Redis across every web process (`nvr:applimit:rpm:<app>:<bucket>:<minute>`); when Redis does not answer within 250 ms each process counts alone for 10 seconds. Only requests that came over HTTP count: batch reads, MCP tool calls and other in-process calls are parts of a request already counted. Probes, sign-in (`/api/auth/*`, it has its own limiter), the Hub links and the file transfer of a move are never counted.'
+          '429 `APP_RATE_LIMITED` with `Retry-After` until the next minute. Judged after the route has checked who is calling: each verified caller (a signed-in person or an API key) gets the limit of its own, and verified callers together share an app-wide ceiling of 10 times it, so no single caller can use up the others’ requests. A request with no credential, or one whose credential did not verify, is anonymous: it counts against its address (a budget of the same size per address) and never against the signed-in budgets or the ceiling. Counted in Redis across every web process (`nvr:applimit:rpm:<app>:<caller>:<minute>`); when Redis does not answer within 250 ms each process counts alone for 10 seconds. Only requests that came over HTTP count: batch reads, MCP tool calls and other in-process calls are parts of a request already counted. Probes, sign-in (`/api/auth/*`, it has its own limiter), the Hub links and the file transfer of a move are never counted.'
         ],
         [
           'Background jobs at once (1–16)',
@@ -94,6 +94,10 @@ export const hubCapacityDocs: DocSection = {
     {
       type: 'p',
       text: 'Set them in the Limits column of a deployment’s app table (`PUT /api/hub/capacity/limits/:envId`, empty = no limit; refused `MOVE_OPEN` while a move holds the environment). They are stored per environment (`nivaro_hub_app_limits`), listed with the app in the tenants answer (`limits`) and the deployment is asked to re-read its list at once, so they apply within a minute. A bad limit in the list is dropped alone; the app is still served. Apps need 0.3.215 or later on the deployment.'
+    },
+    {
+      type: 'warn',
+      text: 'The anonymous budget is per client address as the deployment sees it (`TRUST_PROXY`). With `TRUST_PROXY=true` that address is the left-most `X-Forwarded-For` entry, which a client can write unless the edge proxy replaces it: set `TRUST_PROXY` to the hop count or the proxy addresses (or make the edge normalise the header), or anonymous callers can spread over made-up addresses. Signed-in budgets do not depend on it.'
     },
     { type: 'h2', id: 'hub-capacity-rebalance', text: 'Rebalance' },
     {

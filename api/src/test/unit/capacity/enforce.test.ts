@@ -1,4 +1,4 @@
-import Fastify from 'fastify'
+import Fastify, { type FastifyRequest } from 'fastify'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Hub capacity, idea 15: per-app limits enforced in the shared process — requests per minute
@@ -152,14 +152,26 @@ describe('requests per minute', () => {
     expect(calls).toBe(1)
   })
 
-  describe('the hook', () => {
+  describe('the limiter, after the route’s authentication', () => {
     const app = Fastify()
+    // A route's own authentication, as the real ones do it: `Bearer good-<id>` is a verified
+    // user, `Bearer key-<n>` a verified API key; anything else verifies as nobody.
+    const auth = async (req: FastifyRequest) => {
+      const h = String(req.headers.authorization ?? '')
+      const user = /^Bearer good-(\w+)$/.exec(h)
+      if (user) (req as { user?: unknown }).user = { id: user[1] }
+      const key = /^Bearer key-(\d+)$/.exec(h)
+      if (key) {
+        ;(req as { user?: unknown }).user = { id: 'svc' }
+        ;(req as { apiKeyId?: number }).apiKeyId = Number(key[1])
+      }
+    }
     beforeAll(async () => {
       app.addHook('onRequest', async (req) => {
         ctx.tenant = String(req.headers['x-tenant'] ?? '')
       })
-      app.addHook('onRequest', enforce.appRateLimitHook)
-      app.get('/api/items/x', async () => ({ ok: true }))
+      enforce.registerAppRateLimit(app)
+      app.get('/api/items/x', { preHandler: auth }, async () => ({ ok: true }))
       app.get('/api/health', async () => ({ ok: true }))
       app.get('/api/auth/login', async () => ({ ok: true }))
       await app.ready()
@@ -170,46 +182,73 @@ describe('requests per minute', () => {
     })
     beforeEach(() => enforce._countInjectedForTests(true))
 
-    const signedIn = { authorization: 'Bearer nvk_x' }
     const get = (url: string, headers: Record<string, string>, ip = '10.0.0.1') =>
       app.inject({ url, headers, remoteAddress: ip })
+    const as = (tenant: string, who?: string) => ({
+      'x-tenant': tenant,
+      ...(who ? { authorization: `Bearer ${who}` } : {})
+    })
 
-    it('answers 429 APP_RATE_LIMITED past the limit, with Retry-After', async () => {
+    it('answers 429 APP_RATE_LIMITED past one caller’s limit, with Retry-After', async () => {
       tenants.set('shop', tenant('shop', { requests_per_minute: 10 }))
       tenants.set('free', tenant('free'))
       const codes: number[] = []
       for (let i = 0; i < 12; i++)
-        codes.push((await get('/api/items/x', { 'x-tenant': 'shop', ...signedIn })).statusCode)
+        codes.push((await get('/api/items/x', as('shop', 'good-ann'))).statusCode)
       expect(codes.filter((c) => c === 200)).toHaveLength(10)
-      const refused = await get('/api/items/x', { 'x-tenant': 'shop', ...signedIn })
+      const refused = await get('/api/items/x', as('shop', 'good-ann'))
       expect(refused.statusCode).toBe(429)
       expect(refused.json().code).toBe('APP_RATE_LIMITED')
       expect(Number(refused.headers['retry-after'])).toBeGreaterThan(0)
       // Probes and sign-in still answer; an app without a limit is never counted.
-      expect((await get('/api/health', { 'x-tenant': 'shop' })).statusCode).toBe(200)
-      expect((await get('/api/auth/login', { 'x-tenant': 'shop' })).statusCode).toBe(200)
+      expect((await get('/api/health', as('shop'))).statusCode).toBe(200)
+      expect((await get('/api/auth/login', as('shop'))).statusCode).toBe(200)
       for (let i = 0; i < 15; i++)
-        expect((await get('/api/items/x', { 'x-tenant': 'free', ...signedIn })).statusCode).toBe(
-          200
-        )
+        expect((await get('/api/items/x', as('free', 'good-ann'))).statusCode).toBe(200)
     })
 
-    it('anonymous requests get a budget per address and never spend the signed-in one', async () => {
+    it('one verified caller cannot exhaust another’s budget (users and API keys alike)', async () => {
+      tenants.set('pair', tenant('pair', { requests_per_minute: 10 }))
+      for (let i = 0; i < 15; i++) await get('/api/items/x', as('pair', 'good-ann'))
+      for (let i = 0; i < 15; i++) await get('/api/items/x', as('pair', 'key-7'))
+      expect((await get('/api/items/x', as('pair', 'good-ann'))).statusCode).toBe(429)
+      expect((await get('/api/items/x', as('pair', 'key-7'))).statusCode).toBe(429)
+      expect((await get('/api/items/x', as('pair', 'good-bob'))).statusCode).toBe(200)
+      expect((await get('/api/items/x', as('pair', 'key-8'))).statusCode).toBe(200)
+    })
+
+    it('a bogus credential counts as anonymous, per address, and never spends signed-in budgets', async () => {
       tenants.set('pub', tenant('pub', { requests_per_minute: 10 }))
-      for (let i = 0; i < 10; i++) await get('/api/items/x', { 'x-tenant': 'pub' }, '10.9.9.9')
-      expect((await get('/api/items/x', { 'x-tenant': 'pub' }, '10.9.9.9')).statusCode).toBe(429)
-      // Another address, and every signed-in request, still pass.
-      expect((await get('/api/items/x', { 'x-tenant': 'pub' }, '10.8.8.8')).statusCode).toBe(200)
-      expect((await get('/api/items/x', { 'x-tenant': 'pub', ...signedIn })).statusCode).toBe(200)
+      for (let i = 0; i < 40; i++)
+        await get('/api/items/x', as('pub', 'forged-token-that-does-not-verify'), '10.9.9.9')
+      expect(
+        (await get('/api/items/x', as('pub', 'forged-token-that-does-not-verify'), '10.9.9.9'))
+          .statusCode
+      ).toBe(429)
+      // Without a credential from the same address: the same anonymous bucket.
+      expect((await get('/api/items/x', as('pub'), '10.9.9.9')).statusCode).toBe(429)
+      // Another address, and every verified caller on the flooded address, still pass.
+      expect((await get('/api/items/x', as('pub'), '10.8.8.8')).statusCode).toBe(200)
+      expect((await get('/api/items/x', as('pub', 'good-cat'), '10.9.9.9')).statusCode).toBe(200)
+    })
+
+    it('verified callers together share an app-wide ceiling well above one caller', async () => {
+      tenants.set('busy', tenant('busy', { requests_per_minute: 10 }))
+      const ceiling = 10 * enforce.APP_CEILING_FACTOR
+      let ok = 0
+      for (let u = 0; u < 12; u++)
+        for (let i = 0; i < 10; i++)
+          if ((await get('/api/items/x', as('busy', `good-u${u}`))).statusCode === 200) ok++
+      expect(ok).toBe(ceiling)
+      // Anonymous requests never count toward it (nor are they held by it).
+      expect((await get('/api/items/x', as('busy'), '10.7.7.7')).statusCode).toBe(200)
     })
 
     it('in-process re-entries (inject, batch-get, MCP tool calls) are never counted', async () => {
       enforce._countInjectedForTests(false)
       tenants.set('inner', tenant('inner', { requests_per_minute: 10 }))
       for (let i = 0; i < 30; i++)
-        expect((await get('/api/items/x', { 'x-tenant': 'inner', ...signedIn })).statusCode).toBe(
-          200
-        )
+        expect((await get('/api/items/x', as('inner', 'good-ann'))).statusCode).toBe(200)
     })
   })
 })

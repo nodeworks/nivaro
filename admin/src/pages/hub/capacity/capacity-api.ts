@@ -21,11 +21,11 @@ export const LIMIT_FIELDS: {
 }[] = [
   {
     key: 'requests_per_minute',
-    label: 'Requests per minute',
+    label: 'Requests per minute, each',
     unit: '/min',
     min: 10,
     max: 1_000_000,
-    hint: 'Past it the app answers 429 until the next minute.'
+    hint: 'Per signed-in person or API key, and per address for anonymous calls; the whole app gets 10 times it. Past it: 429 until the next minute.'
   },
   {
     key: 'jobs',
