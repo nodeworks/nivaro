@@ -486,6 +486,7 @@ export async function deleteDriver(
         .first('key')) as { key: string } | undefined)
     : undefined
   if (sharedUser) return { ok: false, code: 'DRIVER_IN_USE', shared: String(sharedUser.key) }
+  const regionTable = await db.schema.hasTable('nivaro_hub_region_drivers')
   return db.transaction(async (trx) => {
     if (!(await trx('nivaro_hub_drivers').where({ id }).first('id')))
       return { ok: false, code: 'NOT_FOUND' as const }
@@ -505,6 +506,8 @@ export async function deleteDriver(
       .orWhereIn('placement_id', trx('nivaro_hub_placements').where({ driver_id: id }).select('id'))
       .del()
     await trx('nivaro_hub_placements').where({ driver_id: id }).del()
+    // Hub placement (review L6): the host leaves its region with it.
+    if (regionTable) await trx('nivaro_hub_region_drivers').where({ driver_id: id }).del()
     await trx('nivaro_hub_drivers').where({ id }).del()
     return { ok: true as const }
   })

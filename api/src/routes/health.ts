@@ -16,6 +16,7 @@ import {
 } from '../services/deployment-mode.js'
 import { requestDevRestart } from '../services/dev-extension-watch.js'
 import { devStaleness, startDevStalenessScan } from '../services/dev-staleness.js'
+import { hubBootMoveId } from '../services/hub-boot-move.js'
 import { readGateStats } from '../services/read-gate.js'
 import {
   DB_BUDGET_MS,
@@ -89,6 +90,11 @@ export async function healthRoutes(app: FastifyInstance) {
     // address resolved to (ruling B3: a move or an upgrade verifies both). Never in cloud mode
     // or self-hosted.
     const shared = tenantSource() === 'hub' ? hubSharedConfig() : null
+    // Hub placement (review C1): the move whose NEW stack this is (HUB_BOOT_MAINTENANCE), so a
+    // move between two stacks of one environment proves the name reaches the new one. Only the
+    // Hub sets it, and only on a dedicated target stack (never cloud or a shared deployment). Not
+    // a secret: a Hub move's number.
+    const moveTarget = hubBootMoveId()
     return reply.send({
       version: NIVARO_VERSION,
       // The shared-code (@nivaro/react) version the admin SPA carries — a
@@ -99,6 +105,7 @@ export async function healthRoutes(app: FastifyInstance) {
       cloud: isNivaroCloud(),
       multi_tenant: isMultiTenant(),
       ...(shared ? { shared_deployment: shared.deployment, tenant: getTenantId() ?? null } : {}),
+      ...(moveTarget ? { move_target: moveTarget } : {}),
       ...(dev ? { dev } : {})
     })
   })

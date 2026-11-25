@@ -57,6 +57,7 @@ export * from './sections/hub-incidents.js'
 export * from './sections/hub-insight.js'
 export * from './sections/hub-ops.js'
 export * from './sections/hub-people.js'
+export * from './sections/hub-placement.js'
 export * from './sections/hub-releases.js'
 export * from './sections/hub-scale.js'
 export * from './sections/hub-security.js'
@@ -353,6 +354,7 @@ import { hubIncidentsDocs } from './sections/hub-incidents.js'
 import { hubInsightDocs } from './sections/hub-insight.js'
 import { hubIssuesDocs, hubSecretsDocs, hubStorageDocs } from './sections/hub-ops.js'
 import { hubPeopleDocs } from './sections/hub-people.js'
+import { hubPlacementDocs } from './sections/hub-placement.js'
 import { hubReleasesDocs } from './sections/hub-releases.js'
 import { hubScaleDocs } from './sections/hub-scale.js'
 import { hubSecurityDocs } from './sections/hub-security.js'
@@ -1199,6 +1201,7 @@ export const navSections: NavGroup[] = [
       hubMovesDocs,
       hubCapacityDocs,
       hubScaleDocs,
+      hubPlacementDocs,
       hubIssuesDocs,
       hubSecretsDocs,
       hubStorageDocs,

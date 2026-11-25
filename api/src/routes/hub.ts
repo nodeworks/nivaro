@@ -107,6 +107,7 @@ import { hubDataRoutes } from './hub-data.js'
 import { hubDockerRoutes } from './hub-docker.js'
 import { hubMoveRoutes } from './hub-move.js'
 import { hubPeopleRoutes } from './hub-people.js'
+import { hubPlacementRoutes } from './hub-placement.js'
 import { hubReleaseRoutes } from './hub-releases.js'
 import { hubScaleRoutes } from './hub-scale.js'
 import { hubSecurityRoutes } from './hub-security.js'
@@ -152,6 +153,7 @@ export async function hubRoutes(app: FastifyInstance) {
   hubChangeRoutes(app) // change calendar, deploy windows, pre-deploy checklists
   hubDataRoutes(app) // data care: backups, restore drills, refreshes, move rehearsals
   hubScaleRoutes(app) // scaling: manual + automatic replicas and limits of Docker stacks
+  hubPlacementRoutes(app) // hosts + regions, cost chargeback, read-only federation with Hubs
   hubSecurityRoutes(app) // access reviews, compliance pack, image scan, TLS watch, break-glass
 }
 
@@ -709,6 +711,10 @@ function environmentRoutes(app: FastifyInstance) {
           'USE_MOVE',
           'Moving an environment onto or off a shared deployment is a move: use Move instead.'
         )
+      // Hub placement (review L1): a freeze also holds placement edits (deploy windows do not).
+      const { environmentFreezeRefusal } = await import('../services/hub/releases/freeze.js')
+      const frozen = await environmentFreezeRefusal(id, 'placement', { skipWindows: true })
+      if (frozen) return fail(reply, frozen.status, frozen.code, frozen.message)
     }
     if (
       patch.version_pin !== undefined &&

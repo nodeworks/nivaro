@@ -2333,6 +2333,169 @@ export const HUB_ROUTES: HubRoute[] = [
         'Docker: the pin is written inside the promotion lock as part of Apply now (202, a normal Hub deploy) and put back when the deploy fails. GitLab: the pin file extensions/<id>.pin beside the driver’s pin file is committed under the promotion and branch locks, a deploy record (kind extension) is written and the repository pipeline is watched (202). Refused for an extension the app neither lists nor runs (UNKNOWN_EXTENSION), on a shared deployment (EXTENSION_ON_SHARED), while a move or creation is open (MOVE_OPEN, CREATION_OPEN), in a freeze (FROZEN) or while the environment deploys (LOCKED).'
     }
   ),
+  // ─── Hosts and regions (routes/hub-placement.ts) ────────────────────────────
+  r(
+    'GET',
+    '/placement',
+    'Hosts',
+    'admin',
+    'read',
+    'Regions, their Docker hosts and what runs there',
+    {
+      notes: 'Also the hosts in no region and the environments with no placement yet.'
+    }
+  ),
+  r('GET', '/regions', 'Hosts', 'admin', 'read', 'Regions (groups of Docker hosts)'),
+  r('POST', '/regions', 'Hosts', 'admin', 'write', 'Make a region', {
+    body: {
+      key: s('Lower-case key', { required: true }),
+      name: s('Name', { required: true }),
+      note: s(),
+      cost_percent: n('Cost factor for chargeback, 1–1000 (100 = the rates as set)'),
+      position: n()
+    }
+  }),
+  r('PATCH', '/regions/:id', 'Hosts', 'admin', 'write', 'Change a region (its key stays)', {
+    body: { name: s(), note: s(), cost_percent: n(), position: n() }
+  }),
+  r('DELETE', '/regions/:id', 'Hosts', 'admin', 'write', 'Delete a region (its hosts stay)'),
+  r(
+    'PUT',
+    '/placement/hosts/:driverId',
+    'Hosts',
+    'admin',
+    'write',
+    'Put a Docker host in a region',
+    {
+      body: { region_id: n('A region, or null for none'), label: s('Shown beside the host name') }
+    }
+  ),
+  r(
+    'POST',
+    '/placement/environments/:envId/place',
+    'Hosts',
+    'admin',
+    'write',
+    'Run an environment that has no placement on a Docker host',
+    {
+      body: {
+        driver_id: n('The Docker host', { required: true }),
+        stack: s('The swarm stack name', { required: true })
+      },
+      notes:
+        'Only for an environment with no placement yet (409 ALREADY_PLACED: move it instead, kind between_stacks), 409 MOVE_OPEN while a move holds it. Makes the stack placement; deploy it with Apply now.'
+    }
+  ),
+  // ─── Cost chargeback (routes/hub-placement.ts) ──────────────────────────────
+  r(
+    'GET',
+    '/chargeback',
+    'Costs',
+    'admin',
+    'read',
+    'Rough monthly cost per app, department and owner'
+  ),
+  r(
+    'GET',
+    '/chargeback.csv',
+    'Costs',
+    'admin',
+    'read',
+    'The cost report as CSV (one line per environment)',
+    {
+      notes: 'Every text cell is formula-safe. Logged.'
+    }
+  ),
+  r('GET', '/chargeback/settings', 'Costs', 'admin', 'read', 'Rates, currency and window'),
+  r(
+    'PUT',
+    '/chargeback/settings',
+    'Costs',
+    'admin',
+    'write',
+    'Set the rates, currency and window',
+    {
+      body: {
+        currency: s('Three-letter code'),
+        rates: o(
+          'cpu_core_month, memory_gb_month, storage_gb_month, database_gb_month, environment_month'
+        ),
+        window_days: n('7–31')
+      }
+    }
+  ),
+  r(
+    'PUT',
+    '/chargeback/apps/:appId',
+    'Costs',
+    'admin',
+    'write',
+    'Set an app’s department and cost centre',
+    {
+      body: { department: s(), cost_center: s() }
+    }
+  ),
+  // ─── Federation (routes/hub-placement.ts) ───────────────────────────────────
+  r(
+    'GET',
+    '/federation/self',
+    'Federation',
+    'owner',
+    'read',
+    'This Hub and the caller’s Hub scope',
+    {
+      notes:
+        'Another Hub asks this with its key: product, version, how the caller signed in and the key’s Hub scope. Nothing else.'
+    }
+  ),
+  r('GET', '/federation/peers', 'Federation', 'admin', 'read', 'Other Hubs this Hub reads'),
+  r(
+    'POST',
+    '/federation/peers',
+    'Federation',
+    'admin',
+    'write',
+    'Register another Hub (read only)',
+    {
+      body: {
+        name: s('Name', { required: true }),
+        base_url: s('Its https origin', { required: true }),
+        token: secret('An API key of that Hub with hub:read only; answered masked'),
+        enabled: b()
+      },
+      sensitive: true,
+      notes:
+        'The key is checked on the other Hub first (GET /api/hub/federation/self): a key with hub:write is refused (PEER_KEY_TOO_WIDE).'
+    }
+  ),
+  r(
+    'PATCH',
+    '/federation/peers/:id',
+    'Federation',
+    'admin',
+    'write',
+    'Change another Hub’s record',
+    {
+      body: { name: s(), base_url: s(), token: secret('Answered masked'), enabled: b() },
+      sensitive: true,
+      notes: 'A new address needs the key again (TOKEN_REQUIRED).'
+    }
+  ),
+  r('DELETE', '/federation/peers/:id', 'Federation', 'admin', 'write', 'Forget another Hub'),
+  r('POST', '/federation/peers/:id/check', 'Federation', 'admin', 'write', 'Read another Hub now', {
+    notes: 'Two GETs on the other Hub; records the outcome.'
+  }),
+  r(
+    'GET',
+    '/federation/fleet',
+    'Federation',
+    'admin',
+    'read',
+    'Apps of the other Hubs, read only',
+    {
+      query: { fresh: s('1 = read every Hub now (else cached 60 s)') }
+    }
+  ),
   // ─── Security (routes/hub-security.ts) ──────────────────────────────────────
   r(
     'GET',

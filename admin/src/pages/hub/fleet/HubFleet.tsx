@@ -23,6 +23,7 @@ import { cn, formatDateTime, formatRelative } from '@/lib/utils'
 import { ghostButton, StatusChip } from '../hub-parts'
 import { HealthScore, useHealthByEnv } from '../insight/HealthScore'
 import type { EnvHealth } from '../insight/insight-api'
+import { FederatedFleet } from '../placement/FederatedFleet'
 import { FleetSettingsCard } from './FleetSettingsCard'
 import { checkFleetNow, type FleetRow, fetchFleet, fleetKeys, pct } from './fleet-api'
 import { UptimeSheet } from './UptimeSheet'
@@ -355,6 +356,7 @@ export default function HubFleet() {
             </div>
           </>
         )}
+        {isAdmin && <FederatedFleet />}
       </div>
       <UptimeSheet row={uptimeOf} onClose={() => setUptimeOf(null)} />
     </div>

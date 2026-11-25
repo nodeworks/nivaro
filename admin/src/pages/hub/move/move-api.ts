@@ -16,13 +16,13 @@ import { fetchSharedList, type SharedListRow, sharedKeys } from '../shared/share
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type MoveKind = 'to_shared' | 'to_dedicated' | 'between_shared'
+export type MoveKind = 'to_shared' | 'to_dedicated' | 'between_shared' | 'between_stacks'
 export type MoveRouting = 'automatic' | 'manual'
 
 /** Where a move goes: a shared deployment, or a dedicated placement of this environment. */
 export type MoveTarget =
   | { kind: 'shared'; shared_id: number; pool_max?: number }
-  | { kind: 'dedicated'; placement_id: number }
+  | { kind: 'dedicated'; placement_id: number; publish_port?: number }
 
 export interface MoveRouteAction {
   side: 'source' | 'target'
@@ -474,7 +474,8 @@ export const moveStatusTone = (s: string) =>
 export const MOVE_KIND_WORDS: Record<MoveKind, string> = {
   to_shared: 'To a shared deployment',
   to_dedicated: 'To a dedicated stack',
-  between_shared: 'Between shared deployments'
+  between_shared: 'Between shared deployments',
+  between_stacks: 'To another Docker stack'
 }
 
 /** What each step does, in plain words (a key this screen does not know shows as sent). */
@@ -924,6 +925,18 @@ export const MOVE_BLOCKER_COPY: Record<string, Copy> = {
     title: 'The new home runs on several machines with local disks',
     hint: 'The app could start on a machine that does not hold its file. Pick a home on one machine.'
   },
+  PORT_IN_USE: {
+    title: 'The new stack needs a published port of its own',
+    hint: 'Both stacks run on one host that publishes stacks on a port. Enter another free port for the new stack, then plan again.'
+  },
+  MOVE_TARGET_MARKER: {
+    title: 'This app is too old for a move between stacks',
+    hint: 'From 0.3.215 the new stack says it is the new one, so the Hub can prove the name moved. Promote the app first.'
+  },
+  DB_CONNECTIONS: {
+    title: 'Both stacks together open more connections than the database server allows',
+    hint: 'While the move runs the old and the new stack are both up. Lower the stack’s pools or replicas on the Scaling tab, or raise the server’s limit, then plan again.'
+  },
   TARGET_NOT_FROZEN: {
     title: 'The new home was not in maintenance',
     hint: 'The database copy is only put in place while the app is held in maintenance there. Resume the move.'
@@ -1130,6 +1143,10 @@ export const MOVE_WARNING_COPY: Record<string, Copy> = {
     title: 'The app’s per-instance settings are not carried',
     hint: 'Settings → This instance (huddle media servers, the outside-write watch, the daily report, caches …) stay with the old instance name. Enter them on the new home after the move.'
   },
+  DB_LIMIT_UNKNOWN: {
+    title: 'The database server’s connection limit is not known',
+    hint: 'Both stacks run at once during the move, and the Hub cannot check their connections. Set the limit under Database server limits on the Scaling tab.'
+  },
   SESSION_REPLAYS: {
     title: 'Session replays are not moved',
     hint: 'Before 0.3.215: watch any replay you still need before the move; the old ones stay on the old home until it is removed. From 0.3.215 a move copies them.'
@@ -1294,9 +1311,17 @@ export const MOVE_CODE_COPY: Record<string, Copy> = {
     title: 'This environment does not run anywhere the Hub knows yet',
     hint: 'A new environment is placed, not moved: use Place on shared deployment….'
   },
+  NAME_NOT_ON_NEW_STACK: {
+    title: 'The name still reaches the old stack',
+    hint: 'The Hub releases and retires only once the public name answers from the new stack. Point the name at the new stack, then resume.'
+  },
+  BAD_PORT: {
+    title: 'That is not a port the new stack can publish',
+    hint: 'Use a free port from 1024 to 65535.'
+  },
   NOT_A_MOVE: {
-    title: 'The Hub moves only onto or off a shared deployment',
-    hint: 'To change one dedicated stack for another, edit the environment’s placement instead.'
+    title: 'This is not a move the Hub makes',
+    hint: 'Between two dedicated placements only a Docker stack moves (to another Docker host). A GitLab placement changes by editing the environment’s placement.'
   },
   BAD_TARGET: {
     title: 'Pick where to move it',

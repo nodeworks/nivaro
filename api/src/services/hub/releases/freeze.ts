@@ -33,6 +33,8 @@ export type FrozenAction =
   | 'apply'
   | 'config_promote'
   | 'extension_promote'
+  /** Hub placement (review L1): placing an environment / changing its placement (no deploy). */
+  | 'placement'
   /** An access review's removals (services/hub/security/reviews.ts): accounts suspended. */
   | 'access_change'
 
@@ -152,6 +154,7 @@ const ACTION_WORDS: Record<FrozenAction, string> = {
   move: 'Moves',
   config_promote: 'Config promotions',
   extension_promote: 'Extension promotions',
+  placement: 'Placement changes',
   access_change: 'Access review removals'
 }
 
