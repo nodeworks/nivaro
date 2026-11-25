@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import type { Knex } from 'knex'
 import { inThisSchema } from '../db/dialect/h1.js'
 import { db } from '../db/index.js'
@@ -855,9 +856,28 @@ export async function installBlueprint(
           part(`flow:${fid}`, true)
           continue
         }
+        // A webhook trigger never arrives open: bearer auth with a secret made here (the source's
+        // secret never leaves it; an empty one would be read as "misconfigured").
+        const flowRow: Record<string, unknown> = { ...f.flow }
+        if (String(flowRow.trigger ?? '') === 'webhook') {
+          let opts: Record<string, unknown> = {}
+          try {
+            const raw = flowRow.trigger_options
+            const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed))
+              opts = parsed as Record<string, unknown>
+          } catch {
+            opts = {}
+          }
+          flowRow.trigger_options = JSON.stringify({
+            ...opts,
+            auth_type: 'bearer',
+            secret: randomBytes(24).toString('hex')
+          })
+        }
         await atomic(async (k) => {
           await k('nivaro_flows').insert({
-            ...f.flow,
+            ...flowRow,
             status: 'inactive',
             created_at: now,
             updated_at: now

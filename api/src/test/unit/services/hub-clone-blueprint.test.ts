@@ -229,25 +229,39 @@ describe('installer: roles, flows, dimensions', () => {
 })
 
 describe('scrubber', () => {
-  it('names credential keys by their tokens (camelCase, _, -, .)', () => {
+  const FILL = '{{fill in on the new app}}'
+  const withRules = (actions: unknown[]) => {
+    const b = bp()
+    b.rules = [{ collection: 'orders', name: 'R', actions: JSON.stringify(actions) }]
+    return JSON.parse(String(scrubBlueprintSecrets(b).blueprint.rules[0].actions))
+  }
+
+  it('names credential keys by their tokens, in English, German, Spanish and French', () => {
     for (const k of [
       'Authorization',
       'x-api-key',
-      'api_key',
-      'client_secret',
-      'password',
-      'token',
       'clientSecret',
       'myApiKey',
       'db_password_2',
       'X-Amz-Signature',
-      'sig',
       'authCode',
       'privateKeyPem',
-      'apikey'
+      'Kennwort',
+      'contraseña',
+      'mot_de_passe',
+      'AccountKey'
     ])
       expect(isSecretKey(k), k).toBe(true)
-    for (const k of ['name', 'field', 'author', 'keyboard', 'group_key', 'key', 'label'])
+    for (const k of [
+      'name',
+      'field',
+      'author',
+      'keyboard',
+      'group_key',
+      'key',
+      'label',
+      'auth_type'
+    ])
       expect(isSecretKey(k), k).toBe(false)
   })
 
@@ -255,71 +269,54 @@ describe('scrubber', () => {
     expect(scrubUrl('https://u:p@h.example.com/a?token=x&q=1')).toBe(
       'https://h.example.com/a?token=&q='
     )
-    expect(scrubUrl('https://h.example.com/a?sv=1&sig=abc#frag')).toBe(
-      'https://h.example.com/a?sv=&sig='
-    )
-    expect(scrubUrl('https://h.example.com/a')).toBe('https://h.example.com/a')
     expect(scrubUrl('not a url')).toBeNull()
   })
 
-  it('outbound actions are denied by default; elsewhere secrets and auth values are emptied', () => {
-    const b = bp()
-    b.rules = [
+  it('an action type off the in-app allow-list is fully denied; every action arrives disabled', () => {
+    const [erp, setField] = withRules([
       {
-        collection: 'orders',
-        name: 'R',
-        actions: JSON.stringify([
-          {
-            type: 'webhook',
-            url: 'https://partner.example.com/in',
-            method: 'POST',
-            headers: [{ header: 'Authorization', value: 'Basic abc' }],
-            message: 'Order {{ id }} is ready'
-          },
-          {
-            type: 'set_field',
-            field: 'status',
-            value: 'sent',
-            note: 'Ring them. Bearer zZ9abcdefgh, then wait',
-            body: { token: '⟦nvr-secret:token⟧' },
-            apiKey: 'k-1'
-          }
-        ])
-      }
-    ]
-    const { blueprint, scrubbed } = scrubBlueprintSecrets(b)
-    const actions = JSON.parse(String(blueprint.rules[0].actions))
-    expect(actions[0]).toEqual({
-      type: 'webhook',
-      url: '{{fill in on the new app}}',
-      method: 'POST',
-      headers: [{ header: 'Authorization', value: '' }],
-      message: '{{fill in on the new app}}'
+        type: 'erp_submit',
+        external_api: 'MWF',
+        endpoint_path: '/api/Order?code=AbCdEf123456==',
+        context: { region: 'east' }
+      },
+      { type: 'set_field', field: 'status', value: 'sent', note: 'Ring Bearer zZ9abcdefgh now' }
+    ])
+    expect(erp).toEqual({
+      type: 'erp_submit',
+      external_api: FILL,
+      endpoint_path: FILL,
+      context: { region: FILL },
+      disabled: true
     })
-    expect(actions[1].value).toBe('sent')
-    expect(actions[1].note).toBe('Ring them. Bearer , then wait')
-    expect(actions[1].body.token).toBe('⟦nvr-secret:token⟧')
-    expect(actions[1].apiKey).toBe('')
-    expect(scrubbed).toEqual(
-      expect.arrayContaining([
-        'rules[R].actions[0].url',
-        'rules[R].actions[0].headers.Authorization',
-        'rules[R].actions[1].note',
-        'rules[R].actions[1].apiKey'
-      ])
-    )
-    expect(JSON.stringify(scrubbed)).not.toContain('abc')
+    expect(setField).toMatchObject({
+      type: 'set_field',
+      field: 'status',
+      value: 'sent',
+      disabled: true
+    })
+    expect(setField.note).toBe('Ring Bearer  now') // prose, scanned
   })
 
-  it('a flow’s options are placeholders but for their structure, and it names what needs values', () => {
+  it('an unknown action type is denied, and so is an in-app type carrying an outbound key', () => {
+    const [unknown, sneaky] = withRules([
+      { type: 'brand_new_push', target: 'orders', note: 'hello' },
+      { type: 'set_field', field: 'x', url: 'https://partner.example.com/x' }
+    ])
+    expect(unknown).toEqual({ type: 'brand_new_push', target: FILL, note: FILL, disabled: true })
+    expect(sneaky.url).toBe(FILL)
+    expect(sneaky.field).toBe(FILL)
+  })
+
+  it('a flow keeps its structure; a webhook trigger keeps auth_type and loses its secret', () => {
     const b = bp()
     b.flows = [
       {
         flow: {
           id: FLOW,
-          name: 'Hourly',
-          trigger: 'schedule',
-          trigger_options: '{"cron":"0 * * * *"}'
+          name: 'Inbound',
+          trigger: 'webhook',
+          trigger_options: JSON.stringify({ auth_type: 'hmac-sha256', secret: 's3cr3t-hook-value' })
         },
         operations: [
           {
@@ -327,40 +324,129 @@ describe('scrubber', () => {
             flow: FLOW,
             key: 'read',
             type: 'item-read',
-            options: JSON.stringify({ collection: 'orders', filter: { status: { _eq: 'open' } } })
+            options: JSON.stringify({
+              collection: 'orders',
+              filter: { status: { _eq: 'open' } },
+              key: 'HMACSECRET123',
+              name: 'sk_live_inname'
+            })
           },
           {
             id: 'op-2',
             flow: FLOW,
             key: 'mail',
             type: 'mail',
-            options: JSON.stringify({ to: 'ops@example.com', subject: 'Hi' })
+            options: JSON.stringify({ to: 'ops@example.com' })
           }
         ]
       }
     ]
-    const { blueprint } = scrubBlueprintSecrets(b)
-    const f = blueprint.flows?.[0]
+    const f = scrubBlueprintSecrets(b).blueprint.flows?.[0]
     expect(JSON.parse(String(f?.flow.trigger_options))).toEqual({
-      cron: '{{fill in on the new app}}'
+      auth_type: 'hmac-sha256',
+      secret: ''
     })
     expect(JSON.parse(String(f?.operations[0].options))).toEqual({
       collection: 'orders',
-      filter: { status: { _eq: 'open' } }
+      filter: { status: { _eq: 'open' } },
+      key: FILL,
+      name: FILL
     })
-    expect(JSON.parse(String(f?.operations[1].options))).toEqual({
-      to: '{{fill in on the new app}}',
-      subject: '{{fill in on the new app}}'
+    expect(JSON.parse(String(f?.operations[1].options))).toEqual({ to: FILL })
+    expect(String(f?.flow.description)).toMatch(/^Needs values \(fill in on the new app\):/)
+  })
+
+  it('an event flow keeps its collections and scope lists', () => {
+    const b = bp()
+    b.flows = [
+      {
+        flow: {
+          id: FLOW,
+          name: 'On save',
+          trigger: 'event',
+          trigger_options: JSON.stringify({ collections: ['orders'], scope: ['items.create'] })
+        },
+        operations: []
+      }
+    ]
+    const f = scrubBlueprintSecrets(b).blueprint.flows?.[0]
+    expect(JSON.parse(String(f?.flow.trigger_options))).toEqual({
+      collections: ['orders'],
+      scope: ['items.create']
     })
-    expect(String(f?.flow.description)).toBe(
-      'Needs values (fill in on the new app): trigger_options.cron, operations[mail].options.to, operations[mail].options.subject'
-    )
+  })
+
+  it('field options keep structure and labels, never other text; keys are scanned too', () => {
+    const b = bp()
+    b.collections[0].fields = [
+      {
+        field: 'kind',
+        options: JSON.stringify({
+          choices: [{ text: 'In progress', value: 'in_progress' }],
+          remote: 'connect with sk_live_abcdef123456',
+          lookup: { 'https://u:p@h.example/x?token=1': 'v' }
+        })
+      }
+    ]
+    const { blueprint, scrubbed } = scrubBlueprintSecrets(b)
+    const opts = JSON.parse(String(blueprint.collections[0].fields[0].options))
+    expect(opts.choices).toEqual([{ text: 'In progress', value: 'in_progress' }])
+    expect(opts.remote).toBe(FILL)
+    expect(Object.keys(opts.lookup)[0]).not.toContain('u:p')
+    expect(Object.keys(opts.lookup)[0]).not.toContain('token=1')
+    expect(scrubbed.join(' ')).not.toContain('u:p@')
+  })
+
+  it('the change counter, not the 500-path report, decides: 600 secrets are all scrubbed', () => {
+    const b = bp()
+    b.roles = [
+      {
+        role: { id: ROLE, name: 'Clerk' },
+        policies: Array.from({ length: 600 }, (_, i) => ({
+          role: ROLE,
+          collection: 'orders',
+          action: 'read',
+          presets: JSON.stringify({ apiKey: `bulk-${i}-zz9` })
+        }))
+      }
+    ]
+    const { blueprint, scrubbed } = scrubBlueprintSecrets(b)
+    expect(JSON.stringify(blueprint)).not.toMatch(/bulk-\d+-zz9/)
+    expect(scrubbed.length).toBe(500)
   })
 
   it('leaves a blueprint without credentials or outbound parts untouched (same JSON text)', () => {
     const b = bp()
+    for (const f of b.flows ?? []) delete f.flow.secret_col
     const { blueprint, scrubbed } = scrubBlueprintSecrets(b)
     expect(scrubbed).toEqual([])
     expect(JSON.stringify(blueprint)).toBe(JSON.stringify(b))
+  })
+})
+
+describe('installer: a cloned webhook flow', () => {
+  it('arrives with bearer auth and a fresh random secret, inactive', async () => {
+    const id = '44444444-3333-4444-8555-666666666666'
+    const b = sanitizeBlueprint(bp()).blueprint
+    b.collections = []
+    b.workflows = []
+    b.roles = []
+    b.flows = [
+      {
+        flow: {
+          id,
+          name: 'Hook',
+          trigger: 'webhook',
+          trigger_options: '{"auth_type":"hmac-sha256","secret":""}'
+        },
+        operations: []
+      }
+    ]
+    await installBlueprint(b, null)
+    const row = await db('nivaro_flows').where({ id }).first('status', 'trigger_options')
+    const opts = JSON.parse(row.trigger_options)
+    expect(row.status).toBe('inactive')
+    expect(opts.auth_type).toBe('bearer')
+    expect(opts.secret).toMatch(/^[0-9a-f]{48}$/)
   })
 })

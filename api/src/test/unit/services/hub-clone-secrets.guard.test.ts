@@ -38,7 +38,20 @@ const SECRETS = {
   accountKey: 'AcctKeyValue88+zz==',
   hiddenUrl: 'hidden-under-field.example.org',
   hiddenToken: 'hidden-object-token-99',
-  conditionHook: 'cond-hook.example.org'
+  conditionHook: 'cond-hook.example.org',
+  // Third review round: the review's probe cases, all outside the deny-by-default parts.
+  azureCode: 'AzFnKey12345abc==',
+  kennwort: 'geheim123zz',
+  contrasena: 'clave99zz',
+  motDePasse: 'x1y2z3zz',
+  xmlPassword: 'hunter2xyz',
+  pairHeader: 'pairHeaderVal77',
+  base64: 'dXNlcjpodW50ZXIy',
+  quotedKey: 's3cr3tVALUE',
+  doubleEncoded: 'doubleEncKey55',
+  pemBody: 'MIIpemBody99xx',
+  liquidLiteral: 'liquidLiteralSecret88',
+  erpCode: 'ErpFunctionKey77zz'
 }
 /** 600 secrets in one JSON text: the 500-path report cap must never stop the scrubbing. */
 const BULK = Array.from({ length: 600 }, (_, i) => `bulk-secret-${i}-x9`)
@@ -149,7 +162,7 @@ beforeAll(async () => {
     {
       collection: 'orders',
       // A SAS URL inside a longer note.
-      note: `Scans live at https://acctfiles55.blob.core.windows.net/scans?sv=2022-11-02&se=2027-01-01&sp=r&sig=${SECRETS.sasSig} (read only)`
+      note: `Scans live at https://acctfiles55.blob.core.windows.net/scans?sv=2022-11-02&se=2027-01-01&sp=r&sig=${SECRETS.sasSig} (read only). SOAP: <wsse:Password>${SECRETS.xmlPassword}</wsse:Password>. cfg: {"client_secret": "${SECRETS.quotedKey}"}`
     },
     { collection: 'nivaro_users' }
   ])
@@ -160,9 +173,17 @@ beforeAll(async () => {
     // camelCase credential keys in a field's options, and a JWT in its note.
     options: JSON.stringify({
       lookup: { clientSecret: SECRETS.camelClient, myApiKey: SECRETS.camelApiKey },
+      // Credential names in German, Spanish and French; [name, value] header pairs.
+      partner: {
+        Kennwort: SECRETS.kennwort,
+        contraseña: SECRETS.contrasena,
+        mot_de_passe: SECRETS.motDePasse
+      },
+      extra_headers: [['X-Api-Key', SECRETS.pairHeader]],
       dbPassword2: SECRETS.camelDbPassword
     }),
-    note: `Token for the lookup: ${SECRETS.jwt}`
+    // A JWT, a doubly encoded JSON text and a Liquid literal in one note.
+    note: `Token for the lookup: ${SECRETS.jwt} ${JSON.stringify(JSON.stringify({ apiKey: SECRETS.doubleEncoded }))} {% assign k = "${SECRETS.liquidLiteral}" %}`
   })
   await db('nivaro_collection_layouts').insert({ id: 1, collection: 'orders', name: 'Main' })
   await db('nivaro_field_groups').insert({
@@ -184,7 +205,7 @@ beforeAll(async () => {
     template: 'wf-1',
     key: 'new',
     // A URL with user info inside a long string.
-    description: `New orders sync to https://svc:${SECRETS.longStringUrlPass}@erp.example.com/orders every night, then wait for approval.`
+    description: `New orders sync to https://svc:${SECRETS.longStringUrlPass}@erp.example.com/orders every night, then wait for approval. Fallback /api/HttpTrigger?code=${SECRETS.azureCode} with blob ${SECRETS.base64}. Key: -----BEGIN PRIVATE KEY-----${SECRETS.pemBody}-----END PRIVATE KEY-----`
   })
   await db('nivaro_workflow_transitions').insert({
     id: 't-1',
@@ -196,6 +217,13 @@ beforeAll(async () => {
         url: 'https://erp.example.com/hook',
         headers: { Authorization: 'Bearer transition-bearer-token-3e8f' },
         payload_template_key: 'mwf-status'
+      },
+      // The product's own partner push (H1): an Azure Functions key in its endpoint path.
+      {
+        type: 'erp_submit',
+        external_api: 'Fusion',
+        endpoint_path: `/api/HttpTrigger?code=${SECRETS.erpCode}`,
+        context: { region: 'east' }
       }
     ])
   })
@@ -298,9 +326,10 @@ describe('Hub clone export: no secret leaves the source', () => {
     const opts = JSON.parse(String(op?.options)) as Record<string, unknown>
     expect(opts.headers).toEqual({ Authorization: '', 'X-Api-Key': '' })
     // Deny by default: every value but the structural ones is a visible placeholder.
+    // A webhook step is off the in-app allow-list: fully denied but its type.
     expect(opts.url).toBe('{{fill in on the new app}}')
-    expect(opts.method).toBe('POST')
-    expect(opts.collection).toBe('orders')
+    expect(opts.method).toBe('{{fill in on the new app}}')
+    expect(opts.collection).toBe('{{fill in on the new app}}')
     expect(String(flow?.flow.description)).toMatch(
       /^Needs values \(fill in on the new app\):.*options\.url/
     )

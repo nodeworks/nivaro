@@ -495,6 +495,13 @@ export async function webhookFlowRoute(app: FastifyInstance) {
           requireTimestamp: opts.require_timestamp === true
         })
         if (!verdict.ok) return reply.code(401).send({ error: verdict.error })
+      } else {
+        // An auth type this route does not know is never read as "no auth" (fails closed).
+        app.log.error(
+          { flowId: flow.id, auth_type: opts.auth_type },
+          'Webhook flow misconfigured: unknown auth_type'
+        )
+        return reply.code(500).send({ error: 'Webhook misconfigured' })
       }
     }
 

@@ -1196,6 +1196,9 @@ export async function runTransitionActions(opts: {
   let acting: { user: Record<string, unknown> | null } | undefined
   for (const action of actions) {
     if (action.type !== 'erp_submit' && action.type !== 'create_record') continue
+    // A cloned app's actions arrive switched off (Hub app cloning): an administrator there
+    // fills in their values and turns each one on.
+    if ((action as { disabled?: unknown }).disabled === true) continue
     void import('./flow-executor.js')
       .then(({ emitFirehose }) =>
         emitFirehose('transition-action', {
