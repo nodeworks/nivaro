@@ -11,7 +11,7 @@ import { poolCounters } from '../pool-attribution.js'
 import { getTenantRegistry } from '../tenancy/registry.js'
 import type { TenantRecord } from '../tenancy/types.js'
 import { currentTenantKey } from '../tenant-rooms.js'
-import { appJobCounts, readStoredBytes } from './enforce.js'
+import { appJobCounts, isExternalRequest, readStoredBytes } from './enforce.js'
 import type { AppLimits } from './limits.js'
 
 /**
@@ -269,7 +269,8 @@ export function registerAppUsage(app: FastifyInstance): void {
   if (!capacityScope()) return
   // onSend, not onResponse: it still runs inside the app's context on a shared deployment.
   app.addHook('onSend', async (req, reply, payload) => {
-    if (req.url.startsWith('/api/') && !NOT_COUNTED.test(req.url))
+    // In-process re-entries (batch-get, MCP tool calls, app.inject) are parts of a counted request.
+    if (req.url.startsWith('/api/') && !NOT_COUNTED.test(req.url) && isExternalRequest(req))
       noteAppRequest(reply.elapsedTime, reply.statusCode)
     return payload
   })
@@ -461,19 +462,23 @@ export async function readUsage(now = Date.now()): Promise<CapacityUsage> {
     string,
     { running: number | null; storage: { bytes: number; at: number } | null }
   >()
+  // Apps not active (maintenance, provisioning, suspended) are not read: no pool is opened for
+  // them on the answering replica; their last stored bytes stay.
   const reads: Array<() => Promise<void>> = shared
-    ? tenants.map((t) => async () => {
-        try {
-          const f = await withTenant(
-            t,
-            async () => ({ running: await runningJobs(), storage: await storageOf(t.id, now) }),
-            t.origin
-          )
-          facts.set(t.id, f)
-        } catch {
-          facts.set(t.id, { running: null, storage: storage.get(t.id) ?? null })
-        }
-      })
+    ? tenants
+        .filter((t) => t.status === 'active')
+        .map((t) => async () => {
+          try {
+            const f = await withTenant(
+              t,
+              async () => ({ running: await runningJobs(), storage: await storageOf(t.id, now) }),
+              t.origin
+            )
+            facts.set(t.id, f)
+          } catch {
+            facts.set(t.id, { running: null, storage: storage.get(t.id) ?? null })
+          }
+        })
     : [
         async () => {
           facts.set(DEDICATED_APP, {
@@ -487,7 +492,9 @@ export async function readUsage(now = Date.now()): Promise<CapacityUsage> {
   const limitsOf = new Map(tenants.map((t) => [t.id, t.limits ?? null]))
   const apps: AppUsage[] = ids.map((id) => {
     const a = agg.apps.get(id) as AppUsage & { jobs_waiting?: number }
-    const f = facts.get(id)
+    // An app not read now keeps its last stored bytes.
+    const kept = storage.get(id)
+    const f = facts.get(id) ?? (kept ? { running: null, storage: kept } : undefined)
     const { jobs_waiting, ...rest } = a
     return {
       ...rest,

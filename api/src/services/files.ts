@@ -10,7 +10,7 @@ import { db } from '../db/index.js'
 import { concat } from '../db/sql-dialect.js'
 import { getTenantId, getTenantSlug } from '../db/tenant-context.js'
 import type { CMSFile, User } from '../types.js'
-import { assertAppStorageRoom } from './capacity/enforce.js'
+import { assertAppStorageRoom, assertNoDirectUploadUnderLimit } from './capacity/enforce.js'
 import { tenantSource } from './deployment-mode.js'
 import { normalizeStoredType } from './file-serving-safety.js'
 import { PRIVATE_TAG } from './private-files.js'
@@ -308,6 +308,9 @@ export async function createPresignedFile(
       statusCode: 400
     })
   }
+  // Hub capacity: the bytes go straight to object storage and no step ever learns their size, so
+  // an app with a storage limit uploads through the app instead (where the limit is checked).
+  await assertNoDirectUploadUnderLimit()
 
   const fileId = randomUUID()
   const diskId = ulid().toLowerCase()
@@ -544,6 +547,8 @@ export async function replaceFileContent(
   const mimeType = normalizeStoredType(claimedType, () => mime.lookup(filename), buffer)
   const existing = await getFile(id)
   if (!existing) return undefined
+  // Hub capacity: a replacement may only grow the app's files by what its storage limit allows.
+  await assertAppStorageRoom(buffer.length - Number(existing.filesize ?? 0))
   const diskId = ulid().toLowerCase()
   const ext = extname(filename) || (mime.extension(mimeType) ? `.${mime.extension(mimeType)}` : '')
   const diskName = buildDiskName(diskId, ext)

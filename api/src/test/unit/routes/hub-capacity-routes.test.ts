@@ -72,14 +72,8 @@ beforeAll(async () => {
   process.env.HUB = 'on'
   process.env.ENCRYPTION_KEY = 'e'.repeat(64)
   for (const mig of migrations) await mig.up(db)
-  await db.schema.createTable('nivaro_extension_settings', (t) => {
-    t.increments('id')
-    t.string('extension_id')
-    t.string('key')
-    t.text('value')
-    t.dateTime('updated_at')
-    t.string('updated_by')
-  })
+  // The real table (migration 254: no updated_by column).
+  await (await import('../../../db/migrations/254_extension_settings.js')).up(db)
   app = Fastify()
   await app.register(hubRoutes, { prefix: '/api/hub' })
   await app.ready()
@@ -225,6 +219,20 @@ describe('reads', () => {
     expect(
       (await app.inject({ url: '/api/hub/capacity/rebalances', headers: admin })).json()
     ).toEqual({ data: [] })
+  })
+
+  it('advisor thresholds save on the real settings table, twice (insert then update)', async () => {
+    for (const share of [0.6, 0.7]) {
+      const r = await app.inject({
+        method: 'PUT',
+        url: '/api/hub/capacity/settings',
+        headers: admin,
+        payload: { most_share: share }
+      })
+      expect(r.statusCode).toBe(200)
+    }
+    const read = await app.inject({ url: '/api/hub/capacity/settings', headers: admin })
+    expect(read.json().data.most_share).toBe(0.7)
   })
 
   it('a rebalance plan needs two deployments', async () => {

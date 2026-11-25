@@ -39,14 +39,8 @@ beforeAll(async () => {
   for (const m of migrations) await m.up(db)
   // A second run changes nothing (guarded, additive).
   await migrations[3].up(db)
-  await db.schema.createTable('nivaro_extension_settings', (t) => {
-    t.increments('id')
-    t.string('extension_id')
-    t.string('key')
-    t.text('value')
-    t.dateTime('updated_at')
-    t.string('updated_by')
-  })
+  // The real table (migration 254: no updated_by column).
+  await (await import('../../../db/migrations/254_extension_settings.js')).up(db)
 })
 afterAll(async () => db.destroy())
 
@@ -120,6 +114,14 @@ describe('store', () => {
     expect(s.sampled_at).toBeInstanceOf(Date)
   })
 
+  it('prunes more rows than one statement may name (2,100 parameters) in batches', async () => {
+    const old = new Date(Date.now() - 40 * 86_400_000)
+    await store.insertSamples(
+      Array.from({ length: 2500 }, (_, i) => row({ sampled_at: old, environment_id: i }))
+    )
+    expect(await store.pruneSamples()).toBe(2500)
+  })
+
   it('limits: set, change, clear (an empty set removes the row)', async () => {
     expect(await store.setLimits(9, { jobs: 2 }, 'x')).toBe(true)
     expect(await store.setLimits(9, { jobs: 2 }, 'x')).toBe(false)
@@ -130,10 +132,7 @@ describe('store', () => {
   })
 
   it('settings: stored values within bounds, the rest default', async () => {
-    await store.writeSettings(
-      store.normalizeSettings({ most_share: 0.7, fits: { max_rpm: -5 } }),
-      'x'
-    )
+    await store.writeSettings(store.normalizeSettings({ most_share: 0.7, fits: { max_rpm: -5 } }))
     const s = await store.readSettings()
     expect(s.most_share).toBe(0.7)
     expect(s.fits.max_rpm).toBe(store.DEFAULT_SETTINGS.fits.max_rpm)
@@ -490,6 +489,27 @@ describe('rebalance runs', () => {
     ])
   })
 
+  const planOf = (hash: string, over: Record<string, unknown> = {}) =>
+    ({
+      kind: 'between_shared',
+      routing: 'automatic',
+      steps: [],
+      route: [],
+      manual_request: null,
+      version: '0.3.215',
+      hostnames: [],
+      files: { count: 0, bytes: 0, first_pull: 'full' },
+      blockers: [],
+      warnings: [],
+      checklist: [],
+      plan_hash: hash,
+      ...over
+    }) as never
+  const okDeps = {
+    openMove: async () => false,
+    planFor: async (env: number) => planOf((env === 21 ? 'a' : 'b').repeat(64))
+  }
+
   const startBody = (over: Record<string, unknown> = {}) => ({
     shared_ids: [1, 2],
     moves: [
@@ -507,38 +527,35 @@ describe('rebalance runs', () => {
   })
 
   it('refuses a bad start (confirm, window, a move not on the deployments, a second run)', async () => {
-    const no = async () => false
     await expect(
-      rebalance.createRebalance(startBody({ confirm: 'x' }), by, { openMove: no })
+      rebalance.createRebalance(startBody({ confirm: 'x' }), by, okDeps)
     ).rejects.toMatchObject({ code: 'CONFIRM_MISMATCH' })
     await expect(
       rebalance.createRebalance(
         startBody({ window: { start: '9', end: '10:00', tz: 'UTC' } }),
         by,
-        { openMove: no }
+        okDeps
       )
     ).rejects.toMatchObject({ code: 'BAD_WINDOW' })
     await expect(
       rebalance.createRebalance(
         startBody({ moves: [{ env_id: 21, to_shared_id: 1, plan_hash: 'a'.repeat(64) }] }),
         by,
-        { openMove: no }
+        okDeps
       )
     ).rejects.toMatchObject({ code: 'BAD_MOVES' })
     await expect(
-      rebalance.createRebalance(startBody(), by, { openMove: async () => true })
+      rebalance.createRebalance(startBody(), by, { ...okDeps, openMove: async () => true })
     ).rejects.toMatchObject({ code: 'MOVE_OPEN' })
-    const id = await rebalance.createRebalance(startBody(), by, { openMove: no })
+    const id = await rebalance.createRebalance(startBody(), by, okDeps)
     expect(id).toBeGreaterThan(0)
-    await expect(
-      rebalance.createRebalance(startBody(), by, { openMove: no })
-    ).rejects.toMatchObject({
+    await expect(rebalance.createRebalance(startBody(), by, okDeps)).rejects.toMatchObject({
       code: 'REBALANCE_OPEN'
     })
   })
 
   it('runs one move at a time, moves on after success, stops at the first failure', async () => {
-    const id = await rebalance.createRebalance(startBody(), by, { openMove: async () => false })
+    const id = await rebalance.createRebalance(startBody(), by, okDeps)
     const started: unknown[] = []
     let status = 'running'
     const deps = {
@@ -570,7 +587,7 @@ describe('rebalance runs', () => {
     expect(await step()).toBe('failed')
     const r = await rebalance.readRebalance(id)
     expect(r?.status).toBe('failed')
-    expect(r?.error).toContain('rolled_back')
+    expect(r?.error).toContain('was rolled back')
     expect(r?.moves.map((m) => m.result)).toEqual(['success', 'failed'])
   })
 
@@ -578,7 +595,7 @@ describe('rebalance runs', () => {
     const id = await rebalance.createRebalance(
       startBody({ window: { start: '01:00', end: '02:00', tz: 'UTC' } }),
       by,
-      { openMove: async () => false }
+      okDeps
     )
     const { MoveError } = await import('../../../services/hub/move/run.js')
     const deps = {
@@ -596,10 +613,10 @@ describe('rebalance runs', () => {
   })
 
   it('cancel: at once with no move under way, after it otherwise', async () => {
-    const id = await rebalance.createRebalance(startBody(), by, { openMove: async () => false })
+    const id = await rebalance.createRebalance(startBody(), by, okDeps)
     expect((await rebalance.cancelRebalance(id)).status).toBe('cancelled')
     await expect(rebalance.cancelRebalance(id)).rejects.toMatchObject({ code: 'ENDED' })
-    const id2 = await rebalance.createRebalance(startBody(), by, { openMove: async () => false })
+    const id2 = await rebalance.createRebalance(startBody(), by, okDeps)
     const deps = {
       confirmText: async () => 'acme/dev',
       start: async () => ({ move_id: 9 }),
@@ -610,6 +627,76 @@ describe('rebalance runs', () => {
     expect(await rebalance.tickRebalance((await rebalance.readRebalance(id2))!, deps)).toBe(
       'cancelled'
     )
+  })
+
+  it('refuses at start a move the planner now refuses, a changed plan, or manual routing', async () => {
+    await expect(
+      rebalance.createRebalance(startBody(), by, {
+        ...okDeps,
+        planFor: async () => planOf('a'.repeat(64), { routing: 'manual' })
+      })
+    ).rejects.toMatchObject({ code: 'MANUAL_ROUTE' })
+    await expect(
+      rebalance.createRebalance(startBody(), by, {
+        ...okDeps,
+        planFor: async () => planOf('f'.repeat(64))
+      })
+    ).rejects.toMatchObject({ code: 'PLAN_CHANGED' })
+    await expect(
+      rebalance.createRebalance(startBody(), by, {
+        ...okDeps,
+        planFor: async (env: number) =>
+          planOf((env === 21 ? 'a' : 'b').repeat(64), {
+            blockers: [{ code: 'SQLITE', text: 'x' }]
+          })
+      })
+    ).rejects.toMatchObject({ code: 'PLAN_BLOCKED' })
+  })
+
+  it('a Cancel while a start is under way waits for that move (never says cancelled over it)', async () => {
+    const id = await rebalance.createRebalance(startBody(), by, okDeps)
+    let cancelled: string | null = null
+    const deps = {
+      confirmText: async () => 'acme/dev',
+      // The cancel lands while startMove is still planning.
+      start: async () => {
+        cancelled = (await rebalance.cancelRebalance(id)).status
+        return { move_id: 55 }
+      },
+      moveStatus: async () => 'running'
+    }
+    expect(await rebalance.tickRebalance((await rebalance.readRebalance(id))!, deps)).toBe(
+      'started'
+    )
+    expect(cancelled).toBe('cancelling')
+    const r = await rebalance.readRebalance(id)
+    expect(r).toMatchObject({ status: 'cancelling', current_move_id: 55 })
+    expect(r?.moves[0]).toMatchObject({ move_id: 55, result: 'running' })
+  })
+
+  it('an overlapping tick leaves a claimed start alone; a stale claim adopts the move it made', async () => {
+    const id = await rebalance.createRebalance(startBody(), by, okDeps)
+    await db(store.REBALANCES)
+      .where({ id })
+      .update({ current_move_id: rebalance.STARTING, heartbeat_at: new Date() })
+    const deps = { movedSince: async () => 77 }
+    expect(await rebalance.tickRebalance((await rebalance.readRebalance(id))!, deps)).toBe(
+      'starting'
+    )
+    await db(store.REBALANCES)
+      .where({ id })
+      .update({ heartbeat_at: new Date(Date.now() - 10 * 60_000) })
+    expect(await rebalance.tickRebalance((await rebalance.readRebalance(id))!, deps)).toBe(
+      'recovered'
+    )
+    expect((await rebalance.readRebalance(id))?.current_move_id).toBe(77)
+    // A run whose tick was overtaken writes nothing.
+    const stale = (await rebalance.readRebalance(id))!
+    await db(store.REBALANCES).where({ id }).update({ status: 'cancelling' })
+    expect(await rebalance.tickRebalance(stale, { moveStatus: async () => 'failed' })).toBe(
+      'changed-meanwhile'
+    )
+    expect((await rebalance.readRebalance(id))?.status).toBe('cancelling')
   })
 
   it('plans with the move planner and leaves out moves that cannot run', async () => {

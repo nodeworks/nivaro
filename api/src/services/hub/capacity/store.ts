@@ -70,19 +70,22 @@ export async function insertSamples(rows: CapacitySample[]): Promise<void> {
   for (let i = 0; i < rows.length; i += 100) await db(SAMPLES).insert(rows.slice(i, i + 100))
 }
 
-/** Deletes samples older than KEEP_DAYS, at most 5000 rows per statement. */
+/** Rows one prune statement names: under SQL Server's 2,100-parameter cap. */
+const PRUNE_BATCH = 1000
+
+/** Deletes samples older than KEEP_DAYS, PRUNE_BATCH rows per statement, at most 200 batches. */
 export async function pruneSamples(now = new Date()): Promise<number> {
   const before = new Date(now.getTime() - KEEP_DAYS * 86_400_000)
   let total = 0
-  for (let round = 0; round < 50; round++) {
+  for (let round = 0; round < 200; round++) {
     const ids = (await db(SAMPLES)
       .where('sampled_at', '<', before)
       .orderBy('id')
-      .limit(5000)
+      .limit(PRUNE_BATCH)
       .pluck('id')) as number[]
     if (!ids.length) break
     total += await db(SAMPLES).whereIn('id', ids).del()
-    if (ids.length < 5000) break
+    if (ids.length < PRUNE_BATCH) break
   }
   return total
 }
@@ -220,7 +223,9 @@ export async function readSettings(): Promise<CapacitySettings> {
   }
 }
 
-export async function writeSettings(s: CapacitySettings, by: string): Promise<void> {
+/** Stores the thresholds. nivaro_extension_settings (migration 254) has no `updated_by`: who
+ *  changed them is in the activity log the route writes. */
+export async function writeSettings(s: CapacitySettings): Promise<void> {
   const value = JSON.stringify(s)
   const existing = (await db('nivaro_extension_settings')
     .where({ extension_id: SETTINGS_EXT, key: SETTINGS_KEY })
@@ -228,13 +233,12 @@ export async function writeSettings(s: CapacitySettings, by: string): Promise<vo
   if (existing)
     await db('nivaro_extension_settings')
       .where({ id: existing.id })
-      .update({ value, updated_at: new Date(), updated_by: by })
+      .update({ value, updated_at: new Date() })
   else
     await db('nivaro_extension_settings').insert({
       extension_id: SETTINGS_EXT,
       key: SETTINGS_KEY,
       value,
-      updated_at: new Date(),
-      updated_by: by
+      updated_at: new Date()
     })
 }

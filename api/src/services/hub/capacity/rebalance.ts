@@ -1,3 +1,4 @@
+import type { Knex } from 'knex'
 import { db } from '../../../db/index.js'
 import { readApp } from '../apps.js'
 import { DEFAULT_POOL_MAX } from '../drivers.js'
@@ -36,6 +37,13 @@ import { type CapacitySample, REBALANCES, samplesSince } from './store.js'
  */
 
 export const MAX_MOVES = 10
+
+/** How a move that did not succeed ended, in words (a run's error is shown as it is). */
+const MOVE_END_WORDS: Record<string, string> = {
+  failed: 'failed',
+  rolled_back: 'was rolled back',
+  cancelled: 'was cancelled'
+}
 const ENVS = 'nivaro_hub_environments'
 
 export interface BalanceApp {
@@ -412,7 +420,10 @@ export const REBALANCE_CONFIRM = 'rebalance'
 export async function createRebalance(
   body: StartRebalanceBody,
   by: string,
-  deps: { openMove?: (envId: number) => Promise<boolean> } = {}
+  deps: {
+    openMove?: (envId: number) => Promise<boolean>
+    planFor?: (envId: number, to: unknown) => Promise<MovePlan>
+  } = {}
 ): Promise<number> {
   const ids = checkSharedIds(body.shared_ids)
   if (body.confirm !== REBALANCE_CONFIRM)
@@ -478,6 +489,41 @@ export async function createRebalance(
         `${app?.key ?? '?'}/${envRow.key} has an open move.`,
         409
       )
+    // The rules the panel shows are enforced here too: the plan as checked, no blockers, and no
+    // manual routing (an unattended run must never wait on a person half way).
+    const label = `${app?.key ?? '?'}/${envRow.key}`
+    let plan: MovePlan
+    try {
+      plan = await (deps.planFor ?? ((e, t) => planFor(e, t)))(env, {
+        kind: 'shared',
+        shared_id: to,
+        pool_max: pool
+      })
+    } catch (err) {
+      throw new RebalanceError(
+        'PLAN_REFUSED',
+        `${label}: ${err instanceof MoveError ? err.message : 'the move could not be planned.'}`,
+        409
+      )
+    }
+    if (plan.plan_hash !== m.plan_hash)
+      throw new RebalanceError(
+        'PLAN_CHANGED',
+        `${label}: the plan changed since you checked it. Plan the rebalance again.`,
+        409
+      )
+    if (plan.blockers.length)
+      throw new RebalanceError(
+        'PLAN_BLOCKED',
+        `${label}: the move planner refuses it (${plan.blockers.map((b) => b.code).join(', ')}).`,
+        409
+      )
+    if (plan.routing === 'manual')
+      throw new RebalanceError(
+        'MANUAL_ROUTE',
+        `${label}: its names change by hand, so it cannot run in a rebalance. Move it on its own.`,
+        409
+      )
     seen.add(env)
     moves.push({
       env_id: env,
@@ -527,21 +573,39 @@ export async function createRebalance(
   return Number(last.id)
 }
 
-/** Asks a run to stop before its next move. A move already running is left to finish. */
+/** `current_move_id` while a move is being started (claimed, startMove not answered yet). */
+export const STARTING = 0
+/** A claim older than this with no move recorded: the start was cut off (the process died). */
+const START_STALE_MS = 5 * 60_000
+
+/** `current_move_id` matched as read (null-safe). */
+function sameCurrentMove(q: Knex.QueryBuilder, id: number | null): Knex.QueryBuilder {
+  return id === null ? q.whereNull('current_move_id') : q.where('current_move_id', id)
+}
+
+/**
+ * Asks a run to stop before its next move. A move already running (or being started) is left to
+ * finish and the run ends after it. Compare-and-set on the status, index AND current move, so a
+ * tick that claimed a start meanwhile is never overtaken (the run then turns `cancelling`).
+ */
 export async function cancelRebalance(id: number): Promise<RebalanceRow> {
-  const r = await readRebalance(id)
-  if (!r) throw new RebalanceError('NOT_FOUND', 'No such rebalance.', 404)
-  if (r.status !== 'running' && r.status !== 'cancelling')
-    throw new RebalanceError('ENDED', 'This rebalance has already ended.', 409)
-  const busy = r.current_move_id !== null
-  await db(REBALANCES)
-    .where({ id, status: r.status })
-    .update(
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const r = await readRebalance(id)
+    if (!r) throw new RebalanceError('NOT_FOUND', 'No such rebalance.', 404)
+    if (r.status !== 'running' && r.status !== 'cancelling')
+      throw new RebalanceError('ENDED', 'This rebalance has already ended.', 409)
+    const busy = r.current_move_id !== null
+    const n = await sameCurrentMove(
+      db(REBALANCES).where({ id, status: r.status, current_index: r.current_index }),
+      r.current_move_id
+    ).update(
       busy
         ? { status: 'cancelling', note: 'Stopping after the move under way ends.' }
         : { status: 'cancelled', finished_at: new Date(), note: 'Cancelled.' }
     )
-  return (await readRebalance(id)) as RebalanceRow
+    if (Number(n) > 0) return (await readRebalance(id)) as RebalanceRow
+  }
+  throw new RebalanceError('REBALANCE_CHANGED', 'The rebalance changed meanwhile. Try again.', 409)
 }
 
 // ─── the tick ────────────────────────────────────────────────────────────────
@@ -551,6 +615,8 @@ export interface TickDeps {
   moveStatus?: (moveId: number) => Promise<string | null>
   start?: (envId: number, body: unknown, by: string) => Promise<{ move_id: number }>
   confirmText?: (envId: number) => Promise<string | null>
+  /** The move of an environment started at or after `since`, or null (start recovery). */
+  movedSince?: (envId: number, since: Date) => Promise<number | null>
 }
 
 async function defaultConfirm(envId: number): Promise<string | null> {
@@ -562,27 +628,101 @@ async function defaultConfirm(envId: number): Promise<string | null> {
   return app ? `${app.key}/${env.key}` : null
 }
 
-/** Writes the run's moves, index and status — only when nobody moved it on meanwhile. */
+async function defaultMovedSince(envId: number, since: Date): Promise<number | null> {
+  const row = (await db('nivaro_hub_moves')
+    .where({ environment_id: envId })
+    .where('started_at', '>=', new Date(since.getTime() - 1000))
+    .orderBy('id', 'desc')
+    .first('id')) as { id: number } | undefined
+  return row ? Number(row.id) : null
+}
+
+/**
+ * Writes the run's moves, index and status — only when nobody moved it on meanwhile (same status,
+ * index AND current move). Answers whether it wrote.
+ */
 async function advance(
   r: RebalanceRow,
   patch: Partial<Record<string, unknown>>,
   moves: RebalanceMove[]
 ): Promise<boolean> {
-  const n = await db(REBALANCES)
-    .where({ id: r.id, status: r.status, current_index: r.current_index })
-    .update({ ...patch, moves: JSON.stringify(moves), heartbeat_at: new Date() })
+  const n = await sameCurrentMove(
+    db(REBALANCES).where({ id: r.id, status: r.status, current_index: r.current_index }),
+    r.current_move_id
+  ).update({ ...patch, moves: JSON.stringify(moves), heartbeat_at: new Date() })
   return Number(n) > 0
 }
+
+/** Records the move a claimed start made (the status may have turned `cancelling` meanwhile). */
+async function recordStarted(
+  r: RebalanceRow,
+  moveId: number,
+  note: string,
+  moves: RebalanceMove[]
+): Promise<boolean> {
+  const n = await db(REBALANCES)
+    .where({ id: r.id, current_index: r.current_index, current_move_id: STARTING })
+    .whereIn('status', ['running', 'cancelling'])
+    .update({
+      current_move_id: moveId,
+      note,
+      moves: JSON.stringify(moves),
+      heartbeat_at: new Date()
+    })
+  return Number(n) > 0
+}
+
+/** Ends a claimed start that failed (the run stops, whatever its status turned to). */
+async function failStart(r: RebalanceRow, error: string, moves: RebalanceMove[]): Promise<void> {
+  await db(REBALANCES)
+    .where({ id: r.id, current_index: r.current_index, current_move_id: STARTING })
+    .whereIn('status', ['running', 'cancelling'])
+    .update({
+      status: 'failed',
+      current_move_id: null,
+      finished_at: new Date(),
+      error: error.slice(0, 1000),
+      moves: JSON.stringify(moves),
+      heartbeat_at: new Date()
+    })
+}
+
+/** What a step answers when its conditional write found the run already moved on. */
+const done = (wrote: boolean, what: string) => (wrote ? what : 'changed-meanwhile')
 
 /** One step of one open run. Answers what it did (for the job's log and tests). */
 export async function tickRebalance(r: RebalanceRow, deps: TickDeps = {}): Promise<string> {
   const now = (deps.now ?? (() => new Date()))()
   const moves = r.moves.map((m) => ({ ...m }))
+  const cur = moves[r.current_index]
+
+  // A start claimed by an earlier tick and not recorded yet: wait for it; once stale (that
+  // process stopped half way), adopt the move it made, or end the run.
+  if (r.current_move_id === STARTING) {
+    const claimedAt = r.heartbeat_at ? new Date(r.heartbeat_at) : now
+    if (now.getTime() - claimedAt.getTime() < START_STALE_MS) return 'starting'
+    const found = cur ? await (deps.movedSince ?? defaultMovedSince)(cur.env_id, claimedAt) : null
+    if (found !== null && cur) {
+      cur.move_id = found
+      cur.result = 'running'
+      return done(
+        await recordStarted(r, found, `Moving ${cur.label} (move ${found}).`, moves),
+        'recovered'
+      )
+    }
+    if (cur) cur.result = 'failed'
+    await failStart(
+      r,
+      `${cur?.label ?? 'A move'}: its start was cut off and no move was made.`,
+      moves
+    )
+    return 'failed'
+  }
+
   if (r.current_move_id !== null) {
     const status = await (
       deps.moveStatus ?? (async (id: number) => (await readMove(id))?.status ?? null)
     )(r.current_move_id)
-    const cur = moves[r.current_index]
     if (status && (OPEN_MOVE_STATUSES as readonly string[]).includes(status)) {
       await db(REBALANCES).where({ id: r.id }).update({ heartbeat_at: new Date() })
       return 'waiting-move'
@@ -590,18 +730,18 @@ export async function tickRebalance(r: RebalanceRow, deps: TickDeps = {}): Promi
     if (status === 'success') {
       if (cur) cur.result = 'success'
       const next = r.current_index + 1
-      const done = next >= moves.length
-      const ending = done || r.status === 'cancelling'
-      await advance(
+      const last = next >= moves.length
+      const ending = last || r.status === 'cancelling'
+      const wrote = await advance(
         r,
         {
           current_index: next,
           current_move_id: null,
           ...(ending
             ? {
-                status: done ? 'success' : 'cancelled',
+                status: last ? 'success' : 'cancelled',
                 finished_at: new Date(),
-                note: done ? 'Every move ended in success.' : 'Cancelled after the move under way.'
+                note: last ? 'Every move ended in success.' : 'Cancelled after the move under way.'
               }
             : {
                 note: `${cur?.label ?? 'A move'} moved. Next move at the next minute in the window.`
@@ -609,28 +749,27 @@ export async function tickRebalance(r: RebalanceRow, deps: TickDeps = {}): Promi
         },
         moves
       )
-      return done ? 'success' : ending ? 'cancelled' : 'moved'
+      return done(wrote, last ? 'success' : ending ? 'cancelled' : 'moved')
     }
     if (cur) cur.result = 'failed'
-    await advance(
+    const wrote = await advance(
       r,
       {
         status: 'failed',
         finished_at: new Date(),
-        error: `Move ${r.current_move_id} of ${cur?.label ?? 'an environment'} ended ${status ?? 'unreadable'}; the rebalance stopped there.`
+        error: `Move ${r.current_move_id} of ${cur?.label ?? 'an environment'} ${MOVE_END_WORDS[status ?? ''] ?? 'could not be read'}; the rebalance stopped there.`
       },
       moves
     )
-    return 'failed'
+    return done(wrote, 'failed')
   }
-  if (r.status === 'cancelling') {
-    await advance(r, { status: 'cancelled', finished_at: new Date(), note: 'Cancelled.' }, moves)
-    return 'cancelled'
-  }
-  if (r.current_index >= moves.length) {
-    await advance(r, { status: 'success', finished_at: new Date() }, moves)
-    return 'success'
-  }
+  if (r.status === 'cancelling')
+    return done(
+      await advance(r, { status: 'cancelled', finished_at: new Date(), note: 'Cancelled.' }, moves),
+      'cancelled'
+    )
+  if (r.current_index >= moves.length)
+    return done(await advance(r, { status: 'success', finished_at: new Date() }, moves), 'success')
   if (!inWindow(now, r.window_start, r.window_end, r.window_tz)) {
     await db(REBALANCES)
       .where({ id: r.id })
@@ -638,18 +777,30 @@ export async function tickRebalance(r: RebalanceRow, deps: TickDeps = {}): Promi
     return 'outside-window'
   }
   const m = moves[r.current_index]
-  const confirm = await (deps.confirmText ?? defaultConfirm)(m.env_id)
-  if (!confirm) {
+  const fail = async (error: string) => {
     m.result = 'failed'
-    await advance(
-      r,
-      { status: 'failed', finished_at: new Date(), error: `${m.label}: the environment is gone.` },
-      moves
+    return done(
+      await advance(r, { status: 'failed', finished_at: new Date(), error }, moves),
+      'failed'
     )
-    return 'failed'
   }
+  if (!r.created_by) return fail('The rebalance has no person to start its moves as.')
+  const confirm = await (deps.confirmText ?? defaultConfirm)(m.env_id)
+  if (!confirm) return fail(`${m.label}: the environment is gone.`)
+  // Claim the turn before anything slow: a Cancel from here on sees a move under way and waits
+  // for it (cancelling), and an overlapping tick finds the claim and leaves it alone.
+  if (
+    !(await advance(
+      r,
+      { current_move_id: STARTING, note: `Starting the move of ${m.label}…` },
+      moves
+    ))
+  )
+    return 'changed-meanwhile'
+  const mine: RebalanceRow = { ...r, current_move_id: STARTING }
+  let out: { move_id: number }
   try {
-    const out = await (
+    out = await (
       deps.start ??
       ((env: number, body: unknown, by: string) =>
         startMove(env, body as Parameters<typeof startMove>[1], by))
@@ -662,29 +813,24 @@ export async function tickRebalance(r: RebalanceRow, deps: TickDeps = {}): Promi
         checklist: m.checklist,
         overrides: []
       },
-      r.created_by ?? ''
+      r.created_by
     )
-    m.move_id = out.move_id
-    m.result = 'running'
-    await advance(
-      r,
-      { current_move_id: out.move_id, note: `Moving ${m.label} (move ${out.move_id}).` },
-      moves
-    )
-    return 'started'
   } catch (err) {
     m.result = 'failed'
     const text =
       err instanceof MoveError
         ? `${m.label}: ${err.code} — ${err.message}`
         : `${m.label}: the move could not start.`
-    await advance(
-      r,
-      { status: 'failed', finished_at: new Date(), error: text.slice(0, 1000) },
-      moves
-    )
+    await failStart(mine, text, moves)
     return 'failed'
   }
+  // The move runs now: record it before anything else.
+  m.move_id = out.move_id
+  m.result = 'running'
+  return done(
+    await recordStarted(mine, out.move_id, `Moving ${m.label} (move ${out.move_id}).`, moves),
+    'started'
+  )
 }
 
 /** Every open run, one step each (the `hub-rebalance-tick` job). */

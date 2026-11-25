@@ -16,7 +16,7 @@ import {
   type StartRebalanceBody,
   tickRebalances
 } from '../services/hub/capacity/rebalance.js'
-import { runCapacitySample } from '../services/hub/capacity/sample.js'
+import { sampleOnce } from '../services/hub/capacity/sample.js'
 import {
   getLimits,
   normalizeSettings,
@@ -110,7 +110,7 @@ export function hubCapacityRoutes(app: FastifyInstance): void {
   })
 
   app.post('/capacity/sample', { preHandler: requireAdmin }, async () => ({
-    data: await runCapacitySample()
+    data: await sampleOnce()
   }))
 
   app.get('/capacity/settings', { preHandler: requireAdmin }, async () => ({
@@ -119,7 +119,7 @@ export function hubCapacityRoutes(app: FastifyInstance): void {
 
   app.put('/capacity/settings', { preHandler: requireAdmin }, async (req) => {
     const s = normalizeSettings(body(req))
-    await writeSettings(s, userId(req))
+    await writeSettings(s)
     await logActivity({
       action: 'update',
       user: userId(req),
@@ -229,7 +229,7 @@ export function hubCapacityRoutes(app: FastifyInstance): void {
       'hub-capacity-sample',
       '*/15 * * * *',
       async () => {
-        const r = await runCapacitySample()
+        const r = await sampleOnce()
         if (r.failed)
           app.log.info(
             `hub-capacity-sample: ${r.shared} shared, ${r.environments} environments, ${r.failed} did not answer`

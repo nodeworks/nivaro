@@ -212,8 +212,11 @@ async function blockersOf(
   } catch {
     codes = null
   }
-  if (blockerCache.size > 2000) blockerCache.clear()
-  blockerCache.set(env.id, { at: now, codes })
+  // Only an answer is kept: a failed read is asked again next time (never hides advice an hour).
+  if (codes !== null) {
+    if (blockerCache.size > 2000) blockerCache.clear()
+    blockerCache.set(env.id, { at: now, codes })
+  }
   return codes
 }
 
@@ -265,6 +268,43 @@ export async function moveAdvice(deps: AdvisorDeps = {}): Promise<Advice[]> {
   const latestTotal = new Map<number, CapacitySample>()
   for (const [id, rows] of totals) latestTotal.set(id, rows[rows.length - 1])
 
+  // The readiness reports of every dedicated candidate whose figures fit, read 4 at a time.
+  const candidates = envRows.filter((r) => {
+    if (String(r.status) === 'archived') return false
+    const rows = perEnv.get(Number(r.id)) ?? []
+    const last = rows[rows.length - 1]
+    return (
+      !!last &&
+      last.shared_deployment_id === null &&
+      !!fitsShared(
+        rows.filter((x) => x.shared_deployment_id === null),
+        settings,
+        []
+      )
+    )
+  })
+  const blockers = new Map<number, string[] | null>()
+  let nextCandidate = 0
+  await Promise.all(
+    Array.from({ length: Math.min(4, candidates.length) }, async () => {
+      while (nextCandidate < candidates.length) {
+        const r = candidates[nextCandidate++]
+        blockers.set(
+          Number(r.id),
+          await blockersOf(
+            {
+              id: Number(r.id),
+              base_url: String(r.base_url),
+              hub_token: (r.hub_token as string | null) ?? null
+            },
+            deps,
+            now.getTime()
+          )
+        )
+      }
+    })
+  )
+
   const out: Advice[] = []
   for (const r of envRows) {
     const envId = Number(r.id)
@@ -285,16 +325,7 @@ export async function moveAdvice(deps: AdvisorDeps = {}): Promise<Advice[]> {
       if (!fitsShared(own, settings, [])) continue
       const target = pickTarget(shareds, latestTotal)
       if (!target) continue
-      const blockers = await blockersOf(
-        {
-          id: envId,
-          base_url: String(r.base_url),
-          hub_token: (r.hub_token as string | null) ?? null
-        },
-        deps,
-        now.getTime()
-      )
-      const reasons = fitsShared(own, settings, blockers)
+      const reasons = fitsShared(own, settings, blockers.get(envId) ?? null)
       if (!reasons) continue
       out.push({
         ...base,

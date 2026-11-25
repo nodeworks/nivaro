@@ -11,7 +11,12 @@
  */
 import { withTenant } from '../db/tenant-context.js'
 import { appPausedCrons } from './app-job-settings.js'
-import { acquireAppJobSlot, releaseAppJobSlot } from './capacity/enforce.js'
+import {
+  JOB_SLOT_WAIT_MS,
+  noteSlotWait,
+  releaseAppJobSlot,
+  tryAcquireAppJobSlot
+} from './capacity/enforce.js'
 import { getTenantRegistry } from './tenancy/registry.js'
 import type { TenantRecord } from './tenancy/types.js'
 
@@ -64,16 +69,38 @@ export async function listApps(): Promise<TenantRecord[]> {
   return registry.listActive()
 }
 
+/**
+ * After a turn waited for its app's job slot: the app as the registry lists it now. An app the
+ * Hub froze meanwhile (maintenance for a move or an upgrade) or dropped is skipped; the slot wait
+ * must never let a job reach a database the Hub has frozen.
+ */
+async function recheckAfterWait(t: TenantRecord): Promise<AppSkipWhy | null> {
+  const registry = getTenantRegistry()
+  if (!registry?.byId) return null
+  const fresh = await registry.byId(t.id)
+  if (!fresh) return 'not_ready'
+  if (t.status === 'active' && fresh.status !== 'active') return 'maintenance'
+  return null
+}
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+
 export async function forEachApp(
   work: (t: TenantRecord) => Promise<'ran' | AppSkipWhy>,
   opts: {
     concurrency?: number
     listActive?: () => Promise<TenantRecord[]>
     /** Called when a lane picks an app up, before its work: a reason skips it (this process
-     *  stopped leading; its previous run of the job is still going). */
+     *  stopped leading; its previous run of the job is still going). Called only once the app's
+     *  job slot is held. */
     start?: (t: TenantRecord) => AppSkipWhy | null
     /** Called once for every started app when its turn is over, however it ended. */
     release?: (t: TenantRecord) => void
+    /** Hub capacity: take one of the app's job slots for each turn (default true). The staged-
+     *  import and export drains pass false: they have their own per-app queues. */
+    slots?: boolean
+    /** Test seam: the check after a slot wait (default: the registry's current listing). */
+    recheck?: (t: TenantRecord) => Promise<AppSkipWhy | null>
   } = {}
 ): Promise<AppFanOutResult> {
   const result: AppFanOutResult = { ran: [], skipped: [], failed: [] }
@@ -82,23 +109,50 @@ export async function forEachApp(
     Math.max(1, Math.floor(opts.concurrency ?? appJobConcurrency())),
     Math.max(1, queue.length)
   )
+  const slotted = opts.slots !== false
+  const pollMs = Math.min(500, Math.max(5, Math.floor(JOB_SLOT_WAIT_MS / 10)))
+  // Hub capacity: an app whose `jobs` limit is full waits here, not in a lane — the lanes carry
+  // on with the other apps and come back to it, until JOB_SLOT_WAIT_MS, then it is skipped.
+  const deferred: { t: TenantRecord; since: number }[] = []
   let next = 0
   const lane = async (): Promise<void> => {
-    while (next < queue.length) {
-      const t = queue[next++]
-      const why = opts.start?.(t) ?? null
-      if (why) {
-        result.skipped.push({ tenant: t.id, why })
-        continue
-      }
-      // Hub capacity: the app's `jobs` limit — its turns of every fan-out share its slots.
-      let slot = false
-      try {
-        slot = await acquireAppJobSlot(t)
-        if (!slot) {
-          result.skipped.push({ tenant: t.id, why: 'app_limit' })
+    for (;;) {
+      let t: TenantRecord
+      let waited = false
+      if (next < queue.length) {
+        t = queue[next++]
+        if (slotted && !tryAcquireAppJobSlot(t)) {
+          noteSlotWait(t.id, 1)
+          deferred.push({ t, since: Date.now() })
           continue
         }
+      } else if (deferred.length) {
+        const d = deferred.shift() as { t: TenantRecord; since: number }
+        if (!tryAcquireAppJobSlot(d.t)) {
+          if (Date.now() - d.since >= JOB_SLOT_WAIT_MS) {
+            noteSlotWait(d.t.id, -1)
+            result.skipped.push({ tenant: d.t.id, why: 'app_limit' })
+          } else {
+            deferred.push(d)
+            await sleep(pollMs)
+          }
+          continue
+        }
+        noteSlotWait(d.t.id, -1)
+        t = d.t
+        waited = true
+      } else break
+      // The slot is held from here (when slotted): leases, pauses and the Hub's freeze are
+      // judged now, never before a wait.
+      let started = false
+      try {
+        const why =
+          (waited ? await (opts.recheck ?? recheckAfterWait)(t) : null) ?? opts.start?.(t) ?? null
+        if (why) {
+          result.skipped.push({ tenant: t.id, why })
+          continue
+        }
+        started = true
         // The app's own origin: links its job builds (mail, notices) name the app (phase 6).
         const out = await withTenant(t, () => work(t), t.origin)
         if (out === 'ran') result.ran.push(t.id)
@@ -106,8 +160,8 @@ export async function forEachApp(
       } catch (err) {
         result.failed.push({ tenant: t.id, error: errorText(err) })
       } finally {
-        if (slot) releaseAppJobSlot(t.id)
-        opts.release?.(t)
+        if (slotted) releaseAppJobSlot(t.id)
+        if (started) opts.release?.(t)
       }
     }
   }

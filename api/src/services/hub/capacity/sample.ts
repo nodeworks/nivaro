@@ -291,3 +291,19 @@ export async function runCapacitySample(deps: SampleDeps = {}): Promise<SampleRe
     pruned
   }
 }
+
+/** The sample under way in this process (Hub only): Sample now and the 15-minute job share it. */
+const sampling: { run: Promise<SampleResult> | null } = { run: null }
+
+/**
+ * One sample at a time: a second call while one runs gets the same answer, so Sample now
+ * overlapping the job never stores two rounds a moment apart (they would skew the advisor's
+ * per-round counts).
+ */
+export function sampleOnce(): Promise<SampleResult> {
+  if (!sampling.run)
+    sampling.run = runCapacitySample().finally(() => {
+      sampling.run = null
+    })
+  return sampling.run
+}

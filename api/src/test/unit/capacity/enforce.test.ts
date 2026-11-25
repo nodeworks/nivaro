@@ -3,7 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 
 // Hub capacity, idea 15: per-app limits enforced in the shared process — requests per minute
 // (429 APP_RATE_LIMITED, Redis-counted, process-counted when Redis does not answer), job slots
-// per app (FIFO wait, then skipped) and the storage quota on upload (413 APP_STORAGE_FULL).
+// per app (never held while waiting) and the storage quota (413 APP_STORAGE_FULL; presign off).
 
 const ctx = vi.hoisted(() => ({ tenant: undefined as string | undefined }))
 
@@ -75,50 +75,42 @@ beforeEach(() => {
 })
 
 describe('job slots per app', () => {
-  it('an app with no limit runs every turn at once; counts are kept', async () => {
+  it('an app with no limit runs every turn at once; counts are kept', () => {
     const t = tenant('a')
-    expect(await enforce.acquireAppJobSlot(t)).toBe(true)
-    expect(await enforce.acquireAppJobSlot(t)).toBe(true)
+    expect(enforce.tryAcquireAppJobSlot(t)).toBe(true)
+    expect(enforce.tryAcquireAppJobSlot(t)).toBe(true)
     expect(enforce.appJobCounts('a')).toEqual({ running: 2, waiting: 0 })
     enforce.releaseAppJobSlot('a')
     enforce.releaseAppJobSlot('a')
     expect(enforce.appJobCounts('a')).toEqual({ running: 0, waiting: 0 })
   })
 
-  it('past its limit a turn waits for a slot, first come first served', async () => {
+  it('past its limit a turn is refused at once (it never waits holding anything)', () => {
     const t = tenant('b', { jobs: 1 })
-    expect(await enforce.acquireAppJobSlot(t, 1000)).toBe(true)
-    const order: string[] = []
-    const w1 = enforce.acquireAppJobSlot(t, 1000).then((g) => order.push(`w1:${g}`))
-    const w2 = enforce.acquireAppJobSlot(t, 1000).then((g) => order.push(`w2:${g}`))
-    expect(enforce.appJobCounts('b')).toEqual({ running: 1, waiting: 2 })
+    expect(enforce.tryAcquireAppJobSlot(t)).toBe(true)
+    expect(enforce.tryAcquireAppJobSlot(t)).toBe(false)
+    enforce.noteSlotWait('b', 1)
+    expect(enforce.appJobCounts('b')).toEqual({ running: 1, waiting: 1 })
     enforce.releaseAppJobSlot('b')
-    await w1
-    enforce.releaseAppJobSlot('b')
-    await w2
-    expect(order).toEqual(['w1:true', 'w2:true'])
+    expect(enforce.tryAcquireAppJobSlot(t)).toBe(true)
+    enforce.noteSlotWait('b', -1)
+    expect(enforce.appJobCounts('b')).toEqual({ running: 1, waiting: 0 })
     // Another app is never held by this one's limit.
-    expect(await enforce.acquireAppJobSlot(tenant('c', { jobs: 1 }), 10)).toBe(true)
-  })
-
-  it('a turn that waits too long is refused (skipped by the fan-out)', async () => {
-    const t = tenant('d', { jobs: 1 })
-    await enforce.acquireAppJobSlot(t, 1000)
-    expect(await enforce.acquireAppJobSlot(t, 20)).toBe(false)
-    expect(enforce.appJobCounts('d').waiting).toBe(0)
+    expect(enforce.tryAcquireAppJobSlot(tenant('c', { jobs: 1 }))).toBe(true)
   })
 })
 
 describe('requests per minute', () => {
-  it('counts only API paths that are not probes or Hub links', () => {
+  it('counts only API paths that are not probes, sign-in or Hub links', () => {
     expect(enforce.rateLimitCounts('/api/items/x')).toBe(true)
     expect(enforce.rateLimitCounts('/api/health')).toBe(false)
     expect(enforce.rateLimitCounts('/api/version?x=1')).toBe(false)
+    expect(enforce.rateLimitCounts('/api/auth/login')).toBe(false)
     expect(enforce.rateLimitCounts('/api/hub-deployment/usage')).toBe(false)
     expect(enforce.rateLimitCounts('/assets/app.js')).toBe(false)
   })
 
-  it('counts in Redis when it answers, alone when it does not', async () => {
+  it('counts in Redis when it answers, alone (and for a while) when it does not', async () => {
     const counts = new Map<string, number>()
     const chain = (key: { k: string }) => {
       const m = {
@@ -141,11 +133,14 @@ describe('requests per minute', () => {
     enforce._setLimitRedisForTests({ multi: () => chain({ k: '' }) })
     expect(await enforce.countAppRequest('a', 1)).toBe(1)
     expect(await enforce.countAppRequest('a', 1)).toBe(2)
-    expect(counts.get('nvr:applimit:rpm:a:1')).toBe(2)
+    expect(await enforce.countAppRequest('a', 1, 'anon:10.0.0.1')).toBe(1)
+    expect(counts.get('nvr:applimit:rpm:a:app:1')).toBe(2)
+    let calls = 0
     const down = {
       incr: () => down,
       pexpire: () => down,
       exec: async (): Promise<Array<[Error | null, unknown]>> => {
+        calls++
         throw new Error('down')
       }
     }
@@ -153,37 +148,69 @@ describe('requests per minute', () => {
     expect(await enforce.countAppRequest('a', 1)).toBe(1)
     expect(await enforce.countAppRequest('a', 1)).toBe(2)
     expect(await enforce.countAppRequest('b', 1)).toBe(1)
+    // After one failure Redis is left alone for a while (no wait on every request).
+    expect(calls).toBe(1)
   })
 
-  it('answers 429 APP_RATE_LIMITED past the limit, with Retry-After', async () => {
-    tenants.set('shop', tenant('shop', { requests_per_minute: 10 }))
-    tenants.set('free', tenant('free'))
+  describe('the hook', () => {
     const app = Fastify()
-    app.addHook('onRequest', async (req) => {
-      ctx.tenant = String(req.headers['x-tenant'] ?? '')
+    beforeAll(async () => {
+      app.addHook('onRequest', async (req) => {
+        ctx.tenant = String(req.headers['x-tenant'] ?? '')
+      })
+      app.addHook('onRequest', enforce.appRateLimitHook)
+      app.get('/api/items/x', async () => ({ ok: true }))
+      app.get('/api/health', async () => ({ ok: true }))
+      app.get('/api/auth/login', async () => ({ ok: true }))
+      await app.ready()
     })
-    app.addHook('onRequest', enforce.appRateLimitHook)
-    app.get('/api/items/x', async () => ({ ok: true }))
-    app.get('/api/health', async () => ({ ok: true }))
-    const codes: number[] = []
-    for (let i = 0; i < 12; i++)
-      codes.push(
-        (await app.inject({ url: '/api/items/x', headers: { 'x-tenant': 'shop' } })).statusCode
-      )
-    expect(codes.filter((c) => c === 200)).toHaveLength(10)
-    const refused = await app.inject({ url: '/api/items/x', headers: { 'x-tenant': 'shop' } })
-    expect(refused.statusCode).toBe(429)
-    expect(refused.json().code).toBe('APP_RATE_LIMITED')
-    expect(Number(refused.headers['retry-after'])).toBeGreaterThan(0)
-    // Probes still answer; an app without a limit is never counted.
-    expect(
-      (await app.inject({ url: '/api/health', headers: { 'x-tenant': 'shop' } })).statusCode
-    ).toBe(200)
-    for (let i = 0; i < 15; i++)
-      expect(
-        (await app.inject({ url: '/api/items/x', headers: { 'x-tenant': 'free' } })).statusCode
-      ).toBe(200)
-    await app.close()
+    afterAll(async () => {
+      enforce._countInjectedForTests(false)
+      await app.close()
+    })
+    beforeEach(() => enforce._countInjectedForTests(true))
+
+    const signedIn = { authorization: 'Bearer nvk_x' }
+    const get = (url: string, headers: Record<string, string>, ip = '10.0.0.1') =>
+      app.inject({ url, headers, remoteAddress: ip })
+
+    it('answers 429 APP_RATE_LIMITED past the limit, with Retry-After', async () => {
+      tenants.set('shop', tenant('shop', { requests_per_minute: 10 }))
+      tenants.set('free', tenant('free'))
+      const codes: number[] = []
+      for (let i = 0; i < 12; i++)
+        codes.push((await get('/api/items/x', { 'x-tenant': 'shop', ...signedIn })).statusCode)
+      expect(codes.filter((c) => c === 200)).toHaveLength(10)
+      const refused = await get('/api/items/x', { 'x-tenant': 'shop', ...signedIn })
+      expect(refused.statusCode).toBe(429)
+      expect(refused.json().code).toBe('APP_RATE_LIMITED')
+      expect(Number(refused.headers['retry-after'])).toBeGreaterThan(0)
+      // Probes and sign-in still answer; an app without a limit is never counted.
+      expect((await get('/api/health', { 'x-tenant': 'shop' })).statusCode).toBe(200)
+      expect((await get('/api/auth/login', { 'x-tenant': 'shop' })).statusCode).toBe(200)
+      for (let i = 0; i < 15; i++)
+        expect((await get('/api/items/x', { 'x-tenant': 'free', ...signedIn })).statusCode).toBe(
+          200
+        )
+    })
+
+    it('anonymous requests get a budget per address and never spend the signed-in one', async () => {
+      tenants.set('pub', tenant('pub', { requests_per_minute: 10 }))
+      for (let i = 0; i < 10; i++) await get('/api/items/x', { 'x-tenant': 'pub' }, '10.9.9.9')
+      expect((await get('/api/items/x', { 'x-tenant': 'pub' }, '10.9.9.9')).statusCode).toBe(429)
+      // Another address, and every signed-in request, still pass.
+      expect((await get('/api/items/x', { 'x-tenant': 'pub' }, '10.8.8.8')).statusCode).toBe(200)
+      expect((await get('/api/items/x', { 'x-tenant': 'pub', ...signedIn })).statusCode).toBe(200)
+    })
+
+    it('in-process re-entries (inject, batch-get, MCP tool calls) are never counted', async () => {
+      enforce._countInjectedForTests(false)
+      tenants.set('inner', tenant('inner', { requests_per_minute: 10 }))
+      for (let i = 0; i < 30; i++)
+        expect((await get('/api/items/x', { 'x-tenant': 'inner', ...signedIn })).statusCode).toBe(
+          200
+        )
+    })
   })
 })
 
@@ -198,12 +225,20 @@ describe('storage quota', () => {
       statusCode: 413,
       code: 'APP_STORAGE_FULL'
     })
+    // A replacement that shrinks a file (negative delta) always fits.
+    await expect(enforce.assertAppStorageRoom(-500 * 1024)).resolves.toBeUndefined()
+    // Presigned (direct) uploads are off for an app with a storage limit.
+    await expect(enforce.assertNoDirectUploadUnderLimit()).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'DIRECT_UPLOAD_OFF_WITH_STORAGE_LIMIT'
+    })
   })
 
   it('no limit, no check (and nothing outside an app)', async () => {
     tenants.set('n', tenant('n'))
     ctx.tenant = 'n'
     await expect(enforce.assertAppStorageRoom(10 ** 12)).resolves.toBeUndefined()
+    await expect(enforce.assertNoDirectUploadUnderLimit()).resolves.toBeUndefined()
     ctx.tenant = undefined
     await expect(enforce.assertAppStorageRoom(10 ** 12)).resolves.toBeUndefined()
   })
