@@ -136,6 +136,8 @@ export type MoveWarningCode =
   | 'STACK_REAPPLY_ALL'
   // P6-31: saved-settings S3/Azure objects are copied to the new key prefix (never shared).
   | 'STORAGE_PREFIX_CHANGES'
+  // 0.3.215 (hub-gap watch): the source saves its env mail settings at maintenance_on.
+  | 'ENV_SMTP_KEPT'
   | SharedReadinessCode
 
 export interface MovePlan {

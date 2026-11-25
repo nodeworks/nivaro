@@ -458,6 +458,33 @@ describe('maintenance and retire', () => {
     expect(link.maintenance).toHaveBeenLastCalledWith(false, w.move.id)
   })
 
+  it('hub gap watch: a plan with ENV_SMTP_KEPT asks the source to keep its env mail on the way in only', async () => {
+    const w = await setup(false)
+    TENANT = w.tenant
+    await db('nivaro_hub_environments')
+      .where({ id: w.envId })
+      .update({
+        hub_token: (await import('../../../services/hub/secrets.js')).sealSecret('t'.repeat(40))
+      })
+    const link = { maintenance: vi.fn(async () => undefined) }
+    const plan = {
+      ...w.plan,
+      warnings: [...w.plan.warnings, { code: 'ENV_SMTP_KEPT' as const, text: 'kept' }]
+    }
+    const ops = defaultMoveOps(w.move, plan, {
+      client: clients().factory,
+      link: () => link as never,
+      sleep,
+      now
+    })
+    await ops.sourceMaintenance(true)
+    expect(link.maintenance).toHaveBeenCalledWith(true, w.move.id, undefined, {
+      keepEnvMail: true
+    })
+    await ops.sourceMaintenance(false)
+    expect(link.maintenance).toHaveBeenLastCalledWith(false, w.move.id)
+  })
+
   it('C-2: a dedicated source is reached on its own address after the name points at the target (maintenance on, then rollback off)', async () => {
     const w = await setup(false)
     TENANT = w.tenant

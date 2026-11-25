@@ -83,7 +83,15 @@ export interface HubLinkReadiness {
 
 export interface HubLinkClient {
   status(): Promise<HubLinkStatus>
-  maintenance(on: boolean, moveId: number, message?: string): Promise<void>
+  /** `keepEnvMail` (0.3.215, a move to a shared deployment): the source first saves the mail
+   *  settings it takes from its server environment into its own Settings (an older app ignores
+   *  it; the plan then keeps the ENV_SMTP warning). */
+  maintenance(
+    on: boolean,
+    moveId: number,
+    message?: string,
+    opts?: { keepEnvMail?: boolean }
+  ): Promise<void>
   retire(moveId: number): Promise<void>
   unretire(): Promise<void>
   sharedReadiness(): Promise<HubLinkReadiness>
@@ -248,11 +256,12 @@ export function hubLinkClient(
       }
     },
 
-    async maintenance(on, moveId, message) {
+    async maintenance(on, moveId, message, opts) {
       const a = await call('/maintenance', 'POST', {
         on,
         move_id: moveId,
-        ...(message ? { message } : {})
+        ...(message ? { message } : {}),
+        ...(on && opts?.keepEnvMail ? { keep_env_mail: true } : {})
       })
       if (!ok(a)) throw refusal(a)
     },

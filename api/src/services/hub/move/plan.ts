@@ -463,16 +463,45 @@ const isReadinessBlocker = (code: SharedReadinessCode) =>
  * blocker.
  */
 function targetRunsSharedFeatures(version: string | null): boolean {
+  return runsAtLeast(version, SHARED_FEATURES_SINCE)
+}
+
+/** `version` is `floor` or later (same reading as above: unreadable or a pre-release = older). */
+function runsAtLeast(version: string | null, floor: string): boolean {
   const m = /^v?(\d+\.\d+\.\d+)(.*)$/.exec((version ?? '').trim())
   if (!m) return false
-  const c = compareVersions(m[1], SHARED_FEATURES_SINCE)
+  const c = compareVersions(m[1], floor)
   return c > 0 || (c === 0 && !m[2].startsWith('-'))
+}
+
+/**
+ * Hub gap `watch` (0.3.215): a shared deployment from this version runs the outside-write watch
+ * per app, uses each app's own saved huddle media servers (HUDDLE_TURN holds only for a target
+ * before it), and a source from this version saves the mail settings it takes from its server
+ * environment into its own Settings when the move freezes it (ENV_SMTP holds unless both sides
+ * run it: the target must open the sealed password).
+ */
+export const HUDDLE_MAIL_SINCE = '0.3.215'
+
+/** The source keeps its env mail settings at maintenance_on (ENV_SMTP_KEPT): see above. */
+export function keepsEnvMail(input: MovePlanInput): boolean {
+  return (
+    input.kind === 'to_shared' &&
+    input.source.readiness.some((r) => r.code === 'ENV_SMTP') &&
+    runsAtLeast(input.source.version, HUDDLE_MAIL_SINCE) &&
+    runsAtLeast(input.target_facts.version, HUDDLE_MAIL_SINCE)
+  )
 }
 
 /** The source's readiness codes the target's version makes real (ruling: target version). */
 function readinessFor(input: MovePlanInput): SharedReadinessItem[] {
-  if (!targetRunsSharedFeatures(input.target_facts.version)) return input.source.readiness
-  return input.source.readiness.filter((r) => !PER_APP_SINCE_SHARED_FEATURES.includes(r.code))
+  let list = input.source.readiness
+  if (targetRunsSharedFeatures(input.target_facts.version))
+    list = list.filter((r) => !PER_APP_SINCE_SHARED_FEATURES.includes(r.code))
+  if (runsAtLeast(input.target_facts.version, HUDDLE_MAIL_SINCE))
+    list = list.filter((r) => r.code !== 'HUDDLE_TURN')
+  if (keepsEnvMail(input)) list = list.filter((r) => r.code !== 'ENV_SMTP')
+  return list
 }
 
 const READINESS_TITLES: Record<string, string> = {
@@ -486,7 +515,7 @@ const READINESS_TITLES: Record<string, string> = {
   PHONE_PUSH: 'Phone push is off on a shared deployment before 0.3.212',
   TEAMS_BOT: 'The Teams bot is off on a shared deployment before 0.3.212',
   MAIL_RETRY: 'Automatic mail retry is off on a shared deployment before 0.3.212',
-  HUDDLE_TURN: "Huddles use the deployment's media servers",
+  HUDDLE_TURN: "Huddles use the deployment's media servers before 0.3.215",
   ENV_SMTP: "Mail set by environment variables uses the deployment's settings",
   SESSION_REPLAYS: 'Session replays are not moved',
   HELP_VIDEO_RENDERS: 'Queued help-video renders redo on the next publish',
@@ -593,6 +622,11 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
   if (kind === 'to_shared')
     for (const r of readinessFor(input))
       if (!isReadinessBlocker(r.code)) add(r.code, `${readinessTitle(r.code)}: ${clean(r.detail)}`)
+  if (keepsEnvMail(input))
+    add(
+      'ENV_SMTP_KEPT',
+      "The app sends mail with its server's environment settings. When the move puts it in maintenance, it saves them in its own Settings → Email (the password sealed with the app's key), so mail keeps going through the same server after the move. Change them there afterwards."
+    )
   return out
 }
 

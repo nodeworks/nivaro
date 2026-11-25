@@ -62,6 +62,8 @@ vi.mock('../../../services/hub-link/shared-readiness.js', () => ({
 }))
 const render = vi.hoisted(() => ({ resumeRendersAfterRetire: vi.fn() }))
 vi.mock('../../../services/help-video-render.js', () => render)
+const keep = vi.hoisted(() => ({ keepEnvMailSettings: vi.fn() }))
+vi.mock('../../../services/mail-env-keep.js', () => keep)
 vi.mock('../../../middleware/authenticate.js', () => ({
   authenticate: vi.fn(async (req: FastifyRequest) => {
     const c = st.caller
@@ -246,6 +248,41 @@ describe('strict maintenance over the hub link', () => {
     })
     expect(r.statusCode).toBe(503)
     expect(r.json()).toMatchObject({ code: 'REDIS_UNAVAILABLE' })
+  })
+})
+
+describe('hub gap watch: keep_env_mail (0.3.215)', () => {
+  const post = (a: FastifyInstance, payload: Record<string, unknown>) =>
+    a.inject({ method: 'POST', url: '/api/hub-link/maintenance', headers: auth, payload })
+
+  it('saves the env mail settings before maintenance when the move asks, and says so', async () => {
+    keep.keepEnvMailSettings.mockReset()
+    keep.keepEnvMailSettings.mockResolvedValue({ kept: true, fields: ['smtp_host'] })
+    const a = await build()
+    const r = await post(a, { on: true, move_id: 9, keep_env_mail: true })
+    expect(r.statusCode).toBe(200)
+    expect(r.json()).toEqual({ on: true, env_mail: 'kept' })
+    expect(keep.keepEnvMailSettings).toHaveBeenCalledTimes(1)
+    expect(st.store.get(MK())).toBeTruthy()
+  })
+
+  it('never without a move id, on the way out, or when not asked', async () => {
+    keep.keepEnvMailSettings.mockReset()
+    const a = await build()
+    expect((await post(a, { on: true, keep_env_mail: true })).json()).toEqual({ on: true })
+    expect((await post(a, { on: true, move_id: 9 })).json()).toEqual({ on: true })
+    expect((await post(a, { on: false, move_id: 9, keep_env_mail: true })).statusCode).toBe(200)
+    expect(keep.keepEnvMailSettings).not.toHaveBeenCalled()
+  })
+
+  it('a failure stops the move before maintenance is set (503 ENV_MAIL_NOT_KEPT)', async () => {
+    keep.keepEnvMailSettings.mockReset()
+    keep.keepEnvMailSettings.mockRejectedValue(new Error('db down'))
+    const a = await build()
+    const r = await post(a, { on: true, move_id: 9, keep_env_mail: true })
+    expect(r.statusCode).toBe(503)
+    expect(r.json()).toMatchObject({ code: 'ENV_MAIL_NOT_KEPT' })
+    expect(st.store.get(MK())).toBeUndefined()
   })
 })
 

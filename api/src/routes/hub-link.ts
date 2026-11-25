@@ -238,9 +238,18 @@ export async function hubLinkRoutes(app: FastifyInstance) {
   // once; other replicas within 15 s (the move waits 16 s, ruling R14). An operator's own freeze
   // is kept under the Hub's and put back when it lifts; {on:false, move_id} for another move's
   // freeze answers 409 MAINTENANCE_OTHER_MOVE. Every rollback must send move_id (boot maintenance).
+  // 0.3.215: {on: true, move_id, keep_env_mail: true} (a move to a shared deployment) first saves
+  // the mail settings this app takes from its server environment into its own Settings → Email
+  // (services/mail-env-keep.ts); a failure there answers 503 ENV_MAIL_NOT_KEPT before maintenance
+  // is set, so the move stops rather than lose the app's mail. Answers `env_mail` kept|none.
   app.post('/maintenance', async (req, reply) => {
     reply.header('Cache-Control', 'no-store')
-    const b = (req.body ?? {}) as { on?: unknown; message?: unknown; move_id?: unknown }
+    const b = (req.body ?? {}) as {
+      on?: unknown
+      message?: unknown
+      move_id?: unknown
+      keep_env_mail?: unknown
+    }
     if (typeof b.on !== 'boolean')
       return fail(reply, 400, 'BAD_MAINTENANCE', 'on must be true or false')
     if (b.message != null && (typeof b.message !== 'string' || b.message.length > 500))
@@ -248,6 +257,26 @@ export async function hubLinkRoutes(app: FastifyInstance) {
     const moveId = b.move_id == null ? null : positiveId(b.move_id)
     if (b.move_id != null && moveId == null)
       return fail(reply, 400, 'BAD_MOVE_ID', 'move_id must be a positive whole number')
+    let envMail: 'kept' | 'none' | undefined
+    if (b.on === true && b.keep_env_mail === true && moveId != null) {
+      try {
+        const { keepEnvMailSettings } = await import('../services/mail-env-keep.js')
+        const kept = await keepEnvMailSettings()
+        envMail = kept.kept ? 'kept' : 'none'
+        if (kept.kept)
+          app.log.info(
+            { move_id: moveId, fields: kept.fields },
+            'hub link: mail settings from the environment saved in Settings for the move'
+          )
+      } catch {
+        return fail(
+          reply,
+          503,
+          'ENV_MAIL_NOT_KEPT',
+          "The mail settings from this server's environment could not be saved in the app's own settings"
+        )
+      }
+    }
     const { setHubMaintenance, HubMaintenanceMoveMismatch } = await import(
       '../services/security.js'
     )
@@ -267,7 +296,7 @@ export async function hubLinkRoutes(app: FastifyInstance) {
         )
       return fail(reply, 503, 'REDIS_UNAVAILABLE', 'Maintenance could not be stored (Redis)')
     }
-    return reply.send({ on: b.on })
+    return reply.send(envMail ? { on: b.on, env_mail: envMail } : { on: b.on })
   })
 
   // Retire this app after a move away (Decision 10): {move_id} → 200 {retired: true}. Every

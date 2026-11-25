@@ -773,7 +773,10 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
         return
       }
       const link = await sourceLink()
-      await link.maintenance(on, move.id)
+      // 0.3.215: the plan decided the source keeps its env mail settings (ENV_SMTP_KEPT).
+      const keepEnvMail = on && plan.warnings.some((w) => w.code === 'ENV_SMTP_KEPT')
+      if (keepEnvMail) await link.maintenance(on, move.id, undefined, { keepEnvMail })
+      else await link.maintenance(on, move.id)
       if (on) {
         // Every source replica enforces it within its 15 s cache (R14).
         log('strict maintenance is on at the source; waiting for every replica to take it')

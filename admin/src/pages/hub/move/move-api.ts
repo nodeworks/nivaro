@@ -964,11 +964,15 @@ export const MOVE_WARNING_COPY: Record<string, Copy> = {
   },
   HUDDLE_TURN: {
     title: 'Huddles use the deployment’s media servers, not the app’s own',
-    hint: 'If your network allows only the app’s own media servers, ask for the deployment’s to be allowed too.'
+    hint: 'The shared deployment runs a version before 0.3.215, or one the Hub cannot read. Upgrade it to 0.3.215 or later to keep the app’s own media servers; otherwise ask for the deployment’s to be allowed on your network.'
   },
   ENV_SMTP: {
     title: 'Mail settings come from environment variables on the old home',
-    hint: 'Enter them in the app (Settings → Email) so mail keeps going after the move.'
+    hint: 'Enter them in the app (Settings → Email) so mail keeps going after the move. From 0.3.215 on both sides the move saves them there itself.'
+  },
+  ENV_SMTP_KEPT: {
+    title: 'The app’s mail settings are saved in its own Settings at the move',
+    hint: 'It sends mail with its server’s environment settings today. When the move starts they are saved in Settings → Email (the password sealed with the app’s key), so mail keeps going through the same server. Change them there afterwards.'
   },
   SESSION_REPLAYS: {
     title: 'Session replays are not moved',

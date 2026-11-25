@@ -53,6 +53,31 @@ describe('move hub-link client: shared readiness (R2-M-9)', () => {
   })
 })
 
+// Hub gap watch (0.3.215): the move asks a source to keep its env mail settings only on the way
+// into maintenance, and only when told to.
+describe('maintenance: keep_env_mail', () => {
+  it('sends keep_env_mail with on=true when asked, never otherwise', async () => {
+    const bodies: unknown[] = []
+    const client = hubLinkClient('https://app.example.com', 't'.repeat(40), {
+      fetch: (async (_url: string, init: { body?: string }) => {
+        bodies.push(JSON.parse(String(init.body ?? '{}')))
+        return new Response(JSON.stringify({ on: true }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' }
+        })
+      }) as never
+    })
+    await client.maintenance(true, 5, undefined, { keepEnvMail: true })
+    await client.maintenance(true, 5)
+    await client.maintenance(false, 5, undefined, { keepEnvMail: true })
+    expect(bodies).toEqual([
+      { on: true, move_id: 5, keep_env_mail: true },
+      { on: true, move_id: 5 },
+      { on: false, move_id: 5 }
+    ])
+  })
+})
+
 // Hub phase 6 untested path 1: the failed rows' plain reasons cross both links (only known
 // reasons, only whole counts), so the move can say why a file was not copied.
 describe('pull status: failed rows per reason', () => {

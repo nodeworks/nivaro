@@ -7,6 +7,7 @@ import { db } from '../db/index.js'
 import { registerAppKeyed } from './app-forget.js'
 import { chainFields } from './chain-columns.js'
 import { encodeDeferredSnippet } from './deferred-snippet.js'
+import { decryptValue, isEncrypted } from './encryption.js'
 import { useZonedDates } from './liquid-dates.js'
 import {
   applySenderName,
@@ -301,7 +302,7 @@ export async function listFileTemplates(): Promise<string[]> {
   return [...names].sort()
 }
 
-interface SmtpConfig {
+export interface SmtpConfig {
   host: string
   port: number
   secure: boolean
@@ -321,11 +322,24 @@ interface SmtpConfig {
   envLabel: string | null
 }
 
+/** A saved SMTP password: stored plain by Settings → Email, or sealed (enc:v1) with the app's key
+ *  when a move to a Hub shared deployment kept the server's env mail settings (mail-env-keep.ts).
+ *  One that does not open reads as no password (the relay then refuses, visibly in the mail log). */
+function savedSmtpPass(raw: unknown): string | null {
+  const v = typeof raw === 'string' ? raw : null
+  if (!v || !isEncrypted(v)) return v
+  try {
+    return decryptValue(v)
+  } catch {
+    return null
+  }
+}
+
 /**
  * Resolves SMTP config — DB values win over env vars when set.
  * Env vars remain the fallback so existing deployments continue to work.
  */
-async function getSmtpConfig(): Promise<SmtpConfig> {
+export async function getSmtpConfig(): Promise<SmtpConfig> {
   try {
     const row = await overlaySettings(
       (await db('nivaro_settings')
@@ -348,7 +362,7 @@ async function getSmtpConfig(): Promise<SmtpConfig> {
     const host = (row?.smtp_host as string | null) || config.SMTP_HOST
     const port = (row?.smtp_port as number | null) ?? config.SMTP_PORT
     const user = (row?.smtp_user as string | null) || config.SMTP_USER || null
-    const pass = (row?.smtp_pass as string | null) || config.SMTP_PASSWORD || null
+    const pass = savedSmtpPass(row?.smtp_pass) || config.SMTP_PASSWORD || null
     const from = (row?.smtp_from as string | null) || config.MAIL_FROM
     const secure =
       row?.smtp_secure != null
