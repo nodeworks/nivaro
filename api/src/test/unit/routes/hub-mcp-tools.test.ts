@@ -109,7 +109,7 @@ async function connectAs(headers: Record<string, string>, adminTools = false) {
   return mcp
 }
 
-const text = (r: { content: unknown }) => JSON.parse((r.content as Array<{ text: string }>)[0].text)
+const text = (r: unknown) => JSON.parse((r as { content: Array<{ text: string }> }).content[0].text)
 
 beforeAll(async () => {
   prevHub = process.env.HUB
