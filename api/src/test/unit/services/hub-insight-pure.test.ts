@@ -288,7 +288,7 @@ describe('Ask the Hub: read-only walls', () => {
     const f = askFetch(inner, calls as never)
     const res = await f('http://x/api/hub/environments/1/promote/start', { method: 'POST' })
     expect(res.status).toBe(403)
-    expect((await res.json()).code).toBe('ASK_READ_ONLY')
+    expect(((await res.json()) as { code?: string }).code).toBe('ASK_READ_ONLY')
     expect(sent).toEqual([])
     expect(calls[0].held).toBe(true)
     await f('http://x/api/hub/apps')
