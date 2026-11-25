@@ -123,10 +123,13 @@ const DB_MODE_WORDS = {
  */
 export function HubCreateApp({
   onDone,
-  onCancel
+  onCancel,
+  initialTemplateId
 }: {
   onDone: (appId: number) => void
   onCancel: () => void
+  /** Preselected template (Clone & retire → Create app from a structure copy: `?template=`). */
+  initialTemplateId?: number
 }) {
   const qc = useQueryClient()
   const targets = useQuery({ queryKey: createKeys.targets(), queryFn: fetchTargets })
@@ -152,7 +155,7 @@ export function HubCreateApp({
   const [extensionsText, setExtensionsText] = useState('')
   const [version, setVersion] = useState('')
   // Hub enhancement 24: a template from the library ('' = none).
-  const [templateId, setTemplateId] = useState('')
+  const [templateId, setTemplateId] = useState(initialTemplateId ? String(initialTemplateId) : '')
   const templates = useQuery({
     queryKey: templateKeys.list(false),
     queryFn: () => fetchTemplates()

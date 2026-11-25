@@ -35,7 +35,8 @@ const ACTION_WORDS: Record<ChecklistAction, string> = {
   move: 'Moves',
   upgrade: 'Shared upgrades',
   config_promote: 'Config promotions',
-  extension_promote: 'Extension promotions'
+  extension_promote: 'Extension promotions',
+  retire: 'Retirements'
 }
 
 function ItemForm({

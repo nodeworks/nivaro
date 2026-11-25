@@ -113,6 +113,11 @@ export const APPS_HUB: HubDef = {
       hint: 'App Blueprints a new app can start from.'
     },
     {
+      path: 'lifecycle',
+      label: 'Clone & retire',
+      hint: 'Copy an app’s structure into a new app, or retire an app step by step.'
+    },
+    {
       path: 'databases',
       label: 'Databases',
       hint: 'The servers new apps get a database on, and every database the Hub knows.'

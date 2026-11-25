@@ -91,6 +91,8 @@ export type ChecklistAction =
   | 'upgrade'
   | 'config_promote'
   | 'extension_promote'
+  /** Hub enhancement 47: an app's retirement (items opt in). */
+  | 'retire'
 
 export interface ChecklistItem {
   id: number
