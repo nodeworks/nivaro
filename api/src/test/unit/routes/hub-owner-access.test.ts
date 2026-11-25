@@ -39,7 +39,17 @@ vi.mock('../../../middleware/authenticate.js', () => {
 })
 vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () => null) }))
 
-const m = vi.hoisted(() => ({ start: vi.fn(), cancel: vi.fn(), apply: vi.fn(), gather: vi.fn() }))
+const m = vi.hoisted(() => ({
+  start: vi.fn(),
+  cancel: vi.fn(),
+  apply: vi.fn(),
+  gather: vi.fn(),
+  getDatabase: vi.fn()
+}))
+vi.mock('../../../services/hub/db/databases.js', async (orig) => ({
+  ...(await orig<typeof import('../../../services/hub/db/databases.js')>()),
+  getDatabase: m.getDatabase
+}))
 vi.mock('../../../services/hub/promote-run.js', async (orig) => ({
   ...(await orig<typeof import('../../../services/hub/promote-run.js')>()),
   startPromotion: m.start,
@@ -412,6 +422,30 @@ describe('GET /apps/:id/access', () => {
     ])
     const admin = (await call('GET', `/apps/${appId}/access`, asAdmin)).json().data
     expect(admin.environments.every((e: { deploy: boolean }) => e.deploy)).toBe(true)
+  })
+})
+
+describe('database connection (owner rule)', () => {
+  const dbFor = (envId: number) => ({
+    id: 7,
+    engine: 'mssql',
+    host: 'db.x',
+    port: 1433,
+    status: 'requested',
+    environment: { id: envId, app_id: appId, app_key: 'efp', env_key: 'x' }
+  })
+  it('an owner may set the connection of a non-production database only', async () => {
+    m.getDatabase.mockResolvedValue(dbFor(prodId))
+    const prod = await call('PUT', '/databases/7/connection', asOwner, { host: 'db.x' })
+    expect(prod.statusCode).toBe(403)
+    expect(prod.json().code).toBe('PRODUCTION_ADMIN_ONLY')
+    m.getDatabase.mockResolvedValue(dbFor(stagingId))
+    const staging = await call('PUT', '/databases/7/connection', asOwner, { host: 'db.x' })
+    expect(staging.json().code).not.toBe('PRODUCTION_ADMIN_ONLY')
+    // An administrator is never refused by the owner rule.
+    m.getDatabase.mockResolvedValue(dbFor(prodId))
+    const admin = await call('PUT', '/databases/7/connection', asAdmin, { host: 'db.x' })
+    expect(admin.json().code).not.toBe('PRODUCTION_ADMIN_ONLY')
   })
 })
 

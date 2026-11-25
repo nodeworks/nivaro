@@ -215,6 +215,7 @@ const m545 = await import('../../../db/migrations/545_hub_creations.js')
 const m546 = await import('../../../db/migrations/546_hub_stack_settings.js')
 const m550 = await import('../../../db/migrations/550_hub_oidc.js')
 const m551 = await import('../../../db/migrations/551_hub_signins.js')
+const m570 = await import('../../../db/migrations/570_hub_people_owner_policy.js')
 const { hubRoutes } = await import('../../../routes/hub.js')
 const { countOwnerTry } = await import('../../../routes/hub-create.js')
 const { maintenanceFreezeHook } = await import('../../../services/maintenance-freeze.js')
@@ -350,6 +351,7 @@ beforeAll(async () => {
   await m546.up(db)
   await m550.up(db)
   await m551.up(db)
+  await m570.up(db)
   await db.schema.createTable('nivaro_users', (t) => t.uuid('id').primary())
   await db('nivaro_users').insert([{ id: ADMIN_ID }, { id: OWNER }, { id: OTHER }])
   app = Fastify()
@@ -792,6 +794,8 @@ describe('databases', () => {
       environments: [{ key: 'production', database: { server_id: manualServer } }]
     })
     const envId = out.environments[0].id
+    // Production's database is the administrators' unless they let owners deploy production.
+    await ownersMayDeployProduction()
     const dbId = Number(
       String((await db('nivaro_hub_environments').where({ id: envId }).first()).db_ref).split(
         ':'
@@ -1099,6 +1103,12 @@ describe('creation', () => {
   })
 })
 
+/** The app's "Owners may deploy production" switch (migration 570): without it an owner may not
+ *  set production's database connection (PRODUCTION_ADMIN_ONLY, hub-owner-access.test.ts). */
+async function ownersMayDeployProduction() {
+  await db('nivaro_hub_apps').update({ owners_deploy_production: true })
+}
+
 // ── owner limits (ruling P3-24) ──────────────────────────────────────────────
 
 describe('owner limits (P3-24)', () => {
@@ -1108,6 +1118,7 @@ describe('owner limits (P3-24)', () => {
       environments: [{ key: 'production', database: { server_id: manualServer } }]
     })
     const envId = out.environments[0].id
+    await ownersMayDeployProduction()
     const dbId = Number(
       String((await db('nivaro_hub_environments').where({ id: envId }).first()).db_ref).split(
         ':'

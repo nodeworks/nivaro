@@ -104,7 +104,7 @@ export interface OwnerRoute {
   url: string
   /** Where the environment comes from: the :envId param, the promotion (:id) it belongs to, or
    *  'app' (:id = an app: a change that reaches every environment, production included). */
-  env: 'envId' | 'promotion' | 'app'
+  env: 'envId' | 'promotion' | 'app' | 'database'
   what: string
 }
 
@@ -115,6 +115,14 @@ export const OWNER_GUARDED: OwnerRoute[] = [
   { method: 'POST', url: '/environments/:envId/stack/restart', env: 'envId', what: 'restart' },
   { method: 'POST', url: '/environments/:envId/stack/apply', env: 'envId', what: 'apply' },
   { method: 'GET', url: '/environments/:envId/stack/settings', env: 'envId', what: 'settings' },
+  // A database record's connection (routes/hub-create.ts): an owner may set it for their own
+  // app's non-production environments only; production's database is the administrators'.
+  {
+    method: 'PUT',
+    url: '/databases/:id/connection',
+    env: 'database',
+    what: 'database connection'
+  },
   // Sign-in (routes/hub-signin-admin.ts, mounted at /api/hub/signin): changing production's
   // sign-in mode or its OpenID client breaks production sign-in, so the production rule applies.
   { method: 'PATCH', url: '/signin/apps/:id/mode', env: 'app', what: 'sign-in mode' },
@@ -147,8 +155,6 @@ export const OWNER_UNGUARDED: Record<string, string> = {
     'a name check (read of DNS + the app), owners only while the environment waits for its name',
   'POST /environments/:envId/stack/remove': 'admin-only inside the route',
   'PUT /environments/:envId/stack/settings': 'admin-only inside the route',
-  'PUT /databases/:id/connection':
-    'an owner may record their own database’s connection (to its own server only, phase 3)',
   'POST /databases/:id/check': 'a connection check, to the database’s own server only',
   'POST /environments/:envId/creation/check': 're-checks a creation step (a read of its state)',
   'POST /environments/:envId/creation/installed':
@@ -317,6 +323,11 @@ async function envIdFor(req: FastifyRequest, route: OwnerRoute): Promise<number 
   const raw = route.env === 'envId' ? params.envId : params.id
   if (!raw || !/^\d{1,15}$/.test(raw)) return null
   if (route.env === 'envId') return Number(raw)
+  if (route.env === 'database') {
+    const { getDatabase } = await import('./db/databases.js')
+    const d = await getDatabase(Number(raw))
+    return d?.environment?.id == null ? null : Number(d.environment.id)
+  }
   const row = (await db('nivaro_hub_deploys')
     .where({ id: Number(raw) })
     .first('environment_id')) as { environment_id: number | null } | undefined

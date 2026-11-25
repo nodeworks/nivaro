@@ -1,7 +1,6 @@
 /**
  * The ONE place the fleet jobs tell people anything (drift alerts, the monthly SLO report): app
- * owners and Hub administrators, through notifyUser. At merge time this can be pointed at the
- * Hub event notifier (notifyHubEvent) without touching the jobs.
+ * owners and Hub administrators, through the Hub's one notice path (notify-events.ts).
  */
 
 export type FleetNoteKind = 'drift' | 'slo_report'
@@ -15,20 +14,17 @@ export interface FleetNote {
 
 export type FleetNotifier = (userId: string, note: FleetNote) => Promise<void>
 
-// TODO(hub-enh/people): once notifyHubEvent (services/hub/notify-events.ts) is merged, send drift
-// alerts as notifyHubEvent({ kind: 'drift', … }) here (phone push); the jobs stay as they are.
+/** Through the Hub's one notice path (services/hub/notify-events.ts deliverHubNotice: inbox,
+ *  socket, browser and phone push, once per person); the jobs stay as they are. */
 export const fleetNotify: FleetNotifier = async (userId, note) => {
-  const { getApp } = await import('../../io-holder.js')
-  const app = getApp()
-  if (!app) return
-  const { notifyUser } = await import('../../notification-channels.js')
+  const { deliverHubNotice } = await import('../notify-events.js')
   const report = note.kind === 'slo_report'
-  await notifyUser(app, userId, {
-    subject: note.subject.slice(0, 255),
-    message: note.message.slice(0, 1000),
+  await deliverHubNotice([userId], {
+    subject: note.subject,
+    message: note.message,
+    path: note.url,
     category: report ? 'reports' : 'system',
-    ...(report ? { channels: { inapp: true, email: true } } : {}),
-    target: { kind: 'external', url: note.url, ...(report ? {} : { action: 'review' as const }) },
+    ...(report ? { email: true } : { action: 'review' as const }),
     source: report
       ? { kind: 'hub_slo_report', label: 'Monthly uptime report' }
       : { kind: 'hub_fleet', label: 'Hub fleet' },

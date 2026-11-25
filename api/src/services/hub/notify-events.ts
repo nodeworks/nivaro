@@ -115,6 +115,12 @@ export interface HubNotice {
   urgent?: boolean
   source: { kind: string; label?: string | null; id?: string | number | null }
   why: string
+  /** Default 'system' (a report may use 'reports'). */
+  category?: 'system' | 'reports'
+  /** Also by email (the person's rules still decide). */
+  email?: boolean
+  /** What a click offers (default open). */
+  action?: 'review'
 }
 
 /**
@@ -144,7 +150,9 @@ export async function deliverHubNotice(
   } catch {
     base = ''
   }
-  const url = `${base.replace(/\/+$/, '')}${notice.path.startsWith('/') ? '' : '/'}${notice.path}`
+  const url = /^https?:\/\//i.test(notice.path)
+    ? notice.path
+    : `${base.replace(/\/+$/, '')}${notice.path.startsWith('/') ? '' : '/'}${notice.path}`
   const seen = new Set<string>()
   let n = 0
   for (const raw of userIds) {
@@ -155,9 +163,10 @@ export async function deliverHubNotice(
       await notify(raw, {
         subject: notice.subject.slice(0, 200),
         message: notice.message.slice(0, 1000),
-        category: 'system',
+        category: notice.category ?? 'system',
         ...(notice.urgent ? { urgent: true } : { lane: 'fyi' }),
-        target: { kind: 'external', url },
+        ...(notice.email ? { channels: { inapp: true, email: true } } : {}),
+        target: { kind: 'external', url, ...(notice.action ? { action: notice.action } : {}) },
         source: notice.source,
         why: notice.why
       })
