@@ -106,7 +106,7 @@ export function EnvWindowGate({
   onReason
 }: {
   envId: number
-  what: 'move' | 'apply'
+  what: 'move' | 'apply' | 'extension'
   onReason: (reason: string | null) => void
 }) {
   const q = useQuery({
@@ -117,12 +117,16 @@ export function EnvWindowGate({
   const w = q.data
   if (!w || !w.governed || w.open) return null
   const invalid = (w.invalid?.length ?? 0) > 0
-  const action = what === 'move' ? 'A move' : 'Apply now'
+  const action =
+    what === 'move' ? 'A move' : what === 'extension' ? 'An extension promotion' : 'Apply now'
   return (
     <Notice
       invalid={invalid}
       override={
-        <OutsideWindowOverride what={what === 'move' ? 'move' : 'apply'} onReason={onReason} />
+        <OutsideWindowOverride
+          what={what === 'move' ? 'move' : what === 'extension' ? 'promotion' : 'apply'}
+          onReason={onReason}
+        />
       }
     >
       {invalid

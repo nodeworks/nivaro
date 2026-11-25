@@ -1,6 +1,7 @@
 import type { Knex } from 'knex'
 import { utcNow } from '../dialect.js'
 import { longText } from '../portable-ddl.js'
+import { sqlDialect } from '../sql-dialect.js'
 
 /**
  * Nivaro Hub verification: post-deploy smoke checks and the extension version manager
@@ -99,6 +100,25 @@ export async function up(knex: Knex): Promise<void> {
       t.index(['app_id'], 'ix_nivaro_hub_ext_promo_app')
     })
   }
+
+  await widenChecklistAction(knex)
+}
+
+/**
+ * Migration 573's checklist runs keep their action in 16 characters; an extension promote's
+ * checklist is `extension_promote` (17). Widened to 32 where the engine enforces lengths (SQLite
+ * does not), only when it is still narrower — a no-op wherever 573 already made it wide enough.
+ */
+async function widenChecklistAction(knex: Knex): Promise<void> {
+  const table = 'nivaro_hub_checklist_runs'
+  if (!(await knex.schema.hasTable(table))) return
+  if (sqlDialect(knex) === 'sqlite') return
+  const info = (await knex(table).columnInfo('action')) as { maxLength?: number | string | null }
+  const len = Number(info?.maxLength)
+  if (!Number.isFinite(len) || len <= 0 || len >= 32) return
+  await knex.schema.alterTable(table, (t) => {
+    t.string('action', 32).notNullable().alter()
+  })
 }
 
 export async function down(): Promise<void> {
