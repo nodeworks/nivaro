@@ -37,14 +37,29 @@ vi.mock('../../../middleware/authenticate.js', () => {
   return { requireAuth: vi.fn(sign), requireAdmin: vi.fn(admin), authenticate: vi.fn(sign) }
 })
 vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () => null) }))
-const delivered: Array<{ ids: string[]; subject: string; urgent?: boolean; path: string }> = []
+const delivered: Array<{
+  ids: string[]
+  subject: string
+  message?: string
+  urgent?: boolean
+  path: string
+}> = []
 vi.mock('../../../services/hub/notify-events.js', async (orig) => {
   const real = (await orig()) as Record<string, unknown>
   return {
     ...real,
     deliverHubNotice: vi.fn(
-      async (ids: string[], n: { subject: string; urgent?: boolean; path: string }) => {
-        delivered.push({ ids: [...ids], subject: n.subject, urgent: n.urgent, path: n.path })
+      async (
+        ids: string[],
+        n: { subject: string; message: string; urgent?: boolean; path: string }
+      ) => {
+        delivered.push({
+          ids: [...ids],
+          subject: n.subject,
+          message: n.message,
+          urgent: n.urgent,
+          path: n.path
+        })
         return ids.length
       }
     )
@@ -298,6 +313,38 @@ describe('incident mode', () => {
 })
 
 describe('on-call and escalation', () => {
+  it('a paged non-owner acknowledging the incident gets a receipt, not the incident', async () => {
+    await setRota()
+    const inc = await openOne({ summary: 'Internal: the DB password rotated' })
+    // The pager notice names app, severity and title only.
+    expect(delivered[0].message).toBe('SEV 1 · EFP: Orders fail')
+    expect(delivered[0].message).not.toContain('password')
+    const r = await app.inject({
+      method: 'POST',
+      url: `/hub/incidents/${inc.id}/acknowledge`,
+      headers: { 'x-user': ONCALL }
+    })
+    expect(r.statusCode).toBe(200)
+    const data = r.json().data
+    expect(Object.keys(data).sort()).toEqual(
+      ['acknowledged_at', 'acknowledged_by', 'id', 'status'].sort()
+    )
+    expect(data.status).toBe('acked')
+    expect(JSON.stringify(data)).not.toMatch(/Orders fail|password/)
+    const owner = await app.inject({
+      method: 'POST',
+      url: `/hub/incidents/${inc.id}/acknowledge`,
+      headers: { 'x-user': OWNER }
+    })
+    expect(owner.json().data.title).toBe('Orders fail')
+    const stranger = await app.inject({
+      method: 'POST',
+      url: `/hub/incidents/${inc.id}/acknowledge`,
+      headers: { 'x-user': OTHER }
+    })
+    expect(stranger.statusCode).toBe(404)
+  })
+
   it('pages the person on call first, escalates after the minutes, a paged person acknowledges', async () => {
     await setRota()
     const inc = await openOne()
@@ -326,6 +373,10 @@ describe('on-call and escalation', () => {
     expect((await escalateDuePages({ now: () => later + 60 * 60_000 })).escalated).toBe(0)
     const d = (await app.inject({ url: `/hub/incidents/${inc.id}`, headers: asAdmin })).json().data
     expect(d.acknowledged_by_name).toBe('Nell Next')
+    // The page receipt only, never the page or incident text, for someone who cannot read the app.
+    expect(Object.keys(ok.json().data).sort()).toEqual(
+      ['acknowledged_at', 'acknowledged_by', 'id', 'status'].sort()
+    )
     // The paged person sees the page on their on-call view.
     const mine = (await app.inject({ url: '/hub/on-call', headers: { 'x-user': ONCALL } })).json()
       .data

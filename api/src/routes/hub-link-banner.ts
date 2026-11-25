@@ -28,7 +28,8 @@ import type { TenantRecord, TenantRegistry } from '../services/tenancy/types.js'
  * Hub; bearer = deploymentLinkBearer(HUB_DEPLOYMENT_TOKEN)), inside that app:
  *   PUT | DELETE /api/hub-deployment/apps/:id/status-banner
  *
- * Both: `Authorization: Bearer …` compared timing-safe, 401 / 429 after 20 failures a minute from
+ * Both: EVERY request this plugin serves needs `Authorization: Bearer …` (the onRequest hook is
+ * plugin-scoped and never looks at the URL), compared timing-safe, 401 / 429 after 20 failures a minute from
  * one address, `Cache-Control: no-store`. Exempt from the app's own maintenance freeze like every
  * hub-link call (a banner is how people learn about the outage).
  */
@@ -49,13 +50,26 @@ function answer(reply: FastifyReply, out: BannerWrite) {
   return reply.send({ banner: out.banner })
 }
 
+/**
+ * PUT / DELETE on any other path under this plugin's prefix lands here instead of the global
+ * 404, so the plugin's bearer hook judges it too: a near-miss spelling of the route (trailing
+ * slash, an encoded slash, `;x`, other case) answers 401 without the bearer, never a route.
+ * Every route a sibling plugin declares is more specific and still wins.
+ */
+function catchRest(app: FastifyInstance) {
+  app.route({
+    method: ['PUT', 'DELETE'],
+    url: '/*',
+    handler: async (_req, reply) => refuse(reply, 404, 'Not found', 'NOT_FOUND')
+  })
+}
+
 /** PUT / DELETE /api/hub-link/status-banner on a dedicated app (HUB_TOKEN). */
 export async function hubLinkBannerRoutes(app: FastifyInstance): Promise<void> {
   const token = hubLinkToken()
   if (!token || isMultiTenant()) return
   const authFails = failedAuthLimiter()
   app.addHook('onRequest', async (req, reply) => {
-    if (!req.url.split('?')[0].endsWith('/status-banner')) return
     reply.header('Cache-Control', 'no-store')
     if (authFails.blocked(req.ip)) return refuse(reply, 429, 'Too many attempts', REFUSED)
     if (!bearerMatches(req.headers.authorization, token)) {
@@ -63,6 +77,8 @@ export async function hubLinkBannerRoutes(app: FastifyInstance): Promise<void> {
       return refuse(reply, 401, 'Unauthorized', REFUSED)
     }
   })
+
+  catchRest(app)
 
   app.put('/status-banner', async (req, reply) => {
     try {
@@ -95,7 +111,6 @@ export async function hubDeploymentBannerRoutes(app: FastifyInstance): Promise<v
   const bearer = deploymentLinkBearer(cfg.token)
   const authFails = failedAuthLimiter()
   app.addHook('onRequest', async (req, reply) => {
-    if (!req.url.split('?')[0].endsWith('/status-banner')) return
     reply.header('Cache-Control', 'no-store')
     if (authFails.blocked(req.ip))
       return refuse(reply, 429, 'Too many attempts', DEPLOYMENT_REFUSED)
@@ -121,6 +136,8 @@ export async function hubDeploymentBannerRoutes(app: FastifyInstance): Promise<v
       return refuse(reply, 503, 'The banner could not be written (Redis)', 'REDIS_UNAVAILABLE')
     }
   }
+
+  catchRest(app)
 
   app.put<{ Params: { id: string } }>('/apps/:id/status-banner', async (req, reply) =>
     inApp(reply, req.params.id, () => setStatusBanner(redisOf(app), req.body))

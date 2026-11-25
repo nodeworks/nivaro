@@ -160,6 +160,33 @@ async function exportFacts(inc: Incident) {
   }
 }
 
+/** What an acknowledgement answers someone who may not read the app: the page's state only. */
+function pageReceipt(p: {
+  id: number
+  status: string
+  acknowledged_by: string | null
+  acknowledged_at: string | null
+}) {
+  return {
+    id: p.id,
+    status: p.status,
+    acknowledged_by: p.acknowledged_by,
+    acknowledged_at: p.acknowledged_at
+  }
+}
+
+async function ackReceipt(inc: Incident) {
+  const page = inc.page_id != null ? await readPage(inc.page_id) : null
+  if (page) return pageReceipt(page)
+  const after = await readIncident(inc.id)
+  return {
+    id: null,
+    status: 'acked',
+    acknowledged_by: after?.acknowledged_by ?? null,
+    acknowledged_at: after?.acknowledged_at ?? null
+  }
+}
+
 function fileName(inc: Incident, ext: string): string {
   const slug = inc.title
     .toLowerCase()
@@ -455,7 +482,9 @@ export async function hubIncidentRoutes(app: FastifyInstance): Promise<void> {
       item: String(inc.id),
       req
     })
-    return { data: await readIncident(inc.id) }
+    // A paged person who cannot read the app gets a receipt only, never the incident.
+    if (await canReadApp(req, inc.app_id)) return { data: await readIncident(inc.id) }
+    return { data: await ackReceipt(inc) }
   })
 
   app.post('/incidents/:id/resolve', { preHandler: requireAdmin }, async (req, reply) => {
@@ -772,7 +801,7 @@ export async function hubIncidentRoutes(app: FastifyInstance): Promise<void> {
         comment: page.subject.slice(0, 200),
         req
       })
-      return { data: after }
+      return { data: owner ? after : pageReceipt(after) }
     } catch (err) {
       return refusal(reply, err)
     }

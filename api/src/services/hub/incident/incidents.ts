@@ -339,7 +339,15 @@ export async function hideBanner(
 export async function pageFor(inc: Incident, deps: IncidentDeps = {}): Promise<void> {
   const app = await appName(inc.app_id)
   const subject = `Incident (${SEV_LABEL[inc.severity]}): ${app} — ${inc.title}`.slice(0, 200)
-  const message = (inc.summary ?? 'An incident was opened in the Nivaro Hub.').slice(0, 1000)
+  // Only what on-call needs: app, environment, severity, title — never the internal summary.
+  const env =
+    inc.environment_id == null
+      ? null
+      : ((await db('nivaro_hub_environments').where({ id: inc.environment_id }).first('key')) as
+          | { key: string }
+          | undefined)
+  const message =
+    `${SEV_LABEL[inc.severity]} · ${app}${env ? ` · ${env.key}` : ''}: ${inc.title}`.slice(0, 1000)
   const path = `/hub/incidents?incident=${inc.id}`
   const paged = await openPage(
     {

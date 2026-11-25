@@ -451,7 +451,7 @@ main { max-width: 760px; margin: 0 auto; padding: 28px 16px 48px; }
 .brand i { width:10px; height:10px; border-radius:3px; background:var(--accent); display:inline-block; }
 h1 { font-size:24px; margin:8px 0 16px; letter-spacing:-.01em; }
 .overall { display:flex; align-items:center; gap:10px; padding:14px 16px; border-radius:10px; background:var(--card); border:1px solid var(--line); font-weight:600; }
-.overall.ok { border-left:4px solid var(--ok); } .overall.warn { border-left:4px solid var(--warn); } .overall.bad { border-left:4px solid var(--bad); } .overall.none { border-left:4px solid var(--none); }
+.overall.ok { background:color-mix(in srgb, var(--ok) 9%, var(--card)); border-color:color-mix(in srgb, var(--ok) 35%, var(--line)); } .overall.warn { background:color-mix(in srgb, var(--warn) 10%, var(--card)); border-color:color-mix(in srgb, var(--warn) 40%, var(--line)); } .overall.bad { background:color-mix(in srgb, var(--bad) 9%, var(--card)); border-color:color-mix(in srgb, var(--bad) 40%, var(--line)); }
 ul { list-style:none; margin:0; padding:0; }
 .apps { margin-top:16px; background:var(--card); border:1px solid var(--line); border-radius:10px; }
 .app { padding:14px 16px; border-top:1px solid var(--line); } .app:first-child { border-top:0; }

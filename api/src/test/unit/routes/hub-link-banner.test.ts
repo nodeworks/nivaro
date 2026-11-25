@@ -38,6 +38,13 @@ beforeAll(async () => {
   app = Fastify()
   app.decorate('redis', redis as never)
   await app.register(hubLinkBannerRoutes, { prefix: '/hub-link' })
+  // A sibling hub-link plugin's own route still wins over the banner plugin's catch-all.
+  await app.register(
+    async (f) => {
+      f.delete('/retire', async () => ({ sibling: true }))
+    },
+    { prefix: '/hub-link' }
+  )
   await app.ready()
 })
 afterAll(async () => {
@@ -69,6 +76,23 @@ describe('PUT / DELETE /api/hub-link/status-banner', () => {
     })
     expect(bad.statusCode).toBe(401)
     expect(redis.store.size).toBe(0)
+  })
+
+  it('every path variant still needs the bearer (no URL-based skip)', async () => {
+    for (const url of [
+      '/hub-link/status-banner/',
+      '/hub-link/%2Fstatus-banner',
+      '/hub-link/status-banner;x',
+      '/hub-link/STATUS-BANNER',
+      '/hub-link/status-banner?x=1'
+    ]) {
+      const r = await app.inject({ method: 'PUT', url, payload: { text: 'x', incident_id: 1 } })
+      expect(r.statusCode, url).toBe(401)
+    }
+    expect(redis.store.size).toBe(0)
+    expect((await app.inject({ method: 'DELETE', url: '/hub-link/retire' })).json()).toEqual({
+      sibling: true
+    })
   })
 
   it('stores plain text with a TTL and tells the tabs; clears only its own incident', async () => {
