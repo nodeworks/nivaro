@@ -58,7 +58,7 @@ import type {
   PromotionPlan,
   PromotionStep
 } from './promote-types.js'
-import { freezeRefusal, rollbackExempt } from './releases/freeze.js'
+import { freezeRefusal, recordedRunningVersion, rollbackExempt } from './releases/freeze.js'
 import { HubSecretError } from './secrets.js'
 import { hubStatusKey } from './status.js'
 
@@ -1112,6 +1112,11 @@ export async function startPromotion(
      */
     checklistRunId?: unknown
     checklistSource?: { kind: 'schedule' | 'train'; id: number; step?: number | null }
+    /**
+     * An administrator's emergency start outside the deploy windows (routes check who and the
+     * typed reason, services/hub/changes/emergency.ts). Freezes and checklists still apply.
+     */
+    outsideWindow?: { reason: string }
   },
   deps: StartDeps = defaultStartDeps()
 ): Promise<{ deployId: number; jobRunId: number | null }> {
@@ -1133,7 +1138,8 @@ export async function startPromotion(
     const frozen = await freezeRefusal({
       appIds: [Number(env.app_id)],
       action: req.apply === true ? 'apply' : 'promote',
-      envId
+      envId,
+      ...(req.outsideWindow ? { skipWindows: true } : {})
     })
     if (frozen) throw new PromotionError(frozen.code, frozen.message, frozen.status)
   }
@@ -1215,12 +1221,18 @@ export async function startPromotion(
       lockHeld: true,
       ...(apply ? { apply: true } : {})
     })
-    if (req.kind === 'rollback' && !rollbackExempt(req.version, input.targetVersion)) {
+    // What runs: the live status, else the Hub's own record of its last successful run (an
+    // outage rollback — production down, its link silent — is still a real rollback); unknown
+    // to both = gated.
+    const running =
+      input.targetVersion ?? (req.kind === 'rollback' ? await recordedRunningVersion(envId) : null)
+    if (req.kind === 'rollback' && !rollbackExempt(req.version, running)) {
       // Freezes AND deploy windows (one engine), then the checklist: a forward deploy.
       const frozen = await freezeRefusal({
         appIds: [Number(env.app_id)],
         action: 'promote',
-        envId
+        envId,
+        ...(req.outsideWindow ? { skipWindows: true } : {})
       })
       if (frozen) throw new PromotionError(frozen.code, frozen.message, frozen.status)
       checklist = await gateChecklist()
@@ -1339,7 +1351,7 @@ export async function startPromotion(
  */
 export async function startStackApply(
   envId: number,
-  req: { confirm: unknown; user: { id: string } | null },
+  req: { confirm: unknown; user: { id: string } | null; outsideWindow?: { reason: string } },
   deps: StartDeps = defaultStartDeps()
 ): Promise<{ deployId: number; jobRunId: number | null }> {
   const env = (await db(ENVS).where({ id: envId }).first('key', 'version_pin')) as
@@ -1354,7 +1366,15 @@ export async function startStackApply(
     )
   return startPromotion(
     envId,
-    { kind: 'promote', version, confirm: req.confirm, planHash: null, user: req.user, apply: true },
+    {
+      kind: 'promote',
+      version,
+      confirm: req.confirm,
+      planHash: null,
+      user: req.user,
+      apply: true,
+      ...(req.outsideWindow ? { outsideWindow: req.outsideWindow } : {})
+    },
     deps
   )
 }

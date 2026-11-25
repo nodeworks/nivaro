@@ -339,6 +339,31 @@ export async function runDueSchedules(deps: ScheduleDeps = defaultScheduleDeps()
     }
     const frozen = await deps.freeze(s.app_id, s.kind === 'promote' ? s.environment_id : null)
     if (frozen) {
+      // A deploy window that cannot be read needs a person, and so does a schedule no window
+      // opens for within 14 days: both end here (missed / failed, people told) instead of
+      // waiting for a surprise deploy whenever someone edits a window.
+      const noOpening = frozen.code === 'OUTSIDE_WINDOW' && frozen.next_opening === null
+      if (noOpening || frozen.code === 'WINDOW_INVALID') {
+        await settle(s.id, {
+          status: 'failed',
+          error: (noOpening
+            ? `MISSED: no deploy window opens within 14 days. ${frozen.message}`
+            : `${frozen.code}: ${frozen.message}`
+          ).slice(0, 1000)
+        })
+        await deps.notify(
+          s.app_id,
+          {
+            subject: noOpening
+              ? `Scheduled ${s.kind} of ${s.version} missed`
+              : `Scheduled ${s.kind} of ${s.version} not started`,
+            message: `${what(s)} was not started: ${frozen.message} Nothing was deployed; schedule it again.`,
+            urgent: true
+          },
+          [s.created_by]
+        )
+        continue
+      }
       // Waits never use up tries; the missed rule counts from the freeze's end (a deploy
       // window's next opening counts the same way: OUTSIDE_WINDOW).
       const timed = frozen.code === 'FROZEN' || frozen.code === 'OUTSIDE_WINDOW'

@@ -12,8 +12,21 @@ export function icsTime(ms: number): string {
   return `${d.getUTCFullYear()}${two(d.getUTCMonth() + 1)}${two(d.getUTCDate())}T${two(d.getUTCHours())}${two(d.getUTCMinutes())}${two(d.getUTCSeconds())}Z`
 }
 
+/**
+ * Text value escaping: backslash, semicolon, comma; every line break (CRLF, a lone CR, a lone
+ * LF) becomes \\n, and other control characters are dropped — a raw CR inside a content line
+ * would let a client that splits on CR read an injected property.
+ */
 export function icsText(v: string): string {
-  return v.replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n')
+  return (
+    v
+      .replace(/\\/g, '\\\\')
+      .replace(/;/g, '\\;')
+      .replace(/,/g, '\\,')
+      .replace(/\r\n|\r|\n/g, '\\n')
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: dropping them is the point
+      .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '')
+  )
 }
 
 /** Folds one content line at 75 octets (continuation lines start with a space). */

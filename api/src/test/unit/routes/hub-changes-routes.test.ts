@@ -30,6 +30,11 @@ vi.mock('../../../middleware/authenticate.js', () => {
     if (!id) throw Object.assign(new Error('Unauthorized'), { statusCode: 401 })
     req.user = { id, status: 'active', first_name: 'Ada', last_name: 'Lovelace', email: 'a@x' }
     req.isAdmin = req.headers['x-admin'] === '1'
+    // x-auth: how the caller signed in (default their own browser session); x-masq: View-as.
+    const r = req as Record<string, unknown>
+    r.authMethod = req.headers['x-auth'] ?? 'session'
+    if (req.headers['x-masq']) r.masqueradeAdminId = req.headers['x-masq']
+    if (req.headers['x-auth'] === 'api_key') r.apiKeyId = 'k1'
   }
   const admin = async (req: Parameters<typeof sign>[0]) => {
     await sign(req)
@@ -38,6 +43,17 @@ vi.mock('../../../middleware/authenticate.js', () => {
   }
   return { requireAuth: vi.fn(sign), requireAdmin: vi.fn(admin), authenticate: vi.fn(sign) }
 })
+// A shared deployment's link (never the network): its version, or no answer.
+const link = vi.hoisted(() => ({ version: null as string | null }))
+vi.mock('../../../services/hub/shared/deployment-client.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  deploymentClient: () => ({
+    status: async () => {
+      if (!link.version) throw new Error('no answer')
+      return { version: link.version }
+    }
+  })
+}))
 const activity = vi.hoisted(() => ({ rows: [] as Array<Record<string, unknown>> }))
 vi.mock('../../../services/activity.js', () => ({
   logActivity: vi.fn(async (row: Record<string, unknown>) => {
@@ -196,6 +212,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   activity.rows = []
+  link.version = null
   for (const t of [
     'nivaro_hub_deploy_windows',
     'nivaro_hub_checklist_items',
@@ -203,21 +220,28 @@ beforeEach(async () => {
     'nivaro_hub_calendar_entries',
     'nivaro_hub_schedules',
     'nivaro_hub_freezes',
-    'nivaro_hub_deploys'
+    'nivaro_hub_deploys',
+    'nivaro_hub_shared_deploys'
   ])
     await db(t).del()
 })
 
 /** A window that is closed now: an hour-long one-off window starting in a day. */
-const closedWindow = (over: Record<string, unknown> = {}) =>
-  inject('POST', '/deploy-windows', {
+/**
+ * A weekly window that is closed now: one hour, three days from today (UTC), 00:00–01:00.
+ * (A one-off window only adds openings; it never closes an app on its own.)
+ */
+const closedWindow = (over: Record<string, unknown> = {}) => {
+  const day = (new Date().getUTCDay() + 3) % 7 || 7
+  return inject('POST', '/deploy-windows', {
     name: 'Release slot',
     app_id: appId,
-    recurrence: 'none',
-    starts_at: new Date(Date.now() + 86_400_000).toISOString(),
-    ends_at: new Date(Date.now() + 90_000_000).toISOString(),
+    recurrence: 'weekly',
+    ranges: [{ days: [day === 0 ? 7 : day], from: '00:00', to: '01:00' }],
+    time_zone: 'UTC',
     ...over
   })
+}
 
 describe('hub change routes', () => {
   it('every window, item and entry write is admin-only', async () => {
@@ -287,7 +311,7 @@ describe('hub change routes', () => {
       confirm: 'prod'
     })
     expect(queued.statusCode).toBe(201)
-    const opens = Date.parse(made.json().data.starts_at)
+    const opens = Date.parse(view.json().data.opens_at)
     expect(Date.parse(queued.json().data.run_at)).toBe(opens + 60_000)
     expect(queued.json().data.on_freeze).toBe('wait')
   })
@@ -505,13 +529,24 @@ describe('hub change routes', () => {
     const upgrade = await inject('POST', `/shared/${sharedId}/upgrade`, { version: '0.3.215' })
     expect(upgrade.statusCode).toBe(409)
     expect(upgrade.json().code).toBe('CHECKLIST_REQUIRED')
-    // A rollback below the version the deployment runs (0.3.210) never waits on it; a
-    // "rollback" to a newer version is an upgrade and does.
-    const back = await inject('POST', `/shared/${sharedId}/upgrade`, {
-      kind: 'rollback',
-      version: '0.3.209'
+    // A rollback below the version the deployment RUNS never waits on it. What runs: the
+    // link's answer, else its last successful run — never the stored pin (0.3.210) alone.
+    const rollbackTo = (version: string) =>
+      inject('POST', `/shared/${sharedId}/upgrade`, { kind: 'rollback', version })
+    expect((await rollbackTo('0.3.209')).json().code).toBe('CHECKLIST_REQUIRED')
+    await db('nivaro_hub_shared_deploys').insert({
+      shared_deployment_id: sharedId,
+      kind: 'upgrade',
+      version: '0.3.210',
+      status: 'success'
     })
-    expect(back.json().code).not.toMatch(/^CHECKLIST_/)
+    expect(String((await rollbackTo('0.3.209')).json().code)).not.toMatch(/^CHECKLIST_/)
+    // The link says it runs 0.3.208 (an out-of-band downgrade): 0.3.209 is forward now.
+    link.version = '0.3.208'
+    expect((await rollbackTo('0.3.209')).json().code).toBe('CHECKLIST_REQUIRED')
+    link.version = '0.3.210'
+    const back = await rollbackTo('0.3.209')
+    expect(String(back.json().code)).not.toMatch(/^CHECKLIST_/)
     const forward = await inject('POST', `/shared/${sharedId}/upgrade`, {
       kind: 'rollback',
       version: '0.3.215'
@@ -524,6 +559,231 @@ describe('hub change routes', () => {
     ])
     const run = await inject('POST', `/shared/${sharedId}/checklist-runs`, { version: '0.3.215' })
     expect(run.statusCode).toBe(201)
+  })
+
+  it('ticks only from a person on their own session (M3)', async () => {
+    const item = await inject('POST', '/checklist-items', { app_id: appId, text: 'Support told' })
+    const opened = await inject(
+      'POST',
+      `/environments/${prod}/checklist-runs`,
+      { action: 'promote', version: '0.3.215' },
+      asOwner
+    )
+    const runId = opened.json().data.run.id
+    const key = `${item.json().data.id}@${prod}`
+    for (const h of [
+      { ...asAdmin, 'x-masq': ADMIN, 'x-user': OWNER },
+      { ...asOwner, 'x-auth': 'api_key' },
+      { ...asOwner, 'x-auth': 'oauth' },
+      { ...asOwner, 'x-auth': 'phone' }
+    ]) {
+      const r = await inject('POST', `/checklist-runs/${runId}/tick`, { key }, h)
+      expect(r.statusCode, JSON.stringify(h)).toBe(403)
+      expect(r.json().code).toBe('TICK_OWN_SESSION')
+    }
+    expect(
+      (
+        await inject(
+          'POST',
+          `/environments/${prod}/checklist-runs`,
+          { action: 'promote', version: '0.3.215' },
+          { ...asOwner, 'x-auth': 'api_key' }
+        )
+      ).json().code
+    ).toBe('TICK_OWN_SESSION')
+    expect(
+      (
+        await inject(
+          'POST',
+          `/checklist-runs/${runId}/void`,
+          {},
+          { ...asAdmin, 'x-auth': 'api_key' }
+        )
+      ).json().code
+    ).toBe('TICK_OWN_SESSION')
+    expect(
+      (await inject('POST', `/checklist-runs/${runId}/tick`, { key }, asOwner)).statusCode
+    ).toBe(200)
+  })
+
+  it('an outage rollback (live version unknown) judges the Hub’s own record (M2)', async () => {
+    await inject('POST', '/checklist-items', { app_id: appId, text: 'Support told' })
+    await closedWindow()
+    // Production is down: gather answers no running version. The Hub recorded 0.3.215.
+    await db('nivaro_hub_deploys').insert({
+      app_id: appId,
+      environment_id: prod,
+      kind: 'promote',
+      version: '0.3.215',
+      status: 'success',
+      started_at: new Date(Date.now() - 3_600_000),
+      finished_at: new Date(Date.now() - 3_500_000)
+    })
+    // The automatic rollback's own call: back to the recorded previous good build.
+    const auto = await startPromotion(
+      prod,
+      {
+        kind: 'rollback',
+        version: '0.3.214',
+        confirm: 'prod',
+        planHash: 'a'.repeat(64),
+        user: null
+      },
+      {
+        ...defaultStartDeps(),
+        lock: memoryPromoteLock,
+        gather: async () => ({ targetVersion: null }) as never
+      }
+    ).then(
+      () => ({ code: 'STARTED' }),
+      (e) => e as { code: string }
+    )
+    expect(String(auto.code)).not.toBe('OUTSIDE_WINDOW')
+    expect(String(auto.code)).not.toMatch(/^CHECKLIST_/)
+    // The panel's hint: a real rollback needs no checklist, a forward one does.
+    const real = await inject(
+      'GET',
+      `/environments/${prod}/checklist?action=promote&version=0.3.214&kind=rollback`,
+      undefined,
+      asOwner
+    )
+    expect(real.json().data).toMatchObject({ exempt: true, required: false })
+    const forward = await inject(
+      'GET',
+      `/environments/${prod}/checklist?action=promote&version=0.3.216&kind=rollback`,
+      undefined,
+      asOwner
+    )
+    expect(forward.json().data.required).toBe(true)
+  })
+
+  it('a move honours the app’s windows; an admin may start outside them with a reason (M4)', async () => {
+    await closedWindow()
+    const move = await inject('POST', `/environments/${prod}/move`, { confirm: 'acme/prod' })
+    expect(move.json().code).toBe('OUTSIDE_WINDOW')
+    const short = await inject('POST', `/environments/${prod}/move`, {
+      confirm: 'acme/prod',
+      outside_window_reason: 'now'
+    })
+    expect(short.json().code).toBe('REASON_REQUIRED')
+    const viaKey = await inject(
+      'POST',
+      `/environments/${prod}/move`,
+      { confirm: 'acme/prod', outside_window_reason: 'Database host is failing over tonight' },
+      { ...asAdmin, 'x-auth': 'api_key' }
+    )
+    expect(viaKey.json().code).toBe('OUTSIDE_WINDOW_ADMIN_ONLY')
+    const emergency = await inject('POST', `/environments/${prod}/move`, {
+      confirm: 'acme/prod',
+      outside_window_reason: 'Database host is failing over tonight'
+    })
+    // Past the window; the move itself then refuses for its own reasons (no placement here).
+    expect(emergency.json().code).not.toBe('OUTSIDE_WINDOW')
+    // An owner may not override (on dev, which owners may promote); an admin's override still
+    // meets a freeze.
+    const ownerTry = await inject(
+      'POST',
+      `/environments/${dev}/promote`,
+      {
+        kind: 'promote',
+        version: '0.3.215',
+        confirm: 'dev',
+        plan_hash: 'a'.repeat(64),
+        outside_window_reason: 'Hotfix for a broken login page'
+      },
+      asOwner
+    )
+    expect(ownerTry.json().code).toBe('OUTSIDE_WINDOW_ADMIN_ONLY')
+    await inject('POST', '/freezes', {
+      name: 'Year end',
+      starts_at: new Date(Date.now() - 60_000).toISOString(),
+      ends_at: new Date(Date.now() + 3_600_000).toISOString()
+    })
+    const frozen = await inject('POST', `/environments/${prod}/promote`, {
+      kind: 'promote',
+      version: '0.3.215',
+      confirm: 'prod',
+      plan_hash: 'a'.repeat(64),
+      outside_window_reason: 'Hotfix for a broken login page'
+    })
+    expect(frozen.json().code).toBe('FROZEN')
+  })
+
+  it('a shared upgrade honours Hub-wide windows and names a frozen app (M4)', async () => {
+    await closedWindow({ app_id: null, name: 'Hub slot' })
+    const up = await inject('POST', `/shared/${sharedId}/upgrade`, { version: '0.3.215' })
+    expect(up.json().code).toBe('OUTSIDE_WINDOW')
+    await db('nivaro_hub_deploy_windows').del()
+    // The app's own window is a plan warning, not a block.
+    await closedWindow({ app_id: otherAppId, name: 'Other slot' })
+    expect(
+      (await inject('POST', `/shared/${sharedId}/upgrade`, { version: '0.3.215' })).json().code
+    ).not.toBe('OUTSIDE_WINDOW')
+    const { closedAppWindows } = await import('../../../services/hub/releases/windows.js')
+    expect(
+      (await closedAppWindows([{ app_id: otherAppId, key: 'other', production: true }]))[0]?.text
+    ).toMatch(/^other: outside its own deploy window/)
+    await inject('POST', '/freezes', {
+      name: 'Other freeze',
+      app_id: otherAppId,
+      starts_at: new Date(Date.now() - 60_000).toISOString(),
+      ends_at: new Date(Date.now() + 3_600_000).toISOString()
+    })
+    const frozen = await inject('POST', `/shared/${sharedId}/upgrade`, { version: '0.3.215' })
+    expect(frozen.json().code).toBe('FROZEN')
+    expect(frozen.json().error).toContain('for other')
+  })
+
+  it('a shared checklist shows an owner only their app; only an admin sets it aside (L2, L3)', async () => {
+    // acme gets a production environment on the same shared deployment.
+    const placement = (
+      await db('nivaro_hub_environments').where({ id: otherProd }).first('placement_id')
+    ).placement_id
+    const acmeEu = await insertId('nivaro_hub_environments', {
+      app_id: appId,
+      key: 'prod-eu',
+      position: 2,
+      base_url: 'https://eu.acme.example.com',
+      placement_id: placement
+    })
+    await inject('POST', '/checklist-items', { app_id: appId, text: 'Acme support told' })
+    await inject('POST', '/checklist-items', {
+      app_id: otherAppId,
+      text: 'Other app secret plan',
+      help: 'Other app only'
+    })
+    const run = await inject('POST', `/shared/${sharedId}/checklist-runs`, { version: '0.3.215' })
+    const id = run.json().data.run.id
+    const mine = await inject('GET', `/checklist-runs/${id}`, undefined, asOwner)
+    expect(mine.statusCode).toBe(200)
+    expect(mine.json().data.entries.map((e: { text: string }) => e.text)).toEqual([
+      'Acme support told'
+    ])
+    expect(mine.json().data.left).toBe(2)
+    expect(JSON.stringify(mine.json())).not.toContain('secret plan')
+    const voided = await inject('POST', `/checklist-runs/${id}/void`, {}, asOwner)
+    expect(voided.statusCode).toBe(403)
+    await db('nivaro_hub_environments').where({ id: acmeEu }).del()
+  })
+
+  it('someone who owns nothing has no calendar; an entry’s environment must be its app’s (L8, L9)', async () => {
+    expect((await inject('GET', '/calendar', undefined, asStranger)).statusCode).toBe(404)
+    expect((await inject('GET', '/calendar.ics', undefined, asStranger)).statusCode).toBe(404)
+    const view = await inject('GET', '/changes/overview', undefined, asStranger)
+    expect(view.json().data).toMatchObject({ apps: [], windows: [], items: [] })
+    const bad = await inject('POST', '/calendar/entries', {
+      title: 'Patching',
+      app_id: appId,
+      environment_id: otherProd,
+      starts_at: new Date(Date.now() + 86_400_000).toISOString()
+    })
+    expect(bad.json().code).toBe('BAD_ENTRY')
+    const follows = await inject('POST', '/calendar/entries', {
+      title: 'Patching',
+      environment_id: otherProd,
+      starts_at: new Date(Date.now() + 86_400_000).toISOString()
+    })
+    expect(follows.json().data.app_id).toBe(otherAppId)
   })
 
   it('the calendar shows the apps the caller may see; .ics downloads them', async () => {

@@ -138,8 +138,30 @@ export function hubMoveRoutes(app: FastifyInstance) {
   app.post('/environments/:envId/move', { preHandler: requireAdmin }, async (req, reply) => {
     const envId = envParam(req)
     if (envId === null) return refuse(reply, 404, 'NOT_FOUND', 'No such environment.')
-    // Release operations: a freeze window stops a move (services/hub/releases/freeze.ts).
-    const frozen = await environmentFreezeRefusal(envId, 'move')
+    // Release operations: a freeze, or a closed deploy window of the environment's app (a move
+    // redeploys it), stops a move (services/hub/releases/freeze.ts). An administrator's
+    // emergency start skips the windows only (services/hub/changes/emergency.ts).
+    const emergency = await import('../services/hub/changes/emergency.js')
+    let outside: { reason: string } | null
+    try {
+      outside = emergency.outsideWindowOf(req, body(req))
+    } catch (e) {
+      if (e instanceof emergency.OutsideWindowError)
+        return refuse(reply, e.status, e.code, e.message)
+      throw e
+    }
+    const envRow = (await db(ENVS).where({ id: envId }).first('app_id', 'key')) as
+      | { app_id: number; key: string }
+      | undefined
+    const closed =
+      outside && envRow
+        ? await emergency.windowWasClosed({
+            appIds: [Number(envRow.app_id)],
+            action: 'move',
+            envId
+          })
+        : false
+    const frozen = await environmentFreezeRefusal(envId, 'move', { skipWindows: !!outside })
     if (frozen) return refuse(reply, frozen.status, frozen.code, frozen.message)
     return guarded(reply, async () => {
       // A production move needs its pre-deploy checklist ticked (services/hub/changes).
@@ -154,6 +176,17 @@ export function hubMoveRoutes(app: FastifyInstance) {
         () => startMove(envId, body(req) as unknown as StartBody, userId(req)),
         (o) => o.move_id
       )
+      if (outside && closed && envRow)
+        await emergency.recordOutsideWindow({
+          req,
+          userId: userId(req),
+          action: 'move',
+          appIds: [Number(envRow.app_id)],
+          where: envRow.key,
+          reason: outside.reason,
+          collection: 'nivaro_hub_moves',
+          item: String(out.move_id)
+        })
       return reply.code(202).send({ data: out })
     })
   })

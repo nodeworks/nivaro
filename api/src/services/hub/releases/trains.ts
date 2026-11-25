@@ -508,7 +508,9 @@ async function stepOnce(t: Train, deps: TrainDeps): Promise<Step> {
         const note =
           frozen.code === 'OUTSIDE_WINDOW'
             ? `Waiting for the deploy window: ${frozen.message}`
-            : `Waiting for the freeze to end: ${frozen.message}`
+            : frozen.code === 'FROZEN'
+              ? `Waiting for the freeze to end: ${frozen.message}`
+              : `Waiting: ${frozen.message}`
         if (s.note !== note) await mutateTrain(t.id, stepPatch(idx, 'pending', { note }))
         return 'wait'
       }

@@ -13,13 +13,15 @@ import {
   validateRanges,
   weeklyNextSpan,
   weeklySpanAt,
-  weeklySpans
+  weeklySpans,
+  zonedTimeUtc
 } from '../../../services/hub/releases/weekly.js'
 import {
   type DeployWindow,
   governingWindows,
   judgeWindows,
   validateWindow,
+  windowFromRow,
   windowRefusalFor
 } from '../../../services/hub/releases/windows.js'
 
@@ -133,7 +135,7 @@ describe('which deploy windows govern', () => {
     expect(r?.status).toBe(409)
     expect(r?.freeze.ends_at).toBe('2026-11-30T12:00:00.000Z')
     expect(r?.message).toContain('Weekdays 7 AM–5 PM (America/New_York)')
-    expect(windowRefusalFor('move', j)).toBeNull()
+    expect(windowRefusalFor('move', j)?.code).toBe('OUTSIDE_WINDOW')
     expect(judgeWindows([win({ enabled: false })], 1, true, now).governed).toBe(false)
   })
 
@@ -179,9 +181,150 @@ describe('one release-time engine', () => {
     expect(
       (await freezeRefusal({ appIds: [1], action: 'apply', now, rows: [], windows }))?.code
     ).toBe('OUTSIDE_WINDOW')
-    expect(await freezeRefusal({ appIds: [1], action: 'move', now, rows: [], windows })).toBeNull()
+    // A move redeploys the app: its windows judge it too.
+    expect(
+      (await freezeRefusal({ appIds: [1], action: 'move', now, rows: [], windows }))?.code
+    ).toBe('OUTSIDE_WINDOW')
+    // A shared upgrade is judged by the Hub-wide windows only (an app's own = plan warnings).
+    expect(
+      await freezeRefusal({ appIds: [1], action: 'upgrade', now, rows: [], windows })
+    ).toBeNull()
+    expect(
+      (
+        await freezeRefusal({
+          appIds: [1],
+          action: 'upgrade',
+          now,
+          rows: [],
+          windows: [win({ app_id: null })]
+        })
+      )?.code
+    ).toBe('OUTSIDE_WINDOW')
+    // The seam: config and extension promotions are judged once their starts call it.
+    expect(
+      (await freezeRefusal({ appIds: [1], action: 'config_promote', now, rows: [], windows }))?.code
+    ).toBe('OUTSIDE_WINDOW')
+    // An administrator's emergency start skips the windows, never a freeze.
+    expect(
+      await freezeRefusal({
+        appIds: [1],
+        action: 'promote',
+        now,
+        rows: [],
+        windows,
+        skipWindows: true
+      })
+    ).toBeNull()
+    expect(
+      (
+        await freezeRefusal({
+          appIds: [1],
+          action: 'promote',
+          now,
+          rows: [freeze],
+          windows,
+          skipWindows: true
+        })
+      )?.code
+    ).toBe('FROZEN')
     // Rows handed in without windows = the caller judges freezes only (older callers, tests).
     expect(await freezeRefusal({ appIds: [1], action: 'promote', now, rows: [] })).toBeNull()
+  })
+})
+
+describe('DST edges (wall-clock windows)', () => {
+  const t = (ms: number) => new Date(ms).toISOString()
+  it('New York spring forward: a start in the gap opens after it, an end in it closes before', () => {
+    // 2027-03-14: 02:00–03:00 EST does not exist.
+    expect(t(zonedTimeUtc(2027, 3, 14, 120, NY, 'start'))).toBe('2027-03-14T07:00:00.000Z')
+    expect(t(zonedTimeUtc(2027, 3, 14, 150, NY, 'start'))).toBe('2027-03-14T07:30:00.000Z')
+    expect(t(zonedTimeUtc(2027, 3, 14, 150, NY, 'end'))).toBe('2027-03-14T06:30:00.000Z')
+    // A Sunday 02:00–05:00 window opens at 3 AM EDT that day, never at 1 AM.
+    const sun = [{ days: [7], from: '02:00', to: '05:00' }]
+    const span = weeklySpanAt(sun, NY, at('2027-03-14T08:00:00Z'))
+    expect(span && t(span.start)).toBe('2027-03-14T07:00:00.000Z')
+    expect(weeklySpanAt(sun, NY, at('2027-03-14T06:30:00Z'))).toBeNull()
+  })
+
+  it('New York fall back: a doubled time takes its first occurrence', () => {
+    expect(t(zonedTimeUtc(2027, 11, 7, 90, NY, 'start'))).toBe('2027-11-07T05:30:00.000Z')
+    expect(t(zonedTimeUtc(2027, 11, 7, 90, NY, 'end'))).toBe('2027-11-07T05:30:00.000Z')
+    expect(t(zonedTimeUtc(2027, 11, 7, 180, NY, 'start'))).toBe('2027-11-07T08:00:00.000Z')
+  })
+
+  it('London both directions', () => {
+    const L = 'Europe/London'
+    // 2027-03-28: 01:00–02:00 GMT does not exist.
+    expect(t(zonedTimeUtc(2027, 3, 28, 90, L, 'start'))).toBe('2027-03-28T01:30:00.000Z')
+    expect(t(zonedTimeUtc(2027, 3, 28, 90, L, 'end'))).toBe('2027-03-28T00:30:00.000Z')
+    // 2027-10-31: 01:00–02:00 happens twice (BST first).
+    expect(t(zonedTimeUtc(2027, 10, 31, 90, L, 'start'))).toBe('2027-10-31T00:30:00.000Z')
+    // Ordinary days are untouched.
+    expect(t(zonedTimeUtc(2027, 7, 1, 420, L))).toBe('2027-07-01T06:00:00.000Z')
+  })
+})
+
+describe('window rules after review', () => {
+  const now = at('2026-11-28T15:00:00Z') // a Saturday
+  it('an app window for every environment never lifts a production-only rule', () => {
+    const hubProd = win({ id: 2, app_id: null, env_scope: 'production', name: 'Hub prod' })
+    const appAll = win({
+      id: 5,
+      env_scope: 'all',
+      name: 'Any time',
+      ranges: [{ days: [1, 2, 3, 4, 5, 6, 7], from: '00:00', to: '24:00' }]
+    })
+    expect(governingWindows([hubProd, appAll], 1, true, now).map((w) => w.id)).toEqual([2])
+    expect(judgeWindows([hubProd, appAll], 1, true, now).open).toBe(false)
+    expect(judgeWindows([hubProd, appAll], 1, false, now).open).toBe(true)
+  })
+
+  it('a one-off window adds an opening; alone it restricts nothing', () => {
+    const extra = win({
+      id: 6,
+      recurrence: 'none',
+      ranges: [],
+      starts_at: '2026-11-29T10:00:00.000Z',
+      ends_at: '2026-11-29T12:00:00.000Z'
+    })
+    expect(judgeWindows([extra], 1, true, now).governed).toBe(false)
+    const j = judgeWindows([win(), extra], 1, true, now)
+    expect(j.next?.window.id).toBe(6)
+  })
+
+  it('a stored window that cannot be read fails closed with WINDOW_INVALID', () => {
+    const bad = windowFromRow({
+      id: 9,
+      app_id: 1,
+      name: 'Broken',
+      env_scope: 'production',
+      recurrence: 'weekly',
+      ranges: '{not json',
+      time_zone: NY,
+      enabled: true
+    })
+    expect(bad.invalid).toMatch(/ranges/)
+    const zone = windowFromRow({
+      ...bad,
+      ranges: JSON.stringify(WEEKDAYS_7_17),
+      time_zone: 'Mars/Base'
+    })
+    expect(zone.invalid).toMatch(/Mars\/Base/)
+    const r = windowRefusalFor('promote', judgeWindows([bad], 1, true, now), now)
+    expect(r?.code).toBe('WINDOW_INVALID')
+    expect(r?.message).toContain('Changes tab')
+  })
+
+  it('no opening within 14 days: next_opening is null', () => {
+    const gone = win({ ranges: [{ days: [3], from: '07:00', to: '08:00' }] })
+    expect(windowRefusalFor('promote', judgeWindows([gone], 1, true, now), now)?.next_opening).toBe(
+      '2026-12-02T12:00:00.000Z'
+    )
+    const disabledAll = win({ enabled: true, ranges: [{ days: [1], from: '07:00', to: '08:00' }] })
+    // A Monday-only window is still within 14 days; a one-off far away adds nothing.
+    expect(
+      windowRefusalFor('promote', judgeWindows([disabledAll], 1, true, now), now)?.next_opening
+    ).not.toBeNull()
   })
 })
 
@@ -256,6 +399,8 @@ describe('iCalendar export', () => {
   it('escapes, folds and writes UTC times; windows are left out', () => {
     expect(icsTime(at('2026-11-30T12:05:09Z'))).toBe('20261130T120509Z')
     expect(icsText('a,b;c\\d\ne')).toBe('a\\,b\\;c\\\\d\\ne')
+    // A lone CR, CRLF and LF all become \n; other control characters are dropped.
+    expect(icsText('a\rATTENDEE:x\r\nb\u0007c')).toBe('a\\nATTENDEE:x\\nbc')
     const long = `SUMMARY:${'x'.repeat(200)}`
     expect(
       foldLine(long)

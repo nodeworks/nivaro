@@ -24,8 +24,25 @@ import { db } from '../../../db/index.js'
 export const ITEMS = 'nivaro_hub_checklist_items'
 export const RUNS = 'nivaro_hub_checklist_runs'
 
-export type ChecklistAction = 'promote' | 'move' | 'upgrade'
-export const ACTIONS: readonly ChecklistAction[] = ['promote', 'move', 'upgrade']
+/**
+ * config_promote / extension_promote: the seam for hub-enh/config and hub-enh/verify — their
+ * starts call checklistGate (or startWithChecklist) with these actions; items opt in to them.
+ */
+export type ChecklistAction =
+  | 'promote'
+  | 'move'
+  | 'upgrade'
+  | 'config_promote'
+  | 'extension_promote'
+export const ACTIONS: readonly ChecklistAction[] = [
+  'promote',
+  'move',
+  'upgrade',
+  'config_promote',
+  'extension_promote'
+]
+/** The actions a new item covers when none are named (the later ones opt in). */
+export const DEFAULT_ACTIONS: readonly ChecklistAction[] = ['promote', 'move', 'upgrade']
 export type TickBy = 'admin' | 'owner' | 'people'
 
 export interface ChecklistItem {
@@ -197,9 +214,12 @@ export function validateItem(b: Record<string, unknown>): ItemInput | { error: s
     if (people.length > 20) return { error: 'at most 20 people' }
     if (people.some((p) => !UUIDISH.test(p))) return { error: 'tick_people are user ids' }
   }
-  const actions = Array.isArray(b.actions) ? b.actions.map(String) : [...ACTIONS]
+  const actions = Array.isArray(b.actions) ? b.actions.map(String) : [...DEFAULT_ACTIONS]
   const clean = ACTIONS.filter((a) => actions.includes(a))
-  if (!clean.length) return { error: 'actions has at least one of promote, move, upgrade' }
+  if (!clean.length)
+    return {
+      error: 'actions has at least one of promote, move, upgrade, config_promote, extension_promote'
+    }
   const position = b.position == null ? 0 : Number(b.position)
   if (!Number.isInteger(position) || position < 0 || position > 10_000)
     return { error: 'position is 0 to 10000' }

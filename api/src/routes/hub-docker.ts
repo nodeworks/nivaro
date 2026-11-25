@@ -698,10 +698,39 @@ export function hubDockerRoutes(app: FastifyInstance) {
     if (body(req).confirm !== key)
       return fail(reply, 400, 'CONFIRM_REQUIRED', `Type the environment key (${key}) to apply`)
     try {
+      // Emergency start outside the deploy windows (admin, own session, typed reason).
+      const emergency = await import('../services/hub/changes/emergency.js')
+      let outside: { reason: string } | null
+      try {
+        outside = emergency.outsideWindowOf(req, body(req))
+      } catch (e) {
+        if (e instanceof emergency.OutsideWindowError)
+          return fail(reply, e.status, e.code, e.message)
+        throw e
+      }
+      const closed = outside
+        ? await emergency.windowWasClosed({
+            appIds: [Number(row.app_id)],
+            action: 'apply',
+            envId
+          })
+        : false
       const started = await startStackApply(envId, {
         confirm: body(req).confirm,
-        user: { id: userId(req) }
+        user: { id: userId(req) },
+        ...(outside ? { outsideWindow: outside } : {})
       })
+      if (outside && closed)
+        await emergency.recordOutsideWindow({
+          req,
+          userId: userId(req),
+          action: 'apply',
+          appIds: [Number(row.app_id)],
+          where: key,
+          reason: outside.reason,
+          collection: 'nivaro_hub_deploys',
+          item: String(started.deployId)
+        })
       await logActivity({
         action: 'hub-stack-apply',
         user: userId(req),

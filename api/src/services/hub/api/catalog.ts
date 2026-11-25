@@ -291,7 +291,10 @@ export const HUB_ROUTES: HubRoute[] = [
         ...PROMOTE_BODY,
         plan_hash: s('The plan’s hash (the plan you reviewed)', { required: true }),
         confirm: s('The environment key, typed', { required: true }),
-        checklist_run_id: n('The ticked pre-deploy checklist (production promotions with one)')
+        checklist_run_id: n('The ticked pre-deploy checklist (production promotions with one)'),
+        outside_window_reason: s(
+          'Admin on own session: start outside the deploy window (10–500 characters); never past a freeze or the checklist'
+        )
       },
       sensitive: true,
       accepted: true
@@ -369,6 +372,12 @@ export const HUB_ROUTES: HubRoute[] = [
   ),
   r('POST', '/environments/:envId/stack/restart', 'Stacks', 'owner', 'write', 'Restart the stack'),
   r('POST', '/environments/:envId/stack/apply', 'Stacks', 'owner', 'write', 'Apply the stack now', {
+    body: {
+      confirm: s('Type the environment key', { required: true }),
+      outside_window_reason: s(
+        'Admin on own session: start outside the deploy window (10–500 characters); never past a freeze or the checklist'
+      )
+    },
     sensitive: true
   }),
   r('POST', '/environments/:envId/stack/remove', 'Stacks', 'owner', 'write', 'Remove the stack', {
@@ -679,7 +688,12 @@ export const HUB_ROUTES: HubRoute[] = [
         plan_hash: s(),
         confirm: s(),
         overrides: list('string'),
-        checklist_run_id: n('The ticked pre-deploy checklist (an upgrade carrying production apps)')
+        checklist_run_id: n(
+          'The ticked pre-deploy checklist (an upgrade carrying production apps)'
+        ),
+        outside_window_reason: s(
+          'Admin on own session: start outside the deploy window (10–500 characters); never past a freeze or the checklist'
+        )
       },
       sensitive: true,
       accepted: true
@@ -729,7 +743,10 @@ export const HUB_ROUTES: HubRoute[] = [
       confirm: s('The environment key, typed', { required: true }),
       checklist: o(),
       overrides: list('string'),
-      checklist_run_id: n('The ticked pre-deploy checklist (production moves with one)')
+      checklist_run_id: n('The ticked pre-deploy checklist (production moves with one)'),
+      outside_window_reason: s(
+        'Admin on own session: start outside the deploy window (10–500 characters); never past a freeze or the checklist'
+      )
     },
     sensitive: true,
     accepted: true
@@ -1591,6 +1608,14 @@ export const HUB_ROUTES: HubRoute[] = [
     'Whether a deploy window is open for the environment now, and the next opening'
   ),
   r(
+    'GET',
+    '/shared/:id/deploy-window',
+    'Changes',
+    'admin',
+    'read',
+    'Whether the Hub-wide deploy windows let the shared deployment be upgraded now'
+  ),
+  r(
     'POST',
     '/environments/:envId/promote/queue',
     'Changes',
@@ -1831,7 +1856,10 @@ export const HUB_ROUTES: HubRoute[] = [
     {
       body: {
         ref: s('hub_token:<environment id>', { required: true }),
-        confirm: s('Type the environment key', { required: true })
+        confirm: s('Type the environment key', { required: true }),
+        outside_window_reason: s(
+          'Admin on own session: start outside the deploy window (10–500 characters); never past a freeze or the checklist'
+        )
       },
       sensitive: true,
       accepted: true,

@@ -227,7 +227,39 @@ export async function hubOpsRoutes(app: FastifyInstance): Promise<void> {
     if (b.confirm !== env.key)
       return fail(reply, 400, 'CONFIRM_REQUIRED', `Type the environment key (${env.key}) to rotate`)
     try {
-      const out = await rotateHubToken(envId, { id: userId(req) })
+      // An emergency rotation after a leak may start outside the deploy windows (admin, own
+      // session, typed reason: services/hub/changes/emergency.ts); freezes still hold it.
+      const emergency = await import('../services/hub/changes/emergency.js')
+      let outside: { reason: string } | null
+      try {
+        outside = emergency.outsideWindowOf(req, b)
+      } catch (e) {
+        if (e instanceof emergency.OutsideWindowError)
+          return fail(reply, e.status, e.code, e.message)
+        throw e
+      }
+      const appRow = (await db('nivaro_hub_environments').where({ id: envId }).first('app_id')) as
+        | { app_id: number }
+        | undefined
+      const appIds = appRow ? [Number(appRow.app_id)] : []
+      const closed = outside
+        ? await emergency.windowWasClosed({ appIds, action: 'apply', envId })
+        : false
+      const out = await rotateHubToken(envId, {
+        id: userId(req),
+        ...(outside ? { outsideWindow: outside } : {})
+      })
+      if (outside && closed)
+        await emergency.recordOutsideWindow({
+          req,
+          userId: userId(req),
+          action: 'apply',
+          appIds,
+          where: env.key,
+          reason: outside.reason,
+          collection: 'nivaro_hub_deploys',
+          item: String(out.deploy_id)
+        })
       await logActivity({
         action: 'hub-secret-rotate',
         user: userId(req),

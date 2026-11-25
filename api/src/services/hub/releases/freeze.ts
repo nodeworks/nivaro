@@ -21,7 +21,18 @@ export const FREEZES = 'nivaro_hub_freezes'
 
 export type FreezeRecurrence = 'none' | 'month_end'
 /** What a freeze stops. A rollback is never one of them. */
-export type FrozenAction = 'promote' | 'upgrade' | 'move' | 'apply'
+/**
+ * config_promote / extension_promote: the seam for hub-enh/config (config promotion through the
+ * Hub) and hub-enh/verify (extension promotion) — once their starts call freezeRefusal (and
+ * checklistGate), freezes, deploy windows and checklists judge them like any other start.
+ */
+export type FrozenAction =
+  | 'promote'
+  | 'upgrade'
+  | 'move'
+  | 'apply'
+  | 'config_promote'
+  | 'extension_promote'
 
 export interface HubFreeze {
   id: number
@@ -136,7 +147,9 @@ const ACTION_WORDS: Record<FrozenAction, string> = {
   promote: 'Promotions',
   apply: 'Stack applies',
   upgrade: 'Shared deployment upgrades',
-  move: 'Moves'
+  move: 'Moves',
+  config_promote: 'Config promotions',
+  extension_promote: 'Extension promotions'
 }
 
 export interface FreezeRefusal {
@@ -144,21 +157,25 @@ export interface FreezeRefusal {
   /**
    * FREEZE_UNKNOWN: the windows could not be read (fails closed; a runner tries again).
    * OUTSIDE_WINDOW: a deploy window governs the app and none is open (windows.ts); `ends_at` is
-   * then the next opening.
+   * then the next opening. WINDOW_INVALID: a governing window cannot be read (fails closed).
    */
-  code: 'FROZEN' | 'FREEZE_UNKNOWN' | 'OUTSIDE_WINDOW'
+  code: 'FROZEN' | 'FREEZE_UNKNOWN' | 'OUTSIDE_WINDOW' | 'WINDOW_INVALID'
   message: string
   freeze: { id: number; name: string; app_id: number | null; ends_at: string }
+  /** OUTSIDE_WINDOW: the next opening, or null when none opens within 14 days. */
+  next_opening?: string | null
 }
 
 /** The refusal for `action` under an active freeze (pure). */
 export function refusalFor(
   action: FrozenAction,
-  active: ActiveFreeze | undefined
+  active: ActiveFreeze | undefined,
+  appKey?: string | null
 ): FreezeRefusal | null {
   if (!active) return null
   const ends = new Date(active.window.end).toISOString()
-  const scope = active.freeze.app_id == null ? 'Hub-wide' : 'for this app'
+  const scope =
+    active.freeze.app_id == null ? 'Hub-wide' : appKey ? `for ${appKey}` : 'for this app'
   return {
     status: 409,
     code: 'FROZEN',
@@ -216,6 +233,13 @@ export async function freezeRefusal(o: {
   envId?: number | null
   /** Deploy windows handed in (tests); omitted with `rows` given = none. */
   windows?: import('./windows.js').DeployWindow[]
+  /**
+   * An administrator's emergency start (services/hub/changes/emergency.ts): the deploy windows
+   * are not judged. Freezes always are.
+   */
+  skipWindows?: boolean
+  /** App keys to name in the refusal (a shared upgrade names the frozen app). */
+  appKeys?: Map<number, string>
 }): Promise<FreezeRefusal | null> {
   let rows = o.rows
   if (!rows) {
@@ -228,11 +252,16 @@ export async function freezeRefusal(o: {
   const now = o.now ?? Date.now()
   const ids = o.appIds.length ? o.appIds : [null]
   for (const appId of ids) {
-    const r = refusalFor(o.action, activeFreezes(rows, appId, now)[0])
+    const r = refusalFor(
+      o.action,
+      activeFreezes(rows, appId, now)[0],
+      appId == null ? null : (o.appKeys?.get(appId) ?? null)
+    )
     if (r) return r
   }
-  // The same engine's other half: deploy windows (allowed times) for promote and apply.
-  if (o.action !== 'promote' && o.action !== 'apply') return null
+  // The same engine's other half: deploy windows (allowed times), windows.ts decides which
+  // actions they judge.
+  if (o.skipWindows) return null
   if (o.rows && !o.windows) return null
   const { windowRefusal } = await import('./windows.js')
   return windowRefusal({
@@ -280,7 +309,8 @@ export async function appsOnShared(sharedId: number): Promise<number[]> {
 /** Route helper: the refusal for an environment's app (promote, apply, move). Fails closed. */
 export async function environmentFreezeRefusal(
   envId: number,
-  action: FrozenAction
+  action: FrozenAction,
+  o: { skipWindows?: boolean } = {}
 ): Promise<FreezeRefusal | null> {
   let appId: number | null
   try {
@@ -289,7 +319,12 @@ export async function environmentFreezeRefusal(
     return freezeUnknown()
   }
   if (appId == null) return null
-  return freezeRefusal({ appIds: [appId], action, envId })
+  return freezeRefusal({
+    appIds: [appId],
+    action,
+    envId,
+    ...(o.skipWindows ? { skipWindows: true } : {})
+  })
 }
 
 /**
@@ -299,16 +334,71 @@ export async function environmentFreezeRefusal(
  */
 export async function sharedFreezeRefusal(
   sharedId: number,
-  o: { kind?: 'upgrade' | 'rollback'; version?: string; running?: string | null } = {}
+  o: {
+    kind?: 'upgrade' | 'rollback'
+    version?: string
+    running?: string | null
+    skipWindows?: boolean
+  } = {}
 ): Promise<FreezeRefusal | null> {
   if (o.kind === 'rollback' && o.version && rollbackExempt(o.version, o.running)) return null
   let apps: number[]
+  let keys: Map<number, string>
   try {
     apps = await appsOnShared(sharedId)
+    const rows = (await db('nivaro_hub_apps')
+      .whereIn('id', apps.length ? apps : [-1])
+      .select('id', 'key')) as Array<{ id: number; key: string }>
+    keys = new Map(rows.map((r) => [Number(r.id), String(r.key)]))
   } catch {
     return freezeUnknown()
   }
-  return freezeRefusal({ appIds: apps, action: 'upgrade' })
+  // Every placed app's freezes (the frozen app is named) and the Hub-wide windows (windows.ts).
+  return freezeRefusal({
+    appIds: apps,
+    action: 'upgrade',
+    appKeys: keys,
+    ...(o.skipWindows ? { skipWindows: true } : {})
+  })
+}
+
+/**
+ * The version a shared deployment runs, for the rollback exemption: what its link reports (the
+ * live status, passed in), else the version of its last successful run (a Hub run, or a
+ * registered deployment's observed version), else null (unknown: gated). Never the stored pin
+ * alone.
+ */
+export async function sharedRunningVersion(
+  sharedId: number,
+  reported?: string | null
+): Promise<string | null> {
+  if (reported) return reported
+  try {
+    const row = (await db('nivaro_hub_shared_deploys')
+      .where({ shared_deployment_id: sharedId, status: 'success' })
+      .orderBy('id', 'desc')
+      .first('version')) as { version: string } | undefined
+    return row?.version ? String(row.version) : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The version an environment runs for the rollback exemption when its live status is unknown:
+ * the Hub's own record — its last successful Hub promotion or rollback (Apply now redeploys the
+ * same version). Hub-recorded, never app-claimed. Null = unknown: gated.
+ */
+export async function recordedRunningVersion(envId: number): Promise<string | null> {
+  try {
+    const row = (await db('nivaro_hub_deploys')
+      .where({ environment_id: envId, status: 'success' })
+      .orderBy('id', 'desc')
+      .first('version')) as { version: string } | undefined
+    return row?.version ? String(row.version) : null
+  } catch {
+    return null
+  }
 }
 
 export interface FreezeInput {

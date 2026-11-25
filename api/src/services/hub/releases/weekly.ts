@@ -30,13 +30,25 @@ const minutes = (hhmm: string) => {
   return h * 60 + m
 }
 
-/** The UTC instant of wall-clock (year, month 1–12, day, minute of day) in `tz`. */
+/**
+ * The UTC instant of wall-clock (year, month 1–12, day, minute of day) in `tz`.
+ *
+ * A DST change makes a wall time missing or doubled; `side` says which way to lean:
+ *   - a time in the spring-forward GAP (02:30 in New York on the March change) does not exist:
+ *     a window START moves to the LATER candidate (the first instant after the gap, 03:30 EDT),
+ *     an END to the earlier one — a window never opens early and never closes late;
+ *   - a time in the fall-back OVERLAP (01:30 on the November change) exists twice: both sides
+ *     take the first occurrence.
+ * The candidates are the wall time read with the zone's offset a day before and a day after;
+ * one of them is the real instant whenever the time exists.
+ */
 export function zonedTimeUtc(
   year: number,
   month: number,
   day: number,
   minuteOfDay: number,
-  tz: string
+  tz: string,
+  side: 'start' | 'end' = 'start'
 ): number {
   const guess = Date.UTC(year, month - 1, day, 0, minuteOfDay)
   const offsetAt = (ms: number) => {
@@ -44,10 +56,24 @@ export function zonedTimeUtc(
     const asUtc = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second)
     return asUtc - Math.floor(ms / 1000) * 1000
   }
-  let at = guess - offsetAt(guess)
-  // Once more at the found instant: a DST change between the guess and the time moves it.
-  at = guess - offsetAt(at)
-  return at
+  const want = new Date(guess)
+  const shows = (ms: number) => {
+    const p = zonedParts(ms, tz)
+    return (
+      p.year === want.getUTCFullYear() &&
+      p.month === want.getUTCMonth() + 1 &&
+      p.day === want.getUTCDate() &&
+      p.hour === want.getUTCHours() &&
+      p.minute === want.getUTCMinutes()
+    )
+  }
+  const candidates = [
+    ...new Set([guess - offsetAt(guess - 86_400_000), guess - offsetAt(guess + 86_400_000)])
+  ].sort((a, b) => a - b)
+  const real = candidates.filter(shows)
+  if (real.length) return real[0]
+  // The gap: no candidate shows the wall time.
+  return side === 'start' ? candidates[candidates.length - 1] : candidates[0]
 }
 
 /** ISO weekday (1 = Monday … 7 = Sunday) of a calendar date. */
@@ -89,8 +115,9 @@ export function weeklySpans(ranges: WeeklyRange[], tz: string, from: number, to:
       if (!r.days.includes(wd)) continue
       const a = minutes(r.from)
       const b = minutes(r.to)
-      const start = zonedTimeUtc(y, m, d, a, tz)
-      const end = b > a ? zonedTimeUtc(y, m, d, b, tz) : zonedTimeUtc(y, m, d + 1, b, tz)
+      const start = zonedTimeUtc(y, m, d, a, tz, 'start')
+      const end =
+        b > a ? zonedTimeUtc(y, m, d, b, tz, 'end') : zonedTimeUtc(y, m, d + 1, b, tz, 'end')
       if (end > from && start < to && end > start) out.push({ start, end })
     }
   }

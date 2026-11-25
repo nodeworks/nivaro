@@ -1433,14 +1433,44 @@ function promotionRoutes(app: FastifyInstance) {
     const input = promoteInput(req)
     if (!input) return fail(reply, 400, 'BAD_KIND', 'kind must be promote or rollback')
     try {
+      // An administrator's emergency start outside the deploy windows (never past a freeze or
+      // the checklist): services/hub/changes/emergency.ts.
+      const emergency = await import('../services/hub/changes/emergency.js')
+      let outside: { reason: string } | null
+      try {
+        outside = emergency.outsideWindowOf(req, body(req))
+      } catch (e) {
+        if (e instanceof emergency.OutsideWindowError)
+          return fail(reply, e.status, e.code, e.message)
+        throw e
+      }
+      const closed = outside
+        ? await emergency.windowWasClosed({
+            appIds: [Number(row.app_id)],
+            action: 'promote',
+            envId: Number(row.id)
+          })
+        : false
       const started = await startPromotion(Number(row.id), {
         ...input,
         confirm: body(req).confirm,
         planHash: body(req).plan_hash,
         user: { id: userId(req) },
         // Pre-deploy checklist ticked for this production promotion (hub-changes.ts).
-        checklistRunId: body(req).checklist_run_id
+        checklistRunId: body(req).checklist_run_id,
+        ...(outside ? { outsideWindow: outside } : {})
       })
+      if (outside && closed)
+        await emergency.recordOutsideWindow({
+          req,
+          userId: userId(req),
+          action: 'promote',
+          appIds: [Number(row.app_id)],
+          where: String(row.key),
+          reason: outside.reason,
+          collection: DEPLOYS,
+          item: String(started.deployId)
+        })
       await logActivity({
         action: 'hub-promote-start',
         user: userId(req),

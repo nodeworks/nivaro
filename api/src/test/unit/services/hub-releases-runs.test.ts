@@ -855,3 +855,23 @@ describe('deploy windows and pre-deploy checklists in the runners', () => {
     await trains.abortTrain(t.id, 'Rob')
   })
 })
+
+describe('schedules after the change review', () => {
+  it('no deploy window within 14 days, or a broken one: failed (missed), people told', async () => {
+    const none = await schedule()
+    const deps = scheduleDeps({
+      freeze: vi.fn(async () => ({ ...FROZEN, code: 'OUTSIDE_WINDOW', next_opening: null }))
+    })
+    await schedules.runDueSchedules(deps)
+    const row = await schedules.readSchedule(none.id)
+    expect(row?.status).toBe('failed')
+    expect(row?.error).toMatch(/^MISSED: no deploy window opens within 14 days/)
+    expect(deps.notify).toHaveBeenCalledTimes(1)
+    const broken = await schedule()
+    const deps2 = scheduleDeps({
+      freeze: vi.fn(async () => ({ ...FROZEN, code: 'WINDOW_INVALID', next_opening: null }))
+    })
+    await schedules.runDueSchedules(deps2)
+    expect((await schedules.readSchedule(broken.id))?.error).toMatch(/^WINDOW_INVALID/)
+  })
+})

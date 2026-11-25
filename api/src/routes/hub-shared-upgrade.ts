@@ -3,9 +3,14 @@ import { requireAdmin } from '../middleware/authenticate.js'
 import { idParam } from '../services/hub/apps.js'
 import { startWithChecklist } from '../services/hub/changes/checklist.js'
 import { PromotionError } from '../services/hub/promote-lock.js'
-import { rollbackExempt, sharedFreezeRefusal } from '../services/hub/releases/freeze.js'
+import {
+  appsOnShared,
+  rollbackExempt,
+  sharedFreezeRefusal,
+  sharedRunningVersion
+} from '../services/hub/releases/freeze.js'
 import { HubSecretError } from '../services/hub/secrets.js'
-import { getShared } from '../services/hub/shared/store.js'
+import { getShared, type SharedDeployment } from '../services/hub/shared/store.js'
 import {
   planSharedUpgrade,
   SharedUpgradeError,
@@ -70,6 +75,56 @@ function kindOf(v: unknown): SharedUpgradeKind | null {
   return v === 'rollback' ? 'rollback' : null
 }
 
+/**
+ * What a shared deployment's link answers as its version (bounded 3 s), or null (no answer, a
+ * deployment not running yet). The rollback exemption judges what RUNS, never the pin alone.
+ */
+export async function sharedLiveVersion(shared: SharedDeployment): Promise<string | null> {
+  if (shared.status === 'retired') return null
+  try {
+    const { deploymentClient } = await import('../services/hub/shared/deployment-client.js')
+    let timer: NodeJS.Timeout | undefined
+    const st = await Promise.race([
+      deploymentClient(shared).status(),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), 3000)
+      })
+    ]).finally(() => clearTimeout(timer))
+    const v = (st as { version?: unknown } | null)?.version
+    return typeof v === 'string' && v ? v : null
+  } catch {
+    return null
+  }
+}
+
+/** APP_WINDOW_CLOSED warnings for the apps placed on a shared deployment (best effort). */
+async function appWindowWarnings(sharedId: number): Promise<Array<{ code: string; text: string }>> {
+  try {
+    const { db } = await import('../db/index.js')
+    const { envPolicy } = await import('../services/hub/owner-access.js')
+    const { closedAppWindows } = await import('../services/hub/releases/windows.js')
+    const rows = (await db('nivaro_hub_environments as e')
+      .join('nivaro_hub_placements as p', 'p.id', 'e.placement_id')
+      .join('nivaro_hub_apps as a', 'a.id', 'e.app_id')
+      .where('p.shared_deployment_id', sharedId)
+      .select('e.id as env_id', 'a.id as app_id', 'a.key as app_key')) as Array<{
+      env_id: number
+      app_id: number
+      app_key: string
+    }>
+    const apps = await Promise.all(
+      rows.map(async (r) => ({
+        app_id: Number(r.app_id),
+        key: String(r.app_key),
+        production: (await envPolicy(Number(r.env_id)))?.production ?? true
+      }))
+    )
+    return (await closedAppWindows(apps)).map((w) => ({ code: 'APP_WINDOW_CLOSED', text: w.text }))
+  } catch {
+    return []
+  }
+}
+
 export function hubSharedUpgradeRoutes(app: FastifyInstance): void {
   app.addHook('onReady', async () => recoverSharedOnceAtBoot(app.log))
   setSharedReapply((shared, by) => startSharedReapply(shared, by))
@@ -85,50 +140,81 @@ export function hubSharedUpgradeRoutes(app: FastifyInstance): void {
     const version = b.version
     return guarded(reply, async () => {
       await healSharedBeforeRead(id)
-      return { data: await planSharedUpgrade(id, version, kind) }
+      const plan = await planSharedUpgrade(id, version, kind)
+      // A placed app's OWN deploy window that is closed is a warning, never a block (the
+      // Hub-wide windows and every app's freezes are what refuse an upgrade).
+      const warnings = await appWindowWarnings(id)
+      return {
+        data: warnings.length
+          ? { ...plan, warnings: [...(plan.warnings ?? []), ...warnings] }
+          : plan
+      }
     })
   })
 
   app.post('/shared/:id/upgrade', { preHandler: requireAdmin }, async (req, reply) => {
     const id = idParam((req.params as { id: string }).id)
     if (id === null) return refuse(reply, 404, 'NOT_FOUND', 'No such shared deployment.')
-    // Release operations: a freeze window stops an upgrade (any app on it, or Hub-wide); only a
-    // rollback to an older version than the deployment runs is exempt.
-    {
-      const b = body(req)
-      const running = (await getShared(id))?.version_pin ?? null
-      const frozen = await sharedFreezeRefusal(id, {
-        kind: kindOf(b.kind) ?? 'upgrade',
-        version: typeof b.version === 'string' ? b.version : undefined,
-        running: running == null ? null : String(running)
-      })
-      if (frozen) return refuse(reply, frozen.status, frozen.code, frozen.message)
+    // Release operations: every placed app's freezes (the frozen app named) and the Hub-wide
+    // deploy windows stop an upgrade; only a rollback below the version the deployment RUNS —
+    // its link's answer, else its last successful run, never the stored pin alone — is exempt
+    // from freezes, windows and the checklist. An administrator's emergency start skips the
+    // windows only (services/hub/changes/emergency.ts).
+    const b = body(req)
+    const emergency = await import('../services/hub/changes/emergency.js')
+    let outside: { reason: string } | null
+    try {
+      outside = emergency.outsideWindowOf(req, b)
+    } catch (e) {
+      if (e instanceof emergency.OutsideWindowError)
+        return refuse(reply, e.status, e.code, e.message)
+      throw e
     }
+    const shared = await getShared(id)
+    const running = shared ? await sharedRunningVersion(id, await sharedLiveVersion(shared)) : null
+    const kind = kindOf(b.kind) ?? 'upgrade'
+    const version = typeof b.version === 'string' ? b.version : undefined
+    const realRollback = kind === 'rollback' && !!version && rollbackExempt(version, running)
+    const apps = realRollback ? [] : await appsOnShared(id).catch(() => [] as number[])
+    const closed =
+      outside && !realRollback
+        ? await emergency.windowWasClosed({ appIds: apps, action: 'upgrade' })
+        : false
+    const frozen = await sharedFreezeRefusal(id, {
+      kind,
+      ...(version ? { version } : {}),
+      running,
+      ...(outside ? { skipWindows: true } : {})
+    })
+    if (frozen) return refuse(reply, frozen.status, frozen.code, frozen.message)
     return guarded(reply, async () => {
-      const b = body(req)
       const start = () => startSharedUpgrade(id, b, userId(req))
       // An upgrade of a deployment carrying production apps needs their pre-deploy checklist
-      // ticked (services/hub/changes). Only a rollback BELOW the version the deployment runs
-      // is exempt (rollbackExempt); a "rollback" to the same, a newer or an unknown running
-      // version is gated like an upgrade.
-      const running = (await getShared(id))?.version_pin ?? null
-      const realRollback =
-        b.kind === 'rollback' &&
-        typeof b.version === 'string' &&
-        rollbackExempt(b.version, running == null ? null : String(running))
+      // ticked (services/hub/changes); a real rollback never waits on one.
       const out = realRollback
         ? await start()
         : await startWithChecklist(
             {
               target: { kind: 'shared', sharedId: id },
               action: 'upgrade',
-              version: typeof b.version === 'string' ? b.version : null,
+              version: version ?? null,
               runId: b.checklist_run_id
             },
             'shared_deploy',
             start,
             (o) => o.shared_deploy_id
           )
+      if (outside && closed)
+        await emergency.recordOutsideWindow({
+          req,
+          userId: userId(req),
+          action: 'upgrade',
+          appIds: apps,
+          where: shared ? `shared deployment ${shared.key}` : `shared deployment #${id}`,
+          reason: outside.reason,
+          collection: 'nivaro_hub_shared_deploys',
+          item: String(out.shared_deploy_id)
+        })
       return reply.code(202).send({ data: out })
     })
   })

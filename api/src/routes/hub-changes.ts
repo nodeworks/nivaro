@@ -33,8 +33,14 @@ import {
   validateItem,
   voidRun
 } from '../services/hub/changes/checklist.js'
+import { ownSession } from '../services/hub/changes/emergency.js'
 import { renderIcs } from '../services/hub/changes/ics.js'
 import { envPolicy } from '../services/hub/owner-access.js'
+import {
+  recordedRunningVersion,
+  rollbackExempt,
+  sharedRunningVersion
+} from '../services/hub/releases/freeze.js'
 import { personNames } from '../services/hub/releases/person.js'
 import { createSchedule } from '../services/hub/releases/schedules.js'
 import {
@@ -117,6 +123,53 @@ async function tickerOf(req: FastifyRequest): Promise<Ticker> {
   return { id: userId(req), isAdmin: !!req.isAdmin, owns: new Set(await ownedAppIds(req)) }
 }
 
+/**
+ * A tick is a person's own attestation: only on their own browser session — never View-as, a
+ * run-as key, an API key, a connected app / MCP call or the phone (403 TICK_OWN_SESSION).
+ */
+function notOwnSession(req: FastifyRequest, reply: FastifyReply): boolean {
+  if (ownSession(req)) return false
+  fail(
+    reply,
+    403,
+    'TICK_OWN_SESSION',
+    'Pre-deploy checklists are opened, ticked and set aside by a person on their own session — not through View-as, an API key, a connected app or the phone.'
+  )
+  return true
+}
+
+/** For a non-admin, only the entries of apps they own or items that name them (pure). */
+function entriesFor(who: Ticker, entries: ChecklistEntry[]): ChecklistEntry[] {
+  if (who.isAdmin) return entries
+  const me = who.id.toLowerCase()
+  return entries.filter(
+    (e) => who.owns.has(e.app_id) || e.tick_people.some((p) => p.toLowerCase() === me)
+  )
+}
+
+/** The version an environment runs, for the rollback hint: its cached status, else the Hub's record. */
+async function runningOfEnv(envId: number): Promise<string | null> {
+  try {
+    const { getApp } = await import('../services/io-holder.js')
+    const { hubStatusKey } = await import('../services/hub/status.js')
+    const redis = (getApp() as { redis?: { get(k: string): Promise<string | null> } } | null)?.redis
+    if (redis) {
+      let timer: NodeJS.Timeout | undefined
+      const raw = await Promise.race([
+        redis.get(hubStatusKey(envId)),
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), 300)
+        })
+      ]).finally(() => clearTimeout(timer))
+      const v = raw ? (JSON.parse(raw) as { version?: unknown }).version : null
+      if (typeof v === 'string' && v) return v
+    }
+  } catch {
+    // Fall through to the Hub's record.
+  }
+  return recordedRunningVersion(envId)
+}
+
 function refusal(reply: FastifyReply, err: unknown) {
   if (err instanceof ChecklistError)
     return fail(reply, err.status, err.code, err.message, err.extra)
@@ -135,13 +188,16 @@ async function checklistView(
   run: ChecklistRun | null,
   who: Ticker
 ) {
-  const { entries, production } = await checklistFor(target, action)
+  const { entries: all, production } = await checklistFor(target, action)
   const ticks = run?.ticks ?? {}
+  // A shared deployment's checklist names many apps: a non-admin sees only theirs.
+  const entries = entriesFor(who, all)
   const names = await personNames(entries.flatMap((e) => e.tick_people))
-  const missing = missingRequired(entries, ticks)
+  const missing = missingRequired(all, ticks)
   return {
     production: production.length > 0,
-    required: entries.some((e) => e.required),
+    required: all.some((e) => e.required),
+    exempt: false,
     entries: entries.map((e) => ({
       ...e,
       tick_people_names: e.tick_people.map((p) => names.get(p.toLowerCase()) ?? null),
@@ -163,7 +219,9 @@ async function checklistView(
           used_at: run.used_at
         }
       : null,
-    missing: missing.map((e) => e.key),
+    // Keys of required items still open — only those the reader sees; `left` counts them all.
+    missing: missing.filter((e) => entries.includes(e)).map((e) => e.key),
+    left: missing.length,
     ready: missing.length === 0
   }
 }
@@ -181,6 +239,18 @@ async function mayReadRun(req: FastifyRequest, run: ChecklistRun): Promise<boole
   const me = userId(req).toLowerCase()
   return all.some((e) => owns.has(e.app_id) || e.tick_people.some((p) => p.toLowerCase() === me))
 }
+
+/** A real rollback: no checklist (the panels show nothing). */
+const exemptView = () => ({
+  production: true,
+  required: false,
+  exempt: true,
+  entries: [],
+  run: null,
+  missing: [],
+  left: 0,
+  ready: true
+})
 
 const targetOfRun = (run: ChecklistRun): ChecklistTarget =>
   run.target_kind === 'shared'
@@ -207,6 +277,8 @@ export function hubChangeRoutes(app: FastifyInstance): void {
     const range = rangeOf(q)
     if ('error' in range) return fail(reply, 400, 'BAD_RANGE', range.error)
     let appIds = await readableAppIds(req)
+    // Someone who looks after no app has no calendar (Hub-wide rows included).
+    if (appIds && !appIds.length) return notFound(reply)
     if (q.app_id != null && q.app_id !== '') {
       const one = idParam(q.app_id)
       if (one === null || !(await canReadApp(req, one))) return notFound(reply)
@@ -246,6 +318,7 @@ export function hubChangeRoutes(app: FastifyInstance): void {
       appIds = await readableAppIds(req)
       name = appIds === null ? 'Hub changes' : 'My apps — changes'
     }
+    if (appIds && !appIds.length) return notFound(reply)
     const now = Date.now()
     const events = (
       await Promise.all([
@@ -255,7 +328,11 @@ export function hubChangeRoutes(app: FastifyInstance): void {
       ])
     ).flat()
     const seen = new Set<string>()
-    const unique = events.filter((e) => (seen.has(e.id) ? false : (seen.add(e.id), true)))
+    const unique = events.filter((e) => {
+      if (seen.has(e.id)) return false
+      seen.add(e.id)
+      return true
+    })
     const host = String(req.headers.host ?? 'nivaro-hub').replace(/[^a-z0-9.:-]/gi, '')
     return reply
       .header('content-type', 'text/calendar; charset=utf-8')
@@ -264,11 +341,32 @@ export function hubChangeRoutes(app: FastifyInstance): void {
       .send(renderIcs(unique, { name, host: host || 'nivaro-hub', now }))
   })
 
+  /** An entry's environment must be one of its app's (the app follows the environment). */
+  async function entryTarget(
+    reply: FastifyReply,
+    v: { app_id: number | null; environment_id: number | null }
+  ): Promise<boolean> {
+    if (v.app_id != null && !(await readApp(v.app_id))) {
+      fail(reply, 400, 'BAD_ENTRY', 'app_id names no app')
+      return false
+    }
+    if (v.environment_id != null) {
+      const e = (await db('nivaro_hub_environments')
+        .where({ id: v.environment_id })
+        .first('app_id')) as { app_id: number } | undefined
+      if (!e || (v.app_id != null && Number(e.app_id) !== v.app_id)) {
+        fail(reply, 400, 'BAD_ENTRY', 'environment_id names none of the app’s environments')
+        return false
+      }
+      v.app_id = Number(e.app_id)
+    }
+    return true
+  }
+
   app.post('/calendar/entries', { preHandler: requireAdmin }, async (req, reply) => {
     const v = validateEntry(body(req))
     if ('error' in v) return fail(reply, 400, 'BAD_ENTRY', v.error)
-    if (v.app_id != null && !(await readApp(v.app_id)))
-      return fail(reply, 400, 'BAD_ENTRY', 'app_id names no app')
+    if (!(await entryTarget(reply, v))) return reply
     const id = Number(
       await insertReturningId(db, ENTRIES, {
         ...v,
@@ -297,6 +395,7 @@ export function hubChangeRoutes(app: FastifyInstance): void {
       return notFound(reply)
     const v = validateEntry(body(req))
     if ('error' in v) return fail(reply, 400, 'BAD_ENTRY', v.error)
+    if (!(await entryTarget(reply, v))) return reply
     await db(ENTRIES)
       .where({ id })
       .update({ ...v, updated_at: new Date() })
@@ -329,12 +428,14 @@ export function hubChangeRoutes(app: FastifyInstance): void {
 
   app.get('/changes/overview', { preHandler: requireAuth }, async (req) => {
     const ids = await readableAppIds(req)
+    // Someone who owns no app (a person an item names) sees only the checklists naming them.
+    const nobody = !!ids && ids.length === 0
     const appsQ = db('nivaro_hub_apps').orderBy('key', 'asc').select('id', 'key', 'name')
     if (ids) appsQ.whereIn('id', ids.length ? ids : [-1])
     const apps = (await appsQ) as Array<{ id: number; key: string; name: string }>
     const appIds = apps.map((a) => Number(a.id))
     const now = Date.now()
-    const windows = await listWindows({ appIds })
+    const windows = nobody ? [] : await listWindows({ appIds })
     const environments = (
       await Promise.all(
         apps.map(async (a) =>
@@ -356,7 +457,8 @@ export function hubChangeRoutes(app: FastifyInstance): void {
                   open: j.open,
                   closes_at: j.current ? new Date(j.current.span.end).toISOString() : null,
                   opens_at: j.next ? new Date(j.next.span.start).toISOString() : null,
-                  name: (j.current?.window ?? j.next?.window ?? j.windows[0])?.name ?? null
+                  name: (j.current?.window ?? j.next?.window ?? j.windows[0])?.name ?? null,
+                  invalid: j.invalid.length > 0
                 }
               }
             })
@@ -492,8 +594,25 @@ export function hubChangeRoutes(app: FastifyInstance): void {
         production,
         closes_at: j.current ? new Date(j.current.span.end).toISOString() : null,
         opens_at: j.next ? new Date(j.next.span.start).toISOString() : null,
-        windows: j.windows.map((w) => ({ id: w.id, name: w.name, words: windowWords(w) }))
+        windows: j.windows.map((w) => ({ id: w.id, name: w.name, words: windowWords(w) })),
+        // Governing windows that cannot be read (they refuse until fixed: WINDOW_INVALID).
+        invalid: j.invalid.map((w) => ({ id: w.id, name: w.name, why: w.invalid ?? '' }))
       }
+    }
+  })
+
+  // Whether the Hub-wide windows let a shared deployment be upgraded now (the Upgrade panel's
+  // notice), with its apps' own closed windows as warnings.
+  app.get('/shared/:id/deploy-window', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = idParam((req.params as { id: string }).id)
+    if (id === null || !(await db('nivaro_hub_shared_deployments').where({ id }).first('id')))
+      return notFound(reply)
+    const { windowRefusal } = await import('../services/hub/releases/windows.js')
+    const r = await windowRefusal({ appIds: [], action: 'upgrade' })
+    return {
+      data: r
+        ? { open: false, code: r.code, message: r.message, opens_at: r.next_opening ?? null }
+        : { open: true, code: null, message: null, opens_at: null }
     }
   })
 
@@ -649,6 +768,13 @@ export function hubChangeRoutes(app: FastifyInstance): void {
     const version = action === 'move' ? null : typeof q.version === 'string' ? q.version : null
     if (action === 'promote' && (!version || !VERSION_RE.test(version)))
       return fail(reply, 400, 'BAD_VERSION', 'version is x.y.z')
+    // A rollback: a real one (older than what runs) needs no checklist; a forward one does.
+    if (
+      q.kind === 'rollback' &&
+      version &&
+      rollbackExempt(version, await runningOfEnv(Number(env.id)))
+    )
+      return { data: exemptView() }
     const target: ChecklistTarget = { kind: 'environment', envId: Number(env.id) }
     const run = await findOpenRun(target, action, version)
     return { data: await checklistView(target, action, run, await tickerOf(req)) }
@@ -660,6 +786,7 @@ export function hubChangeRoutes(app: FastifyInstance): void {
     async (req, reply) => {
       const env = await readableEnv(req)
       if (!env) return notFound(reply)
+      if (notOwnSession(req, reply)) return reply
       const b = body(req)
       const action = actionOf(b.action ?? 'promote')
       if (!action || action === 'upgrade')
@@ -695,12 +822,22 @@ export function hubChangeRoutes(app: FastifyInstance): void {
     const q = (req.query ?? {}) as Record<string, unknown>
     const version = typeof q.version === 'string' ? q.version : ''
     if (!VERSION_RE.test(version)) return fail(reply, 400, 'BAD_VERSION', 'version is x.y.z')
+    if (q.kind === 'rollback') {
+      const { getShared } = await import('../services/hub/shared/store.js')
+      const { sharedLiveVersion } = await import('./hub-shared-upgrade.js')
+      const shared = await getShared(id)
+      const running = shared
+        ? await sharedRunningVersion(id, await sharedLiveVersion(shared))
+        : null
+      if (rollbackExempt(version, running)) return { data: exemptView() }
+    }
     const target: ChecklistTarget = { kind: 'shared', sharedId: id }
     const run = await findOpenRun(target, 'upgrade', version)
     return { data: await checklistView(target, 'upgrade', run, await tickerOf(req)) }
   })
 
   app.post('/shared/:id/checklist-runs', { preHandler: requireAdmin }, async (req, reply) => {
+    if (notOwnSession(req, reply)) return reply
     const id = idParam((req.params as { id: string }).id)
     if (id === null || !(await db('nivaro_hub_shared_deployments').where({ id }).first('id')))
       return notFound(reply)
@@ -732,12 +869,15 @@ export function hubChangeRoutes(app: FastifyInstance): void {
     if (!run || !(await mayReadRun(req, run))) return notFound(reply)
     // A used checklist shows what it was attested against; an open one today's items.
     if (run.status !== 'open') {
-      const names = await personNames(run.items.flatMap((e) => e.tick_people))
+      const seen = entriesFor(await tickerOf(req), run.items)
+      const names = await personNames(seen.flatMap((e) => e.tick_people))
+      const left = missingRequired(run.items, run.ticks)
       return {
         data: {
           production: true,
           required: run.items.some((e) => e.required),
-          entries: run.items.map((e) => ({
+          exempt: false,
+          entries: seen.map((e) => ({
             ...e,
             tick_people_names: e.tick_people.map((p) => names.get(p.toLowerCase()) ?? null),
             may_tick: false,
@@ -756,8 +896,9 @@ export function hubChangeRoutes(app: FastifyInstance): void {
             created_at: run.created_at,
             used_at: run.used_at
           },
-          missing: missingRequired(run.items, run.ticks).map((e) => e.key),
-          ready: missingRequired(run.items, run.ticks).length === 0
+          missing: left.filter((e) => seen.includes(e)).map((e) => e.key),
+          left: left.length,
+          ready: left.length === 0
         }
       }
     }
@@ -768,6 +909,7 @@ export function hubChangeRoutes(app: FastifyInstance): void {
     const id = idParam((req.params as { id: string }).id)
     const found = id === null ? null : await readRun(id)
     if (!found || id === null || !(await mayReadRun(req, found))) return notFound(reply)
+    if (notOwnSession(req, reply)) return reply
     const b = body(req)
     const key = typeof b.key === 'string' ? b.key : ''
     if (!/^\d+@\d+$/.test(key))
@@ -800,9 +942,18 @@ export function hubChangeRoutes(app: FastifyInstance): void {
     const id = idParam((req.params as { id: string }).id)
     const found = id === null ? null : await readRun(id)
     if (!found || id === null || !(await mayReadRun(req, found))) return notFound(reply)
-    // Setting a checklist aside is for admins and owners (a named ticker only ticks).
+    if (notOwnSession(req, reply)) return reply
+    // Setting a checklist aside is for admins and owners (a named ticker only ticks); a shared
+    // deployment's checklist holds other apps' ticks, so only an administrator sets it aside.
     const owns = new Set(await ownedAppIds(req))
     const apps = found.items.map((e) => e.app_id)
+    if (!req.isAdmin && found.target_kind === 'shared')
+      return fail(
+        reply,
+        403,
+        'NOT_YOURS',
+        'Only a Hub administrator sets a shared deployment’s checklist aside.'
+      )
     if (!req.isAdmin && !apps.some((a) => owns.has(a)))
       return fail(
         reply,
