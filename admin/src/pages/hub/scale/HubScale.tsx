@@ -12,7 +12,16 @@ import { Switch } from '@/components/ui/switch'
 import { useAuth } from '@/lib/auth'
 import { cn, formatDateTime, formatRelative } from '@/lib/utils'
 import { hubToast } from '../hub-api'
-import { ghostButton, SectionCard, smallButton } from '../hub-parts'
+import {
+  type ChipTone,
+  countLabel,
+  ghostButton,
+  ListPaneHeader,
+  listPaneClass,
+  SectionCard,
+  smallButton,
+  ToneChip
+} from '../hub-parts'
 import { TONE, type Tone } from '../shared/shared-api'
 import { RuleEditor } from './RuleEditor'
 import {
@@ -88,12 +97,10 @@ export default function HubScale() {
 
   return (
     <div className='flex flex-1 min-h-0 overflow-hidden'>
-      <aside
-        className={cn(
-          'w-full shrink-0 flex-col overflow-y-auto border-slate-200 bg-white md:flex md:w-[300px] md:border-r dark:border-border dark:bg-card',
-          picked ? 'hidden' : 'flex'
-        )}
-      >
+      <aside className={cn(listPaneClass, picked ? 'hidden md:flex' : 'flex')}>
+        <ListPaneHeader
+          label={countLabel(list.data ? targets.length : undefined, 'stack', 'stacks')}
+        />
         {list.isPending ? (
           <div className='space-y-2 p-3'>
             {[0, 1, 2].map((i) => (
@@ -152,17 +159,20 @@ export default function HubScale() {
   )
 }
 
+/** The scale tab's chips: the hub ToneChip (warn yellow, accent "busy" in the Hub look). */
+const CHIP_TONE: Record<Tone, ChipTone> = {
+  ok: 'ok',
+  busy: 'live',
+  warn: 'warn',
+  bad: 'down',
+  quiet: 'neutral'
+}
+
 function Chip({ tone, children, tip }: { tone: Tone; children: ReactNode; tip?: string }) {
   return (
-    <span
-      data-tip={tip}
-      className={cn(
-        'inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-px text-[10px] font-medium',
-        TONE[tone]
-      )}
-    >
+    <ToneChip tone={CHIP_TONE[tone]} tip={tip} compact>
       {children}
-    </span>
+    </ToneChip>
   )
 }
 

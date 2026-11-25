@@ -1,27 +1,17 @@
-import { cn } from '@/lib/utils'
+import { type ChipTone, ToneChip } from '../hub-parts'
 
-/** The security tabs' small status chip (tone + words; never colour alone). */
+/** The security tabs' small status chip (tone + words; never colour alone): the hub ToneChip. */
 export type Tone = 'neutral' | 'good' | 'warn' | 'bad' | 'live'
-const TONE: Record<Tone, string> = {
-  neutral:
-    'border-slate-200 bg-slate-50 text-slate-600 dark:border-border dark:bg-muted dark:text-slate-300',
-  good: 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/50 dark:text-emerald-300',
-  warn: 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/50 dark:text-amber-300',
-  bad: 'border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950/50 dark:text-red-300',
-  live: 'border-sky-200 bg-sky-50 text-sky-800 dark:border-sky-900 dark:bg-sky-950/50 dark:text-sky-300'
+const TONE: Record<Tone, ChipTone> = {
+  neutral: 'neutral',
+  good: 'ok',
+  warn: 'warn',
+  bad: 'down',
+  live: 'live'
 }
 
 export function Chip({ tone, children }: { tone: Tone; children: React.ReactNode }) {
-  return (
-    <span
-      className={cn(
-        'inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[11px] font-medium',
-        TONE[tone]
-      )}
-    >
-      {children}
-    </span>
-  )
+  return <ToneChip tone={TONE[tone]}>{children}</ToneChip>
 }
 
 /** "in 3 h 10 min" / "in 2 days" for a time ahead; "now" once it has passed. Pure. */

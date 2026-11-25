@@ -6,6 +6,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { envTone } from '@/components/hub-brand/env-tone'
 import { HubEnvTag } from '@/components/hub-brand/HubBits'
+import { HubToolbar } from '@/components/hub-page'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { SimpleSelect } from '@/components/ui/simple-select'
@@ -88,25 +89,32 @@ export default function HubHealth() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col overflow-y-auto bg-slate-50 dark:bg-background'>
-      <div className='shrink-0 border-b border-slate-200 bg-white px-4 py-3 dark:border-border dark:bg-card'>
-        <div className='flex flex-wrap items-center gap-x-3 gap-y-1'>
-          <p className='m-0 text-[13px] font-medium text-slate-900 dark:text-foreground'>
-            {health.data ? `${rows.length} environment${rows.length === 1 ? '' : 's'}` : 'Health'}
-          </p>
-          {poor > 0 && (
-            <button
-              type='button'
-              aria-pressed={band === 'poor'}
-              onClick={() => set('band', band === 'poor' ? '' : 'poor', 'any')}
-              className={cn(
-                'rounded-md px-1.5 py-0.5 text-[12px] font-medium text-red-700 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:text-red-300',
-                band === 'poor' && 'bg-accent'
-              )}
-            >
-              {poor} poor
-            </button>
-          )}
-          <div className='ml-auto flex items-center gap-1'>
+      <HubToolbar
+        description={
+          <>
+            {health.data
+              ? `${rows.length} environment${rows.length === 1 ? '' : 's'}, scored 0–100.`
+              : 'A 0–100 score per environment, and what lowers it.'}
+            {poor > 0 && (
+              <>
+                {' '}
+                <button
+                  type='button'
+                  aria-pressed={band === 'poor'}
+                  onClick={() => set('band', band === 'poor' ? '' : 'poor', 'any')}
+                  className={cn(
+                    'rounded-md px-1.5 py-0.5 text-[12px] font-medium text-red-700 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:text-red-300',
+                    band === 'poor' && 'bg-accent'
+                  )}
+                >
+                  {poor} poor
+                </button>
+              </>
+            )}
+          </>
+        }
+        actions={
+          <>
             <Link
               to='/docs?section=hub-insight'
               className='px-2 text-[12px] text-slate-500 hover:underline dark:text-muted-foreground'
@@ -124,8 +132,9 @@ export default function HubHealth() {
                 Weights
               </button>
             )}
-          </div>
-        </div>
+          </>
+        }
+      >
         <div className='mt-2 flex flex-wrap items-center gap-2'>
           <SimpleSelect
             value={app}
@@ -151,9 +160,9 @@ export default function HubHealth() {
             ]}
           />
         </div>
-      </div>
+      </HubToolbar>
 
-      <div className='space-y-4 p-4'>
+      <div className='space-y-4 p-4 sm:p-6'>
         {isAdmin && weightsOpen && <WeightsCard onClose={() => setWeightsOpen(false)} />}
         <DigestCard />
         {health.isPending ? (

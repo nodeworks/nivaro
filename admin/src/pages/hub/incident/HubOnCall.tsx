@@ -14,6 +14,7 @@ import { useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { MonCombobox } from '@/components/filter-combobox'
+import { HubToolbar } from '@/components/hub-page'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { SimpleSelect } from '@/components/ui/simple-select'
@@ -58,18 +59,13 @@ export default function HubOnCall() {
   })
   return (
     <section aria-labelledby='hub-oncall-title' className='flex flex-1 min-h-0 flex-col'>
-      <header className='flex shrink-0 flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-4 py-2.5 dark:border-border dark:bg-card'>
-        <h2
-          id='hub-oncall-title'
-          className='m-0 min-w-0 flex-1 truncate text-[13px] font-semibold text-slate-900 dark:text-foreground'
-        >
-          On-call
-        </h2>
-        <span className='text-[11px] text-slate-500 dark:text-muted-foreground'>
-          Times in {viewerTimeZone()}
-        </span>
-      </header>
-      <div className='flex-1 overflow-y-auto bg-slate-50 p-4 dark:bg-background'>
+      <h2 id='hub-oncall-title' className='sr-only'>
+        On-call
+      </h2>
+      <HubToolbar
+        description={`Pages waiting for you, who is on call for each app now and next, the weekly rota and its overrides. Times in ${viewerTimeZone()}.`}
+      />
+      <div className='flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
         {q.isPending ? (
           <Skeleton className='h-40 w-full' />
         ) : q.isError ? (

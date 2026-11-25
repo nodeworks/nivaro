@@ -10,7 +10,15 @@ import { SimpleSelect } from '@/components/ui/simple-select'
 import { Switch } from '@/components/ui/switch'
 import { cn, formatDateTime } from '@/lib/utils'
 import { hubToast } from '../hub-api'
-import { dangerArmed, dangerGhost, Field, ghostButton, SectionCard } from '../hub-parts'
+import {
+  dangerArmed,
+  dangerGhost,
+  Field,
+  ghostButton,
+  SectionCard,
+  segmentButton,
+  segmentGroup
+} from '../hub-parts'
 import { isoToLocalInput, localInputToIso, viewerTimeZone } from '../releases/releases-api'
 import {
   type ChangesOverview,
@@ -88,7 +96,7 @@ function RangeRow({
     })
   return (
     <div className='flex flex-wrap items-center gap-2'>
-      <fieldset className='m-0 flex border-0 p-0'>
+      <fieldset className={segmentGroup}>
         <legend className='sr-only'>Days</legend>
         {DAY_LETTERS.map((w, i) => {
           const on = r.days.includes(i + 1)
@@ -98,12 +106,7 @@ function RangeRow({
               type='button'
               aria-pressed={on}
               onClick={() => toggle(i + 1)}
-              className={cn(
-                'h-8 w-10 border border-l-0 text-[11.5px] font-medium first:rounded-l-md first:border-l last:rounded-r-md focus-visible:relative focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50',
-                on
-                  ? 'border-nvr-cyan/60 bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
-                  : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50 dark:border-border dark:bg-background dark:text-slate-400 dark:hover:bg-muted'
-              )}
+              className={cn(segmentButton(on), 'w-9 justify-center px-0')}
             >
               {w}
             </button>

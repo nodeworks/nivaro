@@ -26,7 +26,15 @@ import { cn, formatRelative } from '@/lib/utils'
 import { type ChecklistState, PreDeployChecklist } from '../changes/PreDeployChecklist'
 import { EnvWindowGate } from '../changes/WindowGate'
 import { fetchHubApps, hubKeys, useHubApp } from '../hub-api'
-import { dangerArmed, Field, ghostButton, SectionCard } from '../hub-parts'
+import {
+  countLabel,
+  dangerArmed,
+  Field,
+  ghostButton,
+  ListPaneHeader,
+  listPaneClass,
+  SectionCard
+} from '../hub-parts'
 import {
   type ConfigPromotion,
   configError,
@@ -94,15 +102,8 @@ function ConfigAdmin() {
 
   return (
     <div className='flex flex-1 min-h-0 overflow-hidden'>
-      <aside
-        className={cn(
-          'w-full shrink-0 flex-col overflow-y-auto border-slate-200 bg-white md:flex md:w-[272px] md:border-r dark:border-border dark:bg-card',
-          appId ? 'hidden' : 'flex'
-        )}
-      >
-        <p className='m-0 border-b border-slate-200 px-3 py-2 text-[12px] font-medium text-slate-500 dark:border-border dark:text-muted-foreground'>
-          Apps
-        </p>
+      <aside className={cn(listPaneClass, appId ? 'hidden md:flex' : 'flex')}>
+        <ListPaneHeader label={countLabel(apps.data?.length, 'app', 'apps')} />
         {apps.isPending ? (
           <div className='space-y-2 p-3'>
             {[0, 1, 2].map((i) => (

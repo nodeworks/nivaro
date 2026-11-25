@@ -358,13 +358,6 @@
   mask-image: linear-gradient(to right, transparent, #000 36px, #000 calc(100% - 36px), transparent);
 }
 
-/* The Apps hub's own tabs that are also top-bar sections (Fleet, Shared) are not repeated in
-   its tab strip: the top bar is the one place to reach them. */
-[data-product='hub'] #hub-tab-hub-fleet,
-[data-product='hub'] #hub-tab-hub-shared {
-  display: none;
-}
-
 /* Older Hub controls: their cyan focus ring and cyan text become AA on light surfaces. */
 [data-product='hub'] .focus-visible\:ring-nvr-cyan\/50:focus-visible {
   --tw-ring-color: hsl(var(--ring));
@@ -390,13 +383,21 @@
   background: color-mix(in srgb, var(--hub-warn) 12%, hsl(var(--card)));
   color: #6b5600;
 }
-[data-product='hub'] .hub-chip[data-hub-health='warn'] > span:first-child {
+[data-product='hub'] .hub-chip:not(.hub-tone-chip)[data-hub-health='warn'] > span:first-child {
   background: var(--hub-warn);
 }
 [data-product='hub'].dark .hub-chip[data-hub-health='warn'] {
   border-color: color-mix(in srgb, var(--hub-warn) 40%, transparent);
   background: color-mix(in srgb, var(--hub-warn) 10%, hsl(var(--card)));
   color: #fde68a !important;
+}
+
+/* A tone chip that says something is under way ("Running", "Scaling now"): the accent ink on
+   an accent tint, never sky. */
+[data-product='hub'] .hub-chip[data-hub-health='live'] {
+  border-color: color-mix(in srgb, var(--hub-accent-ink) 35%, transparent);
+  background: color-mix(in srgb, var(--hub-accent-ink) 8%, hsl(var(--card)));
+  color: var(--hub-accent-ink);
 }
 
 /* Warn dots elsewhere on Apps hub pages (amber-500) take the warn yellow as well. */
@@ -433,7 +434,16 @@
   border: 0;
 }
 
-/* People is a top-bar section too: not repeated in the Apps tab strip. */
-[data-product='hub'] #hub-tab-hub-people {
-  display: none;
+/* ─── Design pass 2 (2026-11-25): the wave-2 tabs ───────────────────────────────────────── */
+
+/* Warning words in amber text ("2 days left", "could not be read", "Fair") take the Hub's warn
+   ink: amber is the accent here, never a warning. Banner text (amber-900) keeps its colour. */
+[data-product='hub']:not(.dark) [data-hub-base='/hub'] .text-amber-600,
+[data-product='hub']:not(.dark) [data-hub-base='/hub'] .text-amber-700,
+[data-product='hub']:not(.dark) [data-hub-base='/hub'] .text-amber-800 {
+  color: #6b5600;
+}
+[data-product='hub'].dark [data-hub-base='/hub'] .dark\:text-amber-300,
+[data-product='hub'].dark [data-hub-base='/hub'] .dark\:text-amber-400 {
+  color: #fde68a;
 }

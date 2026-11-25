@@ -4,6 +4,7 @@ import { CalendarDays, Download, Wrench } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
+import { HubToolbar } from '@/components/hub-page'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { SimpleSelect } from '@/components/ui/simple-select'
@@ -12,7 +13,15 @@ import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, formatDateTime } from '@/lib/utils'
 import { hubToast } from '../hub-api'
-import { dangerArmed, dangerGhost, Field, ghostButton, SectionCard } from '../hub-parts'
+import {
+  dangerArmed,
+  dangerGhost,
+  Field,
+  ghostButton,
+  SectionCard,
+  segmentButton,
+  segmentGroup
+} from '../hub-parts'
 import { localInputToIso, viewerTimeZone } from '../releases/releases-api'
 import { type CalendarView, ChangeCalendar, KIND_META, LEGEND } from './ChangeCalendar'
 import { ChecklistItemsCard } from './ChecklistItemsCard'
@@ -69,18 +78,13 @@ export default function HubChanges() {
     })
   return (
     <section aria-labelledby='hub-changes-title' className='flex flex-1 min-h-0 flex-col'>
-      <header className='flex shrink-0 flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-4 py-2.5 dark:border-border dark:bg-card'>
-        <h2
-          id='hub-changes-title'
-          className='m-0 min-w-0 flex-1 truncate text-[13px] font-semibold text-slate-900 dark:text-foreground'
-        >
-          Changes
-        </h2>
-        <span className='text-[11px] text-slate-500 dark:text-muted-foreground'>
-          Times in {viewerTimeZone()}
-        </span>
-      </header>
-      <div className='flex-1 overflow-y-auto bg-slate-50 p-4 dark:bg-background'>
+      <h2 id='hub-changes-title' className='sr-only'>
+        Changes
+      </h2>
+      <HubToolbar
+        description={`Promotions, schedules, release trains, moves, shared upgrades, freezes and planned maintenance of every app you can see. Times in ${viewerTimeZone()}.`}
+      />
+      <div className='flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
         {q.isPending ? (
           <Skeleton className='h-40 w-full' />
         ) : q.isError ? (
@@ -119,7 +123,7 @@ export default function HubChanges() {
               className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'
             >
               <div className='flex flex-wrap items-center gap-2 border-b border-slate-200 px-4 py-3 dark:border-border'>
-                <fieldset className='m-0 inline-flex border-0 p-0'>
+                <fieldset className={segmentGroup}>
                   <legend className='sr-only'>View</legend>
                   {(['month', 'week', 'list'] as CalendarView[]).map((v) => (
                     <button
@@ -127,12 +131,7 @@ export default function HubChanges() {
                       type='button'
                       aria-pressed={view === v}
                       onClick={() => setView(v)}
-                      className={cn(
-                        'h-8 border border-l-0 px-3 text-[12px] font-medium capitalize first:rounded-l-md first:border-l last:rounded-r-md focus-visible:relative focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50',
-                        view === v
-                          ? 'border-nvr-cyan/60 bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
-                          : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-border dark:bg-background dark:text-slate-300 dark:hover:bg-muted'
-                      )}
+                      className={cn(segmentButton(view === v), 'capitalize')}
                     >
                       {v}
                     </button>

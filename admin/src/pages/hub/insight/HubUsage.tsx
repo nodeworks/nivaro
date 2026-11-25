@@ -1,14 +1,15 @@
 import { QueryErrorState, toastError } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { RefreshCw, ShieldCheck } from 'lucide-react'
+import { ChevronLeft, RefreshCw, ShieldCheck } from 'lucide-react'
 import { useMemo } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { HubEnvTag } from '@/components/hub-brand/HubBits'
+import { HubToolbar } from '@/components/hub-page'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useAuth } from '@/lib/auth'
-import { cn, formatRelative } from '@/lib/utils'
-import { ghostButton } from '../hub-parts'
+import { cn, formatDate, formatRelative } from '@/lib/utils'
+import { countLabel, ghostButton, ListPaneHeader, listPaneClass } from '../hub-parts'
 import {
   type AppUsage,
   type EnvUsage,
@@ -45,6 +46,8 @@ export default function HubUsage() {
   })
   const [params, setParams] = useSearchParams()
   const envParam = Number(params.get('env') ?? '')
+  // Phones show the list or one environment; wider screens both (the list opens on production).
+  const detailOpen = params.has('env')
 
   const list = useMemo(() => {
     const out: Array<{ app: AppUsage; env: EnvUsage }> = []
@@ -83,16 +86,16 @@ export default function HubUsage() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col bg-slate-50 dark:bg-background'>
-      <div className='shrink-0 border-b border-slate-200 bg-white px-4 py-3 dark:border-border dark:bg-card'>
-        <div className='flex flex-wrap items-center gap-x-3 gap-y-1'>
-          <p className='m-0 text-[13px] font-medium text-slate-900 dark:text-foreground'>Usage</p>
-          {usage.data && (
-            <p className='m-0 inline-flex items-center gap-1 text-[12px] text-slate-500 dark:text-muted-foreground'>
-              <ShieldCheck className='h-3.5 w-3.5' aria-hidden />
-              Counts only, rounded down to 5 · nothing under {usage.data.floor} people is shown
-            </p>
-          )}
-          <div className='ml-auto flex items-center gap-1'>
+      <HubToolbar
+        description={
+          <>
+            <ShieldCheck className='mr-1 inline h-3.5 w-3.5 align-[-2px]' aria-hidden />
+            How many people use each app: counts only, rounded down to 5
+            {usage.data ? `, and nothing under ${usage.data.floor} people is shown.` : '.'}
+          </>
+        }
+        actions={
+          <>
             <Link
               to='/docs?section=hub-insight'
               className='px-2 text-[12px] text-slate-500 hover:underline dark:text-muted-foreground'
@@ -113,9 +116,9 @@ export default function HubUsage() {
                 Read now
               </button>
             )}
-          </div>
-        </div>
-      </div>
+          </>
+        }
+      />
 
       {usage.isPending ? (
         <div className='space-y-2 p-4'>
@@ -139,12 +142,13 @@ export default function HubUsage() {
           </div>
         </div>
       ) : (
-        <div className='flex flex-1 min-h-0 flex-col overflow-y-auto md:flex-row md:overflow-hidden'>
+        <div className='flex flex-1 min-h-0 overflow-hidden'>
           <aside
-            className='shrink-0 border-b border-slate-200 bg-white md:w-[272px] md:overflow-y-auto md:border-r md:border-b-0 dark:border-border dark:bg-card'
+            className={cn(listPaneClass, detailOpen ? 'hidden md:flex' : 'flex')}
             aria-label='Environments'
           >
-            <ul className='m-0 list-none p-1.5'>
+            <ListPaneHeader label={countLabel(list.length, 'environment', 'environments')} />
+            <ul className='m-0 list-none space-y-0.5 p-2'>
               {list.map(({ app, env }) => {
                 const active = picked?.env.environment_id === env.environment_id
                 return (
@@ -197,7 +201,32 @@ export default function HubUsage() {
               })}
             </ul>
           </aside>
-          <main className='min-w-0 flex-1 md:overflow-y-auto'>
+          <main
+            className={cn(
+              'min-w-0 flex-1 overflow-y-auto',
+              detailOpen ? 'block' : 'hidden md:block'
+            )}
+          >
+            {detailOpen && (
+              <div className='border-b border-slate-200 bg-white px-2 py-1.5 md:hidden dark:border-border dark:bg-card'>
+                <button
+                  type='button'
+                  className={ghostButton}
+                  onClick={() =>
+                    setParams(
+                      (p) => {
+                        const out = new URLSearchParams(p)
+                        out.delete('env')
+                        return out
+                      },
+                      { replace: true }
+                    )
+                  }
+                >
+                  <ChevronLeft className='h-3.5 w-3.5' aria-hidden /> All environments
+                </button>
+              </div>
+            )}
             {picked && <EnvDetail app={picked.app} env={picked.env} floor={usage.data.floor} />}
           </main>
         </div>
@@ -266,7 +295,7 @@ function EnvDetail({ app, env, floor }: { app: AppUsage; env: EnvUsage; floor: n
                 <div
                   key={d.day}
                   className='flex h-full min-w-[2px] flex-1 items-end'
-                  data-tip={`${d.day}: ${d.under_floor ? under : `${d.people ?? 0} people`}`}
+                  data-tip={`${d.day ? formatDate(d.day) : ''}: ${d.under_floor ? under : `${d.people ?? 0} people`}`}
                 >
                   {d.under_floor ? (
                     <div className='h-[3px] w-full rounded-sm bg-slate-300 dark:bg-slate-600' />
@@ -280,8 +309,10 @@ function EnvDetail({ app, env, floor }: { app: AppUsage; env: EnvUsage; floor: n
               ))}
             </div>
             <div className='mt-1 flex justify-between text-[11px] tabular-nums text-slate-500 dark:text-muted-foreground'>
-              <span>{env.daily[0]?.day}</span>
-              <span>{env.daily[env.daily.length - 1]?.day}</span>
+              <span>{env.daily[0]?.day ? formatDate(env.daily[0].day) : null}</span>
+              <span>
+                {env.daily.at(-1)?.day ? formatDate(env.daily.at(-1)?.day as string) : null}
+              </span>
             </div>
             <p className='m-0 mt-2 text-[11px] text-slate-500 dark:text-muted-foreground'>
               Grey marks are days with {under} people: the app never sends their figures.

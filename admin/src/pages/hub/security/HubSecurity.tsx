@@ -4,6 +4,7 @@ import { Download, ExternalLink, RefreshCw, ScanSearch } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { HubEnvTag } from '@/components/hub-brand/HubBits'
+import { HubToolbar } from '@/components/hub-page'
 import { Input } from '@/components/ui/input'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -44,18 +45,11 @@ export default function HubSecurity() {
   const isAdmin = !!(user as { is_admin?: boolean } | null)?.is_admin
   return (
     <section aria-labelledby='hub-security-title' className='flex flex-1 min-h-0 flex-col'>
-      <header className='flex shrink-0 flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-4 py-2.5 dark:border-border dark:bg-card'>
-        <h2
-          id='hub-security-title'
-          className='m-0 min-w-0 flex-1 truncate text-[13px] font-semibold text-slate-900 dark:text-foreground'
-        >
-          Security
-        </h2>
-        <span className='hidden text-[11px] text-slate-500 sm:inline dark:text-muted-foreground'>
-          Certificates, image vulnerabilities and compliance evidence
-        </span>
-      </header>
-      <div className='flex-1 overflow-y-auto bg-slate-50 p-4 dark:bg-background'>
+      <h2 id='hub-security-title' className='sr-only'>
+        Security
+      </h2>
+      <HubToolbar description='Certificate expiry and DNS of every environment name, known vulnerabilities of every pinned image (from your scanner), and the compliance pack per app.' />
+      <div className='flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
         <div className='space-y-4'>
           <CertificatesCard isAdmin={isAdmin} />
           <VulnerabilitiesCard isAdmin={isAdmin} />

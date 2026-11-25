@@ -4,6 +4,7 @@ import { ExternalLink, Globe, Lock, Plus, RefreshCw, Trash2, X } from 'lucide-re
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { MonCombobox } from '@/components/filter-combobox'
+import { HubToolbar } from '@/components/hub-page'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { SimpleSelect } from '@/components/ui/simple-select'
@@ -44,20 +45,21 @@ export default function HubStatusPages() {
   const current = pages.find((p) => p.id === selected) ?? null
   return (
     <section aria-labelledby='hub-status-title' className='flex flex-1 min-h-0 flex-col'>
-      <header className='flex shrink-0 flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-4 py-2.5 dark:border-border dark:bg-card'>
-        <h2
-          id='hub-status-title'
-          className='m-0 min-w-0 flex-1 truncate text-[13px] font-semibold text-slate-900 dark:text-foreground'
-        >
-          Status pages
-        </h2>
-        {canWrite && !creating && (
-          <button type='button' className={ghostButton} onClick={() => setCreating(true)}>
-            <Plus className='h-3.5 w-3.5' aria-hidden /> New status page
-          </button>
-        )}
-      </header>
-      <div className='flex-1 overflow-y-auto bg-slate-50 p-4 dark:bg-background'>
+      <h2 id='hub-status-title' className='sr-only'>
+        Status pages
+      </h2>
+      <HubToolbar
+        description='Each app’s health and planned maintenance for people outside the Hub: a public link with a token, or an internal page for signed-in people. Neither shows hostnames, versions or error text.'
+        actions={
+          canWrite &&
+          !creating && (
+            <button type='button' className={ghostButton} onClick={() => setCreating(true)}>
+              <Plus className='h-3.5 w-3.5' aria-hidden /> New status page
+            </button>
+          )
+        }
+      />
+      <div className='flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
         {q.isPending ? (
           <Skeleton className='h-40 w-full' />
         ) : q.isError ? (
@@ -315,7 +317,9 @@ function PageCard({
     <div
       className={cn(
         'rounded-lg border bg-white dark:bg-card',
-        active ? 'border-slate-900 dark:border-slate-200' : 'border-slate-200 dark:border-border'
+        active
+          ? 'border-slate-300 ring-1 ring-slate-300 dark:border-slate-500 dark:ring-slate-500'
+          : 'border-slate-200 dark:border-border'
       )}
     >
       <button

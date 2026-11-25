@@ -24,9 +24,10 @@ export type CalendarView = 'month' | 'week' | 'list'
 // The 3 px edge each entry carries; the legend chips are the only place the word is spelled.
 export const KIND_META: Record<CalendarKind, { bar: string; chip: string }> = {
   promote: { bar: 'bg-nvr-cyan', chip: 'bg-nvr-cyan/15 text-nvr-navy dark:text-nvr-cyan' },
+  // Not amber: in the Hub look the accent (promote) is amber, and a rollback must read apart.
   rollback: {
-    bar: 'bg-amber-500',
-    chip: 'bg-amber-500/10 text-amber-700 dark:text-amber-300'
+    bar: 'bg-fuchsia-500',
+    chip: 'bg-fuchsia-500/10 text-fuchsia-700 dark:text-fuchsia-300'
   },
   scheduled: {
     bar: 'bg-indigo-500',
@@ -356,7 +357,7 @@ function MonthGrid({
                   picked === k && 'ring-2 ring-inset ring-nvr-cyan'
                 )}
               >
-                <span className={cn(outside && 'opacity-50')}>
+                <span className={cn(outside && 'text-slate-500 dark:text-muted-foreground')}>
                   <DayHead day={d} compact />
                 </span>
                 {/* Phones: a dot per change; wider: up to three titles. */}

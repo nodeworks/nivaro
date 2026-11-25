@@ -1,5 +1,5 @@
 import { AlertTriangle, Check, ClipboardCopy, Copy, KeyRound } from 'lucide-react'
-import { type ReactNode, useEffect, useRef, useState } from 'react'
+import { type ComponentType, type ReactNode, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -80,6 +80,63 @@ export function StatusChip({
   ) : (
     <span data-tip={tip} data-hub-health={health} className={className}>
       {body}
+    </span>
+  )
+}
+
+/**
+ * A status chip for states that are not a link check (a smoke run, an extension cell, a review,
+ * a scaling state): the same shape and colours as StatusChip, picked by tone. It carries
+ * `data-hub-health`, so in the standalone Hub look "warn" is the warn yellow and "live" the
+ * accent ink, never sky or the accent amber. Words always say the state (never colour alone).
+ */
+export type ChipTone = 'neutral' | 'ok' | 'warn' | 'down' | 'live'
+
+const TONE_CLASS: Record<ChipTone, string> = {
+  neutral:
+    'border-slate-200 bg-slate-50 text-slate-600 dark:border-border dark:bg-muted dark:text-slate-300',
+  ok: STATUS_TONE.ok,
+  warn: STATUS_TONE.degraded,
+  down: STATUS_TONE.unreachable,
+  live: 'border-sky-200 bg-sky-50 text-sky-800 dark:border-sky-900/60 dark:bg-sky-950/40 dark:text-sky-300'
+}
+
+const TONE_HEALTH: Record<ChipTone, string> = {
+  neutral: 'unknown',
+  ok: 'ok',
+  warn: 'warn',
+  down: 'down',
+  live: 'live'
+}
+
+export function ToneChip({
+  tone,
+  children,
+  icon: Icon,
+  tip,
+  compact,
+  className
+}: {
+  tone: ChipTone
+  children: ReactNode
+  icon?: ComponentType<{ className?: string; 'aria-hidden'?: boolean }>
+  tip?: string
+  compact?: boolean
+  className?: string
+}) {
+  return (
+    <span
+      data-tip={tip}
+      data-hub-health={TONE_HEALTH[tone]}
+      className={cn(
+        'hub-chip hub-tone-chip inline-flex max-w-full shrink-0 items-center gap-1 rounded-full border font-medium',
+        compact ? 'px-1.5 py-px text-[10px]' : 'px-2 py-0.5 text-[11px]',
+        TONE_CLASS[tone],
+        className
+      )}
+    >
+      {Icon && <Icon className='h-3 w-3 shrink-0' aria-hidden />}
+      <span className='truncate'>{children}</span>
     </span>
   )
 }
