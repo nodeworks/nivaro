@@ -9,6 +9,7 @@ import {
   HUB_REDIRECTS,
   HUBS,
   hubForPath,
+  hubTabGroup,
   isPathDisabled
 } from './hubs'
 
@@ -21,53 +22,34 @@ describe('hub registry', () => {
     expect(hubForPath('/activity/42')).toBeNull()
   })
 
-  it('gives Hub targets their own tab between Drivers and Databases (P3-29)', () => {
-    // Phase 7's Sign-in tab follows them (phases 3 + 7 merged); phase 6's Shared deployments
-    // comes right after Apps (Task 17), Capacity right after it (Hub capacity).
-    expect(APPS_HUB.tabs.map((t) => t.label)).toEqual([
-      'Apps',
-      'Shared deployments',
-      'Capacity',
-      'Scaling',
-      // Hub placement (hub-enh/placement): hosts + regions, cost chargeback.
-      'Hosts',
-      'Costs',
-      'Drivers',
-      'Targets',
-      'Templates',
-      // Hub lifecycle (hub-enh/lifecycle): cloning starts from a template, so it follows them.
-      'Clone & retire',
-      'Databases',
-      'Backups & data',
-      'Sign-in',
-      'Releases',
-      // Hub incidents, on-call and status pages (hub-enh/incident) follow Releases.
-      'Incidents',
-      'On-call',
-      'Status pages',
-      // Hub verification (hub-enh/verify) follows Releases.
-      'Smoke checks',
-      'Extensions',
-      // Hub change operations (enhancements 26–28) sit beside Releases.
-      'Changes',
-      // Config promotion (hub-enh/config) follows Releases.
-      'Config',
-      // Hub ops (enhancements 10, 20, 19) come last, then People (hub-enh/people).
-      'Issues',
-      'Storage',
-      'Secrets',
-      'Fleet',
-      // Hub insight (enhancements 36–40) next to the Fleet.
-      'Health',
-      'Usage',
-      'Dependencies',
-      'Ask the Hub',
-      'Audit',
-      'People',
-      // Hub security (hub-enh/security): break-glass + access reviews, then certificates/scans.
-      'Access',
-      'Security'
+  it('groups the Apps hub tabs into seven sections, every tab in exactly one', () => {
+    // 36 tabs in one strip did not read (design pass 2): the strip shows the groups, then the
+    // open group's tabs. The tab list itself follows the group order.
+    expect(APPS_HUB.groups?.map((g) => [g.label, g.tabs])).toEqual([
+      ['Apps', ['']],
+      ['Deploy', ['releases', 'changes', 'smoke', 'extensions', 'config']],
+      ['Run', ['shared', 'capacity', 'scale', 'hosts', 'drivers']],
+      ['Data', ['databases', 'data', 'storage']],
+      [
+        'Watch',
+        ['fleet', 'health', 'usage', 'dependencies', 'issues', 'incidents', 'on-call', 'status']
+      ],
+      ['People & access', ['people', 'signin', 'access', 'security', 'secrets', 'audit']],
+      ['Build', ['targets', 'templates', 'lifecycle', 'costs', 'ask']]
     ])
+    const grouped = APPS_HUB.groups?.flatMap((g) => g.tabs) ?? []
+    expect(grouped).toEqual(APPS_HUB.tabs.map((t) => t.path))
+    expect(new Set(grouped).size).toBe(grouped.length)
+    expect(hubTabGroup(APPS_HUB, 'smoke')?.label).toBe('Deploy')
+    expect(hubTabGroup(APPS_HUB, 'nope')).toBeNull()
+    // The tabs the standalone Hub's top bar also links.
+    expect(APPS_HUB.tabs.filter((t) => t.topBar).map((t) => t.path)).toEqual([
+      'shared',
+      'fleet',
+      'people'
+    ])
+    // Every other hub keeps its one strip.
+    expect(HUBS.filter((h) => h.groups).map((h) => h.base)).toEqual(['/hub'])
     expect(hubForPath('/hub/access')?.tab.label).toBe('Access')
     expect(hubForPath('/hub/security')?.tab.label).toBe('Security')
     expect(hubForPath('/hub/signin')?.tab.label).toBe('Sign-in')

@@ -37,7 +37,8 @@ export const hubOverviewDocs: DocSection = {
         'Environment colours on every Hub screen, read from the environment key: production red-orange, staging violet, development teal, anything else grey (row stripes, tags, deploy history).',
         'Promotions, moves, shared upgrades and app creations show a run timeline (plan → run → check) above their step list; the running step pulses unless the browser asks for reduced motion.',
         'Any action on a production environment (promote, move, place on shared) sits in a red-orange frame and keeps its typed confirmation.',
-        'Versions, digests, hosts and ids are set in a monospace face with tabular figures; Hub pages run denser.'
+        'Versions, digests, hosts and ids are set in a monospace face with tabular figures; Hub pages run denser.',
+        'The Apps hub groups its tabs in two strips: the groups (Apps, Deploy, Run, Data, Watch, People & access, Build), then the open group’s tabs. Choosing a group opens its first tab; every tab keeps its own path (`/hub/smoke`, `/hub/costs`…). A tab the top bar already links (Fleet, Shared deployments, People) is left out of the strip in the Hub look.'
       ]
     },
     {
