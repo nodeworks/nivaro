@@ -13,7 +13,6 @@ import {
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -71,8 +70,6 @@ export function RefreshCard({ v }: { v: EnvDataView }) {
   const [path, setPath] = useState('')
   const [plan, setPlan] = useState<RefreshPlan | null>(null)
   const [confirm, setConfirm] = useState('')
-  const [acceptCore, setAcceptCore] = useState(false)
-  const [rbConfirm, setRbConfirm] = useState('')
   const planBody = () => ({ source_env_id: Number(source), transfer_path: path.trim() || null })
   const doPlan = useMutation({
     mutationFn: () =>
@@ -89,8 +86,7 @@ export function RefreshCard({ v }: { v: EnvDataView }) {
       api.post(`/hub/environments/${envId}/data/refresh`, {
         ...planBody(),
         plan_hash: plan?.plan_hash,
-        confirm,
-        accept_core_keeps: acceptCore
+        confirm
       }),
     onSuccess: () => {
       toast.success('Refresh started')
@@ -102,15 +98,6 @@ export function RefreshCard({ v }: { v: EnvDataView }) {
       if (p) setPlan(p)
     }
   })
-  const rollback = useMutation({
-    mutationFn: () =>
-      api.post(`/hub/data/runs/${v.refresh_rollback?.run_id}/rollback`, { confirm: rbConfirm }),
-    onSuccess: () => {
-      toast.success('Rollback started')
-      setRbConfirm('')
-      invalidate()
-    }
-  })
   if (v.environment.production)
     return (
       <SectionCard
@@ -118,11 +105,35 @@ export function RefreshCard({ v }: { v: EnvDataView }) {
         description='Production is never refreshed: the Hub only copies an environment down, onto a lower one.'
       >
         <p className='m-0 px-4 py-3 text-[12px] text-slate-500 dark:text-muted-foreground'>
+          {v.environment.key} counts as production ({v.environment.production_reasons.join('; ')}).
           To test with production data, refresh a lower environment from this one.
         </p>
       </SectionCard>
     )
   const rb = v.refresh_rollback
+  if (!v.gate.refresh_enabled || !v.environment.refresh_target)
+    return (
+      <SectionCard
+        title='Refresh from a higher environment'
+        description='Copies the whole database of a higher environment over this one, keeping this environment’s own settings.'
+      >
+        <div className='space-y-3 p-4'>
+          {!v.gate.refresh_enabled && (
+            <p className='m-0 text-[12px] text-slate-600 dark:text-muted-foreground'>
+              Refreshes are switched off on this Hub. An administrator turns them on under Switches
+              ({v.gate_warning})
+            </p>
+          )}
+          <RefreshTargetSwitch v={v} />
+          {rb && !rb.refusal && (
+            <p className='m-0 text-[12px] text-slate-500 dark:text-muted-foreground'>
+              The last refresh can be undone only while refreshes are on and this environment is a
+              refresh target.
+            </p>
+          )}
+        </div>
+      </SectionCard>
+    )
   return (
     <SectionCard
       title='Refresh from a higher environment'
@@ -198,6 +209,11 @@ export function RefreshCard({ v }: { v: EnvDataView }) {
                 <CheckLine key={c.id} state={c.state} text={c.text} />
               ))}
             </ul>
+            <ul className='m-0 list-disc space-y-0.5 pl-5 text-[12px] text-slate-600 dark:text-muted-foreground'>
+              {plan.notes.map((n) => (
+                <li key={n}>{n}</li>
+              ))}
+            </ul>
             {plan.blocked && (
               <p className='m-0 text-[12px] font-medium text-red-700 dark:text-red-400'>
                 This refresh cannot start yet: fix the refused checks above, then plan again.
@@ -205,8 +221,7 @@ export function RefreshCard({ v }: { v: EnvDataView }) {
             )}
             <details open={plan.left_out.length > 0}>
               <summary className='cursor-pointer text-[12px] font-medium text-slate-700 dark:text-foreground'>
-                What this environment keeps ({plan.kept.length}, from the{' '}
-                {plan.keeps_from === 'app' ? 'app’s own list' : 'core list only'})
+                What this environment keeps ({plan.kept.length}, from the app’s own list)
               </summary>
               <table className='mt-2 w-full text-[12px]'>
                 <tbody>
@@ -245,29 +260,12 @@ export function RefreshCard({ v }: { v: EnvDataView }) {
                     />
                   </Field>
                 </div>
-                {plan.keeps_from === 'core' && (
-                  <label
-                    htmlFor={`rf-core-${envId}`}
-                    className='flex items-center gap-2 text-[12px] text-slate-700 dark:text-foreground'
-                  >
-                    <Checkbox
-                      id={`rf-core-${envId}`}
-                      checked={acceptCore}
-                      onCheckedChange={(x) => setAcceptCore(x === true)}
-                    />{' '}
-                    Keep only the core’s entries
-                  </label>
-                )}
                 <ConfirmButton
                   title={`Refresh ${plan.target.env_key} from ${plan.source.env_key}`}
                   confirmLabel={`Replace ${plan.confirm}?`}
                   className={dangerGhost}
                   armedClassName={dangerArmed}
-                  disabled={
-                    confirm.trim() !== plan.confirm ||
-                    start.isPending ||
-                    (plan.keeps_from === 'core' && !acceptCore)
-                  }
+                  disabled={confirm.trim() !== plan.confirm || start.isPending}
                   onConfirm={() => start.mutate()}
                 >
                   Refresh {plan.target.env_key} from {plan.source.env_key}
@@ -279,54 +277,134 @@ export function RefreshCard({ v }: { v: EnvDataView }) {
         {start.isError && (
           <ErrorNotice description={hubError(start.error, 'Could not start the refresh')} />
         )}
-        {rb && !plan && (
-          <div className='border-t border-slate-200 pt-3 dark:border-border'>
-            <h4 className='m-0 text-[12px] font-semibold text-slate-800 dark:text-foreground'>
-              Undo the last refresh
-            </h4>
-            {rb.refusal ? (
-              <p className='m-0 mt-1 text-[12px] text-slate-500 dark:text-muted-foreground'>
-                {rb.refusal}
-              </p>
-            ) : (
-              <div className='mt-1 flex flex-wrap items-end gap-2'>
-                <p className='m-0 w-full text-[12px] text-slate-600 dark:text-muted-foreground'>
-                  Puts {v.database?.database_name} back as it was before refresh #{rb.run_id},{' '}
-                  {untilWords(rb.expires_at)}.
-                </p>
-                <div className='min-w-[240px] flex-1'>
-                  <Field
-                    id={`rb-confirm-${envId}`}
-                    label={`Type ${v.database?.database_name ?? ''} to roll back`}
-                  >
-                    <Input
-                      id={`rb-confirm-${envId}`}
-                      value={rbConfirm}
-                      onChange={(e) => setRbConfirm(e.target.value)}
-                      autoComplete='off'
-                      className='h-8 font-mono text-[13px]'
-                    />
-                  </Field>
-                </div>
-                <ConfirmButton
-                  title='Roll back the refresh'
-                  confirmLabel='Roll back to before the refresh?'
-                  className={dangerGhost}
-                  armedClassName={dangerArmed}
-                  disabled={rbConfirm.trim() !== v.database?.database_name || rollback.isPending}
-                  onConfirm={() => rollback.mutate()}
-                >
-                  Roll back the refresh
-                </ConfirmButton>
-              </div>
-            )}
-            {rollback.isError && (
-              <ErrorNotice description={hubError(rollback.error, 'Could not roll back')} />
-            )}
-          </div>
-        )}
+        <RefreshTargetSwitch v={v} />
+        {rb && !plan && <RollbackBlock v={v} />}
       </div>
     </SectionCard>
+  )
+}
+
+/** Opt this environment in (typed app/env) or out as a refresh target. */
+function RefreshTargetSwitch({ v }: { v: EnvDataView }) {
+  const envId = v.environment.id
+  const invalidate = useInvalidate(envId)
+  const want = `${v.app.key}/${v.environment.key}`
+  const [typed, setTyped] = useState('')
+  const set = useMutation({
+    mutationFn: (on: boolean) =>
+      api.put(`/hub/environments/${envId}/data/refresh-target`, { on, confirm: typed }),
+    onSuccess: (_r, on) => {
+      toast.success(on ? 'Refreshes may write over this environment' : 'Refresh target turned off')
+      setTyped('')
+      invalidate()
+    }
+  })
+  const on = v.environment.refresh_target
+  return (
+    <div className='rounded-md border border-slate-200 p-3 dark:border-border'>
+      <p className='m-0 text-[12px] font-semibold text-slate-800 dark:text-foreground'>
+        Refresh target: {on ? 'on' : 'off'}
+      </p>
+      <p className='m-0 mt-0.5 text-[12px] text-slate-600 dark:text-muted-foreground'>
+        {on
+          ? 'A refresh may replace this environment’s database (it is never production).'
+          : 'No refresh may write over this environment until an administrator turns this on.'}
+      </p>
+      {on ? (
+        <Button
+          size='sm'
+          variant='outline'
+          className='mt-2'
+          disabled={set.isPending}
+          onClick={() => set.mutate(false)}
+        >
+          Turn off
+        </Button>
+      ) : (
+        <div className='mt-2 flex flex-wrap items-end gap-2'>
+          <div className='min-w-[220px] flex-1'>
+            <Field id={`rt-${envId}`} label={`Type ${want} to turn it on`}>
+              <Input
+                id={`rt-${envId}`}
+                value={typed}
+                onChange={(e) => setTyped(e.target.value)}
+                autoComplete='off'
+                className='h-8 font-mono text-[13px]'
+              />
+            </Field>
+          </div>
+          <Button
+            size='sm'
+            variant='outline'
+            disabled={typed.trim() !== want || set.isPending}
+            onClick={() => set.mutate(true)}
+          >
+            Allow refreshes here
+          </Button>
+        </div>
+      )}
+      {set.isError && <ErrorNotice description={hubError(set.error, 'Could not change it')} />}
+    </div>
+  )
+}
+
+/** Undo the newest refresh: the pinned database name is what a person types. */
+function RollbackBlock({ v }: { v: EnvDataView }) {
+  const envId = v.environment.id
+  const invalidate = useInvalidate(envId)
+  const rb = v.refresh_rollback
+  const [typed, setTyped] = useState('')
+  const rollback = useMutation({
+    mutationFn: () => api.post(`/hub/data/runs/${rb?.run_id}/rollback`, { confirm: typed }),
+    onSuccess: () => {
+      toast.success('Rollback started')
+      setTyped('')
+      invalidate()
+    }
+  })
+  if (!rb) return null
+  const name = rb.database ?? ''
+  return (
+    <div className='border-t border-slate-200 pt-3 dark:border-border'>
+      <h4 className='m-0 text-[12px] font-semibold text-slate-800 dark:text-foreground'>
+        Undo the last refresh
+      </h4>
+      {rb.refusal ? (
+        <p className='m-0 mt-1 text-[12px] text-slate-500 dark:text-muted-foreground'>
+          {rb.refusal}
+        </p>
+      ) : (
+        <div className='mt-1 flex flex-wrap items-end gap-2'>
+          <p className='m-0 w-full text-[12px] text-slate-600 dark:text-muted-foreground'>
+            Puts {name} back as it was before refresh #{rb.run_id}, {untilWords(rb.expires_at)}.
+          </p>
+          <div className='min-w-[240px] flex-1'>
+            <Field id={`rb-confirm-${envId}`} label={`Type ${name} to roll back`}>
+              <Input
+                id={`rb-confirm-${envId}`}
+                value={typed}
+                onChange={(e) => setTyped(e.target.value)}
+                autoComplete='off'
+                className='h-8 font-mono text-[13px]'
+              />
+            </Field>
+          </div>
+          <ConfirmButton
+            title='Roll back the refresh'
+            confirmLabel='Roll back to before the refresh?'
+            className={dangerGhost}
+            armedClassName={dangerArmed}
+            disabled={!name || typed.trim() !== name || rollback.isPending}
+            onConfirm={() => rollback.mutate()}
+          >
+            Roll back the refresh
+          </ConfirmButton>
+        </div>
+      )}
+      {rollback.isError && (
+        <ErrorNotice description={hubError(rollback.error, 'Could not roll back')} />
+      )}
+    </div>
   )
 }
 
@@ -379,12 +457,17 @@ export function RehearsalCard({ v }: { v: EnvDataView }) {
             <Button
               size='sm'
               variant='outline'
-              disabled={!shared || !v.native || start.isPending}
+              disabled={!shared || !v.native || !v.gate.rehearsal_enabled || start.isPending}
               onClick={() => start.mutate()}
             >
               Start a rehearsal
             </Button>
           </div>
+        )}
+        {!v.gate.rehearsal_enabled && (
+          <p className='m-0 text-[12px] text-slate-600 dark:text-muted-foreground'>
+            Move rehearsals are switched off on this Hub (Switches).
+          </p>
         )}
         {start.isError && (
           <ErrorNotice description={hubError(start.error, 'Could not start the rehearsal')} />
@@ -458,15 +541,34 @@ const RUN_TONE: Record<string, string> = {
 }
 
 function RunRow({ run, envId }: { run: DataRun; envId: number }) {
-  const [open, setOpen] = useState(run.status === 'running' || run.status === 'failed')
+  const [open, setOpen] = useState(
+    run.status === 'running' || run.status === 'failed' || run.status === 'interrupted'
+  )
   const invalidate = useInvalidate(envId)
   const resume = useMutation({
     mutationFn: () => api.post(`/hub/data/runs/${run.id}/resume`, {}),
     onSuccess: () => {
-      toast.success('Refresh resumed')
+      toast.success(run.kind === 'refresh' ? 'Refresh resumed' : 'Rollback resumed')
       invalidate()
     }
   })
+  const [typed, setTyped] = useState('')
+  const abandon = useMutation({
+    mutationFn: () => api.post(`/hub/data/runs/${run.id}/abandon`, { confirm: typed }),
+    onSuccess: () => {
+      toast.success('Run abandoned')
+      setTyped('')
+      invalidate()
+    }
+  })
+  const resumable =
+    (run.kind === 'refresh' || run.kind === 'refresh_rollback') &&
+    (run.status === 'interrupted' || run.status === 'failed') &&
+    !run.artifact?.rolled_back_at &&
+    !run.artifact?.abandoned_at
+  const abandonable =
+    run.status === 'interrupted' || (run.kind === 'refresh' && run.status === 'failed')
+  const want = run.abandon_confirm ?? String(run.id)
   const Chevron = open ? ChevronDown : ChevronRight
   return (
     <li className='border-t border-slate-100 first:border-t-0 dark:border-border'>
@@ -527,15 +629,43 @@ function RunRow({ run, envId }: { run: DataRun; envId: number }) {
               )
             })}
           </ol>
-          {run.kind === 'refresh' && run.status === 'interrupted' && (
+          {resumable && (
             <Button
               size='sm'
               variant='outline'
               disabled={resume.isPending}
               onClick={() => resume.mutate()}
             >
-              Resume the refresh
+              {run.kind === 'refresh' ? 'Resume the refresh' : 'Resume the rollback'}
             </Button>
+          )}
+          {abandonable && (
+            <div className='flex flex-wrap items-end gap-2 border-t border-slate-100 pt-2 dark:border-border'>
+              <div className='min-w-[200px] flex-1'>
+                <Field id={`ab-${run.id}`} label={`Type ${want} to abandon this run`}>
+                  <Input
+                    id={`ab-${run.id}`}
+                    value={typed}
+                    onChange={(e) => setTyped(e.target.value)}
+                    autoComplete='off'
+                    className='h-8 font-mono text-[13px]'
+                  />
+                </Field>
+              </div>
+              <ConfirmButton
+                title='Abandon'
+                confirmLabel='Abandon this run?'
+                className={dangerGhost}
+                armedClassName={dangerArmed}
+                disabled={typed.trim() !== want || abandon.isPending}
+                onConfirm={() => abandon.mutate()}
+              >
+                Abandon
+              </ConfirmButton>
+            </div>
+          )}
+          {abandon.isError && (
+            <ErrorNotice description={hubError(abandon.error, 'Could not abandon')} />
           )}
           {resume.isError && (
             <ErrorNotice description={hubError(resume.error, 'Could not resume')} />

@@ -1,5 +1,5 @@
-import { ErrorNotice, QueryErrorState } from '@nivaro/shared'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { ConfirmButton, ErrorNotice, QueryErrorState } from '@nivaro/shared'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertTriangle,
   ChevronLeft,
@@ -21,13 +21,14 @@ import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
 import { hubError } from '../hub-api'
-import { Field, ghostButton, SecretInput, SectionCard } from '../hub-parts'
+import { dangerArmed, Field, ghostButton, SecretInput, SectionCard } from '../hub-parts'
 import { RefreshCard, RehearsalCard, RunsCard } from './DataOps'
 import {
   ago,
   type BackupPolicy,
   backupAge,
   type DataEnvRow,
+  type DataGate,
   type DataRun,
   type DataRunKind,
   dataKeys,
@@ -175,6 +176,7 @@ function DataAdmin() {
             })}
           </ul>
         )}
+        <SwitchesPanel />
       </aside>
       <div
         className={cn(
@@ -210,6 +212,83 @@ function DataAdmin() {
         )}
       </div>
     </div>
+  )
+}
+
+const SWITCHES: Array<{ key: keyof DataGate; label: string }> = [
+  { key: 'refresh_enabled', label: 'Refreshes' },
+  { key: 'drill_enabled', label: 'Restore drills' },
+  { key: 'rehearsal_enabled', label: 'Move rehearsals' }
+]
+
+/**
+ * The Hub-wide switches: refreshes, drills and rehearsals restore databases on live servers, so
+ * they are off until an administrator turns them on (two presses; turning off is one).
+ */
+function SwitchesPanel() {
+  const qc = useQueryClient()
+  const q = useQuery({
+    queryKey: ['hub', 'data', 'switches'] as const,
+    queryFn: () =>
+      api
+        .get<{ data: DataGate & { warning: string } }>('/hub/data/switches')
+        .then((r) => r.data.data)
+  })
+  const save = useMutation({
+    mutationFn: (patch: Partial<DataGate>) => api.put('/hub/data/switches', patch),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['hub', 'data'] })
+    }
+  })
+  if (!q.data) return null
+  const g = q.data
+  return (
+    <section className='mt-auto border-t border-slate-200 p-3 dark:border-border'>
+      <h3 className='m-0 text-[12px] font-semibold text-slate-700 dark:text-foreground'>
+        Switches
+      </h3>
+      <p className='m-0 mt-0.5 text-[11px] text-amber-700 dark:text-amber-400'>{g.warning}</p>
+      <ul className='m-0 mt-2 list-none space-y-1.5 p-0'>
+        {SWITCHES.map((sw) => (
+          <li key={sw.key} className='flex items-center justify-between gap-2 text-[12px]'>
+            <span className='text-slate-700 dark:text-foreground'>
+              {sw.label}{' '}
+              <span
+                className={
+                  g[sw.key]
+                    ? 'text-emerald-700 dark:text-emerald-400'
+                    : 'text-slate-500 dark:text-muted-foreground'
+                }
+              >
+                {g[sw.key] ? 'on' : 'off'}
+              </span>
+            </span>
+            {g[sw.key] ? (
+              <button
+                type='button'
+                className={ghostButton}
+                disabled={save.isPending}
+                onClick={() => save.mutate({ [sw.key]: false })}
+              >
+                Turn off
+              </button>
+            ) : (
+              <ConfirmButton
+                title={`Turn ${sw.label.toLowerCase()} on`}
+                confirmLabel='Turn on?'
+                className={ghostButton}
+                armedClassName={dangerArmed}
+                disabled={save.isPending}
+                onConfirm={() => save.mutate({ [sw.key]: true })}
+              >
+                Turn on
+              </ConfirmButton>
+            )}
+          </li>
+        ))}
+      </ul>
+      {save.isError && <ErrorNotice description={hubError(save.error, 'Could not change it')} />}
+    </section>
   )
 }
 
@@ -411,7 +490,11 @@ function BackupStatusCard({ v }: { v: EnvDataView }) {
           </StartButton>
           <StartButton
             pending={drill.isPending}
-            blocked={notNative ?? busy('restore_drill')}
+            blocked={
+              v.gate.drill_enabled
+                ? (notNative ?? busy('restore_drill'))
+                : 'Restore drills are switched off on this Hub (Switches).'
+            }
             onClick={() => drill.mutate({})}
             icon={<ShieldCheck className='h-3.5 w-3.5' aria-hidden />}
           >

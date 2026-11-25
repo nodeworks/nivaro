@@ -50,6 +50,8 @@ export interface DataRun {
   finished_at: string | null
   expires_at: string | null
   holds_keep_set: boolean
+  /** Runs list only: what to type to abandon it. */
+  abandon_confirm?: string
 }
 
 export type FilesTarget =
@@ -153,7 +155,17 @@ export interface LastBackupSeen {
 }
 
 export interface EnvDataView {
-  environment: { id: number; key: string; position: number; status: string; production: boolean }
+  environment: {
+    id: number
+    key: string
+    position: number
+    status: string
+    production: boolean
+    production_reasons: string[]
+    refresh_target: boolean
+  }
+  gate: DataGate
+  gate_warning: string
   app: { id: number; key: string; name: string }
   database: { id: number; engine: string; database_name: string; status: string } | null
   server: {
@@ -168,9 +180,21 @@ export interface EnvDataView {
   last_seen: LastBackupSeen | null
   checklist: Array<{ label: string; value: string }>
   latest: Partial<Record<DataRunKind, DataRun>>
-  refresh_rollback: { run_id: number; refusal: string | null; expires_at: string | null } | null
+  refresh_rollback: {
+    run_id: number
+    refusal: string | null
+    expires_at: string | null
+    /** The database the refresh replaced (pinned when it was planned). */
+    database: string | null
+  } | null
   refresh_sources: Array<{ env_id: number; env_key: string }>
   shared_deployments: Array<{ id: number; key: string; name: string }>
+}
+
+export interface DataGate {
+  refresh_enabled: boolean
+  drill_enabled: boolean
+  rehearsal_enabled: boolean
 }
 
 export interface RefreshCheck {
@@ -196,7 +220,6 @@ export interface RefreshPlan {
   }
   same_server: boolean
   transfer_path: string | null
-  keeps_from: 'app' | 'core'
   kept: Array<{
     id: string
     label: string
@@ -207,6 +230,7 @@ export interface RefreshPlan {
   }>
   left_out: Array<{ id: string; label: string; why: string }>
   overwritten: string
+  notes: string[]
   checks: RefreshCheck[]
   blocked: boolean
   rollback_hours: number
