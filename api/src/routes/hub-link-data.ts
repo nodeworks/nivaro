@@ -21,6 +21,8 @@ import { NIVARO_VERSION } from '../version.js'
  *   GET    refresh-keeps          → {version, keeps}  the env-refresh keep registry (core +
  *                                                     extensions): definitions, never values
  *   POST   files-backup           → 202 {run_id}      copy every stored file to a backup set
+ *                                                     (a folder its HUB_FILES_BACKUP_DIRS lists, or
+ *                                                     a bucket its HUB_FILES_BACKUP_S3 lists)
  *   GET    files-backup/:runId    → status            counts only
  *   POST   files-backup/delete    → {deleted}         remove one earlier backup set
  *   DELETE files                  → {deleted}         deployment link, rehearsal apps only:

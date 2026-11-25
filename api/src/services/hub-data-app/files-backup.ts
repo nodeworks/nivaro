@@ -7,8 +7,9 @@ import { tenantSource } from '../deployment-mode.js'
 import { hubLinkKeyTag } from '../hub-link/retire.js'
 import { getApp } from '../io-holder.js'
 import { getStorage } from '../storage/index.js'
-import { buildDriver, getActiveStorageDriver } from '../storage-drivers.js'
+import { getActiveStorageDriver } from '../storage-drivers.js'
 import { appKeyPart } from '../tenancy/credential-binding.js'
+import { type S3Creds, type S3Target, s3Request, s3TargetAllowed } from './s3-target.js'
 
 /**
  * Hub data care, APP side: a files backup. The Hub asks (hub link / deployment link,
@@ -19,7 +20,9 @@ import { appKeyPart } from '../tenancy/credential-binding.js'
  *   dir  <path>/<set>/<key>     only under a folder this app's HUB_FILES_BACKUP_DIRS allows
  *                               (comma list of absolute folders): the Hub never makes an app
  *                               write anywhere its own operator did not allow
- *   s3   <prefix>/<set>/<key>   in the bucket the request names, with the key pair it carries
+ *   s3   <prefix>/<set>/<key>   in a bucket this app's HUB_FILES_BACKUP_S3 lists (s3-target.ts:
+ *                               endpoint + bucket + prefix allow-list, every request through
+ *                               safeFetch, redirects refused), with the key pair the Hub sends
  *
  * One backup per app at a time (FILES_BACKUP_RUNNING). The status lives in this process and is
  * mirrored to Redis (per app, per hub link) so another replica can answer the Hub. A file over
@@ -115,29 +118,29 @@ function dirWriter(path: string, set: string): Writer {
   }
 }
 
-function s3Writer(
-  t: Extract<FilesTargetIn, { kind: 's3' }>,
-  set: string,
-  creds: { access_key_id: string; secret_access_key: string }
-): Writer {
-  const d = buildDriver('s3', {
-    bucket: t.bucket,
-    region: t.region ?? undefined,
-    endpoint: t.endpoint ?? undefined,
-    access_key_id: creds.access_key_id,
-    secret_access_key: creds.secret_access_key
-  })
+function s3Writer(t: S3Target, set: string, creds: S3Creds): Writer {
   const base = `${t.prefix ? `${t.prefix}/` : ''}${set}/`
+  const ok = async (res: Response, what: string) => {
+    if (res.ok) return res
+    await res.body?.cancel().catch(() => undefined)
+    throw new Error(`S3 ${what} failed: ${res.status}`)
+  }
   return {
-    put: (key, buf) => d.put(`${base}${key}`, buf, 'application/octet-stream'),
+    async put(key, buf) {
+      await ok(await s3Request(t, creds, 'PUT', `${base}${key}`, buf), 'PUT')
+    },
     async read(key) {
       try {
-        return await d.get(`${base}${key}`)
+        const res = await ok(await s3Request(t, creds, 'GET', `${base}${key}`), 'GET')
+        return Buffer.from(await res.arrayBuffer())
       } catch {
         return null
       }
     },
-    remove: (key) => d.delete(`${base}${key}`),
+    async remove(key) {
+      const res = await s3Request(t, creds, 'DELETE', `${base}${key}`)
+      await res.body?.cancel().catch(() => undefined)
+    },
     async removeSet() {
       /* objects are removed one by one from the manifest */
     }
@@ -181,17 +184,19 @@ export function writerFor(
       typeof c.secret_access_key !== 'string'
     )
       throw new FilesBackupError('BAD_TARGET', 'An S3 target needs a bucket and a key pair')
-    const prefix =
-      typeof t.prefix === 'string' &&
-      /^[A-Za-z0-9._/-]{0,200}$/.test(t.prefix) &&
-      !t.prefix.includes('..')
-        ? t.prefix.replace(/^\/+|\/+$/g, '')
-        : ''
+    const rawPrefix = t.prefix === undefined || t.prefix === null ? '' : t.prefix
+    if (
+      typeof rawPrefix !== 'string' ||
+      !/^[A-Za-z0-9._/-]{0,200}$/.test(rawPrefix) ||
+      rawPrefix.includes('..')
+    )
+      throw new FilesBackupError('BAD_TARGET', 'The S3 prefix may hold letters, digits and . _ / -')
+    const prefix = rawPrefix.replace(/^\/+|\/+$/g, '')
     let endpoint: string | null = null
     if (typeof t.endpoint === 'string' && t.endpoint) {
       try {
         const u = new URL(t.endpoint)
-        if (u.protocol !== 'https:') throw new Error('http')
+        if (u.protocol !== 'https:' || u.username || u.password) throw new Error('http')
         endpoint = u.origin
       } catch {
         throw new FilesBackupError('BAD_TARGET', 'The S3 endpoint must be an https address')
@@ -204,6 +209,14 @@ export function writerFor(
       region: typeof t.region === 'string' && /^[a-z0-9-]{1,40}$/.test(t.region) ? t.region : null,
       endpoint
     }
+    // The app's own operator decides where its files may go (HUB_FILES_BACKUP_S3), before any
+    // request leaves: the Hub alone can never send them to an endpoint of its choosing.
+    if (!s3TargetAllowed(target, env))
+      throw new FilesBackupError(
+        'S3_NOT_ALLOWED',
+        'This app does not allow files backups into that bucket (HUB_FILES_BACKUP_S3)',
+        403
+      )
     const creds = { access_key_id: c.access_key_id, secret_access_key: c.secret_access_key }
     return {
       req: { set: b.set, target, credentials: creds },
