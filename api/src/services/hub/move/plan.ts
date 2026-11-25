@@ -4,12 +4,13 @@ import {
   type SharedReadinessCode,
   type SharedReadinessItem
 } from '../../hub-link/shared-readiness.js'
-import { COPYABLE_OBJECT_STORAGE } from '../../hub-transfer/copyable.js'
+import { COPYABLE_OBJECT_STORAGE, COPYABLE_SINCE_ENV_STORAGE } from '../../hub-transfer/copyable.js'
 import { MIN_SHARED_POOL_MAX } from '../drivers.js'
 import { holderOf, lockHolderRefusal, sharedHolderOf, sharedLockRefusal } from '../promote-lock.js'
 import { compareVersions } from '../promote-plan.js'
 import { runsSharedHubSignin, SHARED_HUB_SIGNIN_SINCE } from '../shared/hub-signin-floor.js'
 import { routeActions } from './route-actions.js'
+import { runsStorageCopy } from './storage-floor.js'
 import type {
   MoveBlockerCode,
   MoveKind,
@@ -152,6 +153,23 @@ function answerWords(code: string | null | undefined): string {
  *  shared one, the bucket root elsewhere); between two shared ones it stays (one tenant id). */
 function prefixChanges(input: MovePlanInput): boolean {
   return (input.from.kind === 'shared') !== (input.to.kind === 'shared')
+}
+
+/**
+ * 0.3.215 (storage-floor.ts): both sides copy every stored object — env S3/Azure ones and the
+ * cold objects of session replays. The move's version is the source's (a dedicated target is
+ * deployed at it); a shared target must report it too.
+ */
+function copiesEverything(input: MovePlanInput): boolean {
+  const version = input.source.version ?? input.env.version_pin
+  if (!runsStorageCopy(version)) return false
+  // A shared target's version the Hub cannot read is older (the safe side keeps the blocker).
+  return input.to.kind !== 'shared' || runsStorageCopy(input.target_facts.version)
+}
+
+/** The `nivaro_files.storage` kinds this move's pull copies (P6-31; env ones from 0.3.215). */
+function copyableKinds(input: MovePlanInput): readonly string[] {
+  return copiesEverything(input) ? COPYABLE_SINCE_ENV_STORAGE : COPYABLE_OBJECT_STORAGE
 }
 
 function list(items: string[], max = 10): string {
@@ -301,16 +319,17 @@ function blockersOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Bloc
       `The source and ${sideName(to)} use the same Redis database. Give the target its own Redis database (another database number, or its own Redis) first.`
     )
 
-  // Object storage the move cannot copy (ruling R1).
+  // Object storage the move cannot copy (ruling R1): before 0.3.215 only (storage-floor.ts).
   const readinessHas = (code: string) => s.readiness.some((r) => r.code === code)
   const envStorage = (p: string | null) => p !== null && p.toLowerCase() !== 'local'
   if (
+    !copiesEverything(input) &&
     !readinessHas('ENV_OBJECT_STORAGE') &&
     (envStorage(s.storage_provider) || envStorage(t.storage_provider))
   )
     add(
       'ENV_OBJECT_STORAGE',
-      `${envStorage(s.storage_provider) ? 'The source' : sideName(to)[0].toUpperCase() + sideName(to).slice(1)} keeps files in object storage set by environment variables (STORAGE_PROVIDER). A move copies only local files, so those would be lost.`
+      `${envStorage(s.storage_provider) ? 'The source' : sideName(to)[0].toUpperCase() + sideName(to).slice(1)} keeps files in object storage set by environment variables (STORAGE_PROVIDER). Before 0.3.215 a move copies only local files, so those would be lost: upgrade the app first.`
     )
 
   // P6-31: on a shared deployment every object key lives under apps/<tenantId>/; to or from one
@@ -323,8 +342,9 @@ function blockersOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Bloc
       "This move changes where stored files are kept (a shared deployment keeps each app's files in its own folder), and the app did not say which storage its files are on. Plan again once it answers."
     )
   if (prefixChanges(input)) {
+    const kinds = copyableKinds(input)
     const odd = Object.entries(s.files?.objects ?? {})
-      .filter(([p, n]) => n > 0 && !(COPYABLE_OBJECT_STORAGE as readonly string[]).includes(p))
+      .filter(([p, n]) => n > 0 && !kinds.includes(p))
       .map(([p, n]) => `${n} on ${p}`)
     if (odd.length)
       add(
@@ -462,8 +482,16 @@ const PER_APP_SINCE_SHARED_FEATURES: readonly SharedReadinessCode[] = [
   'MAIL_RETRY'
 ]
 
-/** Blockers on a target before SHARED_FEATURES_SINCE, besides the app's own blocker list. */
-const OLDER_TARGET_BLOCKERS: readonly SharedReadinessCode[] = ['STAGED_IMPORTS', 'ROW_SCHEDULES']
+/**
+ * Blockers on an older side, besides the app's own blocker list: before SHARED_FEATURES_SINCE
+ * staged imports and row schedules; before 0.3.215 env object storage (an app from 0.3.215 sends
+ * it as a warning, readinessFor drops it when both sides copy it).
+ */
+const OLDER_TARGET_BLOCKERS: readonly SharedReadinessCode[] = [
+  'STAGED_IMPORTS',
+  'ROW_SCHEDULES',
+  'ENV_OBJECT_STORAGE'
+]
 
 /**
  * GitLab issue sync runs per app on a shared deployment from this version: ISSUE_TRACKERS (sent
@@ -535,8 +563,16 @@ function readinessFor(input: MovePlanInput): SharedReadinessItem[] {
   if (runsAtLeast(input.target_facts.version, HUDDLE_MAIL_SINCE))
     list = list.filter((r) => r.code !== 'HUDDLE_TURN')
   if (keepsEnvMail(input)) list = list.filter((r) => r.code !== 'ENV_SMTP')
+  // 0.3.215: env object storage and cold session replays are copied by the move itself.
+  if (copiesEverything(input)) list = list.filter((r) => !MOVED_SINCE_STORAGE_COPY.includes(r.code))
   return list
 }
+
+/** Codes an app reports for what a 0.3.215 move copies (ENV_OBJECT_STORAGE blocks before). */
+const MOVED_SINCE_STORAGE_COPY: readonly SharedReadinessCode[] = [
+  'ENV_OBJECT_STORAGE',
+  'SESSION_REPLAYS'
+]
 
 const READINESS_TITLES: Record<string, string> = {
   STAGED_IMPORTS: 'Staged imports do not run on a shared deployment before 0.3.212',
@@ -589,10 +625,12 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
     'SIGNED_LINKS_RESET',
     'Links the app signed before the move stop working: submission status links (valid 90 days), help-video and export links and message-action links in mail. The session secret differs on the other side. People can ask for new ones. Unsaved form drafts are dropped too (they are sealed with the same secret): ask people to save their open forms before the move.'
   )
-  add(
-    'REPLAYS_NOT_MOVED',
-    'Session replays and generated image sizes are not moved. Images are made again when asked for; old replays stay on the source until it is removed.'
-  )
+  // 0.3.215: cold replays are copied with the files (hot ones live in the database).
+  if (!copiesEverything(input))
+    add(
+      'REPLAYS_NOT_MOVED',
+      'Session replays and generated image sizes are not moved. Images are made again when asked for; old replays stay on the source until it is removed.'
+    )
   if (toShared(kind) && s.oidc_unread)
     add(
       'ISSUER_UNVERIFIED',
@@ -604,7 +642,10 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
       'REDIS_UNVERIFIED',
       `The Hub cannot see which Redis ${redisUnknown} uses. Source and target hold the same hub token, so they must not share one Redis database and channel prefix (the retire and maintenance keys would collide). Make sure they don't.`
     )
-  const storageUnknown = unknownSides(input, s.storage_provider, t.storage_provider)
+  // From 0.3.215 every env provider is copied: where a side keeps files no longer matters.
+  const storageUnknown = copiesEverything(input)
+    ? null
+    : unknownSides(input, s.storage_provider, t.storage_provider)
   if (storageUnknown)
     add(
       'STORAGE_UNVERIFIED',
@@ -639,13 +680,13 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
   if (prefixChanges(input)) {
     const objects = input.source.files?.objects
     // An unknown count blocks (STORAGE_COUNT_UNKNOWN), so it needs no warning here.
-    const copyable = objects
-      ? COPYABLE_OBJECT_STORAGE.reduce((n, p) => n + (objects[p] ?? 0), 0)
-      : 0
+    const copyable = objects ? copyableKinds(input).reduce((n, p) => n + (objects[p] ?? 0), 0) : 0
     if (copyable > 0)
       add(
         'STORAGE_PREFIX_CHANGES',
-        `${copyable} file(s) kept in S3 or Azure storage saved in Settings are copied to a new folder in the same bucket (a shared deployment keeps each app's files under apps/<app>/; elsewhere they sit at the bucket root). They are copied, not shared: the bucket holds both copies until the old ones are removed.`
+        copiesEverything(input)
+          ? `${copyable} file(s) kept in S3 or Azure storage (saved in Settings or set by environment variables) are copied to a new folder (a shared deployment keeps each app's files under apps/<app>/; elsewhere they sit at the bucket root). Into a dedicated stack on the same bucket, the bucket copies them itself. They are copied, not shared: the bucket holds both copies until the old ones are removed.`
+          : `${copyable} file(s) kept in S3 or Azure storage saved in Settings are copied to a new folder in the same bucket (a shared deployment keeps each app's files under apps/<app>/; elsewhere they sit at the bucket root). They are copied, not shared: the bucket holds both copies until the old ones are removed.`
       )
   }
   if (input.target_facts.boot_maintenance === 'unproven')
@@ -791,7 +832,10 @@ function checklistOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Mov
       text: 'The source and the target do not share one Redis database and channel prefix.',
       required: true
     })
-  if (input.source.storage_provider === null || input.target_facts.storage_provider === null)
+  if (
+    !copiesEverything(input) &&
+    (input.source.storage_provider === null || input.target_facts.storage_provider === null)
+  )
     out.push({
       id: 'storage_local',
       text: 'Neither side keeps files in object storage set by environment variables (STORAGE_PROVIDER): every file is on local storage, so the move copies it.',

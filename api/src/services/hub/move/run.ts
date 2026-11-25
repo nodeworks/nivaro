@@ -801,6 +801,10 @@ async function copyFiles(ctx: Ctx, slot: keyof MoveFiles, blocking: boolean): Pr
     )
   if (s.size_mismatch)
     ctx.run.log(`${s.size_mismatch} file(s) had a stale stored size; copied as the source has them`)
+  if (s.server_copied)
+    ctx.run.log(
+      `${s.server_copied} of them copied by the bucket itself (same bucket on both sides)`
+    )
   if (s.state === 'failed')
     throw new MoveStepError(
       'FILES_FAILED',

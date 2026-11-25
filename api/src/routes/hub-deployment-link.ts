@@ -322,6 +322,9 @@ export async function hubDeploymentLinkRoutes(app: FastifyInstance): Promise<voi
       ticket?: unknown
       mode?: unknown
       objects?: unknown
+      env_objects?: unknown
+      replays?: unknown
+      source_scope?: unknown
     }
     try {
       const out = await withTenant(
@@ -331,7 +334,10 @@ export async function hubDeploymentLinkRoutes(app: FastifyInstance): Promise<voi
             source: b.source as string,
             ticket: b.ticket as string,
             mode: b.mode as 'full' | 'delta',
-            objects: b.objects === true
+            objects: b.objects === true,
+            env_objects: b.env_objects === true,
+            replays: b.replays === true,
+            ...(typeof b.source_scope === 'string' ? { source_scope: b.source_scope } : {})
           }),
         t.origin
       )

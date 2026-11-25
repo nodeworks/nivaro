@@ -72,6 +72,43 @@ export function appScopedKey(key: unknown, tenantId: string | null | undefined):
   return prefix + assertScopableKey(key)
 }
 
+/**
+ * Where a server-side copy (a Hub move, 0.3.215) may read from: `root` = a dedicated source's
+ * bucket root (never inside `apps/`), or the source app's tenant id = its `apps/<tenant>/`
+ * folder. Always named by the caller from what it controls (the Hub's move), never by the data
+ * the source sent.
+ */
+export type CopySourceScope = 'root' | { tenant: string }
+
+/**
+ * The full source key of a server-side copy, checked against its scope: no `..` / `.` segment,
+ * no leading `/`, no `\`, NUL or other control character; `apps/<tenant>/<key>` for a tenant
+ * scope, a key outside `apps/` for the root. Throws BAD_KEY otherwise.
+ */
+export function assertCopySource(raw: unknown, scope: CopySourceScope | null | undefined): string {
+  const bad = () => new AppScopeError('BAD_KEY', 'That copy source is not allowed.')
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what it refuses
+  if (typeof raw !== 'string' || /[\u0000-\u001f\u007f]/.test(raw)) throw bad()
+  try {
+    assertScopableKey(raw)
+  } catch {
+    throw bad()
+  }
+  if (scope === 'root') {
+    if (raw === APP_SCOPE_ROOT.slice(0, -1) || raw.startsWith(APP_SCOPE_ROOT)) throw bad()
+    return raw
+  }
+  if (!scope || typeof scope !== 'object') throw bad()
+  let prefix: string
+  try {
+    prefix = appScopePrefix(scope.tenant)
+  } catch {
+    throw bad()
+  }
+  if (!raw.startsWith(prefix) || raw.length === prefix.length) throw bad()
+  return raw
+}
+
 // Methods whose first argument is an object key. Async ones refuse with a rejection (callers
 // chain `.catch()`); sync ones throw. `size` is the optional stat a provider may add (M9).
 const ASYNC_KEYED = new Set([
@@ -86,6 +123,8 @@ const ASYNC_KEYED = new Set([
   'openStream'
 ])
 const SYNC_KEYED = new Set(['resolveKey'])
+/** Methods that take no key at all (0.3.215: the store's identity hash for a move). */
+const NO_KEY = new Set(['storeId'])
 
 /**
  * Wrap `base` (an env storage provider, or a saved-settings S3/Azure driver — anything whose
@@ -117,6 +156,24 @@ export function scopedStorage<T extends StorageProvider | object>(
       if (SYNC_KEYED.has(prop)) {
         return (key: unknown, ...rest: unknown[]) =>
           Reflect.apply(value, target, [appScopedKey(key, tenantId()), ...rest])
+      }
+      if (NO_KEY.has(prop)) return (...args: unknown[]) => Reflect.apply(value, target, args)
+      if (prop === 'copyFrom') {
+        // 0.3.215: a move's server-side copy. The destination is scoped like every key; the
+        // source must be inside THIS app's own folder (its scope named by the caller and checked
+        // here): a shared bucket's root and every other app's folder are refused.
+        return (key: unknown, raw: unknown, mime: unknown, opts: unknown) => {
+          try {
+            const own = tenantId()
+            const scoped = appScopedKey(key, own)
+            const scope = (opts as { sourceScope?: CopySourceScope } | null)?.sourceScope
+            if (!scope || scope === 'root' || scope.tenant !== own)
+              throw new AppScopeError('BAD_KEY', 'That copy source is not allowed.')
+            return Reflect.apply(value, target, [scoped, assertCopySource(raw, scope), mime, opts])
+          } catch (err) {
+            return Promise.reject(err)
+          }
+        }
       }
       if (prop === 'getUrl') {
         return (key: unknown) => {

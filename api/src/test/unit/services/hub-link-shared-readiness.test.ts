@@ -213,8 +213,7 @@ describe('computeSharedReadiness', () => {
     expect(codeOf(r, 'ROW_SCHEDULES')).toBeUndefined()
     expect([...SHARED_READINESS_BLOCKERS]).toEqual([
       'EXEC_SCRIPT_FLOWS',
-      'SQLITE',
-      'ENV_OBJECT_STORAGE'
+      'SQLITE'
     ])
   })
 
@@ -242,11 +241,18 @@ describe('computeSharedReadiness', () => {
     expect(r.db_identity).toBeNull()
   })
 
-  it('env object storage → blocker ENV_OBJECT_STORAGE (ruling R1)', async () => {
+  it('env object storage → a warning from 0.3.215 (a move copies it; the Hub still blocks it on an older side)', async () => {
     process.env.STORAGE_PROVIDER = 's3'
     const r = await computeSharedReadiness()
-    expect(codeOf(r, 'ENV_OBJECT_STORAGE')?.level).toBe('blocker')
-    expect(SHARED_READINESS_BLOCKERS).toContain('ENV_OBJECT_STORAGE')
+    expect(codeOf(r, 'ENV_OBJECT_STORAGE')).toEqual({
+      code: 'ENV_OBJECT_STORAGE',
+      level: 'warning',
+      detail:
+        "Files are stored by the server's S3 storage setting; a move copies them when both sides run 0.3.215 or later"
+    })
+    expect(SHARED_READINESS_BLOCKERS).not.toContain('ENV_OBJECT_STORAGE')
+    process.env.STORAGE_PROVIDER = 'local'
+    expect(codeOf(await computeSharedReadiness(), 'ENV_OBJECT_STORAGE')).toBeUndefined()
   })
 
   it('GitLab sync runs per app on shared (0.3.215): ISSUE_TRACKERS is a warning, env-switched says so', async () => {

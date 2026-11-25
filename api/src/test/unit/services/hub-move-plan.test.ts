@@ -6,6 +6,7 @@ import {
   SHARED_FEATURES_SINCE,
   SHARED_TRACKERS_SINCE
 } from '../../../services/hub/move/plan.js'
+import { runsStorageCopy, STORAGE_COPY_SINCE } from '../../../services/hub/move/storage-floor.js'
 import type {
   MoveBlockerCode,
   MovePlanInput,
@@ -317,8 +318,8 @@ describe('buildMovePlan — one test per blocker', () => {
     expect(codes(p)).not.toContain('TEAMS_BOT')
   })
 
-  it('every one of the three readiness blockers becomes a plan blocker, on any target version', () => {
-    expect(SHARED_READINESS_BLOCKERS).toHaveLength(3)
+  it('every readiness blocker becomes a plan blocker, on any target version', () => {
+    expect(SHARED_READINESS_BLOCKERS).toHaveLength(2)
     for (const version of ['0.3.210', '0.3.212'])
       for (const code of SHARED_READINESS_BLOCKERS) {
         const p = buildMovePlan(
@@ -649,7 +650,7 @@ describe('buildMovePlan — warnings', () => {
     }
   })
 
-  it('REPLAYS_NOT_MOVED always', () => {
+  it('REPLAYS_NOT_MOVED before 0.3.215', () => {
     expect(buildMovePlan(input()).warnings.map((w) => w.code)).toContain('REPLAYS_NOT_MOVED')
   })
 
@@ -1005,6 +1006,128 @@ describe('object storage key prefix (P6-31)', () => {
     const p = buildMovePlan(input({ source: withObjects({ s3: 1, gcs: 3 }) }))
     expect(codes(p)).toContain('STORAGE_LAYOUT_DIFFERS')
     expect(p.blockers.find((b) => b.code === 'STORAGE_LAYOUT_DIFFERS')?.text).toMatch(/gcs/)
+  })
+})
+
+// 0.3.215 (storage-floor.ts): a move copies env S3/Azure objects (either side, re-keyed between
+// the bucket root and apps/<tenant>/) and the cold objects of session replays. Older sides keep
+// the old rules: ENV_OBJECT_STORAGE blocks, REPLAYS_NOT_MOVED warns.
+describe('env object storage and session replays (0.3.215)', () => {
+  const warns = (p: { warnings: { code: string }[] }) => p.warnings.map((w) => w.code)
+  /** Both sides at `version` (the target at `targetVersion` when given). */
+  const at = (version: string, o: Partial<MovePlanInput> = {}, targetVersion?: string | null) =>
+    input({
+      env: { ...input().env, version_pin: version },
+      ...o,
+      source: { ...input().source, ...(o.source ?? {}), version },
+      target_facts: {
+        ...input().target_facts,
+        ...(o.target_facts ?? {}),
+        version: targetVersion === undefined ? version : targetVersion
+      }
+    })
+
+  it('the floor is 0.3.215; a pre-release or an unreadable version is older', () => {
+    expect(STORAGE_COPY_SINCE).toBe('0.3.215')
+    expect(runsStorageCopy('0.3.215')).toBe(true)
+    expect(runsStorageCopy('v0.3.216')).toBe(true)
+    expect(runsStorageCopy('0.4.0')).toBe(true)
+    expect(runsStorageCopy('0.3.214')).toBe(false)
+    expect(runsStorageCopy('0.3.215-rc.1')).toBe(false)
+    expect(runsStorageCopy(null)).toBe(false)
+    expect(runsStorageCopy('latest')).toBe(false)
+  })
+
+  it('env S3 on the target: blocks at 0.3.214, not at 0.3.215', () => {
+    const t = { storage_provider: 's3' } as Partial<MovePlanInput['target_facts']>
+    expect(codes(buildMovePlan(at('0.3.214', { target_facts: tgt(t) })))).toContain(
+      'ENV_OBJECT_STORAGE'
+    )
+    expect(codes(buildMovePlan(at('0.3.215', { target_facts: tgt(t) })))).toEqual([])
+  })
+
+  it("the app's own ENV_OBJECT_STORAGE (a warning from 0.3.215, a blocker before) blocks only before", () => {
+    const report = (level: 'blocker' | 'warning') => ({
+      readiness: [{ code: 'ENV_OBJECT_STORAGE' as const, level, detail: 'S3' }],
+      storage_provider: 'object'
+    })
+    // An app before 0.3.215 sends it as a blocker; a 0.3.215 app as a warning: either way the
+    // Hub decides by the versions.
+    expect(codes(buildMovePlan(at('0.3.214', { source: src(report('blocker')) })))).toContain(
+      'ENV_OBJECT_STORAGE'
+    )
+    expect(codes(buildMovePlan(at('0.3.214', { source: src(report('warning')) })))).toContain(
+      'ENV_OBJECT_STORAGE'
+    )
+    const p = buildMovePlan(at('0.3.215', { source: src(report('warning')) }))
+    expect(codes(p)).toEqual([])
+    expect(warns(p)).not.toContain('ENV_OBJECT_STORAGE')
+  })
+
+  it('a dedicated target is judged at the move version (it is deployed at it)', () => {
+    const toDedicated = {
+      kind: 'to_dedicated' as const,
+      from: sharedSide(),
+      to: dockerSide(),
+      target: { kind: 'dedicated', placement_id: 3 } as never
+    }
+    const tFacts = tgt({ storage_provider: 'azure' })
+    expect(
+      codes(buildMovePlan(at('0.3.214', { ...toDedicated, target_facts: tFacts }, null)))
+    ).toContain('ENV_OBJECT_STORAGE')
+    expect(
+      codes(buildMovePlan(at('0.3.215', { ...toDedicated, target_facts: tFacts }, null)))
+    ).not.toContain('ENV_OBJECT_STORAGE')
+  })
+
+  it('review L-1: a shared target version the Hub cannot read is older (blocker and warning kept)', () => {
+    const p = buildMovePlan(at('0.3.215', { target_facts: tgt({ storage_provider: 's3' }) }, null))
+    expect(codes(p)).toContain('ENV_OBJECT_STORAGE')
+    expect(warns(p)).toContain('REPLAYS_NOT_MOVED')
+  })
+
+  it('a shared target that reports an older version keeps the blocker', () => {
+    const p = buildMovePlan(
+      at('0.3.215', { target_facts: tgt({ storage_provider: 's3' }) }, '0.3.214')
+    )
+    expect(codes(p)).toContain('ENV_OBJECT_STORAGE')
+  })
+
+  it('REPLAYS_NOT_MOVED and SESSION_REPLAYS go at 0.3.215 (cold replays are copied)', () => {
+    const readiness = [
+      { code: 'SESSION_REPLAYS' as const, level: 'warning' as const, detail: '2 stay behind' }
+    ]
+    const before = buildMovePlan(at('0.3.214', { source: src({ readiness }) }))
+    expect(warns(before)).toContain('REPLAYS_NOT_MOVED')
+    expect(warns(before)).toContain('SESSION_REPLAYS')
+    const after = buildMovePlan(at('0.3.215', { source: src({ readiness }) }))
+    expect(warns(after)).not.toContain('REPLAYS_NOT_MOVED')
+    expect(warns(after)).not.toContain('SESSION_REPLAYS')
+  })
+
+  it('storage the Hub cannot see no longer matters at 0.3.215 (no STORAGE_UNVERIFIED, no storage_local)', () => {
+    const p = buildMovePlan(at('0.3.215', { target_facts: tgt({ storage_provider: null }) }))
+    expect(warns(p)).not.toContain('STORAGE_UNVERIFIED')
+    expect(p.checklist.find((c) => c.id === 'storage_local')).toBeUndefined()
+  })
+
+  it('env Azure rows (storage `azure`) are copyable at 0.3.215, STORAGE_LAYOUT_DIFFERS before', () => {
+    const files = { count: 4, bytes: 1, local: 1, objects: { azure: 3 } }
+    expect(codes(buildMovePlan(at('0.3.214', { source: src({ files }) })))).toContain(
+      'STORAGE_LAYOUT_DIFFERS'
+    )
+    const p = buildMovePlan(at('0.3.215', { source: src({ files }) }))
+    expect(codes(p)).toEqual([])
+    expect(p.warnings.find((w) => w.code === 'STORAGE_PREFIX_CHANGES')?.text).toMatch(
+      /3 file\(s\).*environment variables.*bucket copies them itself/
+    )
+  })
+
+  it('a provider no move copies (gcs) still blocks at 0.3.215', () => {
+    const files = { count: 4, bytes: 1, local: 1, objects: { gcs: 3 } }
+    expect(codes(buildMovePlan(at('0.3.215', { source: src({ files }) })))).toContain(
+      'STORAGE_LAYOUT_DIFFERS'
+    )
   })
 })
 

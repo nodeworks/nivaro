@@ -65,6 +65,7 @@ import {
 import type { MovePlan, RouteAction } from './plan-port.js'
 import { type HubMoveRow, MOVES, mergeSteps, readMove } from './rows.js'
 import { sharedStackRouter as defaultSharedStackRouter } from './shared-route.js'
+import { runsStorageCopy } from './storage-floor.js'
 
 /**
  * Nivaro Hub phase 6, Task 16: every side effect of a move, behind one injectable interface. The
@@ -944,7 +945,25 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
       // the bucket root elsewhere): saved-settings S3/Azure objects are copied too, same bucket
       // or not. Between two shared deployments the prefix is the same (one tenant id).
       const objects = (l.from.kind === 'shared') !== (l.to.kind === 'shared')
-      const req: PullRequest = { source, ticket, mode, ...(objects ? { objects: true } : {}) }
+      // 0.3.215 (a move keeps the version: the plan's is both sides'): env S3/Azure objects and
+      // the cold objects of session replays are copied too. An older side never gets asked: the
+      // plan blocks env object storage there (ENV_OBJECT_STORAGE) and warns REPLAYS_NOT_MOVED.
+      const everything = runsStorageCopy(plan.version)
+      const req: PullRequest = {
+        source,
+        ticket,
+        mode,
+        ...(objects ? { objects: true } : {}),
+        ...(everything
+          ? {
+              env_objects: true,
+              replays: true,
+              // Where the source keeps this app's objects in a bucket (the target rebuilds every
+              // server-side copy's source key from it, never from what the source sends).
+              source_scope: l.from.kind === 'shared' ? l.tenantId : 'root'
+            }
+          : {})
+      }
       try {
         let start: () => Promise<{ run_id: string }>
         let status: (run: string) => Promise<PullStatus>
