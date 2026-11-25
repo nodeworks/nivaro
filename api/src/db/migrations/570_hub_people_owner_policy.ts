@@ -9,10 +9,16 @@ import { longText } from '../portable-ddl.js'
  *  - nivaro_hub_apps.owners_deploy_production  an admin's per-app switch: the app's owners may
  *                                              also promote, restart and apply on production
  *                                              (NULL / false = production stays admin-only)
+ *  - nivaro_hub_environments.production      an admin's per-environment flag for the owner
+ *                                              gate: true = production, false = explicitly
+ *                                              not (opens a last environment), NULL = auto
  *  - nivaro_hub_offboards                      one row per "Offboard everywhere": who (the
  *                                              identities asked about), per-environment results,
  *                                              and the Hub sign-in block (`blocked`) that holds
  *                                              until an administrator lifts it
+ *  - nivaro_hub_offboard_ids                   the block's identities, one row each (kind
+ *                                              user | email | oid, value), indexed for the
+ *                                              lookup every Hub sign-in makes
  */
 export async function up(knex: Knex): Promise<void> {
   if (
@@ -21,6 +27,15 @@ export async function up(knex: Knex): Promise<void> {
   ) {
     await knex.schema.alterTable('nivaro_hub_apps', (t) => {
       t.boolean('owners_deploy_production').nullable().defaultTo(false)
+    })
+  }
+
+  if (
+    (await knex.schema.hasTable('nivaro_hub_environments')) &&
+    !(await knex.schema.hasColumn('nivaro_hub_environments', 'production'))
+  ) {
+    await knex.schema.alterTable('nivaro_hub_environments', (t) => {
+      t.boolean('production').nullable()
     })
   }
 
@@ -37,7 +52,7 @@ export async function up(knex: Knex): Promise<void> {
       t.string('status', 16).notNullable().defaultTo('running')
       // JSON array, one entry per environment (services/hub/people/offboard.ts OffboardResult).
       longText(t, knex, 'results').nullable()
-      // The Hub's own account: suspended | none | kept (refused: the caller / the last admin).
+      // The Hub's own account as step 1 found it: suspended (by this run) | already | none.
       t.string('hub_account', 16).nullable()
       t.boolean('blocked').nullable().defaultTo(true)
       t.uuid('started_by').nullable()
@@ -49,6 +64,18 @@ export async function up(knex: Knex): Promise<void> {
       t.index(['hub_user_id'], 'ix_nivaro_hub_offboard_user')
       t.index(['person_key'], 'ix_nivaro_hub_offboard_person')
       t.index(['blocked'], 'ix_nivaro_hub_offboard_blocked')
+    })
+  }
+
+  if (!(await knex.schema.hasTable('nivaro_hub_offboard_ids'))) {
+    await knex.schema.createTable('nivaro_hub_offboard_ids', (t) => {
+      t.increments('id').primary()
+      t.integer('offboard_id').notNullable()
+      t.string('kind', 8).notNullable()
+      // An upper-cased Hub user id, a lower-cased email (≤ 320) or a lower-cased Entra oid.
+      t.string('value', 320).notNullable()
+      t.index(['kind', 'value'], 'ix_nivaro_hub_offboard_ids_value')
+      t.index(['offboard_id'], 'ix_nivaro_hub_offboard_ids_run')
     })
   }
 }

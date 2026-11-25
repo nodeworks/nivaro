@@ -34,6 +34,8 @@ export interface HubEnvStatus {
   error?: string
   /** Ids of the app's failing preflight checks (hub link only; absent when none). */
   failing?: string[]
+  /** NIVARO_ENVIRONMENT as the app's hub link reports it (0.3.215+), for the owner gate. */
+  app_environment?: string
 }
 
 /** The fields of a nivaro_hub_environments row the status read needs. */
@@ -192,16 +194,19 @@ async function readLinked(
   const body = (res.body ?? {}) as {
     version?: unknown
     preflight?: { status?: unknown; failing?: unknown }
+    app_environment?: unknown
   }
   const preflight = str(body.preflight?.status)
   const failing = failingIds(body.preflight?.failing)
+  const appEnv = str(body.app_environment)
   return {
     state: preflight === 'ok' || preflight === 'warn' ? 'ok' : 'degraded',
     version: str(body.version),
     preflight,
     checked_at: at(),
     source: 'hub-link',
-    ...(failing.length ? { failing } : {})
+    ...(failing.length ? { failing } : {}),
+    ...(appEnv ? { app_environment: appEnv.toLowerCase().slice(0, 32) } : {})
   }
 }
 

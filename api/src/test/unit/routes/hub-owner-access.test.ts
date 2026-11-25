@@ -57,10 +57,13 @@ const { up } = await import('../../../db/migrations/542_hub_tables.js')
 const { up: up543 } = await import('../../../db/migrations/543_hub_promotions.js')
 const { up: up570 } = await import('../../../db/migrations/570_hub_people_owner_policy.js')
 const { hubRoutes } = await import('../../../routes/hub.js')
+const { hubSigninAdminRoutes } = await import('../../../routes/hub-signin-admin.js')
 const auth = await import('../../../middleware/authenticate.js')
 const { OWNER_GUARDED, OWNER_UNGUARDED, isProductionEnv } = await import(
   '../../../services/hub/owner-access.js'
 )
+const { setAppRef } = await import('../../../services/io-holder.js')
+const { hubStatusKey } = await import('../../../services/hub/status.js')
 
 const OWNER = 'BBBBBBBB-0000-4000-8000-000000000002'
 const asAdmin = { 'x-user': 'AAAAAAAA-0000-4000-8000-000000000001', 'x-admin': '1' }
@@ -98,6 +101,8 @@ beforeAll(async () => {
     routes.push(r)
   })
   await app.register(hubRoutes, { prefix: '/api/hub' })
+  // The sign-in plugin is its own mount: the owner rule and the guard test cover it too (M2).
+  await app.register(hubSigninAdminRoutes, { prefix: '/api/hub/signin' })
   await app.ready()
 })
 afterAll(async () => {
@@ -159,7 +164,7 @@ beforeEach(async () => {
 })
 
 const call = (
-  method: 'GET' | 'POST' | 'PUT',
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH',
   p: string,
   headers: Record<string, string>,
   payload?: unknown
@@ -193,6 +198,113 @@ describe('production rule', () => {
       { id: 5, key: 'b', position: 0 }
     ]
     expect(tie.map((e) => isProductionEnv(e, tie))).toEqual([false, true])
+  })
+})
+
+describe('production signals (any one is enough; fail closed)', () => {
+  const env = (id: number, key: string, position: number, more: Record<string, unknown> = {}) => ({
+    id,
+    key,
+    position,
+    ...more
+  })
+
+  it('a production word in the key: prod-eu, production2, prd_eu, eu-live — not prodigy', () => {
+    const other = env(99, 'zz-last', 9)
+    for (const key of ['prod-eu', 'production2', 'prd_eu', 'eu-live', 'PROD', 'live'])
+      expect([key, isProductionEnv(env(1, key, 0), [env(1, key, 0), other])]).toEqual([key, true])
+    for (const key of ['prodigy', 'reproduce', 'staging', 'delivery', 'olive'])
+      expect([key, isProductionEnv(env(1, key, 0), [env(1, key, 0), other])]).toEqual([key, false])
+  })
+
+  it('archived environments leave the chain: archiving the last one never opens the one before', () => {
+    const chain = [env(1, 'staging', 0), env(2, 'main', 1, { status: 'archived' })]
+    expect(isProductionEnv(chain[0], chain)).toBe(true)
+    // The archived one itself counts as production too.
+    expect(isProductionEnv(chain[1], chain)).toBe(true)
+  })
+
+  it('the admin flag: true makes production, false opens a last environment, never a named one', () => {
+    const chain = [env(1, 'staging', 0, { production: true }), env(2, 'main', 1)]
+    expect(isProductionEnv(chain[0], chain)).toBe(true)
+    const opened = [env(1, 'staging', 0), env(2, 'main', 1, { production: false })]
+    expect(isProductionEnv(opened[1], opened)).toBe(false)
+    const named = [env(1, 'staging', 0), env(2, 'production', 1, { production: false })]
+    expect(isProductionEnv(named[1], named)).toBe(true)
+  })
+
+  it('the environment’s own report: NIVARO_ENVIRONMENT=production makes it production', () => {
+    const chain = [env(1, 'qa', 0, { reported: 'production' }), env(2, 'main', 1)]
+    expect(isProductionEnv(chain[0], chain)).toBe(true)
+    expect(isProductionEnv(env(1, 'qa', 0, { reported: 'staging' }), chain)).toBe(false)
+    // The report beats an admin's false.
+    expect(
+      isProductionEnv(env(1, 'qa', 0, { reported: 'production', production: false }), chain)
+    ).toBe(true)
+  })
+
+  it('everything from the first production onward: two regions, a trailing qa, a trailing archived', () => {
+    const regions = [env(1, 'staging', 0), env(2, 'prod-eu', 1), env(3, 'prod-us', 2)]
+    expect(regions.map((e) => isProductionEnv(e, regions))).toEqual([false, true, true])
+    // A qa (or dr) appended after production never opens production, nor itself.
+    const trailing = [
+      env(1, 'staging', 0),
+      env(2, 'main', 1, { production: true }),
+      env(3, 'qa', 2)
+    ]
+    expect(trailing.map((e) => isProductionEnv(e, trailing))).toEqual([false, true, true])
+    // A trailing archived environment does not move "last" off production.
+    const archived = [
+      env(1, 'staging', 0),
+      env(2, 'main', 1),
+      env(3, 'legacy', 2, { status: 'archived' })
+    ]
+    expect(archived.map((e) => isProductionEnv(e, archived))).toEqual([false, true, true])
+    expect(isProductionEnv(env(1, 'eu.prod', 0), [env(1, 'eu.prod', 0), env(2, 'z', 5)])).toBe(true)
+  })
+
+  it('route: archiving production makes staging production for owners', async () => {
+    await db('nivaro_hub_environments').where({ id: prodId }).update({ status: 'archived' })
+    const r = await promote(stagingId, asOwner)
+    expect(r.statusCode).toBe(403)
+    expect(r.json().code).toBe('PRODUCTION_ADMIN_ONLY')
+    const access = (await call('GET', `/apps/${appId}/access`, asOwner)).json().data
+    expect(access.environments.find((e: { id: number }) => e.id === stagingId)).toMatchObject({
+      production: true,
+      deploy: false
+    })
+  })
+
+  it('route: only an admin sets the flag; false opens the last environment, true closes staging', async () => {
+    const set = (envId: number, h: Record<string, string>, production: unknown) =>
+      call('PUT', `/environments/${envId}/production`, h, { production })
+    expect((await set(prodId, asOwner, false)).statusCode).toBe(403)
+    expect((await set(prodId, asAdmin, 'no')).statusCode).toBe(400)
+    expect((await set(prodId, asAdmin, false)).json()).toEqual({
+      data: { id: prodId, production: false }
+    })
+    expect((await promote(prodId, asOwner)).statusCode).toBe(202)
+    await set(stagingId, asAdmin, true)
+    expect((await promote(stagingId, asOwner)).json().code).toBe('PRODUCTION_ADMIN_ONLY')
+    await set(stagingId, asAdmin, null)
+    expect((await promote(stagingId, asOwner)).statusCode).toBe(202)
+  })
+
+  it('route: the cached hub-link report NIVARO_ENVIRONMENT=production closes staging', async () => {
+    setAppRef({
+      redis: {
+        get: async (k: string) =>
+          k === hubStatusKey(stagingId)
+            ? JSON.stringify({ state: 'ok', app_environment: 'production' })
+            : null
+      }
+    })
+    try {
+      expect((await promote(stagingId, asOwner)).json().code).toBe('PRODUCTION_ADMIN_ONLY')
+    } finally {
+      setAppRef(null)
+    }
+    expect((await promote(stagingId, asOwner)).statusCode).toBe(202)
   })
 })
 
@@ -279,24 +391,65 @@ describe('GET /apps/:id/access', () => {
     const owner = (await call('GET', `/apps/${appId}/access`, asOwner)).json().data
     expect(owner).toMatchObject({ admin: false, owner: true, owners_deploy_production: false })
     expect(owner.environments).toEqual([
-      { id: stagingId, key: 'staging', production: false, deploy: true },
-      { id: prodId, key: 'main', production: true, deploy: false }
+      {
+        id: stagingId,
+        key: 'staging',
+        production: false,
+        deploy: true,
+        production_flag: null,
+        archived: false,
+        reported: null
+      },
+      {
+        id: prodId,
+        key: 'main',
+        production: true,
+        deploy: false,
+        production_flag: null,
+        archived: false,
+        reported: null
+      }
     ])
     const admin = (await call('GET', `/apps/${appId}/access`, asAdmin)).json().data
     expect(admin.environments.every((e: { deploy: boolean }) => e.deploy)).toBe(true)
   })
 })
 
+describe('sign-in on production (M2)', () => {
+  it('an owner may not change the app’s sign-in mode or production’s client; staging is theirs', async () => {
+    const mode = await call('PATCH', `/signin/apps/${appId}/mode`, asOwner, {
+      signin_mode: 'hub'
+    })
+    expect(mode.json().code).toBe('PRODUCTION_ADMIN_ONLY')
+    for (const [method, path] of [
+      ['POST', `/signin/environments/${prodId}/client`],
+      ['PATCH', `/signin/environments/${prodId}/client`],
+      ['POST', `/signin/environments/${prodId}/client/rotate`]
+    ] as const) {
+      const r = await call(method, path, asOwner, { active: true })
+      expect([method, path, r.json().code]).toEqual([method, path, 'PRODUCTION_ADMIN_ONLY'])
+    }
+    const staging = await call('POST', `/signin/environments/${stagingId}/client`, asOwner, {})
+    expect(staging.json().code).not.toBe('PRODUCTION_ADMIN_ONLY')
+  })
+})
+
 describe('guard', () => {
-  it('every Hub write a non-admin may reach is owner-guarded or listed with a reason', () => {
-    const requireAuth = auth.requireAuth as unknown
+  it('every Hub write not behind requireAdmin is owner-guarded or listed with a reason', () => {
+    // Whatever the route authenticates with (requireAuth, authenticate + an inline check, an
+    // onRequest hook, a bearer): only a requireAdmin preHandler takes a write off this list.
+    const requireAdmin = auth.requireAdmin as unknown
     const strip = (u: string) => u.replace(/^\/api\/hub/, '')
     const pre = (r: RouteOptions) =>
       r.preHandler ? (Array.isArray(r.preHandler) ? r.preHandler : [r.preHandler]) : []
-    const reachable = routes.filter((r) => pre(r).includes(requireAuth as never))
-    const writes = reachable.filter((r) =>
-      (Array.isArray(r.method) ? r.method : [r.method]).some((x) => x !== 'GET' && x !== 'HEAD')
+    const writes = routes.filter(
+      (r) =>
+        (Array.isArray(r.method) ? r.method : [r.method]).some(
+          (x) => x !== 'GET' && x !== 'HEAD'
+        ) && !pre(r).includes(requireAdmin as never)
     )
+    // The sign-in plugin was really scanned.
+    expect(routes.some((r) => strip(r.url).startsWith('/signin/'))).toBe(true)
     const guarded = new Set(OWNER_GUARDED.map((g) => `${g.method} ${g.url}`))
     const missing = writes
       .map((r) => `${r.method} ${strip(r.url)}`)

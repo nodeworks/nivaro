@@ -43,6 +43,7 @@ import {
   startPromotion
 } from './hub-api'
 import { dangerArmed, dangerGhost, ghostButton, SectionCard } from './hub-parts'
+import { mayDeploy, useAppAccess } from './owner-access'
 
 /**
  * Promote and roll back (Hub phase 2): pick a version, read the plan in plain words, type the
@@ -1048,11 +1049,15 @@ type PanelState =
 
 export function PromotionsCard({
   envs,
-  canPromote
+  canPromote,
+  appId
 }: {
   envs: HubEnvironment[]
   canPromote: boolean
+  /** Owner self-service: no Roll back / Cancel where the caller may not deploy (production). */
+  appId?: number
 }) {
+  const access = useAppAccess(appId ?? 0, appId != null)
   const managed = envs.filter((e) => e.placement_id != null)
   if (managed.length === 0) return null
   return (
@@ -1063,7 +1068,11 @@ export function PromotionsCard({
       <div className='divide-y divide-slate-200 dark:divide-border'>
         {managed.map((env) => (
           // A shared environment's version follows its deployment: no Roll back from here.
-          <EnvPromotions key={env.id} env={env} canPromote={canPromote && env.on_shared !== true} />
+          <EnvPromotions
+            key={env.id}
+            env={env}
+            canPromote={canPromote && env.on_shared !== true && mayDeploy(access.data, env.id)}
+          />
         ))}
       </div>
     </SectionCard>

@@ -3,9 +3,19 @@ import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { idParam, isAppOwner, readApp } from '../services/hub/apps.js'
-import { isProductionEnv, ownersDeployProduction } from '../services/hub/owner-access.js'
+import {
+  appEnvironments,
+  ownersDeployProduction,
+  productionMap,
+  reportedEnvironment
+} from '../services/hub/owner-access.js'
 import { personAccess } from '../services/hub/people/access.js'
-import { isPersonKey, listPeople, readPerson } from '../services/hub/people/directory.js'
+import {
+  identityHash,
+  isPersonKey,
+  listPeople,
+  readPerson
+} from '../services/hub/people/directory.js'
 import {
   liftOffboardBlock,
   listOffboards,
@@ -23,16 +33,18 @@ import { phoneRuns, phoneSummary } from '../services/hub/phone.js'
  *   GET  /people?q=&limit=&offset=          the directory (nivaro_hub_signins, grouped per person)
  *   GET  /people/:key                       one person + their offboard runs (no app is asked)
  *   GET  /people/:key/access                every environment asked live: accounts + role there
- *   POST /people/:key/offboard {confirm}    "Offboard everywhere" (202); confirm = their email
- *                                           (or the key when the Hub knows no email)
+ *   POST /people/:key/offboard {confirm, identity_hash}   "Offboard everywhere" (202); confirm =
+ *                                           their first proven email (or the key), identity_hash =
+ *                                           the one GET /people/:key showed (409 IDENTITY_CHANGED)
  *   GET  /offboards  /offboards/:id         runs, with per-environment results
  *   POST /offboards/:id/retry               ask again what did not finish (202)
- *   POST /offboards/:id/lift                lift the Hub sign-in block (apps stay suspended)
+ *   POST /offboards/:id/lift {confirm}      lift the block + reactivate the Hub account (apps stay)
  * Keys are opaque (u:<hub user id> | k:<sign-in row id>): an email never travels in a URL.
  *
  * App owner self-service:
  *   GET  /apps/:id/access                   what the caller may do on each environment (owner/admin)
  *   PUT  /apps/:id/owner-policy {owners_deploy_production}   admin only, logged
+ *   PUT  /environments/:envId/production {production: true|false|null}   admin only, logged
  *
  * Phone app (read-only, any sign-in incl. a phone's nvd_ token; services/hub/phone.ts):
  *   GET  /mobile/summary   GET /mobile/runs?limit=
@@ -83,10 +95,10 @@ export function hubPeopleRoutes(app: FastifyInstance) {
     return {
       data: {
         ...found.person,
-        identity: {
-          emails: found.identity.emails,
-          entra: found.identity.entra.length
-        },
+        // Exactly what every app would be asked to suspend (proven only: directory.ts
+        // identityOf); the offboard binds to this hash.
+        identity: found.identity,
+        identity_hash: identityHash(found.identity),
         offboards: await listOffboards({ personKey: key, limit: 20 })
       }
     }
@@ -112,10 +124,19 @@ export function hubPeopleRoutes(app: FastifyInstance) {
     if (!isPersonKey(key)) return fail(reply, 404, 'NOT_FOUND', 'Not found')
     const found = await readPerson(key)
     if (!found) return fail(reply, 404, 'NOT_FOUND', 'Not found')
-    const expected = found.person.email ?? key
+    const expected = found.identity.emails[0] ?? key
     const confirm = body(req).confirm
     if (typeof confirm !== 'string' || confirm.trim().toLowerCase() !== expected.toLowerCase())
       return fail(reply, 400, 'CONFIRM_REQUIRED', `Type ${expected} to offboard this person`)
+    // The admin confirmed the exact emails and Entra ids shown: a change since is refused.
+    const hash = identityHash(found.identity)
+    if (body(req).identity_hash !== hash)
+      return reply.code(409).send({
+        error: 'What would be suspended changed since the page showed it — check it again.',
+        code: 'IDENTITY_CHANGED',
+        identity: found.identity,
+        identity_hash: hash
+      })
     try {
       const run = await startOffboard(
         {
@@ -160,7 +181,7 @@ export function hubPeopleRoutes(app: FastifyInstance) {
     const id = idParam((req.params as { id: string }).id)
     if (id === null) return fail(reply, 404, 'NOT_FOUND', 'Not found')
     try {
-      return { data: await liftOffboardBlock(id, userId(req)) }
+      return { data: await liftOffboardBlock(id, userId(req), body(req).confirm) }
     } catch (err) {
       return offboardRefusal(reply, err)
     }
@@ -174,27 +195,62 @@ export function hubPeopleRoutes(app: FastifyInstance) {
     const owner = await isAppOwner(id, userId(req))
     if (!admin && !owner) return fail(reply, 404, 'NOT_FOUND', 'Not found')
     const switchOn = await ownersDeployProduction(id)
-    const envs = (
-      (await db('nivaro_hub_environments')
-        .where({ app_id: id })
-        .orderBy([
-          { column: 'position', order: 'asc' },
-          { column: 'id', order: 'asc' }
-        ])
-        .select('id', 'key', 'position')) as Array<{ id: number; key: string; position: number }>
-    ).map((e) => ({ id: Number(e.id), key: String(e.key), position: Number(e.position ?? 0) }))
+    const envs = await appEnvironments(id)
+    for (const e of envs) e.reported = await reportedEnvironment(e.id, redisOf(app) as never)
+    const prod = productionMap(envs)
     return {
       data: {
         admin,
         owner,
         owners_deploy_production: switchOn,
         environments: envs.map((e) => {
-          const production = isProductionEnv(e, envs)
+          const production = prod.get(e.id) ?? true
           const deploy = admin || (owner && (!production || switchOn))
-          return { id: e.id, key: e.key, production, deploy }
+          return {
+            id: e.id,
+            key: e.key,
+            production,
+            deploy,
+            // The admin's flag (true / false / null = auto) and why production, for the page.
+            production_flag: e.production ?? null,
+            archived: String(e.status ?? '') === 'archived',
+            reported: e.reported ?? null
+          }
         })
       }
     }
+  })
+
+  // The admin's per-environment production flag (owner gate): true = production, false =
+  // explicitly not (the only way to open the last environment of a chain), null = auto.
+  app.put('/environments/:envId/production', { preHandler: requireAdmin }, async (req, reply) => {
+    const envId = idParam((req.params as { envId: string }).envId)
+    const row =
+      envId === null
+        ? undefined
+        : ((await db('nivaro_hub_environments').where({ id: envId }).first('id', 'app_id')) as
+            | { id: number; app_id: number }
+            | undefined)
+    if (!row) return fail(reply, 404, 'NOT_FOUND', 'Not found')
+    const v = body(req).production
+    if (v !== true && v !== false && v !== null)
+      return fail(reply, 400, 'BAD_PRODUCTION', 'production must be true, false or null')
+    await db('nivaro_hub_environments').where({ id: row.id }).update({ production: v })
+    await logActivity({
+      action: 'update',
+      user: userId(req),
+      collection: 'nivaro_hub_environments',
+      item: String(row.id),
+      comment:
+        v === true
+          ? 'Marked production (owner gate)'
+          : v === false
+            ? 'Marked not production (owner gate)'
+            : 'Production worked out by the Hub (owner gate)',
+      changed_fields: ['production'],
+      req
+    })
+    return { data: { id: row.id, production: v } }
   })
 
   app.put('/apps/:id/owner-policy', { preHandler: requireAdmin }, async (req, reply) => {

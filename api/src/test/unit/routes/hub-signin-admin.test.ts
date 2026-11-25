@@ -82,6 +82,7 @@ const { up: up545 } = await import('../../../db/migrations/545_hub_creations.js'
 const { up: up546 } = await import('../../../db/migrations/546_hub_stack_settings.js')
 const { up: up550 } = await import('../../../db/migrations/550_hub_oidc.js')
 const { up: up551 } = await import('../../../db/migrations/551_hub_signins.js')
+const { up: up570 } = await import('../../../db/migrations/570_hub_people_owner_policy.js')
 const { hubSigninAdminRoutes } = await import('../../../routes/hub-signin-admin.js')
 const { hubRoutes } = await import('../../../routes/hub.js')
 const { _resetHubKeysForTests } = await import('../../../services/hub/oidc/keys.js')
@@ -116,6 +117,7 @@ beforeAll(async () => {
   await up546(db)
   await up550(db)
   await up551(db)
+  await up570(db)
   await db.schema.createTable('nivaro_activity', (t) => {
     t.increments('id')
     t.string('action')
@@ -173,7 +175,10 @@ async function seed(key: string, owner?: string) {
     name: key.toUpperCase(),
     signin_mode: 'direct',
     adopted: false,
-    extensions: '[]'
+    extensions: '[]',
+    // Owners here manage production's sign-in: the app lets them (the production rule itself
+    // is hub-owner-access.test.ts).
+    owners_deploy_production: true
   })
   const [envId] = await db('nivaro_hub_environments').insert({
     app_id: appId,

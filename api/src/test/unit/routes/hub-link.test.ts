@@ -94,6 +94,8 @@ describe('GET /api/hub-link/status', () => {
     expect(typeof body.version).toBe('string')
     expect(Object.keys(body).sort()).toEqual(
       [
+        // NIVARO_ENVIRONMENT as the app reports it (the Hub owner gate's production signal).
+        'app_environment',
         'environment',
         'instance',
         'maintenance',

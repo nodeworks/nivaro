@@ -128,7 +128,7 @@ export function HubAppDetail({
         />
       ))}
       <EnvironmentsCard app={data} envs={envs} isAdmin={isAdmin} canPromote={canPromote} />
-      <PromotionsCard envs={envs} canPromote={canPromote} />
+      <PromotionsCard envs={envs} canPromote={canPromote} appId={data.id} />
       {canPromote && <HubAppSigninCard app={data} envs={envs} />}
       <DeploysCard envs={envs} />
       <OwnersCard app={data} isAdmin={isAdmin} />

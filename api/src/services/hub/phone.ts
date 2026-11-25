@@ -1,5 +1,5 @@
 import { db } from '../../db/index.js'
-import { isProductionEnv } from './owner-access.js'
+import { flagOf, productionMap } from './owner-access.js'
 import { hubStatusKey } from './status.js'
 
 /**
@@ -83,7 +83,7 @@ async function visibleApps(viewer: Viewer) {
 async function cachedStatuses(redis: StatusRedis, ids: number[]) {
   const out = new Map<
     number,
-    { state: string; version: string | null; checked_at: string | null }
+    { state: string; version: string | null; checked_at: string | null; reported: string | null }
   >()
   if (!redis?.mget || !ids.length) return out
   try {
@@ -91,11 +91,17 @@ async function cachedStatuses(redis: StatusRedis, ids: number[]) {
     raws.forEach((raw, i) => {
       if (!raw) return
       try {
-        const v = JSON.parse(raw) as { state?: unknown; version?: unknown; checked_at?: unknown }
+        const v = JSON.parse(raw) as {
+          state?: unknown
+          version?: unknown
+          checked_at?: unknown
+          app_environment?: unknown
+        }
         out.set(ids[i], {
           state: typeof v.state === 'string' ? v.state : 'unknown',
           version: typeof v.version === 'string' ? v.version : null,
-          checked_at: typeof v.checked_at === 'string' ? v.checked_at : null
+          checked_at: typeof v.checked_at === 'string' ? v.checked_at : null,
+          reported: typeof v.app_environment === 'string' ? v.app_environment : null
         })
       } catch {
         // an unreadable entry reads as unknown
@@ -114,13 +120,14 @@ export async function phoneSummary(viewer: Viewer, redis: StatusRedis) {
     ? ((await db('nivaro_hub_environments')
         .whereIn('app_id', appIds)
         .whereNot('status', 'archived')
-        .select('id', 'app_id', 'key', 'position')
+        .select('id', 'app_id', 'key', 'position', 'production')
         .orderBy('position', 'asc')
         .orderBy('id', 'asc')) as Array<{
         id: number
         app_id: number
         key: string
         position: number
+        production: unknown
       }>)
     : []
   const statuses = await cachedStatuses(
@@ -144,7 +151,15 @@ export async function phoneSummary(viewer: Viewer, redis: StatusRedis) {
   const out: PhoneApp[] = apps.map((a) => {
     const mine = envRows
       .filter((e) => Number(e.app_id) === Number(a.id))
-      .map((e) => ({ id: Number(e.id), key: String(e.key), position: Number(e.position ?? 0) }))
+      .map((e) => ({
+        id: Number(e.id),
+        key: String(e.key),
+        position: Number(e.position ?? 0),
+        production: flagOf(e.production),
+        reported: statuses.get(Number(e.id))?.reported ?? null
+      }))
+    // The server's own rule (owner-access.ts productionMap), so the phone never disagrees.
+    const prod = productionMap(mine)
     return {
       id: Number(a.id),
       key: String(a.key),
@@ -156,7 +171,7 @@ export async function phoneSummary(viewer: Viewer, redis: StatusRedis) {
         return {
           id: e.id,
           key: e.key,
-          production: isProductionEnv(e, mine),
+          production: prod.get(e.id) ?? true,
           state: s?.state ?? 'unknown',
           version: s?.version ?? null,
           checked_at: s?.checked_at ?? null

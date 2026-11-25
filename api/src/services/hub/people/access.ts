@@ -1,5 +1,5 @@
 import { db } from '../../../db/index.js'
-import { isProductionEnv } from '../owner-access.js'
+import { flagOf, isProductionEnv } from '../owner-access.js'
 import type { PersonIdentity } from './directory.js'
 import {
   callPeople,
@@ -60,17 +60,30 @@ export async function askableEnvironments(): Promise<HubEnvRef[]> {
       'e.status',
       'e.base_url',
       'e.hub_token',
-      'e.placement_id'
+      'e.placement_id',
+      'e.production'
     )) as Array<Record<string, unknown>>
   const byApp = new Map<number, Array<{ id: number; key: string; position: number }>>()
   for (const r of rows) {
     const list = byApp.get(Number(r.app_id)) ?? []
-    list.push({ id: Number(r.id), key: String(r.key), position: Number(r.position ?? 0) })
+    list.push({
+      id: Number(r.id),
+      key: String(r.key),
+      position: Number(r.position ?? 0),
+      status: String(r.status),
+      production: flagOf(r.production)
+    })
     byApp.set(Number(r.app_id), list)
   }
   return rows
     .map((r) => {
-      const env = { id: Number(r.id), key: String(r.key), position: Number(r.position ?? 0) }
+      const env = {
+        id: Number(r.id),
+        key: String(r.key),
+        position: Number(r.position ?? 0),
+        status: String(r.status),
+        production: flagOf(r.production)
+      }
       return {
         id: env.id,
         app_id: Number(r.app_id),
