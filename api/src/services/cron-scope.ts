@@ -94,6 +94,7 @@ export const CORE_CRON_SCOPES: Record<string, CronScope> = {
   'hub-rebalance-tick': 'app', // Hub rebalance runs (HUB=on only, never shared)
   'hub-release-ops': 'app', // Hub release operations: trains, schedules (HUB=on only, never shared)
   'hub-release-rollback': 'app', // Hub release operations: automatic rollback watches (HUB=on only),
+  'hub-scale-tick': 'app', // Hub scaling: the Hub's own scale runs and rules (HUB=on only, never shared)
   'hub-data-tick': 'app', // Hub data care: the Hub's own backup policies and data runs (HUB=on only, never shared)
   'hub-signins-prune': 'app', // Hub phase 7: the Hub's own sign-in rows (HUB=on only, never shared)
   'hub-ops-collect': 'app', // Hub ops: the Hub's own issue/storage rows (HUB=on only, never shared)

@@ -8,6 +8,8 @@ import {
   type StackLeftovers,
   type StackRemoveResult,
   type StackRestartResult,
+  type StackScaleChange,
+  type StackScaleResult,
   type StackSpec,
   type StackStatus
 } from './agent-types.js'
@@ -28,6 +30,7 @@ export const AGENT_TIMEOUTS = {
   stack: 10_000,
   apply: 300_000,
   restart: 30_000,
+  scale: 60_000,
   remove: 120_000
 } as const
 
@@ -323,6 +326,27 @@ export async function agentRestart(
 }
 
 /**
+ * `POST /v1/stacks/:name/scale` (60 s, agent 0.2.4) with the StackSpec the stack runs, freshly
+ * rendered like a restart's, and the roles to change (replicas and limits only). The agent builds
+ * the next spec itself and answers 409 SPEC_MISMATCH when the stack runs neither; the same
+ * request again, once applied, answers `already` and writes nothing.
+ */
+export async function agentScale(
+  driver: AgentDriver,
+  name: string,
+  spec: StackSpec,
+  roles: StackScaleChange[]
+): Promise<StackScaleResult> {
+  return (await call<StackScaleResult>(driver, {
+    what: `scale ${name}`,
+    method: 'POST',
+    path: `${stackPath(name)}/scale`,
+    body: { spec, roles },
+    timeoutMs: AGENT_TIMEOUTS.scale
+  })) as StackScaleResult
+}
+
+/**
  * `DELETE /v1/stacks/:name?confirm=<name>&app=<app>&environment=<env>` (120 s); volumes only
  * with `removeVolumes`. The agent refuses 409 STACK_OWNER_MISMATCH unless the stack's labels name
  * this app and environment, so a check-then-delete on the Hub side can never remove another
@@ -392,6 +416,10 @@ export function describeAgentError(
       return `the swarm has no stack named ${stack}`
     case 'SPEC_MISMATCH':
       return `${stack} does not run the spec the Hub has on record — the saved settings or pins changed since its last deploy; use Apply now to deploy them`
+    case 'SCALE_INVALID': {
+      const list = fieldList()
+      return `the agent refused the scale${list ? `: ${list}` : ''}`
+    }
     case 'SPEC_INVALID': {
       const list = fieldList()
       return `the agent refused the stack spec${list ? `: ${list}` : ''}`
