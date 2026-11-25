@@ -912,11 +912,13 @@ export async function applyStack(
 
 // ── restart ─────────────────────────────────────────────────────────────
 
-const specMismatch = () =>
+const specMismatch = (op: 'restart' | 'scale' = 'restart') =>
   new StackError(
     409,
     'SPEC_MISMATCH',
-    'The stack does not run this spec; apply it instead of restarting'
+    op === 'scale'
+      ? 'The stack does not run this spec; the Hub must apply it before scaling'
+      : 'The stack does not run this spec; apply it instead of restarting'
   )
 
 /**
@@ -1011,7 +1013,9 @@ export async function scaleStack(
   const names = mine.map(nameOf).sort()
   if (live.size === 1 && live.has(to))
     return { spec_hash: to, changed: [], unchanged: names, already: true }
-  if (live.size !== 1 || !live.has(from)) throw specMismatch()
+  // Every service runs `spec`, or — after swarm rolled one role of a scale back — some already
+  // carry `next`'s hash: either way only these two validated specs are in play.
+  if (![...live].every((h) => h === from || h === to)) throw specMismatch('scale')
 
   const existing = new Map<string, string>()
   for (const s of mySecrets) if (s.Spec?.Name) existing.set(s.Spec.Name, s.ID)
@@ -1019,26 +1023,26 @@ export async function scaleStack(
   for (const key of Object.keys(next.secrets).sort()) {
     const sn = secretName(name, key, next.secrets[key], cfg.hmacKey)
     const id = existing.get(sn)
-    if (!id) throw specMismatch()
+    if (!id) throw specMismatch('scale')
     secretIds[key] = { id, name: sn }
   }
   let caBundle: { id: string; name: string } | null = null
   if (cfg.caBundle) {
     const sn = caBundleSecretName(name, cfg.caBundle.sha256)
     const id = existing.get(sn)
-    if (!id) throw specMismatch()
+    if (!id) throw specMismatch('scale')
     caBundle = { id, name: sn }
   }
   const extensionPaths: Record<string, string> = {}
   for (const id of Object.keys(next.extensions).sort()) {
     const path = await existingExtension(cfg, name, id, next.extensions[id])
-    if (!path) throw specMismatch()
+    if (!path) throw specMismatch('scale')
     extensionPaths[id] = path
   }
   const rendered = render(name, next, cfg, deps, to, network, secretIds, extensionPaths, caBundle)
   const current = new Map(mine.map((s) => [nameOf(s), s]))
   if (rendered.length !== mine.length || rendered.some((svc) => !current.has(svc.Name)))
-    throw specMismatch()
+    throw specMismatch('scale')
 
   const changed: string[] = []
   const unchanged: string[] = []

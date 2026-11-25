@@ -247,6 +247,27 @@ describe('scaleStack', () => {
     )
   })
 
+  it('after swarm rolled one role back (mixed hashes), the step can be scaled back to where it was', async () => {
+    await applyStack(fake, cfg, S, spec(), deps)
+    fake.completeUpdates()
+    const next = scaledSpec(spec(), [{ role: 'web', replicas: 5, memory_mb: 4096 }])
+    await scaleStack(fake, cfg, S, spec(), next, deps)
+    // Swarm rolled web back: its labels are the spec before again, the others carry next's hash.
+    const webSvc = [...fake.services.values()].find((x) => x.Spec.Name === `${S}_web`)
+    if (webSvc) webSvc.Spec.Labels['nivaro.hub.spec-hash'] = stackHash(spec(), cfg, NODE)
+    const back = await scaleStack(fake, cfg, S, next, spec(), deps)
+    expect(back.spec_hash).toBe(stackHash(spec(), cfg, NODE))
+    for (const x of fake.services.values())
+      expect(x.Spec.Labels['nivaro.hub.spec-hash']).toBe(back.spec_hash)
+    // A third spec still never passes.
+    const other = spec({ env: { DB_HOST: 'db9.internal', NODE_ENV: 'production' } })
+    expect(
+      await codeOf(
+        scaleStack(fake, cfg, S, other, scaledSpec(other, [{ role: 'web', replicas: 2 }]), deps)
+      )
+    ).toBe('SPEC_MISMATCH')
+  })
+
   it('a stack labelled for another owner is refused before any write', async () => {
     await applyStack(fake, cfg, S, spec(), deps)
     fake.calls.length = 0
