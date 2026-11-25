@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { startAgent } from '../src/main.js'
 import {
   createStorageProbe,
   STATFS_TTL_MS,
@@ -9,6 +10,7 @@ import {
   storageOptionsFrom,
   walkTree
 } from '../src/storage.js'
+import { isNfsOpts } from '../src/volume-kind.js'
 
 const dirs: string[] = []
 afterEach(() => {
@@ -22,24 +24,65 @@ const fs1 = (over: Partial<StatfsLike> = {}): StatfsLike => ({
   bavail: 10,
   ...over
 })
+const NFS = { type: 'nfs4', o: 'addr=10.0.0.5', device: ':/exports/vols' }
+const tick = () => new Promise((r) => setTimeout(r, 0))
 
-describe('storageOptionsFrom', () => {
-  it('reads an absolute path and the nfs kind from the volume options', () => {
-    expect(storageOptionsFrom({ HUB_AGENT_STORAGE_PATH: '/mnt/vols/' }, { type: 'nfs4' })).toEqual({
-      path: '/mnt/vols/',
-      walk: true,
-      kind: 'nfs'
+describe('isNfsOpts', () => {
+  it('nfs and nfs4 only', () => {
+    expect(isNfsOpts({ type: 'NFS' })).toBe(true)
+    expect(isNfsOpts({ type: 'nfs4' })).toBe(true)
+    expect(isNfsOpts({ type: 'cifs' })).toBe(false)
+    expect(isNfsOpts({})).toBe(false)
+  })
+})
+
+describe('storageOptionsFrom: one mount setting per kind', () => {
+  it('NFS reads HUB_AGENT_VOLUME_EXPORT_MOUNT; the walk is off by default there', () => {
+    expect(storageOptionsFrom({ HUB_AGENT_VOLUME_EXPORT_MOUNT: '/export/' }, NFS)).toEqual({
+      ok: true,
+      value: { path: '/export/', walk: false, kind: 'nfs' }
     })
   })
-  it('refuses a relative path or one with ..', () => {
-    expect(storageOptionsFrom({ HUB_AGENT_STORAGE_PATH: 'vols' }).path).toBeNull()
-    expect(storageOptionsFrom({ HUB_AGENT_STORAGE_PATH: '/mnt/../etc' }).path).toBeNull()
-    expect(storageOptionsFrom({}).path).toBeNull()
+  it('NFS refuses HUB_AGENT_STORAGE_PATH (two settings for one mount)', () => {
+    expect(storageOptionsFrom({ HUB_AGENT_STORAGE_PATH: '/x' }, NFS)).toEqual({
+      ok: false,
+      code: 'STORAGE_PATH_BAD'
+    })
   })
-  it('HUB_AGENT_STORAGE_WALK=off skips the tree walk; local by default', () => {
-    const o = storageOptionsFrom({ HUB_AGENT_STORAGE_PATH: '/v', HUB_AGENT_STORAGE_WALK: 'off' })
-    expect(o.walk).toBe(false)
-    expect(o.kind).toBe('local')
+  it('local reads HUB_AGENT_STORAGE_PATH; the walk is on by default', () => {
+    expect(storageOptionsFrom({ HUB_AGENT_STORAGE_PATH: '/var/vols' })).toEqual({
+      ok: true,
+      value: { path: '/var/vols', walk: true, kind: 'local' }
+    })
+    expect(storageOptionsFrom({}).ok).toBe(true)
+  })
+  it('a relative path, a .. segment or a bad walk word refuses', () => {
+    expect(storageOptionsFrom({ HUB_AGENT_STORAGE_PATH: 'vols' })).toMatchObject({ ok: false })
+    expect(storageOptionsFrom({ HUB_AGENT_STORAGE_PATH: '/a/../etc' })).toMatchObject({
+      ok: false
+    })
+    expect(storageOptionsFrom({ HUB_AGENT_VOLUME_EXPORT_MOUNT: 'export' }, NFS)).toMatchObject({
+      ok: false,
+      code: 'STORAGE_PATH_BAD'
+    })
+    expect(storageOptionsFrom({ HUB_AGENT_STORAGE_WALK: 'yes' })).toEqual({
+      ok: false,
+      code: 'STORAGE_WALK_BAD'
+    })
+  })
+  it('the agent refuses to start on a bad setting, with its code only', async () => {
+    const r = await startAgent({
+      env: {
+        HUB_AGENT_TOKEN_FILE: '/t',
+        HUB_AGENT_EDGE: 'publish',
+        HUB_AGENT_PUBLISH_PORTS: '3110-3119',
+        HUB_AGENT_LISTEN: '127.0.0.1:0',
+        HUB_AGENT_STORAGE_PATH: 'relative/path'
+      },
+      readFile: () => 'Server-Token-0123456789-ABCDEFGHIJ-xyz',
+      log: () => {}
+    })
+    expect(r).toEqual({ ok: false, code: 'STORAGE_PATH_BAD' })
   })
 })
 
@@ -55,18 +98,18 @@ describe('createStorageProbe', () => {
         }
       }
     )
-    const r = await p.report()
-    expect(r).toMatchObject({ configured: false, state: 'not_configured', used_pct: null })
+    expect(await p.report()).toMatchObject({ configured: false, state: 'not_configured' })
     expect(called).toBe(0)
   })
 
-  it('statfs figures: used against used + available, like df', async () => {
+  it('never waits: the first read is pending, the next one has the figures', async () => {
     const p = createStorageProbe(
       { path: '/v', walk: false, kind: 'nfs' },
       { statfs: async () => fs1() }
     )
-    const r = await p.report()
-    expect(r).toMatchObject({
+    expect((await p.report()).state).toBe('pending')
+    await tick()
+    expect(await p.report()).toMatchObject({
       configured: true,
       kind: 'nfs',
       state: 'ok',
@@ -78,7 +121,7 @@ describe('createStorageProbe', () => {
     })
   })
 
-  it('caches statfs for its TTL', async () => {
+  it('refreshes in the background after its TTL, answering the last reading meanwhile', async () => {
     let t = 0
     let calls = 0
     const p = createStorageProbe(
@@ -87,33 +130,49 @@ describe('createStorageProbe', () => {
         now: () => t,
         statfs: async () => {
           calls++
-          return fs1()
+          return fs1({ bavail: calls * 10 })
         }
       }
     )
     await p.report()
+    await tick()
     await p.report()
     expect(calls).toBe(1)
     t += STATFS_TTL_MS + 1
-    await p.report()
+    expect((await p.report()).free_bytes).toBe(10_000)
+    await tick()
     expect(calls).toBe(2)
+    expect((await p.report()).free_bytes).toBe(20_000)
   })
 
-  it('a hung statfs reports timeout and never stacks a second call', async () => {
+  it('a hung statfs: the health call answers at once, timeout with the last good figures, one call', async () => {
+    let t = 0
     let calls = 0
+    let hang = false
     const p = createStorageProbe(
       { path: '/v', walk: false, kind: 'nfs' },
       {
-        statfsTimeoutMs: 10,
+        now: () => t,
+        statfsTimeoutMs: 5_000,
         statfs: () => {
           calls++
-          return new Promise<StatfsLike>(() => {})
+          return hang ? new Promise<StatfsLike>(() => {}) : Promise.resolve(fs1())
         }
       }
     )
-    expect((await p.report()).state).toBe('timeout')
-    expect((await p.report()).state).toBe('timeout')
-    expect(calls).toBe(1)
+    await p.report()
+    await tick()
+    hang = true
+    t += STATFS_TTL_MS + 1
+    const started = Date.now()
+    await p.report()
+    t += 6_000
+    const r = await p.report()
+    expect(Date.now() - started).toBeLessThan(500)
+    expect(r).toMatchObject({ state: 'timeout', used_bytes: 80_000 })
+    t += STATFS_TTL_MS
+    await p.report()
+    expect(calls).toBe(2)
   })
 
   it('an unreadable path is a fixed word, never the error text', async () => {
@@ -125,12 +184,14 @@ describe('createStorageProbe', () => {
         }
       }
     )
+    await p.report()
+    await tick()
     const r = await p.report()
     expect(r.state).toBe('unreadable')
     expect(JSON.stringify(r)).not.toContain('secret')
   })
 
-  it('walks the tree in the background and reports it on the next read', async () => {
+  it('walks the tree in the background and reports it on a later read', async () => {
     let release: (() => void) | undefined
     const p = createStorageProbe(
       { path: '/v', walk: true, kind: 'local' },
@@ -142,9 +203,11 @@ describe('createStorageProbe', () => {
           })
       }
     )
+    await p.report()
+    await tick()
     expect((await p.report()).tree).toBeNull()
     release?.()
-    await new Promise((r) => setTimeout(r, 0))
+    await tick()
     expect((await p.report()).tree).toMatchObject({ bytes: 42, files: 3, complete: true })
   })
 })
