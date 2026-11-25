@@ -220,7 +220,14 @@ function SecretRow({
             {item.label}
           </p>
           <p className='m-0 mt-0.5 text-[11px] text-slate-500 dark:text-muted-foreground'>
-            {item.kind_label} · fingerprint <span className='font-mono'>{item.fingerprint}</span>
+            {item.kind_label} ·{' '}
+            {item.sealed ? (
+              <>
+                fingerprint <span className='font-mono'>{item.fingerprint}</span>
+              </>
+            ) : (
+              <span className='text-amber-700 dark:text-amber-400'>stored unsealed</span>
+            )}
             {item.age_days != null ? ` · ${item.age_days} days old` : ''}
             {item.rotated_at
               ? ` · rotated ${formatDate(item.rotated_at)}${item.rotated_via === 'detected' ? ' (seen)' : ''}`

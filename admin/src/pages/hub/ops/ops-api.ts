@@ -104,6 +104,8 @@ export interface SecretItem {
   kind_label: string
   label: string
   fingerprint: string
+  /** False for a value stored unsealed (no fingerprint shown). */
+  sealed: boolean
   path: string
   rotate: RotateMode
   helper_ready: boolean
@@ -224,10 +226,8 @@ export const checkSecretNow = (ref: string) =>
  * shows one (a deployment token, a sign-in client secret), else null.
  */
 export async function rotateThroughRoute(item: SecretItem): Promise<string | null> {
-  if (item.kind === 'deployment_token' && item.shared_id != null) {
-    const r = await api.post(`/hub/shared/${item.shared_id}/token`, {})
-    return (r.data?.data?.token as string | undefined) ?? null
-  }
+  // A shared deployment's token is rotated on its own page (it shows the settings block and the
+  // grace deadline with the new token), so it never comes here.
   if (item.kind === 'oidc_client_secret' && item.env_id != null) {
     const r = await api.post(`/hub/signin/environments/${item.env_id}/client/rotate`, {})
     return (r.data?.data?.client_secret as string | undefined) ?? null
@@ -260,7 +260,9 @@ export function usedPct(h: Pick<OpsHealth, 'used_bytes' | 'free_bytes'>): number
 
 export const STORAGE_STATE_COPY: Record<string, string> = {
   ok: 'Read',
-  not_configured: 'Not set up on the agent (HUB_AGENT_STORAGE_PATH)',
+  pending: 'The agent is reading it now',
+  not_configured:
+    'Not set up on the agent (HUB_AGENT_VOLUME_EXPORT_MOUNT for NFS, HUB_AGENT_STORAGE_PATH for local volumes)',
   unreadable: 'The agent cannot read its storage path',
   timeout: 'The storage did not answer (a hung NFS mount?)',
   agent_too_old: 'The agent is too old to report storage: update the Hub agent',

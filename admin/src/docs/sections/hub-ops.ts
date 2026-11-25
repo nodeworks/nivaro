@@ -15,9 +15,10 @@ export const hubIssuesDocs: DocSection = {
     {
       type: 'ul',
       items: [
-        'Every 15 minutes (cron `hub-ops-collect`, Hub only) the Hub asks each environment for its groups of the last 30 days: a dedicated app through `GET /api/hub-link/ops/issues` (bearer = its hub token), an app on a shared deployment through `GET /api/hub-deployment/ops/apps/<app>/issues` (the deployment link). Administrators can also press Read the apps now.',
+        'Every 15 minutes (cron `hub-ops-collect`, Hub only; one run at a time across processes) the Hub asks each environment for its groups of the last 30 days: a dedicated app through `GET /api/hub-link/ops/issues` (bearer = its hub token), an app on a shared deployment through `GET /api/hub-deployment/ops/apps/<app>/issues` (the deployment link). Administrators can also press Read the apps now.',
         'Only server errors and front-end crashes are sent — issues people file by hand are left out, their titles are free text.',
-        'Per group: a signature, a scrubbed title (secrets, emails, quoted values and long numbers removed, again on the Hub), severity, status, hits, how many people hit it (a count, never who), the release, the screen pattern of a crash, first and last seen, and the issue id in that app. Never a stack, a request, a record value or a person.',
+        'Per group (one per signature per app; rows of one crash family across releases fold): a signature, the message as a template, severity, status, hits, how many different people hit it (a count, never who), the release, the screen pattern of a crash, first and last seen, and the issue id in that app. Never a stack, a request, a record value or a person.',
+        'The template is the message with its literals replaced, on the app and again on the Hub: secrets, emails, GUIDs and long opaque strings; quoted values that are not lower-case code words (`dbo.users` stays, `Jane` goes); a parenthesised list that is not code, such as SQL Server’s "duplicate key value is (Smith, Jane)"; a value with a digit after `=` or `:`; digit runs of 4 or more; two or more Capitalised words in a row (a name).',
         'An app that cannot be read keeps its last reading; the tab names it and why (no hub link, refused token, an app older than 0.3.215, not answering).'
       ]
     },
@@ -59,12 +60,12 @@ export const hubSecretsDocs: DocSection = {
       rows: [
         [
           'Hub token (per environment)',
-          'Docker environments: here — a new token, delivered by Apply now (typed environment key to confirm; the old token is put back if Apply now cannot start). Others: set HUB_TOKEN on the app, then type it on the environment.',
+          'Docker environments: here — a new token, delivered by Apply now (typed environment key to confirm). Others: set HUB_TOKEN on the app, then type it on the environment.',
           '180 days'
         ],
         [
           'Shared deployment token',
-          'Here, through the shared deployment’s rotate (the old token works 24 h more)',
+          'On the shared deployment’s page (it shows the settings block and the 24 h grace with the new token)',
           '180 days'
         ],
         [
@@ -82,15 +83,25 @@ export const hubSecretsDocs: DocSection = {
         ['App encryption key', 'Never (it would mean re-encrypting the app’s data)', 'Never']
       ]
     },
+    { type: 'h2', id: 'hub-secrets-hub-token', text: 'Rotating a hub token here' },
+    {
+      type: 'ul',
+      items: [
+        'Refused while a move is open, while a promotion or Apply now holds the environment, or while a deploy of it is planned or running.',
+        'The new token is written under the environment’s promotion lock, only if the token is still the one read (else ROTATE_RACED), and recorded as your rotation.',
+        'The old token stays valid for 24 hours: the Hub falls back to it when the app refuses the new one, and accepts it from the app, until the app runs the new token. The check after the rotation proves the new token and ends the grace early.',
+        'If Apply now cannot start, the old token is put back — unless a deploy of the environment started meanwhile (it may carry the new one) or the token changed again; then the new one is kept and the grace covers the gap. Both outcomes are logged.'
+      ]
+    },
     { type: 'h2', id: 'hub-secrets-schedules', text: 'Schedules and reminders' },
     {
       type: 'p',
-      text: 'Each kind has a schedule — rotate every N days, remind N days before — set under Rotation schedules. The due date counts from the last rotation the Hub saw, or from when it first saw the secret. Every 15 minutes (cron `hub-secrets`) the Hub fingerprints everything again: a changed fingerprint is a rotation, wherever it was made. Administrators get one notice listing what is due soon or overdue, once per due date.'
+      text: 'Each kind has a schedule — rotate every N days, remind N days before — set under Rotation schedules. The due date counts from the last rotation the Hub saw, or from when it first saw the secret. Every 15 minutes (cron `hub-secrets`) the Hub fingerprints everything again: a changed fingerprint is a rotation, wherever it was made (recorded once, however many scans see it). A value stored unsealed is shown as such, without a fingerprint. Administrators get one notice listing what is due soon or overdue, once per due date.'
     },
     { type: 'h2', id: 'hub-secrets-checks', text: 'The check after a rotation' },
     {
       type: 'p',
-      text: 'About 5 minutes after a rotation the Hub checks that things still work: the app answers the Hub over its link (hub token, client secret, stack secrets — a hub token waits for its Apply now, up to an hour), the shared deployment answers with the new token, the Docker agent accepts its token. A failed check tells the administrators. Check now runs it at once.'
+      text: 'About 5 minutes after a rotation the Hub checks that the NEW secret works, never the old one’s grace: the app answers the Hub over its link with the current token only (hub token, client secret, stack secrets — a hub token waits for its Apply now, up to an hour), the shared deployment answers the current token only (its previous token is not tried), the Docker agent accepts its token. A failed check tells the administrators. Check now runs it at once.'
     }
   ]
 }
@@ -107,15 +118,15 @@ export const hubStorageDocs: DocSection = {
     { type: 'h2', id: 'hub-storage-agent', text: 'On the Hub agent' },
     {
       type: 'p',
-      text: 'Mount the storage the stacks’ volumes live on into the agent, read-only — the NFS export root, or `/var/lib/docker/volumes` for local volumes — and set `HUB_AGENT_STORAGE_PATH` to where the agent sees it. The agent then reports in `GET /v1/health` `storage`: total, free and used bytes (statfs), and the bytes and file count under the path (walked in the background every 15 minutes, at most 2 million entries or 2 minutes; past that the figures are a floor). `HUB_AGENT_STORAGE_WALK=off` skips the walk. A hung NFS mount reads as `timeout`, never a stuck agent. The agent only reads: no volume, file or folder is created or changed.'
+      text: 'Mount the storage the stacks’ volumes live on into the agent, read-only. One setting per kind: with NFS volumes, `HUB_AGENT_VOLUME_EXPORT_MOUNT` (where the agent sees the export root; `HUB_AGENT_STORAGE_PATH` is refused there); with local volumes, `HUB_AGENT_STORAGE_PATH` (where it sees `/var/lib/docker/volumes`). A bad value stops the agent at start (`STORAGE_PATH_BAD`). The agent then reports in `GET /v1/health` `storage`: total, free and used bytes (statfs), and the bytes and file count under the path (walked in the background every 15 minutes, at most 2 million entries or 2 minutes; past that the figures are a floor). The walk is off by default on NFS and on for local volumes; `HUB_AGENT_STORAGE_WALK=on|off` decides. The health call never waits on the storage: it answers the last reading and refreshes it behind; a hung NFS mount reads as `timeout` with the last good figures. The agent only reads: no volume, file or folder is created or changed.'
     },
     { type: 'h2', id: 'hub-storage-warnings', text: 'Warnings' },
     {
       type: 'ul',
       items: [
         'At 80 % used the driver is Filling up, at 90 % Almost full.',
-        'When a driver’s level rises, the Hub administrators and the owners of every app on that driver (dedicated stacks and apps on a shared deployment that runs on it) get one notice for that level. Back under 80 % arms the next one.',
-        'Without `HUB_AGENT_STORAGE_PATH`, or on an older agent, the card says so instead of guessing.'
+        'When a driver’s level rises, the Hub administrators get one notice for that level naming the driver; the owners of every app on that driver (dedicated stacks and apps on a shared deployment that runs on it) get one that does not name it. Back under 80 % arms the next one.',
+        'Without the mount setting, or on an older agent, the card says so instead of guessing.'
       ]
     },
     { type: 'h2', id: 'hub-storage-files', text: 'Files per environment' },

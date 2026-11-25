@@ -28,6 +28,7 @@ const item = (over: Record<string, unknown>) => ({
   kind_label: 'Hub token',
   label: 'efp / prod — hub token',
   fingerprint: 'abcdef012345',
+  sealed: true,
   path: '/hub?app=1',
   rotate: 'helper',
   helper_ready: true,
@@ -48,12 +49,12 @@ const item = (over: Record<string, unknown>) => ({
 
 const kinds = {
   hub_token: { label: 'Hub token', every_days: 180, remind_days: 14, rotate: 'helper', how: 'x' },
-  deployment_token: {
-    label: 'Shared deployment token',
-    every_days: 180,
-    remind_days: 14,
+  oidc_client_secret: {
+    label: 'Sign-in client secret',
+    every_days: 365,
+    remind_days: 30,
     rotate: 'route',
-    how: 'Rotate on the shared deployment.'
+    how: 'Rotate on Sign-in.'
   }
 }
 
@@ -64,24 +65,21 @@ function wire() {
         items: [
           item({}),
           item({
-            ref: 'deployment_token:2',
-            kind: 'deployment_token',
-            kind_label: 'Shared deployment token',
-            label: 'shared-a — deployment token',
+            ref: 'oidc_client_secret:3',
+            kind: 'oidc_client_secret',
+            kind_label: 'Sign-in client secret',
+            label: 'efp / prod — sign-in client secret',
             rotate: 'route',
             helper_ready: false,
-            env_id: null,
-            env_key: null,
-            shared_id: 2,
             due: 'ok'
           })
         ],
         policies: {
           hub_token: { kind: 'hub_token', every_days: 180, remind_days: 14, saved: false },
-          deployment_token: {
-            kind: 'deployment_token',
-            every_days: 180,
-            remind_days: 14,
+          oidc_client_secret: {
+            kind: 'oidc_client_secret',
+            every_days: 365,
+            remind_days: 30,
             saved: false
           }
         },
@@ -90,7 +88,8 @@ function wire() {
     }
   }))
   h.post.mockImplementation(async (url: string) => {
-    if (url === '/hub/shared/2/token') return { data: { data: { token: 'NEW-DEPLOY-TOKEN' } } }
+    if (url === '/hub/signin/environments/3/client/rotate')
+      return { data: { data: { client_secret: 'NEW-CLIENT-SECRET' } } }
     return { data: { data: { rotated: true } } }
   })
 }
@@ -129,6 +128,20 @@ describe('HubSecrets', () => {
     expect(screen.getAllByText('abcdef012345')).toHaveLength(2)
   })
 
+  it('a value stored unsealed shows no fingerprint', async () => {
+    h.get.mockImplementation(async () => ({
+      data: {
+        data: {
+          items: [item({ sealed: false, fingerprint: '' })],
+          policies: {},
+          kinds
+        }
+      }
+    }))
+    mount()
+    expect(await screen.findByText('stored unsealed')).toBeTruthy()
+  })
+
   it('a hub token rotates only after the environment key is typed', async () => {
     wire()
     mount()
@@ -149,15 +162,15 @@ describe('HubSecrets', () => {
     )
   })
 
-  it('a route-rotated token is shown once, recorded, and gone after Done', async () => {
+  it('a route-rotated secret is shown once, recorded, and gone after Done', async () => {
     wire()
     mount()
-    await screen.findByText('shared-a — deployment token')
+    await screen.findByText('efp / prod — sign-in client secret')
     fireEvent.click(screen.getAllByRole('button', { name: /Rotate…/ })[1])
     fireEvent.click(screen.getByRole('button', { name: 'Rotate now' }))
-    expect(await screen.findByText('NEW-DEPLOY-TOKEN')).toBeTruthy()
-    expect(h.post).toHaveBeenCalledWith('/hub/secrets/rotated', { ref: 'deployment_token:2' })
+    expect(await screen.findByText('NEW-CLIENT-SECRET')).toBeTruthy()
+    expect(h.post).toHaveBeenCalledWith('/hub/secrets/rotated', { ref: 'oidc_client_secret:3' })
     fireEvent.click(screen.getByRole('button', { name: 'Done' }))
-    expect(screen.queryByText('NEW-DEPLOY-TOKEN')).toBeNull()
+    expect(screen.queryByText('NEW-CLIENT-SECRET')).toBeNull()
   })
 })
