@@ -516,6 +516,10 @@ export const hubMovesDocs: DocSection = {
           '`check`, `maintenance_on`, `wait_idle`, `deploy_target`, `target_ready`, `files_full`, `route`, `verify`, `release`, `retire_source`, `done`'
         ],
         [
+          '`between_stacks`',
+          'The same as `to_dedicated`: a Docker stack onto another stack of its own, usually on another host (see Hosts, costs and other Hubs). The source is driven over its hub link, as in `to_shared`.'
+        ],
+        [
           'A SQLite app, into shared',
           '`check`, `place_on_target`, `maintenance_on`, `wait_idle`, `db_copy`, `files_full`, `target_ready`, `route`, `verify`, `release`, `retire_source`, `done` (no warm copy: the target has no rows until its database is there)'
         ],
