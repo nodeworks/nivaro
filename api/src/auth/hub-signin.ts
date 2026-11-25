@@ -78,8 +78,11 @@ export class HubSigninError extends Error {
 const AVAILABILITY_ERRORS = new Set(['server_error', 'temporarily_unavailable'])
 
 // ─── Discovery (5 min per issuer + client) ───────────────────────────────────
+// Keyed by issuer + client id + a tag of the secret: on a Hub shared deployment every app has its
+// own client, so each app has its own entry (and a rotated secret a new one).
 
 const DISCOVERY_TTL_MS = 5 * 60_000
+const DISCOVERY_MAX = 512
 /** openid-client's per-request budget for discovery and the token exchange (seconds). */
 const HUB_REQUEST_TIMEOUT_S = 5
 let hubRequestTimeoutS = HUB_REQUEST_TIMEOUT_S
@@ -109,6 +112,7 @@ async function hubDiscovery(cfg: HubSigninConfig): Promise<oidc.Configuration> {
   if (!jwks || new URL(jwks).origin !== cfg.hubUrl) {
     throw new Error('The Hub discovery document names keys on another origin.')
   }
+  if (discoveries.size >= DISCOVERY_MAX && !discoveries.has(key)) discoveries.clear()
   discoveries.set(key, { at: Date.now(), conf })
   return conf
 }

@@ -1,3 +1,4 @@
+import { appBox } from '../app-state.js'
 import type { HubSigninConfig } from './config.js'
 
 /**
@@ -15,6 +16,10 @@ import type { HubSigninConfig } from './config.js'
  * hubProbeReason(). Remembered in-process per origin: up 15 s, down 30 s. A Hub round trip that
  * failed for availability (discovery, token exchange unreachable, Hub server_error) calls
  * noteHubSigninFailed(): down for 60 s whatever the probe says. Concurrent askers share one probe.
+ *
+ * On a Hub shared deployment every app has its own client, so the remembered answers (keyed by
+ * Hub + client + origin) are per app, and so is the 60 s "down" after a failed round trip (an
+ * appBox): one app's failure never sends the other apps' people to direct sign-in.
  */
 
 export const PROBE_TIMEOUT_MS = 1_500
@@ -27,8 +32,9 @@ type FetchImpl = (url: string, init: RequestInit) => Promise<Response>
 
 /** Remembered answers per Hub + client + origin in use (origins come from the allow list). */
 const memo = new Map<string, { up: boolean; until: number }>()
-const MEMO_MAX = 64
-let failedUntil = 0
+const MEMO_MAX = 512
+/** Per app: a Hub round trip failed for availability, so the Hub is down until this time. */
+const failedUntil = appBox(() => 0)
 const inflight = new Map<string, Promise<boolean>>()
 
 function keyOf(cfg: HubSigninConfig, origin?: string): string {
@@ -123,7 +129,7 @@ export async function hubSigninUp(
   deps: { origin?: string; fetchImpl?: FetchImpl; now?: () => number } = {}
 ): Promise<boolean> {
   const now = deps.now ?? Date.now
-  if (now() < failedUntil) return false
+  if (now() < failedUntil.value) return false
   const key = keyOf(cfg, deps.origin)
   const hit = memo.get(key)
   if (hit && now() < hit.until) return hit.up
@@ -140,15 +146,21 @@ export async function hubSigninUp(
   return p
 }
 
-/** A Hub round trip failed for availability: treat the Hub as down for 60 s. */
-export function noteHubSigninFailed(now: number = Date.now()): void {
-  failedUntil = now + FAILED_MS
-  memo.clear()
+/** A Hub round trip failed for availability: treat the Hub as down for 60 s (for this app). With
+ *  `cfg`, only that client's remembered answers are dropped; without, every one. */
+export function noteHubSigninFailed(now: number = Date.now(), cfg?: HubSigninConfig): void {
+  failedUntil.value = now + FAILED_MS
+  if (!cfg) {
+    memo.clear()
+    return
+  }
+  const prefix = `${cfg.hubUrl}|${cfg.clientId}|`
+  for (const k of [...memo.keys()]) if (k.startsWith(prefix)) memo.delete(k)
 }
 
 export function _resetHubProbeForTests(): void {
   lastReason.clear()
   memo.clear()
-  failedUntil = 0
+  failedUntil.reset()
   inflight.clear()
 }

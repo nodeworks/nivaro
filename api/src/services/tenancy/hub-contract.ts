@@ -31,6 +31,10 @@ export interface HubTenantWire {
    *  (`bad encryption key`): sealing its values with no key or another key is worse than not
    *  serving it. */
   encryption_key?: string
+  /** Optional: the app's Hub link (sign-in through the Hub, the app switcher) as JSON sealed with
+   *  the app's own key (tenancy/app-sealed.ts, opened by tenancy/app-hub-links.ts). A value that
+   *  is not a sealed text, or is over 8 KB, is ignored (the tenant stays and signs in directly). */
+  hub_link?: string
 }
 
 /** The label the deployment link bearer is derived with (ruling R7). */
@@ -115,6 +119,14 @@ function wireOrigin(raw: unknown): string | undefined {
   }
 }
 
+/** A sealed hub link as listed, or undefined (absent, not a sealed text, too long). Like the
+ *  origin, a bad one drops the field only, never the tenant. */
+function wireHubLink(raw: unknown): string | undefined {
+  return typeof raw === 'string' && raw.startsWith('enc:v1:') && raw.length <= 8192
+    ? raw
+    : undefined
+}
+
 /** One wire tenant as a TenantRecord, or why this deployment cannot serve it. */
 function toRecord(t: unknown): TenantRecord | string {
   if (!isObj(t)) return 'not an object'
@@ -145,6 +157,7 @@ function toRecord(t: unknown): TenantRecord | string {
   if (hosts.length === 0) return 'no hostnames'
   const ports = wirePorts(t)
   const origin = wireOrigin(t.origin)
+  const hubLink = wireHubLink(t.hub_link)
   return {
     id: t.id,
     slug: t.app_key,
@@ -156,7 +169,8 @@ function toRecord(t: unknown): TenantRecord | string {
     hostnames: hosts,
     ...(Object.keys(ports).length ? { originPorts: ports } : {}),
     ...(origin ? { origin } : {}),
-    ...(encryptionKey ? { encryptionKey } : {})
+    ...(encryptionKey ? { encryptionKey } : {}),
+    ...(hubLink ? { hubLink } : {})
   }
 }
 

@@ -418,6 +418,27 @@ describe('gatherMovePlanInput — to_shared from a Docker stack', () => {
     expect(glInput.source.extension_pins).toBeNull()
   })
 
+  it('reads whether the environment has an active Hub sign-in client (0.3.215)', async () => {
+    const sharedId = await newShared()
+    const placement = await dockerPlacement('shop-client')
+    const e = await newEnv({ placement_id: placement, db_ref: `hub-db:${await newDb()}` })
+    const read = async () =>
+      (await Gather.gatherMovePlanInput(e.id, { kind: 'shared', shared_id: sharedId }, deps())).env
+        .hub_client
+    expect(await read()).toBe(false)
+    await db('nivaro_hub_oidc_clients').insert({
+      environment_id: e.id,
+      client_id: `hubc_${'c'.repeat(24)}`,
+      client_secret: 'sealed-elsewhere',
+      active: true,
+      created_at: new Date(),
+      updated_at: new Date()
+    })
+    expect(await read()).toBe(true)
+    await db('nivaro_hub_oidc_clients').where({ environment_id: e.id }).update({ active: false })
+    expect(await read()).toBe(false)
+  })
+
   it('no hub token → NOT_HUB_LINKED (the link is never called)', async () => {
     const sharedId = await newShared()
     const placement = await dockerPlacement('shop-a')

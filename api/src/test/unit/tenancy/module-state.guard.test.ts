@@ -60,7 +60,10 @@ const TM_ACTIONS =
   'Traffic Map breakers / timed rules are deployment operator actions; their Redis sync never starts on a multi-tenant deployment'
 const CACHE_CFG =
   'stored cache config is never read on a multi-tenant deployment (env + defaults only)'
-const OFF_HUBSIGNIN = 'Hub sign-in is off on any multi-tenant deployment (hub-signin/config.ts)'
+const HUBSIGNIN_PER_CLIENT =
+  "keyed by the Hub + the app's own client id (each app on a shared deployment has its own client from the tenant list; never in Nivaro Cloud)"
+const HUBSIGNIN_PUBLIC =
+  "public signing keys by key-set URL (the Hub's, the deployment's own Microsoft tenant): no app data"
 const OFF_TRACKERS =
   'issue trackers are always off on a multi-tenant deployment (trackers/feature.ts)'
 const OFF_PERMCACHE =
@@ -92,9 +95,10 @@ const SHARED: Record<string, string> = {
   'services/event-journal.ts :: replayStats': DIAG,
   'services/related-announce.ts :: stats': DIAG,
   'services/permission-cache.ts :: entries': OFF_PERMCACHE,
-  'auth/hub-signin.ts :: discoveries': OFF_HUBSIGNIN,
-  'auth/hub-signin.ts :: hubRequestTimeoutS': OFF_HUBSIGNIN,
-  'auth/hub-signin.ts :: keySets': OFF_HUBSIGNIN,
+  'auth/hub-signin.ts :: discoveries': HUBSIGNIN_PER_CLIENT,
+  'auth/hub-signin.ts :: hubRequestTimeoutS':
+    'the Hub request timeout in seconds: a constant only tests change (no app data)',
+  'auth/hub-signin.ts :: keySets': HUBSIGNIN_PUBLIC,
   'auth/login-limits.ts :: lastFailOpenWarn': DIAG,
   'auth/oidc.ts :: _dynConfigs':
     "discovery metadata keyed by provider row id but every hit is checked against that row's issuer + client id + secret (sig) before use: an app never gets discovery for another app's provider",
@@ -616,11 +620,11 @@ const SHARED: Record<string, string> = {
   'services/hub-link/retire.ts :: state': RETIRE,
   'services/hub-link/retire.ts :: timer': RETIRE,
   'services/hub-link/retire.ts :: watched': RETIRE,
-  'services/hub-signin/link-client.ts :: linkDownUntil': OFF_HUBSIGNIN,
-  'services/hub-signin/probe.ts :: failedUntil': OFF_HUBSIGNIN,
-  'services/hub-signin/probe.ts :: inflight': OFF_HUBSIGNIN,
-  'services/hub-signin/probe.ts :: lastReason': OFF_HUBSIGNIN,
-  'services/hub-signin/probe.ts :: memo': OFF_HUBSIGNIN,
+  'services/hub-signin/link-client.ts :: linkDownUntil':
+    "keyed by a tag of the app's own hub token (each app on a shared deployment has its own, from the tenant list)",
+  'services/hub-signin/probe.ts :: inflight': HUBSIGNIN_PER_CLIENT,
+  'services/hub-signin/probe.ts :: lastReason': HUBSIGNIN_PER_CLIENT,
+  'services/hub-signin/probe.ts :: memo': HUBSIGNIN_PER_CLIENT,
   'services/hub/create/run.ts :: launched': HUB_ONLY,
   'services/hub/create/run.ts :: live': HUB_ONLY,
   'services/hub/create/steps.ts :: syncsInFlight': HUB_ONLY,
@@ -955,6 +959,8 @@ const SHARED: Record<string, string> = {
   'services/tenancy/app-lifecycle.ts :: readyHooks': REGISTRY,
   'services/tenancy/app-keys.ts :: keys':
     'Task 14: app keys by tenant id (the map is keyed by the app)',
+  'services/tenancy/app-hub-links.ts :: links':
+    "each app's Hub link (sign-in client, hub token) by tenant id (the map is keyed by the app)",
   'services/tenancy/app-migrations.ts :: follower':
     "the realtime process's re-read loop over every app's stored state (a process mode; the states it writes are keyed by tenant id)",
   'services/tenancy/app-migrations.ts :: gateOn':

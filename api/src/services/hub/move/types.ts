@@ -243,6 +243,8 @@ export interface MovePlanInput {
     id: number
     key: string
     hub_linked: boolean
+    /** The environment has an active sign-in client at the Hub (absent = not read). */
+    hub_client?: boolean
     version_pin: string | null
     /** E2E B3: the origin of the environment's public address (scheme + port kept). */
     public_origin?: string | null
