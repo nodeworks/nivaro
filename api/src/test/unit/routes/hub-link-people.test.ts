@@ -61,6 +61,7 @@ beforeAll(async () => {
     t.uuid('id').primary()
     t.string('name', 100)
     t.boolean('admin_access').defaultTo(false)
+    t.dateTime('created_at')
   })
   await db.schema.createTable('nivaro_users', (t) => {
     t.uuid('id').primary()
@@ -70,6 +71,7 @@ beforeAll(async () => {
     t.string('account_kind', 30)
     t.string('entra_oid', 64)
     t.string('entra_tid', 64)
+    t.dateTime('updated_at')
   })
   app = Fastify()
   await app.register(hubLinkRoutes, { prefix: '/api/hub-link' })
@@ -200,5 +202,29 @@ describe('POST /people/suspend', () => {
     expect(r.statusCode).toBe(409)
     expect(r.json().code).toBe('LAST_ADMIN')
     expect((await db('nivaro_users').where({ id: CARL }).first()).status).toBe('active')
+  })
+})
+
+describe('POST /people/suspend under concurrency (M1)', () => {
+  it('the last two admins offboarded at once: one is suspended, the other refused LAST_ADMIN', async () => {
+    const [a, b] = await Promise.all([
+      post('suspend', { emails: ['anna@example.com'] }),
+      post('suspend', { emails: ['carl@example.com'] })
+    ])
+    expect([a.statusCode, b.statusCode].sort()).toEqual([200, 409])
+    const active = await db('nivaro_users')
+      .whereIn('id', [ANNA, CARL])
+      .where({ status: 'active' })
+      .count({ n: '*' })
+    expect(active).toEqual([{ n: 1 }])
+  })
+
+  it('a lookup is logged in the app with the matched account only, never the asked email', async () => {
+    m.logActivity.mockClear()
+    await post('lookup', { emails: ['bob@example.com'] })
+    expect(m.logActivity).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'hub-people-lookup', item: BOB, origin: 'integration' })
+    )
+    expect(JSON.stringify(m.logActivity.mock.calls)).not.toContain('bob@example.com')
   })
 })

@@ -19,11 +19,13 @@ import { logActivity } from '../activity.js'
  * Lookup answers per account: the app's user id, status, role NAME and whether that role has
  * admin access. Nothing else from the person's row, never a record.
  *
- * Suspend only, never delete: through the app's own user service (`updateUser`), so the identity
- * cache, default channels and revisions follow as for an administrator's edit; then every session
- * and phone sign-in ends (revokeUserSessions) and API keys stop with the account (authentication
- * reads only active accounts). Refused 409 LAST_ADMIN — nothing written — when it would leave the
- * app with no active administrator. An account already suspended is reported, not written again.
+ * Suspend only, never delete: the user service's status write (status + updated_at), in one
+ * transaction with the last-admin count under the admin role lock (suspendInTransaction); then
+ * every session and phone sign-in ends (revokeUserSessions) and API keys stop with the account
+ * (authentication reads only active accounts). Refused 409 LAST_ADMIN — nothing written — when it
+ * would leave the app with no active administrator, however many offboards run at once. Each
+ * lookup is logged in the app too ('hub-people-lookup', matched account ids only). An account
+ * already suspended is reported, not written again.
  * One activity row per suspended account ('hub-offboard', origin integration) and the usual
  * "accounts were suspended by offboarding" notice to the app's administrators.
  */
@@ -164,8 +166,43 @@ export interface SuspendDeps {
   /** The app's Redis (session store): every session and phone sign-in of the person ends. */
   redis?: unknown
   app?: FastifyInstance
-  updateUser?: (id: string, data: { status: string }) => Promise<unknown>
   revokeUserSessions?: (redis: unknown, userId: string) => Promise<number>
+}
+
+type SuspendOutcome =
+  | { kind: 'none' }
+  | { kind: 'already'; accounts: PersonAccount[] }
+  | { kind: 'last_admin' }
+  | { kind: 'done'; accounts: PersonAccount[]; leaving: Set<string>; ids: string[] }
+
+/**
+ * Match, the last-admin count and the status write in ONE transaction that first locks the
+ * oldest admin role row — the same lock the first-admin seed takes (hub-link/first-admin.ts), so
+ * two offboards of an app's last two admins take turns across processes: the second sees the
+ * first's commit and is refused LAST_ADMIN. The write is guarded by the count it was judged on.
+ */
+async function suspendInTransaction(k: Knex, q: PeopleQuery): Promise<SuspendOutcome> {
+  const { oldestAdminRoleQuery, withLockWait } = await import('./first-admin.js')
+  return k.transaction((trx) =>
+    withLockWait(trx, async (): Promise<SuspendOutcome> => {
+      await oldestAdminRoleQuery(trx)
+      const accounts = await matchPeople(q, trx)
+      if (!accounts.length) return { kind: 'none' }
+      const toSuspend = accounts.filter((a) => a.status.toLowerCase() !== 'suspended')
+      if (!toSuspend.length) return { kind: 'already', accounts }
+      const leaving = new Set(toSuspend.map((a) => a.user_id.toUpperCase()))
+      const admins = await activeAdminIds(trx)
+      if (admins.some((id) => leaving.has(id)) && admins.every((id) => leaving.has(id)))
+        return { kind: 'last_admin' }
+      const ids = toSuspend.map((a) => a.user_id)
+      // Suspend only — the same write the app's user service makes for a status change
+      // (services/users.ts updateUser: status + updated_at; nothing else runs for 'suspended').
+      await trx('nivaro_users')
+        .whereIn('id', ids)
+        .update({ status: 'suspended', updated_at: new Date() })
+      return { kind: 'done', accounts, leaving, ids }
+    })
+  )
 }
 
 /** Suspends every matched account (see the header). Never deletes; never touches a non-person. */
@@ -179,14 +216,10 @@ export async function suspendPeople(body: unknown, deps: SuspendDeps = {}): Prom
       message: `Give up to ${PEOPLE_MAX_IDS} emails and/or Entra object ids`
     }
   const k = deps.k ?? db
-  const accounts = await matchPeople(q, k)
-  if (!accounts.length) return { ok: true, state: 'none', accounts: [] }
-  const toSuspend = accounts.filter((a) => a.status.toLowerCase() !== 'suspended')
-  if (!toSuspend.length) return { ok: true, state: 'already', accounts }
-
-  const leaving = new Set(toSuspend.map((a) => a.user_id.toUpperCase()))
-  const admins = await activeAdminIds(k)
-  if (admins.some((id) => leaving.has(id)) && admins.every((id) => leaving.has(id)))
+  const out = await suspendInTransaction(k, q)
+  if (out.kind === 'none') return { ok: true, state: 'none', accounts: [] }
+  if (out.kind === 'already') return { ok: true, state: 'already', accounts: out.accounts }
+  if (out.kind === 'last_admin')
     return {
       ok: false,
       status: 409,
@@ -195,46 +228,36 @@ export async function suspendPeople(body: unknown, deps: SuspendDeps = {}): Prom
         'This person is the last active administrator here; make someone else an administrator first'
     }
 
-  const update =
-    deps.updateUser ??
-    (async (id: string, data: { status: string }) => {
-      const { updateUser } = await import('../users.js')
-      return updateUser(id, data as never)
-    })
   const revoke =
     deps.revokeUserSessions ??
     (async (redis: unknown, id: string) => {
       const { revokeUserSessions } = await import('../../auth/session.js')
       return revokeUserSessions(redis as never, id)
     })
-  for (const a of toSuspend) {
-    await update(a.user_id, { status: 'suspended' })
+  for (const id of out.ids) {
     // Sessions and phones end now; a store that cannot be reached leaves them to the account
     // check every request makes (only active accounts authenticate).
-    if (deps.redis) await revoke(deps.redis, a.user_id).catch(() => 0)
+    if (deps.redis) await revoke(deps.redis, id).catch(() => 0)
     await logActivity({
       action: 'hub-offboard',
       user: null,
       collection: 'nivaro_users',
-      item: a.user_id,
+      item: id,
       comment: 'Suspended by the Nivaro Hub (offboarded everywhere)',
       origin: 'integration'
     })
   }
   try {
     const { noteUsersDeactivated } = await import('../inactive-people-notice.js')
-    noteUsersDeactivated(
-      toSuspend.map((a) => a.user_id),
-      { reason: 'offboarding', ...(deps.app ? { app: deps.app } : {}) }
-    )
+    noteUsersDeactivated(out.ids, { reason: 'offboarding', ...(deps.app ? { app: deps.app } : {}) })
   } catch {
     // The notice is a courtesy; the suspension stands.
   }
   return {
     ok: true,
     state: 'suspended',
-    accounts: accounts.map((a) =>
-      leaving.has(a.user_id.toUpperCase()) ? { ...a, status: 'suspended' } : a
+    accounts: out.accounts.map((a) =>
+      out.leaving.has(a.user_id.toUpperCase()) ? { ...a, status: 'suspended' } : a
     )
   }
 }
@@ -246,5 +269,18 @@ export async function lookupPeople(
 ): Promise<{ ok: true; accounts: PersonAccount[] } | { ok: false; status: 400; code: string }> {
   const q = readPeopleQuery(body)
   if (!q) return { ok: false, status: 400, code: 'BAD_PERSON' }
-  return { ok: true, accounts: await matchPeople(q, k) }
+  const accounts = await matchPeople(q, k)
+  // The app's own trace of the Hub's lookup: how many matched and which account ids, never the
+  // emails or ids it was asked about.
+  await logActivity({
+    action: 'hub-people-lookup',
+    user: null,
+    collection: 'nivaro_users',
+    item: accounts.length === 1 ? accounts[0].user_id : undefined,
+    comment: `The Nivaro Hub looked up a person: ${accounts.length} account(s) matched${
+      accounts.length > 1 ? ` (${accounts.map((a) => a.user_id).join(', ')})` : ''
+    }`.slice(0, 1000),
+    origin: 'integration'
+  })
+  return { ok: true, accounts }
 }

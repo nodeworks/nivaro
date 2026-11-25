@@ -375,9 +375,11 @@ function OffboardCard({ person, running }: { person: PersonDetail; running: bool
   const blocked = person.offboards.some((o) => o.blocked)
   const qc = useQueryClient()
   const [confirm, setConfirm] = useState('')
-  const expected = person.email ?? person.key
+  const ident = person.identity
+  const nothing = ident.emails.length === 0 && ident.entra.length === 0
+  const expected = ident.emails[0] ?? person.key
   const start = useMutation({
-    mutationFn: () => startOffboard(person.key, confirm.trim()),
+    mutationFn: () => startOffboard(person.key, confirm.trim(), person.identity_hash),
     onSuccess: () => {
       setConfirm('')
       toast.success('Offboarding started', {
@@ -385,7 +387,11 @@ function OffboardCard({ person, running }: { person: PersonDetail; running: bool
       })
       void qc.invalidateQueries({ queryKey: peopleKeys.person(person.key) })
     },
-    onError: (err) => peopleToast(err, 'Could not start offboarding')
+    onError: (err) => {
+      peopleToast(err, 'Could not start offboarding')
+      // IDENTITY_CHANGED: show the list as it is now before anyone confirms again.
+      void qc.invalidateQueries({ queryKey: peopleKeys.person(person.key) })
+    }
   })
   const ready = confirm.trim().toLowerCase() === expected.toLowerCase()
   const id = `offboard-confirm-${person.key}`
@@ -403,14 +409,29 @@ function OffboardCard({ person, running }: { person: PersonDetail; running: bool
             Offboarded — the Hub refuses their sign-in. Run it again to reach apps added since.
           </p>
         )}
-        {person.identity.emails.length > 0 && (
-          <p className='m-0 text-[12px] text-slate-600 dark:text-slate-300'>
-            Apps are asked about {person.identity.emails.join(', ')}
-            {person.identity.entra > 0
-              ? ` and ${person.identity.entra} Microsoft ${person.identity.entra === 1 ? 'id' : 'ids'}`
-              : ''}
-            .
+        {nothing ? (
+          <p className='m-0 text-[12px] text-amber-700 dark:text-amber-400'>
+            The Hub has nothing proven to match this person by (no Hub account, or no email or
+            Microsoft id the Hub recorded itself). Suspend them in each app by hand.
           </p>
+        ) : (
+          <div className='space-y-1'>
+            <p className='m-0 text-[12px] text-slate-600 dark:text-slate-300'>
+              Every app suspends the accounts that match:
+            </p>
+            <ul className='m-0 list-none space-y-0.5 p-0 text-[12px]'>
+              {ident.emails.map((e) => (
+                <li key={e} className='text-slate-800 dark:text-slate-200'>
+                  {e}
+                </li>
+              ))}
+              {ident.entra.map((x) => (
+                <li key={x.oid} className='text-slate-800 dark:text-slate-200'>
+                  Microsoft id <span className='font-mono text-[11px]'>{x.oid}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
         )}
         <Field id={id} label={`Type ${expected} to confirm`}>
           <Input
@@ -420,7 +441,7 @@ function OffboardCard({ person, running }: { person: PersonDetail; running: bool
             spellCheck={false}
             onChange={(e) => setConfirm(e.target.value)}
             className='h-8 max-w-sm text-[13px]'
-            disabled={running || start.isPending}
+            disabled={nothing || running || start.isPending}
           />
         </Field>
         <button
@@ -429,7 +450,7 @@ function OffboardCard({ person, running }: { person: PersonDetail; running: bool
             'inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-[12px] font-medium disabled:opacity-50',
             dangerArmed
           )}
-          disabled={!ready || running || start.isPending}
+          disabled={nothing || !ready || running || start.isPending}
           onClick={() => start.mutate()}
         >
           <UserX className='h-3.5 w-3.5' aria-hidden />
@@ -458,12 +479,18 @@ function RunCard({ run, personKey }: { run: OffboardRun; personKey: string }) {
     onSuccess: refresh,
     onError: (err) => peopleToast(err, 'Could not retry')
   })
+  const [lifting, setLifting] = useState(false)
+  const [liftText, setLiftText] = useState('')
+  const liftExpected = run.identity?.emails[0] ?? run.person_key ?? String(run.id)
   const lift = useMutation({
-    mutationFn: () => liftOffboard(run.id),
+    mutationFn: () => liftOffboard(run.id, liftText.trim()),
     onSuccess: () => {
-      toast.success('The Hub may sign them in again', {
-        description: 'Their accounts in the apps stay suspended; restore them in each app.'
+      toast.success('The Hub signs them in again', {
+        description:
+          'Their Hub account is active again. Their accounts in the apps stay suspended; restore them in each app.'
       })
+      setLifting(false)
+      setLiftText('')
       refresh()
     },
     onError: (err) => peopleToast(err, 'Could not lift the block')
@@ -501,17 +528,45 @@ function RunCard({ run, personKey }: { run: OffboardRun; personKey: string }) {
             {run.blocked && (
               <button
                 type='button'
-                className={ghostButton}
-                disabled={lift.isPending}
-                onClick={() => lift.mutate()}
+                className={cn(ghostButton, lifting && 'bg-accent')}
+                aria-expanded={lifting}
+                onClick={() => setLifting((v) => !v)}
               >
-                <ShieldOff className='h-3.5 w-3.5' aria-hidden /> Lift Hub sign-in block
+                <ShieldOff className='h-3.5 w-3.5' aria-hidden /> Lift Hub sign-in block…
               </button>
             )}
           </>
         )
       }
     >
+      {lifting && run.blocked && run.status !== 'running' && (
+        <div className='space-y-2 border-b border-slate-200 px-4 py-3 dark:border-border'>
+          <p className='m-0 text-[12px] text-slate-600 dark:text-slate-300'>
+            The Hub signs them in again and, if this offboard suspended their Hub account, makes it
+            active again. Their accounts in the apps stay suspended.
+          </p>
+          <Field id={`lift-${run.id}`} label={`Type ${liftExpected} to lift the block`}>
+            <Input
+              id={`lift-${run.id}`}
+              value={liftText}
+              autoComplete='off'
+              spellCheck={false}
+              onChange={(e) => setLiftText(e.target.value)}
+              className='h-8 max-w-sm text-[13px]'
+            />
+          </Field>
+          <button
+            type='button'
+            className={cn(ghostButton, 'border border-slate-200 dark:border-border')}
+            disabled={
+              lift.isPending || liftText.trim().toLowerCase() !== liftExpected.toLowerCase()
+            }
+            onClick={() => lift.mutate()}
+          >
+            Lift the block
+          </button>
+        </div>
+      )}
       <div className='overflow-x-auto'>
         <table className='w-full'>
           <thead>

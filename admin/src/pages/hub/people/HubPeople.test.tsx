@@ -97,7 +97,14 @@ function setup(offboards: unknown[] = []) {
       }
     if (url.startsWith('/hub/people/'))
       return {
-        data: { data: { ...person, identity: { emails: ['dana@x.io'], entra: 1 }, offboards } }
+        data: {
+          data: {
+            ...person,
+            identity: { emails: ['dana@x.io'], entra: [{ oid: 'oid-1', tid: 't' }] },
+            identity_hash: 'h1',
+            offboards
+          }
+        }
       }
     return { data: { data: [] } }
   })
@@ -151,7 +158,8 @@ describe('HubPeople', () => {
     fireEvent.click(go)
     await waitFor(() =>
       expect(h.post).toHaveBeenCalledWith(`/hub/people/${encodeURIComponent(KEY)}/offboard`, {
-        confirm: 'DANA@x.io'
+        confirm: 'DANA@x.io',
+        identity_hash: 'h1'
       })
     )
   })

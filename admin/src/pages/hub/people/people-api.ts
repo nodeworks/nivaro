@@ -54,6 +54,7 @@ export interface OffboardRun {
   id: number
   label: string | null
   person_key: string | null
+  identity?: { emails: string[]; entra: Array<{ oid: string; tid: string | null }> }
   status: 'running' | 'done' | 'partial' | 'interrupted'
   results: OffboardResult[]
   hub_account: 'suspended' | 'already' | 'none' | null
@@ -64,7 +65,9 @@ export interface OffboardRun {
 }
 
 export interface PersonDetail extends DirectoryPerson {
-  identity: { emails: string[]; entra: number }
+  /** Exactly what every app is asked to suspend: proven emails and Microsoft ids only. */
+  identity: { emails: string[]; entra: Array<{ oid: string; tid: string | null }> }
+  identity_hash: string
   offboards: OffboardRun[]
 }
 
@@ -105,16 +108,19 @@ export const fetchPerson = (key: string) =>
 export const fetchPersonAccess = (key: string) =>
   api.get(`/hub/people/${encodeURIComponent(key)}/access`).then((r) => r.data.data as EnvAccess[])
 
-export const startOffboard = (key: string, confirm: string) =>
+export const startOffboard = (key: string, confirm: string, identityHash: string) =>
   api
-    .post(`/hub/people/${encodeURIComponent(key)}/offboard`, { confirm })
+    .post(`/hub/people/${encodeURIComponent(key)}/offboard`, {
+      confirm,
+      identity_hash: identityHash
+    })
     .then((r) => r.data.data as OffboardRun)
 
 export const retryOffboard = (id: number) =>
   api.post(`/hub/offboards/${id}/retry`, {}).then((r) => r.data.data as OffboardRun)
 
-export const liftOffboard = (id: number) =>
-  api.post(`/hub/offboards/${id}/lift`, {}).then((r) => r.data.data as OffboardRun)
+export const liftOffboard = (id: number, confirm: string) =>
+  api.post(`/hub/offboards/${id}/lift`, { confirm }).then((r) => r.data.data as OffboardRun)
 
 export function usePerson(key: string | null) {
   return useQuery({
@@ -141,17 +147,28 @@ export const OUTCOME_COPY: Record<EnvOutcome, string> = {
 /** Plain words for the codes the people routes and the apps answer. */
 export const PEOPLE_COPY: Record<string, { title: string; hint?: string }> = {
   CONFIRM_REQUIRED: {
-    title: 'Type the person’s email to confirm',
+    title: 'Type exactly what the page asks to confirm',
     hint: 'Exactly as shown on this page (case does not matter).'
   },
   OFFBOARD_RUNNING: {
     title: 'An offboard of this person is running',
     hint: 'Wait for it to finish, then retry what did not.'
   },
-  OFFBOARD_SELF: { title: 'You cannot offboard yourself' },
+  OFFBOARD_SELF: {
+    title: 'You cannot offboard yourself',
+    hint: 'The list names your own Hub account, email or Microsoft id.'
+  },
+  IDENTITY_SHARED: {
+    title: 'The list names another person too',
+    hint: 'An email or Microsoft id in it belongs to another active Hub account; the apps would suspend them as well. Fix the accounts first.'
+  },
   LAST_HUB_ADMIN: {
     title: 'This is the Hub’s last administrator',
     hint: 'Make someone else a Hub administrator first.'
+  },
+  IDENTITY_CHANGED: {
+    title: 'What would be suspended changed',
+    hint: 'The page shows the new list now. Check it, then confirm again.'
   },
   NO_IDENTITY: {
     title: 'The Hub knows no email or Entra id for this person',

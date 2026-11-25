@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { db } from '../../../db/index.js'
 
 /**
@@ -7,7 +8,7 @@ import { db } from '../../../db/index.js'
  *
  * A person is
  *   u:<HUB USER ID>   every row the Hub tied to one Hub account (hub_user_id), plus rows under
- *                     an identity key (or the email) one of those rows carries
+ *                     an identity key (or the email of a Hub-recorded row) one of those carries
  *   k:<row id>        an identity key no Hub account owns (app reports of people who never
  *                     signed in through the Hub); <row id> = the lowest sign-in row id with it
  * The key is opaque: emails never travel in a URL.
@@ -101,7 +102,7 @@ export function groupPeople(rows: SigninRow[]): Map<string, SigninRow[]> {
     const owner = upper(r.hub_user_id)
     claim(r.identity_key, owner)
     // The email a Hub row recorded (an Entra-keyed row carries it too) is that account's.
-    if (r.email) claim(`email:${String(r.email).trim().toLowerCase()}`, owner)
+    if (r.email && r.via === 'hub') claim(`email:${String(r.email).trim().toLowerCase()}`, owner)
   }
   const firstRow = new Map<string, number>()
   for (const r of rows) {
@@ -242,7 +243,9 @@ export async function readPerson(
     const keys = [
       ...new Set([
         ...own.map((r) => r.identity_key),
-        ...own.filter((r) => r.email).map((r) => `email:${String(r.email).trim().toLowerCase()}`)
+        ...own
+          .filter((r) => r.email && r.via === 'hub')
+          .map((r) => `email:${String(r.email).trim().toLowerCase()}`)
       ])
     ]
     const shared = keys.length
@@ -264,17 +267,32 @@ export async function readPerson(
     if (owned) return readPerson(`u:${upper(owned.hub_user_id)}`)
   }
   const person = personOf(key, rows, user)
-  return { person, identity: identityOf(rows, user) }
+  return { person, identity: await identityOf(rows, user) }
 }
 
-/** The emails and Entra ids every app is asked about (at most 5 of each). Pure. */
-export function identityOf(rows: SigninRow[], user?: HubUser): PersonIdentity {
+/**
+ * The emails and Entra ids every app is asked to match (at most 5 of each) — PROVEN data only,
+ * never what an app asserted (an app could otherwise make the Hub offboard someone else):
+ *   - the Hub account's own email and Entra object id;
+ *   - identity keys of sign-ins the Hub itself recorded (`via = 'hub'`, a redeemed code);
+ *   - an `email:` key of any row only when it passes emailTheirsAlone (exactly one Hub account —
+ *     this one — holds that email, and the Hub recorded it for nobody else).
+ * The free `email` column and the keys of app-reported (`via = 'direct'`) rows never add
+ * anything by themselves. A person with no Hub account (`k:`) has nothing proven: [].
+ */
+export async function identityOf(
+  rows: SigninRow[],
+  user?: HubUser,
+  deps: { theirsAlone?: (key: string, personId: string) => Promise<boolean> } = {}
+): Promise<PersonIdentity> {
   const emails: string[] = []
   const entra: PersonIdentity['entra'] = []
+  if (!user) return { emails, entra }
+  const personId = String(user.id)
   const addEmail = (e: unknown) => {
     if (typeof e !== 'string') return
-    const s = e.trim().toLowerCase()
-    if (s && !emails.includes(s) && emails.length < MAX_IDS) emails.push(s)
+    const v = e.trim().toLowerCase()
+    if (v && !emails.includes(v) && emails.length < MAX_IDS) emails.push(v)
   }
   const addEntra = (oid: unknown, tid: unknown) => {
     if (typeof oid !== 'string' || !oid) return
@@ -282,17 +300,35 @@ export function identityOf(rows: SigninRow[], user?: HubUser): PersonIdentity {
     if (entra.some((x) => x.oid === o) || entra.length >= MAX_IDS) return
     entra.push({ oid: o, tid: typeof tid === 'string' && tid ? tid.toLowerCase() : null })
   }
-  if (user) {
-    addEntra(user.entra_oid, user.entra_tid)
-    addEmail(user.email)
-  }
+  addEntra(user.entra_oid, user.entra_tid)
+  addEmail(user.email)
+  const theirsAlone =
+    deps.theirsAlone ??
+    (async (key: string, id: string) => {
+      const { emailTheirsAlone } = await import('../signins.js')
+      return emailTheirsAlone(key, id)
+    })
+  const mine = (r: SigninRow) => !!r.hub_user_id && upper(r.hub_user_id) === upper(personId)
   for (const r of rows) {
     const k = r.identity_key
     if (k.startsWith('entra:')) {
+      // An Entra key counts only from a sign-in the Hub itself redeemed for this account.
+      if (r.via !== 'hub' || !mine(r)) continue
       const [, tid, oid] = k.split(':')
       addEntra(oid, tid)
-    } else addEmail(emailOfKey(k))
-    addEmail(r.email)
+    } else if (k.startsWith('email:')) {
+      if (r.via === 'hub' && mine(r)) addEmail(emailOfKey(k))
+      else if (await theirsAlone(k, personId)) addEmail(emailOfKey(k))
+    }
   }
   return { emails, entra }
+}
+
+/** The identity as one stable string (the offboard confirm binds to its hash). Pure. */
+export function identityHash(identity: PersonIdentity): string {
+  const canon = JSON.stringify({
+    emails: [...identity.emails].sort(),
+    entra: [...identity.entra].map((x) => `${x.tid ?? ''}:${x.oid}`).sort()
+  })
+  return createHash('sha256').update(canon).digest('hex')
 }
