@@ -53,10 +53,14 @@ const bellClient = createNivaro(typeof window !== 'undefined' ? window.location.
  */
 export function NotificationBell({
   collapsed,
-  compact
+  compact,
+  placement = 'right'
 }: {
   collapsed: boolean
   compact?: boolean
+  /** 'right' (default): beside the trigger, for the sidebar footer. 'below': under it, for a
+   *  top bar (the Hub's) — 'right' there opened the panel above the window's top edge. */
+  placement?: 'below' | 'right'
 }) {
   const { user } = useAuth()
   const navigate = useNavigate()
@@ -128,7 +132,7 @@ export function NotificationBell({
         onActionError={(m) => toast.error(m)}
         // The sidebar footer sits bottom-left inside an overflow-clipped rail:
         // portal the panel beside the trigger instead of below it.
-        panelPlacement='right'
+        panelPlacement={placement}
         renderTrigger={({ badge, toggle }) => (
           <button
             type='button'
