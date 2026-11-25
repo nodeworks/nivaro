@@ -16,6 +16,7 @@ import {
 } from './helpers'
 import { m2mIdKey, resolveM2MRelatedCollection } from './M2MCombobox'
 import type { M2MStagingCtx } from './M2MStagingContext'
+import { isHostDisplayRow, useHostDisplay } from './placement-behaviour'
 import { RelatedItemLabel } from './RelationCombobox'
 import type { CMSField, CMSRelation, FieldGroup, StepDef } from './types'
 
@@ -600,6 +601,17 @@ function O2MSummary({
   )
 }
 
+/** A host display row in the summary rail: the host draws it from the live draft. */
+function HostRailValue(props: {
+  field: string
+  draft: Record<string, unknown>
+  itemId: string | null
+  collection: string
+}) {
+  const Host = useHostDisplay(props.field)
+  return Host ? <Host {...props} /> : <span className='text-slate-400'>—</span>
+}
+
 // ─── SummaryFieldValue ─────────────────────────────────────────────────────────
 
 /** A summary value that changed while the record is open gets one cyan wash. */
@@ -1108,14 +1120,23 @@ export function SummaryPanel({
                       }}
                       className='mt-0.5 w-full text-[12px] min-w-0 overflow-hidden'
                     >
-                      <SummaryFieldValue
-                        field={f}
-                        val={val}
-                        relations={relations}
-                        collection={collection}
-                        itemId={itemId}
-                        staging={staging}
-                      />
+                      {isHostDisplayRow(f) ? (
+                        <HostRailValue
+                          field={f.field}
+                          draft={draft}
+                          itemId={itemId || null}
+                          collection={collection}
+                        />
+                      ) : (
+                        <SummaryFieldValue
+                          field={f}
+                          val={val}
+                          relations={relations}
+                          collection={collection}
+                          itemId={itemId}
+                          staging={staging}
+                        />
+                      )}
                     </span>
                   </button>
                   <button

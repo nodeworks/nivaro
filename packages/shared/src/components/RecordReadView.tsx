@@ -26,6 +26,7 @@ import {
   displayFormulaOf,
   formatDisplayValue,
   isDisplayFormulaField,
+  isHostDisplayField,
   resolvePlacementText
 } from '../lib/placement-behaviour'
 import { invalidateRecordRow, useRecordReader } from '../lib/record-loader'
@@ -38,7 +39,11 @@ import { useFieldTouches } from './item-edit/HeaderFreshness'
 import { richTextToPlain } from './item-edit/helpers'
 import { isNamelessLabel, NAMELESS_LABEL } from './item-edit/option-disambiguate'
 import { PersonalDefaultMark } from './item-edit/PersonalDefaultControl'
-import { evaluateDisplayFormula, usePlacementTextContext } from './item-edit/placement-behaviour'
+import {
+  evaluateDisplayFormula,
+  useHostDisplay,
+  usePlacementTextContext
+} from './item-edit/placement-behaviour'
 import { RuleHiddenNotes } from './item-edit/RuleHiddenNotes'
 import { RELATED_LOADING_CLASS, RelatedMissingLabel } from './item-edit/related-missing'
 import { groupHasReadableField, ruleHiddenGroups } from './item-edit/rule-hidden'
@@ -390,6 +395,16 @@ export function nestedTemplatePaths(template: string | null | undefined): string
 }
 
 /** Label for a related record — display template else name-ish fallback. */
+function HostReadValue(props: {
+  field: string
+  draft: Record<string, unknown>
+  itemId: string | null
+  collection: string
+}) {
+  const Host = useHostDisplay(props.field)
+  return Host ? <Host {...props} /> : <Empty />
+}
+
 function RelatedValue({ collection, id }: { collection: string; id: unknown }) {
   const client = useNivaroClient()
   const readRow = useRecordReader()
@@ -1473,7 +1488,9 @@ function RecordReadViewBody({
     )
   const visible = layoutData.assignments.filter(
     (a) =>
-      (!a.field.startsWith('__') || isDisplayFormulaField(a.field)) &&
+      (!a.field.startsWith('__') ||
+        isDisplayFormulaField(a.field) ||
+        isHostDisplayField(a.field)) &&
       (showAll || !isHiddenAssignment(a))
   )
   // Widget slots (statistics / query tables) render in read views too — the
@@ -1502,6 +1519,7 @@ function RecordReadViewBody({
               a.field.startsWith('__') &&
               !a.field.startsWith('__widget_') &&
               !isDisplayFormulaField(a.field) &&
+              !isHostDisplayField(a.field) &&
               (showAll || a.is_visible === undefined || !!a.is_visible)
           )
           .sort((a, b) => a.sort - b.sort)
@@ -1720,6 +1738,16 @@ function RecordReadViewBody({
           label={labelFor(a)}
         />
       )
+    // A host display: the host app draws it from the stored record (lib/host-displays.ts).
+    if (isHostDisplayField(a.field))
+      return (
+        <HostReadValue
+          field={a.field}
+          draft={record ?? {}}
+          itemId={itemId || null}
+          collection={collection}
+        />
+      )
     // #2712: computed here from the record's values; never stored.
     if (isDisplayFormulaField(a.field)) {
       const df = displayFormulaOf(ov)
@@ -1864,6 +1892,8 @@ function RecordReadViewBody({
     if (ruled !== undefined) return ruled
     if (isDisplayFormulaField(a.field))
       return typeof ovLabel === 'string' && ovLabel.trim() ? ovLabel : 'Formula'
+    if (isHostDisplayField(a.field))
+      return typeof ovLabel === 'string' && ovLabel.trim() ? ovLabel : 'Value'
     if (typeof ovLabel === 'string' && ovLabel.trim()) return ovLabel
     // Alias fields carry an EMPTY label, not null — `||` so they still get a name.
     return a.label_override || fieldByName.get(a.field)?.label || titleCase(a.field)

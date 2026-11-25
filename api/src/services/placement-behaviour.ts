@@ -245,6 +245,23 @@ export function isDisplayFormulaField(field: string): boolean {
   return DISPLAY_FIELD_RE.test(field)
 }
 
+const HOST_DISPLAY_RE = /^__host_([a-z0-9_-]{1,40})__$/
+
+/**
+ * A `__host_<key>__` placement: a read-only value the HOST app draws (a component it
+ * registered under `<key>` with registerHostDisplay), from the form's draft and record id.
+ * Not a column, never stored, never written — like a display formula, but its value
+ * comes from the host (EFP's net terms: the linked PO's, else the vendor's).
+ */
+export function isHostDisplayField(field: string): boolean {
+  return HOST_DISPLAY_RE.test(field)
+}
+
+/** The host key of a `__host_<key>__` placement, else null. */
+export function hostDisplayKey(field: string): string | null {
+  return HOST_DISPLAY_RE.exec(field)?.[1] ?? null
+}
+
 /** A free `__calc_<n>__` name for a new display formula on this layout. */
 export function nextDisplayFormulaField(existing: Iterable<string>): string {
   const taken = new Set(existing)

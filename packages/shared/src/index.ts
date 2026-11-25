@@ -1057,6 +1057,7 @@ export * from './lib/expression'
 export { formulaConstant, networkdaysBetween, setFormulaConstants } from './lib/expression'
 export { useFeatureFlag, useFeatureFlags } from './lib/feature-flags'
 export * from './lib/field-interfaces'
+export * from './lib/host-displays'
 export {
   autoMerge,
   diffTextBlocks,

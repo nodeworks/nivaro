@@ -66,7 +66,9 @@ import {
   FieldCounter,
   fieldCounterConfig,
   fieldIsRecommended,
+  HostDisplayValue,
   isDisplayFormulaRow,
+  isHostDisplayRow,
   placementFieldText,
   RecommendedMarker,
   RepeatLastButton,
@@ -1452,7 +1454,14 @@ export const FieldRow = memo(function FieldRow({
               autoFillTick && 'nvr-autofill-glow'
             )}
           >
-            {isCalc ? (
+            {isHostDisplayRow(field) ? (
+              <HostDisplayValue
+                field={field.field}
+                draft={draft}
+                itemId={itemId ?? null}
+                collection={collection}
+              />
+            ) : isCalc ? (
               <DisplayFormulaValue field={field} values={draft} />
             ) : autoIdPattern ? (
               <AutoIdPreviewField

@@ -4,7 +4,11 @@ import { orderByNullsLikeMssql, sqlDialect } from '../db/sql-dialect.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { markConfigRead } from '../services/config-live.js'
-import { displayFormulaOf, isDisplayFormulaField } from '../services/placement-behaviour.js'
+import {
+  displayFormulaOf,
+  hostDisplayKey,
+  isDisplayFormulaField
+} from '../services/placement-behaviour.js'
 import { bustRollupContributorCache } from '../services/rollups.js'
 
 function parseJsonSafe(val: unknown): unknown {
@@ -456,6 +460,43 @@ export async function formatLayoutFieldRows(
             ...(a.col_span != null ? { col_span: a.col_span } : {}),
             display_formula: displayFormulaOf(ov) ?? { expr: '', format: '', currency: null }
           },
+          group_key: a.group_key,
+          sort: a.sort,
+          label_override: a.label_override,
+          is_visible: a.is_visible,
+          default_expanded: a.default_expanded,
+          show_row_revisions: false,
+          show_approval_chain: null,
+          lock_conditions: null,
+          allow_revision_restore: false,
+          widget_id: null,
+          input_bindings: null,
+          layout_assigned: true,
+          is_virtual: true as unknown,
+          dependency_config: null,
+          type: 'alias',
+          _overrides: ov
+        })
+      }
+      continue
+    }
+    // A host display placement (`__host_<key>__`): a read-only value the host app draws from
+    // the form's draft (placement-behaviour.ts isHostDisplayField); no column, never stored.
+    const hostKey = hostDisplayKey(field)
+    if (hostKey) {
+      for (const a of fieldAssignments) {
+        const ov = a.overrides ?? null
+        formatted.push({
+          field,
+          label: typeof ov?.label === 'string' ? ov.label : 'Value',
+          note: typeof ov?.note === 'string' ? ov.note : null,
+          hidden: ov?.hidden === true,
+          readonly: true,
+          required: false,
+          interface: 'host-display',
+          display: null,
+          display_options: null,
+          options: { ...(a.col_span != null ? { col_span: a.col_span } : {}), host_key: hostKey },
           group_key: a.group_key,
           sort: a.sort,
           label_override: a.label_override,

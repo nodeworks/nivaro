@@ -1,10 +1,11 @@
 import { Loader2, Repeat2, Sigma } from 'lucide-react'
-import { createContext, useContext, useMemo, useState } from 'react'
+import { createContext, useContext, useMemo, useState, useSyncExternalStore } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { toastError } from '../../lib/error-toast'
 import { evaluateExpression, parseExpression, readPath } from '../../lib/expression'
+import { getHostDisplay, hostDisplaysVersion, subscribeHostDisplays } from '../../lib/host-displays'
 import {
   type CounterConfig,
   confirmChangeApplies,
@@ -14,8 +15,10 @@ import {
   countValue,
   displayFormulaOf,
   formatDisplayValue,
+  hostDisplayKey,
   isDisplayFormulaField,
   isEmptyValue,
+  isHostDisplayField,
   isRecommended,
   resolvePlacementText,
   type TextContext,
@@ -112,8 +115,50 @@ export function fieldCounterError(f: CMSField, value: unknown, label: string): s
   return f._overrides ? counterError(value, f._overrides, label) : null
 }
 
+/** A row with no column of its own: a display formula or a host display (no history, AI or input). */
 export function isDisplayFormulaRow(f: Pick<CMSField, 'field' | 'interface'>): boolean {
-  return f.interface === 'display-formula' || isDisplayFormulaField(f.field)
+  return f.interface === 'display-formula' || isDisplayFormulaField(f.field) || isHostDisplayRow(f)
+}
+
+/** A `__host_<key>__` placement: a value the host app draws (lib/host-displays.ts). */
+export function isHostDisplayRow(f: Pick<CMSField, 'field' | 'interface'>): boolean {
+  return f.interface === 'host-display' || isHostDisplayField(f.field)
+}
+
+/** The host's component for this placement, redrawn when the host registers it late. */
+export function useHostDisplay(field: string) {
+  useSyncExternalStore(subscribeHostDisplays, hostDisplaysVersion, hostDisplaysVersion)
+  return getHostDisplay(hostDisplayKey(field))
+}
+
+/**
+ * A host display row on the form: the same read-only face as a display formula, holding
+ * whatever the host draws from the live draft. A key no host registered reads as a dash.
+ */
+export function HostDisplayValue({
+  field,
+  draft,
+  itemId,
+  collection
+}: {
+  field: string
+  draft: Record<string, unknown>
+  itemId: string | null
+  collection: string
+}) {
+  const Host = useHostDisplay(field)
+  return (
+    <div
+      data-host-display={field}
+      className='flex h-9 min-w-0 items-center rounded-md border border-slate-200 bg-slate-50 px-3 text-sm dark:border-border dark:bg-muted/40'
+    >
+      {Host ? (
+        <Host draft={draft} itemId={itemId} collection={collection} field={field} />
+      ) : (
+        <span className='text-slate-400 dark:text-muted-foreground'>—</span>
+      )}
+    </div>
+  )
 }
 
 // ── Markers and controls ────────────────────────────────────────────────────
