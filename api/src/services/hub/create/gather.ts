@@ -16,8 +16,16 @@ import { isUserIdShape, unknownUserIds } from '../apps.js'
 import { getDatabase, type HubDatabase } from '../db/databases.js'
 import { provisionerFor, withServerKnex } from '../db/provisioner.js'
 import { getServerRow, type HubDbServerRow, openAdminSecret } from '../db/servers.js'
+import { AgentError, agentStack, agentHealth as realAgentHealth } from '../docker/agent-client.js'
+import type { AgentHealth, StackStatus } from '../docker/agent-types.js'
+import { agentEnvPrefixes } from '../docker/stack-env.js'
+import { validateStackSettings } from '../docker/stack-settings.js'
+import { type DockerDriverRow, getDriver } from '../drivers.js'
+import type { HubEnvironmentRow } from '../promote-types.js'
 import { hubImage, imageDigest } from '../registry.js'
-import { sealSecret } from '../secrets.js'
+import { HUB_MASK, sealSecret } from '../secrets.js'
+import { lastRoutedNames, sharedPoolUsed } from '../shared/place.js'
+import { getShared } from '../shared/store.js'
 import { hubOwnHostnames, isCreatableKey, stackName } from './app-config.js'
 import { projectExists as gitlabProjectExists } from './gitlab-provision.js'
 import {
@@ -28,7 +36,15 @@ import {
   targetProblem
 } from './plan.js'
 import { getTargetRow, type HubTargetRow, targetCtx } from './targets.js'
-import type { CreateAppInput, CreationFacts } from './types.js'
+import {
+  type CreateAppInput,
+  type CreationFacts,
+  creationKindOf,
+  type DockerCreationFacts,
+  type DockerStackInput,
+  gitlabTargetIdOf,
+  type SharedCreationFacts
+} from './types.js'
 
 export const GATHER_TIMEOUT_MS = 8000
 
@@ -40,6 +56,14 @@ export interface GatherCreationDeps {
   databaseExists?: (server: HubDbServerRow, name: string) => Promise<boolean>
   encryptionKey?: () => boolean
   timeoutMs?: number
+  /**
+   * A preview (POST /apps/create/plan): the browser sends masks for secrets, which count as
+   * given. A start never does (a mask there is no value).
+   */
+  preview?: boolean
+  /** Docker creations: the agent's health and stacks (default: the agent client). */
+  agentHealth?: (driver: DockerDriverRow) => Promise<AgentHealth>
+  agentStack?: (driver: DockerDriverRow, name: string) => Promise<StackStatus | null>
 }
 
 class Unreachable extends Error {}
@@ -119,8 +143,9 @@ export async function gatherCreationFacts(
     unknownOwners = [...malformed, ...(await unknownUserIds(ids.filter(isUserIdShape)))]
   }
 
-  // Target
-  const targetId = Number(i.target_id)
+  // Target (a GitLab one; Docker and shared creations name a driver or a deployment)
+  const kind = creationKindOf(i)
+  const targetId = kind === 'gitlab' ? gitlabTargetIdOf(i) : 0
   const target = Number.isInteger(targetId) && targetId > 0 ? await getTargetRow(targetId) : null
 
   // Servers + existing databases named by the request
@@ -218,12 +243,15 @@ export async function gatherCreationFacts(
       return null
     }
   }
-  const versionOk = /^\d+\.\d+\.\d+$/.test(version)
-  const [, projectExists, digest, slimDigest] = await Promise.all([
+  // A shared deployment runs its own version: no image is looked up for it.
+  const versionOk = /^\d+\.\d+\.\d+$/.test(version) && kind !== 'shared'
+  const [, projectExists, digest, slimDigest, docker, shared] = await Promise.all([
     probeAll,
     projectLook,
     versionOk ? digestLook(version) : Promise.resolve(null),
-    versionOk ? digestLook(`${version}-slim`) : Promise.resolve(null)
+    versionOk && kind === 'gitlab' ? digestLook(`${version}-slim`) : Promise.resolve(null),
+    kind === 'docker' ? gatherDocker(i, keyOk ? key : null, envs, deps, ms) : undefined,
+    kind === 'shared' ? gatherShared(i) : undefined
   ])
 
   return {
@@ -240,6 +268,157 @@ export async function gatherCreationFacts(
     digest,
     slimDigest,
     encryptionKey: (deps.encryptionKey ?? defaultEncryptionKey)(),
-    hubUrl: hubUrlFrom(env)
+    hubUrl: hubUrlFrom(env),
+    kind,
+    ...(docker ? { docker } : {}),
+    ...(shared ? { shared } : {})
   }
+}
+
+// ── Docker and shared creations (gap `create`) ───────────────────────────────
+
+/** Settings the creation writes itself: never taken from the request. */
+const CREATION_OWNED = new Set([
+  'OIDC_ISSUER',
+  'OIDC_CLIENT_ID',
+  'OIDC_CLIENT_SECRET',
+  'OIDC_REDIRECT_URI'
+])
+const creationOwned = (k: string) => CREATION_OWNED.has(k) || k.startsWith('DB_')
+
+/** A preview's stand-in for a masked secret: passes every value rule, never stored. */
+const PREVIEW_VALUE = '0123456789abcdef'.repeat(4)
+
+function agentStateOf(err: unknown): DockerCreationFacts['agentState'] {
+  if (err instanceof AgentError) {
+    if (err.code === 'AGENT_INCOMPATIBLE') return 'incompatible'
+    if (err.code === 'AGENT_REFUSED' || err.code === 'AGENT_REDIRECT') return 'refused'
+    return 'unreachable'
+  }
+  const code = (err as { code?: unknown } | null)?.code
+  if (typeof code === 'string' && /^(DRIVER_MISCONFIGURED|HUB_SECRET|HUB_NEEDS)/.test(code))
+    return 'refused'
+  return 'unreachable'
+}
+
+const isObj = (v: unknown): v is Record<string, unknown> =>
+  !!v && typeof v === 'object' && !Array.isArray(v)
+
+/**
+ * The Docker driver, what its agent says now (health, and every planned stack name), the stack
+ * names its other placements deploy, and the stack settings checked as a Stack panel save is —
+ * the agent's HUB_AGENT_ENV_PREFIXES included. Every agent look is bounded; none throws.
+ */
+async function gatherDocker(
+  i: Partial<CreateAppInput>,
+  key: string | null,
+  envs: CreateAppInput['environments'],
+  deps: GatherCreationDeps,
+  ms: number
+): Promise<DockerCreationFacts> {
+  const t = (isObj(i.target) ? i.target : {}) as { driver_id?: unknown; stack?: unknown }
+  const stack = (isObj(t.stack) ? t.stack : {}) as DockerStackInput
+  const preview = deps.preview === true
+  const id = Number(t.driver_id)
+  const row = Number.isInteger(id) && id > 0 ? await getDriver(id) : null
+  const driver = row?.kind === 'docker' ? row : null
+  const out: DockerCreationFacts = {
+    driver,
+    health: null,
+    agentState: 'not_asked',
+    imageRepo: hubImage(),
+    stacks: {},
+    placementStacks: [],
+    settings: { ok: false, code: 'BAD_TARGET', message: 'Pick the Docker driver.' },
+    secretKeys: []
+  }
+  const secrets = isObj(stack.secrets) ? stack.secrets : {}
+  out.secretKeys = Object.entries(secrets)
+    .filter(([, v]) => typeof v === 'string' && v !== '' && (preview || v !== HUB_MASK))
+    .map(([k]) => k)
+    .sort()
+  if (!driver) return out
+
+  try {
+    out.health = await bounded(() => (deps.agentHealth ?? realAgentHealth)(driver), ms)
+    out.agentState = 'ok'
+  } catch (err) {
+    out.agentState = agentStateOf(err)
+  }
+
+  const placements = (await db('nivaro_hub_placements')
+    .where({ driver_id: driver.id })
+    .select('target')) as Array<{ target: unknown }>
+  for (const p of placements) {
+    const tg = typeof p.target === 'string' ? parseJson(p.target) : p.target
+    const name = isObj(tg) ? tg.stack : undefined
+    if (typeof name === 'string' && name) out.placementStacks.push(name)
+  }
+
+  if (out.health && key) {
+    const look = deps.agentStack ?? ((d: DockerDriverRow, n: string) => agentStack(d, n))
+    await Promise.all(
+      envs.map(async (e) => {
+        const envKey = str(e?.key)
+        if (!isCreatableKey(envKey)) return
+        const name = stackName(key, envKey)
+        try {
+          const st = await bounded(() => look(driver, name), ms)
+          const owner = (st?.owner ?? {}) as { app?: unknown }
+          out.stacks[name] = !st
+            ? 'none'
+            : owner.app === key && st.environment === envKey
+              ? 'hub'
+              : 'other'
+        } catch (err) {
+          const code = (err as { code?: unknown } | null)?.code
+          out.stacks[name] =
+            code === 'STACK_NOT_HUB' || code === 'STACK_OWNER_MISMATCH' ? 'other' : 'unknown'
+        }
+      })
+    )
+  }
+
+  // Keys the creation writes itself (sign-in, the database record) are refused by name.
+  const plain = isObj(stack.settings) ? stack.settings : {}
+  const owned = [...Object.keys(plain), ...Object.keys(secrets)].find(creationOwned)
+  if (owned) {
+    out.settings = {
+      ok: false,
+      code: 'RESERVED_SETTING',
+      message: `${owned.slice(0, 64)} is set by the creation itself (sign-in and the database come from the form).`
+    }
+    return out
+  }
+  const body: Record<string, unknown> = {
+    ...(stack.size !== undefined ? { size: stack.size } : {}),
+    ...(stack.redis !== undefined ? { redis: stack.redis } : {}),
+    settings: plain,
+    secrets: Object.fromEntries(
+      Object.entries(secrets).map(([k, v]) => [k, preview && v === HUB_MASK ? PREVIEW_VALUE : v])
+    ),
+    ...(stack.extension_pins !== undefined ? { extension_pins: stack.extension_pins } : {})
+  }
+  const health = out.health
+  const v = await validateStackSettings(body, null, {
+    driver: driver.config,
+    // Part of the validator's interface only (hostnames are judged by the planner).
+    env: {} as HubEnvironmentRow,
+    envPrefixes: async () => (health ? agentEnvPrefixes(health) : null)
+  })
+  out.settings = v.ok ? { ok: true, row: v.row } : { ok: false, code: v.code, message: v.message }
+  return out
+}
+
+/** The shared deployment, the pool its placements already take and the names it routes. */
+async function gatherShared(i: Partial<CreateAppInput>): Promise<SharedCreationFacts> {
+  const t = (isObj(i.target) ? i.target : {}) as { shared_id?: unknown }
+  const id = Number(t.shared_id)
+  const deployment = Number.isInteger(id) && id > 0 ? await getShared(id) : null
+  if (!deployment) return { deployment: null, poolUsed: 0, routed: [] }
+  const [poolUsed, routed] = await Promise.all([
+    sharedPoolUsed(deployment.id),
+    deployment.mode === 'docker' ? lastRoutedNames(deployment.id) : Promise.resolve([])
+  ])
+  return { deployment, poolUsed, routed }
 }

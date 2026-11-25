@@ -139,13 +139,13 @@ export async function readStackSettings(envId: number): Promise<StackSettingsRow
  * KEY → sealed value. Merging works on the per-key sealed values with secrets.ts `nextSecret`,
  * so a plaintext value exists only in the call that sets it and in openStackSecrets.
  */
-type SealedMap = Record<string, string>
+export type SealedMap = Record<string, string>
 
-function openSealedMap(blob: string | null): SealedMap {
+export function openSealedMap(blob: string | null): SealedMap {
   return stringMap(openSecret(blob))
 }
 
-function sealMap(map: SealedMap): string | null {
+export function sealMap(map: SealedMap): string | null {
   const keys = Object.keys(map).sort()
   if (keys.length === 0) return null
   const sorted: SealedMap = {}

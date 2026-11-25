@@ -12,7 +12,12 @@ import type { Knex } from 'knex'
 import { insertReturningId } from '../../../db/dialect/ef.js'
 import { db } from '../../../db/index.js'
 import { appPromoteRedis, type PromoteRedis } from '../promote-lock.js'
-import { type CreationStepKey, type CreationStepState, STEP_ORDER } from './types.js'
+import {
+  type CreationKind,
+  type CreationStepKey,
+  type CreationStepState,
+  stepOrderFor
+} from './types.js'
 
 export const CREATIONS = 'nivaro_hub_creations'
 
@@ -43,6 +48,13 @@ export interface CreationMade {
   component_id?: number
   /** Public half of the app's deploy key; `pushed` once DEPLOY_SSH_KEY holds its private half. */
   deploy_key?: { public_key: string; keyid: string; pushed: boolean }
+  /**
+   * Where the creation goes, when not a GitLab target (gap `create`): the Docker driver whose
+   * agent deploys the stack, or the shared deployment the environment is placed on.
+   */
+  target?:
+    | { kind: 'docker'; driver_id: number }
+    | { kind: 'shared'; shared_id: number; pool_max: number }
   /** Settled at the start (startCreation), so a retry uses what was planned. */
   planned?: {
     hub_url: string
@@ -53,6 +65,18 @@ export interface CreationMade {
     source_branch: string
     /** Unguessable (base64url of 18 random bytes): the fork's mark. Never answered. */
     nonce: string
+    /**
+     * Docker: the stack settings the stack step stores. `secrets` is the sealed map exactly as
+     * nivaro_hub_stack_settings keeps it (one sealed JSON of per-key sealed values). Never answered.
+     */
+    stack?: {
+      size: string
+      redis: string
+      publish_port: number | null
+      settings: Record<string, string>
+      secrets: string | null
+      extension_pins: Record<string, string>
+    }
   }
   /**
    * The operator said the app's deploy key and key.conf are installed on the swarm manager
@@ -117,23 +141,32 @@ function iso(v: unknown): string | null {
   return Number.isNaN(d.getTime()) ? String(v) : d.toISOString()
 }
 
-/** Every step pending, in STEP_ORDER. */
-export function freshSteps(): CreationStepState[] {
-  return STEP_ORDER.map((key) => ({ key, status: 'pending', at: null, note: null }))
+/** The kind of a creation, from what it stored at its start (no `target` = GitLab). */
+export function creationKind(made: CreationMade | null | undefined): CreationKind {
+  const k = made?.target?.kind
+  return k === 'docker' || k === 'shared' ? k : 'gitlab'
 }
 
-/** The stored step list, completed / reordered to STEP_ORDER (an unknown entry is dropped). */
-function normaliseSteps(raw: unknown): CreationStepState[] {
+/** Every step pending, in the kind's order. */
+export function freshSteps(kind: CreationKind = 'gitlab'): CreationStepState[] {
+  return stepOrderFor(kind).map((key) => ({ key, status: 'pending', at: null, note: null }))
+}
+
+/** The stored step list, completed / reordered to the kind's order (an unknown entry is dropped). */
+function normaliseSteps(raw: unknown, kind: CreationKind): CreationStepState[] {
   const list = parseObj<unknown[]>(raw, [])
   const byKey = new Map<string, CreationStepState>()
   if (Array.isArray(list))
     for (const s of list)
       if (s && typeof s === 'object' && typeof (s as CreationStepState).key === 'string')
         byKey.set((s as CreationStepState).key, s as CreationStepState)
-  return STEP_ORDER.map((key) => byKey.get(key) ?? { key, status: 'pending', at: null, note: null })
+  return stepOrderFor(kind).map(
+    (key) => byKey.get(key) ?? { key, status: 'pending', at: null, note: null }
+  )
 }
 
 export function creationFromRow(r: Record<string, unknown>): CreationRow {
+  const made = parseObj<CreationMade>(r.made, {})
   return {
     id: Number(r.id),
     app_id: Number(r.app_id),
@@ -141,8 +174,8 @@ export function creationFromRow(r: Record<string, unknown>): CreationRow {
     status: String(r.status) as CreationStatus,
     step: (r.step as CreationStepKey | null) ?? null,
     waiting_for: (r.waiting_for as CreationWait | null) ?? null,
-    steps: normaliseSteps(r.steps),
-    made: parseObj<CreationMade>(r.made, {}),
+    steps: normaliseSteps(r.steps, creationKind(made)),
+    made,
     error: (r.error as string | null) ?? null,
     version: String(r.version ?? ''),
     first_admin: parseObj(r.first_admin, { email: '' }),
@@ -188,7 +221,7 @@ export async function insertCreation(
       status: 'queued',
       step: null,
       waiting_for: null,
-      steps: JSON.stringify(freshSteps()),
+      steps: JSON.stringify(freshSteps(creationKind(o.made))),
       made: JSON.stringify(o.made),
       error: null,
       version: o.version,
