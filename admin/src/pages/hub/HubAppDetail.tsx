@@ -70,6 +70,7 @@ import {
   usePlacement,
   useSharedList
 } from './move/move-api'
+import { mayDeploy, OwnerPolicyCard, useAppAccess } from './owner-access'
 import { HubAppSigninCard } from './signin/HubEnvSigninPanel'
 
 /**
@@ -131,6 +132,7 @@ export function HubAppDetail({
       {canPromote && <HubAppSigninCard app={data} envs={envs} />}
       <DeploysCard envs={envs} />
       <OwnersCard app={data} isAdmin={isAdmin} />
+      {canPromote && <OwnerPolicyCard appId={data.id} isAdmin={isAdmin} />}
     </div>
   )
 }
@@ -277,6 +279,9 @@ function EnvironmentsCard({
   const qc = useQueryClient()
   const [adding, setAdding] = useState(false)
   const [refreshingAll, setRefreshingAll] = useState(false)
+  // Owners deploy non-production only, unless an admin allows production (owner-access.tsx).
+  const access = useAppAccess(app.id)
+  const deployHere = (envId: number) => canPromote && mayDeploy(access.data, envId)
 
   const refreshAll = async () => {
     setRefreshingAll(true)
@@ -342,7 +347,7 @@ function EnvironmentsCard({
                 env={env}
                 envs={envs}
                 isAdmin={isAdmin}
-                canPromote={canPromote}
+                canPromote={deployHere(env.id)}
               />
             ))}
           </ul>
@@ -372,7 +377,7 @@ function EnvironmentsCard({
                     env={env}
                     envs={envs}
                     isAdmin={isAdmin}
-                    canPromote={canPromote}
+                    canPromote={deployHere(env.id)}
                   />
                 ))}
               </tbody>
@@ -762,7 +767,13 @@ function EnvRow({
         </td>
       </tr>
       {env.placement_id != null && !row.isShared && !row.placementPending && (
-        <HubStackPanel env={env} appId={app.id} isAdmin={isAdmin} layout='row' />
+        <HubStackPanel
+          env={env}
+          appId={app.id}
+          isAdmin={isAdmin}
+          canDeploy={canPromote}
+          layout='row'
+        />
       )}
       {row.moving && (
         <tr className='border-b border-slate-100 last:border-0 dark:border-border'>
@@ -882,7 +893,14 @@ function EnvItem({
         </p>
       )}
       {env.placement_id != null && !row.isShared && !row.placementPending && (
-        <HubStackPanel env={env} appId={app.id} isAdmin={isAdmin} layout='card' idPrefix='-m' />
+        <HubStackPanel
+          env={env}
+          appId={app.id}
+          isAdmin={isAdmin}
+          canDeploy={canPromote}
+          layout='card'
+          idPrefix='-m'
+        />
       )}
       {row.moving && (
         <div className='mt-2'>

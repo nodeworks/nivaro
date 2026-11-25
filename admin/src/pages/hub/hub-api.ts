@@ -263,6 +263,12 @@ export const STATUS_DOT: Record<ChipState, string> = {
 }
 
 const CODE_COPY: Record<string, { title: string; hint?: string }> = {
+  // Owner self-service (services/hub/owner-access.ts): production is the Hub admins' unless the
+  // app's switch says owners may.
+  PRODUCTION_ADMIN_ONLY: {
+    title: 'Production is deployed by Hub administrators',
+    hint: 'Ask a Hub administrator to deploy it, or to let owners deploy production on this app.'
+  },
   // X-6b: the environment's lock names who holds it (a promotion is PROMOTION_RUNNING).
   CREATION_RUNNING: {
     title: 'A creation step is running on this environment',
