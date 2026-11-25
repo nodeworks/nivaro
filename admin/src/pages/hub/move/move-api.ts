@@ -846,7 +846,11 @@ export const MOVE_BLOCKER_COPY: Record<string, Copy> = {
   },
   SQLITE: {
     title: 'The app runs on SQLite',
-    hint: 'A shared deployment needs a database server. Move the data to SQL Server, Postgres or MySQL first.'
+    hint: 'A move does not carry a SQLite database file yet. A new SQLite environment can be placed on a shared deployment of size small (0.3.215 or later); to move this one, move its data to SQL Server, Postgres or MySQL first.'
+  },
+  SQLITE_MOVE: {
+    title: "The app's database is a SQLite file on its shared deployment",
+    hint: 'A move does not carry that file yet, so the app stays where it is.'
   },
   ENV_OBJECT_STORAGE: {
     title: 'Files are stored in S3 or Azure set by environment variables',
@@ -1141,6 +1145,14 @@ export const MOVE_CODE_COPY: Record<string, Copy> = {
   DATABASE_IN_USE: {
     title: 'Another environment already uses that database',
     hint: 'Each environment has its own database.'
+  },
+  SQLITE_ONE_PROCESS: {
+    title: 'A SQLite app needs a shared deployment of one process',
+    hint: 'SQLite allows one writer process: pick a Docker shared deployment of size small, or give the app a database server.'
+  },
+  SQLITE_SHARED_VERSION: {
+    title: 'That shared deployment is too old for a SQLite app',
+    hint: 'A shared deployment serves SQLite apps from 0.3.215: upgrade it first.'
   },
   CREATION_RUNNING: {
     title: 'A creation step is running on this environment',

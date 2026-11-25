@@ -13,7 +13,7 @@ poolers, and the features that need SQL Server.
 | Postgres | `pg` | **14** | Proven from an empty database on 14 and 16. 13 and older: not tested. |
 | MySQL | `mysql2` | **8.0.13** | Proven on 8.0.46 and 8.4. Aurora MySQL 3, Azure Database for MySQL 8.0 and Cloud SQL MySQL 8.0 are 8.0-compatible. 5.7 is not supported. |
 | MariaDB | `mariadb` | **10.11** | Proven on 10.11 and 11.4. Runs on the `mysql2` driver; boot refuses `mysql2` against a MariaDB server (and the reverse) with a one-line fix. |
-| SQLite | `sqlite` | 3.x (bundled with `better-sqlite3`) | `DB_DATABASE` is the file path. **One process only**: refused in cloud mode, with `NIVARO_ROLE` set and with a read replica. For demos, local development, small single-server installs and tests. `better-sqlite3` is an optional dependency; boot says so if it is missing. |
+| SQLite | `sqlite` | 3.x (bundled with `better-sqlite3`) | `DB_DATABASE` is the file path. **One process only**: refused in cloud mode, with `NIVARO_ROLE` set and with a read replica. For demos, local development, small single-server installs and tests. `better-sqlite3` is an optional dependency; boot says so if it is missing. A Hub shared deployment of one process (size small, 0.3.215+) also serves SQLite *apps*, each its own file (see below). |
 
 Every engine returns the same answers for the same data: text search is case-insensitive, booleans
 read back as `true`/`false`, timestamps are UTC instants.
@@ -281,6 +281,26 @@ Tenant pools take a connection string per tenant. A Postgres tenant string goes 
 node-postgres as is — note that node-postgres reads `sslmode=require` as `verify-full`. A MySQL
 tenant string with `sslmode=` / `ssl-mode=` now gets real TLS (mysql2 used to ignore those
 parameters and connect in plain text); a string without them is unchanged.
+
+## SQLite apps on a Hub shared deployment (0.3.215)
+
+Nivaro Cloud never serves SQLite. A Hub shared deployment does, when it is ONE process (Docker,
+size small: one `all` service; a process with `NIVARO_ROLE` set drops SQLite apps from its list):
+
+- The Hub's tenant list names a SQLite app as `db: {client: 'sqlite', connection: 'app.sqlite'}`:
+  a file NAME only. The deployment keeps it at `<STORAGE_LOCAL_ROOT>/app-db/<tenant id>/<file>`,
+  outside the stored-files key space (`apps/<tenant id>/`), and refuses a name, a folder or a file
+  link that would leave that folder (`db/sqlite-tenant.ts`, checked again when the pool opens).
+- Each app gets its own knex (better-sqlite3 with the `db/sqlite.ts` patches): WAL, a few
+  readers, migrations without knex's per-migration transaction, and the `COLLATE NOCASE` pass
+  after its migrations (`runMigrationsOn` runs it for every SQLite database). Writes take turns
+  per FILE (`sqliteWriteLockFor`), so two apps never wait for each other.
+- One process per file: the pool takes the file's `<file>.lock` (`claimSqliteFile`). During a
+  rolling update the new process gets `SQLITE_FILE_BUSY` until the old one stops; the app's
+  migration pass tries again in 30 s.
+- The deployment link's `db-check` takes `{client: 'sqlite', connection: <file>, tenant: <id>}`
+  and reads the file read-only (no file yet = `absent`).
+- A move does not carry the file yet (`SQLITE` / `SQLITE_MOVE` blockers).
 
 ## SQL Server-only features
 

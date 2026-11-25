@@ -417,6 +417,14 @@ export function warningDetail(n: SharedNote): string | null {
 
 /** Refusals of the shared deployment routes, in plain words. Wins over the Hub's general copy. */
 export const SHARED_COPY: Record<string, { title: string; hint?: string }> = {
+  SQLITE_ONE_PROCESS: {
+    title: 'An app on this deployment uses a SQLite database',
+    hint: 'SQLite allows one writer process: keep the deployment at size small, or move that app off it first.'
+  },
+  SQLITE_SHARED_VERSION: {
+    title: 'An app on this deployment uses a SQLite database',
+    hint: 'Shared deployments serve SQLite apps from 0.3.215: pick that version or later.'
+  },
   EXTENSION_IN_USE: {
     title: 'An app on this deployment still uses that extension',
     hint: 'Keep it in the list, or move that app off the deployment first.'

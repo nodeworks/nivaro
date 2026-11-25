@@ -1,13 +1,24 @@
-import { QueryErrorState } from '@nivaro/shared'
-import { ChevronLeft, Database, Plus, Server } from 'lucide-react'
+import { type ErrorDescription, ErrorNotice, QueryErrorState } from '@nivaro/shared'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { ChevronLeft, Database, FileBox, Plus, Server } from 'lucide-react'
+import { useState } from 'react'
 import { useSearchParams } from 'react-router'
+import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
 import { ghostButton } from '../hub-parts'
 import { AdoptDatabaseForm, DatabaseDetail, DbStatusChip, environmentWords } from './DatabaseDetail'
 import { DbServerForm } from './DbServerForm'
-import { ENGINE_LABEL, MODE_LABEL, useDatabases, useDbServers } from './db-api'
+import {
+  createSqliteDatabase,
+  dbError,
+  dbKeys,
+  ENGINE_LABEL,
+  MODE_LABEL,
+  useDatabases,
+  useDbServers
+} from './db-api'
 
 /**
  * Databases (Hub tab, administrators): the database servers the Hub knows, the databases
@@ -39,11 +50,11 @@ function DatabasesAdmin() {
   const [params, setParams] = useSearchParams()
   const serverId = Number(params.get('server')) || null
   const dbId = Number(params.get('db')) || null
-  const creating = params.get('new') // 'server' | 'adopt'
+  const creating = params.get('new') // 'server' | 'adopt' | 'sqlite'
   const show = (next: {
     server?: number | null
     db?: number | null
-    create?: 'server' | 'adopt'
+    create?: 'server' | 'adopt' | 'sqlite'
   }) =>
     setParams((p) => {
       const out = new URLSearchParams(p)
@@ -117,6 +128,19 @@ function DatabasesAdmin() {
           active={creating === 'adopt'}
           onAction={() => show({ create: 'adopt' })}
         />
+        <div className='px-2 pt-1'>
+          <button
+            type='button'
+            className={cn(
+              ghostButton,
+              'w-full justify-start',
+              creating === 'sqlite' && 'bg-accent'
+            )}
+            onClick={() => show({ create: 'sqlite' })}
+          >
+            <FileBox className='h-3.5 w-3.5' aria-hidden /> New SQLite database
+          </button>
+        </div>
         {dbs.isPending ? (
           <ListSkeleton />
         ) : dbs.isError ? (
@@ -176,6 +200,8 @@ function DatabasesAdmin() {
           />
         ) : creating === 'adopt' ? (
           <AdoptDatabaseForm onAdopted={(id) => show({ db: id })} onCancel={() => show({})} />
+        ) : creating === 'sqlite' ? (
+          <SqliteDatabaseForm onMade={(id) => show({ db: id })} onCancel={() => show({})} />
         ) : currentServer ? (
           <DbServerForm
             key={currentServer.id}
@@ -200,6 +226,70 @@ function DatabasesAdmin() {
             </p>
           </div>
         )}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * 0.3.215: record a SQLite app's database. Nothing to fill in: the record names the file
+ * (app.sqlite) a shared deployment of size small keeps in the app's own folder of its volume.
+ */
+function SqliteDatabaseForm({
+  onMade,
+  onCancel
+}: {
+  onMade: (id: number) => void
+  onCancel: () => void
+}) {
+  const qc = useQueryClient()
+  const [failure, setFailure] = useState<ErrorDescription | null>(null)
+  const make = useMutation({
+    mutationFn: createSqliteDatabase,
+    onSuccess: (d) => {
+      setFailure(null)
+      void qc.invalidateQueries({ queryKey: dbKeys.databases() })
+      onMade(d.id)
+    },
+    onError: (err) => setFailure(dbError(err, 'Could not record the SQLite database'))
+  })
+  return (
+    <div className='p-4 sm:p-6'>
+      <div className='max-w-[760px] space-y-5'>
+        <div>
+          <h2 className='m-0 text-[18px] font-semibold tracking-[-0.015em] text-slate-900 dark:text-foreground'>
+            New SQLite database
+          </h2>
+          <p className='m-0 mt-1 text-[12px] text-slate-500 dark:text-muted-foreground'>
+            For a small app on a shared deployment, without a database server. The deployment keeps
+            the app's database as one file in the app's own folder of its volume.
+          </p>
+        </div>
+        <ul className='m-0 list-disc space-y-1.5 rounded-lg border border-slate-200 bg-white py-3 pr-4 pl-8 text-[12px] text-slate-600 dark:border-border dark:bg-card dark:text-muted-foreground'>
+          <li>
+            Only a Docker shared deployment of size small (one process, 0.3.215 or later) serves it:
+            SQLite allows one writer process. That deployment then stays small while the app is on
+            it.
+          </li>
+          <li>Use it by placing a new environment on that deployment and picking this record.</li>
+          <li>
+            A move does not carry the file yet: the app stays on the deployment it is placed on.
+          </li>
+        </ul>
+        {failure != null && <ErrorNotice description={failure} />}
+        <div className='flex items-center gap-2'>
+          <Button
+            size='sm'
+            className='h-8 bg-nvr-cyan text-white hover:bg-nvr-cyan/90'
+            disabled={make.isPending}
+            onClick={() => make.mutate()}
+          >
+            {make.isPending ? 'Recording…' : 'Record a SQLite database'}
+          </Button>
+          <Button size='sm' variant='ghost' className='h-8' onClick={onCancel}>
+            Cancel
+          </Button>
+        </div>
       </div>
     </div>
   )

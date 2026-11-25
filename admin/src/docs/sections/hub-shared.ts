@@ -258,7 +258,7 @@ export const hubSharedDocs: DocSection = {
         'Only an environment that has never served: no Hub deploy that succeeded, no finished creation (`CREATION_RUNNING` while one is open), no current dedicated placement (clear it first if it never ran), and, when it has a hub token, an app that does not answer over its hub link. Any answer from that link (even a refused token) means it runs, and so does a database that already holds an install: both answer `USE_MOVE`, so move it instead. No answer, or a database the Hub cannot look at, is `SERVING_UNKNOWN` and never a pass: if the app is gone for good, clear its hub token, then place it again.',
         'A Docker shared deployment must have been deployed first (`NOT_DEPLOYED`: upgrade it to a version), and every name of the environment must already be routed by its stack, under its host pattern or among the names its last run routed (`NAME_NOT_ROUTED`; a place never re-applies the stack, which would restart every app on it). An agent that does not answer is never read as routed. A published-port edge routes no names.',
         'An open move of the environment refuses it (`MOVE_OPEN`, naming the move: resume it or roll it back first).',
-        'Before anything is written: the deployment must exist, not be retired and not be busy (`SHARED_RETIRED`, `SHARED_BUSY`); the app must not sign in via the Hub (`SIGNIN_VIA_HUB`) and its extensions must be allowed (`EXTENSION_NOT_ALLOWED`); the database record must be ready and not in use by another environment (`DATABASE_NOT_READY`, `DATABASE_IN_USE`); the pool must be 2 or more (`POOL_TOO_SMALL`) and inside the budget (`POOL_BUDGET`). A Hub database record is never SQLite.',
+        'Before anything is written: the deployment must exist, not be retired and not be busy (`SHARED_RETIRED`, `SHARED_BUSY`); the app must not sign in via the Hub (`SIGNIN_VIA_HUB`) and its extensions must be allowed (`EXTENSION_NOT_ALLOWED`); the database record must be ready and not in use by another environment (`DATABASE_NOT_READY`, `DATABASE_IN_USE`); the pool must be 2 or more (`POOL_TOO_SMALL`) and inside the budget (`POOL_BUDGET`). A SQLite record (0.3.215) only on a Docker deployment of size small at 0.3.215 or later (`SQLITE_ONE_PROCESS`, `SQLITE_SHARED_VERSION`), judged again under the lock of the deployment.',
         "The run (a job run): make the placement and set the environment's database, pin and status `provisioning`; ask every replica to re-read; wait up to 2 minutes for every live replica to hold the list that names the app; wait up to 10 minutes for the app's schema to be `ok` (a failed schema stops the run and names the app's own error); seed the first administrator; set the environment `active`.",
         'A failed run leaves the environment `provisioning` on its placement: place it again to retry.',
         'The Hub keeps no app key it cannot prove: it uses the one it knows, or generates one only for a database known to be empty.'
@@ -399,9 +399,9 @@ export const hubSharedDocs: DocSection = {
           'blocker `EXEC_SCRIPT_FLOWS`'
         ],
         [
-          'SQLite apps',
-          'A shared deployment serves SQL Server, Postgres, MySQL and MariaDB.',
-          'blocker `SQLITE`'
+          'Moving a SQLite app',
+          'A new SQLite environment is placed on a small shared deployment (see Per app on a shared deployment). A move does not carry its database file yet: a dedicated SQLite app does not move in, and a placed one stays where it is.',
+          'blockers `SQLITE`, `SQLITE_MOVE`'
         ],
         [
           'Objects in an env-driven S3 or Azure provider',
@@ -482,7 +482,8 @@ export const hubSharedDocs: DocSection = {
         'The daily retention pass (03:30, one job per app) and the boot passes (owner-group warm, integrity checks, cache warms, readiness warm, db-tuning sweep). They run once per app when it becomes ready. Retention status shows per app. Stale help-video import folders are swept once a day per process (deployment-wide, not per app).',
         'Microsoft directory lookups and sync. The app uses its own Microsoft app registration, saved in Settings → Microsoft directory (tenant id, client id, client secret; the secret is sealed with the app key). The server `GRAPH_*` and `OIDC_*` variables and the directory keys of `NIVARO_SETTINGS_OVERRIDES` are never used on shared.',
         "The Teams bot. The app uses only the bot saved in its own Settings. `TEAMS_BOT_*`, `MICROSOFT_APP_*`, the sign-in app fallback and the `teams_bot_*` override keys are ignored. `TEAMS_BOT=off` still disables the bot on the whole deployment, but `TEAMS_BOT=on` does not switch an app on: each app saves its own switch. Register each bot with that app's host as its messaging endpoint.",
-        "Phone push. An app admin connects the app's push relay in Settings → Mobile app. The server `MOBILE_PUSH_RELAY_KEY` is not used on shared. Phone sign-in was already per app."
+        "Phone push. An app admin connects the app's push relay in Settings → Mobile app. The server `MOBILE_PUSH_RELAY_KEY` is not used on shared. Phone sign-in was already per app.",
+        "SQLite apps (0.3.215). Record a SQLite database on the Databases tab (New SQLite database), then place a new environment with it on a Docker shared deployment of size small. SQLite allows one writer process, so a registered deployment, a medium or large one, or one before 0.3.215 is refused (`SQLITE_ONE_PROCESS`, `SQLITE_SHARED_VERSION`), and while a SQLite app is on it the deployment cannot grow past small or be rolled back below 0.3.215. The file is `app-db/<app id>/app.sqlite` in the deployment's uploads volume, outside the stored-files folders; the Hub names only the file and the deployment refuses any name or link that would leave the app's folder. Each app gets its own pool (WAL, a few readers, one writer at a time per file), its own migrations and the case-insensitive text pass a self-hosted SQLite gets. A process that runs a role of a split stack never opens one. During a rolling update the new process waits for the old one to let go of the file (about 30 s). Back the volume up like any other uploads volume."
       ]
     },
     {
@@ -857,6 +858,10 @@ export const hubMovesDocs: DocSection = {
         ],
         ['`HOSTNAME_TAKEN`', 'Another environment of the Hub already claims one of the names.'],
         ['`REDIS_SHARED`', 'Source and target use the same Redis database.'],
+        [
+          '`SQLITE_MOVE`',
+          "The app's database is a SQLite file its shared deployment keeps: a move does not carry it yet."
+        ],
         [
           '`GATHER_FAILED`',
           'The Hub could not read part of what it needs to plan. Plan again shortly.'
