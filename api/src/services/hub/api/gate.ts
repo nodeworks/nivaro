@@ -127,14 +127,34 @@ function swap(h: Handler): Handler {
   return h
 }
 
+/** A route under /api/hub (not /api/hub-link, /api/hub-transfer, …). */
+export function isHubRouteUrl(url: string | undefined | null): boolean {
+  return /^\/api\/hub(\/|$)/.test(url ?? '')
+}
+
 /**
- * Every route registered after this in the plugin (and its children) gets the Hub gate in place
- * of requireAuth / requireAdmin. Call first thing in a Hub route plugin.
+ * Every /api/hub route registered after this — in this plugin and in EVERY plugin below it, so
+ * call it once at the root of the API routes (routes/index.ts registerRoutes, before any Hub
+ * plugin) — gets the Hub gate in place of requireAuth / requireAdmin. Machine and public routes
+ * (oidc, app-link, the shared deployment's tenant list) carry neither and are left as they are.
  */
 export function installHubCredentialGate(app: FastifyInstance): void {
   app.addHook('onRoute', (opts: RouteOptions) => {
+    if (!isHubRouteUrl(opts.url)) return
     const ph = opts.preHandler as Handler | Handler[] | undefined
     if (!ph) return
     opts.preHandler = (Array.isArray(ph) ? ph.map(swap) : swap(ph)) as RouteOptions['preHandler']
   })
+}
+
+/** Whether a route's preHandlers still name the raw requireAuth / requireAdmin (guard test). */
+export function carriesRawAuth(preHandler: unknown): boolean {
+  const list = Array.isArray(preHandler) ? preHandler : preHandler ? [preHandler] : []
+  return list.some((h) => h === requireAuth || h === requireAdmin)
+}
+
+/** Whether a route's preHandlers carry the Hub gate (guard test). */
+export function carriesHubGate(preHandler: unknown): boolean {
+  const list = Array.isArray(preHandler) ? preHandler : preHandler ? [preHandler] : []
+  return list.some((h) => h === hubRequireAuth || h === hubRequireAdmin)
 }

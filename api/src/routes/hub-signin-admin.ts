@@ -3,7 +3,6 @@ import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { credentialMintRefusal, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { installHubCredentialGate } from '../services/hub/api/gate.js'
 import {
   environmentFromRow,
   idParam,
@@ -215,7 +214,6 @@ async function signinsLast30Days(envId: number): Promise<number> {
 
 export async function hubSigninAdminRoutes(app: FastifyInstance) {
   if (!hubModeEnabled()) return
-  installHubCredentialGate(app)
 
   app.get('/settings', { preHandler: requireAuth }, async (req) => {
     return {

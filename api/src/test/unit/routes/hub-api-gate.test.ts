@@ -69,6 +69,9 @@ const { up: up550 } = await import('../../../db/migrations/550_hub_oidc.js')
 const { up: up551 } = await import('../../../db/migrations/551_hub_signins.js')
 const { hubRoutes } = await import('../../../routes/hub.js')
 const { hubGraphQLFields } = await import('../../../services/hub/api/graphql.js')
+const { installHubCredentialGate, carriesHubGate, carriesRawAuth } = await import(
+  '../../../services/hub/api/gate.js'
+)
 
 const ADMIN = 'AAAAAAAA-0000-4000-8000-000000000001'
 const OWNER = 'BBBBBBBB-0000-4000-8000-000000000002'
@@ -88,6 +91,7 @@ let app: FastifyInstance
 let prevHub: string | undefined
 let prevKey: string | undefined
 let appId = 0
+const seen: Array<{ url: string; method: string; preHandler: unknown }> = []
 let ownedId = 0
 
 beforeAll(async () => {
@@ -109,6 +113,11 @@ beforeAll(async () => {
   ])
   app = Fastify()
   app.decorate('redis', { get: vi.fn(), set: vi.fn(), del: vi.fn(async () => 1) } as never)
+  // As production: the gate is installed once at the root (routes/index.ts registerRoutes).
+  installHubCredentialGate(app)
+  app.addHook('onRoute', (opts) => {
+    seen.push({ url: opts.url, method: String(opts.method), preHandler: opts.preHandler })
+  })
   await app.register(hubRoutes, { prefix: '/api/hub' })
   await app.ready()
 })
@@ -336,6 +345,7 @@ describe('Hub mode off', () => {
     delete process.env.HUB
     try {
       const plain = Fastify()
+      installHubCredentialGate(plain)
       await plain.register(hubRoutes, { prefix: '/api/hub' })
       await plain.ready()
       expect(
@@ -351,5 +361,17 @@ describe('Hub mode off', () => {
   it('cloud mode never has them, even with HUB=on', () => {
     expect(hubGraphQLFields({ HUB: 'on', CLOUD_META_DB_URL: 'mssql://x' } as never)).toBeNull()
     expect(hubGraphQLFields({ HUB: 'on', HUB_SHARED_DEPLOYMENT: 'pool-a' } as never)).toBeNull()
+  })
+})
+
+describe('every registered Hub route is behind the gate', () => {
+  it('no /api/hub route keeps the raw requireAuth / requireAdmin; signed-in ones carry the gate', () => {
+    const hub = seen.filter((r) => r.url.startsWith('/api/hub/'))
+    expect(hub.length).toBeGreaterThan(80)
+    const raw = hub.filter((r) => carriesRawAuth(r.preHandler)).map((r) => `${r.method} ${r.url}`)
+    expect(raw).toEqual([])
+    // Only the shared deployment's tenant list (its own bearer) has no person gate.
+    const open = hub.filter((r) => !carriesHubGate(r.preHandler)).map((r) => `${r.method} ${r.url}`)
+    expect(open.every((r) => r.includes('/api/hub/shared/:key/tenants'))).toBe(true)
   })
 })

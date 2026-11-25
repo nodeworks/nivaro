@@ -3,7 +3,6 @@ import { insertReturningId } from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { installHubCredentialGate } from '../services/hub/api/gate.js'
 import {
   baseUrlCheck,
   environmentFromRow,
@@ -118,8 +117,6 @@ import { hubSharedUpgradeRoutes } from './hub-shared-upgrade.js'
  */
 export async function hubRoutes(app: FastifyInstance) {
   if (!hubModeEnabled()) return
-  // API keys need a Hub scope, connected apps only read and plan (services/hub/api/gate.ts).
-  installHubCredentialGate(app)
   // Once per process start: promotions a previous process left `running` become `interrupted`.
   app.addHook('onReady', async () => recoverOnceAtBoot(app.log))
   // Phase 6: placement runs a previous process left running (services/hub/shared/place.ts).
