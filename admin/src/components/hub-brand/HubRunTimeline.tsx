@@ -22,6 +22,8 @@ export type RunStepState =
 export interface RunStep {
   key: string
   label: string
+  /** One or two words for the track itself; the full label stays in the caption and the tip. */
+  short?: string
   state: RunStepState
 }
 
@@ -84,50 +86,75 @@ export function HubRunTimeline({
     at >= 0
       ? `${what}: step ${at + 1} of ${steps.length}, ${steps[at].label} — ${STATE_WORDS[steps[at].state]}`
       : `${what}: ${steps.length} steps, not started`
+  const focus = at >= 0 ? steps[at] : null
   return (
-    <div
-      ref={box}
-      data-hub-run-timeline=''
-      data-more={more ? '' : undefined}
-      data-more-left={moreLeft ? '' : undefined}
-      role='img'
-      aria-label={summary}
-      className='hub-track-scroll w-full min-w-0 max-w-full overflow-x-auto pb-1'
-    >
-      <ol aria-hidden className='m-0 flex min-w-max list-none items-start p-0'>
-        {steps.map((s, i) => (
-          <Fragment key={s.key}>
-            {i > 0 && (
+    <div data-hub-run='' className='min-w-0 space-y-1.5'>
+      <div
+        ref={box}
+        data-hub-run-timeline=''
+        data-more={more ? '' : undefined}
+        data-more-left={moreLeft ? '' : undefined}
+        role='img'
+        aria-label={summary}
+        className='hub-track-scroll w-full min-w-0 max-w-full overflow-x-auto pb-1'
+      >
+        <ol aria-hidden className='m-0 flex min-w-max list-none items-start p-0'>
+          {steps.map((s, i) => (
+            <Fragment key={s.key}>
+              {i > 0 && (
+                <li
+                  className='hub-track-seg mt-[11px] h-[2px] w-6 shrink-0 rounded-full sm:w-10'
+                  data-done={steps[i - 1].state === 'done' ? '' : undefined}
+                />
+              )}
               <li
-                className='hub-track-seg mt-[11px] h-[2px] w-6 shrink-0 rounded-full sm:w-10'
-                data-done={steps[i - 1].state === 'done' ? '' : undefined}
-              />
+                data-track-step=''
+                data-tip={s.short && s.short !== s.label ? s.label : undefined}
+                className='flex w-[76px] shrink-0 flex-col items-center gap-1.5 text-center'
+              >
+                <span
+                  data-state={s.state}
+                  data-hub-live={live && s.state === 'running' ? '' : undefined}
+                  className='hub-track-node relative flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-semibold'
+                >
+                  <NodeGlyph state={s.state} index={i} />
+                </span>
+                <span
+                  className={cn(
+                    'line-clamp-2 text-[11px] leading-tight',
+                    s.state === 'pending' || s.state === 'undone'
+                      ? 'text-muted-foreground'
+                      : 'font-medium text-foreground'
+                  )}
+                >
+                  {s.short ?? s.label}
+                </span>
+              </li>
+            </Fragment>
+          ))}
+        </ol>
+      </div>
+      {focus && (
+        <p
+          aria-hidden
+          className='m-0 flex min-w-0 flex-wrap items-baseline gap-x-1.5 text-[12px] text-muted-foreground'
+        >
+          <span className='hub-fact shrink-0'>
+            {at + 1}/{steps.length}
+          </span>
+          <span
+            className={cn(
+              'min-w-0 break-words font-medium',
+              focus.state === 'failed' || focus.state === 'stopped'
+                ? 'text-red-700 dark:text-red-300'
+                : 'text-foreground'
             )}
-            <li
-              data-track-step=''
-              className='flex w-[76px] shrink-0 flex-col items-center gap-1.5 text-center'
-            >
-              <span
-                data-state={s.state}
-                data-hub-live={live && s.state === 'running' ? '' : undefined}
-                className='hub-track-node relative flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-semibold'
-              >
-                <NodeGlyph state={s.state} index={i} />
-              </span>
-              <span
-                className={cn(
-                  'line-clamp-2 text-[11px] leading-tight',
-                  s.state === 'pending' || s.state === 'undone'
-                    ? 'text-muted-foreground'
-                    : 'font-medium text-foreground'
-                )}
-              >
-                {s.label}
-              </span>
-            </li>
-          </Fragment>
-        ))}
-      </ol>
+          >
+            {focus.label}
+          </span>
+          <span>— {STATE_WORDS[focus.state]}</span>
+        </p>
+      )}
     </div>
   )
 }

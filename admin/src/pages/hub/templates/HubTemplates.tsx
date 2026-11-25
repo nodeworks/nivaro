@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Archive, ArchiveRestore, Download, FileUp, Plus, Trash2, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
+import { HubToolbar } from '@/components/hub-page'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -56,43 +57,45 @@ export function HubTemplates() {
   const current = picked === 'new' ? null : (list.data?.find((t) => t.id === picked) ?? null)
 
   return (
-    <section aria-labelledby='hub-templates-title' className='flex flex-1 min-h-0 flex-col'>
-      <header className='flex shrink-0 flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-4 py-2.5 dark:border-border dark:bg-card'>
-        <h2
-          id='hub-templates-title'
-          className='m-0 min-w-0 flex-1 basis-full truncate text-[13px] font-semibold text-slate-900 sm:basis-auto dark:text-foreground'
-        >
-          App templates
-          {list.data && (
-            <span className='ml-1.5 font-normal text-slate-500 dark:text-muted-foreground'>
-              · {list.data.length} {list.data.length === 1 ? 'template' : 'templates'}
-            </span>
-          )}
-        </h2>
-        <div className='flex items-center gap-1.5 text-[12px] text-slate-600 dark:text-muted-foreground'>
-          <Switch
-            checked={showArchived}
-            onCheckedChange={setShowArchived}
-            id='hub-templates-archived'
-          />
-          <label htmlFor='hub-templates-archived'>Show archived</label>
-        </div>
-        <button
-          type='button'
-          className={cn(ghostButton, picked === 'new' && 'bg-accent')}
-          onClick={() => setPicked('new')}
-        >
-          <Plus className='h-3.5 w-3.5' aria-hidden /> Upload template
-        </button>
-      </header>
+    <section aria-label='App templates' className='flex flex-1 min-h-0 flex-col'>
+      <HubToolbar
+        description={
+          <>
+            A template is an App Blueprint (schema, workflows, layouts, queues and rules, never
+            data). Pick one on Create app and the Hub installs it into every new environment once
+            its first administrator exists.
+            {list.data && (
+              <span className='tabular-nums text-slate-500 dark:text-muted-foreground'>
+                {' '}
+                {list.data.length} {list.data.length === 1 ? 'template' : 'templates'}.
+              </span>
+            )}
+          </>
+        }
+        actions={
+          <>
+            <div className='flex items-center gap-1.5 text-[12px] text-slate-600 dark:text-muted-foreground'>
+              <Switch
+                checked={showArchived}
+                onCheckedChange={setShowArchived}
+                id='hub-templates-archived'
+              />
+              <label htmlFor='hub-templates-archived'>Show archived</label>
+            </div>
+            <button
+              type='button'
+              aria-pressed={picked === 'new'}
+              className={cn(ghostButton, picked === 'new' && 'bg-accent')}
+              onClick={() => setPicked('new')}
+            >
+              <Plus className='h-3.5 w-3.5' aria-hidden /> Upload template
+            </button>
+          </>
+        }
+      />
 
       <div className='min-h-0 flex-1 overflow-y-auto bg-slate-50 dark:bg-background'>
         <div className='space-y-4 p-4 pb-20 sm:p-6'>
-          <p className='m-0 max-w-[80ch] text-[12px] leading-relaxed text-slate-600 dark:text-muted-foreground'>
-            A template is an App Blueprint (schema, workflows, layouts, queues and rules — never
-            data). Pick one on Create app and the Hub installs it into every new environment after
-            its first administrator exists.
-          </p>
           {picked === 'new' && (
             <UploadForm onClose={() => setPicked(null)} onSaved={(id) => setPicked(id)} />
           )}

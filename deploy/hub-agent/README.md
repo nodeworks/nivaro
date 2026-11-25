@@ -1,7 +1,7 @@
 # Nivaro Hub agent
 
 A small service that runs on a Docker swarm **manager**. The Nivaro Hub calls it
-to deploy, restart and remove app stacks. It is the only Hub component that
+to deploy, restart, scale and remove app stacks. It is the only Hub component that
 holds the Docker socket for writes.
 
 - Image: `nodeworks/nivaro-hub-agent` (tag `@hub-agent-x.y.z` publishes `x.y.z`, and `latest` only for a plain `x.y.z`, never for a prerelease)
@@ -12,7 +12,7 @@ holds the Docker socket for writes.
 
 - Takes a validated stack spec from the Hub and turns it into Engine API calls
   (secrets, volumes, services, labels).
-- Lists, reads, restarts and removes only stacks it created itself (labelled
+- Lists, reads, restarts, scales and removes only stacks it created itself (labelled
   `nivaro.hub.managed`). Every write re-reads the live labels first.
 - Unpacks app extensions from OCI images into a folder the app services mount
   read-only.
@@ -291,6 +291,27 @@ NFS export). The Hub sends those stack fields only to a 0.2.3 agent (else the
 plan stops with `AGENT_TOO_OLD`). Hashes change only on an agent with an NFS
 export or a Redis volume or pin of its own.
 
+**0.2.4 (scaling).** `POST /v1/stacks/:name/scale` with `{spec, roles}`: `spec`
+is the StackSpec the stack runs now, `roles` lists `{role, replicas?, cpus?,
+memory_mb?}` for roles it already runs. The agent builds the next spec itself
+(the old one with only those numbers replaced) and validates it with every apply
+rule, so a scale can never add or remove a role, or change an image, an env
+value, a secret, a hostname, an extension or a volume. Judged like a restart:
+ownership and owner from a fresh read, it creates nothing, and the live stack
+hash must be `spec`'s (`409 SPEC_MISMATCH` otherwise) — or already the scaled
+spec's, which answers `200 {already: true}` and writes nothing, so a Hub that
+lost the answer can send the same request again. Rules: the `worker` and `all`
+roles keep their replica count (`REPLICAS_FIXED`), `web` never goes below 1
+(`LAST_WEB`), `realtime` stays at 1 or more while a role runs `SOCKETS=off`
+(`REALTIME_NEEDED`); limits stay inside 0.1–16 CPUs and 128–65536 MB, at most 10
+replicas a role and 30 a stack (`400 SCALE_INVALID` with field codes). The
+changed services are updated with bodies rendered fresh, rolling start-first
+(one task at a time, rollback on failure); a replica change restarts no task.
+Every service gets the new stack hash (`202 {spec_hash, changed, unchanged}`).
+`GET /v1/health` answers the bounds as `scale`. The Hub refuses to scale through
+an older agent (`AGENT_TOO_OLD`). Stack hashes of stacks nobody scales do not
+change.
+
 ## Secrets in the app
 
 Secret files the agent creates for an app are owned by uid and gid 1000 with
@@ -365,7 +386,8 @@ timeout, 3 retries, 30 s start period: a short timeout got the agent killed on a
 loaded host). `GET /v1/health` needs the token and is what the Hub uses. It
 answers `traefik_version` too, so a shared deployment's upgrade plan refuses a
 host pattern on a Traefik v2 agent before anything is applied. `ca_bundle` says
-whether `HUB_AGENT_CA_BUNDLE_FILE` is set (never its contents).
+whether `HUB_AGENT_CA_BUNDLE_FILE` is set (never its contents). From 0.2.4
+`scale` carries the bounds the scale endpoint holds every role to.
 
 ## Storage health
 

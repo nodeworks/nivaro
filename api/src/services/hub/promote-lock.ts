@@ -67,6 +67,8 @@ export type LockHolder =
   | 'database'
   // Hub data care: an environment refresh (or its rollback) replacing this environment's database.
   | 'data'
+  // Hub scaling: a change of the stack's replicas or limits (services/hub/scale/run.ts).
+  | 'scale'
 const HOLDERS: readonly LockHolder[] = [
   'creation',
   'promotion',
@@ -76,7 +78,8 @@ const HOLDERS: readonly LockHolder[] = [
   'shared',
   'app-key',
   'database',
-  'data'
+  'data',
+  'scale'
 ]
 
 const tokenFor = (holder: LockHolder | undefined) => `${holder ?? 'promotion'}:${randomUUID()}`
@@ -134,6 +137,11 @@ export function lockHolderRefusal(
     return {
       code: 'REFRESH_RUNNING',
       message: "This environment's database is being refreshed or rolled back — wait for it to end."
+    }
+  if (holder === 'scale')
+    return {
+      code: 'SCALE_RUNNING',
+      message: "This environment's stack is being scaled — wait for it to end."
     }
   if (holder === 'shared')
     return {
@@ -338,8 +346,15 @@ export function defaultPromoteLock(): PromoteLock {
  * Same shape as the environment lock: SET NX PX, renewed by its runner, compare-and-pexpire and
  * compare-and-delete with the same two fixed scripts, the holder named in the value.
  */
-export type SharedLockHolder = 'move' | 'shared' | 'place' | 'delete' | 'app-key'
-const SHARED_HOLDERS: readonly SharedLockHolder[] = ['move', 'shared', 'place', 'delete', 'app-key']
+export type SharedLockHolder = 'move' | 'shared' | 'place' | 'delete' | 'app-key' | 'scale'
+const SHARED_HOLDERS: readonly SharedLockHolder[] = [
+  'move',
+  'shared',
+  'place',
+  'delete',
+  'app-key',
+  'scale'
+]
 
 export function hubSharedLockKey(sharedId: number | string): string {
   return `nvr:hub:shared:${sharedId}`
@@ -367,7 +382,9 @@ export function sharedLockRefusal(holder: SharedLockHolder | null): {
             ? 'this shared deployment is being deleted or retired'
             : holder === 'app-key'
               ? "an app's encryption key is being saved"
-              : 'another action holds this shared deployment'
+              : holder === 'scale'
+                ? 'its replicas or limits are being changed'
+                : 'another action holds this shared deployment'
   return {
     code: 'SHARED_BUSY',
     message: `The shared deployment is busy: ${why} — wait for it to end.`

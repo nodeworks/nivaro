@@ -28,6 +28,7 @@ describe('hub registry', () => {
       'Apps',
       'Shared deployments',
       'Capacity',
+      'Scaling',
       'Drivers',
       'Targets',
       'Templates',
@@ -35,6 +36,15 @@ describe('hub registry', () => {
       'Backups & data',
       'Sign-in',
       'Releases',
+      // Hub incidents, on-call and status pages (hub-enh/incident) follow Releases.
+      'Incidents',
+      'On-call',
+      'Status pages',
+      // Hub verification (hub-enh/verify) follows Releases.
+      'Smoke checks',
+      'Extensions',
+      // Hub change operations (enhancements 26–28) sit beside Releases.
+      'Changes',
       // Hub ops (enhancements 10, 20, 19) come last, then People (hub-enh/people).
       'Issues',
       'Storage',
@@ -53,10 +63,12 @@ describe('hub registry', () => {
     expect(hubForPath('/hub/secrets')?.tab.label).toBe('Secrets')
     expect(hubForPath('/hub/fleet')?.tab.label).toBe('Fleet')
     expect(hubForPath('/hub/audit')?.tab.label).toBe('Audit')
+    expect(hubForPath('/hub/on-call')?.tab.label).toBe('On-call')
     expect(hubForPath('/hub/people')?.tab.label).toBe('People')
     expect(hubForPath('/hub/targets')?.tab.label).toBe('Targets')
     expect(hubForPath('/hub/shared')?.tab.label).toBe('Shared deployments')
     expect(hubForPath('/hub/capacity')?.tab.label).toBe('Capacity')
+    expect(hubForPath('/hub/scale')?.tab.label).toBe('Scaling')
     expect(hubForPath('/hub/data')?.tab.label).toBe('Backups & data')
   })
 

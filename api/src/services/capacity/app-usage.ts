@@ -13,6 +13,13 @@ import type { TenantRecord } from '../tenancy/types.js'
 import { currentTenantKey } from '../tenant-rooms.js'
 import { appJobCounts, isExternalRequest, readStoredBytes } from './enforce.js'
 import type { AppLimits } from './limits.js'
+import {
+  noteLatency,
+  queueDepths,
+  type RoleScaleFigures,
+  roleFigures,
+  snapshotExtras
+} from './scale-figures.js'
 
 /**
  * Capacity figures of an app process (Hub capacity view, idea 9) — what the Hub's capacity job
@@ -75,6 +82,8 @@ export function noteAppRequest(ms: number, status: number, now = Date.now()): vo
   b.req++
   b.ms += Number.isFinite(ms) && ms > 0 ? ms : 0
   if (status >= 500) b.err++
+  // Hub autoscaling: the answer-time histogram (services/capacity/scale-figures.ts).
+  noteLatency(ms, now)
 }
 
 /** The last complete minute and the last 15 complete minutes of one app's ring. */
@@ -141,6 +150,10 @@ export interface ProcessSnapshot {
   uptime_s: number
   /** Per app: the tenant id on a shared deployment, `app` on a dedicated one. */
   apps: Record<string, AppSnap>
+  /** Hub autoscaling (scale-figures.ts): answer-time histogram of the last 5 minutes. */
+  lat?: number[]
+  /** Hub autoscaling: heavy reads waiting in this process's read gate. */
+  heavy_queued?: number | null
 }
 
 /** The one app of a dedicated process, as named in a snapshot and an answer. */
@@ -180,7 +193,8 @@ export async function buildSnapshot(now = Date.now()): Promise<ProcessSnapshot> 
     cpu_pct: cpuPercent(now),
     memory_mb: Math.round(process.memoryUsage().rss / 1048576),
     uptime_s: Math.round(process.uptime()),
-    apps
+    apps,
+    ...(await snapshotExtras(now))
   }
 }
 
@@ -314,6 +328,10 @@ export interface CapacityUsage {
     busy_ms_per_min: number
   }
   apps: AppUsage[]
+  /** Hub autoscaling: per role (NIVARO_ROLE, null = `all`), p95 answer time and heavy reads. */
+  roles?: RoleScaleFigures[]
+  /** Hub autoscaling: imports and exports waiting in the hand-off queues (null = unreadable). */
+  queues?: { imports: number | null; exports: number | null }
 }
 
 /** Per app (tenant id, or '' on a dedicated app): stored bytes as last read. */
@@ -510,7 +528,9 @@ export async function readUsage(now = Date.now()): Promise<CapacityUsage> {
     partial,
     processes: agg.processes,
     totals: agg.totals,
-    apps
+    apps,
+    roles: roleFigures(snaps),
+    queues: await queueDepths(shared ? tenants.filter((t) => t.status === 'active') : null)
   }
 }
 

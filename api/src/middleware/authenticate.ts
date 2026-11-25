@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { FastifyReply, FastifyRequest } from 'fastify'
-import { roleAllowsSignIn } from '../auth/role-sign-in.js'
+import { isHubSmokeAccount, roleAllowsSignIn } from '../auth/role-sign-in.js'
 import { sessionForeign } from '../auth/session.js'
 import { db } from '../db/index.js'
 import { mobileSignInEnabled } from '../lib/mobile-clients.js'
@@ -900,7 +900,8 @@ export async function sessionPrincipal(req: FastifyRequest): Promise<SessionPrin
   if (sessionForeign(req.session)) return { ok: false, code: 'NOT_SIGNED_IN' }
 
   const user = await activeUserById(userId)
-  if (!user) {
+  // The Hub smoke identity never holds a session, however one came to name it (role-sign-in.ts).
+  if (!user || isHubSmokeAccount(user)) {
     await req.session.destroy()
     return { ok: false, code: 'ACCOUNT_NOT_ACTIVE' }
   }

@@ -21,6 +21,8 @@ export interface Handlers {
   getStack(name: string, q: { expect: string | null }): Promise<HandlerResult>
   putStack(name: string, body: unknown): Promise<HandlerResult>
   restartStack(name: string, body: unknown): Promise<HandlerResult>
+  /** POST /v1/stacks/:name/scale (0.2.4): replicas and limits of roles the stack runs. */
+  scaleStack(name: string, body: unknown): Promise<HandlerResult>
   /** GET /v1/stacks/:name/leftovers?app|shared=…&environment=… */
   leftovers(name: string, q: OwnerQuery): Promise<HandlerResult>
   deleteStack(name: string, q: RemoveQuery): Promise<HandlerResult>
@@ -54,7 +56,7 @@ const MAX_TRACKED_ADDRESSES = 10_000
 /** Mirrors STACK_NAME_RE in names.ts (Task 2): a name the server will hand to a handler. */
 const STACK_NAME_ROUTE_RE = /^[a-z][a-z0-9-]{1,40}$/
 
-type RouteName = 'health' | 'list' | 'stack' | 'restart' | 'leftovers'
+type RouteName = 'health' | 'list' | 'stack' | 'restart' | 'scale' | 'leftovers'
 type Route = { name: RouteName; template: string; re: RegExp; methods: string[] }
 
 const ROUTES: Route[] = [
@@ -70,6 +72,12 @@ const ROUTES: Route[] = [
     name: 'restart',
     template: '/v1/stacks/:name/restart',
     re: /^\/v1\/stacks\/([^/]+)\/restart$/,
+    methods: ['POST']
+  },
+  {
+    name: 'scale',
+    template: '/v1/stacks/:name/scale',
+    re: /^\/v1\/stacks\/([^/]+)\/scale$/,
     methods: ['POST']
   },
   {
@@ -242,6 +250,9 @@ export function createServer(
         break
       case 'restart':
         result = await handlers.restartStack(name as string, parseJson(bodyBytes))
+        break
+      case 'scale':
+        result = await handlers.scaleStack(name as string, parseJson(bodyBytes))
         break
       case 'leftovers':
         result = await handlers.leftovers(name as string, {

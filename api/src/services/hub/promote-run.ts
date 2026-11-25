@@ -58,7 +58,7 @@ import type {
   PromotionPlan,
   PromotionStep
 } from './promote-types.js'
-import { freezeRefusal, rollbackExempt } from './releases/freeze.js'
+import { freezeRefusal, recordedRunningVersion, rollbackExempt } from './releases/freeze.js'
 import { HubSecretError } from './secrets.js'
 import { hubStatusKey } from './status.js'
 
@@ -1105,6 +1105,20 @@ export async function startPromotion(
      * stack settings and pins. Confirmed by the typed key, like a restart: no plan preview.
      */
     apply?: boolean
+    /** Hooks of a start that changes what is deployed first (an extension pin): StartHooks. */
+    hooks?: StartHooks
+    /**
+     * Pre-deploy checklist (services/hub/changes/checklist.ts): the ticked checklist a person
+     * sends for a production promotion, or the unattended start (schedule, train step) whose
+     * checklist the gate opens and waits for. Rollbacks and Apply now never need one.
+     */
+    checklistRunId?: unknown
+    checklistSource?: { kind: 'schedule' | 'train'; id: number; step?: number | null }
+    /**
+     * An administrator's emergency start outside the deploy windows (routes check who and the
+     * typed reason, services/hub/changes/emergency.ts). Freezes and checklists still apply.
+     */
+    outsideWindow?: { reason: string }
   },
   deps: StartDeps = defaultStartDeps()
 ): Promise<{ deployId: number; jobRunId: number | null }> {
@@ -1125,7 +1139,9 @@ export async function startPromotion(
   if (req.kind !== 'rollback') {
     const frozen = await freezeRefusal({
       appIds: [Number(env.app_id)],
-      action: req.apply === true ? 'apply' : 'promote'
+      action: req.apply === true ? 'apply' : 'promote',
+      envId,
+      ...(req.outsideWindow ? { skipWindows: true } : {})
     })
     if (frozen) throw new PromotionError(frozen.code, frozen.message, frozen.status)
   }
@@ -1164,9 +1180,34 @@ export async function startPromotion(
     ])
   }
   let handedOff = false
+  let lockedHookRan = false
   /** Every GitLab branch the run deploys, held for the whole run (review H1). */
   let branches: BranchHold | null = null
+  /** The pre-deploy checklist this start claimed (given back when it does not start). */
+  let checklist: import('./changes/checklist.js').ChecklistClaim | null = null
   try {
+    // Pre-deploy checklist: a promotion is judged here; a "rollback" after gather (only one to
+    // an OLDER version than the running one — rollbackExempt — is a real rollback and exempt;
+    // an equal, newer or unknown running version is gated exactly like a promotion).
+    const gateChecklist = async () => {
+      const { checklistGate, ChecklistError } = await import('./changes/checklist.js')
+      const { notifyChecklistOpened } = await import('./changes/notify.js')
+      try {
+        return await checklistGate({
+          target: { kind: 'environment', envId },
+          action: 'promote',
+          version: req.version,
+          runId: req.checklistRunId,
+          ...(req.checklistSource ? { source: req.checklistSource } : {}),
+          onOpened: notifyChecklistOpened
+        })
+      } catch (err) {
+        if (err instanceof ChecklistError)
+          throw new PromotionError(err.code, err.message, err.status)
+        throw err
+      }
+    }
+    if (req.kind === 'promote' && !apply) checklist = await gateChecklist()
     // A run of this environment alive in this process (its Redis lock may have vanished).
     if (liveHereFor(envId)) throw alreadyRunning()
     // We hold the lock now: a row still `running` here belongs to a process that lost it —
@@ -1177,15 +1218,32 @@ export async function startPromotion(
     })
     if (await db(DEPLOYS).where({ environment_id: envId, status: 'running' }).first('id'))
       throw alreadyRunning()
+    // Inside the lock, before gather reads what to deploy (an extension promote writes its pin).
+    if (req.hooks?.onLocked) {
+      lockedHookRan = true
+      await req.hooks.onLocked()
+    }
     const input = await deps.gather(envId, {
       kind: req.kind,
       version: req.version,
       lockHeld: true,
       ...(apply ? { apply: true } : {})
     })
-    if (req.kind === 'rollback' && !rollbackExempt(req.version, input.targetVersion)) {
-      const frozen = await freezeRefusal({ appIds: [Number(env.app_id)], action: 'promote' })
+    // What runs: the live status, else the Hub's own record of its last successful run (an
+    // outage rollback — production down, its link silent — is still a real rollback); unknown
+    // to both = gated.
+    const running =
+      input.targetVersion ?? (req.kind === 'rollback' ? await recordedRunningVersion(envId) : null)
+    if (req.kind === 'rollback' && !rollbackExempt(req.version, running)) {
+      // Freezes AND deploy windows (one engine), then the checklist: a forward deploy.
+      const frozen = await freezeRefusal({
+        appIds: [Number(env.app_id)],
+        action: 'promote',
+        envId,
+        ...(req.outsideWindow ? { skipWindows: true } : {})
+      })
       if (frozen) throw new PromotionError(frozen.code, frozen.message, frozen.status)
+      checklist = await gateChecklist()
     }
     const plan = buildPromotionPlan(input)
     if (!plan.ok)
@@ -1258,6 +1316,7 @@ export async function startPromotion(
     live.set(deployId, entry)
     markLive(deployId, envId)
     handedOff = true
+    if (checklist) await checklist.link('deploy', deployId).catch(() => undefined)
     entry.done = runInBackgroundPool(() =>
       runPromotion({
         deployId,
@@ -1278,17 +1337,39 @@ export async function startPromotion(
           'hub promotion bookkeeping failed'
         )
       )
-      .finally(() => {
+      .finally(async () => {
         live.delete(deployId)
         unmarkLive(deployId)
+        if (req.hooks?.onEnd) {
+          const row = (await db(DEPLOYS)
+            .where({ id: deployId })
+            .first('status')
+            .catch(() => undefined)) as { status?: string } | undefined
+          await req.hooks.onEnd(row?.status === 'success', deployId).catch(() => undefined)
+        }
       })
     return { deployId, jobRunId: run.id }
   } finally {
     if (!handedOff) {
+      // A start refused after its hook ran: the hook undoes its change, still inside the lock.
+      if (lockedHookRan) await req.hooks?.onEnd?.(false, null).catch(() => undefined)
+      await checklist?.release().catch(() => undefined)
       await branches?.release()
       await deps.lock.release(envId, token)
     }
   }
+}
+
+/**
+ * Hub verification (extension promote): what a start that first changes the deploy's inputs
+ * needs. `onLocked` runs once the environment's promotion lock is held, before gather reads the
+ * inputs; `onEnd` runs once with whether the deploy succeeded — at once (deployId null) when the
+ * start is refused after `onLocked`, or when the run ends. A run whose process stops never calls
+ * onEnd; its caller settles from the deploy row instead.
+ */
+export interface StartHooks {
+  onLocked?: () => Promise<void>
+  onEnd?: (ok: boolean, deployId: number | null) => Promise<void>
 }
 
 /**
@@ -1299,7 +1380,12 @@ export async function startPromotion(
  */
 export async function startStackApply(
   envId: number,
-  req: { confirm: unknown; user: { id: string } | null },
+  req: {
+    confirm: unknown
+    user: { id: string } | null
+    hooks?: StartHooks
+    outsideWindow?: { reason: string }
+  },
   deps: StartDeps = defaultStartDeps()
 ): Promise<{ deployId: number; jobRunId: number | null }> {
   const env = (await db(ENVS).where({ id: envId }).first('key', 'version_pin')) as
@@ -1314,7 +1400,16 @@ export async function startStackApply(
     )
   return startPromotion(
     envId,
-    { kind: 'promote', version, confirm: req.confirm, planHash: null, user: req.user, apply: true },
+    {
+      kind: 'promote',
+      version,
+      confirm: req.confirm,
+      planHash: null,
+      user: req.user,
+      apply: true,
+      ...(req.hooks ? { hooks: req.hooks } : {}),
+      ...(req.outsideWindow ? { outsideWindow: req.outsideWindow } : {})
+    },
     deps
   )
 }

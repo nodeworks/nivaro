@@ -81,7 +81,9 @@ const SYSTEM_SENSITIVE: Record<string, readonly string[]> = {
   nivaro_hub_apps: ['oidc_secret'],
   nivaro_hub_db_servers: ['admin_secret'],
   nivaro_hub_databases: ['connection'],
-  nivaro_hub_targets: ['secret']
+  nivaro_hub_targets: ['secret'],
+  // Hub status pages (576): the SHA-256 of a public link's token (a lookup, like hub_token_lookup).
+  nivaro_hub_status_pages: ['token_hash']
 }
 
 export function sensitiveColumns(collection: string): readonly string[] {

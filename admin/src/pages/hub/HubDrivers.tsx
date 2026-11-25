@@ -27,7 +27,16 @@ import {
   hubKeys,
   hubToast
 } from './hub-api'
-import { dangerArmed, dangerGhost, Field, ghostButton, SecretInput } from './hub-parts'
+import {
+  countLabel,
+  dangerArmed,
+  dangerGhost,
+  Field,
+  ghostButton,
+  ListPaneHeader,
+  listPaneClass,
+  SecretInput
+} from './hub-parts'
 import { DriverStorageCard } from './ops/HubStorage'
 
 /**
@@ -75,24 +84,20 @@ function DriversAdmin() {
 
   return (
     <div className='flex flex-1 min-h-0 overflow-hidden'>
-      <aside
-        className={cn(
-          'w-full shrink-0 flex-col overflow-y-auto border-slate-200 bg-white md:flex md:w-[272px] md:border-r dark:border-border dark:bg-card',
-          detailOpen ? 'hidden' : 'flex'
-        )}
-      >
-        <div className='flex items-center gap-2 border-b border-slate-200 px-3 py-2.5 dark:border-border'>
-          <p className='m-0 flex-1 text-[12px] font-medium text-slate-500 dark:text-muted-foreground'>
-            Drivers
-          </p>
-          <button
-            type='button'
-            className={cn(ghostButton, creating && 'bg-accent')}
-            onClick={() => show({ create: true })}
-          >
-            <Plus className='h-3.5 w-3.5' aria-hidden /> New driver
-          </button>
-        </div>
+      <aside className={cn(listPaneClass, detailOpen ? 'hidden' : 'flex')}>
+        <ListPaneHeader
+          label={countLabel(drivers.data?.length, 'driver', 'drivers')}
+          actions={
+            <button
+              type='button'
+              aria-pressed={creating}
+              className={cn(ghostButton, creating && 'bg-accent')}
+              onClick={() => show({ create: true })}
+            >
+              <Plus className='h-3.5 w-3.5' aria-hidden /> New driver
+            </button>
+          }
+        />
         {drivers.isPending ? (
           <div className='space-y-2 p-3'>
             {[0, 1].map((i) => (

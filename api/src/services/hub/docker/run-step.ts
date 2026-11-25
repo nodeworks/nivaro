@@ -8,6 +8,8 @@ import { PromotionError } from '../promote-lock.js'
 import { urlForLog } from '../promote-plan.js'
 import type { RunContext } from '../promote-run.js'
 import type { HubEnvironmentRow, PromotionStep } from '../promote-types.js'
+import type { ScaleShape } from '../scale/shape.js'
+import { readScaleShape } from '../scale/store.js'
 import { openSecret } from '../secrets.js'
 import { type HubEnvStatus, type HubStatusTarget, readEnvironmentStatus } from '../status.js'
 import {
@@ -135,6 +137,11 @@ export interface DockerOpsDeps {
    * `want.driverId` naming `want.name`.
    */
   placementId?: number
+  /**
+   * Hub scaling: render with this shape instead of the one the Hub keeps for the environment (a
+   * scale run renders the spec the stack runs BEFORE its change). Absent = the kept shape.
+   */
+  scale?: ScaleShape | null
 }
 
 /** Opens a database record for the run; its errors become PromotionErrors with their code. */
@@ -371,7 +378,9 @@ export async function prepareStackSpec(
       database,
       agentVersion: health.agent_version,
       agentVolumeNfs: health.volume_nfs,
-      agentExportMount: health.export_mount
+      agentExportMount: health.export_mount,
+      // Hub scaling: the replicas and limits the Hub keeps on top of the size template.
+      scale: deps.scale !== undefined ? deps.scale : await readScaleShape('environment', envId)
     })
   } catch (err) {
     throw asPromotionError(err, { stack: want.name })
