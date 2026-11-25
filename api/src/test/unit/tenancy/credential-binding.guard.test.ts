@@ -225,11 +225,11 @@ const REDIS_SITES: Record<string, Entry> = {
   "services/ops-proposals.ts :: keyOf(id, ':claim')": K(
     'ops assistant proposal claim: nvr:t:<tenant>:ops:proposal:<id>'
   ),
-  'services/hub-signin/link-client.ts :: k': P(
-    'Hub sign-in push throttle; Hub sign-in is off on any multi-tenant deployment (hub-signin/config.ts)'
+  'services/hub-signin/link-client.ts :: k': K(
+    "Hub sign-in push throttle: pushKey carries appKeyPart() and a tag of the app's own hub token"
   ),
-  'services/hub-signin/link-client.ts :: key': P(
-    'Hub app-switcher cache; Hub sign-in is off on any multi-tenant deployment (hub-signin/config.ts)'
+  'services/hub-signin/link-client.ts :: key': K(
+    "Hub app-switcher cache: switcherKey carries appKeyPart() and a tag of the app's own hub token"
   ),
   'routes/hub-shared.ts :: key': P(
     'Hub-side shared-deployment status cache; a Hub (HUB=on) is never multi-tenant (deployment-mode.ts)'
@@ -414,8 +414,6 @@ const NVR_ALLOW: Record<string, string> = {
   'services/hub/promote-lock.ts :: nvr:hub:promote-cancel:': HUB,
   'services/hub/promote-lock.ts :: nvr:hub:shared:': HUB,
   'services/hub/status.ts :: nvr:hub:status:': HUB,
-  'services/hub-signin/link-client.ts :: nvr:hub-signin-push:': OFF,
-  'services/hub-signin/link-client.ts :: nvr:hub-switcher:': OFF,
   'services/outside-write-watch.ts :: nvr:rt:outside:': OFF,
   'services/cache-warm-on-change.ts :: nvr:warm:chg:plan': OFF,
   'services/cache-warm-on-change.ts :: nvr:warm:chg:plan:lock': OFF,

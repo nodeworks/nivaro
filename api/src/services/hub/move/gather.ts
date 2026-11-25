@@ -1036,6 +1036,16 @@ export async function gatherMovePlanInput(
   } catch {
     ctx.failed.push("this app's encryption key")
   }
+  // Hub sign-in on a shared target: does this environment have an active client at the Hub?
+  let hubClient: boolean | undefined
+  try {
+    const c = (await db('nivaro_hub_oidc_clients')
+      .where({ environment_id: envId })
+      .first('active')) as { active?: unknown } | undefined
+    hubClient = c?.active === true || c?.active === 1 || c?.active === '1'
+  } catch {
+    if (app.signin_mode === 'hub') ctx.failed.push("this environment's sign-in client")
+  }
   // An entry is stored but does not open (another Hub key, damaged): say so, not "unknown" (M-9).
   let keyUnreadable = false
   if (!appKey && row.encryption_key) {
@@ -1095,6 +1105,7 @@ export async function gatherMovePlanInput(
       id: env.id,
       key: env.key,
       hub_linked: !!row.hub_token,
+      ...(hubClient === undefined ? {} : { hub_client: hubClient }),
       version_pin: env.version_pin,
       public_origin: publicOriginOf(env.base_url)
     },

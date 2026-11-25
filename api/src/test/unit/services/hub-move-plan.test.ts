@@ -1029,3 +1029,55 @@ describe('callback addresses (E2E B3)', () => {
       ).toContain('https://shop.apps.example.com/api/auth/callback')
   })
 })
+
+describe('buildMovePlan — sign-in through the Hub on a shared target (0.3.215)', () => {
+  const hubApp = { ...input().app, signin_mode: 'hub' as const }
+  const at = (version: string | null, o: Partial<MovePlanInput> = {}) =>
+    input({
+      app: hubApp,
+      env: { ...input().env, hub_client: true, version_pin: version },
+      source: src({ version, signin_hub: true }),
+      target_facts: tgt({ version }),
+      ...o
+    })
+  const callbacks = (p: ReturnType<typeof buildMovePlan>) =>
+    p.checklist.find((c) => c.id === 'callbacks_registered')
+
+  it('a target before 0.3.215 (or one the Hub cannot read) still refuses SIGNIN_VIA_HUB, naming the version', () => {
+    for (const v of ['0.3.214', '0.3.215-rc.1', null]) {
+      const p = buildMovePlan(at(v))
+      expect(codes(p)).toContain('SIGNIN_VIA_HUB')
+      expect(p.blockers.find((b) => b.code === 'SIGNIN_VIA_HUB')?.text).toContain('0.3.215')
+      expect(callbacks(p)?.required).toBe(true)
+    }
+  })
+
+  it('0.3.215 or later: no blocker; the callbacks item stays required (the direct fallback, review L1)', () => {
+    for (const v of ['0.3.215', '0.3.220', 'v0.4.0']) {
+      const p = buildMovePlan(at(v))
+      expect(codes(p)).not.toContain('SIGNIN_VIA_HUB')
+      expect(callbacks(p)?.required).toBe(true)
+      expect(callbacks(p)?.text).toContain('for direct sign-in while the Hub is down')
+      expect(callbacks(p)?.text).toContain('https://shop.apps.example.com/api/auth/callback')
+    }
+  })
+
+  it('an app in hub mode whose environment has no active client is refused', () => {
+    const p = buildMovePlan(at('0.3.215', { env: { ...input().env, hub_client: false } }))
+    expect(p.blockers.find((b) => b.code === 'SIGNIN_VIA_HUB')?.text).toContain(
+      'no active sign-in client'
+    )
+  })
+
+  it('a source on Hub sign-in whose app record says direct signs in directly there: callbacks stay required', () => {
+    const p = buildMovePlan(at('0.3.215', { app: { ...hubApp, signin_mode: 'direct' } }))
+    expect(codes(p)).not.toContain('SIGNIN_VIA_HUB')
+    expect(callbacks(p)?.required).toBe(true)
+  })
+
+  it('a client the Hub did not read (absent) keeps the callbacks required', () => {
+    const p = buildMovePlan(at('0.3.215', { env: { ...input().env, version_pin: '0.3.215' } }))
+    expect(codes(p)).not.toContain('SIGNIN_VIA_HUB')
+    expect(callbacks(p)?.required).toBe(true)
+  })
+})

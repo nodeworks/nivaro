@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { insertReturningId } from '../../../db/dialect/ef.js'
 import { db } from '../../../db/index.js'
 import { runInBackgroundPool } from '../../../db/pool-context.js'
@@ -8,6 +8,7 @@ import { getApp } from '../../io-holder.js'
 import { type JobRunHandle, startJobRun } from '../../job-runs.js'
 import { readApp } from '../apps.js'
 import { createPlacement, getDriver, getPlacement } from '../drivers.js'
+import { hubTokenColumns } from '../link-token.js'
 import {
   defaultPromoteLock,
   defaultSharedLock,
@@ -1202,8 +1203,23 @@ async function release(ctx: Ctx, steps: MoveSteps): Promise<void> {
         )
     }
   }
+  // 0.3.215 (review L2): on a shared target the app's sign-in reports and switcher use its own
+  // hub token from the tenant list; an environment without one gets one here, as a placement
+  // does. Sealed before the write; a Hub that cannot seal moves on without one.
+  let linkToken: ReturnType<typeof hubTokenColumns> | null = null
+  if (ctx.shared.to !== null)
+    try {
+      linkToken = hubTokenColumns(randomBytes(32).toString('hex'))
+    } catch {
+      linkToken = null
+    }
   await db.transaction(async (trx) => {
     if (carryKey) await setAppKey(ctx.envId, carryKey, trx)
+    if (linkToken)
+      await trx(ENVS)
+        .where({ id: ctx.envId })
+        .where((q) => q.whereNull('hub_token').orWhere('hub_token', ''))
+        .update(linkToken)
     await trx(ENVS)
       .where({ id: ctx.envId })
       .update({

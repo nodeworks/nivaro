@@ -258,7 +258,7 @@ export const hubSharedDocs: DocSection = {
         'Only an environment that has never served: no Hub deploy that succeeded, no finished creation (`CREATION_RUNNING` while one is open), no current dedicated placement (clear it first if it never ran), and, when it has a hub token, an app that does not answer over its hub link. Any answer from that link (even a refused token) means it runs, and so does a database that already holds an install: both answer `USE_MOVE`, so move it instead. No answer, or a database the Hub cannot look at, is `SERVING_UNKNOWN` and never a pass: if the app is gone for good, clear its hub token, then place it again.',
         'A Docker shared deployment must have been deployed first (`NOT_DEPLOYED`: upgrade it to a version), and every name of the environment must already be routed by its stack, under its host pattern or among the names its last run routed (`NAME_NOT_ROUTED`; a place never re-applies the stack, which would restart every app on it). An agent that does not answer is never read as routed. A published-port edge routes no names.',
         'An open move of the environment refuses it (`MOVE_OPEN`, naming the move: resume it or roll it back first).',
-        'Before anything is written: the deployment must exist, not be retired and not be busy (`SHARED_RETIRED`, `SHARED_BUSY`); the app must not sign in via the Hub (`SIGNIN_VIA_HUB`) and its extensions must be allowed (`EXTENSION_NOT_ALLOWED`); the database record must be ready and not in use by another environment (`DATABASE_NOT_READY`, `DATABASE_IN_USE`); the pool must be 2 or more (`POOL_TOO_SMALL`) and inside the budget (`POOL_BUDGET`). A Hub database record is never SQLite.',
+        'Before anything is written: the deployment must exist, not be retired and not be busy (`SHARED_RETIRED`, `SHARED_BUSY`); an app that signs in via the Hub needs a deployment at 0.3.215 or later (`SIGNIN_VIA_HUB`) and its extensions must be allowed (`EXTENSION_NOT_ALLOWED`); the database record must be ready and not in use by another environment (`DATABASE_NOT_READY`, `DATABASE_IN_USE`); the pool must be 2 or more (`POOL_TOO_SMALL`) and inside the budget (`POOL_BUDGET`). A Hub database record is never SQLite.',
         "The run (a job run): make the placement and set the environment's database, pin and status `provisioning`; ask every replica to re-read; wait up to 2 minutes for every live replica to hold the list that names the app; wait up to 10 minutes for the app's schema to be `ok` (a failed schema stops the run and names the app's own error); seed the first administrator; set the environment `active`.",
         'A failed run leaves the environment `provisioning` on its placement: place it again to retry.',
         'The Hub keeps no app key it cannot prove: it uses the one it knows, or generates one only for a database known to be empty.'
@@ -408,13 +408,8 @@ export const hubSharedDocs: DocSection = {
           'blocker `ENV_OBJECT_STORAGE`'
         ],
         [
-          'Sign-in via the Hub, and the switcher pushes',
-          "An app on shared signs in directly with the deployment's primary OIDC.",
-          'blocker `SIGNIN_VIA_HUB`'
-        ],
-        [
-          'Per-app OIDC client',
-          "For now a shared deployment uses one deployment-wide client; the app's own client record is not used. Each app's callback address must be registered on that one Entra app.",
+          'Per-app direct Microsoft sign-in',
+          "Direct sign-in (and the fallback while the Hub is down) uses the deployment's one primary OIDC client: each app's callback address must be registered on that one Entra app. An app that signs in via the Hub (see Per app below) still needs it: it is the fallback while the Hub is down.",
           'checklist item `callbacks_registered`'
         ],
         [
@@ -482,7 +477,8 @@ export const hubSharedDocs: DocSection = {
         'Microsoft directory lookups and sync. The app uses its own Microsoft app registration, saved in Settings → Microsoft directory (tenant id, client id, client secret; the secret is sealed with the app key). The server `GRAPH_*` and `OIDC_*` variables and the directory keys of `NIVARO_SETTINGS_OVERRIDES` are never used on shared.',
         "The Teams bot. The app uses only the bot saved in its own Settings. `TEAMS_BOT_*`, `MICROSOFT_APP_*`, the sign-in app fallback and the `teams_bot_*` override keys are ignored. `TEAMS_BOT=off` still disables the bot on the whole deployment, but `TEAMS_BOT=on` does not switch an app on: each app saves its own switch. Register each bot with that app's host as its messaging endpoint.",
         "Phone push. An app admin connects the app's push relay in Settings → Mobile app. The server `MOBILE_PUSH_RELAY_KEY` is not used on shared. Phone sign-in was already per app.",
-        "GitLab issue sync (0.3.215 or later). Each app keeps its own connections (tokens sealed with the app key), rules, links, queued GitLab writes and switch (Issue trackers tab, stored in the app's own database); the sweep, send queue, reconcile and prune jobs run once per app. GitLab's webhook calls the app's own address (`https://<app host>/api/tracker-hooks/gitlab/<id>`, the URL the tab shows): the host picks the app, so a connection id never reaches another app. `ISSUE_TRACKERS=off` on the deployment turns sync off for every app, but `ISSUE_TRACKERS=on` does not switch an app on. GitLab calls go through the SSRF guard: a GitLab on a private address needs its host in the deployment's `SSRF_ALLOW_HOSTS`. A move of an app with sync on warns `ISSUE_TRACKERS` (it blocks only a target before 0.3.215). It also warns when sync is off only by the server's `ISSUE_TRACKERS=off` while the app's own switch is on (sync would start on the shared deployment: store the switch off first, which is allowed while the server keeps it off), and when the switch is stored under a custom `NIVARO_INSTANCE`. A copy of an app carries its GitLab connections (`SAME_APP_ON_DEPLOYMENT` says so), and a downgrade or rollback of the deployment below 0.3.215 says sync stops for every app on it."
+        "GitLab issue sync (0.3.215 or later). Each app keeps its own connections (tokens sealed with the app key), rules, links, queued GitLab writes and switch (Issue trackers tab, stored in the app's own database); the sweep, send queue, reconcile and prune jobs run once per app. GitLab's webhook calls the app's own address (`https://<app host>/api/tracker-hooks/gitlab/<id>`, the URL the tab shows): the host picks the app, so a connection id never reaches another app. `ISSUE_TRACKERS=off` on the deployment turns sync off for every app, but `ISSUE_TRACKERS=on` does not switch an app on. GitLab calls go through the SSRF guard: a GitLab on a private address needs its host in the deployment's `SSRF_ALLOW_HOSTS`. A move of an app with sync on warns `ISSUE_TRACKERS` (it blocks only a target before 0.3.215). It also warns when sync is off only by the server's `ISSUE_TRACKERS=off` while the app's own switch is on (sync would start on the shared deployment: store the switch off first, which is allowed while the server keeps it off), and when the switch is stored under a custom `NIVARO_INSTANCE`. A copy of an app carries its GitLab connections (`SAME_APP_ON_DEPLOYMENT` says so), and a downgrade or rollback of the deployment below 0.3.215 says sync stops for every app on it.",
+        "Sign-in via the Hub and the app switcher (from 0.3.215). The Hub hands each app its own sign-in client (only while the app is in Hub mode and the client is on), its environment hub token and the Hub's Microsoft client id in the tenant list (sealed with the app's key, which binds each value to its app; the list itself is what keeps them secret: it is fetched over TLS with the deployment token, never cached or logged). `HUB_CLIENT_*` and `HUB_TOKEN` on the deployment are never used for an app. The app calls back on its own address (the Hub already knows it from the environment), checks the evidence against the deployment's primary `OIDC_ISSUER`, and falls back to direct sign-in through the deployment's primary OIDC. `HUB_SIGNIN=off` on the deployment turns it off for every app. A placed environment gets a hub token when it first serves (one moved in keeps its own). Creating, rotating or switching a client, or changing an app's mode, asks the deployment to re-read its list at once. A move of an app in Hub mode needs the target at 0.3.215 or later and an active client for the environment (`SIGNIN_VIA_HUB` otherwise); `callbacks_registered` stays required: direct sign-in through the deployment's sign-in app is the fallback while the Hub is down, and the only path if the deployment is rolled back below 0.3.215 (the downgrade and rollback plans name the apps that would fall back). A move onto a shared deployment issues a hub token too when the environment has none."
       ]
     },
     {
@@ -733,7 +729,7 @@ export const hubMovesDocs: DocSection = {
       rows: [
         [
           '`callbacks_registered`',
-          "Moving to a shared deployment. Lists `https://<host>/api/auth/callback` for each name; add them to the deployment's Microsoft app registration.",
+          "Moving to a shared deployment. Lists `https://<host>/api/auth/callback` for each name; add them to the deployment's Microsoft app registration. For an app that signs in via the Hub (target 0.3.215 or later, active client) they serve direct sign-in while the Hub is down.",
           'yes'
         ],
         [
@@ -838,7 +834,10 @@ export const hubMovesDocs: DocSection = {
           '`APP_KEY_UNKNOWN`, `APP_KEY_MISMATCH`',
           "The Hub does not know the app's encryption key, or the key it knows does not match the fingerprint the app reports (or the Docker stack settings hold another one). Sealed values would be unreadable."
         ],
-        ['`SIGNIN_VIA_HUB`', 'The app signs in via the Hub. Not supported on shared yet.'],
+        [
+          '`SIGNIN_VIA_HUB`',
+          'The app signs in via the Hub and the target runs before 0.3.215, or the environment has no active sign-in client at the Hub.'
+        ],
         [
           '`ISSUER_DIFFERS`',
           "The deployment's sign-in issuer is in another Entra tenant than the app's, so accounts would not match."

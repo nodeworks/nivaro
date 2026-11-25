@@ -19,6 +19,8 @@ export interface TenantRecord {
   origin?: string
   /** Hub source only (phase 6): the app's ENCRYPTION_KEY (64 hex), when the Hub listed one. */
   encryptionKey?: string
+  /** Hub source only: the app's Hub link, sealed with its key (tenancy/app-hub-links.ts). */
+  hubLink?: string
 }
 
 export interface TenantResolution {

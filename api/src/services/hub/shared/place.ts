@@ -29,6 +29,7 @@ import {
   sharedPoolMax,
   updatePlacement
 } from '../drivers.js'
+import { hubTokenColumns } from '../link-token.js'
 import { moveOpenRefusal } from '../move-open.js'
 import { HEARTBEAT_FRESH_MS, withoutFreshHeartbeat } from '../promote-heal.js'
 import {
@@ -43,6 +44,7 @@ import {
 import { type HubEnvStatus, readEnvironmentStatus } from '../status.js'
 import { APP_KEY_UNKNOWN_MESSAGE } from './app-key-check.js'
 import { DeploymentLinkError, deploymentClient } from './deployment-client.js'
+import { runsSharedHubSignin, SHARED_HUB_SIGNIN_SINCE } from './hub-signin-floor.js'
 import { replicasHolding } from './sightings.js'
 import { patternCovers } from './stack-render.js'
 import { getShared, openAppKey, type SharedDeployment, setAppKey, tenantIdFor } from './store.js'
@@ -766,10 +768,13 @@ async function checkAndWrite(
   const stateRefusal = sharedStateRefusal(shared0)
   if (stateRefusal) throw stateRefusal
   await assertDockerReady(shared0, env, deps)
-  if (app.signin_mode === 'hub')
+  // From SHARED_HUB_SIGNIN_SINCE a shared deployment signs each app in through the Hub with the
+  // app's own client from the tenant list (no client yet: its people sign in directly until one
+  // is made on the Sign-in tab — nobody signs in to a new environment before it is placed).
+  if (app.signin_mode === 'hub' && !runsSharedHubSignin(shared0.version_pin))
     throw refuse(
       'SIGNIN_VIA_HUB',
-      'This app signs in through the Hub, which a shared deployment does not offer yet. Switch it to direct sign-in first.'
+      `This app signs in through the Hub, which a shared deployment offers from ${SHARED_HUB_SIGNIN_SINCE} (${shared0.key} runs ${shared0.version_pin ?? 'a version the Hub cannot read'}). Upgrade it, or switch the app to direct sign-in first.`
     )
   const missing = app.extensions.filter((x) => !shared0.extensions.includes(x))
   if (missing.length)
@@ -1071,7 +1076,21 @@ async function runPlacement(
     // 6. Serving: the environment and its run record move together (I-1).
     stillOurs()
     const version = servedVersion ?? placed.shared.version_pin ?? ''
+    // The app's own hub token (sign-in reports and the app switcher, per app on shared): a served
+    // environment without one gets one here (a later move keeps it). Sealed before the write; a
+    // Hub that cannot seal leaves the app without a switcher, never fails the placement.
+    let linkToken: ReturnType<typeof hubTokenColumns> | null = null
+    try {
+      linkToken = hubTokenColumns(randomBytes(32).toString('hex'))
+    } catch {
+      linkToken = null
+    }
     await db.transaction(async (trx) => {
+      if (linkToken)
+        await trx(ENVS)
+          .where({ id: envId })
+          .where((q) => q.whereNull('hub_token').orWhere('hub_token', ''))
+          .update(linkToken)
       await trx(ENVS)
         .where({ id: envId, status: 'provisioning' })
         .update({ status: 'active', updated_at: new Date() })

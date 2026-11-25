@@ -350,6 +350,23 @@ describe('planSharedUpgrade', () => {
     expect(plan.plan_hash).toMatch(/^[0-9a-f]{64}$/)
   })
 
+  it('a downgrade below 0.3.215 names the apps whose Hub sign-in falls back to direct (review L1)', async () => {
+    const id = await newShared({ version_pin: '0.3.215' })
+    const hub = await newApp(id, [{ key: 'production', placed: true }])
+    await db('nivaro_hub_apps').where({ id: hub.appId }).update({ signin_mode: 'hub' })
+    await newApp(id, [{ key: 'production', placed: true }])
+    const down = await Plan.planSharedUpgrade(id, '0.3.214', 'upgrade', planDeps())
+    const text = down.warnings.find((w) => w.code === 'DOWNGRADE')?.text ?? ''
+    expect(text).toContain(`${hub.appKey}/production falls back to direct Microsoft sign-in`)
+    expect(text).toContain('0.3.215')
+    // Staying at or above the floor says nothing about it.
+    await db('nivaro_hub_shared_deployments').where({ id }).update({ version_pin: '0.3.216' })
+    const still = await Plan.planSharedUpgrade(id, '0.3.215', 'upgrade', planDeps())
+    expect(still.warnings.find((w) => w.code === 'DOWNGRADE')?.text ?? '').not.toContain(
+      'falls back'
+    )
+  })
+
   it('each blocker fires on its input', async () => {
     const id = await newShared()
     await newApp(id, [{ key: 'production', placed: true }])

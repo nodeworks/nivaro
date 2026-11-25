@@ -8,6 +8,7 @@ import { COPYABLE_OBJECT_STORAGE } from '../../hub-transfer/copyable.js'
 import { MIN_SHARED_POOL_MAX } from '../drivers.js'
 import { holderOf, lockHolderRefusal, sharedHolderOf, sharedLockRefusal } from '../promote-lock.js'
 import { compareVersions } from '../promote-plan.js'
+import { runsSharedHubSignin, SHARED_HUB_SIGNIN_SINCE } from '../shared/hub-signin-floor.js'
 import { routeActions } from './route-actions.js'
 import type {
   MoveBlockerCode,
@@ -364,12 +365,21 @@ function blockersOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Bloc
       )
     else if (!input.database.ready)
       add('NO_DATABASE_RECORD', "This environment's Hub database record is not ready.")
-    // Sign-in (Decision 13).
-    if (input.app.signin_mode === 'hub' || s.signin_hub)
-      add(
-        'SIGNIN_VIA_HUB',
-        'This app signs in through the Hub, which a shared deployment does not offer yet. Switch it to direct sign-in first.'
-      )
+    // Sign-in (Decision 13). From SHARED_HUB_SIGNIN_SINCE a shared deployment signs each app in
+    // through the Hub with the app's own client (from the tenant list); only an app in `hub` mode
+    // is sent there, and it needs its active client to keep its people signing in that way.
+    if (input.app.signin_mode === 'hub' || s.signin_hub) {
+      if (!runsSharedHubSignin(t.version))
+        add(
+          'SIGNIN_VIA_HUB',
+          `This app signs in through the Hub, which a shared deployment offers from ${SHARED_HUB_SIGNIN_SINCE} (${target.key} runs ${t.version ?? 'a version the Hub cannot read'}). Upgrade it, or switch the app to direct sign-in first.`
+        )
+      else if (input.app.signin_mode === 'hub' && input.env.hub_client === false)
+        add(
+          'SIGNIN_VIA_HUB',
+          'This app signs in through the Hub, but this environment has no active sign-in client at the Hub. Create or turn on its client on the Sign-in tab, or switch the app to direct sign-in first.'
+        )
+    }
     if (s.oidc && t.oidc) {
       const host = s.oidc.issuer_host !== t.oidc.issuer_host
       const tenant = (s.oidc.tenant ?? null) !== (t.oidc.tenant ?? null)
@@ -669,12 +679,22 @@ function addressOf(input: MovePlanInput, name: string): string {
 
 function checklistOf(input: MovePlanInput, routing: 'automatic' | 'manual'): MovePlan['checklist'] {
   const out: MovePlan['checklist'] = []
-  if (toShared(input.kind) && input.to.kind === 'shared')
+  if (toShared(input.kind) && input.to.kind === 'shared') {
+    const callbacks = input.names.map((n) => `${addressOf(input, n)}/api/auth/callback`).join(', ')
+    // Signed in through the Hub with its own client, whose addresses the Hub derives from the
+    // environment.
+    const viaHub =
+      input.app.signin_mode === 'hub' &&
+      input.env.hub_client === true &&
+      runsSharedHubSignin(input.target_facts.version)
+    // Always required (review L1): direct sign-in through the deployment's own sign-in app is the
+    // fallback while the Hub is down, and the only path after a rollback below the floor.
     out.push({
       id: 'callbacks_registered',
-      text: `The sign-in app of ${input.to.shared.key} lists each of these redirect addresses: ${input.names.map((n) => `${addressOf(input, n)}/api/auth/callback`).join(', ')}.`,
+      text: `The sign-in app of ${input.to.shared.key} lists each of these redirect addresses: ${callbacks}.${viaHub ? ' People sign in through the Hub there; these are for direct sign-in while the Hub is down.' : ''}`,
       required: true
     })
+  }
   if (input.from.kind === 'gitlab')
     out.push({
       id: 'old_stack_stopped',

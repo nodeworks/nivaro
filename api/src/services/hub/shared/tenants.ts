@@ -8,6 +8,7 @@ import { environmentNames } from '../docker/render-spec.js'
 import type { HubPlacementRow } from '../drivers.js'
 import type { HubEnvironmentRow } from '../promote-types.js'
 import { openAppKey, type SharedDeployment, tenantIdFor } from './store.js'
+import { hubLinksFor, sealHubLink } from './tenant-hub-link.js'
 
 /**
  * Nivaro Hub phase 6: the tenants a shared deployment serves, as the phase-5 contract
@@ -223,6 +224,8 @@ export async function tenantsBody(
         ).map((r) => [Number(r.id), r.db_ref])
       : []
   )
+  // Each app's own Hub link (sign-in through the Hub, the switcher), sealed with its key below.
+  const hubLinks = await hubLinksFor(rows)
   const tenants: HubTenantWire[] = []
   const listed: SharedTenantRow[] = []
   for (const row of rows) {
@@ -276,6 +279,8 @@ export async function tenantsBody(
       key = null
     }
     if (key) wire.encryption_key = key
+    const link = hubLinks.get(env.id)
+    if (key && link) wire.hub_link = sealHubLink(link, key)
     tenants.push(wire)
     listed.push(row)
   }

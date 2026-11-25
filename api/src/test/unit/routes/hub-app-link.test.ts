@@ -34,7 +34,7 @@ const { up: up551 } = await import('../../../db/migrations/551_hub_signins.js')
 const { up: up546 } = await import('../../../db/migrations/546_hub_stack_settings.js')
 const { saveStackSettings } = await import('../../../services/hub/docker/stack-settings.js')
 const { openSecret } = await import('../../../services/hub/secrets.js')
-const { hubAppLinkRoutes } = await import('../../../routes/hub-app-link.js')
+const { FAILS_PER_ADDRESS, hubAppLinkRoutes } = await import('../../../routes/hub-app-link.js')
 const { sealSecret } = await import('../../../services/hub/secrets.js')
 const { tokenLookupHash, _resetLinkTokenForTests } = await import(
   '../../../services/hub/link-token.js'
@@ -403,12 +403,21 @@ describe('the bearer', () => {
     await probe.close()
   })
 
-  it('20 bad bearers from one address, then 429 — even with the right token; others unaffected', async () => {
+  it('20 failures of one token a minute → that token 429; other tokens from the same address go on (shared deployment)', async () => {
     const ip = '10.9.9.9'
     for (let i = 0; i < 20; i++) expect((await ask('wrong-token', PAT, ip)).statusCode).toBe(401)
     expect((await ask('wrong-token', PAT, ip)).statusCode).toBe(429)
+    // Another app of the same shared deployment (same egress address, its own token) still works.
+    expect((await report(TOKENS.efpProd, PAT, ip)).statusCode).toBe(204)
+  })
+
+  it('many different bad tokens from one address → past the address ceiling, 429 even with the right token; others unaffected', async () => {
+    const ip = '10.9.9.11'
+    for (let i = 0; i < FAILS_PER_ADDRESS; i++)
+      expect((await ask(`wrong-${i}`, PAT, ip)).statusCode).toBe(401)
+    expect((await ask('wrong-again', PAT, ip)).statusCode).toBe(429)
     expect((await report(TOKENS.efpProd, PAT, ip)).statusCode).toBe(429)
-    expect((await report(TOKENS.efpProd, PAT, '10.9.9.10')).statusCode).toBe(204)
+    expect((await report(TOKENS.efpProd, PAT, '10.9.9.12')).statusCode).toBe(204)
   })
 
   it('a stale lookup (token changed by an older replica) fails closed', async () => {

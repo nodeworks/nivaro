@@ -59,6 +59,8 @@ const { defaultSharedLock, sharedLock } = await import('../../../services/hub/pr
 const { getPlacement } = await import('../../../services/hub/drivers.js')
 const { memoryPromoteLock, PromotionError } = await import('../../../services/hub/promote-lock.js')
 const { sealSecret } = await import('../../../services/hub/secrets.js')
+const { openSecret } = await import('../../../services/hub/secrets.js')
+const { environmentForLinkToken } = await import('../../../services/hub/link-token.js')
 
 const HUB_KEY = 'e'.repeat(64)
 const STACK_KEY = 'cd'.repeat(32)
@@ -286,6 +288,12 @@ describe('placeOnShared — the happy path', () => {
     expect(fake.calls.firstAdmin).toEqual([[tenant, ADMIN]])
     // Nothing the run logged holds the key.
     expect(run.lines.join('\n')).not.toContain(key as string)
+    // 0.3.215: once it serves, the environment has its own hub token (the app's sign-in reports
+    // and switcher on shared), sealed with its lookup so the app link finds it.
+    const tok = openSecret(env.hub_token)
+    expect(tok).toMatch(/^[0-9a-f]{64}$/)
+    expect((await environmentForLinkToken(tok as string))?.environment_id).toBe(envId)
+    expect(run.lines.join('\n')).not.toContain(tok as string)
   })
 
   it('keeps a Docker stack-settings key, copied into the entry (a shared env reads its entry only)', async () => {
@@ -480,10 +488,26 @@ describe('placeOnShared — refusals (nothing written)', () => {
     await expectRefused(envId, { database_id: await newDb() }, 'EXTENSION_NOT_ALLOWED')
   })
 
-  it('SIGNIN_VIA_HUB: the app signs in through the Hub', async () => {
+  it('SIGNIN_VIA_HUB: the app signs in through the Hub and the deployment runs before 0.3.215', async () => {
     const app = await newApp({ signin_mode: 'hub' })
     const envId = await newEnv(app.id)
     await expectRefused(envId, { database_id: await newDb() }, 'SIGNIN_VIA_HUB')
+  })
+
+  it('an app on Hub sign-in is placed on a deployment at 0.3.215 or later', async () => {
+    await db('nivaro_hub_shared_deployments')
+      .where({ id: sharedId })
+      .update({ version_pin: '0.3.215' })
+    try {
+      const app = await newApp({ signin_mode: 'hub' })
+      const envId = await newEnv(app.id)
+      // Judged past the sign-in check: the next refusal is a later one (no such database).
+      await expectRefused(envId, { database_id: 99999 }, 'NOT_FOUND', 404)
+    } finally {
+      await db('nivaro_hub_shared_deployments')
+        .where({ id: sharedId })
+        .update({ version_pin: '0.3.210' })
+    }
   })
 
   it('POOL_TOO_SMALL under 2, BAD_POOL over 20, POOL_BUDGET past the budget', async () => {

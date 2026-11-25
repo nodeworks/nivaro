@@ -46,11 +46,12 @@ const EXTRA_CALLS: Record<string, { multiTenant?: number; nivaroCloud?: number }
   // P5-16: a ws-token / View-as entry that names no app is still accepted in Nivaro Cloud (as
   // before) and refused on a Hub shared deployment (C4: Nivaro Cloud's edge trust of old tokens).
   'plugins/socketio.ts': { nivaroCloud: 1 },
-  // Hub phase 7 merge: sign-in through the Hub and the app switcher are off on any multi-tenant
-  // deployment (T4) — a shared deployment always has HUB_URL for its tenant list. hubUrl() (+1)
-  // and hubSigninConfig() / hubSigninProblems() (+2).
+  // Hub phase 7 merge: a shared deployment always has HUB_URL for its tenant list, so hubUrl() is
+  // null on any multi-tenant deployment (T4, +1). Since 0.3.215 each app on a Hub shared
+  // deployment signs in through the Hub with its own client from the tenant list: hubSigninConfig()
+  // / hubSigninProblems() refuse in Nivaro Cloud only (+2 nivaroCloud).
   'services/hub/mode.ts': { multiTenant: 1 },
-  'services/hub-signin/config.ts': { multiTenant: 2 },
+  'services/hub-signin/config.ts': { nivaroCloud: 2 },
   // Row schedules per app: resyncSchedules refuses in Nivaro Cloud only (its T1 entry is weight 0);
   // a Hub shared deployment reconciles inside an app, so each entry binds to it.
   'services/row-schedules.ts': { nivaroCloud: 1 },
