@@ -85,7 +85,7 @@ export const CRON_DESCRIPTIONS: Record<string, string> = {
   'raw-write-announcements':
     'Every 5 seconds — broadcasts record changes that stored procedures and scripts reported in nivaro_raw_writes, so open pages refresh. Records only failed ticks.',
   'outside-write-watch':
-    'Every 10 seconds (Realtime → Outside writes sets it) — looks for records changed outside the app that nobody announced (procedures, scripts) in the collections people have open, using their changed-at column and its index, and tells open screens. Never in cloud mode. Records only failed ticks.',
+    'Every 10 seconds (Realtime → Outside writes sets it) — looks for records changed outside the app that nobody announced (procedures, scripts) in the collections people have open, using their changed-at column and its index, and tells open screens. On a Hub shared deployment, once per SQL Server app, each look held to about 4 seconds (the rest is read next look). Never in Nivaro Cloud. Records only failed ticks.',
   'event-journal-prune':
     'Hourly — deletes durable realtime journal rows older than 24 hours (nivaro_event_journal).',
   'chat-reminders':
@@ -157,6 +157,10 @@ export const CRON_DESCRIPTIONS: Record<string, string> = {
     'Every 5 minutes — raises one deduped issue when a blocking chain has held for over 15 seconds, naming the head blocker.',
   'pool-monitor':
     'Every 5 minutes — samples DB connection pool usage and leak attribution for the DB Health console.',
+  'app-pool-monitor':
+    "Every 5 minutes, shared deployments only — judges this app's own database pool over the last five minutes (acquire waits, how often every connection was busy) and raises one deduped issue in this app's issue log when it is under pressure.",
+  'app-concurrency-sample':
+    "Every 5 minutes, shared deployments only — records this app's own connected sockets and people for the concurrency chart on the Realtime console.",
   'concurrency-sample':
     'Every 5 minutes — records connected socket / active user counts for the concurrency chart on the Realtime console.',
   'infra-health-sample':

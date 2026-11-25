@@ -15,6 +15,8 @@ export interface FleetNote {
 
 export type FleetNotifier = (userId: string, note: FleetNote) => Promise<void>
 
+// TODO(hub-enh/people): once notifyHubEvent (services/hub/notify-events.ts) is merged, send drift
+// alerts as notifyHubEvent({ kind: 'drift', … }) here (phone push); the jobs stay as they are.
 export const fleetNotify: FleetNotifier = async (userId, note) => {
   const { getApp } = await import('../../io-holder.js')
   const app = getApp()

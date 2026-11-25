@@ -62,6 +62,12 @@ vi.mock('../../../services/hub-link/shared-readiness.js', () => ({
 }))
 const render = vi.hoisted(() => ({ resumeRendersAfterRetire: vi.fn() }))
 vi.mock('../../../services/help-video-render.js', () => render)
+const keep = vi.hoisted(() => ({
+  validTargetInstance: (v: unknown) => typeof v === 'string' && /^[A-Za-z0-9._-]{1,100}$/.test(v),
+  carryInstanceRow: vi.fn(),
+  keepEnvMail: vi.fn()
+}))
+vi.mock('../../../services/move-carry.js', () => keep)
 vi.mock('../../../middleware/authenticate.js', () => ({
   authenticate: vi.fn(async (req: FastifyRequest) => {
     const c = st.caller
@@ -246,6 +252,72 @@ describe('strict maintenance over the hub link', () => {
     })
     expect(r.statusCode).toBe(503)
     expect(r.json()).toMatchObject({ code: 'REDIS_UNAVAILABLE' })
+  })
+})
+
+describe('hub gap watch: carry for a move to shared (0.3.215)', () => {
+  const post = (a: FastifyInstance, payload: Record<string, unknown>) =>
+    a.inject({ method: 'POST', url: '/api/hub-link/maintenance', headers: auth, payload })
+  const ROW = { result: 'created', keys: ['huddle'], differed: [] }
+  const reset = () => {
+    keep.carryInstanceRow.mockReset()
+    keep.keepEnvMail.mockReset()
+    keep.carryInstanceRow.mockResolvedValue(ROW)
+    keep.keepEnvMail.mockResolvedValue({ env_mail: 'kept', fields: ['smtp_host'] })
+  }
+
+  it('carries the row and keeps the mail before maintenance, and says so', async () => {
+    reset()
+    const a = await build()
+    const r = await post(a, {
+      on: true,
+      move_id: 9,
+      target_instance: 'pool-a',
+      keep_env_mail: true
+    })
+    expect(r.statusCode).toBe(200)
+    expect(r.json()).toEqual({ on: true, instance_row: ROW, env_mail: 'kept' })
+    expect(keep.carryInstanceRow).toHaveBeenCalledWith('pool-a')
+    expect(keep.keepEnvMail).toHaveBeenCalledWith('pool-a')
+    expect(st.store.get(MK())).toBeTruthy()
+  })
+
+  it('never without a move id or a target, on the way out, or mail when not asked', async () => {
+    reset()
+    const a = await build()
+    expect((await post(a, { on: true, target_instance: 'pool-a' })).json()).toEqual({ on: true })
+    expect((await post(a, { on: true, move_id: 9, keep_env_mail: true })).json()).toEqual({
+      on: true
+    })
+    expect((await post(a, { on: false, move_id: 9, target_instance: 'pool-a' })).statusCode).toBe(
+      200
+    )
+    expect(keep.carryInstanceRow).not.toHaveBeenCalled()
+    const r = await post(a, { on: true, move_id: 9, target_instance: 'pool-a' })
+    expect(r.json()).toEqual({ on: true, instance_row: ROW })
+    expect(keep.keepEnvMail).not.toHaveBeenCalled()
+    expect((await post(a, { on: true, move_id: 9, target_instance: 'a b' })).statusCode).toBe(400)
+  })
+
+  it('a failure stops the move before maintenance is set (503)', async () => {
+    reset()
+    keep.carryInstanceRow.mockRejectedValue(new Error('db down'))
+    const a = await build()
+    const r = await post(a, { on: true, move_id: 9, target_instance: 'pool-a' })
+    expect(r.statusCode).toBe(503)
+    expect(r.json()).toMatchObject({ code: 'INSTANCE_ROW_NOT_CARRIED' })
+    expect(st.store.get(MK())).toBeUndefined()
+    reset()
+    keep.keepEnvMail.mockRejectedValue(new Error('db down'))
+    const m = await post(a, {
+      on: true,
+      move_id: 9,
+      target_instance: 'pool-a',
+      keep_env_mail: true
+    })
+    expect(m.statusCode).toBe(503)
+    expect(m.json()).toMatchObject({ code: 'ENV_MAIL_NOT_KEPT' })
+    expect(st.store.get(MK())).toBeUndefined()
   })
 })
 

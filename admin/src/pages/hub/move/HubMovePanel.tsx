@@ -89,6 +89,7 @@ import {
   useSharedList,
   writeDismissedMove
 } from './move-api'
+import { movePrefill } from './move-prefill'
 
 /**
  * Nivaro Hub (phase 6) — move one environment between a dedicated stack and a shared deployment
@@ -394,7 +395,8 @@ function MoveForm({
     }))
   })
 
-  const [pick, setPickRaw] = useState('')
+  // The Capacity tab's move advisor links here with the target picked (move-prefill.ts).
+  const [pick, setPickRaw] = useState(() => movePrefill(env.id).pick)
   const pickRef = useRef(pick)
   pickRef.current = pick
   const aliveRef = useRef(true)

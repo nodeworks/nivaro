@@ -61,6 +61,7 @@ vi.mock('../services/trackers/sources/index.js', async (importOriginal) => {
   }
 })
 
+import { runWithTenantDb } from '../db/tenant-context.js'
 import { trackerRoutes } from './trackers.js'
 
 async function app() {
@@ -93,6 +94,35 @@ describe('connection list', () => {
         webhook_url: 'https://admin.example.com/api/tracker-hooks/gitlab/8'
       })
     ])
+  })
+
+  it("on a Hub shared deployment the webhook URL is the app's own origin, never the process's", async () => {
+    const keys = ['HUB_SHARED_DEPLOYMENT', 'HUB_URL', 'HUB_DEPLOYMENT_TOKEN'] as const
+    const before = keys.map((k) => process.env[k])
+    Object.assign(process.env, {
+      HUB_SHARED_DEPLOYMENT: 'shared-a',
+      HUB_URL: 'https://hub.example.com',
+      HUB_DEPLOYMENT_TOKEN: 'x'.repeat(40)
+    })
+    try {
+      const f = Fastify()
+      // middleware/tenant.ts: the request's host names the app and its verified origin
+      f.addHook('onRequest', (_req, _reply, done) =>
+        runWithTenantDb({} as never, 'a', done, 'A', 'https://app-a.example.com')
+      )
+      await f.register(trackerRoutes, { prefix: '/api/trackers' })
+      const res = await f.inject({ method: 'GET', url: '/api/trackers' })
+      expect(res.json().data.map((c: { webhook_url: string }) => c.webhook_url)).toEqual([
+        'https://app-a.example.com/api/tracker-hooks/gitlab/3',
+        'https://app-a.example.com/api/tracker-hooks/gitlab/8'
+      ])
+      await f.close()
+    } finally {
+      keys.forEach((k, i) => {
+        if (before[i] === undefined) delete process.env[k]
+        else process.env[k] = before[i]
+      })
+    }
   })
 })
 

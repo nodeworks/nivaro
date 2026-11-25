@@ -350,6 +350,23 @@ describe('planSharedUpgrade', () => {
     expect(plan.plan_hash).toMatch(/^[0-9a-f]{64}$/)
   })
 
+  it('a downgrade below 0.3.215 names the apps whose Hub sign-in falls back to direct (review L1)', async () => {
+    const id = await newShared({ version_pin: '0.3.215' })
+    const hub = await newApp(id, [{ key: 'production', placed: true }])
+    await db('nivaro_hub_apps').where({ id: hub.appId }).update({ signin_mode: 'hub' })
+    await newApp(id, [{ key: 'production', placed: true }])
+    const down = await Plan.planSharedUpgrade(id, '0.3.214', 'upgrade', planDeps())
+    const text = down.warnings.find((w) => w.code === 'DOWNGRADE')?.text ?? ''
+    expect(text).toContain(`${hub.appKey}/production falls back to direct Microsoft sign-in`)
+    expect(text).toContain('0.3.215')
+    // Staying at or above the floor says nothing about it.
+    await db('nivaro_hub_shared_deployments').where({ id }).update({ version_pin: '0.3.216' })
+    const still = await Plan.planSharedUpgrade(id, '0.3.215', 'upgrade', planDeps())
+    expect(still.warnings.find((w) => w.code === 'DOWNGRADE')?.text ?? '').not.toContain(
+      'falls back'
+    )
+  })
+
   it('each blocker fires on its input', async () => {
     const id = await newShared()
     await newApp(id, [{ key: 'production', placed: true }])
@@ -1542,11 +1559,15 @@ describe('one stack, one Redis database (REDIS_DB_SHARED)', () => {
     expect(JSON.stringify(plan)).not.toContain('pw-a')
     expect(JSON.stringify(plan)).not.toContain('redis-shared-db')
     // Another database number on the same Redis: nothing shared.
-    await Run.setSharedSecrets(id, { REDIS_URL: 'redis://:pw-b@redis-shared-db.example.com:6379/6' })
+    await Run.setSharedSecrets(id, {
+      REDIS_URL: 'redis://:pw-b@redis-shared-db.example.com:6379/6'
+    })
     const ok = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', planDeps())
     expect(codes(ok.blockers)).not.toContain('REDIS_DB_SHARED')
     // A retired deployment holds nothing.
-    await Run.setSharedSecrets(id, { REDIS_URL: 'redis://:pw-b@redis-shared-db.example.com:6379/5' })
+    await Run.setSharedSecrets(id, {
+      REDIS_URL: 'redis://:pw-b@redis-shared-db.example.com:6379/5'
+    })
     await db('nivaro_hub_shared_deployments').where({ id: first }).update({ status: 'retired' })
     const retired = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', planDeps())
     expect(codes(retired.blockers)).not.toContain('REDIS_DB_SHARED')
@@ -1554,7 +1575,7 @@ describe('one stack, one Redis database (REDIS_DB_SHARED)', () => {
 })
 
 describe('REDIS_DB_SHARED: ports and the Hub itself', () => {
-  it('rediss:// without a port is 6379; the Hub\'s own Redis database counts too', async () => {
+  it("rediss:// without a port is 6379; the Hub's own Redis database counts too", async () => {
     const { config } = await import('../../../config.js')
     const first = await newShared({ settings: JSON.stringify({ redis: 'external' }) })
     await Run.setSharedSecrets(first, { REDIS_URL: 'rediss://:a@tls-redis.example.com/7' })
@@ -1700,6 +1721,16 @@ describe('downgrade needs confirm (ruling P6-29, B2)', () => {
     expect(d('0.3', '0.3.211')).toBe(true)
     // Nothing deployed yet: nothing to go down from.
     expect(d(null, '0.3.211')).toBe(false)
+  })
+
+  it('a downgrade or rollback below 0.3.215 says GitLab issue sync stops for every app', () => {
+    const l = Plan.downgradeLosses
+    expect(l('0.3.215', '0.3.214')).toMatch(/GitLab issue sync stops for every app/)
+    expect(l('0.3.216', '0.3.215-rc.1')).toMatch(/GitLab issue sync stops/)
+    expect(l('0.3.216', 'next')).toMatch(/GitLab issue sync stops/) // unreadable: the safe side
+    expect(l('0.3.216', '0.3.215')).toBe('')
+    expect(l('0.3.214', '0.3.213')).toBe('') // never ran it
+    expect(l(null, '0.3.213')).toBe('')
   })
 
   it('an upgrade to an older version → 409 DOWNGRADE_NEEDS_CONFIRM unless downgrade: true', async () => {

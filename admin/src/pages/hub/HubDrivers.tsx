@@ -28,6 +28,7 @@ import {
   hubToast
 } from './hub-api'
 import { dangerArmed, dangerGhost, Field, ghostButton, SecretInput } from './hub-parts'
+import { DriverStorageCard } from './ops/HubStorage'
 
 /**
  * Drivers (Hub tab, administrators): how the Hub reaches the GitLab project that deploys an
@@ -453,6 +454,7 @@ function DriverForm({
             }
           />
         )}
+        {isDocker && driver && <DriverStorageCard driverId={driver.id} />}
 
         {failure != null && (
           <ErrorNotice description={hubError(failure, 'Could not save the driver')} />

@@ -63,6 +63,23 @@ describe('rankDocs (#1803)', () => {
     expect(r.answered).toBe(false)
   })
 
+  it('cites the Hub’s sections only on a Hub', () => {
+    const withHub: DocsIndexSection[] = [
+      ...index,
+      {
+        id: 'hub-promotions',
+        label: 'Hub promotions',
+        group: 'hub',
+        group_label: 'Nivaro Hub · Hub mode only',
+        audience: 'admin',
+        blocks: [{ h: 'Promote', t: 'Promote a release to production from the Hub.' }]
+      }
+    ]
+    const q = 'promote release production'
+    expect(rankDocs(withHub, q, { admin: true, hub: false }).hits).toHaveLength(0)
+    expect(rankDocs(withHub, q, { admin: true, hub: true }).hits[0]?.id).toBe('hub-promotions')
+  })
+
   it('caps the limit at 5', () => {
     expect(rankDocs(index, 'rows', { admin: true, limit: 50 }).hits.length).toBeLessThanOrEqual(5)
   })

@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto'
 import { db } from '../../db/index.js'
 import { runInBackgroundPool } from '../../db/pool-context.js'
 import { errorTag } from '../../lib/error-tag.js'
-import { hubLinkToken, hubUrl } from '../hub/mode.js'
+import { appHubLink } from '../hub/mode.js'
+import { appKeyPart } from '../tenancy/credential-binding.js'
 
 /**
  * Nivaro Hub phase 7 (plan Decision 12, rulings P7-8 / P7-9 / P7-12): the app's side of the Hub
@@ -17,9 +18,12 @@ import { hubLinkToken, hubUrl } from '../hub/mode.js'
  *                    cached 5 min in nvr:hub-switcher:<link>:<userId>; a failure is never cached
  *                    and marks the link down in this process for 30 s (no calls meanwhile)
  *
- * `<link>` = the first 10 hex of sha256(HUB_TOKEN): two environments sharing one Redis never
- * share a slot or a cache. Both are inert unless HUB_URL (hubUrl) and HUB_TOKEN (hubLinkToken)
- * are set; hubUrl() is null on a multi-tenant deployment. Both POST with the person in the
+ * `<link>` = the first 10 hex of sha256(the app's hub token): two environments sharing one Redis
+ * never share a slot or a cache. On a Hub shared deployment the key also names the app
+ * (appKeyPart) and the token is the app's own from the Hub's tenant list. Both are inert without
+ * a link (appHubLink in services/hub/mode.ts: HUB_URL + HUB_TOKEN on a dedicated app, the
+ * deployment's HUB_URL + the app's own token on a shared one, never in Nivaro Cloud). Both POST
+ * with the person in the
  * BODY — never a query string (P7-9) — and send the Entra object + tenant id whenever the
  * account row has them (P7-8: an email alone proves less). The Hub answers the switcher only
  * about a person IT recorded signing in to this environment, so an app people sign in to
@@ -47,9 +51,9 @@ export function linkTag(token: string): string {
   return createHash('sha256').update(token).digest('hex').slice(0, 10)
 }
 export const pushKey = (userId: string, token: string) =>
-  `nvr:hub-signin-push:${linkTag(token)}:${userId}`
+  `nvr:hub-signin-push:${appKeyPart()}${linkTag(token)}:${userId}`
 export const switcherKey = (userId: string, token: string) =>
-  `nvr:hub-switcher:${linkTag(token)}:${userId}`
+  `nvr:hub-switcher:${appKeyPart()}${linkTag(token)}:${userId}`
 
 export interface HubLinkUser {
   id: string
@@ -99,12 +103,11 @@ function defaultReadUser(id: string): Promise<Partial<HubLinkUser> | null> {
 }
 
 function link(env: NodeJS.ProcessEnv): { hub: string; token: string } | null {
-  const hub = hubUrl(env)
-  const token = hubLinkToken(env)
-  return hub && token ? { hub, token } : null
+  return appHubLink(env)
 }
 
-/** Per link: the switcher is not asked again before this time (in-process). */
+/** Per link (each app's own token, so per app on a shared deployment): the switcher is not
+ *  asked again before this time (in-process). */
 const linkDownUntil = new Map<string, number>()
 
 export function _resetLinkClientForTests(): void {

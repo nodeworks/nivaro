@@ -225,11 +225,11 @@ const REDIS_SITES: Record<string, Entry> = {
   "services/ops-proposals.ts :: keyOf(id, ':claim')": K(
     'ops assistant proposal claim: nvr:t:<tenant>:ops:proposal:<id>'
   ),
-  'services/hub-signin/link-client.ts :: k': P(
-    'Hub sign-in push throttle; Hub sign-in is off on any multi-tenant deployment (hub-signin/config.ts)'
+  'services/hub-signin/link-client.ts :: k': K(
+    "Hub sign-in push throttle: pushKey carries appKeyPart() and a tag of the app's own hub token"
   ),
-  'services/hub-signin/link-client.ts :: key': P(
-    'Hub app-switcher cache; Hub sign-in is off on any multi-tenant deployment (hub-signin/config.ts)'
+  'services/hub-signin/link-client.ts :: key': K(
+    "Hub app-switcher cache: switcherKey carries appKeyPart() and a tag of the app's own hub token"
   ),
   'routes/hub-shared.ts :: key': P(
     'Hub-side shared-deployment status cache; a Hub (HUB=on) is never multi-tenant (deployment-mode.ts)'
@@ -323,7 +323,7 @@ const LABEL =
   'a key-family label or SCAN prefix (Traffic Map / chaos key families), never a key itself'
 const HUB = 'Hub-only (HUB=on), which a shared deployment refuses (deploymentModeProblem)'
 const OFF =
-  'the feature is off on any multi-tenant deployment (Hub sign-in, outside-write watch, change warms, chaos test job)'
+  'the feature is off on any multi-tenant deployment (Hub sign-in, change warms, chaos test job)'
 
 const NVR_ALLOW: Record<string, string> = {
   'plugins/socketio.ts :: nvr:ping': PROC,
@@ -363,8 +363,6 @@ const NVR_ALLOW: Record<string, string> = {
   'services/socket-chaos.ts :: nvr:rt:chaos:runs': PROC,
   'services/socket-chaos.ts :: nvr:rt:chaos:run:': PROC,
   'services/socket-chaos.ts :: nvr:rt:chaos': PROC,
-  'services/huddle-turn-monitor.ts :: nvr:huddle:probe:history': PROC,
-  'services/huddle-turn-monitor.ts :: nvr:huddle:probe:state': PROC,
   'services/infra-swarm/health.ts :: nvr:infra:health:': PROC,
   'services/traffic-actions/temp-cache.ts :: nvr:tm:cache:stats:': TM,
   'services/traffic-actions/timed-rules.ts :: nvr:tm:actions': TM,
@@ -402,6 +400,7 @@ const NVR_ALLOW: Record<string, string> = {
   'services/hub/create/store.ts :: nvr:hub:create-start': HUB,
   'services/hub/create/store.ts :: nvr:hub:create-cancel:': HUB,
   'services/hub/db/db-lock.ts :: nvr:hub:db:': HUB,
+  'services/hub/data/lock.ts :: nvr:hub:data:': HUB,
   'services/hub/deploy-evidence.ts :: nvr:hub:evidence:jobs:': HUB,
   'services/hub/deploys.ts :: nvr:hub:deploys:': HUB,
   'services/hub/oidc/codes.ts :: nvr:hub-oidc:code:': HUB,
@@ -413,14 +412,20 @@ const NVR_ALLOW: Record<string, string> = {
     'per-app schema state; the key carries the tenant id (nvr:tenancy:schema:<tenantId>:<version>, ruling R18)',
   'services/hub/promote-lock.ts :: nvr:hub:promote-cancel:': HUB,
   'services/hub/promote-lock.ts :: nvr:hub:shared:': HUB,
+  'services/hub/promote-lock.ts :: nvr:hub:branch:': HUB,
   'services/hub/status.ts :: nvr:hub:status:': HUB,
+  'services/hub-link/template-install.ts :: nvr:hub-template:lock:':
+    "app-bound: hubLinkKeyTag() is a hash of this app's HUB_TOKEN; hub-link routes never mount on a shared deployment (Hub enhancement 24)",
+  'services/hub-link/template-install.ts :: nvr:hub-template:run:':
+    "app-bound: hubLinkKeyTag() is a hash of this app's HUB_TOKEN; hub-link routes never mount on a shared deployment (Hub enhancement 24)",
+  'services/hub-link/template-install.ts :: nvr:hub-template:seen:':
+    "app-bound: hubLinkKeyTag() is a hash of this app's HUB_TOKEN; hub-link routes never mount on a shared deployment (Hub enhancement 24)",
+  'services/capacity/app-usage.ts :: nvr:hubcap:':
+    'capacity snapshots of the whole deployment (per-app counts, timings, pool figures; no records), one key per process; the Hub reads them over its own link',
   'services/hub/fleet/lock.ts :: nvr:hub:fleet-probe': HUB,
   'services/hub/fleet/lock.ts :: nvr:hub:fleet-alerts': HUB,
   'services/hub/fleet/lock.ts :: nvr:hub:fleet-check': HUB,
   'routes/hub-fleet.ts :: nvr:hub:fleet-page:': HUB,
-  'services/hub-signin/link-client.ts :: nvr:hub-signin-push:': OFF,
-  'services/hub-signin/link-client.ts :: nvr:hub-switcher:': OFF,
-  'services/outside-write-watch.ts :: nvr:rt:outside:': OFF,
   'services/cache-warm-on-change.ts :: nvr:warm:chg:plan': OFF,
   'services/cache-warm-on-change.ts :: nvr:warm:chg:plan:lock': OFF,
   'services/cache-warm-on-change.ts :: nvr:warm:chg:cd:': OFF,

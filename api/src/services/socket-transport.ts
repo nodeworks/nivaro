@@ -167,6 +167,11 @@ export function noteTenantSocket(tenant: string, delta: 1 | -1, label?: string |
   row.sockets = Math.max(0, row.sockets + delta)
 }
 
+/** Sockets of `tenant` on this process (the Traffic Map frame of that app's store). */
+export function tenantSocketCount(tenant: string): number {
+  return byTenant.get(tenant)?.sockets ?? 0
+}
+
 /** One outbound packet written to one socket. */
 export function recordOutbound(
   event: string,

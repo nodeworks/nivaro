@@ -49,7 +49,7 @@ import {
 } from '../db/databases.js'
 import { generateHexSecret } from '../db/names.js'
 import { getServerRow, type HubDbServerRow, publicServer } from '../db/servers.js'
-import { placedOnShared, SHARED_PLACEMENT_MESSAGE } from '../drivers.js'
+import { getDriver, placedOnShared, SHARED_PLACEMENT_MESSAGE } from '../drivers.js'
 import { defaultSleep, type Sleep } from '../gitlab-write.js'
 import { hubTokenColumns } from '../link-token.js'
 import { checkName as checkEnvironmentNameById } from '../name-check.js'
@@ -62,15 +62,25 @@ import {
 } from '../promote-lock.js'
 import { hubImage } from '../registry.js'
 import { HubSecretError, openSecret, sealSecret } from '../secrets.js'
+import { getShared } from '../shared/store.js'
 import { readEnvironmentStatus } from '../status.js'
+import { recordTemplateChoices } from '../templates/choice.js'
 import { manualTicket, redirectUriFor, stackName } from './app-config.js'
 import { managerLines } from './deploy-key.js'
+import { namingForDocker } from './dest.js'
+import {
+  type CreationDest,
+  type DestStepContext,
+  type DestStepDeps,
+  destSteps
+} from './docker-steps.js'
 import { type GatherCreationDeps, gatherCreationFacts } from './gather.js'
 import { requestFirstAdmin } from './link-client.js'
 import { checkName } from './name-check.js'
 import { buildCreationPlan } from './plan.js'
 import {
   awaitTargetSyncs,
+  type BaseStepContext,
   checkDatabaseWait,
   checkNameWait,
   OPERATOR_NOTE,
@@ -80,6 +90,7 @@ import {
   type StepDeps,
   type StepEnv,
   StepFailure,
+  type StepResult,
   syncTargetApps,
   tokenUserMemo
 } from './steps.js'
@@ -91,6 +102,7 @@ import {
   type CreationRow,
   type CreationStatus,
   type CreationWait,
+  creationKind,
   defaultCreationFlags,
   defaultKeyedLock,
   HUB_CREATE_START_LOCK_KEY,
@@ -103,8 +115,15 @@ import {
   writeOwnMade
 } from './store.js'
 import { getTargetRow, type HubTargetRow } from './targets.js'
-import type { CreateAppInput, CreationFacts, CreationPlan, CreationStepState } from './types.js'
-import { STEP_ORDER } from './types.js'
+import {
+  type CreateAppInput,
+  type CreationFacts,
+  type CreationPlan,
+  type CreationStepState,
+  creationKindOf,
+  gitlabTargetIdOf,
+  stepOrderFor
+} from './types.js'
 
 export { awaitTargetSyncs, syncTargetApps }
 
@@ -138,6 +157,8 @@ export interface CreationDeps {
   flags?: CreationFlags
   /** How often a leg renews its lock and heartbeat (default LOCK_RENEW_MS; tests shorten it). */
   renewMs?: number
+  /** Docker and shared creations: the agent deploy and place-shared (tests pass fakes). */
+  dest?: DestStepDeps
 }
 
 export function defaultCreationDeps(): CreationDeps {
@@ -152,6 +173,7 @@ interface Resolved {
   startJobRun: NonNullable<CreationDeps['startJobRun']>
   gather?: GatherCreationDeps
   step: StepDeps
+  dest: DestStepDeps
 }
 
 function resolve(d: CreationDeps = defaultCreationDeps()): Resolved {
@@ -165,6 +187,7 @@ function resolve(d: CreationDeps = defaultCreationDeps()): Resolved {
       ((label, envId, userId) =>
         startJobRun('deploy', `hub-create-${envId}`, { label, triggeredBy: userId })),
     gather: d.gather,
+    dest: d.dest ?? {},
     step: {
       repoLock: d.repoLock ?? defaultKeyedLock(),
       link: d.link ?? { requestFirstAdmin },
@@ -264,10 +287,16 @@ async function writeCreation(
   facts: CreationFacts,
   user: { id: string }
 ): Promise<{ app_id: number; environments: Array<{ id: number; key: string }> }> {
-  // Sealed before the transaction: a missing ENCRYPTION_KEY writes nothing.
-  const oidcSecret = sealSecret(String(input.signin.client_secret))
-  // Ruling X-4: sealed with its app-link lookup (link-token.ts hubTokenColumns).
-  const tokens = plan.environments.map(() => hubTokenColumns(generateHexSecret(32)))
+  // Sealed before the transaction: a missing ENCRYPTION_KEY writes nothing. A shared creation may
+  // come without sign-in (the deployment's own OIDC signs its apps in).
+  const signin = input.signin && typeof input.signin === 'object' ? input.signin : null
+  const oidcSecret = signin ? sealSecret(String(signin.client_secret)) : null
+  // Ruling X-4: sealed with its app-link lookup (link-token.ts hubTokenColumns). A shared
+  // environment gets no token at creation: the placement issues its token when the app serves
+  // (a token before then would also make place-shared see a link it cannot reach).
+  const tokens = plan.environments.map(() =>
+    creationKindOf(input) === 'shared' ? null : hubTokenColumns(generateHexSecret(32))
+  )
   const now = () => new Date()
   // The digests and Hub URL the planner accepted: each creation keeps them for its retries.
   const digest = String(facts.digest)
@@ -275,8 +304,19 @@ async function writeCreation(
     typeof facts.slimDigest === 'string' && facts.slimDigest.startsWith('sha256:')
       ? facts.slimDigest
       : null
-  const hubUrl = String(facts.hubUrl)
+  const hubUrl = facts.hubUrl ?? ''
   const servers = facts.servers
+  const kind = creationKindOf(input)
+  const docker = kind === 'docker' && facts.docker?.settings.ok ? facts.docker.settings.row : null
+  if (kind === 'docker' && !docker)
+    throw new CreationError('BAD_TARGET', 'The Docker stack settings were not checked.', 409)
+  const extensions =
+    kind === 'docker'
+      ? Object.keys(docker?.extension_pins ?? {}).sort()
+      : kind === 'shared' && Array.isArray(input.extensions)
+        ? [...new Set(input.extensions.map(String))]
+        : []
+  const tgt = (input.target ?? {}) as { driver_id?: unknown; shared_id?: unknown }
   return db.transaction(async (trx) => {
     const appId = Number(
       await insertReturningId(trx, APPS, {
@@ -284,13 +324,12 @@ async function writeCreation(
         name: plan.app.name,
         signin_mode: 'direct',
         adopted: false,
-        extensions: '[]',
+        extensions: JSON.stringify(extensions),
         created_by: user.id || null,
-        target_id: Number(input.target_id),
-        oidc: JSON.stringify({
-          issuer: str(input.signin.issuer),
-          client_id: str(input.signin.client_id)
-        }),
+        target_id: kind === 'gitlab' ? gitlabTargetIdOf(input) : null,
+        oidc: signin
+          ? JSON.stringify({ issuer: str(signin.issuer), client_id: str(signin.client_id) })
+          : null,
         oidc_secret: oidcSecret,
         created_at: now(),
         updated_at: now()
@@ -316,7 +355,7 @@ async function writeCreation(
           status: 'provisioning',
           base_url: pe.base_url,
           hostnames: JSON.stringify(pe.hostname ? [pe.hostname] : []),
-          ...tokens[i],
+          ...(tokens[i] ?? {}),
           hub_managed: true,
           created_at: now(),
           updated_at: now()
@@ -342,26 +381,57 @@ async function writeCreation(
       }
       const made: CreationMade = {
         database_id: databaseId,
+        ...(kind === 'docker'
+          ? { target: { kind: 'docker' as const, driver_id: Number(tgt.driver_id) } }
+          : kind === 'shared'
+            ? {
+                target: {
+                  kind: 'shared' as const,
+                  shared_id: Number(tgt.shared_id),
+                  pool_max: pe.pool_max ?? 5
+                }
+              }
+            : {}),
         planned: {
           hub_url: hubUrl,
-          digest,
+          digest: kind === 'shared' ? '' : digest,
           slim_digest: slimDigest,
           hostname: pe.hostname as string,
           base_url: pe.base_url as string,
           source_branch: pe.source_branch,
-          nonce: randomBytes(18).toString('base64url')
+          nonce: randomBytes(18).toString('base64url'),
+          // Sealed as validated (gather.ts): the stack step stores them as they are.
+          ...(docker
+            ? {
+                stack: {
+                  size: docker.fields.size,
+                  redis: docker.fields.redis,
+                  publish_port: pe.stack?.publish_port ?? null,
+                  settings: docker.fields.settings,
+                  secrets: docker.fields.secrets,
+                  extension_pins: docker.extension_pins ?? {}
+                }
+              }
+            : {})
         }
       }
       await insertCreation(trx, {
         app_id: appId,
         environment_id: envId,
-        version: str(input.version),
+        // A shared app runs its deployment's version (a blank one on the form means that).
+        version: str(input.version) || (facts.shared?.deployment?.version_pin ?? ''),
         first_admin: firstAdminOf(input),
         made,
         started_by: user.id || null
       })
       envs.push({ id: envId, key: pe.key })
     }
+    await recordTemplateChoices(trx, {
+      input,
+      appId,
+      envIds: envs.map((e) => e.id),
+      by: user.id || null
+    })
     return { app_id: appId, environments: envs }
   })
 }
@@ -436,9 +506,15 @@ export async function runCreationLeg(
   return runLeg(envId, user, resolve(deps), ['queued', 'waiting'])
 }
 
-async function loadContext(
-  row: CreationRow
-): Promise<{ app: StepApp; env: StepEnv; target: HubTargetRow }> {
+async function loadContext(row: CreationRow): Promise<{
+  app: StepApp
+  env: StepEnv
+  /** A GitLab creation's target (null for Docker and shared ones). */
+  target: HubTargetRow | null
+  /** A Docker or shared creation's driver or deployment (null for GitLab ones). */
+  dest: CreationDest | null
+  dnsMode: 'automatic' | 'manual'
+}> {
   const a = (await db(APPS).where({ id: row.app_id }).first()) as
     | Record<string, unknown>
     | undefined
@@ -462,8 +538,25 @@ async function loadContext(
       return []
     }
   })()
-  const target = a.target_id == null ? null : await getTargetRow(Number(a.target_id))
-  if (!target) throw new StepFailure('BAD_TARGET', 'The app’s target is gone.')
+  const t = row.made.target
+  let target: HubTargetRow | null = null
+  let dest: CreationDest | null = null
+  let dnsMode: 'automatic' | 'manual' = 'automatic'
+  if (t?.kind === 'docker') {
+    const driver = await getDriver(t.driver_id)
+    if (driver?.kind !== 'docker')
+      throw new StepFailure('BAD_TARGET', 'The creation’s Docker driver is gone.')
+    dest = { kind: 'docker', driver }
+    dnsMode = driver.config.dns_mode === 'manual' ? 'manual' : 'automatic'
+  } else if (t?.kind === 'shared') {
+    const shared = await getShared(t.shared_id)
+    if (!shared) throw new StepFailure('BAD_TARGET', 'The creation’s shared deployment is gone.')
+    dest = { kind: 'shared', shared }
+  } else {
+    target = a.target_id == null ? null : await getTargetRow(Number(a.target_id))
+    if (!target) throw new StepFailure('BAD_TARGET', 'The app’s target is gone.')
+    dnsMode = target.config.dns_mode === 'manual' ? 'manual' : 'automatic'
+  }
   return {
     app: {
       id: Number(a.id),
@@ -486,7 +579,9 @@ async function loadContext(
       db_ref: (e.db_ref as string | null) ?? null,
       placement_id: e.placement_id == null ? null : Number(e.placement_id)
     },
-    target
+    target,
+    dest,
+    dnsMode
   }
 }
 
@@ -499,7 +594,8 @@ async function runLeg(
   const first = await readCreationRow(envId)
   if (!first) throw new CreationError('NOT_FOUND', 'No creation for this environment.', 404)
   if (first.status === 'done') return 'done'
-  await refuseShared(envId)
+  // A shared creation places the environment on its deployment itself (its place step).
+  if (creationKind(first.made) !== 'shared') await refuseShared(envId)
   const token = await r.lock.take(envId, 'creation')
   if (!token) return 'busy'
   const entry: LiveLeg = { creationId: first.id, cancel: false }
@@ -535,7 +631,7 @@ async function runLeg(
     claimed = await claimLeg(first.id, from)
     if (!claimed) return 'busy'
     await r.flags.clearCancel(first.id)
-    return await walk(envId, first.id, user, r, entry, () => lockLost, ac.signal)
+    return await walk(envId, first.id, user, r, entry, () => lockLost, ac.signal, token)
   } finally {
     clearInterval(renew)
     live.delete(envId)
@@ -599,7 +695,8 @@ async function walk(
   r: Resolved,
   entry: LiveLeg,
   lockLost: () => boolean,
-  signal: AbortSignal
+  signal: AbortSignal,
+  lockToken: string
 ): Promise<'done' | 'waiting' | 'failed' | 'cancelled' | 'interrupted'> {
   const secrets = new Set<string>()
   let row = (await readCreationRow(envId)) as CreationRow
@@ -612,7 +709,7 @@ async function walk(
 
   let current: CreationStepState | null = null
   try {
-    const { app, env, target } = await loadContext(row)
+    const { app, env, target, dest, dnsMode } = await loadContext(row)
     // Every secret this leg could print, known before any step runs (a retry that resumes
     // mid-leg opens no variable step, yet its deploy lines may echo one).
     const remember = (plain: string | null | undefined) => {
@@ -620,7 +717,8 @@ async function walk(
       secrets.add(plain)
       secrets.add(Buffer.from(plain).toString('base64'))
     }
-    for (const sealed of [target.secret, env.hub_token, app.oidc_secret]) {
+    const own = target?.secret ?? (dest?.kind === 'docker' ? dest.driver.secret : null)
+    for (const sealed of [own, env.hub_token, app.oidc_secret]) {
       try {
         remember(openSecret(sealed))
       } catch {
@@ -641,11 +739,11 @@ async function walk(
     }
     run = await r.startJobRun(`Create ${app.key}/${env.key}`, envId, user?.id || null)
     if (run.id != null) await patchCreation(creationId, { job_run_id: run.id }, ['running'])
-    const ctx: StepContext = {
+    const base: BaseStepContext = {
       creation: row,
       app,
       env,
-      target,
+      dnsMode,
       made: { ...row.made },
       async saveMade() {
         // Own keys only; the app-level ones are saveAppMade's (the row's copy comes back).
@@ -654,12 +752,23 @@ async function walk(
       doneSha: (key) => steps.find((s) => s.key === key && s.status === 'done')?.sha ?? null,
       log,
       secrets,
-      tokenUserId: tokenUserMemo(target),
       signal,
       deps: { ...r.step, sleep: guardedSleep(r.step.sleep, signal) }
     }
+    // A GitLab creation walks steps.ts STEPS with its target; Docker and shared ones docker-steps.
+    const ctx: BaseStepContext = target
+      ? ({ ...base, target, tokenUserId: tokenUserMemo(target) } as StepContext)
+      : ({
+          ...base,
+          dest: dest as CreationDest,
+          envLock: { lock: r.lock, token: lockToken },
+          cancelRequested: async () => entry.cancel || (await r.flags.cancelRequested(creationId))
+        } as DestStepContext)
+    const table = target
+      ? (STEPS as Record<string, (c: BaseStepContext) => Promise<StepResult>>)
+      : (destSteps(r.dest) as Record<string, (c: BaseStepContext) => Promise<StepResult>>)
 
-    for (const key of STEP_ORDER) {
+    for (const key of stepOrderFor(creationKind(row.made))) {
       const state = steps.find((s) => s.key === key) as CreationStepState
       if (state.status === 'done') continue
       if (lockLost()) {
@@ -677,7 +786,9 @@ async function walk(
       current = state
       Object.assign(state, { status: 'running', at: new Date().toISOString(), note: null })
       await persist({ step: key })
-      const result = await STEPS[key](ctx)
+      const runStep = table[key]
+      if (!runStep) throw new StepFailure('STEP_FAILED', `No ${key} step for this creation.`)
+      const result = await runStep(ctx)
       // This leg's own keys; the app-level ones come back as the rows hold them.
       ctx.made = await writeOwnMade(creationId, ctx.made)
       if (result.status === 'waiting') {
@@ -732,6 +843,14 @@ async function walk(
       return 'interrupted'
     }
     const code = errorCode(err)
+    if (code === 'CANCELLED') {
+      // Review M1: a Docker deploy stopped by a cancel before its apply. The step did nothing.
+      if (current) Object.assign(current, { status: 'pending', at: null, note: null })
+      await finish('cancelled', null).catch(() => undefined)
+      log(`cancelled during ${current?.key ?? 'start'} (nothing was applied)`, 'warn')
+      await run?.complete(`Create: cancelled during ${current?.key ?? 'start'}`)
+      return 'cancelled'
+    }
     const text = scrub(err instanceof Error ? err.message : err, secrets, 900)
     if (current)
       Object.assign(current, {
@@ -783,7 +902,7 @@ export async function resumeCreation(
   const r = resolve(deps)
   let row = await readCreationRow(envId)
   if (!row) throw new CreationError('NOT_FOUND', 'No creation for this environment.', 404)
-  await refuseShared(envId)
+  if (creationKind(row.made) !== 'shared') await refuseShared(envId)
   if (row.status === 'running' && !live.has(envId) && (await r.lock.held(envId)) === false) {
     await interrupt(row, 'The runner stopped during this step')
     row = (await readCreationRow(envId)) as CreationRow
@@ -846,18 +965,17 @@ async function lookAtWait(
     return { resolved: false, note: waiting?.note ?? OPERATOR_NOTE }
   }
   try {
-    const { app, env, target } = await loadContext(row)
-    const ctx: StepContext = {
+    const { app, env, dnsMode } = await loadContext(row)
+    const ctx: BaseStepContext = {
       creation: row,
       app,
       env,
-      target,
+      dnsMode,
       made: { ...row.made },
       saveMade: async () => undefined,
       doneSha: () => null,
       log: () => undefined,
       secrets,
-      tokenUserId: tokenUserMemo(target),
       deps: r.step
     }
     const look =
@@ -1170,6 +1288,8 @@ export interface CreationView {
   id: number
   app_id: number
   app_key: string
+  /** Where the app goes (gap `create`): its kind and the target's, driver's or deployment's name. */
+  target: { kind: 'gitlab' | 'docker' | 'shared'; name: string | null }
   environment_id: number
   env_key: string
   status: CreationStatus
@@ -1227,7 +1347,13 @@ export async function readCreation(envId: number): Promise<CreationView | null> 
   const env = (await db(ENVS).where({ id: envId }).first('key', 'base_url', 'hostnames')) as
     | { key: string; base_url: string; hostnames: string | null }
     | undefined
-  const target = app?.target_id != null ? await getTargetRow(Number(app.target_id)) : null
+  const kind = creationKind(row.made)
+  const target =
+    kind === 'gitlab' && app?.target_id != null ? await getTargetRow(Number(app.target_id)) : null
+  const t = row.made.target
+  const driver = t?.kind === 'docker' ? await getDriver(t.driver_id) : null
+  const dockerDriver = driver?.kind === 'docker' ? driver : null
+  const sharedDep = t?.kind === 'shared' ? await getShared(t.shared_id) : null
   const shared = app ? await appMade(Number(app.id)) : {}
   const made: Omit<CreationMade, 'planned'> = { ...row.made, ...shared }
   delete (made as CreationMade).planned
@@ -1256,9 +1382,11 @@ export async function readCreation(envId: number): Promise<CreationView | null> 
   )
     checklist = dbaChecklist(publicServer(server), database.database_name, database.login_name)
   let ticket: string | null = null
-  if (target?.config?.dns_mode === 'manual' && hostname) {
+  const naming =
+    target?.config ?? (dockerDriver ? namingForDocker(dockerDriver.config, hostname) : null)
+  if (naming?.dns_mode === 'manual' && hostname) {
     try {
-      ticket = manualTicket(target.config, hostname)
+      ticket = manualTicket(naming, hostname)
     } catch {
       ticket = null
     }
@@ -1314,6 +1442,10 @@ export async function readCreation(envId: number): Promise<CreationView | null> 
     id: row.id,
     app_id: row.app_id,
     app_key: app?.key ?? '',
+    target: {
+      kind,
+      name: target?.name ?? dockerDriver?.name ?? sharedDep?.name ?? null
+    },
     environment_id: row.environment_id,
     env_key: env?.key ?? '',
     status: row.status,

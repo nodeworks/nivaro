@@ -498,6 +498,7 @@ await ctx.sql.announceWrites?.('forecasts', ids, { action: 'update', changed_fie
         'Each look reads a small window by the database’s own clock, in UTC and in local time (procedures often stamp GETDATE()), reaching two minutes back for transactions that commit late, and skips rows other transactions hold locked until a later look.',
         'More than 500 changed rows in one look become one “many records changed” announcement.',
         'Rows caught in 24 hours are counted per collection on the tab: each is a write still made without announcing — usually a procedure that SQL checks can fix.',
+        'On a Hub shared deployment (0.3.215) the watcher runs per app: the server that runs scheduled jobs walks the SQL Server apps in turn, each with its own setting, collections and counts, and one look of one app is held to about 4 seconds as a whole (what it did not read goes first next time). Every read waits at most 1 second on a lock: a table held by a long transaction or a replication snapshot is read again at the next look instead of failing. Nivaro Cloud never runs it.',
         'OUTSIDE_WRITE_WATCH=on|off overrides the setting. Collections with realtime switched off are skipped. Never runs on hosted (cloud) plans.'
       ]
     },
@@ -894,7 +895,7 @@ export const obsTrafficMapInvestigate: DocSection = {
         'Traces live in each API process’s memory, 200 at a time (`TRACE_BUFFER`), and only requests slower than `TRACE_SLOW_MS` are kept unless something armed them: Trace on a trace level, Capture next…, or Keep their next 50 traces on a person. A trace kept by another process reads as not found; statement shapes, plans and captures are per process too.',
         'Requests come from the API log, kept 14 days, so a request older than that opens with its facts but no body. AI calls are kept 30 days. Recordings and error clips are kept 7 days, and only exist where session replay is switched on.',
         'Replay needs a stored body, which only token and API-key writes keep; a read can be run again from Copy as curl.',
-        'In cloud mode the investigation routes read process-wide state and are not tenant-aware, so they answer 404 and every level reads as not found. The map and the inspector history still work there.',
+        'In cloud mode and inside an app of a Hub shared deployment the investigation routes read process-wide state and are not tenant-aware, so they answer 404 and every level reads as not found. The map and the inspector history still work there, for that app only; on a shared deployment the daily summary section and its preview do too.',
         'Captured bodies and traces are held in memory only, with credential-like values masked, and dropped when the capture’s time runs out.',
         'Explain this sends the model only what the open levels already loaded; a level you never opened is sent as "not loaded".'
       ]

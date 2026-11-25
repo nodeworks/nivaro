@@ -27,9 +27,10 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { HubToolbar } from '@/components/hub-page'
-import { navSections } from '@/docs/index'
+import { navSections, navWithoutHub } from '@/docs/index'
 import { DocRenderer } from '@/docs/renderer'
 import { usePersistedTab } from '@/hooks/usePersistedTab'
+import { useServerFeatures } from '@/lib/useServerFeatures'
 import { cn } from '@/lib/utils'
 
 // ─── Section icon mapping ──────────────────────────────────────────────────────
@@ -66,11 +67,14 @@ export function DocsPage() {
   const [activeId, setActiveId] = usePersistedTab<string>('nvr_tab_docs', 'what-is-nivaro')
   const [query, setQuery] = useState('')
   const contentRef = useRef<HTMLDivElement>(null)
+  // The Nivaro Hub's sections show only on a Hub (server feature `hub`, HUB=on).
+  const isHub = useServerFeatures().has('hub')
+  const nav = useMemo(() => (isHub ? navSections : navWithoutHub(navSections)), [isHub])
 
   useEffect(() => {
     const el = contentRef.current
     if (!el) return
-    const allIds = navSections.flatMap((s) => s.items.map((i) => i.id))
+    const allIds = nav.flatMap((s) => s.items.map((i) => i.id))
 
     const observer = new IntersectionObserver(
       (entries) => {
@@ -89,7 +93,7 @@ export function DocsPage() {
       if (target) observer.observe(target)
     }
     return () => observer.disconnect()
-  }, [])
+  }, [nav])
 
   // ?section=<id> — Ask AI's docs citations (#1803) open the page there.
   const [params] = useSearchParams()
@@ -111,22 +115,22 @@ export function DocsPage() {
   }
 
   const filteredSections = useMemo(() => {
-    if (!query.trim()) return navSections
+    if (!query.trim()) return nav
     const q = query.toLowerCase()
-    return navSections
+    return nav
       .map((sec) => ({
         ...sec,
         items: sec.items.filter((item) => item.label.toLowerCase().includes(q))
       }))
       .filter((sec) => sec.items.length > 0 || sec.label.toLowerCase().includes(q))
-  }, [query])
+  }, [query, nav])
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
       <HubToolbar description='Guides to every Nivaro feature, the REST and GraphQL APIs and the SDK. Filter the sections on the left; Ask AI cites these pages in its answers.' />
-      <div className='flex min-h-0 flex-1 overflow-hidden'>
+      <div className='flex min-h-0 flex-1 flex-col overflow-hidden md:flex-row'>
         {/* ─── Left nav ────────────────────────────────────────────── */}
-        <nav className='flex h-full w-[240px] shrink-0 flex-col border-r border-slate-200 dark:border-border bg-white dark:bg-card'>
+        <nav className='flex max-h-[35vh] shrink-0 flex-col border-b border-slate-200 bg-white md:h-full md:max-h-none md:w-[240px] md:border-b-0 md:border-r dark:border-border dark:bg-card'>
           {/* Header */}
           <div className='flex shrink-0 items-center gap-2 border-b border-slate-200 dark:border-border px-4 py-3.5'>
             <BookOpen className='h-4 w-4 text-nvr-cyan shrink-0' />
@@ -206,10 +210,10 @@ export function DocsPage() {
 
         {/* ─── Content ─────────────────────────────────────────────── */}
         <div ref={contentRef} className='flex-1 overflow-y-auto bg-white dark:bg-background'>
-          <div className='mx-auto max-w-3xl px-10 py-8'>
-            {navSections.flatMap((sec, si) =>
+          <div className='mx-auto max-w-3xl px-4 py-6 md:px-10 md:py-8'>
+            {nav.flatMap((sec, si) =>
               sec.items.map((section, ii) => {
-                const isLast = si === navSections.length - 1 && ii === sec.items.length - 1
+                const isLast = si === nav.length - 1 && ii === sec.items.length - 1
                 const isFirstInSection = ii === 0 && si > 0
                 return (
                   <div key={section.id}>

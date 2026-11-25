@@ -5,11 +5,13 @@ import { environmentFromRow } from '../apps.js'
 import { AgentError, agentHealth } from '../docker/agent-client.js'
 import type { AgentHealth, StackSpec } from '../docker/agent-types.js'
 import { environmentNames, hostnameRefusals, type StackEdge } from '../docker/render-spec.js'
-import { agentVersionAtLeast } from '../docker/templates.js'
+import { agentVersionAtLeast, volumesPerNode } from '../docker/templates.js'
 import { type DockerDriverRow, getDriver, STACK_NAME_RE } from '../drivers.js'
+import { SHARED_TRACKERS_SINCE } from '../move/plan.js'
 import { openMoveFor } from '../move-open.js'
 import { storedRuns, successfulVersions } from '../promote-gather.js'
 import {
+  type BranchRef,
   defaultPromoteLock,
   defaultSharedLock,
   type LockHolder,
@@ -19,10 +21,16 @@ import {
   sharedLockRefusal
 } from '../promote-lock.js'
 import { compareVersions } from '../promote-plan.js'
-import type { HubEnvironmentRow } from '../promote-types.js'
+import type { HubEnvironmentRow, PromotionStep } from '../promote-types.js'
 import { hubImage, imageDigest } from '../registry.js'
 import { HUB_MASK, openSecret } from '../secrets.js'
 import { DeploymentLinkError, deploymentClient } from './deployment-client.js'
+import {
+  type GitlabPlanDeps,
+  gatherGitlabUpgrade,
+  type SharedGitlabPlan
+} from './gitlab-upgrade.js'
+import { runsSharedHubSignin, SHARED_HUB_SIGNIN_SINCE } from './hub-signin-floor.js'
 import { stacksOnRedisDatabase } from './redis-databases.js'
 import {
   explicitHostsFor,
@@ -35,16 +43,23 @@ import {
   sharedRoles,
   sharedStackSettings
 } from './stack-render.js'
-import { getShared, type SharedDeployment, tenantIdFor } from './store.js'
+import { getShared, type SharedDeployment, sharedGitlab, tenantIdFor } from './store.js'
 import { type SharedTenantRow, tenantsOf } from './tenants.js'
 
 /**
  * Nivaro Hub phase 6 (Task 5): the plan of a Docker shared deployment's upgrade (or rollback).
  * Reads only: never applies anything, never writes a row, never opens a secret into an answer.
  *
+ * A registered deployment that names a GitLab driver and `settings.gitlab` is upgraded through
+ * its pipeline instead (`runner: 'gitlab'`, gitlab-upgrade.ts): the agent, image, routing, Redis
+ * and extension-pin checks are not made (its pipeline builds and routes it), and GitLab adds
+ * NO_DRIVER, GITLAB_UNREACHABLE, NO_SOURCE_COMMIT, VERSION_UNKNOWN, PIN_CHANGED, ALREADY_RUNS
+ * (upgrade) and NOT_DEPLOYED_BEFORE, ROLLBACK_NOT_RECORDED, ROLLBACK_NO_BUILD (rollback). The
+ * per-app checks, the locks, the move check and the downgrade confirm are the same.
+ *
  * Blockers (the plan's whole-deployment refusals): SHARED_RETIRED; MOVE_OPEN (a move into or out
  * of this deployment is running, waiting or interrupted — final review I-2); SHARED_NOT_HUB_DEPLOYED
- * (registered mode: the operator upgrades it); BAD_VERSION; BUSY (the shared lock, or any placed
+ * (registered mode with no GitLab driver: the operator upgrades it); BAD_VERSION; BUSY (the shared lock, or any placed
  * environment's lock, is held); VERSION_UNKNOWN (no image digest in the registry for the tag);
  * NOT_DEPLOYED_BEFORE (a rollback to a version this deployment never ran); NO_DRIVER;
  * NO_STACK_NAME; AGENT_UNREACHABLE; AGENT_TOO_OLD (an agent before shared owners, < 0.2.0; or,
@@ -119,6 +134,10 @@ export interface SharedUpgradePlan {
    * start needs `downgrade: true` (409 DOWNGRADE_NEEDS_CONFIRM, ruling P6-29). Never a rollback.
    */
   downgrade: boolean
+  /** Who deploys: the Hub agent (a Docker deployment) or the deployment's GitLab pipeline. */
+  runner: 'agent' | 'gitlab'
+  /** runner `gitlab`: the driver, branches, jobs, commit and pin the run uses; else null. */
+  gitlab: SharedGitlabPlan | null
 }
 
 /** Per-app codes an override may clear. */
@@ -165,6 +184,19 @@ function semverCompare(a: string, b: string): number | null {
  * is older by semver precedence, or either side cannot be read as semver. Nothing deployed yet
  * (`from` null) and the same version are never one.
  */
+/**
+ * What a downgrade of a shared deployment stops for every app on it, beyond the generic warning:
+ * going from SHARED_TRACKERS_SINCE (or later) to a version before it unmounts GitLab issue sync
+ * (routes, webhook, jobs) for every app. '' when nothing like that.
+ */
+export function downgradeLosses(from: string | null, to: string): string {
+  if (from === null) return ''
+  const fromRuns = semverCompare(from, SHARED_TRACKERS_SINCE)
+  const toRuns = semverCompare(to, SHARED_TRACKERS_SINCE)
+  if (fromRuns === null || fromRuns < 0 || (toRuns !== null && toRuns >= 0)) return ''
+  return ` GitLab issue sync stops for every app on it (it runs per app from ${SHARED_TRACKERS_SINCE}): GitLab's webhooks get 404 and GitLab may disable them, and queued GitLab writes wait until it is upgraded again.`
+}
+
 export function isSharedDowngrade(from: string | null, to: string): boolean {
   if (from === null || from === to) return false
   const c = semverCompare(to, from)
@@ -179,10 +211,13 @@ const ENVS = 'nivaro_hub_environments'
 const PREFLIGHT_CONCURRENCY = 4
 const DRY = `sha256:${'0'.repeat(64)}`
 
-export interface SharedPlanDeps {
+export interface SharedPlanDeps extends GitlabPlanDeps {
   agentHealth(driver: DockerDriverRow): Promise<AgentHealth>
   imageDigest(image: string, tag: string): Promise<string | 'present' | null>
-  client(shared: SharedDeployment): Pick<ReturnType<typeof deploymentClient>, 'appStatus'>
+  client(
+    shared: SharedDeployment
+  ): Pick<ReturnType<typeof deploymentClient>, 'appStatus'> &
+    Partial<Pick<ReturnType<typeof deploymentClient>, 'status'>>
   sharedLock: SharedLock
   envLock: PromoteLock
   /** The address the stack gets as HUB_URL (deployment-mode.ts hubPublicOrigin). */
@@ -259,6 +294,8 @@ export interface SharedFacts {
   rows: SharedTenantRow[]
   /** The roles the run renders (plan.roles with their limits and role env). */
   roles: StackSpec['roles']
+  /** runner `gitlab`: the one step the run executes through the pipeline; else null. */
+  gitlab: { step: PromotionStep; ref: BranchRef } | null
 }
 
 export interface GatheredPlan {
@@ -379,14 +416,34 @@ export async function gatherSharedUpgrade(
     if (!blockers.some((b) => b.code === code && b.text === text)) blockers.push({ code, text })
   }
   const versionOk = VERSION_RE.test(version)
-  const sameVersion = versionOk && version === shared.version_pin
+  // A registered deployment the Hub upgrades through its GitLab pipeline (gitlab-upgrade.ts).
+  const viaGitlab = sharedGitlab(shared) !== null
+  const client = deps.client(shared)
+  // GitLab (review M2, M3): the deployment already runs, so its link must answer before anything
+  // is merged (steps 3–5 read it), and the version it answers — not the stored pin, which only
+  // moves on an observed or Hub-run change — is "the version that runs" for the same-version,
+  // downgrade and pin rules.
+  let running = shared.version_pin
+  if (viaGitlab && shared.status !== 'retired') {
+    try {
+      const st = await (client.status ?? (() => deploymentClient(shared).status()))()
+      if (typeof st.version === 'string' && st.version) running = st.version
+    } catch (err) {
+      if (!(err instanceof DeploymentLinkError)) throw err
+      block(
+        'LINK_UNREACHABLE',
+        "The deployment's link does not answer the Hub — check its link address and token (the run needs it to see each app migrate), then plan again."
+      )
+    }
+  }
+  const sameVersion = versionOk && version === running
 
   if (shared.status === 'retired')
     block('SHARED_RETIRED', 'This shared deployment is retired; it is never deployed again.')
-  if (shared.mode !== 'docker')
+  if (shared.mode !== 'docker' && !viaGitlab)
     block(
       'SHARED_NOT_HUB_DEPLOYED',
-      'This shared deployment is registered: whoever runs it upgrades it (the Hub records the version it sees).'
+      'This shared deployment is registered: whoever runs it upgrades it (the Hub records the version it sees). Name its GitLab driver to have the Hub upgrade it through that pipeline.'
     )
   if (!versionOk) block('BAD_VERSION', 'The version is x.y.z (a Nivaro release).')
 
@@ -430,6 +487,17 @@ export async function gatherSharedUpgrade(
     )
   }
 
+  // Review H2: a run of this deployment still `running` (after the heal that every plan read,
+  // start and cancel does first) may be alive without its lock — never start a second one.
+  const runningRow = (await db(SHARED_DEPLOYS)
+    .where({ shared_deployment_id: shared.id, status: 'running' })
+    .first('id')) as { id: number } | undefined
+  if (runningRow)
+    block(
+      'BUSY',
+      `Run ${runningRow.id} of this shared deployment is still running — wait for it to end, or cancel it.`
+    )
+
   // Final review I-2 (P6-37): an open move into or out of this deployment — an interrupted one
   // holds no lock — would be migrated, re-routed and verified behind its back. Resume it or roll
   // it back first.
@@ -440,11 +508,15 @@ export async function gatherSharedUpgrade(
       `The move of ${move.label} (move ${move.id}) into or out of this deployment is ${move.status === 'interrupted' ? 'interrupted' : 'under way'}: resume it or roll it back first.`
     )
 
-  // The image and extension pins the run deploys.
+  // The image and extension pins the run deploys. A GitLab pipeline builds its own (none here).
   let image: string | null = null
   let extensions: Record<string, string> = {}
-  const pins = sharedExtensionPins(shared.extensions, shared.extension_pins)
-  if (versionOk && kind === 'rollback') {
+  const pins = viaGitlab
+    ? { pins: {} as Record<string, string>, missing: [] as string[] }
+    : sharedExtensionPins(shared.extensions, shared.extension_pins)
+  if (viaGitlab) {
+    // gatherGitlabUpgrade below reads the commit, the pin and the recorded build.
+  } else if (versionOk && kind === 'rollback') {
     const rec = await recordedRun(shared.id, version)
     if (!rec)
       block(
@@ -521,7 +593,9 @@ export async function gatherSharedUpgrade(
 
   const names: string[] = []
   for (const r of rows) names.push(...environmentNames(r.env))
-  const hostnames = edge === 'traefik' ? explicitHostsFor(names, shared.host_pattern) : []
+  // A GitLab pipeline routes its own names.
+  const hostnames =
+    edge === 'traefik' && !viaGitlab ? explicitHostsFor(names, shared.host_pattern) : []
 
   if (health) {
     if (agentTooOld(health.agent_version))
@@ -585,8 +659,8 @@ export async function gatherSharedUpgrade(
         'REDIS_NOT_AVAILABLE',
         'The stack asks for bundled Redis but the agent has no Redis image configured.'
       )
-    const nodes = health.swarm?.nodes
-    if (typeof nodes === 'number' && nodes > 1 && (health.volume_driver ?? 'local') === 'local')
+    const nodes = volumesPerNode(health)
+    if (nodes !== null)
       warnings.push({
         code: 'MULTI_NODE_VOLUMES',
         text: `The swarm has ${nodes} nodes and local volumes: uploads and bundled Redis stay on the node a task first ran on. Use a shared volume driver, or pin the stack to one node.`
@@ -595,7 +669,7 @@ export async function gatherSharedUpgrade(
 
   // The deployment's own secrets: only whether REDIS_URL is there (never its value), and that no
   // other stack the Hub runs uses the same Redis database (redis-databases.ts: one stack, one db).
-  if (settings.redis === 'external') {
+  if (!viaGitlab && settings.redis === 'external') {
     const url = (await readSharedSecrets(shared.id)).REDIS_URL
     if (!url)
       block(
@@ -624,11 +698,19 @@ export async function gatherSharedUpgrade(
   const hubWarn = deps.hubUrlWarning()
   if (hubWarn) warnings.push({ code: 'HUB_URL_PROBLEM', text: hubWarn })
 
+  // GitLab: what the pipeline deploys (the release commit and pin, or the recorded build).
+  const gl =
+    viaGitlab && versionOk && shared.status !== 'retired'
+      ? await gatherGitlabUpgrade(shared, version, kind, block, deps, running)
+      : null
+
   // Task 14: the services the run deploys, and what changes against what the stack runs now. An
-  // upgrade takes the deployment's size; a re-apply (roleShape `deployed`) keeps what runs.
+  // upgrade takes the deployment's size; a re-apply (roleShape `deployed`) keeps what runs. A
+  // GitLab-run deployment's services are its pipeline's: none here.
   const deployed = shared.mode === 'docker' ? await deployedSharedRoles(shared) : null
-  const toDeploy =
-    deps.roleShape === 'deployed' && deployed
+  const toDeploy = viaGitlab
+    ? []
+    : deps.roleShape === 'deployed' && deployed
       ? deployed.roles
       : sharedRoles(settings.size, {
           realtime: sharedRealtimeFits(version, edge, health?.traefik_version ?? null)
@@ -637,7 +719,7 @@ export async function gatherSharedUpgrade(
   const roles_from = deployed && !deployed.never ? deployed.roles.map((r) => r.role) : null
   // An agent before 0.2.2 refuses a split shared owner and the exporter role: the run would fail
   // at apply. (An unreadable version is already too old for any shared owner, above.)
-  const split = !(toDeploy.length === 1 && toDeploy[0].role === 'all')
+  const split = toDeploy.length > 0 && !(toDeploy.length === 1 && toDeploy[0].role === 'all')
   if (
     health &&
     split &&
@@ -701,7 +783,6 @@ export async function gatherSharedUpgrade(
   }
 
   // Per app.
-  const client = deps.client(shared)
   const apps: SharedUpgradeApp[] = await mapLimited(rows, PREFLIGHT_CONCURRENCY, async (r) => {
     const tenant = tenantIdFor(r.app, r.env)
     const codes: string[] = []
@@ -729,7 +810,7 @@ export async function gatherSharedUpgrade(
       !sameVersion &&
       kind === 'upgrade' &&
       r.placedHere &&
-      shared.mode === 'docker'
+      (shared.mode === 'docker' || viaGitlab)
     ) {
       try {
         const st = await client.appStatus(tenant)
@@ -767,21 +848,32 @@ export async function gatherSharedUpgrade(
         .join(', ')}${apps.length > 20 ? ', …' : ''}.`
     })
 
-  const from_version = shared.version_pin
+  // GitLab: what the deployment answers now (review M3); Docker: the Hub's own record.
+  const from_version = viaGitlab ? running : shared.version_pin
+  // Going below SHARED_HUB_SIGNIN_SINCE: apps set to sign in through the Hub lose it there and
+  // sign in directly through the deployment's primary OIDC (their callbacks must be registered).
+  const hubApps = rows
+    .filter((r) => r.app.signin_mode === 'hub')
+    .map((r) => `${r.app.key}/${r.env.key}`)
+  const losesHubSignin =
+    hubApps.length > 0 && !runsSharedHubSignin(version)
+      ? ` Sign-in through the Hub needs ${SHARED_HUB_SIGNIN_SINCE}: ${hubApps.slice(0, 10).join(', ')}${hubApps.length > 10 ? ', …' : ''} ${hubApps.length === 1 ? 'falls' : 'fall'} back to direct Microsoft sign-in through this deployment's own sign-in app.`
+      : ''
   // A rollback goes back on purpose (to the recorded previous build); only an upgrade asks.
   const downgrade = kind === 'upgrade' && isSharedDowngrade(from_version, version)
   if (downgrade)
     warnings.push({
       code: 'DOWNGRADE',
-      text: `${version} is not newer than the ${from_version} this deployment runs. Every app on it goes back to ${version}; an older version may not read data a newer one wrote. Confirm the downgrade to start.`
+      text: `${version} is not newer than the ${from_version} this deployment runs. Every app on it goes back to ${version}; an older version may not read data a newer one wrote.${downgradeLosses(from_version, version)}${losesHubSignin} Confirm the downgrade to start.`
     })
   // Final review M-8: a rollback restores the build, not the schema — said as DOWNGRADE says it.
   if (kind === 'rollback' && from_version && from_version !== version)
     warnings.push({
       code: 'ROLLBACK_SCHEMA_AHEAD',
-      text: `Apps that ${from_version} already migrated keep its newer database schema under ${version}; an older version may not read data a newer one wrote.`
+      text: `Apps that ${from_version} already migrated keep its newer database schema under ${version}; an older version may not read data a newer one wrote.${downgradeLosses(from_version, version)}${losesHubSignin}`
     })
-  const stack = shared.stack && STACK_NAME_RE.test(shared.stack) ? shared.stack : null
+  const stack = !viaGitlab && shared.stack && STACK_NAME_RE.test(shared.stack) ? shared.stack : null
+  const step = gl?.step ?? null
   const plan_hash = hashOf({
     shared: shared.id,
     kind,
@@ -799,7 +891,28 @@ export async function gatherSharedUpgrade(
     roles_from,
     allow: [...shared.extensions].sort(),
     apps: apps.map((a) => [a.env_id, a.tenant_id, a.blockers, a.status, a.placed]),
-    blockers: blockers.map((b) => b.code)
+    blockers: blockers.map((b) => b.code),
+    // GitLab: what the run merges, pins and deploys (bound like a promotion's plan_hash).
+    ...(viaGitlab
+      ? {
+          runner: 'gitlab',
+          gitlab: step
+            ? [
+                step.driverId,
+                step.driverIdentity,
+                step.sourceSha,
+                step.targetBranch,
+                step.pinFile,
+                step.pinText,
+                step.beforeJob,
+                step.deployJob,
+                step.buildPipelineId ?? null,
+                step.pinMustExist === true,
+                gl?.summary?.pin_on_target ?? null
+              ]
+            : null
+        }
+      : {})
   })
   const plan: SharedUpgradePlan = {
     shared_id: shared.id,
@@ -817,11 +930,24 @@ export async function gatherSharedUpgrade(
     hostnames,
     roles,
     roles_from,
-    downgrade
+    downgrade,
+    runner: viaGitlab ? 'gitlab' : 'agent',
+    gitlab: gl?.summary ?? null
   }
   return {
     plan,
-    facts: { shared, driver, health, edge, image, extensions, hostnames, rows, roles: toDeploy }
+    facts: {
+      shared,
+      driver,
+      health,
+      edge,
+      image,
+      extensions,
+      hostnames,
+      rows,
+      roles: toDeploy,
+      gitlab: step && gl?.ref ? { step, ref: gl.ref } : null
+    }
   }
 }
 

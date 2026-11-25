@@ -1,7 +1,7 @@
 import type { FlowData, FlowExecutionContext } from '@nivaro/extension-kit'
 import type { FastifyInstance } from 'fastify'
 import type { User } from '../../types.js'
-import { isMultiTenant } from '../deployment-mode.js'
+import { isNivaroCloud } from '../deployment-mode.js'
 import { trackersEnabled } from './feature.js'
 import { ISSUE_CHANGED_TRIGGER, setFlowEventLogger } from './flow-events.js'
 import type { RuleAction } from './rules.js'
@@ -233,9 +233,10 @@ export async function createIssueFromFlow(
 
 let registered = false
 
-/** Boot (self-hosted only): the operation + trigger, and start emitting gitlab.issue_changed. */
+/** Boot (self-hosted, and a Hub shared deployment where each app's flows run in that app; never
+ *  Nivaro Cloud): the operation + trigger, and start emitting gitlab.issue_changed. */
 export async function registerTrackerFlows(app: FastifyInstance): Promise<void> {
-  if (isMultiTenant()) return
+  if (isNivaroCloud()) return
   setFlowEventLogger(app.log)
   if (registered) return
   registered = true

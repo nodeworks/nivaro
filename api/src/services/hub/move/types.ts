@@ -136,6 +136,10 @@ export type MoveWarningCode =
   | 'STACK_REAPPLY_ALL'
   // P6-31: saved-settings S3/Azure objects are copied to the new key prefix (never shared).
   | 'STORAGE_PREFIX_CHANGES'
+  // 0.3.215 (hub-gap watch): the source saves its env mail settings at maintenance_on.
+  | 'ENV_SMTP_KEPT'
+  | 'INSTANCE_SETTINGS_CARRIED'
+  | 'INSTANCE_SETTINGS_STAY'
   | SharedReadinessCode
 
 export interface MovePlan {
@@ -243,6 +247,8 @@ export interface MovePlanInput {
     id: number
     key: string
     hub_linked: boolean
+    /** The environment has an active sign-in client at the Hub (absent = not read). */
+    hub_client?: boolean
     version_pin: string | null
     /** E2E B3: the origin of the environment's public address (scheme + port kept). */
     public_origin?: string | null

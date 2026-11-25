@@ -26,3 +26,18 @@ it('advertises hub in app-info features only in hub mode', () => {
   expect(enabledFeatures({} as any)).not.toContain('hub')
   expect(enabledFeatures({ HUB: 'on', CLOUD_META_DB_URL: 'x' } as any)).not.toContain('hub')
 })
+
+describe('hubStandalone (feature hub_only)', () => {
+  it('is on only for a Hub with no app collections; a read failure keeps the full sidebar', async () => {
+    const { hubStandalone } = await import('../../../services/hub/standalone.js')
+    const none = async () => false
+    const some = async () => true
+    expect(await hubStandalone({ env: { HUB: 'on' }, hasAppCollections: none })).toBe(true)
+    expect(await hubStandalone({ env: { HUB: 'on' }, hasAppCollections: some })).toBe(false)
+    expect(await hubStandalone({ env: {}, hasAppCollections: none })).toBe(false)
+    const boom = async (): Promise<boolean> => {
+      throw new Error('db down')
+    }
+    expect(await hubStandalone({ env: { HUB: 'on' }, hasAppCollections: boom })).toBe(false)
+  })
+})

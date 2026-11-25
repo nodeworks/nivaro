@@ -1,7 +1,9 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
+import { adminBaseUrl } from '../admin-base.js'
 import { authenticate, enforceRateLimit, requireAuth } from '../middleware/authenticate.js'
 import { activityGroupKey, withActivityScope } from '../services/activity-scope.js'
 import { isMultiTenant } from '../services/deployment-mode.js'
+import { mcpHubAccess } from '../services/hub/mcp-access.js'
 import {
   classifyToolAnswer,
   clientSlug,
@@ -143,8 +145,13 @@ export function injectFetch(
 export function mcpToolOptions(req: FastifyRequest): {
   adminTools: boolean
   chatAccess: McpChatAccess
+  hub: { adminUrl: string | null } | null
 } {
   return {
+    // Hub enhancement 25: the Hub tools exist only on a Nivaro Hub (HUB=on); the Hub routes
+    // they call scope them (administrators: everything, app owners: their own apps).
+    // Review M4: a Hub scope on the connection (`hub:read` / `$hub`), never a collection-scoped key.
+    hub: mcpHubAccess(req) ? { adminUrl: adminBaseUrl() } : null,
     // Administrator tools only for an administrator who is not on a collection-scoped key.
     adminTools: mcpAdminTools(req),
     // Chat tools only for a connection allowed chat (#2492): the OAuth chat scope or a
@@ -290,10 +297,18 @@ export async function mcpRoutes(app: FastifyInstance) {
    * hosted endpoint above decides for it).
    */
   app.get('/mcp/capabilities', { preHandler: requireAuth }, async (req) => {
-    const { adminTools, chatAccess } = mcpToolOptions(req)
+    const { adminTools, chatAccess, hub } = mcpToolOptions(req)
     // update_preview: PATCH /items/:c/:id?dry_run=1 rehearses (#3222). An older instance would
     // SAVE that request, so the stdio server only sends it when this says so.
-    return { data: { admin_tools: adminTools, chat: chatAccess, update_preview: true } }
+    return {
+      data: {
+        admin_tools: adminTools,
+        chat: chatAccess,
+        update_preview: true,
+        // Hub enhancement 25: present only on a Hub; the stdio server then registers the Hub tools.
+        hub: hub ? { admin_url: hub.adminUrl } : null
+      }
+    }
   })
 
   // GET (the event stream) and DELETE (end the session) exist only inside a live session;
