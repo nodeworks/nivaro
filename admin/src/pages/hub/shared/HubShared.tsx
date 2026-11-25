@@ -532,9 +532,13 @@ function MetaGrid({ detail, link }: { detail: SharedDetail; link: SharedLinkStat
     { label: 'Added', value: row.created_at ? formatDateTime(row.created_at) : '—' }
   ]
   return (
-    <dl className='m-0 grid grid-cols-1 gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 sm:grid-cols-2 xl:grid-cols-4 dark:border-border dark:bg-border'>
+    // The dividers are each cell's outline, so a short last row leaves card, not a grey block.
+    <dl className='m-0 grid grid-cols-1 gap-px overflow-hidden rounded-lg border border-slate-200 bg-white sm:grid-cols-2 xl:grid-cols-4 dark:border-border dark:bg-card'>
       {cells.map((c) => (
-        <div key={c.label} className='min-w-0 bg-white px-3 py-2 dark:bg-card'>
+        <div
+          key={c.label}
+          className='min-w-0 bg-white px-3 py-2 outline outline-1 outline-slate-200 dark:bg-card dark:outline-border'
+        >
           <dt className='text-[11px] text-slate-500 dark:text-muted-foreground'>{c.label}</dt>
           <dd
             className={cn(
