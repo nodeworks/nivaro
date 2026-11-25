@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { db } from '../../../db/index.js'
 import type { HubTenantsResponse, HubTenantWire } from '../../tenancy/hub-contract.js'
 import { appFromRow, environmentFromRow, type HubApp } from '../apps.js'
+import { limitsByEnv } from '../capacity/store.js'
 import { connectionUrl } from '../db/connection.js'
 import { openDatabaseConnection } from '../db/databases.js'
 import { environmentNames } from '../docker/render-spec.js'
@@ -223,6 +224,10 @@ export async function tenantsBody(
         ).map((r) => [Number(r.id), r.db_ref])
       : []
   )
+  // Hub capacity: per-app limits (nivaro_hub_app_limits); a table not there yet = none.
+  const limits = rows.length
+    ? await limitsByEnv(rows.map((r) => r.env.id)).catch(() => new Map())
+    : new Map()
   const tenants: HubTenantWire[] = []
   const listed: SharedTenantRow[] = []
   for (const row of rows) {
@@ -276,6 +281,8 @@ export async function tenantsBody(
       key = null
     }
     if (key) wire.encryption_key = key
+    const lim = limits.get(env.id)
+    if (lim && Object.keys(lim).length) wire.limits = lim
     tenants.push(wire)
     listed.push(row)
   }
