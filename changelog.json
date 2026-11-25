@@ -1,10 +1,1406 @@
 {
-  "generated_at": "2026-11-24T20:56:16.421Z",
+  "generated_at": "2026-11-25T16:12:47.117Z",
   "releases": [
+    {
+      "version": "0.3.215",
+      "tag": "v0.3.215",
+      "date": "2026-11-25T11:12:26-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "forms",
+              "text": "host display rows — a read-only value the host app draws",
+              "hash": "a576848dc"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "group the Apps hub tabs into seven sections",
+              "hash": "ddefc72f9"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "config promotion ships off; policy ids and forced deletions checked",
+              "hash": "b2b9b9890"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "retired apps refuse every start (ENV_ARCHIVED); retire freeze app-scoped",
+              "hash": "033d82d62"
+            },
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "Clone & retire tab in the Apps hub",
+              "hash": "b8f1cef0d"
+            },
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "Config tab follows the reviewed promotion rules",
+              "hash": "b1bef27cc"
+            },
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "Hosts and Costs tabs, Other Hubs on the Fleet tab",
+              "hash": "f42361b56"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "app retirement wizard — five signed-off steps, undo until removal",
+              "hash": "86a2c6d8e"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "app cloning — structure export over the hub link, secrets stripped at the source",
+              "hash": "959df1546"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "hosts and regions, cost chargeback, read-only Hub federation",
+              "hash": "c15728ca7"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "move a Docker stack to another host (move kind between_stacks)",
+              "hash": "2dbdbaf88"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "Access and Security tabs; docs",
+              "hash": "d6b3bc887"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "access reviews, compliance pack, image scan, TLS watch, break-glass (API)",
+              "hash": "e10cb41eb"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "extension promotes go through the change engine",
+              "hash": "bb66e4b53"
+            },
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "Apps hub Config tab for config promotion",
+              "hash": "2dcb35042"
+            },
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "Apps hub Health, Usage, Dependencies and Ask the Hub tabs",
+              "hash": "9a676812c"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "insight API — usage, dependency map, health score, weekly digest, Ask the Hub",
+              "hash": "6cd2077cc"
+            },
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "forward-rollback checklists, emergency start outside the window, broken windows shown",
+              "hash": "d0cc3b197"
+            },
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "Not judged runs, read limit and rollback window warning",
+              "hash": "c1d21ba90"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "promote configuration between an app's environments",
+              "hash": "cdfef44e2"
+            },
+            {
+              "section": "Added",
+              "scope": "hub-link",
+              "text": "config promotion endpoints (app side)",
+              "hash": "d4dce2b9b"
+            },
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "Hub Scaling tab",
+              "hash": "12ef1fded"
+            },
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "Hub Smoke checks and Extensions tabs, docs",
+              "hash": "7fb097d37"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "Incidents, On-call and Status pages tabs; docs",
+              "hash": "232c3c0d1"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "manual and automatic scaling of Docker stacks",
+              "hash": "ce895f815"
+            },
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "Hub Changes tab, deploy window notice and pre-deploy checklists in the start panels",
+              "hash": "f8a996ef4"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "incidents, on-call paging, status pages and post-mortems (API)",
+              "hash": "96428edce"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "change calendar, deploy windows and pre-deploy checklists",
+              "hash": "f7590f25f"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "post-deploy smoke checks and extension version manager",
+              "hash": "9527a5ea5"
+            },
+            {
+              "section": "Added",
+              "scope": "hub-agent",
+              "text": "narrow scale endpoint (0.2.4)",
+              "hash": "2b7e5caa2"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "API catalog entries for capacity, data, releases, ops, templates and secret routes",
+              "hash": "d2f23f2f3"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "people routes in the API catalog, fleet notices on the one path, owner rule on database connections",
+              "hash": "3616e0b71"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "Hub screens carry environment colours, run tracks, prod frame",
+              "hash": "7dca91f57"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "standalone Hub look in the admin",
+              "hash": "03581cdad"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "standalone Hub serves its own look from the server",
+              "hash": "e68d2a44c"
+            },
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "Hub People tab and owner deploy limits",
+              "hash": "9d75bdf61"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "people directory, offboarding, owner self-service, phone",
+              "hash": "64d8a2d81"
+            },
+            {
+              "section": "Added",
+              "scope": "hub-link",
+              "text": "people lookup and suspend for the Hub",
+              "hash": "b1ca796b3"
+            },
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "Backups & data switches, refresh target opt-in, resume and abandon",
+              "hash": "52ab52ec6"
+            },
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "SQLite move steps and copy, polished SQLite database screens",
+              "hash": "a1cab53ea"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "move SQLite apps in and out of a shared deployment",
+              "hash": "eddc5c962"
+            },
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "Releases tab polish and review fixes",
+              "hash": "e160b52f5"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "connected apps need the hub:read OAuth scope; scoped connections stay out",
+              "hash": "ff4065f07"
+            },
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "Apps hub \"Backups & data\" tab",
+              "hash": "6a625d9e3"
+            },
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "Hub Templates tab and the App template picker on Create app",
+              "hash": "80f6091b7"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "the data environment list names the newest drill's outcome and the open run",
+              "hash": "a10b83684"
+            },
+            {
+              "section": "Added",
+              "scope": "mcp",
+              "text": "Hub tools that read and plan, never run",
+              "hash": "78ed893f9"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "app templates installed when the Hub creates an app",
+              "hash": "48bb2f271"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "Hub API access on API keys and Hub-only docs",
+              "hash": "b8e729406"
+            },
+            {
+              "section": "Added",
+              "scope": "sdk",
+              "text": "nivaro.hub client for the Nivaro Hub",
+              "hash": "aab3afc53"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "GraphQL hub namespace on a Hub",
+              "hash": "894dac2bb"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "hub:read / hub:write API-key scopes and the Hub in OpenAPI",
+              "hash": "19040a485"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "backups, restore drills, refreshes and move rehearsals",
+              "hash": "d61a14039"
+            },
+            {
+              "section": "Added",
+              "scope": "hub-link",
+              "text": "data endpoints for Hub backups and refreshes (app side)",
+              "hash": "0b9ae277b"
+            },
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "Hub Releases tab, release notes and freeze notice in Promote",
+              "hash": "c4c55c28e"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "release trains, schedules, freeze windows, auto-rollback, release notes",
+              "hash": "beded458d"
+            },
+            {
+              "section": "Added",
+              "scope": "hub-link",
+              "text": "recent figures and build facts on /status when asked",
+              "hash": "928f4c6c1"
+            },
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "Hub Issues, Storage and Secrets tabs",
+              "hash": "f056a64a0"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "cross-app issues, secret rotation helper, storage health",
+              "hash": "42f8aed92"
+            },
+            {
+              "section": "Added",
+              "scope": "hub-link",
+              "text": "read-only issue and files aggregates for the Hub",
+              "hash": "e94246ed1"
+            },
+            {
+              "section": "Added",
+              "scope": "hub-agent",
+              "text": "report volume storage health in /v1/health",
+              "hash": "137e793e9"
+            },
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "Apps hub Fleet and Audit tabs",
+              "hash": "2f9a05961"
+            },
+            {
+              "section": "Added",
+              "scope": "hub-link",
+              "text": "report open issues; Hub status keeps readiness + issues",
+              "hash": "d786c6ea4"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "fleet status, uptime + SLO, drift alerts and audit timeline API",
+              "hash": "ca1280c1c"
+            },
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "Hub Capacity tab",
+              "hash": "247597997"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "capacity samples, move advisor, app limits and rebalance",
+              "hash": "ebf4265ce"
+            },
+            {
+              "section": "Added",
+              "scope": "capacity",
+              "text": "per-app usage figures and limits in the app process",
+              "hash": "19d6289ce"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "stack files settings for NFS exports",
+              "hash": "c40713c63"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "flow script steps on a shared deployment are an operator opt-in, off by default",
+              "hash": "ecf18d676"
+            },
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "New SQLite database on the Hub Databases tab, and the docs",
+              "hash": "66f2117cb"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "SQLite database records for apps placed on a small shared deployment",
+              "hash": "a309a8e4b"
+            },
+            {
+              "section": "Added",
+              "scope": "shared",
+              "text": "serve SQLite apps on a one-process Hub shared deployment",
+              "hash": "39020b96a"
+            },
+            {
+              "section": "Added",
+              "scope": "hub-admin",
+              "text": "Create app wizard picks GitLab, Docker or a shared deployment",
+              "hash": "dd90a2fcc"
+            },
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "set up and run GitLab upgrades of a shared deployment",
+              "hash": "7cd73a0bf"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "upgrade a GitLab-run shared deployment through its pipeline",
+              "hash": "b0118b641"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "a move copies env S3/Azure objects and cold session replays",
+              "hash": "a0543715d"
+            },
+            {
+              "section": "Added",
+              "scope": "storage",
+              "text": "stream, identify and server-side copy env S3/Azure objects",
+              "hash": "4fef1d4ad"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "create an app straight onto a Docker driver or a shared deployment",
+              "hash": "ad5da09ef"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "a move to shared keeps the app's env mail settings",
+              "hash": "babaf657f"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "huddle media servers per app on a shared deployment",
+              "hash": "408f6f96d"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "outside-write watch runs per app on a shared deployment",
+              "hash": "7d23e0b7e"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "sign-in through the Hub and the app switcher per app on shared",
+              "hash": "7caf0d748"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "Traffic Map, config epochs and pool figures per app on shared",
+              "hash": "7753eb6e9"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "heavy-read slots shared fairly between the apps of a shared deployment",
+              "hash": "ef2a98dd6"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "script-step flows no longer block a move to a 0.3.215+ shared deployment",
+              "hash": "ce7a5f2b6"
+            },
+            {
+              "section": "Added",
+              "scope": "flows",
+              "text": "run exec-script steps in a child process per run on a Hub shared deployment",
+              "hash": "c264d6f69"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "GitLab issue sync no longer blocks a move to a 0.3.215 shared deployment",
+              "hash": "bb5e2f6ce"
+            },
+            {
+              "section": "Added",
+              "scope": "trackers",
+              "text": "GitLab issue sync runs per app on a Hub shared deployment",
+              "hash": "f5d33def4"
+            },
+            {
+              "section": "Added",
+              "scope": "hub-agent",
+              "text": "one uploads folder per stack on an NFS export",
+              "hash": "a52a0db22"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "standalone Hub sidebar keeps Hub pages only",
+              "hash": "982525e4d"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "lists",
+              "text": "a state filter also finds records whose open addendum is in that step",
+              "hash": "bed96f571"
+            },
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "a refused account is never brought back by a sign-in timeout",
+              "hash": "20846b42a"
+            },
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "snapshot-lock timeouts file one issue and keep sign-ins working",
+              "hash": "51c4cfcbe"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "usage masking knows the costs, hosts, lifecycle and security tabs",
+              "hash": "4260aabd5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "after the integration merge — freeze owner read, guard lists, copy",
+              "hash": "90113a40c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "lifecycle review — admin roles, one open retirement, verified export",
+              "hash": "de9de3703"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "config promotion re-review — run record first, baseline after commit, ids remapped",
+              "hash": "659d18a43"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "between-stacks follow-ups from the C1 re-review",
+              "hash": "0c1586859"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "clone scrubber in-app allow-list, structure-only settings, webhook fail-closed",
+              "hash": "d9e4ca1a6"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "/api/version move_target without extra cloud-flag calls",
+              "hash": "2e61fd992"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "placement review M2 and lows L1–L7, docs",
+              "hash": "38c00ece3"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a move between stacks proves the name reaches the NEW stack",
+              "hash": "1dee9beec"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "break-glass boot sweep; GraphQL judged on the parsed document; guard on decoded params; marker race",
+              "hash": "1cdf9c5dd"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "clone scrubber — uncapped change counter, compound names, nested safe parts",
+              "hash": "c2cfd1c02"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub-link",
+              "text": "outbound keys and embedded secrets stripped at every depth",
+              "hash": "d180862f0"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "clone secrets deny by default; key tokens and unanchored scans",
+              "hash": "39d263eb1"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "break-glass off the hot path; deny-by-default grantee guard; credentials end with the grant",
+              "hash": "7951dda53"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "config promotion review — scoped secrets, natural keys, row-exact undo",
+              "hash": "36ffef036"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "one resolved-URL rule for Ask the Hub links, server and client",
+              "hash": "5407805b2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "security review round — break-glass in its own table, last-admin lock, strict identity",
+              "hash": "9777c5b04"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "Hub insight follows the review — incidents part, strict Hub links, usage copy",
+              "hash": "0f73985bf"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "Ask the Hub own-session only; digest rules, incidents, follow-ups",
+              "hash": "13d5652f7"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "usage can no longer be differenced below the privacy floor",
+              "hash": "2e8003839"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "Ask the Hub treats tool output as data and never returns outside links or images",
+              "hash": "100e15da5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "Scaling tab shows paused rules and an unknown limit",
+              "hash": "ab50edd50"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "scaling review fixes (locks, reconcile, backoff, reservations)",
+              "hash": "6c96d676a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub-agent",
+              "text": "scale takes a rolled-back mix, says its own SPEC_MISMATCH",
+              "hash": "dfcf9f2b3"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "trust the recorded running version only when it is the newest run",
+              "hash": "74e46ad4c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub-link",
+              "text": "config promotion never carries flow secrets",
+              "hash": "7e2785afa"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "change operations review — DST, outage rollbacks, own-session ticks, windows for moves and upgrades",
+              "hash": "cf011370e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "only a judged smoke failure rolls back; extension pins inside the lock",
+              "hash": "6d9a908c1"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub-link",
+              "text": "smoke identity gets its own account kind hub_smoke",
+              "hash": "4f944ffc0"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "incident review: resumable paging, masked status token, receipts",
+              "hash": "240dd9d20"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "Changes tab polish after the light/dark, desktop/phone check",
+              "hash": "edcc38b77"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub-link",
+              "text": "smoke identity is a read-only service account found by id",
+              "hash": "5e12bacda"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "banner link always needs the bearer; acknowledge answers a receipt",
+              "hash": "7156bceb7"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a rollback to a newer version is gated like a promotion",
+              "hash": "ecf178c45"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "SQLite move onto shared works; cancelled copies never install",
+              "hash": "4047ba63d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "catalog sees the data run-start routes registered through a helper",
+              "hash": "081aad3a2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "SQLite review 4 fixes: every connection judged, copies as jobs",
+              "hash": "91ae78279"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "offboard block spares only proven different people; one guard on every active-account path",
+              "hash": "d05ca3b4c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "standalone look polish after the second design review",
+              "hash": "1e9a7d9b5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "standalone Hub look review fixes",
+              "hash": "5a43396dd"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "sign-in block holds against new accounts; lift proves its own suspension",
+              "hash": "052dffe48"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a null shared-deployment key never counts as this deployment",
+              "hash": "b394e480e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "flows",
+              "text": "before-save sub-flows block too; one wait deadline; memory rule",
+              "hash": "5034d10f8"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "SQLite review fixes for shared deployments and moves",
+              "hash": "4a56b28f1"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "plain words for the agent's folder/NFS/run-as refusals and REFRESH_RUNNING",
+              "hash": "e2da5d9b4"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "fleet page follows the review fixes; docs corrected",
+              "hash": "0c455b544"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "fleet review fixes — known releases, single-flight, hourly rollups",
+              "hash": "883691ac1"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "scope the script switch by shared-deployment key",
+              "hash": "3fe908806"
+            },
+            {
+              "section": "Fixed",
+              "scope": "flows",
+              "text": "script child input, memory and waits on dedicated apps",
+              "hash": "76f181092"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "offboard only proven identities, serialise suspends",
+              "hash": "74b55b601"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "production rule fails closed for the owner gate",
+              "hash": "1741bc925"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "SDK hub follows wrapped clients; access switch errors say why; heal notes",
+              "hash": "57b38967c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "Templates show what upload removed; 8 MB checked before reading",
+              "hash": "48cb5babb"
+            },
+            {
+              "section": "Fixed",
+              "scope": "capacity",
+              "text": "limit failed-credential floods per address on shared",
+              "hash": "f87ba0c3c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "the consent page never pre-ticks the Hub, and says when a kit rules it out",
+              "hash": "cfba5d546"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "bound the GraphQL hub namespace's inner requests",
+              "hash": "b4631df02"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "one credential gate for every /api/hub route, installed at the routes root",
+              "hash": "c5515d276"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "count only this deployment's processes for the script switch",
+              "hash": "95dea3c70"
+            },
+            {
+              "section": "Fixed",
+              "scope": "flows",
+              "text": "dedicated apps run script steps in a child process too; no in-process vm runner",
+              "hash": "8f595617d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "mcp",
+              "text": "Hub tools need a Hub scope and plans reach the model without run tokens",
+              "hash": "d6342b734"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "template installs run once, in the background, and carry only safe parts",
+              "hash": "48cb4fc62"
+            },
+            {
+              "section": "Fixed",
+              "scope": "capacity",
+              "text": "judge the per-app rate limit after authentication",
+              "hash": "f153e2366"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "refresh only opted-in, verified non-production targets; safe restores",
+              "hash": "971719a2c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "polish the Hub Fleet and Audit tabs after design review",
+              "hash": "3a1c61965"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "NFS review fixes on the Hub side, agent 0.2.3 gate",
+              "hash": "883b22063"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "polish the Hub Issues, Storage and Secrets tabs",
+              "hash": "5b7ac4ca0"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "release operations review — unattended safety and freeze rules",
+              "hash": "9d17d7f50"
+            },
+            {
+              "section": "Fixed",
+              "scope": "capacity",
+              "text": "review fixes for limits, job slots, rebalance and settings",
+              "hash": "e20d488a5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "script-step readiness fails closed; switch reported per process; copy",
+              "hash": "66c7f5238"
+            },
+            {
+              "section": "Fixed",
+              "scope": "flows",
+              "text": "no host function in any script context; hardened script child",
+              "hash": "db1ae128e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub-agent",
+              "text": "NFS review fixes, agent 0.2.3",
+              "hash": "5049ecc96"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "bind the hub token grace to its token and origin; scrub routes",
+              "hash": "96af517fa"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "API Keys and Docs read on a phone; access switches show their pick in dark",
+              "hash": "a7334cf20"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "Secrets tab follows the review fixes; docs updated",
+              "hash": "924393985"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub-link",
+              "text": "issue titles cross the link as templates; one group per signature",
+              "hash": "3b825002c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "safe hub token rotation with a 24 h grace; checks prove new secrets",
+              "hash": "9533967cb"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub-agent",
+              "text": "storage health never blocks /v1/health; one mount setting",
+              "hash": "924b4e840"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "GitLab shared upgrade form asks for its own deploy branch",
+              "hash": "7c3604847"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "one writer per GitLab branch and safer GitLab shared upgrades",
+              "hash": "e763b6b39"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub-link",
+              "text": "S3 files backups only to buckets the app's operator lists",
+              "hash": "23a17f684"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "review fixes for creating on Docker or a shared deployment",
+              "hash": "bafc701fc"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "review fixes for the storage move (Azure copy, probe, versions)",
+              "hash": "7f8d3039e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "the move carries the app's own instance row and env mail",
+              "hash": "b36bda299"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "outside-write look is bounded as a whole, locks wait 1 s",
+              "hash": "ad980014b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "review fixes for per-app config announcements and heavy-read fairness",
+              "hash": "ce5cd1627"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "bind a move's in-bucket copy to the source scope the Hub names",
+              "hash": "9e272da5f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "trackers",
+              "text": "review fixes for GitLab issue sync on shared deployments",
+              "hash": "73abf5d80"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "review follow-ups for Hub sign-in per app on shared",
+              "hash": "310f7aff9"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "TURN probe on shared resolves once and dials the checked address",
+              "hash": "aade3a670"
+            },
+            {
+              "section": "Fixed",
+              "scope": "flows",
+              "text": "script child keeps only ECMAScript built-ins and a memory cap outside V8",
+              "hash": "c38e76034"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub-agent",
+              "text": "never follow links on the NFS export",
+              "hash": "083951899"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "regenerate openapi.json with the Hub API routes",
+              "hash": "f9969b822"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "sync generated docs (docs-index, SDK README)",
+              "hash": "0f19690de"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "hosts, costs and other Hubs; the between_stacks move kind",
+              "hash": "6634242b9"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "health, usage, dependencies and Ask the Hub; polish the insight tabs",
+              "hash": "ff79cd84d"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "scaling section, agent 0.2.4 scale endpoint",
+              "hash": "88e32df65"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "change calendar, deploy windows and pre-deploy checklists",
+              "hash": "830b6fe24"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "how a standalone Hub looks; GET /api/hub/strip",
+              "hash": "ba1529143"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "app owners and people",
+              "hash": "ce6911757"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "NFS review fixes and agent 0.2.3",
+              "hash": "5972c8d01"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "capacity limits — anonymous budget, sign-in, drains, presign, replacements",
+              "hash": "0374d47a6"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "app templates and the Hub MCP tools",
+              "hash": "1f6d3a65d"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "release operations section and hub-link extras",
+              "hash": "aef2f7766"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "issues across apps, secret rotation, storage health",
+              "hash": "439d2715d"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "fleet, uptime, drift alerts and audit timeline",
+              "hash": "a633d4fce"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "capacity and limits",
+              "hash": "2ff2ee1bb"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "instance row carry, env mail, bounded outside-write looks",
+              "hash": "93780b382"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "files on an NFS export (agent 0.2.2)",
+              "hash": "08f85da00"
+            },
+            {
+              "section": "Documentation",
+              "scope": "trackers",
+              "text": "move warnings, the env-off store and downgrades on shared deployments",
+              "hash": "c6a315ee8"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "creating apps on Docker or on a shared deployment",
+              "hash": "09f42414e"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "shared deployment upgrades through GitLab",
+              "hash": "c861a2075"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "env object storage and session replays move from 0.3.215",
+              "hash": "585e904ae"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "outside-write watch, huddles and env mail per app on shared",
+              "hash": "23763951f"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "Hub sign-in and the app switcher per app on shared deployments",
+              "hash": "954b8b8ed"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "Traffic Map, config epochs, heavy reads and pool figures per app",
+              "hash": "a9840fc20"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "script operations and their limits; exec-script runs per app on shared",
+              "hash": "e3db3a130"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "GitLab issue sync per app on shared deployments",
+              "hash": "f3f90c1b4"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "hub smoke rollback-rule tests no longer depend on the real clock",
+              "hash": "4d56e87fb"
+            },
+            {
+              "section": "Other",
+              "scope": "admin",
+              "text": "DbTuning mock covers the client chaos interceptor hub-page now loads",
+              "hash": "ba7d0b7f0"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "tone chips keep an icon on the label line; review bar without bleed",
+              "hash": "d51c15355"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "wave-2 tabs on the shared Hub pieces",
+              "hash": "9f674a76f"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "type the refused-request answer in the Ask the Hub fetch test",
+              "hash": "1382adc1a"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "incident test passes the page path the route type needs",
+              "hash": "3311264db"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "shared deployment facts grid and releases toolbar copy",
+              "hash": "ac0e1b824"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "runs, confirms and panels read the same everywhere",
+              "hash": "e295f519d"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "one list pane and toolbar across the Apps hub tabs",
+              "hash": "f6c016676"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "shared pieces for one Hub look",
+              "hash": "2fa960e98"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "slim parity lists the SQLite copy check's child process",
+              "hash": "1ea092ffc"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "type the counting inject stub in the GraphQL bounds test",
+              "hash": "c83e96ce0"
+            },
+            {
+              "section": "Other",
+              "scope": "admin",
+              "text": "format the stack panel owner tests",
+              "hash": "77ec34974"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "GitLab shared upgrade form and panel read at a glance",
+              "hash": "decc0e4a6"
+            },
+            {
+              "section": "Other",
+              "scope": "admin",
+              "text": "polish the Hub Capacity tab",
+              "hash": "941d86789"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "polish the Flow script steps card",
+              "hash": "5bb781444"
+            },
+            {
+              "section": "Other",
+              "scope": "mcp",
+              "text": "type the Hub tool scoping test's answer reader",
+              "hash": "f153a27e2"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "the realtime-server build tests run without a Redis (CI has none)",
+              "hash": "e282d551f"
+            }
+          ]
+        }
+      ],
+      "count": 228
+    },
     {
       "version": "0.3.214",
       "tag": "v0.3.214",
-      "date": "2026-11-24T15:55:52-05:00",
+      "date": "2026-11-24T15:56:16-05:00",
       "sections": [
         {
           "label": "Added",
