@@ -414,6 +414,12 @@ const NVR_ALLOW: Record<string, string> = {
   'services/hub/promote-lock.ts :: nvr:hub:promote-cancel:': HUB,
   'services/hub/promote-lock.ts :: nvr:hub:shared:': HUB,
   'services/hub/status.ts :: nvr:hub:status:': HUB,
+  'services/hub-link/template-install.ts :: nvr:hub-template:lock:':
+    "app-bound: hubLinkKeyTag() is a hash of this app's HUB_TOKEN; hub-link routes never mount on a shared deployment (Hub enhancement 24)",
+  'services/hub-link/template-install.ts :: nvr:hub-template:run:':
+    "app-bound: hubLinkKeyTag() is a hash of this app's HUB_TOKEN; hub-link routes never mount on a shared deployment (Hub enhancement 24)",
+  'services/hub-link/template-install.ts :: nvr:hub-template:seen:':
+    "app-bound: hubLinkKeyTag() is a hash of this app's HUB_TOKEN; hub-link routes never mount on a shared deployment (Hub enhancement 24)",
   'services/hub-signin/link-client.ts :: nvr:hub-signin-push:': OFF,
   'services/hub-signin/link-client.ts :: nvr:hub-switcher:': OFF,
   'services/outside-write-watch.ts :: nvr:rt:outside:': OFF,

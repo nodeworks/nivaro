@@ -1,3 +1,4 @@
+import type { Knex } from 'knex'
 import { inThisSchema } from '../db/dialect/h1.js'
 import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
@@ -434,10 +435,26 @@ async function tableColumns(name: string): Promise<Set<string>> {
   return new Set(rows.map((r) => r.name))
 }
 
+export interface InstallOptions {
+  /**
+   * Hub enhancement 24 (review M5): each workflow, layout and queue goes in with its children in
+   * ONE transaction, so a failure never leaves a parent whose children a retry would skip. The
+   * collections part stays per field (DDL cannot share a transaction everywhere) and resumes
+   * field by field anyway.
+   */
+  atomic?: boolean
+  /** Called once per part with its outcome (`collection:<name>`, `workflow:<id>` …). */
+  onPart?: (part: string, ok: boolean) => void
+}
+
 export async function installBlueprint(
   bp: Blueprint,
-  ownerId: string | null
+  ownerId: string | null,
+  opts: InstallOptions = {}
 ): Promise<InstallReport> {
+  const atomic = <T>(run: (k: Knex | Knex.Transaction) => Promise<T>): Promise<T> =>
+    opts.atomic ? db.transaction((trx) => run(trx)) : run(db)
+  const part = (key: string, ok: boolean) => opts.onPart?.(key, ok)
   const report: InstallReport = {
     collections: { created: 0, skipped: 0 },
     columns: { created: 0 },
@@ -458,8 +475,9 @@ export async function installBlueprint(
   // Collections: physical table + metadata + typed columns
   for (const col of bp.collections) {
     const name = String(col.meta.collection ?? '')
-    if (!/^[a-zA-Z0-9_]+$/.test(name) || name.startsWith('nivaro_')) {
+    if (!/^[a-zA-Z0-9_]+$/.test(name) || /^(nivaro_|directus_)/i.test(name)) {
       err(`invalid collection name: ${name}`)
+      part(`collection:${name}`, false)
       continue
     }
     try {
@@ -532,8 +550,10 @@ export async function installBlueprint(
           report.fields.created++
         }
       }
+      part(`collection:${name}`, true)
     } catch (e) {
       err(`${name}: ${e instanceof Error ? e.message.slice(0, 150) : 'failed'}`)
+      part(`collection:${name}`, false)
     }
   }
 
@@ -552,8 +572,10 @@ export async function installBlueprint(
         await db('nivaro_relations').insert(r)
         report.relations.created++
       }
+      part(`relation:${String(r.many_collection)}.${String(r.many_field)}`, true)
     } catch (e) {
       err(`relation: ${e instanceof Error ? e.message.slice(0, 120) : 'failed'}`)
+      part(`relation:${String(r.many_collection)}.${String(r.many_field)}`, false)
     }
   }
 
@@ -568,8 +590,10 @@ export async function installBlueprint(
       if (out === 'created') report.payload_templates.created++
       else if (out === 'drafted') report.payload_templates.drafted++
       else report.payload_templates.skipped++
+      part(`payload:${String(t?.key)}`, true)
     } catch (e) {
       err(`payload template ${t?.key}: ${e instanceof Error ? e.message.slice(0, 150) : 'failed'}`)
+      part(`payload:${String(t?.key)}`, false)
     }
   }
 
@@ -580,24 +604,29 @@ export async function installBlueprint(
       const existing = await db('nivaro_workflow_templates').where({ id: tid }).first()
       if (existing) {
         report.workflows.skipped++
+        part(`workflow:${tid}`, true)
         continue
       }
-      await db('nivaro_workflow_templates').insert({
-        ...wf.template,
-        created_at: now,
-        updated_at: now
+      await atomic(async (k) => {
+        await k('nivaro_workflow_templates').insert({
+          ...wf.template,
+          created_at: now,
+          updated_at: now
+        })
+        for (const st of wf.states) await k('nivaro_workflow_states').insert(st)
+        for (const tx of wf.transitions) await k('nivaro_workflow_transitions').insert(tx)
+        for (const b of wf.bindings) {
+          const bound = await k('nivaro_workflow_bindings')
+            .where({ collection: b.collection as string })
+            .first()
+          if (!bound) await k('nivaro_workflow_bindings').insert(b)
+        }
       })
-      for (const st of wf.states) await db('nivaro_workflow_states').insert(st)
-      for (const tx of wf.transitions) await db('nivaro_workflow_transitions').insert(tx)
-      for (const b of wf.bindings) {
-        const bound = await db('nivaro_workflow_bindings')
-          .where({ collection: b.collection as string })
-          .first()
-        if (!bound) await db('nivaro_workflow_bindings').insert(b)
-      }
       report.workflows.created++
+      part(`workflow:${tid}`, true)
     } catch (e) {
       err(`workflow: ${e instanceof Error ? e.message.slice(0, 150) : 'failed'}`)
+      part(`workflow:${String(wf.template?.id)}`, false)
     }
   }
 
@@ -608,19 +637,24 @@ export async function installBlueprint(
       const existing = await db('nivaro_collection_layouts').where(key).first()
       if (existing) {
         report.layouts.skipped++
+        part(`layout:${key.collection}/${key.name}`, true)
         continue
       }
-      const [idRow] = await db('nivaro_collection_layouts')
-        .insert({ ...l.layout, created_at: now, updated_at: now })
-        .returning('id')
-      const newId = typeof idRow === 'object' ? (idRow as { id: number }).id : idRow
-      for (const g of l.groups) await db('nivaro_field_groups').insert({ ...g, layout_id: newId })
-      for (const a of l.assignments) {
-        await db('nivaro_layout_field_assignments').insert({ ...a, layout_id: newId })
-      }
+      await atomic(async (k) => {
+        const [idRow] = await k('nivaro_collection_layouts')
+          .insert({ ...l.layout, created_at: now, updated_at: now })
+          .returning('id')
+        const newId = typeof idRow === 'object' ? (idRow as { id: number }).id : idRow
+        for (const g of l.groups) await k('nivaro_field_groups').insert({ ...g, layout_id: newId })
+        for (const a of l.assignments) {
+          await k('nivaro_layout_field_assignments').insert({ ...a, layout_id: newId })
+        }
+      })
       report.layouts.created++
+      part(`layout:${key.collection}/${key.name}`, true)
     } catch (e) {
       err(`layout: ${e instanceof Error ? e.message.slice(0, 150) : 'failed'}`)
+      part(`layout:${String(l.layout?.collection)}/${String(l.layout?.name)}`, false)
     }
   }
 
@@ -632,21 +666,26 @@ export async function installBlueprint(
         .first()
       if (existing) {
         report.queues.skipped++
+        part(`queue:${String(q.queue.id)}`, true)
         continue
       }
-      await db('nivaro_queues').insert({
-        ...q.queue,
-        owner: ownerId,
-        materialized: false,
-        created_at: now,
-        updated_at: now
+      await atomic(async (k) => {
+        await k('nivaro_queues').insert({
+          ...q.queue,
+          owner: ownerId,
+          materialized: false,
+          created_at: now,
+          updated_at: now
+        })
+        for (const src of q.sources) {
+          await k('nivaro_queue_sources').insert({ ...src, queue_id: q.queue.id })
+        }
       })
-      for (const src of q.sources) {
-        await db('nivaro_queue_sources').insert({ ...src, queue_id: q.queue.id })
-      }
       report.queues.created++
+      part(`queue:${String(q.queue.id)}`, true)
     } catch (e) {
       err(`queue: ${e instanceof Error ? e.message.slice(0, 150) : 'failed'}`)
+      part(`queue:${String(q.queue?.id)}`, false)
     }
   }
 
@@ -661,8 +700,10 @@ export async function installBlueprint(
         await db('nivaro_rules').insert({ ...r, created_at: now, updated_at: now })
         report.rules.created++
       }
+      part(`rule:${String(r.collection)}/${String(r.name)}`, true)
     } catch (e) {
       err(`rule: ${e instanceof Error ? e.message.slice(0, 120) : 'failed'}`)
+      part(`rule:${String(r.collection)}/${String(r.name)}`, false)
     }
   }
 

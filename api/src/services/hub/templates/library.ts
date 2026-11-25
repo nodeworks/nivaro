@@ -10,6 +10,11 @@ import type { Knex } from 'knex'
 import { insertReturningId } from '../../../db/dialect/ef.js'
 import { db } from '../../../db/index.js'
 import {
+  type SanitizeReview,
+  sanitizeBlueprint,
+  TemplateShapeError
+} from '../../blueprint-sanitize.js'
+import {
   type BlueprintManifest,
   buildManifest,
   isPublishedBlueprint,
@@ -20,8 +25,11 @@ import {
 export const TEMPLATES = 'nivaro_hub_app_templates'
 export const TEMPLATE_INSTALLS = 'nivaro_hub_template_installs'
 
-/** Largest bundle the library keeps (the JSON as stored). */
-export const TEMPLATE_MAX_BYTES = 16 * 1024 * 1024
+/**
+ * Largest bundle the library keeps (the JSON as stored). 8 MB stays well inside MySQL/MariaDB's
+ * default max_allowed_packet (16 MB) with protocol overhead, and inside the app's body limit.
+ */
+export const TEMPLATE_MAX_BYTES = 8 * 1024 * 1024
 export const TEMPLATE_NAME_MAX = 120
 export const TEMPLATE_DESCRIPTION_MAX = 1000
 export const TEMPLATE_VERSION_RE = /^[0-9A-Za-z._-]{1,40}$/
@@ -44,7 +52,8 @@ export interface HubTemplate {
   description: string | null
   digest: string
   size_bytes: number
-  manifest: BlueprintManifest | null
+  /** The export's manifest, plus `review`: what upload removed or left out (blueprint-sanitize). */
+  manifest: (BlueprintManifest & { review?: SanitizeReview }) | null
   archived: boolean
   archived_at: string | null
   created_by: string | null
@@ -82,7 +91,7 @@ function fromRow(r: Record<string, unknown>, used = 0): HubTemplate {
     description: r.description == null ? null : String(r.description),
     digest: String(r.digest ?? ''),
     size_bytes: Number(r.size_bytes ?? 0),
-    manifest: parseJson<BlueprintManifest>(r.manifest),
+    manifest: parseJson<BlueprintManifest & { review?: SanitizeReview }>(r.manifest),
     archived: r.archived_at != null,
     archived_at: iso(r.archived_at),
     created_by: r.created_by == null ? null : String(r.created_by),
@@ -109,10 +118,12 @@ const LIST_COLS = [
 async function usage(ids: number[]): Promise<Map<number, number>> {
   const out = new Map<number, number>()
   if (!ids.length) return out
-  const rows = (await db(TEMPLATE_INSTALLS)
-    .whereIn('template_id', ids)
-    .groupBy('template_id')
-    .select('template_id')
+  // Rows of environments that no longer exist (a creation thrown away) do not count (review L5).
+  const rows = (await db(`${TEMPLATE_INSTALLS} as i`)
+    .join('nivaro_hub_environments as e', 'e.id', 'i.environment_id')
+    .whereIn('i.template_id', ids)
+    .groupBy('i.template_id')
+    .select('i.template_id as template_id')
     .count({ n: '*' })) as Array<{ template_id: number; n: number | string }>
   for (const r of rows) out.set(Number(r.template_id), Number(r.n))
   return out
@@ -176,15 +187,27 @@ export function packageUpload(up: TemplateUpload): {
   description: string | null
   pkg: PublishedBlueprint
   json: string
+  review: SanitizeReview
 } {
-  const bp = unwrapBlueprint(up?.bundle)
-  if (!bp)
+  const raw = unwrapBlueprint(up?.bundle)
+  if (!raw)
     throw new TemplateError(
       'BAD_BUNDLE',
       'That is not an App Blueprint export (Promotion → Blueprints: Export or Publish).'
     )
+  // Review M3/L4: kept columns only, every part inside the template's own collections, capped.
+  let bp: ReturnType<typeof sanitizeBlueprint>['blueprint']
+  let review: SanitizeReview
+  try {
+    const clean = sanitizeBlueprint(raw)
+    bp = clean.blueprint
+    review = clean.review
+  } catch (err) {
+    if (err instanceof TemplateShapeError) throw new TemplateError(err.code, err.message)
+    throw err
+  }
   if (!bp.collections.length)
-    throw new TemplateError('EMPTY_BUNDLE', 'The blueprint brings no collections.')
+    throw new TemplateError('EMPTY_BUNDLE', 'The blueprint brings no business collections.')
   const given = isPublishedBlueprint(up.bundle) ? up.bundle.manifest : null
   const name = cleanText(up.name, TEMPLATE_NAME_MAX) ?? cleanText(bp.name, TEMPLATE_NAME_MAX)
   if (!name) throw new TemplateError('BAD_NAME', 'Give the template a name.')
@@ -210,8 +233,8 @@ export function packageUpload(up: TemplateUpload): {
   }
   const json = JSON.stringify(pkg)
   if (Buffer.byteLength(json) > TEMPLATE_MAX_BYTES)
-    throw new TemplateError('TOO_LARGE', 'The blueprint is larger than 16 MB.', 413)
-  return { name, version, description, pkg, json }
+    throw new TemplateError('TOO_LARGE', 'The blueprint is larger than 8 MB.', 413)
+  return { name, version, description, pkg, json, review }
 }
 
 async function nameTaken(name: string, version: string, exceptId?: number): Promise<boolean> {
@@ -237,7 +260,7 @@ export async function uploadTemplate(up: TemplateUpload, by: string | null): Pro
       bundle: p.json,
       digest: templateDigest(p.json),
       size_bytes: Buffer.byteLength(p.json),
-      manifest: JSON.stringify(p.pkg.manifest),
+      manifest: JSON.stringify({ ...p.pkg.manifest, review: p.review }),
       created_by: by || null,
       created_at: now,
       updated_at: now

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-// Hub enhancement 24: the creation's Template step. The library, the install rows and the app
-// call are faked; the step's own rules are what is tested.
+// Hub enhancement 24: the creation's Template step — start the install on the app, poll it, and
+// end done / partial / failed. The library, the install rows and the app calls are faked.
 
 vi.mock('../../../services/hub/templates/choice.js', () => ({
   TEMPLATE_MIN_VERSION: '0.3.215',
@@ -10,7 +10,8 @@ vi.mock('../../../services/hub/templates/choice.js', () => ({
 }))
 vi.mock('../../../services/hub/templates/library.js', () => ({ readTemplateBundle: vi.fn() }))
 vi.mock('../../../services/hub/create/template-client.js', () => ({
-  requestTemplateInstall: vi.fn()
+  startTemplateInstall: vi.fn(),
+  readTemplateInstall: vi.fn()
 }))
 vi.mock('../../../services/hub/secrets.js', async (orig) => ({
   ...(await orig<object>()),
@@ -20,16 +21,17 @@ vi.mock('../../../services/hub/secrets.js', async (orig) => ({
 const choice = await import('../../../services/hub/templates/choice.js')
 const library = await import('../../../services/hub/templates/library.js')
 const client = await import('../../../services/hub/create/template-client.js')
-const { stepTemplate, TEMPLATE_POLLS, templateRefusalText } = await import(
+const { stepTemplate, TEMPLATE_STARTS, templateRefusalText } = await import(
   '../../../services/hub/create/template-step.js'
 )
 const { STEPS } = await import('../../../services/hub/create/steps.js')
 const { STEP_ORDER } = await import('../../../services/hub/create/types.js')
 
-const readInstall = vi.mocked(choice.readTemplateInstall)
-const setInstall = vi.mocked(choice.setTemplateInstall)
+const readRow = vi.mocked(choice.readTemplateInstall)
+const setRow = vi.mocked(choice.setTemplateInstall)
 const readBundle = vi.mocked(library.readTemplateBundle)
-const install = vi.mocked(client.requestTemplateInstall)
+const start = vi.mocked(client.startTemplateInstall)
+const poll = vi.mocked(client.readTemplateInstall)
 
 const TEMPLATE = {
   id: 7,
@@ -38,19 +40,37 @@ const TEMPLATE = {
   digest: 'sha256:abc',
   bundle: { type: 'nivaro-blueprint-package' }
 }
+const REPORT = { collections: { created: 2 }, workflows: { created: 1 }, queues: { created: 0 } }
+const run = (status: string, extra: Record<string, unknown> = {}) =>
+  ({
+    result: 'run',
+    status,
+    report: REPORT,
+    parts: { ok: 3, failed: [] },
+    code: null,
+    ...extra
+  }) as never
 
 function ctx() {
+  let clock = 0
   return {
     env: { id: 5, base_url: 'https://app.example.com', hub_token: 'sealed' },
     secrets: new Set<string>(),
     log: vi.fn(),
-    deps: { sleep: vi.fn(async () => undefined) }
+    deps: {
+      sleep: vi.fn(async (ms: number) => {
+        clock += ms
+      }),
+      now: () => clock
+    }
   } as never as Parameters<typeof stepTemplate>[0]
 }
 
 beforeEach(() => {
   vi.clearAllMocks()
   readBundle.mockResolvedValue(TEMPLATE as never)
+  readRow.mockResolvedValue({ status: 'pending', template_id: 7 } as never)
+  start.mockResolvedValue({ result: 'started', install_id: 'run-0001' })
 })
 
 describe('Template step', () => {
@@ -60,78 +80,83 @@ describe('Template step', () => {
     expect(STEPS.template).toBe(stepTemplate)
   })
 
-  it('no template picked → done at once, the app is never called', async () => {
-    readInstall.mockResolvedValue(null)
+  it('no template picked → done at once; a done row stays done (no call)', async () => {
+    readRow.mockResolvedValueOnce(null)
     expect(await stepTemplate(ctx())).toEqual({ status: 'done', note: 'No template.' })
-    expect(install).not.toHaveBeenCalled()
-  })
-
-  it('an install already done stays done (a retry does not send it again)', async () => {
-    readInstall.mockResolvedValue({ status: 'done', note: 'Installed earlier.' } as never)
+    readRow.mockResolvedValueOnce({ status: 'done', note: 'Installed earlier.' } as never)
     expect(await stepTemplate(ctx())).toEqual({ status: 'done', note: 'Installed earlier.' })
-    expect(install).not.toHaveBeenCalled()
+    expect(start).not.toHaveBeenCalled()
   })
 
-  it('installs: sends bundle + digest with the token, keeps the report, names the counts', async () => {
-    readInstall.mockResolvedValue({ status: 'pending', template_id: 7 } as never)
-    install.mockResolvedValue({
-      result: 'installed',
-      report: {
-        collections: { created: 2 },
-        workflows: { created: 1 },
-        queues: { created: 0 },
-        errors: []
-      },
-      collections: ['assets']
-    })
+  it('starts once, polls while running, ends done with the counts; the token is scrubbed', async () => {
+    poll.mockResolvedValueOnce(run('running')).mockResolvedValueOnce(run('done'))
     const c = ctx()
     const out = await stepTemplate(c)
     expect(out.status).toBe('done')
     expect(out.note).toMatch(/Assets 1\.0\.0 installed: \+2 collections, \+1 workflows/)
-    expect(install).toHaveBeenCalledWith('https://app.example.com', 'plain-hub-token-0123456789', {
+    expect(start).toHaveBeenCalledTimes(1)
+    expect(start).toHaveBeenCalledWith('https://app.example.com', 'plain-hub-token-0123456789', {
       bundle: TEMPLATE.bundle,
       digest: 'sha256:abc',
       template: { name: 'Assets', version: '1.0.0' }
     })
-    // The token is scrubbed from everything the runner stores.
+    expect(poll).toHaveBeenCalledWith(
+      'https://app.example.com',
+      'plain-hub-token-0123456789',
+      'run-0001'
+    )
     expect(c.secrets.has('plain-hub-token-0123456789')).toBe(true)
-    expect(setInstall).toHaveBeenNthCalledWith(1, 5, { status: 'installing', note: null })
-    expect(setInstall).toHaveBeenLastCalledWith(
+    expect(setRow).toHaveBeenLastCalledWith(5, expect.objectContaining({ status: 'done' }))
+  })
+
+  it('partial → TEMPLATE_PARTIAL, the row kept partial with its report (Retry runs it again)', async () => {
+    poll.mockResolvedValueOnce(run('partial', { parts: { ok: 2, failed: ['workflow:w1'] } }))
+    await expect(stepTemplate(ctx())).rejects.toMatchObject({
+      code: 'TEMPLATE_PARTIAL',
+      message: expect.stringContaining('workflow:w1')
+    })
+    expect(setRow).toHaveBeenLastCalledWith(
       5,
-      expect.objectContaining({ status: 'done', report: expect.any(Object) })
+      expect.objectContaining({ status: 'partial', report: REPORT })
     )
   })
 
-  it('a cut-off call is asked again; then it installs', async () => {
-    readInstall.mockResolvedValue({ status: 'pending', template_id: 7 } as never)
-    install
-      .mockResolvedValueOnce({ result: 'refused', code: 'TIMEOUT' })
-      .mockResolvedValueOnce({ result: 'installed', report: {}, collections: [] })
-    const c = ctx()
-    expect((await stepTemplate(c)).status).toBe('done')
-    expect(install).toHaveBeenCalledTimes(2)
+  it('an interrupted run (the app process died) is started again', async () => {
+    start
+      .mockResolvedValueOnce({ result: 'started', install_id: 'run-0001' })
+      .mockResolvedValueOnce({ result: 'started', install_id: 'run-0002' })
+    poll.mockResolvedValueOnce(run('interrupted')).mockResolvedValueOnce(run('done'))
+    expect((await stepTemplate(ctx())).status).toBe('done')
+    expect(start).toHaveBeenCalledTimes(2)
   })
 
-  it('never answering → TEMPLATE fails with the last code after every poll', async () => {
-    readInstall.mockResolvedValue({ status: 'pending', template_id: 7 } as never)
-    install.mockResolvedValue({ result: 'refused', code: 'UNREACHABLE' })
+  it('busy or frozen for a moment (TEMPLATE_INSTALLING / MAINTENANCE) asks again; then runs', async () => {
+    start
+      .mockResolvedValueOnce({ result: 'refused', code: 'TEMPLATE_INSTALLING' })
+      .mockResolvedValueOnce({ result: 'refused', code: 'MAINTENANCE' })
+      .mockResolvedValueOnce({ result: 'started', install_id: 'run-0003' })
+    poll.mockResolvedValueOnce(run('done'))
+    expect((await stepTemplate(ctx())).status).toBe('done')
+  })
+
+  it('never starting → fails with the last code after the allowed starts', async () => {
+    start.mockResolvedValue({ result: 'refused', code: 'UNREACHABLE' })
     await expect(stepTemplate(ctx())).rejects.toMatchObject({ code: 'UNREACHABLE' })
-    expect(install).toHaveBeenCalledTimes(TEMPLATE_POLLS)
-    expect(setInstall).toHaveBeenLastCalledWith(5, expect.objectContaining({ status: 'failed' }))
+    expect(start).toHaveBeenCalledTimes(TEMPLATE_STARTS)
   })
 
   it('an app that is not new refuses at once (APP_NOT_EMPTY), naming its collections', async () => {
-    readInstall.mockResolvedValue({ status: 'pending', template_id: 7 } as never)
-    install.mockResolvedValue({ result: 'refused', code: 'APP_NOT_EMPTY', collections: ['orders'] })
+    start.mockResolvedValue({ result: 'refused', code: 'APP_NOT_EMPTY', collections: ['orders'] })
     await expect(stepTemplate(ctx())).rejects.toMatchObject({
       code: 'APP_NOT_EMPTY',
       message: expect.stringContaining('orders')
     })
-    expect(install).toHaveBeenCalledTimes(1)
+    expect(start).toHaveBeenCalledTimes(1)
   })
 
-  it('a deleted template fails TEMPLATE_GONE', async () => {
-    readInstall.mockResolvedValue({ status: 'pending', template_id: 7 } as never)
+  it('a moved app fails APP_MOVED; a deleted template fails TEMPLATE_GONE', async () => {
+    poll.mockResolvedValue({ result: 'refused', code: 'APP_MOVED' })
+    await expect(stepTemplate(ctx())).rejects.toMatchObject({ code: 'APP_MOVED' })
     readBundle.mockResolvedValue(null)
     await expect(stepTemplate(ctx())).rejects.toMatchObject({ code: 'TEMPLATE_GONE' })
   })

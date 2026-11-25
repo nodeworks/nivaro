@@ -1,24 +1,35 @@
 import { fetchJson } from '../../gitlab-client.js'
 
 /**
- * Hub side (enhancement 24): ask a created app, over its Hub link, to install a template.
+ * Hub side (enhancement 24): ask a created app, over its Hub link, to install a template, then
+ * read how the install goes (it runs in the background on the app: review M2).
  *
- *   POST {base_url}/api/hub-link/template  Authorization: Bearer <hub token>
- *        {bundle, digest, template: {name, version}}
+ *   POST {base_url}/api/hub-link/template      {bundle, digest, template} → 202 {install_id}
+ *   GET  {base_url}/api/hub-link/template/:id  → {status, report?, parts?, review?, code?}
  *
  * Same rules as link-client.ts requestFirstAdmin: the token only in the Authorization header,
- * redirects refused, bounded by `timeoutMs` (outer bound included), never throws, never answers
- * the token or the app's message text:
- *  - 200 {installed: true} → installed, with the app's report (counts and the installer's short
- *    error names);
- *  - everything else → refused with a code: the app's own (BAD_DIGEST, APP_NOT_EMPTY, …),
- *    HUB_LINK_REFUSED (401/403), HUB_LINK_MISSING (404: an app older than the route),
- *    HUB_LINK_REDIRECT, TIMEOUT, UNREACHABLE, BAD_BASE_URL, HUB_TOKEN_MISSING or HTTP_<status>.
+ * redirects refused, every call bounded (outer bound included), never throws, never answers the
+ * token or the app's message text. Refusals carry a code: the app's own (BAD_DIGEST, BAD_SHAPE,
+ * APP_NOT_EMPTY, TEMPLATE_INSTALLING, MAINTENANCE, APP_MOVED, UNKNOWN_INSTALL …),
+ * HUB_LINK_REFUSED (401/403/429), HUB_LINK_MISSING (404 on the start: an app older than the
+ * route), HUB_LINK_REDIRECT, TIMEOUT, UNREACHABLE, BAD_BASE_URL, HUB_TOKEN_MISSING or HTTP_<status>.
  */
 
-export type TemplateInstallAnswer =
-  | { result: 'installed'; report: Record<string, unknown>; collections: string[] }
+export type TemplateStartAnswer =
+  | { result: 'started'; install_id: string }
   | { result: 'refused'; code: string; collections?: string[] }
+
+export type TemplateRunStatus = 'running' | 'done' | 'partial' | 'failed' | 'interrupted'
+
+export type TemplateRunAnswer =
+  | {
+      result: 'run'
+      status: TemplateRunStatus
+      report: Record<string, unknown>
+      parts: { ok: number; failed: string[] }
+      code: string | null
+    }
+  | { result: 'refused'; code: string }
 
 export interface TemplatePayload {
   bundle: unknown
@@ -26,8 +37,9 @@ export interface TemplatePayload {
   template: { name: string; version: string }
 }
 
-/** A large schema creates many tables; ten minutes before the Hub asks again. */
-export const TEMPLATE_INSTALL_TIMEOUT_MS = 10 * 60_000
+/** The start answers once the lock and the fresh check are done; the install runs after it. */
+export const TEMPLATE_START_TIMEOUT_MS = 60_000
+export const TEMPLATE_READ_TIMEOUT_MS = 15_000
 
 function plainHttpHost(hostname: string): boolean {
   const h = hostname.toLowerCase()
@@ -81,46 +93,94 @@ function within<T>(p: Promise<T>, ms: number): Promise<T> {
   ]).finally(() => clearTimeout(timer))
 }
 
-const refused = (code: string, collections?: string[]): TemplateInstallAnswer =>
+const refusedStart = (code: string, collections?: string[]): TemplateStartAnswer =>
   collections?.length ? { result: 'refused', code, collections } : { result: 'refused', code }
 
-export async function requestTemplateInstall(
+type Fetched = { ok: true; status: number; body: unknown } | { ok: false; code: string }
+
+async function call(
+  url: string,
+  bearer: string,
+  timeoutMs: number,
+  opts: { method?: 'POST'; body?: unknown }
+): Promise<Fetched> {
+  try {
+    const res = await within(
+      fetchJson(url, { Accept: 'application/json', Authorization: `Bearer ${bearer}` }, timeoutMs, {
+        ...opts,
+        redirect: 'error'
+      }),
+      timeoutMs
+    )
+    return { ok: true, status: res.status, body: res.body }
+  } catch (err) {
+    if ((err as { code?: unknown } | null)?.code === 'FETCH_REDIRECT')
+      return { ok: false, code: 'HUB_LINK_REDIRECT' }
+    const name = (err as { name?: string } | null)?.name
+    return {
+      ok: false,
+      code: name === 'AbortError' || name === 'TimeoutError' ? 'TIMEOUT' : 'UNREACHABLE'
+    }
+  }
+}
+
+function refusalCode(status: number, body: unknown, missing: string): string {
+  if (status === 401 || status === 403 || status === 429) return 'HUB_LINK_REFUSED'
+  const c = codeOf(body)
+  if (status === 404) return c === 'UNKNOWN_INSTALL' ? c : missing
+  return c ?? `HTTP_${status}`
+}
+
+export async function startTemplateInstall(
   baseUrl: string,
   token: string,
   payload: TemplatePayload,
-  timeoutMs: number = TEMPLATE_INSTALL_TIMEOUT_MS
-): Promise<TemplateInstallAnswer> {
+  timeoutMs: number = TEMPLATE_START_TIMEOUT_MS
+): Promise<TemplateStartAnswer> {
   const base = templateBaseOf(baseUrl)
-  if (!base) return refused('BAD_BASE_URL')
+  if (!base) return refusedStart('BAD_BASE_URL')
   const bearer = typeof token === 'string' ? token.trim() : ''
-  if (!bearer) return refused('HUB_TOKEN_MISSING')
-  let res: Awaited<ReturnType<typeof fetchJson>>
-  try {
-    res = await within(
-      fetchJson(
-        `${base}/api/hub-link/template`,
-        { Accept: 'application/json', Authorization: `Bearer ${bearer}` },
-        timeoutMs,
-        { method: 'POST', body: payload, redirect: 'error' }
-      ),
-      timeoutMs
-    )
-  } catch (err) {
-    if ((err as { code?: unknown } | null)?.code === 'FETCH_REDIRECT')
-      return refused('HUB_LINK_REDIRECT')
-    const name = (err as { name?: string } | null)?.name
-    return refused(name === 'AbortError' || name === 'TimeoutError' ? 'TIMEOUT' : 'UNREACHABLE')
+  if (!bearer) return refusedStart('HUB_TOKEN_MISSING')
+  const r = await call(`${base}/api/hub-link/template`, bearer, timeoutMs, {
+    method: 'POST',
+    body: payload
+  })
+  if (!r.ok) return refusedStart(r.code)
+  const body = r.body as { install_id?: unknown; collections?: unknown } | null
+  if ((r.status === 202 || r.status === 200) && typeof body?.install_id === 'string')
+    return { result: 'started', install_id: body.install_id.slice(0, 64) }
+  return refusedStart(refusalCode(r.status, r.body, 'HUB_LINK_MISSING'), names(body?.collections))
+}
+
+const STATUSES = new Set(['running', 'done', 'partial', 'failed', 'interrupted'])
+
+export async function readTemplateInstall(
+  baseUrl: string,
+  token: string,
+  installId: string,
+  timeoutMs: number = TEMPLATE_READ_TIMEOUT_MS
+): Promise<TemplateRunAnswer> {
+  const base = templateBaseOf(baseUrl)
+  if (!base) return { result: 'refused', code: 'BAD_BASE_URL' }
+  const bearer = typeof token === 'string' ? token.trim() : ''
+  if (!bearer) return { result: 'refused', code: 'HUB_TOKEN_MISSING' }
+  if (!/^[A-Za-z0-9_-]{8,64}$/.test(installId))
+    return { result: 'refused', code: 'UNKNOWN_INSTALL' }
+  const r = await call(`${base}/api/hub-link/template/${installId}`, bearer, timeoutMs, {})
+  if (!r.ok) return { result: 'refused', code: r.code }
+  const b = r.body as Record<string, unknown> | null
+  if (r.status === 200 && typeof b?.status === 'string' && STATUSES.has(b.status)) {
+    const parts = (b.parts ?? {}) as { ok?: unknown; failed?: unknown }
+    return {
+      result: 'run',
+      status: b.status as TemplateRunStatus,
+      report:
+        b.report && typeof b.report === 'object' && !Array.isArray(b.report)
+          ? (b.report as Record<string, unknown>)
+          : {},
+      parts: { ok: typeof parts.ok === 'number' ? parts.ok : 0, failed: names(parts.failed) },
+      code: codeOf(b)
+    }
   }
-  const body = res.body as { installed?: unknown; report?: unknown; collections?: unknown } | null
-  if (res.status === 200 && body?.installed === true) {
-    const report =
-      body.report && typeof body.report === 'object' && !Array.isArray(body.report)
-        ? (body.report as Record<string, unknown>)
-        : {}
-    return { result: 'installed', report, collections: names(body.collections) }
-  }
-  if (res.status === 401 || res.status === 403) return refused('HUB_LINK_REFUSED')
-  if (res.status === 429) return refused('HUB_LINK_REFUSED')
-  if (res.status === 404) return refused('HUB_LINK_MISSING')
-  return refused(codeOf(res.body) ?? `HTTP_${res.status}`, names(body?.collections))
+  return { result: 'refused', code: refusalCode(r.status, r.body, 'UNKNOWN_INSTALL') }
 }

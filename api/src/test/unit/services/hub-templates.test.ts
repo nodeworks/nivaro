@@ -30,7 +30,14 @@ function blueprint(name = 'Assets', collections = ['assets', 'asset_moves']) {
     exported_at: '2026-11-20T00:00:00.000Z',
     collections: collections.map((c) => ({ meta: { collection: c }, fields: [{ field: 'id' }] })),
     relations: [],
-    workflows: [{ template: { id: 'w' }, states: [], transitions: [], bindings: [] }],
+    workflows: [
+      {
+        template: { id: 'w' },
+        states: [],
+        transitions: [],
+        bindings: [{ collection: collections[0] }]
+      }
+    ],
     layouts: [],
     queues: [],
     rules: []
@@ -40,6 +47,11 @@ function blueprint(name = 'Assets', collections = ['assets', 'asset_moves']) {
 beforeAll(async () => {
   await up(db)
   await up(db) // guarded: a second run is a no-op
+  // The environments an install row counts against (review L5: rows of deleted ones do not).
+  await db.schema.createTable('nivaro_hub_environments', (t) => {
+    t.integer('id').primary()
+  })
+  await db('nivaro_hub_environments').insert([10, 31, 32, 41, 51].map((id) => ({ id })))
 })
 afterAll(async () => {
   await db.destroy()
@@ -147,9 +159,40 @@ describe('library', () => {
       by: null
     })
     await expect(lib.deleteTemplate(t.id)).rejects.toMatchObject({ code: 'TEMPLATE_IN_USE' })
+    // Its environment deleted (a creation thrown away): no longer in use (review L5).
+    await db('nivaro_hub_environments').where({ id: 10 }).del()
+    expect((await lib.readTemplate(t.id))?.used).toBe(0)
+    await db('nivaro_hub_environments').insert({ id: 10 })
     const unused = await lib.uploadTemplate({ bundle: blueprint('B') }, null)
     await lib.deleteTemplate(unused.id)
     expect(await lib.readTemplate(unused.id)).toBeNull()
+  })
+})
+
+describe('upload review (M3)', () => {
+  it('stores the cut-down blueprint and says what it removed', async () => {
+    const bp = blueprint()
+    ;(bp.collections[0].meta as Record<string, unknown>).virtual_sql = 'SELECT 1; DROP TABLE x'
+    ;(bp.collections[0].meta as Record<string, unknown>).is_virtual = true
+    const t = await lib.uploadTemplate({ bundle: bp }, null)
+    const full = await lib.readTemplateBundle(t.id)
+    expect(JSON.stringify(full?.bundle)).not.toContain('DROP TABLE')
+    expect(t.manifest?.review?.virtual_removed).toEqual(['assets'])
+    const notes = await choice.templatePlanNotes({ template_id: t.id, version: '0.3.215' })
+    expect(notes.warnings.join(' ')).toMatch(/Virtual SQL removed/)
+  })
+
+  it('a shared creation takes no template (TEMPLATE_NOT_FOR_SHARED)', async () => {
+    const t = await lib.uploadTemplate({ bundle: blueprint() }, null)
+    const input = {
+      template_id: t.id,
+      version: '0.3.215',
+      target: { kind: 'shared', shared_id: 1 }
+    }
+    expect((await choice.templatePlanNotes(input)).blockers[0].code).toBe('TEMPLATE_NOT_FOR_SHARED')
+    await expect(
+      choice.recordTemplateChoices(db, { input, appId: 9, envIds: [41], by: null })
+    ).rejects.toMatchObject({ code: 'TEMPLATE_NOT_FOR_SHARED' })
   })
 })
 

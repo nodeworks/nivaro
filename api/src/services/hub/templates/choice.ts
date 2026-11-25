@@ -5,13 +5,14 @@
 // (create/template-step.ts) installs it over the hub link after the first administrator exists.
 import type { Knex } from 'knex'
 import { db } from '../../../db/index.js'
+import { reviewNotes } from '../../blueprint-sanitize.js'
 import { compareVersions } from '../promote-plan.js'
 import { readTemplate, TEMPLATE_INSTALLS, TemplateError } from './library.js'
 
 /** The first Nivaro version whose hub link takes a template (POST /api/hub-link/template). */
 export const TEMPLATE_MIN_VERSION = '0.3.215'
 
-export type TemplateInstallStatus = 'pending' | 'installing' | 'done' | 'failed'
+export type TemplateInstallStatus = 'pending' | 'installing' | 'done' | 'partial' | 'failed'
 
 export interface TemplateInstallRow {
   id: number
@@ -46,6 +47,15 @@ export async function templatePlanNotes(input: unknown): Promise<TemplatePlanNot
   const out: TemplatePlanNotes = { blockers: [], lines: [], warnings: [] }
   const id = templateIdOf(input)
   if (id === null) return out
+  // A shared deployment's creation makes no app of its own to fill (no first administrator).
+  const kind = (input as { target?: { kind?: unknown } } | null)?.target?.kind
+  if (kind === 'shared') {
+    out.blockers.push({
+      code: 'TEMPLATE_NOT_FOR_SHARED',
+      text: 'A template is installed into an app the Hub creates on its own stack; an app placed on a shared deployment takes none. Pick No template.'
+    })
+    return out
+  }
   const t = id > 0 ? await readTemplate(id) : null
   if (!t || t.archived) {
     out.blockers.push({
@@ -63,9 +73,17 @@ export async function templatePlanNotes(input: unknown): Promise<TemplatePlanNot
   const c = t.manifest?.counts
   out.lines.push(
     `Install the template ${t.name} ${t.version} into every environment after its first administrator${
-      c ? ` (${c.collections} collections, ${c.workflows} workflows, ${c.queues} queues)` : ''
+      c
+        ? ` (${c.collections} collections, ${c.fields} fields, ${c.workflows} workflows, ${c.layouts} layouts, ${c.queues} queues, ${c.rules} rules)`
+        : ''
     }.`
   )
+  const review = t.manifest?.review
+  if (review?.transition_actions)
+    out.lines.push(
+      `It brings ${review.transition_actions} transition actions and ${review.rules} rules that run on the app once installed.`
+    )
+  for (const w of reviewNotes(review)) out.warnings.push(w)
   const made = t.manifest?.nivaro_version
   if (
     made &&
@@ -104,6 +122,12 @@ export async function recordTemplateChoices(
 ): Promise<void> {
   const id = templateIdOf(o.input)
   if (id === null) return
+  if ((o.input as { target?: { kind?: unknown } } | null)?.target?.kind === 'shared')
+    throw new TemplateError(
+      'TEMPLATE_NOT_FOR_SHARED',
+      'An app placed on a shared deployment takes no template.',
+      409
+    )
   const t = id > 0 ? await readTemplate(id, trx) : null
   if (!t || t.archived)
     throw new TemplateError(
@@ -163,6 +187,7 @@ export async function setTemplateInstall(
   const out: Record<string, unknown> = { status: patch.status, updated_at: new Date() }
   if (patch.note !== undefined) out.note = patch.note ? patch.note.slice(0, 500) : null
   if (patch.report !== undefined) out.report = patch.report ? JSON.stringify(patch.report) : null
-  if (patch.status === 'done' || patch.status === 'failed') out.finished_at = new Date()
+  if (patch.status === 'done' || patch.status === 'failed' || patch.status === 'partial')
+    out.finished_at = new Date()
   await db(TEMPLATE_INSTALLS).where({ environment_id: envId }).update(out)
 }

@@ -62,6 +62,10 @@ beforeAll(async () => {
   prevHub = process.env.HUB
   process.env.HUB = 'on'
   await up(db)
+  // Usage counts only install rows of environments that still exist (review L5).
+  await db.schema.createTable('nivaro_hub_environments', (t) => {
+    t.integer('id').primary()
+  })
   app = Fastify()
   await app.register(hubTemplateRoutes, { prefix: '/hub' })
   await app.ready()

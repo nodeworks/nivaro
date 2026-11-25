@@ -30,7 +30,7 @@ import {
  * The library belongs to the Hub, not to an environment: MOVE_OPEN never applies to it.
  */
 
-const UPLOAD_BODY_LIMIT = TEMPLATE_MAX_BYTES + 2 * 1024 * 1024
+const UPLOAD_BODY_LIMIT = TEMPLATE_MAX_BYTES + 4 * 1024 * 1024
 
 function fail(reply: FastifyReply, status: number, code: string, message: string) {
   return reply.code(status).send({ statusCode: status, error: message, message, code })
