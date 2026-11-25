@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildMovePlan,
+  EXEC_SCRIPT_SINCE,
   MANUAL_MOVE_STEPS,
   MOVE_STEPS,
   SHARED_FEATURES_SINCE
@@ -316,9 +317,9 @@ describe('buildMovePlan — one test per blocker', () => {
     expect(codes(p)).not.toContain('TEAMS_BOT')
   })
 
-  it('every one of the four readiness blockers becomes a plan blocker, on any target version', () => {
-    expect(SHARED_READINESS_BLOCKERS).toHaveLength(4)
-    for (const version of ['0.3.210', '0.3.212'])
+  it('every one of the three readiness blockers becomes a plan blocker, on any target version', () => {
+    expect(SHARED_READINESS_BLOCKERS).toHaveLength(3)
+    for (const version of ['0.3.210', '0.3.212', '0.3.215'])
       for (const code of SHARED_READINESS_BLOCKERS) {
         const p = buildMovePlan(
           input({
@@ -362,6 +363,39 @@ describe('buildMovePlan — one test per blocker', () => {
     expect(codes(at('0.3.212-rc.1'))).toEqual(
       expect.arrayContaining(['ROW_SCHEDULES', 'STAGED_IMPORTS'])
     )
+  })
+
+  it('script steps (EXEC_SCRIPT_FLOWS) block a target before 0.3.215 and only warn on one from it', () => {
+    expect(EXEC_SCRIPT_SINCE).toBe('0.3.215')
+    // An app before 0.3.215 sends it as a blocker, one from it as a warning: the target decides.
+    const at = (version: string | null, level: 'blocker' | 'warning') =>
+      buildMovePlan(
+        input({
+          source: src({
+            version: version ?? '0.3.214',
+            readiness: [
+              { code: 'EXEC_SCRIPT_FLOWS', level, detail: '2 active flows run a script step' }
+            ]
+          }),
+          target_facts: tgt({ version })
+        })
+      )
+    for (const level of ['blocker', 'warning'] as const) {
+      for (const v of ['0.3.212', '0.3.214', '0.3.215-rc.1', 'latest', null]) {
+        const p = at(v, level)
+        expect(codes(p), `${v} ${level}`).toEqual(['EXEC_SCRIPT_FLOWS'])
+        expect(p.blockers[0].text).toBe(
+          'Flows that run scripts do not run on a shared deployment before 0.3.215: 2 active flows run a script step'
+        )
+      }
+      for (const v of ['0.3.215', '0.3.216', '0.4.0']) {
+        const p = at(v, level)
+        expect(codes(p), `${v} ${level}`).toEqual([])
+        expect(p.warnings.find((w) => w.code === 'EXEC_SCRIPT_FLOWS')?.text).toMatch(
+          /^Script steps run in a sandbox process of their own .*: 2 active flows run a script step$/
+        )
+      }
+    }
   })
 
   it("an older app's directory, Teams bot, phone and mail retry warnings show only for a target before 0.3.212", () => {

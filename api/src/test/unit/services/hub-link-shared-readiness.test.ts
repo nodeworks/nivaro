@@ -203,13 +203,12 @@ describe('computeSharedReadiness', () => {
     expect(codeOf(r, 'ROW_SCHEDULES')).toBeUndefined()
     expect([...SHARED_READINESS_BLOCKERS]).toEqual([
       'ISSUE_TRACKERS',
-      'EXEC_SCRIPT_FLOWS',
       'SQLITE',
       'ENV_OBJECT_STORAGE'
     ])
   })
 
-  it('an active flow with a script step → EXEC_SCRIPT_FLOWS; an inactive one does not count', async () => {
+  it('an active flow with a script step → EXEC_SCRIPT_FLOWS (a warning from 0.3.215); an inactive one does not count', async () => {
     await db('nivaro_flows').insert([
       { id: 'a', name: 'a', status: 'active', trigger: 'manual' },
       { id: 'b', name: 'b', status: 'inactive', trigger: 'manual' }
@@ -221,7 +220,7 @@ describe('computeSharedReadiness', () => {
     ])
     const r = await computeSharedReadiness()
     expect(codeOf(r, 'EXEC_SCRIPT_FLOWS')).toMatchObject({
-      level: 'blocker',
+      level: 'warning',
       detail: '1 active flow runs a script step'
     })
   })

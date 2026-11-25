@@ -58,11 +58,13 @@ export type SharedReadinessCode =
   | 'TEAMS_BOT'
   | 'MAIL_RETRY'
 
-/** Ruling R1 adds ENV_OBJECT_STORAGE: objects under an env-driven S3/Azure provider are never
+/** EXEC_SCRIPT_FLOWS is a warning from 0.3.215 (hub gap `exec`): a shared deployment from that
+ *  version runs each script step in a child process of its own (flow-script-isolated.ts); the
+ *  Hub's plan still blocks a target before it (plan.ts EXEC_SCRIPT_SINCE).
+ *  Ruling R1 adds ENV_OBJECT_STORAGE: objects under an env-driven S3/Azure provider are never
  *  pulled by a move (only `local` rows), so they would be lost. */
 export const SHARED_READINESS_BLOCKERS: readonly SharedReadinessCode[] = [
   'ISSUE_TRACKERS',
-  'EXEC_SCRIPT_FLOWS',
   'SQLITE',
   'ENV_OBJECT_STORAGE'
 ]

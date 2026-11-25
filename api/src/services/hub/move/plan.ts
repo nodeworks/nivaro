@@ -429,7 +429,8 @@ function blockersOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Bloc
   // with (an unreadable check is sent as its blocker).
   if (kind === 'to_shared')
     for (const r of readinessFor(input))
-      if (isReadinessBlocker(r.code)) add(r.code, `${readinessTitle(r.code)}: ${clean(r.detail)}`)
+      if (isReadinessBlocker(r.code, input))
+        add(r.code, `${readinessTitle(r.code)}: ${clean(r.detail)}`)
 
   return out
 }
@@ -454,8 +455,18 @@ const PER_APP_SINCE_SHARED_FEATURES: readonly SharedReadinessCode[] = [
 /** Blockers on a target before SHARED_FEATURES_SINCE, besides the app's own blocker list. */
 const OLDER_TARGET_BLOCKERS: readonly SharedReadinessCode[] = ['STAGED_IMPORTS', 'ROW_SCHEDULES']
 
-const isReadinessBlocker = (code: SharedReadinessCode) =>
-  SHARED_READINESS_BLOCKERS.includes(code) || OLDER_TARGET_BLOCKERS.includes(code)
+/**
+ * Hub gap `exec`: from this version a shared deployment runs flow script steps per app, each in a
+ * child process of its own (services/flow-script-isolated.ts). An app before it reports
+ * EXEC_SCRIPT_FLOWS as a blocker, one from it as a warning; either way it blocks only a target
+ * before this version, and is a warning (the script limits) on one from it.
+ */
+export const EXEC_SCRIPT_SINCE = '0.3.215'
+
+const isReadinessBlocker = (code: SharedReadinessCode, input: MovePlanInput) =>
+  code === 'EXEC_SCRIPT_FLOWS'
+    ? !targetRunsSince(input.target_facts.version, EXEC_SCRIPT_SINCE)
+    : SHARED_READINESS_BLOCKERS.includes(code) || OLDER_TARGET_BLOCKERS.includes(code)
 
 /**
  * The target runs SHARED_FEATURES_SINCE or later. A version the Hub cannot read (none, not
@@ -463,9 +474,13 @@ const isReadinessBlocker = (code: SharedReadinessCode) =>
  * blocker.
  */
 function targetRunsSharedFeatures(version: string | null): boolean {
+  return targetRunsSince(version, SHARED_FEATURES_SINCE)
+}
+
+function targetRunsSince(version: string | null, since: string): boolean {
   const m = /^v?(\d+\.\d+\.\d+)(.*)$/.exec((version ?? '').trim())
   if (!m) return false
-  const c = compareVersions(m[1], SHARED_FEATURES_SINCE)
+  const c = compareVersions(m[1], since)
   return c > 0 || (c === 0 && !m[2].startsWith('-'))
 }
 
@@ -479,7 +494,7 @@ const READINESS_TITLES: Record<string, string> = {
   STAGED_IMPORTS: 'Staged imports do not run on a shared deployment before 0.3.212',
   ROW_SCHEDULES: 'Schedules kept in table rows do not run on a shared deployment before 0.3.212',
   ISSUE_TRACKERS: 'Issue tracker sync does not run on a shared deployment yet',
-  EXEC_SCRIPT_FLOWS: 'Flows that run scripts do not run on a shared deployment yet',
+  EXEC_SCRIPT_FLOWS: 'Flows that run scripts do not run on a shared deployment before 0.3.215',
   SQLITE: 'A SQLite database cannot be served by a shared deployment',
   ENV_OBJECT_STORAGE: 'Files in object storage set by environment variables are not copied',
   DIRECTORY_SYNC: 'Directory sync is off on a shared deployment before 0.3.212',
@@ -499,6 +514,10 @@ const READINESS_TITLES: Record<string, string> = {
 function readinessTitle(code: string): string {
   return READINESS_TITLES[code] ?? code
 }
+
+/** EXEC_SCRIPT_FLOWS as a warning (a target from EXEC_SCRIPT_SINCE): what the steps get there. */
+const EXEC_SCRIPT_WARNING_TITLE =
+  "Script steps run in a sandbox process of their own on a shared deployment, within the deployment's script limits (memory, time, steps at once) and with no network"
 
 function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warning[] {
   const out: Warning[] = []
@@ -592,7 +611,11 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
     )
   if (kind === 'to_shared')
     for (const r of readinessFor(input))
-      if (!isReadinessBlocker(r.code)) add(r.code, `${readinessTitle(r.code)}: ${clean(r.detail)}`)
+      if (!isReadinessBlocker(r.code, input))
+        add(
+          r.code,
+          `${r.code === 'EXEC_SCRIPT_FLOWS' ? EXEC_SCRIPT_WARNING_TITLE : readinessTitle(r.code)}: ${clean(r.detail)}`
+        )
   return out
 }
 
