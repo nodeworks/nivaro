@@ -298,6 +298,58 @@ describe('GraphQL hub namespace answers like its REST twin', () => {
     })
   const statusOf = (res: Awaited<ReturnType<typeof gql>>) =>
     (res.errors?.[0]?.extensions as { status?: number } | undefined)?.status ?? 200
+  /** Runs `source`, counting the inner Hub requests and the most in flight at once. */
+  async function gqlCounted(source: string, headers: Record<string, string>) {
+    let calls = 0
+    let active = 0
+    let peak = 0
+    const server = {
+      inject: async (o: Parameters<typeof app.inject>[0]) => {
+        calls++
+        active++
+        peak = Math.max(peak, active)
+        try {
+          await new Promise((r) => setTimeout(r, 2))
+          return await app.inject(o as never)
+        } finally {
+          active--
+        }
+      }
+    }
+    const res = await execute({
+      schema: schema(),
+      document: parse(source),
+      contextValue: {
+        req: { headers, server, socket: { remoteAddress: '127.0.0.1' }, ip: '127.0.0.1' }
+      }
+    })
+    return { res, calls, peak }
+  }
+
+  it('one operation reads each Hub path once, at most 8 at a time', async () => {
+    const aliases = Array.from(
+      { length: 30 },
+      (_, i) => `a${i}: app(id: ${appId}) { name owners { userId } environments { id } }`
+    )
+    const { res, calls, peak } = await gqlCounted(`{ hub { ${aliases.join(' ')} } }`, admin)
+    expect(res.errors).toBeUndefined()
+    expect(calls).toBe(1)
+    const many = Array.from(
+      { length: 30 },
+      (_, i) => `d${i}: drivers { id } s${i}: app(id: ${i + 1000}) { id }`
+    )
+    const r2 = await gqlCounted(`{ hub { ${many.join(' ')} } }`, admin)
+    expect(r2.calls).toBe(31)
+    expect(r2.peak).toBeLessThanOrEqual(8)
+  })
+
+  it('refuses an operation past 200 inner Hub requests (QUERY_TOO_COSTLY)', async () => {
+    const many = Array.from({ length: 210 }, (_, i) => `x${i}: app(id: ${i + 5000}) { id }`)
+    const { res, calls } = await gqlCounted(`{ hub { ${many.join(' ')} } }`, admin)
+    expect(calls).toBe(200)
+    const codes = (res.errors ?? []).map((e) => (e.extensions as { code?: string }).code)
+    expect(codes).toContain('QUERY_TOO_COSTLY')
+  })
 
   it('the same apps as REST for an owner', async () => {
     const h = { 'x-user': OWNER }

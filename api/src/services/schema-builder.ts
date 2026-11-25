@@ -2047,8 +2047,12 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
   Object.assign(queryFields, domainQueryFields)
   Object.assign(mutationFields, domainMutationFields)
   // The Nivaro Hub's `hub` namespace — only on a Hub (HUB=on); absent from every other schema.
+  // A collection named `hub` keeps its own `hub` field: the namespace is then left out (one
+  // warning per schema build) rather than silently replacing a collection's API.
   const hubFields = hubGraphQLFields()
-  if (hubFields) {
+  if (hubFields && (queryFields.hub || mutationFields.hub))
+    console.warn('GraphQL: a collection named "hub" exists; the Hub namespace (hub) is left out')
+  else if (hubFields) {
     queryFields.hub = hubFields.query as (typeof queryFields)[string]
     mutationFields.hub = hubFields.mutation as (typeof mutationFields)[string]
   }

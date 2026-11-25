@@ -11,6 +11,7 @@ import {
 } from 'graphql'
 import { GraphQLJSON } from '../../../graphql/scalars.js'
 import { partHeaders } from '../../batch-get.js'
+import { MCP_INNER_HEADER, mcpInnerHeaderValue } from '../../mcp-config.js'
 import { hubModeEnabled } from '../mode.js'
 
 /**
@@ -44,7 +45,46 @@ function codeFor(status: number): string {
   return 'BAD_REQUEST'
 }
 
-/** Calls /api/hub<path> as the caller; the answer's `data`, or a GraphQL error with its status. */
+/** Inner Hub requests one GraphQL operation may make; past it QUERY_TOO_COSTLY. */
+export const HUB_GQL_MAX_CALLS = 200
+/** Inner Hub requests in flight at once for one operation (like BATCH_GET_CONCURRENCY). */
+export const HUB_GQL_CONCURRENCY = 8
+
+interface OperationState {
+  /** GET path → its answer, shared by every field of the operation that reads it. */
+  memo: Map<string, Promise<unknown>>
+  calls: number
+  active: number
+  waiting: Array<() => void>
+}
+
+/** Kept on the request itself (one per GraphQL operation), never in module state. */
+const STATE = Symbol('hub-graphql-state')
+
+function stateOf(req: FastifyRequest): OperationState {
+  const holder = req as unknown as { [STATE]?: OperationState }
+  holder[STATE] ??= { memo: new Map(), calls: 0, active: 0, waiting: [] }
+  return holder[STATE]
+}
+
+async function slot<T>(s: OperationState, run: () => Promise<T>): Promise<T> {
+  if (s.active >= HUB_GQL_CONCURRENCY) await new Promise<void>((go) => s.waiting.push(go))
+  else s.active++
+  try {
+    return await run()
+  } finally {
+    const next = s.waiting.shift()
+    if (next) next()
+    else s.active--
+  }
+}
+
+/**
+ * Calls /api/hub<path> as the caller; the answer's `data`, or a GraphQL error with its status.
+ * Within one operation a GET is made once (every field reading the same path shares it), at most
+ * HUB_GQL_CONCURRENCY run at once, and past HUB_GQL_MAX_CALLS the operation is refused
+ * (QUERY_TOO_COSTLY) — a deep query over many apps cannot take the request pool.
+ */
 export async function hubRest(
   ctx: Ctx,
   method: Method,
@@ -56,8 +96,36 @@ export async function hubRest(
     throw new GraphQLError('Hub fields are answered over HTTP (POST /api/graphql) only.', {
       extensions: { code: 'HUB_NEEDS_HTTP', status: 400 }
     })
+  const s = stateOf(req)
+  if (method === 'GET') {
+    const hit = s.memo.get(path)
+    if (hit) return hit
+  } else s.memo.clear() // a write: later reads in the operation see its result
+  if (s.calls >= HUB_GQL_MAX_CALLS)
+    throw new GraphQLError(
+      `This query asks the Hub for more than ${HUB_GQL_MAX_CALLS} things at once. Ask for fewer apps or fields.`,
+      { extensions: { code: 'QUERY_TOO_COSTLY', status: 400 } }
+    )
+  s.calls++
+  const answer = slot(s, () => innerCall(req, method, path, body))
+  if (method === 'GET') {
+    s.memo.set(path, answer)
+    answer.catch(() => s.memo.delete(path))
+  }
+  return answer
+}
+
+async function innerCall(
+  req: FastifyRequest,
+  method: Method,
+  path: string,
+  body: unknown
+): Promise<unknown> {
   const headers = partHeaders(req)
   if (body !== undefined) headers['content-type'] = 'application/json'
+  // An operation that is itself an MCP tool call stays one inside (the Hub gate's "MCP never
+  // writes" rule): the marker was taken off the outer request when it was checked.
+  if (req.mcpInner === true) headers[MCP_INNER_HEADER] = mcpInnerHeaderValue()
   const res = await req.server.inject({
     method,
     url: `/api/hub${path}`,
