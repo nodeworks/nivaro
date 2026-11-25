@@ -5,6 +5,7 @@ import { hasColumn } from '../lib/column-probe.js'
 import type { ApiKeyScope } from '../middleware/authenticate.js'
 import { credentialMintRefusal, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { hubScopeRefusal } from '../services/hub/api/scopes.js'
 import { bumpUserAccessVersion, permissionCacheEnabled } from '../services/permission-cache.js'
 import {
   apiKeyWidening,
@@ -156,6 +157,9 @@ export async function apiKeysRoutes(app: FastifyInstance) {
     if (body.scopes !== undefined && !validScopes(body.scopes)) {
       return reply.code(400).send({ error: 'scopes must be an array of { collection, actions[] }' })
     }
+    // Hub scopes ($hub, hub:read / hub:write) exist only on a Hub (services/hub/api/scopes.ts).
+    const hubRefusal = body.scopes ? hubScopeRefusal(body.scopes) : null
+    if (hubRefusal) return reply.code(400).send(hubRefusal)
     if (body.scope_restrictions != null && !validScopeRestrictions(body.scope_restrictions)) {
       return reply
         .code(400)
@@ -219,6 +223,11 @@ export async function apiKeysRoutes(app: FastifyInstance) {
     if (body.scopes !== undefined && !validScopes(body.scopes)) {
       return reply.code(400).send({ error: 'scopes must be an array of { collection, actions[] }' })
     }
+    // Hub scopes ($hub, hub:read / hub:write) exist only on a Hub (services/hub/api/scopes.ts).
+    const hubRefusal = body.scopes
+      ? hubScopeRefusal(body.scopes, process.env, parseJson<ApiKeyScope[]>(existing.scopes, []))
+      : null
+    if (hubRefusal) return reply.code(400).send(hubRefusal)
 
     const updates: Record<string, unknown> = {}
     if (body.name !== undefined) updates.name = body.name.trim()

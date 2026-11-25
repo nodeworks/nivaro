@@ -329,7 +329,14 @@ describe('DELETE /keys/:kid (P7-14)', () => {
     for (const auth of ['token', 'api_key', 'oauth', 'masquerade', 'key_sim']) {
       const r = await req('DELETE', `/hub/signin/keys/${next}`, { ...asAdmin, 'x-auth': auth })
       expect(r.statusCode, auth).toBe(403)
-      expect(r.json().code).toBe('OWN_SESSION_ONLY')
+      // The Hub credential gate (services/hub/api/gate.ts) may refuse first: a key without a
+      // Hub scope, a connected app's or a View-as write.
+      expect([
+        'OWN_SESSION_ONLY',
+        'HUB_SCOPE_MISSING',
+        'HUB_WRITE_NOT_FOR_AGENTS',
+        'NOT_WHILE_MASQUERADING'
+      ]).toContain(r.json().code)
     }
     expect(await jwksKids()).toEqual([signing, next].sort())
     expect(await db('nivaro_activity').where({ action: 'hub-oidc-key-remove' })).toHaveLength(0)
@@ -714,7 +721,12 @@ describe('fix round 1: own-session minting, duplicate tokens, write errors', () 
       ]) {
         const r = await req('POST', url, h)
         expect(r.statusCode).toBe(403)
-        expect(['CREDENTIAL_MINT_REFUSED', 'NOT_WHILE_MASQUERADING']).toContain(r.json().code)
+        expect([
+          'CREDENTIAL_MINT_REFUSED',
+          'NOT_WHILE_MASQUERADING',
+          'HUB_SCOPE_MISSING',
+          'HUB_WRITE_NOT_FOR_AGENTS'
+        ]).toContain(r.json().code)
         expect(r.body).not.toMatch(/hubs_/)
       }
     }
