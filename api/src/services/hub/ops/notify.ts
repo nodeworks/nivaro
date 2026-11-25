@@ -1,5 +1,4 @@
 import { db } from '../../../db/index.js'
-import { getApp } from '../../io-holder.js'
 
 /**
  * Who the Hub's ops warnings go to, and how: through notifyUser (the person's channels and
@@ -53,26 +52,15 @@ export function uniqueIds(ids: string[]): string[] {
   return out
 }
 
-/** The default notifier: notifyUser per person; answers how many were reached. */
+/** The default notifier: the Hub's one notice path (services/hub/notify-events.ts
+ *  deliverHubNotice: notifyUser per person, once each); answers how many were handed over. */
 export const notifyOps: OpsNotifier = async (userIds, notice) => {
-  const app = getApp()
-  if (!app) return 0
-  const { notifyUser } = await import('../../notification-channels.js')
-  let reached = 0
-  for (const id of uniqueIds(userIds)) {
-    try {
-      const r = await notifyUser(app, id, {
-        subject: notice.subject,
-        message: notice.message,
-        category: 'system',
-        target: { kind: 'external', url: notice.path },
-        source: notice.source,
-        why: notice.why
-      })
-      if (r.id != null) reached++
-    } catch {
-      // One person's channel failing never stops the others.
-    }
-  }
-  return reached
+  const { deliverHubNotice } = await import('../notify-events.js')
+  return deliverHubNotice(uniqueIds(userIds), {
+    subject: notice.subject,
+    message: notice.message,
+    path: notice.path,
+    source: notice.source,
+    why: notice.why
+  })
 }

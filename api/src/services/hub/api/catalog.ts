@@ -947,7 +947,97 @@ export const HUB_ROUTES: HubRoute[] = [
       limit: n('1–200, default 50')
     }
   }),
-  r('GET', '/audit.csv', 'Audit', 'admin', 'read', 'The Hub audit timeline as CSV (same filters)')
+  r('GET', '/audit.csv', 'Audit', 'admin', 'read', 'The Hub audit timeline as CSV (same filters)'),
+  // ─── People and offboarding (routes/hub-people.ts) ──────────────────────────
+  r('GET', '/people', 'People', 'admin', 'read', 'The people directory (who signed in where)', {
+    query: { q: s('Name, email or app'), limit: n('1–200, default 50'), offset: n() },
+    notes: 'Keys are opaque (u:<hub user id> | k:<sign-in row id>): an email never goes in a URL.'
+  }),
+  r(
+    'GET',
+    '/people/:key',
+    'People',
+    'admin',
+    'read',
+    'One person: where seen, exactly what the apps would be asked to suspend, offboard runs',
+    { notes: 'identity_hash binds the offboard confirm.' }
+  ),
+  r(
+    'GET',
+    '/people/:key/access',
+    'People',
+    'admin',
+    'read',
+    'Ask every environment now which account and role the person holds there',
+    { notes: 'By proven email and Entra id only; logged on the Hub and in each app.' }
+  ),
+  r('POST', '/people/:key/offboard', 'People', 'admin', 'write', 'Offboard everywhere', {
+    sensitive: true,
+    accepted: true,
+    body: {
+      confirm: s('The person’s first proven email (or the key)', { required: true }),
+      identity_hash: s('The hash GET /people/:key answered', { required: true })
+    },
+    notes:
+      '409 IDENTITY_CHANGED, OFFBOARD_RUNNING, OFFBOARD_SELF, IDENTITY_SHARED, LAST_HUB_ADMIN, NO_IDENTITY.'
+  }),
+  r('GET', '/offboards', 'People', 'admin', 'read', 'Offboard runs, newest first', {
+    query: { limit: n('1–200, default 50') }
+  }),
+  r('GET', '/offboards/:id', 'People', 'admin', 'read', 'One offboard run with its results'),
+  r(
+    'POST',
+    '/offboards/:id/retry',
+    'People',
+    'admin',
+    'write',
+    'Ask again the environments that did not finish',
+    { sensitive: true, accepted: true }
+  ),
+  r(
+    'POST',
+    '/offboards/:id/lift',
+    'People',
+    'admin',
+    'write',
+    'Lift this run’s Hub sign-in block (reactivates the Hub account only if this run’s suspension is still the current one)',
+    {
+      sensitive: true,
+      body: { confirm: s('The person’s first email (or the key)', { required: true }) }
+    }
+  ),
+  // ─── Owner self-service (routes/hub-people.ts) ──────────────────────────────
+  r(
+    'GET',
+    '/apps/:id/access',
+    'Apps',
+    'owner',
+    'read',
+    'What the caller may deploy on each environment (production rule, flags, switch)'
+  ),
+  r(
+    'PUT',
+    '/apps/:id/owner-policy',
+    'Apps',
+    'admin',
+    'write',
+    'Let the app’s owners deploy production too',
+    { body: { owners_deploy_production: b('true = owners deploy production') } }
+  ),
+  r(
+    'PUT',
+    '/environments/:envId/production',
+    'Apps',
+    'admin',
+    'write',
+    'Mark an environment production, not production, or auto',
+    { body: { production: b('true | false | null (auto)') } }
+  ),
+  // ─── Phone app (routes/hub-people.ts) ───────────────────────────────────────
+  r('GET', '/mobile/summary', 'Phone', 'owner', 'read', 'Fleet at a glance (last known status)'),
+  r('GET', '/mobile/runs', 'Phone', 'owner', 'read', 'Recent promotions, rollbacks and applies', {
+    query: { limit: n('1–100, default 20') }
+  })
 ]
 
 /** Fastify's template for a request (`/api/hub/apps/:id`) → its catalog entry, else null. */

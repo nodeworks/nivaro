@@ -425,6 +425,8 @@ export const CORE_KEEPS: readonly EnvKeepEntry[] = [
       'nivaro_hub_shared_deployments',
       'nivaro_hub_shared_deploys',
       'nivaro_hub_moves',
+      'nivaro_hub_offboards',
+      'nivaro_hub_offboard_ids',
       'nivaro_hub_capacity_samples',
       'nivaro_hub_app_limits',
       'nivaro_hub_rebalances',

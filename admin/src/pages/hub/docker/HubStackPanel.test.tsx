@@ -121,6 +121,28 @@ describe('HubStackPanel', () => {
     expect(screen.queryByText(/Remove stack/)).toBeNull()
   })
 
+  it('owner on production: no Restart, no Apply now, says who deploys it', async () => {
+    setup()
+    render(
+      <QueryClientProvider client={client()}>
+        <HubStackPanel env={env} appId={1} isAdmin={false} canDeploy={false} layout='card' />
+      </QueryClientProvider>
+    )
+    expect(await screen.findByText('Converged')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Restart' })).toBeNull()
+    expect(screen.queryByRole('button', { name: /Apply now/ })).toBeNull()
+    expect(screen.queryByText('View settings')).toBeNull()
+    expect(screen.getByText(/Hub administrators restart and apply/)).toBeTruthy()
+  })
+
+  it('owner on non-production may open the stack settings read-only', async () => {
+    setup()
+    view(false)
+    fireEvent.click(await screen.findByRole('button', { name: /View settings/ }))
+    await waitFor(() => expect(h.get).toHaveBeenCalledWith('/hub/environments/5/stack/settings'))
+    expect(screen.queryByRole('textbox')).toBeNull()
+  })
+
   it('Restart stays disabled until the environment key is typed', async () => {
     setup()
     h.post.mockResolvedValue({ data: { data: { services: [] } } })

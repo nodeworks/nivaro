@@ -411,6 +411,22 @@ export async function usersRoutes(app: FastifyInstance) {
       }
     }
     const previousUser = safeUser(await getUser(id))
+    {
+      // Nivaro Hub: an account under a live offboard block is not made active again, nor given
+      // a blocked email while active — judged on the row as it will be after this write
+      // (services/hub/people/block.ts; updateUser checks the activation again).
+      const nextStatus = String(filtered.status ?? previousUser?.status ?? '')
+      const nextEmail = 'email' in filtered ? filtered.email : previousUser?.email
+      const becomesActive =
+        filtered.status === 'active' && String(previousUser?.status ?? '') !== 'active'
+      if (previousUser && nextStatus === 'active' && (becomesActive || 'email' in filtered)) {
+        const { emailOffboarded, EMAIL_OFFBOARDED } = await import(
+          '../services/hub/people/block.js'
+        )
+        if (await emailOffboarded({ id: previousUser.id, email: nextEmail }))
+          return reply.code(409).send(EMAIL_OFFBOARDED)
+      }
+    }
     const isSelf = String(id).toUpperCase() === String(req.user!.id).toUpperCase()
     if ('preferences' in filtered) {
       // #1804 — nobody writes notes into someone else's Ask AI prompt.
@@ -794,6 +810,15 @@ export async function usersRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: 'That role no longer exists.', code: 'ROLE_UNKNOWN' })
       const previousUser = safeUser(await getUser(id))
       if (!previousUser) return reply.code(404).send({ error: 'Not found' })
+      {
+        // Nivaro Hub: authorizing makes the account active — never one under a live offboard
+        // block (services/hub/people/block.ts, Hub mode only).
+        const { emailOffboarded, EMAIL_OFFBOARDED } = await import(
+          '../services/hub/people/block.js'
+        )
+        if (await emailOffboarded({ id: previousUser.id, email: previousUser.email }))
+          return reply.code(409).send(EMAIL_OFFBOARDED)
+      }
       const { bustUserScopeCache, listScopeDimensions } = await import('../services/user-scopes.js')
       const dims = await listScopeDimensions(false)
       const asked = (req.body as { dimension?: unknown } | null)?.dimension
@@ -1931,6 +1956,12 @@ export async function usersRoutes(app: FastifyInstance) {
     if (!body.email) return reply.code(400).send({ error: 'email is required' })
     const existing = await whereEqualsCi(db('nivaro_users'), db, 'email', body.email).first()
     if (existing) return reply.code(409).send({ error: 'Email already in use' })
+    {
+      // Nivaro Hub: an email under a live offboard block is never given a new account.
+      const { emailOffboarded, EMAIL_OFFBOARDED } = await import('../services/hub/people/block.js')
+      if (await emailOffboarded({ email: body.email }))
+        return reply.code(409).send(EMAIL_OFFBOARDED)
+    }
     const userId = randomUUID()
     await db('nivaro_users').insert({
       id: userId,

@@ -83,6 +83,7 @@ const m546 = await import('../../../db/migrations/546_hub_stack_settings.js')
 // Phase 7 merge: an environment delete also clears its sign-in client and switcher rows.
 const m550 = await import('../../../db/migrations/550_hub_oidc.js')
 const m551 = await import('../../../db/migrations/551_hub_signins.js')
+const m570 = await import('../../../db/migrations/570_hub_people_owner_policy.js')
 const { hubRoutes } = await import('../../../routes/hub.js')
 const { logActivity } = await import('../../../services/activity.js')
 const { maintenanceFreezeHook } = await import('../../../services/maintenance-freeze.js')
@@ -191,6 +192,7 @@ beforeAll(async () => {
   await m546.up(db)
   await m550.up(db)
   await m551.up(db)
+  await m570.up(db)
   await db.schema.createTable('nivaro_users', (t) => {
     t.string('id').primary()
     t.string('first_name')
@@ -240,7 +242,10 @@ beforeEach(async () => {
     id: 1,
     key: 'acme',
     name: 'Acme',
-    extensions: JSON.stringify(['efp-ops'])
+    extensions: JSON.stringify(['efp-ops']),
+    // Owners here act on the chain's last environment (production): the app lets them
+    // (owner self-service on production is hub-owner-access.test.ts).
+    owners_deploy_production: true
   })
   await db('nivaro_hub_app_owners').insert({ app_id: 1, user_id: OWNER })
   await db('nivaro_hub_drivers').insert([
@@ -399,7 +404,16 @@ describe('access', () => {
       expect(f).not.toHaveBeenCalled()
   }, 20000)
 
-  it('an owner gets 403 on settings GET/PUT, remove and the agent check', async () => {
+  it('an owner gets 403 on settings PUT, remove and the agent check; reads the settings', async () => {
+    // Owner self-service: the settings are readable (secrets masked) where the owner may deploy.
+    const read = await call('GET', `/environments/${DOCKER}/stack/settings`, asOwner)
+    expect(read.statusCode).toBe(200)
+    for (const secret of [DB_PASS, SMTP_PASS])
+      expect(JSON.stringify(read.json())).not.toContain(secret)
+    await db('nivaro_hub_apps').where({ id: 1 }).update({ owners_deploy_production: false })
+    expect((await call('GET', `/environments/${DOCKER}/stack/settings`, asOwner)).json().code).toBe(
+      'PRODUCTION_ADMIN_ONLY'
+    )
     const refused = [
       ['GET', `/environments/${DOCKER}/stack/settings`],
       ['PUT', `/environments/${DOCKER}/stack/settings`],

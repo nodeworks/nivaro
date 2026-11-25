@@ -326,7 +326,7 @@ export const hubPromotionsDocs: DocSection = {
     {
       type: 'ul',
       items: [
-        'Hub administrators and the owners of the app may promote and roll back. Anyone else gets nothing, as if the environment did not exist.',
+        'Hub administrators promote and roll back every environment. The owners of the app do it on every environment but production (the last of the chain, or one named production) unless an administrator turned on Owners may deploy production for the app; on production they get 403 `PRODUCTION_ADMIN_ONLY` (see App owners and people). Anyone else gets nothing, as if the environment did not exist.',
         'A run is bound to the repositories its drivers named when it started. If a Hub administrator points a driver at another repository while it runs, the next step that would use it stops with `DRIVER_CHANGED` and nothing more is written; the run never deletes branches in the other repository either.',
         'An app the Hub created is checked again at the start of each step in its own deploy repository: the project must still read its CI configuration from the pinned template and keep pipeline variables locked. If someone changed that, the step stops with `CI_CONFIG_REFUSED` before anything is written there; the Hub does not put the setting back during a promotion (saving the target does).',
         "Verify: after each deploy the Hub reads each component's check address. The API must answer the planned version. A frontend must answer the planned commit or the commit its deploy job actually ran on (a merge commit, or the branch's current head when the branch already held the commit). Each must answer twice in a row. The Hub asks every 15 seconds, at most 40 times, then the step fails.",
@@ -996,17 +996,17 @@ export const hubDockerDocs: DocSection = {
         ],
         [
           '`GET`, `PUT /api/hub/environments/:envId/stack/settings`',
-          'Admin',
-          'Read and save the stack settings. A refusal answers 400 with `code` and, for a setting, `field`.'
+          'Admin; GET also owner on non-production',
+          'Read and save the stack settings (owners read them, secrets masked). A refusal answers 400 with `code` and, for a setting, `field`.'
         ],
         [
           '`POST /api/hub/environments/:envId/stack/restart`',
-          'Owner, admin',
+          'Owner (non-production), admin',
           'Body `{ confirm }`, the environment key. 202 with the services; 400 `CONFIRM_REQUIRED`, 409 `NO_STACK_NAME`, `NOT_DEPLOYED`, `STACK_STATE_UNKNOWN`, `PROMOTION_RUNNING`.'
         ],
         [
           '`POST /api/hub/environments/:envId/stack/apply`',
-          'Owner, admin',
+          'Owner (non-production), admin',
           'Apply now. Body `{ confirm }`, the environment key. 202 `{ deploy_id, job_run_id }`: a deploy run of the running version with the recorded image and the saved settings and pins. 400 `CONFIRM_REQUIRED`, 409 `NOT_DEPLOYED`, `PROMOTION_RUNNING` or any stack plan blocker (with `blockers`).'
         ],
         [

@@ -182,7 +182,8 @@ const SCREENS: Record<string, Screens> = {
     secrets: lazy(() => import('@/pages/hub/ops/HubSecrets')),
     data: lazy(() => import('@/pages/hub/data/HubData')),
     fleet: lazy(() => import('@/pages/hub/fleet/HubFleet')),
-    audit: lazy(() => import('@/pages/hub/fleet/HubAudit'))
+    audit: lazy(() => import('@/pages/hub/fleet/HubAudit')),
+    people: lazy(() => import('@/pages/hub/people/HubPeople'))
   }
 }
 

@@ -84,7 +84,8 @@ const migrations = [
   await import('../../../db/migrations/550_hub_oidc.js'),
   await import('../../../db/migrations/551_hub_signins.js'),
   await import('../../../db/migrations/552_hub_shared_deployments.js'),
-  await import('../../../db/migrations/553_hub_moves.js')
+  await import('../../../db/migrations/553_hub_moves.js'),
+  await import('../../../db/migrations/570_hub_people_owner_policy.js')
 ]
 const { hubRoutes } = await import('../../../routes/hub.js')
 const { sealSecret } = await import('../../../services/hub/secrets.js')
@@ -136,7 +137,15 @@ beforeEach(async () => {
     'nivaro_hub_moves'
   ])
     await db(t).del()
-  await db('nivaro_hub_apps').insert({ id: 1, key: 'acme', name: 'Acme', extensions: '[]' })
+  await db('nivaro_hub_apps').insert({
+    id: 1,
+    key: 'acme',
+    name: 'Acme',
+    extensions: '[]',
+    // Owners here act on the chain's last environment (production): the app lets them
+    // (owner self-service on production is hub-owner-access.test.ts).
+    owners_deploy_production: true
+  })
   await db('nivaro_hub_app_owners').insert({ app_id: 1, user_id: OWNER })
   await db('nivaro_hub_drivers').insert({
     id: 3,

@@ -29,6 +29,7 @@ import {
   removeSigningKey,
   rotateSigningKey
 } from '../services/hub/oidc/keys.js'
+import { ownerGuardOnRoute } from '../services/hub/owner-access.js'
 import { HUB_MASK, HubSecretError } from '../services/hub/secrets.js'
 import { kickSharedServing } from '../services/hub/shared/tenant-hub-link.js'
 
@@ -215,6 +216,8 @@ async function signinsLast30Days(envId: number): Promise<number> {
 
 export async function hubSigninAdminRoutes(app: FastifyInstance) {
   if (!hubModeEnabled()) return
+  // Owners: production's sign-in follows the production rule (services/hub/owner-access.ts).
+  app.addHook('onRoute', ownerGuardOnRoute)
 
   app.get('/settings', { preHandler: requireAuth }, async (req) => {
     return {

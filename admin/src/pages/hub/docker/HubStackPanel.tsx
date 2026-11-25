@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import { BLOCKER_COPY, type HubEnvironment, hubError, hubKeys, hubToast } from '../hub-api'
 import { dangerGhost, ghostButton, StatusChip } from '../hub-parts'
+import { StackSettingsView } from '../owner-access'
 import { MULTI_NODE_VOLUMES_TEXT } from './docker-api'
 import { StackSettingsEditor } from './StackSettingsEditor'
 import {
@@ -81,12 +82,15 @@ export function HubStackPanel({
   env,
   appId,
   isAdmin,
+  canDeploy = true,
   layout,
   idPrefix = ''
 }: {
   env: HubEnvironment
   appId: number
   isAdmin: boolean
+  /** Restart / Apply now / read-only settings: owners on non-production (owner-access.tsx). */
+  canDeploy?: boolean
   /** Unique per mount: '-m' for the phone card (the table and the card both mount a panel). */
   idPrefix?: string
   /** 'row' wraps the panel in a full-width table row (the desktop table). */
@@ -121,6 +125,7 @@ export function HubStackPanel({
           env={env}
           appId={appId}
           isAdmin={isAdmin}
+          canDeploy={isAdmin || canDeploy}
           idPrefix={idPrefix}
           info={stack.data}
           refresh={() => {
@@ -155,6 +160,7 @@ function StackBody({
   env,
   appId,
   isAdmin,
+  canDeploy,
   idPrefix,
   info,
   refresh
@@ -162,6 +168,7 @@ function StackBody({
   env: HubEnvironment
   appId: number
   isAdmin: boolean
+  canDeploy: boolean
   idPrefix: string
   info: StackInfo
   refresh: () => void
@@ -304,7 +311,12 @@ function StackBody({
         </p>
       )}
 
-      {(s || isAdmin) && (
+      {!canDeploy && (
+        <p className={`m-0 ${rowText} text-slate-500 dark:text-muted-foreground`}>
+          Production: Hub administrators restart and apply this stack.
+        </p>
+      )}
+      {((s && canDeploy) || isAdmin) && (
         <div className='-ml-2 flex flex-wrap items-center gap-1 border-t border-slate-100 pt-2 dark:border-border'>
           {/* Restart re-applies the running stack: nothing to restart without one. */}
           {s && (
@@ -327,6 +339,17 @@ function StackBody({
               onClick={() => toggle('apply')}
             >
               <Play className='h-3.5 w-3.5' aria-hidden /> Apply now
+            </button>
+          )}
+          {!isAdmin && (
+            <button
+              type='button'
+              aria-expanded={open === 'settings'}
+              className={cn(ghostButton, open === 'settings' && 'bg-accent')}
+              onClick={() => toggle('settings')}
+            >
+              <Settings2 className='h-3.5 w-3.5' aria-hidden />
+              {open === 'settings' ? 'Hide settings' : 'View settings'}
             </button>
           )}
           {isAdmin && (
@@ -384,6 +407,11 @@ function StackBody({
             stackName={info.stack_name}
             onApplyNow={s ? () => setOpen('apply') : undefined}
           />
+        </Section>
+      )}
+      {!isAdmin && canDeploy && open === 'settings' && (
+        <Section title='Stack settings'>
+          <StackSettingsView envId={env.id} />
         </Section>
       )}
       {isAdmin && open === 'remove' && info.stack_name && (
