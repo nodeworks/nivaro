@@ -74,6 +74,7 @@ export const APPS_HUB: HubDef = {
     { path: '', label: 'Apps' },
     { path: 'shared', label: 'Shared deployments' },
     { path: 'capacity', label: 'Capacity' },
+    { path: 'scale', label: 'Scaling' },
     { path: 'drivers', label: 'Drivers' },
     { path: 'targets', label: 'Targets' },
     { path: 'templates', label: 'Templates' },

@@ -28,6 +28,7 @@ describe('hub registry', () => {
       'Apps',
       'Shared deployments',
       'Capacity',
+      'Scaling',
       'Drivers',
       'Targets',
       'Templates',
@@ -52,6 +53,7 @@ describe('hub registry', () => {
     expect(hubForPath('/hub/targets')?.tab.label).toBe('Targets')
     expect(hubForPath('/hub/shared')?.tab.label).toBe('Shared deployments')
     expect(hubForPath('/hub/capacity')?.tab.label).toBe('Capacity')
+    expect(hubForPath('/hub/scale')?.tab.label).toBe('Scaling')
     expect(hubForPath('/hub/data')?.tab.label).toBe('Backups & data')
   })
 

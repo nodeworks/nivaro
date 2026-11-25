@@ -106,7 +106,7 @@ function judge(
     return {
       row,
       refusal: null,
-      warning: `${s.name} has no connection limit on record: set it on the Databases tab to have the Hub check ${to} connections against it.`
+      warning: `${s.name} has no connection limit on record: set it under Database server limits on the Scaling tab to have the Hub check ${to} connections against it.`
     }
   // A change that lowers this stack's connections is never refused, even on a crowded server.
   if (!fits && to > from)
