@@ -33,6 +33,7 @@ import {
 } from '../promote-lock.js'
 import { type ExecuteDeps, executePlan } from '../promote-run.js'
 import type { PromotionStep } from '../promote-types.js'
+import { readScaleShape } from '../scale/store.js'
 import { HUB_MASK, sealSecret } from '../secrets.js'
 import { DeploymentLinkError, deploymentClient } from './deployment-client.js'
 import { SHARED_GITLAB_POSITION } from './gitlab-upgrade.js'
@@ -762,7 +763,9 @@ async function runUpgrade(c: RunCtx, deps: SharedRunDeps): Promise<void> {
         extensions: facts.extensions,
         hubPublicUrl: hubUrl ?? '',
         explicitHosts: facts.hostnames,
-        roles: facts.roles
+        roles: facts.roles,
+        // Hub scaling: the replicas and limits the Hub keeps for this deployment.
+        scale: await readScaleShape('shared', sharedId)
       })
     } catch (err) {
       if (err instanceof SharedRenderError) throw new Stop('failed', err.code, err.message)

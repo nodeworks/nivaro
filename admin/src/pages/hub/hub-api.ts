@@ -212,7 +212,7 @@ export const STATUS_COPY: Record<HubStatusState, string> = {
   ok: 'Running',
   degraded: 'Running with warnings',
   unreachable: 'Not answering',
-  link_refused: 'Hub link refused — check HUB_TOKEN'
+  link_refused: 'Hub link refused'
 }
 
 /** Why an environment shows what it shows, by the status read's error code. */
@@ -246,7 +246,7 @@ export const STATUS_TONE: Record<ChipState, string> = {
   unreachable:
     'border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300',
   link_refused:
-    'border-violet-200 bg-violet-50 text-violet-700 dark:border-violet-900/60 dark:bg-violet-950/40 dark:text-violet-300',
+    'border-slate-300 bg-slate-50 text-slate-700 dark:border-border dark:bg-muted dark:text-slate-200',
   checking:
     'border-slate-200 bg-slate-50 text-slate-500 dark:border-border dark:bg-muted dark:text-muted-foreground',
   failed:
@@ -257,7 +257,7 @@ export const STATUS_DOT: Record<ChipState, string> = {
   ok: 'bg-emerald-500',
   degraded: 'bg-amber-500',
   unreachable: 'bg-red-500',
-  link_refused: 'bg-violet-500',
+  link_refused: 'bg-slate-400 dark:bg-slate-500',
   checking: 'bg-slate-300 dark:bg-slate-600',
   failed: 'bg-orange-500'
 }
@@ -597,7 +597,16 @@ export const fetchPromotionPlan = (envId: number, kind: PromotionKind, version: 
 
 export const startPromotion = (
   envId: number,
-  body: { version: string; kind: PromotionKind; confirm: string; plan_hash: string }
+  body: {
+    version: string
+    kind: PromotionKind
+    confirm: string
+    plan_hash: string
+    /** The ticked pre-deploy checklist (a production promotion with one). */
+    checklist_run_id?: number
+    /** An administrator's emergency start outside the deploy window: why. */
+    outside_window_reason?: string
+  }
 ) =>
   api
     .post<{ data: { deploy_id: number; job_run_id: number | null } }>(
@@ -1183,7 +1192,8 @@ export const AGENT_FIELD_COPY: Record<string, string> = {
   SETTING_INVALID: 'A stack setting has a value the agent cannot use.',
   SHARED_KEY_MISMATCH: 'The stack belongs to another shared deployment.',
   ROLE_NOT_SHARED: 'That process role, or that set of roles, cannot run on a shared deployment.',
-  FOLDER_BAD: 'A files folder name is not one the agent accepts (plain folder names only, no dots or slashes at the start).',
+  FOLDER_BAD:
+    'A files folder name is not one the agent accepts (plain folder names only, no dots or slashes at the start).',
   NO_NFS_EXPORT: 'A per-stack files folder needs an NFS share set up on the agent first.',
   RUN_AS_BAD: 'The process user setting is not one the agent accepts.',
   ROLE_NEEDS_TRAEFIK_V3:

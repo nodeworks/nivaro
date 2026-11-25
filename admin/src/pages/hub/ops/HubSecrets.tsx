@@ -274,12 +274,16 @@ function SecretRow({
         )}
         {confirming && item.rotate === 'helper' && (
           <>
+            <span aria-hidden className='text-[12px] text-slate-600 dark:text-slate-300'>
+              Type <span className='font-mono'>{envKey}</span> to rotate:
+            </span>
             <Input
               value={typed}
               onChange={(e) => setTyped(e.target.value)}
-              placeholder={`Type ${envKey} to confirm`}
               aria-label='Environment key to confirm'
-              className='h-7 w-48 text-[12px]'
+              autoComplete='off'
+              spellCheck={false}
+              className='h-7 w-40 font-mono text-[12px]'
             />
             <Button
               size='sm'

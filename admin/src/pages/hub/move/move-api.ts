@@ -295,6 +295,10 @@ export const startMove = (
     checklist: Record<string, boolean>
     /** Refusals the operator overrides for this move (P6-20: LINK_URL_NOT_PULLABLE, SOURCE_NOT_PULLABLE). */
     overrides?: string[]
+    /** The ticked pre-deploy checklist (a production move with one). */
+    checklist_run_id?: number
+    /** An administrator's emergency start outside the deploy window: why. */
+    outside_window_reason?: string
   }
 ) =>
   api.post(`/hub/environments/${envId}/move`, body).then((r) => {
@@ -492,6 +496,25 @@ export const MOVE_STEP_WORDS: Record<string, string> = {
   done: 'Done'
 }
 export const stepWords = (key: string) => MOVE_STEP_WORDS[key] ?? key
+
+/** One or two words per step for the standalone Hub's run track (the full words stay beside it). */
+export const MOVE_STEP_SHORT: Record<string, string> = {
+  check: 'Check',
+  files_warm: 'Copy files',
+  maintenance_on: 'Maintenance',
+  wait_idle: 'Wait idle',
+  db_copy: 'Copy database',
+  files_delta: 'Copy changes',
+  deploy_target: 'Deploy',
+  place_on_target: 'Place',
+  target_ready: 'Wait ready',
+  files_full: 'Copy files',
+  route: 'Point address',
+  verify: 'Verify',
+  release: 'Release',
+  retire_source: 'Retire old',
+  done: 'Done'
+}
 
 /** `stopped` = the step a run was on when it stopped (interrupted): no spinner, nothing failed. */
 export type MoveStepState =
@@ -1242,6 +1265,10 @@ export const MOVE_CODE_COPY: Record<string, Copy> = {
   DATABASE_BUSY: {
     title: "This environment's database record is being attached or detached",
     hint: 'Try again in a moment.'
+  },
+  SCALE_RUNNING: {
+    title: 'This environment is being scaled right now',
+    hint: 'Wait for the scaling run to finish, then try again.'
   },
   REFRESH_RUNNING: {
     title: "This environment's database is being refreshed or rolled back",

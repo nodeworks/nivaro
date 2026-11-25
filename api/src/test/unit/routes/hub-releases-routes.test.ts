@@ -36,6 +36,12 @@ vi.mock('../../../middleware/authenticate.js', () => {
   }
   return { requireAuth: vi.fn(sign), requireAdmin: vi.fn(admin), authenticate: vi.fn(sign) }
 })
+// The shared deployment's link (never the network): it reports running its pin, so a rollback
+// below it is a real rollback (hub-shared-upgrade judges what RUNS, never the pin alone).
+vi.mock('../../../services/hub/shared/deployment-client.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  deploymentClient: () => ({ status: async () => ({ version: '0.3.210' }) })
+}))
 const activity = vi.hoisted(() => ({ rows: [] as Array<Record<string, unknown>> }))
 vi.mock('../../../services/activity.js', () => ({
   logActivity: vi.fn(async (row: Record<string, unknown>) => {

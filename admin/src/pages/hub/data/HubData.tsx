@@ -22,7 +22,16 @@ import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
 import { hubError } from '../hub-api'
-import { dangerArmed, Field, ghostButton, SecretInput, SectionCard } from '../hub-parts'
+import {
+  countLabel,
+  dangerArmed,
+  Field,
+  ghostButton,
+  ListPaneHeader,
+  listPaneClass,
+  SecretInput,
+  SectionCard
+} from '../hub-parts'
 import { RefreshCard, RehearsalCard, RunsCard } from './DataOps'
 import {
   ago,
@@ -92,15 +101,8 @@ function DataAdmin() {
 
   return (
     <div className='flex flex-1 min-h-0 overflow-hidden'>
-      <aside
-        className={cn(
-          'w-full shrink-0 flex-col overflow-y-auto border-slate-200 bg-white md:flex md:w-[300px] md:border-r dark:border-border dark:bg-card',
-          envId ? 'hidden' : 'flex'
-        )}
-      >
-        <p className='m-0 border-b border-slate-200 px-3 py-2 text-[12px] font-medium text-slate-500 dark:border-border dark:text-muted-foreground'>
-          Environments
-        </p>
+      <aside className={cn(listPaneClass, envId ? 'hidden' : 'flex')}>
+        <ListPaneHeader label={countLabel(envs.data?.length, 'environment', 'environments')} />
         {envs.isPending ? (
           <div className='space-y-2 p-3'>
             {[0, 1, 2].map((i) => (
@@ -316,10 +318,10 @@ function EnvDataPanel({ envId }: { envId: number }) {
   return (
     <div className='space-y-4 p-4 sm:p-6'>
       <header>
-        <h2 className='m-0 text-[18px] font-semibold text-slate-900 dark:text-foreground'>
+        <h2 className='m-0 text-[18px] font-semibold tracking-[-0.015em] text-slate-900 dark:text-foreground'>
           {v.app.name} / {v.environment.key}
           {v.environment.production && (
-            <span className='ml-2 rounded-full border border-amber-300 bg-amber-50 px-2 py-px align-middle text-[11px] font-medium text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300'>
+            <span className='ml-2 rounded border border-orange-300 bg-orange-50 px-1.5 py-px align-middle text-[11px] font-medium text-orange-800 dark:border-orange-900/60 dark:bg-orange-950/40 dark:text-orange-300'>
               Production
             </span>
           )}

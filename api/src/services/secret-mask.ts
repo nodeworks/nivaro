@@ -233,6 +233,8 @@ const PUBLIC_FORM_PATH_RE = /^(\/form\/)[^/?#]+/i
 const FORM_PREVIEW_PATH_RE = /(\/form-preview\/)[^/?#]+/gi
 /** A help-video package download link (`/api/help-videos/packages/<token>`, single use). */
 const HELP_VIDEO_PACKAGE_PATH_RE = /(\/help-videos\/packages\/)[^/?#]+/gi
+/** A Nivaro Hub public status page link (`/api/hub/status-page/<token>`; the token is the access). */
+const HUB_STATUS_PAGE_PATH_RE = /(\/hub\/status-page\/)[^/?#]+/gi
 
 /** Every path whose segment IS the access (a link token): the segment becomes `••••••`. */
 const TOKEN_PATH_RES = [
@@ -244,7 +246,8 @@ const TOKEN_PATH_RES = [
   WIDGET_FEED_PATH_RE,
   PUBLIC_FORM_PATH_RE,
   FORM_PREVIEW_PATH_RE,
-  HELP_VIDEO_PACKAGE_PATH_RE
+  HELP_VIDEO_PACKAGE_PATH_RE,
+  HUB_STATUS_PAGE_PATH_RE
 ]
 
 export function maskUrlPath(path: string): string {

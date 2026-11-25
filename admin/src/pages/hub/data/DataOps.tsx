@@ -249,7 +249,7 @@ export function RefreshCard({ v }: { v: EnvDataView }) {
             </details>
             {!plan.blocked && (
               <div className='flex flex-wrap items-end gap-2'>
-                <div className='min-w-[240px] flex-1'>
+                <div className='w-full max-w-[320px]'>
                   <Field id={`rf-confirm-${envId}`} label={`Type ${plan.confirm} to replace it`}>
                     <Input
                       id={`rf-confirm-${envId}`}
@@ -322,7 +322,7 @@ function RefreshTargetSwitch({ v }: { v: EnvDataView }) {
         </Button>
       ) : (
         <div className='mt-2 flex flex-wrap items-end gap-2'>
-          <div className='min-w-[220px] flex-1'>
+          <div className='w-full max-w-[320px]'>
             <Field id={`rt-${envId}`} label={`Type ${want} to turn it on`}>
               <Input
                 id={`rt-${envId}`}
@@ -378,7 +378,7 @@ function RollbackBlock({ v }: { v: EnvDataView }) {
           <p className='m-0 w-full text-[12px] text-slate-600 dark:text-muted-foreground'>
             Puts {name} back as it was before refresh #{rb.run_id}, {untilWords(rb.expires_at)}.
           </p>
-          <div className='min-w-[240px] flex-1'>
+          <div className='w-full max-w-[320px]'>
             <Field id={`rb-confirm-${envId}`} label={`Type ${name} to roll back`}>
               <Input
                 id={`rb-confirm-${envId}`}
@@ -641,7 +641,7 @@ function RunRow({ run, envId }: { run: DataRun; envId: number }) {
           )}
           {abandonable && (
             <div className='flex flex-wrap items-end gap-2 border-t border-slate-100 pt-2 dark:border-border'>
-              <div className='min-w-[200px] flex-1'>
+              <div className='w-full max-w-[320px]'>
                 <Field id={`ab-${run.id}`} label={`Type ${want} to abandon this run`}>
                   <Input
                     id={`ab-${run.id}`}

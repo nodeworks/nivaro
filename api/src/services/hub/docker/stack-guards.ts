@@ -1,6 +1,7 @@
 import { db } from '../../../db/index.js'
 import { type DockerDriverRow, getDriver, getPlacement, STACK_NAME_RE } from '../drivers.js'
 import { defaultPromoteLock, type LockHolder, lockHolderRefusal } from '../promote-lock.js'
+import { scaledSpecHashSince } from '../scale/store.js'
 import { AgentError, agentLeftovers, agentStack } from './agent-client.js'
 import type { StackStatus } from './agent-types.js'
 import { strictPinMap } from './stack-gather.js'
@@ -161,11 +162,13 @@ export async function deployedStack(
     if (typeof image !== 'string' || !PIN_RE.test(image) || !r.version || !extensions)
       return { state: 'unreadable' }
     const hash = step.deployedSpecHash
+    // Hub scaling: a successful scale after this deploy changed the spec hash swarm runs.
+    const scaled = await scaledSpecHashSince(envId, stackName, r.started_at)
     return {
       state: 'ok',
       version: String(r.version),
       image,
-      specHash: typeof hash === 'string' && HASH_RE.test(hash) ? hash : null,
+      specHash: scaled ?? (typeof hash === 'string' && HASH_RE.test(hash) ? hash : null),
       extensions,
       size: typeof step.stack.size === 'string' ? step.stack.size : null
     }

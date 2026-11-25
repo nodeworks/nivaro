@@ -167,7 +167,14 @@ export const OWNER_UNGUARDED: Record<string, string> = {
     'works out and stores the release notes of a past run the caller may read; deploys nothing',
   // Hub insight (routes/hub-insight.ts): the caller's own switch, and a read-only question.
   'PUT /insight/digest/me': 'the caller’s own weekly digest switch; touches no app',
-  'POST /insight/ask': 'a read: read-only tools that re-enter as the caller; changes nothing'
+  'POST /insight/ask': 'a read: read-only tools that re-enter as the caller; changes nothing',
+  // Change operations (routes/hub-changes.ts): a pre-deploy checklist is opened and ticked by
+  // whoever its items allow; nothing deploys, and the start itself stays owner-guarded.
+  'POST /environments/:envId/checklist-runs':
+    'opens the pre-deploy checklist of a start the caller may read; deploys nothing',
+  'POST /checklist-runs/:id/tick':
+    'ticks one checklist item; the route lets only the people the item names (admin, owner, named) tick it',
+  'POST /checklist-runs/:id/void': 'sets an open checklist aside (admins and the app’s owners)'
 }
 
 export interface OwnerRefusal {

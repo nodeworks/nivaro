@@ -136,9 +136,12 @@ export interface ReleasesOverview {
 }
 
 export interface FreezeRefusal {
-  code: 'FROZEN' | 'FREEZE_UNKNOWN'
+  /** OUTSIDE_WINDOW: a deploy window governs and none is open (ends_at = the next opening). */
+  code: 'FROZEN' | 'FREEZE_UNKNOWN' | 'OUTSIDE_WINDOW' | 'WINDOW_INVALID'
   message: string
   freeze: { id: number; name: string; app_id: number | null; ends_at: string }
+  /** OUTSIDE_WINDOW: the next opening, or null when none opens within 14 days. */
+  next_opening?: string | null
 }
 
 export interface NoteCommit {

@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useAuth } from '@/lib/auth'
 import { cn, formatDateTime, formatRelative } from '@/lib/utils'
-import { dangerArmed, Field, ghostButton, SectionCard } from '../hub-parts'
+import { dangerArmed, Field, ghostButton, listPaneClass, SectionCard } from '../hub-parts'
 import {
   codeWords,
   type DirectoryPerson,
@@ -64,12 +64,7 @@ export default function HubPeople() {
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
       <div className='flex flex-1 min-h-0 overflow-hidden'>
-        <aside
-          className={cn(
-            'w-full shrink-0 flex-col overflow-y-auto border-slate-200 bg-white md:flex md:w-[272px] md:border-r dark:border-border dark:bg-card',
-            selected ? 'hidden' : 'flex'
-          )}
-        >
+        <aside className={cn(listPaneClass, selected ? 'hidden' : 'flex')}>
           <div className='border-b border-slate-200 p-2 dark:border-border'>
             <div className='relative'>
               <Search
@@ -231,7 +226,7 @@ function PersonView({ personKey }: { personKey: string }) {
   return (
     <div className='space-y-4 p-4'>
       <header>
-        <h2 className='m-0 text-[16px] font-semibold text-slate-900 dark:text-foreground'>
+        <h2 className='m-0 text-[18px] font-semibold tracking-[-0.015em] text-slate-900 dark:text-foreground'>
           {p.name ?? p.email ?? 'Unknown person'}
         </h2>
         <p className='m-0 mt-0.5 text-[12px] text-slate-500 dark:text-muted-foreground'>

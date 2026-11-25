@@ -372,3 +372,68 @@
 [data-product='hub']:not(.dark) main .text-nvr-cyan {
   color: var(--hub-accent-ink);
 }
+
+/* ─── Design pass (2026-11-25): one product across every Apps hub screen ─────────────────── */
+
+/* Dark ink on the amber in dark mode too: globals.css turns every .text-white near-white with
+   !important there, which left white on amber (1.8:1) on every primary button. */
+[data-product='hub'].dark .bg-nvr-cyan.text-white,
+[data-product='hub'].dark .bg-nvr-cyan .text-white,
+[data-product='hub'].dark .bg-nvr-cyan > svg {
+  color: var(--nvr-on-accent, #14110a) !important;
+}
+
+/* Status chips by health (hub-parts StatusChip data-hub-health): warn is the Hub's warn yellow,
+   never its accent amber; down keeps the red. */
+[data-product='hub'] .hub-chip[data-hub-health='warn'] {
+  border-color: color-mix(in srgb, var(--hub-warn) 55%, transparent);
+  background: color-mix(in srgb, var(--hub-warn) 12%, hsl(var(--card)));
+  color: #6b5600;
+}
+[data-product='hub'] .hub-chip[data-hub-health='warn'] > span:first-child {
+  background: var(--hub-warn);
+}
+[data-product='hub'].dark .hub-chip[data-hub-health='warn'] {
+  border-color: color-mix(in srgb, var(--hub-warn) 40%, transparent);
+  background: color-mix(in srgb, var(--hub-warn) 10%, hsl(var(--card)));
+  color: #fde68a !important;
+}
+
+/* Warn dots elsewhere on Apps hub pages (amber-500) take the warn yellow as well. */
+[data-product='hub'] [data-hub-base='/hub'] .bg-amber-500 {
+  background-color: var(--hub-warn);
+}
+
+/* "Running" words: the Hub's live colour is its accent ink, not sky blue. */
+[data-product='hub'] [data-hub-base='/hub'] .text-sky-700,
+[data-product='hub'] [data-hub-base='/hub'] .text-sky-600 {
+  color: var(--hub-accent-ink);
+}
+[data-product='hub'].dark [data-hub-base='/hub'] .dark\:text-sky-300,
+[data-product='hub'].dark [data-hub-base='/hub'] .dark\:text-sky-400 {
+  color: var(--hub-accent-ink);
+}
+
+/* Secondary text on a selected list row: the neutral selection tint needs a darker grey (AA). */
+[data-product='hub']:not(.dark) [data-hub-base='/hub'] .bg-accent .text-slate-500 {
+  color: #475569;
+}
+
+/* A run shows its steps once: the track (with its caption) replaces the plain step list, which
+   stays in the page for screen readers. */
+[data-product='hub'] [data-hub-run] ~ .hub-run-steps {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* People is a top-bar section too: not repeated in the Apps tab strip. */
+[data-product='hub'] #hub-tab-hub-people {
+  display: none;
+}
