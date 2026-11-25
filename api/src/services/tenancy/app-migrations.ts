@@ -192,8 +192,11 @@ function secretsOf(t: TenantRecord): string[] {
   return out
 }
 
-/** The lock held by another process (not this app's failure): runMigrationsOn's own text. */
+/** The lock held by another process (not this app's failure): runMigrationsOn's own text, or a
+ *  SQLite app's file another process still holds (db/sqlite-tenant.ts: a rolling update's old
+ *  process lets go when it stops, so this one tries again in 30 s, not 5 min). */
 function lockBusy(err: unknown): boolean {
+  if ((err as { code?: unknown } | null)?.code === 'SQLITE_FILE_BUSY') return true
   return /could not acquire the migration advisory lock/i.test(
     err instanceof Error ? err.message : String(err)
   )

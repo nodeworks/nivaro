@@ -589,7 +589,16 @@ export async function runMigrationsOn(
       budgetMs: config.MIGRATION_LOCK_STALE_MS
     })) as [number, string[]]
   const family = migrationFamily(client)
-  if (family === 'sqlite' || !(opts.safe ?? config.MIGRATION_SAFE_MODE)) return latest()
+  if (family === 'sqlite') {
+    // One process owns the file (db/sqlite.ts claimSqliteFile): no advisory lock. Text columns a
+    // migration left exact then compare case-insensitively (db/sqlite-collation.ts) — on this
+    // process's own file and on each SQLite app's of a Hub shared deployment alike.
+    const ran = await latest()
+    const { ensureSqliteTextNocase } = await import('./sqlite-collation.js')
+    await ensureSqliteTextNocase(k)
+    return ran
+  }
+  if (!(opts.safe ?? config.MIGRATION_SAFE_MODE)) return latest()
   if (family === 'mssql') {
     // Take, hold and release the session lock on ONE pinned connection (underSessionAppLock).
     const { withLongConnection } = await import('../services/run-long.js')
@@ -621,11 +630,10 @@ export async function runMigrationsOn(
  * columns then compare case-insensitively.
  */
 export async function runMigrationsSafely(): Promise<[number, string[]]> {
-  const ran = await runMigrationsOn(migrationDb(), config.DB_CLIENT, {
+  // SQLite: runMigrationsOn brings text columns in line after the run (sqliteAfterMigrations).
+  return runMigrationsOn(migrationDb(), config.DB_CLIENT, {
     timeoutMs: config.MIGRATION_LOCK_TIMEOUT_MS
   })
-  if (config.DB_CLIENT === 'sqlite') await sqliteAfterMigrations()
-  return ran
 }
 
 /*

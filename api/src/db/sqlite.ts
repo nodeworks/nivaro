@@ -106,7 +106,7 @@ export const SQLITE_NOW = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"
 export function sqliteDeploymentProblem(env: Record<string, string | undefined>): string | null {
   if (env.DB_CLIENT !== 'sqlite') return null
   if (isMultiTenant(env))
-    return 'DB_CLIENT=sqlite cannot run in cloud mode or on a Hub shared deployment (CLOUD_META_DB_URL or HUB_SHARED_DEPLOYMENT is set): each app needs a server database (SQL Server, Postgres or MySQL).'
+    return 'DB_CLIENT=sqlite cannot run in cloud mode or on a Hub shared deployment (CLOUD_META_DB_URL or HUB_SHARED_DEPLOYMENT is set): the process itself keeps no app database (a Hub shared deployment of one process serves SQLite apps the Hub lists, each its own file: db/sqlite-tenant.ts).'
   const role = (env.NIVARO_ROLE ?? '').trim()
   if (role)
     return `DB_CLIENT=sqlite runs as ONE process; NIVARO_ROLE=${role} splits the app over several processes, which needs a server database (SQL Server, Postgres or MySQL). Unset NIVARO_ROLE or use a server database.`
@@ -184,9 +184,13 @@ function processAlive(pid: number): boolean {
   }
 }
 
-/** Keep this process's lock file fresh, and remove it when the process ends. */
-export function holdSqliteFile(file: string): void {
-  if (!file || file === ':memory:' || /^file::memory:/i.test(file)) return
+/**
+ * Keep this process's lock file fresh, and remove it when the process ends. Answers a release
+ * that stops the refresh and removes the lock file now (a Hub shared deployment closing one app's
+ * database: db/sqlite-tenant.ts); a no-op for an in-memory database.
+ */
+export function holdSqliteFile(file: string): () => void {
+  if (!file || file === ':memory:' || /^file::memory:/i.test(file)) return () => {}
   const lock = `${file}.lock`
   const mine = readFileSync(lock, 'utf8')
   const timer = setInterval(() => {
@@ -196,12 +200,18 @@ export function holdSqliteFile(file: string): void {
     } catch {}
   }, 30_000)
   timer.unref?.()
-  process.once('exit', () => {
+  let released = false
+  const release = () => {
+    if (released) return
+    released = true
     clearInterval(timer)
+    process.removeListener('exit', release)
     try {
       if (readFileSync(lock, 'utf8') === mine) unlinkSync(lock)
     } catch {}
-  })
+  }
+  process.once('exit', release)
+  return release
 }
 
 /**
@@ -458,7 +468,35 @@ export class SqliteWriteLock {
   }
 }
 
+/** The lock of a connection that names no file (an in-memory database): one per process. */
 export const sqliteWriteLock = new SqliteWriteLock()
+
+/** One write lock per database file (a Hub shared deployment opens one file per SQLite app). */
+const fileWriteLocks = new Map<string, SqliteWriteLock>()
+
+/**
+ * The write lock of the database file `connection` (a better-sqlite3 connection) is open on:
+ * one per file, so two SQLite apps of one shared deployment never wait for each other's writes.
+ * A self-hosted process has one file, so one lock, as before. In-memory connections share
+ * `sqliteWriteLock`.
+ */
+export function sqliteWriteLockFor(connection: unknown): SqliteWriteLock {
+  const name = (connection as { name?: unknown } | null)?.name
+  if (typeof name !== 'string' || !name || name === ':memory:' || /^file::memory:/i.test(name))
+    return sqliteWriteLock
+  let lock = fileWriteLocks.get(name)
+  if (!lock) {
+    lock = new SqliteWriteLock()
+    fileWriteLocks.set(name, lock)
+  }
+  return lock
+}
+
+/** Drop a closed file's write lock (db/sqlite-tenant.ts, when an app's database is closed). */
+export function forgetSqliteWriteLock(file: string): void {
+  const lock = fileWriteLocks.get(file)
+  if (lock && lock.holder == null) fileWriteLocks.delete(file)
+}
 
 const BEGIN = /^\s*BEGIN\b(?!\s+(IMMEDIATE|EXCLUSIVE)\b)/i
 
@@ -475,7 +513,7 @@ export function sqliteWriteTarget(connection: unknown): TxScope['connection'] | 
   const scope = sqliteTxScope.getStore()
   if (!scope || scope.connection === connection) return null
   if (scope.trx.isCompleted() || !scope.connection.inTransaction) return null
-  return sqliteWriteLock.holder === scope.connection ? scope.connection : null
+  return sqliteWriteLockFor(scope.connection).holder === scope.connection ? scope.connection : null
 }
 
 // ─── connection + knex patches ───────────────────────────────────────────────
@@ -741,8 +779,9 @@ export function sqliteCompat(): void {
     else if (statement.reader && statement.columns().some((c: ColumnInfo) => isBigintType(c.type)))
       statement.safeIntegers(true)
     const bindings = this._formatBindings(obj.bindings)
-    if ((begin || !statement.readonly) && sqliteWriteLock.holder !== connection)
-      await sqliteWriteLock.acquire(connection)
+    const writeLock = sqliteWriteLockFor(connection)
+    if ((begin || !statement.readonly) && writeLock.holder !== connection)
+      await writeLock.acquire(connection)
     try {
       if (statement.reader) {
         obj.response = convertRows(statement.columns(), statement.all(bindings))
@@ -753,8 +792,8 @@ export function sqliteCompat(): void {
       obj.context = { lastID: response.lastInsertRowid, changes: response.changes }
       return obj
     } finally {
-      if (sqliteWriteLock.holder === connection && !connection.inTransaction)
-        sqliteWriteLock.release(connection)
+      if (writeLock.holder === connection && !connection.inTransaction)
+        writeLock.release(connection)
     }
   }
 
@@ -769,7 +808,7 @@ export function sqliteCompat(): void {
 
   const destroy = proto.destroyRawConnection
   proto.destroyRawConnection = async function (connection: unknown) {
-    sqliteWriteLock.release(connection)
+    sqliteWriteLockFor(connection).release(connection)
     return destroy.call(this, connection)
   }
 

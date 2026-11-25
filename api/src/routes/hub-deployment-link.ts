@@ -12,6 +12,7 @@ import {
   type AppSchemaState,
   appStatusFor,
   checkDatabase,
+  checkSqliteDatabase,
   DB_CHECK_CLIENTS,
   type DeploymentStatus,
   oidcIdentity,
@@ -32,6 +33,7 @@ import { NIVARO_VERSION } from '../version.js'
  *   POST /api/hub-deployment/apps/:id/first-admin    → as POST /api/hub-link/first-admin, in that app
  *   POST /api/hub-deployment/refresh                 → 202; every replica re-reads its tenant list
  *   POST /api/hub-deployment/db-check {client, connection} → {reachable, ledger, db_identity, error}
+ *        (SQLite, 0.3.215: {client: 'sqlite', connection: <file name>, tenant: <app id>})
  *
  * Mounted only on a Hub shared deployment (tenantSource() === 'hub'), never in Nivaro Cloud and
  * never on a dedicated app (HUB_TOKEN alone). The tenant hook frees `/api/hub-deployment/`, so a
@@ -224,9 +226,17 @@ export async function hubDeploymentLinkRoutes(app: FastifyInstance): Promise<voi
   })
 
   app.post('/db-check', async (req, reply) => {
-    const b = (req.body ?? {}) as { client?: unknown; connection?: unknown }
+    const b = (req.body ?? {}) as { client?: unknown; connection?: unknown; tenant?: unknown }
     const client = typeof b.client === 'string' ? b.client : ''
     const connection = typeof b.connection === 'string' ? b.connection.trim() : ''
+    // 0.3.215: a SQLite app's file — `connection` is its file name, `tenant` the app it belongs to
+    // (the file lives in that app's own folder here).
+    if (client === 'sqlite') {
+      const tenant = typeof b.tenant === 'string' ? b.tenant : ''
+      if (!tenant || !connection)
+        return refuse(reply, 400, 'A SQLite check names the app and its file', 'BAD_DB_CONNECTION')
+      return reply.send(await checkSqliteDatabase(cfg.deployment, tenant, connection))
+    }
     if (!DB_CHECK_CLIENTS.has(client))
       return refuse(reply, 400, 'Unknown database client', 'BAD_DB_CLIENT')
     if (!connection || connection.length > CONNECTION_MAX)

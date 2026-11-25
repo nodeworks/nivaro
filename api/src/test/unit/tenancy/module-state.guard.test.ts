@@ -163,6 +163,10 @@ const SHARED: Record<string, string> = {
   'db/owner-signal.ts :: raised': DIAG,
   'db/people-signal.ts :: listeners': REGISTRY,
   'db/pg-utc.ts :: done': PATCH,
+  'db/sqlite-tenant.ts :: heldFiles':
+    'lock releases keyed by the database file: each SQLite app has its own file (app-db/<tenant id>/)',
+  'db/sqlite.ts :: fileWriteLocks':
+    'one write lock per database file: each SQLite app has its own file, so its own lock',
   'db/sqlite.ts :: likes': 'compiled LIKE patterns by pattern text; no app data',
   'db/sqlite.ts :: patched': PATCH,
   'db/sqlite.ts :: regexps': 'compiled regular expressions by pattern text; no app data',
