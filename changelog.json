@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-11-25T16:12:47.117Z",
+  "generated_at": "2026-11-25T16:50:19.150Z",
   "releases": [
+    {
+      "version": "0.3.216",
+      "tag": "v0.3.216",
+      "date": "2026-11-25T11:50:01-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "build",
+              "text": "put the graphql package back at any folder depth",
+              "hash": "1308d91f7"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.215",
       "tag": "v0.3.215",
-      "date": "2026-11-25T11:12:26-05:00",
+      "date": "2026-11-25T11:12:47-05:00",
       "sections": [
         {
           "label": "Added",
