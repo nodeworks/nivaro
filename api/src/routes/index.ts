@@ -7,6 +7,7 @@ import { announceConfigChanged, collectionHint, isConfigWrite } from '../service
 import { configWatchOnResponse, configWatchPreHandler } from '../services/config-watch.js'
 import { bustDefinitionCache } from '../services/definition-cache.js'
 import { isMultiTenant, isNivaroCloud } from '../services/deployment-mode.js'
+import { installHubCredentialGate } from '../services/hub/api/gate.js'
 import { bustLayoutReferences } from '../services/layout-references.js'
 import { announcePermissionChange, permissionTarget } from '../services/permission-live.js'
 import { clearPickerRuleCache } from '../services/picker-rules.js'
@@ -170,12 +171,14 @@ import { hubRoutes } from './hub.js'
 import { hubAppLinkRoutes } from './hub-app-link.js'
 import { hubDeploymentUsageRoutes, hubLinkUsageRoutes } from './hub-capacity-link.js'
 import { hubDeploymentLinkRoutes } from './hub-deployment-link.js'
+import { hubFleetRoutes } from './hub-fleet.js'
 import { hubLinkRoutes } from './hub-link.js'
 import { hubOidcRoutes } from './hub-oidc.js'
 import { hubOpsRoutes } from './hub-ops.js'
 import { hubOpsDeploymentRoutes, hubOpsLinkRoutes } from './hub-ops-link.js'
 import { hubSigninAdminRoutes } from './hub-signin-admin.js'
 import { hubSwitcherRoutes } from './hub-switcher.js'
+import { hubTemplateRoutes } from './hub-templates.js'
 import { hubTransferRoutes } from './hub-transfer.js'
 import { ideasRoutes } from './ideas.js'
 import { importTemplatesRoutes } from './import-templates.js'
@@ -383,6 +386,9 @@ import { writeToScreenAdminRoutes, writeToScreenBeaconRoutes } from './write-to-
 import { zapierRoutes } from './zapier.js'
 
 export async function registerRoutes(app: FastifyInstance) {
+  // Every /api/hub route (any plugin, Hub mode only): API keys need a Hub scope, connected apps
+  // only read and plan, View-as never writes (services/hub/api/gate.ts). Before any registration.
+  installHubCredentialGate(app)
   // #2759 — how long a cache-missing custom query / widget read takes, so a known-slow one can
   // offer "Run in background" (services/background-runs.ts).
   app.addHook('onResponse', noteReadDuration(app))
@@ -510,6 +516,9 @@ export async function registerRoutes(app: FastifyInstance) {
   // Nivaro Hub (apps, environments, owners): registers nothing unless HUB=on (never in cloud).
   await app.register(hubRoutes, { prefix: '/hub' })
   await app.register(hubSigninAdminRoutes, { prefix: '/hub/signin' })
+  await app.register(hubTemplateRoutes, { prefix: '/hub' })
+  // Hub fleet page, uptime + SLO, drift alerts, audit timeline (HUB=on only).
+  await app.register(hubFleetRoutes, { prefix: '/hub' })
   await app.register(hubOidcRoutes, { prefix: '/hub/oidc' })
   await app.register(hubAppLinkRoutes, { prefix: '/hub/app-link' })
   // Hub ops: cross-app issues, secret rotation helper, storage health (HUB=on only).

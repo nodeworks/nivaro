@@ -1166,10 +1166,6 @@ Object.assign(BLOCKER_COPY, {
 export const AGENT_FIELD_COPY: Record<string, string> = {
   UNKNOWN_FIELD: 'The stack spec carries a field this agent does not know: update the agent.',
   REQUIRED: 'A required part of the stack spec is missing.',
-  FOLDER_BAD:
-    'The uploads folder must be a relative folder (1–8 parts, no ..) under the agent’s NFS export.',
-  NO_NFS_EXPORT: 'An uploads folder needs an NFS export on the agent: set one there first.',
-  RUN_AS_BAD: 'The stack asks to run as a user the agent does not allow.',
   BAD_KEY: 'An app, shared deployment or environment key is not one the agent accepts.',
   IMAGE_NOT_ALLOWED: "An image is not on the agent's allow-list.",
   IMAGE_NOT_PINNED: 'An image is not pinned by digest.',
@@ -1187,6 +1183,9 @@ export const AGENT_FIELD_COPY: Record<string, string> = {
   SETTING_INVALID: 'A stack setting has a value the agent cannot use.',
   SHARED_KEY_MISMATCH: 'The stack belongs to another shared deployment.',
   ROLE_NOT_SHARED: 'That process role, or that set of roles, cannot run on a shared deployment.',
+  FOLDER_BAD: 'A files folder name is not one the agent accepts (plain folder names only, no dots or slashes at the start).',
+  NO_NFS_EXPORT: 'A per-stack files folder needs an NFS share set up on the agent first.',
+  RUN_AS_BAD: 'The process user setting is not one the agent accepts.',
   ROLE_NEEDS_TRAEFIK_V3:
     'A separate realtime role needs Traefik v3: set the agent to Traefik v3 (HUB_AGENT_TRAEFIK_VERSION=3), or run without a separate realtime role.'
 }

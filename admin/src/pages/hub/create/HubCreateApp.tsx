@@ -12,6 +12,7 @@ import { dbKeys, ENGINE_LABEL, STATUS_LABEL, useDatabases, useDbServers } from '
 import { fetchDrivers, HUB_MASK, hubKeys } from '../hub-api'
 import { CopyButton, Field, ghostButton, SectionCard } from '../hub-parts'
 import { fetchSharedList, sharedKeys } from '../shared/shared-api'
+import { countsLine, fetchTemplates, templateError, templateKeys } from '../templates/templates-api'
 import {
   appBlockers,
   automaticHostname,
@@ -143,6 +144,12 @@ export function HubCreateApp({
   const [poolMax, setPoolMax] = useState('')
   const [extensionsText, setExtensionsText] = useState('')
   const [version, setVersion] = useState('')
+  // Hub enhancement 24: a template from the library ('' = none).
+  const [templateId, setTemplateId] = useState('')
+  const templates = useQuery({
+    queryKey: templateKeys.list(false),
+    queryFn: () => fetchTemplates()
+  })
   const [issuer, setIssuer] = useState('')
   const [clientId, setClientId] = useState('')
   const [clientSecret, setClientSecret] = useState('')
@@ -213,6 +220,7 @@ export function HubCreateApp({
       // GitLab keeps the phase-3 form (`target_id`), so an older Hub reads it too.
       ...(kind === 'gitlab' ? { target_id: Number(targetId) || 0 } : { target: targetInput }),
       version: version.trim(),
+      ...(kind !== 'shared' && Number(templateId) ? { template_id: Number(templateId) } : {}),
       ...(sharedSignin
         ? {}
         : {
@@ -255,6 +263,7 @@ export function HubCreateApp({
       adminLast,
       targetInput,
       version,
+      templateId,
       issuer,
       clientId,
       clientSecret,
@@ -447,6 +456,11 @@ export function HubCreateApp({
       value: String(t.id),
       label: `${t.name} · ${t.config.namespace}${t.config.dns_mode === 'manual' ? ' · names by hand' : ''}`
     }))
+  ]
+  const pickedTemplate = templates.data?.find((t) => String(t.id) === templateId) ?? null
+  const templateOptions = [
+    { value: '', label: 'No template' },
+    ...(templates.data ?? []).map((t) => ({ value: String(t.id), label: `${t.name} ${t.version}` }))
   ]
   const driverOptions = [
     { value: '', label: 'Pick a Docker driver' },
@@ -802,6 +816,38 @@ export function HubCreateApp({
                   <Plus className='h-3.5 w-3.5' aria-hidden /> Add secret
                 </button>
               </div>
+            </div>
+          )}
+          {kind !== 'shared' && (
+            <div className='border-t border-slate-100 p-4 dark:border-border'>
+              <Field
+                id='hub-create-template'
+                label='App template'
+                hint={
+                  pickedTemplate
+                    ? `${countsLine(pickedTemplate.manifest)} — installed into every environment after its first administrator.`
+                    : templates.data?.length === 0
+                      ? 'No templates yet: upload an App Blueprint on the Templates tab.'
+                      : 'Optional: an App Blueprint from the Templates tab (schema, workflows, layouts, queues and rules — never data).'
+                }
+              >
+                <SimpleSelect
+                  value={templateId}
+                  onChange={touch(setTemplateId)}
+                  options={templateOptions}
+                  ariaLabel='App template'
+                  className='h-8 text-[13px]'
+                  triggerProps={{ id: 'hub-create-template' }}
+                />
+              </Field>
+              {templates.isError && (
+                <div className='mt-2'>
+                  <ErrorNotice
+                    description={templateError(templates.error, 'Could not load the templates')}
+                    onRetry={() => void templates.refetch()}
+                  />
+                </div>
+              )}
             </div>
           )}
           {kind === 'gitlab' && targets.isError && (

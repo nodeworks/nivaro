@@ -16,6 +16,15 @@ vi.mock('../../../services/pool-attribution.js', () => ({
   poolCounters: (...a: unknown[]) => poolCounters(...a)
 }))
 vi.mock('../../../services/instance-key.js', () => ({ instanceKey: () => 'production' }))
+// 0.3.215: /status also counts open issue-log rows (a count only).
+vi.mock('../../../db/index.js', () => {
+  const q = {
+    whereIn: () => q,
+    count: async () => [{ n: 4 }]
+  }
+  return { db: () => q }
+})
+vi.mock('../../../services/security.js', () => ({ maintenanceState: async () => ({ on: false }) }))
 
 import { _resetHubLinkForTests, hubLinkRoutes } from '../../../routes/hub-link.js'
 
@@ -99,6 +108,7 @@ describe('GET /api/hub-link/status', () => {
         'environment',
         'instance',
         'maintenance',
+        'open_issues',
         'preflight',
         'process',
         'readiness_score',
@@ -110,6 +120,7 @@ describe('GET /api/hub-link/status', () => {
     expect(body.instance).toBe('production')
     expect(body.preflight).toEqual({ status: 'warn', failing: ['render'] })
     expect(body.readiness_score).toBe(92)
+    expect(body.open_issues).toBe(4)
     expect(Object.keys(body.process).sort()).toEqual(['memory_mb', 'pool', 'uptime_s'])
     expect(body.process.pool).toEqual({ used: 3, free: 7, pending: 1 })
     expect(typeof body.process.uptime_s).toBe('number')

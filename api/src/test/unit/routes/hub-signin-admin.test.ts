@@ -43,6 +43,8 @@ vi.mock('../../../middleware/authenticate.js', async (importOriginal) => {
     req.user = { id, status: 'active' }
     req.isAdmin = req.headers['x-admin'] === '1'
     req.authMethod = req.headers['x-auth'] ?? 'session'
+    const scopes = req.headers['x-scopes']
+    if (scopes) (req as { apiKeyScopes?: unknown }).apiKeyScopes = JSON.parse(scopes)
   }
   const admin = async (req: Parameters<typeof sign>[0]) => {
     await sign(req)
@@ -781,5 +783,67 @@ describe('fix round 1: own-session minting, duplicate tokens, write errors', () 
       (await req('PATCH', `/hub/environments/${stagingId}`, asAdmin, { hub_token: MASK })).json()
         .code
     ).toBe('HUB_TOKEN_MASK')
+  })
+})
+
+describe('behind the Hub credential gate (services/hub/api/gate.ts)', () => {
+  // The routes as production mounts them: /api/hub, with the gate installed at the root. A key
+  // that HAS hub:write passes the gate and still meets each route's own refusal.
+  let gated: FastifyInstance
+  beforeAll(async () => {
+    const { installHubCredentialGate } = await import('../../../services/hub/api/gate.js')
+    gated = Fastify()
+    gated.decorate('redis', { get: vi.fn(), set: vi.fn(), del: vi.fn(async () => 1) } as never)
+    installHubCredentialGate(gated)
+    await gated.register(hubRoutes, { prefix: '/api/hub' })
+    await gated.register(hubSigninAdminRoutes, { prefix: '/api/hub/signin' })
+    await gated.ready()
+  })
+  afterAll(async () => {
+    await gated.close()
+  })
+  const hubWriteKey = {
+    ...asAdmin,
+    'x-auth': 'api_key',
+    'x-scopes': JSON.stringify([{ collection: '$hub', actions: ['read', 'write'] }])
+  }
+
+  it('a hub:write key still cannot mint a client secret or rotate keys (CREDENTIAL_MINT_REFUSED)', async () => {
+    const { envId } = await seed('gated', OWNER)
+    for (const url of [
+      `/api/hub/signin/environments/${envId}/client`,
+      `/api/hub/signin/environments/${envId}/client/rotate`,
+      '/api/hub/signin/keys/rotate'
+    ]) {
+      const r = await gated.inject({ method: 'POST', url, headers: hubWriteKey })
+      expect(r.statusCode, url).toBe(403)
+      expect(r.json().code).toBe('CREDENTIAL_MINT_REFUSED')
+    }
+  })
+
+  it('a hub:write key still cannot remove a signing key (OWN_SESSION_ONLY)', async () => {
+    const keys = await import('../../../services/hub/oidc/keys.js')
+    const next = (await keys.rotateSigningKey(ADMIN)).kid
+    const r = await gated.inject({
+      method: 'DELETE',
+      url: `/api/hub/signin/keys/${next}`,
+      headers: hubWriteKey
+    })
+    expect(r.statusCode).toBe(403)
+    expect(r.json().code).toBe('OWN_SESSION_ONLY')
+  })
+
+  it('a key without a Hub scope is refused by the gate first', async () => {
+    const r = await gated.inject({
+      method: 'GET',
+      url: '/api/hub/signin/settings',
+      headers: {
+        ...asAdmin,
+        'x-auth': 'api_key',
+        'x-scopes': '[{"collection":"*","actions":["*"]}]'
+      }
+    })
+    expect(r.statusCode).toBe(403)
+    expect(r.json().code).toBe('HUB_SCOPE_MISSING')
   })
 })

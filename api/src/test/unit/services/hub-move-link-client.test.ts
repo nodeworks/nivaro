@@ -90,15 +90,18 @@ describe('maintenance: carry for a move to shared', () => {
   })
 
   it('0.3.215: server_copied crosses (0 when absent or not a count)', async () => {
-    // A finished copy as the app answers it (the merge dropped this fixture's definition).
+    // The pull-status fixture this test used was lost in an earlier merge; restored here.
     const status = {
       state: 'done',
-      total: 2,
-      copied: 2,
+      total: 4,
+      copied: 1,
       skipped: 0,
-      failed: 0,
+      failed: 3,
       missing: [],
-      bytes: 10
+      bytes: 10,
+      error: null,
+      failed_ids: ['a', 'b', 'c'],
+      failed_reasons: { source_read_failed: 2, write_failed: 1 }
     }
     expect(
       (await clientAnswering({ ...status, server_copied: 2 }).pullStatus('r')).server_copied

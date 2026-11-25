@@ -254,9 +254,9 @@ describe('hub known env list (P4-23)', { timeout: 60_000 }, () => {
   const REVIEWED_DATA_PATHS: Record<string, string> = {
     EXPORT_WORK_DIR: 'export-files: scratch folder Nivaro writes export files into',
     FILES_FALLBACK_DIR: 'storage/fallback: read-only folder of another environment uploads',
-    HELP_VIDEO_MUSIC_DIR: 'help-video-music: folder of audio files + music.json, decoded as media',
     HUB_FILES_BACKUP_DIRS:
-      'hub-data-app/files-backup: folders a Hub files backup may write archives into (data only)',
+      'hub-data-app/files-backup: absolute folders a Hub files backup may write archives into',
+    HELP_VIDEO_MUSIC_DIR: 'help-video-music: folder of audio files + music.json, decoded as media',
     UPLOAD_DIR: 'server: folder of stored uploads served as files',
     VIDEO_WORK_DIR: 'help-video-uploads / replay export: scratch folder for media files'
   }

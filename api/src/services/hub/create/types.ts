@@ -51,6 +51,8 @@ export interface CreateAppInput {
   version: string
   /** Shared: extension ids the deployment loads. GitLab / Docker: none (Docker pins them). */
   extensions?: string[]
+  /** Hub enhancement 24: a template from the library to install after the first admin. */
+  template_id?: number | null
   /** Shared: optional (an app on a shared deployment signs in with the deployment's OIDC). */
   signin?: { issuer: string; client_id: string; client_secret: string }
   environments: Array<{
@@ -185,6 +187,7 @@ export type CreationStepKey =
   | 'name'
   | 'link'
   | 'admin'
+  | 'template'
   | 'stack'
   | 'place'
 
@@ -196,7 +199,9 @@ export const STEP_ORDER: readonly CreationStepKey[] = Object.freeze([
   'deploy',
   'name',
   'link',
-  'admin'
+  'admin',
+  // Hub enhancement 24: the picked App Blueprint template (create/template-step.ts)
+  'template'
 ])
 
 /** A Docker creation: the stack (placement, component, settings), then phase 4's agent deploy. */
@@ -206,7 +211,9 @@ export const DOCKER_STEP_ORDER: readonly CreationStepKey[] = Object.freeze([
   'deploy',
   'name',
   'link',
-  'admin'
+  'admin',
+  // Hub enhancement 24: the picked template, after the first administrator (template-step.ts)
+  'template'
 ])
 
 /** A shared creation: the database, then place-shared (list, schema, first administrator). */

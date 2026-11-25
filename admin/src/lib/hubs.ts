@@ -76,6 +76,7 @@ export const APPS_HUB: HubDef = {
     { path: 'capacity', label: 'Capacity' },
     { path: 'drivers', label: 'Drivers' },
     { path: 'targets', label: 'Targets' },
+    { path: 'templates', label: 'Templates' },
     { path: 'databases', label: 'Databases' },
     { path: 'data', label: 'Backups & data' },
     { path: 'signin', label: 'Sign-in' },
@@ -83,6 +84,8 @@ export const APPS_HUB: HubDef = {
     { path: 'issues', label: 'Issues' },
     { path: 'storage', label: 'Storage' },
     { path: 'secrets', label: 'Secrets' },
+    { path: 'fleet', label: 'Fleet' },
+    { path: 'audit', label: 'Audit' },
     { path: 'people', label: 'People' }
   ]
 }

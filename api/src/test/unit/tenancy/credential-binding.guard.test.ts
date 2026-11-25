@@ -414,8 +414,18 @@ const NVR_ALLOW: Record<string, string> = {
   'services/hub/promote-lock.ts :: nvr:hub:shared:': HUB,
   'services/hub/promote-lock.ts :: nvr:hub:branch:': HUB,
   'services/hub/status.ts :: nvr:hub:status:': HUB,
+  'services/hub-link/template-install.ts :: nvr:hub-template:lock:':
+    "app-bound: hubLinkKeyTag() is a hash of this app's HUB_TOKEN; hub-link routes never mount on a shared deployment (Hub enhancement 24)",
+  'services/hub-link/template-install.ts :: nvr:hub-template:run:':
+    "app-bound: hubLinkKeyTag() is a hash of this app's HUB_TOKEN; hub-link routes never mount on a shared deployment (Hub enhancement 24)",
+  'services/hub-link/template-install.ts :: nvr:hub-template:seen:':
+    "app-bound: hubLinkKeyTag() is a hash of this app's HUB_TOKEN; hub-link routes never mount on a shared deployment (Hub enhancement 24)",
   'services/capacity/app-usage.ts :: nvr:hubcap:':
     'capacity snapshots of the whole deployment (per-app counts, timings, pool figures; no records), one key per process; the Hub reads them over its own link',
+  'services/hub/fleet/lock.ts :: nvr:hub:fleet-probe': HUB,
+  'services/hub/fleet/lock.ts :: nvr:hub:fleet-alerts': HUB,
+  'services/hub/fleet/lock.ts :: nvr:hub:fleet-check': HUB,
+  'routes/hub-fleet.ts :: nvr:hub:fleet-page:': HUB,
   'services/cache-warm-on-change.ts :: nvr:warm:chg:plan': OFF,
   'services/cache-warm-on-change.ts :: nvr:warm:chg:plan:lock': OFF,
   'services/cache-warm-on-change.ts :: nvr:warm:chg:cd:': OFF,
