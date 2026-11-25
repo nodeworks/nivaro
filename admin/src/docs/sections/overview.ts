@@ -302,7 +302,7 @@ export const userFlows: DocSection = {
       type: 'ul',
       items: [
         '**Dedicated app** — the script runs in an isolated context inside the API process, stopped at its timeout.',
-        '**Hub shared deployment (0.3.215 or later)** — every step runs in a short-lived child process of its own: no file access, no child processes, an empty environment, no network, a lower CPU priority. Limits per deployment: `FLOW_SCRIPT_MEMORY_MB` (heap, default 64), the step timeout, 8 MB of output, 200 log lines, `FLOW_SCRIPT_CONCURRENCY` steps at once per process (default 4) and `FLOW_SCRIPT_PER_APP` per app (default 2). A step waits at most `FLOW_SCRIPT_MAX_WAIT_MS` (default 30 s) for a slot, then fails ("Too many script steps are running for this app"). Starting the process adds roughly 50–100 ms of CPU to each step.',
+        '**Hub shared deployment (0.3.215 or later)** — every step runs in a short-lived child process of its own: no file access, no child processes, an empty environment, no network, a lower CPU priority. The script has no `ArrayBuffer`, typed arrays or `WebAssembly` there (their memory sits outside the heap limit). Limits per deployment: `FLOW_SCRIPT_MEMORY_MB` (heap, default 64; the whole process may use 96 MB more before it is stopped), the step timeout, 8 MB of output, 200 log lines, `FLOW_SCRIPT_CONCURRENCY` steps at once per process (default 4) and `FLOW_SCRIPT_PER_APP` per app (default 2). A step waits at most `FLOW_SCRIPT_MAX_WAIT_MS` (default 30 s) for a slot, then fails ("Too many script steps are running for this app"). Starting the process adds roughly 50–100 ms of CPU to each step.',
         '**Nivaro Cloud** — refused: the step rejects with a message to use a Transform, Condition or Item operation.'
       ]
     },

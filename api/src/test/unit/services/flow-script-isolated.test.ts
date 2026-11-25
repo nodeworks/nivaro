@@ -1,12 +1,13 @@
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { createServer, type Server } from 'node:net'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Hub gap `exec`: on a Hub shared deployment every exec-script run gets its own child process
 // (flow-script-isolated.ts). The shared contract + escape suite runs against it in
 // flow-script-sandbox.test.ts; this file proves what only the child adds: the lock-down (no
-// files, no child processes, no network, no env), memory / output / slot limits, and that it
-// fails closed when the permission model is missing.
+// files, no child processes, no network, no env, a realm with only ECMAScript built-ins), memory
+// limits inside and outside the V8 heap, output / slot limits, and that it fails closed when the
+// permission model is missing.
 
 const tenant = vi.hoisted(() => ({ key: '' }))
 vi.mock('../../../services/tenant-rooms.js', () => ({ currentTenantKey: () => tenant.key }))
@@ -16,10 +17,14 @@ const {
   CHILD_SOURCE,
   childEnv,
   childFlags,
+  OFF_HEAP_GLOBALS,
   permissionFlag,
+  RSS_MARGIN_MB,
+  readRssBytes,
   runIsolatedScript,
   ScriptLimitError,
-  scriptGateState
+  scriptGateState,
+  watchRss
 } = await import('../../../services/flow-script-isolated.js')
 const { scriptLimits } = await import('../../../services/flow-script-limits.js')
 const { ScriptTimeoutError } = await import('../../../services/flow-script-sandbox.js')
@@ -57,10 +62,19 @@ describe('the child lock-down', () => {
   })
   afterAll(() => server.close())
 
+  /** Runs the lock-down, then `body`. `R` / `P` are require / process captured BEFORE it: they
+   *  stand for an escape that somehow kept them (the real child keeps neither). `emit(obj)`
+   *  answers through stdout. */
   const probe = (flags: string[], body: string, env: Record<string, string> = childEnv()) => {
     const r = spawnSync(
       process.execPath,
-      [...flags, '-e', `(() => { ${CHILD_LOCKDOWN}\n${body} })()`],
+      [
+        ...flags,
+        '-e',
+        `(() => { const R = require; const P = process; const emit = (o) => P.stdout.write(JSON.stringify(o) + '\\n')
+         ${CHILD_LOCKDOWN}
+         ${body} })()`
+      ],
       { env, encoding: 'utf8', timeout: 20_000 }
     )
     return JSON.parse(r.stdout.trim().split('\n').pop() ?? '{}') as Record<string, unknown>
@@ -70,47 +84,83 @@ describe('the child lock-down', () => {
     expect(permissionFlag()).toMatch(/permission$/)
   })
 
-  it('denies files, child processes, workers, code from strings, the network and the env', () => {
+  // Every route to a file, a process, a worker or a socket an escaped script could try.
+  const PATHS: Record<string, string> = {
+    fsRead: "R('node:fs').readFileSync('/etc/hosts')",
+    fsWrite: "R('node:fs').writeFileSync('/tmp/nvr-flow-script-probe', 'x')",
+    childProcess: "R('node:child_process').execFileSync('true')",
+    childSpawn: "R('node:child_process').spawn('true')",
+    worker: "new (R('node:worker_threads').Worker)('1', { eval: true })",
+    codeFromStrings: "new Function('return 1')()",
+    netConnect: "R('node:net').connect(PORT, '127.0.0.1')",
+    netCreateConnection: "R('node:net').createConnection(PORT, '127.0.0.1')",
+    netSocket: "new (R('node:net').Socket)().connect(PORT, '127.0.0.1')",
+    netServer: "R('node:net').createServer().listen(0)",
+    tls: "R('node:tls').connect(PORT, '127.0.0.1')",
+    http: "R('node:http').request('http://127.0.0.1:PORT/')",
+    httpGet: "R('node:http').get('http://127.0.0.1:PORT/')",
+    https: "R('node:https').request('https://127.0.0.1:PORT/')",
+    http2: "R('node:http2').connect('http://127.0.0.1:PORT')",
+    dgramCreate: "R('node:dgram').createSocket('udp4')",
+    dgramSend: "R('node:dgram').Socket.prototype.send.call({}, 'x', PORT, '127.0.0.1')",
+    dgramBind: "R('node:dgram').Socket.prototype.bind.call({}, 0)",
+    dgramConnect: "R('node:dgram').Socket.prototype.connect.call({}, PORT)",
+    dnsLookup: "R('node:dns').lookup('localhost', () => {})",
+    dnsResolve: "R('node:dns').resolve4('localhost', () => {})",
+    dnsResolveAny: "R('node:dns').resolveAny('localhost', () => {})",
+    dnsReverse: "R('node:dns').reverse('127.0.0.1', () => {})",
+    dnsResolver: "new (R('node:dns').Resolver)().resolve4('localhost', () => {})",
+    dnsPromises: "R('node:dns').promises.lookup('localhost')",
+    dnsPromisesModule: "R('node:dns/promises').resolve4('localhost')",
+    dnsPromisesResolver: "new (R('node:dns/promises').Resolver)().resolve4('localhost')",
+    getBuiltinModule: "P.getBuiltinModule('node:net')",
+    binding: "P.binding('tcp_wrap')",
+    linkedBinding: "P._linkedBinding('x')",
+    dlopen: "P.dlopen({ exports: {} }, '/x.node')",
+    inspectorOpen: "R('node:inspector').open(0)",
+    inspectorSession: "new (R('node:inspector').Session)().connect()",
+    wasi: "new (R('node:wasi').WASI)({ version: 'preview1' })"
+  }
+
+  it('refuses every route to files, processes, workers and the network', () => {
+    const flag = permissionFlag() as string
+    const checks = Object.entries(PATHS)
+      .map(([k, code]) => `t(${JSON.stringify(k)}, () => ${code.replaceAll('PORT', String(port))})`)
+      .join('\n')
+    const r = probe(
+      childFlags(flag, 64),
+      `const io = lockdown()
+       const r = { ok: io !== null }
+       const t = (k, f) => { try { const v = f(); r[k] = v && typeof v.then === 'function' ? 'promise' : 'open' } catch (e) { r[k] = 'refused' } }
+       ${checks}
+       emit(r)`
+    )
+    const expected: Record<string, unknown> = { ok: true }
+    for (const k of Object.keys(PATHS)) expected[k] = 'refused'
+    expect(r).toEqual(expected)
+  })
+
+  it('leaves the realm only ECMAScript built-ins: no require, process, fetch, WebSocket or module globals', () => {
     const flag = permissionFlag() as string
     const r = probe(
       childFlags(flag, 64),
-      `const r = { ok: lockdown() }
-       const t = (k, f) => { try { f(); r[k] = 'open' } catch (e) { r[k] = 'denied' } }
-       t('fsRead', () => require('node:fs').readFileSync('/etc/hosts'))
-       t('fsWrite', () => require('node:fs').writeFileSync('/tmp/nvr-flow-script-probe', 'x'))
-       t('child', () => require('node:child_process').execSync('true'))
-       t('worker', () => new (require('node:worker_threads').Worker)('1', { eval: true }))
-       t('fn', () => new Function('return 1')())
-       t('net', () => require('node:net').connect(${port}, '127.0.0.1'))
-       t('socket', () => new (require('node:net').Socket)().connect(${port}, '127.0.0.1'))
-       t('http', () => require('node:http').request('http://127.0.0.1:${port}/'))
-       t('dgram', () => require('node:dgram').createSocket('udp4'))
-       r.fetch = typeof globalThis.fetch
-       r.env = Object.keys(process.env).filter((k) => k !== 'TZ' && !k.startsWith('__CF_'))
-       console.log(JSON.stringify(r))`,
+      `const io = lockdown()
+       emit({
+         ok: io !== null,
+         gone: ['require', 'process', 'module', 'Buffer', 'fetch', 'WebSocket', 'EventSource',
+           'net', 'dns', 'dgram', 'http', 'child_process', 'worker_threads', 'inspector', 'wasi',
+           'setTimeout', 'queueMicrotask', 'structuredClone', 'navigator', 'crypto']
+           .filter((k) => k in globalThis),
+         env: Object.keys(P.env)
+       })`,
       { ...childEnv(), SECRET_FROM_PARENT: 'no' }
     )
-    expect(r).toEqual({
-      ok: true,
-      fsRead: 'denied',
-      fsWrite: 'denied',
-      child: 'denied',
-      worker: 'denied',
-      fn: 'denied',
-      net: 'denied',
-      socket: 'denied',
-      http: 'denied',
-      dgram: 'denied',
-      fetch: 'undefined',
-      // the probe passed one variable on purpose: the real child gets childEnv() only
-      env: ['SECRET_FROM_PARENT']
-    })
+    // The probe passed one variable on purpose: the lock-down empties even that.
+    expect(r).toEqual({ ok: true, gone: [], env: [] })
   })
 
   it('refuses to run without the permission model (fails closed)', () => {
-    expect(probe(['--no-warnings'], 'console.log(JSON.stringify({ ok: lockdown() }))')).toEqual({
-      ok: false
-    })
+    expect(probe(['--no-warnings'], 'emit({ ok: lockdown() !== null })')).toEqual({ ok: false })
     const r = spawnSync(process.execPath, ['-e', CHILD_SOURCE], {
       env: childEnv(),
       input: JSON.stringify({ code: 'return { ran: true }', input: '{}', timeout: 1000 }),
@@ -134,6 +184,60 @@ describe('the child lock-down', () => {
     } finally {
       process.env = before
     }
+  })
+
+  it('a script cannot import() a module', async () => {
+    await expect(
+      runIsolatedScript('return import("node:net").then(() => ({ got: true }))', {}, quietLog())
+    ).rejects.toThrow()
+  })
+})
+
+describe('memory outside the V8 heap', () => {
+  it('the script context has no binary types (their memory is off the heap)', async () => {
+    const out = await runIsolatedScript(
+      `data.seen = ${JSON.stringify(OFF_HEAP_GLOBALS)}.filter((k) => typeof globalThis[k] !== 'undefined')`,
+      {},
+      quietLog()
+    )
+    expect(out.seen).toEqual([])
+  })
+
+  it('a script allocating large ArrayBuffers fails cleanly', async () => {
+    await expect(
+      runIsolatedScript(
+        'const keep = []; for (let i = 0; i < 64; i++) keep.push(new ArrayBuffer(256 * 1024 * 1024)); return data',
+        {},
+        quietLog()
+      )
+    ).rejects.toThrow('ArrayBuffer is not defined')
+    expect(scriptGateState()).toEqual({ active: 0, waiting: 0 })
+  })
+
+  it('the RSS watch stops a process whose memory passes the limit outside V8', async () => {
+    const child = spawn(
+      process.execPath,
+      ['-e', 'const b = Buffer.alloc(256 * 1024 * 1024, 1); setTimeout(() => b.length, 20000)'],
+      { stdio: 'ignore' }
+    )
+    try {
+      const over = await new Promise<boolean>((resolve) => {
+        const stop = watchRss(child.pid as number, (64 + RSS_MARGIN_MB) * 1024 * 1024, () =>
+          resolve(true)
+        )
+        setTimeout(() => {
+          stop()
+          resolve(false)
+        }, 15_000)
+      })
+      expect(over).toBe(true)
+    } finally {
+      child.kill('SIGKILL')
+    }
+  }, 20_000)
+
+  it('reads the resident memory of a running process', async () => {
+    expect(await readRssBytes(process.pid)).toBeGreaterThan(1024 * 1024)
   })
 })
 
