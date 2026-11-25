@@ -29,7 +29,9 @@ const roles: TargetView['roles'] = [
     },
     metrics: ['cpu_pct', 'memory_pct', 'requests_per_min', 'p95_ms', 'heavy_queue'],
     max_hits: 0,
-    last_change_at: '2026-11-25T14:10:00.000Z'
+    last_change_at: '2026-11-25T14:10:00.000Z',
+    paused_at: null,
+    paused_reason: null
   },
   {
     role: 'worker',
@@ -43,7 +45,9 @@ const roles: TargetView['roles'] = [
     auto: null,
     metrics: [],
     max_hits: 0,
-    last_change_at: null
+    last_change_at: null,
+    paused_at: null,
+    paused_reason: null
   },
   {
     role: 'realtime',
@@ -57,7 +61,9 @@ const roles: TargetView['roles'] = [
     auto: null,
     metrics: ['cpu_pct', 'memory_pct'],
     max_hits: 0,
-    last_change_at: null
+    last_change_at: null,
+    paused_at: null,
+    paused_reason: null
   }
 ]
 
@@ -109,7 +115,7 @@ export const DETAIL: TargetDetail = {
       kind: 'environment',
       processes: { from: 7, to: 7 },
       per_process: 70,
-      pools: { main: 60, background: 10 },
+      pools: { main: 60, background: 10, probe: 1 },
       total: { from: 490, to: 490 },
       servers: [
         {
@@ -123,7 +129,8 @@ export const DETAIL: TargetDetail = {
           fits: true
         }
       ],
-      unknown: []
+      unknown: [],
+      limit_unknown: false
     },
     blockers: [],
     warnings: [],

@@ -124,6 +124,41 @@ describe('HubScale', () => {
     expect(body.auto.metrics).toEqual([{ metric: 'cpu_pct', out_above: 70, in_below: 25 }])
   })
 
+  it('a rule that paused itself offers Resume rule; an unknown limit offers Set the limit', async () => {
+    const paused = {
+      ...DETAIL,
+      roles: DETAIL.roles.map((r) =>
+        r.role === 'web'
+          ? {
+              ...r,
+              paused_at: '2026-11-25T15:00:00.000Z',
+              paused_reason: 'Autoscaling stopped after 3 failed changes in a row (SPEC_MISMATCH).'
+            }
+          : r
+      ),
+      now: { ...DETAIL.now, connections: { ...DETAIL.now.connections, limit_unknown: true } }
+    }
+    h.get.mockImplementation(async (url: string) => {
+      if (url === '/hub/scale') return { data: { data: OVERVIEW } }
+      if (url === '/hub/scale/targets/environment/1') return { data: { data: paused } }
+      if (url === '/hub/scale/db-servers') return { data: { data: [] } }
+      throw new Error(url)
+    })
+    h.put.mockResolvedValue({ data: { data: DETAIL } })
+    mount('/hub/scale?target=environment:1')
+    expect(await screen.findByText('Autoscaling paused itself')).toBeTruthy()
+    expect(screen.getByText(/3 failed changes in a row/)).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Set the limit' }).getAttribute('href')).toBe(
+      '#scale-db-limits'
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Resume rule' }))
+    await waitFor(() =>
+      expect(h.put).toHaveBeenCalledWith('/hub/scale/targets/environment/1/roles/web', {
+        resume: true
+      })
+    )
+  })
+
   it('is for administrators only', () => {
     h.admin = false
     mount()

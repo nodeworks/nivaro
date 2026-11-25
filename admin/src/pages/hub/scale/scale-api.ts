@@ -58,6 +58,9 @@ export interface RoleView {
   metrics: Metric[]
   max_hits: number
   last_change_at: string | null
+  /** The rule paused itself after repeated failed runs; Resume rule lifts it. */
+  paused_at: string | null
+  paused_reason: string | null
   running?: { desired: number; running: number } | null
 }
 
@@ -108,11 +111,13 @@ export interface ConnMath {
   kind: TargetKind
   processes: { from: number; to: number }
   per_process: number
-  pools?: { main: number; background: number }
+  pools?: { main: number; background: number; probe: number }
   budget?: { per_process: number; used: number }
   total: { from: number; to: number }
   servers: ServerMath[]
   unknown: string[]
+  /** A server limit (or the database record) is unknown. */
+  limit_unknown: boolean
 }
 
 export interface RoleFigures {
@@ -219,7 +224,7 @@ export const saveRole = (
   kind: TargetKind,
   id: number,
   role: RoleName,
-  body: { pinned?: boolean; auto?: AutoRule | null }
+  body: { pinned?: boolean; auto?: AutoRule | null; resume?: boolean }
 ) =>
   api
     .put<{ data: TargetDetail }>(`/hub/scale/targets/${kind}/${id}/roles/${role}`, body)

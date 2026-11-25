@@ -271,8 +271,10 @@ function TargetPanel({ kind, id }: { kind: TargetKind; id: number }) {
     void qc.invalidateQueries({ queryKey: scaleKeys.all })
   }
   const save = useMutation({
-    mutationFn: (v: { role: RoleView; body: { pinned?: boolean; auto?: AutoRule | null } }) =>
-      saveRole(kind, id, v.role.role, v.body),
+    mutationFn: (v: {
+      role: RoleView
+      body: { pinned?: boolean; auto?: AutoRule | null; resume?: boolean }
+    }) => saveRole(kind, id, v.role.role, v.body),
     onSuccess: (data, v) => {
       qc.setQueryData(scaleKeys.detail(kind, id), data)
       void qc.invalidateQueries({ queryKey: scaleKeys.overview() })
@@ -280,6 +282,7 @@ function TargetPanel({ kind, id }: { kind: TargetKind; id: number }) {
         setRuleFor(null)
         toast.success(v.body.auto ? 'Rule saved' : 'Rule removed')
       }
+      if (v.body.resume) toast.success('Rule resumed')
     },
     onError: (err) => hubToast(err, 'Could not save')
   })
@@ -328,6 +331,58 @@ function TargetPanel({ kind, id }: { kind: TargetKind; id: number }) {
       )}
       {d.now.warnings.length > 0 && !editing && (
         <Notice tone='quiet' items={d.now.warnings} title='Good to know' />
+      )}
+      {d.roles.some((r) => r.paused_at) && (
+        <div role='status' className={cn('rounded-lg border px-3 py-2.5 text-[12px]', TONE.warn)}>
+          <p className='m-0 flex items-center gap-1.5 font-medium'>
+            <AlertTriangle className='h-3.5 w-3.5 shrink-0' aria-hidden /> Autoscaling paused itself
+          </p>
+          <ul className='m-0 mt-1 list-none space-y-1.5 p-0'>
+            {d.roles
+              .filter((r) => r.paused_at)
+              .map((r) => (
+                <li key={r.role} className='flex flex-wrap items-center gap-x-3 gap-y-1'>
+                  <span className='min-w-0 flex-1'>
+                    {ROLE_WORDS[r.role]}: {r.paused_reason ?? 'repeated failed changes.'}
+                  </span>
+                  <button
+                    type='button'
+                    className={cn(
+                      smallButton,
+                      'bg-white text-slate-800 shadow-sm hover:bg-slate-50 dark:bg-card dark:text-foreground dark:hover:bg-muted'
+                    )}
+                    disabled={save.isPending}
+                    onClick={() => save.mutate({ role: r, body: { resume: true } })}
+                  >
+                    Resume rule
+                  </button>
+                </li>
+              ))}
+          </ul>
+        </div>
+      )}
+      {d.autoscaling && d.now.connections.limit_unknown && (
+        <div role='status' className={cn('rounded-lg border px-3 py-2.5 text-[12px]', TONE.warn)}>
+          <p className='m-0 flex flex-wrap items-center gap-x-3 gap-y-1'>
+            <span className='min-w-0 flex-1'>
+              <span className='font-medium'>Autoscaling cannot add processes.</span>{' '}
+              {d.now.connections.unknown.length
+                ? 'The Hub has no database record for this stack’s database, so it cannot check new connections against a limit.'
+                : 'The database server’s connection limit is not set, so the Hub cannot check new connections against it. Scaling in still runs.'}
+            </span>
+            {!d.now.connections.unknown.length && (
+              <a
+                href='#scale-db-limits'
+                className={cn(
+                  smallButton,
+                  'bg-white text-slate-800 shadow-sm hover:bg-slate-50 dark:bg-card dark:text-foreground dark:hover:bg-muted'
+                )}
+              >
+                Set the limit
+              </a>
+            )}
+          </p>
+        </div>
       )}
       {d.maxed && (
         <Notice
@@ -632,6 +687,7 @@ function usePhone(): boolean {
 function ruleSummary(r: RoleView): string {
   if (!r.auto) return 'Add a rule'
   if (!r.auto.enabled) return 'Rule off'
+  if (r.paused_at) return 'Paused'
   const bits = [`${r.auto.min}–${r.auto.max}`]
   if (r.auto.metrics.length)
     bits.push(r.auto.metrics.map((m) => METRIC_WORDS[m.metric].label).join(', '))
@@ -1000,7 +1056,7 @@ function ConnectionsTable({ c }: { c: ConnMath }) {
             c.kind === 'shared' && c.budget
               ? `${c.per_process} of ${c.budget.per_process}`
               : c.pools
-                ? `${c.per_process} (${c.pools.main} + ${c.pools.background})`
+                ? `${c.per_process} (${c.pools.main} + ${c.pools.background} + ${c.pools.probe} probe)`
                 : String(c.per_process)
           }
           tip={
@@ -1227,47 +1283,50 @@ function DbServersCard() {
     )
   if (!servers.data.length) return null
   return (
-    <SectionCard
-      title='Database server limits'
-      description='Each server’s max connections. A plan that would pass it is refused; without one the Hub only warns.'
-    >
-      <ul className='m-0 list-none divide-y divide-slate-100 p-0 dark:divide-border/60'>
-        {servers.data.map((s) => {
-          const value = draft[s.id] ?? (s.max_connections == null ? '' : String(s.max_connections))
-          const dirty = draft[s.id] !== undefined
-          const n = value === '' ? null : Number(value)
-          const bad = n !== null && !(Number.isInteger(n) && n >= 1 && n <= 1_000_000)
-          return (
-            <li key={s.id} className='flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5'>
-              <span className='min-w-0 flex-1'>
-                <span className='block text-[13px] font-medium text-slate-900 dark:text-foreground'>
-                  {s.name}
+    <div id='scale-db-limits' className='scroll-mt-4'>
+      <SectionCard
+        title='Database server limits'
+        description='Each server’s max connections, checked by scaling. A change past it is refused; without one autoscaling adds no processes and a change by hand asks for the key.'
+      >
+        <ul className='m-0 list-none divide-y divide-slate-100 p-0 dark:divide-border/60'>
+          {servers.data.map((s) => {
+            const value =
+              draft[s.id] ?? (s.max_connections == null ? '' : String(s.max_connections))
+            const dirty = draft[s.id] !== undefined
+            const n = value === '' ? null : Number(value)
+            const bad = n !== null && !(Number.isInteger(n) && n >= 1 && n <= 1_000_000)
+            return (
+              <li key={s.id} className='flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5'>
+                <span className='min-w-0 flex-1'>
+                  <span className='block text-[13px] font-medium text-slate-900 dark:text-foreground'>
+                    {s.name}
+                  </span>
+                  <span className='block truncate text-[11px] text-slate-500 dark:text-muted-foreground'>
+                    {s.engine} · {s.host}
+                  </span>
                 </span>
-                <span className='block truncate text-[11px] text-slate-500 dark:text-muted-foreground'>
-                  {s.engine} · {s.host}
-                </span>
-              </span>
-              <Input
-                type='number'
-                aria-label={`${s.name} max connections`}
-                placeholder='Not set'
-                className='h-8 w-28 text-[13px] tabular-nums'
-                value={value}
-                min={1}
-                onChange={(e) => setDraft((x) => ({ ...x, [s.id]: e.target.value }))}
-              />
-              <button
-                type='button'
-                className={ghostButton}
-                disabled={!dirty || bad || save.isPending}
-                onClick={() => save.mutate({ id: s.id, max: n })}
-              >
-                Save
-              </button>
-            </li>
-          )
-        })}
-      </ul>
-    </SectionCard>
+                <Input
+                  type='number'
+                  aria-label={`${s.name} max connections`}
+                  placeholder='Not set'
+                  className='h-8 w-28 text-[13px] tabular-nums'
+                  value={value}
+                  min={1}
+                  onChange={(e) => setDraft((x) => ({ ...x, [s.id]: e.target.value }))}
+                />
+                <button
+                  type='button'
+                  className={ghostButton}
+                  disabled={!dirty || bad || save.isPending}
+                  onClick={() => save.mutate({ id: s.id, max: n })}
+                >
+                  Save
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+      </SectionCard>
+    </div>
   )
 }
