@@ -136,7 +136,9 @@ export function ToneChip({
       )}
     >
       {Icon && <Icon className='h-3 w-3 shrink-0' aria-hidden />}
-      <span className='truncate'>{children}</span>
+      <span className='inline-flex min-w-0 items-center gap-1 overflow-hidden whitespace-nowrap'>
+        {children}
+      </span>
     </span>
   )
 }
