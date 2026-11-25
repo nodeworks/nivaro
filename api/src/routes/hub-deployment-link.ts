@@ -374,6 +374,8 @@ export async function hubDeploymentLinkRoutes(app: FastifyInstance): Promise<voi
   //        the app's file; a pull that passes its own deadline removes its copy and fails.
   // POST   /apps/:id/database/sum → 202 {job} (a source, before release): result {sha256, bytes}
   // GET    /apps/:id/database/jobs/:job → {job}: state running | done | failed, result, code
+  // DELETE /apps/:id/database/jobs/:job → {cancelled}: the Hub gave up (review 5 M1); a running
+  //        pull is aborted and never puts its copy in place
   // DELETE /apps/:id/database {sha256} → {discarded}: a rollback before release throws the copy
   //        away (only the copy whose checksum it names; under the file's lock).
   const databaseRefusal = (reply: FastifyReply, err: unknown, what: string) => {
@@ -407,13 +409,19 @@ export async function hubDeploymentLinkRoutes(app: FastifyInstance): Promise<voi
         ? b.move_id
         : null
     try {
-      const job = await withTenant(
-        t,
-        async () =>
-          startDatabaseJob(t.id, 'pull', moveId ? `move:${moveId}` : `pull:${Date.now()}`, () =>
-            pullDatabaseShared(t, { source: b.source as string, ticket: b.ticket as string })
-          ),
-        t.origin
+      // Review 5 H1: no tenant pool here — a move's target has no database file until this pull
+      // puts the copy in place (its pool opens after the install, from the app's next request).
+      // M1: right before the install, the app is read again from the list.
+      const job = startDatabaseJob(
+        t.id,
+        'pull',
+        moveId ? `move:${moveId}` : `pull:${Date.now()}`,
+        (signal) =>
+          pullDatabaseShared(
+            t,
+            { source: b.source as string, ticket: b.ticket as string },
+            { signal, current: () => tenantById(registry, t.id) }
+          )
       )
       return reply.code(202).send({ job })
     } catch (err) {
@@ -453,6 +461,22 @@ export async function hubDeploymentLinkRoutes(app: FastifyInstance): Promise<voi
       const job = JOB_ID_RE.test(req.params.job) ? readDatabaseJob(t.id, req.params.job) : null
       if (!job) return refuse(reply, 404, 'No such database job here', 'UNKNOWN_JOB')
       return reply.send({ job })
+    }
+  )
+
+  app.delete<{ Params: { id: string; job: string } }>(
+    '/apps/:id/database/jobs/:job',
+    async (req, reply) => {
+      const registry = registryOr503(reply)
+      if (!registry) return reply
+      const { cancelDatabaseJob, JOB_ID_RE } = await import(
+        '../services/hub-transfer/database-jobs.js'
+      )
+      // An app no longer listed has had its jobs aborted already (forgetDatabaseJobs).
+      const ok = JOB_ID_RE.test(req.params.job)
+      return reply.send({
+        cancelled: ok ? cancelDatabaseJob(req.params.id, req.params.job) : false
+      })
     }
   )
 
