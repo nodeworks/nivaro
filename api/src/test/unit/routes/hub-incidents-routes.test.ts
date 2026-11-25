@@ -385,7 +385,7 @@ describe('on-call and escalation', () => {
   })
 
   it('urgent Hub events go to on-call; no rota keeps the old fan-out', async () => {
-    const deliver = vi.fn(async (ids: string[]) => ids.length)
+    const deliver = vi.fn(async (ids: Array<string | null | undefined>) => ids.length)
     const page = (p: Parameters<typeof routeToOnCall>[0]) => routeToOnCall(p, { deliver })
     const sent = vi.fn(async () => null)
     // No rota → null → sendHubEvent delivers to owners + admins itself.

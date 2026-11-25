@@ -447,9 +447,9 @@ export function statusPageHtml(
 * { box-sizing: border-box; }
 body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
 main { max-width: 760px; margin: 0 auto; padding: 28px 16px 48px; }
-.brand { display:flex; align-items:center; gap:8px; font-size:12px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); }
+.brand { display:inline-flex; align-items:center; gap:6px; font-weight:600; color:var(--ink); }
 .brand i { width:10px; height:10px; border-radius:3px; background:var(--accent); display:inline-block; }
-h1 { font-size:24px; margin:8px 0 16px; letter-spacing:-.01em; }
+h1 { font-size:24px; margin:0 0 16px; letter-spacing:-.01em; }
 .overall { display:flex; align-items:center; gap:10px; padding:14px 16px; border-radius:10px; background:var(--card); border:1px solid var(--line); font-weight:600; }
 .overall.ok { background:color-mix(in srgb, var(--ok) 9%, var(--card)); border-color:color-mix(in srgb, var(--ok) 35%, var(--line)); } .overall.warn { background:color-mix(in srgb, var(--warn) 10%, var(--card)); border-color:color-mix(in srgb, var(--warn) 40%, var(--line)); } .overall.bad { background:color-mix(in srgb, var(--bad) 9%, var(--card)); border-color:color-mix(in srgb, var(--bad) 40%, var(--line)); }
 ul { list-style:none; margin:0; padding:0; }
@@ -474,12 +474,11 @@ footer { margin-top:28px; font-size:12.5px; color:var(--muted); }
 @media (max-width: 480px) { .bars { gap:1px; } .when { min-width:0; } h1 { font-size:21px; } }
 </style></head>
 <body><main>
-<div class="brand"><i aria-hidden="true"></i>${esc(product)}</div>
 <h1>${esc(a.name)}</h1>
 <div class="overall ${TONE[a.overall]}" role="status"><span class="dot ${TONE[a.overall]}" aria-hidden="true"></span>${esc(a.overall_word)}</div>
 <ul class="apps">${apps}</ul>
 ${planned}
-<footer>Updated ${esc(when(a.updated_at))}. This page refreshes every minute.</footer>
+<footer><span class="brand"><i aria-hidden="true"></i>${esc(product)}</span> · Updated ${esc(when(a.updated_at))}. This page refreshes every minute.</footer>
 </main></body></html>`
 }
 
