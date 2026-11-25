@@ -41,6 +41,10 @@ function makeHandlers(): Handlers & { calls: unknown[][] } {
       calls.push(['restart', name, body])
       return { status: 202, body: { services: [] } }
     },
+    scaleStack: async (name, body) => {
+      calls.push(['scale', name, body])
+      return { status: 202, body: { spec_hash: 'h', changed: [], unchanged: [], already: false } }
+    },
     leftovers: async (name, q) => {
       calls.push(['leftovers', name, q])
       return { status: 200, body: {} }
@@ -145,14 +149,14 @@ function req(
 }
 
 describe('the version the agent reports', () => {
-  it('is 0.2.2 (exporter role, split shared owners) and matches package.json', () => {
+  it('is 0.2.4 (the scale endpoint) and matches package.json', () => {
     const pkg = JSON.parse(
       fs.readFileSync(
         path.join(path.dirname(new URL(import.meta.url).pathname), '../package.json'),
         'utf8'
       )
     ) as { version: string }
-    expect(AGENT_VERSION).toBe('0.2.3')
+    expect(AGENT_VERSION).toBe('0.2.4')
     expect(pkg.version).toBe(AGENT_VERSION)
   })
 })
@@ -226,6 +230,10 @@ describe('routing', () => {
       (await req('POST', '/v1/stacks/acme-prod/restart', { body: '{"environment":"prod"}' })).status
     ).toBe(202)
     expect((await req('POST', '/v1/stacks/acme-prod/restart')).status).toBe(400)
+    expect((await req('POST', '/v1/stacks/acme-prod/scale', { body: '{"roles":[]}' })).status).toBe(
+      202
+    )
+    expect((await req('GET', '/v1/stacks/acme-prod/scale')).status).toBe(405)
     expect(
       (
         await req(
@@ -243,6 +251,7 @@ describe('routing', () => {
       ['get', 'acme-prod', { expect: 'abc' }],
       ['put', 'acme-prod', { environment: 'prod' }],
       ['restart', 'acme-prod', { environment: 'prod' }],
+      ['scale', 'acme-prod', { roles: [] }],
       [
         'delete',
         'acme-prod',

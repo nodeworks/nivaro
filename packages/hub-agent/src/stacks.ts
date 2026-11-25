@@ -976,6 +976,83 @@ export async function restartStack(
   return { services: rendered.map((s) => s.Name).sort() }
 }
 
+// ── scale (0.2.4) ───────────────────────────────────────────────────────
+
+export type ScaleResult = ApplyResult & {
+  /** true = the stack already ran the scaled spec: nothing was sent (a repeated request). */
+  already: boolean
+}
+
+/**
+ * Scale (0.2.4): `spec` is the StackSpec the stack runs now, `next` the same spec with only the
+ * replica counts and limits of roles it already runs replaced (scale.ts builds and validates it).
+ * Judged like a restart: ownership, owner and hostnames from a fresh read, the live stack hash
+ * must be `spec`'s — or already `next`'s, which answers `already` and writes nothing, so a Hub
+ * that lost the answer can send the same request again — and it creates nothing (every secret,
+ * extension folder and service must be there; else 409 SPEC_MISMATCH). Bodies are rendered fresh
+ * from `next` like an apply's; a service whose own hash changes is updated (replicas alone: swarm
+ * adds or stops tasks and restarts none; limits: a rolling update, one task at a time,
+ * start-first, rollback on failure), the others only get the new stack hash on their labels.
+ */
+export async function scaleStack(
+  engine: Engine,
+  cfg: AgentConfig,
+  name: string,
+  spec: StackSpec,
+  next: StackSpec,
+  deps: StackDeps
+): Promise<ScaleResult> {
+  assertName(name)
+  const { network, mine, mySecrets } = await survey(engine, name, next)
+  if (mine.length === 0) throw notFound()
+  const from = stackHash(spec, cfg, deps.nodeId)
+  const to = stackHash(next, cfg, deps.nodeId)
+  const live = new Set(mine.map((s) => labelsOf(s)[LABEL_SPEC_HASH] ?? ''))
+  const names = mine.map(nameOf).sort()
+  if (live.size === 1 && live.has(to))
+    return { spec_hash: to, changed: [], unchanged: names, already: true }
+  if (live.size !== 1 || !live.has(from)) throw specMismatch()
+
+  const existing = new Map<string, string>()
+  for (const s of mySecrets) if (s.Spec?.Name) existing.set(s.Spec.Name, s.ID)
+  const secretIds: Record<string, { id: string; name: string }> = {}
+  for (const key of Object.keys(next.secrets).sort()) {
+    const sn = secretName(name, key, next.secrets[key], cfg.hmacKey)
+    const id = existing.get(sn)
+    if (!id) throw specMismatch()
+    secretIds[key] = { id, name: sn }
+  }
+  let caBundle: { id: string; name: string } | null = null
+  if (cfg.caBundle) {
+    const sn = caBundleSecretName(name, cfg.caBundle.sha256)
+    const id = existing.get(sn)
+    if (!id) throw specMismatch()
+    caBundle = { id, name: sn }
+  }
+  const extensionPaths: Record<string, string> = {}
+  for (const id of Object.keys(next.extensions).sort()) {
+    const path = await existingExtension(cfg, name, id, next.extensions[id])
+    if (!path) throw specMismatch()
+    extensionPaths[id] = path
+  }
+  const rendered = render(name, next, cfg, deps, to, network, secretIds, extensionPaths, caBundle)
+  const current = new Map(mine.map((s) => [nameOf(s), s]))
+  if (rendered.length !== mine.length || rendered.some((svc) => !current.has(svc.Name)))
+    throw specMismatch()
+
+  const changed: string[] = []
+  const unchanged: string[] = []
+  for (const svc of rendered) {
+    const cur = current.get(svc.Name) as ServiceRow
+    const sameService = labelsOf(cur)[LABEL_SERVICE_HASH] === svc.Labels[LABEL_SERVICE_HASH]
+    // The live ForceUpdate rides along (as in apply): sending 0 back would restart the tasks.
+    const body = withForceUpdate(svc, liveForceUpdate(cur))
+    await updateService(engine, body, cur.Version?.Index, authFor(cfg, svc), next.uploads_folder)
+    ;(sameService ? unchanged : changed).push(svc.Name)
+  }
+  return { spec_hash: to, changed: changed.sort(), unchanged: unchanged.sort(), already: false }
+}
+
 // ── status / list ───────────────────────────────────────────────────────
 
 function updateState(s: ServiceRow): ServiceUpdateState {
