@@ -427,7 +427,16 @@ export const CORE_KEEPS: readonly EnvKeepEntry[] = [
       'nivaro_hub_moves',
       'nivaro_hub_capacity_samples',
       'nivaro_hub_app_limits',
-      'nivaro_hub_rebalances'
+      'nivaro_hub_rebalances',
+      // Hub release operations (565): trains, schedules, freezes, rollback rules and watches,
+      // release notes, learned version facts
+      'nivaro_hub_trains',
+      'nivaro_hub_schedules',
+      'nivaro_hub_freezes',
+      'nivaro_hub_rollback_rules',
+      'nivaro_hub_rollback_watches',
+      'nivaro_hub_release_notes',
+      'nivaro_hub_version_facts'
     ] as const
   ).map(
     (table): EnvKeepEntry => ({

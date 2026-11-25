@@ -264,7 +264,15 @@ export const hubLinkDocs: DocSection = {
           '`readiness_score`',
           'The cached readiness score, never a live run; null while not yet computed or when the preflight timed out.'
         ],
-        ['`process`', 'Uptime, memory in MB and database pool figures (used, free, pending).']
+        ['`process`', 'Uptime, memory in MB and database pool figures (used, free, pending).'],
+        [
+          '`recent` (only with `?recent_minutes=N`, 1–60)',
+          'Counts over the last N minutes: requests answered, 5xx answers, front-end crash reports. Read by automatic rollback rules (see Hub release operations).'
+        ],
+        [
+          '`release_facts` (only with `?release_facts=1`)',
+          'The migration names this build ships and the setting names it knows. The Hub diffs two versions for release notes.'
+        ]
       ]
     },
     { type: 'h2', id: 'hub-link-never', text: 'What it never returns' },

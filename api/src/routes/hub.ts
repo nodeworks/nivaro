@@ -103,6 +103,7 @@ import { hubCapacityRoutes } from './hub-capacity.js'
 import { hubPhase3Routes } from './hub-create.js'
 import { hubDockerRoutes } from './hub-docker.js'
 import { hubMoveRoutes } from './hub-move.js'
+import { hubReleaseRoutes } from './hub-releases.js'
 import { hubSharedRoutes } from './hub-shared.js'
 import { hubSharedTenantsRoutes } from './hub-shared-tenants.js'
 import { hubSharedUpgradeRoutes } from './hub-shared-upgrade.js'
@@ -138,6 +139,7 @@ export async function hubRoutes(app: FastifyInstance) {
   hubSharedUpgradeRoutes(app) // phase 6: shared stack deploy/upgrade/rollback (Task 5)
   hubMoveRoutes(app) // phase 6: moves between shared and dedicated placements (+ boot heal)
   hubCapacityRoutes(app) // capacity view, move advisor, per-app limits, rebalance
+  hubReleaseRoutes(app) // release trains, schedules, freezes, auto-rollback, release notes
 }
 
 const APPS = 'nivaro_hub_apps'
@@ -1428,6 +1430,10 @@ function promotionRoutes(app: FastifyInstance) {
         item: String(started.deployId),
         req
       })
+      // Release notes of the run (GitLab compare, build facts): stored once, never awaited.
+      void import('../services/hub/releases/notes.js')
+        .then((m) => m.recordReleaseNotes(started.deployId))
+        .catch(() => undefined)
       return reply
         .code(202)
         .send({ data: { deploy_id: started.deployId, job_run_id: started.jobRunId } })

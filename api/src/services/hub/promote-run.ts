@@ -53,6 +53,7 @@ import type {
   PromotionPlan,
   PromotionStep
 } from './promote-types.js'
+import { freezeRefusal, rollbackExempt } from './releases/freeze.js'
 import { HubSecretError } from './secrets.js'
 import { hubStatusKey } from './status.js'
 
@@ -1112,6 +1113,15 @@ export async function startPromotion(
   // Gap `create` (review L4): an environment still being created is the creation's.
   const creating = await creationOpenRefusal(envId)
   if (creating) throw new PromotionError(creating.code, creating.message, creating.status)
+  // Release operations: a freeze window stops promotions and Apply now. A rollback is judged
+  // after gather (only one to an OLDER version than the running one is exempt).
+  if (req.kind !== 'rollback') {
+    const frozen = await freezeRefusal({
+      appIds: [Number(env.app_id)],
+      action: req.apply === true ? 'apply' : 'promote'
+    })
+    if (frozen) throw new PromotionError(frozen.code, frozen.message, frozen.status)
+  }
   if (req.kind !== 'promote' && req.kind !== 'rollback')
     throw new PromotionError('BAD_KIND', 'kind must be promote or rollback')
   const apply = req.apply === true
@@ -1164,6 +1174,10 @@ export async function startPromotion(
       lockHeld: true,
       ...(apply ? { apply: true } : {})
     })
+    if (req.kind === 'rollback' && !rollbackExempt(req.version, input.targetVersion)) {
+      const frozen = await freezeRefusal({ appIds: [Number(env.app_id)], action: 'promote' })
+      if (frozen) throw new PromotionError(frozen.code, frozen.message, frozen.status)
+    }
     const plan = buildPromotionPlan(input)
     if (!plan.ok)
       throw new PromotionError(plan.blockers[0].code, plan.blockers[0].text, 409, plan.blockers)
