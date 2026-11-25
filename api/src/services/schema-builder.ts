@@ -41,6 +41,7 @@ import {
   takeNestedQuery
 } from './graphql-nested-guard.js'
 import { graphqlStrictMutations, missingIds, notFoundError } from './graphql-strict.js'
+import { hubGraphQLFields } from './hub/api/graphql.js'
 import {
   AGGREGATE_FUNCTIONS,
   type AggregateFunction,
@@ -2045,6 +2046,12 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
   // Merge domain fields (workflow, pipeline, users, activity, files, settings)
   Object.assign(queryFields, domainQueryFields)
   Object.assign(mutationFields, domainMutationFields)
+  // The Nivaro Hub's `hub` namespace — only on a Hub (HUB=on); absent from every other schema.
+  const hubFields = hubGraphQLFields()
+  if (hubFields) {
+    queryFields.hub = hubFields.query as (typeof queryFields)[string]
+    mutationFields.hub = hubFields.mutation as (typeof mutationFields)[string]
+  }
 
   // ── Workflow mutations (#601) ──────────────────────────────────────────────
   // Same service layer as POST /pipelines/instance/:c/:i/start|transition —
