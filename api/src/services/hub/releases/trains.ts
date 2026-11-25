@@ -1,5 +1,6 @@
 import { db } from '../../../db/index.js'
 import { logActivity } from '../../activity.js'
+import { isChecklistWait } from '../changes/checklist.js'
 import { readHubDeploy } from '../promote-run.js'
 import type { EnvFigures } from './figures.js'
 import { readEnvFiguresById } from './figures.js'
@@ -281,7 +282,7 @@ export interface TrainDeps {
     id: number
   ): Promise<{ status: string; finished_at: string | null; error: string | null } | null>
   figures(envId: number): Promise<EnvFigures>
-  freeze(appId: number): Promise<FreezeRefusal | null>
+  freeze(appId: number, envId?: number | null): Promise<FreezeRefusal | null>
   /** A rollback of the environment ran after deploy `afterId` (automatic or by hand). */
   rolledBack(envId: number, afterId: number): Promise<boolean>
   /** When the environment last finished a successful deploy of `version` (ALREADY_RUNS). */
@@ -364,7 +365,7 @@ export function defaultTrainDeps(): TrainDeps {
       return r ? { status: r.status, finished_at: iso(r.finished_at), error: r.error } : null
     },
     figures: (envId) => readEnvFiguresById(envId),
-    freeze: (appId) => freezeRefusal({ appIds: [appId], action: 'promote' }),
+    freeze: (appId, envId) => freezeRefusal({ appIds: [appId], action: 'promote', envId }),
     rolledBack: async (envId, afterId) =>
       !!(await db(DEPLOYS)
         .where({ environment_id: envId, kind: 'rollback' })
@@ -502,9 +503,12 @@ async function stepOnce(t: Train, deps: TrainDeps): Promise<Step> {
     case 'held':
       return 'wait'
     case 'pending': {
-      const frozen = await deps.freeze(t.app_id)
+      const frozen = await deps.freeze(t.app_id, s.environment_id)
       if (frozen) {
-        const note = `Waiting for the freeze to end: ${frozen.message}`
+        const note =
+          frozen.code === 'OUTSIDE_WINDOW'
+            ? `Waiting for the deploy window: ${frozen.message}`
+            : `Waiting for the freeze to end: ${frozen.message}`
         if (s.note !== note) await mutateTrain(t.id, stepPatch(idx, 'pending', { note }))
         return 'wait'
       }
@@ -564,7 +568,8 @@ async function stepOnce(t: Train, deps: TrainDeps): Promise<Step> {
         const out = await deps.start(s.environment_id, {
           kind: 'promote',
           version: t.version,
-          userId: t.started_by
+          userId: t.started_by,
+          checklist: { kind: 'train', id: t.id, step: idx }
         })
         await mutateTrain(
           t.id,
@@ -592,7 +597,13 @@ async function stepOnce(t: Train, deps: TrainDeps): Promise<Step> {
           )
           return 'again'
         }
-        const retry = code === 'FROZEN' || (isTransientCode(code) && s.attempts + 1 < MAX_ATTEMPTS)
+        // A freeze, a closed deploy window or a production checklist not ticked yet holds the
+        // step (never fails it); other passing refusals use up tries.
+        const retry =
+          code === 'FROZEN' ||
+          code === 'OUTSIDE_WINDOW' ||
+          isChecklistWait(code) ||
+          (isTransientCode(code) && s.attempts + 1 < MAX_ATTEMPTS)
         await mutateTrain(
           t.id,
           stepPatch(idx, 'starting', {

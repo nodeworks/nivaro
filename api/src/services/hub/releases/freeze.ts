@@ -12,7 +12,9 @@ import { daysInMonth, isTimeZone, zonedMidnightUtc, zonedParts } from './zoned.j
  *                            calendar of `time_zone` (a month end in New York is not UTC's)
  *
  * The judgement is pure (activeWindow); freezeRefusal reads the rows and answers the refusal a
- * route or a runner sends (409 FROZEN), or null.
+ * route or a runner sends (409 FROZEN), or null. It is the ONE release-time rule engine: after
+ * the freezes it judges the deploy windows (windows.ts, allowed times) for promote and apply
+ * (409 OUTSIDE_WINDOW), so every caller honours both.
  */
 
 export const FREEZES = 'nivaro_hub_freezes'
@@ -139,8 +141,12 @@ const ACTION_WORDS: Record<FrozenAction, string> = {
 
 export interface FreezeRefusal {
   status: 409 | 503
-  /** FREEZE_UNKNOWN: the windows could not be read (fails closed; a runner tries again). */
-  code: 'FROZEN' | 'FREEZE_UNKNOWN'
+  /**
+   * FREEZE_UNKNOWN: the windows could not be read (fails closed; a runner tries again).
+   * OUTSIDE_WINDOW: a deploy window governs the app and none is open (windows.ts); `ends_at` is
+   * then the next opening.
+   */
+  code: 'FROZEN' | 'FREEZE_UNKNOWN' | 'OUTSIDE_WINDOW'
   message: string
   freeze: { id: number; name: string; app_id: number | null; ends_at: string }
 }
@@ -203,6 +209,13 @@ export async function freezeRefusal(o: {
   action: FrozenAction
   now?: number
   rows?: HubFreeze[]
+  /**
+   * The environment the action deploys (deploy windows scoped to production judge it by THE
+   * production rule); omitted = production-only windows are not judged here.
+   */
+  envId?: number | null
+  /** Deploy windows handed in (tests); omitted with `rows` given = none. */
+  windows?: import('./windows.js').DeployWindow[]
 }): Promise<FreezeRefusal | null> {
   let rows = o.rows
   if (!rows) {
@@ -218,7 +231,17 @@ export async function freezeRefusal(o: {
     const r = refusalFor(o.action, activeFreezes(rows, appId, now)[0])
     if (r) return r
   }
-  return null
+  // The same engine's other half: deploy windows (allowed times) for promote and apply.
+  if (o.action !== 'promote' && o.action !== 'apply') return null
+  if (o.rows && !o.windows) return null
+  const { windowRefusal } = await import('./windows.js')
+  return windowRefusal({
+    appIds: o.appIds,
+    action: o.action,
+    now,
+    ...(o.envId != null ? { envId: o.envId } : {}),
+    ...(o.windows ? { rows: o.windows } : {})
+  })
 }
 
 /**
@@ -266,7 +289,7 @@ export async function environmentFreezeRefusal(
     return freezeUnknown()
   }
   if (appId == null) return null
-  return freezeRefusal({ appIds: [appId], action })
+  return freezeRefusal({ appIds: [appId], action, envId })
 }
 
 /**

@@ -101,6 +101,7 @@ import {
 } from '../services/hub/status.js'
 import { readJobLog } from '../services/job-runs.js'
 import { hubCapacityRoutes } from './hub-capacity.js'
+import { hubChangeRoutes } from './hub-changes.js'
 import { hubPhase3Routes } from './hub-create.js'
 import { hubDataRoutes } from './hub-data.js'
 import { hubDockerRoutes } from './hub-docker.js'
@@ -146,6 +147,7 @@ export async function hubRoutes(app: FastifyInstance) {
   hubPeopleRoutes(app) // people directory + offboarding, owner policy, phone (hub-people.ts)
   hubCapacityRoutes(app) // capacity view, move advisor, per-app limits, rebalance
   hubReleaseRoutes(app) // release trains, schedules, freezes, auto-rollback, release notes
+  hubChangeRoutes(app) // change calendar, deploy windows, pre-deploy checklists
   hubDataRoutes(app) // data care: backups, restore drills, refreshes, move rehearsals
 }
 
@@ -1435,7 +1437,9 @@ function promotionRoutes(app: FastifyInstance) {
         ...input,
         confirm: body(req).confirm,
         planHash: body(req).plan_hash,
-        user: { id: userId(req) }
+        user: { id: userId(req) },
+        // Pre-deploy checklist ticked for this production promotion (hub-changes.ts).
+        checklistRunId: body(req).checklist_run_id
       })
       await logActivity({
         action: 'hub-promote-start',

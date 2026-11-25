@@ -186,7 +186,9 @@ describe('release trains', () => {
     expect(raw.start).toHaveBeenCalledWith(env.staging, {
       kind: 'promote',
       version: '0.3.215',
-      userId: USER
+      userId: USER,
+      // The step names itself: a production checklist is opened for it and waited for.
+      checklist: { kind: 'train', id: t.id, step: 0 }
     })
     // Still deploying: nothing moves.
     cur = await trains.advanceTrain(t.id, deps)
@@ -450,7 +452,8 @@ describe('scheduled promotions', () => {
     expect(deps.startPromotion).toHaveBeenCalledWith(env.production, {
       kind: 'promote',
       version: '0.3.215',
-      userId: USER
+      userId: USER,
+      checklist: { kind: 'schedule', id: due.id }
     })
     expect(await schedules.readSchedule(due.id)).toMatchObject({ status: 'started', deploy_id: 77 })
     expect((await schedules.readSchedule(later.id))?.status).toBe('scheduled')
@@ -793,5 +796,62 @@ describe('automatic rollback', () => {
       status: 'rolled_back',
       rollback_deploy_id: rb
     })
+  })
+})
+
+// Hub change operations (573): a closed deploy window holds a schedule or a train step like a
+// freeze (next opening = wait_until); a production checklist not ticked yet holds without using
+// a try, and a train step waits on it instead of failing.
+describe('deploy windows and pre-deploy checklists in the runners', () => {
+  const OUTSIDE = {
+    ...FROZEN,
+    code: 'OUTSIDE_WINDOW',
+    message: 'Promotions are allowed only inside this app’s deploy windows',
+    freeze: { ...FROZEN.freeze, ends_at: new Date(clock + 90 * MIN).toISOString() }
+  }
+
+  it('a schedule outside its window waits for the opening (or fails, per on_freeze)', async () => {
+    const wait = await schedule()
+    const fail = await schedule({ on_freeze: 'fail' })
+    const deps = scheduleDeps({ freeze: vi.fn(async () => OUTSIDE) })
+    await schedules.runDueSchedules(deps)
+    const w = await schedules.readSchedule(wait.id)
+    expect(w).toMatchObject({ status: 'waiting' })
+    expect(w?.note).toMatch(/Waiting for the deploy window/)
+    const raw = await db('nivaro_hub_schedules').where({ id: wait.id }).first()
+    expect(raw.wait_until).toBeTruthy()
+    expect((await schedules.readSchedule(fail.id))?.error).toMatch(/^OUTSIDE_WINDOW/)
+    expect(deps.freeze).toHaveBeenCalledWith(appId, env.production)
+  })
+
+  it('a schedule waiting on its checklist keeps its tries', async () => {
+    const s = await schedule()
+    const refusal = Object.assign(new Error('Tick the required checklist items first'), {
+      code: 'CHECKLIST_INCOMPLETE'
+    })
+    const deps = scheduleDeps({ startPromotion: vi.fn(async () => Promise.reject(refusal)) })
+    await schedules.runDueSchedules(deps)
+    const row = await schedules.readSchedule(s.id)
+    expect(row).toMatchObject({ status: 'waiting', attempts: 0 })
+    expect(row?.note).toMatch(/pre-deploy checklist/)
+  })
+
+  it('a train step outside its window or waiting on its checklist holds, never fails', async () => {
+    const t = await newTrain([{ environment_id: env.production }])
+    const outside = trainDeps({ freeze: vi.fn(async () => OUTSIDE) as never })
+    let cur = await trains.advanceTrain(t.id, outside.deps)
+    expect(cur?.steps[0]).toMatchObject({ status: 'pending' })
+    expect(cur?.steps[0].note).toMatch(/deploy window/)
+    expect(outside.raw.start).not.toHaveBeenCalled()
+
+    const refusal = Object.assign(new Error('needs its pre-deploy checklist'), {
+      code: 'CHECKLIST_REQUIRED'
+    })
+    const waiting = trainDeps({ start: vi.fn(async () => Promise.reject(refusal)) as never })
+    cur = await trains.advanceTrain(t.id, waiting.deps)
+    expect(cur?.status).toBe('running')
+    expect(cur?.steps[0]).toMatchObject({ status: 'pending' })
+    expect(cur?.steps[0].note).toMatch(/CHECKLIST_REQUIRED/)
+    await trains.abortTrain(t.id, 'Rob')
   })
 })

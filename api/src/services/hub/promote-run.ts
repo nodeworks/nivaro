@@ -1105,6 +1105,13 @@ export async function startPromotion(
      * stack settings and pins. Confirmed by the typed key, like a restart: no plan preview.
      */
     apply?: boolean
+    /**
+     * Pre-deploy checklist (services/hub/changes/checklist.ts): the ticked checklist a person
+     * sends for a production promotion, or the unattended start (schedule, train step) whose
+     * checklist the gate opens and waits for. Rollbacks and Apply now never need one.
+     */
+    checklistRunId?: unknown
+    checklistSource?: { kind: 'schedule' | 'train'; id: number; step?: number | null }
   },
   deps: StartDeps = defaultStartDeps()
 ): Promise<{ deployId: number; jobRunId: number | null }> {
@@ -1125,7 +1132,8 @@ export async function startPromotion(
   if (req.kind !== 'rollback') {
     const frozen = await freezeRefusal({
       appIds: [Number(env.app_id)],
-      action: req.apply === true ? 'apply' : 'promote'
+      action: req.apply === true ? 'apply' : 'promote',
+      envId
     })
     if (frozen) throw new PromotionError(frozen.code, frozen.message, frozen.status)
   }
@@ -1166,7 +1174,27 @@ export async function startPromotion(
   let handedOff = false
   /** Every GitLab branch the run deploys, held for the whole run (review H1). */
   let branches: BranchHold | null = null
+  /** The pre-deploy checklist this start claimed (given back when it does not start). */
+  let checklist: import('./changes/checklist.js').ChecklistClaim | null = null
   try {
+    if (req.kind === 'promote' && !apply) {
+      const { checklistGate, ChecklistError } = await import('./changes/checklist.js')
+      const { notifyChecklistOpened } = await import('./changes/notify.js')
+      try {
+        checklist = await checklistGate({
+          target: { kind: 'environment', envId },
+          action: 'promote',
+          version: req.version,
+          runId: req.checklistRunId,
+          ...(req.checklistSource ? { source: req.checklistSource } : {}),
+          onOpened: notifyChecklistOpened
+        })
+      } catch (err) {
+        if (err instanceof ChecklistError)
+          throw new PromotionError(err.code, err.message, err.status)
+        throw err
+      }
+    }
     // A run of this environment alive in this process (its Redis lock may have vanished).
     if (liveHereFor(envId)) throw alreadyRunning()
     // We hold the lock now: a row still `running` here belongs to a process that lost it —
@@ -1184,7 +1212,11 @@ export async function startPromotion(
       ...(apply ? { apply: true } : {})
     })
     if (req.kind === 'rollback' && !rollbackExempt(req.version, input.targetVersion)) {
-      const frozen = await freezeRefusal({ appIds: [Number(env.app_id)], action: 'promote' })
+      const frozen = await freezeRefusal({
+        appIds: [Number(env.app_id)],
+        action: 'promote',
+        envId
+      })
       if (frozen) throw new PromotionError(frozen.code, frozen.message, frozen.status)
     }
     const plan = buildPromotionPlan(input)
@@ -1258,6 +1290,7 @@ export async function startPromotion(
     live.set(deployId, entry)
     markLive(deployId, envId)
     handedOff = true
+    if (checklist) await checklist.link('deploy', deployId).catch(() => undefined)
     entry.done = runInBackgroundPool(() =>
       runPromotion({
         deployId,
@@ -1285,6 +1318,7 @@ export async function startPromotion(
     return { deployId, jobRunId: run.id }
   } finally {
     if (!handedOff) {
+      await checklist?.release().catch(() => undefined)
       await branches?.release()
       await deps.lock.release(envId, token)
     }

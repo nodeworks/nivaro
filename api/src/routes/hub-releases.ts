@@ -484,7 +484,14 @@ export function hubReleaseRoutes(app: FastifyInstance): void {
   app.get('/environments/:envId/freeze', { preHandler: requireAuth }, async (req, reply) => {
     const env = await readableEnv(req)
     if (!env) return notFound(reply)
-    return { data: await freezeRefusal({ appIds: [Number(env.app_id)], action: 'promote' }) }
+    // The same engine judges deploy windows too (OUTSIDE_WINDOW), for this environment.
+    return {
+      data: await freezeRefusal({
+        appIds: [Number(env.app_id)],
+        action: 'promote',
+        envId: Number(env.id)
+      })
+    }
   })
 
   // ─── Automatic rollback rules ──────────────────────────────────────────────

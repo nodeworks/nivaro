@@ -290,7 +290,8 @@ export const HUB_ROUTES: HubRoute[] = [
       body: {
         ...PROMOTE_BODY,
         plan_hash: s('The plan’s hash (the plan you reviewed)', { required: true }),
-        confirm: s('The environment key, typed', { required: true })
+        confirm: s('The environment key, typed', { required: true }),
+        checklist_run_id: n('The ticked pre-deploy checklist (production promotions with one)')
       },
       sensitive: true,
       accepted: true
@@ -672,7 +673,14 @@ export const HUB_ROUTES: HubRoute[] = [
     'write',
     'Start an upgrade or rollback',
     {
-      body: { kind: s(), version: s(), plan_hash: s(), confirm: s(), overrides: list('string') },
+      body: {
+        kind: s(),
+        version: s(),
+        plan_hash: s(),
+        confirm: s(),
+        overrides: list('string'),
+        checklist_run_id: n('The ticked pre-deploy checklist (an upgrade carrying production apps)')
+      },
       sensitive: true,
       accepted: true
     }
@@ -720,7 +728,8 @@ export const HUB_ROUTES: HubRoute[] = [
       plan_hash: s(undefined, { required: true }),
       confirm: s('The environment key, typed', { required: true }),
       checklist: o(),
-      overrides: list('string')
+      overrides: list('string'),
+      checklist_run_id: n('The ticked pre-deploy checklist (production moves with one)')
     },
     sensitive: true,
     accepted: true
@@ -1508,6 +1517,178 @@ export const HUB_ROUTES: HubRoute[] = [
     'write',
     'Work out and store the release notes of a run that has none',
     { notes: 'Only promotions and rollbacks have notes (409 NOT_A_PROMOTION otherwise).' }
+  ),
+  // ─── Changes: calendar, deploy windows, pre-deploy checklists (routes/hub-changes.ts) ──
+  r(
+    'GET',
+    '/calendar',
+    'Changes',
+    'owner',
+    'read',
+    'Change calendar: promotions, schedules, trains, moves, upgrades, freezes, deploy windows and planned maintenance in a range',
+    {
+      query: {
+        from: s('ISO time (default 7 days ago)'),
+        to: s('ISO time (default 35 days ahead); at most 100 days after from'),
+        app_id: n('One app')
+      }
+    }
+  ),
+  r('GET', '/calendar.ics', 'Changes', 'owner', 'read', 'The change calendar as iCalendar', {
+    query: {
+      app_id: n('One app'),
+      owner: s('A person’s apps (an owner may name only themself)')
+    },
+    notes: 'The last 30 days and the next 180; deploy windows are left out. A download, not a feed.'
+  }),
+  r('POST', '/calendar/entries', 'Changes', 'admin', 'write', 'Add planned maintenance or a note', {
+    body: {
+      title: s('At most 200 characters', { required: true }),
+      kind: s('maintenance or note', { enum: ['maintenance', 'note'] }),
+      app_id: n('null = every app'),
+      environment_id: n(),
+      starts_at: s('ISO time', { required: true }),
+      ends_at: s('ISO time'),
+      description: s('At most 1000 characters')
+    }
+  }),
+  r('PATCH', '/calendar/entries/:id', 'Changes', 'admin', 'write', 'Change a calendar entry', {
+    notes: 'Send the whole entry again. Entries another Hub feature writes are its own (404 here).'
+  }),
+  r('DELETE', '/calendar/entries/:id', 'Changes', 'admin', 'write', 'Delete a calendar entry'),
+  r(
+    'GET',
+    '/changes/overview',
+    'Changes',
+    'owner',
+    'read',
+    'Deploy windows (open or closed per environment), checklist items and checklists waiting for ticks'
+  ),
+  r('POST', '/deploy-windows', 'Changes', 'admin', 'write', 'Create a deploy window', {
+    body: {
+      name: s('At most 120 characters', { required: true }),
+      app_id: n('null = every app without its own'),
+      env_scope: s('production or all', { enum: ['production', 'all'] }),
+      recurrence: s('weekly or none (one extra window)', { enum: ['weekly', 'none'] }),
+      ranges: list('object', 'weekly: {days: 1 (Mon)–7 (Sun), from: HH:MM, to: HH:MM}'),
+      time_zone: s('IANA zone the ranges are read in, e.g. America/New_York'),
+      starts_at: s('ISO time (none)'),
+      ends_at: s('ISO time (none)'),
+      enabled: b()
+    },
+    notes: 'Promotions and Apply now outside every governing window answer 409 OUTSIDE_WINDOW.'
+  }),
+  r('PATCH', '/deploy-windows/:id', 'Changes', 'admin', 'write', 'Change a deploy window', {
+    notes: 'Send the whole window again: it is validated and stored as a whole.'
+  }),
+  r('DELETE', '/deploy-windows/:id', 'Changes', 'admin', 'write', 'Delete a deploy window'),
+  r(
+    'GET',
+    '/environments/:envId/deploy-window',
+    'Changes',
+    'owner',
+    'read',
+    'Whether a deploy window is open for the environment now, and the next opening'
+  ),
+  r(
+    'POST',
+    '/environments/:envId/promote/queue',
+    'Changes',
+    'admin',
+    'write',
+    'Queue a promotion for the next deploy window (a scheduled promotion)',
+    {
+      body: {
+        version: s('x.y.z', { required: true }),
+        confirm: s('Type the environment key', { required: true })
+      },
+      sensitive: true,
+      notes: '409 WINDOW_OPEN when a window is open now; NO_WINDOW_SOON when none opens in 2 weeks.'
+    }
+  ),
+  r('POST', '/checklist-items', 'Changes', 'admin', 'write', 'Add a pre-deploy checklist item', {
+    body: {
+      app_id: n('', { required: true }),
+      environment_id: n('null = every production environment of the app'),
+      text: s('At most 500 characters', { required: true }),
+      help: s('At most 1000 characters'),
+      required: b('Default true'),
+      tick_by: s('admin, owner or people', { enum: ['admin', 'owner', 'people'] }),
+      tick_people: list('string', 'User ids (tick_by people)'),
+      actions: list('string', 'promote, move, upgrade (default all three)'),
+      position: n('Order')
+    }
+  }),
+  r('PATCH', '/checklist-items/:id', 'Changes', 'admin', 'write', 'Change a checklist item', {
+    notes: 'Send the whole item again. Ticks already given are kept (by item id).'
+  }),
+  r('DELETE', '/checklist-items/:id', 'Changes', 'admin', 'write', 'Archive a checklist item'),
+  r(
+    'GET',
+    '/environments/:envId/checklist',
+    'Changes',
+    'owner',
+    'read',
+    'The pre-deploy checklist a production promotion or move of the environment needs, and the open one',
+    {
+      query: {
+        action: s('promote or move', { enum: ['promote', 'move'] }),
+        version: s('x.y.z (promote)')
+      }
+    }
+  ),
+  r(
+    'POST',
+    '/environments/:envId/checklist-runs',
+    'Changes',
+    'owner',
+    'write',
+    'Open the pre-deploy checklist for one promotion or move',
+    {
+      body: {
+        action: s('promote or move', { enum: ['promote', 'move'] }),
+        version: s('x.y.z (promote)')
+      },
+      notes: 'Answers the open one when it exists. Send its id as checklist_run_id with the start.'
+    }
+  ),
+  r(
+    'GET',
+    '/shared/:id/checklist',
+    'Changes',
+    'admin',
+    'read',
+    'The pre-deploy checklist an upgrade of a shared deployment needs (its production apps)',
+    { query: { version: s('x.y.z', { required: true }) } }
+  ),
+  r(
+    'POST',
+    '/shared/:id/checklist-runs',
+    'Changes',
+    'admin',
+    'write',
+    'Open the pre-deploy checklist for one shared deployment upgrade',
+    { body: { version: s('x.y.z', { required: true }) } }
+  ),
+  r('GET', '/checklist-runs/:id', 'Changes', 'owner', 'read', 'One checklist with its ticks', {
+    notes: 'Admins, owners of an app on it, and the people an item names may read it.'
+  }),
+  r('POST', '/checklist-runs/:id/tick', 'Changes', 'owner', 'write', 'Tick or untick one item', {
+    body: {
+      key: s('<item id>@<environment id>', { required: true }),
+      ticked: b('Default true'),
+      note: s('At most 500 characters')
+    },
+    notes: 'Only who the item allows (admins, the app’s owners, or the people it names).'
+  }),
+  r('POST', '/checklist-runs/:id/void', 'Changes', 'owner', 'write', 'Set an open checklist aside'),
+  r(
+    'GET',
+    '/deploys/:id/checklist',
+    'Changes',
+    'owner',
+    'read',
+    'The checklist a past promotion started with, or null'
   ),
   // ─── App templates (routes/hub-templates.ts) ────────────────────────────────
   r('GET', '/templates', 'Templates', 'admin', 'read', 'The template library (never the bundles)', {

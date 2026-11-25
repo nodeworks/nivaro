@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { isEncrypted } from '../services/encryption.js'
 import { idParam } from '../services/hub/apps.js'
+import { startWithChecklist } from '../services/hub/changes/checklist.js'
 import { healMoves } from '../services/hub/move/heal.js'
 import { type HubMoveRow, listMoves, readMove } from '../services/hub/move/rows.js'
 import {
@@ -141,7 +142,18 @@ export function hubMoveRoutes(app: FastifyInstance) {
     const frozen = await environmentFreezeRefusal(envId, 'move')
     if (frozen) return refuse(reply, frozen.status, frozen.code, frozen.message)
     return guarded(reply, async () => {
-      const out = await startMove(envId, body(req) as unknown as StartBody, userId(req))
+      // A production move needs its pre-deploy checklist ticked (services/hub/changes).
+      const out = await startWithChecklist(
+        {
+          target: { kind: 'environment', envId },
+          action: 'move',
+          version: null,
+          runId: body(req).checklist_run_id
+        },
+        'move',
+        () => startMove(envId, body(req) as unknown as StartBody, userId(req)),
+        (o) => o.move_id
+      )
       return reply.code(202).send({ data: out })
     })
   })
