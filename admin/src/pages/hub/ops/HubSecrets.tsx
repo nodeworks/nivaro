@@ -313,7 +313,9 @@ function SecretRow({
         {!confirming &&
           (item.rotate === 'manual' || (item.rotate === 'helper' && !item.helper_ready)) && (
             <span className='text-[12px] text-slate-500 dark:text-muted-foreground'>
-              {info?.how}{' '}
+              {item.rotate === 'helper'
+                ? 'Not deployed through a Docker driver: set a new HUB_TOKEN on the app, then type it on the environment.'
+                : info?.how}{' '}
               <Link
                 to={item.path}
                 className='font-medium text-cyan-700 hover:underline dark:text-cyan-300'

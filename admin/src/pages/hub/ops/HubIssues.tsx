@@ -5,6 +5,7 @@ import { useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -39,10 +40,12 @@ function SeverityChip({ severity }: { severity: string | null }) {
         (severity && SEV_TONE[severity]) || SEV_DEFAULT
       )}
     >
-      {severity ?? 'unknown'}
+      {severity ? severity[0].toUpperCase() + severity.slice(1) : 'Unknown'}
     </span>
   )
 }
+
+const lower = (t: string) => (t ? t[0].toLowerCase() + t.slice(1) : t)
 
 const KIND_OPTIONS = [
   { value: '', label: 'Crashes and server errors' },
@@ -145,7 +148,7 @@ export default function HubIssues() {
             value={filters.kind}
             onChange={(v) => set({ kind: v })}
             ariaLabel='Kind'
-            className='h-8 w-full sm:w-52'
+            className='h-8 w-full sm:w-48'
             options={KIND_OPTIONS}
           />
           <SimpleSelect
@@ -162,30 +165,17 @@ export default function HubIssues() {
             className='h-8 w-full sm:w-44'
             options={STATUS_OPTIONS.map((o) => (o.value === '' ? { ...o, value: 'any' } : o))}
           />
-          <label className='flex items-center gap-1.5 text-[12px] text-slate-600 dark:text-slate-300'>
-            <input
-              type='checkbox'
+          <label
+            htmlFor='hub-issues-multi'
+            className='flex h-8 items-center gap-1.5 text-[12px] text-slate-600 dark:text-slate-300'
+          >
+            <Checkbox
+              id='hub-issues-multi'
               checked={filters.multi}
-              onChange={(e) => set({ multi: e.target.checked ? '1' : null })}
-              className='h-3.5 w-3.5 accent-[#00ceff]'
+              onCheckedChange={(v) => set({ multi: v === true ? '1' : null })}
             />
             In 2 or more apps
           </label>
-          {isAdmin && (
-            <Button
-              size='sm'
-              variant='outline'
-              className='ml-auto h-8'
-              disabled={collect.isPending}
-              onClick={() => collect.mutate()}
-            >
-              <RefreshCw
-                className={cn('mr-1.5 h-3.5 w-3.5', collect.isPending && 'animate-spin')}
-                aria-hidden
-              />
-              Read the apps now
-            </Button>
-          )}
         </div>
 
         {notRead.length > 0 && (
@@ -193,7 +183,7 @@ export default function HubIssues() {
             Not read:{' '}
             {notRead
               .slice(0, 6)
-              .map((r) => `${r.app_key}/${r.environment_key} (${stateWords(r.state)})`)
+              .map((r) => `${r.app_key}/${r.environment_key}: ${lower(stateWords(r.state))}`)
               .join('; ')}
             {notRead.length > 6 ? ` and ${notRead.length - 6} more` : ''}. Their last reading is
             kept.
@@ -203,6 +193,23 @@ export default function HubIssues() {
         <SectionCard
           title='Issues across apps'
           description='Read every 15 minutes from each app’s issue log (last 30 days). The same signature in several apps is one line.'
+          actions={
+            isAdmin ? (
+              <Button
+                size='sm'
+                variant='outline'
+                className='h-8'
+                disabled={collect.isPending}
+                onClick={() => collect.mutate()}
+              >
+                <RefreshCw
+                  className={cn('mr-1.5 h-3.5 w-3.5', collect.isPending && 'animate-spin')}
+                  aria-hidden
+                />
+                Read the apps now
+              </Button>
+            ) : undefined
+          }
         >
           {groups.isPending ? (
             <div className='space-y-2 p-4'>

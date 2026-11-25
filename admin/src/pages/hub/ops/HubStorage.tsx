@@ -225,8 +225,12 @@ export default function HubStorage() {
                         </td>
                         {e.state === 'ok' ? (
                           <>
-                            <td className='px-4 py-2.5'>{e.files?.toLocaleString() ?? '—'}</td>
-                            <td className='px-4 py-2.5'>{formatBytes(e.bytes)}</td>
+                            <td className='whitespace-nowrap px-4 py-2.5 tabular-nums'>
+                              {e.files?.toLocaleString() ?? '—'}
+                            </td>
+                            <td className='whitespace-nowrap px-4 py-2.5 tabular-nums'>
+                              {formatBytes(e.bytes)}
+                            </td>
                             <td className='px-4 py-2.5 text-slate-500 dark:text-muted-foreground'>
                               {growth(e.bytes, e.prev_bytes) ?? '—'}
                             </td>
