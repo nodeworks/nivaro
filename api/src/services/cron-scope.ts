@@ -99,6 +99,7 @@ export const CORE_CRON_SCOPES: Record<string, CronScope> = {
   'hub-ops-collect': 'app', // Hub ops: the Hub's own issue/storage rows (HUB=on only, never shared)
   'hub-secrets': 'app', // Hub ops: the Hub's own secret rows (HUB=on only, never shared)
   'hub-fleet-probe': 'app', // Hub fleet: probes the Hub's environments (HUB=on only, never shared)
+  'hub-incident-tick': 'app', // Hub incidents: pages, banners, freezes, outage watch (HUB=on only, never shared)
   'hub-fleet-rollup': 'app', // Hub fleet: hourly uptime rollups (HUB=on only, never shared)
   'hub-fleet-alerts': 'app', // Hub fleet: version drift alerts (HUB=on only, never shared)
   'hub-fleet-prune': 'app', // Hub fleet: uptime samples past 45 days (HUB=on only, never shared)

@@ -452,7 +452,14 @@ export const CORE_KEEPS: readonly EnvKeepEntry[] = [
       'nivaro_hub_uptime_samples',
       'nivaro_hub_uptime_hours',
       'nivaro_hub_fleet_alerts',
-      'nivaro_hub_slo_reports'
+      'nivaro_hub_slo_reports',
+      // Hub incidents, on-call and status pages (576)
+      'nivaro_hub_incidents',
+      'nivaro_hub_incident_events',
+      'nivaro_hub_oncall_rotas',
+      'nivaro_hub_oncall_overrides',
+      'nivaro_hub_pages',
+      'nivaro_hub_status_pages'
     ] as const
   ).map(
     (table): EnvKeepEntry => ({
@@ -476,6 +483,7 @@ export const CORE_KEEPS: readonly EnvKeepEntry[] = [
       ...(table === 'nivaro_hub_db_servers' ? { secret_columns: ['admin_secret'] } : {}),
       ...(table === 'nivaro_hub_databases' ? { secret_columns: ['connection'] } : {}),
       ...(table === 'nivaro_hub_targets' ? { secret_columns: ['secret'] } : {}),
+      ...(table === 'nivaro_hub_status_pages' ? { secret_columns: ['token_hash'] } : {}),
       ...(table === 'nivaro_hub_shared_deployments'
         ? { secret_columns: ['token', 'prev_token', 'secrets'] }
         : {})
