@@ -180,6 +180,7 @@ describe('hub agent client', () => {
       stack: 10_000,
       apply: 300_000,
       restart: 30_000,
+      scale: 60_000,
       remove: 120_000
     })
     spy.mockRestore()

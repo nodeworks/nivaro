@@ -6,7 +6,7 @@ import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { fetchStackSettings, stackKeys } from './docker/stack-api'
 import { hubError, hubToast } from './hub-api'
-import { SectionCard } from './hub-parts'
+import { SectionCard, segmentButton, segmentGroup } from './hub-parts'
 
 /**
  * App owner self-service (services/hub/owner-access.ts): what the signed-in person may deploy on
@@ -127,10 +127,7 @@ export function OwnerPolicyCard({ appId, isAdmin }: { appId: number; isAdmin: bo
                   {whyWords(e)}
                 </span>
               </span>
-              <fieldset
-                aria-label={`Is ${e.key} production`}
-                className='m-0 inline-flex overflow-hidden rounded-md border border-slate-200 p-0 dark:border-border'
-              >
+              <fieldset aria-label={`Is ${e.key} production`} className={segmentGroup}>
                 {(
                   [
                     [null, 'Auto'],
@@ -144,12 +141,7 @@ export function OwnerPolicyCard({ appId, isAdmin }: { appId: number; isAdmin: bo
                     aria-pressed={(e.production_flag ?? null) === value}
                     disabled={flag.isPending}
                     onClick={() => flag.mutate({ envId: e.id, production: value })}
-                    className={cn(
-                      'h-7 px-2.5 text-[12px] font-medium disabled:opacity-60',
-                      (e.production_flag ?? null) === value
-                        ? 'bg-nvr-cyan text-white'
-                        : 'bg-white text-slate-600 hover:bg-slate-50 dark:bg-card dark:text-slate-300 dark:hover:bg-muted'
-                    )}
+                    className={segmentButton((e.production_flag ?? null) === value)}
                   >
                     {label}
                   </button>

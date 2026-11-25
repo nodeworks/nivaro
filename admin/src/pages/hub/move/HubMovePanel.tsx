@@ -30,6 +30,8 @@ import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn, formatDateTime, formatRelative } from '@/lib/utils'
+import { type ChecklistState, PreDeployChecklist } from '../changes/PreDeployChecklist'
+import { EnvWindowGate } from '../changes/WindowGate'
 import { RunnerError } from '../HubPromotePanel'
 import { type HubEnvironment, hubKeys } from '../hub-api'
 import { CopyButton, dangerArmed, dangerGhost, Field, ghostButton } from '../hub-parts'
@@ -56,6 +58,7 @@ import {
   isRollingBack,
   LINK_OVERRIDE_TEXT,
   MOVE_KIND_WORDS,
+  MOVE_STEP_SHORT,
   type MoveIssue,
   type MovePlan,
   type MoveStepState,
@@ -565,11 +568,20 @@ function MoveForm({
   const offerOverride = pullCodes.length > 0
   // The overridable blocker stops nothing once its box is ticked; every other blocker does.
   const blocking = (p?.blockers ?? []).filter((b) => !(override && isPullOverride(b.code)))
+  /** An administrator's emergency start outside the app's deploy window: the typed reason. */
+  const [outsideReason, setOutsideReason] = useState<string | null>(null)
+  /** The production pre-deploy checklist of this move (Hub change operations). */
+  const [preDeploy, setPreDeploy] = useState<ChecklistState>({
+    required: false,
+    ready: true,
+    runId: null
+  })
   const ready =
     !!p &&
     !!p.plan_hash &&
     blocking.length === 0 &&
     !requiredOpen &&
+    !(preDeploy.required && !preDeploy.ready) &&
     (!offerOverride || override) &&
     confirm.trim() === expected
 
@@ -586,7 +598,9 @@ function MoveForm({
         plan_hash: (p as MovePlan).plan_hash,
         confirm: confirm.trim(),
         checklist: Object.fromEntries((p?.checklist ?? []).map((c) => [c.id, !!checked[c.id]])),
-        ...(offerOverride && override ? { overrides: pullCodes } : {})
+        ...(offerOverride && override ? { overrides: pullCodes } : {}),
+        ...(preDeploy.runId != null ? { checklist_run_id: preDeploy.runId } : {}),
+        ...(outsideReason ? { outside_window_reason: outsideReason } : {})
       }),
     onSuccess: (r) => {
       // The move owns the placement it starts on: it is never removed by this form.
@@ -774,6 +788,16 @@ function MoveForm({
             </span>
           </label>
         </div>
+      )}
+
+      {target && <EnvWindowGate envId={env.id} what='move' onReason={setOutsideReason} />}
+
+      {target && (
+        <PreDeployChecklist
+          target={{ kind: 'environment', envId: env.id }}
+          action='move'
+          onState={setPreDeploy}
+        />
       )}
 
       {target && (
@@ -1306,8 +1330,12 @@ function MoveProgress({
       )}
 
       {/* Standalone Hub: the move as a track (renders nothing otherwise). */}
-      <HubRunTimeline what='Move' live={live} steps={rows} />
-      <ol aria-label='Move steps' className='m-0 list-none space-y-1.5 p-0'>
+      <HubRunTimeline
+        what='Move'
+        live={live}
+        steps={rows.map((r) => ({ ...r, short: MOVE_STEP_SHORT[r.key] }))}
+      />
+      <ol aria-label='Move steps' className='hub-run-steps m-0 list-none space-y-1.5 p-0'>
         {rows.map((r) => (
           <li
             key={r.key}

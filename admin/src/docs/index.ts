@@ -50,14 +50,18 @@ export * from './sections/help-videos.js'
 export * from './sections/hub.js'
 export * from './sections/hub-api.js'
 export * from './sections/hub-capacity.js'
+export * from './sections/hub-changes.js'
 export * from './sections/hub-config.js'
 export * from './sections/hub-data.js'
 export * from './sections/hub-fleet.js'
+export * from './sections/hub-incidents.js'
 export * from './sections/hub-ops.js'
 export * from './sections/hub-people.js'
 export * from './sections/hub-releases.js'
+export * from './sections/hub-scale.js'
 export * from './sections/hub-shared.js'
 export * from './sections/hub-templates.js'
+export * from './sections/hub-verify.js'
 export * from './sections/ideas.js'
 export * from './sections/import-templates.js'
 export * from './sections/infrastructure.js'
@@ -341,14 +345,18 @@ import {
 } from './sections/hub.js'
 import { hubApiDocs, sdkHubDocs } from './sections/hub-api.js'
 import { hubCapacityDocs } from './sections/hub-capacity.js'
+import { hubChangesDocs } from './sections/hub-changes.js'
 import { hubConfigDocs } from './sections/hub-config.js'
 import { hubDataDocs } from './sections/hub-data.js'
 import { hubFleetDocs } from './sections/hub-fleet.js'
+import { hubIncidentsDocs } from './sections/hub-incidents.js'
 import { hubIssuesDocs, hubSecretsDocs, hubStorageDocs } from './sections/hub-ops.js'
 import { hubPeopleDocs } from './sections/hub-people.js'
 import { hubReleasesDocs } from './sections/hub-releases.js'
+import { hubScaleDocs } from './sections/hub-scale.js'
 import { hubMovesDocs, hubSharedDocs } from './sections/hub-shared.js'
 import { hubMcpDocs, hubTemplatesDocs } from './sections/hub-templates.js'
+import { hubVerifyDocs } from './sections/hub-verify.js'
 import { ideasDocs } from './sections/ideas.js'
 import { importTemplatesGuide } from './sections/import-templates.js'
 import { infrastructureDocs } from './sections/infrastructure.js'
@@ -1179,6 +1187,8 @@ export const navSections: NavGroup[] = [
       hubLinkDocs,
       hubPromotionsDocs,
       hubReleasesDocs,
+      hubVerifyDocs,
+      hubChangesDocs,
       hubDockerDocs,
       hubSigninDocs,
       hubDatabasesDocs,
@@ -1186,6 +1196,7 @@ export const navSections: NavGroup[] = [
       hubSharedDocs,
       hubMovesDocs,
       hubCapacityDocs,
+      hubScaleDocs,
       hubIssuesDocs,
       hubSecretsDocs,
       hubStorageDocs,
@@ -1195,6 +1206,7 @@ export const navSections: NavGroup[] = [
       hubTemplatesDocs,
       hubMcpDocs,
       hubFleetDocs,
+      hubIncidentsDocs,
       hubPeopleDocs
     ]
   },

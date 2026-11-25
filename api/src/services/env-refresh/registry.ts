@@ -430,6 +430,9 @@ export const CORE_KEEPS: readonly EnvKeepEntry[] = [
       'nivaro_hub_capacity_samples',
       'nivaro_hub_app_limits',
       'nivaro_hub_rebalances',
+      // Hub scaling (581): kept replicas and limits, autoscaling rules, scale runs
+      'nivaro_hub_scale_roles',
+      'nivaro_hub_scale_runs',
       // Hub release operations (565): trains, schedules, freezes, rollback rules and watches,
       // release notes, learned version facts
       'nivaro_hub_trains',
@@ -439,6 +442,11 @@ export const CORE_KEEPS: readonly EnvKeepEntry[] = [
       'nivaro_hub_rollback_watches',
       'nivaro_hub_release_notes',
       'nivaro_hub_version_facts',
+      // Hub change operations (573): deploy windows, checklist items + checklists, calendar
+      'nivaro_hub_deploy_windows',
+      'nivaro_hub_checklist_items',
+      'nivaro_hub_checklist_runs',
+      'nivaro_hub_calendar_entries',
       'nivaro_hub_issue_groups',
       'nivaro_hub_ops_health',
       'nivaro_hub_secret_policies',
@@ -453,6 +461,18 @@ export const CORE_KEEPS: readonly EnvKeepEntry[] = [
       'nivaro_hub_uptime_hours',
       'nivaro_hub_fleet_alerts',
       'nivaro_hub_slo_reports',
+      // Hub incidents, on-call and status pages (576)
+      'nivaro_hub_incidents',
+      'nivaro_hub_incident_events',
+      'nivaro_hub_oncall_rotas',
+      'nivaro_hub_oncall_overrides',
+      'nivaro_hub_pages',
+      'nivaro_hub_status_pages',
+      // Hub verification (574): smoke suites + runs, extension sightings + promotions
+      'nivaro_hub_smoke_suites',
+      'nivaro_hub_smoke_runs',
+      'nivaro_hub_extension_sightings',
+      'nivaro_hub_extension_promotions',
       // Hub config promotion (575)
       'nivaro_hub_config_promotions'
     ] as const
@@ -478,6 +498,7 @@ export const CORE_KEEPS: readonly EnvKeepEntry[] = [
       ...(table === 'nivaro_hub_db_servers' ? { secret_columns: ['admin_secret'] } : {}),
       ...(table === 'nivaro_hub_databases' ? { secret_columns: ['connection'] } : {}),
       ...(table === 'nivaro_hub_targets' ? { secret_columns: ['secret'] } : {}),
+      ...(table === 'nivaro_hub_status_pages' ? { secret_columns: ['token_hash'] } : {}),
       ...(table === 'nivaro_hub_shared_deployments'
         ? { secret_columns: ['token', 'prev_token', 'secrets'] }
         : {})

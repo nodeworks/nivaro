@@ -1,11 +1,11 @@
 import { QueryErrorState } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, ArrowRightLeft, Pencil } from 'lucide-react'
+import { AlertTriangle, ArrowRightLeft, Pencil, RefreshCw } from 'lucide-react'
 import { Fragment, type ReactNode, useState } from 'react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
-import { envTone } from '@/components/hub-brand/env-tone'
 import { HubEnvTag } from '@/components/hub-brand/HubBits'
+import { HubToolbar } from '@/components/hub-page'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useAuth } from '@/lib/auth'
 import { cn, formatDateTime, formatFileSize } from '@/lib/utils'
@@ -70,52 +70,61 @@ export default function HubCapacity() {
     )
 
   return (
-    <div className='flex flex-1 min-h-0 flex-col overflow-y-auto bg-slate-50 dark:bg-background'>
-      <div className='space-y-4 p-4 sm:p-6'>
-        <div className='flex flex-wrap items-center gap-2'>
-          <p className='m-0 min-w-0 flex-1 text-[12px] text-slate-500 dark:text-muted-foreground'>
-            {overview.data
-              ? `Sampled every 15 minutes · trend over 30 days · as of ${formatDateTime(overview.data.generated_at)}`
-              : 'Sampled every 15 minutes'}
-          </p>
+    <div className='flex flex-1 min-h-0 flex-col'>
+      <HubToolbar
+        description={
+          overview.data
+            ? `Sampled every 15 minutes, trend over 30 days. As of ${formatDateTime(overview.data.generated_at)}.`
+            : 'Sampled every 15 minutes.'
+        }
+        actions={
           <button
             type='button'
             className={ghostButton}
             disabled={sample.isPending}
             onClick={() => sample.mutate()}
           >
+            <RefreshCw
+              className={cn('h-3.5 w-3.5', sample.isPending && 'animate-spin')}
+              aria-hidden
+            />
             {sample.isPending ? 'Sampling…' : 'Sample now'}
           </button>
-        </div>
-
-        {overview.isPending ? (
-          <Skeleton className='h-48 w-full' />
-        ) : overview.isError ? (
-          <QueryErrorState
-            error={overview.error}
-            what='the capacity figures'
-            onRetry={() => void overview.refetch()}
-          />
-        ) : (
-          <>
-            <AdviceCard
-              advice={advice.data ?? []}
-              loading={advice.isPending}
-              error={advice.error}
-              retry={() => void advice.refetch()}
+        }
+      />
+      <div className='flex-1 min-h-0 overflow-y-auto bg-slate-50 dark:bg-background'>
+        <div className='space-y-4 p-4 sm:p-6'>
+          {overview.isPending ? (
+            <Skeleton className='h-48 w-full' />
+          ) : overview.isError ? (
+            <QueryErrorState
+              error={overview.error}
+              what='the capacity figures'
+              onRetry={() => void overview.refetch()}
             />
-            {overview.data.shared.length === 0 && overview.data.dedicated.length === 0 && (
-              <p className='m-0 rounded-lg border border-dashed border-slate-300 p-6 text-center text-[13px] text-slate-500 dark:border-border dark:text-muted-foreground'>
-                No samples yet. The first is taken within 15 minutes, or press Sample now.
-              </p>
-            )}
-            {overview.data.shared.map((s) => (
-              <SharedCard key={s.id} s={s} mostShare={overview.data.settings.most_share} />
-            ))}
-            {overview.data.dedicated.length > 0 && <DedicatedCard apps={overview.data.dedicated} />}
-            <RebalancePanel shared={overview.data.shared} />
-          </>
-        )}
+          ) : (
+            <>
+              <AdviceCard
+                advice={advice.data ?? []}
+                loading={advice.isPending}
+                error={advice.error}
+                retry={() => void advice.refetch()}
+              />
+              {overview.data.shared.length === 0 && overview.data.dedicated.length === 0 && (
+                <p className='m-0 rounded-lg border border-dashed border-slate-300 p-6 text-center text-[13px] text-slate-500 dark:border-border dark:text-muted-foreground'>
+                  No samples yet. The first is taken within 15 minutes, or press Sample now.
+                </p>
+              )}
+              {overview.data.shared.map((s) => (
+                <SharedCard key={s.id} s={s} mostShare={overview.data.settings.most_share} />
+              ))}
+              {overview.data.dedicated.length > 0 && (
+                <DedicatedCard apps={overview.data.dedicated} />
+              )}
+              <RebalancePanel shared={overview.data.shared} />
+            </>
+          )}
+        </div>
       </div>
     </div>
   )
@@ -442,7 +451,6 @@ function AdviceCard({
               <li
                 key={`${a.kind}-${a.env_id}`}
                 className='rounded-lg border border-slate-200 p-3 dark:border-border'
-                data-env-tone={envTone(a.env_key)}
               >
                 <div className='flex flex-wrap items-center gap-2'>
                   <span className='hub-fact font-mono text-[13px]'>

@@ -71,7 +71,7 @@ export const hubReleasesDocs: DocSection = {
     { type: 'h2', id: 'hub-releases-freezes', text: 'Freeze windows' },
     {
       type: 'p',
-      text: 'While a freeze is on, the Hub refuses promotions, Apply now, shared deployment upgrades and moves with 409 `FROZEN` (naming the freeze and when it ends). Only a rollback to a version OLDER than the one running (of an environment or of a shared deployment) is exempt; a “rollback” to the running or a newer version deploys something new and is frozen like a promotion. When the windows cannot be read, starts are refused with 503 `FREEZE_UNKNOWN` (runners try again). A freeze belongs to one app or to every app (Hub-wide); an upgrade of a shared deployment is frozen when any app placed on it is.'
+      text: 'While a freeze is on, the Hub refuses promotions, Apply now, shared deployment upgrades and moves with 409 `FROZEN` (naming the freeze and when it ends). Only a rollback to a version OLDER than the one running (of an environment or of a shared deployment) is exempt; a “rollback” to the running or a newer version deploys something new and is frozen like a promotion. When the windows cannot be read, starts are refused with 503 `FREEZE_UNKNOWN` (runners try again). A freeze belongs to one app or to every app (Hub-wide); an upgrade of a shared deployment is frozen when any app placed on it is. Deploy windows (the times an app may be promoted, on the Changes tab) are judged by the same engine right after the freezes.'
     },
     {
       type: 'table',

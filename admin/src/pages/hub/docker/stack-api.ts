@@ -97,11 +97,12 @@ export const restartStack = (envId: number, confirm: string) =>
   api.post(`/hub/environments/${envId}/stack/restart`, { confirm })
 
 /** Apply now (P4-30): the running version again with the saved settings; a deploy run. */
-export const applyStack = (envId: number, confirm: string) =>
+export const applyStack = (envId: number, confirm: string, outsideWindowReason?: string | null) =>
   api
     .post<{ data: { deploy_id: number; job_run_id: number | null } }>(
       `/hub/environments/${envId}/stack/apply`,
-      { confirm }
+      // An administrator's emergency Apply now outside the deploy window carries why.
+      outsideWindowReason ? { confirm, outside_window_reason: outsideWindowReason } : { confirm }
     )
     .then((r) => r.data.data)
 

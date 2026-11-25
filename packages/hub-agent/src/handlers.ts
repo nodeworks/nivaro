@@ -16,6 +16,7 @@ import { type Engine, EngineError, EngineForbiddenError } from './engine.js'
 import { StackError } from './errors.js'
 import type { ExtensionDeps } from './extensions.js'
 import type { Log } from './log.js'
+import { validateScaleRequest } from './scale.js'
 import type { HandlerResult, Handlers, OwnerQuery } from './server.js'
 import { OWNER_KEY_RE, validateStackSpec } from './spec.js'
 import {
@@ -24,6 +25,7 @@ import {
   type RemoveOwner,
   removeStack,
   restartStack,
+  scaleStack,
   stackLeftovers,
   stackStatus
 } from './stacks.js'
@@ -150,6 +152,34 @@ export function makeHandlers(engine: Engine, cfg: AgentConfig, deps: HandlerDeps
         if (!v.ok) return refusal(400, 'SPEC_INVALID', 'The stack spec is not valid', v.fields)
         const r = await serial(() => restartStack(engine, cfg, name, v.spec, stackDeps()))
         return { status: 202, body: r }
+      }),
+
+    scaleStack: (name, body) =>
+      guarded('scale', name, async () => {
+        // 0.2.4: the spec the stack runs + the roles to change; scale.ts builds the next spec.
+        const v = validateScaleRequest(body, cfg)
+        if (!v.ok)
+          return refusal(
+            v.status,
+            v.code,
+            v.code === 'SPEC_INVALID'
+              ? 'The stack spec is not valid'
+              : 'The scale request is not valid',
+            v.fields
+          )
+        const r = await serial(() =>
+          scaleStack(engine, cfg, name, v.request.spec, v.next, stackDeps())
+        )
+        log({
+          t: new Date().toISOString(),
+          level: 'info',
+          op: 'scale',
+          stack: name,
+          changed: r.changed.length,
+          unchanged: r.unchanged.length,
+          already: r.already
+        })
+        return { status: r.already ? 200 : 202, body: r }
       }),
 
     leftovers: (name, q) =>

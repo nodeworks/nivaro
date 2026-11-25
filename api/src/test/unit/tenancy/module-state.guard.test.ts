@@ -690,6 +690,7 @@ const SHARED: Record<string, string> = {
   'services/hub/capacity/advisor.ts :: blockerCache': HUB_ONLY,
   'services/capacity/app-usage.ts :: cpu': PROC,
   'services/capacity/app-usage.ts :: redisOverride': FN_SLOT,
+  'services/capacity/scale-figures.ts :: redisOverride': FN_SLOT,
   'services/capacity/app-usage.ts :: timer': TIMER,
   'services/capacity/enforce.ts :: redisOverride': FN_SLOT,
   'services/capacity/enforce.ts :: JOB_SLOT_WAIT_MS': FN_SLOT,

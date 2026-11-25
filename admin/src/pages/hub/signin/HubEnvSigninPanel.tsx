@@ -13,6 +13,8 @@ import {
   NO_RECORD_ATTRS,
   NO_RECORD_CLASS,
   SectionCard,
+  segmentButton,
+  segmentGroup,
   smallButton
 } from '../hub-parts'
 import {
@@ -80,10 +82,7 @@ export function HubAppSigninCard({
           : 'People sign in to this app directly with Microsoft.'
       }
       actions={
-        <fieldset
-          aria-label='Sign-in mode'
-          className='m-0 inline-flex overflow-hidden rounded-md border border-slate-200 p-0 dark:border-border'
-        >
+        <fieldset aria-label='Sign-in mode' className={segmentGroup}>
           {(
             [
               ['direct', 'Direct'],
@@ -96,12 +95,7 @@ export function HubAppSigninCard({
               aria-pressed={mode === value}
               disabled={busy}
               onClick={() => void change(value)}
-              className={cn(
-                'h-8 px-3 text-[12px] font-medium disabled:opacity-60',
-                mode === value
-                  ? 'bg-nvr-cyan text-white'
-                  : 'bg-white text-slate-600 hover:bg-slate-50 dark:bg-card dark:text-slate-300 dark:hover:bg-muted'
-              )}
+              className={segmentButton(mode === value)}
             >
               {label}
             </button>

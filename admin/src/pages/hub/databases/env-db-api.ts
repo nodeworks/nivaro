@@ -61,6 +61,10 @@ export const ENV_DB_COPY: Record<string, { title: string; hint?: string }> = {
     hint: 'Try again in a moment.'
   },
   PROMOTION_RUNNING: { title: 'A promotion of this environment is running' },
+  SCALE_RUNNING: {
+    title: 'This environment is being scaled right now',
+    hint: 'Wait for the scaling run to finish, then try again.'
+  },
   REFRESH_RUNNING: {
     title: "This environment's database is being refreshed or rolled back",
     hint: 'Wait for it to finish, then try again.'

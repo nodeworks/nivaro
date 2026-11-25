@@ -137,7 +137,7 @@ describe('GET /api/hub-link/usage', () => {
     expect(ok.headers['cache-control']).toBe('no-store')
     const b = ok.json()
     expect(Object.keys(b).sort()).toEqual(
-      ['apps', 'at', 'partial', 'processes', 'totals', 'version'].sort()
+      ['apps', 'at', 'partial', 'processes', 'queues', 'roles', 'totals', 'version'].sort()
     )
     expect(b.apps[0].id).toBe('app')
     await app.close()

@@ -813,7 +813,7 @@ function envWithLookup(envId: number, lookup: string | null) {
  */
 export async function rotateHubToken(
   envId: number,
-  user: { id: string },
+  user: { id: string; outsideWindow?: { reason: string } },
   deps: RotateDeps = {}
 ): Promise<{ deploy_id: number; job_run_id: number | null }> {
   const env = (await db(ENVS).where({ id: envId }).first('id', 'key', 'version_pin', 'base_url')) as
@@ -882,7 +882,9 @@ export async function rotateHubToken(
   try {
     const started = await (deps.apply ?? startStackApply)(envId, {
       confirm: String(env.key),
-      user: { id: user.id }
+      user: { id: user.id },
+      // An emergency rotation outside the deploy windows (routes/hub-ops.ts checks who + why).
+      ...(user.outsideWindow ? { outsideWindow: user.outsideWindow } : {})
     })
     return { deploy_id: started.deployId, job_run_id: started.jobRunId }
   } catch (err) {

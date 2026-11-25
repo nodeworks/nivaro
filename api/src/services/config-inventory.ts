@@ -330,6 +330,8 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_hub_capacity_samples', //    Hub capacity (567): samples, per-app limits, rebalance runs
   'nivaro_hub_app_limits',
   'nivaro_hub_rebalances',
+  'nivaro_hub_scale_roles', //         Hub scaling (581): kept replicas/limits, rules, scale runs
+  'nivaro_hub_scale_runs',
   'nivaro_hub_trains', //  Hub release operations (565): per-Hub runtime state, never promoted
   'nivaro_hub_schedules',
   'nivaro_hub_freezes',
@@ -337,6 +339,10 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_hub_rollback_watches',
   'nivaro_hub_release_notes',
   'nivaro_hub_version_facts',
+  'nivaro_hub_deploy_windows', //       Hub change operations (573): per-Hub, never promoted
+  'nivaro_hub_checklist_items',
+  'nivaro_hub_checklist_runs',
+  'nivaro_hub_calendar_entries',
   'nivaro_hub_issue_groups', //        Hub ops (568): cross-app issue rollup, storage health,
   'nivaro_hub_ops_health', //          secret rotation helper (fingerprints only, never values)
   'nivaro_hub_secret_policies',
@@ -352,6 +358,16 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_hub_fleet_alerts',
   'nivaro_hub_slo_reports',
   'nivaro_hub_config_promotions', //   Hub config promotion (575): plans, results, undo points
+  'nivaro_hub_incidents', //           Hub incidents (576): incidents + timeline, on-call rotas,
+  'nivaro_hub_incident_events', //     overrides, pages, status page links (token hashes only)
+  'nivaro_hub_oncall_rotas',
+  'nivaro_hub_oncall_overrides',
+  'nivaro_hub_pages',
+  'nivaro_hub_status_pages',
+  'nivaro_hub_smoke_suites', //        Hub verification (574): smoke suites + runs, extension
+  'nivaro_hub_smoke_runs', //          sightings + promotions (per-Hub state, never promoted)
+  'nivaro_hub_extension_sightings',
+  'nivaro_hub_extension_promotions',
   'nivaro_share_links',
   'nivaro_dashboard_links',
   'nivaro_webhook_deliveries',

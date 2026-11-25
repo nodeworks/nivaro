@@ -236,7 +236,13 @@ export function hubReleaseRoutes(app: FastifyInstance): void {
       return notFound(reply)
     const input = await trainInput(appId, body(req))
     if ('error' in input) return fail(reply, 400, 'BAD_TRAIN', input.error)
-    const freeze = await freezeRefusal({ appIds: [appId], action: 'promote' })
+    // Each step's own environment (production deploy windows judge production only): the first
+    // refusal any step would meet now.
+    let freeze = await freezeRefusal({ appIds: [appId], action: 'promote' })
+    for (const st of input.steps) {
+      if (freeze) break
+      freeze = await freezeRefusal({ appIds: [appId], action: 'promote', envId: st.environment_id })
+    }
     let first: { ok: boolean; blockers: Array<{ code: string; text: string }> } | null = null
     try {
       const plan = buildPromotionPlan(
@@ -484,7 +490,14 @@ export function hubReleaseRoutes(app: FastifyInstance): void {
   app.get('/environments/:envId/freeze', { preHandler: requireAuth }, async (req, reply) => {
     const env = await readableEnv(req)
     if (!env) return notFound(reply)
-    return { data: await freezeRefusal({ appIds: [Number(env.app_id)], action: 'promote' }) }
+    // The same engine judges deploy windows too (OUTSIDE_WINDOW), for this environment.
+    return {
+      data: await freezeRefusal({
+        appIds: [Number(env.app_id)],
+        action: 'promote',
+        envId: Number(env.id)
+      })
+    }
   })
 
   // ─── Automatic rollback rules ──────────────────────────────────────────────
