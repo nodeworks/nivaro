@@ -38,7 +38,7 @@ export const hubApiDocs: DocSection = {
         ],
         [
           'A connected app (OAuth `nvo_`)',
-          'Needs the `hub:read` OAuth scope (a consent-page tick, offered only on a Hub)',
+          'Needs the `hub:read` OAuth scope: an unticked consent-page choice, offered only on a Hub, refused together with a kit limited to named collections',
           'Needs `hub:read`',
           'Never (403 `HUB_WRITE_NOT_FOR_AGENTS`)'
         ],
@@ -78,7 +78,7 @@ curl -X POST -H "Authorization: Bearer nvk_…" -H "Content-Type: application/js
     { type: 'h2', id: 'hub-api-graphql', text: 'GraphQL' },
     {
       type: 'p',
-      text: 'On a Hub the schema has a `hub` field on Query and on Mutation. Each field answers by calling its REST route as you, so the access, the masking and the refusals are the REST route’s: a refusal is a GraphQL error whose `extensions` carry the REST `status` (403, 404, 409 …) and `code`. Hub fields are answered over HTTP (`POST /api/graphql`), not over the subscription socket.'
+      text: 'On a Hub the schema has a `hub` field on Query and on Mutation. Each field answers by calling its REST route as you, so the access, the masking and the refusals are the REST route’s: a refusal is a GraphQL error whose `extensions` carry the REST `status` (403, 404, 409 …) and `code`. Hub fields are answered over HTTP (`POST /api/graphql`), not over the subscription socket. Within one operation each Hub path is read once (fields that need the same answer share it), at most 8 inner requests run at a time, and an operation that needs more than 200 is refused with `QUERY_TOO_COSTLY`. On a Hub that has a collection named `hub`, the collection keeps its `hub` field and the namespace is left out (the server logs a warning).'
     },
     {
       type: 'table',

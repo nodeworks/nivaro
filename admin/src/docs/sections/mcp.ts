@@ -130,7 +130,7 @@ export const mcpDocs: DocSection = {
     { type: 'h2', id: 'mcp-connections', text: 'Connected apps' },
     {
       type: 'p',
-      text: 'Every assistant you allowed is a connection: `GET /api/oauth/connections` lists them (name, when you connected, when it was last used, and whether it may use chat) and `DELETE /api/oauth/connections/:id` disconnects one — its tokens stop working at once. Connecting and disconnecting are logged in Activity (`oauth-connect`, `oauth-revoke`). Suspending an account ends its connections too: every request checks the account is still active.'
+      text: 'Every assistant you allowed is a connection: `GET /api/oauth/connections` lists them (name, when you connected, when it was last used, whether it may use chat and, on a Nivaro Hub, whether it may read the Hub — `hub`) and `DELETE /api/oauth/connections/:id` disconnects one — its tokens stop working at once. Connecting and disconnecting are logged in Activity (`oauth-connect`, `oauth-revoke`). Suspending an account ends its connections too: every request checks the account is still active.'
     },
     { type: 'h2', id: 'mcp-limits', text: 'Limit what a connection may use' },
     {

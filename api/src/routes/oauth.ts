@@ -323,6 +323,17 @@ ${choice.kits.map((k) => opt(k.key, k.label, k.description)).join('\n')}
 </fieldset>`
 }
 
+/**
+ * Why the Hub cannot be granted with the kit picked on the consent page (a kit limited to named
+ * collections never reaches the Hub, services/hub/api/gate.ts), else null.
+ */
+export function hubKitConflict(kitKey: unknown, kits: ToolKit[]): string | null {
+  if (typeof kitKey !== 'string' || !kitKey || kitKey === '__keep') return null
+  const picked = kits.find((k) => k.key === kitKey)
+  if (!picked?.collections) return null
+  return `Reading the Hub cannot be combined with “${picked.label}”, which limits the app to named collections. Go back to the app, connect again, and choose “Everything you can do” or leave the Hub unticked.`
+}
+
 /** The authorize request carried through the consent post, plus its CSRF token. */
 const hiddenFields = (p: AuthorizeParams, csrf: string) =>
   Object.entries({ ...p, csrf })
@@ -360,7 +371,7 @@ ${consentFoot(user)}</form>`
   )
 }
 
-function consentPage(
+export function consentPage(
   client: AuthClient,
   p: AuthorizeParams,
   user: User,
@@ -371,9 +382,9 @@ function consentPage(
   const name = escapeHtml(cleanClientName(client.client_name))
   // Chat (#2492) is the person's choice, pre-ticked only when the app asked for it.
   const askedChat = scopeTokens(p.scope).includes(OAUTH_CHAT_SCOPE)
-  // The Hub (Hub mode only): never pre-ticked unless the app asked for it.
+  // The Hub (Hub mode only): never pre-ticked — apps usually ask for every scope on offer, and
+  // reading a fleet's apps is the person's own choice each time.
   const offerHub = hubModeEnabled()
-  const askedHub = offerHub && scopeTokens(p.scope).includes(OAUTH_HUB_SCOPE)
   const hidden = hiddenFields(p, csrf)
   return page(
     `Connect ${cleanClientName(client.client_name)} to Nivaro`,
@@ -389,8 +400,8 @@ ${kitFieldset(kits)}
 <span>Also let it read and post in your chat conversations<span>Only rooms you can open. Its messages say they came from ${name}.</span></span></label>
 ${
   offerHub
-    ? `<label class="opt"><input type="checkbox" name="hub" value="1"${askedHub ? ' checked' : ''}>
-<span>Also let it read the Hub and make plans<span>Apps, environments, status and runs you can see. It can never promote, move or change anything.</span></span></label>`
+    ? `<label class="opt"><input type="checkbox" name="hub" value="1">
+<span>Also let it read the Hub and make plans<span>Apps, environments, status and runs you can see. It can never promote, move or change anything. Not with a choice above that limits it to named collections.</span></span></label>`
     : ''
 }
 ${consentFoot(user)}</form>`
@@ -742,10 +753,14 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
       })
       return reply.redirect(withAuthResponse(p.redirect_uri, { code, state: p.state, iss }))
     }
-    const scope = grantedScope(
-      body.chat === '1' || body.chat === 'on',
-      hubModeEnabled() && (body.hub === '1' || body.hub === 'on')
-    )
+    const wantsHub = hubModeEnabled() && (body.hub === '1' || body.hub === 'on')
+    // A kit limited to named collections never reaches the Hub (services/hub/api/gate.ts): say so
+    // instead of granting a Hub scope that would do nothing.
+    const conflict = wantsHub
+      ? hubKitConflict(body.kit, await listKits().catch(() => [] as ToolKit[]))
+      : null
+    if (conflict) return cannotConnect(reply, conflict)
+    const scope = grantedScope(body.chat === '1' || body.chat === 'on', wantsHub)
     const grant = await upsertGrant(app.redis, String(user.id), checked.client, scope)
     // #3214 — the kit the person picked becomes this connection's limit (never a widening:
     // services/mcp-scope.ts intersects it with what they may do).
@@ -1036,7 +1051,9 @@ export async function oauthConnectionRoutes(app: FastifyInstance) {
         created_at: g.created_at,
         last_used_at: g.last_used_at,
         scope: g.scope || OAUTH_SCOPE,
-        chat: scopeTokens(g.scope).includes(OAUTH_CHAT_SCOPE)
+        chat: scopeTokens(g.scope).includes(OAUTH_CHAT_SCOPE),
+        // Hub mode only: may this app read the Hub (scope hub:read)?
+        hub: scopeTokens(g.scope).includes(OAUTH_HUB_SCOPE)
       }))
     }
   })
