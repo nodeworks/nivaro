@@ -34,13 +34,15 @@ services:
       HUB_AGENT_EXTENSIONS_HOST_ROOT: /srv/nivaro-hub/extensions
       # Set on only when that folder is shared storage every node mounts.
       # HUB_AGENT_EXTENSIONS_SHARED: 'on'
-      # App uploads on an NFS export (agent 0.2.2): the device in the options file
+      # App uploads on an NFS export (agent 0.2.3): the device in the options file
       # is the export ROOT, each stack gets <export>/<stack>/uploads. The agent
       # checks (and makes) those folders through its own mount of the same export.
       #   nfs.json: {"type":"nfs","o":"addr=nas.example.com,rw,nfsvers=4","device":":/volume1/nivaro"}
       #   docker secret create hub_agent_volume_opts ./nfs.json
       # HUB_AGENT_VOLUME_OPTS_FILE: /run/secrets/hub_agent_volume_opts
       # HUB_AGENT_VOLUME_EXPORT_MOUNT: /var/lib/nivaro-hub-agent/export
+      # Optional: bundled Redis only on nodes you labelled (docker node update --label-add).
+      # HUB_AGENT_REDIS_PIN_LABEL: nivaro.redis=1
     secrets:
       - hub_agent_token
       - hub_agent_tls_cert
