@@ -20,7 +20,7 @@ import type { Role, StackSpec } from './spec.js'
 import {
   APP_USER,
   folderOk,
-  redisPinned,
+  redisConstraint,
   redisVolumePlan,
   uploadsVolumePlan,
   type VolumePlan
@@ -41,6 +41,8 @@ export type RenderConfig = {
   /** Absent = the default (volumes.ts redisVolumeDefault): never the uploads' NFS options. */
   redisVolumeDriver?: string
   redisVolumeOpts?: Record<string, string> | null
+  /** HUB_AGENT_REDIS_PIN_LABEL: bundled Redis only on nodes with this label; absent = anywhere. */
+  redisPinLabel?: { key: string; value: string } | null
   redisImage: string | null
 }
 
@@ -476,9 +478,9 @@ export function renderServices(
         },
         Resources: {},
         RestartPolicy: { Condition: 'any' },
-        // A local Redis volume beside NFS uploads lives on the agent's node: Redis stays there.
-        ...(redisPinned(cfg)
-          ? { Placement: { Constraints: [`node.id==${ctx.agentNodeId}`] } }
+        // Opt-in (HUB_AGENT_REDIS_PIN_LABEL): Redis only on the nodes the operator labelled.
+        ...(redisConstraint(cfg)
+          ? { Placement: { Constraints: [redisConstraint(cfg) as string] } }
           : {}),
         Networks: [{ Target: ctx.network }]
       },

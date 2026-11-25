@@ -7,10 +7,11 @@ import {
   folderUnderExport,
   nfsExport,
   nfsUploadsName,
-  redisPinned,
+  redisConstraint,
   redisVolumeChanged,
   redisVolumeOf,
-  uploadsVolumePlan
+  uploadsVolumePlan,
+  volumeAllowed
 } from '../src/volumes.js'
 
 const NFS = { type: 'nfs', o: 'addr=nas', device: ':/export/nivaro' }
@@ -73,23 +74,33 @@ describe('volumes (0.2.2)', () => {
     expect(adopted.name).not.toBe(own.name)
   })
 
-  it('Redis: never NFS by default, pinned when local beside NFS uploads', () => {
+  it('Redis: never NFS by default, pinned only by an operator node label', () => {
     expect(redisVolumeOf({ volumeDriver: 'local', volumeOpts: NFS })).toEqual({
       driver: 'local',
       opts: {}
     })
-    expect(redisPinned({ volumeDriver: 'local', volumeOpts: NFS })).toBe(true)
+    expect(redisConstraint({ volumeDriver: 'local', volumeOpts: NFS })).toBeNull()
     expect(redisVolumeChanged({ volumeDriver: 'local', volumeOpts: NFS })).toBe(true)
     const plain = { volumeDriver: 'local', volumeOpts: {} }
-    expect(redisPinned(plain)).toBe(false)
+    expect(redisConstraint(plain)).toBeNull()
     expect(redisVolumeChanged(plain)).toBe(false)
-    const own = {
-      volumeDriver: 'local',
-      volumeOpts: NFS,
-      redisVolumeDriver: 'rexray',
-      redisVolumeOpts: {}
-    }
-    expect(redisPinned(own)).toBe(false)
+    expect(
+      redisConstraint({ ...plain, redisPinLabel: { key: 'nivaro.redis', value: 'yes' } })
+    ).toBe('node.labels.nivaro.redis==yes')
+    expect(redisConstraint({ ...plain, redisPinLabel: { key: 'a b', value: 'x' } })).toBeNull()
+  })
+
+  it('L2: the guard takes only the folder the stack is bound to', () => {
+    const cfgN = { volumeDriver: 'local', volumeOpts: NFS }
+    const own = uploadsVolumePlan('s', {}, cfgN)
+    expect(volumeAllowed(cfgN, 's', own.name, 'local', own.opts)).toBe(true)
+    const other = uploadsVolumePlan('t', {}, cfgN)
+    const otherUnderS = { ...other, name: nfsUploadsName('s', 'local', other.opts) }
+    expect(volumeAllowed(cfgN, 's', otherUnderS.name, 'local', other.opts)).toBe(false)
+    const adopted = uploadsVolumePlan('s', { uploads_folder: 'efp' }, cfgN)
+    expect(volumeAllowed(cfgN, 's', adopted.name, 'local', adopted.opts)).toBe(false)
+    expect(volumeAllowed(cfgN, 's', adopted.name, 'local', adopted.opts, 'efp')).toBe(true)
+    expect(volumeAllowed(cfgN, 's', adopted.name, 'local', adopted.opts, 'other')).toBe(false)
   })
 
   it('appCanWrite judges uid 1000 by mode bits like the image entrypoint', () => {

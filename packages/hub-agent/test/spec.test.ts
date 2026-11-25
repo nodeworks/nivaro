@@ -1173,7 +1173,7 @@ describe('validateStackSpec — shared deployment owners (phase 6)', () => {
   })
 })
 
-describe('validateStackSpec — files on an NFS export (0.2.2)', () => {
+describe('validateStackSpec — files on an NFS export (0.2.3)', () => {
   const nfs = cfg({ volumeOpts: { type: 'nfs', o: 'addr=nas', device: ':/export/nivaro' } })
 
   it('takes an adopted folder, a files sub-folder and run_as app', () => {

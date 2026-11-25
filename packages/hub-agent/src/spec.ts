@@ -38,18 +38,18 @@ export type StackSpec = {
    */
   host_pattern?: string
   /**
-   * 0.2.2: an EXISTING folder under the agent's NFS export (relative, 1–8 segments, no `..`)
+   * 0.2.3: an EXISTING folder under the agent's NFS export (relative, 1–8 segments, no `..`)
    * the stack uses as its uploads instead of `<stack>/uploads`. Never created or changed by the
    * agent; needs an NFS export on the agent (NO_NFS_EXPORT).
    */
   uploads_folder?: string
   /**
-   * 0.2.2: where the files sit inside the uploads volume (relative, same rule):
+   * 0.2.3: where the files sit inside the uploads volume (relative, same rule):
    * STORAGE_LOCAL_ROOT becomes `/app/uploads/<files_subfolder>`. Any volume driver.
    */
   files_subfolder?: string
   /**
-   * 0.2.2: `app` = the app services run as uid 1000 (the image's `node` user, ContainerSpec.User
+   * 0.2.3: `app` = the app services run as uid 1000 (the image's `node` user, ContainerSpec.User
    * 1000:1000) from the start, never as root: for an NFS export with root squash, where root in
    * the container can do nothing on the files. Absent = the image decides (it steps down to 1000).
    */
@@ -654,7 +654,7 @@ export function validateStackSpec(body: unknown, cfg: SpecConfig): SpecResult {
     } else publishPort = port
   } else if (cfg.edge === 'publish' && hasWeb) bad('publish_port', 'REQUIRED')
 
-  // Files (0.2.2): an adopted folder on the export, the files' sub-folder, the run-as user.
+  // Files (0.2.3): an adopted folder on the export, the files' sub-folder, the run-as user.
   let uploadsFolder: string | undefined
   if (has('uploads_folder')) {
     const v = body.uploads_folder

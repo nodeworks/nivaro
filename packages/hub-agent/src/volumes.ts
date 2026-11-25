@@ -2,15 +2,15 @@
 // Redis, the Redis volume. Pure: no I/O. The renderer, the stack operations and the engine guard
 // all ask this module, so the three agree on every name, driver and option set.
 //
-// Uploads on an NFS export (agent 0.2.2): when HUB_AGENT_VOLUME_OPTS_FILE names an NFS `device`,
+// Uploads on an NFS export (agent 0.2.3): when HUB_AGENT_VOLUME_OPTS_FILE names an NFS `device`,
 // that device is the export ROOT and each stack gets its own folder under it:
 // `<export>/<stack>/uploads`, or an existing folder the stack adopts (`uploads_folder`). Two
 // stacks never share one folder (the stack operations refuse UPLOADS_FOLDER_TAKEN). The Docker
 // volume's name carries a digest of its driver and options (`nvh_<stack>_uploads-<10 hex>`):
 // Docker never changes an existing volume's options, so a new folder takes a new volume.
 // Bundled Redis never sits on NFS: it gets the local driver unless the operator names a Redis
-// driver of their own (HUB_AGENT_REDIS_VOLUME_*), and a local Redis volume is pinned to the
-// agent's node.
+// driver of their own (HUB_AGENT_REDIS_VOLUME_*). It is pinned only where the operator asks
+// (HUB_AGENT_REDIS_PIN_LABEL, a node label), never to the agent's own node.
 import { createHash } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import { redisVolume, uploadsVolume } from './names.js'
@@ -22,6 +22,12 @@ export type VolumeConfig = {
   /** Absent = the default (redisVolumeDefault). */
   redisVolumeDriver?: string
   redisVolumeOpts?: Record<string, string> | null
+  /**
+   * HUB_AGENT_REDIS_PIN_LABEL (0.2.3): bundled Redis runs only on nodes carrying this node label
+   * (`node.labels.<key>==<value>`), so its local volume is always there. Absent/null = not pinned
+   * (a Redis task that moves starts empty; the data is rebuildable).
+   */
+  redisPinLabel?: { key: string; value: string } | null
 }
 
 export type VolumePlan = {
@@ -53,7 +59,7 @@ export function isNfsOpts(opts: Record<string, unknown> | null | undefined): boo
 
 /**
  * The NFS export root (`:/<path>`) the uploads folders sit under, or null: only when the uploads
- * options are NFS and name a device. Without a device the agent keeps the pre-0.2.2 layout.
+ * options are NFS and name a device. Without a device the agent keeps the pre-0.2.3 layout.
  */
 export function nfsExport(cfg: Pick<VolumeConfig, 'volumeOpts'>): string | null {
   const o = cfg.volumeOpts ?? {}
@@ -86,7 +92,7 @@ export function deviceFor(exportDevice: string, folder: string): string {
 }
 
 /**
- * The folder a device names under the export: '' for the export root itself (the pre-0.2.2
+ * The folder a device names under the export: '' for the export root itself (the pre-0.2.3
  * layout), the relative path for a valid folder under it, null for anything else.
  */
 export function folderUnderExport(exportDevice: string, device: unknown): string | null {
@@ -157,7 +163,7 @@ export function uploadsVolumePlan(
 }
 
 /**
- * Redis's volume when the operator names none: the uploads driver and options as before 0.2.2,
+ * Redis's volume when the operator names none: the uploads driver and options as before 0.2.3,
  * except that options mounting NFS give way to `local` (Redis never on NFS).
  */
 export function redisVolumeDefault(
@@ -180,17 +186,22 @@ export function redisVolumePlan(stack: string, cfg: VolumeConfig): VolumePlan {
   return { name: redisVolume(stack), driver: r.driver, opts: r.opts, folder: null, adopted: false }
 }
 
+/** A node label `key=value` for HUB_AGENT_REDIS_PIN_LABEL: key and value letters, digits, . _ -. */
+export const PIN_LABEL_PART_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
+
 /**
- * Bundled Redis is pinned to the agent's node when the uploads mount NFS (a swarm that shares
- * files across nodes) and Redis keeps a `local` volume: a Redis task never moves to a node where
- * its data is not.
+ * The placement constraint for bundled Redis: only on nodes the operator labelled
+ * (HUB_AGENT_REDIS_PIN_LABEL), never the agent's own node id (an agent that moves must not change
+ * a stack or strand its Redis). null = not pinned.
  */
-export function redisPinned(cfg: VolumeConfig): boolean {
-  return isNfsOpts(cfg.volumeOpts) && redisVolumeOf(cfg).driver === 'local'
+export function redisConstraint(cfg: VolumeConfig): string | null {
+  const l = cfg.redisPinLabel
+  if (!l || !PIN_LABEL_PART_RE.test(l.key) || !PIN_LABEL_PART_RE.test(l.value)) return null
+  return `node.labels.${l.key}==${l.value}`
 }
 
 /**
- * Redis's volume differs from the one agents before 0.2.2 gave it (the uploads driver and
+ * Redis's volume differs from the one agents before 0.2.3 gave it (the uploads driver and
  * options): then it is part of the stack hash. Equal = the hash an older agent computed.
  */
 export function redisVolumeChanged(cfg: VolumeConfig): boolean {
@@ -210,7 +221,9 @@ export function volumeAllowed(
   stack: string,
   name: unknown,
   driver: unknown,
-  opts: Record<string, unknown>
+  opts: Record<string, unknown>,
+  /** The folder this stack's uploads must sit in: its adopted one, else `<stack>/uploads`. */
+  expectFolder?: string
 ): boolean {
   if (typeof name !== 'string' || typeof driver !== 'string') return false
   if (name === redisVolume(stack)) {
@@ -225,7 +238,7 @@ export function volumeAllowed(
   const { device: _root, ...want } = cfg.volumeOpts ?? {}
   if (!isDeepStrictEqual(rest, want)) return false
   const folder = folderUnderExport(exp, device)
-  if (!folder) return false
+  if (!folder || folder !== (expectFolder ?? derivedFolder(stack))) return false
   return name === nfsUploadsName(stack, driver, opts as Record<string, string>)
 }
 

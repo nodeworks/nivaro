@@ -30,6 +30,8 @@ import {
 
 export type HandlerDeps = {
   nodeId: string
+  /** The swarm's cluster id: names the agent's claim on a stack folder (0.2.3). */
+  clusterId?: string
   health: Handlers['health']
   log?: Log
   sleep?: (ms: number) => Promise<void>
@@ -58,6 +60,7 @@ export function makeHandlers(engine: Engine, cfg: AgentConfig, deps: HandlerDeps
   let queue: Promise<unknown> = Promise.resolve()
   const stackDeps = () => ({
     nodeId: deps.nodeId,
+    clusterId: deps.clusterId,
     log,
     sleep: deps.sleep,
     extension: deps.extension

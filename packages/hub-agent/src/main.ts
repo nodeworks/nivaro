@@ -15,14 +15,15 @@ import { createLog, type Log } from './log.js'
 import { createServer, type HandlerResult, type Handlers } from './server.js'
 import { nfsExport } from './volumes.js'
 
-export const AGENT_VERSION = '0.2.2'
+export const AGENT_VERSION = '0.2.3'
 export const MIN_ENGINE_API = [1, 44] as const
 
 export type StartResult =
   | { ok: true; server: http.Server | https.Server; cfg: AgentConfig; engine: Engine }
   | { ok: false; code: string }
 
-export type EngineFacts = { engineApi: string; nodeId: string }
+/** clusterId: the swarm's id (GET /info Swarm.Cluster.ID), '' when the Engine does not say. */
+export type EngineFacts = { engineApi: string; nodeId: string; clusterId?: string }
 
 /** `1.45` ≥ `1.44`. Anything unreadable counts as too old. */
 export function engineApiOk(version: unknown): boolean {
@@ -39,15 +40,18 @@ export async function checkEngine(
     const v = await engine.call<{ ApiVersion?: string }>('GET', '/version')
     if (v.status !== 200 || !engineApiOk(v.body?.ApiVersion))
       return { ok: false, code: 'ENGINE_TOO_OLD' }
-    const info = await engine.call<{ Swarm?: { ControlAvailable?: boolean; NodeID?: string } }>(
-      'GET',
-      '/info'
-    )
+    const info = await engine.call<{
+      Swarm?: { ControlAvailable?: boolean; NodeID?: string; Cluster?: { ID?: unknown } }
+    }>('GET', '/info')
     if (info.status !== 200 || info.body?.Swarm?.ControlAvailable !== true)
       return { ok: false, code: 'NOT_A_MANAGER' }
     return {
       ok: true,
-      facts: { engineApi: v.body.ApiVersion as string, nodeId: info.body.Swarm.NodeID ?? '' }
+      facts: {
+        engineApi: v.body.ApiVersion as string,
+        nodeId: info.body.Swarm.NodeID ?? '',
+        clusterId: typeof info.body.Swarm.Cluster?.ID === 'string' ? info.body.Swarm.Cluster.ID : ''
+      }
     }
   } catch (err) {
     return { ok: false, code: err instanceof EngineError ? err.code : 'ENGINE_UNREACHABLE' }
@@ -92,11 +96,15 @@ export function baseHandlers(cfg: AgentConfig, facts: EngineFacts, engine?: Engi
         engine_api: facts.engineApi,
         swarm: { manager: true, node_id: facts.nodeId, nodes: await swarmNodes() },
         volume_driver: cfg.volumeDriver,
-        // 0.2.2: uploads on an NFS export, one folder per stack (shared by every node), whether
+        // 0.2.3: uploads on an NFS export, one folder per stack (shared by every node), whether
         // the agent sees the export to check those folders, and bundled Redis's own driver.
         volume_nfs: nfsExport(cfg) !== null,
         export_mount: cfg.exportMount !== null,
         redis_volume_driver: cfg.redisVolumeDriver,
+        // 0.2.3: bundled Redis runs only on nodes with this label (`key=value`); null = anywhere.
+        redis_pin_label: cfg.redisPinLabel
+          ? `${cfg.redisPinLabel.key}=${cfg.redisPinLabel.value}`
+          : null,
         images: cfg.images,
         host_suffixes: cfg.hostSuffixes,
         edge: cfg.edge,
@@ -167,6 +175,7 @@ async function run(): Promise<void> {
     makeHandlers: (cfg, engine, facts) =>
       makeHandlers(engine, cfg, {
         nodeId: facts.nodeId,
+        clusterId: facts.clusterId ?? '',
         health: baseHandlers(cfg, facts, engine).health,
         log
       })

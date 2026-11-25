@@ -791,7 +791,7 @@ describe('E2E B1 (P6-34): exactly one Traefik network label', () => {
   })
 })
 
-describe('renderServices — files on an NFS export (0.2.2)', () => {
+describe('renderServices — files on an NFS export (0.2.3)', () => {
   const NFS = { type: 'nfs', o: 'addr=nas,rw,nfsvers=4', device: ':/volume1/nivaro' }
   const nfsCfg = (over: Partial<RenderConfig> = {}) => cfg({ volumeOpts: NFS, ...over })
   const mountOf = (s: EngineServiceSpec, target: string) => {
@@ -825,8 +825,18 @@ describe('renderServices — files on an NFS export (0.2.2)', () => {
       Source: 'nvh_st_redis',
       VolumeOptions: { DriverConfig: { Name: 'local', Options: {} } }
     })
-    // Its local volume lives on the agent's node: Redis stays there.
-    expect(redis.TaskTemplate.Placement).toEqual({ Constraints: ['node.id==node-1'] })
+    // Not pinned unless the operator labels nodes for it (never the agent's node id).
+    expect(redis.TaskTemplate.Placement).toBeUndefined()
+    const pinned = byName(
+      renderServices(
+        'st',
+        large(),
+        nfsCfg({ redisPinLabel: { key: 'nivaro.redis', value: '1' } }),
+        ctx()
+      ),
+      'st_redis'
+    )
+    expect(pinned.TaskTemplate.Placement).toEqual({ Constraints: ['node.labels.nivaro.redis==1'] })
     expect(byName(svcs, 'st_web').TaskTemplate.Placement).toBeUndefined()
   })
 

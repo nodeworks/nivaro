@@ -936,7 +936,7 @@ describe('ruling P4-12: NFS volumes, never bind', () => {
     (p) => (p === '/v' ? JSON.stringify(nfs) : 'agent-token-0123456789-abcdefghij')
   )
 
-  // 0.2.2: the configured device is the export ROOT; each stack gets <export>/<stack>/uploads.
+  // 0.2.3: the configured device is the export ROOT; each stack gets <export>/<stack>/uploads.
   const own = { ...nfs, device: ':/export/uploads/s/uploads' }
   const ownName = nfsUploadsName('s', 'local', own)
 
@@ -947,15 +947,29 @@ describe('ruling P4-12: NFS volumes, never bind', () => {
       body: { Name: ownName, Driver: 'local', DriverOpts: { ...own }, Labels: OWN }
     })
     const adopted = { ...nfs, device: ':/export/uploads/legacy/files' }
-    await engine.call('POST', '/volumes/create', {
-      body: {
-        Name: nfsUploadsName('s', 'local', adopted),
-        Driver: 'local',
-        DriverOpts: adopted,
-        Labels: OWN
-      }
-    })
+    const body = {
+      Name: nfsUploadsName('s', 'local', adopted),
+      Driver: 'local',
+      DriverOpts: adopted,
+      Labels: OWN
+    }
+    // L2: an adopted folder only when the call names it as the stack's folder.
+    await expect(engine.call('POST', '/volumes/create', { body })).rejects.toBeInstanceOf(
+      EngineForbiddenError
+    )
+    await expect(
+      engine.call('POST', '/volumes/create', { body, uploadsFolder: 'other' })
+    ).rejects.toBeInstanceOf(EngineForbiddenError)
+    await engine.call('POST', '/volumes/create', { body, uploadsFolder: 'legacy/files' })
+    // Another stack's own folder, under a name digest made for this stack: refused.
+    const theirs = { ...nfs, device: ':/export/uploads/t/uploads' }
+    await expect(
+      engine.call('POST', '/volumes/create', {
+        body: { ...body, Name: nfsUploadsName('s', 'local', theirs), DriverOpts: theirs }
+      })
+    ).rejects.toBeInstanceOf(EngineForbiddenError)
     expect(seen).toHaveLength(2)
+    expect(seen[1].body).not.toContain('uploadsFolder')
   })
 
   it('the export root, a device outside it, a wrong digest or the old name are refused', async () => {
@@ -1400,7 +1414,7 @@ describe('fix round 1: the guard reads ownership before a write', () => {
   })
 })
 
-describe('0.2.2: the service User', () => {
+describe('0.2.3: the service User', () => {
   it("only the image's own user (run_as: 'app') is taken", async () => {
     const engine = createEngine(cfg, transport)
     await engine.call('POST', '/services/create', { body: service({ User: '1000:1000' }) })
