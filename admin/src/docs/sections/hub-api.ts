@@ -37,11 +37,18 @@ export const hubApiDocs: DocSection = {
           'Needs `hub:write`. Acts as the key’s owner: an owner’s key never reaches admin routes'
         ],
         [
-          'A connected app (OAuth) or an MCP tool call',
-          'Yes',
-          'Yes',
+          'A connected app (OAuth `nvo_`)',
+          'Needs the `hub:read` OAuth scope (a consent-page tick, offered only on a Hub)',
+          'Needs `hub:read`',
           'Never (403 `HUB_WRITE_NOT_FOR_AGENTS`)'
         ],
+        [
+          'An MCP tool call',
+          'As its credential (API key scope or OAuth scope). A connection limited to named collections never reaches the Hub',
+          'As reads',
+          'Never (403 `HUB_WRITE_NOT_FOR_AGENTS`)'
+        ],
+        ['The Teams bot', 'Never', 'Never', 'Never'],
         [
           'View-as (`nvm_`) or run-as-key (`nvq_`)',
           'Yes (a run-as-key also needs the key’s Hub scope)',
@@ -134,7 +141,7 @@ curl -X POST -H "Authorization: Bearer nvk_…" -H "Content-Type: application/js
     { type: 'h2', id: 'hub-api-mcp', text: 'MCP' },
     {
       type: 'p',
-      text: 'On a Hub, the MCP server (`/api/mcp`, and `@nivaro/mcp`) adds read and plan tools: `hub_list_apps`, `hub_read_app`, `hub_app_status`, `hub_fleet_status`, `hub_deploy_history`, `hub_list_shared`, `hub_plan_promote`, `hub_plan_move` and `hub_plan_upgrade`. They call the routes above as the connected person, so an app owner’s assistant sees only that owner’s apps. They never start a run or change anything: the Hub refuses every write from a connected app. Elsewhere the tools are not listed.'
+      text: 'On a Hub, the MCP server (`/api/mcp`, and `@nivaro/mcp`) adds read and plan tools: `hub_list_apps`, `hub_read_app`, `hub_app_status`, `hub_fleet_status`, `hub_deploy_history`, `hub_list_shared`, `hub_plan_promote`, `hub_plan_move` and `hub_plan_upgrade`. They call the routes above as the connected person, so an app owner’s assistant sees only that owner’s apps. They are listed only for a connection that carries Hub access: an API key with `hub:read` (or `hub:write`), or an OAuth connection the person allowed to “read the Hub” (scope `hub:read`). They never start a run or change anything: the Hub refuses every write from a connected app. Elsewhere the tools are not listed.'
     }
   ]
 }

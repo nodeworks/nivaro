@@ -19,8 +19,12 @@ import { hubScopeLevel } from './scopes.js'
  *                                            (every write). `*` never implies it. An admin's key
  *                                            with a Hub scope passes the admin routes; an owner's
  *                                            key acts as the owner.
- *   connected app (OAuth nvo_), MCP tool call, Teams bot
- *                                            reads and plans only (403 HUB_WRITE_NOT_FOR_AGENTS)
+ *   connected app (OAuth nvo_)               needs the `hub:read` OAuth scope (the person ticks it
+ *                                            on the consent page; offered only on a Hub); reads
+ *                                            and plans only (403 HUB_WRITE_NOT_FOR_AGENTS)
+ *   MCP tool call (any credential)           reads and plans only; a connection limited to named
+ *                                            collections never reaches the Hub
+ *   Teams bot                                never (403 HUB_SCOPE_MISSING)
  *   View-as (nvm_), run-as-key (nvq_)        reads and plans only (403 NOT_WHILE_MASQUERADING);
  *                                            a run-as-key also needs the key's Hub scope
  */
@@ -31,7 +35,15 @@ export interface HubRefusal {
   error: string
 }
 
-type Caller = Pick<FastifyRequest, 'authMethod' | 'apiKeyScopes' | 'mcpInner' | 'masqueradeAdminId'>
+type Caller = Pick<
+  FastifyRequest,
+  'authMethod' | 'apiKeyScopes' | 'mcpInner' | 'masqueradeAdminId' | 'oauthScopes' | 'mcpScope'
+>
+
+/** The OAuth scope a connected app needs on the Hub (lib/oauth.ts OAUTH_HUB_SCOPE). */
+const OAUTH_HUB_READ = 'hub:read'
+
+const missing = (error: string): HubRefusal => ({ status: 403, code: 'HUB_SCOPE_MISSING', error })
 
 /** The refusal for this caller on a route needing `access`, else null. */
 export function hubCredentialRefusal(req: Caller, access: HubAccess): HubRefusal | null {
@@ -40,14 +52,23 @@ export function hubCredentialRefusal(req: Caller, access: HubAccess): HubRefusal
     const level = hubScopeLevel(req.apiKeyScopes)
     const need = access === 'write' ? 'write' : 'read'
     if (level === 'none' || (need === 'write' && level !== 'write'))
-      return {
-        status: 403,
-        code: 'HUB_SCOPE_MISSING',
-        error: `This API key needs the hub:${need} scope for this Hub route.`
-      }
+      return missing(`This API key needs the hub:${need} scope for this Hub route.`)
   }
+  if (method === 'oauth' && !(req.oauthScopes ?? []).includes(OAUTH_HUB_READ))
+    return missing(
+      'This connected app was not given the hub:read scope. Connect it again and tick “read the Hub”.'
+    )
+  if (method === 'teams') return missing('The Teams bot does not reach the Hub.')
+  // A connection limited to named collections (services/mcp-scope.ts) never reaches the Hub (a
+  // collection list cannot name it); a kit that is gone allows nothing.
+  if (
+    req.mcpInner === true &&
+    req.mcpScope &&
+    (req.mcpScope.kit_missing || req.mcpScope.collections != null)
+  )
+    return missing('This MCP connection is limited to named collections, not the Hub.')
   if (access !== 'write') return null
-  if (req.mcpInner === true || method === 'oauth' || method === 'teams')
+  if (req.mcpInner === true || method === 'oauth')
     return {
       status: 403,
       code: 'HUB_WRITE_NOT_FOR_AGENTS',

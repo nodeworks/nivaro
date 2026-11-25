@@ -37,6 +37,9 @@ vi.mock('../../../middleware/authenticate.js', () => {
     if (h['x-scopes']) req.apiKeyScopes = JSON.parse(h['x-scopes'])
     if (h['x-mcp'] === '1') req.mcpInner = true
     if (h['x-masq']) req.masqueradeAdminId = h['x-masq']
+    if (h['x-oscopes']) req.oauthScopes = h['x-oscopes'].split(' ')
+    if (h['x-mcpcols'])
+      req.mcpScope = { collections: h['x-mcpcols'].split(','), kit_missing: false } as never
   }
   const admin = async (req: FastifyRequest, reply: unknown) => {
     await sign(req)
@@ -216,9 +219,13 @@ describe('API keys on the Hub', () => {
 })
 
 describe('connected apps, MCP and View-as on the Hub', () => {
-  it('OAuth and MCP tool calls read and plan, never write', async () => {
+  it('OAuth needs the hub:read scope; OAuth and MCP tool calls read and plan, never write', async () => {
+    const noScope = await call('GET', '/api/hub/apps', { ...admin, 'x-auth': 'oauth' })
+    expect(noScope.statusCode).toBe(403)
+    expect(noScope.json().code).toBe('HUB_SCOPE_MISSING')
     for (const h of [
-      { ...admin, 'x-auth': 'oauth' },
+      { ...admin, 'x-auth': 'oauth', 'x-oscopes': 'nivaro hub:read' },
+      { ...admin, 'x-auth': 'oauth', 'x-oscopes': 'nivaro hub:read', 'x-mcp': '1' },
       { ...admin, 'x-mcp': '1' },
       { ...key(['read', 'write']), 'x-mcp': '1' }
     ]) {
@@ -227,6 +234,20 @@ describe('connected apps, MCP and View-as on the Hub', () => {
       const w = await call('PATCH', `/api/hub/apps/${appId}`, h, { name: 'Z' })
       expect(w.statusCode).toBe(403)
       expect(w.json().code).toBe('HUB_WRITE_NOT_FOR_AGENTS')
+    }
+  })
+
+  it('a collection-scoped admin key, a collection-limited MCP connection and the Teams bot see no Hub app', async () => {
+    const scopedKey = {
+      ...admin,
+      'x-auth': 'api_key',
+      'x-scopes': JSON.stringify([{ collection: 'projects', actions: ['read'] }])
+    }
+    const limitedConn = { ...key(['read']), 'x-mcp': '1', 'x-mcpcols': 'projects' }
+    for (const h of [scopedKey, limitedConn, { ...admin, 'x-auth': 'teams' }]) {
+      const r = await call('GET', '/api/hub/apps', h)
+      expect(r.statusCode).toBe(403)
+      expect(r.json().code).toBe('HUB_SCOPE_MISSING')
     }
   })
 

@@ -19,9 +19,10 @@ import {
   grantedScope,
   isAllowedRedirectUri,
   OAUTH_CHAT_SCOPE,
+  OAUTH_HUB_SCOPE,
   OAUTH_SCOPE,
-  OAUTH_SCOPES,
   offeredScope,
+  offeredScopes,
   redirectMatches,
   scopeTokens,
   verifyPkceS256,
@@ -36,6 +37,7 @@ import {
   deletePushRowsOrKeep,
   endDeviceGrant
 } from '../services/device-grants.js'
+import { hubModeEnabled } from '../services/hub/mode.js'
 import { mcpOAuthEnabled, mcpPublicOrigin, mcpResourceUrl } from '../services/mcp-config.js'
 import { listKits, type ToolKit } from '../services/mcp-kits.js'
 import { deleteScope, readScopeRow, scopesReady, writeScope } from '../services/mcp-scope.js'
@@ -137,7 +139,7 @@ function protectedResourceDoc(req: FastifyRequest) {
     resource: `${o}/api/mcp`,
     authorization_servers: [o],
     bearer_methods_supported: ['header'],
-    scopes_supported: [...OAUTH_SCOPES],
+    scopes_supported: offeredScopes(),
     resource_name: 'Nivaro',
     resource_documentation: 'https://nivaro.dev/docs.html#s-mcp'
   }
@@ -159,7 +161,7 @@ function authorizationServerDoc(req: FastifyRequest) {
     code_challenge_methods_supported: ['S256'],
     token_endpoint_auth_methods_supported: ['none'],
     revocation_endpoint_auth_methods_supported: ['none'],
-    scopes_supported: [...OAUTH_SCOPES],
+    scopes_supported: offeredScopes(),
     authorization_response_iss_parameter_supported: true
   }
 }
@@ -265,7 +267,7 @@ async function checkAuthorize(
     return fail('This app did not use PKCE (S256), which Nivaro requires.')
   if (!offeredScope(p.scope))
     return fail(
-      `This app asked for a scope Nivaro does not offer (they are ${OAUTH_SCOPES.join(' and ')}).`
+      `This app asked for a scope Nivaro does not offer (they are ${offeredScopes().join(' and ')}).`
     )
   // A phone app's tokens are not bound to a resource (they act as the person everywhere), so its
   // `resource` is ignored; only a phone app may name a device. Neither rides on for the others.
@@ -369,6 +371,9 @@ function consentPage(
   const name = escapeHtml(cleanClientName(client.client_name))
   // Chat (#2492) is the person's choice, pre-ticked only when the app asked for it.
   const askedChat = scopeTokens(p.scope).includes(OAUTH_CHAT_SCOPE)
+  // The Hub (Hub mode only): never pre-ticked unless the app asked for it.
+  const offerHub = hubModeEnabled()
+  const askedHub = offerHub && scopeTokens(p.scope).includes(OAUTH_HUB_SCOPE)
   const hidden = hiddenFields(p, csrf)
   return page(
     `Connect ${cleanClientName(client.client_name)} to Nivaro`,
@@ -382,6 +387,12 @@ function consentPage(
 ${kitFieldset(kits)}
 <label class="opt"><input type="checkbox" name="chat" value="1"${askedChat ? ' checked' : ''}>
 <span>Also let it read and post in your chat conversations<span>Only rooms you can open. Its messages say they came from ${name}.</span></span></label>
+${
+  offerHub
+    ? `<label class="opt"><input type="checkbox" name="hub" value="1"${askedHub ? ' checked' : ''}>
+<span>Also let it read the Hub and make plans<span>Apps, environments, status and runs you can see. It can never promote, move or change anything.</span></span></label>`
+    : ''
+}
 ${consentFoot(user)}</form>`
   )
 }
@@ -657,7 +668,7 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
         token_endpoint_auth_method: 'none',
         grant_types: ['authorization_code', 'refresh_token'],
         response_types: ['code'],
-        scope: OAUTH_SCOPES.join(' ')
+        scope: offeredScopes().join(' ')
       })
   })
 
@@ -731,7 +742,10 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
       })
       return reply.redirect(withAuthResponse(p.redirect_uri, { code, state: p.state, iss }))
     }
-    const scope = grantedScope(body.chat === '1' || body.chat === 'on')
+    const scope = grantedScope(
+      body.chat === '1' || body.chat === 'on',
+      hubModeEnabled() && (body.hub === '1' || body.hub === 'on')
+    )
     const grant = await upsertGrant(app.redis, String(user.id), checked.client, scope)
     // #3214 — the kit the person picked becomes this connection's limit (never a widening:
     // services/mcp-scope.ts intersects it with what they may do).

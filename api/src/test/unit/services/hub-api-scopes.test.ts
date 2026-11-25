@@ -54,13 +54,11 @@ describe('credential refusal', () => {
     expect(hubCredentialRefusal(readKey, 'read')).toBeNull()
     expect(hubCredentialRefusal(readKey, 'plan')).toBeNull()
     expect(hubCredentialRefusal(readKey, 'write')?.code).toBe('HUB_SCOPE_MISSING')
-    expect(hubCredentialRefusal({ authMethod: 'oauth' }, 'plan')).toBeNull()
-    expect(hubCredentialRefusal({ authMethod: 'oauth' }, 'write')?.code).toBe(
-      'HUB_WRITE_NOT_FOR_AGENTS'
-    )
-    expect(hubCredentialRefusal({ authMethod: 'teams' }, 'write')?.code).toBe(
-      'HUB_WRITE_NOT_FOR_AGENTS'
-    )
+    expect(hubCredentialRefusal({ authMethod: 'oauth' }, 'read')?.code).toBe('HUB_SCOPE_MISSING')
+    const hubApp = { authMethod: 'oauth' as const, oauthScopes: ['nivaro', 'hub:read'] }
+    expect(hubCredentialRefusal(hubApp, 'plan')).toBeNull()
+    expect(hubCredentialRefusal(hubApp, 'write')?.code).toBe('HUB_WRITE_NOT_FOR_AGENTS')
+    expect(hubCredentialRefusal({ authMethod: 'teams' }, 'read')?.code).toBe('HUB_SCOPE_MISSING')
     expect(
       hubCredentialRefusal({ authMethod: 'masquerade', masqueradeAdminId: 'a' }, 'write')?.code
     ).toBe('NOT_WHILE_MASQUERADING')
@@ -82,5 +80,29 @@ describe('security alert words', () => {
       expires_at: null
     } as never
     expect(apiKeyWidening(before, after).join(' ')).toContain('the Hub')
+  })
+})
+
+describe('connected apps (OAuth) and the Hub', () => {
+  it('hub:read is offered only on a Hub and only granted when ticked', async () => {
+    const { offeredScopes, grantedScope } = await import('../../../lib/oauth.js')
+    expect(offeredScopes({} as never)).not.toContain('hub:read')
+    expect(offeredScopes({ HUB: 'on', CLOUD_META_DB_URL: 'x' } as never)).not.toContain('hub:read')
+    expect(offeredScopes({ HUB: 'on' } as never)).toContain('hub:read')
+    expect(grantedScope(false)).toBe('nivaro')
+    expect(grantedScope(true, true)).toBe('nivaro chat hub:read')
+  })
+
+  it('a connected app never writes a Hub route, plans stay reachable', async () => {
+    const { oauthAudienceRefusal } = await import('../../../services/mcp-config.js')
+    const at = (method: string, url: string) =>
+      oauthAudienceRefusal({ method, url, mcpInner: true } as never)
+    expect(at('GET', '/api/hub/apps')).toBeNull()
+    expect(at('POST', '/api/hub/environments/3/promote/plan')).toBeNull()
+    expect(at('POST', '/api/hub/shared/2/upgrade/plan')).toBeNull()
+    expect(at('POST', '/api/hub/environments/3/promote')).not.toBeNull()
+    expect(at('PATCH', '/api/hub/apps/1')).not.toBeNull()
+    expect(at('DELETE', '/api/Hub/apps/1')).not.toBeNull()
+    expect(at('POST', '/api/hub-link/status')).toBeNull()
   })
 })
