@@ -3,18 +3,21 @@ import { utcNow } from '../dialect.js'
 import { longText } from '../portable-ddl.js'
 
 /**
- * Nivaro Hub fleet view: the last thing the Hub saw of each environment, uptime samples, version
- * drift alerts and the monthly SLO reports. Created on every install, used only in hub mode
- * (HUB=on), empty otherwise. No foreign keys; each table is skipped when it already exists.
- * Unique indexes are declared in createTable (portable on all five engines).
+ * Nivaro Hub fleet view: the last thing the Hub saw of each environment, uptime samples and their
+ * hourly rollups, version drift alerts and the monthly SLO reports. Created on every install, used
+ * only in hub mode (HUB=on), empty otherwise. No foreign keys; each table is skipped when it
+ * already exists. Unique indexes are declared in createTable (portable on all five engines).
  *
  *  - nivaro_hub_fleet_status    one row per environment: the newest status the probe job read
  *                               (state, version, preflight, readiness score, open issues) and
  *                               `version_since` = when that version was first seen
  *  - nivaro_hub_uptime_samples  one row per probe of an environment's public /api/version (and
- *                               /api/ready); pruned after 45 days by cron hub-fleet-prune
- *  - nivaro_hub_fleet_alerts    one row per opened drift alert (rule + subject); resolved_at set
- *                               when the rule stops firing, notified_at once people were told
+ *                               /api/ready); kept 48 hours (cron hub-fleet-prune) — only the
+ *                               rollup job and the recent-failures list read it
+ *  - nivaro_hub_uptime_hours    one row per environment per UTC hour (samples, answered, p95 ms),
+ *                               written by cron hub-fleet-rollup; what every uptime figure reads
+ *  - nivaro_hub_fleet_alerts    one row per opened drift alert (rule + environment); resolved_at
+ *                               set when the rule stops firing, notified_at once people were told
  *  - nivaro_hub_slo_reports     one row per environment per month (uptime + target, basis points)
  */
 export async function up(knex: Knex): Promise<void> {
@@ -50,8 +53,22 @@ export async function up(knex: Knex): Promise<void> {
       t.boolean('ready').nullable()
       t.integer('ms').nullable()
       t.string('code', 32).nullable()
-      t.index(['environment_id', 'at'], 'ix_nivaro_hub_uptime_env_at')
+      // Covers the rollup read (env, window, up) and the recent-failures list.
+      t.index(['environment_id', 'at', 'up'], 'ix_nivaro_hub_uptime_env_at_up')
       t.index(['at'], 'ix_nivaro_hub_uptime_at')
+    })
+  }
+
+  if (!(await knex.schema.hasTable('nivaro_hub_uptime_hours'))) {
+    await knex.schema.createTable('nivaro_hub_uptime_hours', (t) => {
+      t.increments('id').primary()
+      t.integer('environment_id').notNullable()
+      t.dateTime('hour').notNullable()
+      t.integer('samples').notNullable()
+      t.integer('up_samples').notNullable()
+      t.integer('ms_p95').nullable()
+      t.unique(['environment_id', 'hour'], { indexName: 'ux_nivaro_hub_uptime_hour' })
+      t.index(['hour'], 'ix_nivaro_hub_uptime_hour_at')
     })
   }
 

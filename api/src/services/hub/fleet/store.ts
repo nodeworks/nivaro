@@ -1,27 +1,40 @@
 import { db } from '../../../db/index.js'
+import { MOVE_OPEN_STATUSES } from '../move-open.js'
 import type { HubEnvStatus } from '../status.js'
-import type { ProbeSample } from './probe.js'
+import { type ProbeSample, versionOf } from './probe.js'
 import type { UptimeCounts } from './uptime.js'
 
 /**
- * Hub fleet tables (migration 566): the status snapshot per environment, the uptime samples, and
- * the small reads the fleet page and the jobs share (last Hub deploy per environment, people's
- * names). Raw knex on the Hub's own tables only — never an app's data.
+ * Hub fleet tables (migration 566): the status snapshot per environment, the uptime samples and
+ * their hourly rollups, and the small reads the fleet page and the jobs share (last Hub deploy per
+ * environment, people's names, environments a Hub run is busy with). Raw knex on the Hub's own
+ * tables only — never an app's data.
+ *
+ * Raw minute samples live 48 hours: the rollup job (hub-fleet-rollup) folds them into
+ * nivaro_hub_uptime_hours, and every uptime figure (page, sheet, monthly report) reads the
+ * hours. Raw rows are read only by the rollup and the "recent failed probes" list.
  */
 
 export const FLEET_STATUS = 'nivaro_hub_fleet_status'
 export const SAMPLES = 'nivaro_hub_uptime_samples'
+export const HOURS = 'nivaro_hub_uptime_hours'
 export const ALERTS = 'nivaro_hub_fleet_alerts'
 export const REPORTS = 'nivaro_hub_slo_reports'
 const ENVS = 'nivaro_hub_environments'
 const APPS = 'nivaro_hub_apps'
 const DEPLOYS = 'nivaro_hub_deploys'
+const MOVES = 'nivaro_hub_moves'
 
-/** Samples are kept this long (a whole previous month for the SLO report, plus a margin). */
-export const SAMPLE_KEEP_DAYS = 45
+/** Raw samples are kept this long (the rollup re-folds the last few hours each run). */
+export const SAMPLE_KEEP_HOURS = 48
+/** Hourly rollups are kept this long (monthly reports are kept for good). */
+export const HOUR_KEEP_DAYS = 400
 /** Resolved alerts are kept this long for the page's history. */
 export const ALERT_KEEP_DAYS = 180
+/** The rollup re-folds this many most recent hours each run (a late sample is never lost). */
+export const ROLLUP_HOURS = 3
 
+const HOUR_MS = 3_600_000
 const CHUNK = 500
 
 /** `fn` over `ids` in chunks of 500 (the bound-parameter cap), rows flattened. */
@@ -74,6 +87,27 @@ export async function listProbeTargets(): Promise<ProbeTarget[]> {
   }))
 }
 
+/**
+ * Environments a Hub run is busy with right now: a running promotion/rollback/stack apply
+ * (nivaro_hub_deploys) or an open move. Their probes are not stored (a declared window: the Hub
+ * itself is restarting them), and their drift alerts are left as they are.
+ */
+export async function busyEnvironments(): Promise<Set<number>> {
+  const out = new Set<number>()
+  const read = async (table: string, statuses: string[]) => {
+    try {
+      const rows = (await db(table)
+        .whereIn('status', statuses)
+        .distinct('environment_id')) as Array<{ environment_id: number }>
+      for (const r of rows) out.add(Number(r.environment_id))
+    } catch {
+      /* a table missing on an old database: nothing busy there */
+    }
+  }
+  await Promise.all([read(DEPLOYS, ['running']), read(MOVES, MOVE_OPEN_STATUSES as string[])])
+  return out
+}
+
 export async function recordSample(envId: number, s: ProbeSample, at: Date): Promise<void> {
   await db(SAMPLES).insert({
     environment_id: envId,
@@ -82,7 +116,7 @@ export async function recordSample(envId: number, s: ProbeSample, at: Date): Pro
     version_ok: s.version_ok,
     ready: s.ready,
     ms: s.ms,
-    code: s.code
+    code: s.code ? s.code.slice(0, 32) : null
   })
 }
 
@@ -167,10 +201,25 @@ export interface StatusPatch {
   probe?: ProbeSample
 }
 
+const cut = (v: string | null | undefined, n: number) => (v ? String(v).slice(0, n) : null)
+
+/** A unique-key violation on insert (the row appeared since we looked), on any of the engines. */
+function isDuplicate(err: unknown): boolean {
+  const e = err as { code?: unknown; number?: unknown; errno?: unknown; message?: unknown }
+  return (
+    e?.number === 2627 ||
+    e?.number === 2601 ||
+    e?.code === '23505' ||
+    e?.code === 'ER_DUP_ENTRY' ||
+    e?.errno === 1062 ||
+    /UNIQUE constraint failed|duplicate key/i.test(String(e?.message ?? ''))
+  )
+}
+
 /**
- * Writes what the probe tick learned about one environment. `version_since` moves only when the
- * version changes (from either the status read or the public probe), so it says when the running
- * version was first seen.
+ * Writes what the probe tick learned about one environment, race-safe (update, else insert, and an
+ * insert that loses a race becomes an update). Every text is cut to its column; a version is kept
+ * only when it looks like one (versionOf). `version_since` moves only when the version changes.
  */
 export async function writeFleetStatus(
   envId: number,
@@ -178,21 +227,21 @@ export async function writeFleetStatus(
   patch: StatusPatch,
   now: Date
 ): Promise<void> {
-  const prev = (await db(FLEET_STATUS).where({ environment_id: envId }).first()) as
-    | Record<string, unknown>
-    | undefined
+  const prev = (await db(FLEET_STATUS)
+    .where({ environment_id: envId })
+    .first('version', 'version_since')) as Record<string, unknown> | undefined
   const row: Record<string, unknown> = { app_id: appId, updated_at: now }
-  const seen = patch.status?.version ?? patch.probe?.version ?? null
+  const seen = versionOf(patch.status?.version) ?? versionOf(patch.probe?.version)
   if (patch.status) {
     const s = patch.status
     Object.assign(row, {
-      state: s.state,
-      preflight: s.preflight ? s.preflight.slice(0, 16) : null,
+      state: cut(s.state, 16),
+      preflight: cut(s.preflight, 16),
       readiness_score: s.readiness_score ?? null,
       open_issues: s.open_issues ?? null,
-      source: s.source,
-      error: s.error ? s.error.slice(0, 200) : null,
-      failing: s.failing?.length ? JSON.stringify(s.failing) : null,
+      source: cut(s.source, 16),
+      error: cut(s.error, 200),
+      failing: s.failing?.length ? JSON.stringify(s.failing.slice(0, 20)) : null,
       checked_at: now
     })
   }
@@ -202,19 +251,26 @@ export async function writeFleetStatus(
     row.version = seen
     if (seen !== was || !prev?.version_since) row.version_since = now
   }
-  if (prev)
-    await db(FLEET_STATUS)
-      .where({ id: prev.id as number })
-      .update(row)
-  else await db(FLEET_STATUS).insert({ environment_id: envId, ...row })
+  const update = () => db(FLEET_STATUS).where({ environment_id: envId }).update(row)
+  if (prev) {
+    await update()
+    return
+  }
+  try {
+    await db(FLEET_STATUS).insert({ environment_id: envId, ...row })
+  } catch (err) {
+    if (!isDuplicate(err)) throw err
+    await update()
+  }
 }
 
-/** Rows of environments that no longer exist. */
+/** Status rows of environments that no longer exist. */
 export async function forgetGoneEnvironments(keep: number[]): Promise<void> {
   const rows = (await db(FLEET_STATUS).select('environment_id')) as Array<{
     environment_id: number
   }>
-  const gone = rows.map((r) => Number(r.environment_id)).filter((id) => !keep.includes(id))
+  const keepSet = new Set(keep)
+  const gone = rows.map((r) => Number(r.environment_id)).filter((id) => !keepSet.has(id))
   if (!gone.length) return
   const live = new Set(
     (
@@ -228,7 +284,60 @@ export async function forgetGoneEnvironments(keep: number[]): Promise<void> {
     await chunked(dead, (chunk) => db(FLEET_STATUS).whereIn('environment_id', chunk).delete())
 }
 
-/** Samples and up samples per environment in [from, to). */
+/** The UTC hour `d` falls in. */
+export function hourOf(d: Date): Date {
+  return new Date(Math.floor(d.getTime() / HOUR_MS) * HOUR_MS)
+}
+
+/** The 95th percentile of `values` (nearest-rank), or null. */
+export function p95(values: number[]): number | null {
+  if (!values.length) return null
+  const sorted = [...values].sort((a, b) => a - b)
+  return sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.95) - 1)]
+}
+
+/**
+ * Folds the raw samples of the last ROLLUP_HOURS hours into nivaro_hub_uptime_hours (one row per
+ * environment + hour, rewritten each run, so a late sample is counted). Answers rows written.
+ */
+export async function rollupHours(now: Date): Promise<number> {
+  const from = new Date(hourOf(now).getTime() - (ROLLUP_HOURS - 1) * HOUR_MS)
+  const rows = (await db(SAMPLES)
+    .where('at', '>=', from)
+    .select('environment_id', 'at', 'up', 'ms')) as Array<Record<string, unknown>>
+  const buckets = new Map<
+    string,
+    { env: number; hour: Date; n: number; up: number; ms: number[] }
+  >()
+  for (const r of rows) {
+    const at = new Date(iso(r.at) ?? '')
+    if (!Number.isFinite(at.getTime())) continue
+    const env = Number(r.environment_id)
+    const hour = hourOf(at)
+    const k = `${env}:${hour.getTime()}`
+    const b = buckets.get(k) ?? { env, hour, n: 0, up: 0, ms: [] }
+    b.n++
+    if (bool(r.up)) b.up++
+    const ms = num(r.ms)
+    if (ms != null) b.ms.push(ms)
+    buckets.set(k, b)
+  }
+  for (const b of buckets.values()) {
+    const row = { samples: b.n, up_samples: b.up, ms_p95: p95(b.ms) }
+    const where = { environment_id: b.env, hour: b.hour }
+    const n = Number(await db(HOURS).where(where).update(row)) || 0
+    if (n > 0) continue
+    try {
+      await db(HOURS).insert({ ...where, ...row })
+    } catch (err) {
+      if (!isDuplicate(err)) throw err
+      await db(HOURS).where(where).update(row)
+    }
+  }
+  return buckets.size
+}
+
+/** Samples and answered samples per environment over the hours in [from, to). */
 export async function uptimeCounts(
   envIds: number[],
   from: Date,
@@ -236,46 +345,55 @@ export async function uptimeCounts(
 ): Promise<Map<number, UptimeCounts>> {
   const out = new Map<number, UptimeCounts>()
   if (!envIds.length) return out
-  const count = (onlyUp: boolean) =>
-    chunked(envIds, (chunk) => {
-      const q = db(SAMPLES)
-        .whereIn('environment_id', chunk)
-        .where('at', '>=', from)
-        .where('at', '<', to)
-      if (onlyUp) q.where('up', true)
-      return q.groupBy('environment_id').select('environment_id').count({ n: '*' })
-    }) as Promise<Array<{ environment_id: number; n: number | string }>>
-  const [all, up] = await Promise.all([count(false), count(true)])
-  for (const r of all) out.set(Number(r.environment_id), { samples: Number(r.n), up: 0 })
-  for (const r of up) {
-    const c = out.get(Number(r.environment_id))
-    if (c) c.up = Number(r.n)
-  }
+  const rows = (await chunked(envIds, (chunk) =>
+    db(HOURS)
+      .whereIn('environment_id', chunk)
+      .where('hour', '>=', hourOf(from))
+      .where('hour', '<', to)
+      .groupBy('environment_id')
+      .select('environment_id')
+      .sum({ samples: 'samples', up: 'up_samples' })
+  )) as Array<{ environment_id: number; samples: number | string; up: number | string }>
+  for (const r of rows)
+    out.set(Number(r.environment_id), { samples: Number(r.samples) || 0, up: Number(r.up) || 0 })
   return out
 }
 
-/** Hourly up/down figures of one environment over the last `hours` (newest last). */
-export async function uptimeSeries(
+/** One environment's hours from `from` (oldest first). */
+export async function uptimeHourSeries(
   envId: number,
   from: Date
-): Promise<Array<{ at: string; up: boolean; ms: number | null; code: string | null }>> {
-  const rows = (await db(SAMPLES)
+): Promise<Array<{ at: string; samples: number; up: number; ms: number | null }>> {
+  const rows = (await db(HOURS)
     .where({ environment_id: envId })
-    .where('at', '>=', from)
-    .orderBy('at', 'asc')
-    .limit(50_000)
-    .select('at', 'up', 'ms', 'code')) as Array<Record<string, unknown>>
+    .where('hour', '>=', hourOf(from))
+    .orderBy('hour', 'asc')
+    .limit(24 * 31)
+    .select('hour', 'samples', 'up_samples', 'ms_p95')) as Array<Record<string, unknown>>
   return rows.map((r) => ({
-    at: iso(r.at) ?? '',
-    up: bool(r.up) === true,
-    ms: num(r.ms),
-    code: (r.code as string | null) ?? null
+    at: iso(r.hour) ?? '',
+    samples: Number(r.samples) || 0,
+    up: Number(r.up_samples) || 0,
+    ms: num(r.ms_p95)
   }))
 }
 
-/** Deletes samples older than the keep window, in batches; answers how many went. */
+/** The newest failed probes of one environment (raw samples, so the last 48 hours at most). */
+export async function recentFailures(
+  envId: number,
+  limit = 50
+): Promise<Array<{ at: string; code: string | null }>> {
+  const rows = (await db(SAMPLES)
+    .where({ environment_id: envId, up: false })
+    .orderBy('at', 'desc')
+    .limit(limit)
+    .select('at', 'code')) as Array<Record<string, unknown>>
+  return rows.map((r) => ({ at: iso(r.at) ?? '', code: (r.code as string | null) ?? null }))
+}
+
+/** Deletes raw samples past 48 h, hours past 400 days and old resolved alerts, in batches. */
 export async function pruneSamples(now: Date, batch = 5000, maxBatches = 200): Promise<number> {
-  const before = new Date(now.getTime() - SAMPLE_KEEP_DAYS * 86_400_000)
+  const before = new Date(now.getTime() - SAMPLE_KEEP_HOURS * HOUR_MS)
   let total = 0
   for (let i = 0; i < maxBatches; i++) {
     const ids = (
@@ -283,16 +401,17 @@ export async function pruneSamples(now: Date, batch = 5000, maxBatches = 200): P
         .where('at', '<', before)
         .orderBy('id', 'asc')
         .limit(batch)
-        .select('id')) as Array<{
-        id: number
-      }>
+        .select('id')) as Array<{ id: number }>
     ).map((r) => Number(r.id))
     if (!ids.length) break
     await chunked(ids, (chunk) => db(SAMPLES).whereIn('id', chunk).delete())
     total += ids.length
     if (ids.length < batch) break
   }
-  const alertsBefore = new Date(now.getTime() - ALERT_KEEP_DAYS * 86_400_000)
+  await db(HOURS)
+    .where('hour', '<', new Date(now.getTime() - HOUR_KEEP_DAYS * 24 * HOUR_MS))
+    .delete()
+  const alertsBefore = new Date(now.getTime() - ALERT_KEEP_DAYS * 24 * HOUR_MS)
   await db(ALERTS).whereNotNull('resolved_at').where('resolved_at', '<', alertsBefore).delete()
   return total
 }

@@ -69,6 +69,8 @@ const { runFleetProbeTick } = await import('../../../services/hub/fleet/tick.js'
 const { runFleetAlertTick } = await import('../../../services/hub/fleet/alerts.js')
 const { runSloReport } = await import('../../../services/hub/fleet/report.js')
 const { defaultFleetSettings } = await import('../../../services/hub/fleet/settings.js')
+const { rollupHours, writeFleetStatus } = await import('../../../services/hub/fleet/store.js')
+const { PROBE_LOCK_KEY, withLock } = await import('../../../services/hub/fleet/lock.js')
 
 const ADMIN = 'aaaaaaaa-0000-4000-8000-000000000001'
 const OWNER = 'bbbbbbbb-0000-4000-8000-000000000002'
@@ -76,6 +78,31 @@ const OTHER = 'cccccccc-0000-4000-8000-000000000003'
 const asAdmin = { 'x-user': ADMIN, 'x-admin': '1' }
 const asOwner = { 'x-user': OWNER }
 const asOther = { 'x-user': OTHER }
+
+/** An in-memory Redis: SET (NX, EX/PX ignored for expiry), GET, DEL, and the release script. */
+class FakeRedis {
+  store = new Map<string, string>()
+  async get(k: string) {
+    return this.store.get(k) ?? null
+  }
+  async set(k: string, v: string, ...args: Array<string | number>) {
+    if (args.includes('NX') && this.store.has(k)) return null
+    this.store.set(k, v)
+    return 'OK'
+  }
+  async del(...keys: string[]) {
+    for (const k of keys) this.store.delete(k)
+    return keys.length
+  }
+  async eval(_script: string, _n: number, key: string | number, token: string | number) {
+    if (this.store.get(String(key)) === String(token)) {
+      this.store.delete(String(key))
+      return 1
+    }
+    return 0
+  }
+}
+const redis = new FakeRedis()
 
 let app: FastifyInstance
 let prevHub: string | undefined
@@ -121,6 +148,7 @@ beforeAll(async () => {
     { id: OWNER, first_name: 'Owen', last_name: 'Owner' }
   ])
   app = Fastify()
+  app.decorate('redis', redis as never)
   await app.register(hubFleetRoutes, { prefix: '/hub' })
   await app.ready()
 })
@@ -132,13 +160,16 @@ afterAll(async () => {
 })
 
 beforeEach(async () => {
+  redis.store.clear()
   for (const t of [
     'nivaro_hub_fleet_status',
     'nivaro_hub_uptime_samples',
+    'nivaro_hub_uptime_hours',
     'nivaro_hub_fleet_alerts',
     'nivaro_hub_slo_reports',
     'nivaro_hub_deploys',
     'nivaro_hub_shared_deploys',
+    'nivaro_hub_moves',
     'nivaro_hub_environments',
     'nivaro_hub_app_owners',
     'nivaro_hub_apps',
@@ -182,20 +213,39 @@ beforeEach(async () => {
   poleProd = await env(pole, 'production', 0, shared)
 })
 
-const versions = (map: Record<number, string>) => ({
-  targets: undefined,
-  probe: vi.fn(async (url: string) => {
-    const id = Object.entries(map).find(([envId]) => url.includes(urlKey(Number(envId))))
+/** Known releases: successful Hub deploys of these versions (on staging). */
+async function knownDeploys(versions: string[]) {
+  for (const v of versions)
+    await db('nivaro_hub_deploys').insert({
+      app_id: efp,
+      environment_id: staging,
+      kind: 'promote',
+      version: v,
+      status: 'success',
+      started_at: new Date('2026-11-01T10:00:00Z'),
+      finished_at: new Date('2026-11-01T10:05:00Z')
+    })
+}
+
+const baseOf = new Map<string, number>()
+async function tick(map: Record<number, string>, now = new Date(), extra = {}) {
+  for (const e of (await db('nivaro_hub_environments').select('id', 'base_url')) as Array<{
+    id: number
+    base_url: string
+  }>)
+    baseOf.set(e.base_url, Number(e.id))
+  const probe = vi.fn(async (url: string) => {
+    const v = map[baseOf.get(url) ?? -1]
     return {
-      up: !!id,
-      version_ok: !!id,
+      up: !!v,
+      version_ok: !!v,
       ready: true,
       ms: 12,
-      code: id ? null : 'UNREACHABLE',
-      version: id ? id[1] : null
+      code: v ? null : 'UNREACHABLE',
+      version: v ?? null
     }
-  }),
-  status: vi.fn(async () => ({
+  })
+  const status = vi.fn(async () => ({
     state: 'ok' as const,
     version: null,
     preflight: 'ok',
@@ -204,108 +254,178 @@ const versions = (map: Record<number, string>) => ({
     readiness_score: 92,
     open_issues: 3
   }))
-})
-const urls = new Map<number, string>()
-const urlKey = (envId: number) => urls.get(envId) ?? '\u0000'
+  const out = await runFleetProbeTick({ probe, status, now: () => now, ...extra })
+  return { out, probe, status }
+}
 
-async function tick(map: Record<number, string>, now = new Date()) {
-  for (const e of (await db('nivaro_hub_environments').select('id', 'base_url')) as Array<{
-    id: number
-    base_url: string
-  }>)
-    urls.set(Number(e.id), e.base_url)
-  const deps = versions(map)
-  return runFleetProbeTick({ probe: deps.probe, status: deps.status, now: () => now })
+const fleetAs = async (headers: Record<string, string>) => {
+  redis.store.clear() // the 30 s page cache
+  return (await app.inject({ method: 'GET', url: '/hub/fleet', headers })).json().data
 }
 
 describe('probe tick', () => {
   it('stores one sample per active environment and the status snapshot', async () => {
-    const out = await tick({ [staging]: '0.3.214', [prod]: '0.3.210' })
-    expect(out).toMatchObject({ environments: 3, probed: 3, status_reads: 3, down: 1 })
-    expect(await db('nivaro_hub_uptime_samples').count({ n: '*' })).toEqual([{ n: 3 }])
+    const { out } = await tick({ [staging]: '0.3.214', [prod]: '0.3.210' })
+    expect(out).toMatchObject({ environments: 3, probed: 3, samples: 3, status_reads: 3, down: 1 })
     const st = await db('nivaro_hub_fleet_status').where({ environment_id: prod }).first()
     expect(st).toMatchObject({ version: '0.3.210', readiness_score: 92, open_issues: 3 })
   })
-  it('version_since moves only when the version changes; status is read every 5 minutes', async () => {
+  it('at most one sample a minute; status every 5 minutes (or forced); version_since on change', async () => {
     const t0 = new Date('2026-11-24T10:00:00.000Z')
     await tick({ [prod]: '0.3.210' }, t0)
     const since0 = (await db('nivaro_hub_fleet_status').where({ environment_id: prod }).first())
       .version_since
-    const r1 = await tick({ [prod]: '0.3.210' }, new Date(t0.getTime() + 60_000))
-    expect(r1.status_reads).toBe(0)
-    const row1 = await db('nivaro_hub_fleet_status').where({ environment_id: prod }).first()
-    expect(row1.version_since).toEqual(since0)
-    await tick({ [prod]: '0.3.211' }, new Date(t0.getTime() + 120_000))
-    const row2 = await db('nivaro_hub_fleet_status').where({ environment_id: prod }).first()
-    expect(row2.version_since).not.toEqual(since0)
+    const r1 = await tick({ [prod]: '0.3.210' }, new Date(t0.getTime() + 20_000))
+    expect(r1.out).toMatchObject({ samples: 0, status_reads: 0 })
+    const r2 = await tick({ [prod]: '0.3.210' }, new Date(t0.getTime() + 25_000), {
+      forceStatus: true
+    })
+    expect(r2.out).toMatchObject({ samples: 0, status_reads: 3 })
+    const r3 = await tick({ [prod]: '0.3.211' }, new Date(t0.getTime() + 60_000))
+    expect(r3.out.samples).toBe(3)
+    const row = await db('nivaro_hub_fleet_status').where({ environment_id: prod }).first()
+    expect(row.version_since).not.toEqual(since0)
   })
-  it('an environment not active makes no sample', async () => {
+  it('an environment not active, or busy with a Hub run, stores no sample', async () => {
     await db('nivaro_hub_environments').where({ id: staging }).update({ status: 'maintenance' })
-    const out = await tick({ [prod]: '0.3.210' })
-    expect(out.environments).toBe(2)
-  })
-})
-
-describe('GET /hub/fleet', () => {
-  it('admins see every environment with drift, placement, uptime and last deploy', async () => {
-    await tick({ [staging]: '0.3.214', [prod]: '0.3.210', [poleProd]: '0.3.214' })
     await db('nivaro_hub_deploys').insert({
       app_id: efp,
       environment_id: prod,
       kind: 'promote',
+      version: '0.3.214',
+      status: 'running'
+    })
+    const { out, probe } = await tick({ [prod]: '0.3.210', [poleProd]: '0.3.214' })
+    expect(out).toMatchObject({ environments: 2, samples: 1, busy: 1 })
+    expect(probe).toHaveBeenCalledTimes(1)
+  })
+  it('the status write is race-safe and cuts what does not fit', async () => {
+    const now = new Date()
+    await Promise.all([
+      writeFleetStatus(
+        prod,
+        efp,
+        {
+          probe: { up: true, version_ok: true, ready: true, ms: 1, code: null, version: '0.3.214' }
+        },
+        now
+      ),
+      writeFleetStatus(
+        prod,
+        efp,
+        {
+          status: {
+            state: 'ok',
+            version: 'v'.repeat(80),
+            preflight: 'warn-and-more-words',
+            checked_at: '',
+            source: 'hub-link'
+          }
+        },
+        now
+      )
+    ])
+    const rows = await db('nivaro_hub_fleet_status').where({ environment_id: prod })
+    expect(rows).toHaveLength(1)
+    expect(String(rows[0].version ?? '').length).toBeLessThanOrEqual(64)
+    expect(String(rows[0].preflight ?? '').length).toBeLessThanOrEqual(16)
+  })
+  it('the probe lock lets one run at a time', async () => {
+    let inner: unknown = 'not run'
+    const outer = await withLock(redis, PROBE_LOCK_KEY, async () => {
+      inner = await withLock(redis, PROBE_LOCK_KEY, async () => 'second')
+      return 'first'
+    })
+    expect(outer).toEqual({ ran: true, value: 'first' })
+    expect(inner).toEqual({ ran: false })
+    expect(redis.store.has(PROBE_LOCK_KEY)).toBe(false)
+  })
+})
+
+describe('GET /hub/fleet', () => {
+  it('admins see every environment with drift in known releases, placement, uptime, last deploy', async () => {
+    await knownDeploys(['0.3.210', '0.3.211', '0.3.212', '0.3.213', '0.3.214'])
+    await tick({ [staging]: '0.3.214', [prod]: '0.3.210', [poleProd]: '99.0.0' })
+    await rollupHours(new Date())
+    await db('nivaro_hub_deploys').insert({
+      app_id: efp,
+      environment_id: prod,
+      kind: 'rollback',
       version: '0.3.210',
       status: 'success',
       started_by: OWNER,
       started_at: new Date('2026-11-20T10:00:00Z'),
       finished_at: new Date('2026-11-20T10:05:00Z')
     })
-    const res = await app.inject({ method: 'GET', url: '/hub/fleet', headers: asAdmin })
-    expect(res.statusCode).toBe(200)
-    const data = res.json().data
+    const data = await fleetAs(asAdmin)
     expect(data.newest).toBe('0.3.214')
     expect(data.rows).toHaveLength(3)
     const p = data.rows.find((r: { environment_id: number }) => r.environment_id === prod)
     expect(p).toMatchObject({
       behind: 4,
+      version_unverified: false,
       placement: 'none',
       readiness_score: 92,
       open_issues: 3,
       uptime_24h: 100,
+      probe_stale: false,
       last_deploy: { status: 'success', by_name: 'Owen Owner' }
     })
     const pp = data.rows.find((r: { environment_id: number }) => r.environment_id === poleProd)
-    expect(pp.placement).toBe('shared')
+    // A version above every known release: flagged, never "behind" anything.
+    expect(pp).toMatchObject({ placement: 'shared', version_unverified: true, behind: null })
   })
-  it('owners see their apps only; others see nothing', async () => {
-    const own = (await app.inject({ method: 'GET', url: '/hub/fleet', headers: asOwner })).json()
-    expect(own.data.rows.map((r: { app_key: string }) => r.app_key)).toEqual(['efp', 'efp'])
-    const other = (await app.inject({ method: 'GET', url: '/hub/fleet', headers: asOther })).json()
-    expect(other.data.rows).toEqual([])
+  it('owners see their apps only; others see nothing; answers are cached 30 s per viewer', async () => {
+    const own = await fleetAs(asOwner)
+    expect(own.rows.map((r: { app_key: string }) => r.app_key)).toEqual(['efp', 'efp'])
+    expect((await fleetAs(asOther)).rows).toEqual([])
+    await app.inject({ method: 'GET', url: '/hub/fleet', headers: asOwner })
+    expect([...redis.store.keys()]).toContain(`nvr:hub:fleet-page:${OWNER}`)
   })
 })
 
 describe('drift alerts', () => {
-  it('opens once, tells owners + admins once, resolves when the finding goes', async () => {
+  const on = () => {
+    const s = defaultFleetSettings()
+    s.rules = s.rules.map((r) => ({ ...r, enabled: true }))
+    return s
+  }
+  const deps = (notify: (...args: any[]) => Promise<void>, extra = {}) => ({
+    notify,
+    admins: async () => [ADMIN],
+    settings: on(),
+    refreshRegistry: async () => null,
+    ...extra
+  })
+
+  it('opens once per rule + environment, tells owners + admins once, resolves when gone', async () => {
+    await knownDeploys(['0.3.205', '0.3.206', '0.3.207', '0.3.208', '0.3.209', '0.3.214'])
     await tick({ [staging]: '0.3.214', [prod]: '0.3.205', [poleProd]: '0.3.214' })
     const notify = vi.fn(async () => {})
-    const deps = { notify, admins: async () => [ADMIN], settings: defaultFleetSettings() }
-    const r1 = await runFleetAlertTick(deps)
-    // behind-newest (9 behind ≥ 5) and staging-production (9 apart > 3).
+    const r1 = await runFleetAlertTick(deps(notify))
+    // behind-newest (5 behind ≥ 5) and staging-production (5 apart > 3), both on production.
     expect(r1).toMatchObject({ opened: 2, resolved: 0 })
     expect(notify).toHaveBeenCalledTimes(2) // one per person (owner + admin), not per alert
-    const r2 = await runFleetAlertTick(deps)
+    expect(
+      (await db('nivaro_hub_fleet_alerts')).every((a) => a.subject_key === `env:${prod}`)
+    ).toBe(true)
+    const r2 = await runFleetAlertTick(deps(notify))
     expect(r2).toMatchObject({ opened: 0 })
     expect(notify).toHaveBeenCalledTimes(2)
 
-    const fleet = (await app.inject({ method: 'GET', url: '/hub/fleet', headers: asAdmin })).json()
-    const p = fleet.data.rows.find((r: { environment_id: number }) => r.environment_id === prod)
+    const p = (await fleetAs(asAdmin)).rows.find(
+      (r: { environment_id: number }) => r.environment_id === prod
+    )
     expect(p.alerts.map((a: { rule_id: string }) => a.rule_id).sort()).toEqual([
       'behind-newest',
       'staging-production'
     ])
 
-    await tick({ [staging]: '0.3.214', [prod]: '0.3.214', [poleProd]: '0.3.214' })
-    const r3 = await runFleetAlertTick(deps)
+    await tick(
+      { [staging]: '0.3.214', [prod]: '0.3.214', [poleProd]: '0.3.214' },
+      new Date(Date.now() + 61_000)
+    )
+    const r3 = await runFleetAlertTick(deps(notify))
     expect(r3.resolved).toBe(2)
     const open = await app.inject({ method: 'GET', url: '/hub/fleet/alerts', headers: asOwner })
     expect(open.json().data).toEqual([])
@@ -316,23 +436,65 @@ describe('drift alerts', () => {
     })
     expect(all.json().data).toHaveLength(2)
   })
+
+  it('an environment under a move keeps its alert (no resolve, no re-open)', async () => {
+    await knownDeploys(['0.3.205', '0.3.206', '0.3.207', '0.3.208', '0.3.209', '0.3.214'])
+    await tick({ [staging]: '0.3.214', [prod]: '0.3.205', [poleProd]: '0.3.214' })
+    const notify = vi.fn(async () => {})
+    await runFleetAlertTick(deps(notify))
+    const r = await runFleetAlertTick(deps(notify, { busy: async () => new Set([prod]) }))
+    expect(r).toMatchObject({ resolved: 0, opened: 0 })
+    expect(await db('nivaro_hub_fleet_alerts').whereNull('resolved_at')).toHaveLength(2)
+  })
+
+  it('administrators that cannot be read: nothing stamped, the next pass tells', async () => {
+    await knownDeploys(['0.3.205', '0.3.206', '0.3.207', '0.3.208', '0.3.209', '0.3.214'])
+    await tick({ [staging]: '0.3.214', [prod]: '0.3.205', [poleProd]: '0.3.214' })
+    const notify = vi.fn(async () => {})
+    const fail = async () => {
+      throw new Error('db')
+    }
+    await runFleetAlertTick(deps(notify, { admins: fail }))
+    expect(notify).not.toHaveBeenCalled()
+    expect(await db('nivaro_hub_fleet_alerts').whereNotNull('notified_at')).toHaveLength(0)
+    await runFleetAlertTick(deps(notify))
+    expect(notify).toHaveBeenCalledTimes(2)
+  })
+
+  it('a rule just turned on tells one summary line, not one per environment', async () => {
+    await knownDeploys(['0.3.205', '0.3.206', '0.3.207', '0.3.208', '0.3.209', '0.3.214'])
+    await tick({ [staging]: '0.3.205', [prod]: '0.3.205', [poleProd]: '0.3.205' })
+    const notify = vi.fn(async (_uid: string, _note: { message: string }) => {})
+    const s = defaultFleetSettings()
+    s.rules = s.rules.map((r) => ({ ...r, enabled: r.id === 'behind-newest' }))
+    await runFleetAlertTick({ ...deps(notify), settings: s })
+    const adminNote = notify.mock.calls.find((c) => c[0] === ADMIN)?.[1]
+    expect(adminNote?.message).toBe(
+      'Releases behind the newest (just turned on): 3 environments match.'
+    )
+  })
+
+  it('rules ship off: nothing fires by default', async () => {
+    await knownDeploys(['0.3.205', '0.3.206', '0.3.207', '0.3.208', '0.3.209', '0.3.214'])
+    await tick({ [staging]: '0.3.205', [prod]: '0.3.205', [poleProd]: '0.3.205' })
+    const notify = vi.fn(async () => {})
+    const r = await runFleetAlertTick({ ...deps(notify), settings: defaultFleetSettings() })
+    expect(r).toMatchObject({ findings: 0, opened: 0 })
+  })
 })
 
 describe('monthly SLO report', () => {
-  it('stores the month, tells owners per app and admins once, never twice', async () => {
-    const at = (d: string, up: boolean) => ({
-      environment_id: prod,
-      at: new Date(d),
-      up,
-      version_ok: up,
-      ready: up
-    })
-    await db('nivaro_hub_uptime_samples').insert([
-      at('2026-10-05T00:00:00Z', true),
-      at('2026-10-06T00:00:00Z', true),
-      at('2026-10-07T00:00:00Z', true),
-      at('2026-10-08T00:00:00Z', false),
-      at('2026-11-02T00:00:00Z', false)
+  const hour = (d: string, samples: number, up: number) => ({
+    environment_id: prod,
+    hour: new Date(d),
+    samples,
+    up_samples: up
+  })
+  it('catches up ended months from the hours, tells owners per app and admins once, never twice', async () => {
+    await db('nivaro_hub_uptime_hours').insert([
+      hour('2026-09-30T10:00:00Z', 60, 60),
+      hour('2026-10-05T00:00:00Z', 30, 30),
+      hour('2026-10-06T00:00:00Z', 10, 0)
     ])
     const notify = vi.fn(async () => {})
     const deps = {
@@ -342,9 +504,11 @@ describe('monthly SLO report', () => {
       settings: defaultFleetSettings()
     }
     const out = await runSloReport(deps)
-    expect(out).toMatchObject({ month: '2026-10', environments: 1, missed: 1, notified: 2 })
-    const row = await db('nivaro_hub_slo_reports').first()
-    expect(row).toMatchObject({ samples: 4, up_samples: 3, uptime_bp: 7500, target_bp: 9950 })
+    expect(out.months).toEqual(['2026-09', '2026-10'])
+    expect(out).toMatchObject({ environments: 2, missed: 1, notified: 4 })
+    const oct = await db('nivaro_hub_slo_reports').where({ month: '2026-10' }).first()
+    expect(oct).toMatchObject({ samples: 40, up_samples: 30, uptime_bp: 7500, target_bp: 9950 })
+    expect(oct.sent_at).not.toBeNull()
     const again = await runSloReport(deps)
     expect(again.notified).toBe(0)
     const reports = await app.inject({ method: 'GET', url: '/hub/fleet/reports', headers: asOwner })
@@ -357,6 +521,8 @@ describe('settings', () => {
     expect(
       (await app.inject({ method: 'GET', url: '/hub/fleet/settings', headers: asOwner })).statusCode
     ).toBe(403)
+    const read0 = await app.inject({ method: 'GET', url: '/hub/fleet/settings', headers: asAdmin })
+    expect(read0.json().data.rules.every((r: { enabled: boolean }) => !r.enabled)).toBe(true)
     const bad = await app.inject({
       method: 'PUT',
       url: '/hub/fleet/settings',
@@ -382,16 +548,40 @@ describe('settings', () => {
   })
 })
 
+describe('Check now', () => {
+  it('answers 202 at once, refuses a second one while it runs, and reports the result', async () => {
+    const first = await app.inject({ method: 'POST', url: '/hub/fleet/check', headers: asAdmin })
+    expect(first.statusCode).toBe(202)
+    expect(first.json().data.status).toBe('running')
+    const second = await app.inject({ method: 'POST', url: '/hub/fleet/check', headers: asAdmin })
+    expect(second.statusCode).toBe(409)
+    expect(second.json().code).toBe('CHECK_RUNNING')
+    let state: { status: string } | null = null
+    for (let i = 0; i < 100; i++) {
+      state = (
+        await app.inject({ method: 'GET', url: '/hub/fleet/check', headers: asAdmin })
+      ).json().data
+      if (state?.status !== 'running') break
+      await new Promise((r) => setTimeout(r, 50))
+    }
+    expect(state?.status).not.toBe('running')
+    expect(
+      (await app.inject({ method: 'POST', url: '/hub/fleet/check', headers: asOwner })).statusCode
+    ).toBe(403)
+  })
+})
+
 describe('uptime route', () => {
-  it('owners read their environment; others get 404', async () => {
+  it('owners read their environment from the hourly rows; others get 404', async () => {
     await tick({ [prod]: '0.3.214' })
+    await rollupHours(new Date())
     const ok = await app.inject({
       method: 'GET',
       url: `/hub/fleet/environments/${prod}/uptime?days=1`,
       headers: asOwner
     })
     expect(ok.statusCode).toBe(200)
-    expect(ok.json().data.hours[0]).toMatchObject({ samples: 1, up: 1 })
+    expect(ok.json().data.hours[0]).toMatchObject({ samples: 1, up: 1, ms: 12 })
     const no = await app.inject({
       method: 'GET',
       url: `/hub/fleet/environments/${poleProd}/uptime`,

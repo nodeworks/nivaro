@@ -1,4 +1,5 @@
 import { db } from '../../../db/index.js'
+import { csvRow } from '../../../lib/csv-cell.js'
 import { nameFrom, namesOf } from './store.js'
 
 /**
@@ -238,13 +239,65 @@ interface RunRow {
   error: string | null
 }
 
+/** Only what the timeline shows: never a run's plan, steps or tickets (big, and not for here). */
+const RUN_COLUMNS: Record<string, string[]> = {
+  nivaro_hub_deploys: [
+    'id',
+    'app_id',
+    'environment_id',
+    'kind',
+    'status',
+    'version',
+    'started_by',
+    'started_at',
+    'finished_at',
+    'error'
+  ],
+  nivaro_hub_moves: [
+    'id',
+    'app_id',
+    'environment_id',
+    'kind',
+    'status',
+    'started_by',
+    'started_at',
+    'finished_at',
+    'error'
+  ],
+  nivaro_hub_shared_deploys: [
+    'id',
+    'shared_deployment_id',
+    'kind',
+    'status',
+    'version',
+    'started_by',
+    'started_at',
+    'finished_at',
+    'error'
+  ],
+  nivaro_hub_creations: [
+    'id',
+    'app_id',
+    'environment_id',
+    'status',
+    'version',
+    'started_by',
+    'created_at',
+    'finished_at',
+    'error'
+  ]
+}
+
 async function readRuns(
   table: string,
   ids: number[] | null,
   window: { from: Date | null; to: Date | null }
 ): Promise<RunRow[]> {
   if (ids && !ids.length) return []
-  const q = db(table).select('*').orderBy('id', 'desc').limit(SCAN_MAX)
+  const q = db(table)
+    .select(RUN_COLUMNS[table] ?? ['id'])
+    .orderBy('id', 'desc')
+    .limit(SCAN_MAX)
   if (ids) q.whereIn('id', ids.slice(0, 1000))
   else {
     const col = table === 'nivaro_hub_creations' ? 'created_at' : 'started_at'
@@ -490,14 +543,9 @@ const CSV_COLUMNS: Array<[string, (r: AuditRow) => string]> = [
   ['Detail', (r) => r.detail ?? '']
 ]
 
-function cell(v: string): string {
-  // A cell a spreadsheet would read as a formula is prefixed with a quote.
-  const safe = /^[=+\-@\t\r]/.test(v) ? `'${v}` : v
-  return /[",\n\r]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe
-}
-
+/** The shared CSV rule (lib/csv-cell.ts): every cell quoted, formula cells defused. */
 export function auditCsv(rows: AuditRow[]): string {
-  const head = CSV_COLUMNS.map(([h]) => cell(h)).join(',')
-  const body = rows.map((r) => CSV_COLUMNS.map(([, f]) => cell(f(r))).join(','))
+  const head = csvRow(CSV_COLUMNS.map(([h]) => h))
+  const body = rows.map((r) => csvRow(CSV_COLUMNS.map(([, f]) => f(r))))
   return `${[head, ...body].join('\r\n')}\r\n`
 }

@@ -1,36 +1,44 @@
-import { adminBaseUrl } from '../../../admin-base.js'
 import { db } from '../../../db/index.js'
-import { type FleetSettings, loadFleetSettings, targetFor } from './settings.js'
-import { REPORTS, uptimeCounts } from './store.js'
-import { monthBounds, previousMonth, sloFigures, toBp } from './uptime.js'
+import { type FleetNotifier, fleetNotify, fleetUrl, hubAdminIds } from './notify.js'
+import {
+  type FleetSettings,
+  loadFleetSettings,
+  loadFleetState,
+  saveFleetState,
+  targetFor
+} from './settings.js'
+import { HOURS, REPORTS, uptimeCounts } from './store.js'
+import { monthBounds, monthOf, previousMonth, sloFigures, toBp } from './uptime.js'
 
 /**
- * The monthly SLO report (cron hub-slo-report, 07:00 on the 1st, Hub only). For the month just
- * ended (UTC), every environment with samples gets one nivaro_hub_slo_reports row (uptime and the
- * target it was held to, basis points — the row is the month's record even after the samples are
- * pruned). Then, unless the report is switched off in the fleet settings:
+ * The monthly SLO report (cron hub-slo-report, 07:00 UTC on the 1st with 72 hours of catch-up;
+ * Hub only). Every ended month that has uptime hours and is not reported yet (up to
+ * MAX_CATCH_UP_MONTHS back) is reported: each environment with samples gets one
+ * nivaro_hub_slo_reports row (uptime and the target it was held to, basis points — the month's
+ * record for good). Then, unless the report is switched off in the fleet settings:
  *
- *  - each app's owners get ONE message for their app (in-app + email): every environment's
- *    uptime against its target;
- *  - every Hub administrator gets ONE summary of the whole fleet (how many met, which missed).
+ *  - each app's owners get ONE message for their app (in-app + email);
+ *  - every Hub administrator gets ONE summary of the whole fleet for the month.
  *
- * Idempotent: a month already reported (sent_at set) is never sent again, so a re-run or a
- * second leader only fills in what is missing.
+ * At most once: an app's rows are stamped sent BEFORE its owners are told, and a month is marked
+ * summarised in the fleet state before the administrators are told — a crash part-way never tells
+ * anyone twice (it may leave someone untold, which is the cheaper mistake).
  */
+
+export const MAX_CATCH_UP_MONTHS = 12
 
 export interface ReportDeps {
   now?: Date
+  /** Report this one month only (tests, a manual re-run). */
   month?: string
   settings?: FleetSettings
   admins?: () => Promise<string[]>
-  notify?: (
-    userId: string,
-    note: { subject: string; message: string; url: string }
-  ) => Promise<void>
+  notify?: FleetNotifier
 }
 
 export interface ReportResult {
   month: string
+  months: string[]
   environments: number
   missed: number
   notified: number
@@ -45,48 +53,59 @@ interface EnvLine {
   uptime: number | null
   target: number
   met: boolean | null
-  samples: number
 }
 
 const pct = (v: number | null) =>
-  v === null ? 'no samples' : `${v.toFixed(3).replace(/0+$/, '').replace(/\.$/, '')} %`
+  v === null ? 'no samples' : `${Number(v.toFixed(v >= 99.9 ? 3 : 2))} %`
 
 function lineOf(l: EnvLine): string {
   const verdict = l.met === null ? '' : l.met ? ' — met' : ' — missed'
   return `${l.env_key}: ${pct(l.uptime)} (target ${l.target} %)${verdict}`
 }
 
-async function defaultAdmins(): Promise<string[]> {
-  const { activeAdminIds } = await import('../../infra-drift/store.js')
-  return activeAdminIds()
-}
-
-async function defaultNotify(
-  userId: string,
-  note: { subject: string; message: string; url: string }
-): Promise<void> {
-  const { getApp } = await import('../../io-holder.js')
-  const app = getApp()
-  if (!app) return
-  const { notifyUser } = await import('../../notification-channels.js')
-  await notifyUser(app, userId, {
-    subject: note.subject,
-    message: note.message,
-    category: 'reports',
-    channels: { inapp: true, email: true },
-    target: { kind: 'external', url: note.url },
-    source: { kind: 'hub_slo_report', label: 'Monthly SLO report' },
-    why: 'You own this app (or administer this Hub); the Hub sends its uptime report on the 1st of every month.'
-  })
+/** Ended months with hours stored, oldest first, at most MAX_CATCH_UP_MONTHS back. */
+async function monthsToReport(now: Date): Promise<string[]> {
+  const last = previousMonth(now)
+  const earliest = (await db(HOURS).min({ at: 'hour' }).first()) as { at: unknown } | undefined
+  if (!earliest?.at) return [last]
+  const first = monthOf(
+    new Date(String(earliest.at instanceof Date ? earliest.at.toISOString() : earliest.at))
+  )
+  const out: string[] = []
+  let d = new Date(`${last}-01T00:00:00.000Z`)
+  for (let i = 0; i < MAX_CATCH_UP_MONTHS; i++) {
+    const m = monthOf(d)
+    if (m < first) break
+    out.unshift(m)
+    d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - 1, 1))
+  }
+  return out.length ? out : [last]
 }
 
 export async function runSloReport(deps: ReportDeps = {}): Promise<ReportResult> {
   const now = deps.now ?? new Date()
-  const month = deps.month ?? previousMonth(now)
+  const settings = deps.settings ?? (await loadFleetSettings())
+  const months = deps.month ? [deps.month] : await monthsToReport(now)
+  let environments = 0
+  let missed = 0
+  let notified = 0
+  for (const month of months) {
+    const r = await reportMonth(month, now, settings, deps)
+    environments += r.environments
+    missed += r.missed
+    notified += r.notified
+  }
+  return { month: months[months.length - 1], months, environments, missed, notified }
+}
+
+async function reportMonth(
+  month: string,
+  now: Date,
+  settings: FleetSettings,
+  deps: ReportDeps
+): Promise<{ environments: number; missed: number; notified: number }> {
   const bounds = monthBounds(month)
   if (!bounds) throw new Error(`Bad month ${month}`)
-  const settings = deps.settings ?? (await loadFleetSettings())
-
   const envs = (await db('nivaro_hub_environments as e')
     .join('nivaro_hub_apps as a', 'a.id', 'e.app_id')
     .orderBy('a.key', 'asc')
@@ -101,10 +120,7 @@ export async function runSloReport(deps: ReportDeps = {}): Promise<ReportResult>
   )
   const existing = (await db(REPORTS)
     .where({ month })
-    .select('environment_id', 'sent_at')) as Array<{
-    environment_id: number
-    sent_at: unknown
-  }>
+    .select('environment_id', 'sent_at')) as Array<{ environment_id: number; sent_at: unknown }>
   const known = new Map(existing.map((r) => [Number(r.environment_id), r.sent_at != null]))
 
   const lines: EnvLine[] = []
@@ -122,52 +138,81 @@ export async function runSloReport(deps: ReportDeps = {}): Promise<ReportResult>
       env_key: String(e.key),
       uptime: f.uptime,
       target,
-      met: f.met,
-      samples: c.samples
+      met: f.met
     }
     if (!known.has(id)) {
-      await db(REPORTS).insert({
-        month,
-        app_id: line.app_id,
-        environment_id: id,
-        samples: c.samples,
-        up_samples: c.up,
-        uptime_bp: f.uptime === null ? null : toBp(f.uptime),
-        target_bp: toBp(target),
-        met: f.met,
-        created_at: now
-      })
+      try {
+        await db(REPORTS).insert({
+          month,
+          app_id: line.app_id,
+          environment_id: id,
+          samples: c.samples,
+          up_samples: c.up,
+          uptime_bp: f.uptime === null ? null : toBp(f.uptime),
+          target_bp: toBp(target),
+          met: f.met,
+          created_at: now
+        })
+      } catch {
+        // Another leader stored it first: its sent_at decides below.
+        continue
+      }
     }
-    // Already told about this environment's month: left out of the messages.
     if (known.get(id)) continue
     lines.push(line)
   }
 
-  let notified = 0
   const missed = lines.filter((l) => l.met === false)
-  if (settings.report_enabled && lines.length) {
-    const notify = deps.notify ?? defaultNotify
-    const url = `${adminBaseUrl() ?? ''}/hub/fleet`
-    const byApp = new Map<number, EnvLine[]>()
-    for (const l of lines) byApp.set(l.app_id, [...(byApp.get(l.app_id) ?? []), l])
-    const owners = (await db('nivaro_hub_app_owners')
-      .whereIn('app_id', [...byApp.keys()])
-      .select('app_id', 'user_id')) as Array<{ app_id: number; user_id: string }>
-    for (const [appId, list] of byApp) {
-      const miss = list.filter((l) => l.met === false).length
-      const subject = `${list[0].app_name}: uptime for ${month}${miss ? ` — ${miss} missed the target` : ''}`
-      const message = list.map(lineOf).join('; ')
-      for (const o of owners.filter((x) => Number(x.app_id) === appId)) {
-        try {
-          await notify(String(o.user_id), { subject: subject.slice(0, 255), message, url })
-          notified++
-        } catch {
-          /* next person */
-        }
+  let notified = 0
+  if (!lines.length) return { environments: 0, missed: 0, notified }
+  if (!settings.report_enabled) {
+    await stampSent(
+      month,
+      lines.map((l) => l.environment_id),
+      now
+    )
+    return { environments: lines.length, missed: missed.length, notified }
+  }
+  const notify = deps.notify ?? fleetNotify
+  const url = await fleetUrl()
+  const byApp = new Map<number, EnvLine[]>()
+  for (const l of lines) byApp.set(l.app_id, [...(byApp.get(l.app_id) ?? []), l])
+  const owners = (await db('nivaro_hub_app_owners')
+    .whereIn('app_id', [...byApp.keys()])
+    .select('app_id', 'user_id')) as Array<{ app_id: number; user_id: string }>
+  for (const [appId, list] of byApp) {
+    // Stamped first: a crash below never tells these owners twice.
+    await stampSent(
+      month,
+      list.map((l) => l.environment_id),
+      now
+    )
+    const miss = list.filter((l) => l.met === false).length
+    const subject = `${list[0].app_name}: uptime for ${month}${miss ? ` — ${miss} missed the target` : ''}`
+    const message = list.map(lineOf).join('; ')
+    for (const o of owners.filter((x) => Number(x.app_id) === appId)) {
+      try {
+        await notify(String(o.user_id), { kind: 'slo_report', subject, message, url })
+        notified++
+      } catch {
+        /* next person */
       }
     }
-    const admins = await (deps.admins ?? defaultAdmins)().catch(() => [] as string[])
-    if (admins.length) {
+  }
+
+  const state = await loadFleetState()
+  if (!state.summarised_months.includes(month)) {
+    let admins: string[] | null = null
+    try {
+      admins = await (deps.admins ?? hubAdminIds)()
+    } catch {
+      admins = null // not marked: the next run (catch-up) sends the summary
+    }
+    if (admins) {
+      await saveFleetState({
+        ...state,
+        summarised_months: [...state.summarised_months, month].slice(-36)
+      })
       const met = lines.filter((l) => l.met === true).length
       const subject = `Hub uptime for ${month}: ${met} of ${lines.length} environments met their target`
       const message = missed.length
@@ -178,11 +223,7 @@ export async function runSloReport(deps: ReportDeps = {}): Promise<ReportResult>
         : 'Every environment met its target.'
       for (const uid of admins) {
         try {
-          await notify(uid, {
-            subject: subject.slice(0, 255),
-            message: message.slice(0, 1000),
-            url
-          })
+          await notify(uid, { kind: 'slo_report', subject, message, url })
           notified++
         } catch {
           /* next person */
@@ -190,16 +231,15 @@ export async function runSloReport(deps: ReportDeps = {}): Promise<ReportResult>
       }
     }
   }
-  if (lines.length)
+  return { environments: lines.length, missed: missed.length, notified }
+}
+
+async function stampSent(month: string, envIds: number[], now: Date): Promise<void> {
+  for (let i = 0; i < envIds.length; i += 500)
     await db(REPORTS)
       .where({ month })
-      .whereIn(
-        'environment_id',
-        lines.map((l) => l.environment_id)
-      )
+      .whereIn('environment_id', envIds.slice(i, i + 500))
       .update({ sent_at: now })
-
-  return { month, environments: lines.length, missed: missed.length, notified }
 }
 
 /** Stored monthly rows (newest month first), optionally for some environments only. */

@@ -4,12 +4,21 @@ import type { FleetRule } from './settings.js'
  * Version drift: pure rules over what the Hub last saw of every environment. No I/O — the alerts
  * job (alerts.ts) gathers the facts, this file says what fires.
  *
- * "Releases behind" counts patch releases inside one minor line (0.3.200 → 0.3.214 = 14): every
- * Nivaro release moves the patch number. Two different minor (or major) lines are never "a few
- * releases apart" — they count as behind by more than any rule allows (`null` distance).
+ * Distances are counted in KNOWN releases (releases.ts: the versions the Hub deployed or verified
+ * — successful Hub promotions and shared deploys — plus the image's published tags), never in
+ * whatever an app reports about itself:
+ *
+ *  - "newest" = the highest known release (the Hub's own version and apps' self-reported versions
+ *    never set it);
+ *  - "N behind" = how many known releases lie above an environment's version, up to the newest —
+ *    the same count across a minor or major line (0.3.214 → 0.4.0 with 0.4.0 the only newer known
+ *    release is 1 behind);
+ *  - a version ABOVE the newest known release (a pre-release, a hand-built image, a wrong answer)
+ *    is "unverified": it is shown with a flag and never counts for or against a rule.
  */
 
 const SEMVER = /^(\d+)\.(\d+)\.(\d+)/
+const RELEASE = /^\d+\.\d+\.\d+$/
 
 export function parseVersion(v: string | null | undefined): [number, number, number] | null {
   const m = SEMVER.exec(String(v ?? '').trim())
@@ -24,32 +33,40 @@ export function compareVersion(a: string | null, b: string | null): number {
   return pa[0] - pb[0] || pa[1] - pb[1] || pa[2] - pb[2]
 }
 
-/** The highest parseable version of `versions`, or null. */
-export function newestVersion(versions: Array<string | null | undefined>): string | null {
-  let best: string | null = null
-  for (const v of versions) {
-    if (!v || !parseVersion(v)) continue
-    if (best === null || compareVersion(v, best) > 0) best = v
-  }
-  return best
+/** Known releases: plain x.y.z only, each once, newest first. */
+export function knownReleases(versions: Array<string | null | undefined>): string[] {
+  const out = new Set<string>()
+  for (const v of versions) if (typeof v === 'string' && RELEASE.test(v.trim())) out.add(v.trim())
+  return [...out].sort((a, b) => compareVersion(b, a))
+}
+
+/** The highest known release, or null (nothing known yet). */
+export function newestVersion(known: string[]): string | null {
+  return known.length ? known[0] : null
+}
+
+/** A readable version above every known release (never counted, flagged instead). */
+export function isUnverified(version: string | null, known: string[]): boolean {
+  const newest = newestVersion(known)
+  return !!newest && !!parseVersion(version) && compareVersion(version, newest) > 0
 }
 
 /**
- * How many releases `older` is behind `newer`: 0 when it is not behind, the patch distance in
- * one minor line, null when the lines differ (or either cannot be read — then also not 0).
+ * Known releases above `older`, up to the newest: 0 when it runs the newest, null when the version
+ * cannot be read, nothing is known, or it is unverified (above the newest).
  */
-export function releasesBehind(older: string | null, newer: string | null): number | null {
-  const a = parseVersion(older)
-  const b = parseVersion(newer)
-  if (!a || !b) return null
-  if (compareVersion(older, newer) >= 0) return 0
-  if (a[0] !== b[0] || a[1] !== b[1]) return null
-  return b[2] - a[2]
+export function releasesBehind(older: string | null, known: string[]): number | null {
+  const newest = newestVersion(known)
+  if (!newest || !parseVersion(older) || isUnverified(older, known)) return null
+  return known.filter((k) => compareVersion(k, older) > 0).length
 }
 
-/** How many releases two versions are apart either way (null = different lines / unreadable). */
-export function releasesApart(a: string | null, b: string | null): number | null {
-  return compareVersion(a, b) >= 0 ? releasesBehind(b, a) : releasesBehind(a, b)
+/** Known releases between two versions (above the lower, up to the higher); null as above. */
+export function releasesApart(a: string | null, b: string | null, known: string[]): number | null {
+  if (!newestVersion(known) || !parseVersion(a) || !parseVersion(b)) return null
+  if (isUnverified(a, known) || isUnverified(b, known)) return null
+  const [lo, hi] = compareVersion(a, b) <= 0 ? [a, b] : [b, a]
+  return known.filter((k) => compareVersion(k, lo) > 0 && compareVersion(k, hi) <= 0).length
 }
 
 /** One environment as the rules see it. */
@@ -66,43 +83,40 @@ export interface DriftFacts {
 export interface DriftFinding {
   rule_id: string
   kind: FleetRule['kind']
-  /** Stable per rule: what the alert is about (one open alert per rule + subject). */
+  /** Stable per rule: the environment the alert is about (one open alert per rule + environment). */
   subject_key: string
   app_id: number
-  environment_id: number | null
+  environment_id: number
   message: string
 }
 
 const DAY_MS = 86_400_000
+const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`
 
-function behindText(n: number | null): string {
-  return n === null ? 'a different release line' : `${n} release${n === 1 ? '' : 's'}`
-}
-
-/** Every finding of every enabled rule. `newest` = the newest version the fleet (or Hub) runs. */
+/** Every finding of every enabled rule over known releases `known` (newest first). */
 export function evaluateDrift(
   rules: FleetRule[],
   envs: DriftFacts[],
-  newest: string | null,
+  known: string[],
   now: Date
 ): DriftFinding[] {
   const out: DriftFinding[] = []
+  const newest = newestVersion(known)
   for (const rule of rules) {
     if (!rule.enabled) continue
     const scoped = (e: DriftFacts) => !rule.env_keys.length || rule.env_keys.includes(e.env_key)
     if (rule.kind === 'behind_newest') {
       if (!newest) continue
       for (const e of envs.filter(scoped)) {
-        if (!e.version || !parseVersion(e.version)) continue
-        const n = releasesBehind(e.version, newest)
-        if (n === 0 || (n !== null && n < rule.n)) continue
+        const n = releasesBehind(e.version, known)
+        if (n === null || n < rule.n) continue
         out.push({
           rule_id: rule.id,
           kind: rule.kind,
           subject_key: `env:${e.environment_id}`,
           app_id: e.app_id,
           environment_id: e.environment_id,
-          message: `${e.app_key}/${e.env_key} runs ${e.version}, ${behindText(n)} behind the newest (${newest}).`
+          message: `${e.app_key}/${e.env_key} runs ${e.version}, ${plural(n, 'release')} behind the newest (${newest}).`
         })
       }
     } else if (rule.kind === 'pair_apart') {
@@ -111,17 +125,16 @@ export function evaluateDrift(
       for (const list of byApp.values()) {
         const from = list.find((e) => e.env_key === rule.from_key)
         const to = list.find((e) => e.env_key === rule.to_key)
-        if (!from?.version || !to?.version) continue
-        if (!parseVersion(from.version) || !parseVersion(to.version)) continue
-        const n = releasesApart(from.version, to.version)
-        if (n === 0 || (n !== null && n <= rule.n)) continue
+        if (!from || !to) continue
+        const n = releasesApart(from.version, to.version, known)
+        if (n === null || n <= rule.n) continue
         out.push({
           rule_id: rule.id,
           kind: rule.kind,
-          subject_key: `app:${from.app_id}`,
-          app_id: from.app_id,
+          subject_key: `env:${to.environment_id}`,
+          app_id: to.app_id,
           environment_id: to.environment_id,
-          message: `${from.app_key}: ${from.env_key} runs ${from.version} and ${to.env_key} runs ${to.version} — ${behindText(n)} apart (rule: more than ${rule.n}).`
+          message: `${from.app_key}: ${from.env_key} runs ${from.version} and ${to.env_key} runs ${to.version} — ${plural(n, 'release')} apart (rule: more than ${rule.n}).`
         })
       }
     } else if (rule.kind === 'stale_deploy') {

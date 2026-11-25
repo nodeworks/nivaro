@@ -427,6 +427,7 @@ export const CORE_KEEPS: readonly EnvKeepEntry[] = [
       'nivaro_hub_moves',
       'nivaro_hub_fleet_status',
       'nivaro_hub_uptime_samples',
+      'nivaro_hub_uptime_hours',
       'nivaro_hub_fleet_alerts',
       'nivaro_hub_slo_reports'
     ] as const

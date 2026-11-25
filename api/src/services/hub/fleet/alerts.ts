@@ -1,33 +1,47 @@
-import { adminBaseUrl } from '../../../admin-base.js'
 import { db } from '../../../db/index.js'
-import { NIVARO_VERSION } from '../../../version.js'
-import { type DriftFacts, type DriftFinding, evaluateDrift, newestVersion } from './rules.js'
-import { type FleetSettings, loadFleetSettings } from './settings.js'
-import { ALERTS, lastDeploys, listProbeTargets, readFleetStatus } from './store.js'
+import { type FleetNotifier, fleetNotify, fleetUrl, hubAdminIds } from './notify.js'
+import { loadKnownReleases, refreshRegistryCache } from './releases.js'
+import { type DriftFacts, evaluateDrift } from './rules.js'
+import {
+  type FleetSettings,
+  type FleetState,
+  loadFleetSettings,
+  loadFleetState,
+  saveFleetState
+} from './settings.js'
+import {
+  ALERTS,
+  busyEnvironments,
+  lastDeploys,
+  listProbeTargets,
+  readFleetStatus
+} from './store.js'
 
 /**
- * Version drift alerts (cron hub-fleet-alerts, every 15 minutes, Hub only). Evaluates the rules in
- * the fleet settings (rules.ts) over the status snapshot the probe job keeps, then:
+ * Version drift alerts (cron hub-fleet-alerts every 15 minutes, or Check now; Hub only; one pass at
+ * a time through the nvr:hub:fleet-alerts lock). Evaluates the enabled rules (all ship off) over
+ * the status snapshot the probe job keeps and the releases the Hub knows (releases.ts):
  *
- *  - a finding with no open alert (same rule + subject) opens one and is told ONCE to the app's
- *    owners and every Hub administrator — one notification per person per tick, however many
- *    alerts opened (a burst after a release never floods anyone);
- *  - a finding with an open alert refreshes it (last_seen_at, message);
- *  - an open alert whose finding is gone is resolved (resolved_at) — nobody is told; the chip on
- *    the fleet page simply goes.
- *
- * Only environments the probe job has a version for take part: an unknown version never fires.
+ *  - one open alert per rule + environment: a finding with none opens one, a finding with one
+ *    refreshes it;
+ *  - an open alert is resolved only when its environment was evaluated and the finding is gone, or
+ *    its rule was turned off. An environment a Hub run is busy with (a promotion, an open move) or
+ *    that is not active is left as it is, so a move never resolves and re-opens its alerts;
+ *  - every open alert not yet told (notified_at empty) is told to the app's owners and every Hub
+ *    administrator: one notification per person per pass. A rule's FIRST pass after it was turned
+ *    on sends one summary line for that rule instead of a line per environment. If the
+ *    administrators cannot be read, nothing is stamped and the next pass tries again.
  */
 
 export interface AlertDeps {
   now?: Date
   settings?: FleetSettings
-  /** Active Hub administrators (people). */
   admins?: () => Promise<string[]>
-  notify?: (
-    userId: string,
-    note: { subject: string; message: string; url: string }
-  ) => Promise<void>
+  notify?: FleetNotifier
+  known?: () => Promise<string[]>
+  busy?: () => Promise<Set<number>>
+  /** Refresh the cached registry tags (default: the hourly refresh); tests pass a no-op. */
+  refreshRegistry?: (now: Date) => Promise<FleetState | null>
 }
 
 export interface AlertTickResult {
@@ -37,10 +51,15 @@ export interface AlertTickResult {
   notified: number
 }
 
-async function gatherFacts(): Promise<{ facts: DriftFacts[]; newest: string | null }> {
+const RULE_LABEL: Record<string, string> = {
+  behind_newest: 'Releases behind the newest',
+  pair_apart: 'Two environments apart',
+  stale_deploy: 'Not deployed for days'
+}
+
+async function gatherFacts(): Promise<DriftFacts[]> {
   const targets = await listProbeTargets()
-  const status = await readFleetStatus()
-  const newest = newestVersion([NIVARO_VERSION, ...[...status.values()].map((s) => s.version)])
+  const status = await readFleetStatus(targets.map((t) => t.id))
   const { lastSuccess } = await lastDeploys(targets.map((t) => t.id))
   const facts: DriftFacts[] = []
   for (const t of targets) {
@@ -63,35 +82,11 @@ async function gatherFacts(): Promise<{ facts: DriftFacts[]; newest: string | nu
       deployed_at: deployedAt
     })
   }
-  return { facts, newest }
-}
-
-async function defaultAdmins(): Promise<string[]> {
-  const { activeAdminIds } = await import('../../infra-drift/store.js')
-  return activeAdminIds()
-}
-
-async function defaultNotify(
-  userId: string,
-  note: { subject: string; message: string; url: string }
-): Promise<void> {
-  const { getApp } = await import('../../io-holder.js')
-  const app = getApp()
-  if (!app) return
-  const { notifyUser } = await import('../../notification-channels.js')
-  await notifyUser(app, userId, {
-    subject: note.subject,
-    message: note.message,
-    category: 'system',
-    target: { kind: 'external', url: note.url, action: 'review' },
-    source: { kind: 'hub_fleet', label: 'Hub fleet' },
-    why: 'You own one of these apps or administer this Hub; the fleet alert rules (Apps → Fleet) said so.'
-  })
+  return facts
 }
 
 const key = (rule: string, subject: string) => `${rule}\u0001${subject}`
 
-/** Owners per app id. */
 async function ownersOf(appIds: number[]): Promise<Map<number, string[]>> {
   const out = new Map<number, string[]>()
   if (!appIds.length) return out
@@ -103,18 +98,47 @@ async function ownersOf(appIds: number[]): Promise<Map<number, string[]>> {
   return out
 }
 
+interface OpenAlert {
+  id: number
+  rule_id: string
+  kind: string
+  subject_key: string
+  app_id: number
+  environment_id: number | null
+  message: string
+  notified: boolean
+}
+
 export async function runFleetAlertTick(deps: AlertDeps = {}): Promise<AlertTickResult> {
   const now = deps.now ?? new Date()
   const settings = deps.settings ?? (await loadFleetSettings())
-  const { facts, newest } = await gatherFacts()
-  const findings = evaluateDrift(settings.rules, facts, newest, now)
+  if (deps.refreshRegistry) await deps.refreshRegistry(now)
+  else await refreshRegistryCache(now).catch(() => null)
+  const state = await loadFleetState()
+  const known = await (deps.known ?? (() => loadKnownReleases(state)))()
+  const busy = await (deps.busy ?? busyEnvironments)()
+  const facts = (await gatherFacts()).filter((f) => !busy.has(f.environment_id))
+  const evaluated = new Set(facts.map((f) => f.environment_id))
+  const enabled = new Set(settings.rules.filter((r) => r.enabled).map((r) => r.id))
+  const findings = evaluateDrift(settings.rules, facts, known, now)
 
-  const open = (await db(ALERTS).whereNull('resolved_at').select('*')) as Array<
-    Record<string, unknown>
-  >
-  const openByKey = new Map(open.map((a) => [key(String(a.rule_id), String(a.subject_key)), a]))
+  const open = (
+    (await db(ALERTS).whereNull('resolved_at').select('*')) as Array<Record<string, unknown>>
+  ).map(
+    (a): OpenAlert => ({
+      id: Number(a.id),
+      rule_id: String(a.rule_id),
+      kind: String(a.kind),
+      subject_key: String(a.subject_key),
+      app_id: Number(a.app_id),
+      environment_id: a.environment_id == null ? null : Number(a.environment_id),
+      message: String(a.message),
+      notified: a.notified_at != null
+    })
+  )
+  const openByKey = new Map(open.map((a) => [key(a.rule_id, a.subject_key), a]))
   const seen = new Set<string>()
-  const opened: DriftFinding[] = []
+  let opened = 0
 
   for (const f of findings) {
     const k = key(f.rule_id, f.subject_key)
@@ -123,13 +147,8 @@ export async function runFleetAlertTick(deps: AlertDeps = {}): Promise<AlertTick
     const existing = openByKey.get(k)
     if (existing) {
       await db(ALERTS)
-        .where({ id: existing.id as number })
-        .update({
-          last_seen_at: now,
-          message: f.message.slice(0, 1000),
-          environment_id: f.environment_id,
-          app_id: f.app_id
-        })
+        .where({ id: existing.id })
+        .update({ last_seen_at: now, message: f.message.slice(0, 1000) })
     } else {
       await db(ALERTS).insert({
         rule_id: f.rule_id,
@@ -141,54 +160,103 @@ export async function runFleetAlertTick(deps: AlertDeps = {}): Promise<AlertTick
         opened_at: now,
         last_seen_at: now
       })
-      opened.push(f)
+      opened++
     }
   }
 
-  const gone = open.filter((a) => !seen.has(key(String(a.rule_id), String(a.subject_key))))
-  for (const a of gone)
-    await db(ALERTS)
-      .where({ id: a.id as number })
-      .update({ resolved_at: now })
+  // Resolve only what was really looked at (or whose rule is off now).
+  const gone = open.filter((a) => {
+    if (seen.has(key(a.rule_id, a.subject_key))) return false
+    if (!enabled.has(a.rule_id)) return true
+    return a.environment_id != null && evaluated.has(a.environment_id)
+  })
+  for (const a of gone) await db(ALERTS).where({ id: a.id }).update({ resolved_at: now })
 
-  let notified = 0
-  if (opened.length) {
-    const admins = await (deps.admins ?? defaultAdmins)().catch(() => [] as string[])
-    const owners = await ownersOf([...new Set(opened.map((f) => f.app_id))])
-    // Person → the alerts they hear about (owners: their apps; admins: all).
-    const perPerson = new Map<string, DriftFinding[]>()
-    const add = (uid: string, f: DriftFinding) => {
-      const id = uid.toLowerCase()
-      const list = perPerson.get(id) ?? []
-      if (!list.includes(f)) list.push(f)
-      perPerson.set(id, list)
-    }
-    for (const f of opened) {
-      for (const uid of owners.get(f.app_id) ?? []) add(uid, f)
-      for (const uid of admins) add(uid, f)
-    }
-    const url = `${adminBaseUrl() ?? ''}/hub/fleet`
-    const notify = deps.notify ?? defaultNotify
-    for (const [uid, list] of perPerson) {
-      const subject =
-        list.length === 1
-          ? `Version drift: ${list[0].message.split(' ')[0].replace(/[:,]$/, '')}`
-          : `Version drift: ${list.length} new fleet alerts`
-      const lines = list.slice(0, 6).map((f) => f.message)
-      if (list.length > lines.length) lines.push(`…and ${list.length - lines.length} more`)
-      try {
-        await notify(uid, {
-          subject: subject.slice(0, 255),
-          message: lines.join(' ').slice(0, 1000),
-          url
-        })
-        notified++
-      } catch {
-        /* one person's delivery never stops the rest */
-      }
-    }
-    await db(ALERTS).whereNull('resolved_at').whereNull('notified_at').update({ notified_at: now })
+  const notified = await tellUntold(now, state, enabled, deps)
+  return { findings: findings.length, opened, resolved: gone.length, notified }
+}
+
+/** Every open alert nobody was told about yet: one notification per person. */
+async function tellUntold(
+  now: Date,
+  state: FleetState,
+  enabled: Set<string>,
+  deps: AlertDeps
+): Promise<number> {
+  const untold = (await db(ALERTS)
+    .whereNull('resolved_at')
+    .whereNull('notified_at')
+    .limit(500)
+    .select('id', 'rule_id', 'kind', 'app_id', 'message')) as Array<{
+    id: number
+    rule_id: string
+    kind: string
+    app_id: number
+    message: string
+  }>
+  const armedBefore = new Set(state.armed_rules)
+  const nextArmed = [...enabled]
+  const saveArmed = async () => {
+    if (nextArmed.join('\u0001') !== state.armed_rules.join('\u0001'))
+      await saveFleetState({ ...state, armed_rules: nextArmed }).catch(() => {})
   }
-
-  return { findings: findings.length, opened: opened.length, resolved: gone.length, notified }
+  if (!untold.length) {
+    await saveArmed()
+    return 0
+  }
+  let admins: string[]
+  try {
+    admins = await (deps.admins ?? hubAdminIds)()
+  } catch {
+    // Untold rows stay untold: the next pass tries again (rules not marked armed either).
+    return 0
+  }
+  const owners = await ownersOf([...new Set(untold.map((a) => Number(a.app_id)))])
+  const perPerson = new Map<string, typeof untold>()
+  const add = (uid: string, a: (typeof untold)[number]) => {
+    const id = uid.toLowerCase()
+    const list = perPerson.get(id) ?? []
+    if (!list.includes(a)) list.push(a)
+    perPerson.set(id, list)
+  }
+  for (const a of untold) {
+    for (const uid of owners.get(Number(a.app_id)) ?? []) add(uid, a)
+    for (const uid of admins) add(uid, a)
+  }
+  const url = await fleetUrl()
+  const notify = deps.notify ?? fleetNotify
+  let sent = 0
+  for (const [uid, list] of perPerson) {
+    // First pass of a newly armed rule: one summary line for that rule.
+    const lines: string[] = []
+    const byRule = new Map<string, typeof list>()
+    for (const a of list) byRule.set(a.rule_id, [...(byRule.get(a.rule_id) ?? []), a])
+    for (const [ruleId, items] of byRule) {
+      if (!armedBefore.has(ruleId) && items.length > 1)
+        lines.push(
+          `${RULE_LABEL[items[0].kind] ?? ruleId} (just turned on): ${items.length} environments match.`
+        )
+      else lines.push(...items.map((a) => a.message))
+    }
+    const shown = lines.slice(0, 6)
+    if (lines.length > shown.length) shown.push(`…and ${lines.length - shown.length} more`)
+    const subject =
+      list.length === 1
+        ? 'Version drift: 1 new fleet alert'
+        : `Version drift: ${list.length} new fleet alerts`
+    try {
+      await notify(uid, { kind: 'drift', subject, message: shown.join(' '), url })
+      sent++
+    } catch {
+      /* one person's delivery never stops the rest */
+    }
+  }
+  await db(ALERTS)
+    .whereIn(
+      'id',
+      untold.map((a) => a.id)
+    )
+    .update({ notified_at: now })
+  await saveArmed()
+  return sent
 }

@@ -1,6 +1,7 @@
 import { db } from '../../../db/index.js'
 import { NIVARO_VERSION } from '../../../version.js'
-import { newestVersion, releasesBehind } from './rules.js'
+import { loadKnownReleases } from './releases.js'
+import { isUnverified, newestVersion, releasesBehind } from './rules.js'
 import { type FleetSettings, loadFleetSettings, targetFor } from './settings.js'
 import {
   ALERTS,
@@ -15,13 +16,18 @@ import { monthBounds, monthOf, sloFigures, uptimePercent } from './uptime.js'
 
 /**
  * The fleet page answer: every app × environment the caller may see on one screen, built ONLY
- * from the Hub's own tables (the status snapshot the probe job keeps, uptime samples, Hub deploy
- * rows, open alerts). Never calls an app: a page load costs a handful of reads however many
- * environments there are.
+ * from the Hub's own tables (the status snapshot the probe job keeps, hourly uptime rollups, Hub
+ * deploy rows, open alerts, the cached release list). Never calls an app or the registry: a page
+ * load costs a handful of reads however many environments there are (the route also keeps each
+ * answer 30 s per viewer).
  *
- * "Newest" = the highest version any environment of the whole fleet runs, or the Hub's own
- * version when that is higher (an owner sees the same newest as an admin, never which app runs it).
+ * "Newest" and "N behind" count in releases the Hub knows (releases.ts) — never the Hub's own
+ * version or what an app reports about itself. A version above every known release is flagged
+ * `version_unverified` and has no "behind".
  */
+
+/** A probe older than this marks the row "not checked lately" (never counted as up). */
+export const PROBE_STALE_MS = 3 * 60_000
 
 export interface FleetAlertChip {
   id: number
@@ -45,6 +51,10 @@ export interface FleetRow {
   version: string | null
   version_since: string | null
   behind: number | null
+  /** The environment answers a version above every release the Hub knows. */
+  version_unverified: boolean
+  /** No probe in the last PROBE_STALE_MS (the tick skipped it, or jobs are not running). */
+  probe_stale: boolean
   state: string | null
   preflight: string | null
   readiness_score: number | null
@@ -145,9 +155,9 @@ export async function buildFleet(
   const envs = (await envQ) as Array<Record<string, unknown>>
   const ids = envs.map((e) => Number(e.id))
 
-  // The newest version is fleet-wide (also for an owner): one small read of every snapshot.
-  const allStatus = await readFleetStatus()
-  const newest = newestVersion([NIVARO_VERSION, ...[...allStatus.values()].map((s) => s.version)])
+  const allStatus = await readFleetStatus(ids)
+  const known = await loadKnownReleases()
+  const newest = newestVersion(known)
 
   const day = new Date(now.getTime() - 86_400_000)
   const month = monthOf(now)
@@ -203,7 +213,10 @@ export async function buildFleet(
       shared_key: (e.shared_key as string | null) ?? null,
       version,
       version_since: st?.version_since ?? null,
-      behind: version ? releasesBehind(version, newest) : null,
+      behind: releasesBehind(version, known),
+      version_unverified: isUnverified(version, known),
+      probe_stale:
+        !st?.probed_at || now.getTime() - new Date(st.probed_at).getTime() > PROBE_STALE_MS,
       state: st?.state ?? null,
       preflight: st?.preflight ?? null,
       readiness_score: st?.readiness_score ?? null,

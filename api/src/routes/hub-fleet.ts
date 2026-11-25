@@ -10,7 +10,16 @@ import {
   auditCsv,
   listAudit
 } from '../services/hub/fleet/audit.js'
-import { buildFleet } from '../services/hub/fleet/fleet.js'
+import { buildFleet, type FleetAnswer } from '../services/hub/fleet/fleet.js'
+import {
+  ALERTS_LOCK_KEY,
+  type CheckState,
+  type LockRedis,
+  PROBE_LOCK_KEY,
+  readCheckState,
+  withLock,
+  writeCheckState
+} from '../services/hub/fleet/lock.js'
 import { listSloReports, runSloReport } from '../services/hub/fleet/report.js'
 import {
   type FleetSettings,
@@ -22,7 +31,9 @@ import {
   ALERTS,
   forgetGoneEnvironments,
   pruneSamples,
-  uptimeSeries
+  recentFailures,
+  rollupHours,
+  uptimeHourSeries
 } from '../services/hub/fleet/store.js'
 import { runFleetProbeTick } from '../services/hub/fleet/tick.js'
 import { hubModeEnabled } from '../services/hub/mode.js'
@@ -33,24 +44,36 @@ import type { StatusCache } from '../services/hub/status.js'
  * beside routes/hub.ts, only with HUB=on (never in cloud mode).
  *
  *   GET  /fleet                               every app × environment the caller may see (admins:
- *                                             all; owners: their apps) from the Hub's own tables
- *   GET  /fleet/environments/:envId/uptime    probe samples (≤ 30 days) + stored monthly reports
+ *                                             all; owners: their apps) from the Hub's own tables;
+ *                                             each answer kept 30 s per viewer (nvr:hub:fleet-page)
+ *   GET  /fleet/environments/:envId/uptime    hourly uptime (≤ 30 days), recent failed probes,
+ *                                             stored monthly reports
  *   GET  /fleet/alerts?state=open|all         drift alerts (owners: their apps)
  *   GET  /fleet/reports                       stored monthly SLO rows (owners: their apps)
  *   GET  /fleet/settings                      rules, SLO targets, report switch (admin)
  *   PUT  /fleet/settings                      the same, validated (admin, logged)
- *   POST /fleet/check                         one probe tick + one alert pass now (admin, logged)
+ *   POST /fleet/check                         starts one probe tick + one alert pass (admin,
+ *                                             logged): 202 {status: running}; 409 CHECK_RUNNING
+ *                                             while one runs; never runs beside the cron tick
+ *   GET  /fleet/check                         the last check's state (poll after the POST)
  *   GET  /audit                               the Hub audit timeline (admin): filters app,
  *                                             environment, user, action (category or exact),
  *                                             from, to; offset + limit
  *   GET  /audit.csv                           the same rows as CSV (admin, logged)
  *
  * Jobs (Hub only, one leader through the cron lease, crons tick only where cronTicksEnabled()):
- * hub-fleet-probe (every minute), hub-fleet-alerts (every 15 minutes), hub-fleet-prune (04:20
- * daily), hub-slo-report (07:00 UTC on the 1st).
+ * hub-fleet-probe (every minute), hub-fleet-rollup (every 5 minutes), hub-fleet-alerts (every 15
+ * minutes), hub-fleet-prune (04:20 daily), hub-slo-report (07:00 UTC on the 1st, 72 h catch-up).
+ * The probe tick and the alert pass each hold a Redis lock (services/hub/fleet/lock.ts), shared
+ * with Check now.
  */
 
 type Q = Record<string, string | undefined>
+
+export const PAGE_CACHE_PREFIX = 'nvr:hub:fleet-page:'
+export const PAGE_CACHE_TTL_S = 30
+/** How long Check now waits for a running cron tick to free its lock. */
+const CHECK_WAIT_MS = 70_000
 
 function fail(reply: FastifyReply, status: number, code: string, error: string) {
   return reply.code(status).send({ error, code })
@@ -59,8 +82,10 @@ function fail(reply: FastifyReply, status: number, code: string, error: string) 
 const userId = (req: FastifyRequest) => String(req.user?.id ?? '')
 const query = (req: FastifyRequest) => (req.query ?? {}) as Q
 
-function redisOf(app: FastifyInstance): StatusCache | null {
-  return (app as unknown as { redis?: StatusCache }).redis ?? null
+type FleetRedis = StatusCache & LockRedis & { del?: (...keys: string[]) => Promise<unknown> }
+
+function redisOf(app: FastifyInstance): FleetRedis | null {
+  return (app as unknown as { redis?: FleetRedis }).redis ?? null
 }
 
 /** App ids the caller may read (null = all, for an admin). */
@@ -78,14 +103,17 @@ function dateParam(v: string | undefined): Date | null | 'bad' {
   return Number.isFinite(d.getTime()) ? d : 'bad'
 }
 
-/** Drops targets for environments that no longer exist (ids are the keys). */
+/** Drops targets for environments that no longer exist (ids are the keys), in chunks. */
 async function keepKnownTargets(s: FleetSettings): Promise<FleetSettings> {
   const ids = Object.keys(s.slo.targets).map(Number)
   if (!ids.length) return s
-  const rows = (await db('nivaro_hub_environments').whereIn('id', ids).select('id')) as Array<{
-    id: number
-  }>
-  const live = new Set(rows.map((r) => String(r.id)))
+  const live = new Set<string>()
+  for (let i = 0; i < ids.length; i += 500) {
+    const rows = (await db('nivaro_hub_environments')
+      .whereIn('id', ids.slice(i, i + 500))
+      .select('id')) as Array<{ id: number }>
+    for (const r of rows) live.add(String(r.id))
+  }
   const targets = Object.fromEntries(Object.entries(s.slo.targets).filter(([k]) => live.has(k)))
   return { ...s, slo: { ...s.slo, targets } }
 }
@@ -115,11 +143,55 @@ function auditFilter(q: Q): AuditFilter | string {
   }
 }
 
+/** Admins share one cached answer; an owner's is their own (it depends on what they own). */
+const pageKey = (req: FastifyRequest) =>
+  `${PAGE_CACHE_PREFIX}${req.isAdmin ? 'admin' : userId(req).toLowerCase()}`
+
+async function cachedPage(redis: FleetRedis | null, k: string): Promise<FleetAnswer | null> {
+  if (!redis) return null
+  try {
+    const raw = await redis.get(k)
+    return raw ? (JSON.parse(raw) as FleetAnswer) : null
+  } catch {
+    return null
+  }
+}
+
+async function forgetAdminPage(redis: FleetRedis | null): Promise<void> {
+  await Promise.resolve(redis?.del?.(`${PAGE_CACHE_PREFIX}admin`)).catch(() => {})
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+/** Takes `key` within `waitMs` (polling), then runs `work`; `{ran:false}` if it never freed. */
+async function withLockWaiting<T>(
+  redis: FleetRedis | null,
+  key: string,
+  waitMs: number,
+  work: () => Promise<T>
+) {
+  const until = Date.now() + waitMs
+  for (;;) {
+    const out = await withLock(redis, key, work)
+    if (out.ran || Date.now() >= until) return out
+    await sleep(1000)
+  }
+}
+
 export async function hubFleetRoutes(app: FastifyInstance) {
   if (!hubModeEnabled()) return
 
   app.get('/fleet', { preHandler: requireAuth }, async (req) => {
-    return { data: await buildFleet({ userId: userId(req), isAdmin: !!req.isAdmin }) }
+    const redis = redisOf(app)
+    const k = pageKey(req)
+    const hit = await cachedPage(redis, k)
+    if (hit) return { data: hit }
+    const data = await buildFleet({ userId: userId(req), isAdmin: !!req.isAdmin })
+    if (redis)
+      await Promise.resolve(redis.set(k, JSON.stringify(data), 'EX', PAGE_CACHE_TTL_S)).catch(
+        () => {}
+      )
+    return { data }
   })
 
   app.get('/fleet/environments/:envId/uptime', { preHandler: requireAuth }, async (req, reply) => {
@@ -133,24 +205,11 @@ export async function hubFleetRoutes(app: FastifyInstance) {
       return fail(reply, 404, 'NOT_FOUND', 'Not found')
     const days = Math.max(1, Math.min(30, Number(query(req).days) || 7))
     const from = new Date(Date.now() - days * 86_400_000)
-    const [samples, reports] = await Promise.all([uptimeSeries(id, from), listSloReports([id], 24)])
-    // Hourly buckets keep the answer small (≤ 720 points for 30 days).
-    const buckets = new Map<string, { samples: number; up: number; ms: number[] }>()
-    for (const s of samples) {
-      const hour = `${s.at.slice(0, 13)}:00:00.000Z`
-      const b = buckets.get(hour) ?? { samples: 0, up: 0, ms: [] }
-      b.samples++
-      if (s.up) b.up++
-      if (s.ms != null) b.ms.push(s.ms)
-      buckets.set(hour, b)
-    }
-    const hours = [...buckets].map(([at, b]) => ({
-      at,
-      samples: b.samples,
-      up: b.up,
-      ms: b.ms.length ? Math.round(b.ms.reduce((x, y) => x + y, 0) / b.ms.length) : null
-    }))
-    const incidents = samples.filter((s) => !s.up).slice(-50)
+    const [hours, incidents, reports] = await Promise.all([
+      uptimeHourSeries(id, from),
+      recentFailures(id),
+      listSloReports([id], 24)
+    ])
     return { data: { environment_id: id, days, hours, incidents, reports } }
   })
 
@@ -201,6 +260,7 @@ export async function hubFleetRoutes(app: FastifyInstance) {
     if (!out.ok) return fail(reply, 400, 'BAD_FLEET_SETTINGS', out.error)
     const settings = await keepKnownTargets(out.settings)
     await saveFleetSettings(settings)
+    await forgetAdminPage(redisOf(app))
     await logActivity({
       action: 'hub-fleet-settings',
       user: userId(req),
@@ -220,16 +280,55 @@ export async function hubFleetRoutes(app: FastifyInstance) {
     return { data: settings }
   })
 
-  app.post('/fleet/check', { preHandler: requireAdmin }, async (req) => {
-    const probe = await runFleetProbeTick({ redis: redisOf(app) })
-    const alerts = await runFleetAlertTick()
-    await logActivity({
-      action: 'hub-fleet-check',
-      user: userId(req),
-      comment: JSON.stringify({ probed: probe.probed, down: probe.down, opened: alerts.opened }),
-      req
-    })
-    return { data: { probe, alerts } }
+  app.get('/fleet/check', { preHandler: requireAdmin }, async () => ({
+    data: await readCheckState(redisOf(app))
+  }))
+
+  app.post('/fleet/check', { preHandler: requireAdmin }, async (req, reply) => {
+    const redis = redisOf(app)
+    const last = await readCheckState(redis)
+    const fresh =
+      last?.status === 'running' && Date.now() - Date.parse(last.started_at) < 5 * 60_000
+    if (fresh)
+      return reply
+        .code(409)
+        .send({ error: 'A check is already running', code: 'CHECK_RUNNING', data: last })
+    const started: CheckState = {
+      status: 'running',
+      started_at: new Date().toISOString(),
+      by: userId(req)
+    }
+    await writeCheckState(redis, started)
+    await logActivity({ action: 'hub-fleet-check', user: userId(req), req })
+    // In the background (the answer never holds a minute): wait for the cron tick if it runs.
+    void (async () => {
+      try {
+        const probe = await withLockWaiting(redis, PROBE_LOCK_KEY, CHECK_WAIT_MS, () =>
+          runFleetProbeTick({ redis, forceStatus: true })
+        )
+        const alerts = await withLockWaiting(redis, ALERTS_LOCK_KEY, CHECK_WAIT_MS, () =>
+          runFleetAlertTick()
+        )
+        await forgetAdminPage(redis)
+        await writeCheckState(redis, {
+          ...started,
+          status: probe.ran && alerts.ran ? 'done' : 'failed',
+          finished_at: new Date().toISOString(),
+          result: {
+            probe: probe.ran ? probe.value : null,
+            alerts: alerts.ran ? alerts.value : null
+          }
+        })
+      } catch (err) {
+        req.log.warn({ err: (err as Error)?.name ?? 'Error' }, 'hub fleet check failed')
+        await writeCheckState(redis, {
+          ...started,
+          status: 'failed',
+          finished_at: new Date().toISOString()
+        })
+      }
+    })()
+    return reply.code(202).send({ data: started })
   })
 
   app.get('/audit', { preHandler: requireAdmin }, async (req, reply) => {
@@ -276,25 +375,40 @@ export async function hubFleetRoutes(app: FastifyInstance) {
       'hub-fleet-probe',
       '* * * * *',
       async () => {
-        await runFleetProbeTick({ redis: redisOf(app) })
+        await withLock(redisOf(app), PROBE_LOCK_KEY, () =>
+          runFleetProbeTick({ redis: redisOf(app) })
+        )
       },
       {
         quiet: true,
         idempotent: 'safe',
         description:
-          'Every minute (Hub only) — probes every active environment’s public /api/version and /api/ready (one uptime sample each, nivaro_hub_uptime_samples) and, every 5 minutes per environment, reads its status through the Hub status reader (hub link, public or shared link). Keeps nivaro_hub_fleet_status, which the Apps → Fleet page reads. At most 8 at once, 8 s per request; touches only the Hub’s own tables.'
+          'Every minute (Hub only) — probes every active environment’s public /api/version and /api/ready (one uptime sample each, at most one a minute; none while a Hub promotion or move is running on it) and, every 5 minutes per environment, reads its status through the Hub status reader. Keeps nivaro_hub_fleet_status, which the Apps → Fleet page reads. At most 8 at once, 8 s per request, one run at a time (shared with Check now).'
+      }
+    )
+    app.cron.schedule(
+      'hub-fleet-rollup',
+      '*/5 * * * *',
+      async () => {
+        await rollupHours(new Date())
+      },
+      {
+        quiet: true,
+        idempotent: 'safe',
+        description:
+          'Every 5 minutes (Hub only) — folds the last 3 hours of uptime samples into hourly rows (nivaro_hub_uptime_hours: samples, answered, p95 response time), which every uptime figure reads.'
       }
     )
     app.cron.schedule(
       'hub-fleet-alerts',
       '*/15 * * * *',
       async () => {
-        await runFleetAlertTick()
+        await withLock(redisOf(app), ALERTS_LOCK_KEY, () => runFleetAlertTick())
       },
       {
         idempotent: 'safe',
         description:
-          'Every 15 minutes (Hub only) — evaluates the version drift rules (Apps → Fleet → Alert rules) over the fleet status: opens an alert per new finding and tells the app’s owners and the Hub administrators once (one notification per person per run), resolves alerts whose finding is gone.'
+          'Every 15 minutes (Hub only) — refreshes the cached release list at most hourly, evaluates the version drift rules (Apps → Fleet → Rules and targets; all off until turned on) over the fleet status: opens one alert per rule + environment and tells the app’s owners and the Hub administrators once (one notification per person per run), resolves alerts whose finding is gone.'
       }
     )
     app.cron.schedule(
@@ -304,13 +418,13 @@ export async function hubFleetRoutes(app: FastifyInstance) {
         const n = await pruneSamples(new Date())
         const live = (await db('nivaro_hub_environments').select('id')) as Array<{ id: number }>
         await forgetGoneEnvironments(live.map((r) => Number(r.id)))
-        app.log.info(`hub-fleet-prune: ${n} uptime samples older than 45 days removed`)
+        app.log.info(`hub-fleet-prune: ${n} uptime samples older than 48 hours removed`)
       },
       {
         quiet: true,
         idempotent: 'safe',
         description:
-          'Daily 04:20 (Hub only) — deletes uptime samples older than 45 days and resolved fleet alerts older than 180 days, in batches, and the status rows of environments that no longer exist. Monthly SLO rows are kept.'
+          'Daily 04:20 (Hub only) — deletes raw uptime samples older than 48 hours, hourly uptime rows older than 400 days and resolved fleet alerts older than 180 days, in batches, and the status rows of environments that no longer exist. Monthly SLO rows are kept.'
       }
     )
     app.cron.schedule(
@@ -319,14 +433,15 @@ export async function hubFleetRoutes(app: FastifyInstance) {
       async () => {
         const out = await runSloReport()
         app.log.info(
-          `hub-slo-report: ${out.month}, ${out.environments} environments, ${out.missed} missed, ${out.notified} told`
+          `hub-slo-report: ${out.months.join(', ')}, ${out.environments} environments, ${out.missed} missed, ${out.notified} told`
         )
       },
       {
         idempotent: 'safe',
         timezone: 'UTC',
+        catchUpHours: 72,
         description:
-          '07:00 UTC on the 1st (Hub only) — stores last month’s uptime per environment against its target (nivaro_hub_slo_reports) and, unless switched off in the fleet settings, sends each app’s owners their app’s report and the Hub administrators a fleet summary (in-app + email). A month already sent is never sent again.'
+          '07:00 UTC on the 1st (Hub only; a missed run is caught up within 72 hours, and any ended month not reported yet is reported) — stores each month’s uptime per environment against its target (nivaro_hub_slo_reports) and, unless switched off in the fleet settings, sends each app’s owners their app’s report and the Hub administrators a fleet summary (in-app + email). Never sends a month twice.'
       }
     )
   }

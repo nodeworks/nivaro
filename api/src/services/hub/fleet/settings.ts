@@ -6,7 +6,7 @@ import { db } from '../../../db/index.js'
  * 'nivaro-core', key `hub_fleet`), JSON. Read by the fleet page and the fleet jobs; written only
  * by PUT /api/hub/fleet/settings (admin, logged).
  *
- * Targets are percentages (99.5 = 99.5 % of probes answered) and kept per environment id; a
+ * Every rule ships OFF: an admin turns each one on. Targets are percentages (99.5 = 99.5 % of probes answered) and kept per environment id; a
  * removed environment's target is dropped on the next save.
  */
 
@@ -42,6 +42,8 @@ export interface FleetSettings {
 }
 
 export const MAX_RULES = 20
+/** Per-environment targets kept at most (one per environment; far above a real fleet). */
+export const MAX_TARGETS = 2000
 const ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/
 const KEY_RE = /^[a-z0-9][a-z0-9-]{0,63}$/
 
@@ -51,7 +53,7 @@ export function defaultFleetSettings(): FleetSettings {
       {
         id: 'behind-newest',
         kind: 'behind_newest',
-        enabled: true,
+        enabled: false,
         n: 5,
         env_keys: [],
         from_key: null,
@@ -60,7 +62,7 @@ export function defaultFleetSettings(): FleetSettings {
       {
         id: 'staging-production',
         kind: 'pair_apart',
-        enabled: true,
+        enabled: false,
         n: 3,
         env_keys: [],
         from_key: 'staging',
@@ -69,7 +71,7 @@ export function defaultFleetSettings(): FleetSettings {
       {
         id: 'not-deployed',
         kind: 'stale_deploy',
-        enabled: true,
+        enabled: false,
         n: 30,
         env_keys: [],
         from_key: null,
@@ -156,6 +158,8 @@ export function normalizeFleetSettings(raw: unknown): Result {
   if (def === null) return { ok: false, error: 'The default target must be 50–100 %' }
   const targets: Record<string, number> = {}
   const tRaw = sloRaw.targets && typeof sloRaw.targets === 'object' ? sloRaw.targets : {}
+  if (Object.keys(tRaw).length > MAX_TARGETS)
+    return { ok: false, error: `At most ${MAX_TARGETS} environment targets` }
   for (const [k, v] of Object.entries(tRaw as Record<string, unknown>)) {
     if (!/^\d{1,9}$/.test(k)) return { ok: false, error: 'Targets are keyed by environment id' }
     if (v == null || v === '') continue
@@ -205,4 +209,63 @@ export async function saveFleetSettings(settings: FleetSettings): Promise<void> 
 /** The target (percent) one environment is held to. */
 export function targetFor(settings: FleetSettings, envId: number): number {
   return settings.slo.targets[String(envId)] ?? settings.slo.default_target
+}
+
+/**
+ * What the fleet jobs remember between runs (row `nivaro-core` / `hub_fleet_state`): the rules
+ * already evaluated once since they were turned on (their first run sends one summary instead of
+ * a line per environment), the months whose admin summary went out, and the cached list of the
+ * image's published release tags (refreshed at most hourly by the alerts job).
+ */
+export const FLEET_STATE_KEY = 'hub_fleet_state'
+
+export interface FleetState {
+  armed_rules: string[]
+  summarised_months: string[]
+  registry: { versions: string[]; read_at: string | null }
+}
+
+const emptyState = (): FleetState => ({
+  armed_rules: [],
+  summarised_months: [],
+  registry: { versions: [], read_at: null }
+})
+
+const strings = (v: unknown, max: number) =>
+  Array.isArray(v)
+    ? v.filter((x): x is string => typeof x === 'string' && x.length <= 64).slice(-max)
+    : []
+
+export async function loadFleetState(): Promise<FleetState> {
+  try {
+    const row = (await db('nivaro_extension_settings')
+      .where({ extension_id: FLEET_SETTINGS_EXT, key: FLEET_STATE_KEY })
+      .first('value')) as { value: string | null } | undefined
+    if (!row?.value) return emptyState()
+    const j = JSON.parse(row.value) as Record<string, unknown>
+    const reg = (j.registry ?? {}) as Record<string, unknown>
+    return {
+      armed_rules: strings(j.armed_rules, 100),
+      summarised_months: strings(j.summarised_months, 36),
+      registry: {
+        versions: strings(reg.versions, 200),
+        read_at: typeof reg.read_at === 'string' ? reg.read_at : null
+      }
+    }
+  } catch {
+    return emptyState()
+  }
+}
+
+export async function saveFleetState(state: FleetState): Promise<void> {
+  const value = JSON.stringify(state)
+  const where = { extension_id: FLEET_SETTINGS_EXT, key: FLEET_STATE_KEY }
+  const existing = (await db('nivaro_extension_settings').where(where).first('id')) as
+    | { id: number }
+    | undefined
+  if (existing)
+    await db('nivaro_extension_settings')
+      .where({ id: existing.id })
+      .update({ value, updated_at: new Date() })
+  else await db('nivaro_extension_settings').insert({ ...where, value, updated_at: new Date() })
 }
