@@ -850,7 +850,7 @@ export const MOVE_BLOCKER_COPY: Record<string, Copy> = {
   },
   ENV_OBJECT_STORAGE: {
     title: 'Files are stored in S3 or Azure set by environment variables',
-    hint: 'A move copies only files stored on disk, so these would be lost. Move the storage settings into the app (Settings → Files) first.'
+    hint: 'Before 0.3.215 a move copies only files stored on disk, so these would be lost. Upgrade the app (both sides) to 0.3.215 or later, or move the storage settings into the app (Settings → Files) first.'
   },
   STORAGE_COUNT_UNKNOWN: {
     title: 'The app did not say which storage its files are on',
@@ -922,7 +922,7 @@ export const MOVE_WARNING_COPY: Record<string, Copy> = {
   },
   REPLAYS_NOT_MOVED: {
     title: 'Session replays are not moved',
-    hint: 'Replays recorded on the old home stay there.'
+    hint: 'Before 0.3.215, replays kept in file storage stay on the old home. From 0.3.215 a move copies them.'
   },
   OLD_STACK_STOP: {
     title: 'The old stack keeps running until someone stops it',
@@ -972,7 +972,7 @@ export const MOVE_WARNING_COPY: Record<string, Copy> = {
   },
   SESSION_REPLAYS: {
     title: 'Session replays are not moved',
-    hint: 'Watch any replay you still need before the move; the old ones stay on the old home until it is removed.'
+    hint: 'Before 0.3.215: watch any replay you still need before the move; the old ones stay on the old home until it is removed. From 0.3.215 a move copies them.'
   },
   HELP_VIDEO_RENDERS: {
     title: 'Help-video renders in the queue start again',

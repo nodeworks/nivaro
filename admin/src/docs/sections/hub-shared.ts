@@ -404,11 +404,6 @@ export const hubSharedDocs: DocSection = {
           'blocker `SQLITE`'
         ],
         [
-          'Objects in an env-driven S3 or Azure provider',
-          'A move copies the objects the deployment storage holds (the `local` provider). An app with its own saved-settings S3 or Azure bucket is not unaffected: on a shared deployment its objects live under `apps/<id>/` in that bucket, so a move changes the key prefix and the objects must be copied to their new keys (see Files).',
-          'blocker `ENV_OBJECT_STORAGE`'
-        ],
-        [
           'Sign-in via the Hub, and the switcher pushes',
           "An app on shared signs in directly with the deployment's primary OIDC.",
           'blocker `SIGNIN_VIA_HUB`'
@@ -422,11 +417,6 @@ export const hubSharedDocs: DocSection = {
           'Mail settings from the environment (`SMTP_*`)',
           'An app uses its own saved mail settings.',
           'warning `ENV_SMTP`'
-        ],
-        [
-          'Session replays',
-          'Not moved by a move.',
-          'warnings `SESSION_REPLAYS`, `REPLAYS_NOT_MOVED`'
         ],
         [
           'Outside-write watch (the SQL Server change tracker)',
@@ -483,6 +473,17 @@ export const hubSharedDocs: DocSection = {
         'Microsoft directory lookups and sync. The app uses its own Microsoft app registration, saved in Settings → Microsoft directory (tenant id, client id, client secret; the secret is sealed with the app key). The server `GRAPH_*` and `OIDC_*` variables and the directory keys of `NIVARO_SETTINGS_OVERRIDES` are never used on shared.',
         "The Teams bot. The app uses only the bot saved in its own Settings. `TEAMS_BOT_*`, `MICROSOFT_APP_*`, the sign-in app fallback and the `teams_bot_*` override keys are ignored. `TEAMS_BOT=off` still disables the bot on the whole deployment, but `TEAMS_BOT=on` does not switch an app on: each app saves its own switch. Register each bot with that app's host as its messaging endpoint.",
         "Phone push. An app admin connects the app's push relay in Settings → Mobile app. The server `MOBILE_PUSH_RELAY_KEY` is not used on shared. Phone sign-in was already per app."
+      ]
+    },
+    {
+      type: 'p',
+      text: 'From 0.3.215 (on both sides of a move) a move also copies what used to block or stay behind:'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Objects in an env-driven S3 or Azure provider (`STORAGE_PROVIDER`), on either side: re-keyed between the bucket root (dedicated) and `apps/<id>/` (shared), streamed, resumable, with the same counts and failure reasons as the other files. When both sides use the same bucket the bucket copies them itself. `ENV_OBJECT_STORAGE` is then a note the app sends, not a blocker; it still blocks while either side runs an older version (see Moving an environment → Files).',
+        'Session replays. A replay still being watched often lives in the database, which the move keeps; an older one sits as one object in file storage, and the move copies that object with the files. `SESSION_REPLAYS` and `REPLAYS_NOT_MOVED` then go away.'
       ]
     },
     {
@@ -666,13 +667,15 @@ export const hubMovesDocs: DocSection = {
         "What is copied: every file in the app's files table whose provider is the deployment-storage (`local`) provider. Objects keep their keys. An object already there at the same size is skipped, so a copy is resumable. The first warm copy of a move is always a full copy (a manifest left by an earlier move would make a delta skip rows); later ones are deltas. An object over 5 GB fails that file. A file the source says is missing (404) is listed as missing (up to 50 ids) and never blocks: it was gone before the move. A file whose stored size was stale is copied as the source has it and counted, not failed.",
         'A file that failed is named (up to 50 ids) and counted under a plain reason: the source could not read it (`503 SOURCE_READ_FAILED`), the source\'s `FILES_FALLBACK_DIR` is missing or empty, the source did not answer, the answer was not usable, the bytes arrived incomplete, the target\'s temporary folder could not take them (full or not writable), or the target could not store it. Only the transfer route\'s own "not found" (it carries `X-Nivaro-Transfer-Missing: 1`) counts as missing: a 404 from anything else on the way (a proxy, another route) fails the file. A source on 0.3.209 answers a plain 404 without the marker: a move never pairs it with a newer target (the plan refuses `VERSION_DIFFERS`), and if it ever did, its missing files would fail and the move would roll back, never release without them. A failure in the warm copy is only a warning (the delta inside maintenance tries it again); inside maintenance it stops the move with `FILES_NOT_COPIED`, which names the files and the reasons ("3 file(s) could not be copied (…): the source could not read 3"), and the move rolls back. A failed file is never stored on the target or counted as copied, so the next move copies it again.',
         "A source that reads files through `FILES_FALLBACK_DIR` (after an environment refresh): only a key that is not in a readable fallback folder is missing. A file or folder there that cannot be read (`EACCES`, `EIO`, `ESTALE`) is a read error: `503 SOURCE_READ_FAILED` with no path. So is a fallback folder that is not there, or that is there but EMPTY: an unmounted share or volume usually leaves its mount point behind as an empty folder (`reason: FALLBACK_FOLDER_UNAVAILABLE`). Either way the move rolls back instead of moving on without those files. Fix the mount or the permissions, then start the move again. If the source's uploads really are empty while its files table has rows, unset `FILES_FALLBACK_DIR` on the source; the move's text says so.",
-        'Not copied: objects in an env-driven S3 or Azure provider (a blocker, `ENV_OBJECT_STORAGE`), session replays and image transform caches (replays warn `REPLAYS_NOT_MOVED`; transforms are made again).',
+        "Env-driven S3 or Azure (`STORAGE_PROVIDER=s3|azure`, 0.3.215 on both sides): files whose provider is `s3` or `azure` are copied too, whichever side keeps them there (source, target or both). The source streams each object from its bucket (never whole in memory) and says which of its stores held it (`X-Nivaro-Transfer-Store: env | settings`), so the target writes it to its own env provider or its own saved-settings driver; `s3` is written by both, and the answer settles which. Keys are re-keyed like every key on a shared deployment: `apps/<id>/<key>` there, `<key>` at the bucket root elsewhere. When the source's bucket is also the target's env bucket (the source sends a hash of endpoint or region and bucket, never the name, and the object's full key), the target asks the bucket to copy it (S3 CopyObject, Azure Copy Blob): no byte passes through either app. It does so only from this app's own key (the bucket root, or its own `apps/<id>/` folder; on a shared target never another app's folder). If the bucket refuses (the target's credentials cannot read the source key), the object is streamed instead. The same full key on both sides is already there and is skipped. Counts, failure reasons, the 5 GB cap and resume are the same as for local files. A side before 0.3.215 still blocks with `ENV_OBJECT_STORAGE`.",
+        "Session replays (0.3.215 on both sides): a replay older than the cold-storage setting (default 3 days) keeps its recording as one object in file storage (`session-replays/<year>/<month>/<id>.ndjson.gz`); the pull copies those from the source's `GET /api/hub-transfer/replays/:id` with the files. A failed or missing one is named `replay:<id>`. Newer replays and the 24-hour reload cache live in the database, which the move keeps. Before 0.3.215 the plan warns `REPLAYS_NOT_MOVED` (and the app's `SESSION_REPLAYS`).",
+        'Not copied: image transform caches (generated image sizes are made again when asked for).',
         "Saved-settings S3 or Azure bucket. On a shared deployment every object of such an app sits under `apps/<id>/` in its bucket; on a dedicated stack it sits at the bucket root. A move to or from a shared deployment therefore changes every key, so the pull copies those objects too (files whose provider is `s3` or `azure-blob`), written through the target's own saved-settings driver, whether or not both sides name the same bucket. The plan warns `STORAGE_PREFIX_CHANGES`: the objects are copied, not shared, and the bucket holds both copies until the old ones are removed. A move between two shared deployments keeps the prefix (one app id) and copies nothing there. Files on any other provider block the move with `STORAGE_LAYOUT_DIFFERS` (the copy cannot handle them), and an app that does not say which storage its files are on blocks it with `STORAGE_COUNT_UNKNOWN`.",
         'A pull stalls if nothing moves for 10 minutes, and then fails. A failed pull keeps what it copied; Resume continues.',
         'A pull streams each object into a temporary file under the system temporary folder (`<tmpdir>/nivaro-hub-transfer/`) and only then stores it, so a failed object never leaves a half-written one. Temporary files older than 24 hours are removed when the next pull starts. A stack with a small `/tmp` should give that folder a volume; there is no setting for it yet. Separately, local storage writes each object to `<key>.nvr-part-<random>` beside its final name and renames it; a process killed mid-write leaves that file behind. It is never served and nothing sweeps it: delete leftovers by hand when no process is running.',
         "The one plain fetch (not address-checked) to an address another system named: when the source is a private IP literal (loopback or RFC 1918, for example the Hub's own network), the pull fetches it with no redirects, and a literal cannot be rebound. A source named by an https host name goes through the check that stops a server calling private addresses: a name that resolves to a private address is refused unless the target lists it in its `SSRF_ALLOW_HOSTS` setting. Give the target either an origin that resolves publicly, or a private IP address.",
         '`LINK_URL_NOT_PULLABLE` (between shared deployments, the source deployment\'s link address is a name that resolves to a private address) and `SOURCE_NOT_PULLABLE` (a dedicated source whose own address is such a name — on a company network, most app names) can be overridden: tick "The target deployment allows this host (it is in its SSRF_ALLOW_HOSTS)" (that setting lists hosts the private-address check lets through; on a shared deployment set it in its settings.env) in the start panel. The start then carries the refused code in `overrides` and the activity row records it. If the target does not really allow the host, the first file copy fails and the move rolls back.',
-        "A source with S3 or Azure as the env provider but rows saying `local` (files from before a driver switch) is read through the source's storage, whole objects in memory on the source. Big files make the source use memory."
+        'A source with S3 or Azure as the env provider but rows saying `local` (files from before a driver switch) is read from that bucket too. Before 0.3.215 the source read such an object whole into memory; from 0.3.215 it streams it.'
       ]
     },
     { type: 'h2', id: 'hub-moves-writer', text: 'One writer at a time' },
@@ -768,7 +771,7 @@ export const hubMovesDocs: DocSection = {
         ],
         [
           '`storage_local`',
-          'The Hub cannot see where one side keeps files (`STORAGE_UNVERIFIED`). You vouch every file is on local storage.',
+          'The Hub cannot see where one side keeps files (`STORAGE_UNVERIFIED`; only before 0.3.215, which copies every provider). You vouch every file is on local storage.',
           'yes'
         ],
         [
@@ -863,7 +866,7 @@ export const hubMovesDocs: DocSection = {
         ],
         [
           '`ISSUE_TRACKERS`, `EXEC_SCRIPT_FLOWS`, `SQLITE`, `ENV_OBJECT_STORAGE`',
-          'The app uses something a shared app cannot do yet (see Shared deployments), or keeps files in env-driven object storage. Detail gives counts and kinds, never records. `STAGED_IMPORTS` and `ROW_SCHEDULES` still apply only when the target deployment runs a version before 0.3.212 or one the Hub cannot read.'
+          'The app uses something a shared app cannot do yet (see Shared deployments), or keeps files in env-driven object storage. Detail gives counts and kinds, never records. `STAGED_IMPORTS` and `ROW_SCHEDULES` still apply only when the target deployment runs a version before 0.3.212 or one the Hub cannot read; `ENV_OBJECT_STORAGE` only while either side runs a version before 0.3.215 or one the Hub cannot read.'
         ]
       ]
     },
@@ -892,7 +895,10 @@ export const hubMovesDocs: DocSection = {
           '`SAME_APP_ON_DEPLOYMENT`',
           "Another environment of the same app is already on the target deployment. A copy carries the original's saved Teams bot and directory registration: turn the bot off on the copy if it should not answer."
         ],
-        ['`REPLAYS_NOT_MOVED`', 'Session replays and image transform caches stay behind.'],
+        [
+          '`REPLAYS_NOT_MOVED`',
+          'Before 0.3.215: session replays kept in file storage and image transform caches stay behind. From 0.3.215 the replays are copied.'
+        ],
         [
           '`MANUAL_ROUTE`, `OLD_STACK_STOP`, `GITLAB_BOOT_WINDOW`, `STACK_REAPPLY_ALL`',
           'A person has to do the route change; the old GitLab stack must be stopped afterwards; a GitLab target may run briefly without maintenance; new names re-apply the whole shared stack.'
@@ -907,7 +913,7 @@ export const hubMovesDocs: DocSection = {
         ],
         [
           '`DIRECTORY_ENV_CREDENTIALS`, `TEAMS_BOT_ENV_CREDENTIALS`, `PUSH_RELAY_ENV`, `SETTINGS_ENV_OVERRIDES`, `HUDDLE_TURN`, `ENV_SMTP`, `SESSION_REPLAYS`, `HELP_VIDEO_RENDERS`',
-          'Features a shared app does not have, or that behave differently (see Shared deployments). `DIRECTORY_SYNC`, `PHONE_PUSH`, `TEAMS_BOT` and `MAIL_RETRY` are reported only for a target before 0.3.212 or one the Hub cannot read.'
+          'Features a shared app does not have, or that behave differently (see Shared deployments). `DIRECTORY_SYNC`, `PHONE_PUSH`, `TEAMS_BOT` and `MAIL_RETRY` are reported only for a target before 0.3.212 or one the Hub cannot read; `SESSION_REPLAYS` only while either side runs a version before 0.3.215.'
         ]
       ]
     },
