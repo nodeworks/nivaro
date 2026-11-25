@@ -48,6 +48,7 @@ export * from './sections/file-downloads.js'
 export * from './sections/graphql.js'
 export * from './sections/help-videos.js'
 export * from './sections/hub.js'
+export * from './sections/hub-releases.js'
 export * from './sections/hub-shared.js'
 export * from './sections/ideas.js'
 export * from './sections/import-templates.js'
@@ -330,6 +331,7 @@ import {
   hubPromotionsDocs,
   hubSigninDocs
 } from './sections/hub.js'
+import { hubReleasesDocs } from './sections/hub-releases.js'
 import { hubMovesDocs, hubSharedDocs } from './sections/hub-shared.js'
 import { ideasDocs } from './sections/ideas.js'
 import { importTemplatesGuide } from './sections/import-templates.js'
@@ -1139,6 +1141,7 @@ export const navSections: NavGroup[] = [
       hubOverviewDocs,
       hubLinkDocs,
       hubPromotionsDocs,
+      hubReleasesDocs,
       hubDockerDocs,
       hubSigninDocs,
       hubDatabasesDocs,
