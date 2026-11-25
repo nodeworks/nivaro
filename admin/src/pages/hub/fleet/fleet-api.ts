@@ -29,6 +29,10 @@ export interface FleetRow {
   version: string | null
   version_since: string | null
   behind: number | null
+  /** The environment answers a version above every release the Hub knows (never counted). */
+  version_unverified: boolean
+  /** No probe in the last few minutes (skipped, or the Hub's jobs are not running). */
+  probe_stale: boolean
   state: 'ok' | 'degraded' | 'unreachable' | 'link_refused' | null
   preflight: string | null
   readiness_score: number | null
@@ -90,7 +94,7 @@ export interface UptimeAnswer {
   environment_id: number
   days: number
   hours: Array<{ at: string; samples: number; up: number; ms: number | null }>
-  incidents: Array<{ at: string; up: boolean; ms: number | null; code: string | null }>
+  incidents: Array<{ at: string; code: string | null }>
   reports: Array<{
     month: string
     uptime: number | null
@@ -203,12 +207,33 @@ export const fetchFleetSettings = () =>
 export const saveFleetSettings = (s: FleetSettings) =>
   api.put<{ data: FleetSettings }>('/hub/fleet/settings', s).then((r) => r.data.data)
 
-export const checkFleetNow = () =>
-  api
-    .post<{ data: { probe: { probed: number; down: number }; alerts: { opened: number } } }>(
-      '/hub/fleet/check'
-    )
-    .then((r) => r.data.data)
+export interface FleetCheckState {
+  status: 'running' | 'done' | 'failed'
+  started_at: string
+  finished_at?: string
+  result?: {
+    probe: { probed: number; down: number } | null
+    alerts: { opened: number } | null
+  }
+}
+
+/** Starts a check (202, runs in the background on the server; 409 CHECK_RUNNING while one runs). */
+export const startFleetCheck = () =>
+  api.post<{ data: FleetCheckState }>('/hub/fleet/check').then((r) => r.data.data)
+
+export const fetchFleetCheck = () =>
+  api.get<{ data: FleetCheckState | null }>('/hub/fleet/check').then((r) => r.data.data)
+
+/** Starts a check and waits for it (polls every 2 s, at most 3 minutes). */
+export async function checkFleetNow(): Promise<FleetCheckState> {
+  let state = await startFleetCheck()
+  const until = Date.now() + 3 * 60_000
+  while (state.status === 'running' && Date.now() < until) {
+    await new Promise((r) => setTimeout(r, 2000))
+    state = (await fetchFleetCheck()) ?? state
+  }
+  return state
+}
 
 export const fetchUptime = (envId: number, days: number) =>
   api

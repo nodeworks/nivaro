@@ -56,8 +56,7 @@ function compare(sort: Sort) {
     a.environment_id - b.environment_id
   return (a: FleetRow, b: FleetRow) => {
     let d = 0
-    if (sort === 'behind')
-      d = nullsLast(a.behind ?? (a.version ? 999 : null), b.behind ?? (b.version ? 999 : null), -1)
+    if (sort === 'behind') d = nullsLast(a.behind, b.behind, -1)
     else if (sort === 'uptime') d = nullsLast(a.uptime_30d, b.uptime_30d, 1)
     else if (sort === 'readiness') d = nullsLast(a.readiness_score, b.readiness_score, 1)
     else if (sort === 'deploy')
@@ -107,9 +106,14 @@ export default function HubFleet() {
   const check = useMutation({
     mutationFn: checkFleetNow,
     onSuccess: (d) => {
-      toast.success(
-        `Checked ${d.probe.probed} environment${d.probe.probed === 1 ? '' : 's'}${d.probe.down ? ` — ${d.probe.down} not answering` : ''}`
-      )
+      const p = d.result?.probe
+      if (d.status === 'done' && p)
+        toast.success(
+          `Checked ${p.probed} environment${p.probed === 1 ? '' : 's'}${p.down ? ` — ${p.down} not answering` : ''}`
+        )
+      else if (d.status === 'running')
+        toast('The check is still running — the page updates when it ends')
+      else toast.error('The check did not finish — try again in a minute')
       void qc.invalidateQueries({ queryKey: fleetKeys.fleet() })
     },
     onError: (e) => toastError(e, 'Could not check the fleet')
@@ -418,14 +422,7 @@ function FleetTableRow({
   onOpen: () => void
   onUptime: () => void
 }) {
-  const behind =
-    r.behind == null
-      ? r.version
-        ? 'other release line'
-        : null
-      : r.behind === 0
-        ? null
-        : `${r.behind} behind`
+  const behind = r.behind == null ? null : r.behind === 0 ? null : `${r.behind} behind`
   const sloTone =
     r.slo.met == null
       ? 'text-slate-500 dark:text-muted-foreground'
@@ -473,6 +470,14 @@ function FleetTableRow({
       </td>
       <td className='px-3 py-2'>
         <code className='font-mono text-slate-800 dark:text-foreground'>{r.version ?? '—'}</code>
+        {r.version_unverified && (
+          <p
+            className='m-0 whitespace-nowrap text-[11px] text-amber-800 dark:text-amber-300'
+            data-tip='Newer than every release the Hub deployed or found published — not counted for drift'
+          >
+            not a known release
+          </p>
+        )}
         {behind && (
           <p
             className={cn(
@@ -509,6 +514,9 @@ function FleetTableRow({
           >
             {formatRelative(r.checked_at)}
           </p>
+        )}
+        {r.state && r.probe_stale && (
+          <p className='m-0 text-[11px] text-amber-800 dark:text-amber-300'>Not checked lately</p>
         )}
       </td>
       <td className='px-3 py-2 tabular-nums'>

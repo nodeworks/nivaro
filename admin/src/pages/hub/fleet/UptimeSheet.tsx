@@ -77,7 +77,7 @@ export function UptimeSheet({ row, onClose }: { row: FleetRow | null; onClose: (
                       return (
                         <span
                           key={h.at}
-                          data-tip={`${formatDateTime(h.at)} — ${h.up}/${h.samples} answered${h.ms != null ? `, ${h.ms} ms` : ''}`}
+                          data-tip={`${formatDateTime(h.at)} — ${h.up}/${h.samples} answered${h.ms != null ? `, p95 ${h.ms} ms` : ''}`}
                           className={cn(
                             'h-full min-w-[2px] flex-1 rounded-[1px]',
                             share === 1

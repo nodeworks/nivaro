@@ -96,7 +96,7 @@ export function FleetSettingsCard({ rows }: { rows: FleetRow[] }) {
   return (
     <SectionCard
       title='Alert rules and uptime targets'
-      description='Rules run every 15 minutes; when one starts firing, the app’s owners and every Hub administrator are told once. Targets are the share of probes a month that must answer.'
+      description='Every rule starts off. Turned on, a rule runs every 15 minutes; when it starts firing, the app’s owners and every Hub administrator are told once (its first run sends one summary). Releases are counted among the versions the Hub deployed or found published. Targets are the share of probes a month that must answer.'
       actions={
         <>
           {dirty && (

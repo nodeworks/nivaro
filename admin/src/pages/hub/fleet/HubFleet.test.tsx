@@ -67,6 +67,13 @@ function wire(admin: boolean) {
             rows: [
               row({}),
               row({
+                environment_id: 3,
+                env_key: 'preview',
+                version: '9.0.0',
+                behind: null,
+                version_unverified: true
+              }),
+              row({
                 environment_id: 2,
                 env_key: 'staging',
                 version: '0.3.200',
@@ -118,6 +125,8 @@ describe('HubFleet', () => {
     renderPage()
     expect(await screen.findByText('14 behind')).toBeTruthy()
     expect(screen.getByText('1 not answering')).toBeTruthy()
+    // A version above every known release is flagged, never counted as behind.
+    expect(screen.getByText('not a known release')).toBeTruthy()
     expect(screen.getByText(/^Behind/)).toBeTruthy()
     expect(screen.getByRole('button', { name: /Check now/ })).toBeTruthy()
     // The rules card opens from the header; a summary count filters the table.
