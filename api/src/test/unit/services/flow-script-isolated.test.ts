@@ -381,13 +381,13 @@ describe('a dedicated app (one app per process)', () => {
 })
 
 describe('a dedicated app under a container limit (review N6)', () => {
-  it('starts a child only while its budget is at most half of the free memory', async () => {
+  it('starts a child only once the free memory holds its budget (cap + 96 MB, ruling 4 F2)', async () => {
     process.env.FLOW_SCRIPT_MAX_MB = '256'
     const MB = 1024 * 1024
-    // Budget 256 + 96 MB: needs 704 MB free. 700 MB → waits; then 800 MB → starts.
+    // Budget 256 + 96 = 352 MB: 300 MB free → waits; then 400 MB → starts.
     let calls = 0
     setHeadroomReaderForTests(async () => ({
-      bytes: (++calls < 3 ? 700 : 800) * MB,
+      bytes: (++calls < 3 ? 300 : 400) * MB,
       limited: true
     }))
     expect(
@@ -395,6 +395,19 @@ describe('a dedicated app under a container limit (review N6)', () => {
     ).toEqual({ ok: true })
     expect(calls).toBe(3)
   })
+
+  it('the slot wait and the memory wait share one deadline: ≤ 10 s in all (review 4 F3)', async () => {
+    process.env.FLOW_SCRIPT_CONCURRENCY = '1'
+    const holder = runIsolatedScript(busy(4000), {}, quietLog(), 10_000, { dedicated: true })
+    setHeadroomReaderForTests(async () => ({ bytes: 0, limited: true }))
+    const t = Date.now()
+    await expect(
+      runIsolatedScript('return data', {}, quietLog(), 5000, { dedicated: true, blocking: true })
+    ).rejects.toBeInstanceOf(ScriptBusyError)
+    expect(Date.now() - t).toBeLessThan(12_500)
+    setHeadroomReaderForTests(async () => ({ bytes: Number.POSITIVE_INFINITY, limited: true }))
+    await holder.catch(() => {})
+  }, 40_000)
 
   it('a flow that holds a record write waits at most 10 s, then is refused as busy (review N7)', async () => {
     expect(BLOCKING_WAIT_MS).toBe(10_000)

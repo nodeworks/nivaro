@@ -53,8 +53,8 @@ import { currentTenantKey } from './tenant-rooms.js'
  *    hold the child's budget plus HEADROOM_RESERVE_MB; else it waits up to
  *    FLOW_SCRIPT_MAX_WAIT_MS and is refused; skipped with a warning where no limit can be read);
  *  - on a dedicated app: binary types kept, a V8 heap cap of FLOW_SCRIPT_MAX_MB (default 256), and,
- *    under a container (cgroup) limit, a start only when the child's budget is at most half of
- *    what is free under it (no check on a host without a limit);
+ *    under a container (cgroup) limit, a start only when what is free under it holds the child's
+ *    budget, FLOW_SCRIPT_MAX_MB + RSS_MARGIN_MB (no check on a host without a limit);
  *  - is watched outside V8 too: past its heap cap plus RSS_MARGIN_MB of resident memory
  *    (watchRss polls every 100 ms) it is killed;
  *  - is capped at the step's timeout (≤ 30 s, counted from when the child starts the step; before
@@ -65,7 +65,8 @@ import { currentTenantKey } from './tenant-rooms.js'
  *  - holds a slot: at most FLOW_SCRIPT_CONCURRENCY runs at once on the process (default 4 on a
  *    shared deployment, 2 on a dedicated app); on a shared deployment FLOW_SCRIPT_PER_APP for one
  *    app (default 2). A step waits for a slot (and for memory) up to FLOW_SCRIPT_MAX_WAIT_MS on a
- *    shared deployment (default 30 s) or 10 minutes on a dedicated app — but at most
+ *    shared deployment (default 30 s) or 10 minutes on a dedicated app, one deadline for both —
+ *    but at most
  *    BLOCKING_WAIT_MS (10 s) in a flow that runs before a record is saved, which then refuses the
  *    write (ScriptBusyError → 503 FLOW_SCRIPT_BUSY, nothing written). The input is serialized only
  *    once a slot is held.
@@ -96,7 +97,7 @@ export const BLOCKING_WAIT_MS = 10_000
 /** Kill allowance on top of the script's own timeout: the child's start-up is not script time. */
 const STARTUP_GRACE_MS = 5000
 /** After the child starts the step: room for the prelude and the log read past the timeout. */
-const RUN_GRACE_MS = 2000
+const RUN_GRACE_MS = 5000
 
 /** Time allowed to hand the child its input and parse it: 10 MB a second, at most 60 s. */
 export function transferAllowanceMs(inputChars: number): number {
@@ -592,20 +593,20 @@ export function setHeadroomReaderForTests(fn: (() => Promise<Headroom | null>) |
 let headroomUnreadableWarned = false
 
 /**
- * Waits (≤ maxWaitMs) until there is room for one more child of memoryMb, else ScriptBusyError.
+ * Waits until `deadline` for room for one more child of memoryMb, else ScriptBusyError.
  * Shared deployment: the free memory must hold the child's budget plus HEADROOM_RESERVE_MB.
- * Dedicated app (review N6): only under a container limit, and the child's budget may take at most
- * half of what is free under it (the children already running count in its usage).
+ * Dedicated app (review N6, ruling 4 F2): only under a container limit, and the free memory there
+ * must hold the child's budget (heap cap + RSS_MARGIN_MB); the children already running count in
+ * its usage.
  */
 async function waitForHeadroom(
   memoryMb: number,
-  maxWaitMs: number,
+  deadline: number,
   log: ScriptLog,
   dedicated: boolean
 ): Promise<void> {
   const budget = (memoryMb + RSS_MARGIN_MB) * 1024 * 1024
-  const need = dedicated ? budget * 2 : budget + HEADROOM_RESERVE_MB * 1024 * 1024
-  const deadline = Date.now() + maxWaitMs
+  const need = dedicated ? budget : budget + HEADROOM_RESERVE_MB * 1024 * 1024
   for (;;) {
     const room = await (headroomReader ?? memoryHeadroom)()
     if (room && dedicated && !room.limited) return
@@ -711,7 +712,11 @@ function spawnRun(
       child.kill('SIGKILL')
     }
     let killTimer = setTimeout(kill, STARTUP_GRACE_MS + transferAllowanceMs(input.length))
+    // Once only (review 4 F5): a second `start` line never moves the clock again.
+    let runStarted = false
     const onStart = () => {
+      if (runStarted) return
+      runStarted = true
       clearTimeout(killTimer)
       killTimer = setTimeout(kill, timeout + RUN_GRACE_MS)
     }
@@ -841,10 +846,12 @@ export async function runIsolatedScript(
   const dedicated = opts.dedicated === true
   const timeout = Math.min(Math.max(Number(timeoutMs) || 5000, 1), MAX_TIMEOUT_MS)
   const { memoryMb } = scriptLimits(dedicated)
-  const waitMs = waitBudget(dedicated, opts.blocking === true)
-  const release = await acquireSlot(dedicated, waitMs)
+  // ONE deadline for the slot and the memory together (review 4 F3): a before-save flow's step
+  // waits ≤ BLOCKING_WAIT_MS in all.
+  const deadline = Date.now() + waitBudget(dedicated, opts.blocking === true)
+  const release = await acquireSlot(dedicated, deadline - Date.now())
   try {
-    await waitForHeadroom(memoryMb, waitMs, log, dedicated)
+    await waitForHeadroom(memoryMb, deadline, log, dedicated)
     // Serialized only once a slot is held: a queued step keeps no copy of its input (review N7).
     const input = JSON.stringify(data ?? {}, hostReplacer) ?? '{}'
     return await spawnRun(code, input, log, timeout, memoryMb, dedicated)

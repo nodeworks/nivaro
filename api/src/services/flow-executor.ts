@@ -828,7 +828,10 @@ async function runRunFlow(op: FlowOperation, data: FlowData, ctx: ExecutionConte
     log: ctx.log,
     userId: ctx.userId,
     dryRun: ctx.dryRun,
-    trace: ctx.trace
+    trace: ctx.trace,
+    // A waited-for sub-flow of a before-save flow holds the same write (review 4 F1): its script
+    // steps wait ≤ 10 s too, and a busy one refuses the write. A fire-and-forget one does not.
+    ...(wait && ctx.blocking ? { blocking: true } : {})
   }
 
   if (!wait) {
