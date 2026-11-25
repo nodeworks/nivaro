@@ -287,7 +287,8 @@ export const CHILD_LOCKDOWN = `const lockdown = () => {
         exit: P.reallyExit.bind(P),
         ppid: P.ppid,
         readPpid: () => P.ppid,
-        setInterval
+        setInterval,
+        setTimeout
       }
       // net: everything but the Socket the pipes already are (its connect still throws), the
       // address helpers and the Stream alias.
@@ -343,6 +344,8 @@ export const CHILD_SOURCE = `(() => {
   }
   const vm = io.vm
   const PRELUDE = ${JSON.stringify(PRELUDE)}
+  const SETTLE_TURNS = 10
+  const SETTLE_TURN_MS = 5
   const STRIP_OFF_HEAP = 'for (const k of ' + ${JSON.stringify(JSON.stringify(OFF_HEAP_GLOBALS))} + ') delete globalThis[k]'
   const ownString = (obj, key) => {
     if (obj === null || (typeof obj !== 'object' && typeof obj !== 'function')) return null
@@ -384,17 +387,32 @@ export const CHILD_SOURCE = `(() => {
     } catch (err) {
       failure = classify(err)
     }
-    if (context) {
-      try {
-        // Its own short window (review N2): the log read never doubles the step's timeout.
-        const logs = vm.runInContext('__nvrLogs()', context, { timeout: Math.min(timeout, 250) })
-        if (typeof logs === 'string') write({ t: 'logs', v: logs })
-      } catch {}
+    // Still pending: a promise only the HOST settles (Node's loader refusing import()) lands a
+    // moment after the evaluation on newer Node (22.23: the refusal read as a timeout, CI
+    // 2026-11-25). Give the host a few short turns, re-reading the result each time (each read
+    // drains the context's microtasks); a script that really waits on nothing stays a timeout.
+    let turns = 0
+    const finish = () => {
+      if (!failure && context && state === 'P' && turns < SETTLE_TURNS) {
+        turns++
+        return io.setTimeout(() => {
+          try { state = vm.runInContext('__nvrResult()', context, { timeout }) } catch (err) { failure = classify(err) }
+          finish()
+        }, SETTLE_TURN_MS)
+      }
+      if (context) {
+        try {
+          // Its own short window (review N2): the log read never doubles the step's timeout.
+          const logs = vm.runInContext('__nvrLogs()', context, { timeout: Math.min(timeout, 250) })
+          if (typeof logs === 'string') write({ t: 'logs', v: logs })
+        } catch {}
+      }
+      if (failure) return done(Object.assign({ ok: false }, failure))
+      if (typeof state !== 'string' || state === 'P') return done({ ok: false, kind: 'timeout' })
+      if (state[0] === 'E') return done({ ok: false, kind: 'error', err: state.slice(1) })
+      done({ ok: true, out: state.slice(1) })
     }
-    if (failure) return done(Object.assign({ ok: false }, failure))
-    if (typeof state !== 'string' || state === 'P') return done({ ok: false, kind: 'timeout' })
-    if (state[0] === 'E') return done({ ok: false, kind: 'error', err: state.slice(1) })
-    done({ ok: true, out: state.slice(1) })
+    finish()
   }
   let text = ''
   io.stdin.setEncoding('utf8')
