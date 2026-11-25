@@ -4,6 +4,7 @@ import { failedAuthLimiter } from '../lib/auth-fail-limiter.js'
 import { isMultiTenant } from '../services/deployment-mode.js'
 import { hubLinkToken } from '../services/hub/mode.js'
 import { seedFirstAdmin } from '../services/hub-link/first-admin.js'
+import { recentMinutesParam } from '../services/hub-link/release-params.js'
 import { isRetiredSync, setRetired } from '../services/hub-link/retire.js'
 import { instanceKey } from '../services/instance-key.js'
 import { poolCounters } from '../services/pool-attribution.js'
@@ -18,7 +19,10 @@ import { runPreflight } from './preflight.js'
  *   GET /api/hub-link/status → { version, environment, instance,
  *                                preflight: { status, failing }, readiness_score,
  *                                maintenance, retired,
- *                                process: { uptime_s, memory_mb, pool } }
+ *                                process: { uptime_s, memory_mb, pool },
+ *                                recent?, release_facts? }
+ *   ?recent_minutes=N (1–60) adds `recent` {minutes, requests, errors_5xx, crashes} and
+ *   ?release_facts=1 adds `release_facts` {migrations, env_keys} (Hub release operations).
  *
  * Phase 6 (moves): POST /maintenance (strict), POST + DELETE /retire, GET /shared-readiness —
  * see each route below.
@@ -172,11 +176,30 @@ export async function hubLinkRoutes(app: FastifyInstance) {
     }
   })
 
-  app.get('/status', async (_req, reply) => {
-    const [preflight, readiness_score, maintenance] = await Promise.all([
+  app.get('/status', async (req, reply) => {
+    // Hub release operations: ?recent_minutes=N (aggregate counts) and ?release_facts=1 (build
+    // facts), each only when asked and bounded like the rest (services/hub-link/release-figures).
+    const q = (req.query ?? {}) as Record<string, unknown>
+    const minutes = recentMinutesParam(q.recent_minutes)
+    const wantFacts = q.release_facts === '1'
+    // Imported only when asked (once): the request-log reader pulls the database module in.
+    const extras = minutes || wantFacts ? import('../services/hub-link/release-figures.js') : null
+    const [preflight, readiness_score, maintenance, recent, facts] = await Promise.all([
       preflightSummary(app),
       readinessScore(),
-      maintenanceOn()
+      maintenanceOn(),
+      extras && minutes
+        ? bounded(
+            extras.then((m) => m.recentFigures(minutes)),
+            boundMs
+          ).catch(() => TIMED_OUT)
+        : null,
+      extras && wantFacts
+        ? bounded(
+            extras.then((m) => m.releaseFacts()),
+            boundMs
+          ).catch(() => TIMED_OUT)
+        : null
     ])
     reply.header('Cache-Control', 'no-store')
     return reply.send({
@@ -189,6 +212,8 @@ export async function hubLinkRoutes(app: FastifyInstance) {
       // whether this app is retired (moved away; ruling B9: a move back checks it is false).
       maintenance,
       retired: isRetiredSync(),
+      ...(recent && recent !== TIMED_OUT ? { recent } : {}),
+      ...(facts && facts !== TIMED_OUT ? { release_facts: facts } : {}),
       process: {
         uptime_s: Math.round(process.uptime()),
         memory_mb: Math.round(process.memoryUsage().rss / 1048576),
