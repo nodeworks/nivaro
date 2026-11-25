@@ -484,10 +484,11 @@ function RunCard({ run, personKey }: { run: OffboardRun; personKey: string }) {
   const liftExpected = run.identity?.emails[0] ?? run.person_key ?? String(run.id)
   const lift = useMutation({
     mutationFn: () => liftOffboard(run.id, liftText.trim()),
-    onSuccess: () => {
-      toast.success('The Hub signs them in again', {
-        description:
-          'Their Hub account is active again. Their accounts in the apps stay suspended; restore them in each app.'
+    onSuccess: (res) => {
+      toast.success(res.hub_account_reactivated ? 'The Hub signs them in again' : 'Block lifted', {
+        description: res.hub_account_reactivated
+          ? 'Their Hub account is active again. Their accounts in the apps stay suspended; restore them in each app.'
+          : `${res.hub_account_note ?? 'Their Hub account was left as it is.'} Their accounts in the apps stay suspended.`
       })
       setLifting(false)
       setLiftText('')
@@ -542,8 +543,9 @@ function RunCard({ run, personKey }: { run: OffboardRun; personKey: string }) {
       {lifting && run.blocked && run.status !== 'running' && (
         <div className='space-y-2 border-b border-slate-200 px-4 py-3 dark:border-border'>
           <p className='m-0 text-[12px] text-slate-600 dark:text-slate-300'>
-            The Hub signs them in again and, if this offboard suspended their Hub account, makes it
-            active again. Their accounts in the apps stay suspended.
+            Lifts this offboard’s sign-in block. Their Hub account is made active again only if this
+            offboard suspended it and nobody suspended or changed it since. Their accounts in the
+            apps stay suspended.
           </p>
           <Field id={`lift-${run.id}`} label={`Type ${liftExpected} to lift the block`}>
             <Input

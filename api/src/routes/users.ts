@@ -411,6 +411,14 @@ export async function usersRoutes(app: FastifyInstance) {
       }
     }
     const previousUser = safeUser(await getUser(id))
+    if (filtered.status === 'active' && String(previousUser?.status ?? '') !== 'active') {
+      // Nivaro Hub: an account under a live offboard block is not made active again here.
+      const { emailUnderHubBlock, EMAIL_OFFBOARDED } = await import(
+        '../services/hub/people/offboard.js'
+      )
+      if (await emailUnderHubBlock(previousUser?.email))
+        return reply.code(409).send(EMAIL_OFFBOARDED)
+    }
     const isSelf = String(id).toUpperCase() === String(req.user!.id).toUpperCase()
     if ('preferences' in filtered) {
       // #1804 — nobody writes notes into someone else's Ask AI prompt.
@@ -1931,6 +1939,13 @@ export async function usersRoutes(app: FastifyInstance) {
     if (!body.email) return reply.code(400).send({ error: 'email is required' })
     const existing = await whereEqualsCi(db('nivaro_users'), db, 'email', body.email).first()
     if (existing) return reply.code(409).send({ error: 'Email already in use' })
+    {
+      // Nivaro Hub: an email under a live offboard block is never given a new account.
+      const { emailUnderHubBlock, EMAIL_OFFBOARDED } = await import(
+        '../services/hub/people/offboard.js'
+      )
+      if (await emailUnderHubBlock(body.email)) return reply.code(409).send(EMAIL_OFFBOARDED)
+    }
     const userId = randomUUID()
     await db('nivaro_users').insert({
       id: userId,

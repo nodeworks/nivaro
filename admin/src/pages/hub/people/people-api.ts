@@ -120,7 +120,13 @@ export const retryOffboard = (id: number) =>
   api.post(`/hub/offboards/${id}/retry`, {}).then((r) => r.data.data as OffboardRun)
 
 export const liftOffboard = (id: number, confirm: string) =>
-  api.post(`/hub/offboards/${id}/lift`, { confirm }).then((r) => r.data.data as OffboardRun)
+  api.post(`/hub/offboards/${id}/lift`, { confirm }).then(
+    (r) =>
+      r.data.data as OffboardRun & {
+        hub_account_reactivated?: boolean
+        hub_account_note?: string
+      }
+  )
 
 export function usePerson(key: string | null) {
   return useQuery({
@@ -157,6 +163,10 @@ export const PEOPLE_COPY: Record<string, { title: string; hint?: string }> = {
   OFFBOARD_SELF: {
     title: 'You cannot offboard yourself',
     hint: 'The list names your own Hub account, email or Microsoft id.'
+  },
+  EMAIL_OFFBOARDED: {
+    title: 'This email belongs to an offboarded person',
+    hint: 'Lift their block on the People page first if they are coming back.'
   },
   IDENTITY_SHARED: {
     title: 'The list names another person too',

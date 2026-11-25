@@ -280,6 +280,16 @@ export async function findOrCreateFromOIDC(profile: {
     assignedRole = defaultRole?.id ?? null
   }
 
+  // Nivaro Hub: an offboarded person's email is never made into a new account while the Hub
+  // still blocks it (services/hub/people/offboard.ts; Hub mode only, a no-op elsewhere).
+  {
+    const { emailUnderHubBlock, EMAIL_OFFBOARDED } = await import('./hub/people/offboard.js')
+    if (await emailUnderHubBlock(profile.email))
+      throw Object.assign(new Error(EMAIL_OFFBOARDED.error), {
+        statusCode: 403,
+        code: EMAIL_OFFBOARDED.code
+      })
+  }
   // nivaro_users.id is a uuid its default fills: MySQL reports no id for it.
   const id = await insertReturningId(db, 'nivaro_users', {
     email: profile.email,

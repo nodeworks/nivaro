@@ -70,7 +70,9 @@ const m543 = await import('../../../db/migrations/543_hub_promotions.js')
 const m551 = await import('../../../db/migrations/551_hub_signins.js')
 const m570 = await import('../../../db/migrations/570_hub_people_owner_policy.js')
 const { hubRoutes } = await import('../../../routes/hub.js')
-const { hubSigninBlocked, readOffboard } = await import('../../../services/hub/people/offboard.js')
+const { emailUnderHubBlock, hubSigninBlocked, readOffboard } = await import(
+  '../../../services/hub/people/offboard.js'
+)
 const { groupPeople } = await import('../../../services/hub/people/directory.js')
 
 const ADMIN = 'AAAAAAAA-0000-4000-8000-000000000001'
@@ -112,6 +114,7 @@ beforeAll(async () => {
     t.string('entra_oid')
     t.string('entra_tid')
     t.dateTime('updated_at')
+    t.dateTime('created_at')
   })
   app = Fastify()
   await app.register(hubRoutes, { prefix: '/api/hub' })
@@ -366,7 +369,7 @@ describe('offboard everywhere', () => {
       (await call('POST', `/offboards/${id}/lift`, asAdmin, { confirm: 'x' })).json().code
     ).toBe('CONFIRM_REQUIRED')
     const lifted = await call('POST', `/offboards/${id}/lift`, asAdmin, { confirm: 'dana@x.io' })
-    expect(lifted.json().data.blocked).toBe(false)
+    expect(lifted.json().data).toMatchObject({ blocked: false, hub_account_reactivated: true })
     expect((await db('nivaro_users').where({ id: DANA }).first()).status).toBe('active')
     expect(await hubSigninBlocked({ id: 'x', email: 'dana@x.io' })).toBe(false)
     expect(await hubSigninBlocked({ id: DANA })).toBe(false)
@@ -461,13 +464,16 @@ describe('offboard identity is proven data only', () => {
     expect(res.json().code).toBe('NO_IDENTITY')
   })
 
-  it('Hub sign-in block: an email blocks only the one account that holds it alone', async () => {
+  it('Hub sign-in block: a listed email spares only a DIFFERENT account older than the run', async () => {
+    const started = new Date('2026-11-01T10:00:00Z')
     const [row] = await db('nivaro_hub_offboards')
       .insert({
         person_key: 'u:X',
+        hub_user_id: 'XXXXXXXX-0000-4000-8000-000000000009',
         identity: JSON.stringify({ emails: ['shared@x.io'], entra: [{ oid: 'oid-z', tid: null }] }),
         status: 'done',
-        blocked: true
+        blocked: true,
+        started_at: started
       })
       .returning('id')
     const offboard_id = typeof row === 'object' ? (row as { id: number }).id : row
@@ -475,15 +481,36 @@ describe('offboard identity is proven data only', () => {
       { offboard_id, kind: 'email', value: 'shared@x.io' },
       { offboard_id, kind: 'oid', value: 'oid-z' }
     ])
+    // A real, older shared mailbox (an account that existed before the run): not blocked.
     expect(
-      await hubSigninBlocked({ id: 'a', email: 'shared@x.io' }, { emailHolders: async () => 1 })
-    ).toBe(true)
-    expect(
-      await hubSigninBlocked({ id: 'a', email: 'shared@x.io' }, { emailHolders: async () => 2 })
+      await hubSigninBlocked({
+        id: 'a',
+        email: 'shared@x.io',
+        created_at: new Date('2026-01-01T00:00:00Z')
+      })
     ).toBe(false)
+    // A second account made (or re-linked) after the offboard started: still blocked.
     expect(
-      await hubSigninBlocked({ id: 'a', entra_oid: 'OID-Z' }, { emailHolders: async () => 2 })
+      await hubSigninBlocked({
+        id: 'b',
+        email: 'Shared@x.io',
+        created_at: new Date('2026-11-02T00:00:00Z')
+      })
     ).toBe(true)
+    // An account whose age cannot be told: blocked (fails closed).
+    expect(await hubSigninBlocked({ id: 'nobody', email: 'shared@x.io' })).toBe(true)
+    // The run's own person, and anyone with the listed Microsoft id: blocked.
+    expect(
+      await hubSigninBlocked({
+        id: 'XXXXXXXX-0000-4000-8000-000000000009',
+        email: 'shared@x.io',
+        created_at: new Date('2026-01-01T00:00:00Z')
+      })
+    ).toBe(true)
+    expect(await hubSigninBlocked({ id: 'a', entra_oid: 'OID-Z' })).toBe(true)
+    // Creating or activating an account with that email is refused while the block holds.
+    expect(await emailUnderHubBlock('SHARED@x.io')).toBe(true)
+    expect(await emailUnderHubBlock('other@x.io')).toBe(false)
   })
 })
 
@@ -519,5 +546,21 @@ describe('offboard refusals (H2, single flight)', () => {
     expect([a.json().code, b.json().code]).toContain('OFFBOARD_RUNNING')
     const id = (a.statusCode === 202 ? a : b).json().data.id
     await settled(id)
+  })
+})
+
+describe('lift reactivates only the offboard’s own suspension', () => {
+  it('an admin suspended the account again after the offboard: Lift leaves it suspended', async () => {
+    m.call.mockResolvedValue({ ok: true, state: 'suspended', accounts: [{}] })
+    const id = (await offboard(`u:${DANA}`, asAdmin, 'dana@x.io')).json().data.id
+    await settled(id)
+    // Later, an administrator suspends Dana for another reason (the row changes again).
+    await db('nivaro_users')
+      .where({ id: DANA })
+      .update({ status: 'suspended', updated_at: new Date(Date.now() + 5_000) })
+    const r = await call('POST', `/offboards/${id}/lift`, asAdmin, { confirm: 'dana@x.io' })
+    expect(r.json().data).toMatchObject({ blocked: false, hub_account_reactivated: false })
+    expect(r.json().data.hub_account_note).toMatch(/stays suspended/)
+    expect((await db('nivaro_users').where({ id: DANA }).first()).status).toBe('suspended')
   })
 })

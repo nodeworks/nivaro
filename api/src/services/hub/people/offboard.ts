@@ -235,7 +235,8 @@ async function identityRefusal(
 async function suspendHubAccount(
   k: Knex,
   hubUserId: string | null,
-  deps: OffboardDeps
+  deps: OffboardDeps,
+  marker: Date
 ): Promise<'suspended' | 'already' | 'none'> {
   if (!hubUserId) return 'none'
   const user = (await k('nivaro_users').where({ id: hubUserId }).first('id', 'status')) as
@@ -252,9 +253,14 @@ async function suspendHubAccount(
       'This person is the Hub’s last active administrator; make someone else an administrator first.'
     )
   if (deps.suspendHubUser) await deps.suspendHubUser(id)
-  else await k('nivaro_users').where({ id }).update({ status: 'suspended', updated_at: new Date() })
+  // `marker` (whole seconds: every engine stores it exactly) is kept on the run: Lift reactivates
+  // the account only while its suspension is still this one (nobody touched it since).
+  else await k('nivaro_users').where({ id }).update({ status: 'suspended', updated_at: marker })
   return 'suspended'
 }
+
+/** A Date without milliseconds (MySQL DATETIME keeps whole seconds). */
+const wholeSecond = (d = new Date()) => new Date(Math.floor(d.getTime() / 1000) * 1000)
 
 async function revokeHub(deps: OffboardDeps, id: string) {
   try {
@@ -326,7 +332,8 @@ export async function startOffboard(
       throw new OffboardError(409, 'OFFBOARD_RUNNING', 'An offboard of this person is running.')
     await identityRefusal(trx, input.identity, input.hubUserId, input.caller)
     // Step 1 first: the Hub stops signing them in before anything else is asked.
-    const hubAccount = await suspendHubAccount(trx, input.hubUserId, deps)
+    const marker = wholeSecond()
+    const hubAccount = await suspendHubAccount(trx, input.hubUserId, deps, marker)
     const now = new Date()
     const id = Number(
       await insertReturningId(trx, TABLE, {
@@ -337,6 +344,7 @@ export async function startOffboard(
         status: 'running',
         results: JSON.stringify(results),
         hub_account: hubAccount,
+        hub_suspended_at: hubAccount === 'suspended' ? marker : null,
         blocked: true,
         started_by: input.caller || null,
         started_at: now,
@@ -426,63 +434,78 @@ export function liftConfirmOf(row: Pick<OffboardRow, 'identity' | 'person_key' |
 }
 
 /**
- * Lifts the Hub sign-in block for this person (every run of theirs) and, when an offboard
- * suspended their Hub account, makes that account active again — the Hub signs them in again.
- * Their accounts in the apps stay suspended (restore those in each app). Needs the typed confirm
- * (liftConfirmOf); 409 while a run is going.
+ * Lifts THIS run's Hub sign-in block. The Hub account is made active again only when this run
+ * suspended it, its suspension is still that one (status suspended and updated_at = the run's
+ * marker: an administrator who suspended or edited the account since wins), and no other run of
+ * the person is running or blocked — all judged and written in one transaction under the admin
+ * lock. Otherwise the block is lifted and the account left as it is; the answer and the activity
+ * row say which. Their accounts in the apps stay suspended. Needs the typed confirm.
  */
 export async function liftOffboardBlock(
   id: number,
   caller: string,
-  confirm: unknown,
-  deps: { reactivate?: (userId: string) => Promise<void> } = {}
-): Promise<OffboardRow> {
+  confirm: unknown
+): Promise<OffboardRow & { hub_account_reactivated: boolean; hub_account_note: string }> {
   const row = await readOffboard(id)
   if (!row) throw new OffboardError(404, 'NOT_FOUND', 'Not found')
   const expected = liftConfirmOf(row)
   if (typeof confirm !== 'string' || confirm.trim().toLowerCase() !== expected.toLowerCase())
     throw new OffboardError(400, 'CONFIRM_REQUIRED', `Type ${expected} to lift the block`)
-  const reactivated = await underAdminLock(async (trx) => {
-    const runs = (await trx(TABLE)
-      .where(row.person_key ? { person_key: row.person_key } : { id })
-      .select('id', 'status', 'hub_account')) as Array<{
-      id: number
-      status: string
-      hub_account: string | null
-    }>
-    if (runs.some((r) => r.status === 'running'))
+  const outcome = await underAdminLock(async (trx) => {
+    const me = (await trx(TABLE)
+      .where({ id })
+      .first('status', 'hub_account', 'hub_suspended_at')) as
+      | { status: string; hub_account: string | null; hub_suspended_at: unknown }
+      | undefined
+    if (!me) throw new OffboardError(404, 'NOT_FOUND', 'Not found')
+    if (me.status === 'running')
       throw new OffboardError(409, 'OFFBOARD_RUNNING', 'Wait for the offboard to finish first.')
     await trx(TABLE)
-      .whereIn(
-        'id',
-        runs.map((r) => Number(r.id))
-      )
+      .where({ id })
       .update({ blocked: false, lifted_by: caller || null, lifted_at: new Date() })
-    // Only an account an offboard suspended is made active again (never one suspended otherwise).
-    const suspendedByUs = runs.some((r) => r.hub_account === 'suspended')
-    if (!row.hub_user_id || !suspendedByUs) return false
-    const user = (await trx('nivaro_users').where({ id: row.hub_user_id }).first('status')) as
-      | { status: string | null }
-      | undefined
-    return String(user?.status ?? '').toLowerCase() === 'suspended'
-  })
-  if (reactivated && row.hub_user_id) {
-    if (deps.reactivate) await deps.reactivate(row.hub_user_id)
-    else {
-      const { updateUser } = await import('../../users.js')
-      await updateUser(row.hub_user_id, { status: 'active' } as never)
+    if (!row.hub_user_id || me.hub_account !== 'suspended') return 'not_ours' as const
+    const others = row.person_key
+      ? await trx(TABLE)
+          .where({ person_key: row.person_key })
+          .whereNot({ id })
+          .where((w) => w.where({ status: 'running' }).orWhere('blocked', true))
+          .first('id')
+      : undefined
+    if (others) return 'other_block' as const
+    const user = (await trx('nivaro_users')
+      .where({ id: row.hub_user_id })
+      .first('status', 'updated_at')) as { status: string | null; updated_at: unknown } | undefined
+    const at = (v: unknown) => {
+      if (v == null) return Number.NaN
+      const d = v instanceof Date ? v : new Date(typeof v === 'number' ? v : String(v))
+      return Math.floor(d.getTime() / 1000)
     }
-  }
+    const ours =
+      String(user?.status ?? '').toLowerCase() === 'suspended' &&
+      at(me.hub_suspended_at) === at(user?.updated_at)
+    if (!ours) return 'changed' as const
+    await trx('nivaro_users')
+      .where({ id: row.hub_user_id, status: 'suspended' })
+      .update({ status: 'active', updated_at: new Date() })
+    return 'reactivated' as const
+  })
+  const note = {
+    reactivated: 'Hub sign-in block lifted; the Hub account is active again',
+    not_ours: 'Hub sign-in block lifted; this offboard did not suspend a Hub account',
+    other_block:
+      'Hub sign-in block lifted; the Hub account stays suspended (another offboard of this person still blocks or runs)',
+    changed:
+      'Hub sign-in block lifted; the Hub account stays suspended (it was suspended or changed again since the offboard)'
+  }[outcome]
   await logActivity({
     action: 'hub-offboard-lift',
     user: caller || null,
     collection: TABLE,
     item: String(id),
-    comment: reactivated
-      ? 'Hub sign-in block lifted; Hub account active again'
-      : 'Hub sign-in block lifted'
+    comment: note
   })
-  return (await readOffboard(id)) as OffboardRow
+  const fresh = (await readOffboard(id)) as OffboardRow
+  return { ...fresh, hub_account_reactivated: outcome === 'reactivated', hub_account_note: note }
 }
 
 function launch(id: number, deps: OffboardDeps) {
@@ -564,15 +587,16 @@ export async function runOffboard(id: number, deps: OffboardDeps = {}): Promise<
 
 /**
  * Whether the Hub must refuse this person's sign-in now, by the indexed block entries
- * (nivaro_hub_offboard_ids) of blocked runs: their Hub account, their Entra object id, or an
- * email that is THEIRS ALONE (exactly one Hub account — this one — holds it; a shared or reused
- * address never blocks a twin account). The stored identity is proven data only (directory.ts
+ * (nivaro_hub_offboard_ids) of blocked runs: their Hub account or their Entra object id always;
+ * a listed email unless the account signing in is a DIFFERENT one that existed before the run
+ * started (a real, older shared mailbox). An account made after the run started, or whose age
+ * cannot be told, is refused. The stored identity is proven data only (directory.ts
  * identityOf). Fails CLOSED: a block table that cannot be read refuses the sign-in (only an
  * install without the tables, before migration 570, answers false).
  */
 export async function hubSigninBlocked(
-  user: { id?: unknown; email?: unknown; entra_oid?: unknown },
-  deps: { emailHolders?: (email: string) => Promise<number> } = {}
+  user: { id?: unknown; email?: unknown; entra_oid?: unknown; created_at?: unknown },
+  deps: { createdAt?: (userId: string) => Promise<unknown> } = {}
 ): Promise<boolean> {
   const id = user.id == null ? '' : upperId(user.id)
   const email = typeof user.email === 'string' ? user.email.trim().toLowerCase() : ''
@@ -586,21 +610,40 @@ export async function hubSigninBlocked(
         if (oid) w.orWhere((x) => x.where('i.kind', 'oid').where('i.value', oid))
         if (email) w.orWhere((x) => x.where('i.kind', 'email').where('i.value', email))
       })
-      .limit(10)
-      .select('i.kind')) as Array<{ kind: string }>
+      .limit(20)
+      .select('i.kind', 'o.hub_user_id', 'o.started_at')) as Array<{
+      kind: string
+      hub_user_id: string | null
+      started_at: unknown
+    }>
     if (hits.some((h) => h.kind === 'user' || h.kind === 'oid')) return true
-    if (!hits.some((h) => h.kind === 'email')) return false
-    const holders =
-      deps.emailHolders ??
-      (async (e: string) => {
-        const { emailMatchSql } = await import('../signins.js')
-        const found = (await db('nivaro_users')
-          .whereRaw(emailMatchSql(db), [e])
-          .limit(2)
-          .select('id')) as Array<{ id: unknown }>
-        return found.length
-      })
-    return (await holders(email)) === 1
+    const emailHits = hits.filter((h) => h.kind === 'email')
+    if (!emailHits.length) return false
+    const created =
+      user.created_at !== undefined
+        ? user.created_at
+        : id
+          ? await (deps.createdAt
+              ? deps.createdAt(id)
+              : db('nivaro_users')
+                  .where({ id: String(user.id) })
+                  .first('created_at')
+                  .then((r) => (r as { created_at?: unknown } | undefined)?.created_at))
+          : undefined
+    const ms = (v: unknown) => {
+      if (v == null) return Number.NaN
+      const d = v instanceof Date ? v : new Date(typeof v === 'number' ? v : String(v))
+      return d.getTime()
+    }
+    for (const h of emailHits) {
+      // The run's own person signing in under this email: refused.
+      if (h.hub_user_id && upperId(h.hub_user_id) === id) return true
+      const born = ms(created)
+      const started = ms(h.started_at)
+      // Made after the offboard started, or of unknown age: refused (fail closed).
+      if (!Number.isFinite(born) || !Number.isFinite(started) || born >= started) return true
+    }
+    return false
   } catch {
     try {
       if (!(await db.schema.hasTable(IDS))) return false
@@ -610,3 +653,38 @@ export async function hubSigninBlocked(
     return true
   }
 }
+
+/**
+ * Whether `email` is under a live Hub sign-in block (a blocked offboard lists it). Account
+ * creation and activation refuse such an email (routes/users.ts, services/users.ts) so nobody
+ * re-creates the offboarded person's account to get past the block. Hub mode only; fails closed
+ * once the tables exist.
+ */
+export async function emailUnderHubBlock(email: unknown): Promise<boolean> {
+  if (typeof email !== 'string' || !email.trim()) return false
+  const { hubModeEnabled } = await import('../mode.js')
+  if (!hubModeEnabled()) return false
+  try {
+    const hit = await db(`${IDS} as i`)
+      .join(`${TABLE} as o`, 'o.id', 'i.offboard_id')
+      .where('o.blocked', true)
+      .where('i.kind', 'email')
+      .where('i.value', email.trim().toLowerCase())
+      .first('i.id')
+    return !!hit
+  } catch {
+    try {
+      if (!(await db.schema.hasTable(IDS))) return false
+    } catch {
+      // cannot tell
+    }
+    return true
+  }
+}
+
+/** The refusal an account create / activate answers for such an email (describeError words it). */
+export const EMAIL_OFFBOARDED = {
+  code: 'EMAIL_OFFBOARDED',
+  error: 'This email belongs to a person offboarded from every app.',
+  hint: 'Lift their block on the Hub’s People page first if they are coming back.'
+} as const

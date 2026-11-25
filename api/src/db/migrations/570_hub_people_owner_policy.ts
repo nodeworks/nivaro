@@ -54,6 +54,8 @@ export async function up(knex: Knex): Promise<void> {
       longText(t, knex, 'results').nullable()
       // The Hub's own account as step 1 found it: suspended (by this run) | already | none.
       t.string('hub_account', 16).nullable()
+      // When this run suspended the Hub account: the account's updated_at it wrote (Lift's proof).
+      t.dateTime('hub_suspended_at').nullable()
       t.boolean('blocked').nullable().defaultTo(true)
       t.uuid('started_by').nullable()
       t.dateTime('started_at').nullable().defaultTo(utcNow(knex))
