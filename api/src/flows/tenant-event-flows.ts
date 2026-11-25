@@ -93,7 +93,9 @@ export async function runEventFlow(
     },
     log: app.log,
     userId: ctx.user?.id,
-    ...(ctx.dryRun ? { dryRun: true } : {})
+    ...(ctx.dryRun ? { dryRun: true } : {}),
+    // The write waits for this run (review N7: a script step then waits ≤ 10 s, never minutes).
+    ...(returnPayload ? { blocking: true } : {})
   }
   if (returnPayload) {
     try {
@@ -103,6 +105,9 @@ export async function runEventFlow(
         Object.assign(ctx.payload, result.payload as Record<string, unknown>)
       }
     } catch (err) {
+      // No slot for its script step in time: refuse the write (503 FLOW_SCRIPT_BUSY), never save
+      // a payload the flow did not get to shape.
+      if ((err as { code?: unknown } | null)?.code === 'FLOW_SCRIPT_BUSY') throw err
       app.log.error({ err, flowId: flow.id }, 'Before-event flow failed')
     }
     return

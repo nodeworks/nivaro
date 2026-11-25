@@ -17,14 +17,25 @@ const isolated = vi.fn(
     where: o?.dedicated ? 'dedicated child' : 'shared child'
   })
 )
+const busy = vi.hoisted(() => {
+  class ScriptBusyError extends Error {
+    statusCode = 503
+    code = 'FLOW_SCRIPT_BUSY'
+  }
+  return { ScriptBusyError }
+})
 vi.mock('../../../services/flow-script-isolated.js', () => ({
-  runIsolatedScript: (...a: Parameters<typeof isolated>) => isolated(...a)
+  runIsolatedScript: (...a: Parameters<typeof isolated>) => isolated(...a),
+  ScriptBusyError: busy.ScriptBusyError
 }))
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
 
-const { runExecScript, EXEC_SCRIPT_CLOUD_REFUSAL, EXEC_SCRIPT_SHARED_OFF_REFUSAL } = await import(
-  '../../../services/flow-executor.js'
-)
+const {
+  runExecScript,
+  EXEC_SCRIPT_CLOUD_REFUSAL,
+  EXEC_SCRIPT_SHARED_OFF_REFUSAL,
+  FlowScriptBusyError
+} = await import('../../../services/flow-executor.js')
 
 const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
 const ctx = { flowId: 'F1', flowName: 'F', trigger: 't', payload: {}, log } as never
@@ -61,7 +72,8 @@ describe('exec-script: where it runs', () => {
     const r = await runExecScript(op, { a: 1 }, ctx)
     expect(r).toEqual({ status: 'resolve', output: { a: 1, where: 'dedicated child' } })
     expect(isolated).toHaveBeenCalledWith('data.x = 1', { a: 1 }, expect.anything(), 5000, {
-      dedicated: true
+      dedicated: true,
+      blocking: false
     })
   })
 
@@ -85,7 +97,8 @@ describe('exec-script: where it runs', () => {
     const r = await runExecScript(op, { a: 1 }, ctx)
     expect(r).toEqual({ status: 'resolve', output: { a: 1, where: 'shared child' } })
     expect(isolated).toHaveBeenCalledWith('data.x = 1', { a: 1 }, expect.anything(), 5000, {
-      dedicated: false
+      dedicated: false,
+      blocking: false
     })
   })
 
@@ -104,5 +117,22 @@ describe('exec-script: where it runs', () => {
     const r = await runExecScript(op, { a: 1 }, ctx)
     expect(r.status).toBe('reject')
     expect(String((r.output as { $error?: unknown }).$error)).toContain('64 MB')
+  })
+
+  it('passes a before-save flow on as blocking; no slot in time refuses the write (503 FLOW_SCRIPT_BUSY)', async () => {
+    const blocking = { ...(ctx as object), blocking: true } as never
+    await runExecScript(op, { a: 1 }, blocking)
+    expect(isolated).toHaveBeenLastCalledWith('data.x = 1', { a: 1 }, expect.anything(), 5000, {
+      dedicated: true,
+      blocking: true
+    })
+    isolated.mockRejectedValueOnce(new busy.ScriptBusyError('no slot'))
+    const err = await runExecScript(op, { a: 1 }, blocking).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(FlowScriptBusyError)
+    expect(err).toMatchObject({ statusCode: 503, code: 'FLOW_SCRIPT_BUSY' })
+    // A flow that does not hold the write takes the reject path instead.
+    isolated.mockRejectedValueOnce(new busy.ScriptBusyError('no slot'))
+    const r = await runExecScript(op, { a: 1 }, ctx)
+    expect(r.status).toBe('reject')
   })
 })

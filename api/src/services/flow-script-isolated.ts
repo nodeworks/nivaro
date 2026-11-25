@@ -2,7 +2,6 @@ import { execFile, spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { setPriority } from 'node:os'
-import { getHeapStatistics } from 'node:v8'
 import { scriptLimits } from './flow-script-limits.js'
 import {
   forwardLogs,
@@ -53,20 +52,23 @@ import { currentTenantKey } from './tenant-rooms.js'
  *    room for it (its cgroup limit minus its working set — usage less inactive page cache — must
  *    hold the child's budget plus HEADROOM_RESERVE_MB; else it waits up to
  *    FLOW_SCRIPT_MAX_WAIT_MS and is refused; skipped with a warning where no limit can be read);
- *  - on a dedicated app: binary types kept, and the API's own heap limit as the child's heap cap
- *    (what an in-process script could use before); no headroom gate (the step used the API's
- *    own memory before);
+ *  - on a dedicated app: binary types kept, a V8 heap cap of FLOW_SCRIPT_MAX_MB (default 256), and,
+ *    under a container (cgroup) limit, a start only when the child's budget is at most half of
+ *    what is free under it (no check on a host without a limit);
  *  - is watched outside V8 too: past its heap cap plus RSS_MARGIN_MB of resident memory
  *    (watchRss polls every 100 ms) it is killed;
- *  - is capped at the step's timeout (≤ 30 s, plus a start-up allowance before the process is
- *    killed), 8 MB of output and 200 log lines, and starts under `nice -n 10` (every thread;
- *    without a `nice` binary only its main thread is lowered);
+ *  - is capped at the step's timeout (≤ 30 s, counted from when the child starts the step; before
+ *    that a start-up plus input-transfer allowance), 8 MB of output and 200 log lines, and starts
+ *    under `nice -n 10` (every thread; without a `nice` binary only its main thread is lowered);
  *  - exits right after its answer, and on its own when the API goes away (its stdin closes or its
  *    parent pid changes), so no orphan keeps running;
- *  - holds a slot: at most FLOW_SCRIPT_CONCURRENCY runs at once on the process (default 4); on a
- *    shared deployment FLOW_SCRIPT_PER_APP for one app (default 2) and a refusal after
- *    FLOW_SCRIPT_MAX_WAIT_MS (default 30 s) for a slot; a dedicated app may use every slot and
- *    waits up to 10 minutes.
+ *  - holds a slot: at most FLOW_SCRIPT_CONCURRENCY runs at once on the process (default 4 on a
+ *    shared deployment, 2 on a dedicated app); on a shared deployment FLOW_SCRIPT_PER_APP for one
+ *    app (default 2). A step waits for a slot (and for memory) up to FLOW_SCRIPT_MAX_WAIT_MS on a
+ *    shared deployment (default 30 s) or 10 minutes on a dedicated app — but at most
+ *    BLOCKING_WAIT_MS (10 s) in a flow that runs before a record is saved, which then refuses the
+ *    write (ScriptBusyError → 503 FLOW_SCRIPT_BUSY, nothing written). The input is serialized only
+ *    once a slot is held.
  *
  * The child costs one `node` start per step: about 80 ms of CPU and 50 MB of resident memory in
  * the child, 6–7 ms of the API's own CPU, and 110–170 ms of wall time per step measured on a busy
@@ -78,8 +80,28 @@ import { currentTenantKey } from './tenant-rooms.js'
 
 export class ScriptLimitError extends Error {}
 
+/**
+ * No slot or no memory for a script step in time (review N7). A flow that runs before a record is
+ * saved rethrows it, so the write is refused with 503 FLOW_SCRIPT_BUSY and nothing is written; any
+ * other flow takes the step's reject path with the message.
+ */
+export class ScriptBusyError extends ScriptLimitError {
+  statusCode = 503
+  code = 'FLOW_SCRIPT_BUSY'
+}
+
+/** How long a step of a flow that runs before a record is saved waits for a slot or memory. */
+export const BLOCKING_WAIT_MS = 10_000
+
 /** Kill allowance on top of the script's own timeout: the child's start-up is not script time. */
 const STARTUP_GRACE_MS = 5000
+/** After the child starts the step: room for the prelude and the log read past the timeout. */
+const RUN_GRACE_MS = 2000
+
+/** Time allowed to hand the child its input and parse it: 10 MB a second, at most 60 s. */
+export function transferAllowanceMs(inputChars: number): number {
+  return Math.min(60_000, Math.ceil(inputChars / 10_000))
+}
 const MAX_OUTPUT_BYTES = 8 * 1024 * 1024
 const STDERR_KEEP = 4096
 /** The child's whole memory (RSS) may pass its heap cap by this much (Node itself, code, stacks). */
@@ -335,6 +357,8 @@ export const CHILD_SOURCE = `(() => {
   const run = (text) => {
     let job
     try { job = JSON.parse(text) } catch { return done({ ok: false, kind: 'setup', err: 'Bad input' }) }
+    // The step's own timeout starts now (the parent's input-transfer allowance ends here).
+    write({ t: 'start' })
     const timeout = job.timeout
     const sandbox = Object.create(null)
     sandbox.__nvrInput = job.input
@@ -373,11 +397,15 @@ export const CHILD_SOURCE = `(() => {
   }
   let text = ''
   io.stdin.setEncoding('utf8')
+  // Only the new chunk is scanned for the job's end (review N5: rescanning the whole input on
+  // every 64 KB chunk made a large input quadratic).
   io.stdin.on('data', (c) => {
     if (started) return
-    text += c
-    const nl = text.indexOf('\\n')
-    if (nl >= 0) { started = true; run(text.slice(0, nl)) }
+    const at = c.indexOf('\\n')
+    if (at < 0) { text += c; return }
+    started = true
+    run(text + c.slice(0, at))
+    text = ''
   })
   // The parent closes stdin only by going away (or once it has our answer): never run on alone.
   io.stdin.on('end', () => io.exit(started ? 0 : 1))
@@ -391,14 +419,15 @@ export const CHILD_SOURCE = `(() => {
 interface Waiter {
   app: string
   cap: number
+  total: number
   wake: () => void
 }
 
 /** Runs holding a slot on this process, per app (currentTenantKey) and in all, plus who waits. */
 const gate = { active: 0, byApp: new Map<string, number>(), queue: [] as Waiter[] }
 
-function fits(app: string, cap: number): boolean {
-  return gate.active < scriptLimits().total && (gate.byApp.get(app) ?? 0) < cap
+function fits(app: string, cap: number, total: number): boolean {
+  return gate.active < total && (gate.byApp.get(app) ?? 0) < cap
 }
 
 function take(app: string): void {
@@ -414,7 +443,7 @@ function give(app: string): void {
   // Wake the first waiters that now fit (an app at its share is skipped, not blocking others).
   for (let i = 0; i < gate.queue.length; ) {
     const w = gate.queue[i]
-    if (fits(w.app, w.cap)) {
+    if (fits(w.app, w.cap, w.total)) {
       gate.queue.splice(i, 1)
       take(w.app)
       w.wake()
@@ -430,17 +459,25 @@ export function scriptGateState(): { active: number; waiting: number } {
 /** How long a dedicated app's step waits for a slot (it had no cap before: it ran in line). */
 const DEDICATED_SLOT_WAIT_MS = 600_000
 
-async function acquireSlot(dedicated: boolean): Promise<() => void> {
+/** How long a step may wait for a slot or for memory. */
+function waitBudget(dedicated: boolean, blocking: boolean): number {
+  const limits = scriptLimits(dedicated)
+  const base = dedicated ? DEDICATED_SLOT_WAIT_MS : limits.maxWaitMs
+  return blocking ? Math.min(BLOCKING_WAIT_MS, base) : base
+}
+
+async function acquireSlot(dedicated: boolean, maxWaitMs: number): Promise<() => void> {
   const app = currentTenantKey()
-  const limits = scriptLimits()
-  const cap = dedicated ? limits.total : limits.perApp
-  if (fits(app, cap)) take(app)
+  const limits = scriptLimits(dedicated)
+  const cap = limits.perApp
+  const total = limits.total
+  if (fits(app, cap, total)) take(app)
   else {
-    const maxWaitMs = dedicated ? DEDICATED_SLOT_WAIT_MS : limits.maxWaitMs
     await new Promise<void>((resolve, reject) => {
       const w: Waiter = {
         app,
         cap,
+        total,
         wake: () => {
           clearTimeout(timer)
           resolve()
@@ -450,7 +487,7 @@ async function acquireSlot(dedicated: boolean): Promise<() => void> {
         const i = gate.queue.indexOf(w)
         if (i >= 0) gate.queue.splice(i, 1)
         reject(
-          new ScriptLimitError(
+          new ScriptBusyError(
             'Too many script steps are running for this app right now. Try again in a moment.'
           )
         )
@@ -515,6 +552,17 @@ export function cgroupHeadroom(
  * this process count in the cgroup's usage, so steps already running are included.
  */
 export async function memoryHeadroomBytes(): Promise<number | null> {
+  return (await memoryHeadroom())?.bytes ?? null
+}
+
+/** Free memory and whether it is under a container (cgroup) limit; null where none can be read. */
+export interface Headroom {
+  bytes: number
+  /** True: a cgroup limit minus the working set. False: the machine's MemAvailable. */
+  limited: boolean
+}
+
+export async function memoryHeadroom(): Promise<Headroom | null> {
   if (process.platform !== 'linux') return null
   const v2 = cgroupHeadroom(
     await readText('/sys/fs/cgroup/memory.max'),
@@ -522,33 +570,46 @@ export async function memoryHeadroomBytes(): Promise<number | null> {
     await readText('/sys/fs/cgroup/memory.stat'),
     'inactive_file'
   )
-  if (v2 !== null) return v2
+  if (v2 !== null) return { bytes: v2, limited: true }
   const v1 = cgroupHeadroom(
     await readText('/sys/fs/cgroup/memory/memory.limit_in_bytes'),
     await readText('/sys/fs/cgroup/memory/memory.usage_in_bytes'),
     await readText('/sys/fs/cgroup/memory/memory.stat'),
     'total_inactive_file'
   )
-  if (v1 !== null) return v1
+  if (v1 !== null) return { bytes: v1, limited: true }
   const m = /^MemAvailable:\s+(\d+) kB$/m.exec((await readText('/proc/meminfo')) ?? '')
-  return m ? Number(m[1]) * 1024 : null
+  return m ? { bytes: Number(m[1]) * 1024, limited: false } : null
 }
 
 /** Test seam: the headroom reader (tests only; null = the real one). */
-let headroomReader: (() => Promise<number | null>) | null = null
-export function setHeadroomReaderForTests(fn: (() => Promise<number | null>) | null): void {
+let headroomReader: (() => Promise<Headroom | null>) | null = null
+export function setHeadroomReaderForTests(fn: (() => Promise<Headroom | null>) | null): void {
   headroomReader = fn
 }
 
-/** Waits (≤ maxWaitMs) until the container has room for one more child of memoryMb. */
 /** Warned once per process that free memory cannot be read here (no app data). */
 let headroomUnreadableWarned = false
 
-async function waitForHeadroom(memoryMb: number, maxWaitMs: number, log: ScriptLog): Promise<void> {
-  const need = (memoryMb + RSS_MARGIN_MB + HEADROOM_RESERVE_MB) * 1024 * 1024
+/**
+ * Waits (≤ maxWaitMs) until there is room for one more child of memoryMb, else ScriptBusyError.
+ * Shared deployment: the free memory must hold the child's budget plus HEADROOM_RESERVE_MB.
+ * Dedicated app (review N6): only under a container limit, and the child's budget may take at most
+ * half of what is free under it (the children already running count in its usage).
+ */
+async function waitForHeadroom(
+  memoryMb: number,
+  maxWaitMs: number,
+  log: ScriptLog,
+  dedicated: boolean
+): Promise<void> {
+  const budget = (memoryMb + RSS_MARGIN_MB) * 1024 * 1024
+  const need = dedicated ? budget * 2 : budget + HEADROOM_RESERVE_MB * 1024 * 1024
   const deadline = Date.now() + maxWaitMs
   for (;;) {
-    const free = await (headroomReader ?? memoryHeadroomBytes)()
+    const room = await (headroomReader ?? memoryHeadroom)()
+    if (room && dedicated && !room.limited) return
+    const free = room?.bytes ?? null
     if (free === null) {
       if (!headroomUnreadableWarned) {
         headroomUnreadableWarned = true
@@ -564,8 +625,8 @@ async function waitForHeadroom(memoryMb: number, maxWaitMs: number, log: ScriptL
     }
     if (free >= need) return
     if (Date.now() >= deadline)
-      throw new ScriptLimitError(
-        'Not enough free memory on this deployment to start a script step right now. Try again in a moment.'
+      throw new ScriptBusyError(
+        'Not enough free memory on this server to start a script step right now. Try again in a moment.'
       )
     await new Promise((r) => setTimeout(r, HEADROOM_POLL_MS))
   }
@@ -642,10 +703,18 @@ function spawnRun(
           child.kill('SIGKILL')
         })
       : () => {}
-    const killTimer = setTimeout(() => {
+    // Until the child says it started, the clock is the start-up plus input-transfer allowance
+    // (review N5: a large input must not use up the script's own time); from then, the step's
+    // timeout plus a short grace for the prelude and the log read.
+    const kill = () => {
       killedForTime = true
       child.kill('SIGKILL')
-    }, timeout + STARTUP_GRACE_MS)
+    }
+    let killTimer = setTimeout(kill, STARTUP_GRACE_MS + transferAllowanceMs(input.length))
+    const onStart = () => {
+      clearTimeout(killTimer)
+      killTimer = setTimeout(kill, timeout + RUN_GRACE_MS)
+    }
     if (child.pid && !nice) {
       try {
         setPriority(child.pid, 10)
@@ -666,7 +735,8 @@ function spawnRun(
       } catch {
         return
       }
-      if (msg.t === 'logs') forwardLogs(log, parseLogLines(msg.v))
+      if (msg.t === 'start') onStart()
+      else if (msg.t === 'logs') forwardLogs(log, parseLogLines(msg.v))
       else if (msg.t === 'done' && !result) {
         result = {
           ok: msg.ok === true,
@@ -748,20 +818,19 @@ function spawnRun(
 }
 
 export interface ScriptRunOptions {
-  /** A dedicated app (one app per process): binary types kept, the API's heap limit as the
-   *  child's, every slot usable, no container headroom gate. Default: a shared deployment. */
+  /** A dedicated app (one app per process): binary types kept, FLOW_SCRIPT_MAX_MB as the child's
+   *  heap cap, every slot usable (default 2), the memory check only under a container limit.
+   *  Default: a shared deployment. */
   dedicated?: boolean
-}
-
-/** The heap a dedicated app's script could use before (in the API): the API's own heap limit. */
-export function dedicatedHeapMb(): number {
-  return Math.max(256, Math.floor(getHeapStatistics().heap_size_limit / 1_048_576))
+  /** The flow runs before a record is saved (it holds the write): a slot or memory is waited for
+   *  at most BLOCKING_WAIT_MS, then ScriptBusyError (the write is refused, nothing is written). */
+  blocking?: boolean
 }
 
 /** Runs one exec-script body in its own child process (see the header). Resolves with the
- *  output data; rejects with the script's error message, a ScriptTimeoutError, or a
- *  ScriptLimitError (memory, output, no free slot or memory). Log lines reach `log` after the
- *  run. */
+ *  output data; rejects with the script's error message, a ScriptTimeoutError, a ScriptBusyError
+ *  (no slot or memory in time) or a ScriptLimitError (memory, output). Log lines reach `log`
+ *  after the run. */
 export async function runIsolatedScript(
   code: string,
   data: Record<string, unknown>,
@@ -771,12 +840,13 @@ export async function runIsolatedScript(
 ): Promise<Record<string, unknown>> {
   const dedicated = opts.dedicated === true
   const timeout = Math.min(Math.max(Number(timeoutMs) || 5000, 1), MAX_TIMEOUT_MS)
-  const input = JSON.stringify(data ?? {}, hostReplacer) ?? '{}'
-  const limits = scriptLimits()
-  const memoryMb = dedicated ? dedicatedHeapMb() : limits.memoryMb
-  const release = await acquireSlot(dedicated)
+  const { memoryMb } = scriptLimits(dedicated)
+  const waitMs = waitBudget(dedicated, opts.blocking === true)
+  const release = await acquireSlot(dedicated, waitMs)
   try {
-    if (!dedicated) await waitForHeadroom(memoryMb, limits.maxWaitMs, log)
+    await waitForHeadroom(memoryMb, waitMs, log, dedicated)
+    // Serialized only once a slot is held: a queued step keeps no copy of its input (review N7).
+    const input = JSON.stringify(data ?? {}, hostReplacer) ?? '{}'
     return await spawnRun(code, input, log, timeout, memoryMb, dedicated)
   } finally {
     release()

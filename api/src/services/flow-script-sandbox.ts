@@ -16,7 +16,8 @@
  *  - `log` (info / warn / error / debug) and `console` are context functions that collect lines in
  *    the context; the child reads them after the run as one string built without script hooks;
  *  - everything read back is a primitive string; a thrown value is turned into a message inside the
- *    context, and a Proxy that still reaches the reader is never inspected (classifyRunError);
+ *    context, and a Proxy that still reaches the reader is never inspected (`classify` in
+ *    flow-script-isolated.ts CHILD_SOURCE);
  *  - FinalizationRegistry and WeakRef are removed (their callbacks run later, past the timeout);
  *  - the context's own built-ins (JSON, Math, Date, Array, Object, RegExp, Promise …) are there;
  *    `process`, `require`, timers, `fetch`, `eval` / `new Function` and WebAssembly compilation are

@@ -11,7 +11,9 @@ const quietLog = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: v
 vi.setConfig({ testTimeout: 20_000 })
 // The machine running the tests may be short of free memory (flow-script-isolated.test.ts tests
 // the headroom gate itself).
-beforeEach(() => setHeadroomReaderForTests(async () => Number.POSITIVE_INFINITY))
+beforeEach(() =>
+  setHeadroomReaderForTests(async () => ({ bytes: Number.POSITIVE_INFINITY, limited: true }))
+)
 
 type Runner = (
   code: string,

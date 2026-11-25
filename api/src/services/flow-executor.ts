@@ -16,7 +16,7 @@ import { withChainStep } from './chain.js'
 import { chainFields } from './chain-columns.js'
 import { isMultiTenant, isNivaroCloud } from './deployment-mode.js'
 import { callExternalApi } from './external-apis.js'
-import { runIsolatedScript } from './flow-script-isolated.js'
+import { runIsolatedScript, ScriptBusyError } from './flow-script-isolated.js'
 import { flowScriptsOnShared } from './flow-script-limits.js'
 import { resolveSweepItems } from './flow-sweep-items.js'
 import {
@@ -70,6 +70,21 @@ export interface ExecutionContext {
   dryRun?: boolean
   /** When provided, executeFlow appends one step per executed operation. */
   trace?: FlowTraceStep[]
+  /** The flow runs before a record is saved and the write waits for it (a before-event flow that
+   *  returns its payload): a script step waits for a slot at most 10 s, then the write is refused
+   *  with 503 FLOW_SCRIPT_BUSY (review N7). */
+  blocking?: boolean
+}
+
+/** A before-save flow's script step got no slot in time: the write is refused, nothing written. */
+export class FlowScriptBusyError extends Error {
+  statusCode = 503
+  code = 'FLOW_SCRIPT_BUSY'
+  constructor() {
+    super(
+      'This change was not saved: too many automation scripts are running right now. Try again in a moment.'
+    )
+  }
 }
 
 type FlowData = Record<string, unknown>
@@ -218,12 +233,18 @@ export async function runExecScript(op: FlowOperation, data: FlowData, ctx: Exec
     // process of its own (flow-script-isolated.ts); a dedicated app keeps binary types and its
     // heap budget there.
     const output = (await runIsolatedScript(code, data, scriptLog, timeoutMs, {
-      dedicated: !shared
+      dedicated: !shared,
+      blocking: ctx.blocking === true
     })) as FlowData
 
     ctx.log.debug({ flowId: ctx.flowId, key: op.key }, 'Script executed')
     return { status: 'resolve' as const, output }
   } catch (err) {
+    // A before-save flow never lets the write through on a step that did not run.
+    if (ctx.blocking && err instanceof ScriptBusyError) {
+      ctx.log.warn({ flowId: ctx.flowId, key: op.key }, 'Script step busy: write refused')
+      throw new FlowScriptBusyError()
+    }
     ctx.log.error({ err, flowId: ctx.flowId, key: op.key }, 'Script execution failed')
     return { status: 'reject' as const, output: { ...data, $error: errorText(err) } }
   }

@@ -18,16 +18,18 @@ const {
   childEnv,
   cgroupHeadroom,
   childFlags,
-  dedicatedHeapMb,
   OFF_HEAP_GLOBALS,
   permissionFlag,
   RSS_MARGIN_MB,
   memoryHeadroomBytes,
   readRssBytes,
   runIsolatedScript,
+  BLOCKING_WAIT_MS,
+  ScriptBusyError,
   ScriptLimitError,
   scriptGateState,
   setHeadroomReaderForTests,
+  transferAllowanceMs,
   watchRss
 } = await import('../../../services/flow-script-isolated.js')
 const { scriptLimits } = await import('../../../services/flow-script-limits.js')
@@ -41,7 +43,8 @@ const ENV_KEYS = [
   'FLOW_SCRIPT_CONCURRENCY',
   'FLOW_SCRIPT_PER_APP',
   'FLOW_SCRIPT_MEMORY_MB',
-  'FLOW_SCRIPT_MAX_WAIT_MS'
+  'FLOW_SCRIPT_MAX_WAIT_MS',
+  'FLOW_SCRIPT_MAX_MB'
 ]
 const saved: Record<string, string | undefined> = {}
 beforeEach(() => {
@@ -49,7 +52,7 @@ beforeEach(() => {
   tenant.key = ''
   // The machine running the tests may be short of free memory; the headroom gate has its own
   // cases below.
-  setHeadroomReaderForTests(async () => Number.POSITIVE_INFINITY)
+  setHeadroomReaderForTests(async () => ({ bytes: Number.POSITIVE_INFINITY, limited: true }))
 })
 afterEach(() => {
   for (const k of ENV_KEYS) {
@@ -325,10 +328,10 @@ describe('container memory headroom (review M2)', () => {
 
   it('a step waits for memory, then is refused when there is none; its slot is freed', async () => {
     process.env.FLOW_SCRIPT_MAX_WAIT_MS = '300'
-    setHeadroomReaderForTests(async () => 10 * 1024 * 1024)
+    setHeadroomReaderForTests(async () => ({ bytes: 10 * 1024 * 1024, limited: true }))
     await expect(runIsolatedScript('return data', {}, quietLog())).rejects.toThrow(
-      new ScriptLimitError(
-        'Not enough free memory on this deployment to start a script step right now. Try again in a moment.'
+      new ScriptBusyError(
+        'Not enough free memory on this server to start a script step right now. Try again in a moment.'
       )
     )
     expect(scriptGateState()).toEqual({ active: 0, waiting: 0 })
@@ -337,14 +340,17 @@ describe('container memory headroom (review M2)', () => {
   it('starts as soon as the memory is there', async () => {
     process.env.FLOW_SCRIPT_MAX_WAIT_MS = '5000'
     let calls = 0
-    setHeadroomReaderForTests(async () => (++calls < 3 ? 0 : 4 * 1024 * 1024 * 1024))
+    setHeadroomReaderForTests(async () => ({
+      bytes: ++calls < 3 ? 0 : 4 * 1024 * 1024 * 1024,
+      limited: true
+    }))
     expect(await runIsolatedScript('data.ok = true', {}, quietLog())).toEqual({ ok: true })
     expect(calls).toBe(3)
   })
 })
 
 describe('a dedicated app (one app per process)', () => {
-  it('keeps binary types, and the API heap limit as the child heap cap', async () => {
+  it('keeps binary types; its heap cap is FLOW_SCRIPT_MAX_MB (default 256) and 2 steps at once', async () => {
     expect(
       await runIsolatedScript(
         'const b = new Uint8Array(4); b[0] = 7; return { first: b[0], ab: typeof ArrayBuffer }',
@@ -354,18 +360,80 @@ describe('a dedicated app (one app per process)', () => {
         { dedicated: true }
       )
     ).toEqual({ first: 7, ab: 'function' })
-    expect(dedicatedHeapMb()).toBeGreaterThanOrEqual(256)
+    for (const k of ENV_KEYS) delete process.env[k]
+    expect(scriptLimits(true)).toEqual({ total: 2, perApp: 2, memoryMb: 256, maxWaitMs: 30_000 })
+    process.env.FLOW_SCRIPT_MAX_MB = '4096'
+    expect(scriptLimits(true).memoryMb).toBe(2048)
+    process.env.FLOW_SCRIPT_MAX_MB = '10'
+    expect(scriptLimits(true).memoryMb).toBe(256)
   })
 
-  it('may use every slot (no per-app cap of 2) and skips the container headroom gate', async () => {
+  it('may use every slot (no per-app cap) and skips the memory check on a host without a container limit', async () => {
     process.env.FLOW_SCRIPT_CONCURRENCY = '3'
     process.env.FLOW_SCRIPT_PER_APP = '1'
-    setHeadroomReaderForTests(async () => 0)
+    setHeadroomReaderForTests(async () => ({ bytes: 0, limited: false }))
     const runs = [0, 1, 2].map(() =>
       runIsolatedScript(busy(300), {}, quietLog(), 5000, { dedicated: true })
     )
     expect(scriptGateState()).toEqual({ active: 3, waiting: 0 })
     await Promise.all(runs)
+  })
+})
+
+describe('a dedicated app under a container limit (review N6)', () => {
+  it('starts a child only while its budget is at most half of the free memory', async () => {
+    process.env.FLOW_SCRIPT_MAX_MB = '256'
+    const MB = 1024 * 1024
+    // Budget 256 + 96 MB: needs 704 MB free. 700 MB → waits; then 800 MB → starts.
+    let calls = 0
+    setHeadroomReaderForTests(async () => ({
+      bytes: (++calls < 3 ? 700 : 800) * MB,
+      limited: true
+    }))
+    expect(
+      await runIsolatedScript('data.ok = true', {}, quietLog(), 5000, { dedicated: true })
+    ).toEqual({ ok: true })
+    expect(calls).toBe(3)
+  })
+
+  it('a flow that holds a record write waits at most 10 s, then is refused as busy (review N7)', async () => {
+    expect(BLOCKING_WAIT_MS).toBe(10_000)
+    setHeadroomReaderForTests(async () => ({ bytes: 0, limited: true }))
+    const t = Date.now()
+    await expect(
+      runIsolatedScript('return data', {}, quietLog(), 5000, { dedicated: true, blocking: true })
+    ).rejects.toBeInstanceOf(ScriptBusyError)
+    const took = Date.now() - t
+    expect(took).toBeGreaterThanOrEqual(9_500)
+    expect(took).toBeLessThan(20_000)
+    expect(scriptGateState()).toEqual({ active: 0, waiting: 0 })
+  }, 40_000)
+
+  it('a busy refusal carries 503 FLOW_SCRIPT_BUSY', () => {
+    const e = new ScriptBusyError('x')
+    expect(e).toBeInstanceOf(ScriptLimitError)
+    expect([e.statusCode, e.code]).toEqual([503, 'FLOW_SCRIPT_BUSY'])
+  })
+})
+
+describe('large input (review N5)', () => {
+  it('60 MB of input runs, and is not reported as a timeout', async () => {
+    process.env.FLOW_SCRIPT_MAX_MB = '1024'
+    const blob = 'x'.repeat(60 * 1024 * 1024)
+    const out = await runIsolatedScript(
+      'return { n: data.blob.length }',
+      { blob },
+      quietLog(),
+      1000,
+      { dedicated: true }
+    )
+    expect(out).toEqual({ n: blob.length })
+  }, 120_000)
+
+  it('the input-transfer allowance grows with the input, capped at 60 s', () => {
+    expect(transferAllowanceMs(0)).toBe(0)
+    expect(transferAllowanceMs(60 * 1024 * 1024)).toBeGreaterThan(5_000)
+    expect(transferAllowanceMs(10 ** 10)).toBe(60_000)
   })
 })
 
