@@ -132,7 +132,7 @@ const SHARED: Record<string, string> = {
   'db/config-epoch.ts :: seen': OFF_EPOCH,
   'db/config-epoch.ts :: stampListeners': OFF_EPOCH,
   'db/config-epoch.ts :: watcher': OFF_EPOCH,
-  'db/config-epoch.ts :: writeListeners': OFF_EPOCH,
+  'db/config-epoch.ts :: writeListeners': `${REGISTRY} (on a shared deployment: the per-app config announcer, services/app-config-epoch.ts)`,
   'db/config-epoch.ts :: writesSeen': OFF_EPOCH,
   'db/connect-retry.ts :: lastWarnAt': DIAG,
   'db/index.ts :: migrationKnex': STATIC_DB,
@@ -166,6 +166,7 @@ const SHARED: Record<string, string> = {
   'db/sqlite.ts :: likes': 'compiled LIKE patterns by pattern text; no app data',
   'db/sqlite.ts :: patched': PATCH,
   'db/sqlite.ts :: regexps': 'compiled regular expressions by pattern text; no app data',
+  'db/tenant-context.ts :: poolCreatedHooks': `${REGISTRY} (driver seams for every app pool)`,
   'db/tenant-context.ts :: pools':
     'one knex per connection string: each app has its own connection string, so its own pool',
   'extensions/loader.ts :: _app': APP_REF,
@@ -244,6 +245,11 @@ const SHARED: Record<string, string> = {
   'routes/external-apis.ts :: readinessRegistered': REGISTRY,
   'routes/flows.ts :: flowHealthCheckRegistered': REGISTRY,
   'services/app-seeds.ts :: seeds': `${REGISTRY}; each seed runs inside the app it seeds`,
+  'services/app-pool-pressure.ts :: listening': WEAK,
+  'services/app-pool-pressure.ts :: sampler': TIMER,
+  'services/app-config-epoch.ts :: wiring': `${CONN} (its publish function), set once at boot`,
+  'services/app-config-epoch.ts :: announced': DIAG,
+  'services/app-config-epoch.ts :: heard': DIAG,
   'routes/geocode-suggest.ts :: cache':
     'public geocoder answers keyed by the typed address text; the same for every app',
   'routes/geocode-suggest.ts :: lastCall':
@@ -1041,7 +1047,6 @@ const SHARED: Record<string, string> = {
   'services/traffic-detectors.ts :: loadedAt': TELEMETRY,
   'services/traffic-detectors.ts :: loading': TELEMETRY,
   'services/traffic-detectors.ts :: timer': TELEMETRY,
-  'services/traffic-digest.ts :: cache': TELEMETRY,
   'services/traffic-digest.ts :: registered': TELEMETRY,
   'services/traffic-down-history.ts :: providers': TELEMETRY,
   'services/traffic-entity-history.ts :: OWN_DOWN_NODES': TELEMETRY,

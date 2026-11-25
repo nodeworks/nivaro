@@ -74,8 +74,10 @@ const EXTRA_CALLS: Record<string, { multiTenant?: number; nivaroCloud?: number }
   'services/export-worker.ts': { nivaroCloud: 1 },
   // Retention pass and digests per app: the Monday AI summary (audience + register-once) and the
   // Log retention page's `cloud` field refuse in Nivaro Cloud only (their T6 entries are weight 0);
-  // a Hub shared deployment runs each inside its apps. (The Traffic Map digest stays off on shared.)
+  // a Hub shared deployment runs each inside its apps. So does the Traffic Map digest (audience +
+  // register-once; its T5 entries are weight 0): each app's own request log and admins.
   'services/ai-explain-weekly.ts': { nivaroCloud: 2 },
+  'services/traffic-digest.ts': { nivaroCloud: 2 },
   'services/log-retention.ts': { nivaroCloud: 1 },
   // The Teams bot per app: its admin routes, person routes and config refuse in Nivaro Cloud only
   // (their T4 entries are weight 0); a Hub shared deployment runs each app's own saved bot. The

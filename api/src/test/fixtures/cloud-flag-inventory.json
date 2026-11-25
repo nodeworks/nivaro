@@ -59,7 +59,7 @@
       "rule": "T1",
       "why": "config epochs live in the static DB (knexRef); a multi-tenant process has none",
       "batch": "A",
-      "phase6": "per-app config epochs keyed by tenant"
+      "phase6": "done: per app on a shared deployment through Redis announcements (services/app-config-epoch.ts); the database number stays off"
     },
     {
       "id": "db/index.ts:36",
@@ -3158,11 +3158,12 @@
       "line": 177,
       "text": "if (process.env.CLOUD_META_DB_URL) return []",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T5",
-      "why": "Traffic Map digest is an operator report across tenants",
-      "batch": "C"
+      "why": "traffic digest audience runs per app on a shared deployment (daily-digest fan-out, the app's own request log); Nivaro Cloud still sends none (isNivaroCloud)",
+      "batch": "C",
+      "phase6": "done: per app on a shared deployment"
     },
     {
       "id": "services/traffic-digest.ts:191",
@@ -3170,11 +3171,12 @@
       "line": 191,
       "text": "if (registered || process.env.CLOUD_META_DB_URL) return",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T5",
-      "why": "Traffic Map digest is an operator report across tenants",
-      "batch": "C"
+      "why": "traffic digest registers on a shared deployment (its audience and section run per app); Nivaro Cloud still never registers (isNivaroCloud)",
+      "batch": "C",
+      "phase6": "done: per app on a shared deployment"
     },
     {
       "id": "services/traffic-entity-history.ts:154",

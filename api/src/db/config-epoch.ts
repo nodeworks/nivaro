@@ -645,6 +645,42 @@ function attachEpochDriverSeam(knexInstance: Knex): void {
 }
 
 /**
+ * Hub shared deployment: every app pool's driver tells the configuration-write listeners
+ * (onConfigWrite) about a configuration write, on every engine — SQL Server included, whose
+ * seam (db/metadata-query-cache.ts) is attached only to the static pool, which on a shared
+ * deployment is a stand-in that never runs a statement. The listeners hear it inside the app's
+ * own async context; services/app-config-epoch.ts turns that into the app's epoch. Patches the
+ * driver PROTOTYPE once per driver, so a transaction's cloned client is covered; a prototype the
+ * SQL Server read-cache seam or the epoch seam above already patched is left alone (it notes the
+ * write itself). The epoch (`ENABLED`) stays off: only the listeners hear the note.
+ */
+const APP_EPOCH_SEAM = Symbol.for('nivaro.appConfigEpochSeam')
+const READ_CACHE_SEAM = Symbol.for('nivaro.metadataQueryCache')
+export function attachAppConfigWriteSeam(knexInstance: Knex): void {
+  const client = (knexInstance as unknown as { client?: object }).client
+  if (!client) return
+  const proto = Object.getPrototypeOf(client) as {
+    _query?: (this: unknown, connection: unknown, query: { sql?: string }) => Promise<unknown>
+    [APP_EPOCH_SEAM]?: boolean
+    [READ_CACHE_SEAM]?: boolean
+    [EPOCH_SEAM]?: boolean
+  }
+  if (!proto || typeof proto._query !== 'function') return
+  if (proto[APP_EPOCH_SEAM] || proto[READ_CACHE_SEAM] || proto[EPOCH_SEAM]) return
+  proto[APP_EPOCH_SEAM] = true
+  const original = proto._query
+  proto._query = function patched(this: unknown, connection: unknown, query: { sql?: string }) {
+    try {
+      const sql = typeof query?.sql === 'string' ? query.sql : ''
+      if (sql && movesConfigEpoch(sql)) noteConfigWrite(sql)
+    } catch {
+      /* the note never affects the statement */
+    }
+    return original.call(this, connection, query)
+  }
+}
+
+/**
  * Remember the connection and make `destroy()` wait for a pending move: a
  * script writes its last row and closes the pool in the same breath.
  */
