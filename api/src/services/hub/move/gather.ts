@@ -154,7 +154,12 @@ export function checkMoveTarget(raw: unknown): MoveTarget {
     const id = positiveInt(b.placement_id)
     if (id === null)
       throw new MoveError('BAD_TARGET', 'to.placement_id must name a dedicated placement.')
-    return { kind: 'dedicated', placement_id: id }
+    if (b.publish_port === undefined || b.publish_port === null)
+      return { kind: 'dedicated', placement_id: id }
+    const port = b.publish_port
+    if (typeof port !== 'number' || !Number.isInteger(port) || port < 1024 || port > 65535)
+      throw new MoveError('BAD_PORT', 'to.publish_port is a port from 1024 to 65535.')
+    return { kind: 'dedicated', placement_id: id, publish_port: port }
   }
   throw new MoveError('BAD_TARGET', 'to.kind is shared or dedicated.')
 }
@@ -218,6 +223,7 @@ async function stackFacts(
   storage: string | null
   keyFp: string | null
   size?: string | null
+  publishPort?: number | null
 }> {
   let row: Awaited<ReturnType<typeof readStackSettings>>
   try {
@@ -243,7 +249,8 @@ async function stackFacts(
     redis,
     storage: row.settings.STORAGE_PROVIDER?.trim() || 'local',
     keyFp: key && APP_KEY_RE.test(key) ? keyFingerprint(key.toLowerCase()) : null,
-    size: row.size ?? null
+    size: row.size ?? null,
+    publishPort: row.publish_port ?? null
   }
 }
 
@@ -936,6 +943,7 @@ async function dedicatedTargetFacts(
     out.storage_provider = f.storage
     out.stack_key_fp = f.keyFp
     if (f.size !== undefined) out.stack_size = f.size
+    if (f.publishPort !== undefined) out.stack_publish_port = f.publishPort
   }
   return out
 }

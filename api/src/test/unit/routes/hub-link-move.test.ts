@@ -598,6 +598,47 @@ describe('fix round 1', () => {
     expect(st.store.has(security.hubBootMaintenanceDoneKey(9))).toBe(false)
   })
 
+  // Review C1: a move between two stacks releases with only_target over the public name; the
+  // OLD stack (no HUB_BOOT_MAINTENANCE of that move) refuses and keeps its freeze.
+  it('only_target: the old stack refuses the release and stays frozen; the new one takes it', async () => {
+    const a = await build()
+    await a.inject({
+      method: 'POST',
+      url: '/api/hub-link/maintenance',
+      headers: auth,
+      payload: { on: true, move_id: 21 }
+    })
+    delete process.env.HUB_BOOT_MAINTENANCE
+    const old = await a.inject({
+      method: 'POST',
+      url: '/api/hub-link/maintenance',
+      headers: auth,
+      payload: { on: false, move_id: 21, only_target: true }
+    })
+    expect(old.statusCode).toBe(409)
+    expect(old.json()).toMatchObject({ code: 'NOT_THE_MOVE_TARGET' })
+    expect(JSON.parse(st.store.get(MK()) as string)).toMatchObject({ move_id: 21 })
+    // Another move's new stack refuses too.
+    process.env.HUB_BOOT_MAINTENANCE = '22'
+    const other = await a.inject({
+      method: 'POST',
+      url: '/api/hub-link/maintenance',
+      headers: auth,
+      payload: { on: false, move_id: 21, only_target: true }
+    })
+    expect(other.statusCode).toBe(409)
+    process.env.HUB_BOOT_MAINTENANCE = '21'
+    const ok = await a.inject({
+      method: 'POST',
+      url: '/api/hub-link/maintenance',
+      headers: auth,
+      payload: { on: false, move_id: 21, only_target: true }
+    })
+    expect(ok.statusCode).toBe(200)
+    expect(st.store.has(MK())).toBe(false)
+    delete process.env.HUB_BOOT_MAINTENANCE
+  })
+
   // P6-26 Rule 2: a rollback freezing a lifted target again drops that move's done marker, so a
   // restarted or re-created target boots in maintenance (never writable).
   it('maintenance on with a move id drops that move’s boot-maintenance done marker', async () => {

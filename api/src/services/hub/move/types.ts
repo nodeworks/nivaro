@@ -134,6 +134,10 @@ export type MoveBlockerCode =
   // connections together pass the database server's limit (services/hub/placement/connections.ts,
   // the scaling tab's own math).
   | 'DB_CONNECTIONS'
+  // Review C1: a move between stacks needs an app that reports its move marker (0.3.215+).
+  | 'MOVE_TARGET_MARKER'
+  // Review M1: a same-host move on the publish edge needs another free published port.
+  | 'PORT_IN_USE'
   | SharedReadinessCode
 
 /** What a move will cost or change. SIGNED_LINKS_RESET is the T12 carry. */
@@ -192,7 +196,9 @@ export interface MovePlan {
 
 export type MoveTarget =
   | { kind: 'shared'; shared_id: number; pool_max?: number }
-  | { kind: 'dedicated'; placement_id: number }
+  /** publish_port (review M1): the new Docker stack's published port, when it must differ from
+   *  the old stack's (two stacks of one environment on one publish-edge host). */
+  | { kind: 'dedicated'; placement_id: number; publish_port?: number }
 
 /** The source as read live: over its hub link (dedicated) or its deployment link (shared). */
 export interface MoveSourceFacts {
@@ -258,6 +264,8 @@ export interface MoveTargetFacts {
   nodes_unknown?: boolean
   /** A Docker dedicated target: the ENCRYPTION_KEY fingerprint its stack settings hold. */
   stack_key_fp: string | null
+  /** A Docker dedicated target: the published port its stack settings name (review M1). */
+  stack_publish_port?: number | null
   /** A Docker dedicated target: the size its stack settings ask for (hub gap sqlite). */
   stack_size?: string | null
   /** A dedicated target placement another environment uses ("app/env"); null when free. */

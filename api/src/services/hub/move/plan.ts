@@ -367,6 +367,32 @@ function blockersOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Bloc
     add('SAME_PLACEMENT', `This environment already runs on ${sideName(to)}.`)
   // Hub placement (idea 48): both stacks run at once while the move runs (the scaling math).
   if (input.host_connections?.refusal) add('DB_CONNECTIONS', input.host_connections.refusal)
+  // Review M1: two stacks of one environment on one publish-edge host would publish the same
+  // port (both render it from the environment's settings): the new one needs another, free one.
+  if (
+    kind === 'between_stacks' &&
+    from.kind === 'docker' &&
+    to.kind === 'docker' &&
+    from.driverId === to.driverId &&
+    (to.edge === 'publish' || from.edge === 'publish')
+  ) {
+    const asked = input.target.kind === 'dedicated' ? input.target.publish_port : undefined
+    if (!asked || asked === t.stack_publish_port)
+      add(
+        'PORT_IN_USE',
+        `Both stacks run on the same host, which publishes stacks on a port, and the old one already publishes ${t.stack_publish_port ?? 'its port'}. Give the new stack another free published port.`
+      )
+  }
+  // Review C1: only the new stack of a move between stacks reports the move as its own
+  // (/api/version move_target), which verify and release need; an app before it cannot.
+  if (kind === 'between_stacks') {
+    const v = input.source.version ?? input.env.version_pin
+    if (!runsAtLeast(v, MOVE_TARGET_MARKER_SINCE))
+      add(
+        'MOVE_TARGET_MARKER',
+        `A move between two stacks needs Nivaro ${MOVE_TARGET_MARKER_SINCE} or later (this app runs ${v ?? 'a version the Hub cannot read'}): only from it does the new stack say it is the new one, so the Hub can prove the name moved. Promote first.`
+      )
+  }
   // Hub gap sqlite (0.3.215): a SQLite app's file is copied by the db_copy step, only where
   // that can work (sqliteMoveRefusal).
   const sqlite = sqliteMove(input)
@@ -632,6 +658,9 @@ function blockersOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Bloc
 
   return out
 }
+
+/** Review C1: from this version a move's new stack reports the move (/api/version move_target). */
+export const MOVE_TARGET_MARKER_SINCE = '0.3.215'
 
 /**
  * Shared features: from this version a shared deployment runs staged imports, row schedules,
@@ -1088,6 +1117,9 @@ function planHash(
     from: sideId(input.from),
     to: sideId(input.to),
     pool_max: input.target.kind === 'shared' ? (input.target.pool_max ?? null) : null,
+    ...(input.target.kind === 'dedicated' && input.target.publish_port
+      ? { publish_port: input.target.publish_port }
+      : {}),
     version,
     hostnames: input.names,
     routing,

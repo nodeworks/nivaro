@@ -22,7 +22,7 @@ export type MoveRouting = 'automatic' | 'manual'
 /** Where a move goes: a shared deployment, or a dedicated placement of this environment. */
 export type MoveTarget =
   | { kind: 'shared'; shared_id: number; pool_max?: number }
-  | { kind: 'dedicated'; placement_id: number }
+  | { kind: 'dedicated'; placement_id: number; publish_port?: number }
 
 export interface MoveRouteAction {
   side: 'source' | 'target'
@@ -925,6 +925,14 @@ export const MOVE_BLOCKER_COPY: Record<string, Copy> = {
     title: 'The new home runs on several machines with local disks',
     hint: 'The app could start on a machine that does not hold its file. Pick a home on one machine.'
   },
+  PORT_IN_USE: {
+    title: 'The new stack needs a published port of its own',
+    hint: 'Both stacks run on one host that publishes stacks on a port. Enter another free port for the new stack, then plan again.'
+  },
+  MOVE_TARGET_MARKER: {
+    title: 'This app is too old for a move between stacks',
+    hint: 'From 0.3.215 the new stack says it is the new one, so the Hub can prove the name moved. Promote the app first.'
+  },
   DB_CONNECTIONS: {
     title: 'Both stacks together open more connections than the database server allows',
     hint: 'While the move runs the old and the new stack are both up. Lower the stack’s pools or replicas on the Scaling tab, or raise the server’s limit, then plan again.'
@@ -1302,6 +1310,14 @@ export const MOVE_CODE_COPY: Record<string, Copy> = {
   NO_PLACEMENT: {
     title: 'This environment does not run anywhere the Hub knows yet',
     hint: 'A new environment is placed, not moved: use Place on shared deployment….'
+  },
+  NAME_NOT_ON_NEW_STACK: {
+    title: 'The name still reaches the old stack',
+    hint: 'The Hub releases and retires only once the public name answers from the new stack. Point the name at the new stack, then resume.'
+  },
+  BAD_PORT: {
+    title: 'That is not a port the new stack can publish',
+    hint: 'Use a free port from 1024 to 65535.'
   },
   NOT_A_MOVE: {
     title: 'This is not a move the Hub makes',

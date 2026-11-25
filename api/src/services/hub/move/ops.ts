@@ -693,6 +693,14 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
       { ...deps.docker, placementId: side.placement.id }
     )
     shape(prepared.spec)
+    // Review M1: during a move between stacks each stack keeps the published port recorded at
+    // start (the settings name one port for the environment; the two stacks need two).
+    const ports = (await readMove(move.id))?.steps.publish_ports ?? move.steps.publish_ports
+    if (ports && prepared.spec.publish_port != null) {
+      if (side.placement.id === move.to_placement_id) prepared.spec.publish_port = ports.target
+      else if (side.placement.id === move.from_placement_id && ports.source != null)
+        prepared.spec.publish_port = ports.source
+    }
     let applied: Awaited<ReturnType<typeof agentApply>>
     try {
       applied = await agent.agentApply(prepared.driver, side.stack, prepared.spec)
@@ -1026,7 +1034,11 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
       if (l.to.kind === 'docker' && on) return
       // `off` happens at release, after verify saw the name serve the target.
       const link = !on ? await verifiedTargetLink() : await targetLink()
-      await link.maintenance(on, move.id)
+      // Hub placement (review C1): between two stacks of one environment the public name may
+      // still reach the OLD stack; only the move's new stack takes this release.
+      if (!on && plan.kind === 'between_stacks')
+        await link.maintenance(on, move.id, undefined, undefined, { onlyTarget: true })
+      else await link.maintenance(on, move.id)
     },
 
     async freezeTarget() {
@@ -1784,8 +1796,14 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
           version?: unknown
           shared_deployment?: unknown
           tenant?: unknown
+          move_target?: unknown
         } | null
         if (!b || b.version !== expect.version) return false
+        // Hub placement (review C1): between two stacks of one environment both answer the
+        // same version as a dedicated app. Only the NEW stack reports this move as its own
+        // (HUB_BOOT_MAINTENANCE → /api/version move_target): nothing else proves the name moved.
+        if (plan.kind === 'between_stacks')
+          return b.shared_deployment == null && String(b.move_target ?? '') === String(move.id)
         if (expect.shared === null) return b.shared_deployment == null
         // B3: a shared deployment answers its key and the tenant the name resolved to.
         return b.shared_deployment === expect.shared && b.tenant === l.tenantId

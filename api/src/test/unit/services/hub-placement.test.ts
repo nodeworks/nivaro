@@ -153,6 +153,41 @@ describe('move between two Docker stacks (between_stacks)', () => {
     expect(blind.plan_hash).not.toBe(buildMovePlan(input()).plan_hash)
   })
 
+  it('needs an app that reports its move marker (0.3.215+, review C1)', () => {
+    const old = buildMovePlan(
+      input({
+        source: { ...input().source, version: '0.3.214' },
+        env: { ...input().env, version_pin: '0.3.214' }
+      })
+    )
+    expect(codes(old)).toContain('MOVE_TARGET_MARKER')
+    expect(codes(buildMovePlan(input()))).not.toContain('MOVE_TARGET_MARKER')
+  })
+
+  it('one publish-edge host: the new stack needs another published port (review M1)', () => {
+    const same = {
+      from: docker(3, 1, 'publish'),
+      to: docker(4, 1, 'publish'),
+      target_facts: { ...input().target_facts, stack_publish_port: 8080 }
+    }
+    expect(codes(buildMovePlan(input(same)))).toContain('PORT_IN_USE')
+    const sameAgain = buildMovePlan(
+      input({ ...same, target: { kind: 'dedicated', placement_id: 4, publish_port: 8080 } })
+    )
+    expect(codes(sameAgain)).toContain('PORT_IN_USE')
+    const other = buildMovePlan(
+      input({ ...same, target: { kind: 'dedicated', placement_id: 4, publish_port: 8081 } })
+    )
+    expect(codes(other)).not.toContain('PORT_IN_USE')
+    expect(other.plan_hash).not.toBe(
+      buildMovePlan(
+        input({ ...same, target: { kind: 'dedicated', placement_id: 4, publish_port: 8082 } })
+      ).plan_hash
+    )
+    // Another host: its own port space.
+    expect(codes(buildMovePlan(input()))).not.toContain('PORT_IN_USE')
+  })
+
   it('does not apply the shared-deployment rules to it', () => {
     const p = buildMovePlan(input({ database: null }))
     expect(codes(p)).not.toContain('NO_DATABASE_RECORD')

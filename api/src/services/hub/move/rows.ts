@@ -102,6 +102,12 @@ export interface MoveSteps {
   locks?: { env: string; shared: Array<{ id: number; token: string }> }
   /** Where each dedicated side is reached (addresses.ts), resolved and probed at start. */
   addresses?: MoveAddresses
+  /**
+   * Review M1: the published ports each stack of a move between stacks runs on for the move's
+   * length (the old one's from its settings, the new one's from the start): every apply during
+   * the move uses them, and release writes the new one into the environment's settings.
+   */
+  publish_ports?: { source: number | null; target: number }
   /** sha256 of the source's database identity, read at `check` (R2; never the identity). */
   source_db?: string | null
   /** Hub gap sqlite: the database copy db_copy made and checked (checksum, size, ledger). */

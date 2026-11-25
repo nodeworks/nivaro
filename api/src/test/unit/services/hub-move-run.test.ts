@@ -42,7 +42,8 @@ const migrations = [
 const Run = await import('../../../services/hub/move/run.js')
 const { healMoves, unmarkMoveLive } = await import('../../../services/hub/move/heal.js')
 const { readMove } = await import('../../../services/hub/move/rows.js')
-const { MoveStepError } = await import('../../../services/hub/move/ops.js')
+const Ops = await import('../../../services/hub/move/ops.js')
+const { MoveStepError } = Ops
 const { MOVE_STEPS, MANUAL_MOVE_STEPS } = await import('../../../services/hub/move/plan.js')
 const { memoryPromoteLock, sharedLock } = await import('../../../services/hub/promote-lock.js')
 type MovePlan = import('../../../services/hub/move/types.js').MovePlan
@@ -456,7 +457,9 @@ const ORDER: Record<MoveKind, string[]> = {
     'route',
     'route',
     'verifyName',
+    'verifyName', // review C1: the name reaches the new stack, right before release
     'targetMaintenance',
+    'verifyName', // … and right before the old stack is retired
     'verifyTargetKey',
     'retireSource',
     'dropTempHost',
@@ -2440,5 +2443,121 @@ describe('the app key across moves (E2E B4, P6-38)', () => {
     expect(m?.status).toBe('success')
     expect(m?.error).toBeNull()
     expect(fake.names()).toContain('retireSource')
+  })
+})
+
+// ── review C1: a move between two stacks proves the name reaches the NEW stack ──────────────
+
+describe('between_stacks: the real verifyName tells the new stack from the old one', () => {
+  /**
+   * The app behind the public name, as /api/version answers: the OLD stack (same version, no
+   * marker) or the NEW one (move_target = the move). The real defaultMoveOps.verifyName reads it.
+   */
+  const app = { onNew: false, calls: 0, moveId: 0 }
+  const appFetch = (async () => {
+    app.calls++
+    return new Response(
+      JSON.stringify({
+        version: '0.3.210',
+        ...(app.onNew ? { move_target: app.moveId } : {})
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    )
+  }) as unknown as typeof fetch
+  const withRealVerify = () =>
+    useDeps({
+      ops: (move, p) => {
+        app.moveId = move.id
+        const real = Ops.defaultMoveOps(move, p, { fetch: appFetch })
+        return {
+          ...fake.ops,
+          verifyName: async (e: { version: string; shared: string | null }) => {
+            fake.calls.push(['verifyName', e])
+            return real.verifyName(e)
+          }
+        }
+      }
+    })
+
+  beforeEach(() => {
+    app.onNew = false
+    app.calls = 0
+  })
+
+  it('automatic: the old stack still answering the name → no release, no retire, rolled back', async () => {
+    plan = planOf('between_stacks')
+    withRealVerify()
+    const w = await world('docker')
+    const { move_id } = await start(w, toFor('between_stacks', w))
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    expect(m?.status).toBe('rolled_back')
+    expect(m?.error).toMatch(/^VERIFY_FAILED/)
+    expect(app.calls).toBeGreaterThan(1)
+    // Never lifted at the target, never retired at the source; the env is back on the source.
+    expect(fake.calls.some((c) => c[0] === 'targetMaintenance' && c[1] === false)).toBe(false)
+    expect(fake.names()).not.toContain('retireSource')
+    const env = await db('nivaro_hub_environments').where({ id: w.envId }).first()
+    expect(Number(env.placement_id)).toBe(w.dockerPlacement)
+  })
+
+  it('automatic: the new stack answering with its marker → released and retired', async () => {
+    plan = planOf('between_stacks')
+    withRealVerify()
+    app.onNew = true
+    const w = await world('docker')
+    const { move_id } = await start(w, toFor('between_stacks', w))
+    await Run.awaitMove(move_id)
+    expect((await readMove(move_id))?.status).toBe('success')
+    expect(fake.names()).toContain('retireSource')
+    // verify, then again right before the release and the retire.
+    const names = fake.names()
+    expect(names.lastIndexOf('verifyName')).toBeLessThan(names.indexOf('retireSource'))
+    expect(names.indexOf('verifyName')).toBeLessThan(
+      fake.calls.findIndex((c) => c[0] === 'targetMaintenance' && c[1] === false)
+    )
+  })
+
+  it('manual: the old stack answering never confirms the route; the wait times out and rolls back', async () => {
+    plan = planOf('between_stacks', 'manual')
+    withRealVerify()
+    const w = await world('docker')
+    const { move_id } = await start(w, toFor('between_stacks', w))
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    expect(m?.status).toBe('rolled_back')
+    expect(m?.error).toMatch(/^ROUTE_TIMEOUT/)
+    expect(m?.steps.route_confirmed_at ?? null).toBeNull()
+    expect(fake.calls.some((c) => c[0] === 'targetMaintenance' && c[1] === false)).toBe(false)
+    expect(fake.names()).not.toContain('retireSource')
+    // The source was never put in maintenance (the manual order freezes it after verify).
+    expect(fake.calls.some((c) => c[0] === 'sourceMaintenance' && c[1] === true)).toBe(false)
+  })
+
+  it('verifyName itself: the marker decides for between_stacks, never for the earlier kinds', async () => {
+    const w = await world('docker')
+    const move = {
+      id: 4242,
+      environment_id: w.envId,
+      from_placement_id: w.dockerPlacement,
+      to_placement_id: w.dockerPlacementB,
+      steps: {}
+    } as never
+    const answer = (body: Record<string, unknown>) =>
+      (async () => new Response(JSON.stringify(body), { status: 200 })) as unknown as typeof fetch
+    const v = (kind: MoveKind, body: Record<string, unknown>) =>
+      Ops.defaultMoveOps(move, planOf(kind), { fetch: answer(body) }).verifyName({
+        version: '0.3.210',
+        shared: null
+      })
+    expect(await v('between_stacks', { version: '0.3.210' })).toBe(false)
+    expect(await v('between_stacks', { version: '0.3.210', move_target: 4242 })).toBe(true)
+    expect(await v('between_stacks', { version: '0.3.210', move_target: 4241 })).toBe(false)
+    expect(
+      await v('between_stacks', { version: '0.3.210', move_target: 4242, shared_deployment: 'x' })
+    ).toBe(false)
+    // to_dedicated (a shared source): a dedicated answer still verifies without a marker.
+    expect(await v('to_dedicated', { version: '0.3.210' })).toBe(true)
+    expect(await v('to_dedicated', { version: '0.3.210', shared_deployment: 'pool' })).toBe(false)
   })
 })

@@ -458,9 +458,21 @@ export async function startMove(
       ...c,
       done: body.checklist[c.id] === true
     }))
+    // Review M1: the new stack's own published port, and the old one's (from its settings).
+    let publishPorts: MoveSteps['publish_ports']
+    if (body.to.kind === 'dedicated' && body.to.publish_port) {
+      const ss = (await db('nivaro_hub_stack_settings')
+        .where({ environment_id: envId })
+        .first('publish_port')) as { publish_port: number | null } | undefined
+      publishPorts = {
+        source: ss?.publish_port == null ? null : Number(ss.publish_port),
+        target: body.to.publish_port
+      }
+    }
     const steps: MoveSteps = {
       ...freshSteps(plan.steps),
       created_placement: created,
+      ...(publishPorts ? { publish_ports: publishPorts } : {}),
       addresses,
       ...(body.overrides.length ? { overrides: body.overrides } : {}),
       // I-3: heal frees exactly these locks (compare-and-delete) once the heartbeat is stale.
@@ -1088,6 +1100,15 @@ async function doStep(ctx: Ctx, key: MoveStepKey, steps: MoveSteps): Promise<voi
     case 'release':
       return release(ctx, steps)
     case 'retire_source': {
+      // Hub placement (review C1): the old stack is never retired while the public name could
+      // still reach it (the new one alone reports this move); the move stays open, the old home
+      // as it is.
+      if (plan.kind === 'between_stacks')
+        try {
+          await requireNameOnNewStack(ctx, 'retire_source')
+        } catch (err) {
+          throw new RetireKeyStop(asStepError(err, 'The new stack could not be proven.'))
+        }
       // E2E B4 (P6-38): the new home seals with the app's own key before the old one is retired.
       // A check that never passes keeps the move open (stopRetireKey), the old home as it is.
       if (!steps.retire_key_checked_at) {
@@ -1197,6 +1218,19 @@ async function waitManualRoute(ctx: Ctx, steps: MoveSteps): Promise<void> {
 }
 
 /**
+ * Hub placement (review C1): a move between two stacks of one environment proves, right before
+ * `step`, that the public name answers from the NEW stack (/api/version `move_target` = this
+ * move, ops.verifyName). The version alone never proves it: the old stack answers the same.
+ */
+async function requireNameOnNewStack(ctx: Ctx, step: 'release' | 'retire_source'): Promise<void> {
+  if (await ctx.ops.verifyName({ version: ctx.plan.version, shared: null })) return
+  throw new MoveStepError(
+    'NAME_NOT_ON_NEW_STACK',
+    `${ctx.plan.hostnames[0] ?? 'The public name'} does not answer from the new stack, so ${step === 'release' ? 'nothing is released' : 'the old stack is not retired'}: it may still reach the old one.`
+  )
+}
+
+/**
  * The point of no return (P6-22, R2-I-2): the source is frozen (maintenance_on is done in every
  * order); the environment's switch to the target COMMITS first; only then is the target's
  * maintenance lifted. The step is marked done only after the lift, so a failure or a crash in
@@ -1226,6 +1260,10 @@ async function release(ctx: Ctx, steps: MoveSteps): Promise<void> {
       )
     ctx.run.log("release: the source's database is unchanged since the copy")
   }
+  // Hub placement (review C1): between two stacks of one environment, the public name must
+  // reach the NEW stack (it alone reports this move as its own) before anything is switched or
+  // lifted: else the release would go to the old stack. A failure rolls the move back.
+  if (ctx.plan.kind === 'between_stacks') await requireNameOnNewStack(ctx, 'release')
   const env = (await db(ENVS)
     .where({ id: ctx.envId })
     .first('placement_id', 'status', 'hub_managed', 'version_pin', 'db_ref')) as
@@ -1297,6 +1335,15 @@ async function release(ctx: Ctx, steps: MoveSteps): Promise<void> {
   // Committed: the target serves for real now (a Docker target's boot maintenance is released
   // for good with the move id; a shared target's replicas re-read their list).
   await ctx.ops.targetMaintenance(false)
+  // Review M1: the new stack's published port is the environment's from now on (every later
+  // apply renders it from the settings).
+  const ports = move.steps.publish_ports ?? steps.publish_ports
+  if (ports?.target) {
+    await db('nivaro_hub_stack_settings')
+      .where({ environment_id: ctx.envId })
+      .update({ publish_port: ports.target, updated_at: new Date() })
+    ctx.run.log(`release: the environment's stack now publishes port ${ports.target}`)
+  }
   // M10: the shared target serves the app `active` on every replica.
   if (ctx.shared.to !== null)
     await ctx.ops
