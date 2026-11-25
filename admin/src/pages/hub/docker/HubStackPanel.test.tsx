@@ -137,9 +137,7 @@ describe('HubStackPanel', () => {
     setup()
     view(false)
     fireEvent.click(await screen.findByRole('button', { name: /View settings/ }))
-    await waitFor(() =>
-      expect(h.get).toHaveBeenCalledWith('/hub/environments/5/stack/settings')
-    )
+    await waitFor(() => expect(h.get).toHaveBeenCalledWith('/hub/environments/5/stack/settings'))
     expect(screen.queryByRole('textbox')).toBeNull()
   })
 
