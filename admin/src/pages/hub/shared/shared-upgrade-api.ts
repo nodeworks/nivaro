@@ -347,6 +347,22 @@ export const UPGRADE_COPY: Record<string, { title: string; hint?: string }> = {
     title: 'The Hub does not run this deployment',
     hint: 'It runs elsewhere; it is upgraded by whoever runs it. The Hub records the version it sees. Name its GitLab driver (Edit) to have the Hub upgrade it through that pipeline.'
   },
+  BRANCH_IN_USE: {
+    title: 'Something else deploys this GitLab branch too',
+    hint: 'An environment or another shared deployment deploys the same branch. Give this deployment a deploy branch of its own (Edit), then plan again.'
+  },
+  BRANCH_BUSY: {
+    title: 'Another run is deploying this GitLab branch',
+    hint: 'A promotion, a move or another upgrade holds it. Wait for it to end, then plan again.'
+  },
+  PIPELINE_RUNNING: {
+    title: 'A pipeline on the deploy branch is still running',
+    hint: 'It may still be deploying. Wait for it to end in GitLab, then plan again.'
+  },
+  LINK_UNREACHABLE: {
+    title: "The deployment's link does not answer",
+    hint: 'The run needs it to see each app migrate. Check its link address and token, then plan again.'
+  },
   GITLAB_UNREACHABLE: {
     title: 'GitLab did not answer the Hub',
     hint: "Check the GitLab driver's address and token, then plan again."

@@ -67,8 +67,13 @@ const PIN_RE =
 /** An external Redis address. */
 const REDIS_URL_RE = /^rediss?:\/\/\S+$/
 const STACK_RE = /^[a-z][a-z0-9-]{1,40}$/
-/** A branch name (twin of the API's BRANCH_RE in services/hub/shared/store.ts). */
-const BRANCH_RE = /^(?!-)(?!.*\.\.)[^\s~^:?*[\\]{1,200}$/
+/** A branch name git takes (twin of the API's isGitBranchName in services/hub/shared/store.ts). */
+export function isGitBranchName(t: string): boolean {
+  if (!t || t.length > 200 || /\p{Cc}/u.test(t) || /[\s~^:?*[\\]/.test(t)) return false
+  if (t === '@' || t.includes('..') || t.includes('//') || t.includes('@{')) return false
+  if (t.startsWith('-') || t.startsWith('/') || t.endsWith('/') || t.endsWith('.')) return false
+  return t.split('/').every((part) => !part.startsWith('.') && !part.endsWith('.lock'))
+}
 /** A path in the repository: no leading slash, no `..` (twin of the API's PIN_FILE_RE). */
 const PIN_FILE_RE = /^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[^\s\\]{1,300}$/
 
@@ -98,7 +103,7 @@ function gitlabDraft(s: SharedDeployment | null) {
   return {
     upgrades: g ? ('gitlab' as const) : ('watch' as const),
     gl_driver_id: g && s?.driver_id != null ? String(s.driver_id) : '',
-    gl_source: g?.source_branch ?? 'main',
+    gl_source: g?.source_branch ?? '',
     gl_target: g?.target_branch ?? '',
     gl_pin: g?.pin_file ?? '',
     gl_before: g?.before_job ?? '',
@@ -115,7 +120,7 @@ function gitlabOf(d: Draft): SharedGitlab | null {
   const opt = (v: string) => v.trim() || null
   return {
     source_branch: d.gl_source.trim(),
-    target_branch: opt(d.gl_target),
+    target_branch: d.gl_target.trim(),
     pin_file: opt(d.gl_pin),
     before_job: opt(d.gl_before),
     deploy_job: opt(d.gl_deploy)
@@ -170,10 +175,12 @@ export function sharedDraftErrors(
     e.pins = 'One extension=image per line (repo@sha256:digest), for an extension listed above'
   if (viaGitlab(d)) {
     if (!d.gl_driver_id) e.gl_driver_id = 'Pick the GitLab driver that runs its pipeline'
-    if (!BRANCH_RE.test(d.gl_source.trim()))
-      e.gl_source = 'The branch that holds the release commits (no spaces)'
-    if (d.gl_target.trim() && !BRANCH_RE.test(d.gl_target.trim()))
-      e.gl_target = 'A branch name (no spaces), or empty for the driver’s'
+    if (!isGitBranchName(d.gl_source.trim()))
+      e.gl_source = 'The branch that holds the release commits (a git branch name)'
+    if (!isGitBranchName(d.gl_target.trim()))
+      e.gl_target = 'The branch only this deployment deploys (a git branch name)'
+    else if (d.gl_target.trim() === d.gl_source.trim())
+      e.gl_target = 'Another branch than the release branch'
     if (d.gl_pin.trim() && !PIN_FILE_RE.test(d.gl_pin.trim()))
       e.gl_pin = 'A path in the repository, or empty for the driver’s'
   }
@@ -324,7 +331,7 @@ export function SharedDeploymentForm({
   })
   const gitlabChoices = (gitlabDrivers.data ?? []).filter((x) => x.kind === 'gitlab')
   const gitlabDriver = gitlabChoices.find((x) => String(x.id) === d.gl_driver_id)
-  const driverDefault = (k: 'branch' | 'pin_file' | 'deploy_job') => {
+  const driverDefault = (k: 'pin_file' | 'deploy_job') => {
     const v = (gitlabDriver?.config as Record<string, unknown> | undefined)?.[k]
     return typeof v === 'string' && v ? `${v} (the driver's)` : "the driver's"
   }
@@ -544,7 +551,7 @@ export function SharedDeploymentForm({
               onChange={(e) => set({ gl_source: e.target.value })}
               autoComplete='off'
               spellCheck={false}
-              placeholder='main'
+              placeholder='release'
               className='h-8 font-mono text-[13px]'
             />
           </Field>
@@ -555,7 +562,7 @@ export function SharedDeploymentForm({
             id='sh-gl-target'
             label='Deploy branch'
             error={err('gl_target')}
-            hint='The branch its deploy job runs on. Empty: the driver’s.'
+            hint='The branch its deploy job runs on. Nothing else may deploy it (no environment, no other shared deployment).'
           >
             <Input
               id='sh-gl-target'
@@ -563,7 +570,7 @@ export function SharedDeploymentForm({
               onChange={(e) => set({ gl_target: e.target.value })}
               autoComplete='off'
               spellCheck={false}
-              placeholder={driverDefault('branch')}
+              placeholder='shared-production'
               className='h-8 font-mono text-[13px]'
             />
           </Field>

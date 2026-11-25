@@ -307,6 +307,10 @@ const CODE_COPY: Record<string, { title: string; hint?: string }> = {
     title: 'An environment still uses this driver',
     hint: 'Move those environments to another driver (or none) first.'
   },
+  DRIVER_IN_USE: {
+    title: 'A shared deployment deploys through this driver',
+    hint: 'Point that shared deployment at another driver (or retire it) first.'
+  },
   PLACEMENT_IN_USE: {
     title: 'Another environment already uses this placement',
     hint: 'Each environment has its own placement. Pick the driver again to make a new one.'
@@ -1198,6 +1202,8 @@ export const RUN_ERROR_COPY: Record<string, { title: string }> = {
   GITLAB_NOT_FOUND: { title: 'GitLab does not know the project, branch or job' },
   GITLAB_REFUSED: { title: 'GitLab refused a call' },
   GITLAB_UNREACHABLE: { title: 'GitLab did not answer' },
+  LINK_UNREACHABLE: { title: "The deployment's link did not answer" },
+  BRANCH_BUSY: { title: 'Another run deploys that GitLab branch' },
   LOCK_LOST: { title: 'The run lost its lock' },
   START_FAILED: { title: 'The run could not be started' },
   STEP_FAILED: { title: 'The run stopped unexpectedly' },

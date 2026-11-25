@@ -17,7 +17,9 @@ import {
 const row = (over: Record<string, unknown> = {}) => ({
   mode: 'registered' as const,
   driver_id: 4 as number | null,
-  settings: { gitlab: { source_branch: 'release', deploy_job: null } } as Record<string, unknown>,
+  settings: {
+    gitlab: { source_branch: 'release', target_branch: 'shared', deploy_job: null }
+  } as Record<string, unknown>,
   ...over
 })
 
@@ -25,7 +27,7 @@ describe('a GitLab-run shared deployment', () => {
   it('is registered, names a driver and settings.gitlab; anything else is not', () => {
     expect(sharedGitlabOf(row())).toEqual({
       source_branch: 'release',
-      target_branch: null,
+      target_branch: 'shared',
       pin_file: null,
       before_job: null,
       deploy_job: null
@@ -96,10 +98,20 @@ describe('a GitLab-run shared deployment', () => {
     expect(Object.keys(gl).sort()).toEqual(['gl_driver_id', 'gl_pin', 'gl_source', 'gl_target'])
     expect(
       sharedDraftErrors(
-        { ...draft, upgrades: 'gitlab', gl_driver_id: '4', gl_source: 'main' },
+        { ...draft, upgrades: 'gitlab', gl_driver_id: '4', gl_source: 'main', gl_target: 'shared' },
         true
       )
     ).toEqual({})
+    // The deploy branch is required, a git branch name, and not the release branch.
+    const same = { ...draft, upgrades: 'gitlab' as const, gl_driver_id: '4', gl_source: 'main' }
+    expect(Object.keys(sharedDraftErrors({ ...same, gl_target: '' }, true))).toEqual(['gl_target'])
+    expect(Object.keys(sharedDraftErrors({ ...same, gl_target: 'main' }, true))).toEqual([
+      'gl_target'
+    ])
+    expect(Object.keys(sharedDraftErrors({ ...same, gl_target: 'x.lock' }, true))).toEqual([
+      'gl_target'
+    ])
+    expect(draft.gl_source).toBe('')
   })
 
   it('has plain words for the codes a GitLab plan, run and save stop with', () => {
@@ -109,11 +121,23 @@ describe('a GitLab-run shared deployment', () => {
       'PIN_CHANGED',
       'ALREADY_RUNS',
       'ROLLBACK_NOT_RECORDED',
-      'ROLLBACK_NO_BUILD'
+      'ROLLBACK_NO_BUILD',
+      'BRANCH_IN_USE',
+      'BRANCH_BUSY',
+      'PIPELINE_RUNNING',
+      'LINK_UNREACHABLE'
     ])
       expect(UPGRADE_COPY[c]?.title).toBeTruthy()
-    for (const c of ['DEPLOY_FAILED', 'MERGE_REFUSED', 'HEAD_MOVED', 'DRIVER_CHANGED'])
+    for (const c of [
+      'DEPLOY_FAILED',
+      'MERGE_REFUSED',
+      'HEAD_MOVED',
+      'DRIVER_CHANGED',
+      'LINK_UNREACHABLE',
+      'BRANCH_BUSY'
+    ])
       expect(RUN_ERROR_COPY[c]?.title).toBeTruthy()
-    for (const c of ['DRIVER_NOT_GITLAB', 'BAD_GITLAB']) expect(SHARED_COPY[c]?.title).toBeTruthy()
+    for (const c of ['DRIVER_NOT_GITLAB', 'BAD_GITLAB', 'BRANCH_IN_USE'])
+      expect(SHARED_COPY[c]?.title).toBeTruthy()
   })
 })

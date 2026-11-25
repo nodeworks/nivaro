@@ -45,7 +45,7 @@ export interface SharedDeployment {
  */
 export interface SharedGitlab {
   source_branch: string
-  target_branch: string | null
+  target_branch: string
   pin_file: string | null
   before_job: string | null
   deploy_job: string | null
@@ -57,12 +57,19 @@ export function sharedGitlabOf(
 ): SharedGitlab | null {
   if (row.mode !== 'registered' || row.driver_id == null) return null
   const g = row.settings?.gitlab as Partial<SharedGitlab> | null | undefined
-  if (!g || typeof g !== 'object' || typeof g.source_branch !== 'string' || !g.source_branch)
+  if (
+    !g ||
+    typeof g !== 'object' ||
+    typeof g.source_branch !== 'string' ||
+    !g.source_branch ||
+    typeof g.target_branch !== 'string' ||
+    !g.target_branch
+  )
     return null
   const opt = (v: unknown) => (typeof v === 'string' && v ? v : null)
   return {
     source_branch: g.source_branch,
-    target_branch: opt(g.target_branch),
+    target_branch: g.target_branch,
     pin_file: opt(g.pin_file),
     before_job: opt(g.before_job),
     deploy_job: opt(g.deploy_job)
@@ -501,9 +508,13 @@ export const SHARED_COPY: Record<string, { title: string; hint?: string }> = {
     title: 'Pick a GitLab driver',
     hint: 'The Hub upgrades a deployment that runs elsewhere only through a GitLab driver (Drivers tab).'
   },
+  BRANCH_IN_USE: {
+    title: 'Something else already deploys that GitLab branch',
+    hint: 'An environment or another shared deployment deploys it. Give this deployment a deploy branch of its own.'
+  },
   BAD_GITLAB: {
     title: 'The GitLab settings are not complete',
-    hint: 'Name the branch that holds the release commits; the other names are optional (branch and file names without spaces).'
+    hint: 'Name the release branch and a different deploy branch (git branch names); the pin file and jobs are optional.'
   },
   DRIVER_NOT_DOCKER: {
     title: 'Pick a Docker driver',
