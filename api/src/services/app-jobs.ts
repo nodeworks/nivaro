@@ -11,13 +11,15 @@
  */
 import { withTenant } from '../db/tenant-context.js'
 import { appPausedCrons } from './app-job-settings.js'
+import { acquireAppJobSlot, releaseAppJobSlot } from './capacity/enforce.js'
 import { getTenantRegistry } from './tenancy/registry.js'
 import type { TenantRecord } from './tenancy/types.js'
 
 /** Why an app did not run on a fan-out: the app paused the job; another replica claimed this
  *  fire; the app is in maintenance mode; its previous run is still going; this process stopped
  *  leading (or dropped the job) mid fan-out; a catch-up found a recent completed run; its
- *  database is not migrated at this version yet, or failed to (Hub phase 6). */
+ *  database is not migrated at this version yet, or failed to (Hub phase 6); its `jobs` limit
+ *  (Hub capacity) left no slot free in time (services/capacity/enforce.ts). */
 export type AppSkipWhy =
   | 'paused'
   | 'claimed'
@@ -26,6 +28,7 @@ export type AppSkipWhy =
   | 'lease-lost'
   | 'recent'
   | 'not_ready'
+  | 'app_limit'
 
 export interface AppFanOutResult {
   ran: string[]
@@ -88,7 +91,14 @@ export async function forEachApp(
         result.skipped.push({ tenant: t.id, why })
         continue
       }
+      // Hub capacity: the app's `jobs` limit — its turns of every fan-out share its slots.
+      let slot = false
       try {
+        slot = await acquireAppJobSlot(t)
+        if (!slot) {
+          result.skipped.push({ tenant: t.id, why: 'app_limit' })
+          continue
+        }
         // The app's own origin: links its job builds (mail, notices) name the app (phase 6).
         const out = await withTenant(t, () => work(t), t.origin)
         if (out === 'ran') result.ran.push(t.id)
@@ -96,6 +106,7 @@ export async function forEachApp(
       } catch (err) {
         result.failed.push({ tenant: t.id, error: errorText(err) })
       } finally {
+        if (slot) releaseAppJobSlot(t.id)
         opts.release?.(t)
       }
     }

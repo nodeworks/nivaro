@@ -61,6 +61,8 @@ import { registerAgentPresence } from './services/agent-presence.js'
 import type { BootPhaseRunner } from './services/app-boot-passes.js'
 import { installAppInject } from './services/app-inject-host.js'
 import { bootPhase } from './services/boot-phases.js'
+import { registerAppUsage } from './services/capacity/app-usage.js'
+import { appRateLimitHook } from './services/capacity/enforce.js'
 import { CRON_DESCRIPTIONS } from './services/cron-descriptions.js'
 import { registerMissedCronProbe } from './services/cron-misses.js'
 import {
@@ -281,6 +283,10 @@ export async function buildServer() {
     await startHubTenantSource({ redis: app.redis ?? null })
     app.addHook('preClose', async () => stopHubTenantSource())
   }
+  // Hub capacity (services/capacity/*): per-app limits after the tenant hook (shared only), and
+  // per-app request counts + process figures for the Hub's capacity view (shared or hub-linked).
+  if (tenantSource() === 'hub') app.addHook('onRequest', appRateLimitHook)
+  if (tenantSource() === 'hub' || (hubLinkToken() && tenantSource() === null)) registerAppUsage(app)
 
   // ─── Rate limiting + API analytics logging ────────────────────────────────
   // Tracing goes first so its onRequest hook opens the phase context before

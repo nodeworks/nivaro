@@ -414,6 +414,8 @@ const NVR_ALLOW: Record<string, string> = {
   'services/hub/promote-lock.ts :: nvr:hub:promote-cancel:': HUB,
   'services/hub/promote-lock.ts :: nvr:hub:shared:': HUB,
   'services/hub/status.ts :: nvr:hub:status:': HUB,
+  'services/capacity/app-usage.ts :: nvr:hubcap:':
+    'capacity snapshots of the whole deployment (per-app counts, timings, pool figures; no records), one key per process; the Hub reads them over its own link',
   'services/hub-signin/link-client.ts :: nvr:hub-signin-push:': OFF,
   'services/hub-signin/link-client.ts :: nvr:hub-switcher:': OFF,
   'services/outside-write-watch.ts :: nvr:rt:outside:': OFF,

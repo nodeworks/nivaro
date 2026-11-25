@@ -655,6 +655,12 @@ const SHARED: Record<string, string> = {
   'services/hub/shared/place.ts :: running': HUB_ONLY,
   'services/hub/shared/sightings.ts :: memory': HUB_ONLY,
   'services/hub/shared/tenants.ts :: warned': HUB_ONLY,
+  'services/hub/capacity/advisor.ts :: blockerCache': HUB_ONLY,
+  'services/capacity/app-usage.ts :: cpu': PROC,
+  'services/capacity/app-usage.ts :: redisOverride': FN_SLOT,
+  'services/capacity/app-usage.ts :: timer': TIMER,
+  'services/capacity/enforce.ts :: redisOverride': FN_SLOT,
+  'services/capacity/enforce.ts :: JOB_SLOT_WAIT_MS': FN_SLOT,
   'services/huddle-marks.ts :: markSeq': GEN,
   'services/huddle.ts :: staleEvictor': FN_SLOT,
   'services/import-processors.ts :: processors': REGISTRY,
@@ -1149,6 +1155,12 @@ const SHARED: Record<string, string> = {
 
 /** Keyed per app in a way the scan cannot follow (the key comes from a caller or a helper). */
 const KEYED: Record<string, string> = {
+  'services/capacity/app-usage.ts :: storage':
+    'keyed by the tenant id (t.id, read inside withTenant) — "" on a dedicated app',
+  'services/capacity/enforce.ts :: localCounts':
+    'key = `<tenant id>|<minute>`, tenant id = getTenantId() of the request',
+  'services/capacity/enforce.ts :: gates': 'keyed by the tenant id of the fan-out turn (t.id)',
+  'services/capacity/enforce.ts :: stored': 'keyed by the tenant id = getTenantId() of the upload',
   'services/cache-warm.ts :: usageMemo':
     'key = usageMemoKey() = `${currentTenantKey()}|<slice>`; handed to pruneUsageMemo, which only drops expired entries',
   'services/cache-warm.ts :: queueUsageMemo':

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { open } from 'node:fs/promises'
+import { open, stat } from 'node:fs/promises'
 import { extname, join } from 'node:path'
 import type { MultipartFile } from '@fastify/multipart'
 import mime from 'mime-types'
@@ -10,6 +10,7 @@ import { db } from '../db/index.js'
 import { concat } from '../db/sql-dialect.js'
 import { getTenantId, getTenantSlug } from '../db/tenant-context.js'
 import type { CMSFile, User } from '../types.js'
+import { assertAppStorageRoom } from './capacity/enforce.js'
 import { tenantSource } from './deployment-mode.js'
 import { normalizeStoredType } from './file-serving-safety.js'
 import { PRIVATE_TAG } from './private-files.js'
@@ -88,6 +89,8 @@ export async function uploadFileBuffer(
   // One bare media type, never a list or header text (H1 follow-up).
   // A generic claim (text/plain, octet-stream) never beats a binary name or bytes (army 11).
   const mimeType = normalizeStoredType(claimedType, () => mime.lookup(filename), buffer)
+  // Hub capacity: an app on a shared deployment stays inside its storage limit (413).
+  await assertAppStorageRoom(buffer.length)
   const fileId = randomUUID()
   const diskId = ulid().toLowerCase()
   const ext = extname(filename) || (mime.extension(mimeType) ? `.${mime.extension(mimeType)}` : '')
@@ -157,6 +160,8 @@ export async function uploadFileFromPath(
   opts: { private?: boolean; signal?: AbortSignal } = {}
 ): Promise<StoredFile> {
   opts.signal?.throwIfAborted()
+  // Hub capacity: an app on a shared deployment stays inside its storage limit (413).
+  await assertAppStorageRoom((await stat(path).catch(() => null))?.size ?? 0)
   // One bare media type, never a list or header text (H1 follow-up).
   const mimeType = normalizeStoredType(
     claimedType,
