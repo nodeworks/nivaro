@@ -52,7 +52,7 @@ import type {
   PromotionPlan,
   PromotionStep
 } from './promote-types.js'
-import { freezeRefusal } from './releases/freeze.js'
+import { freezeRefusal, rollbackExempt } from './releases/freeze.js'
 import { HubSecretError } from './secrets.js'
 import { hubStatusKey } from './status.js'
 
@@ -1109,7 +1109,8 @@ export async function startPromotion(
   // deployComponentAt, never this.
   const open = await moveOpenRefusal({ envIds: [envId] })
   if (open) throw new PromotionError(open.code, open.message, open.status)
-  // Release operations: a freeze window stops promotions and Apply now, never a rollback.
+  // Release operations: a freeze window stops promotions and Apply now. A rollback is judged
+  // after gather (only one to an OLDER version than the running one is exempt).
   if (req.kind !== 'rollback') {
     const frozen = await freezeRefusal({
       appIds: [Number(env.app_id)],
@@ -1169,6 +1170,10 @@ export async function startPromotion(
       lockHeld: true,
       ...(apply ? { apply: true } : {})
     })
+    if (req.kind === 'rollback' && !rollbackExempt(req.version, input.targetVersion)) {
+      const frozen = await freezeRefusal({ appIds: [Number(env.app_id)], action: 'promote' })
+      if (frozen) throw new PromotionError(frozen.code, frozen.message, frozen.status)
+    }
     const plan = buildPromotionPlan(input)
     if (!plan.ok)
       throw new PromotionError(plan.blockers[0].code, plan.blockers[0].text, 409, plan.blockers)

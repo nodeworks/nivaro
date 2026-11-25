@@ -143,6 +143,13 @@ function trainDeps(over: Partial<Parameters<typeof trains.advanceTrain>[1]> = {}
     notify: vi.fn(async (_a: number, n: { subject: string }) => {
       notes.push(n.subject)
     }),
+    notifyAll: vi.fn(async (_a: number, n: { subject: string }) => {
+      notes.push(n.subject)
+    }),
+    watch: vi.fn(async () => 'none'),
+    liveVersion: vi.fn(async () => '0.3.215'),
+    person: vi.fn(async () => ({ ok: true, name: 'Rob' })),
+    logStart: vi.fn(async () => 1),
     ...over
   }
   return {
@@ -296,9 +303,95 @@ describe('release trains', () => {
     const { deps, raw } = trainDeps({ startedSince: async () => id })
     let cur = await trains.advanceTrain(t.id, deps)
     expect(cur?.steps[0].status).toBe('starting') // not stale yet
-    clock += 4 * MIN
+    clock += 11 * MIN
     cur = await trains.advanceTrain(t.id, deps)
     expect(cur?.steps[0]).toMatchObject({ status: 'promoting', deploy_id: id })
+    expect(raw.start).not.toHaveBeenCalled()
+  })
+
+  it('a step passes only once its rollback watch ended clean; a rollback fails it', async () => {
+    const t = await newTrain([
+      { environment_id: env.staging, soak_minutes: 0 },
+      { environment_id: env.production, soak_minutes: 0 }
+    ])
+    const { deps, raw } = trainDeps()
+    raw.watch.mockResolvedValue('watching')
+    let cur = await trains.advanceTrain(t.id, deps)
+    await finish(cur?.steps[0].deploy_id ?? null)
+    cur = await trains.advanceTrain(t.id, deps)
+    expect(cur?.steps[0].status).toBe('soaking')
+    expect(cur?.steps[0].note).toBe('Waiting for the automatic rollback watch to end')
+    expect(raw.start).toHaveBeenCalledTimes(1)
+    raw.watch.mockResolvedValue('rolled_back')
+    cur = await trains.advanceTrain(t.id, deps)
+    expect(cur?.status).toBe('failed')
+    expect(cur?.steps[0].note).toBe('staging was rolled back automatically')
+    expect(raw.start).toHaveBeenCalledTimes(1)
+  })
+
+  it('reads the real watch state: a rule with no watch row yet still holds the step', async () => {
+    const id = await deployRow({
+      envId: env.staging,
+      version: '0.3.215',
+      from: '0.3.214',
+      status: 'success',
+      finishedAt: clock - MIN
+    })
+    await rollback.saveRule(
+      env.staging,
+      {
+        enabled: true,
+        window_minutes: 30,
+        max_error_pct: 5,
+        min_requests: 10,
+        max_crashes: null,
+        min_readiness: null
+      },
+      USER
+    )
+    await db('nivaro_hub_rollback_rules').update({ updated_at: new Date(clock - 10 * MIN) })
+    expect(await trains.watchStateOf(env.staging, id, clock)).toBe('pending')
+    expect(await trains.watchStateOf(env.staging, id, clock + 40 * MIN)).toBe('none')
+    await rollback.openWatches({ now: () => clock })
+    expect(await trains.watchStateOf(env.staging, id, clock)).toBe('watching')
+  })
+
+  it('before each next step, an earlier environment must still run the version', async () => {
+    const t = await newTrain([
+      { environment_id: env.staging, soak_minutes: 0 },
+      { environment_id: env.production, soak_minutes: 0 }
+    ])
+    const { deps, notes, raw } = trainDeps()
+    let cur = await trains.advanceTrain(t.id, deps)
+    await finish(cur?.steps[0].deploy_id ?? null)
+    raw.liveVersion.mockResolvedValue('0.3.214')
+    cur = await trains.advanceTrain(t.id, deps)
+    expect(cur?.step_index).toBe(1)
+    expect(cur?.steps[1]).toMatchObject({ status: 'held', blocked: true })
+    expect(cur?.steps[1].note).toMatch(/staging runs 0\.3\.214 now/)
+    expect(notes[0]).toMatch(/held: staging no longer runs it/)
+    expect(raw.start).toHaveBeenCalledTimes(1)
+    // A person decides to go on anyway: Skip starts it without the check.
+    await trains.skipStep(t.id, 1, 'Rob', clock)
+    cur = await trains.advanceTrain(t.id, deps)
+    expect(cur?.steps[1].status).toBe('promoting')
+    expect(raw.start).toHaveBeenCalledTimes(2)
+    expect(raw.logStart).toHaveBeenCalledWith(
+      expect.any(Number),
+      expect.stringMatching(/step 2 \(production\)/),
+      USER
+    )
+  })
+
+  it('a train whose person can no longer act holds before its next start and tells admins', async () => {
+    const t = await newTrain([{ environment_id: env.staging }])
+    const { deps, notes, raw } = trainDeps()
+    raw.person.mockResolvedValue({ ok: false, why: 'Rob is no longer active' })
+    const cur = await trains.advanceTrain(t.id, deps)
+    expect(cur?.steps[0]).toMatchObject({ status: 'held', blocked: true })
+    expect(cur?.steps[0].note).toMatch(/Rob is no longer active/)
+    expect(raw.notifyAll).toHaveBeenCalled()
+    expect(notes[0]).toMatch(/needs a person/)
     expect(raw.start).not.toHaveBeenCalled()
   })
 
@@ -317,6 +410,11 @@ function scheduleDeps(over: Record<string, unknown> = {}) {
     startPromotion: vi.fn(async () => ({ deployId: 77 })),
     startTrain: vi.fn(async () => ({ trainId: 5 })),
     notify: vi.fn(async () => 1),
+    notifyAll: vi.fn(async () => 1),
+    person: vi.fn(async () => ({ ok: true, name: 'Rob' })),
+    startedSince: vi.fn(async () => null),
+    trainOf: vi.fn(async () => null),
+    logStart: vi.fn(async () => 1),
     ...over
   }
   return deps as typeof deps & Parameters<typeof schedules.runDueSchedules>[0]
@@ -340,7 +438,7 @@ const FROZEN = {
   status: 409,
   code: 'FROZEN',
   message: 'Promotions are frozen for this app',
-  freeze: { id: 1, name: 'x', app_id: 1, ends_at: 'later' }
+  freeze: { id: 1, name: 'x', app_id: 1, ends_at: new Date(clock + 60 * MIN).toISOString() }
 }
 
 describe('scheduled promotions', () => {
@@ -411,6 +509,67 @@ describe('scheduled promotions', () => {
     const deps = scheduleDeps()
     await schedules.runDueSchedules(deps)
     expect(await schedules.readSchedule(s.id)).toMatchObject({ status: 'started', train_id: 5 })
+    expect(deps.logStart).toHaveBeenCalledWith(expect.objectContaining({ id: s.id }), {
+      trainId: 5
+    })
+  })
+
+  it('a re-claimed schedule adopts what an earlier claim started, never a second start', async () => {
+    const s = await schedule()
+    await db('nivaro_hub_schedules')
+      .where({ id: s.id })
+      .update({
+        status: 'starting',
+        started_at: new Date(clock - 20 * MIN),
+        claimed_at: new Date(clock - 20 * MIN)
+      })
+    const deps = scheduleDeps({ startedSince: vi.fn(async () => 88) })
+    await schedules.runDueSchedules(deps)
+    expect(await schedules.readSchedule(s.id)).toMatchObject({ status: 'started', deploy_id: 88 })
+    expect(deps.startPromotion).not.toHaveBeenCalled()
+
+    const tr = await schedule({
+      kind: 'train',
+      environment_id: null,
+      train: { version: '0.3.215', steps: [], keys: [] }
+    })
+    await db('nivaro_hub_schedules')
+      .where({ id: tr.id })
+      .update({ status: 'waiting', started_at: new Date(clock - 20 * MIN) })
+    const deps2 = scheduleDeps({ trainOf: vi.fn(async () => 9) })
+    await schedules.runDueSchedules(deps2)
+    expect(await schedules.readSchedule(tr.id)).toMatchObject({ status: 'started', train_id: 9 })
+    expect(deps2.startTrain).not.toHaveBeenCalled()
+  })
+
+  it('freeze waits use up no tries; long after the freeze ended the schedule is missed', async () => {
+    const s = await schedule()
+    const ended = new Date(clock + 30 * MIN).toISOString()
+    const deps = scheduleDeps({
+      freeze: vi.fn(async () => ({ ...FROZEN, freeze: { ...FROZEN.freeze, ends_at: ended } }))
+    })
+    await schedules.runDueSchedules(deps)
+    await schedules.runDueSchedules(deps)
+    expect(await schedules.readSchedule(s.id)).toMatchObject({ status: 'waiting', attempts: 0 })
+    // The Hub comes back 7 hours after the freeze ended: missed, not deployed.
+    clock += 30 * MIN + 7 * 60 * MIN
+    const late = scheduleDeps()
+    await schedules.runDueSchedules(late)
+    expect(await schedules.readSchedule(s.id)).toMatchObject({ status: 'failed' })
+    expect((await schedules.readSchedule(s.id))?.error).toMatch(/^MISSED/)
+    expect(late.startPromotion).not.toHaveBeenCalled()
+  })
+
+  it('a schedule whose person can no longer act fails and tells owners and admins', async () => {
+    const s = await schedule()
+    const deps = scheduleDeps({
+      person: vi.fn(async () => ({ ok: false, why: 'Rob is no longer active' }))
+    })
+    await schedules.runDueSchedules(deps)
+    expect(await schedules.readSchedule(s.id)).toMatchObject({ status: 'failed' })
+    expect((await schedules.readSchedule(s.id))?.error).toMatch(/^PERSON_GONE/)
+    expect(deps.notifyAll).toHaveBeenCalled()
+    expect(deps.startPromotion).not.toHaveBeenCalled()
   })
 })
 
@@ -440,6 +599,43 @@ describe('automatic rollback', () => {
       },
       USER
     )
+    // Saved well before the promotions below (a rule never reaches back past its own save).
+    await db('nivaro_hub_rollback_rules').update({ updated_at: new Date(clock - 120 * MIN) })
+  })
+
+  it('a rule saved after a promotion never watches it', async () => {
+    await deployRow({
+      envId: env.production,
+      version: '0.3.215',
+      from: '0.3.214',
+      status: 'success',
+      finishedAt: clock - 5 * MIN
+    })
+    await db('nivaro_hub_rollback_rules').update({ updated_at: new Date(clock - MIN) })
+    expect(await rollback.openWatches({ now: () => clock })).toBe(0)
+  })
+
+  it('never rolls back a version deployed outside the Hub: the watch ends superseded', async () => {
+    await deployRow({
+      envId: env.production,
+      version: '0.3.215',
+      from: '0.3.214',
+      status: 'success',
+      finishedAt: clock - 5 * MIN
+    })
+    await rollback.openWatches({ now: () => clock })
+    const deps = watchDeps({
+      figures: vi.fn(async () => ({
+        ...figures(95, { requests: 400, errors_5xx: 200 }),
+        version: '0.3.216'
+      }))
+    })
+    expect(await rollback.judgeWatches(deps)).toBe(0)
+    expect(deps.rollback).not.toHaveBeenCalled()
+    const [w] = await rollback.listWatches({ envId: env.production })
+    expect(w.status).toBe('superseded')
+    expect(w.reason).toMatch(/runs 0\.3\.216 now/)
+    expect(deps.notify).toHaveBeenCalled()
   })
 
   it('opens one watch per successful promotion inside the window, never for Apply now', async () => {

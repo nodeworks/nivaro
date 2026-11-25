@@ -138,8 +138,9 @@ const ACTION_WORDS: Record<FrozenAction, string> = {
 }
 
 export interface FreezeRefusal {
-  status: 409
-  code: 'FROZEN'
+  status: 409 | 503
+  /** FREEZE_UNKNOWN: the windows could not be read (fails closed; a runner tries again). */
+  code: 'FROZEN' | 'FREEZE_UNKNOWN'
   message: string
   freeze: { id: number; name: string; app_id: number | null; ends_at: string }
 }
@@ -155,7 +156,8 @@ export function refusalFor(
   return {
     status: 409,
     code: 'FROZEN',
-    message: `${ACTION_WORDS[action]} are frozen ${scope} until ${ends} (${active.freeze.name}). A rollback is still allowed.`,
+    // A readable UTC time in the sentence (stored notes keep it); ends_at carries the instant.
+    message: `${ACTION_WORDS[action]} are frozen ${scope} until ${ends.slice(0, 16).replace('T', ' ')} UTC (${active.freeze.name}). A rollback to an older version is still allowed.`,
     freeze: {
       id: active.freeze.id,
       name: active.freeze.name,
@@ -172,9 +174,29 @@ export async function listFreezes(): Promise<HubFreeze[]> {
   return rows.map(freezeFromRow)
 }
 
+/** The refusal when the windows cannot be read: closed, never "no freeze". */
+export function freezeUnknown(): FreezeRefusal {
+  return {
+    status: 503,
+    code: 'FREEZE_UNKNOWN',
+    message: 'The Hub could not read its freeze windows — try again shortly',
+    freeze: { id: 0, name: '', app_id: null, ends_at: new Date().toISOString() }
+  }
+}
+
+/** A read failure that means "no freeze table" (an install behind migration 565). */
+async function tableMissing(): Promise<boolean> {
+  try {
+    return !(await db.schema.hasTable(FREEZES))
+  } catch {
+    return false
+  }
+}
+
 /**
- * Whether a freeze stops `action` for any of these apps now. A table that cannot be read (an
- * install behind migration 565) freezes nothing — the freeze is a guard rail, not a lock.
+ * Whether a freeze stops `action` for any of these apps now. Fails CLOSED: windows that cannot
+ * be read answer FREEZE_UNKNOWN (503; runners treat it as passing) — except on an install with
+ * no freeze table at all (behind migration 565), which has no windows to honour.
  */
 export async function freezeRefusal(o: {
   appIds: number[]
@@ -187,7 +209,7 @@ export async function freezeRefusal(o: {
     try {
       rows = await listFreezes()
     } catch {
-      return null
+      return (await tableMissing()) ? null : freezeUnknown()
     }
   }
   const now = o.now ?? Date.now()
@@ -197,6 +219,22 @@ export async function freezeRefusal(o: {
     if (r) return r
   }
   return null
+}
+
+/**
+ * A rollback is exempt from a freeze only when it goes back to an OLDER version than the one
+ * running (the last known good). A "rollback" to the running version or a newer one deploys
+ * something new, so it is judged as a promotion. An unknown running version is not exempt.
+ */
+export function rollbackExempt(target: string, running: string | null | undefined): boolean {
+  if (!running) return false
+  const p = (v: string) => v.split('.').map((x) => Number.parseInt(x, 10) || 0)
+  const [a, b] = [p(target), p(running)]
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const d = (a[i] ?? 0) - (b[i] ?? 0)
+    if (d !== 0) return d < 0
+  }
+  return false
 }
 
 /** The app an environment belongs to (null = no such environment). */
@@ -216,27 +254,38 @@ export async function appsOnShared(sharedId: number): Promise<number[]> {
   return rows.map((r) => Number(r.app_id))
 }
 
-/** Route helper: the refusal for an environment's app (promote, apply, move). */
+/** Route helper: the refusal for an environment's app (promote, apply, move). Fails closed. */
 export async function environmentFreezeRefusal(
   envId: number,
   action: FrozenAction
 ): Promise<FreezeRefusal | null> {
+  let appId: number | null
   try {
-    const appId = await appOfEnvironment(envId)
-    if (appId == null) return null
-    return await freezeRefusal({ appIds: [appId], action })
+    appId = await appOfEnvironment(envId)
   } catch {
-    return null
+    return freezeUnknown()
   }
+  if (appId == null) return null
+  return freezeRefusal({ appIds: [appId], action })
 }
 
-/** Route helper: the refusal for an upgrade of a shared deployment (any app on it, or Hub-wide). */
-export async function sharedFreezeRefusal(sharedId: number): Promise<FreezeRefusal | null> {
+/**
+ * Route helper: the refusal for a shared deployment's upgrade (any app on it, or Hub-wide). A
+ * rollback to an older version than the deployment runs is exempt; any other target is an
+ * upgrade. Fails closed.
+ */
+export async function sharedFreezeRefusal(
+  sharedId: number,
+  o: { kind?: 'upgrade' | 'rollback'; version?: string; running?: string | null } = {}
+): Promise<FreezeRefusal | null> {
+  if (o.kind === 'rollback' && o.version && rollbackExempt(o.version, o.running)) return null
+  let apps: number[]
   try {
-    return await freezeRefusal({ appIds: await appsOnShared(sharedId), action: 'upgrade' })
+    apps = await appsOnShared(sharedId)
   } catch {
-    return null
+    return freezeUnknown()
   }
+  return freezeRefusal({ appIds: apps, action: 'upgrade' })
 }
 
 export interface FreezeInput {

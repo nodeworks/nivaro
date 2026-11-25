@@ -1,7 +1,7 @@
 import { db } from '../../../db/index.js'
 import { logActivity } from '../../activity.js'
 import { type EnvFigures, readEnvFiguresById } from './figures.js'
-import { notifyAppPeople } from './notify.js'
+import { notifyAutoRollback } from './notify.js'
 import {
   isTransientCode,
   type PlannedStart,
@@ -37,6 +37,8 @@ const DEPLOYS = 'nivaro_hub_deploys'
 
 export interface RollbackRule {
   environment_id: number
+  /** When the rule was last saved: only promotions that finished after it are watched. */
+  updated_at?: string | null
   enabled: boolean
   window_minutes: number
   max_error_pct: number | null
@@ -56,7 +58,8 @@ export function ruleFromRow(r: Record<string, unknown>): RollbackRule {
     max_error_pct: n(r.max_error_pct),
     min_requests: n(r.min_requests) ?? 50,
     max_crashes: n(r.max_crashes),
-    min_readiness: n(r.min_readiness)
+    min_readiness: n(r.min_readiness),
+    updated_at: r.updated_at == null ? null : new Date(r.updated_at as string | Date).toISOString()
   }
 }
 
@@ -75,8 +78,10 @@ export function validateRule(
   if (!Number.isInteger(minReq) || minReq < 1 || minReq > 1_000_000)
     return { error: 'min_requests is 1 to 1000000' }
   const crashes = b.max_crashes == null || b.max_crashes === '' ? null : Number(b.max_crashes)
-  if (crashes != null && (!Number.isInteger(crashes) || crashes < 1 || crashes > 100_000))
-    return { error: 'max_crashes is 1 to 100000' }
+  // One crash signature keeps its last 50 occurrences (error-tracking), so a higher limit
+  // could never be reached by a single bad crash.
+  if (crashes != null && (!Number.isInteger(crashes) || crashes < 1 || crashes > 50))
+    return { error: 'max_crashes is 1 to 50' }
   const ready = b.min_readiness == null || b.min_readiness === '' ? null : Number(b.min_readiness)
   if (ready != null && (!Number.isInteger(ready) || ready < 1 || ready > 100))
     return { error: 'min_readiness is 1 to 100' }
@@ -230,7 +235,7 @@ export function defaultWatchDeps(): WatchDeps {
     now: () => Date.now(),
     figures: (envId, minutes) => readEnvFiguresById(envId, { recentMinutes: minutes }),
     rollback: (envId, o) => startPlannedPromotion(envId, o),
-    notify: (appId, note) => notifyAppPeople(appId, note),
+    notify: (appId, note) => notifyAutoRollback(appId, note),
     envKey: async (envId) => {
       const r = (await db('nivaro_hub_environments').where({ id: envId }).first('key')) as
         | { key: string }
@@ -249,7 +254,9 @@ export async function openWatches(
   )
   let opened = 0
   for (const rule of rules) {
-    const since = new Date(deps.now() - rule.window_minutes * 60_000)
+    // A rule saved now never reaches back to promotions someone already checked.
+    const savedAt = rule.updated_at ? Date.parse(rule.updated_at) : 0
+    const since = new Date(Math.max(deps.now() - rule.window_minutes * 60_000, savedAt))
     const rows = (await db(`${DEPLOYS} as d`)
       .leftJoin(`${WATCHES} as w`, 'w.deploy_id', 'd.id')
       .where('d.environment_id', rule.environment_id)
@@ -303,8 +310,14 @@ async function closeWatch(id: number, patch: Record<string, unknown>): Promise<b
 /** A `rolling` claim older than this was left by a tick that stopped: settled from the rows. */
 export const ROLLING_STALE_MS = 5 * 60_000
 
-/** Settles claims a stopped tick left: rolled_back when a rollback run exists, else failed. */
-export async function healRolling(now: number): Promise<number> {
+/**
+ * Settles claims a stopped tick left: rolled_back when a rollback run exists, else failed — and
+ * says so like the normal path (activity + owners).
+ */
+export async function healRolling(
+  now: number,
+  deps: Pick<WatchDeps, 'notify' | 'envKey'> = defaultWatchDeps()
+): Promise<number> {
   const stale = (
     (await db(WATCHES)
       .where({ status: 'rolling' })
@@ -319,7 +332,7 @@ export async function healRolling(now: number): Promise<number> {
       .where('id', '>', w.deploy_id)
       .orderBy('id', 'asc')
       .first('id')) as { id: number } | undefined
-    n += await db(WATCHES)
+    const changed = await db(WATCHES)
       .where({ id: w.id, status: 'rolling' })
       .update(
         run
@@ -334,13 +347,39 @@ export async function healRolling(now: number): Promise<number> {
               finished_at: new Date(now)
             }
       )
+    if (!changed) continue
+    n += changed
+    const key = await deps.envKey(w.environment_id).catch(() => `#${w.environment_id}`)
+    if (run) {
+      await logActivity({
+        action: 'hub-auto-rollback',
+        user: null,
+        collection: DEPLOYS,
+        item: String(run.id),
+        comment: `${key}: ${w.version} → ${w.from_version} (settled after a restart)`.slice(
+          0,
+          1000
+        ),
+        origin: 'machine'
+      })
+      await deps.notify(w.app_id, {
+        subject: `${key} rolled back to ${w.from_version}`,
+        message: `The Hub rolled ${key} back from ${w.version} to ${w.from_version} on its own (its figures crossed the rollback rule).`,
+        urgent: true
+      })
+    } else
+      await deps.notify(w.app_id, {
+        subject: `${key}: automatic rollback did not finish starting`,
+        message: `${key} crossed its rollback rule after ${w.version}, but the Hub stopped while starting the rollback to ${w.from_version}. Check ${key} and roll back by hand if needed.`,
+        urgent: true
+      })
   }
   return n
 }
 
 /** One pass over the open watches. Answers how many rolled back. */
 export async function judgeWatches(deps: WatchDeps = defaultWatchDeps()): Promise<number> {
-  await healRolling(deps.now())
+  await healRolling(deps.now(), deps)
   const open = (
     (await db(WATCHES).where({ status: 'watching' }).orderBy('id', 'asc')) as Array<
       Record<string, unknown>
@@ -370,6 +409,24 @@ export async function judgeWatches(deps: WatchDeps = defaultWatchDeps()): Promis
     const until = w.until_at ? Date.parse(w.until_at) : now
     const minutes = Math.max(1, Math.ceil((Math.min(now, until) - deployedAt) / 60_000))
     const figures = await deps.figures(w.environment_id, minutes)
+    // The figures belong to whatever runs now: a version deployed outside the Hub (a CI chain)
+    // is not this promotion — the watch ends without ever rolling that one back.
+    if (figures.linked && figures.version && figures.version !== w.version) {
+      const key = await deps.envKey(w.environment_id)
+      if (
+        await closeWatch(w.id, {
+          status: 'superseded',
+          figures: JSON.stringify(figures),
+          last_check_at: new Date(now),
+          reason: `${key} runs ${figures.version} now, not ${w.version}: not rolled back`
+        })
+      )
+        await deps.notify(w.app_id, {
+          subject: `${key}: rollback watch of ${w.version} ended`,
+          message: `${key} runs ${figures.version} now (deployed outside this promotion), so the Hub stopped watching ${w.version} and will not roll it back on its own.`
+        })
+      continue
+    }
     const verdict = figures.linked ? judgeFigures(rule, figures) : { breach: false, reason: null }
     if (!verdict.breach) {
       if (now >= until) {

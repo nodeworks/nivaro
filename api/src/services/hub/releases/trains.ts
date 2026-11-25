@@ -1,9 +1,11 @@
 import { db } from '../../../db/index.js'
+import { logActivity } from '../../activity.js'
 import { readHubDeploy } from '../promote-run.js'
 import type { EnvFigures } from './figures.js'
 import { readEnvFiguresById } from './figures.js'
 import { type FreezeRefusal, freezeRefusal } from './freeze.js'
-import { notifyAppPeople } from './notify.js'
+import { notifyAppPeople, notifyAppPeopleAndAdmins } from './notify.js'
+import { type PersonCheck, personCanAct } from './person.js'
 import {
   isTransientCode,
   type PlannedStart,
@@ -39,7 +41,9 @@ import {
 export const TRAINS = 'nivaro_hub_trains'
 export const MAX_STEPS = 10
 export const MAX_ATTEMPTS = 60
-export const STARTING_STALE_MS = 3 * 60_000
+/** Above the worst case of one start (two gathers with GitLab timeouts), so a live start is never
+ *  mistaken for a stopped one. */
+export const STARTING_STALE_MS = 10 * 60_000
 const VERSION_RE = /^\d+\.\d+\.\d+$/
 
 export type TrainStatus = 'running' | 'done' | 'failed' | 'aborted'
@@ -69,6 +73,13 @@ export interface TrainStep {
   note: string | null
   readiness: number | null
   attempts: number
+  /**
+   * The step is held BEFORE its promotion (an earlier environment no longer runs the version,
+   * or the person behind the train can no longer act): Skip lets it start without that check.
+   */
+  blocked?: boolean
+  /** Set by a person's Skip of a blocked step: start once without the pre-start checks. */
+  override?: boolean
 }
 
 export interface Train {
@@ -282,6 +293,65 @@ export interface TrainDeps {
     note: { subject: string; message: string; urgent?: boolean },
     also: Array<string | null>
   ): Promise<unknown>
+  /** The automatic rollback watch of a deploy: 'pending' = a rule applies, no watch row yet. */
+  watch(envId: number, deployId: number): Promise<WatchState>
+  /** What the environment answers it runs now (a fresh status read); null = cannot tell. */
+  liveVersion(envId: number): Promise<string | null>
+  /** Whether the train's person may still start promotions. */
+  person(userId: string | null): Promise<PersonCheck>
+  /** Tells owners AND every administrator (a run nobody can vouch for any more). */
+  notifyAll(
+    appId: number,
+    note: { subject: string; message: string; urgent?: boolean }
+  ): Promise<unknown>
+  /** Activity row for a promotion the train started. */
+  logStart(deployId: number, comment: string, userId: string | null): Promise<unknown>
+}
+
+export type WatchState =
+  | 'none'
+  | 'pending'
+  | 'watching'
+  | 'rolling'
+  | 'passed'
+  | 'rolled_back'
+  | 'failed'
+  | 'superseded'
+
+/** The watch state of a deploy from the rule and watch rows (the default deps read it). */
+export async function watchStateOf(
+  envId: number,
+  deployId: number,
+  now = Date.now()
+): Promise<WatchState> {
+  const w = (await db('nivaro_hub_rollback_watches')
+    .where({ deploy_id: deployId })
+    .first('status')) as { status: string } | undefined
+  if (w) return w.status as WatchState
+  const rule = (await db('nivaro_hub_rollback_rules')
+    .where({ environment_id: envId, enabled: true })
+    .first('window_minutes', 'updated_at')) as
+    | { window_minutes: number; updated_at: unknown }
+    | undefined
+  if (!rule) return 'none'
+  const d = (await db('nivaro_hub_deploys')
+    .where({ id: deployId })
+    .first('finished_at', 'kind', 'status', 'from_version', 'version')) as
+    | {
+        finished_at: unknown
+        kind: string
+        status: string
+        from_version: unknown
+        version: unknown
+      }
+    | undefined
+  if (!d || d.kind !== 'promote' || d.status !== 'success' || !d.finished_at) return 'none'
+  if (d.from_version == null || d.from_version === d.version) return 'none'
+  const fin = new Date(d.finished_at as string).getTime()
+  const since = rule.updated_at ? new Date(rule.updated_at as string).getTime() : 0
+  // The watch opens on the next minute tick for a deploy inside the window after the rule.
+  if (fin < since || now - fin > Number(rule.window_minutes) * 60_000) return 'none'
+  return 'pending'
 }
 
 export function defaultTrainDeps(): TrainDeps {
@@ -316,7 +386,37 @@ export function defaultTrainDeps(): TrainDeps {
         .first('id')) as { id: number } | undefined
       return r ? Number(r.id) : null
     },
-    notify: (appId, note, also) => notifyAppPeople(appId, note, also)
+    notify: (appId, note, also) => notifyAppPeople(appId, note, also),
+    watch: (envId, deployId) => watchStateOf(envId, deployId),
+    liveVersion: async (envId) => {
+      const row = (await db('nivaro_hub_environments').where({ id: envId }).first()) as
+        | Record<string, unknown>
+        | undefined
+      if (!row) return null
+      const { readEnvironmentStatus } = await import('../status.js')
+      const st = await readEnvironmentStatus(
+        {
+          id: envId,
+          key: String(row.key),
+          base_url: String(row.base_url),
+          hub_token: (row.hub_token as string | null) ?? null,
+          placement_id: row.placement_id == null ? null : Number(row.placement_id)
+        },
+        { fresh: true }
+      )
+      return st.version
+    },
+    person: (userId) => personCanAct(userId),
+    notifyAll: (appId, note) => notifyAppPeopleAndAdmins(appId, note),
+    logStart: (deployId, comment, userId) =>
+      logActivity({
+        action: 'hub-promote-start',
+        user: userId,
+        collection: 'nivaro_hub_deploys',
+        item: String(deployId),
+        comment,
+        origin: 'machine'
+      })
   }
 }
 
@@ -408,13 +508,55 @@ async function stepOnce(t: Train, deps: TrainDeps): Promise<Step> {
         if (s.note !== note) await mutateTrain(t.id, stepPatch(idx, 'pending', { note }))
         return 'wait'
       }
+      if (!s.override) {
+        const block = async (why: string, subject: string): Promise<Step> => {
+          const held = await mutateTrain(
+            t.id,
+            stepPatch(idx, 'pending', {
+              status: 'held',
+              blocked: true,
+              note: `Held before ${s.key}: ${why} — skip to start it anyway, or abort the train`
+            })
+          )
+          if (held)
+            await deps.notifyAll(t.app_id, {
+              subject,
+              message: `The release train of ${t.version} is held before ${s.key}: ${why}.`,
+              urgent: true
+            })
+          return 'wait'
+        }
+        const who = await deps.person(t.started_by)
+        if (!who.ok)
+          return block(
+            `${who.why}, so nobody vouches for this train`,
+            `Release train ${t.version} needs a person`
+          )
+        // Every earlier environment the train promoted must still run the version (a rollback,
+        // a deploy outside the Hub or a long freeze wait may have changed it since).
+        for (const e of t.steps.slice(0, idx)) {
+          if (e.status !== 'passed') continue
+          const live = await deps.liveVersion(e.environment_id)
+          if (live == null) {
+            const note = `Waiting: cannot read which version ${e.key} runs`
+            if (s.note !== note) await mutateTrain(t.id, stepPatch(idx, 'pending', { note }))
+            return 'wait'
+          }
+          if (live !== t.version)
+            return block(
+              `${e.key} runs ${live} now, not ${t.version}`,
+              `Release train ${t.version} held: ${e.key} no longer runs it`
+            )
+        }
+      }
       const claimed = await mutateTrain(
         t.id,
         stepPatch(idx, 'pending', {
           status: 'starting',
           started_at: at(now),
           attempts: s.attempts + 1,
-          note: null
+          note: null,
+          override: false
         })
       )
       if (!claimed) return 'again'
@@ -428,6 +570,13 @@ async function stepOnce(t: Train, deps: TrainDeps): Promise<Step> {
           t.id,
           stepPatch(idx, 'starting', { status: 'promoting', deploy_id: out.deployId })
         )
+        await Promise.resolve(
+          deps.logStart(
+            out.deployId,
+            `Release train #${t.id} step ${idx + 1} (${s.key})`,
+            t.started_by
+          )
+        ).catch(() => undefined)
         return 'again'
       } catch (err) {
         const code = refusalCode(err)
@@ -519,27 +668,59 @@ async function stepOnce(t: Train, deps: TrainDeps): Promise<Step> {
         if (s.note !== note) await mutateTrain(t.id, stepPatch(idx, 'soaking', { note }))
         return 'wait'
       }
-      if (s.min_readiness == null) {
-        await mutateTrain(
-          t.id,
-          stepPatch(idx, 'soaking', { status: 'passed', passed_at: at(now), note: null })
-        )
-        return 'again'
-      }
-      const f = await deps.figures(s.environment_id)
-      const score = f.readiness_score
-      if (score != null && score >= s.min_readiness) {
+      /** The hold passed: the deploy's rollback watch must also end clean (or none applies). */
+      const passIfWatched = async (readiness: number | null): Promise<Step> => {
+        const w = s.deploy_id == null ? 'none' : await deps.watch(s.environment_id, s.deploy_id)
+        if (w === 'rolled_back') {
+          await mutateTrain(
+            t.id,
+            stepPatch(idx, 'soaking', {
+              status: 'failed',
+              note: `${s.key} was rolled back automatically`
+            })
+          )
+          return 'again'
+        }
+        if (w === 'pending' || w === 'watching' || w === 'rolling') {
+          const note = 'Waiting for the automatic rollback watch to end'
+          if (s.note !== note) await mutateTrain(t.id, stepPatch(idx, 'soaking', { note }))
+          return 'wait'
+        }
+        if (w === 'failed') {
+          const held = await mutateTrain(
+            t.id,
+            stepPatch(idx, 'soaking', {
+              status: 'held',
+              note: `Held: the automatic rollback watch of ${s.key} ended without a verdict — check ${s.key}, then skip the hold or abort the train`
+            })
+          )
+          if (held)
+            await deps.notify(
+              t.app_id,
+              {
+                subject: `Release train ${t.version} needs a person at ${s.key}`,
+                message: `The automatic rollback watch of ${s.key} ended without a verdict. Check it, then skip the hold or abort the train.`,
+                urgent: true
+              },
+              [t.started_by]
+            )
+          return 'wait'
+        }
         await mutateTrain(
           t.id,
           stepPatch(idx, 'soaking', {
             status: 'passed',
             passed_at: at(now),
-            readiness: score,
+            ...(readiness != null ? { readiness } : {}),
             note: null
           })
         )
         return 'again'
       }
+      if (s.min_readiness == null) return passIfWatched(null)
+      const f = await deps.figures(s.environment_id)
+      const score = f.readiness_score
+      if (score != null && score >= s.min_readiness) return passIfWatched(score)
       const why = !f.linked
         ? `the readiness score cannot be read (${f.error ?? 'no hub link'})`
         : score == null
@@ -642,6 +823,11 @@ export async function skipStep(
     if (st.status === 'pending') {
       st.status = 'skipped'
       st.note = `Skipped by ${userName}`
+    } else if (st.status === 'held' && st.blocked) {
+      st.status = 'pending'
+      st.blocked = false
+      st.override = true
+      st.note = `Check skipped by ${userName}`
     } else if (st.status === 'soaking' || st.status === 'held') {
       st.status = 'passed'
       st.passed_at = at(now)

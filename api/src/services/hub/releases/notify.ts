@@ -47,3 +47,37 @@ export async function notifyAppPeople(
     return 0
   }
 }
+
+/** Active administrators (an unattended run whose person can no longer act tells them). */
+export async function hubAdminIds(): Promise<string[]> {
+  try {
+    const rows = (await db('nivaro_users as u')
+      .join('nivaro_roles as r', 'r.id', 'u.role')
+      .where('r.admin_access', true)
+      .where('u.status', 'active')
+      .limit(50)
+      .select('u.id')) as Array<{ id: string }>
+    return rows.map((r) => String(r.id))
+  } catch {
+    return []
+  }
+}
+
+/** An app's owners plus every active administrator. */
+export async function notifyAppPeopleAndAdmins(
+  appId: number,
+  note: { subject: string; message: string; urgent?: boolean }
+): Promise<number> {
+  return notifyAppPeople(appId, note, await hubAdminIds())
+}
+
+/**
+ * The ONE place an automatic rollback (or a watch that ended without one) is announced — a single
+ * helper so it can be routed through another notifier with a one-line change.
+ */
+export function notifyAutoRollback(
+  appId: number,
+  note: { subject: string; message: string; urgent?: boolean }
+): Promise<number> {
+  return notifyAppPeople(appId, note)
+}

@@ -51,6 +51,11 @@ export async function up(knex: Knex): Promise<void> {
       longText(t, knex, 'train').nullable()
       t.string('status', 16).notNullable().defaultTo('scheduled')
       t.integer('attempts').notNullable().defaultTo(0)
+      // The last time it was held back (a freeze's end, a passing refusal): the 6-hour missed
+      // rule counts from here as well as from run_at.
+      t.dateTime('wait_until').nullable()
+      // When the current claim was taken (a claim older than 5 minutes was left by a stopped tick).
+      t.dateTime('claimed_at').nullable()
       t.string('note', 500).nullable()
       t.integer('deploy_id').nullable()
       t.integer('train_id').nullable()

@@ -5,8 +5,15 @@ import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../../db/index.js', () => ({ db: () => ({}), migrationsDir: '/nowhere' }))
 
-const { activeFreezes, activeWindow, nextWindow, refusalFor, freezeRefusal, validateFreeze } =
-  await import('../../../services/hub/releases/freeze.js')
+const {
+  activeFreezes,
+  activeWindow,
+  nextWindow,
+  refusalFor,
+  freezeRefusal,
+  validateFreeze,
+  rollbackExempt
+} = await import('../../../services/hub/releases/freeze.js')
 const { zonedMidnightUtc, isTimeZone } = await import('../../../services/hub/releases/zoned.js')
 const { judgeFigures, validateRule } = await import(
   '../../../services/hub/releases/auto-rollback.js'
@@ -108,8 +115,22 @@ describe('freeze windows', () => {
     })
     expect(r?.code).toBe('FROZEN')
     expect(r?.message).toMatch(/Promotions are frozen Hub-wide/)
-    expect(r?.message).toMatch(/A rollback is still allowed/)
+    expect(r?.message).toMatch(/A rollback to an older version is still allowed/)
     expect(await freezeRefusal({ appIds: [8], action: 'move', now: at, rows })).toBeNull()
+  })
+
+  it('exempts only a rollback to an OLDER version than the one running', () => {
+    expect(rollbackExempt('0.3.214', '0.3.215')).toBe(true)
+    expect(rollbackExempt('0.3.215', '0.3.215')).toBe(false)
+    expect(rollbackExempt('0.3.216', '0.3.215')).toBe(false)
+    expect(rollbackExempt('0.2.999', '0.10.0')).toBe(true)
+    expect(rollbackExempt('0.3.214', null)).toBe(false)
+  })
+
+  it('fails closed when the windows cannot be read', async () => {
+    const r = await freezeRefusal({ appIds: [1], action: 'promote' })
+    expect(r?.code).toBe('FREEZE_UNKNOWN')
+    expect(r?.status).toBe(503)
   })
 
   it('words the refusal per action', () => {
@@ -199,6 +220,7 @@ describe('automatic rollback judgement', () => {
     })
     expect(validateRule({ window_minutes: 2, max_crashes: 1 })).toHaveProperty('error')
     expect(validateRule({ max_error_pct: 150 })).toHaveProperty('error')
+    expect(validateRule({ max_crashes: 51 })).toEqual({ error: 'max_crashes is 1 to 50' })
     expect(validateRule({ max_error_pct: '2.5', window_minutes: 15 })).toMatchObject({
       enabled: true,
       max_error_pct: 2.5,

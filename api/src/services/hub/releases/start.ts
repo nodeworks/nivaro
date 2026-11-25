@@ -92,7 +92,8 @@ const TRANSIENT_CODES: readonly string[] = [
   'PLAN_CHANGED',
   'GITLAB_UNREACHABLE',
   'AGENT_UNREACHABLE',
-  'MOVE_OPEN'
+  'MOVE_OPEN',
+  'FREEZE_UNKNOWN'
 ]
 
 export function isTransientCode(code: string): boolean {

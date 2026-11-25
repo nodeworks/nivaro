@@ -1,7 +1,10 @@
 import { insertReturningId } from '../../../db/dialect/ef.js'
 import { db } from '../../../db/index.js'
+import { logActivity } from '../../activity.js'
+import { listEnvironments } from '../apps.js'
 import { type FreezeRefusal, freezeRefusal } from './freeze.js'
-import { notifyAppPeople } from './notify.js'
+import { notifyAppPeople, notifyAppPeopleAndAdmins } from './notify.js'
+import { type PersonCheck, personCanAct } from './person.js'
 import {
   isTransientCode,
   type PlannedStart,
@@ -9,7 +12,7 @@ import {
   refusalText,
   startPlannedPromotion
 } from './start.js'
-import { advanceTrain, createTrain, type TrainInput } from './trains.js'
+import { advanceTrain, createTrain, type TrainInput, validateTrain } from './trains.js'
 
 /**
  * Scheduled promotions (Hub release operations): a promotion of one environment, or a release
@@ -55,6 +58,8 @@ export interface HubSchedule {
   train: (TrainInput & { keys: string[] }) | null
   status: ScheduleStatus
   attempts: number
+  /** The last time it was held back (a freeze's end, a passing refusal); null = never. */
+  wait_until: string | null
   note: string | null
   deploy_id: number | null
   train_id: number | null
@@ -84,6 +89,7 @@ export function scheduleFromRow(r: Record<string, unknown>): HubSchedule {
     train,
     status: String(r.status) as ScheduleStatus,
     attempts: Number(r.attempts ?? 0),
+    wait_until: iso(r.wait_until),
     note: r.note == null ? null : String(r.note),
     deploy_id: r.deploy_id == null ? null : Number(r.deploy_id),
     train_id: r.train_id == null ? null : Number(r.train_id),
@@ -171,6 +177,19 @@ export interface ScheduleDeps {
     note: { subject: string; message: string; urgent?: boolean },
     also: Array<string | null>
   ): Promise<unknown>
+  /** Owners AND every administrator (the person behind a schedule can no longer act). */
+  notifyAll(
+    appId: number,
+    note: { subject: string; message: string; urgent?: boolean }
+  ): Promise<unknown>
+  /** Whether the schedule's person may still start promotions. */
+  person(userId: string | null): Promise<PersonCheck>
+  /** A promote run of `version` started on the environment at or after `since` (adoption). */
+  startedSince(envId: number, version: string, since: number): Promise<number | null>
+  /** The train this schedule already started, if any (adoption). */
+  trainOf(scheduleId: number): Promise<number | null>
+  /** Activity row for a promotion or train the schedule started. */
+  logStart(s: HubSchedule, item: { deployId?: number; trainId?: number }): Promise<unknown>
 }
 
 export function defaultScheduleDeps(): ScheduleDeps {
@@ -181,11 +200,51 @@ export function defaultScheduleDeps(): ScheduleDeps {
     startTrain: async (s) => {
       if (!s.train)
         throw Object.assign(new Error('The schedule holds no train'), { code: 'BAD_TRAIN' })
-      const t = await createTrain(s.app_id, s.train, { userId: s.created_by, scheduleId: s.id })
+      // Checked again against the app as it is now (environments reordered, removed, placed on
+      // a shared deployment since it was scheduled).
+      const envs = await listEnvironments(s.app_id)
+      const again = validateTrain(
+        { version: s.train.version, steps: s.train.steps },
+        envs.map((e) => ({ id: e.id, key: e.key, position: e.position, on_shared: e.on_shared }))
+      )
+      if ('error' in again)
+        throw Object.assign(
+          new Error(`The scheduled train no longer fits the app: ${again.error}`),
+          {
+            code: 'BAD_TRAIN'
+          }
+        )
+      const t = await createTrain(s.app_id, again, { userId: s.created_by, scheduleId: s.id })
       void advanceTrain(t.id).catch(() => undefined)
       return { trainId: t.id }
     },
-    notify: (appId, note, also) => notifyAppPeople(appId, note, also)
+    notify: (appId, note, also) => notifyAppPeople(appId, note, also),
+    notifyAll: (appId, note) => notifyAppPeopleAndAdmins(appId, note),
+    person: (userId) => personCanAct(userId),
+    startedSince: async (envId, version, since) => {
+      const r = (await db('nivaro_hub_deploys')
+        .where({ environment_id: envId, version, kind: 'promote' })
+        .where('started_at', '>=', new Date(since - 5000))
+        .orderBy('id', 'asc')
+        .first('id')) as { id: number } | undefined
+      return r ? Number(r.id) : null
+    },
+    trainOf: async (scheduleId) => {
+      const r = (await db('nivaro_hub_trains')
+        .where({ schedule_id: scheduleId })
+        .orderBy('id', 'asc')
+        .first('id')) as { id: number } | undefined
+      return r ? Number(r.id) : null
+    },
+    logStart: (s, item) =>
+      logActivity({
+        action: item.trainId ? 'hub-train-start' : 'hub-promote-start',
+        user: s.created_by,
+        collection: item.trainId ? 'nivaro_hub_trains' : 'nivaro_hub_deploys',
+        item: String(item.trainId ?? item.deployId),
+        comment: `Scheduled #${s.id} (${s.kind} ${s.version})`,
+        origin: 'machine'
+      })
   }
 }
 
@@ -196,14 +255,25 @@ async function settle(id: number, patch: Record<string, unknown>): Promise<void>
 const what = (s: HubSchedule) =>
   s.kind === 'train' ? `the release train of ${s.version}` : `the promotion to ${s.version}`
 
+/**
+ * When a schedule counts as missed from: its run_at, or the last time it was held back (a
+ * freeze's end, a passing refusal) — a Hub that was down for hours after either never deploys
+ * by surprise when it comes back.
+ */
+function missedFrom(s: HubSchedule): number {
+  const due = Date.parse(s.run_at)
+  const held = s.wait_until ? Date.parse(s.wait_until) : Number.NaN
+  return Number.isFinite(held) ? Math.max(due, held) : due
+}
+
 /** Starts every due schedule (the tick). Answers how many started. */
 export async function runDueSchedules(deps: ScheduleDeps = defaultScheduleDeps()): Promise<number> {
   const now = deps.now()
-  // Claims a stopped tick left behind go back to waiting (a re-start settles itself).
+  // Claims a stopped tick left behind go back to waiting; the next claim adopts what it started.
   await db(SCHEDULES)
     .where({ status: 'starting' })
-    .where('started_at', '<', new Date(now - STARTING_STALE_MS))
-    .update({ status: 'waiting', note: 'The Hub stopped while starting it; trying again' })
+    .where('claimed_at', '<', new Date(now - STARTING_STALE_MS))
+    .update({ status: 'waiting', note: 'The Hub stopped while starting it; checking again' })
   const due = (
     (await db(SCHEDULES)
       .whereIn('status', ['scheduled', 'waiting'])
@@ -213,11 +283,32 @@ export async function runDueSchedules(deps: ScheduleDeps = defaultScheduleDeps()
   ).map(scheduleFromRow)
   let started = 0
   for (const s of due) {
+    const firstTry = s.started_at ? Date.parse(s.started_at) : null
     const claimed = await db(SCHEDULES)
       .where({ id: s.id, status: s.status })
-      .update({ status: 'starting', started_at: new Date(now), attempts: s.attempts + 1 })
+      .update({
+        status: 'starting',
+        claimed_at: new Date(now),
+        started_at: firstTry == null ? new Date(now) : new Date(firstTry)
+      })
     if (!claimed) continue
-    if (s.status === 'scheduled' && now - Date.parse(s.run_at) > MISSED_AFTER_MS) {
+    // An earlier claim may have started it already (its settle was lost): adopt, never start twice.
+    if (firstTry != null) {
+      if (s.kind === 'train') {
+        const trainId = await deps.trainOf(s.id)
+        if (trainId != null) {
+          await settle(s.id, { status: 'started', train_id: trainId, note: 'Started earlier' })
+          continue
+        }
+      } else if (s.environment_id != null) {
+        const deployId = await deps.startedSince(s.environment_id, s.version, firstTry)
+        if (deployId != null) {
+          await settle(s.id, { status: 'started', deploy_id: deployId, note: 'Started earlier' })
+          continue
+        }
+      }
+    }
+    if (now - missedFrom(s) > MISSED_AFTER_MS) {
       await settle(s.id, {
         status: 'failed',
         error: 'MISSED: the Hub was not running its schedule when this was due'
@@ -226,15 +317,29 @@ export async function runDueSchedules(deps: ScheduleDeps = defaultScheduleDeps()
         s.app_id,
         {
           subject: `Scheduled ${s.kind} of ${s.version} missed`,
-          message: `The Hub did not start ${what(s)} at ${s.run_at}: it was not running its schedule then. Nothing was deployed.`
+          message: `The Hub did not start ${what(s)} in time (due ${s.run_at}): it was not running its schedule then. Nothing was deployed.`
         },
         [s.created_by]
       )
       continue
     }
+    const who = await deps.person(s.created_by)
+    if (!who.ok) {
+      await settle(s.id, {
+        status: 'failed',
+        error: `PERSON_GONE: ${who.why}; nobody vouches for this schedule`.slice(0, 1000)
+      })
+      await deps.notifyAll(s.app_id, {
+        subject: `Scheduled ${s.kind} of ${s.version} needs a person`,
+        message: `${what(s)} was not started: ${who.why}. Schedule it again if it should still run.`,
+        urgent: true
+      })
+      continue
+    }
     const frozen = await deps.freeze(s.app_id)
     if (frozen) {
-      if (s.on_freeze === 'fail') {
+      // Waits never use up tries; the missed rule counts from the freeze's end.
+      if (frozen.code === 'FROZEN' && s.on_freeze === 'fail') {
         await settle(s.id, { status: 'failed', error: `FROZEN: ${frozen.message}`.slice(0, 1000) })
         await deps.notify(
           s.app_id,
@@ -247,15 +352,22 @@ export async function runDueSchedules(deps: ScheduleDeps = defaultScheduleDeps()
       } else {
         await settle(s.id, {
           status: 'waiting',
-          note: `Waiting for the freeze to end: ${frozen.message}`.slice(0, 500)
+          wait_until: frozen.code === 'FROZEN' ? new Date(frozen.freeze.ends_at) : new Date(now),
+          note: (frozen.code === 'FROZEN'
+            ? `Waiting for the freeze to end: ${frozen.message}`
+            : `Trying again: ${frozen.message}`
+          ).slice(0, 500)
         })
       }
       continue
     }
+    const attempts = s.attempts + 1
+    await db(SCHEDULES).where({ id: s.id, status: 'starting' }).update({ attempts })
     try {
       if (s.kind === 'train') {
         const { trainId } = await deps.startTrain(s)
         await settle(s.id, { status: 'started', train_id: trainId, note: null })
+        await Promise.resolve(deps.logStart(s, { trainId })).catch(() => undefined)
       } else {
         if (s.environment_id == null)
           throw Object.assign(new Error('No environment'), { code: 'NOT_FOUND' })
@@ -265,6 +377,7 @@ export async function runDueSchedules(deps: ScheduleDeps = defaultScheduleDeps()
           userId: s.created_by
         })
         await settle(s.id, { status: 'started', deploy_id: deployId, note: null })
+        await Promise.resolve(deps.logStart(s, { deployId })).catch(() => undefined)
       }
       started++
     } catch (err) {
@@ -273,9 +386,10 @@ export async function runDueSchedules(deps: ScheduleDeps = defaultScheduleDeps()
         await settle(s.id, { status: 'started', note: 'The environment already ran this version' })
         continue
       }
-      if (isTransientCode(code) && s.attempts + 1 < MAX_SCHEDULE_ATTEMPTS) {
+      if (isTransientCode(code) && attempts < MAX_SCHEDULE_ATTEMPTS) {
         await settle(s.id, {
           status: 'waiting',
+          wait_until: new Date(now),
           note: `Trying again: ${code}: ${refusalText(err)}`.slice(0, 500)
         })
         continue

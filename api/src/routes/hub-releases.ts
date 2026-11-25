@@ -27,6 +27,7 @@ import {
   readReleaseNotes,
   recordReleaseNotes
 } from '../services/hub/releases/notes.js'
+import { personNames } from '../services/hub/releases/person.js'
 import {
   cancelSchedule,
   createSchedule,
@@ -35,7 +36,7 @@ import {
   SCHEDULES,
   validateWhen
 } from '../services/hub/releases/schedules.js'
-import { releaseOpsTick } from '../services/hub/releases/tick.js'
+import { releaseOpsTick, rollbackTick } from '../services/hub/releases/tick.js'
 import {
   abortTrain,
   advanceTrain,
@@ -124,6 +125,21 @@ function refusal(reply: FastifyReply, err: unknown) {
 
 export function hubReleaseRoutes(app: FastifyInstance): void {
   if (app.cron) {
+    // Rollback watches first and on their own: never judged late behind GitLab-bound starts.
+    app.cron.schedule(
+      'hub-release-rollback',
+      '* * * * *',
+      async () => {
+        const r = await rollbackTick()
+        if (r.errors.length) throw new Error(`hub-release-rollback: ${r.errors.join('; ')}`)
+      },
+      {
+        quiet: true,
+        idempotent: 'unsafe',
+        description:
+          'Every minute (Hub only) — opens and judges automatic rollback watches after promotions (nivaro_hub_rollback_watches); a breach rolls the environment back through the normal rollback path and tells its owners. A missed tick is picked up by the next.'
+      }
+    )
     app.cron.schedule(
       'hub-release-ops',
       '* * * * *',
@@ -135,7 +151,7 @@ export function hubReleaseRoutes(app: FastifyInstance): void {
         quiet: true,
         idempotent: 'unsafe',
         description:
-          'Every minute (Hub only) — starts due scheduled promotions and release trains, moves running trains through their holds, and judges automatic rollback rules after promotions. Every step is a normal Hub promotion run; state lives in nivaro_hub_trains / _schedules / _rollback_watches, so a missed tick is picked up by the next.'
+          'Every minute (Hub only) — starts due scheduled promotions and release trains and moves running trains through their holds. Every step is a normal Hub promotion run; state lives in nivaro_hub_trains / _schedules, so a missed tick is picked up by the next.'
       }
     )
   }
@@ -179,12 +195,22 @@ export function hubReleaseRoutes(app: FastifyInstance): void {
         envs.length ? envs.map((e) => e.id) : [-1]
       )) as Array<Record<string, unknown>>
     ).map(ruleFromRow)
+    const [trains, schedules] = await Promise.all([
+      listTrains({ appIds }),
+      listSchedules({ appIds })
+    ])
+    // Who set each one up (an unattended run acts for them; the page names them).
+    const names = await personNames([
+      ...trains.map((t) => t.started_by),
+      ...schedules.map((s) => s.created_by)
+    ])
+    const nameOf = (id: string | null) => (id ? (names.get(id.toLowerCase()) ?? null) : null)
     return {
       data: {
         apps: apps.map((a) => ({ id: Number(a.id), key: String(a.key), name: String(a.name) })),
         environments: envs,
-        trains: await listTrains({ appIds }),
-        schedules: await listSchedules({ appIds }),
+        trains: trains.map((t) => ({ ...t, started_by_name: nameOf(t.started_by) })),
+        schedules: schedules.map((s) => ({ ...s, created_by_name: nameOf(s.created_by) })),
         freezes,
         rules,
         watches: await listWatches({ appIds, limit: 50 }),

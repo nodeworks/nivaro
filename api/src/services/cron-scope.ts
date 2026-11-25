@@ -88,7 +88,8 @@ export const CORE_CRON_SCOPES: Record<string, CronScope> = {
   'help-video-stale-check': 'app',
   'help-video-storage-sweep': 'app',
   'hub-creation-waits': 'app', // Hub phase 3: the Hub's own creation rows (HUB=on only, never shared)
-  'hub-release-ops': 'app', // Hub release operations: trains, schedules, auto-rollback (HUB=on only, never shared)
+  'hub-release-ops': 'app', // Hub release operations: trains, schedules (HUB=on only, never shared)
+  'hub-release-rollback': 'app', // Hub release operations: automatic rollback watches (HUB=on only)
   'hub-signins-prune': 'app', // Hub phase 7: the Hub's own sign-in rows (HUB=on only, never shared)
   'huddle-schedules': 'app',
   'integration-reconcile': 'app',

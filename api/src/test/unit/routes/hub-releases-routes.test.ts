@@ -58,6 +58,8 @@ const migrations = [
   await import('../../../db/migrations/565_hub_release_ops.js')
 ]
 const { hubRoutes } = await import('../../../routes/hub.js')
+const { startPromotion, defaultStartDeps } = await import('../../../services/hub/promote-run.js')
+const { memoryPromoteLock } = await import('../../../services/hub/promote-lock.js')
 
 const ADMIN = 'AAAAAAAA-0000-4000-8000-000000000001'
 const OWNER = 'BBBBBBBB-0000-4000-8000-000000000002'
@@ -182,13 +184,65 @@ describe('hub release routes', () => {
     expect(promote.statusCode).toBe(409)
     expect(promote.json().code).toBe('FROZEN')
 
-    const rollback = await inject('POST', `/environments/${prod}/promote`, {
-      kind: 'rollback',
-      version: '0.3.214',
-      confirm: 'prod',
-      plan_hash: 'a'.repeat(64)
-    })
-    expect(rollback.json().code).not.toBe('FROZEN')
+    // A rollback is judged after gather (injected here: no network). Only one to an OLDER
+    // version than the running one passes the freeze.
+    const older = await startPromotion(
+      prod,
+      {
+        kind: 'rollback',
+        version: '0.3.214',
+        confirm: 'prod',
+        planHash: 'a'.repeat(64),
+        user: null
+      },
+      {
+        ...defaultStartDeps(),
+        lock: memoryPromoteLock,
+        gather: async () => ({ targetVersion: '0.3.215' }) as never
+      }
+    ).then(
+      () => ({ code: 'STARTED' }),
+      (e) => e as { code: string }
+    )
+    expect(older.code).not.toBe('FROZEN')
+    const newer = await startPromotion(
+      prod,
+      {
+        kind: 'rollback',
+        version: '0.3.216',
+        confirm: 'prod',
+        planHash: 'a'.repeat(64),
+        user: null
+      },
+      {
+        ...defaultStartDeps(),
+        lock: memoryPromoteLock,
+        gather: async () => ({ targetVersion: '0.3.215' }) as never
+      }
+    ).then(
+      () => ({ code: 'STARTED' }),
+      (e) => e as { code: string }
+    )
+    expect(newer.code).toBe('FROZEN')
+    const unknown = await startPromotion(
+      prod,
+      {
+        kind: 'rollback',
+        version: '0.3.214',
+        confirm: 'prod',
+        planHash: 'a'.repeat(64),
+        user: null
+      },
+      {
+        ...defaultStartDeps(),
+        lock: memoryPromoteLock,
+        gather: async () => ({ targetVersion: null }) as never
+      }
+    ).then(
+      () => ({ code: 'STARTED' }),
+      (e) => e as { code: string }
+    )
+    expect(unknown.code).toBe('FROZEN')
 
     const move = await inject('POST', `/environments/${prod}/move`, {})
     expect(move.statusCode).toBe(409)
