@@ -1,16 +1,19 @@
 import { createReadStream } from 'node:fs'
 import { unlink } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import type { Knex } from 'knex'
 import { config } from '../../config.js'
 import { db } from '../../db/index.js'
 import { claimSqliteFile, holdSqliteFile } from '../../db/sqlite.js'
 import {
   prepareSqliteFolder,
+  SQLITE_CREATED_MARKER,
   withSqliteFileReplaced,
   writeSqliteCreatedMarker
 } from '../../db/sqlite-tenant.js'
 import {
   adoptedSqliteFile,
+  adoptRefusedSqliteFile,
   fileSum,
   installSqliteFile,
   oneCopyAtATime,
@@ -59,6 +62,7 @@ export type DatabaseTransferCode =
   | 'SOURCE_REFUSED'
   | 'SOURCE_UNREACHABLE'
   | 'BAD_ANSWER'
+  | 'TARGET_LEFT'
   | SqliteTransferError['code']
 
 export class DatabaseTransferError extends Error {
@@ -98,6 +102,11 @@ export const databaseTransferDeps = {
   maxBytes: SQLITE_COPY_MAX_BYTES,
   /** The longest a target's whole pull may take (N3); the Hub waits longer. */
   pullDeadlineMs: SQLITE_PULL_DEADLINE_MS
+}
+
+/** Review 5 L5: the part of the pull's deadline kept for putting the copy in place. */
+function installReserveMs(): number {
+  return Math.min(3 * 60_000, Math.floor(databaseTransferDeps.pullDeadlineMs / 5))
 }
 
 /** Is this app frozen by a move (the precondition of a snapshot)? */
@@ -164,7 +173,8 @@ export interface DatabasePulled {
 async function fetchVerified(
   req: DatabasePullRequest,
   file: string,
-  deadline: number
+  deadline: number,
+  signal?: AbortSignal
 ): Promise<DatabasePulled & { incoming: string }> {
   const files = transferSource(req.source)
   if (!files)
@@ -183,7 +193,16 @@ async function fetchVerified(
     redirect: 'error' as const,
     // N3: the download stops at the pull's own deadline (the body read errors and the incoming
     // copy is removed), well before the Hub stops waiting.
-    signal: AbortSignal.timeout(Math.max(1, deadline - Date.now()))
+    // Review 5 M1: a cancelled job stops it at once too.
+    signal: signal
+      ? AbortSignal.any([AbortSignal.timeout(Math.max(1, deadline - Date.now())), signal])
+      : AbortSignal.timeout(Math.max(1, deadline - Date.now()))
+  }
+  /** Why a broken download broke (review 5 L4): cancelled, past the deadline, or the source. */
+  const cutReason = (): DatabaseTransferError | null => {
+    if (signal?.aborted) return cancelled()
+    if (Date.now() >= deadline) return asTransfer(pastDeadline())
+    return null
   }
   let res: Response
   try {
@@ -191,7 +210,10 @@ async function fetchVerified(
       ? await pullDeps.fetch(url, init)
       : await pullDeps.safeFetch(url, init)
   } catch {
-    throw new DatabaseTransferError('SOURCE_UNREACHABLE', 'The source did not answer.', 502)
+    throw (
+      cutReason() ??
+      new DatabaseTransferError('SOURCE_UNREACHABLE', 'The source did not answer.', 502)
+    )
   }
   const drop = () => void res.body?.cancel().catch(() => {})
   if (res.status === 401 || res.status === 403) {
@@ -234,18 +256,26 @@ async function fetchVerified(
     )
   }
   try {
-    const got = await receiveSqliteFile(
-      res.body,
-      file,
-      { sha256: sha, bytes },
-      databaseTransferDeps.maxBytes
-    )
+    let got: Awaited<ReturnType<typeof receiveSqliteFile>>
+    try {
+      got = await receiveSqliteFile(
+        res.body,
+        file,
+        { sha256: sha, bytes },
+        databaseTransferDeps.maxBytes
+      )
+    } catch (err) {
+      // L4: a download cut by the deadline (or a cancel) says so, not "broke off".
+      throw cutReason() ?? err
+    }
     let verified: SqliteVerified
     try {
       const left = deadline - Date.now()
+      if (signal?.aborted) throw cancelled()
       if (left <= 0) throw pastDeadline()
       // H1 / N3: in a child process killed at the pull's deadline — never on this event loop.
-      verified = await verifySqliteFile(got.incoming, left)
+      verified = await verifySqliteFile(got.incoming, left, signal)
+      if (signal?.aborted) throw cancelled()
       if (Date.now() > deadline) throw pastDeadline()
     } catch (err) {
       await unlink(got.incoming).catch(() => {})
@@ -259,6 +289,17 @@ async function fetchVerified(
     if (err instanceof SqliteTransferError) throw new DatabaseTransferError(err.code, err.message)
     throw err
   }
+}
+
+function asTransfer(err: SqliteTransferError): DatabaseTransferError {
+  return new DatabaseTransferError(err.code, err.message)
+}
+
+function cancelled(): DatabaseTransferError {
+  return new DatabaseTransferError(
+    'SQLITE_COPY_CANCELLED',
+    'The copy was cancelled (the Hub stopped waiting for it, or the app left this deployment); its incoming file was removed.'
+  )
 }
 
 function pastDeadline(): SqliteTransferError {
@@ -282,7 +323,16 @@ function pullDeadline(): number {
  */
 export async function pullDatabaseShared(
   t: TenantRecord,
-  req: DatabasePullRequest
+  req: DatabasePullRequest,
+  opts: {
+    /** Review 5 M1: the job's abort (the Hub cancelled, or the app left this process). */
+    signal?: AbortSignal
+    /**
+     * Review 5 M1: the app as the deployment lists it NOW (re-read right before the install), or
+     * null when it is no longer listed. Absent: `t` itself (tests).
+     */
+    current?: () => Promise<TenantRecord | null>
+  } = {}
 ): Promise<DatabasePulled> {
   if (t.dbClient !== 'sqlite')
     throw new DatabaseTransferError('NOT_SQLITE', "This app's database is not SQLite.")
@@ -293,13 +343,33 @@ export async function pullDatabaseShared(
     )
   const file = t.dbConnection
   const deadline = pullDeadline()
+  // L5: the download and check end early enough to leave the install its own time.
+  const copyBy = deadline - installReserveMs()
+  const { signal } = opts
   return oneCopyAtATime(file, async () => {
     prepareSqliteFolder(file)
-    const got = await fetchVerified(req, file, deadline)
+    const got = await fetchVerified(req, file, copyBy, signal)
     const { awaitAppSchemaRun, appDatabaseReplaced } = await import('../tenancy/app-migrations.js')
     try {
       await withSqliteFileReplaced(file, async () => {
-        await awaitAppSchemaRun(t.id)
+        // H1: never this app's pool before the install (a move's target has no file yet); its
+        // schema run (if any) ends first, within the install's own deadline (L5).
+        await beforeDeadline(awaitAppSchemaRun(t.id), deadline)
+        // M1: still this app, still listed, still held in maintenance, the same record — and
+        // nobody cancelled. Otherwise the copy is dropped, never put in place.
+        if (signal?.aborted) throw cancelled()
+        const now = opts.current ? await opts.current() : t
+        if (signal?.aborted) throw cancelled()
+        if (
+          now?.status !== 'maintenance' ||
+          now.dbConnection !== file ||
+          (now.dbRecord ?? null) !== (t.dbRecord ?? null)
+        )
+          throw new DatabaseTransferError(
+            'TARGET_LEFT',
+            'This app is no longer listed here in maintenance for this move; its copy was dropped.'
+          )
+        if (Date.now() > deadline) throw asTransfer(pastDeadline())
         await closeTenantPool(file)
         // L7: no other live process may own this file while it is replaced.
         const taken = claimSqliteFile(file)
@@ -336,7 +406,8 @@ export async function pullDatabaseShared(
  */
 export async function pullDatabaseDedicated(
   req: DatabasePullRequest,
-  moveId: number | null
+  moveId: number | null,
+  opts: { signal?: AbortSignal } = {}
 ): Promise<DatabasePulled & { restarting: true }> {
   if (config.DB_CLIENT !== 'sqlite')
     throw new DatabaseTransferError('NOT_SQLITE', "This app's database is not SQLite.")
@@ -348,7 +419,11 @@ export async function pullDatabaseDedicated(
   const file = config.DB_DATABASE
   const deadline = pullDeadline()
   return oneCopyAtATime(file, async () => {
-    const got = await fetchVerified(req, file, deadline)
+    const got = await fetchVerified(req, file, deadline, opts.signal)
+    if (opts.signal?.aborted) {
+      await unlink(got.incoming).catch(() => {})
+      throw cancelled()
+    }
     await stageSqliteFile(file, {
       sha256: got.sha256,
       bytes: got.bytes,
@@ -365,6 +440,25 @@ export async function pullDatabaseDedicated(
   })
 }
 
+/** Resolves `p`, or throws SQLITE_COPY_DEADLINE once `deadline` passes first (L5). */
+async function beforeDeadline<T>(p: Promise<T>, deadline: number): Promise<T> {
+  let timer: NodeJS.Timeout | null = null
+  try {
+    return await Promise.race([
+      p,
+      new Promise<never>((_r, reject) => {
+        timer = setTimeout(
+          () => reject(asTransfer(pastDeadline())),
+          Math.max(0, deadline - Date.now())
+        )
+        timer.unref?.()
+      })
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
 /** What a dedicated app adopted at its last boot (the Hub reads it back after the restart). */
 export async function databaseAdopted(): Promise<{
   sha256: string
@@ -373,6 +467,13 @@ export async function databaseAdopted(): Promise<{
   if (config.DB_CLIENT !== 'sqlite') return null
   const a = await adoptedSqliteFile(config.DB_DATABASE)
   return a ? { sha256: a.sha256, move_id: a.move_id } : null
+}
+
+/** Review 5 L6: why the last boot refused a staged copy (the Hub fails at once with it), or null. */
+export function databaseAdoptRefused(): { move_id: number | null; code: string } | null {
+  if (config.DB_CLIENT !== 'sqlite') return null
+  const r = adoptRefusedSqliteFile(config.DB_DATABASE)
+  return r ? { move_id: r.move_id, code: r.code } : null
 }
 
 /**
@@ -414,6 +515,9 @@ export async function discardDatabaseShared(
     try {
       for (const extra of ['', '-wal', '-shm', '-journal'])
         await unlink(`${t.dbConnection}${extra}`).catch(() => {})
+      // Review 5 L2: the marker the install wrote goes with the copy, so a later NEW placement
+      // of the environment here is not refused for a file that is gone.
+      await unlink(join(dirname(t.dbConnection), SQLITE_CREATED_MARKER)).catch(() => {})
     } finally {
       release()
     }

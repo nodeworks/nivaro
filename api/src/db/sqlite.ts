@@ -789,7 +789,8 @@ export function sqliteAfterCreate(
  * app is served would be made again, empty, by the next connection.
  *  - `mayCreate`: this pool may make the file (a new database's first open, or a move's target).
  *    Once a connection opened it and the file exists, `onCreated` runs once (the `.created`
- *    marker is written only then — L2) and the pool may not make it again.
+ *    marker is written only then — L2) and the pool may not make it again. A marker that cannot
+ *    be written closes that connection and removes the empty file it made (review 5 L3).
  *  - otherwise a missing file is refused before it is opened (`refuse('missing')`);
  *  - `requireTables` (a database that holds an install): a connection that finds no table at all
  *    is refused (`refuse('empty')`) and a zero-byte file it found is removed.
@@ -815,8 +816,22 @@ export function guardSqliteConnections(
     }
     if (mayCreate) {
       if (existsSync(file)) {
+        try {
+          opts.onCreated?.()
+        } catch (err) {
+          // Review 5 L3: no marker, no new file — this connection is closed and the file it just
+          // made (empty) goes, so the next try starts from nothing rather than from a file the
+          // folder cannot vouch for.
+          try {
+            conn.close()
+          } catch {}
+          try {
+            if (statSync(file).size === 0) unlinkSync(file)
+          } catch {}
+          throw err
+        }
+        // Only once the marker is written: a failed write leaves the pool still able to make it.
         mayCreate = false
-        opts.onCreated?.()
       }
       return conn
     }

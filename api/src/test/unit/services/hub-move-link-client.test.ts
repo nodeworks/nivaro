@@ -112,3 +112,29 @@ describe('maintenance: carry for a move to shared', () => {
     ).toBe(0)
   })
 })
+
+describe('move hub-link client: database jobs (review 5 L1)', () => {
+  const JOB = '11111111-2222-4333-8444-555555555555'
+  const answering = (status: number, body: unknown) =>
+    hubLinkClient('https://app.example.com', 't'.repeat(40), {
+      fetch: (async () =>
+        new Response(typeof body === 'string' ? body : JSON.stringify(body), {
+          status,
+          headers: { 'content-type': typeof body === 'string' ? 'text/plain' : 'application/json' }
+        })) as never
+    })
+
+  it("only the app's own 404 UNKNOWN_JOB means the job is unknown", async () => {
+    expect(
+      await answering(404, {
+        code: 'UNKNOWN_JOB',
+        message: 'No such database job here'
+      }).databaseJob?.(JOB)
+    ).toBeNull()
+  })
+
+  it("a proxy's 404 or a 5xx is a failed read (tried again by the follow), never unknown", async () => {
+    await expect(answering(404, '404 page not found').databaseJob?.(JOB)).rejects.toBeTruthy()
+    await expect(answering(502, 'Bad Gateway').databaseJob?.(JOB)).rejects.toBeTruthy()
+  })
+})

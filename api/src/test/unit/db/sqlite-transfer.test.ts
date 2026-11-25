@@ -13,9 +13,10 @@ import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import knex, { type Knex } from 'knex'
 import { afterAll, describe, expect, it } from 'vitest'
-import { sqliteAfterCreate, sqliteCompat } from '../../../db/sqlite.js'
+import { guardSqliteConnections, sqliteAfterCreate, sqliteCompat } from '../../../db/sqlite.js'
 import {
   adoptedSqliteFile,
+  adoptRefusedSqliteFile,
   adoptStagedSqliteFile,
   fileSum,
   installSqliteFile,
@@ -421,5 +422,49 @@ describe('review 4', () => {
     await expect(
       stageSqliteFile(target, { sha256: 'a'.repeat(64), bytes: 7, move_id: 1, incoming: victim })
     ).rejects.toMatchObject({ code: 'SQLITE_NOT_SQLITE' })
+  })
+})
+
+describe('review 5', () => {
+  it('L3: a marker that cannot be written closes the connection and removes the new file', async () => {
+    const file = join(dir, 'l3.sqlite')
+    const k = open(file)
+    let fail = true
+    guardSqliteConnections(k, file, {
+      mayCreate: true,
+      requireTables: false,
+      onCreated: () => {
+        if (fail) throw new Error('EACCES: marker')
+      },
+      refuse: () => new Error('refused')
+    })
+    await expect(k.raw('SELECT 1')).rejects.toThrow(/EACCES/)
+    expect(existsSync(file)).toBe(false)
+    // The pool may still make it: the next connection does, with its marker.
+    fail = false
+    await k.raw('SELECT 1')
+    expect(existsSync(file)).toBe(true)
+    await k.destroy()
+  })
+
+  it('L6: a boot that refuses a staged copy says why, for the Hub; a new staging clears it', async () => {
+    const target = join(dir, 'l6-target.sqlite')
+    writeFileSync(target, 'db')
+    const incoming = `${target}.incoming-00000000-0000-4000-8000-0000000000aa`
+    writeFileSync(incoming, 'other bytes')
+    writeFileSync(
+      `${target}.incoming.json`,
+      JSON.stringify({ sha256: 'a'.repeat(64), bytes: 11, move_id: 42, incoming })
+    )
+    expect(adoptStagedSqliteFile(target)).toBe('refused')
+    expect(adoptRefusedSqliteFile(target)).toMatchObject({
+      move_id: 42,
+      code: 'SQLITE_STAGED_CHANGED'
+    })
+    expect(readFileSync(target, 'utf8')).toBe('db')
+    const next = `${target}.incoming-00000000-0000-4000-8000-0000000000bb`
+    writeFileSync(next, 'x')
+    await stageSqliteFile(target, { sha256: 'b'.repeat(64), bytes: 1, move_id: 43, incoming: next })
+    expect(adoptRefusedSqliteFile(target)).toBeNull()
   })
 })

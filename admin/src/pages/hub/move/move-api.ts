@@ -939,6 +939,30 @@ export const MOVE_BLOCKER_COPY: Record<string, Copy> = {
     title: 'The new home no longer knows the database copy',
     hint: 'It probably restarted. Resume the move to copy it again.'
   },
+  SQLITE_COPY_CANCELLED: {
+    title: 'The database copy was cancelled',
+    hint: 'The Hub stopped waiting for it, or the app left the new home. Nothing was put in place; resume the move to copy it again.'
+  },
+  TARGET_LEFT: {
+    title: 'The app was no longer waiting on the new home',
+    hint: 'It was not listed there in maintenance for this move any more, so the copy was dropped. Resume the move.'
+  },
+  SQLITE_STAGED_BAD_MARKER: {
+    title: 'The new home could not read the staged database copy',
+    hint: 'It removed it at its restart. Resume the move to copy it again.'
+  },
+  SQLITE_STAGED_MISSING: {
+    title: 'The staged database copy was gone at the restart',
+    hint: 'Check the new home’s uploads volume, then resume the move.'
+  },
+  SQLITE_STAGED_CHANGED: {
+    title: 'The staged database copy changed before the restart',
+    hint: 'It no longer matched what was checked, so it was removed. Resume the move to copy it again.'
+  },
+  SQLITE_STAGED_FAILED: {
+    title: 'The new home could not put the database copy in place at its restart',
+    hint: 'Check that its uploads volume is writable, then resume the move.'
+  },
   SQLITE_FILE_STALE: {
     title: 'An older database file is in the app’s folder on the new home',
     hint: 'It is from an earlier stay of the app there and is never opened as this database. Remove it on the new home, then try again.'
