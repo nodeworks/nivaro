@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <title>Nivaro Hub</title>
+  <rect width="32" height="32" fill="#0d1726"/>
+  <g transform="translate(16 16) scale(.72) translate(-16 -16)">
+    <g fill="none" stroke="#f5a623" stroke-linecap="round" stroke-linejoin="round">
+      <path stroke-width="2.1" d="M12 6.2a5.6 5.6 0 0 0 0 8M20 6.2a5.6 5.6 0 0 1 0 8"/>
+      <path stroke-width="1.6" opacity=".55" d="M8.6 3.6a9.6 9.6 0 0 0 0 13.2M23.4 3.6a9.6 9.6 0 0 1 0 13.2"/>
+      <path stroke-width="2.1" d="M16 14.4 11.2 26.6M16 14.4l4.8 12.2M12.9 22.2h6.2"/>
+    </g>
+    <circle cx="16" cy="10.2" r="2.3" fill="#f5a623"/>
+  </g>
+</svg>

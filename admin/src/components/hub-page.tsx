@@ -47,7 +47,8 @@ export function HubPage({
   const Icon = hub.icon
 
   return (
-    <div className='flex flex-1 min-h-0 flex-col'>
+    // data-hub-base: the standalone Hub look (hub-brand.css) styles its own hub by it; inert otherwise.
+    <div className='flex flex-1 min-h-0 flex-col' data-hub-base={hub.base}>
       <header className='shrink-0 border-b border-slate-200 bg-white dark:border-border dark:bg-card'>
         <div className='flex items-center gap-3 px-4 pt-3 sm:px-6 sm:pt-4'>
           <div className='flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-nvr-cyan/15'>

@@ -1,0 +1,17 @@
+{
+  "id": "/",
+  "name": "Nivaro Hub",
+  "short_name": "Hub",
+  "description": "Nivaro Hub — the control tower for your Nivaro apps: environments, deploys, moves and sign-in.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0d1726",
+  "theme_color": "#0d1726",
+  "icons": [
+    { "src": "/hub-brand/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/hub-brand/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/hub-brand/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "/hub-brand/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

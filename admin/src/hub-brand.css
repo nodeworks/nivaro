@@ -1,0 +1,349 @@
+/* ─── Standalone Nivaro Hub look ───────────────────────────────────────────────
+ * Everything here is scoped to :root[data-product="hub"] (admin/src/lib/hub-product.ts sets it
+ * only when GET /api/app-info lists `hub_only`). A regular install — and a Hub that also holds
+ * app data — matches none of these selectors, so its look is byte-for-byte what it was.
+ * Never edit a shared token here without the attribute in front of it.
+ */
+
+:root[data-product='hub'] {
+  /* Signal amber in place of Nivaro cyan. AppLayout also writes the inline accent (an
+     operator's white-label colour wins over both). Dark ink on it: white fails AA on amber. */
+  --nvr-cyan: #f5a623;
+  --nvr-cyan-dark: #e0901a;
+  --nvr-cyan-rgb: 245 166 35;
+  --nvr-cyan-dark-rgb: 224 144 26;
+  --nvr-on-accent: #14110a;
+  --primary: 37 91% 55%;
+  --primary-foreground: 32 45% 6%;
+  /* Focus ring: a deep amber on light surfaces (the signal amber is 2:1 on white). */
+  --ring: 30 92% 36%;
+  /* Selected rows: a neutral raised tint, so amber keeps meaning "the accent". */
+  --accent: 214 22% 92%;
+  --accent-foreground: 220 45% 11%;
+  /* Amber text on light surfaces (links, active labels): AA on white. */
+  --hub-accent-ink: #9a5a00;
+
+  /* Chrome: deep slate-navy in both themes. */
+  --hub-chrome: #0d1726;
+  --hub-chrome-raised: #15233a;
+  --hub-chrome-line: rgb(255 255 255 / 0.08);
+  --hub-chrome-text: #c6d0de;
+  --hub-chrome-muted: #8193ab;
+
+  /* Environments (env-tone.ts): the colour, and the ink that reads on its tint. */
+  --hub-env-production: #e8621a;
+  --hub-env-production-ink: #a8400c;
+  --hub-env-staging: #7c4ddb;
+  --hub-env-staging-ink: #5b2fb3;
+  --hub-env-development: #0f9384;
+  --hub-env-development-ink: #0a6a60;
+  --hub-env-other: #64748b;
+  --hub-env-other-ink: #475569;
+  /* The same tones on the (always dark) chrome. */
+  --hub-env-production-ink-on-chrome: #ff9a5c;
+  --hub-env-staging-ink-on-chrome: #bba5ff;
+  --hub-env-development-ink-on-chrome: #52d7c5;
+  --hub-env-other-ink-on-chrome: #a7b4c6;
+
+  /* Health. Warn is a yellow, not the accent amber; down is red AND a diamond (never only a
+     colour beside the production red-orange). */
+  --hub-ok: #16a34a;
+  --hub-warn: #d4b000;
+  --hub-down: #dc2626;
+  --hub-unknown: #94a3b8;
+  /* The same on the (always dark) chrome. */
+  --hub-ok-on-chrome: #4ade80;
+  --hub-warn-on-chrome: #facc15;
+  --hub-down-on-chrome: #f87171;
+
+  /* Texture: radar rings — barely there. */
+  --hub-ring: rgb(224 144 26 / 0.12);
+}
+
+:root[data-product='hub'].dark {
+  --nvr-cyan: #f5a623;
+  --primary: 37 92% 58%;
+  --primary-foreground: 32 45% 6%;
+  --ring: 37 92% 58%;
+  --accent: 220 12% 22%;
+  --accent-foreground: 210 15% 94%;
+  --hub-accent-ink: #f5a623;
+
+  --hub-chrome: #070c14;
+  --hub-chrome-raised: #0f1828;
+
+  --hub-env-production: #ff8a3d;
+  --hub-env-production-ink: #ffa366;
+  --hub-env-staging: #a98bff;
+  --hub-env-staging-ink: #c3adff;
+  --hub-env-development: #2fc8b4;
+  --hub-env-development-ink: #6fdccd;
+  --hub-env-other: #94a3b8;
+  --hub-env-other-ink: #b6c2d2;
+
+  --hub-ok: #22c55e;
+  --hub-warn: #facc15;
+  --hub-down: #f05252;
+  --hub-unknown: #64748b;
+
+  --hub-ring: rgb(245 166 35 / 0.09);
+}
+
+/* Browser surfaces carry the product too. */
+[data-product='hub'] ::selection {
+  background: rgb(245 166 35 / 0.32);
+}
+[data-product='hub'] body {
+  caret-color: var(--nvr-cyan);
+}
+
+/* Solid accent fills: dark ink where the pair was white-on-cyan (white fails AA on amber). */
+[data-product='hub'] .bg-nvr-cyan.text-white,
+[data-product='hub'] .bg-nvr-cyan .text-white,
+[data-product='hub'] .bg-nvr-cyan > svg {
+  color: var(--nvr-on-accent, #14110a);
+}
+
+/* ─── Machine facts: versions, digests, hosts, ids ──────────────────────────── */
+[data-product='hub'] .hub-fact {
+  font-family: 'JetBrains Mono', Menlo, monospace;
+  font-variant-numeric: tabular-nums slashed-zero;
+  font-feature-settings: 'zero' 1;
+  font-variant-ligatures: none;
+  letter-spacing: -0.01em;
+}
+
+/* ─── Environment colours ───────────────────────────────────────────────────── */
+[data-product='hub'] [data-env-tone='production'],
+[data-product='hub'] [data-env-chip='production'] {
+  --t: var(--hub-env-production);
+  --ti: var(--hub-env-production-ink);
+}
+[data-product='hub'] [data-env-tone='staging'],
+[data-product='hub'] [data-env-chip='staging'] {
+  --t: var(--hub-env-staging);
+  --ti: var(--hub-env-staging-ink);
+}
+[data-product='hub'] [data-env-tone='development'],
+[data-product='hub'] [data-env-chip='development'] {
+  --t: var(--hub-env-development);
+  --ti: var(--hub-env-development-ink);
+}
+[data-product='hub'] [data-env-tone='other'],
+[data-product='hub'] [data-env-chip='other'] {
+  --t: var(--hub-env-other);
+  --ti: var(--hub-env-other-ink);
+}
+/* Row / header stripe: painted, never a border (no layout shift). */
+[data-product='hub'] [data-env-tone] {
+  background-image: linear-gradient(to right, var(--t) 0 3px, transparent 3px);
+}
+[data-product='hub'] .hub-env-chip {
+  color: var(--ti);
+  background: color-mix(in srgb, var(--t) 13%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--t) 38%, transparent);
+}
+
+/* ─── Health dots ───────────────────────────────────────────────────────────── */
+[data-product='hub'] .hub-status-dot[data-hub-health='ok'] {
+  background: var(--hub-ok);
+  box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--hub-ok) 22%, transparent);
+}
+[data-product='hub'] .hub-status-dot[data-hub-health='warn'] {
+  background: var(--hub-warn);
+  box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--hub-warn) 30%, transparent);
+}
+[data-product='hub'] .hub-status-dot[data-hub-health='down'] {
+  border-radius: 1.5px;
+  transform: rotate(45deg) scale(0.86);
+  background: var(--hub-down);
+  box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--hub-down) 26%, transparent);
+}
+[data-product='hub'] .hub-status-dot[data-hub-health='unknown'] {
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--hub-unknown);
+}
+/* A pulse only where something is actually running. */
+@keyframes hub-pulse {
+  0% {
+    transform: scale(1);
+    opacity: 0.55;
+  }
+  100% {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+}
+[data-product='hub'] .hub-status-dot[data-hub-pulse]::after,
+[data-product='hub'] [data-hub-live]::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: currentColor;
+  animation: hub-pulse 1.8s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+}
+[data-product='hub'] .hub-status-dot[data-hub-pulse] {
+  color: var(--nvr-cyan);
+}
+[data-product='hub'] [data-hub-live]::after {
+  background: var(--nvr-cyan);
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-product='hub'] .hub-status-dot[data-hub-pulse]::after,
+  [data-product='hub'] [data-hub-live]::after {
+    animation: none;
+    opacity: 0;
+  }
+}
+
+/* ─── Texture: radar rings from the top-right corner, sparingly (Apps hub header, empty
+   states). The Hub's own motif (a tower sending); static, so motion settings never matter. ── */
+[data-product='hub'] .hub-texture,
+[data-product='hub'] [data-hub-base='/hub'] > header {
+  background-image: repeating-radial-gradient(
+    circle at 100% 0,
+    transparent 0 47px,
+    var(--hub-ring) 47px 48px
+  );
+}
+
+/* ─── Density: Hub pages run tighter (Apps hub only) ────────────────────────── */
+[data-product='hub'] [data-hub-base='/hub'] td.py-2\.5,
+[data-product='hub'] [data-hub-base='/hub'] th.py-2\.5,
+[data-product='hub'] [data-hub-base='/hub'] th.py-2 {
+  padding-top: 0.4rem;
+  padding-bottom: 0.4rem;
+}
+[data-product='hub'] [data-hub-base='/hub'] li.py-2 {
+  padding-top: 0.3rem;
+  padding-bottom: 0.3rem;
+}
+[data-product='hub'] [data-hub-base='/hub'] .space-y-4 > :not([hidden]) ~ :not([hidden]) {
+  margin-top: 0.75rem;
+}
+[data-product='hub'] [data-hub-base='/hub'] .p-4,
+[data-product='hub'] [data-hub-base='/hub'] .sm\:p-6 {
+  padding: 0.875rem;
+}
+[data-product='hub'] [data-hub-base='/hub'] .text-\[13px\] {
+  font-size: 12.5px;
+}
+
+/* ─── Production guard ──────────────────────────────────────────────────────── */
+[data-product='hub'] .hub-prod-guard {
+  border-radius: 8px;
+  padding: 2px;
+  background: color-mix(in srgb, var(--hub-env-production) 10%, transparent);
+  box-shadow:
+    0 0 0 1.5px var(--hub-env-production),
+    0 6px 18px -8px color-mix(in srgb, var(--hub-env-production) 55%, transparent);
+}
+[data-product='hub'] .hub-prod-guard-head {
+  margin: 0;
+  padding: 4px 10px 5px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--hub-env-production-ink);
+}
+
+/* ─── Run timeline ──────────────────────────────────────────────────────────── */
+[data-product='hub'] .hub-track-seg {
+  background: color-mix(in srgb, var(--hub-unknown) 45%, transparent);
+}
+[data-product='hub'] .hub-track-seg[data-done] {
+  background: var(--hub-ok);
+}
+[data-product='hub'] .hub-track-node {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--hub-unknown) 80%, transparent);
+  background: hsl(var(--card));
+}
+[data-product='hub'] .hub-track-node[data-state='done'] {
+  background: var(--hub-ok);
+  box-shadow: none;
+  color: #fff;
+}
+[data-product='hub'] .hub-track-node[data-state='running'],
+[data-product='hub'] .hub-track-node[data-state='waiting'] {
+  background: var(--nvr-cyan);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--nvr-cyan) 28%, transparent);
+  color: var(--nvr-on-accent, #14110a);
+}
+[data-product='hub'] .hub-track-node[data-state='failed'] {
+  background: var(--hub-down);
+  box-shadow: none;
+  color: #fff;
+}
+[data-product='hub'] .hub-track-node[data-state='stopped'],
+[data-product='hub'] .hub-track-node[data-state='undone'] {
+  background: hsl(var(--muted));
+  box-shadow: inset 0 0 0 2px var(--hub-unknown);
+  color: hsl(var(--muted-foreground));
+}
+
+/* ─── Sign-in: the fleet map's beacon ───────────────────────────────────────── */
+@keyframes hub-beacon {
+  0% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+  100% {
+    transform: scale(6);
+    opacity: 0;
+  }
+}
+[data-product='hub'] .hub-login-beacon {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: hub-beacon 3.2s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-product='hub'] .hub-login-beacon {
+    animation: none;
+    opacity: 0;
+  }
+}
+
+/* ─── Hard-coded Nivaro cyan (older screens write #00ceff literally) → the Hub accent ── */
+[data-product='hub'] .bg-\[\#00ceff\] {
+  background-color: var(--nvr-cyan);
+}
+[data-product='hub'] .bg-\[\#00ceff\]\/5 {
+  background-color: rgb(var(--nvr-cyan-rgb) / 0.06);
+}
+[data-product='hub'] .bg-\[\#00ceff\]\/10 {
+  background-color: rgb(var(--nvr-cyan-rgb) / 0.12);
+}
+[data-product='hub'] .bg-\[\#00ceff\]\/15 {
+  background-color: rgb(var(--nvr-cyan-rgb) / 0.16);
+}
+[data-product='hub'].dark .dark\:bg-\[\#00ceff\]\/\[0\.07\],
+[data-product='hub'].dark .dark\:bg-\[\#00ceff\]\/\[0\.08\] {
+  background-color: rgb(var(--nvr-cyan-rgb) / 0.1);
+}
+[data-product='hub'] .text-\[\#00ceff\] {
+  color: var(--hub-accent-ink);
+}
+[data-product='hub'].dark .dark\:text-\[\#00ceff\],
+[data-product='hub'].dark .text-\[\#00ceff\] {
+  color: var(--nvr-cyan);
+}
+[data-product='hub'] .border-\[\#00ceff\] {
+  border-color: var(--nvr-cyan);
+}
+[data-product='hub'] .border-\[\#00ceff\]\/20,
+[data-product='hub'] .border-\[\#00ceff\]\/30,
+[data-product='hub'] .border-\[\#00ceff\]\/40,
+[data-product='hub'] .border-\[\#00ceff\]\/50 {
+  border-color: rgb(var(--nvr-cyan-rgb) / 0.4);
+}
+[data-product='hub'] .ring-\[\#00ceff\] {
+  --tw-ring-color: var(--nvr-cyan);
+}
+
+/* A run track wider than its box fades out on the side that has more steps. */
+[data-product='hub'] .hub-track-scroll[data-more] {
+  mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent);
+}

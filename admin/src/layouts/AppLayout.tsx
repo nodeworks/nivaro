@@ -128,6 +128,8 @@ import {
 import { AskPanelHost } from '@/components/ask-panel-host'
 import { BugReporter } from '@/components/bug-reporter'
 import { CommandPalette } from '@/components/command-palette'
+import { HubFleetStrip } from '@/components/hub-brand/HubFleetStrip'
+import { HubTopBar } from '@/components/hub-brand/HubTopBar'
 import { NOTIF_ROUTES, NotificationBell } from '@/components/notification-bell'
 import { KeyboardShortcuts } from '@/components/shortcuts-overlay'
 import { TeamChatDock } from '@/components/team-chat'
@@ -140,6 +142,7 @@ import type { NavSidebarSlot } from '@/extensions/types'
 import { api, WORKSPACE_KEY, type Workspace } from '@/lib/api'
 import { logout, useAuth } from '@/lib/auth'
 import { reportRenderCrash } from '@/lib/global-error-report'
+import { defaultAccentFor, readableOn, useHubProduct } from '@/lib/hub-product'
 import { hubForPath, isPathDisabled } from '@/lib/hubs'
 import { useT } from '@/lib/i18n'
 import { openViewAsTab, readMasquerade } from '@/lib/masquerade'
@@ -347,6 +350,9 @@ export function AppLayout() {
   })
 
   const projectName = settings?.project_name ?? 'Nivaro'
+  // A standalone Hub (server feature `hub_only`) wears its own look: top bar, amber accent, Hub
+  // icons (lib/hub-product.ts). Everything Hub-only below is gated on it.
+  const hubProduct = useHubProduct()
 
   // Timezone preference (#31): the shared formatters render in the user's
   // chosen zone once set; browser default otherwise.
@@ -504,9 +510,15 @@ export function AppLayout() {
     parseThemeAccents((settings as { theme_accents?: unknown } | undefined)?.theme_accents)
   )
   useEffect(() => {
-    const color = accentPick ?? workspaceColor ?? settings?.project_color ?? '#00ceff'
+    const color = defaultAccentFor(
+      hubProduct,
+      accentPick ?? workspaceColor ?? settings?.project_color ?? null
+    )
     const el = document.documentElement
     el.style.setProperty('--nvr-cyan', color)
+    // Standalone Hub: the ink on a solid accent fill (dark on amber; white fails AA there).
+    if (hubProduct) el.style.setProperty('--nvr-on-accent', readableOn(color))
+    else el.style.removeProperty('--nvr-on-accent')
     el.style.setProperty('--nvr-cyan-dark', color)
     // The Tailwind token reads the CHANNEL form so `/N` opacity modifiers work,
     // so a white-label colour has to land there too — otherwise solid fills
@@ -518,7 +530,7 @@ export function AppLayout() {
     }
     // Theme studio (#662): radius + font follow the same settings effect.
     applyThemeSettings(settings as Record<string, unknown> | undefined)
-  }, [settings?.project_color, workspaceColor, settings, accentPick])
+  }, [settings?.project_color, workspaceColor, settings, accentPick, hubProduct])
 
   // #3225 — the per-tab navigation trail behind PageTrail breadcrumbs. A layout
   // effect, so the entry exists before any page's own effects name it.
@@ -751,6 +763,21 @@ export function AppLayout() {
           <DrillBannerHost />
           {/* Realtime idea 24 — "Sharing with … · Stop" while a support screen share runs. */}
           <ScreenShareHost runtime={screenShareRuntime} />
+          {/* Standalone Hub: a top bar with the Hub sections and the fleet strip replace the
+              icon rail + panel (the <aside> below is hidden). */}
+          {hubProduct && !popout && (
+            <>
+              <HubTopBar
+                items={[
+                  ...permitted.flatMap((c) => c.items),
+                  ...cloudNavItems.map((e) => ({ icon: e.icon, label: e.label, to: e.href }))
+                ]}
+                user={{ id: user?.id, name: displayName, email: displayEmail, initials }}
+                logoUrl={settings?.brand_logo ? `/api/files/${settings.brand_logo}` : null}
+              />
+              <HubFleetStrip />
+            </>
+          )}
           <div className='flex min-h-0 flex-1 overflow-hidden'>
             <a
               href='#main-content'
@@ -783,7 +810,7 @@ export function AppLayout() {
                 // Below md: off-canvas drawer over the page, closed unless opened.
                 'max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-50 max-md:h-[100dvh] max-md:max-w-[88vw] max-md:shadow-2xl max-md:transition-transform max-md:duration-200 max-md:ease-out motion-reduce:max-md:transition-none',
                 isPhone && !drawerOpen && 'max-md:invisible max-md:-translate-x-full',
-                popout && 'hidden'
+                (popout || hubProduct) && 'hidden'
               )}
             >
               {/* Icon rail — always 52px */}
@@ -1126,7 +1153,7 @@ export function AppLayout() {
               className='flex min-w-0 flex-1 flex-col overflow-hidden bg-secondary'
             >
               {/* Phone shell: a slim top bar with the menu button that opens the drawer. */}
-              {!popout && (
+              {!popout && !hubProduct && (
                 <div
                   data-phone-topbar
                   className='flex h-12 shrink-0 items-center gap-2 border-b border-white/[0.07] bg-nvr-navy px-2 dark:bg-[#090c10] md:hidden'
@@ -1161,7 +1188,11 @@ export function AppLayout() {
               )}
               <HelpVideoHost>
                 {/* Before the page outlet on purpose: see RouteTitle. */}
-                <RouteTitle pathname={location.pathname} projectName={settings?.project_name} />
+                <RouteTitle
+                  pathname={location.pathname}
+                  projectName={settings?.project_name}
+                  hub={hubProduct}
+                />
                 {/* #18: the screen's best help video ("Watch: … (2:10)") when a
                     strong match is unwatched; renders nothing otherwise. */}
                 <HelpVideoMatchChip
@@ -1413,17 +1444,24 @@ function RecorderBadge() {
  */
 function RouteTitle({
   pathname,
-  projectName
+  projectName,
+  hub = false
 }: {
   pathname: string
   projectName: string | null | undefined
+  /** Standalone Hub: "<label> — Nivaro Hub" (the "Hub · " lead comes from lib/hub-product). */
+  hub?: boolean
 }) {
   useEffect(() => {
     if (!projectName) return
-    const app = `${projectName} | Nivaro`
+    const app = hub
+      ? projectName === 'Nivaro'
+        ? 'Nivaro Hub'
+        : `${projectName} | Nivaro Hub`
+      : `${projectName} | Nivaro`
     const label = pageLabelForPath(pathname)
     document.title = label ? `${label} — ${app}` : app
-  }, [pathname, projectName])
+  }, [pathname, projectName, hub])
   return null
 }
 

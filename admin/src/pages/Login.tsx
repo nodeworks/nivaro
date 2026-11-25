@@ -1,7 +1,10 @@
 import { EnvironmentLoginBanner, SignOutNoteBanner } from '@nivaro/shared'
 import { Monitor, Moon, ShieldCheck, Sun } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { HubLoginBackdrop } from '@/components/hub-brand/HubLoginBackdrop'
+import { HubWordmark } from '@/components/hub-brand/HubMark'
 import { usePersistedTab } from '@/hooks/usePersistedTab'
+import { useHubProductPublic } from '@/lib/hub-product'
 import {
   postLoginTarget,
   rememberPostLoginTarget,
@@ -364,10 +367,16 @@ export function LoginPage() {
       (THEME_CYCLE.indexOf(theme as (typeof THEME_CYCLE)[number]) + 1) % THEME_CYCLE.length
     ]
   const ThemeIcon = THEME_ICONS[theme as keyof typeof THEME_ICONS] ?? Monitor
+  // A standalone Hub signs in on its own page: full-bleed dark, a faint fleet map behind the
+  // card (same providers, same flow). An operator's logo still wins over the Hub mark.
+  const hub = useHubProductPublic()
 
   return (
     // <main>: the sign-in page's content sits in a landmark (a11y A11Y-12).
-    <main className='flex min-h-screen flex-col'>
+    <main
+      className={`flex min-h-screen flex-col${hub ? ' bg-[var(--hub-chrome)]' : ''}`}
+      data-hub-login={hub ? '' : undefined}
+    >
       {/* Not production: says so above everything (the server decides; nothing on production). */}
       <EnvironmentLoginBanner />
       <div className='flex flex-1 overflow-hidden'>
@@ -375,7 +384,7 @@ export function LoginPage() {
         <SignOutNoteBanner />
         {/* ── Left panel ─────────────────────────────────────────────── */}
         <div
-          className='relative hidden flex-col overflow-hidden lg:flex lg:w-1/2'
+          className={hub ? 'hidden' : 'relative hidden flex-col overflow-hidden lg:flex lg:w-1/2'}
           style={{ background: '#172940' }}
         >
           {/* Subtle grid texture */}
@@ -548,19 +557,43 @@ export function LoginPage() {
         </div>
 
         {/* ── Right panel ──────────────────────────────────────────────── */}
-        <div className='relative flex flex-1 flex-col items-center justify-center bg-secondary px-8 py-12 lg:w-1/2'>
+        <div
+          className={
+            hub
+              ? 'relative flex flex-1 flex-col items-center justify-center overflow-hidden px-4 py-12 sm:px-8'
+              : 'relative flex flex-1 flex-col items-center justify-center bg-secondary px-8 py-12 lg:w-1/2'
+          }
+        >
+          {hub && <HubLoginBackdrop />}
           <button
             type='button'
             onClick={() => setTheme(nextTheme)}
             aria-label={`Theme: ${theme}. Switch to ${nextTheme}`}
-            className='absolute right-4 top-4 flex h-8 w-8 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-slate-200/60 hover:text-slate-600 dark:hover:bg-white/10 dark:hover:text-white'
+            className={
+              hub
+                ? 'absolute right-4 top-4 z-10 flex h-8 w-8 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-white/10 hover:text-white'
+                : 'absolute right-4 top-4 flex h-8 w-8 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-slate-200/60 hover:text-slate-600 dark:hover:bg-white/10 dark:hover:text-white'
+            }
           >
             <ThemeIcon className='h-4 w-4' />
           </button>
 
+          {hub && (
+            <div
+              className='relative z-10 mb-8 flex flex-col items-center'
+              style={{ animation: 'login-up 0.7s cubic-bezier(0.22, 1, 0.36, 1) both' }}
+            >
+              <h1 className='m-0'>
+                <HubWordmark size='lg' onDark logoUrl={branding?.logo_url ?? null} />
+              </h1>
+              <p className='m-0 mt-3 text-[13px] text-[var(--hub-chrome-muted)]'>
+                The control tower for your Nivaro apps
+              </p>
+            </div>
+          )}
           {/* Mobile mark */}
           <div
-            className='mb-8 flex flex-col items-center lg:hidden'
+            className={hub ? 'hidden' : 'mb-8 flex flex-col items-center lg:hidden'}
             style={{ animation: 'login-up 0.7s cubic-bezier(0.22, 1, 0.36, 1) both' }}
           >
             <div
@@ -574,7 +607,11 @@ export function LoginPage() {
           </div>
 
           <div
-            className='w-full max-w-sm'
+            className={
+              hub
+                ? 'relative z-10 w-full max-w-sm rounded-2xl bg-card p-6 shadow-[0_24px_60px_-20px_rgb(0_0_0/0.7)] ring-1 ring-white/10 sm:p-8'
+                : 'w-full max-w-sm'
+            }
             style={{ animation: 'login-up 0.7s cubic-bezier(0.22, 1, 0.36, 1) 0.12s both' }}
           >
             {totpStep ? (
@@ -583,7 +620,7 @@ export function LoginPage() {
               <>
                 <div className='mb-6 text-center'>
                   <h2 className='text-[24px] font-bold tracking-tight text-slate-900'>
-                    Sign in to your account
+                    {hub ? 'Sign in to the Hub' : 'Sign in to your account'}
                   </h2>
                 </div>
 
@@ -734,8 +771,17 @@ export function LoginPage() {
             )}
           </div>
 
-          <div className='mt-16 text-center' style={{ animation: 'login-fade 1s ease 0.4s both' }}>
-            <p className='text-[11px] text-slate-600'>© 2026 Nivaro · All rights reserved</p>
+          <div
+            className={hub ? 'relative z-10 mt-10 text-center' : 'mt-16 text-center'}
+            style={{ animation: 'login-fade 1s ease 0.4s both' }}
+          >
+            <p
+              className={
+                hub ? 'text-[11px] text-[var(--hub-chrome-muted)]' : 'text-[11px] text-slate-600'
+              }
+            >
+              {hub ? 'Nivaro Hub · Restricted access' : '© 2026 Nivaro · All rights reserved'}
+            </p>
           </div>
         </div>
       </div>

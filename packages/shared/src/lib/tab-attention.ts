@@ -25,6 +25,8 @@ interface Owner {
 const owners = new Map<symbol, Owner>()
 /** The environment label in front of the title ("Staging"), and labels to take off. */
 let titleLabel: string | null = null
+/** The product in front of everything ("Hub"): a standalone Nivaro Hub sets it, nothing else. */
+let productLabel: string | null = null
 let goneLabels: string[] = []
 let observer: MutationObserver | null = null
 let iconRequest = 0
@@ -98,14 +100,19 @@ function wantsFavicon(): boolean {
 }
 
 function applyTitle() {
-  const want = composeTabTitle(document.title, currentCount(), titleLabel, goneLabels)
+  const label = [productLabel, titleLabel].filter((l): l is string => !!l).join(' · ') || null
+  const want = composeTabTitle(document.title, currentCount(), label, [
+    ...goneLabels,
+    productLabel,
+    titleLabel
+  ])
   goneLabels = []
   if (document.title !== want) document.title = want
 }
 
 /** Anything for this module to keep in the title (a count owner or a label). */
 function active(): boolean {
-  return owners.size > 0 || !!titleLabel
+  return owners.size > 0 || !!titleLabel || !!productLabel
 }
 
 function iconLinks(): HTMLLinkElement[] {
@@ -293,4 +300,16 @@ export function useTabTitleLabel(label: string | null) {
       apply()
     }
   }, [label])
+}
+
+/**
+ * Put the product in front of the tab title, before any environment label: `(3) Hub · Staging ·
+ * Apps`. Only a standalone Nivaro Hub calls it (admin lib/hub-product.ts); null takes it off.
+ */
+export function setTabTitleProduct(label: string | null): void {
+  if (typeof document === 'undefined' || label === productLabel) return
+  if (productLabel) goneLabels.push(productLabel)
+  productLabel = label
+  if (label) ensureObserver()
+  apply()
 }
