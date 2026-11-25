@@ -18,6 +18,8 @@ const ALLOWED: Record<string, string> = {
     'cloud provisioning of a tenant’s first administrator: cloud mode only, a Hub is refused in cloud mode (no offboard block can exist there)',
   'services/hub-link/first-admin.ts':
     'APP side of the Hub link (POST /api/hub-link/first-admin, never mounted on a Hub): the block lives on the Hub; the app’s own copy is suspended by the offboard run itself',
+  'services/hub-link/verify.ts':
+    'APP side of the Hub link (smoke reads, never mounted on a Hub): writes only its own smoke account (account_kind hub_smoke, which no administrator can set; random address, found by its stored id, own read-only role with app access off); every sign-in path refuses that kind (auth/role-sign-in.ts isHubSmokeAccount), so no person can be made active through it',
   'services/hub/people/offboard.ts':
     'liftOffboardBlock: reactivates the Hub account only after this run’s block is lifted, under the admin lock, when its own suspension marker still matches'
 }

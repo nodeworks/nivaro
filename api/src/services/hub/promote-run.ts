@@ -1105,6 +1105,8 @@ export async function startPromotion(
      * stack settings and pins. Confirmed by the typed key, like a restart: no plan preview.
      */
     apply?: boolean
+    /** Hooks of a start that changes what is deployed first (an extension pin): StartHooks. */
+    hooks?: StartHooks
   },
   deps: StartDeps = defaultStartDeps()
 ): Promise<{ deployId: number; jobRunId: number | null }> {
@@ -1164,6 +1166,7 @@ export async function startPromotion(
     ])
   }
   let handedOff = false
+  let lockedHookRan = false
   /** Every GitLab branch the run deploys, held for the whole run (review H1). */
   let branches: BranchHold | null = null
   try {
@@ -1177,6 +1180,11 @@ export async function startPromotion(
     })
     if (await db(DEPLOYS).where({ environment_id: envId, status: 'running' }).first('id'))
       throw alreadyRunning()
+    // Inside the lock, before gather reads what to deploy (an extension promote writes its pin).
+    if (req.hooks?.onLocked) {
+      lockedHookRan = true
+      await req.hooks.onLocked()
+    }
     const input = await deps.gather(envId, {
       kind: req.kind,
       version: req.version,
@@ -1278,17 +1286,38 @@ export async function startPromotion(
           'hub promotion bookkeeping failed'
         )
       )
-      .finally(() => {
+      .finally(async () => {
         live.delete(deployId)
         unmarkLive(deployId)
+        if (req.hooks?.onEnd) {
+          const row = (await db(DEPLOYS)
+            .where({ id: deployId })
+            .first('status')
+            .catch(() => undefined)) as { status?: string } | undefined
+          await req.hooks.onEnd(row?.status === 'success', deployId).catch(() => undefined)
+        }
       })
     return { deployId, jobRunId: run.id }
   } finally {
     if (!handedOff) {
+      // A start refused after its hook ran: the hook undoes its change, still inside the lock.
+      if (lockedHookRan) await req.hooks?.onEnd?.(false, null).catch(() => undefined)
       await branches?.release()
       await deps.lock.release(envId, token)
     }
   }
+}
+
+/**
+ * Hub verification (extension promote): what a start that first changes the deploy's inputs
+ * needs. `onLocked` runs once the environment's promotion lock is held, before gather reads the
+ * inputs; `onEnd` runs once with whether the deploy succeeded — at once (deployId null) when the
+ * start is refused after `onLocked`, or when the run ends. A run whose process stops never calls
+ * onEnd; its caller settles from the deploy row instead.
+ */
+export interface StartHooks {
+  onLocked?: () => Promise<void>
+  onEnd?: (ok: boolean, deployId: number | null) => Promise<void>
 }
 
 /**
@@ -1299,7 +1328,7 @@ export async function startPromotion(
  */
 export async function startStackApply(
   envId: number,
-  req: { confirm: unknown; user: { id: string } | null },
+  req: { confirm: unknown; user: { id: string } | null; hooks?: StartHooks },
   deps: StartDeps = defaultStartDeps()
 ): Promise<{ deployId: number; jobRunId: number | null }> {
   const env = (await db(ENVS).where({ id: envId }).first('key', 'version_pin')) as
@@ -1314,7 +1343,15 @@ export async function startStackApply(
     )
   return startPromotion(
     envId,
-    { kind: 'promote', version, confirm: req.confirm, planHash: null, user: req.user, apply: true },
+    {
+      kind: 'promote',
+      version,
+      confirm: req.confirm,
+      planHash: null,
+      user: req.user,
+      apply: true,
+      ...(req.hooks ? { hooks: req.hooks } : {})
+    },
     deps
   )
 }

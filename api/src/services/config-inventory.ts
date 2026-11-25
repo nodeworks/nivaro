@@ -356,6 +356,10 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_hub_oncall_overrides',
   'nivaro_hub_pages',
   'nivaro_hub_status_pages',
+  'nivaro_hub_smoke_suites', //        Hub verification (574): smoke suites + runs, extension
+  'nivaro_hub_smoke_runs', //          sightings + promotions (per-Hub state, never promoted)
+  'nivaro_hub_extension_sightings',
+  'nivaro_hub_extension_promotions',
   'nivaro_share_links',
   'nivaro_dashboard_links',
   'nivaro_webhook_deliveries',

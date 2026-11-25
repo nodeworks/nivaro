@@ -459,7 +459,12 @@ export const CORE_KEEPS: readonly EnvKeepEntry[] = [
       'nivaro_hub_oncall_rotas',
       'nivaro_hub_oncall_overrides',
       'nivaro_hub_pages',
-      'nivaro_hub_status_pages'
+      'nivaro_hub_status_pages',
+      // Hub verification (574): smoke suites + runs, extension sightings + promotions
+      'nivaro_hub_smoke_suites',
+      'nivaro_hub_smoke_runs',
+      'nivaro_hub_extension_sightings',
+      'nivaro_hub_extension_promotions'
     ] as const
   ).map(
     (table): EnvKeepEntry => ({

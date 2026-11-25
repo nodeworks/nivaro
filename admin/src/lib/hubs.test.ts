@@ -39,6 +39,9 @@ describe('hub registry', () => {
       'Incidents',
       'On-call',
       'Status pages',
+      // Hub verification (hub-enh/verify) follows Releases.
+      'Smoke checks',
+      'Extensions',
       // Hub ops (enhancements 10, 20, 19) come last, then People (hub-enh/people).
       'Issues',
       'Storage',

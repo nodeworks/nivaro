@@ -1865,7 +1865,118 @@ export const HUB_ROUTES: HubRoute[] = [
     'The public status page (HTML; ?format=json for JSON)',
     {
       notes:
-        'No sign-in: the token is the credential. Rate-limited; a wrong, expired or replaced token answers 404. No hostnames, versions or error text.'
+        'No sign-in: the token is the credential. Rate-limited; a wrong, expired or replaced token answers 404. No hostnames, versions or error text.',
+    }
+  ),
+  // ─── Verification: smoke checks, extension versions (routes/hub-verify.ts) ──────────
+  r(
+    'GET',
+    '/verify/smoke',
+    'Verification',
+    'owner',
+    'read',
+    'Smoke check suites and the last run per environment the caller may see'
+  ),
+  r(
+    'GET',
+    '/environments/:envId/smoke',
+    'Verification',
+    'owner',
+    'read',
+    'An environment’s smoke checks and its recent runs'
+  ),
+  r(
+    'PUT',
+    '/environments/:envId/smoke',
+    'Verification',
+    'admin',
+    'write',
+    'Save an environment’s post-deploy smoke checks',
+    {
+      body: {
+        enabled: b('false switches the suite off'),
+        on_fail: s('notify or rollback', { enum: ['notify', 'rollback'] }),
+        settle_seconds: n('0–600, wait after a deploy finished (default 30)'),
+        checks: list(
+          'object',
+          'Up to 20: kind http|read|query, name, path (http: on the environment; read: /api/…), slug + params (query), expect_status, contains (http), min_rows/max_rows, max_ms'
+        )
+      },
+      notes:
+        'rollback makes a failed run after a promotion a breach for the environment’s automatic rollback rule; without an enabled rule the people are only told.'
+    }
+  ),
+  r(
+    'DELETE',
+    '/environments/:envId/smoke',
+    'Verification',
+    'admin',
+    'write',
+    'Remove an environment’s smoke checks'
+  ),
+  r(
+    'POST',
+    '/environments/:envId/smoke/run',
+    'Verification',
+    'admin',
+    'write',
+    'Run an environment’s smoke checks now',
+    { accepted: true, notes: '409 NO_SUITE when the environment has none.' }
+  ),
+  r('GET', '/smoke-runs/:id', 'Verification', 'owner', 'read', 'One smoke run, check by check'),
+  r(
+    'GET',
+    '/verify/extensions',
+    'Verification',
+    'owner',
+    'read',
+    'Which extension each environment runs (version, build, pin) and which are behind'
+  ),
+  r(
+    'POST',
+    '/verify/extensions/refresh',
+    'Verification',
+    'admin',
+    'write',
+    'Read every environment’s extensions and pins now',
+    {
+      body: {
+        app_id: n(
+          'One app only (read in the request); without it every app, in the background (202)'
+        )
+      }
+    }
+  ),
+  r(
+    'POST',
+    '/environments/:envId/extensions/:extId/plan',
+    'Verification',
+    'admin',
+    'plan',
+    'What promoting one extension into an environment would do',
+    {
+      body: {
+        from_env_id: n('Take the pin of this environment (default: the one before it)'),
+        pin: s('Or this pin: <repository>@sha256:<64 hex>')
+      }
+    }
+  ),
+  r(
+    'POST',
+    '/environments/:envId/extensions/:extId/promote',
+    'Verification',
+    'admin',
+    'write',
+    'Promote one extension into an environment on its own',
+    {
+      body: {
+        from_env_id: n('Take the pin of this environment (default: the one before it)'),
+        pin: s('Or this pin: <repository>@sha256:<64 hex>'),
+        confirm: s('Type the environment key', { required: true })
+      },
+      sensitive: true,
+      notes:
+        'Docker: the pin is written inside the promotion lock as part of Apply now (202, a normal Hub deploy) and put back when the deploy fails. GitLab: the pin file extensions/<id>.pin beside the driver’s pin file is committed under the promotion and branch locks, a deploy record (kind extension) is written and the repository pipeline is watched (202). Refused for an extension the app neither lists nor runs (UNKNOWN_EXTENSION), on a shared deployment (EXTENSION_ON_SHARED), while a move or creation is open (MOVE_OPEN, CREATION_OPEN), in a freeze (FROZEN) or while the environment deploys (LOCKED).'
     }
   ),
   // ─── Phone app (routes/hub-people.ts) ───────────────────────────────────────

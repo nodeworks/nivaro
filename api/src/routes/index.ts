@@ -184,6 +184,8 @@ import { hubStripRoutes } from './hub-strip.js'
 import { hubSwitcherRoutes } from './hub-switcher.js'
 import { hubTemplateRoutes } from './hub-templates.js'
 import { hubTransferRoutes } from './hub-transfer.js'
+import { hubVerifyRoutes } from './hub-verify.js'
+import { hubVerifyDeploymentRoutes, hubVerifyLinkRoutes } from './hub-verify-link.js'
 import { ideasRoutes } from './ideas.js'
 import { importTemplatesRoutes } from './import-templates.js'
 import { importsRoutes } from './imports.js'
@@ -509,6 +511,9 @@ export async function registerRoutes(app: FastifyInstance) {
   // Hub incident status banner (plain text, bearer-only): beside each link.
   await app.register(hubLinkBannerRoutes, { prefix: '/hub-link' })
   await app.register(hubDeploymentBannerRoutes, { prefix: '/hub-deployment' })
+  // Hub verification (smoke reads as the app's service identity, extension inventory).
+  await app.register(hubVerifyLinkRoutes, { prefix: '/hub-link' })
+  await app.register(hubVerifyDeploymentRoutes, { prefix: '/hub-deployment' })
   // Hub phase 6 file transfer (ticket-only): where the hub link is, or on a Hub shared deployment.
   await app.register(hubTransferRoutes, { prefix: '/hub-transfer' })
   // File source: mounted only where FILE_SOURCE_TOKEN is set (bearer-only) — lower environments
@@ -536,6 +541,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(hubAppLinkRoutes, { prefix: '/hub/app-link' })
   // Hub ops: cross-app issues, secret rotation helper, storage health (HUB=on only).
   await app.register(hubOpsRoutes, { prefix: '/hub' })
+  // Hub verification: post-deploy smoke checks, extension version manager (HUB=on only).
+  await app.register(hubVerifyRoutes, { prefix: '/hub' })
   // Hub phase 7 (app side): GET /api/hub-switcher + readiness `hub-signin`; 404 without the link.
   await app.register(hubSwitcherRoutes)
   await app.register(releaseRunsRoutes, { prefix: '/release' })

@@ -30,7 +30,7 @@ import {
   handleDynamicCallback
 } from '../auth/oidc.js'
 import { primaryOidcEnabled } from '../auth/primary-oidc.js'
-import { signInAllowedByRole } from '../auth/role-sign-in.js'
+import { isHubSmokeAccount, signInAllowedByRole } from '../auth/role-sign-in.js'
 import {
   consumeAssertionId,
   extractSamlIdentity,
@@ -1376,6 +1376,12 @@ export async function authRoutes(app: FastifyInstance) {
     }
     const target = await db<User>('nivaro_users').where({ id: user_id, status: 'active' }).first()
     if (!target) return reply.code(404).send({ error: 'User not found or inactive' })
+    // The Hub smoke identity is never viewed as.
+    if (isHubSmokeAccount(target))
+      return reply.code(409).send({
+        error: 'This is the Hub smoke checks’ own account — it cannot be viewed as.',
+        code: 'HUB_SMOKE_ACCOUNT'
+      })
     // Nobody can sign in as them, so there is nothing to view as them.
     if (!(await signInAllowedByRole(target)))
       return reply.code(409).send({
