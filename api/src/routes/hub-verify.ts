@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { logActivity } from '../services/activity.js'
 import { hubRequireAdmin, hubRequireAuth } from '../services/hub/api/gate.js'
 import { idParam } from '../services/hub/apps.js'
+import { OutsideWindowError, outsideWindowOf } from '../services/hub/changes/emergency.js'
 import { hubModeEnabled } from '../services/hub/mode.js'
 import { flagOf, productionMap } from '../services/hub/owner-access.js'
 import { readRule } from '../services/hub/releases/auto-rollback.js'
@@ -361,11 +362,22 @@ export async function hubVerifyRoutes(app: FastifyInstance): Promise<void> {
       const env = await readableEnv(req)
       if (!env) return notFound(reply)
       const b = body(req)
+      let outside: { reason: string } | null
+      try {
+        outside = outsideWindowOf(req, b)
+      } catch (e) {
+        if (e instanceof OutsideWindowError) return fail(reply, e.status, e.code, e.message)
+        throw e
+      }
       try {
         const plan = await planExtensionPromote(
           Number(env.id),
           String((req.params as { extId: string }).extId),
-          { from_env_id: idParam(b.from_env_id), pin: typeof b.pin === 'string' ? b.pin : null }
+          {
+            from_env_id: idParam(b.from_env_id),
+            pin: typeof b.pin === 'string' ? b.pin : null,
+            outsideWindow: outside
+          }
         )
         return { data: plan }
       } catch (err) {
@@ -382,6 +394,15 @@ export async function hubVerifyRoutes(app: FastifyInstance): Promise<void> {
       const env = await readableEnv(req)
       if (!env) return notFound(reply)
       const b = body(req)
+      // An administrator's emergency start outside the deploy window (own session only,
+      // services/hub/changes/emergency.ts): freezes and the checklist still apply.
+      let outside: { reason: string } | null
+      try {
+        outside = outsideWindowOf(req, b)
+      } catch (e) {
+        if (e instanceof OutsideWindowError) return fail(reply, e.status, e.code, e.message)
+        throw e
+      }
       try {
         const out = await promoteExtension(
           Number(env.id),
@@ -389,9 +410,12 @@ export async function hubVerifyRoutes(app: FastifyInstance): Promise<void> {
           {
             from_env_id: idParam(b.from_env_id),
             pin: typeof b.pin === 'string' ? b.pin : null,
-            confirm: b.confirm
+            confirm: b.confirm,
+            checklist_run_id: b.checklist_run_id,
+            outsideWindow: outside
           },
-          { id: userId(req) }
+          { id: userId(req) },
+          { req }
         )
         return reply.code(202).send({ data: out })
       } catch (err) {

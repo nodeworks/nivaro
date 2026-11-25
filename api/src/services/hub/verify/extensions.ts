@@ -2,6 +2,8 @@ import { insertReturningId } from '../../../db/dialect/ef.js'
 import { db } from '../../../db/index.js'
 import { logActivity } from '../../activity.js'
 import { getApp } from '../../io-holder.js'
+import { startWithChecklist } from '../changes/checklist.js'
+import { recordOutsideWindow, windowWasClosed } from '../changes/emergency.js'
 import { componentTargetBranch, listComponents } from '../components.js'
 import { creationOpenRefusal } from '../create/store.js'
 import { strictPinMap } from '../docker/stack-gather.js'
@@ -451,6 +453,8 @@ export interface PromoteInput {
   from_env_id?: number | null
   /** Or a pin given as is (image@sha256:digest). */
   pin?: string | null
+  /** An administrator's emergency start outside the deploy window (outsideWindowOf). */
+  outsideWindow?: { reason: string } | null
 }
 
 export interface ExtensionPlan {
@@ -487,17 +491,36 @@ async function chainOf(appId: number) {
 }
 
 /**
- * THE gate of an extension promote beyond the plan's own blockers — the seam hub-enh/change
- * fills: today a freeze window (freezeRefusal, action `promote`); once change merges, freezeRefusal
- * and checklistGate with action `extension_promote`. Called by the plan (as a blocker) and again
- * at the start of both paths.
+ * THE change-engine gate of an extension promote beyond the plan's own blockers: freeze windows
+ * and deploy windows (freezeRefusal, action `extension_promote`, judged for THIS environment so
+ * production-only windows apply). `skipWindows` = an administrator's emergency start outside the
+ * window (services/hub/changes/emergency.ts): freezes still refuse. Called by the plan (as a
+ * blocker) and again at the start of both paths (inside the lock for GitLab). The production
+ * pre-deploy checklist (checklistGate, action `extension_promote`) is claimed by
+ * promoteExtension through startWithChecklist, linked as run kind `extension`.
  */
 export async function extensionPromoteRefusal(
   appId: number,
-  _envId: number
+  envId: number,
+  o: { skipWindows?: boolean } = {}
 ): Promise<{ code: string; message: string; status: number } | null> {
-  const frozen = await freezeRefusal({ appIds: [appId], action: 'promote' })
+  const frozen = await freezeRefusal({
+    appIds: [appId],
+    action: 'extension_promote',
+    envId,
+    ...(o.skipWindows ? { skipWindows: true } : {})
+  })
   return frozen ? { code: frozen.code, message: frozen.message, status: frozen.status } : null
+}
+
+/**
+ * The "version" an extension promote's checklist is ticked for (one checklist per extension and
+ * image): `<extension id>@<first 12 hex of the digest>` — the admin Extensions panel builds the
+ * same string (verify-api.ts).
+ */
+export function extensionChecklistVersion(extId: string, pin: string): string {
+  const at = pin.indexOf('@sha256:')
+  return `${extId}@${at >= 0 ? pin.slice(at + 8, at + 20) : pin.slice(0, 12)}`.slice(0, 64)
 }
 
 /** The Nivaro version the Hub last deployed to an environment (promote / rollback), or its pin. */
@@ -604,7 +627,9 @@ export async function planExtensionPromote(
   if (move) block(move.code, move.message)
   const creating = await creationOpenRefusal(envId)
   if (creating) block(creating.code, creating.message)
-  const gate = await extensionPromoteRefusal(appId, envId)
+  const gate = await extensionPromoteRefusal(appId, envId, {
+    skipWindows: !!input.outsideWindow
+  })
   if (gate) block(gate.code, gate.message)
   const held = await (deps.lock ?? defaultPromoteLock()).held(envId).catch(() => 'unknown' as const)
   if (held) block('LOCKED', `${env.key} is being deployed right now — try again when it is done.`)
@@ -625,6 +650,8 @@ export async function planExtensionPromote(
 }
 
 export interface PromoteDeps extends ReadDeps {
+  /** The start's request (the outside-window activity row names it). */
+  req?: import('fastify').FastifyRequest
   apply?: typeof startStackApply
   commit?: typeof commitFile
   deployJob?: typeof runDeployJob
@@ -673,7 +700,7 @@ async function finishPromotion(id: number, ok: boolean, deployId: number | null,
 export async function promoteExtension(
   envId: number,
   extId: string,
-  input: PromoteInput & { confirm?: unknown },
+  input: PromoteInput & { confirm?: unknown; checklist_run_id?: unknown },
   user: { id: string },
   deps: PromoteDeps = {}
 ): Promise<{ id: number; via: PinSource; deploy_id: number | null; commit_sha: string | null }> {
@@ -690,33 +717,66 @@ export async function promoteExtension(
     })
   const toPin = plan.to_pin as string
   const via = plan.via as PinSource
-  const id = Number(
-    await insertReturningId(db, EXT_PROMOTIONS, {
-      app_id: plan.environment.app_id,
-      environment_id: envId,
-      extension_id: extId,
-      from_environment_id: plan.from_env?.id ?? null,
-      from_pin: plan.current_pin,
-      to_pin: toPin,
-      via,
-      status: 'starting',
-      created_by: user.id,
-      created_at: new Date()
-    })
+  const appId = plan.environment.app_id
+  const outsideWindow = input.outsideWindow ?? null
+  // Judged before the start, without the override: was a window really closed?
+  const closed = outsideWindow
+    ? await windowWasClosed({ appIds: [appId], action: 'extension_promote', envId })
+    : false
+  let id = 0
+  let out: { deploy_id: number | null; commit_sha: string | null } = {
+    deploy_id: null,
+    commit_sha: null
+  }
+  // Production: the pre-deploy checklist (action extension_promote) is claimed first, linked to
+  // the promotion row, and given back when the start fails.
+  await startWithChecklist(
+    {
+      target: { kind: 'environment', envId },
+      action: 'extension_promote',
+      version: extensionChecklistVersion(extId, toPin),
+      runId: input.checklist_run_id
+    },
+    'extension',
+    async () => {
+      id = Number(
+        await insertReturningId(db, EXT_PROMOTIONS, {
+          app_id: appId,
+          environment_id: envId,
+          extension_id: extId,
+          from_environment_id: plan.from_env?.id ?? null,
+          from_pin: plan.current_pin,
+          to_pin: toPin,
+          via,
+          status: 'starting',
+          created_by: user.id,
+          created_at: new Date()
+        })
+      )
+      try {
+        out =
+          via === 'docker'
+            ? await promoteDocker(id, envId, extId, plan, user, deps, outsideWindow)
+            : await promoteGitlab(id, envId, extId, plan, user, deps, outsideWindow)
+      } catch (err) {
+        await finishPromotion(id, false, null, (err as Error | null)?.message ?? 'refused')
+        throw err
+      }
+      return id
+    },
+    (n) => n
   )
-  const fail = async (err: unknown) => {
-    await finishPromotion(id, false, null, (err as Error | null)?.message ?? 'refused')
-    throw err
-  }
-  let out: { deploy_id: number | null; commit_sha: string | null }
-  try {
-    out =
-      via === 'docker'
-        ? await promoteDocker(id, envId, extId, plan, user, deps)
-        : await promoteGitlab(id, envId, extId, plan, user, deps)
-  } catch (err) {
-    return fail(err)
-  }
+  if (outsideWindow && closed)
+    await recordOutsideWindow({
+      ...(deps.req ? { req: deps.req } : {}),
+      userId: user.id,
+      action: 'extension_promote',
+      appIds: [appId],
+      where: `${plan.environment.key} (${extId})`,
+      reason: outsideWindow.reason,
+      collection: EXT_PROMOTIONS,
+      item: String(id)
+    })
   await upsertSighting(envId, extId, { pin: toPin, pin_source: via, pin_read_at: new Date() })
   await logActivity({
     action: 'hub-extension-promote',
@@ -746,13 +806,15 @@ async function promoteDocker(
   extId: string,
   plan: ExtensionPlan,
   user: { id: string },
-  deps: PromoteDeps
+  deps: PromoteDeps,
+  outsideWindow: { reason: string } | null = null
 ): Promise<{ deploy_id: number | null; commit_sha: null }> {
   const toPin = plan.to_pin as string
   let wrote = false
   const started = await (deps.apply ?? startStackApply)(envId, {
     confirm: plan.environment.key,
     user,
+    ...(outsideWindow ? { outsideWindow } : {}),
     hooks: {
       onLocked: async () => {
         const row = (await db(ENVS).where({ id: envId }).first('extension_pins')) as
@@ -798,7 +860,8 @@ async function promoteGitlab(
   extId: string,
   plan: ExtensionPlan,
   user: { id: string },
-  deps: PromoteDeps
+  deps: PromoteDeps,
+  outsideWindow: { reason: string } | null = null
 ): Promise<{ deploy_id: number; commit_sha: string }> {
   const gl = await gitlabPinTarget(envId)
   if (!gl) throw new ExtensionError('NOT_PINNABLE', 'The GitLab target could not be found.')
@@ -823,7 +886,9 @@ async function promoteGitlab(
     if (move) throw new ExtensionError(move.code, move.message, move.status)
     const creating = await creationOpenRefusal(envId)
     if (creating) throw new ExtensionError(creating.code, creating.message, creating.status)
-    const gate = await extensionPromoteRefusal(plan.environment.app_id, envId)
+    const gate = await extensionPromoteRefusal(plan.environment.app_id, envId, {
+      skipWindows: !!outsideWindow
+    })
     if (gate) throw new ExtensionError(gate.code, gate.message, gate.status)
     branches = await holdBranches(
       defaultBranchLock(),
