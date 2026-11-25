@@ -35,6 +35,11 @@ import { objectStorageCounts } from '../hub-transfer/object-counts.js'
  * (services/hub/move/plan.ts SHARED_FEATURES_SINCE). What a shared app must bring itself is
  * warned instead: the server's own Microsoft app registration, Teams bot or push relay key, and
  * any NIVARO_SETTINGS_OVERRIDES key a shared deployment does not apply (SETTINGS_ENV_OVERRIDES).
+ *
+ * GitLab issue sync (0.3.215) runs per app on a shared deployment too: ISSUE_TRACKERS is sent as
+ * a warning now (sync is on, and whether the server's ISSUE_TRACKERS switch is what turns it on,
+ * which a shared deployment does not apply). The Hub still blocks it for a target before 0.3.215
+ * (plan.ts SHARED_TRACKERS_SINCE); an older Hub reads the code as a blocker whatever its level.
  */
 
 export type SharedReadinessCode =
@@ -61,7 +66,6 @@ export type SharedReadinessCode =
 /** Ruling R1 adds ENV_OBJECT_STORAGE: objects under an env-driven S3/Azure provider are never
  *  pulled by a move (only `local` rows), so they would be lost. */
 export const SHARED_READINESS_BLOCKERS: readonly SharedReadinessCode[] = [
-  'ISSUE_TRACKERS',
   'EXEC_SCRIPT_FLOWS',
   'SQLITE',
   'ENV_OBJECT_STORAGE'
@@ -115,11 +119,22 @@ async function countIf(
 
 // ─── Blockers ────────────────────────────────────────────────────────────────────────────
 
+/**
+ * GitLab sync on with connections (a warning since 0.3.215; the Hub blocks a target before it).
+ * When the server's ISSUE_TRACKERS=on is what switches it on, a shared deployment does not
+ * apply that (each app's own switch decides there): the detail says to switch it on again.
+ */
 async function issueTrackers(): Promise<string | null> {
-  const { trackersEnabled } = await import('../trackers/feature.js')
-  if (!(await trackersEnabled())) return null
+  const { trackersFeature } = await import('../trackers/feature.js')
+  const f = await trackersFeature()
+  if (!f.enabled) return null
   const n = await countIf('nivaro_tracker_connections')
-  return n > 0 ? `GitLab issue sync is on with ${plural(n, 'connection', 'connections')}` : null
+  if (n === 0) return null
+  const on = `GitLab issue sync is on with ${plural(n, 'connection', 'connections')}`
+  const { perAppJobs } = await import('../deployment-mode.js')
+  return f.source === 'env' && !perAppJobs()
+    ? `${on}, switched on by the server's ISSUE_TRACKERS setting; switch it on again on the Issue trackers tab after the move`
+    : on
 }
 
 async function execScriptFlows(): Promise<string | null> {
