@@ -1672,6 +1672,202 @@ export const HUB_ROUTES: HubRoute[] = [
   r('POST', '/secrets/check', 'Secrets', 'admin', 'write', 'Run a secret’s readiness check now', {
     body: { ref: s('Secret reference', { required: true }) }
   }),
+  // ─── Incidents, on-call, status pages (routes/hub-incidents.ts, hub-status-public.ts) ───
+  r('GET', '/incidents', 'Incidents', 'owner', 'read', 'Incidents (owners: their apps)', {
+    query: { status: s('open or resolved', { enum: ['open', 'resolved'] }), app_id: n() }
+  }),
+  r(
+    'GET',
+    '/incidents/:id',
+    'Incidents',
+    'owner',
+    'read',
+    'One incident: timeline, banner per environment, freeze, page and escalation'
+  ),
+  r('POST', '/apps/:id/incidents', 'Incidents', 'admin', 'write', 'Open an incident', {
+    body: {
+      title: s('What is wrong (at most 200 characters)', { required: true }),
+      severity: s('sev1, sev2 or sev3', { enum: ['sev1', 'sev2', 'sev3'] }),
+      environment_id: n('One environment of the app (empty = the app)'),
+      summary: s('Internal summary'),
+      banner_text: s('Plain text every person of the app sees (at most 280 characters)'),
+      freeze: b('Freeze deploys for the app (default true)'),
+      page: b('Page on-call (default true)')
+    },
+    notes:
+      'Freezes deploys (409 FROZEN on promote / apply / upgrade / move; a rollback stays allowed), sets the banner over the hub link and pages on-call.'
+  }),
+  r('PATCH', '/incidents/:id', 'Incidents', 'admin', 'write', 'Change title, severity or summary', {
+    body: { title: s(), severity: s('sev1, sev2 or sev3'), summary: s() }
+  }),
+  r('POST', '/incidents/:id/notes', 'Incidents', 'admin', 'write', 'Add a note to the timeline', {
+    body: { text: s('At most 2000 characters', { required: true }) }
+  }),
+  r(
+    'PUT',
+    '/incidents/:id/banner',
+    'Incidents',
+    'admin',
+    'write',
+    'Set or remove the status banner in the app',
+    { body: { text: s('Plain text, at most 280 characters; empty removes it') } }
+  ),
+  r(
+    'POST',
+    '/incidents/:id/freeze',
+    'Incidents',
+    'admin',
+    'write',
+    'Freeze deploys again, or lift the incident’s freeze early',
+    { body: { on: b('true = freeze, false = lift') }, sensitive: true }
+  ),
+  r(
+    'POST',
+    '/incidents/:id/acknowledge',
+    'Incidents',
+    'owner',
+    'write',
+    'Acknowledge the incident’s page (stops the escalation)',
+    { notes: 'Also open to the people the page was sent to.' }
+  ),
+  r(
+    'POST',
+    '/incidents/:id/resolve',
+    'Incidents',
+    'admin',
+    'write',
+    'Resolve: lift the freeze, remove the banner, close the pages',
+    { body: { note: s('What fixed it') } }
+  ),
+  r(
+    'POST',
+    '/incidents/:id/postmortem/draft',
+    'Incidents',
+    'admin',
+    'write',
+    'Draft the post-mortem timeline from deploys, alerts, errors, moves and uptime',
+    {
+      body: { replace: b('Replace a post-mortem that exists') },
+      notes: '409 POSTMORTEM_EXISTS unless replace is true.'
+    }
+  ),
+  r(
+    'PUT',
+    '/incidents/:id/postmortem',
+    'Incidents',
+    'admin',
+    'write',
+    'Save the edited post-mortem',
+    {
+      body: { postmortem: o('The document', { required: true }) }
+    }
+  ),
+  r('GET', '/incidents/:id/postmortem.md', 'Incidents', 'owner', 'read', 'Post-mortem as Markdown'),
+  r('GET', '/incidents/:id/postmortem.pdf', 'Incidents', 'owner', 'read', 'Post-mortem as PDF', {
+    notes: '503 when the server has no Chromium and no render peer.'
+  }),
+  r(
+    'GET',
+    '/on-call',
+    'On-call',
+    'owner',
+    'read',
+    'Rotas, who is on call now, upcoming shifts, overrides and pages',
+    { notes: 'People on a rota see that rota and the pages sent to them.' }
+  ),
+  r('GET', '/on-call/people', 'On-call', 'admin', 'read', 'Hub accounts a rota may name'),
+  r('PUT', '/apps/:id/on-call', 'On-call', 'admin', 'write', 'Set the app’s weekly on-call rota', {
+    body: {
+      enabled: b(),
+      people: list('string', 'Hub account ids, in rota order'),
+      time_zone: s('IANA zone of the hand-over'),
+      handover_weekday: n('0 = Sunday … 6 = Saturday'),
+      handover_time: s('HH:MM'),
+      starts_on: s('ISO time the first person starts'),
+      escalate_minutes: n('1–240'),
+      steps: list('string', 'on_call, next, owners, admins (on_call first)')
+    }
+  }),
+  r(
+    'POST',
+    '/apps/:id/on-call/overrides',
+    'On-call',
+    'admin',
+    'write',
+    'Put someone on call instead of the rota for a time range',
+    {
+      body: {
+        user_id: s('Hub account id', { required: true }),
+        starts_at: s('ISO time', { required: true }),
+        ends_at: s('ISO time', { required: true }),
+        note: s()
+      }
+    }
+  ),
+  r('DELETE', '/on-call/overrides/:id', 'On-call', 'admin', 'write', 'Remove an override'),
+  r(
+    'POST',
+    '/pages/:id/acknowledge',
+    'On-call',
+    'owner',
+    'write',
+    'Acknowledge a page (stops its escalation)',
+    { notes: 'Also open to the people the page was sent to.' }
+  ),
+  r(
+    'GET',
+    '/status-pages',
+    'Status pages',
+    'owner',
+    'read',
+    'Status pages (administrators: all; anyone signed in: the internal ones)'
+  ),
+  r(
+    'GET',
+    '/status-pages/:id/view',
+    'Status pages',
+    'owner',
+    'read',
+    'What a status page says now (internal pages: anyone signed in)'
+  ),
+  r('POST', '/status-pages', 'Status pages', 'admin', 'write', 'Create a status page', {
+    body: {
+      name: s('Title on the page', { required: true }),
+      audience: s('public (token link) or internal (signed-in people)', {
+        enum: ['public', 'internal']
+      }),
+      app_ids: list('integer', 'Apps on the page (empty = every app)'),
+      expires_in_days: n('Public link lifetime, 1–366 (default 90)')
+    },
+    notes: 'A public page answers its token once; only its SHA-256 is stored.'
+  }),
+  r('PATCH', '/status-pages/:id', 'Status pages', 'admin', 'write', 'Rename or change the apps', {
+    body: { name: s(), app_ids: list('integer') }
+  }),
+  r(
+    'POST',
+    '/status-pages/:id/rotate',
+    'Status pages',
+    'admin',
+    'write',
+    'Replace a public page’s link (the old one stops working)',
+    { body: { expires_in_days: n('1–366 (default 90)') }, sensitive: true }
+  ),
+  r('DELETE', '/status-pages/:id', 'Status pages', 'admin', 'write', 'Delete a status page', {
+    sensitive: true
+  }),
+  r(
+    'GET',
+    '/status-page/:token',
+    'Status pages',
+    'public',
+    'read',
+    'The public status page (HTML; ?format=json for JSON)',
+    {
+      notes:
+        'No sign-in: the token is the credential. Rate-limited; a wrong, expired or replaced token answers 404. No hostnames, versions or error text.'
+    }
+  ),
   // ─── Phone app (routes/hub-people.ts) ───────────────────────────────────────
   r('GET', '/mobile/summary', 'Phone', 'owner', 'read', 'Fleet at a glance (last known status)'),
   r('GET', '/mobile/runs', 'Phone', 'owner', 'read', 'Recent promotions, rollbacks and applies', {

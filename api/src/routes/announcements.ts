@@ -784,6 +784,15 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
         /* table mid-migration */
       }
     }
+    // A Nivaro Hub incident's status banner (services/hub-link/status-banner.ts): plain text set
+    // over the hub link, shown to every viewer, never dismissable; first in the strip.
+    const { readStatusBanner, bannerAnnouncement } = await import(
+      '../services/hub-link/status-banner.js'
+    )
+    const hub = await readStatusBanner(
+      (app as unknown as { redis?: Parameters<typeof readStatusBanner>[0] }).redis
+    )
+    if (hub) data.unshift(bannerAnnouncement(hub))
     return { data }
   })
 
