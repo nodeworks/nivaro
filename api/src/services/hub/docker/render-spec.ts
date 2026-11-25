@@ -42,8 +42,10 @@ export interface RenderStackInput {
   database?: DatabaseRecordEnv | null
   /** The target agent's version (GET /v1/health `agent_version`); unknown = no exporter role. */
   agentVersion?: string | null
-  /** The target agent keeps uploads on an NFS export (GET /v1/health `volume_nfs`, 0.2.2). */
+  /** The target agent keeps uploads on an NFS export (GET /v1/health `volume_nfs`, 0.2.3). */
   agentVolumeNfs?: boolean | null
+  /** The target agent sees that export (GET /v1/health `export_mount`); false = cannot deploy. */
+  agentExportMount?: boolean | null
 }
 
 export type StackRenderCode =
@@ -53,6 +55,7 @@ export type StackRenderCode =
   | 'ENV_SECRET_CLASH'
   | 'AGENT_TOO_OLD'
   | 'UPLOADS_FOLDER_NEEDS_NFS'
+  | 'EXPORT_MOUNT_MISSING'
 
 export class StackRenderError extends Error {
   code: StackRenderCode
@@ -182,7 +185,16 @@ export function renderStackSpec(input: RenderStackInput): StackSpec {
   // The agent takes a published port only on the publish edge.
   if (edge === 'publish' && row.publish_port != null) spec.publish_port = row.publish_port
 
-  // Where the files sit (agent 0.2.2): sent only when set, so an older agent and every stack
+  // L3: an agent with uploads on an NFS export that cannot see the export refuses every stack
+  // (EXPORT_MOUNT_MISSING): say so in the plan, not only when the run reaches the agent.
+  if (input.agentVolumeNfs === true && input.agentExportMount === false) {
+    throw new StackRenderError(
+      'EXPORT_MOUNT_MISSING',
+      'The Hub agent keeps uploads on an NFS export but does not see the export (HUB_AGENT_VOLUME_EXPORT_MOUNT): mount it into the agent first.'
+    )
+  }
+
+  // Where the files sit (agent 0.2.3): sent only when set, so an older agent and every stack
   // that uses none get exactly the spec (and hash) they had.
   const files = row.files ?? DEFAULT_STACK_FILES
   if (stackFilesSet(files)) {

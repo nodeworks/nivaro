@@ -438,7 +438,8 @@ export async function gatherStackFacts(
         extensions,
         hubPublicUrl: null,
         agentVersion: health.agent_version,
-        agentVolumeNfs: health.volume_nfs
+        agentVolumeNfs: health.volume_nfs,
+        agentExportMount: health.export_mount
       })
     } catch (err) {
       if (!(err instanceof StackRenderError)) throw err

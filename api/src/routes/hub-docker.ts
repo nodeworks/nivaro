@@ -36,6 +36,7 @@ import {
   saveStackSettings,
   validateStackSettings
 } from '../services/hub/docker/stack-settings.js'
+import { volumesPerNode } from '../services/hub/docker/templates.js'
 import { getDriver, placedOnShared, SHARED_PLACEMENT_MESSAGE } from '../services/hub/drivers.js'
 import { moveOpenRefusal } from '../services/hub/move-open.js'
 import { markNameServing } from '../services/hub/name-check.js'
@@ -453,6 +454,9 @@ export function hubDockerRoutes(app: FastifyInstance) {
     let status: StackStatus | null = null
     let agent = 'ok'
     let localVolumesOnNodes: number | null = null
+    /** Agent 0.2.3: uploads on an NFS export (Remove keeps them) and the Redis pin label. */
+    let uploadsOnShare = false
+    let redisPinLabel: string | null = null
     /** P4-35: what Apply now would deploy against what runs (size, pins; never a setting). */
     let applyPreview: ApplyPreview | null = null
     /** P4-25: no service runs, but parts of this stack remain (what Remove stack clears). */
@@ -503,9 +507,9 @@ export function hubDockerRoutes(app: FastifyInstance) {
         // P4-33: local volumes on a swarm of several nodes split the stack's data.
         if (status) {
           const h = await agentHealth(target.driver).catch(() => null)
-          const nodes = h?.swarm?.nodes
-          if (typeof nodes === 'number' && nodes > 1 && (h?.volume_driver ?? 'local') === 'local')
-            localVolumesOnNodes = nodes
+          localVolumesOnNodes = volumesPerNode(h)
+          uploadsOnShare = h?.volume_nfs === true
+          redisPinLabel = typeof h?.redis_pin_label === 'string' ? h.redis_pin_label : null
         }
       } catch (err) {
         const code = err instanceof AgentError ? err.code : null
@@ -520,6 +524,8 @@ export function hubDockerRoutes(app: FastifyInstance) {
         status,
         agent,
         local_volumes_on_nodes: localVolumesOnNodes,
+        uploads_on_share: uploadsOnShare,
+        redis_pin_label: redisPinLabel,
         leftovers,
         apply_preview: status ? applyPreview : null
       }

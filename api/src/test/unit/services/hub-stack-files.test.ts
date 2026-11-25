@@ -199,7 +199,7 @@ describe('renderStackSpec: files', () => {
     expect(renderStackSpec(input({ agentVersion: '0.2.0' }))).toEqual(EXAMPLE)
   })
 
-  it('sends them to a 0.2.2 agent with an NFS export, and the agent takes the spec', () => {
+  it('sends them to a 0.2.3 agent with an NFS export, and the agent takes the spec', () => {
     const spec = renderStackSpec(
       input(
         { agentVolumeNfs: true },
@@ -222,14 +222,19 @@ describe('renderStackSpec: files', () => {
     expect(r.ok ? [] : r.fields).toEqual([])
   })
 
-  it('AGENT_TOO_OLD below 0.2.2 (or unknown), UPLOADS_FOLDER_NEEDS_NFS without an export', () => {
-    for (const v of ['0.2.1', null, 'dev'])
+  it('AGENT_TOO_OLD below 0.2.3 (or unknown), UPLOADS_FOLDER_NEEDS_NFS, EXPORT_MOUNT_MISSING', () => {
+    for (const v of ['0.2.1', '0.2.2', null, 'dev'])
       expect(codeOf(input({ agentVersion: v }, files({ run_as: 'app' }))), String(v)).toBe(
         'AGENT_TOO_OLD'
       )
     expect(codeOf(input({ agentVolumeNfs: false }, files({ uploads_folder: 'efp' })))).toBe(
       'UPLOADS_FOLDER_NEEDS_NFS'
     )
+    // L3: an agent on NFS that does not see its export cannot deploy any stack: the plan says so.
+    expect(codeOf(input({ agentVolumeNfs: true, agentExportMount: false }))).toBe(
+      'EXPORT_MOUNT_MISSING'
+    )
+    expect(codeOf(input({ agentVolumeNfs: true, agentExportMount: true }))).toBeNull()
     // A files sub-folder and run_as need no export.
     expect(codeOf(input({}, files({ files_subfolder: 'x', run_as: 'app' })))).toBeNull()
   })

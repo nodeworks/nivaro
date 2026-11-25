@@ -1065,6 +1065,18 @@ Object.assign(BLOCKER_COPY, {
   EXPORT_MOUNT_MISSING: {
     title: 'The agent does not see its NFS export',
     hint: 'Mount the export into the agent and set HUB_AGENT_VOLUME_EXPORT_MOUNT.'
+  },
+  UPLOADS_FOLDER_PARENT_WRITABLE: {
+    title: 'A folder above the uploads folder is writable by others',
+    hint: 'Remove group and other write (chmod go-w) on it on the file server.'
+  },
+  UPLOADS_FOLDER_NOT_OURS: {
+    title: 'A folder with this stack’s name is already on the export',
+    hint: 'The agent did not make it. Adopt it with the uploads folder setting, or remove it on the file server.'
+  },
+  UPLOADS_LAYOUT_CHANGED: {
+    title: 'This stack’s files are still on the export root',
+    hint: 'An older agent put them there. Move them into a folder on the file server and set it as the uploads folder.'
   }
 } satisfies Record<string, { title: string; hint?: string }>)
 

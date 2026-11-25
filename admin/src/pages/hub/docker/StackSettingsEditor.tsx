@@ -143,12 +143,15 @@ export function StackSettingsEditor({
   env,
   appId,
   idPrefix = '',
+  stackName = null,
   onApplyNow
 }: {
   env: HubEnvironment
   appId: number
   /** Unique per mount (the table and the phone list can both hold an editor). */
   idPrefix?: string
+  /** The placement's swarm stack name: names the stack's own folder on an NFS export. */
+  stackName?: string | null
   /** A stack runs: after a save, offer Apply now (P4-30). */
   onApplyNow?: () => void
 }) {
@@ -280,6 +283,12 @@ export function StackSettingsEditor({
   const rowErr = (kind: string, id: number) =>
     fieldError && fieldError.kind === kind && fieldError.id === id ? fieldError.text : null
   const idp = `hub-stack-${env.id}${idPrefix}`
+  // Where the files land, relative to the agent's NFS export (agent 0.2.3).
+  const noExport = !!agent.data && !agent.data.volume_nfs
+  const ownFolder = `${stackName ?? '<stack>'}/uploads`
+  const filesPath = `${draft.uploadsFolder.trim() || ownFolder}/${
+    draft.filesSubfolder.trim() ? `${draft.filesSubfolder.trim()}/` : ''
+  }`
 
   const kvRows = (
     kind: 'setting' | 'pin',
@@ -377,7 +386,20 @@ export function StackSettingsEditor({
             ]}
           />
         </Field>
-        <Field id={`${idp}-redis`} label='Redis'>
+        <Field
+          id={`${idp}-redis`}
+          label='Redis'
+          hint={
+            draft.redis !== 'bundled' ? undefined : agent.data?.redis_pin_label ? (
+              `Runs only on swarm nodes labelled ${agent.data.redis_pin_label}.`
+            ) : agent.data?.volume_nfs ? (
+              <span className='text-amber-700 dark:text-amber-400'>
+                Runs on any node, so after a move it starts empty (sign-ins and locks reset). To
+                keep it on one node, set HUB_AGENT_REDIS_PIN_LABEL on the agent.
+              </span>
+            ) : undefined
+          }
+        >
           <SimpleSelect
             value={draft.redis}
             onChange={(v) => set({ redis: v })}
@@ -411,15 +433,18 @@ export function StackSettingsEditor({
             label='Uploads folder'
             error={rowErr('uploads_folder', 0)}
             hint={
-              agent.data?.volume_nfs
-                ? "An existing folder on the agent's NFS export, used as it is (never created or changed). Empty: the stack gets its own folder, <stack>/uploads."
-                : 'Only with an agent that keeps uploads on an NFS export.'
+              noExport
+                ? 'Needs an agent that keeps uploads on an NFS export.'
+                : "An existing folder on the agent's NFS export, used as it is. Empty: the stack's own folder, which the agent creates."
             }
           >
             <Input
               id={`${idp}-uploads-folder`}
               value={draft.uploadsFolder}
-              placeholder='<stack>/uploads'
+              placeholder={ownFolder}
+              // Like Size under SQLite: an agent without an export cannot use one. A stored
+              // value stays editable so it can be cleared.
+              disabled={noExport && draft.uploadsFolder === ''}
               onChange={(e) => set({ uploadsFolder: e.target.value })}
               className='h-8 font-mono text-[13px]'
             />
@@ -428,7 +453,7 @@ export function StackSettingsEditor({
             id={`${idp}-files-subfolder`}
             label='Files sub-folder'
             error={rowErr('files_subfolder', 0)}
-            hint='Where the files sit inside the uploads folder (for example directus-uploads). Empty: the folder itself.'
+            hint='Only when the files sit one folder down inside the uploads folder (sets STORAGE_LOCAL_ROOT). Empty: the uploads folder itself.'
           >
             <Input
               id={`${idp}-files-subfolder`}
@@ -441,7 +466,11 @@ export function StackSettingsEditor({
             id={`${idp}-run-as`}
             label='Run as'
             error={rowErr('run_as', 0)}
-            hint='uid 1000 from the start suits an NFS export with root squash, where root in the container can do nothing on the files.'
+            hint={
+              draft.runAs === 'app'
+                ? 'The app never runs as root: right for an NFS export with root squash.'
+                : 'Pick uid 1000 for an NFS export with root squash: root in the container cannot write there.'
+            }
           >
             <SimpleSelect
               value={draft.runAs}
@@ -456,6 +485,13 @@ export function StackSettingsEditor({
             />
           </Field>
         </div>
+        {agent.data?.volume_nfs && (
+          <p className='m-0 text-[11px] text-slate-500 dark:text-muted-foreground'>
+            Files at{' '}
+            <span className='font-mono text-slate-700 dark:text-foreground'>{filesPath}</span> on
+            the NFS export.
+          </p>
+        )}
       </section>
 
       <section aria-label='Settings' className='space-y-1.5'>

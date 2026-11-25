@@ -85,14 +85,14 @@ export const EXPORTER_AGENT_MIN_VERSION = '0.2.2'
 
 /**
  * Hub agents from this version keep one uploads folder per stack on an NFS export and take a
- * stack's uploads_folder / files_subfolder / run_as.
+ * stack's uploads_folder / files_subfolder / run_as (0.2.2 builds from main predate them).
  */
-export const STACK_FILES_AGENT_MIN_VERSION = '0.2.2'
+export const STACK_FILES_AGENT_MIN_VERSION = '0.2.3'
 
 /**
  * P4-33: how many swarm nodes keep their OWN copy of a stack's volumes — the swarm has more than
- * one node and the volumes are `local`, unless the agent (0.2.2+) puts uploads on an NFS export
- * every node mounts (bundled Redis then stays on the agent's node). null = not per node.
+ * one node and the volumes are `local`, unless the agent (0.2.3+) puts uploads on an NFS export
+ * every node mounts. null = not per node.
  */
 export function volumesPerNode(
   h: { swarm?: { nodes?: number | null }; volume_driver?: string; volume_nfs?: boolean } | null

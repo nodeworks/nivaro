@@ -55,6 +55,7 @@ function setup(
     agent?: string
     settings?: unknown
     nodes?: number | null
+    onShare?: boolean
     leftovers?: unknown
     noStatus?: boolean
     preview?: unknown
@@ -74,6 +75,7 @@ function setup(
                 : status(opts.state ?? 'converged'),
             agent: opts.agent ?? 'ok',
             local_volumes_on_nodes: opts.nodes ?? null,
+            uploads_on_share: opts.onShare ?? false,
             leftovers: opts.leftovers ?? null,
             apply_preview: opts.preview ?? null
           }
@@ -558,5 +560,36 @@ describe('HubStackPanel: files (Hub agent 0.2.2)', () => {
     fireEvent.change(folder, { target: { value: '../x' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save settings' }))
     expect(await screen.findByText(/The uploads folder is not a valid path/)).toBeTruthy()
+  })
+})
+
+describe('HubStackPanel: Remove on an NFS share (Hub agent 0.2.3)', () => {
+  it('says only the Redis data goes and names the folder whose files stay', async () => {
+    setup({
+      onShare: true,
+      settings: {
+        size: 'small',
+        redis: 'bundled',
+        publish_port: null,
+        settings: {},
+        secrets: {},
+        saved: true,
+        extension_pins: {},
+        files: { uploads_folder: 'directus-uploads', files_subfolder: null, run_as: 'app' }
+      }
+    })
+    view(true)
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove stack…' }))
+    expect(screen.getByText(/uploads stay on the NFS share whatever you choose/)).toBeTruthy()
+    fireEvent.click(screen.getByLabelText("Also delete the stack's Redis data"))
+    expect(await screen.findByText(/The Redis data goes for good/)).toBeTruthy()
+    expect(await screen.findByText('directus-uploads')).toBeTruthy()
+  })
+
+  it('without a share the copy is the volumes one, as before', async () => {
+    setup()
+    view(true)
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove stack…' }))
+    expect(screen.getByLabelText("Also delete the stack's data volumes")).toBeTruthy()
   })
 })

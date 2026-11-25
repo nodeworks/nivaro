@@ -27,17 +27,19 @@ export interface HubAgentHealth {
   publish_ports: [number, number] | null
   extensions_shared: boolean
   redis_bundled: boolean
-  /** Agent 0.2.2: uploads sit on an NFS export, one folder per stack (shared by every node). */
+  /** Agent 0.2.3: uploads sit on an NFS export, one folder per stack (shared by every node). */
   volume_nfs?: boolean
-  /** Agent 0.2.2: the agent sees the export (HUB_AGENT_VOLUME_EXPORT_MOUNT). */
+  /** Agent 0.2.3: the agent sees the export (HUB_AGENT_VOLUME_EXPORT_MOUNT). */
   export_mount?: boolean
-  /** Agent 0.2.2: bundled Redis's volume driver (never NFS). */
+  /** Agent 0.2.3: bundled Redis's volume driver (never NFS). */
   redis_volume_driver?: string
+  /** Agent 0.2.3: bundled Redis runs only on nodes with this label (`key=value`); null = any. */
+  redis_pin_label?: string | null
 }
 
 /**
  * P4-33: a swarm of more than one node where stack volumes are `local` (one copy per node) —
- * not when the agent (0.2.2+) keeps uploads on an NFS export every node mounts.
+ * not when the agent (0.2.3+) keeps uploads on an NFS export every node mounts.
  */
 export const multiNodeLocal = (
   h: Pick<HubAgentHealth, 'swarm' | 'volume_driver' | 'volume_nfs'>

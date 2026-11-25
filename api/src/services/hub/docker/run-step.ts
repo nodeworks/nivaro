@@ -355,7 +355,8 @@ export async function prepareStackSpec(
       hubPublicUrl: (deps.hubPublicUrl ?? envHubUrl)(),
       database,
       agentVersion: health.agent_version,
-      agentVolumeNfs: health.volume_nfs
+      agentVolumeNfs: health.volume_nfs,
+      agentExportMount: health.export_mount
     })
   } catch (err) {
     throw asPromotionError(err, { stack: want.name })

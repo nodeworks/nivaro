@@ -34,6 +34,10 @@ export interface StackInfo {
   agent: string
   /** P4-33: the swarm has this many nodes (> 1) and the stack's volumes are local; else null. */
   local_volumes_on_nodes?: number | null
+  /** Agent 0.2.3: uploads are files on an NFS export (Remove stack keeps them). */
+  uploads_on_share?: boolean
+  /** Agent 0.2.3: bundled Redis runs only on nodes with this label (`key=value`); null = any. */
+  redis_pin_label?: string | null
   /** P4-35: what Apply now deploys against what runs: sizes and the pins that changed. */
   apply_preview?: {
     size: string | null
@@ -104,6 +108,8 @@ export const applyStack = (envId: number, confirm: string) =>
 export interface RemoveResult {
   removed: boolean | Record<string, string[] | number>
   already_absent?: boolean
+  /** Agent 0.2.3: volumes on an NFS export, kept (their files stay on the share). */
+  kept_volumes?: string[]
 }
 
 export const removeStack = (envId: number, name: string, volumes: boolean): Promise<RemoveResult> =>
