@@ -31,6 +31,7 @@ describe('hub registry', () => {
       'Drivers',
       'Targets',
       'Databases',
+      'Backups & data',
       'Sign-in',
       'Releases',
       // Hub ops (enhancements 10, 20, 19) come last.
@@ -44,6 +45,7 @@ describe('hub registry', () => {
     expect(hubForPath('/hub/targets')?.tab.label).toBe('Targets')
     expect(hubForPath('/hub/shared')?.tab.label).toBe('Shared deployments')
     expect(hubForPath('/hub/capacity')?.tab.label).toBe('Capacity')
+    expect(hubForPath('/hub/data')?.tab.label).toBe('Backups & data')
   })
 
   it('has unique tab paths across every hub', () => {

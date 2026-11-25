@@ -65,6 +65,8 @@ export type LockHolder =
   | 'app-key'
   // Phase 6 (P6-32): a database record being attached to or detached from the environment.
   | 'database'
+  // Hub data care: an environment refresh (or its rollback) replacing this environment's database.
+  | 'data'
 const HOLDERS: readonly LockHolder[] = [
   'creation',
   'promotion',
@@ -73,7 +75,8 @@ const HOLDERS: readonly LockHolder[] = [
   'move',
   'shared',
   'app-key',
-  'database'
+  'database',
+  'data'
 ]
 
 const tokenFor = (holder: LockHolder | undefined) => `${holder ?? 'promotion'}:${randomUUID()}`
@@ -126,6 +129,11 @@ export function lockHolderRefusal(
       code: 'DATABASE_BUSY',
       message:
         "This environment's database record is being attached or detached — try again in a moment."
+    }
+  if (holder === 'data')
+    return {
+      code: 'REFRESH_RUNNING',
+      message: "This environment's database is being refreshed or rolled back — wait for it to end."
     }
   if (holder === 'shared')
     return {

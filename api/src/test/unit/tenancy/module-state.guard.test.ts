@@ -634,6 +634,8 @@ const SHARED: Record<string, string> = {
   'services/hub/create/steps.ts :: syncsInFlight': HUB_ONLY,
   'services/hub/create/store.ts :: memCancels': HUB_ONLY,
   'services/hub/db/db-lock.ts :: memLocks': HUB_ONLY,
+  'services/hub/data/lock.ts :: memLocks': HUB_ONLY,
+  'services/hub/data/app-calls.ts :: fetchImpl': HUB_ONLY,
   'services/hub/shared/upgrade-run.ts :: cancelledHere': HUB_ONLY,
   'services/hub/shared/upgrade-run.ts :: live': HUB_ONLY,
   'services/hub/shared/upgrade-run.ts :: recovered': HUB_ONLY,

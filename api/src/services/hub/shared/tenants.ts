@@ -292,6 +292,12 @@ export async function tenantsBody(
     listed.push(row)
   }
 
+  // Hub data care: a move rehearsal's temporary app (rh-<run>, maintenance, .invalid host).
+  tenants.push(
+    ...(await import('../data/rehearsal.js')
+      .then((m) => m.rehearsalTenantWires(shared.id))
+      .catch(() => []))
+  )
   const hashed = JSON.stringify({ data: { deployment: shared.key, tenants } })
   const etag = `"${createHash('sha256').update(hashed).digest('hex')}"`
   const body: HubTenantsResponse = {

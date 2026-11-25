@@ -101,6 +101,7 @@ import {
 import { readJobLog } from '../services/job-runs.js'
 import { hubCapacityRoutes } from './hub-capacity.js'
 import { hubPhase3Routes } from './hub-create.js'
+import { hubDataRoutes } from './hub-data.js'
 import { hubDockerRoutes } from './hub-docker.js'
 import { hubMoveRoutes } from './hub-move.js'
 import { hubReleaseRoutes } from './hub-releases.js'
@@ -140,6 +141,7 @@ export async function hubRoutes(app: FastifyInstance) {
   hubMoveRoutes(app) // phase 6: moves between shared and dedicated placements (+ boot heal)
   hubCapacityRoutes(app) // capacity view, move advisor, per-app limits, rebalance
   hubReleaseRoutes(app) // release trains, schedules, freezes, auto-rollback, release notes
+  hubDataRoutes(app) // data care: backups, restore drills, refreshes, move rehearsals
 }
 
 const APPS = 'nivaro_hub_apps'

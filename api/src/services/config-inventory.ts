@@ -339,6 +339,8 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_hub_secret_policies',
   'nivaro_hub_secrets',
   'nivaro_hub_secret_rotations',
+  'nivaro_hub_backup_policies', // Hub data care (569): backup policies (sealed S3 key) and data runs
+  'nivaro_hub_data_runs',
   'nivaro_share_links',
   'nivaro_dashboard_links',
   'nivaro_webhook_deliveries',
