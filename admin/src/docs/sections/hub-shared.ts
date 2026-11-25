@@ -410,8 +410,8 @@ export const hubSharedDocs: DocSection = {
         ],
         [
           'Per-app direct Microsoft sign-in',
-          "Direct sign-in (and the fallback while the Hub is down) uses the deployment's one primary OIDC client: each app's callback address must be registered on that one Entra app. An app that signs in via the Hub (see Per app below) needs this only for the fallback.",
-          'checklist item `callbacks_registered` (not required for an app on Hub sign-in)'
+          "Direct sign-in (and the fallback while the Hub is down) uses the deployment's one primary OIDC client: each app's callback address must be registered on that one Entra app. An app that signs in via the Hub (see Per app below) still needs it: it is the fallback while the Hub is down.",
+          'checklist item `callbacks_registered`'
         ],
         [
           'Mail settings from the environment (`SMTP_*`)',
@@ -478,7 +478,7 @@ export const hubSharedDocs: DocSection = {
         'Microsoft directory lookups and sync. The app uses its own Microsoft app registration, saved in Settings → Microsoft directory (tenant id, client id, client secret; the secret is sealed with the app key). The server `GRAPH_*` and `OIDC_*` variables and the directory keys of `NIVARO_SETTINGS_OVERRIDES` are never used on shared.',
         "The Teams bot. The app uses only the bot saved in its own Settings. `TEAMS_BOT_*`, `MICROSOFT_APP_*`, the sign-in app fallback and the `teams_bot_*` override keys are ignored. `TEAMS_BOT=off` still disables the bot on the whole deployment, but `TEAMS_BOT=on` does not switch an app on: each app saves its own switch. Register each bot with that app's host as its messaging endpoint.",
         "Phone push. An app admin connects the app's push relay in Settings → Mobile app. The server `MOBILE_PUSH_RELAY_KEY` is not used on shared. Phone sign-in was already per app.",
-        "Sign-in via the Hub and the app switcher (from 0.3.215). The Hub hands each app its own sign-in client (only while the app is in Hub mode and the client is on), its environment hub token and the Hub's Microsoft client id in the tenant list, sealed with the app's key; `HUB_CLIENT_*` and `HUB_TOKEN` on the deployment are never used for an app. The app calls back on its own address (the Hub already knows it from the environment), checks the evidence against the deployment's primary `OIDC_ISSUER`, and falls back to direct sign-in through the deployment's primary OIDC. `HUB_SIGNIN=off` on the deployment turns it off for every app. A placed environment gets a hub token when it first serves (one moved in keeps its own). Creating, rotating or switching a client, or changing an app's mode, asks the deployment to re-read its list at once. A move of an app in Hub mode needs the target at 0.3.215 or later and an active client for the environment (`SIGNIN_VIA_HUB` otherwise); `callbacks_registered` is then only needed for the fallback."
+        "Sign-in via the Hub and the app switcher (from 0.3.215). The Hub hands each app its own sign-in client (only while the app is in Hub mode and the client is on), its environment hub token and the Hub's Microsoft client id in the tenant list (sealed with the app's key, which binds each value to its app; the list itself is what keeps them secret: it is fetched over TLS with the deployment token, never cached or logged). `HUB_CLIENT_*` and `HUB_TOKEN` on the deployment are never used for an app. The app calls back on its own address (the Hub already knows it from the environment), checks the evidence against the deployment's primary `OIDC_ISSUER`, and falls back to direct sign-in through the deployment's primary OIDC. `HUB_SIGNIN=off` on the deployment turns it off for every app. A placed environment gets a hub token when it first serves (one moved in keeps its own). Creating, rotating or switching a client, or changing an app's mode, asks the deployment to re-read its list at once. A move of an app in Hub mode needs the target at 0.3.215 or later and an active client for the environment (`SIGNIN_VIA_HUB` otherwise); `callbacks_registered` stays required: direct sign-in through the deployment's sign-in app is the fallback while the Hub is down, and the only path if the deployment is rolled back below 0.3.215 (the downgrade and rollback plans name the apps that would fall back). A move onto a shared deployment issues a hub token too when the environment has none."
       ]
     },
     {
@@ -729,8 +729,8 @@ export const hubMovesDocs: DocSection = {
       rows: [
         [
           '`callbacks_registered`',
-          "Moving to a shared deployment. Lists `https://<host>/api/auth/callback` for each name; add them to the deployment's Microsoft app registration. For an app that signs in via the Hub (target 0.3.215 or later, active client) only the direct fallback needs them.",
-          'yes; no for an app on Hub sign-in'
+          "Moving to a shared deployment. Lists `https://<host>/api/auth/callback` for each name; add them to the deployment's Microsoft app registration. For an app that signs in via the Hub (target 0.3.215 or later, active client) they serve direct sign-in while the Hub is down.",
+          'yes'
         ],
         [
           '`route_ticket`',

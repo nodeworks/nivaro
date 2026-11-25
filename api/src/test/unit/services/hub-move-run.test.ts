@@ -429,6 +429,13 @@ describe('move run — happy paths', () => {
       expect(env.status).toBe('active')
       expect(env.version_pin).toBe('0.3.210')
       if (kind === 'to_dedicated') expect([1, true, '1']).toContain(env.hub_managed)
+      // 0.3.215 (review L2): released onto a shared deployment without a hub token → one is
+      // issued (sealed, with its lookup), as a placement does; a dedicated target is untouched.
+      if (kind === 'to_dedicated') expect(env.hub_token ?? null).toBeNull()
+      else {
+        expect(String(env.hub_token)).toMatch(/^enc:v1:/)
+        expect(env.hub_token_lookup).toMatch(/^[0-9a-f]{64}$/)
+      }
       // The first copy is full, the one inside maintenance a delta (T10 carry).
       const pulls = fake.calls.filter((c) => c[0] === 'pullFiles').map((c) => c[1])
       expect(pulls).toEqual(kind === 'to_dedicated' ? ['full'] : ['full', 'delta'])

@@ -5,6 +5,13 @@ import { createCipheriv, createDecipheriv, createHmac } from 'node:crypto'
  * (AES-256-GCM, the `enc:v1:<iv>:<tag>:<ciphertext>` format of services/encryption.ts, so the
  * app's own decryptValue opens it too).
  *
+ * What this is for (review I1): binding, not secrecy. The tenant list that carries the sealed value
+ * carries the same app key in plain beside it, so the seal hides nothing from whoever reads the
+ * list. It makes the value open only for the app it was sealed for (a value under another app's
+ * entry fails the GCM check and is dropped) and keeps it opaque in anything that copies a tenant
+ * record. Secrecy comes from the list itself: TLS, the deployment token, `no-store`, never logged,
+ * and the deployment's last-good copy sealed whole with the deployment key.
+ *
  * The IV is synthetic: HMAC-SHA256(key, label + plain), first 12 bytes. The same value under the
  * same key always seals to the same text, so the tenant list's ETag (a hash of the body) stays
  * put while nothing changed; it shows only that two seals hold the same value. The label keeps

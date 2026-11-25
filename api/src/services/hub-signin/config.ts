@@ -17,7 +17,8 @@ import { type AppHubLink, currentAppHubLink } from '../tenancy/app-hub-links.js'
  * Hub (HUB=on → null) and Nivaro Cloud ignores all of it.
  *
  * On a Hub shared deployment (one process, many apps) the per-app values come from the Hub's
- * tenant list instead (tenancy/app-hub-links.ts, sealed with each app's key): the app's own
+ * tenant list instead (tenancy/app-hub-links.ts, bound to each app by a seal with its key): the
+ * app's own
  * client id + secret and the Hub's Microsoft client id (HUB_IDP_AUDIENCE of the deployment when
  * the Hub sent none). HUB_URL, HUB_SIGNIN=off and the primary OIDC stay the deployment's: one Hub,
  * one Microsoft tenant, one direct-sign-in fallback for every app it serves. HUB_CLIENT_ID /

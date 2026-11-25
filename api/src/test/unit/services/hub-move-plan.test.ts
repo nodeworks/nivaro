@@ -1010,12 +1010,12 @@ describe('buildMovePlan — sign-in through the Hub on a shared target (0.3.215)
     }
   })
 
-  it('0.3.215 or later: no blocker, and the callbacks item is only the direct fallback (not required)', () => {
+  it('0.3.215 or later: no blocker; the callbacks item stays required (the direct fallback, review L1)', () => {
     for (const v of ['0.3.215', '0.3.220', 'v0.4.0']) {
       const p = buildMovePlan(at(v))
       expect(codes(p)).not.toContain('SIGNIN_VIA_HUB')
-      expect(callbacks(p)?.required).toBe(false)
-      expect(callbacks(p)?.text).toContain('Only for direct sign-in while the Hub is down')
+      expect(callbacks(p)?.required).toBe(true)
+      expect(callbacks(p)?.text).toContain('for direct sign-in while the Hub is down')
       expect(callbacks(p)?.text).toContain('https://shop.apps.example.com/api/auth/callback')
     }
   })

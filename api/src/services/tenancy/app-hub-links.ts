@@ -7,7 +7,9 @@ import { openForApp } from './app-sealed.js'
  * per app), by tenant id. A dedicated app reads these from its environment (HUB_TOKEN,
  * HUB_CLIENT_ID, HUB_CLIENT_SECRET, HUB_IDP_AUDIENCE); one process serving many apps cannot, so
  * the Hub hands each app its own in the tenant list (`hub_link`, services/hub/shared/tenants.ts),
- * sealed with that app's key (tenancy/app-sealed.ts):
+ * sealed with that app's key (tenancy/app-sealed.ts) — binding the value to that app (it opens
+ * only under that app's entry), not secrecy: the list carries the key beside it and is protected
+ * as a whole (TLS, deployment token, no-store):
  *
  *   token          the environment's hub token (the app link bearer: sign-in reports, switcher)
  *   client_id      the environment's client at the Hub (hubc_…), only while the app signs in

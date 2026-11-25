@@ -1017,6 +1017,22 @@ describe('GET /callback with the Hub unavailable', () => {
     expect(other.headers.location).toMatch(/^https:\/\/login\.microsoftonline\.com\//)
   })
 
+  it('a client secret rotated while the person was at the Hub (401 invalid_client) → one hop to direct, no issue, Hub not marked down', async () => {
+    hub.token = async () => ({ status: 401, body: { error: 'invalid_client' } })
+    const session = hubSession()
+    const app = await build(session)
+    const res = await app.inject({ method: 'GET', url: cbUrl() })
+    expect(res.headers.location).toBe(
+      `/api/auth/login?direct=1&returnTo=${encodeURIComponent(RETURN_TO)}`
+    )
+    expect(session.userId).toBeUndefined()
+    expect(trackError).not.toHaveBeenCalled()
+    const pings = hub.pingHits
+    const other = await (await build(fakeSession())).inject({ method: 'GET', url: '/login' })
+    expect(new URL(other.headers.location as string).origin).toBe(base)
+    expect(hub.pingHits).toBeGreaterThanOrEqual(pings)
+  })
+
   it('a browser-delivered error=temporarily_unavailable hops that person, the probe stays up (P7-11)', async () => {
     const session = hubSession()
     const app = await build(session)

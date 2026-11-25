@@ -662,24 +662,18 @@ function checklistOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Mov
   if (toShared(input.kind) && input.to.kind === 'shared') {
     const callbacks = input.names.map((n) => `${addressOf(input, n)}/api/auth/callback`).join(', ')
     // Signed in through the Hub with its own client, whose addresses the Hub derives from the
-    // environment: the deployment's sign-in app is only the direct fallback while the Hub is down.
+    // environment.
     const viaHub =
       input.app.signin_mode === 'hub' &&
       input.env.hub_client === true &&
       runsSharedHubSignin(input.target_facts.version)
-    out.push(
-      viaHub
-        ? {
-            id: 'callbacks_registered',
-            text: `People sign in through the Hub, which already knows this environment's addresses. Only for direct sign-in while the Hub is down: the sign-in app of ${input.to.shared.key} lists ${callbacks}.`,
-            required: false
-          }
-        : {
-            id: 'callbacks_registered',
-            text: `The sign-in app of ${input.to.shared.key} lists each of these redirect addresses: ${callbacks}.`,
-            required: true
-          }
-    )
+    // Always required (review L1): direct sign-in through the deployment's own sign-in app is the
+    // fallback while the Hub is down, and the only path after a rollback below the floor.
+    out.push({
+      id: 'callbacks_registered',
+      text: `The sign-in app of ${input.to.shared.key} lists each of these redirect addresses: ${callbacks}.${viaHub ? ' People sign in through the Hub there; these are for direct sign-in while the Hub is down.' : ''}`,
+      required: true
+    })
   }
   if (input.from.kind === 'gitlab')
     out.push({

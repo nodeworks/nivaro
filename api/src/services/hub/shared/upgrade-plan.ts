@@ -23,6 +23,7 @@ import type { HubEnvironmentRow } from '../promote-types.js'
 import { hubImage, imageDigest } from '../registry.js'
 import { HUB_MASK, openSecret } from '../secrets.js'
 import { DeploymentLinkError, deploymentClient } from './deployment-client.js'
+import { runsSharedHubSignin, SHARED_HUB_SIGNIN_SINCE } from './hub-signin-floor.js'
 import { stacksOnRedisDatabase } from './redis-databases.js'
 import {
   explicitHostsFor,
@@ -768,18 +769,27 @@ export async function gatherSharedUpgrade(
     })
 
   const from_version = shared.version_pin
+  // Going below SHARED_HUB_SIGNIN_SINCE: apps set to sign in through the Hub lose it there and
+  // sign in directly through the deployment's primary OIDC (their callbacks must be registered).
+  const hubApps = rows
+    .filter((r) => r.app.signin_mode === 'hub')
+    .map((r) => `${r.app.key}/${r.env.key}`)
+  const losesHubSignin =
+    hubApps.length > 0 && !runsSharedHubSignin(version)
+      ? ` Sign-in through the Hub needs ${SHARED_HUB_SIGNIN_SINCE}: ${hubApps.slice(0, 10).join(', ')}${hubApps.length > 10 ? ', …' : ''} ${hubApps.length === 1 ? 'falls' : 'fall'} back to direct Microsoft sign-in through this deployment's own sign-in app.`
+      : ''
   // A rollback goes back on purpose (to the recorded previous build); only an upgrade asks.
   const downgrade = kind === 'upgrade' && isSharedDowngrade(from_version, version)
   if (downgrade)
     warnings.push({
       code: 'DOWNGRADE',
-      text: `${version} is not newer than the ${from_version} this deployment runs. Every app on it goes back to ${version}; an older version may not read data a newer one wrote. Confirm the downgrade to start.`
+      text: `${version} is not newer than the ${from_version} this deployment runs. Every app on it goes back to ${version}; an older version may not read data a newer one wrote.${losesHubSignin} Confirm the downgrade to start.`
     })
   // Final review M-8: a rollback restores the build, not the schema — said as DOWNGRADE says it.
   if (kind === 'rollback' && from_version && from_version !== version)
     warnings.push({
       code: 'ROLLBACK_SCHEMA_AHEAD',
-      text: `Apps that ${from_version} already migrated keep its newer database schema under ${version}; an older version may not read data a newer one wrote.`
+      text: `Apps that ${from_version} already migrated keep its newer database schema under ${version}; an older version may not read data a newer one wrote.${losesHubSignin}`
     })
   const stack = shared.stack && STACK_NAME_RE.test(shared.stack) ? shared.stack : null
   const plan_hash = hashOf({

@@ -32,7 +32,8 @@ export interface HubTenantWire {
    *  serving it. */
   encryption_key?: string
   /** Optional: the app's Hub link (sign-in through the Hub, the app switcher) as JSON sealed with
-   *  the app's own key (tenancy/app-sealed.ts, opened by tenancy/app-hub-links.ts). A value that
+   *  the app's own key (tenancy/app-sealed.ts, opened by tenancy/app-hub-links.ts) — binding it to
+   *  that app, not secrecy: this body carries the key too and is guarded as a whole. A value that
    *  is not a sealed text, or is over 8 KB, is ignored (the tenant stays and signs in directly). */
   hub_link?: string
 }

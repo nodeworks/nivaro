@@ -332,6 +332,12 @@ function classifyGrantError(err: unknown): HubSigninError {
   // answering this app right now — direct sign-in once, never a security refusal.
   if (err instanceof oidc.ResponseBodyError) {
     if (unavailableStatus(err.status)) return new HubSigninError('HUB_UNREACHABLE')
+    // 0.3.215 (review I3): the Hub no longer takes this app's secret — rotated while the person
+    // was at the Hub, before the app (a shared deployment's list) has the new one. Not this
+    // person's fault and not a forged callback: one hop to direct sign-in, nothing marked down
+    // (the probe answers CLIENT_AUTH_FAILED until the app has the new secret).
+    if (err.error === 'invalid_client')
+      return new HubSigninError('HUB_REFUSED', { availability: true, hubError: err.error })
     return new HubSigninError('HUB_REFUSED', { hubError: err.error })
   }
   if (isNetworkError(err)) return new HubSigninError('HUB_UNREACHABLE')

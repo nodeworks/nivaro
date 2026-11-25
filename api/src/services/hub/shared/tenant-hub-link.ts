@@ -10,7 +10,9 @@ import type { SharedTenantRow } from './tenants.js'
  * The Hub link a shared deployment hands each app it serves (the tenant list's `hub_link`,
  * services/tenancy/hub-contract.ts): what a dedicated app reads from HUB_TOKEN, HUB_CLIENT_ID,
  * HUB_CLIENT_SECRET and HUB_IDP_AUDIENCE. JSON, sealed with the app's own key
- * (tenancy/app-sealed.ts, synthetic IV, so the list's ETag only moves when a value does):
+ * (tenancy/app-sealed.ts, synthetic IV, so the list's ETag only moves when a value does). The seal
+ * binds the value to that app; it is not what keeps it secret (the same body carries the app key):
+ * the tenants route is (bearer only, TLS, `no-store`, never logged).
  *
  *   token          the environment's hub token, when it has one
  *   client_id      the environment's Hub sign-in client, only when it can sign people in now:
