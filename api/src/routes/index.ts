@@ -169,6 +169,7 @@ import { hierarchyRoutes } from './hierarchy.js'
 import { hubRoutes } from './hub.js'
 import { hubAppLinkRoutes } from './hub-app-link.js'
 import { hubDeploymentLinkRoutes } from './hub-deployment-link.js'
+import { hubFleetRoutes } from './hub-fleet.js'
 import { hubLinkRoutes } from './hub-link.js'
 import { hubOidcRoutes } from './hub-oidc.js'
 import { hubSigninAdminRoutes } from './hub-signin-admin.js'
@@ -501,6 +502,8 @@ export async function registerRoutes(app: FastifyInstance) {
   // Nivaro Hub (apps, environments, owners): registers nothing unless HUB=on (never in cloud).
   await app.register(hubRoutes, { prefix: '/hub' })
   await app.register(hubSigninAdminRoutes, { prefix: '/hub/signin' })
+  // Hub fleet page, uptime + SLO, drift alerts, audit timeline (HUB=on only).
+  await app.register(hubFleetRoutes, { prefix: '/hub' })
   await app.register(hubOidcRoutes, { prefix: '/hub/oidc' })
   await app.register(hubAppLinkRoutes, { prefix: '/hub/app-link' })
   // Hub phase 7 (app side): GET /api/hub-switcher + readiness `hub-signin`; 404 without the link.

@@ -324,6 +324,10 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_hub_shared_deployments', //  Hub phase 6 (552, 553): shared deployments, sealed tokens
   'nivaro_hub_shared_deploys',
   'nivaro_hub_moves',
+  'nivaro_hub_fleet_status', //        Hub fleet (566): last status, uptime, drift alerts, SLO reports
+  'nivaro_hub_uptime_samples',
+  'nivaro_hub_fleet_alerts',
+  'nivaro_hub_slo_reports',
   'nivaro_share_links',
   'nivaro_dashboard_links',
   'nivaro_webhook_deliveries',
