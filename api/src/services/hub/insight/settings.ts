@@ -1,5 +1,5 @@
 import { db } from '../../../db/index.js'
-import { USAGE_DAYS_MAX, USAGE_FLOOR_MIN } from '../../hub-link/insight-report.js'
+import { USAGE_FLOOR_MIN } from '../../hub-link/insight-report.js'
 
 /**
  * Hub insight settings (row `nivaro-core` / `hub_insight` of nivaro_extension_settings, like the
@@ -18,7 +18,8 @@ export const HEALTH_PARTS = [
   'issues',
   'readiness',
   'backups',
-  'secrets'
+  'secrets',
+  'incidents'
 ] as const
 export type HealthPart = (typeof HEALTH_PARTS)[number]
 
@@ -28,8 +29,6 @@ export interface InsightSettings {
   usage: {
     /** Privacy floor: buckets with fewer people are never shown (never below 5). */
     floor: number
-    /** How many days each collect reads (the app keeps 14). */
-    days: number
   }
   digest: {
     /** The weekly owner digest goes out at all (each person may still turn theirs off). */
@@ -44,13 +43,14 @@ export const DEFAULT_WEIGHTS: Record<HealthPart, number> = {
   issues: 2,
   readiness: 3,
   backups: 3,
-  secrets: 1
+  secrets: 1,
+  incidents: 4
 }
 
 export function defaultInsightSettings(): InsightSettings {
   return {
     weights: { ...DEFAULT_WEIGHTS },
-    usage: { floor: USAGE_FLOOR_MIN, days: USAGE_DAYS_MAX },
+    usage: { floor: USAGE_FLOOR_MIN },
     digest: { enabled: true }
   }
 }
@@ -80,7 +80,7 @@ export function normalizeInsightSettings(
     if (HEALTH_PARTS.every((p) => weights[p] === 0))
       return { ok: false, error: 'At least one weight must be above 0.' }
   }
-  const usage = { ...base.usage }
+  const usage = { floor: base.usage.floor }
   if (raw.usage !== undefined) {
     if (!isObj(raw.usage)) return { ok: false, error: 'usage must be an object.' }
     if (raw.usage.floor !== undefined) {
@@ -92,12 +92,8 @@ export function normalizeInsightSettings(
         }
       usage.floor = n
     }
-    if (raw.usage.days !== undefined) {
-      const n = Number(raw.usage.days)
-      if (!Number.isInteger(n) || n < 1 || n > USAGE_DAYS_MAX)
-        return { ok: false, error: `days must be a whole number from 1 to ${USAGE_DAYS_MAX}.` }
-      usage.days = n
-    }
+    // `days` is not a setting any more: the app always answers fixed 14 / 7-day windows of
+    // completed days (an older stored row's value is ignored).
   }
   const digest = { ...base.digest }
   if (raw.digest !== undefined) {

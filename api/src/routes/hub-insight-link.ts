@@ -5,6 +5,7 @@ import { failedAuthLimiter } from '../lib/auth-fail-limiter.js'
 import { hubSharedConfig, isMultiTenant, tenantSource } from '../services/deployment-mode.js'
 import { hubLinkToken } from '../services/hub/mode.js'
 import { dependencyReport, usageReport } from '../services/hub-link/insight-report.js'
+import { sharedGatedRead } from '../services/read-gate.js'
 import { bearerMatches } from '../services/render-peer.js'
 import { deploymentLinkBearer } from '../services/tenancy/hub-contract.js'
 import { getTenantRegistry } from '../services/tenancy/registry.js'
@@ -18,13 +19,13 @@ import type { TenantRecord, TenantRegistry } from '../services/tenancy/types.js'
  * Dedicated app (registered under /api/hub-link, mounted only where HUB_TOKEN ≥ 32 characters is
  * set and never on a deployment that serves many apps — Nivaro Cloud or a Hub shared deployment):
  *
- *   GET /api/hub-link/ops/usage?days=14&floor=5 → UsageReport
+ *   GET /api/hub-link/ops/usage?floor=5        → UsageReport (fixed windows; behind the read gate)
  *   GET /api/hub-link/ops/dependencies          → DependencyReport
  *
  * Hub shared deployment (registered under /api/hub-deployment, mounted only where the tenant list
  * comes from the Hub; bearer = deploymentLinkBearer(HUB_DEPLOYMENT_TOKEN)), inside that app:
  *
- *   GET /api/hub-deployment/ops/apps/:id/usage?days=14&floor=5
+ *   GET /api/hub-deployment/ops/apps/:id/usage?floor=5
  *   GET /api/hub-deployment/ops/apps/:id/dependencies
  *
  * Both: `Authorization: Bearer …` compared timing-safe in an onRequest hook on EVERY route of the
@@ -46,7 +47,22 @@ function intOf(q: unknown, key: string): number | undefined {
   return Number.isFinite(n) ? Math.round(n) : undefined
 }
 
-const usageOpts = (q: unknown) => ({ days: intOf(q, 'days'), floor: intOf(q, 'floor') })
+const usageOpts = (q: unknown) => ({ floor: intOf(q, 'floor') })
+
+/**
+ * The usage read behind the read gate, single-flight per floor (the windows are fixed, so every
+ * caller of one floor gets the same answer): a burst of reads from the Hub costs one gated read.
+ */
+async function gatedUsage(q: unknown, k?: Parameters<typeof usageReport>[1]) {
+  const opts = usageOpts(q)
+  const out = await sharedGatedRead(
+    `hub-insight-usage:${opts.floor ?? 0}`,
+    'hub-link',
+    () => usageReport(opts, k),
+    { label: 'hub-insight-usage' }
+  )
+  return out.value
+}
 
 /** GET /api/hub-link/ops/usage|dependencies on a dedicated app (HUB_TOKEN). */
 export async function hubInsightLinkRoutes(app: FastifyInstance): Promise<void> {
@@ -64,7 +80,7 @@ export async function hubInsightLinkRoutes(app: FastifyInstance): Promise<void> 
 
   app.get('/ops/usage', async (req, reply) => {
     try {
-      return reply.send(await usageReport(usageOpts(req.query)))
+      return reply.send(await gatedUsage(req.query))
     } catch (err) {
       req.log.warn(
         { code: (err as { code?: unknown } | null)?.code ?? null },
@@ -133,9 +149,7 @@ export async function hubInsightDeploymentRoutes(app: FastifyInstance): Promise<
   }
 
   app.get<{ Params: { id: string } }>('/ops/apps/:id/usage', async (req, reply) =>
-    inApp(reply, req.params.id, 'usage summary', () =>
-      usageReport(usageOpts(req.query), getTenantDb())
-    )
+    inApp(reply, req.params.id, 'usage summary', () => gatedUsage(req.query, getTenantDb()))
   )
 
   // One process serves many apps here: the sign-in issuer is the deployment's, not this app's,

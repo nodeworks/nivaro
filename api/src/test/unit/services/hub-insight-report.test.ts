@@ -76,26 +76,77 @@ beforeAll(async () => {
     t.string('secret').nullable()
   })
 
-  // Yesterday: 8 people on the fleet screen; 2 people on a rare screen. Today: 3 people.
+  await db.schema.createTable('nivaro_tracker_connections', (t) => {
+    t.increments('id')
+    t.string('provider', 20)
+    t.string('base_url', 500)
+    t.boolean('is_active')
+    t.text('token').nullable()
+    t.string('webhook_secret_hash').nullable()
+  })
+  await db('nivaro_tracker_connections').insert({
+    provider: 'gitlab',
+    base_url: 'https://gitlab.corp.example.com/group/project',
+    is_active: false,
+    token: 'sealed:glpat-secret',
+    webhook_secret_hash: 'abc123hash'
+  })
+  // Completed days (NOW = 2026-11-25 15:00 UTC → the window is 11-11 … 11-24):
+  //  11-24: 12 people on /hub/fleet; 2 + 5 people on single workflow ids (masked into one
+  //         screen); 6 people on a slug page; rage clicks naming a person and widget rows
+  //         (never counted); 11-20: 3 people (under the floor); 11-12: 2 more people (only in
+  //         the long window — their difference must never show). Today: 9 people (never counted).
   const rows: Array<Record<string, unknown>> = []
-  const yesterday = new Date('2026-11-24T10:00:00Z')
-  for (let i = 1; i <= 8; i++)
-    rows.push({ route: '/hub/fleet', kind: 'route', user: user(i), created_at: yesterday })
+  const at = (d: string) => new Date(`${d}T10:00:00Z`)
+  for (let i = 1; i <= 12; i++)
+    rows.push({ route: '/hub/fleet', kind: 'route', user: user(i), created_at: at('2026-11-24') })
   for (let i = 1; i <= 2; i++)
     rows.push({
       route: '/collections/workflows/123',
       kind: 'route',
       user: user(i),
-      created_at: yesterday
+      created_at: at('2026-11-24')
     })
-  for (let i = 1; i <= 3; i++)
+  for (let i = 1; i <= 5; i++)
     rows.push({
-      route: '/hub',
+      route: `/collections/workflows/${100 + i}`,
+      kind: 'route',
+      user: user(i),
+      created_at: at('2026-11-24')
+    })
+  for (let i = 1; i <= 6; i++)
+    rows.push({
+      route: '/p/quarterly-plan-rob',
       kind: 'load',
+      user: user(i),
+      created_at: at('2026-11-24')
+    })
+  for (let i = 1; i <= 6; i++) {
+    rows.push({
+      route: "/hub/fleet :: button 'Rob Lee'",
+      kind: 'rage',
+      user: user(i),
+      created_at: at('2026-11-24')
+    })
+    rows.push({
+      route: 'widget:kpi@aaaaaaaa-0000-4000-8000-000000000999',
+      kind: 'widget',
+      user: user(i),
+      created_at: at('2026-11-24')
+    })
+  }
+  for (let i = 13; i <= 15; i++)
+    rows.push({ route: '/hub', kind: 'load', user: user(i), created_at: at('2026-11-20') })
+  for (let i = 16; i <= 17; i++)
+    rows.push({ route: '/hub', kind: 'load', user: user(i), created_at: at('2026-11-12') })
+  for (let i = 20; i <= 28; i++)
+    rows.push({
+      route: '/hub/fleet',
+      kind: 'route',
       user: user(i),
       created_at: new Date('2026-11-25T09:00:00Z')
     })
-  rows.push({ route: '/login', kind: 'load', user: null, created_at: yesterday })
+  rows.push({ route: '/login', kind: 'load', user: null, created_at: at('2026-11-24') })
   await db('nivaro_rum_events').insert(rows)
   await db('nivaro_users').insert([
     ...Array.from({ length: 12 }, (_, i) => ({
@@ -133,33 +184,75 @@ afterAll(async () => {
 })
 
 describe('usageReport', () => {
-  it('counts people per day; a day under the floor carries no figures', async () => {
-    const r = await usageReport({ days: 3, now: NOW })
+  it('counts completed days only, rounded down to 5; a day under the floor has no figures', async () => {
+    const r = await usageReport({ now: NOW })
     expect(r.available).toBe(true)
     expect(r.floor).toBe(5)
-    expect(r.daily).toEqual([
-      { day: '2026-11-23', people: 0, views: 0, under_floor: false },
-      { day: '2026-11-24', people: 8, views: 10, under_floor: false },
-      { day: '2026-11-25', people: null, views: null, under_floor: true }
-    ])
-    expect(r.people_window).toBe(8)
-    expect(r.accounts).toBe(12)
+    expect(r.days).toBe(14)
+    expect(r.daily).toHaveLength(14)
+    expect(r.daily[0].day).toBe('2026-11-11')
+    expect(r.daily[13]).toEqual({ day: '2026-11-24', people: 10, views: 25, under_floor: false })
+    expect(r.daily.find((d) => d.day === '2026-11-20')).toEqual({
+      day: '2026-11-20',
+      people: null,
+      views: null,
+      under_floor: true
+    })
+    expect(r.daily.find((d) => d.day === '2026-11-25')).toBeUndefined()
+    expect(r.people_window).toBe(15)
+    expect(r.accounts).toBe(10)
   })
 
-  it('lists only screens enough people opened, and never names anyone', async () => {
-    const r = await usageReport({ days: 3, now: NOW })
-    expect(r.screens).toEqual([{ route: '/hub/fleet', people: 8, views: 8 }])
-    expect(r.screens_hidden).toBe(2)
+  it('never lets two windows subtract into a handful of people', async () => {
+    const r = await usageReport({ now: NOW })
+    // 17 people in 14 days, 15 in the last 7: the 2 seen only in the first week stay hidden.
+    expect(r.people_7d).toBeNull()
+    const nums = [
+      r.people_window,
+      r.people_7d,
+      r.accounts,
+      ...r.daily.flatMap((d) => [d.people, d.views]),
+      ...r.screens.flatMap((x) => [x.people, x.views])
+    ].filter((n): n is number => n != null)
+    for (const n of nums) expect(n % 5).toBe(0)
+    if (r.people_window != null && r.people_7d != null) {
+      const d = r.people_window - r.people_7d
+      expect(d === 0 || d >= 5).toBe(true)
+    }
+  })
+
+  it('answers the same all day: today and a different `days` never change it', async () => {
+    const first = await usageReport({ now: NOW })
+    await db('nivaro_rum_events').insert(
+      Array.from({ length: 4 }, (_, i) => ({
+        route: '/hub/secrets',
+        kind: 'route',
+        user: user(40 + i),
+        created_at: new Date('2026-11-25T16:00:00Z')
+      }))
+    )
+    const later = await usageReport({ days: 3, now: new Date('2026-11-25T23:59:00Z') })
+    expect(later).toEqual(first)
+  })
+
+  it('counts page views per masked screen, never element text, widgets, slugs or ids', async () => {
+    const r = await usageReport({ now: NOW })
+    expect(r.screens).toEqual([
+      { route: '/hub/fleet', people: 10, views: 10 },
+      { route: '/collections/workflows/:id', people: 5, views: 5 },
+      { route: '/hub', people: 5, views: 5 },
+      { route: '/p/:id', people: 5, views: 5 }
+    ])
     const text = JSON.stringify(r)
-    expect(text).not.toMatch(/aaaaaaaa|@x\.com|\/123/)
+    expect(text).not.toMatch(/aaaaaaaa|@x\.com|\/123|Rob Lee|quarterly|widget|::/)
   })
 
   it('never goes below a floor of 5, and a higher floor hides more', async () => {
-    expect((await usageReport({ days: 3, floor: 1, now: NOW })).floor).toBe(5)
-    const high = await usageReport({ days: 3, floor: 9, now: NOW })
-    expect(high.daily[1]).toMatchObject({ people: null, under_floor: true })
-    expect(high.screens).toEqual([])
-    expect(high.accounts).toBe(12)
+    expect((await usageReport({ floor: 1, now: NOW })).floor).toBe(5)
+    const high = await usageReport({ floor: 9, now: NOW })
+    expect(high.daily[13]).toMatchObject({ people: 10, under_floor: false })
+    expect(high.screens.map((x) => x.route)).toEqual(['/hub/fleet'])
+    expect(high.screens_hidden).toBe(3)
   })
 })
 
@@ -191,10 +284,17 @@ describe('dependencyReport', () => {
         count: null,
         enabled: true
       },
+      {
+        kind: 'tracker',
+        target: 'gitlab.corp.example.com',
+        label: 'gitlab',
+        count: null,
+        enabled: false
+      },
       { kind: 'extension', target: 'efp-ops', label: '2.1.0', count: null, enabled: true }
     ])
     const text = JSON.stringify(r)
-    expect(text).not.toMatch(/hunter2|svc|token=|fscm|sig=|mailer|\/a\b|pw/)
+    expect(text).not.toMatch(/hunter2|svc|token=|fscm|sig=|mailer|\/a\b|pw|glpat|abc123hash|\/group/)
   })
 })
 
@@ -212,7 +312,8 @@ describe('the hub link routes', () => {
     })
     expect(ok.statusCode).toBe(200)
     expect(ok.headers['cache-control']).toBe('no-store')
-    expect(ok.json().days).toBe(2)
+    // The window is fixed whatever the caller asks for.
+    expect(ok.json().days).toBe(14)
     const deps = await app.inject({
       url: '/hub-link/ops/dependencies',
       headers: { authorization: `Bearer ${TOKEN}` }

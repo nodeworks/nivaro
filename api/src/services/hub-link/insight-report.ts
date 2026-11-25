@@ -1,6 +1,7 @@
 import type { Knex } from 'knex'
 import { db } from '../../db/index.js'
 import { NIVARO_VERSION } from '../../version.js'
+import { KNOWN_ROUTE_SEGMENTS } from './known-route-segments.js'
 
 /**
  * Hub insight (enhancements 36 + 37), app side: the two aggregates a Nivaro Hub may read about this
@@ -8,12 +9,20 @@ import { NIVARO_VERSION } from '../../version.js'
  * and inside the app's tenant on a Hub shared deployment).
  *
  *  - `usageReport`: how many DIFFERENT people used the app per UTC day and which screens are the
- *    busiest, from the browser's own page-load beacons (nivaro_rum_events, kept 14 days). Counts
- *    only — never a person's id, name or email, never a record, never a raw URL: a screen is the
- *    stored route PATTERN, and anything in it that still looks like an id is masked again here.
- *    The privacy floor (k-anonymity) is enforced HERE, before anything leaves the app: a day with
- *    fewer than `floor` people (never below 5) carries no figures at all, only `under_floor`; a
- *    screen fewer than `floor` people opened is not listed (only how many were held back).
+ *    busiest, from the browser's own page views (nivaro_rum_events kind load | route — never the
+ *    rage / dead / widget rows, whose `route` carries element text). Counts only — never a
+ *    person's id, name or email, never a record, never a raw URL. Privacy (k-anonymity) is enforced
+ *    HERE, before anything leaves the app, and so that no two answers can be subtracted into a
+ *    small bucket (review H1):
+ *      · COMPLETED UTC days only — today is never counted, so two reads on one day are identical;
+ *      · FIXED windows, 14 days with the last 7 inside it, whatever the caller asks for;
+ *      · every count is rounded DOWN to a multiple of 5; a figure under the floor (never below 5)
+ *        is null (a day says only `under_floor`), and `people_7d` is null when it is within the
+ *        floor of the 14-day figure (their difference would name a handful of people);
+ *      · a screen is the route pattern with every segment that is not a parameter or a known
+ *        static route segment (KNOWN_ROUTE_SEGMENTS + this app's collection keys) masked as `:id`,
+ *        and people are counted per MASKED screen; a screen under the floor is not listed (only
+ *        how many were held back).
  *  - `dependencyReport`: what the app talks to — partner API configs, webhooks, the mail relay,
  *    the sign-in issuer, issue trackers — as HOST names only (`host[:port]`: never a scheme, a
  *    path, a query or a credential), plus the extensions this process loaded (id + version).
@@ -21,19 +30,27 @@ import { NIVARO_VERSION } from '../../version.js'
  * Read with whatever knex the caller passes (the tenant's on a shared deployment).
  */
 
-export const USAGE_DAYS_MAX = 14
+/** The window every usage answer covers (completed UTC days); the last 7 are the short window. */
+export const USAGE_DAYS = 14
+export const USAGE_SHORT_DAYS = 7
+/** Kept for callers: the window is fixed, never longer. */
+export const USAGE_DAYS_MAX = USAGE_DAYS
 /** The lowest privacy floor there is: a bucket under 5 people never leaves the app. */
 export const USAGE_FLOOR_MIN = 5
+/** Every count is rounded down to this. */
+export const USAGE_ROUND = 5
 export const USAGE_SCREENS_MAX = 25
-const GROUPS_CAP = 2000
+/** (screen, person) pairs read for the screen list. */
+const PAIRS_CAP = 50_000
 const DAY_MS = 86_400_000
+const VIEW_KINDS = ['load', 'route'] as const
 
 export interface UsageDay {
-  /** UTC day, YYYY-MM-DD. */
+  /** UTC day, YYYY-MM-DD (a completed day). */
   day: string
-  /** Different people that day; null under the floor. */
+  /** Different people that day, rounded down to 5; null under the floor. */
   people: number | null
-  /** Page loads + screen changes that day; null under the floor. */
+  /** Page loads + screen changes that day, rounded down to 5; null under the floor. */
   views: number | null
   under_floor: boolean
 }
@@ -48,13 +65,15 @@ export interface UsageScreen {
 export interface UsageReport {
   version: string
   floor: number
+  /** Always USAGE_DAYS. */
   days: number
   /** False when this app keeps no page-load beacons (an old install): every figure is empty. */
   available: boolean
   daily: UsageDay[]
-  /** Different people over the whole window; null under the floor. */
+  /** Different people over the 14 completed days; null under the floor. */
   people_window: number | null
-  /** Different people over the last 7 days; null under the floor. */
+  /** Different people over the last 7 completed days; null under the floor or within the floor of
+   *  people_window. */
   people_7d: number | null
   /** Active people with an account (no service/machine accounts); null under the floor. */
   accounts: number | null
@@ -69,23 +88,40 @@ function startOfUtcDay(d: Date): Date {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()))
 }
 
-/** A figure, or null when it is under the floor (0 stays 0: nobody is not a person). */
-export function floored(n: number, floor: number): number | null {
-  if (n === 0) return 0
-  return n >= floor ? n : null
+/** Rounded down to a multiple of USAGE_ROUND. Pure. */
+export function roundDown(n: number): number {
+  return Math.max(0, Math.floor(n / USAGE_ROUND) * USAGE_ROUND)
 }
 
-const ID_SEGMENT =
-  /^(\d+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{16,}|[^/]*@[^/]*|[A-Za-z0-9_-]{24,})$/i
+/**
+ * A count as it may leave the app: 0 stays 0 (nobody is not a person), anything else is rounded
+ * down to 5 and null when under the floor. Pure.
+ */
+export function floored(n: number, floor: number): number | null {
+  if (n === 0) return 0
+  if (n < floor) return null
+  const r = roundDown(n)
+  return r >= floor ? r : null
+}
 
-/** A route pattern with anything that still looks like an id, a token or an address masked. */
-export function maskRoute(route: string): string {
-  const path = String(route ?? '')
-    .split(/[?#]/)[0]
+/**
+ * A route pattern reduced to what is safe to name: anything after ` :: ` (a rage / dead tag) and
+ * the query/hash are cut, a `:param` and a known static segment stay, every other segment — an
+ * id, a slug, a record key, a name — becomes `:id`. Null for a pseudo-screen (`widget:…`). Pure.
+ */
+export function maskRoute(route: string, allowed?: ReadonlySet<string>): string | null {
+  const known = allowed ?? new Set(KNOWN_ROUTE_SEGMENTS)
+  const raw = String(route ?? '')
+    .split(' :: ')[0]
+    .split(/[?#\s]/)[0]
     .slice(0, 300)
-  const parts = path.split('/').map((s) => (s && ID_SEGMENT.test(s) ? ':id' : s))
-  const out = parts.join('/') || '/'
-  return out.startsWith('/') ? out : `/${out}`
+  if (!raw.startsWith('/')) return null
+  const parts = raw.split('/').map((s, i) => {
+    if (i === 0 || s === '') return s
+    if (/^:[A-Za-z_][A-Za-z0-9_]*$/.test(s)) return s
+    return known.has(s.toLowerCase()) ? s.toLowerCase() : ':id'
+  })
+  return parts.join('/').replace(/\/+$/, '') || '/'
 }
 
 const num = (v: unknown) => {
@@ -93,19 +129,39 @@ const num = (v: unknown) => {
   return Number.isFinite(n) ? n : 0
 }
 
+/** This app's collection keys: config names, never people — they stay in a screen's route. */
+async function collectionKeys(k: Knex): Promise<Set<string>> {
+  const out = new Set<string>(KNOWN_ROUTE_SEGMENTS)
+  try {
+    if (await k.schema.hasTable('nivaro_collections')) {
+      const rows = (await k('nivaro_collections').select('collection').limit(5000)) as Array<{
+        collection: unknown
+      }>
+      for (const r of rows)
+        if (typeof r.collection === 'string' && /^[a-z][a-z0-9_]*$/.test(r.collection))
+          out.add(r.collection)
+    }
+  } catch {
+    // No collection list: the built-in segments only.
+  }
+  return out
+}
+
+/** The usage answer. `opts.days` is ignored (fixed windows); `floor` can only raise the floor. */
 export async function usageReport(
   opts: { days?: number; floor?: number; now?: Date } = {},
   k: Knex = db
 ): Promise<UsageReport> {
-  const days = Math.max(1, Math.min(USAGE_DAYS_MAX, Math.round(opts.days ?? USAGE_DAYS_MAX)))
   const floor = Math.max(USAGE_FLOOR_MIN, Math.round(opts.floor ?? USAGE_FLOOR_MIN))
   const now = opts.now ?? new Date()
-  const today = startOfUtcDay(now)
-  const since = new Date(today.getTime() - (days - 1) * DAY_MS)
+  // Completed days only: the window ends at the start of today (UTC).
+  const until = startOfUtcDay(now)
+  const since = new Date(until.getTime() - USAGE_DAYS * DAY_MS)
+  const shortSince = new Date(until.getTime() - USAGE_SHORT_DAYS * DAY_MS)
   const out: UsageReport = {
     version: NIVARO_VERSION,
     floor,
-    days,
+    days: USAGE_DAYS,
     available: false,
     daily: [],
     people_window: null,
@@ -125,64 +181,71 @@ export async function usageReport(
   if (!(await k.schema.hasTable('nivaro_rum_events'))) return out
   out.available = true
 
-  // One bounded count per day (the created_at index serves each): portable on every engine,
-  // where a GROUP BY on a date expression is not.
-  for (let i = 0; i < days; i++) {
-    const from = new Date(since.getTime() + i * DAY_MS)
-    const to = new Date(from.getTime() + DAY_MS)
-    const row = (await k('nivaro_rum_events')
+  const views = (from: Date, to: Date) =>
+    k('nivaro_rum_events')
       .where('created_at', '>=', from)
       .where('created_at', '<', to)
+      .whereIn('kind', [...VIEW_KINDS])
       .whereNotNull('user')
+
+  // One bounded count per day (the created_at index serves each): portable on every engine,
+  // where a GROUP BY on a date expression is not.
+  for (let i = 0; i < USAGE_DAYS; i++) {
+    const from = new Date(since.getTime() + i * DAY_MS)
+    const to = new Date(from.getTime() + DAY_MS)
+    const row = (await views(from, to)
       .select(k.raw('COUNT(DISTINCT ??) as people', ['user']), k.raw('COUNT(*) as views'))
       .first()) as { people?: unknown; views?: unknown } | undefined
-    const people = num(row?.people)
-    const under = people > 0 && people < floor
+    const people = floored(num(row?.people), floor)
+    const under = people === null
     out.daily.push({
       day: isoDay(from),
-      people: under ? null : people,
-      views: under ? null : num(row?.views),
+      people,
+      views: under ? null : roundDown(num(row?.views)),
       under_floor: under
     })
   }
 
-  const distinctSince = async (from: Date): Promise<number> => {
-    const row = (await k('nivaro_rum_events')
-      .where('created_at', '>=', from)
-      .whereNotNull('user')
+  const distinct = async (from: Date): Promise<number> => {
+    const row = (await views(from, until)
       .select(k.raw('COUNT(DISTINCT ??) as people', ['user']))
       .first()) as { people?: unknown } | undefined
     return num(row?.people)
   }
-  out.people_window = floored(await distinctSince(since), floor)
-  out.people_7d = floored(
-    await distinctSince(new Date(today.getTime() - (Math.min(days, 7) - 1) * DAY_MS)),
-    floor
-  )
+  const long = await distinct(since)
+  const short = await distinct(shortSince)
+  out.people_window = floored(long, floor)
+  // The two windows nest: their difference is the people seen only in the first week. When that
+  // is a handful (0 < d < floor), the short figure would name them — it is held back.
+  const gap = long - short
+  out.people_7d = gap > 0 && gap < floor ? null : floored(short, floor)
 
-  const groups = (await k('nivaro_rum_events')
-    .where('created_at', '>=', since)
-    .whereNotNull('user')
-    .groupBy('route')
-    .select('route', k.raw('COUNT(DISTINCT ??) as people', ['user']), k.raw('COUNT(*) as views'))
-    .limit(GROUPS_CAP)) as Array<{ route: unknown; people: unknown; views: unknown }>
-  const byRoute = new Map<string, UsageScreen>()
+  // People per MASKED screen (two raw patterns masked into one are counted together).
+  const known = await collectionKeys(k)
+  const pairs = (await views(since, until)
+    .groupBy('route', 'user')
+    .select('route', 'user', k.raw('COUNT(*) as views'))
+    .limit(PAIRS_CAP)) as Array<{ route: unknown; user: unknown; views: unknown }>
+  const byRoute = new Map<string, { people: Set<string>; views: number }>()
+  for (const p of pairs) {
+    const route = maskRoute(String(p.route ?? ''), known)
+    if (!route) continue
+    const hit = byRoute.get(route) ?? { people: new Set<string>(), views: 0 }
+    hit.people.add(String(p.user).toLowerCase())
+    hit.views += num(p.views)
+    byRoute.set(route, hit)
+  }
+  const screens: UsageScreen[] = []
   let hidden = 0
-  for (const g of groups) {
-    const people = num(g.people)
-    if (people < floor) {
+  for (const [route, v] of byRoute) {
+    const people = floored(v.people.size, floor)
+    if (people === null) {
       hidden++
       continue
     }
-    const route = maskRoute(String(g.route ?? ''))
-    const hit = byRoute.get(route)
-    // Two patterns masked into one: the larger head count stays a true lower bound.
-    if (hit) {
-      hit.people = Math.max(hit.people, people)
-      hit.views += num(g.views)
-    } else byRoute.set(route, { route, people, views: num(g.views) })
+    screens.push({ route, people, views: roundDown(v.views) })
   }
-  out.screens = [...byRoute.values()]
+  out.screens = screens
     .sort((a, b) => b.people - a.people || b.views - a.views || a.route.localeCompare(b.route))
     .slice(0, USAGE_SCREENS_MAX)
   out.screens_hidden = hidden
@@ -312,18 +375,19 @@ export async function dependencyReport(
     out.push({ kind: 'signin', target: issuer, label: 'Sign-in', count: null, enabled: true })
 
   if (await k.schema.hasTable('nivaro_tracker_connections')) {
-    const rows = (await k('nivaro_tracker_connections').select('*').limit(PER_KIND_CAP)) as Array<
-      Record<string, unknown>
-    >
+    // Only what is named: never the sealed token or the webhook secret.
+    const rows = (await k('nivaro_tracker_connections')
+      .select('base_url', 'provider', 'is_active')
+      .limit(PER_KIND_CAP)) as Array<Record<string, unknown>>
     for (const r of rows) {
       const host = hostOf(r.base_url)
       if (!host) continue
       out.push({
         kind: 'tracker',
         target: host,
-        label: label(r.kind ?? r.provider, 40) ?? 'Issue tracker',
+        label: label(r.provider, 40) ?? 'Issue tracker',
         count: null,
-        enabled: r.enabled !== false && r.enabled !== 0
+        enabled: r.is_active !== false && r.is_active !== 0 && r.is_active !== '0'
       })
     }
   }

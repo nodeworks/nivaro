@@ -24,7 +24,7 @@ import { type InsightSettings, loadInsightSettings } from './settings.js'
 export const COLLECT_CONCURRENCY = 4
 export const COLLECT_BUDGET_MS = 20 * 60_000
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/
-const HOST_RE = /^[a-z0-9.-]{1,253}(:\d{1,5})?$/
+const HOST_RE = /^(?:[a-z0-9_.-]{1,253}|\[[0-9a-f:.]{2,45}\])(?::\d{1,5})?$/
 const EXT_RE = /^[A-Za-z0-9@/._-]{1,100}$/
 export const DEP_KINDS = [
   'partner_api',
@@ -231,10 +231,7 @@ export async function collectEnvironment(
   let usageState = 'failed'
   let depsState = 'failed'
   try {
-    const res = await read(env, 'usage', {
-      days: String(settings.usage.days),
-      floor: String(settings.usage.floor)
-    })
+    const res = await read(env, 'usage', { floor: String(settings.usage.floor) })
     usageState = res.state
     if (res.state === 'ok') {
       const parsed = parseUsage(res.body, settings.usage.floor)
