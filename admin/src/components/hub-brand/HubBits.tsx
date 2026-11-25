@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { Fragment, type ReactNode } from 'react'
 import { useHubProductFlag } from '@/lib/hub-product'
 import { cn } from '@/lib/utils'
 import { type EnvTone, envTone } from './env-tone'
@@ -86,15 +86,23 @@ export function ProductionGuard({
   what?: string
 }) {
   const on = useHubProductFlag()
-  if (!on || envTone(envKey) !== 'production') return <>{children}</>
+  const guarded = on && envTone(envKey) === 'production'
+  // One stable wrapper: the panel inside (a typed confirmation, a plan) is never remounted when
+  // the frame comes or goes. Unguarded it is a plain block with no style (a parent's space-y
+  // margin lands on it exactly as it did on the panel).
   return (
-    <div data-prod-guard='' className='hub-prod-guard'>
-      <p className='hub-prod-guard-head'>
-        Production
-        {envKey && envKey.toLowerCase() !== 'production' ? ` · ${envKey}` : ''}
-        {what ? ` — this ${what} reaches live users` : ''}
-      </p>
-      {children}
+    <div
+      data-prod-guard={guarded ? '' : undefined}
+      className={guarded ? 'hub-prod-guard' : undefined}
+    >
+      {guarded && (
+        <p key='head' className='hub-prod-guard-head'>
+          Production
+          {envKey && envKey.toLowerCase() !== 'production' ? ` · ${envKey}` : ''}
+          {what ? ` — this ${what} reaches live users` : ''}
+        </p>
+      )}
+      <Fragment key='body'>{children}</Fragment>
     </div>
   )
 }

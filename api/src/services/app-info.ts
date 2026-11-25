@@ -9,9 +9,15 @@ import { appEnvironment } from './app-info-environment.js'
 import { chaosAllowed } from './chaos/gate.js'
 import { isMultiTenant, isNivaroCloud } from './deployment-mode.js'
 import { currentNotice, type EnvironmentNotice } from './environment-notice.js'
-import { HUB_BRAND, HUB_PRODUCT_NAME } from './hub/brand.js'
+import {
+  HUB_ACCENT,
+  HUB_BRAND,
+  HUB_PRODUCT_NAME,
+  hubStandaloneCached,
+  isStockProjectName,
+  NIVARO_STOCK_ACCENT
+} from './hub/brand.js'
 import { appHubLink, hubModeEnabled } from './hub/mode.js'
-import { hubStandalone } from './hub/standalone.js'
 import { phonePushMode } from './phone-push.js'
 import { overlaySettings } from './settings-overrides.js'
 import { currentTenantKey } from './tenant-rooms.js'
@@ -114,15 +120,19 @@ export async function buildAppInfo(opts: { block?: AppInfoBlock | null } = {}): 
   const origin = isMultiTenant() ? (block?.origin ?? tenantOrigin() ?? '') : base
   // A standalone Hub (no app data here) says `hub_only`, and shows the Hub mark (phone app
   // included) unless the operator uploaded a logo of their own: white-label wins.
-  const hubOnly = !block && (await hubStandalone())
+  const hubOnly = !block && (await hubStandaloneCached())
   return {
-    name: brand.name ?? (hubOnly ? HUB_PRODUCT_NAME : 'Nivaro'),
+    name: hubOnly && isStockProjectName(brand.name) ? HUB_PRODUCT_NAME : (brand.name ?? 'Nivaro'),
     origin,
-    color: brand.color,
+    // A standalone Hub with no colour chosen (or the stock cyan) answers its own amber.
+    color:
+      hubOnly && (!brand.color || brand.color.toLowerCase() === NIVARO_STOCK_ACCENT)
+        ? HUB_ACCENT
+        : brand.color,
     // Multi-tenant: on the tenant's own origin, never the shared process's address.
     logo_url: brand.logo
       ? `${isMultiTenant() ? origin : base}/api/files/${brand.logo}`
-      : hubOnly
+      : hubOnly && /^https?:\/\//i.test(base)
         ? `${base}${HUB_BRAND.logo512}`
         : null,
     version: NIVARO_VERSION,

@@ -12,6 +12,7 @@ import {
 import { type ReactNode, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
+import { HubEnvTag } from '@/components/hub-brand/HubBits'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { SimpleSelect } from '@/components/ui/simple-select'
@@ -138,6 +139,7 @@ function DataAdmin() {
                       <span className='font-normal text-slate-500 dark:text-muted-foreground'>
                         / {r.env_key}
                       </span>
+                      <HubEnvTag envKey={r.env_key} className='ml-1 align-[1px]' />
                     </span>
                     <span className='mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px]'>
                       <span className={AGE_TONE[age]}>

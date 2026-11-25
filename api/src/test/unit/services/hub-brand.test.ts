@@ -12,9 +12,17 @@ import {
   HUB_BRAND,
   hubIndexHtml,
   hubStandaloneCached,
+  inkOn,
+  isStockProjectName,
   resetHubBrandCache
 } from '../../../services/hub/brand.js'
-import { HUB_MAIL_ACCENT, hubMailBrand, mailChrome, safeHtml } from '../../../services/mail.js'
+import {
+  HUB_MAIL_ACCENT,
+  hubMailBrand,
+  mailChrome,
+  registerMailTemplateRoot,
+  safeHtml
+} from '../../../services/mail.js'
 import { brandTemplateContext, type MailBrand } from '../../../services/mail-branding.js'
 
 const ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '../../../../..')
@@ -54,19 +62,35 @@ describe('standalone Hub index.html (served before any script runs)', () => {
     expect(ADMIN_INDEX).not.toContain('data-product="hub"')
   })
 
-  it('is decided by hubStandalone, kept 30 s, and off at once without HUB=on', async () => {
+  it('is kept 60 s, and off at once without HUB=on', async () => {
     let reads = 0
     const read = async () => {
       reads++
       return true
     }
     expect(await hubStandaloneCached({ read, now: 1000 })).toBe(true)
-    expect(await hubStandaloneCached({ read, now: 20_000 })).toBe(true)
+    expect(await hubStandaloneCached({ read, now: 50_000 })).toBe(true)
     expect(reads).toBe(1)
-    expect(await hubStandaloneCached({ read, now: 40_000 })).toBe(true)
+    expect(await hubStandaloneCached({ read, now: 62_000 })).toBe(true)
     expect(reads).toBe(2)
     resetHubBrandCache()
     expect(await hubStandaloneCached({ env: {} })).toBe(false)
+  })
+
+  it('a failed read keeps the last known answer (the look never flips on a blip)', async () => {
+    expect(await hubStandaloneCached({ read: async () => true, now: 1000 })).toBe(true)
+    const boom = async (): Promise<boolean> => {
+      throw new Error('db down')
+    }
+    expect(await hubStandaloneCached({ read: boom, now: 70_000 })).toBe(true)
+    resetHubBrandCache()
+    expect(await hubStandaloneCached({ read: boom, now: 1 })).toBe(false)
+  })
+
+  it('names nobody chose: empty, Nivaro, the database default Nivaro CMS', () => {
+    for (const n of [null, '', ' Nivaro ', 'Nivaro CMS', 'nivaro cms'])
+      expect(isStockProjectName(n)).toBe(true)
+    expect(isStockProjectName('Acme Ops')).toBe(false)
   })
 })
 
@@ -97,6 +121,31 @@ describe('Hub mail chrome', () => {
     expect(html).toContain('efp production runs 0.3.215')
   })
 
+  it('"Nivaro CMS" (the database default) also gives way to Nivaro Hub in the chrome', () => {
+    const b = hubMailBrand({ ...stock, sender_name: 'Nivaro CMS' }, null)
+    expect(b.sender_name).toBe('Nivaro Hub')
+  })
+
+  it('the HUB badge ink follows the colour by contrast (a dark operator colour gets white)', async () => {
+    const amber = await mailChrome(stock, {
+      standalone: async () => true,
+      markUrl: async () => null
+    })
+    expect(amber.extra.hub_badge_ink).toBe('#14110a')
+    const navy = await mailChrome(
+      { ...stock, color: '#172940' },
+      { standalone: async () => true, markUrl: async () => null }
+    )
+    expect(navy.extra.hub_badge_ink).toBe('#ffffff')
+    expect(inkOn('#172940')).toBe('#ffffff')
+    const html = await navy.engine.renderFile('message', {
+      ...brandTemplateContext(navy.brand),
+      ...navy.extra,
+      html: safeHtml('<p>x</p>')
+    })
+    expect(html).toContain('color:#ffffff;background-color:#172940')
+  })
+
   it("an operator's own logo, sender name and colour win over the Hub defaults", () => {
     const own: MailBrand = {
       ...stock,
@@ -119,5 +168,25 @@ describe('Hub mail chrome', () => {
       }
     })
     expect(chrome.hub).toBe(false)
+  })
+})
+
+describe('Hub mail template order', () => {
+  it("an extension's own base.liquid still wins over the Hub layout", async () => {
+    const { mkdtempSync, writeFileSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const dir = mkdtempSync(join(tmpdir(), 'hub-mail-ext-'))
+    writeFileSync(join(dir, 'base.liquid'), 'EXT-BASE {% block content %}{% endblock %}')
+    registerMailTemplateRoot(dir)
+    const chrome = await mailChrome(stock, {
+      standalone: async () => true,
+      markUrl: async () => null
+    })
+    const html = await chrome.engine.renderFile('message', {
+      ...brandTemplateContext(chrome.brand),
+      html: safeHtml('<p>body</p>')
+    })
+    expect(html).toContain('EXT-BASE')
+    expect(html).not.toContain('data-hub-mail')
   })
 })

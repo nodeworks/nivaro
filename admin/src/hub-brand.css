@@ -13,15 +13,16 @@
   --nvr-cyan-rgb: 245 166 35;
   --nvr-cyan-dark-rgb: 224 144 26;
   --nvr-on-accent: #14110a;
-  --primary: 37 91% 55%;
-  --primary-foreground: 32 45% 6%;
+  /* An operator's colour (AppLayout sets --hub-op-* inline) wins over every amber default. */
+  --primary: var(--hub-op-primary, 37 91% 55%);
+  --primary-foreground: var(--hub-op-primary-fg, 32 45% 6%);
   /* Focus ring: a deep amber on light surfaces (the signal amber is 2:1 on white). */
-  --ring: 30 92% 36%;
+  --ring: var(--hub-op-ring-light, 30 92% 36%);
   /* Selected rows: a neutral raised tint, so amber keeps meaning "the accent". */
   --accent: 214 22% 92%;
   --accent-foreground: 220 45% 11%;
   /* Amber text on light surfaces (links, active labels): AA on white. */
-  --hub-accent-ink: #9a5a00;
+  --hub-accent-ink: var(--hub-op-ink-light, #9a5a00);
 
   /* Chrome: deep slate-navy in both themes. */
   --hub-chrome: #0d1726;
@@ -62,12 +63,12 @@
 
 :root[data-product='hub'].dark {
   --nvr-cyan: #f5a623;
-  --primary: 37 92% 58%;
-  --primary-foreground: 32 45% 6%;
-  --ring: 37 92% 58%;
+  --primary: var(--hub-op-primary, 37 92% 58%);
+  --primary-foreground: var(--hub-op-primary-fg, 32 45% 6%);
+  --ring: var(--hub-op-primary, 37 92% 58%);
   --accent: 220 12% 22%;
   --accent-foreground: 210 15% 94%;
-  --hub-accent-ink: #f5a623;
+  --hub-accent-ink: var(--hub-op-ink-dark, #f5a623);
 
   --hub-chrome: #070c14;
   --hub-chrome-raised: #0f1828;
@@ -91,7 +92,7 @@
 
 /* Browser surfaces carry the product too. */
 [data-product='hub'] ::selection {
-  background: rgb(245 166 35 / 0.32);
+  background: rgb(var(--nvr-cyan-rgb) / 0.32);
 }
 [data-product='hub'] body {
   caret-color: var(--nvr-cyan);

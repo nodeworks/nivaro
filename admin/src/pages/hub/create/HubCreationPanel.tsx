@@ -181,12 +181,12 @@ function CreationBody({
         <HubRunTimeline
           what='Creation'
           live={v.status === 'running'}
-          steps={STEP_ORDER.map((key) => {
+          steps={(v.steps.length ? v.steps.map((s) => s.key) : STEP_ORDER).map((key) => {
             const st = v.steps.find((s) => s.key === key)?.status ?? 'pending'
             const stopped = ['failed', 'interrupted', 'cancelled'].includes(v.status)
             return {
               key,
-              label: STEP_LABELS[key],
+              label: stepLabel(key, v.target?.kind),
               state: stopped && st === 'running' ? ('stopped' as const) : st
             }
           })}

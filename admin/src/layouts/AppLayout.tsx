@@ -142,7 +142,14 @@ import type { NavSidebarSlot } from '@/extensions/types'
 import { api, WORKSPACE_KEY, type Workspace } from '@/lib/api'
 import { logout, useAuth } from '@/lib/auth'
 import { reportRenderCrash } from '@/lib/global-error-report'
-import { defaultAccentFor, readableOn, useHubProduct } from '@/lib/hub-product'
+import {
+  defaultAccentFor,
+  isStockProjectName,
+  OPERATOR_ACCENT_PROPS,
+  operatorAccentTokens,
+  readableOn,
+  useHubProduct
+} from '@/lib/hub-product'
 import { hubForPath, isPathDisabled } from '@/lib/hubs'
 import { useT } from '@/lib/i18n'
 import { openViewAsTab, readMasquerade } from '@/lib/masquerade'
@@ -516,9 +523,16 @@ export function AppLayout() {
     )
     const el = document.documentElement
     el.style.setProperty('--nvr-cyan', color)
-    // Standalone Hub: the ink on a solid accent fill (dark on amber; white fails AA there).
+    // Standalone Hub: the ink on a solid accent fill (dark on amber; white fails AA there), and
+    // an operator's colour carried into primary buttons, focus ring, links and selection.
     if (hubProduct) el.style.setProperty('--nvr-on-accent', readableOn(color))
     else el.style.removeProperty('--nvr-on-accent')
+    const opTokens = hubProduct ? operatorAccentTokens(color) : null
+    for (const prop of OPERATOR_ACCENT_PROPS) {
+      const v = opTokens?.[prop]
+      if (v) el.style.setProperty(prop, v)
+      else el.style.removeProperty(prop)
+    }
     el.style.setProperty('--nvr-cyan-dark', color)
     // The Tailwind token reads the CHANNEL form so `/N` opacity modifiers work,
     // so a white-label colour has to land there too — otherwise solid fills
@@ -770,10 +784,28 @@ export function AppLayout() {
               <HubTopBar
                 items={[
                   ...permitted.flatMap((c) => c.items),
+                  ...extensionNavItems.map((e) => ({ icon: e.icon, label: e.label, to: e.href })),
                   ...cloudNavItems.map((e) => ({ icon: e.icon, label: e.label, to: e.href }))
                 ]}
+                disabled={disabledPaths}
                 user={{ id: user?.id, name: displayName, email: displayEmail, initials }}
                 logoUrl={settings?.brand_logo ? `/api/files/${settings.brand_logo}` : null}
+                chat={<TeamChatDock />}
+                tools={
+                  <>
+                    <ScreenRefreshButton variant='rail' />
+                    <WatchListButton variant='rail' />
+                    <InstanceSwitcher collapsed />
+                  </>
+                }
+                accountExtras={
+                  <>
+                    <NivaroProvider client={announcementsClient}>
+                      <DoNotDisturbRow />
+                    </NivaroProvider>
+                    <ChaosMenuRow user={authUser} />
+                  </>
+                }
               />
               <HubFleetStrip />
             </>
@@ -1453,9 +1485,10 @@ function RouteTitle({
   hub?: boolean
 }) {
   useEffect(() => {
-    if (!projectName) return
+    if (!projectName && !hub) return
+    // A name nobody chose ("Nivaro", the database default "Nivaro CMS") is no name on a Hub.
     const app = hub
-      ? projectName === 'Nivaro'
+      ? isStockProjectName(projectName)
         ? 'Nivaro Hub'
         : `${projectName} | Nivaro Hub`
       : `${projectName} | Nivaro`

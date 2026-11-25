@@ -1,22 +1,22 @@
 import { db } from '../../db/index.js'
-import {
-  type HubEnvState,
-  type HubEnvStatus,
-  type HubStatusTarget,
-  readEnvironmentStatus,
-  type StatusCache
-} from './status.js'
+import { appMap } from '../app-state.js'
+import { type HubEnvState, type HubEnvStatus, hubStatusKey } from './status.js'
 
 /**
  * The fleet strip of the standalone Hub look (admin HubFleetStrip): one dot per environment the
  * caller may see, coloured by health. ONE read for the whole strip (the client never asks per
- * dot): every environment's status comes from the same 30 s cache the Apps page fills
- * (status.ts, nvr:hub:status:<id>), and an environment nobody looked at lately is read once,
- * side by side, bounded by the status read's own timeout. Never throws; a failed read = unknown.
+ * dot), and it never probes an app: every environment's status comes from the cache the Apps
+ * page and the status reads fill (status.ts, nvr:hub:status:<id>, 30 s); an environment nobody
+ * looked at lately is `unknown` until something reads it. Answers are kept 30 s per caller view
+ * (admins share one, each owner has their own) and concurrent asks share one read (single
+ * flight, per app). Never throws on a cache problem: a failed cache read = unknown.
  */
 
 /** A strip this long is already a wall: past it the strip says there are more. */
 export const FLEET_STRIP_MAX = 200
+export const FLEET_STRIP_TTL_MS = 30_000
+/** One cache read never holds the strip longer than this. */
+const CACHE_BOUND_MS = 300
 
 export interface FleetStripEntry {
   env_id: number
@@ -38,33 +38,26 @@ export interface FleetStrip {
 interface Row extends Record<string, unknown> {
   id: unknown
   key: unknown
-  base_url: unknown
-  hub_token: unknown
-  placement_id: unknown
   app_id: unknown
   app_key: unknown
   app_name: unknown
 }
 
+/** The cache the status reads fill (the app's Redis); only `get` is used here. */
+export interface StripCache {
+  get(key: string): Promise<string | null>
+}
+
 export interface FleetStripDeps {
-  redis?: StatusCache | null
+  redis?: StripCache | null
   rows?: (userId: string, isAdmin: boolean) => Promise<Row[]>
-  read?: (target: HubStatusTarget, redis: StatusCache | null) => Promise<HubEnvStatus>
+  now?: () => number
 }
 
 async function stripRows(userId: string, isAdmin: boolean): Promise<Row[]> {
   const q = db('nivaro_hub_environments as e')
     .join('nivaro_hub_apps as a', 'a.id', 'e.app_id')
-    .select(
-      'e.id',
-      'e.key',
-      'e.base_url',
-      'e.hub_token',
-      'e.placement_id',
-      'e.app_id',
-      'a.key as app_key',
-      'a.name as app_name'
-    )
+    .select('e.id', 'e.key', 'e.app_id', 'a.key as app_key', 'a.name as app_name')
     .orderBy([
       { column: 'a.key', order: 'asc' },
       { column: 'e.position', order: 'asc' },
@@ -77,35 +70,33 @@ async function stripRows(userId: string, isAdmin: boolean): Promise<Row[]> {
   return (await q) as Row[]
 }
 
-export async function readFleetStrip(
+async function cachedStatus(redis: StripCache | null, envId: number): Promise<HubEnvStatus | null> {
+  if (!redis) return null
+  try {
+    const raw = await Promise.race([
+      redis.get(hubStatusKey(envId)),
+      new Promise<null>((r) => setTimeout(() => r(null), CACHE_BOUND_MS))
+    ])
+    if (!raw) return null
+    const v = JSON.parse(raw) as HubEnvStatus
+    return v && typeof v.state === 'string' ? v : null
+  } catch {
+    return null
+  }
+}
+
+async function buildStrip(
   userId: string,
   isAdmin: boolean,
-  deps: FleetStripDeps = {}
+  deps: FleetStripDeps
 ): Promise<FleetStrip> {
   const all = await (deps.rows ?? stripRows)(userId, isAdmin)
   const rows = all.slice(0, FLEET_STRIP_MAX)
   const redis = deps.redis ?? null
-  const read =
-    deps.read ??
-    ((t: HubStatusTarget, r: StatusCache | null) => readEnvironmentStatus(t, { redis: r }))
-  const settled = await Promise.allSettled(
-    rows.map((r) =>
-      read(
-        {
-          id: Number(r.id),
-          key: String(r.key),
-          base_url: String(r.base_url ?? ''),
-          hub_token: (r.hub_token as string | null) ?? null,
-          placement_id: r.placement_id == null ? null : Number(r.placement_id)
-        },
-        redis
-      )
-    )
-  )
+  const statuses = await Promise.all(rows.map((r) => cachedStatus(redis, Number(r.id))))
   return {
     entries: rows.map((r, i) => {
-      const s = settled[i]
-      const status = s.status === 'fulfilled' ? s.value : null
+      const status = statuses[i]
       return {
         env_id: Number(r.id),
         env_key: String(r.key),
@@ -119,4 +110,31 @@ export async function readFleetStrip(
     }),
     truncated: all.length > rows.length
   }
+}
+
+/** Kept answers and reads in flight, per app (appMap) and caller view. */
+const strips = appMap<string, { at: number; answer: Promise<FleetStrip> }>()
+
+/** Test hook. */
+export function resetFleetStripCache(): void {
+  strips.clear()
+}
+
+export function readFleetStrip(
+  userId: string,
+  isAdmin: boolean,
+  deps: FleetStripDeps = {}
+): Promise<FleetStrip> {
+  const now = (deps.now ?? Date.now)()
+  const view = isAdmin ? 'admin' : `owner:${userId}`
+  const hit = strips.get(view)
+  if (hit && now - hit.at < FLEET_STRIP_TTL_MS) return hit.answer
+  const answer = buildStrip(userId, isAdmin, deps)
+  if (strips.size >= 500) strips.clear()
+  strips.set(view, { at: now, answer })
+  // A failed read is never kept: the next ask tries again.
+  answer.catch(() => {
+    if (strips.get(view)?.answer === answer) strips.delete(view)
+  })
+  return answer
 }

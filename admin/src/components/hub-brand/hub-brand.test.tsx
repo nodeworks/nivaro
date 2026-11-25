@@ -11,7 +11,7 @@ import { HubEnvTag, HubStatusDot, ProductionGuard } from './HubBits'
 import { envAbbrev, groupByApp, healthOf } from './HubFleetStrip'
 import { HubRunTimeline, type RunStep } from './HubRunTimeline'
 import { systemItems } from './HubTopBar'
-import { routeExists, sectionActive, visibleSections } from './hub-sections'
+import { activeSection, routeExists, sectionAllowed, visibleSections } from './hub-sections'
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 let host: HTMLDivElement
@@ -59,8 +59,11 @@ describe('Hub-only pieces render nothing without hub_only', () => {
     expect(el.querySelector('[data-env-chip]')).toBeNull()
     expect(el.querySelector('[data-prod-guard]')).toBeNull()
     expect(el.querySelector('[data-hub-run-timeline]')).toBeNull()
-    // The guarded panel itself still renders, unwrapped.
-    expect(el.querySelector('#inside')?.parentElement).toBe(el)
+    // The guarded panel itself still renders, in a plain wrapper with no class or style.
+    const wrap = el.querySelector('#inside')?.parentElement as HTMLElement
+    expect(wrap.getAttribute('class')).toBeNull()
+    expect(wrap.getAttribute('style')).toBeNull()
+    expect(wrap.hasAttribute('data-prod-guard')).toBe(false)
   })
 
   it('…and appear once the standalone Hub look is on', () => {
@@ -123,18 +126,40 @@ describe('run timeline labels', () => {
 })
 
 describe('top bar sections and fleet strip', () => {
+  const admin = {
+    permitted: new Set(['/', '/hub', '/users', '/settings']),
+    disabled: new Set<string>()
+  }
+
   it('hides a section whose route this build does not have', () => {
     const paths = new Set(['/hub', '/hub/shared'])
-    expect(visibleSections(paths).map((s) => s.label)).toEqual(['Apps', 'Shared', 'Settings'])
+    expect(visibleSections(admin, paths).map((s) => s.label)).toEqual([
+      'Apps',
+      'Shared',
+      'Settings'
+    ])
     expect(routeExists('/hub/fleet', paths)).toBe(false)
     expect(routeExists('/settings', paths)).toBe(true)
   })
 
+  it('follows the role like the sidebar did: a non-admin owner sees only what they may open', () => {
+    const paths = new Set(['/hub', '/hub/shared'])
+    // No Settings entry in their nav, and their role's ui_permissions hide the Shared tab.
+    const owner = { permitted: new Set(['/', '/hub']), disabled: new Set(['/hub/shared']) }
+    expect(visibleSections(owner, paths).map((s) => s.label)).toEqual(['Apps'])
+    expect(sectionAllowed('/settings', owner)).toBe(false)
+    expect(sectionAllowed('/hub/shared', owner)).toBe(false)
+    // Without the Apps entry in their nav, no Hub tab shows at all.
+    const none = { permitted: new Set(['/']), disabled: new Set<string>() }
+    expect(visibleSections(none, paths)).toEqual([])
+  })
+
   it('Apps lights up on its own tabs, Shared on its own', () => {
-    const [apps] = visibleSections(new Set(['/hub']))
-    expect(sectionActive(apps, '/hub')).toBe(true)
-    expect(sectionActive(apps, '/hub/drivers')).toBe(true)
-    expect(sectionActive(apps, '/hub/shared')).toBe(false)
+    const sections = visibleSections(admin, new Set(['/hub', '/hub/shared']))
+    expect(activeSection(sections, '/hub')?.label).toBe('Apps')
+    expect(activeSection(sections, '/hub/drivers')?.label).toBe('Apps')
+    expect(activeSection(sections, '/hub/shared')?.label).toBe('Shared')
+    expect(activeSection(sections, '/users')).toBeNull()
   })
 
   it('System lists the other pages once, never a Hub page or a section', () => {
@@ -146,10 +171,8 @@ describe('top bar sections and fleet strip', () => {
       { icon: Icon, label: 'Settings', to: '/settings' },
       { icon: Icon, label: 'Users', to: '/users' }
     ]
-    expect(systemItems(items, visibleSections(new Set(['/hub']))).map((i) => i.to)).toEqual([
-      '/',
-      '/users'
-    ])
+    const sections = visibleSections(admin, new Set(['/hub']))
+    expect(systemItems(items, sections).map((i) => i.to)).toEqual(['/', '/users'])
   })
 
   it('groups the strip by app and maps state to health', () => {

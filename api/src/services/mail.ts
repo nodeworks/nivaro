@@ -9,11 +9,16 @@ import { chainFields } from './chain-columns.js'
 import { encodeDeferredSnippet } from './deferred-snippet.js'
 import { perAppJobs } from './deployment-mode.js'
 import { decryptValue, isEncrypted } from './encryption.js'
-import { HUB_BRAND, HUB_PRODUCT_NAME, hubStandaloneCached } from './hub/brand.js'
+import {
+  HUB_BRAND,
+  HUB_PRODUCT_NAME,
+  hubStandaloneCached,
+  inkOn,
+  isStockProjectName
+} from './hub/brand.js'
 import { useZonedDates } from './liquid-dates.js'
 import {
   applySenderName,
-  brandContextFor,
   brandTemplateContext,
   DEFAULT_ACCENT,
   DEFAULT_SENDER_NAME,
@@ -110,10 +115,12 @@ let engine = buildEngine()
 
 // ─── Standalone Hub mail chrome ──────────────────────────────────────────────
 // A standalone Nivaro Hub (HUB=on, no app data: services/hub/standalone.ts) sends its mail in its
-// own chrome: templates/mail-hub/base.liquid is consulted BEFORE every other root, so every
-// template's `{% layout 'base' %}` lands on the Hub layout, and the From name says "Nivaro Hub".
-// Only there: a regular install, and a Hub that also holds app data, keep the stock chrome. An
-// operator's own branding (logo, sender name, colour) still wins over the Hub defaults.
+// own chrome: templates/mail-hub/base.liquid is consulted after any extension's templates and
+// BEFORE core, so every template's `{% layout 'base' %}` lands on the Hub layout (an extension's
+// own base.liquid rebrand still wins), and the From name says "Nivaro Hub". Only there: a regular
+// install, and a Hub that also holds app data, keep the stock chrome. An operator's own branding
+// (logo, sender name, colour) still wins over the Hub defaults. Sends and previews (template
+// editor, mail-type harness, draft preview) take the same chrome (mailChrome).
 
 /** Signal amber: the Hub's accent (admin hub-brand.css), the rule under the mail header. */
 export const HUB_MAIL_ACCENT = '#f5a623'
@@ -121,13 +128,20 @@ const HUB_MAIL_ROOT = join(__dirname, '../../templates/mail-hub')
 let hubEngine: Liquid | null = null
 
 function hubMailEngine(): Liquid {
-  if (!hubEngine) hubEngine = buildMailEngine([HUB_MAIL_ROOT, ...templateRoots])
+  if (!hubEngine)
+    hubEngine = buildMailEngine([
+      ...templateRoots.filter((r) => r !== CORE_TEMPLATE_ROOT),
+      HUB_MAIL_ROOT,
+      CORE_TEMPLATE_ROOT
+    ])
   return hubEngine
 }
 
 /** The Hub defaults over a resolved brand: only the values nobody chose are replaced. */
 export function hubMailBrand(brand: MailBrand, markUrl: string | null): MailBrand {
-  const stockName = !brand.sender_name || brand.sender_name === DEFAULT_SENDER_NAME
+  // "Nivaro", the database default "Nivaro CMS" or nothing = a name nobody chose.
+  const stockName =
+    brand.sender_name === DEFAULT_SENDER_NAME || isStockProjectName(brand.sender_name)
   return {
     ...brand,
     logo: brand.logo ?? (markUrl ? normalizeMailLogo(markUrl) : null),
@@ -141,16 +155,28 @@ export function hubMailBrand(brand: MailBrand, markUrl: string | null): MailBran
 export async function mailChrome(
   brand: MailBrand,
   deps: { standalone?: () => Promise<boolean>; markUrl?: () => Promise<string | null> } = {}
-): Promise<{ brand: MailBrand; engine: Liquid; hub: boolean }> {
+): Promise<{
+  brand: MailBrand
+  engine: Liquid
+  hub: boolean
+  /** Extra template values the Hub layout reads (the HUB badge's ink, by contrast). */
+  extra: Record<string, unknown>
+}> {
   let standalone = false
   try {
     standalone = await (deps.standalone ?? hubStandaloneCached)()
   } catch {
     standalone = false
   }
-  if (!standalone) return { brand, engine, hub: false }
+  if (!standalone) return { brand, engine, hub: false, extra: {} }
   const markUrl = await (deps.markUrl ?? hubMailMarkUrl)()
-  return { brand: hubMailBrand(brand, markUrl), engine: hubMailEngine(), hub: true }
+  const hubBrand = hubMailBrand(brand, markUrl)
+  return {
+    brand: hubBrand,
+    engine: hubMailEngine(),
+    hub: true,
+    extra: { hub_badge_ink: inkOn(hubBrand.color) }
+  }
 }
 
 /** The Hub mark's absolute address (a mail client fetches it without a session). */
@@ -211,7 +237,7 @@ export async function renderMailTemplate(
   data?: Record<string, unknown>,
   opts?: { brand?: MailBrand }
 ): Promise<string> {
-  const ctx = await withBrand(data, {}, opts?.brand)
+  const { ctx, engine } = await withBrand(data, {}, opts?.brand)
   const override = await getTemplateOverride(template)
   if (override !== null) {
     return engine.parseAndRender(override, ctx)
@@ -228,9 +254,11 @@ async function withBrand(
   data: Record<string, unknown> | undefined,
   lookup: MailBrandingLookup,
   brand?: MailBrand
-): Promise<Record<string, unknown>> {
-  const ctx = trustedBrand(brand ? brandTemplateContext(brand) : await brandContextFor(lookup))
-  return { ...(data ?? {}), ...ctx }
+): Promise<{ ctx: Record<string, unknown>; engine: Liquid }> {
+  // The same chrome a send would take (a standalone Hub previews its own layout).
+  const chrome = await mailChrome(brand ?? (await resolveMailBranding(lookup)))
+  const ctx = trustedBrand(brandTemplateContext(chrome.brand))
+  return { ctx: { ...(data ?? {}), ...ctx, ...chrome.extra }, engine: chrome.engine }
 }
 
 /** Wrap a bare HTML fragment in the branded `message` chrome — the same wrap
@@ -243,7 +271,7 @@ export async function wrapMailFragment(
 ): Promise<string> {
   if (/<html[\s>]/i.test(html)) return html
   try {
-    const ctx = await withBrand(extra, {})
+    const { ctx, engine } = await withBrand(extra, {})
     return await engine.renderFile('message', {
       ...ctx,
       html: safeHtml(html),
@@ -332,7 +360,8 @@ export async function previewMailBody(
   body: string,
   data?: Record<string, unknown>
 ): Promise<string> {
-  return engine.parseAndRender(body, await withBrand(data, {}))
+  const { ctx, engine } = await withBrand(data, {})
+  return engine.parseAndRender(body, ctx)
 }
 
 /** The file template's source (for the editor's baseline + revert preview). */
@@ -1036,10 +1065,10 @@ export async function sendMail(opts: MailOptions): Promise<MailResult> {
   // Mail branding (#1463): the workspace chrome the base layout renders, and
   // the From display name when the workspace names a sender.
   // A standalone Hub swaps in its own chrome + engine (mailChrome); everyone else: unchanged.
-  const { brand, engine } = await mailChrome(await resolveMailBranding(brandLookupFor(opts)))
+  const { brand, engine, extra } = await mailChrome(await resolveMailBranding(brandLookupFor(opts)))
   // The resolved brand is spread LAST so caller data can never smuggle an
   // unescaped `brand` object into the chrome.
-  const renderData = { ...(opts.data ?? {}), ...whyCtx, ...brandCtx(brand) }
+  const renderData = { ...(opts.data ?? {}), ...whyCtx, ...brandCtx(brand), ...extra }
   let html: string
   try {
     html = await engine.renderFile(opts.template, renderData)
@@ -1058,6 +1087,7 @@ export async function sendMail(opts: MailOptions): Promise<MailResult> {
     )
     html = await engine.renderFile('message', {
       ...brandCtx(brand),
+      ...extra,
       ...whyCtx,
       title: opts.subject,
       html: safeHtml(safe ? `<p style="margin:0;white-space:pre-wrap;">${safe}</p>` : '')
@@ -1238,13 +1268,14 @@ export async function sendRawMail(opts: {
   // built a full document — wrap the fragment in the branded base layout
   // (the 'message' template), so ad-hoc emails match templated ones.
   // Mail branding (#1463): the workspace chrome + From display name.
-  const { brand, engine } = await mailChrome(await resolveMailBranding(brandLookupFor(opts)))
+  const { brand, engine, extra } = await mailChrome(await resolveMailBranding(brandLookupFor(opts)))
   let html = opts.html
   if (opts.wrap !== false && !/<html[\s>]/i.test(html)) {
     try {
       const whyCtx = await whyContext(opts.to, opts.why)
       html = await engine.renderFile('message', {
         ...brandCtx(brand),
+        ...extra,
         ...whyCtx,
         html: safeHtml(html),
         title: opts.title ?? null

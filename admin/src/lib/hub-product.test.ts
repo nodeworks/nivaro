@@ -4,13 +4,20 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   applyHubProduct,
+  confirmHubProduct,
+  contrast,
   defaultAccentFor,
   HUB_ACCENT,
   HUB_ICONS,
   HUB_PRODUCT_KEY,
   hubProductOn,
+  inkOnWhite,
   isHubProduct,
-  readableOn
+  isStockProjectName,
+  operatorAccentTokens,
+  readableOn,
+  resetHubProductDecision,
+  STOCK_PROJECT_NAMES
 } from './hub-product'
 
 const INDEX = readFileSync(join(import.meta.dirname, '../../index.html'), 'utf8')
@@ -35,6 +42,7 @@ const manifestHref = () => document.querySelector('link[rel="manifest"]')?.getAt
 const touchHref = () => document.querySelector('link[rel="apple-touch-icon"]')?.getAttribute('href')
 
 beforeEach(() => {
+  resetHubProductDecision()
   // Back to a regular page (the product label of the tab title lives in a module).
   applyHubProduct(false)
   localStorage.clear()
@@ -125,5 +133,81 @@ describe('accent', () => {
   it('ink on the accent passes AA: dark on amber, white on navy', () => {
     expect(readableOn(HUB_ACCENT)).toBe('#14110a')
     expect(readableOn('#172940')).toBe('#ffffff')
+  })
+})
+
+describe('one session, one look', () => {
+  it('the first answer decides; a later "off" never flips the look mid-session', () => {
+    confirmHubProduct(true)
+    expect(hubProductOn()).toBe(true)
+    confirmHubProduct(false)
+    expect(hubProductOn()).toBe(true)
+  })
+
+  it('a first "off" turns a remembered look off; a later "on" may still turn it on', () => {
+    applyHubProduct(true)
+    confirmHubProduct(false)
+    expect(hubProductOn()).toBe(false)
+    confirmHubProduct(true)
+    expect(hubProductOn()).toBe(true)
+  })
+
+  it('a refetch that says the same leaves the (maybe badged) tab icon alone', () => {
+    applyHubProduct(true)
+    const icon = document.querySelector('link[rel~="icon"]') as HTMLLinkElement
+    icon.setAttribute('href', 'data:image/png;base64,AAAA')
+    applyHubProduct(true)
+    expect(icon.getAttribute('href')).toBe('data:image/png;base64,AAAA')
+  })
+})
+
+describe('index.html boot script keeps the server-written original-icon markers', () => {
+  it('never overwrites data-nvr-base-* the server already wrote', () => {
+    const icon = document.querySelector('link[rel~="icon"]') as HTMLLinkElement
+    icon.setAttribute('href', HUB_ICONS.svg)
+    icon.setAttribute('data-nvr-base-icon', '/favicon.svg')
+    document.documentElement.setAttribute('data-product', 'hub')
+    localStorage.setItem(HUB_PRODUCT_KEY, 'hub')
+    runBootScript()
+    expect(icon.getAttribute('data-nvr-base-icon')).toBe('/favicon.svg')
+    applyHubProduct(false)
+    expect(iconHref()).toBe('/favicon.svg')
+  })
+})
+
+describe('names and colours', () => {
+  it('stock project names match the API twin (app-info, mail and the tab title agree)', () => {
+    const api = readFileSync(
+      join(import.meta.dirname, '../../../api/src/services/hub/brand.ts'),
+      'utf8'
+    )
+    const m = /STOCK_PROJECT_NAMES: readonly string\[\] = (\[[^\]]*\])/.exec(api)
+    expect(m).not.toBeNull()
+    expect(JSON.parse((m as RegExpExecArray)[1].replace(/'/g, '"'))).toEqual([
+      ...STOCK_PROJECT_NAMES
+    ])
+    expect(isStockProjectName('Nivaro CMS')).toBe(true)
+    expect(isStockProjectName('Acme')).toBe(false)
+  })
+
+  it("an operator's colour drives primary, ring and links, with ink by contrast", () => {
+    expect(operatorAccentTokens(HUB_ACCENT)).toBeNull()
+    const navy = operatorAccentTokens('#172940')
+    expect(navy?.['--hub-op-primary-fg']).toBe('0 0% 100%')
+    const lime = operatorAccentTokens('#a3e635')
+    expect(lime?.['--hub-op-primary-fg']).toBe('32 45% 6%')
+    expect(contrast(inkOnWhite('#a3e635'), '#ffffff')).toBeGreaterThanOrEqual(4.5)
+    expect(lime?.['--hub-op-ink-dark']).toBe('#a3e635')
+  })
+})
+
+describe('public pages drop a remembered Hub look', () => {
+  it('a wallboard or shared dashboard never wears it, and forgets it', () => {
+    localStorage.setItem(HUB_PRODUCT_KEY, 'hub')
+    window.history.replaceState({}, '', '/d/abc')
+    runBootScript()
+    expect(hubProductOn()).toBe(false)
+    expect(localStorage.getItem(HUB_PRODUCT_KEY)).toBeNull()
+    window.history.replaceState({}, '', '/')
   })
 })

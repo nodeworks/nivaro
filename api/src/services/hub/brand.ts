@@ -2,12 +2,12 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { appBox } from '../app-state.js'
 import { hubModeEnabled } from './mode.js'
-import { hubStandalone } from './standalone.js'
+import { hasAppCollections } from './standalone.js'
 
 /**
  * The standalone Hub's own look, server side (the admin half is admin/src/lib/hub-product.ts).
  *
- *  - hubStandaloneCached(): hubStandalone() kept 30 s — read on every SPA page load and every mail
+ *  - hubStandaloneCached(): hubStandalone() kept 60 s — read on every SPA page load and every mail
  *    send, so it must not cost a database round trip each time. Off (HUB not on) answers at once.
  *  - hubIndexHtml(): index.html with the Hub's icons, manifest, title and `data-product="hub"` on
  *    <html>, so a standalone Hub's tab never shows the Nivaro icon, even on a browser that has
@@ -28,10 +28,48 @@ export const HUB_BRAND = {
 } as const
 
 export const HUB_PRODUCT_NAME = 'Nivaro Hub'
+/** Signal amber: the Hub's accent (admin hub-brand.css HUB_ACCENT). */
+export const HUB_ACCENT = '#f5a623'
+/** Nivaro's stock accent: a project colour equal to it was never chosen by anyone. */
+export const NIVARO_STOCK_ACCENT = '#00ceff'
 
-const TTL_MS = 30_000
+/**
+ * A project name nobody chose: empty, the product's own name, or the database default
+ * ("Nivaro CMS", base schema 000). Twin of admin/src/lib/hub-product.ts STOCK_PROJECT_NAMES (a
+ * test keeps the two equal), so app-info, Hub mail and the tab title agree.
+ */
+export const STOCK_PROJECT_NAMES: readonly string[] = ['', 'nivaro', 'nivaro cms']
+
+export function isStockProjectName(name: string | null | undefined): boolean {
+  return STOCK_PROJECT_NAMES.includes(
+    String(name ?? '')
+      .trim()
+      .toLowerCase()
+  )
+}
+
+/** Text that reads on `hex` (WCAG): near-black on a light fill, white on a dark one. */
+export function inkOn(hex: string): '#ffffff' | '#14110a' {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex ?? '').trim())
+  if (!m) return '#ffffff'
+  const n = Number.parseInt(m[1], 16)
+  const lin = (c: number) => {
+    const v = c / 255
+    return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4
+  }
+  const L = 0.2126 * lin((n >> 16) & 255) + 0.7152 * lin((n >> 8) & 255) + 0.0722 * lin(n & 255)
+  return 1.05 / (L + 0.05) >= 4.5 ? '#ffffff' : '#14110a'
+}
+
+/** How long "is this a standalone Hub" is kept per app (app-info, index.html, mail). */
+const TTL_MS = 60_000
 const standaloneCache = appBox<{ at: number; value: boolean } | null>(() => null)
 
+/**
+ * hubStandalone(), kept 60 s per app. A failed read keeps the last known answer (and is asked
+ * again next time): a database blip never flips the Hub look off mid-session. With no answer yet,
+ * a failure answers false (the full Nivaro look, never a missing page).
+ */
 export async function hubStandaloneCached(
   deps: { now?: number; read?: () => Promise<boolean>; env?: NodeJS.ProcessEnv } = {}
 ): Promise<boolean> {
@@ -40,9 +78,13 @@ export async function hubStandaloneCached(
   const now = deps.now ?? Date.now()
   const hit = standaloneCache.value
   if (hit && now - hit.at < TTL_MS) return hit.value
-  const value = await (deps.read ?? (() => hubStandalone({ env })))()
-  standaloneCache.value = { at: now, value }
-  return value
+  try {
+    const value = await (deps.read ?? (async () => !(await hasAppCollections())))()
+    standaloneCache.value = { at: now, value }
+    return value
+  } catch {
+    return hit?.value ?? false
+  }
 }
 
 /** Test hook. */

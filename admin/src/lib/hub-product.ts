@@ -110,7 +110,8 @@ export function applyHubProduct(on: boolean, doc: Document = document): void {
   const was = root.getAttribute(HUB_PRODUCT_ATTR) === HUB_PRODUCT_VALUE
   if (on) root.setAttribute(HUB_PRODUCT_ATTR, HUB_PRODUCT_VALUE)
   else if (was) root.removeAttribute(HUB_PRODUCT_ATTR)
-  swapIcons(doc, on)
+  // Only on a change: a refetch that says the same must not rewrite a badged tab icon.
+  if (was !== on || (on && !doc.querySelector('link[data-hub-icon]'))) swapIcons(doc, on)
   // "Hub · Apps — Nivaro Hub": the product leads every tab title (packages/shared tab-attention).
   if (on || was) setTabTitleProduct(on ? HUB_TITLE_LABEL : null)
   try {
@@ -120,6 +121,24 @@ export function applyHubProduct(on: boolean, doc: Document = document): void {
     /* private window: the server-side index.html still sets it */
   }
   if (was !== on) for (const l of listeners) l()
+}
+
+/**
+ * The server's answer for this page, applied once: the first app-info answer decides (on or off);
+ * a later answer may only turn the look ON. A later "off" (a database blip on the server, a
+ * refetch racing a restart) never flips the look mid-session — the panels inside (a typed
+ * confirmation, a plan) would be thrown away. A reload asks again.
+ */
+let decided = false
+
+export function confirmHubProduct(on: boolean, doc: Document = document): void {
+  if (!decided || on) applyHubProduct(on, doc)
+  decided = true
+}
+
+/** Test hook: forget this page's decision. */
+export function resetHubProductDecision(): void {
+  decided = false
 }
 
 function subscribe(cb: () => void): () => void {
@@ -146,7 +165,7 @@ export function useHubProduct(): boolean {
   const on = useHubProductFlag()
   useEffect(() => {
     if (!q.isSuccess) return
-    applyHubProduct(isHubProduct(q.data))
+    confirmHubProduct(isHubProduct(q.data))
   }, [q.isSuccess, q.data])
   return on
 }
@@ -164,7 +183,9 @@ export function useHubProductPublic(): boolean {
       .then((r) => (r.ok ? r.json() : null))
       .then((d: { features?: unknown } | null) => {
         if (!live || !Array.isArray(d?.features)) return
-        applyHubProduct(isHubProduct(d.features.filter((f): f is string => typeof f === 'string')))
+        confirmHubProduct(
+          isHubProduct(d.features.filter((f): f is string => typeof f === 'string'))
+        )
       })
       .catch(() => {})
     return () => {
@@ -202,3 +223,103 @@ export function readableOn(hex: string): '#ffffff' | '#14110a' {
   // White passes AA (4.5:1) only below L ≈ 0.183; above it the dark ink does better.
   return 1.05 / (L + 0.05) >= 4.5 ? '#ffffff' : '#14110a'
 }
+
+/**
+ * A project name nobody chose: empty, the product's own name, or the database default
+ * ("Nivaro CMS", base schema). Twin of api services/hub/brand.ts STOCK_PROJECT_NAMES — a test
+ * keeps the two lists equal, so app-info, mail and the tab title agree.
+ */
+export const STOCK_PROJECT_NAMES: readonly string[] = ['', 'nivaro', 'nivaro cms']
+
+export function isStockProjectName(name: string | null | undefined): boolean {
+  return STOCK_PROJECT_NAMES.includes(
+    String(name ?? '')
+      .trim()
+      .toLowerCase()
+  )
+}
+
+// ─── An operator's colour on the Hub ─────────────────────────────────────────
+
+function hexToRgb(hex: string): [number, number, number] | null {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim())
+  if (!m) return null
+  const n = Number.parseInt(m[1], 16)
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+}
+
+function luminance([r, g, b]: [number, number, number]): number {
+  const lin = (c: number) => {
+    const v = c / 255
+    return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4
+  }
+  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+}
+
+/** WCAG contrast of two colours. */
+export function contrast(a: string, b: string): number {
+  const x = hexToRgb(a)
+  const y = hexToRgb(b)
+  if (!x || !y) return 1
+  const [hi, lo] = [luminance(x), luminance(y)].sort((p, q) => q - p)
+  return (hi + 0.05) / (lo + 0.05)
+}
+
+const toHex = (rgb: number[]) =>
+  `#${rgb.map((c) => Math.round(c).toString(16).padStart(2, '0')).join('')}`
+
+/** `hex` darkened (mixed toward black) until it reaches `ratio` against white. */
+export function inkOnWhite(hex: string, ratio = 4.5): string {
+  const rgb = hexToRgb(hex)
+  if (!rgb) return hex
+  for (let k = 0; k <= 1.0001; k += 0.04) {
+    const c = toHex(rgb.map((v) => v * (1 - k)))
+    if (contrast(c, '#ffffff') >= ratio) return c
+  }
+  return '#000000'
+}
+
+/** `hex` as the "h s% l%" triplet the shadcn tokens use. */
+export function hexToHslTriplet(hex: string): string | null {
+  const rgb = hexToRgb(hex)
+  if (!rgb) return null
+  const [r, g, b] = rgb.map((v) => v / 255)
+  const max = Math.max(r, g, b)
+  const min = Math.min(r, g, b)
+  const l = (max + min) / 2
+  let h = 0
+  let sat = 0
+  if (max !== min) {
+    const d = max - min
+    sat = l > 0.5 ? d / (2 - max - min) : d / (max + min)
+    h = max === r ? (g - b) / d + (g < b ? 6 : 0) : max === g ? (b - r) / d + 2 : (r - g) / d + 4
+    h *= 60
+  }
+  return `${Math.round(h)} ${Math.round(sat * 100)}% ${Math.round(l * 100)}%`
+}
+
+/**
+ * The inline token values that make an operator's colour win across the Hub (primary buttons,
+ * focus ring, links, selection), with ink chosen by contrast; null = the stock Hub amber (the
+ * CSS defaults in hub-brand.css apply). Keys are CSS custom properties.
+ */
+export function operatorAccentTokens(color: string): Record<string, string> | null {
+  if (color.toLowerCase() === HUB_ACCENT) return null
+  const primary = hexToHslTriplet(color)
+  if (!primary) return null
+  return {
+    '--hub-op-primary': primary,
+    '--hub-op-primary-fg': readableOn(color) === '#ffffff' ? '0 0% 100%' : '32 45% 6%',
+    '--hub-op-ring-light': hexToHslTriplet(inkOnWhite(color, 3)) ?? primary,
+    '--hub-op-ink-light': inkOnWhite(color, 4.5),
+    '--hub-op-ink-dark': color
+  }
+}
+
+export const OPERATOR_ACCENT_PROPS = [
+  '--hub-op-primary',
+  '--hub-op-primary-fg',
+  '--hub-op-ring-light',
+  '--hub-op-ink-light',
+  '--hub-op-ink-dark'
+] as const

@@ -1,6 +1,7 @@
 import { type DataTag, useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router'
 import { api } from '@/lib/api'
+import { useServerFeatures } from '@/lib/useServerFeatures'
 import { cn } from '@/lib/utils'
 import { ENV_TONE_LABEL, envTone } from './env-tone'
 import { type HubHealth, HubStatusDot } from './HubBits'
@@ -61,7 +62,11 @@ export function groupByApp(entries: FleetStripEntry[]) {
 }
 
 export function HubFleetStrip() {
+  // Only once the server has confirmed this is a standalone Hub (an early flag remembered by the
+  // browser is not enough: on a regular install /api/hub/strip does not exist).
+  const confirmed = useServerFeatures().has('hub_only')
   const q = useQuery({
+    enabled: confirmed,
     queryKey: fleetStripKey(),
     queryFn: () => api.get<{ data: FleetStripAnswer }>('/hub/strip').then((r) => r.data.data),
     refetchInterval: 60_000,
