@@ -30,6 +30,7 @@ const { extensionRegistry } = await import('../../../extensions/loader.js')
 let app: FastifyInstance
 const seenAuth: string[] = []
 const keysDuringRead: number[] = []
+let maxInFlight = 0
 
 beforeAll(async () => {
   await db.schema.createTable('nivaro_roles', (t) => {
@@ -103,9 +104,42 @@ beforeAll(async () => {
   app.get('/api/items/broken', async (_req, reply) =>
     reply.code(403).send({ error: 'no', code: 'FORBIDDEN_COLLECTION' })
   )
-  app.post('/api/custom-queries/:slug/execute', async (req) => ({
-    data: Array.from({ length: Number((req.body as { params?: { n?: number } }).params?.n ?? 0) })
-  }))
+  let inFlight = 0
+  app.get('/api/items/slow', async () => {
+    inFlight++
+    maxInFlight = Math.max(maxInFlight, inFlight)
+    await new Promise((r) => setTimeout(r, 30))
+    inFlight--
+    return { data: [{ id: 1 }] }
+  })
+  // The smoke queries run HERE (never through the execute route): stand-in custom queries.
+  await db.schema.createTable('nivaro_custom_queries', (t) => {
+    t.increments('id')
+    t.string('slug').unique()
+    t.text('sql_text')
+    t.text('params')
+    t.string('access')
+    t.boolean('enabled')
+    t.text('scope_params')
+  })
+  await db.schema.createTable('nivaro_user_scopes', (t) => {
+    t.increments('id')
+    t.string('user')
+    t.string('dimension')
+  })
+  await db.schema.createTable('smoke_marks', (t) => {
+    t.increments('id')
+  })
+  await db('nivaro_custom_queries').insert([
+    {
+      slug: 'open-orders',
+      sql_text: 'SELECT 1 AS n UNION ALL SELECT 2 UNION ALL SELECT 3',
+      access: 'authenticated',
+      enabled: true
+    },
+    { slug: 'writes', sql_text: 'DELETE FROM smoke_marks', access: 'authenticated', enabled: true },
+    { slug: 'admin-only', sql_text: 'SELECT 1', access: 'admin', enabled: true }
+  ])
   await app.register(hubVerifyLinkRoutes, { prefix: '/api/hub-link' })
   await app.ready()
 })
@@ -134,7 +168,7 @@ describe('hub link: verify', () => {
         reads: [
           { kind: 'read', path: '/api/items/projects?limit=2' },
           { kind: 'read', path: '/api/items/broken' },
-          { kind: 'query', slug: 'open-orders', params: { n: 3 } }
+          { kind: 'query', slug: 'open-orders' }
         ]
       }
     })
@@ -156,7 +190,7 @@ describe('hub link: verify', () => {
       (await db('nivaro_extension_settings').where(verify.SMOKE_STORE).first()).value
     )
     const u = await db('nivaro_users').where({ id: stored.user_id }).first()
-    expect(u).toMatchObject({ account_kind: 'service', status: 'active', role: stored.role_id })
+    expect(u).toMatchObject({ account_kind: 'hub_smoke', status: 'active', role: stored.role_id })
     expect(u.role).not.toBe('R-ADMIN')
     expect(u.email).toMatch(/^hub-smoke-[0-9a-f]{8}@nivaro\.local$/)
     // Its own role: no administration, no sign-in, one read policy.
@@ -200,6 +234,7 @@ describe('hub link: verify', () => {
     ['a static token', { static_token: 'tok' }, 'SMOKE_IDENTITY_HAS_CREDENTIAL'],
     ['another role', { role: 'R-ADMIN' }, 'SMOKE_IDENTITY_CHANGED'],
     ['a person kind', { account_kind: null }, 'SMOKE_IDENTITY_NOT_SERVICE'],
+    ['a plain service kind', { account_kind: 'service' }, 'SMOKE_IDENTITY_NOT_SERVICE'],
     ['a suspension', { status: 'suspended' }, 'SMOKE_IDENTITY_SUSPENDED']
   ])('refuses a smoke account that was given %s', async (_what, patch, code) => {
     const { user_id } = JSON.parse(
@@ -234,6 +269,68 @@ describe('hub link: verify', () => {
     await expect(verify.smokeIdentity()).rejects.toMatchObject({ code: 'SMOKE_ROLE_CHANGED' })
     await db('nivaro_roles').where({ id: role_id }).update({ admin_access: false })
     expect(await verify.smokeIdentity()).toBe(user_id)
+  })
+
+  it('a smoke query must be one read of tables the smoke role may read; refused otherwise', async () => {
+    const r = await app.inject({
+      method: 'POST',
+      url: '/api/hub-link/verify/run',
+      headers: auth,
+      payload: {
+        reads: [
+          { kind: 'query', slug: 'writes' },
+          { kind: 'query', slug: 'admin-only' },
+          { kind: 'query', slug: 'missing' }
+        ]
+      }
+    })
+    expect(r.statusCode).toBe(200)
+    expect(r.json().results.map((x: Record<string, unknown>) => x.code)).toEqual([
+      'SMOKE_QUERY_NOT_READ_ONLY',
+      'SMOKE_QUERY_ACCESS',
+      'SMOKE_QUERY_MISSING'
+    ])
+    // The write never ran.
+    await db('smoke_marks').insert({})
+    const before = Number((await db('smoke_marks').count({ n: '*' }))[0].n)
+    expect(before).toBe(1)
+    // The Hub asks the same before it saves a suite.
+    const check = await app.inject({
+      method: 'POST',
+      url: '/api/hub-link/verify/queries',
+      headers: auth,
+      payload: { slugs: ['open-orders', 'writes'] }
+    })
+    expect(check.statusCode).toBe(200)
+    expect(check.json().results.map((x: Record<string, unknown>) => [x.slug, x.code])).toEqual([
+      ['open-orders', null],
+      ['writes', 'SMOKE_QUERY_NOT_READ_ONLY']
+    ])
+  })
+
+  it('runs ten reads, at most three at a time', async () => {
+    maxInFlight = 0
+    const r = await app.inject({
+      method: 'POST',
+      url: '/api/hub-link/verify/run',
+      headers: auth,
+      payload: {
+        reads: Array.from({ length: 10 }, () => ({ kind: 'read', path: '/api/items/slow' }))
+      }
+    })
+    expect(r.statusCode).toBe(200)
+    expect(r.json().results).toHaveLength(10)
+    expect(r.json().results.every((x: Record<string, unknown>) => x.status === 200)).toBe(true)
+    expect(maxInFlight).toBe(3)
+    const eleven = await app.inject({
+      method: 'POST',
+      url: '/api/hub-link/verify/run',
+      headers: auth,
+      payload: {
+        reads: Array.from({ length: 11 }, () => ({ kind: 'read', path: '/api/items/slow' }))
+      }
+    })
+    expect(eleven.statusCode).toBe(400)
   })
 
   it('the minted key is read-only and short-lived', async () => {

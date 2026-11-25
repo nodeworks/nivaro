@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
-import { isServiceAccount } from '../auth/role-sign-in.js'
+import { isHubSmokeAccount } from '../auth/role-sign-in.js'
 import { whereEqualsCi } from '../db/dialect/h2.js'
 import { db } from '../db/index.js'
 import { authenticate } from '../middleware/authenticate.js'
@@ -23,8 +23,8 @@ const SCIM_USER_SCHEMA = 'urn:ietf:params:scim:schemas:core:2.0:User'
 const SCIM_LIST_SCHEMA = 'urn:ietf:params:scim:api:messages:2.0:ListResponse'
 const SCIM_ERROR_SCHEMA = 'urn:ietf:params:scim:api:messages:2.0:Error'
 const SCIM_PATCH_SCHEMA = 'urn:ietf:params:scim:api:messages:2.0:PatchOp'
-const SERVICE_ACCOUNT_DETAIL =
-  'This is a service account of the app itself; SCIM cannot change or sign it in'
+const HUB_SMOKE_DETAIL =
+  'This is the Hub smoke checks’ own account; SCIM cannot change or sign it in'
 const OFFBOARDED_DETAIL =
   'This email belongs to a person offboarded from every app (EMAIL_OFFBOARDED). Lift their block on the Hub first.'
 
@@ -187,8 +187,8 @@ export async function scimRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string }
     const user = await db<User>('nivaro_users').where({ id }).first()
     if (!user) return scimError(reply, 404, 'User not found')
-    // A service account is the app's own (e.g. the Hub smoke identity): never SCIM's to change.
-    if (isServiceAccount(user)) return scimError(reply, 409, SERVICE_ACCOUNT_DETAIL)
+    // The Hub smoke identity is the app's own: never SCIM's to change.
+    if (isHubSmokeAccount(user)) return scimError(reply, 409, HUB_SMOKE_DETAIL)
 
     const body = (req.body ?? {}) as ScimUserPayload & ScimPatchPayload
     const updates: Record<string, unknown> = {}
@@ -290,8 +290,8 @@ export async function scimRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string }
     const user = await db<User>('nivaro_users').where({ id }).first()
     if (!user) return scimError(reply, 404, 'User not found')
-    // A service account is the app's own (e.g. the Hub smoke identity): never SCIM's to change.
-    if (isServiceAccount(user)) return scimError(reply, 409, SERVICE_ACCOUNT_DETAIL)
+    // The Hub smoke identity is the app's own: never SCIM's to change.
+    if (isHubSmokeAccount(user)) return scimError(reply, 409, HUB_SMOKE_DETAIL)
 
     await db('nivaro_users')
       .where({ id })

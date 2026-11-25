@@ -17,22 +17,26 @@ export function roleAllowsSignIn(
 }
 
 /**
- * A SERVICE account (account_kind 'service': the Hub's smoke identity, a service login) is never
- * signed in interactively — no session, password, identity-provider or token sign-in, no
- * password setup, no View-as, no OAuth/device grant. It acts only through the credential its own
- * code mints (an API key), which this gate never judges.
+ * The Hub smoke identity's own account kind (services/hub-link/verify.ts makes the only such row;
+ * it is not one of the kinds an administrator may set, ACCOUNT_KINDS). An account of this kind
+ * is never signed in interactively — no session, password, identity-provider or token sign-in, no
+ * password setup, no View-as, no OAuth/device grant, no SCIM change. It acts only through the
+ * temporary API key its own code mints, which this gate never judges. Every other kind
+ * (service logins included) signs in exactly as before.
  */
-export function isServiceAccount(
+export const HUB_SMOKE_KIND = 'hub_smoke'
+
+export function isHubSmokeAccount(
   user: { account_kind?: string | null } | null | undefined
 ): boolean {
-  return String(user?.account_kind ?? '').toLowerCase() === 'service'
+  return String(user?.account_kind ?? '').toLowerCase() === HUB_SMOKE_KIND
 }
 
-/** roleAllowsSignIn for a user row, reading the role; a service account never signs in. */
+/** roleAllowsSignIn for a user row, reading the role; the Hub smoke identity never signs in. */
 export async function signInAllowedByRole(
   user: Pick<User, 'role'> & { account_kind?: string | null }
 ): Promise<boolean> {
-  if (isServiceAccount(user)) return false
+  if (isHubSmokeAccount(user)) return false
   if (!user.role) return true
   const role = (await db('nivaro_roles').where({ id: user.role }).first('app_access')) as
     | { app_access?: unknown }

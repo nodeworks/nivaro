@@ -3,7 +3,7 @@ import Fastify from 'fastify'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 /**
- * A SERVICE account (account_kind 'service', e.g. the Hub smoke identity) never signs in
+ * The Hub smoke identity (account_kind 'hub_smoke') never signs in
  * interactively: password, static-token sign-in, password setup, View-as, an existing session,
  * SCIM. It acts only through the API key its own code mints (roleAllowsSignIn still lets a
  * machine account authenticate with its own credential).
@@ -70,7 +70,7 @@ vi.mock('../services/users.js', async (orig) => ({
   findOrCreateFromOIDC: async () => state.user
 }))
 
-import { isServiceAccount, roleAllowsSignIn, signInAllowedByRole } from '../auth/role-sign-in.js'
+import { isHubSmokeAccount, roleAllowsSignIn, signInAllowedByRole } from '../auth/role-sign-in.js'
 import { sessionPrincipal } from '../middleware/authenticate.js'
 import { authRoutes } from './auth.js'
 import { scimRoutes } from './scim.js'
@@ -99,7 +99,7 @@ const SERVICE = {
   id: 'SVC-1',
   email: 'hub-smoke-ab12cd34@nivaro.local',
   status: 'active',
-  account_kind: 'service',
+  account_kind: 'hub_smoke',
   role: null,
   static_token: 'svc-static-token-123',
   password_hash: hashed('right-password')
@@ -151,14 +151,16 @@ beforeEach(() => {
 })
 afterEach(() => vi.clearAllMocks())
 
-describe('a service account never signs in', () => {
-  it('the gate: service accounts refused, other machine accounts and people as before', async () => {
-    expect(isServiceAccount({ account_kind: 'service' })).toBe(true)
-    expect(isServiceAccount({ account_kind: 'integration' })).toBe(false)
-    expect(await signInAllowedByRole({ role: null, account_kind: 'service' })).toBe(false)
+describe('the Hub smoke identity never signs in', () => {
+  it('the gate: only the hub_smoke kind is refused; service logins and people as before', async () => {
+    expect(isHubSmokeAccount({ account_kind: 'hub_smoke' })).toBe(true)
+    expect(isHubSmokeAccount({ account_kind: 'service' })).toBe(false)
+    expect(isHubSmokeAccount({ account_kind: 'integration' })).toBe(false)
+    expect(await signInAllowedByRole({ role: null, account_kind: 'hub_smoke' })).toBe(false)
+    expect(await signInAllowedByRole({ role: null, account_kind: 'service' })).toBe(true)
     expect(await signInAllowedByRole({ role: null, account_kind: null })).toBe(true)
     // Its own API key still authenticates (the role gate lets machine accounts through).
-    expect(roleAllowsSignIn({ app_access: false }, { account_kind: 'service' })).toBe(true)
+    expect(roleAllowsSignIn({ app_access: false }, { account_kind: 'hub_smoke' })).toBe(true)
   })
 
   it('not with a password', async () => {
@@ -208,7 +210,7 @@ describe('a service account never signs in', () => {
     const { app } = await build()
     const r = await app.inject(post('/masquerade', { user_id: SERVICE.id }))
     expect(r.statusCode).toBe(409)
-    expect(r.json().code).toBe('SERVICE_ACCOUNT')
+    expect(r.json().code).toBe('HUB_SMOKE_ACCOUNT')
   })
 
   it('a session naming it is ended', async () => {
@@ -233,5 +235,19 @@ describe('a service account never signs in', () => {
       })
       expect([method, r.statusCode]).toEqual([method, 409])
     }
+  })
+
+  it('a plain service login (account_kind service) signs in exactly as on main', async () => {
+    state.user = { ...SERVICE, account_kind: 'service' }
+    const { app, session } = await build()
+    const r = await app.inject(
+      post('/login/password', { email: SERVICE.email, password: 'right-password' })
+    )
+    expect(r.statusCode).toBe(200)
+    expect(session.userId).toBe(SERVICE.id)
+    const live = fakeSession({ userId: SERVICE.id })
+    expect(await sessionPrincipal({ session: live } as never)).toMatchObject({ ok: true })
+    const viewAs = await (await build()).app.inject(post('/masquerade', { user_id: SERVICE.id }))
+    expect(viewAs.json().code).not.toBe('HUB_SMOKE_ACCOUNT')
   })
 })

@@ -1,32 +1,48 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
+import { HUB_SMOKE_KIND } from '../../auth/role-sign-in.js'
 import { db } from '../../db/index.js'
+import { rawRows } from '../../db/raw-rows.js'
+import { sqlDialect } from '../../db/sql-dialect.js'
 import { extensionRegistry } from '../../extensions/loader.js'
+import type { User } from '../../types.js'
 import { NIVARO_VERSION } from '../../version.js'
+import { buildFinalParams, type ParamDef } from '../custom-query-exec.js'
+import { substituteDialectOf, substituteParams } from '../custom-query-substitute.js'
+import { can } from '../permissions.js'
+import { tablesReadBy } from '../query-freshness.js'
+import { readOnlySqlRefusal } from './read-only-sql.js'
+import { MAX_READS, READ_CONCURRENCY, READ_TIMEOUT_MS } from './verify-limits.js'
 
 /**
  * Hub verification, APP side (0.3.215+): what a Nivaro Hub's post-deploy smoke checks and its
  * extension version manager may ask of an app over its hub link (routes/hub-verify-link.ts).
  *
- * Smoke reads (`runVerifyReads`): a signed-in read, run IN-PROCESS as a SERVICE identity — never
- * as a person and never with a token the Hub holds. The identity is one SERVICE account per app
- * (account_kind `service`, found by the id this code stored, never by address) in a role of its
- * own: read every collection, no administration, app access off (nobody signs in with it, and
- * every sign-in path refuses a service account); every call mints a temporary API key for it — read-only scope (`*`: read),
- * expiring in 3 minutes, never leaving this process — runs the reads through `app.inject` with it
- * and deletes the key again. Because the key's scope is read-only, administration routes refuse
- * it (a "keys limited to named collections" refusal) and no write route accepts it; the methods
- * are fixed here anyway: a `read` is a GET of an /api/ path, a `query` is the custom query
- * execute route. The answer is facts only — HTTP status, milliseconds, a row count and a short
- * error code — never a body, a value or a header.
+ * Smoke reads (`runVerifyReads`): signed-in reads run IN-PROCESS as the app's smoke identity —
+ * never as a person and never with a token the Hub holds. The identity is one account per app of
+ * its own kind (`hub_smoke`, found by the id this code stored, never by address; every sign-in
+ * path refuses that kind, auth/role-sign-in.ts) in a role of its own: read every collection, no
+ * administration, app access off.
+ *  - a `read` is a GET of an /api/ path through `app.inject` with a temporary API key for the
+ *    identity (scope `*`: read, 3 minutes, never leaving this process, deleted after the run);
+ *  - a `query` is a custom query run HERE, never through its execute route: enabled, access
+ *    `authenticated` or `public`, its SQL provably a single read (read-only-sql.ts), every table it
+ *    reads readable by the smoke role (`can`), and run inside a transaction that is always rolled
+ *    back. Refused otherwise (SMOKE_QUERY_*), when the Hub saves the check and again on every run.
+ * Up to MAX_READS reads, READ_CONCURRENCY at a time, each bounded by READ_TIMEOUT_MS
+ * (verify-limits.ts, shared with the Hub). A timed-out `read` is answered TIMEOUT at once; the
+ * injected request itself cannot be cancelled and finishes in the background (its key is deleted
+ * with the run, so it ends 401 if it outlives it). The answer is facts only — HTTP status,
+ * milliseconds, a row count and a short code — never a body, a value or a header.
  *
  * Extensions (`extensionInventory`): the extensions this process loaded — id, status, enabled,
  * the manifest version and the build (the export's `build` or the deploy's `.release-sha`).
  */
 
 const KEY_TTL_MS = 3 * 60_000
-const READ_TIMEOUT_MS = 15_000
-export const MAX_READS = 10
+
+export { MAX_READS }
+
 const CODE_RE = /^[A-Z][A-Z0-9_]{0,63}$/
 
 /** Paths a smoke read may never name: the links, sign-in, streams, files, MCP. */
@@ -150,7 +166,7 @@ export function smokeUserRefusal(
   roleId: string
 ): string | null {
   if (!u) return 'SMOKE_IDENTITY_MISSING'
-  if (String(u.account_kind ?? '') !== 'service') return 'SMOKE_IDENTITY_NOT_SERVICE'
+  if (String(u.account_kind ?? '') !== HUB_SMOKE_KIND) return 'SMOKE_IDENTITY_NOT_SERVICE'
   if (!blank(u.password_hash) || !blank(u.entra_oid) || !blank(u.external_id))
     return 'SMOKE_IDENTITY_HAS_CREDENTIAL'
   if (!blank(u.static_token)) return 'SMOKE_IDENTITY_HAS_CREDENTIAL'
@@ -207,15 +223,15 @@ async function createIdentity(): Promise<StoredIdentity> {
     action: 'read',
     fields: '*'
   })
-  // A machine account (account_kind service): never a person, never offboarded, never mailed,
-  // never signed in (auth/role-sign-in.ts isServiceAccount); it acts only through the temporary
+  // A machine account of its own kind (hub_smoke): never a person, never offboarded, never mailed,
+  // never signed in (auth/role-sign-in.ts isHubSmokeAccount); it acts only through the temporary
   // key minted below, and is found again by its stored id only, never by its address.
   await db('nivaro_users').insert({
     id: userId,
     email: `hub-smoke-${tag}@nivaro.local`,
     first_name: 'Hub smoke check',
     status: 'active',
-    account_kind: 'service',
+    account_kind: HUB_SMOKE_KIND,
     role: roleId
   })
   try {
@@ -319,21 +335,15 @@ async function oneRead(r: VerifyRead, key: string, deps: VerifyDeps): Promise<Ve
     accept: 'application/json',
     ...(deps.host ? { host: deps.host } : {})
   }
-  const req =
-    r.kind === 'read'
-      ? deps.inject({ method: 'GET', url: r.path as string, headers })
-      : deps.inject({
-          method: 'POST',
-          url: `/api/custom-queries/${encodeURIComponent(r.slug as string)}/execute`,
-          headers: { ...headers, 'content-type': 'application/json' },
-          payload: JSON.stringify({ params: r.params ?? {} })
-        })
   let timer: NodeJS.Timeout | undefined
   const timeout = new Promise<'timeout'>((resolve) => {
     timer = setTimeout(() => resolve('timeout'), deps.timeoutMs ?? READ_TIMEOUT_MS)
   })
   try {
-    const res = await Promise.race([req, timeout])
+    const res = await Promise.race([
+      deps.inject({ method: 'GET', url: r.path as string, headers }),
+      timeout
+    ])
     const ms = Math.max(0, Math.round(now() - t0))
     if (res === 'timeout') return { status: 0, ms, rows: null, code: 'TIMEOUT' }
     const body = typeof res.body === 'string' ? res.body : ''
@@ -351,24 +361,192 @@ async function oneRead(r: VerifyRead, key: string, deps: VerifyDeps): Promise<Ve
   }
 }
 
-/** Runs the reads one after another as the service identity. The key is gone afterwards. */
+interface QueryRow {
+  id: unknown
+  slug: string
+  sql_text: string | null
+  params: string | null
+  access: string | null
+  enabled: unknown
+  scope_params?: string | null
+}
+
+export class SmokeQueryRefusal extends Error {
+  code: string
+  status: number
+  constructor(code: string, message: string, status = 409) {
+    super(message)
+    this.code = code
+    this.status = status
+  }
+}
+
+/**
+ * Why `slug` may not be a smoke query for this identity, or null. Refusals: SMOKE_QUERY_MISSING
+ * (no such enabled query), SMOKE_QUERY_ACCESS (administrators only), SMOKE_QUERY_NOT_READ_ONLY
+ * (its SQL is not provably one read), SMOKE_QUERY_NOT_READABLE (it reads a table the smoke role
+ * may not read).
+ */
+export async function smokeQueryRefusal(
+  q: QueryRow | undefined,
+  user: User
+): Promise<SmokeQueryRefusal | null> {
+  if (!q || !(q.enabled === true || q.enabled === 1 || q.enabled === '1'))
+    return new SmokeQueryRefusal(
+      'SMOKE_QUERY_MISSING',
+      'No enabled custom query with that slug',
+      404
+    )
+  if (q.access !== 'authenticated' && q.access !== 'public')
+    return new SmokeQueryRefusal(
+      'SMOKE_QUERY_ACCESS',
+      'The query is for administrators only; a smoke query must be Signed in or Public'
+    )
+  const why = readOnlySqlRefusal(q.sql_text)
+  if (why)
+    return new SmokeQueryRefusal(
+      'SMOKE_QUERY_NOT_READ_ONLY',
+      `The query is not one plain read (${why}), so smoke checks may not run it`
+    )
+  const tables = await tablesReadBy(q.sql_text ?? '').catch(() => null)
+  if (!tables)
+    return new SmokeQueryRefusal(
+      'SMOKE_QUERY_NOT_READABLE',
+      'The tables the query reads are unknown'
+    )
+  for (const t of tables)
+    if (!(await can(user, 'read', t)))
+      return new SmokeQueryRefusal(
+        'SMOKE_QUERY_NOT_READABLE',
+        `The smoke role may not read ${String(t).slice(0, 64)}`
+      )
+  return null
+}
+
+const ROLLBACK = Symbol('smoke-query-rollback')
+
+/** Runs one smoke query: checked, then inside a transaction that is always rolled back. */
+async function oneQuery(r: VerifyRead, user: User, deps: VerifyDeps): Promise<VerifyReadResult> {
+  const now = deps.now ?? Date.now
+  const t0 = now()
+  const ms = () => Math.max(0, Math.round(now() - t0))
+  try {
+    const q = (await db('nivaro_custom_queries').where({ slug: r.slug }).first()) as
+      | QueryRow
+      | undefined
+    const refusal = await smokeQueryRefusal(q, user)
+    if (refusal) return { status: refusal.status, ms: ms(), rows: null, code: refusal.code }
+    const row = q as QueryRow
+    let defs: ParamDef[] = []
+    try {
+      defs = row.params ? (JSON.parse(row.params) as ParamDef[]) : []
+    } catch {
+      defs = []
+    }
+    let finalParams: Record<string, unknown>
+    try {
+      finalParams = buildFinalParams(defs, r.params ?? {})
+    } catch {
+      return { status: 400, ms: ms(), rows: null, code: 'BAD_QUERY_PARAMS' }
+    }
+    const { applyScopeParams } = await import('../custom-query-scope.js')
+    await applyScopeParams(row.scope_params ?? null, finalParams, String(user.id), false, {
+      slug: row.slug,
+      sqlText: row.sql_text ?? ''
+    })
+    const text = substituteParams(
+      row.sql_text ?? '',
+      finalParams,
+      substituteDialectOf(sqlDialect(db as never))
+    )
+    let rows = 0
+    let timer: NodeJS.Timeout | undefined
+    const timeout = new Promise<'timeout'>((resolve) => {
+      timer = setTimeout(() => resolve('timeout'), deps.timeoutMs ?? READ_TIMEOUT_MS)
+    })
+    const run = db
+      .transaction(async (trx) => {
+        rows = rawRows(await trx.raw(text)).length
+        // Never committed: whatever the statement did (nothing — it is a read) is undone.
+        throw ROLLBACK
+      })
+      .then(
+        () => 'done' as const,
+        (err) => (err === ROLLBACK ? ('done' as const) : Promise.reject(err))
+      )
+    try {
+      if ((await Promise.race([run, timeout])) === 'timeout') {
+        run.catch(() => undefined)
+        return { status: 0, ms: ms(), rows: null, code: 'TIMEOUT' }
+      }
+    } finally {
+      clearTimeout(timer)
+    }
+    return { status: 200, ms: ms(), rows, code: null }
+  } catch {
+    // The app answered: its query failed on this database (a missing column after a deploy…).
+    return { status: 400, ms: ms(), rows: null, code: 'QUERY_FAILED' }
+  }
+}
+
+/** Runs `fn` over `items`, at most `width` at a time; answers in order. */
+async function mapLimited<T, R>(items: T[], width: number, fn: (t: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length)
+  let next = 0
+  const lane = async () => {
+    for (let i = next++; i < items.length; i = next++) out[i] = await fn(items[i])
+  }
+  await Promise.all(Array.from({ length: Math.min(width, items.length) }, lane))
+  return out
+}
+
+async function smokeUser(id: string): Promise<User> {
+  return (await db('nivaro_users').where({ id }).first()) as User
+}
+
+/** Runs the reads as the smoke identity, READ_CONCURRENCY at a time. The key is gone afterwards. */
 export async function runVerifyReads(
   reads: VerifyRead[],
   deps: VerifyDeps
 ): Promise<{ version: string; results: VerifyReadResult[] }> {
+  if (reads.length > MAX_READS) throw new SmokeQueryRefusal('BAD_READS', 'Too many reads', 400)
   const userId = await smokeIdentity()
-  const { key, hash } = await mintKey(userId)
+  const user = await smokeUser(userId)
+  const needsKey = reads.some((r) => r.kind === 'read')
+  const minted = needsKey ? await mintKey(userId) : null
   try {
-    const results: VerifyReadResult[] = []
-    for (const r of reads) results.push(await oneRead(r, key, deps))
+    const results = await mapLimited(reads, READ_CONCURRENCY, (r) =>
+      r.kind === 'read' ? oneRead(r, minted?.key as string, deps) : oneQuery(r, user, deps)
+    )
     return { version: NIVARO_VERSION, results }
   } finally {
     // Expires in 3 minutes on its own if this delete does not get through.
-    await db('nivaro_api_keys')
-      .where({ key_hash: hash })
-      .delete()
-      .catch(() => undefined)
+    if (minted)
+      await db('nivaro_api_keys')
+        .where({ key_hash: minted.hash })
+        .delete()
+        .catch(() => undefined)
   }
+}
+
+/** The Hub asks before it saves a suite: may each slug be a smoke query here? */
+export async function checkSmokeQueries(
+  body: unknown
+): Promise<{ results: Array<{ slug: string; code: string | null; reason: string | null }> }> {
+  const list = (body as { slugs?: unknown } | null)?.slugs
+  if (!Array.isArray(list) || list.length === 0 || list.length > MAX_READS)
+    throw new SmokeQueryRefusal('BAD_READS', `Send 1 to ${MAX_READS} slugs`, 400)
+  const slugs = list.map((x) => String(x))
+  if (!slugs.every((x) => SLUG_RE.test(x)))
+    throw new SmokeQueryRefusal('BAD_READS', 'A slug is not a custom query slug', 400)
+  const user = await smokeUser(await smokeIdentity())
+  const results = []
+  for (const slug of slugs) {
+    const q = (await db('nivaro_custom_queries').where({ slug }).first()) as QueryRow | undefined
+    const r = await smokeQueryRefusal(q, user)
+    results.push({ slug, code: r?.code ?? null, reason: r?.message ?? null })
+  }
+  return { results }
 }
 
 export interface ExtensionFact {
