@@ -191,6 +191,10 @@ const SCREENS: Record<string, Screens> = {
     data: lazy(() => import('@/pages/hub/data/HubData')),
     fleet: lazy(() => import('@/pages/hub/fleet/HubFleet')),
     audit: lazy(() => import('@/pages/hub/fleet/HubAudit')),
+    health: lazy(() => import('@/pages/hub/insight/HubHealth')),
+    usage: lazy(() => import('@/pages/hub/insight/HubUsage')),
+    dependencies: lazy(() => import('@/pages/hub/insight/HubDependencies')),
+    ask: lazy(() => import('@/pages/hub/insight/HubAsk')),
     people: lazy(() => import('@/pages/hub/people/HubPeople'))
   }
 }

@@ -180,6 +180,8 @@ const actionOf = (v: unknown): ChecklistAction | null =>
   (ACTIONS as readonly string[]).includes(String(v)) ? (v as ChecklistAction) : null
 
 const VERSION_RE = /^\d+\.\d+\.\d+$/
+/** An extension promote's checklist version (services/hub/verify/extensions.ts extensionChecklistVersion). */
+const EXT_VERSION_RE = /^[a-z0-9][a-z0-9-]{0,50}@[0-9a-f]{12}$/
 
 /** The checklist as one person sees it: today's entries, the ticks, what they may tick. */
 async function checklistView(
@@ -774,6 +776,8 @@ export function hubChangeRoutes(app: FastifyInstance): void {
           : null
     if (action === 'promote' && (!version || !VERSION_RE.test(version)))
       return fail(reply, 400, 'BAD_VERSION', 'version is x.y.z')
+    if (action === 'extension_promote' && (!version || !EXT_VERSION_RE.test(version)))
+      return fail(reply, 400, 'BAD_VERSION', 'version is <extension id>@<12 hex>')
     // A rollback: a real one (older than what runs) needs no checklist; a forward one does.
     if (
       q.kind === 'rollback' &&
@@ -805,6 +809,8 @@ export function hubChangeRoutes(app: FastifyInstance): void {
             : null
       if (action === 'promote' && (!version || !VERSION_RE.test(version)))
         return fail(reply, 400, 'BAD_VERSION', 'version is x.y.z')
+      if (action === 'extension_promote' && (!version || !EXT_VERSION_RE.test(version)))
+        return fail(reply, 400, 'BAD_VERSION', 'version is <extension id>@<12 hex>')
       const target: ChecklistTarget = { kind: 'environment', envId: Number(env.id) }
       const { entries } = await checklistFor(target, action)
       if (!entries.length)

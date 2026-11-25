@@ -10,6 +10,8 @@ import { SimpleSelect } from '@/components/ui/simple-select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useAuth } from '@/lib/auth'
 import { cn, formatDateTime, formatRelative } from '@/lib/utils'
+import { type ChecklistState, PreDeployChecklist } from '../changes/PreDeployChecklist'
+import { EnvWindowGate } from '../changes/WindowGate'
 import { hubError, hubToast } from '../hub-api'
 import { Field, ghostButton, SectionCard } from '../hub-parts'
 import {
@@ -18,13 +20,15 @@ import {
   type ExtensionCell,
   type ExtensionPlan,
   type ExtensionPromotion,
+  extensionChecklistVersion,
   fetchExtensions,
   planExtension,
   promoteExtension,
   refreshExtensions,
   STATE_WORDS,
   shortPin,
-  verifyKeys
+  verifyKeys,
+  WINDOW_CODES
 } from './verify-api'
 
 /**
@@ -287,17 +291,36 @@ function PromotePanel({
   const sources = m.environments.filter((e) => e.id !== target.envId)
   const [fromEnv, setFromEnv] = useState(String(m.environments[i - 1]?.id ?? sources[0]?.id ?? ''))
   const [confirm, setConfirm] = useState('')
+  /** An administrator's emergency start outside the deploy window: the typed reason. */
+  const [outsideReason, setOutsideReason] = useState<string | null>(null)
+  const [checklist, setChecklist] = useState<ChecklistState>({
+    required: false,
+    ready: true,
+    runId: null
+  })
   const plan = useQuery({
-    queryKey: [...verifyKeys.extensions(), 'plan', target.envId, target.extId, fromEnv],
+    queryKey: [
+      ...verifyKeys.extensions(),
+      'plan',
+      target.envId,
+      target.extId,
+      fromEnv,
+      !!outsideReason
+    ],
     queryFn: () =>
-      planExtension(target.envId, target.extId, { from_env_id: fromEnv ? Number(fromEnv) : null }),
+      planExtension(target.envId, target.extId, {
+        from_env_id: fromEnv ? Number(fromEnv) : null,
+        ...(outsideReason ? { outside_window_reason: outsideReason } : {})
+      }),
     retry: false
   })
   const go = useMutation({
     mutationFn: () =>
       promoteExtension(target.envId, target.extId, {
         from_env_id: fromEnv ? Number(fromEnv) : null,
-        confirm
+        confirm,
+        ...(checklist.runId != null ? { checklist_run_id: checklist.runId } : {}),
+        ...(outsideReason ? { outside_window_reason: outsideReason } : {})
       }),
     onSuccess: (r) => {
       toast.success(
@@ -311,7 +334,10 @@ function PromotePanel({
     onError: (e) => hubToast(e, 'The extension could not be promoted')
   })
   const p: ExtensionPlan | undefined = plan.data
-  const ready = !!p && p.blockers.length === 0 && confirm.trim() === env?.key
+  // Window refusals are said by the deploy-window notice above (with its override).
+  const listed = (p?.blockers ?? []).filter((b) => !WINDOW_CODES.has(b.code))
+  const checklistBlocks = checklist.required && !checklist.ready
+  const ready = !!p && p.blockers.length === 0 && !checklistBlocks && confirm.trim() === env?.key
   return (
     <div className='border-t border-slate-200 bg-slate-50 px-4 py-4 dark:border-border dark:bg-muted/40'>
       <ProductionGuard envKey={env?.key} what='extension promote'>
@@ -370,12 +396,21 @@ function PromotePanel({
               </dd>
             </dl>
           ) : null}
-          {p && p.blockers.length > 0 && (
+          <EnvWindowGate envId={target.envId} what='extension' onReason={setOutsideReason} />
+          {listed.length > 0 && (
             <ul className='m-0 list-disc space-y-1 pl-5 text-[12px] text-amber-900 dark:text-amber-200'>
-              {p.blockers.map((b) => (
+              {listed.map((b) => (
                 <li key={b.code}>{b.text}</li>
               ))}
             </ul>
+          )}
+          {p?.to_pin && (
+            <PreDeployChecklist
+              target={{ kind: 'environment', envId: target.envId }}
+              action='extension_promote'
+              version={extensionChecklistVersion(target.extId, p.to_pin)}
+              onState={setChecklist}
+            />
           )}
           <div className='flex flex-wrap justify-end gap-2'>
             <button type='button' className={ghostButton} onClick={onClose}>

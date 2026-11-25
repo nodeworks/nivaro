@@ -165,6 +165,9 @@ export const OWNER_UNGUARDED: Record<string, string> = {
     'a read: what a promotion or rollback of a version would change (GitLab read-only)',
   'POST /deploys/:id/release-notes':
     'works out and stores the release notes of a past run the caller may read; deploys nothing',
+  // Hub insight (routes/hub-insight.ts): the caller's own switch, and a read-only question.
+  'PUT /insight/digest/me': 'the caller’s own weekly digest switch; touches no app',
+  'POST /insight/ask': 'a read: read-only tools that re-enter as the caller; changes nothing',
   // Change operations (routes/hub-changes.ts): a pre-deploy checklist is opened and ticked by
   // whoever its items allow; nothing deploys, and the start itself stays owner-guarded.
   'POST /environments/:envId/checklist-runs':
