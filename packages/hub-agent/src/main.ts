@@ -13,6 +13,7 @@ import { sweepUnpackContainers, sweepUnpackFolders } from './extensions.js'
 import { makeHandlers } from './handlers.js'
 import { createLog, type Log } from './log.js'
 import { createServer, type HandlerResult, type Handlers } from './server.js'
+import { createStorageProbe, type StorageProbe, storageOptionsFrom } from './storage.js'
 
 export const AGENT_VERSION = '0.2.2'
 export const MIN_ENGINE_API = [1, 44] as const
@@ -60,7 +61,13 @@ export async function checkEngine(
 /** How long a read of the swarm's node count is reused (health is polled). */
 const NODES_TTL_MS = 30_000
 
-export function baseHandlers(cfg: AgentConfig, facts: EngineFacts, engine?: Engine): Handlers {
+export function baseHandlers(
+  cfg: AgentConfig,
+  facts: EngineFacts,
+  engine?: Engine,
+  // Enhancement 20: volume storage health (storage.ts), read-only; one probe per process.
+  storage: StorageProbe = createStorageProbe(storageOptionsFrom(process.env, cfg.volumeOpts))
+): Handlers {
   // P4-33: the node count, read live from GET /info (no new Engine path), cached briefly.
   // null = not read. With more than one node, `local` volumes are per node.
   let nodes: { at: number; n: number | null } | null = null
@@ -102,7 +109,9 @@ export function baseHandlers(cfg: AgentConfig, facts: EngineFacts, engine?: Engi
         // Hub's plans refuse a host pattern on v2 before any apply.
         traefik_version: cfg.traefikVersion,
         // HUB_AGENT_CA_BUNDLE_FILE is set: app services trust its CAs. Never its contents.
-        ca_bundle: cfg.caBundle !== null
+        ca_bundle: cfg.caBundle !== null,
+        // Enhancement 20: how full the volume storage is (HUB_AGENT_STORAGE_PATH); figures only.
+        storage: await storage.report()
       }
     }),
     listStacks: notYet,
