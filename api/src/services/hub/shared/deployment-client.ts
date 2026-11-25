@@ -202,6 +202,8 @@ export interface DeploymentClient {
   databaseSum?(tenantId: string): Promise<DatabaseJobStatus>
   /** Hub gap sqlite: a database job now; null = the deployment does not know it. */
   databaseJob?(tenantId: string, id: string): Promise<DatabaseJobStatus | null>
+  /** Review 5 M1: the Hub gave up on a job — a running pull is aborted, never installed. */
+  cancelDatabaseJob?(tenantId: string, id: string): Promise<{ cancelled: boolean }>
   /** Hub gap sqlite: a rollback before release throws the app's copy away. */
   discardDatabase?(tenantId: string, sha256: string | null): Promise<{ discarded: boolean }>
 }
@@ -669,6 +671,13 @@ export function deploymentClient(
       const j = parseDatabaseJob(a.body)
       if (!j) throw new DeploymentLinkError('LINK_BAD_ANSWER', a.status)
       return j
+    },
+
+    async cancelDatabaseJob(tenantId, id) {
+      if (!/^[0-9a-f-]{36}$/.test(id)) throw new DeploymentLinkError('LINK_BAD_ANSWER', 0)
+      const a = await call(`${tenantPath(tenantId)}/database/jobs/${id}`, { method: 'DELETE' })
+      if (!ok(a)) throw refusalOf(a, transferRefusal)
+      return { cancelled: (a.body as { cancelled?: unknown } | null)?.cancelled === true }
     },
 
     async discardDatabase(tenantId, sha256) {

@@ -556,7 +556,9 @@ export async function hubLinkRoutes(app: FastifyInstance) {
   //      boot. A pull past its own deadline removes its copy and fails.
   // POST /files/database/sum → 202 {job}: this app's database checksum (a source, before release)
   // GET  /files/database/jobs/:job → {job}
-  // GET  /files/database/adopted → {adopted: {sha256, move_id} | null}: what the last boot put in.
+  // DELETE /files/database/jobs/:job → {cancelled}: the Hub gave up (review 5 M1)
+  // GET  /files/database/adopted → {adopted: {sha256, move_id} | null, refused: {move_id, code} |
+  //      null}: what the last boot put in, or why it refused a staged copy (review 5 L6).
   const databaseFail = (reply: FastifyReply, err: unknown) => {
     const e = err as { code?: unknown; statusCode?: unknown; message?: unknown; name?: unknown }
     if (
@@ -588,10 +590,11 @@ export async function hubLinkRoutes(app: FastifyInstance) {
         'self',
         'pull',
         moveId ? `move:${moveId}` : `pull:${Date.now()}`,
-        async () => {
+        async (signal) => {
           const r = await pullDatabaseDedicated(
             { source: b.source as string, ticket: b.ticket as string },
-            moveId
+            moveId,
+            { signal }
           )
           // The Hub reads the end, then this app restarts; if it never does, restart anyway.
           fallback = setTimeout(() => databaseTransferDeps.restart(0), 90_000)
@@ -632,9 +635,20 @@ export async function hubLinkRoutes(app: FastifyInstance) {
     return reply.send({ job })
   })
 
+  app.delete<{ Params: { job: string } }>('/files/database/jobs/:job', async (req, reply) => {
+    reply.header('Cache-Control', 'no-store')
+    const { cancelDatabaseJob, JOB_ID_RE } = await import(
+      '../services/hub-transfer/database-jobs.js'
+    )
+    const ok = JOB_ID_RE.test(req.params.job)
+    return reply.send({ cancelled: ok ? cancelDatabaseJob('self', req.params.job) : false })
+  })
+
   app.get('/files/database/adopted', async (_req, reply) => {
     reply.header('Cache-Control', 'no-store')
-    const { databaseAdopted } = await import('../services/hub-transfer/database.js')
-    return reply.send({ adopted: await databaseAdopted() })
+    const { databaseAdopted, databaseAdoptRefused } = await import(
+      '../services/hub-transfer/database.js'
+    )
+    return reply.send({ adopted: await databaseAdopted(), refused: databaseAdoptRefused() })
   })
 }

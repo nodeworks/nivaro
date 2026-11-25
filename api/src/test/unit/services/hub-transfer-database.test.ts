@@ -181,6 +181,49 @@ describe('rollback before release: the copy is discarded', () => {
     expect(await D.discardDatabaseShared(dst, sha)).toEqual({ discarded: true })
     expect(existsSync(dst.dbConnection)).toBe(false)
     expect(existsSync(`${dst.dbConnection}.lock`)).toBe(false)
+    // Review 5 L2: its marker goes too — a later NEW placement here may make the file again.
+    const { dirname: dn, join: jn } = await import('node:path')
+    expect(existsSync(jn(dn(dst.dbConnection), T.SQLITE_CREATED_MARKER))).toBe(false)
+    expect(() =>
+      ctx.getOrCreateTenantPool(dst.dbConnection, 'sqlite', undefined, { create: true, record: 99 })
+    ).not.toThrow()
+    await ctx.closeTenantPool(dst.dbConnection)
+  })
+
+  it('review 5 L4: a download cut by the deadline says SQLITE_COPY_DEADLINE, not "broke off"', async () => {
+    const src = tenant('src-e30')
+    await seed(src, 1)
+    const snap = await ctx.withTenant(src, () => D.databaseSnapshot(src))
+    const dst = tenant('dst-e30')
+    await seed(dst, 0)
+    const was = D.databaseTransferDeps.pullDeadlineMs
+    D.databaseTransferDeps.pullDeadlineMs = 200
+    // A body that sends a little, then stalls until the request is aborted (as fetch does).
+    pullDeps.fetch = async (_url: string, init: RequestInit) => {
+      const body = new ReadableStream<Uint8Array>({
+        start(c) {
+          c.enqueue(new Uint8Array(16))
+          init.signal?.addEventListener('abort', () => c.error(new Error('aborted')))
+        }
+      })
+      return new Response(body, {
+        status: 200,
+        headers: { 'content-length': String(snap.bytes), 'x-nivaro-sha256': snap.sha256 }
+      })
+    }
+    try {
+      await expect(ctx.withTenant(dst, () => D.pullDatabaseShared(dst, REQ))).rejects.toMatchObject(
+        {
+          code: 'SQLITE_COPY_DEADLINE'
+        }
+      )
+    } finally {
+      D.databaseTransferDeps.pullDeadlineMs = was
+    }
+    rmSync(snap.path)
+    X.thawSqliteFile(src.dbConnection)
+    await ctx.closeTenantPool(src.dbConnection)
+    await ctx.closeTenantPool(dst.dbConnection)
   })
 })
 
