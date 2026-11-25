@@ -128,9 +128,9 @@ export function DocsPage() {
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
       <HubToolbar description='Guides to every Nivaro feature, the REST and GraphQL APIs and the SDK. Filter the sections on the left; Ask AI cites these pages in its answers.' />
-      <div className='flex min-h-0 flex-1 overflow-hidden'>
+      <div className='flex min-h-0 flex-1 flex-col overflow-hidden md:flex-row'>
         {/* ─── Left nav ────────────────────────────────────────────── */}
-        <nav className='flex h-full w-[240px] shrink-0 flex-col border-r border-slate-200 dark:border-border bg-white dark:bg-card'>
+        <nav className='flex max-h-[35vh] shrink-0 flex-col border-b border-slate-200 bg-white md:h-full md:max-h-none md:w-[240px] md:border-b-0 md:border-r dark:border-border dark:bg-card'>
           {/* Header */}
           <div className='flex shrink-0 items-center gap-2 border-b border-slate-200 dark:border-border px-4 py-3.5'>
             <BookOpen className='h-4 w-4 text-nvr-cyan shrink-0' />
@@ -210,7 +210,7 @@ export function DocsPage() {
 
         {/* ─── Content ─────────────────────────────────────────────── */}
         <div ref={contentRef} className='flex-1 overflow-y-auto bg-white dark:bg-background'>
-          <div className='mx-auto max-w-3xl px-10 py-8'>
+          <div className='mx-auto max-w-3xl px-4 py-6 md:px-10 md:py-8'>
             {nav.flatMap((sec, si) =>
               sec.items.map((section, ii) => {
                 const isLast = si === nav.length - 1 && ii === sec.items.length - 1

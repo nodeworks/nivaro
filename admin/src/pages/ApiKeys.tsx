@@ -102,7 +102,7 @@ function ChatAccessControl({
     <div className='space-y-1.5'>
       <fieldset
         aria-label='Chat for AI assistants'
-        className='m-0 inline-flex min-w-0 rounded-md border border-slate-200 bg-slate-50 p-0.5 dark:border-border dark:bg-muted/40'
+        className='m-0 inline-flex min-w-0 max-w-full flex-wrap rounded-md border border-slate-200 bg-slate-50 p-0.5 dark:border-border dark:bg-muted/40'
         data-key-chat-access
       >
         {CHAT_OPTIONS.map((o) => (
@@ -113,9 +113,9 @@ function ChatAccessControl({
             disabled={disabled}
             onClick={() => onChange(o.value)}
             className={cn(
-              'h-7 rounded px-3 text-[12px] font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 disabled:cursor-not-allowed disabled:opacity-60',
+              'h-7 whitespace-nowrap rounded px-3 text-[12px] font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 disabled:cursor-not-allowed disabled:opacity-60',
               value === o.value
-                ? 'bg-white text-slate-900 shadow-sm dark:bg-card dark:text-slate-100'
+                ? 'bg-white text-slate-900 shadow-sm dark:bg-white/10 dark:text-slate-100 dark:ring-1 dark:ring-white/15'
                 : 'text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200'
             )}
           >
@@ -459,9 +459,9 @@ export function ApiKeysPage() {
         </div>
       </header>
 
-      <div className='flex flex-1 min-h-0 overflow-hidden'>
+      <div className='flex flex-1 min-h-0 flex-col overflow-hidden md:flex-row'>
         {/* Left: key list */}
-        <aside className='w-[272px] shrink-0 overflow-y-auto border-r border-slate-200 bg-white dark:border-border dark:bg-background'>
+        <aside className='max-h-[40vh] shrink-0 overflow-y-auto border-b border-slate-200 bg-white md:max-h-none md:w-[272px] md:border-b-0 md:border-r dark:border-border dark:bg-background'>
           {isLoading ? (
             <div className='space-y-2 p-3'>
               {[1, 2, 3].map((i) => (

@@ -54,7 +54,7 @@ export function HubKeyAccessControl({
     <div className='space-y-1.5'>
       <fieldset
         aria-label='Hub API access'
-        className='m-0 inline-flex min-w-0 rounded-md border border-slate-200 bg-slate-50 p-0.5 dark:border-border dark:bg-muted/40'
+        className='m-0 inline-flex min-w-0 max-w-full flex-wrap rounded-md border border-slate-200 bg-slate-50 p-0.5 dark:border-border dark:bg-muted/40'
         data-key-hub-access
       >
         {OPTIONS.map((o) => (
@@ -65,9 +65,9 @@ export function HubKeyAccessControl({
             disabled={disabled}
             onClick={() => onChange(o.value)}
             className={cn(
-              'h-7 rounded px-3 text-[12px] font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 disabled:cursor-not-allowed disabled:opacity-60',
+              'h-7 whitespace-nowrap rounded px-3 text-[12px] font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 disabled:cursor-not-allowed disabled:opacity-60',
               value === o.value
-                ? 'bg-white text-slate-900 shadow-sm dark:bg-card dark:text-slate-100'
+                ? 'bg-white text-slate-900 shadow-sm dark:bg-white/10 dark:text-slate-100 dark:ring-1 dark:ring-white/15'
                 : 'text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200'
             )}
           >
