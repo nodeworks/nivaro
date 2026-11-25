@@ -216,7 +216,14 @@ function clients() {
     pullFiles: vi.fn(
       async (
         _tid: string,
-        req: { source: string; ticket: string; mode: string; objects?: boolean }
+        req: {
+          source: string
+          ticket: string
+          mode: string
+          objects?: boolean
+          env_objects?: boolean
+          replays?: boolean
+        }
       ) => {
         calls.push([
           shared.id,
@@ -225,7 +232,9 @@ function clients() {
             source: req.source,
             mode: req.mode,
             ticket: req.ticket === TICKET,
-            ...(req.objects ? { objects: true } : {})
+            ...(req.objects ? { objects: true } : {}),
+            ...(req.env_objects ? { env_objects: true } : {}),
+            ...(req.replays ? { replays: true } : {})
           }
         ])
         return { run_id: 'run-1' }
@@ -378,6 +387,31 @@ describe('pullFiles', () => {
     })
     await ops.pullFiles('full')
     expect(c.calls.find((x) => x[1] === 'pullFiles')?.[2]).toMatchObject({ objects: true })
+    // A plan before 0.3.215: no env objects, no replays (the source has no /replays route).
+    expect(c.calls.find((x) => x[1] === 'pullFiles')?.[2]).not.toHaveProperty('env_objects')
+    expect(c.calls.find((x) => x[1] === 'pullFiles')?.[2]).not.toHaveProperty('replays')
+  })
+
+  // 0.3.215 (storage-floor.ts): a move at that version also copies env S3/Azure objects and the
+  // cold objects of session replays.
+  it('a move at 0.3.215 asks the pull for env objects and session replays too', async () => {
+    const w = await setup(true)
+    TENANT = w.tenant
+    const c = clients()
+    const ops = defaultMoveOps(
+      w.move,
+      { ...w.plan, version: '0.3.215' },
+      {
+        client: c.factory,
+        sleep,
+        now
+      }
+    )
+    await ops.pullFiles('full')
+    expect(c.calls.find((x) => x[1] === 'pullFiles')?.[2]).toMatchObject({
+      env_objects: true,
+      replays: true
+    })
   })
 
   // R2-M-6: a ticket a dead run could not revoke is revoked by the next run (heal + resume or

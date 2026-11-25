@@ -14,9 +14,10 @@ import { type SafeFetchInit, safeFetch } from '../../lib/ssrf.js'
 import { tenantSource } from '../deployment-mode.js'
 import { hubLinkKeyTag } from '../hub-link/retire.js'
 import { getApp } from '../io-holder.js'
+import { APP_SCOPE_ROOT, appScopedKey } from '../storage/app-scope.js'
 import { getStorage, type StorageProvider } from '../storage/index.js'
 import { appKeyPart } from '../tenancy/credential-binding.js'
-import { COPYABLE_OBJECT_STORAGE } from './copyable.js'
+import { COPYABLE_OBJECT_STORAGE, ENV_STORAGE_PROVIDERS } from './copyable.js'
 import type { PullFailReason, PullFailReasons } from './fail-reasons.js'
 import { TRANSFER_TICKET_RE } from './tickets.js'
 
@@ -32,6 +33,15 @@ import { TRANSFER_TICKET_RE } from './tickets.js'
  *    for it whenever the effective key prefix changes (a move to or from a shared deployment,
  *    where every key lives under apps/<tenantId>/; ruling P6-31), same bucket or not. They are
  *    written through the target's own saved-settings driver (scoped on a shared deployment).
+ *  - 0.3.215 (`env_objects`, `replays`; the Hub asks only when both sides run it): the rows an
+ *    env S3/Azure provider stored (`storage` 's3' / 'azure') and the cold objects of session
+ *    replays (`nivaro_session_recordings.cold_key`, from the source's /replays/:id; their ids are
+ *    `replay:<id>` in the manifest, `missing` and `failed_ids`). The source says which store held
+ *    each object (`X-Nivaro-Transfer-Store: env | settings`) and the target writes it to the same
+ *    kind of its own store. When the source's env bucket is this side's env bucket (same hash) and
+ *    it names this app's own full key (bucket root, or apps/<this tenant>/ — never another app's
+ *    folder), the bucket copies it (`copyFrom`, counted in `server_copied` too); a refusal
+ *    streams it as usual.
  *  - Per row: skipped when the object is already here at the row's size (resumable); otherwise
  *    fetched (`redirect: 'error'`, 10 min per object, 4 at a time) into a temp file, then
  *    `putFile(filename_disk)`. Streams go through `pipeline()`, never `.pipe()`.
@@ -70,6 +80,10 @@ export interface PullRequest {
   mode: 'full' | 'delta'
   /** P6-31: also copy the saved-settings S3/Azure objects (the key prefix changes). */
   objects?: boolean
+  /** 0.3.215: also copy the rows stored by an env S3/Azure provider (`storage` 's3' / 'azure'). */
+  env_objects?: boolean
+  /** 0.3.215: also copy the cold objects of session replays (the source's /replays/:id). */
+  replays?: boolean
 }
 
 export interface PullStatus {
@@ -92,10 +106,14 @@ export interface PullStatus {
   failed_ids?: string[]
   /** How many rows failed for each plain reason (every failed row, not only the 50 ids). */
   failed_reasons?: PullFailReasons
+  /** 0.3.215: objects copied inside one bucket by the bucket itself (counted in `copied` too). */
+  server_copied?: number
 }
 
 export interface FileRow {
   id: string
+  /** 0.3.215: 'replay' = a session replay's cold object (id = the recording); absent = a file. */
+  kind?: 'file' | 'replay'
   filename_disk: string | null
   /** The row's provider (`storage`); absent = 'local' (older seams). */
   storage?: string | null
@@ -138,8 +156,28 @@ export function errorShape(err: unknown): { err_name: string | null; err_code: s
 }
 
 export const TRANSFER_FILES_PATH = '/api/hub-transfer/files'
+/** 0.3.215: the source's route for a session replay's cold object (routes/hub-transfer.ts). */
+export const TRANSFER_REPLAYS_PATH = '/api/hub-transfer/replays'
 /** The transfer route's own "not found" marker (routes/hub-transfer.ts TRANSFER_MISSING_HEADER). */
 const TRANSFER_MISSING_HEADER = 'x-nivaro-transfer-missing'
+/** 0.3.215 answer headers (routes/hub-transfer.ts TRANSFER_STORE*_HEADER). */
+const TRANSFER_STORE_HEADER = 'x-nivaro-transfer-store'
+const TRANSFER_STORE_ID_HEADER = 'x-nivaro-transfer-store-id'
+const TRANSFER_STORED_KEY_HEADER = 'x-nivaro-transfer-stored-key'
+
+/** A row's id in the manifest, `missing` and `failed_ids`: a replay's carries `replay:`. */
+function rowTag(row: FileRow): string {
+  return row.kind === 'replay' ? `replay:${row.id}` : String(row.id)
+}
+
+/** The store's bucket hash, or null when it cannot say. */
+function safeStoreId(s: { storeId?: () => string }): string | null {
+  try {
+    return s.storeId ? s.storeId() : null
+  } catch {
+    return null
+  }
+}
 const MAX_MISSING = 50
 const RUN_TTL_MS = 24 * 60 * 60 * 1000
 const MANIFEST_TTL_MS = 7 * 24 * 60 * 60 * 1000
@@ -181,7 +219,8 @@ async function renewLock(redis: PullRedis, key: string, runId: string): Promise<
   }
 }
 
-type PullStorage = Pick<StorageProvider, 'putFile'> & Partial<Pick<StorageProvider, 'size'>>
+type PullStorage = Pick<StorageProvider, 'putFile'> &
+  Partial<Pick<StorageProvider, 'size' | 'storeId' | 'copyFrom'>>
 
 const defaultLimits = {
   concurrency: 4,
@@ -211,16 +250,52 @@ export const pullDeps = {
     return getActiveStorageDriver()
   },
   /** The next page of the app's env-local file rows after `after` (by id); with `objects`,
-   *  the saved-settings S3/Azure rows too (P6-31). */
-  async listRows(after: string | null, limit: number, objects = false): Promise<FileRow[]> {
+   *  the saved-settings S3/Azure rows too (P6-31); with `envObjects`, the rows an env S3/Azure
+   *  provider stored (0.3.215). */
+  async listRows(
+    after: string | null,
+    limit: number,
+    objects = false,
+    envObjects = false
+  ): Promise<FileRow[]> {
+    const kinds = new Set<string>(['local'])
+    if (objects) for (const p of COPYABLE_OBJECT_STORAGE) kinds.add(p)
+    if (envObjects) for (const p of ENV_STORAGE_PROVIDERS) kinds.add(p)
     let q = db('nivaro_files')
       .select('id', 'filename_disk', 'storage', 'filesize', 'type', 'uploaded_on', 'modified_on')
-      .whereIn('storage', objects ? ['local', ...COPYABLE_OBJECT_STORAGE] : ['local'])
+      .whereIn('storage', [...kinds])
       .whereNotNull('filename_disk')
       .orderBy('id', 'asc')
       .limit(limit)
     if (after !== null) q = q.where('id', '>', after)
     return (await q) as FileRow[]
+  },
+  /** 0.3.215: the next page of the app's cold session replays (their storage object) by id. */
+  async listReplays(after: string | null, limit: number): Promise<FileRow[]> {
+    if (!(await db.schema.hasColumn('nivaro_session_recordings', 'cold_key'))) return []
+    let q = db('nivaro_session_recordings')
+      .select('id', 'cold_key', 'cold_bytes', 'cold_at')
+      .where('cold', true)
+      .whereNotNull('cold_key')
+      .orderBy('id', 'asc')
+      .limit(limit)
+    if (after !== null) q = q.where('id', '>', after)
+    const rows = (await q) as Array<{
+      id: string
+      cold_key: string
+      cold_bytes: number | string | null
+      cold_at: Date | string | null
+    }>
+    return rows.map((r) => ({
+      id: String(r.id),
+      kind: 'replay' as const,
+      filename_disk: r.cold_key,
+      storage: 'replay',
+      filesize: r.cold_bytes,
+      type: 'application/gzip',
+      uploaded_on: r.cold_at,
+      modified_on: r.cold_at
+    }))
   },
   /** Plain fetch: only for an http(s) source that is a loopback / private literal. */
   fetch: (url: string, init: RequestInit): Promise<Response> => fetch(url, init),
@@ -367,7 +442,8 @@ function copyStatus(s: PullStatus): PullStatus {
     // A mirror an older process wrote has neither field.
     size_mismatch: Number(s.size_mismatch) || 0,
     failed_ids: Array.isArray(s.failed_ids) ? [...s.failed_ids] : [],
-    failed_reasons: { ...(s.failed_reasons ?? {}) }
+    failed_reasons: { ...(s.failed_reasons ?? {}) },
+    server_copied: Number(s.server_copied) || 0
   }
 }
 
@@ -469,6 +545,8 @@ export async function startPull(req: PullRequest): Promise<{ run_id: string }> {
   const ticket = b.ticket
   const mode = b.mode
   const objects = b.objects === true
+  const envObjects = b.env_objects === true
+  const replays = b.replays === true
   const sc = scope()
   const now = Date.now()
   prune(now)
@@ -508,24 +586,37 @@ export async function startPull(req: PullRequest): Promise<{ run_id: string }> {
       error: null,
       size_mismatch: 0,
       failed_ids: [],
-      failed_reasons: {}
+      failed_reasons: {},
+      server_copied: 0
     }
   }
   runs.set(mapKey(sc, runId), run)
   pullDeps.log('hub transfer: pull started', {
     run_id: runId,
     mode,
-    source: new URL(source).origin
+    source: new URL(source).origin,
+    objects,
+    env_objects: envObjects,
+    replays
   })
   // Runs in the caller's async context (on a shared deployment, inside the target app) and on
   // the background pool: fire-and-forget work never takes request connections.
-  void runInBackgroundPool(() => execute(run, { source, ticket, mode, objects }, redis))
+  void runInBackgroundPool(() =>
+    execute(run, { source, ticket, mode, objects, envObjects, replays }, redis)
+  )
   return { run_id: runId }
 }
 
 async function execute(
   run: Run,
-  req: { source: string; ticket: string; mode: 'full' | 'delta'; objects?: boolean },
+  req: {
+    source: string
+    ticket: string
+    mode: 'full' | 'delta'
+    objects?: boolean
+    envObjects?: boolean
+    replays?: boolean
+  },
   redis: PullRedis | null
 ): Promise<void> {
   const limits = pullDeps.limits
@@ -602,7 +693,8 @@ async function execute(
         skipped: final.skipped,
         failed: final.failed,
         missing: final.total - final.copied - final.skipped - final.failed,
-        bytes: final.bytes
+        bytes: final.bytes,
+        server_copied: final.server_copied ?? 0
       })
     })()
     return finalized
@@ -646,47 +738,111 @@ async function execute(
     // takes every row as 'any'.
     const pick = (row: FileRow): 'any' | 'changed' | null => {
       if (req.mode === 'full' || !manifest || changedAfter === null) return 'any'
-      if (!manifest.has(String(row.id))) return 'any'
+      if (!manifest.has(rowTag(row))) return 'any'
       const t = toTime(row.modified_on)
       return t !== null && t >= changedAfter ? 'changed' : null
     }
 
+    // Files first, then (0.3.215, when asked) the cold objects of session replays.
+    const lists: Array<(after: string | null) => Promise<FileRow[]>> = [
+      (after) =>
+        pullDeps.listRows(after, limits.pageSize, req.objects === true, req.envObjects === true)
+    ]
+    if (req.replays) lists.push((after) => pullDeps.listReplays(after, limits.pageSize))
+
     async function* candidates(): AsyncGenerator<{ row: FileRow; changed: boolean }> {
-      let after: string | null = null
-      for (;;) {
-        if (fatal) return
-        let page: FileRow[]
-        try {
-          page = await pullDeps.listRows(after, limits.pageSize, req.objects === true)
-        } catch {
-          stop(ERR_LIST)
-          return
+      for (const list of lists) {
+        let after: string | null = null
+        for (;;) {
+          if (fatal) return
+          let page: FileRow[]
+          try {
+            page = await list(after)
+          } catch {
+            stop(ERR_LIST)
+            return
+          }
+          if (page.length === 0) break
+          for (const row of page) {
+            if (!row.filename_disk) continue
+            const why = pick(row)
+            if (!why) continue
+            st.total++
+            yield { row, changed: why === 'changed' }
+          }
+          after = String(page[page.length - 1].id)
+          if (page.length < limits.pageSize) break
+          progress()
         }
-        if (page.length === 0) return
-        for (const row of page) {
-          if (!row.filename_disk) continue
-          const why = pick(row)
-          if (!why) continue
-          st.total++
-          yield { row, changed: why === 'changed' }
-        }
-        after = String(page[page.length - 1].id)
-        if (page.length < limits.pageSize) return
-        progress()
       }
     }
 
     const storage = pullDeps.storage()
     // P6-31: the saved-settings driver, read once per run, only when objects are asked for.
     let objectStore: Promise<PullStorage> | null = null
-    const storeFor = async (row: FileRow): Promise<PullStorage> => {
-      if (!row.storage || row.storage === 'local') return storage
+    const settingsStore = (): Promise<PullStorage> => {
       objectStore ??= pullDeps.objectStorage()
       return objectStore
+    }
+    /**
+     * Where this side keeps the object: the store the source says held it (0.3.215:
+     * `env` = this side's env provider, `settings` = its saved-settings driver, which is the env
+     * provider again when none is saved), else by the row: `local` and an env Azure row go to the
+     * env provider, a replay and a saved-settings row to the active driver.
+     */
+    const storeFor = async (row: FileRow, said: string | null): Promise<PullStorage> => {
+      if (said === 'env') return storage
+      if (said === 'settings') return settingsStore()
+      if (row.kind !== 'replay' && (!row.storage || row.storage === 'local')) return storage
+      if (row.storage === 'azure') return storage
+      return settingsStore()
+    }
+    /**
+     * Already here at `size`, in any store this side reads the key from (the active driver, then
+     * the env provider — services/storage-drivers.ts readOwnStoredObject): 's3' is written by an
+     * env S3 provider and the saved-settings S3 driver alike, and a replay by whichever is active.
+     */
+    const presentAt = async (row: FileRow, key: string, size: number): Promise<boolean> => {
+      const first = await storeFor(row, null)
+      const stores = first === storage ? [storage] : [first, storage]
+      for (const s of stores) {
+        if (!s.size) continue
+        const have = await s.size(key).catch(() => null)
+        if (have === size) return true
+      }
+      return false
+    }
+    /**
+     * 0.3.215: the source's full key of the object when this side may copy it inside the bucket:
+     * this app's own key at the bucket root, or under apps/<tenant>/ — on a shared deployment
+     * only this app's own tenant. Anything else (another app's folder, a path trick) is null and
+     * the bytes are streamed as usual.
+     */
+    const ownRawKey = (key: string, raw: string | null): string | null => {
+      if (raw === null) return null
+      if (raw === key) return raw
+      if (!raw.startsWith(APP_SCOPE_ROOT) || !raw.endsWith(`/${key}`)) return null
+      const tenant = raw.slice(APP_SCOPE_ROOT.length, raw.length - key.length - 1)
+      try {
+        if (appScopedKey(key, tenant) !== raw) return null
+      } catch {
+        return null
+      }
+      if (tenantSource() === 'hub' && tenant !== getTenantId()) return null
+      return raw
+    }
+    /** The key as this side's env provider stores it (apps/<tenantId>/… on a shared one). */
+    const ownStoredKey = (key: string): string | null => {
+      try {
+        return tenantSource() === 'hub' ? appScopedKey(key, getTenantId()) : key
+      } catch {
+        return null
+      }
     }
     const iter = candidates()
     // A private literal is the only plain fetch (see the header); every host name is guarded.
     const guarded = !plainHttpHost(new URL(req.source).hostname)
+    const replaysBase = `${new URL(req.source).origin}${TRANSFER_REPLAYS_PATH}`
 
     const failRow = (id: string, reason: PullFailReason) => {
       if (!fatal) {
@@ -715,19 +871,19 @@ async function execute(
         : 'bad_answer'
     }
 
-    const copyOne = async (row: FileRow, changed: boolean): Promise<void> => {
-      const id = String(row.id)
+    const copyOne = async (row: FileRow, changed: boolean, streamOnly = false): Promise<void> => {
+      // A replay's id is its recording's: tagged so it never reads as a file id.
+      const id = rowTag(row)
       const key = String(row.filename_disk)
       const expected = toNumber(row.filesize)
-      let store: PullStorage
-      try {
-        store = await storeFor(row)
-      } catch {
-        return failRow(id, 'write_failed')
-      }
-      if (!changed && expected !== null && store.size) {
-        const have = await store.size(key).catch(() => null)
-        if (have === expected) {
+      if (!streamOnly && !changed && expected !== null) {
+        let here = false
+        try {
+          here = await presentAt(row, key, expected)
+        } catch {
+          return failRow(id, 'write_failed')
+        }
+        if (here) {
           st.skipped++
           progress()
           await remember(id)
@@ -737,7 +893,10 @@ async function execute(
       const signal = AbortSignal.any([ac.signal, AbortSignal.timeout(limits.objectTimeoutMs)])
       let res: Response
       try {
-        const url = `${req.source}/${encodeURIComponent(id)}`
+        const url =
+          row.kind === 'replay'
+            ? `${replaysBase}/${encodeURIComponent(String(row.id))}`
+            : `${req.source}/${encodeURIComponent(String(row.id))}`
         const init = {
           method: 'GET',
           headers: { Authorization: `Transfer ${req.ticket}` },
@@ -778,10 +937,63 @@ async function execute(
         drop()
         return failRow(id, 'bad_answer')
       }
+      // 0.3.215: the store the source kept it in (absent from an older source: by the row).
+      const said = res.headers.get(TRANSFER_STORE_HEADER)
+      let store: PullStorage
+      try {
+        store = await storeFor(row, said === 'env' || said === 'settings' ? said : null)
+      } catch {
+        drop()
+        return failRow(id, 'write_failed')
+      }
       // The row's stored size disagrees with what the source serves (a stale filesize, T10
       // review N-1): the source's object is the one the row names (same key), so it is copied
       // anyway — against its own Content-Length — and counted apart.
       const mismatch = expected !== null && declared !== expected
+      const mime = row.type || 'application/octet-stream'
+
+      // 0.3.215: the same bucket on both sides (an env S3/Azure provider whose bucket hash this
+      // side's env provider shares): the bucket copies it, no byte comes through here. Only into
+      // the env provider, only from this app's own key; any failure streams it as usual.
+      const sourceId = res.headers.get(TRANSFER_STORE_ID_HEADER)
+      const rawHeader = res.headers.get(TRANSFER_STORED_KEY_HEADER)
+      const raw = ownRawKey(key, rawHeader === null ? null : decodeHeader(rawHeader))
+      if (
+        !streamOnly &&
+        said === 'env' &&
+        store === storage &&
+        sourceId &&
+        raw !== null &&
+        typeof storage.copyFrom === 'function' &&
+        typeof storage.storeId === 'function' &&
+        safeStoreId(storage) === sourceId
+      ) {
+        drop()
+        if (raw === ownStoredKey(key)) {
+          // The very object this side reads (same bucket, same full key): nothing to copy.
+          st.skipped++
+          progress()
+          await remember(id)
+          return
+        }
+        try {
+          const n = await storage.copyFrom(key, raw, mime, { signal })
+          if (n === declared) {
+            st.copied++
+            st.server_copied = (st.server_copied ?? 0) + 1
+            if (mismatch) st.size_mismatch = (st.size_mismatch ?? 0) + 1
+            st.bytes += n
+            progress()
+            await remember(id)
+            return
+          }
+        } catch {
+          // The credentials may not read the source's key, or the bucket refused: stream it.
+        }
+        if (fatal) return
+        return copyOne(row, changed, true)
+      }
+
       const tmp = join(tmpDir, `${run.id}-${randomUUID()}`)
       let got = 0
       let tooBig = false
@@ -816,9 +1028,7 @@ async function execute(
         )
         if (got !== declared) return failRow(id, 'incomplete')
         stage = 'write_failed'
-        await store.putFile(key, tmp, row.type || 'application/octet-stream', {
-          signal: ac.signal
-        })
+        await store.putFile(key, tmp, mime, { signal: ac.signal })
         st.copied++
         if (mismatch) st.size_mismatch = (st.size_mismatch ?? 0) + 1
         st.bytes += got

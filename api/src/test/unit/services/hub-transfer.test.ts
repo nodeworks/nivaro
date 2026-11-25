@@ -117,13 +117,18 @@ const proxy404 = new Set<string>()
 const fallbackGone = new Set<string>()
 /** Review N-3: ids whose body the source cuts off mid-way (the connection drops). */
 const cutMidBody = new Set<string>()
+/** 0.3.215: extra answer headers per id (the store, its bucket hash and the full key). */
+const extraHeaders = new Map<string, Record<string, string>>()
 const sourceSeen: string[] = []
 let server: Server
 let SOURCE = ''
 
 beforeAll(async () => {
   server = createServer((req, res) => {
-    const id = decodeURIComponent((req.url ?? '').split('/').pop() ?? '')
+    const last = decodeURIComponent((req.url ?? '').split('/').pop() ?? '')
+    // 0.3.215: /api/hub-transfer/replays/:id serves a replay's cold object (key `replay:<id>`).
+    const replay = (req.url ?? '').startsWith('/api/hub-transfer/replays/')
+    const id = replay ? `replay:${last}` : last
     sourceSeen.push(id)
     if (req.headers.authorization !== `Transfer ${TICKET}`) {
       res.writeHead(401, { 'content-type': 'application/json' })
@@ -155,9 +160,13 @@ beforeAll(async () => {
       })
       return res.end('{"code":"NOT_FOUND"}')
     }
-    const headers: Record<string, string> = { 'content-type': 'application/octet-stream' }
+    const headers: Record<string, string> = {
+      'content-type': 'application/octet-stream',
+      ...(extraHeaders.get(id) ?? {})
+    }
     if (!noLength.has(id)) headers['content-length'] = String(body.length)
-    if (!noName.has(id)) headers['x-nivaro-filename-disk'] = `${id}.bin`
+    if (!noName.has(id))
+      headers['x-nivaro-filename-disk'] = replay ? `session-replays/${last}.gz` : `${id}.bin`
     res.writeHead(200, headers)
     if (cutMidBody.has(id)) {
       // Half the bytes, then the connection drops.
@@ -185,6 +194,7 @@ afterAll(async () => {
 let root = ''
 let tmp = ''
 let rows: FileRow[] = []
+let replayRows: FileRow[] = []
 let redis: FakeRedis
 const logs: string[] = []
 const saved = { ...process.env }
@@ -243,6 +253,7 @@ beforeEach(() => {
   proxy404.clear()
   fallbackGone.clear()
   cutMidBody.clear()
+  extraHeaders.clear()
   sourceSeen.length = 0
   logs.length = 0
   resetPullsForTests()
@@ -250,14 +261,21 @@ beforeEach(() => {
   ticketDeps.now = () => Date.now()
   pullDeps.redis = () => redis as never
   pullDeps.storage = () => fakeStorage() as never
-  pullDeps.listRows = async (after, limit, withObjects = false) =>
+  pullDeps.listRows = async (after, limit, withObjects = false, withEnv = false) =>
     rows
       .filter((r) => after === null || r.id > after)
       .filter(
         (r) =>
           (r.storage ?? 'local') === 'local' ||
-          (withObjects && ['s3', 'azure-blob'].includes(String(r.storage)))
+          (withObjects && ['s3', 'azure-blob'].includes(String(r.storage))) ||
+          (withEnv && ['s3', 'azure'].includes(String(r.storage)))
       )
+      .sort((a, b) => (a.id < b.id ? -1 : 1))
+      .slice(0, limit)
+  replayRows = []
+  pullDeps.listReplays = async (after, limit) =>
+    replayRows
+      .filter((r) => after === null || r.id > after)
       .sort((a, b) => (a.id < b.id ? -1 : 1))
       .slice(0, limit)
   pullDeps.log = (msg, meta) => void logs.push(`${msg} ${JSON.stringify(meta ?? {})}`)
@@ -912,5 +930,209 @@ describe('pull: saved-settings objects (P6-31)', () => {
     expect(s).toMatchObject({ state: 'done', total: 0, copied: 0 })
     expect(asked).toBe(false)
     expect(sourceSeen).toEqual([])
+  })
+})
+
+// 0.3.215: env S3/Azure objects (storage 's3' / 'azure'), the store the source says held each
+// object, a server-side copy inside one bucket, and the cold objects of session replays.
+describe('pull: env object storage and session replays (0.3.215)', () => {
+  /** This side's env provider on one bucket (hash BUCKET): what it holds, and its copies. */
+  const BUCKET = 'b'.repeat(64)
+  const envBucket = new Map<string, Buffer>()
+  const copies: Array<{ key: string; raw: string; mime: string }> = []
+  let copyFails = false
+  function envS3(tenant: string | null = null) {
+    const full = (k: string) => (tenant ? `apps/${tenant}/${k}` : k)
+    return {
+      async size(k: string) {
+        return envBucket.get(full(k))?.length ?? null
+      },
+      async putFile(k: string, from: string) {
+        const b = readFileSync(from)
+        envBucket.set(full(k), b)
+        return b.length
+      },
+      storeId: () => BUCKET,
+      async copyFrom(k: string, raw: string, mime: string) {
+        if (copyFails) throw Object.assign(new Error('AccessDenied'), { name: 'AccessDenied' })
+        copies.push({ key: full(k), raw, mime })
+        const b = envBucket.get(raw)
+        if (!b) throw new Error('NoSuchKey')
+        envBucket.set(full(k), b)
+        return b.length
+      }
+    }
+  }
+  const settingsBucket = new Map<string, Buffer>()
+  const settingsS3 = () => ({
+    async putFile(k: string, from: string) {
+      const b = readFileSync(from)
+      settingsBucket.set(k, b)
+      return b.length
+    }
+  })
+  beforeEach(() => {
+    envBucket.clear()
+    settingsBucket.clear()
+    copies.length = 0
+    copyFails = false
+    pullDeps.storage = () => envS3() as never
+    pullDeps.objectStorage = async () => settingsS3() as never
+  })
+  const envSaid = (id: string, raw: string | null, store = 'env', bucket = BUCKET) =>
+    extraHeaders.set(id, {
+      'x-nivaro-transfer-store': store,
+      ...(raw ? { 'x-nivaro-transfer-store-id': bucket, 'x-nivaro-transfer-stored-key': raw } : {})
+    })
+  const start = (o: Partial<Parameters<typeof startPull>[0]> = {}) =>
+    startPull({ source: SOURCE, ticket: TICKET, mode: 'full', env_objects: true, ...o })
+  const replayRow = (id: string, size: number): FileRow => ({
+    id,
+    kind: 'replay',
+    filename_disk: `session-replays/${id}.gz`,
+    storage: 'replay',
+    filesize: size,
+    type: 'application/gzip',
+    uploaded_on: null,
+    modified_on: null
+  })
+
+  it('without env_objects an env S3 / Azure row is never taken (an older Hub)', async () => {
+    rows.push(row('e1', 3, { storage: 's3' }), row('e2', 3, { storage: 'azure' }))
+    const s = await finished((await start({ env_objects: false })).run_id)
+    expect(s).toMatchObject({ state: 'done', total: 0 })
+    expect(sourceSeen).toEqual([])
+  })
+
+  it('another bucket: streamed through into this side’s env provider', async () => {
+    for (const id of ['e1', 'e2']) objects.set(id, Buffer.from(`env ${id}`))
+    rows.push(row('e1', 6, { storage: 's3' }), row('e2', 6, { storage: 'azure' }))
+    envSaid('e1', 'e1.bin', 'env', 'c'.repeat(64)) // a bucket this side does not use
+    envSaid('e2', null) // local disk at the source (no bucket): plain stream
+    const s = await finished((await start()).run_id)
+    expect(s).toMatchObject({ state: 'done', total: 2, copied: 2, failed: 0, server_copied: 0 })
+    expect(envBucket.get('e1.bin')?.toString()).toBe('env e1')
+    expect(envBucket.get('e2.bin')?.toString()).toBe('env e2')
+    expect(copies).toEqual([])
+    expect(settingsBucket.size).toBe(0)
+  })
+
+  it('an s3 row the source kept in its saved-settings driver goes to the settings driver here', async () => {
+    objects.set('s1', Buffer.from('settings'))
+    rows.push(row('s1', 8, { storage: 's3' }))
+    envSaid('s1', null, 'settings')
+    const s = await finished((await start()).run_id)
+    expect(s).toMatchObject({ state: 'done', copied: 1 })
+    expect(settingsBucket.get('s1.bin')?.toString()).toBe('settings')
+    expect(envBucket.size).toBe(0)
+  })
+
+  it('the same bucket, shared source to dedicated target: the bucket copies it', async () => {
+    envBucket.set('apps/shop-e1/e3.bin', Buffer.from('shared obj'))
+    objects.set('e3', Buffer.from('shared obj'))
+    rows.push(row('e3', 10, { storage: 's3' }))
+    envSaid('e3', 'apps/shop-e1/e3.bin')
+    const s = await finished((await start()).run_id)
+    expect(s).toMatchObject({ state: 'done', copied: 1, server_copied: 1, bytes: 10, failed: 0 })
+    expect(copies).toEqual([
+      { key: 'e3.bin', raw: 'apps/shop-e1/e3.bin', mime: 'application/octet-stream' }
+    ])
+    expect(envBucket.get('e3.bin')?.toString()).toBe('shared obj')
+  })
+
+  it('the same bucket and the very same full key: nothing to copy (skipped)', async () => {
+    envBucket.set('e4.bin', Buffer.from('xx'))
+    objects.set('e4', Buffer.from('xxx')) // the row's size is stale, so the size skip misses
+    rows.push(row('e4', 3, { storage: 's3' }))
+    envSaid('e4', 'e4.bin')
+    const s = await finished((await start()).run_id)
+    expect(s).toMatchObject({ state: 'done', skipped: 1, copied: 0 })
+    expect(copies).toEqual([])
+  })
+
+  it('a server-side copy the bucket refuses (credentials) is streamed instead', async () => {
+    envBucket.set('apps/shop-e1/e5.bin', Buffer.from('fallback'))
+    objects.set('e5', Buffer.from('fallback'))
+    rows.push(row('e5', 8, { storage: 's3' }))
+    envSaid('e5', 'apps/shop-e1/e5.bin')
+    copyFails = true
+    const s = await finished((await start()).run_id)
+    expect(s).toMatchObject({ state: 'done', copied: 1, server_copied: 0, failed: 0 })
+    expect(envBucket.get('e5.bin')?.toString()).toBe('fallback')
+    expect(sourceSeen).toEqual(['e5', 'e5']) // asked again for the bytes
+  })
+
+  it('a shared target copies server-side only from its own folder or the bucket root', async () => {
+    process.env.HUB_SHARED_DEPLOYMENT = 'pool-a'
+    process.env.HUB_URL = 'https://hub.example'
+    process.env.HUB_DEPLOYMENT_TOKEN = 'd'.repeat(40)
+    delete process.env.HUB_TOKEN
+    pullDeps.storage = () => envS3('shop-e1') as never
+    envBucket.set('e6.bin', Buffer.from('root obj'))
+    envBucket.set('apps/other-e2/e7.bin', Buffer.from('not ours'))
+    objects.set('e6', Buffer.from('root obj'))
+    objects.set('e7', Buffer.from('streamed'))
+    rows.push(row('e6', 8, { storage: 's3' }), row('e7', 8, { storage: 's3' }))
+    envSaid('e6', 'e6.bin')
+    envSaid('e7', 'apps/other-e2/e7.bin') // another app's folder: never copied from
+    const tenant = {
+      id: 'shop-e1',
+      slug: 'shop',
+      name: 'Shop',
+      status: 'active',
+      dbClient: 'pg',
+      dbConnection: 'postgres://x@127.0.0.1:1/x',
+      poolMax: 1,
+      hostnames: []
+    }
+    const { run_id } = await withTenant(tenant as never, () => start())
+    const s = await withTenant(tenant as never, () => finished(run_id))
+    expect(s).toMatchObject({ state: 'done', copied: 2, server_copied: 1 })
+    expect(copies).toEqual([
+      { key: 'apps/shop-e1/e6.bin', raw: 'e6.bin', mime: 'application/octet-stream' }
+    ])
+    expect(envBucket.get('apps/shop-e1/e7.bin')?.toString()).toBe('streamed')
+  })
+
+  it('replays: the cold objects come from /replays/:id into the store the source names', async () => {
+    replayRows.push(replayRow('r1', 5), replayRow('r2', 4), replayRow('r3', 4))
+    objects.set('replay:r1', Buffer.from('gzip1'))
+    objects.set('replay:r2', Buffer.from('gzp2'))
+    extraHeaders.set('replay:r1', { 'x-nivaro-transfer-store': 'env' })
+    extraHeaders.set('replay:r2', { 'x-nivaro-transfer-store': 'settings' })
+    objects.set('f1', Buffer.from('file'))
+    rows.push(row('f1', 4))
+    const s = await finished((await start({ replays: true })).run_id)
+    expect(s).toMatchObject({ state: 'done', total: 4, copied: 3, failed: 0 })
+    expect(s.missing).toEqual(['replay:r3'])
+    expect(envBucket.get('session-replays/r1.gz')?.toString()).toBe('gzip1')
+    expect(settingsBucket.get('session-replays/r2.gz')?.toString()).toBe('gzp2')
+    expect(envBucket.get('f1.bin')?.toString()).toBe('file')
+    // The manifest holds the tagged replay ids, so a delta takes nothing it already has.
+    const manifests = [...redis.sets.values()].map((m) => [...m].sort())
+    expect(manifests).toEqual([['f1', 'replay:r1', 'replay:r2']])
+    sourceSeen.length = 0
+    const again = await finished((await start({ replays: true, mode: 'delta' })).run_id)
+    expect(again).toMatchObject({ state: 'done', total: 1, copied: 0 })
+    expect(sourceSeen).toEqual(['replay:r3'])
+  })
+
+  it('without replays the cold objects are never asked for (an older source)', async () => {
+    let asked = false
+    pullDeps.listReplays = async () => {
+      asked = true
+      return []
+    }
+    await finished((await start()).run_id)
+    expect(asked).toBe(false)
+  })
+
+  it('a replay the source cannot read fails as replay:<id>', async () => {
+    replayRows.push(replayRow('r9', 4))
+    readFails.add('replay:r9')
+    const s = await finished((await start({ replays: true })).run_id)
+    expect(s).toMatchObject({ state: 'done', failed: 1 })
+    expect(s.failed_ids).toEqual(['replay:r9'])
+    expect(s.failed_reasons).toEqual({ source_read_failed: 1 })
   })
 })

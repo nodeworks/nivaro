@@ -27,7 +27,9 @@ const st = vi.hoisted(() => ({
     }>
   >(),
   /** R6-I-1 / R6-M-3: the saved-settings driver a test stands up (null = local only). */
-  driver: null as null | Record<string, unknown>
+  driver: null as null | Record<string, unknown>,
+  /** 0.3.215: session recordings per database connection (cold ones carry their object key). */
+  replays: new Map<string, Array<{ id: string; cold: boolean; cold_key: string | null }>>()
 }))
 
 vi.mock('../../../config.js', () => ({
@@ -35,15 +37,27 @@ vi.mock('../../../config.js', () => ({
 }))
 vi.mock('../../../db/index.js', async () => {
   const tc = await import('../../../db/tenant-context.js')
-  const db = (_table: string) => {
+  const db = (table: string) => {
     const conn = (tc.getTenantDb() as unknown as { __conn?: string } | undefined)?.__conn ?? ''
+    const rows = (): Array<Record<string, unknown>> =>
+      table === 'nivaro_session_recordings'
+        ? (st.replays.get(conn) ?? [])
+        : (st.files.get(conn) ?? [])
     const chain = {
-      where: (_c: string, id: string) => ({
-        first: async () => (st.files.get(conn) ?? []).find((f) => f.id === id)
-      })
+      where: (c: string | Record<string, unknown>, id?: string) => {
+        const match = (f: Record<string, unknown>) =>
+          typeof c === 'string' ? f.id === id : Object.entries(c).every(([k, v]) => f[k] === v)
+        return {
+          first: async () => rows().find(match),
+          whereNotNull: (col: string) => ({
+            first: async () => rows().find((f) => match(f) && f[col] != null)
+          })
+        }
+      }
     }
     return chain
   }
+  Object.assign(db, { schema: { hasColumn: async () => true } })
   return { db, resolveDb: () => db }
 })
 vi.mock('../../../db/tenant-context.js', async (orig) => {
@@ -235,6 +249,10 @@ describe('GET /api/hub-transfer/files/:id on a dedicated app', () => {
     expect(res.headers['x-nivaro-filename-disk']).toBe('ab/report.pdf')
     expect(res.headers['cache-control']).toBe('no-store')
     expect(res.headers['content-encoding']).toBeUndefined()
+    // 0.3.215: the store that held it; local disk names no bucket (never copied server-side).
+    expect(res.headers['x-nivaro-transfer-store']).toBe('env')
+    expect(res.headers['x-nivaro-transfer-store-id']).toBeUndefined()
+    expect(res.headers['x-nivaro-transfer-stored-key']).toBeUndefined()
   })
 
   it('401 without a ticket, with a bearer, or with an unknown ticket; 429 after 20', async () => {
@@ -459,6 +477,67 @@ describe('GET /api/hub-transfer/files/:id for a saved-settings object', () => {
     })
 })
 
+// 0.3.215: a session replay's cold object (nivaro_session_recordings.cold_key), so a move takes it.
+describe('GET /api/hub-transfer/replays/:id', () => {
+  const REC_COLD = '22222222-2222-4333-8444-555555555555'
+  const REC_HOT = '33333333-2222-4333-8444-555555555555'
+  const REC_LOST = '44444444-2222-4333-8444-555555555555'
+  beforeAll(() => {
+    mkdirSync(join(root, 'session-replays/2026/11'), { recursive: true })
+    writeFileSync(join(root, `session-replays/2026/11/${REC_COLD}.ndjson.gz`), 'gz-bytes')
+    mkdirSync(join(root, 'apps/app-a-e1/session-replays/2026/11'), { recursive: true })
+    writeFileSync(
+      join(root, `apps/app-a-e1/session-replays/2026/11/${REC_COLD}.ndjson.gz`),
+      'gz-app-a'
+    )
+    const rows = [
+      { id: REC_COLD, cold: true, cold_key: `session-replays/2026/11/${REC_COLD}.ndjson.gz` },
+      { id: REC_HOT, cold: false, cold_key: null },
+      { id: REC_LOST, cold: true, cold_key: `session-replays/2026/11/${REC_LOST}.ndjson.gz` }
+    ]
+    st.replays.set('', rows)
+    st.replays.set('postgres://a@127.0.0.1:1/app_a', rows)
+  })
+  const replay = (a: FastifyInstance, id: string, headers: Record<string, string>) =>
+    a.inject({ method: 'GET', url: `/api/hub-transfer/replays/${id}`, headers })
+
+  it('dedicated: streams the cold object with its key; a hot or unknown replay is missing', async () => {
+    dedicated()
+    const a = await build()
+    const { ticket } = await mintTransferTicket(null)
+    const h = { authorization: `Transfer ${ticket}` }
+    const res = await replay(a, REC_COLD, h)
+    expect(res.statusCode).toBe(200)
+    expect(res.body).toBe('gz-bytes')
+    expect(res.headers['content-length']).toBe('8')
+    expect(res.headers['x-nivaro-filename-disk']).toBe(
+      `session-replays/2026/11/${REC_COLD}.ndjson.gz`
+    )
+    expect(res.headers['x-nivaro-transfer-store']).toBe('env')
+    for (const id of [REC_HOT, REC_LOST, 'not-a-uuid', FILE_A]) {
+      const miss = await replay(a, id, h)
+      expect(miss.statusCode, id).toBe(404)
+      expect(miss.headers['x-nivaro-transfer-missing'], id).toBe('1')
+    }
+  })
+
+  it('needs a transfer ticket like the file route', async () => {
+    dedicated()
+    const a = await build()
+    const res = await replay(a, REC_COLD, { authorization: `Bearer ${HUB_TOKEN}` })
+    expect(res.statusCode).toBe(401)
+  })
+
+  it("shared: the ticket's app, its own scope", async () => {
+    shared()
+    const a = await build()
+    const { ticket } = await mintTransferTicket('app-a-e1')
+    const res = await replay(a, REC_COLD, { authorization: `Transfer ${ticket}` })
+    expect(res.statusCode).toBe(200)
+    expect(res.body).toBe('gz-app-a')
+  })
+})
+
 describe('GET /api/hub-transfer/files/:id on a shared deployment', () => {
   it("the ticket decides the app: it serves that app's object, scoped, on any host", async () => {
     shared()
@@ -577,21 +656,24 @@ describe('the Hub asks for tickets and pulls', () => {
     })
     expect(started.statusCode).toBe(202)
     expect(started.json()).toEqual({ run_id: 'run-1' })
-    expect(vi.mocked(pull.startPull)).toHaveBeenCalledWith({ ...body, objects: false })
-    // P6-31: the Hub's `objects: true` reaches the pull (only a real true counts).
-    for (const [sent, got] of [
-      [true, true],
-      ['yes', false]
-    ] as const) {
-      vi.mocked(pull.startPull).mockClear()
-      await a.inject({
-        method: 'POST',
-        url: '/api/hub-link/files/pull',
-        headers: h,
-        payload: { ...body, objects: sent }
-      })
-      expect(vi.mocked(pull.startPull)).toHaveBeenCalledWith({ ...body, objects: got })
-    }
+    const none = { objects: false, env_objects: false, replays: false }
+    expect(vi.mocked(pull.startPull)).toHaveBeenCalledWith({ ...body, ...none })
+    // P6-31: the Hub's `objects: true` reaches the pull (only a real true counts); 0.3.215 does
+    // the same for `env_objects` and `replays`.
+    for (const flag of ['objects', 'env_objects', 'replays'] as const)
+      for (const [sent, got] of [
+        [true, true],
+        ['yes', false]
+      ] as const) {
+        vi.mocked(pull.startPull).mockClear()
+        await a.inject({
+          method: 'POST',
+          url: '/api/hub-link/files/pull',
+          headers: h,
+          payload: { ...body, [flag]: sent }
+        })
+        expect(vi.mocked(pull.startPull)).toHaveBeenCalledWith({ ...body, ...none, [flag]: got })
+      }
     const unknown = await a.inject({
       method: 'GET',
       url: '/api/hub-link/files/pull/run-x',
@@ -681,9 +763,11 @@ describe('the Hub asks for tickets and pulls', () => {
     expect(await ticketTenant(t.json().ticket)).toEqual({ ok: true, tenant: 'app-a-e1' })
     const seenIn: Array<string | undefined> = []
     let objectsSeen: unknown
+    let flagsSeen: unknown
     vi.mocked(pull.startPull).mockImplementationOnce(async (req) => {
       seenIn.push(getTenantId())
       objectsSeen = req.objects
+      flagsSeen = { env_objects: req.env_objects, replays: req.replays }
       return { run_id: 'run-9' }
     })
     const p = await a.inject({
@@ -694,12 +778,15 @@ describe('the Hub asks for tickets and pulls', () => {
         source: 'https://a.example.com/api/hub-transfer/files',
         ticket: `nvt_${'T'.repeat(43)}`,
         mode: 'delta',
-        objects: true
+        objects: true,
+        env_objects: true,
+        replays: true
       }
     })
     expect(p.statusCode).toBe(202)
     expect(seenIn).toEqual(['app-b-e2'])
     expect(objectsSeen).toBe(true)
+    expect(flagsSeen).toEqual({ env_objects: true, replays: true })
     const unknownApp = await a.inject({
       method: 'POST',
       url: '/api/hub-deployment/apps/nope-e1/files/ticket',

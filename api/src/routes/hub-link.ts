@@ -361,13 +361,17 @@ export async function hubLinkRoutes(app: FastifyInstance) {
       ticket?: unknown
       mode?: unknown
       objects?: unknown
+      env_objects?: unknown
+      replays?: unknown
     }
     try {
       const out = await startPull({
         source: b.source as string,
         ticket: b.ticket as string,
         mode: b.mode as 'full' | 'delta',
-        objects: b.objects === true
+        objects: b.objects === true,
+        env_objects: b.env_objects === true,
+        replays: b.replays === true
       })
       return reply.code(202).send(out)
     } catch (err) {

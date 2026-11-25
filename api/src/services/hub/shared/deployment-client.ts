@@ -128,6 +128,10 @@ export interface PullRequest {
   mode: 'full' | 'delta'
   /** P6-31: also copy saved-settings S3/Azure objects (the key prefix changes). */
   objects?: boolean
+  /** 0.3.215 (both sides): also copy objects an env S3/Azure provider stored. */
+  env_objects?: boolean
+  /** 0.3.215 (both sides): also copy the cold objects of session replays. */
+  replays?: boolean
 }
 
 export interface PullStatus {
@@ -565,7 +569,9 @@ export function deploymentClient(
           source: req.source,
           ticket: req.ticket,
           mode: req.mode,
-          ...(req.objects ? { objects: true } : {})
+          ...(req.objects ? { objects: true } : {}),
+          ...(req.env_objects ? { env_objects: true } : {}),
+          ...(req.replays ? { replays: true } : {})
         }
       })
       if (!ok(a)) throw refusalOf(a, transferRefusal)

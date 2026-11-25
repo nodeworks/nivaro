@@ -19,7 +19,13 @@ import type { TenantRecord } from '../services/tenancy/types.js'
 /**
  * File transfer, source side (Hub phase 6, Decision 11).
  *
- *   GET /api/hub-transfer/files/:id   the stored object of the app's nivaro_files row :id
+ *   GET /api/hub-transfer/files/:id     the stored object of the app's nivaro_files row :id
+ *   GET /api/hub-transfer/replays/:id   the cold object of session replay :id (0.3.215)
+ *
+ * 0.3.215: every 200 also says which of the app's stores served it (`X-Nivaro-Transfer-Store:
+ * env | settings`) and, for an env S3/Azure object, the bucket's hash and the object's full key
+ * (`X-Nivaro-Transfer-Store-Id`, `X-Nivaro-Transfer-Stored-Key`): a target writing to the same
+ * bucket copies it server-side. Never a bucket name, an endpoint or a credential.
  *
  * The target of a move pulls every object from here (services/hub-transfer/pull.ts). Auth is a
  * transfer ticket the source minted on the Hub's request, and nothing else — no session, API
@@ -109,6 +115,29 @@ async function fileRow(id: string): Promise<FileRow | null> {
   return row?.filename_disk ? row : null
 }
 
+/** The cold object key of a session replay, or null (unknown id, still hot, or no object). */
+async function coldReplayKey(id: string): Promise<string | null> {
+  if (!isUuid(id)) return null
+  if (!(await db.schema.hasColumn('nivaro_session_recordings', 'cold_key'))) return null
+  const row = (await db('nivaro_session_recordings')
+    .where({ id, cold: true })
+    .whereNotNull('cold_key')
+    .first('cold_key')) as { cold_key?: string | null } | undefined
+  return row?.cold_key ? String(row.cold_key) : null
+}
+
+/** A key in a header: percent-encoded, slashes kept. */
+function encodeKeyHeader(key: string): string {
+  return encodeURIComponent(key).replace(/%2F/gi, '/')
+}
+
+/** 0.3.215: which of the app's stores served the object (`env` or `settings`). */
+export const TRANSFER_STORE_HEADER = 'X-Nivaro-Transfer-Store'
+/** 0.3.215, env S3/Azure only: the hash of the bucket/container (storage storeId()). */
+export const TRANSFER_STORE_ID_HEADER = 'X-Nivaro-Transfer-Store-Id'
+/** 0.3.215, env S3/Azure only: the object's full key in that bucket (apps/<id>/… on shared). */
+export const TRANSFER_STORED_KEY_HEADER = 'X-Nivaro-Transfer-Stored-Key'
+
 export async function hubTransferRoutes(app: FastifyInstance): Promise<void> {
   if (!hubTransferMounted()) return
   const shared = tenantSource() === 'hub'
@@ -157,60 +186,100 @@ export async function hubTransferRoutes(app: FastifyInstance): Promise<void> {
     req.hubTransferApp = found
   })
 
+  /** One stored object, as the app reads it, with the headers the pull checks. */
+  const serveObject = async (
+    req: FastifyRequest,
+    reply: FastifyReply,
+    obj: { key: string; storage: string | null | undefined; type: string | null }
+  ) => {
+    const { key } = obj
+    reply.header('X-Nivaro-Filename-Disk', encodeKeyHeader(key))
+    let opened: Awaited<ReturnType<typeof openTransferObject>>
+    try {
+      // The object the app itself reads (P6-36): the row's saved-settings driver first
+      // (P6-31), then the env chain (env S3/Azure streamed, 0.3.215), FILES_FALLBACK_DIR and
+      // FILES_FALLBACK_URL included.
+      opened = await openTransferObject(key, obj.storage, req.headers.range)
+    } catch (err) {
+      reply.removeHeader('X-Nivaro-Filename-Disk')
+      // R6-I-1: only a real not-found is "missing" (404, never blocks a move). Any other read
+      // error (throttling, a timeout, a refused credential) is a 5xx: the target counts the
+      // row as failed, which blocks inside maintenance, so a move never releases without it.
+      if (isStoredObjectMissing(err)) return missing(reply, 'Stored object not found')
+      req.log.warn(
+        {
+          err_name: (err as { name?: unknown } | null)?.name ?? null,
+          status: (err as { status?: unknown } | null)?.status ?? null
+        },
+        'hub transfer: a stored object could not be read'
+      )
+      // C-1: the fallback folder is gone or empty (an unmounted share) — said apart, so the
+      // move can name the remedy. Still no path.
+      if (err instanceof FallbackFolderUnavailable)
+        return reply.code(503).header('Cache-Control', 'no-store').send({
+          statusCode: 503,
+          error: 'The files fallback folder is not available here',
+          message: 'The files fallback folder is not available here',
+          code: 'SOURCE_READ_FAILED',
+          reason: 'FALLBACK_FOLDER_UNAVAILABLE'
+        })
+      return refuse(
+        reply,
+        503,
+        'SOURCE_READ_FAILED',
+        'The stored object could not be read here right now'
+      )
+    }
+    // 0.3.215: which store holds it, so the target writes it to the same kind of store; for an
+    // env S3/Azure object also the bucket's hash and the object's full key, so a target on the
+    // same bucket copies it server-side (it then drops this body unread).
+    reply.header(TRANSFER_STORE_HEADER, opened.store)
+    if (opened.store_id && opened.stored_key) {
+      reply.header(TRANSFER_STORE_ID_HEADER, opened.store_id)
+      reply.header(TRANSFER_STORED_KEY_HEADER, encodeKeyHeader(opened.stored_key))
+    }
+    return sendOpenedObject(reply, opened, {
+      contentType: obj.type || 'application/octet-stream',
+      disposition: 'attachment'
+    })
+  }
+
+  /** Runs `serve` inside the ticket's app (shared) or as this app (dedicated). */
+  const asTicketApp = (req: FastifyRequest, serve: () => Promise<unknown>) => {
+    const found = req.hubTransferApp as TicketApp
+    return found.kind === 'shared' ? withTenant(found.tenant, serve, found.tenant.origin) : serve()
+  }
+
   app.get<{ Params: { id: string } }>(
     '/files/:id',
     { compress: false, exposeHeadRoute: false },
     async (req, reply) => {
-      const found = req.hubTransferApp
-      if (!found) return refuse(reply, 401, TRANSFER_REFUSED, 'Unauthorized')
-      const serve = async () => {
+      if (!req.hubTransferApp) return refuse(reply, 401, TRANSFER_REFUSED, 'Unauthorized')
+      return asTicketApp(req, async () => {
         const row = await fileRow(req.params.id)
         if (!row?.filename_disk) return missing(reply, 'Not found')
-        const key = row.filename_disk
-        reply.header('X-Nivaro-Filename-Disk', encodeURIComponent(key).replace(/%2F/gi, '/'))
-        let opened: Awaited<ReturnType<typeof openTransferObject>>
-        try {
-          // The object the app itself reads (P6-36): the row's saved-settings driver first
-          // (P6-31), then the local chain, FILES_FALLBACK_DIR and FILES_FALLBACK_URL included.
-          opened = await openTransferObject(key, row.storage, req.headers.range)
-        } catch (err) {
-          reply.removeHeader('X-Nivaro-Filename-Disk')
-          // R6-I-1: only a real not-found is "missing" (404, never blocks a move). Any other read
-          // error (throttling, a timeout, a refused credential) is a 5xx: the target counts the
-          // row as failed, which blocks inside maintenance, so a move never releases without it.
-          if (isStoredObjectMissing(err)) return missing(reply, 'Stored object not found')
-          req.log.warn(
-            {
-              err_name: (err as { name?: unknown } | null)?.name ?? null,
-              status: (err as { status?: unknown } | null)?.status ?? null
-            },
-            'hub transfer: a stored object could not be read'
-          )
-          // C-1: the fallback folder is gone or empty (an unmounted share) — said apart, so the
-          // move can name the remedy. Still no path.
-          if (err instanceof FallbackFolderUnavailable)
-            return reply.code(503).header('Cache-Control', 'no-store').send({
-              statusCode: 503,
-              error: 'The files fallback folder is not available here',
-              message: 'The files fallback folder is not available here',
-              code: 'SOURCE_READ_FAILED',
-              reason: 'FALLBACK_FOLDER_UNAVAILABLE'
-            })
-          return refuse(
-            reply,
-            503,
-            'SOURCE_READ_FAILED',
-            'The stored object could not be read here right now'
-          )
-        }
-        return sendOpenedObject(reply, opened, {
-          contentType: row.type || 'application/octet-stream',
-          disposition: 'attachment'
+        return serveObject(req, reply, {
+          key: row.filename_disk,
+          storage: row.storage,
+          type: row.type
         })
-      }
-      return found.kind === 'shared'
-        ? withTenant(found.tenant, serve, found.tenant.origin)
-        : serve()
+      })
+    }
+  )
+
+  // 0.3.215: the cold object of a session replay (nivaro_session_recordings.cold_key), so a move
+  // takes replays along. A hot replay lives in the database, which the move keeps.
+  app.get<{ Params: { id: string } }>(
+    '/replays/:id',
+    { compress: false, exposeHeadRoute: false },
+    async (req, reply) => {
+      if (!req.hubTransferApp) return refuse(reply, 401, TRANSFER_REFUSED, 'Unauthorized')
+      return asTicketApp(req, async () => {
+        const key = await coldReplayKey(req.params.id)
+        if (!key) return missing(reply, 'Not found')
+        // Written through the active storage driver (session-replay-storage.ts): asked first.
+        return serveObject(req, reply, { key, storage: 'replay', type: 'application/gzip' })
+      })
     }
   )
 }

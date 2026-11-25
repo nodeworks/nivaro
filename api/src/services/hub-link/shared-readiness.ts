@@ -58,13 +58,17 @@ export type SharedReadinessCode =
   | 'TEAMS_BOT'
   | 'MAIL_RETRY'
 
-/** Ruling R1 adds ENV_OBJECT_STORAGE: objects under an env-driven S3/Azure provider are never
- *  pulled by a move (only `local` rows), so they would be lost. */
+/**
+ * Ruling R1 added ENV_OBJECT_STORAGE here: before 0.3.215 objects under an env-driven S3/Azure
+ * provider were never pulled by a move. From 0.3.215 a move copies them (and the cold objects of
+ * session replays), so this app sends it as a warning; the Hub still blocks it while either side
+ * runs an older version (services/hub/move/plan.ts OLDER_TARGET_BLOCKERS, storage-floor.ts), and
+ * a Hub before 0.3.215 keeps it in its own blocker list.
+ */
 export const SHARED_READINESS_BLOCKERS: readonly SharedReadinessCode[] = [
   'ISSUE_TRACKERS',
   'EXEC_SCRIPT_FLOWS',
-  'SQLITE',
-  'ENV_OBJECT_STORAGE'
+  'SQLITE'
 ]
 
 export interface SharedReadinessItem {
@@ -144,7 +148,7 @@ function envObjectStorage(): string | null {
   const p = (process.env.STORAGE_PROVIDER ?? 'local').trim().toLowerCase() || 'local'
   return p === 'local'
     ? null
-    : `Files are stored by the server's ${p === 's3' ? 'S3' : p === 'azure' ? 'Azure' : 'object'} storage setting; a move copies only files on local storage`
+    : `Files are stored by the server's ${p === 's3' ? 'S3' : p === 'azure' ? 'Azure' : 'object'} storage setting; a move copies them when both sides run 0.3.215 or later`
 }
 
 // ─── Warnings ────────────────────────────────────────────────────────────────────────────
