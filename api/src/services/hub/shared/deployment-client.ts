@@ -335,6 +335,7 @@ const SCHEMA_STATES = new Set(['pending', 'running', 'ok', 'failed'])
 
 function isDeploymentStatus(v: unknown): v is DeploymentStatus {
   if (!isObj(v) || !isStr(v.version) || !isStr(v.instance)) return false
+  if (v.instance_key !== undefined && !isStr(v.instance_key)) return false
   const r = v.registry
   if (
     !isObj(r) ||

@@ -176,12 +176,14 @@ function clients() {
     schema: 'ok' as 'ok' | 'failed' | 'pending',
     keyFp: null as string | null,
     pullStates: ['running', 'done'] as Array<'running' | 'done' | 'failed'>,
-    dbIdentity: 'pg|pg1|5432|acme' as string | null
+    dbIdentity: 'pg|pg1|5432|acme' as string | null,
+    instanceKey: 'pool-x' as string | undefined
   }
   const make = (shared: { id: number }) => ({
     status: vi.fn(async () => {
       calls.push([shared.id, 'status'])
       return {
+        instance_key: conf.instanceKey,
         apps: [
           {
             id: TENANT,
@@ -458,7 +460,7 @@ describe('maintenance and retire', () => {
     expect(link.maintenance).toHaveBeenLastCalledWith(false, w.move.id)
   })
 
-  it('hub gap watch: a plan with ENV_SMTP_KEPT asks the source to keep its env mail on the way in only', async () => {
+  it('hub gap watch: a carrying plan passes the target instance and logs what was carried', async () => {
     const w = await setup(false)
     TENANT = w.tenant
     await db('nivaro_hub_environments')
@@ -466,23 +468,45 @@ describe('maintenance and retire', () => {
       .update({
         hub_token: (await import('../../../services/hub/secrets.js')).sealSecret('t'.repeat(40))
       })
-    const link = { maintenance: vi.fn(async () => undefined) }
+    const link = {
+      maintenance: vi.fn(async () => ({
+        instance_row: { result: 'filled', keys: ['cache'], differed: ['huddle'] },
+        env_mail: null
+      }))
+    }
     const plan = {
       ...w.plan,
-      warnings: [...w.plan.warnings, { code: 'ENV_SMTP_KEPT' as const, text: 'kept' }]
+      warnings: [
+        ...w.plan.warnings,
+        { code: 'INSTANCE_SETTINGS_CARRIED' as const, text: 'carried' },
+        { code: 'ENV_SMTP_KEPT' as const, text: 'kept' }
+      ]
     }
+    const lines: string[] = []
+    const c = clients()
     const ops = defaultMoveOps(w.move, plan, {
-      client: clients().factory,
+      client: c.factory,
       link: () => link as never,
       sleep,
-      now
+      now,
+      log: (l) => lines.push(l)
     })
     await ops.sourceMaintenance(true)
     expect(link.maintenance).toHaveBeenCalledWith(true, w.move.id, undefined, {
+      targetInstance: 'pool-x',
       keepEnvMail: true
     })
+    // the source did not say it kept the mail: ENV_SMTP goes back in the run log
+    expect(lines.join('\n')).toMatch(/ENV_SMTP: the source did not keep/)
+    expect(lines.join('\n')).toMatch(/already held with other values.*huddle/)
     await ops.sourceMaintenance(false)
     expect(link.maintenance).toHaveBeenLastCalledWith(false, w.move.id)
+    // a target that names no instance stops the step before the source is touched
+    c.conf.instanceKey = undefined
+    link.maintenance.mockClear()
+    const err = await ops.sourceMaintenance(true).catch((e) => e)
+    expect(err?.code).toBe('TARGET_INSTANCE_UNKNOWN')
+    expect(link.maintenance).not.toHaveBeenCalled()
   })
 
   it('C-2: a dedicated source is reached on its own address after the name points at the target (maintenance on, then rollback off)', async () => {

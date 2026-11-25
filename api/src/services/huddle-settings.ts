@@ -23,8 +23,8 @@ import { currentTenantKey } from './tenant-rooms.js'
  *
  * Hub shared deployment (0.3.215): each app uses the huddle settings it saved itself (Nivaro Cloud
  * still replaces the addresses with the platform's: huddle-destinations.ts). They live in the
- * app's own database; a moved app's row still carries its old stack's instance name, which
- * services/instance-row.ts finds. There the three secrets are stored sealed with the app's own
+ * app's own database, under the deployment's instance key (a move to shared carries the app's
+ * row there: services/move-carry.ts). There the three secrets are stored sealed with the app's own
  * key (enc:v1, services/encryption.ts); a value that does not open reads as not set.
  */
 

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { buildMovePlan, HUDDLE_MAIL_SINCE, keepsEnvMail } from '../../../services/hub/move/plan.js'
+import {
+  buildMovePlan,
+  carriesInstanceRow,
+  HUDDLE_MAIL_SINCE,
+  keepsEnvMail
+} from '../../../services/hub/move/plan.js'
 import type { MovePlanInput, PlacementSide } from '../../../services/hub/move/types.js'
 import type { SharedDeployment } from '../../../services/hub/shared/store.js'
 
@@ -120,7 +125,15 @@ const plan = (sv: string | null, tv: string | null) =>
 const warned = (p: ReturnType<typeof plan>) =>
   p.warnings
     .map((w) => w.code)
-    .filter((c) => ['HUDDLE_TURN', 'ENV_SMTP', 'ENV_SMTP_KEPT'].includes(c))
+    .filter((c) =>
+      [
+        'HUDDLE_TURN',
+        'ENV_SMTP',
+        'ENV_SMTP_KEPT',
+        'INSTANCE_SETTINGS_CARRIED',
+        'INSTANCE_SETTINGS_STAY'
+      ].includes(c)
+    )
 
 describe('hub gap watch: huddle and env mail on a shared target', () => {
   it('floor is 0.3.215', () => {
@@ -136,14 +149,29 @@ describe('hub gap watch: huddle and env mail on a shared target', () => {
     expect(warned(plan('0.3.215', '0.4.0'))).not.toContain('HUDDLE_TURN')
   })
 
-  it('ENV_SMTP becomes ENV_SMTP_KEPT only when both sides run 0.3.215 or later', () => {
-    expect(warned(plan('0.3.214', '0.3.215'))).toEqual(['ENV_SMTP'])
-    expect(warned(plan('0.3.215', '0.3.214'))).toEqual(['HUDDLE_TURN', 'ENV_SMTP'])
-    expect(warned(plan('0.3.215', '0.3.215'))).toEqual(['ENV_SMTP_KEPT'])
+  it('ENV_SMTP becomes ENV_SMTP_KEPT (and the row is carried) only when both sides run 0.3.215 or later', () => {
+    expect(warned(plan('0.3.214', '0.3.215'))).toEqual(['ENV_SMTP', 'INSTANCE_SETTINGS_STAY'])
+    expect(warned(plan('0.3.215', '0.3.214'))).toEqual([
+      'HUDDLE_TURN',
+      'ENV_SMTP',
+      'INSTANCE_SETTINGS_STAY'
+    ])
+    expect(warned(plan('0.3.215', '0.3.215'))).toEqual([
+      'INSTANCE_SETTINGS_CARRIED',
+      'ENV_SMTP_KEPT'
+    ])
+    expect(
+      buildMovePlan(
+        input({
+          source: src({ version: '0.3.215', readiness: [smtp] }),
+          target_facts: tgt({ version: '0.3.215' })
+        })
+      ).checklist.find((c) => c.id === 'env_mail_checked')
+    ).toMatchObject({ required: false })
     const p = plan('0.3.216', '0.3.216')
     expect(p.blockers).toEqual([])
     expect(p.warnings.find((w) => w.code === 'ENV_SMTP_KEPT')?.text).toMatch(
-      /Settings → Email \(the password sealed with the app's key\)/
+      /instance \(the password sealed with the app's key; a mail test mode/
     )
   })
 
@@ -153,7 +181,8 @@ describe('hub gap watch: huddle and env mail on a shared target', () => {
       target_facts: tgt({ version: '0.3.215' })
     })
     expect(keepsEnvMail(none)).toBe(false)
-    expect(warned(buildMovePlan(none))).toEqual([])
+    expect(carriesInstanceRow(none)).toBe(true)
+    expect(warned(buildMovePlan(none))).toEqual(['INSTANCE_SETTINGS_CARRIED'])
     const both = input({
       source: src({ version: '0.3.215', readiness: [smtp] }),
       target_facts: tgt({ version: '0.3.215' })

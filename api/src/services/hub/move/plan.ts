@@ -483,14 +483,24 @@ function runsAtLeast(version: string | null, floor: string): boolean {
  */
 export const HUDDLE_MAIL_SINCE = '0.3.215'
 
-/** The source keeps its env mail settings at maintenance_on (ENV_SMTP_KEPT): see above. */
-export function keepsEnvMail(input: MovePlanInput): boolean {
+/**
+ * The source carries its per-instance settings row to the shared deployment's instance key at
+ * maintenance_on (INSTANCE_SETTINGS_CARRIED; services/move-carry.ts): a dedicated source and a
+ * shared target, both 0.3.215 or later (the target reports its instance key from that version).
+ */
+export function carriesInstanceRow(input: MovePlanInput): boolean {
   return (
     input.kind === 'to_shared' &&
-    input.source.readiness.some((r) => r.code === 'ENV_SMTP') &&
+    input.from.kind !== 'shared' &&
+    input.to.kind === 'shared' &&
     runsAtLeast(input.source.version, HUDDLE_MAIL_SINCE) &&
     runsAtLeast(input.target_facts.version, HUDDLE_MAIL_SINCE)
   )
+}
+
+/** The source keeps its env mail settings in that row at maintenance_on (ENV_SMTP_KEPT). */
+export function keepsEnvMail(input: MovePlanInput): boolean {
+  return carriesInstanceRow(input) && input.source.readiness.some((r) => r.code === 'ENV_SMTP')
 }
 
 /** The source's readiness codes the target's version makes real (ruling: target version). */
@@ -622,10 +632,20 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
   if (kind === 'to_shared')
     for (const r of readinessFor(input))
       if (!isReadinessBlocker(r.code)) add(r.code, `${readinessTitle(r.code)}: ${clean(r.detail)}`)
+  if (carriesInstanceRow(input))
+    add(
+      'INSTANCE_SETTINGS_CARRIED',
+      "The app's per-instance settings (Settings → This instance: huddle media servers, the outside-write watch, the daily report, caches …) are copied to the shared deployment's instance when the move puts the app in maintenance. Its own row stays as it was; values the new home already holds are kept and named in the run log."
+    )
+  else if (from.kind === 'shared' || to.kind === 'shared')
+    add(
+      'INSTANCE_SETTINGS_STAY',
+      "The app's per-instance settings (Settings → This instance: huddle media servers, the outside-write watch, the daily report, caches …) are not carried to the new home: it reads them under its own instance name. Enter them there again after the move (both sides at 0.3.215 or later carry them on a move from a dedicated stack to a shared deployment)."
+    )
   if (keepsEnvMail(input))
     add(
       'ENV_SMTP_KEPT',
-      "The app sends mail with its server's environment settings. When the move puts it in maintenance, it saves them in its own Settings → Email (the password sealed with the app's key), so mail keeps going through the same server after the move. Change them there afterwards."
+      "The app sends mail with its server's environment settings. When the move puts it in maintenance, it saves them for the shared deployment's instance (the password sealed with the app's key; a mail test mode its environment forces stays on), so mail keeps going through the same server after the move. The run log says if it could not; then enter them in Settings → Email."
     )
   return out
 }
@@ -683,6 +703,12 @@ function addressOf(input: MovePlanInput, name: string): string {
 
 function checklistOf(input: MovePlanInput, routing: 'automatic' | 'manual'): MovePlan['checklist'] {
   const out: MovePlan['checklist'] = []
+  if (keepsEnvMail(input))
+    out.push({
+      id: 'env_mail_checked',
+      text: 'After the move: the run log says the mail settings were kept (no ENV_SMTP warning in it), or they are entered in Settings → Email.',
+      required: false
+    })
   if (toShared(input.kind) && input.to.kind === 'shared')
     out.push({
       id: 'callbacks_registered',

@@ -55,7 +55,13 @@ import {
 } from '../shared/store.js'
 import { tenantsBody } from '../shared/tenants.js'
 import type { MoveAddresses } from './addresses.js'
-import { type HubLinkClient, HubLinkError, hubLinkClient, hubLinkOrigin } from './link-client.js'
+import {
+  type HubLinkClient,
+  HubLinkError,
+  hubLinkClient,
+  hubLinkOrigin,
+  type MaintenanceAnswer
+} from './link-client.js'
 import type { MovePlan, RouteAction } from './plan-port.js'
 import { type HubMoveRow, MOVES, mergeSteps, readMove } from './rows.js'
 import { sharedStackRouter as defaultSharedStackRouter } from './shared-route.js'
@@ -762,6 +768,52 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
     )
   }
 
+  // ── carrying the app's per-instance settings (0.3.215) ───────────────────────────────────
+
+  /** The shared target's NIVARO_INSTANCE, from its deployment status. */
+  const targetInstanceKey = async (l: Loaded): Promise<string> => {
+    if (l.to.kind !== 'shared')
+      throw new MoveStepError('TARGET_INSTANCE_UNKNOWN', 'The target is not a shared deployment.')
+    const st = await clientFor(l.to.shared).status()
+    const key = typeof st.instance_key === 'string' ? st.instance_key : ''
+    if (!/^[A-Za-z0-9._-]{1,100}$/.test(key))
+      throw new MoveStepError(
+        'TARGET_INSTANCE_UNKNOWN',
+        `${l.to.shared.key} does not name its instance, so the app's per-instance settings cannot be carried to it.`
+      )
+    return key
+  }
+
+  /** What the source said it carried, into the run log (names only, never values). */
+  const noteCarried = (answer: MaintenanceAnswer | undefined, keepEnvMail: boolean) => {
+    const row = answer?.instance_row ?? null
+    if (!row)
+      log(
+        'INSTANCE_SETTINGS_STAY: the source did not say it copied its per-instance settings; enter them on the new home (Settings → This instance, Huddles, Realtime → Outside writes) after the move',
+        'warn'
+      )
+    else {
+      log(
+        `per-instance settings: ${row.result}${row.keys.length ? ` (${row.keys.join(', ')})` : ''}`
+      )
+      if (row.differed.length)
+        log(
+          `per-instance settings the new home already held with other values, kept as they were: ${row.differed.join(', ')}`,
+          'warn'
+        )
+    }
+    if (!keepEnvMail) return
+    const mail = answer?.env_mail ?? null
+    if (mail === 'kept') log('mail settings from the source environment were kept for the new home')
+    else if (mail === 'none_needed')
+      log('mail settings: nothing to keep (already saved, or no relay)')
+    else
+      log(
+        'ENV_SMTP: the source did not keep the mail settings from its environment; enter them in Settings → Email on the new home (checklist: env_mail_checked)',
+        'warn'
+      )
+  }
+
   // ── the ops ──────────────────────────────────────────────────────────────────────────────
 
   const ops: MoveOps = {
@@ -773,10 +825,19 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
         return
       }
       const link = await sourceLink()
-      // 0.3.215: the plan decided the source keeps its env mail settings (ENV_SMTP_KEPT).
-      const keepEnvMail = on && plan.warnings.some((w) => w.code === 'ENV_SMTP_KEPT')
-      if (keepEnvMail) await link.maintenance(on, move.id, undefined, { keepEnvMail })
-      else await link.maintenance(on, move.id)
+      // 0.3.215: the plan decided the source carries its per-instance settings row to the shared
+      // deployment's instance key (INSTANCE_SETTINGS_CARRIED), and its env mail settings into it
+      // (ENV_SMTP_KEPT). The target names its key on its deployment status.
+      const has = (code: string) => plan.warnings.some((w) => w.code === code)
+      if (on && has('INSTANCE_SETTINGS_CARRIED')) {
+        const keepEnvMail = has('ENV_SMTP_KEPT')
+        const targetInstance = await targetInstanceKey(l)
+        const answer = await link.maintenance(on, move.id, undefined, {
+          targetInstance,
+          keepEnvMail
+        })
+        noteCarried(answer, keepEnvMail)
+      } else await link.maintenance(on, move.id)
       if (on) {
         // Every source replica enforces it within its 15 s cache (R14).
         log('strict maintenance is on at the source; waiting for every replica to take it')

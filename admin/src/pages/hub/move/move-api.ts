@@ -971,8 +971,16 @@ export const MOVE_WARNING_COPY: Record<string, Copy> = {
     hint: 'Enter them in the app (Settings → Email) so mail keeps going after the move. From 0.3.215 on both sides the move saves them there itself.'
   },
   ENV_SMTP_KEPT: {
-    title: 'The app’s mail settings are saved in its own Settings at the move',
-    hint: 'It sends mail with its server’s environment settings today. When the move starts they are saved in Settings → Email (the password sealed with the app’s key), so mail keeps going through the same server. Change them there afterwards.'
+    title: 'The app’s mail settings are kept for the shared deployment at the move',
+    hint: 'It sends mail with its server’s environment settings today. When the move starts they are saved for the shared deployment’s instance (the password sealed with the app’s key; a mail test mode its environment forces stays on), so mail keeps going through the same server. If the run log says ENV_SMTP, enter them in Settings → Email.'
+  },
+  INSTANCE_SETTINGS_CARRIED: {
+    title: 'The app’s per-instance settings are copied at the move',
+    hint: 'Settings → This instance (huddle media servers, the outside-write watch, the daily report, caches …) are copied to the shared deployment’s instance when the move starts. The run log names any value the new home already held.'
+  },
+  INSTANCE_SETTINGS_STAY: {
+    title: 'The app’s per-instance settings are not carried',
+    hint: 'Settings → This instance (huddle media servers, the outside-write watch, the daily report, caches …) stay with the old instance name. Enter them on the new home after the move.'
   },
   SESSION_REPLAYS: {
     title: 'Session replays are not moved',
@@ -998,6 +1006,18 @@ export const MOVE_WARNING_COPY: Record<string, Copy> = {
 
 /** Refusals of the move, place and app-key routes (non-planner codes), in plain words. */
 export const MOVE_CODE_COPY: Record<string, Copy> = {
+  TARGET_INSTANCE_UNKNOWN: {
+    title: 'The shared deployment does not name its instance',
+    hint: 'The app’s per-instance settings cannot be carried to it. Upgrade the shared deployment to 0.3.215 or later, then resume the move.'
+  },
+  INSTANCE_ROW_NOT_CARRIED: {
+    title: 'The app could not copy its per-instance settings',
+    hint: 'Its database refused the write; the app was not put in maintenance. Check the app’s database, then resume the move.'
+  },
+  ENV_MAIL_NOT_KEPT: {
+    title: 'The app could not keep its mail settings',
+    hint: 'Its database refused the write; the app was not put in maintenance. Check the app’s database, then resume the move.'
+  },
   PLAN_CHANGED: {
     title: 'The plan changed since you read it',
     hint: 'Check the plan as it stands now, then start again.'

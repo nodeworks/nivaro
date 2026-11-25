@@ -138,6 +138,8 @@ export type MoveWarningCode =
   | 'STORAGE_PREFIX_CHANGES'
   // 0.3.215 (hub-gap watch): the source saves its env mail settings at maintenance_on.
   | 'ENV_SMTP_KEPT'
+  | 'INSTANCE_SETTINGS_CARRIED'
+  | 'INSTANCE_SETTINGS_STAY'
   | SharedReadinessCode
 
 export interface MovePlan {
