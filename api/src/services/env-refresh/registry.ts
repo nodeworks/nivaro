@@ -433,6 +433,11 @@ export const CORE_KEEPS: readonly EnvKeepEntry[] = [
       // Hub scaling (581): kept replicas and limits, autoscaling rules, scale runs
       'nivaro_hub_scale_roles',
       'nivaro_hub_scale_runs',
+      // Hub placement (580): regions + host membership, cost centres, peer Hubs (sealed key)
+      'nivaro_hub_regions',
+      'nivaro_hub_region_drivers',
+      'nivaro_hub_app_cost_centers',
+      'nivaro_hub_peers',
       // Hub release operations (565): trains, schedules, freezes, rollback rules and watches,
       // release notes, learned version facts
       'nivaro_hub_trains',
