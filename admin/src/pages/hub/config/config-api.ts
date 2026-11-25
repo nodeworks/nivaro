@@ -66,6 +66,8 @@ export interface PlanView {
   cap: number
   warnings: string[]
   prod_only: { count: number; lines: string[]; refuse: boolean }
+  /** Steps (or webhook flows) that need this environment's own values; their flows arrive off. */
+  needs_setup?: Array<{ flow: string | null; step: string | null; reason: string }>
 }
 
 export interface ConfigPromotion {
@@ -83,10 +85,13 @@ export interface ConfigPromotion {
   plan: PlanView | null
   result: {
     totals?: { inserted: number; updated: number; deleted: number }
-    procedures?: { deployed: number; failed: number; names: string[] } | null
+    procedures?: { written: number; failed: string[] } | null
+    needs_setup?: Array<{ flow: string | null; step: string | null; reason: string }>
     baseline?: 'moved' | 'unchanged'
   } | null
   pre_restore_id: number | null
+  run_key: string | null
+  /** Applied and the newest promotion that wrote to its target. */
   undo_ready: boolean
   undo_result: { totals?: { inserted: number; updated: number; deleted: number } } | null
   source_version: string | null
@@ -231,7 +236,52 @@ const COPY: Record<string, { title: string; hint?: string; serverHint?: boolean 
   BUSY: { title: 'The app is restoring configuration already', hint: 'Try again in a minute.' },
   SAME_ENVIRONMENT: { title: 'Pick two different environments' },
   ARCHIVED: { title: 'That environment is archived', serverHint: true },
-  BAD_GROUPS: { title: 'Pick at least one kind of configuration' }
+  BAD_GROUPS: { title: 'Pick at least one kind of configuration' },
+  ROW_UNMATCHED: {
+    title: 'Some rows cannot be matched between the two environments',
+    hint: 'Rows are matched by name or key, never by id. Rename or remove the rows listed below on one side, then plan again.'
+  },
+  REF_UNMAPPED: {
+    title: 'Some references point at things the target does not have',
+    hint: 'Create them on the target with the same name (or set the value on the target), then plan again.'
+  },
+  PROC_IMPORT_OWNED: {
+    title: 'A procedure belongs to an import on the target',
+    hint: 'Its import definition writes it there; leave managed procedures out or change the import.'
+  },
+  NOT_NEWEST: { title: 'Only the newest promotion can be undone', serverHint: true },
+  INTERRUPTED: {
+    title: 'The Hub lost the target’s answer',
+    hint: 'It may have written. Use “Check the target” on the promotion to read what it says.'
+  },
+  NOTHING_TO_CHECK: { title: 'There is nothing to check on this promotion' },
+  UNDO_ADMIN_SESSION_ONLY: {
+    title: 'Undo needs an administrator on their own session',
+    hint: 'Sign in as yourself (not View-as, an API key or a connected app) to undo it.'
+  },
+  OUTSIDE_WINDOW: { title: 'Outside this app’s deploy window', serverHint: true },
+  CHECKLIST_REQUIRED: { title: 'Tick the pre-deploy checklist first', serverHint: true },
+  CHECKLIST_INCOMPLETE: { title: 'Required checklist items are not ticked', serverHint: true },
+  CHECKLIST_USED: { title: 'That checklist already started a run', serverHint: true },
+  CHECKLIST_MISMATCH: { title: 'That checklist was ticked for another start', serverHint: true }
+}
+
+/** The rows a refusal names (ROW_UNMATCHED, REF_UNMAPPED, STALE …), when it names any. */
+export function refusalItems(
+  err: unknown
+): Array<{ table: string; key: string; label: string | null; reason: string }> {
+  const items = (err as { response?: { data?: { items?: unknown } } })?.response?.data?.items
+  if (!Array.isArray(items)) return []
+  return items
+    .filter((i): i is Record<string, unknown> => !!i && typeof i === 'object')
+    .slice(0, 50)
+    .map((i) => ({
+      table: typeof i.table === 'string' ? i.table : '',
+      key: typeof i.key === 'string' ? i.key : String(i.key ?? ''),
+      label: typeof i.label === 'string' ? i.label : null,
+      reason: typeof i.reason === 'string' ? i.reason : ''
+    }))
+    .filter((i) => i.reason && !isRawErrorText(i.reason))
 }
 
 export const CONFIG_COPY_KEYS: ReadonlySet<string> = new Set(Object.keys(COPY))

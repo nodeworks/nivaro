@@ -23,6 +23,8 @@ import { Switch } from '@/components/ui/switch'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, formatRelative } from '@/lib/utils'
+import { type ChecklistState, PreDeployChecklist } from '../changes/PreDeployChecklist'
+import { EnvWindowGate } from '../changes/WindowGate'
 import { fetchHubApps, hubKeys, useHubApp } from '../hub-api'
 import { dangerArmed, Field, ghostButton, SectionCard } from '../hub-parts'
 import {
@@ -31,6 +33,7 @@ import {
   configKeys,
   type PlanView,
   type RowChange,
+  refusalItems,
   STATUS_LABEL,
   STATUS_TONE,
   shownValue,
@@ -43,8 +46,8 @@ import {
 } from './config-api'
 
 /**
- * Config (Apps hub tab, administrators): move an app's configuration — forms, flows, payload
- * templates, managed procedures, pipelines, roles, settings without secrets — from one of its
+ * Config (Apps hub tab, administrators): move an app's configuration — flows, payload
+ * templates, managed procedures, roles, settings without secrets — from one of its
  * environments to another. Plan (a field diff the target app computes), typed confirm on
  * production, apply; every applied promotion can be undone from the target's restore point.
  * URL: ?app=<id>&promotion=<id> (a notice opens ?promotion=<id> alone).
@@ -181,9 +184,9 @@ function ConfigAdmin() {
               Pick an app
             </p>
             <p className='m-0 mt-1 max-w-[46ch] text-[12px] text-slate-500 dark:text-muted-foreground'>
-              Move its forms, flows, payload templates, procedures, pipelines, roles and settings
-              from one environment to another. You see every field that changes before anything is
-              written, and you can undo it afterwards.
+              Move its flows, payload templates, procedures, roles and settings from one environment
+              to another. You see every field that changes before anything is written, and you can
+              undo it afterwards.
             </p>
           </div>
         )}
@@ -427,7 +430,10 @@ function PlanForm({
           )}
         </div>
         {plan.isError && (
-          <ErrorNotice description={configError(plan.error, 'Could not plan the promotion')} />
+          <>
+            <ErrorNotice description={configError(plan.error, 'Could not plan the promotion')} />
+            <RefusalList error={plan.error} />
+          </>
         )}
       </div>
     </SectionCard>
@@ -508,10 +514,18 @@ function PromotionPanel({
             <span>{p.error}</span>
           </p>
         )}
+        {(p.status === 'interrupted' || (p.status === 'failed' && p.run_key)) && (
+          <CheckTarget p={p} to={to} />
+        )}
         {p.result?.totals && <Outcome p={p} to={to} />}
         {p.plan && <PlanBody plan={p.plan} to={to} />}
         {p.status === 'planned' && p.plan && <ApplyBox p={p} from={from} to={to} />}
         {p.undo_ready && <UndoBox p={p} to={to} />}
+        {p.status === 'applied' && !p.undo_ready && (
+          <p className='m-0 text-[12px] text-slate-500 dark:text-muted-foreground'>
+            A newer promotion has written to {to} since; only the newest one can be undone.
+          </p>
+        )}
       </div>
     </SectionCard>
   )
@@ -525,20 +539,23 @@ function Outcome({ p, to }: { p: ConfigPromotion; to: string }) {
     <div className='rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[12px] text-slate-700 dark:border-border dark:bg-muted/40 dark:text-foreground'>
       {t && (
         <p className='m-0'>
-          Written to {to}: {t.inserted} added, {t.updated} changed, {t.deleted} removed.
-          {p.pre_restore_id
-            ? ` Restore point #${p.pre_restore_id} on ${to} holds what was there.`
-            : ''}
+          Written to {to}: {t.inserted} added, {t.updated} changed, {t.deleted} removed. {to}{' '}
+          recorded exactly what it wrote.
         </p>
       )}
-      {procs && (
+      {procs && (procs.written > 0 || procs.failed.length > 0) && (
         <p className='m-0 mt-1'>
-          Procedures: {procs.deployed} deployed
-          {procs.failed > 0
-            ? `, ${procs.failed} failed${procs.names.length ? ` (${procs.names.join(', ')})` : ''}`
-            : ''}
+          Procedures: {procs.written} saved and deployed
+          {procs.failed.length > 0 && (
+            <span className='text-red-700 dark:text-red-400'>
+              {`; did not deploy: ${procs.failed.join(', ')}`}
+            </span>
+          )}
           .
         </p>
+      )}
+      {(p.result?.needs_setup?.length ?? 0) > 0 && (
+        <SetupList items={p.result?.needs_setup ?? []} to={to} done />
       )}
       {u && (
         <p className='m-0 mt-1'>
@@ -633,6 +650,7 @@ function PlanBody({ plan, to }: { plan: PlanView; to: string }) {
           </ul>
         </div>
       )}
+      {(plan.needs_setup?.length ?? 0) > 0 && <SetupList items={plan.needs_setup ?? []} to={to} />}
       {plan.warnings.length > 0 && (
         <ul className='m-0 list-none space-y-1 p-0'>
           {plan.warnings.map((w) => (
@@ -801,6 +819,12 @@ function ApplyBox({ p, from, to }: { p: ConfigPromotion; from: string; to: strin
   const invalidate = useInvalidate(p.app_id)
   const [typed, setTyped] = useState('')
   const [overwrite, setOverwrite] = useState(false)
+  const [outsideReason, setOutsideReason] = useState<string | null>(null)
+  const [checklist, setChecklist] = useState<ChecklistState>({
+    required: false,
+    ready: true,
+    runId: null
+  })
   const plan = p.plan as PlanView
   const needsOverwrite = plan.prod_only.refuse
   const empty = plan.totals.inserts + plan.totals.updates + plan.totals.deletes === 0
@@ -810,7 +834,9 @@ function ApplyBox({ p, from, to }: { p: ConfigPromotion; from: string; to: strin
         .post<{ data: ConfigPromotion }>(`/hub/config-promotions/${p.id}/apply`, {
           plan_hash: p.plan_hash,
           confirm: p.production ? typed.trim() : undefined,
-          overwrite_prod_changes: needsOverwrite && overwrite
+          overwrite_prod_changes: needsOverwrite && overwrite,
+          ...(checklist.runId != null ? { checklist_run_id: checklist.runId } : {}),
+          ...(outsideReason ? { outside_window_reason: outsideReason } : {})
         })
         .then((r) => r.data.data),
     onSuccess: () => {
@@ -824,6 +850,7 @@ function ApplyBox({ p, from, to }: { p: ConfigPromotion; from: string; to: strin
     plan.over_cap ||
     (p.production && typed.trim() !== to) ||
     (needsOverwrite && !overwrite) ||
+    (checklist.required && !checklist.ready) ||
     apply.isPending
   return (
     <ProductionGuard envKey={p.production ? to : null} what='promotion'>
@@ -835,8 +862,8 @@ function ApplyBox({ p, from, to }: { p: ConfigPromotion; from: string; to: strin
         ) : (
           <p className='m-0 text-[12px] text-slate-600 dark:text-muted-foreground'>
             Applying reads {from} again. If either environment changed since this plan, nothing is
-            written and you plan again. Before writing, {to} keeps a restore point, so this can be
-            undone.
+            written and you plan again. {to} records exactly what it writes, so the newest promotion
+            can be undone.
           </p>
         )}
         {needsOverwrite && (
@@ -854,6 +881,13 @@ function ApplyBox({ p, from, to }: { p: ConfigPromotion; from: string; to: strin
             on {to}
           </label>
         )}
+        <EnvWindowGate envId={p.target_environment_id} what='config' onReason={setOutsideReason} />
+        <PreDeployChecklist
+          target={{ kind: 'environment', envId: p.target_environment_id }}
+          action='config_promote'
+          version={`config-promotion-${p.id}`}
+          onState={setChecklist}
+        />
         {p.production && (
           <ConfirmField id={`cfg-confirm-${p.id}`} to={to} value={typed} onChange={setTyped} />
         )}
@@ -871,7 +905,10 @@ function ApplyBox({ p, from, to }: { p: ConfigPromotion; from: string; to: strin
           {apply.isPending ? 'Applying…' : `Apply to ${to}`}
         </ConfirmButton>
         {apply.isError && (
-          <ErrorNotice description={configError(apply.error, 'Could not apply the promotion')} />
+          <>
+            <ErrorNotice description={configError(apply.error, 'Could not apply the promotion')} />
+            <RefusalList error={apply.error} />
+          </>
         )}
       </div>
     </ProductionGuard>
@@ -894,7 +931,7 @@ function UndoBox({ p, to }: { p: ConfigPromotion; to: string }) {
     mutationFn: () =>
       api.post(`/hub/config-promotions/${p.id}/undo`, {
         plan_hash: preview?.plan_hash,
-        confirm: p.production ? typed.trim() : undefined,
+        confirm: typed.trim(),
         overwrite_prod_changes: preview?.plan.prod_only.refuse ? overwrite : false
       }),
     onSuccess: () => {
@@ -909,7 +946,8 @@ function UndoBox({ p, to }: { p: ConfigPromotion; to: string }) {
       <div className='flex flex-wrap items-center gap-3'>
         <h4 className='m-0 text-[13px] font-semibold text-slate-900 dark:text-foreground'>Undo</h4>
         <span className='text-[12px] text-slate-500 dark:text-muted-foreground'>
-          Puts {to} back as it was just before this promotion. A freeze never stops it.
+          Puts back exactly the rows this promotion wrote on {to}. Rows changed since stop it; a
+          freeze or a closed deploy window does not.
         </span>
       </div>
       {!preview ? (
@@ -945,24 +983,18 @@ function UndoBox({ p, to }: { p: ConfigPromotion; to: string }) {
                   Overwrite the changes made on {to} since
                 </label>
               )}
-              {p.production && (
-                <ConfirmField
-                  id={`cfg-undo-confirm-${p.id}`}
-                  to={to}
-                  value={typed}
-                  onChange={setTyped}
-                />
-              )}
+              <ConfirmField
+                id={`cfg-undo-confirm-${p.id}`}
+                to={to}
+                value={typed}
+                onChange={setTyped}
+              />
               <ConfirmButton
                 title={`Undo on ${to}`}
                 confirmLabel={`Put ${to} back?`}
                 className={cn(ghostButton, 'border border-slate-200 dark:border-border')}
                 armedClassName={dangerArmed}
-                disabled={
-                  undo.isPending ||
-                  (p.production && typed.trim() !== to) ||
-                  (needsOverwrite && !overwrite)
-                }
+                disabled={undo.isPending || typed.trim() !== to || (needsOverwrite && !overwrite)}
                 onConfirm={() => undo.mutate()}
               >
                 {undo.isPending ? 'Undoing…' : `Undo on ${to}`}
@@ -975,7 +1007,90 @@ function UndoBox({ p, to }: { p: ConfigPromotion; to: string }) {
         <ErrorNotice description={configError(load.error, 'Could not read what undo would do')} />
       )}
       {undo.isError && (
-        <ErrorNotice description={configError(undo.error, 'Could not undo the promotion')} />
+        <>
+          <ErrorNotice description={configError(undo.error, 'Could not undo the promotion')} />
+          <RefusalList error={undo.error} />
+        </>
+      )}
+    </div>
+  )
+}
+
+function RefusalList({ error }: { error: unknown }) {
+  const items = refusalItems(error)
+  if (!items.length) return null
+  return (
+    <ul className='m-0 list-none space-y-1 rounded-md border border-slate-200 bg-white px-3 py-2 text-[12px] dark:border-border dark:bg-card'>
+      {items.map((i) => (
+        <li key={`${i.table}-${i.key}-${i.reason}`} className='text-slate-700 dark:text-foreground'>
+          <span className='font-medium'>
+            <span className='first-letter:uppercase'>{tableWords(i.table)}</span>{' '}
+            {i.label ?? `#${i.key}`}
+          </span>
+          : {i.reason}
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function SetupList({
+  items,
+  to,
+  done
+}: {
+  items: Array<{ flow: string | null; step: string | null; reason: string }>
+  to: string
+  done?: boolean
+}) {
+  return (
+    <div className='rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200'>
+      <p className='m-0 font-medium'>
+        {done ? 'Switched off on ' : 'Will arrive switched off on '}
+        {to} until set up there
+      </p>
+      <ul className='m-0 mt-1 list-disc space-y-0.5 pl-4'>
+        {items.slice(0, 20).map((n) => (
+          <li key={`${n.flow}-${n.step}-${n.reason}`}>
+            <span className='font-medium'>{[n.flow, n.step].filter(Boolean).join(' → ')}</span>:{' '}
+            {n.reason}
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+function CheckTarget({ p, to }: { p: ConfigPromotion; to: string }) {
+  const invalidate = useInvalidate(p.app_id)
+  const check = useMutation({
+    mutationFn: () =>
+      api
+        .post<{ data: ConfigPromotion }>(`/hub/config-promotions/${p.id}/check`)
+        .then((r) => r.data.data),
+    onSuccess: (q) => {
+      toast.success(`${to} says: ${STATUS_LABEL[q.status].toLowerCase()}`)
+      invalidate()
+    }
+  })
+  return (
+    <div className='flex flex-wrap items-center gap-3'>
+      <button
+        type='button'
+        className={cn(ghostButton, 'border border-slate-200 dark:border-border')}
+        disabled={check.isPending}
+        onClick={() => check.mutate()}
+      >
+        {check.isPending && (
+          <Loader2 className='h-3.5 w-3.5 animate-spin motion-reduce:animate-none' aria-hidden />
+        )}
+        Check the target
+      </button>
+      <span className='text-[12px] text-slate-500 dark:text-muted-foreground'>
+        Reads what {to} itself recorded for this promotion.
+      </span>
+      {check.isError && (
+        <ErrorNotice description={configError(check.error, 'Could not read the target')} />
       )}
     </div>
   )

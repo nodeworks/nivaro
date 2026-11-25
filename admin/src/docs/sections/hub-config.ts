@@ -8,68 +8,59 @@ export const hubConfigDocs: DocSection = {
     { type: 'h1', id: 'hub-config', text: 'Config promotion' },
     {
       type: 'p',
-      text: 'Apps → Config (`/hub/config`) moves an app’s configuration from one of its environments to another — typically development → staging → production — without anyone exporting and uploading files. It is the same engine as Environments → Config and its restore points, driven by the Hub over each app’s hub link (a dedicated app) or its shared deployment’s link. For Hub administrators; every plan, apply, undo and refusal is logged on `nivaro_hub_config_promotions`.'
+      text: 'Apps → Config (`/hub/config`) moves an app’s configuration from one of its environments to another — typically development → staging → production — over each app’s hub link (a dedicated app) or its shared deployment’s link. The TARGET app works out the plan from its own rows and writes it with the config restore engine (field diff, plan-hash binding, one locked transaction). For Hub administrators; every plan, apply, check, undo and refusal is logged on `nivaro_hub_config_promotions`. The Environments → Config download, diff, stored restore points, restore and Changed here work exactly as before: the promotion has its own export filter.'
     },
     { type: 'h2', id: 'hub-config-what', text: 'What can move' },
     {
       type: 'table',
-      head: ['Group', 'Tables', 'Notes'],
+      head: ['Group', 'Matched by', 'Notes'],
       rows: [
         [
-          'Forms and layouts',
-          'collection layouts, field placement, layout templates, linked sections, field groups, field rules',
-          ''
-        ],
-        [
           'Flows',
-          'flows, flow steps',
-          'Step addresses, headers, auth and secret options never travel; each environment keeps its own. A flow new on the target arrives switched off. Flow version history is not copied: the target keeps its own.'
+          'flow name; steps by flow + step key',
+          'Step addresses, headers, auth and every nested secret never travel; a matched step keeps this environment’s own. A webhook trigger’s inbound auth (auth type, secret, timestamp rule) is always the target’s. A flow new on the target arrives switched off (a new webhook flow with bearer auth and a fresh secret); a flow that gains a step needing this environment’s address lands switched off too, named on the plan and in the notice. Flow version history stays per environment.'
         ],
         [
           'Payload templates',
-          'templates, published versions, drafts',
-          'Body secrets live in the external API, which never travels; a template names a secret only by its placeholder.'
+          'key',
+          'The external API is matched by name. Body secrets are placeholders; their values live in the external API, which never travels. History stays per environment.'
         ],
         [
           'Managed procedures',
-          'managed procedure definitions + versions',
-          'Each changed procedure is then deployed into the target’s database through its one writer.'
-        ],
-        [
-          'Pipelines',
-          'workflow templates, steps, moves, bindings, owner dimensions, owner groups, members, teams',
-          'Owner-group members come over only for people active on the target.'
+          'name',
+          'Saved and deployed through the managed-procedure writer on the target (a new version there, its own deploy record). Import-owned names are refused.'
         ],
         [
           'Roles and policies',
-          'roles, policies',
+          'role name; policies by role + collection + action',
           'People and their role assignments never travel.'
         ],
         [
           'Settings (no secrets)',
-          'nivaro_settings',
-          'Only the product settings that are the same everywhere; mail, SMS, push, Teams, AI keys, storage, sign-in, maintenance and job switches stay as the target has them.'
+          'the one settings row',
+          'Only product settings that are the same everywhere and name nothing by id. Mail, keys, storage, sign-in, switches and role choices stay as the target has them.'
         ]
       ]
     },
     {
-      type: 'note',
-      text: 'Never carried: any credential (dropped by name and by list at export, again on arrival), every column the TARGET’s environment-refresh keep registry keeps (core and extension entries: endpoints, switches, sign-in, secrets), tables it keeps whole, people, User Scopes and the schema registry (collections, fields, relations describe database columns a config copy cannot create — they move with a release or a blueprint). A row new on the target in a table whose columns the target keeps arrives switched off when those columns are switches; otherwise it is held back and named on the plan.'
+      type: 'warn',
+      text: 'Rows are matched by name or key, NEVER by id: environments the Hub created have their own databases, so the same id is routinely a different thing. A row the target has under the same name is updated in place; a row it does not have is inserted with a new id. Every reference (a flow step’s external API, flow or person, a template’s external API, a policy’s role) is rewritten to the target’s id of the same thing. The plan refuses — nothing is written — with `ROW_UNMATCHED` (no name, or two rows sharing one) or `REF_UNMAPPED` (a reference the target has nothing of that name for, or a literal id in step options), naming each row.'
     },
-    { type: 'h2', id: 'hub-config-flow', text: 'Plan, apply, undo' },
+    {
+      type: 'note',
+      text: 'Not offered yet: forms / layouts and pipelines (their rows reference roles, steps, people, widgets and templates by id inside JSON, and mapping all of those by name is not built), version-history tables, the schema registry, people and User Scopes. Both environments need Nivaro 0.3.215 or later and a SQL Server database.'
+    },
+    { type: 'h2', id: 'hub-config-flow', text: 'Plan, apply, check, undo' },
     {
       type: 'ul',
       items: [
-        'Plan: pick From, To and the groups (optionally “Also remove rows the source no longer has”). The Hub reads a snapshot from the source app and the TARGET app works out the plan against its own rows: a field diff per row (now → after, values capped and secrets masked), what it keeps, held rows, and the changes made on it that were not promoted (Environments → Changed here) that the write would overwrite. A newer plan for the same target replaces the older one.',
-        'Apply: bound to the plan hash and refused after 24 hours. On production (the Hub’s one production rule) type the environment key. Refused while a move of the target is open (`MOVE_OPEN`), in a freeze window (`FROZEN`), while anything else holds the environment (`CONFIG_PROMOTION_RUNNING` and the other lock holders), and — when the target refuses promotions over its own changes — until they are marked as intended there or you tick Overwrite. The Hub reads the source again; if either side changed since the plan, nothing is written (`STALE`) and you plan again.',
-        'The target writes everything in one locked transaction and first stores a restore point of exactly the rows it locks. The promoted tables then join its “Changed here” baseline; other tables keep theirs.',
-        'Undo: “See what undo would change” previews restoring that restore point (its own hash), then Undo puts the target back as it was just before the promotion. A freeze never stops an undo (it is a true rollback); a move still does. Production needs the typed key.',
-        'Owners and admins of the app are told when a promotion lands, fails or needs a new plan.'
+        'Plan: pick From, To and the groups (optionally “Also remove rows the source no longer has”). The plan shows each row’s field diff (now → after; never a step’s outbound part, inbound auth or a secret), what the target keeps, held rows, flows that will arrive switched off, and the changes made on the target that were not promoted (Environments → Changed here). A newer plan for the same target replaces the older one.',
+        'Apply: bound to the plan hash and refused after 24 hours. Typed environment key on production. Under the environment lock (holder `config`, renewed every minute) the Hub checks again: an open move (`MOVE_OPEN`), freezes and deploy windows (action `config_promote`; an administrator’s “Start outside the window” skips the windows only), the production pre-deploy checklist (one per promotion). The source is read again; if either side changed, nothing is written (`STALE`).',
+        'The target writes everything in one transaction and, inside it, records the run (`nivaro_hub_config_applied`: the rows it wrote, their values before and hashes after). The apply is idempotent by the promotion’s run key. If the Hub loses the answer, the promotion is `interrupted` — never “nothing written” — until “Check the target” reads what the target recorded.',
+        'Undo: only the newest promotion that wrote to an environment. It puts back exactly the rows that promotion wrote, from their values before; rows created since are never touched, and any written row that changed since refuses the undo (`STALE`). Freezes and deploy windows never stop it (reverting bad config during an incident is wanted); an open move does. An administrator on their own session, always with the typed environment key.',
+        'Changed here: the tables a promotion (or its undo) wrote join the target’s promotion baseline as a record of their own kind, never listed with or restorable as a restore point.',
+        'App owners and administrators are told when a promotion lands (with procedures that failed and flows switched off), is refused, or loses its answer.'
       ]
-    },
-    {
-      type: 'warn',
-      text: 'Rows are matched by id, as in Environments → Config: environments that were not set up from one another may give the same id to different things. The plan warns when a change would rename a row — check those rows before applying. Both environments need Nivaro 0.3.215 or later and a SQL Server database; on a shared deployment the app’s own database is used.'
     },
     { type: 'h2', id: 'hub-config-api', text: 'API' },
     {
@@ -85,18 +76,22 @@ export const hubConfigDocs: DocSection = {
         ['`GET /api/hub/config-promotions/:id`', 'One promotion'],
         [
           '`POST /api/hub/config-promotions/:id/apply`',
-          '`{plan_hash, confirm?, overwrite_prod_changes?}`'
+          '`{plan_hash, confirm?, overwrite_prod_changes?, checklist_run_id?, outside_window_reason?}`'
+        ],
+        [
+          '`POST /api/hub/config-promotions/:id/check`',
+          'Ask the target what it recorded (a lost answer)'
         ],
         ['`POST /api/hub/config-promotions/:id/undo/plan`', 'The undo preview and its hash'],
         [
           '`POST /api/hub/config-promotions/:id/undo`',
-          '`{plan_hash, confirm?, overwrite_prod_changes?}`'
+          '`{plan_hash, confirm, overwrite_prod_changes?}` — administrator, own session'
         ]
       ]
     },
     {
       type: 'p',
-      text: 'App side (bearer only, checked on every request): `POST /api/hub-link/config/{snapshot,plan,apply,undo}` on a dedicated app (HUB_TOKEN), `POST /api/hub-deployment/config/apps/:id/{snapshot,plan,apply,undo}` on a Hub shared deployment. An undo restores only a restore point a Hub promotion stored there.'
+      text: 'App side (bearer only, checked on every request): `POST /api/hub-link/config/{snapshot,plan,apply,status,undo}` on a dedicated app (HUB_TOKEN), `POST /api/hub-deployment/config/apps/:id/{snapshot,plan,apply,status,undo}` on a Hub shared deployment (active apps only).'
     }
   ]
 }

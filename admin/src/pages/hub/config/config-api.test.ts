@@ -4,7 +4,9 @@ vi.mock('@/lib/api', () => ({
   api: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), put: vi.fn(), delete: vi.fn() }
 }))
 
-const { CONFIG_COPY_KEYS, configError, shownValue, tableWords } = await import('./config-api')
+const { CONFIG_COPY_KEYS, configError, refusalItems, shownValue, tableWords } = await import(
+  './config-api'
+)
 
 const refusal = (code: string, message: string) => ({
   isAxiosError: true,
@@ -24,7 +26,14 @@ describe('config promotion copy', () => {
       'CONFIG_PROMOTION_RUNNING',
       'LINK_MISSING',
       'NOT_SUPPORTED_ON_DATABASE',
-      'NOT_UNDOABLE'
+      'NOT_UNDOABLE',
+      'ROW_UNMATCHED',
+      'REF_UNMAPPED',
+      'NOT_NEWEST',
+      'INTERRUPTED',
+      'UNDO_ADMIN_SESSION_ONLY',
+      'CHECKLIST_REQUIRED',
+      'OUTSIDE_WINDOW'
     ])
       expect(CONFIG_COPY_KEYS.has(c), c).toBe(true)
   })
@@ -51,5 +60,30 @@ describe('config promotion copy', () => {
     expect(shownValue(false)).toBe('false')
     expect(shownValue({ a: 1 })).toBe('{"a":1}')
     expect(tableWords('nivaro_payload_template_versions')).toBe('payload template versions')
+  })
+})
+
+describe('refusal rows', () => {
+  it('lists the rows a plan refusal names, never raw text', () => {
+    const err = {
+      response: {
+        data: {
+          code: 'REF_UNMAPPED',
+          items: [
+            {
+              table: 'nivaro_flow_operations',
+              key: 'a',
+              label: 'Send',
+              reason: 'points at “Gone”'
+            },
+            { table: 'nivaro_roles', key: 'b', label: null, reason: 'Error: SELECT * FROM x' }
+          ]
+        }
+      }
+    }
+    expect(refusalItems(err)).toEqual([
+      { table: 'nivaro_flow_operations', key: 'a', label: 'Send', reason: 'points at “Gone”' }
+    ])
+    expect(refusalItems(new Error('x'))).toEqual([])
   })
 })
