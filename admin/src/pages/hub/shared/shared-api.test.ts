@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   extensionDrift,
+  flowScriptsLive,
   flowScriptsSetting,
   holdsLatest,
   reapplyWords,
@@ -9,6 +10,31 @@ import {
 } from './shared-api'
 
 describe('shared deployment helpers', () => {
+  it('reads the live script switch: on, off, mixed, unknown before 0.3.215 or unreachable', () => {
+    const ok = (extra: Record<string, unknown>) =>
+      ({
+        state: 'ok',
+        checked_at: 'x',
+        version: '0.3.215',
+        instance: 'i',
+        registry: { count: 0, loaded_at: null, etag: null, stale: false, dropped: [] },
+        apps: [],
+        extensions: [],
+        oidc: null,
+        process: {},
+        ...extra
+      }) as never
+    expect(flowScriptsLive(ok({ flow_scripts: true }))).toBe('on')
+    expect(flowScriptsLive(ok({ flow_scripts: false }))).toBe('off')
+    expect(flowScriptsLive(ok({ flow_scripts: false, flow_scripts_mixed: true }))).toBe('mixed')
+    // A reachable deployment before 0.3.215 does not report it: unknown, never "off" (review L4).
+    expect(flowScriptsLive(ok({}))).toBe('unknown')
+    expect(
+      flowScriptsLive({ state: 'unreachable', code: 'X', message: 'm', checked_at: 'x' })
+    ).toBe('unknown')
+    expect(flowScriptsLive(undefined)).toBe('unknown')
+  })
+
   it('turns the flow script switch on and off in settings.env, keeping every other setting', () => {
     const base = { size: 'small', env: { CREATE_SCOPE_GUARD: 'on' } }
     expect(flowScriptsSetting(base)).toBe(false)

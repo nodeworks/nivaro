@@ -225,6 +225,40 @@ describe('computeSharedReadiness', () => {
     })
   })
 
+  it('names script flows that use binary types a shared deployment lacks (counts only, review L5)', async () => {
+    await db('nivaro_flows').insert([
+      { id: 'a', name: 'a', status: 'active', trigger: 'manual' },
+      { id: 'b', name: 'b', status: 'active', trigger: 'manual' }
+    ])
+    await db('nivaro_flow_operations').insert([
+      { id: 'o1', flow: 'a', type: 'exec-script', options: '{"code":"new Uint8Array(4)"}' },
+      { id: 'o2', flow: 'b', type: 'exec-script', options: '{"code":"data.x = 1"}' }
+    ])
+    expect(codeOf(await computeSharedReadiness(), 'EXEC_SCRIPT_FLOWS')?.detail).toBe(
+      '2 active flows run a script step; 1 of them uses binary types (ArrayBuffer, typed arrays, TextEncoder) a shared deployment does not offer'
+    )
+  })
+
+  it('a script-flow check that cannot run is still reported (fail closed, review M1)', async () => {
+    const proto = Object.getPrototypeOf(db.schema) as { hasTable: (t: string) => Promise<boolean> }
+    const real = proto.hasTable
+    // Only the script-flow check's table read fails (a busy database at that moment).
+    const spy = vi.spyOn(proto, 'hasTable').mockImplementation(function (this: unknown, t: string) {
+      if (t === 'nivaro_flow_operations') return Promise.reject(new Error('db busy'))
+      return real.call(this, t)
+    })
+    try {
+      const r = await computeSharedReadiness()
+      expect(codeOf(r, 'EXEC_SCRIPT_FLOWS')).toEqual({
+        code: 'EXEC_SCRIPT_FLOWS',
+        level: 'warning',
+        detail: 'Could not be checked.'
+      })
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
   it('DB_CLIENT=sqlite → blocker SQLITE and no database identity', async () => {
     h.config.DB_CLIENT = 'sqlite'
     const r = await computeSharedReadiness()

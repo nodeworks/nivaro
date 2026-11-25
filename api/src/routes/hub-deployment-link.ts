@@ -5,7 +5,7 @@ import { failedAuthLimiter } from '../lib/auth-fail-limiter.js'
 import { hubSharedConfig, tenantSource } from '../services/deployment-mode.js'
 import { flowScriptsOnShared } from '../services/flow-script-limits.js'
 import { seedFirstAdmin } from '../services/hub-link/first-admin.js'
-import { INSTANCE_ID } from '../services/instance-roster.js'
+import { INSTANCE_ID, listInstances } from '../services/instance-roster.js'
 import { poolCounters } from '../services/pool-attribution.js'
 import { bearerMatches } from '../services/render-peer.js'
 import { appSchemaStatus } from '../services/tenancy/app-migrations.js'
@@ -132,6 +132,15 @@ export async function hubDeploymentLinkRoutes(app: FastifyInstance): Promise<voi
     } catch {
       extensions = []
     }
+    // Script steps count as on only when every process that may run flows says so (review L7):
+    // a worker left off would refuse the steps the plan let through. Roster entries before
+    // 0.3.215 carry no flag and count as off; realtime processes run no flows.
+    const ownScripts = flowScriptsOnShared()
+    const peers = (await listInstances()).filter(
+      (r) => r.id !== INSTANCE_ID && r.role !== 'realtime'
+    )
+    const scriptFlags = [ownScripts, ...peers.map((r) => r.flow_scripts === true)]
+    const scriptsOn = scriptFlags.every(Boolean)
     const body: DeploymentStatus = {
       version: NIVARO_VERSION,
       instance: INSTANCE_ID,
@@ -145,7 +154,8 @@ export async function hubDeploymentLinkRoutes(app: FastifyInstance): Promise<voi
       apps: tenants.map((t) => ({ id: t.id, schema: appSchemaFor(t.id) })),
       extensions,
       oidc: oidcIdentity(config.OIDC_ISSUER),
-      flow_scripts: flowScriptsOnShared(),
+      flow_scripts: scriptsOn,
+      ...(!scriptsOn && scriptFlags.some(Boolean) ? { flow_scripts_mixed: true } : {}),
       process: {
         uptime_s: Math.round(process.uptime()),
         memory_mb: Math.round(process.memoryUsage().rss / 1048576),

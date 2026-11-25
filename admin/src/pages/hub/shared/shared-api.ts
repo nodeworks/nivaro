@@ -114,6 +114,8 @@ export type SharedLinkStatus =
       process: Record<string, unknown>
       /** Runs flow script steps (FLOW_SCRIPTS_ON_SHARED); absent before 0.3.215 (= off). */
       flow_scripts?: boolean
+      /** Some of its processes have script steps on and some off (flow_scripts is then false). */
+      flow_scripts_mixed?: boolean
     }
   | { state: 'unreachable'; code: string; message: string; checked_at: string }
 
@@ -158,7 +160,17 @@ export interface SharedInput {
 export const FLOW_SCRIPTS_KEY = 'FLOW_SCRIPTS_ON_SHARED'
 
 export const FLOW_SCRIPTS_RISK =
-  'Scripts run without network access enforced by the operating system; turn on only when every app on this deployment is trusted.'
+  'The sandbox blocks network access in JavaScript; the operating system does not stop a script that breaks out of it from reaching the network or other apps’ secrets. Turn on only when every app on this deployment is trusted.'
+
+/** What the deployment reports now: on, off, mixed (some processes on), or unknown (no answer,
+ *  or a version before 0.3.215 that does not report it). */
+export function flowScriptsLive(
+  link: SharedLinkStatus | undefined
+): 'on' | 'off' | 'mixed' | 'unknown' {
+  if (link?.state !== 'ok' || typeof link.flow_scripts !== 'boolean') return 'unknown'
+  if (link.flow_scripts) return 'on'
+  return link.flow_scripts_mixed ? 'mixed' : 'off'
+}
 
 const envOf = (settings: Record<string, unknown>): Record<string, unknown> => {
   const env = settings?.env

@@ -964,7 +964,7 @@ export const MOVE_WARNING_COPY: Record<string, Copy> = {
   },
   EXEC_SCRIPT_FLOWS: {
     title: 'Script steps run in a sandbox of their own on the shared deployment',
-    hint: 'Each step gets its own process with the deployment’s limits (memory, at most 30 s, a few at once per app) and no network. A script that needs more memory or time fails there: check the flows’ recent runs after the move.'
+    hint: 'Each step gets its own process with the deployment’s limits: no network, no ArrayBuffer, typed arrays or WebAssembly, a heap limit (64 MB unless set higher), at most 30 s, a few steps at once per app. A script that needs any of these fails there: check the flows’ recent runs after the move.'
   },
   HUDDLE_TURN: {
     title: 'Huddles use the deployment’s media servers, not the app’s own',

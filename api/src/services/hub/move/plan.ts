@@ -461,7 +461,7 @@ const OLDER_TARGET_BLOCKERS: readonly SharedReadinessCode[] = ['STAGED_IMPORTS',
 /**
  * Hub gap `exec`: from this version a shared deployment can run flow script steps per app, each in
  * a child process of its own (services/flow-script-isolated.ts) — but only when its operator turned
- * them on (FLOW_SCRIPTS_ON_SHARED, off by default: Node 22 cannot cut the network at the OS level).
+ * them on (FLOW_SCRIPTS_ON_SHARED, off by default: the sandbox blocks the network in JavaScript, not the operating system).
  * An app before it reports EXEC_SCRIPT_FLOWS as a blocker, one from it as a warning; either way it
  * blocks unless the target runs this version AND reports script steps on (its link status
  * `flow_scripts`), and is a warning (the script limits) when both hold.
@@ -533,7 +533,7 @@ function readinessTitle(code: string): string {
 
 /** EXEC_SCRIPT_FLOWS as a warning (a target from EXEC_SCRIPT_SINCE): what the steps get there. */
 const EXEC_SCRIPT_WARNING_TITLE =
-  "Script steps run in a sandbox process of their own on a shared deployment, within the deployment's script limits (memory, time, steps at once) and with no network"
+  'Script steps run in a sandbox process of their own on a shared deployment, and differ there from a dedicated app: no network, no ArrayBuffer, typed arrays, DataView or WebAssembly, a heap limit (64 MB unless the deployment sets more; the data is read again inside the sandbox, so a step on large data needs more), at most 30 s per step and a few steps at once per app. A script that relies on any of these fails after the move'
 
 function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warning[] {
   const out: Warning[] = []

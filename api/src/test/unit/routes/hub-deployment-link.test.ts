@@ -26,6 +26,11 @@ vi.mock('../../../routes/preflight.js', () => ({
 }))
 vi.mock('../../../services/readiness.js', () => ({ readReadiness: async () => ({ score: 88 }) }))
 vi.mock('../../../services/pool-attribution.js', () => ({ poolCounters: () => null }))
+const roster = vi.hoisted(() => ({ peers: [] as Array<Record<string, unknown>> }))
+vi.mock('../../../services/instance-roster.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../services/instance-roster.js')>()),
+  listInstances: async () => roster.peers
+}))
 vi.mock('../../../services/security.js', () => ({
   maintenanceState: async () => ({ on: state.maintenance })
 }))
@@ -218,7 +223,33 @@ describe('GET /status', () => {
       process.env.FLOW_SCRIPTS_ON_SHARED = 'on'
       const on = await a.inject({ method: 'GET', url: '/api/hub-deployment/status', headers: auth })
       expect(on.json().flow_scripts).toBe(true)
+      expect(on.json().flow_scripts_mixed).toBeUndefined()
+      // Every process that may run flows must agree (review L7): a worker left off, or one
+      // before 0.3.215 (no flag), makes it off and "mixed"; a realtime process does not count.
+      roster.peers = [
+        { id: 'other-web', role: 'web', flow_scripts: true },
+        { id: 'rt', role: 'realtime' }
+      ]
+      const all = await a.inject({
+        method: 'GET',
+        url: '/api/hub-deployment/status',
+        headers: auth
+      })
+      expect(all.json().flow_scripts).toBe(true)
+      for (const worker of [
+        { id: 'w1', role: 'worker', flow_scripts: false },
+        { id: 'w1', role: 'worker' }
+      ]) {
+        roster.peers = [{ id: 'other-web', role: 'web', flow_scripts: true }, worker]
+        const mixed = await a.inject({
+          method: 'GET',
+          url: '/api/hub-deployment/status',
+          headers: auth
+        })
+        expect(mixed.json()).toMatchObject({ flow_scripts: false, flow_scripts_mixed: true })
+      }
     } finally {
+      roster.peers = []
       if (before === undefined) delete process.env.FLOW_SCRIPTS_ON_SHARED
       else process.env.FLOW_SCRIPTS_ON_SHARED = before
     }
