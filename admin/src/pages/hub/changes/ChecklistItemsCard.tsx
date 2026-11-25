@@ -11,7 +11,15 @@ import { UserCombobox } from '@/components/user-combobox'
 import { api, type User } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { hubToast } from '../hub-api'
-import { dangerArmed, dangerGhost, Field, ghostButton, SectionCard } from '../hub-parts'
+import {
+  dangerArmed,
+  dangerGhost,
+  Field,
+  ghostButton,
+  SectionCard,
+  segmentButton,
+  segmentGroup
+} from '../hub-parts'
 import {
   archiveItem,
   type ChangesOverview,
@@ -167,7 +175,7 @@ function ItemForm({
           <legend className='mb-1.5 text-[12px] font-medium text-slate-700 dark:text-foreground'>
             Needed for
           </legend>
-          <div className='flex flex-wrap gap-1.5'>
+          <div className={segmentGroup}>
             {(Object.keys(ACTION_WORDS) as ChecklistAction[]).map((a) => {
               const on = actions.includes(a)
               return (
@@ -176,12 +184,7 @@ function ItemForm({
                   type='button'
                   aria-pressed={on}
                   onClick={() => setActions(on ? actions.filter((x) => x !== a) : [...actions, a])}
-                  className={cn(
-                    'h-8 rounded-md border px-2.5 text-[12px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50',
-                    on
-                      ? 'border-nvr-cyan/60 bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
-                      : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50 dark:border-border dark:bg-background dark:text-slate-400 dark:hover:bg-muted'
-                  )}
+                  className={segmentButton(on)}
                 >
                   {ACTION_WORDS[a]}
                 </button>

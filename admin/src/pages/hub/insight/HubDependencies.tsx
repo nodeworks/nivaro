@@ -4,6 +4,7 @@ import { Search, X } from 'lucide-react'
 import { useMemo } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { HubEnvTag } from '@/components/hub-brand/HubBits'
+import { HubToolbar } from '@/components/hub-page'
 import { Input } from '@/components/ui/input'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -99,25 +100,29 @@ export default function HubDependencies() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col bg-slate-50 dark:bg-background'>
-      <div className='shrink-0 border-b border-slate-200 bg-white px-4 py-3 dark:border-border dark:bg-card'>
-        <div className='flex flex-wrap items-center gap-x-3 gap-y-1'>
-          <p className='m-0 text-[13px] font-medium text-slate-900 dark:text-foreground'>
+      <HubToolbar
+        description={
+          <>
             {deps.data
-              ? `${deps.data.nodes.filter((n) => n.kind !== 'app').length} dependencies across ${deps.data.nodes.filter((n) => n.kind === 'app').length} apps`
-              : 'Dependencies'}
-          </p>
-          {unread > 0 && (
-            <p className='m-0 text-[12px] text-amber-800 dark:text-amber-300'>
-              {unread} environment{unread === 1 ? '' : 's'} could not be read last time
-            </p>
-          )}
+              ? `${deps.data.nodes.filter((n) => n.kind !== 'app').length} dependencies across ${deps.data.nodes.filter((n) => n.kind === 'app').length} apps.`
+              : 'What each app depends on, and what a change would touch.'}
+            {unread > 0 && (
+              <span className='font-medium text-slate-900 dark:text-foreground'>
+                {' '}
+                {unread} environment{unread === 1 ? '' : 's'} could not be read last time.
+              </span>
+            )}
+          </>
+        }
+        actions={
           <Link
             to='/docs?section=hub-insight'
-            className='ml-auto px-2 text-[12px] text-slate-500 hover:underline dark:text-muted-foreground'
+            className='px-2 text-[12px] text-slate-500 hover:underline dark:text-muted-foreground'
           >
             How this works
           </Link>
-        </div>
+        }
+      >
         <div className='mt-2 flex flex-wrap items-center gap-2'>
           <div className='relative w-full sm:w-[240px]'>
             <Search
@@ -143,7 +148,7 @@ export default function HubDependencies() {
             ]}
           />
         </div>
-      </div>
+      </HubToolbar>
 
       {deps.isPending ? (
         <div className='space-y-2 p-4'>
@@ -161,7 +166,7 @@ export default function HubDependencies() {
         </div>
       ) : (
         <div className='flex flex-1 min-h-0 flex-col overflow-y-auto lg:flex-row lg:overflow-hidden'>
-          <div className='min-w-0 flex-1 p-4 lg:overflow-y-auto'>
+          <div className='min-w-0 flex-1 p-4 sm:p-6 lg:overflow-y-auto'>
             {view.deps.length === 0 ? (
               <div className='rounded-lg border border-dashed border-slate-300 bg-white px-6 py-10 text-center dark:border-border dark:bg-card'>
                 <p className='m-0 text-[13px] font-medium text-slate-900 dark:text-foreground'>

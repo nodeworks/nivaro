@@ -1,6 +1,6 @@
 import { ConfirmButton, QueryErrorState } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, ChevronRight, Play, Plus, ShieldCheck, Trash2, X } from 'lucide-react'
+import { Check, ChevronLeft, ChevronRight, Play, Plus, ShieldCheck, Trash2, X } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
@@ -13,7 +13,18 @@ import { Switch } from '@/components/ui/switch'
 import { useAuth } from '@/lib/auth'
 import { cn, formatDateTime, formatRelative } from '@/lib/utils'
 import { hubToast } from '../hub-api'
-import { dangerArmed, dangerGhost, Field, ghostButton, SectionCard } from '../hub-parts'
+import {
+  type ChipTone,
+  countLabel,
+  dangerArmed,
+  dangerGhost,
+  Field,
+  ghostButton,
+  ListPaneHeader,
+  listPaneClass,
+  SectionCard,
+  ToneChip
+} from '../hub-parts'
 import {
   type CheckKind,
   deleteSuite,
@@ -38,17 +49,12 @@ import {
  * administrators change or run a suite. `?env=<id>&run=<id>` opens one (the failure notice does).
  */
 
-const RUN_TONE: Record<SmokeRun['status'], string> = {
-  passed:
-    'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300',
-  failed:
-    'border-red-200 bg-red-50 text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300',
-  queued:
-    'border-slate-200 bg-slate-50 text-slate-700 dark:border-border dark:bg-muted dark:text-slate-300',
-  running:
-    'border-sky-200 bg-sky-50 text-sky-800 dark:border-sky-900 dark:bg-sky-950/40 dark:text-sky-300',
-  unverified:
-    'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300'
+const RUN_TONE: Record<SmokeRun['status'], ChipTone> = {
+  passed: 'ok',
+  failed: 'down',
+  queued: 'neutral',
+  running: 'live',
+  unverified: 'warn'
 }
 const RUN_WORDS: Record<SmokeRun['status'], string> = {
   passed: 'Passed',
@@ -60,19 +66,12 @@ const RUN_WORDS: Record<SmokeRun['status'], string> = {
 
 function RunChip({ status }: { status: SmokeRun['status'] }) {
   return (
-    <span
-      className={cn(
-        'inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium',
-        RUN_TONE[status]
-      )}
+    <ToneChip
+      tone={RUN_TONE[status]}
+      icon={status === 'passed' ? Check : status === 'failed' ? X : undefined}
     >
-      {status === 'passed' ? (
-        <Check className='h-3 w-3' aria-hidden />
-      ) : status === 'failed' ? (
-        <X className='h-3 w-3' aria-hidden />
-      ) : null}
       {RUN_WORDS[status]}
-    </span>
+    </ToneChip>
   )
 }
 
@@ -87,6 +86,8 @@ export default function HubSmoke() {
   })
   const envParam = Number(params.get('env')) || null
   const selected = envParam ?? q.data?.environments[0]?.id ?? null
+  // Phones show the list or one environment; wider screens both (the first is open).
+  const detailOpen = envParam != null
   const select = (id: number) => {
     const next = new URLSearchParams(params)
     next.set('env', String(id))
@@ -94,8 +95,11 @@ export default function HubSmoke() {
     setParams(next, { replace: true })
   }
   return (
-    <div className='flex min-h-0 flex-1 flex-col md:flex-row'>
-      <aside className='max-h-[40vh] shrink-0 overflow-y-auto border-b border-slate-200 bg-white md:max-h-none md:w-[272px] md:border-b-0 md:border-r dark:border-border dark:bg-card'>
+    <div className='flex min-h-0 flex-1 overflow-hidden'>
+      <aside className={cn(listPaneClass, detailOpen ? 'hidden md:flex' : 'flex')}>
+        <ListPaneHeader
+          label={countLabel(q.data?.environments.length, 'environment', 'environments')}
+        />
         {q.isPending ? (
           <div className='space-y-2 p-3'>
             <Skeleton className='h-8 w-full' />
@@ -114,20 +118,43 @@ export default function HubSmoke() {
           <EnvList data={q.data} selected={selected} onSelect={select} />
         )}
       </aside>
-      <div className='min-h-0 flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
-        {q.data && selected != null ? (
-          <EnvDetail
-            key={selected}
-            envId={selected}
-            data={q.data}
-            isAdmin={isAdmin}
-            openRun={Number(params.get('run')) || null}
-          />
-        ) : q.data ? (
-          <p className='m-0 text-[13px] text-slate-500 dark:text-muted-foreground'>
-            No environments yet. Add an app and its environments on the Apps tab first.
-          </p>
-        ) : null}
+      <div
+        className={cn(
+          'min-h-0 min-w-0 flex-1 overflow-y-auto bg-slate-50 dark:bg-background',
+          detailOpen ? 'block' : 'hidden md:block'
+        )}
+      >
+        {detailOpen && (
+          <div className='border-b border-slate-200 bg-white px-2 py-1.5 md:hidden dark:border-border dark:bg-card'>
+            <button
+              type='button'
+              className={ghostButton}
+              onClick={() => {
+                const next = new URLSearchParams(params)
+                next.delete('env')
+                next.delete('run')
+                setParams(next, { replace: true })
+              }}
+            >
+              <ChevronLeft className='h-3.5 w-3.5' aria-hidden /> All environments
+            </button>
+          </div>
+        )}
+        <div className='p-4 sm:p-6'>
+          {q.data && selected != null ? (
+            <EnvDetail
+              key={selected}
+              envId={selected}
+              data={q.data}
+              isAdmin={isAdmin}
+              openRun={Number(params.get('run')) || null}
+            />
+          ) : q.data ? (
+            <p className='m-0 text-[13px] text-slate-500 dark:text-muted-foreground'>
+              No environments yet. Add an app and its environments on the Apps tab first.
+            </p>
+          ) : null}
+        </div>
       </div>
     </div>
   )
@@ -145,7 +172,7 @@ function EnvList({
   const last = new Map(data.last_runs.map((r) => [r.environment_id, r]))
   const suites = new Map(data.suites.map((s) => [s.environment_id, s]))
   return (
-    <nav aria-label='Environments' className='py-2'>
+    <nav aria-label='Environments' className='pb-2'>
       {data.apps.map((a) => {
         const envs = data.environments.filter((e) => e.app_id === a.id)
         if (!envs.length) return null
@@ -175,7 +202,7 @@ function EnvList({
                       </span>
                       <HubEnvTag envKey={e.key} />
                       {!s ? (
-                        <span className='text-[11px] text-slate-400 dark:text-muted-foreground'>
+                        <span className='text-[11px] text-slate-500 dark:text-muted-foreground'>
                           No checks
                         </span>
                       ) : !s.enabled ? (
@@ -661,7 +688,7 @@ function SuiteCard({
                   armedClassName={dangerArmed}
                   onConfirm={() => remove.mutate()}
                   disabled={remove.isPending}
-                  confirmLabel='Remove the checks'
+                  confirmLabel='Remove the checks?'
                 >
                   Remove all
                 </ConfirmButton>

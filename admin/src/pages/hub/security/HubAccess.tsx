@@ -13,6 +13,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { HubEnvTag, ProductionGuard } from '@/components/hub-brand/HubBits'
+import { HubToolbar } from '@/components/hub-page'
 import { Checkbox } from '@/components/ui/checkbox'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -72,18 +73,11 @@ export default function HubAccess() {
     })
   return (
     <section aria-labelledby='hub-access-title' className='flex flex-1 min-h-0 flex-col'>
-      <header className='flex shrink-0 flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-4 py-2.5 dark:border-border dark:bg-card'>
-        <h2
-          id='hub-access-title'
-          className='m-0 min-w-0 flex-1 truncate text-[13px] font-semibold text-slate-900 dark:text-foreground'
-        >
-          Access
-        </h2>
-        <span className='hidden text-[11px] text-slate-500 sm:inline dark:text-muted-foreground'>
-          Temporary admin access and access reviews
-        </span>
-      </header>
-      <div className='flex-1 overflow-y-auto bg-slate-50 p-4 dark:bg-background'>
+      <h2 id='hub-access-title' className='sr-only'>
+        Access
+      </h2>
+      <HubToolbar description='Temporary admin access (break-glass) that ends by itself, and the access reviews every app is due for. Removed people are suspended in the app, never deleted.' />
+      <div className='flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
         {reviewId ? (
           <ReviewView id={reviewId} onBack={() => open(null)} />
         ) : (
@@ -758,7 +752,7 @@ function ReviewView({ id, onBack }: { id: number; onBack: () => void }) {
           </p>
         ))}
 
-      <div className='flex flex-wrap items-center gap-2'>
+      <div className='sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b border-slate-200 bg-slate-50 py-2 dark:border-border dark:bg-background'>
         {isOpen && pendingIds.length > 0 && (
           <button
             type='button'
@@ -898,7 +892,7 @@ function ItemRow({
           <span className='truncate text-[13px] font-medium text-slate-900 dark:text-foreground'>
             {item.name ?? item.email ?? item.app_user_id}
           </span>
-          {item.admin && <Chip tone='warn'>Admin</Chip>}
+          {item.admin && <Chip tone='neutral'>Admin</Chip>}
           {item.account_kind && <Chip tone='neutral'>{item.account_kind}</Chip>}
           {item.break_glass && <Chip tone='bad'>Break-glass</Chip>}
           {item.account_status && item.account_status !== 'active' && (

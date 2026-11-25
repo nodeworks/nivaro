@@ -4,7 +4,14 @@ import { Navigate, useLocation, useNavigate } from 'react-router'
 import { ScrollTabStrip } from '@/components/tab-strip'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useHubProductFlag } from '@/lib/hub-product'
-import { type HubDef, hubForPath, hubTabPath } from '@/lib/hubs'
+import {
+  type HubDef,
+  type HubTabDef,
+  type HubTabGroup,
+  hubForPath,
+  hubTabGroup,
+  hubTabPath
+} from '@/lib/hubs'
 import { cn } from '@/lib/utils'
 
 /**
@@ -50,6 +57,13 @@ export function HubPage({
   const title = tabHeader ? active.label : hub.title
   const hint = tabHeader ? active.hint : hub.hint
   const panelId = `hub-panel${hub.base.replace(/\//g, '-')}`
+  // With groups the open tab is named by the second strip, or by its group when that strip does
+  // not show it (a group of one, or a tab the Hub look leaves to its top bar).
+  const group = hub.groups ? hubTabGroup(hub, active.path) : null
+  const labelledBy =
+    group && !groupStripTabs(hub, group, hubLook).includes(active)
+      ? groupDomId(hub, group.key)
+      : tabDomId(active.path)
   const Body = components[active.path]
   const Icon = hub.icon
 
@@ -75,30 +89,107 @@ export function HubPage({
             </p>
           </div>
         </div>
-        <ScrollTabStrip
-          className='mt-1.5'
-          tabs={hub.tabs.map((t) => ({ id: t.path, label: t.label }))}
-          active={active.path}
-          onSelect={(path) => {
-            const tab = hub.tabs.find((t) => t.path === path)
-            if (tab) navigate(hubTabPath(hub, tab))
-          }}
-          ariaLabel={`${hub.title} views`}
-          tabDomId={tabDomId}
-          panelId={panelId}
-        />
+        {hub.groups ? (
+          <GroupedTabStrips hub={hub} active={active} hubLook={hubLook} panelId={panelId} />
+        ) : (
+          <ScrollTabStrip
+            className='mt-1.5'
+            tabs={hub.tabs.map((t) => ({ id: t.path, label: t.label }))}
+            active={active.path}
+            onSelect={(path) => {
+              const tab = hub.tabs.find((t) => t.path === path)
+              if (tab) navigate(hubTabPath(hub, tab))
+            }}
+            ariaLabel={`${hub.title} views`}
+            tabDomId={tabDomId}
+            panelId={panelId}
+          />
+        )}
       </header>
       <div
         id={panelId}
         role='tabpanel'
         // biome-ignore lint/a11y/noNoninteractiveTabindex: WAI-ARIA tabs pattern; the panel is a tab stop so keyboard users reach a body that opens with text
         tabIndex={0}
-        aria-labelledby={tabDomId(active.path)}
+        aria-labelledby={labelledBy}
         className='flex flex-1 min-h-0 flex-col focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan'
       >
         <Suspense fallback={<HubTabFallback />}>{Body && <Body key={active.path} />}</Suspense>
       </div>
     </div>
+  )
+}
+
+const groupDomId = (hub: HubDef, key: string) => `hub-group${hub.base.replace(/\//g, '-')}-${key}`
+
+/** A group's tabs as its strip shows them: one tab alone shows no strip (empty list). */
+function groupStripTabs(hub: HubDef, group: HubTabGroup, hubLook: boolean): HubTabDef[] {
+  const tabs = group.tabs
+    .map((p) => hub.tabs.find((t) => t.path === p))
+    .filter((t): t is HubTabDef => !!t && !(hubLook && t.topBar))
+  return tabs.length > 1 ? tabs : []
+}
+
+/**
+ * A hub with groups (only the Apps hub): the groups in one strip, the open group's tabs in a
+ * quieter strip under it. Choosing a group opens its first tab. A group of one tab shows no
+ * second strip. In the standalone Hub look a tab its top bar also links (`topBar`) is left out.
+ */
+function GroupedTabStrips({
+  hub,
+  active,
+  hubLook,
+  panelId
+}: {
+  hub: HubDef
+  active: HubTabDef
+  hubLook: boolean
+  panelId: string
+}) {
+  const navigate = useNavigate()
+  const groups = hub.groups ?? []
+  const open = hubTabGroup(hub, active.path) ?? groups[0]
+  const openTabs = groupStripTabs(hub, open, hubLook)
+  const groupId = useCallback((key: string) => groupDomId(hub, key), [hub])
+  const tabDomId = useCallback(
+    (path: string) => `hub-tab${hub.base.replace(/\//g, '-')}-${path || 'index'}`,
+    [hub.base]
+  )
+  /** The tab a group opens on: its first one this look shows. */
+  const landing = (g: HubTabGroup) =>
+    g.tabs.map((p) => hub.tabs.find((t) => t.path === p)).find((t) => t && !(hubLook && t.topBar))
+  return (
+    <>
+      <ScrollTabStrip
+        className='mt-1.5'
+        tabs={groups.map((g) => ({ id: g.key, label: g.label }))}
+        active={open.key}
+        onSelect={(key) => {
+          const g = groups.find((x) => x.key === key)
+          const first = g && landing(g)
+          if (first) navigate(hubTabPath(hub, first))
+        }}
+        ariaLabel={`${hub.title} sections`}
+        tabDomId={groupId}
+        panelId={panelId}
+      />
+      {openTabs.length > 0 && (
+        <div className='border-t border-slate-200 bg-slate-50 dark:border-border dark:bg-background'>
+          <ScrollTabStrip
+            variant='sub'
+            tabs={openTabs.map((t) => ({ id: t.path, label: t.label }))}
+            active={active.path}
+            onSelect={(path) => {
+              const tab = hub.tabs.find((t) => t.path === path)
+              if (tab) navigate(hubTabPath(hub, tab))
+            }}
+            ariaLabel={`${open.label} views`}
+            tabDomId={tabDomId}
+            panelId={panelId}
+          />
+        </div>
+      )}
+    </>
   )
 }
 

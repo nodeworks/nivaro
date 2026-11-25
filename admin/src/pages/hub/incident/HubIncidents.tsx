@@ -27,7 +27,18 @@ import { Textarea } from '@/components/ui/textarea'
 import { useAuth } from '@/lib/auth'
 import { cn, formatDateTime, formatRelative } from '@/lib/utils'
 import { fetchHubApp, fetchHubApps, hubKeys, hubToast } from '../hub-api'
-import { dangerArmed, dangerGhost, Field, ghostButton, SectionCard } from '../hub-parts'
+import {
+  countLabel,
+  dangerArmed,
+  dangerGhost,
+  Field,
+  ghostButton,
+  ListPaneHeader,
+  listPaneClass,
+  SectionCard,
+  segmentButton,
+  segmentGroup
+} from '../hub-parts'
 import {
   ackIncident,
   addNote,
@@ -93,48 +104,50 @@ export default function HubIncidents() {
   const detailOpen = creating || selected != null
   return (
     <section aria-labelledby='hub-incidents-title' className='flex flex-1 min-h-0 flex-col'>
-      <header className='flex shrink-0 flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-4 py-2.5 dark:border-border dark:bg-card'>
-        <h2
-          id='hub-incidents-title'
-          className='m-0 min-w-0 flex-1 truncate text-[13px] font-semibold text-slate-900 dark:text-foreground'
-        >
-          Incidents
-        </h2>
-        {isAdmin && (
-          <Button size='sm' className='h-8 gap-1.5 text-[12px]' onClick={() => select(null, true)}>
-            <Siren className='h-3.5 w-3.5' aria-hidden /> Open incident
-          </Button>
-        )}
-      </header>
+      <h2 id='hub-incidents-title' className='sr-only'>
+        Incidents
+      </h2>
       <div className='flex flex-1 min-h-0 overflow-hidden'>
         <aside
-          className={cn(
-            'w-full shrink-0 overflow-y-auto border-r border-slate-200 bg-white md:w-[300px] dark:border-border dark:bg-card',
-            detailOpen && 'hidden md:block'
-          )}
+          className={cn(listPaneClass, detailOpen ? 'hidden md:flex' : 'flex')}
           aria-label='Incidents'
         >
-          <div
-            className='flex gap-1 border-b border-slate-200 p-2 dark:border-border'
-            role='tablist'
-          >
-            {(['open', 'resolved'] as const).map((s) => (
-              <button
-                key={s}
-                type='button'
-                role='tab'
-                aria-selected={show === s}
-                onClick={() => setShow(s)}
-                className={cn(
-                  'h-7 flex-1 rounded-md text-[12px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50',
-                  show === s
-                    ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
-                    : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-muted'
-                )}
-              >
-                {s === 'open' ? `Open${openCount ? ` · ${openCount}` : ''}` : 'Resolved'}
-              </button>
-            ))}
+          <ListPaneHeader
+            label={
+              list.data
+                ? show === 'open'
+                  ? countLabel(rows.length, 'open incident', 'open incidents')
+                  : countLabel(rows.length, 'resolved incident', 'resolved incidents')
+                : 'Incidents'
+            }
+            actions={
+              isAdmin && (
+                <button
+                  type='button'
+                  aria-pressed={creating}
+                  className={cn(ghostButton, creating && 'bg-accent')}
+                  onClick={() => select(null, true)}
+                >
+                  <Siren className='h-3.5 w-3.5' aria-hidden /> Open incident
+                </button>
+              )
+            }
+          />
+          <div className='border-b border-slate-200 px-3 py-2 dark:border-border'>
+            <fieldset className={cn(segmentGroup, 'flex w-full')}>
+              <legend className='sr-only'>Show</legend>
+              {(['open', 'resolved'] as const).map((s) => (
+                <button
+                  key={s}
+                  type='button'
+                  aria-pressed={show === s}
+                  onClick={() => setShow(s)}
+                  className={cn(segmentButton(show === s), 'flex-1 justify-center')}
+                >
+                  {s === 'open' ? `Open${openCount ? ` · ${openCount}` : ''}` : 'Resolved'}
+                </button>
+              ))}
+            </fieldset>
           </div>
           {list.isPending ? (
             <div className='space-y-2 p-3'>
@@ -171,12 +184,12 @@ export default function HubIncidents() {
         </aside>
         <div
           className={cn(
-            'flex-1 overflow-y-auto bg-slate-50 dark:bg-background',
+            'min-w-0 flex-1 overflow-y-auto bg-slate-50 dark:bg-background',
             !detailOpen && 'hidden md:block'
           )}
         >
           {detailOpen && (
-            <div className='border-b border-slate-200 bg-white px-4 py-2 md:hidden dark:border-border dark:bg-card'>
+            <div className='border-b border-slate-200 bg-white px-2 py-1.5 md:hidden dark:border-border dark:bg-card'>
               <button type='button' className={ghostButton} onClick={() => select(null)}>
                 <ArrowLeft className='h-3.5 w-3.5' aria-hidden /> All incidents
               </button>
@@ -202,7 +215,7 @@ export default function HubIncidents() {
 }
 
 const SEV_CHIP: Record<Severity, string> = {
-  sev1: 'bg-red-600 text-white dark:bg-red-500 dark:text-white',
+  sev1: 'bg-red-600 text-white dark:bg-red-700 dark:text-white',
   sev2: 'bg-orange-100 text-orange-900 ring-1 ring-inset ring-orange-300 dark:bg-orange-500/15 dark:text-orange-200 dark:ring-orange-400/40',
   sev3: 'bg-slate-100 text-slate-700 ring-1 ring-inset ring-slate-300 dark:bg-muted dark:text-slate-200 dark:ring-border'
 }
@@ -912,6 +925,7 @@ function PostMortemCard({ inc }: { inc: IncidentDetail }) {
           {write && !doc && (
             <Button
               size='sm'
+              variant='outline'
               className='h-8 gap-1.5'
               onClick={() => draft.mutate(false)}
               disabled={draft.isPending}

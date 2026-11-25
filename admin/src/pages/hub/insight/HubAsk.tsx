@@ -3,6 +3,7 @@ import { useMutation } from '@tanstack/react-query'
 import { ArrowUp, Eraser, Sparkles } from 'lucide-react'
 import { type KeyboardEvent, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router'
+import { HubToolbar } from '@/components/hub-page'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { ghostButton } from '../hub-parts'
@@ -84,15 +85,10 @@ export default function HubAsk() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col bg-slate-50 dark:bg-background'>
-      <div className='shrink-0 border-b border-slate-200 bg-white px-4 py-3 dark:border-border dark:bg-card'>
-        <div className='flex flex-wrap items-center gap-x-3 gap-y-1'>
-          <p className='m-0 text-[13px] font-medium text-slate-900 dark:text-foreground'>
-            Ask the Hub
-          </p>
-          <p className='m-0 text-[12px] text-slate-500 dark:text-muted-foreground'>
-            Reads only — it sees what you see here and cannot change anything.
-          </p>
-          <div className='ml-auto flex items-center gap-1'>
+      <HubToolbar
+        description='Questions about your apps, answered from Hub data. It reads only: it sees what you see here and cannot change anything.'
+        actions={
+          <>
             <Link
               to='/docs?section=hub-insight'
               className='px-2 text-[12px] text-slate-500 hover:underline dark:text-muted-foreground'
@@ -114,11 +110,11 @@ export default function HubAsk() {
                 New conversation
               </button>
             )}
-          </div>
-        </div>
-      </div>
+          </>
+        }
+      />
 
-      <div className='flex-1 overflow-y-auto px-4 py-4' aria-live='polite'>
+      <div className='flex-1 overflow-y-auto p-4 sm:p-6' aria-live='polite'>
         {turns.length === 0 ? (
           <div className='rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
             <p className='m-0 flex items-center gap-2 text-[13px] font-medium text-slate-900 dark:text-foreground'>

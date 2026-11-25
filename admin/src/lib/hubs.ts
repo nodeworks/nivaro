@@ -54,6 +54,24 @@ export type HubTabDef = {
    * title and hint stay.
    */
   hint?: string
+  /**
+   * The standalone Hub look's top bar links this tab too (Fleet, Shared, People): there the tab is
+   * left out of the strip, so the top bar is the one place to reach it. Inert everywhere else.
+   */
+  topBar?: boolean
+}
+
+/**
+ * A named group of a hub's tabs. A hub with groups shows two strips: the groups, then the open
+ * group's tabs. Only the Apps hub has them (36 tabs in one strip did not read); every other hub
+ * keeps its one strip.
+ */
+export type HubTabGroup = {
+  /** DOM id part; stable. */
+  key: string
+  label: string
+  /** Tab paths in this group, in strip order. Every tab is in exactly one group. */
+  tabs: string[]
 }
 
 export type HubDef = {
@@ -62,6 +80,8 @@ export type HubDef = {
   hint: string
   icon: LucideIcon
   tabs: HubTabDef[]
+  /** Optional groups of `tabs` (two strips); see HubTabGroup. */
+  groups?: HubTabGroup[]
   /**
    * A server feature (GET /api/app-info `features`) the hub needs. Without it the hub is left
    * out of the nav and its paths show "Not available on this server".
@@ -83,9 +103,35 @@ export const APPS_HUB: HubDef = {
       hint: 'The apps this Hub looks after: their environments, whether they are up and what was deployed.'
     },
     {
+      path: 'releases',
+      label: 'Releases',
+      hint: 'Release trains, scheduled promotions, freezes and automatic rollbacks.'
+    },
+    {
+      path: 'changes',
+      label: 'Changes',
+      hint: 'Every planned change on one calendar, deploy windows and checklists.'
+    },
+    {
+      path: 'smoke',
+      label: 'Smoke checks',
+      hint: 'Checks that run after every deploy, per environment.'
+    },
+    {
+      path: 'extensions',
+      label: 'Extensions',
+      hint: 'Which extension version each environment runs.'
+    },
+    {
+      path: 'config',
+      label: 'Config',
+      hint: 'Move configuration from one environment of an app to another, with undo.'
+    },
+    {
       path: 'shared',
       label: 'Shared deployments',
-      hint: 'One process serving many apps, each with its own database, files and key.'
+      hint: 'One process serving many apps, each with its own database, files and key.',
+      topBar: true
     },
     {
       path: 'capacity',
@@ -103,29 +149,9 @@ export const APPS_HUB: HubDef = {
       hint: 'Docker hosts grouped in regions, and what runs on each.'
     },
     {
-      path: 'costs',
-      label: 'Costs',
-      hint: 'A rough monthly cost per app, department and owner.'
-    },
-    {
       path: 'drivers',
       label: 'Drivers',
       hint: 'Where apps are deployed: a GitLab project or a Docker host the Hub agent runs.'
-    },
-    {
-      path: 'targets',
-      label: 'Targets',
-      hint: 'Where a new app goes: the GitLab group, template and hostnames it gets.'
-    },
-    {
-      path: 'templates',
-      label: 'Templates',
-      hint: 'App Blueprints a new app can start from.'
-    },
-    {
-      path: 'lifecycle',
-      label: 'Clone & retire',
-      hint: 'Copy an app’s structure into a new app, or retire an app step by step.'
     },
     {
       path: 'databases',
@@ -138,69 +164,15 @@ export const APPS_HUB: HubDef = {
       hint: 'Backups, restore drills and refreshes, per environment.'
     },
     {
-      path: 'signin',
-      label: 'Sign-in',
-      hint: 'The Hub as the sign-in for its apps: keys, clients and who signed in where.'
-    },
-    {
-      path: 'releases',
-      label: 'Releases',
-      hint: 'Release trains, scheduled promotions, freezes and automatic rollbacks.'
-    },
-    {
-      path: 'incidents',
-      label: 'Incidents',
-      hint: 'Open incidents: freeze, banner, timeline and post-mortem.'
-    },
-    {
-      path: 'on-call',
-      label: 'On-call',
-      hint: 'Who is paged first for each app, and the escalation after.'
-    },
-    {
-      path: 'status',
-      label: 'Status pages',
-      hint: 'Public or internal status pages for your apps.'
-    },
-    {
-      path: 'smoke',
-      label: 'Smoke checks',
-      hint: 'Checks that run after every deploy, per environment.'
-    },
-    {
-      path: 'extensions',
-      label: 'Extensions',
-      hint: 'Which extension version each environment runs.'
-    },
-    {
-      path: 'changes',
-      label: 'Changes',
-      hint: 'Every planned change on one calendar, deploy windows and checklists.'
-    },
-    {
-      path: 'config',
-      label: 'Config',
-      hint: 'Move configuration from one environment of an app to another, with undo.'
-    },
-    {
-      path: 'issues',
-      label: 'Issues',
-      hint: 'Crashes and server errors from every app, grouped by signature.'
-    },
-    {
       path: 'storage',
       label: 'Storage',
       hint: 'How full each driver and environment is.'
     },
     {
-      path: 'secrets',
-      label: 'Secrets',
-      hint: 'Tokens and keys the Hub holds, and when each is due to rotate.'
-    },
-    {
       path: 'fleet',
       label: 'Fleet',
-      hint: 'Every environment at a glance: version, health and uptime.'
+      hint: 'Every environment at a glance: version, health and uptime.',
+      topBar: true
     },
     {
       path: 'health',
@@ -218,12 +190,36 @@ export const APPS_HUB: HubDef = {
       hint: 'What each app depends on, and what a change would touch.'
     },
     {
-      path: 'ask',
-      label: 'Ask the Hub',
-      hint: 'Questions about your apps, answered from Hub data (read-only).'
+      path: 'issues',
+      label: 'Issues',
+      hint: 'Crashes and server errors from every app, grouped by signature.'
     },
-    { path: 'audit', label: 'Audit', hint: 'Every change made through the Hub, by whom and when.' },
-    { path: 'people', label: 'People', hint: 'Who can reach which app, and offboarding.' },
+    {
+      path: 'incidents',
+      label: 'Incidents',
+      hint: 'Open incidents: freeze, banner, timeline and post-mortem.'
+    },
+    {
+      path: 'on-call',
+      label: 'On-call',
+      hint: 'Who is paged first for each app, and the escalation after.'
+    },
+    {
+      path: 'status',
+      label: 'Status pages',
+      hint: 'Public or internal status pages for your apps.'
+    },
+    {
+      path: 'people',
+      label: 'People',
+      hint: 'Who can reach which app, and offboarding.',
+      topBar: true
+    },
+    {
+      path: 'signin',
+      label: 'Sign-in',
+      hint: 'The Hub as the sign-in for its apps: keys, clients and who signed in where.'
+    },
     {
       path: 'access',
       label: 'Access',
@@ -233,7 +229,59 @@ export const APPS_HUB: HubDef = {
       path: 'security',
       label: 'Security',
       hint: 'Certificates and names, image vulnerabilities and the compliance pack.'
+    },
+    {
+      path: 'secrets',
+      label: 'Secrets',
+      hint: 'Tokens and keys the Hub holds, and when each is due to rotate.'
+    },
+    { path: 'audit', label: 'Audit', hint: 'Every change made through the Hub, by whom and when.' },
+    {
+      path: 'targets',
+      label: 'Targets',
+      hint: 'Where a new app goes: the GitLab group, template and hostnames it gets.'
+    },
+    {
+      path: 'templates',
+      label: 'Templates',
+      hint: 'App Blueprints a new app can start from.'
+    },
+    {
+      path: 'lifecycle',
+      label: 'Clone & retire',
+      hint: 'Copy an app’s structure into a new app, or retire an app step by step.'
+    },
+    {
+      path: 'costs',
+      label: 'Costs',
+      hint: 'A rough monthly cost per app, department and owner.'
+    },
+    {
+      path: 'ask',
+      label: 'Ask the Hub',
+      hint: 'Questions about your apps, answered from Hub data (read-only).'
     }
+  ],
+  groups: [
+    { key: 'apps', label: 'Apps', tabs: [''] },
+    {
+      key: 'deploy',
+      label: 'Deploy',
+      tabs: ['releases', 'changes', 'smoke', 'extensions', 'config']
+    },
+    { key: 'run', label: 'Run', tabs: ['shared', 'capacity', 'scale', 'hosts', 'drivers'] },
+    { key: 'data', label: 'Data', tabs: ['databases', 'data', 'storage'] },
+    {
+      key: 'watch',
+      label: 'Watch',
+      tabs: ['fleet', 'health', 'usage', 'dependencies', 'issues', 'incidents', 'on-call', 'status']
+    },
+    {
+      key: 'people',
+      label: 'People & access',
+      tabs: ['people', 'signin', 'access', 'security', 'secrets', 'audit']
+    },
+    { key: 'build', label: 'Build', tabs: ['targets', 'templates', 'lifecycle', 'costs', 'ask'] }
   ]
 }
 
@@ -580,6 +628,10 @@ export const HUBS: HubDef[] = [
 
 export const hubTabPath = (hub: HubDef, tab: HubTabDef) =>
   tab.path ? `${hub.base}/${tab.path}` : hub.base
+
+/** The group a tab path is in (hubs with `groups` only), else null. */
+export const hubTabGroup = (hub: HubDef, path: string): HubTabGroup | null =>
+  hub.groups?.find((g) => g.tabs.includes(path)) ?? null
 
 /** The hub and tab a pathname shows, or null when it is not a hub tab. */
 export function hubForPath(pathname: string): { hub: HubDef; tab: HubTabDef } | null {

@@ -4,6 +4,7 @@ import { ArrowUpRight, RefreshCw } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { HubEnvTag, ProductionGuard } from '@/components/hub-brand/HubBits'
+import { HubToolbar } from '@/components/hub-page'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { SimpleSelect } from '@/components/ui/simple-select'
@@ -13,7 +14,7 @@ import { cn, formatDateTime, formatRelative } from '@/lib/utils'
 import { type ChecklistState, PreDeployChecklist } from '../changes/PreDeployChecklist'
 import { EnvWindowGate } from '../changes/WindowGate'
 import { hubError, hubToast } from '../hub-api'
-import { Field, ghostButton, SectionCard } from '../hub-parts'
+import { type ChipTone, Field, ghostButton, SectionCard, ToneChip } from '../hub-parts'
 import {
   type AppMatrix,
   type CellState,
@@ -38,18 +39,13 @@ import {
  * pin file is committed).
  */
 
-const STATE_TONE: Record<CellState, string> = {
-  behind:
-    'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300',
-  missing:
-    'border-red-200 bg-red-50 text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300',
-  ahead:
-    'border-sky-200 bg-sky-50 text-sky-800 dark:border-sky-900 dark:bg-sky-950/40 dark:text-sky-300',
-  same: 'border-slate-200 bg-white text-slate-600 dark:border-border dark:bg-card dark:text-slate-300',
-  first:
-    'border-slate-200 bg-white text-slate-600 dark:border-border dark:bg-card dark:text-slate-300',
-  unknown:
-    'border-slate-200 bg-slate-50 text-slate-500 dark:border-border dark:bg-muted dark:text-muted-foreground'
+const STATE_TONE: Record<CellState, ChipTone> = {
+  behind: 'warn',
+  missing: 'down',
+  ahead: 'live',
+  same: 'neutral',
+  first: 'neutral',
+  unknown: 'neutral'
 }
 
 const SOURCE_WORDS: Record<string, string> = {
@@ -89,56 +85,61 @@ export default function HubExtensions() {
     0
   )
   return (
-    <div className='flex-1 space-y-5 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
-      <div className='flex flex-wrap items-center gap-3'>
-        <p className='m-0 max-w-[90ch] flex-1 text-[12px] text-slate-600 dark:text-slate-300'>
-          Read over each environment’s link every 30 minutes.{' '}
-          {behind ? (
-            <span className='font-medium text-amber-800 dark:text-amber-300'>
-              {behind === 1 ? '1 environment is' : `${behind} environments are`} behind the one
-              before them.
-            </span>
-          ) : q.data ? (
-            'No environment is behind the one before it.'
-          ) : null}
-        </p>
-        {isAdmin && (
-          <Button
-            size='sm'
-            variant='outline'
-            className='ml-auto h-8'
-            disabled={refresh.isPending}
-            onClick={() => refresh.mutate()}
-          >
-            <RefreshCw
-              className={cn('mr-1.5 h-3.5 w-3.5', refresh.isPending && 'animate-spin')}
-              aria-hidden
-            />
-            {refresh.isPending ? 'Reading…' : 'Read now'}
-          </Button>
+    <div className='flex flex-1 min-h-0 flex-col'>
+      <HubToolbar
+        description={
+          <>
+            Which extension version each environment runs, read over its link every 30 minutes.{' '}
+            {behind ? (
+              <span className='font-medium text-slate-900 dark:text-foreground'>
+                {behind === 1 ? '1 environment is' : `${behind} environments are`} behind the one
+                before them.
+              </span>
+            ) : q.data ? (
+              'No environment is behind the one before it.'
+            ) : null}
+          </>
+        }
+        actions={
+          isAdmin && (
+            <button
+              type='button'
+              className={ghostButton}
+              disabled={refresh.isPending}
+              onClick={() => refresh.mutate()}
+            >
+              <RefreshCw
+                className={cn('h-3.5 w-3.5', refresh.isPending && 'animate-spin')}
+                aria-hidden
+              />
+              {refresh.isPending ? 'Reading…' : 'Read now'}
+            </button>
+          )
+        }
+      />
+      <div className='flex-1 space-y-5 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
+        {q.isPending ? (
+          <Skeleton className='h-40 w-full' />
+        ) : q.isError ? (
+          <QueryErrorState error={q.error} what='the extensions' onRetry={() => void q.refetch()} />
+        ) : q.data.apps.length === 0 ? (
+          <p className='m-0 text-[13px] text-slate-500 dark:text-muted-foreground'>No apps yet.</p>
+        ) : (
+          <>
+            {q.data.apps.map((m) => (
+              <AppCard
+                key={m.app.id}
+                m={m}
+                isAdmin={isAdmin}
+                target={target?.appId === m.app.id ? target : null}
+                onPromote={(envId, extId) => setTarget({ appId: m.app.id, envId, extId })}
+                onClose={() => setTarget(null)}
+              />
+            ))}
+            <HistoryCard rows={q.data.promotions} apps={q.data.apps} />
+          </>
         )}
       </div>
-      {q.isPending ? (
-        <Skeleton className='h-40 w-full' />
-      ) : q.isError ? (
-        <QueryErrorState error={q.error} what='the extensions' onRetry={() => void q.refetch()} />
-      ) : q.data.apps.length === 0 ? (
-        <p className='m-0 text-[13px] text-slate-500 dark:text-muted-foreground'>No apps yet.</p>
-      ) : (
-        <>
-          {q.data.apps.map((m) => (
-            <AppCard
-              key={m.app.id}
-              m={m}
-              isAdmin={isAdmin}
-              target={target?.appId === m.app.id ? target : null}
-              onPromote={(envId, extId) => setTarget({ appId: m.app.id, envId, extId })}
-              onClose={() => setTarget(null)}
-            />
-          ))}
-          <HistoryCard rows={q.data.promotions} apps={q.data.apps} />
-        </>
-      )}
     </div>
   )
 }
@@ -161,14 +162,9 @@ function Cell({
         <span className='text-[13px] font-medium tabular-nums text-slate-800 dark:text-foreground'>
           {c.status === 'absent' ? 'Not loaded' : (c.version ?? c.build?.slice(0, 10) ?? '—')}
         </span>
-        <span
-          className={cn(
-            'rounded-full border px-1.5 py-px text-[10.5px] font-medium',
-            STATE_TONE[c.state]
-          )}
-        >
+        <ToneChip tone={STATE_TONE[c.state]} compact>
           {STATE_WORDS[c.state]}
-        </span>
+        </ToneChip>
       </div>
       {c.version && c.build && (
         <p className='m-0 font-mono text-[11px] text-slate-500 dark:text-muted-foreground'>
