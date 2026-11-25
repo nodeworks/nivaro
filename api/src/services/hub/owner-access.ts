@@ -164,7 +164,10 @@ export const OWNER_UNGUARDED: Record<string, string> = {
   'POST /environments/:envId/release-notes':
     'a read: what a promotion or rollback of a version would change (GitLab read-only)',
   'POST /deploys/:id/release-notes':
-    'works out and stores the release notes of a past run the caller may read; deploys nothing'
+    'works out and stores the release notes of a past run the caller may read; deploys nothing',
+  // Hub insight (routes/hub-insight.ts): the caller's own switch, and a read-only question.
+  'PUT /insight/digest/me': 'the caller’s own weekly digest switch; touches no app',
+  'POST /insight/ask': 'a read: read-only tools that re-enter as the caller; changes nothing'
 }
 
 export interface OwnerRefusal {

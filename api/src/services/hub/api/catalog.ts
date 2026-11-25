@@ -1672,6 +1672,62 @@ export const HUB_ROUTES: HubRoute[] = [
   r('POST', '/secrets/check', 'Secrets', 'admin', 'write', 'Run a secret’s readiness check now', {
     body: { ref: s('Secret reference', { required: true }) }
   }),
+  // ─── Insight: usage, dependency map, health score, digest, Ask (routes/hub-insight.ts) ──
+  r('GET', '/insight/health', 'Insight', 'owner', 'read', 'Health score per environment', {
+    query: { app: n('Only this app') },
+    notes:
+      '0–100 from uptime, error rate, drift, open issues, readiness, backup age and secret age (Hub figures only); kept 60 s per viewer.'
+  }),
+  r('GET', '/insight/usage', 'Insight', 'owner', 'read', 'Usage counts per environment', {
+    query: { app: n('Only this app'), days: n('7–400, default 90') },
+    notes:
+      'Counts only (people per day and week, adoption, busiest screens); nothing under the privacy floor of at least 5 people.'
+  }),
+  r('GET', '/insight/dependencies', 'Insight', 'owner', 'read', 'The dependency map', {
+    query: { app: n('Only this app') },
+    notes: 'Hosts only — never a path, a query or a credential.'
+  }),
+  r('GET', '/insight/impact', 'Insight', 'owner', 'read', 'Who depends on one dependency', {
+    query: { node: s('A node id from /insight/dependencies', { required: true }) }
+  }),
+  r(
+    'GET',
+    '/insight/settings',
+    'Insight',
+    'admin',
+    'read',
+    'Health weights, privacy floor, digest'
+  ),
+  r('PUT', '/insight/settings', 'Insight', 'admin', 'write', 'Save the insight settings', {
+    body: {
+      weights: o('{uptime, errors, drift, issues, readiness, backups, secrets}: 0–10 each'),
+      usage: o('{floor: 5–100, days: 1–14}'),
+      digest: o('{enabled}')
+    }
+  }),
+  r('GET', '/insight/collect', 'Insight', 'admin', 'read', 'The last Collect now'),
+  r(
+    'POST',
+    '/insight/collect',
+    'Insight',
+    'admin',
+    'write',
+    'Read every environment’s usage and dependencies now',
+    { accepted: true, notes: '409 COLLECT_RUNNING while one runs; poll GET /insight/collect.' }
+  ),
+  r('GET', '/insight/digest/me', 'Insight', 'owner', 'read', 'Your weekly digest switch'),
+  r('PUT', '/insight/digest/me', 'Insight', 'owner', 'write', 'Turn your weekly digest on or off', {
+    body: { enabled: b('Send me the weekly digest') }
+  }),
+  r('GET', '/insight/digest/preview', 'Insight', 'owner', 'read', 'Your digest as it would go out'),
+  r('POST', '/insight/ask', 'Insight', 'owner', 'write', 'Ask the Hub a question (read-only)', {
+    body: {
+      question: s('Your question (≤ 4,000 characters)'),
+      messages: list('object', 'Or the conversation so far: [{role user|assistant, content}]')
+    },
+    notes:
+      'Answers from read-only tools that call the Hub back as you (admins: every app; owners: their own) and cite the records used. Never changes anything. Catalogued as a write because it spends the caller’s AI allowance: never for connected apps, assistants, View-as or run-as keys; an API key needs hub:write.'
+  }),
   // ─── Phone app (routes/hub-people.ts) ───────────────────────────────────────
   r('GET', '/mobile/summary', 'Phone', 'owner', 'read', 'Fleet at a glance (last known status)'),
   r('GET', '/mobile/runs', 'Phone', 'owner', 'read', 'Recent promotions, rollbacks and applies', {

@@ -103,6 +103,9 @@ export const CORE_CRON_SCOPES: Record<string, CronScope> = {
   'hub-fleet-alerts': 'app', // Hub fleet: version drift alerts (HUB=on only, never shared)
   'hub-fleet-prune': 'app', // Hub fleet: uptime samples past 45 days (HUB=on only, never shared)
   'hub-slo-report': 'app', // Hub fleet: monthly SLO report (HUB=on only, never shared)
+  'hub-insight-collect': 'app', // Hub insight: usage + dependency reads (HUB=on only, never shared)
+  'hub-insight-health': 'app', // Hub insight: daily health score history (HUB=on only, never shared)
+  'hub-insight-digest': 'app', // Hub insight: weekly owner digest (HUB=on only, never shared)
   'huddle-schedules': 'app',
   'integration-reconcile': 'app',
   'integration-signals': 'app',

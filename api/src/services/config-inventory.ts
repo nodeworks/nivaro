@@ -350,6 +350,13 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_hub_uptime_hours',
   'nivaro_hub_fleet_alerts',
   'nivaro_hub_slo_reports',
+  'nivaro_hub_usage_days', //          Hub insight (577): usage counts, dependency hosts, health
+  'nivaro_hub_usage_screens', //       score history, weekly digest switches and sends
+  'nivaro_hub_dependencies',
+  'nivaro_hub_insight_state',
+  'nivaro_hub_health_scores',
+  'nivaro_hub_digest_prefs',
+  'nivaro_hub_digest_sends',
   'nivaro_share_links',
   'nivaro_dashboard_links',
   'nivaro_webhook_deliveries',

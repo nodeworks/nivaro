@@ -1,0 +1,76 @@
+{% layout 'base' %}
+{% block content %}
+<p style="margin:0 0 6px;font-size:15px;font-weight:700;">
+  {% if first_name != '' %}{{ first_name }}, here{% else %}Here{% endif %} is your week in the Hub
+</p>
+<p style="margin:0 0 18px;font-size:13px;color:#64748b;">{{ summary }}</p>
+{% for app in apps %}
+<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin:0 0 18px;">
+  <tr>
+    <td style="padding:0 0 6px;border-bottom:1px solid #e2e8f0;">
+      <p style="margin:0;font-size:14px;font-weight:700;">
+        {% if app.url != '' %}<a href="{{ app.url }}" style="color:#0f172a;text-decoration:none;">{{ app.name }}</a>{% else %}{{ app.name }}{% endif %}
+      </p>
+    </td>
+  </tr>
+  {% if app.health.size > 0 %}
+  <tr>
+    <td style="padding:8px 0 0;">
+      <p style="margin:0 0 4px;font-size:12px;font-weight:600;color:#475569;text-transform:uppercase;letter-spacing:0.04em;">Health</p>
+      {% for h in app.health %}
+      <p style="margin:0 0 2px;font-size:13px;color:#334155;">
+        {{ h.env }}: {% if h.score != nil %}<strong>{{ h.score }}</strong>{% if h.band %} · {{ h.band }}{% endif %}{% if h.change_text != '' %} · {{ h.change_text }}{% endif %}{% else %}not enough figures yet{% endif %}
+      </p>
+      {% endfor %}
+    </td>
+  </tr>
+  {% endif %}
+  <tr>
+    <td style="padding:8px 0 0;">
+      <p style="margin:0 0 4px;font-size:12px;font-weight:600;color:#475569;text-transform:uppercase;letter-spacing:0.04em;">Deploys</p>
+      {% if app.deploys.size > 0 %}
+      {% for d in app.deploys %}
+      <p style="margin:0 0 2px;font-size:13px;color:#334155;">{{ d.version }} to {{ d.env }} · {{ d.kind }} · {{ d.status }}{% if d.when != '' %} · {{ d.when }}{% endif %}</p>
+      {% endfor %}
+      {% else %}
+      <p style="margin:0;font-size:13px;color:#64748b;">None last week.</p>
+      {% endif %}
+    </td>
+  </tr>
+  {% if app.incidents.size > 0 %}
+  <tr>
+    <td style="padding:8px 0 0;">
+      <p style="margin:0 0 4px;font-size:12px;font-weight:600;color:#475569;text-transform:uppercase;letter-spacing:0.04em;">Incidents</p>
+      {% for i in app.incidents %}
+      <p style="margin:0 0 2px;font-size:13px;color:#334155;">{{ i.title }} · {{ i.severity }} · {{ i.status }}{% if i.when != '' %} · {{ i.when }}{% endif %}</p>
+      {% endfor %}
+    </td>
+  </tr>
+  {% endif %}
+  {% if app.drift.size > 0 %}
+  <tr>
+    <td style="padding:8px 0 0;">
+      <p style="margin:0 0 4px;font-size:12px;font-weight:600;color:#475569;text-transform:uppercase;letter-spacing:0.04em;">Drift</p>
+      {% for d in app.drift %}
+      <p style="margin:0 0 2px;font-size:13px;color:#334155;">{% if d.env != '' %}{{ d.env }}: {% endif %}{{ d.message }}</p>
+      {% endfor %}
+    </td>
+  </tr>
+  {% endif %}
+  {% if app.upcoming.size > 0 %}
+  <tr>
+    <td style="padding:8px 0 0;">
+      <p style="margin:0 0 4px;font-size:12px;font-weight:600;color:#475569;text-transform:uppercase;letter-spacing:0.04em;">Coming up</p>
+      {% for u in app.upcoming %}
+      <p style="margin:0 0 2px;font-size:13px;color:#334155;">{{ u.what }} · {{ u.when }}</p>
+      {% endfor %}
+    </td>
+  </tr>
+  {% endif %}
+</table>
+{% endfor %}
+{% render 'partials/button', url: home_url, label: 'Open Apps → Health' %}
+<p style="margin:12px 0 0;color:#64748b;font-size:12px;">
+  You get this once a week because you own apps in the Hub. Turn it off in Apps → Health.
+</p>
+{% endblock %}
