@@ -10,6 +10,7 @@ import { poolCounters } from '../services/pool-attribution.js'
 import { readReadiness } from '../services/readiness.js'
 import { bearerMatches } from '../services/render-peer.js'
 import { NIVARO_VERSION } from '../version.js'
+import { hubLinkDataRoutes } from './hub-link-data.js'
 import { runPreflight } from './preflight.js'
 
 /**
@@ -171,6 +172,9 @@ export async function hubLinkRoutes(app: FastifyInstance) {
       return refuse(reply, 401, 'Unauthorized')
     }
   })
+
+  // Hub data care (0.3.215): /data/* — refresh keeps and files backups (routes/hub-link-data.ts).
+  hubLinkDataRoutes(app)
 
   app.get('/status', async (_req, reply) => {
     const [preflight, readiness_score, maintenance] = await Promise.all([
