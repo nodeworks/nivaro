@@ -347,6 +347,7 @@ export {
   HUB_TOOL_NAMES,
   hubLinks,
   PLAN_ONLY_NOTE,
+  planForModel,
   registerHubTools
 } from './tools/hub.js'
 export { INFRA_TOOL_NAMES, registerInfrastructureTools } from './tools/infrastructure.js'

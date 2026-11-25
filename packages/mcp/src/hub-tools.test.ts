@@ -47,7 +47,16 @@ const answers: Handler = (c) => {
       ]
     }
   if (p.endsWith('/promotable')) return { data: { promote: ['0.3.216'], rollback: [] } }
-  if (p.endsWith('/plan')) return { data: { ok: true, plan_hash: 'h', lines: ['x'] } }
+  if (p.endsWith('/plan'))
+    return {
+      data: {
+        ok: true,
+        plan_hash: 'h',
+        confirm: 'efp/prod',
+        lines: ['x'],
+        components: [{ name: 'api', image_digest: 'sha256:1' }]
+      }
+    }
   if (p === '/hub/shared') return { data: [{ id: 2, key: 'pool-a', name: 'Pool A', token: 'x' }] }
   return { data: [] }
 }
@@ -155,6 +164,8 @@ describe('Hub MCP tools', () => {
       link: 'https://hub.example.com/hub?app=3',
       note: PLAN_ONLY_NOTE
     })
+    // Review L7: nothing that would start the run, no image digests.
+    expect(planned.plan).toEqual({ ok: true, lines: ['x'], components: [{ name: 'api' }] })
     const posts = calls.filter((c) => c._method !== 'GET')
     expect(posts.map((c) => [c._path, c._body])).toEqual([
       ['/hub/environments/12/promote/plan', { kind: 'promote', version: '0.3.216' }]

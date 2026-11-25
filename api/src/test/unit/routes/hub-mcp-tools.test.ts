@@ -247,4 +247,33 @@ describe('mcpToolOptions: Hub tools only on a Hub', () => {
     expect(mcpToolOptions(req).hub).toBeNull()
     process.env.HUB = 'on'
   })
+
+  it('review M4: a Hub scope on the connection, never a collection-scoped key', async () => {
+    const { mcpToolOptions } = await import('../../../routes/mcp.js')
+    const has = (r: Record<string, unknown>) =>
+      mcpToolOptions({ isAdmin: true, user: { id: ADMIN }, ...r } as unknown as FastifyRequest)
+        .hub !== null
+    // OAuth: only with hub:read.
+    expect(has({ authMethod: 'oauth', oauthScopes: ['mcp'] })).toBe(false)
+    expect(has({ authMethod: 'oauth', oauthScopes: ['mcp', 'hub:read'] })).toBe(true)
+    // An OAuth connection narrowed to collections never reaches the Hub.
+    expect(
+      has({
+        authMethod: 'oauth',
+        oauthScopes: ['hub:read'],
+        user: { id: ADMIN, api_key_scopes: [{ collection: 'orders', actions: ['read'] }] }
+      })
+    ).toBe(false)
+    // API key: a $hub read entry; `*` collections do not imply it.
+    const key = (scopes: unknown[]) => ({
+      authMethod: 'api_key',
+      apiKeyScopes: scopes,
+      user: { id: ADMIN, api_key_scopes: scopes }
+    })
+    expect(has(key([{ collection: '*', actions: ['*'] }]))).toBe(false)
+    expect(has(key([{ collection: 'orders', actions: ['read'] }]))).toBe(false)
+    expect(has(key([{ collection: '$hub', actions: ['read'] }]))).toBe(true)
+    // An administrator's own session (the MCP console) keeps them.
+    expect(has({})).toBe(true)
+  })
 })

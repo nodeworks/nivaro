@@ -3,7 +3,7 @@ import { adminBaseUrl } from '../admin-base.js'
 import { authenticate, enforceRateLimit, requireAuth } from '../middleware/authenticate.js'
 import { activityGroupKey, withActivityScope } from '../services/activity-scope.js'
 import { isMultiTenant } from '../services/deployment-mode.js'
-import { hubModeEnabled } from '../services/hub/mode.js'
+import { mcpHubAccess } from '../services/hub/mcp-access.js'
 import {
   classifyToolAnswer,
   clientSlug,
@@ -150,7 +150,8 @@ export function mcpToolOptions(req: FastifyRequest): {
   return {
     // Hub enhancement 25: the Hub tools exist only on a Nivaro Hub (HUB=on); the Hub routes
     // they call scope them (administrators: everything, app owners: their own apps).
-    hub: hubModeEnabled() ? { adminUrl: adminBaseUrl() } : null,
+    // Review M4: a Hub scope on the connection (`hub:read` / `$hub`), never a collection-scoped key.
+    hub: mcpHubAccess(req) ? { adminUrl: adminBaseUrl() } : null,
     // Administrator tools only for an administrator who is not on a collection-scoped key.
     adminTools: mcpAdminTools(req),
     // Chat tools only for a connection allowed chat (#2492): the OAuth chat scope or a

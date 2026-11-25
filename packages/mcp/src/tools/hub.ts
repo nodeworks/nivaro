@@ -44,7 +44,7 @@ export interface HubToolOptions {
 
 /** The one line every plan answer carries. */
 export const PLAN_ONLY_NOTE =
-  'Planned only: nothing was started or changed. Starting it is a person’s action in the Hub — open the link, check the plan there and start it.'
+  'Planned only: nothing was started. Starting it is a person’s action in the Hub — open the link, check the plan there and start it.'
 
 const id = (what: string) => z.number().int().positive().describe(`The ${what} id.`)
 
@@ -78,6 +78,28 @@ const ENV_KEYS = [
   'on_shared',
   'version'
 ]
+
+/** Keys a plan answer never carries to a model (review L7): run tokens, hashes, image digests. */
+const DROP_KEY = /(^|_)(hash|confirm|token|secret|digest|nonce|ticket)s?($|_)/i
+
+/**
+ * Pure: a plan as an assistant sees it: blockers, warnings, steps, versions, apps. Never anything
+ * that would let a later call start the run (plan_hash, confirm text) or that is noise to it
+ * (image digests). Lists capped at 50, depth at 6.
+ */
+export function planForModel(v: unknown, depth = 0): unknown {
+  if (depth > 6) return null
+  if (Array.isArray(v)) return v.slice(0, 50).map((x) => planForModel(x, depth + 1))
+  if (v && typeof v === 'object') {
+    const out: Row = {}
+    for (const [k, x] of Object.entries(v as Row)) {
+      if (DROP_KEY.test(k)) continue
+      out[k] = planForModel(x, depth + 1)
+    }
+    return out
+  }
+  return v
+}
 
 export function hubLinks(base: string) {
   const b = base.replace(/\/+$/, '')
@@ -297,7 +319,7 @@ export function registerHubTools(
         )
         return ok({
           environment: pick(env, ['id', 'key']),
-          plan: res.data,
+          plan: planForModel(res.data),
           link,
           note: PLAN_ONLY_NOTE
         })
@@ -366,7 +388,7 @@ export function registerHubTools(
         )
         return ok({
           environment: pick(env, ['id', 'key']),
-          plan: res.data,
+          plan: planForModel(res.data),
           link: links.app(args.app_id),
           note: PLAN_ONLY_NOTE
         })
@@ -397,7 +419,11 @@ export function registerHubTools(
             kind: args.kind ?? 'upgrade'
           })
         )
-        return ok({ plan: res.data, link: links.shared(args.shared_id), note: PLAN_ONLY_NOTE })
+        return ok({
+          plan: planForModel(res.data),
+          link: links.shared(args.shared_id),
+          note: PLAN_ONLY_NOTE
+        })
       } catch (err) {
         return fail(err)
       }
