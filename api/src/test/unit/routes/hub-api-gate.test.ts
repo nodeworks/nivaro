@@ -304,7 +304,7 @@ describe('GraphQL hub namespace answers like its REST twin', () => {
     let active = 0
     let peak = 0
     const server = {
-      inject: async (o: Parameters<typeof app.inject>[0]) => {
+      inject: async (o: unknown) => {
         calls++
         active++
         peak = Math.max(peak, active)
