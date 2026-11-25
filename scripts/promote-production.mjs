@@ -505,15 +505,17 @@ async function main() {
     if (priority !== null && priority >= 3) {
       const checks = [
         ...(PORTAL_ONLY ? [] : prod.verify.map((v) => ({ ...v, want: VERSION }))),
-        ...(fe ? fe.verify.map((v) => ({ ...v, want: frontend.short })) : [])
+        // The portal's production branch serves a merge commit of the staging build (same files),
+        // so its version.json may answer the merge id rather than the staging id.
+        ...(fe ? fe.verify.map((v) => ({ ...v, want: frontend.short, also: feSha ? feSha.slice(0, 8) : null })) : [])
       ]
       for (const v of checks) {
         let streak = 0
         for (let i = 1; ; i++) {
           const r = probe(v.url, v.field)
-          streak = r.value === v.want ? streak + 1 : 0
+          streak = r.value === v.want || (v.also && r.value === v.also) ? streak + 1 : 0
           if (streak >= 2) break
-          if (i >= 40) throw new StageError(`${v.name} never answered ${v.want} (last: ${r.value ?? r.error})`)
+          if (i >= 40) throw new StageError(`${v.name} never answered ${v.want}${v.also ? ` or ${v.also}` : ''} (last: ${r.value ?? r.error})`)
           emit('verify', 'progress', `${v.name}: ${r.value ?? r.error ?? 'no answer'} (${i}/40)`)
           await sleep(15_000)
         }
