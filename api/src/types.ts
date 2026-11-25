@@ -235,6 +235,9 @@ declare module 'fastify' {
     user?: User
     userRole?: Role | null
     isAdmin?: boolean
+    /** A Nivaro Hub break-glass grant holds this account right now (its admin access comes from
+     *  it): what it may not do meanwhile is refused BREAK_GLASS_ACTIVE (services/break-glass-guard.ts). */
+    breakGlass?: { ref: string; ends_at: string | null } | null
     workspaceId: string | null
     /** The request id (= its trace id), stamped by plugins/request-trace.ts on /api requests. */
     requestId?: string

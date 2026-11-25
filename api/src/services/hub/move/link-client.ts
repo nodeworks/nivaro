@@ -100,7 +100,9 @@ export interface HubLinkClient {
     on: boolean,
     moveId: number,
     message?: string,
-    carry?: { targetInstance: string; keepEnvMail?: boolean }
+    carry?: { targetInstance: string; keepEnvMail?: boolean },
+    /** Hub placement (review C1): only the move's new stack may take it (NOT_THE_MOVE_TARGET). */
+    opts?: { onlyTarget?: boolean }
   ): Promise<MaintenanceAnswer>
   retire(moveId: number): Promise<void>
   unretire(): Promise<void>
@@ -348,10 +350,11 @@ export function hubLinkClient(
       }
     },
 
-    async maintenance(on, moveId, message, carry) {
+    async maintenance(on, moveId, message, carry, opts) {
       const a = await call('/maintenance', 'POST', {
         on,
         move_id: moveId,
+        ...(opts?.onlyTarget ? { only_target: true } : {}),
         ...(message ? { message } : {}),
         ...(on && carry ? { target_instance: carry.targetInstance } : {}),
         ...(on && carry?.keepEnvMail ? { keep_env_mail: true } : {})

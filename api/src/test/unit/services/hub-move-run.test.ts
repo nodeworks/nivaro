@@ -42,7 +42,8 @@ const migrations = [
 const Run = await import('../../../services/hub/move/run.js')
 const { healMoves, unmarkMoveLive } = await import('../../../services/hub/move/heal.js')
 const { readMove } = await import('../../../services/hub/move/rows.js')
-const { MoveStepError } = await import('../../../services/hub/move/ops.js')
+const Ops = await import('../../../services/hub/move/ops.js')
+const { MoveStepError } = Ops
 const { MOVE_STEPS, MANUAL_MOVE_STEPS } = await import('../../../services/hub/move/plan.js')
 const { memoryPromoteLock, sharedLock } = await import('../../../services/hub/promote-lock.js')
 type MovePlan = import('../../../services/hub/move/types.js').MovePlan
@@ -80,6 +81,8 @@ interface World {
   sharedB: number
   dockerPlacement: number
   sharedPlacementA: number
+  /** Hub placement (idea 48): a stack on another Docker host (between_stacks). */
+  dockerPlacementB: number
 }
 
 async function world(fromKind: 'docker' | 'shared'): Promise<World> {
@@ -110,6 +113,16 @@ async function world(fromKind: 'docker' | 'shared'): Promise<World> {
     driver_id: driver,
     target: JSON.stringify({ stack: `acme-prod${n}` })
   })
+  const driverB = await insertId('nivaro_hub_drivers', {
+    kind: 'docker',
+    name: `agentb${n}`,
+    config: JSON.stringify({ agent_url: 'https://agent-b.example.com' })
+  })
+  const dockerPlacementB = await insertId('nivaro_hub_placements', {
+    kind: 'dedicated',
+    driver_id: driverB,
+    target: JSON.stringify({ stack: `acme-prod${n}` })
+  })
   const sharedPlacementA = await insertId('nivaro_hub_placements', {
     kind: 'shared',
     driver_id: null,
@@ -131,17 +144,31 @@ async function world(fromKind: 'docker' | 'shared'): Promise<World> {
   // The app's key, as the plan requires (APP_KEY_UNKNOWN blocks a move without one).
   const { setAppKey } = await import('../../../services/hub/shared/store.js')
   await setAppKey(envId, 'ab'.repeat(32))
-  return { envId, appKey, envKey, sharedA, sharedB, dockerPlacement, sharedPlacementA }
+  return {
+    envId,
+    appKey,
+    envKey,
+    sharedA,
+    sharedB,
+    dockerPlacement,
+    sharedPlacementA,
+    dockerPlacementB
+  }
 }
 
 function planOf(kind: MoveKind, routing: 'automatic' | 'manual' = 'automatic'): MovePlan {
   const route: RouteAction[] =
     kind === 'to_dedicated'
       ? [{ side: 'target', op: 'apply_stack' }]
-      : [
-          { side: 'source', op: 'drop_host', host: 'acme.example.com' },
-          { side: 'target', op: 'add_host', host: 'acme.example.com' }
-        ]
+      : kind === 'between_stacks'
+        ? [
+            { side: 'source', op: 'drop_host', host: 'acme.example.com' },
+            { side: 'target', op: 'apply_stack' }
+          ]
+        : [
+            { side: 'source', op: 'drop_host', host: 'acme.example.com' },
+            { side: 'target', op: 'add_host', host: 'acme.example.com' }
+          ]
   return {
     kind,
     routing,
@@ -295,10 +322,12 @@ async function start(w: World, to: unknown, over: Record<string, unknown> = {}) 
 const toFor = (kind: MoveKind, w: World) =>
   kind === 'to_dedicated'
     ? { kind: 'dedicated', placement_id: w.dockerPlacement }
-    : { kind: 'shared', shared_id: kind === 'to_shared' ? w.sharedA : w.sharedB }
+    : kind === 'between_stacks'
+      ? { kind: 'dedicated', placement_id: w.dockerPlacementB }
+      : { kind: 'shared', shared_id: kind === 'to_shared' ? w.sharedA : w.sharedB }
 
 const fromFor = (kind: MoveKind): 'docker' | 'shared' =>
-  kind === 'to_shared' ? 'docker' : 'shared'
+  kind === 'to_shared' || kind === 'between_stacks' ? 'docker' : 'shared'
 
 async function refusal(p: Promise<unknown>): Promise<{ code: string; statusCode: number }> {
   try {
@@ -410,10 +439,54 @@ const ORDER: Record<MoveKind, string[]> = {
     'retireSource',
     'dropTempHost',
     'revokeTickets'
+  ],
+  // Hub placement (idea 48): a Docker stack onto a stack on another host — to_dedicated's steps,
+  // with a dedicated source (no replica wait after its maintenance).
+  between_stacks: [
+    'databaseIdentity',
+    'sourceMaintenance',
+    'sourceBusy',
+    'targetMaintenance',
+    'deployTarget',
+    'targetMaintenance',
+    'targetMaintenance',
+    'targetUnretire',
+    'targetReady',
+    'databaseIdentity',
+    'pullFiles',
+    'route',
+    'route',
+    'verifyName',
+    'verifyName', // review C1: the name reaches the new stack, right before release
+    'targetMaintenance',
+    'verifyName', // … and right before the old stack is retired
+    'verifyTargetKey',
+    'retireSource',
+    'dropTempHost',
+    'revokeTickets'
   ]
 }
 
 describe('move run — happy paths', () => {
+  it('between_stacks: a Docker stack onto another host, every step in order, success', async () => {
+    plan = planOf('between_stacks')
+    const w = await world('docker')
+    const { move_id } = await start(w, toFor('between_stacks', w))
+    await Run.awaitMove(move_id)
+    expect(fake.names()).toEqual(ORDER.between_stacks)
+    const m = await readMove(move_id)
+    expect(m?.status).toBe('success')
+    expect(m?.kind).toBe('between_stacks')
+    const env = await db('nivaro_hub_environments').where({ id: w.envId }).first()
+    expect(Number(env.placement_id)).toBe(w.dockerPlacementB)
+    expect(env.status).toBe('active')
+    // One full copy (the automatic order), never a delta.
+    expect(fake.calls.filter((c) => c[0] === 'pullFiles').map((c) => c[1])).toEqual(['full'])
+    // The source drops its name before the target applies its stack.
+    const routes = fake.calls.filter((c) => c[0] === 'route').map((c) => (c[1] as RouteAction).op)
+    expect(routes).toEqual(['drop_host', 'apply_stack'])
+  })
+
   for (const kind of ['to_shared', 'to_dedicated', 'between_shared'] as MoveKind[]) {
     it(`${kind}: every step in order, released onto the target, success`, async () => {
       plan = planOf(kind)
@@ -493,7 +566,7 @@ const undoCalls = (calls: Call[]) =>
  * the order they were recorded; `ran` = the steps that ran (done or the failed one).
  */
 function rule2Undo(kind: MoveKind, recorded: number[], ran: readonly string[]): Call[] {
-  const sharedTarget = kind !== 'to_dedicated'
+  const sharedTarget = kind !== 'to_dedicated' && kind !== 'between_stacks'
   const newest = [...recorded].reverse()
   const out: Call[] = []
   // 2. target-side route actions (a dedicated target's go with its stack in 3).
@@ -511,7 +584,12 @@ function rule2Undo(kind: MoveKind, recorded: number[], ran: readonly string[]): 
 }
 
 describe('rolls back from every step before release', () => {
-  for (const kind of ['to_shared', 'to_dedicated', 'between_shared'] as MoveKind[]) {
+  for (const kind of [
+    'to_shared',
+    'to_dedicated',
+    'between_shared',
+    'between_stacks'
+  ] as MoveKind[]) {
     const steps = MOVE_STEPS[kind]
     const before = steps.slice(0, steps.indexOf('release'))
     for (const key of before) {
@@ -543,7 +621,7 @@ describe('rolls back from every step before release', () => {
         expect((await db('nivaro_hub_deploys').where({ move_id }).first()).status).toBe('failed')
         expect(activity.rows.map((r) => r.action)).toContain('hub-move-rolled-back')
         // A shared target placement this move made is gone again.
-        if (kind !== 'to_dedicated')
+        if (kind !== 'to_dedicated' && kind !== 'between_stacks')
           expect(
             await db('nivaro_hub_placements').where({ id: m?.to_placement_id }).first()
           ).toBeUndefined()
@@ -553,7 +631,12 @@ describe('rolls back from every step before release', () => {
 
   // I-5: the same table for the manual orders (B8: the route and verify come before maintenance;
   // the target's own actions run at route, the source's after verify).
-  for (const kind of ['to_shared', 'to_dedicated', 'between_shared'] as MoveKind[]) {
+  for (const kind of [
+    'to_shared',
+    'to_dedicated',
+    'between_shared',
+    'between_stacks'
+  ] as MoveKind[]) {
     const steps = MANUAL_MOVE_STEPS[kind]
     const before = steps.slice(0, steps.indexOf('release'))
     for (const key of before) {
@@ -2360,5 +2443,268 @@ describe('the app key across moves (E2E B4, P6-38)', () => {
     expect(m?.status).toBe('success')
     expect(m?.error).toBeNull()
     expect(fake.names()).toContain('retireSource')
+  })
+})
+
+// ── review C1: a move between two stacks proves the name reaches the NEW stack ──────────────
+
+describe('between_stacks: the real verifyName tells the new stack from the old one', () => {
+  /**
+   * The app behind the public name, as /api/version answers: the OLD stack (same version, no
+   * marker) or the NEW one (move_target = the move). The real defaultMoveOps.verifyName reads it.
+   */
+  const app = {
+    onNew: false,
+    calls: 0,
+    moveId: 0,
+    decide: undefined as undefined | ((n: number) => boolean)
+  }
+  const appFetch = (async () => {
+    app.calls++
+    return new Response(
+      JSON.stringify({
+        version: '0.3.210',
+        ...((app.decide ? app.decide(app.calls) : app.onNew) ? { move_target: app.moveId } : {})
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    )
+  }) as unknown as typeof fetch
+  const withRealVerify = () =>
+    useDeps({
+      ops: (move, p) => {
+        app.moveId = move.id
+        const real = Ops.defaultMoveOps(move, p, { fetch: appFetch })
+        return {
+          ...fake.ops,
+          verifyName: async (e: { version: string; shared: string | null }) => {
+            fake.calls.push(['verifyName', e])
+            return real.verifyName(e)
+          }
+        }
+      }
+    })
+
+  beforeEach(() => {
+    app.onNew = false
+    app.calls = 0
+    app.decide = undefined
+  })
+
+  it('automatic: the old stack still answering the name → no release, no retire, rolled back', async () => {
+    plan = planOf('between_stacks')
+    withRealVerify()
+    const w = await world('docker')
+    const { move_id } = await start(w, toFor('between_stacks', w))
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    expect(m?.status).toBe('rolled_back')
+    expect(m?.error).toMatch(/^VERIFY_FAILED/)
+    expect(app.calls).toBeGreaterThan(1)
+    // Never lifted at the target, never retired at the source; the env is back on the source.
+    expect(fake.calls.some((c) => c[0] === 'targetMaintenance' && c[1] === false)).toBe(false)
+    expect(fake.names()).not.toContain('retireSource')
+    const env = await db('nivaro_hub_environments').where({ id: w.envId }).first()
+    expect(Number(env.placement_id)).toBe(w.dockerPlacement)
+  })
+
+  it('automatic: the new stack answering with its marker → released and retired', async () => {
+    plan = planOf('between_stacks')
+    withRealVerify()
+    app.onNew = true
+    const w = await world('docker')
+    const { move_id } = await start(w, toFor('between_stacks', w))
+    await Run.awaitMove(move_id)
+    expect((await readMove(move_id))?.status).toBe('success')
+    expect(fake.names()).toContain('retireSource')
+    // verify, then again right before the release and the retire.
+    const names = fake.names()
+    expect(names.lastIndexOf('verifyName')).toBeLessThan(names.indexOf('retireSource'))
+    expect(names.indexOf('verifyName')).toBeLessThan(
+      fake.calls.findIndex((c) => c[0] === 'targetMaintenance' && c[1] === false)
+    )
+  })
+
+  it('manual: the old stack answering never confirms the route; the wait times out and rolls back', async () => {
+    plan = planOf('between_stacks', 'manual')
+    withRealVerify()
+    const w = await world('docker')
+    const { move_id } = await start(w, toFor('between_stacks', w))
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    expect(m?.status).toBe('rolled_back')
+    expect(m?.error).toMatch(/^ROUTE_TIMEOUT/)
+    expect(m?.steps.route_confirmed_at ?? null).toBeNull()
+    expect(fake.calls.some((c) => c[0] === 'targetMaintenance' && c[1] === false)).toBe(false)
+    expect(fake.names()).not.toContain('retireSource')
+    // The source was never put in maintenance (the manual order freezes it after verify).
+    expect(fake.calls.some((c) => c[0] === 'sourceMaintenance' && c[1] === true)).toBe(false)
+  })
+
+  it('verifyName itself: the marker decides for between_stacks, never for the earlier kinds', async () => {
+    const w = await world('docker')
+    const move = {
+      id: 4242,
+      environment_id: w.envId,
+      from_placement_id: w.dockerPlacement,
+      to_placement_id: w.dockerPlacementB,
+      steps: {}
+    } as never
+    const urls: string[] = []
+    const answer = (body: Record<string, unknown>) =>
+      (async (u: string) => {
+        urls.push(String(u))
+        return new Response(JSON.stringify(body), { status: 200 })
+      }) as unknown as typeof fetch
+    const v = (kind: MoveKind, body: Record<string, unknown>) =>
+      Ops.defaultMoveOps(move, planOf(kind), { fetch: answer(body) }).verifyName({
+        version: '0.3.210',
+        shared: null
+      })
+    expect(await v('between_stacks', { version: '0.3.210' })).toBe(false)
+    expect(await v('between_stacks', { version: '0.3.210', move_target: 4242 })).toBe(true)
+    expect(await v('between_stacks', { version: '0.3.210', move_target: 4241 })).toBe(false)
+    expect(
+      await v('between_stacks', { version: '0.3.210', move_target: 4242, shared_deployment: 'x' })
+    ).toBe(false)
+    // to_dedicated (a shared source): a dedicated answer still verifies without a marker.
+    expect(await v('to_dedicated', { version: '0.3.210' })).toBe(true)
+    expect(await v('to_dedicated', { version: '0.3.210', shared_deployment: 'pool' })).toBe(false)
+    // Review 2 L6: every check carries a cache-buster (no proxy answers from a copy).
+    expect(urls.every((u) => /\/api\/version\?_=[0-9a-z]+$/.test(u))).toBe(true)
+    expect(new Set(urls).size).toBe(urls.length)
+  })
+
+  // ── review 2 L9: the gaps ─────────────────────────────────────────────────────────────────
+
+  it('verify passes, then the name flips back before release → nothing switched, rolled back', async () => {
+    plan = planOf('between_stacks')
+    withRealVerify()
+    app.decide = (n) => n === 1 // verify sees the new stack once; release never does
+    const w = await world('docker')
+    const { move_id } = await start(w, toFor('between_stacks', w))
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    expect(m?.status).toBe('rolled_back')
+    expect(m?.error).toMatch(/^NAME_NOT_ON_NEW_STACK/)
+    // Tried again before giving up (review 2 M1), never lifted, env row on the source.
+    expect(app.calls).toBeGreaterThanOrEqual(5)
+    expect(fake.calls.some((c) => c[0] === 'targetMaintenance' && c[1] === false)).toBe(false)
+    const env = await db('nivaro_hub_environments').where({ id: w.envId }).first()
+    expect(Number(env.placement_id)).toBe(w.dockerPlacement)
+  })
+
+  it('a blip at release is tried again: the move still succeeds', async () => {
+    plan = planOf('between_stacks')
+    withRealVerify()
+    app.decide = (n) => n !== 2 // the first check at release misses, the next one sees it
+    const w = await world('docker')
+    const { move_id } = await start(w, toFor('between_stacks', w))
+    await Run.awaitMove(move_id)
+    expect((await readMove(move_id))?.status).toBe('success')
+  })
+
+  it('the retire check fails → interrupted, the old stack is not retired, the cause is kept', async () => {
+    plan = planOf('between_stacks')
+    withRealVerify()
+    // verify (1) and release (2) see the new stack; every retire check after does not.
+    app.decide = (n) => n <= 2
+    const w = await world('docker')
+    const { move_id } = await start(w, toFor('between_stacks', w))
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    expect(m?.status).toBe('interrupted')
+    expect(m?.error).toMatch(/^OLD_STACK_STILL_NAMED/)
+    expect(fake.names()).not.toContain('retireSource')
+    const env = await db('nivaro_hub_environments').where({ id: w.envId }).first()
+    expect(Number(env.placement_id)).toBe(w.dockerPlacementB)
+  })
+
+  it('the release lift refused (the name reached the old stack) → rolled back, never lifted', async () => {
+    plan = planOf('between_stacks')
+    withRealVerify()
+    app.decide = () => true
+    fake.state.failOn = (name, arg) => name === 'targetMaintenance' && arg === false
+    const w = await world('docker')
+    const { move_id } = await start(w, toFor('between_stacks', w))
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    expect(m?.status).toBe('rolled_back')
+    expect(fake.names()).not.toContain('retireSource')
+    const env = await db('nivaro_hub_environments').where({ id: w.envId }).first()
+    expect(Number(env.placement_id)).toBe(w.dockerPlacement)
+  })
+
+  it('confirmRoute with the real check: {serving:false} while the old stack answers', async () => {
+    plan = planOf('between_stacks', 'manual')
+    withRealVerify()
+    useDeps({
+      ops: (move, p) => {
+        app.moveId = move.id
+        const real = Ops.defaultMoveOps(move, p, { fetch: appFetch })
+        return { ...fake.ops, verifyName: (e) => real.verifyName(e) }
+      },
+      sleep: async (ms: number) => {
+        t += ms
+        await new Promise((r) => setTimeout(r, 20))
+      }
+    })
+    const w = await world('docker')
+    const { move_id } = await start(w, toFor('between_stacks', w))
+    await waitFor(async () => (await readMove(move_id))?.status === 'waiting')
+    expect(await Run.confirmRoute(move_id, 'u')).toEqual({ serving: false })
+    app.decide = () => true
+    expect(await Run.confirmRoute(move_id, 'u')).toEqual({ serving: true })
+    await Run.awaitMove(move_id)
+    expect((await readMove(move_id))?.status).toBe('success')
+  })
+
+  it('Finish refuses to stop the old stack while the name may still reach it, in a key stop too', async () => {
+    plan = planOf('between_stacks')
+    withRealVerify()
+    app.decide = () => true
+    fake.ops.verifyTargetKey = async () => {
+      throw new MoveStepError('APP_KEY_MISMATCH', 'The new home runs another key.')
+    }
+    const w = await world('docker')
+    const { move_id } = await start(w, toFor('between_stacks', w))
+    await Run.awaitMove(move_id)
+    expect((await readMove(move_id))?.status).toBe('interrupted')
+    app.decide = () => false
+    const r = await Run.finishStopSource(move_id, `${w.appKey}/${w.envKey}`, 'u').catch(
+      (e: unknown) => e as { code?: string }
+    )
+    expect((r as { code?: string }).code).toBe('NEW_HOME_NOT_SERVING')
+    expect(fake.names()).not.toContain('stopSource')
+  })
+
+  it('a published port of its own: written at release, put back by a rollback of release (L1)', async () => {
+    const w = await world('docker')
+    await db('nivaro_hub_stack_settings').insert({ environment_id: w.envId, publish_port: 8080 })
+    plan = planOf('between_stacks')
+    withRealVerify()
+    app.decide = () => true
+    const ok = await start(w, { ...toFor('between_stacks', w), publish_port: 8090 })
+    expect((await readMove(ok.move_id))?.steps.publish_ports).toEqual({
+      source: 8080,
+      target: 8090
+    })
+    await Run.awaitMove(ok.move_id)
+    expect((await readMove(ok.move_id))?.status).toBe('success')
+    expect(
+      (await db('nivaro_hub_stack_settings').where({ environment_id: w.envId }).first())
+        .publish_port
+    ).toBe(8090)
+
+    // A second environment: release commits, then its lift fails → the old port comes back.
+    const w2 = await world('docker')
+    await db('nivaro_hub_stack_settings').insert({ environment_id: w2.envId, publish_port: 8080 })
+    fake.state.failOn = (name, arg) => name === 'targetMaintenance' && arg === false
+    const bad = await start(w2, { ...toFor('between_stacks', w2), publish_port: 8091 })
+    await Run.awaitMove(bad.move_id)
+    expect((await readMove(bad.move_id))?.status).toBe('rolled_back')
+    expect(
+      (await db('nivaro_hub_stack_settings').where({ environment_id: w2.envId }).first())
+        .publish_port
+    ).toBe(8080)
   })
 })

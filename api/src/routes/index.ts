@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { bustPortalLinkCache } from '../services/app-links.js'
 import { noteReadDuration } from '../services/background-runs.js'
+import { installBreakGlassWriteGuard } from '../services/break-glass-guard.js'
 import { clearMetadataCache } from '../services/collections.js'
 import { announceConfigChanged, collectionHint, isConfigWrite } from '../services/config-live.js'
 import { configWatchOnResponse, configWatchPreHandler } from '../services/config-watch.js'
@@ -399,6 +400,9 @@ export async function registerRoutes(app: FastifyInstance) {
   // Every /api/hub route (any plugin, Hub mode only): API keys need a Hub scope, connected apps
   // only read and plan, View-as never writes (services/hub/api/gate.ts). Before any registration.
   installHubCredentialGate(app)
+  // A Nivaro Hub break-glass grantee may not turn borrowed admin into lasting admin: role, policy
+  // and account-role writes refuse BREAK_GLASS_ACTIVE (services/break-glass-guard.ts).
+  installBreakGlassWriteGuard(app)
   // #2759 — how long a cache-missing custom query / widget read takes, so a known-slow one can
   // offer "Run in background" (services/background-runs.ts).
   app.addHook('onResponse', noteReadDuration(app))

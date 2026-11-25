@@ -459,6 +459,12 @@ function MoveForm({
   })
 
   const currentShared = current.data?.kind === 'shared' ? current.data.shared_deployment_id : null
+  // Hub placement (idea 48): a Docker stack moves to another stack of its own (another host).
+  const currentDocker =
+    current.data?.kind === 'dedicated' &&
+    drivers.data?.find((d) => d.id === current.data?.driver_id)?.kind === 'docker'
+  const isDockerPlacement = (p: Extract<HubPlacement, { kind: 'dedicated' }>) =>
+    drivers.data?.find((d) => d.id === p.driver_id)?.kind === 'docker'
   const options: ComboOption[] = [
     ...(shared.data ?? [])
       .filter((s) => s.status !== 'retired' && s.id !== currentShared)
@@ -467,12 +473,13 @@ function MoveForm({
         label: `Shared · ${s.key}`,
         hint: [s.name, s.version_pin].filter(Boolean).join(' · ')
       })),
-    // Back to a dedicated stack only from a shared deployment (dedicated → dedicated is not a
-    // move: the planner answers NOT_A_MOVE).
+    // Back to a dedicated stack from a shared deployment; between two dedicated placements only
+    // Docker stacks (the planner answers NOT_A_MOVE for a GitLab one).
     ...homes
-      .filter(() => currentShared != null)
+      .filter(() => currentShared != null || currentDocker)
       .map((h) => h.data)
       .filter((p): p is Extract<HubPlacement, { kind: 'dedicated' }> => p?.kind === 'dedicated')
+      .filter((p) => currentShared != null || isDockerPlacement(p))
       .map((p) => {
         const driver = drivers.data?.find((d) => d.id === p.driver_id)
         const where = p.target.stack ?? p.target.branch
@@ -485,8 +492,8 @@ function MoveForm({
         }
       }),
     // Never ran on a stack of its own (placed on shared from the start): a new stack on any
-    // Docker driver (ruling P6-17 gap a).
-    ...(currentShared != null
+    // Docker driver (ruling P6-17 gap a). A Docker stack: a new stack on any Docker host.
+    ...(currentShared != null || currentDocker
       ? (drivers.data ?? [])
           .filter((d) => d.kind === 'docker')
           .map((d) => ({
@@ -507,15 +514,27 @@ function MoveForm({
   ]
 
   const [pool, setPool] = useState('5')
+  // Review M1: the new stack's published port when both stacks share a publish-edge host.
+  const [port, setPort] = useState('')
   const [checked, setChecked] = useState<Record<string, boolean>>({})
   const [confirm, setConfirm] = useState('')
   const [changed, setChanged] = useState(false)
   const poolN = Number(pool)
   const poolBad = !Number.isInteger(poolN) || poolN < POOL_MIN || poolN > POOL_MAX
   const base = targetFromValue(pick)
+  const portN = Number(port)
+  const portBad = port.trim() !== '' && (!Number.isInteger(portN) || portN < 1024 || portN > 65535)
+  const portSet = base?.kind === 'dedicated' && port.trim() !== '' && !portBad
   const target =
-    base?.kind === 'shared' ? { ...base, ...(poolBad ? {} : { pool_max: poolN }) } : base
-  const planKey = moveKeys.plan(env.id, `${pick}|${base?.kind === 'shared' ? pool : ''}`)
+    base?.kind === 'shared'
+      ? { ...base, ...(poolBad ? {} : { pool_max: poolN }) }
+      : base && portSet
+        ? { ...base, publish_port: portN }
+        : base
+  const planKey = moveKeys.plan(
+    env.id,
+    `${pick}|${base?.kind === 'shared' ? pool : ''}|${portSet ? portN : ''}`
+  )
 
   const plan = useQuery({
     queryKey: planKey,
@@ -540,7 +559,7 @@ function MoveForm({
     setChanged(false)
     setOverride(false)
     setPullRefused([])
-  }, [pick, pool])
+  }, [pick, pool, port])
   // The pull overrides (LINK_URL_NOT_PULLABLE, SOURCE_NOT_PULLABLE; ruling P6-20 #2): offered
   // when the plan or a refused start names one; never a required checklist item; reset with every
   // new plan. Only the codes seen are sent.
@@ -669,6 +688,23 @@ function MoveForm({
             />
           </Field>
         )}
+        {base?.kind === 'dedicated' &&
+          (port !== '' || plan.data?.blockers.some((b) => b.code === 'PORT_IN_USE')) && (
+            <Field
+              id={`${idPrefix}-port`}
+              label='Published port of the new stack'
+              hint='A free port on that host, other than the old stack’s.'
+              error={portBad ? 'A port from 1024 to 65535.' : null}
+            >
+              <Input
+                id={`${idPrefix}-port`}
+                inputMode='numeric'
+                value={port}
+                onChange={(e) => setPort(e.target.value)}
+                className='h-8 bg-white font-mono text-[13px] dark:bg-background'
+              />
+            </Field>
+          )}
         {base?.kind === 'shared' && (
           <Field
             id={`${idPrefix}-pool`}

@@ -331,6 +331,10 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_hub_rebalances',
   'nivaro_hub_scale_roles', //         Hub scaling (581): kept replicas/limits, rules, scale runs
   'nivaro_hub_scale_runs',
+  'nivaro_hub_regions', //             Hub placement (580): regions, host membership, cost
+  'nivaro_hub_region_drivers', //      centres, peer Hubs (sealed key)
+  'nivaro_hub_app_cost_centers',
+  'nivaro_hub_peers',
   'nivaro_hub_trains', //  Hub release operations (565): per-Hub runtime state, never promoted
   'nivaro_hub_schedules',
   'nivaro_hub_freezes',
@@ -373,6 +377,14 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_hub_smoke_runs', //          sightings + promotions (per-Hub state, never promoted)
   'nivaro_hub_extension_sightings',
   'nivaro_hub_extension_promotions',
+  'nivaro_break_glass_grants', //    break-glass grants of THIS app (578): travel with nivaro_users
+  'nivaro_hub_access_reviews', //    Hub security (578): access reviews, scans, TLS, break-glass
+  'nivaro_hub_access_review_items',
+  'nivaro_hub_security_settings',
+  'nivaro_hub_vuln_scans',
+  'nivaro_hub_vuln_findings',
+  'nivaro_hub_cert_checks',
+  'nivaro_hub_break_glass',
   'nivaro_hub_clones', //              Hub lifecycle (579): structure copies, retirements
   'nivaro_hub_retirements', //         (per-Hub state, never promoted)
   'nivaro_share_links',

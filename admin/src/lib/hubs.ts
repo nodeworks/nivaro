@@ -98,6 +98,16 @@ export const APPS_HUB: HubDef = {
       hint: 'Replicas and limits per role, and the rules that scale them.'
     },
     {
+      path: 'hosts',
+      label: 'Hosts',
+      hint: 'Docker hosts grouped in regions, and what runs on each.'
+    },
+    {
+      path: 'costs',
+      label: 'Costs',
+      hint: 'A rough monthly cost per app, department and owner.'
+    },
+    {
       path: 'drivers',
       label: 'Drivers',
       hint: 'Where apps are deployed: a GitLab project or a Docker host the Hub agent runs.'
@@ -208,7 +218,17 @@ export const APPS_HUB: HubDef = {
       hint: 'Questions about your apps, answered from Hub data (read-only).'
     },
     { path: 'audit', label: 'Audit', hint: 'Every change made through the Hub, by whom and when.' },
-    { path: 'people', label: 'People', hint: 'Who can reach which app, and offboarding.' }
+    { path: 'people', label: 'People', hint: 'Who can reach which app, and offboarding.' },
+    {
+      path: 'access',
+      label: 'Access',
+      hint: 'Temporary admin access (break-glass) and access reviews of every app.'
+    },
+    {
+      path: 'security',
+      label: 'Security',
+      hint: 'Certificates and names, image vulnerabilities and the compliance pack.'
+    }
   ]
 }
 

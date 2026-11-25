@@ -84,12 +84,16 @@ export function hubEventText(
 
 /** Active Hub admins + the app's active owners, each once (upper-cased compare). */
 export async function hubEventRecipients(appId: number): Promise<string[]> {
-  const admins = (await db('nivaro_users as u')
-    .join('nivaro_roles as r', 'r.id', 'u.role')
-    .where('r.admin_access', true)
-    .where('u.status', 'active')
-    .whereNull('u.account_kind')
-    .select('u.id')) as Array<{ id: unknown }>
+  // Break-glass grantees are not Hub administrators (their admin access is borrowed).
+  const { withoutLiveGrantees } = await import('../break-glass-grants.js')
+  const admins = (await withoutLiveGrantees(
+    db('nivaro_users as u')
+      .join('nivaro_roles as r', 'r.id', 'u.role')
+      .where('r.admin_access', true)
+      .where('u.status', 'active')
+      .whereNull('u.account_kind')
+      .select('u.id')
+  )) as Array<{ id: unknown }>
   const owners = (await db('nivaro_hub_app_owners as o')
     .join('nivaro_users as u', 'u.id', 'o.user_id')
     .where('o.app_id', appId)

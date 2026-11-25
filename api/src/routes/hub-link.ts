@@ -12,6 +12,7 @@ import { readReadiness } from '../services/readiness.js'
 import { bearerMatches } from '../services/render-peer.js'
 import { NIVARO_VERSION } from '../version.js'
 import { hubLinkDataRoutes } from './hub-link-data.js'
+import { hubLinkSecurityRoutes } from './hub-link-security.js'
 import { hubLinkTemplateRoute } from './hub-link-template.js'
 import { runPreflight } from './preflight.js'
 
@@ -197,6 +198,9 @@ export async function hubLinkRoutes(app: FastifyInstance) {
 
   // Hub data care (0.3.215): /data/* — refresh keeps and files backups (routes/hub-link-data.ts).
   hubLinkDataRoutes(app)
+  // Hub security (0.3.215): /security/* — access-review reads, break-glass grants
+  // (routes/hub-link-security.ts).
+  hubLinkSecurityRoutes(app)
 
   app.get('/status', async (req, reply) => {
     // Hub release operations: ?recent_minutes=N (aggregate counts) and ?release_facts=1 (build
@@ -309,6 +313,7 @@ export async function hubLinkRoutes(app: FastifyInstance) {
       move_id?: unknown
       keep_env_mail?: unknown
       target_instance?: unknown
+      only_target?: unknown
     }
     if (typeof b.on !== 'boolean')
       return fail(reply, 400, 'BAD_MAINTENANCE', 'on must be true or false')
@@ -317,6 +322,20 @@ export async function hubLinkRoutes(app: FastifyInstance) {
     const moveId = b.move_id == null ? null : positiveId(b.move_id)
     if (b.move_id != null && moveId == null)
       return fail(reply, 400, 'BAD_MOVE_ID', 'move_id must be a positive whole number')
+    // Hub placement (review C1): {on:false, move_id, only_target:true} lifts maintenance only on
+    // the NEW stack of that move (HUB_BOOT_MAINTENANCE = move_id). A move between two stacks of
+    // one environment sends it over the public name: should the name still reach the OLD stack,
+    // that one answers 409 NOT_THE_MOVE_TARGET and keeps its freeze.
+    if (b.only_target === true) {
+      const { hubBootMoveId } = await import('../services/hub-boot-move.js')
+      if (moveId == null || hubBootMoveId() !== moveId)
+        return fail(
+          reply,
+          409,
+          'NOT_THE_MOVE_TARGET',
+          'This app is not the new stack of that move; its maintenance was left as it is'
+        )
+    }
     const carry = await import('../services/move-carry.js')
     if (b.target_instance != null && !carry.validTargetInstance(b.target_instance))
       return fail(reply, 400, 'BAD_TARGET_INSTANCE', 'target_instance must be an instance name')

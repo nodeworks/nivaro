@@ -91,8 +91,10 @@ import { runsStorageCopy } from './storage-floor.js'
  *           link (link-client.ts) with the environment's hub token;
  *   gitlab  a dedicated app deployed by its GitLab pipeline (Decision 9: pin + deploy job,
  *           promote-run.ts deployComponentAt), reached over its hub link.
- * Phase 6 kinds always have a shared side: to_shared (dedicated → shared), to_dedicated
- * (shared → dedicated), between_shared (shared → shared).
+ * Phase 6 kinds have a shared side: to_shared (dedicated → shared), to_dedicated
+ * (shared → dedicated), between_shared (shared → shared). Hub placement (idea 48) adds
+ * between_stacks (a Docker stack → another Docker stack, usually on another host): its source is
+ * driven as to_shared's dedicated source, its target as to_dedicated's Docker target.
  *
  * Addresses (fix round 1, P6-19 C-2 / P6-18 #1): a dedicated side is reached only on the
  * address addresses.ts resolved and probed at start (steps.addresses): the source on one that
@@ -190,9 +192,11 @@ export interface MoveOps {
   targetKeyFp(): Promise<string | null>
   /**
    * P6-27: once rollback is no longer possible, a Docker target stack is applied again with only
-   * the environment's own names and the per-move name is proven gone (the agent converged on a
-   * spec without it, and the name no longer serves the app). Answers the name removed, or null
-   * when the target never had one.
+   * the environment's own names and without its boot maintenance (HUB_BOOT_MAINTENANCE), and the
+   * per-move name is proven gone (the agent converged on a spec without it, and the name no
+   * longer serves the app). A Docker target with no per-move name (a publish edge) is applied
+   * again without the boot maintenance only (review 2 L5). Answers the name removed, or null when
+   * the target never had one.
    */
   dropTempHost(): Promise<string | null>
   /** T10 carry: revokes any transfer ticket this move still holds (move end, rollback). */
@@ -691,6 +695,14 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
       { ...deps.docker, placementId: side.placement.id }
     )
     shape(prepared.spec)
+    // Review M1: during a move between stacks each stack keeps the published port recorded at
+    // start (the settings name one port for the environment; the two stacks need two).
+    const ports = (await readMove(move.id))?.steps.publish_ports ?? move.steps.publish_ports
+    if (ports && prepared.spec.publish_port != null) {
+      if (side.placement.id === move.to_placement_id) prepared.spec.publish_port = ports.target
+      else if (side.placement.id === move.from_placement_id && ports.source != null)
+        prepared.spec.publish_port = ports.source
+    }
     let applied: Awaited<ReturnType<typeof agentApply>>
     try {
       applied = await agent.agentApply(prepared.driver, side.stack, prepared.spec)
@@ -1022,9 +1034,16 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
       // here. A GitLab target is set both ways (M18). A rollback freezes a lifted target through
       // freezeTarget (P6-26 Rule 1), never through this.
       if (l.to.kind === 'docker' && on) return
-      // `off` happens at release, after verify saw the name serve the target.
-      const link = !on ? await verifiedTargetLink() : await targetLink()
-      await link.maintenance(on, move.id)
+      // `off` happens at release, after verify saw the name serve the target. Between two stacks
+      // (review 2 M1) it goes to the new stack's OWN address once the marker proved the name:
+      // a load balancer still holding both stacks never decides where it lands.
+      const link =
+        !on && plan.kind !== 'between_stacks' ? await verifiedTargetLink() : await targetLink()
+      // Hub placement (review C1): between two stacks of one environment the public name may
+      // still reach the OLD stack; only the move's new stack takes this release.
+      if (!on && plan.kind === 'between_stacks')
+        await link.maintenance(on, move.id, undefined, undefined, { onlyTarget: true })
+      else await link.maintenance(on, move.id)
     },
 
     async freezeTarget() {
@@ -1691,8 +1710,16 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
     async dropTempHost() {
       const l = await load()
       const temp = await tempHost()
-      if (!temp || l.to.kind !== 'docker') return null
+      if (l.to.kind !== 'docker') return null
       const to = l.to
+      // Review 2 L5: a target with no per-move name (a publish edge) is applied once more without
+      // its boot maintenance, so the released stack never carries this move's marker on.
+      if (!temp) {
+        await applyStack(to, await runningWant(to), (spec) => {
+          delete spec.env.HUB_BOOT_MAINTENANCE
+        })
+        return null
+      }
       const want = await runningWant(to)
       let sent: string[] = []
       await applyStack(to, want, (spec) => {
@@ -1769,8 +1796,10 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
       const ctl = new AbortController()
       const timer = setTimeout(() => ctl.abort(), 8_000)
       try {
-        const res = await (deps.fetch ?? fetch)(`${origin}/api/version`, {
-          headers: { Accept: 'application/json' },
+        // Review 2 L6: a cache-buster, so no proxy answers from a copy (the app sends no-store too).
+        const bust = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
+        const res = await (deps.fetch ?? fetch)(`${origin}/api/version?_=${bust}`, {
+          headers: { Accept: 'application/json', 'Cache-Control': 'no-cache' },
           redirect: 'manual',
           signal: ctl.signal
         })
@@ -1782,8 +1811,14 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
           version?: unknown
           shared_deployment?: unknown
           tenant?: unknown
+          move_target?: unknown
         } | null
         if (!b || b.version !== expect.version) return false
+        // Hub placement (review C1): between two stacks of one environment both answer the
+        // same version as a dedicated app. Only the NEW stack reports this move as its own
+        // (HUB_BOOT_MAINTENANCE → /api/version move_target): nothing else proves the name moved.
+        if (plan.kind === 'between_stacks')
+          return b.shared_deployment == null && String(b.move_target ?? '') === String(move.id)
         if (expect.shared === null) return b.shared_deployment == null
         // B3: a shared deployment answers its key and the tenant the name resolved to.
         return b.shared_deployment === expect.shared && b.tenant === l.tenantId

@@ -178,6 +178,8 @@ const SCREENS: Record<string, Screens> = {
     shared: lazy(() => import('@/pages/hub/shared/HubShared')),
     capacity: lazy(() => import('@/pages/hub/capacity/HubCapacity')),
     scale: lazy(() => import('@/pages/hub/scale/HubScale')),
+    hosts: lazy(() => import('@/pages/hub/placement/HubHosts')),
+    costs: lazy(() => import('@/pages/hub/placement/HubCosts')),
     releases: lazy(() => import('@/pages/hub/releases/HubReleases')),
     incidents: lazy(() => import('@/pages/hub/incident/HubIncidents')),
     'on-call': lazy(() => import('@/pages/hub/incident/HubOnCall')),
@@ -195,7 +197,9 @@ const SCREENS: Record<string, Screens> = {
     usage: lazy(() => import('@/pages/hub/insight/HubUsage')),
     dependencies: lazy(() => import('@/pages/hub/insight/HubDependencies')),
     ask: lazy(() => import('@/pages/hub/insight/HubAsk')),
-    people: lazy(() => import('@/pages/hub/people/HubPeople'))
+    people: lazy(() => import('@/pages/hub/people/HubPeople')),
+    access: lazy(() => import('@/pages/hub/security/HubAccess')),
+    security: lazy(() => import('@/pages/hub/security/HubSecurity'))
   }
 }
 

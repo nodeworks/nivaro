@@ -2335,6 +2335,392 @@ export const HUB_ROUTES: HubRoute[] = [
         'Docker: the pin is written inside the promotion lock as part of Apply now (202, a normal Hub deploy) and put back when the deploy fails. GitLab: the pin file extensions/<id>.pin beside the driver’s pin file is committed under the promotion and branch locks, a deploy record (kind extension) is written and the repository pipeline is watched (202). Refused for an extension the app neither lists nor runs (UNKNOWN_EXTENSION), on a shared deployment (EXTENSION_ON_SHARED), while a move or creation is open (MOVE_OPEN, CREATION_OPEN), in a freeze (FROZEN) or while the environment deploys (LOCKED).'
     }
   ),
+  // ─── Hosts and regions (routes/hub-placement.ts) ────────────────────────────
+  r(
+    'GET',
+    '/placement',
+    'Hosts',
+    'admin',
+    'read',
+    'Regions, their Docker hosts and what runs there',
+    {
+      notes: 'Also the hosts in no region and the environments with no placement yet.'
+    }
+  ),
+  r('GET', '/regions', 'Hosts', 'admin', 'read', 'Regions (groups of Docker hosts)'),
+  r('POST', '/regions', 'Hosts', 'admin', 'write', 'Make a region', {
+    body: {
+      key: s('Lower-case key', { required: true }),
+      name: s('Name', { required: true }),
+      note: s(),
+      cost_percent: n('Cost factor for chargeback, 1–1000 (100 = the rates as set)'),
+      position: n()
+    }
+  }),
+  r('PATCH', '/regions/:id', 'Hosts', 'admin', 'write', 'Change a region (its key stays)', {
+    body: { name: s(), note: s(), cost_percent: n(), position: n() }
+  }),
+  r('DELETE', '/regions/:id', 'Hosts', 'admin', 'write', 'Delete a region (its hosts stay)'),
+  r(
+    'PUT',
+    '/placement/hosts/:driverId',
+    'Hosts',
+    'admin',
+    'write',
+    'Put a Docker host in a region',
+    {
+      body: { region_id: n('A region, or null for none'), label: s('Shown beside the host name') }
+    }
+  ),
+  r(
+    'POST',
+    '/placement/environments/:envId/place',
+    'Hosts',
+    'admin',
+    'write',
+    'Run an environment that has no placement on a Docker host',
+    {
+      body: {
+        driver_id: n('The Docker host', { required: true }),
+        stack: s('The swarm stack name', { required: true })
+      },
+      notes:
+        'Only for an environment with no placement yet (409 ALREADY_PLACED: move it instead, kind between_stacks), 409 MOVE_OPEN while a move holds it. Makes the stack placement; deploy it with Apply now.'
+    }
+  ),
+  // ─── Cost chargeback (routes/hub-placement.ts) ──────────────────────────────
+  r(
+    'GET',
+    '/chargeback',
+    'Costs',
+    'admin',
+    'read',
+    'Rough monthly cost per app, department and owner'
+  ),
+  r(
+    'GET',
+    '/chargeback.csv',
+    'Costs',
+    'admin',
+    'read',
+    'The cost report as CSV (one line per environment)',
+    {
+      notes: 'Every text cell is formula-safe. Logged.'
+    }
+  ),
+  r('GET', '/chargeback/settings', 'Costs', 'admin', 'read', 'Rates, currency and window'),
+  r(
+    'PUT',
+    '/chargeback/settings',
+    'Costs',
+    'admin',
+    'write',
+    'Set the rates, currency and window',
+    {
+      body: {
+        currency: s('Three-letter code'),
+        rates: o(
+          'cpu_core_month, memory_gb_month, storage_gb_month, database_gb_month, environment_month'
+        ),
+        window_days: n('7–31')
+      }
+    }
+  ),
+  r(
+    'PUT',
+    '/chargeback/apps/:appId',
+    'Costs',
+    'admin',
+    'write',
+    'Set an app’s department and cost centre',
+    {
+      body: { department: s(), cost_center: s() }
+    }
+  ),
+  // ─── Federation (routes/hub-placement.ts) ───────────────────────────────────
+  r(
+    'GET',
+    '/federation/self',
+    'Federation',
+    'owner',
+    'read',
+    'This Hub and the caller’s Hub scope',
+    {
+      notes:
+        'Another Hub asks this with its key: product, version, how the caller signed in and the key’s Hub scope. Nothing else.'
+    }
+  ),
+  r('GET', '/federation/peers', 'Federation', 'admin', 'read', 'Other Hubs this Hub reads'),
+  r(
+    'POST',
+    '/federation/peers',
+    'Federation',
+    'admin',
+    'write',
+    'Register another Hub (read only)',
+    {
+      body: {
+        name: s('Name', { required: true }),
+        base_url: s('Its https origin', { required: true }),
+        token: secret('An API key of that Hub with hub:read only; answered masked'),
+        enabled: b()
+      },
+      sensitive: true,
+      notes:
+        'The key is checked on the other Hub first (GET /api/hub/federation/self): a key with hub:write is refused (PEER_KEY_TOO_WIDE).'
+    }
+  ),
+  r(
+    'PATCH',
+    '/federation/peers/:id',
+    'Federation',
+    'admin',
+    'write',
+    'Change another Hub’s record',
+    {
+      body: { name: s(), base_url: s(), token: secret('Answered masked'), enabled: b() },
+      sensitive: true,
+      notes: 'A new address needs the key again (TOKEN_REQUIRED).'
+    }
+  ),
+  r('DELETE', '/federation/peers/:id', 'Federation', 'admin', 'write', 'Forget another Hub'),
+  r('POST', '/federation/peers/:id/check', 'Federation', 'admin', 'write', 'Read another Hub now', {
+    notes: 'Two GETs on the other Hub; records the outcome.'
+  }),
+  r(
+    'GET',
+    '/federation/fleet',
+    'Federation',
+    'admin',
+    'read',
+    'Apps of the other Hubs, read only',
+    {
+      query: { fresh: s('1 = read every Hub now (else cached 60 s)') }
+    }
+  ),
+  // ─── Security (routes/hub-security.ts) ──────────────────────────────────────
+  r(
+    'GET',
+    '/security/overview',
+    'Security',
+    'owner',
+    'read',
+    'Security counts for the caller’s apps'
+  ),
+  r(
+    'GET',
+    '/security/settings',
+    'Security',
+    'admin',
+    'read',
+    'Scanner endpoint, longest break-glass, TLS watch',
+    {
+      notes: 'The scanner token is answered masked.'
+    }
+  ),
+  r('PUT', '/security/settings', 'Security', 'admin', 'write', 'Save the security settings', {
+    sensitive: true,
+    body: {
+      scanner_url: s('Scanner endpoint (https); empty = no scanner, no outbound call'),
+      scanner_token: secret('Bearer the Hub sends to the scanner; the mask keeps the stored one'),
+      break_glass_max_hours: n('Longest grant a request may ask for (1–24)'),
+      tls_watch: b('Check certificates and DNS every 6 hours')
+    }
+  }),
+  r('GET', '/apps/:id/security', 'Security', 'owner', 'read', 'The app’s access review cadence'),
+  r(
+    'PUT',
+    '/apps/:id/security',
+    'Security',
+    'admin',
+    'write',
+    'Set the app’s access review cadence',
+    {
+      body: {
+        review_every_months: n('0 = off, else every 1–12 months', { required: true }),
+        review_due_days: n('Days owners have to finish a review (1–90)')
+      }
+    }
+  ),
+  r('GET', '/access-reviews', 'Security', 'owner', 'read', 'Access reviews, newest first', {
+    query: { app_id: n('Only this app') }
+  }),
+  r('POST', '/apps/:id/access-reviews', 'Security', 'owner', 'write', 'Start an access review', {
+    accepted: true,
+    body: { note: s('Why (optional)') },
+    notes:
+      'Reads every environment’s role holders over the hub link; one open review per app (409 REVIEW_OPEN).'
+  }),
+  r(
+    'GET',
+    '/access-reviews/:id',
+    'Security',
+    'owner',
+    'read',
+    'One review with every account and its decision'
+  ),
+  r(
+    'POST',
+    '/access-reviews/:id/decisions',
+    'Security',
+    'owner',
+    'write',
+    'Keep or remove accounts',
+    {
+      body: { items: list('object', '[{id, decision: keep | remove | pending, note?}], 1–1000') }
+    }
+  ),
+  r(
+    'POST',
+    '/access-reviews/:id/complete',
+    'Security',
+    'owner',
+    'write',
+    'Complete the review and run the removals',
+    {
+      accepted: true,
+      sensitive: true,
+      notes:
+        'Every account needs a decision (409 DECISIONS_PENDING). Removals go through the app’s suspend route (never delete; LAST_ADMIN refused).'
+    }
+  ),
+  r(
+    'POST',
+    '/access-reviews/:id/retry',
+    'Security',
+    'owner',
+    'write',
+    'Try failed removals again',
+    {
+      accepted: true
+    }
+  ),
+  r('POST', '/access-reviews/:id/cancel', 'Security', 'owner', 'write', 'Cancel an open review'),
+  r(
+    'GET',
+    '/access-reviews/:id/evidence.csv',
+    'Security',
+    'owner',
+    'read',
+    'The review as CSV evidence'
+  ),
+  r('GET', '/access-reviews/:id/evidence.pdf', 'Security', 'owner', 'read', 'The review as a PDF', {
+    notes: '503 RENDER_UNAVAILABLE without Chromium or a render peer.'
+  }),
+  r(
+    'GET',
+    '/apps/:id/compliance-pack',
+    'Security',
+    'owner',
+    'read',
+    'Compliance pack (zip of a PDF and CSVs)',
+    {
+      query: { months: n('1–36, default 12') },
+      notes:
+        'Deploys, access reviews, break-glass, backups and drills, secret rotations, incidents, certificates, vulnerabilities. Never a secret.'
+    }
+  ),
+  r(
+    'GET',
+    '/security/vulnerabilities',
+    'Security',
+    'owner',
+    'read',
+    'Pinned images and their open findings'
+  ),
+  r(
+    'POST',
+    '/security/vulnerabilities/scan',
+    'Security',
+    'admin',
+    'write',
+    'Scan every pinned image now',
+    {
+      accepted: true,
+      notes: '409 NO_SCANNER without a scanner endpoint, 409 SCAN_RUNNING while one runs.'
+    }
+  ),
+  r(
+    'GET',
+    '/security/certificates',
+    'Security',
+    'owner',
+    'read',
+    'Certificate expiry and DNS of every environment name'
+  ),
+  r(
+    'POST',
+    '/security/certificates/check',
+    'Security',
+    'admin',
+    'write',
+    'Check every certificate now',
+    {
+      accepted: true
+    }
+  ),
+  r(
+    'GET',
+    '/break-glass',
+    'Security',
+    'owner',
+    'read',
+    'Break-glass requests (and always the caller’s own)'
+  ),
+  r(
+    'POST',
+    '/environments/:envId/break-glass',
+    'Security',
+    'owner',
+    'write',
+    'Ask for temporary admin access',
+    {
+      sensitive: true,
+      body: {
+        hours: n('1 – the longest grant', { required: true }),
+        reason: s('10–1000 characters', { required: true }),
+        self_approve: b('On call during an open incident of the app: approve it yourself')
+      },
+      notes:
+        'Own browser session only (403 OWN_SESSION_ONLY for View-as, keys, phones, connected apps).'
+    }
+  ),
+  r(
+    'POST',
+    '/break-glass/:id/approve',
+    'Security',
+    'admin',
+    'write',
+    'Approve a request and grant it',
+    {
+      sensitive: true,
+      body: { note: s('Optional') },
+      notes:
+        'Own session only; never your own request (403 SELF_APPROVAL) unless on call during an open incident.'
+    }
+  ),
+  r('POST', '/break-glass/:id/deny', 'Security', 'admin', 'write', 'Deny a request', {
+    body: { note: s('Optional') }
+  }),
+  r(
+    'POST',
+    '/break-glass/:id/cancel',
+    'Security',
+    'owner',
+    'write',
+    'Withdraw your own pending request'
+  ),
+  r(
+    'POST',
+    '/break-glass/:id/revoke',
+    'Security',
+    'owner',
+    'write',
+    'End temporary admin access now',
+    {
+      sensitive: true
+    }
+  ),
   // ─── Phone app (routes/hub-people.ts) ───────────────────────────────────────
   r('GET', '/mobile/summary', 'Phone', 'owner', 'read', 'Fleet at a glance (last known status)'),
   r('GET', '/mobile/runs', 'Phone', 'owner', 'read', 'Recent promotions, rollbacks and applies', {
