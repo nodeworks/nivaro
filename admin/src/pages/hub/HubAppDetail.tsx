@@ -359,7 +359,7 @@ function EnvironmentsCard({
                 inside its column; the table never scrolls sideways on a desktop screen. */}
             <table className='w-full min-w-[640px] table-fixed text-[12px]'>
               <thead>
-                <tr className='border-b border-slate-200 text-left text-[11px] uppercase tracking-wide text-slate-500 dark:border-border dark:text-muted-foreground'>
+                <tr className='border-b border-slate-200 text-left text-[11px] font-medium text-slate-500 dark:border-border dark:text-muted-foreground'>
                   <th className='w-[20%] px-4 py-2 font-medium'>Environment</th>
                   <th className='px-4 py-2 font-medium'>Address</th>
                   <th className='w-[11%] px-4 py-2 font-medium'>Version</th>

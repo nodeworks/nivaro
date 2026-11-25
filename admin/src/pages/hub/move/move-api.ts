@@ -493,6 +493,25 @@ export const MOVE_STEP_WORDS: Record<string, string> = {
 }
 export const stepWords = (key: string) => MOVE_STEP_WORDS[key] ?? key
 
+/** One or two words per step for the standalone Hub's run track (the full words stay beside it). */
+export const MOVE_STEP_SHORT: Record<string, string> = {
+  check: 'Check',
+  files_warm: 'Copy files',
+  maintenance_on: 'Maintenance',
+  wait_idle: 'Wait idle',
+  db_copy: 'Copy database',
+  files_delta: 'Copy changes',
+  deploy_target: 'Deploy',
+  place_on_target: 'Place',
+  target_ready: 'Wait ready',
+  files_full: 'Copy files',
+  route: 'Point address',
+  verify: 'Verify',
+  release: 'Release',
+  retire_source: 'Retire old',
+  done: 'Done'
+}
+
 /** `stopped` = the step a run was on when it stopped (interrupted): no spinner, nothing failed. */
 export type MoveStepState =
   | 'done'

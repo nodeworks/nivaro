@@ -1,6 +1,6 @@
 import { ConfirmButton, ErrorNotice, QueryErrorState } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, Circle, Loader2, Pause, RefreshCw, RotateCcw, X } from 'lucide-react'
+import { Ban, Check, Circle, Loader2, Pause, RefreshCw, RotateCcw, X } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import { toast } from 'sonner'
 import { HubRunTimeline } from '@/components/hub-brand/HubRunTimeline'
@@ -170,7 +170,7 @@ function CreationBody({
               disabled={cancel.isPending}
               onConfirm={() => cancel.mutate()}
             >
-              <X className='h-3.5 w-3.5' aria-hidden /> Cancel
+              <Ban className='h-3.5 w-3.5' aria-hidden /> Cancel
             </ConfirmButton>
           )}
         </>
@@ -276,7 +276,7 @@ export function StepTrack({
   return (
     <ol
       aria-label='Steps'
-      className='m-0 grid list-none grid-cols-1 gap-2 p-0 sm:grid-cols-2 xl:grid-cols-4'
+      className='m-0 grid list-none grid-cols-1 gap-x-4 gap-y-1 p-0 sm:grid-cols-2 xl:grid-cols-4'
     >
       {(steps.length ? steps.map((s) => s.key) : STEP_ORDER).map((key, i) => {
         const stored = byKey.get(key) ?? { key, status: 'pending' as const, at: null, note: null }
@@ -289,12 +289,12 @@ export function StepTrack({
             key={key}
             aria-label={`${stepLabel(key, kind)}: ${STEP_STATE_WORDS[s.status]}`}
             className={cn(
-              'min-w-0 rounded-md border px-2.5 py-2',
+              'min-w-0 rounded-md px-2 py-1.5',
               s.status === 'failed'
-                ? 'border-red-200 bg-red-50 dark:border-red-900/60 dark:bg-red-950/30'
+                ? 'bg-red-50 dark:bg-red-950/30'
                 : s.status === 'waiting'
-                  ? 'border-amber-200 bg-amber-50 dark:border-amber-900/60 dark:bg-amber-950/30'
-                  : 'border-slate-200 bg-white dark:border-border dark:bg-card'
+                  ? 'bg-amber-50 dark:bg-amber-950/30'
+                  : null
             )}
           >
             <div className='flex items-center gap-1.5'>
