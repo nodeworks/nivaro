@@ -2,48 +2,172 @@ import type { Blueprint } from './blueprints.js'
 
 /**
  * Hub enhancement 46 (app cloning): what a structure blueprint must never carry out of the app it
- * was exported from. Run on the SOURCE, before the bundle leaves it (services/hub-link/clone-export.ts),
- * and again on the Hub as defence in depth (services/hub/lifecycle/clone.ts). Leaf module, pure.
+ * was exported from. A clone carries STRUCTURE, never values that talk to the outside world. Run on
+ * the SOURCE, before the bundle leaves it (services/hub-link/clone-export.ts), and again on the Hub
+ * as defence in depth (services/hub/lifecycle/clone.ts). Leaf module, pure.
  *
- * A blueprint never reads nivaro_external_apis (partner credentials, body secrets) or the
- * settings, so those cannot leave. What CAN hold a credential is configuration people typed into
- * the parts a blueprint does carry — a flow's webhook step, a transition action, a rule action,
- * a field option, a payload template's text:
+ * DENY BY DEFAULT (security review ruling) in the parts that call out: flow trigger options, flow
+ * step options, workflow transition actions and rule actions that reach outside (webhook, HTTP,
+ * external API, mail, chat…: a `type` that says so, or a `url` / `headers` / `endpoint` in them),
+ * and payload templates. There EVERY string value becomes the visible placeholder FILL_IN, except
+ * the values of a short allow-list of structural keys (field and collection names, keys, method,
+ * operators, conditions, filters, mappings) — and those still pass the scans below. Every URL
+ * there becomes FILL_IN. Each cloned flow names every placeholder it got in its description
+ * ("Needs values: …"), and is inactive anyway.
  *
- *  - every value under a `headers` key (object `{Authorization: …}` or list `[{header, value}]`)
- *    is emptied; the header NAMES stay so the clone shows what to fill in;
- *  - every value whose key names a credential (`password`, `token`, `api_key`, `client_secret`,
- *    `authorization`, `cookie`, … — SECRET_KEY_RE) is emptied;
- *  - a URL keeps its host and path: `user:password@` is removed and a query parameter whose
- *    name names a credential is emptied;
- *  - a bare `Bearer …` / `Basic …` / `token …` value is emptied wherever it sits.
- * JSON held as text (transition `actions`, flow `options`, …) is parsed, scrubbed and written back
- * as text. A body-secret placeholder `⟦nvr-secret:<name>⟧` is a name, never a value: kept.
- * Every change is reported by PATH only (`flows[Notify].operations[post].options.headers.Authorization`),
- * never with the value.
+ * EVERYWHERE ELSE (defence in depth):
+ *  - a key is split into tokens on camelCase, `_`, `-` and `.`; a string or number under a key
+ *    with a token password / passwd / pwd / secret / token / key / sig / signature / code / auth /
+ *    credential(s) / cert / private / bearer is emptied (a few structural names that only look like
+ *    it — `key`, `group_key`, `upsert_keys` … — STRUCTURAL_KEYS — are scanned, not emptied);
+ *  - every value under a `headers` key is emptied (the header names stay);
+ *  - whole strings are scanned with unanchored patterns: an embedded URL loses its user info,
+ *    fragment and every query value (names kept); an auth-scheme token (Bearer, Basic, Token,
+ *    SharedAccessSignature, AWS4-HMAC-SHA256 …) anywhere in the text, a JWT, and `password=…` /
+ *    `token: …` pairs lose their value;
+ *  - JSON held as text is parsed, walked the same way and written back as text.
+ * A body-secret placeholder `⟦nvr-secret:<name>⟧` is a name, never a value: kept. Every change is
+ * reported by PATH only, never with the value.
  */
 
-export const SECRET_KEY_RE =
-  /^(x-)?(api[-_]?key|apikey|auth[-_]?token|access[-_]?token|refresh[-_]?token|id[-_]?token|bearer|token|password|passwd|pwd|pass|secret|client[-_]?secret|private[-_]?key|signing[-_]?(key|secret)|webhook[-_]?secret|shared[-_]?secret|credentials?|authorization|proxy[-_]?authorization|cookie|set[-_]?cookie|basic[-_]?auth|session[-_]?(id|token)|sas[-_]?token|connection[-_]?string)$/i
+export const FILL_IN = '{{fill in on the new app}}'
+const SECRET_TOKENS = new Set([
+  'password',
+  'passwd',
+  'pwd',
+  'pass',
+  'secret',
+  'secrets',
+  'token',
+  'tokens',
+  'key',
+  'keys',
+  'apikey',
+  'sig',
+  'signature',
+  'code',
+  'auth',
+  'authorization',
+  'credential',
+  'credentials',
+  'cert',
+  'certificate',
+  'private',
+  'bearer',
+  'cookie',
+  'session',
+  'sas',
+  'connectionstring'
+])
+/** Names that tokenise like a credential but name structure (their values are scanned). */
+const STRUCTURAL_KEYS = new Set([
+  'key',
+  'keys',
+  'group_key',
+  'upsert_keys',
+  'locked_keys',
+  'payload_template_key',
+  'key_field',
+  'primary_key',
+  'sort_key',
+  'session_field'
+])
+/** In a deny-by-default part, the keys whose string values are structure (kept, then scanned). */
+const SAFE_KEYS = new Set([
+  'field',
+  'fields',
+  'field_name',
+  'target_field',
+  'source_field',
+  'value_field',
+  'collection',
+  'collections',
+  'related_collection',
+  'key',
+  'keys',
+  'name',
+  'label',
+  'type',
+  'kind',
+  'method',
+  'operator',
+  'op',
+  'mode',
+  'event',
+  'events',
+  'scope',
+  'action',
+  'trigger',
+  'state',
+  'from_state',
+  'to_state',
+  'payload_template_key',
+  'external_api',
+  'flow',
+  'flow_id',
+  'resolve',
+  'reject',
+  'sort',
+  'direction',
+  'format',
+  'id',
+  'locked_keys'
+])
+/** In a deny-by-default part, a container under one of these keys is structure as a whole. */
+const SAFE_CONTAINERS = new Set([
+  'conditions',
+  'condition',
+  'condition_rules',
+  'filter',
+  'filters',
+  'mapping',
+  'map',
+  'field_map',
+  'fields_map',
+  'lookups',
+  'sort'
+])
+const OUTBOUND_TYPE_RE =
+  /webhook|http|request|external|api|fetch|call|push|mail|email|sms|teams|slack|notify|post|send/i
 
-const AUTH_VALUE_RE = /^\s*(bearer|basic|token|digest|negotiate|apikey)\s+\S+/i
+const URL_RE = /\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>`)\]]+/gi
+const AUTH_RE =
+  /\b(Bearer|Basic|Token|Digest|Negotiate|ApiKey|SharedAccessSignature|AWS4-HMAC-SHA256|Signature)(\s+|=)([A-Za-z0-9._~+/=:%-]{8,})/gi
+const JWT_RE = /\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}/g
+const PAIR_RE =
+  /\b([A-Za-z0-9_-]*(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|signature|sig|credential)[A-Za-z0-9_-]*)(\s*[:=]\s*)("?)([^\s"&;,]+)/gi
 const PLACEHOLDER_ONLY_RE = /^\s*⟦nvr-secret:[^⟧]*⟧\s*$/
 
 export interface ScrubResult {
   blueprint: Blueprint
-  /** Paths whose value was emptied (≤ 500, names only). */
+  /** Paths whose value was emptied or replaced (≤ 500, names only). */
   scrubbed: string[]
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> =>
   !!v && typeof v === 'object' && !Array.isArray(v)
 
-/** A credential-named key (header names compared the same way). */
-export function isSecretKey(key: string): boolean {
-  return SECRET_KEY_RE.test(key.trim())
+/** A key's tokens: split on camelCase, `_`, `-`, `.` and spaces, lower-cased. */
+export function keyTokens(key: string): string[] {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .split(/[\s_.-]+/)
+    .map((t) => t.toLowerCase())
+    .filter(Boolean)
 }
 
-/** A URL with its userinfo removed and credential-named query values emptied (null: no URL). */
+/** A credential-named key (header names compared the same way). */
+export function isSecretKey(key: string): boolean {
+  const k = key.trim()
+  if (STRUCTURAL_KEYS.has(k.toLowerCase())) return false
+  const tokens = keyTokens(k)
+  if (tokens.some((t) => SECRET_TOKENS.has(t))) return true
+  // Run-together names: apikey, clientsecret, accesstoken, xapikey …
+  return /(apikey|secret|password|passwd|token|signature|credential|bearer)/i.test(tokens.join(''))
+}
+
+/** One URL with its user info, fragment and every query value removed (names kept). */
 export function scrubUrl(raw: string): string | null {
   if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(raw.trim())) return null
   let u: URL
@@ -58,8 +182,12 @@ export function scrubUrl(raw: string): string | null {
     u.password = ''
     changed = true
   }
-  for (const k of [...u.searchParams.keys()])
-    if (isSecretKey(k) && u.searchParams.get(k)) {
+  if (u.hash) {
+    u.hash = ''
+    changed = true
+  }
+  for (const k of [...new Set(u.searchParams.keys())])
+    if (u.searchParams.getAll(k).some((v) => v !== '')) {
       u.searchParams.set(k, '')
       changed = true
     }
@@ -68,26 +196,63 @@ export function scrubUrl(raw: string): string | null {
 
 class Walker {
   scrubbed: string[] = []
+  /** Paths given FILL_IN, for the flow being walked (its "Needs values" line). */
+  filled: string[] = []
   note(path: string) {
     if (this.scrubbed.length < 500) this.scrubbed.push(path.slice(0, 300))
   }
+  fill(path: string): string {
+    this.note(path)
+    this.filled.push(path)
+    return FILL_IN
+  }
 
-  /** A string value at `path`: a URL, an auth value, or JSON text to walk. */
-  str(v: string, path: string, secretKey: boolean): string {
-    if (PLACEHOLDER_ONLY_RE.test(v)) return v
-    if (secretKey) {
-      if (v === '') return v
-      this.note(path)
-      return ''
-    }
-    if (AUTH_VALUE_RE.test(v)) {
-      this.note(path)
-      return ''
-    }
-    const url = scrubUrl(v)
-    if (url !== null && url !== v) {
-      this.note(path)
+  /** Unanchored scans of one string; `deny` = URLs become FILL_IN. */
+  scanText(v: string, path: string, deny: boolean): string {
+    let out = v
+    let hit = false
+    out = out.replace(URL_RE, (url) => {
+      if (deny) {
+        hit = true
+        return FILL_IN
+      }
+      const clean = scrubUrl(url)
+      if (clean !== null && clean !== url) {
+        hit = true
+        return clean
+      }
       return url
+    })
+    out = out.replace(AUTH_RE, (m, scheme: string, sep: string, tok: string) => {
+      // Only what looks like a credential ("Basic details" is a label, not a password).
+      if (!credentialLike(tok)) return m
+      hit = true
+      return `${scheme}${sep}`
+    })
+    out = out.replace(JWT_RE, () => {
+      hit = true
+      return ''
+    })
+    out = out.replace(PAIR_RE, (m, name: string, sep: string, q: string, value: string) => {
+      if (/^⟦nvr-secret:/.test(value) || value === FILL_IN) return m
+      hit = true
+      return `${name}${sep}${q}`
+    })
+    if (hit) {
+      if (deny) this.filled.push(path)
+      this.note(path)
+    }
+    return out
+  }
+
+  /** A string value at `path`. */
+  str(v: string, path: string, o: { secret: boolean; deny: boolean; safe: boolean }): string {
+    if (PLACEHOLDER_ONLY_RE.test(v) || v === FILL_IN) return v
+    if (v === '') return v
+    if (o.secret) {
+      if (o.deny) return this.fill(path)
+      this.note(path)
+      return ''
     }
     const t = v.trim()
     if ((t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))) {
@@ -95,13 +260,16 @@ class Walker {
       try {
         parsed = JSON.parse(t)
       } catch {
-        return v
+        parsed = undefined
       }
-      const before = this.scrubbed.length
-      const out = this.any(parsed, path, false)
-      return this.scrubbed.length === before ? v : JSON.stringify(out)
+      if (parsed !== undefined && typeof parsed === 'object' && parsed !== null) {
+        const before = this.scrubbed.length
+        const out = this.any(parsed, path, o)
+        return this.scrubbed.length === before ? v : JSON.stringify(out)
+      }
     }
-    return v
+    if (o.deny && !o.safe) return this.fill(path)
+    return this.scanText(v, path, o.deny)
   }
 
   /** Every value under a `headers` key: names kept, values emptied. */
@@ -121,11 +289,11 @@ class Walker {
     }
     if (Array.isArray(v))
       return v.map((h, i) => {
-        if (!isObj(h)) return this.any(h, `${path}[${i}]`, true)
+        if (!isObj(h)) return this.headers(h, `${path}[${i}]`)
         const name = String(h.header ?? h.name ?? h.key ?? i)
         const out: Record<string, unknown> = { ...h }
-        for (const k of ['value', 'val', 'content'])
-          if (k in out && out[k] !== '' && out[k] != null) {
+        for (const k of Object.keys(out))
+          if (!['header', 'name', 'key'].includes(k) && out[k] !== '' && out[k] != null) {
             this.note(`${path}.${name}`)
             out[k] = ''
           }
@@ -136,7 +304,7 @@ class Walker {
       for (const [k, val] of Object.entries(v)) {
         if (typeof val === 'string' && PLACEHOLDER_ONLY_RE.test(val)) out[k] = val
         else if (val === '' || val == null) out[k] = val
-        else if (typeof val === 'object') out[k] = this.any(val, `${path}.${k}`, true)
+        else if (typeof val === 'object') out[k] = this.headers(val, `${path}.${k}`)
         else {
           this.note(`${path}.${k}`)
           out[k] = ''
@@ -147,24 +315,62 @@ class Walker {
     return v
   }
 
-  any(v: unknown, path: string, secretKey: boolean): unknown {
-    if (typeof v === 'string') return this.str(v, path, secretKey)
-    if (typeof v === 'number' && secretKey) {
+  any(
+    v: unknown,
+    path: string,
+    o: { secret: boolean; deny: boolean; safe: boolean } = {
+      secret: false,
+      deny: false,
+      safe: false
+    }
+  ): unknown {
+    if (typeof v === 'string') return this.str(v, path, o)
+    if (typeof v === 'number' && o.secret) {
       this.note(path)
       return ''
     }
-    if (Array.isArray(v)) return v.map((x, i) => this.any(x, `${path}[${i}]`, secretKey))
+    if (Array.isArray(v)) return v.map((x, i) => this.any(x, `${path}[${i}]`, o))
     if (isObj(v)) {
+      // Inside an otherwise structural part, an action that reaches outside is denied by default.
+      const deny = o.deny || (!o.safe && isOutbound(v))
       const out: Record<string, unknown> = {}
       for (const [k, val] of Object.entries(v)) {
         const p = `${path}.${k}`
-        if (/^headers?$/i.test(k)) out[k] = this.headers(val, p)
-        else out[k] = this.any(val, p, secretKey || isSecretKey(k))
+        if (/^headers?$/i.test(k)) {
+          out[k] = this.headers(val, p)
+          continue
+        }
+        const lower = k.toLowerCase()
+        out[k] = this.any(val, p, {
+          secret: o.secret || isSecretKey(k),
+          deny,
+          safe: o.safe || SAFE_CONTAINERS.has(lower) || (deny && SAFE_KEYS.has(lower))
+        })
       }
       return out
     }
     return v
   }
+
+  /** A part that is denied by default as a whole (flow options, payload templates). */
+  deny(v: unknown, path: string): unknown {
+    return this.any(v, path, { secret: false, deny: true, safe: false })
+  }
+}
+
+/** A token that looks like a credential: 8+ characters with a digit, mixed case or a symbol. */
+function credentialLike(tok: string): boolean {
+  return (
+    tok.length >= 8 &&
+    (/\d/.test(tok) || (/[a-z]/.test(tok) && /[A-Z]/.test(tok)) || /[._~+/=:%-]/.test(tok))
+  )
+}
+
+/** An action object that reaches outside the app (webhook, HTTP, external API, mail, chat …). */
+function isOutbound(v: Record<string, unknown>): boolean {
+  const type = typeof v.type === 'string' ? v.type : typeof v.op === 'string' ? v.op : ''
+  if (type && OUTBOUND_TYPE_RE.test(type)) return true
+  return 'url' in v || 'endpoint' in v || 'webhook_url' in v || 'base_url' in v
 }
 
 const label = (row: Record<string, unknown> | undefined, ...keys: string[]): string => {
@@ -175,11 +381,22 @@ const label = (row: Record<string, unknown> | undefined, ...keys: string[]): str
   return '?'
 }
 
+const NEEDS = 'Needs values (fill in on the new app):'
+
 /** Pure: a copy of the blueprint with every credential emptied, and where they were. */
 export function scrubBlueprintSecrets(bp: Blueprint): ScrubResult {
   const w = new Walker()
   const row = (r: Record<string, unknown>, path: string) =>
-    w.any(r, path, false) as Record<string, unknown>
+    w.any(r, path) as Record<string, unknown>
+  /** Payload templates: denied as a whole except their names and references. */
+  const PAYLOAD_SAFE = new Set([
+    'key',
+    'label',
+    'external_api',
+    'collection',
+    'mode',
+    'locked_keys'
+  ])
   const out: Blueprint = {
     ...bp,
     collections: bp.collections.map((c) => {
@@ -223,12 +440,17 @@ export function scrubBlueprintSecrets(bp: Blueprint): ScrubResult {
     rules: bp.rules.map((r) => row(r, `rules[${label(r, 'name')}]`)),
     ...(bp.payload_templates
       ? {
-          payload_templates: bp.payload_templates.map(
-            (t) =>
-              w.any(t, `payload_templates[${label(t as never, 'key')}]`, false) as NonNullable<
-                Blueprint['payload_templates']
-              >[number]
-          )
+          payload_templates: bp.payload_templates.map((t) => {
+            const rec = t as unknown as Record<string, unknown>
+            const path = `payload_templates[${label(rec, 'key')}]`
+            const kept: Record<string, unknown> = {}
+            for (const [k, v] of Object.entries(rec))
+              kept[k] =
+                PAYLOAD_SAFE.has(k) || k === 'lookups'
+                  ? w.any(v, `${path}.${k}`, { secret: false, deny: false, safe: k === 'lookups' })
+                  : w.deny(v, `${path}.${k}`)
+            return kept as unknown as NonNullable<Blueprint['payload_templates']>[number]
+          })
         }
       : {}),
     ...(bp.roles
@@ -246,12 +468,35 @@ export function scrubBlueprintSecrets(bp: Blueprint): ScrubResult {
       ? {
           flows: bp.flows.map((f) => {
             const name = label(f.flow, 'name', 'id')
-            return {
-              flow: row(f.flow, `flows[${name}]`),
-              operations: f.operations.map((o) =>
-                row(o, `flows[${name}].operations[${label(o, 'key', 'name')}]`)
+            w.filled = []
+            const flow: Record<string, unknown> = {}
+            for (const [k, v] of Object.entries(f.flow))
+              flow[k] =
+                k === 'trigger_options'
+                  ? w.deny(v, `flows[${name}].trigger_options`)
+                  : w.any(v, `flows[${name}].${k}`)
+            const operations = f.operations.map((op) => {
+              const key = label(op, 'key', 'name')
+              const o: Record<string, unknown> = {}
+              for (const [k, v] of Object.entries(op))
+                o[k] =
+                  k === 'options'
+                    ? w.deny(v, `flows[${name}].operations[${key}].options`)
+                    : w.any(v, `flows[${name}].operations[${key}].${k}`)
+              return o
+            })
+            const needs = [...new Set(w.filled)].map((p) =>
+              p.replace(`flows[${name}].`, '').slice(0, 120)
+            )
+            if (needs.length) {
+              const desc = typeof flow.description === 'string' ? flow.description.trim() : ''
+              flow.description = `${desc ? `${desc}\n\n` : ''}${NEEDS} ${needs.join(', ')}`.slice(
+                0,
+                4000
               )
             }
+            w.filled = []
+            return { flow, operations }
           })
         }
       : {})

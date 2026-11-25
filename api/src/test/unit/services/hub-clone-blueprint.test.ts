@@ -229,48 +229,135 @@ describe('installer: roles, flows, dimensions', () => {
 })
 
 describe('scrubber', () => {
-  it('names credential keys', () => {
-    for (const k of ['Authorization', 'x-api-key', 'api_key', 'client_secret', 'password', 'token'])
-      expect(isSecretKey(k)).toBe(true)
-    for (const k of ['token_url', 'auth_type', 'name', 'field', 'tokens_used'])
-      expect(isSecretKey(k)).toBe(false)
+  it('names credential keys by their tokens (camelCase, _, -, .)', () => {
+    for (const k of [
+      'Authorization',
+      'x-api-key',
+      'api_key',
+      'client_secret',
+      'password',
+      'token',
+      'clientSecret',
+      'myApiKey',
+      'db_password_2',
+      'X-Amz-Signature',
+      'sig',
+      'authCode',
+      'privateKeyPem',
+      'apikey'
+    ])
+      expect(isSecretKey(k), k).toBe(true)
+    for (const k of ['name', 'field', 'author', 'keyboard', 'group_key', 'key', 'label'])
+      expect(isSecretKey(k), k).toBe(false)
   })
 
-  it('cleans URLs: user info and credential query values', () => {
+  it('cleans URLs: user info, fragment and every query value (names kept)', () => {
     expect(scrubUrl('https://u:p@h.example.com/a?token=x&q=1')).toBe(
-      'https://h.example.com/a?token=&q=1'
+      'https://h.example.com/a?token=&q='
     )
-    expect(scrubUrl('https://h.example.com/a?q=1')).toBe('https://h.example.com/a?q=1')
+    expect(scrubUrl('https://h.example.com/a?sv=1&sig=abc#frag')).toBe(
+      'https://h.example.com/a?sv=&sig='
+    )
+    expect(scrubUrl('https://h.example.com/a')).toBe('https://h.example.com/a')
     expect(scrubUrl('not a url')).toBeNull()
   })
 
-  it('empties header values, auth values and secret keys; keeps placeholders; reports paths only', () => {
+  it('outbound actions are denied by default; elsewhere secrets and auth values are emptied', () => {
     const b = bp()
     b.rules = [
       {
         collection: 'orders',
         name: 'R',
         actions: JSON.stringify([
-          { headers: [{ header: 'Authorization', value: 'Basic abc' }], api_key: 'k-1' },
-          { body: { token: '⟦nvr-secret:token⟧' }, note: 'Bearer zzz' }
+          {
+            type: 'webhook',
+            url: 'https://partner.example.com/in',
+            method: 'POST',
+            headers: [{ header: 'Authorization', value: 'Basic abc' }],
+            message: 'Order {{ id }} is ready'
+          },
+          {
+            type: 'set_field',
+            field: 'status',
+            value: 'sent',
+            note: 'Ring them. Bearer zZ9abcdefgh, then wait',
+            body: { token: '⟦nvr-secret:token⟧' },
+            apiKey: 'k-1'
+          }
         ])
       }
     ]
     const { blueprint, scrubbed } = scrubBlueprintSecrets(b)
     const actions = JSON.parse(String(blueprint.rules[0].actions))
-    expect(actions[0].headers).toEqual([{ header: 'Authorization', value: '' }])
-    expect(actions[0].api_key).toBe('')
+    expect(actions[0]).toEqual({
+      type: 'webhook',
+      url: '{{fill in on the new app}}',
+      method: 'POST',
+      headers: [{ header: 'Authorization', value: '' }],
+      message: '{{fill in on the new app}}'
+    })
+    expect(actions[1].value).toBe('sent')
+    expect(actions[1].note).toBe('Ring them. Bearer , then wait')
     expect(actions[1].body.token).toBe('⟦nvr-secret:token⟧')
-    expect(actions[1].note).toBe('')
-    expect(scrubbed).toEqual([
-      'rules[R].actions[0].headers.Authorization',
-      'rules[R].actions[0].api_key',
-      'rules[R].actions[1].note'
-    ])
+    expect(actions[1].apiKey).toBe('')
+    expect(scrubbed).toEqual(
+      expect.arrayContaining([
+        'rules[R].actions[0].url',
+        'rules[R].actions[0].headers.Authorization',
+        'rules[R].actions[1].note',
+        'rules[R].actions[1].apiKey'
+      ])
+    )
     expect(JSON.stringify(scrubbed)).not.toContain('abc')
   })
 
-  it('leaves a blueprint without credentials untouched (same JSON text)', () => {
+  it('a flow’s options are placeholders but for their structure, and it names what needs values', () => {
+    const b = bp()
+    b.flows = [
+      {
+        flow: {
+          id: FLOW,
+          name: 'Hourly',
+          trigger: 'schedule',
+          trigger_options: '{"cron":"0 * * * *"}'
+        },
+        operations: [
+          {
+            id: 'op-1',
+            flow: FLOW,
+            key: 'read',
+            type: 'item-read',
+            options: JSON.stringify({ collection: 'orders', filter: { status: { _eq: 'open' } } })
+          },
+          {
+            id: 'op-2',
+            flow: FLOW,
+            key: 'mail',
+            type: 'mail',
+            options: JSON.stringify({ to: 'ops@example.com', subject: 'Hi' })
+          }
+        ]
+      }
+    ]
+    const { blueprint } = scrubBlueprintSecrets(b)
+    const f = blueprint.flows?.[0]
+    expect(JSON.parse(String(f?.flow.trigger_options))).toEqual({
+      cron: '{{fill in on the new app}}'
+    })
+    expect(JSON.parse(String(f?.operations[0].options))).toEqual({
+      collection: 'orders',
+      filter: { status: { _eq: 'open' } }
+    })
+    expect(JSON.parse(String(f?.operations[1].options))).toEqual({
+      to: '{{fill in on the new app}}',
+      subject: '{{fill in on the new app}}'
+    })
+    expect(String(f?.flow.description)).toBe(
+      'Needs values (fill in on the new app): trigger_options.cron, operations[mail].options.to, operations[mail].options.subject'
+    )
+  })
+
+  it('leaves a blueprint without credentials or outbound parts untouched (same JSON text)', () => {
     const b = bp()
     const { blueprint, scrubbed } = scrubBlueprintSecrets(b)
     expect(scrubbed).toEqual([])

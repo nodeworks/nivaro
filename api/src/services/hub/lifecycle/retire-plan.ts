@@ -7,7 +7,7 @@ import { creationOpenRefusal } from '../create/store.js'
 import { readPolicy } from '../data/policy.js'
 import { dockerTargetOf } from '../docker/stack-guards.js'
 import { moveOpenRefusal } from '../move-open.js'
-import { envPolicy } from '../owner-access.js'
+import { envPolicy, PRODUCTION_KEY_RE } from '../owner-access.js'
 import { openRetirementOf, type RetireEnvPlan, type RetirePlan } from './retire-store.js'
 
 export interface PlanLine {
@@ -112,7 +112,9 @@ export async function gatherPlan(appId: number): Promise<RetirePlan> {
 /** Plain sentences per step for the plan (the wizard shows them under each step). */
 export function planLines(p: RetirePlan): Record<string, string[]> {
   const envs = p.environments
-  const name = (e: RetireEnvPlan) => `${e.key}${e.production ? ' (production)' : ''}`
+  // A key that already says production needs no "(production)" after it.
+  const name = (e: RetireEnvPlan) =>
+    `${e.key}${e.production && !PRODUCTION_KEY_RE.test(e.key) ? ' (production)' : ''}`
   return {
     freeze: [
       'A Hub freeze for the app: no promotion, Apply now, move or upgrade while it retires.',

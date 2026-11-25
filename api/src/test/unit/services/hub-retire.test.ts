@@ -55,7 +55,10 @@ const readDataRun = vi.fn(async (id: number) => {
   return { status: n === 1 ? 'running' : 'done', error: null }
 })
 const removeStack = vi.fn(async () => 'removed' as const)
-const deliver = vi.fn(async (ids: string[]) => ids.length)
+const deliver = vi.fn(
+  async (ids: string[], _notice: import('../../../services/hub/notify-events.js').HubNotice) =>
+    ids.length
+)
 const recipients = vi.fn(async () => ({ team: ['admin-1'], people: ['person-9'] }))
 const deps = {
   maintenance,
@@ -292,7 +295,7 @@ describe('steps, undo and cancel', () => {
     expect(store.stepOf(r, 'notice').state).toBe('pending')
     expect(store.stepOf(r, 'notice').signed_off_by).toBeNull()
     expect(deliver.mock.calls[0][0]).toEqual(['admin-1', 'person-9'])
-    expect(String(deliver.mock.calls[0][1].subject)).toContain('not being retired')
+    expect(String(deliver.mock.calls[0]?.[1]?.subject)).toContain('not being retired')
     expect(store.undoableStep(r)?.key).toBe('export')
   })
 

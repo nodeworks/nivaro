@@ -18,7 +18,20 @@ const SECRETS = {
   inlineBodyPassword: 'literal-body-password-0b7c',
   transitionBearer: 'transition-bearer-token-3e8f',
   urlPassword: 'url-userinfo-password-c41d',
-  queryToken: 'query-token-value-6b2a'
+  queryToken: 'query-token-value-6b2a',
+  // Review round (deny by default): the nasty cases.
+  camelClient: 'camel-client-secret-value-11aa',
+  camelApiKey: 'camel-my-api-key-value-22bb',
+  camelDbPassword: 'camel-db-password-two-33cc',
+  nestedArrayKey: 'nested-array-api-key-44dd',
+  sasSig: 'SasSigValue55ee9Xq%3D',
+  liquidBearer: 'LiquidBearerTok3n66ff',
+  longStringUrlPass: 'longStringUrlPass77aa',
+  flowNotifyUrl: 'hooks.partner-77.example.net',
+  triggerSecretHeader: 'trigger-webhook-secret-88bb',
+  adGroupId: '9f8e7d6c-5b4a-4321-9abc-def012345678',
+  adGroupName: 'SG-EFP-Clerks-Secret-Group',
+  jwt: 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJjbG9uZSJ9.c2lnbmF0dXJlLXZhbHVl'
 }
 
 vi.mock('../../../db/index.js', async () => {
@@ -40,7 +53,6 @@ vi.mock('../../../services/payload-templates/index.js', () => ({
       ? {
           key: 'mwf-status',
           label: 'MWF status',
-          description: null,
           external_api: 'MWF',
           endpoint_path: '/status',
           collection: 'orders',
@@ -52,6 +64,9 @@ vi.mock('../../../services/payload-templates/index.js', () => ({
             password: 'literal-body-password-0b7c',
             status: '{{ state }}'
           }),
+          // A Liquid header block with a Bearer inside a longer text.
+          description:
+            'Sends status. Header: Authorization: Bearer LiquidBearerTok3n66ff (rotate yearly)',
           locked_keys: [],
           lookups: {}
         }
@@ -76,11 +91,19 @@ async function table(name: string, cols: string[]) {
 }
 
 beforeAll(async () => {
-  await table('nivaro_collections', ['collection', 'display_name', 'hidden', 'sort'])
-  await table('nivaro_fields', ['collection', 'field', 'type', 'interface', 'options', 'sort'])
+  await table('nivaro_collections', ['collection', 'display_name', 'hidden', 'sort', 'note'])
+  await table('nivaro_fields', [
+    'collection',
+    'field',
+    'type',
+    'interface',
+    'options',
+    'sort',
+    'note'
+  ])
   await table('nivaro_relations', ['many_collection', 'many_field', 'one_collection'])
   await table('nivaro_workflow_templates', ['id', 'name', 'description'])
-  await table('nivaro_workflow_states', ['id', 'template', 'key', 'label', 'sort'])
+  await table('nivaro_workflow_states', ['id', 'template', 'key', 'label', 'sort', 'description'])
   await table('nivaro_workflow_transitions', [
     'id',
     'template',
@@ -93,22 +116,62 @@ beforeAll(async () => {
   await table('nivaro_workflow_bindings', ['template', 'collection'])
   await table('nivaro_pipeline_owner_dimensions', ['binding', 'field', 'label', 'sort'])
   await table('nivaro_collection_layouts', ['collection', 'name'])
-  await table('nivaro_field_groups', ['layout_id', 'collection', 'key', 'label'])
+  await table('nivaro_field_groups', ['layout_id', 'collection', 'key', 'label', 'content'])
   await table('nivaro_layout_field_assignments', ['layout_id', 'field', 'group_key'])
   await table('nivaro_queues', ['id', 'name'])
   await table('nivaro_queue_sources', ['queue_id', 'type', 'collection'])
   await table('nivaro_rules', ['collection', 'name', 'trigger', 'actions', 'enabled'])
-  await table('nivaro_roles', ['id', 'name', 'admin_access', 'app_access', 'workspace'])
+  await table('nivaro_roles', [
+    'id',
+    'name',
+    'description',
+    'admin_access',
+    'app_access',
+    'workspace',
+    'ad_group_map'
+  ])
   await table('nivaro_policies', ['role', 'collection', 'action', 'fields'])
   await table('nivaro_flows', ['id', 'name', 'status', 'trigger', 'trigger_options'])
   await table('nivaro_flow_operations', ['id', 'flow', 'name', 'key', 'type', 'options'])
   await table('nivaro_external_apis', ['name', 'base_url', 'auth_config'])
   await table('nivaro_settings', ['anthropic_api_key', 'smtp_pass'])
 
-  await db('nivaro_collections').insert([{ collection: 'orders' }, { collection: 'nivaro_users' }])
-  await db('nivaro_fields').insert({ collection: 'orders', field: 'title', type: 'string' })
+  await db('nivaro_collections').insert([
+    {
+      collection: 'orders',
+      // A SAS URL inside a longer note.
+      note: `Scans live at https://acctfiles55.blob.core.windows.net/scans?sv=2022-11-02&se=2027-01-01&sp=r&sig=${SECRETS.sasSig} (read only)`
+    },
+    { collection: 'nivaro_users' }
+  ])
+  await db('nivaro_fields').insert({
+    collection: 'orders',
+    field: 'title',
+    type: 'string',
+    // camelCase credential keys in a field's options, and a JWT in its note.
+    options: JSON.stringify({
+      lookup: { clientSecret: SECRETS.camelClient, myApiKey: SECRETS.camelApiKey },
+      dbPassword2: SECRETS.camelDbPassword
+    }),
+    note: `Token for the lookup: ${SECRETS.jwt}`
+  })
+  await db('nivaro_collection_layouts').insert({ id: 1, collection: 'orders', name: 'Main' })
+  await db('nivaro_field_groups').insert({
+    layout_id: 1,
+    collection: 'orders',
+    key: 'g1',
+    label: 'G',
+    // Nested arrays.
+    content: JSON.stringify({ blocks: [[{ embed: { apiKey: SECRETS.nestedArrayKey } }]] })
+  })
   await db('nivaro_workflow_templates').insert({ id: 'wf-1', name: 'Order flow' })
-  await db('nivaro_workflow_states').insert({ id: 's-1', template: 'wf-1', key: 'new' })
+  await db('nivaro_workflow_states').insert({
+    id: 's-1',
+    template: 'wf-1',
+    key: 'new',
+    // A URL with user info inside a long string.
+    description: `New orders sync to https://svc:${SECRETS.longStringUrlPass}@erp.example.com/orders every night, then wait for approval.`
+  })
   await db('nivaro_workflow_transitions').insert({
     id: 't-1',
     template: 'wf-1',
@@ -139,7 +202,9 @@ beforeAll(async () => {
     id: '11111111-2222-4333-8444-555555555555',
     name: 'Clerk',
     admin_access: '0',
-    app_access: '1'
+    app_access: '1',
+    // An AD group → role map.
+    ad_group_map: JSON.stringify({ [SECRETS.adGroupId]: SECRETS.adGroupName })
   })
   await db('nivaro_policies').insert({
     role: '11111111-2222-4333-8444-555555555555',
@@ -151,8 +216,12 @@ beforeAll(async () => {
     id: '22222222-3333-4444-8555-666666666666',
     name: 'Notify ERP',
     status: 'active',
-    trigger: 'schedule',
-    trigger_options: JSON.stringify({ cron: '0 * * * *' })
+    trigger: 'webhook',
+    trigger_options: JSON.stringify({
+      cron: '0 * * * *',
+      collections: ['orders'],
+      verify: { sharedValue: SECRETS.triggerSecretHeader }
+    })
   })
   await db('nivaro_flow_operations').insert({
     id: '33333333-4444-4555-8666-777777777777',
@@ -163,7 +232,9 @@ beforeAll(async () => {
     options: JSON.stringify({
       url: 'https://erp.example.com/api',
       method: 'POST',
-      headers: { Authorization: SECRETS.flowAuth, 'X-Api-Key': SECRETS.flowKey }
+      headers: { Authorization: SECRETS.flowAuth, 'X-Api-Key': SECRETS.flowKey },
+      notify: [{ to: `https://${SECRETS.flowNotifyUrl}/in`, note: 'call partner' }],
+      collection: 'orders'
     })
   })
   await db('nivaro_external_apis').insert({
@@ -192,14 +263,22 @@ describe('Hub clone export: no secret leaves the source', () => {
     for (const [name, value] of Object.entries(SECRETS))
       expect(json.includes(value), `${name} left the source`).toBe(false)
     // The flow step keeps its header NAMES (what to fill in on the clone), never their values.
-    const op = out.package.blueprint.flows?.[0]?.operations[0]
-    const opts = JSON.parse(String(op?.options)) as { headers: Record<string, string>; url: string }
+    const flow = out.package.blueprint.flows?.[0]
+    const op = flow?.operations[0]
+    const opts = JSON.parse(String(op?.options)) as Record<string, unknown>
     expect(opts.headers).toEqual({ Authorization: '', 'X-Api-Key': '' })
-    expect(opts.url).toBe('https://erp.example.com/api')
+    // Deny by default: every value but the structural ones is a visible placeholder.
+    expect(opts.url).toBe('{{fill in on the new app}}')
+    expect(opts.method).toBe('POST')
+    expect(opts.collection).toBe('orders')
+    expect(String(flow?.flow.description)).toMatch(
+      /^Needs values \(fill in on the new app\):.*options\.url/
+    )
     // A body secret travels as its placeholder only.
     expect(json).toContain('⟦nvr-secret:token⟧')
     expect(out.scrubbed.length).toBeGreaterThanOrEqual(5)
-    expect(out.scrubbed.join(' ')).not.toMatch(/value-/)
+    // The report names paths only, never a value.
+    for (const value of Object.values(SECRETS)) expect(out.scrubbed.join(' ')).not.toContain(value)
   })
 
   it('never reads the external API configurations or the settings', () => {
