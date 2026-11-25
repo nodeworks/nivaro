@@ -163,6 +163,11 @@ const REVIEWED: Record<string, Reviewed> = {
     calls: { child_process: 1 },
     why: 'pdftotext (poppler) for document text, with a JS fallback: neither image ships it.'
   },
+  'services/flow-script-isolated.ts': {
+    role: 'not-media',
+    calls: { child_process: 1 },
+    why: 'Flow script steps on a Hub shared deployment: a plain `node` child (process.execPath), the same in both images.'
+  },
   'services/staged-imports.ts': {
     role: 'not-media',
     calls: { child_process: 1 },

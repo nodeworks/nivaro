@@ -1184,6 +1184,8 @@ const KEYED: Record<string, string> = {
   'services/activity-feed.ts :: scopeCache':
     'routes/activity.ts builds the key from the tenant + the person + the sources',
   'services/ai-tool-lane.ts :: lanes': 'laneFor(currentTenantKey())',
+  'services/flow-script-isolated.ts :: gate':
+    'script-step slots: byApp keyed by currentTenantKey(); active + queue are the process-wide cap (no app data)',
   'services/ai-tool-reuse.ts :: changedAt':
     "key `${tenant}|<collection>`, tenant = the event's own tenant",
   'services/app-links.ts :: appCache':
@@ -1317,6 +1319,7 @@ const LEFT_ON_LEAVE: Record<string, string> = {
   'services/export-runs.ts :: local': INFLIGHT,
   'services/export-worker.ts :: runningHere': INFLIGHT,
   'services/flow-executor.ts :: runningFlows': INFLIGHT,
+  'services/flow-script-isolated.ts :: gate': GATE,
   'services/help-video-render.ts :: queueStates': INFLIGHT,
   'services/hub-transfer/pull.ts :: runs': INFLIGHT,
   'services/huddle-marks.ts :: invalidated': LIVE,

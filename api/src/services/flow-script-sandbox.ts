@@ -24,7 +24,7 @@ import vm from 'node:vm'
  * BigInt becomes a string.
  */
 
-const DATE_KEY = '\u0000nvr:date'
+export const DATE_KEY = '\u0000nvr:date'
 
 export interface ScriptLog {
   info: (msg: string) => void
@@ -35,7 +35,7 @@ export interface ScriptLog {
 
 export class ScriptTimeoutError extends Error {}
 
-function hostReplacer(this: Record<string, unknown>, key: string, value: unknown): unknown {
+export function hostReplacer(this: Record<string, unknown>, key: string, value: unknown): unknown {
   const raw = this[key]
   if (raw instanceof Date) {
     return Number.isNaN(raw.getTime()) ? null : { [DATE_KEY]: raw.toISOString() }
@@ -44,7 +44,7 @@ function hostReplacer(this: Record<string, unknown>, key: string, value: unknown
   return value
 }
 
-function hostReviver(_key: string, value: unknown): unknown {
+export function hostReviver(_key: string, value: unknown): unknown {
   if (
     value &&
     typeof value === 'object' &&
@@ -58,8 +58,9 @@ function hostReviver(_key: string, value: unknown): unknown {
 }
 
 // Runs inside the context. Takes the bridge + input off the global and keeps them in a closure,
-// then exposes one runner. Nothing here hands a host object to the script.
-const PRELUDE = `(() => {
+// then exposes one runner. Nothing here hands a host object to the script. Also run, unchanged,
+// by the isolated runner's child process (flow-script-isolated.ts).
+export const PRELUDE = `(() => {
   'use strict'
   const bridge = globalThis.__nvrBridge
   const input = globalThis.__nvrInput
@@ -107,7 +108,7 @@ const PRELUDE = `(() => {
   })
 })()`
 
-const MAX_TIMEOUT_MS = 30_000
+export const MAX_TIMEOUT_MS = 30_000
 
 function ownString(obj: unknown, key: string): string | null {
   if (obj === null || (typeof obj !== 'object' && typeof obj !== 'function')) return null

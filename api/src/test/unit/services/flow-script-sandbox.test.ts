@@ -1,9 +1,18 @@
 import { describe, expect, it, vi } from 'vitest'
-import { runSandboxedScript, ScriptTimeoutError } from '../../../services/flow-script-sandbox.js'
+import { runIsolatedScript } from '../../../services/flow-script-isolated.js'
+import {
+  runSandboxedScript as inProcess,
+  ScriptTimeoutError
+} from '../../../services/flow-script-sandbox.js'
 
 const quietLog = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })
 
-describe('exec-script sandbox (C2)', () => {
+// The same contract and the same escapes, for the in-process context (a dedicated app) and for
+// the child process a Hub shared deployment runs each script in (flow-script-isolated.ts).
+describe.each([
+  ['in process (dedicated)', inProcess],
+  ['child process (shared deployment)', runIsolatedScript]
+])('exec-script sandbox (C2) — %s', (_where, runSandboxedScript) => {
   it('keeps the documented contract: modify data and return it', async () => {
     const out = await runSandboxedScript(
       'data.computed = data.payload?.amount * 1.1; return data;',

@@ -14,8 +14,9 @@ import {
 } from './body-secrets.js'
 import { withChainStep } from './chain.js'
 import { chainFields } from './chain-columns.js'
-import { isMultiTenant } from './deployment-mode.js'
+import { isMultiTenant, isNivaroCloud } from './deployment-mode.js'
 import { callExternalApi } from './external-apis.js'
+import { runIsolatedScript } from './flow-script-isolated.js'
 import { runSandboxedScript } from './flow-script-sandbox.js'
 import { resolveSweepItems } from './flow-sweep-items.js'
 import {
@@ -174,15 +175,18 @@ async function runCondition(op: FlowOperation, data: FlowData, ctx: ExecutionCon
 export const EXEC_SCRIPT_CLOUD_REFUSAL =
   'Script operations are not available on a cloud instance. Use a Transform, Condition or Item operation instead.'
 
-async function runExecScript(op: FlowOperation, data: FlowData, ctx: ExecutionContext) {
+/** The exec-script operation (exported for tests). */
+export async function runExecScript(op: FlowOperation, data: FlowData, ctx: ExecutionContext) {
   const opts = parseOpts(op)
   const code = (opts.code as string) ?? ''
   const timeoutMs = (opts.timeout_ms as number) ?? 5000
 
   if (!code.trim()) return { status: 'resolve' as const, output: data }
 
-  // C2 (security audit 2026-10-27): cloud tenants share one process — no tenant runs code in it.
-  if (isMultiTenant()) {
+  // C2 (security audit 2026-10-27): Nivaro Cloud tenants share one process with strangers — no
+  // tenant runs code there. A Hub shared deployment runs each script in its own child process
+  // (flow-script-isolated.ts: permission model, empty env, no network, memory/time/slot caps).
+  if (isNivaroCloud()) {
     ctx.log.warn({ flowId: ctx.flowId, key: op.key }, 'exec-script refused in cloud mode')
     return {
       status: 'reject' as const,
@@ -198,8 +202,10 @@ async function runExecScript(op: FlowOperation, data: FlowData, ctx: ExecutionCo
   }
 
   try {
-    // Isolated node:vm context: data + log only, no process/require/timers (flow-script-sandbox).
-    const output = (await runSandboxedScript(code, data, scriptLog, timeoutMs)) as FlowData
+    // Isolated node:vm context: data + log only, no process/require/timers (flow-script-sandbox);
+    // on a shared deployment that context runs in a child process of its own.
+    const run = isMultiTenant() ? runIsolatedScript : runSandboxedScript
+    const output = (await run(code, data, scriptLog, timeoutMs)) as FlowData
 
     ctx.log.debug({ flowId: ctx.flowId, key: op.key }, 'Script executed')
     return { status: 'resolve' as const, output }
