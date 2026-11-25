@@ -171,6 +171,8 @@ import { hubAppLinkRoutes } from './hub-app-link.js'
 import { hubDeploymentLinkRoutes } from './hub-deployment-link.js'
 import { hubLinkRoutes } from './hub-link.js'
 import { hubOidcRoutes } from './hub-oidc.js'
+import { hubOpsRoutes } from './hub-ops.js'
+import { hubOpsDeploymentRoutes, hubOpsLinkRoutes } from './hub-ops-link.js'
 import { hubSigninAdminRoutes } from './hub-signin-admin.js'
 import { hubSwitcherRoutes } from './hub-switcher.js'
 import { hubTransferRoutes } from './hub-transfer.js'
@@ -487,6 +489,9 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(hubLinkRoutes, { prefix: '/hub-link' })
   // Hub phase 6 deployment link: mounted only on a Hub shared deployment (bearer-only).
   await app.register(hubDeploymentLinkRoutes, { prefix: '/hub-deployment' })
+  // Hub ops (issue rollup, files usage): read-only aggregates over the hub / deployment link.
+  await app.register(hubOpsLinkRoutes, { prefix: '/hub-link' })
+  await app.register(hubOpsDeploymentRoutes, { prefix: '/hub-deployment' })
   // Hub phase 6 file transfer (ticket-only): where the hub link is, or on a Hub shared deployment.
   await app.register(hubTransferRoutes, { prefix: '/hub-transfer' })
   // File source: mounted only where FILE_SOURCE_TOKEN is set (bearer-only) — lower environments
@@ -503,6 +508,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(hubSigninAdminRoutes, { prefix: '/hub/signin' })
   await app.register(hubOidcRoutes, { prefix: '/hub/oidc' })
   await app.register(hubAppLinkRoutes, { prefix: '/hub/app-link' })
+  // Hub ops: cross-app issues, secret rotation helper, storage health (HUB=on only).
+  await app.register(hubOpsRoutes, { prefix: '/hub' })
   // Hub phase 7 (app side): GET /api/hub-switcher + readiness `hub-signin`; 404 without the link.
   await app.register(hubSwitcherRoutes)
   await app.register(releaseRunsRoutes, { prefix: '/release' })
