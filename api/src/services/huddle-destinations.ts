@@ -1,5 +1,6 @@
-import { assertSafeUrl, type SafeFetchInit, safeFetch } from '../lib/ssrf.js'
+import { resolveCheckedHost, type SafeFetchInit, safeFetch } from '../lib/ssrf.js'
 import { isMultiTenant, isNivaroCloud, perAppJobs } from './deployment-mode.js'
+import { type IceLookup, parseIceUrl } from './huddle-turn-probe.js'
 
 /**
  * Where the API itself connects for huddles (security review 2026-10-21, finding 3): the
@@ -21,13 +22,12 @@ import { isMultiTenant, isNivaroCloud, perAppJobs } from './deployment-mode.js'
  * the media servers it saved itself, as self-hosted (the platform HUDDLE_* variables stay Nivaro
  * Cloud's). What the deployment's own process dials stays guarded there: a LiveKit address goes
  * through the SSRF guard (safeFetch, SSRF_ALLOW_HOSTS honoured), the TURN/STUN probe refuses a
- * private address the operator has not allowed (iceProbeRefusal), and `ws://` to this computer
+ * private address the operator has not allowed (guardedIceLookup: resolved once, the checked address is the one dialled), and `ws://` to this computer
  * is refused on any multi-tenant process.
  */
 
 type Env = Record<string, string | undefined>
 
-const ICE_URL_RE = /^(stuns?|turns?):[^\s@/]+$/i
 const LOOPBACK_RE = /^(localhost|127(?:\.\d{1,3}){3}|\[::1\])$/i
 const MAX_URLS = 8
 
@@ -58,13 +58,15 @@ export function validLiveKitUrl(raw: unknown, strict = isMultiTenant()): string 
   return null
 }
 
-/** A STUN/TURN address the probe may dial: `turn(s):host[:port][?transport=…]`, no user info. */
+/**
+ * A STUN/TURN address the probe may dial: `turn(s):host[:port][?transport=udp|tcp]`, read by the
+ * probe's own parser (parseIceUrl, the one reader): a plain host name or an IP literal, no user
+ * info, `#`, `\`, `%` or spaces.
+ */
 export function validIceUrl(raw: unknown, scheme: RegExp = /^(stuns?|turns?):/i): boolean {
   if (typeof raw !== 'string') return false
   const s = raw.trim()
-  const [head, query = ''] = s.split('?', 2)
-  if (!ICE_URL_RE.test(head) || !scheme.test(head)) return false
-  return query === '' || /^transport=(udp|tcp)$/i.test(query)
+  return s.length <= 300 && scheme.test(s) && parseIceUrl(s) !== null
 }
 
 function iceList(raw: string | undefined, scheme: RegExp): string[] {
@@ -123,31 +125,29 @@ export const huddleFetch: typeof fetch = async (input, init) => {
   return safeFetch(url, { ...(init ?? {}), redirect: 'manual' } as SafeFetchInit)
 }
 
-/** `turn:host:port?…` → host (brackets kept off an IPv6 literal); null when unreadable. */
-function iceHost(url: string): string | null {
-  const m = /^(?:stuns?|turns?):(\[[^\]]+\]|[^:?]+)/i.exec(url.trim())
-  return m ? m[1].replace(/^\[|\]$/g, '') : null
-}
+/** The probe's message when a shared deployment refuses to dial an app's address. */
+export const ICE_PRIVATE_REFUSED =
+  'A private or reserved address: the operator must allow it (SSRF_ALLOW_HOSTS) before it can be tested from this server. Browsers still use it.'
 
 /**
- * Hub shared deployment: why the TURN/STUN probe must not dial these addresses (a private or
- * reserved address the operator has not allowed with SSRF_ALLOW_HOSTS), or null. The probe runs
- * on the deployment's own process; anywhere else it is null (self-hosted: the admin is the
- * operator; Nivaro Cloud: only the platform's servers are ever probed).
+ * The TURN/STUN probe's resolver on a Hub shared deployment: the host (already read by
+ * parseIceUrl) is resolved ONCE, every address it resolves to is checked against the private and
+ * reserved ranges and SSRF_ALLOW_HOSTS (lib/ssrf.ts resolveCheckedHost), and the probe connects
+ * to exactly the address answered here — no separate pre-check, no second lookup to rebind.
  */
-export async function iceProbeRefusal(urls: string[]): Promise<string | null> {
-  if (!perAppJobs()) return null
-  for (const url of urls) {
-    const host = iceHost(url)
-    if (!host) return 'A STUN or TURN address could not be read.'
-    const shown = host.includes(':') ? `[${host}]` : host
-    try {
-      await assertSafeUrl(`https://${shown}/`)
-    } catch {
-      return `${url} is a private or reserved address. Ask the operator to allow it (SSRF_ALLOW_HOSTS) before it can be tested from this server; browsers still use it.`
-    }
+export const guardedIceLookup: IceLookup = async (host) => {
+  try {
+    return await resolveCheckedHost(host)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : ''
+    throw new Error(/resolved/i.test(msg) ? msg : ICE_PRIVATE_REFUSED)
   }
-  return null
+}
+
+/** The probe's resolver here: guarded on a Hub shared deployment, plain elsewhere (self-hosted:
+ *  the admin is the operator; Nivaro Cloud: only the platform's servers are ever probed). */
+export function iceProbeLookup(): IceLookup | undefined {
+  return perAppJobs() ? guardedIceLookup : undefined
 }
 
 /** Cloud mode: may the TURN probe run at all (the platform set a STUN or TURN server)? */

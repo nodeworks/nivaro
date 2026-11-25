@@ -98,7 +98,7 @@ describe('batch B: T7 sites (tenant-admin protections hold on shared)', () => {
     setMode('cloud')
     expect(huddleCloudMode(process.env)).toBe(true)
     // Hub gap watch: the operator's own apps; the API's own calls stay guarded
-    // (huddle-destinations.ts huddleFetch / iceProbeRefusal).
+    // (huddle-destinations.ts huddleFetch / guardedIceLookup).
     setMode('shared')
     expect(huddleCloudMode(process.env)).toBe(false)
   })

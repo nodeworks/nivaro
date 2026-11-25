@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { db } from '../db/index.js'
+import { iceProbeLookup } from './huddle-destinations.js'
 import { getHuddleSettings, type HuddleSettings, iceServersFrom } from './huddle-settings.js'
 import { type ProbeResult, probeIceServers } from './huddle-turn-probe.js'
 import { noteIssueWrite } from './issue-raise.js'
@@ -141,7 +142,9 @@ export async function runHuddleProbe(
   if (!s.enabled || (!s.turn_urls.length && !s.stun_urls.length)) return { skipped: true }
   // The credential a person would get for a room they can see (minted the same way).
   const servers = iceServersFrom({ ...s, turn_ttl_s: 120 }, 'huddle-probe')
-  const results = await (deps.probe ?? probeIceServers)(servers)
+  // A shared deployment dials an app's servers only through the checked, pinned resolver.
+  const lookup = iceProbeLookup()
+  const results = await (deps.probe ?? probeIceServers)(servers, lookup ? { lookup } : {})
   const sample = sampleOf(results, deps.now?.())
   await deps.redis.lpush(keyHistory(), JSON.stringify(sample))
   await deps.redis.ltrim(keyHistory(), 0, HISTORY_MAX - 1)
