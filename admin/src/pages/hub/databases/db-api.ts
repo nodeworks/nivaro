@@ -353,6 +353,10 @@ export const DB_CODE_COPY: Record<string, { title: string; hint?: string }> = {
   ),
   // State
   NOT_FOUND: copy('That no longer exists', 'It was removed. Reload the list.'),
+  OWN_SESSION_REQUIRED: copy(
+    'Only on your own session',
+    'Keeping a role’s administrator access needs an administrator signed in themselves.'
+  ),
   NOT_READY: copy('The database is not ready yet', 'Wait until it shows Ready, then try again.'),
   DATABASE_NOT_READY: copy(
     'The database is not ready yet',

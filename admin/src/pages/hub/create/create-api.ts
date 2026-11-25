@@ -721,6 +721,11 @@ export const CREATE_COPY: Record<string, Copy> = {
   },
   HUB_SECRET_NOT_SEALED: { title: "A saved secret can't be read", hint: 'Enter it again.' },
   HUB_SECRET_UNREADABLE: { title: "A saved secret can't be read", hint: 'Enter it again.' },
+  // Review M2: keeping a template role's administrator access is an own-session decision.
+  OWN_SESSION_REQUIRED: {
+    title: 'Only on your own session',
+    hint: 'Keeping a role’s administrator access needs an administrator signed in themselves.'
+  },
   // Hub enhancement 24: templates on Create app and the creation's Template step.
   TEMPLATE_UNKNOWN: {
     title: 'The picked template is not in the library',

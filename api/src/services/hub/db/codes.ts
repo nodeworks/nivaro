@@ -40,6 +40,8 @@ export const HUB_DB_CODES = [
   'DATABASE_IN_USE',
   // State
   'NOT_FOUND',
+  // Create app (routes/hub-create.ts): keeping a template role's admin access (review M2)
+  'OWN_SESSION_REQUIRED',
   'NOT_READY',
   'DATABASE_NOT_READY',
   'NOT_WAITING',

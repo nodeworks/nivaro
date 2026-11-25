@@ -453,9 +453,11 @@ export function hubReleaseRoutes(app: FastifyInstance): void {
 
   /** A retirement's own freeze (`retire:<id>`) ends with its retirement, never by hand. */
   const retirementOwned = async (id: number) => {
-    const row = (await db(FREEZES).where({ id }).first('source')) as
-      | { source: string | null }
-      | undefined
+    // An install behind migration 576 has no `source` column: nothing there is a retirement's.
+    const row = (await db(FREEZES)
+      .where({ id })
+      .first('*')
+      .catch(() => undefined)) as { source?: string | null } | undefined
     return typeof row?.source === 'string' && row.source.startsWith('retire:') ? row.source : null
   }
   const ownedRefusal = (reply: FastifyReply, source: string) =>

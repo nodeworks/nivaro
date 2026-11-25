@@ -803,7 +803,7 @@ function RetirementDetail({ id, isAdmin }: { id: number; isAdmin: boolean }) {
                 <RotateCcw className='mr-1.5 h-3.5 w-3.5' aria-hidden /> Resume
               </Button>
             )}
-            {r.status !== 'running' && undo && (
+            {undo && (
               <Button
                 size='sm'
                 variant='outline'
@@ -814,7 +814,7 @@ function RetirementDetail({ id, isAdmin }: { id: number; isAdmin: boolean }) {
                 <Undo2 className='mr-1.5 h-3.5 w-3.5' aria-hidden /> Undo “{undo.label}”
               </Button>
             )}
-            {r.status !== 'running' && r.cancellable && (
+            {r.cancellable && (
               <ConfirmButton
                 onConfirm={() => act.mutate('cancel')}
                 confirmLabel={
