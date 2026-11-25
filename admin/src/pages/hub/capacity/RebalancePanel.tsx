@@ -29,6 +29,14 @@ import {
 const primary = cn(smallButton, 'bg-nvr-cyan text-white hover:opacity-90 disabled:opacity-50')
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/
 
+const RESULT_WORDS: Record<RebalanceRun['moves'][number]['result'], string> = {
+  pending: 'Waiting its turn',
+  running: 'Moving',
+  success: 'Moved',
+  failed: 'Did not move',
+  skipped: 'Skipped'
+}
+
 const STATUS_WORDS: Record<RebalanceRun['status'], string> = {
   running: 'Running',
   cancelling: 'Stopping after the move under way',
@@ -200,6 +208,10 @@ export function RebalancePanel({ shared }: { shared: SharedCapacity[] }) {
                 </tbody>
               </table>
             </div>
+            <p className='m-0 text-[11px] text-slate-500 dark:text-muted-foreground'>
+              Load is the time a deployment spends answering requests, per minute (mean of the last
+              7 days). Deployments are weighed as equals.
+            </p>
             {proposal.moves.length === 0 ? (
               <p className='m-0 text-[12px] text-slate-600 dark:text-muted-foreground'>
                 Nothing to move: these deployments are already even, or no app can move.
@@ -282,6 +294,7 @@ export function RebalancePanel({ shared }: { shared: SharedCapacity[] }) {
                 >
                   <Input
                     id='rb-start'
+                    type='time'
                     value={start}
                     onChange={(e) => setStart(e.target.value)}
                     className='h-8 text-[13px] tabular-nums'
@@ -290,6 +303,7 @@ export function RebalancePanel({ shared }: { shared: SharedCapacity[] }) {
                 <Field id='rb-end' label='Window ends' error={HHMM.test(end) ? null : 'HH:MM'}>
                   <Input
                     id='rb-end'
+                    type='time'
                     value={end}
                     onChange={(e) => setEnd(e.target.value)}
                     className='h-8 text-[13px] tabular-nums'
@@ -393,7 +407,7 @@ export function RebalancePanel({ shared }: { shared: SharedCapacity[] }) {
                         <span className='tabular-nums text-slate-400'>{i + 1}.</span>
                         <span className='font-mono'>{m.label}</span>
                         <span className='text-slate-500 dark:text-muted-foreground'>
-                          → {keyOf(m.to_shared_id)} · {m.result}
+                          → {keyOf(m.to_shared_id)} · {RESULT_WORDS[m.result] ?? m.result}
                           {m.move_id ? ` (move ${m.move_id})` : ''}
                         </span>
                       </li>

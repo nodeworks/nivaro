@@ -1,7 +1,7 @@
 import { QueryErrorState } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, ArrowRightLeft } from 'lucide-react'
-import { Fragment, useState } from 'react'
+import { AlertTriangle, ArrowRightLeft, Pencil } from 'lucide-react'
+import { Fragment, type ReactNode, useState } from 'react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -119,6 +119,32 @@ export default function HubCapacity() {
   )
 }
 
+/** A figure per minute, or a dash when it was not read. */
+const rate = (n: number | null | undefined) => (n == null ? '—' : `${num(n)}/min`)
+
+/** Connections in use of the pool, or a dash when not read. */
+const conns = (f: Figures | null | undefined) =>
+  f?.db_in_use == null ? '—' : `${f.db_in_use} / ${f.db_pool_max ?? '—'}`
+
+/** Jobs running (and waiting for a slot), or a dash. */
+const jobsText = (f: Figures | null | undefined) =>
+  f?.jobs_running == null ? '—' : `${f.jobs_running}${f.jobs_waiting ? ` +${f.jobs_waiting}` : ''}`
+
+const jobsTip = (f: Figures | null | undefined) =>
+  f?.jobs_running == null
+    ? undefined
+    : `${f.jobs_running} running${f.jobs_waiting ? `, ${f.jobs_waiting} waiting for a slot` : ''}`
+
+/** A small trend with its name above it. */
+function TrendLabel({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <span className='flex flex-col items-start gap-0.5'>
+      <span className='text-[10px] text-slate-500 dark:text-muted-foreground'>{label}</span>
+      {children}
+    </span>
+  )
+}
+
 function MetaCell({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
     <div className='min-w-0 bg-white px-3 py-2 dark:bg-card' data-tip={hint}>
@@ -181,13 +207,17 @@ function SharedCard({ s, mostShare }: { s: SharedCapacity; mostShare: number }) 
       title={`Shared · ${s.key}`}
       description={`${s.name} · ${s.apps.length} ${s.apps.length === 1 ? 'app' : 'apps'}${s.status !== 'active' ? ` · ${s.status}` : ''}`}
       actions={
-        <span className='flex items-center gap-3'>
-          <Sparkline
-            points={s.trend}
-            pick={(p) => p.requests_per_min}
-            label='Requests per minute'
-          />
-          <Sparkline points={s.trend} pick={(p) => p.cpu_pct} label='CPU' />
+        <span className='flex items-center gap-4'>
+          <TrendLabel label='Requests, 30 days'>
+            <Sparkline
+              points={s.trend}
+              pick={(p) => p.requests_per_min}
+              label='Requests per minute'
+            />
+          </TrendLabel>
+          <TrendLabel label='CPU, 30 days'>
+            <Sparkline points={s.trend} pick={(p) => p.cpu_pct} label='CPU' />
+          </TrendLabel>
         </span>
       }
     >
@@ -199,20 +229,22 @@ function SharedCard({ s, mostShare }: { s: SharedCapacity; mostShare: number }) 
             <table className='w-full min-w-[760px] text-[12px]'>
               <thead className='text-left text-slate-500 dark:text-muted-foreground'>
                 <tr>
-                  <th className='py-1.5 pr-3 font-medium'>App</th>
-                  <th className='py-1.5 pr-3 font-medium'>Share</th>
-                  <th className='py-1.5 pr-3 text-right font-medium'>Requests</th>
+                  <th className='whitespace-nowrap py-1.5 pr-3 font-medium'>App</th>
+                  <th className='whitespace-nowrap py-1.5 pr-3 font-medium'>Share</th>
+                  <th className='whitespace-nowrap py-1.5 pr-3 text-right font-medium'>Requests</th>
                   <th
-                    className='py-1.5 pr-3 text-right font-medium'
+                    className='whitespace-nowrap py-1.5 pr-3 text-right font-medium'
                     data-tip='The deployment’s CPU split by answering time'
                   >
                     CPU (est.)
                   </th>
-                  <th className='py-1.5 pr-3 text-right font-medium'>Connections</th>
-                  <th className='py-1.5 pr-3 text-right font-medium'>Jobs</th>
-                  <th className='py-1.5 pr-3 text-right font-medium'>Files</th>
-                  <th className='py-1.5 pr-3 font-medium'>Limits</th>
-                  <th className='py-1.5 font-medium'>30 days</th>
+                  <th className='whitespace-nowrap py-1.5 pr-3 text-right font-medium'>
+                    Connections
+                  </th>
+                  <th className='whitespace-nowrap py-1.5 pr-3 text-right font-medium'>Jobs</th>
+                  <th className='whitespace-nowrap py-1.5 pr-3 text-right font-medium'>Files</th>
+                  <th className='whitespace-nowrap py-1.5 pr-3 font-medium'>Limits</th>
+                  <th className='whitespace-nowrap py-1.5 font-medium'>30 days</th>
                 </tr>
               </thead>
               <tbody>
@@ -223,10 +255,10 @@ function SharedCard({ s, mostShare }: { s: SharedCapacity; mostShare: number }) 
                     <Fragment key={a.env_id}>
                       <tr className='border-t border-slate-100 align-middle dark:border-border'>
                         <td className='py-1.5 pr-3'>
-                          <span className='font-mono'>{label}</span>
+                          <span className='block min-w-[12rem] break-words font-mono'>{label}</span>
                           {a.uses_most && (
                             <span
-                              className='ml-2 rounded-full border border-amber-200 bg-amber-50 px-1.5 py-px text-[10px] text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200'
+                              className='mt-1 inline-block whitespace-nowrap rounded-full border border-amber-200 bg-amber-50 px-1.5 py-px text-[10px] font-medium text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200'
                               data-tip={`Uses ${pct(top)} of the deployment (threshold ${pct(mostShare)})`}
                             >
                               Uses most of the deployment
@@ -236,20 +268,19 @@ function SharedCard({ s, mostShare }: { s: SharedCapacity; mostShare: number }) 
                         <td className='py-1.5 pr-3'>
                           <ShareBar value={top} strong={a.uses_most} />
                         </td>
-                        <td className='py-1.5 pr-3 text-right tabular-nums'>
-                          {num(a.latest?.requests_per_min)}/min
+                        <td className='whitespace-nowrap py-1.5 pr-3 text-right tabular-nums'>
+                          {rate(a.latest?.requests_per_min)}
                         </td>
-                        <td className='py-1.5 pr-3 text-right tabular-nums'>
+                        <td className='whitespace-nowrap py-1.5 pr-3 text-right tabular-nums'>
                           {a.latest?.cpu_pct == null ? '—' : `${num(a.latest.cpu_pct)}%`}
                         </td>
-                        <td className='py-1.5 pr-3 text-right tabular-nums'>
-                          {a.latest?.db_in_use ?? '—'} / {a.latest?.db_pool_max ?? '—'}
+                        <td className='whitespace-nowrap py-1.5 pr-3 text-right tabular-nums'>
+                          {conns(a.latest)}
                         </td>
-                        <td className='py-1.5 pr-3 text-right tabular-nums'>
-                          {a.latest?.jobs_running ?? '—'}
-                          {a.latest?.jobs_waiting ? ` +${a.latest.jobs_waiting}` : ''}
+                        <td className='whitespace-nowrap py-1.5 pr-3 text-right tabular-nums'>
+                          <span data-tip={jobsTip(a.latest)}>{jobsText(a.latest)}</span>
                         </td>
-                        <td className='py-1.5 pr-3 text-right tabular-nums'>
+                        <td className='whitespace-nowrap py-1.5 pr-3 text-right tabular-nums'>
                           {a.latest?.storage_bytes == null
                             ? '—'
                             : formatFileSize(a.latest.storage_bytes)}
@@ -265,6 +296,7 @@ function SharedCard({ s, mostShare }: { s: SharedCapacity; mostShare: number }) 
                             aria-expanded={editing === a.env_id}
                             onClick={() => setEditing(editing === a.env_id ? null : a.env_id)}
                           >
+                            <Pencil className='h-3 w-3 shrink-0 opacity-60' aria-hidden />
                             {limitsText(a.limits)}
                           </button>
                         </td>
@@ -317,14 +349,14 @@ function DedicatedCard({ apps }: { apps: AppCapacity[] }) {
         <table className='w-full min-w-[720px] text-[12px]'>
           <thead className='text-left text-slate-500 dark:text-muted-foreground'>
             <tr>
-              <th className='py-1.5 pr-3 font-medium'>App</th>
-              <th className='py-1.5 pr-3 text-right font-medium'>CPU</th>
-              <th className='py-1.5 pr-3 text-right font-medium'>Memory</th>
-              <th className='py-1.5 pr-3 text-right font-medium'>Requests</th>
-              <th className='py-1.5 pr-3 text-right font-medium'>Connections</th>
-              <th className='py-1.5 pr-3 text-right font-medium'>Jobs</th>
-              <th className='py-1.5 pr-3 text-right font-medium'>Files</th>
-              <th className='py-1.5 font-medium'>30 days</th>
+              <th className='whitespace-nowrap py-1.5 pr-3 font-medium'>App</th>
+              <th className='whitespace-nowrap py-1.5 pr-3 text-right font-medium'>CPU</th>
+              <th className='whitespace-nowrap py-1.5 pr-3 text-right font-medium'>Memory</th>
+              <th className='whitespace-nowrap py-1.5 pr-3 text-right font-medium'>Requests</th>
+              <th className='whitespace-nowrap py-1.5 pr-3 text-right font-medium'>Connections</th>
+              <th className='whitespace-nowrap py-1.5 pr-3 text-right font-medium'>Jobs</th>
+              <th className='whitespace-nowrap py-1.5 pr-3 text-right font-medium'>Files</th>
+              <th className='whitespace-nowrap py-1.5 font-medium'>30 days</th>
             </tr>
           </thead>
           <tbody>
@@ -341,22 +373,22 @@ function DedicatedCard({ apps }: { apps: AppCapacity[] }) {
                       </span>
                     )}
                   </td>
-                  <td className='py-1.5 pr-3 text-right tabular-nums'>
+                  <td className='whitespace-nowrap py-1.5 pr-3 text-right tabular-nums'>
                     {a.latest?.cpu_pct == null ? '—' : `${num(a.latest.cpu_pct)}%`}
                   </td>
-                  <td className='py-1.5 pr-3 text-right tabular-nums'>
+                  <td className='whitespace-nowrap py-1.5 pr-3 text-right tabular-nums'>
                     {a.latest?.memory_mb == null ? '—' : `${num(a.latest.memory_mb, 0)} MB`}
                   </td>
-                  <td className='py-1.5 pr-3 text-right tabular-nums'>
-                    {num(a.latest?.requests_per_min)}/min
+                  <td className='whitespace-nowrap py-1.5 pr-3 text-right tabular-nums'>
+                    {rate(a.latest?.requests_per_min)}
                   </td>
-                  <td className='py-1.5 pr-3 text-right tabular-nums'>
-                    {a.latest?.db_in_use ?? '—'} / {a.latest?.db_pool_max ?? '—'}
+                  <td className='whitespace-nowrap py-1.5 pr-3 text-right tabular-nums'>
+                    {conns(a.latest)}
                   </td>
-                  <td className='py-1.5 pr-3 text-right tabular-nums'>
-                    {a.latest?.jobs_running ?? '—'}
+                  <td className='whitespace-nowrap py-1.5 pr-3 text-right tabular-nums'>
+                    {jobsText(a.latest)}
                   </td>
-                  <td className='py-1.5 pr-3 text-right tabular-nums'>
+                  <td className='whitespace-nowrap py-1.5 pr-3 text-right tabular-nums'>
                     {a.latest?.storage_bytes == null ? '—' : formatFileSize(a.latest.storage_bytes)}
                   </td>
                   <td className='py-1.5'>
@@ -426,11 +458,12 @@ function AdviceCard({
                       : 'Outgrew shared'}
                   </span>
                   <span className='flex-1' />
-                  <Link to={a.plan_path} className={cn(ghostButton, 'text-nvr-cyan')}>
-                    <ArrowRightLeft className='h-3.5 w-3.5' aria-hidden /> Plan the move
+                  <Link to={a.plan_path} className={ghostButton}>
+                    <ArrowRightLeft className='h-3.5 w-3.5 text-nvr-cyan' aria-hidden /> Plan the
+                    move
                   </Link>
                 </div>
-                <ul className='m-0 mt-2 pl-5 text-[12px] text-slate-600 dark:text-muted-foreground'>
+                <ul className='m-0 mt-2 list-disc space-y-0.5 pl-5 text-[12px] text-slate-600 dark:text-muted-foreground'>
                   {a.reasons.map((r) => (
                     <li key={r.code}>{r.text}</li>
                   ))}
