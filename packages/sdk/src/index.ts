@@ -2564,6 +2564,10 @@ export function createNivaro(url: string, options: NivaroClientOptions = {}): Ni
     }
   }
 
+  // `hub` is a getter so a wrapped client (a Proxy that replaces `request` — GET coalescing, the
+  // signed-out gate, a read-only design client) sends Hub calls through ITS request: Reflect.get
+  // runs the getter with the wrapper as `this`. One Hub client per receiver (its app-info check).
+  const hubClients = new WeakMap<object, HubClient>()
   return {
     request,
     graphql,
@@ -2573,7 +2577,15 @@ export function createNivaro(url: string, options: NivaroClientOptions = {}): Ni
     setToken,
     getToken,
     url: baseUrl,
-    hub: createHubClient({ request })
+    get hub(): HubClient {
+      const self = this as NivaroClient
+      let h = hubClients.get(self)
+      if (!h) {
+        h = createHubClient({ request: (c) => self.request(c) })
+        hubClients.set(self, h)
+      }
+      return h
+    }
   }
 }
 

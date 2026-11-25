@@ -108,6 +108,9 @@ const r = (
   extra: Partial<HubRoute> = {}
 ): HubRoute => ({ method, path, group, auth, access, summary, ...extra })
 
+/** A status or run read that also heals: a run whose server stopped is marked interrupted. */
+const HEALS = 'This read also heals: a run whose server stopped is marked interrupted (idempotent).'
+
 /** Every route the Hub serves under /api/hub (prefix not included). */
 export const HUB_ROUTES: HubRoute[] = [
   // ─── Apps, owners, environments ─────────────────────────────────────────────
@@ -293,6 +296,7 @@ export const HUB_ROUTES: HubRoute[] = [
     'read',
     'Hub promotion runs of an environment',
     {
+      notes: HEALS,
       query: { limit: n() },
       response: 'HubRun[]'
     }
@@ -305,6 +309,7 @@ export const HUB_ROUTES: HubRoute[] = [
     'read',
     'One promotion run with plan and log',
     {
+      notes: HEALS,
       response: 'HubRun'
     }
   ),
@@ -646,7 +651,8 @@ export const HUB_ROUTES: HubRoute[] = [
         kind: s('upgrade or rollback', { enum: ['upgrade', 'rollback'], required: true }),
         version: s('x.y.z', { required: true })
       },
-      response: 'HubPlan'
+      response: 'HubPlan',
+      notes: HEALS
     }
   ),
   r(
@@ -663,9 +669,11 @@ export const HUB_ROUTES: HubRoute[] = [
     }
   ),
   r('GET', '/shared/:id/deploys', 'Shared deployments', 'admin', 'read', 'Upgrade runs', {
+    notes: HEALS,
     response: 'HubRun[]'
   }),
   r('GET', '/shared-deploys/:id', 'Shared deployments', 'admin', 'read', 'One upgrade run', {
+    notes: HEALS,
     response: 'HubRun'
   }),
   r(
@@ -708,8 +716,12 @@ export const HUB_ROUTES: HubRoute[] = [
     sensitive: true,
     accepted: true
   }),
-  r('GET', '/moves/:id', 'Moves', 'admin', 'read', 'One move run', { response: 'HubRun' }),
+  r('GET', '/moves/:id', 'Moves', 'admin', 'read', 'One move run', {
+    notes: HEALS,
+    response: 'HubRun'
+  }),
   r('GET', '/environments/:envId/moves', 'Moves', 'admin', 'read', 'Moves of an environment', {
+    notes: HEALS,
     response: 'HubRun[]'
   }),
   r('POST', '/moves/:id/cancel', 'Moves', 'admin', 'write', 'Cancel (roll back) a move', {

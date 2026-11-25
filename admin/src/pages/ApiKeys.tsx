@@ -1,3 +1,4 @@
+import { toastError } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BarChart3, Check, ChevronsUpDown, Copy, KeyRound, Plus, Trash2, X } from 'lucide-react'
 import { useState } from 'react'
@@ -385,7 +386,7 @@ export function ApiKeysPage() {
       qc.invalidateQueries({ queryKey: ['api-keys'] })
       toast.success('Chat access saved')
     },
-    onError: () => toast.error('Failed to save chat access')
+    onError: (err) => toastError(err, 'Could not save chat access')
   })
 
   const hubMut = useMutation({
@@ -395,7 +396,7 @@ export function ApiKeysPage() {
       qc.invalidateQueries({ queryKey: ['api-keys'] })
       toast.success('Hub access saved')
     },
-    onError: () => toast.error('Failed to save Hub access')
+    onError: (err) => toastError(err, 'Could not save Hub access')
   })
 
   const selected = keys.find((k) => k.id === selectedId) ?? null

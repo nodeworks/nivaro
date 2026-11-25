@@ -93,3 +93,30 @@ describe('nivaro.hub', () => {
     assert.deepEqual(c._body, { to: { kind: 'shared', shared_deployment_id: 2 } })
   })
 })
+
+describe('nivaro.hub through a wrapped client', () => {
+  it('a Proxy that replaces request also carries the Hub calls (read-only wrappers refuse them)', async () => {
+    const { fetch, calls } = server(['hub'], { 'GET /api/hub/apps': { body: { data: [] } } })
+    const base = createNivaro('http://hub', { fetch })
+    const refused = []
+    const readOnly = new Proxy(base, {
+      get(target, prop, receiver) {
+        if (prop === 'request')
+          return (c) => {
+            if (c._method !== 'GET') {
+              refused.push(c._path)
+              return Promise.reject(new Error('read-only'))
+            }
+            return target.request(c)
+          }
+        const v = Reflect.get(target, prop, receiver)
+        return typeof v === 'function' ? v.bind(target) : v
+      }
+    })
+    assert.deepEqual(await readOnly.hub.listApps(), [])
+    await assert.rejects(readOnly.hub.updateApp(1, { name: 'x' }), /read-only/)
+    assert.deepEqual(refused, ['/hub/apps/1'])
+    assert.equal(calls.filter((c) => c.method === 'PATCH').length, 0)
+    assert.equal(base.hub, base.hub)
+  })
+})
