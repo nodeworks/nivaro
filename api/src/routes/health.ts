@@ -91,9 +91,10 @@ export async function healthRoutes(app: FastifyInstance) {
     // or self-hosted.
     const shared = tenantSource() === 'hub' ? hubSharedConfig() : null
     // Hub placement (review C1): the move whose NEW stack this is (HUB_BOOT_MAINTENANCE), so a
-    // move between two stacks of one environment proves the name reaches the new one. Only on a
-    // dedicated app (never cloud or a shared deployment). Not a secret: a Hub move's number.
-    const moveTarget = isMultiTenant() || isNivaroCloud() ? null : hubBootMoveId()
+    // move between two stacks of one environment proves the name reaches the new one. Only the
+    // Hub sets it, and only on a dedicated target stack (never cloud or a shared deployment). Not
+    // a secret: a Hub move's number.
+    const moveTarget = hubBootMoveId()
     return reply.send({
       version: NIVARO_VERSION,
       // The shared-code (@nivaro/react) version the admin SPA carries — a
