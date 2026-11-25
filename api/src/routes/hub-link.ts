@@ -12,6 +12,7 @@ import { readReadiness } from '../services/readiness.js'
 import { bearerMatches } from '../services/render-peer.js'
 import { NIVARO_VERSION } from '../version.js'
 import { hubLinkDataRoutes } from './hub-link-data.js'
+import { hubLinkTemplateRoute } from './hub-link-template.js'
 import { runPreflight } from './preflight.js'
 
 /**
@@ -254,6 +255,10 @@ export async function hubLinkRoutes(app: FastifyInstance) {
         .send({ statusCode: 500, error: message, message, code: 'FIRST_ADMIN_FAILED' })
     }
   })
+
+  // Hub enhancement 24: an App Blueprint template into an app the Hub just created
+  // (services/hub-link/template-install.ts; routes/hub-link-template.ts).
+  hubLinkTemplateRoute(app)
 
   // ─── Hub phase 6: what a move needs from a dedicated app ─────────────────────────────────
   // Every route below is the Hub's own call (the HUB_TOKEN bearer above), never a person. The

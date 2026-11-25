@@ -64,6 +64,7 @@ import { hubImage } from '../registry.js'
 import { HubSecretError, openSecret, sealSecret } from '../secrets.js'
 import { getShared } from '../shared/store.js'
 import { readEnvironmentStatus } from '../status.js'
+import { recordTemplateChoices } from '../templates/choice.js'
 import { manualTicket, redirectUriFor, stackName } from './app-config.js'
 import { managerLines } from './deploy-key.js'
 import { namingForDocker } from './dest.js'
@@ -425,6 +426,12 @@ async function writeCreation(
       })
       envs.push({ id: envId, key: pe.key })
     }
+    await recordTemplateChoices(trx, {
+      input,
+      appId,
+      envIds: envs.map((e) => e.id),
+      by: user.id || null
+    })
     return { app_id: appId, environments: envs }
   })
 }

@@ -120,6 +120,8 @@ export interface CreateAppInput {
   target?: CreateTargetInput
   /** Shared: blank = the deployment's version. */
   version: string
+  /** Hub enhancement 24: a template from the library, installed after the first admin. */
+  template_id?: number | null
   /** Shared only: extension ids the deployment loads. */
   extensions?: string[]
   /** Optional on a shared deployment (it signs its apps in with its own OIDC). */
@@ -185,6 +187,7 @@ export type CreationStepKey =
   | 'name'
   | 'link'
   | 'admin'
+  | 'template'
   | 'stack'
   | 'place'
 
@@ -197,7 +200,8 @@ export const STEP_ORDER: readonly CreationStepKey[] = [
   'deploy',
   'name',
   'link',
-  'admin'
+  'admin',
+  'template'
 ]
 
 export interface CreationStepState {
@@ -401,6 +405,7 @@ export const STEP_LABELS: Record<CreationStepKey, string> = {
   name: 'Hostname',
   link: 'Hub link',
   admin: 'First administrator',
+  template: 'Template',
   stack: 'Stack and settings',
   place: 'Place on the shared deployment'
 }
@@ -715,6 +720,49 @@ export const CREATE_COPY: Record<string, Copy> = {
   },
   HUB_SECRET_NOT_SEALED: { title: "A saved secret can't be read", hint: 'Enter it again.' },
   HUB_SECRET_UNREADABLE: { title: "A saved secret can't be read", hint: 'Enter it again.' },
+  // Hub enhancement 24: templates on Create app and the creation's Template step.
+  TEMPLATE_UNKNOWN: {
+    title: 'The picked template is not in the library',
+    hint: 'It was archived or deleted. Pick another template, or none.'
+  },
+  TEMPLATE_APP_TOO_OLD: { title: 'This version cannot take a template', detail: true },
+  TEMPLATE_GONE: {
+    title: 'The template was deleted',
+    hint: 'Upload it again on the Templates tab, or install it by hand from Promotion → Blueprints in the app.'
+  },
+  TEMPLATE_UNANSWERED: {
+    title: 'The app did not answer the template install',
+    hint: 'Retry: the app skips what it already made.'
+  },
+  TEMPLATE_FAILED: {
+    title: 'The app could not install the template',
+    hint: "Check the app's server log, then Retry."
+  },
+  APP_NOT_EMPTY: { title: 'The app already has collections of its own', detail: true },
+  BAD_DIGEST: {
+    title: 'The app received a different template than the Hub sent',
+    hint: 'Retry; if it happens again, check what sits between the Hub and the app.'
+  },
+  BAD_BUNDLE: { title: 'That is not an App Blueprint', detail: true },
+  TEMPLATE_PARTIAL: { title: 'The template was installed in part', detail: true },
+  TEMPLATE_NOT_FOR_SHARED: {
+    title: 'An app on a shared deployment takes no template',
+    hint: 'Pick No template, or create the app on its own stack.'
+  },
+  TEMPLATE_INSTALLING: {
+    title: 'A template install is already running in this app',
+    hint: 'Wait for it to end, then Retry.'
+  },
+  BAD_SHAPE: { title: 'The template is not a well-formed blueprint', detail: true },
+  TOO_MANY_PARTS: { title: 'The template is larger than an app takes', detail: true },
+  APP_MOVED: {
+    title: 'The app has moved to another home',
+    hint: 'Nothing was installed there. Install the template from the app’s new home by hand (Promotion → Blueprints).'
+  },
+  UNKNOWN_INSTALL: {
+    title: 'The app lost track of the template install',
+    hint: 'Retry starts it again; the app skips what it already made.'
+  },
   // Docker and shared creations (gap `create`, 0.3.215)
   AGENT_UNREACHABLE: {
     title: 'The Hub agent did not answer',

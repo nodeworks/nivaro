@@ -61,6 +61,7 @@ import {
   stepLink,
   stepName
 } from './steps.js'
+import { stepTemplate } from './template-step.js'
 import type { CreationStepKey } from './types.js'
 
 /** Where a non-GitLab creation goes, loaded fresh by the runner for each leg. */
@@ -453,6 +454,7 @@ export function destSteps(
     name: stepName,
     link: stepLink,
     admin: stepAdmin,
-    place: (ctx) => stepPlace(ctx, deps)
+    place: (ctx) => stepPlace(ctx, deps),
+    template: stepTemplate
   }
 }

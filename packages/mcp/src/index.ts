@@ -37,6 +37,7 @@ import { registerDashboardTools } from './tools/dashboards.js'
 import { registerDataTools } from './tools/data.js'
 import { registerDrillTools } from './tools/drill.js'
 import { registerFormTools } from './tools/forms.js'
+import { type HubToolOptions, registerHubTools } from './tools/hub.js'
 import { registerInfrastructureTools } from './tools/infrastructure.js'
 import { registerInstanceTools, registerNamedInstanceTools } from './tools/instance.js'
 import { registerItemTools } from './tools/items.js'
@@ -96,6 +97,12 @@ export interface NivaroMcpOptions {
    * register (an admin tool for a non-admin) is not added.
    */
   allowedTools?: readonly string[] | null
+  /**
+   * Nivaro Hub tools (HUB_TOOL_NAMES; with adminTools also HUB_ADMIN_TOOL_NAMES): pass only when
+   * the instance is a Hub (HUB=on). `adminUrl` is where the links in plan answers point (the
+   * Hub's admin UI); default `url`. Omitted or null = no Hub tools.
+   */
+  hub?: HubToolOptions | null
 }
 
 export interface NivaroMcp {
@@ -212,16 +219,22 @@ export function createNivaroMcpClient(options: {
  */
 export async function keyCapabilities(
   client: NivaroClient
-): Promise<{ adminTools: boolean; chatAccess: ChatAccess }> {
+): Promise<{ adminTools: boolean; chatAccess: ChatAccess; hub: HubToolOptions | null }> {
   try {
     const res = await client.request(readMcpCapabilities())
     const chat = res.data?.chat
+    // Hub enhancement 25: a Hub answers hub {admin_url}; an older instance or an app answers none.
+    const hub = (res.data as { hub?: { admin_url?: unknown } | null } | undefined)?.hub
     return {
       adminTools: res.data?.admin_tools === true,
-      chatAccess: chat === 'read' || chat === 'post' ? chat : 'none'
+      chatAccess: chat === 'read' || chat === 'post' ? chat : 'none',
+      hub:
+        hub && typeof hub === 'object'
+          ? { adminUrl: typeof hub.admin_url === 'string' ? hub.admin_url : null }
+          : null
     }
   } catch {
-    return { adminTools: await keyIsAdmin(client), chatAccess: 'none' }
+    return { adminTools: await keyIsAdmin(client), chatAccess: 'none', hub: null }
   }
 }
 
@@ -295,6 +308,12 @@ export function createNivaroMcpServer(options: NivaroMcpOptions): NivaroMcp {
     registerInfrastructureTools(server, client)
     registerChaosTools(server, client)
   }
+  if (options.hub)
+    registerHubTools(server, client, {
+      url,
+      adminUrl: options.hub.adminUrl ?? null,
+      admin: options.adminTools === true
+    })
   // After every built-in, so a built-in name always wins.
   if (options.instanceTools?.length)
     registerNamedInstanceTools(server, client, options.instanceTools)
@@ -322,6 +341,15 @@ export { registerChatTools } from './tools/chat.js'
 export type { CollectionSchema, CollectionSummary, FieldSummary } from './tools/collections.js'
 export { summarizeCollection, summarizeSchema } from './tools/collections.js'
 export { compactFigure, registerDashboardTools } from './tools/dashboards.js'
+export type { HubToolOptions } from './tools/hub.js'
+export {
+  HUB_ADMIN_TOOL_NAMES,
+  HUB_TOOL_NAMES,
+  hubLinks,
+  PLAN_ONLY_NOTE,
+  planForModel,
+  registerHubTools
+} from './tools/hub.js'
 export { INFRA_TOOL_NAMES, registerInfrastructureTools } from './tools/infrastructure.js'
 export { registerInstanceTools, registerNamedInstanceTools, zodShapeOf } from './tools/instance.js'
 export { registerLayoutTools } from './tools/layouts.js'

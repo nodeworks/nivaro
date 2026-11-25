@@ -177,6 +177,7 @@ import { hubOpsRoutes } from './hub-ops.js'
 import { hubOpsDeploymentRoutes, hubOpsLinkRoutes } from './hub-ops-link.js'
 import { hubSigninAdminRoutes } from './hub-signin-admin.js'
 import { hubSwitcherRoutes } from './hub-switcher.js'
+import { hubTemplateRoutes } from './hub-templates.js'
 import { hubTransferRoutes } from './hub-transfer.js'
 import { ideasRoutes } from './ideas.js'
 import { importTemplatesRoutes } from './import-templates.js'
@@ -514,6 +515,7 @@ export async function registerRoutes(app: FastifyInstance) {
   // Nivaro Hub (apps, environments, owners): registers nothing unless HUB=on (never in cloud).
   await app.register(hubRoutes, { prefix: '/hub' })
   await app.register(hubSigninAdminRoutes, { prefix: '/hub/signin' })
+  await app.register(hubTemplateRoutes, { prefix: '/hub' })
   await app.register(hubOidcRoutes, { prefix: '/hub/oidc' })
   await app.register(hubAppLinkRoutes, { prefix: '/hub/app-link' })
   // Hub ops: cross-app issues, secret rotation helper, storage health (HUB=on only).

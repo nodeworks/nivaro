@@ -84,7 +84,9 @@ const migrations = await Promise.all([
   import('../../../db/migrations/546_hub_stack_settings.js'),
   import('../../../db/migrations/551_hub_signins.js'),
   import('../../../db/migrations/552_hub_shared_deployments.js'),
-  import('../../../db/migrations/553_hub_moves.js')
+  import('../../../db/migrations/553_hub_moves.js'),
+  // Hub enhancement 24: the Docker creation's last step reads its template install row.
+  import('../../../db/migrations/571_hub_app_templates.js')
 ])
 const R = await import('../../../services/hub/create/run.js')
 const store = await import('../../../services/hub/create/store.js')
@@ -425,7 +427,9 @@ describe('create on a Docker driver', () => {
         ['deploy', 'done'],
         ['name', 'done'],
         ['link', 'done'],
-        ['admin', 'done']
+        ['admin', 'done'],
+        // Hub enhancement 24: no template picked → done at once.
+        ['template', 'done']
       ])
       const env = await db('nivaro_hub_environments').where({ id: e.id }).first()
       expect(env.status).toBe('active')

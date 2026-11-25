@@ -83,6 +83,7 @@ import {
   saveAppMade
 } from './store.js'
 import { getTargetRow, type HubTargetRow, targetCtx } from './targets.js'
+import { stepTemplate } from './template-step.js'
 import type { CreationStepKey } from './types.js'
 
 // ── shapes ───────────────────────────────────────────────────────────────────
@@ -929,7 +930,8 @@ export const STEPS: Record<
   deploy: stepDeploy,
   name: stepName,
   link: stepLink,
-  admin: stepAdmin
+  admin: stepAdmin,
+  template: stepTemplate
 }
 
 // ── target changes ───────────────────────────────────────────────────────────

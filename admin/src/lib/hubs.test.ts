@@ -30,6 +30,7 @@ describe('hub registry', () => {
       'Capacity',
       'Drivers',
       'Targets',
+      'Templates',
       'Databases',
       'Backups & data',
       'Sign-in',

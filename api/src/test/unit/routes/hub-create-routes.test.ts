@@ -174,7 +174,8 @@ vi.mock('../../../services/hub/create/steps.js', async (orig) => {
       deploy: stub('deploy'),
       name: stub('name'),
       link: stub('link'),
-      admin: stub('admin')
+      admin: stub('admin'),
+      template: stub('template')
     }
   }
 })
