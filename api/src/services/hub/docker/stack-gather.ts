@@ -10,6 +10,8 @@ import type {
   StackFacts
 } from '../promote-types.js'
 import { hubImage } from '../registry.js'
+import { applyScaleShape } from '../scale/shape.js'
+import { readScaleShape } from '../scale/store.js'
 import { HUB_MASK } from '../secrets.js'
 import { AgentError, agentHealth, agentStack } from './agent-client.js'
 import type { AgentHealth, StackStatus } from './agent-types.js'
@@ -414,7 +416,11 @@ export async function gatherStackFacts(
   if (row && versionOk) {
     try {
       // The agent decides whether a large stack gets its exporter (stackRoles).
-      facts.roles = stackRoles(version, row.size, health?.agent_version)
+      // Hub scaling: with the replicas and limits the Hub keeps on top of the template.
+      facts.roles = applyScaleShape(
+        stackRoles(version, row.size, health?.agent_version),
+        await readScaleShape('environment', env.id)
+      )
     } catch (err) {
       if (!(err instanceof StackTemplateError)) throw err
       facts.renderProblem = { code: 'TEMPLATE_NONE', text: err.message }

@@ -2,6 +2,7 @@ import { ConfirmButton, ErrorNotice, QueryErrorState } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, Globe, Plus, Trash2, X } from 'lucide-react'
 import { useState } from 'react'
+import { HubToolbar } from '@/components/hub-page'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { SimpleSelect } from '@/components/ui/simple-select'
@@ -52,34 +53,34 @@ export function HubTargets() {
   const current = picked === 'new' ? null : (targets.data?.find((t) => t.id === picked) ?? null)
 
   return (
-    <section aria-labelledby='hub-targets-title' className='flex flex-1 min-h-0 flex-col'>
-      <header className='flex shrink-0 flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-4 py-2.5 dark:border-border dark:bg-card'>
-        <h2
-          id='hub-targets-title'
-          className='m-0 min-w-0 flex-1 truncate text-[13px] font-semibold text-slate-900 dark:text-foreground'
-        >
-          Where new apps go
-          {targets.data && (
-            <span className='ml-1.5 font-normal text-slate-500 dark:text-muted-foreground'>
-              · {targets.data.length} {targets.data.length === 1 ? 'target' : 'targets'}
-            </span>
-          )}
-        </h2>
-        <button
-          type='button'
-          className={cn(ghostButton, picked === 'new' && 'bg-accent')}
-          onClick={() => setPicked('new')}
-        >
-          <Plus className='h-3.5 w-3.5' aria-hidden /> New target
-        </button>
-      </header>
+    <section aria-label='Targets' className='flex flex-1 min-h-0 flex-col'>
+      <HubToolbar
+        description={
+          <>
+            A target is the GitLab group a new app's deploy repository is made in, the template it
+            is copied from, the server it deploys to and how its hostnames are made.
+            {targets.data && (
+              <span className='tabular-nums text-slate-500 dark:text-muted-foreground'>
+                {' '}
+                {targets.data.length} {targets.data.length === 1 ? 'target' : 'targets'}.
+              </span>
+            )}
+          </>
+        }
+        actions={
+          <button
+            type='button'
+            aria-pressed={picked === 'new'}
+            className={cn(ghostButton, picked === 'new' && 'bg-accent')}
+            onClick={() => setPicked('new')}
+          >
+            <Plus className='h-3.5 w-3.5' aria-hidden /> New target
+          </button>
+        }
+      />
 
       <div className='min-h-0 flex-1 overflow-y-auto bg-slate-50 dark:bg-background'>
         <div className='space-y-4 p-4 sm:p-6'>
-          <p className='m-0 max-w-[80ch] text-[12px] leading-relaxed text-slate-600 dark:text-muted-foreground'>
-            A target is the GitLab namespace a new app's deploy repository is created in, the
-            template it is copied from, the server it deploys to and how its hostnames are made.
-          </p>
           {targets.isPending ? (
             <div className='grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3'>
               {[0, 1].map((i) => (
@@ -652,7 +653,7 @@ function TargetForm({
 function FormGroup({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <fieldset className='m-0 min-w-0 border-0 p-0'>
-      <legend className='mb-2 p-0 text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-muted-foreground'>
+      <legend className='mb-2 p-0 text-[11px] font-medium text-slate-600 dark:text-muted-foreground'>
         {title}
       </legend>
       <div className='grid grid-cols-1 gap-3 sm:grid-cols-2'>{children}</div>

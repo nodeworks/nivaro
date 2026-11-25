@@ -15,6 +15,7 @@ import { Input } from '@/components/ui/input'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn, formatDateTime, formatRelative } from '@/lib/utils'
+import { type ChecklistState, PreDeployChecklist } from './changes/PreDeployChecklist'
 import {
   blockerCopy,
   blockerDetailLine,
@@ -52,6 +53,8 @@ import {
   FreezeBanner,
   ReleaseNotesPreview
 } from './releases/ReleaseNotes'
+
+const NO_CHECKLIST: ChecklistState = { required: false, ready: true, runId: null }
 
 /**
  * Promote and roll back (Hub phase 2): pick a version, read the plan in plain words, type the
@@ -187,6 +190,15 @@ function PromoteForm({
     if (planHash) shownHash.current = planHash
   }, [planHash])
 
+  /**
+   * The production pre-deploy checklist of this start: a promotion, or a rollback the Hub judges
+   * a forward deploy (to the same or a newer version than runs). A real rollback needs none.
+   */
+  const [checklist, setChecklist] = useState<ChecklistState>(NO_CHECKLIST)
+  const checklistBlocks = checklist.required && !checklist.ready
+  /** An administrator's emergency start outside the deploy window: the typed reason. */
+  const [outsideReason, setOutsideReason] = useState<string | null>(null)
+
   const start = useMutation({
     mutationFn: () =>
       startPromotion(env.id, {
@@ -194,7 +206,9 @@ function PromoteForm({
         kind,
         confirm: confirm.trim(),
         // The plan on screen: the Hub starts only if it would still do exactly this.
-        plan_hash: plan.data?.plan_hash ?? ''
+        plan_hash: plan.data?.plan_hash ?? '',
+        ...(checklist.runId != null ? { checklist_run_id: checklist.runId } : {}),
+        ...(outsideReason ? { outside_window_reason: outsideReason } : {})
       }),
     onSuccess: (r) => {
       void qc.invalidateQueries({ queryKey: hubKeys.promotions(env.id) })
@@ -227,6 +241,7 @@ function PromoteForm({
     !!plan.data?.ok &&
     !!plan.data.plan_hash &&
     !refused &&
+    !checklistBlocks &&
     confirm.trim() === env.key &&
     !start.isPending
 
@@ -302,7 +317,14 @@ function PromoteForm({
           <code className='font-mono font-semibold'>{env.key}</code> again to start it.
         </p>
       )}
-      <FreezeBanner envId={env.id} kind={kind} />
+      <FreezeBanner
+        envId={env.id}
+        kind={kind}
+        envKey={env.key}
+        version={version}
+        confirm={confirm}
+        onOutsideReason={setOutsideReason}
+      />
       {plan.data ? (
         <PlanPreview plan={plan.data} blockers={blockers} />
       ) : plan.isPending ? (
@@ -315,6 +337,17 @@ function PromoteForm({
       )}
 
       <ReleaseNotesPreview envId={env.id} kind={kind} version={version} />
+
+      {version && (
+        <PreDeployChecklist
+          key={kind}
+          target={{ kind: 'environment', envId: env.id }}
+          action='promote'
+          version={version}
+          kind={kind === 'rollback' ? 'rollback' : null}
+          onState={setChecklist}
+        />
+      )}
 
       <div className='space-y-1.5'>
         <label
@@ -714,7 +747,7 @@ function PromotionProgress({
           }))
         ]}
       />
-      <ol aria-label='Promotion steps' className='m-0 list-none space-y-1.5 p-0'>
+      <ol aria-label='Promotion steps' className='hub-run-steps m-0 list-none space-y-1.5 p-0'>
         {rows.map((r, i) => (
           <li
             key={r.key}
@@ -931,7 +964,7 @@ export function PromotionHistory({
       <div className='hidden overflow-x-auto sm:block'>
         <table aria-label={label} className='w-full min-w-[720px] text-[12px]'>
           <thead>
-            <tr className='border-b border-slate-200 text-left text-[11px] uppercase tracking-wide text-slate-500 dark:border-border dark:text-muted-foreground'>
+            <tr className='border-b border-slate-200 text-left text-[11px] font-medium text-slate-500 dark:border-border dark:text-muted-foreground'>
               <th className='py-2 pr-4 font-medium'>Version</th>
               <th className='py-2 pr-4 font-medium'>Kind</th>
               <th className='py-2 pr-4 font-medium'>Status</th>

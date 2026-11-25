@@ -17,6 +17,8 @@ import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn, formatRelative } from '@/lib/utils'
+import { type ChecklistState, PreDeployChecklist } from '../changes/PreDeployChecklist'
+import { SharedWindowGate } from '../changes/WindowGate'
 import {
   isLivePromotion,
   promotionStatusTone,
@@ -24,7 +26,7 @@ import {
   RUN_ERROR_COPY,
   splitRunError
 } from '../hub-api'
-import { dangerArmed, dangerGhost, SectionCard } from '../hub-parts'
+import { dangerArmed, dangerGhost, SectionCard, segmentButton, segmentGroup } from '../hub-parts'
 import { type SharedDeployment, sharedError, sharedKeys, WARNING_COPY } from './shared-api'
 import {
   cancelSharedDeploy,
@@ -236,6 +238,17 @@ function UpgradeForm({
   const downgrade = plan.data
     ? plan.data.downgrade === true
     : isDowngrade(kind, version, shared.version_pin)
+  /** An administrator's emergency start outside the Hub-wide deploy windows: the reason. */
+  const [outsideReason, setOutsideReason] = useState<string | null>(null)
+  /**
+   * The pre-deploy checklist of the production apps on this deployment: an upgrade, or a
+   * rollback the Hub judges a forward deploy (not below what the deployment runs).
+   */
+  const [preDeploy, setPreDeploy] = useState<ChecklistState>({
+    required: false,
+    ready: true,
+    runId: null
+  })
   const start = useMutation({
     mutationFn: () =>
       startSharedUpgrade(shared.id, {
@@ -244,7 +257,9 @@ function UpgradeForm({
         plan_hash: plan.data?.plan_hash ?? '',
         confirm: confirm.trim(),
         overrides: [...overrides].sort(),
-        ...(downgrade && downgradeOk ? { downgrade: true as const } : {})
+        ...(downgrade && downgradeOk ? { downgrade: true as const } : {}),
+        ...(preDeploy.runId != null ? { checklist_run_id: preDeploy.runId } : {}),
+        ...(outsideReason ? { outside_window_reason: outsideReason } : {})
       }),
     onSuccess: (r) => {
       void qc.invalidateQueries({ queryKey: upgradeKeys.deploys(shared.id) })
@@ -279,6 +294,7 @@ function UpgradeForm({
     open === 0 &&
     confirm.trim() === shared.key &&
     (!downgrade || downgradeOk) &&
+    !(preDeploy.required && !preDeploy.ready) &&
     !start.isPending
   const label = downgrade ? DOWNGRADE_LABEL : KIND_LABEL[kind]
   const downgradeNote = plan.data?.warnings.find((w) => w.code === 'DOWNGRADE')?.text
@@ -295,19 +311,14 @@ function UpgradeForm({
           <legend className='mb-1.5 text-[12px] font-medium text-slate-700 dark:text-foreground'>
             What to do
           </legend>
-          <div className='inline-flex rounded-md border border-slate-200 bg-white p-0.5 dark:border-border dark:bg-background'>
+          <div className={segmentGroup}>
             {(['upgrade', 'rollback'] as const).map((k) => (
               <button
                 key={k}
                 type='button'
                 aria-pressed={kind === k}
                 onClick={() => chooseKind(k)}
-                className={cn(
-                  'h-7 rounded px-2.5 text-[12px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50',
-                  kind === k
-                    ? 'bg-accent text-slate-900 dark:text-foreground'
-                    : 'text-slate-600 hover:bg-muted dark:text-slate-300'
-                )}
+                className={segmentButton(kind === k)}
               >
                 {KIND_LABEL[k].title}
               </button>
@@ -427,6 +438,19 @@ function UpgradeForm({
         <ErrorNotice
           description={upgradeError(plan.error, 'Could not check this version')}
           onRetry={() => void plan.refetch()}
+        />
+      )}
+
+      <SharedWindowGate sharedId={shared.id} onReason={setOutsideReason} />
+
+      {version && (
+        <PreDeployChecklist
+          key={kind}
+          target={{ kind: 'shared', sharedId: shared.id }}
+          action='upgrade'
+          version={version}
+          kind={kind === 'rollback' ? 'rollback' : null}
+          onState={setPreDeploy}
         />
       )}
 
@@ -961,7 +985,7 @@ function UpgradeProgress({
             className={dangerGhost}
             armedClassName={cn(dangerGhost, dangerArmed)}
           >
-            Cancel
+            <Ban className='h-3.5 w-3.5' aria-hidden /> Cancel
           </ConfirmButton>
         ) : (
           <Button type='button' variant='outline' size='sm' className='h-8' onClick={onClose}>
@@ -974,9 +998,14 @@ function UpgradeProgress({
       <HubRunTimeline
         what={d.kind === 'rollback' ? 'Rollback' : 'Upgrade'}
         live={live}
-        steps={steps.map((s, i) => ({ key: s.key, label: s.label, state: states[i] }))}
+        steps={steps.map((s, i) => ({
+          key: s.key,
+          label: s.label,
+          short: s.short,
+          state: states[i]
+        }))}
       />
-      <ol aria-label='Upgrade steps' className='m-0 list-none space-y-1.5 p-0'>
+      <ol aria-label='Upgrade steps' className='hub-run-steps m-0 list-none space-y-1.5 p-0'>
         {steps.map((s, i) => {
           const st = states[i]
           const Icon = STEP_ICON[st]

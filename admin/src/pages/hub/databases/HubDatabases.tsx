@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
-import { ghostButton } from '../hub-parts'
+import { countLabel, ghostButton, ListPaneHeader, listPaneClass } from '../hub-parts'
 import { AdoptDatabaseForm, DatabaseDetail, DbStatusChip, environmentWords } from './DatabaseDetail'
 import { DbServerForm } from './DbServerForm'
 import {
@@ -73,14 +73,9 @@ function DatabasesAdmin() {
 
   return (
     <div className='flex flex-1 min-h-0 overflow-hidden'>
-      <aside
-        className={cn(
-          'w-full shrink-0 flex-col overflow-y-auto border-slate-200 bg-white md:flex md:w-[300px] md:border-r dark:border-border dark:bg-card',
-          detailOpen ? 'hidden' : 'flex'
-        )}
-      >
+      <aside className={cn(listPaneClass, detailOpen ? 'hidden' : 'flex')}>
         <ListHeader
-          label='Servers'
+          label={countLabel(servers.data?.length, 'server', 'servers')}
           action='New server'
           active={creating === 'server'}
           onAction={() => show({ create: 'server' })}
@@ -123,7 +118,7 @@ function DatabasesAdmin() {
         )}
 
         <ListHeader
-          label='Databases'
+          label={countLabel(dbs.data?.length, 'database', 'databases')}
           action='Adopt'
           actionLabel='Adopt a database'
           active={creating === 'adopt'}
@@ -304,11 +299,10 @@ function ListHeader({
   ...main
 }: HeaderAction & { label: string; extra?: HeaderAction }) {
   return (
-    <div className='flex items-center gap-1 border-y border-slate-200 px-3 py-2 first:border-t-0 dark:border-border'>
-      <p className='m-0 flex-1 text-[12px] font-medium text-slate-500 dark:text-muted-foreground'>
-        {label}
-      </p>
-      {[main, ...(extra ? [extra] : [])].map((a) => (
+    <ListPaneHeader
+      className='border-t first:border-t-0'
+      label={label}
+      actions={[main, ...(extra ? [extra] : [])].map((a) => (
         <button
           key={a.action}
           type='button'
@@ -321,7 +315,7 @@ function ListHeader({
           <Plus className='h-3.5 w-3.5' aria-hidden /> {a.action}
         </button>
       ))}
-    </div>
+    />
   )
 }
 

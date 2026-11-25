@@ -80,8 +80,28 @@ export function parseUsage(body: unknown): CapacityUsage | null {
       requests_per_min: n0(t.requests_per_min),
       busy_ms_per_min: n0(t.busy_ms_per_min)
     },
-    apps: apps as AppUsage[]
+    apps: apps as AppUsage[],
+    // Hub autoscaling (app 0.3.215+): per-role answer times and heavy reads, queue depths.
+    ...scaleExtrasOf(body)
   }
+}
+
+/** The autoscaling figures of a usage answer; absent from an app before them (no figure). */
+function scaleExtrasOf(body: Record<string, unknown>): Pick<CapacityUsage, 'roles' | 'queues'> {
+  const out: Pick<CapacityUsage, 'roles' | 'queues'> = {}
+  if (Array.isArray(body.roles))
+    out.roles = body.roles
+      .filter(isObj)
+      .slice(0, 20)
+      .map((r) => ({
+        role: typeof r.role === 'string' ? r.role.slice(0, 32) : null,
+        processes: n0(r.processes),
+        p95_ms: n(r.p95_ms),
+        heavy_queued: n(r.heavy_queued)
+      }))
+  if (isObj(body.queues))
+    out.queues = { imports: n(body.queues.imports), exports: n(body.queues.exports) }
+  return out
 }
 
 async function readCapped(res: Response): Promise<string | null> {

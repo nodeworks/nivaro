@@ -1,5 +1,6 @@
 import type { HubApp } from '../apps.js'
 import type { HubEnvironmentRow } from '../promote-types.js'
+import { applyScaleShape, type ScaleShape } from '../scale/shape.js'
 import type { StackSpec } from './agent-types.js'
 import type { DockerDriverConfig } from './driver-config.js'
 import { type DatabaseRecordEnv, databaseEnvFor, databaseKey } from './stack-env.js'
@@ -46,6 +47,8 @@ export interface RenderStackInput {
   agentVolumeNfs?: boolean | null
   /** The target agent sees that export (GET /v1/health `export_mount`); false = cannot deploy. */
   agentExportMount?: boolean | null
+  /** Hub scaling: the replicas and limits kept on top of the size template (scale/shape.ts). */
+  scale?: ScaleShape | null
 }
 
 export type StackRenderCode =
@@ -122,7 +125,10 @@ export function stackHostnames(
 
 export function renderStackSpec(input: RenderStackInput): StackSpec {
   const { env: environment, row, edge } = input
-  const roles = stackRoles(input.version, row.size, input.agentVersion)
+  const roles = applyScaleShape(
+    stackRoles(input.version, row.size, input.agentVersion),
+    input.scale
+  )
   const base = noTrailingSlash(environment.base_url)
 
   const hostnames = stackHostnames(environment, edge)

@@ -5,9 +5,9 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useAuth } from '@/lib/auth'
-import { formatDateTime } from '@/lib/utils'
+import { cn, formatDateTime } from '@/lib/utils'
 import { hubToast } from '../hub-api'
-import { dangerArmed, ghostButton, SectionCard } from '../hub-parts'
+import { dangerArmed, dangerGhost, ghostButton, SectionCard } from '../hub-parts'
 import {
   removeSigningKey,
   rotateSigningKey,
@@ -286,8 +286,8 @@ function KeysCard({ keys }: { keys: SigningKey[] }) {
                             ? 'Remove? The next key signs now'
                             : 'Remove the key?'
                         }
-                        className={ghostButton}
-                        armedClassName={dangerArmed}
+                        className={dangerGhost}
+                        armedClassName={cn(dangerGhost, dangerArmed)}
                         disabled={busy}
                         onConfirm={() => void remove(k.kid)}
                       >

@@ -290,7 +290,11 @@ export const HUB_ROUTES: HubRoute[] = [
       body: {
         ...PROMOTE_BODY,
         plan_hash: s('The plan’s hash (the plan you reviewed)', { required: true }),
-        confirm: s('The environment key, typed', { required: true })
+        confirm: s('The environment key, typed', { required: true }),
+        checklist_run_id: n('The ticked pre-deploy checklist (production promotions with one)'),
+        outside_window_reason: s(
+          'Admin on own session: start outside the deploy window (10–500 characters); never past a freeze or the checklist'
+        )
       },
       sensitive: true,
       accepted: true
@@ -368,6 +372,12 @@ export const HUB_ROUTES: HubRoute[] = [
   ),
   r('POST', '/environments/:envId/stack/restart', 'Stacks', 'owner', 'write', 'Restart the stack'),
   r('POST', '/environments/:envId/stack/apply', 'Stacks', 'owner', 'write', 'Apply the stack now', {
+    body: {
+      confirm: s('Type the environment key', { required: true }),
+      outside_window_reason: s(
+        'Admin on own session: start outside the deploy window (10–500 characters); never past a freeze or the checklist'
+      )
+    },
     sensitive: true
   }),
   r('POST', '/environments/:envId/stack/remove', 'Stacks', 'owner', 'write', 'Remove the stack', {
@@ -672,7 +682,19 @@ export const HUB_ROUTES: HubRoute[] = [
     'write',
     'Start an upgrade or rollback',
     {
-      body: { kind: s(), version: s(), plan_hash: s(), confirm: s(), overrides: list('string') },
+      body: {
+        kind: s(),
+        version: s(),
+        plan_hash: s(),
+        confirm: s(),
+        overrides: list('string'),
+        checklist_run_id: n(
+          'The ticked pre-deploy checklist (an upgrade carrying production apps)'
+        ),
+        outside_window_reason: s(
+          'Admin on own session: start outside the deploy window (10–500 characters); never past a freeze or the checklist'
+        )
+      },
       sensitive: true,
       accepted: true
     }
@@ -720,7 +742,11 @@ export const HUB_ROUTES: HubRoute[] = [
       plan_hash: s(undefined, { required: true }),
       confirm: s('The environment key, typed', { required: true }),
       checklist: o(),
-      overrides: list('string')
+      overrides: list('string'),
+      checklist_run_id: n('The ticked pre-deploy checklist (production moves with one)'),
+      outside_window_reason: s(
+        'Admin on own session: start outside the deploy window (10–500 characters); never past a freeze or the checklist'
+      )
     },
     sensitive: true,
     accepted: true
@@ -1146,6 +1172,95 @@ export const HUB_ROUTES: HubRoute[] = [
     'write',
     'Cancel a rebalance (stops before its next move)'
   ),
+  // ─── Scaling (routes/hub-scale.ts) ──────────────────────────────────────────
+  r('GET', '/scale', 'Scaling', 'admin', 'read', 'Every Docker stack the Hub scales, per role'),
+  r(
+    'GET',
+    '/scale/targets/:kind/:id',
+    'Scaling',
+    'admin',
+    'read',
+    'One stack: replicas running and kept per role, rules, recent runs and connections now',
+    { notes: 'kind = environment (a dedicated stack) or shared (a shared deployment).' }
+  ),
+  r(
+    'POST',
+    '/scale/targets/:kind/:id/plan',
+    'Scaling',
+    'admin',
+    'plan',
+    'Plan a change of replicas or limits (connection math, blockers, steps)',
+    {
+      body: {
+        roles: list('object', '[{role, replicas?, cpus?, memory_mb?}] — only what changes')
+      }
+    }
+  ),
+  r(
+    'POST',
+    '/scale/targets/:kind/:id/runs',
+    'Scaling',
+    'admin',
+    'write',
+    'Start a planned change (bound to its plan_hash)',
+    {
+      sensitive: true,
+      accepted: true,
+      body: {
+        roles: { ...list('object', 'The same changes as the plan'), required: true },
+        plan_hash: s('The plan the person read', { required: true }),
+        confirm: s('The environment or deployment key, where the plan asks for it')
+      },
+      notes:
+        'Production environments and shared deployments ask for the typed key. Needs Hub agent 0.2.4 (AGENT_TOO_OLD otherwise).'
+    }
+  ),
+  r(
+    'PUT',
+    '/scale/targets/:kind/:id/roles/:role',
+    'Scaling',
+    'admin',
+    'write',
+    'Pin a role to manual, or set / clear its autoscaling rule',
+    {
+      body: {
+        pinned: b('true = autoscaling leaves this role alone'),
+        resume: b('true = lift the pause the rule put itself in after repeated failures'),
+        auto: o(
+          'The rule: enabled, min, max, metrics [{metric, out_above, in_below}], sustain, sustain_in, cooldown_out_min, cooldown_in_min, step_every_min, step, schedules [{days, from, to, zone, min}]; null clears it'
+        )
+      }
+    }
+  ),
+  r('GET', '/scale/runs', 'Scaling', 'admin', 'read', 'Scaling runs and skipped decisions', {
+    query: { kind: s('environment or shared'), id: n('The stack'), limit: n('1–200') }
+  }),
+  r('GET', '/scale/runs/:id', 'Scaling', 'admin', 'read', 'One scaling run'),
+  r(
+    'POST',
+    '/scale/runs/:id/cancel',
+    'Scaling',
+    'admin',
+    'write',
+    'Stop a run before its next step (a realtime scale-in drains one replica a step)'
+  ),
+  r(
+    'GET',
+    '/scale/db-servers',
+    'Scaling',
+    'admin',
+    'read',
+    'Database servers with their connection limit and what the Hub stacks may open there'
+  ),
+  r(
+    'PUT',
+    '/scale/db-servers/:id',
+    'Scaling',
+    'admin',
+    'write',
+    'Set a database server’s connection limit (null = unknown)',
+    { body: { max_connections: n('The server’s max connections, 1–1,000,000; null clears it') } }
+  ),
   // ─── Data care: backups, drills, refreshes (routes/hub-data.ts) ─────────────
   r(
     'GET',
@@ -1509,6 +1624,186 @@ export const HUB_ROUTES: HubRoute[] = [
     'Work out and store the release notes of a run that has none',
     { notes: 'Only promotions and rollbacks have notes (409 NOT_A_PROMOTION otherwise).' }
   ),
+  // ─── Changes: calendar, deploy windows, pre-deploy checklists (routes/hub-changes.ts) ──
+  r(
+    'GET',
+    '/calendar',
+    'Changes',
+    'owner',
+    'read',
+    'Change calendar: promotions, schedules, trains, moves, upgrades, freezes, deploy windows and planned maintenance in a range',
+    {
+      query: {
+        from: s('ISO time (default 7 days ago)'),
+        to: s('ISO time (default 35 days ahead); at most 100 days after from'),
+        app_id: n('One app')
+      }
+    }
+  ),
+  r('GET', '/calendar.ics', 'Changes', 'owner', 'read', 'The change calendar as iCalendar', {
+    query: {
+      app_id: n('One app'),
+      owner: s('A person’s apps (an owner may name only themself)')
+    },
+    notes: 'The last 30 days and the next 180; deploy windows are left out. A download, not a feed.'
+  }),
+  r('POST', '/calendar/entries', 'Changes', 'admin', 'write', 'Add planned maintenance or a note', {
+    body: {
+      title: s('At most 200 characters', { required: true }),
+      kind: s('maintenance or note', { enum: ['maintenance', 'note'] }),
+      app_id: n('null = every app'),
+      environment_id: n(),
+      starts_at: s('ISO time', { required: true }),
+      ends_at: s('ISO time'),
+      description: s('At most 1000 characters')
+    }
+  }),
+  r('PATCH', '/calendar/entries/:id', 'Changes', 'admin', 'write', 'Change a calendar entry', {
+    notes: 'Send the whole entry again. Entries another Hub feature writes are its own (404 here).'
+  }),
+  r('DELETE', '/calendar/entries/:id', 'Changes', 'admin', 'write', 'Delete a calendar entry'),
+  r(
+    'GET',
+    '/changes/overview',
+    'Changes',
+    'owner',
+    'read',
+    'Deploy windows (open or closed per environment), checklist items and checklists waiting for ticks'
+  ),
+  r('POST', '/deploy-windows', 'Changes', 'admin', 'write', 'Create a deploy window', {
+    body: {
+      name: s('At most 120 characters', { required: true }),
+      app_id: n('null = every app without its own'),
+      env_scope: s('production or all', { enum: ['production', 'all'] }),
+      recurrence: s('weekly or none (one extra window)', { enum: ['weekly', 'none'] }),
+      ranges: list('object', 'weekly: {days: 1 (Mon)–7 (Sun), from: HH:MM, to: HH:MM}'),
+      time_zone: s('IANA zone the ranges are read in, e.g. America/New_York'),
+      starts_at: s('ISO time (none)'),
+      ends_at: s('ISO time (none)'),
+      enabled: b()
+    },
+    notes: 'Promotions and Apply now outside every governing window answer 409 OUTSIDE_WINDOW.'
+  }),
+  r('PATCH', '/deploy-windows/:id', 'Changes', 'admin', 'write', 'Change a deploy window', {
+    notes: 'Send the whole window again: it is validated and stored as a whole.'
+  }),
+  r('DELETE', '/deploy-windows/:id', 'Changes', 'admin', 'write', 'Delete a deploy window'),
+  r(
+    'GET',
+    '/environments/:envId/deploy-window',
+    'Changes',
+    'owner',
+    'read',
+    'Whether a deploy window is open for the environment now, and the next opening'
+  ),
+  r(
+    'GET',
+    '/shared/:id/deploy-window',
+    'Changes',
+    'admin',
+    'read',
+    'Whether the Hub-wide deploy windows let the shared deployment be upgraded now'
+  ),
+  r(
+    'POST',
+    '/environments/:envId/promote/queue',
+    'Changes',
+    'admin',
+    'write',
+    'Queue a promotion for the next deploy window (a scheduled promotion)',
+    {
+      body: {
+        version: s('x.y.z', { required: true }),
+        confirm: s('Type the environment key', { required: true })
+      },
+      sensitive: true,
+      notes: '409 WINDOW_OPEN when a window is open now; NO_WINDOW_SOON when none opens in 2 weeks.'
+    }
+  ),
+  r('POST', '/checklist-items', 'Changes', 'admin', 'write', 'Add a pre-deploy checklist item', {
+    body: {
+      app_id: n('', { required: true }),
+      environment_id: n('null = every production environment of the app'),
+      text: s('At most 500 characters', { required: true }),
+      help: s('At most 1000 characters'),
+      required: b('Default true'),
+      tick_by: s('admin, owner or people', { enum: ['admin', 'owner', 'people'] }),
+      tick_people: list('string', 'User ids (tick_by people)'),
+      actions: list('string', 'promote, move, upgrade (default all three)'),
+      position: n('Order')
+    }
+  }),
+  r('PATCH', '/checklist-items/:id', 'Changes', 'admin', 'write', 'Change a checklist item', {
+    notes: 'Send the whole item again. Ticks already given are kept (by item id).'
+  }),
+  r('DELETE', '/checklist-items/:id', 'Changes', 'admin', 'write', 'Archive a checklist item'),
+  r(
+    'GET',
+    '/environments/:envId/checklist',
+    'Changes',
+    'owner',
+    'read',
+    'The pre-deploy checklist a production promotion or move of the environment needs, and the open one',
+    {
+      query: {
+        action: s('promote or move', { enum: ['promote', 'move'] }),
+        version: s('x.y.z (promote)')
+      }
+    }
+  ),
+  r(
+    'POST',
+    '/environments/:envId/checklist-runs',
+    'Changes',
+    'owner',
+    'write',
+    'Open the pre-deploy checklist for one promotion or move',
+    {
+      body: {
+        action: s('promote or move', { enum: ['promote', 'move'] }),
+        version: s('x.y.z (promote)')
+      },
+      notes: 'Answers the open one when it exists. Send its id as checklist_run_id with the start.'
+    }
+  ),
+  r(
+    'GET',
+    '/shared/:id/checklist',
+    'Changes',
+    'admin',
+    'read',
+    'The pre-deploy checklist an upgrade of a shared deployment needs (its production apps)',
+    { query: { version: s('x.y.z', { required: true }) } }
+  ),
+  r(
+    'POST',
+    '/shared/:id/checklist-runs',
+    'Changes',
+    'admin',
+    'write',
+    'Open the pre-deploy checklist for one shared deployment upgrade',
+    { body: { version: s('x.y.z', { required: true }) } }
+  ),
+  r('GET', '/checklist-runs/:id', 'Changes', 'owner', 'read', 'One checklist with its ticks', {
+    notes: 'Admins, owners of an app on it, and the people an item names may read it.'
+  }),
+  r('POST', '/checklist-runs/:id/tick', 'Changes', 'owner', 'write', 'Tick or untick one item', {
+    body: {
+      key: s('<item id>@<environment id>', { required: true }),
+      ticked: b('Default true'),
+      note: s('At most 500 characters')
+    },
+    notes: 'Only who the item allows (admins, the app’s owners, or the people it names).'
+  }),
+  r('POST', '/checklist-runs/:id/void', 'Changes', 'owner', 'write', 'Set an open checklist aside'),
+  r(
+    'GET',
+    '/deploys/:id/checklist',
+    'Changes',
+    'owner',
+    'read',
+    'The checklist a past promotion started with, or null'
+  ),
   // ─── App templates (routes/hub-templates.ts) ────────────────────────────────
   r('GET', '/templates', 'Templates', 'admin', 'read', 'The template library (never the bundles)', {
     query: { archived: s('1 = archived templates') }
@@ -1650,7 +1945,10 @@ export const HUB_ROUTES: HubRoute[] = [
     {
       body: {
         ref: s('hub_token:<environment id>', { required: true }),
-        confirm: s('Type the environment key', { required: true })
+        confirm: s('Type the environment key', { required: true }),
+        outside_window_reason: s(
+          'Admin on own session: start outside the deploy window (10–500 characters); never past a freeze or the checklist'
+        )
       },
       sensitive: true,
       accepted: true,
@@ -1672,6 +1970,202 @@ export const HUB_ROUTES: HubRoute[] = [
   r('POST', '/secrets/check', 'Secrets', 'admin', 'write', 'Run a secret’s readiness check now', {
     body: { ref: s('Secret reference', { required: true }) }
   }),
+  // ─── Incidents, on-call, status pages (routes/hub-incidents.ts, hub-status-public.ts) ───
+  r('GET', '/incidents', 'Incidents', 'owner', 'read', 'Incidents (owners: their apps)', {
+    query: { status: s('open or resolved', { enum: ['open', 'resolved'] }), app_id: n() }
+  }),
+  r(
+    'GET',
+    '/incidents/:id',
+    'Incidents',
+    'owner',
+    'read',
+    'One incident: timeline, banner per environment, freeze, page and escalation'
+  ),
+  r('POST', '/apps/:id/incidents', 'Incidents', 'admin', 'write', 'Open an incident', {
+    body: {
+      title: s('What is wrong (at most 200 characters)', { required: true }),
+      severity: s('sev1, sev2 or sev3', { enum: ['sev1', 'sev2', 'sev3'] }),
+      environment_id: n('One environment of the app (empty = the app)'),
+      summary: s('Internal summary'),
+      banner_text: s('Plain text every person of the app sees (at most 280 characters)'),
+      freeze: b('Freeze deploys for the app (default true)'),
+      page: b('Page on-call (default true)')
+    },
+    notes:
+      'Freezes deploys (409 FROZEN on promote / apply / upgrade / move; a rollback stays allowed), sets the banner over the hub link and pages on-call.'
+  }),
+  r('PATCH', '/incidents/:id', 'Incidents', 'admin', 'write', 'Change title, severity or summary', {
+    body: { title: s(), severity: s('sev1, sev2 or sev3'), summary: s() }
+  }),
+  r('POST', '/incidents/:id/notes', 'Incidents', 'admin', 'write', 'Add a note to the timeline', {
+    body: { text: s('At most 2000 characters', { required: true }) }
+  }),
+  r(
+    'PUT',
+    '/incidents/:id/banner',
+    'Incidents',
+    'admin',
+    'write',
+    'Set or remove the status banner in the app',
+    { body: { text: s('Plain text, at most 280 characters; empty removes it') } }
+  ),
+  r(
+    'POST',
+    '/incidents/:id/freeze',
+    'Incidents',
+    'admin',
+    'write',
+    'Freeze deploys again, or lift the incident’s freeze early',
+    { body: { on: b('true = freeze, false = lift') }, sensitive: true }
+  ),
+  r(
+    'POST',
+    '/incidents/:id/acknowledge',
+    'Incidents',
+    'owner',
+    'write',
+    'Acknowledge the incident’s page (stops the escalation)',
+    { notes: 'Also open to the people the page was sent to.' }
+  ),
+  r(
+    'POST',
+    '/incidents/:id/resolve',
+    'Incidents',
+    'admin',
+    'write',
+    'Resolve: lift the freeze, remove the banner, close the pages',
+    { body: { note: s('What fixed it') } }
+  ),
+  r(
+    'POST',
+    '/incidents/:id/postmortem/draft',
+    'Incidents',
+    'admin',
+    'write',
+    'Draft the post-mortem timeline from deploys, alerts, errors, moves and uptime',
+    {
+      body: { replace: b('Replace a post-mortem that exists') },
+      notes: '409 POSTMORTEM_EXISTS unless replace is true.'
+    }
+  ),
+  r(
+    'PUT',
+    '/incidents/:id/postmortem',
+    'Incidents',
+    'admin',
+    'write',
+    'Save the edited post-mortem',
+    {
+      body: { postmortem: o('The document', { required: true }) }
+    }
+  ),
+  r('GET', '/incidents/:id/postmortem.md', 'Incidents', 'owner', 'read', 'Post-mortem as Markdown'),
+  r('GET', '/incidents/:id/postmortem.pdf', 'Incidents', 'owner', 'read', 'Post-mortem as PDF', {
+    notes: '503 when the server has no Chromium and no render peer.'
+  }),
+  r(
+    'GET',
+    '/on-call',
+    'On-call',
+    'owner',
+    'read',
+    'Rotas, who is on call now, upcoming shifts, overrides and pages',
+    { notes: 'People on a rota see that rota and the pages sent to them.' }
+  ),
+  r('GET', '/on-call/people', 'On-call', 'admin', 'read', 'Hub accounts a rota may name'),
+  r('PUT', '/apps/:id/on-call', 'On-call', 'admin', 'write', 'Set the app’s weekly on-call rota', {
+    body: {
+      enabled: b(),
+      people: list('string', 'Hub account ids, in rota order'),
+      time_zone: s('IANA zone of the hand-over'),
+      handover_weekday: n('0 = Sunday … 6 = Saturday'),
+      handover_time: s('HH:MM'),
+      starts_on: s('ISO time the first person starts'),
+      escalate_minutes: n('1–240'),
+      steps: list('string', 'on_call, next, owners, admins (on_call first)')
+    }
+  }),
+  r(
+    'POST',
+    '/apps/:id/on-call/overrides',
+    'On-call',
+    'admin',
+    'write',
+    'Put someone on call instead of the rota for a time range',
+    {
+      body: {
+        user_id: s('Hub account id', { required: true }),
+        starts_at: s('ISO time', { required: true }),
+        ends_at: s('ISO time', { required: true }),
+        note: s()
+      }
+    }
+  ),
+  r('DELETE', '/on-call/overrides/:id', 'On-call', 'admin', 'write', 'Remove an override'),
+  r(
+    'POST',
+    '/pages/:id/acknowledge',
+    'On-call',
+    'owner',
+    'write',
+    'Acknowledge a page (stops its escalation)',
+    { notes: 'Also open to the people the page was sent to.' }
+  ),
+  r(
+    'GET',
+    '/status-pages',
+    'Status pages',
+    'owner',
+    'read',
+    'Status pages (administrators: all; anyone signed in: the internal ones)'
+  ),
+  r(
+    'GET',
+    '/status-pages/:id/view',
+    'Status pages',
+    'owner',
+    'read',
+    'What a status page says now (internal pages: anyone signed in)'
+  ),
+  r('POST', '/status-pages', 'Status pages', 'admin', 'write', 'Create a status page', {
+    body: {
+      name: s('Title on the page', { required: true }),
+      audience: s('public (token link) or internal (signed-in people)', {
+        enum: ['public', 'internal']
+      }),
+      app_ids: list('integer', 'Apps on the page: null or absent = every app, [] = none'),
+      expires_in_days: n('Public link lifetime, 1–366 (default 90)')
+    },
+    notes: 'A public page answers its token once; only its SHA-256 is stored.'
+  }),
+  r('PATCH', '/status-pages/:id', 'Status pages', 'admin', 'write', 'Rename or change the apps', {
+    body: { name: s(), app_ids: list('integer') }
+  }),
+  r(
+    'POST',
+    '/status-pages/:id/rotate',
+    'Status pages',
+    'admin',
+    'write',
+    'Replace a public page’s link (the old one stops working)',
+    { body: { expires_in_days: n('1–366 (default 90)') }, sensitive: true }
+  ),
+  r('DELETE', '/status-pages/:id', 'Status pages', 'admin', 'write', 'Delete a status page', {
+    sensitive: true
+  }),
+  r(
+    'GET',
+    '/status-page/:token',
+    'Status pages',
+    'public',
+    'read',
+    'The public status page (HTML; ?format=json for JSON)',
+    {
+      notes:
+        'No sign-in: the token is the credential. Rate-limited; a wrong, expired or replaced token answers 404. No hostnames, versions or error text.',
+    }
+  ),
   // ─── Verification: smoke checks, extension versions (routes/hub-verify.ts) ──────────
   r(
     'GET',

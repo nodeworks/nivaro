@@ -3,10 +3,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Copy, Play, RotateCw, Settings2, Trash2 } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
 import { toast } from 'sonner'
+import { ProductionGuard } from '@/components/hub-brand/HubBits'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
+import { EnvWindowGate } from '../changes/WindowGate'
 import { BLOCKER_COPY, type HubEnvironment, hubError, hubKeys, hubToast } from '../hub-api'
 import { dangerGhost, ghostButton, StatusChip } from '../hub-parts'
 import { StackSettingsView } from '../owner-access'
@@ -241,7 +243,7 @@ function StackBody({
           <div className='hidden overflow-x-auto sm:block'>
             <table className='w-full text-[12px]'>
               <thead>
-                <tr className='border-b border-slate-200 text-left text-[11px] uppercase tracking-wide text-slate-500 dark:border-border dark:text-muted-foreground'>
+                <tr className='border-b border-slate-200 text-left text-[11px] font-medium text-slate-500 dark:border-border dark:text-muted-foreground'>
                   <th className='py-1.5 pr-3 font-medium'>Role</th>
                   <th className='py-1.5 pr-3 font-medium'>Replicas</th>
                   <th className='py-1.5 pr-3 font-medium'>Update</th>
@@ -505,30 +507,32 @@ function RestartForm({
     onError: (err) => hubToast(err, `Could not restart ${env.key}`)
   })
   return (
-    <div className='flex flex-wrap items-center gap-2'>
-      <label htmlFor={`hub-restart-${env.id}${idPrefix}`} className={rowText}>
-        Type <span className='font-mono'>{env.key}</span> to restart:
-      </label>
-      <Input
-        id={`hub-restart-${env.id}${idPrefix}`}
-        value={typed}
-        onChange={(e) => setTyped(e.target.value)}
-        autoComplete='off'
-        spellCheck={false}
-        className='h-8 w-40 font-mono text-[12px]'
-      />
-      <Button
-        size='sm'
-        className='h-8 bg-nvr-cyan text-white hover:bg-nvr-cyan/90'
-        disabled={typed !== env.key || restart.isPending}
-        onClick={() => restart.mutate()}
-      >
-        {restart.isPending ? 'Restarting…' : 'Restart now'}
-      </Button>
-      <button type='button' className={ghostButton} onClick={onClose}>
-        Cancel
-      </button>
-    </div>
+    <ProductionGuard envKey={env.key} what='restart'>
+      <div className='flex flex-wrap items-center gap-2'>
+        <label htmlFor={`hub-restart-${env.id}${idPrefix}`} className={rowText}>
+          Type <span className='font-mono'>{env.key}</span> to restart:
+        </label>
+        <Input
+          id={`hub-restart-${env.id}${idPrefix}`}
+          value={typed}
+          onChange={(e) => setTyped(e.target.value)}
+          autoComplete='off'
+          spellCheck={false}
+          className='h-8 w-40 font-mono text-[12px]'
+        />
+        <Button
+          size='sm'
+          className='h-8 bg-nvr-cyan text-white hover:bg-nvr-cyan/90'
+          disabled={typed !== env.key || restart.isPending}
+          onClick={() => restart.mutate()}
+        >
+          {restart.isPending ? 'Restarting…' : 'Restart now'}
+        </Button>
+        <button type='button' className={ghostButton} onClick={onClose}>
+          Cancel
+        </button>
+      </div>
+    </ProductionGuard>
   )
 }
 
@@ -547,8 +551,9 @@ function ApplyForm({
 }) {
   const qc = useQueryClient()
   const [typed, setTyped] = useState('')
+  const [outsideReason, setOutsideReason] = useState<string | null>(null)
   const apply = useMutation({
-    mutationFn: () => applyStack(env.id, typed),
+    mutationFn: () => applyStack(env.id, typed, outsideReason),
     onSuccess: () => {
       toast.success(
         `Applying the saved settings to ${env.key} — follow it in the promotion history`
@@ -560,38 +565,41 @@ function ApplyForm({
     onError: (err) => hubToast(err, `Could not apply the settings to ${env.key}`)
   })
   return (
-    <div className='space-y-1.5'>
-      <p className={`m-0 ${rowText}`}>
-        Redeploys the version this stack runs, with the image the Hub recorded for it and the saved
-        settings and extension pins. Swarm replaces the tasks one by one; the run is checked like a
-        deploy.
-      </p>
-      {preview && <ApplyPreviewLines preview={preview} />}
-      <div className='flex flex-wrap items-center gap-2'>
-        <label htmlFor={`hub-apply-${env.id}${idPrefix}`} className={rowText}>
-          Type <span className='font-mono'>{env.key}</span> to apply:
-        </label>
-        <Input
-          id={`hub-apply-${env.id}${idPrefix}`}
-          value={typed}
-          onChange={(e) => setTyped(e.target.value)}
-          autoComplete='off'
-          spellCheck={false}
-          className='h-8 w-40 font-mono text-[12px]'
-        />
-        <Button
-          size='sm'
-          className='h-8 bg-nvr-cyan text-white hover:bg-nvr-cyan/90'
-          disabled={typed !== env.key || apply.isPending}
-          onClick={() => apply.mutate()}
-        >
-          {apply.isPending ? 'Starting…' : 'Apply now'}
-        </Button>
-        <button type='button' className={ghostButton} onClick={onClose}>
-          Cancel
-        </button>
+    <ProductionGuard envKey={env.key} what='apply'>
+      <div className='space-y-1.5'>
+        <p className={`m-0 ${rowText}`}>
+          Redeploys the version this stack runs, with the image the Hub recorded for it and the
+          saved settings and extension pins. Swarm replaces the tasks one by one; the run is checked
+          like a deploy.
+        </p>
+        {preview && <ApplyPreviewLines preview={preview} />}
+        <EnvWindowGate envId={env.id} what='apply' onReason={setOutsideReason} />
+        <div className='flex flex-wrap items-center gap-2'>
+          <label htmlFor={`hub-apply-${env.id}${idPrefix}`} className={rowText}>
+            Type <span className='font-mono'>{env.key}</span> to apply:
+          </label>
+          <Input
+            id={`hub-apply-${env.id}${idPrefix}`}
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            autoComplete='off'
+            spellCheck={false}
+            className='h-8 w-40 font-mono text-[12px]'
+          />
+          <Button
+            size='sm'
+            className='h-8 bg-nvr-cyan text-white hover:bg-nvr-cyan/90'
+            disabled={typed !== env.key || apply.isPending}
+            onClick={() => apply.mutate()}
+          >
+            {apply.isPending ? 'Starting…' : 'Apply now'}
+          </Button>
+          <button type='button' className={ghostButton} onClick={onClose}>
+            Cancel
+          </button>
+        </div>
       </div>
-    </div>
+    </ProductionGuard>
   )
 }
 
@@ -688,80 +696,86 @@ function RemoveForm({
   const volId = `hub-remove-vols-${env.id}${idPrefix}`
   return (
     <Section title='Remove stack'>
-      <div className='space-y-2 rounded-md border border-red-200 bg-red-50/60 p-2.5 dark:border-red-500/30 dark:bg-red-950/20'>
-        <p className={`m-0 ${rowText}`}>
-          Stops every service of <span className='font-mono'>{name}</span> and suspends the
-          environment.{' '}
-          {uploadsOnShare
-            ? 'Its uploads stay on the NFS share whatever you choose; its Redis data stays unless you delete it.'
-            : 'Its data volumes stay unless you delete them too.'}
-        </p>
-        <div className='flex flex-wrap items-center gap-2'>
-          <label htmlFor={`hub-remove-${env.id}${idPrefix}`} className={rowText}>
-            Type <span className='font-mono'>{name}</span> to remove it:
-          </label>
-          <Input
-            id={`hub-remove-${env.id}${idPrefix}`}
-            value={typed}
-            onChange={(e) => setTyped(e.target.value)}
-            autoComplete='off'
-            spellCheck={false}
-            className='h-8 w-48 bg-white font-mono text-[12px] dark:bg-background'
-          />
-        </div>
-        <div className='flex items-center gap-2'>
-          <Checkbox id={volId} checked={volumes} onCheckedChange={(v) => setVolumes(v === true)} />
-          <label htmlFor={volId} className={rowText}>
+      <ProductionGuard envKey={env.key} what='removal'>
+        <div className='space-y-2 rounded-md border border-red-200 bg-red-50/60 p-2.5 dark:border-red-500/30 dark:bg-red-950/20'>
+          <p className={`m-0 ${rowText}`}>
+            Stops every service of <span className='font-mono'>{name}</span> and suspends the
+            environment.{' '}
             {uploadsOnShare
-              ? "Also delete the stack's Redis data"
-              : "Also delete the stack's data volumes"}
-          </label>
-        </div>
-        {volumes && (
-          <div className='space-y-1.5'>
-            <p className='m-0 text-[12px] text-red-700 dark:text-red-300'>
-              {uploadsOnShare ? (
-                <>
-                  The Redis data goes for good; this cannot be undone. The files in{' '}
-                  <span className='font-mono'>{keptFolder}</span> on the NFS share are kept
-                  {adopted
-                    ? '.'
-                    : ': delete that folder on the file server if you no longer need it.'}
-                </>
-              ) : (
-                'The uploads and Redis data go for good. This cannot be undone.'
-              )}
-            </p>
-            <div className='flex flex-wrap items-center gap-2'>
-              <label htmlFor={`hub-remove-vol-${env.id}${idPrefix}`} className={rowText}>
-                Type <span className='font-mono'>{phrase}</span>:
-              </label>
-              <Input
-                id={`hub-remove-vol-${env.id}${idPrefix}`}
-                value={typedVol}
-                onChange={(e) => setTypedVol(e.target.value)}
-                autoComplete='off'
-                spellCheck={false}
-                className='h-8 w-64 max-w-full bg-white font-mono text-[12px] dark:bg-background'
-              />
-            </div>
+              ? 'Its uploads stay on the NFS share whatever you choose; its Redis data stays unless you delete it.'
+              : 'Its data volumes stay unless you delete them too.'}
+          </p>
+          <div className='flex flex-wrap items-center gap-2'>
+            <label htmlFor={`hub-remove-${env.id}${idPrefix}`} className={rowText}>
+              Type <span className='font-mono'>{name}</span> to remove it:
+            </label>
+            <Input
+              id={`hub-remove-${env.id}${idPrefix}`}
+              value={typed}
+              onChange={(e) => setTyped(e.target.value)}
+              autoComplete='off'
+              spellCheck={false}
+              className='h-8 w-48 bg-white font-mono text-[12px] dark:bg-background'
+            />
           </div>
-        )}
-        <div className='flex items-center gap-2'>
-          <Button
-            size='sm'
-            variant='destructive'
-            className='h-8'
-            disabled={!ready || remove.isPending}
-            onClick={() => remove.mutate()}
-          >
-            {remove.isPending ? 'Removing…' : 'Remove stack'}
-          </Button>
-          <button type='button' className={ghostButton} onClick={onClose}>
-            Cancel
-          </button>
+          <div className='flex items-center gap-2'>
+            <Checkbox
+              id={volId}
+              checked={volumes}
+              onCheckedChange={(v) => setVolumes(v === true)}
+            />
+            <label htmlFor={volId} className={rowText}>
+              {uploadsOnShare
+                ? "Also delete the stack's Redis data"
+                : "Also delete the stack's data volumes"}
+            </label>
+          </div>
+          {volumes && (
+            <div className='space-y-1.5'>
+              <p className='m-0 text-[12px] text-red-700 dark:text-red-300'>
+                {uploadsOnShare ? (
+                  <>
+                    The Redis data goes for good; this cannot be undone. The files in{' '}
+                    <span className='font-mono'>{keptFolder}</span> on the NFS share are kept
+                    {adopted
+                      ? '.'
+                      : ': delete that folder on the file server if you no longer need it.'}
+                  </>
+                ) : (
+                  'The uploads and Redis data go for good. This cannot be undone.'
+                )}
+              </p>
+              <div className='flex flex-wrap items-center gap-2'>
+                <label htmlFor={`hub-remove-vol-${env.id}${idPrefix}`} className={rowText}>
+                  Type <span className='font-mono'>{phrase}</span>:
+                </label>
+                <Input
+                  id={`hub-remove-vol-${env.id}${idPrefix}`}
+                  value={typedVol}
+                  onChange={(e) => setTypedVol(e.target.value)}
+                  autoComplete='off'
+                  spellCheck={false}
+                  className='h-8 w-64 max-w-full bg-white font-mono text-[12px] dark:bg-background'
+                />
+              </div>
+            </div>
+          )}
+          <div className='flex items-center gap-2'>
+            <Button
+              size='sm'
+              variant='destructive'
+              className='h-8'
+              disabled={!ready || remove.isPending}
+              onClick={() => remove.mutate()}
+            >
+              {remove.isPending ? 'Removing…' : 'Remove stack'}
+            </Button>
+            <button type='button' className={ghostButton} onClick={onClose}>
+              Cancel
+            </button>
+          </div>
         </div>
-      </div>
+      </ProductionGuard>
     </Section>
   )
 }

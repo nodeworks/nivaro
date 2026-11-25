@@ -1,0 +1,746 @@
+import { db } from '../../../db/index.js'
+import { runInBackgroundPool } from '../../../db/pool-context.js'
+import { logActivity } from '../../activity.js'
+import { hubPublicOrigin } from '../../deployment-mode.js'
+import {
+  AgentError,
+  agentHealth,
+  agentScale,
+  agentStack,
+  describeAgentError
+} from '../docker/agent-client.js'
+import type { StackScaleChange, StackSpec, StackStatus } from '../docker/agent-types.js'
+import { environmentNames } from '../docker/render-spec.js'
+import { prepareStackSpec } from '../docker/run-step.js'
+import { deployedStack } from '../docker/stack-guards.js'
+import { type DockerDriverRow, getDriver } from '../drivers.js'
+import { recordedImage } from '../move/shared-route.js'
+import { deliverHubNotice, hubEventRecipients, type NotifyDeps } from '../notify-events.js'
+import {
+  defaultPromoteLock,
+  defaultSharedLock,
+  LOCK_RENEW_MS,
+  lockHolderRefusal,
+  type PromoteLock,
+  PromotionError,
+  type SharedLock,
+  sharedLockRefusal
+} from '../promote-lock.js'
+import { renderSharedSpec, SharedRenderError } from '../shared/stack-render.js'
+import { getShared, openSharedToken } from '../shared/store.js'
+import { tenantsOf } from '../shared/tenants.js'
+import { deployedSharedRoles } from '../shared/upgrade-plan.js'
+import { ensureSharedSecrets } from '../shared/upgrade-run.js'
+import { scalePauses } from './pause.js'
+import {
+  changesBetween,
+  type PlanDeps,
+  planScale,
+  type RoleChangeInput,
+  ScaleError,
+  type ScalePlan
+} from './plan.js'
+import { liveStatus, reconcileFromLive } from './reconcile.js'
+import { defaultServerLock, type ServerLock, withServerLocks } from './server-lock.js'
+import { figuresOf, type RoleFigures, type ScaleShape, shapeText } from './shape.js'
+import {
+  claimStaleRun,
+  insertRun,
+  noteChange,
+  type RunSource,
+  readRun,
+  type ScaleRun,
+  type ScaleStep,
+  shapeFromFigures,
+  staleRuns,
+  type TargetKind,
+  updateRun,
+  updateRunning,
+  writeShape
+} from './store.js'
+import { readTarget, type ScaleTarget } from './target.js'
+
+/**
+ * Nivaro Hub scaling: one change run (manual, automatic or by schedule) of a stack's replicas and
+ * limits, through the Hub agent's scale endpoint (agent 0.2.4). Every change is a run row
+ * (nivaro_hub_scale_runs) with its reason, the figures that caused it, the shape before and after
+ * and its steps; the run holds the stack's lock (the environment lock, or the shared deployment's
+ * lock, holder `scale`) for its whole life, renewed with a heartbeat.
+ *
+ * A step: render the spec the stack runs now (exactly as a restart does — the recorded image and
+ * pins, the saved settings, the shape BEFORE the step), ask the agent to change only the numbers
+ * of this step, wait for swarm to settle on the new spec hash, then keep the new numbers
+ * (nivaro_hub_scale_roles), so every later render — promotion, Apply now, upgrade, move — renders
+ * the scaled stack. A realtime scale-in is one replica a step, with a pause between steps so the
+ * stopped process's sockets reconnect to the others before the next one stops.
+ *
+ * Resume: a run whose process stopped keeps `running` with an old heartbeat; the scale tick takes
+ * the lock again and sends the same step again. The agent answers `already` when the stack runs
+ * that step's spec, so nothing is applied twice.
+ */
+
+export const SETTLE_MS = 15 * 60_000
+export const POLL_MS = 5_000
+/** Between realtime scale-in steps: the closed sockets reconnect to the other processes. */
+export const DRAIN_MS = 60_000
+/** A run whose heartbeat is older than this is resumed by the tick. */
+export const STALE_MS = 3 * 60_000
+const POLL_MISSES = 3
+
+export interface CurrentSpec {
+  driver: DockerDriverRow
+  spec: StackSpec
+}
+
+export interface RunDeps extends PlanDeps {
+  envLock?: PromoteLock
+  sharedLock?: SharedLock
+  agentScale?: typeof agentScale
+  agentStack?: (d: DockerDriverRow, name: string, expect?: string) => Promise<StackStatus | null>
+  /** The spec the stack runs with `shape`; default renderCurrentSpec. */
+  renderCurrent?: (t: ScaleTarget, shape: ScaleShape) => Promise<CurrentSpec>
+  sleep?: (ms: number) => Promise<void>
+  now?: () => number
+  pollMs?: number
+  settleMs?: number
+  drainMs?: number
+  renewMs?: number
+  notify?: NotifyDeps
+  /** Tests: wait for the background run instead of firing it off. */
+  inline?: boolean
+  /** The per-database-server plan lock (server-lock.ts). */
+  serverLock?: ServerLock
+}
+
+/** What a SPEC_MISMATCH asks the person to do, by the kind of stack. */
+export function specMismatchText(kind: TargetKind): string {
+  return kind === 'shared'
+    ? 'The stack does not run the spec the Hub has on record — re-apply the shared deployment (an upgrade at the version it runs), then scale again.'
+    : 'The stack does not run the spec the Hub has on record — the saved settings or pins changed since its last deploy; use Apply now, then scale again.'
+}
+
+/** Every database server the target's apps use (the plan lock covers each). */
+function serverIdsOf(t: ScaleTarget): number[] {
+  const ids =
+    t.kind === 'shared' ? (t.apps ?? []).map((a) => a.server?.id) : [t.server?.id ?? undefined]
+  return ids.filter((x): x is number => typeof x === 'number')
+}
+
+const realSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+
+class Stop extends Error {
+  status: 'failed' | 'cancelled' | 'interrupted'
+  code: string
+  constructor(status: Stop['status'], code: string, message: string) {
+    super(message)
+    this.status = status
+    this.code = code
+  }
+}
+
+const PIN_RE = /^[^@\s]+@sha256:[0-9a-f]{64}$/
+
+/** The spec the stack runs now, with `shape` laid over the template (never an inspect). */
+export async function renderCurrentSpec(t: ScaleTarget, shape: ScaleShape): Promise<CurrentSpec> {
+  if (!t.stack || !t.driver)
+    throw new Stop('failed', 'NO_STACK_NAME', 'The stack has no swarm stack name or driver.')
+  if (t.kind === 'environment') {
+    const deployed = await deployedStack(t.id, t.stack)
+    if (deployed.state !== 'ok' || !t.version || deployed.version !== t.version)
+      throw new Stop(
+        'failed',
+        'STACK_STATE_UNKNOWN',
+        `The Hub cannot tell which spec ${t.stack} runs — deploy it (Apply now) before scaling it.`
+      )
+    try {
+      const prepared = await prepareStackSpec(
+        t.id,
+        {
+          name: t.stack,
+          driverId: t.driver.id,
+          version: t.version,
+          image: deployed.image,
+          extensions: deployed.extensions
+        },
+        { scale: shape }
+      )
+      return { driver: prepared.driver, spec: prepared.spec }
+    } catch (err) {
+      if (err instanceof PromotionError) throw new Stop('failed', err.code, err.message)
+      throw err
+    }
+  }
+  // A shared deployment: what its newest successful run deployed, the names its apps claim now
+  // (a move changes them), the roles it runs — exactly as a move's route step renders it.
+  const shared = await getShared(t.id)
+  if (!shared?.stack || shared.driver_id == null || !shared.version_pin)
+    throw new Stop('failed', 'NOT_DEPLOYED', 'The shared deployment has no recorded run.')
+  const driver = await getDriver(shared.driver_id)
+  if (driver?.kind !== 'docker')
+    throw new Stop('failed', 'NO_DRIVER', 'The shared deployment names no Docker driver.')
+  const recorded = await recordedImage(shared.id, shared.version_pin)
+  if (!recorded || !PIN_RE.test(recorded.image))
+    throw new Stop(
+      'failed',
+      'STACK_STATE_UNKNOWN',
+      `The Hub has no record of what ${shared.stack} runs; deploy it once before scaling it.`
+    )
+  const token = await openSharedToken(shared.id)
+  if (!token) throw new Stop('failed', 'TOKEN_MISSING', 'The deployment token cannot be opened.')
+  const secrets = await ensureSharedSecrets(shared.id)
+  let edge: 'traefik' | 'publish' = 'traefik'
+  try {
+    edge = (await agentHealth(driver)).edge === 'publish' ? 'publish' : 'traefik'
+  } catch (err) {
+    throw new Stop(
+      'failed',
+      'AGENT_UNREACHABLE',
+      err instanceof AgentError
+        ? describeAgentError(err, { stack: shared.stack })
+        : 'The Hub agent does not answer.'
+    )
+  }
+  const names = new Set<string>()
+  for (const r of await tenantsOf(shared)) for (const n of environmentNames(r.env)) names.add(n)
+  try {
+    const spec = renderSharedSpec({
+      shared,
+      driver: driver.config,
+      edge,
+      secrets,
+      token,
+      version: shared.version_pin,
+      image: recorded.image,
+      extensions: { ...shared.extension_pins, ...recorded.extensions },
+      hubPublicUrl: hubPublicOrigin() ?? '',
+      explicitHosts: [...names],
+      roles: (await deployedSharedRoles(shared)).roles,
+      scale: shape
+    })
+    return { driver, spec }
+  } catch (err) {
+    if (err instanceof SharedRenderError) throw new Stop('failed', err.code, err.message)
+    throw err
+  }
+}
+
+type Held =
+  | { kind: 'environment'; envId: number; token: string }
+  | { kind: 'shared'; sharedId: number; token: string }
+
+async function takeLock(t: ScaleTarget, deps: RunDeps): Promise<Held> {
+  if (t.kind === 'shared') {
+    const lock = deps.sharedLock ?? defaultSharedLock()
+    const token = await lock.take(t.id, 'scale')
+    if (!token) {
+      const r = sharedLockRefusal(await lock.holder(t.id).catch(() => null))
+      throw new ScaleError(r.code, r.message)
+    }
+    return { kind: 'shared', sharedId: t.id, token }
+  }
+  const lock = deps.envLock ?? defaultPromoteLock()
+  const token = await lock.take(t.id, 'scale')
+  if (!token) {
+    const r = lockHolderRefusal((await lock.holder?.(t.id).catch(() => null)) ?? null, {
+      code: 'ENVIRONMENT_BUSY',
+      message: 'Another action holds this environment — wait for it to end.'
+    })
+    throw new ScaleError(r.code, r.message)
+  }
+  return { kind: 'environment', envId: t.id, token }
+}
+
+async function renewLock(h: Held, deps: RunDeps): Promise<boolean> {
+  try {
+    if (h.kind === 'shared') {
+      const l = deps.sharedLock ?? defaultSharedLock()
+      return l.renewStrict
+        ? await l.renewStrict(h.sharedId, h.token)
+        : await l.renew(h.sharedId, h.token)
+    }
+    const l = deps.envLock ?? defaultPromoteLock()
+    return l.renewStrict ? await l.renewStrict(h.envId, h.token) : await l.renew(h.envId, h.token)
+  } catch {
+    return false
+  }
+}
+
+async function releaseLock(h: Held, deps: RunDeps): Promise<void> {
+  try {
+    if (h.kind === 'shared')
+      await (deps.sharedLock ?? defaultSharedLock()).release(h.sharedId, h.token)
+    else await (deps.envLock ?? defaultPromoteLock()).release(h.envId, h.token)
+  } catch {
+    // the lock expires on its own
+  }
+}
+
+export interface StartInput {
+  roles: RoleChangeInput[]
+  /** Manual: the plan the person read (409 PLAN_CHANGED otherwise). */
+  plan_hash?: string
+  /** Manual: the typed key, where the plan asks for it. */
+  confirm?: string
+}
+
+export interface StartActor {
+  by: string | null
+  source: RunSource
+  /** Automatic: why (the rule's sentence with its figure). */
+  reason?: string
+  figures?: Record<string, unknown> | null
+}
+
+export interface Started {
+  run_id: number
+  plan: ScalePlan
+  /** For tests and the tick: settles when the run ends. */
+  done: Promise<void>
+}
+
+/**
+ * Plans and starts one change. Manual: bound to `plan_hash`, refused on any blocker, typed
+ * confirm on production and shared deployments. Automatic: refused on any blocker (the tick logs
+ * a skipped row instead). Answers once the run row exists; the run goes on in the background.
+ */
+export async function startScale(
+  kind: TargetKind,
+  id: number,
+  input: StartInput,
+  actor: StartActor,
+  deps: RunDeps = {}
+): Promise<Started> {
+  const first = await readTarget(kind, id, deps.health)
+  if (!first) throw new ScaleError('NOT_FOUND', 'No such stack.', 404)
+  // Plans on the same database server are serialised until the run row (the reservation the
+  // next plan counts) exists.
+  const locked = await withServerLocks(
+    serverIdsOf(first),
+    async () => {
+      const t = (await readTarget(kind, id, deps.health)) ?? first
+      const plan = await planScale(
+        t,
+        input.roles,
+        actor.source === 'manual' ? 'manual' : 'auto',
+        deps
+      )
+      if (actor.source === 'manual' && input.plan_hash !== plan.plan_hash)
+        throw Object.assign(
+          new ScaleError(
+            'PLAN_CHANGED',
+            'The plan changed since you saw it — check the new plan and start again.'
+          ),
+          { plan }
+        )
+      if (plan.blockers.length)
+        throw Object.assign(new ScaleError(plan.blockers[0].code, plan.blockers[0].text), {
+          plan
+        })
+      if (actor.source === 'manual' && plan.confirm && input.confirm !== plan.confirm)
+        throw new ScaleError('CONFIRM_REQUIRED', `Type ${plan.confirm} to change this stack.`, 400)
+      const held = await takeLock(t, deps)
+      try {
+        const steps: ScaleStep[] = plan.steps.map((to) => ({ to, status: 'pending' }))
+        const runId = await insertRun({
+          target_kind: kind,
+          target_id: id,
+          stack: t.stack,
+          source: actor.source,
+          status: 'running',
+          reason: actor.reason ?? `Changed by hand: ${shapeText(plan.from, plan.to)}.`,
+          figures: actor.figures ?? null,
+          from: plan.from,
+          to: plan.to,
+          steps,
+          plan_hash: plan.plan_hash,
+          started_by: actor.by
+        })
+        return { runId, held, plan }
+      } catch (err) {
+        await releaseLock(held, deps)
+        throw err
+      }
+    },
+    deps.serverLock ?? defaultServerLock()
+  )
+  if (!locked.held)
+    throw new ScaleError(
+      'SERVER_BUSY',
+      'Another change of a stack on the same database server is being planned — try again in a moment.'
+    )
+  const { runId, held, plan } = locked.value
+  const done = runInBackgroundPool(() => execute(runId, held, deps))
+  if (deps.inline) await done
+  return { run_id: runId, plan, done }
+}
+
+/** Waits for swarm to settle on `hash`: converged, rolled back, paused, or the time is up. */
+async function settle(
+  driver: DockerDriverRow,
+  stack: string,
+  hash: string,
+  deps: RunDeps,
+  alive: () => boolean
+): Promise<void> {
+  const read = deps.agentStack ?? agentStack
+  const sleep = deps.sleep ?? realSleep
+  const now = deps.now ?? Date.now
+  const until = now() + (deps.settleMs ?? SETTLE_MS)
+  let misses = 0
+  for (;;) {
+    if (!alive()) throw new Stop('interrupted', 'LOCK_LOST', 'The run lost its lock.')
+    let st: StackStatus | null = null
+    try {
+      st = await read(driver, stack, hash)
+      misses = 0
+    } catch {
+      misses++
+      if (misses >= POLL_MISSES)
+        throw new Stop(
+          'failed',
+          'AGENT_UNREACHABLE',
+          'The Hub agent stopped answering while swarm settled.'
+        )
+    }
+    if (st?.state === 'converged') return
+    if (st?.state === 'rolled_back')
+      throw new Stop(
+        'failed',
+        'SWARM_ROLLED_BACK',
+        'Swarm rolled the change back (a new process did not start).'
+      )
+    if (st?.state === 'paused')
+      throw new Stop(
+        'failed',
+        'SWARM_UPDATE_PAUSED',
+        'Swarm paused the update — see the stack panel.'
+      )
+    if (now() > until)
+      throw new Stop(
+        'failed',
+        'SETTLE_TIMEOUT',
+        'Swarm did not settle on the change within 15 minutes.'
+      )
+    await sleep(deps.pollMs ?? POLL_MS)
+  }
+}
+
+const changedRoles = (from: RoleFigures[], to: RoleFigures[]) =>
+  to.filter((t) => {
+    const f = from.find((x) => x.role === t.role)
+    return !f || f.replicas !== t.replicas || f.cpus !== t.cpus || f.memory_mb !== t.memory_mb
+  })
+
+/** The run itself (fresh or resumed), holding `held` until it ends. Never throws. */
+async function execute(runId: number, held: Held, deps: RunDeps): Promise<void> {
+  const now = deps.now ?? Date.now
+  const sleep = deps.sleep ?? realSleep
+  let alive = true
+  const beat = async () => {
+    if (!alive) return
+    if (!(await renewLock(held, deps))) {
+      alive = false
+      return
+    }
+    await updateRunning(runId, { heartbeat_at: new Date(now()) }).catch(() => false)
+  }
+  /** Before every write to the stack: still ours, renewed now; else the run stops. */
+  const ensure = async () => {
+    if (alive && (await renewLock(held, deps))) return
+    alive = false
+    throw new Stop(
+      'interrupted',
+      'LOCK_LOST',
+      'The run lost the stack’s lock; nothing more was sent.'
+    )
+  }
+  const timer = setInterval(() => void beat(), deps.renewMs ?? LOCK_RENEW_MS)
+  timer.unref?.()
+  let run = await readRun(runId)
+  let t: ScaleTarget | null = null
+  /** The step that was sent (or about to be) and the live hash read right before it. */
+  let inflight: { index: number; fromHash: string | null } | null = null
+  const steps = run?.steps ?? []
+  try {
+    if (!run) return
+    t = await readTarget(run.target_kind, run.target_id, deps.health)
+    if (!t) throw new Stop('failed', 'NOT_FOUND', 'The stack no longer exists.')
+    if (!t.stack || t.stack !== run.stack)
+      throw new Stop('failed', 'STACK_CHANGED', 'The stack name changed since the run started.')
+    const stack = t.stack
+    for (let i = run.step_index; i < steps.length; i++) {
+      await ensure()
+      // A cancel lands between steps (a realtime drain): what ran keeps running.
+      const fresh = await readRun(runId)
+      if (fresh?.error_code === 'CANCEL_REQUESTED')
+        throw new Stop(
+          'cancelled',
+          'CANCELLED',
+          `Cancelled after ${i} of ${steps.length} steps; the stack keeps what it runs now.`
+        )
+      const prev = i === 0 ? run.from : steps[i - 1].to
+      const changes: StackScaleChange[] = changesBetween(prev, steps[i].to)
+      // The pending record: the step's target numbers, before anything is sent.
+      steps[i] = { ...steps[i], status: 'applying', at: new Date(now()).toISOString() }
+      await updateRunning(runId, { steps, step_index: i })
+      if (changes.length) {
+        const fromHash = (await liveStatus(t, deps))?.spec_hash ?? null
+        inflight = { index: i, fromHash }
+        let current = await (deps.renderCurrent ?? renderCurrentSpec)(t, shapeFromFigures(prev))
+        let sendChanges = changes
+        let hash: string | null = null
+        for (let attempt = 0; hash === null; attempt++) {
+          await ensure()
+          try {
+            hash = (
+              await (deps.agentScale ?? agentScale)(
+                current.driver,
+                stack,
+                current.spec,
+                sendChanges
+              )
+            ).spec_hash
+          } catch (err) {
+            if (!(err instanceof AgentError)) throw err
+            // The Hub's record and the stack drifted: adopt what runs, then try once more from it.
+            if (err.code === 'SPEC_MISMATCH' && attempt === 0) {
+              const r = await reconcileFromLive(t, null, deps)
+              if (r.adopted === 'step' || r.adopted === 'replicas') {
+                t = (await readTarget(run.target_kind, run.target_id, deps.health)) ?? t
+                const base = figuresOf(t.roles)
+                sendChanges = changesBetween(base, steps[i].to)
+                if (!sendChanges.length) break
+                current = await (deps.renderCurrent ?? renderCurrentSpec)(t, shapeFromFigures(base))
+                continue
+              }
+            }
+            throw new Stop(
+              'failed',
+              err.code,
+              err.code === 'SPEC_MISMATCH'
+                ? specMismatchText(t.kind)
+                : `The agent did not scale the stack: ${describeAgentError(err, { stack })}`
+            )
+          }
+        }
+        if (hash) {
+          steps[i] = { ...steps[i], spec_hash: hash }
+          await updateRunning(runId, { steps })
+          await settle(current.driver, stack, hash, deps, () => alive)
+        }
+      }
+      // Keep the new numbers: every later render lays them over the template.
+      await ensure()
+      await writeShape(
+        run.target_kind,
+        run.target_id,
+        changedRoles(run.from, steps[i].to),
+        run.started_by
+      )
+      steps[i] = { ...steps[i], status: 'done', at: new Date(now()).toISOString() }
+      inflight = null
+      await updateRunning(runId, { steps, step_index: i + 1 })
+      if (i < steps.length - 1) await sleep(deps.drainMs ?? DRAIN_MS)
+    }
+    const lastHash = [...steps].reverse().find((x) => x.spec_hash)?.spec_hash ?? null
+    await updateRunning(runId, {
+      status: 'success',
+      finished_at: new Date(now()),
+      step_index: steps.length,
+      // A cancel asked during the last step is moot once it finished.
+      error_code: null,
+      ...(lastHash ? { spec_hash: lastHash } : {})
+    })
+    await noteChange(
+      run.target_kind,
+      run.target_id,
+      changedRoles(run.from, run.to).map((r) => r.role),
+      new Date(now())
+    )
+    await logActivity({
+      action: 'hub-scale',
+      user: run.started_by,
+      collection: 'nivaro_hub_scale_runs',
+      item: String(runId),
+      origin: run.source === 'manual' ? 'person' : 'machine',
+      comment: JSON.stringify({
+        target: `${run.target_kind}:${run.target_id}`,
+        stack: run.stack,
+        source: run.source,
+        change: shapeText(run.from, run.to)
+      })
+    })
+    if (run.source !== 'manual') await tell(t, run, 'done', null, deps)
+  } catch (err) {
+    let stop =
+      err instanceof Stop
+        ? err
+        : new Stop(
+            'failed',
+            'INTERNAL',
+            'The run stopped on an error inside the Hub — see the Hub log.'
+          )
+    run = run ?? (await readRun(runId))
+    await updateRunning(runId, {
+      status: stop.status,
+      error_code: stop.code.slice(0, 64),
+      error: stop.message,
+      finished_at: new Date(now()),
+      steps
+    }).catch(() => false)
+    // The step in flight may have reached swarm: the record follows what runs.
+    if (t && run && inflight) {
+      const at = inflight.index
+      const latest = (await readRun(runId)) ?? run
+      if (stop.code === 'SWARM_ROLLED_BACK' && alive) {
+        const back = await revertStep(t, latest, at, deps).catch(() => false)
+        stop = new Stop(
+          'failed',
+          stop.code,
+          back
+            ? 'Swarm rolled the change back (a new process did not start); the Hub put every role back to the numbers before it.'
+            : `Swarm rolled the change back (a new process did not start) and the Hub could not put the rest back. ${t.kind === 'shared' ? 'Re-apply the shared deployment (an upgrade at the version it runs).' : 'Use Apply now.'}`
+        )
+        await updateRun(runId, { error: stop.message }).catch(() => undefined)
+      } else
+        await reconcileFromLive(
+          t,
+          { run: latest, stepIndex: at, fromHash: inflight.fromHash },
+          deps
+        ).catch(() => undefined)
+    }
+    if (run && stop.status === 'failed') {
+      const target = t ?? (await readTarget(run.target_kind, run.target_id).catch(() => null))
+      if (target) await tell(target, run, 'failed', stop.message, deps)
+    }
+  } finally {
+    clearInterval(timer)
+    await releaseLock(held, deps)
+  }
+}
+
+/**
+ * After swarm rolled one role back, the other services of the step already carry its hash: the
+ * stack runs a mix. Scale the step's spec back to the numbers before it (the agent takes a stack
+ * whose services carry either hash), wait for swarm, and keep nothing new. true = put back.
+ */
+async function revertStep(
+  t: ScaleTarget,
+  run: ScaleRun,
+  index: number,
+  deps: RunDeps
+): Promise<boolean> {
+  const step = run.steps[index]
+  if (!step?.spec_hash || !t.stack) return false
+  const prev = index === 0 ? run.from : run.steps[index - 1].to
+  const changes = changesBetween(step.to, prev)
+  if (!changes.length) return true
+  const current = await (deps.renderCurrent ?? renderCurrentSpec)(t, shapeFromFigures(step.to))
+  const back = await (deps.agentScale ?? agentScale)(current.driver, t.stack, current.spec, changes)
+  await settle(current.driver, t.stack, back.spec_hash, deps, () => true)
+  return true
+}
+
+/** Tells the app's admins and owners about an automatic change, or a failed one. */
+async function tell(
+  t: ScaleTarget,
+  run: ScaleRun,
+  what: 'done' | 'failed',
+  error: string | null,
+  deps: RunDeps
+): Promise<void> {
+  try {
+    const people = new Set<string>()
+    for (const appId of t.app_ids.length ? t.app_ids : [0])
+      for (const p of appId ? await hubEventRecipients(appId) : []) people.add(p)
+    if (!people.size) return
+    const change = shapeText(run.from, run.to)
+    await deliverHubNotice(
+      [...people],
+      {
+        subject: what === 'done' ? `Scaled: ${t.label}` : `Scaling failed: ${t.label}`,
+        message:
+          what === 'done'
+            ? `${run.source === 'schedule' ? 'The schedule' : 'Autoscaling'} changed ${change}. ${run.reason ?? ''}`.trim()
+            : `${change} did not finish: ${error ?? 'unknown error'}`,
+        path: `/hub/scale?target=${t.kind}:${t.id}`,
+        urgent: what === 'failed' && t.production,
+        source: { kind: 'hub', label: 'scale', id: run.id },
+        why: 'You are a Hub administrator or an owner of this app.'
+      },
+      deps.notify
+    )
+  } catch {
+    // a notice never stops a run
+  }
+}
+
+/** Asks a running run to stop before its next step (a realtime drain). */
+export async function cancelScale(runId: number): Promise<boolean> {
+  const n = await db('nivaro_hub_scale_runs')
+    .where({ id: runId, status: 'running' })
+    .whereNull('error_code')
+    .update({ error_code: 'CANCEL_REQUESTED' })
+  return Number(n) > 0
+}
+
+/**
+ * Runs whose process stopped (heartbeat older than STALE_MS) go on from their step: the lock is
+ * taken again and the step sent again (the agent answers `already` for a step it applied). A lock
+ * someone else holds leaves the run for the next tick; one that stays stale for an hour is marked
+ * interrupted.
+ */
+export async function resumeStaleRuns(deps: RunDeps = {}): Promise<number> {
+  const now = deps.now ?? Date.now
+  let resumed = 0
+  const cutoff = new Date(now() - STALE_MS)
+  for (const run of await staleRuns(cutoff)) {
+    const t = await readTarget(run.target_kind, run.target_id, deps.health).catch(() => null)
+    const age = now() - Date.parse(run.heartbeat_at ?? run.created_at ?? new Date(0).toISOString())
+    const end = async (code: string, error: string) => {
+      await updateRunning(run.id, {
+        status: 'interrupted',
+        error_code: code,
+        error,
+        finished_at: new Date(now())
+      })
+    }
+    if (!t) {
+      await end('NOT_FOUND', 'The stack no longer exists.')
+      continue
+    }
+    let held: Held
+    try {
+      held = await takeLock(t, deps)
+    } catch {
+      if (age > 60 * 60_000)
+        await end('LOCK_HELD', 'The run stopped and another action has held the stack since.')
+      continue
+    }
+    // Single flight: only the caller that moves the stale heartbeat on resumes the run.
+    if (!(await claimStaleRun(run.id, cutoff, new Date(now())))) {
+      await releaseLock(held, deps)
+      continue
+    }
+    // An automatic run does not resume into a move, a freeze or an incident that began meanwhile:
+    // the record follows what runs and the run ends.
+    if (run.source !== 'manual') {
+      const pauses = await scalePauses(t, 'auto', { ...deps, exceptRunId: run.id })
+      const b = pauses.blockers.find((x) => x.code !== 'BUSY' && x.code !== 'LOCK_UNAVAILABLE')
+      if (b) {
+        const at = run.steps.findIndex((x) => x.status === 'applying')
+        if (at >= 0)
+          await reconcileFromLive(t, { run, stepIndex: at, fromHash: null }, deps).catch(
+            () => undefined
+          )
+        await end('PAUSED', `Not resumed: ${b.text}`)
+        await releaseLock(held, deps)
+        continue
+      }
+    }
+    const done = runInBackgroundPool(() => execute(run.id, held, deps))
+    if (deps.inline) await done
+    resumed++
+  }
+  return resumed
+}

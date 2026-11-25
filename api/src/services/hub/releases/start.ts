@@ -17,6 +17,8 @@ export interface PlannedStart {
   version: string
   /** Who the run is recorded as started by (the train's / schedule's person; null = the Hub). */
   userId: string | null
+  /** The unattended start a production pre-deploy checklist is opened and waited for. */
+  checklist?: { kind: 'schedule' | 'train'; id: number; step?: number | null }
 }
 
 export interface PlannedStartDeps {
@@ -29,6 +31,7 @@ export interface PlannedStartDeps {
       confirm: string
       planHash: string
       user: { id: string } | null
+      checklistSource?: { kind: 'schedule' | 'train'; id: number; step?: number | null }
     }
   ): Promise<{ deployId: number }>
   envKey(envId: number): Promise<string | null>
@@ -72,7 +75,8 @@ export async function startPlannedPromotion(
         version: o.version,
         confirm: key,
         planHash: plan.plan_hash,
-        user: o.userId ? { id: o.userId } : null
+        user: o.userId ? { id: o.userId } : null,
+        ...(o.checklist ? { checklistSource: o.checklist } : {})
       })
       if (deps.notes) void deps.notes(out.deployId).catch(() => undefined)
       return out
