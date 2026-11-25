@@ -538,9 +538,34 @@ export async function configEpochForRead(): Promise<number | null> {
   return configEpochNow()
 }
 
-/** True while this process clears caches because ANOTHER process moved the number. */
+/** True while this process clears caches because ANOTHER process moved the number (or, on a Hub
+ *  shared deployment, announced an app's configuration change). */
 export function isRemoteEpochClear(): boolean {
-  return remoteClear
+  return remoteClear || appOnlyClear
+}
+
+/** Set only for the synchronous span of runAppOnlyClear. */
+let appOnlyClear = false
+
+/**
+ * Hub shared deployment: run `fn` (synchronous) as a clear of ONE app's caches, heard from another
+ * process (services/app-config-epoch.ts), inside that app's async context. A cache keyed by hand
+ * across apps drops only that app's entries (isAppOnlyClear); per-app slots (appMap / appBox)
+ * already clear only the current app.
+ */
+export function runAppOnlyClear<T>(fn: () => T): T {
+  const prev = appOnlyClear
+  appOnlyClear = true
+  try {
+    return fn()
+  } finally {
+    appOnlyClear = prev
+  }
+}
+
+/** True inside runAppOnlyClear: clear the current app's entries only. */
+export function isAppOnlyClear(): boolean {
+  return appOnlyClear
 }
 
 const writeListeners = new Set<() => void>()

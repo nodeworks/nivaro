@@ -193,7 +193,9 @@ function underShareUserWaiting(g: TenantGate, w: Waiter): boolean {
 
 function eligible(g: TenantGate, w: Waiter): boolean {
   if (g.active >= limitOf(g)) return false
-  if (g.tenant && fairAcrossApps() && processActive() >= conf().global) return false
+  // Hub shared deployment: every gate counts against the one process budget, the no-app gate
+  // ('' — work outside any app) included.
+  if (fairAcrossApps() && processActive() >= conf().global) return false
   return (g.byUser.get(w.who) ?? 0) < conf().perUser || !underShareUserWaiting(g, w)
 }
 
@@ -262,20 +264,21 @@ function pump(g: TenantGate): void {
 }
 
 /**
- * Hub shared deployment: a slot freed in one app may be the one another app waits on (the
- * shared budget). Grant across every app's queue: the app holding the fewest slots first, then
- * the oldest request. Elsewhere: this gate only, as before.
+ * Hub shared deployment: a slot freed in one app (or outside any app) may be the one another app
+ * waits on (the shared budget). Grant across every queue: the gate holding the fewest slots
+ * first, then the oldest request. Elsewhere: this gate only, as before.
  */
 function pumpFrom(g: TenantGate): void {
-  if (!g.tenant || !fairAcrossApps()) {
+  if (!fairAcrossApps()) {
     pump(g)
     return
   }
+  // Any release (an app's, or one held outside any app) may free the budget others wait on.
   for (;;) {
     let pick: Waiter | null = null
     let pickGate: TenantGate | null = null
     for (const x of gates.values()) {
-      if (!x.tenant || x.queue.length === 0) continue
+      if (x.queue.length === 0) continue
       const w = x.queue.find((q) => eligible(x, q))
       if (!w) continue
       if (

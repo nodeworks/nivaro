@@ -114,6 +114,23 @@ describe('read gate on a Hub shared deployment', () => {
     expect(a4.state.slot).not.toBeNull()
   })
 
+  it('a slot held outside any app counts against the budget, and its release wakes app waiters', async () => {
+    Object.assign(process.env, SHARED)
+    resetReadGate({ global: 2, perApp: 2, perUser: 10, maxWaitMs: 60_000 })
+    const outside = acquireReadSlot('job')
+    const a1 = ask('A', 'a1')
+    await tick()
+    const held = await outside
+    expect(a1.state.slot).not.toBeNull()
+    // The budget is full (one outside, one in A): A's next request waits.
+    const a2 = ask('A', 'a2')
+    await tick()
+    expect(a2.state.slot).toBeNull()
+    held.release()
+    await tick()
+    expect(a2.state.slot).not.toBeNull()
+  })
+
   it('each app sees only its own gate', async () => {
     Object.assign(process.env, SHARED)
     resetReadGate({ global: 4, perApp: 2, perUser: 10, maxWaitMs: 60_000 })

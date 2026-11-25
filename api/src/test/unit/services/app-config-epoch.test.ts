@@ -10,7 +10,8 @@ vi.mock('../../../services/tenancy/app-migrations.js', () => ({
   appReadyForRequests: (id: string) => ready.has(id)
 }))
 
-const { attachAppConfigWriteSeam, onConfigWrite } = await import('../../../db/config-epoch.js')
+const { attachAppConfigWriteSeam, isAppOnlyClear, isRemoteEpochClear, onConfigWrite } =
+  await import('../../../db/config-epoch.js')
 const { getOrCreateTenantPool, runWithTenantDb, onTenantPoolCreated } = await import(
   '../../../db/tenant-context.js'
 )
@@ -106,6 +107,31 @@ describe('hearing another process announce', () => {
       busted.push(currentTenantKey())
       return ['collection-metadata']
     }
+  })
+
+  it("announces on the deployment's own channel", () => {
+    expect(epochs.appConfigChannel()).toBe('nvr:app-config:shared-a')
+    process.env.REDIS_CHANNEL_PREFIX = 'pfx:'
+    try {
+      expect(epochs.appConfigChannel()).toBe('pfx:nvr:app-config:shared-a')
+    } finally {
+      delete process.env.REDIS_CHANNEL_PREFIX
+    }
+  })
+
+  it('runs the bust as an app-only clear', async () => {
+    ready.add('A')
+    const flags: boolean[] = []
+    const d = deps({ A: app('A') }, [])
+    await epochs.onAppConfigMessage('A|node-2', 'node-1', {
+      ...d,
+      bust: () => {
+        flags.push(isAppOnlyClear(), isRemoteEpochClear())
+        return []
+      }
+    })
+    expect(flags).toEqual([true, true])
+    expect(isAppOnlyClear()).toBe(false)
   })
 
   it("clears that app's caches inside the app", async () => {

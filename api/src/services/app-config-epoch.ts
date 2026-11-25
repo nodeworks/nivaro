@@ -13,9 +13,10 @@
  *  - the first write of a run is announced at once (other replicas drop what they hold early),
  *    and the run is announced again 2 s after its last write (so a replica that re-read during
  *    the run drops that too) — the same leading + trailing rule as the database number;
- *  - every OTHER process of the deployment hears `<app id>|<instance>` and clears its caches
- *    inside that app only (bustAllCaches in the app's context: every per-app slot of the other
- *    apps stays).
+ *  - every OTHER process of the deployment (web, worker and realtime) hears `<app id>|<instance>`
+ *    on the deployment's own channel and clears its caches for that app only (bustAllCaches in
+ *    the app's context, as an app-only clear: per-app slots and hand-keyed metadata caches of the
+ *    other apps stay).
  *
  * The process that made the edit clears its own caches itself, as self-hosted. A manual bust
  * (the cache console, a config restore) announces too (announceAppConfigChange). `CACHE_EPOCH=off`
@@ -23,10 +24,10 @@
  * Nivaro Cloud and self-hosted never start it.
  */
 import type { Redis } from 'ioredis'
-import { attachAppConfigWriteSeam, onConfigWrite } from '../db/config-epoch.js'
+import { attachAppConfigWriteSeam, onConfigWrite, runAppOnlyClear } from '../db/config-epoch.js'
 import { onTenantPoolCreated, withTenant } from '../db/tenant-context.js'
 import { registerAppKeyed } from './app-forget.js'
-import { perAppJobs } from './deployment-mode.js'
+import { hubSharedConfig, perAppJobs } from './deployment-mode.js'
 import { appReadyForRequests } from './tenancy/app-migrations.js'
 import { getTenantRegistry } from './tenancy/registry.js'
 import type { TenantRecord } from './tenancy/types.js'
@@ -35,8 +36,9 @@ import { currentTenantKey } from './tenant-rooms.js'
 const TRAILING_MS = 2_000
 const MIN_GAP_MS = 10_000
 
+/** The deployment's own channel: two shared deployments on one Redis never hear each other. */
 export const appConfigChannel = (): string =>
-  `${process.env.REDIS_CHANNEL_PREFIX ?? ''}nvr:app-config`
+  `${process.env.REDIS_CHANNEL_PREFIX ?? ''}nvr:app-config:${hubSharedConfig()?.deployment ?? ''}`
 
 /** One run of configuration writes per app (keyed by the app's id). */
 interface AppRun {
@@ -127,7 +129,8 @@ export async function onAppConfigMessage(
   }
   if (!t || t.status !== 'active' || !appReadyForRequests(t.id)) return null
   heard++
-  return deps.inApp(t, async () => deps.bust())
+  // Inside the app, as an app-only clear: hand-keyed caches drop this app's entries only.
+  return deps.inApp(t, async () => runAppOnlyClear(() => deps.bust()))
 }
 
 async function resolveApp(tenantId: string): Promise<TenantRecord | null> {

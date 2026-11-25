@@ -127,6 +127,8 @@ const SHARED: Record<string, string> = {
   'db/config-epoch.ts :: pollFailing': OFF_EPOCH,
   'db/config-epoch.ts :: primed': OFF_EPOCH,
   'db/config-epoch.ts :: remoteClear': OFF_EPOCH,
+  'db/config-epoch.ts :: appOnlyClear':
+    'a flag set only for the synchronous span of one app-only clear (runAppOnlyClear), inside that app',
   'db/config-epoch.ts :: resetListeners': OFF_EPOCH,
   'db/config-epoch.ts :: run': OFF_EPOCH,
   'db/config-epoch.ts :: seen': OFF_EPOCH,
