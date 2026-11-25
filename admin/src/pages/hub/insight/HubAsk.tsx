@@ -114,7 +114,7 @@ export default function HubAsk() {
         }
       />
 
-      <div className='flex-1 overflow-y-auto p-4 sm:p-6' aria-live='polite'>
+      <div className='relative flex-1 overflow-y-auto p-4 sm:p-6' aria-live='polite'>
         {turns.length === 0 ? (
           <div className='rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
             <p className='m-0 flex items-center gap-2 text-[13px] font-medium text-slate-900 dark:text-foreground'>

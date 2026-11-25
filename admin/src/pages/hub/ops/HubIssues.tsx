@@ -118,7 +118,7 @@ export default function HubIssues() {
     <div className='flex flex-1 min-h-0 overflow-hidden'>
       <div
         className={cn(
-          'min-w-0 flex-1 space-y-4 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background',
+          'relative min-w-0 flex-1 space-y-4 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background',
           selected && 'hidden lg:block'
         )}
       >
@@ -306,7 +306,7 @@ function IssueLine({
 function IssueDetail({ sig, onClose }: { sig: string; onClose: () => void }) {
   const q = useIssueGroup(sig)
   return (
-    <aside className='flex w-full shrink-0 flex-col overflow-y-auto border-slate-200 bg-white lg:w-[420px] lg:border-l dark:border-border dark:bg-card'>
+    <aside className='relative flex w-full shrink-0 flex-col overflow-y-auto border-slate-200 bg-white lg:w-[420px] lg:border-l dark:border-border dark:bg-card'>
       <div className='flex items-center gap-2 border-b border-slate-200 px-4 py-3 dark:border-border'>
         <h3 className='m-0 flex-1 text-[13px] font-semibold text-slate-900 dark:text-foreground'>
           Where it happens

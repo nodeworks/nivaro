@@ -138,7 +138,7 @@ export default function HubScale() {
       </aside>
       <div
         className={cn(
-          'min-w-0 flex-1 overflow-y-auto bg-slate-50 dark:bg-background',
+          'relative min-w-0 flex-1 overflow-y-auto bg-slate-50 dark:bg-background',
           picked ? 'block' : 'hidden md:block'
         )}
       >

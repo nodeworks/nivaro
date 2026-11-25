@@ -63,7 +63,7 @@ export default function HubReleases() {
   return (
     <section aria-label='Releases' className='flex flex-1 min-h-0 flex-col'>
       <HubToolbar description={`Every time on this page is in ${viewerTimeZone()}.`} />
-      <div className='flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
+      <div className='relative flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
         {q.isPending ? (
           <Skeleton className='h-40 w-full' />
         ) : q.isError ? (

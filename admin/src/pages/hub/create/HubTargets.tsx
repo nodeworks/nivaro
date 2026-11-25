@@ -79,7 +79,7 @@ export function HubTargets() {
         }
       />
 
-      <div className='min-h-0 flex-1 overflow-y-auto bg-slate-50 dark:bg-background'>
+      <div className='relative min-h-0 flex-1 overflow-y-auto bg-slate-50 dark:bg-background'>
         <div className='space-y-4 p-4 sm:p-6'>
           {targets.isPending ? (
             <div className='grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3'>

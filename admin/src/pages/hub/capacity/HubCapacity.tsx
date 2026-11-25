@@ -92,7 +92,7 @@ export default function HubCapacity() {
           </button>
         }
       />
-      <div className='flex-1 min-h-0 overflow-y-auto bg-slate-50 dark:bg-background'>
+      <div className='relative flex-1 min-h-0 overflow-y-auto bg-slate-50 dark:bg-background'>
         <div className='space-y-4 p-4 sm:p-6'>
           {overview.isPending ? (
             <Skeleton className='h-48 w-full' />

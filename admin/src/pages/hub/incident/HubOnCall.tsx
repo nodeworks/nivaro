@@ -65,7 +65,7 @@ export default function HubOnCall() {
       <HubToolbar
         description={`Pages waiting for you, who is on call for each app now and next, the weekly rota and its overrides. Times in ${viewerTimeZone()}.`}
       />
-      <div className='flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
+      <div className='relative flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
         {q.isPending ? (
           <Skeleton className='h-40 w-full' />
         ) : q.isError ? (

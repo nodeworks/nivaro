@@ -203,7 +203,7 @@ export default function HubUsage() {
           </aside>
           <main
             className={cn(
-              'min-w-0 flex-1 overflow-y-auto',
+              'relative min-w-0 flex-1 overflow-y-auto',
               detailOpen ? 'block' : 'hidden md:block'
             )}
           >

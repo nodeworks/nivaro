@@ -83,7 +83,7 @@ export function ReleaseNotesView({ notes }: { notes: ReleaseNotes }) {
             <p className='m-0 text-[11px] text-amber-800 dark:text-amber-300'>{c.error}</p>
           )}
           {c.commits.length > 0 && (
-            <ul className='m-0 max-h-48 list-none space-y-0.5 overflow-y-auto p-0'>
+            <ul className='relative m-0 max-h-48 list-none space-y-0.5 overflow-y-auto p-0'>
               {c.commits.map((m) => (
                 <li key={m.sha} className='flex min-w-0 gap-2 text-[11px]'>
                   <span className='shrink-0 font-mono text-slate-500 dark:text-muted-foreground'>

@@ -165,8 +165,8 @@ export default function HubDependencies() {
           />
         </div>
       ) : (
-        <div className='flex flex-1 min-h-0 flex-col overflow-y-auto lg:flex-row lg:overflow-hidden'>
-          <div className='min-w-0 flex-1 p-4 sm:p-6 lg:overflow-y-auto'>
+        <div className='relative flex flex-1 min-h-0 flex-col overflow-y-auto lg:flex-row lg:overflow-hidden'>
+          <div className='relative min-w-0 flex-1 p-4 sm:p-6 lg:overflow-y-auto'>
             {view.deps.length === 0 ? (
               <div className='rounded-lg border border-dashed border-slate-300 bg-white px-6 py-10 text-center dark:border-border dark:bg-card'>
                 <p className='m-0 text-[13px] font-medium text-slate-900 dark:text-foreground'>
@@ -190,7 +190,7 @@ export default function HubDependencies() {
           <aside
             id='hub-impact'
             className={cn(
-              'shrink-0 scroll-mt-2 border-slate-200 bg-white lg:order-none lg:w-[340px] lg:overflow-y-auto lg:border-t-0 lg:border-b-0 lg:border-l dark:border-border dark:bg-card',
+              'relative shrink-0 scroll-mt-2 border-slate-200 bg-white lg:order-none lg:w-[340px] lg:overflow-y-auto lg:border-t-0 lg:border-b-0 lg:border-l dark:border-border dark:bg-card',
               // On a phone or tablet the pick shows above the list, not under it.
               selected ? 'order-first border-b' : 'border-t'
             )}

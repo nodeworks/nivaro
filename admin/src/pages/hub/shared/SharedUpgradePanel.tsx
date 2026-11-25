@@ -1038,7 +1038,7 @@ function UpgradeProgress({
       {d.log && d.log.length > 0 && (
         <ol
           aria-label='Upgrade log'
-          className='m-0 max-h-[160px] list-none space-y-0.5 overflow-y-auto rounded-md border border-slate-200 bg-white p-2 font-mono text-[11px] dark:border-border dark:bg-card'
+          className='relative m-0 max-h-[160px] list-none space-y-0.5 overflow-y-auto rounded-md border border-slate-200 bg-white p-2 font-mono text-[11px] dark:border-border dark:bg-card'
         >
           {d.log.slice(-12).map((l) => (
             <li

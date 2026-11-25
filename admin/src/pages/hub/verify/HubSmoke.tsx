@@ -120,7 +120,7 @@ export default function HubSmoke() {
       </aside>
       <div
         className={cn(
-          'min-h-0 min-w-0 flex-1 overflow-y-auto bg-slate-50 dark:bg-background',
+          'relative min-h-0 min-w-0 flex-1 overflow-y-auto bg-slate-50 dark:bg-background',
           detailOpen ? 'block' : 'hidden md:block'
         )}
       >

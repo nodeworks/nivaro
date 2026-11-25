@@ -49,7 +49,7 @@ export default function HubSecurity() {
         Security
       </h2>
       <HubToolbar description='Certificate expiry and DNS of every environment name, known vulnerabilities of every pinned image (from your scanner), and the compliance pack per app.' />
-      <div className='flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
+      <div className='relative flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
         <div className='space-y-4'>
           <CertificatesCard isAdmin={isAdmin} />
           <VulnerabilitiesCard isAdmin={isAdmin} />

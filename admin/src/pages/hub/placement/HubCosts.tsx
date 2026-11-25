@@ -87,7 +87,7 @@ export default function HubCosts() {
           </>
         }
       />
-      <div className='min-h-0 flex-1 overflow-y-auto bg-slate-50 dark:bg-background'>
+      <div className='relative min-h-0 flex-1 overflow-y-auto bg-slate-50 dark:bg-background'>
         <div className='space-y-4 p-4 sm:p-6'>
           {rates && <RatesCard onDone={() => setRates(false)} />}
           {report.isPending ? (

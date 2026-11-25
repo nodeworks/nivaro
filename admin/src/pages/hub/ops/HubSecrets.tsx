@@ -96,7 +96,7 @@ function SecretsAdmin() {
   const due = items.filter((i) => i.due === 'overdue' || i.due === 'due_soon').length
   const visible = kind ? items.filter((i) => i.kind === kind) : items
   return (
-    <div className='flex-1 space-y-5 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
+    <div className='relative flex-1 space-y-5 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
       {shown && (
         <section
           aria-label='New secret'
