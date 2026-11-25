@@ -59,6 +59,7 @@ export * from './commands/devex.js'
 export * from './commands/files.js'
 export * from './commands/form-tools.js'
 export * from './commands/help-videos.js'
+export * from './commands/hub.js'
 export * from './commands/import-templates.js'
 export * from './commands/inbox.js'
 export * from './commands/infra.js'
@@ -656,6 +657,7 @@ export interface NivaroRuntime {
 // ─── Command descriptor ───────────────────────────────────────────────────────
 
 import { type Command, cmd } from './command.js'
+import { createHubClient, type HubClient } from './commands/hub.js'
 import { errorBodyMessage, NivaroError, REQUEST_ID_HEADER, retryAfterMs } from './errors.js'
 import {
   isKeyedWrite,
@@ -2124,6 +2126,11 @@ export interface NivaroClient {
   setToken(token: string | null): void
   getToken(): string | undefined
   url: string
+  /**
+   * The Nivaro Hub (Hub mode only): typed calls to /api/hub/*. On a server that is not a Hub
+   * every call fails with code `HUB_MODE_OFF` (checked once through GET /api/app-info).
+   */
+  hub: HubClient
 }
 
 const DEFAULT_RETRY_STATUSES = [408, 429, 502, 503, 504]
@@ -2557,7 +2564,29 @@ export function createNivaro(url: string, options: NivaroClientOptions = {}): Ni
     }
   }
 
-  return { request, graphql, upload, importParse, fileUrl, setToken, getToken, url: baseUrl }
+  // `hub` is a getter so a wrapped client (a Proxy that replaces `request` — GET coalescing, the
+  // signed-out gate, a read-only design client) sends Hub calls through ITS request: Reflect.get
+  // runs the getter with the wrapper as `this`. One Hub client per receiver (its app-info check).
+  const hubClients = new WeakMap<object, HubClient>()
+  return {
+    request,
+    graphql,
+    upload,
+    importParse,
+    fileUrl,
+    setToken,
+    getToken,
+    url: baseUrl,
+    get hub(): HubClient {
+      const self = this as NivaroClient
+      let h = hubClients.get(self)
+      if (!h) {
+        h = createHubClient({ request: (c) => self.request(c) })
+        hubClients.set(self, h)
+      }
+      return h
+    }
+  }
 }
 
 // ─── Tree (same-collection hierarchy) ─────────────────────────────────────────

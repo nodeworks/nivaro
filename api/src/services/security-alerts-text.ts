@@ -101,6 +101,8 @@ export function eventActor(ev: SecurityEvent): string | null {
 /** `purchase_orders` → `Purchase orders`; `*` → `every collection`. */
 export function collectionWords(c: string): string {
   if (!c || c === '*') return 'every collection'
+  if (c === '$hub') return 'the Hub'
+  if (c === '$chat') return 'chat'
   const s = c
     .replace(/^nivaro_/i, '')
     .replace(/[_-]+/g, ' ')
@@ -112,6 +114,7 @@ const VERBS: Record<string, string> = {
   read: 'read',
   create: 'create',
   update: 'change',
+  write: 'change',
   delete: 'delete',
   share: 'share',
   '*': 'do anything with'
@@ -224,9 +227,10 @@ export interface KeyShape {
 }
 
 function covers(scopes: KeyScope[], collection: string, action: string): boolean {
+  // `*` never implies a `$` scope (chat, the Hub): those are granted only by name.
   return scopes.some(
     (s) =>
-      (s.collection === '*' || s.collection === collection) &&
+      ((s.collection === '*' && !collection.startsWith('$')) || s.collection === collection) &&
       (s.actions.includes('*') || s.actions.includes(action))
   )
 }
@@ -234,7 +238,14 @@ function covers(scopes: KeyScope[], collection: string, action: string): boolean
 /** What a key may do, in words: "full access to every collection", "read Projects and …". */
 export function describeKeyScopes(scopes: KeyScope[]): string {
   if (scopes.length === 0) return 'no access yet'
-  if (covers(scopes, '*', '*')) return 'full access to every collection'
+  if (covers(scopes, '*', '*')) {
+    const named = scopes.filter((s) => s.collection.startsWith('$'))
+    if (!named.length) return 'full access to every collection'
+    const extra = named.map(
+      (s) => `${listWords(s.actions.map(actionWords))} ${collectionWords(s.collection)}`
+    )
+    return `full access to every collection and ${listWords(extra)}`
+  }
   const parts = scopes.map((s) => {
     const verbs = s.actions.includes('*') ? ['do anything with'] : s.actions.map(actionWords)
     return `${listWords(verbs)} ${collectionWords(s.collection)}`
