@@ -1,3 +1,4 @@
+import type { AppLimits } from '../capacity/limits.js'
 import type { TenantSource } from '../deployment-mode.js'
 
 /** One tenant (app) a multi-tenant process serves, whatever source lists it. */
@@ -21,6 +22,9 @@ export interface TenantRecord {
   encryptionKey?: string
   /** Hub source only: the app's Hub link, sealed with its key (tenancy/app-hub-links.ts). */
   hubLink?: string
+  /** Hub source only (capacity): the app's limits on this deployment (services/capacity/
+   *  limits.ts); absent = unlimited. */
+  limits?: AppLimits
 }
 
 export interface TenantResolution {

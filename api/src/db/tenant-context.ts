@@ -102,6 +102,13 @@ export function getOrCreateTenantPool(
   return pools.get(connectionString)!
 }
 
+/** The pool already open for this connection string, or undefined. Never opens one: the capacity
+ *  figures (services/capacity/app-usage.ts) read an app's connections in use without creating
+ *  its pool on a replica that has not served it. */
+export function peekTenantPool(connectionString: string): Knex | undefined {
+  return pools.get(connectionString)
+}
+
 /**
  * mysql2 reads `?ssl=<json>` from a URI but silently ignores libpq/MySQL-style `sslmode=` /
  * `ssl-mode=` — a tenant URL carrying one connected in plain text. Those two parameters are

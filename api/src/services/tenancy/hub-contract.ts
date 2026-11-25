@@ -1,6 +1,7 @@
 import { createHmac } from 'node:crypto'
 import { cleanTenantHost } from '../../db/tenant-context.js'
 import { APP_KEY_RE } from '../app-key-fingerprint.js'
+import { type AppLimits, parseAppLimits } from '../capacity/limits.js'
 import type { TenantRecord } from './types.js'
 
 /**
@@ -36,6 +37,9 @@ export interface HubTenantWire {
    *  that app, not secrecy: this body carries the key too and is guarded as a whole. A value that
    *  is not a sealed text, or is over 8 KB, is ignored (the tenant stays and signs in directly). */
   hub_link?: string
+  /** Optional (Hub capacity): the app's limits on this deployment. A bad limit drops that limit
+   *  only, never the tenant (services/capacity/limits.ts). */
+  limits?: AppLimits
 }
 
 /** The label the deployment link bearer is derived with (ruling R7). */
@@ -159,6 +163,7 @@ function toRecord(t: unknown): TenantRecord | string {
   const ports = wirePorts(t)
   const origin = wireOrigin(t.origin)
   const hubLink = wireHubLink(t.hub_link)
+  const limits = parseAppLimits(t.limits)
   return {
     id: t.id,
     slug: t.app_key,
@@ -171,7 +176,8 @@ function toRecord(t: unknown): TenantRecord | string {
     ...(Object.keys(ports).length ? { originPorts: ports } : {}),
     ...(origin ? { origin } : {}),
     ...(encryptionKey ? { encryptionKey } : {}),
-    ...(hubLink ? { hubLink } : {})
+    ...(hubLink ? { hubLink } : {}),
+    ...(limits ? { limits } : {})
   }
 }
 

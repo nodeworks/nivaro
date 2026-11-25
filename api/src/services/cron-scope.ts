@@ -89,7 +89,9 @@ export const CORE_CRON_SCOPES: Record<string, CronScope> = {
   'help-video-render-sweep': 'app',
   'help-video-stale-check': 'app',
   'help-video-storage-sweep': 'app',
+  'hub-capacity-sample': 'app', // Hub capacity: the Hub's own samples (HUB=on only, never shared)
   'hub-creation-waits': 'app', // Hub phase 3: the Hub's own creation rows (HUB=on only, never shared)
+  'hub-rebalance-tick': 'app', // Hub rebalance runs (HUB=on only, never shared)
   'hub-signins-prune': 'app', // Hub phase 7: the Hub's own sign-in rows (HUB=on only, never shared)
   'huddle-schedules': 'app',
   'integration-reconcile': 'app',

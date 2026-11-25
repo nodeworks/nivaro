@@ -168,6 +168,7 @@ import { helpVideoMediaRoutes, helpVideosRoutes } from './help-videos.js'
 import { hierarchyRoutes } from './hierarchy.js'
 import { hubRoutes } from './hub.js'
 import { hubAppLinkRoutes } from './hub-app-link.js'
+import { hubDeploymentUsageRoutes, hubLinkUsageRoutes } from './hub-capacity-link.js'
 import { hubDeploymentLinkRoutes } from './hub-deployment-link.js'
 import { hubLinkRoutes } from './hub-link.js'
 import { hubOidcRoutes } from './hub-oidc.js'
@@ -487,6 +488,9 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(hubLinkRoutes, { prefix: '/hub-link' })
   // Hub phase 6 deployment link: mounted only on a Hub shared deployment (bearer-only).
   await app.register(hubDeploymentLinkRoutes, { prefix: '/hub-deployment' })
+  // Hub capacity: GET /usage beside each link (same mount rules, same bearer).
+  await app.register(hubDeploymentUsageRoutes, { prefix: '/hub-deployment' })
+  await app.register(hubLinkUsageRoutes, { prefix: '/hub-link' })
   // Hub phase 6 file transfer (ticket-only): where the hub link is, or on a Hub shared deployment.
   await app.register(hubTransferRoutes, { prefix: '/hub-transfer' })
   // File source: mounted only where FILE_SOURCE_TOKEN is set (bearer-only) — lower environments

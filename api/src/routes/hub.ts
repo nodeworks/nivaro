@@ -99,6 +99,7 @@ import {
   type StatusCache
 } from '../services/hub/status.js'
 import { readJobLog } from '../services/job-runs.js'
+import { hubCapacityRoutes } from './hub-capacity.js'
 import { hubPhase3Routes } from './hub-create.js'
 import { hubDockerRoutes } from './hub-docker.js'
 import { hubMoveRoutes } from './hub-move.js'
@@ -136,6 +137,7 @@ export async function hubRoutes(app: FastifyInstance) {
   app.register(hubSharedTenantsRoutes) // phase 6: GET /shared/:key/tenants (deployment bearer)
   hubSharedUpgradeRoutes(app) // phase 6: shared stack deploy/upgrade/rollback (Task 5)
   hubMoveRoutes(app) // phase 6: moves between shared and dedicated placements (+ boot heal)
+  hubCapacityRoutes(app) // capacity view, move advisor, per-app limits, rebalance
 }
 
 const APPS = 'nivaro_hub_apps'
