@@ -206,6 +206,10 @@ export const hubSharedDocs: DocSection = {
           'The version, this instance, the list the deployment holds (count, loaded time, etag, stale, apps it dropped and why), every app with its schema state, the extensions it loaded, and the sign-in issuer host and Entra tenant.'
         ],
         [
+          '`GET /api/hub-deployment/usage`',
+          'Capacity figures (0.3.215 or later): every process (CPU, memory) and every app (requests and answering time per minute, connections in use against its pool, job runs, file bytes, the limits it enforces). Counts only; see Capacity and limits.'
+        ],
+        [
           '`GET /api/hub-deployment/apps/:id/status`',
           'One app: version, preflight (status and failing check names), readiness score, busy work counts (imports, exports, renders), files (count, bytes, local), the key fingerprint, and whether it is in maintenance. `404 UNKNOWN_APP`.'
         ],
@@ -482,7 +486,8 @@ export const hubSharedDocs: DocSection = {
         'The daily retention pass (03:30, one job per app) and the boot passes (owner-group warm, integrity checks, cache warms, readiness warm, db-tuning sweep). They run once per app when it becomes ready. Retention status shows per app. Stale help-video import folders are swept once a day per process (deployment-wide, not per app).',
         'Microsoft directory lookups and sync. The app uses its own Microsoft app registration, saved in Settings → Microsoft directory (tenant id, client id, client secret; the secret is sealed with the app key). The server `GRAPH_*` and `OIDC_*` variables and the directory keys of `NIVARO_SETTINGS_OVERRIDES` are never used on shared.',
         "The Teams bot. The app uses only the bot saved in its own Settings. `TEAMS_BOT_*`, `MICROSOFT_APP_*`, the sign-in app fallback and the `teams_bot_*` override keys are ignored. `TEAMS_BOT=off` still disables the bot on the whole deployment, but `TEAMS_BOT=on` does not switch an app on: each app saves its own switch. Register each bot with that app's host as its messaging endpoint.",
-        "Phone push. An app admin connects the app's push relay in Settings → Mobile app. The server `MOBILE_PUSH_RELAY_KEY` is not used on shared. Phone sign-in was already per app."
+        "Phone push. An app admin connects the app's push relay in Settings → Mobile app. The server `MOBILE_PUSH_RELAY_KEY` is not used on shared. Phone sign-in was already per app.",
+        'Per-app limits (Hub Capacity tab, apps 0.3.215 or later): requests per minute (429 `APP_RATE_LIMITED`), background jobs at once (a turn waits for a slot, then is skipped with `app_limit`) and file storage (413 `APP_STORAGE_FULL`). The Hub lists them with the app; see Capacity and limits.'
       ]
     },
     {

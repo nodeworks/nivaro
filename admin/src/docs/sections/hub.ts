@@ -247,7 +247,7 @@ export const hubLinkDocs: DocSection = {
     { type: 'h1', id: 'hub-link', text: 'Hub link' },
     {
       type: 'p',
-      text: 'The hub link is the one door an app opens to its Hub. It is a single read-only route, `GET /api/hub-link/status`, mounted only when the app has `HUB_TOKEN` set (32 characters or more). The Hub sends that token as `Authorization: Bearer <token>`; any other caller, or no token, gets 401 `HUB_LINK_REFUSED`. The answer is never cached (`Cache-Control: no-store`) and the preflight behind it is reused for 15 seconds. No session, API key or OAuth token opens it.'
+      text: 'The hub link is the one door an app opens to its Hub. It is a single read-only route, `GET /api/hub-link/status`, mounted only when the app has `HUB_TOKEN` set (32 characters or more). The Hub sends that token as `Authorization: Bearer <token>`; any other caller, or no token, gets 401 `HUB_LINK_REFUSED`. The answer is never cached (`Cache-Control: no-store`) and the preflight behind it is reused for 15 seconds. No session, API key or OAuth token opens it. From 0.3.215 the same token also opens `GET /api/hub-link/usage`, the capacity figures the Capacity tab samples (see Capacity and limits).'
     },
     { type: 'h2', id: 'hub-link-returns', text: 'What it returns' },
     {
