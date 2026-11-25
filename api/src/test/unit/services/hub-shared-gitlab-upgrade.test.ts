@@ -819,11 +819,9 @@ describe('the run through GitLab', () => {
       (await db('nivaro_hub_shared_deploys').where({ id: row?.id }).first()).plan
     )
     expect(stored.gitlab_build).toEqual({ sha: TIP, pipeline_id: 555 })
-    expect(d.lines.some((l) => l.startsWith(`1. push nivaro 0.3.210 to ${branch}`))).toBe(true)
+    expect(d.lines.some((l) => l.startsWith(`1. merge nivaro 0.3.210 onto ${branch}`))).toBe(true)
     expect(d.lines.some((l) => l.startsWith('2. run deploy_production'))).toBe(true)
-    expect(d.lines.some((l) => l.startsWith('GitLab: deploy api: deploy_production passed'))).toBe(
-      true
-    )
+    expect(d.lines.some((l) => l.startsWith('GitLab: deploy_production passed'))).toBe(true)
     expect(d.lines.join('\n')).not.toContain(GL_TOKEN)
     expect(d.lines.some((l) => /^GitLab: verify:/.test(l))).toBe(false)
     // The branch lock is free again.

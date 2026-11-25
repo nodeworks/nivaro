@@ -1,7 +1,7 @@
 import { ConfirmButton, type ErrorDescription, ErrorNotice, isRawErrorText } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Ban, Check, ChevronsUpDown, Circle, Loader2, X } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -43,6 +43,7 @@ import {
   refusedPlanOf,
   restatesTitle,
   runErrorText,
+  runnerOf,
   type SharedDeploy,
   type SharedUpgradeKind,
   type SharedUpgradePlan,
@@ -564,7 +565,10 @@ function VersionPicker({
   )
 }
 
-/** What a run through the deployment's GitLab pipeline does, in one sentence. */
+/**
+ * What a run through the deployment's GitLab pipeline does, one labelled line per step in the
+ * order it does them (the plan reads in two seconds; every machine value in mono).
+ */
 function GitlabLine({
   gitlab,
   plan
@@ -573,31 +577,81 @@ function GitlabLine({
   plan: SharedUpgradePlan
 }) {
   const sha = gitlab.commit ? gitlab.commit.slice(0, 8) : null
+  const mono = 'font-mono text-[12px] text-slate-900 dark:text-foreground'
+  const rows: { label: string; value: ReactNode }[] = [
+    {
+      label: 'Through',
+      value: (
+        <>
+          {gitlab.driver} · <span className={mono}>{gitlab.project}</span>
+        </>
+      )
+    },
+    ...(plan.kind === 'rollback'
+      ? [
+          {
+            label: 'Rerun',
+            value: (
+              <>
+                <span className={mono}>{gitlab.deploy_job}</span> of pipeline{' '}
+                <span className={mono}>{gitlab.build_pipeline_id ?? '?'}</span>
+                {sha && (
+                  <>
+                    {' '}
+                    (build <span className={mono}>{sha}</span>)
+                  </>
+                )}
+              </>
+            )
+          }
+        ]
+      : [
+          {
+            label: 'Merge',
+            value: (
+              <>
+                <span className={mono}>{sha ?? 'the release commit'}</span> from{' '}
+                <span className={mono}>{gitlab.source_branch}</span> onto{' '}
+                <span className={mono}>{gitlab.target_branch}</span>
+              </>
+            )
+          },
+          {
+            label: 'Pin',
+            value: (
+              <>
+                <span className={mono}>{plan.version}</span> in{' '}
+                <span className={mono}>{gitlab.pin_file}</span>
+              </>
+            )
+          },
+          {
+            label: 'Run',
+            value: (
+              <>
+                {gitlab.before_job && (
+                  <>
+                    <span className={mono}>{gitlab.before_job}</span> first, then{' '}
+                  </>
+                )}
+                <span className={mono}>{gitlab.deploy_job}</span>
+              </>
+            )
+          }
+        ])
+  ]
   return (
-    <p className='m-0 text-[12px] text-slate-600 dark:text-slate-300'>
-      Through GitLab ({gitlab.driver}, <span className='font-mono'>{gitlab.project}</span>):{' '}
-      {plan.kind === 'rollback' ? (
-        <>
-          reruns <span className='font-mono'>{gitlab.deploy_job}</span> of pipeline{' '}
-          <span className='font-mono'>{gitlab.build_pipeline_id ?? '?'}</span>
-          {sha && (
-            <>
-              {' '}
-              (build <span className='font-mono'>{sha}</span>)
-            </>
-          )}
-        </>
-      ) : (
-        <>
-          merges {sha ? <span className='font-mono'>{sha}</span> : 'the release commit'} from{' '}
-          <span className='font-mono'>{gitlab.source_branch}</span> onto{' '}
-          <span className='font-mono'>{gitlab.target_branch}</span>, pins {plan.version} in{' '}
-          <span className='font-mono'>{gitlab.pin_file}</span>, then runs{' '}
-          <span className='font-mono'>{gitlab.deploy_job}</span>
-        </>
-      )}
-      .
-    </p>
+    <dl
+      aria-label='What GitLab does'
+      className='m-0 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-[12px] text-slate-600 dark:text-slate-300'
+    >
+      {rows.map((r) => (
+        <Fragment key={r.label}>
+          <dt className='text-slate-500 dark:text-muted-foreground'>{r.label}</dt>
+          <dd className='m-0 min-w-0 break-words'>{r.value}</dd>
+        </Fragment>
+      ))}
+    </dl>
   )
 }
 
@@ -935,6 +989,11 @@ function UpgradeProgress({
           )
         })}
       </ol>
+      {live && d.step === 'deploy' && runnerOf(d) === 'gitlab' && (
+        <p className='m-0 text-[12px] text-slate-600 dark:text-slate-300'>
+          Cancel stops the Hub waiting. A deploy job GitLab already started keeps running there.
+        </p>
+      )}
       {live && d.step && !steps.some((s) => s.key === d.step) && (
         // A step this screen does not know (a newer server): never its raw key.
         <p className='m-0 text-[12px] text-slate-600 dark:text-slate-300'>Working…</p>

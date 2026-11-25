@@ -796,7 +796,7 @@ async function runUpgrade(c: RunCtx, deps: SharedRunDeps): Promise<void> {
       'push',
       rollback
         ? `1. check that ${step0.targetBranch} still holds the ${version} build ${String(step0.sourceSha).slice(0, 8)}`
-        : `1. push nivaro ${version} to ${step0.targetBranch} through GitLab`
+        : `1. merge nivaro ${version} onto ${step0.targetBranch} and pin it in GitLab`
     )
     await checkpoint()
     // Review M2: steps 3–5 read the deployment link; one that does not answer now would only fail
@@ -863,7 +863,8 @@ async function runUpgrade(c: RunCtx, deps: SharedRunDeps): Promise<void> {
           }
           // The step has no check address: the run verifies each app's name itself (step 5).
           if (/^(verify|done):/.test(e.line)) return
-          run.log(`GitLab: ${e.line}`, e.level)
+          // The promotion's own step names ("push api:", "deploy api:") are not this run's words.
+          run.log(`GitLab: ${e.line.replace(/^(push|deploy) [^:]{1,64}: /, '')}`, e.level)
         }
       }
     )

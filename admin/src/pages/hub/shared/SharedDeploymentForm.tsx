@@ -331,9 +331,10 @@ export function SharedDeploymentForm({
   })
   const gitlabChoices = (gitlabDrivers.data ?? []).filter((x) => x.kind === 'gitlab')
   const gitlabDriver = gitlabChoices.find((x) => String(x.id) === d.gl_driver_id)
+  /** The driver's own value, said in a hint (" (deploy_production)"); '' before one is picked. */
   const driverDefault = (k: 'pin_file' | 'deploy_job') => {
     const v = (gitlabDriver?.config as Record<string, unknown> | undefined)?.[k]
-    return typeof v === 'string' && v ? `${v} (the driver's)` : "the driver's"
+    return typeof v === 'string' && v ? ` (${v})` : ''
   }
 
   const changes = shared
@@ -498,7 +499,7 @@ export function SharedDeploymentForm({
             label='Upgrades'
             hint={
               viaGitlab(d)
-                ? 'The Hub pins the version in GitLab and runs the deploy job, as a promotion does, then waits for every app.'
+                ? 'The Hub merges and pins the version in GitLab, runs the deploy job, then waits for every app.'
                 : 'Its own pipeline upgrades it; the Hub records the version it sees.'
             }
           >
@@ -514,121 +515,127 @@ export function SharedDeploymentForm({
         )}
 
         {viaGitlab(d) && (
-          <Field
-            id='sh-gl-driver'
-            label='GitLab driver'
-            error={err('gl_driver_id')}
-            hint={
-              gitlabDrivers.isSuccess && gitlabChoices.length === 0
-                ? 'No GitLab driver yet: add one under Drivers first.'
-                : 'The project whose pipeline deploys it.'
-            }
+          <section
+            aria-labelledby='sh-gl-heading'
+            className='space-y-3 border-y border-slate-200 py-4 md:col-span-2 dark:border-border'
           >
-            <SimpleSelect
-              value={d.gl_driver_id}
-              onChange={(v) => set({ gl_driver_id: v })}
-              options={[
-                { value: '', label: 'Pick a driver' },
-                ...gitlabChoices.map((x) => ({ value: String(x.id), label: x.name }))
-              ]}
-              ariaLabel='GitLab driver'
-              className='h-8 bg-white text-left text-[13px] dark:bg-background'
-              triggerProps={{ id: 'sh-gl-driver' }}
-            />
-          </Field>
-        )}
+            <div>
+              <h3
+                id='sh-gl-heading'
+                className='m-0 text-[13px] font-semibold text-slate-900 dark:text-foreground'
+              >
+                GitLab
+              </h3>
+              <p className='m-0 mt-0.5 text-[11px] text-slate-500 dark:text-muted-foreground'>
+                In the order an upgrade uses them: the release commit is merged onto the deploy
+                branch with the version pinned, then the deploy job runs.
+              </p>
+            </div>
+            <div className='grid grid-cols-1 gap-4 md:grid-cols-2'>
+              <Field
+                id='sh-gl-driver'
+                label='GitLab driver'
+                error={err('gl_driver_id')}
+                hint={
+                  gitlabDrivers.isSuccess && gitlabChoices.length === 0
+                    ? 'No GitLab driver yet: add one on the Drivers tab first.'
+                    : 'The project whose pipeline deploys it.'
+                }
+              >
+                <SimpleSelect
+                  value={d.gl_driver_id}
+                  onChange={(v) => set({ gl_driver_id: v })}
+                  options={[
+                    { value: '', label: 'Pick a driver' },
+                    ...gitlabChoices.map((x) => ({ value: String(x.id), label: x.name }))
+                  ]}
+                  ariaLabel='GitLab driver'
+                  className='h-8 bg-white text-left text-[13px] dark:bg-background'
+                  triggerProps={{ id: 'sh-gl-driver' }}
+                />
+              </Field>
 
-        {viaGitlab(d) && (
-          <Field
-            id='sh-gl-source'
-            label='Release branch'
-            error={err('gl_source')}
-            hint='Holds the release commits (a subject ending "nivaro <version>") the Hub merges.'
-          >
-            <Input
-              id='sh-gl-source'
-              value={d.gl_source}
-              onChange={(e) => set({ gl_source: e.target.value })}
-              autoComplete='off'
-              spellCheck={false}
-              placeholder='release'
-              className='h-8 font-mono text-[13px]'
-            />
-          </Field>
-        )}
+              <Field
+                id='sh-gl-source'
+                label='Release branch'
+                error={err('gl_source')}
+                hint='Holds the release commits, titled "… nivaro 0.3.x".'
+              >
+                <Input
+                  id='sh-gl-source'
+                  value={d.gl_source}
+                  onChange={(e) => set({ gl_source: e.target.value })}
+                  autoComplete='off'
+                  spellCheck={false}
+                  placeholder='release'
+                  className='h-8 font-mono text-[13px]'
+                />
+              </Field>
 
-        {viaGitlab(d) && (
-          <Field
-            id='sh-gl-target'
-            label='Deploy branch'
-            error={err('gl_target')}
-            hint='The branch its deploy job runs on. Nothing else may deploy it (no environment, no other shared deployment).'
-          >
-            <Input
-              id='sh-gl-target'
-              value={d.gl_target}
-              onChange={(e) => set({ gl_target: e.target.value })}
-              autoComplete='off'
-              spellCheck={false}
-              placeholder='shared-production'
-              className='h-8 font-mono text-[13px]'
-            />
-          </Field>
-        )}
+              <Field
+                id='sh-gl-target'
+                label='Deploy branch'
+                error={err('gl_target')}
+                hint='Its deploy job runs on it. Nothing else may deploy this branch: no environment, no other shared deployment.'
+              >
+                <Input
+                  id='sh-gl-target'
+                  value={d.gl_target}
+                  onChange={(e) => set({ gl_target: e.target.value })}
+                  autoComplete='off'
+                  spellCheck={false}
+                  placeholder='shared-production'
+                  className='h-8 font-mono text-[13px]'
+                />
+              </Field>
 
-        {viaGitlab(d) && (
-          <Field
-            id='sh-gl-pin'
-            label='Pin file'
-            error={err('gl_pin')}
-            hint='Where the version and image digests are committed. Empty: the driver’s.'
-          >
-            <Input
-              id='sh-gl-pin'
-              value={d.gl_pin}
-              onChange={(e) => set({ gl_pin: e.target.value })}
-              autoComplete='off'
-              spellCheck={false}
-              placeholder={driverDefault('pin_file')}
-              className='h-8 font-mono text-[13px]'
-            />
-          </Field>
-        )}
+              <Field
+                id='sh-gl-pin'
+                label='Pin file'
+                error={err('gl_pin')}
+                hint={`Where the version and image digests are committed. Leave empty to use the driver's${driverDefault('pin_file')}.`}
+              >
+                <Input
+                  id='sh-gl-pin'
+                  value={d.gl_pin}
+                  onChange={(e) => set({ gl_pin: e.target.value })}
+                  autoComplete='off'
+                  spellCheck={false}
+                  className='h-8 font-mono text-[13px]'
+                />
+              </Field>
 
-        {viaGitlab(d) && (
-          <Field
-            id='sh-gl-deploy'
-            label='Deploy job'
-            hint='Played when manual, waited for when it runs by itself. Empty: the driver’s.'
-          >
-            <Input
-              id='sh-gl-deploy'
-              value={d.gl_deploy}
-              onChange={(e) => set({ gl_deploy: e.target.value })}
-              autoComplete='off'
-              spellCheck={false}
-              placeholder={driverDefault('deploy_job')}
-              className='h-8 font-mono text-[13px]'
-            />
-          </Field>
-        )}
+              <Field
+                id='sh-gl-before'
+                label='Job to wait for first'
+                hint='Optional: a build or test job that must pass before the deploy job.'
+              >
+                <Input
+                  id='sh-gl-before'
+                  value={d.gl_before}
+                  onChange={(e) => set({ gl_before: e.target.value })}
+                  autoComplete='off'
+                  spellCheck={false}
+                  className='h-8 font-mono text-[13px]'
+                />
+              </Field>
 
-        {viaGitlab(d) && (
-          <Field
-            id='sh-gl-before'
-            label='Job to wait for first'
-            hint='Optional: a job that must pass before the deploy job (a build or test job).'
-          >
-            <Input
-              id='sh-gl-before'
-              value={d.gl_before}
-              onChange={(e) => set({ gl_before: e.target.value })}
-              autoComplete='off'
-              spellCheck={false}
-              placeholder='none'
-              className='h-8 font-mono text-[13px]'
-            />
-          </Field>
+              <Field
+                id='sh-gl-deploy'
+                label='Deploy job'
+                hint={`Played by the Hub when it is a manual job, else waited for. Leave empty to use the driver's${driverDefault('deploy_job')}.`}
+              >
+                <Input
+                  id='sh-gl-deploy'
+                  value={d.gl_deploy}
+                  onChange={(e) => set({ gl_deploy: e.target.value })}
+                  autoComplete='off'
+                  spellCheck={false}
+                  className='h-8 font-mono text-[13px]'
+                />
+              </Field>
+            </div>
+          </section>
         )}
 
         <Field

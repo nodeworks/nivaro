@@ -297,7 +297,7 @@ export const UPGRADE_STEPS: { key: string; label: string }[] = [
 
 /** The steps of a run through the deployment's GitLab pipeline (steps 1–2 differ). */
 export const GITLAB_UPGRADE_STEPS: { key: string; label: string }[] = [
-  { key: 'push', label: 'Pin the version in GitLab' },
+  { key: 'push', label: 'Merge and pin in GitLab' },
   { key: 'deploy', label: 'Run the deploy job' },
   ...UPGRADE_STEPS.slice(2)
 ]

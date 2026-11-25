@@ -65,7 +65,7 @@ describe('a GitLab-run shared deployment', () => {
       'pending'
     ])
     expect(UPGRADE_STEPS[0].key).toBe('render')
-    expect(logLineWords('push: started')).toBe('Pin the version in GitLab: started')
+    expect(logLineWords('push: started')).toBe('Merge and pin in GitLab: started')
   })
 
   it('the form asks for the driver and a release branch only when the Hub upgrades it', () => {
