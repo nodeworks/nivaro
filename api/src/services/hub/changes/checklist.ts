@@ -503,8 +503,11 @@ export async function voidRun(runId: number): Promise<boolean> {
 
 export interface ChecklistClaim {
   runId: number
-  /** The run the checklist started (`deploy`, `move`, `shared_deploy`, `extension` = nivaro_hub_extension_promotions). */
-  link(kind: 'deploy' | 'move' | 'shared_deploy' | 'extension', id: number): Promise<void>
+  /** The run the checklist started (`deploy`, `move`, `shared_deploy`, `extension` = nivaro_hub_extension_promotions, `config` = nivaro_hub_config_promotions). */
+  link(
+    kind: 'deploy' | 'move' | 'shared_deploy' | 'extension' | 'config',
+    id: number
+  ): Promise<void>
   /** The start failed: the checklist is open again (ticks kept). */
   release(): Promise<void>
 }
@@ -644,7 +647,7 @@ export function isChecklistWait(code: string): boolean {
 
 /** The checklist a run was started with (its history row's "Checklist"). */
 export async function checklistOfRun(
-  kind: 'deploy' | 'move' | 'shared_deploy' | 'extension',
+  kind: 'deploy' | 'move' | 'shared_deploy' | 'extension' | 'config',
   id: number
 ): Promise<ChecklistRun | null> {
   const r = (await db(RUNS).where({ run_kind: kind, run_id: id }).first()) as
@@ -660,7 +663,7 @@ export async function checklistOfRun(
  */
 export async function startWithChecklist<T>(
   gate: GateInput,
-  kind: 'deploy' | 'move' | 'shared_deploy' | 'extension',
+  kind: 'deploy' | 'move' | 'shared_deploy' | 'extension' | 'config',
   start: () => Promise<T>,
   idOf: (out: T) => number
 ): Promise<T> {

@@ -67,6 +67,10 @@ export interface PlanView {
   warnings: string[]
   /** Changed here, not from promotion, that the write would overwrite (the target's guard). */
   prod_only: { count: number; lines: string[]; refuse: boolean }
+  /** Steps (or flows) that need this environment's own values; their flows arrive switched off. */
+  needs_setup: Array<{ flow: string | null; step: string | null; reason: string }>
+  /** What the target binds the apply to (its engine plan and its procedure plan). */
+  hashes: { engine: string; procs: string }
 }
 
 export interface ConfigPromotion {
@@ -84,6 +88,9 @@ export interface ConfigPromotion {
   plan: PlanView | null
   result: Record<string, unknown> | null
   pre_restore_id: number | null
+  /** The promotion's key at the target app (idempotency, lost-answer check, undo). */
+  run_key: string | null
+  /** Applied and the newest applied promotion of its target: the one that may be undone. */
   undo_ready: boolean
   undo_result: Record<string, unknown> | null
   source_version: string | null

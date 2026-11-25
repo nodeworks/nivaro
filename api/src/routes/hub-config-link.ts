@@ -7,6 +7,7 @@ import {
   applyPromotion,
   PromoteError,
   planPromotion,
+  promotionStatus,
   readPromotionSnapshot,
   undoPromotion
 } from '../services/hub-link/config-promote.js'
@@ -23,7 +24,8 @@ import type { TenantRecord, TenantRegistry } from '../services/tenancy/types.js'
  *   POST snapshot {tables}                         → {version, environment, snapshot}  (source)
  *   POST plan     {snapshot, tables, deletes, …}   → field diff, plan hash, kept, held  (target)
  *   POST apply    {… + plan_hash, overwrite_prod_changes?} → counts, pre-apply restore point
- *   POST undo     {restore_id, mode, plan_hash?}   → preview / restore of that point
+ *   POST status   {run_key}                        → applied / undone / not_applied (lost answer)
+ *   POST undo     {run_key, mode, plan_hash?, …}   → preview / put back the rows that run wrote
  *
  * Dedicated app: /api/hub-link/config/* — mounted only where HUB_TOKEN (≥ 32 characters) is set,
  * never on a deployment that serves many apps. Hub shared deployment: /api/hub-deployment/config/
@@ -53,6 +55,7 @@ const WORK: Record<string, Work> = {
   snapshot: (b) => readPromotionSnapshot((b as { tables?: unknown } | null)?.tables),
   plan: planPromotion,
   apply: applyPromotion,
+  status: promotionStatus,
   undo: undoPromotion
 }
 
@@ -98,10 +101,12 @@ export async function hubConfigLinkRoutes(app: FastifyInstance): Promise<void> {
     )
 }
 
+/** An app this deployment serves now (active or in maintenance) — never a retired or suspended one. */
 async function tenantById(registry: TenantRegistry, id: string): Promise<TenantRecord | null> {
-  if (registry.byId) return registry.byId(id)
-  const all = registry.listAll ? await registry.listAll() : await registry.listActive()
-  return all.find((t) => t.id === id) ?? null
+  const t = registry.byId
+    ? await registry.byId(id)
+    : ((await registry.listActive()).find((x) => x.id === id) ?? null)
+  return t && (t.status === 'active' || t.status === 'maintenance') ? t : null
 }
 
 /** /api/hub-deployment/config/apps/:id/* on a Hub shared deployment, inside that app. */

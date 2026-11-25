@@ -3,7 +3,6 @@ import { listNivaroTables } from '../db/dialect/users-ai-config.js'
 import { db as defaultDb } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { qi, sqlDialect } from '../db/sql-dialect.js'
-import { isOutboundOptionKey } from './env-refresh/flow-ops.js'
 import { isRedactedColumn } from './secret-columns.js'
 import { isSensitiveHeaderName } from './secret-mask.js'
 
@@ -357,7 +356,8 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_hub_uptime_hours',
   'nivaro_hub_fleet_alerts',
   'nivaro_hub_slo_reports',
-  'nivaro_hub_config_promotions', //   Hub config promotion (575): plans, results, undo points
+  'nivaro_hub_config_promotions', //   Hub config promotion (575): plans, results, undo state
+  'nivaro_hub_config_applied', //      the app's own record of each Hub config promotion it applied (575)
   'nivaro_hub_incidents', //           Hub incidents (576): incidents + timeline, on-call rotas,
   'nivaro_hub_incident_events', //     overrides, pages, status page links (token hashes only)
   'nivaro_hub_oncall_rotas',
@@ -604,83 +604,6 @@ export function restoreSettingsOverrides(snapshotValue: unknown, currentValue: u
   return JSON.stringify(out)
 }
 
-/** A JSON object's top-level keys `drop` names, taken off (null / not-an-object: dropped whole). */
-function withoutKeys(v: unknown, drop: (k: string) => boolean): unknown {
-  if (v === null || v === undefined) return v
-  const o = jsonObject(v)
-  if (!o) return null
-  const out = Object.fromEntries(Object.entries(o).filter(([k]) => !drop(k)))
-  return typeof v === 'string' ? JSON.stringify(out) : out
-}
-
-/** `snap` without `drop` keys, plus `current`'s `drop` keys (the live row's own). JSON text. */
-function withKeysFrom(snap: unknown, current: unknown, drop: (k: string) => boolean): unknown {
-  if (snap === null || snap === undefined) return null
-  const o = jsonObject(snap)
-  if (!o) return null
-  const cur = jsonObject(current) ?? {}
-  const out: Record<string, unknown> = Object.fromEntries(
-    Object.entries(o).filter(([k]) => !drop(k))
-  )
-  for (const [k, v] of Object.entries(cur)) if (drop(k)) out[k] = v
-  return JSON.stringify(out)
-}
-
-/**
- * Flow step options (`nivaro_flow_operations.options`) and flow trigger options
- * (`nivaro_flows.trigger_options`) without their outbound part: every option key that addresses
- * or authenticates something outside the instance (env-refresh/flow-ops isOutboundOptionKey: URLs,
- * endpoints, headers, auth, webhook, any secret-named key). A restore — and a Hub config
- * promotion — writes the snapshot's other options with the LIVE row's own outbound part.
- */
-export const redactFlowOptions = (v: unknown): unknown => withoutKeys(v, isOutboundOptionKey)
-export const restoreFlowOptions = (snap: unknown, current: unknown): unknown =>
-  withKeysFrom(snap, current, isOutboundOptionKey)
-
-/**
- * `nivaro_flow_versions.definition` (a whole flow: its trigger options and every step's options)
- * with the same outbound parts taken off. A restore puts each step's outbound part back from the
- * live definition's step with the same id (else the same key), the trigger's from the live one.
- */
-export function redactFlowDefinition(v: unknown): unknown {
-  if (v === null || v === undefined) return v
-  const d = jsonObject(v)
-  if (!d) return null
-  const out: Record<string, unknown> = { ...d }
-  if (isObj(out.flow) && 'trigger_options' in out.flow)
-    out.flow = { ...out.flow, trigger_options: redactFlowOptions(out.flow.trigger_options) }
-  if (Array.isArray(out.operations))
-    out.operations = out.operations.map((op) =>
-      isObj(op) && 'options' in op ? { ...op, options: redactFlowOptions(op.options) } : op
-    )
-  return typeof v === 'string' ? JSON.stringify(out) : out
-}
-
-export function restoreFlowDefinition(snap: unknown, current: unknown): unknown {
-  if (snap === null || snap === undefined) return null
-  const d = jsonObject(snap)
-  if (!d) return null
-  const cur = jsonObject(current) ?? {}
-  const curOps = Array.isArray(cur.operations) ? cur.operations.filter(isObj) : []
-  const out: Record<string, unknown> = { ...d }
-  if (isObj(out.flow)) {
-    const curFlow = isObj(cur.flow) ? cur.flow : {}
-    out.flow = {
-      ...out.flow,
-      trigger_options: restoreFlowOptions(out.flow.trigger_options ?? null, curFlow.trigger_options)
-    }
-  }
-  if (Array.isArray(out.operations))
-    out.operations = out.operations.map((op) => {
-      if (!isObj(op)) return op
-      const mine =
-        curOps.find((c) => c.id != null && c.id === op.id) ??
-        curOps.find((c) => c.key != null && c.key === op.key)
-      return { ...op, options: restoreFlowOptions(op.options ?? null, mine?.options) }
-    })
-  return JSON.stringify(out)
-}
-
 const VALUE_REDACTED: Record<
   string,
   Record<
@@ -693,15 +616,6 @@ const VALUE_REDACTED: Record<
   },
   nivaro_settings_overrides: {
     data: { redact: redactSettingsOverrides, restore: restoreSettingsOverrides }
-  },
-  nivaro_flows: {
-    trigger_options: { redact: redactFlowOptions, restore: restoreFlowOptions }
-  },
-  nivaro_flow_operations: {
-    options: { redact: redactFlowOptions, restore: restoreFlowOptions }
-  },
-  nivaro_flow_versions: {
-    definition: { redact: redactFlowDefinition, restore: restoreFlowDefinition }
   }
 }
 

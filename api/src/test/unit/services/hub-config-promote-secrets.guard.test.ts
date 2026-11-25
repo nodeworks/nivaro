@@ -11,7 +11,9 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 //     mail, Teams, storage, MCP credentials and a sealed value) answers NONE of them: no seeded
 //     value, no sealed value, no secret-named key with a value, and a body-secret placeholder
 //     only as a reference by name (the value lives in the external API, which never travels).
-// Every promotable table is created (columns from the column fixture) and walked.
+// Every promotable table is created (columns from the column fixture) and walked; every column of
+// every promotable table must have an export rule (config-promote-export COLUMN_RULES), so a
+// migration adding a column to one needs a decision.
 
 vi.mock('../../../db/index.js', async () => {
   const knex = (await import('knex')).default
@@ -25,6 +27,11 @@ vi.mock('../../../db/index.js', async () => {
   })
   return { db }
 })
+// The SQL Server check of the restore engine (the snapshot read itself is engine-neutral).
+vi.mock('../../../services/config-restore.js', async (orig) => ({
+  ...((await orig()) as Record<string, unknown>),
+  restoreEngineSupported: () => true
+}))
 vi.mock('../../../db/dialect/users-ai-config.js', async (orig) => ({
   ...((await orig()) as Record<string, unknown>),
   listNivaroTables: async (k: Knex) =>
@@ -38,9 +45,9 @@ vi.mock('../../../db/dialect/users-ai-config.js', async (orig) => ({
 const { db } = (await import('../../../db/index.js')) as unknown as { db: Knex }
 const { promotableTables } = await import('../../../services/config-promote-groups.js')
 const { allKeeps } = await import('../../../services/env-refresh/registry.js')
-const { KEEP_PSEUDO_COLUMNS, readPromotionSnapshot } = await import(
-  '../../../services/hub-link/config-promote.js'
-)
+const { readPromotionSnapshot } = await import('../../../services/hub-link/config-promote.js')
+const { KEEP_PSEUDO_COLUMNS } = await import('../../../services/hub-link/config-promote-keeps.js')
+const { ruleOf } = await import('../../../services/hub-link/config-promote-export.js')
 const { MARKER, PLACEHOLDER_RE, SECRET_NAME_RE } = await import(
   '../../../services/secret-markers.js'
 )
@@ -61,14 +68,23 @@ const SECRETS = [
   'STORE-8',
   'MCP-9',
   'BODY-SECRET-11',
-  'enc:v1:'
+  'enc:v1:',
+  'DEEP-12',
+  'DEEP-13',
+  'DEEP-14',
+  'QUERY-15'
 ]
 /** A key name that holds a credential (plural `tokens` is an AI token count). */
 const SECRET_KEY =
   /secret|token(?!s)|passw|pwd|private_key|credential|api_?key|access_key|auth|cookie|webhook/i
 
 beforeAll(async () => {
-  for (const t of [...promotableTables(), 'nivaro_external_apis']) {
+  for (const t of [
+    ...promotableTables(),
+    'nivaro_external_apis',
+    'nivaro_payload_template_versions',
+    'nivaro_payload_template_drafts'
+  ]) {
     const cols = COLUMNS[t]
     expect(cols, `${t} in the column fixture`).toBeTruthy()
     await db.schema.createTable(t, (tb) => {
@@ -94,7 +110,14 @@ beforeAll(async () => {
       headers: { Authorization: 'Bearer HDR-SECRET-2', 'X-Api-Key': 'APIKEY-3' },
       auth: { username: 'svc', password: 'PW-SECRET-4' },
       token: 'TOK-5',
-      body: '{"order":"{{id}}"}'
+      api_id: 1,
+      body: '{"order":"{{id}}"}',
+      // Nested and unknown keys, at any depth.
+      request: {
+        query: { api_key: 'QUERY-15', page: 1 },
+        layers: [{ inner: { clientSecret: 'DEEP-12', note: 'fine' } }, { x: { bearer: 'DEEP-13' } }]
+      },
+      vendor_thing: { deeper: { deepest: { sessionToken: 'DEEP-14' } } }
     })
   })
   await db('nivaro_external_apis').insert({
@@ -132,6 +155,16 @@ beforeAll(async () => {
 })
 afterAll(async () => {
   await db.destroy()
+})
+
+describe('every promotable column has an export rule', () => {
+  it('a real column without a rule fails here (it would be dropped silently otherwise)', () => {
+    const missing: string[] = []
+    for (const t of promotableTables())
+      for (const c of COLUMNS[t] ?? [])
+        if (!ruleOf(t, c) && !(t === 'nivaro_settings')) missing.push(`${t}.${c}`)
+    expect(missing).toEqual([])
+  })
 })
 
 describe('keep rules on promotable tables', () => {
@@ -206,12 +239,22 @@ describe('readPromotionSnapshot', () => {
   it('keeps what is not a secret: the step body, the template’s placeholder by name', async () => {
     const answer = await readPromotionSnapshot([...promotableTables()])
     const op = answer.snapshot.tables.nivaro_flow_operations['1'].data
-    expect(JSON.parse(String(op.options))).toEqual({ method: 'POST', body: '{"order":"{{id}}"}' })
+    expect(JSON.parse(String(op.options))).toEqual({
+      method: 'POST',
+      api_id: 1,
+      body: '{"order":"{{id}}"}',
+      request: { layers: [{ inner: { note: 'fine' } }, { x: {} }] },
+      vendor_thing: { deeper: { deepest: {} } }
+    })
     expect(
       String(answer.snapshot.tables.nivaro_payload_templates['1'].data.published_body)
     ).toContain('⟦nvr-secret:partner_key⟧')
     expect(answer.snapshot.tables.nivaro_settings['1'].data.welcome_message).toBe('hello')
     expect(answer.snapshot.tables.nivaro_external_apis).toBeUndefined()
+    // The external API the step names travels as its NAME only (the target maps it to its own).
+    expect(answer.refs).toEqual({ external_api: { '1': 'partner' } })
+    // History tables never travel.
+    expect(answer.snapshot.tables.nivaro_payload_template_versions).toBeUndefined()
     expect(answer.snapshot.instance.database).toBe('')
   })
 })

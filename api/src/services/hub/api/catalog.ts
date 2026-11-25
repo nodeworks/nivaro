@@ -1478,17 +1478,14 @@ export const HUB_ROUTES: HubRoute[] = [
       body: {
         source_env_id: n('Environment the configuration comes from', { required: true }),
         target_env_id: n('Environment it goes to', { required: true }),
-        groups: list(
-          'string',
-          'layouts | flows | payload_templates | managed_procedures | pipelines | roles | settings'
-        ),
+        groups: list('string', 'flows | payload_templates | managed_procedures | roles | settings'),
         deletes: b(
           'Also remove rows the source no longer has (default false: add and change only)'
         ),
         allow_cascade: b('Let removals take rows of other tables with them')
       },
       notes:
-        'Reads a snapshot from the source app and has the target app plan it over their links; secrets and what the target keeps never travel. 409 MOVE_OPEN while a move of the target is open.'
+        'Reads a snapshot from the source app and has the target app plan it over their links: rows matched by name / key, references remapped (409 ROW_UNMATCHED / REF_UNMAPPED with items), secrets and what the target keeps never travel. 409 MOVE_OPEN while a move of the target is open.'
     }
   ),
   r(
@@ -1514,11 +1511,23 @@ export const HUB_ROUTES: HubRoute[] = [
       body: {
         plan_hash: s('The plan_hash of the plan', { required: true }),
         confirm: s('Production: type the target environment key'),
-        overwrite_prod_changes: b('Overwrite changes made on the target, not from promotion')
+        overwrite_prod_changes: b('Overwrite changes made on the target, not from promotion'),
+        checklist_run_id: n('The production pre-deploy checklist ticked for this promotion'),
+        outside_window_reason: s(
+          'An administrator on their own session: start outside the deploy window (10–500 characters)'
+        )
       },
       notes:
-        '409 STALE when either side moved since the plan, FROZEN in a freeze window, MOVE_OPEN, PROD_ONLY_CHANGES, CONFIG_PROMOTION_RUNNING; 400 CONFIRM_REQUIRED on production.'
+        'Freezes, deploy windows and the checklist are judged under the environment lock (action config_promote). 409 STALE when either side moved since the plan, FROZEN, OUTSIDE_WINDOW, CHECKLIST_*, MOVE_OPEN, PROD_ONLY_CHANGES, CONFIG_PROMOTION_RUNNING; 400 CONFIRM_REQUIRED on production; a lost answer leaves the promotion `interrupted` (502 INTERRUPTED) — check it with /check.'
     }
+  ),
+  r(
+    'POST',
+    '/config-promotions/:id/check',
+    'Config promotion',
+    'admin',
+    'write',
+    'Ask the target what it did with an interrupted promotion (by its run key) and record it'
   ),
   r(
     'POST',
@@ -1534,16 +1543,16 @@ export const HUB_ROUTES: HubRoute[] = [
     'Config promotion',
     'admin',
     'write',
-    'Undo an applied config promotion (bound to the undo preview’s hash)',
+    'Undo the newest applied config promotion of an environment (bound to the undo preview’s hash)',
     {
       sensitive: true,
       body: {
         plan_hash: s('The plan_hash of the undo preview', { required: true }),
-        confirm: s('Production: type the target environment key'),
+        confirm: s('Type the target environment key', { required: true }),
         overwrite_prod_changes: b('Overwrite changes made on the target since')
       },
       notes:
-        'Never stopped by a freeze (it puts back what was there); refused while a move is open.'
+        'An administrator on their own session only (403 UNDO_ADMIN_SESSION_ONLY). Puts back exactly the rows the promotion wrote (409 STALE when any changed since, NOT_NEWEST when a newer promotion wrote there). Never stopped by a freeze or a deploy window; refused while a move is open.'
     }
   ),
   // ─── Releases: trains, schedules, freezes, rollback rules, notes (routes/hub-releases.ts) ─
@@ -2260,7 +2269,7 @@ export const HUB_ROUTES: HubRoute[] = [
     'The public status page (HTML; ?format=json for JSON)',
     {
       notes:
-        'No sign-in: the token is the credential. Rate-limited; a wrong, expired or replaced token answers 404. No hostnames, versions or error text.',
+        'No sign-in: the token is the credential. Rate-limited; a wrong, expired or replaced token answers 404. No hostnames, versions or error text.'
     }
   ),
   // ─── Verification: smoke checks, extension versions (routes/hub-verify.ts) ──────────

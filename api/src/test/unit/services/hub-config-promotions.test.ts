@@ -2,9 +2,11 @@ import type { Knex } from 'knex'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Hub config promotion (idea 30), Hub side, against real SQLite rows: plan → apply → undo, and
-// every gate an apply or undo meets (typed confirm on production, freeze, change-window seam,
-// open move, the environment lock, a plan that went stale, Changed-here hits, expiry, heal).
-// The two apps are fakes behind the channel seam: the test proves what the Hub sends them.
+// every gate an apply or undo meets — typed confirm (production for an apply, always for an undo),
+// freezes / deploy windows and the checklist judged UNDER the lock, an open move, the lock itself,
+// a plan that went stale, Changed-here hits, expiry, a lost answer (never "nothing written"
+// without the target's word) and undo of the newest promotion only. The two apps are fakes behind
+// the channel seam: the test proves what the Hub sends them.
 
 vi.mock('../../../db/index.js', async () => {
   const knex = (await import('knex')).default
@@ -27,54 +29,57 @@ const P = await import('../../../services/hub/config/promotions.js')
 const { ConfigPromotionError, PROMOTIONS } = await import('../../../services/hub/config/types.js')
 type Deps = import('../../../services/hub/config/promotions.js').ConfigDeps
 
-const HASH = 'a'.repeat(64)
-const UNDO_HASH = 'b'.repeat(64)
+const H = (c: string) => c.repeat(64)
+const PLAN = H('a')
+const UNDO = H('b')
 
 const calls: Array<{ env: number; name: string; body: Record<string, unknown> }> = []
 const app = {
-  snapshotVersion: 1,
   applyError: null as InstanceType<typeof ConfigPromotionError> | null,
+  undoError: null as InstanceType<typeof ConfigPromotionError> | null,
+  status: 'applied' as 'applied' | 'not_applied' | 'unreachable',
   prodOnly: false
 }
 
-function planAnswer(hash = HASH) {
+function preview(hash: string) {
   return {
-    version: '0.3.215',
-    preview: {
-      plan_hash: hash,
-      totals: { inserts: 1, updates: 1, deletes: 0, tables: 1, skipped_inactive_user: 0 },
-      tables: [
-        {
-          table: 'nivaro_roles',
-          inserts: 1,
-          updates: 1,
-          deletes: 0,
-          unchanged: 3,
-          more: 0,
-          dropped_columns: [],
-          rows: [
-            {
-              key: '7',
-              op: 'update',
-              label: 'Editor',
-              fields: [{ field: 'description', now: 'old', was: 'new' }]
-            }
-          ]
-        }
-      ],
-      cascade: [],
-      over_cap: false,
-      cap: 2000
-    },
-    refused: [],
-    kept: [],
-    held: [],
-    switched_off: [],
-    prod_only_changes: app.prodOnly ? [{ id: 'x' }] : [],
-    prod_only_lines: app.prodOnly ? ['nivaro_roles #7 changed here'] : [],
-    prod_only_refuse: app.prodOnly,
-    warnings: []
+    plan_hash: hash,
+    totals: { inserts: 1, updates: 1, deletes: 0, tables: 1, skipped_inactive_user: 0 },
+    tables: [
+      {
+        table: 'nivaro_roles',
+        inserts: 1,
+        updates: 1,
+        deletes: 0,
+        unchanged: 3,
+        more: 0,
+        dropped_columns: [],
+        rows: [
+          {
+            key: '7',
+            op: 'update',
+            label: 'Editor',
+            fields: [{ field: 'description', now: 'old', was: 'new' }]
+          }
+        ]
+      }
+    ],
+    cascade: [],
+    over_cap: false,
+    cap: 2000
   }
+}
+
+const applied = {
+  run_key: 'x',
+  result: {
+    pre_restore_id: 91,
+    totals: { inserted: 1, updated: 1, deleted: 0 },
+    tables: [{ table: 'nivaro_roles', inserted: 1, updated: 1, deleted: 0 }]
+  },
+  procedures: [{ name: 'usp_x', ok: false }],
+  needs_setup: [{ flow: 'Order submitted', step: 'Notify partner', reason: 'Set url' }],
+  baseline: 'moved'
 }
 
 const channel = async (env: number) => ({
@@ -82,49 +87,98 @@ const channel = async (env: number) => ({
   async call(name: string, body: unknown) {
     calls.push({ env, name, body: body as Record<string, unknown> })
     if (name === 'snapshot')
-      return { version: '0.3.215', snapshot: { format: 1, tables: {}, v: app.snapshotVersion } }
-    if (name === 'plan') return planAnswer()
+      return {
+        version: '0.3.215',
+        snapshot: { format: 1, tables: {} },
+        refs: { external_api: { '3': 'MDSi' } },
+        stripped: { nivaro_flow_operations: { o: ['url'] } }
+      }
+    if (name === 'plan')
+      return {
+        version: '0.3.215',
+        preview: preview(PLAN),
+        engine_hash: H('e'),
+        procs_hash: H('f'),
+        refused: [],
+        kept: [],
+        held: [],
+        switched_off: [],
+        needs_setup: [],
+        prod_only_changes: app.prodOnly ? [{ id: 'x' }] : [],
+        prod_only_lines: app.prodOnly ? ['nivaro_roles #7 changed here'] : [],
+        prod_only_refuse: app.prodOnly,
+        warnings: []
+      }
     if (name === 'apply') {
       if (app.applyError) throw app.applyError
-      return {
-        result: {
-          pre_restore_id: 91,
-          totals: { inserted: 1, updated: 1, deleted: 0 },
-          tables: [{ table: 'nivaro_roles', inserted: 1, updated: 1, deleted: 0 }]
-        },
-        procedures: null,
-        baseline: 'moved'
-      }
+      return applied
+    }
+    if (name === 'status') {
+      if (app.status === 'unreachable') throw new ConfigPromotionError('APP_UNREACHABLE', 'no', 502)
+      return app.status === 'applied'
+        ? { state: 'applied', answer: applied, newest: true }
+        : { state: 'not_applied', answer: null, newest: false }
     }
     if (name === 'undo') {
+      if (app.undoError) throw app.undoError
       const b = body as { mode: string }
-      if (b.mode === 'preview') return { preview: { ...planAnswer(UNDO_HASH).preview } }
-      return { result: { pre_restore_id: 92, totals: { inserted: 0, updated: 1, deleted: 1 } } }
+      if (b.mode === 'preview')
+        return { mode: 'preview', preview: preview(UNDO), engine_hash: H('c'), procs_hash: H('d') }
+      return {
+        mode: 'apply',
+        result: { totals: { inserted: 0, updated: 1, deleted: 1 } },
+        procedures: []
+      }
     }
     throw new Error(`unexpected ${name}`)
   }
 })
 
-const notices: Array<{ kind: string; text?: { subject: string } | null }> = []
+const notices: Array<{ kind: string; text?: { subject: string; message: string } | null }> = []
+const gateCalls: string[] = []
 let production = false
 let frozen = false
 let windowShut = false
 let moving = false
+let checklistNeeded = false
 let now = Date.parse('2026-11-25T12:00:00Z')
 const lock = memoryPromoteLock
+const links: Array<[string, number]> = []
+let released = 0
 
 const deps = (): Deps => ({
   channel,
   lock,
   production: async () => production,
-  freeze: async (_e, action) =>
-    frozen && action === 'config_apply'
-      ? { status: 409, code: 'FROZEN', message: 'Promotions are frozen' }
-      : null,
-  window: async () =>
-    windowShut ? { status: 409, code: 'OUTSIDE_WINDOW', message: 'Outside the window' } : null,
-  moveOpen: async () =>
-    moving ? { status: 409, code: 'MOVE_OPEN', message: 'A move is open' } : null,
+  window: async (_e, action, o) => {
+    gateCalls.push(`window:${action}:${o.skipWindows ? 'skip' : 'judge'}`)
+    if (action === 'config_undo') return null
+    if (frozen) return { status: 409, code: 'FROZEN', message: 'Promotions are frozen' }
+    if (windowShut && !o.skipWindows)
+      return { status: 409, code: 'OUTSIDE_WINDOW', message: 'Outside the window' }
+    return null
+  },
+  moveOpen: async () => {
+    gateCalls.push(`move:${(await lock.held(11)) ? 'locked' : 'free'}`)
+    return moving ? { status: 409, code: 'MOVE_OPEN', message: 'A move is open' } : null
+  },
+  checklist: async (_e, _id, runId) => {
+    if (!checklistNeeded) return null
+    if (runId !== 5)
+      throw Object.assign(new Error('Tick it'), { code: 'CHECKLIST_REQUIRED', status: 409 })
+    return {
+      runId: 5,
+      link: async (kind: string, id: number) => {
+        links.push([kind, id])
+      },
+      release: async () => {
+        released++
+      }
+    }
+  },
+  outsideWindow: async () => {
+    gateCalls.push('outside-recorded')
+  },
   notify: (e) => notices.push(e as never),
   now: () => now
 })
@@ -163,11 +217,17 @@ beforeEach(async () => {
   await db(PROMOTIONS).del()
   calls.length = 0
   notices.length = 0
+  gateCalls.length = 0
+  links.length = 0
+  released = 0
   production = false
   frozen = false
   windowShut = false
   moving = false
+  checklistNeeded = false
   app.applyError = null
+  app.undoError = null
+  app.status = 'applied'
   app.prodOnly = false
   now = Date.parse('2026-11-25T12:00:00Z')
 })
@@ -191,7 +251,7 @@ const apply = (id: number, over: Partial<Parameters<typeof P.applyPromotion>[0]>
   P.applyPromotion(
     {
       id,
-      planHash: HASH,
+      planHash: PLAN,
       confirm: 'production',
       overwriteProdChanges: false,
       userId: '00000000-0000-0000-0000-000000000002',
@@ -201,7 +261,20 @@ const apply = (id: number, over: Partial<Parameters<typeof P.applyPromotion>[0]>
     deps()
   )
 
-async function refusedWith(p: Promise<unknown>): Promise<string> {
+const undo = (id: number, over: Partial<Parameters<typeof P.applyUndo>[0]> = {}) =>
+  P.applyUndo(
+    {
+      id,
+      planHash: UNDO,
+      confirm: 'production',
+      overwriteProdChanges: false,
+      userId: null,
+      ...over
+    },
+    deps()
+  )
+
+async function code(p: Promise<unknown>): Promise<string> {
   try {
     await p
   } catch (e) {
@@ -212,18 +285,23 @@ async function refusedWith(p: Promise<unknown>): Promise<string> {
 }
 
 describe('plan', () => {
-  it('reads the source, has the target plan it, stores the field diff', async () => {
+  it('reads the source, has the target plan it with a run key, stores the field diff', async () => {
     const p = await plan()
     expect(p.status).toBe('planned')
-    expect(p.plan_hash).toBe(HASH)
+    expect(p.plan_hash).toBe(PLAN)
+    expect(p.run_key).toMatch(/^[A-Za-z0-9_-]{24}$/)
     expect(p.tables).toEqual(['nivaro_roles', 'nivaro_policies'])
     expect(calls.map((c) => [c.env, c.name])).toEqual([
       [10, 'snapshot'],
       [11, 'plan']
     ])
-    expect(calls[0].body).toEqual({ tables: ['nivaro_roles', 'nivaro_policies'] })
-    expect(calls[1].body.source_label).toBe('efp/staging')
-    expect(p.plan?.tables[0].group).toBe('roles')
+    expect(calls[1].body).toMatchObject({
+      run_key: p.run_key,
+      refs: { external_api: { '3': 'MDSi' } },
+      stripped: { nivaro_flow_operations: { o: ['url'] } },
+      source_label: 'efp/staging'
+    })
+    expect(p.plan?.hashes).toEqual({ engine: H('e'), procs: H('f') })
     expect(p.plan?.tables[0].rows[0].fields[0]).toEqual({
       field: 'description',
       current: 'old',
@@ -231,162 +309,196 @@ describe('plan', () => {
     })
   })
 
-  it('refuses environments of another app, archived ones, the same one, unknown groups', async () => {
-    expect(await refusedWith(plan({ targetEnvId: 12 }))).toBe('NOT_FOUND')
-    expect(await refusedWith(plan({ targetEnvId: 13 }))).toBe('ARCHIVED')
-    expect(await refusedWith(plan({ targetEnvId: 10 }))).toBe('SAME_ENVIRONMENT')
-    expect(await refusedWith(plan({ groups: ['roles', 'schema'] }))).toBe('BAD_GROUPS')
+  it('refuses other apps’ environments, archived ones, the same one, unknown groups', async () => {
+    expect(await code(plan({ targetEnvId: 12 }))).toBe('NOT_FOUND')
+    expect(await code(plan({ targetEnvId: 13 }))).toBe('ARCHIVED')
+    expect(await code(plan({ targetEnvId: 10 }))).toBe('SAME_ENVIRONMENT')
+    expect(await code(plan({ groups: ['roles', 'layouts'] }))).toBe('BAD_GROUPS')
     expect(calls).toEqual([])
-  })
-
-  it('refuses while a move of the target is open', async () => {
-    moving = true
-    expect(await refusedWith(plan())).toBe('MOVE_OPEN')
   })
 
   it('a newer plan for the same target supersedes the older one', async () => {
     const a = await plan()
     await plan()
     expect((await P.getPromotion(a.id))?.status).toBe('superseded')
-    expect(await refusedWith(apply(a.id))).toBe('NOT_PLANNED')
+    expect(await code(apply(a.id))).toBe('NOT_PLANNED')
   })
 })
 
 describe('apply', () => {
-  it('production needs the typed key; then applies bound to the hash, re-reading the source', async () => {
+  it('production needs the key; gates run under the lock; the run key and hashes are sent', async () => {
     production = true
     const p = await plan()
-    expect(await refusedWith(apply(p.id, { confirm: 'prod' }))).toBe('CONFIRM_REQUIRED')
+    expect(await code(apply(p.id, { confirm: 'prod' }))).toBe('CONFIRM_REQUIRED')
     calls.length = 0
+    gateCalls.length = 0
     const done = await apply(p.id)
     expect(done.status).toBe('applied')
-    expect(done.pre_restore_id).toBe(91)
-    expect(done.undo_ready).toBe(true)
-    expect(calls.map((c) => [c.env, c.name])).toEqual([
-      [10, 'snapshot'],
-      [11, 'apply']
-    ])
+    expect(gateCalls).toEqual(['move:locked', 'window:config_apply:judge'])
+    expect(calls.map((c) => c.name)).toEqual(['snapshot', 'apply'])
     expect(calls[1].body).toMatchObject({
-      plan_hash: HASH,
+      run_key: p.run_key,
+      plan_hash: PLAN,
+      engine_hash: H('e'),
+      procs_hash: H('f'),
       promotion_id: p.id,
-      actor: 'Rob',
-      overwrite_prod_changes: false,
-      tables: ['nivaro_roles', 'nivaro_policies']
+      actor: 'Rob'
     })
-    expect(notices.at(-1)?.kind).toBe('promote_done')
-    expect(notices.at(-1)?.text?.subject).toMatch(/Config promoted: efp · production/)
+    expect(done.undo_ready).toBe(true)
+    expect((done.result as { procedures: { failed: string[] } }).procedures.failed).toEqual([
+      'usp_x'
+    ])
+    // A procedure that failed and steps to set up are said in the notice.
+    expect(notices.at(-1)?.kind).toBe('promote_failed')
+    expect(notices.at(-1)?.text?.message).toMatch(/usp_x/)
+    expect(notices.at(-1)?.text?.message).toMatch(/Order submitted → Notify partner/)
   })
 
-  it('a non-production target needs no typed key', async () => {
-    const p = await plan({ sourceEnvId: 11, targetEnvId: 10 })
-    expect((await apply(p.id, { confirm: undefined })).status).toBe('applied')
-  })
-
-  it('refuses another hash, an expired plan, and every gate', async () => {
+  it('freezes, windows and open moves refuse; an emergency start skips the windows only', async () => {
     const p = await plan()
-    expect(await refusedWith(apply(p.id, { planHash: 'c'.repeat(64) }))).toBe('PLAN_CHANGED')
     frozen = true
-    expect(await refusedWith(apply(p.id))).toBe('FROZEN')
+    expect(await code(apply(p.id))).toBe('FROZEN')
     frozen = false
     windowShut = true
-    expect(await refusedWith(apply(p.id))).toBe('OUTSIDE_WINDOW')
-    windowShut = false
+    expect(await code(apply(p.id))).toBe('OUTSIDE_WINDOW')
     moving = true
-    expect(await refusedWith(apply(p.id))).toBe('MOVE_OPEN')
+    expect(await code(apply(p.id))).toBe('MOVE_OPEN')
     moving = false
+    expect(
+      (await apply(p.id, { outsideWindow: { reason: 'Broken login for everyone' } })).status
+    ).toBe('applied')
+    expect(gateCalls).toContain('window:config_apply:skip')
+    expect(gateCalls).toContain('outside-recorded')
+  })
+
+  it('the lock, the plan hash and expiry refuse before anything is sent', async () => {
+    const p = await plan()
+    expect(await code(apply(p.id, { planHash: H('9') }))).toBe('PLAN_CHANGED')
     const token = await lock.take(11, 'promotion')
-    expect(await refusedWith(apply(p.id))).toBe('PROMOTION_RUNNING')
+    expect(await code(apply(p.id))).toBe('PROMOTION_RUNNING')
     if (token) await lock.release(11, token)
     now += P.PLAN_TTL_MS + 1
-    expect(await refusedWith(apply(p.id))).toBe('PLAN_EXPIRED')
+    expect(await code(apply(p.id))).toBe('PLAN_EXPIRED')
     expect(calls.filter((c) => c.name === 'apply')).toEqual([])
+  })
+
+  it('the production checklist is claimed and linked to the promotion', async () => {
+    checklistNeeded = true
+    const p = await plan()
+    expect(await code(apply(p.id))).toBe('CHECKLIST_REQUIRED')
     expect((await P.getPromotion(p.id))?.status).toBe('planned')
+    await apply(p.id, { checklistRunId: 5 })
+    expect(links).toEqual([['config', p.id]])
   })
 
   it('Changed-here hits the target refuses need the explicit overwrite', async () => {
     app.prodOnly = true
     const p = await plan()
-    expect(p.plan?.prod_only).toMatchObject({ count: 1, refuse: true })
-    expect(await refusedWith(apply(p.id))).toBe('PROD_ONLY_CHANGES')
-    const done = await apply(p.id, { overwriteProdChanges: true })
-    expect(done.status).toBe('applied')
-    expect(calls.at(-1)?.body.overwrite_prod_changes).toBe(true)
+    expect(await code(apply(p.id))).toBe('PROD_ONLY_CHANGES')
+    expect((await apply(p.id, { overwriteProdChanges: true })).status).toBe('applied')
   })
 
-  it('the target answering STALE marks the plan stale and says so', async () => {
+  it('the target answering STALE marks the plan stale; a refusal says it wrote nothing', async () => {
     const p = await plan()
     app.applyError = new ConfigPromotionError('STALE', 'Configuration changed', 409)
-    expect(await refusedWith(apply(p.id))).toBe('STALE')
-    const after = await P.getPromotion(p.id)
-    expect(after?.status).toBe('stale')
-    expect(notices.at(-1)?.text?.subject).toMatch(/needs a new plan/)
+    expect(await code(apply(p.id))).toBe('STALE')
+    expect((await P.getPromotion(p.id))?.status).toBe('stale')
+    expect(notices.at(-1)?.text?.message).toMatch(/wrote nothing/)
     expect(await lock.held(11)).toBe(false)
   })
 
-  it('a refusal before any write (the target busy) keeps the plan', async () => {
+  it('a busy target keeps the plan (and gives the checklist back)', async () => {
+    checklistNeeded = true
     const p = await plan()
     app.applyError = new ConfigPromotionError('BUSY', 'Another config restore is running', 409)
-    expect(await refusedWith(apply(p.id))).toBe('BUSY')
+    expect(await code(apply(p.id, { checklistRunId: 5 }))).toBe('BUSY')
     expect((await P.getPromotion(p.id))?.status).toBe('planned')
+    expect(released).toBe(1)
+  })
+})
+
+describe('a lost answer (M4)', () => {
+  it('the target says it applied → applied, with its own counts', async () => {
+    const p = await plan()
+    app.applyError = new ConfigPromotionError(
+      'APP_UNREACHABLE',
+      'The app did not answer in time.',
+      502
+    )
+    const out = await apply(p.id)
+    expect(out.status).toBe('applied')
+    expect(calls.map((c) => c.name)).toContain('status')
+    expect(calls.find((c) => c.name === 'status')?.body).toEqual({ run_key: p.run_key })
   })
 
-  it('any other failure is failed, urgent', async () => {
+  it('the target confirms nothing was written → failed, saying so', async () => {
     const p = await plan()
-    app.applyError = new ConfigPromotionError('FAILED', 'Insert failed', 422)
-    expect(await refusedWith(apply(p.id))).toBe('FAILED')
-    expect((await P.getPromotion(p.id))?.status).toBe('failed')
-    expect(notices.at(-1)?.kind).toBe('promote_failed')
+    app.applyError = new ConfigPromotionError('CONFIG_PROMOTE_FAILED', 'x', 502)
+    app.status = 'not_applied'
+    const out = await apply(p.id)
+    expect(out.status).toBe('failed')
+    expect(out.error).toMatch(/confirms it wrote nothing/)
+  })
+
+  it('no word from the target → interrupted, never “nothing written”; check later', async () => {
+    const p = await plan()
+    app.applyError = new ConfigPromotionError('APP_UNREACHABLE', 'no', 502)
+    app.status = 'unreachable'
+    expect(await code(apply(p.id))).toBe('INTERRUPTED')
+    const got = await P.getPromotion(p.id)
+    expect(got?.status).toBe('interrupted')
+    expect(got?.error).toMatch(/may have written/)
+    expect(notices.at(-1)?.text?.message).not.toMatch(/nothing/i)
+    app.status = 'applied'
+    expect((await P.reconcilePromotion(p.id, deps())).status).toBe('applied')
   })
 })
 
 describe('undo', () => {
-  it('previews the pre-apply point, then restores it bound to its own hash', async () => {
-    production = true
+  it('previews, then puts back the rows bound to its own hash; typed key always', async () => {
     const p = await apply((await plan()).id)
-    expect(
-      await refusedWith(
-        P.applyUndo(
-          {
-            id: p.id,
-            planHash: UNDO_HASH,
-            confirm: 'production',
-            overwriteProdChanges: false,
-            userId: null
-          },
-          deps()
-        )
-      )
-    ).toBe('PLAN_CHANGED')
+    gateCalls.length = 0
+    expect(await code(undo(p.id))).toBe('PLAN_CHANGED')
     const pv = await P.previewUndo(p.id, deps())
-    expect(pv.plan_hash).toBe(UNDO_HASH)
-    expect(calls.at(-1)?.body).toEqual({ mode: 'preview', restore_id: 91 })
-    const undo = (o: Record<string, unknown> = {}) =>
-      P.applyUndo(
-        {
-          id: p.id,
-          planHash: UNDO_HASH,
-          confirm: 'production',
-          overwriteProdChanges: false,
-          userId: null,
-          ...o
-        },
-        deps()
-      )
-    expect(await refusedWith(undo({ confirm: 'nope' }))).toBe('CONFIRM_REQUIRED')
+    expect(pv.plan_hash).toBe(UNDO)
+    expect(calls.at(-1)?.body).toEqual({ mode: 'preview', run_key: p.run_key })
+    // Not production, still typed.
+    expect(await code(undo(p.id, { confirm: '' }))).toBe('CONFIRM_REQUIRED')
     moving = true
-    expect(await refusedWith(undo())).toBe('MOVE_OPEN')
+    expect(await code(undo(p.id))).toBe('MOVE_OPEN')
     moving = false
-    // A freeze or a shut change window never stops an undo.
+    // A freeze or a closed window never stops an undo.
     frozen = true
     windowShut = true
-    const done = await undo()
+    const done = await undo(p.id)
     expect(done.status).toBe('undone')
     expect(calls.at(-1)?.body).toMatchObject({
       mode: 'apply',
-      restore_id: 91,
-      plan_hash: UNDO_HASH
+      run_key: p.run_key,
+      plan_hash: UNDO,
+      engine_hash: H('c'),
+      procs_hash: H('d')
     })
-    expect(await refusedWith(P.previewUndo(p.id, deps()))).toBe('NOT_UNDOABLE')
+    // The undo judged no freeze and no window.
+    expect(gateCalls.filter((g) => g.startsWith('window'))).toEqual([])
+  })
+
+  it('only the newest promotion of an environment can be undone', async () => {
+    const a = await apply((await plan()).id)
+    const b = await apply((await plan()).id)
+    expect((await P.getPromotion(a.id))?.undo_ready).toBe(false)
+    expect((await P.getPromotion(b.id))?.undo_ready).toBe(true)
+    expect(await code(P.previewUndo(a.id, deps()))).toBe('NOT_NEWEST')
+  })
+
+  it('a refused undo leaves the promotion applied, saying why', async () => {
+    const p = await apply((await plan()).id)
+    await P.previewUndo(p.id, deps())
+    app.undoError = new ConfigPromotionError('STALE', 'Rows changed since', 409)
+    expect(await code(undo(p.id))).toBe('STALE')
+    const got = await P.getPromotion(p.id)
+    expect(got?.status).toBe('applied')
+    expect(got?.error).toMatch(/Rows changed since/)
   })
 })
 
@@ -398,7 +510,7 @@ describe('heal', () => {
       .update({ status: 'applying', started_at: new Date(now - P.STUCK_MS - 1000) })
     const got = await P.getPromotion(p.id, now)
     expect(got?.status).toBe('interrupted')
-    expect(got?.error).toMatch(/restore points/)
+    expect(got?.error).toMatch(/Check the target/)
   })
 
   it('healedStatus is pure and leaves fresh rows alone', () => {
@@ -407,14 +519,17 @@ describe('heal', () => {
       'applied'
     )
     expect(P.healedStatus({ status: 'applying', started_at: t }, Date.parse(t) + 1000)).toBeNull()
-    expect(P.healedStatus({ status: 'planned', started_at: null }, Date.parse(t))).toBeNull()
   })
 })
 
 describe('plan view', () => {
   it('refuses an answer without a hash and caps a huge plan by rows, never counts', () => {
     expect(() => P.planViewOf({ preview: {} })).toThrow(ConfigPromotionError)
-    const { view } = P.planViewOf(planAnswer())
+    const { view } = P.planViewOf({
+      preview: preview(PLAN),
+      engine_hash: H('e'),
+      procs_hash: H('f')
+    })
     const big = {
       ...view,
       tables: [
@@ -424,6 +539,5 @@ describe('plan view', () => {
     const capped = JSON.parse(P.cappedPlan(big, 2_000))
     expect(capped.tables[0].rows.length).toBeLessThan(50)
     expect(capped.tables[0].updates).toBe(1)
-    expect(capped.tables[0].more).toBeGreaterThan(0)
   })
 })

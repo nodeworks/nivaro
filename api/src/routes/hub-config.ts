@@ -3,13 +3,19 @@ import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { idParam } from '../services/hub/apps.js'
 import {
+  OutsideWindowError,
+  outsideWindowOf,
+  ownSession
+} from '../services/hub/changes/emergency.js'
+import {
   applyPromotion,
   applyUndo,
   getPromotion,
   listPromotions,
   planPromotion,
   previewUndo,
-  promotionGroups
+  promotionGroups,
+  reconcilePromotion
 } from '../services/hub/config/promotions.js'
 import { ConfigPromotionError, PROMOTIONS } from '../services/hub/config/types.js'
 
@@ -24,9 +30,12 @@ import { ConfigPromotionError, PROMOTIONS } from '../services/hub/config/types.j
  *   POST /apps/:id/config-promotions/plan             {source_env_id, target_env_id, groups[],
  *                                                     deletes?, allow_cascade?} → the plan
  *   GET  /config-promotions/:id                       one promotion with its plan
- *   POST /config-promotions/:id/apply                 {plan_hash, confirm?, overwrite_prod_changes?}
+ *   POST /config-promotions/:id/apply                 {plan_hash, confirm?, overwrite_prod_changes?,
+ *                                                     checklist_run_id?, outside_window_reason?}
+ *   POST /config-promotions/:id/check                 ask the target what it did (a lost answer)
  *   POST /config-promotions/:id/undo/plan             the undo's preview (its own hash)
- *   POST /config-promotions/:id/undo                  {plan_hash, confirm?, overwrite_prod_changes?}
+ *   POST /config-promotions/:id/undo                  {plan_hash, confirm, overwrite_prod_changes?}
+ *                                                     — an administrator on their own session only
  *
  * Refusals are {statusCode, error, message, code} (+ items/lines/preview/freeze when the code
  * has them).
@@ -140,6 +149,13 @@ export function hubConfigRoutes(app: FastifyInstance) {
       const id = idParam(req.params.id)
       if (!id) return refuse(reply, 404, 'NOT_FOUND', 'No such config promotion')
       const b = body(req)
+      let outside: { reason: string } | null
+      try {
+        outside = outsideWindowOf(req, b)
+      } catch (e) {
+        if (e instanceof OutsideWindowError) return refuse(reply, e.status, e.code, e.message)
+        throw e
+      }
       return guarded(
         reply,
         async () => {
@@ -149,19 +165,35 @@ export function hubConfigRoutes(app: FastifyInstance) {
             confirm: b.confirm,
             overwriteProdChanges: b.overwrite_prod_changes === true,
             userId: userId(req),
-            actor: actorOf(req)
+            actor: actorOf(req),
+            checklistRunId: b.checklist_run_id,
+            outsideWindow: outside
           })
           const t = (p.result as { totals?: Record<string, number> } | null)?.totals
           await log(
             req,
             'hub-config-promote',
             id,
-            `applied to environment ${p.target_environment_id}: ${t?.inserted ?? 0} added, ${t?.updated ?? 0} changed, ${t?.deleted ?? 0} removed; undo = restore point #${p.pre_restore_id ?? '?'}${b.overwrite_prod_changes === true ? ' (overwrote changes made there)' : ''}`
+            `applied to environment ${p.target_environment_id}: ${t?.inserted ?? 0} added, ${t?.updated ?? 0} changed, ${t?.deleted ?? 0} removed${b.overwrite_prod_changes === true ? ' (overwrote changes made there)' : ''}${outside ? ` — outside the deploy window: ${outside.reason}` : ''}`
           )
           return { data: p }
         },
         (e) => log(req, 'hub-config-promote-refused', id, `${e.code}: ${e.message}`.slice(0, 500))
       )
+    }
+  )
+
+  app.post<{ Params: { id: string } }>(
+    '/config-promotions/:id/check',
+    admin,
+    async (req, reply) => {
+      const id = idParam(req.params.id)
+      if (!id) return refuse(reply, 404, 'NOT_FOUND', 'No such config promotion')
+      return guarded(reply, async () => {
+        const p = await reconcilePromotion(id)
+        await log(req, 'hub-config-promote-check', id, `the target says: ${p.status}`)
+        return { data: p }
+      })
     }
   )
 
@@ -179,6 +211,14 @@ export function hubConfigRoutes(app: FastifyInstance) {
     const id = idParam(req.params.id)
     if (!id) return refuse(reply, 404, 'NOT_FOUND', 'No such config promotion')
     const b = body(req)
+    // An undo writes to the target even inside a freeze: an administrator on their own session.
+    if (req.isAdmin !== true || !ownSession(req))
+      return refuse(
+        reply,
+        403,
+        'UNDO_ADMIN_SESSION_ONLY',
+        'Only a Hub administrator on their own session may undo a config promotion.'
+      )
     return guarded(
       reply,
       async () => {

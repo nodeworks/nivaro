@@ -39,6 +39,9 @@ export type SnapshotTrigger =
   // Taken right after a promotion copied config here: the baseline "Changed here, not from
   // promotion" compares against (services/config-drift).
   | 'promote'
+  // Hub config promotion: the Changed-here baseline with the promoted tables moved forward. Not a
+  // point in time — never listed with the restore points and never restorable (config-restore).
+  | 'hub-baseline'
 
 /** Newest N kept per trigger kind (#2803). Unknown kinds keep the default. */
 export const KEEP_BY_TRIGGER: Record<string, number> = {
@@ -47,7 +50,8 @@ export const KEEP_BY_TRIGGER: Record<string, number> = {
   'pre-migration': 10,
   'pre-deploy': 10,
   'pre-restore': 10,
-  promote: 10
+  promote: 10,
+  'hub-baseline': 5
 }
 const KEEP_DEFAULT = 10
 /** Every kind at its cap, plus slack: the history list's default length. */
@@ -246,6 +250,7 @@ export async function listConfigSnapshots(limit = LIST_LIMIT): Promise<StoredSna
       'bytes',
       'trigger'
     )
+    .where((q) => q.whereNull('trigger').orWhereNot('trigger', 'hub-baseline'))
     .orderBy('id', 'desc')
     .limit(limit + 1)) as Array<
     Omit<StoredSnapshotMeta, 'same_as_previous' | 'taken_at'> & { taken_at: Date }
@@ -293,14 +298,18 @@ export async function loadConfigSnapshot(id: number): Promise<ConfigSnapshot | n
 
 /** The stored snapshot taken at or before `at` (newest such), or the oldest when none is that old. */
 export async function snapshotAtOrBefore(at: Date): Promise<number | null> {
+  const notBaseline = (q: Knex.QueryBuilder) =>
+    q.whereNull('trigger').orWhereNot('trigger', 'hub-baseline')
   const row = (await db('nivaro_config_snapshots')
     .where('taken_at', '<=', at)
+    .where(notBaseline)
     .orderBy('taken_at', 'desc')
     .first('id')) as { id: number } | undefined
   if (row) return row.id
-  const oldest = (await db('nivaro_config_snapshots').orderBy('taken_at', 'asc').first('id')) as
-    | { id: number }
-    | undefined
+  const oldest = (await db('nivaro_config_snapshots')
+    .where(notBaseline)
+    .orderBy('taken_at', 'asc')
+    .first('id')) as { id: number } | undefined
   return oldest?.id ?? null
 }
 

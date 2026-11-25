@@ -21,13 +21,14 @@ import { ConfigPromotionError } from './types.js'
  * answer cap and the time limit are per call (a snapshot or a plan up to 64 MB, two minutes).
  */
 
-export type ConfigCall = 'snapshot' | 'plan' | 'apply' | 'undo'
+export type ConfigCall = 'snapshot' | 'plan' | 'apply' | 'status' | 'undo'
 
 const CODE_RE = /^[A-Z][A-Z0-9_]{0,63}$/
 const LIMITS: Record<ConfigCall, { bytes: number; ms: number }> = {
   snapshot: { bytes: 64 * 1024 * 1024, ms: 120_000 },
   plan: { bytes: 16 * 1024 * 1024, ms: 150_000 },
   apply: { bytes: 4 * 1024 * 1024, ms: 170_000 },
+  status: { bytes: 4 * 1024 * 1024, ms: 30_000 },
   undo: { bytes: 16 * 1024 * 1024, ms: 170_000 }
 }
 

@@ -1,18 +1,19 @@
-import { CONFIG_TABLES } from './config-inventory.js'
-import { RESTORE_EXCLUDED } from './config-restore.js'
+import { SETTINGS_FROM_SOURCE } from './env-refresh/registry.js'
 
 /**
  * Hub config promotion (idea 30): the kinds of configuration an operator promotes from one
  * environment of an app to another, as groups of config tables. Pure; read by the Hub (the plan
- * form) and by the app (which tables a request may name). Every table is a CONFIG table
- * (config-inventory) that a restore may write (not RESTORE_EXCLUDED): the group test pins it.
+ * form) and by the app (which tables a request may name). Every table has a natural key and
+ * reference map (services/hub-link/config-promote-map.ts): rows are matched by name or key and
+ * every reference is rewritten to the target's id, never carried as the source's id.
  *
- * Not offered on purpose:
- *  - the schema registry (nivaro_collections / _fields / _relations): its rows describe database
- *    columns a config copy cannot create — schema moves with the app's release or a blueprint;
- *  - people, grants to people other than owner-group members (User Scopes), personal choices;
- *  - per-environment tables (the environments registry, settings overrides, sign-in providers):
- *    the target's own keep rules refuse them anyway.
+ * Not offered (yet), on purpose:
+ *  - forms / layouts and pipelines: their rows reference roles, steps, people, widgets, PDF
+ *    templates and each other by id inside JSON (visibility rules, owner groups, transition
+ *    actions); matching all of those by name is not built, and a raw id is never carried;
+ *  - version-history tables (flow, payload-template, managed-procedure, workflow and owner-matrix
+ *    versions, payload drafts): history belongs to each environment;
+ *  - the schema registry, people, User Scopes, per-environment tables.
  */
 
 export interface ConfigGroup {
@@ -24,72 +25,45 @@ export interface ConfigGroup {
 
 export const CONFIG_PROMOTION_GROUPS: readonly ConfigGroup[] = [
   {
-    key: 'layouts',
-    label: 'Forms and layouts',
-    hint: 'Record forms, their sections, field placement, templates, linked sections and field rules.',
-    tables: [
-      'nivaro_collection_layouts',
-      'nivaro_layout_field_assignments',
-      'nivaro_layout_templates',
-      'nivaro_layout_section_links',
-      'nivaro_field_groups',
-      'nivaro_field_rules'
-    ]
-  },
-  {
     key: 'flows',
     label: 'Flows',
-    hint: 'Automations and their steps. Step addresses, headers and secrets stay as this environment has them; a flow new here arrives switched off.',
-    // Not nivaro_flow_versions: a version row carries whole steps (options included). The target
-    // writes its own version rows when its flows change, through the normal path.
+    hint: 'Automations and their steps, matched by flow name and step key. Step addresses, headers and secrets, and a webhook’s inbound auth, stay as this environment has them. A flow new here — or one that gains a step needing this environment’s address — arrives switched off.',
     tables: ['nivaro_flows', 'nivaro_flow_operations']
   },
   {
     key: 'payload_templates',
     label: 'Payload templates',
-    hint: 'Partner payload templates, their published versions and drafts. Body secrets never travel.',
-    tables: [
-      'nivaro_payload_templates',
-      'nivaro_payload_template_versions',
-      'nivaro_payload_template_drafts'
-    ]
+    hint: 'Partner payload templates, matched by key; their external API is matched by name. Body secrets never travel; history stays per environment.',
+    tables: ['nivaro_payload_templates']
   },
   {
     key: 'managed_procedures',
     label: 'Managed procedures',
-    hint: 'App-managed stored procedures: the definitions are copied, then each changed one is deployed into this environment’s database.',
-    tables: ['nivaro_managed_procedures', 'nivaro_managed_procedure_versions']
-  },
-  {
-    key: 'pipelines',
-    label: 'Pipelines',
-    hint: 'Workflow templates, steps, moves, bindings, owner dimensions and owner groups (members only when they are active here).',
-    tables: [
-      'nivaro_workflow_templates',
-      'nivaro_workflow_states',
-      'nivaro_workflow_transitions',
-      'nivaro_workflow_bindings',
-      'nivaro_workflow_template_versions',
-      'nivaro_owner_matrix_versions',
-      'nivaro_pipeline_owner_dimensions',
-      'nivaro_pipeline_owner_groups',
-      'nivaro_pipeline_owner_group_users',
-      'nivaro_pipeline_owner_group_teams'
-    ]
+    hint: 'App-managed stored procedures, matched by name: each changed one is saved and deployed through its own writer (a new version here), never copied with another environment’s deploy record.',
+    tables: ['nivaro_managed_procedures']
   },
   {
     key: 'roles',
     label: 'Roles and policies',
-    hint: 'Roles and their permission policies. People and their role assignments never travel.',
+    hint: 'Roles matched by name and their permission policies. People and their role assignments never travel.',
     tables: ['nivaro_roles', 'nivaro_policies']
   },
   {
     key: 'settings',
     label: 'Settings (no secrets)',
-    hint: 'Product settings that are the same everywhere. Where this environment sends mail, its keys, storage, sign-in and switches stay as they are here.',
+    hint: 'Product settings that are the same everywhere and name nothing by id. Mail, keys, storage, sign-in, switches and role choices stay as they are here.',
     tables: ['nivaro_settings']
   }
 ]
+
+/**
+ * nivaro_settings columns a promotion carries: the env-refresh "follows the source" list minus
+ * every column that names roles, widgets, rooms or tools by id (they stay on the target).
+ */
+const SETTINGS_ID_COLUMN = /role|^command_center$|^mcp_tools$|^dashboard_headline$|^chat_general$/
+export const SETTINGS_PROMOTED: readonly string[] = SETTINGS_FROM_SOURCE.filter(
+  (c) => c !== 'updated_at' && !SETTINGS_ID_COLUMN.test(c)
+)
 
 const BY_KEY = new Map(CONFIG_PROMOTION_GROUPS.map((g) => [g.key, g]))
 
@@ -105,14 +79,9 @@ export function tablesForGroups(keys: readonly string[]): string[] {
   return out
 }
 
-/** Every table a promotion may name: the groups' tables (all CONFIG, none excluded). */
+/** Every table a promotion may name. */
 export function promotableTables(): Set<string> {
-  const config = new Set(CONFIG_TABLES)
-  return new Set(
-    CONFIG_PROMOTION_GROUPS.flatMap((g) => g.tables).filter(
-      (t) => config.has(t) && !RESTORE_EXCLUDED[t]
-    )
-  )
+  return new Set(CONFIG_PROMOTION_GROUPS.flatMap((g) => g.tables))
 }
 
 /** The group a table belongs to (for the plan's headings). */

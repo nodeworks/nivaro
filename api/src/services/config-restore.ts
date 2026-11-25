@@ -507,7 +507,30 @@ export async function withRestoreDb<T>(fn: (k: Knex) => Promise<T>): Promise<T> 
   // pool, never the deployment's DB_* connection (that is not this app's database). Nivaro Cloud
   // keeps its old path.
   const tenant = hubTenantDb()
-  if (tenant) return fn(tenant)
+  if (tenant) {
+    // Its own short-lived pool on the app's connection, with the 2-minute request timeout (the
+    // app's request pool keeps the driver default, 15 s on SQL Server — too short for a locked
+    // read of a large table). A connection given as a string falls back to the app's pool.
+    const cfg = (tenant.client as { config?: { client?: unknown; connection?: unknown } })?.config
+    const conn = cfg?.connection
+    if (/mssql/i.test(String(cfg?.client ?? '')) && conn && typeof conn === 'object') {
+      const c = conn as { options?: Record<string, unknown> }
+      const own = knexFactory({
+        client: 'mssql',
+        connection: {
+          ...c,
+          options: { ...(c.options ?? {}), requestTimeout: REQUEST_TIMEOUT_MS }
+        } as Knex.StaticConnectionConfig,
+        pool: { min: 0, max: 4 }
+      })
+      try {
+        return await fn(own)
+      } finally {
+        await own.destroy().catch(() => {})
+      }
+    }
+    return fn(tenant)
+  }
   const base = buildConnection(config.DB_HOST, writePort) as { options?: Record<string, unknown> }
   const k = knexFactory({
     client: config.DB_CLIENT,
@@ -1036,11 +1059,32 @@ export class RestoreError extends Error {
  */
 export type RestoreSource =
   | { kind: 'stored'; id: number }
-  | { kind: 'given'; snapshot: ConfigSnapshot; ref: string; deletes: boolean }
+  | {
+      kind: 'given'
+      snapshot: ConfigSnapshot
+      ref: string
+      deletes: boolean
+      /** Only these rows of each table (a Hub promotion's undo: exactly the rows it wrote). */
+      keys?: Record<string, string[]> | null
+    }
+
+/** Context a Hub promotion's apply writes its own record from, inside the same transaction. */
+export interface GivenWriteContext {
+  /** The operations written, per table. */
+  plans: TablePlan[]
+  /** The rows as they were before the write (locked). */
+  before: ConfigSnapshot['tables']
+  /** The rows as they are after the write, read back inside the transaction. */
+  after: ConfigSnapshot['tables']
+}
 
 const sourceRef = (s: RestoreSource) =>
   s.kind === 'stored' ? `snapshot:${s.id}` : `given:${s.ref}`
 const sourceDeletes = (s: RestoreSource) => (s.kind === 'stored' ? true : s.deletes)
+const sourceKeys = (s: RestoreSource, table: string): Set<string> | null => {
+  if (s.kind !== 'given' || !s.keys) return null
+  return new Set(s.keys[table] ?? [])
+}
 
 async function computeWith(
   k: Knex,
@@ -1059,6 +1103,9 @@ async function computeWith(
     target = src.snapshot
   }
   if (!target) throw new RestoreError(404, 'Snapshot not found', 'NOT_FOUND')
+  // A Changed-here baseline a Hub promotion moved (trigger hub-baseline) is not a point in time.
+  if (src.kind === 'stored' && target.restore_point?.trigger === 'hub-baseline')
+    throw new RestoreError(400, 'That record is not a restore point', 'NOT_A_RESTORE_POINT')
   if (target.format !== 1)
     throw new RestoreError(400, `Unsupported snapshot format ${target.format}`, 'FORMAT')
 
@@ -1107,6 +1154,7 @@ async function computeWith(
     plans.push(
       planTable(table, target.tables[table], live.tables[table], columns.get(table) ?? new Map(), {
         deletes,
+        keys: sourceKeys(src, table),
         isActiveUser
       })
     )
@@ -1181,11 +1229,23 @@ export async function previewRestore(
  */
 export async function previewGivenSnapshot(
   snapshot: ConfigSnapshot,
-  opts: { ref: string; deletes: boolean; tables?: string[] | null; allowCascade?: boolean }
+  opts: {
+    ref: string
+    deletes: boolean
+    tables?: string[] | null
+    allowCascade?: boolean
+    keys?: Record<string, string[]> | null
+  }
 ): Promise<RestorePreview> {
   if (!restoreEngineSupported())
     throw new RestoreError(501, 'This needs a SQL Server database.', 'NOT_SUPPORTED_ON_DATABASE')
-  const src: RestoreSource = { kind: 'given', snapshot, ref: opts.ref, deletes: opts.deletes }
+  const src: RestoreSource = {
+    kind: 'given',
+    snapshot,
+    ref: opts.ref,
+    deletes: opts.deletes,
+    keys: opts.keys ?? null
+  }
   return withRestoreDb(
     async (k) => (await computeWith(k, src, opts.tables, opts.allowCascade === true)).preview
   )
@@ -1202,6 +1262,8 @@ export async function computeRestorePlan(
 }
 
 export interface RestoreResult {
+  /** What a Hub promotion's inTransaction hook answered (written in the same transaction). */
+  extra?: unknown
   snapshot_id: number
   /** The restore point stored just before the write — restore it to undo this. */
   pre_restore_id: number | null
@@ -1236,18 +1298,31 @@ export async function applyRestore(id: number, opts: RestoreApplyOpts): Promise<
  */
 export async function applyGivenSnapshot(
   snapshot: ConfigSnapshot,
-  opts: RestoreApplyOpts & { ref: string; deletes: boolean; note: string; activityNote: string }
+  opts: RestoreApplyOpts & {
+    ref: string
+    deletes: boolean
+    note: string
+    activityNote: string
+    keys?: Record<string, string[]> | null
+    /** Runs inside the write's transaction, after the rows are written (its answer = `extra`). */
+    inTransaction?: (trx: Knex, ctx: GivenWriteContext) => Promise<unknown>
+  }
 ): Promise<RestoreResult> {
-  return applyPlanned({ kind: 'given', snapshot, ref: opts.ref, deletes: opts.deletes }, opts, {
-    note: opts.note,
-    activity: opts.activityNote
-  })
+  return applyPlanned(
+    { kind: 'given', snapshot, ref: opts.ref, deletes: opts.deletes, keys: opts.keys ?? null },
+    opts,
+    { note: opts.note, activity: opts.activityNote, inTransaction: opts.inTransaction }
+  )
 }
 
 async function applyPlanned(
   src: RestoreSource,
   opts: RestoreApplyOpts,
-  given: { note: string; activity: string } | null
+  given: {
+    note: string
+    activity: string
+    inTransaction?: (trx: Knex, ctx: GivenWriteContext) => Promise<unknown>
+  } | null
 ): Promise<RestoreResult> {
   if (!restoreEngineSupported())
     throw new RestoreError(501, 'This needs a SQL Server database.', 'NOT_SUPPORTED_ON_DATABASE')
@@ -1291,7 +1366,8 @@ async function applyPlanned(
         )
       }
       const touched = plan.plans.filter((p) => p.ops.length > 0).map((p) => p.table)
-      if (touched.length === 0) return { applied: [] as AppliedCounts[], pre: null, touched }
+      if (touched.length === 0)
+        return { applied: [] as AppliedCounts[], pre: null, touched, extra: undefined as unknown }
       const hashTables = plan.plans.map((p) => p.table)
       const when = new Date(plan.target.generated_at)
       const note =
@@ -1314,6 +1390,7 @@ async function applyPlanned(
                 plan.columns.get(t) ?? new Map(),
                 {
                   deletes,
+                  keys: sourceKeys(src, t),
                   isActiveUser: (u) => active.has(u.toUpperCase())
                 }
               )
@@ -1348,7 +1425,19 @@ async function applyPlanned(
               plan.columns,
               plan.fks
             )
-            return { applied, pre, touched }
+            let extra: unknown
+            if (given?.inTransaction) {
+              const after = await buildConfigSnapshot(
+                { tables: touched, version: NIVARO_VERSION, environment: config.NODE_ENV },
+                trx as unknown as Parameters<typeof buildConfigSnapshot>[1]
+              )
+              extra = await given.inTransaction(trx as unknown as Knex, {
+                plans,
+                before: locked.tables,
+                after: after.tables
+              })
+            }
+            return { applied, pre, touched, extra }
           }
         )
       } catch (err) {
@@ -1404,7 +1493,13 @@ async function applyPlanned(
         : `${out.applied.length} tables restored to snapshot #${id} (${totals.inserted} inserted, ${totals.updated} updated, ${totals.deleted} deleted); undo = restore #${out.pre.id}`,
       req: opts.req
     })
-    return { snapshot_id: id, pre_restore_id: out.pre.id, tables: out.applied, totals }
+    return {
+      snapshot_id: id,
+      pre_restore_id: out.pre.id,
+      tables: out.applied,
+      totals,
+      ...(out.extra !== undefined ? { extra: out.extra } : {})
+    }
   } finally {
     restoring.value = false
   }

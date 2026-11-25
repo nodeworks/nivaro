@@ -174,7 +174,8 @@ export async function resolveBaseline(settings: DriftSettings): Promise<DriftBas
   }
   if (!row) {
     row = (await db('nivaro_config_snapshots')
-      .where({ trigger: 'promote' })
+      // A Hub config promotion moves the baseline forward for the tables it wrote (hub-baseline).
+      .whereIn('trigger', ['promote', 'hub-baseline'])
       .orderBy('id', 'desc')
       .first(cols)) as Row | undefined
   }

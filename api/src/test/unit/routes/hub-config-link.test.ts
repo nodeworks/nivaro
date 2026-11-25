@@ -42,6 +42,10 @@ vi.mock('../../../services/hub-link/config-promote.js', async () => {
         items: [{ id: 'x' }]
       })
     }),
+    promotionStatus: vi.fn(async (b: unknown) => {
+      note(b)
+      return { state: 'not_applied', answer: null, newest: false }
+    }),
     undoPromotion: vi.fn(async (b: unknown) => {
       note(b)
       throw new Error('boom: SELECT * FROM secret')
@@ -66,11 +70,12 @@ const A: TenantRecord = {
   poolMax: 1,
   hostnames: ['a.example.com']
 }
+const B: TenantRecord = { ...A, id: 'app-b-e2', slug: 'app-b', status: 'suspended' }
 const registry: TenantRegistry = {
   source: 'hub',
   resolve: async () => null,
   listActive: async () => [A],
-  byId: async (id) => (id === A.id ? A : null),
+  byId: async (id) => (id === A.id ? A : id === B.id ? B : null),
   status: () => ({ source: 'hub', count: 1, loadedAt: null, stale: false, lastError: null })
 }
 const saved = { ...process.env }
@@ -103,7 +108,7 @@ describe('dedicated app (/api/hub-link/config/*)', () => {
 
   it('every call needs the hub token', async () => {
     const a = await build()
-    for (const name of ['snapshot', 'plan', 'apply', 'undo']) {
+    for (const name of ['snapshot', 'plan', 'apply', 'status', 'undo']) {
       const r = await a.inject({ method: 'POST', url: `/api/hub-link/config/${name}`, payload: {} })
       expect(r.statusCode, name).toBe(401)
       const odd = await a.inject({
@@ -209,6 +214,15 @@ describe('shared deployment (/api/hub-deployment/config/apps/:id/*)', () => {
       payload: { tables: ['nivaro_roles'] }
     })
     expect(ok.statusCode).toBe(200)
+    expect(seen.tenants).toEqual([A.id])
+    // A suspended (or retired) app takes no config writes.
+    const off = await a.inject({
+      method: 'POST',
+      url: `/api/hub-deployment/config/apps/${B.id}/apply`,
+      headers: auth,
+      payload: {}
+    })
+    expect(off.statusCode).toBe(404)
     expect(seen.tenants).toEqual([A.id])
   })
 })
