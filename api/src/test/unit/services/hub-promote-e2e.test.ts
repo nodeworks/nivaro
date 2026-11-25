@@ -215,6 +215,8 @@ const driverConfig = (project: string) =>
 beforeAll(async () => {
   await m542.up(db)
   await m543.up(db)
+  // Gap `create` (L4): a promotion asks for an open creation of the environment.
+  await (await import('../../../db/migrations/545_hub_creations.js')).up(db)
 })
 
 afterAll(async () => {

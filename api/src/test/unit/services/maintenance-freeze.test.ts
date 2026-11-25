@@ -111,6 +111,16 @@ describe('maintenanceExemptPath', () => {
     ])
       expect(maintenanceExemptPath(p), p).toBe(false)
     expect(maintenanceExemptPath('/api/hub-link/x', '/api/hub-link/first-admin')).toBe(false)
+    // Hub enhancement 24: the template install writes schema — frozen the same way.
+    for (const p of [
+      '/api/hub-link/template',
+      '/api/hub-link/Template/',
+      '/api/hub-link//template',
+      '/api/hub-link/%74emplate',
+      '/api/hub-link/template/abc'
+    ])
+      expect(maintenanceExemptPath(p), p).toBe(false)
+    expect(maintenanceExemptPath('/api/hub-link/x', '/api/hub-link/template')).toBe(false)
     for (const p of ['/api/hub-link/maintenance', '/api/hub-link/retire', '/api/hub-transfer/x'])
       expect(maintenanceExemptPath(p), p).toBe(true)
   })

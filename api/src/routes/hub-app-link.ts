@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { failedAuthLimiter, windowLimiter } from '../lib/auth-fail-limiter.js'
 import { noteClientCredentialAccepted } from '../lib/client-credential.js'
@@ -17,8 +18,12 @@ import { identityKeys, pruneSignins, recordSignin, switcherFor } from '../servic
  * Mounted only with HUB=on (never in cloud mode). Every request needs `Authorization: Bearer
  * <the environment's hub token>` (HUB_TOKEN on the app): found through its lookup hash and
  * confirmed timing-safe against the sealed token; an unknown, stale or shared token names no
- * environment (401 HUB_LINK_REFUSED, 429 after 20 failures a minute from one address, like
- * routes/hub-link.ts). A token whose environment is archived or suspended is refused too (401,
+ * environment (401 HUB_LINK_REFUSED). The failure brake counts per PRESENTED token (20 a minute,
+ * then that token answers 429 without a lookup) and per address only with a generous ceiling
+ * (FAILS_PER_ADDRESS a minute, or 20 calls with no bearer): every app of a Hub shared deployment
+ * calls from the same address, each with its own token, so one app's stale token (rotated, list
+ * not re-read yet) never locks the other apps out (0.3.215, review L3). Tokens are 32+ random
+ * characters, so the ceiling still stops any guessing. A token whose environment is archived or suspended is refused too (401,
  * not counted: that app is not guessing). The environment is ONLY the one the token belongs to:
  * an app reports sign-ins to its own environment and asks the switcher about its own people.
  * The switcher answers only about a person the Hub itself recorded there (services/hub/signins.ts,
@@ -36,6 +41,10 @@ import { identityKeys, pruneSignins, recordSignin, switcherFor } from '../servic
  */
 
 const HUB_LINK_REFUSED = 'HUB_LINK_REFUSED'
+/** Failed bearers a minute from one address before it is refused (many apps share one). */
+export const FAILS_PER_ADDRESS = 300
+/** Failed tries a minute of one presented token (or of calls with no bearer, per address). */
+const FAILS_PER_TOKEN = 20
 const BODY_LIMIT = 4096
 const PER_ENV_PER_MINUTE = 1200
 const REPORTS_PER_ENV_PER_MINUTE = 120
@@ -82,15 +91,21 @@ export function newIdentityCounterKey(envId: number, now = new Date()): string {
 export async function hubAppLinkRoutes(app: FastifyInstance) {
   if (!hubModeEnabled()) return
 
-  const authFails = failedAuthLimiter()
+  const addressFails = failedAuthLimiter(FAILS_PER_ADDRESS)
+  const tokenFails = failedAuthLimiter(FAILS_PER_TOKEN)
+  /** The brake key of a presented bearer (a short hash, never the token), or of its absence. */
+  const failKey = (bearer: string | null, ip: string) =>
+    bearer ? `t:${createHash('sha256').update(bearer).digest('hex').slice(0, 32)}` : `none:${ip}`
   const perEnv = windowLimiter(PER_ENV_PER_MINUTE)
   const reportsPerEnv = windowLimiter(REPORTS_PER_ENV_PER_MINUTE)
   const linked = new WeakMap<FastifyRequest, Linked>()
 
   app.addHook('onRequest', async (req, reply) => {
     reply.header('Cache-Control', 'no-store')
-    if (authFails.blocked(req.ip)) return refuse(reply, 429, 'Too many attempts')
     const bearer = bearerOf(req)
+    const key = failKey(bearer, req.ip)
+    if (addressFails.blocked(req.ip) || tokenFails.blocked(key))
+      return refuse(reply, 429, 'Too many attempts')
     let env: Awaited<ReturnType<typeof environmentForLinkToken>> = null
     if (bearer) {
       try {
@@ -102,7 +117,8 @@ export async function hubAppLinkRoutes(app: FastifyInstance) {
       }
     }
     if (!env) {
-      if (authFails.fail(req.ip))
+      const first = tokenFails.fail(key)
+      if (addressFails.fail(req.ip) || first)
         req.log.warn({ ip: req.ip }, 'hub app link: wrong or missing hub token')
       return refuse(reply, 401, 'Unauthorized')
     }

@@ -176,12 +176,14 @@ function clients() {
     schema: 'ok' as 'ok' | 'failed' | 'pending',
     keyFp: null as string | null,
     pullStates: ['running', 'done'] as Array<'running' | 'done' | 'failed'>,
-    dbIdentity: 'pg|pg1|5432|acme' as string | null
+    dbIdentity: 'pg|pg1|5432|acme' as string | null,
+    instanceKey: 'pool-x' as string | undefined
   }
   const make = (shared: { id: number }) => ({
     status: vi.fn(async () => {
       calls.push([shared.id, 'status'])
       return {
+        instance_key: conf.instanceKey,
         apps: [
           {
             id: TENANT,
@@ -216,7 +218,15 @@ function clients() {
     pullFiles: vi.fn(
       async (
         _tid: string,
-        req: { source: string; ticket: string; mode: string; objects?: boolean }
+        req: {
+          source: string
+          ticket: string
+          mode: string
+          objects?: boolean
+          env_objects?: boolean
+          replays?: boolean
+          source_scope?: string
+        }
       ) => {
         calls.push([
           shared.id,
@@ -225,7 +235,10 @@ function clients() {
             source: req.source,
             mode: req.mode,
             ticket: req.ticket === TICKET,
-            ...(req.objects ? { objects: true } : {})
+            ...(req.objects ? { objects: true } : {}),
+            ...(req.env_objects ? { env_objects: true } : {}),
+            ...(req.replays ? { replays: true } : {}),
+            ...(req.source_scope ? { source_scope: req.source_scope } : {})
           }
         ])
         return { run_id: 'run-1' }
@@ -378,6 +391,60 @@ describe('pullFiles', () => {
     })
     await ops.pullFiles('full')
     expect(c.calls.find((x) => x[1] === 'pullFiles')?.[2]).toMatchObject({ objects: true })
+    // A plan before 0.3.215: no env objects, no replays (the source has no /replays route).
+    expect(c.calls.find((x) => x[1] === 'pullFiles')?.[2]).not.toHaveProperty('env_objects')
+    expect(c.calls.find((x) => x[1] === 'pullFiles')?.[2]).not.toHaveProperty('replays')
+  })
+
+  // 0.3.215 (storage-floor.ts): a move at that version also copies env S3/Azure objects and the
+  // cold objects of session replays.
+  it('a move at 0.3.215 asks the pull for env objects and session replays too', async () => {
+    const w = await setup(true)
+    TENANT = w.tenant
+    const c = clients()
+    const ops = defaultMoveOps(
+      w.move,
+      { ...w.plan, version: '0.3.215' },
+      {
+        client: c.factory,
+        sleep,
+        now
+      }
+    )
+    await ops.pullFiles('full')
+    // The source scope is the Hub's own: a shared source → its tenant id (never what it sends).
+    expect(c.calls.find((x) => x[1] === 'pullFiles')?.[2]).toMatchObject({
+      env_objects: true,
+      replays: true,
+      source_scope: w.tenant
+    })
+  })
+
+  it('a dedicated source at 0.3.215: the source scope is the bucket root', async () => {
+    const w = await setup(false)
+    TENANT = w.tenant
+    await db('nivaro_hub_environments')
+      .where({ id: w.envId })
+      .update({
+        hub_token: (await import('../../../services/hub/secrets.js')).sealSecret('t'.repeat(40))
+      })
+    const c = clients()
+    const ops = defaultMoveOps(
+      w.move,
+      { ...w.plan, version: '0.3.215' },
+      {
+        client: c.factory,
+        link: () =>
+          ({
+            fileTicket: async () => ({ ticket: TICKET, expires_at: '2026-11-23T00:00:00Z' }),
+            revokeTicket: async () => ({ revoked: true })
+          }) as never,
+        sleep,
+        now
+      }
+    )
+    await ops.pullFiles('full')
+    expect(c.calls.find((x) => x[1] === 'pullFiles')?.[2]).toMatchObject({ source_scope: 'root' })
   })
 
   // R2-M-6: a ticket a dead run could not revoke is revoked by the next run (heal + resume or
@@ -456,6 +523,55 @@ describe('maintenance and retire', () => {
     expect(sleep).toHaveBeenCalledWith(16_000)
     await ops.sourceMaintenance(false)
     expect(link.maintenance).toHaveBeenLastCalledWith(false, w.move.id)
+  })
+
+  it('hub gap watch: a carrying plan passes the target instance and logs what was carried', async () => {
+    const w = await setup(false)
+    TENANT = w.tenant
+    await db('nivaro_hub_environments')
+      .where({ id: w.envId })
+      .update({
+        hub_token: (await import('../../../services/hub/secrets.js')).sealSecret('t'.repeat(40))
+      })
+    const link = {
+      maintenance: vi.fn(async () => ({
+        instance_row: { result: 'filled', keys: ['cache'], differed: ['huddle'] },
+        env_mail: null
+      }))
+    }
+    const plan = {
+      ...w.plan,
+      warnings: [
+        ...w.plan.warnings,
+        { code: 'INSTANCE_SETTINGS_CARRIED' as const, text: 'carried' },
+        { code: 'ENV_SMTP_KEPT' as const, text: 'kept' }
+      ]
+    }
+    const lines: string[] = []
+    const c = clients()
+    const ops = defaultMoveOps(w.move, plan, {
+      client: c.factory,
+      link: () => link as never,
+      sleep,
+      now,
+      log: (l) => lines.push(l)
+    })
+    await ops.sourceMaintenance(true)
+    expect(link.maintenance).toHaveBeenCalledWith(true, w.move.id, undefined, {
+      targetInstance: 'pool-x',
+      keepEnvMail: true
+    })
+    // the source did not say it kept the mail: ENV_SMTP goes back in the run log
+    expect(lines.join('\n')).toMatch(/ENV_SMTP: the source did not keep/)
+    expect(lines.join('\n')).toMatch(/already held with other values.*huddle/)
+    await ops.sourceMaintenance(false)
+    expect(link.maintenance).toHaveBeenLastCalledWith(false, w.move.id)
+    // a target that names no instance stops the step before the source is touched
+    c.conf.instanceKey = undefined
+    link.maintenance.mockClear()
+    const err = await ops.sourceMaintenance(true).catch((e) => e)
+    expect(err?.code).toBe('TARGET_INSTANCE_UNKNOWN')
+    expect(link.maintenance).not.toHaveBeenCalled()
   })
 
   it('C-2: a dedicated source is reached on its own address after the name points at the target (maintenance on, then rollback off)', async () => {

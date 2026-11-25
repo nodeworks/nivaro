@@ -172,7 +172,9 @@ describe('POST /api/mcp', () => {
       url: '/api/mcp/capabilities',
       headers: { authorization: 'Bearer chat-token' }
     })
-    expect(res.json()).toEqual({ data: { admin_tools: false, chat: 'post', update_preview: true } })
+    expect(res.json()).toEqual({
+      data: { admin_tools: false, chat: 'post', update_preview: true, hub: null }
+    })
   })
 
   it('stamps a tool call with its connection, tool, outcome and bytes', async () => {

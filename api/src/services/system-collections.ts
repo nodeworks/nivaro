@@ -55,7 +55,15 @@ const SYSTEM_SENSITIVE: Record<string, readonly string[]> = {
   // Nivaro Hub: sealed GitLab driver tokens and environment hub tokens. The Hub's own routes
   // answer them masked; nothing else ever reads them.
   nivaro_hub_drivers: ['secret'],
-  nivaro_hub_environments: ['hub_token', 'hub_token_lookup', 'encryption_key', 'encryption_key_fp'],
+  nivaro_hub_environments: [
+    'hub_token',
+    'hub_token_lookup',
+    'hub_token_prev',
+    'hub_token_prev_lookup',
+    'hub_token_prev_for',
+    'encryption_key',
+    'encryption_key_fp'
+  ],
   nivaro_hub_stack_settings: ['secrets'],
   // Hub phase 6 (552): a shared deployment's sealed token (current and previous), their lookups
   // and its sealed secrets object.

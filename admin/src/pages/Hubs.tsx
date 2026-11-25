@@ -172,8 +172,15 @@ const SCREENS: Record<string, Screens> = {
     drivers: lazy(() => import('@/pages/hub/HubDrivers')),
     signin: lazy(() => import('@/pages/hub/signin/HubSignin')),
     targets: lazy(() => import('@/pages/hub/create/HubTargets')),
+    templates: lazy(() => import('@/pages/hub/templates/HubTemplates')),
     databases: lazy(() => import('@/pages/hub/databases/HubDatabases')),
-    shared: lazy(() => import('@/pages/hub/shared/HubShared'))
+    shared: lazy(() => import('@/pages/hub/shared/HubShared')),
+    capacity: lazy(() => import('@/pages/hub/capacity/HubCapacity')),
+    releases: lazy(() => import('@/pages/hub/releases/HubReleases')),
+    issues: lazy(() => import('@/pages/hub/ops/HubIssues')),
+    storage: lazy(() => import('@/pages/hub/ops/HubStorage')),
+    secrets: lazy(() => import('@/pages/hub/ops/HubSecrets')),
+    data: lazy(() => import('@/pages/hub/data/HubData'))
   }
 }
 

@@ -72,6 +72,7 @@ import {
   usePlacement,
   useSharedList
 } from './move/move-api'
+import { movePrefill } from './move/move-prefill'
 import { HubAppSigninCard } from './signin/HubEnvSigninPanel'
 
 /**
@@ -412,7 +413,8 @@ function useEnvRow(app: HubAppFull, env: HubEnvironment, isAdmin: boolean) {
   const lastMove = newestMove(moves.data)
   const moveOpen = !!lastMove && isOpenMove(lastMove.status)
   const badge = moveBadge(lastMove)
-  const [moving, setMoving] = useState(false)
+  // Opened from the Capacity tab's move advisor (`?move=<envId>`): the panel starts open.
+  const [moving, setMoving] = useState(() => isAdmin && movePrefill(env.id).open)
   // A start or a stack-placement request is out in the move panel: the row keeps it mounted.
   const [moveBusy, setMoveBusy] = useState(false)
   const [placing, setPlacing] = useState(false)

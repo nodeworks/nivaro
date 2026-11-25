@@ -236,6 +236,42 @@ async function checkUrl(rawUrl: string | URL): Promise<CheckedUrl> {
 }
 
 /**
+ * For a dial that is not HTTP (the huddle TURN/STUN probe): resolves `host` ONCE and checks every
+ * address it resolves to as checkUrl does (private, loopback, link-local and reserved refused,
+ * unless SSRF_ALLOW_HOSTS names the host or the address), and answers the one address to connect
+ * to. The caller connects to exactly that address, so a DNS answer that changes later cannot
+ * reach a private host. `host` must already be a plain name or an IP literal (one parser read it).
+ */
+export async function resolveCheckedHost(host: string): Promise<Pin> {
+  const hostname = host
+    .toLowerCase()
+    .replace(/^\[|]$/g, '')
+    .replace(/\.$/, '')
+  if (!hostname) throw new Error('Invalid host')
+  const allowed = hostAllowed(hostname)
+  const literal = isIP(hostname)
+  if (literal) {
+    if (!allowed && isBlockedAddress(hostname) && !addressAllowed(hostname))
+      throw new Error(PRIVATE_MESSAGE)
+    return { address: hostname, family: literal === 6 ? 6 : 4 }
+  }
+  if (!allowed && BLOCKED_NAME_RE.test(hostname)) throw new Error(PRIVATE_MESSAGE)
+  let addresses: Array<{ address: string; family: number }>
+  try {
+    addresses = await dns.promises.lookup(hostname, { all: true, family: 0 })
+  } catch {
+    throw new Error('Hostname could not be resolved')
+  }
+  if (addresses.length === 0) throw new Error('Hostname could not be resolved')
+  if (!allowed)
+    for (const { address } of addresses)
+      if (isBlockedAddress(address) && !addressAllowed(address))
+        throw new Error(RESOLVES_PRIVATE_MESSAGE)
+  const chosen = addresses.find((a) => a.family === 4) ?? addresses[0]
+  return { address: chosen.address, family: chosen.family === 6 ? 6 : 4 }
+}
+
+/**
  * Throws if the URL is non-http(s), targets a private/loopback/reserved host, or resolves to a
  * private/reserved address. Callers that then `fetch()` themselves are still open to DNS
  * rebinding between this check and their connect — prefer `safeFetch`.

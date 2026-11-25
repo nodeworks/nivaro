@@ -369,14 +369,19 @@ export async function drainEveryAppImports(app: FastifyInstance): Promise<AppFan
   if (passing) return null
   passing = true
   try {
-    return await forEachApp(async (t) => {
-      // The Hub is moving or updating it: maintenance. Any other status (provisioning, suspended)
-      // is an app not ready to run anything.
-      if (t.status === 'maintenance') return 'maintenance'
-      if (t.status !== 'active' || !(await importAppReady(app, t))) return 'not_ready'
-      await runInBackgroundPool(() => drainImportsTick(app))
-      return 'ran'
-    })
+    return await forEachApp(
+      async (t) => {
+        // The Hub is moving or updating it: maintenance. Any other status (provisioning, suspended)
+        // is an app not ready to run anything.
+        if (t.status === 'maintenance') return 'maintenance'
+        if (t.status !== 'active' || !(await importAppReady(app, t))) return 'not_ready'
+        await runInBackgroundPool(() => drainImportsTick(app))
+        return 'ran'
+      },
+      // Hub capacity: drains take no job slot (their own per-app queue), so a long one never
+      // starves the app's scheduled jobs.
+      { slots: false }
+    )
   } catch (err) {
     app.log.warn({ err }, 'staged-import worker: per-app pass failed')
     return null

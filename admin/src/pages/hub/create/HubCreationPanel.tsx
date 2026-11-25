@@ -10,6 +10,7 @@ import { CheckResult, DbaChecklist, DbConnectionForm } from '../databases/Databa
 import { hubKeys } from '../hub-api'
 import { CopyButton, dangerArmed, dangerGhost, ghostButton, SectionCard } from '../hub-parts'
 import {
+  type CreationKind,
   type CreationStepState,
   type CreationView,
   cancelCreation,
@@ -23,10 +24,10 @@ import {
   fetchCreation,
   noteWords,
   retryCreation,
-  STEP_LABELS,
   STEP_ORDER,
   STEP_STATE_WORDS,
   serverTlsWords,
+  stepLabel,
   WAIT_WORDS
 } from './create-api'
 
@@ -192,6 +193,7 @@ function CreationBody({
         />
         <StepTrack
           steps={v.steps}
+          kind={v.target?.kind}
           stopped={['failed', 'interrupted', 'cancelled'].includes(v.status)}
         />
 
@@ -261,9 +263,12 @@ function StepIcon({ state }: { state: CreationStepState['status'] }) {
 
 export function StepTrack({
   steps,
+  kind,
   stopped
 }: {
   steps: CreationStepState[]
+  /** Docker and shared creations walk their own steps; the server sends them in order. */
+  kind?: CreationKind
   /** The run is not going (failed, interrupted, cancelled): a step left 'running' shows as stopped. */
   stopped?: boolean
 }) {
@@ -273,7 +278,7 @@ export function StepTrack({
       aria-label='Steps'
       className='m-0 grid list-none grid-cols-1 gap-2 p-0 sm:grid-cols-2 xl:grid-cols-4'
     >
-      {STEP_ORDER.map((key, i) => {
+      {(steps.length ? steps.map((s) => s.key) : STEP_ORDER).map((key, i) => {
         const stored = byKey.get(key) ?? { key, status: 'pending' as const, at: null, note: null }
         const s =
           stopped && stored.status === 'running'
@@ -282,7 +287,7 @@ export function StepTrack({
         return (
           <li
             key={key}
-            aria-label={`${STEP_LABELS[key]}: ${STEP_STATE_WORDS[s.status]}`}
+            aria-label={`${stepLabel(key, kind)}: ${STEP_STATE_WORDS[s.status]}`}
             className={cn(
               'min-w-0 rounded-md border px-2.5 py-2',
               s.status === 'failed'
@@ -297,7 +302,7 @@ export function StepTrack({
                 <StepIcon state={s.status} />
               </span>
               <span className='min-w-0 truncate text-[12px] font-medium text-slate-800 dark:text-foreground'>
-                {i + 1}. {STEP_LABELS[key]}
+                {i + 1}. {stepLabel(key, kind)}
               </span>
             </div>
             {s.note && (

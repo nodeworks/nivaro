@@ -59,6 +59,8 @@ const { defaultSharedLock, sharedLock } = await import('../../../services/hub/pr
 const { getPlacement } = await import('../../../services/hub/drivers.js')
 const { memoryPromoteLock, PromotionError } = await import('../../../services/hub/promote-lock.js')
 const { sealSecret } = await import('../../../services/hub/secrets.js')
+const { openSecret } = await import('../../../services/hub/secrets.js')
+const { environmentForLinkToken } = await import('../../../services/hub/link-token.js')
 
 const HUB_KEY = 'e'.repeat(64)
 const STACK_KEY = 'cd'.repeat(32)
@@ -286,6 +288,12 @@ describe('placeOnShared — the happy path', () => {
     expect(fake.calls.firstAdmin).toEqual([[tenant, ADMIN]])
     // Nothing the run logged holds the key.
     expect(run.lines.join('\n')).not.toContain(key as string)
+    // 0.3.215: once it serves, the environment has its own hub token (the app's sign-in reports
+    // and switcher on shared), sealed with its lookup so the app link finds it.
+    const tok = openSecret(env.hub_token)
+    expect(tok).toMatch(/^[0-9a-f]{64}$/)
+    expect((await environmentForLinkToken(tok as string))?.environment_id).toBe(envId)
+    expect(run.lines.join('\n')).not.toContain(tok as string)
   })
 
   it('keeps a Docker stack-settings key, copied into the entry (a shared env reads its entry only)', async () => {
@@ -480,10 +488,26 @@ describe('placeOnShared — refusals (nothing written)', () => {
     await expectRefused(envId, { database_id: await newDb() }, 'EXTENSION_NOT_ALLOWED')
   })
 
-  it('SIGNIN_VIA_HUB: the app signs in through the Hub', async () => {
+  it('SIGNIN_VIA_HUB: the app signs in through the Hub and the deployment runs before 0.3.215', async () => {
     const app = await newApp({ signin_mode: 'hub' })
     const envId = await newEnv(app.id)
     await expectRefused(envId, { database_id: await newDb() }, 'SIGNIN_VIA_HUB')
+  })
+
+  it('an app on Hub sign-in is placed on a deployment at 0.3.215 or later', async () => {
+    await db('nivaro_hub_shared_deployments')
+      .where({ id: sharedId })
+      .update({ version_pin: '0.3.215' })
+    try {
+      const app = await newApp({ signin_mode: 'hub' })
+      const envId = await newEnv(app.id)
+      // Judged past the sign-in check: the next refusal is a later one (no such database).
+      await expectRefused(envId, { database_id: 99999 }, 'NOT_FOUND', 404)
+    } finally {
+      await db('nivaro_hub_shared_deployments')
+        .where({ id: sharedId })
+        .update({ version_pin: '0.3.210' })
+    }
   })
 
   it('POOL_TOO_SMALL under 2, BAD_POOL over 20, POOL_BUDGET past the budget', async () => {
@@ -1409,5 +1433,85 @@ describe('re-review FW1-M-3: the place re-checks extensions under the deployment
         .where({ id: sharedId })
         .update({ extensions: JSON.stringify(['reports']) })
     }
+  })
+})
+
+describe('gap create (review L6): placeForCreation, the creation place step', () => {
+  async function creating() {
+    const app = await newApp()
+    const envId = await newEnv(app.id, { status: 'provisioning' })
+    // The creation's own open row: placeForCreation is that creation, so it is no refusal.
+    await db('nivaro_hub_creations').insert({
+      app_id: app.id,
+      environment_id: envId,
+      status: 'running',
+      steps: '[]',
+      version: '0.3.210',
+      first_admin: '{}'
+    })
+    TENANTS = [Store.tenantIdFor(app, { id: envId })]
+    return { app, envId, dbId: await newDb() }
+  }
+
+  it('places inline under the caller lock, never releasing it; a second call answers already', async () => {
+    const { envId, dbId } = await creating()
+    const lock = memoryPromoteLock
+    const token = (await lock.take(envId, 'creation')) as string
+    const fake = fakeClient()
+    const lines: string[] = []
+    const input = { shared_id: sharedId, database_id: dbId, first_admin: ADMIN }
+    const out = await Place.placeForCreation(envId, input, 'admin-1', {
+      lock,
+      token,
+      log: (l) => lines.push(l),
+      deps: { client: fake.factory, sleep, now }
+    })
+    expect(out).toEqual({ already: false })
+    const env = await db('nivaro_hub_environments').where({ id: envId }).first()
+    expect(env.status).toBe('active')
+    expect(fake.calls.firstAdmin).toHaveLength(1)
+    expect(lines.join('\n')).toMatch(/1\. placed on shared-one/)
+    // The lock is still the caller's.
+    expect(await lock.renew(envId, token)).toBe(true)
+    // Done already: nothing placed again.
+    const again = await Place.placeForCreation(envId, input, 'admin-1', {
+      lock,
+      token,
+      log: () => undefined,
+      deps: { client: fake.factory, sleep, now }
+    })
+    expect(again).toEqual({ already: true })
+    expect(fake.calls.firstAdmin).toHaveLength(1)
+  })
+
+  it('a failed run throws its code (lock kept); a retry places again with the kept app key', async () => {
+    const { envId, dbId } = await creating()
+    const lock = memoryPromoteLock
+    const token = (await lock.take(envId, 'creation')) as string
+    let schema: { state: string; error: string | null } = {
+      state: 'failed',
+      error: 'migration 512 failed'
+    }
+    const fake = fakeClient({ schema: () => schema })
+    const input = { shared_id: sharedId, database_id: dbId, first_admin: ADMIN }
+    const o = { lock, token, log: () => undefined, deps: { client: fake.factory, sleep, now } }
+    const err = await refusal(Place.placeForCreation(envId, input, 'admin-1', o))
+    expect(err).toBeInstanceOf(Place.PlaceSharedError)
+    expect(err.code).toBe('SCHEMA_FAILED')
+    expect(await lock.renew(envId, token)).toBe(true)
+    const key = await Store.openAppKey(envId)
+    expect(key).toMatch(/^[0-9a-f]{64}$/)
+
+    schema = { state: 'ok', error: null }
+    expect(await Place.placeForCreation(envId, input, 'admin-1', o)).toEqual({ already: false })
+    expect(await Store.openAppKey(envId)).toBe(key)
+    const env = await db('nivaro_hub_environments').where({ id: envId }).first()
+    expect(env.status).toBe('active')
+  })
+
+  it('the open-creation refusal still holds for a plain place-shared', async () => {
+    const { envId, dbId } = await creating()
+    const err = await refusal(place(envId, { database_id: dbId }, { client: fakeClient().factory }))
+    expect(err.code).toBe('CREATION_RUNNING')
   })
 })

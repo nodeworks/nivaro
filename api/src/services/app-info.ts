@@ -10,7 +10,7 @@ import { chaosAllowed } from './chaos/gate.js'
 import { isMultiTenant, isNivaroCloud } from './deployment-mode.js'
 import { currentNotice, type EnvironmentNotice } from './environment-notice.js'
 import { HUB_BRAND, HUB_PRODUCT_NAME } from './hub/brand.js'
-import { hubLinkToken, hubModeEnabled, hubUrl } from './hub/mode.js'
+import { appHubLink, hubModeEnabled } from './hub/mode.js'
 import { hubStandalone } from './hub/standalone.js'
 import { phonePushMode } from './phone-push.js'
 import { overlaySettings } from './settings-overrides.js'
@@ -52,8 +52,9 @@ export function enabledFeatures(env: NodeJS.ProcessEnv = process.env): string[] 
     out.push('teams_bot')
   out.push('traffic_map')
   if (hubModeEnabled(env)) out.push('hub')
-  // Hub phase 7: this app can ask the Hub for the person's other apps (GET /api/hub-switcher).
-  if (hubUrl(env) && hubLinkToken(env)) out.push('hub_switcher')
+  // Hub phase 7: this app can ask the Hub for the person's other apps (GET /api/hub-switcher). On
+  // a Hub shared deployment per app (its own token from the Hub's list); never in Nivaro Cloud.
+  if (appHubLink(env)) out.push('hub_switcher')
   return out
 }
 

@@ -13,15 +13,18 @@ import { sweepUnpackContainers, sweepUnpackFolders } from './extensions.js'
 import { makeHandlers } from './handlers.js'
 import { createLog, type Log } from './log.js'
 import { createServer, type HandlerResult, type Handlers } from './server.js'
+import { createStorageProbe, type StorageProbe, storageOptionsFrom } from './storage.js'
+import { nfsExport } from './volumes.js'
 
-export const AGENT_VERSION = '0.2.2'
+export const AGENT_VERSION = '0.2.3'
 export const MIN_ENGINE_API = [1, 44] as const
 
 export type StartResult =
   | { ok: true; server: http.Server | https.Server; cfg: AgentConfig; engine: Engine }
   | { ok: false; code: string }
 
-export type EngineFacts = { engineApi: string; nodeId: string }
+/** clusterId: the swarm's id (GET /info Swarm.Cluster.ID), '' when the Engine does not say. */
+export type EngineFacts = { engineApi: string; nodeId: string; clusterId?: string }
 
 /** `1.45` ≥ `1.44`. Anything unreadable counts as too old. */
 export function engineApiOk(version: unknown): boolean {
@@ -38,15 +41,18 @@ export async function checkEngine(
     const v = await engine.call<{ ApiVersion?: string }>('GET', '/version')
     if (v.status !== 200 || !engineApiOk(v.body?.ApiVersion))
       return { ok: false, code: 'ENGINE_TOO_OLD' }
-    const info = await engine.call<{ Swarm?: { ControlAvailable?: boolean; NodeID?: string } }>(
-      'GET',
-      '/info'
-    )
+    const info = await engine.call<{
+      Swarm?: { ControlAvailable?: boolean; NodeID?: string; Cluster?: { ID?: unknown } }
+    }>('GET', '/info')
     if (info.status !== 200 || info.body?.Swarm?.ControlAvailable !== true)
       return { ok: false, code: 'NOT_A_MANAGER' }
     return {
       ok: true,
-      facts: { engineApi: v.body.ApiVersion as string, nodeId: info.body.Swarm.NodeID ?? '' }
+      facts: {
+        engineApi: v.body.ApiVersion as string,
+        nodeId: info.body.Swarm.NodeID ?? '',
+        clusterId: typeof info.body.Swarm.Cluster?.ID === 'string' ? info.body.Swarm.Cluster.ID : ''
+      }
     }
   } catch (err) {
     return { ok: false, code: err instanceof EngineError ? err.code : 'ENGINE_UNREACHABLE' }
@@ -60,7 +66,14 @@ export async function checkEngine(
 /** How long a read of the swarm's node count is reused (health is polled). */
 const NODES_TTL_MS = 30_000
 
-export function baseHandlers(cfg: AgentConfig, facts: EngineFacts, engine?: Engine): Handlers {
+export function baseHandlers(
+  cfg: AgentConfig,
+  facts: EngineFacts,
+  engine?: Engine,
+  // Enhancement 20: volume storage health (storage.ts), read-only; startAgent builds it from
+  // the checked settings. Absent = not configured.
+  storage: StorageProbe = createStorageProbe({ path: null, walk: false, kind: 'local' })
+): Handlers {
   // P4-33: the node count, read live from GET /info (no new Engine path), cached briefly.
   // null = not read. With more than one node, `local` volumes are per node.
   let nodes: { at: number; n: number | null } | null = null
@@ -91,6 +104,15 @@ export function baseHandlers(cfg: AgentConfig, facts: EngineFacts, engine?: Engi
         engine_api: facts.engineApi,
         swarm: { manager: true, node_id: facts.nodeId, nodes: await swarmNodes() },
         volume_driver: cfg.volumeDriver,
+        // 0.2.3: uploads on an NFS export, one folder per stack (shared by every node), whether
+        // the agent sees the export to check those folders, and bundled Redis's own driver.
+        volume_nfs: nfsExport(cfg) !== null,
+        export_mount: cfg.exportMount !== null,
+        redis_volume_driver: cfg.redisVolumeDriver,
+        // 0.2.3: bundled Redis runs only on nodes with this label (`key=value`); null = anywhere.
+        redis_pin_label: cfg.redisPinLabel
+          ? `${cfg.redisPinLabel.key}=${cfg.redisPinLabel.value}`
+          : null,
         images: cfg.images,
         host_suffixes: cfg.hostSuffixes,
         edge: cfg.edge,
@@ -102,7 +124,9 @@ export function baseHandlers(cfg: AgentConfig, facts: EngineFacts, engine?: Engi
         // Hub's plans refuse a host pattern on v2 before any apply.
         traefik_version: cfg.traefikVersion,
         // HUB_AGENT_CA_BUNDLE_FILE is set: app services trust its CAs. Never its contents.
-        ca_bundle: cfg.caBundle !== null
+        ca_bundle: cfg.caBundle !== null,
+        // Enhancement 20: how full the volume storage is; the last reading, never waited on.
+        storage: await storage.report()
       }
     }),
     listStacks: notYet,
@@ -119,7 +143,12 @@ export async function startAgent(opts: {
   readFile: (p: string) => string
   transport?: Transport
   log?: Log
-  makeHandlers?: (cfg: AgentConfig, engine: Engine, facts: EngineFacts) => Handlers
+  makeHandlers?: (
+    cfg: AgentConfig,
+    engine: Engine,
+    facts: EngineFacts,
+    storage: StorageProbe
+  ) => Handlers
 }): Promise<StartResult> {
   let cfg: AgentConfig
   try {
@@ -128,13 +157,17 @@ export async function startAgent(opts: {
     if (err instanceof ConfigError) return { ok: false, code: err.code }
     return { ok: false, code: 'CONFIG_ERROR' }
   }
+  const storageOpts = storageOptionsFrom(opts.env, cfg.volumeOpts)
+  if (!storageOpts.ok) return { ok: false, code: storageOpts.code }
+  const storage = createStorageProbe(storageOpts.value)
   const engine = createEngine(cfg, opts.transport)
   const checked = await checkEngine(engine)
   if (!checked.ok) return checked
-  const handlers = (opts.makeHandlers ?? ((c, e, f) => baseHandlers(c, f, e)))(
+  const handlers = (opts.makeHandlers ?? ((c, e, f, st) => baseHandlers(c, f, e, st)))(
     cfg,
     engine,
-    checked.facts
+    checked.facts,
+    storage
   )
   const server = createServer(cfg, handlers, { log: opts.log })
   const { host, port } = parseListen(cfg.listen)
@@ -158,10 +191,11 @@ async function run(): Promise<void> {
     env: process.env,
     readFile: (p) => readFileSync(p, 'utf8'),
     log,
-    makeHandlers: (cfg, engine, facts) =>
+    makeHandlers: (cfg, engine, facts, storage) =>
       makeHandlers(engine, cfg, {
         nodeId: facts.nodeId,
-        health: baseHandlers(cfg, facts, engine).health,
+        clusterId: facts.clusterId ?? '',
+        health: baseHandlers(cfg, facts, engine, storage).health,
         log
       })
   })

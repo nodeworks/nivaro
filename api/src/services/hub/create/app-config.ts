@@ -19,6 +19,15 @@ import type { HubDbEngine } from '../db/connection.js'
 import { DNS_LABEL, dnsSuffix, httpAllowed } from './dns.js'
 import type { HubTargetConfig } from './targets.js'
 
+/**
+ * What naming an environment needs of where it goes: a GitLab target's config, or the one a
+ * Docker driver or a shared deployment stands for (gap `create`, dest.ts namingFor*).
+ */
+export type NamingConfig = Pick<
+  HubTargetConfig,
+  'dns_mode' | 'wildcard_domain' | 'scheme' | 'port' | 'edge_address' | 'cert_note'
+>
+
 /** The non-secret settings in `.hub/app.env`, in the order the deploy script lists them. */
 export const HUB_APP_ENV_KEYS: readonly string[] = Object.freeze([
   'APP_KEY',
@@ -205,7 +214,7 @@ const httpHost = (host: string) => httpAllowed(host)
  * token is sent to this address.
  */
 export function hostnameFor(
-  target: HubTargetConfig,
+  target: NamingConfig,
   appKey: string,
   envKey: string,
   given?: string | null
@@ -261,7 +270,7 @@ export function hostnameFor(
 }
 
 /** scheme://host[:port] (the default port of the scheme is left out). */
-export function baseUrlFor(target: HubTargetConfig, hostname: string): string {
+export function baseUrlFor(target: NamingConfig, hostname: string): string {
   if (!target || typeof target !== 'object') throw new AppConfigError('The target has no settings.')
   const host = normaliseHost(hostname)
   if (!host || host !== hostname) throw new AppConfigError('Not a hostname.')
@@ -311,7 +320,7 @@ export function nivaroEnvironmentFor(
 }
 
 /** The DNS + certificate request for a manual-name environment, ready to paste into a ticket. */
-export function manualTicket(target: HubTargetConfig, hostname: string): string {
+export function manualTicket(target: NamingConfig, hostname: string): string {
   if (!target || typeof target !== 'object' || normaliseHost(hostname) !== hostname)
     throw new AppConfigError('A ticket needs the target and a normalised hostname.')
   const lines = [

@@ -18,7 +18,8 @@ import type { SharedDeployment } from './store.js'
  * A registered deployment is upgraded outside the Hub; when every live sighting agrees on a
  * version other than `version_pin`, `noteObservedVersion` records an `observed` shared deploy, a
  * `shared` deploy row per listed environment, and moves the pins (Decision 3). Once per
- * (deployment, version): a Redis NX key plus a compare-and-set on `version_pin`.
+ * (deployment, version): a Redis NX key plus a compare-and-set on `version_pin`. Never while the
+ * Hub itself upgrades a registered deployment through GitLab (status `upgrading`).
  *
  * No value here is a secret: an ETag is a hash, a version is public. Hub-only (HUB=on, never
  * cloud mode), so the keys carry no tenant (as every nvr:hub:* key). Without Redis (a
@@ -267,6 +268,9 @@ export async function noteObservedVersion(
   envs: ListedEnv[]
 ): Promise<string | null> {
   if (shared.mode !== 'registered' || shared.status === 'retired') return null
+  // A Hub upgrade through GitLab is running (status `upgrading`): its own run records the version
+  // when it ends, so the replicas it rolls are not an outside upgrade.
+  if (shared.status === 'upgrading') return null
   const live = await liveSightings(shared.id)
   if (!live.length) return null
   const version = live[0].version
@@ -280,7 +284,7 @@ export async function noteObservedVersion(
   const from = shared.version_pin
   const at = new Date(deps.now())
   return db.transaction(async (trx) => {
-    const q = trx(SHARED).where({ id: shared.id })
+    const q = trx(SHARED).where({ id: shared.id }).whereNot({ status: 'upgrading' })
     if (from === null) q.whereNull('version_pin')
     else q.where({ version_pin: from })
     const changed = await q.update({ version_pin: version, updated_at: at })

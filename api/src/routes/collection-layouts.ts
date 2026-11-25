@@ -10,6 +10,7 @@ import { buildAddendumRenderOverlay } from '../services/addendum-render.js'
 import { registerAppKeyed } from '../services/app-forget.js'
 import { cacheSetting } from '../services/cache-config.js'
 import { registerCache } from '../services/cache-registry.js'
+import { assertAppStorageRoom } from '../services/capacity/enforce.js'
 import { markConfigRead, nameConfigCollection } from '../services/config-live.js'
 import { isMultiTenant } from '../services/deployment-mode.js'
 import { assertNotEditLocked } from '../services/edit-lock.js'
@@ -2297,6 +2298,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       (resolvedName ?? `${collection}-${item_id}`).replace(/[^a-zA-Z0-9_-]/g, '_') + addendumSuffix
     const diskName = `${fileId}.pdf`
     const provider = getStorageProviderName()
+    // Hub capacity: a stored PDF counts against the app's storage limit (413 past it).
+    await assertAppStorageRoom(pdfBuffer.length)
     await getStorage().put(diskName, pdfBuffer, 'application/pdf')
     const fileRow = {
       id: fileId,

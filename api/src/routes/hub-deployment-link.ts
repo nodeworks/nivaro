@@ -4,6 +4,7 @@ import { getTenantDb, withTenant } from '../db/tenant-context.js'
 import { failedAuthLimiter } from '../lib/auth-fail-limiter.js'
 import { hubSharedConfig, tenantSource } from '../services/deployment-mode.js'
 import { seedFirstAdmin } from '../services/hub-link/first-admin.js'
+import { instanceKey } from '../services/instance-key.js'
 import { INSTANCE_ID } from '../services/instance-roster.js'
 import { poolCounters } from '../services/pool-attribution.js'
 import { bearerMatches } from '../services/render-peer.js'
@@ -22,6 +23,7 @@ import { type HubTenantRegistry, tenancyRefreshChannel } from '../services/tenan
 import { getTenantRegistry } from '../services/tenancy/registry.js'
 import type { TenantRecord, TenantRegistry } from '../services/tenancy/types.js'
 import { NIVARO_VERSION } from '../version.js'
+import { deploymentLinkDataRoutes } from './hub-link-data.js'
 
 /**
  * Deployment link (Hub phase 6) — the shared twin of the per-app hub link (routes/hub-link.ts):
@@ -41,7 +43,9 @@ import { NIVARO_VERSION } from '../version.js'
  * HMAC of the deployment token — the token itself never crosses this link. Timing-safe; 401
  * DEPLOYMENT_LINK_REFUSED, 429 after 20 failures a minute from one address. Every answer is
  * `Cache-Control: no-store`. Counts and health figures only: never a record, a connection
- * string, an app key (its fingerprint only) or a driver's raw error text.
+ * string, an app key (its fingerprint only) or a driver's raw error text. The `process` block
+ * carries the process's own figures across every app (sockets, heavy-read budget, app pools
+ * summed) — the operator's view; each app's own figures stay in that app.
  */
 
 export const DEPLOYMENT_LINK_REFUSED = 'DEPLOYMENT_LINK_REFUSED'
@@ -79,6 +83,34 @@ function loadedExtensions(registry: Map<string, { id: string; status: string; en
     .sort()
 }
 
+/**
+ * The process's own figures across every app (counts only, never which app): sockets and people
+ * connected, the shared heavy-read budget, and every watched app pool summed. What is per app is
+ * kept in each app (app-pool-monitor, app-concurrency-sample, the app's own Traffic Map).
+ */
+async function processFigures(): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = {}
+  try {
+    const { getLocalConcurrency } = await import('../plugins/socketio.js')
+    out.sockets = getLocalConcurrency()
+  } catch {
+    out.sockets = null
+  }
+  try {
+    const { readGateProcessFigures } = await import('../services/read-gate.js')
+    out.heavy_reads = readGateProcessFigures()
+  } catch {
+    out.heavy_reads = null
+  }
+  try {
+    const { appPoolTotals } = await import('../services/app-pool-pressure.js')
+    out.app_pools = appPoolTotals()
+  } catch {
+    out.app_pools = null
+  }
+  return out
+}
+
 function poolFigures(): { used: number; free: number; pending: number } | null {
   try {
     const p = poolCounters('main')
@@ -105,6 +137,9 @@ export async function hubDeploymentLinkRoutes(app: FastifyInstance): Promise<voi
       return refuse(reply, 401, 'Unauthorized', DEPLOYMENT_LINK_REFUSED)
     }
   })
+
+  // Hub data care (0.3.215): /apps/:id/data/* (routes/hub-link-data.ts).
+  deploymentLinkDataRoutes(app)
 
   const registryOr503 = (reply: FastifyReply): TenantRegistry | null => {
     const r = getTenantRegistry()
@@ -134,6 +169,7 @@ export async function hubDeploymentLinkRoutes(app: FastifyInstance): Promise<voi
     const body: DeploymentStatus = {
       version: NIVARO_VERSION,
       instance: INSTANCE_ID,
+      instance_key: instanceKey(),
       registry: {
         count: st.count,
         loaded_at: st.loadedAt,
@@ -147,7 +183,8 @@ export async function hubDeploymentLinkRoutes(app: FastifyInstance): Promise<voi
       process: {
         uptime_s: Math.round(process.uptime()),
         memory_mb: Math.round(process.memoryUsage().rss / 1048576),
-        pool: poolFigures()
+        pool: poolFigures(),
+        ...(await processFigures())
       }
     }
     return reply.send(body)
@@ -289,6 +326,9 @@ export async function hubDeploymentLinkRoutes(app: FastifyInstance): Promise<voi
       ticket?: unknown
       mode?: unknown
       objects?: unknown
+      env_objects?: unknown
+      replays?: unknown
+      source_scope?: unknown
     }
     try {
       const out = await withTenant(
@@ -298,7 +338,10 @@ export async function hubDeploymentLinkRoutes(app: FastifyInstance): Promise<voi
             source: b.source as string,
             ticket: b.ticket as string,
             mode: b.mode as 'full' | 'delta',
-            objects: b.objects === true
+            objects: b.objects === true,
+            env_objects: b.env_objects === true,
+            replays: b.replays === true,
+            ...(typeof b.source_scope === 'string' ? { source_scope: b.source_scope } : {})
           }),
         t.origin
       )

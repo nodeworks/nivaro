@@ -3,8 +3,8 @@ import type { HubEnvironmentRow } from '../promote-types.js'
 import type { StackSpec } from './agent-types.js'
 import type { DockerDriverConfig } from './driver-config.js'
 import { type DatabaseRecordEnv, databaseEnvFor, databaseKey } from './stack-env.js'
-import type { StackSettingsRow } from './stack-settings.js'
-import { stackRoles } from './templates.js'
+import { DEFAULT_STACK_FILES, type StackSettingsRow, stackFilesSet } from './stack-settings.js'
+import { agentVersionAtLeast, STACK_FILES_AGENT_MIN_VERSION, stackRoles } from './templates.js'
 
 /**
  * The Hub-side StackSpec renderer (Hub phase 4): one environment's stored settings + the version
@@ -42,6 +42,10 @@ export interface RenderStackInput {
   database?: DatabaseRecordEnv | null
   /** The target agent's version (GET /v1/health `agent_version`); unknown = no exporter role. */
   agentVersion?: string | null
+  /** The target agent keeps uploads on an NFS export (GET /v1/health `volume_nfs`, 0.2.3). */
+  agentVolumeNfs?: boolean | null
+  /** The target agent sees that export (GET /v1/health `export_mount`); false = cannot deploy. */
+  agentExportMount?: boolean | null
 }
 
 export type StackRenderCode =
@@ -49,6 +53,9 @@ export type StackRenderCode =
   | 'TOO_MANY_HOSTNAMES'
   | 'PUBLISH_PORT_REQUIRED'
   | 'ENV_SECRET_CLASH'
+  | 'AGENT_TOO_OLD'
+  | 'UPLOADS_FOLDER_NEEDS_NFS'
+  | 'EXPORT_MOUNT_MISSING'
 
 export class StackRenderError extends Error {
   code: StackRenderCode
@@ -177,6 +184,36 @@ export function renderStackSpec(input: RenderStackInput): StackSpec {
   }
   // The agent takes a published port only on the publish edge.
   if (edge === 'publish' && row.publish_port != null) spec.publish_port = row.publish_port
+
+  // L3: an agent with uploads on an NFS export that cannot see the export refuses every stack
+  // (EXPORT_MOUNT_MISSING): say so in the plan, not only when the run reaches the agent.
+  if (input.agentVolumeNfs === true && input.agentExportMount === false) {
+    throw new StackRenderError(
+      'EXPORT_MOUNT_MISSING',
+      'The Hub agent keeps uploads on an NFS export but does not see the export (HUB_AGENT_VOLUME_EXPORT_MOUNT): mount it into the agent first.'
+    )
+  }
+
+  // Where the files sit (agent 0.2.3): sent only when set, so an older agent and every stack
+  // that uses none get exactly the spec (and hash) they had.
+  const files = row.files ?? DEFAULT_STACK_FILES
+  if (stackFilesSet(files)) {
+    if (!agentVersionAtLeast(input.agentVersion, STACK_FILES_AGENT_MIN_VERSION)) {
+      throw new StackRenderError(
+        'AGENT_TOO_OLD',
+        `The stack's file settings (uploads folder, files sub-folder, run as uid 1000) need Hub agent ${STACK_FILES_AGENT_MIN_VERSION} or later.`
+      )
+    }
+    if (files.uploads_folder !== null && input.agentVolumeNfs !== true) {
+      throw new StackRenderError(
+        'UPLOADS_FOLDER_NEEDS_NFS',
+        `The uploads folder ${files.uploads_folder} is a folder on an NFS export, but the agent keeps no uploads on one (set an NFS device in HUB_AGENT_VOLUME_OPTS_FILE).`
+      )
+    }
+    if (files.uploads_folder !== null) spec.uploads_folder = files.uploads_folder
+    if (files.files_subfolder !== null) spec.files_subfolder = files.files_subfolder
+    if (files.run_as === 'app') spec.run_as = 'app'
+  }
   return spec
 }
 

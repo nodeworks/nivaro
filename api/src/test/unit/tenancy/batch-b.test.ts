@@ -92,13 +92,15 @@ describe('batch B: T7 sites (tenant-admin protections hold on shared)', () => {
     expect(envRelayKey()).toBeNull()
   })
 
-  it('platform huddle servers replace tenant settings in cloud and on shared (T7)', () => {
+  it('platform huddle servers replace tenant settings in cloud only; on shared each app saves its own (0.3.215)', () => {
     setMode('selfHosted')
     expect(huddleCloudMode(process.env)).toBe(false)
     setMode('cloud')
     expect(huddleCloudMode(process.env)).toBe(true)
+    // Hub gap watch: the operator's own apps; the API's own calls stay guarded
+    // (huddle-destinations.ts huddleFetch / guardedIceLookup).
     setMode('shared')
-    expect(huddleCloudMode(process.env)).toBe(true)
+    expect(huddleCloudMode(process.env)).toBe(false)
   })
 })
 

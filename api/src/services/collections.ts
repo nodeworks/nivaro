@@ -1,4 +1,4 @@
-import { isRemoteEpochClear } from '../db/config-epoch.js'
+import { isAppOnlyClear, isRemoteEpochClear } from '../db/config-epoch.js'
 import { insertReturningId } from '../db/dialect/ef.js'
 import { inThisSchema } from '../db/dialect/h1.js'
 import { db } from '../db/index.js'
@@ -112,6 +112,19 @@ export function metadataGeneration(): number {
 /** Drop cached collection/field metadata (all, or one collection). */
 export function clearMetadataCache(collection?: string): void {
   metadataGen++
+  // Hub shared deployment: another process announced ONE app's configuration change. Drop that
+  // app's entries only (keys start with its key); the statement cache and the shared Redis level
+  // serve the static database only, never an app's, so they stay.
+  if (isAppOnlyClear()) {
+    const prefix = `${getTenantId() ?? ''}\u0000`
+    clearVirtualSqlCache() // an appMap: this app's slot only
+    const mine = (k: string) =>
+      k.startsWith(prefix) && (!collection || k === `${prefix}${collection}`)
+    for (const k of [...physicalColumnsCache.keys()]) if (mine(k)) physicalColumnsCache.delete(k)
+    for (const k of [...collectionCache.keys()]) if (mine(k)) collectionCache.delete(k)
+    for (const k of [...fieldsCache.keys()]) if (mine(k)) fieldsCache.delete(k)
+    return
+  }
   clearMetadataQueryCache()
   // #2441 — the shared Redis level: a clear made HERE (after this process changed configuration)
   // drops the generations it keyed on; the whole generation, since a statement's entry cannot be

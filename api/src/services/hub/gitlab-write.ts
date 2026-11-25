@@ -603,6 +603,32 @@ export async function findPipeline(
   return { id: Number(p.id), web_url: str(p.web_url) }
 }
 
+/** GitLab pipeline states that are not over yet (a deploy may still run in them). */
+const ACTIVE_PIPELINE = [
+  'created',
+  'waiting_for_resource',
+  'preparing',
+  'pending',
+  'running',
+  'scheduled'
+]
+
+/**
+ * Pipelines on `ref` that are not over yet (one read of the newest 20), newest first. A `manual`
+ * pipeline (waiting for someone to play a job) is not counted: nothing runs in it.
+ */
+export async function activePipelines(
+  ctx: GitCtx,
+  ref: string
+): Promise<Array<{ id: number; status: string; web_url: string }>> {
+  const res = await call(ctx, 'activePipelines', `/pipelines?ref=${enc(ref)}&per_page=20`)
+  const list = Array.isArray(res.body) ? (res.body as unknown[]) : []
+  return list
+    .map((x) => obj(x))
+    .filter((p) => ACTIVE_PIPELINE.includes(str(p.status)))
+    .map((p) => ({ id: Number(p.id), status: str(p.status), web_url: str(p.web_url) }))
+}
+
 /** The newest (non-retried) job called `name` in a pipeline, or null. */
 export async function jobNamed(
   ctx: GitCtx,

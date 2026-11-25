@@ -7,6 +7,8 @@ import { db } from '../db/index.js'
 import { registerAppKeyed } from './app-forget.js'
 import { chainFields } from './chain-columns.js'
 import { encodeDeferredSnippet } from './deferred-snippet.js'
+import { perAppJobs } from './deployment-mode.js'
+import { decryptValue, isEncrypted } from './encryption.js'
 import { HUB_BRAND, HUB_PRODUCT_NAME, hubStandaloneCached } from './hub/brand.js'
 import { useZonedDates } from './liquid-dates.js'
 import {
@@ -362,7 +364,7 @@ export async function listFileTemplates(): Promise<string[]> {
   return [...names].sort()
 }
 
-interface SmtpConfig {
+export interface SmtpConfig {
   host: string
   port: number
   secure: boolean
@@ -382,11 +384,24 @@ interface SmtpConfig {
   envLabel: string | null
 }
 
+/** A saved SMTP password: stored plain by Settings → Email, or sealed (enc:v1) with the app's key
+ *  when a move to a Hub shared deployment kept the server's env mail settings (move-carry.ts).
+ *  One that does not open reads as no password (the relay then refuses, visibly in the mail log). */
+function savedSmtpPass(raw: unknown): string | null {
+  const v = typeof raw === 'string' ? raw : null
+  if (!v || !isEncrypted(v)) return v
+  try {
+    return decryptValue(v)
+  } catch {
+    return null
+  }
+}
+
 /**
  * Resolves SMTP config — DB values win over env vars when set.
  * Env vars remain the fallback so existing deployments continue to work.
  */
-async function getSmtpConfig(): Promise<SmtpConfig> {
+export async function getSmtpConfig(): Promise<SmtpConfig> {
   try {
     const row = await overlaySettings(
       (await db('nivaro_settings')
@@ -406,15 +421,22 @@ async function getSmtpConfig(): Promise<SmtpConfig> {
         .first()) as Record<string, unknown> | undefined
     )
 
-    const host = (row?.smtp_host as string | null) || config.SMTP_HOST
-    const port = (row?.smtp_port as number | null) ?? config.SMTP_PORT
-    const user = (row?.smtp_user as string | null) || config.SMTP_USER || null
-    const pass = (row?.smtp_pass as string | null) || config.SMTP_PASSWORD || null
+    const savedHost = String(row?.smtp_host ?? '').trim()
+    // Hub shared deployment: an app with a saved relay uses only its own saved sign-in, port and
+    // security — never the deployment's SMTP_USER / SMTP_PASSWORD sent to the app's relay (a
+    // sealed password that does not open is no password, never the deployment's).
+    const own = savedHost !== '' && perAppJobs()
+    const host = savedHost || config.SMTP_HOST
+    const port = (row?.smtp_port as number | null) ?? (own ? 587 : config.SMTP_PORT)
+    const user = (row?.smtp_user as string | null) || (own ? null : config.SMTP_USER || null)
+    const pass = savedSmtpPass(row?.smtp_pass) || (own ? null : config.SMTP_PASSWORD || null)
     const from = (row?.smtp_from as string | null) || config.MAIL_FROM
     const secure =
       row?.smtp_secure != null
         ? row.smtp_secure === 1 || row.smtp_secure === true
-        : config.SMTP_SECURE
+        : own
+          ? false
+          : config.SMTP_SECURE
 
     const envLabel = String(row?.environment_label ?? '').trim() || null
     return { host, port, secure, user, pass, from, envLabel, ...resolveTestMode(row) }
