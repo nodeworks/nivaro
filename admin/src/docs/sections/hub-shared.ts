@@ -250,7 +250,7 @@ export const hubSharedDocs: DocSection = {
     { type: 'h2', id: 'hub-shared-place', text: 'Placing a new environment' },
     {
       type: 'p',
-      text: 'An environment that has never served can be placed straight on a shared deployment: Apps → the app → the environment row → Place… (tooltip "Place on shared deployment…"; shown only for an environment still `provisioning`), or `POST /api/hub/environments/:envId/place-shared` with `{shared_id, database_id, pool_max?, first_admin: {email, first_name?, last_name?}}`. An environment that has served moves instead (Moving an environment); a refusal says `USE_MOVE`.'
+      text: 'An environment that has never served can be placed straight on a shared deployment: Apps → the app → the environment row → Place… (tooltip "Place on shared deployment…"; shown only for an environment still `provisioning`), or `POST /api/hub/environments/:envId/place-shared` with `{shared_id, database_id, pool_max?, first_admin: {email, first_name?, last_name?}}`. An environment that has served moves instead (Moving an environment); a refusal says `USE_MOVE`. A brand-new app can also be created straight onto a shared deployment (Hub 0.3.215 or later): Apps → Create app → Shared deployment makes its databases and runs this placement as the creation’s `place` step for every environment (see Creating on Docker or on a shared deployment). Create app → Docker creates one straight onto a Docker driver instead, no GitLab target needed.'
     },
     {
       type: 'ul',
@@ -451,11 +451,6 @@ export const hubSharedDocs: DocSection = {
         ],
         ['Config epochs per app', 'The metadata cache expires on its own TTL, as in cloud.', '-'],
         ['Per-process heavy-read slots per app', 'Only the pool budget caps connections.', '-'],
-        [
-          'Creating a new app on a Docker target (`nivaro_hub_targets` has the GitLab kind only)',
-          'A later phase. Place a new environment, or move an existing one.',
-          '-'
-        ],
         [
           'Upgrades driven by GitLab',
           'A GitLab-run deployment is registered and upgraded by its pipeline.',

@@ -1685,13 +1685,17 @@ export const hubCreateDocs: DocSection = {
       text: "Apps → Create app (Hub administrators) makes a new Nivaro app end to end: a database for each environment, a GitLab deploy repository, the settings and secrets the deploy needs, the first deploy on the Docker swarm, the app's name, the Hub link and the first administrator. The result is an ordinary environment the Hub can promote and roll back like any adopted one."
     },
     {
+      type: 'p',
+      text: 'Where the app goes is the first choice on the form: GitLab (a target, below: a deploy repository whose pipeline deploys), Docker (a Docker driver: the Hub agent deploys each environment as a swarm stack, no repository) or Shared deployment (each environment is placed on a shared deployment). Docker and shared creations need Nivaro 0.3.215 or later on the Hub; see Creating on Docker or on a shared deployment below.'
+    },
+    {
       type: 'warn',
       text: 'Creating apps needs GitLab 17.1 or newer (the Hub sets `restrict_user_defined_variables` together with `ci_pipeline_variables_minimum_override_role` on every deploy repository and refuses to deploy when GitLab does not keep them), a Docker swarm with Traefik v3, and a Hub with `ENCRYPTION_KEY` set. The Hub never makes DNS names on a name server, Microsoft app registrations, or swarm users: those are listed below as what you do yourself.'
     },
     { type: 'h2', id: 'hub-create-targets', text: 'Targets: where new apps go' },
     {
       type: 'p',
-      text: 'A target (the Targets tab of the Hub, administrators only: Apps · Drivers · Targets · Databases) holds everything about one place apps are created. Only kind `gitlab` exists. Settings:'
+      text: 'A target (the Targets tab of the Hub, administrators only: Apps · Drivers · Targets · Databases) holds everything about one place apps are created through GitLab. Targets are of kind `gitlab` only: a Docker creation names a Docker driver and a shared one a shared deployment directly, so neither needs a target. Settings:'
     },
     {
       type: 'table',
@@ -1862,7 +1866,7 @@ export const hubCreateDocs: DocSection = {
     { type: 'h2', id: 'hub-create-steps', text: 'The eight steps' },
     {
       type: 'p',
-      text: "Each environment is walked through the same steps in the background, in position order. Every step can be repeated safely, so Retry starts again at the first unfinished step and never plans again. A creation holds the environment's promotion lock, so a promotion and a creation never run on one environment together."
+      text: "Each environment is walked through the same steps in the background, in position order. Every step can be repeated safely, so Retry starts again at the first unfinished step and never plans again. A creation holds the environment's promotion lock, so a promotion and a creation never run on one environment together. These are a GitLab creation's steps; Docker and shared creations walk their own (next section)."
     },
     {
       type: 'table',
@@ -1899,6 +1903,70 @@ export const hubCreateDocs: DocSection = {
     {
       type: 'p',
       text: "The environment is `provisioning` while it is created, `waiting_for_name` while a hand-made name is awaited, and becomes `active` when every step is done. A creation is `queued`, `running`, `waiting`, `done`, `failed`, `interrupted` or `cancelled`. Progress, the log, the made repository, driver, placement and database, the ticket, the checklist and the manager lines are on the environment's creation panel; none of them contains a secret."
+    },
+    {
+      type: 'h2',
+      id: 'hub-create-docker',
+      text: 'Creating on Docker or on a shared deployment'
+    },
+    {
+      type: 'p',
+      text: 'Send `target: { kind: "docker", driver_id, stack }` or `target: { kind: "shared", shared_id, pool_max? }` instead of `target_id` (which stays the GitLab form; `target: { kind: "gitlab", id }` is the same). Everything else on the form is the same: key, name, owners, first administrator, version, sign-in, environments and their databases (the existing create and adopt database rules).'
+    },
+    { type: 'h3', id: 'hub-create-docker-stack', text: 'Docker: the Hub agent deploys the stack' },
+    {
+      type: 'table',
+      head: ['Field', 'Rule'],
+      rows: [
+        [
+          '`driver_id`',
+          'A Docker driver with an agent token. Its DNS mode names the environments as a GitLab target does: `production` gets `<app>.<wildcard>`, others `<app>--<env>.<wildcard>`; with manual DNS you type each hostname and the creation shows the ticket (pointing at the driver’s edge target).'
+        ],
+        [
+          '`stack.size`, `stack.redis`',
+          '`small` (default), `medium` or `large`; `bundled` (default) or `external` (then `REDIS_URL` as a setting or secret).'
+        ],
+        [
+          '`stack.settings`, `stack.secrets`',
+          'Plain settings and secrets, judged as a Stack panel save is: keys Nivaro reads or under the agent’s `HUB_AGENT_ENV_PREFIXES`, credentials only as secrets. Sign-in (`OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_REDIRECT_URI`, the secret `OIDC_CLIENT_SECRET`) comes from the form and the database from its record, so those keys and every `DB_*` are refused (`RESERVED_SETTING`). `SESSION_SECRET` and `ENCRYPTION_KEY` are generated and sealed for each environment; enter `ENCRYPTION_KEY` only for an existing database an earlier install sealed with it (the plan warns when you do not).'
+        ],
+        [
+          '`stack.extension_pins`',
+          '`{ id: "<repo>@sha256:<64 hex>" }`, up to 20. The images must be in the agent’s `HUB_AGENT_IMAGES`. The app’s extensions are these ids. (`extensions` itself is refused on Docker: `EXTENSIONS_UNSUPPORTED`.)'
+        ],
+        [
+          '`environments[].publish_port`',
+          'Only on an agent with the published-port edge: one port per environment, inside `HUB_AGENT_PUBLISH_PORTS`.'
+        ]
+      ]
+    },
+    {
+      type: 'p',
+      text: 'The plan asks the agent (`GET /v1/health`, and each planned stack name) and refuses, before anything is written, with a code per limit: `AGENT_UNREACHABLE`, `AGENT_REFUSED`, `AGENT_INCOMPATIBLE`; `IMAGE_NOT_ALLOWED` (the Hub image is not in `HUB_AGENT_IMAGES`); `EXTENSION_NOT_ALLOWED` (an extension image is not); `HOSTNAME_NOT_ALLOWED` (a name outside the wildcard or the agent’s `HUB_AGENT_HOST_SUFFIXES`); `SETTING_INVALID` (a key outside the env allow-list), `SECRET_IN_SETTINGS`, `RESERVED_SETTING`, `BAD_VALUE`, `BAD_SIZE`, `BAD_REDIS`, `BAD_EXTENSION_PIN`; `REDIS_NOT_OFFERED` (bundled Redis but no `HUB_AGENT_REDIS_IMAGE`); `STACK_SETTINGS_MISSING` (external Redis without `REDIS_URL`); `PUBLISH_PORT_NOT_ALLOWED`, `BAD_PUBLISH_PORT`; `TEMPLATE_NONE` (no stack template for the version); `STACK_EXISTS` (the swarm already runs a stack of that name) and `STACK_NAME_TAKEN` (another placement of the driver deploys it). It warns when the swarm has several nodes and the agent keeps volumes per node.'
+    },
+    {
+      type: 'table',
+      head: ['Step', 'What it does'],
+      rows: [
+        ['`database`', 'As on GitLab.'],
+        [
+          '`stack`',
+          'Gives the environment a dedicated placement on the driver (stack `<app>--<env>`) and its one `stack` component, then saves its stack settings: what you entered, sign-in, the extension pins, and a generated `SESSION_SECRET` and `ENCRYPTION_KEY`, all sealed. A retry keeps the generated keys.'
+        ],
+        [
+          '`deploy`',
+          'The phase-4 agent deploy: reads the agent’s limits again, renders the spec, applies it and waits for swarm (up to 30 minutes). It is recorded as a promote deploy of the environment, so its history, Restart, Apply now and later promotions know what the stack runs.'
+        ],
+        [
+          '`name`, `link`, `admin`',
+          'As on GitLab: the name serves the version, the Hub link answers, the first administrator is made over the Hub link.'
+        ]
+      ]
+    },
+    { type: 'h3', id: 'hub-create-shared', text: 'Shared: placed on a shared deployment' },
+    {
+      type: 'p',
+      text: 'Each environment is placed on the deployment with place-shared, as a creation step. The version is the deployment’s (leave it empty; another one is `VERSION_NOT_SHARED`), no image is looked up, and sign-in is optional (the app signs in with the deployment’s own app registration; add each redirect URI there). `extensions` lists ids the deployment loads (`EXTENSION_NOT_ALLOWED` otherwise). With a host pattern the names are made under it; without one you type each name. On a Docker deployment a typed name must be under the pattern or already routed (`NAME_NOT_ROUTED`). The plan also refuses `SHARED_RETIRED`, `SHARED_BUSY`, `NOT_DEPLOYED`, `POOL_BUDGET` (every environment’s `pool_max`, default 5, against what is left of the deployment’s budget), `BAD_POOL`, `POOL_TOO_SMALL`, and `DATABASE_HOLDS_NIVARO` (an existing database that already holds an install moves instead). Steps: `database`, then `place` (the placement, the app’s key, the list, every replica, the schema, the first administrator, `active`; the place-shared run’s own refusals, such as `USE_MOVE` or `APP_KEY_UNKNOWN`, fail the step and Retry places again).'
     },
     { type: 'h2', id: 'hub-create-waits', text: 'Waits' },
     {
