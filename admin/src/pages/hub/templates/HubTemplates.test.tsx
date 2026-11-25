@@ -126,6 +126,42 @@ describe('HubTemplates', () => {
     )
   })
 
+  it('a file over 8 MB is refused before it is read (review L8)', async () => {
+    mount()
+    fireEvent.click(await screen.findByRole('button', { name: /Upload template/ }))
+    const big = new File([new Uint8Array(8 * 1024 * 1024 + 1)], 'big.json')
+    fireEvent.change(document.getElementById('hub-template-file') as HTMLInputElement, {
+      target: { files: [big] }
+    })
+    expect(await screen.findByText(/a template is at most/)).toBeTruthy()
+  })
+
+  it('what upload removed is shown on the template (review M3)', async () => {
+    const t = T(1, 'Assets', 0)
+    t.manifest = {
+      ...t.manifest,
+      review: {
+        stripped: { 'collections.virtual_sql': 1 },
+        refused: ['Rule r2 on nivaro_roles'],
+        virtual_removed: ['assets'],
+        transition_actions: 2,
+        rules: 1
+      }
+    } as never
+    h.get.mockResolvedValue({ data: { data: [t] } })
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={qc}>
+        <HubTemplates />
+      </QueryClientProvider>
+    )
+    fireEvent.click(await screen.findByText('Assets'))
+    expect(await screen.findByText('Removed on upload')).toBeTruthy()
+    expect(screen.getByText(/Virtual SQL of assets/)).toBeTruthy()
+    expect(screen.getByText('Left out: Rule r2 on nivaro_roles.')).toBeTruthy()
+    expect(screen.getByText(/2 transition actions · 1 rule/)).toBeTruthy()
+  })
+
   it('a file that is not a blueprint is refused in plain words', async () => {
     mount()
     fireEvent.click(await screen.findByRole('button', { name: /Upload template/ }))

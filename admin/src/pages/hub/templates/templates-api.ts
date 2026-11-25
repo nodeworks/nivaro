@@ -26,7 +26,20 @@ export interface TemplateManifest {
     queues: number
     rules: number
   }
+  /** What upload removed or left out (the Hub's template rules), when it removed anything. */
+  review?: TemplateReview
 }
+
+export interface TemplateReview {
+  stripped: Record<string, number>
+  refused: string[]
+  virtual_removed: string[]
+  transition_actions: number
+  rules: number
+}
+
+/** The largest export the library takes (the Hub stores at most 8 MB). */
+export const TEMPLATE_MAX_BYTES = 8 * 1024 * 1024
 
 export interface HubTemplate {
   id: number
@@ -106,7 +119,13 @@ export const TEMPLATE_COPY: Record<string, { title: string; hint?: string; detai
     hint: 'Use letters, digits, dots or dashes, like 1.2.0.'
   },
   BAD_ARCHIVED: { title: 'Archive could not be changed' },
-  TOO_LARGE: { title: 'The blueprint is too large', hint: 'A template is at most 16 MB.' },
+  TOO_LARGE: { title: 'The blueprint is too large', hint: 'A template is at most 8 MB.' },
+  FST_ERR_CTP_BODY_TOO_LARGE: {
+    title: 'The blueprint is too large',
+    hint: 'A template is at most 8 MB.'
+  },
+  BAD_SHAPE: { title: 'The file is not a well-formed blueprint', detail: true },
+  TOO_MANY_PARTS: { title: 'The blueprint is larger than a template may be', detail: true },
   TEMPLATE_EXISTS: { title: 'This name and version are in the library already', detail: true },
   TEMPLATE_IN_USE: {
     title: 'A creation used this template',
@@ -147,4 +166,18 @@ export function countsLine(m: TemplateManifest | null): string {
   ]
     .filter(Boolean)
     .join(' · ')
+}
+
+/** Pure: what upload removed or left out, as short lines for the template's detail. */
+export function reviewLines(r: TemplateReview | null | undefined): string[] {
+  if (!r) return []
+  const out: string[] = []
+  if (r.virtual_removed.length)
+    out.push(
+      `Virtual SQL of ${r.virtual_removed.join(', ')}: they install as ordinary collections.`
+    )
+  const stripped = Object.keys(r.stripped)
+  if (stripped.length) out.push(`Settings a template may not carry: ${stripped.join(', ')}.`)
+  for (const why of r.refused) out.push(`Left out: ${why}.`)
+  return out.slice(0, 20)
 }

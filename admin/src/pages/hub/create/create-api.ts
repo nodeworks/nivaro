@@ -689,6 +689,25 @@ export const CREATE_COPY: Record<string, Copy> = {
     hint: 'Retry; if it happens again, check what sits between the Hub and the app.'
   },
   BAD_BUNDLE: { title: 'That is not an App Blueprint', detail: true },
+  TEMPLATE_PARTIAL: { title: 'The template was installed in part', detail: true },
+  TEMPLATE_NOT_FOR_SHARED: {
+    title: 'An app on a shared deployment takes no template',
+    hint: 'Pick No template, or create the app on its own stack.'
+  },
+  TEMPLATE_INSTALLING: {
+    title: 'A template install is already running in this app',
+    hint: 'Wait for it to end, then Retry.'
+  },
+  BAD_SHAPE: { title: 'The template is not a well-formed blueprint', detail: true },
+  TOO_MANY_PARTS: { title: 'The template is larger than an app takes', detail: true },
+  APP_MOVED: {
+    title: 'The app has moved to another home',
+    hint: 'Nothing was installed there. Install the template from the app’s new home by hand (Promotion → Blueprints).'
+  },
+  UNKNOWN_INSTALL: {
+    title: 'The app lost track of the template install',
+    hint: 'Retry starts it again; the app skips what it already made.'
+  },
   // Phase 6 (Task 4): creation refuses an environment placed on a shared deployment.
   SHARED_PLACEMENT: {
     title: 'This environment runs on a shared deployment',

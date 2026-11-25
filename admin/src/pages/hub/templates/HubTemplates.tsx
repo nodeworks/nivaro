@@ -18,6 +18,8 @@ import {
   fetchTemplates,
   type HubTemplate,
   patchTemplate,
+  reviewLines,
+  TEMPLATE_MAX_BYTES,
   templateError,
   templateKeys,
   templateToast,
@@ -230,6 +232,13 @@ function UploadForm({ onClose, onSaved }: { onClose: () => void; onSaved: (id: n
     setFileFacts('')
     if (!file) return
     setFileName(file.name)
+    // Review L8: say so before reading a file the Hub would refuse anyway.
+    if (file.size > TEMPLATE_MAX_BYTES) {
+      setReadError(
+        `This file is ${formatFileSize(file.size)}; a template is at most ${formatFileSize(TEMPLATE_MAX_BYTES)}. Export fewer collections.`
+      )
+      return
+    }
     try {
       const parsed = JSON.parse(await readText(file)) as Record<string, unknown>
       const m = (parsed?.manifest ?? null) as Record<string, unknown> | null
@@ -392,6 +401,7 @@ function TemplateDetail({ template, onClose }: { template: HubTemplate; onClose:
   })
   const dirty = name.trim() !== template.name || description.trim() !== (template.description ?? '')
   const m = template.manifest
+  const removed = reviewLines(m?.review)
 
   return (
     <div
@@ -471,6 +481,23 @@ function TemplateDetail({ template, onClose }: { template: HubTemplate; onClose:
           </div>
         ))}
       </div>
+      {m?.review && (m.review.transition_actions > 0 || m.review.rules > 0) && (
+        <p className='m-0 text-[12px] text-slate-600 dark:text-muted-foreground'>
+          Runs on the app once installed:{' '}
+          {plural(m.review.transition_actions, 'transition action', 'transition actions')} ·{' '}
+          {plural(m.review.rules, 'rule', 'rules')}
+        </p>
+      )}
+      {removed.length > 0 && (
+        <div className='rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200'>
+          <p className='m-0 font-medium'>Removed on upload</p>
+          <ul className='m-0 mt-1 list-disc space-y-0.5 pl-4'>
+            {removed.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className='grid grid-cols-1 gap-3'>
         <Field id={`hub-template-${template.id}-name`} label='Name'>
@@ -512,3 +539,5 @@ function TemplateDetail({ template, onClose }: { template: HubTemplate; onClose:
     </div>
   )
 }
+
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
