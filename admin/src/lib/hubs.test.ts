@@ -23,10 +23,11 @@ describe('hub registry', () => {
 
   it('gives Hub targets their own tab between Drivers and Databases (P3-29)', () => {
     // Phase 7's Sign-in tab follows them (phases 3 + 7 merged); phase 6's Shared deployments
-    // comes right after Apps (Task 17).
+    // comes right after Apps (Task 17), Capacity right after it (Hub capacity).
     expect(APPS_HUB.tabs.map((t) => t.label)).toEqual([
       'Apps',
       'Shared deployments',
+      'Capacity',
       'Drivers',
       'Targets',
       'Databases',
@@ -35,6 +36,7 @@ describe('hub registry', () => {
     expect(hubForPath('/hub/signin')?.tab.label).toBe('Sign-in')
     expect(hubForPath('/hub/targets')?.tab.label).toBe('Targets')
     expect(hubForPath('/hub/shared')?.tab.label).toBe('Shared deployments')
+    expect(hubForPath('/hub/capacity')?.tab.label).toBe('Capacity')
   })
 
   it('has unique tab paths across every hub', () => {
