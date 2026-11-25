@@ -1034,6 +1034,578 @@ export const HUB_ROUTES: HubRoute[] = [
     'Mark an environment production, not production, or auto',
     { body: { production: b('true | false | null (auto)') } }
   ),
+  // ─── Capacity (routes/hub-capacity.ts) ──────────────────────────────────────
+  r('GET', '/capacity', 'Capacity', 'admin', 'read', 'Capacity overview with a daily trend', {
+    query: { days: n('1–31, default 30') }
+  }),
+  r(
+    'GET',
+    '/capacity/environments/:envId',
+    'Capacity',
+    'admin',
+    'read',
+    'Hourly capacity trend and latest figures of one environment',
+    { query: { days: n('1–31, default 30') } }
+  ),
+  r(
+    'GET',
+    '/capacity/shared/:id',
+    'Capacity',
+    'admin',
+    'read',
+    'Hourly capacity trend and latest figures of one shared deployment',
+    { query: { days: n('1–31, default 30') } }
+  ),
+  r(
+    'POST',
+    '/capacity/sample',
+    'Capacity',
+    'admin',
+    'write',
+    'Take a capacity sample now (the 15-minute job, on demand)',
+    { notes: 'Reads every shared deployment and linked environment; writes only capacity samples.' }
+  ),
+  r('GET', '/capacity/settings', 'Capacity', 'admin', 'read', 'Move-advice thresholds'),
+  r(
+    'PUT',
+    '/capacity/settings',
+    'Capacity',
+    'admin',
+    'write',
+    'Change the move-advice thresholds',
+    {
+      body: {
+        fits: n('Thresholds the advisor judges by'),
+        outgrew: n(),
+        most_share: n(),
+        min_samples: n()
+      }
+    }
+  ),
+  r('GET', '/capacity/limits/:envId', 'Capacity', 'admin', 'read', 'Limits set on an environment'),
+  r(
+    'PUT',
+    '/capacity/limits/:envId',
+    'Capacity',
+    'admin',
+    'write',
+    'Set or clear an environment’s limits',
+    {
+      body: {
+        requests_per_minute: n('null = no limit'),
+        jobs: n('null = no limit'),
+        storage_mb: n('null = no limit')
+      },
+      notes:
+        '409 MOVE_OPEN while a move holds the environment. A shared deployment re-reads its tenant list after a change.'
+    }
+  ),
+  r('GET', '/capacity/advice', 'Capacity', 'admin', 'read', 'Suggested moves, with plan links'),
+  r(
+    'POST',
+    '/capacity/rebalance/plan',
+    'Capacity',
+    'admin',
+    'plan',
+    'Plan a rebalance across shared deployments',
+    { body: { shared_ids: list('integer'), max_moves: n() } }
+  ),
+  r(
+    'POST',
+    '/capacity/rebalances',
+    'Capacity',
+    'admin',
+    'write',
+    'Start a rebalance (a series of normal moves inside a quiet window)',
+    {
+      body: {
+        shared_ids: list('integer', 'Shared deployments in scope'),
+        moves: list('object', 'The planned moves'),
+        window: o('Quiet window the moves run in'),
+        confirm: s('Type rebalance', { required: true })
+      },
+      sensitive: true,
+      accepted: true
+    }
+  ),
+  r('GET', '/capacity/rebalances', 'Capacity', 'admin', 'read', 'Rebalances, newest first'),
+  r('GET', '/capacity/rebalances/:id', 'Capacity', 'admin', 'read', 'One rebalance'),
+  r(
+    'POST',
+    '/capacity/rebalances/:id/cancel',
+    'Capacity',
+    'admin',
+    'write',
+    'Cancel a rebalance (stops before its next move)'
+  ),
+  // ─── Data care: backups, drills, refreshes (routes/hub-data.ts) ─────────────
+  r(
+    'GET',
+    '/data/environments',
+    'Data care',
+    'admin',
+    'read',
+    'Every environment with its backup policy, last backup, last drill and open run'
+  ),
+  r(
+    'GET',
+    '/environments/:envId/data',
+    'Data care',
+    'admin',
+    'read',
+    'Data care of one environment: policy (secrets masked), last backup seen, checklist, newest runs'
+  ),
+  r(
+    'PUT',
+    '/environments/:envId/data/policy',
+    'Data care',
+    'admin',
+    'write',
+    'Save the backup policy',
+    {
+      body: {
+        target_secret: secret('Write-only access secret of an S3 files target; never answered back')
+      },
+      notes:
+        'Send only the policy fields to change; the rest keep their stored values. Answered with secrets masked.'
+    }
+  ),
+  r(
+    'POST',
+    '/environments/:envId/data/refresh/plan',
+    'Data care',
+    'admin',
+    'plan',
+    'Plan a refresh (copy another environment’s data over this one)',
+    {
+      body: {
+        source_env_id: n('The environment to copy from', { required: true }),
+        transfer_path: s('Optional transfer path')
+      }
+    }
+  ),
+  r(
+    'GET',
+    '/environments/:envId/data/runs',
+    'Data care',
+    'admin',
+    'read',
+    'Data runs of an environment, newest first',
+    { query: { kind: s('Comma list of run kinds'), limit: n('Default 50') } }
+  ),
+  r('GET', '/data/runs/:id', 'Data care', 'admin', 'read', 'One data run with its plan and log'),
+  r(
+    'POST',
+    '/data/runs/:id/resume',
+    'Data care',
+    'admin',
+    'write',
+    'Resume an interrupted refresh or refresh rollback',
+    { accepted: true, notes: 'Any other kind of run answers 409 NOT_RESUMABLE.' }
+  ),
+  r(
+    'POST',
+    '/data/runs/:id/rollback',
+    'Data care',
+    'admin',
+    'write',
+    'Roll a refresh back, within its rollback window',
+    {
+      body: { confirm: s('Typed confirmation naming the database', { required: true }) },
+      sensitive: true,
+      accepted: true
+    }
+  ),
+  r(
+    'POST',
+    '/data/runs/:id/abandon',
+    'Data care',
+    'admin',
+    'write',
+    'Give up on an interrupted run or a failed refresh',
+    {
+      body: { confirm: s('Typed confirmation the run asks for', { required: true }) },
+      sensitive: true
+    }
+  ),
+  r(
+    'GET',
+    '/data/switches',
+    'Data care',
+    'admin',
+    'read',
+    'The switches that allow refreshes, drills and rehearsals (all off by default)'
+  ),
+  r(
+    'PUT',
+    '/data/switches',
+    'Data care',
+    'admin',
+    'write',
+    'Turn refreshes, drills and rehearsals on or off',
+    {
+      body: {
+        refresh_enabled: b(),
+        drill_enabled: b(),
+        rehearsal_enabled: b()
+      },
+      sensitive: true
+    }
+  ),
+  r(
+    'PUT',
+    '/environments/:envId/data/refresh-target',
+    'Data care',
+    'admin',
+    'write',
+    'Allow or forbid refreshes to write over an environment',
+    {
+      body: {
+        on: b('true | false'),
+        confirm: s('Type <app>/<environment> when turning it on')
+      },
+      sensitive: true,
+      notes: 'Refused for anything that counts as production (PRODUCTION_TARGET).'
+    }
+  ),
+  // ─── Releases: trains, schedules, freezes, rollback rules, notes (routes/hub-releases.ts) ─
+  r(
+    'GET',
+    '/releases/overview',
+    'Releases',
+    'owner',
+    'read',
+    'Trains, schedules, freeze windows, rollback rules and watches for the apps the caller may see'
+  ),
+  r(
+    'POST',
+    '/apps/:id/trains/check',
+    'Releases',
+    'owner',
+    'write',
+    'Check a release train: its steps, the first step’s plan and any freeze on now',
+    {
+      notes: 'Changes nothing, but a POST that is not a /plan route needs hub:write.',
+      body: {
+        version: s('x.y.z', { required: true }),
+        steps: list(
+          'object',
+          'Environments in order: environment_id, soak_minutes, min_readiness, max_hold_minutes'
+        )
+      }
+    }
+  ),
+  r(
+    'POST',
+    '/apps/:id/trains',
+    'Releases',
+    'admin',
+    'write',
+    'Start a release train (a promotion through environments in order)',
+    {
+      body: {
+        version: s('x.y.z', { required: true }),
+        steps: list(
+          'object',
+          'Environments in order: environment_id, soak_minutes, min_readiness, max_hold_minutes'
+        ),
+        confirm: s('Type the app key', { required: true })
+      },
+      sensitive: true
+    }
+  ),
+  r('GET', '/trains/:id', 'Releases', 'owner', 'read', 'One release train'),
+  r('POST', '/trains/:id/skip', 'Releases', 'admin', 'write', 'Skip a step of a running train', {
+    body: { step: n('Step index, from 0', { required: true }) },
+    sensitive: true
+  }),
+  r('POST', '/trains/:id/abort', 'Releases', 'admin', 'write', 'Abort a running train', {
+    sensitive: true
+  }),
+  r(
+    'POST',
+    '/schedules',
+    'Releases',
+    'admin',
+    'write',
+    'Schedule a promotion or a train for a later time',
+    {
+      body: {
+        kind: s('promote or train', { enum: ['promote', 'train'], required: true }),
+        app_id: n('', { required: true }),
+        environment_id: n('A promote’s environment'),
+        version: s('x.y.z'),
+        run_at: s('ISO time, at most 90 days ahead', { required: true }),
+        on_freeze: s('wait or fail', { enum: ['wait', 'fail'] }),
+        steps: list('object', 'A train’s steps'),
+        confirm: s('Type the environment key (promote) or app key (train)', { required: true })
+      },
+      sensitive: true
+    }
+  ),
+  r(
+    'POST',
+    '/schedules/:id/cancel',
+    'Releases',
+    'admin',
+    'write',
+    'Cancel a scheduled promotion or train',
+    { notes: '409 NOT_CANCELLABLE once it started, failed or was cancelled.' }
+  ),
+  r('POST', '/freezes', 'Releases', 'admin', 'write', 'Create a freeze window', {
+    body: {
+      name: s('At most 120 characters', { required: true }),
+      app_id: n('null = every app'),
+      recurrence: s('none or month_end', { enum: ['none', 'month_end'] }),
+      starts_at: s('ISO time (recurrence none)'),
+      ends_at: s('ISO time (recurrence none)'),
+      days_before: n('0–10 (month_end)'),
+      days_after: n('0–10 (month_end)'),
+      time_zone: s('(month_end)')
+    }
+  }),
+  r('PATCH', '/freezes/:id', 'Releases', 'admin', 'write', 'Change a freeze window', {
+    notes: 'Send the whole window again: it is validated and stored as a whole.'
+  }),
+  r('DELETE', '/freezes/:id', 'Releases', 'admin', 'write', 'Delete a freeze window'),
+  r(
+    'GET',
+    '/environments/:envId/freeze',
+    'Releases',
+    'owner',
+    'read',
+    'The freeze on now for the environment’s app, or null'
+  ),
+  r(
+    'GET',
+    '/environments/:envId/rollback-rule',
+    'Releases',
+    'owner',
+    'read',
+    'The environment’s automatic rollback rule and its recent watches'
+  ),
+  r(
+    'PUT',
+    '/environments/:envId/rollback-rule',
+    'Releases',
+    'admin',
+    'write',
+    'Set the automatic rollback rule',
+    {
+      body: {
+        enabled: b(),
+        window_minutes: n('5–1440, default 30'),
+        max_error_pct: n('More than 0, at most 100'),
+        min_requests: n('Default 50'),
+        max_crashes: n('1–50'),
+        min_readiness: n('1–100')
+      },
+      notes: 'At least one threshold (5xx rate, crashes or readiness) is required.'
+    }
+  ),
+  r(
+    'DELETE',
+    '/environments/:envId/rollback-rule',
+    'Releases',
+    'admin',
+    'write',
+    'Delete the automatic rollback rule'
+  ),
+  r(
+    'POST',
+    '/environments/:envId/release-notes',
+    'Releases',
+    'owner',
+    'write',
+    'Preview what promoting or rolling back a version would change',
+    {
+      body: {
+        kind: s('promote or rollback', { enum: ['promote', 'rollback'], required: true }),
+        version: s('x.y.z', { required: true })
+      },
+      notes: 'Reads GitLab only; stores nothing. A POST that is not a /plan route needs hub:write.'
+    }
+  ),
+  r(
+    'GET',
+    '/deploys/:id/release-notes',
+    'Releases',
+    'owner',
+    'read',
+    'Stored release notes of a promotion or rollback'
+  ),
+  r(
+    'POST',
+    '/deploys/:id/release-notes',
+    'Releases',
+    'owner',
+    'write',
+    'Work out and store the release notes of a run that has none',
+    { notes: 'Only promotions and rollbacks have notes (409 NOT_A_PROMOTION otherwise).' }
+  ),
+  // ─── App templates (routes/hub-templates.ts) ────────────────────────────────
+  r('GET', '/templates', 'Templates', 'admin', 'read', 'The template library (never the bundles)', {
+    query: { archived: s('1 = archived templates') }
+  }),
+  r('GET', '/templates/:id', 'Templates', 'admin', 'read', 'One template'),
+  r(
+    'GET',
+    '/templates/:id/bundle',
+    'Templates',
+    'admin',
+    'read',
+    'Download a template’s stored package (app blueprint JSON)'
+  ),
+  r('POST', '/templates', 'Templates', 'admin', 'write', 'Upload a template', {
+    body: {
+      bundle: o('The blueprint bundle', { required: true }),
+      name: s(),
+      description: s(),
+      version: s()
+    }
+  }),
+  r(
+    'PATCH',
+    '/templates/:id',
+    'Templates',
+    'admin',
+    'write',
+    'Rename, describe or archive a template',
+    {
+      body: { name: s(), description: s(), archived: b() }
+    }
+  ),
+  r('DELETE', '/templates/:id', 'Templates', 'admin', 'write', 'Delete a template', {
+    notes: '409 TEMPLATE_IN_USE while a creation used it; answers 204.'
+  }),
+  // ─── Operations: issues, storage, secrets (routes/hub-ops.ts) ───────────────
+  r(
+    'GET',
+    '/ops/issues',
+    'Operations',
+    'owner',
+    'read',
+    'Issue and crash groups across environments (owners: their apps only)',
+    {
+      query: {
+        app_id: n(),
+        environment_id: n(),
+        kind: s('crash or server', { enum: ['crash', 'server'] }),
+        severity: s(),
+        status: s('open or resolved', { enum: ['open', 'resolved'] }),
+        multi: b('Only signatures seen in more than one environment'),
+        q: s('Search text, at most 200 characters')
+      }
+    }
+  ),
+  r(
+    'GET',
+    '/ops/issues/reads',
+    'Operations',
+    'owner',
+    'read',
+    'When each environment’s issues were last read'
+  ),
+  r(
+    'GET',
+    '/ops/issues/:sig',
+    'Operations',
+    'owner',
+    'read',
+    'One issue signature, per environment it was seen in'
+  ),
+  r(
+    'POST',
+    '/ops/collect',
+    'Operations',
+    'admin',
+    'write',
+    'Read issues, file usage and driver storage from every environment now',
+    { accepted: true, notes: '409 COLLECT_RUNNING while another collection holds the lease.' }
+  ),
+  r(
+    'GET',
+    '/ops/storage',
+    'Operations',
+    'owner',
+    'read',
+    'Storage overview: drivers (administrators only) and environments (owners: their apps)'
+  ),
+  r(
+    'GET',
+    '/drivers/:id/storage',
+    'Operations',
+    'admin',
+    'read',
+    'A Docker driver’s last storage reading'
+  ),
+  r(
+    'POST',
+    '/drivers/:id/storage/check',
+    'Operations',
+    'admin',
+    'write',
+    'Read the driver’s storage from its agent now',
+    { notes: '404 when the driver is not a Docker driver.' }
+  ),
+  r(
+    'GET',
+    '/secrets',
+    'Secrets',
+    'admin',
+    'read',
+    'Inventory of the secrets the Hub holds (state, age, check result; never values) and rotation policies'
+  ),
+  r(
+    'GET',
+    '/secrets/history',
+    'Secrets',
+    'admin',
+    'read',
+    'Rotation history of one secret (no values)',
+    { query: { ref: s('Secret reference, e.g. hub_token:12', { required: true }) } }
+  ),
+  r(
+    'PUT',
+    '/secrets/policies/:kind',
+    'Secrets',
+    'admin',
+    'write',
+    'Set how often a kind of secret is rotated and when to remind',
+    { body: { every_days: n('null = no schedule'), remind_days: n('Days before due') } }
+  ),
+  r(
+    'POST',
+    '/secrets/rotate',
+    'Secrets',
+    'admin',
+    'write',
+    'Rotate a Docker environment’s hub token and apply it',
+    {
+      body: {
+        ref: s('hub_token:<environment id>', { required: true }),
+        confirm: s('Type the environment key', { required: true })
+      },
+      sensitive: true,
+      accepted: true,
+      notes: 'The answer names the deploy that delivers the new token, never the token.'
+    }
+  ),
+  r(
+    'POST',
+    '/secrets/rotated',
+    'Secrets',
+    'admin',
+    'write',
+    'Record that a secret was rotated elsewhere',
+    {
+      body: { ref: s('Secret reference', { required: true }) },
+      notes: '409 NOT_ROTATED when the secret has not changed since it was last seen.'
+    }
+  ),
+  r('POST', '/secrets/check', 'Secrets', 'admin', 'write', 'Run a secret’s readiness check now', {
+    body: { ref: s('Secret reference', { required: true }) }
+  }),
   // ─── Phone app (routes/hub-people.ts) ───────────────────────────────────────
   r('GET', '/mobile/summary', 'Phone', 'owner', 'read', 'Fleet at a glance (last known status)'),
   r('GET', '/mobile/runs', 'Phone', 'owner', 'read', 'Recent promotions, rollbacks and applies', {
