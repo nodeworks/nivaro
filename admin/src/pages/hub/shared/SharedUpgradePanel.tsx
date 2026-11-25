@@ -50,14 +50,15 @@ import {
   type StepState,
   startSharedUpgrade,
   stepStates,
+  stepsOf,
   UPGRADE_COPY,
-  UPGRADE_STEPS,
   upgradeCopy,
   upgradeKeys
 } from './shared-upgrade-api'
 
 /**
- * Upgrade or roll back a shared deployment the Hub runs (Docker): pick a version, read the plan
+ * Upgrade or roll back a shared deployment the Hub runs (Docker) or upgrades through its GitLab
+ * pipeline (registered with a GitLab driver): pick a version, read the plan
  * (which apps it touches and what holds each back), override an order or preflight hold where a
  * Hub administrator may, type the deployment's key, start; then watch each step. The server
  * re-checks everything at start, so the confirmation is for the person, not the gate.
@@ -563,6 +564,43 @@ function VersionPicker({
   )
 }
 
+/** What a run through the deployment's GitLab pipeline does, in one sentence. */
+function GitlabLine({
+  gitlab,
+  plan
+}: {
+  gitlab: NonNullable<SharedUpgradePlan['gitlab']>
+  plan: SharedUpgradePlan
+}) {
+  const sha = gitlab.commit ? gitlab.commit.slice(0, 8) : null
+  return (
+    <p className='m-0 text-[12px] text-slate-600 dark:text-slate-300'>
+      Through GitLab ({gitlab.driver}, <span className='font-mono'>{gitlab.project}</span>):{' '}
+      {plan.kind === 'rollback' ? (
+        <>
+          reruns <span className='font-mono'>{gitlab.deploy_job}</span> of pipeline{' '}
+          <span className='font-mono'>{gitlab.build_pipeline_id ?? '?'}</span>
+          {sha && (
+            <>
+              {' '}
+              (build <span className='font-mono'>{sha}</span>)
+            </>
+          )}
+        </>
+      ) : (
+        <>
+          merges {sha ? <span className='font-mono'>{sha}</span> : 'the release commit'} from{' '}
+          <span className='font-mono'>{gitlab.source_branch}</span> onto{' '}
+          <span className='font-mono'>{gitlab.target_branch}</span>, pins {plan.version} in{' '}
+          <span className='font-mono'>{gitlab.pin_file}</span>, then runs{' '}
+          <span className='font-mono'>{gitlab.deploy_job}</span>
+        </>
+      )}
+      .
+    </p>
+  )
+}
+
 function PlanPreview({
   plan,
   overrides,
@@ -579,6 +617,8 @@ function PlanPreview({
         <span className='font-mono font-semibold'>{plan.version}</span> on{' '}
         {plan.apps.length === 1 ? '1 app' : `${plan.apps.length} apps`}
       </p>
+
+      {plan.runner === 'gitlab' && plan.gitlab && <GitlabLine gitlab={plan.gitlab} plan={plan} />}
 
       {plan.blockers.length > 0 && (
         <ul aria-label='What holds it back' className='m-0 list-none space-y-1.5 p-0'>
@@ -839,6 +879,7 @@ function UpgradeProgress({
     )
 
   const states = stepStates(d)
+  const steps = stepsOf(d)
   const kindWord = KIND_WORDS[d.kind] ?? d.kind
   return (
     <div className='space-y-3'>
@@ -875,7 +916,7 @@ function UpgradeProgress({
       </div>
 
       <ol aria-label='Upgrade steps' className='m-0 list-none space-y-1.5 p-0'>
-        {UPGRADE_STEPS.map((s, i) => {
+        {steps.map((s, i) => {
           const st = states[i]
           const Icon = STEP_ICON[st]
           return (
@@ -894,7 +935,7 @@ function UpgradeProgress({
           )
         })}
       </ol>
-      {live && d.step && !UPGRADE_STEPS.some((s) => s.key === d.step) && (
+      {live && d.step && !steps.some((s) => s.key === d.step) && (
         // A step this screen does not know (a newer server): never its raw key.
         <p className='m-0 text-[12px] text-slate-600 dark:text-slate-300'>Working…</p>
       )}

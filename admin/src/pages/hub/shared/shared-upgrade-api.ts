@@ -46,6 +46,26 @@ export interface SharedUpgradePlan {
   image?: string | null
   stack?: string | null
   hostnames?: string[]
+  /** Who deploys: the Hub agent (Docker) or the deployment's GitLab pipeline (registered). */
+  runner?: 'agent' | 'gitlab'
+  /** runner `gitlab`: what the run merges, pins and deploys (never a token). */
+  gitlab?: SharedGitlabPlan | null
+}
+
+/** The GitLab side of a plan for a deployment its GitLab pipeline runs (services gitlab-upgrade.ts). */
+export interface SharedGitlabPlan {
+  driver_id: number
+  driver: string
+  project: string
+  source_branch: string
+  target_branch: string
+  pin_file: string | null
+  before_job: string | null
+  deploy_job: string
+  /** The release commit an upgrade merges; the recorded build a rollback reruns. */
+  commit: string | null
+  build_pipeline_id: number | null
+  pin: string | null
 }
 
 export type SharedDeployStatus =
@@ -266,7 +286,7 @@ export function defaultUpgradeVersion(versions: string[], current: string | null
   return compareVersions(newest, current) > 0 ? newest : null
 }
 
-/** The run's step keys, in order (Task 5's run steps 1–5). */
+/** The run's step keys, in order (Task 5's run steps 1–5): a Docker deployment's. */
 export const UPGRADE_STEPS: { key: string; label: string }[] = [
   { key: 'render', label: 'Write the stack' },
   { key: 'apply', label: 'Apply it through the agent' },
@@ -275,12 +295,32 @@ export const UPGRADE_STEPS: { key: string; label: string }[] = [
   { key: 'verify', label: 'Each app answers at the version' }
 ]
 
+/** The steps of a run through the deployment's GitLab pipeline (steps 1–2 differ). */
+export const GITLAB_UPGRADE_STEPS: { key: string; label: string }[] = [
+  { key: 'push', label: 'Pin the version in GitLab' },
+  { key: 'deploy', label: 'Run the deploy job' },
+  ...UPGRADE_STEPS.slice(2)
+]
+
+/** A run's (or plan's) runner: `gitlab` when its plan says so, else the agent. */
+export function runnerOf(d: { plan?: SharedUpgradePlan | string | null }): 'agent' | 'gitlab' {
+  const p = d.plan
+  return p && typeof p === 'object' && p.runner === 'gitlab' ? 'gitlab' : 'agent'
+}
+
+/** The steps a run goes through, by its runner. */
+export const stepsOf = (d: { plan?: SharedUpgradePlan | string | null }) =>
+  runnerOf(d) === 'gitlab' ? GITLAB_UPGRADE_STEPS : UPGRADE_STEPS
+
 export type StepState = 'done' | 'running' | 'failed' | 'stopped' | 'pending'
 
 /** Each step's state from the run's status and the step it is on. */
-export function stepStates(d: Pick<SharedDeploy, 'status' | 'step'>): StepState[] {
-  const at = UPGRADE_STEPS.findIndex((s) => s.key === d.step)
-  return UPGRADE_STEPS.map((_, i) => {
+export function stepStates(
+  d: Pick<SharedDeploy, 'status' | 'step'> & { plan?: SharedDeploy['plan'] }
+): StepState[] {
+  const steps = stepsOf(d)
+  const at = steps.findIndex((s) => s.key === d.step)
+  return steps.map((_, i) => {
     if (d.status === 'success') return 'done'
     if (at < 0) return 'pending'
     if (i < at) return 'done'
@@ -305,7 +345,31 @@ export const UPGRADE_COPY: Record<string, { title: string; hint?: string }> = {
   },
   SHARED_NOT_HUB_DEPLOYED: {
     title: 'The Hub does not run this deployment',
-    hint: 'It runs elsewhere; it is upgraded by whoever runs it. The Hub records the version it sees.'
+    hint: 'It runs elsewhere; it is upgraded by whoever runs it. The Hub records the version it sees. Name its GitLab driver (Edit) to have the Hub upgrade it through that pipeline.'
+  },
+  GITLAB_UNREACHABLE: {
+    title: 'GitLab did not answer the Hub',
+    hint: "Check the GitLab driver's address and token, then plan again."
+  },
+  NO_SOURCE_COMMIT: {
+    title: 'No release commit for this version',
+    hint: 'The source branch has no commit whose subject ends "nivaro <version>". Merge the release into it, or check the source branch (Edit).'
+  },
+  PIN_CHANGED: {
+    title: 'The pin of the running version would change',
+    hint: 'The Hub never creates or rewrites the pin of the version that runs. Upgrade to a newer version instead.'
+  },
+  ALREADY_RUNS: {
+    title: 'It already runs this version',
+    hint: 'The target branch holds its release commit and pin: there is nothing to deploy.'
+  },
+  ROLLBACK_NOT_RECORDED: {
+    title: 'The Hub did not record that build',
+    hint: 'A rollback reruns the deploy job of a pipeline the Hub recorded. Pick a version it deployed itself.'
+  },
+  ROLLBACK_NO_BUILD: {
+    title: 'That build cannot be redeployed',
+    hint: 'Its commit left the branch, or its deploy job cannot be rerun. Upgrade to a version instead.'
   },
   BUSY: {
     title: 'Something else holds this deployment or one of its apps',
@@ -357,8 +421,8 @@ export const UPGRADE_COPY: Record<string, { title: string; hint?: string }> = {
     hint: 'A rollback redeploys a version this deployment ran before. Pick one from its history.'
   },
   NO_DRIVER: {
-    title: 'The deployment has no Docker driver',
-    hint: 'Its driver was removed. Add the deployment again on a Docker driver.'
+    title: 'The deployment has no driver to deploy through',
+    hint: 'Its driver was removed. A Docker deployment: add it again on a Docker driver. One its GitLab pipeline runs: name its GitLab driver again (Edit).'
   },
   NO_STACK_NAME: {
     title: 'The deployment has no stack name',
@@ -476,7 +540,8 @@ export function logLineWords(line: string): string {
   const stop = /^(failed|cancelled|interrupted):\s*[A-Z][A-Z0-9_]{2,63}:\s*([\s\S]*)$/.exec(line)
   if (stop) return `${STATUS_LINE_WORDS[stop[1]]}: ${stop[2].trim()}`
   const step = /^([a-z_]+):\s*([\s\S]*)$/.exec(line)
-  const label = step && UPGRADE_STEPS.find((s) => s.key === step[1])?.label
+  const label =
+    step && [...UPGRADE_STEPS, ...GITLAB_UPGRADE_STEPS].find((s) => s.key === step[1])?.label
   return label ? `${label}: ${step[2].trim()}` : line
 }
 
