@@ -648,6 +648,7 @@
           <a class="docs-nav-item" data-section="hub-create-app" href="#hub-create-app">Creating apps from the Hub</a>
           <a class="docs-nav-item" data-section="hub-shared" href="#hub-shared">Shared deployments</a>
           <a class="docs-nav-item" data-section="hub-moves" href="#hub-moves">Moving an environment</a>
+          <a class="docs-nav-item" data-section="hub-people" href="#hub-people">App owners and people</a>
         </div>
       </div>
 
@@ -23625,6 +23626,11 @@ GET /api/files/usage/orphans    → files referenced by nothing (admin)</code></
           <p class="doc-p">Hub link routes on a dedicated app, mounted with <code class="doc-code">HUB_TOKEN</code> exactly as before, carry the move: <code class="doc-code">POST /api/hub-link/maintenance</code> (<code class="doc-code">{on, message?, move_id?}</code>), <code class="doc-code">POST</code> and <code class="doc-code">DELETE /api/hub-link/retire</code>, <code class="doc-code">GET /api/hub-link/shared-readiness</code>, and the file routes <code class="doc-code">POST</code> and <code class="doc-code">DELETE /files/ticket</code>, <code class="doc-code">POST /files/pull</code>, <code class="doc-code">GET /files/pull/:runId</code>; <code class="doc-code">GET /status</code> adds <code class="doc-code">maintenance</code> and <code class="doc-code">retired</code>. The source serves the files on <code class="doc-code">GET /api/hub-transfer/files/:id</code>, authorised by a transfer ticket (<code class="doc-code">Authorization: Transfer &lt;ticket&gt;</code>) and nothing else. These routes extend the read-only link of phase 1: they carry counts and kinds and file bytes between the two apps, never records and never through the Hub.</p>
           <div class="doc-note">The move activity rows are <code class="doc-code">hub-move-start</code> (also a resume), <code class="doc-code">hub-move-done</code>, <code class="doc-code">hub-move-rolled-back</code>, <code class="doc-code">hub-move-cancel</code> (also a Roll back of an interrupted move), <code class="doc-code">hub-move-finish-stop</code> (Finish and stop the old home), <code class="doc-code">hub-move-route-confirm</code> and <code class="doc-code">hub-move-checklist</code>. None contains a token, ticket, key or connection. After a move ends the Move… panel keeps showing its result until you dismiss it (per browser); an ended move stays in the environment history as "Moved".</div>
           <!-- /SYNC:hub-moves -->
+        </div>
+
+        <div class="doc-section" id="s-hub-people" data-toc='[]'>
+          <!-- SYNC:hub-people -->
+          <!-- /SYNC:hub-people -->
         </div>
 
         <div class="doc-section" id="s-chaos" data-toc='[{"id":"chaos","label":"Chaos engineering"},{"id":"chaos-gate","label":"The gate and CHAOS_ENABLED"},{"id":"chaos-faults","label":"Faults"},{"id":"chaos-runs","label":"Runs and verdicts"},{"id":"chaos-hypothesis","label":"Steady-state hypothesis and auto-abort"},{"id":"chaos-preflight","label":"Pre-flight checklist"},{"id":"chaos-console","label":"The console"},{"id":"chaos-cockpit","label":"Live run cockpit"},{"id":"chaos-banner","label":"The “Drill running” banner"}]'>
