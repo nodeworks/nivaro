@@ -917,6 +917,15 @@ export async function runRevoke(id: number, deps: BreakGlassDeps = {}): Promise<
       const changedBy = typeof res.body.changed_by === 'string' ? res.body.changed_by : null
       const changedTo = typeof res.body.changed_to === 'string' ? res.body.changed_to : null
       const count = typeof res.body.activity_count === 'number' ? res.body.activity_count : null
+      const rc = res.body.revoked_credentials as
+        | { api_keys?: unknown; static_tokens?: unknown; connections?: unknown }
+        | null
+        | undefined
+      const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+      const took = rc ? num(rc.api_keys) + num(rc.static_tokens) + num(rc.connections) : 0
+      const revokedWords = took
+        ? ` Revoked what the account made during the grant: ${num(rc?.api_keys)} API key(s), ${num(rc?.static_tokens)} static token(s), ${num(rc?.connections)} connection(s).`
+        : ''
       await logActivity({
         action: 'hub-break-glass-ended',
         user: row.revoked_by,
@@ -935,7 +944,7 @@ export async function runRevoke(id: number, deps: BreakGlassDeps = {}): Promise<
           : ''
       const did =
         count != null ? ` ${count} change(s) were made by the account during the grant.` : ''
-      const changed = state === 'role_changed' || state === 'restored_over_change'
+      const changed = state === 'role_changed' || state === 'restored_over_change' || took > 0
       await tell(
         row,
         {
@@ -951,6 +960,7 @@ export async function runRevoke(id: number, deps: BreakGlassDeps = {}): Promise<
                 ? `${changedBy ?? 'Someone'} changed the account’s role to ${changedTo ?? 'another admin role'} during the grant; the role it had before was put back.`
                 : 'The temporary administrator access ended; the account has its own role again.') +
             did +
+            revokedWords +
             link
         },
         deps

@@ -20,6 +20,8 @@ export interface GrantRow {
   role: string | null
   prev_role: string | null
   ends_at: string | null
+  /** When the grant began (credentials made since then are revoked at its end). */
+  granted_at?: string | null
 }
 
 const ms = (v: unknown): number => {

@@ -42,6 +42,31 @@ const { grantEnded, roleAfterGrant, grantEndsAt } = await import(
   '../../../services/break-glass-role.js'
 )
 const guard = await import('../../../services/break-glass-guard.js')
+const { setAppRef } = await import('../../../services/io-holder.js')
+
+/** A Redis with what the open-grants marker uses (get / set / compare-and-delete). */
+function fakeRedis() {
+  const map = new Map<string, string>()
+  return {
+    map,
+    down: false,
+    async get(k: string) {
+      if (this.down) throw new Error('redis down')
+      return map.get(k) ?? null
+    },
+    async set(k: string, v: string) {
+      if (this.down) throw new Error('redis down')
+      map.set(k, v)
+      return 'OK'
+    },
+    async eval(_s: string, _n: number, k: string, v: string) {
+      if (map.get(k) === v) map.delete(k)
+      return 1
+    }
+  }
+}
+const redis = fakeRedis()
+const HUB_TOKEN = 't'.repeat(40)
 
 const ADMIN_ROLE = 'R-ADMIN'
 const OPS_ADMIN = 'R-OPS'
@@ -52,6 +77,8 @@ const NOW = Date.parse('2026-11-25T12:00:00.000Z')
 const H = 3_600_000
 
 beforeAll(async () => {
+  process.env.HUB_TOKEN = HUB_TOKEN
+  setAppRef({ redis })
   await db.schema.createTable('nivaro_roles', (t) => {
     t.string('id').primary()
     t.string('name')
@@ -75,6 +102,7 @@ beforeAll(async () => {
   await db.schema.createTable('nivaro_activity', (t) => {
     t.increments('id')
     t.string('user')
+    t.string('action')
     t.string('collection')
     t.string('item')
     t.dateTime('timestamp')
@@ -83,11 +111,17 @@ beforeAll(async () => {
   await m578.up(db) // every step is guarded
 })
 afterAll(async () => {
+  delete process.env.HUB_TOKEN
+  setAppRef(null)
   await db.destroy()
 })
 beforeEach(async () => {
   vi.clearAllMocks()
   grants._resetGrantsTableForTests()
+  grants._resetMarkerForTests()
+  redis.map.clear()
+  redis.down = false
+  process.env.HUB_TOKEN = HUB_TOKEN
   for (const t of ['nivaro_break_glass_grants', 'nivaro_activity', 'nivaro_users', 'nivaro_roles'])
     await db(t).delete()
   await db('nivaro_roles').insert([
@@ -456,7 +490,7 @@ describe('H1: a grantee cannot turn borrowed admin into lasting admin', () => {
         })
       ).statusCode
     ).toBe(403)
-    // Reads, other edits and non-grantees pass.
+    // Deny by default: ANY account write (even a name) and any role route, the reads included.
     expect(
       (
         await app.inject({
@@ -466,7 +500,7 @@ describe('H1: a grantee cannot turn borrowed admin into lasting admin', () => {
           payload: {}
         })
       ).statusCode
-    ).toBe(200)
+    ).toBe(403)
     expect(
       (
         await app.inject({
@@ -476,7 +510,7 @@ describe('H1: a grantee cannot turn borrowed admin into lasting admin', () => {
           payload: { first_name: 'B' }
         })
       ).statusCode
-    ).toBe(200)
+    ).toBe(403)
     expect(
       (
         await app.inject({
@@ -498,5 +532,194 @@ describe('H1: a grantee cannot turn borrowed admin into lasting admin', () => {
       ).statusCode
     ).toBe(200)
     await app.close()
+  })
+})
+
+describe('the hot path (ruling: no join unless a grant may exist)', () => {
+  const statements = async (fn: () => Promise<unknown>) => {
+    const seen: string[] = []
+    const on = (q: { sql: string }) => seen.push(q.sql)
+    db.on('query', on)
+    try {
+      await fn()
+    } finally {
+      db.off('query', on)
+    }
+    return seen
+  }
+  const plain = () => db('nivaro_roles').where({ id: ADMIN_ROLE }).first().toSQL().sql
+
+  it('a plain install (no HUB_TOKEN, not shared) issues exactly the old statement', async () => {
+    delete process.env.HUB_TOKEN
+    expect(grants.breakGlassPossible()).toBe(false)
+    const sql = await statements(() => grants.effectiveRole({ id: ANA, role: ADMIN_ROLE }))
+    expect(sql).toEqual([plain()])
+    expect(await grants.expireGrants()).toEqual([])
+  })
+
+  it('linked, marker says none: the old statement; a grant elsewhere is honoured within 5 s', async () => {
+    const t0 = Date.now()
+    expect(
+      await statements(() => grants.effectiveRole({ id: BEN, role: STAFF_ROLE }, db, t0))
+    ).toEqual([plain().replace(ADMIN_ROLE, STAFF_ROLE)])
+    // Another replica grants: its marker + row land; this process still holds "none" briefly.
+    await db('nivaro_break_glass_grants').insert({
+      ref: 'bg-77',
+      user_id: BEN,
+      role: ADMIN_ROLE,
+      prev_role: STAFF_ROLE,
+      granted_at: new Date(t0),
+      ends_at: new Date(t0 + 60_000)
+    })
+    await db('nivaro_users').where({ id: BEN }).update({ role: ADMIN_ROLE })
+    redis.map.set(grants.openGrantsKey(), 'x')
+    const soon = await grants.effectiveRole({ id: BEN, role: ADMIN_ROLE }, db, t0 + 1000)
+    expect(soon.live).toBeNull()
+    const later = await grants.effectiveRole(
+      { id: BEN, role: ADMIN_ROLE },
+      db,
+      t0 + grants.MARKER_TTL_MS + 1
+    )
+    expect(later.live?.ref).toBe('bg-77')
+  })
+
+  it('an unknown marker (Redis down) joins — fail closed', async () => {
+    redis.down = true
+    await db('nivaro_break_glass_grants').insert({
+      ref: 'bg-78',
+      user_id: BEN,
+      role: ADMIN_ROLE,
+      prev_role: STAFF_ROLE,
+      granted_at: new Date(NOW),
+      ends_at: new Date(NOW + H)
+    })
+    expect(await grants.openGrantsMarker()).toBe('unknown')
+    const r = await grants.effectiveRole({ id: BEN, role: ADMIN_ROLE }, db, NOW + 2 * H)
+    expect(r.roleId).toBe(STAFF_ROLE)
+    // And no grant can be made while the marker cannot be stored.
+    expect(await grant({ ref: 'bg-79', emails: ['ana@example.com'] })).toMatchObject({
+      ok: false,
+      code: 'MARKER_UNAVAILABLE'
+    })
+  })
+
+  it('a grant sets the marker before it answers; the last end clears it; expiry ignores it', async () => {
+    expect(await grant({ ref: 'bg-80', emails: ['ben@example.com'] })).toMatchObject({
+      state: 'granted'
+    })
+    expect(redis.map.get(grants.openGrantsKey())).toBeTruthy()
+    // The marker lost (a Redis restart): the expiry job still restores, and re-asserts it first.
+    redis.map.clear()
+    grants._resetMarkerForTests()
+    expect(await grants.expireGrants(db, new Date(NOW + 3 * H))).toEqual([BEN])
+    expect(await role(BEN)).toBe(STAFF_ROLE)
+    // No grant left open: the marker is cleared.
+    expect(redis.map.get(grants.openGrantsKey())).toBeUndefined()
+  })
+})
+
+describe('second review: nothing a grantee makes outlasts the grant', () => {
+  it('a grantee minting a token for another admin is refused', async () => {
+    const app = Fastify()
+    guard.installBreakGlassWriteGuard(app)
+    await app.register(
+      async (f) => {
+        const sign = async (req: { breakGlass?: unknown }) => {
+          req.breakGlass = { ref: 'bg-1', ends_at: null }
+        }
+        f.post('/users/:id/token', { preHandler: sign }, async () => ({ token: 'x' }))
+        f.post('/api-keys', { preHandler: sign }, async () => ({ key: 'x' }))
+        f.post('/user-groups/:id/members', { preHandler: sign }, async () => ({ ok: true }))
+        f.delete('/api-keys/:id', { preHandler: sign }, async () => ({ ok: true }))
+        f.patch('/users/me/preferences', { preHandler: sign }, async () => ({ ok: true }))
+      },
+      { prefix: '/api' }
+    )
+    await app.ready()
+    const mint = await app.inject({ method: 'POST', url: `/api/users/${ANA}/token` })
+    expect(mint.statusCode).toBe(403)
+    expect(mint.json()).toMatchObject({ code: 'BREAK_GLASS_ACTIVE' })
+    expect(
+      (await app.inject({ method: 'POST', url: '/api/api-keys', payload: { name: 'k' } }))
+        .statusCode
+    ).toBe(403)
+    expect(
+      (await app.inject({ method: 'POST', url: '/api/user-groups/1/members', payload: {} }))
+        .statusCode
+    ).toBe(403)
+    expect((await app.inject({ method: 'DELETE', url: '/api/api-keys/3' })).statusCode).toBe(200)
+    expect(
+      (
+        await app.inject({
+          method: 'PATCH',
+          url: '/api/users/me/preferences',
+          payload: { theme: 'dark' }
+        })
+      ).statusCode
+    ).toBe(200)
+    await app.close()
+  })
+
+  it('a key or token made during the grant (by any path) is revoked at its end', async () => {
+    await db.schema.createTable('nivaro_api_keys', (t) => {
+      t.increments('id')
+      t.string('name')
+      t.string('user')
+      t.boolean('is_active')
+      t.dateTime('created_at')
+    })
+    await db.schema.alterTable('nivaro_users', (t) => t.string('static_token'))
+    try {
+      await grant({ ref: 'bg-90', emails: ['ben@example.com'] })
+      const during = new Date(NOW + 10 * 60_000)
+      // A key for ANOTHER admin, made by the grantee; one the grantee owns; one from before.
+      const [k1] = await db('nivaro_api_keys')
+        .insert({ name: 'for ana', user: ANA, is_active: true, created_at: during })
+        .returning('id')
+      await db('nivaro_api_keys').insert({
+        name: 'own',
+        user: BEN,
+        is_active: true,
+        created_at: during
+      })
+      await db('nivaro_api_keys').insert({
+        name: 'old',
+        user: ANA,
+        is_active: true,
+        created_at: new Date(0)
+      })
+      const id1 = typeof k1 === 'object' ? (k1 as { id: number }).id : k1
+      await db('nivaro_activity').insert([
+        {
+          user: BEN,
+          action: 'api_key_created',
+          collection: 'nivaro_api_keys',
+          item: String(id1),
+          timestamp: during
+        },
+        {
+          user: BEN,
+          action: 'token.generate',
+          collection: 'nivaro_users',
+          item: ANA,
+          timestamp: during
+        }
+      ])
+      await db('nivaro_users').where({ id: ANA }).update({ static_token: 'minted-by-ben' })
+      const out = await sec.revokeBreakGlass({ ref: 'bg-90' })
+      expect(out).toMatchObject({
+        state: 'revoked',
+        revoked_credentials: { api_keys: 2, static_tokens: 1, connections: 0 }
+      })
+      const keys = await db('nivaro_api_keys').orderBy('id').select('name', 'is_active')
+      expect(keys.map((k) => [k.name, !!k.is_active])).toEqual([
+        ['for ana', false],
+        ['own', false],
+        ['old', true]
+      ])
+      expect((await db('nivaro_users').where({ id: ANA }).first()).static_token).toBeNull()
+    } finally {
+      await db.schema.dropTable('nivaro_api_keys')
+    }
   })
 })

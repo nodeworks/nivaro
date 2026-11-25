@@ -43,6 +43,17 @@ vi.mock('../../../services/users.js', async () => {
 const { db } = (await import('../../../db/index.js')) as unknown as { db: Knex }
 const { hubLinkRoutes } = await import('../../../routes/hub-link.js')
 const m578 = await import('../../../db/migrations/578_hub_security.js')
+const { setAppRef } = await import('../../../services/io-holder.js')
+// The open-grants marker needs a Redis (a grant is refused without it).
+const marker = new Map<string, string>()
+setAppRef({
+  redis: {
+    get: async (k: string) => marker.get(k) ?? null,
+    set: async (k: string, v: string) => marker.set(k, v),
+    eval: async (_s: string, _n: number, k: string, v: string) =>
+      marker.get(k) === v ? marker.delete(k) : 0
+  }
+})
 
 const TOKEN = `${'t'.repeat(20)}People-Hub-Token-xyz-123`
 const ADMIN_ROLE = '0A000000-0000-4000-8000-000000000001'

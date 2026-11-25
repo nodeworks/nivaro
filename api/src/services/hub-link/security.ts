@@ -3,11 +3,13 @@ import { db } from '../../db/index.js'
 import { logActivity } from '../activity.js'
 import {
   afterGrantEnded,
+  clearMarkerIfNone,
   endGrantInTrx,
   expireGrants,
   GRANTS,
   grantFromRow,
-  grantsTableReady
+  grantsTableReady,
+  markGrantsOpen
 } from '../break-glass-grants.js'
 import { grantEnded, grantEndsAt } from '../break-glass-role.js'
 import { matchPeople, readPeopleQuery } from './people.js'
@@ -211,6 +213,17 @@ export async function grantBreakGlass(
   if (!(await grantsTableReady(k)))
     return refused(409, 'NOT_READY', 'This app has not run the migration that holds grants')
   const hasOid = await k.schema.hasColumn('nivaro_users', 'entra_oid')
+  // The open-grants marker goes up BEFORE anything is granted: every replica's request path then
+  // judges the grant (within MARKER_TTL_MS); without it the grant is refused.
+  try {
+    await markGrantsOpen()
+  } catch {
+    return refused(
+      409,
+      'MARKER_UNAVAILABLE',
+      'The app could not record the grant (Redis); try again'
+    )
+  }
   const { oldestAdminRoleQuery, withLockWait } = await import('./first-admin.js')
   let out: BreakGlassAnswer
   try {
@@ -289,6 +302,7 @@ export async function grantBreakGlass(
       out = refused(409, 'REF_ENDED', 'This grant was already revoked or ended; ask again')
     else throw err
   }
+  if (!(out.ok && out.state === 'granted')) await clearMarkerIfNone(k)
   if (out.ok && out.state === 'granted') {
     await logActivity({
       action: 'hub-break-glass-grant',
@@ -323,6 +337,7 @@ export interface RevokeAnswer {
   changed_by?: string | null
   changed_to?: string | null
   activity_count?: number | null
+  revoked_credentials?: { api_keys: number; static_tokens: number; connections: number } | null
 }
 
 async function activityCount(k: Knex, userId: string, since: unknown): Promise<number | null> {
@@ -377,7 +392,8 @@ export async function revokeBreakGlass(
   const end = await k.transaction((trx) => endGrantInTrx(trx, Number(row?.id), 'revoked', now))
   if (!end) return { ok: true, state: 'none' }
   if (row.ended_at == null && end.grant.user_id)
-    await afterGrantEnded(end, 'revoked', 'revoked by the Hub')
+    await afterGrantEnded(end, 'revoked', 'revoked by the Hub', k)
+  await clearMarkerIfNone(k)
   const state: RevokeState =
     end.state === 'restored' ? 'revoked' : end.state === 'none' ? 'none' : end.state
   return {
@@ -386,6 +402,7 @@ export async function revokeBreakGlass(
     user_id: end.grant.user_id,
     changed_by: end.changed_by,
     changed_to: end.changed_to,
+    revoked_credentials: end.revoked ?? null,
     activity_count: end.grant.user_id
       ? await activityCount(k, end.grant.user_id, row.granted_at)
       : null

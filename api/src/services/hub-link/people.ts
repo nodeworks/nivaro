@@ -297,6 +297,12 @@ export async function suspendPeople(body: unknown, deps: SuspendDeps = {}): Prom
   const out = await suspendInTransaction(k, q)
   if (out.kind === 'none') return { ok: true, state: 'none', accounts: [] }
   if (out.kind === 'already') return { ok: true, state: 'already', accounts: out.accounts }
+  try {
+    const { clearMarkerIfNone } = await import('../break-glass-grants.js')
+    await clearMarkerIfNone(k)
+  } catch {
+    /* left set: the request path keeps joining */
+  }
   if (out.kind === 'stale')
     return {
       ok: false,

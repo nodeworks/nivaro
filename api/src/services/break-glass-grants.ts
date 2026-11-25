@@ -2,6 +2,10 @@ import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { appBox } from './app-state.js'
 import { type GrantRow, grantEnded, roleAfterGrant } from './break-glass-role.js'
+import { isMultiTenant, tenantSource } from './deployment-mode.js'
+import { hubLinkToken } from './hub/mode.js'
+import { getApp } from './io-holder.js'
+import { appKeyPart } from './tenancy/credential-binding.js'
 
 /**
  * Break-glass grants on the APP side (Hub enhancement 45): the table nivaro_break_glass_grants
@@ -27,6 +31,114 @@ import { type GrantRow, grantEnded, roleAfterGrant } from './break-glass-role.js
 
 export const GRANTS = 'nivaro_break_glass_grants'
 const ABSENT_RECHECK_MS = 60_000
+
+// ─── The hot path: no join unless a grant may exist ──────────────────────────────────────────
+
+/**
+ * Whether a break-glass grant can exist on this install at all: only an app linked to a Nivaro
+ * Hub — a dedicated app with HUB_TOKEN (the hub link is mounted) or one app of a Hub shared
+ * deployment. Everywhere else the request path keeps its old, cached role read with no join, and
+ * the expiry job is not registered.
+ */
+export function breakGlassPossible(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (tenantSource(env) === 'hub') return true
+  return !!hubLinkToken(env) && !isMultiTenant(env)
+}
+
+/**
+ * "This app has open grants" (Redis `nvr:bg-open:<app>`, set BEFORE a grant is answered,
+ * cleared when its last grant ends), copied per process for MARKER_TTL_MS. `none` → the request
+ * path uses the old cached role read; `some` or `unknown` (no Redis, a read error) → the joined,
+ * uncached statement (fail closed). A grant written on another replica is honoured here within
+ * MARKER_TTL_MS. The expiry job re-asserts it every minute while grants are open (a Redis flush
+ * cannot hide one for longer).
+ */
+export const MARKER_TTL_MS = 5_000
+const MARKER_READ_MS = 500
+export type MarkerState = 'some' | 'none' | 'unknown'
+
+export function openGrantsKey(): string {
+  return `nvr:bg-open:${appKeyPart()}`
+}
+
+interface MarkerRedis {
+  get(k: string): Promise<string | null>
+  set(k: string, v: string): Promise<unknown>
+  eval?(script: string, keys: number, ...args: string[]): Promise<unknown>
+}
+
+const markerCopy = appBox<{ v: MarkerState; at: number } | null>(() => null)
+
+function markerRedis(): MarkerRedis | null {
+  const r = (getApp() as { redis?: MarkerRedis } | null)?.redis
+  return r && typeof r.get === 'function' ? r : null
+}
+
+function bounded<T>(p: Promise<T>, ms: number): Promise<T> {
+  let t: NodeJS.Timeout | undefined
+  return Promise.race([
+    p,
+    new Promise<T>((_r, reject) => {
+      t = setTimeout(() => reject(new Error('marker read timed out')), ms)
+    })
+  ]).finally(() => clearTimeout(t))
+}
+
+/** The marker as this process sees it (see above). Never throws. */
+export async function openGrantsMarker(now: number = Date.now()): Promise<MarkerState> {
+  if (!breakGlassPossible()) return 'none'
+  const c = markerCopy.value
+  if (c && now - c.at < MARKER_TTL_MS) return c.v
+  let v: MarkerState = 'unknown'
+  const r = markerRedis()
+  if (r) {
+    try {
+      v = (await bounded(r.get(openGrantsKey()), MARKER_READ_MS)) ? 'some' : 'none'
+    } catch {
+      v = 'unknown'
+    }
+  }
+  markerCopy.value = { v, at: now }
+  return v
+}
+
+/** Sets the marker (before a grant is answered). Throws when it cannot be stored. */
+export async function markGrantsOpen(): Promise<void> {
+  const r = markerRedis()
+  if (!r)
+    throw Object.assign(new Error('No Redis to mark the grant'), { code: 'MARKER_UNAVAILABLE' })
+  await r.set(openGrantsKey(), `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`)
+  markerCopy.value = { v: 'some', at: Date.now() }
+}
+
+/** Tests: forget this process's copy of the marker. */
+export function _resetMarkerForTests(): void {
+  markerCopy.reset()
+}
+
+const CLEAR_IF_SAME =
+  "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) end return 0"
+
+/**
+ * Clears the marker when the app has no open grant left. The value read first is the one
+ * deleted (compare-and-delete): a grant marked in between keeps its marker. Never throws.
+ */
+export async function clearMarkerIfNone(k: Knex = db): Promise<void> {
+  try {
+    const r = markerRedis()
+    if (!r) return
+    const seen = await r.get(openGrantsKey())
+    if (!seen) return
+    const open = (await k(GRANTS).whereNull('ended_at').whereNotNull('user_id').first('id')) as
+      | { id: unknown }
+      | undefined
+    if (open) return
+    if (typeof r.eval === 'function') await r.eval(CLEAR_IF_SAME, 1, openGrantsKey(), seen)
+    markerCopy.value = null
+  } catch {
+    // Left set: the request path keeps joining (fail closed) until the next clear.
+  }
+}
 
 /** Whether this database has the grants table (true is kept; false is re-checked each minute).
  *  A failed check THROWS — never read as "no grant". Per app on a shared deployment. */
@@ -63,7 +175,8 @@ export function grantFromRow(r: Record<string, unknown>): GrantRow {
     role: r.role == null ? null : String(r.role),
     prev_role: r.prev_role == null ? null : String(r.prev_role),
     // An unparseable stored time stays null: grantEnded reads it as ended (fail closed).
-    ends_at: iso(r.ends_at)
+    ends_at: iso(r.ends_at),
+    granted_at: iso(r.granted_at)
   }
 }
 
@@ -92,7 +205,12 @@ export async function effectiveRole<R extends Record<string, unknown>>(
 ): Promise<EffectiveRole<R>> {
   const roleId = user.role == null || user.role === '' ? null : String(user.role)
   if (!roleId) return { role: null, roleId: null, live: null, ended: null }
-  if (!(await grantsTableReady(k))) {
+  // The old statement (cached at the driver seam) unless a grant may exist here right now.
+  if (
+    !breakGlassPossible() ||
+    (await openGrantsMarker(now)) === 'none' ||
+    !(await grantsTableReady(k))
+  ) {
     const role = (await k('nivaro_roles').where({ id: roleId }).first()) as R | undefined
     return { role: role ?? null, roleId, live: null, ended: null }
   }
@@ -136,7 +254,7 @@ export async function withoutLiveGrantees<Q extends Knex.QueryBuilder>(
   k: Knex = db,
   col = 'u.id'
 ): Promise<Q> {
-  if (!(await grantsTableReady(k))) return qb
+  if (!breakGlassPossible() || !(await grantsTableReady(k))) return qb
   return qb.whereNotExists(
     k(GRANTS)
       .select(k.raw('1'))
@@ -148,11 +266,111 @@ export async function withoutLiveGrantees<Q extends Knex.QueryBuilder>(
 export type EndReason = 'expired' | 'revoked' | 'offboarded' | 'unreadable'
 export type EndState = 'restored' | 'restored_over_change' | 'role_changed' | 'none'
 
+export interface RevokedCredentials {
+  api_keys: number
+  static_tokens: number
+  connections: number
+}
+
 export interface GrantEnd {
   grant: GrantRow
   state: EndState
   changed_by: string | null
   changed_to: string | null
+  /** What the grantee made during the grant that the end took away (after afterGrantEnded). */
+  revoked?: RevokedCredentials | null
+}
+
+function readRevoked(v: unknown): RevokedCredentials | null {
+  try {
+    const o = typeof v === 'string' ? JSON.parse(v) : v
+    if (!o || typeof o !== 'object') return null
+    const n = (x: unknown) => (Number.isFinite(Number(x)) ? Number(x) : 0)
+    const r = o as Record<string, unknown>
+    return {
+      api_keys: n(r.api_keys),
+      static_tokens: n(r.static_tokens),
+      connections: n(r.connections)
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Belt and braces (security review): every credential the grantee MADE during the grant ends
+ * with it — API keys they created (for anyone), static tokens they minted (for anyone), and their
+ * own OAuth / phone / MCP connections opened since the grant began. Run-as and View-as tokens
+ * stop on their own: they need their issuer to be an administrator still (isActiveAdmin judges
+ * the grant). Found through the activity log and the keys' own rows; never throws.
+ */
+export async function revokeGrantCredentials(
+  k: Knex,
+  userId: string,
+  since: string | null | undefined
+): Promise<RevokedCredentials> {
+  const out: RevokedCredentials = { api_keys: 0, static_tokens: 0, connections: 0 }
+  const from = since ? new Date(since) : new Date(0)
+  const activityItems = async (action: string, collection: string) => {
+    try {
+      const rows = (await k('nivaro_activity')
+        .where({ user: userId, action, collection })
+        .where('timestamp', '>=', from)
+        .select('item')
+        .limit(1000)) as Array<{ item: unknown }>
+      return [...new Set(rows.map((r) => String(r.item ?? '')).filter(Boolean))]
+    } catch {
+      return [] as string[]
+    }
+  }
+  try {
+    const logged = (await activityItems('api_key_created', 'nivaro_api_keys'))
+      .map(Number)
+      .filter((n) => Number.isInteger(n) && n > 0)
+    const keys = (await k('nivaro_api_keys')
+      .where('is_active', true)
+      .where((w) => {
+        w.where((x) => x.where('user', userId).where('created_at', '>=', from))
+        if (logged.length) w.orWhereIn('id', logged)
+      })
+      .select('id')) as Array<{ id: unknown }>
+    if (keys.length) {
+      out.api_keys = await k('nivaro_api_keys')
+        .whereIn(
+          'id',
+          keys.map((x) => Number(x.id))
+        )
+        .update({ is_active: false })
+    }
+  } catch {
+    /* no keys table here */
+  }
+  try {
+    const minted = await activityItems('token.generate', 'nivaro_users')
+    if (minted.length)
+      out.static_tokens = await k('nivaro_users')
+        .whereIn('id', minted.slice(0, 500))
+        .whereNotNull('static_token')
+        .update({ static_token: null })
+  } catch {
+    /* best effort */
+  }
+  try {
+    const redis = (getApp() as { redis?: unknown } | null)?.redis
+    if (redis) {
+      const store = await import('./oauth-store.js')
+      const grants = await store.listGrants(redis as never, userId)
+      for (const g of grants)
+        if (
+          Date.parse(g.created_at) >= from.getTime() &&
+          (await store.revokeGrant(redis as never, userId, g.id))
+        )
+          out.connections++
+    }
+  } catch {
+    /* best effort */
+  }
+  return out
 }
 
 const sameId = (a: unknown, b: unknown) =>
@@ -197,7 +415,8 @@ export async function endGrantInTrx(
       grant: g,
       state: (String(r.end_state ?? 'none') as EndState) || 'none',
       changed_by: (r.changed_by as string | null) ?? null,
-      changed_to: (r.changed_to as string | null) ?? null
+      changed_to: (r.changed_to as string | null) ?? null,
+      revoked: readRevoked(r.revoked_credentials)
     }
   let state: EndState = 'none'
   let changedBy: string | null = null
@@ -241,10 +460,17 @@ export async function endGrantInTrx(
 export async function afterGrantEnded(
   end: GrantEnd,
   reason: EndReason,
-  why: string
+  why: string,
+  k: Knex = db
 ): Promise<void> {
   const userId = end.grant.user_id
   if (userId) {
+    const revoked = await revokeGrantCredentials(k, userId, end.grant.granted_at)
+    end.revoked = revoked
+    await k(GRANTS)
+      .where({ id: end.grant.id })
+      .update({ revoked_credentials: JSON.stringify(revoked) })
+      .catch(() => undefined)
     try {
       const sockets = await import('./socket-access.js')
       sockets.endUserSockets(userId, 'account_inactive')
@@ -270,7 +496,13 @@ export async function afterGrantEnded(
         : end.state === 'restored_over_change'
           ? `Break-glass ${end.grant.ref} ended (${why}); ${end.changed_by ?? 'someone'} had changed the role to ${end.changed_to ?? 'another admin role'} — the role the grant replaced is back`
           : `Break-glass ${end.grant.ref} ended (${why}); the role it replaced is back`
-      ).slice(0, 1000),
+      )
+        .concat(
+          end.revoked && end.revoked.api_keys + end.revoked.static_tokens + end.revoked.connections
+            ? `; revoked what was made during it: ${end.revoked.api_keys} API key(s), ${end.revoked.static_tokens} static token(s), ${end.revoked.connections} connection(s)`
+            : ''
+        )
+        .slice(0, 1000),
       origin: 'integration'
     })
   } catch {
@@ -288,7 +520,8 @@ export async function endGrant(
   now: Date = new Date()
 ): Promise<GrantEnd | null> {
   const end = await k.transaction((trx) => endGrantInTrx(trx, grantId, reason, now))
-  if (end && end.grant.user_id) await afterGrantEnded(end, reason, why)
+  if (end && end.grant.user_id) await afterGrantEnded(end, reason, why, k)
+  await clearMarkerIfNone(k)
   return end
 }
 
@@ -328,7 +561,13 @@ export function endLiveGrantsOf(grant: GrantRow, k: Knex = db): void {
  * or whose end time cannot be read.
  */
 export async function expireGrants(k: Knex = db, now: Date = new Date()): Promise<string[]> {
-  if (!(await grantsTableReady(k))) return []
+  if (!breakGlassPossible() || !(await grantsTableReady(k))) return []
+  // Open grants keep the marker set (a Redis restart or flush cannot hide them past a minute).
+  const anyOpen = (await k(GRANTS).whereNull('ended_at').whereNotNull('user_id').first('id')) as
+    | { id: unknown }
+    | undefined
+  if (anyOpen && (await openGrantsMarker(0)) !== 'some')
+    await markGrantsOpen().catch(() => undefined)
   const rows = (await k(GRANTS)
     .whereNull('ended_at')
     .whereNotNull('user_id')
@@ -346,7 +585,8 @@ export async function expireGrants(k: Knex = db, now: Date = new Date()): Promis
 
 /** Ends every grant of these accounts whose time ran out (the socket sweep). Never throws. */
 export async function endDueGrantsOf(userIds: string[], k: Knex = db): Promise<number> {
-  if (!userIds.length || !(await grantsTableReady(k))) return 0
+  if (!userIds.length || !breakGlassPossible()) return 0
+  if ((await openGrantsMarker()) === 'none' || !(await grantsTableReady(k))) return 0
   const now = new Date()
   let n = 0
   for (let i = 0; i < userIds.length; i += 200) {

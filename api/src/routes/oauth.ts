@@ -722,6 +722,13 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
         reply,
         'This consent page expired. Go back to the app and connect again.'
       )
+    // A Nivaro Hub break-glass grantee connects nothing while the grant holds: a connection would
+    // outlast it (services/break-glass-guard.ts).
+    if (req.breakGlass)
+      return cannotConnect(
+        reply,
+        'While a break-glass grant holds your account you cannot connect apps. Ask another administrator.'
+      )
     const checked = await checkAuthorize(app, req, readAuthorizeParams(body))
     if (!checked.ok) return cannotConnect(reply, checked.message)
     const p = checked.p

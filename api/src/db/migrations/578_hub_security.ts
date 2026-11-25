@@ -221,6 +221,9 @@ export async function up(knex: Knex): Promise<void> {
       t.string('end_state', 24).nullable()
       t.string('changed_by', 200).nullable()
       t.string('changed_to', 200).nullable()
+      // JSON {api_keys, static_tokens, connections}: what the grantee made during the grant and
+      // the app took away at its end
+      t.string('revoked_credentials', 500).nullable()
       t.unique(['ref'], { indexName: 'ux_nivaro_break_glass_grants_ref' })
       t.index(['user_id', 'ended_at'], 'ix_nivaro_break_glass_grants_user')
     })
