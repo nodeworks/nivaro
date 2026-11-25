@@ -1,0 +1,376 @@
+import Fastify, { type FastifyInstance } from 'fastify'
+import type { Knex } from 'knex'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+
+// Nivaro Hub people directory + "Offboard everywhere" (routes/hub-people.ts,
+// services/hub/people/*). Real SQLite for the Hub tables; the calls to the apps (link-calls.ts),
+// the user service and the session store are mocked — no app is ever contacted.
+
+vi.mock('../../../db/index.js', async () => {
+  const knex = (await import('knex')).default
+  const { sqliteAfterCreate, sqliteCompat } = await import('../../../db/sqlite.js')
+  sqliteCompat()
+  const db = knex({
+    client: 'better-sqlite3',
+    connection: { filename: ':memory:' },
+    useNullAsDefault: true,
+    pool: { min: 1, max: 1, afterCreate: sqliteAfterCreate }
+  })
+  return { db }
+})
+vi.mock('../../../middleware/authenticate.js', () => {
+  const sign = async (req: {
+    headers: Record<string, string | undefined>
+    user?: unknown
+    isAdmin?: boolean
+  }) => {
+    const id = req.headers['x-user']
+    if (!id) throw Object.assign(new Error('Unauthorized'), { statusCode: 401 })
+    req.user = { id, status: 'active' }
+    req.isAdmin = req.headers['x-admin'] === '1'
+  }
+  const admin = async (req: Parameters<typeof sign>[0]) => {
+    await sign(req)
+    if (!req.isAdmin)
+      throw Object.assign(new Error('Forbidden'), { statusCode: 403, code: 'ADMIN_ONLY' })
+  }
+  return { requireAuth: vi.fn(sign), requireAdmin: vi.fn(admin), authenticate: vi.fn(sign) }
+})
+const m = vi.hoisted(() => ({
+  logActivity: vi.fn(async (..._a: unknown[]) => null),
+  call: vi.fn(),
+  revoke: vi.fn(async (..._a: unknown[]) => 1)
+}))
+vi.mock('../../../services/activity.js', () => ({ logActivity: m.logActivity }))
+vi.mock('../../../services/hub/promote-run.js', async (orig) => ({
+  ...(await orig<typeof import('../../../services/hub/promote-run.js')>()),
+  recoverOnceAtBoot: vi.fn()
+}))
+vi.mock('../../../services/hub/people/link-calls.js', () => ({
+  peopleTargetOf: vi.fn(async (env: { id: number; hub_token?: string | null; base_url: string }) =>
+    env.hub_token
+      ? { kind: 'dedicated', envId: env.id, base_url: env.base_url, token: env.hub_token }
+      : null
+  ),
+  callPeople: m.call
+}))
+vi.mock('../../../auth/session.js', () => ({ revokeUserSessions: m.revoke }))
+vi.mock('../../../services/users.js', async () => {
+  const { db } = (await import('../../../db/index.js')) as unknown as { db: Knex }
+  return {
+    updateUser: vi.fn(async (id: string, data: Record<string, unknown>) => {
+      await db('nivaro_users').where({ id }).update(data)
+    })
+  }
+})
+
+const { db } = (await import('../../../db/index.js')) as unknown as { db: Knex }
+const m542 = await import('../../../db/migrations/542_hub_tables.js')
+const m543 = await import('../../../db/migrations/543_hub_promotions.js')
+const m551 = await import('../../../db/migrations/551_hub_signins.js')
+const m570 = await import('../../../db/migrations/570_hub_people_owner_policy.js')
+const { hubRoutes } = await import('../../../routes/hub.js')
+const { hubSigninBlocked, readOffboard } = await import('../../../services/hub/people/offboard.js')
+const { groupPeople } = await import('../../../services/hub/people/directory.js')
+
+const ADMIN = 'AAAAAAAA-0000-4000-8000-000000000001'
+const ADMIN2 = 'AAAAAAAA-0000-4000-8000-000000000009'
+const DANA = 'DDDDDDDD-0000-4000-8000-000000000004'
+const asAdmin = { 'x-user': ADMIN, 'x-admin': '1' }
+const asOwner = { 'x-user': 'BBBBBBBB-0000-4000-8000-000000000002' }
+const ADMIN_ROLE = '0A000000-0000-4000-8000-000000000001'
+
+let app: FastifyInstance
+let prevHub: string | undefined
+let envA: number
+let envB: number
+let envC: number
+
+const idOf = (r: unknown) => {
+  const x = (r as Array<number | { id: number }>)[0]
+  return typeof x === 'object' ? x.id : x
+}
+
+beforeAll(async () => {
+  prevHub = process.env.HUB
+  process.env.HUB = 'on'
+  for (const mig of [m542, m543, m551, m570]) await mig.up(db)
+  await db.schema.createTable('nivaro_roles', (t) => {
+    t.string('id').primary()
+    t.boolean('admin_access')
+  })
+  await db.schema.createTable('nivaro_users', (t) => {
+    t.string('id').primary()
+    t.string('first_name')
+    t.string('last_name')
+    t.string('email')
+    t.string('role')
+    t.string('status')
+    t.string('account_kind')
+    t.string('entra_oid')
+    t.string('entra_tid')
+  })
+  app = Fastify()
+  await app.register(hubRoutes, { prefix: '/api/hub' })
+  await app.ready()
+})
+afterAll(async () => {
+  await app.close()
+  await db.destroy()
+  if (prevHub === undefined) delete process.env.HUB
+  else process.env.HUB = prevHub
+})
+beforeEach(async () => {
+  vi.clearAllMocks()
+  for (const t of [
+    'nivaro_hub_offboards',
+    'nivaro_hub_signins',
+    'nivaro_hub_environments',
+    'nivaro_hub_apps',
+    'nivaro_users',
+    'nivaro_roles'
+  ])
+    await db(t).del()
+  await db('nivaro_roles').insert({ id: ADMIN_ROLE, admin_access: true })
+  await db('nivaro_users').insert([
+    { id: ADMIN, email: 'admin@x.io', role: ADMIN_ROLE, status: 'active' },
+    { id: ADMIN2, email: 'admin2@x.io', role: ADMIN_ROLE, status: 'active' },
+    {
+      id: DANA,
+      first_name: 'Dana',
+      last_name: 'Doe',
+      email: 'dana@x.io',
+      status: 'active',
+      entra_oid: 'oid-dana',
+      entra_tid: 'tid-1'
+    }
+  ])
+  const appRow = async (key: string) =>
+    idOf(
+      await db('nivaro_hub_apps')
+        .insert({ key, name: key.toUpperCase(), signin_mode: 'hub', extensions: '[]' })
+        .returning('id')
+    )
+  const efp = await appRow('efp')
+  const pole = await appRow('pole')
+  const env = async (appId: number, key: string, token: string | null) =>
+    idOf(
+      await db('nivaro_hub_environments')
+        .insert({
+          app_id: appId,
+          key,
+          base_url: `https://${key}.x.io`,
+          hostnames: '[]',
+          status: 'active',
+          position: 0,
+          hub_token: token
+        })
+        .returning('id')
+    )
+  envA = await env(efp, 'production', 'sealed-a')
+  envB = await env(pole, 'production', 'sealed-b')
+  envC = await env(pole, 'staging', null)
+  await db('nivaro_hub_signins').insert([
+    {
+      identity_key: 'entra:tid-1:oid-dana',
+      hub_user_id: DANA,
+      email: 'dana@x.io',
+      app_id: efp,
+      environment_id: envA,
+      via: 'hub',
+      last_seen: new Date()
+    },
+    {
+      identity_key: 'email:dana@x.io',
+      hub_user_id: null,
+      email: 'dana@x.io',
+      app_id: pole,
+      environment_id: envB,
+      via: 'direct',
+      last_seen: new Date()
+    },
+    {
+      identity_key: 'email:eve@x.io',
+      hub_user_id: null,
+      email: 'eve@x.io',
+      app_id: pole,
+      environment_id: envB,
+      via: 'direct',
+      last_seen: new Date(Date.now() - 86_400_000)
+    }
+  ])
+})
+
+const call = (method: 'GET' | 'POST', p: string, headers: Record<string, string>, body?: unknown) =>
+  app.inject({ method, url: `/api/hub${p}`, headers, payload: body as never })
+
+async function settled(id: number) {
+  for (let i = 0; i < 100; i++) {
+    const r = await readOffboard(id)
+    if (r && r.status !== 'running') return r
+    await new Promise((res) => setTimeout(res, 20))
+  }
+  throw new Error('offboard did not finish')
+}
+
+describe('directory', () => {
+  it('groups sign-ins per person; a key a Hub account carries joins that account', async () => {
+    const r = await call('GET', '/people', asAdmin)
+    expect(r.statusCode).toBe(200)
+    const { data, total } = r.json()
+    expect(total).toBe(2)
+    expect(data[0]).toMatchObject({ key: `u:${DANA}`, name: 'Dana Doe', email: 'dana@x.io' })
+    expect(
+      data[0].environments.map((e: { environment_id: number }) => e.environment_id).sort()
+    ).toEqual([envA, envB].sort())
+    expect(data[1].key).toMatch(/^k:\d+$/)
+    expect((await call('GET', '/people?q=EVE', asAdmin)).json().total).toBe(1)
+  })
+
+  it('a key two Hub accounts carry belongs to neither (pure)', () => {
+    const row = (id: number, key: string, user: string | null) => ({
+      id,
+      identity_key: key,
+      hub_user_id: user,
+      email: null,
+      environment_id: 1,
+      app_id: 1,
+      via: 'hub',
+      last_seen: null,
+      env_key: 'p',
+      app_key: 'a',
+      app_name: 'A'
+    })
+    const g = groupPeople([
+      row(1, 'email:x@y.z', 'U1'),
+      row(2, 'email:x@y.z', 'U2'),
+      row(3, 'email:x@y.z', null)
+    ])
+    expect([...g.keys()].sort()).toEqual(['k:1', 'u:U1', 'u:U2'])
+  })
+
+  it('admins only; an unknown or malformed key is 404', async () => {
+    expect((await call('GET', '/people', asOwner)).statusCode).toBe(403)
+    expect((await call('GET', `/people/u:${DANA}/access`, asOwner)).statusCode).toBe(403)
+    expect((await call('POST', `/people/u:${DANA}/offboard`, asOwner, {})).statusCode).toBe(403)
+    expect((await call('GET', '/people/dana@x.io', asAdmin)).statusCode).toBe(404)
+    expect((await call('GET', '/people/k:999999', asAdmin)).statusCode).toBe(404)
+  })
+
+  it('person detail: identities asked about (emails, count of Entra ids), no app asked', async () => {
+    const r = (await call('GET', `/people/u:${DANA}`, asAdmin)).json().data
+    expect(r.identity).toEqual({ emails: ['dana@x.io'], entra: 1 })
+    expect(r.offboards).toEqual([])
+    expect(m.call).not.toHaveBeenCalled()
+  })
+})
+
+describe('access (live)', () => {
+  it('asks every environment by email + Entra id; one with no link says so', async () => {
+    m.call.mockImplementation(async (t: { envId: number }, op: string, ident: unknown) => {
+      expect(op).toBe('lookup')
+      expect(ident).toEqual({
+        emails: ['dana@x.io'],
+        entra: [{ oid: 'oid-dana', tid: 'tid-1' }]
+      })
+      return t.envId === envA
+        ? {
+            ok: true,
+            accounts: [
+              { user_id: 'x', status: 'active', role: 'Admin', admin: true, matched_by: 'entra' }
+            ]
+          }
+        : { ok: false, code: 'LINK_UNREACHABLE', status: 0 }
+    })
+    const data = (await call('GET', `/people/u:${DANA}/access`, asAdmin)).json().data
+    const by = (id: number) => data.find((d: { environment_id: number }) => d.environment_id === id)
+    expect(by(envA)).toMatchObject({ state: 'account', accounts: [{ role: 'Admin' }] })
+    expect(by(envB)).toMatchObject({ state: 'error', code: 'LINK_UNREACHABLE' })
+    expect(by(envC)).toMatchObject({ state: 'no_link' })
+  })
+})
+
+describe('offboard everywhere', () => {
+  it('needs the typed email; suspends the Hub account at once and blocks Hub sign-in', async () => {
+    m.call.mockResolvedValue({ ok: true, state: 'suspended', accounts: [{}] })
+    const wrong = await call('POST', `/people/u:${DANA}/offboard`, asAdmin, { confirm: 'dana' })
+    expect(wrong.statusCode).toBe(400)
+    expect(wrong.json().code).toBe('CONFIRM_REQUIRED')
+    expect(await hubSigninBlocked({ id: DANA })).toBe(false)
+
+    const r = await call('POST', `/people/u:${DANA}/offboard`, asAdmin, { confirm: 'DANA@x.io' })
+    expect(r.statusCode).toBe(202)
+    expect(r.json().data).toMatchObject({ hub_account: 'suspended', blocked: true })
+    expect((await db('nivaro_users').where({ id: DANA }).first()).status).toBe('suspended')
+    // Blocked by account, by email and by Entra id (an account made again is refused too).
+    expect(await hubSigninBlocked({ id: DANA })).toBe(true)
+    expect(await hubSigninBlocked({ id: 'other', email: ' Dana@X.io ' })).toBe(true)
+    expect(await hubSigninBlocked({ id: 'other', entra_oid: 'OID-DANA' })).toBe(true)
+    expect(await hubSigninBlocked({ id: ADMIN, email: 'admin@x.io' })).toBe(false)
+
+    const done = await settled(r.json().data.id)
+    // Two environments with a link suspended; the one without a link is not finished.
+    expect(done.status).toBe('partial')
+    const st = Object.fromEntries(done.results.map((x) => [x.environment_id, x.state]))
+    expect(st).toEqual({ [envA]: 'suspended', [envB]: 'suspended', [envC]: 'no_link' })
+    expect(m.call.mock.calls.every((c) => c[1] === 'suspend')).toBe(true)
+  })
+
+  it('a refusal (last admin) and a failure stay open; Retry asks only those again', async () => {
+    m.call.mockImplementation(async (t: { envId: number }) =>
+      t.envId === envA
+        ? { ok: false, code: 'LAST_ADMIN', status: 409 }
+        : { ok: false, code: 'TIMEOUT', status: 0 }
+    )
+    const id = (
+      await call('POST', `/people/u:${DANA}/offboard`, asAdmin, { confirm: 'dana@x.io' })
+    ).json().data.id
+    const first = await settled(id)
+    const st = Object.fromEntries(first.results.map((x) => [x.environment_id, x]))
+    expect(st[envA]).toMatchObject({ state: 'refused', code: 'LAST_ADMIN', attempts: 1 })
+    expect(st[envB]).toMatchObject({ state: 'failed', code: 'TIMEOUT' })
+
+    m.call.mockReset()
+    m.call.mockImplementation(async (t: { envId: number }) =>
+      t.envId === envA
+        ? { ok: true, state: 'suspended', accounts: [{}] }
+        : { ok: true, state: 'none', accounts: [] }
+    )
+    // Lift, then Retry puts the block back.
+    expect((await call('POST', `/offboards/${id}/lift`, asAdmin)).json().data.blocked).toBe(false)
+    expect(await hubSigninBlocked({ id: 'x', email: 'dana@x.io' })).toBe(false)
+    expect((await call('POST', `/offboards/${id}/retry`, asAdmin)).statusCode).toBe(202)
+    const second = await settled(id)
+    const s2 = Object.fromEntries(second.results.map((x) => [x.environment_id, x]))
+    expect(s2[envA]).toMatchObject({ state: 'suspended', attempts: 2 })
+    expect(s2[envB]).toMatchObject({ state: 'none', attempts: 2 })
+    expect(second.blocked).toBe(true)
+  })
+
+  it('refuses the caller themselves and the Hub’s last admin', async () => {
+    await db('nivaro_hub_signins').insert({
+      identity_key: 'email:admin@x.io',
+      hub_user_id: ADMIN,
+      email: 'admin@x.io',
+      app_id: 1,
+      environment_id: envA,
+      via: 'hub'
+    })
+    const self = await call('POST', `/people/u:${ADMIN}/offboard`, asAdmin, {
+      confirm: 'admin@x.io'
+    })
+    expect(self.json().code).toBe('OFFBOARD_SELF')
+    await db('nivaro_users').where({ id: ADMIN2 }).update({ status: 'suspended' })
+    const last = await call(
+      'POST',
+      `/people/u:${ADMIN}/offboard`,
+      { 'x-user': DANA, 'x-admin': '1' },
+      {
+        confirm: 'admin@x.io'
+      }
+    )
+    expect(last.json().code).toBe('LAST_HUB_ADMIN')
+    expect((await db('nivaro_users').where({ id: ADMIN }).first()).status).toBe('active')
+    expect(await db('nivaro_hub_offboards').count({ n: '*' })).toEqual([{ n: 0 }])
+  })
+})

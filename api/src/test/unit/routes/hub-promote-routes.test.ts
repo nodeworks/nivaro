@@ -67,6 +67,7 @@ vi.mock('../../../services/security.js', async (orig) => ({
 const { db } = (await import('../../../db/index.js')) as unknown as { db: Knex }
 const { up } = await import('../../../db/migrations/542_hub_tables.js')
 const { up: up543 } = await import('../../../db/migrations/543_hub_promotions.js')
+const { up: up570 } = await import('../../../db/migrations/570_hub_people_owner_policy.js')
 const { hubRoutes } = await import('../../../routes/hub.js')
 const { logActivity } = await import('../../../services/activity.js')
 const { maintenanceFreezeHook } = await import('../../../services/maintenance-freeze.js')
@@ -95,6 +96,7 @@ beforeAll(async () => {
   process.env.HUB = 'on'
   await up(db)
   await up543(db)
+  await up570(db)
   await db.schema.createTable('nivaro_users', (t) => {
     t.string('id').primary()
     t.string('first_name')
@@ -123,7 +125,15 @@ beforeEach(async () => {
     await db(t).del()
   appId = idOf(
     await db('nivaro_hub_apps')
-      .insert({ key: 'efp', name: 'EFP', signin_mode: 'direct', extensions: '[]' })
+      .insert({
+        key: 'efp',
+        name: 'EFP',
+        signin_mode: 'direct',
+        extensions: '[]',
+        // Owners here act on the chain's last environment (production): the app lets them
+        // (owner self-service on production is hub-owner-access.test.ts).
+        owners_deploy_production: true
+      })
       .returning('id')
   )
   const env = (key: string, position: number) =>

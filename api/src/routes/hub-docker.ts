@@ -38,6 +38,7 @@ import {
 import { getDriver, placedOnShared, SHARED_PLACEMENT_MESSAGE } from '../services/hub/drivers.js'
 import { moveOpenRefusal } from '../services/hub/move-open.js'
 import { markNameServing } from '../services/hub/name-check.js'
+import { ownerDeployRefusal } from '../services/hub/owner-access.js'
 import { type LockHolder, lockHolderRefusal, PromotionError } from '../services/hub/promote-lock.js'
 import { startStackApply } from '../services/hub/promote-run.js'
 import type { HubEnvironmentRow } from '../services/hub/promote-types.js'
@@ -527,7 +528,8 @@ export function hubDockerRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const row = await readableEnvironment(req)
       if (!row) return notFound(reply)
-      if (!req.isAdmin) return adminOnly(reply)
+      // Owners read (secrets masked) on non-production; production per the app's switch.
+      if (!req.isAdmin && (await ownerDeployRefusal(req, Number(row.id)))) return adminOnly(reply)
       const envId = Number(row.id)
       if (!(await dockerTargetOf(envId))) return notDocker(reply, envId)
       return { data: settingsAnswer(envId, await readStackSettings(envId), row) }

@@ -22,6 +22,7 @@ import { issueCode, takeCode } from '../services/hub/oidc/codes.js'
 import { bareEvidence, evidenceFresh, hubPrimaryIssuer } from '../services/hub/oidc/evidence.js'
 import { hubIssuer, hubOwnOrigin, publishedJwks, sidHash } from '../services/hub/oidc/keys.js'
 import { HUB_ID_TOKEN_TTL_S, mintIdToken } from '../services/hub/oidc/tokens.js'
+import { hubSigninBlocked } from '../services/hub/people/offboard.js'
 import { recordSignin } from '../services/hub/signins.js'
 import { canSignIn } from '../services/users.js'
 import type { User } from '../types.js'
@@ -407,6 +408,8 @@ export async function hubOidcRoutes(app: FastifyInstance) {
     }
     const user = signedIn.user
     if (!canSignIn(user)) return back('access_denied', 'This account cannot sign in.')
+    // Offboarded everywhere (services/hub/people/offboard.ts): refused while the block holds.
+    if (await hubSigninBlocked(user)) return back('access_denied', 'This account cannot sign in.')
     // Ruling P7-7: the new-user gate authenticate runs (accessPendingGate). A Hub account still
     // in First Access / Needs Authorization may use the Hub's request-access screen only; it
     // never signs anyone in to an app.
@@ -515,7 +518,7 @@ export async function hubOidcRoutes(app: FastifyInstance) {
           is_redacted?: unknown
         }
       | undefined
-    if (!user || !canSignIn(user)) return badGrant()
+    if (!user || !canSignIn(user) || (await hubSigninBlocked(user))) return badGrant()
     // The Hub session the code was issued from was signed out (or revoked) since: no token.
     if (!rec.sid || (await app.redis.exists(`${REVOKED_PREFIX}${rec.sid}`))) return badGrant()
 
