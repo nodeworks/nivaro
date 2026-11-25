@@ -498,7 +498,7 @@ await ctx.sql.announceWrites?.('forecasts', ids, { action: 'update', changed_fie
         'Each look reads a small window by the database’s own clock, in UTC and in local time (procedures often stamp GETDATE()), reaching two minutes back for transactions that commit late, and skips rows other transactions hold locked until a later look.',
         'More than 500 changed rows in one look become one “many records changed” announcement.',
         'Rows caught in 24 hours are counted per collection on the tab: each is a write still made without announcing — usually a procedure that SQL checks can fix.',
-        'On a Hub shared deployment (0.3.215) the watcher runs per app: the server that runs scheduled jobs walks the SQL Server apps in turn, each with its own setting, collections and counts, and one look of one app stops starting collections after 4 seconds (the rest go first next time). Nivaro Cloud never runs it.',
+        'On a Hub shared deployment (0.3.215) the watcher runs per app: the server that runs scheduled jobs walks the SQL Server apps in turn, each with its own setting, collections and counts, and one look of one app is held to about 4 seconds as a whole (what it did not read goes first next time). Every read waits at most 1 second on a lock: a table held by a long transaction or a replication snapshot is read again at the next look instead of failing. Nivaro Cloud never runs it.',
         'OUTSIDE_WRITE_WATCH=on|off overrides the setting. Collections with realtime switched off are skipped. Never runs on hosted (cloud) plans.'
       ]
     },
