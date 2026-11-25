@@ -85,6 +85,7 @@ const SHARED: Record<string, string> = {
     'the routes this realtime-only process registered at boot (code, the same for every app)',
   'db/metadata-query-cache.ts :: counters': DIAG,
   'middleware/authenticate.ts :: identityCounters': DIAG,
+  'middleware/authenticate.ts :: staleLoggedAt': DIAG,
   'routes/collection-layouts.ts :: layoutBundleCounters': DIAG,
   'routes/presence.ts :: presenceOnlineCounters': DIAG,
   'services/collection-live-mode.ts :: stats': DIAG,

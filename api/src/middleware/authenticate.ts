@@ -243,12 +243,25 @@ export function isDbRequestTimeout(err: unknown): boolean {
   )
 }
 
+let staleLoggedAt = 0
+/** One warning per 10 s while sign-ins run on kept rows (a lock lasts ~15 s; no flood). */
+function noteStaleIdentity(userId: unknown, ageMs: number): void {
+  const now = Date.now()
+  if (now - staleLoggedAt < 10_000) return
+  staleLoggedAt = now
+  // biome-ignore lint/suspicious/noConsole: a sign-in on a kept row must be visible in the server log
+  console.warn(
+    `[auth] sign-in read timed out; answered from a kept identity row (user ${String(userId)}, ${Math.round(ageMs / 1000)} s old; ${identityCounters.stale_served} so far)`
+  )
+}
+
 /** The kept row a timed-out read may fall back to (a copy), or undefined. */
 function staleIdentityRow(key: string, err: unknown): User | undefined {
   if (!isDbRequestTimeout(err)) return undefined
   const hit = identityRows.get(key)
   if (!hit || Date.now() - hit.at > IDENTITY_STALE_ON_TIMEOUT_MS) return undefined
   identityCounters.stale_served++
+  noteStaleIdentity(hit.row.id, Date.now() - hit.at)
   return { ...hit.row }
 }
 
@@ -340,6 +353,8 @@ async function activeUserById(id: unknown): Promise<User | undefined> {
     const started = Date.now()
     p = Promise.resolve(db<User>('nivaro_users').where({ id, status: 'active' }).first())
       .then((row) => {
+        // The database said no (suspended, deleted): a later timeout must never bring it back.
+        if (!row) identityRows.delete(key)
         if (row && gen === identityGen) {
           if (identityRows.size >= IDENTITY_MAX) {
             const oldest = identityRows.keys().next().value

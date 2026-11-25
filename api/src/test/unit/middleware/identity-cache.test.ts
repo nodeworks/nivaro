@@ -151,6 +151,25 @@ describe('identity rows', () => {
   })
 })
 
+describe('a refused account is never brought back by a timeout', () => {
+  it('fresh read finds no active row → the kept one is dropped', async () => {
+    vi.useFakeTimers({ now: Date.now(), toFake: ['Date'] })
+    try {
+      state.fail = null
+      state.row = { id: 'U2', role: null, status: 'active' }
+      await authenticate(req('U2'), {} as never).catch(() => {})
+      vi.setSystemTime(Date.now() + 10_000)
+      state.row = null // suspended on another replica
+      await expect(authenticate(req('U2'), {} as never)).rejects.toMatchObject({ statusCode: 401 })
+      state.fail = Object.assign(new Error('x'), { code: 'ETIMEOUT' })
+      await expect(authenticate(req('U2'), {} as never)).rejects.toMatchObject({ code: 'ETIMEOUT' })
+    } finally {
+      vi.useRealTimers()
+      state.fail = null
+    }
+  })
+})
+
 describe('isDbRequestTimeout', () => {
   it('the driver timeout by code or message, nothing else', () => {
     expect(isDbRequestTimeout({ code: 'ETIMEOUT' })).toBe(true)
