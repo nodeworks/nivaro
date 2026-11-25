@@ -49,6 +49,12 @@ export interface StackSpec {
    * `hostnames: []` only with a pattern (ruling B5); app owners may send `[]` (no router).
    */
   host_pattern?: string
+  /** Agent 0.2.3: an EXISTING folder under the agent's NFS export used as-is for uploads. */
+  uploads_folder?: string
+  /** Agent 0.2.3: STORAGE_LOCAL_ROOT = `/app/uploads/<files_subfolder>`. */
+  files_subfolder?: string
+  /** Agent 0.2.3: the app services run as uid 1000 from the start (ContainerSpec.User). */
+  run_as?: 'app'
 }
 
 /** `GET /v1/health` */
@@ -73,6 +79,17 @@ export interface AgentHealth {
   env_prefixes?: string[]
   /** HUB_AGENT_TRAEFIK_VERSION (final review M-7). Absent on an older agent (= 3, its default). */
   traefik_version?: 2 | 3
+  /**
+   * Agent 0.2.3: uploads sit on an NFS export, one folder per stack (every node mounts the same
+   * files, so a `local` volume_driver is not per node then). Absent on an older agent.
+   */
+  volume_nfs?: boolean
+  /** Agent 0.2.3: the agent sees the export (HUB_AGENT_VOLUME_EXPORT_MOUNT) to check folders. */
+  export_mount?: boolean
+  /** Agent 0.2.3: bundled Redis's volume driver (never NFS). */
+  redis_volume_driver?: string
+  /** Agent 0.2.3: bundled Redis runs only on nodes with this label (`key=value`); null = any. */
+  redis_pin_label?: string | null
 }
 
 /** One row of `GET /v1/stacks` (Hub-managed stacks only). */
@@ -139,6 +156,8 @@ export interface StackRemoveResult {
     networks: RemovedObjects
     volumes: RemovedObjects
   }
+  /** Agent 0.2.3: volumes on an NFS export, kept (their files are on the share). */
+  kept_volumes?: string[]
 }
 
 /**
@@ -150,6 +169,11 @@ export interface StackLeftovers {
   secrets: string[]
   networks: string[]
   volumes: string[]
+  /**
+   * Agent 0.2.3: the stack's volumes on an NFS export. Not leftovers to clear: the agent never
+   * removes them (their files are on the share) and they never block a delete.
+   */
+  share_volumes?: string[]
   extensions: boolean
   /**
    * Agent 0.2.1: the stack's tasks whose containers have not ended (draining ones included),

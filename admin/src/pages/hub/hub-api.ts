@@ -1028,6 +1028,60 @@ Object.assign(BLOCKER_COPY, {
   BAD_EXTENSION_PIN: {
     title: 'An extension pin is not valid',
     hint: 'Use image@sha256:… with the 64-character digest.'
+  },
+  // Where a stack keeps its files (Hub agent 0.2.2).
+  BAD_UPLOADS_FOLDER: {
+    title: 'The uploads folder is not a valid path',
+    hint: 'A relative path such as efp or nas/efp: letters, digits, . _ - per part, no .. .'
+  },
+  BAD_FILES_SUBFOLDER: {
+    title: 'The files sub-folder is not a valid path',
+    hint: 'A relative path such as directus-uploads: letters, digits, . _ - per part, no .. .'
+  },
+  BAD_RUN_AS: { title: 'Pick the image default or uid 1000' },
+  AGENT_TOO_OLD: {
+    title: 'The Hub agent is too old for this',
+    hint: 'Update the agent (nodeworks/nivaro-hub-agent) to the version the message names.'
+  },
+  UPLOADS_FOLDER_NEEDS_NFS: {
+    title: 'An uploads folder needs an agent with an NFS export',
+    hint: 'Set an NFS device in HUB_AGENT_VOLUME_OPTS_FILE on the agent, or clear the uploads folder.'
+  },
+  UPLOADS_FOLDER_MISSING: {
+    title: 'The folder is not on the NFS export',
+    hint: 'Create it on the file server (writable by uid 1000), or fix the folder setting.'
+  },
+  UPLOADS_FOLDER_NOT_WRITABLE: {
+    title: 'uid 1000 cannot write the folder on the NFS export',
+    hint: 'Run chown -R 1000:1000 on it on the file server, or export the share with anonuid=1000.'
+  },
+  UPLOADS_FOLDER_UNCHECKED: {
+    title: 'The agent cannot look into the folder on the NFS export',
+    hint: "Check the permissions of the agent's export mount."
+  },
+  UPLOADS_FOLDER_TAKEN: {
+    title: 'Another Hub stack keeps its files in that folder',
+    hint: 'Two stacks never share a folder: pick another one.'
+  },
+  UPLOADS_FOLDER_LINK: {
+    title: 'The folder is a link or passes through one',
+    hint: 'The agent never follows links on the export: use the real folder.'
+  },
+  EXPORT_MOUNT_MISSING: {
+    title: 'The agent does not see its NFS export',
+    hint: 'Mount the export into the agent and set HUB_AGENT_VOLUME_EXPORT_MOUNT.'
+  },
+  UPLOADS_FOLDER_PARENT_WRITABLE: {
+    title: 'A folder above the uploads folder is writable by others',
+    hint: 'Remove group and other write (chmod go-w) on it on the file server.'
+  },
+  UPLOADS_FOLDER_NOT_OURS: {
+    title: 'A folder with this stack’s name is already on the export',
+    hint: 'The agent did not make it. Adopt it with the uploads folder setting, or remove it on the file server.'
+  },
+  UPLOADS_LAYOUT_CHANGED: {
+    title: 'This stack’s files are still on the export root',
+    hint: 'An older agent put them there. Move them into a folder on the file server and set it as the uploads folder.'
   }
 } satisfies Record<string, { title: string; hint?: string }>)
 

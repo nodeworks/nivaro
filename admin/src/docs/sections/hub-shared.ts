@@ -150,7 +150,7 @@ export const hubSharedDocs: DocSection = {
     },
     {
       type: 'p',
-      text: "Plan blockers about routing: `PATTERN_NOT_ALLOWED` (the pattern is outside the agent host suffixes), `HOSTNAME_NOT_ALLOWED`, `TOO_MANY_HOSTNAMES`, `NO_ROUTE` (no pattern, no explicit name and no publish port), `PUBLISH_PORT_NOT_ALLOWED`, and `HUB_URL_UNUSABLE` (the address the stack would get as `HUB_URL` is not an https origin a deployment accepts). Warnings: `HUB_URL_PROBLEM` (the Hub's own `HUB_URL` is ignored and its public address is used instead) and `MULTI_NODE_VOLUMES` (the swarm has several nodes and local volumes: uploads and bundled Redis stay on the node a task first ran on)."
+      text: "Plan blockers about routing: `PATTERN_NOT_ALLOWED` (the pattern is outside the agent host suffixes), `HOSTNAME_NOT_ALLOWED`, `TOO_MANY_HOSTNAMES`, `NO_ROUTE` (no pattern, no explicit name and no publish port), `PUBLISH_PORT_NOT_ALLOWED`, and `HUB_URL_UNUSABLE` (the address the stack would get as `HUB_URL` is not an https origin a deployment accepts). Warnings: `HUB_URL_PROBLEM` (the Hub's own `HUB_URL` is ignored and its public address is used instead) and `MULTI_NODE_VOLUMES` (the swarm has several nodes and local volumes that are not on an NFS export: uploads and bundled Redis stay on the node a task first ran on; an agent 0.2.3 with an NFS export ends it)."
     },
     { type: 'h2', id: 'hub-shared-pool', text: 'Pool budget' },
     {
@@ -420,11 +420,6 @@ export const hubSharedDocs: DocSection = {
           'Upgrades driven by GitLab',
           'A GitLab-run deployment is registered and upgraded by its pipeline.',
           '-'
-        ],
-        [
-          'More than one swarm node with bundled volumes',
-          'Same limit as dedicated stacks.',
-          'warning `MULTI_NODE_VOLUMES`'
         ]
       ]
     },
@@ -453,7 +448,8 @@ export const hubSharedDocs: DocSection = {
         'From 0.3.215 — huddle media servers. Each app uses the STUN, TURN and media server (LiveKit) it saved in Settings → Huddles, as on a dedicated stack; the TURN secret, TURN password and LiveKit secret are stored sealed with the app key. The platform variables `HUDDLE_LIVEKIT_URL`, `HUDDLE_TURN_URLS` and `HUDDLE_STUN_URLS` stay Nivaro Cloud only. What the deployment itself dials stays guarded: the media server test and the room clean-up calls go through the SSRF guard, and Test TURN resolves each address once, refuses a private or reserved one the operator has not allowed with `SSRF_ALLOW_HOSTS` (browsers still use it), and connects to exactly the address it checked. The every-5-minutes TURN probe stays off on shared; Server health shows the last manual test.',
         "From 0.3.215 — per-instance settings (Settings → This instance: huddle media servers, the outside-write watch, the daily report, caches …). A shared deployment reads an app's row under the deployment's own instance name (`NIVARO_INSTANCE`). When a move from a dedicated stack puts the app in maintenance, the Hub passes that name and the app copies its OWN row to it (never another environment's row in the same database); a row already there keeps its values (only empty keys are filled, and the run log names the keys that differ). The app's own row is left as it was, so a rollback changes nothing. The plan says `INSTANCE_SETTINGS_CARRIED`, or `INSTANCE_SETTINGS_STAY` when a side is older or the move is from a shared deployment (then enter them again).",
         "From 0.3.215 — mail from an app that sent with its server's `SMTP_*` / `MAIL_FROM` (or a mail test mode its environment forces, `MAIL_TEST_MODE` / `MAIL_TEST_RECIPIENT`). In the same maintenance call the app saves what it sends with into the carried instance row (only what nothing saved already holds; the password sealed with the app key; a forced test mode stays on with its recipient), never into the settings row other instances of the same database read. A failure stops the move before maintenance (503). The plan shows `ENV_SMTP_KEPT` instead of `ENV_SMTP` when both the app and the target run 0.3.215 or later, with a checklist item to confirm it in the run log; if the app does not confirm, the run log says `ENV_SMTP`. On shared an app with a saved relay signs in only with its own saved user and password, never the deployment's `SMTP_USER` / `SMTP_PASSWORD`; an app with nothing saved at all still uses the deployment's own `SMTP_*`.",
-        'Per-app limits (Hub Capacity tab, apps 0.3.215 or later): requests per minute (429 `APP_RATE_LIMITED`), background jobs at once (a turn waits for a slot, then is skipped with `app_limit`) and file storage (413 `APP_STORAGE_FULL`). The Hub lists them with the app; see Capacity and limits.'
+        'Per-app limits (Hub Capacity tab, apps 0.3.215 or later): requests per minute (429 `APP_RATE_LIMITED`), background jobs at once (a turn waits for a slot, then is skipped with `app_limit`) and file storage (413 `APP_STORAGE_FULL`). The Hub lists them with the app; see Capacity and limits.',
+        "Files on a swarm of several nodes. With Hub agent 0.2.3 and an NFS export (`HUB_AGENT_VOLUME_OPTS_FILE` + `HUB_AGENT_VOLUME_EXPORT_MOUNT`), the shared stack keeps its uploads in its own folder on the export, `<export>/<stack>/uploads`, which every node mounts; each app's files sit inside it under `apps/<app>/`, and bundled Redis stays on a local volume on the agent's node. `MULTI_NODE_VOLUMES` then no longer fires; it still does for local volumes on several nodes (Docker driver and Hub agent, Files on an NFS export)."
       ]
     },
     {
@@ -889,7 +885,7 @@ export const hubMovesDocs: DocSection = {
         ],
         [
           '`MULTI_NODE_VOLUMES`, `MULTI_NODE_UNVERIFIED`',
-          'The target stack has local volumes on a swarm with several nodes (or the Hub could not read the agent to tell).'
+          'The target stack has local volumes, not on an NFS export, on a swarm with several nodes (or the Hub could not read the agent to tell).'
         ],
         [
           '`ISSUER_UNVERIFIED`, `REDIS_UNVERIFIED`, `STORAGE_UNVERIFIED`, `DB_IDENTITY_UNCHECKED`, `EXTENSION_PIN_UNVERIFIED`',

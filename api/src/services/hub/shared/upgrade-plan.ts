@@ -5,7 +5,7 @@ import { environmentFromRow } from '../apps.js'
 import { AgentError, agentHealth } from '../docker/agent-client.js'
 import type { AgentHealth, StackSpec } from '../docker/agent-types.js'
 import { environmentNames, hostnameRefusals, type StackEdge } from '../docker/render-spec.js'
-import { agentVersionAtLeast } from '../docker/templates.js'
+import { agentVersionAtLeast, volumesPerNode } from '../docker/templates.js'
 import { type DockerDriverRow, getDriver, STACK_NAME_RE } from '../drivers.js'
 import { SHARED_TRACKERS_SINCE } from '../move/plan.js'
 import { openMoveFor } from '../move-open.js'
@@ -600,8 +600,8 @@ export async function gatherSharedUpgrade(
         'REDIS_NOT_AVAILABLE',
         'The stack asks for bundled Redis but the agent has no Redis image configured.'
       )
-    const nodes = health.swarm?.nodes
-    if (typeof nodes === 'number' && nodes > 1 && (health.volume_driver ?? 'local') === 'local')
+    const nodes = volumesPerNode(health)
+    if (nodes !== null)
       warnings.push({
         code: 'MULTI_NODE_VOLUMES',
         text: `The swarm has ${nodes} nodes and local volumes: uploads and bundled Redis stay on the node a task first ran on. Use a shared volume driver, or pin the stack to one node.`

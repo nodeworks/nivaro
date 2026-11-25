@@ -609,7 +609,22 @@ export const hubDockerDocs: DocSection = {
         [
           '`HUB_AGENT_VOLUME_DRIVER`, `HUB_AGENT_VOLUME_OPTS_FILE`',
           '`local`',
-          'Driver and options for the uploads and Redis volumes, for example an NFS export. `o=bind` (also `rbind` and `remount`) and a `device` that is not an NFS export are refused at start.'
+          'Driver and options for the uploads volumes (and Redis, unless set below), for example an NFS export. `o=bind` (also `rbind` and `remount`) and a `device` that is not an NFS export are refused at start. From agent 0.2.3 an NFS `device` is the export ROOT: each stack gets its own folder under it (see Files on an NFS export).'
+        ],
+        [
+          '`HUB_AGENT_VOLUME_EXPORT_MOUNT`',
+          'none',
+          'Agent 0.2.3: where the agent itself mounts that same NFS export, so it can check and make each stack folder before a deploy. Only with an NFS `device` (`VOLUME_EXPORT_MOUNT_BAD` otherwise). Without it a stack on the export is refused (`EXPORT_MOUNT_MISSING`).'
+        ],
+        [
+          '`HUB_AGENT_REDIS_PIN_LABEL`',
+          'none',
+          'Agent 0.2.3: `key=value` of a swarm node label. Bundled Redis then runs only on nodes carrying it, so its local volume is always there. Unset: any node, and Redis starts empty after it moves. Never the agent’s own node.'
+        ],
+        [
+          '`HUB_AGENT_REDIS_VOLUME_DRIVER`, `HUB_AGENT_REDIS_VOLUME_OPTS_FILE`',
+          'see text',
+          'Agent 0.2.3: bundled Redis’s own volume. Default: the uploads driver and options, except `local` with none when those mount NFS. NFS options are refused (`REDIS_VOLUME_OPTS_BAD`): Redis never sits on NFS.'
         ],
 
         [
@@ -738,6 +753,37 @@ export const hubDockerDocs: DocSection = {
     {
       type: 'p',
       text: 'A deploy also needs `DB_CLIENT` set, plus `DB_DATABASE` for SQLite, or `DB_HOST`, `DB_DATABASE`, `DB_USER` and the secret `DB_PASSWORD` for a database server, and the secret `REDIS_URL` when Redis is external. Anything missing blocks the plan as `STACK_SETTINGS_MISSING`. An environment with a database on the Databases tab (Hub databases) needs none of the `DB_*` settings: the stack gets that database as `DB_CLIENT` and the secret `DB_URL`, opened only by the deploy run, and the `DB_*` settings are not used. The plan names a database that is not ready yet; the run stops with `DATABASE_<code>` when it cannot open it.'
+    },
+    { type: 'h3', id: 'hub-docker-files', text: 'Files on an NFS export' },
+    {
+      type: 'p',
+      text: 'With agent 0.2.3 and an NFS `device` in `HUB_AGENT_VOLUME_OPTS_FILE`, that device is the export root and every stack keeps its uploads in its own folder under it, `<export>/<stack>/uploads`. Two Hub stacks never share a folder (`UPLOADS_FOLDER_TAKEN`; one export per agent). Before the deploy the agent checks the folder through its own mount of the export (`HUB_AGENT_VOLUME_EXPORT_MOUNT`; the plan stops with `EXPORT_MOUNT_MISSING` without it). It creates `<stack>` (0755, claimed with a marker naming its swarm) and `<stack>/uploads`, and hands only a `<stack>/uploads` it just created to uid 1000; when it cannot (root squash, no `CHOWN` capability) the deploy stops with `UPLOADS_FOLDER_NOT_WRITABLE` and you create the folder on the file server, owned by 1000:1000. An existing `<stack>` it did not make is never used (`UPLOADS_FOLDER_NOT_OURS`): adopt it if you mean it. It never follows a link there (`UPLOADS_FOLDER_LINK`), and every folder above the uploads folder must not be writable by its group or by everyone (`UPLOADS_FOLDER_PARENT_WRITABLE`). These checks hold when the stack is applied: Docker resolves the folder again whenever a task starts, so keep the export root writable by the file server administrators only. Bundled Redis stays on a local volume, pinned only to nodes carrying `HUB_AGENT_REDIS_PIN_LABEL` when that is set. The agent check shows the uploads mode and Redis placement, and the more-than-one-node warning does not show on an NFS export.'
+    },
+    {
+      type: 'table',
+      head: ['Stack setting', 'What it does'],
+      rows: [
+        [
+          'Uploads folder (`uploads_folder`)',
+          'An existing folder under the agent’s NFS export (relative, for example `efp`; 1–8 parts of letters, digits, `.`, `_` and `-`, no `..`) used as it is instead of `<stack>/uploads`. The agent never creates, chowns, changes or deletes it; it must exist and uid 1000 must be able to write it (`UPLOADS_FOLDER_MISSING`, `UPLOADS_FOLDER_NOT_WRITABLE`). Needs an agent with an NFS export (`UPLOADS_FOLDER_NEEDS_NFS`).'
+        ],
+        [
+          'Files sub-folder (`files_subfolder`)',
+          'Where the files sit inside the uploads volume: `STORAGE_LOCAL_ROOT` becomes `/app/uploads/<files_subfolder>` (for example `directus-uploads`). Any volume. An adopted folder must already hold it; in the stack’s own folder the app creates it.'
+        ],
+        [
+          'Run as (`run_as`)',
+          '`image` (default): the image starts as root and steps down to uid 1000. `app`: every app service runs as uid 1000 from the start. Use `app` on an export with root squash, where root in the container can do nothing on the files and a root-owned file at the top of the folder would otherwise keep the server root.'
+        ]
+      ]
+    },
+    {
+      type: 'p',
+      text: 'All three need Hub agent 0.2.3 or later: with an older agent (or one whose version is unknown) the plan stops with `AGENT_TOO_OLD`. They are part of the stack’s spec, so changing one shows the stack as changed until it is applied. Unset, the stack’s spec is exactly what it was. Refusals when saving: `BAD_UPLOADS_FOLDER`, `BAD_FILES_SUBFOLDER`, `BAD_RUN_AS`. Removing a stack with its volumes deletes its Redis volume only: volumes on the NFS export are kept and their files stay on the file server; moves, their rollbacks and Finish and stop the old home keep volumes anyway. A stack an older agent deployed still mounts the export root, where its files are: its next apply is refused (`UPLOADS_LAYOUT_CHANGED`) until you move its files into a folder and set that folder as its uploads folder.'
+    },
+    {
+      type: 'note',
+      text: 'An app whose files already sit on the file server: EFP production mounts the NFS export itself at `/app/uploads` and reads files from `directus-uploads/` (owned by uid 1000). The export root cannot be adopted, so give the agent that export and set the stack’s uploads folder `directus-uploads`, no files sub-folder, and run as `app`. First check by hand that the file server lets a client mount a folder below the export (the agent README has the probe), and that the export root is not group- or other-writable.'
     },
     { type: 'h2', id: 'hub-docker-extensions', text: 'Extensions as images' },
     {
@@ -910,7 +956,7 @@ export const hubDockerDocs: DocSection = {
     },
     {
       type: 'warn',
-      text: 'A swarm of more than one node and the default `local` volume driver: `local` volumes are per node, so each node a web, worker or importer task lands on keeps its own uploads, and a Redis task that moves to another node starts empty. Remove stack with its volumes deletes only the agent node’s copies. Pin the stack to one node (a placement constraint on the swarm) or set a shared volume driver (`HUB_AGENT_VOLUME_DRIVER`, `HUB_AGENT_VOLUME_OPTS_FILE`, for example an NFS export). The agent check shows the node count and the volume driver, and the stack panel warns when the swarm has more than one node and the volumes are local. Shared volumes managed by the Hub come in a later phase.'
+      text: 'A swarm of more than one node and the default `local` volume driver: `local` volumes are per node, so each node a web, worker or importer task lands on keeps its own uploads, and a Redis task that moves to another node starts empty. Remove stack with its volumes deletes only the agent node’s copies. Pin the stack to one node (a placement constraint on the swarm) or put the uploads on an NFS export (agent 0.2.3, Files on an NFS export: one folder per stack, Redis kept local on the agent’s node). The agent check shows the node count, the volume driver and whether uploads sit on an NFS export, and the stack panel warns when the swarm has more than one node and the volumes are local and not on an NFS export.'
     },
     {
       type: 'note',
@@ -927,7 +973,7 @@ export const hubDockerDocs: DocSection = {
         'Administrators only. The body is `{ confirm: "<stack name>" }`; the Hub refuses with 400 `CONFIRM_REQUIRED` otherwise.',
         'Remove checks stack ownership first. The agent reads the labels, and a stack that names another app or environment is never removed (409 `STACK_OWNER_MISMATCH`).',
         'Removing the services is not always the end. When the agent finds no service left (status 404), remove still goes to the agent, which clears the leftovers it owns: secrets, the network, volumes and the extensions folder.',
-        'Volumes stay unless asked for. `remove_volumes: true` also needs `confirm_volumes: "delete <stack name> data"` (400 `CONFIRM_REQUIRED`): both confirms, because the uploads and Redis data go.',
+        'Volumes stay unless asked for. `remove_volumes: true` also needs `confirm_volumes: "delete <stack name> data"` (400 `CONFIRM_REQUIRED`): both confirms, because the uploads and Redis data go. With uploads on an NFS export (agent 0.2.3) only the Redis data goes: the agent keeps every volume on the export and the files stay on the file server; the panel says so.',
         'A remove with nothing to remove answers `{ removed: false, already_absent: true }`. After a remove the environment is `suspended` and the removal is logged.',
         'It runs under the environment promotion lock, so no promotion starts during it; a running promotion answers 409 `PROMOTION_RUNNING`.',
         'An environment cannot be deleted while its stack exists (409 `STACK_STILL_RUNNING`), or while leftovers remain on the swarm (409 `STACK_LEFTOVERS`: volumes, secrets or the network). Remove the stack first. When the agent cannot say, deleting is refused with `AGENT_UNREACHABLE`; a stack the Hub did not create, or one that belongs to another environment, never blocks the delete.'

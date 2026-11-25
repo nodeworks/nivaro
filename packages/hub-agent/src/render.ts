@@ -14,11 +14,17 @@ import {
   LABEL_ROLE,
   LABEL_SPEC_HASH,
   ownershipLabels,
-  redisVolume,
-  serviceName,
-  uploadsVolume
+  serviceName
 } from './names.js'
 import type { Role, StackSpec } from './spec.js'
+import {
+  APP_USER,
+  folderOk,
+  redisConstraint,
+  redisVolumePlan,
+  uploadsVolumePlan,
+  type VolumePlan
+} from './volumes.js'
 
 /** The part of AgentConfig rendering reads (a full AgentConfig satisfies it). */
 export type RenderConfig = {
@@ -32,6 +38,11 @@ export type RenderConfig = {
   extensionsHostRoot: string
   volumeDriver: string
   volumeOpts?: Record<string, string> | null
+  /** Absent = the default (volumes.ts redisVolumeDefault): never the uploads' NFS options. */
+  redisVolumeDriver?: string
+  redisVolumeOpts?: Record<string, string> | null
+  /** HUB_AGENT_REDIS_PIN_LABEL: bundled Redis only on nodes with this label; absent = anywhere. */
+  redisPinLabel?: { key: string; value: string } | null
   redisImage: string | null
 }
 
@@ -72,6 +83,8 @@ export type EngineServiceSpec = {
   TaskTemplate: {
     ContainerSpec: {
       Image: string
+      /** Only ever APP_USER (a spec's `run_as: 'app'`), on app services. */
+      User?: string
       Env: string[]
       Labels: Record<string, string>
       Secrets: EngineSecretRef[]
@@ -320,15 +333,23 @@ export function renderServices(
     [LABEL_SPEC_HASH]: ctx.hash,
     [LABEL_ROLE]: role
   })
-  const volumeMount = (source: string, target: string): EngineMount => ({
+  // The driver config rides on the mount so swarm makes the volume the same way on any node.
+  const volumeMount = (plan: VolumePlan, target: string): EngineMount => ({
     Type: 'volume',
-    Source: source,
+    Source: plan.name,
     Target: target,
     VolumeOptions: {
       Labels: { ...owner },
-      DriverConfig: { Name: cfg.volumeDriver, Options: { ...(cfg.volumeOpts ?? {}) } }
+      DriverConfig: { Name: plan.driver, Options: { ...plan.opts } }
     }
   })
+  if (spec.uploads_folder !== undefined && !folderOk(spec.uploads_folder))
+    throw new Error('renderServices: bad uploads folder')
+  if (spec.files_subfolder !== undefined && !folderOk(spec.files_subfolder))
+    throw new Error('renderServices: bad files sub-folder')
+  const uploads = uploadsVolumePlan(stack, spec, cfg)
+  const storageRoot =
+    spec.files_subfolder !== undefined ? `${UPLOADS_PATH}/${spec.files_subfolder}` : UPLOADS_PATH
 
   const secrets: EngineSecretRef[] = Object.keys(spec.secrets)
     .sort()
@@ -388,7 +409,7 @@ export function renderServices(
     if (r.role !== 'all') env.set('NIVARO_ROLE', r.role)
     else env.delete('NIVARO_ROLE')
     if (bundled) env.set('REDIS_URL', `redis://${serviceName(stack, 'redis')}:6379`)
-    env.set('STORAGE_LOCAL_ROOT', UPLOADS_PATH)
+    env.set('STORAGE_LOCAL_ROOT', storageRoot)
     if (caRef) env.set(CA_BUNDLE_ENV, `${SECRETS_PATH}/${caRef.File.Name}`)
 
     const limits: { NanoCPUs?: number; MemoryBytes?: number } = {}
@@ -412,16 +433,14 @@ export function renderServices(
       TaskTemplate: {
         ContainerSpec: {
           Image: spec.image,
+          ...(spec.run_as === 'app' ? { User: APP_USER } : {}),
           Env: envList(env),
           Labels: { ...labels },
           Secrets: [...secrets, ...(caRef ? [caRef] : [])].map((s) => ({
             ...s,
             File: { ...s.File }
           })),
-          Mounts: [
-            volumeMount(uploadsVolume(stack), UPLOADS_PATH),
-            ...extMounts.map((m) => ({ ...m }))
-          ]
+          Mounts: [volumeMount(uploads, UPLOADS_PATH), ...extMounts.map((m) => ({ ...m }))]
         },
         Resources: Object.keys(limits).length > 0 ? { Limits: limits } : {},
         RestartPolicy: { Condition: 'any' },
@@ -455,10 +474,14 @@ export function renderServices(
           Env: [],
           Labels: { ...labels },
           Secrets: [],
-          Mounts: [volumeMount(redisVolume(stack), '/data')]
+          Mounts: [volumeMount(redisVolumePlan(stack, cfg), '/data')]
         },
         Resources: {},
         RestartPolicy: { Condition: 'any' },
+        // Opt-in (HUB_AGENT_REDIS_PIN_LABEL): Redis only on the nodes the operator labelled.
+        ...(redisConstraint(cfg)
+          ? { Placement: { Constraints: [redisConstraint(cfg) as string] } }
+          : {}),
         Networks: [{ Target: ctx.network }]
       },
       Mode: { Replicated: { Replicas: 1 } },
