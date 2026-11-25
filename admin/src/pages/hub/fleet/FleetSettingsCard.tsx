@@ -137,7 +137,7 @@ export function FleetSettingsCard({ rows }: { rows: FleetRow[] }) {
               <Switch
                 checked={r.enabled}
                 onCheckedChange={(v) => setRule(i, { enabled: v })}
-                aria-label={`Rule ${r.id} on`}
+                aria-label={`Rule ${i + 1} (${RULE_KIND_LABEL[r.kind]}) on`}
               />
               <SimpleSelect
                 value={r.kind}
@@ -157,7 +157,7 @@ export function FleetSettingsCard({ rows }: { rows: FleetRow[] }) {
                 min={1}
                 value={r.n}
                 onChange={(e) => setRule(i, { n: Number(e.target.value) })}
-                aria-label='Threshold'
+                aria-label={`Rule ${i + 1} threshold in ${UNIT[r.kind]}`}
                 className='h-8 w-[80px] text-[13px]'
               />
               <span className='text-[12px] text-slate-500 dark:text-muted-foreground'>
@@ -185,15 +185,15 @@ export function FleetSettingsCard({ rows }: { rows: FleetRow[] }) {
                 <Input
                   value={r.env_keys.join(', ')}
                   onChange={(e) => setRule(i, { env_keys: keyList(e.target.value) })}
-                  placeholder='every environment'
-                  aria-label='Only these environment keys'
-                  className='h-8 w-[180px] font-mono text-[12px]'
+                  placeholder='All environments'
+                  aria-label={`Rule ${i + 1}: only these environment keys, comma separated`}
+                  className='h-8 w-[180px] font-mono text-[12px] placeholder:font-sans'
                 />
               )}
               <button
                 type='button'
                 className={cn(dangerGhost, 'ml-auto')}
-                aria-label={`Remove rule ${r.id}`}
+                aria-label={`Remove rule ${i + 1}`}
                 onClick={() => setDraft({ ...draft, rules: draft.rules.filter((_, j) => j !== i) })}
               >
                 <Trash2 className='h-3.5 w-3.5' aria-hidden />
@@ -238,7 +238,7 @@ export function FleetSettingsCard({ rows }: { rows: FleetRow[] }) {
                 key={r.environment_id}
                 className='flex items-center gap-2 text-[12px] text-slate-700 dark:text-foreground'
               >
-                <span className='min-w-0 flex-1 truncate'>
+                <span className='w-[150px] min-w-0 truncate'>
                   {r.app_key}/{r.env_key}
                 </span>
                 <Input

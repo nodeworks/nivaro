@@ -16,7 +16,8 @@ import {
   downloadAuditCsv,
   fetchAudit,
   fetchFleet,
-  fleetKeys
+  fleetKeys,
+  RESULT_LABEL
 } from './fleet-api'
 
 /**
@@ -81,6 +82,10 @@ export default function HubAudit() {
     for (const r of fleet.data?.rows ?? []) m.set(r.app_id, r.app_name)
     return [...m].sort((a, b) => a[1].localeCompare(b[1]))
   }, [fleet.data])
+  const appNames = useMemo(
+    () => new Map((fleet.data?.rows ?? []).map((r) => [r.app_id, r.app_name])),
+    [fleet.data]
+  )
   const envs = useMemo(
     () => (fleet.data?.rows ?? []).filter((r) => !query.app || String(r.app_id) === query.app),
     [fleet.data, query.app]
@@ -202,6 +207,9 @@ export default function HubAudit() {
           />
         ) : (
           <>
+            <p className='m-0 mb-2 text-[12px] text-slate-500 dark:text-muted-foreground'>
+              {total.toLocaleString()} Hub action{total === 1 ? '' : 's'}
+            </p>
             {audit.data.meta.truncated && (
               <p className='m-0 mb-2 text-[12px] text-amber-800 dark:text-amber-300'>
                 This window holds more than 5,000 Hub actions; only the newest are shown. Narrow the
@@ -209,14 +217,14 @@ export default function HubAudit() {
               </p>
             )}
             <div className='overflow-x-auto rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
-              <table className='w-full min-w-[860px] border-collapse text-[12px]'>
+              <table className='w-full min-w-[560px] border-collapse text-[12px] sm:min-w-[860px]'>
                 <thead>
                   <tr className='border-b border-slate-200 text-left text-[11px] text-slate-500 dark:border-border dark:text-muted-foreground'>
                     <th className='px-3 py-2 font-medium'>When</th>
                     <th className='px-3 py-2 font-medium'>What</th>
                     <th className='px-3 py-2 font-medium'>App / environment</th>
-                    <th className='px-3 py-2 font-medium'>Who</th>
-                    <th className='px-3 py-2 font-medium'>Result</th>
+                    <th className='hidden px-3 py-2 font-medium sm:table-cell'>Who</th>
+                    <th className='hidden px-3 py-2 font-medium sm:table-cell'>Result</th>
                     <th className='px-3 py-2 font-medium'>Reason / detail</th>
                   </tr>
                 </thead>
@@ -233,14 +241,21 @@ export default function HubAudit() {
                         <span className='font-medium text-slate-900 dark:text-foreground'>
                           {r.label}
                         </span>
-                        <p className='m-0 text-[11px] text-slate-500 dark:text-muted-foreground'>
-                          {CATEGORY_LABEL[r.category]}
+                        {/* Phone: who and the result ride under the action. */}
+                        <p className='m-0 text-[11px] text-slate-500 sm:hidden dark:text-muted-foreground'>
+                          {r.user_name ?? '—'}
+                          {r.result ? (
+                            <span className={RESULT_TONE[r.result]}>
+                              {' · '}
+                              {RESULT_LABEL[r.result] ?? r.result}
+                            </span>
+                          ) : null}
                         </p>
                       </td>
                       <td className='px-3 py-2'>
                         {r.app_key ? (
                           <>
-                            {r.app_key}
+                            {(r.app_id != null && appNames.get(r.app_id)) || r.app_key}
                             {r.env_key ? (
                               <span className='text-slate-500'> / {r.env_key}</span>
                             ) : null}
@@ -249,9 +264,14 @@ export default function HubAudit() {
                           <span className='text-slate-400'>—</span>
                         )}
                       </td>
-                      <td className='px-3 py-2'>{r.user_name ?? '—'}</td>
-                      <td className={cn('px-3 py-2', r.result ? RESULT_TONE[r.result] : '')}>
-                        {r.result ?? '—'}
+                      <td className='hidden px-3 py-2 sm:table-cell'>{r.user_name ?? '—'}</td>
+                      <td
+                        className={cn(
+                          'hidden px-3 py-2 sm:table-cell',
+                          r.result ? RESULT_TONE[r.result] : ''
+                        )}
+                      >
+                        {r.result ? (RESULT_LABEL[r.result] ?? r.result) : '—'}
                       </td>
                       <td className='max-w-[360px] px-3 py-2'>
                         {r.note && (

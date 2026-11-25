@@ -118,9 +118,14 @@ describe('HubFleet', () => {
     renderPage()
     expect(await screen.findByText('14 behind')).toBeTruthy()
     expect(screen.getByText('1 not answering')).toBeTruthy()
-    expect(screen.getByText('Behind')).toBeTruthy()
+    expect(screen.getByText(/^Behind/)).toBeTruthy()
     expect(screen.getByRole('button', { name: /Check now/ })).toBeTruthy()
+    // The rules card opens from the header; a summary count filters the table.
+    expect(screen.queryByText('Alert rules and uptime targets')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /Rules and targets/ }))
     expect(await screen.findByText('Alert rules and uptime targets')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '1 not answering' }))
+    expect(within(screen.getByRole('table')).queryByText('0.3.214')).toBeNull()
   })
 
   it('owners get no Check now and no rules card', async () => {
@@ -128,7 +133,7 @@ describe('HubFleet', () => {
     renderPage()
     await screen.findByText('14 behind')
     expect(screen.queryByRole('button', { name: /Check now/ })).toBeNull()
-    expect(screen.queryByText('Alert rules and uptime targets')).toBeNull()
+    expect(screen.queryByRole('button', { name: /Rules and targets/ })).toBeNull()
     expect(h.get).not.toHaveBeenCalledWith('/hub/fleet/settings')
   })
 

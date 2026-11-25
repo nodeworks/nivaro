@@ -241,8 +241,25 @@ export async function downloadAuditCsv(q: AuditQuery): Promise<void> {
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
-/** 99.987 → "99.987 %", null → "—". */
+/**
+ * 99.987 → "99.987 %", 97.9166 → "97.92 %", null → "—". Three decimals only where they matter
+ * (at or above 99.9, next to an SLO target); a non-breaking space keeps the % with its number.
+ */
 export function pct(v: number | null | undefined): string {
   if (v == null) return '—'
-  return `${Number(v.toFixed(3))} %`
+  return `${Number(v.toFixed(v >= 99.9 ? 3 : 2))}\u00a0%`
+}
+
+/** A run's result in words (the API sends the stored status). */
+export const RESULT_LABEL: Record<string, string> = {
+  success: 'Succeeded',
+  done: 'Done',
+  failed: 'Failed',
+  interrupted: 'Interrupted',
+  cancelled: 'Cancelled',
+  rolled_back: 'Rolled back',
+  running: 'Running',
+  planned: 'Planned',
+  queued: 'Queued',
+  waiting: 'Waiting'
 }

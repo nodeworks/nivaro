@@ -1,8 +1,17 @@
 import { QueryErrorState, toastError } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Activity, AlertTriangle, ArrowUpRight, RefreshCw, Search } from 'lucide-react'
-import { useMemo, useState } from 'react'
-import { useNavigate } from 'react-router'
+import {
+  Activity,
+  AlertTriangle,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpRight,
+  RefreshCw,
+  Search,
+  SlidersHorizontal
+} from 'lucide-react'
+import { type ReactNode, useMemo, useState } from 'react'
+import { Link, useNavigate, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { Input } from '@/components/ui/input'
 import { SimpleSelect } from '@/components/ui/simple-select'
@@ -18,20 +27,22 @@ import { UptimeSheet } from './UptimeSheet'
  * Fleet (Apps hub tab): every app × environment on one screen — version and how far behind the
  * newest, health, readiness, open issues, uptime and this month's SLO, the last Hub deploy, shared
  * or dedicated placement and open drift alerts. Read from the Hub's own tables (the probe job
- * refreshes them every minute); nothing here makes the Hub call an app. Admins also get Check now
- * and the alert rules / SLO targets below the table.
+ * refreshes them every minute); nothing here makes the Hub call an app. Filters and the sort live
+ * in the URL (q, app, placement, health, sort) so a view can be shared. Admins also get Check now
+ * and, behind "Rules and targets", the drift rules and uptime targets.
  */
 
 type Health = 'any' | 'attention' | 'down' | 'alerts'
 type Sort = 'app' | 'behind' | 'uptime' | 'deploy' | 'readiness'
 
-const SORT_OPTIONS = [
-  { value: 'app', label: 'App and environment' },
-  { value: 'behind', label: 'Most releases behind' },
-  { value: 'uptime', label: 'Lowest uptime (30 days)' },
-  { value: 'deploy', label: 'Longest since a deploy' },
-  { value: 'readiness', label: 'Lowest readiness' }
-]
+const SORTS: readonly Sort[] = ['app', 'behind', 'uptime', 'deploy', 'readiness']
+const HEALTHS: readonly Health[] = ['any', 'attention', 'down', 'alerts']
+
+const ALERT_CHIP: Record<string, string> = {
+  stale_deploy: 'Not deployed',
+  pair_apart: 'Envs apart',
+  behind_newest: 'Behind'
+}
 
 const needsAttention = (r: FleetRow) =>
   r.up === false || (r.state != null && r.state !== 'ok') || r.alerts.length > 0
@@ -40,12 +51,13 @@ function compare(sort: Sort) {
   const nullsLast = (a: number | null, b: number | null, dir: 1 | -1) =>
     a == null ? (b == null ? 0 : 1) : b == null ? -1 : (a - b) * dir
   const byApp = (a: FleetRow, b: FleetRow) =>
-    a.app_key.localeCompare(b.app_key) ||
+    a.app_name.localeCompare(b.app_name) ||
     a.position - b.position ||
     a.environment_id - b.environment_id
   return (a: FleetRow, b: FleetRow) => {
     let d = 0
-    if (sort === 'behind') d = nullsLast(a.behind, b.behind, -1)
+    if (sort === 'behind')
+      d = nullsLast(a.behind ?? (a.version ? 999 : null), b.behind ?? (b.version ? 999 : null), -1)
     else if (sort === 'uptime') d = nullsLast(a.uptime_30d, b.uptime_30d, 1)
     else if (sort === 'readiness') d = nullsLast(a.readiness_score, b.readiness_score, 1)
     else if (sort === 'deploy')
@@ -69,12 +81,28 @@ export default function HubFleet() {
     staleTime: 30_000,
     refetchInterval: 60_000
   })
-  const [q, setQ] = useState('')
-  const [app, setApp] = useState('')
-  const [placement, setPlacement] = useState('')
-  const [health, setHealth] = useState<Health>('any')
-  const [sort, setSort] = useState<Sort>('app')
+  const [params, setParams] = useSearchParams()
+  const q = params.get('q') ?? ''
+  const app = params.get('app') ?? ''
+  const placement = params.get('placement') ?? ''
+  const health = (HEALTHS as readonly string[]).includes(params.get('health') ?? '')
+    ? (params.get('health') as Health)
+    : 'any'
+  const sort = (SORTS as readonly string[]).includes(params.get('sort') ?? '')
+    ? (params.get('sort') as Sort)
+    : 'app'
+  const set = (k: string, v: string, empty = '') =>
+    setParams(
+      (p) => {
+        const out = new URLSearchParams(p)
+        if (v && v !== empty) out.set(k, v)
+        else out.delete(k)
+        return out
+      },
+      { replace: true }
+    )
   const [uptimeOf, setUptimeOf] = useState<FleetRow | null>(null)
+  const [rulesOpen, setRulesOpen] = useState(false)
 
   const check = useMutation({
     mutationFn: checkFleetNow,
@@ -87,7 +115,7 @@ export default function HubFleet() {
     onError: (e) => toastError(e, 'Could not check the fleet')
   })
 
-  const rows = fleet.data?.rows ?? []
+  const rows = useMemo(() => fleet.data?.rows ?? [], [fleet.data])
   const apps = useMemo(() => {
     const m = new Map<number, string>()
     for (const r of rows) m.set(r.app_id, r.app_name)
@@ -120,11 +148,12 @@ export default function HubFleet() {
 
   const down = rows.filter((r) => r.up === false).length
   const alerting = rows.filter((r) => r.alerts.length > 0).length
+  const sortBy = (s: Sort) => set('sort', sort === s ? 'app' : s, 'app')
 
   return (
     <div className='flex flex-1 min-h-0 flex-col overflow-y-auto bg-slate-50 dark:bg-background'>
       <div className='shrink-0 border-b border-slate-200 bg-white px-4 py-3 dark:border-border dark:bg-card'>
-        <div className='flex flex-wrap items-center gap-x-4 gap-y-1'>
+        <div className='flex flex-wrap items-center gap-x-3 gap-y-1'>
           <p className='m-0 text-[13px] font-medium text-slate-900 dark:text-foreground'>
             {fleet.data ? `${rows.length} environment${rows.length === 1 ? '' : 's'}` : 'Fleet'}
           </p>
@@ -134,39 +163,66 @@ export default function HubFleet() {
             </p>
           )}
           {down > 0 && (
-            <p className='m-0 text-[12px] font-medium text-red-700 dark:text-red-300'>
+            <CountToggle
+              active={health === 'down'}
+              onClick={() => set('health', health === 'down' ? '' : 'down')}
+              tone='text-red-700 dark:text-red-300'
+            >
               {down} not answering
-            </p>
+            </CountToggle>
           )}
           {alerting > 0 && (
-            <p className='m-0 text-[12px] font-medium text-amber-800 dark:text-amber-300'>
-              {alerting} with drift alerts
-            </p>
-          )}
-          {isAdmin && (
-            <button
-              type='button'
-              className={cn(ghostButton, 'ml-auto')}
-              disabled={check.isPending}
-              onClick={() => check.mutate()}
+            <CountToggle
+              active={health === 'alerts'}
+              onClick={() => set('health', health === 'alerts' ? '' : 'alerts')}
+              tone='text-amber-800 dark:text-amber-300'
             >
-              <RefreshCw
-                className={cn('h-3.5 w-3.5', check.isPending && 'animate-spin')}
-                aria-hidden
-              />
-              Check now
-            </button>
+              {alerting} with drift alerts
+            </CountToggle>
           )}
+          <div className='ml-auto flex items-center gap-1'>
+            <Link
+              to='/docs?section=hub-fleet'
+              className='px-2 text-[12px] text-slate-500 hover:underline dark:text-muted-foreground'
+            >
+              How this works
+            </Link>
+            {isAdmin && (
+              <button
+                type='button'
+                className={cn(ghostButton, rulesOpen && 'bg-accent')}
+                aria-expanded={rulesOpen}
+                onClick={() => setRulesOpen((o) => !o)}
+              >
+                <SlidersHorizontal className='h-3.5 w-3.5' aria-hidden />
+                Rules and targets
+              </button>
+            )}
+            {isAdmin && (
+              <button
+                type='button'
+                className={ghostButton}
+                disabled={check.isPending}
+                onClick={() => check.mutate()}
+              >
+                <RefreshCw
+                  className={cn('h-3.5 w-3.5', check.isPending && 'animate-spin')}
+                  aria-hidden
+                />
+                Check now
+              </button>
+            )}
+          </div>
         </div>
         <div className='mt-2 flex flex-wrap items-center gap-2'>
-          <div className='relative w-full sm:w-[220px]'>
+          <div className='relative w-full sm:w-[240px]'>
             <Search
               className='pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-slate-400'
               aria-hidden
             />
             <Input
               value={q}
-              onChange={(e) => setQ(e.target.value)}
+              onChange={(e) => set('q', e.target.value)}
               placeholder='Find an app, environment or version'
               aria-label='Find'
               className='h-8 pl-8 text-[13px]'
@@ -174,7 +230,7 @@ export default function HubFleet() {
           </div>
           <SimpleSelect
             value={app}
-            onChange={setApp}
+            onChange={(v) => set('app', v)}
             ariaLabel='App'
             className='h-8 w-[160px] text-[12px]'
             options={[
@@ -184,7 +240,7 @@ export default function HubFleet() {
           />
           <SimpleSelect
             value={placement}
-            onChange={setPlacement}
+            onChange={(v) => set('placement', v)}
             ariaLabel='Placement'
             className='h-8 w-[150px] text-[12px]'
             options={[
@@ -196,7 +252,7 @@ export default function HubFleet() {
           />
           <SimpleSelect
             value={health}
-            onChange={(v) => setHealth(v as Health)}
+            onChange={(v) => set('health', v, 'any')}
             ariaLabel='Health'
             className='h-8 w-[170px] text-[12px]'
             options={[
@@ -206,17 +262,11 @@ export default function HubFleet() {
               { value: 'alerts', label: 'With drift alerts' }
             ]}
           />
-          <SimpleSelect
-            value={sort}
-            onChange={(v) => setSort(v as Sort)}
-            ariaLabel='Sort'
-            className='h-8 w-[200px] text-[12px]'
-            options={SORT_OPTIONS}
-          />
         </div>
       </div>
 
       <div className='space-y-4 p-4'>
+        {isAdmin && rulesOpen && fleet.data && <FleetSettingsCard rows={rows} />}
         {fleet.isPending ? (
           <div className='space-y-2'>
             {[0, 1, 2, 3].map((i) => (
@@ -243,14 +293,25 @@ export default function HubFleet() {
               <table className='w-full min-w-[1080px] border-collapse text-[12px]'>
                 <thead>
                   <tr className='border-b border-slate-200 text-left text-[11px] font-medium text-slate-500 dark:border-border dark:text-muted-foreground'>
-                    <th className='px-3 py-2 font-medium'>App / environment</th>
-                    <th className='px-3 py-2 font-medium'>Version</th>
+                    <SortHeader label='App / environment' col='app' sort={sort} onSort={sortBy} />
+                    <SortHeader
+                      label='Version'
+                      col='behind'
+                      sort={sort}
+                      onSort={sortBy}
+                      dir='desc'
+                    />
                     <th className='px-3 py-2 font-medium'>Health</th>
-                    <th className='px-3 py-2 font-medium'>Readiness</th>
-                    <th className='px-3 py-2 font-medium'>Issues</th>
-                    <th className='px-3 py-2 font-medium'>Uptime 24 h / 30 d</th>
-                    <th className='px-3 py-2 font-medium'>SLO this month</th>
-                    <th className='px-3 py-2 font-medium'>Last deploy</th>
+                    <SortHeader label='Readiness' col='readiness' sort={sort} onSort={sortBy} />
+                    <th className='px-3 py-2 font-medium'>Open issues</th>
+                    <SortHeader
+                      label='Uptime 24 h / 30 d'
+                      col='uptime'
+                      sort={sort}
+                      onSort={sortBy}
+                    />
+                    <th className='px-3 py-2 font-medium'>Uptime this month</th>
+                    <SortHeader label='Last deploy' col='deploy' sort={sort} onSort={sortBy} />
                     <th className='px-3 py-2 font-medium'>Placement</th>
                   </tr>
                 </thead>
@@ -278,10 +339,73 @@ export default function HubFleet() {
             </div>
           </>
         )}
-        {isAdmin && fleet.data && <FleetSettingsCard rows={rows} />}
       </div>
       <UptimeSheet row={uptimeOf} onClose={() => setUptimeOf(null)} />
     </div>
+  )
+}
+
+/** A summary count that filters the table to what it counts (and back). */
+function CountToggle({
+  active,
+  onClick,
+  tone,
+  children
+}: {
+  active: boolean
+  onClick: () => void
+  tone: string
+  children: ReactNode
+}) {
+  return (
+    <button
+      type='button'
+      aria-pressed={active}
+      onClick={onClick}
+      className={cn(
+        'rounded-md px-1.5 py-0.5 text-[12px] font-medium hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50',
+        tone,
+        active && 'bg-accent'
+      )}
+    >
+      {children}
+    </button>
+  )
+}
+
+/** A column header that sorts the table by it; a second press goes back to app order. */
+function SortHeader({
+  label,
+  col,
+  sort,
+  onSort,
+  dir = 'asc'
+}: {
+  label: string
+  col: Sort
+  sort: Sort
+  onSort: (s: Sort) => void
+  dir?: 'asc' | 'desc'
+}) {
+  const active = sort === col
+  const Arrow = dir === 'desc' ? ArrowDown : ArrowUp
+  return (
+    <th
+      className='px-3 py-2 font-medium'
+      aria-sort={active ? (dir === 'desc' ? 'descending' : 'ascending') : 'none'}
+    >
+      <button
+        type='button'
+        onClick={() => onSort(col)}
+        className={cn(
+          'inline-flex items-center gap-1 whitespace-nowrap rounded hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:hover:text-foreground',
+          active && 'text-slate-900 dark:text-foreground'
+        )}
+      >
+        {label}
+        <Arrow className={cn('h-3 w-3', active ? 'opacity-100' : 'opacity-0')} aria-hidden />
+      </button>
+    </th>
   )
 }
 
@@ -297,7 +421,7 @@ function FleetTableRow({
   const behind =
     r.behind == null
       ? r.version
-        ? 'other line'
+        ? 'other release line'
         : null
       : r.behind === 0
         ? null
@@ -308,19 +432,23 @@ function FleetTableRow({
       : r.slo.met
         ? 'text-emerald-700 dark:text-emerald-300'
         : 'text-red-700 dark:text-red-300'
+  const neverProbed = r.uptime_24h == null && r.uptime_30d == null
   return (
-    <tr className='border-b border-slate-100 align-top last:border-b-0 hover:bg-muted/50 dark:border-border'>
+    <tr className='border-b border-slate-100 align-top last:border-b-0 hover:bg-slate-50 dark:border-border dark:hover:bg-muted'>
       <td className='px-3 py-2'>
         <button
           type='button'
           onClick={onOpen}
-          className='group inline-flex items-center gap-1 text-left font-medium text-slate-900 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:text-foreground'
+          className='group text-left font-medium text-slate-900 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:text-foreground'
         >
-          {r.app_name} <span className='text-slate-400'>/</span> {r.env_key}
-          <ArrowUpRight
-            className='h-3 w-3 text-slate-400 opacity-0 group-hover:opacity-100'
-            aria-hidden
-          />
+          <span>{r.app_name}</span>{' '}
+          <span className='whitespace-nowrap'>
+            <span className='text-slate-400'>/</span> {r.env_key}
+            <ArrowUpRight
+              className='ml-0.5 inline h-3 w-3 align-[-1px] text-slate-400 opacity-0 group-hover:opacity-100'
+              aria-hidden
+            />
+          </span>
         </button>
         {r.env_status !== 'active' && (
           <p className='m-0 text-[11px] text-slate-500 dark:text-muted-foreground'>
@@ -336,11 +464,8 @@ function FleetTableRow({
                 className='inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-1.5 py-px text-[10px] font-medium text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-300'
               >
                 <AlertTriangle className='h-2.5 w-2.5' aria-hidden />
-                {a.kind === 'stale_deploy'
-                  ? 'Not deployed'
-                  : a.kind === 'pair_apart'
-                    ? 'Apart'
-                    : 'Behind'}
+                {ALERT_CHIP[a.kind] ?? 'Drift'}
+                <span className='sr-only'>: {a.message}</span>
               </span>
             ))}
           </div>
@@ -351,7 +476,7 @@ function FleetTableRow({
         {behind && (
           <p
             className={cn(
-              'm-0 text-[11px]',
+              'm-0 whitespace-nowrap text-[11px]',
               r.behind == null || r.behind >= 5
                 ? 'text-amber-800 dark:text-amber-300'
                 : 'text-slate-500 dark:text-muted-foreground'
@@ -370,9 +495,9 @@ function FleetTableRow({
             tip={r.failing.length ? `Failing: ${r.failing.join(', ')}` : (r.error ?? undefined)}
           />
         ) : (
-          <span className='text-slate-400'>Not read yet</span>
+          <span className='text-slate-500 dark:text-muted-foreground'>Not checked yet</span>
         )}
-        {r.up === false && (
+        {r.up === false && r.state !== 'unreachable' && (
           <p className='m-0 mt-0.5 text-[11px] font-medium text-red-700 dark:text-red-300'>
             Not answering
           </p>
@@ -386,23 +511,40 @@ function FleetTableRow({
           </p>
         )}
       </td>
-      <td className='px-3 py-2 tabular-nums'>{r.readiness_score ?? '—'}</td>
-      <td className='px-3 py-2 tabular-nums'>{r.open_issues ?? '—'}</td>
       <td className='px-3 py-2 tabular-nums'>
-        <button
-          type='button'
-          onClick={onUptime}
-          className='inline-flex items-center gap-1 rounded text-left hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50'
-          aria-label={`Uptime of ${r.app_name} ${r.env_key}`}
-        >
-          <Activity className='h-3 w-3 text-slate-400' aria-hidden />
-          {pct(r.uptime_24h)} / {pct(r.uptime_30d)}
-        </button>
+        {r.readiness_score == null ? (
+          '—'
+        ) : (
+          <span>
+            {r.readiness_score}
+            <span className='text-[11px] text-slate-500 dark:text-muted-foreground'>/100</span>
+          </span>
+        )}
+      </td>
+      <td className='px-3 py-2 tabular-nums'>{r.open_issues ?? '—'}</td>
+      <td className='whitespace-nowrap px-3 py-2 tabular-nums'>
+        {neverProbed ? (
+          <span className='text-slate-400'>—</span>
+        ) : (
+          <button
+            type='button'
+            onClick={onUptime}
+            className='inline-flex items-center gap-1 rounded text-left hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50'
+          >
+            <Activity className='h-3 w-3 text-slate-400' aria-hidden />
+            <span>
+              {pct(r.uptime_24h)} / {pct(r.uptime_30d)}
+            </span>
+            <span className='sr-only'>
+              — uptime of {r.app_name} {r.env_key}
+            </span>
+          </button>
+        )}
       </td>
       <td className='px-3 py-2 tabular-nums'>
-        <span className={sloTone}>{pct(r.slo.uptime)}</span>
-        <p className='m-0 text-[11px] text-slate-500 dark:text-muted-foreground'>
-          target {r.slo.target} %
+        <span className={cn('whitespace-nowrap', sloTone)}>{pct(r.slo.uptime)}</span>
+        <p className='m-0 whitespace-nowrap text-[11px] text-slate-500 dark:text-muted-foreground'>
+          target {r.slo.target}&nbsp;%
           {r.slo.met === false ? ' · missed' : r.slo.met ? ' · on track' : ''}
         </p>
       </td>
@@ -410,11 +552,11 @@ function FleetTableRow({
         {r.last_deploy ? (
           <>
             <span className='text-slate-800 dark:text-foreground'>
-              {r.last_deploy.kind === 'rollback' ? 'Rollback' : 'Promotion'} to{' '}
-              <code className='font-mono'>{r.last_deploy.version}</code>
+              {r.last_deploy.kind === 'rollback' ? 'Rollback' : 'Promotion'}{' '}
+              <code className='whitespace-nowrap font-mono'>{r.last_deploy.version}</code>
             </span>
             <p className='m-0 text-[11px] text-slate-500 dark:text-muted-foreground'>
-              {r.last_deploy.status}
+              {r.last_deploy.status === 'success' ? 'Succeeded' : r.last_deploy.status}
               {r.last_deploy.at ? ` · ${formatRelative(r.last_deploy.at)}` : ''}
               {r.last_deploy.by_name ? ` · ${r.last_deploy.by_name}` : ''}
             </p>
@@ -429,16 +571,19 @@ function FleetTableRow({
       </td>
       <td className='px-3 py-2'>
         {r.placement === 'shared' ? (
-          <span>
-            Shared
-            {r.shared_key ? (
-              <code className='ml-1 font-mono text-[11px]'>{r.shared_key}</code>
-            ) : null}
+          <span className='whitespace-nowrap'>
+            Shared{r.shared_key ? ' · ' : ''}
+            {r.shared_key ? <code className='font-mono text-[11px]'>{r.shared_key}</code> : null}
           </span>
         ) : r.placement === 'dedicated' ? (
           'Dedicated'
         ) : (
-          <span className='text-slate-500 dark:text-muted-foreground'>Watch only</span>
+          <span
+            className='text-slate-500 dark:text-muted-foreground'
+            data-tip='The Hub watches this environment but does not deploy it'
+          >
+            Watch only
+          </span>
         )}
       </td>
     </tr>

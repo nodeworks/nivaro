@@ -27,7 +27,11 @@ export function UptimeSheet({ row, onClose }: { row: FleetRow | null; onClose: (
   })
   return (
     <Sheet open={row != null} onOpenChange={(o) => !o && onClose()}>
-      <SheetContent side='right' className='w-full overflow-y-auto sm:max-w-[560px]'>
+      <SheetContent
+        side='right'
+        className='w-full overflow-y-auto sm:max-w-[560px]'
+        onOpenAutoFocus={(e) => e.preventDefault()}
+      >
         <SheetHeader>
           <SheetTitle>{row ? `${row.app_name} / ${row.env_key}` : 'Uptime'}</SheetTitle>
           <SheetDescription>
@@ -53,6 +57,7 @@ export function UptimeSheet({ row, onClose }: { row: FleetRow | null; onClose: (
             <QueryErrorState error={q.error} what='the uptime' onRetry={() => void q.refetch()} />
           ) : (
             <>
+              <WindowSummary hours={q.data.hours} target={row?.slo.target ?? null} />
               <section>
                 <h4 className='m-0 mb-2 text-[12px] font-semibold text-slate-700 dark:text-foreground'>
                   Hour by hour
@@ -62,7 +67,11 @@ export function UptimeSheet({ row, onClose }: { row: FleetRow | null; onClose: (
                     No probes in this window.
                   </p>
                 ) : (
-                  <div className='flex h-10 items-end gap-px' role='img' aria-label='Hourly uptime'>
+                  <div
+                    className='flex h-10 items-end gap-px'
+                    role='img'
+                    aria-label={stripLabel(q.data.hours)}
+                  >
                     {q.data.hours.map((h) => {
                       const share = h.samples ? h.up / h.samples : 0
                       return (
@@ -80,6 +89,12 @@ export function UptimeSheet({ row, onClose }: { row: FleetRow | null; onClose: (
                         />
                       )
                     })}
+                  </div>
+                )}
+                {q.data.hours.length > 0 && (
+                  <div className='mt-1 flex justify-between text-[11px] text-slate-500 dark:text-muted-foreground'>
+                    <span>{formatDateTime(q.data.hours[0].at)}</span>
+                    <span>{formatDateTime(q.data.hours[q.data.hours.length - 1].at)}</span>
                   </div>
                 )}
               </section>
@@ -149,5 +164,41 @@ export function UptimeSheet({ row, onClose }: { row: FleetRow | null; onClose: (
         </div>
       </SheetContent>
     </Sheet>
+  )
+}
+
+type Hour = { samples: number; up: number }
+
+function windowFigures(hours: Hour[]) {
+  const samples = hours.reduce((n, h) => n + h.samples, 0)
+  const up = hours.reduce((n, h) => n + h.up, 0)
+  const badHours = hours.filter((h) => h.samples && h.up < h.samples).length
+  return { samples, uptime: samples ? (up / samples) * 100 : null, badHours }
+}
+
+function stripLabel(hours: Hour[]): string {
+  const f = windowFigures(hours)
+  return `${hours.length} hours, ${f.badHours} with failed probes, ${pct(f.uptime)} answered`
+}
+
+/** The uptime of the chosen window, the figure the row's cell was opened from. */
+function WindowSummary({ hours, target }: { hours: Hour[]; target: number | null }) {
+  const f = windowFigures(hours)
+  const met = f.uptime == null || target == null ? null : f.uptime >= target
+  return (
+    <div className='flex items-baseline gap-3'>
+      <span
+        className={cn(
+          'text-[20px] font-semibold tabular-nums',
+          met === false ? 'text-red-700 dark:text-red-300' : 'text-slate-900 dark:text-foreground'
+        )}
+      >
+        {pct(f.uptime)}
+      </span>
+      <span className='text-[12px] text-slate-500 dark:text-muted-foreground'>
+        answered · {f.samples.toLocaleString()} probes · {f.badHours} hour
+        {f.badHours === 1 ? '' : 's'} with failures
+      </span>
+    </div>
   )
 }
