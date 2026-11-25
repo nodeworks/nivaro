@@ -838,7 +838,7 @@ export const MOVE_BLOCKER_COPY: Record<string, Copy> = {
   },
   ISSUE_TRACKERS: {
     title: 'GitLab issue sync is on in this app',
-    hint: 'A shared deployment does not sync issues yet. Turn issue sync off first.'
+    hint: 'This shared deployment runs a version before 0.3.215, or one the Hub cannot read, which does not sync issues. Upgrade it to 0.3.215 or later, or turn issue sync off first.'
   },
   EXEC_SCRIPT_FLOWS: {
     title: 'Some of the app’s flows run scripts',
@@ -946,6 +946,10 @@ export const MOVE_WARNING_COPY: Record<string, Copy> = {
     hint: 'It runs a version before 0.3.212, or one the Hub cannot read. They stay in the mail log and can be resent by hand. Upgrade it to 0.3.212 or later to keep the retries.'
   },
   // What an app on a shared deployment brings itself (the server's own settings are not used).
+  ISSUE_TRACKERS: {
+    title: "GitLab issue sync runs per app on a shared deployment, by the app's own switch",
+    hint: 'Connections, tokens, rules and queued GitLab writes move with the app, and GitLab keeps calling the app’s own address. If the server’s ISSUE_TRACKERS setting switches sync on today, switch it on again on the Issue trackers tab after the move. A GitLab on a private address needs its host in the deployment’s SSRF_ALLOW_HOSTS.'
+  },
   DIRECTORY_ENV_CREDENTIALS: {
     title: 'A shared app reads the directory with its own saved app registration',
     hint: 'Before the move, save the app’s own Microsoft app registration (tenant, client id and secret) in Settings → Microsoft, or directory sync stops after it.'

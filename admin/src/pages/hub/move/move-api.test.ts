@@ -92,6 +92,9 @@ describe('move copy covers every code', () => {
       expect(MOVE_BLOCKER_COPY[code]?.hint, code).toMatch(/0\.3\.212/)
     for (const code of ['DIRECTORY_SYNC', 'TEAMS_BOT', 'PHONE_PUSH', 'MAIL_RETRY'])
       expect(MOVE_WARNING_COPY[code]?.hint, code).toMatch(/0\.3\.212/)
+    // GitLab issue sync: a blocker before 0.3.215, a warning (with what to do) from it on.
+    expect(MOVE_BLOCKER_COPY.ISSUE_TRACKERS?.hint).toMatch(/0\.3\.215/)
+    expect(MOVE_WARNING_COPY.ISSUE_TRACKERS?.hint).toMatch(/Issue trackers tab/)
     // A copy of an app carries the original's Teams bot and directory registration.
     expect(MOVE_WARNING_COPY.SAME_APP_ON_DEPLOYMENT.hint).toMatch(/Teams bot/)
   })
