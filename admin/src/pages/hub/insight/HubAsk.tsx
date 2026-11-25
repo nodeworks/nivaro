@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { ghostButton } from '../hub-parts'
 import { type AskAnswer, askHub } from './insight-api'
-import { isHubPath, SafeAnswer } from './SafeAnswer'
+import { hubLinkPath, SafeAnswer } from './SafeAnswer'
 
 /**
  * Ask the Hub (Apps hub tab): questions about the apps this Hub looks after, answered by AI from
@@ -165,7 +165,8 @@ export default function HubAsk() {
                         </p>
                         <ul className='m-0 mt-1 flex list-none flex-wrap gap-1.5 p-0'>
                           {t.answer.citations
-                            .filter((c) => isHubPath(c.path))
+                            .map((c) => ({ ...c, path: hubLinkPath(c.path) ?? '' }))
+                            .filter((c) => c.path)
                             .slice(0, 12)
                             .map((c) => (
                               <li key={c.path}>

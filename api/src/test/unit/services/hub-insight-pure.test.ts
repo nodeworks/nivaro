@@ -411,23 +411,37 @@ describe('review fixes', () => {
     expect(parseConversation({ question: 'z'.repeat(4001) })).toBeNull()
   })
 
-  it('one Hub-path rule: /hub or /hub/…, never /hub-link, .. or encoded tricks', () => {
+  it('one Hub-path rule: decode once, resolve, stay on /hub — and answer the resolved path', () => {
     expect(hubPath('/hub')).toBe('/hub')
     expect(hubPath('/hub?app=3')).toBe('/hub?app=3')
     expect(hubPath('/hub/health')).toBe('/hub/health')
+    expect(hubPath('/hub/apps/3')).toBe('/hub/apps/3')
+    expect(hubPath('/hub/%61pps/3')).toBe('/hub/apps/3')
+    expect(hubPath('/hub/a/../apps/3')).toBe('/hub/apps/3')
+    expect(hubPath('/hub/apps/3#frag')).toBe('/hub/apps/3')
     for (const bad of [
       '/hub-link/status',
       '/hub-deployment/x',
       '/hubx',
+      '/hub/../x',
       '/hub/../api/auth/logout',
       '/hub/%2e%2e/api/auth/logout',
       '/hub/%252e%252e/api',
-      '/hub//evil.example',
+      '/hub/%25252e%25252e/api',
+      '/hub/%2525252e%2525252e/api',
+      '/hub/%5c..%5capi',
+      '/hub\\..\\api',
       '/hub\\evil',
+      '/hub/%0aevil',
+      '//evil',
+      '//evil.example/hub',
+      'https:',
       'https://hub.example.com/hub',
-      '//evil.example/hub'
+      'hub/apps'
     ])
       expect(hubPath(bad), bad).toBeNull()
+    // `/hub//x` stays on the Hub's own origin: it resolves to a /hub path, never to a host.
+    expect(hubPath('/hub//evil.example')).toBe('/hub//evil.example')
     expect(sanitizeAnswer('[x](/hub/../api/auth/logout) [y](/hub-link/status)', '')).toBe('x y')
     expect(citationsOf({ link: '/hub-link/status', apps: [{ id: 2, name: 'Pole' }] }, '')).toEqual([
       { label: 'Pole', path: '/hub?app=2' }

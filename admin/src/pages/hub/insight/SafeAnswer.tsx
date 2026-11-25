@@ -9,28 +9,45 @@ import { Link } from 'react-router'
  */
 
 /**
- * Whether a link target is a Hub page this app may open — the twin of the server's hubPath
- * (services/hub/insight/ask.ts): decoded to a fixed point, exactly `/hub` or `/hub/…` (so never
- * `/hub-link`), no `..` / `.` segment, `//`, backslash, quote, space or control character. Pure.
+ * A Hub page path, resolved, or null — the twin of the server's hubPath (services/hub/insight/ask.ts),
+ * character for character:
+ *  - decoded at most once; anything still holding `%` after that is refused;
+ *  - backslashes and control characters are refused;
+ *  - the path is resolved with `new URL(s, 'http://hub.invalid')`: its origin must stay
+ *    `http://hub.invalid` (so `//evil`, `https:…` are refused) and its pathname must be `/hub` or
+ *    start with `/hub/` (so `/hub-link`, and `/hub/../x` that resolves outside, are refused);
+ *  - the answer is the RESOLVED pathname + search, never the raw input.
+ * Pure.
  */
-export function isHubPath(href: string): boolean {
-  let s = String(href ?? '').trim()
-  if (!s.startsWith('/') || s.length > 500) return false
-  for (let i = 0; i < 3; i++) {
-    let d: string
+export function hubLinkPath(raw: string): string | null {
+  let s = String(raw ?? '').trim()
+  if (!s.startsWith('/') || s.length > 500) return null
+  // Decode at most once: anything still encoded after that is refused, never decoded further.
+  if (s.includes('%')) {
     try {
-      d = decodeURIComponent(s)
+      s = decodeURIComponent(s)
     } catch {
-      return false
+      return null
     }
-    if (d === s) break
-    s = d
+    if (s.includes('%')) return null
   }
-  if (/[\\\s"'<>`]/.test(s) || [...s].some((c) => c.charCodeAt(0) < 32)) return false
-  const cut = s.search(/[?#]/)
-  const path = cut < 0 ? s : s.slice(0, cut)
-  if (path !== '/hub' && !path.startsWith('/hub/')) return false
-  return !/\/\/|(^|\/)\.\.?(\/|$)/.test(path)
+  if (s.includes('\\') || [...s].some((c) => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127))
+    return null
+  // Let the URL parser resolve it (dot segments, `//host`, schemes) against a throwaway origin.
+  let u: URL
+  try {
+    u = new URL(s, 'http://hub.invalid')
+  } catch {
+    return null
+  }
+  if (u.origin !== 'http://hub.invalid') return null
+  if (u.pathname !== '/hub' && !u.pathname.startsWith('/hub/')) return null
+  return `${u.pathname}${u.search}`
+}
+
+/** Whether a link target is a Hub page this app may open. Pure. */
+export function isHubPath(href: string): boolean {
+  return hubLinkPath(href) !== null
 }
 
 function inline(text: string, key: string): ReactNode[] {
@@ -55,9 +72,9 @@ function inline(text: string, key: string): ReactNode[] {
     } else {
       const lm = /^\[([^\]]*)\]\(([^)]*)\)$/.exec(tok)
       const label = lm?.[1] ?? ''
-      const href = (lm?.[2] ?? '').trim()
+      const href = hubLinkPath((lm?.[2] ?? '').trim())
       out.push(
-        isHubPath(href) ? (
+        href ? (
           <Link
             key={k}
             to={href}
