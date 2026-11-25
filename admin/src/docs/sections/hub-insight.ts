@@ -41,6 +41,11 @@ export const hubInsightDocs: DocSection = {
           'Secrets',
           'Rotation state of the environment’s secrets (Secrets)',
           'overdue 0, due soon 60, on time 100'
+        ],
+        [
+          'Incidents',
+          'Open Hub incidents on the environment, or on the whole app (Incidents)',
+          'none 100, worst sev3 70, sev2 40, sev1 0'
         ]
       ]
     },
@@ -50,7 +55,7 @@ export const hubInsightDocs: DocSection = {
         'A part the Hub has no figure for is left out and the weights of the others scale up, so a new or watch-only environment is not punished for what the Hub cannot see. No part at all = no score (—).',
         'Backups count on production environments (the Hub’s production rule) and wherever a database backup policy is on. Elsewhere "no backup" is not a fault.',
         'Bands: 90 and up Good, 70–89 Fair, below 70 Poor (always written beside the number).',
-        'Administrators set each part’s weight (0–10, 0 leaves it out) under Health → Weights. Changing a weight changes scores from then on; stored days keep the score they had.',
+        'Administrators set each part’s weight (0–10, 0 leaves it out) under Health → Weights. Changing a weight changes every viewer’s score at once; stored days keep the score they had.',
         'The job hub-insight-health (hourly at :25) stores each environment’s score under the UTC day for the trend; the last run of a day wins. Days older than 400 are dropped.'
       ]
     },
@@ -58,15 +63,15 @@ export const hubInsightDocs: DocSection = {
     { type: 'h2', id: 'hub-insight-usage', text: 'Usage' },
     {
       type: 'p',
-      text: 'How many different people used each app per day, the average per day for each week, adoption (people active in the last 7 days ÷ people with an account) and the busiest screens. The figures come from the app’s own page-load beacons, read once a day (job hub-insight-collect, 05:10 UTC) over the hub link, or the shared deployment’s link for an app on a shared deployment.'
+      text: 'How many different people used each app per day over the last 14 completed days, the average per day for each week, adoption (people active in the last 7 days ÷ people with an account) and the busiest screens. The figures come from the app’s own page views (page loads and screen changes — never rage clicks, dead clicks or widget beacons), read once a day (job hub-insight-collect, 05:10 UTC) over the hub link, or the shared deployment’s link for an app on a shared deployment.'
     },
     {
       type: 'note',
-      text: 'Counts only. The Hub never receives a person’s name, id or email, a record, or a raw address: a screen is the route pattern (/collections/:c/:id), and anything in it that still looks like an id is masked by the app. The privacy floor is enforced IN THE APP before anything leaves it: a day with fewer people than the floor (never below 5) arrives with no figures at all, and a screen fewer people opened is not listed. The Hub re-checks the floor on what arrives, and an administrator can raise it (Health → Weights); a raised floor hides stored figures under it at once.'
+      text: 'Counts only, and built so that no two answers can be subtracted into a small group. The Hub never receives a person’s name, id or email, a record, or a raw address. The app enforces all of this before anything leaves it: only completed UTC days are counted (today is counted tomorrow, so two reads on one day are identical); the windows are fixed (14 days, with the last 7 inside it) whatever the Hub asks; every count is rounded down to a multiple of 5; a figure under the privacy floor (never below 5) is not sent — a day says only "fewer than N", a screen is not listed — and the 7-day figure is held back when it is within the floor of the 14-day one. A screen is its route pattern with every segment that is not a route parameter or a known static route segment (the app’s own routes and collection names) shown as :id, so ids, slugs and record keys never appear, and people are counted per masked screen. The Hub re-checks the floor on what arrives; an administrator can raise it (Health → Weights), which hides stored figures under it at once.'
     },
     {
       type: 'p',
-      text: 'An app before 0.3.215 does not report usage (the page says so). Administrators can read every environment now with Read now (one run at a time; it also refreshes dependencies).'
+      text: 'An app before 0.3.215 does not report usage (the page says so). Administrators can read every environment now with Read now (one run at a time, in the background; it also refreshes dependencies). The app answers usage behind its read gate, one read at a time per floor.'
     },
 
     { type: 'h2', id: 'hub-insight-dependencies', text: 'Dependency map and impact' },
@@ -108,7 +113,7 @@ export const hubInsightDocs: DocSection = {
       items: [
         'Turn your own off with the Weekly digest switch on the Health tab (it shows only to app owners).',
         'Administrators can switch it off for everyone under Health → Weights.',
-        'The email follows your notification rules for reports; an in-app notice says the same in one line.'
+        'The email follows your Profile → Notification rules for Reports (No email and quiet hours apply; it is never held for the daily summary, since it is a summary itself). An in-app notice says the same in one line.'
       ]
     },
 
@@ -123,8 +128,9 @@ export const hubInsightDocs: DocSection = {
         'Read-only, always: the AI gets only read and plan tools (the Hub’s own MCP read tools plus health, usage, dependencies and impact). Every tool call goes back into the Hub as you, so it sees exactly what you see on the other tabs; it cannot start, cancel, change or delete anything.',
         'It uses the instance’s AI settings, your personal AI limits and the AI call log (feature "hub").',
         'What tools return is treated as data, never as instructions. The answer is cleaned before you see it: no images, no HTML, and only links to Hub pages stay clickable.',
-        'Nothing is stored: the conversation lives in your browser tab. New conversation clears it.',
-        'API: POST /api/hub/insight/ask {question} or {messages}. Connected apps, assistants, View-as and run-as keys cannot call it; an API key needs hub:write (it spends your AI allowance).'
+        'Nothing is stored: the conversation lives in your browser tab. New conversation clears it. The newest 20 turns are sent, starting on a question; a long earlier answer is cut, never refused.',
+        'A tool the model asks for that is not offered, or a write it tries, is refused and logged (activity action hub-ask-refused, names and paths only).',
+        'Only in your own signed-in session in the Hub: named API keys, connected apps and assistants, phone tokens, View-as and run-as keys get 403 ASK_OWN_SESSION (it spends your AI allowance and is a chat for a person).'
       ]
     },
 
@@ -138,7 +144,7 @@ export const hubInsightDocs: DocSection = {
           'admin, owner',
           'Score, parts and 30-day trend per environment'
         ],
-        ['GET /api/hub/insight/usage', 'admin, owner', 'Usage per environment (days 7–400)'],
+        ['GET /api/hub/insight/usage', 'admin, owner', 'Usage per environment (stored days 7–400)'],
         ['GET /api/hub/insight/dependencies', 'admin, owner', 'Nodes, edges and uses'],
         ['GET /api/hub/insight/impact?node=', 'admin, owner', 'Who depends on one node'],
         [
@@ -153,7 +159,7 @@ export const hubInsightDocs: DocSection = {
         ],
         ['GET/PUT /api/hub/insight/digest/me', 'signed in', 'Your own digest switch'],
         ['GET /api/hub/insight/digest/preview', 'signed in', 'Your digest as it would go out'],
-        ['POST /api/hub/insight/ask', 'admin, owner', 'Ask the Hub'],
+        ['POST /api/hub/insight/ask', 'admin, owner (own session only)', 'Ask the Hub'],
         [
           'GET /api/hub-link/ops/usage, /ops/dependencies',
           'Hub (link bearer)',

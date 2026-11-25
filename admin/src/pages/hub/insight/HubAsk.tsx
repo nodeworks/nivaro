@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { ghostButton } from '../hub-parts'
 import { type AskAnswer, askHub } from './insight-api'
-import { SafeAnswer } from './SafeAnswer'
+import { isHubPath, SafeAnswer } from './SafeAnswer'
 
 /**
  * Ask the Hub (Apps hub tab): questions about the apps this Hub looks after, answered by AI from
@@ -43,6 +43,13 @@ const TOOL_LABEL: Record<string, string> = {
   hub_impact: 'impact'
 }
 
+/** The newest 20 turns, starting on a question (the server keeps the same window). */
+function windowOf(turns: Turn[]): Turn[] {
+  const out = turns.slice(-20)
+  while (out.length && out[0].role !== 'user') out.shift()
+  return out
+}
+
 export default function HubAsk() {
   const [turns, setTurns] = useState<Turn[]>([])
   const [draft, setDraft] = useState('')
@@ -66,7 +73,7 @@ export default function HubAsk() {
     const next: Turn[] = [...turns, { role: 'user', content: q }]
     setTurns(next)
     setDraft('')
-    ask.mutate(next.slice(-20))
+    ask.mutate(windowOf(next))
   }
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -157,16 +164,19 @@ export default function HubAsk() {
                           Sources
                         </p>
                         <ul className='m-0 mt-1 flex list-none flex-wrap gap-1.5 p-0'>
-                          {t.answer.citations.slice(0, 12).map((c) => (
-                            <li key={c.path}>
-                              <Link
-                                to={c.path}
-                                className='inline-block rounded-md border border-slate-200 px-2 py-0.5 text-[12px] text-slate-700 hover:bg-muted dark:border-border dark:text-slate-200'
-                              >
-                                {c.label}
-                              </Link>
-                            </li>
-                          ))}
+                          {t.answer.citations
+                            .filter((c) => isHubPath(c.path))
+                            .slice(0, 12)
+                            .map((c) => (
+                              <li key={c.path}>
+                                <Link
+                                  to={c.path}
+                                  className='inline-block rounded-md border border-slate-200 px-2 py-0.5 text-[12px] text-slate-700 hover:bg-muted dark:border-border dark:text-slate-200'
+                                >
+                                  {c.label}
+                                </Link>
+                              </li>
+                            ))}
                         </ul>
                       </div>
                     )}
@@ -199,7 +209,7 @@ export default function HubAsk() {
               onRetry={() => {
                 const history = turns
                 if (history.length && history[history.length - 1].role === 'user')
-                  ask.mutate(history.slice(-20))
+                  ask.mutate(windowOf(history))
               }}
             />
           </div>

@@ -8,9 +8,29 @@ import { Link } from 'react-router'
  * in-app); any other link shows as its text. Paragraphs, lists, small tables, **bold** and `code`.
  */
 
-/** Whether a link target is a Hub page this app may open. Pure. */
+/**
+ * Whether a link target is a Hub page this app may open — the twin of the server's hubPath
+ * (services/hub/insight/ask.ts): decoded to a fixed point, exactly `/hub` or `/hub/…` (so never
+ * `/hub-link`), no `..` / `.` segment, `//`, backslash, quote, space or control character. Pure.
+ */
 export function isHubPath(href: string): boolean {
-  return /^\/hub(?:[/?#]|$)/.test(href) && !/[\s"'<>]|\/\//.test(href)
+  let s = String(href ?? '').trim()
+  if (!s.startsWith('/') || s.length > 500) return false
+  for (let i = 0; i < 3; i++) {
+    let d: string
+    try {
+      d = decodeURIComponent(s)
+    } catch {
+      return false
+    }
+    if (d === s) break
+    s = d
+  }
+  if (/[\\\s"'<>`]/.test(s) || [...s].some((c) => c.charCodeAt(0) < 32)) return false
+  const cut = s.search(/[?#]/)
+  const path = cut < 0 ? s : s.slice(0, cut)
+  if (path !== '/hub' && !path.startsWith('/hub/')) return false
+  return !/\/\/|(^|\/)\.\.?(\/|$)/.test(path)
 }
 
 function inline(text: string, key: string): ReactNode[] {

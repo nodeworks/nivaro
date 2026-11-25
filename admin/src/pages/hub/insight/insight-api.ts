@@ -14,7 +14,8 @@ export const HEALTH_PARTS = [
   'issues',
   'readiness',
   'backups',
-  'secrets'
+  'secrets',
+  'incidents'
 ] as const
 export type HealthPart = (typeof HEALTH_PARTS)[number]
 export type HealthBand = 'good' | 'fair' | 'poor'
@@ -26,7 +27,8 @@ export const PART_LABEL: Record<HealthPart, string> = {
   issues: 'Issues',
   readiness: 'Readiness',
   backups: 'Backups',
-  secrets: 'Secrets'
+  secrets: 'Secrets',
+  incidents: 'Incidents'
 }
 
 export const PART_HINT: Record<HealthPart, string> = {
@@ -38,7 +40,9 @@ export const PART_HINT: Record<HealthPart, string> = {
   readiness: 'The readiness score the app reported.',
   backups:
     'Age of the newest backup (Backups & data). A day or less scores 100, a week 0. Counted on production and wherever a backup policy is on.',
-  secrets: 'Secret rotation (Secrets): overdue 0, due soon 60, on time 100.'
+  secrets: 'Secret rotation (Secrets): overdue 0, due soon 60, on time 100.',
+  incidents:
+    'Open incidents on the environment or the whole app (Incidents): none 100, sev3 70, sev2 40, sev1 0.'
 }
 
 export interface PartScore {
@@ -69,7 +73,7 @@ export interface HealthAnswer {
 
 export interface InsightSettings {
   weights: Record<HealthPart, number>
-  usage: { floor: number; days: number }
+  usage: { floor: number }
   digest: { enabled: boolean }
 }
 

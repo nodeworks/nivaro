@@ -89,7 +89,7 @@ export default function HubUsage() {
           {usage.data && (
             <p className='m-0 inline-flex items-center gap-1 text-[12px] text-slate-500 dark:text-muted-foreground'>
               <ShieldCheck className='h-3.5 w-3.5' aria-hidden />
-              Counts only · nothing under {usage.data.floor} people is shown
+              Counts only, rounded down to 5 · nothing under {usage.data.floor} people is shown
             </p>
           )}
           <div className='ml-auto flex items-center gap-1'>
@@ -248,6 +248,9 @@ function EnvDetail({ app, env, floor }: { app: AppUsage; env: EnvUsage; floor: n
         <h3 className='m-0 text-[13px] font-semibold text-slate-900 dark:text-foreground'>
           Different people per day
         </h3>
+        <p className='m-0 mt-0.5 text-[11px] text-slate-500 dark:text-muted-foreground'>
+          Completed days only, rounded down to 5 — today is counted tomorrow.
+        </p>
         {env.daily.length === 0 ? (
           <p className='m-0 mt-2 text-[12px] text-slate-500 dark:text-muted-foreground'>
             No days read yet.
