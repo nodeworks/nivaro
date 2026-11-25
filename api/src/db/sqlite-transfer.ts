@@ -91,6 +91,7 @@ export class SqliteTransferError extends Error {
     | 'SQLITE_CHECK_TIMEOUT'
     | 'SQLITE_CHECK_FAILED'
     | 'SQLITE_COPY_DEADLINE'
+    | 'SQLITE_COPY_CANCELLED'
     | 'DATABASE_COPY_RUNNING'
   constructor(code: SqliteTransferError['code'], message: string) {
     super(message)
@@ -487,9 +488,14 @@ let checkerExitHook = false
  */
 export function verifySqliteFile(
   file: string,
-  timeoutMs: number = sqliteTransferDeps.checkTimeoutMs
+  timeoutMs: number = sqliteTransferDeps.checkTimeoutMs,
+  signal?: AbortSignal
 ): Promise<SqliteVerified> {
   return new Promise<SqliteVerified>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new SqliteTransferError('SQLITE_COPY_CANCELLED', 'The copy was cancelled.'))
+      return
+    }
     let child: import('node:child_process').ChildProcess
     try {
       child = spawn(
@@ -537,6 +543,15 @@ export function verifySqliteFile(
       timeoutMs
     )
     timer.unref?.()
+    // Review 5 M1: a cancelled copy kills its check at once.
+    signal?.addEventListener(
+      'abort',
+      () =>
+        done(() =>
+          reject(new SqliteTransferError('SQLITE_COPY_CANCELLED', 'The copy was cancelled.'))
+        ),
+      { once: true }
+    )
     child.stdout?.setEncoding('utf8')
     child.stdout?.on('data', (d: string) => {
       if (out.length < 4096) out += d
@@ -605,6 +620,30 @@ export function sweepSqliteLeftovers(file: string, now = Date.now()): number {
 
 const stagedMarker = (file: string) => `${file}.incoming.json`
 const adoptedMarker = (file: string) => `${file}.adopted.json`
+const refusedMarker = (file: string) => `${file}.adopt-refused.json`
+
+/** Why a boot refused a staged copy (review 5 L6): the Hub fails the move with it at once. */
+export type SqliteAdoptRefusal =
+  | 'SQLITE_STAGED_BAD_MARKER'
+  | 'SQLITE_STAGED_MISSING'
+  | 'SQLITE_STAGED_CHANGED'
+  | 'SQLITE_STAGED_FAILED'
+
+export interface SqliteAdoptRefused {
+  move_id: number | null
+  code: SqliteAdoptRefusal
+  at: string
+}
+
+/** What the last boot refused (`<file>.adopt-refused.json`), or null. */
+export function adoptRefusedSqliteFile(file: string): SqliteAdoptRefused | null {
+  try {
+    const r = JSON.parse(readFileSync(refusedMarker(file), 'utf8')) as SqliteAdoptRefused
+    return r && typeof r.code === 'string' ? r : null
+  } catch {
+    return null
+  }
+}
 
 export interface StagedSqlite {
   sha256: string
@@ -655,6 +694,8 @@ export async function stageSqliteFile(
     stagedIncomingOk(file, before.incoming)
   )
     await unlink(before.incoming).catch(() => {})
+  // A refusal of an earlier staged copy no longer applies.
+  await unlink(refusedMarker(file)).catch(() => {})
   const tmp = `${stagedMarker(file)}.${randomUUID()}`
   await writeFile(tmp, JSON.stringify({ ...info, at: new Date().toISOString() }), {
     mode: 0o600
@@ -683,15 +724,27 @@ export function adoptStagedSqliteFile(file: string): 'none' | 'adopted' | 'refus
         unlinkSync(f)
       } catch {}
   }
-  if (!info || typeof info.sha256 !== 'string' || !incoming) {
+  // L6: say why, for the Hub to read through the hub link (`GET /files/database/adopted`).
+  const refuse = (code: SqliteAdoptRefusal): 'refused' => {
     dropAll()
+    try {
+      const r: SqliteAdoptRefused = {
+        move_id: typeof info?.move_id === 'number' ? info.move_id : null,
+        code,
+        at: new Date().toISOString()
+      }
+      writeFileSync(refusedMarker(file), JSON.stringify(r), { mode: 0o600 })
+    } catch {}
     return 'refused'
   }
+  if (!info || typeof info.sha256 !== 'string' || !incoming)
+    return refuse('SQLITE_STAGED_BAD_MARKER')
   const writeAdopted = () => {
     writeFileSync(adoptedMarker(file), JSON.stringify(info), { mode: 0o600 })
-    try {
-      unlinkSync(marker)
-    } catch {}
+    for (const f of [marker, refusedMarker(file)])
+      try {
+        unlinkSync(f)
+      } catch {}
   }
   try {
     if (!existsSync(incoming)) {
@@ -700,18 +753,11 @@ export function adoptStagedSqliteFile(file: string): 'none' | 'adopted' | 'refus
         writeAdopted()
         return 'adopted'
       }
-      dropAll()
-      return 'refused'
+      return refuse('SQLITE_STAGED_MISSING')
     }
     const size = statSync(incoming).size
-    if (size > SQLITE_COPY_MAX_BYTES || size !== info.bytes) {
-      dropAll()
-      return 'refused'
-    }
-    if (fileSumSync(incoming).sha256 !== info.sha256) {
-      dropAll()
-      return 'refused'
-    }
+    if (size > SQLITE_COPY_MAX_BYTES || size !== info.bytes) return refuse('SQLITE_STAGED_CHANGED')
+    if (fileSumSync(incoming).sha256 !== info.sha256) return refuse('SQLITE_STAGED_CHANGED')
     for (const extra of ['-wal', '-shm', '-journal'])
       try {
         unlinkSync(`${file}${extra}`)
@@ -720,8 +766,7 @@ export function adoptStagedSqliteFile(file: string): 'none' | 'adopted' | 'refus
     writeAdopted()
     return 'adopted'
   } catch {
-    dropAll()
-    return 'refused'
+    return refuse('SQLITE_STAGED_FAILED')
   }
 }
 

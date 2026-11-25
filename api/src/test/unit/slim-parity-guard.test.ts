@@ -168,6 +168,11 @@ const REVIEWED: Record<string, Reviewed> = {
     calls: { child_process: 1 },
     why: 'Flow script steps on every deployment: a plain `node` child (process.execPath, `nice` when present), the same in both images.'
   },
+  'db/sqlite-transfer.ts': {
+    role: 'not-media',
+    calls: { child_process: 3 },
+    why: 'SQLite copy check: PRAGMA integrity_check in a plain `node` child (process.execPath) killed at its time limit, the same in both images (one spawn import + two ChildProcess type references).'
+  },
   'services/staged-imports.ts': {
     role: 'not-media',
     calls: { child_process: 1 },

@@ -124,6 +124,10 @@ export interface HubLinkClient {
   databaseSum?(): Promise<DatabaseJobStatus>
   /** Hub gap sqlite: a database job now; null = this process does not know it (it restarted). */
   databaseJob?(id: string): Promise<DatabaseJobStatus | null>
+  /** Review 5 M1: the Hub gave up on a job — a running pull is aborted, nothing staged. */
+  cancelDatabaseJob?(id: string): Promise<{ cancelled: boolean }>
+  /** Review 5 L6: why this app's last boot refused a staged copy, or null. */
+  databaseAdoptRefused?(): Promise<{ move_id: number | null; code: string } | null>
 }
 
 /** A database job as a link answers it (services/hub-transfer/database-jobs.ts). */
@@ -444,11 +448,32 @@ export function hubLinkClient(
     async databaseJob(id) {
       if (!JOB_ID_RE.test(id)) throw new HubLinkError('LINK_SAID_NO', 0, 'BAD_JOB_ID')
       const a = await call(`/files/database/jobs/${id}`, 'GET')
-      if (a.status === 404) return null
+      // Review 5 L1: only the app's own "no such job" — a proxy's 404 (no healthy task yet) is a
+      // read that failed, tried again within the follow's limit.
+      if (a.status === 404 && (a.body as { code?: unknown } | null)?.code === 'UNKNOWN_JOB')
+        return null
       if (!ok(a)) throw refusal(a)
       const j = parseDatabaseJob(a.body)
       if (!j) throw new HubLinkError('LINK_BAD_ANSWER', a.status)
       return j
+    },
+
+    async cancelDatabaseJob(id) {
+      if (!JOB_ID_RE.test(id)) throw new HubLinkError('LINK_SAID_NO', 0, 'BAD_JOB_ID')
+      const a = await call(`/files/database/jobs/${id}`, 'DELETE', undefined, true)
+      if (!ok(a)) throw refusal(a)
+      return { cancelled: (a.body as { cancelled?: unknown } | null)?.cancelled === true }
+    },
+
+    async databaseAdoptRefused() {
+      const a = await call('/files/database/adopted', 'GET')
+      if (!ok(a)) throw refusal(a)
+      const r = (a.body as { refused?: unknown } | null)?.refused as
+        | { move_id?: unknown; code?: unknown }
+        | null
+        | undefined
+      if (!r || typeof r.code !== 'string' || !CODE_RE.test(r.code)) return null
+      return { move_id: typeof r.move_id === 'number' ? r.move_id : null, code: r.code }
     },
 
     async databaseAdopted() {
