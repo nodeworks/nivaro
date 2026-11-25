@@ -92,6 +92,18 @@ export interface AgentHealth {
   redis_volume_driver?: string
   /** Agent 0.2.3: bundled Redis runs only on nodes with this label (`key=value`); null = any. */
   redis_pin_label?: string | null
+  /** Agent 0.2.4: POST /v1/stacks/:name/scale and the bounds it holds every role to. */
+  scale?: AgentScaleCaps
+}
+
+/** Agent 0.2.4 (`GET /v1/health` `scale`). */
+export interface AgentScaleCaps {
+  max_replicas: number
+  max_total_replicas: number
+  cpus: [number, number]
+  memory_mb: [number, number]
+  /** Roles whose replica count a scale never changes (worker, all). */
+  fixed_replica_roles: string[]
 }
 
 /** One row of `GET /v1/stacks` (Hub-managed stacks only). */
@@ -140,6 +152,19 @@ export interface StackApplyResult {
   spec_hash: string
   changed: string[]
   unchanged: string[]
+}
+
+/** One role a scale changes (agent 0.2.4): only replicas and limits. */
+export interface StackScaleChange {
+  role: StackRoleName
+  replicas?: number
+  cpus?: number
+  memory_mb?: number
+}
+
+/** `POST /v1/stacks/:name/scale` → 202 (changed) or 200 (`already`: it ran that spec). */
+export interface StackScaleResult extends StackApplyResult {
+  already: boolean
 }
 
 /** `POST /v1/stacks/:name/restart` → 202 */

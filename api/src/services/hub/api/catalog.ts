@@ -1172,6 +1172,95 @@ export const HUB_ROUTES: HubRoute[] = [
     'write',
     'Cancel a rebalance (stops before its next move)'
   ),
+  // ─── Scaling (routes/hub-scale.ts) ──────────────────────────────────────────
+  r('GET', '/scale', 'Scaling', 'admin', 'read', 'Every Docker stack the Hub scales, per role'),
+  r(
+    'GET',
+    '/scale/targets/:kind/:id',
+    'Scaling',
+    'admin',
+    'read',
+    'One stack: replicas running and kept per role, rules, recent runs and connections now',
+    { notes: 'kind = environment (a dedicated stack) or shared (a shared deployment).' }
+  ),
+  r(
+    'POST',
+    '/scale/targets/:kind/:id/plan',
+    'Scaling',
+    'admin',
+    'plan',
+    'Plan a change of replicas or limits (connection math, blockers, steps)',
+    {
+      body: {
+        roles: list('object', '[{role, replicas?, cpus?, memory_mb?}] — only what changes')
+      }
+    }
+  ),
+  r(
+    'POST',
+    '/scale/targets/:kind/:id/runs',
+    'Scaling',
+    'admin',
+    'write',
+    'Start a planned change (bound to its plan_hash)',
+    {
+      sensitive: true,
+      accepted: true,
+      body: {
+        roles: { ...list('object', 'The same changes as the plan'), required: true },
+        plan_hash: s('The plan the person read', { required: true }),
+        confirm: s('The environment or deployment key, where the plan asks for it')
+      },
+      notes:
+        'Production environments and shared deployments ask for the typed key. Needs Hub agent 0.2.4 (AGENT_TOO_OLD otherwise).'
+    }
+  ),
+  r(
+    'PUT',
+    '/scale/targets/:kind/:id/roles/:role',
+    'Scaling',
+    'admin',
+    'write',
+    'Pin a role to manual, or set / clear its autoscaling rule',
+    {
+      body: {
+        pinned: b('true = autoscaling leaves this role alone'),
+        resume: b('true = lift the pause the rule put itself in after repeated failures'),
+        auto: o(
+          'The rule: enabled, min, max, metrics [{metric, out_above, in_below}], sustain, sustain_in, cooldown_out_min, cooldown_in_min, step_every_min, step, schedules [{days, from, to, zone, min}]; null clears it'
+        )
+      }
+    }
+  ),
+  r('GET', '/scale/runs', 'Scaling', 'admin', 'read', 'Scaling runs and skipped decisions', {
+    query: { kind: s('environment or shared'), id: n('The stack'), limit: n('1–200') }
+  }),
+  r('GET', '/scale/runs/:id', 'Scaling', 'admin', 'read', 'One scaling run'),
+  r(
+    'POST',
+    '/scale/runs/:id/cancel',
+    'Scaling',
+    'admin',
+    'write',
+    'Stop a run before its next step (a realtime scale-in drains one replica a step)'
+  ),
+  r(
+    'GET',
+    '/scale/db-servers',
+    'Scaling',
+    'admin',
+    'read',
+    'Database servers with their connection limit and what the Hub stacks may open there'
+  ),
+  r(
+    'PUT',
+    '/scale/db-servers/:id',
+    'Scaling',
+    'admin',
+    'write',
+    'Set a database server’s connection limit (null = unknown)',
+    { body: { max_connections: n('The server’s max connections, 1–1,000,000; null clears it') } }
+  ),
   // ─── Data care: backups, drills, refreshes (routes/hub-data.ts) ─────────────
   r(
     'GET',

@@ -4,6 +4,7 @@ import { isAgentDnsName, MAX_STACK_HOSTNAMES, type StackEdge } from '../docker/r
 import { agentAcceptsEnvKey, ENV_KEY_RE } from '../docker/stack-env.js'
 import type { StackSize } from '../docker/templates.js'
 import { compareVersions } from '../promote-plan.js'
+import { applyScaleShape, type ScaleShape } from '../scale/shape.js'
 import type { SharedDeployment } from './store.js'
 
 /**
@@ -288,6 +289,8 @@ export interface RenderSharedInput {
   /** The roles to run; absent = sharedRoles(size) without realtime (the run always passes the
    *  plan's roles). A re-apply passes the shape the stack runs. */
   roles?: StackSpec['roles']
+  /** Hub scaling: the replicas and limits kept on top of those roles (scale/shape.ts). */
+  scale?: ScaleShape | null
 }
 
 /** The http(s) origin of an address; '' when it is not one. */
@@ -409,7 +412,7 @@ export function renderSharedSpec(input: RenderSharedInput): StackSpec {
     owner: { shared: shared.key },
     environment: SHARED_STACK_ENVIRONMENT,
     image: input.image,
-    roles: input.roles ? structuredClone(input.roles) : sharedRoles(settings.size),
+    roles: applyScaleShape(input.roles ?? sharedRoles(settings.size), input.scale),
     env,
     secrets,
     hostnames,

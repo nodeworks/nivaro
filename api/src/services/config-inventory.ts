@@ -329,6 +329,8 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_hub_capacity_samples', //    Hub capacity (567): samples, per-app limits, rebalance runs
   'nivaro_hub_app_limits',
   'nivaro_hub_rebalances',
+  'nivaro_hub_scale_roles', //         Hub scaling (581): kept replicas/limits, rules, scale runs
+  'nivaro_hub_scale_runs',
   'nivaro_hub_trains', //  Hub release operations (565): per-Hub runtime state, never promoted
   'nivaro_hub_schedules',
   'nivaro_hub_freezes',

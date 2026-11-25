@@ -646,20 +646,35 @@ export function hubDockerRoutes(app: FastifyInstance) {
               code: 'STACK_STATE_UNKNOWN',
               text: `The Hub cannot tell which spec ${name} runs — deploy it instead of restarting`
             }
-          const prepared = await prepareStackSpec(envId, {
+          const want = {
             name,
             driverId: target.driver.id,
             version,
             image: deployed.image,
             // The pins that same deploy step installed, never the environment's current ones.
             extensions: deployed.extensions
-          })
-          try {
-            return { kind: 'ok', result: await agentRestart(prepared.driver, name, prepared.spec) }
-          } catch (err) {
-            if (!(err instanceof AgentError)) throw err
-            // The names the Hub sent let a HOSTNAME_TAKEN refusal say which one is taken.
-            return { kind: 'agent', err, hostnames: [...prepared.spec.hostnames] }
+          }
+          let prepared = await prepareStackSpec(envId, want)
+          for (let attempt = 0; ; attempt++) {
+            try {
+              return {
+                kind: 'ok',
+                result: await agentRestart(prepared.driver, name, prepared.spec)
+              }
+            } catch (err) {
+              if (!(err instanceof AgentError)) throw err
+              // Hub scaling: a scale whose outcome the Hub did not see left the record behind
+              // the stack — adopt what runs, then try once more.
+              if (err.code === 'SPEC_MISMATCH' && attempt === 0) {
+                const { reconcileEnvironment } = await import('../services/hub/scale/reconcile.js')
+                if (await reconcileEnvironment(envId)) {
+                  prepared = await prepareStackSpec(envId, want)
+                  continue
+                }
+              }
+              // The names the Hub sent let a HOSTNAME_TAKEN refusal say which one is taken.
+              return { kind: 'agent', err, hostnames: [...prepared.spec.hostnames] }
+            }
           }
         })
         if (!done.held) return promotionRunning(reply, key, done.holder)

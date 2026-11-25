@@ -10,6 +10,7 @@ import {
 import { environmentNames } from '../docker/render-spec.js'
 import { type DockerDriverRow, getDriver } from '../drivers.js'
 import { PromotionError } from '../promote-lock.js'
+import { readScaleShape } from '../scale/store.js'
 import { renderSharedSpec, SharedRenderError } from '../shared/stack-render.js'
 import { openSharedToken, type SharedDeployment } from '../shared/store.js'
 import { tenantsOf } from '../shared/tenants.js'
@@ -56,7 +57,7 @@ const realSleep = (ms: number) =>
   })
 
 /** What the deployment's newest successful run at `version` deployed. */
-async function recordedImage(
+export async function recordedImage(
   sharedId: number,
   version: string
 ): Promise<{ image: string; extensions: Record<string, string> } | null> {
@@ -145,7 +146,9 @@ export function sharedStackRouter(deps: SharedRouteDeps = {}) {
         explicitHosts: [...names],
         // Ruling I2 (Task 14): a name change keeps the roles the stack runs; only an upgrade
         // changes them.
-        roles: (await deployedSharedRoles(shared)).roles
+        roles: (await deployedSharedRoles(shared)).roles,
+        // Hub scaling: the replicas and limits the Hub keeps for this deployment.
+        scale: await readScaleShape('shared', shared.id)
       })
     } catch (err) {
       if (err instanceof SharedRenderError) throw new PromotionError(err.code, err.message)
