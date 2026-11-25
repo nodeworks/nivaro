@@ -732,7 +732,8 @@ describe('review fixes', () => {
       envId: prod,
       kind: 'promote_failed',
       subject: 'Deploy failed: EFP · production — 0.3.215 on production',
-      message: 'The deploy did not finish — promote 0.3.215 on production.'
+      message: 'The deploy did not finish — promote 0.3.215 on production.',
+      path: '/hub?app=1'
     })
     expect(delivered.at(-1)?.subject).toBe('Urgent alert: EFP')
     expect(delivered.at(-1)?.message).not.toMatch(/0\.3\.215|production —/)
