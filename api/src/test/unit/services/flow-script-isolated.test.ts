@@ -20,16 +20,21 @@ const {
   OFF_HEAP_GLOBALS,
   permissionFlag,
   RSS_MARGIN_MB,
+  memoryHeadroomBytes,
   readRssBytes,
   runIsolatedScript,
   ScriptLimitError,
   scriptGateState,
+  setHeadroomReaderForTests,
   watchRss
 } = await import('../../../services/flow-script-isolated.js')
 const { scriptLimits } = await import('../../../services/flow-script-limits.js')
 const { ScriptTimeoutError } = await import('../../../services/flow-script-sandbox.js')
 
 const quietLog = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })
+
+// Each case here starts a node: well past the default 5 s under a full suite's load (review L6).
+vi.setConfig({ testTimeout: 20_000 })
 const ENV_KEYS = [
   'FLOW_SCRIPT_CONCURRENCY',
   'FLOW_SCRIPT_PER_APP',
@@ -40,6 +45,9 @@ const saved: Record<string, string | undefined> = {}
 beforeEach(() => {
   for (const k of ENV_KEYS) saved[k] = process.env[k]
   tenant.key = ''
+  // The machine running the tests may be short of free memory; the headroom gate has its own
+  // cases below.
+  setHeadroomReaderForTests(async () => Number.POSITIVE_INFINITY)
 })
 afterEach(() => {
   for (const k of ENV_KEYS) {
@@ -119,7 +127,18 @@ describe('the child lock-down', () => {
     dlopen: "P.dlopen({ exports: {} }, '/x.node')",
     inspectorOpen: "R('node:inspector').open(0)",
     inspectorSession: "new (R('node:inspector').Session)().connect()",
-    wasi: "new (R('node:wasi').WASI)({ version: 'preview1' })"
+    wasi: "new (R('node:wasi').WASI)({ version: 'preview1' })",
+    killParent: 'P._kill(P.ppid, 0)',
+    debugParent: 'P._debugProcess(P.ppid)',
+    debugEnd: 'P._debugEnd()',
+    reallyExit: 'P.reallyExit(0)',
+    abort: 'P.abort()',
+    netServerHandle: "R('node:net')._createServerHandle('127.0.0.1', 0)",
+    netListen2: "R('node:net').Server.prototype._listen2.call({})",
+    netSocketPrivateConnect: "R('node:net').Socket.prototype._connect.call({})",
+    v8Flags: "R('node:v8').setFlagsFromString('--allow-natives-syntax')",
+    osRenice: "R('node:os').setPriority(P.ppid, 19)",
+    createRequire: "R('node:module').createRequire('/x.js')"
   }
 
   it('refuses every route to files, processes, workers and the network', () => {
@@ -186,10 +205,84 @@ describe('the child lock-down', () => {
     }
   })
 
-  it('a script cannot import() a module', async () => {
+  it('freezes the child realm’s own intrinsics (--frozen-intrinsics)', () => {
+    const r = probe(
+      childFlags(permissionFlag() as string, 64),
+      'const io = lockdown(); emit({ ok: io !== null, frozen: Object.isFrozen(Object.prototype) && Object.isFrozen(Array.prototype) })'
+    )
+    expect(r).toEqual({ ok: true, frozen: true })
+  })
+
+  it('a script cannot import() a module: the vm has no import callback', async () => {
     await expect(
       runIsolatedScript('return import("node:net").then(() => ({ got: true }))', {}, quietLog())
-    ).rejects.toThrow()
+    ).rejects.toThrow(/dynamic import callback/i)
+  })
+
+  it('exits right after its answer, and on its own when the API goes away', async () => {
+    const flags = childFlags(permissionFlag() as string, 64)
+    const exitOf = (c: ReturnType<typeof spawn>) =>
+      new Promise<number | null>((resolve) => c.on('exit', (code) => resolve(code)))
+    // Answers, then exits although its stdin stays open.
+    const a = spawn(process.execPath, [...flags, '-e', CHILD_SOURCE], { env: childEnv() })
+    let out = ''
+    a.stdout?.setEncoding('utf8')
+    a.stdout?.on('data', (t: string) => {
+      out += t
+    })
+    a.stdin?.write(`${JSON.stringify({ code: 'data.x = 1', input: '{}', timeout: 1000 })}\n`)
+    expect(await exitOf(a)).toBe(0)
+    expect(out).toContain('"t":"done"')
+    a.stdin?.destroy()
+    // No job and the parent closes the pipe (it went away): the child exits instead of waiting.
+    const b = spawn(process.execPath, [...flags, '-e', CHILD_SOURCE], { env: childEnv() })
+    const bExit = exitOf(b)
+    b.stdin?.end()
+    expect(await bExit).toBe(1)
+  })
+})
+
+describe('output decoding (review H1)', () => {
+  it('multi-byte characters split across pipe reads come back whole', async () => {
+    const word = 'Müller café 日本 😀 '
+    const out = await runIsolatedScript(
+      `data.s = ${JSON.stringify(word)}.repeat(12000); return data`,
+      {},
+      quietLog()
+    )
+    expect(out.s).toBe(word.repeat(12000))
+    expect(String(out.s)).not.toContain('\uFFFD')
+  })
+
+  it('log lines with multi-byte text come back whole', async () => {
+    const log = quietLog()
+    await runIsolatedScript('log.info("é".repeat(3999))', {}, log)
+    expect(log.info).toHaveBeenCalledWith('é'.repeat(3999))
+  })
+})
+
+describe('container memory headroom (review M2)', () => {
+  it('reads the headroom of this container or machine', async () => {
+    expect(await memoryHeadroomBytes()).toBeGreaterThan(0)
+  })
+
+  it('a step waits for memory, then is refused when there is none; its slot is freed', async () => {
+    process.env.FLOW_SCRIPT_MAX_WAIT_MS = '300'
+    setHeadroomReaderForTests(async () => 10 * 1024 * 1024)
+    await expect(runIsolatedScript('return data', {}, quietLog())).rejects.toThrow(
+      new ScriptLimitError(
+        'Not enough free memory on this deployment to start a script step right now. Try again in a moment.'
+      )
+    )
+    expect(scriptGateState()).toEqual({ active: 0, waiting: 0 })
+  })
+
+  it('starts as soon as the memory is there', async () => {
+    process.env.FLOW_SCRIPT_MAX_WAIT_MS = '5000'
+    let calls = 0
+    setHeadroomReaderForTests(async () => (++calls < 3 ? 0 : 4 * 1024 * 1024 * 1024))
+    expect(await runIsolatedScript('data.ok = true', {}, quietLog())).toEqual({ ok: true })
+    expect(calls).toBe(3)
   })
 })
 

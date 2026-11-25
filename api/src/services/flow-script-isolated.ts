@@ -1,12 +1,15 @@
 import { execFile, spawn } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import { setPriority } from 'node:os'
+import { freemem, setPriority } from 'node:os'
 import { scriptLimits } from './flow-script-limits.js'
 import {
+  forwardLogs,
   hostReplacer,
   hostReviver,
   MAX_TIMEOUT_MS,
   PRELUDE,
+  parseLogLines,
   type ScriptLog,
   ScriptTimeoutError
 } from './flow-script-sandbox.js'
@@ -20,18 +23,22 @@ import { currentTenantKey } from './tenant-rooms.js'
  * flow-executor.ts). Each run:
  *
  *  - starts a fresh `node` (process.execPath, no native module, works on the slim image) with
- *    the permission model on (`--permission`, OS/C++ level): no file read or write, no child
+ *    the permission model on (`--permission`, checked inside Node — a safeguard, not a boundary
+ *    against malicious code, Node's own docs say): no file read or write, no child
  *    processes, no workers, no native addons, no WASI — so no other app's files, uploads or
  *    mounted secrets;
  *  - gets an EMPTY environment (TZ only, this process's own zone, so dates read as in the app):
  *    no deployment secrets, no NODE_OPTIONS;
- *  - cannot compile code from strings in its own realm (`--disallow-code-generation-from-strings`)
- *    and runs the script inside the same `node:vm` context as a dedicated app
- *    (flow-script-sandbox.ts PRELUDE: data + log only, no process / require / import() / timers /
- *    fetch), minus the binary types (OFF_HEAP_GLOBALS);
+ *  - cannot compile code from strings in its own realm (`--disallow-code-generation-from-strings`),
+ *    has its own intrinsics frozen (`--frozen-intrinsics`), and runs the script inside the same
+ *    `node:vm` context as a dedicated app (flow-script-sandbox.ts PRELUDE: data + log only, no
+ *    host function at all — logs are read after the run — no process / require / import() /
+ *    timers / fetch / FinalizationRegistry), minus the binary types (OFF_HEAP_GLOBALS);
  *  - locks its own realm down before reading the job (CHILD_LOCKDOWN): every network entry point
  *    of the built-in modules throws (net, tls, dgram sockets, all of dns, http/https/http2,
- *    inspector, cluster), process loses getBuiltinModule / binding / dlopen and its env, and the
+ *    inspector, cluster, all of net but the pipes' own Socket; v8, module, os, child_process,
+ *    worker_threads, wasi throw too), process loses getBuiltinModule / binding / dlopen / _kill /
+ *    _debugProcess / reallyExit and its env, and the
  *    global keeps ECMAScript built-ins only (an allow-list: no require, process, module, fetch,
  *    WebSocket, timers or module globals). Node 22 has no permission scope for the network
  *    (`--allow-net` arrives in Node 25), so the network block is these layers, not the OS: a
@@ -42,15 +49,22 @@ import { currentTenantKey } from './tenant-rooms.js'
  *    RSS_MARGIN_MB of resident memory (watchRss polls it every 100 ms and kills the child); the
  *    script has no ArrayBuffer / typed arrays / WebAssembly, the only way JavaScript holds memory
  *    off the heap. RLIMIT_AS is not used: V8 reserves far more address space than it touches;
+ *  - starts only when the container has room for it: its cgroup limit minus what it uses now (else
+ *    the machine's free memory) must hold the child's budget plus HEADROOM_RESERVE_MB, else it
+ *    waits up to FLOW_SCRIPT_MAX_WAIT_MS and is refused (the API's own heap is sized from the
+ *    same container limit);
  *  - is capped at the step's timeout (≤ 30 s, plus a start-up allowance before the process is
- *    killed), 8 MB of output and 200 log lines, and runs at a lower CPU priority than the API;
+ *    killed), 8 MB of output and 200 log lines, and starts under `nice -n 10` (every thread;
+ *    without a `nice` binary only its main thread is lowered);
+ *  - exits right after its answer, and on its own when the API goes away (its stdin closes or its
+ *    parent pid changes), so no orphan keeps running;
  *  - holds a slot: at most FLOW_SCRIPT_CONCURRENCY runs at once on the process (default 4) and
  *    FLOW_SCRIPT_PER_APP for one app (default 2); a run that waits FLOW_SCRIPT_MAX_WAIT_MS
  *    (default 30 s) for a slot is refused, never run past the cap.
  *
  * The process shares nothing with the API: no module state, no pool, no Redis, no app context.
- * Data crosses as JSON on stdin; the child answers with JSON lines on stdout (log lines, then one
- * `done`). A child that dies without its `done` line is a failure, never an empty success.
+ * Data crosses as one JSON line on stdin; the child answers with JSON lines on stdout (its log
+ * lines, then one `done`), decoded as a UTF-8 stream. A child that dies without its `done` line is a failure, never an empty success.
  * Nivaro Cloud still refuses script steps (flow-executor.ts EXEC_SCRIPT_CLOUD_REFUSAL); a
  * dedicated app still runs them in-process (runSandboxedScript).
  */
@@ -60,8 +74,6 @@ export class ScriptLimitError extends Error {}
 /** Kill allowance on top of the script's own timeout: the child's start-up is not script time. */
 const STARTUP_GRACE_MS = 5000
 const MAX_OUTPUT_BYTES = 8 * 1024 * 1024
-const MAX_LOG_LINES = 200
-const MAX_LOG_CHARS = 4000
 const STDERR_KEEP = 4096
 /** The child's whole memory (RSS) may pass its heap cap by this much (Node itself, code, stacks). */
 export const RSS_MARGIN_MB = 96
@@ -127,6 +139,7 @@ export function childFlags(permission: string, memoryMb: number): string[] {
   return [
     permission,
     '--disallow-code-generation-from-strings',
+    '--frozen-intrinsics',
     `--max-old-space-size=${memoryMb}`,
     '--no-warnings'
   ]
@@ -215,45 +228,60 @@ export const OFF_HEAP_GLOBALS = [
 // It answers what the runner needs (vm, stdin, stdout), captured before the strip. Kept apart so
 // a test can run it with a probe after it.
 export const CHILD_LOCKDOWN = `const lockdown = () => {
-    const perm = process.permission
+    const P = process
+    const perm = P.permission
     const has = (s) => { try { return perm.has(s) } catch { return true } }
     if (!perm || ['fs.read', 'fs.write', 'child', 'worker', 'addon', 'wasi'].some(has)) return null
     const deny = () => { throw new Error('Scripts have no network access') }
+    const set = (obj, k) => {
+      try { Object.defineProperty(obj, k, { value: deny, writable: false, configurable: false }) } catch {}
+    }
     const denyAll = (obj, keep) => {
       if (!obj) return
       for (const k of Reflect.ownKeys(obj)) {
         if (keep && keep.includes(k)) continue
         const d = Object.getOwnPropertyDescriptor(obj, k)
-        if (!d || typeof d.value !== 'function') continue
-        try { Object.defineProperty(obj, k, { value: deny, writable: false, configurable: false }) } catch {}
+        if (d && typeof d.value === 'function') set(obj, k)
       }
     }
     const denyClass = (C) => { if (typeof C === 'function') denyAll(C.prototype, ['constructor']) }
-    let vm, stdin, stdout
+    // Own data properties only: reading a lazy getter could load more of Node (undici).
+    const fns = (o) => Reflect.ownKeys(o).map((k) => Object.getOwnPropertyDescriptor(o, k)).filter((d) => d && typeof d.value === 'function').map((d) => d.value)
+    let io
     try {
-      vm = require('node:vm')
-      stdin = process.stdin
-      stdout = process.stdout
+      io = {
+        vm: require('node:vm'),
+        isProxy: require('node:util').types.isProxy,
+        stdin: P.stdin,
+        stdout: P.stdout,
+        exit: P.reallyExit.bind(P),
+        ppid: P.ppid,
+        readPpid: () => P.ppid,
+        setInterval
+      }
+      // net: everything but the Socket the pipes already are (its connect still throws), the
+      // address helpers and the Stream alias.
       const net = require('node:net')
-      net.Socket.prototype.connect = deny
-      net.Server.prototype.listen = deny
-      for (const k of ['connect', 'createConnection', 'createServer']) net[k] = deny
+      set(net.Socket.prototype, 'connect')
+      set(net.Socket.prototype, '_connect')
+      denyClass(net.Server)
+      denyAll(net, ['Socket', 'Stream', 'isIP', 'isIPv4', 'isIPv6', 'BlockList', 'SocketAddress'])
       for (const m of ['node:dns', 'node:dns/promises', 'node:dgram', 'node:tls', 'node:http',
         'node:https', 'node:http2', 'node:inspector', 'node:inspector/promises', 'node:cluster',
-        'node:child_process', 'node:worker_threads', 'node:wasi']) {
+        'node:child_process', 'node:worker_threads', 'node:wasi', 'node:v8', 'node:module',
+        'node:os', 'node:repl', 'node:trace_events']) {
         let x
         try { x = require(m) } catch { continue }
-        // Own data properties only: reading a lazy getter could load more of Node (undici).
-        const fns = (o) => Reflect.ownKeys(o).map((k) => Object.getOwnPropertyDescriptor(o, k)).filter((d) => d && typeof d.value === 'function').map((d) => d.value)
         for (const C of fns(x)) denyClass(C)
         denyAll(x)
         const pd = Object.getOwnPropertyDescriptor(x, 'promises')
         if (pd && pd.value) { for (const C of fns(pd.value)) denyClass(C); denyAll(pd.value) }
       }
-      for (const k of ['getBuiltinModule', 'binding', '_linkedBinding', 'dlopen', 'kill', 'chdir']) {
-        try { Object.defineProperty(process, k, { value: deny, writable: false, configurable: false }) } catch {}
-      }
-      for (const k of Object.keys(process.env)) delete process.env[k]
+      for (const k of ['getBuiltinModule', 'binding', '_linkedBinding', 'dlopen', 'kill', '_kill',
+        '_debugProcess', '_debugEnd', '_startProfilerIdleNotifier', '_stopProfilerIdleNotifier',
+        'reallyExit', 'abort', 'chdir', 'setuid', 'setgid', 'seteuid', 'setegid', 'setgroups',
+        'initgroups', 'loadEnvFile', 'setSourceMapsEnabled']) set(P, k)
+      for (const k of Object.keys(P.env)) delete P.env[k]
     } catch {
       return null
     }
@@ -263,17 +291,22 @@ export const CHILD_LOCKDOWN = `const lockdown = () => {
       try { delete globalThis[k] } catch {}
     }
     for (const k of Reflect.ownKeys(globalThis)) if (!(typeof k === 'string' && keep.has(k))) return null
-    return { vm, stdin, stdout }
+    return io
   }`
 
-// The child's whole program (CommonJS, `node -e`): lock down, read one job from stdin, run it in
-// a vm context, answer JSON lines.
+// The child's whole program (CommonJS, `node -e`): lock down, read ONE job line from stdin, run
+// it in a vm context, answer JSON lines (its log lines, then `done`) and exit. The parent keeps
+// stdin open for the whole run: stdin closing means the parent is gone, and the child exits
+// (also when its parent pid changes), so a crashed API leaves no script running.
 export const CHILD_SOURCE = `(() => {
   'use strict'
+  const stdout = process.stdout
   ${CHILD_LOCKDOWN}
   const io = lockdown()
-  const out = (o) => { try { (io ? io.stdout : process.stdout).write(JSON.stringify(o) + '\\n') } catch {} }
-  const done = (o) => out(Object.assign({ t: 'done' }, o))
+  const write = (o, cb) => {
+    try { stdout.write(JSON.stringify(o) + '\\n', cb) } catch { if (cb) cb() }
+  }
+  const done = (o) => write(Object.assign({ t: 'done' }, o), () => { if (io) io.exit(0) })
   if (!io) {
     done({ ok: false, kind: 'setup', err: 'The script sandbox could not start' })
     return
@@ -281,32 +314,28 @@ export const CHILD_SOURCE = `(() => {
   const vm = io.vm
   const PRELUDE = ${JSON.stringify(PRELUDE)}
   const STRIP_OFF_HEAP = 'for (const k of ' + ${JSON.stringify(JSON.stringify(OFF_HEAP_GLOBALS))} + ') delete globalThis[k]'
-  const MAX_LOG_LINES = ${MAX_LOG_LINES}
-  const MAX_LOG_CHARS = ${MAX_LOG_CHARS}
   const ownString = (obj, key) => {
     if (obj === null || (typeof obj !== 'object' && typeof obj !== 'function')) return null
     const d = Object.getOwnPropertyDescriptor(obj, key)
     return d && 'value' in d && typeof d.value === 'string' ? d.value : null
   }
-  const isTimeout = (err) =>
-    ownString(err, 'code') === 'ERR_SCRIPT_EXECUTION_TIMEOUT' ||
-    /^Script execution timed out/.test(ownString(err, 'message') || '')
+  const classify = (err) => {
+    if (err !== null && (typeof err === 'object' || typeof err === 'function') && io.isProxy(err)) return { kind: 'error', err: 'Script failed' }
+    if (ownString(err, 'code') === 'ERR_SCRIPT_EXECUTION_TIMEOUT' || /^Script execution timed out/.test(ownString(err, 'message') || '')) return { kind: 'timeout' }
+    return { kind: 'error', err: (ownString(err, 'message') || 'Script failed').slice(0, 2000) }
+  }
+  let started = false
   const run = (text) => {
     let job
     try { job = JSON.parse(text) } catch { return done({ ok: false, kind: 'setup', err: 'Bad input' }) }
     const timeout = job.timeout
-    let lines = 0
-    const bridge = (level, msg) => {
-      if (lines >= MAX_LOG_LINES) return
-      lines++
-      out({ t: 'log', l: String(level), m: typeof msg === 'string' ? msg.slice(0, MAX_LOG_CHARS) : '' })
-    }
     const sandbox = Object.create(null)
-    sandbox.__nvrBridge = bridge
     sandbox.__nvrInput = job.input
+    let context
     let state
+    let failure = null
     try {
-      const context = vm.createContext(sandbox, {
+      context = vm.createContext(sandbox, {
         name: 'flow-exec-script',
         codeGeneration: { strings: false, wasm: false },
         microtaskMode: 'afterEvaluate'
@@ -321,17 +350,32 @@ export const CHILD_SOURCE = `(() => {
       vm.runInContext('__nvrRun(__nvrFn)', context, { timeout })
       state = vm.runInContext('__nvrResult()', context, { timeout })
     } catch (err) {
-      if (isTimeout(err)) return done({ ok: false, kind: 'timeout' })
-      return done({ ok: false, kind: 'error', err: ownString(err, 'message') || 'Script failed' })
+      failure = classify(err)
     }
+    if (context) {
+      try {
+        const logs = vm.runInContext('__nvrLogs()', context, { timeout })
+        if (typeof logs === 'string') write({ t: 'logs', v: logs })
+      } catch {}
+    }
+    if (failure) return done(Object.assign({ ok: false }, failure))
     if (typeof state !== 'string' || state === 'P') return done({ ok: false, kind: 'timeout' })
     if (state[0] === 'E') return done({ ok: false, kind: 'error', err: state.slice(1) })
     done({ ok: true, out: state.slice(1) })
   }
   let text = ''
   io.stdin.setEncoding('utf8')
-  io.stdin.on('data', (c) => { text += c })
-  io.stdin.on('end', () => run(text))
+  io.stdin.on('data', (c) => {
+    if (started) return
+    text += c
+    const nl = text.indexOf('\\n')
+    if (nl >= 0) { started = true; run(text.slice(0, nl)) }
+  })
+  // The parent closes stdin only by going away (or once it has our answer): never run on alone.
+  io.stdin.on('end', () => io.exit(started ? 0 : 1))
+  io.stdin.on('error', () => io.exit(1))
+  const watch = io.setInterval(() => { if (io.readPpid() !== io.ppid) io.exit(1) }, 1000)
+  watch.unref()
 })()`
 
 // ─── Slots: per process and per app ──────────────────────────────────────────────────────
@@ -408,6 +452,61 @@ async function acquireSlot(): Promise<() => void> {
   }
 }
 
+// ─── Memory headroom (review M2) ─────────────────────────────────────────────────────────
+
+/** Headroom the container must keep beyond a new child's own budget (the API's own growth). */
+export const HEADROOM_RESERVE_MB = 256
+const HEADROOM_POLL_MS = 250
+
+async function readText(path: string): Promise<string | null> {
+  try {
+    return (await readFile(path, 'utf8')).trim()
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Free memory for a new script child, in bytes: the container's cgroup limit minus what it uses
+ * now (cgroup v2 memory.max / memory.current, else v1 limit_in_bytes / usage_in_bytes), else the
+ * machine's free memory. The children of this process count in the cgroup's usage, so steps
+ * already running are included.
+ */
+export async function memoryHeadroomBytes(): Promise<number> {
+  if (process.platform === 'linux') {
+    const v2max = await readText('/sys/fs/cgroup/memory.max')
+    const v2cur = await readText('/sys/fs/cgroup/memory.current')
+    if (v2max && v2cur && v2max !== 'max' && Number.isFinite(Number(v2max)))
+      return Math.max(0, Number(v2max) - Number(v2cur))
+    const v1max = await readText('/sys/fs/cgroup/memory/memory.limit_in_bytes')
+    const v1cur = await readText('/sys/fs/cgroup/memory/memory.usage_in_bytes')
+    // v1 reports "no limit" as a huge number (close to 2^63).
+    if (v1max && v1cur && Number(v1max) < 2 ** 60) return Math.max(0, Number(v1max) - Number(v1cur))
+  }
+  return freemem()
+}
+
+/** Test seam: the headroom reader (tests only; null = the real one). */
+let headroomReader: (() => Promise<number>) | null = null
+export function setHeadroomReaderForTests(fn: (() => Promise<number>) | null): void {
+  headroomReader = fn
+}
+
+/** Waits (≤ maxWaitMs) until the container has room for one more child of memoryMb. */
+async function waitForHeadroom(memoryMb: number, maxWaitMs: number): Promise<void> {
+  const need = (memoryMb + RSS_MARGIN_MB + HEADROOM_RESERVE_MB) * 1024 * 1024
+  const deadline = Date.now() + maxWaitMs
+  for (;;) {
+    const free = await (headroomReader ?? memoryHeadroomBytes)()
+    if (free >= need) return
+    if (Date.now() >= deadline)
+      throw new ScriptLimitError(
+        'Not enough free memory on this deployment to start a script step right now. Try again in a moment.'
+      )
+    await new Promise((r) => setTimeout(r, HEADROOM_POLL_MS))
+  }
+}
+
 // ─── One run ─────────────────────────────────────────────────────────────────────────────
 
 /** The child's whole environment: TZ only (this process's own time zone, so dates read as in
@@ -420,6 +519,13 @@ export function childEnv(): Record<string, string> {
     /* no zone: the child uses UTC */
   }
   return /^[A-Za-z0-9_+\-/]{1,64}$/.test(tz) ? { TZ: tz } : {}
+}
+
+/** `nice` at a fixed path, so the whole child (its GC and helper threads too) starts at a lower
+ *  CPU priority; null when the image has none (then only its main thread is lowered). */
+function niceBinary(): string | null {
+  for (const p of ['/usr/bin/nice', '/bin/nice']) if (existsSync(p)) return p
+  return null
 }
 
 function spawnRun(
@@ -442,13 +548,26 @@ function spawnRun(
       settled = true
       clearTimeout(killTimer)
       stopRss()
+      try {
+        child.stdin.end()
+      } catch {
+        /* already closed */
+      }
       fn()
     }
-    const child = spawn(process.execPath, [...childFlags(flag, memoryMb), '-e', CHILD_SOURCE], {
-      env: childEnv(),
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true
-    })
+    const args = [...childFlags(flag, memoryMb), '-e', CHILD_SOURCE]
+    const nice = niceBinary()
+    const child = nice
+      ? spawn(nice, ['-n', '10', process.execPath, ...args], {
+          env: childEnv(),
+          stdio: ['pipe', 'pipe', 'pipe'],
+          windowsHide: true
+        })
+      : spawn(process.execPath, args, {
+          env: childEnv(),
+          stdio: ['pipe', 'pipe', 'pipe'],
+          windowsHide: true
+        })
     let killedForTime = false
     let killedForSize = false
     let killedForMemory = false
@@ -462,7 +581,7 @@ function spawnRun(
       killedForTime = true
       child.kill('SIGKILL')
     }, timeout + STARTUP_GRACE_MS)
-    if (child.pid) {
+    if (child.pid && !nice) {
       try {
         setPriority(child.pid, 10)
       } catch {
@@ -472,8 +591,8 @@ function spawnRun(
 
     let outBytes = 0
     let pending = ''
+    let scanFrom = 0
     let result: { ok: boolean; kind?: string; err?: string; out?: string } | null = null
-    let logLines = 0
     const onLine = (line: string) => {
       if (!line) return
       let msg: Record<string, unknown>
@@ -482,19 +601,8 @@ function spawnRun(
       } catch {
         return
       }
-      if (msg.t === 'log') {
-        if (logLines >= MAX_LOG_LINES) return
-        logLines++
-        const m = typeof msg.m === 'string' ? msg.m.slice(0, MAX_LOG_CHARS) : ''
-        try {
-          if (msg.l === 'warn') log.warn(m)
-          else if (msg.l === 'error') log.error(m)
-          else if (msg.l === 'debug') log.debug(m)
-          else log.info(m)
-        } catch {
-          /* a log sink never fails the run */
-        }
-      } else if (msg.t === 'done' && !result) {
+      if (msg.t === 'logs') forwardLogs(log, parseLogLines(msg.v))
+      else if (msg.t === 'done' && !result) {
         result = {
           ok: msg.ok === true,
           kind: typeof msg.kind === 'string' ? msg.kind : undefined,
@@ -503,8 +611,10 @@ function spawnRun(
         }
       }
     }
-    child.stdout.on('data', (chunk: Buffer) => {
-      outBytes += chunk.length
+    // Decoded as a stream (review H1): a character split across two pipe reads stays whole.
+    child.stdout.setEncoding('utf8')
+    child.stdout.on('data', (text: string) => {
+      outBytes += Buffer.byteLength(text, 'utf8')
       if (outBytes > MAX_OUTPUT_BYTES) {
         if (!killedForSize) {
           killedForSize = true
@@ -512,19 +622,20 @@ function spawnRun(
         }
         return
       }
-      pending += chunk.toString('utf8')
-      let nl = pending.indexOf('\n')
+      pending += text
+      let nl = pending.indexOf('\n', scanFrom)
       while (nl >= 0) {
         onLine(pending.slice(0, nl))
         pending = pending.slice(nl + 1)
         nl = pending.indexOf('\n')
       }
+      scanFrom = pending.length
     })
     let stderr = ''
-    child.stderr.on('data', (chunk: Buffer) => {
+    child.stderr.setEncoding('utf8')
+    child.stderr.on('data', (text: string) => {
       // The head: V8's out-of-memory line comes before its long native stack trace.
-      if (stderr.length < STDERR_KEEP)
-        stderr = (stderr + chunk.toString('utf8')).slice(0, STDERR_KEEP)
+      if (stderr.length < STDERR_KEEP) stderr = (stderr + text).slice(0, STDERR_KEEP)
     })
     child.on('error', () =>
       finish(() => reject(new Error('The script sandbox could not start on this server')))
@@ -533,11 +644,7 @@ function spawnRun(
       if (pending) onLine(pending)
       const r = result as typeof result
       finish(() => {
-        if (killedForMemory) {
-          reject(new ScriptLimitError(`Script used more than ${memoryMb} MB of memory`))
-        } else if (killedForSize) {
-          reject(new ScriptLimitError('Script output is larger than 8 MB'))
-        } else if (r?.ok && typeof r.out === 'string') {
+        if (r?.ok && typeof r.out === 'string') {
           try {
             const parsed = JSON.parse(r.out, hostReviver) as unknown
             resolve(
@@ -548,6 +655,10 @@ function spawnRun(
           } catch {
             reject(new Error('Script output could not be read'))
           }
+        } else if (killedForMemory) {
+          reject(new ScriptLimitError(`Script used more than ${memoryMb} MB of memory`))
+        } else if (killedForSize) {
+          reject(new ScriptLimitError('Script output is larger than 8 MB'))
         } else if (r && r.kind === 'timeout') {
           reject(new ScriptTimeoutError(`Script timed out after ${timeout}ms`))
         } else if (r && r.kind === 'error') {
@@ -566,13 +677,14 @@ function spawnRun(
     child.stdin.on('error', () => {
       /* the child died before reading its job: 'close' reports why */
     })
-    child.stdin.end(JSON.stringify({ code, input, timeout }))
+    // One job line; stdin stays open for the run (its close tells the child we are gone).
+    child.stdin.write(`${JSON.stringify({ code, input, timeout })}\n`)
   })
 }
 
 /** Runs one exec-script body in its own child process (see the header). Same contract as
  *  runSandboxedScript: resolves with the output data; rejects with the script's error message,
- *  a ScriptTimeoutError, or a ScriptLimitError (memory, output, no free slot). */
+ *  a ScriptTimeoutError, or a ScriptLimitError (memory, output, no free slot or memory). */
 export async function runIsolatedScript(
   code: string,
   data: Record<string, unknown>,
@@ -581,9 +693,10 @@ export async function runIsolatedScript(
 ): Promise<Record<string, unknown>> {
   const timeout = Math.min(Math.max(Number(timeoutMs) || 5000, 1), MAX_TIMEOUT_MS)
   const input = JSON.stringify(data ?? {}, hostReplacer) ?? '{}'
-  const { memoryMb } = scriptLimits()
+  const { memoryMb, maxWaitMs } = scriptLimits()
   const release = await acquireSlot()
   try {
+    await waitForHeadroom(memoryMb, maxWaitMs)
     return await spawnRun(code, input, log, timeout, memoryMb)
   } finally {
     release()

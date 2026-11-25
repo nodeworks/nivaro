@@ -1,11 +1,20 @@
-import { describe, expect, it, vi } from 'vitest'
-import { runIsolatedScript } from '../../../services/flow-script-isolated.js'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  runIsolatedScript,
+  setHeadroomReaderForTests
+} from '../../../services/flow-script-isolated.js'
 import {
   runSandboxedScript as inProcess,
   ScriptTimeoutError
 } from '../../../services/flow-script-sandbox.js'
 
 const quietLog = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })
+
+// Each child-process case starts a node: well past the default 5 s under a full suite's load.
+vi.setConfig({ testTimeout: 20_000 })
+// The machine running the tests may be short of free memory (flow-script-isolated.test.ts tests
+// the headroom gate itself).
+beforeEach(() => setHeadroomReaderForTests(async () => Number.POSITIVE_INFINITY))
 
 // The same contract and the same escapes, for the in-process context (a dedicated app) and for
 // the child process a Hub shared deployment runs each script in (flow-script-isolated.ts).
@@ -160,6 +169,81 @@ describe.each([
     await expect(runSandboxedScript('throw new Error("nope")', {}, quietLog())).rejects.toThrow(
       'nope'
     )
+  })
+
+  it('holds no host function: log and console are the context’s own (review P1/M3)', async () => {
+    expect(
+      await runSandboxedScript(
+        'return { same: log.info.constructor === Function && console.log.constructor === Function && log.warn.constructor === Function }',
+        {},
+        quietLog()
+      )
+    ).toEqual({ same: true })
+  })
+
+  it('a stack overflow on a log call never yields a host Function (review P1)', async () => {
+    const out = await runSandboxedScript(
+      `let found = 'none'
+       const probe = (d) => {
+         try { probe(d + 1) } catch (e) {
+           try { log.info('x') } catch (e2) {
+             try { found = typeof e2.constructor.constructor('return process')() } catch (e3) { if (found === 'none') found = 'blocked' }
+           }
+         }
+       }
+       probe(0)
+       return { found }`,
+      {},
+      quietLog()
+    )
+    expect(out.found).not.toBe('object')
+  })
+
+  it('a thrown value whose message getter throws a looping Proxy never hangs the host (review P2)', async () => {
+    const started = Date.now()
+    await expect(
+      runSandboxedScript(
+        `const trap = () => { for (;;) {} }
+         const p = new Proxy({}, { get: trap, getOwnPropertyDescriptor: trap, has: trap, ownKeys: trap, getPrototypeOf: trap })
+         throw { get message() { throw p } }`,
+        {},
+        quietLog(),
+        200
+      )
+    ).rejects.toThrow()
+    await expect(
+      runSandboxedScript(
+        `const trap = () => { for (;;) {} }
+         throw new Proxy({}, { get: trap, getOwnPropertyDescriptor: trap, has: trap, ownKeys: trap, getPrototypeOf: trap })`,
+        {},
+        quietLog(),
+        200
+      )
+    ).rejects.toThrow()
+    expect(Date.now() - started).toBeLessThan(15_000)
+  })
+
+  it('has no FinalizationRegistry or WeakRef (their callbacks would run past the timeout, review P3)', async () => {
+    expect(
+      await runSandboxedScript(
+        'return { f: typeof FinalizationRegistry, w: typeof WeakRef }',
+        {},
+        quietLog()
+      )
+    ).toEqual({ f: 'undefined', w: 'undefined' })
+  })
+
+  it('log lines reach the logger even when the script fails, capped at 200', async () => {
+    const log = quietLog()
+    await expect(
+      runSandboxedScript(
+        'for (let i = 0; i < 300; i++) log.info("n" + i); throw new Error("after")',
+        {},
+        log
+      )
+    ).rejects.toThrow('after')
+    expect(log.info).toHaveBeenCalledTimes(200)
+    expect(log.info).toHaveBeenNthCalledWith(1, 'n0')
   })
 
   it('does not change the caller object', async () => {

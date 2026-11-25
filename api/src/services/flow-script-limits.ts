@@ -1,7 +1,9 @@
 /**
  * Whether this shared deployment runs flow script steps at all: an OPERATOR OPT-IN, off by default
  * (FLOW_SCRIPTS_ON_SHARED=on). The child sandbox (flow-script-isolated.ts) cannot have the network
- * cut by the operating system on Node 22 (no `--allow-net` before Node 25), so only an operator who
+ * blocked in JavaScript only — nothing in the operating system stops a script that breaks out of
+ * the sandbox (Node 25's `--allow-net` adds a check inside Node, still not an OS boundary) — so only
+ * an operator who
  * trusts every app on the deployment turns it on. The Hub sets it from the deployment's settings
  * (Docker) or the operator sets it (registered); the deployment reports it on its link status.
  * Read only on a multi-tenant process; a dedicated app runs its scripts whatever it says.

@@ -227,6 +227,7 @@ const SHARED: Record<string, string> = {
   'plugins/socketio.ts :: pagePrefixReader': FN_SLOT,
   'plugins/socketio.ts :: pagePresenceReader': FN_SLOT,
   'plugins/socketio.ts :: pageSnapshotReader': FN_SLOT,
+  'services/flow-script-isolated.ts :: headroomReader': FN_SLOT,
   'plugins/socketio.ts :: presenceNoter': FN_SLOT,
   'plugins/socketio.ts :: socketMeta': 'per socket id; each socket is bound to its app',
   'routes/access-requests.ts :: digestRegistered': REGISTRY,
