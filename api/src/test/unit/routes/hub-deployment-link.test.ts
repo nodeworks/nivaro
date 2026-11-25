@@ -239,6 +239,15 @@ describe('GET /status', () => {
           flow_scripts: false,
           instance: instanceKey(),
           shared_deployment: 'shared-b'
+        },
+        // A process of no shared deployment at all (an explicit null key) on the same Redis and
+        // NODE_ENV (review 4 F4): not this deployment's either.
+        {
+          id: 'plain',
+          role: 'worker',
+          flow_scripts: false,
+          instance: instanceKey(),
+          shared_deployment: null
         }
       ]
       const all = await a.inject({

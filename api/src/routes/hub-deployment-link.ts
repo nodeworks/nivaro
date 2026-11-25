@@ -145,7 +145,9 @@ export async function hubDeploymentLinkRoutes(app: FastifyInstance): Promise<voi
     const ownKey = hubSharedConfig()?.deployment ?? null
     const peers = (await listInstances()).filter((r) => {
       if (r.id === INSTANCE_ID || r.role === 'realtime') return false
-      if (typeof r.shared_deployment === 'string') return r.shared_deployment === ownKey
+      // An explicit key, null included (a process that belongs to no shared deployment), must be
+      // this one's; only a missing key (a version before 0.3.215) falls back to the instance.
+      if (r.shared_deployment !== undefined) return r.shared_deployment === ownKey
       return r.instance === instanceKey()
     })
     const scriptFlags = [ownScripts, ...peers.map((r) => r.flow_scripts === true)]
