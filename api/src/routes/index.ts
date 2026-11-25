@@ -170,6 +170,7 @@ import { hierarchyRoutes } from './hierarchy.js'
 import { hubRoutes } from './hub.js'
 import { hubAppLinkRoutes } from './hub-app-link.js'
 import { hubDeploymentUsageRoutes, hubLinkUsageRoutes } from './hub-capacity-link.js'
+import { hubConfigDeploymentRoutes, hubConfigLinkRoutes } from './hub-config-link.js'
 import { hubDeploymentLinkRoutes } from './hub-deployment-link.js'
 import { hubFleetRoutes } from './hub-fleet.js'
 import { hubLinkRoutes } from './hub-link.js'
@@ -503,6 +504,9 @@ export async function registerRoutes(app: FastifyInstance) {
   // Hub ops (issue rollup, files usage): read-only aggregates over the hub / deployment link.
   await app.register(hubOpsLinkRoutes, { prefix: '/hub-link' })
   await app.register(hubOpsDeploymentRoutes, { prefix: '/hub-deployment' })
+  // Hub config promotion (snapshot / plan / apply / undo) over the hub / deployment link.
+  await app.register(hubConfigLinkRoutes, { prefix: '/hub-link' })
+  await app.register(hubConfigDeploymentRoutes, { prefix: '/hub-deployment' })
   // Hub phase 6 file transfer (ticket-only): where the hub link is, or on a Hub shared deployment.
   await app.register(hubTransferRoutes, { prefix: '/hub-transfer' })
   // File source: mounted only where FILE_SOURCE_TOKEN is set (bearer-only) — lower environments

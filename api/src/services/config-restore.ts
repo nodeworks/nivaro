@@ -55,6 +55,7 @@ import knexFactory, { type Knex } from 'knex'
 import { config } from '../config.js'
 import { buildConnection, isMssql, writePort } from '../db/index.js'
 import { mysqlFlavorConfig } from '../db/mysql-flavor.js'
+import { getTenantDb } from '../db/tenant-context.js'
 import { isUniqueViolation } from '../lib/unique-violation.js'
 import { NIVARO_VERSION } from '../version.js'
 import { appBox } from './app-state.js'
@@ -68,6 +69,7 @@ import {
   type SnapshotRow
 } from './config-inventory.js'
 import { chunkArray } from './db-batch.js'
+import { tenantSource } from './deployment-mode.js'
 import { isSecretColumn } from './system-collections.js'
 
 /** Config tables a restore never writes, with the reason the preview shows. */
@@ -478,6 +480,22 @@ export function toDbValue(v: unknown, info: ColumnInfo | undefined): unknown {
 
 // ── database side ────────────────────────────────────────────────────────────
 
+/** Inside one app of a Hub shared deployment: that app's pool; else null. */
+function hubTenantDb(): Knex | null {
+  if (tenantSource() !== 'hub') return null
+  return getTenantDb() ?? null
+}
+
+/**
+ * Whether this engine can plan and apply here: SQL Server only (sys.* reads, IDENTITY_INSERT,
+ * UPDLOCK). On a Hub shared deployment the app's own database decides, not the deployment's.
+ */
+export function restoreEngineSupported(): boolean {
+  const tenant = hubTenantDb()
+  if (tenant) return /mssql/i.test(String(tenant.client?.config?.client ?? ''))
+  return isMssql()
+}
+
 /**
  * A short-lived pool for one restore or preview: its own 2-minute request timeout, never the
  * request pool, destroyed afterwards (so no session state outlives it). The driver-seam hooks
@@ -485,6 +503,11 @@ export function toDbValue(v: unknown, info: ColumnInfo | undefined): unknown {
  * writes; afterConfigWrite does the rest explicitly.
  */
 export async function withRestoreDb<T>(fn: (k: Knex) => Promise<T>): Promise<T> {
+  // One app of a Hub shared deployment (hub config promotion over the deployment link): its own
+  // pool, never the deployment's DB_* connection (that is not this app's database). Nivaro Cloud
+  // keeps its old path.
+  const tenant = hubTenantDb()
+  if (tenant) return fn(tenant)
   const base = buildConnection(config.DB_HOST, writePort) as { options?: Record<string, unknown> }
   const k = knexFactory({
     client: config.DB_CLIENT,
@@ -1005,14 +1028,36 @@ export class RestoreError extends Error {
   }
 }
 
+/**
+ * What a plan makes the config tables look like: a stored restore point of this instance (the
+ * restore), or a snapshot handed in whole (a Hub config promotion: services/hub-link/
+ * config-promote.ts) — same engine, same binding. `ref` names the handed-in snapshot in the plan
+ * hash; `deletes` off = upsert only.
+ */
+export type RestoreSource =
+  | { kind: 'stored'; id: number }
+  | { kind: 'given'; snapshot: ConfigSnapshot; ref: string; deletes: boolean }
+
+const sourceRef = (s: RestoreSource) =>
+  s.kind === 'stored' ? `snapshot:${s.id}` : `given:${s.ref}`
+const sourceDeletes = (s: RestoreSource) => (s.kind === 'stored' ? true : s.deletes)
+
 async function computeWith(
   k: Knex,
-  id: number,
+  source: RestoreSource | number,
   scope: string[] | null | undefined,
   allowCascade: boolean
 ): Promise<ComputedPlan> {
-  const { loadConfigSnapshot } = await import('./config-snapshots.js')
-  const target = await loadConfigSnapshot(id)
+  const src: RestoreSource = typeof source === 'number' ? { kind: 'stored', id: source } : source
+  const id = src.kind === 'stored' ? src.id : 0
+  const deletes = sourceDeletes(src)
+  let target: ConfigSnapshot | null
+  if (src.kind === 'stored') {
+    const { loadConfigSnapshot } = await import('./config-snapshots.js')
+    target = await loadConfigSnapshot(id)
+  } else {
+    target = src.snapshot
+  }
   if (!target) throw new RestoreError(404, 'Snapshot not found', 'NOT_FOUND')
   if (target.format !== 1)
     throw new RestoreError(400, `Unsupported snapshot format ${target.format}`, 'FORMAT')
@@ -1061,7 +1106,7 @@ async function computeWith(
     }
     plans.push(
       planTable(table, target.tables[table], live.tables[table], columns.get(table) ?? new Map(), {
-        deletes: true,
+        deletes,
         isActiveUser
       })
     )
@@ -1071,7 +1116,12 @@ async function computeWith(
 
   const dbName = ((await k.raw('SELECT DB_NAME() AS n;')) as Array<{ n: string }>)[0]?.n
   const warnings: string[] = []
-  if (target.instance.database && dbName && target.instance.database !== dbName) {
+  if (
+    src.kind === 'stored' &&
+    target.instance.database &&
+    dbName &&
+    target.instance.database !== dbName
+  ) {
     warnings.push(
       `This snapshot was taken on ${target.instance.database}; this instance is ${dbName} (a database restored from another one carries its snapshots).`
     )
@@ -1094,7 +1144,7 @@ async function computeWith(
       database: target.instance.database,
       restore_point: target.restore_point ?? null
     },
-    plan_hash: planHash(`snapshot:${id}`, changed, { cascade, allowCascade }),
+    plan_hash: planHash(sourceRef(src), changed, { cascade, allowCascade }),
     tables: changed.map((p) => {
       const { ops, inactive_keys: _k, ...rest } = p
       return {
@@ -1119,9 +1169,26 @@ export async function previewRestore(
   scope?: string[] | null,
   allowCascade = false
 ): Promise<RestorePreview> {
-  if (!isMssql())
+  if (!restoreEngineSupported())
     throw new RestoreError(501, 'This needs a SQL Server database.', 'NOT_SUPPORTED_ON_DATABASE')
   return withRestoreDb(async (k) => (await computeWith(k, id, scope, allowCascade)).preview)
+}
+
+/**
+ * Hub config promotion (target side): the plan that makes this instance's config tables look like
+ * a snapshot handed in (redacted and stripped of what this environment keeps by the caller).
+ * Inserts and updates; deletes only with `deletes`. Same preview and hash rules as a restore.
+ */
+export async function previewGivenSnapshot(
+  snapshot: ConfigSnapshot,
+  opts: { ref: string; deletes: boolean; tables?: string[] | null; allowCascade?: boolean }
+): Promise<RestorePreview> {
+  if (!restoreEngineSupported())
+    throw new RestoreError(501, 'This needs a SQL Server database.', 'NOT_SUPPORTED_ON_DATABASE')
+  const src: RestoreSource = { kind: 'given', snapshot, ref: opts.ref, deletes: opts.deletes }
+  return withRestoreDb(
+    async (k) => (await computeWith(k, src, opts.tables, opts.allowCascade === true)).preview
+  )
 }
 
 /** Probes only (rolled back): the computed plan on a caller's pool. */
@@ -1144,36 +1211,61 @@ export interface RestoreResult {
 
 const restoring = appBox(() => false)
 
+export interface RestoreApplyOpts {
+  planHash: string
+  tables?: string[] | null
+  allowCascade?: boolean
+  userId?: string | null
+  req?: Parameters<typeof import('./activity.js').logActivity>[0]['req']
+}
+
 /**
  * Apply a restore bound to the preview `planHash`. Throws RestoreError: 409 STALE (with the
  * fresh preview) when live config moved since, 409 BUSY / LOCKED, 409 CASCADE when deletes
  * would take rows with them and the plan did not opt in, 400 OVER_CAP, 422 FAILED (nothing
  * written) when an operation failed.
  */
-export async function applyRestore(
-  id: number,
-  opts: {
-    planHash: string
-    tables?: string[] | null
-    allowCascade?: boolean
-    userId?: string | null
-    req?: Parameters<typeof import('./activity.js').logActivity>[0]['req']
-  }
+export async function applyRestore(id: number, opts: RestoreApplyOpts): Promise<RestoreResult> {
+  return applyPlanned({ kind: 'stored', id }, opts, null)
+}
+
+/**
+ * Hub config promotion (target side): apply the plan previewGivenSnapshot answered, bound to its
+ * hash. The pre-restore point (`note`) is stored inside the same transaction, from the locked
+ * rows: restoring it (applyRestore) undoes the promotion. Same refusals as applyRestore.
+ */
+export async function applyGivenSnapshot(
+  snapshot: ConfigSnapshot,
+  opts: RestoreApplyOpts & { ref: string; deletes: boolean; note: string; activityNote: string }
 ): Promise<RestoreResult> {
-  if (!isMssql())
+  return applyPlanned({ kind: 'given', snapshot, ref: opts.ref, deletes: opts.deletes }, opts, {
+    note: opts.note,
+    activity: opts.activityNote
+  })
+}
+
+async function applyPlanned(
+  src: RestoreSource,
+  opts: RestoreApplyOpts,
+  given: { note: string; activity: string } | null
+): Promise<RestoreResult> {
+  if (!restoreEngineSupported())
     throw new RestoreError(501, 'This needs a SQL Server database.', 'NOT_SUPPORTED_ON_DATABASE')
   if (restoring.value) throw new RestoreError(409, 'Another config restore is running', 'BUSY')
   restoring.value = true
+  const id = src.kind === 'stored' ? src.id : 0
+  const ref = sourceRef(src)
+  const deletes = sourceDeletes(src)
   const allowCascade = opts.allowCascade === true
   try {
     const out = await withRestoreDb(async (k) => {
-      const plan = await computeWith(k, id, opts.tables, allowCascade)
+      const plan = await computeWith(k, src, opts.tables, allowCascade)
       const stale = async () =>
         new RestoreError(
           409,
           'Configuration changed since the preview — review the new preview and apply again.',
           'STALE',
-          { preview: (await computeWith(k, id, opts.tables, allowCascade)).preview }
+          { preview: (await computeWith(k, src, opts.tables, allowCascade)).preview }
         )
       if (plan.preview.plan_hash !== opts.planHash) {
         throw new RestoreError(
@@ -1202,7 +1294,9 @@ export async function applyRestore(
       if (touched.length === 0) return { applied: [] as AppliedCounts[], pre: null, touched }
       const hashTables = plan.plans.map((p) => p.table)
       const when = new Date(plan.target.generated_at)
-      const note = `Before restoring ${touched.length} table${touched.length === 1 ? '' : 's'} to snapshot #${id} (${when.toISOString().slice(0, 16).replace('T', ' ')} UTC)`
+      const note =
+        given?.note ??
+        `Before restoring ${touched.length} table${touched.length === 1 ? '' : 's'} to snapshot #${id} (${when.toISOString().slice(0, 16).replace('T', ' ')} UTC)`
       try {
         return await lockedWrite(
           k,
@@ -1219,7 +1313,7 @@ export async function applyRestore(
                 locked.tables[t] ?? {},
                 plan.columns.get(t) ?? new Map(),
                 {
-                  deletes: true,
+                  deletes,
                   isActiveUser: (u) => active.has(u.toUpperCase())
                 }
               )
@@ -1227,7 +1321,7 @@ export async function applyRestore(
             const changed = plans.filter((p) => p.ops.length > 0 || p.inactive_keys.length > 0)
             const cascade = await computeCascade(trx as unknown as Knex, changed, plan.fks)
             return {
-              hash: planHash(`snapshot:${id}`, changed, { cascade, allowCascade }),
+              hash: planHash(ref, changed, { cascade, allowCascade }),
               plans: changed
             }
           },
@@ -1243,7 +1337,7 @@ export async function applyRestore(
             const pre = await storeConfigSnapshot(
               preSnap,
               'pre-restore',
-              { userId: opts.userId ?? null, restoreOf: id, note },
+              { userId: opts.userId ?? null, restoreOf: id || null, note },
               trx as unknown as Knex
             )
             const applied = await applyTablePlans(
@@ -1282,11 +1376,13 @@ export async function applyRestore(
     const { logActivity } = await import('./activity.js')
     for (const a of out.applied) {
       await logActivity({
-        action: 'config-restore',
+        action: given ? 'config-promote' : 'config-restore',
         user: opts.userId ?? null,
         collection: a.table,
-        item: String(id),
-        comment: `restored to snapshot #${id}: ${a.inserted} inserted, ${a.updated} updated, ${a.deleted} deleted`,
+        item: given ? String(out.pre.id) : String(id),
+        comment: given
+          ? `${given.activity}: ${a.inserted} inserted, ${a.updated} updated, ${a.deleted} deleted`
+          : `restored to snapshot #${id}: ${a.inserted} inserted, ${a.updated} updated, ${a.deleted} deleted`,
         req: opts.req
       })
     }
@@ -1299,11 +1395,13 @@ export async function applyRestore(
       { inserted: 0, updated: 0, deleted: 0 }
     )
     await logActivity({
-      action: 'config-restore',
+      action: given ? 'config-promote' : 'config-restore',
       user: opts.userId ?? null,
       collection: 'nivaro_config_snapshots',
-      item: String(id),
-      comment: `${out.applied.length} tables restored to snapshot #${id} (${totals.inserted} inserted, ${totals.updated} updated, ${totals.deleted} deleted); undo = restore #${out.pre.id}`,
+      item: given ? String(out.pre.id) : String(id),
+      comment: given
+        ? `${given.activity}: ${out.applied.length} tables (${totals.inserted} inserted, ${totals.updated} updated, ${totals.deleted} deleted); undo = restore #${out.pre.id}`
+        : `${out.applied.length} tables restored to snapshot #${id} (${totals.inserted} inserted, ${totals.updated} updated, ${totals.deleted} deleted); undo = restore #${out.pre.id}`,
       req: opts.req
     })
     return { snapshot_id: id, pre_restore_id: out.pre.id, tables: out.applied, totals }
@@ -1343,7 +1441,7 @@ export async function applyUploadedTable(
     userId?: string | null
   }
 ): Promise<UploadApplyPreview | (AppliedCounts & { plan_hash: string })> {
-  if (!isMssql())
+  if (!restoreEngineSupported())
     throw new RestoreError(501, 'This needs a SQL Server database.', 'NOT_SUPPORTED_ON_DATABASE')
   if (RESTORE_EXCLUDED[table]) {
     throw new RestoreError(400, `${table}: ${RESTORE_EXCLUDED[table]}`, 'EXCLUDED')
