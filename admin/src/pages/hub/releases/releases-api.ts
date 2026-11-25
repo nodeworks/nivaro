@@ -32,6 +32,8 @@ export interface TrainStep {
   note: string | null
   readiness: number | null
   attempts: number
+  /** Held before its promotion (an earlier environment changed, or the person is gone). */
+  blocked?: boolean
 }
 
 export interface HubTrain {
@@ -44,6 +46,7 @@ export interface HubTrain {
   error: string | null
   schedule_id: number | null
   started_by: string | null
+  started_by_name?: string | null
   started_at: string | null
   finished_at: string | null
 }
@@ -69,6 +72,8 @@ export interface HubSchedule {
   train_id: number | null
   error: string | null
   train: { keys: string[] } | null
+  /** Who the run acts for (it is checked again when it starts). */
+  created_by_name?: string | null
 }
 
 export interface HubFreeze {
@@ -131,7 +136,7 @@ export interface ReleasesOverview {
 }
 
 export interface FreezeRefusal {
-  code: 'FROZEN'
+  code: 'FROZEN' | 'FREEZE_UNKNOWN'
   message: string
   freeze: { id: number; name: string; app_id: number | null; ends_at: string }
 }

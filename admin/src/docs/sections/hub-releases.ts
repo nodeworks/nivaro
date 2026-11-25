@@ -16,7 +16,7 @@ export const hubReleasesDocs: DocSection = {
     { type: 'h2', id: 'hub-releases-trains', text: 'Release trains' },
     {
       type: 'p',
-      text: 'A train takes one version through chosen environments of one app, in the app’s order (for example development → staging → production). Each step promotes the environment, then holds: the soak time must pass after the deploy finished, then, when a minimum readiness is set, the app’s readiness score (read over its hub link) must reach it. A hold still short after its longest hold waits for a person, who skips the hold or aborts the train. A step whose environment already runs the version goes straight to its hold.'
+      text: 'A train takes one version through chosen environments of one app, in the app’s order (for example development → staging → production). Each step promotes the environment, then holds: the soak time must pass after the deploy finished, then, when a minimum readiness is set, the app’s readiness score (read over its hub link) must reach it. A hold still short after its longest hold waits for a person, who skips the hold or aborts the train. When the environment has an automatic rollback rule, the step also waits until that promotion’s rollback watch has ended clean; a rollback fails the step. A step whose environment already runs the version goes straight to its hold.'
     },
     {
       type: 'table',
@@ -28,7 +28,10 @@ export const hubReleasesDocs: DocSection = {
         ],
         ['Promoting', 'Its promotion run is running.'],
         ['Holding', 'Soaking, or waiting for the readiness score.'],
-        ['Needs a person', 'The hold did not pass in time: Skip the hold, or Abort.'],
+        [
+          'Needs a person',
+          'The hold did not pass in time, the rollback watch ended without a verdict (Skip the hold, or Abort), or the step is held before its promotion (Start it anyway, or Abort).'
+        ],
         [
           'Passed / Skipped',
           'Done; Skipped = a person skipped the step before it started (that environment was not promoted).'
@@ -42,6 +45,8 @@ export const hubReleasesDocs: DocSection = {
     {
       type: 'ul',
       items: [
+        'Before each next step the Hub reads, live, which version every earlier environment of the train runs. One that no longer runs the train’s version (rolled back, or deployed outside the Hub) holds the train before the next promotion, and owners and administrators are told.',
+        'Before each start the Hub checks that the person who started the train is still an active administrator; if not, the train holds before its next promotion and the administrators are told.',
         'One running train per app. Aborting stops the train; a promotion already running finishes on its own (cancel it from the Promote panel if needed).',
         'A step can be skipped only while it waits or holds, never while its promotion runs.',
         'The app’s owners and the person who started the train are told when it finishes, stops or needs a person.',
@@ -51,21 +56,22 @@ export const hubReleasesDocs: DocSection = {
     { type: 'h2', id: 'hub-releases-schedules', text: 'Scheduled promotions' },
     {
       type: 'p',
-      text: 'A promotion of one environment, or a whole train, can be scheduled for a time. The Hub stores UTC and shows every time in the viewer’s own zone. Scheduling needs the typed environment key (a promotion) or app key (a train). At the time, the Hub judges the plan again and starts it as the person who scheduled it.'
+      text: 'A promotion of one environment, or a whole train, can be scheduled for a time. The Hub stores UTC and shows every time in the viewer’s own zone. Scheduling needs the typed environment key (a promotion) or app key (a train). At the time, the Hub judges the plan again and starts it as the person who scheduled it (the list names them), after checking that this person is still an active administrator: if not, the schedule fails and owners and administrators are told.'
     },
     {
       type: 'ul',
       items: [
         'Inside a freeze window: *Wait until it ends* (default) starts it once the freeze lifts; *Do not start* fails it and tells the owners.',
-        'A refusal that passes on its own is tried again every minute (at most 30 times); any other refusal fails the schedule and tells the owners.',
-        'A schedule the Hub finds more than 6 hours late (it was not running its schedule) is marked missed instead of deploying by surprise.',
+        'A refusal that passes on its own is tried again every minute (at most 30 tries; waiting for a freeze uses none); any other refusal fails the schedule and tells the owners.',
+        'A schedule the Hub finds more than 6 hours late — after its time, or after the freeze or refusal it waited on ended — is marked missed instead of deploying by surprise.',
+        'A start the Hub lost track of (it stopped mid-start) is never started twice: the next claim adopts the promotion or train it had already started.',
         'A schedule can be cancelled until it starts.'
       ]
     },
     { type: 'h2', id: 'hub-releases-freezes', text: 'Freeze windows' },
     {
       type: 'p',
-      text: 'While a freeze is on, the Hub refuses promotions, Apply now, shared deployment upgrades and moves with 409 `FROZEN` (naming the freeze and when it ends). A rollback — of an environment or of a shared deployment — is always allowed. A freeze belongs to one app or to every app (Hub-wide); an upgrade of a shared deployment is frozen when any app placed on it is.'
+      text: 'While a freeze is on, the Hub refuses promotions, Apply now, shared deployment upgrades and moves with 409 `FROZEN` (naming the freeze and when it ends). Only a rollback to a version OLDER than the one running (of an environment or of a shared deployment) is exempt; a “rollback” to the running or a newer version deploys something new and is frozen like a promotion. When the windows cannot be read, starts are refused with 503 `FREEZE_UNKNOWN` (runners try again). A freeze belongs to one app or to every app (Hub-wide); an upgrade of a shared deployment is frozen when any app placed on it is.'
     },
     {
       type: 'table',
@@ -81,7 +87,7 @@ export const hubReleasesDocs: DocSection = {
     { type: 'h2', id: 'hub-releases-rollback', text: 'Automatic rollback' },
     {
       type: 'p',
-      text: 'An automatic rollback rule belongs to one environment. For its watch window after each successful promotion (not Apply now), the Hub reads the app’s figures over its hub link every minute and, when one crosses, rolls back to the version the environment ran before — through the normal rollback path (the build the Hub recorded), never frozen — and tells the app’s owners.'
+      text: 'An automatic rollback rule belongs to one environment. For its watch window after each successful promotion (not Apply now), the Hub reads the app’s figures over its hub link every minute and, when one crosses, rolls back to the version the environment ran before — through the normal rollback path (the build the Hub recorded), never frozen — and tells the app’s owners. It acts only while the environment still runs the promoted version: when the hub link reports another version (deployed outside the Hub), the watch ends as Another deploy followed, says so, and never rolls back. A rule watches only promotions that finished after it was saved.'
     },
     {
       type: 'table',
@@ -89,9 +95,12 @@ export const hubReleasesDocs: DocSection = {
       rows: [
         [
           '5xx rate ≥ %',
-          '5xx answers / requests since the deploy, once at least the minimum requests were answered.'
+          '5xx answers / requests of this instance over the minutes since the deploy (at most the last 60), once at least the minimum requests were answered.'
         ],
-        ['Crashes ≥', 'Front-end crash reports since the deploy.'],
+        [
+          'Crashes ≥',
+          'Front-end crash reports over the minutes since the deploy (at most the last 60). At most 50: one crash keeps its last 50 reports.'
+        ],
         [
           'Readiness <',
           'The readiness score is below it (a score not computed yet is not a breach).'
@@ -137,7 +146,7 @@ export const hubReleasesDocs: DocSection = {
     { type: 'h2', id: 'hub-releases-who', text: 'Who can do what' },
     {
       type: 'p',
-      text: 'Administrators start trains, schedule, manage freezes and rules, skip and abort; every change is logged in Activity. An app’s owners see its trains, schedules, freezes, rules and release notes. The minute job `hub-release-ops` (one leader, only where scheduled jobs tick) moves everything on; its state is in the database, so a missed minute is picked up by the next.'
+      text: 'Administrators start trains, schedule, manage freezes and rules, skip and abort; every change is logged in Activity. An app’s owners see its trains, schedules, freezes, rules and release notes. Two minute jobs (one leader each, only where scheduled jobs tick) move everything on: `hub-release-rollback` judges rollback watches on its own, so a rollback is never late behind slow GitLab calls, and `hub-release-ops` starts schedules and moves trains on; its state is in the database, so a missed minute is picked up by the next.'
     },
     { type: 'h2', id: 'hub-releases-routes', text: 'Routes' },
     {

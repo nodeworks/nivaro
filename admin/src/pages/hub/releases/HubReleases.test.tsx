@@ -193,6 +193,36 @@ describe('HubReleases', () => {
     await waitFor(() => expect(h.post).toHaveBeenCalledWith('/hub/trains/5/skip', { step: 0 }))
   })
 
+  it('names who a run acts for, and offers to start a blocked step anyway', async () => {
+    const blocked = {
+      ...overview,
+      trains: [
+        {
+          ...overview.trains[0],
+          started_by_name: 'Rob Lee',
+          steps: [
+            {
+              ...overview.trains[0].steps[0],
+              status: 'held',
+              blocked: true,
+              deploy_id: null,
+              note: 'Held before staging: development runs 0.3.214 now'
+            },
+            overview.trains[0].steps[1]
+          ]
+        }
+      ],
+      schedules: [{ ...overview.schedules[0], created_by_name: 'Rob Lee' }]
+    }
+    h.get.mockResolvedValue({ data: { data: blocked } })
+    h.post.mockResolvedValue({ data: { data: blocked.trains[0] } })
+    mount()
+    expect(await screen.findByText(/started by Rob Lee/)).toBeTruthy()
+    expect(screen.getByText('runs as Rob Lee')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Start staging anyway' }))
+    await waitFor(() => expect(h.post).toHaveBeenCalledWith('/hub/trains/5/skip', { step: 0 }))
+  })
+
   it('an owner reads but gets no buttons that change anything', async () => {
     h.admin = false
     h.get.mockResolvedValue({ data: { data: overview } })

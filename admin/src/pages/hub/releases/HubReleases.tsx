@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CalendarClock, Plus, Snowflake, Train, Undo2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
+import { MonCombobox } from '@/components/filter-combobox'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { SimpleSelect } from '@/components/ui/simple-select'
@@ -100,9 +101,11 @@ function useRefresh() {
 const tone = (s: string) =>
   s === 'failed' || s === 'held' || s === 'aborted'
     ? 'text-red-700 dark:text-red-300'
-    : s === 'done' || s === 'passed' || s === 'started' || s === 'rolled_back'
-      ? 'text-emerald-700 dark:text-emerald-300'
-      : 'text-slate-700 dark:text-slate-300'
+    : s === 'rolled_back' || s === 'waiting'
+      ? 'text-amber-700 dark:text-amber-300'
+      : s === 'done' || s === 'passed' || s === 'started'
+        ? 'text-emerald-700 dark:text-emerald-300'
+        : 'text-slate-700 dark:text-slate-300'
 
 const Empty = ({ children }: { children: React.ReactNode }) => (
   <p className='m-0 px-4 py-3 text-[12px] text-slate-500 dark:text-muted-foreground'>{children}</p>
@@ -285,7 +288,7 @@ function TrainForm({
         <Field
           id='train-version'
           label='Version'
-          hint='x.y.z — it must already run on the environment before the first step.'
+          hint='x.y.z, already running on the environment before the first step (the first environment takes a published release).'
         >
           <Input
             id='train-version'
@@ -361,6 +364,7 @@ function TrainRow({ t, data, isAdmin }: { t: HubTrain; data: ReleasesOverview; i
           data-tip={t.started_at ? formatDateTime(t.started_at) : undefined}
         >
           {t.started_at ? formatRelative(t.started_at) : ''}
+          {t.started_by_name ? ` · started by ${t.started_by_name}` : ''}
         </span>
         <div className='ml-auto flex gap-1'>
           {canSkip && (
@@ -370,7 +374,11 @@ function TrainRow({ t, data, isAdmin }: { t: HubTrain; data: ReleasesOverview; i
               disabled={act.isPending}
               onClick={() => act.mutate({ kind: 'skip', step: t.step_index })}
             >
-              {cur.status === 'pending' ? `Skip ${cur.key}` : 'Skip the hold'}
+              {cur.blocked
+                ? `Start ${cur.key} anyway`
+                : cur.status === 'pending'
+                  ? `Skip ${cur.key}`
+                  : 'Skip the hold'}
             </button>
           )}
           {isAdmin && t.status === 'running' && (
@@ -415,7 +423,9 @@ function TrainRow({ t, data, isAdmin }: { t: HubTrain; data: ReleasesOverview; i
           </li>
         ))}
       </ol>
-      {t.error && <p className='m-0 text-[11px] text-red-700 dark:text-red-300'>{t.error}</p>}
+      {t.error && !t.steps.some((s) => s.note && t.error?.endsWith(s.note)) && (
+        <p className='m-0 text-[11px] text-red-700 dark:text-red-300'>{t.error}</p>
+      )}
     </li>
   )
 }
@@ -645,6 +655,11 @@ function SchedulesCard({ data, isAdmin }: { data: ReleasesOverview; isAdmin: boo
                   no start in a freeze
                 </span>
               )}
+              {s.created_by_name && (
+                <span className='text-[11px] text-slate-500 dark:text-muted-foreground'>
+                  runs as {s.created_by_name}
+                </span>
+              )}
               {(s.error || s.note) && (
                 <span className='basis-full text-[11px] text-slate-600 dark:text-slate-300'>
                   {s.error ?? s.note}
@@ -670,6 +685,48 @@ function SchedulesCard({ data, isAdmin }: { data: ReleasesOverview; isAdmin: boo
 
 // ─── Freeze windows ────────────────────────────────────────────────────────────
 
+/** Every IANA zone this browser knows (a month-end freeze is judged on that zone's calendar). */
+function timeZones(current: string): string[] {
+  let all: string[] = []
+  try {
+    all =
+      (Intl as unknown as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf?.(
+        'timeZone'
+      ) ?? []
+  } catch {
+    all = []
+  }
+  return [...new Set(['UTC', current, ...all])]
+}
+
+function ZonePicker({
+  id,
+  value,
+  onChange
+}: {
+  id: string
+  value: string
+  onChange: (v: string) => void
+}) {
+  const options = useMemo(() => timeZones(value).map((z) => ({ value: z, label: z })), [value])
+  return (
+    <div id={id}>
+      <MonCombobox
+        value={value}
+        // Picking the same zone again would clear it: keep it instead. The command list may hand
+        // back the value lower-cased, so it is matched back to the zone's own spelling.
+        onChange={(v) => {
+          const hit = options.find((o) => o.value.toLowerCase() === v.toLowerCase())
+          if (hit) onChange(hit.value)
+        }}
+        options={options}
+        placeholder='Pick a time zone'
+        className='w-full bg-white text-[13px] dark:bg-background'
+      />
+    </div>
+  )
+}
+
 function FreezeForm({
   data,
   current,
@@ -687,7 +744,7 @@ function FreezeForm({
   const [end, setEnd] = useState(isoToLocalInput(current?.ends_at))
   const [before, setBefore] = useState(current?.days_before ?? 2)
   const [after, setAfter] = useState(current?.days_after ?? 2)
-  const tz = current?.time_zone ?? viewerTimeZone()
+  const [tz, setTz] = useState(current?.time_zone ?? viewerTimeZone())
   const save = useMutation({
     mutationFn: () =>
       saveFreeze(current?.id ?? null, {
@@ -766,12 +823,11 @@ function FreezeForm({
           </Field>
         </div>
       ) : (
-        <div className='grid gap-3 sm:grid-cols-2'>
-          <Field
-            id='fz-before'
-            label='Last days of the month'
-            hint={`Midnight to midnight in ${tz}.`}
-          >
+        <div className='grid gap-3 sm:grid-cols-3'>
+          <Field id='fz-zone' label='Time zone' hint='Days run midnight to midnight here.'>
+            <ZonePicker id='fz-zone' value={tz} onChange={setTz} />
+          </Field>
+          <Field id='fz-before' label='Last days of the month'>
             <Input
               id='fz-before'
               type='number'
@@ -797,7 +853,8 @@ function FreezeForm({
       )}
       <p className='m-0 text-[11px] text-slate-500 dark:text-muted-foreground'>
         While a freeze is on, the Hub refuses promotions, Apply now, shared deployment upgrades and
-        moves. A rollback is always allowed.
+        moves. A rollback to an older version than the one running is always allowed; any other
+        target counts as a promotion.
       </p>
       <div className='flex gap-2'>
         <Button
@@ -831,7 +888,7 @@ function FreezesCard({ data, isAdmin }: { data: ReleasesOverview; isAdmin: boole
   return (
     <SectionCard
       title='Freeze windows'
-      description='No promotions, upgrades or moves while one is on — rollbacks still go through.'
+      description='No promotions, upgrades or moves while one is on — rollbacks to an older version still go through.'
       actions={
         isAdmin &&
         !editing && (
@@ -854,28 +911,27 @@ function FreezesCard({ data, isAdmin }: { data: ReleasesOverview; isAdmin: boole
       ) : (
         <ul className='m-0 list-none divide-y divide-slate-100 p-0 dark:divide-border'>
           {data.freezes.map((f) => (
-            <li
-              key={f.id}
-              className='flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 text-[12px]'
-            >
-              <span className='font-medium text-slate-900 dark:text-foreground'>{f.name}</span>
-              <span className='text-slate-500 dark:text-muted-foreground'>
-                {appKey(data, f.app_id)}
-              </span>
-              {f.active ? (
-                <span className='rounded-full border border-sky-200 bg-sky-50 px-2 py-px text-[11px] font-medium text-sky-800 dark:border-sky-900/60 dark:bg-sky-950/40 dark:text-sky-200'>
-                  On until {formatDateTime(f.active.end)}
-                </span>
-              ) : f.next ? (
-                <span className='text-[11px] text-slate-500 dark:text-muted-foreground'>
-                  Next {formatDateTime(f.next.start)}
-                </span>
-              ) : null}
-              <span className='basis-full text-[11px] text-slate-600 dark:text-slate-300'>
-                {words(f)}
-              </span>
+            <li key={f.id} className='flex items-center gap-3 px-4 py-2.5 text-[12px]'>
+              <div className='min-w-0 flex-1 space-y-0.5'>
+                <div className='flex flex-wrap items-center gap-x-3 gap-y-1'>
+                  <span className='font-medium text-slate-900 dark:text-foreground'>{f.name}</span>
+                  <span className='text-slate-500 dark:text-muted-foreground'>
+                    {appKey(data, f.app_id)}
+                  </span>
+                  {f.active ? (
+                    <span className='rounded-full border border-sky-200 bg-sky-50 px-2 py-px text-[11px] font-medium text-sky-800 dark:border-sky-900/60 dark:bg-sky-950/40 dark:text-sky-200'>
+                      On until {formatDateTime(f.active.end)}
+                    </span>
+                  ) : f.next ? (
+                    <span className='text-[11px] text-slate-500 dark:text-muted-foreground'>
+                      Next {formatDateTime(f.next.start)}
+                    </span>
+                  ) : null}
+                </div>
+                <div className='text-[11px] text-slate-600 dark:text-slate-300'>{words(f)}</div>
+              </div>
               {isAdmin && (
-                <div className='ml-auto flex gap-1'>
+                <div className='flex shrink-0 gap-1'>
                   <button type='button' className={ghostButton} onClick={() => setEditing(f)}>
                     Edit
                   </button>
@@ -908,7 +964,17 @@ interface RuleDraft {
   min_readiness: number | ''
 }
 
-function RuleEditor({
+/** A rule in one line: what crosses it, and for how long after a promotion. */
+function ruleWords(r: RollbackRule): string {
+  const parts = [
+    r.max_error_pct != null ? `5xx ≥ ${r.max_error_pct}% (from ${r.min_requests} requests)` : null,
+    r.max_crashes != null ? `crashes ≥ ${r.max_crashes}` : null,
+    r.min_readiness != null ? `readiness < ${r.min_readiness}` : null
+  ].filter(Boolean)
+  return `${parts.join(' · ')} — watched ${r.window_minutes} min after each promotion`
+}
+
+function RuleRow({
   env,
   rule,
   isAdmin
@@ -916,6 +982,59 @@ function RuleEditor({
   env: ReleaseEnv
   rule: RollbackRule | undefined
   isAdmin: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className='px-4 py-2.5'>
+      <div className='flex items-center gap-3 text-[12px]'>
+        <div className='min-w-0 flex-1 space-y-0.5'>
+          <div className='flex flex-wrap items-center gap-x-3 gap-y-1'>
+            <span className='font-mono font-semibold text-slate-900 dark:text-foreground'>
+              {env.key}
+            </span>
+            <span
+              className={cn(
+                'font-medium',
+                rule?.enabled
+                  ? 'text-emerald-700 dark:text-emerald-300'
+                  : 'text-slate-500 dark:text-muted-foreground'
+              )}
+            >
+              {rule ? (rule.enabled ? 'On' : 'Off') : 'No rule'}
+            </span>
+            {!env.linked && (
+              <span className='text-[11px] text-amber-700 dark:text-amber-300'>
+                No hub link: the Hub cannot read its figures
+              </span>
+            )}
+          </div>
+          {rule && (
+            <div className='text-[11px] text-slate-600 dark:text-slate-300'>{ruleWords(rule)}</div>
+          )}
+        </div>
+        {isAdmin && !open && (
+          <button
+            type='button'
+            className={cn(ghostButton, 'shrink-0')}
+            onClick={() => setOpen(true)}
+          >
+            {rule ? 'Edit' : 'Add rule'}
+          </button>
+        )}
+      </div>
+      {open && <RuleEditor env={env} rule={rule} onDone={() => setOpen(false)} />}
+    </div>
+  )
+}
+
+function RuleEditor({
+  env,
+  rule,
+  onDone
+}: {
+  env: ReleaseEnv
+  rule: RollbackRule | undefined
+  onDone: () => void
 }) {
   const refresh = useRefresh()
   const [draft, setDraft] = useState<RuleDraft>({
@@ -940,12 +1059,16 @@ function RuleEditor({
     onSuccess: () => {
       toast.success(`Rollback rule saved for ${env.key}`)
       refresh()
+      onDone()
     },
     onError: (err) => hubToast(err, 'Could not save the rule')
   })
   const remove = useMutation({
     mutationFn: () => deleteRollbackRule(env.id),
-    onSuccess: refresh,
+    onSuccess: () => {
+      refresh()
+      onDone()
+    },
     onError: (err) => hubToast(err, 'Could not remove the rule')
   })
   const num = (
@@ -960,7 +1083,6 @@ function RuleEditor({
         min={opts.min}
         max={opts.max}
         step={opts.step}
-        disabled={!isAdmin}
         value={draft[k]}
         placeholder='off'
         onChange={(e) =>
@@ -971,55 +1093,45 @@ function RuleEditor({
     </Field>
   )
   return (
-    <div className='space-y-2 px-4 py-3'>
-      <div className='flex flex-wrap items-center gap-2'>
-        <span className='font-mono text-[12px] font-semibold text-slate-900 dark:text-foreground'>
-          {env.key}
-        </span>
-        {!env.linked && (
-          <span className='text-[11px] text-amber-700 dark:text-amber-300'>
-            No hub link: the Hub cannot read its figures
-          </span>
-        )}
-        <div className='ml-auto flex items-center gap-2 text-[12px] text-slate-600 dark:text-slate-300'>
-          <Switch
-            checked={draft.enabled}
-            disabled={!isAdmin}
-            onCheckedChange={(v) => setDraft((d) => ({ ...d, enabled: v }))}
-            aria-label={`Automatic rollback for ${env.key}`}
-          />
-          {rule ? (draft.enabled ? 'On' : 'Off') : 'Not set'}
-        </div>
+    <div className='mt-2 space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3 dark:border-border dark:bg-muted/40'>
+      <div className='flex items-center gap-2 text-[12px] text-slate-700 dark:text-slate-300'>
+        <Switch
+          checked={draft.enabled}
+          onCheckedChange={(v) => setDraft((d) => ({ ...d, enabled: v }))}
+          aria-label={`Automatic rollback for ${env.key}`}
+        />
+        {draft.enabled ? 'Roll back on its own' : 'Off (kept, not used)'}
       </div>
-      <div className='grid grid-cols-2 gap-2 sm:grid-cols-6'>
+      <div className='grid grid-cols-2 gap-2 sm:grid-cols-5'>
         {num('window_minutes', 'Watch (min)', { min: 5, max: 1440 })}
         {num('max_error_pct', '5xx rate ≥ %', { min: 0.1, max: 100, step: '0.1' })}
         {num('min_requests', 'Min. requests', { min: 1 })}
-        {num('max_crashes', 'Crashes ≥', { min: 1 })}
+        {num('max_crashes', 'Crashes ≥', { min: 1, max: 50 })}
         {num('min_readiness', 'Readiness <', { min: 1, max: 100 })}
       </div>
-      {isAdmin && (
-        <div className='flex gap-2'>
+      <div className='flex flex-wrap gap-2'>
+        <Button
+          size='sm'
+          className='h-8 bg-nvr-cyan text-white hover:bg-nvr-cyan/90'
+          disabled={save.isPending}
+          onClick={() => save.mutate()}
+        >
+          {save.isPending ? 'Saving…' : 'Save rule'}
+        </Button>
+        <Button size='sm' variant='ghost' className='h-8' onClick={onDone}>
+          Cancel
+        </Button>
+        {rule && (
           <button
             type='button'
-            className={ghostButton}
-            disabled={save.isPending}
-            onClick={() => save.mutate()}
+            className={cn(dangerGhost, 'ml-auto')}
+            disabled={remove.isPending}
+            onClick={() => remove.mutate()}
           >
-            {save.isPending ? 'Saving…' : 'Save rule'}
+            Remove rule
           </button>
-          {rule && (
-            <button
-              type='button'
-              className={dangerGhost}
-              disabled={remove.isPending}
-              onClick={() => remove.mutate()}
-            >
-              Remove rule
-            </button>
-          )}
-        </div>
-      )}
+        )}
+      </div>
     </div>
   )
 }
@@ -1029,7 +1141,7 @@ function RollbackCard({ data, isAdmin }: { data: ReleasesOverview; isAdmin: bool
   return (
     <SectionCard
       title='Automatic rollback'
-      description='After a promotion, the Hub watches the app’s 5xx rate, crash reports and readiness score over its hub link and rolls back to the version before when one crosses. Owners are told.'
+      description='After a promotion, the Hub watches the app’s 5xx rate, crash reports (both over the minutes since the deploy, at most the last 60) and readiness score over its hub link, and rolls back to the version before when one crosses — only while that version still runs. Owners are told.'
     >
       {envs.length === 0 ? (
         <Empty>No environment the Hub deploys.</Empty>
@@ -1043,14 +1155,16 @@ function RollbackCard({ data, isAdmin }: { data: ReleasesOverview; isAdmin: bool
                 <div className='bg-slate-50 px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:bg-muted/40 dark:text-muted-foreground'>
                   {a.key}
                 </div>
-                {mine.map((e) => (
-                  <RuleEditor
-                    key={`${e.id}-${JSON.stringify(data.rules.find((r) => r.environment_id === e.id) ?? null)}`}
-                    env={e}
-                    rule={data.rules.find((r) => r.environment_id === e.id)}
-                    isAdmin={isAdmin}
-                  />
-                ))}
+                <div className='divide-y divide-slate-100 dark:divide-border'>
+                  {mine.map((e) => (
+                    <RuleRow
+                      key={e.id}
+                      env={e}
+                      rule={data.rules.find((r) => r.environment_id === e.id)}
+                      isAdmin={isAdmin}
+                    />
+                  ))}
+                </div>
               </div>
             )
           })}
@@ -1071,8 +1185,13 @@ function RollbackCard({ data, isAdmin }: { data: ReleasesOverview; isAdmin: bool
                   <Undo2 className='h-3.5 w-3.5 text-red-600' aria-hidden />
                 )}
                 <span className='font-mono'>
-                  {envKey(data, w.environment_id)} {w.from_version} → {w.version}
+                  {envKey(data, w.environment_id)} {w.version}
                 </span>
+                {w.from_version && (
+                  <span className='text-[11px] text-slate-500 dark:text-muted-foreground'>
+                    promoted from {w.from_version}
+                  </span>
+                )}
                 <span className={cn('font-medium', tone(w.status))}>{WATCH_WORDS[w.status]}</span>
                 {w.until_at && w.status === 'watching' && (
                   <span className='text-[11px] text-slate-500 dark:text-muted-foreground'>

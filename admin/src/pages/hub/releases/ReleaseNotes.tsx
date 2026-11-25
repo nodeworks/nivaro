@@ -64,7 +64,7 @@ export function ReleaseNotesView({ notes }: { notes: ReleaseNotes }) {
       {notes.components.map((c) => (
         <div
           key={`${c.position}-${c.component}`}
-          className='space-y-1.5 rounded-md border border-slate-200 bg-white p-2.5 dark:border-border dark:bg-card'
+          className='space-y-1.5 border-t border-slate-200 pt-2 dark:border-border'
         >
           <div className='flex flex-wrap items-center gap-x-2 text-[12px]'>
             <span className='font-medium text-slate-900 dark:text-foreground'>{c.component}</span>
@@ -110,7 +110,7 @@ export function ReleaseNotesView({ notes }: { notes: ReleaseNotes }) {
           <NameList label='New settings in env files' names={c.env_keys} />
         </div>
       ))}
-      <div className='space-y-1.5 rounded-md border border-slate-200 bg-white p-2.5 dark:border-border dark:bg-card'>
+      <div className='space-y-1.5 border-t border-slate-200 pt-2 dark:border-border'>
         <div className='font-medium text-slate-900 dark:text-foreground'>Nivaro</div>
         {notes.nivaro.note && (
           <p className='m-0 text-[11px] text-slate-500 dark:text-muted-foreground'>
@@ -279,9 +279,11 @@ export function FreezeBanner({ envId, kind }: { envId: number; kind: 'promote' |
     >
       <Snowflake className='mt-0.5 h-3.5 w-3.5 shrink-0' aria-hidden />
       <span>
-        {kind === 'rollback'
-          ? `A freeze is on (${q.data.freeze.name}, until ${formatDateTime(q.data.freeze.ends_at)}). A rollback is still allowed.`
-          : `Promotions are frozen (${q.data.freeze.name}) until ${formatDateTime(q.data.freeze.ends_at)}. The Hub will refuse to start this; a rollback is still allowed.`}
+        {q.data.code === 'FREEZE_UNKNOWN'
+          ? 'The Hub cannot read its freeze windows right now, so it refuses to start this until it can. Try again shortly.'
+          : kind === 'rollback'
+            ? `A freeze is on (${q.data.freeze.name}, until ${formatDateTime(q.data.freeze.ends_at)}). Only a rollback to a version older than the running one is allowed.`
+            : `Promotions are frozen (${q.data.freeze.name}) until ${formatDateTime(q.data.freeze.ends_at)}. The Hub will refuse to start this; a rollback to an older version is still allowed.`}
       </span>
     </p>
   )
