@@ -166,7 +166,7 @@ const REVIEWED: Record<string, Reviewed> = {
   'services/flow-script-isolated.ts': {
     role: 'not-media',
     calls: { child_process: 1 },
-    why: 'Flow script steps on a Hub shared deployment: a plain `node` child (process.execPath), the same in both images.'
+    why: 'Flow script steps on every deployment: a plain `node` child (process.execPath, `nice` when present), the same in both images.'
   },
   'services/staged-imports.ts': {
     role: 'not-media',

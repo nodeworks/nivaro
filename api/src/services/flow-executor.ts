@@ -18,7 +18,6 @@ import { isMultiTenant, isNivaroCloud } from './deployment-mode.js'
 import { callExternalApi } from './external-apis.js'
 import { runIsolatedScript } from './flow-script-isolated.js'
 import { flowScriptsOnShared } from './flow-script-limits.js'
-import { runSandboxedScript } from './flow-script-sandbox.js'
 import { resolveSweepItems } from './flow-sweep-items.js'
 import {
   getByPath,
@@ -188,9 +187,9 @@ export async function runExecScript(op: FlowOperation, data: FlowData, ctx: Exec
   if (!code.trim()) return { status: 'resolve' as const, output: data }
 
   // C2 (security audit 2026-10-27): Nivaro Cloud tenants share one process with strangers — no
-  // tenant runs code there. A Hub shared deployment runs each script in its own child process
-  // (flow-script-isolated.ts: permission model, empty env, no network, memory/time/slot caps), and
-  // only when its operator opted in (FLOW_SCRIPTS_ON_SHARED=on, flow-script-limits.ts).
+  // tenant runs code there. Everywhere else each script runs in a child process of its own
+  // (flow-script-isolated.ts: permission model, empty env, no network, memory/time/slot caps); a
+  // Hub shared deployment only when its operator opted in (FLOW_SCRIPTS_ON_SHARED=on).
   if (isNivaroCloud()) {
     ctx.log.warn({ flowId: ctx.flowId, key: op.key }, 'exec-script refused in cloud mode')
     return {
@@ -215,10 +214,12 @@ export async function runExecScript(op: FlowOperation, data: FlowData, ctx: Exec
   }
 
   try {
-    // Isolated node:vm context: data + log only, no process/require/timers (flow-script-sandbox);
-    // on a shared deployment that context runs in a child process of its own.
-    const run = shared ? runIsolatedScript : runSandboxedScript
-    const output = (await run(code, data, scriptLog, timeoutMs)) as FlowData
+    // Never in the API process (re-review P1): every deployment runs the script in a child
+    // process of its own (flow-script-isolated.ts); a dedicated app keeps binary types and its
+    // heap budget there.
+    const output = (await runIsolatedScript(code, data, scriptLog, timeoutMs, {
+      dedicated: !shared
+    })) as FlowData
 
     ctx.log.debug({ flowId: ctx.flowId, key: op.key }, 'Script executed')
     return { status: 'resolve' as const, output }

@@ -16,7 +16,9 @@ const {
   CHILD_LOCKDOWN,
   CHILD_SOURCE,
   childEnv,
+  cgroupHeadroom,
   childFlags,
+  dedicatedHeapMb,
   OFF_HEAP_GLOBALS,
   permissionFlag,
   RSS_MARGIN_MB,
@@ -213,10 +215,26 @@ describe('the child lock-down', () => {
     expect(r).toEqual({ ok: true, frozen: true })
   })
 
-  it('a script cannot import() a module: the vm has no import callback', async () => {
+  it('a script cannot import() a module, and the refusal it gets is no way out', async () => {
     await expect(
       runIsolatedScript('return import("node:net").then(() => ({ got: true }))', {}, quietLog())
     ).rejects.toThrow(/dynamic import callback/i)
+    // The refusal is a host-realm error (Node's loader): it must not lead anywhere.
+    expect(
+      await runIsolatedScript(
+        `return import('node:net').then(null, (e) => {
+           const r = {}
+           try { r.fn = typeof e.constructor.constructor('return process')() } catch { r.fn = 'refused' }
+           // The host realm's intrinsics (the root of the error's prototype chain) are frozen.
+           let root = e
+           while (Object.getPrototypeOf(root)) root = Object.getPrototypeOf(root)
+           try { root.nvrPoked = 1; r.proto = 'wrote' } catch { r.proto = 'frozen' }
+           return r
+         })`,
+        {},
+        quietLog()
+      )
+    ).toEqual({ fn: 'refused', proto: 'frozen' })
   })
 
   it('exits right after its answer, and on its own when the API goes away', async () => {
@@ -262,8 +280,47 @@ describe('output decoding (review H1)', () => {
 })
 
 describe('container memory headroom (review M2)', () => {
-  it('reads the headroom of this container or machine', async () => {
-    expect(await memoryHeadroomBytes()).toBeGreaterThan(0)
+  it('reads the headroom of this container or machine (null where it cannot be read)', async () => {
+    const h = await memoryHeadroomBytes()
+    if (process.platform === 'linux') expect(h).toBeGreaterThan(0)
+    else expect(h).toBeNull()
+  })
+
+  it('judges by working set: inactive page cache does not count as used (review N1)', () => {
+    const GB = 1024 ** 3
+    // v2: 4 GB limit, 3.8 GB used of which 2 GB is inactive file cache → 2.2 GB free.
+    expect(
+      cgroupHeadroom(
+        String(4 * GB),
+        String(3.8 * GB),
+        `anon 1\ninactive_file ${2 * GB}\nactive_file 5`,
+        'inactive_file'
+      )
+    ).toBeCloseTo(2.2 * GB, -3)
+    // v1 names it total_inactive_file.
+    expect(
+      cgroupHeadroom(
+        String(4 * GB),
+        String(3 * GB),
+        `total_inactive_file ${GB}`,
+        'total_inactive_file'
+      )
+    ).toBe(2 * GB)
+    // No limit → null; a stat without the line counts nothing as reclaimable.
+    expect(cgroupHeadroom('max', '1', '', 'inactive_file')).toBeNull()
+    expect(cgroupHeadroom(String(2 ** 62), '1', '', 'total_inactive_file')).toBeNull()
+    expect(cgroupHeadroom(String(4 * GB), String(3 * GB), null, 'inactive_file')).toBe(GB)
+  })
+
+  it('where free memory cannot be read, steps start without the check (one warning), never refused (review N3)', async () => {
+    process.env.FLOW_SCRIPT_MAX_WAIT_MS = '50'
+    setHeadroomReaderForTests(async () => null)
+    const log = quietLog()
+    expect(await runIsolatedScript('data.ok = true', {}, log)).toEqual({ ok: true })
+    expect(await runIsolatedScript('data.ok = 2', {}, log)).toEqual({ ok: 2 })
+    expect(
+      log.warn.mock.calls.filter((c) => String(c[0]).includes('Free memory cannot be read')).length
+    ).toBeLessThanOrEqual(1)
   })
 
   it('a step waits for memory, then is refused when there is none; its slot is freed', async () => {
@@ -283,6 +340,32 @@ describe('container memory headroom (review M2)', () => {
     setHeadroomReaderForTests(async () => (++calls < 3 ? 0 : 4 * 1024 * 1024 * 1024))
     expect(await runIsolatedScript('data.ok = true', {}, quietLog())).toEqual({ ok: true })
     expect(calls).toBe(3)
+  })
+})
+
+describe('a dedicated app (one app per process)', () => {
+  it('keeps binary types, and the API heap limit as the child heap cap', async () => {
+    expect(
+      await runIsolatedScript(
+        'const b = new Uint8Array(4); b[0] = 7; return { first: b[0], ab: typeof ArrayBuffer }',
+        {},
+        quietLog(),
+        5000,
+        { dedicated: true }
+      )
+    ).toEqual({ first: 7, ab: 'function' })
+    expect(dedicatedHeapMb()).toBeGreaterThanOrEqual(256)
+  })
+
+  it('may use every slot (no per-app cap of 2) and skips the container headroom gate', async () => {
+    process.env.FLOW_SCRIPT_CONCURRENCY = '3'
+    process.env.FLOW_SCRIPT_PER_APP = '1'
+    setHeadroomReaderForTests(async () => 0)
+    const runs = [0, 1, 2].map(() =>
+      runIsolatedScript(busy(300), {}, quietLog(), 5000, { dedicated: true })
+    )
+    expect(scriptGateState()).toEqual({ active: 3, waiting: 0 })
+    await Promise.all(runs)
   })
 })
 

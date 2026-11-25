@@ -1,27 +1,27 @@
-import { types } from 'node:util'
-import vm from 'node:vm'
-
 /**
- * The flow `exec-script` operation's sandbox (C2, security audit 2026-10-27).
+ * The flow `exec-script` operation's sandbox contract (C2, security audit 2026-10-27): the vm
+ * context PRELUDE and the pure helpers around it. Scripts never run in the API process: every
+ * deployment runs them in a child process of its own (flow-script-isolated.ts).
  *
- * The script used to run through `new Function` in the API process — `process.env`,
- * `process.getBuiltinModule('child_process')` and every pool were in reach. It now runs in a
- * fresh `node:vm` context that holds nothing of the host:
+ * Why not in-process (re-review 2026-11-24, P1): a `node:vm` context is not a boundary. Even with
+ * nothing of the host handed in, V8 and Node run host JavaScript on the script's behalf and their
+ * errors reach the script as HOST-realm objects — `import()` rejects with the host loader's
+ * TypeError, and a stack overflow inside Node's stack-trace formatter throws a host RangeError.
+ * From either, `e.constructor.constructor('return process')()` was the API's own `process` on a
+ * dedicated install. In the child the same errors are useless: code generation from strings is
+ * refused process-wide, its intrinsics are frozen and its global is stripped (flow-script-isolated.ts).
  *
- *  - `data` is rebuilt INSIDE the context from JSON (Dates kept as Dates), so no host object —
- *    and so no host `Function` constructor — is reachable through it;
- *  - `log` (info / warn / error / debug) and `console` are context functions that collect lines
- *    inside the context; the host reads them after the run as one string (no host function is
- *    ever inside the context: a stack overflow on entry to one would hand the script a host-realm
- *    error, and its constructor chain the host Function constructor);
- *  - every value the host reads back is a primitive string; a thrown value is turned into a
- *    message inside the context, and a Proxy that still reaches the host is never inspected;
+ * Inside the context (both kinds of deployment):
+ *  - `data` is rebuilt from JSON (Dates kept as Dates);
+ *  - `log` (info / warn / error / debug) and `console` are context functions that collect lines in
+ *    the context; the child reads them after the run as one string built without script hooks;
+ *  - everything read back is a primitive string; a thrown value is turned into a message inside the
+ *    context, and a Proxy that still reaches the reader is never inspected (classifyRunError);
  *  - FinalizationRegistry and WeakRef are removed (their callbacks run later, past the timeout);
- *  - the context's own built-ins (JSON, Math, Date, Array, Object, RegExp, Promise …) are
- *    there; `process`, `require`, `import()`, timers, `fetch`, `eval` / `new Function` and
- *    WebAssembly are not;
- *  - the timeout covers the synchronous run AND the microtasks it queues (an infinite loop is
- *    stopped, not left spinning the event loop).
+ *  - the context's own built-ins (JSON, Math, Date, Array, Object, RegExp, Promise …) are there;
+ *    `process`, `require`, timers, `fetch`, `eval` / `new Function` and WebAssembly compilation are
+ *    not (and `import()` is refused);
+ *  - the timeout covers the synchronous run AND the microtasks it queues.
  *
  * Unchanged for scripts: `data` + `log`, `return` an object to replace the data, mutate `data`
  * and return nothing to pass the mutated data on, return a Promise (resolved inside the run).
@@ -66,16 +66,16 @@ export function hostReviver(_key: string, value: unknown): unknown {
 export const MAX_LOG_LINES = 200
 export const MAX_LOG_CHARS = 4000
 
-// Runs inside the context, before the script. It takes the input (a string) off the global and
-// keeps the JSON functions it needs in a closure, so a script that replaces JSON.stringify or
-// Array.prototype.map later changes only its own data. NOTHING of the host is in the context:
-// `log` / `console` collect lines in a context array, read after the run with __nvrLogs() — no
-// host function a script could overflow its way into (a stack overflow on entry to a host
-// function hands the script a host-realm error, and from it the host Function constructor).
-// Every value the host reads back is a primitive string; __nvrRun never throws on purpose
-// (whatever the script throws is turned into a message here, under the run's timeout).
-// FinalizationRegistry and WeakRef are removed: their callbacks would run later, outside the
-// timeout. Also run, unchanged, by the isolated runner's child process (flow-script-isolated.ts).
+// Runs inside the context, before the script (in the child process, flow-script-isolated.ts). It
+// takes the input (a string) off the global and keeps the JSON functions it needs in a closure,
+// so a script that replaces JSON.stringify or Array.prototype.map later changes only its own data.
+// The runner hands in no host function: `log` / `console` collect lines in the context, read
+// after the run with __nvrLogs(). Each line is stored as pre-serialized JSON text through a
+// captured defineProperty, and __nvrLogs() joins them with a plain loop, so no script hook
+// (toJSON, an Array.prototype setter) runs while the lines are read. Every value read back is a
+// primitive string; __nvrRun never throws on purpose (whatever the script throws is turned into a
+// message here, under the run's timeout). FinalizationRegistry and WeakRef are removed: their
+// callbacks would run later, outside the timeout.
 export const PRELUDE = `(() => {
   'use strict'
   const input = globalThis.__nvrInput
@@ -93,15 +93,19 @@ export const PRELUDE = `(() => {
   const MAX_LINES = ${MAX_LOG_LINES}
   const MAX_CHARS = ${MAX_LOG_CHARS}
   const lines = []
+  let count = 0
   const one = (a) => {
     if (typeof a === 'string') return a
     try { const j = stringify(a); return typeof j === 'string' ? j : Str(a) } catch { try { return Str(a) } catch { return '' } }
   }
   const say = (level) => (...args) => {
-    if (lines.length >= MAX_LINES) return
+    if (count >= MAX_LINES) return
     let m = ''
     try { for (let i = 0; i < args.length; i++) m += (i ? ' ' : '') + one(args[i]) } catch { m = '' }
-    lines[lines.length] = [level, typeof m === 'string' ? m.slice(0, MAX_CHARS) : '']
+    const text = typeof m === 'string' ? m.slice(0, MAX_CHARS) : ''
+    // Strings only (no toJSON lookup on a primitive), stored as own data (no setter runs).
+    define(lines, count, { value: '[' + stringify(level) + ',' + stringify(text) + ']' })
+    count++
   }
   const log = freeze({ info: say('info'), warn: say('warn'), error: say('error'), debug: say('debug') })
   define(globalThis, 'console', {
@@ -147,34 +151,15 @@ export const PRELUDE = `(() => {
     value: () => (done ? (err !== null ? 'E' + err : 'O' + out) : 'P')
   })
   define(globalThis, '__nvrLogs', {
-    value: () => { try { const s = stringify(lines); return typeof s === 'string' ? s : '[]' } catch { return '[]' } }
+    value: () => {
+      let s = '['
+      for (let i = 0; i < count; i++) s += (i ? ',' : '') + lines[i]
+      return s + ']'
+    }
   })
 })()`
 
 export const MAX_TIMEOUT_MS = 30_000
-
-/** An own data property that is a string; null otherwise. Never runs a getter. */
-export function ownString(obj: unknown, key: string): string | null {
-  if (obj === null || (typeof obj !== 'object' && typeof obj !== 'function')) return null
-  const d = Object.getOwnPropertyDescriptor(obj, key)
-  return d && 'value' in d && typeof d.value === 'string' ? d.value : null
-}
-
-/**
- * What a run's error means, read without ever running script code on the host: a Proxy (whose
- * traps would run here, past the timeout) is never inspected; anything else is read through own
- * data properties only.
- */
-export function classifyRunError(err: unknown): 'timeout' | { message: string } {
-  if (err !== null && (typeof err === 'object' || typeof err === 'function') && types.isProxy(err))
-    return { message: 'Script failed' }
-  if (
-    ownString(err, 'code') === 'ERR_SCRIPT_EXECUTION_TIMEOUT' ||
-    /^Script execution timed out/.test(ownString(err, 'message') ?? '')
-  )
-    return 'timeout'
-  return { message: (ownString(err, 'message') ?? 'Script failed').slice(0, 2000) }
-}
 
 /** The run's log lines as [level, message] pairs, from the string __nvrLogs() answered. */
 export function parseLogLines(raw: unknown): Array<[string, string]> {
@@ -205,60 +190,4 @@ export function forwardLogs(log: ScriptLog, lines: Array<[string, string]>): voi
       /* a log sink never fails the run */
     }
   }
-}
-
-/** Runs one exec-script body. Resolves with the script's output data; rejects with the
- *  script's error (message only) or a ScriptTimeoutError. Log lines reach `log` after the run. */
-export async function runSandboxedScript(
-  code: string,
-  data: Record<string, unknown>,
-  log: ScriptLog,
-  timeoutMs = 5000
-): Promise<Record<string, unknown>> {
-  const timeout = Math.min(Math.max(Number(timeoutMs) || 5000, 1), MAX_TIMEOUT_MS)
-  const input = JSON.stringify(data ?? {}, hostReplacer) ?? '{}'
-  // A null-prototype sandbox: `globalThis.constructor` must not resolve to the HOST Object (and
-  // from there the host Function constructor) — with no prototype the lookup falls through to
-  // the context's own global. It holds one string, taken off by the prelude.
-  const sandbox = Object.create(null) as Record<string, unknown>
-  sandbox.__nvrInput = input
-  const context = vm.createContext(sandbox, {
-    name: 'flow-exec-script',
-    codeGeneration: { strings: false, wasm: false },
-    microtaskMode: 'afterEvaluate'
-  })
-  vm.runInContext(PRELUDE, context, { timeout })
-  const readLogs = () => {
-    try {
-      forwardLogs(log, parseLogLines(vm.runInContext('__nvrLogs()', context, { timeout })))
-    } catch {
-      /* logs are best effort */
-    }
-  }
-  let state: unknown
-  try {
-    // compileFunction parses the code as a function BODY — it cannot close the function and run
-    // statements at the top of the prelude's scope.
-    const fn = vm.compileFunction(`"use strict";\n${code}`, ['data', 'log'], {
-      parsingContext: context,
-      filename: 'exec-script.js'
-    })
-    Object.defineProperty(context, '__nvrFn', { value: fn })
-    vm.runInContext('__nvrRun(__nvrFn)', context, { timeout })
-    state = vm.runInContext('__nvrResult()', context, { timeout })
-  } catch (err) {
-    readLogs()
-    const c = classifyRunError(err)
-    if (c === 'timeout') throw new ScriptTimeoutError(`Script timed out after ${timeout}ms`)
-    throw new Error(c.message)
-  }
-  readLogs()
-  if (typeof state !== 'string' || state === 'P') {
-    // A promise that never settles (there are no timers in the sandbox) — what the old
-    // implementation reported once its timer ran out.
-    throw new ScriptTimeoutError(`Script timed out after ${timeout}ms`)
-  }
-  if (state.startsWith('E')) throw new Error(state.slice(1))
-  const parsed = JSON.parse(state.slice(1), hostReviver) as unknown
-  return parsed !== null && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {}
 }

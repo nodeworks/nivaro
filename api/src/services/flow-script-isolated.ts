@@ -1,7 +1,8 @@
 import { execFile, spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import { freemem, setPriority } from 'node:os'
+import { setPriority } from 'node:os'
+import { getHeapStatistics } from 'node:v8'
 import { scriptLimits } from './flow-script-limits.js'
 import {
   forwardLogs,
@@ -16,57 +17,63 @@ import {
 import { currentTenantKey } from './tenant-rooms.js'
 
 /**
- * The flow `exec-script` operation on a Hub shared deployment (hub gap `exec`): one process
- * serves many apps there, so a script step runs in its OWN short-lived child process, never in
- * the shared one — and only when the operator turned script steps on for the deployment
+ * The flow `exec-script` operation, on every deployment: a script step never runs in the API
+ * process. Each run gets its OWN short-lived child process (re-review P1: a `node:vm` context in
+ * the API is not a boundary — V8 and Node raise host-realm errors into the script through
+ * `import()` and stack-trace formatting, and from those `e.constructor.constructor` reached the
+ * API's `process`). On a Hub shared deployment script steps also need the operator's opt-in
  * (FLOW_SCRIPTS_ON_SHARED, off by default; flow-script-limits.ts flowScriptsOnShared, checked by
- * flow-executor.ts). Each run:
+ * flow-executor.ts); Nivaro Cloud refuses them. Each run:
  *
  *  - starts a fresh `node` (process.execPath, no native module, works on the slim image) with
  *    the permission model on (`--permission`, checked inside Node — a safeguard, not a boundary
- *    against malicious code, Node's own docs say): no file read or write, no child
- *    processes, no workers, no native addons, no WASI — so no other app's files, uploads or
- *    mounted secrets;
+ *    against malicious code, Node's own docs say): no file read or write, no child processes, no
+ *    workers, no native addons, no WASI — so no other app's files, uploads or mounted secrets;
  *  - gets an EMPTY environment (TZ only, this process's own zone, so dates read as in the app):
  *    no deployment secrets, no NODE_OPTIONS;
- *  - cannot compile code from strings in its own realm (`--disallow-code-generation-from-strings`),
- *    has its own intrinsics frozen (`--frozen-intrinsics`), and runs the script inside the same
- *    `node:vm` context as a dedicated app (flow-script-sandbox.ts PRELUDE: data + log only, no
- *    host function at all — logs are read after the run — no process / require / import() /
- *    timers / fetch / FinalizationRegistry), minus the binary types (OFF_HEAP_GLOBALS);
+ *  - runs the script in a `node:vm` context (flow-script-sandbox.ts PRELUDE: data + log; the runner
+ *    hands in no host function, logs are read after the run; no process / require / timers /
+ *    fetch / FinalizationRegistry, `import()` refused). That context alone is NOT the boundary: a
+ *    script can still be handed a host-realm error by V8 / Node. What makes such an error useless
+ *    is the child itself: code generation from strings is refused process-wide
+ *    (`--disallow-code-generation-from-strings`), its intrinsics are frozen
+ *    (`--frozen-intrinsics`), and its global and modules are locked down (next point);
  *  - locks its own realm down before reading the job (CHILD_LOCKDOWN): every network entry point
  *    of the built-in modules throws (net, tls, dgram sockets, all of dns, http/https/http2,
  *    inspector, cluster, all of net but the pipes' own Socket; v8, module, os, child_process,
  *    worker_threads, wasi throw too), process loses getBuiltinModule / binding / dlopen / _kill /
- *    _debugProcess / reallyExit and its env, and the
- *    global keeps ECMAScript built-ins only (an allow-list: no require, process, module, fetch,
- *    WebSocket, timers or module globals). Node 22 has no permission scope for the network
- *    (`--allow-net` arrives in Node 25), so the network block is these layers, not the OS: a
- *    script must escape the vm context AND compile code without strings AND find a module
- *    reference in a realm that holds none. A script step has no network on any deployment;
- *    partner calls go through the Webhook / External API operations and their guarded fetch;
- *  - is capped at FLOW_SCRIPT_MEMORY_MB of V8 heap (default 64) and, outside V8, at that plus
- *    RSS_MARGIN_MB of resident memory (watchRss polls it every 100 ms and kills the child); the
- *    script has no ArrayBuffer / typed arrays / WebAssembly, the only way JavaScript holds memory
- *    off the heap. RLIMIT_AS is not used: V8 reserves far more address space than it touches;
- *  - starts only when the container has room for it: its cgroup limit minus what it uses now (else
- *    the machine's free memory) must hold the child's budget plus HEADROOM_RESERVE_MB, else it
- *    waits up to FLOW_SCRIPT_MAX_WAIT_MS and is refused (the API's own heap is sized from the
- *    same container limit);
+ *    _debugProcess / reallyExit and its env, and the global keeps ECMAScript built-ins only (an
+ *    allow-list: no require, process, module, fetch, WebSocket, timers or module globals).
+ *    Network access is blocked in JavaScript, not by the operating system (Node 22 has no
+ *    permission scope for it; Node 25's `--allow-net` adds a check inside Node). A script step
+ *    has no network on any deployment; partner calls go through the Webhook / External API
+ *    operations and their guarded fetch;
+ *  - on a shared deployment: no binary types (OFF_HEAP_GLOBALS: their memory is off the V8 heap),
+ *    a V8 heap cap of FLOW_SCRIPT_MEMORY_MB (default 64), and a start only when the container has
+ *    room for it (its cgroup limit minus its working set — usage less inactive page cache — must
+ *    hold the child's budget plus HEADROOM_RESERVE_MB; else it waits up to
+ *    FLOW_SCRIPT_MAX_WAIT_MS and is refused; skipped with a warning where no limit can be read);
+ *  - on a dedicated app: binary types kept, and the API's own heap limit as the child's heap cap
+ *    (what an in-process script could use before); no headroom gate (the step used the API's
+ *    own memory before);
+ *  - is watched outside V8 too: past its heap cap plus RSS_MARGIN_MB of resident memory
+ *    (watchRss polls every 100 ms) it is killed;
  *  - is capped at the step's timeout (≤ 30 s, plus a start-up allowance before the process is
  *    killed), 8 MB of output and 200 log lines, and starts under `nice -n 10` (every thread;
  *    without a `nice` binary only its main thread is lowered);
  *  - exits right after its answer, and on its own when the API goes away (its stdin closes or its
  *    parent pid changes), so no orphan keeps running;
- *  - holds a slot: at most FLOW_SCRIPT_CONCURRENCY runs at once on the process (default 4) and
- *    FLOW_SCRIPT_PER_APP for one app (default 2); a run that waits FLOW_SCRIPT_MAX_WAIT_MS
- *    (default 30 s) for a slot is refused, never run past the cap.
+ *  - holds a slot: at most FLOW_SCRIPT_CONCURRENCY runs at once on the process (default 4); on a
+ *    shared deployment FLOW_SCRIPT_PER_APP for one app (default 2) and a refusal after
+ *    FLOW_SCRIPT_MAX_WAIT_MS (default 30 s) for a slot; a dedicated app may use every slot and
+ *    waits up to 10 minutes.
  *
- * The process shares nothing with the API: no module state, no pool, no Redis, no app context.
- * Data crosses as one JSON line on stdin; the child answers with JSON lines on stdout (its log
- * lines, then one `done`), decoded as a UTF-8 stream. A child that dies without its `done` line is a failure, never an empty success.
- * Nivaro Cloud still refuses script steps (flow-executor.ts EXEC_SCRIPT_CLOUD_REFUSAL); a
- * dedicated app still runs them in-process (runSandboxedScript).
+ * The child costs one `node` start per step: about 80 ms of CPU and 50 MB of resident memory in
+ * the child, 6–7 ms of the API's own CPU, and 110–170 ms of wall time per step measured on a busy
+ * development Mac (load 45 on 10 cores; hub-gap exec report). The process shares nothing with the API:
+ * no module state, no pool, no Redis, no app context. Data crosses as one JSON line on stdin; the
+ * child answers with JSON lines on stdout (its log lines, then one `done`), decoded as a UTF-8
+ * stream. A child that dies without its `done` line is a failure, never an empty success.
  */
 
 export class ScriptLimitError extends Error {}
@@ -341,7 +348,7 @@ export const CHILD_SOURCE = `(() => {
         microtaskMode: 'afterEvaluate'
       })
       vm.runInContext(PRELUDE, context, { timeout })
-      vm.runInContext(STRIP_OFF_HEAP, context, { timeout })
+      if (!job.binary) vm.runInContext(STRIP_OFF_HEAP, context, { timeout })
       const fn = vm.compileFunction('"use strict";\\n' + job.code, ['data', 'log'], {
         parsingContext: context,
         filename: 'exec-script.js'
@@ -354,7 +361,8 @@ export const CHILD_SOURCE = `(() => {
     }
     if (context) {
       try {
-        const logs = vm.runInContext('__nvrLogs()', context, { timeout })
+        // Its own short window (review N2): the log read never doubles the step's timeout.
+        const logs = vm.runInContext('__nvrLogs()', context, { timeout: Math.min(timeout, 250) })
         if (typeof logs === 'string') write({ t: 'logs', v: logs })
       } catch {}
     }
@@ -382,15 +390,15 @@ export const CHILD_SOURCE = `(() => {
 
 interface Waiter {
   app: string
+  cap: number
   wake: () => void
 }
 
 /** Runs holding a slot on this process, per app (currentTenantKey) and in all, plus who waits. */
 const gate = { active: 0, byApp: new Map<string, number>(), queue: [] as Waiter[] }
 
-function fits(app: string): boolean {
-  const { total, perApp } = scriptLimits()
-  return gate.active < total && (gate.byApp.get(app) ?? 0) < perApp
+function fits(app: string, cap: number): boolean {
+  return gate.active < scriptLimits().total && (gate.byApp.get(app) ?? 0) < cap
 }
 
 function take(app: string): void {
@@ -406,7 +414,7 @@ function give(app: string): void {
   // Wake the first waiters that now fit (an app at its share is skipped, not blocking others).
   for (let i = 0; i < gate.queue.length; ) {
     const w = gate.queue[i]
-    if (fits(w.app)) {
+    if (fits(w.app, w.cap)) {
       gate.queue.splice(i, 1)
       take(w.app)
       w.wake()
@@ -419,14 +427,20 @@ export function scriptGateState(): { active: number; waiting: number } {
   return { active: gate.active, waiting: gate.queue.length }
 }
 
-async function acquireSlot(): Promise<() => void> {
+/** How long a dedicated app's step waits for a slot (it had no cap before: it ran in line). */
+const DEDICATED_SLOT_WAIT_MS = 600_000
+
+async function acquireSlot(dedicated: boolean): Promise<() => void> {
   const app = currentTenantKey()
-  if (fits(app)) take(app)
+  const limits = scriptLimits()
+  const cap = dedicated ? limits.total : limits.perApp
+  if (fits(app, cap)) take(app)
   else {
-    const { maxWaitMs } = scriptLimits()
+    const maxWaitMs = dedicated ? DEDICATED_SLOT_WAIT_MS : limits.maxWaitMs
     await new Promise<void>((resolve, reject) => {
       const w: Waiter = {
         app,
+        cap,
         wake: () => {
           clearTimeout(timer)
           resolve()
@@ -466,38 +480,88 @@ async function readText(path: string): Promise<string | null> {
   }
 }
 
+/** A number from a memory.stat line ("inactive_file 123"); 0 when absent. */
+function statValue(stat: string | null, key: string): number {
+  const m = new RegExp(`^${key} (\\d+)$`, 'm').exec(stat ?? '')
+  return m ? Number(m[1]) : 0
+}
+
 /**
- * Free memory for a new script child, in bytes: the container's cgroup limit minus what it uses
- * now (cgroup v2 memory.max / memory.current, else v1 limit_in_bytes / usage_in_bytes), else the
- * machine's free memory. The children of this process count in the cgroup's usage, so steps
- * already running are included.
+ * Free memory under a cgroup limit, by working set (review N1): usage less the inactive page cache
+ * the kernel reclaims first (as `docker stats` and the kubelet count), so a container that reads
+ * many files is not judged full. Null when there is no limit to judge against.
  */
-export async function memoryHeadroomBytes(): Promise<number> {
-  if (process.platform === 'linux') {
-    const v2max = await readText('/sys/fs/cgroup/memory.max')
-    const v2cur = await readText('/sys/fs/cgroup/memory.current')
-    if (v2max && v2cur && v2max !== 'max' && Number.isFinite(Number(v2max)))
-      return Math.max(0, Number(v2max) - Number(v2cur))
-    const v1max = await readText('/sys/fs/cgroup/memory/memory.limit_in_bytes')
-    const v1cur = await readText('/sys/fs/cgroup/memory/memory.usage_in_bytes')
-    // v1 reports "no limit" as a huge number (close to 2^63).
-    if (v1max && v1cur && Number(v1max) < 2 ** 60) return Math.max(0, Number(v1max) - Number(v1cur))
-  }
-  return freemem()
+export function cgroupHeadroom(
+  limit: string | null,
+  usage: string | null,
+  stat: string | null,
+  inactiveKey: 'inactive_file' | 'total_inactive_file'
+): number | null {
+  const max = Number(limit)
+  const used = Number(usage)
+  if (!limit || !usage || limit === 'max' || !Number.isFinite(max) || !Number.isFinite(used))
+    return null
+  // cgroup v1 reports "no limit" as a huge number (close to 2^63).
+  if (max >= 2 ** 60) return null
+  const working = Math.max(0, used - statValue(stat, inactiveKey))
+  return Math.max(0, max - working)
+}
+
+/**
+ * Free memory for a new script child, in bytes: the container's cgroup limit minus its working
+ * set (cgroup v2, else v1); on Linux without a limit, MemAvailable from /proc/meminfo. Null where
+ * none can be read (macOS, Windows): the caller then skips the check with a warning, rather than
+ * refusing every step on a figure that leaves out reclaimable memory (review N3). The children of
+ * this process count in the cgroup's usage, so steps already running are included.
+ */
+export async function memoryHeadroomBytes(): Promise<number | null> {
+  if (process.platform !== 'linux') return null
+  const v2 = cgroupHeadroom(
+    await readText('/sys/fs/cgroup/memory.max'),
+    await readText('/sys/fs/cgroup/memory.current'),
+    await readText('/sys/fs/cgroup/memory.stat'),
+    'inactive_file'
+  )
+  if (v2 !== null) return v2
+  const v1 = cgroupHeadroom(
+    await readText('/sys/fs/cgroup/memory/memory.limit_in_bytes'),
+    await readText('/sys/fs/cgroup/memory/memory.usage_in_bytes'),
+    await readText('/sys/fs/cgroup/memory/memory.stat'),
+    'total_inactive_file'
+  )
+  if (v1 !== null) return v1
+  const m = /^MemAvailable:\s+(\d+) kB$/m.exec((await readText('/proc/meminfo')) ?? '')
+  return m ? Number(m[1]) * 1024 : null
 }
 
 /** Test seam: the headroom reader (tests only; null = the real one). */
-let headroomReader: (() => Promise<number>) | null = null
-export function setHeadroomReaderForTests(fn: (() => Promise<number>) | null): void {
+let headroomReader: (() => Promise<number | null>) | null = null
+export function setHeadroomReaderForTests(fn: (() => Promise<number | null>) | null): void {
   headroomReader = fn
 }
 
 /** Waits (≤ maxWaitMs) until the container has room for one more child of memoryMb. */
-async function waitForHeadroom(memoryMb: number, maxWaitMs: number): Promise<void> {
+/** Warned once per process that free memory cannot be read here (no app data). */
+let headroomUnreadableWarned = false
+
+async function waitForHeadroom(memoryMb: number, maxWaitMs: number, log: ScriptLog): Promise<void> {
   const need = (memoryMb + RSS_MARGIN_MB + HEADROOM_RESERVE_MB) * 1024 * 1024
   const deadline = Date.now() + maxWaitMs
   for (;;) {
     const free = await (headroomReader ?? memoryHeadroomBytes)()
+    if (free === null) {
+      if (!headroomUnreadableWarned) {
+        headroomUnreadableWarned = true
+        try {
+          log.warn(
+            'Free memory cannot be read on this server (no cgroup limit or /proc/meminfo): script steps start without the memory check'
+          )
+        } catch {
+          /* a log sink never fails the run */
+        }
+      }
+      return
+    }
     if (free >= need) return
     if (Date.now() >= deadline)
       throw new ScriptLimitError(
@@ -533,7 +597,8 @@ function spawnRun(
   input: string,
   log: ScriptLog,
   timeout: number,
-  memoryMb: number
+  memoryMb: number,
+  binary: boolean
 ): Promise<Record<string, unknown>> {
   const flag = permissionFlag()
   if (!flag) {
@@ -678,26 +743,41 @@ function spawnRun(
       /* the child died before reading its job: 'close' reports why */
     })
     // One job line; stdin stays open for the run (its close tells the child we are gone).
-    child.stdin.write(`${JSON.stringify({ code, input, timeout })}\n`)
+    child.stdin.write(`${JSON.stringify({ code, input, timeout, binary })}\n`)
   })
 }
 
-/** Runs one exec-script body in its own child process (see the header). Same contract as
- *  runSandboxedScript: resolves with the output data; rejects with the script's error message,
- *  a ScriptTimeoutError, or a ScriptLimitError (memory, output, no free slot or memory). */
+export interface ScriptRunOptions {
+  /** A dedicated app (one app per process): binary types kept, the API's heap limit as the
+   *  child's, every slot usable, no container headroom gate. Default: a shared deployment. */
+  dedicated?: boolean
+}
+
+/** The heap a dedicated app's script could use before (in the API): the API's own heap limit. */
+export function dedicatedHeapMb(): number {
+  return Math.max(256, Math.floor(getHeapStatistics().heap_size_limit / 1_048_576))
+}
+
+/** Runs one exec-script body in its own child process (see the header). Resolves with the
+ *  output data; rejects with the script's error message, a ScriptTimeoutError, or a
+ *  ScriptLimitError (memory, output, no free slot or memory). Log lines reach `log` after the
+ *  run. */
 export async function runIsolatedScript(
   code: string,
   data: Record<string, unknown>,
   log: ScriptLog,
-  timeoutMs = 5000
+  timeoutMs = 5000,
+  opts: ScriptRunOptions = {}
 ): Promise<Record<string, unknown>> {
+  const dedicated = opts.dedicated === true
   const timeout = Math.min(Math.max(Number(timeoutMs) || 5000, 1), MAX_TIMEOUT_MS)
   const input = JSON.stringify(data ?? {}, hostReplacer) ?? '{}'
-  const { memoryMb, maxWaitMs } = scriptLimits()
-  const release = await acquireSlot()
+  const limits = scriptLimits()
+  const memoryMb = dedicated ? dedicatedHeapMb() : limits.memoryMb
+  const release = await acquireSlot(dedicated)
   try {
-    await waitForHeadroom(memoryMb, maxWaitMs)
-    return await spawnRun(code, input, log, timeout, memoryMb)
+    if (!dedicated) await waitForHeadroom(memoryMb, limits.maxWaitMs, log)
+    return await spawnRun(code, input, log, timeout, memoryMb, dedicated)
   } finally {
     release()
   }

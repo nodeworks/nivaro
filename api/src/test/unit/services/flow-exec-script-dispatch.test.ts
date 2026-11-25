@@ -1,17 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-// Hub gap `exec`: where an exec-script step runs. A dedicated app runs it in-process (node:vm
-// context); a Hub shared deployment refuses it unless its operator opted in
+// Hub gap `exec`: where an exec-script step runs. A dedicated app runs it in a child process of its
+// own (binary types kept); a Hub shared deployment refuses it unless its operator opted in
 // (FLOW_SCRIPTS_ON_SHARED=on), then runs it in a child process of its own; Nivaro Cloud still
 // refuses it, whatever the switch says.
 
-const inProcess = vi.fn(async (_c: string, d: Record<string, unknown>) => ({ ...d, where: 'vm' }))
-const isolated = vi.fn(async (_c: string, d: Record<string, unknown>) => ({ ...d, where: 'child' }))
-vi.mock('../../../services/flow-script-sandbox.js', () => ({
-  runSandboxedScript: (...a: [string, Record<string, unknown>]) => inProcess(...a)
-}))
+const isolated = vi.fn(
+  async (
+    _c: string,
+    d: Record<string, unknown>,
+    _l: unknown,
+    _t: unknown,
+    o?: { dedicated?: boolean }
+  ) => ({
+    ...d,
+    where: o?.dedicated ? 'dedicated child' : 'shared child'
+  })
+)
 vi.mock('../../../services/flow-script-isolated.js', () => ({
-  runIsolatedScript: (...a: [string, Record<string, unknown>]) => isolated(...a)
+  runIsolatedScript: (...a: Parameters<typeof isolated>) => isolated(...a)
 }))
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
 
@@ -38,7 +45,6 @@ beforeEach(() => {
   delete process.env.CLOUD_META_DB_URL
   delete process.env.HUB_SHARED_DEPLOYMENT
   delete process.env.FLOW_SCRIPTS_ON_SHARED
-  inProcess.mockClear()
   isolated.mockClear()
 })
 afterEach(() => {
@@ -51,10 +57,12 @@ afterEach(() => {
 })
 
 describe('exec-script: where it runs', () => {
-  it('a dedicated app runs it in-process', async () => {
+  it('a dedicated app runs it in a child process too, never in the API (re-review P1)', async () => {
     const r = await runExecScript(op, { a: 1 }, ctx)
-    expect(r).toEqual({ status: 'resolve', output: { a: 1, where: 'vm' } })
-    expect(isolated).not.toHaveBeenCalled()
+    expect(r).toEqual({ status: 'resolve', output: { a: 1, where: 'dedicated child' } })
+    expect(isolated).toHaveBeenCalledWith('data.x = 1', { a: 1 }, expect.anything(), 5000, {
+      dedicated: true
+    })
   })
 
   it('a Hub shared deployment refuses it while its operator has not turned scripts on (the default)', async () => {
@@ -69,15 +77,16 @@ describe('exec-script: where it runs', () => {
       })
     }
     expect(isolated).not.toHaveBeenCalled()
-    expect(inProcess).not.toHaveBeenCalled()
   })
 
   it('a Hub shared deployment with scripts on runs it in a child process of its own', async () => {
     process.env.HUB_SHARED_DEPLOYMENT = 'pool-1'
     process.env.FLOW_SCRIPTS_ON_SHARED = 'on'
     const r = await runExecScript(op, { a: 1 }, ctx)
-    expect(r).toEqual({ status: 'resolve', output: { a: 1, where: 'child' } })
-    expect(inProcess).not.toHaveBeenCalled()
+    expect(r).toEqual({ status: 'resolve', output: { a: 1, where: 'shared child' } })
+    expect(isolated).toHaveBeenCalledWith('data.x = 1', { a: 1 }, expect.anything(), 5000, {
+      dedicated: false
+    })
   })
 
   it('Nivaro Cloud still refuses it, even with the switch on', async () => {
@@ -85,7 +94,6 @@ describe('exec-script: where it runs', () => {
     process.env.FLOW_SCRIPTS_ON_SHARED = 'on'
     const r = await runExecScript(op, { a: 1 }, ctx)
     expect(r).toEqual({ status: 'reject', output: { a: 1, $error: EXEC_SCRIPT_CLOUD_REFUSAL } })
-    expect(inProcess).not.toHaveBeenCalled()
     expect(isolated).not.toHaveBeenCalled()
   })
 
