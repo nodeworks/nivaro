@@ -125,7 +125,7 @@ export async function openTransferObject(
   rangeHeader?: string
 ): Promise<TransferObject> {
   const provider = String(storage ?? 'local').toLowerCase() || 'local'
-  if (provider !== 'local') {
+  if (askSettingsFirst(provider)) {
     const active = await getActiveStorageDriver()
     // A driver that is not the active one cannot be asked; the chain below still can.
     if (active.name !== 'local') {
@@ -141,6 +141,34 @@ export async function openTransferObject(
     }
   }
   return openLocalChain(key, rangeHeader)
+}
+
+/**
+ * Whether the saved-settings driver may hold this row's object: not for `local`, nor for
+ * `azure`, which only the env Azure provider writes (the saved Azure driver writes `azure-blob`).
+ * `s3` is written by both, and a replay by whichever driver is active.
+ */
+function askSettingsFirst(provider: string): boolean {
+  return provider !== 'local' && provider !== 'azure'
+}
+
+/**
+ * 0.3.215, a move's header-only probe: where this app's env S3/Azure provider keeps the object
+ * (its bucket hash, the full key, the size from a HEAD), without opening it. Null when the object
+ * is not answered that way — local disk, a saved-settings driver that may hold it, not there, or
+ * a provider that cannot say — and the target then asks for the bytes as usual.
+ */
+export async function probeTransferObject(
+  key: string,
+  storage: string | null | undefined
+): Promise<{ store_id: string; stored_key: string; size: number } | null> {
+  const provider = String(storage ?? 'local').toLowerCase() || 'local'
+  if (askSettingsFirst(provider) && (await getActiveStorageDriver()).name !== 'local') return null
+  const env = getStorage()
+  if (env instanceof LocalStorage || typeof env.storeId !== 'function' || !env.size) return null
+  const size = await env.size(key)
+  if (size === null) return null
+  return { store_id: env.storeId(), stored_key: envStoredKey(key), size }
 }
 
 /** pipeline: an error on either side destroys both (never .pipe(), see gotchas). */

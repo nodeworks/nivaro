@@ -1038,6 +1038,12 @@ describe('env object storage and session replays (0.3.215)', () => {
     ).not.toContain('ENV_OBJECT_STORAGE')
   })
 
+  it('review L-1: a shared target version the Hub cannot read is older (blocker and warning kept)', () => {
+    const p = buildMovePlan(at('0.3.215', { target_facts: tgt({ storage_provider: 's3' }) }, null))
+    expect(codes(p)).toContain('ENV_OBJECT_STORAGE')
+    expect(warns(p)).toContain('REPLAYS_NOT_MOVED')
+  })
+
   it('a shared target that reports an older version keeps the blocker', () => {
     const p = buildMovePlan(
       at('0.3.215', { target_facts: tgt({ storage_provider: 's3' }) }, '0.3.214')

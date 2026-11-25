@@ -24,6 +24,24 @@ import { StoredObjectMissing } from './missing.js'
 import { parseByteRange } from './range.js'
 
 const SAS_EXPIRES_MS = 3600 * 1000 // 1 hour
+/** How often a pending server-side copy is polled (a move's copy, 0.3.215). */
+export const AZURE_COPY_POLL_MS = 2000
+
+/** Wait `ms`, or reject at once when `signal` fires. */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(signal.reason)
+    const t = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    const onAbort = () => {
+      clearTimeout(t)
+      reject(signal?.reason)
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
+}
 
 function parseConnectionString(conn: string): { accountName: string; accountKey: string } {
   const parts = new Map(
@@ -162,11 +180,35 @@ export class AzureStorage implements StorageProvider {
     const from = assertCopySource(rawSource, opts?.sourceScope)
     const dest = this.container.getBlockBlobClient(key)
     const src = this.container.getBlockBlobClient(from)
-    const poller = await dest.beginCopyFromURL(src.url, { abortSignal: opts.signal })
-    await poller.pollUntilDone()
-    await dest.setHTTPHeaders({ blobContentType: mime }, { abortSignal: opts.signal })
-    const props = await dest.getProperties({ abortSignal: opts.signal })
-    return typeof props.contentLength === 'number' ? props.contentLength : -1
+    const signal = opts.signal
+    let poller: Awaited<ReturnType<typeof dest.beginCopyFromURL>> | null = null
+    try {
+      poller = await dest.beginCopyFromURL(src.url, { abortSignal: signal })
+      // Inside one account a copy is usually done at once, but may stay `pending`: poll with the
+      // caller's signal (the move's per-object timeout), never an unbounded pollUntilDone.
+      while (!poller.isDone()) {
+        signal?.throwIfAborted()
+        await sleep(AZURE_COPY_POLL_MS, signal)
+        await poller.poll({ abortSignal: signal })
+      }
+      const failed = poller.getOperationState().error
+      if (failed) throw failed
+      const props = await dest.getProperties({ abortSignal: signal })
+      if (props.copyStatus && props.copyStatus !== 'success')
+        throw new Error(`Azure copy ended ${props.copyStatus}`)
+      await dest.setHTTPHeaders({ blobContentType: mime }, { abortSignal: signal })
+      return typeof props.contentLength === 'number' ? props.contentLength : -1
+    } catch (err) {
+      // A copy left pending or failed would make the stream fallback's upload answer 409
+      // PendingCopyOperation: stop it, then remove what it left (best-effort, without the
+      // caller's signal, which may be the one that fired).
+      if (poller && !poller.isDone()) {
+        poller.stopPolling()
+        await poller.cancelOperation().catch(() => null)
+      }
+      await dest.deleteIfExists().catch(() => null)
+      throw err
+    }
   }
 
   async exists(key: string): Promise<boolean> {

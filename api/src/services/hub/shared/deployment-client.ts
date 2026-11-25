@@ -149,6 +149,8 @@ export interface PullStatus {
   error: string | null
   /** Rows copied although their stored filesize disagreed (Task 16); absent from older apps. */
   size_mismatch?: number
+  /** 0.3.215: objects the bucket copied itself (counted in `copied` too). */
+  server_copied?: number
   /** Ids of the rows that failed, ≤ 50 (Task 16); absent from older apps. */
   failed_ids?: string[]
   /** Failed rows per plain reason (hub-transfer/fail-reasons.ts); absent from older apps. */
@@ -601,6 +603,7 @@ export function deploymentClient(
         bytes: b.bytes,
         error: b.error === null ? null : b.error.slice(0, 300),
         size_mismatch: isNum(b.size_mismatch) ? b.size_mismatch : 0,
+        server_copied: isNum(b.server_copied) ? b.server_copied : 0,
         failed_ids: Array.isArray(b.failed_ids)
           ? b.failed_ids.filter((x): x is string => isStr(x) && x.length <= 64).slice(0, 50)
           : [],

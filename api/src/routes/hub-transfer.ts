@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { withTenant } from '../db/tenant-context.js'
 import { failedAuthLimiter } from '../lib/auth-fail-limiter.js'
 import { trustedRequestHost } from '../lib/trust-proxy.js'
+import { appBox } from '../services/app-state.js'
 import { tenantSource } from '../services/deployment-mode.js'
 import { isUuid } from '../services/help-video-files.js'
 import {
@@ -12,7 +13,11 @@ import {
 } from '../services/hub-transfer/tickets.js'
 import { FallbackFolderUnavailable } from '../services/storage/fallback.js'
 import { isStoredObjectMissing } from '../services/storage/missing.js'
-import { openTransferObject, sendOpenedObject } from '../services/stored-object-stream.js'
+import {
+  openTransferObject,
+  probeTransferObject,
+  sendOpenedObject
+} from '../services/stored-object-stream.js'
 import { getTenantRegistry } from '../services/tenancy/registry.js'
 import type { TenantRecord } from '../services/tenancy/types.js'
 
@@ -25,7 +30,9 @@ import type { TenantRecord } from '../services/tenancy/types.js'
  * 0.3.215: every 200 also says which of the app's stores served it (`X-Nivaro-Transfer-Store:
  * env | settings`) and, for an env S3/Azure object, the bucket's hash and the object's full key
  * (`X-Nivaro-Transfer-Store-Id`, `X-Nivaro-Transfer-Stored-Key`): a target writing to the same
- * bucket copies it server-side. Never a bucket name, an endpoint or a credential.
+ * bucket copies it server-side. Never a bucket name, an endpoint or a credential. A request with
+ * `X-Nivaro-Transfer-Probe: 1` gets only those headers (204, plus `X-Nivaro-Transfer-Size`), and
+ * the object is never opened: the target decides on an in-bucket copy without a GET of it.
  *
  * The target of a move pulls every object from here (services/hub-transfer/pull.ts). Auth is a
  * transfer ticket the source minted on the Hub's request, and nothing else — no session, API
@@ -116,9 +123,21 @@ async function fileRow(id: string): Promise<FileRow | null> {
 }
 
 /** The cold object key of a session replay, or null (unknown id, still hot, or no object). */
+// Per app: true once the cold-storage columns exist (they never go away); a missing column is
+// asked again after a minute (an app behind that migration that then runs it).
+const coldColumn = appBox<{ ok: boolean; at: number }>(() => ({ ok: false, at: 0 }))
+
+async function hasColdColumn(): Promise<boolean> {
+  const c = coldColumn.value
+  if (c.ok || (c.at && Date.now() - c.at < 60_000)) return c.ok
+  const ok = await db.schema.hasColumn('nivaro_session_recordings', 'cold_key')
+  coldColumn.value = { ok, at: Date.now() }
+  return ok
+}
+
 async function coldReplayKey(id: string): Promise<string | null> {
   if (!isUuid(id)) return null
-  if (!(await db.schema.hasColumn('nivaro_session_recordings', 'cold_key'))) return null
+  if (!(await hasColdColumn())) return null
   const row = (await db('nivaro_session_recordings')
     .where({ id, cold: true })
     .whereNotNull('cold_key')
@@ -137,6 +156,10 @@ export const TRANSFER_STORE_HEADER = 'X-Nivaro-Transfer-Store'
 export const TRANSFER_STORE_ID_HEADER = 'X-Nivaro-Transfer-Store-Id'
 /** 0.3.215, env S3/Azure only: the object's full key in that bucket (apps/<id>/… on shared). */
 export const TRANSFER_STORED_KEY_HEADER = 'X-Nivaro-Transfer-Stored-Key'
+/** 0.3.215: a request header asking only where the object is (204, no body, no object opened). */
+export const TRANSFER_PROBE_HEADER = 'X-Nivaro-Transfer-Probe'
+/** 0.3.215: the probe's answer of the object's size. */
+export const TRANSFER_SIZE_HEADER = 'X-Nivaro-Transfer-Size'
 
 export async function hubTransferRoutes(app: FastifyInstance): Promise<void> {
   if (!hubTransferMounted()) return
@@ -194,6 +217,25 @@ export async function hubTransferRoutes(app: FastifyInstance): Promise<void> {
   ) => {
     const { key } = obj
     reply.header('X-Nivaro-Filename-Disk', encodeKeyHeader(key))
+    // 0.3.215: a header-only probe (a move deciding on an in-bucket copy). 204 either way and no
+    // object is opened: `env` + bucket hash + full key + size when the env S3/Azure bucket holds
+    // it, else `X-Nivaro-Transfer-Store: none` (the target then asks for the bytes as usual).
+    if (req.headers[TRANSFER_PROBE_HEADER.toLowerCase()] === '1') {
+      let where: Awaited<ReturnType<typeof probeTransferObject>> = null
+      try {
+        where = await probeTransferObject(key, obj.storage)
+      } catch {
+        where = null
+      }
+      if (!where) return reply.code(204).header(TRANSFER_STORE_HEADER, 'none').send()
+      return reply
+        .code(204)
+        .header(TRANSFER_STORE_HEADER, 'env')
+        .header(TRANSFER_STORE_ID_HEADER, where.store_id)
+        .header(TRANSFER_STORED_KEY_HEADER, encodeKeyHeader(where.stored_key))
+        .header(TRANSFER_SIZE_HEADER, String(where.size))
+        .send()
+    }
     let opened: Awaited<ReturnType<typeof openTransferObject>>
     try {
       // The object the app itself reads (P6-36): the row's saved-settings driver first

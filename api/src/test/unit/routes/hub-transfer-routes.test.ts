@@ -249,6 +249,15 @@ describe('GET /api/hub-transfer/files/:id on a dedicated app', () => {
     expect(res.headers['x-nivaro-filename-disk']).toBe('ab/report.pdf')
     expect(res.headers['cache-control']).toBe('no-store')
     expect(res.headers['content-encoding']).toBeUndefined()
+    // 0.3.215 (review L-3): a header-only probe opens nothing; local disk is no bucket → `none`.
+    const probe = await get(a, FILE_A, {
+      authorization: `Transfer ${ticket}`,
+      'x-nivaro-transfer-probe': '1'
+    })
+    expect(probe.statusCode).toBe(204)
+    expect(probe.body).toBe('')
+    expect(probe.headers['x-nivaro-transfer-store']).toBe('none')
+    expect(probe.headers['x-nivaro-transfer-size']).toBeUndefined()
     // 0.3.215: the store that held it; local disk names no bucket (never copied server-side).
     expect(res.headers['x-nivaro-transfer-store']).toBe('env')
     expect(res.headers['x-nivaro-transfer-store-id']).toBeUndefined()

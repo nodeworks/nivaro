@@ -365,7 +365,8 @@ describe('deploymentClient — each route', () => {
         missing: [],
         bytes: 10,
         error: null,
-        failed_reasons: { source_read_failed: 1, made_up: 3 }
+        failed_reasons: { source_read_failed: 1, made_up: 3 },
+        server_copied: 1
       })
     })
     expect((await c.fileTicket('acme-e7')).ticket).toBe(TICKET)
@@ -378,6 +379,7 @@ describe('deploymentClient — each route', () => {
     ).toEqual({ run_id: 'run-1' })
     const st = await c.pullStatus('acme-e7', 'run-1')
     expect(st.copied).toBe(1)
+    expect(st.server_copied).toBe(1)
     // Only the known plain reasons cross (hub-transfer/fail-reasons.ts).
     expect(st.failed_reasons).toEqual({ source_read_failed: 1 })
     expect(calls.map((x) => new URL(x.url).pathname)).toEqual([

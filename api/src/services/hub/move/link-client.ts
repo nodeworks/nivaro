@@ -345,6 +345,7 @@ export function hubLinkClient(
         bytes: b.bytes,
         error: isStr(b.error) ? b.error.slice(0, 300) : null,
         size_mismatch: isNum(b.size_mismatch) ? b.size_mismatch : 0,
+        server_copied: isNum(b.server_copied) ? b.server_copied : 0,
         failed_ids: Array.isArray(b.failed_ids)
           ? (b.failed_ids as unknown[]).filter(isStr).slice(0, 50)
           : [],

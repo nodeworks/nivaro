@@ -122,6 +122,8 @@ const cutMidBody = new Set<string>()
 /** 0.3.215: extra answer headers per id (the store, its bucket hash and the full key). */
 const extraHeaders = new Map<string, Record<string, string>>()
 const sourceSeen: string[] = []
+/** 0.3.215: ids the target only probed (headers, no bytes). */
+const probesSeen: string[] = []
 let server: Server
 let SOURCE = ''
 
@@ -161,6 +163,21 @@ beforeAll(async () => {
         ...(proxy404.has(id) ? {} : { 'x-nivaro-transfer-missing': '1' })
       })
       return res.end('{"code":"NOT_FOUND"}')
+    }
+    // 0.3.215: a header-only probe — where the object is (store, bucket hash, key, size).
+    if (req.headers['x-nivaro-transfer-probe'] === '1') {
+      probesSeen.push(id)
+      const extra = extraHeaders.get(id) ?? {}
+      if (!extra['x-nivaro-transfer-store-id']) {
+        res.writeHead(204, { 'x-nivaro-transfer-store': 'none' })
+        return res.end()
+      }
+      res.writeHead(204, {
+        ...extra,
+        'x-nivaro-filename-disk': replay ? `session-replays/${last}.gz` : `${id}.bin`,
+        'x-nivaro-transfer-size': String(body.length)
+      })
+      return res.end()
     }
     const headers: Record<string, string> = {
       'content-type': 'application/octet-stream',
@@ -256,6 +273,7 @@ beforeEach(() => {
   fallbackGone.clear()
   cutMidBody.clear()
   extraHeaders.clear()
+  probesSeen.length = 0
   sourceSeen.length = 0
   logs.length = 0
   resetPullsForTests()
@@ -1045,6 +1063,20 @@ describe('pull: env object storage and session replays (0.3.215)', () => {
       }
     ])
     expect(envBucket.get('e3.bin')?.toString()).toBe('shared obj')
+    // L-3: decided from a header-only probe; the bytes were never asked for.
+    expect(probesSeen).toEqual(['e3'])
+    expect(sourceSeen).toEqual(['e3'])
+  })
+
+  it('a probe that says the object is not in an env bucket (`none`) streams it', async () => {
+    objects.set('e12', Buffer.from('plain'))
+    rows.push(row('e12', 5, { storage: 's3' }))
+    envSaid('e12', null) // local disk at the source: the probe answers `none`
+    const s = await finished((await start({ source_scope: 'root' })).run_id)
+    expect(s).toMatchObject({ state: 'done', copied: 1, server_copied: 0 })
+    expect(probesSeen).toEqual(['e12'])
+    expect(sourceSeen).toEqual(['e12', 'e12'])
+    expect(envBucket.get('e12.bin')?.toString()).toBe('plain')
   })
 
   it('without a source scope from the Hub nothing is copied server-side (streamed)', async () => {

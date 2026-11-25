@@ -85,4 +85,14 @@ describe('pull status: failed rows per reason', () => {
     const { failed_reasons: _r, ...older } = status
     expect((await clientAnswering(older).pullStatus('run-1')).failed_reasons).toEqual({})
   })
+
+  it('0.3.215: server_copied crosses (0 when absent or not a count)', async () => {
+    expect(
+      (await clientAnswering({ ...status, server_copied: 2 }).pullStatus('r')).server_copied
+    ).toBe(2)
+    expect((await clientAnswering(status).pullStatus('r')).server_copied).toBe(0)
+    expect(
+      (await clientAnswering({ ...status, server_copied: 'x' }).pullStatus('r')).server_copied
+    ).toBe(0)
+  })
 })

@@ -162,7 +162,8 @@ function prefixChanges(input: MovePlanInput): boolean {
 function copiesEverything(input: MovePlanInput): boolean {
   const version = input.source.version ?? input.env.version_pin
   if (!runsStorageCopy(version)) return false
-  return input.to.kind !== 'shared' || runsStorageCopy(input.target_facts.version ?? version)
+  // A shared target's version the Hub cannot read is older (the safe side keeps the blocker).
+  return input.to.kind !== 'shared' || runsStorageCopy(input.target_facts.version)
 }
 
 /** The `nivaro_files.storage` kinds this move's pull copies (P6-31; env ones from 0.3.215). */

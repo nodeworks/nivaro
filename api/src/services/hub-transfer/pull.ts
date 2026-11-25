@@ -46,8 +46,10 @@ import { TRANSFER_TICKET_RE } from './tickets.js'
  *    kind of its own store. When the source's env bucket is this side's env bucket (same hash),
  *    the bucket copies it (`copyFrom`, counted in `server_copied` too) from a full key REBUILT
  *    here from the Hub's `source_scope` and the row's key (the source's stored-key header must
- *    agree, it never chooses it); a shared target only from its own apps/<tenant>/. Anything
- *    else, or a refusal, streams it as usual.
+ *    agree, it never chooses it); a shared target only from its own apps/<tenant>/. The decision
+ *    comes from a header-only probe (`X-Nivaro-Transfer-Probe: 1` → 204 with the store, bucket
+ *    hash, full key and size; the source opens no object). Anything else, or a refusal, streams
+ *    it as usual.
  *  - Per row: skipped when the object is already here at the row's size (resumable); otherwise
  *    fetched (`redirect: 'error'`, 10 min per object, 4 at a time) into a temp file, then
  *    `putFile(filename_disk)`. Streams go through `pipeline()`, never `.pipe()`.
@@ -176,6 +178,9 @@ const TRANSFER_MISSING_HEADER = 'x-nivaro-transfer-missing'
 const TRANSFER_STORE_HEADER = 'x-nivaro-transfer-store'
 const TRANSFER_STORE_ID_HEADER = 'x-nivaro-transfer-store-id'
 const TRANSFER_STORED_KEY_HEADER = 'x-nivaro-transfer-stored-key'
+/** 0.3.215: a header-only question (routes/hub-transfer.ts): where is it, how big; no bytes. */
+const TRANSFER_PROBE_HEADER = 'x-nivaro-transfer-probe'
+const TRANSFER_SIZE_HEADER = 'x-nivaro-transfer-size'
 
 /** The Hub's `source_scope`: `root`, or a tenant id usable as apps/<id>/; anything else null. */
 export function parseSourceScope(raw: unknown): CopySourceScope | null {
@@ -296,7 +301,9 @@ export const pullDeps = {
   },
   /** 0.3.215: the next page of the app's cold session replays (their storage object) by id. */
   async listReplays(after: string | null, limit: number): Promise<FileRow[]> {
-    if (!(await db.schema.hasColumn('nivaro_session_recordings', 'cold_key'))) return []
+    // Asked once per run (on the first page): a later page means the column was there.
+    if (after === null && !(await db.schema.hasColumn('nivaro_session_recordings', 'cold_key')))
+      return []
     let q = db('nivaro_session_recordings')
       .select('id', 'cold_key', 'cold_bytes', 'cold_at')
       .where('cold', true)
@@ -898,12 +905,81 @@ async function execute(
         : 'bad_answer'
     }
 
-    const copyOne = async (row: FileRow, changed: boolean, streamOnly = false): Promise<void> => {
+    /**
+     * 0.3.215: copy one object inside the bucket when the source's env bucket is this side's.
+     * A probe (`X-Nivaro-Transfer-Probe: 1`) asks the source where it keeps the object without
+     * opening it: 204 with its store, bucket hash, full key and size. The copy runs only when the
+     * bucket hash is this side's env provider's and the full key equals the one rebuilt here from
+     * the Hub's source scope (copySource). True = done (copied, already the same object, or a
+     * refused ticket stopped the run); false = stream it as usual.
+     */
+    const copyInBucket = async (
+      id: string,
+      key: string,
+      expected: number | null,
+      mime: string,
+      ask: (probe: boolean) => Promise<Response>,
+      signal: AbortSignal
+    ): Promise<boolean> => {
+      const from = copySource(key)
+      if (!from || typeof storage.copyFrom !== 'function') return false
+      const ownId = safeStoreId(storage)
+      if (!ownId) return false
+      let p: Response
+      try {
+        p = await ask(true)
+      } catch {
+        return false
+      }
+      void p.body?.cancel().catch(() => {})
+      if (p.status === 401 || p.status === 403) {
+        stop(ERR_TICKET)
+        return true
+      }
+      if (p.status !== 204) return false
+      const named = p.headers.get('x-nivaro-filename-disk')
+      const raw = p.headers.get(TRANSFER_STORED_KEY_HEADER)
+      const size = toNumber(p.headers.get(TRANSFER_SIZE_HEADER))
+      if (
+        named === null ||
+        decodeHeader(named) !== key ||
+        p.headers.get(TRANSFER_STORE_HEADER) !== 'env' ||
+        p.headers.get(TRANSFER_STORE_ID_HEADER) !== ownId ||
+        raw === null ||
+        decodeHeader(raw) !== from.raw ||
+        size === null ||
+        size > limits.maxObjectBytes
+      )
+        return false
+      if (from.raw === ownStoredKey(key)) {
+        // The very object this side reads (same bucket, same full key): nothing to copy.
+        st.skipped++
+        progress()
+        await remember(id)
+        return true
+      }
+      try {
+        const n = await storage.copyFrom(key, from.raw, mime, { signal, sourceScope: from.scope })
+        if (n !== size) return false
+        st.copied++
+        st.server_copied = (st.server_copied ?? 0) + 1
+        if (expected !== null && size !== expected) st.size_mismatch = (st.size_mismatch ?? 0) + 1
+        st.bytes += n
+        progress()
+        await remember(id)
+        return true
+      } catch {
+        // The credentials may not read the source's key, or the bucket refused: stream it.
+        return false
+      }
+    }
+
+    const copyOne = async (row: FileRow, changed: boolean): Promise<void> => {
       // A replay's id is its recording's: tagged so it never reads as a file id.
       const id = rowTag(row)
       const key = String(row.filename_disk)
       const expected = toNumber(row.filesize)
-      if (!streamOnly && !changed && expected !== null) {
+      if (!changed && expected !== null) {
         let here = false
         try {
           here = await presentAt(row, key, expected)
@@ -918,19 +994,32 @@ async function execute(
         }
       }
       const signal = AbortSignal.any([ac.signal, AbortSignal.timeout(limits.objectTimeoutMs)])
-      let res: Response
-      try {
-        const url =
-          row.kind === 'replay'
-            ? `${replaysBase}/${encodeURIComponent(String(row.id))}`
-            : `${req.source}/${encodeURIComponent(String(row.id))}`
+      const url =
+        row.kind === 'replay'
+          ? `${replaysBase}/${encodeURIComponent(String(row.id))}`
+          : `${req.source}/${encodeURIComponent(String(row.id))}`
+      const ask = (probe: boolean) => {
         const init = {
           method: 'GET',
-          headers: { Authorization: `Transfer ${req.ticket}` },
+          headers: {
+            Authorization: `Transfer ${req.ticket}`,
+            ...(probe ? { [TRANSFER_PROBE_HEADER]: '1' } : {})
+          },
           redirect: 'error' as const,
           signal
         }
-        res = guarded ? await pullDeps.safeFetch(url, init) : await pullDeps.fetch(url, init)
+        return guarded ? pullDeps.safeFetch(url, init) : pullDeps.fetch(url, init)
+      }
+      const mime = row.type || 'application/octet-stream'
+
+      // 0.3.215: the same bucket on both sides — the bucket copies it, no byte comes through
+      // here. Decided from a header-only probe (the source opens no object), only into this
+      // side's env provider, only from the source key rebuilt here; anything else streams.
+      if ((await copyInBucket(id, key, expected, mime, ask, signal)) || fatal) return
+
+      let res: Response
+      try {
+        res = await ask(false)
       } catch {
         // unreachable, timed out, or a redirect (redirect: 'error')
         return failRow(id, 'unreachable')
@@ -977,55 +1066,6 @@ async function execute(
       // review N-1): the source's object is the one the row names (same key), so it is copied
       // anyway — against its own Content-Length — and counted apart.
       const mismatch = expected !== null && declared !== expected
-      const mime = row.type || 'application/octet-stream'
-
-      // 0.3.215: the same bucket on both sides (an env S3/Azure provider whose bucket hash this
-      // side's env provider shares): the bucket copies it, no byte comes through here. Only into
-      // the env provider, only from this app's own key; any failure streams it as usual.
-      const sourceId = res.headers.get(TRANSFER_STORE_ID_HEADER)
-      const rawHeader = res.headers.get(TRANSFER_STORED_KEY_HEADER)
-      const from = copySource(key)
-      // The source's own word must agree with the key rebuilt here; it never chooses it.
-      const agrees = from !== null && rawHeader !== null && decodeHeader(rawHeader) === from.raw
-      if (
-        !streamOnly &&
-        said === 'env' &&
-        store === storage &&
-        sourceId &&
-        from !== null &&
-        agrees &&
-        typeof storage.copyFrom === 'function' &&
-        typeof storage.storeId === 'function' &&
-        safeStoreId(storage) === sourceId
-      ) {
-        drop()
-        if (from.raw === ownStoredKey(key)) {
-          // The very object this side reads (same bucket, same full key): nothing to copy.
-          st.skipped++
-          progress()
-          await remember(id)
-          return
-        }
-        try {
-          const n = await storage.copyFrom(key, from.raw, mime, {
-            signal,
-            sourceScope: from.scope
-          })
-          if (n === declared) {
-            st.copied++
-            st.server_copied = (st.server_copied ?? 0) + 1
-            if (mismatch) st.size_mismatch = (st.size_mismatch ?? 0) + 1
-            st.bytes += n
-            progress()
-            await remember(id)
-            return
-          }
-        } catch {
-          // The credentials may not read the source's key, or the bucket refused: stream it.
-        }
-        if (fatal) return
-        return copyOne(row, changed, true)
-      }
 
       const tmp = join(tmpDir, `${run.id}-${randomUUID()}`)
       let got = 0

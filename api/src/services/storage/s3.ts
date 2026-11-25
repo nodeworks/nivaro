@@ -290,7 +290,9 @@ export class S3Storage implements StorageProvider {
       }),
       { abortSignal: opts.signal }
     )
-    const head = await this.client.send(new HeadObjectCommand({ Bucket: this.bucket, Key: key }))
+    const head = await this.client.send(new HeadObjectCommand({ Bucket: this.bucket, Key: key }), {
+      abortSignal: opts.signal
+    })
     return typeof head.ContentLength === 'number' ? head.ContentLength : -1
   }
 
