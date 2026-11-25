@@ -1,0 +1,100 @@
+{%- comment -%}
+  Nivaro Hub mail chrome. Used ONLY by a standalone Hub (services/mail.ts mailChrome: HUB=on and
+  no app data here): this folder is consulted before every other template root, so each
+  template's `{% layout 'base' %}` lands here. Same blocks as templates/mail/base.liquid, so every
+  child template works unchanged. `brand` arrives with the Hub defaults filled in
+  (hubMailBrand): the Hub mark as logo, "Nivaro Hub" as name, signal amber as the rule — an
+  operator's own logo / sender name / colour still wins.
+{%- endcomment -%}
+{%- assign brand_name = brand.sender_name | default: 'Nivaro Hub' -%}
+{%- assign brand_color = brand.color | default: '#f5a623' -%}
+<!doctype html>
+<html lang="en">
+<head>
+  <title>{{ brand_name | raw }}</title>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="x-apple-disable-message-reformatting">
+  {%- comment -%}
+    Light-only by design. Client dark modes invert inline colors, and quoted
+    replies then bake those inverted colors into a light-mode thread —
+    unreadable both ways. Declaring light + pairing every background with an
+    explicit inline text color keeps the email (and its quoted copies)
+    readable in every client and theme.
+  {%- endcomment -%}
+  <meta name="color-scheme" content="light">
+  <meta name="supported-color-schemes" content="light">
+  <style type="text/css">
+    :root{color-scheme:light;supported-color-schemes:light;}
+    body,table,td,a{-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%;-webkit-font-smoothing:antialiased;}
+    table,td{mso-table-lspace:0pt;mso-table-rspace:0pt;}
+    img{-ms-interpolation-mode:bicubic;border:0;height:auto;line-height:100%;outline:none;text-decoration:none;}
+    table{border-collapse:collapse!important;}
+    body{height:100%!important;margin:0!important;padding:0!important;width:100%!important;}
+    a[x-apple-data-detectors]{color:inherit!important;text-decoration:none!important;font-size:inherit!important;font-family:inherit!important;font-weight:inherit!important;line-height:inherit!important;}
+    div[style*="margin: 16px 0;"]{margin:0!important;}
+    @media screen and (max-width:620px){
+      .card-wrap{width:100%!important;}
+      .card-pad{padding:28px 22px!important;}
+      .hdr-pad{padding:16px 22px!important;}
+      .ftr-pad{padding:18px 22px!important;}
+      .stat-col{display:block!important;width:100%!important;border-right:none!important;border-bottom:1px solid #dde3ea!important;}
+    }
+  </style>
+</head>
+<body style="margin:0;padding:0;background-color:#eef2f6;" bgcolor="#eef2f6">
+
+<div style="display:none;font-size:1px;color:#eef2f6;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;">{% block preheader %}{{ brand_name | raw }}{% endblock %}&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;</div>
+
+<table id="page-bg" role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" bgcolor="#e9edf2" style="background-color:#e9edf2;">
+  <tr>
+    <td align="center" valign="top" style="padding:36px 16px 52px;">
+
+      <!--[if (gte mso 9)|(IE)]><table align="center" border="0" cellspacing="0" cellpadding="0" width="580"><tr><td width="580"><![endif]-->
+      <table id="card" class="card-wrap" role="presentation" border="0" cellpadding="0" cellspacing="0" style="max-width:580px;width:100%;background-color:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #dde3ea;" bgcolor="#ffffff">
+
+        <!-- ─── Hub header: deep slate-navy band, the Hub mark, amber baseline rule ─── -->
+        <tr>
+          <td id="card-hdr" class="hdr-pad" data-hub-mail="" style="background-color:#0d1726;padding:18px 36px;" bgcolor="#0d1726">
+            <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+              <tr>
+                <td valign="middle">
+                  {% block brand %}<table role="presentation" border="0" cellpadding="0" cellspacing="0"><tr>{% if brand.logo %}<td valign="middle" style="padding-right:12px;"><img id="brand-logo" src="{{ brand.logo | raw }}" alt="" height="32" style="display:block;height:32px;max-height:32px;width:auto;max-width:180px;border:0;"></td>{% endif %}<td valign="middle"><span style="font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:16px;font-weight:700;color:#ffffff;letter-spacing:-0.1px;">{{ brand_name | raw }}</span></td></tr></table>{% endblock %}
+                </td>
+                <td align="right" valign="middle">
+                  {% block brandmark %}<span style="display:inline-block;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:10px;font-weight:700;letter-spacing:1.2px;color:#0d1726;background-color:{{ brand_color }};border-radius:4px;padding:3px 7px;">HUB</span>{% endblock %}
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+        <tr>
+          <td id="brand-rule" height="4" bgcolor="{{ brand_color }}" style="background-color:{{ brand_color }};font-size:0;line-height:0;mso-line-height-rule:exactly;">&nbsp;</td>
+        </tr>
+
+        <!-- ─── Body content ─── -->
+        <tr>
+          <td id="card-body" class="card-pad" style="background-color:#ffffff;padding:40px 36px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:26px;color:#1e293b;" bgcolor="#ffffff">
+            {% block content %}{{ html | raw }}{% endblock %}
+          </td>
+        </tr>
+
+        <!-- ─── Footer ─── -->
+        <tr>
+          <td id="card-ftr" class="ftr-pad" style="background-color:#f4f7fa;border-top:1px solid #dde3ea;padding:18px 36px;" bgcolor="#f4f7fa">
+            <p class="ftr-text" style="margin:0;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12px;color:#64748b;line-height:20px;">
+              Sent by <strong style="color:#334155;">{% block brandname %}{{ brand_name | raw }}{% endblock %}</strong> &mdash; This is an automated notification. Please do not reply to this email.{% block footer %}{% endblock %}{% if brand.footer %}<br><span id="brand-footer" style="display:block;margin-top:6px;">{{ brand.footer | raw }}</span>{% endif %}{% if why %}<br><span style="display:block;margin-top:6px;">You&rsquo;re getting this because {{ why }}.{% if rules_url %} <a href="{{ rules_url }}" style="color:#334155;text-decoration:underline;">Change how you&rsquo;re notified</a>{% endif %}</span>{% endif %}
+            </p>
+          </td>
+        </tr>
+
+      </table>
+      <!--[if (gte mso 9)|(IE)]></td></tr></table><![endif]-->
+
+    </td>
+  </tr>
+</table>
+
+</body>
+</html>

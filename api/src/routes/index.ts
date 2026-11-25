@@ -172,6 +172,7 @@ import { hubDeploymentLinkRoutes } from './hub-deployment-link.js'
 import { hubLinkRoutes } from './hub-link.js'
 import { hubOidcRoutes } from './hub-oidc.js'
 import { hubSigninAdminRoutes } from './hub-signin-admin.js'
+import { hubStripRoutes } from './hub-strip.js'
 import { hubSwitcherRoutes } from './hub-switcher.js'
 import { hubTransferRoutes } from './hub-transfer.js'
 import { ideasRoutes } from './ideas.js'
@@ -500,6 +501,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(envPresenceRoutes, { prefix: '/environments' })
   // Nivaro Hub (apps, environments, owners): registers nothing unless HUB=on (never in cloud).
   await app.register(hubRoutes, { prefix: '/hub' })
+  // Standalone Hub look: the fleet strip's one read (GET /api/hub/strip).
+  await app.register(hubStripRoutes, { prefix: '/hub' })
   await app.register(hubSigninAdminRoutes, { prefix: '/hub/signin' })
   await app.register(hubOidcRoutes, { prefix: '/hub/oidc' })
   await app.register(hubAppLinkRoutes, { prefix: '/hub/app-link' })

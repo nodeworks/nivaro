@@ -9,6 +9,7 @@ import { appEnvironment } from './app-info-environment.js'
 import { chaosAllowed } from './chaos/gate.js'
 import { isMultiTenant, isNivaroCloud } from './deployment-mode.js'
 import { currentNotice, type EnvironmentNotice } from './environment-notice.js'
+import { HUB_BRAND, HUB_PRODUCT_NAME } from './hub/brand.js'
 import { hubLinkToken, hubModeEnabled, hubUrl } from './hub/mode.js'
 import { hubStandalone } from './hub/standalone.js'
 import { phonePushMode } from './phone-push.js'
@@ -110,12 +111,19 @@ export async function buildAppInfo(opts: { block?: AppInfoBlock | null } = {}): 
   // Multi-tenant (Nivaro Cloud, a Hub shared deployment): the app's own origin, never the
   // shared process's address.
   const origin = isMultiTenant() ? (block?.origin ?? tenantOrigin() ?? '') : base
+  // A standalone Hub (no app data here) says `hub_only`, and shows the Hub mark (phone app
+  // included) unless the operator uploaded a logo of their own: white-label wins.
+  const hubOnly = !block && (await hubStandalone())
   return {
-    name: brand.name ?? 'Nivaro',
+    name: brand.name ?? (hubOnly ? HUB_PRODUCT_NAME : 'Nivaro'),
     origin,
     color: brand.color,
     // Multi-tenant: on the tenant's own origin, never the shared process's address.
-    logo_url: brand.logo ? `${isMultiTenant() ? origin : base}/api/files/${brand.logo}` : null,
+    logo_url: brand.logo
+      ? `${isMultiTenant() ? origin : base}/api/files/${brand.logo}`
+      : hubOnly
+        ? `${base}${HUB_BRAND.logo512}`
+        : null,
     version: NIVARO_VERSION,
     cloud: isNivaroCloud(),
     environment: appEnvironment(),
@@ -129,7 +137,7 @@ export async function buildAppInfo(opts: { block?: AppInfoBlock | null } = {}): 
     // The relay key may live in the tenant's settings; a blocked tenant sends nothing anyway.
     push: { mode: block ? 'off' : await cachedPushMode() },
     // A standalone Hub (no app data here) also says `hub_only`: the admin keeps Hub pages only.
-    features: [...enabledFeatures(), ...(!block && (await hubStandalone()) ? ['hub_only'] : [])],
+    features: [...enabledFeatures(), ...(hubOnly ? ['hub_only'] : [])],
     blocked: block ? block.kind : (await maintenanceOn()) ? 'maintenance' : null
   }
 }

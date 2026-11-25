@@ -7,13 +7,17 @@ import { db } from '../db/index.js'
 import { registerAppKeyed } from './app-forget.js'
 import { chainFields } from './chain-columns.js'
 import { encodeDeferredSnippet } from './deferred-snippet.js'
+import { HUB_BRAND, HUB_PRODUCT_NAME, hubStandaloneCached } from './hub/brand.js'
 import { useZonedDates } from './liquid-dates.js'
 import {
   applySenderName,
   brandContextFor,
   brandTemplateContext,
+  DEFAULT_ACCENT,
+  DEFAULT_SENDER_NAME,
   type MailBrand,
   type MailBrandingLookup,
+  normalizeMailLogo,
   resolveMailBranding
 } from './mail-branding.js'
 import { resendFields } from './mail-resends.js'
@@ -102,12 +106,69 @@ function buildEngine(): Liquid {
 
 let engine = buildEngine()
 
+// ─── Standalone Hub mail chrome ──────────────────────────────────────────────
+// A standalone Nivaro Hub (HUB=on, no app data: services/hub/standalone.ts) sends its mail in its
+// own chrome: templates/mail-hub/base.liquid is consulted BEFORE every other root, so every
+// template's `{% layout 'base' %}` lands on the Hub layout, and the From name says "Nivaro Hub".
+// Only there: a regular install, and a Hub that also holds app data, keep the stock chrome. An
+// operator's own branding (logo, sender name, colour) still wins over the Hub defaults.
+
+/** Signal amber: the Hub's accent (admin hub-brand.css), the rule under the mail header. */
+export const HUB_MAIL_ACCENT = '#f5a623'
+const HUB_MAIL_ROOT = join(__dirname, '../../templates/mail-hub')
+let hubEngine: Liquid | null = null
+
+function hubMailEngine(): Liquid {
+  if (!hubEngine) hubEngine = buildMailEngine([HUB_MAIL_ROOT, ...templateRoots])
+  return hubEngine
+}
+
+/** The Hub defaults over a resolved brand: only the values nobody chose are replaced. */
+export function hubMailBrand(brand: MailBrand, markUrl: string | null): MailBrand {
+  const stockName = !brand.sender_name || brand.sender_name === DEFAULT_SENDER_NAME
+  return {
+    ...brand,
+    logo: brand.logo ?? (markUrl ? normalizeMailLogo(markUrl) : null),
+    color: brand.color.toLowerCase() === DEFAULT_ACCENT ? HUB_MAIL_ACCENT : brand.color,
+    sender_name: stockName ? HUB_PRODUCT_NAME : brand.sender_name,
+    from_name: brand.from_name ?? HUB_PRODUCT_NAME
+  }
+}
+
+/** Which chrome a send uses: the Hub's on a standalone Hub, else the stock one (unchanged). */
+export async function mailChrome(
+  brand: MailBrand,
+  deps: { standalone?: () => Promise<boolean>; markUrl?: () => Promise<string | null> } = {}
+): Promise<{ brand: MailBrand; engine: Liquid; hub: boolean }> {
+  let standalone = false
+  try {
+    standalone = await (deps.standalone ?? hubStandaloneCached)()
+  } catch {
+    standalone = false
+  }
+  if (!standalone) return { brand, engine, hub: false }
+  const markUrl = await (deps.markUrl ?? hubMailMarkUrl)()
+  return { brand: hubMailBrand(brand, markUrl), engine: hubMailEngine(), hub: true }
+}
+
+/** The Hub mark's absolute address (a mail client fetches it without a session). */
+async function hubMailMarkUrl(): Promise<string | null> {
+  try {
+    const { adminBaseUrl } = await import('../admin-base.js')
+    const base = (adminBaseUrl() ?? '').replace(/\/+$/, '')
+    return /^https?:\/\//i.test(base) ? `${base}${HUB_BRAND.mailMark}` : null
+  } catch {
+    return null
+  }
+}
+
 /** Register an extension's mail-template directory (highest precedence wins —
  *  last registered is consulted first, core is always the final fallback). */
 export function registerMailTemplateRoot(dir: string): void {
   if (templateRoots.includes(dir)) return
   templateRoots = [dir, ...templateRoots]
   engine = buildEngine()
+  hubEngine = null
 }
 
 // DB override layer (#18): a nivaro_mail_templates row shadows the file
@@ -952,7 +1013,8 @@ export async function sendMail(opts: MailOptions): Promise<MailResult> {
   const whyCtx = await whyContext(opts.to, (opts.data?.why as string | undefined) ?? opts.why)
   // Mail branding (#1463): the workspace chrome the base layout renders, and
   // the From display name when the workspace names a sender.
-  const brand = await resolveMailBranding(brandLookupFor(opts))
+  // A standalone Hub swaps in its own chrome + engine (mailChrome); everyone else: unchanged.
+  const { brand, engine } = await mailChrome(await resolveMailBranding(brandLookupFor(opts)))
   // The resolved brand is spread LAST so caller data can never smuggle an
   // unescaped `brand` object into the chrome.
   const renderData = { ...(opts.data ?? {}), ...whyCtx, ...brandCtx(brand) }
@@ -1154,7 +1216,7 @@ export async function sendRawMail(opts: {
   // built a full document — wrap the fragment in the branded base layout
   // (the 'message' template), so ad-hoc emails match templated ones.
   // Mail branding (#1463): the workspace chrome + From display name.
-  const brand = await resolveMailBranding(brandLookupFor(opts))
+  const { brand, engine } = await mailChrome(await resolveMailBranding(brandLookupFor(opts)))
   let html = opts.html
   if (opts.wrap !== false && !/<html[\s>]/i.test(html)) {
     try {
