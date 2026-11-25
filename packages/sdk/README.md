@@ -2845,6 +2845,57 @@ const check = await nivaro.request(aiValidate('articles', { title: 'Draft post' 
 const feeds = await nivaro.request(listWidgetFeeds());
 ```
 
+---
+
+## SDK — Hub client (Hub mode only)
+
+> **Warning:** `nivaro.hub.*` works only against a Nivaro Hub (a deployment with `HUB=on`). Against any other Nivaro every call fails with a `NivaroError` coded `HUB_MODE_OFF` (the client asks `GET /api/app-info` once per client), never a bare 404.
+
+Access is the Hub’s: administrators see every app, app owners their own. An API key needs the `hub:read` scope (reads and plans) or `hub:write` (changes); `*` does not include the Hub. Calls answer the route’s `data`.
+
+```typescript
+import { createNivaro, isNivaroError } from '@nivaro/sdk'
+
+const nivaro = createNivaro('https://hub.example.com', { token: process.env.HUB_KEY })
+
+if (await nivaro.hub.isHub()) {
+  const apps = await nivaro.hub.listApps()
+  const app = await nivaro.hub.readApp(apps[0].id)
+  const prod = app.environments.find((e) => e.key === 'production')
+  if (prod) {
+    console.log(await nivaro.hub.environmentStatus(prod.id))   // { state, version, preflight, … }
+    const plan = await nivaro.hub.planPromotion(prod.id, { kind: 'promote', version: '0.3.215' })
+    // Needs hub:write; confirm = the environment key, typed.
+    await nivaro.hub.startPromotion(prod.id, {
+      kind: 'promote',
+      version: '0.3.215',
+      plan_hash: String(plan.plan_hash),
+      confirm: 'production'
+    })
+  }
+}
+
+try {
+  await nivaro.hub.listApps()
+} catch (err) {
+  if (isNivaroError(err) && err.code === 'HUB_MODE_OFF') console.log('Not a Hub')
+}
+```
+
+| Area | Methods |
+| --- | --- |
+| Apps | `listApps` `readApp` `createApp` `updateApp` `deleteApp` `setAppOwners` `appStatus` |
+| Environments | `addEnvironment` `updateEnvironment` `deleteEnvironment` `environmentStatus` `environmentDeploys` `promotable` `creation` |
+| Promotions | `planPromotion` `startPromotion` `listPromotions` `readPromotion` `cancelPromotion` |
+| Moves | `planMove` `startMove` `listMoves` `readMove` `cancelMove` `resumeMove` `confirmMoveRoute` `finishMoveStopSource` `tickMoveChecklist` |
+| Shared deployments | `listShared` `readShared` `createShared` `updateShared` `rotateSharedToken` `deleteShared` `sharedStatus` `sharedVersions` `planSharedUpgrade` `startSharedUpgrade` `listSharedUpgrades` `readSharedUpgrade` `cancelSharedUpgrade` |
+| Databases | `listDatabases` `readDatabase` `checkDatabase` `listDatabaseServers` |
+| Drivers and targets | `listDrivers` `createDriver` `updateDriver` `deleteDriver` `driverAgent` `listTargets` |
+| Creating apps | `planAppCreation` |
+| Mode | `isHub()` |
+
+Each method is also a command builder in `hubCommands` (e.g. `nivaro.request(hubCommands.listApps())`) for callers that batch or wrap requests.
+
 
 ---
 
