@@ -52,6 +52,7 @@ import type {
   PromotionPlan,
   PromotionStep
 } from './promote-types.js'
+import { freezeRefusal } from './releases/freeze.js'
 import { HubSecretError } from './secrets.js'
 import { hubStatusKey } from './status.js'
 
@@ -1108,6 +1109,14 @@ export async function startPromotion(
   // deployComponentAt, never this.
   const open = await moveOpenRefusal({ envIds: [envId] })
   if (open) throw new PromotionError(open.code, open.message, open.status)
+  // Release operations: a freeze window stops promotions and Apply now, never a rollback.
+  if (req.kind !== 'rollback') {
+    const frozen = await freezeRefusal({
+      appIds: [Number(env.app_id)],
+      action: req.apply === true ? 'apply' : 'promote'
+    })
+    if (frozen) throw new PromotionError(frozen.code, frozen.message, frozen.status)
+  }
   if (req.kind !== 'promote' && req.kind !== 'rollback')
     throw new PromotionError('BAD_KIND', 'kind must be promote or rollback')
   const apply = req.apply === true
