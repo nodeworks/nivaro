@@ -4,6 +4,8 @@ import { AlertTriangle, ArrowRightLeft, Pencil } from 'lucide-react'
 import { Fragment, type ReactNode, useState } from 'react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
+import { envTone } from '@/components/hub-brand/env-tone'
+import { HubEnvTag } from '@/components/hub-brand/HubBits'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useAuth } from '@/lib/auth'
 import { cn, formatDateTime, formatFileSize } from '@/lib/utils'
@@ -440,11 +442,13 @@ function AdviceCard({
               <li
                 key={`${a.kind}-${a.env_id}`}
                 className='rounded-lg border border-slate-200 p-3 dark:border-border'
+                data-env-tone={envTone(a.env_key)}
               >
                 <div className='flex flex-wrap items-center gap-2'>
-                  <span className='font-mono text-[13px]'>
+                  <span className='hub-fact font-mono text-[13px]'>
                     {a.app_key}/{a.env_key}
                   </span>
+                  <HubEnvTag envKey={a.env_key} />
                   <span
                     className={cn(
                       'rounded-full border px-2 py-0.5 text-[11px]',

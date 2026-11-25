@@ -12,6 +12,8 @@ import {
   X
 } from 'lucide-react'
 import { Fragment, useId, useState } from 'react'
+import { envTone } from '@/components/hub-brand/env-tone'
+import { HubEnvTag, ProductionGuard } from '@/components/hub-brand/HubBits'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -731,9 +733,13 @@ function EnvRow({
   const s = row.status.data
   return (
     <Fragment>
-      <tr className='border-b border-slate-100 last:border-0 dark:border-border'>
+      <tr
+        className='border-b border-slate-100 last:border-0 dark:border-border'
+        data-env-tone={envTone(env.key)}
+      >
         <td className='truncate px-4 py-2.5 font-mono text-[12px] font-medium text-slate-800 dark:text-foreground'>
           {env.key}
+          <HubEnvTag envKey={env.key} className='ml-1.5 align-[1px]' />
           {(row.placementText || row.badge) && (
             <div className='mt-0.5 flex flex-wrap gap-1'>
               <PlacementChip text={row.placementText} shared={row.isShared} />
@@ -746,12 +752,12 @@ function EnvRow({
             href={env.base_url}
             target='_blank'
             rel='noreferrer'
-            className='block truncate text-slate-600 hover:text-nvr-navy hover:underline dark:text-slate-300 dark:hover:text-nvr-cyan'
+            className='hub-fact block truncate text-slate-600 hover:text-nvr-navy hover:underline dark:text-slate-300 dark:hover:text-nvr-cyan'
           >
             {hostOf(env.base_url)}
           </a>
         </td>
-        <td className='px-4 py-2.5 font-mono tabular-nums text-slate-700 dark:text-slate-300'>
+        <td className='hub-fact px-4 py-2.5 font-mono tabular-nums text-slate-700 dark:text-slate-300'>
           {s?.version ?? '—'}
         </td>
         <td className='min-w-0 px-4 py-2.5'>
@@ -780,38 +786,44 @@ function EnvRow({
       {row.moving && (
         <tr className='border-b border-slate-100 last:border-0 dark:border-border'>
           <td colSpan={6} className='px-4 pb-3'>
-            <HubMovePanel
-              appKey={app.key}
-              env={env}
-              idPrefix={`hub-move-${env.id}`}
-              onClose={() => row.setMoving(false)}
-              onBusy={row.setMoveBusy}
-            />
+            <ProductionGuard envKey={env.key} what='move'>
+              <HubMovePanel
+                appKey={app.key}
+                env={env}
+                idPrefix={`hub-move-${env.id}`}
+                onClose={() => row.setMoving(false)}
+                onBusy={row.setMoveBusy}
+              />
+            </ProductionGuard>
           </td>
         </tr>
       )}
       {row.placing && (
         <tr className='border-b border-slate-100 last:border-0 dark:border-border'>
           <td colSpan={6} className='px-4 pb-3'>
-            <HubPlaceSharedForm
-              appId={app.id}
-              env={env}
-              idPrefix={`hub-place-${env.id}`}
-              onClose={() => row.setPlacing(false)}
-              onBusy={row.setMoveBusy}
-            />
+            <ProductionGuard envKey={env.key} what='placement'>
+              <HubPlaceSharedForm
+                appId={app.id}
+                env={env}
+                idPrefix={`hub-place-${env.id}`}
+                onClose={() => row.setPlacing(false)}
+                onBusy={row.setMoveBusy}
+              />
+            </ProductionGuard>
           </td>
         </tr>
       )}
       {row.promoting && (
         <tr className='border-b border-slate-100 last:border-0 dark:border-border'>
           <td colSpan={6} className='px-4 pb-3'>
-            <HubPromotePanel
-              env={env}
-              kind='promote'
-              idPrefix={`hub-promote-${env.id}`}
-              onClose={() => row.setPromoting(false)}
-            />
+            <ProductionGuard envKey={env.key} what='promotion'>
+              <HubPromotePanel
+                env={env}
+                kind='promote'
+                idPrefix={`hub-promote-${env.id}`}
+                onClose={() => row.setPromoting(false)}
+              />
+            </ProductionGuard>
           </td>
         </tr>
       )}
@@ -850,13 +862,14 @@ function EnvItem({
   }
   const s = row.status.data
   return (
-    <li className='px-4 py-2.5'>
+    <li className='px-4 py-2.5' data-env-tone={envTone(env.key)}>
       {/* Design S1: name and status on the first line, chips wrap below at their full width,
           the actions get a line of their own under the facts (nothing runs off the card). */}
       <div className='flex flex-wrap items-center gap-x-2 gap-y-1'>
         <span className='font-mono text-[12px] font-medium text-slate-800 dark:text-foreground'>
           {env.key}
         </span>
+        <HubEnvTag envKey={env.key} />
         <EnvStatus status={row.status} />
       </div>
       {(row.placementText || row.badge) && (
@@ -875,7 +888,7 @@ function EnvItem({
           {hostOf(env.base_url)}
         </a>
         <span aria-hidden>·</span>
-        <span className='shrink-0 font-mono tabular-nums'>{s?.version ?? '—'}</span>
+        <span className='hub-fact shrink-0 font-mono tabular-nums'>{s?.version ?? '—'}</span>
         <span aria-hidden>·</span>
         <span className='shrink-0'>{s?.checked_at ? formatRelative(s.checked_at) : '—'}</span>
       </p>
@@ -906,34 +919,40 @@ function EnvItem({
       )}
       {row.moving && (
         <div className='mt-2'>
-          <HubMovePanel
-            appKey={app.key}
-            env={env}
-            idPrefix={`hub-move-${env.id}-m`}
-            onClose={() => row.setMoving(false)}
-            onBusy={row.setMoveBusy}
-          />
+          <ProductionGuard envKey={env.key} what='move'>
+            <HubMovePanel
+              appKey={app.key}
+              env={env}
+              idPrefix={`hub-move-${env.id}-m`}
+              onClose={() => row.setMoving(false)}
+              onBusy={row.setMoveBusy}
+            />
+          </ProductionGuard>
         </div>
       )}
       {row.placing && (
         <div className='mt-2'>
-          <HubPlaceSharedForm
-            appId={app.id}
-            env={env}
-            idPrefix={`hub-place-${env.id}-m`}
-            onClose={() => row.setPlacing(false)}
-            onBusy={row.setMoveBusy}
-          />
+          <ProductionGuard envKey={env.key} what='placement'>
+            <HubPlaceSharedForm
+              appId={app.id}
+              env={env}
+              idPrefix={`hub-place-${env.id}-m`}
+              onClose={() => row.setPlacing(false)}
+              onBusy={row.setMoveBusy}
+            />
+          </ProductionGuard>
         </div>
       )}
       {row.promoting && (
         <div className='mt-2'>
-          <HubPromotePanel
-            env={env}
-            kind='promote'
-            idPrefix={`hub-promote-${env.id}-m`}
-            onClose={() => row.setPromoting(false)}
-          />
+          <ProductionGuard envKey={env.key} what='promotion'>
+            <HubPromotePanel
+              env={env}
+              kind='promote'
+              idPrefix={`hub-promote-${env.id}-m`}
+              onClose={() => row.setPromoting(false)}
+            />
+          </ProductionGuard>
         </div>
       )}
     </li>
@@ -1162,9 +1181,10 @@ function EnvDeploys({ env }: { env: HubEnvironment }) {
   })
 
   return (
-    <div className='px-4 py-3'>
+    <div className='px-4 py-3' data-env-tone={envTone(env.key)}>
       <h4 className='m-0 mb-2 font-mono text-[12px] font-semibold text-slate-800 dark:text-foreground'>
         {env.key}
+        <HubEnvTag envKey={env.key} className='ml-1.5 align-[1px]' />
       </h4>
       {q.isPending ? (
         <Skeleton className='h-14 w-full' />
@@ -1185,7 +1205,7 @@ function EnvDeploys({ env }: { env: HubEnvironment }) {
         <ul className='m-0 list-none divide-y divide-slate-100 p-0 dark:divide-border'>
           {(all ? q.data.data : q.data.data.slice(0, DEPLOYS_SHOWN)).map((d) => (
             <li key={d.pipeline_id} className='flex flex-wrap items-center gap-x-4 gap-y-1 py-2'>
-              <span className='min-w-[84px] font-mono text-[12px] font-medium text-slate-900 dark:text-foreground'>
+              <span className='hub-fact min-w-[84px] font-mono text-[12px] font-medium text-slate-900 dark:text-foreground'>
                 {d.version ?? d.sha.slice(0, 8)}
               </span>
               <span

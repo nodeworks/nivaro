@@ -2,6 +2,7 @@ import { ConfirmButton, type ErrorDescription, ErrorNotice, isRawErrorText } fro
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Ban, Check, ChevronsUpDown, Circle, Loader2, X } from 'lucide-react'
 import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import { HubRunTimeline } from '@/components/hub-brand/HubRunTimeline'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -969,6 +970,12 @@ function UpgradeProgress({
         )}
       </div>
 
+      {/* Standalone Hub: the upgrade as a track (renders nothing otherwise). */}
+      <HubRunTimeline
+        what={d.kind === 'rollback' ? 'Rollback' : 'Upgrade'}
+        live={live}
+        steps={steps.map((s, i) => ({ key: s.key, label: s.label, state: states[i] }))}
+      />
       <ol aria-label='Upgrade steps' className='m-0 list-none space-y-1.5 p-0'>
         {steps.map((s, i) => {
           const st = states[i]

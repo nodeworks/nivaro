@@ -3,11 +3,13 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Suspense, useEffect, useRef } from 'react'
 import { BrowserRouter, Navigate, Route, useLocation, useNavigate, useParams } from 'react-router'
 import { Toaster } from 'sonner'
+import { HubGlyph } from '@/components/hub-brand/HubMark'
 import { HubRedirect } from '@/components/hub-page'
 import { ExtensionPluginLoader } from '@/extensions/loader'
 import { AppLayout } from '@/layouts/AppLayout'
 import { api } from '@/lib/api'
 import { AuthProvider, useAuth } from '@/lib/auth'
+import { useHubProductFlag } from '@/lib/hub-product'
 import { HUB_REDIRECTS, HUBS, hubTabPath } from '@/lib/hubs'
 import { I18nProvider } from '@/lib/i18n'
 import {
@@ -362,6 +364,16 @@ function NotFoundPage() {
 }
 
 function AppShell() {
+  // A standalone Hub loads under its own mark (lib/hub-product.ts; set before first paint).
+  const hub = useHubProductFlag()
+  if (hub)
+    return (
+      <div className='flex min-h-screen items-center justify-center bg-[var(--hub-chrome)]'>
+        <span role='img' aria-label='Loading Nivaro Hub' className='motion-safe:animate-pulse'>
+          <HubGlyph size={56} />
+        </span>
+      </div>
+    )
   return (
     <div className='min-h-screen bg-secondary flex items-center justify-center'>
       <svg width='56' height='56' viewBox='0 0 24 24' fill='none' aria-label='Loading' role='img'>

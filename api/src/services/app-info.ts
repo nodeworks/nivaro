@@ -9,8 +9,15 @@ import { appEnvironment } from './app-info-environment.js'
 import { chaosAllowed } from './chaos/gate.js'
 import { isMultiTenant, isNivaroCloud } from './deployment-mode.js'
 import { currentNotice, type EnvironmentNotice } from './environment-notice.js'
+import {
+  HUB_ACCENT,
+  HUB_BRAND,
+  HUB_PRODUCT_NAME,
+  hubStandaloneCached,
+  isStockProjectName,
+  NIVARO_STOCK_ACCENT
+} from './hub/brand.js'
 import { appHubLink, hubModeEnabled } from './hub/mode.js'
-import { hubStandalone } from './hub/standalone.js'
 import { phonePushMode } from './phone-push.js'
 import { overlaySettings } from './settings-overrides.js'
 import { currentTenantKey } from './tenant-rooms.js'
@@ -111,12 +118,23 @@ export async function buildAppInfo(opts: { block?: AppInfoBlock | null } = {}): 
   // Multi-tenant (Nivaro Cloud, a Hub shared deployment): the app's own origin, never the
   // shared process's address.
   const origin = isMultiTenant() ? (block?.origin ?? tenantOrigin() ?? '') : base
+  // A standalone Hub (no app data here) says `hub_only`, and shows the Hub mark (phone app
+  // included) unless the operator uploaded a logo of their own: white-label wins.
+  const hubOnly = !block && (await hubStandaloneCached())
   return {
-    name: brand.name ?? 'Nivaro',
+    name: hubOnly && isStockProjectName(brand.name) ? HUB_PRODUCT_NAME : (brand.name ?? 'Nivaro'),
     origin,
-    color: brand.color,
+    // A standalone Hub with no colour chosen (or the stock cyan) answers its own amber.
+    color:
+      hubOnly && (!brand.color || brand.color.toLowerCase() === NIVARO_STOCK_ACCENT)
+        ? HUB_ACCENT
+        : brand.color,
     // Multi-tenant: on the tenant's own origin, never the shared process's address.
-    logo_url: brand.logo ? `${isMultiTenant() ? origin : base}/api/files/${brand.logo}` : null,
+    logo_url: brand.logo
+      ? `${isMultiTenant() ? origin : base}/api/files/${brand.logo}`
+      : hubOnly && /^https?:\/\//i.test(base)
+        ? `${base}${HUB_BRAND.logo512}`
+        : null,
     version: NIVARO_VERSION,
     cloud: isNivaroCloud(),
     environment: appEnvironment(),
@@ -130,7 +148,7 @@ export async function buildAppInfo(opts: { block?: AppInfoBlock | null } = {}): 
     // The relay key may live in the tenant's settings; a blocked tenant sends nothing anyway.
     push: { mode: block ? 'off' : await cachedPushMode() },
     // A standalone Hub (no app data here) also says `hub_only`: the admin keeps Hub pages only.
-    features: [...enabledFeatures(), ...(!block && (await hubStandalone()) ? ['hub_only'] : [])],
+    features: [...enabledFeatures(), ...(hubOnly ? ['hub_only'] : [])],
     blocked: block ? block.kind : (await maintenanceOn()) ? 'maintenance' : null
   }
 }

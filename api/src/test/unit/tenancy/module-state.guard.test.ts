@@ -752,6 +752,7 @@ const SHARED: Record<string, string> = {
   'services/lock-presence.ts :: probe': FN_SLOT,
   'services/mail-types.ts :: registry': REGISTRY,
   'services/mail.ts :: engine': 'the Liquid engine over those folders (Task 13)',
+  'services/mail.ts :: hubEngine': `the standalone Hub's Liquid engine over the same folders; ${HUB_ONLY}`,
   'services/mail.ts :: mailLogWarned': DIAG,
   'services/mail.ts :: templateRoots': 'template folders of the image and its extensions (Task 13)',
   'services/maintenance-live.ts :: announceImpl': FN_SLOT,

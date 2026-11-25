@@ -8,6 +8,8 @@ import { createRoot } from 'react-dom/client'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import './globals.css'
+// The standalone Hub look: every rule is scoped to [data-product="hub"] (lib/hub-product.ts).
+import './hub-brand.css'
 import {
   disableRecordOutbox,
   guardErrorToasts,

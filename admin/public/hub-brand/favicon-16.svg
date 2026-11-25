@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <title>Nivaro Hub</title>
+  <rect width="16" height="16" rx="3.5" fill="#0d1726"/>
+  <g fill="none" stroke="#f5a623" stroke-linecap="round" stroke-linejoin="round">
+    <path stroke-width="1.4" d="M4.6 2a3.9 3.9 0 0 0 0 5.2M11.4 2a3.9 3.9 0 0 1 0 5.2"/>
+    <path stroke-width="1.6" d="M8 6.2 5.3 14M8 6.2l2.7 7.8M6.3 11.1h3.4"/>
+  </g>
+  <circle cx="8" cy="4.6" r="1.5" fill="#f5a623"/>
+</svg>

@@ -15,6 +15,7 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
+import { HubRunTimeline } from '@/components/hub-brand/HubRunTimeline'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -1304,6 +1305,8 @@ function MoveProgress({
         </section>
       )}
 
+      {/* Standalone Hub: the move as a track (renders nothing otherwise). */}
+      <HubRunTimeline what='Move' live={live} steps={rows} />
       <ol aria-label='Move steps' className='m-0 list-none space-y-1.5 p-0'>
         {rows.map((r) => (
           <li

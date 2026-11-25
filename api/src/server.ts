@@ -81,6 +81,7 @@ import { enrichErrorPayload, noteDbRefusal } from './services/error-enrich.js'
 import { logRouteError } from './services/error-log-level.js'
 import { stableIssueKey, trackError } from './services/error-tracking.js'
 import { callExternalApi } from './services/external-apis.js'
+import { hubIndexFor } from './services/hub/brand.js'
 import { hubLinkToken } from './services/hub/mode.js'
 import { importerServes } from './services/import-handoff.js'
 import { maintenanceFreezeHook, retiredRequestHook } from './services/maintenance-freeze.js'
@@ -982,6 +983,20 @@ export async function buildServer() {
         if (path === '/' || path === '/index.html') applyEarlyHints(req, reply, earlyHints)
       })
     }
+    // A standalone Hub serves its own index.html (Hub icons, manifest, title, data-product) so
+    // its tab never shows the Nivaro icon (services/hub/brand.ts); null = everyone else, untouched.
+    app.addHook('onRequest', async (req, reply) => {
+      if (req.method !== 'GET' && req.method !== 'HEAD') return
+      const path = req.url.split('?')[0]
+      if (path !== '/' && path !== '/index.html') return
+      const html = await hubIndexFor(adminBuildPath)
+      if (html === null) return
+      return reply
+        .header('Cache-Control', 'no-cache')
+        .header('Vary', 'Accept-Encoding')
+        .type('text/html; charset=utf-8')
+        .send(html)
+    })
     await app.register(fastifyStatic, {
       root: adminBuildPath,
       prefix: '/',
@@ -1018,7 +1033,7 @@ export async function buildServer() {
         }
       })
     }
-    app.setNotFoundHandler((req, reply) => {
+    app.setNotFoundHandler(async (req, reply) => {
       // Segment-exact prefix match: '/api/...' is an API miss, but the admin
       // SPA routes /api-analytics, /api-keys and /api-docs also START WITH
       // '/api' — a bare startsWith('/api') served them a JSON 404 on hard
@@ -1027,7 +1042,13 @@ export async function buildServer() {
         return reply.code(404).send({ error: 'Not found' })
       }
       applyEarlyHints(req, reply, earlyHints)
-      reply.sendFile('index.html')
+      const hubHtml = await hubIndexFor(adminBuildPath)
+      if (hubHtml !== null)
+        return reply
+          .header('Cache-Control', 'no-cache')
+          .type('text/html; charset=utf-8')
+          .send(hubHtml)
+      return reply.sendFile('index.html')
     })
   }
 

@@ -12,6 +12,8 @@
  *   it follows TRUST_PROXY); a plain-http dev server never pins a browser to https.
  *
  * No script-src is enforced (the admin and extension UI bundles still need a survey first).
+ * When one is: admin/index.html carries one inline boot script (the standalone Hub look,
+ * admin/src/lib/hub-product.ts) — its hash must be allowed.
  *
  * A route that already set its own header keeps it (the public form renderer allows any
  * framer; OAuth pages and file responses send stricter policies). Leaf module.

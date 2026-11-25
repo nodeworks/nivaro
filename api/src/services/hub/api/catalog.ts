@@ -239,6 +239,14 @@ export const HUB_ROUTES: HubRoute[] = [
   r('GET', '/apps/:id/status', 'Status', 'owner', 'read', 'Live status of every environment'),
   r(
     'GET',
+    '/strip',
+    'Status',
+    'owner',
+    'read',
+    'The fleet strip: every environment the caller may see with its cached status (never a live probe)'
+  ),
+  r(
+    'GET',
     '/environments/:envId/deploys',
     'Status',
     'owner',

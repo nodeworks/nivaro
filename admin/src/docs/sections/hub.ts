@@ -22,6 +22,32 @@ export const hubOverviewDocs: DocSection = {
       type: 'p',
       text: 'A standalone Hub (hub mode on, and no collections of its own beyond the Nivaro system tables) also lists `hub_only` in `GET /api/app-info`. Its admin sidebar then keeps only the pages a Hub needs: Overview, Apps, Users, Roles, Security Center, Activity, Health, Issues, Jobs, Database, API keys, Docs and Settings. The data pages (Collections, Flows, Dashboards and the rest) read data a Hub never holds, so they are left out. An installation that is a Hub and also holds app data keeps the full sidebar.'
     },
+    { type: 'h2', id: 'hub-overview-look', text: 'How a standalone Hub looks' },
+    {
+      type: 'p',
+      text: 'A standalone Hub looks like its own product, an ops control tower, so nobody mistakes it for one of the apps it runs. All of it switches on only with `hub_only`: a regular Nivaro, and a Hub that also holds app data, look exactly as before.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Its own mark and name: a signal tower in amber on deep slate-navy, with "Nivaro Hub", in the top bar, on the sign-in page, on the loading screen, in the browser tab ("Hub · Apps — Nivaro Hub"), as the favicon and installed-app icons (`/hub-brand/`), in Hub email and as the `logo_url` of `GET /api/app-info` (the phone app shows it).',
+        'An operator\'s own branding still wins: a logo uploaded in Settings → Project replaces the mark (the name "Hub" stays), a project name replaces "Nivaro Hub" (the database default "Nivaro CMS" counts as no name), and a chosen project or workspace colour replaces the amber everywhere: primary buttons, focus rings, links and selection, with text on it chosen by contrast.',
+        "A top bar with the Hub sections (Fleet, Apps, Deploys, Shared, Moves, People, Settings; a section this version does not have is left out) and a System menu for the other pages the Hub keeps, in place of the icon rail. Sections and System follow the person's role and its UI permissions exactly as the sidebar did. Team chat, refresh, the watch list, the instance switcher and the theme stay in the bar; do-not-disturb and browser chaos are in the account menu. Below tablet width the sections fold into a menu, and on a phone the smaller tools move into it.",
+        "A fleet strip under the top bar: one dot per environment, green running, amber needs a look, red not answering, hollow not checked yet. It is one read of the Hub's cached status (`GET /api/hub/strip`, never a live check of an app; an environment nobody looked at lately shows hollow), refreshed once a minute; a dot opens its app.",
+        'Environment colours on every Hub screen, read from the environment key: production red-orange, staging violet, development teal, anything else grey (row stripes, tags, deploy history).',
+        'Promotions, moves, shared upgrades and app creations show a run timeline (plan → run → check) above their step list; the running step pulses unless the browser asks for reduced motion.',
+        'Any action on a production environment (promote, move, place on shared) sits in a red-orange frame and keeps its typed confirmation.',
+        'Versions, digests, hosts and ids are set in a monospace face with tabular figures; Hub pages run denser.'
+      ]
+    },
+    {
+      type: 'p',
+      text: 'Mail from a standalone Hub uses its own layout (`api/templates/mail-hub/base.liquid`): a navy header band with the mark and an amber rule, sent as "Nivaro Hub" unless the instance names its own sender.'
+    },
+    {
+      type: 'note',
+      text: 'The look is set before the first paint: the server writes it into the page for a standalone Hub, and the browser remembers it for the next load. If a browser once opened a Hub at the same address as a regular Nivaro (a development machine), the Hub look shows for a moment until `GET /api/app-info` answers.'
+    },
     {
       type: 'warn',
       text: "Two Hubs must not share one Redis database. The keys of promotion and creation locks (`nvr:hub:promote:<environment id>`), job logs and readiness carry no instance prefix (`REDIS_CHANNEL_PREFIX` covers pub/sub channels only), so two Hubs on one Redis database take each other's locks and read each other's logs by id. Give each Hub its own Redis database (or its own Redis)."
@@ -164,6 +190,10 @@ export const hubOverviewDocs: DocSection = {
         [
           '`GET /api/hub/apps`, `GET /api/hub/apps/:id`',
           'List apps (administrators: all; others: the apps they own) and read one with its environments and owners.'
+        ],
+        [
+          '`GET /api/hub/strip`',
+          "The fleet strip of a standalone Hub: every environment the caller may see (administrators: all; owners: their apps' environments) with its cached status only (never a live probe), in one answer `{entries, truncated}` (at most 200). Kept 30 s per view; concurrent asks share one read; API keys need `hub:read`."
         ],
         [
           '`POST/PATCH/DELETE /api/hub/apps`, `PUT /api/hub/apps/:id/owners`',

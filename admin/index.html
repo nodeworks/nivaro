@@ -14,6 +14,35 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <!-- Standalone Nivaro Hub (admin/src/lib/hub-product.ts): replay the last answer before the
+         first paint so a Hub never flashes the Nivaro look. Does nothing on a regular install.
+         Public pages (shared dashboards, wallboards, kiosks) never wear a remembered Hub look:
+         the remembered answer is dropped there. A server-written Hub page keeps its own
+         original-icon markers (never overwritten here). Any future CSP script-src needs this
+         script's hash (lib/security-headers.ts). -->
+    <script>
+      ;(function () {
+        try {
+          if (/^\/(wallboard|d\/|command\/kiosk|share\/|form\/)/.test(location.pathname)) {
+            localStorage.removeItem('nvr:product')
+            return
+          }
+          if (localStorage.getItem('nvr:product') !== 'hub') return
+          var d = document, r = d.documentElement
+          var s = function (q, keep, h) {
+            var l = d.querySelector(q)
+            if (!l || l.getAttribute('href') === h) return
+            if (!l.hasAttribute(keep)) l.setAttribute(keep, l.getAttribute('href') || '')
+            l.setAttribute('href', h)
+          }
+          r.setAttribute('data-product', 'hub')
+          d.title = 'Nivaro Hub'
+          s('link[rel~="icon"]', 'data-nvr-base-icon', '/hub-brand/favicon.svg')
+          s('link[rel="manifest"]', 'data-nvr-base-href', '/hub-brand/manifest.webmanifest')
+          s('link[rel="apple-touch-icon"]', 'data-nvr-base-href', '/hub-brand/apple-touch-icon.png')
+        } catch (e) {}
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>
