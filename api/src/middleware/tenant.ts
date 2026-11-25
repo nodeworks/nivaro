@@ -1,7 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto'
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import type { Knex } from 'knex'
-import { getOrCreateTenantPool, runWithTenantDb } from '../db/tenant-context.js'
+import { getOrCreateTenantPool, runWithTenantDb, tenantPoolOpts } from '../db/tenant-context.js'
 import { isAppInfoPath } from '../lib/app-info-path.js'
 import { trustedRequestHost } from '../lib/trust-proxy.js'
 import { isNivaroCloud } from '../services/deployment-mode.js'
@@ -903,9 +903,12 @@ async function resolveTenant(hostname: string, customHost?: string | null): Prom
     found: true,
     suspended: false,
     provisioning: false,
-    db: getOrCreateTenantPool(tenant.dbConnection, tenant.dbClient, tenant.poolMax ?? undefined, {
-      create: tenant.dbCreate === true
-    }),
+    db: getOrCreateTenantPool(
+      tenant.dbConnection,
+      tenant.dbClient,
+      tenant.poolMax ?? undefined,
+      tenantPoolOpts(tenant)
+    ),
     slug: tenant.slug,
     tenantId: tenant.id,
     origin,
@@ -1025,9 +1028,12 @@ export function tenantHook(req: FastifyRequest, reply: FastifyReply, done: (err?
         const t = versionTenant
         ;(req as unknown as { nvrTenantId?: string }).nvrTenantId = t.id || t.slug
         runWithTenantDb(
-          getOrCreateTenantPool(t.dbConnection, t.dbClient, t.poolMax ?? undefined, {
-            create: t.dbCreate === true
-          }),
+          getOrCreateTenantPool(
+            t.dbConnection,
+            t.dbClient,
+            t.poolMax ?? undefined,
+            tenantPoolOpts(t)
+          ),
           t.slug,
           done,
           t.id,

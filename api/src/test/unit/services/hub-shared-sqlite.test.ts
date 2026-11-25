@@ -135,7 +135,8 @@ describe('the tenants body', () => {
       (x) => x.id === Store.tenantIdFor({ key: 'lite' }, { id: liteEnv })
     )
     // H2: a NEW record (never placed) lets the deployment make the file, once.
-    expect(t?.db).toEqual({ client: 'sqlite', connection: 'app.sqlite', create: true })
+    expect(t?.db).toMatchObject({ client: 'sqlite', connection: 'app.sqlite', create: true })
+    expect(typeof (t?.db as { record?: unknown } | undefined)?.record).toBe('number')
     const parsed = parseHubTenants(body, 'shared-lite', () => ({
       root: '/srv/up/app-db',
       problem: null

@@ -79,7 +79,7 @@
 //     values: db/sqlite-values.ts.
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash } from 'node:crypto'
-import { readFileSync, statSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, statSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { hostname } from 'node:os'
 import { isMultiTenant } from '../services/deployment-mode.js'
@@ -779,6 +779,65 @@ export function sqliteAfterCreate(
     done(null, conn)
   } catch (err) {
     done(err as Error, conn)
+  }
+}
+
+/**
+ * Hub gap sqlite (review 4, N1): every connection a SQLite pool opens — not only the first — is
+ * judged before better-sqlite3 opens the file, because knex opens connections without
+ * `fileMustExist` and reopens them after an idle reap. Without this, a file removed while the
+ * app is served would be made again, empty, by the next connection.
+ *  - `mayCreate`: this pool may make the file (a new database's first open, or a move's target).
+ *    Once a connection opened it and the file exists, `onCreated` runs once (the `.created`
+ *    marker is written only then — L2) and the pool may not make it again.
+ *  - otherwise a missing file is refused before it is opened (`refuse('missing')`);
+ *  - `requireTables` (a database that holds an install): a connection that finds no table at all
+ *    is refused (`refuse('empty')`) and a zero-byte file it found is removed.
+ */
+export function guardSqliteConnections(
+  k: { client: unknown },
+  file: string,
+  opts: {
+    mayCreate: boolean
+    requireTables: boolean
+    onCreated?: () => void
+    refuse: (why: 'missing' | 'empty') => Error
+  }
+): void {
+  const client = k.client as { acquireRawConnection: () => Promise<unknown> }
+  const open = client.acquireRawConnection.bind(client)
+  let mayCreate = opts.mayCreate
+  client.acquireRawConnection = async () => {
+    if (!mayCreate && !existsSync(file)) throw opts.refuse('missing')
+    const conn = (await open()) as {
+      prepare(sql: string): { get(): { n?: number } | undefined }
+      close(): void
+    }
+    if (mayCreate) {
+      if (existsSync(file)) {
+        mayCreate = false
+        opts.onCreated?.()
+      }
+      return conn
+    }
+    if (opts.requireTables) {
+      let n = 1
+      try {
+        n = Number(conn.prepare('SELECT COUNT(*) AS n FROM sqlite_master').get()?.n ?? 0)
+      } catch {
+        n = 1 // unreadable here: the query that follows says so
+      }
+      if (n === 0) {
+        try {
+          conn.close()
+        } catch {}
+        try {
+          if (statSync(file).size === 0) unlinkSync(file)
+        } catch {}
+        throw opts.refuse('empty')
+      }
+    }
+    return conn
   }
 }
 

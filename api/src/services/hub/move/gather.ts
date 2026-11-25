@@ -677,6 +677,7 @@ async function sharedTargetFacts(
     // Hub gap sqlite (M5): what the agent says of its uploads volume (null = not said).
     out.uploads_network = h ? uploadsOnNetwork(h) : null
     out.volume_driver = h?.volume_driver ?? null
+    if (h && typeof h.swarm?.nodes !== 'number') out.nodes_unknown = true
   }
 
   let rows: Awaited<ReturnType<typeof tenantsOf>> = []
@@ -922,6 +923,7 @@ async function dedicatedTargetFacts(
   out.multi_node = multiNode(h)
   out.uploads_network = uploadsOnNetwork(h)
   out.volume_driver = h.volume_driver ?? null
+  if (typeof h.swarm?.nodes !== 'number') out.nodes_unknown = true
   if (side.stack) {
     const f = await stackFacts(ctx, side.driverId, side.stack)
     out.redis = f.redis

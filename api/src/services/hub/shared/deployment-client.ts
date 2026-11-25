@@ -6,9 +6,9 @@ import type {
 } from '../../tenancy/app-status.js'
 import { scrubDbError } from '../db/connection.js'
 import {
-  DATABASE_COPY_TIMEOUT_MS,
-  type DatabaseCopied,
-  parseDatabaseCopied
+  DATABASE_SUM_TIMEOUT_MS,
+  type DatabaseJobStatus,
+  parseDatabaseJob
 } from '../move/link-client.js'
 import {
   deploymentLinkBearer,
@@ -193,10 +193,15 @@ export interface DeploymentClient {
   pullStatus(tenantId: string, runId: string): Promise<PullStatus>
   /** Revokes a transfer ticket the app minted (a move ended); `revoked` false = it was gone. */
   revokeTicket(tenantId: string, ticket: string): Promise<{ revoked: boolean }>
-  /** Hub gap sqlite: fetch, check and put the source's database in place of the app's. */
-  pullDatabase?(tenantId: string, req: { source: string; ticket: string }): Promise<DatabaseCopied>
-  /** Hub gap sqlite: the app's database checksum now. */
-  databaseSum?(tenantId: string): Promise<{ sha256: string; bytes: number }>
+  /** Hub gap sqlite: START fetching, checking and putting the source's database in place (a job). */
+  pullDatabase?(
+    tenantId: string,
+    req: { source: string; ticket: string; move_id?: number }
+  ): Promise<DatabaseJobStatus>
+  /** Hub gap sqlite: START the app's database checksum (a job). */
+  databaseSum?(tenantId: string): Promise<DatabaseJobStatus>
+  /** Hub gap sqlite: a database job now; null = the deployment does not know it. */
+  databaseJob?(tenantId: string, id: string): Promise<DatabaseJobStatus | null>
   /** Hub gap sqlite: a rollback before release throws the app's copy away. */
   discardDatabase?(tenantId: string, sha256: string | null): Promise<{ discarded: boolean }>
 }
@@ -633,35 +638,46 @@ export function deploymentClient(
     },
 
     async pullDatabase(tenantId, req) {
-      const a = await call(
-        `${tenantPath(tenantId)}/database/pull`,
-        { method: 'POST', body: { source: req.source, ticket: req.ticket } },
-        { timeoutMs: DATABASE_COPY_TIMEOUT_MS }
-      )
+      const a = await call(`${tenantPath(tenantId)}/database/pull`, {
+        method: 'POST',
+        body: {
+          source: req.source,
+          ticket: req.ticket,
+          ...(req.move_id ? { move_id: req.move_id } : {})
+        }
+      })
       if (!ok(a)) throw refusalOf(a, transferRefusal)
-      const c = parseDatabaseCopied(a.body)
-      if (!c) throw new DeploymentLinkError('LINK_BAD_ANSWER', a.status)
-      return c
+      const j = parseDatabaseJob(a.body)
+      if (!j) throw new DeploymentLinkError('LINK_BAD_ANSWER', a.status)
+      return j
     },
 
     async databaseSum(tenantId) {
-      const a = await call(
-        `${tenantPath(tenantId)}/database/sum`,
-        { method: 'GET' },
-        { timeoutMs: SLOW_CALL_TIMEOUT_MS * 4 }
-      )
+      const a = await call(`${tenantPath(tenantId)}/database/sum`, { method: 'POST', body: {} })
       if (!ok(a)) throw refusalOf(a, transferRefusal)
-      const b = a.body as { sha256?: unknown; bytes?: unknown } | null
-      if (!isObj(b) || !isStr(b.sha256) || !/^[0-9a-f]{64}$/.test(b.sha256) || !isNum(b.bytes))
-        throw new DeploymentLinkError('LINK_BAD_ANSWER', a.status)
-      return { sha256: b.sha256, bytes: b.bytes }
+      const j = parseDatabaseJob(a.body)
+      if (!j) throw new DeploymentLinkError('LINK_BAD_ANSWER', a.status)
+      return j
+    },
+
+    async databaseJob(tenantId, id) {
+      if (!/^[0-9a-f-]{36}$/.test(id)) throw new DeploymentLinkError('LINK_BAD_ANSWER', 0)
+      const a = await call(`${tenantPath(tenantId)}/database/jobs/${id}`, { method: 'GET' })
+      if (a.status === 404 && (a.body as { code?: unknown } | null)?.code === 'UNKNOWN_JOB')
+        return null
+      if (!ok(a)) throw refusalOf(a, transferRefusal)
+      const j = parseDatabaseJob(a.body)
+      if (!j) throw new DeploymentLinkError('LINK_BAD_ANSWER', a.status)
+      return j
     },
 
     async discardDatabase(tenantId, sha256) {
-      const a = await call(`${tenantPath(tenantId)}/database`, {
-        method: 'DELETE',
-        body: { sha256 }
-      })
+      // L3: the target re-hashes the file before it removes it — a big file takes a while.
+      const a = await call(
+        `${tenantPath(tenantId)}/database`,
+        { method: 'DELETE', body: { sha256 } },
+        { timeoutMs: DATABASE_SUM_TIMEOUT_MS }
+      )
       if (!ok(a)) throw refusalOf(a, transferRefusal)
       return { discarded: (a.body as { discarded?: unknown } | null)?.discarded === true }
     },

@@ -200,7 +200,8 @@ export function sqliteMoveRefusal(
         : {
             uploads_network: t.uploads_network,
             volume_driver: t.volume_driver,
-            multi_node: t.multi_node
+            multi_node: t.multi_node,
+            nodes_unknown: t.nodes_unknown === true
           }
     )
     if (no) return { code: no.code, text: no.message }

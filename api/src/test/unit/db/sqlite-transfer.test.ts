@@ -20,6 +20,7 @@ import {
   fileSum,
   installSqliteFile,
   receiveSqliteFile,
+  reserveRoomFor,
   snapshotSqliteDatabase,
   sqliteDatabaseSum,
   sqliteFileFrozen,
@@ -344,10 +345,81 @@ describe('review fixes', () => {
         sha256: snap.sha256,
         bytes: snap.bytes,
         move_id: 11,
-        incoming: `${target}.incoming-gone`
+        incoming: `${target}.incoming-00000000-0000-4000-8000-000000000000`
       })
     )
     expect(adoptStagedSqliteFile(target)).toBe('adopted')
     expect(await adoptedSqliteFile(target)).toMatchObject({ sha256: snap.sha256, move_id: 11 })
+  })
+})
+
+describe('review 4', () => {
+  it('L6: a check that does not end in time is KILLED (SQLITE_CHECK_TIMEOUT)', async () => {
+    const was = sqliteTransferDeps.checkScript
+    sqliteTransferDeps.checkScript = 'setInterval(() => {}, 1000)'
+    try {
+      const at = Date.now()
+      await expect(verifySqliteFile(join(dir, 'any.sqlite'), 300)).rejects.toMatchObject({
+        code: 'SQLITE_CHECK_TIMEOUT'
+      })
+      expect(Date.now() - at).toBeLessThan(5_000)
+    } finally {
+      sqliteTransferDeps.checkScript = was
+    }
+  })
+
+  it('L6: a checker that crashes or answers nothing is SQLITE_CHECK_FAILED', async () => {
+    const was = sqliteTransferDeps.checkScript
+    try {
+      for (const script of [
+        'process.exit(3)',
+        "throw new Error('boom')",
+        "process.stdout.write('x')"
+      ]) {
+        sqliteTransferDeps.checkScript = script
+        await expect(verifySqliteFile(join(dir, 'any.sqlite'), 10_000)).rejects.toMatchObject({
+          code: 'SQLITE_CHECK_FAILED'
+        })
+      }
+    } finally {
+      sqliteTransferDeps.checkScript = was
+    }
+  })
+
+  it('L4: copies in flight reserve their bytes: a second copy on the same volume counts the first', async () => {
+    const was = sqliteTransferDeps.freeBytes
+    sqliteTransferDeps.freeBytes = async () => 1_000_000_000
+    try {
+      const a = join(dir, 'res-a.sqlite')
+      const b = join(dir, 'res-b.sqlite')
+      const first = await reserveRoomFor(a, 600_000_000)
+      await expect(reserveRoomFor(b, 300_000_000)).rejects.toMatchObject({
+        code: 'SQLITE_NO_SPACE'
+      })
+      first()
+      ;(await reserveRoomFor(b, 300_000_000))()
+    } finally {
+      sqliteTransferDeps.freeBytes = was
+    }
+  })
+
+  it('L5: a staged marker naming any other path is refused, and that path is never touched', async () => {
+    const target = join(dir, 'l5-target.sqlite')
+    const victim = join(dir, 'l5-victim.sqlite')
+    writeFileSync(target, 'db')
+    writeFileSync(victim, 'keep me')
+    for (const incoming of [victim, `${target}.incoming`, join(tmpdir(), 'l5.incoming-x')]) {
+      writeFileSync(
+        `${target}.incoming.json`,
+        JSON.stringify({ sha256: 'a'.repeat(64), bytes: 7, move_id: 1, incoming })
+      )
+      expect(adoptStagedSqliteFile(target)).toBe('refused')
+      expect(readFileSync(victim, 'utf8')).toBe('keep me')
+      expect(readFileSync(target, 'utf8')).toBe('db')
+      expect(existsSync(`${target}.incoming.json`)).toBe(false)
+    }
+    await expect(
+      stageSqliteFile(target, { sha256: 'a'.repeat(64), bytes: 7, move_id: 1, incoming: victim })
+    ).rejects.toMatchObject({ code: 'SQLITE_NOT_SQLITE' })
   })
 })

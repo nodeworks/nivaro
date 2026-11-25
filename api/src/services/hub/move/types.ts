@@ -241,6 +241,8 @@ export interface MoveTargetFacts {
   uploads_network?: boolean | null
   /** The target agent's volume driver; null/absent = not said. */
   volume_driver?: string | null
+  /** Hub gap sqlite (review 4, L1): the agent answered but not its swarm's node count. */
+  nodes_unknown?: boolean
   /** A Docker dedicated target: the ENCRYPTION_KEY fingerprint its stack settings hold. */
   stack_key_fp: string | null
   /** A Docker dedicated target: the size its stack settings ask for (hub gap sqlite). */

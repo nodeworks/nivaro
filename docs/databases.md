@@ -293,13 +293,20 @@ size small: one `all` service; a process with `NIVARO_ROLE` set drops SQLite app
   stored-files key space (`apps/<tenant id>/`), and refuses a name, a folder or a file link that
   would leave that folder (`db/sqlite-tenant.ts`, checked again when the pool opens).
 - A missing file is never made into a fresh install. Only a database the Hub records as New sends
-  `create: true`, and the deployment makes it once (a `.created` marker in the folder); after its
-  first placement the record is marked existing. Otherwise the pool refuses to open
-  (`SQLITE_FILE_MISSING`, 503 to requests, the app's schema state fails). A Hub Docker stack gets
-  `DB_SQLITE_MISSING=refuse` (boot refuses a missing `DB_DATABASE`), except the first deploy of a
-  move's new home (`create`: it starts empty in maintenance until `db_copy` replaces it).
+  `create: true`, and the deployment makes it once — by the pool's first connection, then a
+  `.created` marker naming the Hub record (`db.record` on the list) is written; after its first
+  placement the record is marked existing. Otherwise the pool refuses to open
+  (`SQLITE_FILE_MISSING`, 503 to requests, the app's schema state fails). Every connection the
+  pool opens is judged (`guardSqliteConnections`, `db/sqlite.ts`), not only the first: knex
+  reopens idle connections without `fileMustExist`, and a file removed while the app runs must not
+  be made again. A placed app whose file holds no table is refused too; a file another record
+  made is `SQLITE_FILE_STALE`. A Hub Docker stack gets
+  `DB_SQLITE_MISSING=refuse` (boot and every later connection refuse a missing or empty
+  `DB_DATABASE`), except the first deploy of a move's new home (`create`: it starts empty in
+  maintenance until `db_copy` replaces it).
 - Never on network storage: SQLite moves and placements are refused when the agent reports an NFS
-  uploads volume, another volume driver, nothing at all, or several swarm nodes with local volumes.
+  uploads volume, another volume driver, nothing at all, several swarm nodes with local volumes, or
+  no node count.
 - Each app gets its own knex (better-sqlite3 with the `db/sqlite.ts` patches): WAL, a few
   readers, migrations without knex's per-migration transaction, and the `COLLATE NOCASE` pass
   after its migrations (`runMigrationsOn` runs it for every SQLite database). Writes take turns
@@ -313,10 +320,13 @@ size small: one `all` service; a process with `NIVARO_ROLE` set drops SQLite app
   the frozen source freezes the file (later writes get `SQLITE_FROZEN`), checkpoints
   (`wal_checkpoint(TRUNCATE)`, no busy handler blocking the event loop) and snapshots it; the
   target receives it with its size and sha256 into `<file>.incoming-<id>`, checks it read-only in
-  a worker thread (`integrity_check`, the migrations ledger) and puts it in place (a shared app:
-  pool closed and reopened; a Docker app: staged, installed at the next boot after taking the file
-  lock). Free space is checked on both sides. Automatic routing only, onto a small shared
-  deployment (0.3.215+) or a small Docker stack.
+  a child process killed at the copy's deadline (`integrity_check`, the migrations ledger) and puts
+  it in place (a shared app: pool closed and reopened; a Docker app: staged, installed at the next
+  boot after taking the file lock). The pull and the release checksum are start-then-poll jobs
+  (`services/hub-transfer/database-jobs.ts`): the target ends a pull at 25 minutes and removes its
+  copy (`SQLITE_COPY_DEADLINE`), the Hub waits 30. Copies in flight reserve their bytes per volume
+  before the free-space check. Automatic routing only, onto a small shared deployment (0.3.215+)
+  or a small Docker stack.
 
 ## SQL Server-only features
 

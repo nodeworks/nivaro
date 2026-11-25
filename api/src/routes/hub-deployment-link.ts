@@ -367,16 +367,22 @@ export async function hubDeploymentLinkRoutes(app: FastifyInstance): Promise<voi
   })
 
   // ─── Hub gap sqlite (0.3.215): a SQLite app's database file in a move ──────────────────────
-  // POST   /apps/:id/database/pull {source, ticket} → {sha256, bytes, verified}: fetched with the
-  //        ticket, checked (checksum, integrity_check, ledger), put in place of the app's file.
-  // GET    /apps/:id/database/sum → {sha256, bytes} (a source, before release)
-  // DELETE /apps/:id/database → {discarded}: a rollback before release throws the copy away.
+  // Review 4 (N2/N3): the copy and the checksum are start-then-poll jobs
+  // (services/hub-transfer/database-jobs.ts) — they can take longer than one call may stay open.
+  // POST   /apps/:id/database/pull {source, ticket, move_id?} → 202 {job}: fetched with the
+  //        ticket, checked (checksum, integrity_check in a child process, ledger), put in place of
+  //        the app's file; a pull that passes its own deadline removes its copy and fails.
+  // POST   /apps/:id/database/sum → 202 {job} (a source, before release): result {sha256, bytes}
+  // GET    /apps/:id/database/jobs/:job → {job}: state running | done | failed, result, code
+  // DELETE /apps/:id/database {sha256} → {discarded}: a rollback before release throws the copy
+  //        away (only the copy whose checksum it names; under the file's lock).
   const databaseRefusal = (reply: FastifyReply, err: unknown, what: string) => {
     const e = err as { code?: unknown; statusCode?: unknown; message?: unknown; name?: unknown }
     if (
       e?.name === 'DatabaseTransferError' ||
       e?.name === 'SqliteTenantError' ||
-      e?.name === 'SqliteTransferError'
+      e?.name === 'SqliteTransferError' ||
+      e?.name === 'DatabaseJobError'
     )
       return refuse(
         reply,
@@ -394,32 +400,61 @@ export async function hubDeploymentLinkRoutes(app: FastifyInstance): Promise<voi
     const t = await tenantById(registry, req.params.id)
     if (!t) return refuse(reply, 404, 'This deployment does not serve that app', 'UNKNOWN_APP')
     const { pullDatabaseShared } = await import('../services/hub-transfer/database.js')
-    const b = (req.body ?? {}) as { source?: unknown; ticket?: unknown }
+    const { startDatabaseJob } = await import('../services/hub-transfer/database-jobs.js')
+    const b = (req.body ?? {}) as { source?: unknown; ticket?: unknown; move_id?: unknown }
+    const moveId =
+      typeof b.move_id === 'number' && Number.isSafeInteger(b.move_id) && b.move_id > 0
+        ? b.move_id
+        : null
     try {
-      return reply.send(
-        await withTenant(
-          t,
-          () => pullDatabaseShared(t, { source: b.source as string, ticket: b.ticket as string }),
-          t.origin
-        )
+      const job = await withTenant(
+        t,
+        async () =>
+          startDatabaseJob(t.id, 'pull', moveId ? `move:${moveId}` : `pull:${Date.now()}`, () =>
+            pullDatabaseShared(t, { source: b.source as string, ticket: b.ticket as string })
+          ),
+        t.origin
       )
+      return reply.code(202).send({ job })
     } catch (err) {
       return databaseRefusal(reply, err, 'the database copy failed')
     }
   })
 
-  app.get<{ Params: { id: string } }>('/apps/:id/database/sum', async (req, reply) => {
+  app.post<{ Params: { id: string } }>('/apps/:id/database/sum', async (req, reply) => {
     const registry = registryOr503(reply)
     if (!registry) return reply
     const t = await tenantById(registry, req.params.id)
     if (!t) return refuse(reply, 404, 'This deployment does not serve that app', 'UNKNOWN_APP')
     const { databaseSum } = await import('../services/hub-transfer/database.js')
+    const { startDatabaseJob } = await import('../services/hub-transfer/database-jobs.js')
     try {
-      return reply.send(await withTenant(t, () => databaseSum(t), t.origin))
+      const job = await withTenant(
+        t,
+        async () => startDatabaseJob(t.id, 'sum', 'sum', () => databaseSum(t)),
+        t.origin
+      )
+      return reply.code(202).send({ job })
     } catch (err) {
       return databaseRefusal(reply, err, 'the database checksum could not be read')
     }
   })
+
+  app.get<{ Params: { id: string; job: string } }>(
+    '/apps/:id/database/jobs/:job',
+    async (req, reply) => {
+      const registry = registryOr503(reply)
+      if (!registry) return reply
+      const t = await tenantById(registry, req.params.id)
+      if (!t) return refuse(reply, 404, 'This deployment does not serve that app', 'UNKNOWN_APP')
+      const { readDatabaseJob, JOB_ID_RE } = await import(
+        '../services/hub-transfer/database-jobs.js'
+      )
+      const job = JOB_ID_RE.test(req.params.job) ? readDatabaseJob(t.id, req.params.job) : null
+      if (!job) return refuse(reply, 404, 'No such database job here', 'UNKNOWN_JOB')
+      return reply.send({ job })
+    }
+  )
 
   app.delete<{ Params: { id: string } }>('/apps/:id/database', async (req, reply) => {
     const registry = registryOr503(reply)

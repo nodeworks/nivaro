@@ -24,6 +24,7 @@ import { pgSessionUtc, pgUtc } from './pg-utc.js'
 import { inBackgroundPool } from './pool-context.js'
 import {
   claimSqliteFile,
+  guardSqliteConnections,
   holdSqliteFile,
   SQLITE_KNEX_CLIENT,
   sqliteAfterCreate,
@@ -124,6 +125,33 @@ if (config.DB_CLIENT === 'sqlite') {
     }
   }
   sqliteCompat()
+}
+
+/**
+ * Review 4 N1: on a Hub stack (DB_SQLITE_MISSING set) every connection the pool opens is judged,
+ * not only the boot: `refuse` — a file gone while the app runs is never made again, and a file
+ * with no table is never migrated as a fresh install; `create` — a move's new home may make the
+ * file once (its first connection). Unset (a plain self-hosted SQLite app): SQLite's own rules.
+ */
+function guardDedicatedSqlite(k: { client: unknown }): void {
+  if (config.DB_CLIENT !== 'sqlite') return
+  const mode = (process.env.DB_SQLITE_MISSING ?? '').trim()
+  if (mode !== 'refuse' && mode !== 'create') return
+  const file = config.DB_DATABASE
+  if (!file || file === ':memory:' || /^file::memory:/i.test(file)) return
+  guardSqliteConnections(k, file, {
+    mayCreate: mode === 'create' && !existsSync(file),
+    requireTables: mode === 'refuse',
+    refuse: (why) =>
+      Object.assign(
+        new Error(
+          why === 'empty'
+            ? 'SQLite: the database file has no tables and this Hub stack never sets one up as a fresh install (DB_SQLITE_MISSING=refuse).'
+            : 'SQLite: the database file is missing (DB_DATABASE) and this Hub stack never makes a new one (DB_SQLITE_MISSING=refuse).'
+        ),
+        { code: 'SQLITE_FILE_MISSING', statusCode: 503 }
+      )
+  })
 }
 
 /** True when running against MSSQL — lets services branch on dialect (recursive CTEs etc.). */
@@ -289,13 +317,15 @@ export const _backgroundDb: ReturnType<typeof knex> | null =
 let probeKnex: ReturnType<typeof knex> | null = null
 export function probeDb(): ReturnType<typeof knex> | null {
   if (multiTenant) return null
-  probeKnex ??= knex({
+  if (probeKnex) return probeKnex
+  probeKnex = knex({
     client: config.DB_CLIENT,
     ...mysqlFlavorConfig(config.DB_MARIADB),
     connection: buildConnection(config.DB_HOST, writePort),
     pool: { min: 0, max: 1, acquireTimeoutMillis: 10_000, ...sessionUtcPool() },
     ...sqliteKnex(1)
   })
+  guardDedicatedSqlite(probeKnex)
   return probeKnex
 }
 // Built on first use. The chaos seam patches the driver prototype, so database
@@ -307,6 +337,8 @@ export function probeDb(): ReturnType<typeof knex> | null {
 function activeStaticDb(): typeof _staticDb {
   return _backgroundDb && inBackgroundPool() ? _backgroundDb : _staticDb
 }
+
+if (!multiTenant) guardDedicatedSqlite(_staticDb)
 
 // #1773 — the database fault point (chaos drills); first, so cached config reads skip it.
 if (!multiTenant) attachChaosSeam(_staticDb)

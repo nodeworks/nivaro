@@ -19,13 +19,21 @@
 //  - Each app gets its own knex (better-sqlite3, the db/sqlite.ts patches): WAL, a few readers,
 //    one writer at a time per FILE (sqliteWriteLockFor), migrations without knex's per-migration
 //    transaction. Closing it (a move replacing the file) releases the file lock.
-import { existsSync, lstatSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync
+} from 'node:fs'
 import { join, resolve, sep } from 'node:path'
 import knex, { type Knex } from 'knex'
 import { isNivaroCloud } from '../services/deployment-mode.js'
 import {
   claimSqliteFile,
   forgetSqliteWriteLock,
+  guardSqliteConnections,
   holdSqliteFile,
   SQLITE_KNEX_CLIENT,
   sqliteAfterCreate,
@@ -58,13 +66,24 @@ export const SQLITE_APP_POOL_MAX = 3
 
 /** Refusals a caller can tell apart (never a path in the message). */
 export class SqliteTenantError extends Error {
-  readonly code: 'SQLITE_BAD_PATH' | 'SQLITE_FILE_BUSY' | 'SQLITE_NOT_HERE' | 'SQLITE_FILE_MISSING'
+  readonly code:
+    | 'SQLITE_BAD_PATH'
+    | 'SQLITE_FILE_BUSY'
+    | 'SQLITE_NOT_HERE'
+    | 'SQLITE_FILE_MISSING'
+    | 'SQLITE_FILE_STALE'
+  /** What a request that meets it answers: the app is unavailable here, not the request wrong. */
+  readonly statusCode: number
   constructor(code: SqliteTenantError['code'], message: string) {
     super(message)
     this.name = 'SqliteTenantError'
     this.code = code
+    this.statusCode = code === 'SQLITE_BAD_PATH' ? 409 : 503
   }
 }
+
+const MISSING_TEXT =
+  "This app's database file is missing on this deployment; it is not made again. Restore the file (or move the app here again) before it serves."
 
 /**
  * Why this process may not serve a SQLite app, or null. Nivaro Cloud never does; a process of a
@@ -92,6 +111,36 @@ export function sqliteAppsRoot(env: NodeJS.ProcessEnv = process.env): string {
  * there (ruling H2): a file that goes missing after that is never made again.
  */
 export const SQLITE_CREATED_MARKER = '.created'
+
+/** What the `.created` marker says: the Hub database record the file belongs to (L7). */
+interface CreatedMarker {
+  record?: number
+  at?: string
+}
+
+function readCreatedMarker(dir: string): CreatedMarker | null {
+  try {
+    const m = JSON.parse(readFileSync(join(dir, SQLITE_CREATED_MARKER), 'utf8')) as unknown
+    return m && typeof m === 'object' ? (m as CreatedMarker) : {}
+  } catch {
+    return existsSync(join(dir, SQLITE_CREATED_MARKER)) ? {} : null
+  }
+}
+
+/**
+ * Write the `.created` marker beside `path`: the database there belongs to Hub record `record`
+ * (L7). Written once the file exists — by the first connection of a new database (L2), or by a
+ * move's install of its copy.
+ */
+export function writeSqliteCreatedMarker(path: string, record: number | null | undefined): void {
+  const body: CreatedMarker = {
+    ...(typeof record === 'number' ? { record } : {}),
+    at: new Date().toISOString()
+  }
+  writeFileSync(join(resolve(path, '..'), SQLITE_CREATED_MARKER), JSON.stringify(body), {
+    mode: 0o600
+  })
+}
 
 /**
  * The database file of tenant `tenantId` named `file`: `<root>/<tenantId>/<file>`. Throws
@@ -185,7 +234,7 @@ export function openSqliteTenantKnex(
   path: string,
   poolMax: number = SQLITE_APP_POOL_MAX,
   root: string = sqliteAppsRoot(),
-  opts: { create?: boolean } = {}
+  opts: { create?: boolean; record?: number | null } = {}
 ): Knex {
   const problem = sqliteTenantProblem()
   if (problem) throw new SqliteTenantError('SQLITE_NOT_HERE', `${problem}.`)
@@ -199,13 +248,25 @@ export function openSqliteTenantKnex(
   // Ruling H2: a missing file is never silently made into a fresh, writable install. Only a
   // database the Hub placed as NEW (`create`) is made, once, with a marker in its folder; a file
   // missing after that (another node, a volume not mounted, a folder cleaned) is refused.
-  const marker = join(resolve(path, '..'), SQLITE_CREATED_MARKER)
-  const makeNew = !existsSync(path)
-  if (makeNew && (!opts.create || existsSync(marker)))
+  const dir = resolve(path, '..')
+  const marker = readCreatedMarker(dir)
+  const exists = existsSync(path)
+  const record = typeof opts.record === 'number' ? opts.record : null
+  // L7: the folder is the tenant's, not the record's. A file another Hub record made (an older
+  // stay of this environment here) is never opened as this record's database, and a NEW record
+  // never takes a file it did not make.
+  if (
+    record !== null &&
+    exists &&
+    ((typeof marker?.record === 'number' && marker.record !== record) || (opts.create && !marker))
+  )
     throw new SqliteTenantError(
-      'SQLITE_FILE_MISSING',
-      "This app's database file is missing on this deployment; it is not made again. Restore the file (or move the app here again) before it serves."
+      'SQLITE_FILE_STALE',
+      "This app's folder holds a database file from an earlier stay of the app on this deployment; it is not opened as this database. Remove it (or move the app here) before it serves."
     )
+  const makeNew = !exists
+  if (makeNew && (!opts.create || marker))
+    throw new SqliteTenantError('SQLITE_FILE_MISSING', MISSING_TEXT)
   if (!heldFiles.has(path)) {
     const taken = claimSqliteFile(path)
     if (taken)
@@ -216,12 +277,8 @@ export function openSqliteTenantKnex(
     heldFiles.set(path, holdSqliteFile(path))
   }
   sweepSqliteLeftovers(path)
-  if (makeNew) {
-    // The file itself is made by the first connection; the marker says it was, once.
-    writeFileSync(marker, JSON.stringify({ at: new Date().toISOString() }), { mode: 0o600 })
-  }
   sqliteCompat()
-  return knex({
+  const k = knex({
     client: SQLITE_KNEX_CLIENT,
     useNullAsDefault: true,
     connection: { filename: path },
@@ -234,6 +291,23 @@ export function openSqliteTenantKnex(
     // point 5): this app's migrations run without knex's per-migration transaction.
     migrations: { disableTransactions: true }
   })
+  // N1: every connection, not only this first open, is judged — knex reopens connections after an
+  // idle reap without `fileMustExist`. The file is made at most once, by this pool's first
+  // connection of a NEW database; the marker is written only once it exists (L2). A database the
+  // Hub placed before (not new) must hold tables: an empty one is refused, never migrated.
+  guardSqliteConnections(k, path, {
+    mayCreate: makeNew && opts.create === true,
+    requireTables: opts.create !== true,
+    onCreated: () => writeSqliteCreatedMarker(path, record),
+    refuse: (why) =>
+      new SqliteTenantError(
+        'SQLITE_FILE_MISSING',
+        why === 'empty'
+          ? "This app's database file on this deployment is empty; it is not set up as a new install. Restore the file (or move the app here again) before it serves."
+          : MISSING_TEXT
+      )
+  })
+  return k
 }
 
 /** Let go of an app's database file: its lock file and write lock (the knex is destroyed first). */

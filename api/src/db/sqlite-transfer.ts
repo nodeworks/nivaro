@@ -16,15 +16,20 @@
 //  - receiveSqliteFile: the streamed bytes go to `<file>.incoming-<id>` (one name per pull),
 //    counted and hashed; refused past the size cap, without room (SQLITE_NO_SPACE), on a short or
 //    long body, or a checksum that is not the source's.
-//  - verifySqliteFile: opened READ-ONLY in a WORKER THREAD (never on the event loop: a whole
-//    shared deployment would stall), bounded in time: `PRAGMA integrity_check` must answer `ok`
-//    and the nivaro_migrations ledger must hold rows.
+//  - verifySqliteFile: opened READ-ONLY in a CHILD PROCESS (never on the event loop: a whole
+//    shared deployment would stall), killed at its time limit (N3: integrity_check is one native
+//    call a worker thread cannot be stopped in): `PRAGMA integrity_check` must answer `ok` and the
+//    nivaro_migrations ledger must hold rows.
+//  - Room: a copy reserves its bytes on the volume while it is made (L4), so two copies of
+//    different apps never both pass against the same free space.
 //  - installSqliteFile: rename over the database file (same folder, atomic) and remove its old
 //    -wal / -shm; the caller has closed every connection first.
 //  - A dedicated app cannot close its own database under itself: it stages the checked file
 //    (stageSqliteFile) and restarts; at boot (holding the file's lock) adoptStagedSqliteFile
-//    re-hashes it in chunks — the bytes the worker checked — and installs it before anything
+//    re-hashes it in chunks — the bytes the check passed — and installs it before anything
 //    opens the database, and leaves `<file>.adopted.json` for the Hub to read.
+
+import { spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import {
   closeSync,
@@ -45,7 +50,6 @@ import { createRequire } from 'node:module'
 import { basename, dirname, join } from 'node:path'
 import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
-import { Worker } from 'node:worker_threads'
 import type { Knex } from 'knex'
 import { sqliteWriteLockFor, sqliteWriteLockOfFile, thawSqliteWriteLock } from './sqlite.js'
 
@@ -60,8 +64,15 @@ export const SQLITE_SPACE_MARGIN_BYTES = 256 * 1024 * 1024
 /** How long the checkpoint may wait for a long reader (writes are refused meanwhile). */
 export const SQLITE_CHECKPOINT_WAIT_MS = 5 * 60_000
 
-/** How long the read-only check of a copy may take in its worker. */
-export const SQLITE_CHECK_TIMEOUT_MS = 30 * 60_000
+/**
+ * How long a target's whole pull (download + check) may take (N3). Shorter than the Hub's own
+ * wait for it (DATABASE_COPY_TIMEOUT_MS, 30 min): the target always gives up first, removes its
+ * incoming copy and says why, so the Hub never leaves a copy that finishes after it stopped.
+ */
+export const SQLITE_PULL_DEADLINE_MS = 25 * 60_000
+
+/** How long the read-only check of a copy may take in its child process (at most the pull's). */
+export const SQLITE_CHECK_TIMEOUT_MS = SQLITE_PULL_DEADLINE_MS
 
 /** Snapshot / incoming files older than this are a crash's leftovers (sweepSqliteLeftovers). */
 const LEFTOVER_AGE_MS = 60 * 60_000
@@ -78,6 +89,8 @@ export class SqliteTransferError extends Error {
     | 'SQLITE_NO_LEDGER'
     | 'SQLITE_NOT_SQLITE'
     | 'SQLITE_CHECK_TIMEOUT'
+    | 'SQLITE_CHECK_FAILED'
+    | 'SQLITE_COPY_DEADLINE'
     | 'DATABASE_COPY_RUNNING'
   constructor(code: SqliteTransferError['code'], message: string) {
     super(message)
@@ -118,6 +131,8 @@ export const sqliteTransferDeps = {
   checkpointWaitMs: SQLITE_CHECKPOINT_WAIT_MS,
   checkpointPollMs: 250,
   checkTimeoutMs: SQLITE_CHECK_TIMEOUT_MS,
+  /** The check's program (tests replace it with one that hangs or crashes). */
+  checkScript: '' as string,
   /** Free bytes on the volume holding `dir`. */
   async freeBytes(dir: string): Promise<number> {
     const s = await statfs(dir)
@@ -153,14 +168,44 @@ async function checkpoint(conn: RawConn): Promise<void> {
   }
 }
 
-/** Refuse a copy of `bytes` into the folder of `file` without room for it (and a margin). */
-export async function assertRoomFor(file: string, bytes: number): Promise<void> {
-  const free = await sqliteTransferDeps.freeBytes(dirname(file))
-  if (free < bytes + SQLITE_SPACE_MARGIN_BYTES)
+/** Bytes copies in flight in this process have reserved, per volume (device id) — L4. */
+const reservedBytes = new Map<number, number>()
+
+/**
+ * Reserve room for a copy of `bytes` in the folder of `file`: refused (SQLITE_NO_SPACE) unless the
+ * volume's free space, less what other copies in flight here reserved, holds it and a margin.
+ * Answers the release (call it once the copy is on disk or gone).
+ */
+export async function reserveRoomFor(file: string, bytes: number): Promise<() => void> {
+  const dir = dirname(file)
+  let dev = 0
+  try {
+    dev = statSync(dir).dev
+  } catch {
+    // the folder is made by the caller; an unreadable one is judged on free space alone
+  }
+  const free = await sqliteTransferDeps.freeBytes(dir)
+  // Read after the await: a copy that reserved meanwhile counts.
+  const held = reservedBytes.get(dev) ?? 0
+  if (free - held < bytes + SQLITE_SPACE_MARGIN_BYTES)
     throw new SqliteTransferError(
       'SQLITE_NO_SPACE',
-      `The volume has ${free} bytes free; a copy of ${bytes} bytes needs ${bytes + SQLITE_SPACE_MARGIN_BYTES} (its size and a margin).`
+      `The volume has ${free} bytes free${held ? ` (${held} of them held for other copies in progress)` : ''}; a copy of ${bytes} bytes needs ${bytes + SQLITE_SPACE_MARGIN_BYTES} (its size and a margin).`
     )
+  reservedBytes.set(dev, held + bytes)
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    const left = (reservedBytes.get(dev) ?? 0) - bytes
+    if (left > 0) reservedBytes.set(dev, left)
+    else reservedBytes.delete(dev)
+  }
+}
+
+/** Refuse a copy of `bytes` into the folder of `file` without room for it (nothing reserved). */
+export async function assertRoomFor(file: string, bytes: number): Promise<void> {
+  ;(await reserveRoomFor(file, bytes))()
 }
 
 /** sha256 (hex) and size of a file, streamed. */
@@ -237,14 +282,19 @@ export async function snapshotSqliteDatabase(
     sweepSqliteLeftovers(file)
     const size = (await stat(file)).size
     if (size > SQLITE_COPY_MAX_BYTES) throw tooLarge(size)
-    await assertRoomFor(file, size)
+    const unreserve = await reserveRoomFor(file, size)
     const snap = `${file}.snapshot-${randomUUID()}`
-    await underWriteLock(k, async (conn) => {
-      // Frozen first: the checkpoint may then wait for a long reader with no write coming in.
-      sqliteWriteLockFor(conn).freeze(reason)
-      await checkpoint(conn)
-      await copyFile(file, snap)
-    })
+    try {
+      await underWriteLock(k, async (conn) => {
+        // Frozen first: the checkpoint may then wait for a long reader with no write coming in.
+        sqliteWriteLockFor(conn).freeze(reason)
+        await checkpoint(conn)
+        await copyFile(file, snap)
+      })
+    } finally {
+      // The snapshot is on disk now (the volume's free space counts it) or gone.
+      unreserve()
+    }
     try {
       const sum = await fileSum(snap)
       if (sum.bytes > SQLITE_COPY_MAX_BYTES) throw tooLarge(sum.bytes)
@@ -300,7 +350,20 @@ export async function receiveSqliteFile(
   max: number = SQLITE_COPY_MAX_BYTES
 ): Promise<{ incoming: string; sha256: string; bytes: number }> {
   if (expected.bytes > max) throw tooLarge(expected.bytes)
-  await assertRoomFor(file, expected.bytes)
+  const unreserve = await reserveRoomFor(file, expected.bytes)
+  try {
+    return await receiveInto(body, file, expected, max)
+  } finally {
+    unreserve()
+  }
+}
+
+async function receiveInto(
+  body: Readable | ReadableStream<Uint8Array>,
+  file: string,
+  expected: { sha256: string; bytes: number },
+  max: number
+): Promise<{ incoming: string; sha256: string; bytes: number }> {
   const incoming = `${file}.incoming-${randomUUID()}`
   const h = createHash('sha256')
   let bytes = 0
@@ -361,16 +424,17 @@ export interface SqliteVerified {
   latest: string | null
 }
 
-// The check itself, run in a worker thread: its own read-only connection, never the app's pool.
-const VERIFY_WORKER = `
-const { parentPort, workerData } = require('node:worker_threads')
-const Database = require(workerData.driver)
+// The check itself, run in a child process: its own read-only connection, never the app's pool.
+// argv: [file, driver]. Prints one JSON line.
+const VERIFY_CHILD = `
+const Database = require(process.argv[2])
+const say = (m) => process.stdout.write(JSON.stringify(m) + '\\n')
 ;(() => {
 let conn
 try {
-  conn = new Database(workerData.file, { readonly: true, fileMustExist: true })
+  conn = new Database(process.argv[1], { readonly: true, fileMustExist: true })
 } catch {
-  parentPort.postMessage({ code: 'SQLITE_NOT_SQLITE' })
+  say({ code: 'SQLITE_NOT_SQLITE' })
   return
 }
 try {
@@ -378,26 +442,26 @@ try {
   try {
     integrity = conn.pragma('integrity_check', { simple: true })
   } catch {
-    parentPort.postMessage({ code: 'SQLITE_NOT_SQLITE' })
+    say({ code: 'SQLITE_NOT_SQLITE' })
     return
   }
   if (integrity !== 'ok') {
-    parentPort.postMessage({ code: 'SQLITE_NOT_INTACT' })
+    say({ code: 'SQLITE_NOT_INTACT' })
     return
   }
   const table = conn
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'nivaro_migrations'")
     .get()
   if (!table) {
-    parentPort.postMessage({ code: 'SQLITE_NO_LEDGER' })
+    say({ code: 'SQLITE_NO_LEDGER' })
     return
   }
   const row = conn.prepare('SELECT COUNT(*) AS n, MAX(name) AS latest FROM nivaro_migrations').get()
   if (!row || !row.n) {
-    parentPort.postMessage({ code: 'SQLITE_NO_LEDGER' })
+    say({ code: 'SQLITE_NO_LEDGER' })
     return
   }
-  parentPort.postMessage({ ok: true, migrations: Number(row.n), latest: row.latest ?? null })
+  say({ ok: true, migrations: Number(row.n), latest: row.latest ?? null })
 } finally {
   conn.close()
 }
@@ -407,30 +471,58 @@ try {
 const VERIFY_TEXT: Record<string, string> = {
   SQLITE_NOT_SQLITE: 'The copy is not a SQLite database.',
   SQLITE_NOT_INTACT: 'The copy failed its integrity check (PRAGMA integrity_check).',
-  SQLITE_NO_LEDGER: 'The copy holds no Nivaro install.'
+  SQLITE_NO_LEDGER: 'The copy holds no Nivaro install.',
+  SQLITE_CHECK_FAILED: 'The check of the copy stopped before it answered.'
 }
 
+/** Check processes running now (killed when this process ends, so none outlives it). */
+const checkers = new Set<import('node:child_process').ChildProcess>()
+let checkerExitHook = false
+
 /**
- * Open `file` READ-ONLY in a worker thread (nothing written, never the app's pool, never on the
+ * Open `file` READ-ONLY in a child process (nothing written, never the app's pool, never on the
  * event loop): `PRAGMA integrity_check` must answer exactly `ok`, and nivaro_migrations must hold
- * rows. Bounded by `timeoutMs` (SQLITE_CHECK_TIMEOUT; the worker is ended).
+ * rows. At `timeoutMs` the child is KILLED (SQLITE_CHECK_TIMEOUT) — the work stops, not just the
+ * wait; a child that dies or answers nothing is SQLITE_CHECK_FAILED.
  */
 export function verifySqliteFile(
   file: string,
   timeoutMs: number = sqliteTransferDeps.checkTimeoutMs
 ): Promise<SqliteVerified> {
   return new Promise<SqliteVerified>((resolve, reject) => {
-    const w = new Worker(VERIFY_WORKER, {
-      eval: true,
-      workerData: { file, driver: require.resolve('better-sqlite3') }
-    })
+    let child: import('node:child_process').ChildProcess
+    try {
+      child = spawn(
+        process.execPath,
+        [
+          '-e',
+          sqliteTransferDeps.checkScript || VERIFY_CHILD,
+          file,
+          require.resolve('better-sqlite3')
+        ],
+        // No inherited NODE_OPTIONS (loaders, inspectors): a plain node running one script.
+        { stdio: ['ignore', 'pipe', 'ignore'], env: {} }
+      )
+    } catch {
+      reject(new SqliteTransferError('SQLITE_CHECK_FAILED', VERIFY_TEXT.SQLITE_CHECK_FAILED))
+      return
+    }
+    checkers.add(child)
+    if (!checkerExitHook) {
+      checkerExitHook = true
+      process.once('exit', () => {
+        for (const c of checkers) c.kill('SIGKILL')
+      })
+    }
+    let out = ''
     let settled = false
     const done = (fn: () => void) => {
       if (settled) return
       settled = true
       clearTimeout(timer)
+      checkers.delete(child)
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
       fn()
-      void w.terminate().catch(() => {})
     }
     const timer = setTimeout(
       () =>
@@ -438,32 +530,40 @@ export function verifySqliteFile(
           reject(
             new SqliteTransferError(
               'SQLITE_CHECK_TIMEOUT',
-              `The integrity check of the copy did not end within ${Math.round(timeoutMs / 60_000)} minutes.`
+              `The integrity check of the copy did not end within ${Math.max(1, Math.round(timeoutMs / 60_000))} minutes; it was stopped.`
             )
           )
         ),
       timeoutMs
     )
     timer.unref?.()
-    w.once('message', (m: { ok?: boolean; code?: string; migrations?: number; latest?: string }) =>
+    child.stdout?.setEncoding('utf8')
+    child.stdout?.on('data', (d: string) => {
+      if (out.length < 4096) out += d
+    })
+    child.once('error', () =>
+      done(() =>
+        reject(new SqliteTransferError('SQLITE_CHECK_FAILED', VERIFY_TEXT.SQLITE_CHECK_FAILED))
+      )
+    )
+    child.once('close', () =>
       done(() => {
-        if (m.ok)
-          resolve({ integrity: 'ok', migrations: Number(m.migrations), latest: m.latest ?? null })
-        else {
-          const code = (m.code ?? 'SQLITE_NOT_SQLITE') as SqliteTransferError['code']
-          reject(new SqliteTransferError(code, VERIFY_TEXT[code] ?? VERIFY_TEXT.SQLITE_NOT_SQLITE))
+        let m: { ok?: boolean; code?: string; migrations?: number; latest?: string | null } | null =
+          null
+        try {
+          m = JSON.parse(out.trim().split('\n')[0] ?? '')
+        } catch {
+          m = null
         }
+        if (m?.ok) {
+          resolve({ integrity: 'ok', migrations: Number(m.migrations), latest: m.latest ?? null })
+          return
+        }
+        const code = (
+          m?.code && VERIFY_TEXT[m.code] ? m.code : 'SQLITE_CHECK_FAILED'
+        ) as SqliteTransferError['code']
+        reject(new SqliteTransferError(code, VERIFY_TEXT[code]))
       })
-    )
-    w.once('error', () =>
-      done(() =>
-        reject(new SqliteTransferError('SQLITE_NOT_SQLITE', VERIFY_TEXT.SQLITE_NOT_SQLITE))
-      )
-    )
-    w.once('exit', () =>
-      done(() =>
-        reject(new SqliteTransferError('SQLITE_NOT_SQLITE', VERIFY_TEXT.SQLITE_NOT_SQLITE))
-      )
     )
   })
 }
@@ -527,14 +627,33 @@ function isStagedIncoming(file: string, path: string): boolean {
   return readStaged(file)?.incoming === path
 }
 
+const UUID_RE = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+
+/** L5: a staged copy's path is `<file>.incoming-<uuid>` in the database's own folder, nothing else. */
+export function stagedIncomingOk(file: string, incoming: unknown): incoming is string {
+  if (typeof incoming !== 'string') return false
+  if (dirname(incoming) !== dirname(file)) return false
+  const base = basename(file).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`^${base}\\.incoming-${UUID_RE}$`).test(basename(incoming))
+}
+
 /** Leave a checked `<file>.incoming-<id>` for the next boot to install (adoptStagedSqliteFile). */
 export async function stageSqliteFile(
   file: string,
   info: Omit<StagedSqlite, 'at'> & { incoming: string }
 ): Promise<void> {
+  if (!stagedIncomingOk(file, info.incoming))
+    throw new SqliteTransferError(
+      'SQLITE_NOT_SQLITE',
+      'The staged copy is not where copies are made.'
+    )
   // An older staged copy (an earlier pull of the same move) goes.
   const before = readStaged(file)
-  if (before?.incoming && before.incoming !== info.incoming)
+  if (
+    before?.incoming &&
+    before.incoming !== info.incoming &&
+    stagedIncomingOk(file, before.incoming)
+  )
     await unlink(before.incoming).catch(() => {})
   const tmp = `${stagedMarker(file)}.${randomUUID()}`
   await writeFile(tmp, JSON.stringify({ ...info, at: new Date().toISOString() }), {
@@ -545,7 +664,7 @@ export async function stageSqliteFile(
 
 /**
  * At boot, holding the file's lock, before anything opens the database: a staged copy whose marker
- * is readable and whose bytes (re-hashed in chunks — the very bytes the worker checked before
+ * is readable and whose bytes (re-hashed in chunks — the very bytes the check passed before
  * staging) still match it replaces the file; the marker moves to `<file>.adopted.json` (what the
  * Hub reads back). A boot that stopped between the rename and the marker (the database already
  * hashes to the marker) writes the adopted marker now. Anything wrong: the staged files are
@@ -556,14 +675,15 @@ export function adoptStagedSqliteFile(file: string): 'none' | 'adopted' | 'refus
   const marker = stagedMarker(file)
   if (!existsSync(marker)) return 'none'
   const info = readStaged(file)
-  const incoming = info?.incoming ?? `${file}.incoming`
+  // L5: a marker naming any other path is refused; only the marker itself is removed then.
+  const incoming = info && stagedIncomingOk(file, info.incoming) ? info.incoming : null
   const dropAll = () => {
-    for (const f of [incoming, marker])
+    for (const f of incoming ? [incoming, marker] : [marker])
       try {
         unlinkSync(f)
       } catch {}
   }
-  if (!info || typeof info.sha256 !== 'string') {
+  if (!info || typeof info.sha256 !== 'string' || !incoming) {
     dropAll()
     return 'refused'
   }

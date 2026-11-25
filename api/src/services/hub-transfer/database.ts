@@ -4,7 +4,11 @@ import type { Knex } from 'knex'
 import { config } from '../../config.js'
 import { db } from '../../db/index.js'
 import { claimSqliteFile, holdSqliteFile } from '../../db/sqlite.js'
-import { prepareSqliteFolder, withSqliteFileReplaced } from '../../db/sqlite-tenant.js'
+import {
+  prepareSqliteFolder,
+  withSqliteFileReplaced,
+  writeSqliteCreatedMarker
+} from '../../db/sqlite-tenant.js'
 import {
   adoptedSqliteFile,
   fileSum,
@@ -12,6 +16,7 @@ import {
   oneCopyAtATime,
   receiveSqliteFile,
   SQLITE_COPY_MAX_BYTES,
+  SQLITE_PULL_DEADLINE_MS,
   SqliteTransferError,
   type SqliteVerified,
   snapshotSqliteDatabase,
@@ -86,11 +91,13 @@ export const databaseTransferDeps = {
     return hubStrictMaintenanceOn()
   },
   /** A dedicated app restarts to install a staged copy (swarm starts it again). */
-  restart(): void {
-    const t = setTimeout(() => process.kill(process.pid, 'SIGTERM'), 500)
+  restart(delayMs = 500): void {
+    const t = setTimeout(() => process.kill(process.pid, 'SIGTERM'), delayMs)
     t.unref?.()
   },
-  maxBytes: SQLITE_COPY_MAX_BYTES
+  maxBytes: SQLITE_COPY_MAX_BYTES,
+  /** The longest a target's whole pull may take (N3); the Hub waits longer. */
+  pullDeadlineMs: SQLITE_PULL_DEADLINE_MS
 }
 
 /** Is this app frozen by a move (the precondition of a snapshot)? */
@@ -156,7 +163,8 @@ export interface DatabasePulled {
 /** Fetch, receive and check a copy into `<file>.incoming`. */
 async function fetchVerified(
   req: DatabasePullRequest,
-  file: string
+  file: string,
+  deadline: number
 ): Promise<DatabasePulled & { incoming: string }> {
   const files = transferSource(req.source)
   if (!files)
@@ -173,7 +181,9 @@ async function fetchVerified(
     method: 'GET',
     headers: { Authorization: `Transfer ${req.ticket}` },
     redirect: 'error' as const,
-    signal: AbortSignal.timeout(30 * 60_000)
+    // N3: the download stops at the pull's own deadline (the body read errors and the incoming
+    // copy is removed), well before the Hub stops waiting.
+    signal: AbortSignal.timeout(Math.max(1, deadline - Date.now()))
   }
   let res: Response
   try {
@@ -232,8 +242,11 @@ async function fetchVerified(
     )
     let verified: SqliteVerified
     try {
-      // H1: in a worker thread, bounded in time — never on this process's event loop.
-      verified = await verifySqliteFile(got.incoming)
+      const left = deadline - Date.now()
+      if (left <= 0) throw pastDeadline()
+      // H1 / N3: in a child process killed at the pull's deadline — never on this event loop.
+      verified = await verifySqliteFile(got.incoming, left)
+      if (Date.now() > deadline) throw pastDeadline()
     } catch (err) {
       await unlink(got.incoming).catch(() => {})
       throw err
@@ -248,10 +261,22 @@ async function fetchVerified(
   }
 }
 
+function pastDeadline(): SqliteTransferError {
+  return new SqliteTransferError(
+    'SQLITE_COPY_DEADLINE',
+    `The copy did not end within ${Math.round(databaseTransferDeps.pullDeadlineMs / 60_000)} minutes here; its incoming file was removed.`
+  )
+}
+
+/** When a pull started now must end. */
+function pullDeadline(): number {
+  return Date.now() + databaseTransferDeps.pullDeadlineMs
+}
+
 /**
  * A shared deployment's app (held in maintenance by the move — M2): the copy is checked in a
- * worker, then the app's pool is closed and — holding the file's lock (no other process may own
- * it) — the copy is put in place while no pool may open on the file; the file is thawed (this
+ * child process, then the app's pool is closed and — holding the file's lock (no other process
+ * may own it) — the copy is put in place while no pool may open on the file; the file is thawed (this
  * home is never the frozen source) and the app's schema state and caches start again. One pull per
  * app at a time (M3, DATABASE_COPY_RUNNING).
  */
@@ -267,9 +292,10 @@ export async function pullDatabaseShared(
       'This app is not held in maintenance by a move: its database is never replaced.'
     )
   const file = t.dbConnection
+  const deadline = pullDeadline()
   return oneCopyAtATime(file, async () => {
     prepareSqliteFolder(file)
-    const got = await fetchVerified(req, file)
+    const got = await fetchVerified(req, file, deadline)
     const { awaitAppSchemaRun, appDatabaseReplaced } = await import('../tenancy/app-migrations.js')
     try {
       await withSqliteFileReplaced(file, async () => {
@@ -286,6 +312,8 @@ export async function pullDatabaseShared(
         const release = holdSqliteFile(file)
         try {
           await installSqliteFile(got.incoming, file)
+          // L7: the file is this record's now (its marker names it).
+          writeSqliteCreatedMarker(file, t.dbRecord ?? null)
         } finally {
           release()
         }
@@ -301,7 +329,8 @@ export async function pullDatabaseShared(
 
 /**
  * A dedicated app (in the move's strict maintenance — M2): it cannot close its own database under
- * itself. The checked copy is staged (`<file>.incoming-<id>` + its marker) and the app restarts;
+ * itself. The checked copy is staged (`<file>.incoming-<id>` + its marker) and the app restarts
+ * (the route does, once the Hub has read that the job ended);
  * its boot installs it (db/sqlite-transfer.ts adoptStagedSqliteFile) before anything opens the
  * database. One pull at a time (M3).
  */
@@ -317,15 +346,16 @@ export async function pullDatabaseDedicated(
       'This app is not in the move’s strict maintenance: its database is never replaced.'
     )
   const file = config.DB_DATABASE
+  const deadline = pullDeadline()
   return oneCopyAtATime(file, async () => {
-    const got = await fetchVerified(req, file)
+    const got = await fetchVerified(req, file, deadline)
     await stageSqliteFile(file, {
       sha256: got.sha256,
       bytes: got.bytes,
       move_id: moveId,
       incoming: got.incoming
     })
-    databaseTransferDeps.restart()
+    // The restart is the caller's (routes/hub-link.ts: once the Hub read the job's end).
     return {
       sha256: got.sha256,
       bytes: got.bytes,
@@ -372,8 +402,21 @@ export async function discardDatabaseShared(
       now = null
     }
     if (now !== sha256) return { discarded: false }
-    for (const extra of ['', '-wal', '-shm', '-journal'])
-      await unlink(`${t.dbConnection}${extra}`).catch(() => {})
+    // L3: no other live process may own the file while it is removed.
+    const taken = claimSqliteFile(t.dbConnection)
+    if (taken)
+      throw new DatabaseTransferError(
+        'SQLITE_FILE_BUSY',
+        'Another process holds this app database; its copy is not removed.',
+        503
+      )
+    const release = holdSqliteFile(t.dbConnection)
+    try {
+      for (const extra of ['', '-wal', '-shm', '-journal'])
+        await unlink(`${t.dbConnection}${extra}`).catch(() => {})
+    } finally {
+      release()
+    }
     return { discarded: true }
   })
 }

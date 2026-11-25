@@ -486,54 +486,93 @@ export async function hubLinkRoutes(app: FastifyInstance) {
   })
 
   // ─── Hub gap sqlite (0.3.215): a SQLite app's database file in a move ──────────────────────
-  // POST /files/database/pull {source, ticket, move_id} → 200 {sha256, bytes, verified,
-  //      restarting}: the copy is fetched with the ticket, checked (checksum, integrity_check,
-  //      ledger) and staged; this app restarts and installs it at boot.
+  // Review 4 (N2/N3): the copy and the checksum are start-then-poll jobs
+  // (services/hub-transfer/database-jobs.ts).
+  // POST /files/database/pull {source, ticket, move_id} → 202 {job}: the copy is fetched with the
+  //      ticket, checked (checksum, integrity_check in a child process, ledger) and staged; once
+  //      the Hub has read the job's end (or 90 s after it), this app restarts and installs it at
+  //      boot. A pull past its own deadline removes its copy and fails.
+  // POST /files/database/sum → 202 {job}: this app's database checksum (a source, before release)
+  // GET  /files/database/jobs/:job → {job}
   // GET  /files/database/adopted → {adopted: {sha256, move_id} | null}: what the last boot put in.
-  // GET  /files/database/sum → {sha256, bytes}: this app's database checksum now (a source,
-  //      before release).
+  const databaseFail = (reply: FastifyReply, err: unknown) => {
+    const e = err as { code?: unknown; statusCode?: unknown; message?: unknown; name?: unknown }
+    if (
+      e?.name === 'DatabaseTransferError' ||
+      e?.name === 'SqliteTransferError' ||
+      e?.name === 'DatabaseJobError'
+    )
+      return fail(
+        reply,
+        typeof e.statusCode === 'number' ? e.statusCode : 409,
+        String(e.code),
+        String(e.message)
+      )
+    app.log.error({ err_name: e?.name ?? null }, 'hub link: database copy failed')
+    return fail(reply, 500, 'DATABASE_COPY_FAILED', 'The database copy failed here')
+  }
+
   app.post('/files/database/pull', async (req, reply) => {
     reply.header('Cache-Control', 'no-store')
-    const { pullDatabaseDedicated, DatabaseTransferError } = await import(
+    const { pullDatabaseDedicated, databaseTransferDeps } = await import(
       '../services/hub-transfer/database.js'
     )
+    const { startDatabaseJob } = await import('../services/hub-transfer/database-jobs.js')
     const b = (req.body ?? {}) as { source?: unknown; ticket?: unknown; move_id?: unknown }
+    const moveId = positiveId(b.move_id)
+    let fallback: NodeJS.Timeout | null = null
     try {
-      return reply.send(
-        await pullDatabaseDedicated(
-          { source: b.source as string, ticket: b.ticket as string },
-          positiveId(b.move_id)
-        )
+      const job = startDatabaseJob(
+        'self',
+        'pull',
+        moveId ? `move:${moveId}` : `pull:${Date.now()}`,
+        async () => {
+          const r = await pullDatabaseDedicated(
+            { source: b.source as string, ticket: b.ticket as string },
+            moveId
+          )
+          // The Hub reads the end, then this app restarts; if it never does, restart anyway.
+          fallback = setTimeout(() => databaseTransferDeps.restart(0), 90_000)
+          fallback.unref?.()
+          return r
+        },
+        {
+          afterRead: () => {
+            if (fallback) clearTimeout(fallback)
+            databaseTransferDeps.restart(2_000)
+          }
+        }
       )
+      return reply.code(202).send({ job })
     } catch (err) {
-      if (err instanceof DatabaseTransferError)
-        return fail(reply, err.statusCode, err.code, err.message)
-      if ((err as Error | null)?.name === 'SqliteTransferError')
-        return fail(reply, 409, String((err as { code?: unknown }).code), (err as Error).message)
-      app.log.error({ err_name: (err as Error | null)?.name }, 'hub link: database copy failed')
-      return fail(reply, 500, 'DATABASE_COPY_FAILED', 'The database copy failed here')
+      return databaseFail(reply, err)
     }
+  })
+
+  app.post('/files/database/sum', async (_req, reply) => {
+    reply.header('Cache-Control', 'no-store')
+    const { databaseSum } = await import('../services/hub-transfer/database.js')
+    const { startDatabaseJob } = await import('../services/hub-transfer/database-jobs.js')
+    try {
+      return reply
+        .code(202)
+        .send({ job: startDatabaseJob('self', 'sum', 'sum', () => databaseSum(null)) })
+    } catch (err) {
+      return databaseFail(reply, err)
+    }
+  })
+
+  app.get<{ Params: { job: string } }>('/files/database/jobs/:job', async (req, reply) => {
+    reply.header('Cache-Control', 'no-store')
+    const { readDatabaseJob, JOB_ID_RE } = await import('../services/hub-transfer/database-jobs.js')
+    const job = JOB_ID_RE.test(req.params.job) ? readDatabaseJob('self', req.params.job) : null
+    if (!job) return fail(reply, 404, 'UNKNOWN_JOB', 'No such database job here')
+    return reply.send({ job })
   })
 
   app.get('/files/database/adopted', async (_req, reply) => {
     reply.header('Cache-Control', 'no-store')
     const { databaseAdopted } = await import('../services/hub-transfer/database.js')
     return reply.send({ adopted: await databaseAdopted() })
-  })
-
-  app.get('/files/database/sum', async (_req, reply) => {
-    reply.header('Cache-Control', 'no-store')
-    const { databaseSum, DatabaseTransferError } = await import(
-      '../services/hub-transfer/database.js'
-    )
-    try {
-      return reply.send(await databaseSum(null))
-    } catch (err) {
-      if (err instanceof DatabaseTransferError)
-        return fail(reply, err.statusCode, err.code, err.message)
-      if ((err as Error | null)?.name === 'SqliteTransferError')
-        return fail(reply, 409, String((err as { code?: unknown }).code), (err as Error).message)
-      return fail(reply, 503, 'DATABASE_UNREADABLE', 'The database could not be read here')
-    }
   })
 }

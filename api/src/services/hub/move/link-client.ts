@@ -109,12 +109,54 @@ export interface HubLinkClient {
   revokeTicket(ticket: string): Promise<{ revoked: boolean }>
   pullFiles(req: PullRequest): Promise<{ run_id: string }>
   pullStatus(runId: string): Promise<PullStatus>
-  /** Hub gap sqlite: fetch, check and stage the source's database; the app restarts. */
-  pullDatabase?(req: { source: string; ticket: string; move_id: number }): Promise<DatabaseCopied>
+  /**
+   * Hub gap sqlite: START fetching, checking and staging the source's database (a job; the app
+   * restarts once the Hub has read its end). Review 4 N3: start-then-poll.
+   */
+  pullDatabase?(req: {
+    source: string
+    ticket: string
+    move_id: number
+  }): Promise<DatabaseJobStatus>
   /** Hub gap sqlite: what this app installed at its last boot, or null. */
   databaseAdopted?(): Promise<{ sha256: string; move_id: number | null } | null>
-  /** Hub gap sqlite: this app's database checksum now. */
-  databaseSum?(): Promise<{ sha256: string; bytes: number }>
+  /** Hub gap sqlite: START this app's database checksum (a job; review 4 N2). */
+  databaseSum?(): Promise<DatabaseJobStatus>
+  /** Hub gap sqlite: a database job now; null = this process does not know it (it restarted). */
+  databaseJob?(id: string): Promise<DatabaseJobStatus | null>
+}
+
+/** A database job as a link answers it (services/hub-transfer/database-jobs.ts). */
+export interface DatabaseJobStatus {
+  id: string
+  state: 'running' | 'done' | 'failed'
+  result: unknown
+  code: string | null
+  message: string | null
+}
+
+const JOB_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+/** `{job}` as a link answers it, or null. */
+export function parseDatabaseJob(b: unknown): DatabaseJobStatus | null {
+  const j = (b as { job?: unknown } | null)?.job as Record<string, unknown> | undefined
+  if (!j || typeof j !== 'object') return null
+  if (typeof j.id !== 'string' || !JOB_ID_RE.test(j.id)) return null
+  if (j.state !== 'running' && j.state !== 'done' && j.state !== 'failed') return null
+  return {
+    id: j.id,
+    state: j.state,
+    result: j.result ?? null,
+    code: typeof j.code === 'string' && CODE_RE.test(j.code) ? j.code : null,
+    message: typeof j.message === 'string' ? j.message.slice(0, 300) : null
+  }
+}
+
+/** A checksum job's result, or null. */
+export function parseDatabaseSum(r: unknown): { sha256: string; bytes: number } | null {
+  const o = r as { sha256?: unknown; bytes?: unknown } | null
+  if (typeof o?.sha256 !== 'string' || !SHA_RE.test(o.sha256)) return null
+  if (typeof o.bytes !== 'number' || !Number.isSafeInteger(o.bytes) || o.bytes < 0) return null
+  return { sha256: o.sha256, bytes: o.bytes }
 }
 
 /** What a target answers for a database copy (hub gap sqlite). */
@@ -124,8 +166,14 @@ export interface DatabaseCopied {
   migrations: number
 }
 
-/** The longest a database copy call may take (it streams the whole file). */
+/**
+ * How long the Hub waits for a database copy job (review 4 N3): longer than the target's own
+ * deadline (SQLITE_PULL_DEADLINE_MS, 25 min), so the target always ends a copy first and says why.
+ */
 export const DATABASE_COPY_TIMEOUT_MS = 30 * 60_000
+
+/** How long the Hub waits for a checksum job (review 4 N2): checkpoint wait + hashing 8 GiB. */
+export const DATABASE_SUM_TIMEOUT_MS = 20 * 60_000
 
 const SHA_RE = /^[0-9a-f]{64}$/
 
@@ -385,13 +433,22 @@ export function hubLinkClient(
         '/files/database/pull',
         'POST',
         { source: req.source, ticket: req.ticket, move_id: req.move_id },
-        true,
-        DATABASE_COPY_TIMEOUT_MS
+        true
       )
       if (!ok(a)) throw refusal(a)
-      const c = parseDatabaseCopied(a.body)
-      if (!c) throw new HubLinkError('LINK_BAD_ANSWER', a.status)
-      return c
+      const j = parseDatabaseJob(a.body)
+      if (!j) throw new HubLinkError('LINK_BAD_ANSWER', a.status)
+      return j
+    },
+
+    async databaseJob(id) {
+      if (!JOB_ID_RE.test(id)) throw new HubLinkError('LINK_SAID_NO', 0, 'BAD_JOB_ID')
+      const a = await call(`/files/database/jobs/${id}`, 'GET')
+      if (a.status === 404) return null
+      if (!ok(a)) throw refusal(a)
+      const j = parseDatabaseJob(a.body)
+      if (!j) throw new HubLinkError('LINK_BAD_ANSWER', a.status)
+      return j
     },
 
     async databaseAdopted() {
@@ -406,12 +463,11 @@ export function hubLinkClient(
     },
 
     async databaseSum() {
-      const a = await call('/files/database/sum', 'GET', undefined, true)
+      const a = await call('/files/database/sum', 'POST', {}, true)
       if (!ok(a)) throw refusal(a)
-      const b = a.body as { sha256?: unknown; bytes?: unknown } | null
-      if (typeof b?.sha256 !== 'string' || !SHA_RE.test(b.sha256) || typeof b.bytes !== 'number')
-        throw new HubLinkError('LINK_BAD_ANSWER', a.status)
-      return { sha256: b.sha256, bytes: b.bytes }
+      const j = parseDatabaseJob(a.body)
+      if (!j) throw new HubLinkError('LINK_BAD_ANSWER', a.status)
+      return j
     },
 
     async pullStatus(runId) {

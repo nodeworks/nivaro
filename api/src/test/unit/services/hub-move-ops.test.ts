@@ -1234,18 +1234,43 @@ describe('verifyTargetKey (E2E B4)', () => {
 
 describe('hub gap sqlite: copyDatabase, sourceDatabaseSum, unplace', () => {
   const SUM = '9'.repeat(64)
-  const withDb = (c: ReturnType<typeof clients>, o: { pull?: () => Promise<unknown> } = {}) => {
+  const JOB = '11111111-2222-4333-8444-555555555555'
+  const COPIED = { sha256: SUM, bytes: 4096, verified: { integrity: 'ok', migrations: 560 } }
+  const job = (state: 'running' | 'done' | 'failed', o: Record<string, unknown> = {}) => ({
+    id: JOB,
+    state,
+    result: null,
+    code: null,
+    message: null,
+    ...o
+  })
+  /** Review 4 N2/N3: the link answers a job at once; the Hub reads it until it ends. */
+  const withDb = (
+    c: ReturnType<typeof clients>,
+    o: {
+      pull?: () => Promise<unknown>
+      reads?: Array<ReturnType<typeof job> | null>
+    } = {}
+  ) => {
     const base = c.factory as unknown as (s: { id: number }) => Record<string, unknown>
+    const reads = [...(o.reads ?? [job('running'), job('done', { result: COPIED })])]
     return ((s: { id: number }) => ({
       ...base(s),
-      pullDatabase: vi.fn(async (_tid: string, req: { source: string; ticket: string }) => {
-        c.calls.push([s.id, 'pullDatabase', { source: req.source, ticket: req.ticket === TICKET }])
-        if (o.pull) return o.pull()
-        return { sha256: SUM, bytes: 4096, migrations: 560 }
-      }),
+      pullDatabase: vi.fn(
+        async (_tid: string, req: { source: string; ticket: string; move_id?: number }) => {
+          c.calls.push([
+            s.id,
+            'pullDatabase',
+            { source: req.source, ticket: req.ticket === TICKET, move: !!req.move_id }
+          ])
+          if (o.pull) return o.pull()
+          return job('running')
+        }
+      ),
+      databaseJob: vi.fn(async () => (reads.length > 1 ? reads.shift() : reads[0]) ?? null),
       databaseSum: vi.fn(async () => {
         c.calls.push([s.id, 'databaseSum'])
-        return { sha256: SUM, bytes: 4096 }
+        return job('done', { result: { sha256: SUM, bytes: 4096 } })
       }),
       discardDatabase: vi.fn(async (_tid: string, sha: string | null) => {
         c.calls.push([s.id, 'discardDatabase', sha])
@@ -1271,7 +1296,11 @@ describe('hub gap sqlite: copyDatabase, sourceDatabaseSum, unplace', () => {
       [
         w.b,
         'pullDatabase',
-        { source: 'https://src.internal.example.com/api/hub-transfer/files', ticket: true }
+        {
+          source: 'https://src.internal.example.com/api/hub-transfer/files',
+          ticket: true,
+          move: true
+        }
       ],
       [w.a, 'revokeTicket', true]
     ])
@@ -1327,5 +1356,39 @@ describe('hub gap sqlite: copyDatabase, sourceDatabaseSum, unplace', () => {
     expect(c.calls[0]).toEqual([w.b, 'discardDatabase', SUM])
     expect(await db('nivaro_hub_databases').where({ id: rec }).first()).toBeUndefined()
     expect((await readMove(w.move.id))?.steps.sqlite_record).toBeUndefined()
+  })
+
+  it('N3: a copy job the target ended with a refusal is a step error with its code', async () => {
+    const w = await setup(true)
+    TENANT = w.tenant
+    const c = clients()
+    const ops = defaultMoveOps(
+      w.move,
+      { ...w.plan, sqlite: true },
+      {
+        client: withDb(c, {
+          reads: [job('failed', { code: 'SQLITE_COPY_DEADLINE', message: 'too slow' })]
+        }),
+        sleep,
+        now
+      }
+    )
+    await expect(ops.copyDatabase?.()).rejects.toMatchObject({ code: 'SQLITE_COPY_DEADLINE' })
+    expect(c.calls.at(-1)).toEqual([w.a, 'revokeTicket', true])
+  })
+
+  it('N3: the Hub stops waiting only after its own limit (30 min), longer than the target', async () => {
+    const w = await setup(true)
+    TENANT = w.tenant
+    const c = clients()
+    const ops = defaultMoveOps(
+      w.move,
+      { ...w.plan, sqlite: true },
+      { client: withDb(c, { reads: [job('running')] }), sleep, now }
+    )
+    const at = t
+    await expect(ops.copyDatabase?.()).rejects.toMatchObject({ code: 'DATABASE_JOB_TIMEOUT' })
+    expect(t - at).toBeGreaterThanOrEqual(30 * 60_000)
+    expect(t - at).toBeLessThan(31 * 60_000)
   })
 })

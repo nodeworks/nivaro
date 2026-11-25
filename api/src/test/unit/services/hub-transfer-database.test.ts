@@ -245,3 +245,142 @@ describe('a pull only replaces a frozen target, one at a time', () => {
     await ctx.closeTenantPool(dst.dbConnection)
   })
 })
+
+describe('review 4', () => {
+  it('a move target with no file yet: the copy is installed, its marker names the record, the app reads it', async () => {
+    const src = tenant('src-e20')
+    await seed(src, 4)
+    const snap = await ctx.withTenant(src, () => D.databaseSnapshot(src))
+    const dst: TenantRecord = { ...tenant('dst-e20'), dbCreate: undefined, dbRecord: 44 }
+    // Before the copy, the target app has no file: refused, never made.
+    expect(() => ctx.withTenant(dst, async () => 1)).toThrow(
+      expect.objectContaining({ code: 'SQLITE_FILE_MISSING' })
+    )
+    serve(snap)
+    // The pull runs inside the app's own context on the deployment (the route's withTenant);
+    // with no file yet the pool is not opened: run it outside.
+    await D.pullDatabaseShared(dst, REQ)
+    const { dirname, join: j } = await import('node:path')
+    const marker = JSON.parse(readFileSync(j(dirname(dst.dbConnection), '.created'), 'utf8'))
+    expect(marker.record).toBe(44)
+    const n = await ctx.withTenant(dst, async () =>
+      Number((await (ctx.getTenantDb() as Knex)('items').count({ n: '*' }))[0].n)
+    )
+    expect(n).toBe(4)
+    rmSync(snap.path)
+    X.thawSqliteFile(src.dbConnection)
+    await ctx.closeTenantPool(src.dbConnection)
+    await ctx.closeTenantPool(dst.dbConnection)
+  })
+
+  it('N3: a pull past its own deadline fails SQLITE_COPY_DEADLINE and leaves no incoming copy', async () => {
+    const src = tenant('src-e21')
+    await seed(src, 2)
+    const snap = await ctx.withTenant(src, () => D.databaseSnapshot(src))
+    const dst = tenant('dst-e21')
+    await seed(dst, 0)
+    const was = D.databaseTransferDeps.pullDeadlineMs
+    D.databaseTransferDeps.pullDeadlineMs = 30
+    pullDeps.fetch = async () => {
+      await new Promise((r) => setTimeout(r, 60))
+      return new Response(readFileSync(snap.path), {
+        status: 200,
+        headers: { 'content-length': String(snap.bytes), 'x-nivaro-sha256': snap.sha256 }
+      })
+    }
+    try {
+      await expect(ctx.withTenant(dst, () => D.pullDatabaseShared(dst, REQ))).rejects.toMatchObject(
+        {
+          code: 'SQLITE_COPY_DEADLINE'
+        }
+      )
+    } finally {
+      D.databaseTransferDeps.pullDeadlineMs = was
+    }
+    const { readdirSync } = await import('node:fs')
+    const { dirname } = await import('node:path')
+    expect(readdirSync(dirname(dst.dbConnection)).filter((n) => n.includes('.incoming'))).toEqual(
+      []
+    )
+    // The target's own database is as it was (no row of the source).
+    const n = await ctx.withTenant(dst, async () =>
+      Number((await (ctx.getTenantDb() as Knex)('items').count({ n: '*' }))[0].n)
+    )
+    expect(n).toBe(0)
+    await ctx.closeTenantPool(dst.dbConnection)
+    rmSync(snap.path)
+    X.thawSqliteFile(src.dbConnection)
+    await ctx.closeTenantPool(src.dbConnection)
+  })
+})
+
+const J = await import('../../../services/hub-transfer/database-jobs.js')
+
+describe('review 4: database jobs (start, then poll)', () => {
+  const settle = () => new Promise((r) => setTimeout(r, 5))
+
+  it('a job runs in the background, ends done with its result; read once ended runs afterRead once', async () => {
+    let finish!: (v: unknown) => void
+    let after = 0
+    const job = J.startDatabaseJob(
+      'app-a',
+      'pull',
+      'move:1',
+      () =>
+        new Promise((r) => {
+          finish = r
+        }),
+      { afterRead: () => after++ }
+    )
+    expect(job.state).toBe('running')
+    expect(J.readDatabaseJob('app-a', job.id)?.state).toBe('running')
+    expect(after).toBe(0)
+    finish({ sha256: 'x' })
+    await settle()
+    expect(J.readDatabaseJob('app-a', job.id)).toMatchObject({
+      state: 'done',
+      result: { sha256: 'x' }
+    })
+    J.readDatabaseJob('app-a', job.id)
+    expect(after).toBe(1)
+    // Another app never reads it.
+    expect(J.readDatabaseJob('app-b', job.id)).toBeNull()
+  })
+
+  it('the same move asking again gets the running job; another start is refused DATABASE_COPY_RUNNING', async () => {
+    let finish!: () => void
+    const run = () =>
+      new Promise<void>((r) => {
+        finish = r
+      })
+    const a = J.startDatabaseJob('app-c', 'pull', 'move:7', run)
+    expect(J.startDatabaseJob('app-c', 'pull', 'move:7', run).id).toBe(a.id)
+    expect(() => J.startDatabaseJob('app-c', 'pull', 'move:8', run)).toThrow(
+      expect.objectContaining({ code: 'DATABASE_COPY_RUNNING' })
+    )
+    // A sum of the same app is another kind.
+    expect(J.startDatabaseJob('app-c', 'sum', 'sum', async () => 1).state).toBe('running')
+    finish()
+    await settle()
+  })
+
+  it('a refusal is kept with its own code and message; anything else is DATABASE_COPY_FAILED', async () => {
+    const refused = J.startDatabaseJob('app-d', 'pull', 'move:1', async () => {
+      throw new X.SqliteTransferError('SQLITE_CHECK_TIMEOUT', 'too slow')
+    })
+    const crashed = J.startDatabaseJob('app-e', 'pull', 'move:1', async () => {
+      throw new Error('/secret/path broke')
+    })
+    await settle()
+    expect(J.readDatabaseJob('app-d', refused.id)).toMatchObject({
+      state: 'failed',
+      code: 'SQLITE_CHECK_TIMEOUT',
+      message: 'too slow'
+    })
+    expect(J.readDatabaseJob('app-e', crashed.id)).toMatchObject({
+      state: 'failed',
+      code: 'DATABASE_COPY_FAILED',
+      message: 'The database copy failed here.'
+    })
+  })
+})

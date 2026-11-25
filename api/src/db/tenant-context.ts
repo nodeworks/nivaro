@@ -52,13 +52,21 @@ function runPoolHook(fn: (pool: Knex) => void, pool: Knex): void {
   }
 }
 
+/** What a SQLite tenant's pool is opened with: may it make its file, and the record it is (L7). */
+export function tenantPoolOpts(t: { dbCreate?: boolean; dbRecord?: number }): {
+  create: boolean
+  record: number | null
+} {
+  return { create: t.dbCreate === true, record: t.dbRecord ?? null }
+}
+
 /** `max` (a tenant's own pool size) defaults to TENANT_POOL_MAX; it applies when the pool is
  *  first created for the connection string. */
 export function getOrCreateTenantPool(
   connectionString: string,
   client = 'pg',
   max: number = TENANT_POOL_MAX,
-  opts: { create?: boolean } = {}
+  opts: { create?: boolean; record?: number | null } = {}
 ): Knex {
   // SQLite is one file owned by one process (db/sqlite.ts): never a Nivaro Cloud tenant's
   // database. A Hub shared deployment of one process serves SQLite apps, each its own file in its
@@ -184,13 +192,17 @@ export function withTenant<T>(
     dbConnection: string
     poolMax: number | null
     dbCreate?: boolean
+    dbRecord?: number
   },
   fn: () => Promise<T>,
   origin?: string
 ): Promise<T> {
-  const db = getOrCreateTenantPool(t.dbConnection, t.dbClient, t.poolMax ?? undefined, {
-    create: t.dbCreate === true
-  })
+  const db = getOrCreateTenantPool(
+    t.dbConnection,
+    t.dbClient,
+    t.poolMax ?? undefined,
+    tenantPoolOpts(t)
+  )
   return store.run({ db, slug: t.slug, tenantId: t.id, ...(origin ? { origin } : {}) }, fn)
 }
 

@@ -31,6 +31,8 @@ export interface HubTenantWire {
     connection: string
     /** SQLite only: the Hub placed this database as NEW; the deployment may make the file once. */
     create?: boolean
+    /** SQLite only (review 4, L7): the Hub database record the file belongs to. */
+    record?: number
   }
   pool_max?: number
   /** Phase 6, optional: the environment's origin (`https://host[:port]`). A value that is not an
@@ -210,6 +212,9 @@ function toRecord(t: unknown, sqliteHere: () => SqliteHere): TenantRecord | stri
     dbClient: client,
     dbConnection: connection,
     ...(client === 'sqlite' && db?.create === true ? { dbCreate: true } : {}),
+    ...(client === 'sqlite' && sqliteRecordOf(db) !== null
+      ? { dbRecord: sqliteRecordOf(db) as number }
+      : {}),
     poolMax,
     hostnames: hosts,
     ...(Object.keys(ports).length ? { originPorts: ports } : {}),
@@ -218,6 +223,12 @@ function toRecord(t: unknown, sqliteHere: () => SqliteHere): TenantRecord | stri
     ...(hubLink ? { hubLink } : {}),
     ...(limits ? { limits } : {})
   }
+}
+
+/** A SQLite tenant's record id (review 4, L7), or null. */
+function sqliteRecordOf(db: unknown): number | null {
+  const r = (db as { record?: unknown } | null)?.record
+  return typeof r === 'number' && Number.isSafeInteger(r) && r > 0 ? r : null
 }
 
 /**

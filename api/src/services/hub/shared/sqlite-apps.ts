@@ -78,6 +78,8 @@ export interface SqliteStorageFacts {
   volume_driver?: string | null
   /** Swarm nodes when local volumes sit on more than one node, else null. */
   multi_node?: number | null
+  /** Review 4 L1: the agent answered without its swarm's node count (its /info call failed). */
+  nodes_unknown?: boolean
 }
 
 /**
@@ -111,6 +113,11 @@ export function sqliteStorageRefusal(
     return {
       code: 'SQLITE_ON_NFS',
       message: `${key} keeps its uploads on network storage (${f.uploads_network ? 'NFS' : `volume driver ${f.volume_driver}`}); SQLite's write-ahead log and file locks are not safe there.`
+    }
+  if (f.nodes_unknown)
+    return {
+      code: 'SQLITE_MULTI_NODE',
+      message: `The Hub agent of ${key} did not say how many nodes its swarm has, and a SQLite file must stay on one node. Check the agent (its Docker /info call), then try again.`
     }
   if (f.multi_node && f.multi_node > 1)
     return {

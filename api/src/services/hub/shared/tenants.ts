@@ -290,7 +290,13 @@ export async function tenantsBody(
       name: app.name,
       status: wireStatus,
       hostnames: environmentNames(env),
-      db: { client, connection, ...(create ? { create: true } : {}) }
+      db: {
+        client,
+        connection,
+        ...(create ? { create: true } : {}),
+        // L7: the record a SQLite file belongs to (its `.created` marker must name it).
+        ...(client === 'sqlite' ? { record: recordId } : {})
+      }
     }
     const pool = poolMaxOf(placement)
     if (pool !== null) wire.pool_max = pool

@@ -63,11 +63,17 @@ import {
 import { tenantsBody } from '../shared/tenants.js'
 import type { MoveAddresses } from './addresses.js'
 import {
+  DATABASE_COPY_TIMEOUT_MS,
+  DATABASE_SUM_TIMEOUT_MS,
+  type DatabaseCopied,
+  type DatabaseJobStatus,
   type HubLinkClient,
   HubLinkError,
   hubLinkClient,
   hubLinkOrigin,
-  type MaintenanceAnswer
+  type MaintenanceAnswer,
+  parseDatabaseCopied,
+  parseDatabaseSum
 } from './link-client.js'
 import type { MovePlan, RouteAction } from './plan-port.js'
 import { type HubMoveRow, MOVES, mergeSteps, readMove } from './rows.js'
@@ -207,24 +213,94 @@ export interface MoveOps {
   sourceDatabaseSum?(): Promise<string>
 }
 
+type DbClientKeys = 'pullDatabase' | 'databaseSum' | 'databaseJob' | 'discardDatabase'
+
 /** Hub gap sqlite: a deployment client that can copy a database (every real one can). */
 function dbClient<
-  T extends { pullDatabase?: unknown; databaseSum?: unknown; discardDatabase?: unknown }
->(c: T): T & Required<Pick<T, 'pullDatabase' | 'databaseSum' | 'discardDatabase'>> {
-  if (!c.pullDatabase || !c.databaseSum || !c.discardDatabase)
+  T extends {
+    pullDatabase?: unknown
+    databaseSum?: unknown
+    databaseJob?: unknown
+    discardDatabase?: unknown
+  }
+>(c: T): T & Required<Pick<T, DbClientKeys>> {
+  if (!c.pullDatabase || !c.databaseSum || !c.databaseJob || !c.discardDatabase)
     throw new MoveStepError('SQLITE_MOVE', 'This deployment link cannot copy a database.')
-  return c as T & Required<Pick<T, 'pullDatabase' | 'databaseSum' | 'discardDatabase'>>
+  return c as T & Required<Pick<T, DbClientKeys>>
 }
 
+type DbLinkKeys = 'pullDatabase' | 'databaseAdopted' | 'databaseSum' | 'databaseJob'
+
 /** Hub gap sqlite: a hub link client that can copy a database (every real one can). */
-function dbLink(
-  c: HubLinkClient
-): HubLinkClient &
-  Required<Pick<HubLinkClient, 'pullDatabase' | 'databaseAdopted' | 'databaseSum'>> {
-  if (!c.pullDatabase || !c.databaseAdopted || !c.databaseSum)
+function dbLink(c: HubLinkClient): HubLinkClient & Required<Pick<HubLinkClient, DbLinkKeys>> {
+  if (!c.pullDatabase || !c.databaseAdopted || !c.databaseSum || !c.databaseJob)
     throw new MoveStepError('SQLITE_MOVE', 'This hub link cannot copy a database.')
-  return c as HubLinkClient &
-    Required<Pick<HubLinkClient, 'pullDatabase' | 'databaseAdopted' | 'databaseSum'>>
+  return c as HubLinkClient & Required<Pick<HubLinkClient, DbLinkKeys>>
+}
+
+/** How often the Hub reads a database job. */
+const DATABASE_JOB_POLL_MS = 5_000
+
+/**
+ * Hub gap sqlite (review 4, N2/N3): follow a database job a link started until it ends, within
+ * `limitMs` (longer than the target's own deadline). A failed job throws its own code; reads that
+ * fail are tolerated for PULL_STATUS_GIVE_UP_MS. `unknown` = the link no longer knows the job
+ * (it restarted): answer `onUnknown()`'s value, or throw UNKNOWN_JOB without it. The run's own
+ * heartbeat keeps the move alive meanwhile.
+ */
+export async function followDatabaseJob<T>(
+  started: DatabaseJobStatus,
+  read: (id: string) => Promise<DatabaseJobStatus | null>,
+  parse: (result: unknown) => T | null,
+  o: {
+    sleep: (ms: number) => Promise<void>
+    now: () => number
+    limitMs: number
+    what: string
+    pollMs?: number
+    onUnknown?: () => Promise<T | null>
+  }
+): Promise<T> {
+  const by = o.now() + o.limitMs
+  let job: DatabaseJobStatus | null = started
+  let lastRead = o.now()
+  for (;;) {
+    if (job?.state === 'done') {
+      const r = parse(job.result)
+      if (r === null)
+        throw new MoveStepError('LINK_BAD_ANSWER', `${o.what}: the answer could not be read.`)
+      return r
+    }
+    if (job?.state === 'failed') {
+      const code = job.code ?? 'DATABASE_COPY_FAILED'
+      throw new MoveStepError(code, `${o.what} (${code}${job.message ? `: ${job.message}` : ''}).`)
+    }
+    if (o.now() >= by)
+      throw new MoveStepError(
+        'DATABASE_JOB_TIMEOUT',
+        `${o.what}: it did not end within ${Math.round(o.limitMs / 60_000)} minutes.`
+      )
+    await o.sleep(o.pollMs ?? DATABASE_JOB_POLL_MS)
+    const id: string = job?.id ?? started.id
+    try {
+      const next = await read(id)
+      lastRead = o.now()
+      if (next === null) {
+        const alt = o.onUnknown ? await o.onUnknown() : null
+        if (alt !== null) return alt
+        if (!o.onUnknown)
+          throw new MoveStepError('UNKNOWN_JOB', `${o.what}: the link no longer knows the job.`)
+        // A restarting target: keep reading until it answers or the limit passes.
+        job = { ...started, state: 'running' }
+        continue
+      }
+      job = next
+    } catch (err) {
+      if (err instanceof MoveStepError) throw err
+      if (o.now() - lastRead >= PULL_STATUS_GIVE_UP_MS)
+        throw databaseStepError(err, `${o.what}: it could not be followed`)
+    }
+  }
 }
 
 /** Hub gap sqlite: a transfer refusal's own code (the target's reason), else the link's code. */
@@ -1003,11 +1079,23 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
       tickets.set(key, revoke)
       try {
         if (l.to.kind === 'shared') {
-          const c = await dbClient(clientFor(l.to.shared))
-            .pullDatabase(l.tenantId, { source, ticket })
+          const dc = dbClient(clientFor(l.to.shared))
+          const started = await dc
+            .pullDatabase(l.tenantId, { source, ticket, move_id: move.id })
             .catch((err) => {
               throw databaseStepError(err, 'The database was not copied')
             })
+          const c = await followDatabaseJob<DatabaseCopied>(
+            started,
+            (id) => dc.databaseJob(l.tenantId, id),
+            parseDatabaseCopied,
+            {
+              sleep,
+              now,
+              limitMs: DATABASE_COPY_TIMEOUT_MS,
+              what: 'The database was not copied'
+            }
+          )
           log(
             `database: ${c.bytes} bytes copied, checksum and integrity checked, ${c.migrations} migrations in its ledger`
           )
@@ -1016,10 +1104,31 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
         if (l.to.kind !== 'docker')
           throw new MoveStepError('SQLITE_MOVE', 'Only a Docker stack takes a SQLite database.')
         const link = dbLink(await targetLink())
-        const c = await link.pullDatabase({ source, ticket, move_id: move.id }).catch((err) => {
-          throw databaseStepError(err, 'The database was not copied')
+        const started = await link
+          .pullDatabase({ source, ticket, move_id: move.id })
+          .catch((err) => {
+            throw databaseStepError(err, 'The database was not copied')
+          })
+        const readJob = async (id: string) => dbLink(await targetLink()).databaseJob(id)
+        // A target that restarted before its end was read: what it adopted at boot answers.
+        const adoptedNow = async (): Promise<DatabaseCopied | null> => {
+          const a = await dbLink(await targetLink())
+            .databaseAdopted()
+            .catch(() => null)
+          return a && a.move_id === move.id ? { sha256: a.sha256, bytes: 0, migrations: 0 } : null
+        }
+        const c = await followDatabaseJob<DatabaseCopied>(started, readJob, parseDatabaseCopied, {
+          sleep,
+          now,
+          limitMs: DATABASE_COPY_TIMEOUT_MS,
+          what: 'The database was not copied',
+          onUnknown: adoptedNow
         })
-        log(`database: ${c.bytes} bytes copied and checked; the target restarts to put it in place`)
+        log(
+          c.bytes
+            ? `database: ${c.bytes} bytes copied and checked; the target restarts to put it in place`
+            : 'database: copied and checked; the target restarted to put it in place'
+        )
         // The target restarts and installs the staged copy at boot: read back what it adopted.
         const by = now() + TARGET_READY_MS
         for (;;) {
@@ -1054,12 +1163,29 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
 
     async sourceDatabaseSum() {
       const l = await load()
+      const what = "The source database's checksum could not be read"
+      const follow = { sleep, now, limitMs: DATABASE_SUM_TIMEOUT_MS, what }
       try {
-        if (l.from.kind === 'shared')
-          return (await dbClient(clientFor(l.from.shared)).databaseSum(l.tenantId)).sha256
-        return (await dbLink(await sourceLink()).databaseSum()).sha256
+        if (l.from.kind === 'shared') {
+          const dc = dbClient(clientFor(l.from.shared))
+          const started = await dc.databaseSum(l.tenantId)
+          return (
+            await followDatabaseJob(
+              started,
+              (id) => dc.databaseJob(l.tenantId, id),
+              parseDatabaseSum,
+              follow
+            )
+          ).sha256
+        }
+        const link = dbLink(await sourceLink())
+        const started = await link.databaseSum()
+        return (
+          await followDatabaseJob(started, (id) => link.databaseJob(id), parseDatabaseSum, follow)
+        ).sha256
       } catch (err) {
-        throw databaseStepError(err, "The source database's checksum could not be read")
+        if (err instanceof MoveStepError) throw err
+        throw databaseStepError(err, what)
       }
     },
 

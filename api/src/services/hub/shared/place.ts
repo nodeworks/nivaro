@@ -832,7 +832,8 @@ async function checkAndWrite(
           multi_node:
             typeof h.swarm?.nodes === 'number' && (h.volume_driver ?? 'local') === 'local'
               ? h.swarm.nodes
-              : null
+              : null,
+          nodes_unknown: typeof h.swarm?.nodes !== 'number'
         }
       }
     } catch {

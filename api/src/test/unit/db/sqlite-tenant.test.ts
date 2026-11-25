@@ -1,4 +1,13 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
@@ -188,6 +197,90 @@ describe('sqlite tenant: a missing file is never made again (H2)', () => {
 
   it('the folder is pinned, whatever STORAGE_LOCAL_ROOT says', () => {
     expect(t.sqliteAppsRoot({ STORAGE_LOCAL_ROOT: '/somewhere/else' })).toBe('/app/uploads/app-db')
+  })
+})
+
+describe('sqlite tenant: every connection is judged, not only the first (review 4)', () => {
+  /** A placed (not new) app's file with a table in it, made through a NEW pool and closed. */
+  async function placedFile(id: string, record = 7): Promise<string> {
+    const p = t.sqliteTenantPath(id, 'app.sqlite')
+    const k = ctx.getOrCreateTenantPool(p, 'sqlite', undefined, { create: true, record })
+    await k.schema.createTable('items', (tb) => tb.increments('id'))
+    await ctx.closeTenantPool(p)
+    return p
+  }
+  const dropIdle = (k: unknown) => {
+    // tarn's idle connections: closed and dropped, as an idle reap does.
+    const pool = (k as { client: { pool: { free: Array<{ resource: { close(): void } }> } } })
+      .client.pool
+    for (const f of pool.free.splice(0)) f.resource.close()
+  }
+
+  it('N1: the file removed while the app is served — the next connection is refused 503, no file is made', async () => {
+    const p = await placedFile('reap-e1')
+    const k = ctx.getOrCreateTenantPool(p, 'sqlite', undefined, { record: 7 })
+    expect(await k('items').count({ n: '*' })).toEqual([{ n: 0 }])
+    dropIdle(k)
+    rmSync(p)
+    await expect(k('items').count({ n: '*' })).rejects.toMatchObject({
+      code: 'SQLITE_FILE_MISSING',
+      statusCode: 503
+    })
+    expect(existsSync(p)).toBe(false)
+    await ctx.closeTenantPool(p)
+  })
+
+  it('N1: a NEW pool makes its file once; removed afterwards, a reconnect never makes it again', async () => {
+    const p = t.sqliteTenantPath('reap-e2', 'app.sqlite')
+    const k = ctx.getOrCreateTenantPool(p, 'sqlite', undefined, { create: true, record: 8 })
+    await k.raw('SELECT 1')
+    dropIdle(k)
+    rmSync(p)
+    await expect(k.raw('SELECT 1')).rejects.toMatchObject({ code: 'SQLITE_FILE_MISSING' })
+    expect(existsSync(p)).toBe(false)
+    await ctx.closeTenantPool(p)
+  })
+
+  it('belt: a placed app whose file holds no table is refused, and an empty file it found goes', async () => {
+    const p = t.sqliteTenantPath('empty-e1', 'app.sqlite')
+    mkdirSync(join(apps, 'empty-e1'), { recursive: true })
+    writeFileSync(p, '')
+    const k = ctx.getOrCreateTenantPool(p, 'sqlite', undefined, { record: 9 })
+    await expect(k.raw('SELECT 1')).rejects.toMatchObject({ code: 'SQLITE_FILE_MISSING' })
+    expect(existsSync(p)).toBe(false)
+    await ctx.closeTenantPool(p)
+  })
+
+  it('L2: the marker is written once the first connection made the file, with its record', async () => {
+    const p = t.sqliteTenantPath('mark-e1', 'app.sqlite')
+    const marker = join(apps, 'mark-e1', t.SQLITE_CREATED_MARKER)
+    const k = ctx.getOrCreateTenantPool(p, 'sqlite', undefined, { create: true, record: 11 })
+    expect(existsSync(marker)).toBe(false)
+    await k.raw('SELECT 1')
+    expect(statSync(p).isFile()).toBe(true)
+    expect(JSON.parse(readFileSync(marker, 'utf8')).record).toBe(11)
+    await ctx.closeTenantPool(p)
+  })
+
+  it("L7: a file another record made is refused SQLITE_FILE_STALE, never opened as this record's", async () => {
+    const p = await placedFile('stale-e1', 21)
+    for (const opts of [{ record: 22 }, { create: true, record: 22 }])
+      expect(() => ctx.getOrCreateTenantPool(p, 'sqlite', undefined, opts)).toThrow(
+        expect.objectContaining({ code: 'SQLITE_FILE_STALE' })
+      )
+    // Its own record opens it.
+    const k = ctx.getOrCreateTenantPool(p, 'sqlite', undefined, { record: 21 })
+    expect(await k('items').count({ n: '*' })).toEqual([{ n: 0 }])
+    await ctx.closeTenantPool(p)
+  })
+
+  it('L7: a NEW record never takes a file it did not make (no marker)', () => {
+    const p = t.sqliteTenantPath('stale-e2', 'app.sqlite')
+    mkdirSync(join(apps, 'stale-e2'), { recursive: true })
+    writeFileSync(p, 'old')
+    expect(() =>
+      ctx.getOrCreateTenantPool(p, 'sqlite', undefined, { create: true, record: 30 })
+    ).toThrow(expect.objectContaining({ code: 'SQLITE_FILE_STALE' }))
   })
 })
 

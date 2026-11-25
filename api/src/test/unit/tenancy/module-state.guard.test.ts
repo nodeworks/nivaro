@@ -171,6 +171,13 @@ const SHARED: Record<string, string> = {
     'lock releases keyed by the database file: each SQLite app has its own file (app-db/<tenant id>/)',
   'db/sqlite-transfer.ts :: busyFiles':
     'database files a copy is being made of now, keyed by the file: each SQLite app has its own file',
+  'db/sqlite-transfer.ts :: reservedBytes':
+    'bytes copies in flight reserve, keyed by the volume (device id): the room every app on it shares',
+  'db/sqlite-transfer.ts :: checkers':
+    'running integrity-check child processes, killed at process exit; each checks one copy',
+  'db/sqlite-transfer.ts :: checkerExitHook': PROC,
+  'services/hub-transfer/database-jobs.ts :: jobs':
+    'database copy and checksum jobs keyed by `<app scope>|<job id>`: each app reads only its own; forgotten when the app leaves',
   'db/sqlite.ts :: heldLockReleases':
     'lock-file releases keyed by the database file (one per SQLite app), run at process exit',
   'db/sqlite.ts :: exitListening': PROC,

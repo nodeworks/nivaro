@@ -921,6 +921,26 @@ export const MOVE_BLOCKER_COPY: Record<string, Copy> = {
     title: 'The copied file is not a SQLite database',
     hint: "Check the source app's database file (its DB_DATABASE), then move again."
   },
+  SQLITE_CHECK_FAILED: {
+    title: 'The check of the database copy stopped before it answered',
+    hint: 'The new home removed its copy. Resume the move to copy and check it again.'
+  },
+  SQLITE_COPY_DEADLINE: {
+    title: 'The database copy took longer than the new home allows',
+    hint: 'It stops a copy after 25 minutes and removes it. Resume the move; for a very large database, move it at a quieter time.'
+  },
+  DATABASE_JOB_TIMEOUT: {
+    title: 'The Hub stopped waiting for the database copy',
+    hint: 'Resume the move. If it happens again, check that the new home is running.'
+  },
+  UNKNOWN_JOB: {
+    title: 'The new home no longer knows the database copy',
+    hint: 'It probably restarted. Resume the move to copy it again.'
+  },
+  SQLITE_FILE_STALE: {
+    title: 'An older database file is in the app’s folder on the new home',
+    hint: 'It is from an earlier stay of the app there and is never opened as this database. Remove it on the new home, then try again.'
+  },
   ENV_OBJECT_STORAGE: {
     title: 'Files are stored in S3 or Azure set by environment variables',
     hint: 'Before 0.3.215 a move copies only files stored on disk, so these would be lost. Upgrade the app (both sides) to 0.3.215 or later, or move the storage settings into the app (Settings → Files) first.'
