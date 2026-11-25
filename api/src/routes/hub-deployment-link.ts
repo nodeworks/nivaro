@@ -41,7 +41,9 @@ import { NIVARO_VERSION } from '../version.js'
  * HMAC of the deployment token — the token itself never crosses this link. Timing-safe; 401
  * DEPLOYMENT_LINK_REFUSED, 429 after 20 failures a minute from one address. Every answer is
  * `Cache-Control: no-store`. Counts and health figures only: never a record, a connection
- * string, an app key (its fingerprint only) or a driver's raw error text.
+ * string, an app key (its fingerprint only) or a driver's raw error text. The `process` block
+ * carries the process's own figures across every app (sockets, heavy-read budget, app pools
+ * summed) — the operator's view; each app's own figures stay in that app.
  */
 
 export const DEPLOYMENT_LINK_REFUSED = 'DEPLOYMENT_LINK_REFUSED'
@@ -77,6 +79,34 @@ function loadedExtensions(registry: Map<string, { id: string; status: string; en
     .filter((e) => e.status === 'loaded' && e.enabled)
     .map((e) => e.id)
     .sort()
+}
+
+/**
+ * The process's own figures across every app (counts only, never which app): sockets and people
+ * connected, the shared heavy-read budget, and every watched app pool summed. What is per app is
+ * kept in each app (app-pool-monitor, app-concurrency-sample, the app's own Traffic Map).
+ */
+async function processFigures(): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = {}
+  try {
+    const { getLocalConcurrency } = await import('../plugins/socketio.js')
+    out.sockets = getLocalConcurrency()
+  } catch {
+    out.sockets = null
+  }
+  try {
+    const { readGateProcessFigures } = await import('../services/read-gate.js')
+    out.heavy_reads = readGateProcessFigures()
+  } catch {
+    out.heavy_reads = null
+  }
+  try {
+    const { appPoolTotals } = await import('../services/app-pool-pressure.js')
+    out.app_pools = appPoolTotals()
+  } catch {
+    out.app_pools = null
+  }
+  return out
 }
 
 function poolFigures(): { used: number; free: number; pending: number } | null {
@@ -147,7 +177,8 @@ export async function hubDeploymentLinkRoutes(app: FastifyInstance): Promise<voi
       process: {
         uptime_s: Math.round(process.uptime()),
         memory_mb: Math.round(process.memoryUsage().rss / 1048576),
-        pool: poolFigures()
+        pool: poolFigures(),
+        ...(await processFigures())
       }
     }
     return reply.send(body)

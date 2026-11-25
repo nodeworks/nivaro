@@ -37,7 +37,9 @@ import { trafficViewRoutes } from './view.js'
  * Extra Traffic Map routes, one plugin per feature. Registered by trafficMapRoutes AFTER its
  * cloud-404 + requireAdmin hooks, so every route here is under /api/traffic-map, admin only, and
  * answers 404 in cloud mode — a feature adds nothing for that. A route that reads only the
- * caller's store (#1132) may opt in to cloud mode with `config: { trafficTenantAware: true }`.
+ * caller's store (#1132) may opt in to cloud mode with `config: { trafficTenantAware: true }`; one
+ * that reads only the caller's app (its store or its own database) may opt in to a Hub shared
+ * deployment only with `config: { trafficAppAware: true }`.
  *
  * To add one: create `./<feature>.ts` exporting `async function <feature>Routes(app)` that declares
  * its routes relative to the prefix (`app.get('/my-thing', …)` → GET /api/traffic-map/my-thing),

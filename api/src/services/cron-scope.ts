@@ -47,6 +47,8 @@ export const CORE_CRON_SCOPES: Record<string, CronScope> = {
   'ai-spend-rollup': 'app',
   'ai-undo-prune': 'app',
   'ai-watch-checks': 'app',
+  'app-concurrency-sample': 'app', // shared deployments only: the app's own sockets and people
+  'app-pool-monitor': 'app', // shared deployments only: the app's own pool (app-pool-pressure.ts)
   'alert-definitions-sweep': 'app',
   'anomaly-checks-daily': 'app',
   'anomaly-checks-weekly': 'app',
@@ -204,13 +206,16 @@ export const SELF_HOSTED_ONLY_CRONS: Record<string, string> = {
 /**
  * Deployment-wide ('process') core jobs whose only output is the static database: on a shared
  * deployment they would sample and write nothing anywhere, so server.ts registers them self-hosted
- * only (P5-10). No deployment-wide core job runs on a shared deployment until phase 6 gives it a
- * deployment store. They stay 'process' here, so a manager can still run them.
+ * only (P5-10). There the figure that is per app runs as an app job of its own (app-pool-monitor,
+ * app-concurrency-sample: each app's pool and sockets, stored in that app), and the process's own
+ * figures are on the deployment link status (routes/hub-deployment-link.ts). They stay 'process'
+ * here, so a manager can still run them.
  */
 export const NO_DEPLOYMENT_STORE_CRONS: Record<string, string> = {
   'pool-monitor':
-    "reads the process's static pool and raises an issue in the static database; per-app pools are not sampled",
-  'concurrency-sample': 'writes socket counts to the static database; no deployment store yet'
+    "reads the process's static pool and raises an issue in the static database; on a shared deployment each app's own pool is judged by app-pool-monitor, and the process figures are on the deployment link status",
+  'concurrency-sample':
+    "writes socket counts to the static database; on a shared deployment each app's own sockets are sampled by app-concurrency-sample, and the process's total is on the deployment link status"
 }
 
 /** Whether a shared deployment leaves this core job out (SELF_HOSTED_ONLY_CRONS). */

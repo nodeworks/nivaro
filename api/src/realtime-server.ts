@@ -312,6 +312,18 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
     onMetadataL2IdentityChange(() => restored('database incarnation changed'))
     startEpochWatch(Number(process.env.CACHE_EPOCH_POLL_MS ?? 5000))
     app.addHook('onClose', async () => stopEpochWatch())
+    // Hub shared deployment: an app's configuration change announced by another process clears
+    // this process's caches for that app (services/app-config-epoch.ts).
+    {
+      const { startAppConfigEpochs } = await import('./services/app-config-epoch.js')
+      const stopAppEpochs = startAppConfigEpochs({
+        redis: app.redis ?? null,
+        instance: INSTANCE_ID,
+        bust: bustAllCaches,
+        log: app.log
+      })
+      if (stopAppEpochs) app.addHook('onClose', stopAppEpochs)
+    }
     const { startInstanceRoster } = await import('./services/instance-roster.js')
     startInstanceRoster(app.redis)
     // Per-minute event-loop lag peaks for the stall monitor (ops-signals.ts): realtime processes
