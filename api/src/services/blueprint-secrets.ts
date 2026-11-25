@@ -131,11 +131,22 @@ const OUTBOUND_TYPE_RE =
   /webhook|http|request|external|api|fetch|call|push|mail|email|sms|teams|slack|notify|post|send/i
 
 const URL_RE = /\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>`)\]]+/gi
+/** An auth scheme and the token after it (quoted: up to its closing quote). */
 const AUTH_RE =
-  /\b(Bearer|Basic|Token|Digest|Negotiate|ApiKey|SharedAccessSignature|AWS4-HMAC-SHA256|Signature)(\s+|=)([A-Za-z0-9._~+/=:%-]{8,})/gi
+  /\b(Bearer|Token|ApiKey|SharedAccessSignature|AWS4-HMAC-SHA256|Signature|Negotiate|Basic|Digest)(\s+|=)(?:"([^"]*)"|'([^']*)'|([^\s"',;]+))/gi
+/** Schemes whose next word may be plain prose ("Basic details"): scrubbed only from 8 characters. */
+const WEAK_SCHEMES = new Set(['basic', 'digest'])
 const JWT_RE = /\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}/g
+/** `name=value` / `name: value` with a credential name: the whole value goes (quoted: up to its
+ *  closing quote; else up to `;`, `&`, `,` or the end of the line). */
 const PAIR_RE =
-  /\b([A-Za-z0-9_-]*(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|signature|sig|credential)[A-Za-z0-9_-]*)(\s*[:=]\s*)("?)([^\s"&;,]+)/gi
+  /\b([A-Za-z0-9_-]*(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|signature|sig|credential|account[_-]?key|shared[_-]?access[_-]?key|access[_-]?key|connection[_-]?string)[A-Za-z0-9_-]*)(\s*[:=]\s*)(?:"([^"]*)"|'([^']*)'|([^;&,\r\n]*))/gi
+/** The exact-name rule of the first version, kept as an extra OR. */
+const SECRET_KEY_RE =
+  /^(x-)?(api[-_]?key|apikey|auth[-_]?token|access[-_]?token|refresh[-_]?token|id[-_]?token|bearer|token|password|passwd|pwd|pass|secret|client[-_]?secret|private[-_]?key|signing[-_]?(key|secret)|webhook[-_]?secret|shared[-_]?secret|credentials?|authorization|proxy[-_]?authorization|cookie|set[-_]?cookie|basic[-_]?auth|session[-_]?(id|token)|sas[-_]?token|connection[-_]?string)$/i
+/** Compound credential names, judged on the joined tokens (clientSecret → clientsecret). */
+const COMPOUND_RE =
+  /(apikey|secret|password|passwd|token|signature|credential|bearer|connectionstring|accountkey|sharedaccesskey|accesskey|privatekey|clientsecret|refreshtoken)/i
 const PLACEHOLDER_ONLY_RE = /^\s*⟦nvr-secret:[^⟧]*⟧\s*$/
 
 export interface ScrubResult {
@@ -161,10 +172,11 @@ export function keyTokens(key: string): string[] {
 export function isSecretKey(key: string): boolean {
   const k = key.trim()
   if (STRUCTURAL_KEYS.has(k.toLowerCase())) return false
+  if (SECRET_KEY_RE.test(k)) return true
   const tokens = keyTokens(k)
   if (tokens.some((t) => SECRET_TOKENS.has(t))) return true
-  // Run-together names: apikey, clientsecret, accesstoken, xapikey …
-  return /(apikey|secret|password|passwd|token|signature|credential|bearer)/i.test(tokens.join(''))
+  // Run-together names: apikey, clientsecret, accountkey, connectionstring, xapikey …
+  return COMPOUND_RE.test(tokens.join(''))
 }
 
 /** One URL with its user info, fragment and every query value removed (names kept). */
@@ -195,10 +207,14 @@ export function scrubUrl(raw: string): string | null {
 }
 
 class Walker {
+  /** The report (capped). Never used to decide whether a value changed: `changes` is. */
   scrubbed: string[] = []
+  /** Every change made, uncapped. */
+  changes = 0
   /** Paths given FILL_IN, for the flow being walked (its "Needs values" line). */
   filled: string[] = []
   note(path: string) {
+    this.changes++
     if (this.scrubbed.length < 500) this.scrubbed.push(path.slice(0, 300))
   }
   fill(path: string): string {
@@ -223,21 +239,32 @@ class Walker {
       }
       return url
     })
-    out = out.replace(AUTH_RE, (m, scheme: string, sep: string, tok: string) => {
-      // Only what looks like a credential ("Basic details" is a label, not a password).
-      if (!credentialLike(tok)) return m
-      hit = true
-      return `${scheme}${sep}`
-    })
+    out = out.replace(
+      AUTH_RE,
+      (m, scheme: string, sep: string, dq?: string, sq?: string, bare?: string) => {
+        const tok = dq ?? sq ?? bare ?? ''
+        // Bearer, Token, ApiKey …: the token always goes. Basic / Digest followed by a short
+        // plain word is prose ("Basic details"); from 8 characters it is a credential.
+        if (!tok) return m
+        if (WEAK_SCHEMES.has(scheme.toLowerCase()) && tok.length < 8 && !credentialLike(tok))
+          return m
+        hit = true
+        return `${scheme}${sep}${dq !== undefined ? '""' : sq !== undefined ? "''" : ''}`
+      }
+    )
     out = out.replace(JWT_RE, () => {
       hit = true
       return ''
     })
-    out = out.replace(PAIR_RE, (m, name: string, sep: string, q: string, value: string) => {
-      if (/^⟦nvr-secret:/.test(value) || value === FILL_IN) return m
-      hit = true
-      return `${name}${sep}${q}`
-    })
+    out = out.replace(
+      PAIR_RE,
+      (m, name: string, sep: string, dq?: string, sq?: string, bare?: string) => {
+        const value = (dq ?? sq ?? bare ?? '').trim()
+        if (!value || /^⟦nvr-secret:[^⟧]*⟧$/.test(value) || value === FILL_IN) return m
+        hit = true
+        return `${name}${sep}${dq !== undefined ? '""' : sq !== undefined ? "''" : ''}`
+      }
+    )
     if (hit) {
       if (deny) this.filled.push(path)
       this.note(path)
@@ -263,9 +290,10 @@ class Walker {
         parsed = undefined
       }
       if (parsed !== undefined && typeof parsed === 'object' && parsed !== null) {
-        const before = this.scrubbed.length
+        // The uncapped counter decides (the report stops at 500 paths; changes never do).
+        const before = this.changes
         const out = this.any(parsed, path, o)
-        return this.scrubbed.length === before ? v : JSON.stringify(out)
+        return this.changes === before ? v : JSON.stringify(out)
       }
     }
     if (o.deny && !o.safe) return this.fill(path)
@@ -331,8 +359,9 @@ class Walker {
     }
     if (Array.isArray(v)) return v.map((x, i) => this.any(x, `${path}[${i}]`, o))
     if (isObj(v)) {
-      // Inside an otherwise structural part, an action that reaches outside is denied by default.
-      const deny = o.deny || (!o.safe && isOutbound(v))
+      // Any object that reaches outside is denied by default — inside a "safe" container too.
+      const outbound = isOutbound(v)
+      const deny = o.deny || outbound
       const out: Record<string, unknown> = {}
       for (const [k, val] of Object.entries(v)) {
         const p = `${path}.${k}`
@@ -341,10 +370,16 @@ class Walker {
           continue
         }
         const lower = k.toLowerCase()
+        const leaf = val === null || typeof val !== 'object'
         out[k] = this.any(val, p, {
           secret: o.secret || isSecretKey(k),
           deny,
-          safe: o.safe || SAFE_CONTAINERS.has(lower) || (deny && SAFE_KEYS.has(lower))
+          // A safe container stays safe below only while nothing in it reaches out (every
+          // nested object is judged again); SAFE_KEYS keep only a plain value (a field name, an
+          // operator), never an object or a list under them.
+          safe:
+            ((o.safe || SAFE_CONTAINERS.has(lower)) && !outbound) ||
+            (deny && leaf && SAFE_KEYS.has(lower))
         })
       }
       return out

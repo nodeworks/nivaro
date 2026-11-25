@@ -31,8 +31,17 @@ const SECRETS = {
   triggerSecretHeader: 'trigger-webhook-secret-88bb',
   adGroupId: '9f8e7d6c-5b4a-4321-9abc-def012345678',
   adGroupName: 'SG-EFP-Clerks-Secret-Group',
-  jwt: 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJjbG9uZSJ9.c2lnbmF0dXJlLXZhbHVl'
+  jwt: 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJjbG9uZSJ9.c2lnbmF0dXJlLXZhbHVl',
+  // Second review round.
+  quotedSpaces: 'correct horse battery staple',
+  shortBearer: 'q7x',
+  accountKey: 'AcctKeyValue88+zz==',
+  hiddenUrl: 'hidden-under-field.example.org',
+  hiddenToken: 'hidden-object-token-99',
+  conditionHook: 'cond-hook.example.org'
 }
+/** 600 secrets in one JSON text: the 500-path report cap must never stop the scrubbing. */
+const BULK = Array.from({ length: 600 }, (_, i) => `bulk-secret-${i}-x9`)
 
 vi.mock('../../../db/index.js', async () => {
   const knex = (await import('knex')).default
@@ -120,7 +129,7 @@ beforeAll(async () => {
   await table('nivaro_layout_field_assignments', ['layout_id', 'field', 'group_key'])
   await table('nivaro_queues', ['id', 'name'])
   await table('nivaro_queue_sources', ['queue_id', 'type', 'collection'])
-  await table('nivaro_rules', ['collection', 'name', 'trigger', 'actions', 'enabled'])
+  await table('nivaro_rules', ['collection', 'name', 'trigger', 'actions', 'enabled', 'conditions'])
   await table('nivaro_roles', [
     'id',
     'name',
@@ -164,7 +173,12 @@ beforeAll(async () => {
     // Nested arrays.
     content: JSON.stringify({ blocks: [[{ embed: { apiKey: SECRETS.nestedArrayKey } }]] })
   })
-  await db('nivaro_workflow_templates').insert({ id: 'wf-1', name: 'Order flow' })
+  await db('nivaro_workflow_templates').insert({
+    id: 'wf-1',
+    name: 'Order flow',
+    // A quoted value with spaces, a short Bearer and an AccountKey in a connection string.
+    description: `Admin password: "${SECRETS.quotedSpaces}" — call the bot with Bearer ${SECRETS.shortBearer}. Archive: DefaultEndpointsProtocol=https;AccountName=acct;AccountKey=${SECRETS.accountKey};EndpointSuffix=core.windows.net`
+  })
   await db('nivaro_workflow_states').insert({
     id: 's-1',
     template: 'wf-1',
@@ -186,6 +200,17 @@ beforeAll(async () => {
     ])
   })
   await db('nivaro_workflow_bindings').insert({ template: 'wf-1', collection: 'orders' })
+  await db('nivaro_rules').insert({
+    collection: 'orders',
+    name: 'Bulk',
+    trigger: 'update',
+    enabled: '1',
+    actions: JSON.stringify(BULK.map((v) => ({ type: 'set_field', field: 'x', apiKey: v }))),
+    // An outbound object hidden inside a "safe" container.
+    conditions: JSON.stringify({
+      filter: { _and: [{ type: 'webhook', url: `https://${SECRETS.conditionHook}/x` }] }
+    })
+  })
   await db('nivaro_rules').insert({
     collection: 'orders',
     name: 'Ping',
@@ -234,6 +259,8 @@ beforeAll(async () => {
       method: 'POST',
       headers: { Authorization: SECRETS.flowAuth, 'X-Api-Key': SECRETS.flowKey },
       notify: [{ to: `https://${SECRETS.flowNotifyUrl}/in`, note: 'call partner' }],
+      // A secret object under a safe key name.
+      field: { url: `https://${SECRETS.hiddenUrl}/x`, token: SECRETS.hiddenToken },
       collection: 'orders'
     })
   })
@@ -262,6 +289,9 @@ describe('Hub clone export: no secret leaves the source', () => {
     const json = JSON.stringify(out)
     for (const [name, value] of Object.entries(SECRETS))
       expect(json.includes(value), `${name} left the source`).toBe(false)
+    const leaked = BULK.filter((v) => json.includes(v))
+    expect(leaked, `${leaked.length} of the 600 bulk secrets left the source`).toEqual([])
+    expect(out.scrubbed.length).toBeLessThanOrEqual(500)
     // The flow step keeps its header NAMES (what to fill in on the clone), never their values.
     const flow = out.package.blueprint.flows?.[0]
     const op = flow?.operations[0]
@@ -294,7 +324,7 @@ describe('Hub clone export: no secret leaves the source', () => {
     expect(bp.roles?.map((r) => r.role.name)).toEqual(['Clerk'])
     expect(bp.roles?.[0].policies).toHaveLength(1)
     expect(bp.flows?.map((f) => f.flow.status)).toEqual(['inactive'])
-    expect(bp.rules.map((r) => r.enabled)).toEqual([false])
+    expect(bp.rules.map((r) => r.enabled)).toEqual([false, false])
     expect(pkg.manifest.counts.roles).toBe(1)
     expect(pkg.manifest.counts.flows).toBe(1)
   })
