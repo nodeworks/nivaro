@@ -355,6 +355,15 @@ async function gatherDocker(
     if (typeof name === 'string' && name) out.placementStacks.push(name)
   }
 
+  // Ports the driver's other stacks are published on (a second stack on one is refused).
+  const ports = (await db('nivaro_hub_stack_settings as ss')
+    .join('nivaro_hub_environments as e', 'e.id', 'ss.environment_id')
+    .join('nivaro_hub_placements as p', 'p.id', 'e.placement_id')
+    .where('p.driver_id', driver.id)
+    .whereNotNull('ss.publish_port')
+    .select('ss.publish_port as port')) as Array<{ port: unknown }>
+  out.takenPorts = [...new Set(ports.map((r) => Number(r.port)).filter(Number.isInteger))]
+
   if (out.health && key) {
     const look = deps.agentStack ?? ((d: DockerDriverRow, n: string) => agentStack(d, n))
     await Promise.all(

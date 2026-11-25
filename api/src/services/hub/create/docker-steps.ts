@@ -24,11 +24,14 @@
 import { insertReturningId } from '../../../db/dialect/ef.js'
 import { db } from '../../../db/index.js'
 import { createComponent, listComponents } from '../components.js'
+import { connectionUrl, scrubDbErrorFull } from '../db/connection.js'
+import { openDatabaseConnection } from '../db/databases.js'
 import { agentOrigin } from '../docker/driver-config.js'
 import { type DockerStepOps, defaultDockerOps } from '../docker/run-step.js'
 import { strictPinMap } from '../docker/stack-gather.js'
 import {
   openSealedMap,
+  openStackSecrets,
   readStackSettings,
   saveStackSettings,
   sealMap
@@ -52,6 +55,7 @@ import {
   dbIdOf,
   StepFailure,
   type StepResult,
+  secret,
   stepAdmin,
   stepDatabase,
   stepLink,
@@ -68,6 +72,8 @@ export interface DestStepContext extends BaseStepContext {
   dest: CreationDest
   /** The environment lock the leg holds (the place step runs place-shared under it). */
   envLock?: { lock: PromoteLock; token: string }
+  /** Cancel was asked for this creation (here, or on another process through the flag). */
+  cancelRequested?: () => Promise<boolean>
 }
 
 /** What these steps call out to; tests pass fakes. */
@@ -241,6 +247,21 @@ export async function stepStackDeploy(
   if (!pins)
     throw new StepFailure('EXTENSION_UNPINNED', `${ctx.env.key}'s extension pins cannot be read.`)
 
+  // Review L2: every value this deploy could echo is a secret of the leg (scrubbed from every
+  // note, log line and stored error): the stack's secrets, generated ones included, and the
+  // database's password and URL. Opened here only to be remembered; the renderer opens its own.
+  for (const v of Object.values(openStackSecrets(row))) secret(ctx, v)
+  const dbId = dbIdOf(ctx)
+  if (dbId) {
+    try {
+      const conn = await openDatabaseConnection(dbId)
+      secret(ctx, conn.password)
+      secret(ctx, connectionUrl(conn))
+    } catch {
+      // not readable: the renderer refuses with its own code
+    }
+  }
+
   const base = ctx.env.base_url.replace(/\/+$/, '')
   const step: PromotionStep = {
     position: 1,
@@ -305,22 +326,41 @@ export async function stepStackDeploy(
       .catch(() => undefined)
   }, LOCK_RENEW_MS)
   beat.unref?.()
+  const runCtx = {
+    deployId,
+    envId: ctx.env.id,
+    version,
+    kind: 'promote' as const,
+    targetKey: ctx.env.key,
+    gitCtx: () => Promise.reject(new StepFailure('NO_GITLAB', 'A Docker stack reads no GitLab.'))
+  }
+  const log = async (line: string, level?: 'info' | 'warn' | 'error') => ctx.log(line, level)
   try {
     const ops = deps.docker ?? defaultDockerOps()
-    const out = await ops.deploy(
-      step,
-      {
-        deployId,
-        envId: ctx.env.id,
-        version,
-        kind: 'promote',
-        targetKey: ctx.env.key,
-        gitCtx: () =>
-          Promise.reject(new StepFailure('NO_GITLAB', 'A Docker stack reads no GitLab.'))
-      },
-      async (line, level) => ctx.log(line, level)
-    )
-    if (!out) throw new StepFailure('DEPLOY_FAILED', `${name} was not applied.`)
+    // Review M1: the last chance to stop, as a promotion's (run-step.ts beforeApply). A lost
+    // lock or a cancel stops the deploy before the agent PUT: nothing is applied, and no second
+    // leg ever finds a second apply in flight.
+    const out = await ops.deploy(step, runCtx, log, {
+      beforeApply: async () =>
+        ctx.signal?.aborted === true || (await ctx.cancelRequested?.()) === true
+    })
+    if (!out) {
+      await db(DEPLOYS).where({ id: deployId }).update({
+        status: 'cancelled',
+        step: null,
+        error: null,
+        finished_at: new Date(),
+        heartbeat_at: null
+      })
+      throw new StepFailure(
+        'CANCELLED',
+        `Stopped before ${name} was applied: nothing was deployed.`
+      )
+    }
+    // Review L1: the deploy counts as served only once the app answers, as a promotion's: the
+    // version served twice and its preflight not failing (manual DNS whose name is not there
+    // yet: the environment waits for its name, as phase 4 does).
+    await ops.verify(step, runCtx, log)
     const ran: PromotionStep = {
       ...step,
       deployedSha: out.specHash,
@@ -341,9 +381,13 @@ export async function stepStackDeploy(
     return done(`Stack ${name} runs nivaro ${version} (${short}).`)
   } catch (err) {
     const code = codeOf(err)
-    const text = err instanceof Error ? err.message : 'The deploy stopped unexpectedly.'
+    if (code === 'CANCELLED') throw err
+    const text = scrubDbErrorFull(
+      err instanceof Error ? err.message : 'The deploy stopped unexpectedly.',
+      [...ctx.secrets]
+    )
     await db(DEPLOYS)
-      .where({ id: deployId })
+      .where({ id: deployId, status: 'running' })
       .update({
         status: 'failed',
         error: `${code}: ${text}`.slice(0, 1000),

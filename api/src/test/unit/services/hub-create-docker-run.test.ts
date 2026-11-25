@@ -181,6 +181,9 @@ let sharedId: number
 let autoServer: number
 let applied: Array<{ step: PromotionStep; envId: number; secrets: Record<string, string> }>
 let deployFails: string | null
+let verifyFails: string | null
+let verified: Array<{ envId: number; want: string }>
+let beforeApplyHook: ((envId: number) => Promise<void>) | null
 let agentHealthNow: AgentHealth
 let adminCalls: Array<{ base: string; email: string }>
 let placeCalls: Array<{ envId: number; input: Record<string, unknown>; token: string }>
@@ -189,12 +192,18 @@ const clock = { t: 1_000_000 }
 
 /** The agent deploy, faked: it records what it would send, as the real step writes the pins. */
 const dockerOps: DockerStepOps = {
-  async deploy(step, ctx, log) {
+  async deploy(step, ctx, log, hooks) {
     const envId = Number(ctx.envId)
+    await beforeApplyHook?.(envId)
+    // The real step's last chance to stop (run-step.ts): nothing is applied after it.
+    if (await hooks?.beforeApply?.()) return null
     // What the real renderer would open, inside the call that sends the spec.
     applied.push({ step, envId, secrets: openStackSecrets(await readStackSettings(envId)) })
     await log(`stack ${step.stack?.name}: applied (1 services changed)`)
-    if (deployFails) throw Object.assign(new Error('swarm rolled it back'), { code: deployFails })
+    if (deployFails)
+      throw Object.assign(new Error(`swarm rolled it back (REDIS_URL=${REDIS_SECRET})`), {
+        code: deployFails
+      })
     await db('nivaro_hub_environments')
       .where({ id: envId })
       .update({ version_pin: ctx.version, extension_pins: JSON.stringify(step.stack?.extensions) })
@@ -204,7 +213,11 @@ const dockerOps: DockerStepOps = {
       extensions: { ...(step.stack?.extensions ?? {}) }
     }
   },
-  async verify() {}
+  async verify(step, ctx) {
+    verified.push({ envId: Number(ctx.envId), want: step.want })
+    if (verifyFails)
+      throw Object.assign(new Error('never answered version twice'), { code: verifyFails })
+  }
 }
 
 function deps(over: Partial<CreationDeps> = {}): CreationDeps {
@@ -356,6 +369,9 @@ beforeEach(async () => {
   fake.logins = new Map()
   applied = []
   deployFails = null
+  verifyFails = null
+  verified = []
+  beforeApplyHook = null
   placeFails = null
   adminCalls = []
   placeCalls = []
@@ -540,6 +556,93 @@ describe('create on a Docker driver', () => {
   })
 })
 
+describe('create on a Docker driver: review fixes', () => {
+  const oneEnv = () =>
+    dockerInput({ environments: [{ key: 'staging', database: { server_id: autoServer } }] })
+
+  it('M1: a cancel during the deploy stops it before the apply; Retry deploys once', async () => {
+    const d = deps()
+    beforeApplyHook = async (envId) => {
+      beforeApplyHook = null
+      await R.cancelCreation(envId, USER, d)
+    }
+    const out = await startAndWait(oneEnv(), d)
+    const envId = out.environments[0].id
+    let c = await store.readCreationRow(envId)
+    expect(c?.status).toBe('cancelled')
+    expect(c?.steps.find((s) => s.key === 'deploy')?.status).toBe('pending')
+    expect(applied).toHaveLength(0)
+    const rows = await db('nivaro_hub_deploys').where({ environment_id: envId })
+    expect(rows.map((r) => r.status)).toEqual(['cancelled'])
+
+    await R.resumeCreation(envId, USER, 'retry', d)
+    await R.awaitCreation(envId)
+    c = await store.readCreationRow(envId)
+    expect(c?.status).toBe('done')
+    expect(applied).toHaveLength(1)
+    const after = await db('nivaro_hub_deploys').where({ environment_id: envId }).orderBy('id')
+    expect(after.map((r) => r.status)).toEqual(['cancelled', 'success'])
+    for (const a of applied) for (const v of Object.values(a.secrets)) secretsSeen.add(v)
+  })
+
+  it('L1: the deploy row is success only after verify; a failed verify fails it', async () => {
+    verifyFails = 'VERIFY_FAILED'
+    const out = await startAndWait(oneEnv())
+    const envId = out.environments[0].id
+    expect(verified).toEqual([{ envId, want: '0.3.215' }])
+    const c = await store.readCreationRow(envId)
+    expect(c?.status).toBe('failed')
+    expect(c?.error).toMatch(/^VERIFY_FAILED:/)
+    const row = await db('nivaro_hub_deploys').where({ environment_id: envId }).first()
+    expect(row.status).toBe('failed')
+    for (const a of applied) for (const v of Object.values(a.secrets)) secretsSeen.add(v)
+  })
+
+  it('L2: a deploy error never stores a stack secret (the row and the creation are scrubbed)', async () => {
+    deployFails = 'SWARM_ROLLED_BACK'
+    const out = await startAndWait(oneEnv())
+    const envId = out.environments[0].id
+    const row = await db('nivaro_hub_deploys').where({ environment_id: envId }).first()
+    expect(row.error).toMatch(/^SWARM_ROLLED_BACK:/)
+    expect(row.error).not.toContain(REDIS_SECRET)
+    expect((await store.readCreationRow(envId))?.error).not.toContain(REDIS_SECRET)
+    for (const a of applied) for (const v of Object.values(a.secrets)) secretsSeen.add(v)
+  })
+
+  it('L4: promotions and Apply now refuse an environment whose creation is open', async () => {
+    const out = await startAndWait(oneEnv())
+    const envId = out.environments[0].id
+    for (const a of applied) for (const v of Object.values(a.secrets)) secretsSeen.add(v)
+    await db('nivaro_hub_creations')
+      .where({ environment_id: envId })
+      .update({ status: 'waiting', waiting_for: 'name' })
+    expect(await store.creationOpenRefusal(envId)).toMatchObject({ code: 'CREATION_OPEN' })
+    const { startPromotion, startStackApply } = await import('../../../services/hub/promote-run.js')
+    const never = () => {
+      throw new Error('must not be reached')
+    }
+    const startDeps = { gather: never, lock: never, startJobRun: never, gitCtx: never } as never
+    await expect(
+      startPromotion(
+        envId,
+        {
+          kind: 'promote',
+          version: '0.3.215',
+          confirm: 'staging',
+          planHash: 'a'.repeat(64),
+          user: USER
+        },
+        startDeps
+      )
+    ).rejects.toMatchObject({ code: 'CREATION_OPEN', status: 409 })
+    await expect(
+      startStackApply(envId, { confirm: 'staging', user: USER }, startDeps)
+    ).rejects.toMatchObject({ code: 'CREATION_OPEN' })
+    await db('nivaro_hub_creations').where({ environment_id: envId }).update({ status: 'done' })
+    expect(await store.creationOpenRefusal(envId)).toBeNull()
+  })
+})
+
 describe('create on a shared deployment', () => {
   const sharedInput = (): CreateAppInput => ({
     key: 'demo',
@@ -571,7 +674,7 @@ describe('create on a shared deployment', () => {
     })
     expect(placeCalls[0].token).toBeTruthy()
     const env = await db('nivaro_hub_environments').where({ id: envId }).first()
-    // A shared app has no Hub link of its own.
+    // No token at creation: the placement issues one when the app serves (faked here).
     expect(env.hub_token).toBeNull()
     expect(env.base_url).toBe('https://demo.shared.example.com')
     expect(env.status).toBe('active')

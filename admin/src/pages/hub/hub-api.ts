@@ -268,6 +268,11 @@ const CODE_COPY: Record<string, { title: string; hint?: string }> = {
     title: 'A creation step is running on this environment',
     hint: 'Wait for it to finish, or cancel it on the app page, then try again.'
   },
+  // Gap `create`: promotions, Apply now and Restart wait for an open creation.
+  CREATION_OPEN: {
+    title: 'This environment is still being created',
+    hint: 'Let the creation finish, or cancel it on the app page, then try again.'
+  },
   // X-7: hub token input rules
   HUB_TOKEN_MASK: {
     title: 'That is the hidden token, not a token',

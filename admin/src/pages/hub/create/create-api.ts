@@ -792,6 +792,10 @@ export const CREATE_COPY: Record<string, Copy> = {
   EXTENSION_UNPINNED: { title: "The environment's extension pins cannot be read" },
   INTERRUPTED: { title: 'The Hub stopped while this ran', hint: 'Retry.' },
   NO_GITLAB: { title: 'A Docker stack reads no GitLab', hint: 'Retry.' },
+  CREATION_OPEN: {
+    title: 'This environment is still being created',
+    hint: 'Let the creation finish, or cancel it, then try again.'
+  },
 
   // Phase 6 (Task 4): creation refuses an environment placed on a shared deployment.
   SHARED_PLACEMENT: {

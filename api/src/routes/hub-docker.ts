@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { environmentFromRow, idParam, isAppOwner } from '../services/hub/apps.js'
+import { creationOpenRefusal } from '../services/hub/create/store.js'
 import { hubDeploysKeys } from '../services/hub/deploys.js'
 import {
   AgentError,
@@ -609,6 +610,9 @@ export function hubDockerRoutes(app: FastifyInstance) {
       // goes through prepareStackSpec + the agent, never this route.
       const open = await moveOpenRefusal({ envIds: [envId] })
       if (open) return fail(reply, open.status, open.code, open.message)
+      // Gap `create` (review L4): a stack its creation still walks is the creation's.
+      const creating = await creationOpenRefusal(envId)
+      if (creating) return fail(reply, creating.status, creating.code, creating.message)
       try {
         const done = await withEnvironmentLock(envId, async (): Promise<RestartOutcome> => {
           // Ruling P4-16: never rebuilt from an inspect — the spec the stack runs, rendered fresh

@@ -513,6 +513,12 @@ export function buildCreationPlan(input: CreateAppInput, facts: CreationFacts): 
       if (edge === 'publish') {
         const why = publishPortProblem(dk.health, { publish_port: publishPort } as never)
         if (why) block('PUBLISH_PORT_NOT_ALLOWED', `${label}: ${why}.`, label)
+        else if (publishPort !== null && (dk.takenPorts ?? []).includes(publishPort))
+          block(
+            'PUBLISH_PORT_NOT_ALLOWED',
+            `Port ${publishPort} is already published by another stack on ${dk.driver?.name ?? 'this driver'}.`,
+            label
+          )
         else if (publishPort !== null && seenPort.has(publishPort))
           block(
             'PUBLISH_PORT_NOT_ALLOWED',
@@ -800,7 +806,8 @@ export function buildCreationPlan(input: CreateAppInput, facts: CreationFacts): 
     else if (facts.projectExists === 'unreachable')
       block('GITLAB_UNREACHABLE', `GitLab did not answer for ${projectPath}.`)
   }
-  // A shared app has no Hub link of its own: the deployment's link speaks for it.
+  // A shared app is not told HUB_URL by the creation (the deployment carries it); its hub token
+  // is issued by the placement when the app serves.
   const hubWhy = kind === 'shared' ? null : hubUrlProblem(facts.hubUrl, appHosts)
   if (hubWhy) block('NO_HUB_URL', hubWhy)
 

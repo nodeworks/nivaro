@@ -109,6 +109,8 @@ export interface DockerCreationFacts {
   stacks: Record<string, 'none' | 'hub' | 'other' | 'unknown'>
   /** Stack names other placements of this driver deploy. */
   placementStacks: string[]
+  /** Publish ports the stack settings of this driver's other environments hold (review L3). */
+  takenPorts?: number[]
   /** The stack settings, checked like a Stack panel save (values sealed; never answered). */
   settings: { ok: true; row: StackSettingsInput } | { ok: false; code: string; message: string }
   /** Secret keys the input carries a value for (a preview's masks count). */

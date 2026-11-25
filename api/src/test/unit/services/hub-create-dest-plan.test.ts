@@ -336,6 +336,16 @@ describe('Docker creation plan', () => {
     expect(codes(buildCreationPlan(ports(20001, 20002), f))).toEqual([])
     expect(codes(buildCreationPlan(ports(20001, 20001), f))).toEqual(['PUBLISH_PORT_NOT_ALLOWED'])
     expect(codes(buildCreationPlan(ports(30000, 20002), f))).toEqual(['PUBLISH_PORT_NOT_ALLOWED'])
+    // A port another stack on the driver already publishes (review L3).
+    const taken = facts({
+      docker: dockerFacts({
+        health: health({ edge: 'publish', publish_ports: [20000, 20100] }),
+        takenPorts: [20002]
+      })
+    })
+    const p = buildCreationPlan(ports(20001, 20002), taken)
+    expect(codes(p)).toEqual(['PUBLISH_PORT_NOT_ALLOWED'])
+    expect(p.blockers[0].text).toMatch(/already published by another stack/)
   })
 
   it('has no stack template before 0.3.0', () => {

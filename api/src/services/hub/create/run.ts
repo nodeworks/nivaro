@@ -290,8 +290,9 @@ async function writeCreation(
   // come without sign-in (the deployment's own OIDC signs its apps in).
   const signin = input.signin && typeof input.signin === 'object' ? input.signin : null
   const oidcSecret = signin ? sealSecret(String(signin.client_secret)) : null
-  // Ruling X-4: sealed with its app-link lookup (link-token.ts hubTokenColumns). A shared app has
-  // no Hub link of its own (the deployment's link speaks for it), so no token.
+  // Ruling X-4: sealed with its app-link lookup (link-token.ts hubTokenColumns). A shared
+  // environment gets no token at creation: the placement issues its token when the app serves
+  // (a token before then would also make place-shared see a link it cannot reach).
   const tokens = plan.environments.map(() =>
     creationKindOf(input) === 'shared' ? null : hubTokenColumns(generateHexSecret(32))
   )
@@ -753,7 +754,8 @@ async function walk(
       : ({
           ...base,
           dest: dest as CreationDest,
-          envLock: { lock: r.lock, token: lockToken }
+          envLock: { lock: r.lock, token: lockToken },
+          cancelRequested: async () => entry.cancel || (await r.flags.cancelRequested(creationId))
         } as DestStepContext)
     const table = target
       ? (STEPS as Record<string, (c: BaseStepContext) => Promise<StepResult>>)
@@ -834,6 +836,14 @@ async function walk(
       return 'interrupted'
     }
     const code = errorCode(err)
+    if (code === 'CANCELLED') {
+      // Review M1: a Docker deploy stopped by a cancel before its apply. The step did nothing.
+      if (current) Object.assign(current, { status: 'pending', at: null, note: null })
+      await finish('cancelled', null).catch(() => undefined)
+      log(`cancelled during ${current?.key ?? 'start'} (nothing was applied)`, 'warn')
+      await run?.complete(`Create: cancelled during ${current?.key ?? 'start'}`)
+      return 'cancelled'
+    }
     const text = scrub(err instanceof Error ? err.message : err, secrets, 900)
     if (current)
       Object.assign(current, {

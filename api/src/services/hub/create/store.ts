@@ -188,6 +188,30 @@ export function creationFromRow(r: Record<string, unknown>): CreationRow {
   }
 }
 
+/**
+ * Review L4: an environment whose creation is still open (queued, running, or waiting between
+ * legs for a database, a name or the operator) refuses promotions, rollbacks, Apply now and
+ * Restart. Between legs no lock is held, and a deploy then would move the version the
+ * creation's name step waits for. Answers the refusal, or null.
+ */
+export async function creationOpenRefusal(
+  envId: number,
+  k: Knex = db
+): Promise<{ code: 'CREATION_OPEN'; message: string; status: 409 } | null> {
+  const open = await k(CREATIONS)
+    .where({ environment_id: envId })
+    .whereIn('status', OPEN_CREATION_STATUSES as CreationStatus[])
+    .first('id')
+  return open
+    ? {
+        code: 'CREATION_OPEN',
+        message:
+          'This environment is still being created: let the creation finish, or cancel it, first.',
+        status: 409
+      }
+    : null
+}
+
 export async function readCreationRow(envId: number, k: Knex = db): Promise<CreationRow | null> {
   if (!Number.isInteger(envId)) return null
   const r = (await k(CREATIONS).where({ environment_id: envId }).first()) as
