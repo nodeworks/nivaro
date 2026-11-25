@@ -1,4 +1,5 @@
 import type { FastifyRequest } from 'fastify'
+import { hubModeEnabled } from './hub/mode.js'
 
 /**
  * Every MCP tool name a connection could be given (#3205 scope editor, #3214 kits, #3206
@@ -32,6 +33,8 @@ export function builtinToolCatalog(): Promise<CatalogTool[]> {
       token: 'catalog',
       adminTools: true,
       chatAccess: 'post',
+      // Hub enhancement 25: the Hub tools are handed out only where they exist (HUB=on).
+      hub: hubModeEnabled() ? {} : null,
       fetch: (async () => new Response('{}', { status: 503 })) as typeof fetch
     })
     const [clientSide, serverSide] = InMemoryTransport.createLinkedPair()
@@ -43,7 +46,8 @@ export function builtinToolCatalog(): Promise<CatalogTool[]> {
       const admin = new Set<string>([
         ...m.ADMIN_TOOL_NAMES,
         ...m.LAYOUT_TOOL_NAMES,
-        ...m.INFRA_TOOL_NAMES
+        ...m.INFRA_TOOL_NAMES,
+        ...m.HUB_ADMIN_TOOL_NAMES
       ])
       const chat = new Set<string>(m.CHAT_TOOL_NAMES)
       return tools.map(

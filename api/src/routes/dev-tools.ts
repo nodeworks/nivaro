@@ -7,6 +7,8 @@ import { EXTENSIONS_DIR } from '../extensions/loader.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { getRelations, listCollections } from '../services/collections.js'
+import { withHubOpenApi } from '../services/hub/api/openapi.js'
+import { hubModeEnabled } from '../services/hub/mode.js'
 import type { CMSCollection, CMSField, CMSRelation } from '../types.js'
 
 /**
@@ -706,7 +708,8 @@ server.listen(port, () => console.log('nivaro mock api on http://localhost:' + p
     const { collections, fieldsByCollection, projectName } = await loadSchema()
     const spec = generateOpenApi(collections, fieldsByCollection, projectName)
     const roleId = req.query.role?.trim()
-    if (!roleId) return reply.send(spec)
+    // The Hub's own routes are listed only on a Hub (HUB=on): a regular install has none.
+    if (!roleId) return reply.send(hubModeEnabled() ? withHubOpenApi(spec) : spec)
     const { narrowOpenApiForRole, roleAccessFor } = await import('../services/openapi-role.js')
     const access = await roleAccessFor(
       roleId,

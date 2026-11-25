@@ -4,8 +4,10 @@ import {
   EXEC_SCRIPT_SINCE,
   MANUAL_MOVE_STEPS,
   MOVE_STEPS,
-  SHARED_FEATURES_SINCE
+  SHARED_FEATURES_SINCE,
+  SHARED_TRACKERS_SINCE
 } from '../../../services/hub/move/plan.js'
+import { runsStorageCopy, STORAGE_COPY_SINCE } from '../../../services/hub/move/storage-floor.js'
 import type {
   MoveBlockerCode,
   MovePlanInput,
@@ -317,8 +319,8 @@ describe('buildMovePlan — one test per blocker', () => {
     expect(codes(p)).not.toContain('TEAMS_BOT')
   })
 
-  it('every one of the three readiness blockers becomes a plan blocker, on any target version', () => {
-    expect(SHARED_READINESS_BLOCKERS).toHaveLength(3)
+  it('every readiness blocker becomes a plan blocker, on any target version', () => {
+    expect(SHARED_READINESS_BLOCKERS).toEqual(['SQLITE'])
     for (const version of ['0.3.210', '0.3.212', '0.3.215'])
       for (const code of SHARED_READINESS_BLOCKERS) {
         const p = buildMovePlan(
@@ -410,6 +412,45 @@ describe('buildMovePlan — one test per blocker', () => {
         expect(codes(p), `${v} ${level} on`).toEqual([])
         expect(p.warnings.find((w) => w.code === 'EXEC_SCRIPT_FLOWS')?.text).toMatch(
           /^Script steps run in a sandbox process of their own .*: 2 active flows run a script step$/
+        )
+      }
+    }
+  })
+
+  it('GitLab issue sync blocks only a target before 0.3.215; on one that runs it, a warning', () => {
+    expect(SHARED_TRACKERS_SINCE).toBe('0.3.215')
+    // An app before 0.3.215 sends it as a blocker; from 0.3.215 on, as a warning. Either way the
+    // target's version decides.
+    for (const level of ['blocker', 'warning'] as const) {
+      const at = (version: string | null) =>
+        buildMovePlan(
+          input({
+            source: src({
+              version: '0.3.214',
+              readiness: [
+                {
+                  code: 'ISSUE_TRACKERS',
+                  level,
+                  detail: 'GitLab issue sync is on with 2 connections'
+                }
+              ]
+            }),
+            target_facts: tgt({ version })
+          })
+        )
+      for (const v of ['0.3.212', '0.3.214', '0.3.215-rc.1', null, 'latest']) {
+        const p = at(v)
+        expect(codes(p), `${level} @ ${v}`).toContain('ISSUE_TRACKERS')
+        expect(p.blockers.find((b) => b.code === 'ISSUE_TRACKERS')?.text).toBe(
+          'Issue tracker sync does not run on a shared deployment before 0.3.215: GitLab issue sync is on with 2 connections'
+        )
+        expect(p.warnings.some((w) => w.code === 'ISSUE_TRACKERS')).toBe(false)
+      }
+      for (const v of ['0.3.215', '0.3.216', '0.4.0']) {
+        const p = at(v)
+        expect(codes(p), `${level} @ ${v}`).not.toContain('ISSUE_TRACKERS')
+        expect(p.warnings.find((w) => w.code === 'ISSUE_TRACKERS')?.text, v).toBe(
+          "GitLab issue sync runs per app on a shared deployment, by the app's own switch: GitLab issue sync is on with 2 connections"
         )
       }
     }
@@ -630,6 +671,8 @@ describe('buildMovePlan — warnings', () => {
     expect(w?.text).toMatch(/Teams bot/)
     expect(w?.text).toMatch(/directory/)
     expect(w?.text).toMatch(/turn the bot off on the copy/i)
+    // ...and its GitLab connections (a staging copy would write to the production project).
+    expect(w?.text).toMatch(/GitLab connections: turn issue sync off on the copy/)
   })
 
   it('SIGN_IN_AGAIN names phone and MCP sign-ins', () => {
@@ -658,7 +701,7 @@ describe('buildMovePlan — warnings', () => {
     }
   })
 
-  it('REPLAYS_NOT_MOVED always', () => {
+  it('REPLAYS_NOT_MOVED before 0.3.215', () => {
     expect(buildMovePlan(input()).warnings.map((w) => w.code)).toContain('REPLAYS_NOT_MOVED')
   })
 
@@ -1017,6 +1060,128 @@ describe('object storage key prefix (P6-31)', () => {
   })
 })
 
+// 0.3.215 (storage-floor.ts): a move copies env S3/Azure objects (either side, re-keyed between
+// the bucket root and apps/<tenant>/) and the cold objects of session replays. Older sides keep
+// the old rules: ENV_OBJECT_STORAGE blocks, REPLAYS_NOT_MOVED warns.
+describe('env object storage and session replays (0.3.215)', () => {
+  const warns = (p: { warnings: { code: string }[] }) => p.warnings.map((w) => w.code)
+  /** Both sides at `version` (the target at `targetVersion` when given). */
+  const at = (version: string, o: Partial<MovePlanInput> = {}, targetVersion?: string | null) =>
+    input({
+      env: { ...input().env, version_pin: version },
+      ...o,
+      source: { ...input().source, ...(o.source ?? {}), version },
+      target_facts: {
+        ...input().target_facts,
+        ...(o.target_facts ?? {}),
+        version: targetVersion === undefined ? version : targetVersion
+      }
+    })
+
+  it('the floor is 0.3.215; a pre-release or an unreadable version is older', () => {
+    expect(STORAGE_COPY_SINCE).toBe('0.3.215')
+    expect(runsStorageCopy('0.3.215')).toBe(true)
+    expect(runsStorageCopy('v0.3.216')).toBe(true)
+    expect(runsStorageCopy('0.4.0')).toBe(true)
+    expect(runsStorageCopy('0.3.214')).toBe(false)
+    expect(runsStorageCopy('0.3.215-rc.1')).toBe(false)
+    expect(runsStorageCopy(null)).toBe(false)
+    expect(runsStorageCopy('latest')).toBe(false)
+  })
+
+  it('env S3 on the target: blocks at 0.3.214, not at 0.3.215', () => {
+    const t = { storage_provider: 's3' } as Partial<MovePlanInput['target_facts']>
+    expect(codes(buildMovePlan(at('0.3.214', { target_facts: tgt(t) })))).toContain(
+      'ENV_OBJECT_STORAGE'
+    )
+    expect(codes(buildMovePlan(at('0.3.215', { target_facts: tgt(t) })))).toEqual([])
+  })
+
+  it("the app's own ENV_OBJECT_STORAGE (a warning from 0.3.215, a blocker before) blocks only before", () => {
+    const report = (level: 'blocker' | 'warning') => ({
+      readiness: [{ code: 'ENV_OBJECT_STORAGE' as const, level, detail: 'S3' }],
+      storage_provider: 'object'
+    })
+    // An app before 0.3.215 sends it as a blocker; a 0.3.215 app as a warning: either way the
+    // Hub decides by the versions.
+    expect(codes(buildMovePlan(at('0.3.214', { source: src(report('blocker')) })))).toContain(
+      'ENV_OBJECT_STORAGE'
+    )
+    expect(codes(buildMovePlan(at('0.3.214', { source: src(report('warning')) })))).toContain(
+      'ENV_OBJECT_STORAGE'
+    )
+    const p = buildMovePlan(at('0.3.215', { source: src(report('warning')) }))
+    expect(codes(p)).toEqual([])
+    expect(warns(p)).not.toContain('ENV_OBJECT_STORAGE')
+  })
+
+  it('a dedicated target is judged at the move version (it is deployed at it)', () => {
+    const toDedicated = {
+      kind: 'to_dedicated' as const,
+      from: sharedSide(),
+      to: dockerSide(),
+      target: { kind: 'dedicated', placement_id: 3 } as never
+    }
+    const tFacts = tgt({ storage_provider: 'azure' })
+    expect(
+      codes(buildMovePlan(at('0.3.214', { ...toDedicated, target_facts: tFacts }, null)))
+    ).toContain('ENV_OBJECT_STORAGE')
+    expect(
+      codes(buildMovePlan(at('0.3.215', { ...toDedicated, target_facts: tFacts }, null)))
+    ).not.toContain('ENV_OBJECT_STORAGE')
+  })
+
+  it('review L-1: a shared target version the Hub cannot read is older (blocker and warning kept)', () => {
+    const p = buildMovePlan(at('0.3.215', { target_facts: tgt({ storage_provider: 's3' }) }, null))
+    expect(codes(p)).toContain('ENV_OBJECT_STORAGE')
+    expect(warns(p)).toContain('REPLAYS_NOT_MOVED')
+  })
+
+  it('a shared target that reports an older version keeps the blocker', () => {
+    const p = buildMovePlan(
+      at('0.3.215', { target_facts: tgt({ storage_provider: 's3' }) }, '0.3.214')
+    )
+    expect(codes(p)).toContain('ENV_OBJECT_STORAGE')
+  })
+
+  it('REPLAYS_NOT_MOVED and SESSION_REPLAYS go at 0.3.215 (cold replays are copied)', () => {
+    const readiness = [
+      { code: 'SESSION_REPLAYS' as const, level: 'warning' as const, detail: '2 stay behind' }
+    ]
+    const before = buildMovePlan(at('0.3.214', { source: src({ readiness }) }))
+    expect(warns(before)).toContain('REPLAYS_NOT_MOVED')
+    expect(warns(before)).toContain('SESSION_REPLAYS')
+    const after = buildMovePlan(at('0.3.215', { source: src({ readiness }) }))
+    expect(warns(after)).not.toContain('REPLAYS_NOT_MOVED')
+    expect(warns(after)).not.toContain('SESSION_REPLAYS')
+  })
+
+  it('storage the Hub cannot see no longer matters at 0.3.215 (no STORAGE_UNVERIFIED, no storage_local)', () => {
+    const p = buildMovePlan(at('0.3.215', { target_facts: tgt({ storage_provider: null }) }))
+    expect(warns(p)).not.toContain('STORAGE_UNVERIFIED')
+    expect(p.checklist.find((c) => c.id === 'storage_local')).toBeUndefined()
+  })
+
+  it('env Azure rows (storage `azure`) are copyable at 0.3.215, STORAGE_LAYOUT_DIFFERS before', () => {
+    const files = { count: 4, bytes: 1, local: 1, objects: { azure: 3 } }
+    expect(codes(buildMovePlan(at('0.3.214', { source: src({ files }) })))).toContain(
+      'STORAGE_LAYOUT_DIFFERS'
+    )
+    const p = buildMovePlan(at('0.3.215', { source: src({ files }) }))
+    expect(codes(p)).toEqual([])
+    expect(p.warnings.find((w) => w.code === 'STORAGE_PREFIX_CHANGES')?.text).toMatch(
+      /3 file\(s\).*environment variables.*bucket copies them itself/
+    )
+  })
+
+  it('a provider no move copies (gcs) still blocks at 0.3.215', () => {
+    const files = { count: 4, bytes: 1, local: 1, objects: { gcs: 3 } }
+    expect(codes(buildMovePlan(at('0.3.215', { source: src({ files }) })))).toContain(
+      'STORAGE_LAYOUT_DIFFERS'
+    )
+  })
+})
+
 // E2E B3: the redirect addresses the checklist names keep the public address's scheme and port.
 describe('callback addresses (E2E B3)', () => {
   it('an environment on a port other than 443 → its callbacks name that port', () => {
@@ -1036,5 +1201,57 @@ describe('callback addresses (E2E B3)', () => {
       expect(
         buildMovePlan(input({ env })).checklist.find((c) => c.id === 'callbacks_registered')?.text
       ).toContain('https://shop.apps.example.com/api/auth/callback')
+  })
+})
+
+describe('buildMovePlan — sign-in through the Hub on a shared target (0.3.215)', () => {
+  const hubApp = { ...input().app, signin_mode: 'hub' as const }
+  const at = (version: string | null, o: Partial<MovePlanInput> = {}) =>
+    input({
+      app: hubApp,
+      env: { ...input().env, hub_client: true, version_pin: version },
+      source: src({ version, signin_hub: true }),
+      target_facts: tgt({ version }),
+      ...o
+    })
+  const callbacks = (p: ReturnType<typeof buildMovePlan>) =>
+    p.checklist.find((c) => c.id === 'callbacks_registered')
+
+  it('a target before 0.3.215 (or one the Hub cannot read) still refuses SIGNIN_VIA_HUB, naming the version', () => {
+    for (const v of ['0.3.214', '0.3.215-rc.1', null]) {
+      const p = buildMovePlan(at(v))
+      expect(codes(p)).toContain('SIGNIN_VIA_HUB')
+      expect(p.blockers.find((b) => b.code === 'SIGNIN_VIA_HUB')?.text).toContain('0.3.215')
+      expect(callbacks(p)?.required).toBe(true)
+    }
+  })
+
+  it('0.3.215 or later: no blocker; the callbacks item stays required (the direct fallback, review L1)', () => {
+    for (const v of ['0.3.215', '0.3.220', 'v0.4.0']) {
+      const p = buildMovePlan(at(v))
+      expect(codes(p)).not.toContain('SIGNIN_VIA_HUB')
+      expect(callbacks(p)?.required).toBe(true)
+      expect(callbacks(p)?.text).toContain('for direct sign-in while the Hub is down')
+      expect(callbacks(p)?.text).toContain('https://shop.apps.example.com/api/auth/callback')
+    }
+  })
+
+  it('an app in hub mode whose environment has no active client is refused', () => {
+    const p = buildMovePlan(at('0.3.215', { env: { ...input().env, hub_client: false } }))
+    expect(p.blockers.find((b) => b.code === 'SIGNIN_VIA_HUB')?.text).toContain(
+      'no active sign-in client'
+    )
+  })
+
+  it('a source on Hub sign-in whose app record says direct signs in directly there: callbacks stay required', () => {
+    const p = buildMovePlan(at('0.3.215', { app: { ...hubApp, signin_mode: 'direct' } }))
+    expect(codes(p)).not.toContain('SIGNIN_VIA_HUB')
+    expect(callbacks(p)?.required).toBe(true)
+  })
+
+  it('a client the Hub did not read (absent) keeps the callbacks required', () => {
+    const p = buildMovePlan(at('0.3.215', { env: { ...input().env, version_pin: '0.3.215' } }))
+    expect(codes(p)).not.toContain('SIGNIN_VIA_HUB')
+    expect(callbacks(p)?.required).toBe(true)
   })
 })

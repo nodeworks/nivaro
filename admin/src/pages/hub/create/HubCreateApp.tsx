@@ -9,14 +9,18 @@ import { UserCombobox } from '@/components/user-combobox'
 import type { User } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { dbKeys, ENGINE_LABEL, STATUS_LABEL, useDatabases, useDbServers } from '../databases/db-api'
-import { HUB_MASK, hubKeys } from '../hub-api'
+import { fetchDrivers, HUB_MASK, hubKeys } from '../hub-api'
 import { CopyButton, Field, ghostButton, SectionCard } from '../hub-parts'
+import { fetchSharedList, sharedKeys } from '../shared/shared-api'
+import { countsLine, fetchTemplates, templateError, templateKeys } from '../templates/templates-api'
 import {
   appBlockers,
   automaticHostname,
   blockersForEnv,
   type CreateAppInput,
+  type CreateTargetInput,
   type CreationBlocker,
+  type CreationKind,
   type CreationPlan,
   createBlockersOf,
   createError,
@@ -24,6 +28,7 @@ import {
   defaultDbNames,
   fetchTargets,
   isCreatableKey,
+  KIND_WORDS,
   previewPlan,
   startCreate,
   VERSION_RE
@@ -45,6 +50,8 @@ interface EnvDraft {
   loginName: string
   databaseId: string
   hostname: string
+  /** Docker, published-port edge: this environment's port. */
+  publishPort: string
 }
 
 const emptyEnv = (key: string): EnvDraft => ({
@@ -54,8 +61,40 @@ const emptyEnv = (key: string): EnvDraft => ({
   databaseName: '',
   loginName: '',
   databaseId: '',
-  hostname: ''
+  hostname: '',
+  publishPort: ''
 })
+
+interface SecretDraft {
+  id: number
+  key: string
+  value: string
+}
+let secretSeq = 1
+
+/** `KEY=value` lines (blank lines and `#` comments skipped) as a map; null when a line is bad. */
+export function linesToMap(raw: string): Record<string, string> | null {
+  const out: Record<string, string> = {}
+  for (const line of raw.split('\n')) {
+    const t = line.trim()
+    if (!t || t.startsWith('#')) continue
+    const at = t.indexOf('=')
+    if (at < 1) return null
+    out[t.slice(0, at).trim()] = t.slice(at + 1).trim()
+  }
+  return out
+}
+
+const KIND_OPTIONS: CreationKind[] = ['gitlab', 'docker', 'shared']
+const SIZE_OPTIONS = [
+  { value: 'small', label: 'Small (one process)' },
+  { value: 'medium', label: 'Medium (web + worker)' },
+  { value: 'large', label: 'Large (split roles)' }
+]
+const REDIS_OPTIONS = [
+  { value: 'bundled', label: 'Bundled (the agent runs one)' },
+  { value: 'external', label: 'External (give REDIS_URL)' }
+]
 
 const DB_MODE_OPTIONS = [
   { value: 'server', label: 'New database on a server' },
@@ -84,6 +123,8 @@ export function HubCreateApp({
 }) {
   const qc = useQueryClient()
   const targets = useQuery({ queryKey: createKeys.targets(), queryFn: fetchTargets })
+  const drivers = useQuery({ queryKey: hubKeys.drivers(), queryFn: fetchDrivers })
+  const sharedList = useQuery({ queryKey: sharedKeys.list(), queryFn: fetchSharedList })
   // The Databases tab's reads and keys: a save on either screen refreshes both.
   const servers = useDbServers()
   const databases = useDatabases()
@@ -91,8 +132,24 @@ export function HubCreateApp({
   const [key, setKey] = useState('')
   const [name, setName] = useState('')
   const [owners, setOwners] = useState<Array<{ id: string; label: string }>>([])
+  const [kind, setKind] = useState<CreationKind>('gitlab')
   const [targetId, setTargetId] = useState('')
+  const [driverId, setDriverId] = useState('')
+  const [sharedId, setSharedId] = useState('')
+  const [size, setSize] = useState('small')
+  const [redis, setRedis] = useState('bundled')
+  const [settingsText, setSettingsText] = useState('')
+  const [pinsText, setPinsText] = useState('')
+  const [secrets, setSecrets] = useState<SecretDraft[]>([])
+  const [poolMax, setPoolMax] = useState('')
+  const [extensionsText, setExtensionsText] = useState('')
   const [version, setVersion] = useState('')
+  // Hub enhancement 24: a template from the library ('' = none).
+  const [templateId, setTemplateId] = useState('')
+  const templates = useQuery({
+    queryKey: templateKeys.list(false),
+    queryFn: () => fetchTemplates()
+  })
   const [issuer, setIssuer] = useState('')
   const [clientId, setClientId] = useState('')
   const [clientSecret, setClientSecret] = useState('')
@@ -103,7 +160,52 @@ export function HubCreateApp({
   const [touched, setTouched] = useState(false)
 
   const target = targets.data?.find((t) => String(t.id) === targetId) ?? null
-  const manual = target?.config.dns_mode === 'manual'
+  const dockerDrivers = (drivers.data ?? []).filter((d) => d.kind === 'docker')
+  const driver = dockerDrivers.find((d) => String(d.id) === driverId) ?? null
+  const deployments = (sharedList.data ?? []).filter((s) => s.status !== 'retired')
+  const shared = deployments.find((s) => String(s.id) === sharedId) ?? null
+  const sharedBase = shared?.host_pattern?.startsWith('*.') ? shared.host_pattern.slice(2) : null
+  // Where names are typed by hand: a GitLab target or Docker driver with manual DNS, or a shared
+  // deployment without a host pattern.
+  const manual =
+    kind === 'gitlab'
+      ? target?.config.dns_mode === 'manual'
+      : kind === 'docker'
+        ? driver?.config.dns_mode === 'manual'
+        : !!shared && !sharedBase
+  const wildcard =
+    kind === 'gitlab'
+      ? (target?.config.wildcard_domain ?? null)
+      : kind === 'docker'
+        ? (driver?.config.wildcard_domain ?? null)
+        : sharedBase
+  const picked = kind === 'gitlab' ? !!target : kind === 'docker' ? !!driver : !!shared
+  const settingsMap = useMemo(() => linesToMap(settingsText), [settingsText])
+  const pinsMap = useMemo(() => linesToMap(pinsText), [pinsText])
+  const targetInput: CreateTargetInput = useMemo(() => {
+    if (kind === 'docker')
+      return {
+        kind,
+        driver_id: Number(driverId) || 0,
+        stack: {
+          size,
+          redis,
+          settings: settingsMap ?? {},
+          secrets: Object.fromEntries(
+            secrets.filter((s) => s.key.trim()).map((s) => [s.key.trim(), s.value])
+          ),
+          extension_pins: pinsMap ?? {}
+        }
+      }
+    if (kind === 'shared')
+      return {
+        kind,
+        shared_id: Number(sharedId) || 0,
+        ...(poolMax.trim() ? { pool_max: Number(poolMax) } : {})
+      }
+    return { kind, id: Number(targetId) || 0 }
+  }, [kind, driverId, sharedId, targetId, size, redis, settingsMap, secrets, pinsMap, poolMax])
+  const sharedSignin = kind === 'shared' && !issuer.trim() && !clientId.trim() && !clientSecret
 
   const input: CreateAppInput = useMemo(
     () => ({
@@ -115,12 +217,33 @@ export function HubCreateApp({
         ...(adminFirst.trim() ? { first_name: adminFirst.trim() } : {}),
         ...(adminLast.trim() ? { last_name: adminLast.trim() } : {})
       },
-      target_id: Number(targetId) || 0,
+      // GitLab keeps the phase-3 form (`target_id`), so an older Hub reads it too.
+      ...(kind === 'gitlab' ? { target_id: Number(targetId) || 0 } : { target: targetInput }),
       version: version.trim(),
-      signin: { issuer: issuer.trim(), client_id: clientId.trim(), client_secret: clientSecret },
+      ...(kind !== 'shared' && Number(templateId) ? { template_id: Number(templateId) } : {}),
+      ...(sharedSignin
+        ? {}
+        : {
+            signin: {
+              issuer: issuer.trim(),
+              client_id: clientId.trim(),
+              client_secret: clientSecret
+            }
+          }),
+      ...(kind === 'shared' && extensionsText.trim()
+        ? {
+            extensions: extensionsText
+              .split(/[\s,]+/)
+              .map((x) => x.trim())
+              .filter(Boolean)
+          }
+        : {}),
       environments: envs.map((e) => ({
         key: e.key.trim(),
         ...(manual && e.hostname.trim() ? { hostname: e.hostname.trim() } : {}),
+        ...(kind === 'docker' && e.publishPort.trim()
+          ? { publish_port: Number(e.publishPort) }
+          : {}),
         database:
           e.dbMode === 'existing'
             ? { database_id: Number(e.databaseId) || 0 }
@@ -138,24 +261,48 @@ export function HubCreateApp({
       adminEmail,
       adminFirst,
       adminLast,
-      targetId,
+      targetInput,
       version,
+      templateId,
       issuer,
       clientId,
       clientSecret,
       envs,
-      manual
+      manual,
+      kind,
+      sharedSignin,
+      extensionsText
     ]
   )
-  // What a preview sends: the form with the client secret replaced by the mask. The planner only
-  // checks that a secret is there; the secret itself goes out once, with Create.
-  const previewInput: CreateAppInput = useMemo(
-    () => ({
+  // What a preview sends: the form with every secret replaced by the mask. The planner only
+  // checks that a secret is there; the secrets themselves go out once, with Create.
+  const previewInput: CreateAppInput = useMemo(() => {
+    const t = input.target
+    return {
       ...input,
-      signin: { ...input.signin, client_secret: input.signin.client_secret ? HUB_MASK : '' }
-    }),
-    [input]
-  )
+      ...(input.signin
+        ? {
+            signin: {
+              ...input.signin,
+              client_secret: input.signin.client_secret ? HUB_MASK : ''
+            }
+          }
+        : {}),
+      ...(t?.kind === 'docker'
+        ? {
+            target: {
+              ...t,
+              stack: {
+                ...t.stack,
+                secrets: Object.fromEntries(
+                  Object.entries(t.stack?.secrets ?? {}).map(([k, v]) => [k, v ? HUB_MASK : ''])
+                )
+              }
+            }
+          }
+        : {})
+    }
+  }, [input])
   // The form's identity: a preview counts only for exactly this form. Held in memory only.
   const sig = useMemo(() => JSON.stringify(previewInput), [previewInput])
 
@@ -219,7 +366,16 @@ export function HubCreateApp({
       key.trim() && !isCreatableKey(key.trim())
         ? 'Lower-case letters, digits and single dashes'
         : '',
-    version: version.trim() && !VERSION_RE.test(version.trim()) ? 'A version like 0.3.210' : '',
+    version: version.trim() && !VERSION_RE.test(version.trim()) ? 'A version like 0.3.215' : '',
+    settings:
+      kind === 'docker' && (settingsMap === null || pinsMap === null)
+        ? 'One KEY=value per line'
+        : '',
+    ports: envs.map((e) =>
+      kind === 'docker' && e.publishPort.trim() && !/^\d{1,5}$/.test(e.publishPort.trim())
+        ? 'A port number'
+        : ''
+    ),
     hostnames: envs.map((e) =>
       manual && !e.hostname.trim() ? 'Enter the hostname you will request' : ''
     ),
@@ -232,7 +388,13 @@ export function HubCreateApp({
           : ''
   }
   const localProblem =
-    !!local.key || !!local.version || !!local.secret || local.hostnames.some(Boolean) || !targetId
+    !!local.key ||
+    !!local.version ||
+    !!local.secret ||
+    !!local.settings ||
+    local.ports.some(Boolean) ||
+    local.hostnames.some(Boolean) ||
+    !picked
 
   const fresh = plan?.sig === sig ? plan.plan : null
   const blockers = fresh?.blockers ?? plan?.plan.blockers ?? []
@@ -295,6 +457,29 @@ export function HubCreateApp({
       label: `${t.name} · ${t.config.namespace}${t.config.dns_mode === 'manual' ? ' · names by hand' : ''}`
     }))
   ]
+  const pickedTemplate = templates.data?.find((t) => String(t.id) === templateId) ?? null
+  const templateOptions = [
+    { value: '', label: 'No template' },
+    ...(templates.data ?? []).map((t) => ({ value: String(t.id), label: `${t.name} ${t.version}` }))
+  ]
+  const driverOptions = [
+    { value: '', label: 'Pick a Docker driver' },
+    ...dockerDrivers.map((d) => ({
+      value: String(d.id),
+      label: `${d.name}${d.config.dns_mode === 'manual' ? ' · names by hand' : d.config.wildcard_domain ? ` · *.${d.config.wildcard_domain}` : ''}`
+    }))
+  ]
+  const sharedOptions = [
+    { value: '', label: 'Pick a shared deployment' },
+    ...deployments.map((s) => ({
+      value: String(s.id),
+      label: `${s.name} · ${s.key}${s.version_pin ? ` · ${s.version_pin}` : ''}${s.host_pattern ? ` · ${s.host_pattern}` : ''}`
+    }))
+  ]
+  const setSecret = (id: number, patch: Partial<SecretDraft>) => {
+    setTouched(true)
+    setSecrets((all) => all.map((s) => (s.id === id ? { ...s, ...patch } : s)))
+  }
 
   return (
     <div className='p-4 sm:p-6'>
@@ -304,9 +489,10 @@ export function HubCreateApp({
             Create an app
           </h2>
           <p className='m-0 mt-1 max-w-[72ch] text-[12px] leading-relaxed text-slate-600 dark:text-muted-foreground'>
-            The Hub makes a deploy repository from the target's template, a database per
-            environment, their secrets, a first deploy, the hostnames and the first administrator.
-            The preview below says exactly what it will do before anything is made.
+            The Hub makes a database per environment, their secrets, a first deploy (through a
+            GitLab target's pipeline, a Docker driver's Hub agent, or a shared deployment), the
+            hostnames and the first administrator. The preview below says exactly what it will do
+            before anything is made.
           </p>
         </div>
 
@@ -374,46 +560,297 @@ export function HubCreateApp({
         </SectionCard>
 
         <SectionCard title='Where and which version'>
+          <div className='relative px-4 pt-4'>
+            <fieldset className='m-0 inline-flex flex-wrap gap-1 rounded-md border border-slate-200 bg-slate-50 p-0.5 dark:border-border dark:bg-muted'>
+              <legend className='sr-only'>Where the app goes</legend>
+              {KIND_OPTIONS.map((k) => (
+                <button
+                  key={k}
+                  type='button'
+                  aria-pressed={kind === k}
+                  data-tip={KIND_WORDS[k].hint}
+                  onClick={() => touch(setKind)(k)}
+                  className={cn(
+                    'rounded px-3 py-1 text-[12px] font-medium',
+                    kind === k
+                      ? 'bg-white text-slate-900 shadow-sm dark:bg-card dark:text-foreground'
+                      : 'text-slate-600 hover:bg-muted dark:text-slate-300'
+                  )}
+                >
+                  {KIND_WORDS[k].label}
+                </button>
+              ))}
+            </fieldset>
+            <p className='m-0 mt-1.5 text-[12px] text-slate-500 dark:text-muted-foreground'>
+              {KIND_WORDS[kind].hint}
+            </p>
+          </div>
           <div className='grid grid-cols-1 gap-3 p-4 sm:grid-cols-2'>
-            <Field
-              id='hub-create-target'
-              label='Target'
-              hint={
-                targets.data?.length === 0
-                  ? 'No targets yet: add one on the Targets tab.'
-                  : target
-                    ? target.config.dns_mode === 'manual'
-                      ? 'Hostnames are requested by hand on this target.'
-                      : `Hostnames are made under ${target.config.wildcard_domain}.`
-                    : 'Where the deploy repository is made and deployed from.'
-              }
-            >
-              <SimpleSelect
-                value={targetId}
-                onChange={touch(setTargetId)}
-                options={targetOptions}
-                ariaLabel='Target'
-                className='h-8 text-[13px]'
-                triggerProps={{ id: 'hub-create-target' }}
-              />
-            </Field>
+            {kind === 'gitlab' && (
+              <Field
+                id='hub-create-target'
+                label='Target'
+                hint={
+                  targets.data?.length === 0
+                    ? 'No targets yet: add one on the Targets tab.'
+                    : target
+                      ? target.config.dns_mode === 'manual'
+                        ? 'Hostnames are requested by hand on this target.'
+                        : `Hostnames are made under ${target.config.wildcard_domain}.`
+                      : 'Where the deploy repository is made and deployed from.'
+                }
+              >
+                <SimpleSelect
+                  value={targetId}
+                  onChange={touch(setTargetId)}
+                  options={targetOptions}
+                  ariaLabel='Target'
+                  className='h-8 text-[13px]'
+                  triggerProps={{ id: 'hub-create-target' }}
+                />
+              </Field>
+            )}
+            {kind === 'docker' && (
+              <Field
+                id='hub-create-driver'
+                label='Docker driver'
+                hint={
+                  drivers.data && dockerDrivers.length === 0
+                    ? 'No Docker drivers yet: add one under Drivers.'
+                    : driver
+                      ? driver.config.dns_mode === 'manual'
+                        ? 'Hostnames are requested by hand for this driver.'
+                        : `Hostnames are made under ${driver.config.wildcard_domain}.`
+                      : 'The Hub agent that deploys each environment as a swarm stack.'
+                }
+              >
+                <SimpleSelect
+                  value={driverId}
+                  onChange={touch(setDriverId)}
+                  options={driverOptions}
+                  ariaLabel='Docker driver'
+                  className='h-8 text-[13px]'
+                  triggerProps={{ id: 'hub-create-driver' }}
+                />
+              </Field>
+            )}
+            {kind === 'shared' && (
+              <Field
+                id='hub-create-shared'
+                label='Shared deployment'
+                hint={
+                  sharedList.data && deployments.length === 0
+                    ? 'No shared deployments yet: add one on the Shared tab.'
+                    : shared
+                      ? sharedBase
+                        ? `Hostnames are made under ${sharedBase}.`
+                        : 'Enter each hostname: the deployment has no host pattern.'
+                      : 'The deployment every environment is placed on.'
+                }
+              >
+                <SimpleSelect
+                  value={sharedId}
+                  onChange={touch(setSharedId)}
+                  options={sharedOptions}
+                  ariaLabel='Shared deployment'
+                  className='h-8 text-[13px]'
+                  triggerProps={{ id: 'hub-create-shared' }}
+                />
+              </Field>
+            )}
             <Field
               id='hub-create-version'
-              label='Version'
-              hint='The Nivaro release every environment starts on.'
+              label={kind === 'shared' ? 'Version (optional)' : 'Version'}
+              hint={
+                kind === 'shared'
+                  ? `An app on a shared deployment runs its version${shared?.version_pin ? ` (${shared.version_pin})` : ''}.`
+                  : 'The Nivaro release every environment starts on.'
+              }
               error={local.version || null}
             >
               <Input
                 id='hub-create-version'
                 value={version}
                 onChange={(e) => touch(setVersion)(e.target.value)}
-                placeholder='0.3.210'
+                placeholder={kind === 'shared' ? (shared?.version_pin ?? '') : '0.3.215'}
                 inputMode='decimal'
                 className='h-8 font-mono text-[13px]'
               />
             </Field>
+            {kind === 'shared' && (
+              <>
+                <Field
+                  id='hub-create-pool'
+                  label='Database connections per environment (optional)'
+                  hint='Taken from the deployment’s connection budget; 5 when empty.'
+                >
+                  <Input
+                    id='hub-create-pool'
+                    value={poolMax}
+                    onChange={(e) => touch(setPoolMax)(e.target.value)}
+                    placeholder='5'
+                    inputMode='numeric'
+                    className='h-8 font-mono text-[13px]'
+                  />
+                </Field>
+                <Field
+                  id='hub-create-extensions'
+                  label='Extensions (optional)'
+                  hint={
+                    shared?.extensions.length
+                      ? `The deployment loads ${shared.extensions.join(', ')}.`
+                      : 'Extension ids the deployment loads, comma separated.'
+                  }
+                >
+                  <Input
+                    id='hub-create-extensions'
+                    value={extensionsText}
+                    onChange={(e) => touch(setExtensionsText)(e.target.value)}
+                    className='h-8 font-mono text-[13px]'
+                  />
+                </Field>
+              </>
+            )}
           </div>
-          {targets.isError && (
+          {kind === 'docker' && (
+            <div className='grid grid-cols-1 gap-3 border-t border-slate-100 p-4 sm:grid-cols-2 dark:border-border'>
+              <Field id='hub-create-size' label='Stack size'>
+                <SimpleSelect
+                  value={size}
+                  onChange={touch(setSize)}
+                  options={SIZE_OPTIONS}
+                  ariaLabel='Stack size'
+                  className='h-8 text-[13px]'
+                  triggerProps={{ id: 'hub-create-size' }}
+                />
+              </Field>
+              <Field id='hub-create-redis' label='Redis'>
+                <SimpleSelect
+                  value={redis}
+                  onChange={touch(setRedis)}
+                  options={REDIS_OPTIONS}
+                  ariaLabel='Redis'
+                  className='h-8 text-[13px]'
+                  triggerProps={{ id: 'hub-create-redis' }}
+                />
+              </Field>
+              <Field
+                id='hub-create-settings'
+                label='Settings (optional)'
+                hint='One KEY=value per line. Sign-in and the database are set by the Hub.'
+                error={settingsMap === null ? 'One KEY=value per line' : null}
+              >
+                <textarea
+                  id='hub-create-settings'
+                  value={settingsText}
+                  onChange={(e) => touch(setSettingsText)(e.target.value)}
+                  rows={3}
+                  spellCheck={false}
+                  placeholder='MAIL_FROM=orders@example.com'
+                  className='w-full rounded-md border border-input bg-background px-2 py-1.5 font-mono text-[12px]'
+                />
+              </Field>
+              <Field
+                id='hub-create-pins'
+                label='Extension pins (optional)'
+                hint='One id=repository@sha256:digest per line; the agent must allow the image.'
+                error={pinsMap === null ? 'One id=image per line' : null}
+              >
+                <textarea
+                  id='hub-create-pins'
+                  value={pinsText}
+                  onChange={(e) => touch(setPinsText)(e.target.value)}
+                  rows={3}
+                  spellCheck={false}
+                  placeholder='efp-ops=registry.example.com/efp-ops@sha256:…'
+                  className='w-full rounded-md border border-input bg-background px-2 py-1.5 font-mono text-[12px]'
+                />
+              </Field>
+              <div className='space-y-2 sm:col-span-2'>
+                <p className='m-0 text-[12px] font-medium text-slate-700 dark:text-slate-200'>
+                  Secrets (optional)
+                </p>
+                <p className='m-0 text-[12px] text-slate-500 dark:text-muted-foreground'>
+                  SESSION_SECRET and ENCRYPTION_KEY are generated and sealed for each environment.
+                  Enter ENCRYPTION_KEY only for a database an earlier install sealed with it.
+                </p>
+                {secrets.map((s) => (
+                  <div key={s.id} className='flex flex-wrap items-center gap-2'>
+                    <Input
+                      aria-label='Secret name'
+                      value={s.key}
+                      onChange={(e) => setSecret(s.id, { key: e.target.value })}
+                      placeholder='REDIS_URL'
+                      className='h-8 w-[200px] font-mono text-[13px]'
+                    />
+                    <Input
+                      aria-label={`Value of ${s.key || 'the secret'}`}
+                      type='password'
+                      autoComplete='new-password'
+                      spellCheck={false}
+                      value={s.value}
+                      onChange={(e) => setSecret(s.id, { value: e.target.value })}
+                      className='h-8 min-w-[200px] flex-1 font-mono text-[13px]'
+                    />
+                    <button
+                      type='button'
+                      className={ghostButton}
+                      aria-label={`Remove ${s.key || 'secret'}`}
+                      onClick={() => {
+                        setTouched(true)
+                        setSecrets((all) => all.filter((x) => x.id !== s.id))
+                      }}
+                    >
+                      <Trash2 className='h-3.5 w-3.5' aria-hidden />
+                    </button>
+                  </div>
+                ))}
+                <button
+                  type='button'
+                  className={ghostButton}
+                  onClick={() => {
+                    setTouched(true)
+                    setSecrets((all) => [...all, { id: secretSeq++, key: '', value: '' }])
+                  }}
+                >
+                  <Plus className='h-3.5 w-3.5' aria-hidden /> Add secret
+                </button>
+              </div>
+            </div>
+          )}
+          {kind !== 'shared' && (
+            <div className='border-t border-slate-100 p-4 dark:border-border'>
+              <Field
+                id='hub-create-template'
+                label='App template'
+                hint={
+                  pickedTemplate
+                    ? `${countsLine(pickedTemplate.manifest)} — installed into every environment after its first administrator.`
+                    : templates.data?.length === 0
+                      ? 'No templates yet: upload an App Blueprint on the Templates tab.'
+                      : 'Optional: an App Blueprint from the Templates tab (schema, workflows, layouts, queues and rules — never data).'
+                }
+              >
+                <SimpleSelect
+                  value={templateId}
+                  onChange={touch(setTemplateId)}
+                  options={templateOptions}
+                  ariaLabel='App template'
+                  className='h-8 text-[13px]'
+                  triggerProps={{ id: 'hub-create-template' }}
+                />
+              </Field>
+              {templates.isError && (
+                <div className='mt-2'>
+                  <ErrorNotice
+                    description={templateError(templates.error, 'Could not load the templates')}
+                    onRetry={() => void templates.refetch()}
+                  />
+                </div>
+              )}
+            </div>
+          )}
+          {kind === 'gitlab' && targets.isError && (
             <div className='px-4 pb-3'>
               <ErrorNotice
                 description={createError(targets.error, 'Could not load the targets')}
@@ -421,11 +858,31 @@ export function HubCreateApp({
               />
             </div>
           )}
+          {kind === 'docker' && drivers.isError && (
+            <div className='px-4 pb-3'>
+              <ErrorNotice
+                description={createError(drivers.error, 'Could not load the drivers')}
+                onRetry={() => void drivers.refetch()}
+              />
+            </div>
+          )}
+          {kind === 'shared' && sharedList.isError && (
+            <div className='px-4 pb-3'>
+              <ErrorNotice
+                description={createError(sharedList.error, 'Could not load the shared deployments')}
+                onRetry={() => void sharedList.refetch()}
+              />
+            </div>
+          )}
         </SectionCard>
 
         <SectionCard
           title='Sign-in'
-          description='The Microsoft Entra app registration people sign in with.'
+          description={
+            kind === 'shared'
+              ? 'Optional: an app on a shared deployment signs in with the deployment’s own app registration. Fill this in to keep the app’s own registration for a later move.'
+              : 'The Microsoft Entra app registration people sign in with.'
+          }
         >
           <div className='grid grid-cols-1 gap-3 p-4 sm:grid-cols-2'>
             <Field id='hub-create-issuer' label='Issuer'>
@@ -489,9 +946,8 @@ export function HubCreateApp({
               const planned = fresh?.environments.find((p) => p.position === i)
               const names = defaultDbNames(key.trim() || '<app>', e.key.trim() || '<env>')
               const auto =
-                !manual && target
-                  ? (planned?.hostname ??
-                    automaticHostname(target.config.wildcard_domain, key.trim(), e.key.trim()))
+                !manual && picked
+                  ? (planned?.hostname ?? automaticHostname(wildcard, key.trim(), e.key.trim()))
                   : null
               const id = (f: string) => `hub-create-env-${i}-${f}`
               return (
@@ -628,7 +1084,23 @@ export function HubCreateApp({
                           />
                         </Field>
                       </div>
-                    ) : auto ? (
+                    ) : null}
+                    {kind === 'docker' && (
+                      <Field
+                        id={id('port')}
+                        label='Publish port (only on a published-port edge)'
+                        error={local.ports[i] || null}
+                      >
+                        <Input
+                          id={id('port')}
+                          value={e.publishPort}
+                          onChange={(ev) => setEnv(i, { publishPort: ev.target.value })}
+                          inputMode='numeric'
+                          className='h-8 font-mono text-[13px]'
+                        />
+                      </Field>
+                    )}
+                    {manual ? null : auto ? (
                       <p className='m-0 text-[12px] text-slate-600 sm:col-span-2 dark:text-slate-300'>
                         Hostname: <code className='font-mono text-[12px]'>{auto}</code>{' '}
                         <span className='text-slate-500 dark:text-muted-foreground'>
@@ -797,7 +1269,10 @@ function PreviewCard({
                   {p.key}
                   <span className='font-normal text-slate-500 dark:text-muted-foreground'>
                     {' '}
-                    · from {p.source_branch === p.key ? 'its own pipeline' : p.source_branch}
+                    ·{' '}
+                    {plan.target?.kind === 'shared'
+                      ? `on ${plan.target.name ?? 'the shared deployment'}`
+                      : `from ${p.source_branch === p.key ? (plan.target?.kind === 'docker' ? 'the published release' : 'its own pipeline') : p.source_branch}`}
                   </span>
                 </p>
                 {p.database.database_name ? (
@@ -810,6 +1285,13 @@ function PreviewCard({
                 ) : (
                   <p className='m-0 text-slate-500 dark:text-muted-foreground'>
                     No database picked yet.
+                  </p>
+                )}
+                {p.stack && (
+                  <p className='m-0 break-words text-slate-600 dark:text-slate-300'>
+                    Stack <code className='font-mono'>{p.stack_name}</code>, {p.stack.size}, Redis{' '}
+                    {p.stack.redis}
+                    {p.stack.publish_port ? `, port ${p.stack.publish_port}` : ''}
                   </p>
                 )}
                 {p.base_url && (

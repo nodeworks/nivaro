@@ -23,6 +23,10 @@ import {
 } from '../db/names.js'
 import { isCollation, isUserHost } from '../db/provisioner.js'
 import { type HubDbServerRow, publicServer } from '../db/servers.js'
+import { hostnameRefusals } from '../docker/render-spec.js'
+import { publishPortProblem } from '../docker/stack-gather.js'
+import { StackTemplateError, stackRoles } from '../docker/templates.js'
+import { DEFAULT_POOL_MAX, MAX_SHARED_POOL_MAX, MIN_SHARED_POOL_MAX } from '../drivers.js'
 import {
   baseUrlFor,
   ciConfigPath,
@@ -31,9 +35,11 @@ import {
   hubOwnHostnames,
   isCreatableKey,
   manualTicket,
+  type NamingConfig,
   redirectUriFor,
   stackName
 } from './app-config.js'
+import { namingForDocker, namingForShared, sharedHostname } from './dest.js'
 import { dnsSuffix, httpAllowed } from './dns.js'
 import { type HubTargetRow, knownHostsCover, parseKnownHosts, validTemplateRef } from './targets.js'
 import type {
@@ -44,6 +50,7 @@ import type {
   CreationPlanDatabase,
   CreationPlanEnvironment
 } from './types.js'
+import { creationKindOf, gitlabTargetIdOf } from './types.js'
 
 /** At most this many environments per created app. */
 export const MAX_CREATE_ENVIRONMENTS = 6
@@ -55,6 +62,7 @@ const EMAIL_MAX = 255
 const PERSON_NAME_MAX = 100
 const APP_NAME_MAX = 200
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const EXTENSION_ID_RE = /^[a-z0-9][a-z0-9-]{0,62}$/
 const GITLAB_PATH = /^[A-Za-z0-9][A-Za-z0-9._-]*(\/[A-Za-z0-9][A-Za-z0-9._-]*)*$/
 // biome-ignore lint/suspicious/noControlCharactersInRegex: refusing control characters
 const CONTROL = /[\u0000-\u001f\u007f]/
@@ -235,19 +243,56 @@ export function buildCreationPlan(input: CreateAppInput, facts: CreationFacts): 
         block('BAD_EMAIL', `The first administrator's ${part.replace('_', ' ')} must be one line.`)
     }
 
-  // Target
-  const t = facts.target && facts.target.id === Number(i.target_id) ? facts.target : null
+  // Target: a GitLab target, a Docker driver (the Hub agent) or a shared deployment.
+  const kind = creationKindOf(i)
+  const gitlab = kind === 'gitlab'
+  const t = gitlab && facts.target && facts.target.id === gitlabTargetIdOf(i) ? facts.target : null
+  const dk = kind === 'docker' ? (facts.docker ?? null) : null
+  const sh = kind === 'shared' ? (facts.shared?.deployment ?? null) : null
   let targetOk = false
-  if (!t) block('BAD_TARGET', 'Pick the target the app is created on.')
-  else {
-    const why = targetProblem(t)
-    if (why) block('BAD_TARGET', why)
+  let targetName: string | null = null
+  if (gitlab) {
+    if (!t) block('BAD_TARGET', 'Pick the target the app is created on.')
+    else {
+      targetName = t.name
+      const why = targetProblem(t)
+      if (why) block('BAD_TARGET', why)
+      else targetOk = true
+    }
+  } else if (kind === 'docker') {
+    const d = dk?.driver ?? null
+    targetName = d?.name ?? null
+    if (!d) block('BAD_TARGET', 'Pick the Docker driver (the Hub agent) the app is deployed with.')
+    else if (!d.secret)
+      block('BAD_TARGET', `${d.name} has no agent token: enter one on the driver.`)
+    else targetOk = true
+  } else {
+    targetName = sh?.name ?? null
+    if (!sh) block('BAD_TARGET', 'Pick the shared deployment the app is placed on.')
+    else if (sh.status === 'retired')
+      block('SHARED_RETIRED', `${sh.key} is retired: nothing can be placed on it.`)
+    else if (sh.status === 'upgrading')
+      block('SHARED_BUSY', `${sh.key} is being upgraded or rolled back: wait for it to end.`)
+    else if (sh.mode === 'docker' && (sh.status === 'new' || !sh.version_pin))
+      block(
+        'NOT_DEPLOYED',
+        `${sh.key} has not been deployed yet: upgrade it to a version first, then create apps on it.`
+      )
     else targetOk = true
   }
+  if (targetOk && dk?.driver) dockerAppBlockers()
 
-  // Version + image
-  const version = str(i.version)
-  if (!VERSION_RE.test(version))
+  // Version + image (a shared deployment runs its own version: blank = that one)
+  const version = sh && !str(i.version) ? (sh.version_pin ?? '') : str(i.version)
+  if (kind === 'shared') {
+    if (sh && version && sh.version_pin && version !== sh.version_pin)
+      block(
+        'VERSION_NOT_SHARED',
+        `${sh.key} runs ${sh.version_pin}: an app placed on it runs that version. Leave the version empty.`
+      )
+    else if (version && !VERSION_RE.test(version))
+      block('BAD_VERSION', `"${cut(version, 40)}" is not a version (x.y.z).`)
+  } else if (!VERSION_RE.test(version))
     block('BAD_VERSION', `"${cut(version, 40)}" is not a version (x.y.z).`)
   else if (facts.digest === null)
     block(
@@ -297,14 +342,54 @@ export function buildCreationPlan(input: CreateAppInput, facts: CreationFacts): 
       return 'The sign-in client secret is missing.'
     return null
   })()
-  if (signinProblem) block('BAD_SIGNIN', signinProblem)
+  // On a shared deployment the app signs in with the deployment's own OIDC: optional there.
+  if (signinProblem && !(kind === 'shared' && (i.signin === undefined || i.signin === null)))
+    block('BAD_SIGNIN', signinProblem)
 
+  const extensionIds: string[] = []
   if (i.extensions !== undefined && i.extensions !== null) {
-    if (!Array.isArray(i.extensions) || i.extensions.length)
+    if (kind === 'shared') {
+      if (
+        !Array.isArray(i.extensions) ||
+        i.extensions.some((x) => typeof x !== 'string' || !EXTENSION_ID_RE.test(x))
+      )
+        block('BAD_EXTENSIONS', 'Extensions are a list of extension ids.')
+      else {
+        for (const x of i.extensions) if (!extensionIds.includes(x)) extensionIds.push(x)
+        const missing = sh ? extensionIds.filter((x) => !sh.extensions.includes(x)) : []
+        if (missing.length)
+          block(
+            'EXTENSION_NOT_ALLOWED',
+            `${sh?.key} does not load ${missing.slice(0, 10).join(', ')}.`
+          )
+      }
+    } else if (!Array.isArray(i.extensions) || i.extensions.length)
       block(
         'EXTENSIONS_UNSUPPORTED',
-        'Created apps start without extensions: add one in the deploy repository afterwards.'
+        kind === 'docker'
+          ? 'A Docker app gets its extensions as pinned images in the stack settings (extension_pins).'
+          : 'Created apps start without extensions: add one in the deploy repository afterwards.'
       )
+  }
+  const pins: Record<string, string> =
+    dk?.settings.ok && dk.settings.row.extension_pins ? dk.settings.row.extension_pins : {}
+
+  // Shared: the pool each environment takes on the deployment.
+  const tgt = (i.target && typeof i.target === 'object' ? i.target : {}) as { pool_max?: unknown }
+  let poolMax = DEFAULT_POOL_MAX
+  if (kind === 'shared' && tgt.pool_max !== undefined && tgt.pool_max !== null) {
+    const n = tgt.pool_max
+    if (typeof n !== 'number' || !Number.isInteger(n) || n > MAX_SHARED_POOL_MAX)
+      block(
+        'BAD_POOL',
+        `pool_max must be a whole number of connections, at most ${MAX_SHARED_POOL_MAX}.`
+      )
+    else if (n < MIN_SHARED_POOL_MAX)
+      block(
+        'POOL_TOO_SMALL',
+        `An app on a shared deployment needs at least ${MIN_SHARED_POOL_MAX} database connections.`
+      )
+    else poolMax = n
   }
 
   if (!facts.encryptionKey)
@@ -335,7 +420,19 @@ export function buildCreationPlan(input: CreateAppInput, facts: CreationFacts): 
   const seenDbId = new Set<number>()
   const planned: CreationPlanEnvironment[] = []
   const appHosts: string[] = []
-  const tc = targetOk && t ? t.config : null
+  const naming: NamingConfig | null = !targetOk
+    ? null
+    : t
+      ? t.config
+      : dk?.driver
+        ? namingForDocker(dk.driver.config)
+        : sh
+          ? namingForShared(sh)
+          : null
+  const edge = dk?.health?.edge === 'publish' ? 'publish' : 'traefik'
+  const seenPort = new Set<number>()
+  const stackSize = dk?.settings.ok ? dk.settings.row.fields.size : 'small'
+  const stackRedis = dk?.settings.ok ? dk.settings.row.fields.redis : 'bundled'
 
   envs.slice(0, MAX_CREATE_ENVIRONMENTS).forEach((raw, position) => {
     const e = (raw && typeof raw === 'object' ? raw : {}) as CreateAppInput['environments'][number]
@@ -358,12 +455,20 @@ export function buildCreationPlan(input: CreateAppInput, facts: CreationFacts): 
     let base_url: string | null = null
     let ticket: string | null = null
     let redirect_uri: string | null = null
-    if (tc && namesOk) {
-      const h = hostnameFor(tc, key, envKey, e.hostname ?? null)
+    if (naming && namesOk) {
+      const h = sh
+        ? sharedHostname(sh, facts.shared?.routed ?? [], key, envKey, e.hostname ?? null)
+        : hostnameFor(naming, key, envKey, e.hostname ?? null)
       if (!h.ok) block(h.code, h.message, label)
       else {
         try {
-          base_url = baseUrlFor(tc, h.hostname)
+          // Docker / shared: http only for the local names that allow it (namingFor*).
+          const forUrl = dk?.driver
+            ? namingForDocker(dk.driver.config, h.hostname)
+            : sh
+              ? namingForShared(sh, h.hostname)
+              : naming
+          base_url = baseUrlFor(forUrl, h.hostname)
           hostname = h.hostname
         } catch (err) {
           block('HOSTNAME_INVALID', err instanceof Error ? err.message : 'Not a hostname.', label)
@@ -381,13 +486,52 @@ export function buildCreationPlan(input: CreateAppInput, facts: CreationFacts): 
           block('HOSTNAME_TAKEN', `${hostname} is given to two environments.`, label)
         seenHost.add(hostname)
         redirect_uri = base_url ? redirectUriFor(base_url) : null
-        if (tc.dns_mode === 'manual') ticket = manualTicket(tc, hostname)
+        if (naming.dns_mode === 'manual' && !sh) ticket = manualTicket(naming, hostname)
+        // The agent's own rules for the name: under the wildcard, under a host suffix.
+        if (dk?.driver && dk.health)
+          for (const p of hostnameRefusals([hostname], dk.driver.config, {
+            hostSuffixes: edge === 'traefik' ? dk.health.host_suffixes : undefined,
+            edge
+          }))
+            block(
+              p.code === 'HOSTNAME_INVALID' ? 'HOSTNAME_INVALID' : 'HOSTNAME_NOT_ALLOWED',
+              p.message,
+              label
+            )
       }
+    }
+
+    // Docker: the published port of a publish edge (one per environment, in the agent's range).
+    let publishPort: number | null = null
+    if (dk?.health) {
+      const raw = e.publish_port
+      if (raw !== undefined && raw !== null) {
+        if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1 || raw > 65535)
+          block('BAD_PUBLISH_PORT', 'The publish port must be a port number (1–65535).', label)
+        else publishPort = raw
+      }
+      if (edge === 'publish') {
+        const why = publishPortProblem(dk.health, { publish_port: publishPort } as never)
+        if (why) block('PUBLISH_PORT_NOT_ALLOWED', `${label}: ${why}.`, label)
+        else if (publishPort !== null && (dk.takenPorts ?? []).includes(publishPort))
+          block(
+            'PUBLISH_PORT_NOT_ALLOWED',
+            `Port ${publishPort} is already published by another stack on ${dk.driver?.name ?? 'this driver'}.`,
+            label
+          )
+        else if (publishPort !== null && seenPort.has(publishPort))
+          block(
+            'PUBLISH_PORT_NOT_ALLOWED',
+            `Port ${publishPort} is given to two environments.`,
+            label
+          )
+        if (publishPort !== null) seenPort.add(publishPort)
+      } else publishPort = null
     }
 
     // Stack
     let stack: string | null = null
-    if (namesOk) {
+    if (namesOk && kind !== 'shared') {
       stack = stackName(key, envKey)
       if (takenStacks.has(stack) || seenStack.has(stack))
         block(
@@ -395,25 +539,113 @@ export function buildCreationPlan(input: CreateAppInput, facts: CreationFacts): 
           `The swarm stack ${stack} is already another environment's: pick another environment key.`,
           label
         )
+      else if (dk?.placementStacks.includes(stack))
+        block(
+          'STACK_NAME_TAKEN',
+          `Another placement on ${dk.driver?.name ?? 'this driver'} already deploys stack ${stack}.`,
+          label
+        )
+      else if (dk?.health) {
+        const held = dk.stacks[stack]
+        if (held === 'hub' || held === 'other')
+          block(
+            'STACK_EXISTS',
+            `The swarm already runs a stack named ${stack}: remove it first, or pick another environment key.`,
+            label
+          )
+        else if (held !== 'none')
+          block('AGENT_UNREACHABLE', `The Hub agent did not say whether ${stack} exists.`, label)
+      }
       seenStack.add(stack)
     }
 
     // Database
     const database = planDatabase(e.database, label, key, envKey, namesOk)
+    // place-shared makes an app key only for an empty database (an install there has its own).
+    if (kind === 'shared' && database.holds_nivaro)
+      block(
+        'DATABASE_HOLDS_NIVARO',
+        `${database.database_name} already holds a Nivaro install: an app that has served moves to a shared deployment instead.`,
+        label
+      )
     planned.push({
       key: envKey,
       position,
       hostname,
       base_url,
-      dns_mode: tc?.dns_mode === 'manual' ? 'manual' : 'automatic',
+      dns_mode: naming?.dns_mode === 'manual' ? 'manual' : 'automatic',
       ticket,
       redirect_uri,
       branch: envKey,
       source_branch: prev || envKey,
       stack_name: stack,
+      ...(kind === 'docker'
+        ? { stack: { size: stackSize, redis: stackRedis, publish_port: publishPort } }
+        : {}),
+      ...(kind === 'shared' ? { pool_max: poolMax } : {}),
       database
     })
   })
+
+  /** The agent's limits, the image and the stack settings of a Docker creation. */
+  function dockerAppBlockers(): void {
+    const d = dk as NonNullable<typeof dk>
+    if (d.agentState !== 'ok' || !d.health) {
+      block(
+        d.agentState === 'incompatible'
+          ? 'AGENT_INCOMPATIBLE'
+          : d.agentState === 'refused'
+            ? 'AGENT_REFUSED'
+            : 'AGENT_UNREACHABLE',
+        d.agentState === 'incompatible'
+          ? `The Hub agent of ${d.driver?.name} speaks another API version: upgrade the agent.`
+          : d.agentState === 'refused'
+            ? `The Hub agent of ${d.driver?.name} refused the Hub (check the driver's token and address).`
+            : `The Hub agent of ${d.driver?.name} did not answer.`
+      )
+      return
+    }
+    const images = Array.isArray(d.health.images) ? d.health.images : []
+    if (!images.includes(d.imageRepo))
+      block(
+        'IMAGE_NOT_ALLOWED',
+        `The agent does not allow ${d.imageRepo}: add it to HUB_AGENT_IMAGES on the agent.`
+      )
+    if (!d.settings.ok) {
+      block(d.settings.code, d.settings.message)
+      return
+    }
+    const row = d.settings.row
+    for (const [id, pin] of Object.entries(row.extension_pins ?? {}).sort(([a], [b]) =>
+      a.localeCompare(b)
+    )) {
+      const repo = pin.slice(0, pin.indexOf('@'))
+      if (!images.includes(repo))
+        block(
+          'EXTENSION_NOT_ALLOWED',
+          `The agent does not allow extension ${id} (${repo}): add it to HUB_AGENT_IMAGES.`
+        )
+    }
+    if (row.fields.redis === 'bundled' && d.health.redis_bundled === false)
+      block(
+        'REDIS_NOT_OFFERED',
+        'The agent offers no bundled Redis (HUB_AGENT_REDIS_IMAGE is not set): pick external Redis and give REDIS_URL.'
+      )
+    if (
+      row.fields.redis === 'external' &&
+      !row.fields.settings.REDIS_URL?.trim() &&
+      !d.secretKeys.includes('REDIS_URL')
+    )
+      block('STACK_SETTINGS_MISSING', 'External Redis needs REDIS_URL (a setting or a secret).')
+    const v = str(i.version)
+    if (VERSION_RE.test(v))
+      try {
+        stackRoles(v, row.fields.size, d.health.agent_version)
+      } catch (err) {
+        if (!(err instanceof StackTemplateError)) throw err
+        block(err.code, err.message)
+      }
+  }
 
   function planDatabase(
     d: unknown,
@@ -562,8 +794,10 @@ export function buildCreationPlan(input: CreateAppInput, facts: CreationFacts): 
   }
 
   // GitLab project + Hub address (after the environments: the Hub address check needs their names)
-  const projectPath = `${t?.config?.namespace ?? ''}${t?.config?.namespace ? '/' : ''}${key}-deploy`
-  if (targetOk && keyOk) {
+  const projectPath = gitlab
+    ? `${t?.config?.namespace ?? ''}${t?.config?.namespace ? '/' : ''}${key}-deploy`
+    : ''
+  if (gitlab && targetOk && keyOk) {
     if (facts.projectExists === true)
       block(
         'PROJECT_EXISTS',
@@ -572,8 +806,21 @@ export function buildCreationPlan(input: CreateAppInput, facts: CreationFacts): 
     else if (facts.projectExists === 'unreachable')
       block('GITLAB_UNREACHABLE', `GitLab did not answer for ${projectPath}.`)
   }
-  const hubWhy = hubUrlProblem(facts.hubUrl, appHosts)
+  // A shared app is not told HUB_URL by the creation (the deployment carries it); its hub token
+  // is issued by the placement when the app serves.
+  const hubWhy = kind === 'shared' ? null : hubUrlProblem(facts.hubUrl, appHosts)
   if (hubWhy) block('NO_HUB_URL', hubWhy)
+
+  // Shared: the deployment's connection budget takes every new environment's pool.
+  if (sh && targetOk && planned.length) {
+    const want = poolMax * planned.length
+    const used = facts.shared?.poolUsed ?? 0
+    if (used + want > sh.pool_budget)
+      block(
+        'POOL_BUDGET',
+        `${sh.key} has ${Math.max(0, sh.pool_budget - used)} of its ${sh.pool_budget} database connections left; ${planned.length} environment(s) at ${poolMax} each need ${want}.`
+      )
+  }
 
   // Plain warnings (never blockers): an existing database that already holds a Nivaro install
   // is legitimate (an app re-created on its old data) but must not surprise anyone.
@@ -591,10 +838,38 @@ export function buildCreationPlan(input: CreateAppInput, facts: CreationFacts): 
     )
   }
 
+  if (dk?.health) {
+    const nodes = dk.health.swarm?.nodes
+    if (typeof nodes === 'number' && nodes > 1 && (dk.health.volume_driver ?? 'local') === 'local')
+      warnings.push(
+        `The swarm has ${nodes} nodes and the agent keeps volumes on each node (local): a stack's uploads stay on the node a task ran on. Set a shared volume driver on the agent before you rely on uploads.`
+      )
+    if (planned.some((p) => p.database.holds_nivaro) && !dk.secretKeys.includes('ENCRYPTION_KEY'))
+      warnings.push(
+        'A new ENCRYPTION_KEY is generated: values the old install sealed with its own key stay unreadable unless you enter that key as the secret ENCRYPTION_KEY.'
+      )
+  }
+
   // Preview lines: names only.
   const lines: string[] = []
   if (t) lines.push(`Fork ${t.config.template_project} into ${projectPath} (target ${t.name}).`)
-  lines.push(`Install Nivaro ${version || '(no version)'} with no extensions.`)
+  if (dk?.driver) {
+    lines.push(
+      `Deploy through the Hub agent of ${dk.driver.name}${dk.health ? ` (${edge === 'publish' ? 'published port' : 'traefik'} edge)` : ''}.`
+    )
+    const ids = Object.keys(pins).sort()
+    lines.push(
+      `Install Nivaro ${version || '(no version)'} (${dk.imageRepo})${ids.length ? ` with ${ids.join(', ')}` : ' with no extensions'}.`
+    )
+    lines.push(
+      `Stack settings: size ${stackSize}, Redis ${stackRedis}; SESSION_SECRET and ENCRYPTION_KEY${dk.secretKeys.includes('ENCRYPTION_KEY') ? ' (as entered)' : ' generated and'} sealed for each environment.`
+    )
+  } else if (sh) {
+    lines.push(
+      `Place every environment on the shared deployment ${sh.key} (Nivaro ${sh.version_pin ?? 'its version'}), ${poolMax} database connections each.`
+    )
+    if (extensionIds.length) lines.push(`Extensions: ${extensionIds.join(', ')}.`)
+  } else lines.push(`Install Nivaro ${version || '(no version)'} with no extensions.`)
   for (const p of planned) {
     const d = p.database
     const dbLine =
@@ -604,9 +879,14 @@ export function buildCreationPlan(input: CreateAppInput, facts: CreationFacts): 
           ? `create database ${d.database_name} and login ${d.login_name} on ${d.server_name}`
           : `ask the DBA for database ${d.database_name} and login ${d.login_name} on ${d.server_name}`
     lines.push(`${p.key}: ${dbLine}.`)
-    lines.push(
-      `${p.key}: branch ${p.branch} (promoted from ${p.source_branch}), stack ${p.stack_name ?? '—'}.`
-    )
+    if (gitlab)
+      lines.push(
+        `${p.key}: branch ${p.branch} (promoted from ${p.source_branch}), stack ${p.stack_name ?? '—'}.`
+      )
+    else if (kind === 'docker')
+      lines.push(
+        `${p.key}: stack ${p.stack_name ?? '—'} (promoted from ${p.source_branch})${p.stack?.publish_port ? `, published on port ${p.stack.publish_port}` : ''}.`
+      )
     if (p.hostname)
       lines.push(
         p.dns_mode === 'manual'
@@ -614,7 +894,11 @@ export function buildCreationPlan(input: CreateAppInput, facts: CreationFacts): 
           : `${p.key}: ${p.base_url}.`
       )
     if (p.redirect_uri)
-      lines.push(`${p.key}: add the redirect URI ${p.redirect_uri} to the app registration.`)
+      lines.push(
+        sh
+          ? `${p.key}: add the redirect URI ${p.redirect_uri} to the deployment's app registration.`
+          : `${p.key}: add the redirect URI ${p.redirect_uri} to the app registration.`
+      )
   }
   if (email && EMAIL_RE.test(email)) lines.push(`First administrator: ${email}.`)
 
@@ -624,6 +908,7 @@ export function buildCreationPlan(input: CreateAppInput, facts: CreationFacts): 
     lines,
     warnings,
     app: { key, name, project_path: projectPath },
+    target: { kind, name: targetName },
     environments: planned
   }
 }

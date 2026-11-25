@@ -38,6 +38,44 @@ export interface SharedDeployment {
   updated_at: string | null
 }
 
+/**
+ * How the Hub drives the GitLab pipeline of a registered deployment it upgrades (`settings.gitlab`
+ * with `driver_id` naming a GitLab driver; api services/hub/shared/store.ts SharedGitlab). null =
+ * the driver's own branch, pin file or deploy job.
+ */
+export interface SharedGitlab {
+  source_branch: string
+  target_branch: string
+  pin_file: string | null
+  before_job: string | null
+  deploy_job: string | null
+}
+
+/** The GitLab settings of a deployment the Hub upgrades through GitLab; null for any other. */
+export function sharedGitlabOf(
+  row: Pick<SharedDeployment, 'mode' | 'driver_id' | 'settings'>
+): SharedGitlab | null {
+  if (row.mode !== 'registered' || row.driver_id == null) return null
+  const g = row.settings?.gitlab as Partial<SharedGitlab> | null | undefined
+  if (
+    !g ||
+    typeof g !== 'object' ||
+    typeof g.source_branch !== 'string' ||
+    !g.source_branch ||
+    typeof g.target_branch !== 'string' ||
+    !g.target_branch
+  )
+    return null
+  const opt = (v: unknown) => (typeof v === 'string' && v ? v : null)
+  return {
+    source_branch: g.source_branch,
+    target_branch: g.target_branch,
+    pin_file: opt(g.pin_file),
+    before_job: opt(g.before_job),
+    deploy_job: opt(g.deploy_job)
+  }
+}
+
 /** A list row: the deployment plus how many environments it serves and how many replicas. */
 export interface SharedListRow extends SharedDeployment {
   apps: number
@@ -356,6 +394,15 @@ export const MODE_WORDS: Record<SharedMode, { label: string; tip: string }> = {
   }
 }
 
+/** The mode chip of a row: a registered deployment the Hub upgrades through GitLab says so. */
+export const GITLAB_MODE_WORDS = {
+  label: 'Run by GitLab',
+  tip: 'Its GitLab pipeline runs it; the Hub upgrades and rolls it back through that pipeline'
+}
+
+export const modeWords = (row: Pick<SharedDeployment, 'mode' | 'driver_id' | 'settings'>) =>
+  sharedGitlabOf(row) ? GITLAB_MODE_WORDS : MODE_WORDS[row.mode]
+
 export const STATUS_WORDS: Record<SharedStatus, string> = {
   new: 'New',
   active: 'Serving',
@@ -507,6 +554,18 @@ export const SHARED_COPY: Record<string, { title: string; hint?: string }> = {
     hint: 'A version or image tag (no spaces). A Docker deployment takes no version here: create it, then upgrade it.'
   },
   BAD_SETTINGS: { title: 'The settings are too large' },
+  DRIVER_NOT_GITLAB: {
+    title: 'Pick a GitLab driver',
+    hint: 'The Hub upgrades a deployment that runs elsewhere only through a GitLab driver (Drivers tab).'
+  },
+  BRANCH_IN_USE: {
+    title: 'Something else already deploys that GitLab branch',
+    hint: 'An environment or another shared deployment deploys it. Give this deployment a deploy branch of its own.'
+  },
+  BAD_GITLAB: {
+    title: 'The GitLab settings are not complete',
+    hint: 'Name the release branch and a different deploy branch (git branch names); the pin file and jobs are optional.'
+  },
   DRIVER_NOT_DOCKER: {
     title: 'Pick a Docker driver',
     hint: 'A deployment the Hub runs needs a Docker driver with an agent.'

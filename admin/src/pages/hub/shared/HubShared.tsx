@@ -31,7 +31,7 @@ import {
   flowScriptsSetting,
   holdsLatest,
   linkProblem,
-  MODE_WORDS,
+  modeWords,
   redisUrlStored,
   rotateSharedToken,
   SCHEMA_TONE,
@@ -45,6 +45,7 @@ import {
   STATUS_WORDS,
   schemaOf,
   sharedError,
+  sharedGitlabOf,
   sharedKeys,
   TONE,
   type Tone,
@@ -250,7 +251,7 @@ function ListRow({
   active: boolean
   onClick: () => void
 }) {
-  const mode = MODE_WORDS[row.mode]
+  const mode = modeWords(row)
   return (
     <li>
       <button
@@ -373,7 +374,7 @@ function SharedDetailView({
       />
     )
   const retired = row.status === 'retired'
-  const mode = MODE_WORDS[row.mode]
+  const mode = modeWords(row)
 
   return (
     <div className='space-y-4 p-4 sm:p-6'>
@@ -456,7 +457,9 @@ function SharedDetailView({
 
       <ReplicasCard detail={d} />
 
-      {row.mode === 'docker' && !retired && <SharedUpgradePanel shared={row} />}
+      {(row.mode === 'docker' || sharedGitlabOf(row)) && !retired && (
+        <SharedUpgradePanel shared={row} />
+      )}
     </div>
   )
 }
@@ -493,6 +496,15 @@ function MetaGrid({ detail, link }: { detail: SharedDetail; link: SharedLinkStat
         : 'None',
       mono: row.extensions.length > 0
     },
+    ...(sharedGitlabOf(row)
+      ? [
+          {
+            label: 'Upgraded through',
+            value: `GitLab, from ${sharedGitlabOf(row)?.source_branch}`,
+            mono: false
+          }
+        ]
+      : []),
     ...(row.mode === 'docker'
       ? [
           { label: 'Stack', value: row.stack ?? row.key, mono: true },

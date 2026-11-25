@@ -31,6 +31,9 @@ vi.mock('../../../services/instance-roster.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../services/instance-roster.js')>()),
   listInstances: async () => roster.peers
 }))
+vi.mock('../../../plugins/socketio.js', () => ({
+  getLocalConcurrency: () => ({ sockets: 3, users: 2 })
+}))
 vi.mock('../../../services/security.js', () => ({
   maintenanceState: async () => ({ on: state.maintenance })
 }))
@@ -275,6 +278,16 @@ describe('GET /status', () => {
       if (before === undefined) delete process.env.FLOW_SCRIPTS_ON_SHARED
       else process.env.FLOW_SCRIPTS_ON_SHARED = before
     }
+  })
+
+  it("carries the process's own figures across every app: counts only, no app named", async () => {
+    const a = await build()
+    const res = await a.inject({ method: 'GET', url: '/api/hub-deployment/status', headers: auth })
+    const p = res.json().process
+    expect(p.heavy_reads).toMatchObject({ active: 0, queued: 0, apps_active: 0 })
+    expect(p.app_pools).toEqual({ apps: 0, used: 0, free: 0, pending: 0, max: 0 })
+    expect(p.sockets).toEqual({ sockets: 3, users: 2 })
+    expect(JSON.stringify(p)).not.toContain('app-a-e1')
   })
 })
 

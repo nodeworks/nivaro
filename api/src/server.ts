@@ -61,6 +61,8 @@ import { registerAgentPresence } from './services/agent-presence.js'
 import type { BootPhaseRunner } from './services/app-boot-passes.js'
 import { installAppInject } from './services/app-inject-host.js'
 import { bootPhase } from './services/boot-phases.js'
+import { registerAppUsage } from './services/capacity/app-usage.js'
+import { registerAppRateLimit } from './services/capacity/enforce.js'
 import { CRON_DESCRIPTIONS } from './services/cron-descriptions.js'
 import { registerMissedCronProbe } from './services/cron-misses.js'
 import {
@@ -281,6 +283,11 @@ export async function buildServer() {
     await startHubTenantSource({ redis: app.redis ?? null })
     app.addHook('preClose', async () => stopHubTenantSource())
   }
+  // Hub capacity (services/capacity/*): per-app limits as every later route's last preHandler,
+  // after its own authentication (shared only), and
+  // per-app request counts + process figures for the Hub's capacity view (shared or hub-linked).
+  if (tenantSource() === 'hub') registerAppRateLimit(app)
+  if (tenantSource() === 'hub' || (hubLinkToken() && tenantSource() === null)) registerAppUsage(app)
 
   // ─── Rate limiting + API analytics logging ────────────────────────────────
   // Tracing goes first so its onRequest hook opens the phase context before
@@ -576,6 +583,19 @@ export async function buildServer() {
     onMetadataL2IdentityChange(() => restored('database incarnation changed'))
     startEpochWatch(Number(process.env.CACHE_EPOCH_POLL_MS ?? 5000))
     app.addHook('onClose', async () => stopEpochWatch())
+    // Hub shared deployment: the number is off there; each app's configuration writes are
+    // announced on Redis instead and the other processes clear that app's caches at once.
+    {
+      const { startAppConfigEpochs } = await import('./services/app-config-epoch.js')
+      const { INSTANCE_ID } = await import('./services/instance-roster.js')
+      const stopAppEpochs = startAppConfigEpochs({
+        redis: app.redis ?? null,
+        instance: INSTANCE_ID,
+        bust: bustAllCaches,
+        log: app.log
+      })
+      if (stopAppEpochs) app.addHook('onClose', stopAppEpochs)
+    }
     const { startInstanceRoster } = await import('./services/instance-roster.js')
     startInstanceRoster(app.redis)
     // Post-mortem 2026-10-23 4.3: per-minute lag peaks + route rates for the event-loop and
@@ -1056,6 +1076,9 @@ export async function buildServer() {
       // versions, portal-URL warning) run per app when it becomes ready — same ordering rule.
       const { registerAppBootPasses } = await import('./services/app-boot-passes.js')
       registerAppBootPasses(app, { restRoutes: collectedRoutes })
+      // Each app's own pool is watched from the moment it is ready (app-pool-monitor below).
+      const { registerAppPoolTracking } = await import('./services/app-pool-pressure.js')
+      registerAppPoolTracking()
     }
     // Each app's database: migrations, default workspace, the loaded extensions' schema steps —
     // after the extensions above declared their steps. In the background: it never holds up the
@@ -1746,6 +1769,32 @@ export async function buildServer() {
           }
         })
 
+      // A Hub shared deployment: each app's own sockets and people, sampled into that app's own
+      // nivaro_concurrency_samples (the Realtime console's chart), once per app.
+      if (perAppJobs())
+        app.cron.schedule('app-concurrency-sample', '*/5 * * * *', async () => {
+          const { boardFresh, boardReaderOn } = await import('./services/realtime-board.js')
+          if (boardReaderOn() && !boardFresh()) return
+          const { appConcurrency } = await import('./services/app-pool-pressure.js')
+          const { getRealtimeStats } = await import('./plugins/socketio.js')
+          const { sockets, users } = appConcurrency(getRealtimeStats().sockets)
+          const { db } = await import('./db/index.js')
+          await db('nivaro_concurrency_samples')
+            .insert({
+              sampled_at: new Date(),
+              instance: process.env.HOSTNAME?.slice(0, 100) ?? null,
+              sockets,
+              users
+            })
+            .catch(() => {})
+          if (new Date().getHours() === 4 && new Date().getMinutes() < 5) {
+            await db('nivaro_concurrency_samples')
+              .where('sampled_at', '<', new Date(Date.now() - 90 * 86_400_000))
+              .del()
+              .catch(() => {})
+          }
+        })
+
       // Scheduled broadcasts (#94): deliver every due scheduled announcement.
       app.cron.schedule('scheduled-broadcasts', '* * * * *', async () => {
         const { deliverScheduledAnnouncements } = await import('./routes/announcements.js')
@@ -1917,6 +1966,27 @@ export async function buildServer() {
               message: `DB connection pool under pressure: p95 acquire wait ${p.wait_p95_ms}ms, every connection busy ${p.saturated_pct}% of the last ${p.window_s}s (peak ${p.peak_used}/${p.max} in use, ${p.peak_pending} waiting)`
             })
           }
+        })
+
+      // A Hub shared deployment: each app's own pool, judged by the same rule, the issue raised in
+      // that app's own issue log (services/app-pool-pressure.ts).
+      if (perAppJobs())
+        app.cron.schedule('app-pool-monitor', '*/5 * * * *', async () => {
+          const { appPoolPressure, trackCurrentAppPool, underPressure } = await import(
+            './services/app-pool-pressure.js'
+          )
+          trackCurrentAppPool()
+          const p = appPoolPressure()
+          if (!p || !underPressure(p)) return
+          const { trackError, stableIssueKey } = await import('./services/error-tracking.js')
+          await trackError({
+            source: 'server',
+            route: 'app-pool-monitor',
+            severity: 'high',
+            fingerprint: stableIssueKey('app-pool-pressure'),
+            refreshDetails: true,
+            message: `This app's database connection pool is under pressure: p95 acquire wait ${p.wait_p95_ms}ms, every connection busy ${p.saturated_pct}% of the last ${p.window_s}s (peak ${p.peak_used}/${p.max} in use, ${p.peak_pending} waiting). Its pool size is set on the app's placement in the Hub.`
+          })
         })
 
       // ERP auto-retry (#469): failed pushes on APIs with a retry_policy
@@ -3201,6 +3271,8 @@ export async function buildServer() {
       for (const id of [
         'deadlock-sweep',
         'pool-monitor',
+        'app-pool-monitor',
+        'app-concurrency-sample',
         'blocking-sessions',
         'presence-janitor',
         'ops-monitors',

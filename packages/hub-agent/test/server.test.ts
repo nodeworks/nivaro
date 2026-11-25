@@ -152,7 +152,7 @@ describe('the version the agent reports', () => {
         'utf8'
       )
     ) as { version: string }
-    expect(AGENT_VERSION).toBe('0.2.2')
+    expect(AGENT_VERSION).toBe('0.2.3')
     expect(pkg.version).toBe(AGENT_VERSION)
   })
 })

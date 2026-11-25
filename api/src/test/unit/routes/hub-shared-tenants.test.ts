@@ -48,6 +48,9 @@ const { parseHubTenants } = await import('../../../services/tenancy/hub-contract
 const { exemptFromLimits } = await import('../../../plugins/rate-limit.js')
 const { shouldSkip } = await import('../../../plugins/api-logger.js')
 const { _resetTenantWarningsForTests } = await import('../../../services/hub/shared/tenants.js')
+const { hubTokenColumns } = await import('../../../services/hub/link-token.js')
+const { createClient } = await import('../../../services/hub/oidc/clients.js')
+const { openForApp } = await import('../../../services/tenancy/app-sealed.js')
 
 const HUB_KEY = 'c'.repeat(64)
 const APP_KEY = 'ab'.repeat(32)
@@ -557,6 +560,67 @@ describe('GET /api/hub/shared/:key/tenants', () => {
       expect(exemptFromLimits(req('/api/hub/shared/shared-one/tenants'))).toBe(false)
     } finally {
       process.env.HUB = 'on'
+    }
+  })
+})
+
+describe("each app's Hub link (sign-in through the Hub, the switcher; 0.3.215)", () => {
+  it('carries the token always, the client only while the app signs in through the Hub, sealed with the app key', async () => {
+    const devId = Store.tenantIdFor({ key: 'acme' }, { id: env.dev })
+    const prodId = Store.tenantIdFor({ key: 'acme' }, { id: env.prod })
+    const TOKEN = `tok-${'k'.repeat(40)}`
+    const linkOf = (data: { tenants: Array<{ id: string; hub_link?: string }> }, id: string) => {
+      const t = data.tenants.find((x) => x.id === id)
+      return t?.hub_link ? JSON.parse(openForApp(t.hub_link, APP_KEY) ?? 'null') : null
+    }
+    await db('nivaro_hub_environments').where({ id: env.dev }).update(hubTokenColumns(TOKEN))
+    await db('nivaro_hub_environments')
+      .where({ id: env.prod })
+      .update(hubTokenColumns(`p${TOKEN}`))
+    const made = await createClient(env.dev, 'u-1')
+    try {
+      // direct mode: the token only
+      let res = await call()
+      expect(linkOf(res.json().data, devId)).toEqual({ v: 1, token: TOKEN })
+      // prod has a token but no app key: nothing it could open, so nothing is sent
+      expect(res.json().data.tenants.find((t: { id: string }) => t.id === prodId).hub_link).toBe(
+        undefined
+      )
+      // hub mode: the client too, and the Hub's own Microsoft client id
+      await db('nivaro_hub_apps').where({ id: appId }).update({ signin_mode: 'hub' })
+      res = await call()
+      expect(linkOf(res.json().data, devId)).toEqual({
+        v: 1,
+        token: TOKEN,
+        client_id: made.client_id,
+        client_secret: made.client_secret,
+        ...(process.env.OIDC_CLIENT_ID ? { idp_audience: process.env.OIDC_CLIENT_ID } : {})
+      })
+      // the seal is stable: the same list answers the same ETag (and 304 on If-None-Match)
+      const again = await call()
+      expect(again.headers.etag).toBe(res.headers.etag)
+      expect((await call({ 'if-none-match': String(res.headers.etag) })).statusCode).toBe(304)
+      // the deployment parses it and keeps the sealed text for the app to open
+      const parsed = parseHubTenants(res.json(), sharedKey)
+      expect(parsed?.tenants.find((t) => t.id === devId)?.hubLink).toMatch(/^enc:v1:/)
+      // a client turned off is not sent; the ETag moves
+      await db('nivaro_hub_oidc_clients')
+        .where({ environment_id: env.dev })
+        .update({ active: false })
+      const off = await call()
+      expect(linkOf(off.json().data, devId)).toEqual({ v: 1, token: TOKEN })
+      expect(off.headers.etag).not.toBe(res.headers.etag)
+      // no secret ever reaches a log line
+      for (const l of logs) {
+        expect(l).not.toContain(made.client_secret)
+        expect(l).not.toContain(TOKEN)
+      }
+    } finally {
+      await db('nivaro_hub_apps').where({ id: appId }).update({ signin_mode: 'direct' })
+      await db('nivaro_hub_oidc_clients').where({ environment_id: env.dev }).delete()
+      await db('nivaro_hub_environments')
+        .whereIn('id', [env.dev, env.prod])
+        .update(hubTokenColumns(null))
     }
   })
 })

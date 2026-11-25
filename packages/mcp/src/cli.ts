@@ -59,11 +59,12 @@ if (!token) {
 
 try {
   const client = createNivaroMcpClient({ url, token })
-  const { adminTools, chatAccess } = await keyCapabilities(client)
-  await serveStdio({ url, client, adminTools, chatAccess })
+  const { adminTools, chatAccess, hub } = await keyCapabilities(client)
+  await serveStdio({ url, client, adminTools, chatAccess, hub })
   const extras = [
     adminTools ? 'admin tools' : '',
-    chatAccess !== 'none' ? `chat ${chatAccess}` : ''
+    chatAccess !== 'none' ? `chat ${chatAccess}` : '',
+    hub ? 'hub tools' : ''
   ]
     .filter(Boolean)
     .join(', ')

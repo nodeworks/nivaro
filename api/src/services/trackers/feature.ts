@@ -1,28 +1,39 @@
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../../db/index.js'
 import { logActivity } from '../activity.js'
-import { isMultiTenant } from '../deployment-mode.js'
+import { appBox } from '../app-state.js'
+import { isNivaroCloud, perAppJobs } from '../deployment-mode.js'
 import { instanceKey } from '../instance-key.js'
 import { bustInstanceOverridesCache } from '../settings-overrides.js'
 
 /**
  * The master switch for GitLab sync. OFF by default, per instance. Order of precedence:
- * cloud mode (always off) > env ISSUE_TRACKERS on|off > the stored setting (key `issue_trackers`
- * on this instance's nivaro_settings_overrides row) > default off.
+ * Nivaro Cloud (always off) > env ISSUE_TRACKERS on|off > the stored setting (key
+ * `issue_trackers` on this instance's nivaro_settings_overrides row) > default off.
+ *
+ * On a Hub shared deployment (one process, many apps) the switch is per app: the stored setting
+ * lives in each app's own database. The process env belongs to the whole deployment there, so
+ * ISSUE_TRACKERS=off turns sync off for every app on it (and locks the switch), while
+ * ISSUE_TRACKERS=on does not switch any app on: each app's own stored switch decides (the same
+ * rule as TEAMS_BOT).
  */
 export type FeatureSource = 'env' | 'setting' | 'default' | 'cloud'
 export interface FeatureState {
   enabled: boolean
   source: FeatureSource
+  /** Hub shared deployment: the env `off` is the deployment operator's, for every app on it. */
+  deployment?: true
 }
 
 export const FEATURE_KEY = 'issue_trackers'
 const TTL_MS = 5000
 
-let cache: { at: number; value: FeatureState } | null = null
+// One cache per app (a Hub shared deployment serves many apps from this process, each with its
+// own switch). A bust inside an app clears that app's; outside one, every app's.
+const cache = appBox<{ at: number; value: FeatureState } | null>(() => null)
 
 export function bustTrackersFeatureCache(): void {
-  cache = null
+  cache.reset()
 }
 
 function envValue(): boolean | null {
@@ -50,23 +61,37 @@ async function readRow(): Promise<{ id: number; data: Record<string, unknown> } 
 }
 
 async function compute(): Promise<FeatureState> {
-  if (isMultiTenant()) return { enabled: false, source: 'cloud' }
+  if (isNivaroCloud()) return { enabled: false, source: 'cloud' }
   const env = envValue()
-  if (env !== null) return { enabled: env, source: 'env' }
+  // A shared deployment's env `on` is not any app's choice: only `off` applies there.
+  if (env !== null && !(env && perAppJobs()))
+    return perAppJobs()
+      ? { enabled: env, source: 'env', deployment: true }
+      : { enabled: env, source: 'env' }
   try {
-    const stored = (await readRow())?.data[FEATURE_KEY] as { enabled?: unknown } | undefined
-    if (stored && typeof stored.enabled === 'boolean')
-      return { enabled: stored.enabled, source: 'setting' }
+    const stored = await storedTrackersSwitch()
+    if (stored !== null) return { enabled: stored, source: 'setting' }
   } catch {
     // table missing / unreadable: the default
   }
   return { enabled: false, source: 'default' }
 }
 
+/**
+ * The app's own stored switch (this instance's overrides row), whatever the env says; null when
+ * none is stored. The move readiness reads it under an env override: a shared deployment does not
+ * apply the server's ISSUE_TRACKERS, so this is what decides there.
+ */
+export async function storedTrackersSwitch(): Promise<boolean | null> {
+  const stored = (await readRow())?.data[FEATURE_KEY] as { enabled?: unknown } | undefined
+  return stored && typeof stored.enabled === 'boolean' ? stored.enabled : null
+}
+
 export async function trackersFeature(): Promise<FeatureState> {
-  if (cache && Date.now() - cache.at < TTL_MS) return cache.value
+  const hit = cache.value
+  if (hit && Date.now() - hit.at < TTL_MS) return hit.value
   const value = await compute()
-  cache = { at: Date.now(), value }
+  cache.value = { at: Date.now(), value }
   return value
 }
 
@@ -80,7 +105,9 @@ export class FeatureLockedError extends Error {
     super(
       source === 'cloud'
         ? 'GitLab sync is not available in cloud mode'
-        : 'Set by the ISSUE_TRACKERS setting on the server'
+        : perAppJobs()
+          ? 'Turned off for every app on this shared deployment by its operator'
+          : 'Set by the ISSUE_TRACKERS setting on the server'
     )
   }
 }
@@ -88,7 +115,11 @@ export class FeatureLockedError extends Error {
 export async function setTrackersEnabled(enabled: boolean, userId: string): Promise<FeatureState> {
   bustTrackersFeatureCache()
   const current = await compute()
-  if (current.source === 'env' || current.source === 'cloud')
+  // Under an env lock only storing "off" while the env keeps it off is allowed: it changes
+  // nothing now, and the app's own switch then agrees where the env is not applied (a Hub shared
+  // deployment after a move), so sync does not start there.
+  const storeOffUnderEnvOff = current.source === 'env' && !current.enabled && !enabled
+  if ((current.source === 'env' && !storeOffUnderEnvOff) || current.source === 'cloud')
     throw new FeatureLockedError(current.source)
 
   const row = await readRow()
@@ -114,7 +145,7 @@ export async function setTrackersEnabled(enabled: boolean, userId: string): Prom
     item: id != null && !Number.isNaN(id) ? String(id) : undefined,
     comment: enabled ? 'GitLab sync turned on' : 'GitLab sync turned off'
   })
-  return { enabled, source: 'setting' }
+  return storeOffUnderEnvOff ? await compute() : { enabled, source: 'setting' }
 }
 
 /** preHandler for the admin plugin: everything but `/trackers/feature` answers 404 when off. */

@@ -205,11 +205,13 @@ export function localToUtc(localText: unknown, tz: unknown, serverOffsetMin: unk
 }
 
 export async function readBackupHistory(
-  database: string
+  database: string,
+  /** Where the msdb reads run (default: this instance's own server). The Hub's restore drill
+   *  passes its connection to an app's database server. */
+  read: (sql: string) => Promise<Record<string, unknown>[]> = (sql) =>
+    runLongSql<Record<string, unknown>>(sql, { timeoutMs: 60_000 })
 ): Promise<{ sets: BackupSetRow[]; families: MediaFamilyRow[] }> {
-  const raw = await runLongSql<Record<string, unknown>>(backupSetSql(database), {
-    timeoutMs: 60_000
-  })
+  const raw = await read(backupSetSql(database))
   const sets: BackupSetRow[] = raw.map((r) => ({
     backup_set_id: Number(r.backup_set_id),
     media_set_id: Number(r.media_set_id),
@@ -229,9 +231,8 @@ export async function readBackupHistory(
   const ids = [...new Set(sets.map((s) => s.media_set_id).filter(Number.isFinite))]
   const families = ids.length
     ? (
-        await runLongSql<Record<string, unknown>>(
-          `SELECT media_set_id, family_sequence_number, physical_device_name, device_type, mirror FROM msdb.dbo.backupmediafamily WHERE media_set_id IN (${ids.map((i) => Math.trunc(i)).join(',')})`,
-          { timeoutMs: 60_000 }
+        await read(
+          `SELECT media_set_id, family_sequence_number, physical_device_name, device_type, mirror FROM msdb.dbo.backupmediafamily WHERE media_set_id IN (${ids.map((i) => Math.trunc(i)).join(',')})`
         )
       ).map((f) => ({
         media_set_id: Number(f.media_set_id),

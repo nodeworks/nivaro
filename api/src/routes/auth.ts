@@ -48,6 +48,7 @@ import { config } from '../config.js'
 import { configEpochState } from '../db/config-epoch.js'
 import { whereEqualsCi } from '../db/dialect/h2.js'
 import { db } from '../db/index.js'
+import { tenantOrigin } from '../db/tenant-context.js'
 import { hasColumn } from '../lib/column-probe.js'
 import {
   authenticate,
@@ -59,7 +60,7 @@ import { INTERNAL_DISPATCH_HEADER, internalDispatchTokens } from '../plugins/api
 import { accessPendingFor } from '../services/access-pending.js'
 import { logActivity } from '../services/activity.js'
 import { idpUnreachable } from '../services/chaos/outbound-points.js'
-import { hubPublicOrigin, isNivaroCloud } from '../services/deployment-mode.js'
+import { hubPublicOrigin, isNivaroCloud, tenantSource } from '../services/deployment-mode.js'
 import { cardLogoVersion, parseCardLogo } from '../services/help-video-card-logo.js'
 import { hubModeEnabled } from '../services/hub/mode.js'
 import { captureEvidence } from '../services/hub/oidc/evidence.js'
@@ -104,7 +105,22 @@ import type { User } from '../types.js'
 // Validate returnTo against all configured allowed origins (admin + any APP_URLS, and on a Hub
 // its one public address, ruling X-5: its OpenID authorize page sends people through this login
 // and back there). Relative paths are resolved against ADMIN_URL so a bare "/" is always safe.
+//
+// On a Hub shared deployment (one process, many apps) ADMIN_URL / PUBLIC_URL are the
+// deployment's own, never an app's: inside an app the only return address is the app's own
+// origin (the host the request came on), so its sign-in (direct or through the Hub, 0.3.215)
+// calls back on the app itself. Nivaro Cloud and dedicated apps are unchanged.
 export function resolveReturnTo(rawReturnTo: string | undefined): string {
+  const appOrigin = tenantSource() === 'hub' ? tenantOrigin() : null
+  if (appOrigin) {
+    if (!rawReturnTo) return `${appOrigin}/`
+    try {
+      const parsed = new URL(rawReturnTo, appOrigin)
+      return parsed.origin === appOrigin ? parsed.href : `${appOrigin}/`
+    } catch {
+      return `${appOrigin}/`
+    }
+  }
   const allowedOrigins = new Set([
     new URL(config.ADMIN_URL).origin,
     new URL(config.PUBLIC_URL).origin,
@@ -405,7 +421,7 @@ export async function authRoutes(app: FastifyInstance) {
     const { returnTo, fellBack } = endHubAttempt(req)
     if (err.availability) {
       // Only what this server saw itself marks the Hub down for everyone (P7-11).
-      if (err.markHubDown) noteHubSigninFailed()
+      if (err.markHubDown) noteHubSigninFailed(Date.now(), hubSigninConfig() ?? undefined)
       void noteSignInFailure(req, app.redis, {
         reason: 'provider_unavailable',
         method: 'oidc',
@@ -706,7 +722,7 @@ export async function authRoutes(app: FastifyInstance) {
         return reply.redirect(url.href)
       } catch (err) {
         app.log.warn({ err }, 'Hub sign-in unavailable, signing in directly')
-        noteHubSigninFailed()
+        noteHubSigninFailed(Date.now(), hubCfg)
       }
     }
     try {

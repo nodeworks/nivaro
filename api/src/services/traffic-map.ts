@@ -11,6 +11,7 @@ import { INSTANCE_ID } from './instance-roster.js'
 import { getIo } from './io-holder.js'
 import { currentTraceCaller, currentTraceMeta } from './request-trace.js'
 import { instanceKey } from './settings-overrides.js'
+import { tenantSocketCount } from './socket-transport.js'
 import { clientFactsOf } from './traffic-client-facts.js'
 import {
   type CallerKey,
@@ -64,6 +65,7 @@ import {
   NO_STORE,
   resetTapState,
   storeForRequest,
+  tenantOfStore,
   withTrafficStore
 } from './traffic-taps.js'
 
@@ -1535,7 +1537,10 @@ export function startTrafficMapEmitter(
           // catch-up at 5 s, then skip ahead.
           for (let s = Math.max(nextFrameSec, sec - 5); s <= sec - 1; s++) {
             const t0 = process.hrtime.bigint()
-            const frame = buildFrame(s, { sockets: io.engine?.clientsCount ?? 0, journalSeq })
+            // An app's store counts that app's own sockets, never the whole process's.
+            const tenant = tenantOfStore(id)
+            const sockets = tenant ? tenantSocketCount(tenant) : (io.engine?.clientsCount ?? 0)
+            const frame = buildFrame(s, { sockets, journalSeq })
             if (opts.node) frame.node = opts.node
             noteFrameCost(s, Number((process.hrtime.bigint() - t0) / 1000n))
             if (m.legacy.length) {

@@ -84,6 +84,29 @@ export function templateFor(version: string): StackTemplate {
 export const EXPORTER_AGENT_MIN_VERSION = '0.2.2'
 
 /**
+ * Hub agents from this version keep one uploads folder per stack on an NFS export and take a
+ * stack's uploads_folder / files_subfolder / run_as (0.2.2 builds from main predate them).
+ */
+export const STACK_FILES_AGENT_MIN_VERSION = '0.2.3'
+
+/**
+ * P4-33: how many swarm nodes keep their OWN copy of a stack's volumes — the swarm has more than
+ * one node and the volumes are `local`, unless the agent (0.2.3+) puts uploads on an NFS export
+ * every node mounts. null = not per node.
+ */
+export function volumesPerNode(
+  h: { swarm?: { nodes?: number | null }; volume_driver?: string; volume_nfs?: boolean } | null
+): number | null {
+  const nodes = h?.swarm?.nodes
+  return typeof nodes === 'number' &&
+    nodes > 1 &&
+    (h?.volume_driver ?? 'local') === 'local' &&
+    h?.volume_nfs !== true
+    ? nodes
+    : null
+}
+
+/**
  * Is the version an agent reports (GET /v1/health `agent_version`) at least `min`? `v0.2.2`,
  * `0.2.2-rc.1` read as 0.2.2; anything that is not `x.y.z…` (unknown, `dev`) is false.
  */

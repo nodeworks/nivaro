@@ -4,6 +4,7 @@ import { NIVARO_VERSION } from '../../version.js'
 import { forgetAppState } from '../app-state.js'
 import { hubSharedConfig } from '../deployment-mode.js'
 import { INSTANCE_ID } from '../instance-roster.js'
+import { resetAppHubLinksForTests, setAppHubLinks } from './app-hub-links.js'
 import { resetAppKeysForTests, setAppKeys } from './app-keys.js'
 import { fireAppLeft } from './app-lifecycle.js'
 import { HUB_TENANTS_PATH, parseHubTenants } from './hub-contract.js'
@@ -186,6 +187,7 @@ export async function startHubTenantSource(deps: Deps): Promise<TenantRegistry> 
     for (const t of list) if (!before.has(t.id)) forgetAppState(t.id)
     tenants = list.map(withListedOrigin)
     setAppKeys(tenants)
+    setAppHubLinks(tenants)
     const m = new Map<string, TenantRecord>()
     for (const t of tenants) for (const h of t.hostnames) m.set(h, t)
     byHost = m
@@ -507,4 +509,5 @@ export function resetHubTenantSourceForTests(): void {
   active?.stop()
   active = null
   resetAppKeysForTests()
+  resetAppHubLinksForTests()
 }

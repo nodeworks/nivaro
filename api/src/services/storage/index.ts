@@ -5,8 +5,10 @@
  * Env vars are read from process.env directly — see local.ts / s3.ts / azure.ts
  * for the provider-specific variables.
  */
+import type { Readable } from 'node:stream'
 import { getTenantId } from '../../db/tenant-context.js'
 import { tenantSource } from '../deployment-mode.js'
+import type { CopySourceScope } from './app-scope.js'
 import { scopedStorage } from './app-scope.js'
 import { AzureStorage } from './azure.js'
 import { instrumentStorage } from './instrument.js'
@@ -40,6 +42,29 @@ export interface StorageProvider {
   /** The stored object's size in bytes, or null when it is missing — never downloads it (Hub
    *  phase 6: a move's file pull skips objects already present at the same size). */
   size?(key: string): Promise<number | null>
+  /** The object as a stream, never read whole (env S3/Azure; a move's source route, 0.3.215).
+   *  Throws StoredObjectMissing when it is not there. */
+  openStream?(key: string, rangeHeader?: string): Promise<StoredStream>
+  /** A hash naming the bucket/container this provider writes to (never a credential): a move
+   *  copies server-side when source and target name the same one (0.3.215). */
+  storeId?(): string
+  /** Server-side copy inside the same bucket/container from the source's FULL key `rawSource`
+   *  to `key`. The source must lie in `sourceScope` (assertCopySource), which the caller names
+   *  from what it controls, never from what the source sent. Resolves to the size (0.3.215). */
+  copyFrom?(
+    key: string,
+    rawSource: string,
+    mime: string,
+    opts: { signal?: AbortSignal; sourceScope: CopySourceScope }
+  ): Promise<number>
+}
+
+/** An object opened as a stream (a byte range of it when one was asked for and satisfiable). */
+export interface StoredStream {
+  size: number
+  range: { start: number; end: number } | null
+  unsatisfiable: boolean
+  stream: Readable
 }
 
 let _storage: StorageProvider | null = null

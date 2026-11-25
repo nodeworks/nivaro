@@ -247,7 +247,7 @@ export const hubLinkDocs: DocSection = {
     { type: 'h1', id: 'hub-link', text: 'Hub link' },
     {
       type: 'p',
-      text: 'The hub link is the one door an app opens to its Hub. It is a single read-only route, `GET /api/hub-link/status`, mounted only when the app has `HUB_TOKEN` set (32 characters or more). The Hub sends that token as `Authorization: Bearer <token>`; any other caller, or no token, gets 401 `HUB_LINK_REFUSED`. The answer is never cached (`Cache-Control: no-store`) and the preflight behind it is reused for 15 seconds. No session, API key or OAuth token opens it.'
+      text: 'The hub link is the one door an app opens to its Hub. It is a single read-only route, `GET /api/hub-link/status`, mounted only when the app has `HUB_TOKEN` set (32 characters or more). The Hub sends that token as `Authorization: Bearer <token>`; any other caller, or no token, gets 401 `HUB_LINK_REFUSED`. The answer is never cached (`Cache-Control: no-store`) and the preflight behind it is reused for 15 seconds. No session, API key or OAuth token opens it. From 0.3.215 the same token also opens `GET /api/hub-link/usage`, the capacity figures the Capacity tab samples (see Capacity and limits).'
     },
     { type: 'h2', id: 'hub-link-returns', text: 'What it returns' },
     {
@@ -264,7 +264,15 @@ export const hubLinkDocs: DocSection = {
           '`readiness_score`',
           'The cached readiness score, never a live run; null while not yet computed or when the preflight timed out.'
         ],
-        ['`process`', 'Uptime, memory in MB and database pool figures (used, free, pending).']
+        ['`process`', 'Uptime, memory in MB and database pool figures (used, free, pending).'],
+        [
+          '`recent` (only with `?recent_minutes=N`, 1–60)',
+          'Counts over the last N minutes: requests answered, 5xx answers, front-end crash reports. Read by automatic rollback rules (see Hub release operations).'
+        ],
+        [
+          '`release_facts` (only with `?release_facts=1`)',
+          'The migration names this build ships and the setting names it knows. The Hub diffs two versions for release notes.'
+        ]
       ]
     },
     { type: 'h2', id: 'hub-link-never', text: 'What it never returns' },
@@ -278,7 +286,7 @@ export const hubLinkDocs: DocSection = {
     },
     {
       type: 'note',
-      text: 'The link started read-only. Later phases added seeding a first administrator and, for moves, strict maintenance on and off, retiring an app, a shared-readiness report and file transfer (see Moving an environment). An app that does not set HUB_TOKEN has no hub link at all: the route answers 404, which the Hub shows as `link_refused` / `HUB_LINK_MISSING` for an environment saved with a token. An environment saved without a token is read through the public version and health routes instead.'
+      text: 'The link started read-only. Later phases added seeding a first administrator and, for moves, strict maintenance on and off, retiring an app, a shared-readiness report and file transfer (see Moving an environment), and, from 0.3.215, two read-only summaries the Hub collects every 15 minutes: issue and crash groups (`GET /api/hub-link/ops/issues`, see Issues across apps) and stored-files usage (`GET /api/hub-link/ops/files`, see Storage health). An app that does not set HUB_TOKEN has no hub link at all: the route answers 404, which the Hub shows as `link_refused` / `HUB_LINK_MISSING` for an environment saved with a token. An environment saved without a token is read through the public version and health routes instead.'
     }
   ]
 }
@@ -601,7 +609,22 @@ export const hubDockerDocs: DocSection = {
         [
           '`HUB_AGENT_VOLUME_DRIVER`, `HUB_AGENT_VOLUME_OPTS_FILE`',
           '`local`',
-          'Driver and options for the uploads and Redis volumes, for example an NFS export. `o=bind` (also `rbind` and `remount`) and a `device` that is not an NFS export are refused at start.'
+          'Driver and options for the uploads volumes (and Redis, unless set below), for example an NFS export. `o=bind` (also `rbind` and `remount`) and a `device` that is not an NFS export are refused at start. From agent 0.2.3 an NFS `device` is the export ROOT: each stack gets its own folder under it (see Files on an NFS export).'
+        ],
+        [
+          '`HUB_AGENT_VOLUME_EXPORT_MOUNT`',
+          'none',
+          'Agent 0.2.3: where the agent itself mounts that same NFS export, so it can check and make each stack folder before a deploy. Only with an NFS `device` (`VOLUME_EXPORT_MOUNT_BAD` otherwise). Without it a stack on the export is refused (`EXPORT_MOUNT_MISSING`).'
+        ],
+        [
+          '`HUB_AGENT_REDIS_PIN_LABEL`',
+          'none',
+          'Agent 0.2.3: `key=value` of a swarm node label. Bundled Redis then runs only on nodes carrying it, so its local volume is always there. Unset: any node, and Redis starts empty after it moves. Never the agent’s own node.'
+        ],
+        [
+          '`HUB_AGENT_REDIS_VOLUME_DRIVER`, `HUB_AGENT_REDIS_VOLUME_OPTS_FILE`',
+          'see text',
+          'Agent 0.2.3: bundled Redis’s own volume. Default: the uploads driver and options, except `local` with none when those mount NFS. NFS options are refused (`REDIS_VOLUME_OPTS_BAD`): Redis never sits on NFS.'
         ],
 
         [
@@ -730,6 +753,37 @@ export const hubDockerDocs: DocSection = {
     {
       type: 'p',
       text: 'A deploy also needs `DB_CLIENT` set, plus `DB_DATABASE` for SQLite, or `DB_HOST`, `DB_DATABASE`, `DB_USER` and the secret `DB_PASSWORD` for a database server, and the secret `REDIS_URL` when Redis is external. Anything missing blocks the plan as `STACK_SETTINGS_MISSING`. An environment with a database on the Databases tab (Hub databases) needs none of the `DB_*` settings: the stack gets that database as `DB_CLIENT` and the secret `DB_URL`, opened only by the deploy run, and the `DB_*` settings are not used. The plan names a database that is not ready yet; the run stops with `DATABASE_<code>` when it cannot open it.'
+    },
+    { type: 'h3', id: 'hub-docker-files', text: 'Files on an NFS export' },
+    {
+      type: 'p',
+      text: 'With agent 0.2.3 and an NFS `device` in `HUB_AGENT_VOLUME_OPTS_FILE`, that device is the export root and every stack keeps its uploads in its own folder under it, `<export>/<stack>/uploads`. Two Hub stacks never share a folder (`UPLOADS_FOLDER_TAKEN`; one export per agent). Before the deploy the agent checks the folder through its own mount of the export (`HUB_AGENT_VOLUME_EXPORT_MOUNT`; the plan stops with `EXPORT_MOUNT_MISSING` without it). It creates `<stack>` (0755, claimed with a marker naming its swarm) and `<stack>/uploads`, and hands only a `<stack>/uploads` it just created to uid 1000; when it cannot (root squash, no `CHOWN` capability) the deploy stops with `UPLOADS_FOLDER_NOT_WRITABLE` and you create the folder on the file server, owned by 1000:1000. An existing `<stack>` it did not make is never used (`UPLOADS_FOLDER_NOT_OURS`): adopt it if you mean it. It never follows a link there (`UPLOADS_FOLDER_LINK`), and every folder above the uploads folder must not be writable by its group or by everyone (`UPLOADS_FOLDER_PARENT_WRITABLE`). These checks hold when the stack is applied: Docker resolves the folder again whenever a task starts, so keep the export root writable by the file server administrators only. Bundled Redis stays on a local volume, pinned only to nodes carrying `HUB_AGENT_REDIS_PIN_LABEL` when that is set. The agent check shows the uploads mode and Redis placement, and the more-than-one-node warning does not show on an NFS export.'
+    },
+    {
+      type: 'table',
+      head: ['Stack setting', 'What it does'],
+      rows: [
+        [
+          'Uploads folder (`uploads_folder`)',
+          'An existing folder under the agent’s NFS export (relative, for example `efp`; 1–8 parts of letters, digits, `.`, `_` and `-`, no `..`) used as it is instead of `<stack>/uploads`. The agent never creates, chowns, changes or deletes it; it must exist and uid 1000 must be able to write it (`UPLOADS_FOLDER_MISSING`, `UPLOADS_FOLDER_NOT_WRITABLE`). Needs an agent with an NFS export (`UPLOADS_FOLDER_NEEDS_NFS`).'
+        ],
+        [
+          'Files sub-folder (`files_subfolder`)',
+          'Where the files sit inside the uploads volume: `STORAGE_LOCAL_ROOT` becomes `/app/uploads/<files_subfolder>` (for example `directus-uploads`). Any volume. An adopted folder must already hold it; in the stack’s own folder the app creates it.'
+        ],
+        [
+          'Run as (`run_as`)',
+          '`image` (default): the image starts as root and steps down to uid 1000. `app`: every app service runs as uid 1000 from the start. Use `app` on an export with root squash, where root in the container can do nothing on the files and a root-owned file at the top of the folder would otherwise keep the server root.'
+        ]
+      ]
+    },
+    {
+      type: 'p',
+      text: 'All three need Hub agent 0.2.3 or later: with an older agent (or one whose version is unknown) the plan stops with `AGENT_TOO_OLD`. They are part of the stack’s spec, so changing one shows the stack as changed until it is applied. Unset, the stack’s spec is exactly what it was. Refusals when saving: `BAD_UPLOADS_FOLDER`, `BAD_FILES_SUBFOLDER`, `BAD_RUN_AS`. Removing a stack with its volumes deletes its Redis volume only: volumes on the NFS export are kept and their files stay on the file server; moves, their rollbacks and Finish and stop the old home keep volumes anyway. A stack an older agent deployed still mounts the export root, where its files are: its next apply is refused (`UPLOADS_LAYOUT_CHANGED`) until you move its files into a folder and set that folder as its uploads folder.'
+    },
+    {
+      type: 'note',
+      text: 'An app whose files already sit on the file server: EFP production mounts the NFS export itself at `/app/uploads` and reads files from `directus-uploads/` (owned by uid 1000). The export root cannot be adopted, so give the agent that export and set the stack’s uploads folder `directus-uploads`, no files sub-folder, and run as `app`. First check by hand that the file server lets a client mount a folder below the export (the agent README has the probe), and that the export root is not group- or other-writable.'
     },
     { type: 'h2', id: 'hub-docker-extensions', text: 'Extensions as images' },
     {
@@ -902,7 +956,7 @@ export const hubDockerDocs: DocSection = {
     },
     {
       type: 'warn',
-      text: 'A swarm of more than one node and the default `local` volume driver: `local` volumes are per node, so each node a web, worker or importer task lands on keeps its own uploads, and a Redis task that moves to another node starts empty. Remove stack with its volumes deletes only the agent node’s copies. Pin the stack to one node (a placement constraint on the swarm) or set a shared volume driver (`HUB_AGENT_VOLUME_DRIVER`, `HUB_AGENT_VOLUME_OPTS_FILE`, for example an NFS export). The agent check shows the node count and the volume driver, and the stack panel warns when the swarm has more than one node and the volumes are local. Shared volumes managed by the Hub come in a later phase.'
+      text: 'A swarm of more than one node and the default `local` volume driver: `local` volumes are per node, so each node a web, worker or importer task lands on keeps its own uploads, and a Redis task that moves to another node starts empty. Remove stack with its volumes deletes only the agent node’s copies. Pin the stack to one node (a placement constraint on the swarm) or put the uploads on an NFS export (agent 0.2.3, Files on an NFS export: one folder per stack, Redis kept local on the agent’s node). The agent check shows the node count, the volume driver and whether uploads sit on an NFS export, and the stack panel warns when the swarm has more than one node and the volumes are local and not on an NFS export.'
     },
     {
       type: 'note',
@@ -919,7 +973,7 @@ export const hubDockerDocs: DocSection = {
         'Administrators only. The body is `{ confirm: "<stack name>" }`; the Hub refuses with 400 `CONFIRM_REQUIRED` otherwise.',
         'Remove checks stack ownership first. The agent reads the labels, and a stack that names another app or environment is never removed (409 `STACK_OWNER_MISMATCH`).',
         'Removing the services is not always the end. When the agent finds no service left (status 404), remove still goes to the agent, which clears the leftovers it owns: secrets, the network, volumes and the extensions folder.',
-        'Volumes stay unless asked for. `remove_volumes: true` also needs `confirm_volumes: "delete <stack name> data"` (400 `CONFIRM_REQUIRED`): both confirms, because the uploads and Redis data go.',
+        'Volumes stay unless asked for. `remove_volumes: true` also needs `confirm_volumes: "delete <stack name> data"` (400 `CONFIRM_REQUIRED`): both confirms, because the uploads and Redis data go. With uploads on an NFS export (agent 0.2.3) only the Redis data goes: the agent keeps every volume on the export and the files stay on the file server; the panel says so.',
         'A remove with nothing to remove answers `{ removed: false, already_absent: true }`. After a remove the environment is `suspended` and the removal is logged.',
         'It runs under the environment promotion lock, so no promotion starts during it; a running promotion answers 409 `PROMOTION_RUNNING`.',
         'An environment cannot be deleted while its stack exists (409 `STACK_STILL_RUNNING`), or while leftovers remain on the swarm (409 `STACK_LEFTOVERS`: volumes, secrets or the network). Remove the stack first. When the agent cannot say, deleting is refused with `AGENT_UNREACHABLE`; a stack the Hub did not create, or one that belongs to another environment, never blocks the delete.'
@@ -985,7 +1039,7 @@ export const hubSigninDocs: DocSection = {
     },
     {
       type: 'note',
-      text: 'Sign-in through the Hub is off for every app until you turn it on, app by app. None of this exists on a multi-tenant deployment (cloud mode or a Hub shared deployment): the Hub routes are not mounted there, `HUB_URL` does not turn on Hub sign-in or the app switcher, and every app signs in directly as before.'
+      text: "Sign-in through the Hub is off for every app until you turn it on, app by app. In Nivaro Cloud none of this exists: every app signs in directly as before. On a Hub shared deployment (from 0.3.215) each app signs in through the Hub with its own client, which the Hub hands it in the tenant list (see On a shared deployment below); the deployment's own `HUB_URL` never turns it on by itself."
     },
     { type: 'h2', id: 'hub-signin-modes', text: 'Modes' },
     {
@@ -1075,6 +1129,11 @@ export const hubSigninDocs: DocSection = {
       type: 'p',
       text: "Hub sign-in also uses the app's own `OIDC_ISSUER` and `OIDC_CLIENT_ID`: the evidence is checked against them. With any piece missing or unusable, the app does not use the Hub, and the readiness check Sign-in through the Hub (group Sign-in) names what to fix. It warns and never fails, because people can always sign in directly."
     },
+    { type: 'h3', id: 'hub-signin-shared', text: 'On a shared deployment' },
+    {
+      type: 'p',
+      text: "An app on a Hub shared deployment (0.3.215 or later) sets none of these lines. The Hub hands each app it lists its own values in the tenant list (sealed with that app's key, which binds them to that app; the list itself is protected by TLS, the deployment token and no caching): the environment's client id and secret (only while the app is in Hub mode and the client is on), the environment hub token (for the switcher and sign-in reports) and the Hub's own Microsoft client id (the deployment's `HUB_IDP_AUDIENCE` when the Hub has none). `HUB_URL`, `HUB_SIGNIN=off` and the primary `OIDC_ISSUER` / `OIDC_CLIENT_ID` are the deployment's: one Hub, one Microsoft tenant and one direct-sign-in fallback for every app it serves. `HUB_CLIENT_*` and `HUB_TOKEN` on a shared deployment are never used for an app. Each app calls back on its own address and probes the Hub for it; one app's Hub failures never send another app's people to direct sign-in. A new, rotated or switched client reaches the app at once (the Hub asks the deployment to re-read its list), else within 30 seconds."
+    },
     { type: 'h2', id: 'hub-signin-fallback', text: 'Fallback and the direct link' },
     {
       type: 'p',
@@ -1131,7 +1190,7 @@ export const hubSigninDocs: DocSection = {
     { type: 'h2', id: 'hub-signin-switcher', text: 'The app switcher' },
     {
       type: 'p',
-      text: "The switcher lists the other apps a person uses in the same environment (production lists production), each with a link to that app's own sign-in. An app asks for it at `GET /api/hub-switcher`, which asks the Hub. The feature is `hub_switcher` in `GET /api/app-info`; the route is a 404 unless the app has `HUB_URL` and `HUB_TOKEN`."
+      text: "The switcher lists the other apps a person uses in the same environment (production lists production), each with a link to that app's own sign-in. An app asks for it at `GET /api/hub-switcher`, which asks the Hub. The feature is `hub_switcher` in `GET /api/app-info`; the route is a 404 unless the app has `HUB_URL` and `HUB_TOKEN` (on a Hub shared deployment: unless the Hub gave the app its hub token in the tenant list)."
     },
     {
       type: 'ul',
@@ -1178,7 +1237,7 @@ export const hubSigninDocs: DocSection = {
         '`OIDC_ISSUER` must be tenant-specific on the Hub and on every Hub-signed-in app (`https://login.microsoftonline.com/<tenant>/v2.0`, never `common`, `organizations` or `consumers`): the evidence is matched to the exact tenant issuer. Supported Microsoft hosts: `login.microsoftonline.com`, `sts.windows.net`, `login.microsoftonline.us`, `login.chinacloudapi.cn`, `login.partner.microsoftonline.cn`, `login.microsoftonline.de`. The minimum for an app is all five lines above plus a tenant-specific https `OIDC_ISSUER` on one of those hosts and an `OIDC_CLIENT_ID`.',
         'An Entra v1 issuer (`sts.windows.net`) works only when the Hub and the app are on the same token version, because the issuer inside the evidence differs between v1 and v2.0. The readiness check warns about v1. Prefer v2.0 on both.',
         'The Hub supports `prompt=none` only. `prompt=login`, `max_age` and similar are ignored: a person who already has a Hub session is not asked to sign in again.',
-        "Many people behind one address (an office NAT, a proxy): set `TRUST_PROXY` so the Hub sees real addresses. The token endpoint and the probe block an address for a minute after 20 failed client authentications (429, `Retry-After: 60`) and the app link does the same after 20 wrong hub tokens a minute, per Hub process. The calls an app's server makes with its credentials (token exchange, probe, app link) count against `RATE_LIMIT_ANON_PER_MINUTE` only when the credentials fail: apps behind one egress address never use up that budget by signing people in, and a guessed secret is refused (429) once the address is over it. The discovery document and the key set are never counted. When the Hub's token endpoint answers 429 or 503, or does not answer within 5 seconds, the app treats the Hub as unavailable: the person goes to direct sign-in once and nothing is filed. People's own sign-ins use their session cookie, which the general limiter never refuses; only the first request of a sign-in, made without a session, counts against `RATE_LIMIT_ANON_PER_MINUTE` (300 a minute per address by default behind a proxy). Raise it on the Hub when a large site signs in together. Once an address is over that budget, the Hub refuses every call an app server makes from it, even with a correct client secret: the app then treats the Hub as unavailable and signs people in directly for a minute. So give app servers their own outbound address, not one shared with offices whose people sign in, or raise `RATE_LIMIT_ANON_PER_MINUTE` on the Hub. The app link also caps each environment at 1200 calls and 120 reports a minute, and 5000 new people a day.",
+        "Many people behind one address (an office NAT, a proxy): set `TRUST_PROXY` so the Hub sees real addresses. The token endpoint and the probe block an address for a minute after 20 failed client authentications (429, `Retry-After: 60`) and the app link refuses a hub token after 20 failed tries of it a minute, and an address after 300 failed tokens a minute (all apps of a shared deployment call from one address with their own tokens, so one app's stale token never locks out the others), per Hub process. The calls an app's server makes with its credentials (token exchange, probe, app link) count against `RATE_LIMIT_ANON_PER_MINUTE` only when the credentials fail: apps behind one egress address never use up that budget by signing people in, and a guessed secret is refused (429) once the address is over it. The discovery document and the key set are never counted. When the Hub's token endpoint answers 429 or 503, or does not answer within 5 seconds, the app treats the Hub as unavailable: the person goes to direct sign-in once and nothing is filed. People's own sign-ins use their session cookie, which the general limiter never refuses; only the first request of a sign-in, made without a session, counts against `RATE_LIMIT_ANON_PER_MINUTE` (300 a minute per address by default behind a proxy). Raise it on the Hub when a large site signs in together. Once an address is over that budget, the Hub refuses every call an app server makes from it, even with a correct client secret: the app then treats the Hub as unavailable and signs people in directly for a minute. So give app servers their own outbound address, not one shared with offices whose people sign in, or raise `RATE_LIMIT_ANON_PER_MINUTE` on the Hub. The app link also caps each environment at 1200 calls and 120 reports a minute, and 5000 new people a day.",
         'Sign-in through the Hub keeps working while the Hub shows its maintenance page: the maintenance write freeze exempts `/api/hub/oidc/*` (the token request is a sign-in, not a data write) and the two app-link report routes.',
         'The Hub answers only on its configured `PUBLIC_URL` origin, never on the Host header.'
       ]
@@ -1685,13 +1744,17 @@ export const hubCreateDocs: DocSection = {
       text: "Apps → Create app (Hub administrators) makes a new Nivaro app end to end: a database for each environment, a GitLab deploy repository, the settings and secrets the deploy needs, the first deploy on the Docker swarm, the app's name, the Hub link and the first administrator. The result is an ordinary environment the Hub can promote and roll back like any adopted one."
     },
     {
+      type: 'p',
+      text: 'Where the app goes is the first choice on the form: GitLab (a target, below: a deploy repository whose pipeline deploys), Docker (a Docker driver: the Hub agent deploys each environment as a swarm stack, no repository) or Shared deployment (each environment is placed on a shared deployment). Docker and shared creations need Nivaro 0.3.215 or later on the Hub; see Creating on Docker or on a shared deployment below.'
+    },
+    {
       type: 'warn',
       text: 'Creating apps needs GitLab 17.1 or newer (the Hub sets `restrict_user_defined_variables` together with `ci_pipeline_variables_minimum_override_role` on every deploy repository and refuses to deploy when GitLab does not keep them), a Docker swarm with Traefik v3, and a Hub with `ENCRYPTION_KEY` set. The Hub never makes DNS names on a name server, Microsoft app registrations, or swarm users: those are listed below as what you do yourself.'
     },
     { type: 'h2', id: 'hub-create-targets', text: 'Targets: where new apps go' },
     {
       type: 'p',
-      text: 'A target (the Targets tab of the Hub, administrators only: Apps · Drivers · Targets · Databases) holds everything about one place apps are created. Only kind `gitlab` exists. Settings:'
+      text: 'A target (the Targets tab of the Hub, administrators only: Apps · Drivers · Targets · Databases) holds everything about one place apps are created through GitLab. Targets are of kind `gitlab` only: a Docker creation names a Docker driver and a shared one a shared deployment directly, so neither needs a target. Settings:'
     },
     {
       type: 'table',
@@ -1859,10 +1922,10 @@ export const hubCreateDocs: DocSection = {
       type: 'p',
       text: 'Plan (a read that writes nothing) shows, per environment, the hostname, base URL, the ticket text for a manual name, the redirect URI, the branch, the swarm stack name (`<app>--<env>`, shortened with a hash past 40 characters), the database and, for a DBA, the checklist, and lists every problem at once. Create plans again inside a lock that only one creation at a time holds, so two creations never take the same key, hostname or stack name. It writes the app, owners, environments, database records and one creation per environment in one transaction, and answers 202.'
     },
-    { type: 'h2', id: 'hub-create-steps', text: 'The eight steps' },
+    { type: 'h2', id: 'hub-create-steps', text: 'The steps' },
     {
       type: 'p',
-      text: "Each environment is walked through the same steps in the background, in position order. Every step can be repeated safely, so Retry starts again at the first unfinished step and never plans again. A creation holds the environment's promotion lock, so a promotion and a creation never run on one environment together."
+      text: "Each environment is walked through the same steps in the background, in position order. Every step can be repeated safely, so Retry starts again at the first unfinished step and never plans again. A creation holds the environment's promotion lock, so a promotion and a creation never run on one environment together. These are a GitLab creation's steps; Docker and shared creations walk their own (next section)."
     },
     {
       type: 'table',
@@ -1893,12 +1956,80 @@ export const hubCreateDocs: DocSection = {
         [
           '`admin`',
           'Asks the app, over the Hub link, to make the first administrator (up to 20 tries 15 seconds apart for "not ready yet" answers).'
+        ],
+        [
+          '`template`',
+          'Installs the template picked on Create app (an App Blueprint from the Templates tab) over the Hub link; with none picked it is done at once. See App templates.'
         ]
       ]
     },
     {
       type: 'p',
       text: "The environment is `provisioning` while it is created, `waiting_for_name` while a hand-made name is awaited, and becomes `active` when every step is done. A creation is `queued`, `running`, `waiting`, `done`, `failed`, `interrupted` or `cancelled`. Progress, the log, the made repository, driver, placement and database, the ticket, the checklist and the manager lines are on the environment's creation panel; none of them contains a secret."
+    },
+    {
+      type: 'h2',
+      id: 'hub-create-docker',
+      text: 'Creating on Docker or on a shared deployment'
+    },
+    {
+      type: 'p',
+      text: 'Send `target: { kind: "docker", driver_id, stack }` or `target: { kind: "shared", shared_id, pool_max? }` instead of `target_id` (which stays the GitLab form; `target: { kind: "gitlab", id }` is the same). Everything else on the form is the same: key, name, owners, first administrator, version, sign-in, environments and their databases (the existing create and adopt database rules).'
+    },
+    { type: 'h3', id: 'hub-create-docker-stack', text: 'Docker: the Hub agent deploys the stack' },
+    {
+      type: 'table',
+      head: ['Field', 'Rule'],
+      rows: [
+        [
+          '`driver_id`',
+          'A Docker driver with an agent token. Its DNS mode names the environments as a GitLab target does: `production` gets `<app>.<wildcard>`, others `<app>--<env>.<wildcard>`; with manual DNS you type each hostname and the creation shows the ticket (pointing at the driver’s edge target).'
+        ],
+        [
+          '`stack.size`, `stack.redis`',
+          '`small` (default), `medium` or `large`; `bundled` (default) or `external` (then `REDIS_URL` as a setting or secret).'
+        ],
+        [
+          '`stack.settings`, `stack.secrets`',
+          'Plain settings and secrets, judged as a Stack panel save is: keys Nivaro reads or under the agent’s `HUB_AGENT_ENV_PREFIXES`, credentials only as secrets. Sign-in (`OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_REDIRECT_URI`, the secret `OIDC_CLIENT_SECRET`) comes from the form and the database from its record, so those keys and every `DB_*` are refused (`RESERVED_SETTING`). `SESSION_SECRET` and `ENCRYPTION_KEY` are generated and sealed for each environment; enter `ENCRYPTION_KEY` only for an existing database an earlier install sealed with it (the plan warns when you do not).'
+        ],
+        [
+          '`stack.extension_pins`',
+          '`{ id: "<repo>@sha256:<64 hex>" }`, up to 20. The images must be in the agent’s `HUB_AGENT_IMAGES`. The app’s extensions are these ids. (`extensions` itself is refused on Docker: `EXTENSIONS_UNSUPPORTED`.)'
+        ],
+        [
+          '`environments[].publish_port`',
+          'Only on an agent with the published-port edge: one port per environment, inside `HUB_AGENT_PUBLISH_PORTS`.'
+        ]
+      ]
+    },
+    {
+      type: 'p',
+      text: 'The plan asks the agent (`GET /v1/health`, and each planned stack name) and refuses, before anything is written, with a code per limit: `AGENT_UNREACHABLE`, `AGENT_REFUSED`, `AGENT_INCOMPATIBLE`; `IMAGE_NOT_ALLOWED` (the Hub image is not in `HUB_AGENT_IMAGES`); `EXTENSION_NOT_ALLOWED` (an extension image is not); `HOSTNAME_NOT_ALLOWED` (a name outside the wildcard or the agent’s `HUB_AGENT_HOST_SUFFIXES`); `SETTING_INVALID` (a key outside the env allow-list), `SECRET_IN_SETTINGS`, `RESERVED_SETTING`, `BAD_VALUE`, `BAD_SIZE`, `BAD_REDIS`, `BAD_EXTENSION_PIN`; `REDIS_NOT_OFFERED` (bundled Redis but no `HUB_AGENT_REDIS_IMAGE`); `STACK_SETTINGS_MISSING` (external Redis without `REDIS_URL`); `PUBLISH_PORT_NOT_ALLOWED`, `BAD_PUBLISH_PORT`; `TEMPLATE_NONE` (no stack template for the version); `STACK_EXISTS` (the swarm already runs a stack of that name) and `STACK_NAME_TAKEN` (another placement of the driver deploys it). It warns when the swarm has several nodes and the agent keeps volumes per node.'
+    },
+    {
+      type: 'table',
+      head: ['Step', 'What it does'],
+      rows: [
+        ['`database`', 'As on GitLab.'],
+        [
+          '`stack`',
+          'Gives the environment a dedicated placement on the driver (stack `<app>--<env>`) and its one `stack` component, then saves its stack settings: what you entered, sign-in, the extension pins, and a generated `SESSION_SECRET` and `ENCRYPTION_KEY`, all sealed. A retry keeps the generated keys.'
+        ],
+        [
+          '`deploy`',
+          'The phase-4 agent deploy: reads the agent’s limits again, renders the spec, applies it and waits for swarm (up to 30 minutes), then verifies as a promotion does (the version served twice, the preflight not failing; with manual DNS a name that is not there yet makes the environment wait for it). A cancel or a lost lock stops it before the apply, with nothing deployed. It is recorded as a promote deploy of the environment, so its history, Restart, Apply now and later promotions know what the stack runs. While a creation is open, promotions, Apply now and Restart of its environments are refused (`CREATION_OPEN`).'
+        ],
+        [
+          '`name`, `link`, `admin`',
+          'As on GitLab: the name serves the version, the Hub link answers, the first administrator is made over the Hub link.'
+        ]
+      ]
+    },
+    { type: 'h3', id: 'hub-create-shared', text: 'Shared: placed on a shared deployment' },
+    {
+      type: 'p',
+      text: 'Each environment is placed on the deployment with place-shared, as a creation step. The version is the deployment’s (leave it empty; another one is `VERSION_NOT_SHARED`), no image is looked up, and sign-in is optional (the app signs in with the deployment’s own app registration; add each redirect URI there). `extensions` lists ids the deployment loads (`EXTENSION_NOT_ALLOWED` otherwise). With a host pattern the names are made under it; without one you type each name. On a Docker deployment a typed name must be under the pattern or already routed (`NAME_NOT_ROUTED`). The plan also refuses `SHARED_RETIRED`, `SHARED_BUSY`, `NOT_DEPLOYED`, `POOL_BUDGET` (every environment’s `pool_max`, default 5, against what is left of the deployment’s budget), `BAD_POOL`, `POOL_TOO_SMALL`, and `DATABASE_HOLDS_NIVARO` (an existing database that already holds an install moves instead). Steps: `database`, then `place` (the placement, the app’s key, the list, every replica, the schema, the first administrator, `active`; the place-shared run’s own refusals, such as `USE_MOVE` or `APP_KEY_UNKNOWN`, fail the step and Retry places again). The creation gives a shared environment no hub token: the placement issues it when the app serves.'
     },
     { type: 'h2', id: 'hub-create-waits', text: 'Waits' },
     {

@@ -16,6 +16,7 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { closeDb } from '../db/index.js'
 import { generateOpenApi } from '../routes/dev-tools.js'
+import { withHubOpenApi } from '../services/hub/api/openapi.js'
 import { sampleSchema } from './openapi-sample-schema.js'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
@@ -28,7 +29,11 @@ async function main() {
   const { collections, fieldsByCollection, projectName } = useDb
     ? await (await import('../routes/dev-tools.js')).loadSchema()
     : sampleSchema()
-  const spec = generateOpenApi(collections, fieldsByCollection, projectName)
+  // The public reference also lists the Nivaro Hub's routes, each in a "Hub mode only" group:
+  // a regular install has none of them (they are mounted only with HUB=on).
+  const spec = withHubOpenApi(generateOpenApi(collections, fieldsByCollection, projectName), {
+    publicArtefact: true
+  })
   mkdirSync(dirname(outFile), { recursive: true })
   writeFileSync(outFile, `${JSON.stringify(spec, null, 2)}\n`)
   console.log(

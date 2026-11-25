@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { getApp } from '../io-holder.js'
 import type { PromotionBlocker } from './promote-types.js'
 
@@ -65,6 +65,8 @@ export type LockHolder =
   | 'app-key'
   // Phase 6 (P6-32): a database record being attached to or detached from the environment.
   | 'database'
+  // Hub data care: an environment refresh (or its rollback) replacing this environment's database.
+  | 'data'
 const HOLDERS: readonly LockHolder[] = [
   'creation',
   'promotion',
@@ -73,7 +75,8 @@ const HOLDERS: readonly LockHolder[] = [
   'move',
   'shared',
   'app-key',
-  'database'
+  'database',
+  'data'
 ]
 
 const tokenFor = (holder: LockHolder | undefined) => `${holder ?? 'promotion'}:${randomUUID()}`
@@ -126,6 +129,11 @@ export function lockHolderRefusal(
       code: 'DATABASE_BUSY',
       message:
         "This environment's database record is being attached or detached — try again in a moment."
+    }
+  if (holder === 'data')
+    return {
+      code: 'REFRESH_RUNNING',
+      message: "This environment's database is being refreshed or rolled back — wait for it to end."
     }
   if (holder === 'shared')
     return {
@@ -466,4 +474,183 @@ export function sharedLock(redis: PromoteRedis | null): SharedLock {
 
 export function defaultSharedLock(): SharedLock {
   return sharedLock(appPromoteRedis())
+}
+
+/**
+ * One writer per GitLab branch (review H1): nvr:hub:branch:<sha256 of repository identity +
+ * branch, 32 hex>. Every Hub run that merges onto, pins on or deploys from a GitLab branch holds
+ * it for the whole run: a promotion (each GitLab step's target branch), a shared deployment's
+ * upgrade through GitLab and a move's GitLab deploy leg. Same shape as the other locks (SET NX PX,
+ * renewed by its runner, compare-and-delete); the holder is named in the value. A held lock is
+ * never stolen; a Redis error refuses (503 LOCK_UNAVAILABLE).
+ */
+export type BranchLockHolder = 'promotion' | 'shared' | 'move'
+const BRANCH_HOLDERS: readonly BranchLockHolder[] = ['promotion', 'shared', 'move']
+
+export interface BranchRef {
+  /** repositoryIdentity(api, project) of the driver. */
+  identity: string
+  branch: string
+}
+
+export function hubBranchLockKey(ref: BranchRef): string {
+  const h = createHash('sha256').update(`${ref.identity}\n${ref.branch}`).digest('hex')
+  return `nvr:hub:branch:${h.slice(0, 32)}`
+}
+
+export interface BranchLock {
+  take(ref: BranchRef, holder: BranchLockHolder): Promise<string | null>
+  /** Who holds it now; null when no one. A Redis error throws LOCK_UNAVAILABLE (never free). */
+  holder(ref: BranchRef): Promise<BranchLockHolder | null>
+  /** Strict: a Redis error is a lost lock. */
+  renew(ref: BranchRef, token: string): Promise<boolean>
+  release(ref: BranchRef, token: string): Promise<void>
+}
+
+const branchHolderOf = (v: string | null | undefined): BranchLockHolder | null => {
+  const kind = String(v ?? '').split(':', 1)[0]
+  return (BRANCH_HOLDERS as readonly string[]).includes(kind) ? (kind as BranchLockHolder) : null
+}
+
+const memBranch = new Map<string, { token: string; until: number }>()
+
+/** The branch lock on Redis, or in this process only with no Redis (a single-process dev Hub). */
+export function branchLock(redis: PromoteRedis | null): BranchLock {
+  const tokenOf = (holder: BranchLockHolder) => `${holder}:${randomUUID()}`
+  if (!redis)
+    return {
+      async take(ref, holder) {
+        const key = hubBranchLockKey(ref)
+        const held = memBranch.get(key)
+        if (held && held.until > Date.now()) return null
+        const token = tokenOf(holder)
+        memBranch.set(key, { token, until: Date.now() + LOCK_TTL_MS })
+        return token
+      },
+      async holder(ref) {
+        const held = memBranch.get(hubBranchLockKey(ref))
+        return held && held.until > Date.now() ? branchHolderOf(held.token) : null
+      },
+      async renew(ref, token) {
+        const held = memBranch.get(hubBranchLockKey(ref))
+        if (held?.token !== token) return false
+        held.until = Date.now() + LOCK_TTL_MS
+        return true
+      },
+      async release(ref, token) {
+        const key = hubBranchLockKey(ref)
+        if (memBranch.get(key)?.token === token) memBranch.delete(key)
+      }
+    }
+  return {
+    async take(ref, holder) {
+      const token = tokenOf(holder)
+      let ok: unknown
+      try {
+        ok = await redis.set(hubBranchLockKey(ref), token, 'PX', LOCK_TTL_MS, 'NX')
+      } catch {
+        throw new PromotionError(
+          'LOCK_UNAVAILABLE',
+          'The Hub cannot reach Redis to make sure only one run deploys this GitLab branch — try again shortly',
+          503
+        )
+      }
+      return ok === 'OK' ? token : null
+    },
+    async holder(ref) {
+      let value: string | null
+      try {
+        value = await redis.get(hubBranchLockKey(ref))
+      } catch {
+        throw lockUnreadable()
+      }
+      return branchHolderOf(value)
+    },
+    async renew(ref, token) {
+      try {
+        return (
+          Number(await redis.eval(RENEW_SCRIPT, 1, hubBranchLockKey(ref), token, LOCK_TTL_MS)) === 1
+        )
+      } catch {
+        return false
+      }
+    },
+    async release(ref, token) {
+      await Promise.resolve(redis.eval(RELEASE_SCRIPT, 1, hubBranchLockKey(ref), token)).catch(
+        () => undefined
+      )
+    }
+  }
+}
+
+export function defaultBranchLock(): BranchLock {
+  return branchLock(appPromoteRedis())
+}
+
+/** The refusal for a GitLab branch another run deploys (409 BRANCH_BUSY), naming the holder. */
+export function branchLockRefusal(ref: BranchRef, holder: BranchLockHolder | null): PromotionError {
+  const who =
+    holder === 'promotion'
+      ? 'a promotion'
+      : holder === 'shared'
+        ? 'a shared deployment upgrade'
+        : holder === 'move'
+          ? 'a move'
+          : 'another Hub run'
+  return new PromotionError(
+    'BRANCH_BUSY',
+    `${ref.branch} is being deployed by ${who} — wait for it to end.`,
+    409
+  )
+}
+
+/** Branches held for one run: renewed every LOCK_RENEW_MS until released. */
+export interface BranchHold {
+  /** A renewal failed: another run may hold the branch now. */
+  lost(): boolean
+  release(): Promise<void>
+}
+
+/**
+ * Takes the lock of every distinct branch in `refs` (in a fixed order, so two runs never take
+ * them crosswise) and keeps them renewed. Throws BRANCH_BUSY (nothing kept) when one is held.
+ */
+export async function holdBranches(
+  lock: BranchLock,
+  refs: BranchRef[],
+  holder: BranchLockHolder,
+  renewMs = LOCK_RENEW_MS
+): Promise<BranchHold> {
+  const unique = [...new Map(refs.map((r) => [hubBranchLockKey(r), r])).entries()].sort((a, b) =>
+    a[0].localeCompare(b[0])
+  )
+  const held: Array<{ ref: BranchRef; token: string }> = []
+  try {
+    for (const [, ref] of unique) {
+      const token = await lock.take(ref, holder)
+      if (!token) throw branchLockRefusal(ref, await lock.holder(ref).catch(() => null))
+      held.push({ ref, token })
+    }
+  } catch (err) {
+    for (const h of held) await lock.release(h.ref, h.token)
+    throw err
+  }
+  let lost = false
+  const timer = held.length
+    ? setInterval(() => {
+        void Promise.all(
+          held.map(async (h) => {
+            if (!(await lock.renew(h.ref, h.token).catch(() => false))) lost = true
+          })
+        )
+      }, renewMs)
+    : null
+  timer?.unref?.()
+  return {
+    lost: () => lost,
+    async release() {
+      if (timer) clearInterval(timer)
+      for (const h of held) await lock.release(h.ref, h.token).catch(() => undefined)
+    }
+  }
 }

@@ -4,9 +4,10 @@ import { loadedExtensionLabels } from '../extensions/loader.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { getRealtimeStats } from '../plugins/socketio.js'
 import { selectInChunks } from '../services/db-batch.js'
-import { isMultiTenant } from '../services/deployment-mode.js'
+import { isMultiTenant, perAppJobs } from '../services/deployment-mode.js'
 import { currentSeq } from '../services/event-journal.js'
 import { MCP_CALLER_RE, mcpCallerLabel } from '../services/mcp-calls.js'
+import { currentTenantKey } from '../services/tenant-rooms.js'
 import { LANES, type TrafficLane } from '../services/traffic-entities.js'
 import {
   downNodeHistory,
@@ -29,15 +30,21 @@ import { trafficMapExtraRoutes } from './traffic-map-extras/index.js'
  */
 const WINDOWS = new Set([60, 300, 900])
 
+/** Sockets and people of the caller's app only on a multi-tenant process (a socket names its
+ *  app); self-hosted (no app key), every socket. */
 function socketCounts(): { count: number; users: number } {
   const stats = getRealtimeStats()
+  const tenant = currentTenantKey()
   const users = new Set<string>()
+  let count = 0
   for (const s of stats.sockets) {
+    if (tenant && (s as { tenant?: unknown }).tenant !== tenant) continue
+    count++
     const u = s.user as { id?: string } | string | null
     const id = typeof u === 'string' ? u : u?.id
     if (id) users.add(id)
   }
-  return { count: stats.sockets.length, users: users.size }
+  return { count, users: users.size }
 }
 
 interface Catalog {
@@ -193,6 +200,9 @@ declare module 'fastify' {
   interface FastifyContextConfig {
     /** A Traffic Map route that reads only the caller's store, so it may run in cloud mode. */
     trafficTenantAware?: boolean
+    /** A Traffic Map route that reads only the caller's app (its store or its own database): it
+     *  runs on a Hub shared deployment, inside that app; Nivaro Cloud still answers 404. */
+    trafficAppAware?: boolean
   }
 }
 const CLOUD_ROUTES = new Set([
@@ -203,10 +213,12 @@ const CLOUD_ROUTES = new Set([
   '/down/:id'
 ])
 function cloudAllowed(req: { routeOptions?: { url?: string; config?: unknown } }): boolean {
-  if (
-    (req.routeOptions?.config as { trafficTenantAware?: boolean } | undefined)?.trafficTenantAware
-  )
-    return true
+  const cfg = req.routeOptions?.config as
+    | { trafficTenantAware?: boolean; trafficAppAware?: boolean }
+    | undefined
+  if (cfg?.trafficTenantAware) return true
+  // A Hub shared deployment (not Nivaro Cloud): routes that read only the caller's app too.
+  if (cfg?.trafficAppAware && perAppJobs()) return true
   const url = req.routeOptions?.url ?? ''
   const cut = url.indexOf('/traffic-map')
   return CLOUD_ROUTES.has(cut >= 0 ? url.slice(cut + '/traffic-map'.length) : url)

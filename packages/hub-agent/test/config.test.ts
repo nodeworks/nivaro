@@ -439,8 +439,7 @@ describe('fix round 1: listen, token strength, volume options, extension root', 
   it('accepts an NFS export (ruling P4-12)', () => {
     for (const opts of [
       { type: 'nfs', o: 'addr=10.0.0.5,rw,nfsvers=4', device: ':/export/uploads' },
-      { type: 'nfs4', o: 'addr=nas.corp', device: ':/' },
-      { type: 'nfs', o: 'addr=10.0.0.5' }
+      { type: 'nfs4', o: 'addr=nas.corp', device: ':/' }
     ]) {
       const cfg = loadAgentConfig(
         { ...traefikEnv, HUB_AGENT_VOLUME_OPTS_FILE: '/v' },
@@ -448,6 +447,121 @@ describe('fix round 1: listen, token strength, volume options, extension root', 
       )
       expect(cfg.volumeOpts).toEqual(opts)
     }
+  })
+
+  describe('0.2.3: NFS device forms (M4)', () => {
+    const load = (opts: unknown, env: Record<string, string> = {}) =>
+      loadAgentConfig(
+        { ...traefikEnv, HUB_AGENT_VOLUME_OPTS_FILE: '/v', ...env },
+        files({ ...baseFiles, '/v': JSON.stringify(opts) })
+      )
+
+    it('normalises host:/path to Docker form, adding addr= when o has none', () => {
+      expect(load({ type: 'nfs', o: 'rw,nfsvers=4', device: 'nas01:/volume1' }).volumeOpts).toEqual(
+        { type: 'nfs', o: 'addr=nas01,rw,nfsvers=4', device: ':/volume1' }
+      )
+      expect(
+        load({ type: 'nfs4', o: 'addr=10.0.0.5,rw', device: '10.0.0.5:/export' }).volumeOpts
+      ).toEqual({ type: 'nfs4', o: 'addr=10.0.0.5,rw', device: ':/export' })
+    })
+
+    it('refuses an ambiguous server, and NFS on the local driver without a device', () => {
+      expect(codeOf(() => load({ type: 'nfs', o: 'addr=other', device: 'nas01:/volume1' }))).toBe(
+        'VOLUME_OPTS_BAD'
+      )
+      expect(codeOf(() => load({ type: 'nfs', o: 'addr=10.0.0.5' }))).toBe('VOLUME_OPTS_BAD')
+      // A plugin driver keeps its own semantics.
+      expect(
+        load({ type: 'nfs', o: 'addr=10.0.0.5' }, { HUB_AGENT_VOLUME_DRIVER: 'nfs' }).volumeOpts
+      ).toEqual({ type: 'nfs', o: 'addr=10.0.0.5' })
+    })
+
+    it('HUB_AGENT_REDIS_PIN_LABEL is key=value or refused', () => {
+      const ok = loadAgentConfig(
+        { ...traefikEnv, HUB_AGENT_REDIS_PIN_LABEL: 'nivaro.redis=1' },
+        files(baseFiles)
+      )
+      expect(ok.redisPinLabel).toEqual({ key: 'nivaro.redis', value: '1' })
+      expect(loadAgentConfig(traefikEnv, files(baseFiles)).redisPinLabel).toBeNull()
+      for (const v of ['nolabel', '=x', 'a=', 'a b=c', 'a=b,c', 'a=b==c']) {
+        expect(
+          codeOf(() =>
+            loadAgentConfig({ ...traefikEnv, HUB_AGENT_REDIS_PIN_LABEL: v }, files(baseFiles))
+          ),
+          v
+        ).toBe('REDIS_PIN_LABEL_BAD')
+      }
+    })
+  })
+
+  describe('0.2.3: Redis volume and the export mount', () => {
+    const nfs = { type: 'nfs', o: 'addr=10.0.0.5,rw', device: ':/export/nivaro' }
+    const load = (env: Record<string, string>, extra: Record<string, string> = {}) =>
+      loadAgentConfig(
+        { ...traefikEnv, ...env },
+        files({ ...baseFiles, '/v': JSON.stringify(nfs), ...extra })
+      )
+
+    it('Redis follows the uploads driver and options unless those mount NFS', () => {
+      const plain = loadAgentConfig(
+        { ...traefikEnv, HUB_AGENT_VOLUME_DRIVER: 'rexray', HUB_AGENT_VOLUME_OPTS_FILE: '/v' },
+        files({ ...baseFiles, '/v': '{"size":"10"}' })
+      )
+      expect(plain.redisVolumeDriver).toBe('rexray')
+      expect(plain.redisVolumeOpts).toEqual({ size: '10' })
+      const onNfs = load({ HUB_AGENT_VOLUME_OPTS_FILE: '/v' })
+      expect(onNfs.redisVolumeDriver).toBe('local')
+      expect(onNfs.redisVolumeOpts).toEqual({})
+      expect(onNfs.exportMount).toBeNull()
+    })
+
+    it('takes a Redis driver and options of its own, never NFS or a bind', () => {
+      const cfg = load(
+        {
+          HUB_AGENT_VOLUME_OPTS_FILE: '/v',
+          HUB_AGENT_REDIS_VOLUME_DRIVER: 'rexray',
+          HUB_AGENT_REDIS_VOLUME_OPTS_FILE: '/r'
+        },
+        { '/r': '{"size":"5"}' }
+      )
+      expect(cfg.redisVolumeDriver).toBe('rexray')
+      expect(cfg.redisVolumeOpts).toEqual({ size: '5' })
+      for (const r of [JSON.stringify(nfs), '{"type":"nfs4"}', '{"o":"bind"}', '[1]', '{"a":1}']) {
+        expect(
+          codeOf(() =>
+            load(
+              { HUB_AGENT_VOLUME_OPTS_FILE: '/v', HUB_AGENT_REDIS_VOLUME_OPTS_FILE: '/r' },
+              { '/r': r }
+            )
+          ),
+          r
+        ).toBe('REDIS_VOLUME_OPTS_BAD')
+      }
+    })
+
+    it('reads the export mount only beside an NFS export, absolute and without ..', () => {
+      const cfg = load({
+        HUB_AGENT_VOLUME_OPTS_FILE: '/v',
+        HUB_AGENT_VOLUME_EXPORT_MOUNT: '/var/lib/nivaro-hub-agent/export/'
+      })
+      expect(cfg.exportMount).toBe('/var/lib/nivaro-hub-agent/export')
+      expect(
+        codeOf(() =>
+          loadAgentConfig(
+            { ...traefikEnv, HUB_AGENT_VOLUME_EXPORT_MOUNT: '/var/lib/export' },
+            files(baseFiles)
+          )
+        )
+      ).toBe('VOLUME_EXPORT_MOUNT_BAD')
+      for (const m of ['relative/x', '/', '/srv', '/srv/../etc']) {
+        expect(
+          codeOf(() =>
+            load({ HUB_AGENT_VOLUME_OPTS_FILE: '/v', HUB_AGENT_VOLUME_EXPORT_MOUNT: m })
+          ),
+          m
+        ).toBe('VOLUME_EXPORT_MOUNT_BAD')
+      }
+    })
   })
 
   it('EXTENSIONS_ROOT_BAD for /, a single segment, . or ..', () => {

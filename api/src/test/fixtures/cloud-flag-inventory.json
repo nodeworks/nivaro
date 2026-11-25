@@ -59,7 +59,7 @@
       "rule": "T1",
       "why": "config epochs live in the static DB (knexRef); a multi-tenant process has none",
       "batch": "A",
-      "phase6": "per-app config epochs keyed by tenant"
+      "phase6": "done: per app on a shared deployment through Redis announcements (services/app-config-epoch.ts); the database number stays off"
     },
     {
       "id": "db/index.ts:36",
@@ -805,12 +805,12 @@
       "line": 755,
       "text": "if (!process.env.CLOUD_META_DB_URL) {",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T6",
-      "why": "issue tracker routes are a self-hosted feature",
+      "why": "GitLab issue sync runs per app on a shared deployment (each app's own switch, connections and webhook); Nivaro Cloud still refuses (isNivaroCloud)",
       "batch": "A",
-      "phase6": "GitLab issue sync per app"
+      "phase6": "done: per app on a shared deployment (0.3.215)"
     },
     {
       "id": "routes/infrastructure-drift.ts:35",
@@ -2073,10 +2073,10 @@
       "line": 25,
       "text": "return !!env.CLOUD_META_DB_URL",
       "form": "env-param",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T7",
-      "why": "platform-supplied HUDDLE_* media servers replace tenant settings: a tenant admin must not choose outbound hosts on a shared process",
+      "why": "platform-supplied HUDDLE_* media servers replace tenant settings in Nivaro Cloud only (isNivaroCloud); a Hub shared deployment uses each app's own saved servers (0.3.215), the API's own calls to them SSRF-guarded",
       "batch": "B"
     },
     {
@@ -2172,12 +2172,12 @@
       "line": 118,
       "text": "const cloud = !!process.env.CLOUD_META_DB_URL",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T6",
-      "why": "issue counters/tracker listener exist only where GitLab sync runs",
+      "why": "GitLab issue sync runs per app on a shared deployment (each app's own switch, connections and webhook); Nivaro Cloud still refuses (isNivaroCloud)",
       "batch": "C",
-      "phase6": "GitLab issue sync per app"
+      "phase6": "done: per app on a shared deployment (0.3.215)"
     },
     {
       "id": "services/log-retention.ts:553",
@@ -2379,10 +2379,10 @@
       "line": 189,
       "text": "const cloud = isCloudMode()",
       "form": "helper-call",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T1",
-      "why": "outside-write watch scans the static DB from a cron with no tenant",
+      "why": "outside-write watch runs per app on a Hub shared deployment (0.3.215, cron fan-out); Nivaro Cloud still refuses (isNivaroCloud)",
       "batch": "B"
     },
     {
@@ -2391,10 +2391,10 @@
       "line": 848,
       "text": "if (isCloudMode() || !isMssql(db)) return null",
       "form": "helper-call",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T1",
-      "why": "outside-write watch scans the static DB from a cron with no tenant",
+      "why": "outside-write watch runs per app on a Hub shared deployment (0.3.215, cron fan-out); Nivaro Cloud still refuses (isNivaroCloud)",
       "batch": "B"
     },
     {
@@ -2999,12 +2999,12 @@
       "line": 147,
       "text": "if (process.env.CLOUD_META_DB_URL) return",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T6",
-      "why": "GitLab issue sync crons",
+      "why": "GitLab issue sync runs per app on a shared deployment (each app's own switch, connections and webhook); Nivaro Cloud still refuses (isNivaroCloud)",
       "batch": "D",
-      "phase6": "GitLab issue sync per app (connections, webhook → app, app-scoped crons)"
+      "phase6": "done: per app on a shared deployment (0.3.215)"
     },
     {
       "id": "services/trackers/feature.ts:52",
@@ -3012,12 +3012,12 @@
       "line": 52,
       "text": "if (process.env.CLOUD_META_DB_URL) return { enabled: false, source: 'cloud' }",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T6",
-      "why": "GitLab issue sync feature switch",
+      "why": "GitLab issue sync runs per app on a shared deployment (each app's own switch, connections and webhook); Nivaro Cloud still refuses (isNivaroCloud)",
       "batch": "D",
-      "phase6": "GitLab issue sync per app"
+      "phase6": "done: per app on a shared deployment (0.3.215)"
     },
     {
       "id": "services/trackers/flow-ops.ts:237",
@@ -3025,12 +3025,12 @@
       "line": 237,
       "text": "if (process.env.CLOUD_META_DB_URL) return",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T6",
-      "why": "GitLab issue sync flow op/trigger registration",
+      "why": "GitLab issue sync runs per app on a shared deployment (each app's own switch, connections and webhook); Nivaro Cloud still refuses (isNivaroCloud)",
       "batch": "D",
-      "phase6": "GitLab issue sync per app"
+      "phase6": "done: per app on a shared deployment (0.3.215)"
     },
     {
       "id": "services/traefik-source.ts:22",
@@ -3158,11 +3158,12 @@
       "line": 177,
       "text": "if (process.env.CLOUD_META_DB_URL) return []",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T5",
-      "why": "Traffic Map digest is an operator report across tenants",
-      "batch": "C"
+      "why": "traffic digest audience runs per app on a shared deployment (daily-digest fan-out, the app's own request log); Nivaro Cloud still sends none (isNivaroCloud)",
+      "batch": "C",
+      "phase6": "done: per app on a shared deployment"
     },
     {
       "id": "services/traffic-digest.ts:191",
@@ -3170,11 +3171,12 @@
       "line": 191,
       "text": "if (registered || process.env.CLOUD_META_DB_URL) return",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T5",
-      "why": "Traffic Map digest is an operator report across tenants",
-      "batch": "C"
+      "why": "traffic digest registers on a shared deployment (its audience and section run per app); Nivaro Cloud still never registers (isNivaroCloud)",
+      "batch": "C",
+      "phase6": "done: per app on a shared deployment"
     },
     {
       "id": "services/traffic-entity-history.ts:154",

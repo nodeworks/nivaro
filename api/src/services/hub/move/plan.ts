@@ -4,11 +4,13 @@ import {
   type SharedReadinessCode,
   type SharedReadinessItem
 } from '../../hub-link/shared-readiness.js'
-import { COPYABLE_OBJECT_STORAGE } from '../../hub-transfer/copyable.js'
+import { COPYABLE_OBJECT_STORAGE, COPYABLE_SINCE_ENV_STORAGE } from '../../hub-transfer/copyable.js'
 import { MIN_SHARED_POOL_MAX } from '../drivers.js'
 import { holderOf, lockHolderRefusal, sharedHolderOf, sharedLockRefusal } from '../promote-lock.js'
 import { compareVersions } from '../promote-plan.js'
+import { runsSharedHubSignin, SHARED_HUB_SIGNIN_SINCE } from '../shared/hub-signin-floor.js'
 import { routeActions } from './route-actions.js'
+import { runsStorageCopy } from './storage-floor.js'
 import type {
   MoveBlockerCode,
   MoveKind,
@@ -151,6 +153,23 @@ function answerWords(code: string | null | undefined): string {
  *  shared one, the bucket root elsewhere); between two shared ones it stays (one tenant id). */
 function prefixChanges(input: MovePlanInput): boolean {
   return (input.from.kind === 'shared') !== (input.to.kind === 'shared')
+}
+
+/**
+ * 0.3.215 (storage-floor.ts): both sides copy every stored object — env S3/Azure ones and the
+ * cold objects of session replays. The move's version is the source's (a dedicated target is
+ * deployed at it); a shared target must report it too.
+ */
+function copiesEverything(input: MovePlanInput): boolean {
+  const version = input.source.version ?? input.env.version_pin
+  if (!runsStorageCopy(version)) return false
+  // A shared target's version the Hub cannot read is older (the safe side keeps the blocker).
+  return input.to.kind !== 'shared' || runsStorageCopy(input.target_facts.version)
+}
+
+/** The `nivaro_files.storage` kinds this move's pull copies (P6-31; env ones from 0.3.215). */
+function copyableKinds(input: MovePlanInput): readonly string[] {
+  return copiesEverything(input) ? COPYABLE_SINCE_ENV_STORAGE : COPYABLE_OBJECT_STORAGE
 }
 
 function list(items: string[], max = 10): string {
@@ -300,16 +319,17 @@ function blockersOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Bloc
       `The source and ${sideName(to)} use the same Redis database. Give the target its own Redis database (another database number, or its own Redis) first.`
     )
 
-  // Object storage the move cannot copy (ruling R1).
+  // Object storage the move cannot copy (ruling R1): before 0.3.215 only (storage-floor.ts).
   const readinessHas = (code: string) => s.readiness.some((r) => r.code === code)
   const envStorage = (p: string | null) => p !== null && p.toLowerCase() !== 'local'
   if (
+    !copiesEverything(input) &&
     !readinessHas('ENV_OBJECT_STORAGE') &&
     (envStorage(s.storage_provider) || envStorage(t.storage_provider))
   )
     add(
       'ENV_OBJECT_STORAGE',
-      `${envStorage(s.storage_provider) ? 'The source' : sideName(to)[0].toUpperCase() + sideName(to).slice(1)} keeps files in object storage set by environment variables (STORAGE_PROVIDER). A move copies only local files, so those would be lost.`
+      `${envStorage(s.storage_provider) ? 'The source' : sideName(to)[0].toUpperCase() + sideName(to).slice(1)} keeps files in object storage set by environment variables (STORAGE_PROVIDER). Before 0.3.215 a move copies only local files, so those would be lost: upgrade the app first.`
     )
 
   // P6-31: on a shared deployment every object key lives under apps/<tenantId>/; to or from one
@@ -322,8 +342,9 @@ function blockersOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Bloc
       "This move changes where stored files are kept (a shared deployment keeps each app's files in its own folder), and the app did not say which storage its files are on. Plan again once it answers."
     )
   if (prefixChanges(input)) {
+    const kinds = copyableKinds(input)
     const odd = Object.entries(s.files?.objects ?? {})
-      .filter(([p, n]) => n > 0 && !(COPYABLE_OBJECT_STORAGE as readonly string[]).includes(p))
+      .filter(([p, n]) => n > 0 && !kinds.includes(p))
       .map(([p, n]) => `${n} on ${p}`)
     if (odd.length)
       add(
@@ -364,12 +385,21 @@ function blockersOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Bloc
       )
     else if (!input.database.ready)
       add('NO_DATABASE_RECORD', "This environment's Hub database record is not ready.")
-    // Sign-in (Decision 13).
-    if (input.app.signin_mode === 'hub' || s.signin_hub)
-      add(
-        'SIGNIN_VIA_HUB',
-        'This app signs in through the Hub, which a shared deployment does not offer yet. Switch it to direct sign-in first.'
-      )
+    // Sign-in (Decision 13). From SHARED_HUB_SIGNIN_SINCE a shared deployment signs each app in
+    // through the Hub with the app's own client (from the tenant list); only an app in `hub` mode
+    // is sent there, and it needs its active client to keep its people signing in that way.
+    if (input.app.signin_mode === 'hub' || s.signin_hub) {
+      if (!runsSharedHubSignin(t.version))
+        add(
+          'SIGNIN_VIA_HUB',
+          `This app signs in through the Hub, which a shared deployment offers from ${SHARED_HUB_SIGNIN_SINCE} (${target.key} runs ${t.version ?? 'a version the Hub cannot read'}). Upgrade it, or switch the app to direct sign-in first.`
+        )
+      else if (input.app.signin_mode === 'hub' && input.env.hub_client === false)
+        add(
+          'SIGNIN_VIA_HUB',
+          'This app signs in through the Hub, but this environment has no active sign-in client at the Hub. Create or turn on its client on the Sign-in tab, or switch the app to direct sign-in first.'
+        )
+    }
     if (s.oidc && t.oidc) {
       const host = s.oidc.issuer_host !== t.oidc.issuer_host
       const tenant = (s.oidc.tenant ?? null) !== (t.oidc.tenant ?? null)
@@ -430,10 +460,7 @@ function blockersOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Bloc
   if (kind === 'to_shared')
     for (const r of readinessFor(input))
       if (isReadinessBlocker(r.code, input))
-        add(
-          r.code,
-          `${r.code === 'EXEC_SCRIPT_FLOWS' ? execScriptBlockerTitle(input) : readinessTitle(r.code)}: ${clean(r.detail)}`
-        )
+        add(r.code, `${readinessTitle(r.code, input)}: ${clean(r.detail)}`)
 
   return out
 }
@@ -455,61 +482,125 @@ const PER_APP_SINCE_SHARED_FEATURES: readonly SharedReadinessCode[] = [
   'MAIL_RETRY'
 ]
 
-/** Blockers on a target before SHARED_FEATURES_SINCE, besides the app's own blocker list. */
-const OLDER_TARGET_BLOCKERS: readonly SharedReadinessCode[] = ['STAGED_IMPORTS', 'ROW_SCHEDULES']
+/**
+ * Blockers on an older side, besides the app's own blocker list: before SHARED_FEATURES_SINCE
+ * staged imports and row schedules; before 0.3.215 env object storage (an app from 0.3.215 sends
+ * it as a warning, readinessFor drops it when both sides copy it).
+ */
+const OLDER_TARGET_BLOCKERS: readonly SharedReadinessCode[] = [
+  'STAGED_IMPORTS',
+  'ROW_SCHEDULES',
+  'ENV_OBJECT_STORAGE'
+]
 
 /**
  * Hub gap `exec`: from this version a shared deployment can run flow script steps per app, each in
  * a child process of its own (services/flow-script-isolated.ts) — but only when its operator turned
- * them on (FLOW_SCRIPTS_ON_SHARED, off by default: the sandbox blocks the network in JavaScript, not the operating system).
- * An app before it reports EXEC_SCRIPT_FLOWS as a blocker, one from it as a warning; either way it
- * blocks unless the target runs this version AND reports script steps on (its link status
- * `flow_scripts`), and is a warning (the script limits) when both hold.
+ * them on (FLOW_SCRIPTS_ON_SHARED, off by default: the sandbox blocks the network in JavaScript,
+ * not the operating system). An app before it reports EXEC_SCRIPT_FLOWS as a blocker, one from it
+ * as a warning; either way it blocks unless the target runs this version AND reports script steps
+ * on (its link status `flow_scripts`), and is a warning (the script limits) when both hold.
  */
 export const EXEC_SCRIPT_SINCE = '0.3.215'
 
 const targetRunsScripts = (input: MovePlanInput) =>
-  targetRunsSince(input.target_facts.version, EXEC_SCRIPT_SINCE) &&
+  targetRuns(input.target_facts.version, EXEC_SCRIPT_SINCE) &&
   input.target_facts.flow_scripts === true
+
+/** EXEC_SCRIPT_FLOWS as a blocker: an older target, or one whose operator left scripts off. */
+function execScriptBlockerTitle(input: MovePlanInput): string {
+  return targetRuns(input.target_facts.version, EXEC_SCRIPT_SINCE)
+    ? 'Flows that run scripts are off on this shared deployment: its operator has not turned script steps on (FLOW_SCRIPTS_ON_SHARED)'
+    : READINESS_TITLES.EXEC_SCRIPT_FLOWS
+}
+
+/**
+ * GitLab issue sync runs per app on a shared deployment from this version: ISSUE_TRACKERS (sent
+ * as a blocker by an app before it, as a warning from it on) blocks only a target before it, and
+ * is a warning on one that runs it (what the app must switch on itself after the move).
+ */
+export const SHARED_TRACKERS_SINCE = '0.3.215'
 
 const isReadinessBlocker = (code: SharedReadinessCode, input: MovePlanInput) =>
   code === 'EXEC_SCRIPT_FLOWS'
     ? !targetRunsScripts(input)
-    : SHARED_READINESS_BLOCKERS.includes(code) || OLDER_TARGET_BLOCKERS.includes(code)
-
-/** EXEC_SCRIPT_FLOWS as a blocker: an older target, or one whose operator left scripts off. */
-function execScriptBlockerTitle(input: MovePlanInput): string {
-  return targetRunsSince(input.target_facts.version, EXEC_SCRIPT_SINCE)
-    ? 'Flows that run scripts are off on this shared deployment: its operator has not turned script steps on (FLOW_SCRIPTS_ON_SHARED)'
-    : readinessTitle('EXEC_SCRIPT_FLOWS')
-}
+    : SHARED_READINESS_BLOCKERS.includes(code) ||
+      OLDER_TARGET_BLOCKERS.includes(code) ||
+      (code === 'ISSUE_TRACKERS' && !targetRuns(input.target_facts.version, SHARED_TRACKERS_SINCE))
 
 /**
- * The target runs SHARED_FEATURES_SINCE or later. A version the Hub cannot read (none, not
- * x.y.z) is taken as older, and so is a pre-release of that version: the safe side keeps the
- * blocker.
+ * The target runs `since` (default SHARED_FEATURES_SINCE) or later. A version the Hub cannot
+ * read (none, not x.y.z) is taken as older, and so is a pre-release of that version: the safe
+ * side keeps the blocker.
  */
-function targetRunsSharedFeatures(version: string | null): boolean {
-  return targetRunsSince(version, SHARED_FEATURES_SINCE)
-}
-
-function targetRunsSince(version: string | null, since: string): boolean {
+function targetRuns(version: string | null, since: string): boolean {
   const m = /^v?(\d+\.\d+\.\d+)(.*)$/.exec((version ?? '').trim())
   if (!m) return false
   const c = compareVersions(m[1], since)
   return c > 0 || (c === 0 && !m[2].startsWith('-'))
 }
 
+function targetRunsSharedFeatures(version: string | null): boolean {
+  return targetRuns(version, SHARED_FEATURES_SINCE)
+}
+
+/** `version` is `floor` or later (unreadable or a pre-release = older). */
+function runsAtLeast(version: string | null, floor: string): boolean {
+  return targetRuns(version, floor)
+}
+
+/**
+ * Hub gap `watch` (0.3.215): a shared deployment from this version runs the outside-write watch
+ * per app, uses each app's own saved huddle media servers (HUDDLE_TURN holds only for a target
+ * before it), and a source from this version saves the mail settings it takes from its server
+ * environment into its own Settings when the move freezes it (ENV_SMTP holds unless both sides
+ * run it: the target must open the sealed password).
+ */
+export const HUDDLE_MAIL_SINCE = '0.3.215'
+
+/**
+ * The source carries its per-instance settings row to the shared deployment's instance key at
+ * maintenance_on (INSTANCE_SETTINGS_CARRIED; services/move-carry.ts): a dedicated source and a
+ * shared target, both 0.3.215 or later (the target reports its instance key from that version).
+ */
+export function carriesInstanceRow(input: MovePlanInput): boolean {
+  return (
+    input.kind === 'to_shared' &&
+    input.from.kind !== 'shared' &&
+    input.to.kind === 'shared' &&
+    runsAtLeast(input.source.version, HUDDLE_MAIL_SINCE) &&
+    runsAtLeast(input.target_facts.version, HUDDLE_MAIL_SINCE)
+  )
+}
+
+/** The source keeps its env mail settings in that row at maintenance_on (ENV_SMTP_KEPT). */
+export function keepsEnvMail(input: MovePlanInput): boolean {
+  return carriesInstanceRow(input) && input.source.readiness.some((r) => r.code === 'ENV_SMTP')
+}
+
 /** The source's readiness codes the target's version makes real (ruling: target version). */
 function readinessFor(input: MovePlanInput): SharedReadinessItem[] {
-  if (!targetRunsSharedFeatures(input.target_facts.version)) return input.source.readiness
-  return input.source.readiness.filter((r) => !PER_APP_SINCE_SHARED_FEATURES.includes(r.code))
+  let list = input.source.readiness
+  if (targetRunsSharedFeatures(input.target_facts.version))
+    list = list.filter((r) => !PER_APP_SINCE_SHARED_FEATURES.includes(r.code))
+  if (runsAtLeast(input.target_facts.version, HUDDLE_MAIL_SINCE))
+    list = list.filter((r) => r.code !== 'HUDDLE_TURN')
+  if (keepsEnvMail(input)) list = list.filter((r) => r.code !== 'ENV_SMTP')
+  // 0.3.215: env object storage and cold session replays are copied by the move itself.
+  if (copiesEverything(input)) list = list.filter((r) => !MOVED_SINCE_STORAGE_COPY.includes(r.code))
+  return list
 }
+
+/** Codes an app reports for what a 0.3.215 move copies (ENV_OBJECT_STORAGE blocks before). */
+const MOVED_SINCE_STORAGE_COPY: readonly SharedReadinessCode[] = [
+  'ENV_OBJECT_STORAGE',
+  'SESSION_REPLAYS'
+]
 
 const READINESS_TITLES: Record<string, string> = {
   STAGED_IMPORTS: 'Staged imports do not run on a shared deployment before 0.3.212',
   ROW_SCHEDULES: 'Schedules kept in table rows do not run on a shared deployment before 0.3.212',
-  ISSUE_TRACKERS: 'Issue tracker sync does not run on a shared deployment yet',
+  ISSUE_TRACKERS: 'Issue tracker sync does not run on a shared deployment before 0.3.215',
   EXEC_SCRIPT_FLOWS: 'Flows that run scripts do not run on a shared deployment before 0.3.215',
   SQLITE: 'A SQLite database cannot be served by a shared deployment',
   ENV_OBJECT_STORAGE: 'Files in object storage set by environment variables are not copied',
@@ -517,7 +608,7 @@ const READINESS_TITLES: Record<string, string> = {
   PHONE_PUSH: 'Phone push is off on a shared deployment before 0.3.212',
   TEAMS_BOT: 'The Teams bot is off on a shared deployment before 0.3.212',
   MAIL_RETRY: 'Automatic mail retry is off on a shared deployment before 0.3.212',
-  HUDDLE_TURN: "Huddles use the deployment's media servers",
+  HUDDLE_TURN: "Huddles use the deployment's media servers before 0.3.215",
   ENV_SMTP: "Mail set by environment variables uses the deployment's settings",
   SESSION_REPLAYS: 'Session replays are not moved',
   HELP_VIDEO_RENDERS: 'Queued help-video renders redo on the next publish',
@@ -527,7 +618,16 @@ const READINESS_TITLES: Record<string, string> = {
   SETTINGS_ENV_OVERRIDES: "A shared deployment does not apply the app's server setting overrides"
 }
 
-function readinessTitle(code: string): string {
+/** ISSUE_TRACKERS on a target that runs it (SHARED_TRACKERS_SINCE): a warning. */
+const ISSUE_TRACKERS_PER_APP =
+  "GitLab issue sync runs per app on a shared deployment, by the app's own switch"
+
+function readinessTitle(code: string, input: MovePlanInput): string {
+  if (code === 'ISSUE_TRACKERS' && !isReadinessBlocker(code, input)) return ISSUE_TRACKERS_PER_APP
+  if (code === 'EXEC_SCRIPT_FLOWS')
+    return isReadinessBlocker(code, input)
+      ? execScriptBlockerTitle(input)
+      : EXEC_SCRIPT_WARNING_TITLE
   return READINESS_TITLES[code] ?? code
 }
 
@@ -550,16 +650,18 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
   if (toShared(kind) && to.kind === 'shared' && t.siblings.length)
     add(
       'SAME_APP_ON_DEPLOYMENT',
-      `${list(t.siblings)} of this app already run${t.siblings.length === 1 ? 's' : ''} on ${to.shared.key}. Environments of one app on one deployment usually hold copied databases: their stored files and sign-ins are kept apart, but test with care. A copied app also carries the original's saved Teams bot and directory app registration, so it answers in Teams and syncs the directory as that app: turn the bot off on the copy if it should not.`
+      `${list(t.siblings)} of this app already run${t.siblings.length === 1 ? 's' : ''} on ${to.shared.key}. Environments of one app on one deployment usually hold copied databases: their stored files and sign-ins are kept apart, but test with care. A copied app also carries the original's saved Teams bot and directory app registration, so it answers in Teams and syncs the directory as that app: turn the bot off on the copy if it should not. It also carries the original's GitLab connections: turn issue sync off on the copy (Issue trackers tab) unless it should write to the same GitLab project.`
     )
   add(
     'SIGNED_LINKS_RESET',
     'Links the app signed before the move stop working: submission status links (valid 90 days), help-video and export links and message-action links in mail. The session secret differs on the other side. People can ask for new ones. Unsaved form drafts are dropped too (they are sealed with the same secret): ask people to save their open forms before the move.'
   )
-  add(
-    'REPLAYS_NOT_MOVED',
-    'Session replays and generated image sizes are not moved. Images are made again when asked for; old replays stay on the source until it is removed.'
-  )
+  // 0.3.215: cold replays are copied with the files (hot ones live in the database).
+  if (!copiesEverything(input))
+    add(
+      'REPLAYS_NOT_MOVED',
+      'Session replays and generated image sizes are not moved. Images are made again when asked for; old replays stay on the source until it is removed.'
+    )
   if (toShared(kind) && s.oidc_unread)
     add(
       'ISSUER_UNVERIFIED',
@@ -571,7 +673,10 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
       'REDIS_UNVERIFIED',
       `The Hub cannot see which Redis ${redisUnknown} uses. Source and target hold the same hub token, so they must not share one Redis database and channel prefix (the retire and maintenance keys would collide). Make sure they don't.`
     )
-  const storageUnknown = unknownSides(input, s.storage_provider, t.storage_provider)
+  // From 0.3.215 every env provider is copied: where a side keeps files no longer matters.
+  const storageUnknown = copiesEverything(input)
+    ? null
+    : unknownSides(input, s.storage_provider, t.storage_provider)
   if (storageUnknown)
     add(
       'STORAGE_UNVERIFIED',
@@ -606,13 +711,13 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
   if (prefixChanges(input)) {
     const objects = input.source.files?.objects
     // An unknown count blocks (STORAGE_COUNT_UNKNOWN), so it needs no warning here.
-    const copyable = objects
-      ? COPYABLE_OBJECT_STORAGE.reduce((n, p) => n + (objects[p] ?? 0), 0)
-      : 0
+    const copyable = objects ? copyableKinds(input).reduce((n, p) => n + (objects[p] ?? 0), 0) : 0
     if (copyable > 0)
       add(
         'STORAGE_PREFIX_CHANGES',
-        `${copyable} file(s) kept in S3 or Azure storage saved in Settings are copied to a new folder in the same bucket (a shared deployment keeps each app's files under apps/<app>/; elsewhere they sit at the bucket root). They are copied, not shared: the bucket holds both copies until the old ones are removed.`
+        copiesEverything(input)
+          ? `${copyable} file(s) kept in S3 or Azure storage (saved in Settings or set by environment variables) are copied to a new folder (a shared deployment keeps each app's files under apps/<app>/; elsewhere they sit at the bucket root). Into a dedicated stack on the same bucket, the bucket copies them itself. They are copied, not shared: the bucket holds both copies until the old ones are removed.`
+          : `${copyable} file(s) kept in S3 or Azure storage saved in Settings are copied to a new folder in the same bucket (a shared deployment keeps each app's files under apps/<app>/; elsewhere they sit at the bucket root). They are copied, not shared: the bucket holds both copies until the old ones are removed.`
       )
   }
   if (input.target_facts.boot_maintenance === 'unproven')
@@ -628,10 +733,22 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
   if (kind === 'to_shared')
     for (const r of readinessFor(input))
       if (!isReadinessBlocker(r.code, input))
-        add(
-          r.code,
-          `${r.code === 'EXEC_SCRIPT_FLOWS' ? EXEC_SCRIPT_WARNING_TITLE : readinessTitle(r.code)}: ${clean(r.detail)}`
-        )
+        add(r.code, `${readinessTitle(r.code, input)}: ${clean(r.detail)}`)
+  if (carriesInstanceRow(input))
+    add(
+      'INSTANCE_SETTINGS_CARRIED',
+      "The app's per-instance settings (Settings → This instance: huddle media servers, the outside-write watch, the daily report, caches …) are copied to the shared deployment's instance when the move puts the app in maintenance. Its own row stays as it was; values the new home already holds are kept and named in the run log."
+    )
+  else if (from.kind === 'shared' || to.kind === 'shared')
+    add(
+      'INSTANCE_SETTINGS_STAY',
+      "The app's per-instance settings (Settings → This instance: huddle media servers, the outside-write watch, the daily report, caches …) are not carried to the new home: it reads them under its own instance name. Enter them there again after the move (both sides at 0.3.215 or later carry them on a move from a dedicated stack to a shared deployment)."
+    )
+  if (keepsEnvMail(input))
+    add(
+      'ENV_SMTP_KEPT',
+      "The app sends mail with its server's environment settings. When the move puts it in maintenance, it saves them for the shared deployment's instance (the password sealed with the app's key; a mail test mode its environment forces stays on), so mail keeps going through the same server after the move. The run log says if it could not; then enter them in Settings → Email."
+    )
   return out
 }
 
@@ -688,12 +805,28 @@ function addressOf(input: MovePlanInput, name: string): string {
 
 function checklistOf(input: MovePlanInput, routing: 'automatic' | 'manual'): MovePlan['checklist'] {
   const out: MovePlan['checklist'] = []
-  if (toShared(input.kind) && input.to.kind === 'shared')
+  if (keepsEnvMail(input))
+    out.push({
+      id: 'env_mail_checked',
+      text: 'After the move: the run log says the mail settings were kept (no ENV_SMTP warning in it), or they are entered in Settings → Email.',
+      required: false
+    })
+  if (toShared(input.kind) && input.to.kind === 'shared') {
+    const callbacks = input.names.map((n) => `${addressOf(input, n)}/api/auth/callback`).join(', ')
+    // Signed in through the Hub with its own client, whose addresses the Hub derives from the
+    // environment.
+    const viaHub =
+      input.app.signin_mode === 'hub' &&
+      input.env.hub_client === true &&
+      runsSharedHubSignin(input.target_facts.version)
+    // Always required (review L1): direct sign-in through the deployment's own sign-in app is the
+    // fallback while the Hub is down, and the only path after a rollback below the floor.
     out.push({
       id: 'callbacks_registered',
-      text: `The sign-in app of ${input.to.shared.key} lists each of these redirect addresses: ${input.names.map((n) => `${addressOf(input, n)}/api/auth/callback`).join(', ')}.`,
+      text: `The sign-in app of ${input.to.shared.key} lists each of these redirect addresses: ${callbacks}.${viaHub ? ' People sign in through the Hub there; these are for direct sign-in while the Hub is down.' : ''}`,
       required: true
     })
+  }
   if (input.from.kind === 'gitlab')
     out.push({
       id: 'old_stack_stopped',
@@ -730,7 +863,10 @@ function checklistOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Mov
       text: 'The source and the target do not share one Redis database and channel prefix.',
       required: true
     })
-  if (input.source.storage_provider === null || input.target_facts.storage_provider === null)
+  if (
+    !copiesEverything(input) &&
+    (input.source.storage_provider === null || input.target_facts.storage_provider === null)
+  )
     out.push({
       id: 'storage_local',
       text: 'Neither side keeps files in object storage set by environment variables (STORAGE_PROVIDER): every file is on local storage, so the move copies it.',

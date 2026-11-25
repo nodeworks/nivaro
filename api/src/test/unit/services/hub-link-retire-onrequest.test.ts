@@ -43,6 +43,7 @@ async function build(withOnRequest: boolean): Promise<FastifyInstance> {
   app.get('/api/version', async () => ({ version: 'v' }))
   app.get('/api/hub-link/status', async () => ({ link: true }))
   app.post('/api/hub-link/first-admin', async () => ({ created: true }))
+  app.post('/api/hub-link/template', async () => ({ installed: true }))
   await app.ready()
   return app
 }
@@ -87,6 +88,9 @@ describe('retire as a root onRequest (M17)', () => {
     expect(fa.json()).toMatchObject({ code: 'APP_MOVED' })
     const fa2 = await app.inject({ method: 'POST', url: '/api/hub-link/first%2Dadmin' })
     expect(fa2.statusCode).toBe(503)
+    // Hub enhancement 24: a template install into a retired app is refused too.
+    for (const url of ['/api/hub-link/template', '/api/hub-link/%74emplate'])
+      expect((await app.inject({ method: 'POST', url })).statusCode, url).toBe(503)
     expect((await app.inject({ method: 'OPTIONS', url: '/api/items/x' })).statusCode).not.toBe(503)
   })
 

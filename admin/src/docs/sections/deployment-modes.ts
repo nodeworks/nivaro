@@ -137,7 +137,7 @@ export const deploymentModesDocs: DocSection = {
     {
       type: 'ul',
       items: [
-        'Huddle media servers come from the platform `HUDDLE_LIVEKIT_URL`, `HUDDLE_TURN_URLS` and `HUDDLE_STUN_URLS`; an app cannot set its own.',
+        'Huddle media servers: in Nivaro Cloud they come from the platform `HUDDLE_LIVEKIT_URL`, `HUDDLE_TURN_URLS` and `HUDDLE_STUN_URLS`. A shared deployment (0.3.215) is run by one operator for their own apps, so each app uses the servers it saved; what the deployment itself dials (the media server test and clean-up calls, Test TURN) goes through the SSRF guard, and `ws://` to the same computer is refused.',
         "There is no env push-relay key: `MOBILE_PUSH_RELAY_KEY` is ignored on a shared deployment. An app admin connects the app's own push relay in Settings → Mobile app, and phone push runs per app.",
         'The SSRF guard applies to URLs an app admin sets (webhooks, link preview, the flow webhook operation): pinned address, every redirect re-checked.',
         'Ending maintenance in one app does not end the operator deployment-wide freeze (see Per-app jobs and maintenance below).'
@@ -179,7 +179,7 @@ export const deploymentModesDocs: DocSection = {
         ],
         [
           '`HUB_TOKEN`',
-          'The token an app answers the Hub link with (`GET /api/hub-link/status`). It is not honoured on a shared deployment (rule T4): the hub link routes are not mounted there, and the log says so ("HUB_TOKEN is set on a deployment that serves many apps").'
+          'The token an app answers the Hub link with (`GET /api/hub-link/status`). It is not honoured on a shared deployment (rule T4): the hub link routes are not mounted there, and the log says so ("HUB_TOKEN is set on a deployment that serves many apps"). From 0.3.215 each app’s own hub token (sign-in reports and the app switcher) and Hub sign-in client come from the Hub’s tenant list instead; `HUB_TOKEN` and `HUB_CLIENT_*` on the deployment are never used for an app.'
         ]
       ]
     },
@@ -257,13 +257,13 @@ export const deploymentModesDocs: DocSection = {
     { type: 'h2', id: 'deployment-modes-jobs', text: 'Per-app jobs and maintenance' },
     {
       type: 'p',
-      text: 'A shared deployment (`perAppJobs()`) schedules the app-scoped core jobs; Nivaro Cloud schedules none of them, as before. Some core jobs return at once on any multi-tenant process (GitLab issue sync, huddle crons) and are not registered there either.'
+      text: 'A shared deployment (`perAppJobs()`) schedules the app-scoped core jobs; Nivaro Cloud schedules none of them, as before. Some core jobs return at once on any multi-tenant process (huddle crons) and are not registered there either. GitLab issue sync (0.3.215) runs per app on a shared deployment and stays off in Nivaro Cloud.'
     },
     {
       type: 'ul',
       items: [
         "App jobs read or write one app's database, files or people. The job fires once, and the fan-out runs it once for every active app, each run inside that app's tenant context, at most `TENANT_JOB_CONCURRENCY` apps at a time. One app failing or hanging never stops the others. Job-run rows land in that app's own database. An app in maintenance mode is skipped, and an app whose previous run is still going is skipped.",
-        "No deployment-wide (`process`) core job runs on a shared deployment yet. The two there are (the pool monitor and the socket-count sample) only write to the static database, so they are registered self-hosted only until a deployment store exists for them. Every job's scope is listed in `services/cron-scope.ts`; a test fails when a core job is missing from it, and the boot log names any job registered without a scope.",
+        "No deployment-wide (`process`) core job runs on a shared deployment. The two there are (the pool monitor and the socket-count sample) only write to the static database, so they stay self-hosted only. Their per-app twins run on a shared deployment, once per app, each storing into that app: `app-pool-monitor` judges the app's own pool and raises an issue in its issue log, `app-concurrency-sample` records the app's own sockets and people. The process's own figures (sockets across every app, the heavy-read budget, every app pool summed) are on the deployment link status. Every job's scope is listed in `services/cron-scope.ts`; a test fails when a core job is missing from it, and the boot log names any job registered without a scope.",
         "Some core jobs only make sense self-hosted and are not registered on a shared deployment (`SELF_HOSTED_ONLY_CRONS` in `services/cron-scope.ts`, each with its reason): the restore drill, fault drills, Docker host and Traffic Map history jobs, huddle crons, the outside-write watch, the help-video render sweep (no app owns a queue there: each publish renders its own video in its own app, and publishes from two apps render one after the other through the deployment-wide heavy slot), and the storage snapshot (it walks the upload folder on disk, outside the per-app scope). File cleanup and session recording tiering run per app, because every object key is under that app's own prefix. The import drainer, live SLA flips, the cumulative-flow rollup, automatic mail retry and the daily retention pass run per app. The boot warn line `[cron] shared deployment` counts the app jobs and the jobs left out.",
         "Extension jobs default to `app`. An extension job that serves the process passes `scope: 'process'` in `ctx.cron.schedule(id, expression, fn, { scope })`. The option is ignored in cloud and self-hosted, so existing extensions need no change.",
         "An app admin can pause and resume a job for their own app only. The pause is that app's own `paused_crons` setting; the process-wide paused set is never touched. Pausing a process-scoped job answers 409.",
@@ -286,9 +286,7 @@ export const deploymentModesDocs: DocSection = {
     {
       type: 'ul',
       items: [
-        'GitLab issue sync. Staged imports, row schedules, the Microsoft directory, the Teams bot, phone push, automatic mail retry and (from 0.3.215, when the operator turns `FLOW_SCRIPTS_ON_SHARED` on) the flow `exec-script` operation, each step in a child process of its own, work per app on a shared deployment (each app saves its own directory registration, bot and push relay); they stay off in Nivaro Cloud.',
-        'The huddle relay (TURN) settings: off on a multi-tenant process, as in cloud.',
-        'Config epochs per tenant (`CACHE_EPOCH`): the metadata caches expire on their own TTL.',
+        'Staged imports, row schedules, the Microsoft directory, the Teams bot, phone push, automatic mail retry, GitLab issue sync and (from 0.3.215, when the operator turns `FLOW_SCRIPTS_ON_SHARED` on) the flow `exec-script` operation, each step in a child process of its own, work per app on a shared deployment (each app saves its own directory registration, bot, push relay and GitLab connections and switch); they stay off in Nivaro Cloud.',
         'The self-hosted-only jobs above. Boot passes against a database run once per app when it becomes ready.'
       ]
     },
