@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply } from 'fastify'
 import { withTenant } from '../db/tenant-context.js'
+import { appEnvironment } from '../services/app-info-environment.js'
 import { allKeeps } from '../services/env-refresh/registry.js'
 import {
   deleteFilesBackupSet,
@@ -18,7 +19,9 @@ import { NIVARO_VERSION } from '../version.js'
  * `/api/hub-deployment/apps/:id/data/*`, one app of a shared deployment), so each inherits that
  * link's bearer check; both are exempt from the maintenance freeze and the retire gate.
  *
- *   GET    refresh-keeps          → {version, keeps}  the env-refresh keep registry (core +
+ *   GET    refresh-keeps          → {version, environment, keeps}  what this app is (its
+ *                                                     NIVARO_ENVIRONMENT, as app-info says it) and
+ *                                                     the env-refresh keep registry (core +
  *                                                     extensions): definitions, never values
  *   POST   files-backup           → 202 {run_id}      copy every stored file to a backup set
  *                                                     (a folder its HUB_FILES_BACKUP_DIRS lists, or
@@ -54,7 +57,7 @@ function dataRoutes(
   app.get<{ Params: { id?: string } }>(`${prefix}/refresh-keeps`, async (req, reply) => {
     reply.header('Cache-Control', 'no-store')
     return inApp(req.params.id, reply, async () =>
-      reply.send({ version: NIVARO_VERSION, keeps: allKeeps() })
+      reply.send({ version: NIVARO_VERSION, environment: appEnvironment(), keeps: allKeeps() })
     )
   })
 

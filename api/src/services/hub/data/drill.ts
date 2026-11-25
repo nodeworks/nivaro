@@ -9,6 +9,7 @@ import {
   serverAccessOf,
   withServerExec
 } from './env-db.js'
+import { assertGate, type DataGate } from './gate.js'
 import { checkdbSql, headerSql, scratchName } from './mssql-sql.js'
 import { readPolicy } from './policy.js'
 import { type RunnerDeps, startDataRun } from './runner.js'
@@ -43,6 +44,7 @@ export const DRILL_STEPS = [
 
 export interface DrillDeps extends RunnerDeps {
   opener?: ServerOpener
+  gate?: () => Promise<DataGate>
 }
 
 /** The newest backup file to drill: the Hub's own (still readable), else msdb's newest on disk. */
@@ -97,6 +99,7 @@ export async function startRestoreDrill(
   o: { by: string | null; via?: 'person' | 'schedule' },
   deps: DrillDeps = {}
 ): Promise<number> {
+  await assertGate('drill_enabled', deps.gate ? await deps.gate() : undefined)
   const data = await envData(envId)
   const access = serverAccessOf(data)
   const policy = await readPolicy(envId)
@@ -113,6 +116,8 @@ export async function startRestoreDrill(
     body: (ctx) =>
       opener(access, async (exec) => {
         scratch = scratchName('d', ctx.id)
+        // Named in the row before anything is restored: a crashed drill's copy is found by heal.
+        await ctx.patch({ artifact: { scratch, server_id: access.server.id } })
         const box: { picked: Awaited<ReturnType<typeof pickDrillBackup>> | null } = { picked: null }
         await ctx.step('pick', async () => {
           const p = await pickDrillBackup(exec, envId, access.database)

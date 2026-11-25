@@ -45,7 +45,8 @@ export function checkSchedule(v: unknown, what: string): string {
   } catch {
     throw fail(`${what}: "${expr}" is not a cron expression.`, 'BAD_SCHEDULE')
   }
-  const runs = c.nextRuns(4, new Date(Date.UTC(2030, 0, 1)))
+  // A year of runs (capped): a schedule that is an hour apart most days but not on some is refused.
+  const runs = c.nextRuns(400, new Date(Date.UTC(2030, 0, 1)))
   for (let i = 1; i < runs.length; i++) {
     if (runs[i].getTime() - runs[i - 1].getTime() < MIN_GAP_MS)
       throw fail(`${what}: runs must be at least an hour apart.`, 'BAD_SCHEDULE')

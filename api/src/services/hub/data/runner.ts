@@ -57,6 +57,8 @@ interface Begin {
   body: (ctx: RunCtx) => Promise<RunBodyResult | undefined>
   cleanup?: (ctx: RunCtx, failed: boolean) => Promise<void>
   deps?: RunnerDeps
+  /** resumeDataRun: the statuses that may be continued (default interrupted / waiting). */
+  statuses?: DataRunStatus[]
 }
 
 async function takeLocks(lock: DataLock, envIds: number[]): Promise<Map<number, string>> {
@@ -88,10 +90,19 @@ async function execute(runId: number, initial: DataStep[], b: Begin, held: Map<n
   let steps = initial
   let current: string | null = null
   const save = (p: RunPatch = {}) => patchRun(runId, { ...p, steps })
+  // A lock another holder took over (it expired under a stalled process) stops the run at its
+  // next step: two runs never keep working on one environment.
+  let lost = false
   const timer = setInterval(
     () => {
       void patchRun(runId, {}).catch(() => undefined)
-      for (const [e, t] of held) void lock.renew(e, t).catch(() => undefined)
+      for (const [e, t] of held)
+        void lock
+          .renew(e, t)
+          .then((ok) => {
+            if (!ok) lost = true
+          })
+          .catch(() => undefined)
     },
     Math.min(HEARTBEAT_MS, DATA_LOCK_RENEW_MS)
   )
@@ -104,6 +115,11 @@ async function execute(runId: number, initial: DataStep[], b: Begin, held: Map<n
     async step(key, fn) {
       const s = steps.find((x) => x.key === key)
       if (s?.state === 'done' || s?.state === 'skipped' || s?.state === 'warn') return
+      if (lost)
+        throw new DataError(
+          'DATA_BUSY',
+          'This run lost its lock on the environment (its process stalled): it stopped before the next step.'
+        )
       current = key
       steps = setStep(steps, key, 'running', null)
       await save({ step: key })
@@ -193,8 +209,9 @@ export async function startDataRun(
 export async function resumeDataRun(runId: number, o: Begin): Promise<void> {
   const run = await readRun(runId)
   if (!run) throw new DataError('NOT_FOUND', 'No such run.', 404)
-  if (run.status !== 'interrupted' && run.status !== 'waiting')
-    throw new DataError('NOT_RESUMABLE', 'Only an interrupted or waiting run can be continued.')
+  const allowed = o.statuses ?? ['interrupted', 'waiting']
+  if (!allowed.includes(run.status))
+    throw new DataError('NOT_RESUMABLE', `A ${run.status} run cannot be continued.`)
   const lock = o.deps?.lock ?? defaultDataLock()
   const held = await takeLocks(lock, o.envIds)
   // The failed / running step starts over; done steps are kept.

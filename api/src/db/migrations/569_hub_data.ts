@@ -15,8 +15,20 @@ import { longText } from '../portable-ddl.js'
  *                                step list, result, the artifact it left (a backup file, a
  *                                files backup set) and, for a refresh, the target's keep set
  *                                sealed in `keep_secret` until its rollback window ends
+ *  - nivaro_hub_environments.refresh_target  an administrator opted this environment in as a
+ *                                refresh target (default false: no environment may be written over
+ *                                by a refresh until someone says so)
  */
 export async function up(knex: Knex): Promise<void> {
+  if (
+    (await knex.schema.hasTable('nivaro_hub_environments')) &&
+    !(await knex.schema.hasColumn('nivaro_hub_environments', 'refresh_target'))
+  ) {
+    await knex.schema.alterTable('nivaro_hub_environments', (t) => {
+      t.boolean('refresh_target').notNullable().defaultTo(false)
+    })
+  }
+
   if (!(await knex.schema.hasTable('nivaro_hub_backup_policies'))) {
     await knex.schema.createTable('nivaro_hub_backup_policies', (t) => {
       t.increments('id').primary()

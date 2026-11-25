@@ -1,6 +1,7 @@
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { Readable } from 'node:stream'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { _setAppCallFetchForTests, bearerCall } from '../../../services/hub/data/app-calls.js'
 import {
@@ -50,13 +51,25 @@ describe('files backup target rules', () => {
       { id: 'a', filename_disk: 'one.txt', storage: 'local', filesize: 3 },
       { id: 'b', filename_disk: 'sub/two.txt', storage: 'local', filesize: 3 },
       { id: 'c', filename_disk: 'big.bin', storage: 'local', filesize: 5 * 1024 * 1024 * 1024 },
-      { id: 'd', filename_disk: 'gone.txt', storage: 's3', filesize: 1 }
+      { id: 'd', filename_disk: 'gone.txt', storage: 's3', filesize: 1 },
+      { id: 'e', filename_disk: 'streamed.bin', storage: 'local', filesize: 3 * 1024 * 1024 }
     ]
     const saved = { ...filesBackupDeps }
     filesBackupDeps.listRows = async (after) => (after === null ? rows : [])
-    filesBackupDeps.read = async (_s, key) => {
+    // Objects are streamed: a source with no stream (big.bin) is read whole only when small.
+    filesBackupDeps.open = async (_s, key) => {
       if (key === 'gone.txt') throw new Error('missing')
-      return Buffer.from(key.slice(0, 3))
+      if (key === 'big.bin') return null
+      if (key === 'streamed.bin')
+        return Readable.from(
+          (function* () {
+            for (let i = 0; i < 3; i++) yield Buffer.alloc(1024 * 1024, i)
+          })()
+        )
+      return Readable.from([Buffer.from(key.slice(0, 3))])
+    }
+    filesBackupDeps.read = async () => {
+      throw new Error('a whole read was not expected')
     }
     try {
       const { writer } = writerFor(
@@ -78,8 +91,8 @@ describe('files backup target rules', () => {
       await copyAll(run, writer)
       expect(run.status).toMatchObject({
         state: 'done',
-        total: 4,
-        copied: 2,
+        total: 5,
+        copied: 3,
         failed: 1,
         too_large: 1
       })
@@ -88,8 +101,10 @@ describe('files backup target rules', () => {
       const manifest = JSON.parse(await readFile(join(setDir, 'manifest.json'), 'utf8'))
       expect(manifest.files.map((f: { key: string }) => f.key).sort()).toEqual([
         'one.txt',
+        'streamed.bin',
         'sub/two.txt'
       ])
+      expect((await stat(join(setDir, 'streamed.bin'))).size).toBe(3 * 1024 * 1024)
       const prev = process.env.HUB_FILES_BACKUP_DIRS
       process.env.HUB_FILES_BACKUP_DIRS = root
       try {
@@ -97,7 +112,7 @@ describe('files backup target rules', () => {
           set: 'nivaro-efp-staging-1',
           target: { kind: 'dir', path: root }
         })
-        expect(del.deleted).toBe(2)
+        expect(del.deleted).toBe(3)
       } finally {
         if (prev === undefined) delete process.env.HUB_FILES_BACKUP_DIRS
         else process.env.HUB_FILES_BACKUP_DIRS = prev

@@ -126,6 +126,7 @@ export async function listRuns(o: {
       'step',
       'started_via',
       'steps',
+      'plan',
       'plan_hash',
       'result',
       'artifact',

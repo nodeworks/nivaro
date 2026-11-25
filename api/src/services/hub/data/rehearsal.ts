@@ -22,10 +22,11 @@ import {
   serverAccessOf,
   withServerExec
 } from './env-db.js'
+import { assertGate, type DataGate } from './gate.js'
 import { backupFileName, deleteFileSql, joinServerPath, scratchName } from './mssql-sql.js'
 import { readPolicy } from './policy.js'
 import { type RunnerDeps, startDataRun } from './runner.js'
-import { patchRun, runFromRow } from './runs.js'
+import { patchRun, readRun, runFromRow } from './runs.js'
 import { dropScratch, restoreScratch } from './scratch.js'
 import { DataError } from './types.js'
 
@@ -38,9 +39,11 @@ import { DataError } from './types.js'
  *  2. copy_db    a COPY_ONLY backup of the app's database restored as this run's scratch copy on
  *                the same server (its users map to the app's own login by SID, so the app's own
  *                connection reaches the copy)
- *  3. list       a temporary app `rh-<run>` on the target deployment (rehearsal-tenants.ts adds
- *                it to the tenants list): status maintenance, a `.invalid` host no request can
- *                reach, the copy's connection, the app's own key when the Hub knows it
+ *  3. list       a temporary app `rh-<run>` on the target deployment (shared/tenants.ts lists
+ *                it): status maintenance (every request but /api/version and app-info answers
+ *                503), on a `.invalid` host name nothing routes to (a caller can still send that
+ *                Host header — maintenance is what keeps it closed), the copy's connection, and
+ *                the app's own key when the Hub knows it
  *  4. migrate    the deployment migrates the copy as it would migrate the moved app (its version)
  *  5. checks     the deployment's preflight and readiness score for that app
  *  6. files      the move's own file copy (ticket from the source, pull into `rh-<run>`), timed
@@ -76,6 +79,7 @@ export interface RehearsalDeps extends RunnerDeps {
   sleep?: (ms: number) => Promise<void>
   pollMs?: number
   purge?: typeof purgeRehearsalFiles
+  gate?: () => Promise<DataGate>
 }
 
 /** The listed wire tenant of a rehearsal run (null when it cannot be listed). */
@@ -133,6 +137,7 @@ export async function startRehearsal(
   by: string | null,
   deps: RehearsalDeps = {}
 ): Promise<number> {
+  await assertGate('rehearsal_enabled', deps.gate ? await deps.gate() : undefined)
   const sharedId = Number(body.shared_id)
   if (!Number.isSafeInteger(sharedId) || sharedId < 1)
     throw new DataError(
@@ -226,6 +231,19 @@ export async function startRehearsal(
               at: new Date()
             })
           )
+          // Named in the row before they exist: a crashed rehearsal's copy and file are found.
+          await ctx.patch({
+            artifact: {
+              listed: false,
+              shared_id: sharedId,
+              env_id: envId,
+              database_id: access.databaseId,
+              server_id: access.server.id,
+              app_key: data.app.key,
+              scratch,
+              bak_file: file
+            }
+          })
           const t0 = Date.now()
           await backupInto(exec, access.database, file)
           const backupMs = Date.now() - t0
@@ -233,15 +251,20 @@ export async function startRehearsal(
           try {
             restoreMs = (await restoreScratch(exec, scratch, file, ctx.id)).ms
           } finally {
-            await exec(deleteFileSql(file)).catch(() => undefined)
+            await exec(deleteFileSql(file)).then(
+              () => undefined,
+              () => undefined
+            )
           }
           await keep({ scratch, backup_ms: backupMs, restore_ms: restoreMs })
           return `Copied into ${scratch} (backup ${Math.round(backupMs / 1000)} s, restore ${Math.round(restoreMs / 1000)} s).`
         })
       })
       await ctx.step('list', async () => {
+        const before = (await readRun(ctx.id))?.artifact ?? {}
         await ctx.patch({
           artifact: {
+            ...before,
             listed: true,
             shared_id: sharedId,
             env_id: envId,

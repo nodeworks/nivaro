@@ -21,7 +21,24 @@ vi.mock('../../../middleware/authenticate.js', () => {
   }
   return { requireAuth: vi.fn(sign), requireAdmin: vi.fn(admin), authenticate: vi.fn(sign) }
 })
-const m = vi.hoisted(() => ({ log: vi.fn(async () => null), backup: vi.fn(), refresh: vi.fn() }))
+const m = vi.hoisted(() => ({
+  log: vi.fn(async () => null),
+  backup: vi.fn(),
+  refresh: vi.fn(),
+  updates: [] as unknown[],
+  env: { key: 'staging', reasons: [] as string[] }
+}))
+vi.mock('../../../db/index.js', () => ({
+  db: () => ({ where: () => ({ update: async (v: unknown) => m.updates.push(v) }) })
+}))
+vi.mock('../../../services/hub/data/env-db.js', () => ({
+  envData: async () => ({
+    env: { id: 2, key: m.env.key, position: 2 },
+    app: { id: 1, key: 'efp', name: 'EFP' },
+    production_reasons: m.env.reasons
+  }),
+  serverAccessOf: () => ({})
+}))
 vi.mock('../../../services/activity.js', () => ({ logActivity: m.log }))
 vi.mock('../../../services/hub/data/backup.js', () => ({
   startDbBackup: m.backup,
@@ -34,7 +51,11 @@ vi.mock('../../../services/hub/data/refresh.js', () => ({
   startRefresh: m.refresh,
   resumeRefresh: vi.fn(),
   rollbackRefusal: () => null,
-  startRefreshRollback: vi.fn()
+  startRefreshRollback: vi.fn(),
+  resumeRefreshRollback: vi.fn(),
+  newestRefreshRun: vi.fn(async () => null),
+  abandonRun: vi.fn(),
+  abandonConfirm: () => ''
 }))
 vi.mock('../../../services/hub/data/schedule.js', () => ({
   DATA_TICK_CRON: '*/5 * * * *',
@@ -107,6 +128,31 @@ describe('hub data routes', () => {
       plan: { blocked: true }
     })
     expect(m.log).not.toHaveBeenCalled()
+  })
+
+  it('opts a target in only with the typed app/env and never a production one', async () => {
+    const put = (payload: unknown) =>
+      app.inject({
+        method: 'PUT',
+        url: '/api/hub/environments/2/data/refresh-target',
+        headers: admin,
+        payload: payload as Record<string, unknown>
+      })
+    expect((await put({ on: true, confirm: 'staging' })).json()).toMatchObject({
+      code: 'CONFIRM_MISMATCH'
+    })
+    m.env = { key: 'prod-eu', reasons: ['its key names production'] }
+    expect((await put({ on: true, confirm: 'efp/prod-eu' })).json()).toMatchObject({
+      code: 'PRODUCTION_TARGET'
+    })
+    expect(m.updates).toEqual([])
+    m.env = { key: 'staging', reasons: [] }
+    const ok = await put({ on: true, confirm: 'efp/staging' })
+    expect(ok.statusCode).toBe(200)
+    expect(m.updates).toHaveLength(1)
+    expect(m.log).toHaveBeenCalledWith(
+      expect.objectContaining({ changed_fields: ['refresh_target'] })
+    )
   })
 
   it('answers 404 for a junk id', async () => {

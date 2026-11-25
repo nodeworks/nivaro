@@ -108,16 +108,28 @@ export function s3Location(t: S3Target, key: string): { url: string; host: strin
   return { url: `https://${host}${path}`, host, path }
 }
 
+/** SigV4 canonical query: keys sorted, both sides strictly encoded, `k=` for a bare key. */
+export function canonicalQuery(query: Record<string, string>): string {
+  return Object.keys(query)
+    .sort()
+    .map((k) => `${uriEncodeSegment(k)}=${uriEncodeSegment(query[k])}`)
+    .join('&')
+}
+
 /** One SigV4-signed request through safeFetch, redirects refused. */
 export async function s3Request(
   t: S3Target,
   creds: S3Creds,
-  method: 'GET' | 'PUT' | 'DELETE',
+  method: 'GET' | 'PUT' | 'DELETE' | 'POST',
   key: string,
   body?: Buffer,
-  now = new Date()
+  now = new Date(),
+  query: Record<string, string> = {}
 ): Promise<Response> {
-  const { url, host, path } = s3Location(t, key)
+  const loc = s3Location(t, key)
+  const qs = canonicalQuery(query)
+  const { host, path } = loc
+  const url = qs ? `${loc.url}?${qs}` : loc.url
   const region = t.region || 'us-east-1'
   const amzDate = now
     .toISOString()
@@ -132,11 +144,12 @@ export async function s3Request(
     'x-amz-date': amzDate
   }
   if (method === 'PUT') headers['content-type'] = 'application/octet-stream'
+  if (method === 'POST' && body) headers['content-type'] = 'application/xml'
   const names = Object.keys(headers).sort()
   const canonical = [
     method,
     path,
-    '',
+    qs,
     names.map((h) => `${h}:${headers[h].trim()}\n`).join(''),
     names.join(';'),
     payloadHash
@@ -158,4 +171,92 @@ export async function s3Request(
     redirect: 'error',
     timeoutMs: body ? Math.max(30_000, Math.ceil(body.length / 1_000_000) * 2_000) : 30_000
   })
+}
+
+/** Objects are sent in parts of this size: never more than one part per object in memory. */
+export const S3_PART_BYTES = 8 * 1024 * 1024
+
+async function ok(res: Response, what: string): Promise<Response> {
+  if (res.ok) return res
+  await res.body?.cancel().catch(() => undefined)
+  throw new Error(`S3 ${what} failed: ${res.status}`)
+}
+
+/**
+ * Uploads a stream without holding it whole: one PUT when it ends inside the first part, else a
+ * multipart upload, part by part (8 MiB in memory at a time); a failed multipart is aborted so no
+ * parts are left billed. Answers the bytes stored.
+ */
+export async function s3PutStream(
+  t: S3Target,
+  creds: S3Creds,
+  key: string,
+  src: AsyncIterable<Buffer | Uint8Array | string> | Iterable<Buffer | Uint8Array | string>
+): Promise<number> {
+  let buf: Buffer[] = []
+  let size = 0
+  let total = 0
+  let uploadId: string | null = null
+  const etags: string[] = []
+  const flushPart = async () => {
+    const part = Buffer.concat(buf)
+    buf = []
+    size = 0
+    if (!uploadId) {
+      const res = await ok(
+        await s3Request(t, creds, 'POST', key, undefined, new Date(), { uploads: '' }),
+        'create upload'
+      )
+      const m = /<UploadId>([^<]+)<\/UploadId>/.exec(await res.text())
+      if (!m) throw new Error('S3 create upload: no UploadId')
+      uploadId = m[1]
+    }
+    const n = etags.length + 1
+    const res = await ok(
+      await s3Request(t, creds, 'PUT', key, part, new Date(), {
+        partNumber: String(n),
+        uploadId
+      }),
+      `part ${n}`
+    )
+    await res.body?.cancel().catch(() => undefined)
+    const etag = res.headers.get('etag')
+    if (!etag) throw new Error(`S3 part ${n}: no ETag`)
+    etags.push(etag)
+  }
+  try {
+    for await (const chunk of src) {
+      const b = typeof chunk === 'string' ? Buffer.from(chunk) : Buffer.from(chunk)
+      buf.push(b)
+      size += b.length
+      total += b.length
+      if (size >= S3_PART_BYTES) await flushPart()
+    }
+    if (!uploadId) {
+      const res = await ok(await s3Request(t, creds, 'PUT', key, Buffer.concat(buf)), 'PUT')
+      await res.body?.cancel().catch(() => undefined)
+      return total
+    }
+    if (size > 0) await flushPart()
+    const xml = `<CompleteMultipartUpload>${etags
+      .map(
+        (e, i) =>
+          `<Part><PartNumber>${i + 1}</PartNumber><ETag>${e.replace(/[<>&]/g, '')}</ETag></Part>`
+      )
+      .join('')}</CompleteMultipartUpload>`
+    const done = await ok(
+      await s3Request(t, creds, 'POST', key, Buffer.from(xml), new Date(), { uploadId }),
+      'complete upload'
+    )
+    await done.body?.cancel().catch(() => undefined)
+    return total
+  } catch (err) {
+    if (uploadId) {
+      const id: string = uploadId
+      await s3Request(t, creds, 'DELETE', key, undefined, new Date(), { uploadId: id })
+        .then((r) => r.body?.cancel())
+        .catch(() => undefined)
+    }
+    throw err
+  }
 }

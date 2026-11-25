@@ -4,11 +4,12 @@ import {
   backupsToDelete,
   parseLastBackups
 } from '../../../services/hub/data/backup.js'
-import { isProductionEnv } from '../../../services/hub/data/env-db.js'
+import { isProductionEnv, productionReasons } from '../../../services/hub/data/env-db.js'
 import { parseFilesStatus, setName } from '../../../services/hub/data/files-backup.js'
 import {
   backupFileName,
   backupSql,
+  hubTag,
   isCompressionRefusal,
   isScratchName,
   isServerFolder,
@@ -29,6 +30,7 @@ import {
 import {
   refreshRefusals,
   rollbackRefusal,
+  targetRefusals,
   trustedKeeps
 } from '../../../services/hub/data/refresh.js'
 import { setStep } from '../../../services/hub/data/runs.js'
@@ -39,11 +41,17 @@ import type { DataRun } from '../../../services/hub/data/types.js'
 
 describe('SQL Server text', () => {
   it('names scratch databases by run and recognises only those', () => {
-    expect(scratchName('d', 12)).toBe('nivaro_hub_scratch_d12')
-    expect(isScratchName('nivaro_hub_scratch_r7')).toBe(true)
-    expect(isScratchName('nivaro_hub_scratch_x7')).toBe(false)
+    expect(scratchName('d', 12, 'abcdef01')).toBe('nivaro_hub_scratch_abcdef01_d12')
+    expect(isScratchName('nivaro_hub_scratch_abcdef01_r7')).toBe(true)
+    expect(isScratchName('nivaro_hub_scratch_r7')).toBe(false)
+    expect(isScratchName('nivaro_hub_scratch_abcdef01_x7')).toBe(false)
     expect(isScratchName('EFP')).toBe(false)
     expect(() => scratchName('d', 0)).toThrow()
+    // Two Hubs (another ENCRYPTION_KEY) never name the same copy.
+    expect(hubTag({ ENCRYPTION_KEY: 'a'.repeat(64) })).not.toBe(
+      hubTag({ ENCRYPTION_KEY: 'b'.repeat(64) })
+    )
+    expect(isServerFolder('F:\\back?ups')).toBe(false)
   })
 
   it('accepts server folders and refuses quotes, .. and relative paths', () => {
@@ -99,8 +107,9 @@ describe('SQL Server text', () => {
     const sql = restoreOverSql('EFP_Staging', 'F:\\x.bak', moves)
     expect(sql).toContain('REPLACE')
     expect(sql).toContain('NEW_BROKER')
-    expect(sql).toMatch(/SINGLE_USER WITH ROLLBACK IMMEDIATE; RESTORE DATABASE \[EFP_Staging\]/)
-    expect(sql.trim().endsWith('SET MULTI_USER;')).toBe(true)
+    // OFFLINE, never SINGLE_USER: nobody (the app's pool included) can take a slot before it.
+    expect(sql).toMatch(/SET OFFLINE WITH ROLLBACK IMMEDIATE; RESTORE DATABASE \[EFP_Staging\]/)
+    expect(sql).not.toMatch(/SINGLE_USER|MULTI_USER/)
   })
 
   it('never restores a scratch copy with REPLACE', () => {
@@ -202,7 +211,8 @@ describe('refresh rules', () => {
       position,
       status: 'active',
       base_url: 'https://x.test',
-      placement_id: null
+      placement_id: null,
+      refresh_target: true
     },
     app: { id: app, key: 'efp', name: 'EFP' },
     siblings: [
@@ -211,6 +221,11 @@ describe('refresh rules', () => {
       { id: 3, key: 'production', position: 3 }
     ],
     production: isProductionEnv({ id, key, position }, [
+      { id: 1, key: 'development', position: 1 },
+      { id: 2, key: 'staging', position: 2 },
+      { id: 3, key: 'production', position: 3 }
+    ]),
+    production_reasons: productionReasons({ id, key, position }, [
       { id: 1, key: 'development', position: 1 },
       { id: 2, key: 'staging', position: 2 },
       { id: 3, key: 'production', position: 3 }
@@ -237,6 +252,23 @@ describe('refresh rules', () => {
     expect(
       isProductionEnv({ id: 1, key: 'dev', position: 1 }, [{ id: 2, key: 'uat', position: 5 }])
     ).toBe(false)
+    // A key that names production as a word, whatever sits above it (a DR or training env).
+    const sibs = [{ id: 9, key: 'dr', position: 9 }]
+    for (const key of ['prod-eu', 'prd1', 'eu_live', 'main', 'master', 'Production'])
+      expect(productionReasons({ id: 1, key, position: 1 }, sibs).length).toBe(1)
+    for (const key of ['staging', 'product-demo', 'prodigy', 'domain'])
+      expect(productionReasons({ id: 1, key, position: 1 }, sibs)).toEqual([])
+  })
+
+  it('refuses a target that is not opted in, or whose app says production or cannot say', () => {
+    const t = env(2, 'staging', 2)
+    expect(targetRefusals(t, 'staging')).toEqual([])
+    expect(
+      targetRefusals({ ...t, env: { ...t.env, refresh_target: false } }, 'staging').map((c) => c.id)
+    ).toEqual(['not_opted_in'])
+    expect(targetRefusals(t, 'production').map((c) => c.id)).toEqual(['app_says_production'])
+    expect(targetRefusals(t, null).map((c) => c.id)).toEqual(['target_unverified'])
+    expect(targetRefusals(t, null, { forRollback: true })).toEqual([])
   })
 
   it('copies only down, never over production, never across apps', () => {
@@ -313,6 +345,16 @@ describe('refresh rules', () => {
         now
       )
     ).toMatch(/already/)
+    // A restore cut short still leaves the rollback point usable, from a failed run too.
+    expect(
+      rollbackRefusal(
+        run({ status: 'failed', artifact: { rollback_file: 'x', restore_started_at: 'y' } }),
+        now
+      )
+    ).toBeNull()
+    // Only the newest refresh or rollback of the environment.
+    expect(rollbackRefusal(run({ id: 4 }), now, { id: 9 })).toMatch(/newer/)
+    expect(rollbackRefusal(run({ id: 9 }), now, { id: 9 })).toBeNull()
   })
 })
 
@@ -353,7 +395,8 @@ describe('retention, sightings, files status', () => {
           position: 1,
           status: 'active',
           base_url: '',
-          placement_id: null
+          placement_id: null,
+          refresh_target: false
         },
         database: {
           id: 1,

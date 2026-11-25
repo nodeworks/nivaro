@@ -7,7 +7,6 @@ import {
   type SqlRunner
 } from '../../env-refresh/keep-set.js'
 import {
-  allKeeps,
   CORE_KEEPS,
   type EnvKeepEntry,
   EnvKeepError,
@@ -36,53 +35,61 @@ import {
   serverAccessOf,
   withServerExec
 } from './env-db.js'
+import { assertGate, type DataGate, readGate } from './gate.js'
 import {
   backupFileName,
   databaseFilesSql,
   deleteFileSql,
   dropLoginUserSql,
   fileListSqlFor,
+  identitySql,
   isServerFolder,
   joinServerPath,
   mapLoginSql,
   movesOverTarget,
-  multiUserSql,
+  onlineSql,
   restoreOverSql
 } from './mssql-sql.js'
 import { readPolicy } from './policy.js'
 import { type RunCtx, type RunnerDeps, resumeDataRun, startDataRun } from './runner.js'
-import { openRunFor, patchRun, readKeepSecret, readRun } from './runs.js'
+import { openRunFor, patchRun, readKeepSecret, readRun, runFromRow } from './runs.js'
 import { DataError, type DataRun } from './types.js'
 
 /**
  * Hub data care — environment refresh: copy one environment's database over a LOWER one of the
  * same app (production → staging, staging → development …), keeping the target's own settings.
  *
- * Refused, always: a target that is production (key prod / production / prd / live, or the
- * app's last environment), a target that is not lower in promotion order, another app's
- * environment, the same database, an engine other than SQL Server, a server without a stored
- * login, two different Nivaro versions (the restored copy must already match the target's
- * migrations — promote the target first), an open move or another data run on either.
+ * Off until an administrator turns refreshes on (gate.ts). The target must be OPTED IN
+ * (`nivaro_hub_environments.refresh_target`, set by an administrator with a typed confirm), and is
+ * refused — flag or not — when its key names production as a word, it is the app's last
+ * environment, or its app reports NIVARO_ENVIRONMENT=production (or cannot say). Also refused:
+ * another app, not lower in promotion order, the same database, not SQL Server, no server login,
+ * two Nivaro versions, an open move or data run on either.
  *
- * What the target keeps is the target APP's own refresh registry (core + its extensions, read
- * over its link, GET …/data/refresh-keeps) — the same entries the EFP host runbook keeps. The
- * Hub runs the core's own row filters only: an extension entry with a `where` is left out and
- * named on the plan (its SQL would run with the server's login). When the app does not answer,
- * the core's entries are used and the start must say `accept_core_keeps`.
+ * The plan PINS the target database (record id, server id, name, and the server's own database_id
+ * + create_date); a start, a resume and a rollback refuse (TARGET_CHANGED) when any differs. The
+ * run holds the promote lock (holder `data`) of BOTH environments, so neither is promoted while
+ * it runs.
  *
- * Run: maintenance on (target) → rollback point (COPY_ONLY backup of the target) → keep set
- * captured, sealed into the run row → COPY_ONLY backup of the source → RESTORE … WITH REPLACE
- * over the target → the target's login owns the copy again → keep set applied → safety pass
- * (test modes on, external APIs new from the source switched off …) → source copy deleted →
- * maintenance off → verify. The rollback point stays ROLLBACK_HOURS; until then "Roll back"
- * restores it (typed confirm again). The run holds the target's promote lock (holder `data`).
+ * What the target keeps is the target APP's own refresh registry (core entries as the Hub defines
+ * them; an extension entry's `where` and delegates are left out and named).
+ *
+ * Run: strict maintenance on the target (must hold; the prior state is recorded) → rollback point
+ * (COPY_ONLY backup of the target) → keep set captured, sealed → COPY_ONLY backup of the source
+ * (its version checked again) → stage `restoring` recorded → OFFLINE WITH ROLLBACK IMMEDIATE +
+ * RESTORE … WITH REPLACE → the restored identity pinned → the target's login owns the copy →
+ * keep set applied → safety pass → source copy deleted → maintenance back to its prior state →
+ * verify. A failure before the restore lifts the maintenance again; from the restore on, the
+ * run can be resumed or rolled back (the rollback point stays ROLLBACK_HOURS).
  */
 
 export const ROLLBACK_HOURS = 24
 const KEEP_MAX_BYTES = 8 * 1024 * 1024
+/** Other replicas of a dedicated app re-read maintenance within 15 s (hub link /maintenance). */
+const MAINTENANCE_SETTLE_MS = 16_000
 
 export const REFRESH_STEPS = [
-  { key: 'maintenance_on', label: 'Put the target app in maintenance' },
+  { key: 'maintenance_on', label: 'Put the target app in strict maintenance' },
   { key: 'rollback_point', label: 'Back up the target (rollback point)' },
   { key: 'keep_capture', label: 'Save what the target keeps' },
   { key: 'backup_source', label: 'Back up the source (copy-only)' },
@@ -91,15 +98,15 @@ export const REFRESH_STEPS = [
   { key: 'keep_apply', label: 'Put back what the target keeps' },
   { key: 'safety', label: 'Safety pass (test modes, new partners off)' },
   { key: 'tidy', label: 'Delete the source copy file' },
-  { key: 'maintenance_off', label: 'Take the target out of maintenance' },
+  { key: 'maintenance_off', label: 'Put the target’s maintenance back as it was' },
   { key: 'verify', label: 'Check the target answers' }
 ] as const
 
 export const ROLLBACK_STEPS = [
-  { key: 'maintenance_on', label: 'Put the target app in maintenance' },
+  { key: 'maintenance_on', label: 'Put the target app in strict maintenance' },
   { key: 'restore', label: 'Restore the rollback point over the target' },
   { key: 'login', label: 'Give the database back to the target’s login' },
-  { key: 'maintenance_off', label: 'Take the target out of maintenance' }
+  { key: 'maintenance_off', label: 'Put the target’s maintenance back as it was' }
 ] as const
 
 export interface RefreshCheck {
@@ -117,32 +124,39 @@ export interface KeptLine {
   note: string | null
 }
 
+export interface DbIdentity {
+  database_id: number
+  create_date: string
+}
+
+export interface PinnedSide {
+  env_id: number
+  env_key: string
+  database: string | null
+  database_record_id: number | null
+  server: string | null
+  server_id: number | null
+  version: string | null
+}
+
 export interface RefreshPlan {
-  source: {
-    env_id: number
-    env_key: string
-    database: string | null
-    server: string | null
-    version: string | null
-  }
-  target: {
-    env_id: number
-    env_key: string
-    database: string | null
-    server: string | null
-    version: string | null
+  source: PinnedSide
+  target: PinnedSide & {
+    identity: DbIdentity | null
+    /** What the target app says it is (NIVARO_ENVIRONMENT); null = it did not say. */
+    app_environment: string | null
   }
   app: { id: number; key: string; name: string }
   same_server: boolean
   transfer_path: string | null
-  keeps_from: 'app' | 'core'
   kept: KeptLine[]
   left_out: Array<{ id: string; label: string; why: string }>
   overwritten: string
+  notes: string[]
   checks: RefreshCheck[]
   blocked: boolean
   rollback_hours: number
-  /** What a person types to start: the target database's name. */
+  /** What a person types to start: the pinned target database's name. */
   confirm: string | null
   plan_hash: string
 }
@@ -151,9 +165,11 @@ export interface RefreshDeps extends RunnerDeps {
   opener?: ServerOpener
   channel?: (envId: number) => Promise<AppChannel>
   promoteLock?: PromoteLock
+  gate?: () => Promise<DataGate>
+  sleep?: (ms: number) => Promise<void>
 }
 
-/** Pure: the refusals that depend only on the two environments. */
+/** Pure: the refusals that depend only on the two environments' rows. */
 export function refreshRefusals(source: EnvData, target: EnvData): RefreshCheck[] {
   const out: RefreshCheck[] = []
   if (source.app.id !== target.app.id)
@@ -164,12 +180,7 @@ export function refreshRefusals(source: EnvData, target: EnvData): RefreshCheck[
       state: 'fail',
       text: 'An environment cannot be refreshed from itself.'
     })
-  if (target.production)
-    out.push({
-      id: 'production_target',
-      state: 'fail',
-      text: `${target.env.key} is production: a refresh never writes over production.`
-    })
+  out.push(...targetRefusals(target, undefined))
   if (target.env.position >= source.env.position)
     out.push({
       id: 'not_lower',
@@ -187,6 +198,44 @@ export function refreshRefusals(source: EnvData, target: EnvData): RefreshCheck[
       id: 'same_database',
       state: 'fail',
       text: 'Both environments use the same database.'
+    })
+  return out
+}
+
+/**
+ * Pure: why the Hub may not write over this environment's database. `appEnvironment` undefined =
+ * not asked (rows only); null = the app did not say (refused for a refresh, allowed for the
+ * rollback of a refresh that was verified when it was planned).
+ */
+export function targetRefusals(
+  target: EnvData,
+  appEnvironment: string | null | undefined,
+  o: { forRollback?: boolean } = {}
+): RefreshCheck[] {
+  const out: RefreshCheck[] = []
+  for (const why of target.production_reasons)
+    out.push({
+      id: 'production_target',
+      state: 'fail',
+      text: `${target.env.key} counts as production (${why}): the Hub never writes over production.`
+    })
+  if (!target.env.refresh_target)
+    out.push({
+      id: 'not_opted_in',
+      state: 'fail',
+      text: `${target.env.key} is not opted in as a refresh target: an administrator turns that on for this environment first.`
+    })
+  if (appEnvironment === 'production')
+    out.push({
+      id: 'app_says_production',
+      state: 'fail',
+      text: `The ${target.env.key} app reports itself as production (NIVARO_ENVIRONMENT).`
+    })
+  if (appEnvironment === null && !o.forRollback)
+    out.push({
+      id: 'target_unverified',
+      state: 'fail',
+      text: `The ${target.env.key} app did not say which environment it is (its link did not answer): the Hub only writes over an app that says it is not production.`
     })
   return out
 }
@@ -249,10 +298,17 @@ export function trustedKeeps(sent: unknown): {
 
 export function planHash(p: Omit<RefreshPlan, 'plan_hash'>): string {
   const stable = {
-    s: [p.source.env_id, p.source.database, p.source.server, p.source.version],
-    t: [p.target.env_id, p.target.database, p.target.server, p.target.version],
+    s: [p.source.env_id, p.source.database_record_id, p.source.server_id, p.source.version],
+    t: [
+      p.target.env_id,
+      p.target.database_record_id,
+      p.target.server_id,
+      p.target.database,
+      p.target.identity?.database_id ?? null,
+      p.target.identity?.create_date ?? null,
+      p.target.version
+    ],
     path: p.transfer_path,
-    from: p.keeps_from,
     kept: p.kept.map((k) => k.id),
     checks: p.checks.filter((c) => c.state === 'fail').map((c) => c.id)
   }
@@ -274,6 +330,34 @@ function accessOrCheck(d: EnvData, who: string, checks: RefreshCheck[]): ServerA
   }
 }
 
+export async function readIdentity(exec: SqlExec, database: string): Promise<DbIdentity | null> {
+  const [r] = await exec(identitySql(database))
+  if (!r || r.database_id == null) return null
+  return { database_id: Number(r.database_id), create_date: String(r.create_date ?? '') }
+}
+
+const sameIdentity = (a: DbIdentity | null | undefined, b: DbIdentity | null | undefined) =>
+  !!a && !!b && a.database_id === b.database_id && a.create_date === b.create_date
+
+/** What the target app answers on refresh-keeps: its keep entries and what it says it is. */
+async function targetAnswer(
+  ch: AppChannel
+): Promise<{ keeps: unknown; environment: string | null } | null> {
+  try {
+    const a = (await ch.call('GET', dataPath(ch, 'refresh-keeps'))) as {
+      keeps?: unknown
+      environment?: unknown
+    } | null
+    if (!a) return null
+    return {
+      keeps: a.keeps,
+      environment: typeof a.environment === 'string' ? a.environment.slice(0, 32) : null
+    }
+  } catch {
+    return null
+  }
+}
+
 export async function planRefresh(
   targetEnvId: number,
   body: Record<string, unknown>,
@@ -284,6 +368,13 @@ export async function planRefresh(
     throw new DataError('BAD_TARGET', 'source_env_id must name the environment to copy from.', 400)
   const [source, target] = await Promise.all([envData(sourceId), envData(targetEnvId)])
   const checks = refreshRefusals(source, target)
+  const gate = await (deps.gate ?? readGate)()
+  if (!gate.refresh_enabled)
+    checks.push({
+      id: 'feature_off',
+      state: 'fail',
+      text: 'Refreshes are switched off on this Hub (Backups & data → Switches).'
+    })
   const sAccess = accessOrCheck(source, 'source', checks)
   const tAccess = accessOrCheck(target, 'target', checks)
   const sameServer = !!sAccess && !!tAccess && sAccess.server.id === tAccess.server.id
@@ -309,7 +400,7 @@ export async function planRefresh(
   if (move) checks.push({ id: 'move_open', state: 'fail', text: moveOpenMessage(move) })
   for (const id of [sourceId, targetEnvId]) {
     const open = await openRunFor(id)
-    if (open)
+    if (open && open.id !== Number(body.resuming_run ?? 0))
       checks.push({
         id: 'data_busy',
         state: 'fail',
@@ -319,7 +410,11 @@ export async function planRefresh(
 
   const chFor = deps.channel ?? appChannelFor
   const [sCh, tCh] = await Promise.all([chFor(sourceId), chFor(targetEnvId)])
-  const [sVersion, tVersion] = await Promise.all([sCh.version(), tCh.version()])
+  const [sVersion, tVersion, answer] = await Promise.all([
+    sCh.version(),
+    tCh.version(),
+    targetAnswer(tCh)
+  ])
   if (!sVersion || !tVersion)
     checks.push({
       id: 'version_unknown',
@@ -332,24 +427,14 @@ export async function planRefresh(
       state: 'fail',
       text: `The source runs ${sVersion} and the target ${tVersion}: promote the target to ${sVersion} first, so the copy matches its migrations.`
     })
-
-  let keeps_from: 'app' | 'core' = 'app'
-  let entries: EnvKeepEntry[]
-  let left_out: RefreshPlan['left_out'] = []
-  try {
-    const a = (await tCh.call('GET', dataPath(tCh, 'refresh-keeps'))) as { keeps?: unknown } | null
-    const t = trustedKeeps(a?.keeps)
-    entries = t.keeps
-    left_out = t.left_out
-  } catch {
-    keeps_from = 'core'
-    entries = trustedKeeps(allKeeps().filter((e) => e.source === 'core')).keeps
-    checks.push({
-      id: 'core_keeps_only',
-      state: 'warn',
-      text: 'The target app did not list what it keeps: only the core’s entries are kept (an extension’s own settings would come from the source). Start with “accept core keeps” to go on.'
-    })
-  }
+  const appEnvironment = answer ? answer.environment : null
+  checks.push(
+    ...targetRefusals(target, appEnvironment).filter(
+      (c) => c.id === 'app_says_production' || c.id === 'target_unverified'
+    )
+  )
+  const trusted = trustedKeeps(answer?.keeps)
+  const entries = trusted.keeps
 
   let kept: KeptLine[] = entries.map((e) => ({
     id: e.id,
@@ -359,18 +444,21 @@ export async function planRefresh(
     rows: null,
     note: null
   }))
+  let identity: DbIdentity | null = null
   if (tAccess && target.database) {
     try {
-      const saved = await (deps.opener ?? withServerExec)(tAccess, (exec) =>
-        captureKeepSet(runner(exec), {
+      const out = await (deps.opener ?? withServerExec)(tAccess, async (exec) => ({
+        identity: await readIdentity(exec, tAccess.database),
+        saved: await captureKeepSet(runner(exec), {
           entries,
           direction: `${source.env.key}-to-${target.env.key}`,
           sourceDb: source.database?.database_name ?? '',
           targetDb: tAccess.database,
           sampleOver: 0
         })
-      )
-      kept = saved.entries.map((s) => ({
+      }))
+      identity = out.identity
+      kept = out.saved.entries.map((s) => ({
         id: s.id,
         label: s.label,
         table: s.table,
@@ -378,39 +466,46 @@ export async function planRefresh(
         rows: s.missing ? null : s.total,
         note: s.missing ?? null
       }))
+      if (!identity)
+        checks.push({
+          id: 'target_missing',
+          state: 'fail',
+          text: `${tAccess.database} does not exist on ${tAccess.server.name}.`
+        })
     } catch (err) {
       checks.push({
         id: 'keep_read',
         state: 'fail',
-        text: `The target’s keep set could not be read: ${errText(err).slice(0, 200)}`
+        text: `The target database could not be read: ${errText(err).slice(0, 200)}`
       })
     }
   }
 
+  const side = (d: EnvData, a: ServerAccess | null, version: string | null): PinnedSide => ({
+    env_id: d.env.id,
+    env_key: d.env.key,
+    database: d.database?.database_name ?? null,
+    database_record_id: d.database?.id ?? null,
+    server: a?.server.name ?? null,
+    server_id: a?.server.id ?? null,
+    version
+  })
   const plan: Omit<RefreshPlan, 'plan_hash'> = {
-    source: {
-      env_id: sourceId,
-      env_key: source.env.key,
-      database: source.database?.database_name ?? null,
-      server: sAccess?.server.name ?? null,
-      version: sVersion
-    },
-    target: {
-      env_id: targetEnvId,
-      env_key: target.env.key,
-      database: target.database?.database_name ?? null,
-      server: tAccess?.server.name ?? null,
-      version: tVersion
-    },
+    source: side(source, sAccess, sVersion),
+    target: { ...side(target, tAccess, tVersion), identity, app_environment: appEnvironment },
     app: source.app,
     same_server: sameServer,
     transfer_path,
-    keeps_from,
     kept,
-    left_out,
+    left_out: trusted.left_out,
     overwritten: target.database
       ? `The whole of ${target.database.database_name} is replaced by a copy of ${source.database?.database_name ?? 'the source'} taken when the run starts; every record, file row, user and setting comes from ${source.env.key}, except what is listed as kept.`
       : 'Nothing: the target has no database record.',
+    notes: [
+      'The target app is held in strict maintenance for the whole run (nobody signs in, administrators included).',
+      'The target app keeps its in-memory caches and sessions: restart it after the refresh.',
+      'Backups the Hub writes are not encrypted: the backup folder must be one only database administrators can read.'
+    ],
     checks,
     blocked: checks.some((c) => c.state === 'fail'),
     rollback_hours: ROLLBACK_HOURS,
@@ -421,90 +516,142 @@ export async function planRefresh(
 
 // ─── maintenance on the target ─────────────────────────────────────────────────────────────
 
+/**
+ * Strict maintenance on (refuses when it does not hold) or back to the state recorded before
+ * the run (`prior`: on a dedicated app whether maintenance was already on; on a shared app the
+ * environment's listed status). The prior state is recorded once, never overwritten by a resume.
+ */
 async function setMaintenance(
   ch: AppChannel,
   envId: number,
   on: boolean,
-  runId: number
+  art: Record<string, unknown>,
+  save: (extra: Record<string, unknown>) => Promise<void>,
+  sleep: (ms: number) => Promise<void>
 ): Promise<string> {
   if (ch.kind === 'dedicated') {
-    await ch.call('POST', 'maintenance', {
-      on,
-      ...(on ? { message: 'This environment is being refreshed from another one.' } : {})
-    })
-    return on ? 'The app shows its maintenance page.' : 'The maintenance page is off.'
+    if (on) {
+      if (art.prior_maintenance === undefined) {
+        let prior: boolean | null = null
+        try {
+          const st = (await ch.call('GET', 'status')) as { maintenance?: unknown } | null
+          prior = typeof st?.maintenance === 'boolean' ? st.maintenance : null
+        } catch {
+          prior = null
+        }
+        await save({ prior_maintenance: prior })
+      }
+      await ch.call('POST', 'maintenance', {
+        on: true,
+        message: 'This environment is being refreshed from another one.'
+      })
+      await sleep(MAINTENANCE_SETTLE_MS)
+      return 'Strict maintenance on (every replica, administrators included).'
+    }
+    if (art.prior_maintenance === true) return 'Maintenance was on before the run: left on.'
+    await ch.call('POST', 'maintenance', { on: false })
+    return 'Maintenance is off again.'
   }
-  // A shared app: its listed status (the deployment serves `maintenance`), as a move does.
-  const run = await readRun(runId)
-  const prior = (run?.result?.prior_status as string | undefined) ?? null
   if (on) {
-    const env = (await db('nivaro_hub_environments').where({ id: envId }).first('status')) as
-      | { status: string }
-      | undefined
-    await patchRun(runId, {
-      result: { ...(run?.result ?? {}), prior_status: env?.status ?? 'active' }
-    })
+    if (art.prior_status === undefined) {
+      const env = (await db('nivaro_hub_environments').where({ id: envId }).first('status')) as
+        | { status: string }
+        | undefined
+      await save({ prior_status: env?.status ?? 'active' })
+    }
     await db('nivaro_hub_environments')
       .where({ id: envId })
       .update({ status: 'maintenance', updated_at: new Date() })
   } else {
+    const prior = typeof art.prior_status === 'string' ? art.prior_status : 'active'
     await db('nivaro_hub_environments')
       .where({ id: envId, status: 'maintenance' })
-      .update({
-        status: prior && prior !== 'maintenance' ? prior : 'active',
-        updated_at: new Date()
-      })
+      .update({ status: prior, updated_at: new Date() })
   }
-  if (ch.shared)
-    await deploymentClient(ch.shared)
-      .refresh()
-      .catch(() => undefined)
+  if (ch.shared) await deploymentClient(ch.shared).refresh()
+  if (on) await sleep(MAINTENANCE_SETTLE_MS)
   return on
     ? 'Listed as maintenance on its shared deployment.'
-    : 'Listed as before on its shared deployment.'
+    : 'Listed as it was before the run on its shared deployment.'
+}
+
+// ─── pins ──────────────────────────────────────────────────────────────────────────────────
+
+/** The environment still points at the pinned database record, server and name. */
+export function pinRefusal(plan: Pick<RefreshPlan, 'target'>, now: EnvData): string | null {
+  const t = plan.target
+  if (!now.database) return 'The target environment no longer has a database record.'
+  if (now.database.id !== t.database_record_id)
+    return 'The target environment points at another database record than the one this refresh was planned on.'
+  if (now.database.server_id !== t.server_id)
+    return 'The target database record now names another server.'
+  if (now.database.database_name !== t.database)
+    return `The target database record now names ${now.database.database_name}, not ${t.database}.`
+  return null
+}
+
+/**
+ * The live database must be the pinned one: before the restore started its identity must equal
+ * the plan's; after it finished, the restored identity. While a restore was cut short the
+ * identity is not comparable (the database may be RESTORING) and only the record pins hold.
+ */
+async function assertPinned(
+  exec: SqlExec,
+  plan: Pick<RefreshPlan, 'target'>,
+  art: Record<string, unknown>,
+  now: EnvData
+): Promise<void> {
+  const why = pinRefusal(plan, now)
+  if (why) throw new DataError('TARGET_CHANGED', why)
+  const database = String(plan.target.database)
+  const restoring = !!art.restore_started_at && !art.restored_at
+  if (restoring) return
+  const want = (art.restored_identity as DbIdentity | undefined) ?? plan.target.identity
+  const live = await readIdentity(exec, database)
+  if (!sameIdentity(live, want))
+    throw new DataError(
+      'TARGET_CHANGED',
+      `${database} on the server is not the database this refresh was planned on (its id or creation time changed).`
+    )
 }
 
 // ─── run ───────────────────────────────────────────────────────────────────────────────────
 
 interface RefreshTarget {
+  plan: RefreshPlan
   source: EnvData
   target: EnvData
   sAccess: ServerAccess
   tAccess: ServerAccess
-  transferPath: string | null
   entries: EnvKeepEntry[]
 }
 
 function refreshBody(t: RefreshTarget, deps: RefreshDeps) {
   const opener = deps.opener ?? withServerExec
   const chFor = deps.channel ?? appChannelFor
+  const sleep = deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)))
   return async (ctx: RunCtx) => {
-    const ch = await chFor(t.target.env.id)
+    const [ch, sCh] = await Promise.all([chFor(t.target.env.id), chFor(t.source.env.id)])
     const prior = (await readRun(ctx.id))?.artifact ?? {}
     const art: Record<string, unknown> = { ...prior }
-    const save = (extra: Record<string, unknown>) => {
+    const save = async (extra: Record<string, unknown>) => {
       Object.assign(art, extra)
-      return ctx.patch({ artifact: { ...art } })
+      await ctx.patch({ artifact: { ...art } })
     }
-    const targetDb = t.tAccess.database
+    const targetDb = String(t.plan.target.database)
     const sameServer = t.sAccess.server.id === t.tAccess.server.id
     await opener(t.tAccess, async (texec) => {
+      await assertPinned(texec, t.plan, art, t.target)
       const withSource = <T>(fn: (sexec: SqlExec) => Promise<T>) =>
         sameServer ? fn(texec) : opener(t.sAccess, fn)
       const now = new Date()
-      await ctx.step('maintenance_on', async () => {
-        try {
-          return await setMaintenance(ch, t.target.env.id, true, ctx.id)
-        } catch (err) {
-          return {
-            warn: true,
-            note: `The app did not take maintenance (${errText(err).slice(0, 120)}); the restore puts every session out anyway.`
-          }
-        }
-      })
+      await ctx.step('maintenance_on', () =>
+        setMaintenance(ch, t.target.env.id, true, art, save, sleep)
+      )
       await ctx.step('rollback_point', async () => {
         const folder =
-          t.transferPath ?? (await backupFolder(texec, (await readPolicy(t.target.env.id)).db_path))
+          t.plan.transfer_path ??
+          (await backupFolder(texec, (await readPolicy(t.target.env.id)).db_path))
         const file = joinServerPath(
           folder,
           backupFileName({
@@ -515,8 +662,8 @@ function refreshBody(t: RefreshTarget, deps: RefreshDeps) {
             at: now
           })
         )
-        await backupInto(texec, targetDb, file)
         await save({ rollback_file: file, rollback_server_id: t.tAccess.server.id })
+        await backupInto(texec, targetDb, file)
         await ctx.patch({ expiresAt: new Date(Date.now() + ROLLBACK_HOURS * 3600_000) })
         return `Rollback point ${file} (kept ${ROLLBACK_HOURS} h).`
       })
@@ -538,9 +685,16 @@ function refreshBody(t: RefreshTarget, deps: RefreshDeps) {
         return `${saved.entries.length} entries, ${rows} rows saved (sealed).`
       })
       await ctx.step('backup_source', async () => {
+        // The source may not have moved on since the plan (its promote lock is held now).
+        const v = await sCh.version()
+        if (v !== t.plan.source.version)
+          throw new DataError(
+            'VERSION_MISMATCH',
+            `The source now runs ${v ?? 'an unknown version'}, not ${t.plan.source.version}: plan again.`
+          )
         const file = await withSource(async (sexec) => {
           const folder =
-            t.transferPath ??
+            t.plan.transfer_path ??
             (await backupFolder(sexec, (await readPolicy(t.source.env.id)).db_path))
           const f = joinServerPath(
             folder,
@@ -552,10 +706,10 @@ function refreshBody(t: RefreshTarget, deps: RefreshDeps) {
               at: now
             })
           )
+          await save({ source_file: f, source_server_id: t.sAccess.server.id })
           await backupInto(sexec, t.sAccess.database, f)
           return f
         })
-        await save({ source_file: file })
         return `Source copy ${file}.`
       })
       await ctx.step('restore', async () => {
@@ -575,14 +729,21 @@ function refreshBody(t: RefreshTarget, deps: RefreshDeps) {
           })),
           Date.now().toString(36)
         )
+        // Recorded BEFORE the statement: a restore cut short still leaves a usable rollback.
+        await save({ stage: 'restoring', restore_started_at: new Date().toISOString() })
         const t0 = Date.now()
         try {
           await texec(restoreOverSql(targetDb, file, moves))
         } catch (err) {
-          await texec(multiUserSql(targetDb)).catch(() => undefined)
+          await texec(onlineSql(targetDb)).catch(() => undefined)
           throw err
         }
-        await save({ restored_at: new Date().toISOString(), restore_ms: Date.now() - t0 })
+        await save({
+          stage: 'restored',
+          restored_at: new Date().toISOString(),
+          restore_ms: Date.now() - t0,
+          restored_identity: await readIdentity(texec, targetDb)
+        })
         return `${targetDb} replaced in ${Math.round((Date.now() - t0) / 1000)} s.`
       })
       await ctx.step('login', async () => {
@@ -600,8 +761,7 @@ function refreshBody(t: RefreshTarget, deps: RefreshDeps) {
       })
       let saved: SavedKeepSet | null = null
       await ctx.step('keep_apply', async () => {
-        const sealed = await readKeepSecret(ctx.id)
-        const plain = openSecret(sealed)
+        const plain = openSecret(await readKeepSecret(ctx.id))
         if (!plain)
           throw new DataError(
             'NO_ROLLBACK',
@@ -610,8 +770,10 @@ function refreshBody(t: RefreshTarget, deps: RefreshDeps) {
         saved = JSON.parse(plain) as SavedKeepSet
         const results = await applyKeepSet(runner(texec), saved, targetDb)
         const errors = results.flatMap((r) => r.errors)
+        const current = (await readRun(ctx.id))?.result ?? {}
         await ctx.patch({
           result: {
+            ...current,
             keep: results.map((r) => ({
               id: r.id,
               written: r.written,
@@ -652,6 +814,7 @@ function refreshBody(t: RefreshTarget, deps: RefreshDeps) {
         if (!file) return { skipped: true }
         try {
           await withSource((sexec) => sexec(deleteFileSql(file)))
+          await save({ source_file_deleted_at: new Date().toISOString() })
           return 'Source copy deleted.'
         } catch {
           return {
@@ -663,52 +826,89 @@ function refreshBody(t: RefreshTarget, deps: RefreshDeps) {
     })
     await ctx.step('maintenance_off', async () => {
       try {
-        return await setMaintenance(ch, t.target.env.id, false, ctx.id)
+        return await setMaintenance(ch, t.target.env.id, false, art, save, sleep)
       } catch (err) {
         return {
           warn: true,
-          note: `Maintenance could not be lifted (${errText(err).slice(0, 120)}): lift it on the app.`
+          note: `Maintenance could not be put back (${errText(err).slice(0, 120)}): lift it on the app.`
         }
       }
     })
     await ctx.step('verify', async () => {
       const v = await ch.version()
       if (!v) return { warn: true, note: 'The target did not answer its link yet.' }
-      return `The target answers (Nivaro ${v}).`
+      return {
+        note: `The target answers (Nivaro ${v}). Restart it so it drops caches and sessions from before the refresh.`,
+        warn: true
+      }
     })
     return { artifact: { ...art } }
   }
 }
 
-async function withEnvLock<T>(
+/** A failed refresh that never reached its restore puts the target's maintenance back. */
+function refreshCleanup(t: RefreshTarget, deps: RefreshDeps, release: () => Promise<void>) {
+  return async (ctx: RunCtx, failed: boolean) => {
+    try {
+      if (!failed) return
+      const run = await readRun(ctx.id)
+      const art = run?.artifact ?? {}
+      if (art.restore_started_at) return // the database may be mid-restore: resume or roll back
+      const tookMaintenance = run?.steps.find((s) => s.key === 'maintenance_on')
+      if (!tookMaintenance || tookMaintenance.state === 'pending') return
+      const ch = await (deps.channel ?? appChannelFor)(t.target.env.id)
+      await setMaintenance(
+        ch,
+        t.target.env.id,
+        false,
+        art,
+        async () => {},
+        async () => {}
+      ).catch(() => undefined)
+      ctx.log('hub data refresh: failed before its restore, maintenance put back')
+    } finally {
+      await release()
+    }
+  }
+}
+
+async function withEnvLocks<T>(
   lock: PromoteLock,
-  envId: number,
+  envIds: number[],
   fn: (release: () => Promise<void>) => Promise<T>
 ): Promise<T> {
-  const token = await lock.take(envId, 'data')
-  if (!token) {
-    const holder = lock.holder ? await lock.holder(envId).catch(() => null) : null
-    const r = lockHolderRefusal(
-      holder,
-      {
-        code: 'ENV_BUSY',
-        message: 'Something else is changing the target environment — wait for it to end.'
-      },
-      'data'
-    )
-    throw new DataError('ENV_BUSY', r.message)
+  const held: Array<[number, string]> = []
+  try {
+    for (const envId of [...new Set(envIds)]) {
+      const token = await lock.take(envId, 'data')
+      if (!token) {
+        const holder = lock.holder ? await lock.holder(envId).catch(() => null) : null
+        const r = lockHolderRefusal(
+          holder,
+          {
+            code: 'ENV_BUSY',
+            message: 'Something else is changing this environment — wait for it to end.'
+          },
+          'data'
+        )
+        throw new DataError('ENV_BUSY', r.message)
+      }
+      held.push([envId, token])
+    }
+  } catch (err) {
+    for (const [e, tk] of held) await lock.release(e, tk)
+    throw err
   }
-  const timer = setInterval(
-    () => void lock.renew(envId, token).catch(() => undefined),
-    LOCK_RENEW_MS
-  )
+  const timer = setInterval(() => {
+    for (const [e, tk] of held) void lock.renew(e, tk).catch(() => undefined)
+  }, LOCK_RENEW_MS)
   timer.unref?.()
   let released = false
   const release = async () => {
     if (released) return
     released = true
     clearInterval(timer)
-    await lock.release(envId, token)
+    for (const [e, tk] of held) await lock.release(e, tk)
   }
   try {
     return await fn(release)
@@ -718,19 +918,32 @@ async function withEnvLock<T>(
   }
 }
 
-async function targetsFor(plan: RefreshPlan): Promise<RefreshTarget> {
+async function targetsFor(plan: RefreshPlan, entries: EnvKeepEntry[]): Promise<RefreshTarget> {
   const [source, target] = await Promise.all([
     envData(plan.source.env_id),
     envData(plan.target.env_id)
   ])
+  const why = pinRefusal(plan, target)
+  if (why) throw new DataError('TARGET_CHANGED', why)
   return {
+    plan,
     source,
     target,
     sAccess: serverAccessOf(source),
     tAccess: serverAccessOf(target),
-    transferPath: plan.transfer_path,
-    entries: []
+    entries
   }
+}
+
+async function keepEntries(targetEnvId: number, deps: RefreshDeps): Promise<EnvKeepEntry[]> {
+  const ch = await (deps.channel ?? appChannelFor)(targetEnvId)
+  const a = await targetAnswer(ch)
+  if (!a)
+    throw new DataError(
+      'TARGET_UNVERIFIED',
+      'The target app did not answer what it keeps: nothing was started.'
+    )
+  return trustedKeeps(a.keeps).keeps
 }
 
 export async function startRefresh(
@@ -739,13 +952,16 @@ export async function startRefresh(
   by: string | null,
   deps: RefreshDeps = {}
 ): Promise<number> {
+  await assertGate('refresh_enabled', deps.gate ? await deps.gate() : undefined)
   const plan = await planRefresh(targetEnvId, body, deps)
   if (body.plan_hash !== plan.plan_hash)
     throw new DataError(
       'PLAN_CHANGED',
       'The plan changed since it was shown: look at it again.',
       409,
-      { plan }
+      {
+        plan
+      }
     )
   if (plan.blocked)
     throw new DataError('PLAN_BLOCKED', 'The plan has refusals: nothing was started.', 409, {
@@ -757,22 +973,9 @@ export async function startRefresh(
       `Type the target database name (${plan.confirm}) to start.`,
       400
     )
-  if (plan.keeps_from === 'core' && body.accept_core_keeps !== true)
-    throw new DataError(
-      'CORE_KEEPS_ONLY',
-      'The target app did not list what it keeps: start with accept_core_keeps to keep only the core’s entries.',
-      409,
-      { plan }
-    )
-  const t = await targetsFor(plan)
-  const chFor = deps.channel ?? appChannelFor
-  if (plan.keeps_from === 'app') {
-    const ch = await chFor(targetEnvId)
-    const a = (await ch.call('GET', dataPath(ch, 'refresh-keeps'))) as { keeps?: unknown } | null
-    t.entries = trustedKeeps(a?.keeps).keeps
-  } else t.entries = trustedKeeps(allKeeps().filter((e) => e.source === 'core')).keeps
+  const t = await targetsFor(plan, await keepEntries(targetEnvId, deps))
   const lock = deps.promoteLock ?? defaultPromoteLock()
-  return withEnvLock(lock, targetEnvId, async (release) =>
+  return withEnvLocks(lock, [targetEnvId, plan.source.env_id], async (release) =>
     startDataRun({
       kind: 'refresh',
       environmentId: targetEnvId,
@@ -784,55 +987,222 @@ export async function startRefresh(
       by,
       deps,
       body: refreshBody(t, deps),
-      cleanup: async () => release()
+      cleanup: refreshCleanup(t, deps, release)
     })
   )
 }
 
-/** Continues an interrupted refresh from its first step not done (the plan it started with). */
+/** Why a refresh cannot be resumed (null = it can). */
+export function resumeRefusal(run: DataRun): string | null {
+  if (run.kind !== 'refresh') return 'Only a refresh resumes this way.'
+  if (run.status !== 'interrupted' && run.status !== 'failed')
+    return 'Only an interrupted or failed refresh can be resumed.'
+  if (run.artifact?.rolled_back_at) return 'This refresh was rolled back.'
+  if (run.artifact?.abandoned_at) return 'This refresh was abandoned.'
+  return null
+}
+
+/**
+ * Continues an interrupted or failed refresh from its first step not done, after checking again
+ * everything a start checks: the switch, the target's production rules and opt-in, the order and
+ * both versions (against the plan), and that the target is still the pinned database.
+ */
 export async function resumeRefresh(runId: number, deps: RefreshDeps = {}): Promise<void> {
   const run = await readRun(runId)
-  if (run?.kind !== 'refresh') throw new DataError('NOT_FOUND', 'No such refresh.', 404)
+  if (!run) throw new DataError('NOT_FOUND', 'No such refresh.', 404)
+  const why = resumeRefusal(run)
+  if (why) throw new DataError('NOT_RESUMABLE', why)
+  await assertGate('refresh_enabled', deps.gate ? await deps.gate() : undefined)
   const plan = run.plan as unknown as RefreshPlan & { entries?: string[] }
-  const t = await targetsFor(plan)
+  const [source, target] = await Promise.all([
+    envData(plan.source.env_id),
+    envData(plan.target.env_id)
+  ])
+  const chFor = deps.channel ?? appChannelFor
+  const [sCh, tCh] = await Promise.all([chFor(source.env.id), chFor(target.env.id)])
+  const [sv, tv, answer] = await Promise.all([sCh.version(), tCh.version(), targetAnswer(tCh)])
+  const restoring = !!run.artifact?.restore_started_at
+  const checks = [
+    ...refreshRefusals(source, target),
+    // A target mid-restore may not answer: it was verified when it was planned.
+    ...targetRefusals(target, answer?.environment ?? null, { forRollback: restoring }).filter(
+      (c) => c.id === 'app_says_production' || c.id === 'target_unverified'
+    )
+  ].filter((c) => c.state === 'fail')
+  if (sv !== plan.source.version)
+    checks.push({
+      id: 'version',
+      state: 'fail',
+      text: 'The source runs another version than planned.'
+    })
+  if (!restoring && tv !== plan.target.version)
+    checks.push({
+      id: 'version',
+      state: 'fail',
+      text: 'The target runs another version than planned.'
+    })
+  if (checks.length)
+    throw new DataError('PLAN_BLOCKED', checks.map((c) => c.text).join(' '), 409, { checks })
   const ids = new Set(plan.entries ?? [])
-  const known = new Map([...allKeeps(), ...CORE_KEEPS].map((e) => [e.id, e]))
-  if (plan.keeps_from === 'app') {
-    try {
-      const ch = await (deps.channel ?? appChannelFor)(run.environment_id)
-      for (const e of trustedKeeps(
-        ((await ch.call('GET', dataPath(ch, 'refresh-keeps'))) as { keeps?: unknown } | null)?.keeps
-      ).keeps)
-        known.set(e.id, e)
-    } catch {
-      // the keep set is already sealed in the row once captured; entries only matter before
-    }
-  }
-  t.entries = [...ids].map((id) => known.get(id)).filter((e): e is EnvKeepEntry => !!e)
+  const known = new Map(CORE_KEEPS.map((e) => [e.id, e]))
+  for (const e of trustedKeeps(answer?.keeps).keeps) known.set(e.id, e)
+  const t = await targetsFor(
+    plan,
+    [...ids].map((id) => known.get(id)).filter((e): e is EnvKeepEntry => !!e)
+  )
   const lock = deps.promoteLock ?? defaultPromoteLock()
-  await withEnvLock(lock, run.environment_id, async (release) =>
+  await withEnvLocks(lock, [run.environment_id, plan.source.env_id], async (release) =>
     resumeDataRun(runId, {
       envIds: [run.environment_id, plan.source.env_id],
+      statuses: ['interrupted', 'failed'],
       deps,
       body: refreshBody(t, deps),
-      cleanup: async () => release()
+      cleanup: refreshCleanup(t, deps, release)
     })
   )
+}
+
+/** The newest refresh or refresh rollback of an environment. */
+export async function newestRefreshRun(envId: number): Promise<DataRun | null> {
+  const r = (await db('nivaro_hub_data_runs')
+    .where({ environment_id: envId })
+    .whereIn('kind', ['refresh', 'refresh_rollback'])
+    .orderBy('id', 'desc')
+    .first()) as Record<string, unknown> | undefined
+  return r ? runFromRow(r) : null
 }
 
 /** Whether a refresh can still be rolled back, and why not. */
-export function rollbackRefusal(run: DataRun, now = new Date()): string | null {
+export function rollbackRefusal(
+  run: DataRun,
+  now = new Date(),
+  newest: Pick<DataRun, 'id'> | null = null
+): string | null {
   if (run.kind !== 'refresh') return 'Only a refresh can be rolled back.'
   if (run.status === 'running' || run.status === 'waiting') return 'The refresh is still running.'
+  if (newest && newest.id !== run.id)
+    return 'A newer refresh or rollback ran on this environment since: only the newest can be rolled back.'
   if (typeof run.artifact?.rollback_file !== 'string') return 'This refresh made no rollback point.'
   if (run.artifact?.rollback_deleted_at || run.artifact?.rolled_back_at)
     return run.artifact?.rolled_back_at
       ? 'This refresh was already rolled back.'
       : 'Its rollback point is gone.'
-  if (!run.artifact?.restored_at) return 'The target was never replaced: nothing to roll back.'
+  if (!run.artifact?.restore_started_at && !run.artifact?.restored_at)
+    return 'The target was never replaced: nothing to roll back.'
   if (!run.expires_at || Date.parse(run.expires_at) < now.getTime())
     return 'The rollback window has ended.'
   return null
+}
+
+function rollbackBody(
+  refreshRun: DataRun,
+  target: EnvData,
+  tAccess: ServerAccess,
+  deps: RefreshDeps
+) {
+  const opener = deps.opener ?? withServerExec
+  const chFor = deps.channel ?? appChannelFor
+  const sleep = deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)))
+  const plan = refreshRun.plan as unknown as RefreshPlan
+  const file = String(refreshRun.artifact?.rollback_file)
+  const database = String(plan.target.database)
+  return async (ctx: RunCtx) => {
+    const ch = await chFor(target.env.id)
+    // The refresh's own prior maintenance state is what the rollback puts back.
+    const art: Record<string, unknown> = {
+      prior_maintenance: refreshRun.artifact?.prior_maintenance,
+      prior_status: refreshRun.artifact?.prior_status,
+      ...((await readRun(ctx.id))?.artifact ?? {})
+    }
+    const save = async (extra: Record<string, unknown>) => {
+      Object.assign(art, extra)
+      await ctx.patch({ artifact: { ...art } })
+    }
+    await ctx.step('maintenance_on', async () => {
+      try {
+        return await setMaintenance(ch, target.env.id, true, art, save, sleep)
+      } catch (err) {
+        // A target whose restore failed may not answer at all; the OFFLINE restore below still
+        // puts every session out.
+        return {
+          warn: true,
+          note: `The app did not take maintenance (${errText(err).slice(0, 120)}).`
+        }
+      }
+    })
+    await opener(tAccess, async (texec) => {
+      await assertPinned(texec, plan, refreshRun.artifact ?? {}, target)
+      await ctx.step('restore', async () => {
+        const files = await texec(fileListSqlFor(file))
+        const own = await texec(databaseFilesSql(database))
+        const moves = movesOverTarget(
+          files.map((f) => ({
+            logical: String(f.LogicalName),
+            physical: String(f.PhysicalName),
+            type: String(f.Type ?? 'D')
+          })),
+          own.map((f) => ({
+            logical: String(f.logical),
+            physical: String(f.physical),
+            type_id: Number(f.type_id)
+          })),
+          Date.now().toString(36)
+        )
+        try {
+          await texec(restoreOverSql(database, file, moves))
+        } catch (err) {
+          await texec(onlineSql(database)).catch(() => undefined)
+          throw err
+        }
+        await patchRun(refreshRun.id, {
+          artifact: {
+            ...refreshRun.artifact,
+            rolled_back_at: new Date().toISOString(),
+            rollback_run: ctx.id
+          },
+          keepSecret: null,
+          ...(['interrupted', 'failed'].includes(refreshRun.status)
+            ? { status: 'cancelled' as const, finished: true }
+            : {})
+        })
+        return `${database} is back as it was before refresh ${refreshRun.id}.`
+      })
+      await ctx.step('login', async () => {
+        await texec(mapLoginSql(database, await appLoginOf(tAccess.databaseId)))
+        return 'The target’s login owns the database.'
+      })
+    })
+    await ctx.step('maintenance_off', async () => {
+      try {
+        return await setMaintenance(ch, target.env.id, false, art, save, sleep)
+      } catch (err) {
+        return {
+          warn: true,
+          note: `Maintenance could not be put back (${errText(err).slice(0, 120)}).`
+        }
+      }
+    })
+    return {}
+  }
+}
+
+async function rollbackContext(refreshRun: DataRun, deps: RefreshDeps) {
+  await assertGate('refresh_enabled', deps.gate ? await deps.gate() : undefined)
+  const plan = refreshRun.plan as unknown as RefreshPlan
+  const target = await envData(refreshRun.environment_id)
+  const refusals = targetRefusals(target, undefined).filter((c) => c.state === 'fail')
+  const ch = await (deps.channel ?? appChannelFor)(target.env.id)
+  const answer = await targetAnswer(ch)
+  refusals.push(
+    ...targetRefusals(target, answer?.environment ?? null, { forRollback: true }).filter(
+      (c) => c.id === 'app_says_production'
+    )
+  )
+  if (refusals.length)
+    throw new DataError('PRODUCTION_TARGET', refusals.map((c) => c.text).join(' '))
+  const why = pinRefusal(plan, target)
+  if (why) throw new DataError('TARGET_CHANGED', why)
+  return { plan, target, tAccess: serverAccessOf(target) }
 }
 
 export async function startRefreshRollback(
@@ -843,104 +1213,71 @@ export async function startRefreshRollback(
 ): Promise<number> {
   const run = await readRun(refreshRunId)
   if (!run) throw new DataError('NOT_FOUND', 'No such refresh.', 404)
-  const why = rollbackRefusal(run)
-  if (why) throw new DataError(why.includes('ended') ? 'ROLLBACK_EXPIRED' : 'NO_ROLLBACK', why)
-  const target = await envData(run.environment_id)
-  if (target.production)
+  const why = rollbackRefusal(run, new Date(), await newestRefreshRun(run.environment_id))
+  if (why)
     throw new DataError(
-      'PRODUCTION_TARGET',
-      'The target is production now: the Hub never restores over production.'
+      why.includes('ended')
+        ? 'ROLLBACK_EXPIRED'
+        : why.includes('newer')
+          ? 'NOT_NEWEST'
+          : 'NO_ROLLBACK',
+      why
     )
-  const tAccess = serverAccessOf(target)
-  if (typeof body.confirm !== 'string' || body.confirm.trim() !== tAccess.database)
+  const { plan, target, tAccess } = await rollbackContext(run, deps)
+  if (typeof body.confirm !== 'string' || body.confirm.trim() !== plan.target.database)
     throw new DataError(
       'CONFIRM_MISMATCH',
-      `Type the target database name (${tAccess.database}) to roll back.`,
+      `Type the database the refresh replaced (${plan.target.database}) to roll back.`,
       400
     )
-  const file = String(run.artifact?.rollback_file)
-  const opener = deps.opener ?? withServerExec
-  const chFor = deps.channel ?? appChannelFor
   const lock = deps.promoteLock ?? defaultPromoteLock()
-  return withEnvLock(lock, run.environment_id, async (release) =>
+  return withEnvLocks(lock, [run.environment_id], async (release) =>
     startDataRun({
       kind: 'refresh_rollback',
       environmentId: run.environment_id,
       sourceEnvironmentId: run.source_environment_id,
       envIds: [run.environment_id],
       steps: ROLLBACK_STEPS,
-      plan: { refresh_run: refreshRunId, file },
+      plan: {
+        refresh_run: refreshRunId,
+        file: run.artifact?.rollback_file,
+        database: plan.target.database
+      },
       by,
       deps,
       cleanup: async () => release(),
-      body: async (ctx) => {
-        const ch = await chFor(run.environment_id)
-        await ctx.step('maintenance_on', async () => {
-          try {
-            return await setMaintenance(ch, run.environment_id, true, ctx.id)
-          } catch (err) {
-            return {
-              warn: true,
-              note: `The app did not take maintenance (${errText(err).slice(0, 120)}).`
-            }
-          }
-        })
-        await opener(tAccess, async (texec) => {
-          await ctx.step('restore', async () => {
-            const files = await texec(fileListSqlFor(file))
-            const own = await texec(databaseFilesSql(tAccess.database))
-            const moves = movesOverTarget(
-              files.map((f) => ({
-                logical: String(f.LogicalName),
-                physical: String(f.PhysicalName),
-                type: String(f.Type ?? 'D')
-              })),
-              own.map((f) => ({
-                logical: String(f.logical),
-                physical: String(f.physical),
-                type_id: Number(f.type_id)
-              })),
-              Date.now().toString(36)
-            )
-            try {
-              await texec(restoreOverSql(tAccess.database, file, moves))
-            } catch (err) {
-              await texec(multiUserSql(tAccess.database)).catch(() => undefined)
-              throw err
-            }
-            await patchRun(refreshRunId, {
-              artifact: {
-                ...run.artifact,
-                rolled_back_at: new Date().toISOString(),
-                rollback_run: ctx.id
-              }
-            })
-            return `${tAccess.database} is back as it was before refresh ${refreshRunId}.`
-          })
-          await ctx.step('login', async () => {
-            await texec(mapLoginSql(tAccess.database, await appLoginOf(tAccess.databaseId)))
-            return 'The target’s login owns the database.'
-          })
-        })
-        await ctx.step('maintenance_off', async () => {
-          try {
-            return await setMaintenance(ch, run.environment_id, false, ctx.id)
-          } catch (err) {
-            return {
-              warn: true,
-              note: `Maintenance could not be lifted (${errText(err).slice(0, 120)}).`
-            }
-          }
-        })
-        return {}
-      }
+      body: rollbackBody(run, target, tAccess, deps)
+    })
+  )
+}
+
+/** Continues an interrupted (or failed) rollback. */
+export async function resumeRefreshRollback(runId: number, deps: RefreshDeps = {}): Promise<void> {
+  const rb = await readRun(runId)
+  if (rb?.kind !== 'refresh_rollback') throw new DataError('NOT_FOUND', 'No such rollback.', 404)
+  if (rb.status !== 'interrupted' && rb.status !== 'failed')
+    throw new DataError('NOT_RESUMABLE', 'Only an interrupted or failed rollback can be resumed.')
+  const refreshRun = await readRun(Number(rb.plan?.refresh_run))
+  if (!refreshRun)
+    throw new DataError('NOT_FOUND', 'The refresh this rollback undoes is gone.', 404)
+  if (refreshRun.artifact?.rollback_deleted_at)
+    throw new DataError('NO_ROLLBACK', 'Its rollback point is gone.')
+  const { target, tAccess } = await rollbackContext(refreshRun, deps)
+  const lock = deps.promoteLock ?? defaultPromoteLock()
+  await withEnvLocks(lock, [rb.environment_id], async (release) =>
+    resumeDataRun(runId, {
+      envIds: [rb.environment_id],
+      statuses: ['interrupted', 'failed'],
+      deps,
+      cleanup: async () => release(),
+      body: rollbackBody(refreshRun, target, tAccess, deps)
     })
   )
 }
 
 /**
- * A refresh whose rollback window ended: its rollback point file is deleted (best effort) and
- * its sealed keep set dropped. Called by the schedule tick.
+ * A refresh whose rollback window ended: its rollback point file is deleted (best effort, on the
+ * server it was written to) and its sealed keep set dropped. Called by the schedule tick.
  */
 export async function expireRefresh(
   run: DataRun,
@@ -951,7 +1288,10 @@ export async function expireRefresh(
   if (file && !run.artifact?.rollback_deleted_at) {
     try {
       const access = serverAccessOf(await envData(run.environment_id))
-      await (deps.opener ?? withServerExec)(access, (exec) => exec(deleteFileSql(file)))
+      const wrote = Number(run.artifact?.rollback_server_id)
+      if (Number.isFinite(wrote) && wrote !== access.server.id)
+        note = 'The environment moved to another server: a DBA removes the old rollback point file.'
+      else await (deps.opener ?? withServerExec)(access, (exec) => exec(deleteFileSql(file)))
     } catch (err) {
       note = errText(err).slice(0, 200)
     }
@@ -965,4 +1305,58 @@ export async function expireRefresh(
       ...(note ? { rollback_delete_error: note } : {})
     }
   })
+}
+
+/**
+ * An administrator gives up on an interrupted run (or a failed refresh) instead of resuming it:
+ * typed confirm — the database a refresh or rollback replaces, else the run id. The run ends
+ * `cancelled`; a refresh's rollback point stays usable until its window ends. A refresh that
+ * never reached its restore has its target's maintenance put back.
+ */
+export async function abandonRun(
+  runId: number,
+  confirm: unknown,
+  deps: RefreshDeps = {}
+): Promise<DataRun> {
+  const run = await readRun(runId)
+  if (!run) throw new DataError('NOT_FOUND', 'No such run.', 404)
+  const ok = run.status === 'interrupted' || (run.kind === 'refresh' && run.status === 'failed')
+  if (!ok)
+    throw new DataError(
+      'RUN_ENDED',
+      'Only an interrupted run (or a failed refresh) can be abandoned.'
+    )
+  const want = abandonConfirm(run)
+  if (typeof confirm !== 'string' || confirm.trim() !== want)
+    throw new DataError('CONFIRM_MISMATCH', `Type ${want} to abandon this run.`, 400)
+  const art = run.artifact ?? {}
+  if (run.kind === 'refresh' && !art.restore_started_at) {
+    const took = run.steps.find((s) => s.key === 'maintenance_on')
+    if (took && took.state !== 'pending') {
+      const ch = await (deps.channel ?? appChannelFor)(run.environment_id)
+      await setMaintenance(
+        ch,
+        run.environment_id,
+        false,
+        art,
+        async () => {},
+        async () => {}
+      ).catch(() => undefined)
+    }
+  }
+  await patchRun(runId, {
+    status: 'cancelled',
+    finished: true,
+    artifact: { ...art, abandoned_at: new Date().toISOString() },
+    error: run.error ?? 'Abandoned by an administrator.'
+  })
+  return (await readRun(runId)) as DataRun
+}
+
+/** What a person types to abandon a run. */
+export function abandonConfirm(run: Pick<DataRun, 'kind' | 'id' | 'plan'>): string {
+  const p = (run.plan ?? {}) as { target?: { database?: unknown }; database?: unknown }
+  if (run.kind === 'refresh') return String(p.target?.database ?? run.id)
+  if (run.kind === 'refresh_rollback') return String(p.database ?? run.id)
+  return String(run.id)
 }

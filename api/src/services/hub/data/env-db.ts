@@ -42,10 +42,13 @@ export interface EnvData {
     status: string
     base_url: string
     placement_id: number | null
+    /** An administrator opted this environment in as a refresh target. */
+    refresh_target: boolean
   }
   app: { id: number; key: string; name: string }
   siblings: EnvSibling[]
   production: boolean
+  production_reasons: string[]
   database: {
     id: number
     engine: string
@@ -58,18 +61,26 @@ export interface EnvData {
   server: HubDbServerRow | null
 }
 
-const PROD_KEY = /^(prod|production|prd|live)$/i
+/** A key that names production anywhere as a word: prod-eu, prd1, live, main, master … */
+export const PROD_TOKEN = /(^|[-_.])(prod|production|prd|live|main|master)([-_.0-9]|$)/i
 
 /**
- * Production, for the data features: its key says so (prod, production, prd, live), or it is the
- * app's last environment in promotion order (the highest position) — an app with one environment
- * has only production. A refresh never writes over it, whatever the request says.
+ * Why an environment counts as production for the data features (empty = it does not): its key
+ * names production as a word, or it is the app's last environment in promotion order (an app with
+ * one environment has only production). Any one reason refuses a refresh into it, flag or not; the
+ * app's own NIVARO_ENVIRONMENT is checked live on top (refresh.ts).
  */
-export function isProductionEnv(env: EnvSibling, siblings: EnvSibling[]): boolean {
-  if (PROD_KEY.test(env.key)) return true
+export function productionReasons(env: EnvSibling, siblings: EnvSibling[]): string[] {
+  const out: string[] = []
+  if (PROD_TOKEN.test(env.key)) out.push(`its key "${env.key}" names production`)
   const all = siblings.length ? siblings : [env]
   const top = Math.max(...all.map((s) => s.position))
-  return env.position >= top
+  if (env.position >= top) out.push('it is the app’s last environment in promotion order')
+  return out
+}
+
+export function isProductionEnv(env: EnvSibling, siblings: EnvSibling[]): boolean {
+  return productionReasons(env, siblings).length > 0
 }
 
 function dbIdOf(ref: unknown): number | null {
@@ -100,7 +111,8 @@ export async function envData(envId: number): Promise<EnvData> {
     position: Number(e.position ?? 0),
     status: String(e.status ?? 'active'),
     base_url: String(e.base_url ?? ''),
-    placement_id: e.placement_id == null ? null : Number(e.placement_id)
+    placement_id: e.placement_id == null ? null : Number(e.placement_id),
+    refresh_target: e.refresh_target === true || Number(e.refresh_target) === 1
   }
   let database: EnvData['database'] = null
   let server: HubDbServerRow | null = null
@@ -125,6 +137,7 @@ export async function envData(envId: number): Promise<EnvData> {
     app: { id: Number(a.id), key: String(a.key), name: String(a.name) },
     siblings,
     production: isProductionEnv(env, siblings),
+    production_reasons: productionReasons(env, siblings),
     database,
     server
   }
@@ -221,8 +234,11 @@ export const withServerExec: ServerOpener = async (a, fn) => {
     rememberSecrets(k, secrets)
     const kk = k
     const exec: SqlExec = async (sql, bindings = []) => {
+      // knex reads a bare `?` as a binding: in a statement sent without bindings (names and
+      // paths in literals) every `?` is literal text.
+      const text = bindings.length ? sql : sql.replace(/\?/g, '\\?')
       try {
-        return rawRows<Record<string, unknown>>(await kk.raw(sql, bindings as Knex.RawBinding[]))
+        return rawRows<Record<string, unknown>>(await kk.raw(text, bindings as Knex.RawBinding[]))
       } catch (err) {
         throw new Error(scrubText(err, secrets))
       }

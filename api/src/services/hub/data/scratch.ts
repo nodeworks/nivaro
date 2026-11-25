@@ -12,6 +12,7 @@ import {
   SERVER_FACTS_SQL,
   scratchMarkReadSql,
   scratchMarkSql,
+  scratchMarkValue,
   scratchName
 } from './mssql-sql.js'
 import { DataError } from './types.js'
@@ -51,7 +52,7 @@ export async function restoreScratch(
   if (!isScratchName(scratch))
     throw new DataError('SCRATCH_TAKEN', `${scratch} is not a scratch name.`)
   if (await exists(exec, scratch)) {
-    if ((await scratchMark(exec, scratch)) !== String(runId))
+    if ((await scratchMark(exec, scratch)) !== scratchMarkValue(runId))
       throw new DataError(
         'SCRATCH_TAKEN',
         `A database named ${scratch} already exists and is not this run’s copy: it was left alone.`
@@ -69,7 +70,7 @@ export async function restoreScratch(
   const t0 = Date.now()
   await exec(restoreScratchSql(scratch, file, moves, checksum))
   const ms = Date.now() - t0
-  await exec(scratchMarkSql(scratch, runId))
+  await exec(scratchMarkSql(scratch, scratchMarkValue(runId)))
   return { ms }
 }
 
@@ -84,7 +85,7 @@ export async function dropScratch(
   const mark = await scratchMark(exec, scratch)
   // No mark: the restore of this run stopped before the mark (a half-restored copy under this
   // run's own name, which nobody else uses). Another run's mark: never ours.
-  if (mark !== null && mark !== String(runId)) return 'not_ours'
+  if (mark !== null && mark !== scratchMarkValue(runId)) return 'not_ours'
   await exec(dropDatabaseSql(scratch))
   return 'dropped'
 }

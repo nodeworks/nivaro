@@ -106,6 +106,11 @@ export type DataCode =
   | 'FILES_TARGET_MISSING'
   | 'RUN_ENDED'
   | 'LOCK_UNAVAILABLE'
+  | 'FEATURE_OFF'
+  | 'NOT_OPTED_IN'
+  | 'TARGET_CHANGED'
+  | 'TARGET_UNVERIFIED'
+  | 'NOT_NEWEST'
 
 export class DataError extends Error {
   code: DataCode

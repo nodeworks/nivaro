@@ -131,7 +131,9 @@ export async function pruneDbBackups(
   policy: BackupPolicy,
   now: Date,
   /** The run that just wrote its backup (still running): it counts as the newest one kept. */
-  currentRunId: number | null = null
+  currentRunId: number | null = null,
+  /** The server this exec is on: a file another server wrote is left for a DBA. */
+  serverId: number | null = null
 ): Promise<{ deleted: number; failed: number; note: string }> {
   const kept = await keptArtifacts(envId, 'db_backup')
   const ranked =
@@ -143,6 +145,11 @@ export async function pruneDbBackups(
     if (!ids.has(r.id)) continue
     const file = typeof r.artifact?.file === 'string' ? r.artifact.file : null
     if (!file) continue
+    const wrote = Number(r.artifact?.server_id)
+    if (serverId !== null && Number.isFinite(wrote) && wrote !== serverId) {
+      failed++
+      continue
+    }
     try {
       await exec(deleteFileSql(file))
       deleted++
@@ -226,7 +233,7 @@ export async function startDbBackup(
         // Recorded before retention runs, so this backup counts as the newest kept one.
         await ctx.patch({ artifact })
         await ctx.step('retention', async () => {
-          const r = await pruneDbBackups(exec, envId, policy, now(), ctx.id)
+          const r = await pruneDbBackups(exec, envId, policy, now(), ctx.id, access.server.id)
           return { note: r.note, warn: r.failed > 0 }
         })
         return { result: { backup_ms: backupMs, ...facts }, artifact }

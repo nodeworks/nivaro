@@ -1,12 +1,15 @@
 import { db } from '../../../db/index.js'
 import { deploymentClient } from '../shared/deployment-client.js'
 import { getShared } from '../shared/store.js'
+import { purgeRehearsalFiles } from './app-calls.js'
 import { startDbBackup } from './backup.js'
 import { startRestoreDrill } from './drill.js'
 import { envData, type ServerOpener, serverAccessOf, withServerExec } from './env-db.js'
 import { startFilesBackup } from './files-backup.js'
+import { deleteFileSql, scratchName } from './mssql-sql.js'
 import { isDue, listPolicies } from './policy.js'
 import { expireRefresh } from './refresh.js'
+import { rehearsalTenantId } from './rehearsal.js'
 import { createRun, expiredRollbacks, lastStarted, patchRun, staleRuns } from './runs.js'
 import { dropScratch } from './scratch.js'
 import type { BackupPolicy, DataRun, DataRunKind } from './types.js'
@@ -41,11 +44,24 @@ export interface TickReport {
   skipped: Array<{ env: number; kind: DataRunKind; why: string }>
 }
 
-async function healOne(run: DataRun, opener: ServerOpener): Promise<void> {
+/**
+ * A run whose process went away. Its leftovers are found by the names the run gives them (the
+ * scratch copy is nivaro_hub_scratch_<hub>_<d|r><run id>, recorded before anything is restored;
+ * a rehearsal's backup file is recorded before it is written), never by what the run got to
+ * write at its end.
+ */
+export async function healOne(
+  run: DataRun,
+  opener: ServerOpener,
+  deps: { purge?: typeof purgeRehearsalFiles } = {}
+): Promise<void> {
   if (run.kind === 'refresh' || run.kind === 'refresh_rollback') {
     await patchRun(run.id, {
       status: 'interrupted',
-      error: 'The Hub process running this stopped: Resume continues it, or roll back.'
+      error:
+        run.kind === 'refresh'
+          ? 'The Hub process running this stopped: Resume continues it, Roll back undoes it, or abandon it.'
+          : 'The Hub process running this stopped: Resume continues the rollback.'
     })
     return
   }
@@ -54,23 +70,35 @@ async function healOne(run: DataRun, opener: ServerOpener): Promise<void> {
     error: 'The Hub process running this stopped before it finished.',
     finished: true
   })
-  const scratch =
-    (run.result?.scratch as string | undefined) ?? (run.artifact?.scratch as string | undefined)
-  if (run.kind === 'rehearsal' && run.artifact?.listed === true) {
-    await patchRun(run.id, { artifact: { ...run.artifact, listed: false } })
+  if (run.kind === 'rehearsal' && run.artifact?.shared_id != null) {
     const shared = await getShared(Number(run.artifact.shared_id)).catch(() => null)
-    if (shared)
+    if (shared) {
+      // Its files first (the app must still be listed to be reached), then off the list.
+      await (deps.purge ?? purgeRehearsalFiles)(shared, rehearsalTenantId(run.id)).catch(
+        () => undefined
+      )
+      await patchRun(run.id, { artifact: { ...run.artifact, listed: false } })
       await deploymentClient(shared)
         .refresh()
         .catch(() => undefined)
-  }
-  if ((run.kind === 'restore_drill' || run.kind === 'rehearsal') && scratch) {
-    try {
-      const access = serverAccessOf(await envData(run.environment_id))
-      await opener(access, (exec) => dropScratch(exec, scratch, run.id))
-    } catch {
-      // the next drill of this run id never comes; a DBA sees the marked copy by its name
     }
+  }
+  if (run.kind !== 'restore_drill' && run.kind !== 'rehearsal') return
+  try {
+    const access = serverAccessOf(await envData(run.environment_id))
+    const wrote = Number(run.artifact?.server_id)
+    if (Number.isFinite(wrote) && wrote !== access.server.id) return
+    await opener(access, async (exec) => {
+      await dropScratch(exec, scratchName(run.kind === 'restore_drill' ? 'd' : 'r', run.id), run.id)
+      const bak = run.artifact?.bak_file
+      if (typeof bak === 'string' && bak)
+        await exec(deleteFileSql(bak)).then(
+          () => undefined,
+          () => undefined
+        )
+    })
+  } catch {
+    // a DBA finds the marked copy by its name (nivaro_hub_scratch_…)
   }
 }
 

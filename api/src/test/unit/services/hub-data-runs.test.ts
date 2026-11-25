@@ -47,12 +47,13 @@ const { sealSecret } = await import('../../../services/hub/secrets.js')
 const { memoryPromoteLock } = await import('../../../services/hub/promote-lock.js')
 const { startDbBackup } = await import('../../../services/hub/data/backup.js')
 const { startRestoreDrill } = await import('../../../services/hub/data/drill.js')
-const { planRefresh, startRefresh, startRefreshRollback } = await import(
+const { abandonRun, planRefresh, resumeRefresh, startRefresh, startRefreshRollback } = await import(
   '../../../services/hub/data/refresh.js'
 )
+const { scratchName } = await import('../../../services/hub/data/mssql-sql.js')
 const { savePolicy, emptyPolicy } = await import('../../../services/hub/data/policy.js')
 const { readRun, createRun, patchRun } = await import('../../../services/hub/data/runs.js')
-const { dataTick } = await import('../../../services/hub/data/schedule.js')
+const { dataTick, healOne } = await import('../../../services/hub/data/schedule.js')
 const { rehearsalTenantWires } = await import('../../../services/hub/data/rehearsal.js')
 const { memoryDataLock, _resetDataLocksForTests } = await import(
   '../../../services/hub/data/lock.js'
@@ -65,16 +66,21 @@ const KEY = 'e'.repeat(64)
 const server = {
   dbs: new Set<string>(['db1', 'db2', 'db3']),
   marks: new Map<string, string>(),
+  created: new Map<string, string>(),
   sql: [] as string[],
   ledger: 500,
-  failRestore: false
+  failRestore: false,
+  failBackupOf: '' as string
 }
+let stamp = 0
 function resetServer() {
   server.dbs = new Set(['db1', 'db2', 'db3'])
   server.marks = new Map()
+  server.created = new Map(['db1', 'db2', 'db3'].map((d) => [d, '2026-01-01T00:00:00']))
   server.sql = []
   server.ledger = 500
   server.failRestore = false
+  server.failBackupOf = ''
 }
 const name = (sql: string, re: RegExp) => re.exec(sql)?.[1] ?? ''
 const exec = async (sql: string): Promise<Record<string, unknown>[]> => {
@@ -92,6 +98,18 @@ const exec = async (sql: string): Promise<Record<string, unknown>[]> => {
       { logical: 'stg', physical: 'D:\\data\\stg.mdf', type_id: 0 },
       { logical: 'stg_log', physical: 'L:\\log\\stg.ldf', type_id: 1 }
     ]
+  if (sql.startsWith('SELECT database_id,')) {
+    const n = name(sql, /name = N'([^']+)'/)
+    return server.dbs.has(n)
+      ? [{ database_id: Number(n.replace(/\D/g, '')) || 99, create_date: server.created.get(n) }]
+      : []
+  }
+  if (
+    sql.startsWith('BACKUP DATABASE') &&
+    server.failBackupOf &&
+    sql.includes(`[${server.failBackupOf}]`)
+  )
+    throw new Error('backup refused')
   if (sql.startsWith('SELECT name, state_desc FROM sys.databases')) {
     const n = name(sql, /name = N'([^']+)'/)
     return server.dbs.has(n) ? [{ name: n }] : []
@@ -106,7 +124,9 @@ const exec = async (sql: string): Promise<Record<string, unknown>[]> => {
   }
   if (sql.includes('RESTORE DATABASE')) {
     if (server.failRestore) throw new Error('restore failed')
-    server.dbs.add(name(sql, /RESTORE DATABASE \[([^\]]+)\]/))
+    const n = name(sql, /RESTORE DATABASE \[([^\]]+)\]/)
+    server.dbs.add(n)
+    server.created.set(n, `2026-11-24T00:00:${String(++stamp).padStart(2, '0')}`)
     return []
   }
   if (sql.includes('DROP DATABASE')) {
@@ -136,15 +156,20 @@ const exec = async (sql: string): Promise<Record<string, unknown>[]> => {
 }
 const opener = async <T>(_a: unknown, fn: (e: typeof exec) => Promise<T>) => fn(exec)
 
+const ENV_OF: Record<number, string> = { 1: 'development', 2: 'staging', 3: 'production' }
+const maintenanceCalls: Array<{ env: number; on: unknown }> = []
 const channel =
-  (version = '0.3.215') =>
-  async () => ({
+  (version = '0.3.215', envSays: Record<number, string | null> = ENV_OF) =>
+  async (envId: number) => ({
     kind: 'dedicated' as const,
     tenantId: null,
     shared: null,
-    calls: [] as string[],
-    async call(method: string, sub: string) {
-      if (sub.endsWith('refresh-keeps')) return { version, keeps: allKeeps() }
+    async call(method: string, sub: string, body?: unknown) {
+      if (sub.endsWith('refresh-keeps'))
+        return { version, environment: envSays[envId], keeps: allKeeps() }
+      if (sub === 'status') return { maintenance: false }
+      if (sub === 'maintenance')
+        maintenanceCalls.push({ env: envId, on: (body as { on?: unknown }).on })
       return { ok: true, method }
     },
     async version() {
@@ -152,12 +177,15 @@ const channel =
     }
   })
 
+const gateOn = async () => ({ refresh_enabled: true, drill_enabled: true, rehearsal_enabled: true })
 const deps = () => ({
   opener,
   background: false,
   lock: memoryDataLock,
   promoteLock: memoryPromoteLock,
-  channel: channel()
+  channel: channel(),
+  gate: gateOn,
+  sleep: async () => {}
 })
 
 let prevKey: string | undefined
@@ -184,7 +212,8 @@ beforeAll(async () => {
       position,
       status: 'active',
       base_url: `https://${key}.efp.test`,
-      db_ref: `hub-db:${id}`
+      db_ref: `hub-db:${id}`,
+      refresh_target: id === 2
     })
   await db('nivaro_hub_db_servers').insert({
     id: 1,
@@ -210,9 +239,13 @@ afterAll(async () => {
   else process.env.ENCRYPTION_KEY = prevKey
   await db.destroy()
 })
-beforeEach(() => {
+beforeEach(async () => {
   resetServer()
   _resetDataLocksForTests()
+  maintenanceCalls.length = 0
+  await db('nivaro_hub_environments')
+    .where({ id: 2 })
+    .update({ refresh_target: true, db_ref: 'hub-db:2' })
 })
 
 describe('migration 569', () => {
@@ -221,6 +254,9 @@ describe('migration 569', () => {
     const cols = Object.keys(await db('nivaro_hub_data_runs').columnInfo())
     expect(cols).toContain('keep_secret')
     expect(cols).toContain('heartbeat_at')
+    expect(Object.keys(await db('nivaro_hub_environments').columnInfo())).toContain(
+      'refresh_target'
+    )
   })
 })
 
@@ -258,11 +294,28 @@ describe('database backup', () => {
 })
 
 describe('restore drill', () => {
+  it('is off until the switch is on', async () => {
+    await expect(
+      startRestoreDrill(
+        2,
+        { by: null },
+        {
+          ...deps(),
+          gate: async () => ({
+            refresh_enabled: false,
+            drill_enabled: false,
+            rehearsal_enabled: false
+          })
+        }
+      )
+    ).rejects.toMatchObject({ code: 'FEATURE_OFF' })
+  })
+
   it('restores the newest backup into its own scratch copy, checks it and drops it', async () => {
     const id = await startRestoreDrill(2, { by: null }, deps())
     const run = await readRun(id)
     expect(run?.status).toBe('done')
-    const scratch = `nivaro_hub_scratch_d${id}`
+    const scratch = scratchName('d', id)
     expect(
       server.sql.some(
         (s) => s.startsWith(`RESTORE DATABASE [${scratch}]`) && !s.includes('REPLACE')
@@ -279,12 +332,12 @@ describe('restore drill', () => {
     const run = await readRun(id)
     expect(run?.status).toBe('failed')
     expect(run?.steps.find((s) => s.key === 'checks')?.state).toBe('failed')
-    expect(server.dbs.has(`nivaro_hub_scratch_d${id}`)).toBe(false)
+    expect(server.dbs.has(scratchName('d', id))).toBe(false)
   })
 
   it('never drops a database under its name that another run marked', async () => {
     const next = Number((await db('nivaro_hub_data_runs').max('id as m').first())?.m ?? 0) + 1
-    const name = `nivaro_hub_scratch_d${next}`
+    const name = scratchName('d', next)
     server.dbs.add(name)
     server.marks.set(name, '999')
     const id = await startRestoreDrill(2, { by: null }, deps())
@@ -310,8 +363,8 @@ describe('refresh', () => {
   it('refuses two versions', async () => {
     const d = deps()
     let n = 0
-    d.channel = async () => ({
-      ...(await channel()()),
+    d.channel = async (envId: number) => ({
+      ...(await channel()(envId)),
       version: async () => (n++ % 2 ? '0.3.214' : '0.3.215')
     })
     const p = await planRefresh(2, { source_env_id: 3 }, d)
@@ -322,7 +375,7 @@ describe('refresh', () => {
     const p = await planRefresh(2, { source_env_id: 3 }, deps())
     expect(p.blocked).toBe(false)
     expect(p.confirm).toBe('db2')
-    expect(p.keeps_from).toBe('app')
+    expect(p.target.identity).toEqual({ database_id: 2, create_date: '2026-01-01T00:00:00' })
     await expect(
       startRefresh(2, { source_env_id: 3, plan_hash: p.plan_hash, confirm: 'db3' }, null, deps())
     ).rejects.toMatchObject({ code: 'CONFIRM_MISMATCH' })
@@ -352,8 +405,14 @@ describe('refresh', () => {
       )
     ).toBe(true)
     expect(server.sql.some((s) => s.includes('DROP USER [login3]'))).toBe(true)
-    // never anything over production
+    // never anything over production; OFFLINE, never SINGLE_USER; strict maintenance on then off
     expect(server.sql.some((s) => /RESTORE DATABASE \[db3\]/.test(s))).toBe(false)
+    expect(restores[0]).toMatch(/ALTER DATABASE \[db2\] SET OFFLINE WITH ROLLBACK IMMEDIATE/)
+    expect(maintenanceCalls).toEqual([
+      { env: 2, on: true },
+      { env: 2, on: false }
+    ])
+    expect(run?.artifact?.restored_identity).toBeTruthy()
 
     await expect(startRefreshRollback(id, { confirm: 'nope' }, null, deps())).rejects.toMatchObject(
       {
@@ -367,8 +426,123 @@ describe('refresh', () => {
       String(run?.artifact?.rollback_file)
     )
     await expect(startRefreshRollback(id, { confirm: 'db2' }, null, deps())).rejects.toMatchObject({
-      code: 'NO_ROLLBACK'
+      code: expect.stringMatching(/NOT_NEWEST|NO_ROLLBACK/)
     })
+  })
+})
+
+describe('refresh safety', () => {
+  const plan = (target = 2, source = 3, d = deps()) =>
+    planRefresh(target, { source_env_id: source }, d)
+
+  it('is off until the switch is on', async () => {
+    const d = {
+      ...deps(),
+      gate: async () => ({ refresh_enabled: false, drill_enabled: true, rehearsal_enabled: true })
+    }
+    const p = await plan(2, 3, d)
+    expect(p.checks.map((c) => c.id)).toContain('feature_off')
+    await expect(
+      startRefresh(2, { source_env_id: 3, plan_hash: p.plan_hash, confirm: 'db2' }, null, d)
+    ).rejects.toMatchObject({ code: 'FEATURE_OFF' })
+  })
+
+  it('refuses a target that is not opted in, says production, or cannot say', async () => {
+    await db('nivaro_hub_environments').where({ id: 2 }).update({ refresh_target: false })
+    expect((await plan()).checks.map((c) => c.id)).toContain('not_opted_in')
+    await db('nivaro_hub_environments').where({ id: 2 }).update({ refresh_target: true })
+    const says = { ...deps(), channel: channel('0.3.215', { 2: 'production', 3: 'production' }) }
+    expect((await plan(2, 3, says)).checks.map((c) => c.id)).toContain('app_says_production')
+    const silent = { ...deps(), channel: channel('0.3.215', { 2: null, 3: 'production' }) }
+    expect((await plan(2, 3, silent)).checks.map((c) => c.id)).toContain('target_unverified')
+  })
+
+  it('a failure before the restore puts maintenance back and writes nothing', async () => {
+    const p = await plan()
+    server.failBackupOf = 'db3'
+    const id = await startRefresh(
+      2,
+      { source_env_id: 3, plan_hash: p.plan_hash, confirm: 'db2' },
+      null,
+      deps()
+    )
+    const run = await readRun(id)
+    expect(run?.status).toBe('failed')
+    expect(server.sql.some((s) => s.includes('RESTORE DATABASE [db2]'))).toBe(false)
+    expect(maintenanceCalls).toEqual([
+      { env: 2, on: true },
+      { env: 2, on: false }
+    ])
+  })
+
+  it('a restore that fails keeps the rollback point usable and the run resumable; a changed target refuses', async () => {
+    const p = await plan()
+    server.failRestore = true
+    const id = await startRefresh(
+      2,
+      { source_env_id: 3, plan_hash: p.plan_hash, confirm: 'db2' },
+      null,
+      deps()
+    )
+    const run = await readRun(id)
+    expect(run?.status).toBe('failed')
+    expect(run?.artifact?.stage).toBe('restoring')
+    // maintenance stays on (the database may be half restored)
+    expect(maintenanceCalls).toEqual([{ env: 2, on: true }])
+    // the environment now points at another database: resume and rollback refuse
+    await db('nivaro_hub_environments').where({ id: 2 }).update({ db_ref: 'hub-db:1' })
+    await expect(resumeRefresh(id, deps())).rejects.toMatchObject({
+      code: expect.stringMatching(/TARGET_CHANGED|PLAN_BLOCKED/)
+    })
+    await expect(startRefreshRollback(id, { confirm: 'db2' }, null, deps())).rejects.toMatchObject({
+      code: 'TARGET_CHANGED'
+    })
+    await db('nivaro_hub_environments').where({ id: 2 }).update({ db_ref: 'hub-db:2' })
+    // back on the pinned database: resume finishes the refresh
+    server.failRestore = false
+    await resumeRefresh(id, deps())
+    expect((await readRun(id))?.status).toBe('done')
+  })
+
+  it('rolls back a failed refresh, and only the newest', async () => {
+    const p1 = await plan()
+    server.failRestore = true
+    const first = await startRefresh(
+      2,
+      { source_env_id: 3, plan_hash: p1.plan_hash, confirm: 'db2' },
+      null,
+      deps()
+    )
+    server.failRestore = false
+    const rb = await startRefreshRollback(first, { confirm: 'db2' }, null, deps())
+    expect((await readRun(rb))?.status).toBe('done')
+    expect((await readRun(first))?.status).toBe('cancelled')
+    const p2 = await plan()
+    const second = await startRefresh(
+      2,
+      { source_env_id: 3, plan_hash: p2.plan_hash, confirm: 'db2' },
+      null,
+      deps()
+    )
+    expect((await readRun(second))?.status).toBe('done')
+    await expect(
+      startRefreshRollback(first, { confirm: 'db2' }, null, deps())
+    ).rejects.toMatchObject({
+      code: expect.stringMatching(/NOT_NEWEST|NO_ROLLBACK/)
+    })
+  })
+
+  it('abandons an interrupted run with a typed confirm', async () => {
+    const id = await createRun({
+      kind: 'restore_drill',
+      environmentId: 2,
+      steps: [],
+      status: 'interrupted'
+    })
+    await expect(abandonRun(id, 'nope', deps())).rejects.toMatchObject({ code: 'CONFIRM_MISMATCH' })
+    const r = await abandonRun(id, String(id), deps())
+    expect(r.status).toBe('cancelled')
+    await expect(abandonRun(id, String(id), deps())).rejects.toMatchObject({ code: 'RUN_ENDED' })
   })
 })
 
@@ -399,6 +573,26 @@ describe('schedule tick', () => {
   })
 })
 
+describe('heal by name', () => {
+  it('drops a crashed drill copy by the name its run id gives it, even with nothing recorded', async () => {
+    const id = await createRun({ kind: 'restore_drill', environmentId: 2, steps: [] })
+    const name = scratchName('d', id)
+    server.dbs.add(name)
+    await healOne((await readRun(id)) as NonNullable<Awaited<ReturnType<typeof readRun>>>, opener)
+    expect(server.dbs.has(name)).toBe(false)
+    expect((await readRun(id))?.status).toBe('failed')
+  })
+
+  it('removes a crashed rehearsal copy and its backup file', async () => {
+    const id = await createRun({ kind: 'rehearsal', environmentId: 2, steps: [] })
+    await patchRun(id, { artifact: { bak_file: 'F:\\bak\\r.bak', server_id: 1 } })
+    server.dbs.add(scratchName('r', id))
+    await healOne((await readRun(id)) as NonNullable<Awaited<ReturnType<typeof readRun>>>, opener)
+    expect(server.dbs.has(scratchName('r', id))).toBe(false)
+    expect(server.sql.some((q) => q.includes('xp_delete_file') && q.includes('r.bak'))).toBe(true)
+  })
+})
+
 describe('rehearsal tenants', () => {
   it('lists a running rehearsal on its deployment only, in maintenance, on the copy', async () => {
     const id = await createRun({ kind: 'rehearsal', environmentId: 2, steps: [] })
@@ -409,7 +603,7 @@ describe('rehearsal tenants', () => {
         env_id: 2,
         database_id: 2,
         app_key: 'efp',
-        scratch: `nivaro_hub_scratch_r${id}`
+        scratch: scratchName('r', id)
       }
     })
     const wires = await rehearsalTenantWires(4)
@@ -419,7 +613,7 @@ describe('rehearsal tenants', () => {
       status: 'maintenance',
       hostnames: [`rh-${id}.rehearsal.invalid`]
     })
-    expect(wires[0].db.connection).toContain(`nivaro_hub_scratch_r${id}`)
+    expect(wires[0].db.connection).toContain(scratchName('r', id))
     expect(await rehearsalTenantWires(5)).toEqual([])
     await patchRun(id, { status: 'done' })
     expect(await rehearsalTenantWires(4)).toEqual([])

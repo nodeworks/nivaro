@@ -51,6 +51,11 @@ export function parseFilesStatus(v: unknown): FilesBackupStatus | null {
   }
 }
 
+/** Every file was copied (too large ones aside): only then may older sets go. */
+export function setComplete(st: FilesBackupStatus | null): boolean {
+  return !!st && st.state === 'done' && st.failed === 0 && st.copied >= st.total - st.too_large
+}
+
 /** A backup set's name: lowercase letters, digits and dashes (a folder / key prefix). */
 export function setName(app: string, env: string, runId: number): string {
   const clean = (s: string) =>
@@ -150,6 +155,13 @@ export async function startFilesBackup(
       })
       await ctx.patch({ artifact: { ...artifact, ...(status ? { counts: status } : {}) } })
       await ctx.step('retention', async () => {
+        // An incomplete set never costs an older complete one.
+        const st = status as FilesBackupStatus | null
+        if (!setComplete(st))
+          return {
+            warn: true,
+            note: 'This set is incomplete (files failed to copy): older sets are kept.'
+          }
         const keep = policy.files_keep_count ?? DEFAULT_FILES_KEEP_COUNT
         const kept = (await keptArtifacts(envId, 'files_backup')).filter((r) => r.id !== ctx.id)
         // This run's set counts as the newest one kept.

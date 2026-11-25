@@ -12,6 +12,7 @@
  * dropped when it carries that mark for the same run. Nothing here restores WITH REPLACE except
  * the refresh (and its rollback) over a target the plan proved is not production.
  */
+import { createHash } from 'node:crypto'
 import { joinServerPath, type MoveTarget, qi, qs } from '../../recovery/plan.js'
 
 export { joinServerPath, qi, qs }
@@ -24,13 +25,29 @@ export function hasControlChar(s: string): boolean {
 
 export const SCRATCH_PREFIX = 'nivaro_hub_scratch_'
 export const SCRATCH_PROPERTY = 'nivaro_hub_scratch'
-const SCRATCH_RE = /^nivaro_hub_scratch_[dr][1-9][0-9]{0,9}$/
+const SCRATCH_RE = /^nivaro_hub_scratch_[0-9a-f]{8}_[dr][1-9][0-9]{0,9}$/
 
-/** The scratch database of a drill (`d`) or a rehearsal (`r`) run. */
-export function scratchName(kind: 'd' | 'r', runId: number): string {
-  if (!Number.isSafeInteger(runId) || runId < 1) throw new Error('bad run id')
-  return `${SCRATCH_PREFIX}${kind}${runId}`
+/**
+ * This Hub's own tag (8 hex of a hash of its ENCRYPTION_KEY, never the key): two Hubs that share
+ * a database server (a dev and a staging Hub) both have a run 5, and must never take each
+ * other's scratch copy for their own. Part of every scratch name and mark.
+ */
+export function hubTag(env: NodeJS.ProcessEnv = process.env): string {
+  return createHash('sha256')
+    .update(`nivaro-hub-scratch:${(env.ENCRYPTION_KEY ?? '').trim()}`)
+    .digest('hex')
+    .slice(0, 8)
 }
+
+/** The scratch database of a drill (`d`) or a rehearsal (`r`) run of this Hub. */
+export function scratchName(kind: 'd' | 'r', runId: number, tag = hubTag()): string {
+  if (!Number.isSafeInteger(runId) || runId < 1) throw new Error('bad run id')
+  if (!/^[0-9a-f]{8}$/.test(tag)) throw new Error('bad hub tag')
+  return `${SCRATCH_PREFIX}${tag}_${kind}${runId}`
+}
+
+/** The mark a scratch copy carries: this Hub's tag and the run id. */
+export const scratchMarkValue = (runId: number, tag = hubTag()) => `${tag}:${runId}`
 
 export function isScratchName(name: string): boolean {
   return SCRATCH_RE.test(name)
@@ -44,7 +61,7 @@ export function isServerFolder(v: unknown): v is string {
   if (typeof v !== 'string') return false
   const p = v.trim()
   if (!p || p.length > 400 || p !== v) return false
-  if (/['";`]/.test(p) || hasControlChar(p)) return false
+  if (/['";`?]/.test(p) || hasControlChar(p)) return false
   if (/(^|[\\/])\.\.([\\/]|$)/.test(p)) return false
   return /^[A-Za-z]:\\/.test(p) || /^\\\\[A-Za-z0-9._-]+\\[^\\]/.test(p) || /^\/[^/]/.test(p)
 }
@@ -142,16 +159,22 @@ export function scratchMarkReadSql(database: string): string {
   return `SELECT CAST(value AS nvarchar(100)) AS v FROM ${qi(database)}.sys.extended_properties WHERE class = 0 AND name = ${qs(SCRATCH_PROPERTY)}`
 }
 
-export function scratchMarkSql(database: string, runId: number): string {
-  return `EXECUTE ${qi(database)}.sys.sp_addextendedproperty @name = ${qs(SCRATCH_PROPERTY)}, @value = ${qs(String(runId))}`
+export function scratchMarkSql(database: string, mark: string): string {
+  return `EXECUTE ${qi(database)}.sys.sp_addextendedproperty @name = ${qs(SCRATCH_PROPERTY)}, @value = ${qs(mark)}`
 }
 
 export function dropDatabaseSql(database: string): string {
   return `ALTER DATABASE ${qi(database)} SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE ${qi(database)};`
 }
 
-export function multiUserSql(database: string): string {
-  return `IF DB_ID(${qs(database)}) IS NOT NULL ALTER DATABASE ${qi(database)} SET MULTI_USER`
+/** Brings a database the Hub took offline back, when a restore never started over it. */
+export function onlineSql(database: string): string {
+  return `IF DB_ID(${qs(database)}) IS NOT NULL AND DATABASEPROPERTYEX(${qs(database)}, 'Status') = 'OFFLINE' ALTER DATABASE ${qi(database)} SET ONLINE`
+}
+
+/** The database's identity on its server: id and creation time (a RESTORE changes the time). */
+export function identitySql(database: string): string {
+  return `SELECT database_id, CONVERT(varchar(33), create_date, 126) AS create_date FROM sys.databases WHERE name = ${qs(database)}`
 }
 
 export interface BackupFile {
@@ -201,9 +224,11 @@ export function movesOverTarget(
 }
 
 /**
- * Replaces `target` with the backup in `file`: every session is put out first (SINGLE_USER WITH
- * ROLLBACK IMMEDIATE), the restore uses REPLACE and NEW_BROKER (the copy must not share a
- * Service Broker id with its source on the same server), and MULTI_USER comes back after.
+ * Replaces `target` with the backup in `file`: the database is taken OFFLINE WITH ROLLBACK
+ * IMMEDIATE first (every session put out, and nobody — the app's pool included — can connect
+ * and take a single-user slot before the restore), then RESTORE … WITH REPLACE, NEW_BROKER (the
+ * copy must not share a Service Broker id with its source on the same server). The restore
+ * brings it back online.
  */
 export function restoreOverSql(target: string, file: string, moves: MoveTarget[]): string {
   const w = [
@@ -214,7 +239,7 @@ export function restoreOverSql(target: string, file: string, moves: MoveTarget[]
     'NEW_BROKER',
     'STATS = 10'
   ]
-  return `IF DB_ID(${qs(target)}) IS NOT NULL ALTER DATABASE ${qi(target)} SET SINGLE_USER WITH ROLLBACK IMMEDIATE; RESTORE DATABASE ${qi(target)} FROM DISK = ${qs(file)} WITH ${w.join(', ')}; ALTER DATABASE ${qi(target)} SET MULTI_USER;`
+  return `IF DB_ID(${qs(target)}) IS NOT NULL ALTER DATABASE ${qi(target)} SET OFFLINE WITH ROLLBACK IMMEDIATE; RESTORE DATABASE ${qi(target)} FROM DISK = ${qs(file)} WITH ${w.join(', ')};`
 }
 
 /** A scratch copy: never REPLACE (the runner proved the name is free or its own leftover). */

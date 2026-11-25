@@ -1,6 +1,9 @@
-import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { randomBytes, randomUUID } from 'node:crypto'
+import { createReadStream, createWriteStream } from 'node:fs'
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
+import type { Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
 import { db } from '../../db/index.js'
 import { appMap } from '../app-state.js'
 import { tenantSource } from '../deployment-mode.js'
@@ -9,7 +12,13 @@ import { getApp } from '../io-holder.js'
 import { getStorage } from '../storage/index.js'
 import { getActiveStorageDriver } from '../storage-drivers.js'
 import { appKeyPart } from '../tenancy/credential-binding.js'
-import { type S3Creds, type S3Target, s3Request, s3TargetAllowed } from './s3-target.js'
+import {
+  type S3Creds,
+  type S3Target,
+  s3PutStream,
+  s3Request,
+  s3TargetAllowed
+} from './s3-target.js'
 
 /**
  * Hub data care, APP side: a files backup. The Hub asks (hub link / deployment link,
@@ -24,15 +33,20 @@ import { type S3Creds, type S3Target, s3Request, s3TargetAllowed } from './s3-ta
  *                               endpoint + bucket + prefix allow-list, every request through
  *                               safeFetch, redirects refused), with the key pair the Hub sends
  *
- * One backup per app at a time (FILES_BACKUP_RUNNING). The status lives in this process and is
- * mirrored to Redis (per app, per hub link) so another replica can answer the Hub. A file over
- * MAX_OBJECT_BYTES is counted `too_large`, not copied (objects are read whole). The key pair is
- * held only in the run's closure: never in the status, a Redis value, a log line or an error.
+ * One backup per app at a time (FILES_BACKUP_RUNNING; the Redis lock is renewed on a timer). The
+ * status lives in this process and is mirrored to Redis (per app, per hub link) so another
+ * replica can answer the Hub. Objects are STREAMED (a local file from disk, a saved-settings
+ * object through its driver's stream; an S3 target receives 8 MiB parts), two at a time, so a
+ * backup never holds a whole file in the memory of the app it protects. A source that cannot be
+ * streamed is read whole only up to WHOLE_READ_MAX, else counted `too_large`. The key pair is held
+ * only in the run's closure: never in the status, a Redis value, a log line or an error.
  */
 
-export const MAX_OBJECT_BYTES = 1024 * 1024 * 1024
+/** A source with no stream is read whole only up to this size. */
+export const WHOLE_READ_MAX = 64 * 1024 * 1024
 const RUN_TTL_MS = 24 * 60 * 60_000
 const LOCK_TTL_MS = 60_000
+const LOCK_RENEW_MS = 20_000
 const SET_RE = /^[a-z0-9][a-z0-9-]{0,99}$/
 const RUN_ID_RE = /^[A-Za-z0-9_-]{1,100}$/
 
@@ -63,6 +77,8 @@ export class FilesBackupError extends Error {
 
 export interface Writer {
   put(key: string, buf: Buffer): Promise<void>
+  /** A streamed object; resolves to the bytes stored. */
+  putStream(key: string, src: Readable): Promise<number>
   read(key: string): Promise<Buffer | null>
   remove(key: string): Promise<void>
   removeSet(): Promise<void>
@@ -101,6 +117,24 @@ function dirWriter(path: string, set: string): Writer {
       await mkdir(dirname(f), { recursive: true })
       await writeFile(f, buf)
     },
+    async putStream(key, src) {
+      const f = full(key)
+      await mkdir(dirname(f), { recursive: true })
+      // A part file renamed over the key once every byte arrived: never a truncated object.
+      const part = `${f}.nvr-part-${randomBytes(6).toString('hex')}`
+      let bytes = 0
+      src.on('data', (c: Buffer) => {
+        bytes += c.length
+      })
+      try {
+        await pipeline(src, createWriteStream(part))
+        await rename(part, f)
+      } catch (err) {
+        await rm(part, { force: true }).catch(() => undefined)
+        throw err
+      }
+      return bytes
+    },
     async read(key) {
       try {
         return await readFile(full(key))
@@ -129,6 +163,7 @@ function s3Writer(t: S3Target, set: string, creds: S3Creds): Writer {
     async put(key, buf) {
       await ok(await s3Request(t, creds, 'PUT', `${base}${key}`, buf), 'PUT')
     },
+    putStream: (key, src) => s3PutStream(t, creds, `${base}${key}`, src),
     async read(key) {
       try {
         const res = await ok(await s3Request(t, creds, 'GET', `${base}${key}`), 'GET')
@@ -264,11 +299,25 @@ export const filesBackupDeps = {
       filesize: number | string | null
     }>
   },
+  /**
+   * The object as a stream: a local file straight from disk (its path inside this app's scope),
+   * a saved-settings object through its driver's stream; null when the source has no stream.
+   */
+  async open(storage: string | null, key: string): Promise<Readable | null> {
+    if (!storage || storage === 'local') {
+      const env = getStorage() as { resolveKey?: (k: string) => string }
+      if (typeof env.resolveKey !== 'function') return null
+      return createReadStream(env.resolveKey(key))
+    }
+    const d = await getActiveStorageDriver()
+    if (typeof d.openStream !== 'function') return null
+    return (await d.openStream(key)).stream
+  },
   async read(storage: string | null, key: string): Promise<Buffer> {
     if (!storage || storage === 'local') return getStorage().get(key)
     return (await getActiveStorageDriver()).get(key)
   },
-  concurrency: 3,
+  concurrency: 2,
   pageSize: 500
 }
 
@@ -337,7 +386,16 @@ export async function startFilesBackup(body: unknown): Promise<{ run_id: string 
     }
   }
   runs.set(id, run)
+  // The lock is renewed on a timer (a slow page must not let a second backup start beside it).
+  const renew = redis
+    ? setInterval(() => {
+        void redis.set(lockKey(), id, 'PX', LOCK_TTL_MS).catch(() => undefined)
+        void mirror(run)
+      }, LOCK_RENEW_MS)
+    : null
+  renew?.unref?.()
   void copyAll(run, writer).finally(async () => {
+    if (renew) clearInterval(renew)
     await mirror(run)
     if (redis) {
       try {
@@ -355,8 +413,6 @@ export async function startFilesBackup(body: unknown): Promise<{ run_id: string 
 export async function copyAll(run: Run, writer: Writer): Promise<void> {
   const st = run.status
   const manifest: Array<{ id: string; key: string; size: number }> = []
-  const redis = filesBackupDeps.redis()
-  let lastMirror = 0
   try {
     let after: string | null = null
     for (;;) {
@@ -369,35 +425,34 @@ export async function copyAll(run: Run, writer: Writer): Promise<void> {
         while (i < rows.length) {
           const r = rows[i++]
           const size = r.filesize == null ? null : Number(r.filesize)
-          if (size !== null && size > MAX_OBJECT_BYTES) {
-            st.too_large++
-            continue
-          }
           try {
-            const buf = await filesBackupDeps.read(r.storage, r.filename_disk)
-            if (buf.length > MAX_OBJECT_BYTES) {
-              st.too_large++
-              continue
+            const stream = await filesBackupDeps.open(r.storage, r.filename_disk)
+            let bytes: number
+            if (stream) bytes = await writer.putStream(r.filename_disk, stream)
+            else {
+              if (size === null || size > WHOLE_READ_MAX) {
+                st.too_large++
+                continue
+              }
+              const buf = await filesBackupDeps.read(r.storage, r.filename_disk)
+              if (buf.length > WHOLE_READ_MAX) {
+                st.too_large++
+                continue
+              }
+              await writer.put(r.filename_disk, buf)
+              bytes = buf.length
             }
-            await writer.put(r.filename_disk, buf)
-            manifest.push({ id: String(r.id), key: r.filename_disk, size: buf.length })
+            manifest.push({ id: String(r.id), key: r.filename_disk, size: bytes })
             st.copied++
-            st.bytes += buf.length
+            st.bytes += bytes
           } catch {
             st.failed++
           }
         }
       }
-      await Promise.all(Array.from({ length: filesBackupDeps.concurrency }, worker))
-      if (redis && Date.now() - lastMirror > 2_000) {
-        lastMirror = Date.now()
-        await mirror(run)
-        try {
-          await redis.set(lockKey(), run.id, 'PX', LOCK_TTL_MS)
-        } catch {
-          /* the next page tries again */
-        }
-      }
+      await Promise.all(
+        Array.from({ length: Math.min(2, Math.max(1, filesBackupDeps.concurrency)) }, worker)
+      )
     }
     await writer.put(
       'manifest.json',

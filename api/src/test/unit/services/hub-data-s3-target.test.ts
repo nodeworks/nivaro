@@ -2,8 +2,10 @@ import dns from 'node:dns'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { writerFor } from '../../../services/hub-data-app/files-backup.js'
 import {
+  S3_PART_BYTES,
   s3AllowList,
   s3Location,
+  s3PutStream,
   s3TargetAllowed,
   s3TargetDeps
 } from '../../../services/hub-data-app/s3-target.js'
@@ -130,5 +132,47 @@ describe('HUB_FILES_BACKUP_S3', () => {
     )
     await expect(writer.put('x', Buffer.from('x'))).rejects.toThrow(/private|reserved/i)
     expect(lookup).toHaveBeenCalled()
+  })
+
+  it('streams a large object in parts (never whole), and aborts the upload when a part fails', async () => {
+    const calls: Array<{ method: string; url: string; bytes: number }> = []
+    let failPart = 0
+    s3TargetDeps.fetch = async (url, init) => {
+      const body = init.body as Uint8Array | undefined
+      calls.push({ method: String(init.method), url, bytes: body?.byteLength ?? 0 })
+      const u = new URL(url)
+      if (init.method === 'POST' && u.searchParams.has('uploads'))
+        return new Response(
+          '<InitiateMultipartUploadResult><UploadId>U1</UploadId></InitiateMultipartUploadResult>'
+        )
+      if (init.method === 'PUT' && u.searchParams.has('partNumber')) {
+        if (Number(u.searchParams.get('partNumber')) === failPart)
+          return new Response('', { status: 500 })
+        return new Response('', { headers: { etag: `"e${u.searchParams.get('partNumber')}"` } })
+      }
+      return new Response('', { status: 200 })
+    }
+    const t = {
+      bucket: 'bkt',
+      prefix: '',
+      region: 'us-east-1',
+      endpoint: 'https://minio.example.com'
+    }
+    const src = function* () {
+      for (let i = 0; i < 20; i++) yield Buffer.alloc(1024 * 1024, i)
+    }
+    expect(await s3PutStream(t, creds, 'k/big.bin', src())).toBe(20 * 1024 * 1024)
+    const parts = calls.filter((c) => c.method === 'PUT')
+    expect(parts.length).toBe(3)
+    expect(Math.max(...parts.map((p) => p.bytes))).toBeLessThanOrEqual(S3_PART_BYTES + 1024 * 1024)
+    expect(calls.at(-1)?.url).toContain('uploadId=U1')
+    calls.length = 0
+    failPart = 2
+    await expect(s3PutStream(t, creds, 'k/big.bin', src())).rejects.toThrow(/part 2/)
+    expect(calls.some((c) => c.method === 'DELETE' && c.url.includes('uploadId=U1'))).toBe(true)
+    // small objects stay one PUT
+    calls.length = 0
+    expect(await s3PutStream(t, creds, 'k/s.txt', [Buffer.from('hi')])).toBe(2)
+    expect(calls.map((c) => c.method)).toEqual(['PUT'])
   })
 })

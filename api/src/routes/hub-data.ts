@@ -12,6 +12,7 @@ import {
 import { startRestoreDrill } from '../services/hub/data/drill.js'
 import { envData, serverAccessOf } from '../services/hub/data/env-db.js'
 import { startFilesBackup } from '../services/hub/data/files-backup.js'
+import { GATE_WARNING, readGate, saveGate } from '../services/hub/data/gate.js'
 import {
   publicPolicy,
   readPolicy,
@@ -19,8 +20,12 @@ import {
   validatePolicy
 } from '../services/hub/data/policy.js'
 import {
+  abandonConfirm,
+  abandonRun,
+  newestRefreshRun,
   planRefresh,
   resumeRefresh,
+  resumeRefreshRollback,
   rollbackRefusal,
   startRefresh,
   startRefreshRollback
@@ -152,16 +157,18 @@ export function hubDataRoutes(app: FastifyInstance) {
         : []
       ).map((r) => [
         Number(r.environment_id),
-        { status: String(r.status), at: r.started_at ? new Date(String(r.started_at)).toISOString() : null }
+        {
+          status: String(r.status),
+          at: r.started_at ? new Date(String(r.started_at)).toISOString() : null
+        }
       ])
     )
     const open = new Map(
-      ((await db(RUNS)
-        .whereIn('status', ['running', 'waiting', 'interrupted'])
-        .select('environment_id', 'kind', 'status')) as Record<string, unknown>[]).map((r) => [
-        Number(r.environment_id),
-        { kind: String(r.kind), status: String(r.status) }
-      ])
+      (
+        (await db(RUNS)
+          .whereIn('status', ['running', 'waiting', 'interrupted'])
+          .select('environment_id', 'kind', 'status')) as Record<string, unknown>[]
+      ).map((r) => [Number(r.environment_id), { kind: String(r.kind), status: String(r.status) }])
     )
     const on = (v: unknown) => v === true || Number(v) === 1
     return {
@@ -204,9 +211,18 @@ export function hubDataRoutes(app: FastifyInstance) {
         listShared().catch(() => [])
       ])
       const refresh = latest.refresh ?? null
+      const newest = await newestRefreshRun(envId)
+      const gate = await readGate()
+      const pinned = (refresh?.plan as { target?: { database?: unknown } } | null)?.target?.database
       return {
         data: {
-          environment: { ...d.env, production: d.production },
+          environment: {
+            ...d.env,
+            production: d.production,
+            production_reasons: d.production_reasons
+          },
+          gate,
+          gate_warning: GATE_WARNING,
           app: d.app,
           database: d.database,
           server: d.server
@@ -221,12 +237,16 @@ export function hubDataRoutes(app: FastifyInstance) {
           policy: publicPolicy(policy),
           last_seen: seen,
           checklist: backupChecklist(d, policy),
-          latest,
+          latest: Object.fromEntries(
+            Object.entries(latest).map(([k, r]) => [k, r ? { ...r, plan: null } : r])
+          ),
           refresh_rollback: refresh
             ? {
                 run_id: refresh.id,
-                refusal: rollbackRefusal(refresh),
-                expires_at: refresh.expires_at
+                refusal: rollbackRefusal(refresh, new Date(), newest),
+                expires_at: refresh.expires_at,
+                // The rollback confirm names the database the refresh replaced (pinned at plan).
+                database: typeof pinned === 'string' ? pinned : null
               }
             : null,
           refresh_sources: d.siblings
@@ -322,7 +342,10 @@ export function hubDataRoutes(app: FastifyInstance) {
         .split(',')
         .filter((k): k is DataRunKind => (DATA_RUN_KINDS as readonly string[]).includes(k))
       return {
-        data: await listRuns({ environmentId: envId, kinds, limit: Number(req.query.limit) || 50 })
+        // The plan stays out of the list; each run says what to type to abandon it.
+        data: (
+          await listRuns({ environmentId: envId, kinds, limit: Number(req.query.limit) || 50 })
+        ).map((r) => ({ ...r, plan: null, abandon_confirm: abandonConfirm(r) }))
       }
     }
   )
@@ -340,12 +363,13 @@ export function hubDataRoutes(app: FastifyInstance) {
     return guarded(reply, async () => {
       const run = await readRun(id)
       if (!run) throw new DataError('NOT_FOUND', 'No such run.', 404)
-      if (run.kind !== 'refresh')
+      if (run.kind === 'refresh') await resumeRefresh(id)
+      else if (run.kind === 'refresh_rollback') await resumeRefreshRollback(id)
+      else
         throw new DataError(
           'NOT_RESUMABLE',
-          'Only a refresh can be resumed; start a new run instead.'
+          'Only a refresh or a rollback can be resumed; start a new run instead.'
         )
-      await resumeRefresh(id)
       await logRun(req, 'resume', id, run.environment_id)
       return reply.code(202).send({ data: { run_id: id } })
     })
@@ -361,6 +385,80 @@ export function hubDataRoutes(app: FastifyInstance) {
       return reply.code(202).send({ data: { run_id: runId } })
     })
   })
+
+  // An interrupted run (or a failed refresh) an administrator gives up on (typed confirm).
+  app.post<{ Params: { id: string } }>('/data/runs/:id/abandon', admin, async (req, reply) => {
+    const id = idParam(req.params.id)
+    if (!id) return refuse(reply, 404, 'NOT_FOUND', 'No such run.')
+    return guarded(reply, async () => {
+      const run = await abandonRun(id, body(req).confirm)
+      await logRun(req, 'abandon', id, run.environment_id)
+      return { data: run }
+    })
+  })
+
+  // The switches: refreshes, drills and rehearsals are off until an administrator turns them on.
+  app.get('/data/switches', admin, async () => ({
+    data: { ...(await readGate()), warning: GATE_WARNING }
+  }))
+  app.put('/data/switches', admin, async (req, reply) =>
+    guarded(reply, async () => {
+      const b = body(req)
+      const saved = await saveGate(b, userId(req))
+      await logActivity({
+        action: 'update',
+        user: userId(req),
+        collection: 'nivaro_extension_settings',
+        item: 'nivaro-core:hub_data_care',
+        comment: JSON.stringify(saved),
+        req,
+        changed_fields: Object.keys(b)
+      })
+      return { data: { ...saved, warning: GATE_WARNING } }
+    })
+  )
+
+  // Opt an environment in (or out) as a refresh target: typed confirm `<app>/<env>`; refused for
+  // anything that counts as production.
+  app.put<{ Params: { envId: string } }>(
+    '/environments/:envId/data/refresh-target',
+    admin,
+    async (req, reply) => {
+      const envId = idParam(req.params.envId)
+      if (!envId) return refuse(reply, 404, 'NOT_FOUND', 'No such environment.')
+      return guarded(reply, async () => {
+        const d = await envData(envId)
+        const b = body(req)
+        if (typeof b.on !== 'boolean')
+          throw new DataError('BAD_POLICY', 'on must be true or false.', 400)
+        const want = `${d.app.key}/${d.env.key}`
+        if (b.on && (typeof b.confirm !== 'string' || b.confirm.trim() !== want))
+          throw new DataError(
+            'CONFIRM_MISMATCH',
+            `Type ${want} to let refreshes write over it.`,
+            400
+          )
+        if (b.on && d.production_reasons.length)
+          throw new DataError(
+            'PRODUCTION_TARGET',
+            `${d.env.key} counts as production (${d.production_reasons.join('; ')}): it can never be a refresh target.`
+          )
+        await db('nivaro_hub_environments')
+          .where({ id: envId })
+          .update({ refresh_target: b.on, updated_at: new Date() })
+        await logActivity({
+          action: 'update',
+          user: userId(req),
+          collection: 'nivaro_hub_environments',
+          item: String(envId),
+          comment: b.on ? 'refresh target: on' : 'refresh target: off',
+          req,
+          changed_fields: ['refresh_target']
+        })
+        return { data: { refresh_target: b.on } }
+      })
+    }
+  )
 
   if (app.cron) {
     app.cron.schedule(
