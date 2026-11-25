@@ -155,7 +155,7 @@ export const hubSharedDocs: DocSection = {
     { type: 'h2', id: 'hub-shared-pool', text: 'Pool budget' },
     {
       type: 'p',
-      text: 'Each placement on a shared deployment carries a pool size (2 to 20 connections for a shared placement, default 5: one connection holds the migration lock while another migrates, and fewer than 2 is refused with `POOL_TOO_SMALL`). The deployment has a pool budget (default 60, range 1 to 500). A placement that would take the sum of pool sizes over the budget is refused with `POOL_BUDGET`. The budget is per process: with three replicas the database sees up to three times the sizes. Per-process fairness for the heavy-read slots between apps is not built; the budget only caps connections.'
+      text: 'Each placement on a shared deployment carries a pool size (2 to 20 connections for a shared placement, default 5: one connection holds the migration lock while another migrates, and fewer than 2 is refused with `POOL_TOO_SMALL`). The deployment has a pool budget (default 60, range 1 to 500). A placement that would take the sum of pool sizes over the budget is refused with `POOL_BUDGET`. The budget is per process: with three replicas the database sees up to three times the sizes. Inside a process the apps also share the heavy-read slots fairly (see Per app on a shared deployment).'
     },
     { type: 'h2', id: 'hub-shared-migrations', text: 'Per-app migrations and the not-ready page' },
     {
@@ -433,24 +433,12 @@ export const hubSharedDocs: DocSection = {
           'Off on shared: it needs a deployment-wide watcher.',
           '-'
         ],
-        [
-          'Traffic digest section and the Traffic Map page',
-          'Off on shared. The daily digest keeps its other sections.',
-          '-'
-        ],
         ['Huddle relay (TURN)', 'Off on shared, as in cloud.', 'warning `HUDDLE_TURN`'],
         [
           'Help-video renders queued before a restart',
           'They render again on the next publish.',
           'warning `HELP_VIDEO_RENDERS`'
         ],
-        [
-          'Deployment-wide process jobs (pool monitor, socket sample)',
-          'No deployment store yet. The figures are live on the deployment link status.',
-          '-'
-        ],
-        ['Config epochs per app', 'The metadata cache expires on its own TTL, as in cloud.', '-'],
-        ['Per-process heavy-read slots per app', 'Only the pool budget caps connections.', '-'],
         [
           'Creating a new app on a Docker target (`nivaro_hub_targets` has the GitLab kind only)',
           'A later phase. Place a new environment, or move an existing one.',
@@ -478,11 +466,15 @@ export const hubSharedDocs: DocSection = {
       items: [
         'Staged file imports (upload and drainer). Rows load with inserts: the bulk loader (`IMPORT_LOADER=bulk`, SMB share) is not available on shared, so a `bulk` loader falls back to inserts with a note and a `bulk_only` import fails saying so. Each app keeps its own queue, attempts and leases.',
         'Row schedules (scheduled reports, retention policies, scheduled audit and activity views, sync jobs, scheduled flows). An edit reaches every replica, and a 5-minute `row-schedules-resync` job per app is the backstop. An app that leaves the deployment loses its jobs.',
-        'Automatic mail retry (`MAIL_RETRY=off` still turns it off for the whole deployment), live SLA status changes, the cumulative-flow rollup and the weekly AI summary in the daily digest. The traffic digest section stays off.',
+        'Automatic mail retry (`MAIL_RETRY=off` still turns it off for the whole deployment), live SLA status changes, the cumulative-flow rollup and the weekly AI summary in the daily digest.',
         'The daily retention pass (03:30, one job per app) and the boot passes (owner-group warm, integrity checks, cache warms, readiness warm, db-tuning sweep). They run once per app when it becomes ready. Retention status shows per app. Stale help-video import folders are swept once a day per process (deployment-wide, not per app).',
         'Microsoft directory lookups and sync. The app uses its own Microsoft app registration, saved in Settings → Microsoft directory (tenant id, client id, client secret; the secret is sealed with the app key). The server `GRAPH_*` and `OIDC_*` variables and the directory keys of `NIVARO_SETTINGS_OVERRIDES` are never used on shared.',
         "The Teams bot. The app uses only the bot saved in its own Settings. `TEAMS_BOT_*`, `MICROSOFT_APP_*`, the sign-in app fallback and the `teams_bot_*` override keys are ignored. `TEAMS_BOT=off` still disables the bot on the whole deployment, but `TEAMS_BOT=on` does not switch an app on: each app saves its own switch. Register each bot with that app's host as its messaging endpoint.",
-        "Phone push. An app admin connects the app's push relay in Settings → Mobile app. The server `MOBILE_PUSH_RELAY_KEY` is not used on shared. Phone sign-in was already per app."
+        "Phone push. An app admin connects the app's push relay in Settings → Mobile app. The server `MOBILE_PUSH_RELAY_KEY` is not used on shared. Phone sign-in was already per app.",
+        "The Traffic Map, for the app's administrators: the map, its live frames, the inspector and the traffic section of the daily summary show only that app's requests, callers, partners, sockets and people, read from the app's own store and its own request log. The parts that read the process as a whole stay with the operator, as in Nivaro Cloud: minute history and baselines, the investigation and request-trace lenses, database, Redis, node and capacity panels, circuit breakers and timed actions. They answer 404 inside an app.",
+        "Configuration changes reach every replica at once. A configuration write in an app (fields, relations, layouts, roles, rules, pipelines and the other configuration tables) is announced on the deployment's Redis (`<REDIS_CHANNEL_PREFIX>nvr:app-config`, the app id and the process only) as soon as it starts and again 2 seconds after the last write of the run; every other process clears its caches for that app only. A bust from Database → Caches is announced the same way. `CACHE_EPOCH=off` turns it off; without Redis the caches expire on their TTL. The database's own configuration number (`nivaro_cache_epochs`) stays off on a shared deployment.",
+        "Heavy reads share the process fairly. The apps of one process share its heavy-read budget (`HEAVY_READ_CONCURRENCY`). One app holds at most `HEAVY_READ_PER_APP` slots (default half the budget, at least 1) and never more than its own pool size minus one, and a freed slot goes to the waiting app that holds the fewest. So one busy app cannot take every slot, and another app's first heavy read waits for at most one release.",
+        "Pool and socket figures. Each app's own pool is judged every 5 minutes (`app-pool-monitor`, the self-hosted pool-monitor rule) and an issue is raised in that app's issue log when it is under pressure; each app's own sockets and people are sampled into its Realtime console chart (`app-concurrency-sample`). The process's own figures (sockets and people across every app, the heavy-read budget in use, every app pool summed; counts only, no app named) are on the deployment link status, for the Hub operator."
       ]
     },
     {

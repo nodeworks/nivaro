@@ -894,7 +894,7 @@ export const obsTrafficMapInvestigate: DocSection = {
         'Traces live in each API process’s memory, 200 at a time (`TRACE_BUFFER`), and only requests slower than `TRACE_SLOW_MS` are kept unless something armed them: Trace on a trace level, Capture next…, or Keep their next 50 traces on a person. A trace kept by another process reads as not found; statement shapes, plans and captures are per process too.',
         'Requests come from the API log, kept 14 days, so a request older than that opens with its facts but no body. AI calls are kept 30 days. Recordings and error clips are kept 7 days, and only exist where session replay is switched on.',
         'Replay needs a stored body, which only token and API-key writes keep; a read can be run again from Copy as curl.',
-        'In cloud mode the investigation routes read process-wide state and are not tenant-aware, so they answer 404 and every level reads as not found. The map and the inspector history still work there.',
+        'In cloud mode and inside an app of a Hub shared deployment the investigation routes read process-wide state and are not tenant-aware, so they answer 404 and every level reads as not found. The map and the inspector history still work there, for that app only; on a shared deployment the daily summary section and its preview do too.',
         'Captured bodies and traces are held in memory only, with credential-like values masked, and dropped when the capture’s time runs out.',
         'Explain this sends the model only what the open levels already loaded; a level you never opened is sent as "not loaded".'
       ]
