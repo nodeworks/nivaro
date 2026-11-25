@@ -15,6 +15,10 @@ import { getApp } from '../io-holder.js'
  *   uptime_down / uptime_up         an environment stopped / started answering
  *   drift                           a stack or pin no longer matches what the Hub recorded
  *
+ * On-call (Hub enhancement 33): an URGENT event for an app with an enabled on-call rota goes to
+ * the person on call first and escalates from there (services/hub/incident/paging.ts); an app
+ * without a rota keeps the fan-out above.
+ *
  * Never throws and never holds the caller: notifyHubEvent is fire-and-forget (`void`).
  * Hub only (hub mode is never multi-tenant), so no tenant context is needed.
  */
@@ -102,9 +106,30 @@ export async function hubEventRecipients(appId: number): Promise<string[]> {
   return out
 }
 
+export interface OnCallPage {
+  appId: number
+  envId: number | null
+  kind: string
+  subject: string
+  message: string
+  path: string
+}
+
 export interface NotifyDeps {
   notify?: (userId: string, opts: Record<string, unknown>) => Promise<unknown>
   adminBase?: () => string
+  /**
+   * The on-call route for an URGENT event (services/hub/incident/paging.ts routeToOnCall):
+   * answers how many people were paged, or null when the app has no on-call rota (then the
+   * event goes to admins + owners as before). Default: that route — except when `notify` is
+   * injected (a test or a one-off sender), which keeps the plain fan-out. null = off.
+   */
+  page?: ((p: OnCallPage) => Promise<number | null>) | null
+}
+
+async function defaultOnCall(p: OnCallPage): Promise<number | null> {
+  const { routeToOnCall } = await import('./incident/paging.js')
+  return routeToOnCall(p)
 }
 
 export interface HubNotice {
@@ -201,13 +226,27 @@ export async function sendHubEvent(e: HubEvent, deps: NotifyDeps = {}): Promise<
             | undefined)
     const text =
       e.text ?? hubEventText(e, { app: String(app.name || app.key), env: env?.key ?? null })
+    const urgent = e.urgent ?? URGENT.has(e.kind)
+    // Urgent: the person on call first, when the app has an on-call rota (Hub enhancement 33).
+    const page = deps.page !== undefined ? deps.page : deps.notify ? null : defaultOnCall
+    if (urgent && page) {
+      const paged = await page({
+        appId: Number(app.id),
+        envId: e.envId ?? null,
+        kind: e.kind,
+        subject: text.subject,
+        message: text.message,
+        path: e.path ?? `/hub?app=${Number(app.id)}`
+      }).catch(() => null)
+      if (paged != null) return paged
+    }
     return await deliverHubNotice(
       await hubEventRecipients(Number(app.id)),
       {
         subject: text.subject,
         message: text.message,
         path: e.path ?? `/hub?app=${Number(app.id)}`,
-        urgent: e.urgent ?? URGENT.has(e.kind),
+        urgent,
         source: { kind: 'hub', label: e.kind, id: e.deployId ?? e.envId ?? appId },
         why: 'You are a Hub administrator or an owner of this app.'
       },

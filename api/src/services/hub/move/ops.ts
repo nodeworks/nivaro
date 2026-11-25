@@ -244,7 +244,7 @@ const DATABASE_JOB_POLL_MS = 5_000
 /**
  * Hub gap sqlite (review 4, N2/N3): follow a database job a link started until it ends, within
  * `limitMs` (longer than the target's own deadline). A failed job throws its own code; reads that
- * fail are tolerated for PULL_STATUS_GIVE_UP_MS. `unknown` = the link no longer knows the job
+ * fail are tried again until that limit. `unknown` = the link no longer knows the job
  * (it restarted): answer `onUnknown()`'s value, or throw UNKNOWN_JOB without it. The run's own
  * heartbeat keeps the move alive meanwhile.
  */
@@ -263,7 +263,6 @@ export async function followDatabaseJob<T>(
 ): Promise<T> {
   const by = o.now() + o.limitMs
   let job: DatabaseJobStatus | null = started
-  let lastRead = o.now()
   for (;;) {
     if (job?.state === 'done') {
       const r = parse(job.result)
@@ -284,7 +283,6 @@ export async function followDatabaseJob<T>(
     const id: string = job?.id ?? started.id
     try {
       const next = await read(id)
-      lastRead = o.now()
       if (next === null) {
         const alt = o.onUnknown ? await o.onUnknown() : null
         if (alt !== null) return alt
@@ -297,8 +295,9 @@ export async function followDatabaseJob<T>(
       job = next
     } catch (err) {
       if (err instanceof MoveStepError) throw err
-      if (o.now() - lastRead >= PULL_STATUS_GIVE_UP_MS)
-        throw databaseStepError(err, `${o.what}: it could not be followed`)
+      // Review 5 L1: a read that failed (a proxy's 404 or 5xx, the link restarting) is tried
+      // again until the follow's own limit.
+      if (o.now() >= by) throw databaseStepError(err, `${o.what}: it could not be followed`)
     }
   }
 }
@@ -956,6 +955,34 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
 
   // ── the ops ──────────────────────────────────────────────────────────────────────────────
 
+  /** Hub gap sqlite: the source database's checksum now (frozen again first; a job, followed). */
+  const sourceSumNow = async (l: Loaded): Promise<string> => {
+    const what = "The source database's checksum could not be read"
+    const follow = { sleep, now, limitMs: DATABASE_SUM_TIMEOUT_MS, what }
+    try {
+      if (l.from.kind === 'shared') {
+        const dc = dbClient(clientFor(l.from.shared))
+        const started = await dc.databaseSum(l.tenantId)
+        return (
+          await followDatabaseJob(
+            started,
+            (id) => dc.databaseJob(l.tenantId, id),
+            parseDatabaseSum,
+            follow
+          )
+        ).sha256
+      }
+      const link = dbLink(await sourceLink())
+      const started = await link.databaseSum()
+      return (
+        await followDatabaseJob(started, (id) => link.databaseJob(id), parseDatabaseSum, follow)
+      ).sha256
+    } catch (err) {
+      if (err instanceof MoveStepError) throw err
+      throw databaseStepError(err, what)
+    }
+  }
+
   const ops: MoveOps = {
     async sourceMaintenance(on) {
       const l = await load()
@@ -1085,17 +1112,59 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
             .catch((err) => {
               throw databaseStepError(err, 'The database was not copied')
             })
-          const c = await followDatabaseJob<DatabaseCopied>(
-            started,
-            (id) => dc.databaseJob(l.tenantId, id),
-            parseDatabaseCopied,
-            {
+          // Review 5 M1: a deployment that restarted no longer knows the job. Whether the copy is
+          // in place is read from the target's file itself: its checksum equals the frozen
+          // source's = the copy (the step records it, so a rollback can discard it); anything else
+          // = no copy here (the step fails and nothing is discarded).
+          const copiedByChecksum = async (): Promise<DatabaseCopied | null> => {
+            const sumFollow = {
               sleep,
               now,
-              limitMs: DATABASE_COPY_TIMEOUT_MS,
-              what: 'The database was not copied'
+              limitMs: DATABASE_SUM_TIMEOUT_MS,
+              what: "The target database's checksum could not be read"
             }
-          )
+            let target: { sha256: string; bytes: number }
+            try {
+              target = await followDatabaseJob(
+                await dc.databaseSum(l.tenantId),
+                (id) => dc.databaseJob(l.tenantId, id),
+                parseDatabaseSum,
+                sumFollow
+              )
+            } catch {
+              throw new MoveStepError(
+                'UNKNOWN_JOB',
+                'The target no longer knows the database copy, and holds no copy of it.'
+              )
+            }
+            const src = await sourceSumNow(l)
+            if (src !== target.sha256)
+              throw new MoveStepError(
+                'UNKNOWN_JOB',
+                'The target no longer knows the database copy, and its file is not the source’s.'
+              )
+            log('database: the target restarted; its file is the source’s copy (checksum)')
+            return { sha256: target.sha256, bytes: target.bytes, migrations: 0 }
+          }
+          let c: DatabaseCopied
+          try {
+            c = await followDatabaseJob<DatabaseCopied>(
+              started,
+              (id) => dc.databaseJob(l.tenantId, id),
+              parseDatabaseCopied,
+              {
+                sleep,
+                now,
+                limitMs: DATABASE_COPY_TIMEOUT_MS,
+                what: 'The database was not copied',
+                onUnknown: copiedByChecksum
+              }
+            )
+          } catch (err) {
+            // M1: the Hub gave up — the target aborts the pull and never puts it in place.
+            await dc.cancelDatabaseJob?.(l.tenantId, started.id).catch(() => null)
+            throw err
+          }
           log(
             `database: ${c.bytes} bytes copied, checksum and integrity checked, ${c.migrations} migrations in its ledger`
           )
@@ -1110,20 +1179,40 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
             throw databaseStepError(err, 'The database was not copied')
           })
         const readJob = async (id: string) => dbLink(await targetLink()).databaseJob(id)
+        /** Review 5 L6: a boot that refused this move's staged copy fails the step at once. */
+        const refusedAtBoot = async (): Promise<void> => {
+          const tl = await targetLink()
+          const r = await tl.databaseAdoptRefused?.().catch(() => null)
+          if (r && r.move_id === move.id)
+            throw new MoveStepError(
+              r.code,
+              `The target refused the database copy at its restart (${r.code}).`
+            )
+        }
         // A target that restarted before its end was read: what it adopted at boot answers.
         const adoptedNow = async (): Promise<DatabaseCopied | null> => {
+          await refusedAtBoot()
           const a = await dbLink(await targetLink())
             .databaseAdopted()
             .catch(() => null)
           return a && a.move_id === move.id ? { sha256: a.sha256, bytes: 0, migrations: 0 } : null
         }
-        const c = await followDatabaseJob<DatabaseCopied>(started, readJob, parseDatabaseCopied, {
-          sleep,
-          now,
-          limitMs: DATABASE_COPY_TIMEOUT_MS,
-          what: 'The database was not copied',
-          onUnknown: adoptedNow
-        })
+        let c: DatabaseCopied
+        try {
+          c = await followDatabaseJob<DatabaseCopied>(started, readJob, parseDatabaseCopied, {
+            sleep,
+            now,
+            limitMs: DATABASE_COPY_TIMEOUT_MS,
+            what: 'The database was not copied',
+            onUnknown: adoptedNow
+          })
+        } catch (err) {
+          // M1: the Hub gave up — the target aborts the pull and stages nothing.
+          await (await targetLink().catch(() => null))
+            ?.cancelDatabaseJob?.(started.id)
+            .catch(() => null)
+          throw err
+        }
         log(
           c.bytes
             ? `database: ${c.bytes} bytes copied and checked; the target restarts to put it in place`
@@ -1134,12 +1223,14 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
         for (;;) {
           await sleep(POLL_MS)
           try {
+            await refusedAtBoot()
             const a = await dbLink(await targetLink()).databaseAdopted()
             if (a && a.sha256 === c.sha256 && a.move_id === move.id) {
               log('database: the target put the copy in place at its restart')
               return c
             }
-          } catch {
+          } catch (err) {
+            if (err instanceof MoveStepError) throw err
             // restarting
           }
           if (now() >= by)
@@ -1162,31 +1253,7 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
     },
 
     async sourceDatabaseSum() {
-      const l = await load()
-      const what = "The source database's checksum could not be read"
-      const follow = { sleep, now, limitMs: DATABASE_SUM_TIMEOUT_MS, what }
-      try {
-        if (l.from.kind === 'shared') {
-          const dc = dbClient(clientFor(l.from.shared))
-          const started = await dc.databaseSum(l.tenantId)
-          return (
-            await followDatabaseJob(
-              started,
-              (id) => dc.databaseJob(l.tenantId, id),
-              parseDatabaseSum,
-              follow
-            )
-          ).sha256
-        }
-        const link = dbLink(await sourceLink())
-        const started = await link.databaseSum()
-        return (
-          await followDatabaseJob(started, (id) => link.databaseJob(id), parseDatabaseSum, follow)
-        ).sha256
-      } catch (err) {
-        if (err instanceof MoveStepError) throw err
-        throw databaseStepError(err, what)
-      }
+      return sourceSumNow(await load())
     },
 
     async pullFiles(mode) {

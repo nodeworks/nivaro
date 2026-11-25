@@ -324,7 +324,9 @@ size small: one `all` service; a process with `NIVARO_ROLE` set drops SQLite app
   it in place (a shared app: pool closed and reopened; a Docker app: staged, installed at the next
   boot after taking the file lock). The pull and the release checksum are start-then-poll jobs
   (`services/hub-transfer/database-jobs.ts`): the target ends a pull at 25 minutes and removes its
-  copy (`SQLITE_COPY_DEADLINE`), the Hub waits 30. Copies in flight reserve their bytes per volume
+  copy (`SQLITE_COPY_DEADLINE`), the Hub waits 30 and cancels a copy it gave up on
+  (`DELETE …/database/jobs/:job`); the shared pull opens no pool before the install and re-reads
+  the list right before it (`TARGET_LEFT`). Copies in flight reserve their bytes per volume
   before the free-space check. Automatic routing only, onto a small shared deployment (0.3.215+)
   or a small Docker stack.
 
