@@ -1855,7 +1855,7 @@ export const hubCreateDocs: DocSection = {
       type: 'p',
       text: 'Plan (a read that writes nothing) shows, per environment, the hostname, base URL, the ticket text for a manual name, the redirect URI, the branch, the swarm stack name (`<app>--<env>`, shortened with a hash past 40 characters), the database and, for a DBA, the checklist, and lists every problem at once. Create plans again inside a lock that only one creation at a time holds, so two creations never take the same key, hostname or stack name. It writes the app, owners, environments, database records and one creation per environment in one transaction, and answers 202.'
     },
-    { type: 'h2', id: 'hub-create-steps', text: 'The eight steps' },
+    { type: 'h2', id: 'hub-create-steps', text: 'The steps' },
     {
       type: 'p',
       text: "Each environment is walked through the same steps in the background, in position order. Every step can be repeated safely, so Retry starts again at the first unfinished step and never plans again. A creation holds the environment's promotion lock, so a promotion and a creation never run on one environment together."
@@ -1889,6 +1889,10 @@ export const hubCreateDocs: DocSection = {
         [
           '`admin`',
           'Asks the app, over the Hub link, to make the first administrator (up to 20 tries 15 seconds apart for "not ready yet" answers).'
+        ],
+        [
+          '`template`',
+          'Installs the template picked on Create app (an App Blueprint from the Templates tab) over the Hub link; with none picked it is done at once. See App templates.'
         ]
       ]
     },
