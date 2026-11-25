@@ -1,4 +1,5 @@
-import { isMultiTenant } from './deployment-mode.js'
+import { assertSafeUrl, type SafeFetchInit, safeFetch } from '../lib/ssrf.js'
+import { isMultiTenant, isNivaroCloud, perAppJobs } from './deployment-mode.js'
 
 /**
  * Where the API itself connects for huddles (security review 2026-10-21, finding 3): the
@@ -15,6 +16,13 @@ import { isMultiTenant } from './deployment-mode.js'
  * platform — HUDDLE_LIVEKIT_URL, HUDDLE_TURN_URLS, HUDDLE_STUN_URLS (comma lists) — whatever a
  * tenant saved is ignored, a save that tries to change them is refused, and with nothing set by
  * the platform the probes answer 404 and no RoomService call is made.
+ *
+ * A Hub shared deployment (0.3.215) is run by one operator for their own apps, so each app uses
+ * the media servers it saved itself, as self-hosted (the platform HUDDLE_* variables stay Nivaro
+ * Cloud's). What the deployment's own process dials stays guarded there: a LiveKit address goes
+ * through the SSRF guard (safeFetch, SSRF_ALLOW_HOSTS honoured), the TURN/STUN probe refuses a
+ * private address the operator has not allowed (iceProbeRefusal), and `ws://` to this computer
+ * is refused on any multi-tenant process.
  */
 
 type Env = Record<string, string | undefined>
@@ -23,15 +31,18 @@ const ICE_URL_RE = /^(stuns?|turns?):[^\s@/]+$/i
 const LOOPBACK_RE = /^(localhost|127(?:\.\d{1,3}){3}|\[::1\])$/i
 const MAX_URLS = 8
 
+/** The platform supplies the media servers: Nivaro Cloud only (a shared deployment uses each
+ *  app's own saved ones). */
 export function huddleCloudMode(env: Env = process.env): boolean {
-  return isMultiTenant(env)
+  return isNivaroCloud(env)
 }
 
 /**
  * A LiveKit address the API may call: `wss://host[:port][/path]`, or `ws://` to this computer
- * outside cloud mode; no user name or password, no query or fragment. Returns it trimmed, or null.
+ * on a single-app process only (`strict` = any multi-tenant process); no user name or password,
+ * no query or fragment. Returns it trimmed, or null.
  */
-export function validLiveKitUrl(raw: unknown, cloud = huddleCloudMode()): string | null {
+export function validLiveKitUrl(raw: unknown, strict = isMultiTenant()): string | null {
   if (typeof raw !== 'string') return null
   const s = raw.trim()
   if (!s || s.length > 300 || /\s/.test(s)) return null
@@ -43,7 +54,7 @@ export function validLiveKitUrl(raw: unknown, cloud = huddleCloudMode()): string
   }
   if (!u.hostname || u.username || u.password || u.search || u.hash) return null
   if (u.protocol === 'wss:') return s
-  if (u.protocol === 'ws:' && !cloud && LOOPBACK_RE.test(u.hostname)) return s
+  if (u.protocol === 'ws:' && !strict && LOOPBACK_RE.test(u.hostname)) return s
   return null
 }
 
@@ -91,12 +102,52 @@ export function withPlatformDestinations<T extends HuddleDestinations>(
   return { ...s, ...platformDestinations(env) }
 }
 
-/** May the API call this LiveKit server? Outside cloud mode any valid address; inside, the platform's only. */
+/** May the API call this LiveKit server? Outside cloud mode any valid address (the SSRF guard
+ *  still applies on a shared deployment: huddleFetch); inside, the platform's only. */
 export function sfuDestinationAllowed(url: string | null, env: Env = process.env): boolean {
   if (!url) return false
   const cloud = huddleCloudMode(env)
-  if (!validLiveKitUrl(url, cloud)) return false
+  if (!validLiveKitUrl(url, isMultiTenant(env))) return false
   return !cloud || url.trim() === platformDestinations(env).livekit_url
+}
+
+/**
+ * The fetch the API's own LiveKit calls use: through the SSRF guard on a Hub shared deployment
+ * (an app admin's address must not reach the operator's private network unless SSRF_ALLOW_HOSTS
+ * lets it), plain fetch elsewhere (self-hosted: the admin is the operator; Nivaro Cloud: only the
+ * platform's own server, which may be internal).
+ */
+export const huddleFetch: typeof fetch = async (input, init) => {
+  if (!perAppJobs()) return fetch(input, init)
+  const url = input instanceof Request ? input.url : String(input)
+  return safeFetch(url, { ...(init ?? {}), redirect: 'manual' } as SafeFetchInit)
+}
+
+/** `turn:host:port?…` → host (brackets kept off an IPv6 literal); null when unreadable. */
+function iceHost(url: string): string | null {
+  const m = /^(?:stuns?|turns?):(\[[^\]]+\]|[^:?]+)/i.exec(url.trim())
+  return m ? m[1].replace(/^\[|\]$/g, '') : null
+}
+
+/**
+ * Hub shared deployment: why the TURN/STUN probe must not dial these addresses (a private or
+ * reserved address the operator has not allowed with SSRF_ALLOW_HOSTS), or null. The probe runs
+ * on the deployment's own process; anywhere else it is null (self-hosted: the admin is the
+ * operator; Nivaro Cloud: only the platform's servers are ever probed).
+ */
+export async function iceProbeRefusal(urls: string[]): Promise<string | null> {
+  if (!perAppJobs()) return null
+  for (const url of urls) {
+    const host = iceHost(url)
+    if (!host) return 'A STUN or TURN address could not be read.'
+    const shown = host.includes(':') ? `[${host}]` : host
+    try {
+      await assertSafeUrl(`https://${shown}/`)
+    } catch {
+      return `${url} is a private or reserved address. Ask the operator to allow it (SSRF_ALLOW_HOSTS) before it can be tested from this server; browsers still use it.`
+    }
+  }
+  return null
 }
 
 /** Cloud mode: may the TURN probe run at all (the platform set a STUN or TURN server)? */
@@ -131,7 +182,7 @@ export function destinationPatchError(patch: unknown, env: Env = process.env): s
     return changed ? 'Media servers are set by the platform on this instance.' : null
   }
   const livekit = typeof p.livekit_url === 'string' ? p.livekit_url.trim() : ''
-  if (livekit && !validLiveKitUrl(livekit, false)) {
+  if (livekit && !validLiveKitUrl(livekit, isMultiTenant(env))) {
     return 'The media server address must start with wss:// (ws:// only to this computer) and carry no user name or password.'
   }
   for (const u of [...listOf(p.turn_urls), ...listOf(p.stun_urls)]) {

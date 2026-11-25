@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { getHuddleSettings, type HuddleSettings, iceServersFrom } from './huddle-settings.js'
 import { type ProbeResult, probeIceServers } from './huddle-turn-probe.js'
 import { noteIssueWrite } from './issue-raise.js'
+import { appKeyPart } from './tenancy/credential-binding.js'
 
 /**
  * Continuous coturn monitoring (#2850). The `huddle-turn-probe` cron (every 5 minutes, only
@@ -16,8 +17,10 @@ import { noteIssueWrite } from './issue-raise.js'
 export const PROBE_FAILURES_TO_RAISE = 3
 /** One sample every 5 minutes: a day of history. */
 const HISTORY_MAX = 288
-const KEY_HISTORY = 'nvr:huddle:probe:history'
-const KEY_STATE = 'nvr:huddle:probe:state'
+// Per app on a Hub shared deployment, where each app probes its own servers (appKeyPart(): ''
+// elsewhere, keys unchanged).
+const keyHistory = () => `nvr:huddle:probe:${appKeyPart()}history`
+const keyState = () => `nvr:huddle:probe:${appKeyPart()}state`
 const ISSUE_FINGERPRINT = createHash('sha256').update('huddle-turn-probe').digest('hex')
 
 export interface ProbeSample {
@@ -43,7 +46,7 @@ interface ProbeState {
 
 async function readState(redis: ProbeRedis): Promise<ProbeState> {
   try {
-    const raw = await redis.get(KEY_STATE)
+    const raw = await redis.get(keyState())
     const s = raw ? (JSON.parse(raw) as Partial<ProbeState>) : {}
     return { failures: Number(s.failures) || 0, issue_id: s.issue_id ?? null }
   } catch {
@@ -52,7 +55,7 @@ async function readState(redis: ProbeRedis): Promise<ProbeState> {
 }
 
 async function writeState(redis: ProbeRedis, s: ProbeState): Promise<void> {
-  await redis.set(KEY_STATE, JSON.stringify(s), 'EX', 7 * 24 * 3600)
+  await redis.set(keyState(), JSON.stringify(s), 'EX', 7 * 24 * 3600)
 }
 
 /** Does this configuration give the probe anything to test? */
@@ -140,8 +143,8 @@ export async function runHuddleProbe(
   const servers = iceServersFrom({ ...s, turn_ttl_s: 120 }, 'huddle-probe')
   const results = await (deps.probe ?? probeIceServers)(servers)
   const sample = sampleOf(results, deps.now?.())
-  await deps.redis.lpush(KEY_HISTORY, JSON.stringify(sample))
-  await deps.redis.ltrim(KEY_HISTORY, 0, HISTORY_MAX - 1)
+  await deps.redis.lpush(keyHistory(), JSON.stringify(sample))
+  await deps.redis.ltrim(keyHistory(), 0, HISTORY_MAX - 1)
   const state = await readState(deps.redis)
   // A run with only STUN urls counts as healthy only if those answer; TURN is what we raise on.
   const turnFailed = sample.results.some((r) => r.kind === 'turn' && !r.ok)
@@ -179,7 +182,7 @@ export async function huddleProbeStatus(
   s?: HuddleSettings
 ): Promise<ProbeStatus> {
   const settings = s ?? (await getHuddleSettings())
-  const raw = await redis.lrange(KEY_HISTORY, 0, HISTORY_MAX - 1).catch(() => [] as string[])
+  const raw = await redis.lrange(keyHistory(), 0, HISTORY_MAX - 1).catch(() => [] as string[])
   const samples: ProbeSample[] = []
   for (const r of raw) {
     try {
