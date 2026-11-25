@@ -1542,11 +1542,15 @@ describe('one stack, one Redis database (REDIS_DB_SHARED)', () => {
     expect(JSON.stringify(plan)).not.toContain('pw-a')
     expect(JSON.stringify(plan)).not.toContain('redis-shared-db')
     // Another database number on the same Redis: nothing shared.
-    await Run.setSharedSecrets(id, { REDIS_URL: 'redis://:pw-b@redis-shared-db.example.com:6379/6' })
+    await Run.setSharedSecrets(id, {
+      REDIS_URL: 'redis://:pw-b@redis-shared-db.example.com:6379/6'
+    })
     const ok = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', planDeps())
     expect(codes(ok.blockers)).not.toContain('REDIS_DB_SHARED')
     // A retired deployment holds nothing.
-    await Run.setSharedSecrets(id, { REDIS_URL: 'redis://:pw-b@redis-shared-db.example.com:6379/5' })
+    await Run.setSharedSecrets(id, {
+      REDIS_URL: 'redis://:pw-b@redis-shared-db.example.com:6379/5'
+    })
     await db('nivaro_hub_shared_deployments').where({ id: first }).update({ status: 'retired' })
     const retired = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', planDeps())
     expect(codes(retired.blockers)).not.toContain('REDIS_DB_SHARED')
@@ -1554,7 +1558,7 @@ describe('one stack, one Redis database (REDIS_DB_SHARED)', () => {
 })
 
 describe('REDIS_DB_SHARED: ports and the Hub itself', () => {
-  it('rediss:// without a port is 6379; the Hub\'s own Redis database counts too', async () => {
+  it("rediss:// without a port is 6379; the Hub's own Redis database counts too", async () => {
     const { config } = await import('../../../config.js')
     const first = await newShared({ settings: JSON.stringify({ redis: 'external' }) })
     await Run.setSharedSecrets(first, { REDIS_URL: 'rediss://:a@tls-redis.example.com/7' })
@@ -1700,6 +1704,16 @@ describe('downgrade needs confirm (ruling P6-29, B2)', () => {
     expect(d('0.3', '0.3.211')).toBe(true)
     // Nothing deployed yet: nothing to go down from.
     expect(d(null, '0.3.211')).toBe(false)
+  })
+
+  it('a downgrade or rollback below 0.3.215 says GitLab issue sync stops for every app', () => {
+    const l = Plan.downgradeLosses
+    expect(l('0.3.215', '0.3.214')).toMatch(/GitLab issue sync stops for every app/)
+    expect(l('0.3.216', '0.3.215-rc.1')).toMatch(/GitLab issue sync stops/)
+    expect(l('0.3.216', 'next')).toMatch(/GitLab issue sync stops/) // unreadable: the safe side
+    expect(l('0.3.216', '0.3.215')).toBe('')
+    expect(l('0.3.214', '0.3.213')).toBe('') // never ran it
+    expect(l(null, '0.3.213')).toBe('')
   })
 
   it('an upgrade to an older version → 409 DOWNGRADE_NEEDS_CONFIRM unless downgrade: true', async () => {

@@ -35,6 +35,11 @@ import { objectStorageCounts } from '../hub-transfer/object-counts.js'
  * (services/hub/move/plan.ts SHARED_FEATURES_SINCE). What a shared app must bring itself is
  * warned instead: the server's own Microsoft app registration, Teams bot or push relay key, and
  * any NIVARO_SETTINGS_OVERRIDES key a shared deployment does not apply (SETTINGS_ENV_OVERRIDES).
+ *
+ * GitLab issue sync (0.3.215) runs per app on a shared deployment too: ISSUE_TRACKERS is sent as
+ * a warning now (sync is on, and whether the server's ISSUE_TRACKERS switch is what turns it on,
+ * which a shared deployment does not apply). The Hub still blocks it for a target before 0.3.215
+ * (plan.ts SHARED_TRACKERS_SINCE); an older Hub reads the code as a blocker whatever its level.
  */
 
 export type SharedReadinessCode =
@@ -61,7 +66,6 @@ export type SharedReadinessCode =
 /** Ruling R1 adds ENV_OBJECT_STORAGE: objects under an env-driven S3/Azure provider are never
  *  pulled by a move (only `local` rows), so they would be lost. */
 export const SHARED_READINESS_BLOCKERS: readonly SharedReadinessCode[] = [
-  'ISSUE_TRACKERS',
   'EXEC_SCRIPT_FLOWS',
   'SQLITE',
   'ENV_OBJECT_STORAGE'
@@ -115,11 +119,36 @@ async function countIf(
 
 // ─── Blockers ────────────────────────────────────────────────────────────────────────────
 
+/**
+ * GitLab sync with connections (a warning since 0.3.215; the Hub blocks a target before it). On a
+ * shared deployment the server's ISSUE_TRACKERS is not applied and the app's own stored switch
+ * (under this process's instance key) decides, so the detail says what changes:
+ *   - on only by the server's ISSUE_TRACKERS=on: switch it on again after the move;
+ *   - off only by the server's ISSUE_TRACKERS=off while its own switch is on: sync would START
+ *     after the move and write to the real GitLab projects (review I-2): store its switch off first;
+ *   - on by its own switch under a custom NIVARO_INSTANCE: a target with another instance key
+ *     reads the switch as off (review m-6).
+ */
 async function issueTrackers(): Promise<string | null> {
-  const { trackersEnabled } = await import('../trackers/feature.js')
-  if (!(await trackersEnabled())) return null
+  const { storedTrackersSwitch, trackersFeature } = await import('../trackers/feature.js')
+  const { perAppJobs } = await import('../deployment-mode.js')
+  const f = await trackersFeature()
+  const envDecides = f.source === 'env' && !perAppJobs()
+  const startsAfter = envDecides && !f.enabled && (await storedTrackersSwitch()) === true
+  if (!f.enabled && !startsAfter) return null
   const n = await countIf('nivaro_tracker_connections')
-  return n > 0 ? `GitLab issue sync is on with ${plural(n, 'connection', 'connections')}` : null
+  if (n === 0) return null
+  const conns = plural(n, 'connection', 'connections')
+  if (startsAfter)
+    return `GitLab issue sync is off only by the server's ISSUE_TRACKERS=off and its own switch is on, so on the shared deployment it starts syncing ${conns} to GitLab. Store its switch off first (PUT /api/trackers/feature {"enabled": false} is allowed while the server keeps it off)`
+  const on = `GitLab issue sync is on with ${conns}`
+  if (envDecides)
+    return `${on}, switched on by the server's ISSUE_TRACKERS setting; switch it on again on the Issue trackers tab after the move`
+  const { instanceKey } = await import('../instance-key.js')
+  const key = instanceKey()
+  return !perAppJobs() && key !== 'production'
+    ? `${on}; its switch is stored for instance '${key.slice(0, 40)}', so a deployment with another NIVARO_INSTANCE reads it as off: switch it on again after the move if so`
+    : on
 }
 
 async function execScriptFlows(): Promise<string | null> {

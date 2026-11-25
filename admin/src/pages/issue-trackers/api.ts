@@ -15,6 +15,8 @@ export type FeatureSource = 'env' | 'setting' | 'default' | 'cloud'
 export interface FeatureState {
   enabled: boolean
   source: FeatureSource
+  /** Hub shared deployment: the env `off` is its operator's, for every app on it. */
+  deployment?: boolean
 }
 
 export const SEVERITIES = ['low', 'medium', 'high', 'critical'] as const
@@ -230,6 +232,8 @@ export const fetchPreview = (rule: Record<string, unknown>, days: 7 | 30) =>
 export function featureLockReason(state: FeatureState | undefined): string | null {
   if (!state) return null
   if (state.source === 'cloud') return 'GitLab sync is not available in cloud mode.'
+  if (state.source === 'env' && state.deployment)
+    return 'Turned off for every app on this shared deployment by its operator.'
   if (state.source === 'env')
     return 'Set by the ISSUE_TRACKERS setting on the server. Change it there and restart.'
   return null

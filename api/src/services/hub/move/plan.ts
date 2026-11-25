@@ -429,7 +429,8 @@ function blockersOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Bloc
   // with (an unreadable check is sent as its blocker).
   if (kind === 'to_shared')
     for (const r of readinessFor(input))
-      if (isReadinessBlocker(r.code)) add(r.code, `${readinessTitle(r.code)}: ${clean(r.detail)}`)
+      if (isReadinessBlocker(r.code, input))
+        add(r.code, `${readinessTitle(r.code, input)}: ${clean(r.detail)}`)
 
   return out
 }
@@ -454,19 +455,32 @@ const PER_APP_SINCE_SHARED_FEATURES: readonly SharedReadinessCode[] = [
 /** Blockers on a target before SHARED_FEATURES_SINCE, besides the app's own blocker list. */
 const OLDER_TARGET_BLOCKERS: readonly SharedReadinessCode[] = ['STAGED_IMPORTS', 'ROW_SCHEDULES']
 
-const isReadinessBlocker = (code: SharedReadinessCode) =>
-  SHARED_READINESS_BLOCKERS.includes(code) || OLDER_TARGET_BLOCKERS.includes(code)
+/**
+ * GitLab issue sync runs per app on a shared deployment from this version: ISSUE_TRACKERS (sent
+ * as a blocker by an app before it, as a warning from it on) blocks only a target before it, and
+ * is a warning on one that runs it (what the app must switch on itself after the move).
+ */
+export const SHARED_TRACKERS_SINCE = '0.3.215'
+
+const isReadinessBlocker = (code: SharedReadinessCode, input: MovePlanInput) =>
+  SHARED_READINESS_BLOCKERS.includes(code) ||
+  OLDER_TARGET_BLOCKERS.includes(code) ||
+  (code === 'ISSUE_TRACKERS' && !targetRuns(input.target_facts.version, SHARED_TRACKERS_SINCE))
 
 /**
- * The target runs SHARED_FEATURES_SINCE or later. A version the Hub cannot read (none, not
- * x.y.z) is taken as older, and so is a pre-release of that version: the safe side keeps the
- * blocker.
+ * The target runs `since` (default SHARED_FEATURES_SINCE) or later. A version the Hub cannot
+ * read (none, not x.y.z) is taken as older, and so is a pre-release of that version: the safe
+ * side keeps the blocker.
  */
-function targetRunsSharedFeatures(version: string | null): boolean {
+function targetRuns(version: string | null, since: string): boolean {
   const m = /^v?(\d+\.\d+\.\d+)(.*)$/.exec((version ?? '').trim())
   if (!m) return false
-  const c = compareVersions(m[1], SHARED_FEATURES_SINCE)
+  const c = compareVersions(m[1], since)
   return c > 0 || (c === 0 && !m[2].startsWith('-'))
+}
+
+function targetRunsSharedFeatures(version: string | null): boolean {
+  return targetRuns(version, SHARED_FEATURES_SINCE)
 }
 
 /** The source's readiness codes the target's version makes real (ruling: target version). */
@@ -478,7 +492,7 @@ function readinessFor(input: MovePlanInput): SharedReadinessItem[] {
 const READINESS_TITLES: Record<string, string> = {
   STAGED_IMPORTS: 'Staged imports do not run on a shared deployment before 0.3.212',
   ROW_SCHEDULES: 'Schedules kept in table rows do not run on a shared deployment before 0.3.212',
-  ISSUE_TRACKERS: 'Issue tracker sync does not run on a shared deployment yet',
+  ISSUE_TRACKERS: 'Issue tracker sync does not run on a shared deployment before 0.3.215',
   EXEC_SCRIPT_FLOWS: 'Flows that run scripts do not run on a shared deployment yet',
   SQLITE: 'A SQLite database cannot be served by a shared deployment',
   ENV_OBJECT_STORAGE: 'Files in object storage set by environment variables are not copied',
@@ -496,7 +510,12 @@ const READINESS_TITLES: Record<string, string> = {
   SETTINGS_ENV_OVERRIDES: "A shared deployment does not apply the app's server setting overrides"
 }
 
-function readinessTitle(code: string): string {
+/** ISSUE_TRACKERS on a target that runs it (SHARED_TRACKERS_SINCE): a warning. */
+const ISSUE_TRACKERS_PER_APP =
+  "GitLab issue sync runs per app on a shared deployment, by the app's own switch"
+
+function readinessTitle(code: string, input: MovePlanInput): string {
+  if (code === 'ISSUE_TRACKERS' && !isReadinessBlocker(code, input)) return ISSUE_TRACKERS_PER_APP
   return READINESS_TITLES[code] ?? code
 }
 
@@ -515,7 +534,7 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
   if (toShared(kind) && to.kind === 'shared' && t.siblings.length)
     add(
       'SAME_APP_ON_DEPLOYMENT',
-      `${list(t.siblings)} of this app already run${t.siblings.length === 1 ? 's' : ''} on ${to.shared.key}. Environments of one app on one deployment usually hold copied databases: their stored files and sign-ins are kept apart, but test with care. A copied app also carries the original's saved Teams bot and directory app registration, so it answers in Teams and syncs the directory as that app: turn the bot off on the copy if it should not.`
+      `${list(t.siblings)} of this app already run${t.siblings.length === 1 ? 's' : ''} on ${to.shared.key}. Environments of one app on one deployment usually hold copied databases: their stored files and sign-ins are kept apart, but test with care. A copied app also carries the original's saved Teams bot and directory app registration, so it answers in Teams and syncs the directory as that app: turn the bot off on the copy if it should not. It also carries the original's GitLab connections: turn issue sync off on the copy (Issue trackers tab) unless it should write to the same GitLab project.`
     )
   add(
     'SIGNED_LINKS_RESET',
@@ -592,7 +611,8 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
     )
   if (kind === 'to_shared')
     for (const r of readinessFor(input))
-      if (!isReadinessBlocker(r.code)) add(r.code, `${readinessTitle(r.code)}: ${clean(r.detail)}`)
+      if (!isReadinessBlocker(r.code, input))
+        add(r.code, `${readinessTitle(r.code, input)}: ${clean(r.detail)}`)
   return out
 }
 

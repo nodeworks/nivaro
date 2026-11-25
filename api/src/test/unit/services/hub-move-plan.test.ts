@@ -3,7 +3,8 @@ import {
   buildMovePlan,
   MANUAL_MOVE_STEPS,
   MOVE_STEPS,
-  SHARED_FEATURES_SINCE
+  SHARED_FEATURES_SINCE,
+  SHARED_TRACKERS_SINCE
 } from '../../../services/hub/move/plan.js'
 import type {
   MoveBlockerCode,
@@ -316,8 +317,8 @@ describe('buildMovePlan — one test per blocker', () => {
     expect(codes(p)).not.toContain('TEAMS_BOT')
   })
 
-  it('every one of the four readiness blockers becomes a plan blocker, on any target version', () => {
-    expect(SHARED_READINESS_BLOCKERS).toHaveLength(4)
+  it('every one of the three readiness blockers becomes a plan blocker, on any target version', () => {
+    expect(SHARED_READINESS_BLOCKERS).toHaveLength(3)
     for (const version of ['0.3.210', '0.3.212'])
       for (const code of SHARED_READINESS_BLOCKERS) {
         const p = buildMovePlan(
@@ -362,6 +363,45 @@ describe('buildMovePlan — one test per blocker', () => {
     expect(codes(at('0.3.212-rc.1'))).toEqual(
       expect.arrayContaining(['ROW_SCHEDULES', 'STAGED_IMPORTS'])
     )
+  })
+
+  it('GitLab issue sync blocks only a target before 0.3.215; on one that runs it, a warning', () => {
+    expect(SHARED_TRACKERS_SINCE).toBe('0.3.215')
+    // An app before 0.3.215 sends it as a blocker; from 0.3.215 on, as a warning. Either way the
+    // target's version decides.
+    for (const level of ['blocker', 'warning'] as const) {
+      const at = (version: string | null) =>
+        buildMovePlan(
+          input({
+            source: src({
+              version: '0.3.214',
+              readiness: [
+                {
+                  code: 'ISSUE_TRACKERS',
+                  level,
+                  detail: 'GitLab issue sync is on with 2 connections'
+                }
+              ]
+            }),
+            target_facts: tgt({ version })
+          })
+        )
+      for (const v of ['0.3.212', '0.3.214', '0.3.215-rc.1', null, 'latest']) {
+        const p = at(v)
+        expect(codes(p), `${level} @ ${v}`).toContain('ISSUE_TRACKERS')
+        expect(p.blockers.find((b) => b.code === 'ISSUE_TRACKERS')?.text).toBe(
+          'Issue tracker sync does not run on a shared deployment before 0.3.215: GitLab issue sync is on with 2 connections'
+        )
+        expect(p.warnings.some((w) => w.code === 'ISSUE_TRACKERS')).toBe(false)
+      }
+      for (const v of ['0.3.215', '0.3.216', '0.4.0']) {
+        const p = at(v)
+        expect(codes(p), `${level} @ ${v}`).not.toContain('ISSUE_TRACKERS')
+        expect(p.warnings.find((w) => w.code === 'ISSUE_TRACKERS')?.text, v).toBe(
+          "GitLab issue sync runs per app on a shared deployment, by the app's own switch: GitLab issue sync is on with 2 connections"
+        )
+      }
+    }
   })
 
   it("an older app's directory, Teams bot, phone and mail retry warnings show only for a target before 0.3.212", () => {
@@ -579,6 +619,8 @@ describe('buildMovePlan — warnings', () => {
     expect(w?.text).toMatch(/Teams bot/)
     expect(w?.text).toMatch(/directory/)
     expect(w?.text).toMatch(/turn the bot off on the copy/i)
+    // ...and its GitLab connections (a staging copy would write to the production project).
+    expect(w?.text).toMatch(/GitLab connections: turn issue sync off on the copy/)
   })
 
   it('SIGN_IN_AGAIN names phone and MCP sign-ins', () => {

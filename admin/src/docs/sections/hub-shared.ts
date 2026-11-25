@@ -386,13 +386,12 @@ export const hubSharedDocs: DocSection = {
     { type: 'h2', id: 'hub-shared-not-yet', text: 'What a shared app cannot do yet' },
     {
       type: 'p',
-      text: 'Each item below is deferred. The Hub enforces it when a dedicated app moves in: a blocker stops the move, a warning is shown in the plan. A new environment placed straight on a shared deployment has none of these features from the start. Staged imports, row schedules, directory lookups, the Teams bot, phone push, mail retry and the other per-app jobs are not in this table: they work per app (see Per app on a shared deployment below).'
+      text: 'Each item below is deferred. The Hub enforces it when a dedicated app moves in: a blocker stops the move, a warning is shown in the plan. A new environment placed straight on a shared deployment has none of these features from the start. Staged imports, row schedules, directory lookups, the Teams bot, phone push, mail retry, GitLab issue sync and the other per-app jobs are not in this table: they work per app (see Per app on a shared deployment below).'
     },
     {
       type: 'table',
       head: ['Gap', 'What happens', 'Move check'],
       rows: [
-        ['GitLab issue sync', 'Off.', 'blocker `ISSUE_TRACKERS`'],
         [
           'Flows with the `exec-script` operation',
           'Needs a per-app sandbox.',
@@ -482,16 +481,17 @@ export const hubSharedDocs: DocSection = {
         'The daily retention pass (03:30, one job per app) and the boot passes (owner-group warm, integrity checks, cache warms, readiness warm, db-tuning sweep). They run once per app when it becomes ready. Retention status shows per app. Stale help-video import folders are swept once a day per process (deployment-wide, not per app).',
         'Microsoft directory lookups and sync. The app uses its own Microsoft app registration, saved in Settings → Microsoft directory (tenant id, client id, client secret; the secret is sealed with the app key). The server `GRAPH_*` and `OIDC_*` variables and the directory keys of `NIVARO_SETTINGS_OVERRIDES` are never used on shared.',
         "The Teams bot. The app uses only the bot saved in its own Settings. `TEAMS_BOT_*`, `MICROSOFT_APP_*`, the sign-in app fallback and the `teams_bot_*` override keys are ignored. `TEAMS_BOT=off` still disables the bot on the whole deployment, but `TEAMS_BOT=on` does not switch an app on: each app saves its own switch. Register each bot with that app's host as its messaging endpoint.",
-        "Phone push. An app admin connects the app's push relay in Settings → Mobile app. The server `MOBILE_PUSH_RELAY_KEY` is not used on shared. Phone sign-in was already per app."
+        "Phone push. An app admin connects the app's push relay in Settings → Mobile app. The server `MOBILE_PUSH_RELAY_KEY` is not used on shared. Phone sign-in was already per app.",
+        "GitLab issue sync (0.3.215 or later). Each app keeps its own connections (tokens sealed with the app key), rules, links, queued GitLab writes and switch (Issue trackers tab, stored in the app's own database); the sweep, send queue, reconcile and prune jobs run once per app. GitLab's webhook calls the app's own address (`https://<app host>/api/tracker-hooks/gitlab/<id>`, the URL the tab shows): the host picks the app, so a connection id never reaches another app. `ISSUE_TRACKERS=off` on the deployment turns sync off for every app, but `ISSUE_TRACKERS=on` does not switch an app on. GitLab calls go through the SSRF guard: a GitLab on a private address needs its host in the deployment's `SSRF_ALLOW_HOSTS`. A move of an app with sync on warns `ISSUE_TRACKERS` (it blocks only a target before 0.3.215). It also warns when sync is off only by the server's `ISSUE_TRACKERS=off` while the app's own switch is on (sync would start on the shared deployment: store the switch off first, which is allowed while the server keeps it off), and when the switch is stored under a custom `NIVARO_INSTANCE`. A copy of an app carries its GitLab connections (`SAME_APP_ON_DEPLOYMENT` says so), and a downgrade or rollback of the deployment below 0.3.215 says sync stops for every app on it."
       ]
     },
     {
       type: 'p',
-      text: 'Nivaro Cloud is unchanged: the Teams bot, phone push and mail retry stay off there, and push stays cloud-managed.'
+      text: 'Nivaro Cloud is unchanged: the Teams bot, phone push, mail retry and GitLab issue sync stay off there, and push stays cloud-managed.'
     },
     {
       type: 'p',
-      text: 'Before or after a move, save what the app needs on its own. The plan warns `DIRECTORY_ENV_CREDENTIALS` when the directory credentials come only from the environment, `TEAMS_BOT_ENV_CREDENTIALS` when the bot comes from the environment (or is on only by `TEAMS_BOT=on`), `PUSH_RELAY_ENV` when push uses the server relay key, and `SETTINGS_ENV_OVERRIDES` when the app’s `NIVARO_SETTINGS_OVERRIDES` sets keys a shared deployment does not apply. `SAME_APP_ON_DEPLOYMENT` notes that a copy carries the original saved Teams bot and directory registration.'
+      text: 'Before or after a move, save what the app needs on its own. The plan warns `DIRECTORY_ENV_CREDENTIALS` when the directory credentials come only from the environment, `TEAMS_BOT_ENV_CREDENTIALS` when the bot comes from the environment (or is on only by `TEAMS_BOT=on`), `PUSH_RELAY_ENV` when push uses the server relay key, `SETTINGS_ENV_OVERRIDES` when the app’s `NIVARO_SETTINGS_OVERRIDES` sets keys a shared deployment does not apply, and `ISSUE_TRACKERS` when GitLab sync is on (its detail says when only the server’s `ISSUE_TRACKERS=on` switches it on: switch it on again on the Issue trackers tab after the move). `SAME_APP_ON_DEPLOYMENT` notes that a copy carries the original saved Teams bot and directory registration.'
     },
     {
       type: 'note',

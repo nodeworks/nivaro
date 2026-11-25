@@ -11,19 +11,19 @@ export const issueTrackers: DocSection = {
     },
     {
       type: 'note',
-      text: 'GitLab sync is OFF by default and self-hosted only (never available in cloud mode). The issue log, support desk and records work exactly as before while it is off or no connection exists.'
+      text: 'GitLab sync is OFF by default. It runs self-hosted and, per app, on a Nivaro Hub shared deployment (0.3.215 or later); it is never available in Nivaro Cloud. The issue log, support desk and records work exactly as before while it is off or no connection exists.'
     },
     { type: 'h2', id: 'issue-trackers-switch', text: 'Turning it on' },
     {
       type: 'p',
-      text: 'The Issue trackers tab opens with one switch. Order of precedence: cloud mode (always off), the environment variable `ISSUE_TRACKERS=on|off`, the stored setting (key `issue_trackers` on this instance’s settings overrides row, so it is never promoted between environments), then off. With the env variable set the switch is read-only and says why. While off, every `/api/trackers*` route except the switch answers 404 `FEATURE_OFF`, the webhook answers 404, and every GitLab control disappears from the issue log, tickets and records. Queued GitLab writes wait and nothing is deleted; turning it on again resumes the queue and catches up. Each change is written to the activity log.'
+      text: 'The Issue trackers tab opens with one switch. Order of precedence: Nivaro Cloud (always off), the environment variable `ISSUE_TRACKERS=on|off`, the stored setting (key `issue_trackers` on this instance’s settings overrides row, so it is never promoted between environments), then off. On a Hub shared deployment the switch is per app (each app’s own stored setting); the deployment’s `ISSUE_TRACKERS=off` turns sync off for every app on it, while `ISSUE_TRACKERS=on` switches no app on. With the env variable set the switch is read-only and says why; while it keeps sync off, `PUT /api/trackers/feature {"enabled": false}` may still store this instance’s own switch off (so a move to a shared deployment, which does not apply the env, does not start sync). While off, every `/api/trackers*` route except the switch answers 404 `FEATURE_OFF`, the webhook answers 404, and every GitLab control disappears from the issue log, tickets and records. Queued GitLab writes wait and nothing is deleted; turning it on again resumes the queue and catches up. Each change is written to the activity log.'
     },
     { type: 'h2', id: 'issue-trackers-connection', text: 'Connection and webhook' },
     {
       type: 'ul',
       items: [
-        'A connection holds the GitLab base URL, a personal or project access token (stored like External API secrets, masked on every read, never logged) and a default project. Test connection shows the GitLab user, the default project with the token’s access level and when the last webhook arrived; a failure explains why (wrong token, unreachable host). A GitLab on a private address needs `SSRF_ALLOW_HOSTS` on the server; the test says so.',
-        'Webhook setup: the tab shows the URL to paste into GitLab (built from the admin host) and a secret shown once at creation or rotation (Rotate secret). Tick Issues events and Comments events. "Check it arrived" compares against the last webhook time read from the server.',
+        'A connection holds the GitLab base URL, a personal or project access token (stored like External API secrets, masked on every read, never logged) and a default project. Test connection shows the GitLab user, the default project with the token’s access level and when the last webhook arrived; a failure explains why (wrong token, unreachable host). A GitLab on a private address needs `SSRF_ALLOW_HOSTS` on the server (on a Hub shared deployment, the deployment’s, set by its operator); the test says so. On a shared deployment the token is sealed with the app’s own key.',
+        'Webhook setup: the tab shows the URL to paste into GitLab (built from the admin host; on a Hub shared deployment from the app’s own address, whose host is what routes a delivery to the app) and a secret shown once at creation or rotation (Rotate secret). Tick Issues events and Comments events. "Check it arrived" compares against the last webhook time read from the server.',
         'The webhook is `POST /api/tracker-hooks/gitlab/:connectionId`. It has no session: the `X-Gitlab-Token` header is compared to the stored secret hash in constant time before the body is read, and an unknown connection and a wrong token get the same 401. The body is limited to 1 MB, deliveries are de-duplicated on `X-Gitlab-Event-UUID`, it answers 200 at once and applies the change in the background; a paused connection answers 200 and ignores the delivery. Failed token checks are counted per address (20 in 10 minutes, then 429 for further failures); a delivery whose token checks out is never limited, and the route stays out of the shared anonymous rate limit. It is not exempt from the maintenance freeze (GitLab retries the 503). GitLab disables a webhook after repeated 4xx answers (while the feature was off, say): after turning GitLab sync back on, re-enable the hook in GitLab (Settings → Webhooks).',
         'If the webhook is missing or silent, a reconcile job (every 10 minutes) reads recent GitLab changes for linked issues, so sync still works, only slower. The health strip shows last webhook, last reconcile, queued and dead sends.'
       ]
@@ -137,7 +137,7 @@ export const issueTrackers: DocSection = {
         'Create is idempotent: the GitLab text carries a hidden marker and a retry searches for it before creating again, so a timeout never makes a duplicate.',
         'The first send that goes dead on a connection each UTC day raises one warning issue on the issue log ("GitLab sync: a change could not be sent"); later dead rows that day add no more.',
         'A 401 or 403 from GitLab (an authentication or permission refusal) marks the connection broken (banner) and holds the row for an hour without spending one of its 10 attempts, so fixing the token loses nothing; a missing project pauses the rules that use it with the reason.',
-        'Background jobs (self-hosted, on the cron leader only): `tracker-sweep` every 5 minutes, `tracker-outbox` every 30 seconds, `tracker-reconcile` every 10 minutes, `tracker-prune` nightly (hit counters older than 90 days, inbound events older than 30 days, decisions beyond 200 per rule).',
+        'Background jobs (on the cron leader only; on a Hub shared deployment once per app): `tracker-sweep` every 5 minutes, `tracker-outbox` every 30 seconds, `tracker-reconcile` every 10 minutes, `tracker-prune` nightly (hit counters older than 90 days, inbound events older than 30 days, decisions beyond 200 per rule).',
         'Readiness check `tracker-health` (Integrations group) warns on dead sends, a broken connection, or linked issues with no webhook in 24 hours. It passes while sync is off or nothing is connected and skips until migration 532 has run.'
       ]
     },
@@ -169,7 +169,7 @@ export const issueTrackers: DocSection = {
         [
           '`GET` / `PUT /api/trackers/feature`',
           'Admins',
-          'Read or set the master switch (409 when the environment or cloud mode decides it).'
+          'Read or set the master switch (409 when the environment or cloud mode decides it; storing off while the environment keeps it off is allowed).'
         ],
         [
           '`GET` / `POST /api/trackers`, `PATCH` / `DELETE /api/trackers/:id`',

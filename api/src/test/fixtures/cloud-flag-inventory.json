@@ -805,12 +805,12 @@
       "line": 755,
       "text": "if (!process.env.CLOUD_META_DB_URL) {",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T6",
-      "why": "issue tracker routes are a self-hosted feature",
+      "why": "GitLab issue sync runs per app on a shared deployment (each app's own switch, connections and webhook); Nivaro Cloud still refuses (isNivaroCloud)",
       "batch": "A",
-      "phase6": "GitLab issue sync per app"
+      "phase6": "done: per app on a shared deployment (0.3.215)"
     },
     {
       "id": "routes/infrastructure-drift.ts:35",
@@ -2172,12 +2172,12 @@
       "line": 118,
       "text": "const cloud = !!process.env.CLOUD_META_DB_URL",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T6",
-      "why": "issue counters/tracker listener exist only where GitLab sync runs",
+      "why": "GitLab issue sync runs per app on a shared deployment (each app's own switch, connections and webhook); Nivaro Cloud still refuses (isNivaroCloud)",
       "batch": "C",
-      "phase6": "GitLab issue sync per app"
+      "phase6": "done: per app on a shared deployment (0.3.215)"
     },
     {
       "id": "services/log-retention.ts:553",
@@ -2999,12 +2999,12 @@
       "line": 147,
       "text": "if (process.env.CLOUD_META_DB_URL) return",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T6",
-      "why": "GitLab issue sync crons",
+      "why": "GitLab issue sync runs per app on a shared deployment (each app's own switch, connections and webhook); Nivaro Cloud still refuses (isNivaroCloud)",
       "batch": "D",
-      "phase6": "GitLab issue sync per app (connections, webhook → app, app-scoped crons)"
+      "phase6": "done: per app on a shared deployment (0.3.215)"
     },
     {
       "id": "services/trackers/feature.ts:52",
@@ -3012,12 +3012,12 @@
       "line": 52,
       "text": "if (process.env.CLOUD_META_DB_URL) return { enabled: false, source: 'cloud' }",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T6",
-      "why": "GitLab issue sync feature switch",
+      "why": "GitLab issue sync runs per app on a shared deployment (each app's own switch, connections and webhook); Nivaro Cloud still refuses (isNivaroCloud)",
       "batch": "D",
-      "phase6": "GitLab issue sync per app"
+      "phase6": "done: per app on a shared deployment (0.3.215)"
     },
     {
       "id": "services/trackers/flow-ops.ts:237",
@@ -3025,12 +3025,12 @@
       "line": 237,
       "text": "if (process.env.CLOUD_META_DB_URL) return",
       "form": "raw",
-      "weight": 1,
+      "weight": 0,
       "meaning": "multiTenant",
       "rule": "T6",
-      "why": "GitLab issue sync flow op/trigger registration",
+      "why": "GitLab issue sync runs per app on a shared deployment (each app's own switch, connections and webhook); Nivaro Cloud still refuses (isNivaroCloud)",
       "batch": "D",
-      "phase6": "GitLab issue sync per app"
+      "phase6": "done: per app on a shared deployment (0.3.215)"
     },
     {
       "id": "services/traefik-source.ts:22",

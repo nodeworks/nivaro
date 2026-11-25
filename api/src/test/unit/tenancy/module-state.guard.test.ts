@@ -61,8 +61,6 @@ const TM_ACTIONS =
 const CACHE_CFG =
   'stored cache config is never read on a multi-tenant deployment (env + defaults only)'
 const OFF_HUBSIGNIN = 'Hub sign-in is off on any multi-tenant deployment (hub-signin/config.ts)'
-const OFF_TRACKERS =
-  'issue trackers are always off on a multi-tenant deployment (trackers/feature.ts)'
 const OFF_PERMCACHE =
   'the permission cache is off on any multi-tenant deployment (cache-config permission.enabled)'
 const OFF_EPOCH = 'the config epoch is off on any multi-tenant deployment (config-epoch.ts ENABLED)'
@@ -999,22 +997,16 @@ const SHARED: Record<string, string> = {
   'services/trace-export.ts :: sending': TELEMETRY,
   'services/trace-export.ts :: stats': DIAG,
   'services/trace-export.ts :: timer': TIMER,
-  'services/trackers/crons.ts :: unsubscribe': OFF_TRACKERS,
-  'services/trackers/crons.ts :: unsubscribeTickets': OFF_TRACKERS,
-  'services/trackers/engine.ts :: again': OFF_TRACKERS,
-  'services/trackers/engine.ts :: failureLog': OFF_TRACKERS,
-  'services/trackers/engine.ts :: inFlight': OFF_TRACKERS,
-  'services/trackers/engine.ts :: sweepFailures': OFF_TRACKERS,
-  'services/trackers/engine.ts :: ticketAgain': OFF_TRACKERS,
-  'services/trackers/engine.ts :: ticketInFlight': OFF_TRACKERS,
-  'services/trackers/feature.ts :: cache': OFF_TRACKERS,
-  'services/trackers/flow-events.ts :: logger': OFF_TRACKERS,
-  'services/trackers/flow-ops.ts :: registered': OFF_TRACKERS,
-  'services/trackers/inbound.ts :: issueFailures': OFF_TRACKERS,
-  'services/trackers/inbound.ts :: lockRedis': OFF_TRACKERS,
-  'services/trackers/inbound.ts :: reconcileLog': OFF_TRACKERS,
-  'services/trackers/outbound-sync.ts :: lastLogAt': OFF_TRACKERS,
-  'services/trackers/outbox.ts :: autoSend': OFF_TRACKERS,
+  // GitLab sync per app (0.3.215): the issue-write listener is registered once at boot (outside
+  // any app) and each write runs in the writer's app; the per-issue queues, sweep tally, held
+  // reconcile issues, the failure-log limiters and the switch cache are appSet / appMap / appBox
+  // (detected as keyed).
+  'services/trackers/crons.ts :: unsubscribe': REGISTRY,
+  'services/trackers/crons.ts :: unsubscribeTickets': REGISTRY,
+  'services/trackers/flow-events.ts :: logger': APP_REF,
+  'services/trackers/flow-ops.ts :: registered': REGISTRY,
+  'services/trackers/inbound.ts :: lockRedis': CONN,
+  'services/trackers/outbox.ts :: autoSend': FN_SLOT,
   'services/traefik-source.ts :: fetchImpl': FN_SLOT,
   'services/traffic-actions/debug-window.ts :: wired': TELEMETRY,
   'services/traffic-actions/ext-lenses.ts :: inflight': TELEMETRY,

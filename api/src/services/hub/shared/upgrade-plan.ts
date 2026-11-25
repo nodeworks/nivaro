@@ -7,6 +7,7 @@ import type { AgentHealth, StackSpec } from '../docker/agent-types.js'
 import { environmentNames, hostnameRefusals, type StackEdge } from '../docker/render-spec.js'
 import { agentVersionAtLeast } from '../docker/templates.js'
 import { type DockerDriverRow, getDriver, STACK_NAME_RE } from '../drivers.js'
+import { SHARED_TRACKERS_SINCE } from '../move/plan.js'
 import { openMoveFor } from '../move-open.js'
 import { storedRuns, successfulVersions } from '../promote-gather.js'
 import {
@@ -165,6 +166,19 @@ function semverCompare(a: string, b: string): number | null {
  * is older by semver precedence, or either side cannot be read as semver. Nothing deployed yet
  * (`from` null) and the same version are never one.
  */
+/**
+ * What a downgrade of a shared deployment stops for every app on it, beyond the generic warning:
+ * going from SHARED_TRACKERS_SINCE (or later) to a version before it unmounts GitLab issue sync
+ * (routes, webhook, jobs) for every app. '' when nothing like that.
+ */
+export function downgradeLosses(from: string | null, to: string): string {
+  if (from === null) return ''
+  const fromRuns = semverCompare(from, SHARED_TRACKERS_SINCE)
+  const toRuns = semverCompare(to, SHARED_TRACKERS_SINCE)
+  if (fromRuns === null || fromRuns < 0 || (toRuns !== null && toRuns >= 0)) return ''
+  return ` GitLab issue sync stops for every app on it (it runs per app from ${SHARED_TRACKERS_SINCE}): GitLab's webhooks get 404 and GitLab may disable them, and queued GitLab writes wait until it is upgraded again.`
+}
+
 export function isSharedDowngrade(from: string | null, to: string): boolean {
   if (from === null || from === to) return false
   const c = semverCompare(to, from)
@@ -773,13 +787,13 @@ export async function gatherSharedUpgrade(
   if (downgrade)
     warnings.push({
       code: 'DOWNGRADE',
-      text: `${version} is not newer than the ${from_version} this deployment runs. Every app on it goes back to ${version}; an older version may not read data a newer one wrote. Confirm the downgrade to start.`
+      text: `${version} is not newer than the ${from_version} this deployment runs. Every app on it goes back to ${version}; an older version may not read data a newer one wrote.${downgradeLosses(from_version, version)} Confirm the downgrade to start.`
     })
   // Final review M-8: a rollback restores the build, not the schema — said as DOWNGRADE says it.
   if (kind === 'rollback' && from_version && from_version !== version)
     warnings.push({
       code: 'ROLLBACK_SCHEMA_AHEAD',
-      text: `Apps that ${from_version} already migrated keep its newer database schema under ${version}; an older version may not read data a newer one wrote.`
+      text: `Apps that ${from_version} already migrated keep its newer database schema under ${version}; an older version may not read data a newer one wrote.${downgradeLosses(from_version, version)}`
     })
   const stack = shared.stack && STACK_NAME_RE.test(shared.stack) ? shared.stack : null
   const plan_hash = hashOf({
