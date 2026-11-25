@@ -15,7 +15,13 @@ import type { SharedDeployment } from '../shared/store.js'
  * codes.
  */
 
-export type MoveKind = 'to_shared' | 'to_dedicated' | 'between_shared'
+/**
+ * Hub placement (idea 48): `between_stacks` moves a dedicated Docker stack to another placement of
+ * its own — another Docker host (driver), or another stack on the same one. It follows
+ * `to_dedicated`'s step lists exactly (the target is a dedicated Docker stack either way); only
+ * the source differs (a dedicated stack reached over its hub link, as in `to_shared`).
+ */
+export type MoveKind = 'to_shared' | 'to_dedicated' | 'between_shared' | 'between_stacks'
 
 export type MoveStepKey =
   | 'check'
@@ -124,6 +130,10 @@ export type MoveBlockerCode =
   | 'SQLITE_SHARED_VERSION'
   | 'SQLITE_ON_NFS'
   | 'SQLITE_MULTI_NODE'
+  // Hub placement (idea 48): while a move between two stacks runs, both stacks are up; their
+  // connections together pass the database server's limit (services/hub/placement/connections.ts,
+  // the scaling tab's own math).
+  | 'DB_CONNECTIONS'
   | SharedReadinessCode
 
 /** What a move will cost or change. SIGNED_LINKS_RESET is the T12 carry. */
@@ -153,6 +163,9 @@ export type MoveWarningCode =
   | 'ENV_SMTP_KEPT'
   | 'INSTANCE_SETTINGS_CARRIED'
   | 'INSTANCE_SETTINGS_STAY'
+  // Hub placement (idea 48): the database server's connection limit is not on record, so the two
+  // stacks a move between stacks runs at once are not checked against it.
+  | 'DB_LIMIT_UNKNOWN'
   | SharedReadinessCode
 
 export interface MovePlan {
@@ -308,6 +321,13 @@ export interface MovePlanInput {
   driver_problem: string | null
   /** Parts of the gather that could not be read (GATHER_FAILED), in words. */
   gather_failed: string[]
+  /**
+   * Hub placement (idea 48), a move between two stacks only: both stacks run at once while it
+   * runs; `refusal` = their connections together pass the database server's limit
+   * (DB_CONNECTIONS), `warning` = the limit is not on record (DB_LIMIT_UNKNOWN). Absent = not
+   * judged (another kind).
+   */
+  host_connections?: { refusal: string | null; warning: string | null } | null
 }
 
 /** A refusal before any plan can be made: `{statusCode, code, message}`, plain words. */

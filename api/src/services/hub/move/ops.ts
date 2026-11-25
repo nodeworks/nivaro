@@ -91,8 +91,10 @@ import { runsStorageCopy } from './storage-floor.js'
  *           link (link-client.ts) with the environment's hub token;
  *   gitlab  a dedicated app deployed by its GitLab pipeline (Decision 9: pin + deploy job,
  *           promote-run.ts deployComponentAt), reached over its hub link.
- * Phase 6 kinds always have a shared side: to_shared (dedicated → shared), to_dedicated
- * (shared → dedicated), between_shared (shared → shared).
+ * Phase 6 kinds have a shared side: to_shared (dedicated → shared), to_dedicated
+ * (shared → dedicated), between_shared (shared → shared). Hub placement (idea 48) adds
+ * between_stacks (a Docker stack → another Docker stack, usually on another host): its source is
+ * driven as to_shared's dedicated source, its target as to_dedicated's Docker target.
  *
  * Addresses (fix round 1, P6-19 C-2 / P6-18 #1): a dedicated side is reached only on the
  * address addresses.ts resolved and probed at start (steps.addresses): the source on one that

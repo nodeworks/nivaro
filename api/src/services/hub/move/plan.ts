@@ -82,6 +82,20 @@ export const MOVE_STEPS: Record<MoveKind, MoveStepKey[]> = {
     'release',
     'retire_source',
     'done'
+  ],
+  // Hub placement (idea 48): a dedicated Docker target, exactly as to_dedicated.
+  between_stacks: [
+    'check',
+    'maintenance_on',
+    'wait_idle',
+    'deploy_target',
+    'target_ready',
+    'files_full',
+    'route',
+    'verify',
+    'release',
+    'retire_source',
+    'done'
   ]
 }
 
@@ -129,6 +143,20 @@ export const SQLITE_MOVE_STEPS: Record<MoveKind, MoveStepKey[]> = {
     'db_copy',
     'files_full',
     'target_ready',
+    'route',
+    'verify',
+    'release',
+    'retire_source',
+    'done'
+  ],
+  between_stacks: [
+    'check',
+    'maintenance_on',
+    'wait_idle',
+    'deploy_target',
+    'db_copy',
+    'target_ready',
+    'files_full',
     'route',
     'verify',
     'release',
@@ -224,7 +252,8 @@ const MANUAL_TAIL: MoveStepKey[] = [
 export const MANUAL_MOVE_STEPS: Record<MoveKind, MoveStepKey[]> = {
   to_shared: ['check', 'place_on_target', 'files_warm', ...MANUAL_TAIL],
   to_dedicated: ['check', 'deploy_target', 'files_warm', ...MANUAL_TAIL],
-  between_shared: ['check', 'place_on_target', 'files_warm', ...MANUAL_TAIL]
+  between_shared: ['check', 'place_on_target', 'files_warm', ...MANUAL_TAIL],
+  between_stacks: ['check', 'deploy_target', 'files_warm', ...MANUAL_TAIL]
 }
 
 type Blocker = { code: MoveBlockerCode; text: string }
@@ -334,6 +363,10 @@ function blockersOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Bloc
   // The placement and what holds it.
   if (from.kind === 'shared' && to.kind === 'shared' && from.shared.id === to.shared.id)
     add('SAME_PLACEMENT', `This environment already runs on ${sideName(to)}.`)
+  if (from.kind !== 'shared' && to.kind !== 'shared' && from.placement.id === to.placement.id)
+    add('SAME_PLACEMENT', `This environment already runs on ${sideName(to)}.`)
+  // Hub placement (idea 48): both stacks run at once while the move runs (the scaling math).
+  if (input.host_connections?.refusal) add('DB_CONNECTIONS', input.host_connections.refusal)
   // Hub gap sqlite (0.3.215): a SQLite app's file is copied by the db_copy step, only where
   // that can work (sqliteMoveRefusal).
   const sqlite = sqliteMove(input)
@@ -386,17 +419,21 @@ function blockersOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Bloc
     )
 
   // The hub link of the dedicated side (maintenance, retire and the readiness report need it).
-  const dedicatedSide = kind === 'to_shared' || kind === 'to_dedicated'
+  const dedicatedSide = kind !== 'between_shared'
+  // A dedicated source is driven over its hub link (to_shared, and a move between two stacks).
+  const linkedSource = kind === 'to_shared' || kind === 'between_stacks'
   if (dedicatedSide && !input.env.hub_linked)
     add(
       'NOT_HUB_LINKED',
       kind === 'to_shared'
         ? 'This environment has no hub link (no hub token). The Hub needs it to put the app in maintenance, read what it would lose and retire it. Link it first.'
-        : 'This environment has no hub token. The new dedicated stack needs one so the Hub can hold it in maintenance and release it. Set one first.'
+        : kind === 'between_stacks'
+          ? 'This environment has no hub link (no hub token). The Hub needs it to hold both stacks in maintenance, release the new one and retire the old one. Link it first.'
+          : 'This environment has no hub token. The new dedicated stack needs one so the Hub can hold it in maintenance and release it. Set one first.'
     )
 
   // The source, read live.
-  if (!s.reachable && !(kind === 'to_shared' && !input.env.hub_linked))
+  if (!s.reachable && !(linkedSource && !input.env.hub_linked))
     add(
       'LINK_UNREACHABLE',
       from.kind === 'shared'
@@ -846,6 +883,7 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
       'SQLITE_COPY',
       "This app's database is a SQLite file: it is copied while the app is in maintenance (the old home frozen, its checksum checked, the copy checked read-only at the new home before it serves). The old home keeps its file until it is retired."
     )
+  if (input.host_connections?.warning) add('DB_LIMIT_UNKNOWN', input.host_connections.warning)
   if (routing === 'manual')
     add(
       'MANUAL_ROUTE',

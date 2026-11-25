@@ -27,6 +27,7 @@ import {
   MAX_SHARED_POOL_MAX,
   STACK_NAME_RE
 } from '../drivers.js'
+import { overlapConnections } from '../placement/connections.js'
 import {
   defaultPromoteLock,
   defaultSharedLock,
@@ -90,6 +91,8 @@ const IDENTITY_CHECK_PARALLEL = 4
 export const IDENTITY_CHECK_BUDGET_MS = 15_000
 
 export interface MoveGatherDeps {
+  /** Hub placement (idea 48): the two-stacks connection check of a move between stacks. */
+  hostConnections?: (envId: number) => Promise<MovePlanInput['host_connections']>
   /** The deployment link client of a shared deployment. */
   client?: (shared: SharedDeployment) => Pick<DeploymentClient, 'status' | 'appStatus' | 'dbCheck'>
   /** A dedicated app's shared-readiness report over its hub link. */
@@ -460,12 +463,14 @@ async function dedicatedSide(
   return { kind: 'gitlab', placement, components }
 }
 
-function kindOf(from: PlacementSide, to: MoveTarget): MoveKind {
+function kindOf(from: PlacementSide, to: MoveTarget, toSide: PlacementSide): MoveKind {
   if (from.kind === 'shared') return to.kind === 'shared' ? 'between_shared' : 'to_dedicated'
   if (to.kind === 'shared') return 'to_shared'
+  // Hub placement (idea 48): a Docker stack to another placement of its own (another host).
+  if (from.kind === 'docker' && toSide.kind === 'docker') return 'between_stacks'
   throw new MoveError(
     'NOT_A_MOVE',
-    'A move goes onto or off a shared deployment. Between two dedicated placements, change the placement and promote instead.'
+    'Between two dedicated placements only a Docker stack moves (to another Docker host or stack). A GitLab placement changes by editing the placement and promoting instead.'
   )
 }
 
@@ -1035,7 +1040,7 @@ export async function gatherMovePlanInput(
   const [from, toSide] = await Promise.all([readFrom(), readTo()])
   const fromShared = stored.from
   const toShared = stored.to
-  const kind = kindOf(from, target)
+  const kind = kindOf(from, target, toSide)
 
   // The Hub's own records.
   const recordId = databaseRecordId(row.db_ref)
@@ -1111,6 +1116,15 @@ export async function gatherMovePlanInput(
     .filter((s): s is Extract<PlacementSide, { kind: 'shared' }> => s.kind === 'shared')
     .map((s) => s.shared)
 
+  // Hub placement (idea 48): both stacks of a move between stacks run at once.
+  let hostConnections: MovePlanInput['host_connections']
+  if (kind === 'between_stacks')
+    try {
+      hostConnections = await (deps.hostConnections ?? overlapConnections)(envId)
+    } catch {
+      ctx.failed.push("the connections of this environment's database server")
+    }
+
   return {
     kind,
     app: {
@@ -1148,6 +1162,7 @@ export async function gatherMovePlanInput(
     source,
     target_facts: targetFacts,
     driver_problem: ctx.problems.length ? ctx.problems.join(' ') : null,
-    gather_failed: [...ctx.failed]
+    gather_failed: [...ctx.failed],
+    ...(hostConnections !== undefined ? { host_connections: hostConnections } : {})
   }
 }

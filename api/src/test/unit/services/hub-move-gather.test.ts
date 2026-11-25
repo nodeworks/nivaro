@@ -952,6 +952,39 @@ describe('gatherMovePlanInput — time (N-1)', () => {
   })
 })
 
+describe('gatherMovePlanInput — a Docker stack to another stack (Hub placement, idea 48)', () => {
+  it('is a move between stacks, with the two-stacks connection check (injected)', async () => {
+    const env = await newEnv({ placement_id: await dockerPlacement(`shop-a${seq + 1}`) })
+    const target = await dockerPlacement(`shop-b${seq}`)
+    const hostConnections = vi.fn(async () => ({ refusal: 'Too many.', warning: null }))
+    const input = await Gather.gatherMovePlanInput(
+      env.id,
+      { kind: 'dedicated', placement_id: target },
+      deps({ hostConnections })
+    )
+    expect(input.kind).toBe('between_stacks')
+    expect(input.to.kind).toBe('docker')
+    expect(input.host_connections).toEqual({ refusal: 'Too many.', warning: null })
+    expect(hostConnections).toHaveBeenCalledWith(env.id)
+  })
+
+  it('a connection check that cannot be read is a gather failure, never a pass', async () => {
+    const env = await newEnv({ placement_id: await dockerPlacement(`shop-c${seq + 1}`) })
+    const target = await dockerPlacement(`shop-d${seq}`)
+    const input = await Gather.gatherMovePlanInput(
+      env.id,
+      { kind: 'dedicated', placement_id: target },
+      deps({
+        hostConnections: async () => {
+          throw new Error('db down')
+        }
+      })
+    )
+    expect(input.gather_failed).toContain("the connections of this environment's database server")
+    expect(input.host_connections).toBeUndefined()
+  })
+})
+
 describe('gatherMovePlanInput — refusals before a plan', () => {
   it('no such environment, no placement, not a move, a shared placement named as dedicated', async () => {
     expect(

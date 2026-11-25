@@ -80,6 +80,8 @@ interface World {
   sharedB: number
   dockerPlacement: number
   sharedPlacementA: number
+  /** Hub placement (idea 48): a stack on another Docker host (between_stacks). */
+  dockerPlacementB: number
 }
 
 async function world(fromKind: 'docker' | 'shared'): Promise<World> {
@@ -110,6 +112,16 @@ async function world(fromKind: 'docker' | 'shared'): Promise<World> {
     driver_id: driver,
     target: JSON.stringify({ stack: `acme-prod${n}` })
   })
+  const driverB = await insertId('nivaro_hub_drivers', {
+    kind: 'docker',
+    name: `agentb${n}`,
+    config: JSON.stringify({ agent_url: 'https://agent-b.example.com' })
+  })
+  const dockerPlacementB = await insertId('nivaro_hub_placements', {
+    kind: 'dedicated',
+    driver_id: driverB,
+    target: JSON.stringify({ stack: `acme-prod${n}` })
+  })
   const sharedPlacementA = await insertId('nivaro_hub_placements', {
     kind: 'shared',
     driver_id: null,
@@ -131,17 +143,31 @@ async function world(fromKind: 'docker' | 'shared'): Promise<World> {
   // The app's key, as the plan requires (APP_KEY_UNKNOWN blocks a move without one).
   const { setAppKey } = await import('../../../services/hub/shared/store.js')
   await setAppKey(envId, 'ab'.repeat(32))
-  return { envId, appKey, envKey, sharedA, sharedB, dockerPlacement, sharedPlacementA }
+  return {
+    envId,
+    appKey,
+    envKey,
+    sharedA,
+    sharedB,
+    dockerPlacement,
+    sharedPlacementA,
+    dockerPlacementB
+  }
 }
 
 function planOf(kind: MoveKind, routing: 'automatic' | 'manual' = 'automatic'): MovePlan {
   const route: RouteAction[] =
     kind === 'to_dedicated'
       ? [{ side: 'target', op: 'apply_stack' }]
-      : [
-          { side: 'source', op: 'drop_host', host: 'acme.example.com' },
-          { side: 'target', op: 'add_host', host: 'acme.example.com' }
-        ]
+      : kind === 'between_stacks'
+        ? [
+            { side: 'source', op: 'drop_host', host: 'acme.example.com' },
+            { side: 'target', op: 'apply_stack' }
+          ]
+        : [
+            { side: 'source', op: 'drop_host', host: 'acme.example.com' },
+            { side: 'target', op: 'add_host', host: 'acme.example.com' }
+          ]
   return {
     kind,
     routing,
@@ -295,10 +321,12 @@ async function start(w: World, to: unknown, over: Record<string, unknown> = {}) 
 const toFor = (kind: MoveKind, w: World) =>
   kind === 'to_dedicated'
     ? { kind: 'dedicated', placement_id: w.dockerPlacement }
-    : { kind: 'shared', shared_id: kind === 'to_shared' ? w.sharedA : w.sharedB }
+    : kind === 'between_stacks'
+      ? { kind: 'dedicated', placement_id: w.dockerPlacementB }
+      : { kind: 'shared', shared_id: kind === 'to_shared' ? w.sharedA : w.sharedB }
 
 const fromFor = (kind: MoveKind): 'docker' | 'shared' =>
-  kind === 'to_shared' ? 'docker' : 'shared'
+  kind === 'to_shared' || kind === 'between_stacks' ? 'docker' : 'shared'
 
 async function refusal(p: Promise<unknown>): Promise<{ code: string; statusCode: number }> {
   try {
@@ -410,10 +438,52 @@ const ORDER: Record<MoveKind, string[]> = {
     'retireSource',
     'dropTempHost',
     'revokeTickets'
+  ],
+  // Hub placement (idea 48): a Docker stack onto a stack on another host — to_dedicated's steps,
+  // with a dedicated source (no replica wait after its maintenance).
+  between_stacks: [
+    'databaseIdentity',
+    'sourceMaintenance',
+    'sourceBusy',
+    'targetMaintenance',
+    'deployTarget',
+    'targetMaintenance',
+    'targetMaintenance',
+    'targetUnretire',
+    'targetReady',
+    'databaseIdentity',
+    'pullFiles',
+    'route',
+    'route',
+    'verifyName',
+    'targetMaintenance',
+    'verifyTargetKey',
+    'retireSource',
+    'dropTempHost',
+    'revokeTickets'
   ]
 }
 
 describe('move run — happy paths', () => {
+  it('between_stacks: a Docker stack onto another host, every step in order, success', async () => {
+    plan = planOf('between_stacks')
+    const w = await world('docker')
+    const { move_id } = await start(w, toFor('between_stacks', w))
+    await Run.awaitMove(move_id)
+    expect(fake.names()).toEqual(ORDER.between_stacks)
+    const m = await readMove(move_id)
+    expect(m?.status).toBe('success')
+    expect(m?.kind).toBe('between_stacks')
+    const env = await db('nivaro_hub_environments').where({ id: w.envId }).first()
+    expect(Number(env.placement_id)).toBe(w.dockerPlacementB)
+    expect(env.status).toBe('active')
+    // One full copy (the automatic order), never a delta.
+    expect(fake.calls.filter((c) => c[0] === 'pullFiles').map((c) => c[1])).toEqual(['full'])
+    // The source drops its name before the target applies its stack.
+    const routes = fake.calls.filter((c) => c[0] === 'route').map((c) => (c[1] as RouteAction).op)
+    expect(routes).toEqual(['drop_host', 'apply_stack'])
+  })
+
   for (const kind of ['to_shared', 'to_dedicated', 'between_shared'] as MoveKind[]) {
     it(`${kind}: every step in order, released onto the target, success`, async () => {
       plan = planOf(kind)
@@ -493,7 +563,7 @@ const undoCalls = (calls: Call[]) =>
  * the order they were recorded; `ran` = the steps that ran (done or the failed one).
  */
 function rule2Undo(kind: MoveKind, recorded: number[], ran: readonly string[]): Call[] {
-  const sharedTarget = kind !== 'to_dedicated'
+  const sharedTarget = kind !== 'to_dedicated' && kind !== 'between_stacks'
   const newest = [...recorded].reverse()
   const out: Call[] = []
   // 2. target-side route actions (a dedicated target's go with its stack in 3).
@@ -511,7 +581,12 @@ function rule2Undo(kind: MoveKind, recorded: number[], ran: readonly string[]): 
 }
 
 describe('rolls back from every step before release', () => {
-  for (const kind of ['to_shared', 'to_dedicated', 'between_shared'] as MoveKind[]) {
+  for (const kind of [
+    'to_shared',
+    'to_dedicated',
+    'between_shared',
+    'between_stacks'
+  ] as MoveKind[]) {
     const steps = MOVE_STEPS[kind]
     const before = steps.slice(0, steps.indexOf('release'))
     for (const key of before) {
@@ -543,7 +618,7 @@ describe('rolls back from every step before release', () => {
         expect((await db('nivaro_hub_deploys').where({ move_id }).first()).status).toBe('failed')
         expect(activity.rows.map((r) => r.action)).toContain('hub-move-rolled-back')
         // A shared target placement this move made is gone again.
-        if (kind !== 'to_dedicated')
+        if (kind !== 'to_dedicated' && kind !== 'between_stacks')
           expect(
             await db('nivaro_hub_placements').where({ id: m?.to_placement_id }).first()
           ).toBeUndefined()
@@ -553,7 +628,12 @@ describe('rolls back from every step before release', () => {
 
   // I-5: the same table for the manual orders (B8: the route and verify come before maintenance;
   // the target's own actions run at route, the source's after verify).
-  for (const kind of ['to_shared', 'to_dedicated', 'between_shared'] as MoveKind[]) {
+  for (const kind of [
+    'to_shared',
+    'to_dedicated',
+    'between_shared',
+    'between_stacks'
+  ] as MoveKind[]) {
     const steps = MANUAL_MOVE_STEPS[kind]
     const before = steps.slice(0, steps.indexOf('release'))
     for (const key of before) {
