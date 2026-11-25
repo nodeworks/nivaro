@@ -494,6 +494,27 @@ const OLDER_TARGET_BLOCKERS: readonly SharedReadinessCode[] = [
 ]
 
 /**
+ * Hub gap `exec`: from this version a shared deployment can run flow script steps per app, each in
+ * a child process of its own (services/flow-script-isolated.ts) — but only when its operator turned
+ * them on (FLOW_SCRIPTS_ON_SHARED, off by default: the sandbox blocks the network in JavaScript,
+ * not the operating system). An app before it reports EXEC_SCRIPT_FLOWS as a blocker, one from it
+ * as a warning; either way it blocks unless the target runs this version AND reports script steps
+ * on (its link status `flow_scripts`), and is a warning (the script limits) when both hold.
+ */
+export const EXEC_SCRIPT_SINCE = '0.3.215'
+
+const targetRunsScripts = (input: MovePlanInput) =>
+  targetRuns(input.target_facts.version, EXEC_SCRIPT_SINCE) &&
+  input.target_facts.flow_scripts === true
+
+/** EXEC_SCRIPT_FLOWS as a blocker: an older target, or one whose operator left scripts off. */
+function execScriptBlockerTitle(input: MovePlanInput): string {
+  return targetRuns(input.target_facts.version, EXEC_SCRIPT_SINCE)
+    ? 'Flows that run scripts are off on this shared deployment: its operator has not turned script steps on (FLOW_SCRIPTS_ON_SHARED)'
+    : READINESS_TITLES.EXEC_SCRIPT_FLOWS
+}
+
+/**
  * GitLab issue sync runs per app on a shared deployment from this version: ISSUE_TRACKERS (sent
  * as a blocker by an app before it, as a warning from it on) blocks only a target before it, and
  * is a warning on one that runs it (what the app must switch on itself after the move).
@@ -501,9 +522,11 @@ const OLDER_TARGET_BLOCKERS: readonly SharedReadinessCode[] = [
 export const SHARED_TRACKERS_SINCE = '0.3.215'
 
 const isReadinessBlocker = (code: SharedReadinessCode, input: MovePlanInput) =>
-  SHARED_READINESS_BLOCKERS.includes(code) ||
-  OLDER_TARGET_BLOCKERS.includes(code) ||
-  (code === 'ISSUE_TRACKERS' && !targetRuns(input.target_facts.version, SHARED_TRACKERS_SINCE))
+  code === 'EXEC_SCRIPT_FLOWS'
+    ? !targetRunsScripts(input)
+    : SHARED_READINESS_BLOCKERS.includes(code) ||
+      OLDER_TARGET_BLOCKERS.includes(code) ||
+      (code === 'ISSUE_TRACKERS' && !targetRuns(input.target_facts.version, SHARED_TRACKERS_SINCE))
 
 /**
  * The target runs `since` (default SHARED_FEATURES_SINCE) or later. A version the Hub cannot
@@ -578,7 +601,7 @@ const READINESS_TITLES: Record<string, string> = {
   STAGED_IMPORTS: 'Staged imports do not run on a shared deployment before 0.3.212',
   ROW_SCHEDULES: 'Schedules kept in table rows do not run on a shared deployment before 0.3.212',
   ISSUE_TRACKERS: 'Issue tracker sync does not run on a shared deployment before 0.3.215',
-  EXEC_SCRIPT_FLOWS: 'Flows that run scripts do not run on a shared deployment yet',
+  EXEC_SCRIPT_FLOWS: 'Flows that run scripts do not run on a shared deployment before 0.3.215',
   SQLITE: 'A SQLite database cannot be served by a shared deployment',
   ENV_OBJECT_STORAGE: 'Files in object storage set by environment variables are not copied',
   DIRECTORY_SYNC: 'Directory sync is off on a shared deployment before 0.3.212',
@@ -601,8 +624,16 @@ const ISSUE_TRACKERS_PER_APP =
 
 function readinessTitle(code: string, input: MovePlanInput): string {
   if (code === 'ISSUE_TRACKERS' && !isReadinessBlocker(code, input)) return ISSUE_TRACKERS_PER_APP
+  if (code === 'EXEC_SCRIPT_FLOWS')
+    return isReadinessBlocker(code, input)
+      ? execScriptBlockerTitle(input)
+      : EXEC_SCRIPT_WARNING_TITLE
   return READINESS_TITLES[code] ?? code
 }
+
+/** EXEC_SCRIPT_FLOWS as a warning (a target from EXEC_SCRIPT_SINCE): what the steps get there. */
+const EXEC_SCRIPT_WARNING_TITLE =
+  'Script steps run in a sandbox process of their own on a shared deployment, and differ there from a dedicated app: no network, no ArrayBuffer, typed arrays, DataView or WebAssembly, a heap limit (64 MB unless the deployment sets more; the data is read again inside the sandbox, so a step on large data needs more), at most 30 s per step and a few steps at once per app. A script that relies on any of these fails after the move'
 
 function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warning[] {
   const out: Warning[] = []

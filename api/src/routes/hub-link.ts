@@ -20,6 +20,7 @@ import { runPreflight } from './preflight.js'
  *
  *   GET /api/hub-link/status → { version, environment, instance,
  *                                preflight: { status, failing }, readiness_score,
+ *                                open_issues (0.3.215+: issue-log rows open or in progress),
  *                                maintenance, retired,
  *                                process: { uptime_s, memory_mb, pool },
  *                                recent?, release_facts? }
@@ -123,6 +124,22 @@ async function readinessScore(): Promise<number | null> {
   }
 }
 
+/** Open + in-progress issue-log rows (a count only, never a title); null past the bound or on
+ *  a read error. The Hub's fleet page shows it (services/hub/fleet). */
+async function openIssueCount(): Promise<number | null> {
+  try {
+    const { db } = await import('../db/index.js')
+    const read = db('nivaro_issues')
+      .whereIn('status', ['open', 'in_progress'])
+      .count<Array<{ n: number | string }>>({ n: '*' })
+      .then((rows) => Number(rows[0]?.n ?? 0))
+    const n = await bounded(read, boundMs)
+    return n === TIMED_OUT || !Number.isFinite(n) ? null : n
+  } catch {
+    return null
+  }
+}
+
 function poolFigures(): { used: number; free: number; pending: number } | null {
   try {
     const p = poolCounters('main')
@@ -189,23 +206,26 @@ export async function hubLinkRoutes(app: FastifyInstance) {
     const wantFacts = q.release_facts === '1'
     // Imported only when asked (once): the request-log reader pulls the database module in.
     const extras = minutes || wantFacts ? import('../services/hub-link/release-figures.js') : null
-    const [preflight, readiness_score, maintenance, recent, facts] = await Promise.all([
-      preflightSummary(app),
-      readinessScore(),
-      maintenanceOn(),
-      extras && minutes
-        ? bounded(
-            extras.then((m) => m.recentFigures(minutes)),
-            boundMs
-          ).catch(() => TIMED_OUT)
-        : null,
-      extras && wantFacts
-        ? bounded(
-            extras.then((m) => m.releaseFacts()),
-            boundMs
-          ).catch(() => TIMED_OUT)
-        : null
-    ])
+    const [preflight, readiness_score, maintenance, recent, facts, open_issues] = await Promise.all(
+      [
+        preflightSummary(app),
+        readinessScore(),
+        maintenanceOn(),
+        extras && minutes
+          ? bounded(
+              extras.then((m) => m.recentFigures(minutes)),
+              boundMs
+            ).catch(() => TIMED_OUT)
+          : null,
+        extras && wantFacts
+          ? bounded(
+              extras.then((m) => m.releaseFacts()),
+              boundMs
+            ).catch(() => TIMED_OUT)
+          : null,
+        openIssueCount()
+      ]
+    )
     reply.header('Cache-Control', 'no-store')
     return reply.send({
       version: NIVARO_VERSION,
@@ -213,6 +233,7 @@ export async function hubLinkRoutes(app: FastifyInstance) {
       instance: instanceKey(),
       preflight,
       readiness_score,
+      open_issues,
       // Hub phase 6: whether the maintenance freeze is on here (null = could not be read), and
       // whether this app is retired (moved away; ruling B9: a move back checks it is false).
       maintenance,

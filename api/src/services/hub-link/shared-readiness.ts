@@ -69,11 +69,12 @@ export type SharedReadinessCode =
  * session replays), so this app sends it as a warning; the Hub still blocks it while either side
  * runs an older version (services/hub/move/plan.ts OLDER_TARGET_BLOCKERS, storage-floor.ts), and
  * a Hub before 0.3.215 keeps it in its own blocker list.
+ * EXEC_SCRIPT_FLOWS is a warning from 0.3.215 (hub gap `exec`): a shared deployment from that
+ * version runs each script step in a child process of its own when its operator turned them on
+ * (flow-script-isolated.ts); the Hub's plan still blocks a target before it or with them off
+ * (plan.ts EXEC_SCRIPT_SINCE).
  */
-export const SHARED_READINESS_BLOCKERS: readonly SharedReadinessCode[] = [
-  'EXEC_SCRIPT_FLOWS',
-  'SQLITE'
-]
+export const SHARED_READINESS_BLOCKERS: readonly SharedReadinessCode[] = ['SQLITE']
 
 export interface SharedReadinessItem {
   code: SharedReadinessCode
@@ -155,16 +156,27 @@ async function issueTrackers(): Promise<string | null> {
     : on
 }
 
+/** Binary types a shared deployment's script sandbox does not offer (review L5). */
+const BINARY_TYPES_RE =
+  /\b(ArrayBuffer|SharedArrayBuffer|DataView|Atomics|WebAssembly|TextEncoder|TextDecoder|(?:Ui|I)nt(?:8|16|32)Array|Uint8ClampedArray|Float(?:16|32|64)Array|Big(?:Ui|I)nt64Array)\b/
+
 async function execScriptFlows(): Promise<string | null> {
   if (!(await hasTable('nivaro_flow_operations')) || !(await hasTable('nivaro_flows'))) return null
-  const row = (await db('nivaro_flow_operations as o')
+  const rows = (await db('nivaro_flow_operations as o')
     .join('nivaro_flows as f', 'f.id', 'o.flow')
     .where('o.type', 'exec-script')
     .where('f.status', 'active')
-    .countDistinct({ n: 'o.flow' })
-    .first()) as { n?: unknown } | undefined
-  const n = num(row?.n)
-  return n > 0 ? `${plural(n, 'active flow runs', 'active flows run')} a script step` : null
+    .select('o.flow', 'o.options')) as Array<{ flow: unknown; options: unknown }>
+  const flows = new Set(rows.map((r) => String(r.flow)))
+  if (!flows.size) return null
+  // Counts only: the script text is read here, never sent.
+  const binary = new Set(
+    rows.filter((r) => BINARY_TYPES_RE.test(String(r.options ?? ''))).map((r) => String(r.flow))
+  )
+  const base = `${plural(flows.size, 'active flow runs', 'active flows run')} a script step`
+  return binary.size
+    ? `${base}; ${plural(binary.size, 'of them uses', 'of them use')} binary types (ArrayBuffer, typed arrays, TextEncoder) a shared deployment does not offer`
+    : base
 }
 
 function sqlite(): string | null {
@@ -298,6 +310,11 @@ async function helpVideoRenders(): Promise<string | null> {
     : null
 }
 
+/** Warnings that must still be reported when their check cannot run: the Hub's plan turns
+ *  EXEC_SCRIPT_FLOWS into a blocker for a target that does not run scripts, so leaving it out
+ *  would read as "no script flows" (review M1, fail closed). */
+const FAIL_CLOSED_WARNINGS: readonly SharedReadinessCode[] = ['EXEC_SCRIPT_FLOWS']
+
 const CHECKS: Array<[SharedReadinessCode, () => Promise<string | null> | string | null]> = [
   ['ISSUE_TRACKERS', issueTrackers],
   ['EXEC_SCRIPT_FLOWS', execScriptFlows],
@@ -321,7 +338,9 @@ async function codes(): Promise<SharedReadinessItem[]> {
         const detail = await check()
         return detail ? { code, level, detail } : null
       } catch {
-        return level === 'blocker' ? { code, level, detail: COULD_NOT_CHECK } : null
+        return level === 'blocker' || FAIL_CLOSED_WARNINGS.includes(code)
+          ? { code, level, detail: COULD_NOT_CHECK }
+          : null
       }
     })
   )

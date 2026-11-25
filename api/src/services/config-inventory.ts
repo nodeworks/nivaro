@@ -343,6 +343,11 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_hub_data_runs',
   'nivaro_hub_app_templates', //       Hub enhancement 24 (571): template library + installs
   'nivaro_hub_template_installs',
+  'nivaro_hub_fleet_status', //        Hub fleet (566): last status, uptime, drift alerts, SLO reports
+  'nivaro_hub_uptime_samples',
+  'nivaro_hub_uptime_hours',
+  'nivaro_hub_fleet_alerts',
+  'nivaro_hub_slo_reports',
   'nivaro_share_links',
   'nivaro_dashboard_links',
   'nivaro_webhook_deliveries',

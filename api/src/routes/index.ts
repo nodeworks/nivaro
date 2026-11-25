@@ -171,6 +171,7 @@ import { hubRoutes } from './hub.js'
 import { hubAppLinkRoutes } from './hub-app-link.js'
 import { hubDeploymentUsageRoutes, hubLinkUsageRoutes } from './hub-capacity-link.js'
 import { hubDeploymentLinkRoutes } from './hub-deployment-link.js'
+import { hubFleetRoutes } from './hub-fleet.js'
 import { hubLinkRoutes } from './hub-link.js'
 import { hubOidcRoutes } from './hub-oidc.js'
 import { hubOpsRoutes } from './hub-ops.js'
@@ -519,6 +520,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(hubStripRoutes, { prefix: '/hub' })
   await app.register(hubSigninAdminRoutes, { prefix: '/hub/signin' })
   await app.register(hubTemplateRoutes, { prefix: '/hub' })
+  // Hub fleet page, uptime + SLO, drift alerts, audit timeline (HUB=on only).
+  await app.register(hubFleetRoutes, { prefix: '/hub' })
   await app.register(hubOidcRoutes, { prefix: '/hub/oidc' })
   await app.register(hubAppLinkRoutes, { prefix: '/hub/app-link' })
   // Hub ops: cross-app issues, secret rotation helper, storage health (HUB=on only).

@@ -38,11 +38,15 @@ describe('hub registry', () => {
       // Hub ops (enhancements 10, 20, 19) come last.
       'Issues',
       'Storage',
-      'Secrets'
+      'Secrets',
+      'Fleet',
+      'Audit'
     ])
     expect(hubForPath('/hub/signin')?.tab.label).toBe('Sign-in')
     expect(hubForPath('/hub/releases')?.tab.label).toBe('Releases')
     expect(hubForPath('/hub/secrets')?.tab.label).toBe('Secrets')
+    expect(hubForPath('/hub/fleet')?.tab.label).toBe('Fleet')
+    expect(hubForPath('/hub/audit')?.tab.label).toBe('Audit')
     expect(hubForPath('/hub/targets')?.tab.label).toBe('Targets')
     expect(hubForPath('/hub/shared')?.tab.label).toBe('Shared deployments')
     expect(hubForPath('/hub/capacity')?.tab.label).toBe('Capacity')

@@ -26,6 +26,11 @@ vi.mock('../../../routes/preflight.js', () => ({
 }))
 vi.mock('../../../services/readiness.js', () => ({ readReadiness: async () => ({ score: 88 }) }))
 vi.mock('../../../services/pool-attribution.js', () => ({ poolCounters: () => null }))
+const roster = vi.hoisted(() => ({ peers: [] as Array<Record<string, unknown>> }))
+vi.mock('../../../services/instance-roster.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../services/instance-roster.js')>()),
+  listInstances: async () => roster.peers
+}))
 vi.mock('../../../plugins/socketio.js', () => ({
   getLocalConcurrency: () => ({ sockets: 3, users: 2 })
 }))
@@ -60,6 +65,7 @@ vi.mock('../../../services/hub-link/first-admin.js', async () => {
 
 import { hubDeploymentLinkRoutes } from '../../../routes/hub-deployment-link.js'
 import { keyFingerprint } from '../../../services/app-key-fingerprint.js'
+import { instanceKey } from '../../../services/instance-key.js'
 import { INSTANCE_ID } from '../../../services/instance-roster.js'
 import { _resetAppStatusForTests, appStatusFor } from '../../../services/tenancy/app-status.js'
 import { deploymentLinkBearer } from '../../../services/tenancy/hub-contract.js'
@@ -205,6 +211,73 @@ describe('GET /status', () => {
     expect(body.oidc).toEqual({ issuer_host: 'login.microsoftonline.com', tenant: '1111-tenant' })
     expect(res.body).not.toContain('Pa55word')
     expect(res.body).not.toContain(KEY_A)
+  })
+
+  it('reports whether it runs flow script steps: off by default, on with FLOW_SCRIPTS_ON_SHARED=on', async () => {
+    const before = process.env.FLOW_SCRIPTS_ON_SHARED
+    try {
+      const a = await build()
+      delete process.env.FLOW_SCRIPTS_ON_SHARED
+      const off = await a.inject({
+        method: 'GET',
+        url: '/api/hub-deployment/status',
+        headers: auth
+      })
+      expect(off.json().flow_scripts).toBe(false)
+      process.env.FLOW_SCRIPTS_ON_SHARED = 'on'
+      const on = await a.inject({ method: 'GET', url: '/api/hub-deployment/status', headers: auth })
+      expect(on.json().flow_scripts).toBe(true)
+      expect(on.json().flow_scripts_mixed).toBeUndefined()
+      // Every process that may run flows must agree (review L7): a worker left off, or one
+      // before 0.3.215 (no flag), makes it off and "mixed"; a realtime process does not count.
+      // Only this deployment's processes count (review N8): a peer of another shared deployment
+      // on the same Redis — same NODE_ENV, so the same instanceKey() — is left out.
+      const mine = { instance: instanceKey(), shared_deployment: 'shared-a' }
+      roster.peers = [
+        { id: 'other-web', role: 'web', flow_scripts: true, ...mine },
+        { id: 'rt', role: 'realtime', ...mine },
+        {
+          id: 'foreign',
+          role: 'worker',
+          flow_scripts: false,
+          instance: instanceKey(),
+          shared_deployment: 'shared-b'
+        },
+        // A process of no shared deployment at all (an explicit null key) on the same Redis and
+        // NODE_ENV (review 4 F4): not this deployment's either.
+        {
+          id: 'plain',
+          role: 'worker',
+          flow_scripts: false,
+          instance: instanceKey(),
+          shared_deployment: null
+        }
+      ]
+      const all = await a.inject({
+        method: 'GET',
+        url: '/api/hub-deployment/status',
+        headers: auth
+      })
+      expect(all.json().flow_scripts).toBe(true)
+      expect(all.json().flow_scripts_mixed).toBeUndefined()
+      for (const worker of [
+        { id: 'w1', role: 'worker', flow_scripts: false, ...mine },
+        // Before 0.3.215: no flag and no key, but the same instance — counted, and off.
+        { id: 'w1', role: 'worker', instance: instanceKey() }
+      ]) {
+        roster.peers = [{ id: 'other-web', role: 'web', flow_scripts: true, ...mine }, worker]
+        const mixed = await a.inject({
+          method: 'GET',
+          url: '/api/hub-deployment/status',
+          headers: auth
+        })
+        expect(mixed.json()).toMatchObject({ flow_scripts: false, flow_scripts_mixed: true })
+      }
+    } finally {
+      roster.peers = []
+      if (before === undefined) delete process.env.FLOW_SCRIPTS_ON_SHARED
+      else process.env.FLOW_SCRIPTS_ON_SHARED = before
+    }
   })
 
   it("carries the process's own figures across every app: counts only, no app named", async () => {

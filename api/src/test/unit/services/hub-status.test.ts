@@ -110,6 +110,36 @@ describe('readEnvironmentStatus — hub link', () => {
     expect(await readEnvironmentStatus(linked)).not.toHaveProperty('failing')
   })
 
+  it('keeps the readiness score and open issue count (fleet page); junk is dropped', async () => {
+    fetchJson.mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: {
+        version: '0.3.215',
+        preflight: { status: 'ok', failing: [] },
+        readiness_score: 91.6,
+        open_issues: 12
+      }
+    })
+    expect(await readEnvironmentStatus(linked)).toMatchObject({
+      readiness_score: 92,
+      open_issues: 12
+    })
+    fetchJson.mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: {
+        version: '0.3.208',
+        preflight: { status: 'ok', failing: [] },
+        readiness_score: 'high',
+        open_issues: -1
+      }
+    })
+    const old = await readEnvironmentStatus(linked)
+    expect(old).not.toHaveProperty('readiness_score')
+    expect(old).not.toHaveProperty('open_issues')
+  })
+
   it('401 is link_refused and never falls back to the public routes', async () => {
     fetchJson.mockResolvedValue({ ok: false, status: 401, body: { code: 'HUB_LINK_REFUSED' } })
     const s = await readEnvironmentStatus(linked)

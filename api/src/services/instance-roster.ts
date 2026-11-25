@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto'
 import { hostname } from 'node:os'
 import type { Redis } from 'ioredis'
 import { NIVARO_VERSION } from '../version.js'
+import { hubSharedConfig } from './deployment-mode.js'
+import { flowScriptsOnShared } from './flow-script-limits.js'
 import { instanceKey } from './instance-key.js'
 import { socketsServed } from './process-role.js'
 
@@ -34,6 +36,12 @@ async function beat(): Promise<void> {
         role: process.env.NIVARO_ROLE?.trim() || null,
         // Post-mortem 3.3 — false on a web process with SOCKETS=off (a realtime tier holds them).
         sockets: socketsServed(),
+        // Hub gap exec (review L7): whether this process runs flow script steps on a shared
+        // deployment, so the deployment's status says "on" only when every process does.
+        flow_scripts: flowScriptsOnShared(),
+        // The Hub shared deployment this process belongs to (null elsewhere), so a deployment's
+        // status counts only its own processes on a Redis others share (review N8).
+        shared_deployment: hubSharedConfig()?.deployment ?? null,
         node: process.version,
         started_at: new Date(Date.now() - process.uptime() * 1000).toISOString(),
         uptime_seconds: Math.round(process.uptime()),

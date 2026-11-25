@@ -842,7 +842,7 @@ export const MOVE_BLOCKER_COPY: Record<string, Copy> = {
   },
   EXEC_SCRIPT_FLOWS: {
     title: 'Some of the app’s flows run scripts',
-    hint: 'A shared deployment cannot run flow scripts. Change or turn off those flows first.'
+    hint: 'This shared deployment does not run flow scripts: it runs a version before 0.3.215 (or one the Hub cannot read), or its operator has not turned script steps on (off by default; Shared deployments → the deployment → Flow script steps). Upgrade it (and the app) to 0.3.215 or later and turn script steps on there if every app on it is trusted, or change or turn off those flows first.'
   },
   SQLITE: {
     title: 'The app runs on SQLite',
@@ -965,6 +965,10 @@ export const MOVE_WARNING_COPY: Record<string, Copy> = {
   SETTINGS_ENV_OVERRIDES: {
     title: 'A shared deployment does not apply the app’s server setting overrides',
     hint: 'NIVARO_SETTINGS_OVERRIDES on a shared deployment applies only test modes and the environment label. Before the move, save the listed values in the app’s own Settings.'
+  },
+  EXEC_SCRIPT_FLOWS: {
+    title: 'Script steps run in a sandbox of their own on the shared deployment',
+    hint: 'Each step gets its own process with the deployment’s limits: no network, no ArrayBuffer, typed arrays or WebAssembly, a heap limit (64 MB unless set higher), at most 30 s, a few steps at once per app. A script that needs any of these fails there: check the flows’ recent runs after the move.'
   },
   HUDDLE_TURN: {
     title: 'Huddles use the deployment’s media servers, not the app’s own',
