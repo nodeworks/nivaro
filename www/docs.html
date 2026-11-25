@@ -256,6 +256,7 @@
           <a class="docs-nav-item" data-section="sdk-tree-hierarchy" href="#sdk-tree-hierarchy">Tree &amp; Hierarchy</a>
           <a class="docs-nav-item" data-section="sdk-help-videos" href="#sdk-help-videos">Help Videos</a>
           <a class="docs-nav-item" data-section="sdk-coverage" href="#sdk-coverage">Full API Coverage</a>
+          <a class="docs-nav-item" data-section="sdk-hub" href="#sdk-hub">Hub client (Hub mode only)</a>
         </div>
       </div>
 
@@ -639,6 +640,16 @@
           <a class="docs-nav-item" data-section="release-image" href="#release-image">Release image</a>
           <a class="docs-nav-item" data-section="realtime-tier" href="#realtime-tier">Realtime tier</a>
           <a class="docs-nav-item" data-section="deployment-modes" href="#deployment-modes">Deployment modes</a>
+        </div>
+      </div>
+
+      <!-- Nivaro Hub — Hub mode only (HUB=on); a regular install has none of it -->
+      <div class="docs-nav-group">
+        <button class="docs-nav-group-btn" data-group="hub" aria-expanded="false">
+          Nivaro Hub · Hub mode only
+          <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M4 2l4 4-4 4"/></svg>
+        </button>
+        <div class="docs-nav-items" id="group-hub">
           <a class="docs-nav-item" data-section="hub-overview" href="#hub-overview">Nivaro Hub</a>
           <a class="docs-nav-item" data-section="hub-link" href="#hub-link">Hub link</a>
           <a class="docs-nav-item" data-section="hub-promotions" href="#hub-promotions">Hub promotions</a>
@@ -648,6 +659,7 @@
           <a class="docs-nav-item" data-section="hub-create-app" href="#hub-create-app">Creating apps from the Hub</a>
           <a class="docs-nav-item" data-section="hub-shared" href="#hub-shared">Shared deployments</a>
           <a class="docs-nav-item" data-section="hub-moves" href="#hub-moves">Moving an environment</a>
+          <a class="docs-nav-item" data-section="hub-api" href="#hub-api">Hub API (REST, GraphQL, SDK, MCP)</a>
         </div>
       </div>
 
@@ -7067,6 +7079,12 @@ const articles = await nivaro.request(readItems('articles', { limit: 5 }));
 const check = await nivaro.request(aiValidate('articles', { title: 'Draft post' }));
 const feeds = await nivaro.request(listWidgetFeeds());</code></pre>
           <!-- /SYNC:sdk-coverage -->
+        </div>
+
+        <div class="doc-section" id="s-sdk-hub" data-toc='[{"id":"sdk-hub","label":"SDK — Hub client (Hub mode only)"}]'>
+          <!-- SYNC:sdk-hub -->
+          <h1 class="doc-h1" id="sdk-hub">SDK — Hub client (Hub mode only)</h1>
+          <!-- /SYNC:sdk-hub -->
         </div>
 
         <div class="doc-section" id="s-sdk-alerts" data-toc='[{"id":"sdk-alerts","label":"SDK — Alerts &amp; Monitoring"}]'>
@@ -23624,6 +23642,12 @@ GET /api/files/usage/orphans    → files referenced by nothing (admin)</code></
           <p class="doc-p">Hub link routes on a dedicated app, mounted with <code class="doc-code">HUB_TOKEN</code> exactly as before, carry the move: <code class="doc-code">POST /api/hub-link/maintenance</code> (<code class="doc-code">{on, message?, move_id?}</code>), <code class="doc-code">POST</code> and <code class="doc-code">DELETE /api/hub-link/retire</code>, <code class="doc-code">GET /api/hub-link/shared-readiness</code>, and the file routes <code class="doc-code">POST</code> and <code class="doc-code">DELETE /files/ticket</code>, <code class="doc-code">POST /files/pull</code>, <code class="doc-code">GET /files/pull/:runId</code>; <code class="doc-code">GET /status</code> adds <code class="doc-code">maintenance</code> and <code class="doc-code">retired</code>. The source serves the files on <code class="doc-code">GET /api/hub-transfer/files/:id</code>, authorised by a transfer ticket (<code class="doc-code">Authorization: Transfer &lt;ticket&gt;</code>) and nothing else. These routes extend the read-only link of phase 1: they carry counts and kinds and file bytes between the two apps, never records and never through the Hub.</p>
           <div class="doc-note">The move activity rows are <code class="doc-code">hub-move-start</code> (also a resume), <code class="doc-code">hub-move-done</code>, <code class="doc-code">hub-move-rolled-back</code>, <code class="doc-code">hub-move-cancel</code> (also a Roll back of an interrupted move), <code class="doc-code">hub-move-finish-stop</code> (Finish and stop the old home), <code class="doc-code">hub-move-route-confirm</code> and <code class="doc-code">hub-move-checklist</code>. None contains a token, ticket, key or connection. After a move ends the Move… panel keeps showing its result until you dismiss it (per browser); an ended move stays in the environment history as "Moved".</div>
           <!-- /SYNC:hub-moves -->
+        </div>
+
+        <div class="doc-section" id="s-hub-api" data-toc='[{"id":"hub-api","label":"Hub API — Hub mode only"}]'>
+          <!-- SYNC:hub-api -->
+          <h1 class="doc-h1" id="hub-api">Hub API — Hub mode only</h1>
+          <!-- /SYNC:hub-api -->
         </div>
 
         <div class="doc-section" id="s-chaos" data-toc='[{"id":"chaos","label":"Chaos engineering"},{"id":"chaos-gate","label":"The gate and CHAOS_ENABLED"},{"id":"chaos-faults","label":"Faults"},{"id":"chaos-runs","label":"Runs and verdicts"},{"id":"chaos-hypothesis","label":"Steady-state hypothesis and auto-abort"},{"id":"chaos-preflight","label":"Pre-flight checklist"},{"id":"chaos-console","label":"The console"},{"id":"chaos-cockpit","label":"Live run cockpit"},{"id":"chaos-banner","label":"The “Drill running” banner"}]'>

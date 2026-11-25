@@ -48,6 +48,7 @@ export * from './sections/file-downloads.js'
 export * from './sections/graphql.js'
 export * from './sections/help-videos.js'
 export * from './sections/hub.js'
+export * from './sections/hub-api.js'
 export * from './sections/hub-shared.js'
 export * from './sections/ideas.js'
 export * from './sections/import-templates.js'
@@ -330,6 +331,7 @@ import {
   hubPromotionsDocs,
   hubSigninDocs
 } from './sections/hub.js'
+import { hubApiDocs, sdkHubDocs } from './sections/hub-api.js'
 import { hubMovesDocs, hubSharedDocs } from './sections/hub-shared.js'
 import { ideasDocs } from './sections/ideas.js'
 import { importTemplatesGuide } from './sections/import-templates.js'
@@ -631,6 +633,18 @@ export interface NavGroup {
   items: DocSection[]
 }
 
+/** The nav group of the Nivaro Hub (Hub mode only). */
+export const HUB_DOC_GROUP = 'hub'
+/** Sections elsewhere that also describe Hub mode only (the SDK's Hub client). */
+export const HUB_ONLY_SECTION_IDS: ReadonlySet<string> = new Set(['sdk-hub'])
+
+/** The nav without the Hub's sections — what a regular install (no `hub` feature) shows. */
+export function navWithoutHub(groups: NavGroup[]): NavGroup[] {
+  return groups
+    .filter((g) => g.id !== HUB_DOC_GROUP)
+    .map((g) => ({ ...g, items: g.items.filter((i) => !HUB_ONLY_SECTION_IDS.has(i.id)) }))
+}
+
 export const navSections: NavGroup[] = [
   {
     id: 'overview',
@@ -768,7 +782,8 @@ export const navSections: NavGroup[] = [
       sdkPresence,
       sdkTreeHierarchy,
       sdkHelpVideos,
-      sdkCoverage
+      sdkCoverage,
+      sdkHubDocs
     ]
   },
   {
@@ -1135,7 +1150,15 @@ export const navSections: NavGroup[] = [
       infrastructureDriftDocs,
       releaseImageDocs,
       realtimeTierDocs,
-      deploymentModesDocs,
+      deploymentModesDocs
+    ]
+  },
+  {
+    // Hub mode only (HUB=on): the Docs page shows this group only where the server lists the
+    // `hub` feature; www/docs.html keeps it in its own "Hub mode only" group.
+    id: HUB_DOC_GROUP,
+    label: 'Nivaro Hub · Hub mode only',
+    items: [
       hubOverviewDocs,
       hubLinkDocs,
       hubPromotionsDocs,
@@ -1144,7 +1167,8 @@ export const navSections: NavGroup[] = [
       hubDatabasesDocs,
       hubCreateDocs,
       hubSharedDocs,
-      hubMovesDocs
+      hubMovesDocs,
+      hubApiDocs
     ]
   },
   {

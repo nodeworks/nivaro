@@ -4,6 +4,13 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import { ApiKeyUsageSheet } from '@/components/api-key-usage-sheet'
 import { ConfigHistoryButton } from '@/components/config-history'
+import {
+  HUB_SCOPE,
+  type HubKeyAccess,
+  HubKeyAccessControl,
+  hubAccessOf,
+  withHubAccess
+} from '@/components/hub-key-access'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -20,6 +27,7 @@ import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Textarea } from '@/components/ui/textarea'
 import { api } from '@/lib/api'
+import { useServerFeatures } from '@/lib/useServerFeatures'
 import { cn, formatDate, formatNumber, formatRelative } from '@/lib/utils'
 
 interface ApiKeyScope {
@@ -283,6 +291,7 @@ interface FormState {
   scope_restrictions: string
   sandbox: boolean
   chat: ChatAccess
+  hub: HubKeyAccess
 }
 
 const FORM_DEFAULTS: FormState = {
@@ -293,7 +302,8 @@ const FORM_DEFAULTS: FormState = {
   rate_limit_per_minute: '',
   scope_restrictions: '',
   sandbox: false,
-  chat: 'none'
+  chat: 'none',
+  hub: 'none'
 }
 
 function MetaCell({ label, value }: { label: string; value: React.ReactNode }) {
@@ -317,6 +327,8 @@ export function ApiKeysPage() {
   const [createdKey, setCreatedKey] = useState<string | null>(null)
   const [confirm, setConfirm] = useState<'revoke' | 'delete' | null>(null)
   const [usageOpen, setUsageOpen] = useState(false)
+  // Hub API access (hub:read / hub:write) exists only on a Nivaro Hub (HUB=on).
+  const isHub = useServerFeatures().has('hub')
 
   const { data: keys = [], isLoading } = useQuery<ApiKey[]>({
     queryKey: ['api-keys'],
@@ -376,12 +388,25 @@ export function ApiKeysPage() {
     onError: () => toast.error('Failed to save chat access')
   })
 
+  const hubMut = useMutation({
+    mutationFn: ({ key, access }: { key: ApiKey; access: HubKeyAccess }) =>
+      api.patch(`/api-keys/${key.id}`, { scopes: withHubAccess(key.scopes, access) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['api-keys'] })
+      toast.success('Hub access saved')
+    },
+    onError: () => toast.error('Failed to save Hub access')
+  })
+
   const selected = keys.find((k) => k.id === selectedId) ?? null
 
   const submitCreate = () => {
-    const scopes = withChatAccess(
-      form.scopes.filter((s) => s.collection && s.actions.length > 0),
-      form.chat
+    const scopes = withHubAccess(
+      withChatAccess(
+        form.scopes.filter((s) => s.collection && s.actions.length > 0),
+        form.chat
+      ),
+      isHub ? form.hub : 'none'
     )
     if (!form.name.trim()) return toast.error('Name is required')
     if (scopes.length === 0) return toast.error('At least one scope is required')
@@ -606,6 +631,16 @@ export function ApiKeysPage() {
                 />
               </div>
 
+              {isHub && (
+                <div className='space-y-1.5'>
+                  <Label>Hub API</Label>
+                  <HubKeyAccessControl
+                    value={form.hub}
+                    onChange={(hub) => setForm((f) => ({ ...f, hub }))}
+                  />
+                </div>
+              )}
+
               <div className='space-y-1.5'>
                 <Label htmlFor='key-allowlist'>IP allowlist (one CIDR per line, optional)</Label>
                 <Textarea
@@ -743,13 +778,15 @@ export function ApiKeysPage() {
                   Scopes
                 </h3>
                 <div className='space-y-1.5'>
-                  {selected.scopes.filter((s) => s.collection !== CHAT_SCOPE).length === 0 ? (
+                  {selected.scopes.filter(
+                    (s) => s.collection !== CHAT_SCOPE && s.collection !== HUB_SCOPE
+                  ).length === 0 ? (
                     <p className='text-[12px] text-slate-500 dark:text-slate-400'>
                       No collection scopes — the key reads and writes no records.
                     </p>
                   ) : (
                     selected.scopes
-                      .filter((s) => s.collection !== CHAT_SCOPE)
+                      .filter((s) => s.collection !== CHAT_SCOPE && s.collection !== HUB_SCOPE)
                       .map((scope) => (
                         <div
                           key={`${scope.collection}:${scope.actions.join(',')}`}
@@ -781,6 +818,19 @@ export function ApiKeysPage() {
                   onChange={(access) => chatMut.mutate({ key: selected, access })}
                 />
               </div>
+
+              {isHub && (
+                <div className='space-y-2'>
+                  <h3 className='text-[12px] font-semibold text-slate-700 dark:text-slate-200'>
+                    Hub API
+                  </h3>
+                  <HubKeyAccessControl
+                    value={hubAccessOf(selected.scopes)}
+                    disabled={hubMut.isPending || !selected.is_active}
+                    onChange={(access) => hubMut.mutate({ key: selected, access })}
+                  />
+                </div>
+              )}
 
               {selected.ip_allowlist.length > 0 && (
                 <div>
