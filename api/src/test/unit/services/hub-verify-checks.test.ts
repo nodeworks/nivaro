@@ -68,8 +68,8 @@ const check = (over: Partial<SmokeCheck> = {}): SmokeCheck => ({
 describe('judgeCheck', () => {
   it('passes and fails on status, time, text and rows', () => {
     expect(judgeCheck(check(), { status: 200, ms: 10 }).ok).toBe(true)
-    expect(judgeCheck(check(), { status: 503, ms: 10, code: 'MAINTENANCE' }).reason).toBe(
-      'answered 503 (MAINTENANCE), expected 200'
+    expect(judgeCheck(check(), { status: 503, ms: 10, code: 'BAD_GATEWAY' }).reason).toBe(
+      'answered 503 (BAD_GATEWAY), expected 200'
     )
     expect(judgeCheck(check({ max_ms: 100 }), { status: 200, ms: 250 }).reason).toBe(
       'took 250 ms, the limit is 100 ms'

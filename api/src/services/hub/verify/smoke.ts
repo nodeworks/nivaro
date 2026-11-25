@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { insertReturningId } from '../../../db/dialect/ef.js'
 import { db } from '../../../db/index.js'
 import { logActivity } from '../../activity.js'
+import { hubReadTimeoutMs } from '../../hub-link/verify-limits.js'
 import { deliverHubNotice, hubEventRecipients } from '../notify-events.js'
 import { flagOf, productionMap } from '../owner-access.js'
 import {
@@ -10,6 +11,7 @@ import {
   checksFromJson,
   judgeCheck,
   type OnFail,
+  runOutcome,
   runSummary,
   type SmokeCheck,
   type SmokeSuiteInput
@@ -48,8 +50,16 @@ export const LOOKBACK_MS = 6 * 60 * 60_000
 /** A `running` claim older than this was left by a stopped tick. */
 export const RUN_STALE_MS = 10 * 60_000
 
-export type RunTrigger = 'promote' | 'rollback' | 'apply' | 'move' | 'upgrade' | 'manual'
-export type RunStatus = 'queued' | 'running' | 'passed' | 'failed'
+export type RunTrigger =
+  | 'promote'
+  | 'rollback'
+  | 'apply'
+  | 'extension'
+  | 'move'
+  | 'upgrade'
+  | 'manual'
+/** `unverified`: checks failed only because they could not be judged — told, never rolled back. */
+export type RunStatus = 'queued' | 'running' | 'passed' | 'failed' | 'unverified'
 
 export interface SmokeSuite extends SmokeSuiteInput {
   environment_id: number
@@ -261,12 +271,18 @@ export async function queueNewRuns(now = Date.now()): Promise<number> {
 
     const deploys = (await db(DEPLOYS)
       .where({ environment_id: envId, status: 'success' })
-      .whereIn('kind', ['promote', 'rollback'])
+      .whereIn('kind', ['promote', 'rollback', 'extension'])
       .where('finished_at', '>=', since)
       .select('id', 'kind', 'version', 'finished_at', 'plan')) as Array<Record<string, unknown>>
     for (const d of deploys) {
       const trigger: RunTrigger =
-        d.kind === 'rollback' ? 'rollback' : isApply(d.plan) ? 'apply' : 'promote'
+        d.kind === 'rollback'
+          ? 'rollback'
+          : d.kind === 'extension'
+            ? 'extension'
+            : isApply(d.plan)
+              ? 'apply'
+              : 'promote'
       if (
         await queueRun({
           appId,
@@ -439,7 +455,10 @@ export async function runChecks(
       )
     }
     const res = target
-      ? await callVerify(target, 'run', body, deps.link)
+      ? await callVerify(target, 'run', body, {
+          ...deps.link,
+          timeoutMs: deps.link?.timeoutMs ?? hubReadTimeoutMs(reads.length)
+        })
       : ({ state: 'failed', body: null } as VerifyLinkResult)
     const list = (res.body as { results?: unknown } | null)?.results
     reads.forEach((c, i) => {
@@ -487,6 +506,7 @@ const TRIGGER_WORDS: Record<RunTrigger, string> = {
   promote: 'the promotion',
   rollback: 'the rollback',
   apply: 'Apply now',
+  extension: 'an extension deploy',
   move: 'the move',
   upgrade: 'the shared deployment’s upgrade',
   manual: 'a run by hand'
@@ -512,7 +532,7 @@ export async function executeRun(id: number, deps: RunDeps = defaultRunDeps()): 
     )
   }
   const failed = results.filter((r) => !r.ok).length
-  const status: RunStatus = failed || !results.length ? 'failed' : 'passed'
+  const status: RunStatus = runOutcome(results)
   const reason = results.length ? runSummary(results) : 'The suite had no checks to run'
   await db(RUNS)
     .where({ id, status: 'running' })
@@ -526,13 +546,26 @@ export async function executeRun(id: number, deps: RunDeps = defaultRunDeps()): 
     })
   const { key, production } = await envFacts(run.environment_id)
   await logActivity({
-    action: status === 'passed' ? 'hub-smoke-passed' : 'hub-smoke-failed',
+    action: `hub-smoke-${status}`,
     user: run.created_by,
     collection: RUNS,
     item: String(id),
     comment: `${key} after ${TRIGGER_WORDS[run.trigger]}: ${reason}`.slice(0, 1000),
     origin: run.created_by ? undefined : 'machine'
   })
+  if (status === 'unverified') {
+    // Nothing about the deploy is known: the people are told, nothing is rolled back.
+    await (deps.notify ?? notifyPeople)(run.app_id, {
+      subject: `Smoke checks could not judge ${key}`,
+      message:
+        `${key} after ${TRIGGER_WORDS[run.trigger]}: the checks could not be judged (${reason}). Nothing was rolled back; check the environment and its link.`.slice(
+          0,
+          1000
+        ),
+      urgent: false,
+      path: `/hub/smoke?env=${run.environment_id}&run=${id}`
+    }).catch(() => undefined)
+  }
   if (status === 'failed') {
     let tail = ''
     if (run.on_fail === 'rollback' && run.trigger === 'promote' && run.deploy_id != null) {
@@ -555,21 +588,26 @@ export async function executeRun(id: number, deps: RunDeps = defaultRunDeps()): 
   return true
 }
 
-/** Settles runs a stopped tick left `running`: failed, and said so. */
+/** Settles runs a stopped tick left `running`: unverified (never a breach), and said so. */
 export async function healStaleRuns(now: number): Promise<number> {
   return db(RUNS)
     .where({ status: 'running' })
     .where('claimed_at', '<', new Date(now - RUN_STALE_MS))
     .update({
-      status: 'failed',
+      // Never a verdict on the deploy: the Hub stopped, not the app.
+      status: 'unverified',
       reason: 'The Hub stopped during this run — run it again',
       finished_at: new Date(now)
     })
 }
 
-/** Runs every queued run that is due (oldest first, at most `max` a tick). */
+/** A tick stops starting runs after this long (the rest wait for the next minute). */
+export const TICK_BUDGET_MS = 45_000
+
+/** Runs the queued runs that are due (oldest first, at most `max`, within TICK_BUDGET_MS). */
 export async function runDueRuns(deps: RunDeps = defaultRunDeps(), max = 20): Promise<number> {
-  await healStaleRuns(deps.now())
+  const started = deps.now()
+  await healStaleRuns(started)
   const due = (await db(RUNS)
     .where({ status: 'queued' })
     .where('due_at', '<=', new Date(deps.now()))
@@ -577,20 +615,27 @@ export async function runDueRuns(deps: RunDeps = defaultRunDeps(), max = 20): Pr
     .limit(max)
     .select('id')) as Array<{ id: number }>
   let n = 0
-  for (const r of due) if (await executeRun(Number(r.id), deps)) n++
+  for (const r of due) {
+    if (deps.now() - started > TICK_BUDGET_MS) break
+    if (await executeRun(Number(r.id), deps)) n++
+  }
   return n
 }
 
 /**
- * For the automatic rollback rule (releases/auto-rollback.ts): a failed smoke run after this
- * promotion whose suite said `rollback` is a breach. Null = no such run (yet).
+ * For the automatic rollback rule (releases/auto-rollback.ts): a run after this promotion whose
+ * suite said `rollback`, that FINISHED inside the rule's window (`untilIso`) and saw a check fail
+ * on the app's own answer (status `failed`, never `unverified`), is a breach. Null = none.
  */
 export async function smokeVerdictForDeploy(
-  deployId: number
+  deployId: number,
+  untilIso?: string | null
 ): Promise<{ breach: boolean; reason: string | null } | null> {
-  const r = (await db(RUNS)
+  const q = db(RUNS)
     .where({ deploy_id: deployId, trigger_kind: 'promote', on_fail: 'rollback', status: 'failed' })
+    .whereNotNull('finished_at')
     .orderBy('id', 'desc')
-    .first('reason')) as { reason: string | null } | undefined
+  if (untilIso) q.where('finished_at', '<=', new Date(untilIso))
+  const r = (await q.first('reason')) as { reason: string | null } | undefined
   return r ? { breach: true, reason: `smoke checks failed: ${r.reason ?? 'see the run'}` } : null
 }

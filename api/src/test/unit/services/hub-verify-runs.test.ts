@@ -289,7 +289,7 @@ describe('running smoke checks', () => {
     expect(String(note.path)).toContain(`/hub/smoke?env=${env.production}`)
   })
 
-  it('a refused link fails the signed-in reads with the reason in words', async () => {
+  it('a refused link cannot judge the signed-in reads: unverified, said in words', async () => {
     await smoke.saveSuite(env.staging, suite(), USER)
     const id = await smoke.queueManualRun(env.staging, USER)
     await smoke.executeRun(id, {
@@ -299,7 +299,8 @@ describe('running smoke checks', () => {
       notify: async () => 1
     })
     const run = await smoke.readRun(id)
-    expect(run?.status).toBe('failed')
+    expect(run?.status).toBe('unverified')
+    expect(run?.results.find((r) => r.id === 'bbbbbbbb')?.judged).toBe(false)
     expect(run?.results.find((r) => r.id === 'bbbbbbbb')?.reason).toBe(
       'the app refused the Hub’s link token'
     )
@@ -313,7 +314,7 @@ describe('running smoke checks', () => {
       .where({ id })
       .update({ status: 'running', claimed_at: new Date(clock - 11 * MIN) })
     expect(await smoke.healStaleRuns(clock)).toBe(1)
-    expect((await smoke.readRun(id))?.status).toBe('failed')
+    expect((await smoke.readRun(id))?.status).toBe('unverified')
   })
 })
 
@@ -380,9 +381,122 @@ describe('a failed smoke run and the automatic rollback rule', () => {
       }),
       notify: vi.fn(async () => 1),
       envKey: async () => 'staging',
-      smoke: (id: number) => smoke.smokeVerdictForDeploy(id)
+      smoke: (id: number, until: string | null) => smoke.smokeVerdictForDeploy(id, until)
     }
   }
+
+  /** A promotion of `envId` watched by an enabled rule, with its smoke run queued (not run). */
+  async function watchedPromotion(envId: number, over: Record<string, unknown> = {}) {
+    await smoke.saveSuite(envId, suite({ on_fail: 'rollback', ...over }), USER)
+    await rollback.saveRule(
+      envId,
+      {
+        enabled: true,
+        window_minutes: 30,
+        max_error_pct: 50,
+        min_requests: 50,
+        max_crashes: null,
+        min_readiness: null
+      },
+      USER
+    )
+    await db('nivaro_hub_rollback_rules')
+      .where({ environment_id: envId })
+      .update({ updated_at: new Date(clock - 60 * MIN) })
+    const deployId = await deployRow({
+      envId,
+      version: '0.3.215',
+      from: '0.3.214',
+      finishedAt: clock - 2 * MIN
+    })
+    expect(await rollback.openWatches({ now: () => clock })).toBe(1)
+    await smoke.queueNewRuns(clock)
+    const [run] = await smoke.listRuns({ envIds: [envId] })
+    return { deployId, runId: run.id }
+  }
+
+  it('the Hub restarts mid-run after a production promotion: unverified, never a rollback', async () => {
+    const { deployId, runId } = await watchedPromotion(env.production)
+    await db('nivaro_hub_smoke_runs')
+      .where({ id: runId })
+      .update({ status: 'running', claimed_at: new Date(clock - 11 * MIN) })
+    clock += 11 * MIN
+    expect(await smoke.healStaleRuns(clock)).toBe(1)
+    expect((await smoke.readRun(runId))?.status).toBe('unverified')
+    expect(await smoke.smokeVerdictForDeploy(deployId)).toBeNull()
+    const rolled: Array<Record<string, unknown>> = []
+    expect(await rollback.judgeWatches(watchDeps(rolled) as never)).toBe(0)
+    expect(rolled).toEqual([])
+  })
+
+  it('the link is unreachable: unverified, the people are told, never a rollback', async () => {
+    const { deployId, runId } = await watchedPromotion(env.production, {
+      checks: [{ id: 'bbbbbbbb', kind: 'read', name: 'Projects list', path: '/api/items/projects' }]
+    })
+    const notify = vi.fn(async () => 1)
+    await smoke.executeRun(runId, {
+      now: () => clock,
+      link: {
+        fetch: (async () => {
+          throw new Error('ECONNREFUSED')
+        }) as never
+      },
+      notify,
+      watched: async () => true
+    })
+    expect((await smoke.readRun(runId))?.status).toBe('unverified')
+    const [, note] = notify.mock.calls[0] as unknown as [number, Record<string, unknown>]
+    expect(String(note.subject)).toBe('Smoke checks could not judge production')
+    expect(String(note.message)).toContain('Nothing was rolled back')
+    expect(await smoke.smokeVerdictForDeploy(deployId)).toBeNull()
+    const rolled: Array<Record<string, unknown>> = []
+    expect(await rollback.judgeWatches(watchDeps(rolled) as never)).toBe(0)
+  })
+
+  it('maintenance or the smoke identity refused: not judged either', async () => {
+    const { deployId, runId } = await watchedPromotion(env.production, {
+      checks: [
+        { id: 'bbbbbbbb', kind: 'read', name: 'Projects list', path: '/api/items/projects' },
+        { id: 'cccccccc', kind: 'query', name: 'Orders', slug: 'open-orders', min_rows: 1 }
+      ]
+    })
+    await smoke.executeRun(runId, {
+      now: () => clock,
+      link: {
+        fetch: linkAnswer([
+          { status: 503, ms: 3, rows: null, code: 'MAINTENANCE' },
+          { status: 409, ms: 3, rows: null, code: 'SMOKE_QUERY_NOT_READ_ONLY' }
+        ]).fetch as never
+      },
+      notify: async () => 1
+    })
+    expect((await smoke.readRun(runId))?.status).toBe('unverified')
+    expect(await smoke.smokeVerdictForDeploy(deployId)).toBeNull()
+  })
+
+  it('a run that finished after the rule’s window closed never counts', async () => {
+    const { deployId, runId } = await watchedPromotion(env.production)
+    clock += 40 * MIN
+    await smoke.executeRun(runId, {
+      now: () => clock,
+      httpFetch: (async () => okResponse(500)) as never,
+      link: {
+        fetch: linkAnswer([
+          { status: 200, ms: 1, rows: 1, code: null },
+          { status: 200, ms: 1, rows: 3, code: null }
+        ]).fetch as never
+      },
+      notify: async () => 1,
+      watched: async () => false
+    })
+    expect((await smoke.readRun(runId))?.status).toBe('failed')
+    const w = await db('nivaro_hub_rollback_watches')
+      .where({ deploy_id: deployId })
+      .first('until_at')
+    expect(
+      await smoke.smokeVerdictForDeploy(deployId, new Date(w.until_at).toISOString())
+    ).toBeNull()
+  })
 
   it('rollback: the rule takes it as a breach and rolls back through its own path', async () => {
     const { deployId, notify } = await failedPromotionRun('rollback')
@@ -529,8 +643,54 @@ describe('extension version manager', () => {
     expect(row?.behind).toBe(1)
   })
 
-  it('promotes one extension into a Docker stack: pin + Apply now; a refused start puts the pins back', async () => {
-    const apply = vi.fn(async () => ({ deployId: 77, jobRunId: null }))
+  /** A lock that is held by someone else (`busy`) or free; records what it handed out. */
+  function testLock(busy = false) {
+    const taken: string[] = []
+    return {
+      taken,
+      lock: {
+        take: vi.fn(async () => {
+          if (busy) return null
+          taken.push('tok')
+          return 'tok'
+        }),
+        renew: vi.fn(async () => true),
+        release: vi.fn(async () => undefined),
+        held: vi.fn(async () => busy),
+        holder: vi.fn(async () => null)
+      }
+    }
+  }
+
+  /** startStackApply through the REAL startPromotion, with its outside world faked. */
+  async function realApply(o: { busy?: boolean; gather?: () => Promise<never> }) {
+    const run = await import('../../../services/hub/promote-run.js')
+    const { lock } = testLock(o.busy)
+    return (envId: number, req: Parameters<typeof run.startStackApply>[1]) =>
+      run.startStackApply(envId, req, {
+        lock: lock as never,
+        gather: (o.gather ??
+          (async () => {
+            throw Object.assign(new Error('the agent did not answer'), {
+              code: 'AGENT_UNREACHABLE',
+              status: 502
+            })
+          })) as never,
+        startJobRun: (async () => ({ id: 1, log() {}, fail: async () => undefined })) as never,
+        gitCtx: (async () => ({})) as never
+      })
+  }
+
+  const pinsOf = async (envId: number) =>
+    JSON.parse(
+      (await db('nivaro_hub_environments').where({ id: envId }).first('extension_pins'))
+        .extension_pins
+    )
+
+  it('Docker: a concurrent deploy refuses the start before the pin is written (no leak)', async () => {
+    await db('nivaro_hub_environments')
+      .where({ id: env.staging })
+      .update({ version_pin: '0.3.215' })
     const plan = await ext.planExtensionPromote(env.staging, 'efp-ops', {})
     expect(plan).toMatchObject({
       via: 'docker',
@@ -540,67 +700,129 @@ describe('extension version manager', () => {
       blockers: []
     })
     await expect(
-      ext.promoteExtension(env.staging, 'efp-ops', { confirm: 'nope' }, { id: USER }, { apply })
+      ext.promoteExtension(env.staging, 'efp-ops', { confirm: 'nope' }, { id: USER }, {})
     ).rejects.toMatchObject({ code: 'CONFIRM_REQUIRED' })
-    const out = await ext.promoteExtension(
-      env.staging,
-      'efp-ops',
-      { confirm: 'staging' },
-      { id: USER },
-      { apply }
-    )
-    expect(out).toMatchObject({ via: 'docker', deploy_id: 77 })
-    expect(apply).toHaveBeenCalledWith(env.staging, { confirm: 'staging', user: { id: USER } })
-    const pins = await db('nivaro_hub_environments')
-      .where({ id: env.staging })
-      .first('extension_pins')
-    expect(JSON.parse(pins.extension_pins)).toEqual({ 'efp-ops': DIGEST('b') })
+    // Another run holds the environment's lock: refused, the stored pins never changed.
+    await expect(
+      ext.promoteExtension(
+        env.staging,
+        'efp-ops',
+        { confirm: 'staging' },
+        { id: USER },
+        { apply: await realApply({ busy: true }) }
+      )
+    ).rejects.toMatchObject({ code: 'PROMOTION_RUNNING' })
+    expect(await pinsOf(env.staging)).toEqual({ 'efp-ops': DIGEST('a') })
+    const [p] = await ext.listExtensionPromotions({})
+    expect(p.status).toBe('failed')
+  })
 
-    // Now it pins the same image: nothing to do.
-    const again = await ext.planExtensionPromote(env.staging, 'efp-ops', {})
-    expect(again.blockers.map((b) => b.code)).toEqual(['ALREADY_PINNED'])
-
-    // A refused Apply now leaves the old pins.
-    const refused = vi.fn(async () => {
-      throw Object.assign(new Error('frozen'), { code: 'FROZEN', status: 409 })
+  it('Docker: a start that fails after the pin was written puts it back; a retry is allowed', async () => {
+    let seen: unknown = null
+    const failing = await realApply({
+      gather: async () => {
+        // gather runs inside the lock, after the hook: it already reads the new pin.
+        seen = await pinsOf(env.staging)
+        throw Object.assign(new Error('agent down'), { code: 'AGENT_UNREACHABLE', status: 502 })
+      }
     })
     await expect(
       ext.promoteExtension(
         env.staging,
         'efp-ops',
-        { pin: DIGEST('c'), confirm: 'staging' },
+        { confirm: 'staging' },
         { id: USER },
-        { apply: refused }
+        { apply: failing }
       )
-    ).rejects.toMatchObject({ code: 'FROZEN' })
-    const kept = await db('nivaro_hub_environments')
-      .where({ id: env.staging })
-      .first('extension_pins')
-    expect(JSON.parse(kept.extension_pins)).toEqual({ 'efp-ops': DIGEST('b') })
+    ).rejects.toMatchObject({ code: 'AGENT_UNREACHABLE' })
+    expect(seen).toEqual({ 'efp-ops': DIGEST('b') })
+    expect(await pinsOf(env.staging)).toEqual({ 'efp-ops': DIGEST('a') })
+    // The retry is not ALREADY_PINNED: the pin really is the old one again.
+    const plan = await ext.planExtensionPromote(env.staging, 'efp-ops', {})
+    expect(plan.blockers).toEqual([])
 
-    // The Docker promotion follows its deploy row.
+    // A start that hands off, then a deploy that fails: onEnd puts the pin back.
+    let hooks: {
+      onLocked?: () => Promise<void>
+      onEnd?: (ok: boolean, id: number | null) => Promise<void>
+    } = {}
+    const started = vi.fn(async (_envId: number, req: { hooks?: typeof hooks }) => {
+      hooks = req.hooks ?? {}
+      await hooks.onLocked?.()
+      return { deployId: 78, jobRunId: null }
+    })
+    const out = await ext.promoteExtension(
+      env.staging,
+      'efp-ops',
+      { confirm: 'staging' },
+      { id: USER },
+      { apply: started as never }
+    )
+    expect(out).toMatchObject({ via: 'docker', deploy_id: 78 })
+    expect(await pinsOf(env.staging)).toEqual({ 'efp-ops': DIGEST('b') })
+    await hooks.onEnd?.(false, 78)
+    expect(await pinsOf(env.staging)).toEqual({ 'efp-ops': DIGEST('a') })
+    const [p] = await ext.listExtensionPromotions({})
+    expect(p).toMatchObject({ status: 'failed', deploy_id: 78 })
+
+    // And one that succeeds keeps it; the tick settles a run whose process stopped.
+    const ok = await ext.promoteExtension(
+      env.staging,
+      'efp-ops',
+      { confirm: 'staging' },
+      { id: USER },
+      { apply: started as never }
+    )
     await db('nivaro_hub_deploys').insert({
-      id: 77,
+      id: 78,
       app_id: appId,
       environment_id: env.staging,
       kind: 'promote',
       version: '0.3.215',
       status: 'success',
+      plan: '{"apply":true}',
       finished_at: new Date(clock)
     })
     expect(await ext.settleExtensionPromotions()).toBe(1)
-    const [p] = await ext.listExtensionPromotions({})
-    expect(p.status).toBe('done')
+    expect((await ext.listExtensionPromotions({}))[0]).toMatchObject({ id: ok.id, status: 'done' })
+    expect(await pinsOf(env.staging)).toEqual({ 'efp-ops': DIGEST('b') })
+    await db('nivaro_hub_environments')
+      .where({ id: env.staging })
+      .update({ extension_pins: JSON.stringify({ 'efp-ops': DIGEST('a') }) })
   })
 
-  it('promotes into a GitLab environment by committing its pin file; refuses a shared one', async () => {
+  it('refuses an extension the app neither lists nor runs', async () => {
+    const plan = await ext.planExtensionPromote(env.staging, 'not-ours', { pin: DIGEST('e') })
+    expect(plan.blockers.map((b) => b.code)).toContain('UNKNOWN_EXTENSION')
+  })
+
+  it('GitLab: commits the pin under the locks, records an extension deploy and watches its pipeline', async () => {
+    await deployRow({ envId: env.production, version: '0.3.214', finishedAt: clock - 60 * MIN })
     const commit = vi.fn(async () => ({ sha: 'f'.repeat(40), changed: true }))
+    let finishDeploy: (ok: boolean) => void = () => undefined
+    const deployJob = vi.fn(
+      () =>
+        new Promise<{ status: 'success'; job: never }>((resolve, reject) => {
+          finishDeploy = (ok) =>
+            ok
+              ? resolve({ status: 'success', job: {} as never })
+              : reject(Object.assign(new Error('deploy failed'), { code: 'DEPLOY_FAILED' }))
+        })
+    )
+    const notify = vi.fn()
+    const { lock } = testLock()
     const out = await ext.promoteExtension(
       env.production,
       'efp-ops',
       { from_env_id: env.development, confirm: 'production' },
       { id: USER },
-      { commit, readFile: (async () => null) as never }
+      {
+        commit,
+        deployJob: deployJob as never,
+        lock: lock as never,
+        notify,
+        readFile: (async () => null) as never
+      }
     )
     expect(out).toMatchObject({ via: 'gitlab', commit_sha: 'f'.repeat(40) })
     expect(commit).toHaveBeenCalledWith(
@@ -610,7 +832,57 @@ describe('extension version manager', () => {
       `${DIGEST('b')}\n`,
       'Pin extension efp-ops (Nivaro Hub)'
     )
+    const row = await db('nivaro_hub_deploys').where({ id: out.deploy_id }).first()
+    expect(row).toMatchObject({ kind: 'extension', status: 'running', version: '0.3.214' })
+    expect(lock.release).not.toHaveBeenCalled()
+    expect(deployJob).toHaveBeenCalledWith(expect.anything(), 'production', 'f'.repeat(40), {
+      before: null,
+      deploy: 'deploy',
+      minutes: 60
+    })
+    finishDeploy(false)
+    await vi.waitFor(async () =>
+      expect((await db('nivaro_hub_deploys').where({ id: out.deploy_id }).first()).status).toBe(
+        'failed'
+      )
+    )
+    await vi.waitFor(() => expect(lock.release).toHaveBeenCalled())
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ kind: 'promote_failed' }))
+    expect((await ext.listExtensionPromotions({}))[0]).toMatchObject({ status: 'failed' })
+  })
 
+  it('GitLab: a successful extension deploy is smoke-tested afterwards', async () => {
+    await deployRow({ envId: env.production, version: '0.3.214', finishedAt: clock - 60 * MIN })
+    await smoke.saveSuite(env.production, suite(), USER)
+    await db('nivaro_hub_smoke_suites')
+      .where({ environment_id: env.production })
+      .update({ updated_at: new Date(Date.now() - 120 * MIN) })
+    const out = await ext.promoteExtension(
+      env.production,
+      'efp-ops',
+      { from_env_id: env.development, confirm: 'production' },
+      { id: USER },
+      {
+        commit: (async () => ({ sha: 'e'.repeat(40), changed: true })) as never,
+        deployJob: (async () => ({ status: 'success', job: {} })) as never,
+        lock: testLock().lock as never,
+        notify: vi.fn(),
+        readFile: (async () => null) as never
+      }
+    )
+    await vi.waitFor(async () =>
+      expect((await db('nivaro_hub_deploys').where({ id: out.deploy_id }).first()).status).toBe(
+        'success'
+      )
+    )
+    await smoke.queueNewRuns(Date.now())
+    const runs = await smoke.listRuns({ envIds: [env.production] })
+    expect(runs.filter((r) => r.trigger === 'extension').map((r) => r.deploy_id)).toEqual([
+      out.deploy_id
+    ])
+  })
+
+  it('refuses a shared one', async () => {
     const [sd] = await db('nivaro_hub_shared_deployments').insert({
       key: 'pool-a',
       name: 'Pool A',

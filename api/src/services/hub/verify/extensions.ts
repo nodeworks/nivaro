@@ -1,14 +1,29 @@
 import { insertReturningId } from '../../../db/dialect/ef.js'
 import { db } from '../../../db/index.js'
 import { logActivity } from '../../activity.js'
+import { getApp } from '../../io-holder.js'
 import { componentTargetBranch, listComponents } from '../components.js'
+import { creationOpenRefusal } from '../create/store.js'
 import { strictPinMap } from '../docker/stack-gather.js'
 import { dockerTargetOf } from '../docker/stack-guards.js'
-import { driverCtx, type GitlabDriverRow, getDriver, getPlacement } from '../drivers.js'
-import { commitFile, readFile } from '../gitlab-write.js'
+import {
+  driverCtx,
+  type GitlabDriverRow,
+  getDriver,
+  getPlacement,
+  repositoryIdentity
+} from '../drivers.js'
+import { commitFile, readFile, runDeployJob } from '../gitlab-write.js'
 import { moveOpenRefusal } from '../move-open.js'
+import { notifyHubEvent } from '../notify-events.js'
 import { flagOf, productionMap } from '../owner-access.js'
-import { defaultPromoteLock } from '../promote-lock.js'
+import {
+  defaultBranchLock,
+  defaultPromoteLock,
+  holdBranches,
+  LOCK_RENEW_MS,
+  type PromoteLock
+} from '../promote-lock.js'
 import { startStackApply } from '../promote-run.js'
 import { freezeRefusal } from '../releases/freeze.js'
 import { getShared } from '../shared/store.js'
@@ -177,6 +192,9 @@ async function upsertSighting(
 interface GitlabPinTarget {
   driver: GitlabDriverRow
   branch: string
+  /** The API component's own jobs (null = the driver's deploy job, no before job). */
+  before_job: string | null
+  deploy_job: string | null
 }
 
 /** The GitLab driver + branch an environment's API deploys through, or null. */
@@ -192,7 +210,8 @@ export async function gitlabPinTarget(envId: number): Promise<GitlabPinTarget | 
     const driver = await getDriver(c.driver_id)
     if (driver?.kind !== 'gitlab') continue
     const branch = componentTargetBranch(c, placement, driver.config.branch)
-    if (branch) return { driver, branch }
+    if (branch)
+      return { driver, branch, before_job: c.before_job ?? null, deploy_job: c.deploy_job ?? null }
   }
   return null
 }
@@ -467,12 +486,55 @@ async function chainOf(appId: number) {
   }
 }
 
+/**
+ * THE gate of an extension promote beyond the plan's own blockers — the seam hub-enh/change
+ * fills: today a freeze window (freezeRefusal, action `promote`); once change merges, freezeRefusal
+ * and checklistGate with action `extension_promote`. Called by the plan (as a blocker) and again
+ * at the start of both paths.
+ */
+export async function extensionPromoteRefusal(
+  appId: number,
+  _envId: number
+): Promise<{ code: string; message: string; status: number } | null> {
+  const frozen = await freezeRefusal({ appIds: [appId], action: 'promote' })
+  return frozen ? { code: frozen.code, message: frozen.message, status: frozen.status } : null
+}
+
+/** The Nivaro version the Hub last deployed to an environment (promote / rollback), or its pin. */
+async function deployedVersion(envId: number): Promise<string | null> {
+  const row = (await db('nivaro_hub_deploys')
+    .where({ environment_id: envId, status: 'success' })
+    .whereIn('kind', ['promote', 'rollback'])
+    .orderBy('id', 'desc')
+    .first('version')) as { version: string } | undefined
+  if (row?.version) return String(row.version)
+  const env = (await db(ENVS).where({ id: envId }).first('version_pin')) as
+    | { version_pin: string | null }
+    | undefined
+  return env?.version_pin ? String(env.version_pin) : null
+}
+
+/** Whether the app declares the extension or one of its environments was seen with it (L4). */
+async function knownExtension(appId: number, extId: string): Promise<boolean> {
+  const app = (await db(APPS).where({ id: appId }).first('extensions')) as
+    | { extensions: unknown }
+    | undefined
+  if (stringList(app?.extensions).includes(extId)) return true
+  const seen = await db(`${SIGHTINGS} as s`)
+    .join(`${ENVS} as e`, 'e.id', 's.environment_id')
+    .where('e.app_id', appId)
+    .where('s.extension_id', extId)
+    .whereNot('s.status', 'absent')
+    .first('s.id')
+  return !!seen
+}
+
 /** The plan of promoting `extId` into `envId` (a read: nothing is written). */
 export async function planExtensionPromote(
   envId: number,
   extId: string,
   input: PromoteInput,
-  deps: ReadDeps = {}
+  deps: ReadDeps & { lock?: PromoteLock } = {}
 ): Promise<ExtensionPlan> {
   if (!EXTENSION_ID_RE.test(extId))
     throw new ExtensionError('BAD_EXTENSION', 'That is not an extension id.', 400)
@@ -486,6 +548,12 @@ export async function planExtensionPromote(
   const { chain, prod } = await chainOf(appId)
   const blockers: ExtensionPlan['blockers'] = []
   const block = (code: string, text: string) => blockers.push({ code, text })
+
+  if (!(await knownExtension(appId, extId)))
+    block(
+      'UNKNOWN_EXTENSION',
+      `${extId} is neither listed for this app nor seen on any of its environments.`
+    )
 
   const { source, pins } = await readPins(target, [extId], deps)
   const current = pins.get(extId) ?? null
@@ -526,17 +594,20 @@ export async function planExtensionPromote(
     const gl = await gitlabPinTarget(envId)
     if (gl && !gl.driver.config.pin_file?.trim())
       block('NO_PIN_FILE', 'The GitLab driver has no pin file, so the Hub has no folder to pin in.')
+    if (!(await deployedVersion(envId)))
+      block(
+        'NOT_DEPLOYED_BY_HUB',
+        `The Hub has not deployed ${env.key} yet, so it cannot record the extension deploy.`
+      )
   }
   const move = await moveOpenRefusal({ envIds: [envId] })
   if (move) block(move.code, move.message)
-  if (source === 'gitlab') {
-    const frozen = await freezeRefusal({ appIds: [appId], action: 'promote' })
-    if (frozen) block(frozen.code, frozen.message)
-    const held = await defaultPromoteLock()
-      .held(envId)
-      .catch(() => 'unknown' as const)
-    if (held) block('LOCKED', `${env.key} is being deployed right now — try again when it is done.`)
-  }
+  const creating = await creationOpenRefusal(envId)
+  if (creating) block(creating.code, creating.message)
+  const gate = await extensionPromoteRefusal(appId, envId)
+  if (gate) block(gate.code, gate.message)
+  const held = await (deps.lock ?? defaultPromoteLock()).held(envId).catch(() => 'unknown' as const)
+  if (held) block('LOCKED', `${env.key} is being deployed right now — try again when it is done.`)
   return {
     environment: {
       id: envId,
@@ -556,6 +627,46 @@ export async function planExtensionPromote(
 export interface PromoteDeps extends ReadDeps {
   apply?: typeof startStackApply
   commit?: typeof commitFile
+  deployJob?: typeof runDeployJob
+  lock?: PromoteLock
+  notify?: typeof notifyHubEvent
+}
+
+/**
+ * Puts the pin of `extId` back to `fromPin` (null = no pin) — only while it still holds `toPin`,
+ * and only if nobody changed the stored pins since they were read (compare-and-set on the text).
+ */
+export async function restoreDockerPin(
+  envId: number,
+  extId: string,
+  toPin: string,
+  fromPin: string | null
+): Promise<boolean> {
+  const row = (await db(ENVS).where({ id: envId }).first('extension_pins')) as
+    | { extension_pins: unknown }
+    | undefined
+  const raw = row?.extension_pins == null ? null : String(row.extension_pins)
+  const map = strictPinMap(raw ?? '{}')
+  if (!map || map[extId] !== toPin) return false
+  const next = { ...map }
+  if (fromPin) next[extId] = fromPin
+  else delete next[extId]
+  const q = db(ENVS).where({ id: envId })
+  if (raw == null) q.whereNull('extension_pins')
+  else q.where('extension_pins', raw)
+  return (await q.update({ extension_pins: JSON.stringify(next), updated_at: new Date() })) > 0
+}
+
+async function finishPromotion(id: number, ok: boolean, deployId: number | null, error?: string) {
+  await db(EXT_PROMOTIONS)
+    .where({ id })
+    .whereIn('status', ['starting', 'deploying'])
+    .update({
+      status: ok ? 'done' : 'failed',
+      ...(deployId != null ? { deploy_id: deployId } : {}),
+      error: ok ? null : (error ?? 'The deploy did not finish').slice(0, 1000),
+      finished_at: new Date()
+    })
 }
 
 /** Promotes one extension (admin; `confirm` = the environment key). Answers the promotion row id. */
@@ -579,50 +690,6 @@ export async function promoteExtension(
     })
   const toPin = plan.to_pin as string
   const via = plan.via as PinSource
-  let deployId: number | null = null
-  let commitSha: string | null = null
-
-  if (via === 'docker') {
-    const before = (await db(ENVS).where({ id: envId }).first('extension_pins')) as
-      | { extension_pins: unknown }
-      | undefined
-    const oldRaw = before?.extension_pins == null ? null : String(before.extension_pins)
-    const pins = strictPinMap(oldRaw ?? '{}')
-    if (!pins)
-      throw new ExtensionError(
-        'PINS_UNREADABLE',
-        'The environment’s extension pins cannot be read; fix them in its Stack panel first.'
-      )
-    await db(ENVS)
-      .where({ id: envId })
-      .update({
-        extension_pins: JSON.stringify({ ...pins, [extId]: toPin }),
-        updated_at: new Date()
-      })
-    try {
-      const started = await (deps.apply ?? startStackApply)(envId, {
-        confirm: plan.environment.key,
-        user
-      })
-      deployId = started.deployId
-    } catch (err) {
-      // Nothing was deployed: the environment keeps the pins it had.
-      await db(ENVS).where({ id: envId }).update({ extension_pins: oldRaw, updated_at: new Date() })
-      throw err
-    }
-  } else {
-    const gl = await gitlabPinTarget(envId)
-    if (!gl) throw new ExtensionError('NOT_PINNABLE', 'The GitLab target could not be found.')
-    const out = await (deps.commit ?? commitFile)(
-      driverCtx(gl.driver),
-      gl.branch,
-      extensionPinPath(gl.driver.config.pin_file, extId),
-      `${toPin}\n`,
-      `Pin extension ${extId} (Nivaro Hub)`
-    )
-    commitSha = out.sha
-  }
-
   const id = Number(
     await insertReturningId(db, EXT_PROMOTIONS, {
       app_id: plan.environment.app_id,
@@ -632,13 +699,24 @@ export async function promoteExtension(
       from_pin: plan.current_pin,
       to_pin: toPin,
       via,
-      status: via === 'docker' ? 'deploying' : 'committed',
-      deploy_id: deployId,
-      commit_sha: commitSha,
+      status: 'starting',
       created_by: user.id,
       created_at: new Date()
     })
   )
+  const fail = async (err: unknown) => {
+    await finishPromotion(id, false, null, (err as Error | null)?.message ?? 'refused')
+    throw err
+  }
+  let out: { deploy_id: number | null; commit_sha: string | null }
+  try {
+    out =
+      via === 'docker'
+        ? await promoteDocker(id, envId, extId, plan, user, deps)
+        : await promoteGitlab(id, envId, extId, plan, user, deps)
+  } catch (err) {
+    return fail(err)
+  }
   await upsertSighting(envId, extId, { pin: toPin, pin_source: via, pin_read_at: new Date() })
   await logActivity({
     action: 'hub-extension-promote',
@@ -646,18 +724,254 @@ export async function promoteExtension(
     collection: EXT_PROMOTIONS,
     item: String(id),
     comment: `${plan.environment.key}: ${extId} → ${toPin.slice(0, 120)} (${via}${
-      commitSha ? ` commit ${commitSha.slice(0, 12)}` : deployId ? ` deploy #${deployId}` : ''
+      out.commit_sha
+        ? ` commit ${out.commit_sha.slice(0, 12)}`
+        : out.deploy_id
+          ? ` deploy #${out.deploy_id}`
+          : ''
     })`.slice(0, 1000)
   })
-  return { id, via, deploy_id: deployId, commit_sha: commitSha }
+  return { id, via, ...out }
 }
 
-/** Docker promotions follow their deploy row: done or failed (the tick). */
+/**
+ * Docker: the pin is written INSIDE the environment's promotion lock, as part of the Apply now
+ * start (StartHooks.onLocked, before gather reads the pins), and put back when that start is
+ * refused or its deploy does not succeed (onEnd). A promote or Apply now that holds the lock first
+ * refuses ours before anything is written, so it never deploys our pin.
+ */
+async function promoteDocker(
+  id: number,
+  envId: number,
+  extId: string,
+  plan: ExtensionPlan,
+  user: { id: string },
+  deps: PromoteDeps
+): Promise<{ deploy_id: number | null; commit_sha: null }> {
+  const toPin = plan.to_pin as string
+  let wrote = false
+  const started = await (deps.apply ?? startStackApply)(envId, {
+    confirm: plan.environment.key,
+    user,
+    hooks: {
+      onLocked: async () => {
+        const row = (await db(ENVS).where({ id: envId }).first('extension_pins')) as
+          | { extension_pins: unknown }
+          | undefined
+        const pins = strictPinMap(row?.extension_pins ?? '{}')
+        if (!pins)
+          throw new ExtensionError(
+            'PINS_UNREADABLE',
+            'The environment’s extension pins cannot be read; fix them in its Stack panel first.'
+          )
+        await db(ENVS)
+          .where({ id: envId })
+          .update({
+            extension_pins: JSON.stringify({ ...pins, [extId]: toPin }),
+            updated_at: new Date()
+          })
+        wrote = true
+      },
+      onEnd: async (ok, deployId) => {
+        if (!ok && wrote) await restoreDockerPin(envId, extId, toPin, plan.current_pin)
+        // A refused start (deployId null) is recorded by promoteExtension's own catch.
+        if (deployId != null) await finishPromotion(id, ok, deployId)
+      }
+    }
+  })
+  await db(EXT_PROMOTIONS)
+    .where({ id, status: 'starting' })
+    .update({ status: 'deploying', deploy_id: started.deployId })
+  return { deploy_id: started.deployId, commit_sha: null }
+}
+
+/**
+ * GitLab: under the environment's promotion lock and its branch's lock (held for the whole run),
+ * the pin file is committed, a deploy record (kind `extension`) is written, and the repository's
+ * pipeline is watched the way a promotion's is (runDeployJob: the before job, then the deploy job —
+ * played when manual). Success → the deploy row succeeds (a smoke run follows); failure → it fails
+ * and the app's people are told, like a failed promotion. The commit stays in git either way.
+ */
+async function promoteGitlab(
+  id: number,
+  envId: number,
+  extId: string,
+  plan: ExtensionPlan,
+  user: { id: string },
+  deps: PromoteDeps
+): Promise<{ deploy_id: number; commit_sha: string }> {
+  const gl = await gitlabPinTarget(envId)
+  if (!gl) throw new ExtensionError('NOT_PINNABLE', 'The GitLab target could not be found.')
+  const version = await deployedVersion(envId)
+  if (!version)
+    throw new ExtensionError(
+      'NOT_DEPLOYED_BY_HUB',
+      'The Hub has not deployed this environment yet.'
+    )
+  const lock = deps.lock ?? defaultPromoteLock()
+  const token = await lock.take(envId, 'promotion')
+  if (!token)
+    throw new ExtensionError(
+      'LOCKED',
+      `${plan.environment.key} is being deployed right now — try again when it is done.`
+    )
+  let handedOff = false
+  let branches: Awaited<ReturnType<typeof holdBranches>> | null = null
+  try {
+    // Judged again inside the lock: a move, a creation or a freeze that began since the plan.
+    const move = await moveOpenRefusal({ envIds: [envId] })
+    if (move) throw new ExtensionError(move.code, move.message, move.status)
+    const creating = await creationOpenRefusal(envId)
+    if (creating) throw new ExtensionError(creating.code, creating.message, creating.status)
+    const gate = await extensionPromoteRefusal(plan.environment.app_id, envId)
+    if (gate) throw new ExtensionError(gate.code, gate.message, gate.status)
+    branches = await holdBranches(
+      defaultBranchLock(),
+      [
+        {
+          identity: repositoryIdentity(gl.driver.config.api, gl.driver.config.project),
+          branch: gl.branch
+        }
+      ],
+      'promotion'
+    )
+    const ctx = driverCtx(gl.driver)
+    const toPin = plan.to_pin as string
+    const committed = await (deps.commit ?? commitFile)(
+      ctx,
+      gl.branch,
+      extensionPinPath(gl.driver.config.pin_file, extId),
+      `${toPin}\n`,
+      `Pin extension ${extId} (Nivaro Hub)`
+    )
+    const deployId = Number(
+      await insertReturningId(db, 'nivaro_hub_deploys', {
+        app_id: plan.environment.app_id,
+        environment_id: envId,
+        kind: 'extension',
+        version,
+        from_version: version,
+        status: 'running',
+        step: `deploy ${extId}`,
+        error: null,
+        plan: JSON.stringify({
+          steps: [],
+          extension: { id: extId, from_pin: plan.current_pin, to_pin: toPin, commit: committed.sha }
+        }),
+        started_by: user.id,
+        started_at: new Date(),
+        heartbeat_at: new Date()
+      })
+    )
+    await db(EXT_PROMOTIONS)
+      .where({ id, status: 'starting' })
+      .update({ status: 'deploying', deploy_id: deployId, commit_sha: committed.sha })
+    handedOff = true
+    const held = branches
+    void watchGitlabDeploy({
+      id,
+      envId,
+      extId,
+      deployId,
+      sha: committed.sha,
+      gl,
+      lock,
+      token,
+      deps
+    })
+      .catch((err) =>
+        getApp()?.log?.error?.(
+          { deployId, err: (err as Error | null)?.name ?? 'Error' },
+          'hub extension deploy bookkeeping failed'
+        )
+      )
+      .finally(async () => {
+        await held?.release()
+        await lock.release(envId, token)
+      })
+    return { deploy_id: deployId, commit_sha: committed.sha }
+  } finally {
+    if (!handedOff) {
+      await branches?.release()
+      await lock.release(envId, token)
+    }
+  }
+}
+
+async function watchGitlabDeploy(o: {
+  id: number
+  envId: number
+  extId: string
+  deployId: number
+  sha: string
+  gl: GitlabPinTarget
+  lock: PromoteLock
+  token: string
+  deps: PromoteDeps
+}): Promise<void> {
+  const DEPLOYS = 'nivaro_hub_deploys'
+  const renew = setInterval(() => {
+    void o.lock.renew(o.envId, o.token).catch(() => undefined)
+    void db(DEPLOYS)
+      .where({ id: o.deployId, status: 'running' })
+      .update({ heartbeat_at: new Date() })
+      .catch(() => undefined)
+  }, LOCK_RENEW_MS)
+  renew.unref?.()
+  let ok = false
+  let error: string | null = null
+  try {
+    await (o.deps.deployJob ?? runDeployJob)(driverCtx(o.gl.driver), o.gl.branch, o.sha, {
+      before: o.gl.before_job,
+      deploy: o.gl.deploy_job ?? o.gl.driver.config.deploy_job,
+      minutes: 60
+    })
+    ok = true
+  } catch (err) {
+    const e = err as { code?: unknown; message?: unknown } | null
+    error =
+      `${typeof e?.code === 'string' ? `${e.code}: ` : ''}${String(e?.message ?? 'the deploy failed')}`.slice(
+        0,
+        1000
+      )
+  } finally {
+    clearInterval(renew)
+  }
+  await db(DEPLOYS)
+    .where({ id: o.deployId, status: 'running' })
+    .update({
+      status: ok ? 'success' : 'failed',
+      step: ok ? null : `deploy ${o.extId}`,
+      error,
+      finished_at: new Date()
+    })
+  await finishPromotion(o.id, ok, o.deployId, error ?? undefined)
+  ;(o.deps.notify ?? notifyHubEvent)({
+    kind: ok ? 'promote_done' : 'promote_failed',
+    envId: o.envId,
+    deployId: o.deployId,
+    detail: `extension ${o.extId}${error ? ` — ${error}` : ''}`,
+    path: '/hub/extensions'
+  })
+}
+
+/**
+ * The tick's fallback for runs whose process stopped (no onEnd ran): a promotion follows its
+ * deploy row — done, or failed; a failed Docker one puts the old pin back (compare-and-set).
+ */
 export async function settleExtensionPromotions(): Promise<number> {
   const open = (await db(EXT_PROMOTIONS)
     .where({ status: 'deploying' })
     .whereNotNull('deploy_id')
-    .select('id', 'deploy_id')) as Array<{ id: number; deploy_id: number }>
+    .select(
+      'id',
+      'deploy_id',
+      'environment_id',
+      'extension_id',
+      'via',
+      'from_pin',
+      'to_pin'
+    )) as Array<Record<string, unknown>>
   let n = 0
   for (const p of open) {
     const d = (await db('nivaro_hub_deploys')
@@ -665,14 +979,16 @@ export async function settleExtensionPromotions(): Promise<number> {
       .first('status', 'error')) as { status: string; error: string | null } | undefined
     const status = d?.status
     if (status === 'running' || status === 'planned') continue
-    n += await db(EXT_PROMOTIONS)
-      .where({ id: p.id, status: 'deploying' })
-      .update({
-        status: status === 'success' ? 'done' : 'failed',
-        error:
-          status === 'success' ? null : (d?.error ?? 'The deploy did not finish').slice(0, 1000),
-        finished_at: new Date()
-      })
+    const ok = status === 'success'
+    if (!ok && p.via === 'docker')
+      await restoreDockerPin(
+        Number(p.environment_id),
+        String(p.extension_id),
+        String(p.to_pin),
+        p.from_pin == null ? null : String(p.from_pin)
+      )
+    await finishPromotion(Number(p.id), ok, Number(p.deploy_id), d?.error ?? undefined)
+    n++
   }
   return n
 }

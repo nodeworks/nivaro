@@ -5,6 +5,7 @@ import { hubRequireAdmin, hubRequireAuth } from '../services/hub/api/gate.js'
 import { idParam } from '../services/hub/apps.js'
 import { hubModeEnabled } from '../services/hub/mode.js'
 import { flagOf, productionMap } from '../services/hub/owner-access.js'
+import { readRule } from '../services/hub/releases/auto-rollback.js'
 import { validateSuite } from '../services/hub/verify/checks.js'
 import {
   ExtensionError,
@@ -14,6 +15,7 @@ import {
   promoteExtension,
   refreshSightings
 } from '../services/hub/verify/extensions.js'
+import { callVerify, verifyTarget } from '../services/hub/verify/link.js'
 import {
   deleteSuite,
   executeRun,
@@ -26,6 +28,7 @@ import {
   saveSuite
 } from '../services/hub/verify/smoke.js'
 import { extensionsTick, smokeTick } from '../services/hub/verify/tick.js'
+import { appReadBudgetMs } from '../services/hub-link/verify-limits.js'
 
 /**
  * Hub verification (mounted under /api/hub, hub mode only): post-deploy smoke checks per
@@ -198,10 +201,19 @@ export async function hubVerifyRoutes(app: FastifyInstance): Promise<void> {
     const env = await readableEnv(req)
     if (!env) return notFound(reply)
     const envId = Number(env.id)
+    const suite = await readSuite(envId)
+    const rule = await readRule(envId).catch(() => null)
+    const reads = (suite?.checks ?? []).filter((c) => c.kind !== 'http').length
     return {
       data: {
-        suite: await readSuite(envId),
-        runs: await listRuns({ envIds: [envId], limit: 20 })
+        suite,
+        runs: await listRuns({ envIds: [envId], limit: 20 }),
+        // The automatic rollback rule's window (null = no enabled rule) and the longest a run can
+        // take, so the editor can warn when a run would finish after the window closed (L1).
+        rollback_window_minutes: rule?.enabled ? rule.window_minutes : null,
+        longest_run_seconds: suite
+          ? suite.settle_seconds + Math.ceil(appReadBudgetMs(Math.max(1, reads)) / 1000) + 15
+          : null
       }
     }
   })
@@ -211,6 +223,37 @@ export async function hubVerifyRoutes(app: FastifyInstance): Promise<void> {
     if (!env) return notFound(reply)
     const input = validateSuite(body(req))
     if ('error' in input) return fail(reply, 400, 'BAD_SUITE', input.error)
+    // Saved queries: the app says each one may be a smoke query (one read, readable by the
+    // smoke role) before the Hub keeps it; it judges them again on every run.
+    const slugs = [
+      ...new Set(input.checks.filter((c) => c.kind === 'query').map((c) => String(c.slug)))
+    ]
+    if (slugs.length) {
+      const target = await verifyTarget(Number(env.id))
+      const res = target ? await callVerify(target, 'queries', { slugs }) : null
+      if (!res || res.state !== 'ok')
+        return fail(
+          reply,
+          409,
+          'SMOKE_QUERY_UNCHECKED',
+          'The Hub could not ask the app whether these saved queries may be smoke checks (no link, or an app before 0.3.215). Save the suite without them, or fix the link first.'
+        )
+      const results = ((res.body as { results?: unknown } | null)?.results ?? []) as Array<{
+        slug?: string
+        code?: string | null
+        reason?: string | null
+      }>
+      const bad = results.find((r) => r.code)
+      if (bad || results.length !== slugs.length)
+        return fail(
+          reply,
+          409,
+          bad?.code ?? 'SMOKE_QUERY_UNCHECKED',
+          bad
+            ? `Saved query ${String(bad.slug).slice(0, 120)}: ${String(bad.reason ?? bad.code).slice(0, 300)}`
+            : 'The app did not answer for every saved query'
+        )
+    }
     const saved = await saveSuite(Number(env.id), input, userId(req))
     await logActivity({
       action: 'hub-smoke-suite-save',
@@ -289,9 +332,10 @@ export async function hubVerifyRoutes(app: FastifyInstance): Promise<void> {
     return { data: { apps: matrix, promotions } }
   })
 
-  app.post('/verify/extensions/refresh', { preHandler: hubRequireAdmin }, async (req) => {
+  // One app is read inside the request; every app in the background (202) — a fleet of links
+  // and GitLab reads does not fit one request (L5).
+  app.post('/verify/extensions/refresh', { preHandler: hubRequireAdmin }, async (req, reply) => {
     const appId = idParam(body(req).app_id)
-    const read = await refreshSightings(appId === null ? {} : { appIds: [appId] })
     await logActivity({
       action: 'hub-extensions-refresh',
       user: userId(req),
@@ -299,7 +343,15 @@ export async function hubVerifyRoutes(app: FastifyInstance): Promise<void> {
       comment: appId === null ? 'every app' : `app #${appId}`,
       req
     })
-    return { data: { read } }
+    if (appId === null) {
+      setImmediate(() => {
+        void refreshSightings({}).catch((err) =>
+          req.log.warn({ err }, 'hub extensions refresh failed')
+        )
+      })
+      return reply.code(202).send({ data: { read: null, background: true } })
+    }
+    return { data: { read: await refreshSightings({ appIds: [appId] }), background: false } }
   })
 
   app.post(
@@ -341,7 +393,7 @@ export async function hubVerifyRoutes(app: FastifyInstance): Promise<void> {
           },
           { id: userId(req) }
         )
-        return reply.code(out.via === 'docker' ? 202 : 200).send({ data: out })
+        return reply.code(202).send({ data: out })
       } catch (err) {
         if (err instanceof ExtensionError)
           return fail(reply, err.status, err.code, err.message, {

@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto'
+import { MAX_READS } from '../../hub-link/verify-limits.js'
 
 /**
  * Post-deploy smoke checks, the pure part: what a suite may hold and how one check's facts are
@@ -48,6 +49,8 @@ export interface CheckResult {
   ms: number | null
   rows: number | null
   code: string | null
+  /** False when the failure was not the app's verdict (no link, timeout…); never a breach. */
+  judged: boolean
   reason: string | null
 }
 
@@ -153,6 +156,15 @@ export function validateSuite(b: Record<string, unknown>): SmokeSuiteInput | Fai
   const list = b.checks
   if (!Array.isArray(list) || list.length === 0) return { error: 'Add at least one check' }
   if (list.length > MAX_CHECKS) return { error: `A suite holds at most ${MAX_CHECKS} checks` }
+  const reads = list.filter(
+    (c) =>
+      (c as { kind?: unknown } | null)?.kind === 'read' ||
+      (c as { kind?: unknown } | null)?.kind === 'query'
+  ).length
+  if (reads > MAX_READS)
+    return {
+      error: `A suite holds at most ${MAX_READS} signed-in reads and saved queries together (the app runs no more in one go)`
+    }
   const checks: SmokeCheck[] = []
   const ids = new Set<string>()
   for (const [i, raw] of list.entries()) {
@@ -192,8 +204,23 @@ export interface CheckFacts {
   error?: string | null
 }
 
-/** The verdict for one check (pure). */
+/**
+ * Codes that mean the app did not judge the read (its link, its key, its smoke identity, a
+ * maintenance freeze, a timeout): such a failure says nothing about the deploy.
+ */
+const UNJUDGED_CODE =
+  /^(TIMEOUT|READ_FAILED|MAINTENANCE.*|BAD_READS|BAD_QUERY_PARAMS|VERIFY_FAILED|SMOKE_.*|API_KEY_.*|TOKEN_.*|ACCOUNT_NOT_ACTIVE|HUB_LINK_REFUSED|DEPLOYMENT_LINK_REFUSED|UNKNOWN_APP|REGISTRY_NOT_READY|RATE_LIMITED)$/
+
+/** Whether these facts are the app's own answer to the check (a verdict on the deploy). */
+export function factsJudged(f: CheckFacts): boolean {
+  if (f.error) return false
+  if (f.status == null || f.status <= 0) return false
+  return !(f.code && UNJUDGED_CODE.test(f.code))
+}
+
+/** The verdict for one check (pure). `judged` = it failed on the app's own answer. */
 export function judgeCheck(c: SmokeCheck, f: CheckFacts): CheckResult {
+  const judged = factsJudged(f)
   const base = {
     id: c.id,
     name: c.name,
@@ -203,8 +230,12 @@ export function judgeCheck(c: SmokeCheck, f: CheckFacts): CheckResult {
     rows: f.rows ?? null,
     code: f.code ?? null
   }
-  const failed = (reason: string): CheckResult => ({ ...base, ok: false, reason })
+  const failed = (reason: string): CheckResult => ({ ...base, ok: false, judged, reason })
   if (f.error) return failed(f.error)
+  if (!judged)
+    return failed(
+      `not judged: the app answered ${f.status || 'nothing'}${f.code ? ` (${f.code})` : ''}`
+    )
   if (f.status !== c.expect_status)
     return failed(
       `answered ${f.status ?? 'nothing'}${f.code ? ` (${f.code})` : ''}, expected ${c.expect_status}`
@@ -220,7 +251,20 @@ export function judgeCheck(c: SmokeCheck, f: CheckFacts): CheckResult {
     if (c.max_rows != null && f.rows > c.max_rows)
       return failed(`${f.rows} rows, expected at most ${c.max_rows}`)
   }
-  return { ...base, ok: true, reason: null }
+  return { ...base, ok: true, judged: true, reason: null }
+}
+
+/**
+ * A run's outcome (pure): `failed` only when at least one check failed on the app's own answer
+ * (status, time, text or rows); `unverified` when checks failed only because they could not be
+ * judged (no link, refused, unreachable, too old, the identity, maintenance, a Hub fault);
+ * `passed` otherwise. Only `failed` may ever count for an automatic rollback.
+ */
+export function runOutcome(results: CheckResult[]): 'passed' | 'failed' | 'unverified' {
+  if (!results.length) return 'unverified'
+  if (results.some((r) => !r.ok && r.judged)) return 'failed'
+  if (results.some((r) => !r.ok)) return 'unverified'
+  return 'passed'
 }
 
 /** One line for a run: "3 of 4 checks passed — Home page: answered 502, expected 200". */

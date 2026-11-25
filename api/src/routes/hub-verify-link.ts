@@ -4,10 +4,12 @@ import { failedAuthLimiter } from '../lib/auth-fail-limiter.js'
 import { hubSharedConfig, isMultiTenant, tenantSource } from '../services/deployment-mode.js'
 import { hubLinkToken } from '../services/hub/mode.js'
 import {
+  checkSmokeQueries,
   extensionInventory,
   parseReads,
   runVerifyReads,
-  SmokeIdentityError
+  SmokeIdentityError,
+  SmokeQueryRefusal
 } from '../services/hub-link/verify.js'
 import { bearerMatches } from '../services/render-peer.js'
 import { deploymentLinkBearer } from '../services/tenancy/hub-contract.js'
@@ -22,12 +24,15 @@ import type { TenantRecord, TenantRegistry } from '../services/tenancy/types.js'
  * set, never on a deployment that serves many apps):
  *
  *   POST /api/hub-link/verify/run         {reads: [...]} → {version, results: [{status, ms, rows, code}]}
+ *   POST /api/hub-link/verify/queries     {slugs: [...]} → {results: [{slug, code, reason}]}  (the
+ *                                          Hub asks before it saves query checks)
  *   GET  /api/hub-link/verify/extensions  → {version, extensions: [{id, status, enabled, version, build}]}
  *
  * Hub shared deployment (registered under /api/hub-deployment; bearer = deploymentLinkBearer of
  * HUB_DEPLOYMENT_TOKEN), inside that app:
  *
  *   POST /api/hub-deployment/verify/apps/:id/run
+ *   POST /api/hub-deployment/verify/apps/:id/queries
  *   GET  /api/hub-deployment/verify/apps/:id/extensions
  *
  * Both: timing-safe bearer, 401 / 429 after 20 failures a minute from one address,
@@ -58,8 +63,23 @@ async function runReads(
     const code = (err as { code?: unknown } | null)?.code
     // The stored identity is no longer what the app made: refused, never repaired (plain words).
     if (err instanceof SmokeIdentityError) return refuse(reply, 409, err.message, err.code)
+    if (err instanceof SmokeQueryRefusal) return refuse(reply, err.status, err.message, err.code)
     req.log.warn({ code: code ?? null }, 'hub link: smoke reads failed')
     return refuse(reply, 503, 'The smoke reads could not run', 'VERIFY_FAILED')
+  }
+}
+
+async function checkQueries(req: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> {
+  try {
+    return reply.send(await checkSmokeQueries(req.body))
+  } catch (err) {
+    if (err instanceof SmokeIdentityError) return refuse(reply, 409, err.message, err.code)
+    if (err instanceof SmokeQueryRefusal) return refuse(reply, err.status, err.message, err.code)
+    req.log.warn(
+      { code: (err as { code?: unknown } | null)?.code ?? null },
+      'hub link: smoke query check failed'
+    )
+    return refuse(reply, 503, 'The smoke queries could not be checked', 'VERIFY_FAILED')
   }
 }
 
@@ -78,6 +98,7 @@ export async function hubVerifyLinkRoutes(app: FastifyInstance): Promise<void> {
   })
 
   app.post('/verify/run', async (req, reply) => runReads(req, reply, null))
+  app.post('/verify/queries', async (req, reply) => checkQueries(req, reply))
   app.get('/verify/extensions', async (_req, reply) => reply.send(extensionInventory()))
 }
 
@@ -133,6 +154,13 @@ export async function hubVerifyDeploymentRoutes(app: FastifyInstance): Promise<v
     if ('sent' in found) return found.sent
     const { t } = found
     return withTenant(t, () => runReads(req, reply, hostOf(t.origin)), t.origin)
+  })
+
+  app.post<{ Params: { id: string } }>('/verify/apps/:id/queries', async (req, reply) => {
+    const found = await tenant(reply, req.params.id)
+    if ('sent' in found) return found.sent
+    const { t } = found
+    return withTenant(t, () => checkQueries(req, reply), t.origin)
   })
 
   app.get<{ Params: { id: string } }>('/verify/apps/:id/extensions', async (req, reply) => {

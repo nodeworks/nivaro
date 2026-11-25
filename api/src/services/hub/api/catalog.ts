@@ -1743,7 +1743,13 @@ export const HUB_ROUTES: HubRoute[] = [
     'admin',
     'write',
     'Read every environment’s extensions and pins now',
-    { body: { app_id: n('One app only') } }
+    {
+      body: {
+        app_id: n(
+          'One app only (read in the request); without it every app, in the background (202)'
+        )
+      }
+    }
   ),
   r(
     'POST',
@@ -1774,7 +1780,7 @@ export const HUB_ROUTES: HubRoute[] = [
       },
       sensitive: true,
       notes:
-        'Docker: the pin is written and Apply now redeploys (202, a normal Hub deploy). GitLab: the pin file extensions/<id>.pin beside the driver’s pin file is committed to the target branch. Refused on a shared deployment (EXTENSION_ON_SHARED), while a move is open (MOVE_OPEN), in a freeze (FROZEN) or while the environment deploys (LOCKED).'
+        'Docker: the pin is written inside the promotion lock as part of Apply now (202, a normal Hub deploy) and put back when the deploy fails. GitLab: the pin file extensions/<id>.pin beside the driver’s pin file is committed under the promotion and branch locks, a deploy record (kind extension) is written and the repository pipeline is watched (202). Refused for an extension the app neither lists nor runs (UNKNOWN_EXTENSION), on a shared deployment (EXTENSION_ON_SHARED), while a move or creation is open (MOVE_OPEN, CREATION_OPEN), in a freeze (FROZEN) or while the environment deploys (LOCKED).'
     }
   ),
   // ─── Phone app (routes/hub-people.ts) ───────────────────────────────────────

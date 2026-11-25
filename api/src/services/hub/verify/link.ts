@@ -84,10 +84,10 @@ function codeOf(body: unknown): string | null {
   return typeof c === 'string' && CODE_RE.test(c) ? c : null
 }
 
-/** One verify call for one environment (`sub` = run | extensions). Never throws. */
+/** One verify call for one environment (`sub` = run | extensions | queries). Never throws; a run passes its own timeout (verify-limits hubReadTimeoutMs). */
 export async function callVerify(
   env: VerifyEnvTarget,
-  sub: 'run' | 'extensions',
+  sub: 'run' | 'extensions' | 'queries',
   body?: unknown,
   deps: VerifyLinkDeps = {}
 ): Promise<VerifyLinkResult> {

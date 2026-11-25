@@ -232,7 +232,7 @@ export interface WatchDeps {
    * Hub verification: a failed post-deploy smoke run of this promotion whose suite asks for a
    * rollback (services/hub/verify/smoke.ts) is a breach like the figures'. Null = none (yet).
    */
-  smoke?(deployId: number): Promise<Judgement | null>
+  smoke?(deployId: number, untilIso: string | null): Promise<Judgement | null>
 }
 
 export function defaultWatchDeps(): WatchDeps {
@@ -247,7 +247,8 @@ export function defaultWatchDeps(): WatchDeps {
         | undefined
       return r ? String(r.key) : `#${envId}`
     },
-    smoke: async (deployId) => (await import('../verify/smoke.js')).smokeVerdictForDeploy(deployId)
+    smoke: async (deployId, untilIso) =>
+      (await import('../verify/smoke.js')).smokeVerdictForDeploy(deployId, untilIso)
   }
 }
 
@@ -437,7 +438,8 @@ export async function judgeWatches(deps: WatchDeps = defaultWatchDeps()): Promis
       ? judgeFigures(rule, figures)
       : { breach: false, reason: null }
     if (!verdict.breach && deps.smoke) {
-      const smoke = await deps.smoke(w.deploy_id).catch(() => null)
+      // Only a run that finished inside the window counts (L1).
+      const smoke = await deps.smoke(w.deploy_id, w.until_at).catch(() => null)
       if (smoke?.breach) verdict = smoke
     }
     if (!verdict.breach) {
