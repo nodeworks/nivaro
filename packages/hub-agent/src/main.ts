@@ -13,6 +13,7 @@ import { sweepUnpackContainers, sweepUnpackFolders } from './extensions.js'
 import { makeHandlers } from './handlers.js'
 import { createLog, type Log } from './log.js'
 import { createServer, type HandlerResult, type Handlers } from './server.js'
+import { createStorageProbe, type StorageProbe, storageOptionsFrom } from './storage.js'
 
 export const AGENT_VERSION = '0.2.2'
 export const MIN_ENGINE_API = [1, 44] as const
@@ -60,7 +61,14 @@ export async function checkEngine(
 /** How long a read of the swarm's node count is reused (health is polled). */
 const NODES_TTL_MS = 30_000
 
-export function baseHandlers(cfg: AgentConfig, facts: EngineFacts, engine?: Engine): Handlers {
+export function baseHandlers(
+  cfg: AgentConfig,
+  facts: EngineFacts,
+  engine?: Engine,
+  // Enhancement 20: volume storage health (storage.ts), read-only; startAgent builds it from
+  // the checked settings. Absent = not configured.
+  storage: StorageProbe = createStorageProbe({ path: null, walk: false, kind: 'local' })
+): Handlers {
   // P4-33: the node count, read live from GET /info (no new Engine path), cached briefly.
   // null = not read. With more than one node, `local` volumes are per node.
   let nodes: { at: number; n: number | null } | null = null
@@ -102,7 +110,9 @@ export function baseHandlers(cfg: AgentConfig, facts: EngineFacts, engine?: Engi
         // Hub's plans refuse a host pattern on v2 before any apply.
         traefik_version: cfg.traefikVersion,
         // HUB_AGENT_CA_BUNDLE_FILE is set: app services trust its CAs. Never its contents.
-        ca_bundle: cfg.caBundle !== null
+        ca_bundle: cfg.caBundle !== null,
+        // Enhancement 20: how full the volume storage is; the last reading, never waited on.
+        storage: await storage.report()
       }
     }),
     listStacks: notYet,
@@ -119,7 +129,12 @@ export async function startAgent(opts: {
   readFile: (p: string) => string
   transport?: Transport
   log?: Log
-  makeHandlers?: (cfg: AgentConfig, engine: Engine, facts: EngineFacts) => Handlers
+  makeHandlers?: (
+    cfg: AgentConfig,
+    engine: Engine,
+    facts: EngineFacts,
+    storage: StorageProbe
+  ) => Handlers
 }): Promise<StartResult> {
   let cfg: AgentConfig
   try {
@@ -128,13 +143,17 @@ export async function startAgent(opts: {
     if (err instanceof ConfigError) return { ok: false, code: err.code }
     return { ok: false, code: 'CONFIG_ERROR' }
   }
+  const storageOpts = storageOptionsFrom(opts.env, cfg.volumeOpts)
+  if (!storageOpts.ok) return { ok: false, code: storageOpts.code }
+  const storage = createStorageProbe(storageOpts.value)
   const engine = createEngine(cfg, opts.transport)
   const checked = await checkEngine(engine)
   if (!checked.ok) return checked
-  const handlers = (opts.makeHandlers ?? ((c, e, f) => baseHandlers(c, f, e)))(
+  const handlers = (opts.makeHandlers ?? ((c, e, f, st) => baseHandlers(c, f, e, st)))(
     cfg,
     engine,
-    checked.facts
+    checked.facts,
+    storage
   )
   const server = createServer(cfg, handlers, { log: opts.log })
   const { host, port } = parseListen(cfg.listen)
@@ -158,10 +177,10 @@ async function run(): Promise<void> {
     env: process.env,
     readFile: (p) => readFileSync(p, 'utf8'),
     log,
-    makeHandlers: (cfg, engine, facts) =>
+    makeHandlers: (cfg, engine, facts, storage) =>
       makeHandlers(engine, cfg, {
         nodeId: facts.nodeId,
-        health: baseHandlers(cfg, facts, engine).health,
+        health: baseHandlers(cfg, facts, engine, storage).health,
         log
       })
   })

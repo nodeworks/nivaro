@@ -175,7 +175,10 @@ const SCREENS: Record<string, Screens> = {
     databases: lazy(() => import('@/pages/hub/databases/HubDatabases')),
     shared: lazy(() => import('@/pages/hub/shared/HubShared')),
     capacity: lazy(() => import('@/pages/hub/capacity/HubCapacity')),
-    releases: lazy(() => import('@/pages/hub/releases/HubReleases'))
+    releases: lazy(() => import('@/pages/hub/releases/HubReleases')),
+    issues: lazy(() => import('@/pages/hub/ops/HubIssues')),
+    storage: lazy(() => import('@/pages/hub/ops/HubStorage')),
+    secrets: lazy(() => import('@/pages/hub/ops/HubSecrets'))
   }
 }
 

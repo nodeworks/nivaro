@@ -334,6 +334,11 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_hub_rollback_watches',
   'nivaro_hub_release_notes',
   'nivaro_hub_version_facts',
+  'nivaro_hub_issue_groups', //        Hub ops (568): cross-app issue rollup, storage health,
+  'nivaro_hub_ops_health', //          secret rotation helper (fingerprints only, never values)
+  'nivaro_hub_secret_policies',
+  'nivaro_hub_secrets',
+  'nivaro_hub_secret_rotations',
   'nivaro_share_links',
   'nivaro_dashboard_links',
   'nivaro_webhook_deliveries',

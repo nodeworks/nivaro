@@ -93,6 +93,8 @@ Secrets are read from files only (`*_FILE`). All values are read once at start.
 | `HUB_AGENT_REGISTRY_AUTH_FILE` | none | A docker `config.json` with `auths`, for private registries. |
 | `HUB_AGENT_ENV_PREFIXES` | none | Comma list of env key prefixes a stack may set on top of the keys Nivaro reads, such as `EFP_` or `EFP_OPS_` for the EFP extension. Each entry is upper-case segments ending with `_` (`^[A-Z][A-Z0-9]*(_[A-Z0-9]+)*_$`). |
 | `HUB_AGENT_CA_BUNDLE_FILE` | none | PEM file of extra CA certificates every app service trusts (see Company CA below). Read once at start; at most 256 KB, at least one `CERTIFICATE` block and no private key, else the agent refuses to start (`CA_BUNDLE_BAD`, never printing the file). |
+| `HUB_AGENT_STORAGE_PATH` | none | LOCAL volumes only: absolute path where the agent sees the node's `/var/lib/docker/volumes`, mounted READ-ONLY, for storage health (see Storage health below). Refused with NFS volume options (`STORAGE_PATH_BAD`): storage health reads `HUB_AGENT_VOLUME_EXPORT_MOUNT` there. A relative path or a `..` segment stops the agent (`STORAGE_PATH_BAD`). |
+| `HUB_AGENT_STORAGE_WALK` | on (local), off (NFS) | `on` / `off`: whether bytes and file count under the path are walked (anything else stops the agent, `STORAGE_WALK_BAD`). Off by default on NFS: a hung mount would pin the agent's I/O threads. |
 
 ## Volumes on a swarm of more than one node
 
@@ -238,3 +240,34 @@ loaded host). `GET /v1/health` needs the token and is what the Hub uses. It
 answers `traefik_version` too, so a shared deployment's upgrade plan refuses a
 host pattern on a Traefik v2 agent before anything is applied. `ca_bundle` says
 whether `HUB_AGENT_CA_BUNDLE_FILE` is set (never its contents).
+
+## Storage health
+
+The storage path is `HUB_AGENT_VOLUME_EXPORT_MOUNT` with NFS volume options (the
+same export-root mount the volume work uses) and `HUB_AGENT_STORAGE_PATH` with
+local volumes. With it set, `GET /v1/health` carries `storage`:
+`{configured, kind: nfs|local, state: ok|pending|not_configured|unreadable|timeout,
+total_bytes, free_bytes, used_bytes, used_pct, tree: {bytes, files, complete,
+walked_at} | null, checked_at}`. The health call never waits on it: it answers
+the last reading at once (`pending` before the first) and refreshes it in the
+background every 30 s; a refresh still out after 5 s (a hung NFS mount) reads as
+`timeout` with the last good figures, and no second one starts while it is out.
+The tree (off by default on NFS) is walked in the background at most every 15
+minutes, one directory at a time, links never followed, stopped at 2 million
+entries or 2 minutes (`complete: false`). Figures and fixed words only: never a
+path or a file name. Read-only: it creates, changes and removes nothing. For
+local volumes, for example:
+
+```yaml
+    volumes:
+      - type: bind
+        source: /var/lib/docker/volumes
+        target: /storage
+        read_only: true
+    environment:
+      HUB_AGENT_STORAGE_PATH: /storage
+```
+
+The Hub reads it every 15 minutes (Apps hub → Storage, and each Docker driver's
+page) and warns administrators and the owners of the apps on the driver at
+80 % and 90 %.

@@ -95,6 +95,8 @@ export const CORE_CRON_SCOPES: Record<string, CronScope> = {
   'hub-release-ops': 'app', // Hub release operations: trains, schedules (HUB=on only, never shared)
   'hub-release-rollback': 'app', // Hub release operations: automatic rollback watches (HUB=on only)
   'hub-signins-prune': 'app', // Hub phase 7: the Hub's own sign-in rows (HUB=on only, never shared)
+  'hub-ops-collect': 'app', // Hub ops: the Hub's own issue/storage rows (HUB=on only, never shared)
+  'hub-secrets': 'app', // Hub ops: the Hub's own secret rows (HUB=on only, never shared)
   'huddle-schedules': 'app',
   'integration-reconcile': 'app',
   'integration-signals': 'app',

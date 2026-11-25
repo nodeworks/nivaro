@@ -436,7 +436,12 @@ export const CORE_KEEPS: readonly EnvKeepEntry[] = [
       'nivaro_hub_rollback_rules',
       'nivaro_hub_rollback_watches',
       'nivaro_hub_release_notes',
-      'nivaro_hub_version_facts'
+      'nivaro_hub_version_facts',
+      'nivaro_hub_issue_groups',
+      'nivaro_hub_ops_health',
+      'nivaro_hub_secret_policies',
+      'nivaro_hub_secrets',
+      'nivaro_hub_secret_rotations'
     ] as const
   ).map(
     (table): EnvKeepEntry => ({
@@ -449,7 +454,7 @@ export const CORE_KEEPS: readonly EnvKeepEntry[] = [
       kind: 'table',
       ...(table === 'nivaro_hub_drivers' ? { secret_columns: ['secret'] } : {}),
       ...(table === 'nivaro_hub_environments'
-        ? { secret_columns: ['hub_token', 'encryption_key'] }
+        ? { secret_columns: ['hub_token', 'hub_token_prev', 'encryption_key'] }
         : {}),
       ...(table === 'nivaro_hub_stack_settings' ? { secret_columns: ['secrets'] } : {}),
       ...(table === 'nivaro_hub_oidc_keys' ? { secret_columns: ['private_jwk'] } : {}),
