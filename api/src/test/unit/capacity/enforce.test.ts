@@ -169,9 +169,30 @@ describe('requests per minute', () => {
     beforeAll(async () => {
       app.addHook('onRequest', async (req) => {
         ctx.tenant = String(req.headers['x-tenant'] ?? '')
+        // A verified session, as the session plugin leaves it.
+        const sid = req.headers['x-session-user']
+        if (typeof sid === 'string') (req as { session?: unknown }).session = { userId: sid }
       })
       enforce.registerAppRateLimit(app)
       app.get('/api/items/x', { preHandler: auth }, async () => ({ ok: true }))
+      // A route that requires sign-in: an unverified caller stops here with 401.
+      app.get(
+        '/api/secure',
+        {
+          preHandler: [
+            auth,
+            async (req, reply) => {
+              const r = req as { user?: unknown; session?: { userId?: string } }
+              if (!r.user && !r.session?.userId)
+                return reply.code(401).send({ code: 'UNAUTHORIZED' })
+            }
+          ]
+        },
+        async () => ({ ok: true })
+      )
+      app.get('/api/forbidden', { preHandler: auth }, async (_req, reply) =>
+        reply.code(403).send({ code: 'FORBIDDEN' })
+      )
       app.get('/api/health', async () => ({ ok: true }))
       app.get('/api/auth/login', async () => ({ ok: true }))
       await app.ready()
@@ -242,6 +263,30 @@ describe('requests per minute', () => {
       expect(ok).toBe(ceiling)
       // Anonymous requests never count toward it (nor are they held by it).
       expect((await get('/api/items/x', as('busy'), '10.7.7.7')).statusCode).toBe(200)
+    })
+
+    it('a flood of failed credentials is counted and refused per address (they never reach the limiter)', async () => {
+      tenants.set('lock', tenant('lock', { requests_per_minute: 10 }))
+      const ip = '10.6.6.6'
+      for (let i = 0; i < 10; i++)
+        expect((await get('/api/secure', as('lock', 'forged'), ip)).statusCode).toBe(401)
+      // Over its failed-credential budget: refused before the route's own check.
+      const refused = await get('/api/secure', as('lock', 'forged'), ip)
+      expect(refused.statusCode).toBe(429)
+      expect(refused.json().code).toBe('APP_RATE_LIMITED')
+      expect((await get('/api/items/x', as('lock'), ip)).statusCode).toBe(429)
+      // A verified session from that address, and every other address, still pass.
+      expect(
+        (await get('/api/secure', { ...as('lock'), 'x-session-user': 'u-1' }, ip)).statusCode
+      ).toBe(200)
+      expect((await get('/api/secure', as('lock', 'good-ann'), '10.6.6.7')).statusCode).toBe(200)
+      // A verified caller's 403 is a permission answer: it never fills the bucket.
+      tenants.set('perm', tenant('perm', { requests_per_minute: 10 }))
+      for (let i = 0; i < 10; i++)
+        expect((await get('/api/forbidden', as('perm', 'good-dan'), '10.5.5.5')).statusCode).toBe(
+          403
+        )
+      expect((await get('/api/items/x', as('perm'), '10.5.5.5')).statusCode).toBe(200)
     })
 
     it('in-process re-entries (inject, batch-get, MCP tool calls) are never counted', async () => {

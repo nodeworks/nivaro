@@ -1,5 +1,5 @@
 import { IncomingMessage } from 'node:http'
-import type { FastifyReply, FastifyRequest } from 'fastify'
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../../db/index.js'
 import { getTenantId } from '../../db/tenant-context.js'
 import { sessionUser } from '../../plugins/rate-limit.js'
@@ -25,7 +25,10 @@ import type { AppLimits } from './limits.js'
  *    (no credential, or one that did not verify) the limit of its own, outside the ceiling.
  *    Only requests that came over HTTP count (never batch-get's reads, MCP tool calls or
  *    app.inject). Past it: 429 APP_RATE_LIMITED with Retry-After = seconds to the next minute.
- *    Probes, sign-in and the Hub links are never counted.
+ *    Probes, sign-in and the Hub links are never counted. Requests that FAIL authentication stop
+ *    before that limiter: their 401 / 403 spends their address's `bad:<ip>` bucket
+ *    (appBadAuthCount) and, past the limit, the address is refused for the rest of the minute
+ *    except on a verified session (appBadAuthGuard).
  *  - jobs: tryAcquireAppJobSlot / releaseAppJobSlot around each app's turn of a scheduled
  *    fan-out (services/app-jobs.ts). A turn that finds the app full holds no lane: the fan-out
  *    comes back to the app after its other apps, for at most JOB_SLOT_WAIT_MS, then skips it
@@ -90,6 +93,7 @@ interface RedisMulti {
 
 interface RedisLike {
   multi(): RedisMulti
+  get?(k: string): Promise<string | null>
 }
 
 let redisOverride: RedisLike | null | undefined
@@ -154,6 +158,33 @@ export async function countAppRequest(
   return countLocally(tenant, bucket, minute)
 }
 
+/** A bucket's count in its minute without counting this request (0 when unread). */
+export async function peekAppBucket(
+  tenant: string,
+  minute: number,
+  bucket: string
+): Promise<number> {
+  const r = redis()
+  if (r?.get && Date.now() >= redisState.pausedUntil) {
+    let timer: NodeJS.Timeout | undefined
+    try {
+      const v = await Promise.race([
+        r.get(`nvr:applimit:rpm:${tenant}:${bucket}:${minute}`),
+        new Promise<undefined>((resolve) => {
+          timer = setTimeout(() => resolve(undefined), REDIS_WAIT_MS)
+        })
+      ])
+      if (v !== undefined) return Number(v ?? 0) || 0
+      redisState.pausedUntil = Date.now() + REDIS_BACKOFF_MS
+    } catch {
+      redisState.pausedUntil = Date.now() + REDIS_BACKOFF_MS
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+  return localCounts.get(`${tenant}|${bucket}|${minute}`) ?? 0
+}
+
 /** The app-wide ceiling on verified callers' requests, as a multiple of the per-caller limit:
  *  high enough that no handful of callers can use it up, low enough to cap a whole app. */
 export const APP_CEILING_FACTOR = 10
@@ -197,7 +228,8 @@ function tooMany(reply: FastifyReply, now: number, minute: number, message: stri
  */
 export async function appRateLimitPreHandler(req: FastifyRequest, reply: FastifyReply) {
   if (!isExternalRequest(req) || !rateLimitCounts(req.url)) return
-  const app = await currentAppLimits()
+  const c = capturedOf(req)
+  const app = c ? { id: c.id, limits: { requests_per_minute: c.limit } } : await currentAppLimits()
   const limit = app?.limits.requests_per_minute
   if (!app || !limit) return
   const now = Date.now()
@@ -228,14 +260,75 @@ export async function appRateLimitPreHandler(req: FastifyRequest, reply: Fastify
  * shared deployment, before the routes): as the last preHandler it runs after the route's own
  * authentication and inside the app's context.
  */
-export function registerAppRateLimit(app: {
-  addHook(name: 'onRoute', fn: (route: { preHandler?: unknown }) => void): unknown
-}): void {
+// ─── failed credentials ──────────────────────────────────────────────────────
+
+/** What the capture hook learned about a request inside its app's context (before auth). */
+const CAPTURED = Symbol('nvrAppRateLimit')
+type Captured = { id: string; limit: number }
+
+function capturedOf(req: FastifyRequest): Captured | undefined {
+  return (req as unknown as Record<symbol, Captured | undefined>)[CAPTURED]
+}
+
+/** The address bucket of requests whose credential did not check out (401 / 403 unverified). */
+export const badAuthBucket = (req: FastifyRequest) =>
+  `bad:${String(req.ip ?? '').replace(/[^0-9a-fA-F.:]/g, '')}`
+
+/** onRequest, right after the tenant hook: notes the app and its limit on the request. */
+export async function appRateLimitCapture(req: FastifyRequest): Promise<void> {
+  if (!isExternalRequest(req) || !rateLimitCounts(req.url)) return
+  const app = await currentAppLimits()
+  const limit = app?.limits.requests_per_minute
+  if (app && limit) (req as unknown as Record<symbol, Captured>)[CAPTURED] = { id: app.id, limit }
+}
+
+/**
+ * Root preHandler (the session is read by then, the route's own authentication not yet): an
+ * address whose requests failed authentication `requests_per_minute` times this minute is
+ * refused (429) for the rest of the minute, except a request on a verified session. Requests that
+ * fail authentication stop in the route's own check, before the per-caller limiter, so without
+ * this a flood of bad credentials would never be limited per app. (The core anonymous limiter,
+ * RATE_LIMIT_ANON_PER_MINUTE, counts them per address but never refuses a request that carries
+ * a credential, and it is off unless TRUST_PROXY is set.) Cost: an API key used from that address
+ * waits out the minute too.
+ */
+export async function appBadAuthGuard(req: FastifyRequest, reply: FastifyReply) {
+  const c = capturedOf(req)
+  if (!c || sessionUser(req)) return
+  const now = Date.now()
+  const minute = Math.floor(now / 60_000)
+  if ((await peekAppBucket(c.id, minute, badAuthBucket(req))) < c.limit) return
+  return tooMany(
+    reply,
+    now,
+    minute,
+    'Too many requests from this address whose sign-in did not check out.'
+  )
+}
+
+/** onResponse: a 401 / 403 to a caller that never verified spends its address's bucket. */
+export async function appBadAuthCount(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+  const c = capturedOf(req)
+  if (!c || (reply.statusCode !== 401 && reply.statusCode !== 403)) return
+  // A verified caller's 403 is a permission answer, not a failed sign-in.
+  if (rateLimitPrincipal(req).verified) return
+  await countAppRequest(c.id, Math.floor(Date.now() / 60_000), badAuthBucket(req))
+}
+
+/**
+ * The per-app limits on a Hub shared deployment (server.ts, after the tenant hook and before the
+ * routes): the capture hook, the failed-credential guard and counter, and the per-caller limiter
+ * as every later route's last preHandler (after its own authentication).
+ */
+export function registerAppRateLimit(app: FastifyInstance): void {
+  app.addHook('onRequest', appRateLimitCapture)
+  app.addHook('preHandler', appBadAuthGuard)
+  app.addHook('onResponse', appBadAuthCount)
   app.addHook('onRoute', (route) => {
     const own = route.preHandler
-    const list = Array.isArray(own) ? own : own ? [own] : []
+    const list = (Array.isArray(own) ? own : own ? [own] : []) as unknown[]
     if (list.includes(appRateLimitPreHandler)) return
-    route.preHandler = [...list, appRateLimitPreHandler]
+    route.preHandler = [...list, appRateLimitPreHandler] as never
   })
 }
 
