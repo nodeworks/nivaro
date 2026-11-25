@@ -402,6 +402,7 @@ const NVR_ALLOW: Record<string, string> = {
   'services/hub/create/store.ts :: nvr:hub:create-start': HUB,
   'services/hub/create/store.ts :: nvr:hub:create-cancel:': HUB,
   'services/hub/db/db-lock.ts :: nvr:hub:db:': HUB,
+  'services/hub/data/lock.ts :: nvr:hub:data:': HUB,
   'services/hub/deploy-evidence.ts :: nvr:hub:evidence:jobs:': HUB,
   'services/hub/deploys.ts :: nvr:hub:deploys:': HUB,
   'services/hub/oidc/codes.ts :: nvr:hub-oidc:code:': HUB,

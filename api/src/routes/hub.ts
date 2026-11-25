@@ -100,6 +100,7 @@ import {
 } from '../services/hub/status.js'
 import { readJobLog } from '../services/job-runs.js'
 import { hubPhase3Routes } from './hub-create.js'
+import { hubDataRoutes } from './hub-data.js'
 import { hubDockerRoutes } from './hub-docker.js'
 import { hubMoveRoutes } from './hub-move.js'
 import { hubSharedRoutes } from './hub-shared.js'
@@ -136,6 +137,7 @@ export async function hubRoutes(app: FastifyInstance) {
   app.register(hubSharedTenantsRoutes) // phase 6: GET /shared/:key/tenants (deployment bearer)
   hubSharedUpgradeRoutes(app) // phase 6: shared stack deploy/upgrade/rollback (Task 5)
   hubMoveRoutes(app) // phase 6: moves between shared and dedicated placements (+ boot heal)
+  hubDataRoutes(app) // data care: backups, restore drills, refreshes, move rehearsals
 }
 
 const APPS = 'nivaro_hub_apps'
