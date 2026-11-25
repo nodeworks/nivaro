@@ -16,12 +16,13 @@ import {
   DEDICATED_BACKGROUND_POOL,
   DEDICATED_MAIN_POOL,
   type DedicatedPools,
+  PROBE_CONNECTIONS,
   poolSetting,
   type ServerLoad,
   type SharedAppPool
 } from './connections.js'
 import { applyScaleShape, processCount, type ScaleShape } from './shape.js'
-import { readScaleShape, type TargetKind } from './store.js'
+import { openRunOf, readScaleShape, type TargetKind } from './store.js'
 
 /**
  * Nivaro Hub scaling: everything the plan, the runner and the scaling view read about ONE stack
@@ -286,14 +287,29 @@ export async function readTarget(
 }
 
 /**
+ * What one tick (or one plan) already read of other stacks: their processes from the kept shape
+ * and their pools. Open runs are read fresh every time (they are the reservations).
+ */
+export type LoadCache = Map<string, { procs: number; per: number } | null>
+
+/** The processes a stack may run now: its kept shape, or an open run's target if higher. */
+async function reserved(kind: TargetKind, id: number, kept: number): Promise<number> {
+  const open = await openRunOf(kind, id)
+  return open ? Math.max(kept, processCount(open.to)) : kept
+}
+
+/**
  * Connections every OTHER Hub stack may open on each of these database servers now: dedicated
- * stacks (processes × their pools) and shared deployments (processes × each app's pool_max) whose
- * environments' database records live there. Environments the Hub does not run on Docker are not
- * counted (their processes are unknown): the operator keeps room for them in the limit.
+ * stacks (processes × their pools, + the probe) and shared deployments (processes × each app's
+ * pool_max) whose environments' database records live there — each counted at the higher of its
+ * kept numbers and the target of a scale run still open on it (the reservation a plan made under
+ * the server lock). Environments the Hub does not run on Docker are not counted (their processes
+ * are unknown): the operator keeps room for them in the limit.
  */
 export async function otherLoads(
   serverIds: number[],
-  self: { kind: TargetKind; id: number }
+  self: { kind: TargetKind; id: number },
+  cache: LoadCache = new Map()
 ): Promise<Map<number, number>> {
   const out = new Map<number, number>()
   if (!serverIds.length) return out
@@ -307,7 +323,6 @@ export async function otherLoads(
     .whereNotNull('db_ref')
     .whereNot({ status: 'archived' })
     .select('id', 'db_ref', 'placement_id', 'version_pin')) as Array<Record<string, unknown>>
-  const sharedProcs = new Map<number, number>()
   const health = healthReader()
   for (const e of envs) {
     const recordId = databaseRecordId(e.db_ref)
@@ -321,10 +336,12 @@ export async function otherLoads(
     if (placement.kind === 'shared') {
       const sid = Number(placement.shared_deployment_id)
       if (self.kind === 'shared' && sid === self.id) continue
-      if (!sharedProcs.has(sid)) {
+      const key = `shared:${sid}`
+      if (!cache.has(key)) {
         const t = await sharedTarget(sid)
-        sharedProcs.set(sid, t ? processCount(t.roles) : 0)
+        cache.set(key, t ? { procs: processCount(t.roles), per: 0 } : null)
       }
+      const c = cache.get(key)
       let target: unknown = placement.target
       try {
         target = typeof target === 'string' ? JSON.parse(target) : target
@@ -332,14 +349,30 @@ export async function otherLoads(
         target = {}
       }
       const pool = sharedPoolMax(target as { pool_max?: number })
-      out.set(server, (out.get(server) ?? 0) + (sharedProcs.get(sid) ?? 0) * pool)
+      const procs = c ? await reserved('shared', sid, c.procs) : 0
+      out.set(server, (out.get(server) ?? 0) + procs * pool)
       continue
     }
     if (self.kind === 'environment' && envId === self.id) continue
-    const t = await environmentTarget(envId, health)
-    if (!t || t.unusable?.code === 'NOT_DOCKER' || !t.pools) continue
-    const per = t.pools.main + t.pools.background
-    out.set(server, (out.get(server) ?? 0) + processCount(t.roles) * per)
+    const key = `environment:${envId}`
+    if (!cache.has(key)) {
+      const t = await environmentTarget(envId, health)
+      cache.set(
+        key,
+        !t || t.unusable?.code === 'NOT_DOCKER' || !t.pools
+          ? null
+          : {
+              procs: processCount(t.roles),
+              per: t.pools.main + t.pools.background + PROBE_CONNECTIONS
+            }
+      )
+    }
+    const c = cache.get(key)
+    if (!c) continue
+    out.set(
+      server,
+      (out.get(server) ?? 0) + (await reserved('environment', envId, c.procs)) * c.per
+    )
   }
   return out
 }

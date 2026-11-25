@@ -137,7 +137,7 @@ afterAll(async () => {
 
 beforeEach(() => vi.clearAllMocks())
 
-const call = (method: 'GET' | 'POST' | 'PUT', url: string, payload?: unknown, headers = admin) =>
+const call = (method: 'GET' | 'POST' | 'PUT', url: string, payload?: unknown, headers: Record<string, string> = admin) =>
   app.inject({ method, url: `/api/hub${url}`, headers, payload: payload as never })
 
 describe('/api/hub/scale', () => {

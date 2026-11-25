@@ -1,7 +1,7 @@
 import { insertReturningId } from '../../../db/dialect/ef.js'
 import { db } from '../../../db/index.js'
 import type { StackRoleName } from '../docker/agent-types.js'
-import { type AutoRule, type AutoState, parseRule, parseState } from './rules.js'
+import { type AutoRule, type AutoState, EMPTY_STATE, parseRule, parseState } from './rules.js'
 import { isRoleName, type RoleFigures, roleScaleOf, type ScaleShape } from './shape.js'
 
 /**
@@ -82,7 +82,13 @@ function json<T>(raw: unknown, dflt: T): T {
 
 const iso = (v: unknown): string | null => {
   if (v == null || v === '') return null
-  const t = v instanceof Date ? v.getTime() : Date.parse(String(v))
+  // SQLite keeps a dateTime as epoch milliseconds.
+  const t =
+    v instanceof Date
+      ? v.getTime()
+      : typeof v === 'number' || /^\d{12,}$/.test(String(v))
+        ? Number(v)
+        : Date.parse(String(v))
   return Number.isFinite(t) ? new Date(t).toISOString() : null
 }
 const numOrNull = (v: unknown): number | null =>
@@ -211,10 +217,43 @@ export async function setRule(
   rule: AutoRule | null,
   by: string
 ): Promise<void> {
+  // A new rule starts counting afresh; the last change (its cooldown), the last at-max notice
+  // and a pause it put itself in stay (Resume rule lifts a pause, never an edit).
+  const cur = (await readRoles(kind, id)).find((r) => r.role === role)?.state ?? EMPTY_STATE
+  const state: AutoState = {
+    ...EMPTY_STATE,
+    max_hits: [],
+    last_change_at: cur.last_change_at,
+    max_noticed_at: cur.max_noticed_at,
+    paused_at: cur.paused_at,
+    paused_reason: cur.paused_reason,
+    resumed_at: cur.resumed_at
+  }
   await upsert(kind, id, role, {
     auto: rule ? JSON.stringify(rule) : null,
-    // A new rule starts counting afresh; the last change it remembers stays.
-    state: null,
+    state: JSON.stringify(state),
+    updated_by: by
+  })
+}
+
+/** Lifts a rule's own pause: failures before now no longer count. */
+export async function resumeRule(
+  kind: TargetKind,
+  id: number,
+  role: StackRoleName,
+  by: string,
+  at = new Date()
+): Promise<void> {
+  const cur = (await readRoles(kind, id)).find((r) => r.role === role)?.state ?? EMPTY_STATE
+  await upsert(kind, id, role, {
+    state: JSON.stringify({
+      ...cur,
+      above: 0,
+      below: 0,
+      paused_at: null,
+      paused_reason: null,
+      resumed_at: at.toISOString()
+    }),
     updated_by: by
   })
 }
@@ -404,11 +443,68 @@ export async function scaledSpecHashSince(
 ): Promise<string | null> {
   if (!(await hasTable(SCALE_RUNS))) return null
   const q = db(SCALE_RUNS)
-    .where({ target_kind: 'environment', target_id: envId, stack, status: 'success' })
+    // A run's spec_hash is set only once the Hub knows swarm runs it: a success, or a failed run
+    // whose change the agent applied and the Hub adopted from the live stack (reconcile.ts).
+    .where({ target_kind: 'environment', target_id: envId, stack })
     .whereNotNull('spec_hash')
     .orderBy('id', 'desc')
   const at = iso(since)
   if (at) q.where('created_at', '>', new Date(at))
   const r = (await q.first('spec_hash')) as { spec_hash: string | null } | undefined
   return r?.spec_hash && /^[0-9a-f]{64}$/.test(r.spec_hash) ? r.spec_hash : null
+}
+
+/**
+ * Single-flight resume: one caller (holding the stack's lock) claims a stale run by moving its
+ * heartbeat on, only while it is still the stale value it read. true = this caller resumes it.
+ */
+export async function claimStaleRun(id: number, before: Date, at: Date): Promise<boolean> {
+  const n = await db(SCALE_RUNS)
+    .where({ id, status: 'running' })
+    .where((q) => q.whereNull('heartbeat_at').orWhere('heartbeat_at', '<', before))
+    .update({ heartbeat_at: at })
+  return Number(n) > 0
+}
+
+/** Writes a field on a run whatever its status (an adoption after the run ended). */
+export async function updateRun(id: number, patch: Record<string, unknown>): Promise<void> {
+  const out: Record<string, unknown> = { ...patch }
+  for (const k of ['steps', 'figures'] as const)
+    if (out[k] !== undefined && typeof out[k] !== 'string') out[k] = JSON.stringify(out[k])
+  await db(SCALE_RUNS).where({ id }).update(out)
+}
+
+/**
+ * The automatic runs (auto / schedule, never skipped rows) of a stack since `since`, newest
+ * first: how many failed in a row and when the newest of those ended.
+ */
+export async function autoFailures(
+  kind: TargetKind,
+  id: number,
+  since: string | null
+): Promise<{ count: number; code: string | null; last_at: string | null }> {
+  if (!(await hasTable(SCALE_RUNS))) return { count: 0, code: null, last_at: null }
+  const q = db(SCALE_RUNS)
+    .where({ target_kind: kind, target_id: id })
+    .whereIn('source', ['auto', 'schedule'])
+    .whereNot({ status: 'skipped' })
+    .orderBy('id', 'desc')
+    .limit(10)
+  if (since) q.where('created_at', '>', new Date(since))
+  const rows = (await q.select('status', 'error_code', 'finished_at', 'created_at')) as Array<
+    Record<string, unknown>
+  >
+  let count = 0
+  let code: string | null = null
+  let last: string | null = null
+  for (const r of rows) {
+    if (r.status === 'running') continue
+    if (r.status !== 'failed' && r.status !== 'interrupted') break
+    count++
+    if (count === 1) {
+      code = r.error_code == null ? null : String(r.error_code)
+      last = iso(r.finished_at) ?? iso(r.created_at)
+    }
+  }
+  return { count, code, last_at: last }
 }

@@ -12,6 +12,7 @@ import {
   isTargetKind,
   listRuns,
   readRun,
+  resumeRule,
   setPinned,
   setRule,
   type TargetKind
@@ -131,6 +132,10 @@ export function hubScaleRoutes(app: FastifyInstance): void {
         return refuse(reply, 404, 'NOT_FOUND', 'The stack runs no such role.')
       const b = body(req)
       const changed: string[] = []
+      if (b.resume === true) {
+        await resumeRule(t.kind, t.id, role, userId(req))
+        changed.push('resume')
+      }
       if (b.pinned !== undefined) {
         if (typeof b.pinned !== 'boolean')
           return refuse(reply, 400, 'BAD_PINNED', 'pinned is true or false.')
@@ -160,7 +165,7 @@ export function hubScaleRoutes(app: FastifyInstance): void {
         }
         changed.push('auto')
       }
-      if (!changed.length) return refuse(reply, 400, 'NOTHING', 'Send pinned or auto.')
+      if (!changed.length) return refuse(reply, 400, 'NOTHING', 'Send pinned, auto or resume.')
       await logActivity({
         action: 'update',
         user: userId(req),
@@ -280,7 +285,10 @@ export function hubScaleRoutes(app: FastifyInstance): void {
       '* * * * *',
       async () => {
         const r = await scaleTick()
-        if (r.errors.length) throw new Error(`hub-scale-tick: ${r.errors.join('; ')}`)
+        // One stack's persistent error is logged; the job fails only when nothing could be judged.
+        if (r.errors.length && r.errors.length >= Math.max(1, r.targets))
+          throw new Error(`hub-scale-tick: ${r.errors.join('; ')}`)
+        if (r.errors.length) app.log.warn(`hub-scale-tick: ${r.errors.join('; ')}`)
       },
       {
         quiet: true,

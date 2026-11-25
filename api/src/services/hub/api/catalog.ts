@@ -1199,6 +1199,7 @@ export const HUB_ROUTES: HubRoute[] = [
     {
       body: {
         pinned: b('true = autoscaling leaves this role alone'),
+        resume: b('true = lift the pause the rule put itself in after repeated failures'),
         auto: o(
           'The rule: enabled, min, max, metrics [{metric, out_above, in_below}], sustain, sustain_in, cooldown_out_min, cooldown_in_min, step_every_min, step, schedules [{days, from, to, zone, min}]; null clears it'
         )

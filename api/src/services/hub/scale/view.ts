@@ -49,6 +49,9 @@ export interface RoleView {
   /** Times the rule wanted more than its max in 24 h (≥ 3 = warning). */
   max_hits: number
   last_change_at: string | null
+  /** The rule paused itself after repeated failed runs (Resume rule lifts it). */
+  paused_at: string | null
+  paused_reason: string | null
   /** What swarm runs now (detail only; null = unknown). */
   running?: { desired: number; running: number } | null
 }
@@ -94,7 +97,9 @@ function rolesOf(t: ScaleTarget, rows: RoleRow[], now: number): RoleView[] {
       auto: row?.auto ?? null,
       metrics: ROLE_METRICS[r.role] ?? [],
       max_hits: row ? maxHits24h(row.state, now) : 0,
-      last_change_at: row?.state.last_change_at ?? null
+      last_change_at: row?.state.last_change_at ?? null,
+      paused_at: row?.state.paused_at ?? null,
+      paused_reason: row?.state.paused_reason ?? null
     }
   })
 }

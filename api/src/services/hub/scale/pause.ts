@@ -1,4 +1,5 @@
 import { db } from '../../../db/index.js'
+import { INCIDENTS } from '../incident/store.js'
 import { moveOpenRefusal } from '../move-open.js'
 import {
   defaultPromoteLock,
@@ -29,15 +30,31 @@ export interface Pause {
 }
 
 /**
- * THE seam for incident mode (Hub ideas 32–35, built on its own branch): whether an incident is
- * open for any of these apps / environments. It answers false until incident mode lands; that
- * branch makes it read its table, and automatic scaling then pauses during an incident.
+ * Whether an incident is open (hub-enh/incident, nivaro_hub_incidents status `open`) for any of
+ * these apps: one opened for the whole app (environment_id null), or for one of these
+ * environments. Fails CLOSED: incidents that cannot be read count as open, except on a database
+ * with no incident table (behind migration 576).
  */
-export async function incidentOpenFor(_target: {
+export async function incidentOpenFor(target: {
   appIds: number[]
   envIds: number[]
 }): Promise<boolean> {
-  return false
+  const appIds = target.appIds.filter((n) => Number.isInteger(n) && n > 0)
+  if (!appIds.length) return false
+  try {
+    if (!(await db.schema.hasTable(INCIDENTS))) return false
+    const row = await db(INCIDENTS)
+      .where({ status: 'open' })
+      .whereIn('app_id', appIds)
+      .where((q) => {
+        q.whereNull('environment_id')
+        if (target.envIds.length) q.orWhereIn('environment_id', target.envIds)
+      })
+      .first('id')
+    return !!row
+  } catch {
+    return true
+  }
 }
 
 export interface PauseDeps {
@@ -46,6 +63,8 @@ export interface PauseDeps {
   incidentOpen?: typeof incidentOpenFor
   /** The instant freezes are judged at (default now). */
   at?: number
+  /** A run judging its own resume: it does not block itself. */
+  exceptRunId?: number
 }
 
 /** Why the target cannot be changed now (blockers) and, for a person, what to know (warnings). */
@@ -60,7 +79,7 @@ export async function scalePauses(
   const sharedLock = deps.sharedLock ?? defaultSharedLock()
 
   const open = await openRunOf(t.kind, t.id)
-  if (open)
+  if (open && open.id !== deps.exceptRunId)
     blockers.push({
       code: 'SCALE_RUNNING',
       text: `Scale run ${open.id} of this stack is still running — wait for it to end.`

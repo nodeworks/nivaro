@@ -91,9 +91,10 @@ describe('connection math', () => {
       pools: { main: 60, background: 10 },
       server: { id: 1, name: 'sql1', max_connections: 800, others: 140 }
     })
-    expect(m.per_process).toBe(70)
-    expect(m.total).toEqual({ from: 560, to: 700 })
-    expect(m.servers[0]).toMatchObject({ after: 840, fits: false })
+    // + 1 per process for the health probe's own connection.
+    expect(m.per_process).toBe(71)
+    expect(m.total).toEqual({ from: 568, to: 710 })
+    expect(m.servers[0]).toMatchObject({ after: 850, fits: false })
     expect(m.refusals.map((r) => r.code)).toEqual(['DB_CONNECTIONS'])
   })
 

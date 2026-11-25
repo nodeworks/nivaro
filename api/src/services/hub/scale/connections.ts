@@ -4,7 +4,8 @@
  * Every Nivaro process opens its own pools, so connections grow with processes:
  *   - a dedicated stack: per process DB_POOL_MAX (main pool, default 60) + DB_POOL_BACKGROUND_MAX
  *     (background pool, default 10; 0 = it shares the main pool) — the stack's settings, else the
- *     defaults the API boots with (config.ts);
+ *     defaults the API boots with (config.ts) — + 1 for the health probe's own connection
+ *     (db/index.ts probeDb);
  *   - a shared deployment: per process, one pool per app of `pool_max` (the placement's, default
  *     5). The deployment's pool budget caps that sum for ONE process (place.ts checks it when an
  *     app is placed); scaling multiplies it by the processes.
@@ -17,6 +18,8 @@
 
 export const DEDICATED_MAIN_POOL = 60
 export const DEDICATED_BACKGROUND_POOL = 10
+/** The health probe's own one-connection pool every dedicated process opens (probeDb). */
+export const PROBE_CONNECTIONS = 1
 
 export interface ServerLoad {
   id: number
@@ -72,8 +75,8 @@ export interface ConnMath {
   processes: { from: number; to: number }
   /** Connections one process may open (dedicated: main + background; shared: Σ pool_max). */
   per_process: number
-  /** Dedicated only. */
-  pools?: DedicatedPools
+  /** Dedicated only (+ PROBE_CONNECTIONS each process). */
+  pools?: DedicatedPools & { probe: number }
   /** Shared only: the pool budget of one process and what the apps take of it. */
   budget?: { per_process: number; used: number }
   total: { from: number; to: number }
@@ -82,6 +85,8 @@ export interface ConnMath {
   unknown: string[]
   refusals: { code: 'DB_CONNECTIONS'; text: string }[]
   warnings: { code: string; text: string }[]
+  /** A server limit (or the database record) is unknown: nothing to judge the total by. */
+  limit_unknown: boolean
 }
 
 function judge(
@@ -129,7 +134,7 @@ export function connectionMath(input: ConnInput): ConnMath {
   const refusals: ConnMath['refusals'] = []
   const warnings: ConnMath['warnings'] = []
   if (input.kind === 'environment') {
-    const per = input.pools.main + input.pools.background
+    const per = input.pools.main + input.pools.background + PROBE_CONNECTIONS
     const total = { from: processes.from * per, to: processes.to * per }
     const servers: ServerMath[] = []
     const unknown: string[] = []
@@ -149,12 +154,13 @@ export function connectionMath(input: ConnInput): ConnMath {
       kind: 'environment',
       processes,
       per_process: per,
-      pools: { ...input.pools },
+      pools: { ...input.pools, probe: PROBE_CONNECTIONS },
       total,
       servers,
       unknown,
       refusals,
-      warnings
+      warnings,
+      limit_unknown: unknown.length > 0 || servers.some((x) => x.max_connections == null)
     }
   }
 
@@ -197,7 +203,8 @@ export function connectionMath(input: ConnInput): ConnMath {
     servers,
     unknown,
     refusals,
-    warnings
+    warnings,
+    limit_unknown: unknown.length > 0 || servers.some((x) => x.max_connections == null)
   }
 }
 

@@ -49,6 +49,7 @@ const MIGRATIONS = [
   await import('../../../db/migrations/553_hub_moves.js'),
   await import('../../../db/migrations/565_hub_release_ops.js'),
   await import('../../../db/migrations/570_hub_people_owner_policy.js'),
+  await import('../../../db/migrations/576_hub_incidents.js'),
   await import('../../../db/migrations/581_hub_scale.js')
 ]
 
@@ -265,9 +266,9 @@ describe('the plan', () => {
     const p = await plan.planScale(t as never, [{ role: 'web', replicas: 5 }], 'manual', deps())
     expect(p.blockers).toEqual([])
     expect(p.changes).toEqual([{ role: 'web', replicas: 5 }])
-    expect(p.connections.total).toEqual({ from: 560, to: 700 })
-    // production (medium: web 2 + worker 1) × (20 + 10)
-    expect(p.connections.servers[0]).toMatchObject({ others: 90, after: 790, fits: true })
+    expect(p.connections.total).toEqual({ from: 568, to: 710 })
+    // production (medium: web 2 + worker 1) × (20 + 10 + 1 probe)
+    expect(p.connections.servers[0]).toMatchObject({ others: 93, after: 803, fits: true })
     expect(p.confirm).toBeNull()
   })
 
@@ -515,13 +516,13 @@ describe('the autoscaling tick', () => {
     const later = () => Date.now() + 60 * 60_000
     const d2 = { ...deps(), readUsage: usage(180), now: later }
     expect(await auto.evaluateTarget('environment', 1, d2)).toBe('skipped')
-    expect(await auto.evaluateTarget('environment', 1, d2)).toBe('skipped')
+    expect(await auto.evaluateTarget('environment', 1, d2)).toBe('held')
     const skipped = (await store.listRuns('environment', 1, 10)).filter(
       (x) => x.status === 'skipped'
     )
     expect(skipped).toHaveLength(1)
     expect(skipped[0]).toMatchObject({ error_code: 'FROZEN' })
-    expect(skipped[0].reason).toMatch(/would have: web 4 → 5/)
+    expect(skipped[0].reason).toMatch(/^Autoscaling paused: A release freeze is on/)
   })
 
   it('the scaling view lists the stack with its rule and runs', async () => {
@@ -542,7 +543,7 @@ describe('the autoscaling tick', () => {
         }) as never
     })
     expect(d?.roles.find((r) => r.role === 'web')?.running).toEqual({ desired: 3, running: 2 })
-    expect(d?.now.connections.total.from).toBe(560)
+    expect(d?.now.connections.total.from).toBe(568)
     expect(d?.now.blockers).toEqual([])
   })
 })
@@ -607,8 +608,514 @@ describe('a shared deployment', () => {
     const p = await plan.planScale(t as never, [{ role: 'web', replicas: 4 }], 'manual', deps())
     expect(p.connections.kind).toBe('shared')
     expect(p.connections.total).toEqual({ from: 40, to: 56 })
-    // The dedicated stacks on the same server count as others: 8 × 70 + 3 × 30.
-    expect(p.connections.servers[0]).toMatchObject({ others: 650, to: 56 })
+    // The dedicated stacks on the same server count as others: 8 × 71 + 3 × 31 (each process has its probe connection).
+    expect(p.connections.servers[0]).toMatchObject({ others: 661, to: 56 })
     expect(p.confirm).toBe('shared-eu')
+  })
+})
+
+// ─── review fixes ─────────────────────────────────────────────────────────────
+
+/** A fake swarm: what the agent says the stack runs, moved by the scale calls it accepts. */
+function swarm() {
+  const live = { hash: HASH0, web: 3, realtime: 2 }
+  const status = () =>
+    ({
+      state: 'converged',
+      spec_hash: live.hash,
+      services: [
+        { role: 'web', replicas: { desired: live.web, running: live.web } },
+        { role: 'realtime', replicas: { desired: live.realtime, running: live.realtime } }
+      ]
+    }) as never
+  const apply = (changes: StackScaleChange[]) => {
+    for (const c of changes) {
+      if (c.role === 'web' && c.replicas !== undefined) live.web = c.replicas
+      if (c.role === 'realtime' && c.replicas !== undefined) live.realtime = c.replicas
+    }
+    live.hash = String(nextHash++).padStart(64, 'c')
+    return live.hash
+  }
+  return { live, status, apply }
+}
+
+const cancelled = { notices: 0 }
+const countingNotify = {
+  notify: async () => {
+    cancelled.notices++
+    return null
+  },
+  adminBase: () => 'https://hub.corp'
+}
+
+async function planAndStart(
+  roles: RoleChangeInput[],
+  d: ReturnType<typeof deps>,
+  envId = 1
+): Promise<number> {
+  const t = await target.environmentTarget(envId, async () => health())
+  const p = await plan.planScale(t as never, roles, 'manual', d)
+  expect(p.blockers).toEqual([])
+  const s = await run.startScale(
+    'environment',
+    envId,
+    { roles, plan_hash: p.plan_hash, confirm: p.confirm ?? undefined },
+    { by: null, source: 'manual' },
+    d
+  )
+  return s.run_id
+}
+
+describe('review: the lock is checked before every write to the stack', () => {
+  it('a lock lost during a realtime drain sends no further step', async () => {
+    await store.writeShape(
+      'environment',
+      1,
+      [{ role: 'realtime', replicas: 4, cpus: 1, memory_mb: 1024 }],
+      null
+    )
+    let renews = 0
+    const lock = {
+      ...memoryPromoteLock,
+      renew: async (envId: number, token: string) => {
+        renews++
+        // The first step's checks pass; from the drain on, the lock is someone else's.
+        return renews <= 3 ? memoryPromoteLock.renew(envId, token) : false
+      },
+      renewStrict: undefined
+    }
+    const id = await planAndStart([{ role: 'realtime', replicas: 1 }], deps({ envLock: lock }))
+    expect(scaleCalls).toHaveLength(1)
+    expect(await store.readRun(id)).toMatchObject({
+      status: 'interrupted',
+      error_code: 'LOCK_LOST'
+    })
+    expect(await memoryPromoteLock.held(1)).toBe(false)
+  })
+
+  it('a stale run is resumed once, however many ticks ask at the same time', async () => {
+    const t = await target.environmentTarget(1, async () => health())
+    const from = t?.roles.map((r) => ({
+      role: r.role,
+      replicas: r.replicas,
+      cpus: r.cpus ?? null,
+      memory_mb: r.memory_mb ?? null
+    })) as RoleFigures[]
+    const to = from.map((r) => (r.role === 'web' ? { ...r, replicas: 4 } : r))
+    const id = await store.insertRun({
+      target_kind: 'environment',
+      target_id: 1,
+      stack: 'acme-st',
+      source: 'manual',
+      status: 'running',
+      reason: 'x',
+      figures: null,
+      from,
+      to,
+      steps: [{ to, status: 'pending' }],
+      plan_hash: null,
+      started_by: null
+    })
+    await db(store.SCALE_RUNS)
+      .where({ id })
+      .update({ heartbeat_at: new Date(Date.now() - 10 * 60_000) })
+    // A second tick racing the first: the stale heartbeat is claimed by one of them only.
+    const before = new Date(Date.now() - run.STALE_MS)
+    expect(await store.claimStaleRun(id, before, new Date())).toBe(true)
+    expect(await store.claimStaleRun(id, before, new Date())).toBe(false)
+    expect(await run.resumeStaleRuns(deps())).toBe(0)
+  })
+})
+
+describe('review: the Hub record follows what swarm runs', () => {
+  it('the agent applied, then the Hub timed out: the record matches live and Apply now does not scale back', async () => {
+    const sw = swarm()
+    let t0 = 0
+    const d = deps({
+      agentScale: async (_d, _n, spec, changes) => {
+        scaleCalls.push({ roles: spec.roles, changes })
+        return { spec_hash: sw.apply(changes), changed: [], unchanged: [], already: false }
+      },
+      // Swarm never says converged: the run times out waiting.
+      agentStack: async () => ({ ...(sw.status() as object), state: 'updating' }) as never,
+      now: () => (t0 += 60_000),
+      settleMs: 120_000
+    })
+    const id = await planAndStart([{ role: 'web', replicas: 5 }], d)
+    const r = await store.readRun(id)
+    expect(r).toMatchObject({
+      status: 'failed',
+      error_code: 'SETTLE_TIMEOUT',
+      spec_hash: sw.live.hash
+    })
+    expect((await store.readScaleShape('environment', 1))?.web?.replicas).toBe(5)
+    // What Apply now / a promotion renders: the kept shape (web 5), and the hash it expects.
+    const after = await target.environmentTarget(1, async () => health())
+    expect(web(after?.roles as never)?.replicas).toBe(5)
+    const dep = await guards.deployedStack(1, 'acme-st')
+    expect(dep.state === 'ok' && dep.specHash).toBe(sw.live.hash)
+  })
+
+  it('the agent call failed but swarm took it (a new live hash): adopted', async () => {
+    const sw = swarm()
+    const { AgentError } = await import('../../../services/hub/docker/agent-client.js')
+    const d = deps({
+      agentScale: async (_d, _n, _spec, changes) => {
+        sw.apply(changes)
+        throw new AgentError('AGENT_UNREACHABLE', 0, 'timeout')
+      },
+      agentStack: async () => sw.status()
+    })
+    const id = await planAndStart([{ role: 'web', replicas: 6 }], d)
+    expect(await store.readRun(id)).toMatchObject({ status: 'failed', spec_hash: sw.live.hash })
+    expect((await store.readScaleShape('environment', 1))?.web?.replicas).toBe(6)
+  })
+
+  it('a later scale refused SPEC_MISMATCH adopts what runs and tries once more', async () => {
+    const sw = swarm()
+    sw.live.web = 4 // someone's earlier change the Hub never recorded
+    const { AgentError } = await import('../../../services/hub/docker/agent-client.js')
+    let calls = 0
+    const d = deps({
+      agentScale: async (_d, _n, spec, changes) => {
+        calls++
+        scaleCalls.push({ roles: spec.roles, changes })
+        if (calls === 1) throw new AgentError('SPEC_MISMATCH', 409, 'x')
+        return { spec_hash: sw.apply(changes), changed: [], unchanged: [], already: false }
+      },
+      agentStack: async () => sw.status()
+    })
+    const id = await planAndStart([{ role: 'web', replicas: 6 }], d)
+    expect(await store.readRun(id)).toMatchObject({ status: 'success' })
+    expect(calls).toBe(2)
+    // The retry is rendered from what runs (web 4), not from the stale record (web 3).
+    expect(scaleCalls[1].roles.find((x) => x.role === 'web')?.replicas).toBe(4)
+  })
+
+  it('swarm rolled one role back: the run puts the stack back to the numbers before it', async () => {
+    let n = 0
+    const d = deps({
+      agentScale: async (_d, _n, spec, changes) => {
+        scaleCalls.push({ roles: spec.roles, changes })
+        return {
+          spec_hash: String(++n).padStart(64, 'd'),
+          changed: [],
+          unchanged: [],
+          already: false
+        }
+      },
+      agentStack: async (_d, _n, expect) =>
+        ({
+          state: expect === String(1).padStart(64, 'd') ? 'rolled_back' : 'converged',
+          spec_hash: expect ? null : HASH0,
+          services: []
+        }) as never
+    })
+    const id = await planAndStart([{ role: 'web', replicas: 5, memory_mb: 4096 }], d)
+    const r = await store.readRun(id)
+    expect(r?.error_code).toBe('SWARM_ROLLED_BACK')
+    expect(r?.error).toMatch(/put every role back/)
+    expect(scaleCalls).toHaveLength(2)
+    expect(scaleCalls[1].changes).toEqual([{ role: 'web', replicas: 3, memory_mb: 3072 }])
+    expect(await store.readScaleShape('environment', 1)).toBeNull()
+  })
+
+  it('a cancel asked during the last step is cleared when the run succeeds', async () => {
+    const d = deps({
+      agentScale: async (_d, _n, spec, changes) => {
+        scaleCalls.push({ roles: spec.roles, changes })
+        await db(store.SCALE_RUNS)
+          .where({ status: 'running' })
+          .update({ error_code: 'CANCEL_REQUESTED' })
+        return { spec_hash: 'e'.repeat(64), changed: [], unchanged: [], already: false }
+      }
+    })
+    const id = await planAndStart([{ role: 'web', replicas: 4 }], d)
+    expect(await store.readRun(id)).toMatchObject({ status: 'success', error_code: null })
+  })
+})
+
+describe('review: automatic runs back off and pause', () => {
+  beforeEach(async () => {
+    // One active Hub administrator to tell.
+    await db('nivaro_roles').del()
+    await db('nivaro_users').del()
+    await db('nivaro_roles').insert({ id: 1, admin_access: true })
+    await db('nivaro_users').insert({
+      id: 'aaaaaaaa-0000-4000-8000-000000000001',
+      role: 1,
+      status: 'active',
+      account_kind: null
+    })
+  })
+  const ruleWeb = async () => {
+    const { checkRule } = await import('../../../services/hub/scale/rules.js')
+    const r = checkRule(
+      {
+        enabled: true,
+        min: 2,
+        max: 8,
+        sustain: 1,
+        cooldown_out_min: 0,
+        step_every_min: 1,
+        metrics: [{ metric: 'cpu_pct', out_above: 70, in_below: 20 }]
+      },
+      'web'
+    )
+    if (!r.ok) throw new Error(r.error)
+    await store.setRule('environment', 1, 'web', r.rule, 'u1')
+  }
+  const hot = async () => ({
+    ok: true as const,
+    usage: {
+      version: '0.3.215',
+      at: new Date().toISOString(),
+      partial: false,
+      processes: [{ instance: 'w1', role: 'web', cpu_pct: 190, memory_mb: 1000, uptime_s: 1 }],
+      totals: { cpu_pct: 190, memory_mb: 1000, requests_per_min: 1, busy_ms_per_min: 1 },
+      apps: []
+    }
+  })
+  const failAuto = async (at: number) =>
+    store.insertRun({
+      target_kind: 'environment',
+      target_id: 1,
+      stack: 'acme-st',
+      source: 'auto',
+      status: 'failed',
+      reason: 'x',
+      figures: null,
+      from: [],
+      to: [],
+      steps: [],
+      plan_hash: null,
+      started_by: null,
+      error_code: 'SPEC_MISMATCH',
+      at: new Date(at)
+    })
+
+  it('waits 10, then 20 minutes after failures; the third pauses the rule with one notice; Resume rule lifts it', async () => {
+    await ruleWeb()
+    const now = Date.now()
+    await failAuto(now - 5 * 60_000)
+    expect(
+      await auto.evaluateTarget('environment', 1, { ...deps(), readUsage: hot, now: () => now })
+    ).toBe('held')
+    await failAuto(now - 60_000)
+    // Newest failure 11 minutes before, 2 in a row: 20 minutes.
+    expect(
+      await auto.evaluateTarget('environment', 1, {
+        ...deps(),
+        readUsage: hot,
+        now: () => now + 10 * 60_000
+      })
+    ).toBe('held')
+    await failAuto(now)
+    cancelled.notices = 0
+    const d = { ...deps({ notify: countingNotify }), readUsage: hot, now: () => now }
+    expect(await auto.evaluateTarget('environment', 1, d)).toBe('skipped')
+    expect(cancelled.notices).toBeGreaterThan(0)
+    const told = cancelled.notices
+    // Paused: nothing more, no second notice.
+    expect(await auto.evaluateTarget('environment', 1, d)).toBe('none')
+    expect(cancelled.notices).toBe(told)
+    const role = (await store.readRoles('environment', 1)).find((r) => r.role === 'web')
+    expect(role?.state.paused_at).toBeTruthy()
+    await store.resumeRule('environment', 1, 'web', 'u1', new Date(now + 1000))
+    expect(
+      await auto.evaluateTarget('environment', 1, {
+        ...deps(),
+        readUsage: hot,
+        now: () => now + 2000
+      })
+    ).toBe('started')
+  })
+
+  it('the at-max notice is told once while the stack is paused', async () => {
+    const { checkRule } = await import('../../../services/hub/scale/rules.js')
+    const r = checkRule(
+      {
+        enabled: true,
+        min: 2,
+        max: 3,
+        sustain: 1,
+        metrics: [{ metric: 'cpu_pct', out_above: 70, in_below: 20 }]
+      },
+      'web'
+    )
+    if (!r.ok) throw new Error(r.error)
+    await store.setRule('environment', 1, 'web', r.rule, 'u1')
+    const now = Date.now()
+    const hits = [now - 50 * 60_000, now - 30 * 60_000, now - 15 * 60_000].map((x) =>
+      new Date(x).toISOString()
+    )
+    const cur = (await store.readRoles('environment', 1)).find((x) => x.role === 'web')
+    await store.saveState('environment', 1, 'web', Object.assign({}, cur?.state, { max_hits: hits }) as never)
+    await db('nivaro_hub_freezes').insert({
+      app_id: 1,
+      name: 'Month end',
+      recurrence: 'none',
+      starts_at: new Date(now - 60_000),
+      ends_at: new Date(now + 3 * 3600_000)
+    })
+    cancelled.notices = 0
+    const d = { ...deps({ notify: countingNotify }), readUsage: hot, now: () => now }
+    await auto.evaluateTarget('environment', 1, d)
+    const once = cancelled.notices
+    expect(once).toBeGreaterThan(0)
+    await auto.evaluateTarget('environment', 1, { ...d, now: () => now + 60_000 })
+    await auto.evaluateTarget('environment', 1, { ...d, now: () => now + 120_000 })
+    expect(cancelled.notices).toBe(once)
+  })
+
+  it('editing a rule keeps its last change (the cooldown holds)', async () => {
+    await ruleWeb()
+    await store.noteChange('environment', 1, ['web'], new Date('2026-11-25T10:00:00Z'))
+    await ruleWeb()
+    expect(
+      (await store.readRoles('environment', 1)).find((r) => r.role === 'web')?.state.last_change_at
+    ).toBe('2026-11-25T10:00:00.000Z')
+  })
+})
+
+describe('review: connections are reserved and never judged blind', () => {
+  it('two plans at once on one server: the second counts the first one’s open run', async () => {
+    // Acme production (env 2) shares sql1 with staging (env 1).
+    let release: () => void = () => {}
+    const blocked = new Promise<void>((r) => {
+      release = r
+    })
+    const d = deps({
+      inline: false,
+      agentScale: async (_d, _n, spec, changes) => {
+        scaleCalls.push({ roles: spec.roles, changes })
+        await blocked
+        return { spec_hash: 'f'.repeat(64), changed: [], unchanged: [], already: false }
+      }
+    })
+    const first = await planAndStart([{ role: 'web', replicas: 6 }], d)
+    const prod = await target.environmentTarget(2, async () => health())
+    const p = await plan.planScale(prod as never, [{ role: 'web', replicas: 3 }], 'manual', deps())
+    // Staging counts at its open run's target (web 6: 11 processes × 71), not its kept 8 × 71.
+    expect(p.connections.servers[0].others).toBe(11 * 71)
+    release()
+    await new Promise((r) => setTimeout(r, 20))
+    await db(store.SCALE_RUNS).where({ id: first }).update({ status: 'success' })
+  })
+
+  it('an unknown limit: autoscaling never adds processes, a person may with the key, fewer always passes', async () => {
+    await db('nivaro_hub_db_servers').update({ max_connections: null })
+    const t = await target.environmentTarget(1, async () => health())
+    const auto1 = await plan.planScale(t as never, [{ role: 'web', replicas: 5 }], 'auto', deps())
+    expect(auto1.blockers.map((b) => b.code)).toContain('DB_LIMIT_UNKNOWN')
+    const manual = await plan.planScale(
+      t as never,
+      [{ role: 'web', replicas: 5 }],
+      'manual',
+      deps()
+    )
+    expect(manual.blockers).toEqual([])
+    expect(manual.warnings.map((w) => w.code)).toContain('DB_LIMIT_UNKNOWN')
+    expect(manual.confirm).toBe('staging')
+    const fewer = await plan.planScale(t as never, [{ role: 'web', replicas: 2 }], 'auto', deps())
+    expect(fewer.blockers).toEqual([])
+  })
+
+  it('a manual change outside an enabled rule warns that autoscaling moves it back', async () => {
+    const { checkRule } = await import('../../../services/hub/scale/rules.js')
+    const r = checkRule(
+      {
+        enabled: true,
+        min: 2,
+        max: 4,
+        metrics: [{ metric: 'cpu_pct', out_above: 70, in_below: 20 }]
+      },
+      'web'
+    )
+    if (!r.ok) throw new Error(r.error)
+    await store.setRule('environment', 1, 'web', r.rule, 'u1')
+    const t = await target.environmentTarget(1, async () => health())
+    const p = await plan.planScale(t as never, [{ role: 'web', replicas: 6 }], 'manual', deps())
+    expect(p.warnings.find((w) => w.code === 'AUTOSCALE_WILL_MOVE')?.text).toMatch(/back to 4/)
+  })
+})
+
+describe('review: incidents pause autoscaling', () => {
+  it('an open incident for the app (or this environment) pauses it; a resolved one or another app does not', async () => {
+    const { incidentOpenFor } = await import('../../../services/hub/scale/pause.js')
+    await db('nivaro_hub_incidents').del()
+    expect(await incidentOpenFor({ appIds: [1], envIds: [1] })).toBe(false)
+    const base = { title: 'Down', severity: 'sev1', opened_at: new Date() }
+    await db('nivaro_hub_incidents').insert({
+      ...base,
+      app_id: 1,
+      environment_id: 2,
+      status: 'open'
+    })
+    expect(await incidentOpenFor({ appIds: [1], envIds: [1] })).toBe(false)
+    expect(await incidentOpenFor({ appIds: [1], envIds: [2] })).toBe(true)
+    await db('nivaro_hub_incidents').insert({
+      ...base,
+      app_id: 2,
+      environment_id: null,
+      status: 'open'
+    })
+    expect(await incidentOpenFor({ appIds: [1], envIds: [1] })).toBe(false)
+    await db('nivaro_hub_incidents').insert({
+      ...base,
+      app_id: 1,
+      environment_id: null,
+      status: 'resolved'
+    })
+    expect(await incidentOpenFor({ appIds: [1], envIds: [1] })).toBe(false)
+    await db('nivaro_hub_incidents').insert({
+      ...base,
+      app_id: 1,
+      environment_id: null,
+      status: 'open'
+    })
+    expect(await incidentOpenFor({ appIds: [1], envIds: [1] })).toBe(true)
+    const t = await target.environmentTarget(1, async () => health())
+    const p = await plan.planScale(t as never, [{ role: 'web', replicas: 4 }], 'auto', deps())
+    expect(p.blockers.map((b) => b.code)).toContain('INCIDENT_OPEN')
+    await db('nivaro_hub_incidents').del()
+  })
+
+  it('a stopped automatic run does not resume into a freeze that began meanwhile', async () => {
+    const t = await target.environmentTarget(1, async () => health())
+    const from = t?.roles.map((r) => ({
+      role: r.role,
+      replicas: r.replicas,
+      cpus: r.cpus ?? null,
+      memory_mb: r.memory_mb ?? null
+    })) as RoleFigures[]
+    const to = from.map((r) => (r.role === 'web' ? { ...r, replicas: 4 } : r))
+    const id = await store.insertRun({
+      target_kind: 'environment',
+      target_id: 1,
+      stack: 'acme-st',
+      source: 'auto',
+      status: 'running',
+      reason: 'x',
+      figures: null,
+      from,
+      to,
+      steps: [{ to, status: 'pending' }],
+      plan_hash: null,
+      started_by: null
+    })
+    await db(store.SCALE_RUNS)
+      .where({ id })
+      .update({ heartbeat_at: new Date(Date.now() - 10 * 60_000) })
+    await db('nivaro_hub_freezes').insert({
+      app_id: 1,
+      name: 'Month end',
+      recurrence: 'none',
+      starts_at: new Date(Date.now() - 60_000),
+      ends_at: new Date(Date.now() + 3600_000)
+    })
+    expect(await run.resumeStaleRuns(deps())).toBe(0)
+    expect(await store.readRun(id)).toMatchObject({ status: 'interrupted', error_code: 'PAUSED' })
+    expect(scaleCalls).toHaveLength(0)
   })
 })

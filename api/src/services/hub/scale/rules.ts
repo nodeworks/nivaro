@@ -95,6 +95,11 @@ export interface AutoState {
   last_eval_at: string | null
   /** ISO time the app's people were last told the rule keeps hitting its max. */
   max_noticed_at: string | null
+  /** The rule paused itself after repeated failed runs (ISO); null = running. */
+  paused_at: string | null
+  paused_reason: string | null
+  /** A person resumed it (ISO): failures before this no longer count. */
+  resumed_at: string | null
 }
 
 export const EMPTY_STATE: AutoState = {
@@ -103,7 +108,10 @@ export const EMPTY_STATE: AutoState = {
   last_change_at: null,
   max_hits: [],
   last_eval_at: null,
-  max_noticed_at: null
+  max_noticed_at: null,
+  paused_at: null,
+  paused_reason: null,
+  resumed_at: null
 }
 
 export const RULE_DEFAULTS: Omit<AutoRule, 'min' | 'max' | 'metrics'> = {
@@ -267,7 +275,10 @@ export function parseState(raw: unknown): AutoState {
       .filter((x): x is string => x !== null)
       .slice(-50),
     last_eval_at: iso(v.last_eval_at),
-    max_noticed_at: iso(v.max_noticed_at)
+    max_noticed_at: iso(v.max_noticed_at),
+    paused_at: iso(v.paused_at),
+    paused_reason: typeof v.paused_reason === 'string' ? v.paused_reason.slice(0, 300) : null,
+    resumed_at: iso(v.resumed_at)
   }
 }
 

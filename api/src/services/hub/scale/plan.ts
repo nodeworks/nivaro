@@ -16,7 +16,8 @@ import {
   type ScaleCaps,
   scaleAgentOk
 } from './shape.js'
-import { healthReader, otherLoads, type ScaleTarget } from './target.js'
+import { readRoles } from './store.js'
+import { healthReader, type LoadCache, otherLoads, type ScaleTarget } from './target.js'
 
 /**
  * Nivaro Hub scaling: the plan of one change to a stack's replicas and limits. Reads only: never
@@ -146,6 +147,8 @@ function hashOf(v: unknown): string {
 export interface PlanDeps extends PauseDeps {
   health?: (d: DockerDriverRow | null) => Promise<AgentHealth | null>
   otherLoads?: typeof otherLoads
+  /** One tick's (or plan's) reads of other stacks (target.ts LoadCache). */
+  loadCache?: LoadCache
 }
 
 /** Plans `changes` on `t` (a fresh read of the target). Throws ScaleError only for bad input. */
@@ -236,10 +239,11 @@ export async function planScale(
   const serverIds = (
     t.kind === 'shared' ? (t.apps ?? []).map((a) => a.server?.id) : [t.server?.id]
   ).filter((x): x is number => typeof x === 'number')
-  const others = await (deps.otherLoads ?? otherLoads)([...new Set(serverIds)], {
-    kind: t.kind,
-    id: t.id
-  })
+  const others = await (deps.otherLoads ?? otherLoads)(
+    [...new Set(serverIds)],
+    { kind: t.kind, id: t.id },
+    deps.loadCache
+  )
   const withOthers = <S extends { id: number; others: number } | null | undefined>(s: S): S =>
     s ? { ...s, others: others.get(s.id) ?? 0 } : s
   const connections =
@@ -258,6 +262,33 @@ export async function planScale(
         })
   for (const r of connections.refusals) block(r.code, r.text)
   warnings.push(...connections.warnings)
+  // No limit to judge by (a server without max_connections, or no database record): automatic
+  // scaling never adds connections blind; a person may, with the typed key. Fewer always passes.
+  const blindOut = connections.limit_unknown && connections.total.to > connections.total.from
+  if (blindOut && mode === 'auto')
+    block(
+      'DB_LIMIT_UNKNOWN',
+      'The database server’s connection limit is not known, so autoscaling does not add processes. Set the limit under Database server limits on the Scaling tab.'
+    )
+  else if (blindOut)
+    warnings.push({
+      code: 'DB_LIMIT_UNKNOWN',
+      text: 'The database server’s connection limit is not known, so the Hub cannot check this change against it. Type the key to go ahead anyway.'
+    })
+
+  // A person's change outside an enabled rule's range is moved back by autoscaling.
+  if (mode === 'manual')
+    for (const row of await readRoles(t.kind, t.id)) {
+      const r = row.auto
+      const want = to.find((x) => x.role === row.role)
+      const had = from.find((x) => x.role === row.role)
+      if (!r?.enabled || row.pinned || !want || !had || want.replicas === had.replicas) continue
+      if (want.replicas < r.min || want.replicas > r.max)
+        warnings.push({
+          code: 'AUTOSCALE_WILL_MOVE',
+          text: `${want.role} ${want.replicas} is outside its autoscaling rule (${r.min}–${r.max}): the rule moves it back to ${want.replicas < r.min ? r.min : r.max}. Pin the role to manual to keep it.`
+        })
+    }
 
   const pauses = await scalePauses(t, mode, deps)
   for (const b of pauses.blockers) block(b.code, b.text)
@@ -300,7 +331,7 @@ export async function planScale(
     connections,
     blockers,
     warnings,
-    confirm: t.production || t.kind === 'shared' ? t.confirm : null,
+    confirm: t.production || t.kind === 'shared' || blindOut ? t.confirm : null,
     agent: {
       version: typeof health?.agent_version === 'string' ? health.agent_version.slice(0, 32) : null,
       ok: !!health && scaleAgentOk(health.agent_version)
