@@ -230,6 +230,8 @@ const SHARED: Record<string, string> = {
   'plugins/socketio.ts :: pagePrefixReader': FN_SLOT,
   'plugins/socketio.ts :: pagePresenceReader': FN_SLOT,
   'plugins/socketio.ts :: pageSnapshotReader': FN_SLOT,
+  'services/flow-script-isolated.ts :: headroomReader': FN_SLOT,
+  'services/flow-script-isolated.ts :: headroomUnreadableWarned': DIAG,
   'plugins/socketio.ts :: presenceNoter': FN_SLOT,
   'plugins/socketio.ts :: socketMeta': 'per socket id; each socket is bound to its app',
   'routes/access-requests.ts :: digestRegistered': REGISTRY,
@@ -1193,6 +1195,8 @@ const KEYED: Record<string, string> = {
   'services/activity-feed.ts :: scopeCache':
     'routes/activity.ts builds the key from the tenant + the person + the sources',
   'services/ai-tool-lane.ts :: lanes': 'laneFor(currentTenantKey())',
+  'services/flow-script-isolated.ts :: gate':
+    'script-step slots: byApp keyed by currentTenantKey(); active + queue are the process-wide cap (no app data)',
   'services/ai-tool-reuse.ts :: changedAt':
     "key `${tenant}|<collection>`, tenant = the event's own tenant",
   'services/app-links.ts :: appCache':
@@ -1326,6 +1330,7 @@ const LEFT_ON_LEAVE: Record<string, string> = {
   'services/export-runs.ts :: local': INFLIGHT,
   'services/export-worker.ts :: runningHere': INFLIGHT,
   'services/flow-executor.ts :: runningFlows': INFLIGHT,
+  'services/flow-script-isolated.ts :: gate': GATE,
   'services/help-video-render.ts :: queueStates': INFLIGHT,
   'services/hub-transfer/pull.ts :: runs': INFLIGHT,
   'services/huddle-marks.ts :: invalidated': LIVE,

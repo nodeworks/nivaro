@@ -58,6 +58,10 @@ const EXTRA_CALLS: Record<string, { multiTenant?: number; nivaroCloud?: number }
   // Mail retry, the cumulative-flow rollup and the live SLA flip pass run per app on a shared
   // deployment: each now refuses in Nivaro Cloud only (their T1/T3/T6 entries are weight 0).
   'services/mail-retry-state.ts': { nivaroCloud: 1 },
+  // Flow script steps run per app on a shared deployment (each in its own child process,
+  // flow-script-isolated.ts): the refusal is Nivaro Cloud only (its T6 entry is weight 0); the
+  // in-process vs child choice keeps the one isMultiTenant() call.
+  'services/flow-executor.ts': { nivaroCloud: 1 },
   'services/cumulative-flow.ts': { nivaroCloud: 2 },
   'services/sla-flips.ts': { nivaroCloud: 1 },
   // Staged imports per app: the hand-off (enqueueImportJob, importDrainMode, enqueueImportRun) and

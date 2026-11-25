@@ -688,6 +688,7 @@ async function sharedTargetFacts(
     return { ...out, reachable: false, error: codeOf(st.reason, 'LINK_UNREACHABLE') }
   out.version = st.value.version
   out.oidc = st.value.oidc
+  out.flow_scripts = st.value.flow_scripts === true
 
   if (recordId == null) return out
   if (!wire) {

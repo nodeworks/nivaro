@@ -3,9 +3,10 @@ import { config } from '../config.js'
 import { getTenantDb, withTenant } from '../db/tenant-context.js'
 import { failedAuthLimiter } from '../lib/auth-fail-limiter.js'
 import { hubSharedConfig, tenantSource } from '../services/deployment-mode.js'
+import { flowScriptsOnShared } from '../services/flow-script-limits.js'
 import { seedFirstAdmin } from '../services/hub-link/first-admin.js'
 import { instanceKey } from '../services/instance-key.js'
-import { INSTANCE_ID } from '../services/instance-roster.js'
+import { INSTANCE_ID, listInstances } from '../services/instance-roster.js'
 import { poolCounters } from '../services/pool-attribution.js'
 import { bearerMatches } from '../services/render-peer.js'
 import { appSchemaStatus } from '../services/tenancy/app-migrations.js'
@@ -166,6 +167,25 @@ export async function hubDeploymentLinkRoutes(app: FastifyInstance): Promise<voi
     } catch {
       extensions = []
     }
+    // Script steps count as on only when every process that may run flows says so (review L7):
+    // a worker left off would refuse the steps the plan let through. Roster entries before
+    // 0.3.215 carry no flag and count as off; realtime processes run no flows.
+    const ownScripts = flowScriptsOnShared()
+    // Only this deployment's processes (review N4/N8): a shared external Redis also holds other
+    // deployments' roster entries, and NODE_ENV alone does not tell them apart. A peer naming
+    // another shared-deployment key is left out; one naming none (a version before 0.3.215) is
+    // counted when its instance matches, so an old process of this deployment still reads as off
+    // (fail closed).
+    const ownKey = hubSharedConfig()?.deployment ?? null
+    const peers = (await listInstances()).filter((r) => {
+      if (r.id === INSTANCE_ID || r.role === 'realtime') return false
+      // An explicit key, null included (a process that belongs to no shared deployment), must be
+      // this one's; only a missing key (a version before 0.3.215) falls back to the instance.
+      if (r.shared_deployment !== undefined) return r.shared_deployment === ownKey
+      return r.instance === instanceKey()
+    })
+    const scriptFlags = [ownScripts, ...peers.map((r) => r.flow_scripts === true)]
+    const scriptsOn = scriptFlags.every(Boolean)
     const body: DeploymentStatus = {
       version: NIVARO_VERSION,
       instance: INSTANCE_ID,
@@ -180,6 +200,8 @@ export async function hubDeploymentLinkRoutes(app: FastifyInstance): Promise<voi
       apps: tenants.map((t) => ({ id: t.id, schema: appSchemaFor(t.id) })),
       extensions,
       oidc: oidcIdentity(config.OIDC_ISSUER),
+      flow_scripts: scriptsOn,
+      ...(!scriptsOn && scriptFlags.some(Boolean) ? { flow_scripts_mixed: true } : {}),
       process: {
         uptime_s: Math.round(process.uptime()),
         memory_mb: Math.round(process.memoryUsage().rss / 1048576),

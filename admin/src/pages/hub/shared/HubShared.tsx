@@ -22,9 +22,13 @@ import {
   DEFAULT_POOL_MAX,
   deleteShared,
   extensionDrift,
+  FLOW_SCRIPTS_KEY,
+  FLOW_SCRIPTS_RISK,
   fetchShared,
   fetchSharedList,
   fetchSharedStatus,
+  flowScriptsLive,
+  flowScriptsSetting,
   holdsLatest,
   linkProblem,
   modeWords,
@@ -45,10 +49,12 @@ import {
   sharedKeys,
   TONE,
   type Tone,
+  updateShared,
   WARNING_COPY,
   WIRE_TONE,
   WIRE_WORDS,
-  warningDetail
+  warningDetail,
+  withFlowScripts
 } from './shared-api'
 
 /**
@@ -445,6 +451,8 @@ function SharedDetailView({
 
       <Warnings notes={warningsOf(d, link.data)} />
 
+      <ScriptsCard row={row} link={link.data} retired={retired} />
+
       <AppsCard detail={d} link={link.data} />
 
       <ReplicasCard detail={d} />
@@ -709,6 +717,133 @@ function LinkCard({
             )}
           </div>
         ) : null}
+        {failure && <ErrorNotice description={failure} />}
+      </div>
+    </SectionCard>
+  )
+}
+
+/**
+ * Flow script steps (hub gap `exec`): an operator opt-in, off by default. A Docker deployment's
+ * switch is saved in its settings (FLOW_SCRIPTS_ON_SHARED in settings.env) and reaches the
+ * processes when the stack is applied again; a registered one is set where it runs. What the
+ * deployment reports now (its link status) is what a move plan reads.
+ */
+function ScriptsCard({
+  row,
+  link,
+  retired
+}: {
+  row: SharedDeployment
+  link: SharedLinkStatus | undefined
+  retired: boolean
+}) {
+  const qc = useQueryClient()
+  const [failure, setFailure] = useState<ErrorDescription | null>(null)
+  const saved = flowScriptsSetting(row.settings)
+  const live = flowScriptsLive(link)
+  const save = useMutation({
+    mutationFn: (on: boolean) =>
+      updateShared(row.id, { settings: withFlowScripts(row.settings, on) }),
+    onSuccess: (r, on) => {
+      setFailure(null)
+      qc.setQueryData(sharedKeys.detail(row.id), (old: SharedDetail | undefined) =>
+        old ? { ...old, row: r.row } : old
+      )
+      void qc.invalidateQueries({ queryKey: sharedKeys.list() })
+      toast.success(
+        on
+          ? 'Script steps turned on: they run once the stack is applied again'
+          : 'Script steps turned off: they stop once the stack is applied again'
+      )
+    },
+    onError: (e) => setFailure(sharedError(e, 'Could not change the script setting'))
+  })
+  const pending = live !== 'unknown' && row.mode === 'docker' && saved !== (live === 'on')
+  const action =
+    row.mode !== 'docker' || retired ? null : saved ? (
+      <button
+        type='button'
+        className={ghostButton}
+        disabled={save.isPending}
+        onClick={() => save.mutate(false)}
+      >
+        Turn off
+      </button>
+    ) : (
+      <ConfirmButton
+        onConfirm={() => save.mutate(true)}
+        title='Turn on script steps for every app on this deployment'
+        confirmLabel='Every app here is trusted: turn on?'
+        disabled={save.isPending}
+        className={ghostButton}
+        armedClassName={cn(ghostButton, dangerArmed)}
+      >
+        Turn on
+      </ConfirmButton>
+    )
+  return (
+    <SectionCard
+      title='Flow script steps'
+      description='Off by default. When on, each script step of a flow runs in a sandbox process of its own.'
+      actions={action}
+    >
+      <div className='space-y-3 px-4 py-3 text-[12px] text-slate-700 dark:text-slate-300'>
+        <dl className='m-0 flex flex-wrap items-center gap-x-5 gap-y-2'>
+          <div className='flex items-center gap-2'>
+            <dt className='text-slate-500 dark:text-muted-foreground'>Running now</dt>
+            <dd className='m-0'>
+              {live === 'unknown' ? (
+                <Chip
+                  tone='quiet'
+                  tip='The deployment did not answer, or runs a version before 0.3.215.'
+                >
+                  Unknown
+                </Chip>
+              ) : live === 'mixed' ? (
+                <Chip
+                  tone='warn'
+                  tip='Some of its processes have script steps on and some off, so it counts as off.'
+                >
+                  Mixed
+                </Chip>
+              ) : (
+                <Chip tone={live === 'on' ? 'busy' : 'quiet'}>{live === 'on' ? 'On' : 'Off'}</Chip>
+              )}
+            </dd>
+          </div>
+          {row.mode === 'docker' && (
+            <div className='flex items-center gap-2'>
+              <dt className='text-slate-500 dark:text-muted-foreground'>Saved</dt>
+              <dd className='m-0'>
+                <Chip tone={saved ? 'busy' : 'quiet'}>{saved ? 'On' : 'Off'}</Chip>
+              </dd>
+            </div>
+          )}
+        </dl>
+        {pending && (
+          <p className='m-0 text-slate-600 dark:text-slate-300'>
+            Saved {saved ? 'on' : 'off'}, not running yet: it takes effect when the stack is applied
+            again (the next upgrade, or an upgrade to the version it runs).
+          </p>
+        )}
+        {row.mode !== 'docker' && (
+          <p className='m-0 text-slate-600 dark:text-slate-300'>
+            Whoever runs this deployment sets{' '}
+            <span className='font-mono'>{FLOW_SCRIPTS_KEY}=on</span> on every process of it to turn
+            them on.
+          </p>
+        )}
+        <div
+          role='note'
+          className='flex gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-900/60 dark:bg-amber-950/40'
+        >
+          <AlertTriangle
+            className='mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-700 dark:text-amber-300'
+            aria-hidden
+          />
+          <p className='m-0 text-amber-900 dark:text-amber-200'>{FLOW_SCRIPTS_RISK}</p>
+        </div>
         {failure && <ErrorNotice description={failure} />}
       </div>
     </SectionCard>

@@ -1,9 +1,41 @@
-import { describe, expect, it, vi } from 'vitest'
-import { runSandboxedScript, ScriptTimeoutError } from '../../../services/flow-script-sandbox.js'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  runIsolatedScript,
+  setHeadroomReaderForTests
+} from '../../../services/flow-script-isolated.js'
+import { ScriptTimeoutError } from '../../../services/flow-script-sandbox.js'
 
 const quietLog = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })
 
-describe('exec-script sandbox (C2)', () => {
+// Each child-process case starts a node: well past the default 5 s under a full suite's load.
+vi.setConfig({ testTimeout: 20_000 })
+// The machine running the tests may be short of free memory (flow-script-isolated.test.ts tests
+// the headroom gate itself).
+beforeEach(() =>
+  setHeadroomReaderForTests(async () => ({ bytes: Number.POSITIVE_INFINITY, limited: true }))
+)
+
+type Runner = (
+  code: string,
+  data: Record<string, unknown>,
+  log: ReturnType<typeof quietLog>,
+  timeoutMs?: number
+) => Promise<Record<string, unknown>>
+
+// The same contract and the same escapes for both kinds of deployment: every script runs in a
+// child process of its own (re-review P1: never in the API process). A dedicated app's child keeps
+// binary types and the API's heap budget; a shared deployment's has neither.
+describe.each<[string, Runner]>([
+  [
+    'dedicated app (child)',
+    (code, data, log, timeoutMs) =>
+      runIsolatedScript(code, data, log, timeoutMs, { dedicated: true })
+  ],
+  [
+    'shared deployment (child)',
+    (code, data, log, timeoutMs) => runIsolatedScript(code, data, log, timeoutMs)
+  ]
+])('exec-script sandbox (C2) — %s', (_where, runSandboxedScript) => {
   it('keeps the documented contract: modify data and return it', async () => {
     const out = await runSandboxedScript(
       'data.computed = data.payload?.amount * 1.1; return data;',
@@ -151,6 +183,132 @@ describe('exec-script sandbox (C2)', () => {
     await expect(runSandboxedScript('throw new Error("nope")', {}, quietLog())).rejects.toThrow(
       'nope'
     )
+  })
+
+  it('holds no host function: log and console are the context’s own (review P1/M3)', async () => {
+    expect(
+      await runSandboxedScript(
+        'return { same: log.info.constructor === Function && console.log.constructor === Function && log.warn.constructor === Function }',
+        {},
+        quietLog()
+      )
+    ).toEqual({ same: true })
+  })
+
+  it('a stack overflow on a log call never yields a host Function (review P1)', async () => {
+    const out = await runSandboxedScript(
+      `let found = 'none'
+       const probe = (d) => {
+         try { probe(d + 1) } catch (e) {
+           try { log.info('x') } catch (e2) {
+             try { found = typeof e2.constructor.constructor('return process')() } catch (e3) { if (found === 'none') found = 'blocked' }
+           }
+         }
+       }
+       probe(0)
+       return { found }`,
+      {},
+      quietLog()
+    )
+    expect(out.found).not.toBe('object')
+  })
+
+  it('a thrown value whose message getter throws a looping Proxy never hangs the host (review P2)', async () => {
+    const started = Date.now()
+    await expect(
+      runSandboxedScript(
+        `const trap = () => { for (;;) {} }
+         const p = new Proxy({}, { get: trap, getOwnPropertyDescriptor: trap, has: trap, ownKeys: trap, getPrototypeOf: trap })
+         throw { get message() { throw p } }`,
+        {},
+        quietLog(),
+        200
+      )
+    ).rejects.toThrow()
+    await expect(
+      runSandboxedScript(
+        `const trap = () => { for (;;) {} }
+         throw new Proxy({}, { get: trap, getOwnPropertyDescriptor: trap, has: trap, ownKeys: trap, getPrototypeOf: trap })`,
+        {},
+        quietLog(),
+        200
+      )
+    ).rejects.toThrow()
+    expect(Date.now() - started).toBeLessThan(15_000)
+  })
+
+  it('has no FinalizationRegistry or WeakRef (their callbacks would run past the timeout, review P3)', async () => {
+    expect(
+      await runSandboxedScript(
+        'return { f: typeof FinalizationRegistry, w: typeof WeakRef }',
+        {},
+        quietLog()
+      )
+    ).toEqual({ f: 'undefined', w: 'undefined' })
+  })
+
+  it('log lines reach the logger even when the script fails, capped at 200', async () => {
+    const log = quietLog()
+    await expect(
+      runSandboxedScript(
+        'for (let i = 0; i < 300; i++) log.info("n" + i); throw new Error("after")',
+        {},
+        log
+      )
+    ).rejects.toThrow('after')
+    expect(log.info).toHaveBeenCalledTimes(200)
+    expect(log.info).toHaveBeenNthCalledWith(1, 'n0')
+  })
+
+  // ── re-review P1: the two escapes that reached the API's `process` in-process ──
+
+  it('import() hands the script no usable host error: no process, no host Function', async () => {
+    const out = await runSandboxedScript(
+      `return import('node:fs').then(() => ({ got: 'imported' }), (e) => {
+         let pid = 'none'
+         try { pid = typeof e.constructor.constructor('return process')().pid } catch (x) { pid = 'refused' }
+         let proc = 'none'
+         try { proc = typeof e.constructor.constructor('return globalThis.process')() } catch (x) { proc = 'refused' }
+         return { pid, proc }
+       })`,
+      {},
+      quietLog()
+    )
+    expect(out).toEqual({ pid: 'refused', proc: 'refused' })
+  })
+
+  it('a stack overflow inside stack-trace formatting hands the script nothing usable', async () => {
+    const out = await runSandboxedScript(
+      `let hit = null, how = null, tries = 0
+       const isHost = (e) => { try { return e !== null && typeof e === 'object' && !(e instanceof Object) } catch { return false } }
+       const probes = [
+         ['stack', () => new Error('x').stack],
+         ['promise', () => Promise.resolve(1).then(() => 1)],
+         ['typeerr-stack', () => { try { null.x } catch (e) { return e.stack } }]
+       ]
+       function go() {
+         try { go() } catch (e) {}
+         if (hit) return
+         for (const [n, p] of probes) {
+           tries++
+           try { p() } catch (e) { if (isHost(e)) { hit = e; how = n; return } }
+         }
+       }
+       go()
+       let rce = 'none'
+       if (hit) { try { rce = typeof hit.constructor.constructor('return process')().pid } catch (x) { rce = 'refused' } }
+       let poke = 'none'
+       if (hit) { try { Object.getPrototypeOf(Object.getPrototypeOf(hit)).nvrPoked = 1; poke = 'wrote' } catch (x) { poke = 'frozen' } }
+       return { rce, poke, found: !!hit }`,
+      {},
+      quietLog(),
+      10_000
+    )
+    // Whether or not V8 hands a host-realm error over, it never compiles code there or reaches
+    // a writable host prototype.
+    expect(out.rce).not.toBe('number')
+    expect(['none', 'refused']).toContain(out.rce)
+    expect(['none', 'frozen']).toContain(out.poke)
   })
 
   it('does not change the caller object', async () => {

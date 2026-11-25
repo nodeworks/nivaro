@@ -14,9 +14,10 @@ import {
 } from './body-secrets.js'
 import { withChainStep } from './chain.js'
 import { chainFields } from './chain-columns.js'
-import { isMultiTenant } from './deployment-mode.js'
+import { isMultiTenant, isNivaroCloud } from './deployment-mode.js'
 import { callExternalApi } from './external-apis.js'
-import { runSandboxedScript } from './flow-script-sandbox.js'
+import { runIsolatedScript, ScriptBusyError } from './flow-script-isolated.js'
+import { flowScriptsOnShared } from './flow-script-limits.js'
 import { resolveSweepItems } from './flow-sweep-items.js'
 import {
   getByPath,
@@ -69,6 +70,21 @@ export interface ExecutionContext {
   dryRun?: boolean
   /** When provided, executeFlow appends one step per executed operation. */
   trace?: FlowTraceStep[]
+  /** The flow runs before a record is saved and the write waits for it (a before-event flow that
+   *  returns its payload): a script step waits for a slot at most 10 s, then the write is refused
+   *  with 503 FLOW_SCRIPT_BUSY (review N7). */
+  blocking?: boolean
+}
+
+/** A before-save flow's script step got no slot in time: the write is refused, nothing written. */
+export class FlowScriptBusyError extends Error {
+  statusCode = 503
+  code = 'FLOW_SCRIPT_BUSY'
+  constructor() {
+    super(
+      'This change was not saved: too many automation scripts are running right now. Try again in a moment.'
+    )
+  }
 }
 
 type FlowData = Record<string, unknown>
@@ -174,19 +190,34 @@ async function runCondition(op: FlowOperation, data: FlowData, ctx: ExecutionCon
 export const EXEC_SCRIPT_CLOUD_REFUSAL =
   'Script operations are not available on a cloud instance. Use a Transform, Condition or Item operation instead.'
 
-async function runExecScript(op: FlowOperation, data: FlowData, ctx: ExecutionContext) {
+export const EXEC_SCRIPT_SHARED_OFF_REFUSAL =
+  'Script operations are off on this shared deployment. Its operator can turn them on; until then use a Transform, Condition or Item operation instead.'
+
+/** The exec-script operation (exported for tests). */
+export async function runExecScript(op: FlowOperation, data: FlowData, ctx: ExecutionContext) {
   const opts = parseOpts(op)
   const code = (opts.code as string) ?? ''
   const timeoutMs = (opts.timeout_ms as number) ?? 5000
 
   if (!code.trim()) return { status: 'resolve' as const, output: data }
 
-  // C2 (security audit 2026-10-27): cloud tenants share one process — no tenant runs code in it.
-  if (isMultiTenant()) {
+  // C2 (security audit 2026-10-27): Nivaro Cloud tenants share one process with strangers — no
+  // tenant runs code there. Everywhere else each script runs in a child process of its own
+  // (flow-script-isolated.ts: permission model, empty env, no network, memory/time/slot caps); a
+  // Hub shared deployment only when its operator opted in (FLOW_SCRIPTS_ON_SHARED=on).
+  if (isNivaroCloud()) {
     ctx.log.warn({ flowId: ctx.flowId, key: op.key }, 'exec-script refused in cloud mode')
     return {
       status: 'reject' as const,
       output: { ...data, $error: EXEC_SCRIPT_CLOUD_REFUSAL }
+    }
+  }
+  const shared = isMultiTenant()
+  if (shared && !flowScriptsOnShared()) {
+    ctx.log.warn({ flowId: ctx.flowId, key: op.key }, 'exec-script off on this shared deployment')
+    return {
+      status: 'reject' as const,
+      output: { ...data, $error: EXEC_SCRIPT_SHARED_OFF_REFUSAL }
     }
   }
 
@@ -198,12 +229,22 @@ async function runExecScript(op: FlowOperation, data: FlowData, ctx: ExecutionCo
   }
 
   try {
-    // Isolated node:vm context: data + log only, no process/require/timers (flow-script-sandbox).
-    const output = (await runSandboxedScript(code, data, scriptLog, timeoutMs)) as FlowData
+    // Never in the API process (re-review P1): every deployment runs the script in a child
+    // process of its own (flow-script-isolated.ts); a dedicated app keeps binary types and its
+    // heap budget there.
+    const output = (await runIsolatedScript(code, data, scriptLog, timeoutMs, {
+      dedicated: !shared,
+      blocking: ctx.blocking === true
+    })) as FlowData
 
     ctx.log.debug({ flowId: ctx.flowId, key: op.key }, 'Script executed')
     return { status: 'resolve' as const, output }
   } catch (err) {
+    // A before-save flow never lets the write through on a step that did not run.
+    if (ctx.blocking && err instanceof ScriptBusyError) {
+      ctx.log.warn({ flowId: ctx.flowId, key: op.key }, 'Script step busy: write refused')
+      throw new FlowScriptBusyError()
+    }
     ctx.log.error({ err, flowId: ctx.flowId, key: op.key }, 'Script execution failed')
     return { status: 'reject' as const, output: { ...data, $error: errorText(err) } }
   }
@@ -787,7 +828,10 @@ async function runRunFlow(op: FlowOperation, data: FlowData, ctx: ExecutionConte
     log: ctx.log,
     userId: ctx.userId,
     dryRun: ctx.dryRun,
-    trace: ctx.trace
+    trace: ctx.trace,
+    // A waited-for sub-flow of a before-save flow holds the same write (review 4 F1): its script
+    // steps wait ≤ 10 s too, and a busy one refuses the write. A fire-and-forget one does not.
+    ...(wait && ctx.blocking ? { blocking: true } : {})
   }
 
   if (!wait) {

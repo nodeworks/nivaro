@@ -2002,9 +2002,9 @@
       "weight": 1,
       "meaning": "multiTenant",
       "rule": "T6",
-      "why": "exec-script refused: apps share one process",
+      "why": "exec-script: a multi-tenant process runs each script in a child process of its own (flow-script-isolated.ts); Nivaro Cloud still refuses (isNivaroCloud, EXTRA_CALLS)",
       "batch": "E",
-      "phase6": "exec-script needs a per-app sandbox (isolated worker)"
+      "phase6": "done: per-app child-process sandbox on a shared deployment (hub gap exec)"
     },
     {
       "id": "services/flow-executor.ts:295",

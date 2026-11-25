@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildMovePlan,
+  EXEC_SCRIPT_SINCE,
   MANUAL_MOVE_STEPS,
   MOVE_STEPS,
   SHARED_FEATURES_SINCE,
@@ -319,8 +320,8 @@ describe('buildMovePlan — one test per blocker', () => {
   })
 
   it('every readiness blocker becomes a plan blocker, on any target version', () => {
-    expect(SHARED_READINESS_BLOCKERS).toHaveLength(2)
-    for (const version of ['0.3.210', '0.3.212'])
+    expect(SHARED_READINESS_BLOCKERS).toEqual(['SQLITE'])
+    for (const version of ['0.3.210', '0.3.212', '0.3.215'])
       for (const code of SHARED_READINESS_BLOCKERS) {
         const p = buildMovePlan(
           input({
@@ -364,6 +365,56 @@ describe('buildMovePlan — one test per blocker', () => {
     expect(codes(at('0.3.212-rc.1'))).toEqual(
       expect.arrayContaining(['ROW_SCHEDULES', 'STAGED_IMPORTS'])
     )
+  })
+
+  it('script steps (EXEC_SCRIPT_FLOWS) warn only on a 0.3.215+ target whose operator turned them on', () => {
+    expect(EXEC_SCRIPT_SINCE).toBe('0.3.215')
+    // An app before 0.3.215 sends it as a blocker, one from it as a warning: the target decides,
+    // by its version AND its operator opt-in (FLOW_SCRIPTS_ON_SHARED, reported as flow_scripts).
+    const at = (
+      version: string | null,
+      level: 'blocker' | 'warning',
+      flow_scripts: boolean | undefined
+    ) =>
+      buildMovePlan(
+        input({
+          source: src({
+            version: version ?? '0.3.214',
+            readiness: [
+              { code: 'EXEC_SCRIPT_FLOWS', level, detail: '2 active flows run a script step' }
+            ]
+          }),
+          target_facts: tgt({ version, flow_scripts })
+        })
+      )
+    for (const level of ['blocker', 'warning'] as const) {
+      // Older target: a blocker whatever it reports.
+      for (const v of ['0.3.212', '0.3.214', '0.3.215-rc.1', 'latest', null])
+        for (const on of [true, false, undefined]) {
+          const p = at(v, level, on)
+          expect(codes(p), `${v} ${level} ${on}`).toEqual(['EXEC_SCRIPT_FLOWS'])
+          expect(p.blockers[0].text).toBe(
+            'Flows that run scripts do not run on a shared deployment before 0.3.215: 2 active flows run a script step'
+          )
+        }
+      for (const v of ['0.3.215', '0.3.216', '0.4.0']) {
+        // Off (the default), or a status that does not say: still a blocker, naming the switch.
+        for (const off of [false, undefined]) {
+          const p = at(v, level, off)
+          expect(codes(p), `${v} ${level} ${off}`).toEqual(['EXEC_SCRIPT_FLOWS'])
+          expect(p.blockers[0].text).toMatch(
+            /FLOW_SCRIPTS_ON_SHARED\): 2 active flows run a script step$/
+          )
+          expect(p.warnings.find((w) => w.code === 'EXEC_SCRIPT_FLOWS')).toBeUndefined()
+        }
+        // On: a warning with the limits.
+        const p = at(v, level, true)
+        expect(codes(p), `${v} ${level} on`).toEqual([])
+        expect(p.warnings.find((w) => w.code === 'EXEC_SCRIPT_FLOWS')?.text).toMatch(
+          /^Script steps run in a sandbox process of their own .*: 2 active flows run a script step$/
+        )
+      }
+    }
   })
 
   it('GitLab issue sync blocks only a target before 0.3.215; on one that runs it, a warning', () => {

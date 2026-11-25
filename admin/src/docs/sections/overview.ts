@@ -264,7 +264,11 @@ export const userFlows: DocSection = {
           '⚙️ Stub',
           'Branch on a condition expression (not yet implemented — resolves forward).'
         ],
-        ['exec-script', '⚙️ Stub', 'Run arbitrary Node.js code (not yet implemented).'],
+        [
+          'exec-script',
+          '✅ Live',
+          'Run a short JavaScript body against the flow data (`data`, `log`): change `data` or return a new object. Sandboxed, no network; see Script operations below. Off in Nivaro Cloud.'
+        ],
         [
           'mail',
           '✅ Live',
@@ -288,6 +292,23 @@ export const userFlows: DocSection = {
         '**Message** — the text written to the server log. Defaults to the operation name if left blank.',
         '**Level** — `info`, `warn`, `error`, or `debug`. Log output appears in the API process stdout (visible in `pnpm dev:api`).'
       ]
+    },
+    { type: 'h3', id: 'flow-exec-script', text: 'Script operations (exec-script)' },
+    {
+      type: 'p',
+      text: 'Options: `code` (the body of a function of `data` and `log`) and `timeout_ms` (default 5000, at most 30000). Return an object to replace the data, or change `data` and return nothing; a returned promise is awaited. Data crosses as JSON (dates stay dates; functions drop out). `log.info/warn/error/debug` and `console` write to the server log. The script has the language built-ins only: no `process`, `require`, `import()`, timers, `fetch`, `eval` or `new Function`. Call partners with a Webhook or External API operation instead.'
+    },
+    {
+      type: 'ul',
+      items: [
+        '**Dedicated app** — the script runs in a short-lived child process of its own, never inside the API (a script context in the API process could reach the API itself). The script keeps `ArrayBuffer` and typed arrays. Its heap is capped by `FLOW_SCRIPT_MAX_MB` (default 256, 64–2048), at most `FLOW_SCRIPT_CONCURRENCY` steps run at once (default 2), and inside a container a step starts only when about `FLOW_SCRIPT_MAX_MB` + 96 MB is free under the container limit (it waits for that, as for a slot).',
+        '**Hub shared deployment (0.3.215 or later)** — off unless the operator turns script steps on for the deployment (`FLOW_SCRIPTS_ON_SHARED=on`, Shared deployments → Flow script steps); off, the step rejects with "Script operations are off on this shared deployment". Turn it on only when every app on the deployment is trusted: network access is blocked in JavaScript, not by the operating system, so a script that breaks out of the sandbox could reach the network or other apps’ secrets. Node 25’s `--allow-net` will add a network check inside Node; like the rest of Node’s permission model it is a safeguard, not an operating-system boundary. When on, every step runs in a short-lived child process of its own: no file access, no child processes, an empty environment, no network, a lower CPU priority. The script has no `ArrayBuffer`, typed arrays or `WebAssembly` there (their memory sits outside the heap limit). Limits per deployment: `FLOW_SCRIPT_MEMORY_MB` (heap, default 64; the whole process may use 96 MB more before it is stopped), the step timeout, 8 MB of output, 200 log lines, `FLOW_SCRIPT_CONCURRENCY` steps at once per process (default 4) and `FLOW_SCRIPT_PER_APP` per app (default 2). A step waits at most `FLOW_SCRIPT_MAX_WAIT_MS` (default 30 s) for a slot, then fails ("Too many script steps are running for this app"). A step also starts only when the container has the memory for it (its limit minus what it uses must hold the step’s budget plus 256 MB), and waits for that like for a slot. Log lines arrive when the step ends. Starting the process adds about 80 ms of CPU to each step.',
+        '**Nivaro Cloud** — refused: the step rejects with a message to use a Transform, Condition or Item operation.'
+      ]
+    },
+    {
+      type: 'p',
+      text: 'Script steps run in a separate locked-down process on every deployment: no file access, no child processes, an empty environment and no network, at a lower CPU priority. Each step costs one process start, about 150 ms (about 80 ms of CPU and 50 MB of memory for the child while it runs). A step may return at most 8 MB of output and keep 200 log lines (4000 characters each); its log lines reach the server log when it ends. The step timeout counts from when the script starts, so a large input does not use it up. A step waits for a free slot and for memory, one deadline for both: up to 30 s on a shared deployment and up to 10 minutes on a dedicated app — but a flow that runs before a record is saved (a before-event flow that returns its payload) waits at most 10 s, then the save is refused with 503 `FLOW_SCRIPT_BUSY` ("This change was not saved: too many automation scripts are running right now. Try again in a moment.") and the record is not written. The same holds for a sub-flow it runs and waits for. A before-save flow that is refused may already have run steps in parallel branches (sent mail, written other records): keep side effects out of before-save flows.'
     },
     { type: 'h2', id: 'flow-silence', text: 'Flows that go quiet' },
     {
