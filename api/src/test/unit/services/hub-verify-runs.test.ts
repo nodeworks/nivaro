@@ -1,0 +1,668 @@
+import { join } from 'node:path'
+import type { Knex } from 'knex'
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+
+// Hub verification against real SQLite (every Hub migration up to 574): smoke runs queued after
+// deploys, moves and shared upgrades, run with injected http + link answers, people told on a
+// failure, the automatic rollback rule taking a failed smoke run as a breach; the extension
+// matrix (behind / missing) and promoting one extension through a Docker pin or a GitLab pin
+// file. Nothing leaves the process: fetches, the stack apply and GitLab commits are injected.
+
+vi.mock('../../../db/index.js', async () => {
+  const knex = (await import('knex')).default
+  const { sqliteAfterCreate, sqliteCompat } = await import('../../../db/sqlite.js')
+  sqliteCompat()
+  const db = knex({
+    client: 'better-sqlite3',
+    connection: { filename: ':memory:' },
+    useNullAsDefault: true,
+    pool: { min: 1, max: 1, afterCreate: sqliteAfterCreate }
+  })
+  return { db, migrationsDir: '/nowhere' }
+})
+vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () => 1) }))
+vi.mock('../../../services/hub/secrets.js', async (orig) => ({
+  ...(await orig<typeof import('../../../services/hub/secrets.js')>()),
+  openSecret: (v: string | null) => (v ? `open:${v}` : null)
+}))
+
+const { db } = (await import('../../../db/index.js')) as unknown as { db: Knex }
+const MIGRATIONS = [
+  '542_hub_tables',
+  '543_hub_promotions',
+  '544_hub_databases',
+  '545_hub_creations',
+  '546_hub_stack_settings',
+  '550_hub_oidc',
+  '551_hub_signins',
+  '552_hub_shared_deployments',
+  '553_hub_moves',
+  '555_hub_stack_files',
+  '565_hub_release_ops',
+  '566_hub_fleet',
+  '567_hub_capacity',
+  '568_hub_ops',
+  '569_hub_data',
+  '570_hub_people_owner_policy',
+  '571_hub_app_templates',
+  '574_hub_verify'
+]
+const smoke = await import('../../../services/hub/verify/smoke.js')
+const ext = await import('../../../services/hub/verify/extensions.js')
+const rollback = await import('../../../services/hub/releases/auto-rollback.js')
+const { validateSuite } = await import('../../../services/hub/verify/checks.js')
+
+const USER = '6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b'
+const DIGEST = (c: string) => `reg.example.com/ext@sha256:${c.repeat(64)}`
+let appId: number
+const env: Record<string, number> = {}
+let clock = Date.parse('2026-11-25T12:00:00Z')
+const MIN = 60_000
+
+const okResponse = (status: number, text = '') =>
+  new Response(text, { status, headers: { 'content-type': 'text/html' } })
+
+async function deployRow(o: {
+  envId: number
+  kind?: string
+  version: string
+  from?: string | null
+  status?: string
+  finishedAt: number
+  plan?: string
+}): Promise<number> {
+  const [id] = await db('nivaro_hub_deploys').insert({
+    app_id: appId,
+    environment_id: o.envId,
+    kind: o.kind ?? 'promote',
+    version: o.version,
+    from_version: o.from ?? null,
+    status: o.status ?? 'success',
+    plan: o.plan ?? '{"steps":[]}',
+    started_at: new Date(o.finishedAt - MIN),
+    finished_at: new Date(o.finishedAt)
+  })
+  return Number(id)
+}
+
+function suite(over: Record<string, unknown> = {}) {
+  const s = validateSuite({
+    on_fail: 'notify',
+    settle_seconds: 30,
+    checks: [
+      { id: 'aaaaaaaa', kind: 'http', name: 'Home page', path: '/', contains: 'Nivaro' },
+      { id: 'bbbbbbbb', kind: 'read', name: 'Projects list', path: '/api/items/projects?limit=1' },
+      { id: 'cccccccc', kind: 'query', name: 'Open orders', slug: 'open-orders', min_rows: 1 }
+    ],
+    ...over
+  })
+  if ('error' in s) throw new Error(s.error)
+  return s
+}
+
+/** A link fetch that answers the reads with these facts. */
+function linkAnswer(results: Array<Record<string, unknown>> | null, status = 200) {
+  const calls: Array<{ url: string; body: unknown }> = []
+  const fetch = vi.fn(async (url: string, _h: Record<string, string>, _t: number, o: unknown) => {
+    calls.push({ url, body: (o as { body?: unknown }).body })
+    if (results == null) return { ok: false, status, body: { code: 'HUB_LINK_REFUSED' } }
+    return { ok: true, status: 200, body: { version: '0.3.215', results } }
+  })
+  return { fetch, calls }
+}
+
+beforeAll(async () => {
+  const dir = join(import.meta.dirname, '../../../db/migrations')
+  for (const m of MIGRATIONS) await (await import(/* @vite-ignore */ join(dir, `${m}.ts`))).up(db)
+  await (await import('../../../db/migrations/574_hub_verify.js')).up(db) // a second run is a no-op
+  const [a] = await db('nivaro_hub_apps').insert({
+    key: 'demo',
+    name: 'Demo',
+    extensions: JSON.stringify(['efp-ops'])
+  })
+  appId = Number(a)
+  for (const [i, key] of ['development', 'staging', 'production'].entries()) {
+    const [id] = await db('nivaro_hub_environments').insert({
+      app_id: appId,
+      key,
+      position: i,
+      base_url: `https://${key}.example.com`,
+      hub_token: `sealed-${key}`
+    })
+    env[key] = Number(id)
+  }
+})
+
+beforeEach(async () => {
+  for (const t of [
+    'nivaro_hub_smoke_suites',
+    'nivaro_hub_smoke_runs',
+    'nivaro_hub_deploys',
+    'nivaro_hub_moves',
+    'nivaro_hub_rollback_rules',
+    'nivaro_hub_rollback_watches',
+    'nivaro_hub_extension_sightings',
+    'nivaro_hub_extension_promotions'
+  ])
+    await db(t).delete()
+  clock = Date.parse('2026-11-25T12:00:00Z')
+})
+
+describe('migration 574', () => {
+  it('creates the verification tables', async () => {
+    for (const t of [
+      'nivaro_hub_smoke_suites',
+      'nivaro_hub_smoke_runs',
+      'nivaro_hub_extension_sightings',
+      'nivaro_hub_extension_promotions'
+    ])
+      expect(await db.schema.hasTable(t)).toBe(true)
+    expect(await db.schema.hasColumn('nivaro_hub_smoke_runs', 'source_key')).toBe(true)
+    expect(await db.schema.hasColumn('nivaro_hub_smoke_runs', 'trigger_kind')).toBe(true)
+  })
+})
+
+describe('queueing smoke runs', () => {
+  it('queues one run per finished promotion, rollback, Apply now, move and shared upgrade, once', async () => {
+    await smoke.saveSuite(env.staging, suite(), USER)
+    // A deploy finished before the suite was saved is never tested after the fact.
+    await db('nivaro_hub_smoke_suites')
+      .where({ environment_id: env.staging })
+      .update({ updated_at: new Date(clock - 60 * MIN) })
+    const promote = await deployRow({
+      envId: env.staging,
+      version: '0.3.215',
+      from: '0.3.214',
+      finishedAt: clock - 5 * MIN
+    })
+    await deployRow({
+      envId: env.staging,
+      kind: 'rollback',
+      version: '0.3.214',
+      finishedAt: clock - 4 * MIN
+    })
+    await deployRow({
+      envId: env.staging,
+      version: '0.3.214',
+      finishedAt: clock - 3 * MIN,
+      plan: '{"apply":true}'
+    })
+    await deployRow({
+      envId: env.staging,
+      version: '0.3.216',
+      status: 'failed',
+      finishedAt: clock - 2 * MIN
+    })
+    await deployRow({ envId: env.staging, version: '0.3.213', finishedAt: clock - 90 * MIN })
+    await db('nivaro_hub_moves').insert({
+      app_id: appId,
+      environment_id: env.staging,
+      from_placement_id: 1,
+      to_placement_id: 2,
+      kind: 'to_shared',
+      routing: 'automatic',
+      status: 'success',
+      steps: '[]',
+      finished_at: new Date(clock - MIN)
+    })
+    // Another environment without a suite: nothing.
+    await deployRow({ envId: env.development, version: '0.3.215', finishedAt: clock - MIN })
+
+    expect(await smoke.queueNewRuns(clock)).toBe(4)
+    expect(await smoke.queueNewRuns(clock)).toBe(0)
+    const runs = await smoke.listRuns({ envIds: [env.staging] })
+    expect(runs.map((r) => r.trigger).sort()).toEqual(['apply', 'move', 'promote', 'rollback'])
+    const p = runs.find((r) => r.trigger === 'promote')
+    expect(p?.deploy_id).toBe(promote)
+    expect(p?.version).toBe('0.3.215')
+    // Due settle_seconds after the deploy finished.
+    expect(Date.parse(p?.due_at ?? '')).toBe(clock - 5 * MIN + 30_000)
+  })
+
+  it('a switched-off suite queues nothing; Run now refuses an environment without one', async () => {
+    await smoke.saveSuite(env.staging, suite({ enabled: false }), USER)
+    await deployRow({ envId: env.staging, version: '0.3.215', finishedAt: clock - MIN })
+    expect(await smoke.queueNewRuns(clock)).toBe(0)
+    await expect(smoke.queueManualRun(env.development, USER)).rejects.toMatchObject({
+      code: 'NO_SUITE'
+    })
+  })
+})
+
+describe('running smoke checks', () => {
+  it('passes when every check holds; the reads go over the hub link, never as a person', async () => {
+    await smoke.saveSuite(env.staging, suite(), USER)
+    const id = await smoke.queueManualRun(env.staging, USER)
+    const http = vi.fn(async () => okResponse(200, '<title>Nivaro</title>'))
+    const link = linkAnswer([
+      { status: 200, ms: 40, rows: 1, code: null },
+      { status: 200, ms: 90, rows: 12, code: null }
+    ])
+    const notify = vi.fn(async () => 1)
+    expect(
+      await smoke.executeRun(id, {
+        now: () => clock,
+        httpFetch: http as never,
+        link: { fetch: link.fetch as never },
+        notify
+      })
+    ).toBe(true)
+    const run = await smoke.readRun(id)
+    expect(run?.status).toBe('passed')
+    expect(run?.passed).toBe(3)
+    expect(http).toHaveBeenCalledWith('https://staging.example.com/', expect.anything())
+    expect(link.calls[0].url).toBe('https://staging.example.com/api/hub-link/verify/run')
+    expect(link.calls[0].body).toEqual({
+      reads: [
+        { kind: 'read', path: '/api/items/projects?limit=1' },
+        { kind: 'query', slug: 'open-orders', params: {} }
+      ]
+    })
+    expect(notify).not.toHaveBeenCalled()
+    // A second claim of the same run does nothing.
+    expect(await smoke.executeRun(id, { now: () => clock })).toBe(false)
+  })
+
+  it('fails and tells the people (urgent on production) with what failed', async () => {
+    await smoke.saveSuite(env.production, suite(), USER)
+    const id = await smoke.queueManualRun(env.production, USER)
+    const link = linkAnswer([
+      { status: 200, ms: 40, rows: 1, code: null },
+      { status: 200, ms: 90, rows: 0, code: null }
+    ])
+    const notify = vi.fn(async () => 1)
+    await smoke.executeRun(id, {
+      now: () => clock,
+      httpFetch: (async () => okResponse(502, 'Bad gateway')) as never,
+      link: { fetch: link.fetch as never },
+      notify
+    })
+    const run = await smoke.readRun(id)
+    expect(run?.status).toBe('failed')
+    expect(run?.failed).toBe(2)
+    expect(run?.reason).toContain('Home page: answered 502, expected 200')
+    expect(run?.reason).toContain('Open orders: 0 rows, expected at least 1')
+    expect(notify).toHaveBeenCalledTimes(1)
+    const [, note] = notify.mock.calls[0] as unknown as [number, Record<string, unknown>]
+    expect(note.subject).toBe('Smoke checks failed: production')
+    expect(note.urgent).toBe(true)
+    expect(String(note.path)).toContain(`/hub/smoke?env=${env.production}`)
+  })
+
+  it('a refused link fails the signed-in reads with the reason in words', async () => {
+    await smoke.saveSuite(env.staging, suite(), USER)
+    const id = await smoke.queueManualRun(env.staging, USER)
+    await smoke.executeRun(id, {
+      now: () => clock,
+      httpFetch: (async () => okResponse(200, 'Nivaro')) as never,
+      link: { fetch: linkAnswer(null, 401).fetch as never },
+      notify: async () => 1
+    })
+    const run = await smoke.readRun(id)
+    expect(run?.status).toBe('failed')
+    expect(run?.results.find((r) => r.id === 'bbbbbbbb')?.reason).toBe(
+      'the app refused the Hub’s link token'
+    )
+    expect(run?.results.find((r) => r.id === 'aaaaaaaa')?.ok).toBe(true)
+  })
+
+  it('settles a run a stopped tick left running', async () => {
+    await smoke.saveSuite(env.staging, suite(), USER)
+    const id = await smoke.queueManualRun(env.staging, USER)
+    await db('nivaro_hub_smoke_runs')
+      .where({ id })
+      .update({ status: 'running', claimed_at: new Date(clock - 11 * MIN) })
+    expect(await smoke.healStaleRuns(clock)).toBe(1)
+    expect((await smoke.readRun(id))?.status).toBe('failed')
+  })
+})
+
+describe('a failed smoke run and the automatic rollback rule', () => {
+  async function failedPromotionRun(onFail: 'notify' | 'rollback') {
+    await smoke.saveSuite(env.staging, suite({ on_fail: onFail }), USER)
+    await rollback.saveRule(
+      env.staging,
+      {
+        enabled: true,
+        window_minutes: 30,
+        max_error_pct: 50,
+        min_requests: 50,
+        max_crashes: null,
+        min_readiness: null
+      },
+      USER
+    )
+    await db('nivaro_hub_rollback_rules')
+      .where({ environment_id: env.staging })
+      .update({ updated_at: new Date(clock - 60 * MIN) })
+    const deployId = await deployRow({
+      envId: env.staging,
+      version: '0.3.215',
+      from: '0.3.214',
+      finishedAt: clock - 2 * MIN
+    })
+    expect(await rollback.openWatches({ now: () => clock })).toBe(1)
+    await smoke.queueNewRuns(clock)
+    const [run] = await smoke.listRuns({ envIds: [env.staging] })
+    const notify = vi.fn(async () => 1)
+    await smoke.executeRun(run.id, {
+      now: () => clock,
+      httpFetch: (async () => okResponse(500)) as never,
+      link: {
+        fetch: linkAnswer([
+          { status: 200, ms: 1, rows: 1, code: null },
+          { status: 200, ms: 1, rows: 3, code: null }
+        ]).fetch as never
+      },
+      notify,
+      watched: async (id) =>
+        !!(await db('nivaro_hub_rollback_watches')
+          .where({ deploy_id: id, status: 'watching' })
+          .first('id'))
+    })
+    return { deployId, notify }
+  }
+
+  function watchDeps(rolled: Array<Record<string, unknown>>) {
+    return {
+      now: () => clock,
+      figures: async () => ({
+        linked: true,
+        version: '0.3.215',
+        readiness_score: 100,
+        recent: { minutes: 2, requests: 10, errors_5xx: 0, crashes: 0 },
+        release_facts: null,
+        read_at: 'now'
+      }),
+      rollback: vi.fn(async (_envId: number, o: Record<string, unknown>) => {
+        rolled.push(o)
+        return { deployId: 999 }
+      }),
+      notify: vi.fn(async () => 1),
+      envKey: async () => 'staging',
+      smoke: (id: number) => smoke.smokeVerdictForDeploy(id)
+    }
+  }
+
+  it('rollback: the rule takes it as a breach and rolls back through its own path', async () => {
+    const { deployId, notify } = await failedPromotionRun('rollback')
+    const [, note] = notify.mock.calls[0] as unknown as [number, Record<string, unknown>]
+    expect(String(note.message)).toContain('Its automatic rollback rule rolls it back')
+    expect(await smoke.smokeVerdictForDeploy(deployId)).toMatchObject({ breach: true })
+    const rolled: Array<Record<string, unknown>> = []
+    // Figures are healthy: only the smoke run says it is broken.
+    expect(await rollback.judgeWatches(watchDeps(rolled) as never)).toBe(1)
+    expect(rolled).toEqual([{ kind: 'rollback', version: '0.3.214', userId: null }])
+    const w = await db('nivaro_hub_rollback_watches').where({ deploy_id: deployId }).first()
+    expect(w.status).toBe('rolled_back')
+    expect(String(w.reason)).toMatch(/^smoke checks failed: /)
+  })
+
+  it('notify: never a breach — the rule judges its figures only', async () => {
+    const { deployId } = await failedPromotionRun('notify')
+    expect(await smoke.smokeVerdictForDeploy(deployId)).toBeNull()
+    const rolled: Array<Record<string, unknown>> = []
+    expect(await rollback.judgeWatches(watchDeps(rolled) as never)).toBe(0)
+    expect(rolled).toEqual([])
+  })
+
+  it('rollback without a watching rule: the people are told it is not rolled back', async () => {
+    await smoke.saveSuite(env.staging, suite({ on_fail: 'rollback' }), USER)
+    await deployRow({
+      envId: env.staging,
+      version: '0.3.215',
+      from: '0.3.214',
+      finishedAt: clock - MIN
+    })
+    await smoke.queueNewRuns(clock)
+    const [run] = await smoke.listRuns({ envIds: [env.staging] })
+    const notify = vi.fn(async () => 1)
+    await smoke.executeRun(run.id, {
+      now: () => clock,
+      httpFetch: (async () => okResponse(500)) as never,
+      link: { fetch: linkAnswer([]).fetch as never },
+      notify,
+      watched: async () => false
+    })
+    const [, note] = notify.mock.calls[0] as unknown as [number, Record<string, unknown>]
+    expect(String(note.message)).toContain('NOT rolled back')
+  })
+})
+
+describe('extension version manager', () => {
+  let dockerDriver: number
+  let gitlabDriver: number
+
+  beforeAll(async () => {
+    const [d] = await db('nivaro_hub_drivers').insert({
+      kind: 'docker',
+      name: 'swarm',
+      config: JSON.stringify({ agent_url: 'https://agent.example.com' })
+    })
+    dockerDriver = Number(d)
+    const [g] = await db('nivaro_hub_drivers').insert({
+      kind: 'gitlab',
+      name: 'gitlab',
+      config: JSON.stringify({
+        api: 'https://gitlab.example.com',
+        project: 'efp/deploy',
+        branch: 'production',
+        pin_file: 'deploy/nivaro.pin',
+        deploy_job: 'deploy'
+      })
+    })
+    gitlabDriver = Number(g)
+    const [pd] = await db('nivaro_hub_placements').insert({
+      kind: 'dedicated',
+      driver_id: dockerDriver,
+      target: JSON.stringify({ stack: 'demo-dev' })
+    })
+    const [ps] = await db('nivaro_hub_placements').insert({
+      kind: 'dedicated',
+      driver_id: dockerDriver,
+      target: JSON.stringify({ stack: 'demo-staging' })
+    })
+    const [pg] = await db('nivaro_hub_placements').insert({
+      kind: 'dedicated',
+      driver_id: gitlabDriver,
+      target: JSON.stringify({ branch: 'production' })
+    })
+    await db('nivaro_hub_environments')
+      .where({ id: env.development })
+      .update({
+        placement_id: Number(pd),
+        extension_pins: JSON.stringify({ 'efp-ops': DIGEST('b') })
+      })
+    await db('nivaro_hub_environments')
+      .where({ id: env.staging })
+      .update({
+        placement_id: Number(ps),
+        extension_pins: JSON.stringify({ 'efp-ops': DIGEST('a') })
+      })
+    await db('nivaro_hub_environments')
+      .where({ id: env.production })
+      .update({ placement_id: Number(pg) })
+  })
+
+  const inventory = (version: string, build: string) => ({
+    fetch: vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      body: {
+        version: '0.3.215',
+        extensions: [{ id: 'efp-ops', status: 'loaded', enabled: true, version, build }]
+      }
+    }))
+  })
+
+  it('reads what runs and what is pinned; flags the environment behind the one before it', async () => {
+    const files = vi.fn(async (_ctx: unknown, path: string, ref: string) =>
+      path === 'deploy/extensions/efp-ops.pin' && ref === 'production' ? `${DIGEST('a')}\n` : null
+    )
+    const targets = (await import('../../../services/hub/verify/link.js')).verifyTargets
+    for (const [key, ver, build] of [
+      ['development', '2.1.0', 'b1'],
+      ['staging', '2.0.0', 'a1'],
+      ['production', '2.0.0', 'a1']
+    ] as const) {
+      const [t] = await targets([env[key]])
+      expect(
+        await ext.refreshEnvironment(t, ['efp-ops'], {
+          link: inventory(ver, build),
+          readFile: files as never,
+          now: () => clock
+        })
+      ).toBe('ok')
+    }
+    const [m] = await ext.extensionMatrix(null)
+    expect(m.environments.map((e) => [e.key, e.production])).toEqual([
+      ['development', false],
+      ['staging', false],
+      ['production', true]
+    ])
+    const row = m.extensions.find((x) => x.id === 'efp-ops')
+    expect(row?.cells.map((c) => [c?.pin_source, c?.state])).toEqual([
+      ['docker', 'first'],
+      ['docker', 'behind'],
+      ['gitlab', 'same']
+    ])
+    expect(row?.behind).toBe(1)
+  })
+
+  it('promotes one extension into a Docker stack: pin + Apply now; a refused start puts the pins back', async () => {
+    const apply = vi.fn(async () => ({ deployId: 77, jobRunId: null }))
+    const plan = await ext.planExtensionPromote(env.staging, 'efp-ops', {})
+    expect(plan).toMatchObject({
+      via: 'docker',
+      from_env: { key: 'development' },
+      current_pin: DIGEST('a'),
+      to_pin: DIGEST('b'),
+      blockers: []
+    })
+    await expect(
+      ext.promoteExtension(env.staging, 'efp-ops', { confirm: 'nope' }, { id: USER }, { apply })
+    ).rejects.toMatchObject({ code: 'CONFIRM_REQUIRED' })
+    const out = await ext.promoteExtension(
+      env.staging,
+      'efp-ops',
+      { confirm: 'staging' },
+      { id: USER },
+      { apply }
+    )
+    expect(out).toMatchObject({ via: 'docker', deploy_id: 77 })
+    expect(apply).toHaveBeenCalledWith(env.staging, { confirm: 'staging', user: { id: USER } })
+    const pins = await db('nivaro_hub_environments')
+      .where({ id: env.staging })
+      .first('extension_pins')
+    expect(JSON.parse(pins.extension_pins)).toEqual({ 'efp-ops': DIGEST('b') })
+
+    // Now it pins the same image: nothing to do.
+    const again = await ext.planExtensionPromote(env.staging, 'efp-ops', {})
+    expect(again.blockers.map((b) => b.code)).toEqual(['ALREADY_PINNED'])
+
+    // A refused Apply now leaves the old pins.
+    const refused = vi.fn(async () => {
+      throw Object.assign(new Error('frozen'), { code: 'FROZEN', status: 409 })
+    })
+    await expect(
+      ext.promoteExtension(
+        env.staging,
+        'efp-ops',
+        { pin: DIGEST('c'), confirm: 'staging' },
+        { id: USER },
+        { apply: refused }
+      )
+    ).rejects.toMatchObject({ code: 'FROZEN' })
+    const kept = await db('nivaro_hub_environments')
+      .where({ id: env.staging })
+      .first('extension_pins')
+    expect(JSON.parse(kept.extension_pins)).toEqual({ 'efp-ops': DIGEST('b') })
+
+    // The Docker promotion follows its deploy row.
+    await db('nivaro_hub_deploys').insert({
+      id: 77,
+      app_id: appId,
+      environment_id: env.staging,
+      kind: 'promote',
+      version: '0.3.215',
+      status: 'success',
+      finished_at: new Date(clock)
+    })
+    expect(await ext.settleExtensionPromotions()).toBe(1)
+    const [p] = await ext.listExtensionPromotions({})
+    expect(p.status).toBe('done')
+  })
+
+  it('promotes into a GitLab environment by committing its pin file; refuses a shared one', async () => {
+    const commit = vi.fn(async () => ({ sha: 'f'.repeat(40), changed: true }))
+    const out = await ext.promoteExtension(
+      env.production,
+      'efp-ops',
+      { from_env_id: env.development, confirm: 'production' },
+      { id: USER },
+      { commit, readFile: (async () => null) as never }
+    )
+    expect(out).toMatchObject({ via: 'gitlab', commit_sha: 'f'.repeat(40) })
+    expect(commit).toHaveBeenCalledWith(
+      expect.objectContaining({ project: 'efp/deploy' }),
+      'production',
+      'deploy/extensions/efp-ops.pin',
+      `${DIGEST('b')}\n`,
+      'Pin extension efp-ops (Nivaro Hub)'
+    )
+
+    const [sd] = await db('nivaro_hub_shared_deployments').insert({
+      key: 'pool-a',
+      name: 'Pool A',
+      mode: 'registered',
+      extensions: JSON.stringify(['efp-ops']),
+      extension_pins: JSON.stringify({ 'efp-ops': DIGEST('a') }),
+      link_url: 'https://pool-a.example.com',
+      pool_budget: 50,
+      status: 'active'
+    })
+    const [psh] = await db('nivaro_hub_placements').insert({
+      kind: 'shared',
+      shared_deployment_id: Number(sd),
+      target: '{}'
+    })
+    const [qa] = await db('nivaro_hub_environments').insert({
+      app_id: appId,
+      key: 'qa',
+      position: 1,
+      base_url: 'https://qa.example.com',
+      placement_id: Number(psh)
+    })
+    const plan = await ext.planExtensionPromote(Number(qa), 'efp-ops', { pin: DIGEST('d') })
+    expect(plan.via).toBe('shared')
+    expect(plan.blockers.map((b) => b.code)).toContain('EXTENSION_ON_SHARED')
+    await db('nivaro_hub_environments').where({ id: qa }).delete()
+  })
+
+  it('pure rules: pin file path, pin parsing and the chain', () => {
+    expect(ext.extensionPinPath('deploy/nivaro.pin', 'efp-ops')).toBe(
+      'deploy/extensions/efp-ops.pin'
+    )
+    expect(ext.extensionPinPath('nivaro.pin', 'x')).toBe('extensions/x.pin')
+    expect(ext.pinFromFile(`\n ${DIGEST('a')} \n`)).toBe(DIGEST('a'))
+    expect(ext.pinFromFile('reg/ext:latest')).toBeNull()
+    const f = (version: string | null, pin: string | null = null, status = 'loaded') => ({
+      version,
+      build: null,
+      status,
+      pin
+    })
+    expect(ext.judgeChain([f('2.0.0'), f('2.0.0'), f('1.9.0')])).toEqual([
+      'first',
+      'same',
+      'behind'
+    ])
+    expect(ext.judgeChain([f('2.0.0'), f('2.1.0')])).toEqual(['first', 'ahead'])
+    expect(ext.judgeChain([f('2.0.0'), f(null, null, 'absent')])).toEqual(['first', 'missing'])
+    expect(ext.judgeChain([f(null, DIGEST('a')), f(null, DIGEST('b'))])).toEqual([
+      'first',
+      'behind'
+    ])
+    expect(ext.judgeChain([null, f('1.0.0')])).toEqual(['unknown', 'first'])
+  })
+})

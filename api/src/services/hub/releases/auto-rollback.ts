@@ -228,6 +228,11 @@ export interface WatchDeps {
     note: { subject: string; message: string; urgent?: boolean }
   ): Promise<unknown>
   envKey(envId: number): Promise<string>
+  /**
+   * Hub verification: a failed post-deploy smoke run of this promotion whose suite asks for a
+   * rollback (services/hub/verify/smoke.ts) is a breach like the figures'. Null = none (yet).
+   */
+  smoke?(deployId: number): Promise<Judgement | null>
 }
 
 export function defaultWatchDeps(): WatchDeps {
@@ -241,7 +246,8 @@ export function defaultWatchDeps(): WatchDeps {
         | { key: string }
         | undefined
       return r ? String(r.key) : `#${envId}`
-    }
+    },
+    smoke: async (deployId) => (await import('../verify/smoke.js')).smokeVerdictForDeploy(deployId)
   }
 }
 
@@ -427,7 +433,13 @@ export async function judgeWatches(deps: WatchDeps = defaultWatchDeps()): Promis
         })
       continue
     }
-    const verdict = figures.linked ? judgeFigures(rule, figures) : { breach: false, reason: null }
+    let verdict: Judgement = figures.linked
+      ? judgeFigures(rule, figures)
+      : { breach: false, reason: null }
+    if (!verdict.breach && deps.smoke) {
+      const smoke = await deps.smoke(w.deploy_id).catch(() => null)
+      if (smoke?.breach) verdict = smoke
+    }
     if (!verdict.breach) {
       if (now >= until) {
         const judged = figures.linked || w.figures?.linked === true
