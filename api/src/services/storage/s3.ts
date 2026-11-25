@@ -14,9 +14,11 @@
  */
 import { createHash, createHmac } from 'node:crypto'
 import { open, readFile, stat } from 'node:fs/promises'
+import { Readable } from 'node:stream'
 import {
   AbortMultipartUploadCommand,
   CompleteMultipartUploadCommand,
+  CopyObjectCommand,
   CreateMultipartUploadCommand,
   DeleteObjectCommand,
   GetObjectCommand,
@@ -26,7 +28,9 @@ import {
   S3Client,
   UploadPartCommand
 } from '@aws-sdk/client-s3'
-import type { StorageProvider } from './index.js'
+import type { StorageProvider, StoredStream } from './index.js'
+import { StoredObjectMissing } from './missing.js'
+import { parseByteRange } from './range.js'
 
 const PRESIGN_EXPIRES = 3600 // 1 hour
 /** putFile: files up to this size go up in one PUT; bigger ones as a multipart upload. */
@@ -73,6 +77,29 @@ function uriEncode(value: string): string {
     /[!'()*]/g,
     (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`
   )
+}
+
+/** NoSuchKey / NotFound / a 404 from the SDK: the object is not there. */
+export function s3Missing(err: unknown): boolean {
+  const e = err as {
+    name?: unknown
+    Code?: unknown
+    $metadata?: { httpStatusCode?: unknown }
+  } | null
+  return (
+    e?.name === 'NoSuchKey' ||
+    e?.name === 'NotFound' ||
+    e?.Code === 'NoSuchKey' ||
+    e?.$metadata?.httpStatusCode === 404
+  )
+}
+
+/** The SDK's body as a Node stream (in Node it already is one). */
+function s3Body(body: unknown, key: string): Readable {
+  if (body instanceof Readable) return body
+  if (body && typeof (body as { getReader?: unknown }).getReader === 'function')
+    return Readable.fromWeb(body as import('node:stream/web').ReadableStream)
+  throw new Error(`S3 object has no body: ${key}`)
 }
 
 export class S3Storage implements StorageProvider {
@@ -185,6 +212,83 @@ export class S3Storage implements StorageProvider {
     if (!res.Body) throw new Error(`S3 object has no body: ${key}`)
     const bytes = await res.Body.transformToByteArray()
     return Buffer.from(bytes)
+  }
+
+  /**
+   * The object as a stream, never read whole (Hub moves, 0.3.215). A single `Range` header is
+   * answered after a HEAD of the size. A missing object throws StoredObjectMissing; any other
+   * error is thrown as it is (a move counts it as failed, never missing).
+   */
+  async openStream(key: string, rangeHeader?: string): Promise<StoredStream> {
+    try {
+      if (rangeHeader) {
+        const head = await this.client.send(
+          new HeadObjectCommand({ Bucket: this.bucket, Key: key })
+        )
+        const size = Number(head.ContentLength ?? 0)
+        const r = parseByteRange(rangeHeader, size)
+        if (r === 'unsatisfiable')
+          return { size, range: null, unsatisfiable: true, stream: Readable.from([]) }
+        if (r) {
+          const res = await this.client.send(
+            new GetObjectCommand({
+              Bucket: this.bucket,
+              Key: key,
+              Range: `bytes=${r.start}-${r.end}`
+            })
+          )
+          return { size, range: r, unsatisfiable: false, stream: s3Body(res.Body, key) }
+        }
+      }
+      const res = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }))
+      const stream = s3Body(res.Body, key)
+      const size = Number(res.ContentLength)
+      if (!Number.isFinite(size) || size < 0) {
+        stream.destroy()
+        throw Object.assign(new Error('S3 answered without the object size'), { status: 502 })
+      }
+      return { size, range: null, unsatisfiable: false, stream }
+    } catch (err) {
+      throw s3Missing(err) ? new StoredObjectMissing() : err
+    }
+  }
+
+  /**
+   * Who this store is, for a move's same-bucket check: a hash of the endpoint (or the AWS region)
+   * and the bucket. Never a credential; the bucket name itself never leaves the process.
+   */
+  storeId(): string {
+    const where = this.endpoint
+      ? this.endpoint.replace(/\/+$/, '').toLowerCase()
+      : `aws:${this.region}`
+    return createHash('sha256').update(`s3|${where}|${this.bucket}`).digest('hex')
+  }
+
+  /**
+   * Server-side copy inside this bucket (Hub moves, 0.3.215): `rawSource` is the source object's
+   * full key in the bucket (never scoped again), `key` the destination. No byte passes through
+   * this process. Resolves to the copy's size (a HEAD after the copy). CopyObject takes objects
+   * up to 5 GB, the move's per-object cap.
+   */
+  async copyFrom(
+    key: string,
+    rawSource: string,
+    mime: string,
+    opts: { signal?: AbortSignal } = {}
+  ): Promise<number> {
+    const source = `${uriEncode(this.bucket)}/${rawSource.split('/').map(uriEncode).join('/')}`
+    await this.client.send(
+      new CopyObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        CopySource: source,
+        ContentType: mime,
+        MetadataDirective: 'REPLACE'
+      }),
+      { abortSignal: opts.signal }
+    )
+    const head = await this.client.send(new HeadObjectCommand({ Bucket: this.bucket, Key: key }))
+    return typeof head.ContentLength === 'number' ? head.ContentLength : -1
   }
 
   async exists(key: string): Promise<boolean> {

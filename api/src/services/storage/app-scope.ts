@@ -83,9 +83,14 @@ const ASYNC_KEYED = new Set([
   'getUploadUrl',
   'size',
   // R6-M-3: a saved-settings driver's streamed read
-  'openStream'
+  'openStream',
+  // 0.3.215: a move's server-side copy — the DESTINATION key (first) is scoped; the source's
+  // full key (second) is passed as it is: the pull checks it names this app's own object
+  'copyFrom'
 ])
 const SYNC_KEYED = new Set(['resolveKey'])
+/** Methods that take no key at all (0.3.215: the store's identity hash for a move). */
+const NO_KEY = new Set(['storeId'])
 
 /**
  * Wrap `base` (an env storage provider, or a saved-settings S3/Azure driver — anything whose
@@ -118,6 +123,7 @@ export function scopedStorage<T extends StorageProvider | object>(
         return (key: unknown, ...rest: unknown[]) =>
           Reflect.apply(value, target, [appScopedKey(key, tenantId()), ...rest])
       }
+      if (NO_KEY.has(prop)) return (...args: unknown[]) => Reflect.apply(value, target, args)
       if (prop === 'getUrl') {
         return (key: unknown) => {
           const scoped = appScopedKey(key, tenantId())
