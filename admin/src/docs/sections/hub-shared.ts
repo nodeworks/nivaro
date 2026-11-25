@@ -419,26 +419,15 @@ export const hubSharedDocs: DocSection = {
           'checklist item `callbacks_registered`'
         ],
         [
-          'Mail settings from the environment (`SMTP_*`)',
-          'An app uses its own saved mail settings.',
-          'warning `ENV_SMTP`'
-        ],
-        [
           'Session replays',
           'Not moved by a move.',
           'warnings `SESSION_REPLAYS`, `REPLAYS_NOT_MOVED`'
-        ],
-        [
-          'Outside-write watch (the SQL Server change tracker)',
-          'Off on shared: it needs a deployment-wide watcher.',
-          '-'
         ],
         [
           'Traffic digest section and the Traffic Map page',
           'Off on shared. The daily digest keeps its other sections.',
           '-'
         ],
-        ['Huddle relay (TURN)', 'Off on shared, as in cloud.', 'warning `HUDDLE_TURN`'],
         [
           'Help-video renders queued before a restart',
           'They render again on the next publish.',
@@ -482,7 +471,10 @@ export const hubSharedDocs: DocSection = {
         'The daily retention pass (03:30, one job per app) and the boot passes (owner-group warm, integrity checks, cache warms, readiness warm, db-tuning sweep). They run once per app when it becomes ready. Retention status shows per app. Stale help-video import folders are swept once a day per process (deployment-wide, not per app).',
         'Microsoft directory lookups and sync. The app uses its own Microsoft app registration, saved in Settings → Microsoft directory (tenant id, client id, client secret; the secret is sealed with the app key). The server `GRAPH_*` and `OIDC_*` variables and the directory keys of `NIVARO_SETTINGS_OVERRIDES` are never used on shared.',
         "The Teams bot. The app uses only the bot saved in its own Settings. `TEAMS_BOT_*`, `MICROSOFT_APP_*`, the sign-in app fallback and the `teams_bot_*` override keys are ignored. `TEAMS_BOT=off` still disables the bot on the whole deployment, but `TEAMS_BOT=on` does not switch an app on: each app saves its own switch. Register each bot with that app's host as its messaging endpoint.",
-        "Phone push. An app admin connects the app's push relay in Settings → Mobile app. The server `MOBILE_PUSH_RELAY_KEY` is not used on shared. Phone sign-in was already per app."
+        "Phone push. An app admin connects the app's push relay in Settings → Mobile app. The server `MOBILE_PUSH_RELAY_KEY` is not used on shared. Phone sign-in was already per app.",
+        'From 0.3.215 — the outside-write watch (the safety net that notices rows other systems wrote straight into the database). The process that runs scheduled jobs walks the SQL Server apps in turn, each in its own database with its own Realtime → Outside writes setting and counts; Postgres and MySQL apps are skipped as on a dedicated stack. One look of one app stops starting collections after 4 seconds and carries on with the rest at its next look, and an app that leaves the deployment is no longer walked.',
+        'From 0.3.215 — huddle media servers. Each app uses the STUN, TURN and media server (LiveKit) it saved in Settings → Huddles, as on a dedicated stack; the TURN secret, TURN password and LiveKit secret are stored sealed with the app key. The platform variables `HUDDLE_LIVEKIT_URL`, `HUDDLE_TURN_URLS` and `HUDDLE_STUN_URLS` stay Nivaro Cloud only. What the deployment itself dials stays guarded: the media server test and the room clean-up calls go through the SSRF guard, and Test TURN refuses a private address until the operator allows it with `SSRF_ALLOW_HOSTS` (browsers still use it). The every-5-minutes TURN probe stays off on shared; Server health shows the last manual test.',
+        "From 0.3.215 — mail from an app that sent with its server's `SMTP_*` / `MAIL_FROM` (or a per-instance override) and nothing saved in Settings → Email. When a move puts the app in maintenance, the app saves the settings it sends with into its own Settings → Email (only empty fields; the password sealed with the app key), so it keeps its own relay and sender on shared. The plan shows `ENV_SMTP_KEPT` instead of the `ENV_SMTP` warning when both the app and the target run 0.3.215 or later; otherwise `ENV_SMTP` stays and the settings must be entered by hand. An app with nothing saved at all still falls back to the deployment's own `SMTP_*`."
       ]
     },
     {
@@ -907,7 +899,11 @@ export const hubMovesDocs: DocSection = {
         ],
         [
           '`DIRECTORY_ENV_CREDENTIALS`, `TEAMS_BOT_ENV_CREDENTIALS`, `PUSH_RELAY_ENV`, `SETTINGS_ENV_OVERRIDES`, `HUDDLE_TURN`, `ENV_SMTP`, `SESSION_REPLAYS`, `HELP_VIDEO_RENDERS`',
-          'Features a shared app does not have, or that behave differently (see Shared deployments). `DIRECTORY_SYNC`, `PHONE_PUSH`, `TEAMS_BOT` and `MAIL_RETRY` are reported only for a target before 0.3.212 or one the Hub cannot read.'
+          'Features a shared app does not have, or that behave differently (see Shared deployments). `DIRECTORY_SYNC`, `PHONE_PUSH`, `TEAMS_BOT` and `MAIL_RETRY` are reported only for a target before 0.3.212 or one the Hub cannot read; `HUDDLE_TURN` only for a target before 0.3.215; `ENV_SMTP` unless both the app and the target run 0.3.215 or later.'
+        ],
+        [
+          '`ENV_SMTP_KEPT`',
+          "The app sends mail with its server's environment settings; the move saves them in the app's own Settings → Email when it puts the app in maintenance (only empty fields, the password sealed with the app key)."
         ]
       ]
     },
