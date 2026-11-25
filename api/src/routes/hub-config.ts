@@ -17,6 +17,12 @@ import {
   promotionGroups,
   reconcilePromotion
 } from '../services/hub/config/promotions.js'
+import {
+  readConfigSwitch,
+  SWITCH_KEY,
+  SWITCH_NOTICE,
+  saveConfigSwitch
+} from '../services/hub/config/switch.js'
 import { ConfigPromotionError, PROMOTIONS } from '../services/hub/config/types.js'
 
 /**
@@ -90,6 +96,28 @@ export function hubConfigRoutes(app: FastifyInstance) {
   const admin = { preHandler: requireAdmin }
 
   app.get('/config/groups', admin, async () => ({ data: promotionGroups() }))
+
+  // The switch: config promotion is off until an administrator turns it on (after a try on a
+  // staging pair). Off refuses a new plan and an apply; check and undo stay allowed.
+  app.get('/config/switch', admin, async () => ({
+    data: { ...(await readConfigSwitch()), notice: SWITCH_NOTICE }
+  }))
+  app.put('/config/switch', admin, async (req, reply) =>
+    guarded(reply, async () => {
+      const b = body(req)
+      const saved = await saveConfigSwitch(b, userId(req))
+      await logActivity({
+        action: 'update',
+        user: userId(req),
+        collection: 'nivaro_extension_settings',
+        item: `nivaro-core:${SWITCH_KEY}`,
+        comment: JSON.stringify(saved),
+        req,
+        changed_fields: ['config_promotion']
+      })
+      return { data: { ...saved, notice: SWITCH_NOTICE } }
+    })
+  )
 
   app.get<{ Params: { id: string } }>('/apps/:id/config-promotions', admin, async (req, reply) => {
     const id = idParam(req.params.id)

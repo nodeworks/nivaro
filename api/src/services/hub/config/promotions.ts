@@ -24,6 +24,7 @@ import {
   isProductionTarget,
   moveOpenGate
 } from './gates.js'
+import { configPromotionOn, switchedOff } from './switch.js'
 import {
   type ConfigPromotion,
   ConfigPromotionError,
@@ -102,6 +103,8 @@ export interface ConfigDeps {
     userId: string | null
   }) => Promise<void>
   notify?: (e: HubEvent) => void
+  /** The Hub's config promotion switch (off by default): plan and apply refuse while off. */
+  enabled?: () => Promise<boolean>
   now?: () => number
   sleep?: (ms: number) => Promise<void>
   pollMs?: number
@@ -119,6 +122,7 @@ function d(deps: ConfigDeps) {
     production: deps.production ?? isProductionTarget,
     outsideWindow: deps.outsideWindow ?? defaultOutsideWindow,
     notify: deps.notify ?? notifyHubEvent,
+    enabled: deps.enabled ?? configPromotionOn,
     now: deps.now ?? Date.now,
     sleep: deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms))),
     pollMs: deps.pollMs ?? POLL_MS,
@@ -562,6 +566,7 @@ export const newRunKey = () => randomBytes(18).toString('base64url')
 
 export async function planPromotion(i: PlanInput, deps: ConfigDeps = {}): Promise<ConfigPromotion> {
   const x = d(deps)
+  if (!(await x.enabled())) throw switchedOff()
   const { source, target, appKey, groups, tables } = await checkPlanInput(i)
   const moving = await x.moveOpen(target.id)
   if (moving) throw new ConfigPromotionError(moving.code, moving.message, moving.status)
@@ -770,6 +775,7 @@ export async function applyPromotion(
   deps: ConfigDeps = {}
 ): Promise<ConfigPromotion> {
   const x = d(deps)
+  if (!(await x.enabled())) throw switchedOff()
   const p = await getPromotion(i.id, x.now())
   if (!p) throw new ConfigPromotionError('NOT_FOUND', 'No such config promotion.', 404)
   if (p.status !== 'planned')

@@ -50,6 +50,10 @@ export const hubConfigDocs: DocSection = {
       type: 'note',
       text: 'Not offered yet: forms / layouts and pipelines (their rows reference roles, steps, people, widgets and templates by id inside JSON, and mapping all of those by name is not built), version-history tables, the schema registry, people and User Scopes. Both environments need Nivaro 0.3.215 or later and a SQL Server database.'
     },
+    {
+      type: 'warn',
+      text: 'Config promotion ships OFF. It has not yet been tried on a real pair of SQL Server environments, so — like data refreshes and drills — it stays off until an administrator turns it on at the top of the Config tab (`PUT /api/hub/config/switch {config_promotion}`; stored in `nivaro_extension_settings` `nivaro-core` / `hub_config_promotion`). While it is off a new plan and an apply answer 409 `CONFIG_PROMOTION_OFF`; “Check the target” and the undo of a promotion that already ran still work. Turn it on only after a try on a staging pair.'
+    },
     { type: 'h2', id: 'hub-config-flow', text: 'Plan, apply, check, undo' },
     {
       type: 'ul',

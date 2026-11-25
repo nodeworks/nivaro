@@ -41,6 +41,7 @@ import {
   tableWords,
   type UndoPreview,
   useConfigGroups,
+  useConfigSwitch,
   usePromotion,
   usePromotions
 } from './config-api'
@@ -206,6 +207,8 @@ function AppConfigPanel({
 }) {
   const app = useHubApp(appId)
   const list = usePromotions(appId)
+  const sw = useConfigSwitch()
+  const on = sw.data?.config_promotion === true
   if (app.isPending)
     return (
       <div className='space-y-3 p-4'>
@@ -239,10 +242,11 @@ function AppConfigPanel({
           the target keeps for itself (mail, keys, endpoints, sign-in, switches) never travel.
         </p>
       </header>
+      <SwitchNotice />
       {selected && (
         <PromotionPanel key={selected.id} p={selected} envKey={envKey} onClose={() => open(null)} />
       )}
-      {envs.length < 2 ? (
+      {!on ? null : envs.length < 2 ? (
         <p className='m-0 rounded-md border border-slate-200 bg-white px-3 py-3 text-[12px] text-slate-600 dark:border-border dark:bg-card dark:text-muted-foreground'>
           This app needs two environments before configuration can move between them.
         </p>
@@ -258,6 +262,70 @@ function AppConfigPanel({
         selectedId={promotionId}
         open={open}
       />
+    </div>
+  )
+}
+
+/**
+ * The Hub's config promotion switch. Off (the default) until promotion has been tried on a
+ * staging pair: new plans and applies are refused; checking and undoing past promotions still
+ * work. Turning it on takes two presses; turning it off one.
+ */
+function SwitchNotice() {
+  const qc = useQueryClient()
+  const sw = useConfigSwitch()
+  const save = useMutation({
+    mutationFn: (on: boolean) => api.put('/hub/config/switch', { config_promotion: on }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: configKeys.switch() })
+    }
+  })
+  if (!sw.data) return null
+  const on = sw.data.config_promotion
+  return (
+    <div
+      className={cn(
+        'flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-md border px-3 py-2 text-[12px]',
+        on
+          ? 'border-slate-200 bg-white text-slate-600 dark:border-border dark:bg-card dark:text-muted-foreground'
+          : 'border-slate-200 bg-slate-100 text-slate-700 dark:border-border dark:bg-muted/50 dark:text-foreground'
+      )}
+    >
+      <p className='m-0 max-w-[80ch]'>
+        {on ? (
+          <>
+            Config promotion is{' '}
+            <span className='font-medium text-emerald-700 dark:text-emerald-400'>on</span> on this
+            Hub.
+          </>
+        ) : (
+          sw.data.notice
+        )}
+      </p>
+      {on ? (
+        <button
+          type='button'
+          className={ghostButton}
+          disabled={save.isPending}
+          onClick={() => save.mutate(false)}
+        >
+          Turn off
+        </button>
+      ) : (
+        <ConfirmButton
+          title='Turn config promotion on'
+          confirmLabel='Turn on?'
+          className={cn(ghostButton, 'border border-slate-200 dark:border-border')}
+          armedClassName={dangerArmed}
+          disabled={save.isPending}
+          onConfirm={() => save.mutate(true)}
+        >
+          Turn on
+        </ConfirmButton>
+      )}
+      {save.isError && (
+        <ErrorNotice description={configError(save.error, 'Could not change the switch')} />
+      )}
     </div>
   )
 }

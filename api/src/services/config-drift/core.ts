@@ -403,7 +403,13 @@ export function overwrittenBy(
   items: DriftItem[],
   target: Record<string, Record<string, SnapshotRow>>,
   live: Record<string, Record<string, SnapshotRow>>,
-  opts: { tables: string[]; deletes: boolean; keys?: Set<string> | null }
+  opts: {
+    tables: string[]
+    deletes: boolean
+    keys?: Set<string> | null
+    /** Rows deleted whatever `deletes` says (a Hub promotion's steps of a promoted flow). */
+    alsoDelete?: Record<string, readonly string[]> | null
+  }
 ): DriftItem[] {
   const tables = new Set(opts.tables)
   return items.filter((it) => {
@@ -412,7 +418,7 @@ export function overwrittenBy(
     const t = target[it.table]?.[it.key]
     if (it.kind === 'removed') return !!t
     const l = live[it.table]?.[it.key]
-    if (!t) return opts.deletes
+    if (!t) return opts.deletes || !!opts.alsoDelete?.[it.table]?.includes(it.key)
     return meaningfulFields(t.data, l?.data).length > 0
   })
 }

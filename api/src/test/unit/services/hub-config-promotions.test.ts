@@ -157,6 +157,7 @@ let frozen = false
 let windowShut = false
 let moving = false
 let checklistNeeded = false
+let switchOn = true
 let now = Date.parse('2026-11-25T12:00:00Z')
 const lock = memoryPromoteLock
 const links: Array<[string, number]> = []
@@ -196,6 +197,7 @@ const deps = (): Deps => ({
     gateCalls.push('outside-recorded')
   },
   notify: (e) => notices.push(e as never),
+  enabled: async () => switchOn,
   now: () => now,
   // The Hub's wait after a lost answer: each poll moves the clock on (no real sleeping).
   sleep: async (ms) => {
@@ -248,6 +250,7 @@ beforeEach(async () => {
   windowShut = false
   moving = false
   checklistNeeded = false
+  switchOn = true
   app.applyError = null
   app.undoError = null
   app.status = 'applied'
@@ -656,5 +659,28 @@ describe('plan view', () => {
     const capped = JSON.parse(P.cappedPlan(big, 2_000))
     expect(capped.tables[0].rows.length).toBeLessThan(50)
     expect(capped.tables[0].updates).toBe(1)
+  })
+})
+
+describe('the off switch (config promotion ships off)', () => {
+  it('off: a new plan and an apply answer 409 CONFIG_PROMOTION_OFF in plain words', async () => {
+    const p = await plan()
+    switchOn = false
+    const e = await plan().catch((x) => x)
+    expect(e).toMatchObject({ code: 'CONFIG_PROMOTION_OFF', status: 409 })
+    expect(e.message).toMatch(/off until it has been tried on a staging pair/)
+    expect(await code(apply(p.id))).toBe('CONFIG_PROMOTION_OFF')
+    expect((await P.getPromotion(p.id))?.status).toBe('planned')
+    expect(calls.filter((c) => c.name === 'apply')).toHaveLength(0)
+  })
+
+  it('off: Check the target and undo of a promotion that already ran still work', async () => {
+    const p = await apply((await plan()).id)
+    switchOn = false
+    await db(PROMOTIONS).where({ id: p.id }).update({ status: 'interrupted' })
+    expect((await P.reconcilePromotion(p.id, deps())).status).toBe('applied')
+    const pv = await P.previewUndo(p.id, deps())
+    expect(pv.plan_hash).toBe(UNDO)
+    expect((await undo(p.id)).status).toBe('undone')
   })
 })

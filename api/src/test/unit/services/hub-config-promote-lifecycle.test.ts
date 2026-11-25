@@ -30,6 +30,8 @@ const fake = {
   applyCalls: 0,
   live: {} as Record<string, Record<string, { hash: string; data: Record<string, unknown> }>>,
   drift: 'off' as 'off' | 'on' | 'throws',
+  tracking: false,
+  overwriteOpts: [] as Array<Record<string, unknown>>,
   stored: [] as Array<{ trigger: string; tables: Record<string, unknown>; markerSeen: boolean }>,
   saved: [] as string[]
 }
@@ -104,8 +106,18 @@ vi.mock('../../../services/env-refresh/registry.js', async (orig) => ({
 
 vi.mock('../../../services/config-drift/store.js', async () => {
   return {
-    driftTrackingHere: async () => false,
-    checkOverwrite: async () => null,
+    driftTrackingHere: async () => fake.tracking,
+    // A change made here on step `old`: hit only when the check is told it is removed.
+    checkOverwrite: async (_t: unknown, o: Record<string, any>) => {
+      fake.overwriteOpts.push(o)
+      const hit = !!o.alsoDelete?.nivaro_flow_operations?.includes('old')
+      return {
+        active: true,
+        refuse: true,
+        items: hit ? [{ table: 'nivaro_flow_operations', key: 'old' }] : [],
+        lines: hit ? ['Step “Legacy step” changed on production'] : []
+      }
+    },
     getDriftSettings: async () => {
       if (fake.drift === 'throws') throw new Error('drift store unreachable')
       return {}
@@ -225,6 +237,8 @@ beforeEach(async () => {
   fake.during = null
   fake.applyCalls = 0
   fake.drift = 'off'
+  fake.tracking = false
+  fake.overwriteOpts = []
   fake.stored = []
   fake.saved = []
   fake.live = { nivaro_roles: { r1: { hash: 'h1', data: { id: 'r1', name: 'Editor' } } } }
@@ -408,5 +422,50 @@ describe('undo: row-exact, newest only, its own lifecycle', () => {
     await T.applyPromotion(body())
     fake.live = { nivaro_roles: { r1: { hash: 'changed-after', data: { id: 'r1' } } } }
     expect(await code(undoPreview())).toBe('STALE')
+  })
+})
+
+describe('forced step deletions go through the Changed-here check (security review)', () => {
+  const flow = { id: 'f', name: 'Order', status: 'active' }
+  const step = { id: 'o1', flow: 'f', key: 'post', name: 'Post' }
+  const flowBody = (runKey = RUN) => ({
+    ...body(runKey),
+    tables: ['nivaro_flows', 'nivaro_flow_operations'],
+    snapshot: {
+      ...body(runKey).snapshot,
+      tables: {
+        nivaro_flows: { f: { hash: hashRow(flow), data: flow } },
+        nivaro_flow_operations: { o1: { hash: hashRow(step), data: step } }
+      }
+    }
+  })
+  const liveFlows = () => {
+    fake.tracking = true
+    fake.live = {
+      nivaro_flows: { F: { hash: 'hf', data: { id: 'F', name: 'Order', status: 'active' } } },
+      nivaro_flow_operations: {
+        keep: { hash: 'hk', data: { id: 'keep', flow: 'F', key: 'post', name: 'Post' } },
+        old: { hash: 'ho', data: { id: 'old', flow: 'F', key: 'legacy', name: 'Legacy step' } }
+      }
+    }
+  }
+
+  it('the plan passes the orphan step to the check and shows the refusal', async () => {
+    liveFlows()
+    const plan = await T.planPromotion(flowBody())
+    expect(plan.orphans.map((o) => o.key)).toEqual(['old'])
+    expect(fake.overwriteOpts.at(-1)?.alsoDelete).toEqual({ nivaro_flow_operations: ['old'] })
+    expect(plan.prod_only_refuse).toBe(true)
+    expect(plan.prod_only_lines[0]).toMatch(/Legacy step/)
+  })
+
+  it('the apply refuses PROD_ONLY_CHANGES unless overwriting is confirmed', async () => {
+    liveFlows()
+    expect(await code(T.applyPromotion(flowBody()))).toBe('PROD_ONLY_CHANGES')
+    expect(fake.applyCalls).toBe(0)
+    expect((await record())?.status).toBe('failed')
+    const out = await T.applyPromotion({ ...flowBody(), overwrite_prod_changes: true })
+    expect(out.replayed).toBe(false)
+    expect(fake.applyCalls).toBe(1)
   })
 })

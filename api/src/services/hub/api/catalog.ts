@@ -1452,6 +1452,23 @@ export const HUB_ROUTES: HubRoute[] = [
   // ─── Config promotion (routes/hub-config.ts, idea 30) ───────────────────────
   r(
     'GET',
+    '/config/switch',
+    'Config promotion',
+    'admin',
+    'read',
+    'Whether config promotion is on here (off by default until tried on a staging pair)'
+  ),
+  r(
+    'PUT',
+    '/config/switch',
+    'Config promotion',
+    'admin',
+    'write',
+    'Turn config promotion on or off (off refuses new plans and applies; check and undo stay allowed)',
+    { body: { config_promotion: b('On or off') }, sensitive: true }
+  ),
+  r(
+    'GET',
     '/config/groups',
     'Config promotion',
     'admin',

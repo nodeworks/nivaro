@@ -503,7 +503,12 @@ export interface OverwriteCheck {
  */
 export async function checkOverwrite(
   target: ConfigSnapshot['tables'] | null,
-  opts: { tables: string[]; deletes: boolean; keys?: string[] | null }
+  opts: {
+    tables: string[]
+    deletes: boolean
+    keys?: string[] | null
+    alsoDelete?: Record<string, readonly string[]> | null
+  }
 ): Promise<OverwriteCheck> {
   let settings = DRIFT_DEFAULTS
   try {
@@ -515,7 +520,8 @@ export async function checkOverwrite(
       ? overwrittenBy(open, target, state.live, {
           tables: opts.tables,
           deletes: opts.deletes,
-          keys: opts.keys?.length ? new Set(opts.keys) : null
+          keys: opts.keys?.length ? new Set(opts.keys) : null,
+          alsoDelete: opts.alsoDelete ?? null
         })
       : open.filter((i) => opts.tables.includes(i.table))
     return {

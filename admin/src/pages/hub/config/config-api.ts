@@ -124,8 +124,22 @@ export interface UndoPreview {
 
 export const configKeys = {
   groups: () => ['hub', 'config', 'groups'] as const,
+  switch: () => ['hub', 'config', 'switch'] as const,
   list: (appId: number) => ['hub', 'config', 'list', appId] as const,
   one: (id: number) => ['hub', 'config', 'one', id] as const
+}
+
+export interface ConfigSwitch {
+  config_promotion: boolean
+  notice: string
+}
+
+/** The Hub's config promotion switch (off by default). */
+export function useConfigSwitch() {
+  return useQuery({
+    queryKey: configKeys.switch(),
+    queryFn: () => api.get<{ data: ConfigSwitch }>('/hub/config/switch').then((r) => r.data.data)
+  })
 }
 
 export function useConfigGroups() {
@@ -269,6 +283,10 @@ const COPY: Record<string, { title: string; hint?: string; serverHint?: boolean 
     hint: 'It may have written. Use “Check the target” on the promotion to read what it says.'
   },
   NOTHING_TO_CHECK: { title: 'There is nothing to check on this promotion' },
+  CONFIG_PROMOTION_OFF: {
+    title: 'Config promotion is off on this Hub',
+    hint: 'It stays off until it has been tried on a staging pair. An administrator can turn it on at the top of the Config tab. Checking and undoing promotions that already ran still work.'
+  },
   STILL_RUNNING: {
     title: 'The target is still working on this promotion',
     hint: 'It has not finished writing or deploying yet. Check again in a moment — nothing is marked failed meanwhile.'

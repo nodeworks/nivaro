@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { overwrittenBy } from '../../../services/config-drift/core.js'
 import {
   CONFIG_TABLES,
   type ConfigSnapshot,
@@ -932,5 +933,92 @@ describe('nested arrays are merged back by identity, not position', () => {
     const out = parsed(mergeOwn(incoming, own, () => false))
     expect(out.fields[0]).toEqual({ key: 'b', label: 'Bearer prod-secret-token-123456' })
     expect(out.fields[1]).toEqual({ key: 'a', label: 'A' })
+  })
+})
+
+describe('policy JSON: every literal id leaf refuses, operators included (security review)', () => {
+  const R = '22222222-2222-4222-8222-222222222222'
+  const T = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+  const withRule = (permissions: unknown) =>
+    mapToTarget({
+      source: {
+        nivaro_roles: { [R]: row({ id: R, name: 'Editor' }) },
+        nivaro_policies: {
+          '7': row({
+            id: 7,
+            role: R,
+            collection: 'units',
+            action: 'read',
+            permissions: JSON.stringify(permissions)
+          })
+        }
+      },
+      target: { nivaro_roles: { [T]: row({ id: T, name: 'editor' }) } },
+      sourceDict: {},
+      targetDict: {},
+      runKey: RUN
+    }).refusals.filter((r) => r.code === 'REF_UNMAPPED')
+
+  it('`_eq` holding an id refuses, naming the field', () => {
+    const r = withRule({ owner: { _eq: 42 } })
+    expect(r).toHaveLength(1)
+    expect(r[0].reason).toMatch(/permissions\.owner\._eq \(field owner\).*literal id \(42\)/)
+    expect(withRule({ owner: { _eq: '42' } })).toHaveLength(1)
+  })
+
+  it('an `_in` list of ids refuses each one', () => {
+    const r = withRule({ zone: { _in: [3, 4, '5'] } })
+    expect(r).toHaveLength(3)
+    expect(r.every((x) => /\(field zone\)/.test(x.reason))).toBe(true)
+  })
+
+  it('nested `_and` / `_or` are walked; a role id inside maps, a uuid that is not a role refuses', () => {
+    const r = withRule({
+      _and: [
+        { _or: [{ region: { _eq: 9 } }, { role: { _eq: R } }] },
+        { created_by: { _neq: '11111111-1111-4111-8111-111111111111' } }
+      ]
+    })
+    expect(r).toHaveLength(2)
+    expect(r.some((x) => /\(field region\)/.test(x.reason))).toBe(true)
+    expect(r.some((x) => /\(field created_by\)/.test(x.reason))).toBe(true)
+  })
+
+  it('known-number fields, text, booleans, decimals and variables pass', () => {
+    expect(
+      withRule({
+        _and: [
+          { priority: { _gte: 2 } },
+          { status: { _eq: 'open' } },
+          { archived: { _eq: false } },
+          { ratio: { _lt: 0.5 } },
+          { owner: { _eq: '$CURRENT_USER' } }
+        ]
+      })
+    ).toEqual([])
+  })
+})
+
+describe('Changed here judges forced deletions (security review)', () => {
+  const item = (key: string) => ({
+    id: `nivaro_flow_operations:${key}`,
+    table: 'nivaro_flow_operations',
+    key,
+    label: 'Legacy step',
+    kind: 'changed' as const,
+    intended: false,
+    at: null,
+    who: null
+  })
+  it('a production-only change on an orphan step counts even with removals off', () => {
+    const live = { nivaro_flow_operations: { old: row({ id: 'old', name: 'Legacy step' }) } }
+    const items = [item('old'), item('other')] as never
+    const opts = { tables: ['nivaro_flow_operations'], deletes: false }
+    expect(overwrittenBy(items, { nivaro_flow_operations: {} }, live, opts)).toEqual([])
+    const hit = overwrittenBy(items, { nivaro_flow_operations: {} }, live, {
+      ...opts,
+      alsoDelete: { nivaro_flow_operations: ['old'] }
+    })
+    expect(hit.map((h) => h.key)).toEqual(['old'])
   })
 })

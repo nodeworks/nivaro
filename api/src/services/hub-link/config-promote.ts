@@ -591,11 +591,20 @@ async function prepare(req: PromoteRequest): Promise<Ready> {
 async function prodOnlyCheck(
   tables: ConfigSnapshot['tables'],
   deletes: boolean,
-  keys?: string[] | null
+  keys?: string[] | null,
+  alsoDelete?: Record<string, string[]> | null
 ) {
   const { checkOverwrite, driftTrackingHere } = await import('../config-drift/store.js')
   if (!(await driftTrackingHere())) return null
-  return checkOverwrite(tables, { tables: Object.keys(tables), deletes, keys: keys ?? null })
+  // Forced deletions (steps a promoted flow no longer has) are judged like any removal: a
+  // change made here on one refuses PROD_ONLY_CHANGES unless overwriting is confirmed.
+  const scope = [...new Set([...Object.keys(tables), ...Object.keys(alsoDelete ?? {})])]
+  return checkOverwrite(tables, {
+    tables: scope,
+    deletes,
+    keys: keys ?? null,
+    alsoDelete: alsoDelete ?? null
+  })
 }
 
 function prodOnlyRefusal(
@@ -708,7 +717,7 @@ export async function planPromotion(body: unknown): Promise<PromotionPlanAnswer>
   } catch (err) {
     rethrow(err)
   }
-  const check = await prodOnlyCheck(r.prepared.tables, req.deletes)
+  const check = await prodOnlyCheck(r.prepared.tables, req.deletes, null, r.alsoDelete)
   const warnings = [...r.warnings, ...preview.warnings]
   if (r.orphans.length)
     warnings.push(
@@ -1158,7 +1167,7 @@ export async function applyPromotion(body: unknown): Promise<PromotionApplyAnswe
         'Managed procedures changed since the plan — plan again.'
       )
     const refusal = prodOnlyRefusal(
-      await prodOnlyCheck(r.prepared.tables, req.deletes),
+      await prodOnlyCheck(r.prepared.tables, req.deletes, null, r.alsoDelete),
       b.overwrite_prod_changes
     )
     if (refusal) throw refusal

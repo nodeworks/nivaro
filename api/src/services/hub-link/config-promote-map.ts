@@ -524,34 +524,44 @@ export function mapToTarget(input: MapInput): MapOutput {
   }
 
   /** Permission JSON: a role id is rewritten to the target's role; any other uuid or id refuses. */
+  /**
+   * Permission JSON: a role id is rewritten to the target's role. ANY other uuid or literal
+   * integer leaf refuses (REF_UNMAPPED) — whatever key holds it, operators included
+   * (`{ owner: { _eq: 42 } }`, `_in` lists, nested `_and` / `_or`) — unless the nearest field
+   * above it is a known number (SAFE_NUMBER_KEYS). `field` = that nearest non-operator key.
+   */
   const mapPolicy = (
     v: unknown,
     where: { table: string; key: string; label: string | null },
     path: string,
-    key: string
+    field: string | null
   ): unknown => {
-    if (Array.isArray(v)) return v.map((x, i) => mapPolicy(x, where, `${path}[${i}]`, key))
+    if (Array.isArray(v)) return v.map((x, i) => mapPolicy(x, where, `${path}[${i}]`, field))
     if (v && typeof v === 'object') {
       const out: Record<string, unknown> = {}
       for (const [k, x] of Object.entries(v as Record<string, unknown>))
-        out[k] = mapPolicy(x, where, path ? `${path}.${k}` : k, k)
+        out[k] = mapPolicy(x, where, path ? `${path}.${k}` : k, k.startsWith('_') ? field : k)
       return out
     }
+    const on = field ? ` (field ${field})` : ''
     if (isUuid(v)) {
       const role = ids.nivaro_roles?.get(String(v).trim())
       if (role) return role
       refusals.push({
         code: 'REF_UNMAPPED',
         ...where,
-        reason: `Permission rule ${path} holds an id (${String(v).slice(0, 8)}…) the Hub cannot map to the target — use $CURRENT_USER / $CURRENT_ROLE, or set it on the target`
+        reason: `Permission rule ${path}${on} holds an id (${String(v).slice(0, 8)}…) the Hub cannot map to the target — use $CURRENT_USER / $CURRENT_ROLE, or set it on the target`
       })
       return v
     }
-    if (RAW_ID_KEY.test(key) && isLiteralId(v))
+    const integer =
+      (typeof v === 'number' && Number.isInteger(v)) ||
+      (typeof v === 'string' && /^\s*\d+\s*$/.test(v))
+    if (integer && !(field && SAFE_NUMBER_KEYS.has(field.toLowerCase())))
       refusals.push({
         code: 'REF_UNMAPPED',
         ...where,
-        reason: `Permission rule ${path} holds a literal id the Hub cannot map to the target`
+        reason: `Permission rule ${path}${on} holds a literal id (${String(v).slice(0, 20)}) the Hub cannot map to the target — use $CURRENT_USER / $CURRENT_ROLE, or set the rule on the target`
       })
     return v
   }
@@ -580,7 +590,7 @@ export function mapToTarget(input: MapInput): MapOutput {
         if (typeof v !== 'string' || !v.trim()) continue
         const parsed = safeParse(v)
         if (parsed && typeof parsed === 'object')
-          data[col] = JSON.stringify(mapPolicy(parsed, where, col, col))
+          data[col] = JSON.stringify(mapPolicy(parsed, where, col, null))
       }
       for (const col of spec.jsonRefs ?? []) {
         const v = data[col]
