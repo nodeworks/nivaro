@@ -83,7 +83,9 @@ export const APPS_HUB: HubDef = {
     { path: 'releases', label: 'Releases' },
     { path: 'issues', label: 'Issues' },
     { path: 'storage', label: 'Storage' },
-    { path: 'secrets', label: 'Secrets' }
+    { path: 'secrets', label: 'Secrets' },
+    { path: 'fleet', label: 'Fleet' },
+    { path: 'audit', label: 'Audit' }
   ]
 }
 

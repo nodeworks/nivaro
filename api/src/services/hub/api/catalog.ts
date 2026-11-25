@@ -876,7 +876,78 @@ export const HUB_ROUTES: HubRoute[] = [
     'machine',
     'read',
     'An app asks for the person’s other apps (environment hub token)'
-  )
+  ),
+  // Fleet, uptime + SLO, drift alerts, audit timeline (routes/hub-fleet.ts).
+  r('GET', '/fleet', 'Fleet', 'owner', 'read', 'Every app × environment the caller may see', {
+    notes: 'Built from the Hub’s own tables (never calls an app); kept 30 s per viewer.'
+  }),
+  r(
+    'GET',
+    '/fleet/environments/:envId/uptime',
+    'Fleet',
+    'owner',
+    'read',
+    'One environment’s hourly uptime, recent failed probes and monthly reports',
+    { query: { days: n('1–30, default 7') } }
+  ),
+  r('GET', '/fleet/alerts', 'Fleet', 'owner', 'read', 'Version drift alerts', {
+    query: { state: s('open (default) or all', { enum: ['open', 'all'] }) }
+  }),
+  r('GET', '/fleet/reports', 'Fleet', 'owner', 'read', 'Stored monthly uptime reports'),
+  r(
+    'GET',
+    '/fleet/settings',
+    'Fleet',
+    'admin',
+    'read',
+    'Drift rules, uptime targets, report switch'
+  ),
+  r(
+    'PUT',
+    '/fleet/settings',
+    'Fleet',
+    'admin',
+    'write',
+    'Save the drift rules and uptime targets',
+    {
+      body: {
+        rules: list(
+          'object',
+          'Rules (id, kind behind_newest|pair_apart|stale_deploy, enabled, n, env_keys, from_key, to_key)'
+        ),
+        slo: o('{default_target, targets: {<environment id>: percent}}'),
+        report_enabled: b('Send the monthly uptime report')
+      }
+    }
+  ),
+  r('GET', '/fleet/check', 'Fleet', 'admin', 'read', 'The last Check now: running, done or failed'),
+  r(
+    'POST',
+    '/fleet/check',
+    'Fleet',
+    'admin',
+    'write',
+    'Probe every environment and evaluate the drift rules now',
+    {
+      accepted: true,
+      notes: '409 CHECK_RUNNING while a check runs; poll GET /fleet/check.'
+    }
+  ),
+  r('GET', '/audit', 'Audit', 'admin', 'read', 'The Hub audit timeline', {
+    query: {
+      app: n('App id'),
+      environment: n('Environment id'),
+      user: s('Person (user id)'),
+      action: s(
+        'A kind (promote, rollback, move, stack, keys, upgrade, creation, signin, database, config) or an exact action id'
+      ),
+      from: s('Date or ISO time'),
+      to: s('Date (that whole day) or ISO time'),
+      offset: n(),
+      limit: n('1–200, default 50')
+    }
+  }),
+  r('GET', '/audit.csv', 'Audit', 'admin', 'read', 'The Hub audit timeline as CSV (same filters)')
 ]
 
 /** Fastify's template for a request (`/api/hub/apps/:id`) → its catalog entry, else null. */
