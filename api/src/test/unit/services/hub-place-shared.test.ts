@@ -59,6 +59,7 @@ const { defaultSharedLock, sharedLock } = await import('../../../services/hub/pr
 const { getPlacement } = await import('../../../services/hub/drivers.js')
 const { memoryPromoteLock, PromotionError } = await import('../../../services/hub/promote-lock.js')
 const { sealSecret } = await import('../../../services/hub/secrets.js')
+const Dbs = await import('../../../services/hub/db/databases.js')
 const { openSecret } = await import('../../../services/hub/secrets.js')
 const { environmentForLinkToken } = await import('../../../services/hub/link-token.js')
 
@@ -1339,6 +1340,109 @@ describe('final fix wave FW-1 — a Docker shared deployment (I-3, M-6)', () => 
     expect((await db('nivaro_hub_environments').where({ id: published }).first()).status).toBe(
       'active'
     )
+  })
+
+  it('hub gap sqlite: a SQLite record only on a small deployment at 0.3.215+; its check names the app', async () => {
+    const lite = async () => (await Dbs.createSqliteDatabase(null)).id
+    const app = await newApp()
+    // Registered (the first deployment): the Hub cannot tell how many processes run it.
+    const onRegistered = await newEnv(app.id)
+    const reg = await refusal(
+      place(
+        onRegistered,
+        { shared_id: sharedId, database_id: await lite() },
+        { client: fakeClient().factory, startJobRun: fakeRun().start }
+      )
+    )
+    expect(reg).toMatchObject({ code: 'SQLITE_ONE_PROCESS', statusCode: 409 })
+    // Docker at 0.3.210: too old to serve SQLite apps.
+    const localDisk = vi.fn(async () => ({
+      edge: 'traefik',
+      uploads_network: false,
+      volume_driver: 'local',
+      swarm: { nodes: 1 }
+    }))
+    const tooOld = await newEnv(app.id)
+    const old = await refusal(
+      place(
+        tooOld,
+        { shared_id: dockerShared, database_id: await lite() },
+        { client: dockerClient(), startJobRun: fakeRun().start, agentHealth: localDisk }
+      )
+    )
+    expect(old).toMatchObject({ code: 'SQLITE_SHARED_VERSION', statusCode: 409 })
+    await db('nivaro_hub_shared_deployments')
+      .where({ id: dockerShared })
+      .update({ version_pin: '0.3.215', settings: JSON.stringify({ size: 'medium' }) })
+    try {
+      const medium = await newEnv(app.id)
+      const split = await refusal(
+        place(
+          medium,
+          { shared_id: dockerShared, database_id: await lite() },
+          { client: dockerClient(), startJobRun: fakeRun().start, agentHealth: localDisk }
+        )
+      )
+      expect(split).toMatchObject({ code: 'SQLITE_ONE_PROCESS', statusCode: 409 })
+      await db('nivaro_hub_shared_deployments')
+        .where({ id: dockerShared })
+        .update({ settings: JSON.stringify({ size: 'small' }) })
+      // M5: an NFS uploads volume, or an agent that does not say, is refused.
+      for (const h of [{ edge: 'traefik', uploads_network: true }, { edge: 'traefik' }]) {
+        const nfsEnv = await newEnv(app.id)
+        const nfs = await refusal(
+          place(
+            nfsEnv,
+            { shared_id: dockerShared, database_id: await lite() },
+            {
+              client: dockerClient(),
+              startJobRun: fakeRun().start,
+              agentHealth: vi.fn(async () => h)
+            }
+          )
+        )
+        expect(nfs).toMatchObject({ code: 'SQLITE_ON_NFS', statusCode: 409 })
+      }
+      const small = await newEnv(app.id)
+      const tenant = Store.tenantIdFor(app, { id: small })
+      TENANTS = [tenant]
+      const fake = fakeClient()
+      fake.client.refresh.mockImplementation(async () => {
+        const shared = await Store.getShared(dockerShared)
+        if (!shared) return
+        const { etag } = await tenantsBody(shared)
+        await Sightings.recordSighting(dockerShared, {
+          instance: 'web-1',
+          version: '0.3.215',
+          etag,
+          at: new Date(t).toISOString()
+        })
+      })
+      const record = await lite()
+      await place(
+        small,
+        { shared_id: dockerShared, database_id: record },
+        { client: fake.factory, startJobRun: fakeRun().start, agentHealth: localDisk }
+      )
+      await Place.awaitPlacement(small)
+      expect(fake.client.dbCheck).toHaveBeenCalledWith({
+        client: 'sqlite',
+        connection: 'app.sqlite',
+        create: true,
+        tenant
+      })
+      // H2: once placed, the record names an existing file; the deployment never makes it again.
+      expect(
+        Boolean((await db('nivaro_hub_databases').where({ id: record }).first()).adopted)
+      ).toBe(true)
+      const env = await db('nivaro_hub_environments').where({ id: small }).first()
+      expect(env.status).toBe('active')
+      expect(env.db_ref).toBe(`hub-db:${record}`)
+    } finally {
+      await db('nivaro_hub_shared_deployments')
+        .where({ id: dockerShared })
+        .update({ version_pin: '0.3.210', settings: JSON.stringify({}) })
+    }
   })
 
   it('M-6: a Docker shared deployment never deployed → 409 NOT_DEPLOYED at once', async () => {

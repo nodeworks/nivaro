@@ -202,6 +202,13 @@ export async function attachEnvDatabase(
         'DATABASE_NOT_READY',
         `The database is ${record.status}: only a ready database can be attached.`
       )
+    // 0.3.215: a SQLite record is a file a shared deployment keeps for the app it places; it is
+    // never attached to an environment that already runs somewhere.
+    if (record.engine === 'sqlite')
+      throw new EnvDatabaseError(
+        'SQLITE_PLACE_ONLY',
+        'A SQLite record is used by placing a new environment on a shared deployment of size small, not attached to one that already runs.'
+      )
     const app = await appIdentity(env, deps)
     const appEngine = app.split('|', 1)[0]
     if (family(appEngine) !== family(record.engine))

@@ -66,6 +66,8 @@ export interface AgentHealth {
   swarm: { manager: boolean; node_id: string; nodes?: number | null }
   /** P4-33: HUB_AGENT_VOLUME_DRIVER (`local` = one copy per node). Absent on an older agent. */
   volume_driver?: string
+  /** Hub gap sqlite (M5): the uploads volume is an NFS export. Absent on an older agent. */
+  uploads_network?: boolean
   images: string[]
   host_suffixes: string[]
   edge: 'traefik' | 'publish'

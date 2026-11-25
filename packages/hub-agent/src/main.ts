@@ -14,7 +14,7 @@ import { makeHandlers } from './handlers.js'
 import { createLog, type Log } from './log.js'
 import { createServer, type HandlerResult, type Handlers } from './server.js'
 import { createStorageProbe, type StorageProbe, storageOptionsFrom } from './storage.js'
-import { nfsExport } from './volumes.js'
+import { isNfsOpts, nfsExport } from './volumes.js'
 
 export const AGENT_VERSION = '0.2.3'
 export const MIN_ENGINE_API = [1, 44] as const
@@ -113,6 +113,9 @@ export function baseHandlers(
         redis_pin_label: cfg.redisPinLabel
           ? `${cfg.redisPinLabel.key}=${cfg.redisPinLabel.value}`
           : null,
+        // 0.2.3 (hub gap sqlite, M5): the uploads volume is on network storage (NFS options).
+        // SQLite's write-ahead log and file locks are not safe there; the Hub refuses SQLite apps.
+        uploads_network: isNfsOpts(cfg.volumeOpts),
         images: cfg.images,
         host_suffixes: cfg.hostSuffixes,
         edge: cfg.edge,

@@ -3,8 +3,7 @@ import { db } from '../../../db/index.js'
 import type { HubTenantsResponse, HubTenantWire } from '../../tenancy/hub-contract.js'
 import { appFromRow, environmentFromRow, type HubApp } from '../apps.js'
 import { limitsByEnv } from '../capacity/store.js'
-import { connectionUrl } from '../db/connection.js'
-import { openDatabaseConnection } from '../db/databases.js'
+import { openDatabaseWire } from '../db/databases.js'
 import { environmentNames } from '../docker/render-spec.js'
 import type { HubPlacementRow } from '../drivers.js'
 import type { HubEnvironmentRow } from '../promote-types.js'
@@ -233,10 +232,27 @@ export async function tenantsBody(
     : new Map()
   const tenants: HubTenantWire[] = []
   const listed: SharedTenantRow[] = []
+  // Hub gap sqlite: a dedicated SQLite app moving in has no record on its environment until
+  // release; its move names the SQLite record it made (steps.sqlite_record).
+  const moveRecords = new Map<number, number>()
+  const unnamed = rows.filter((r) => databaseId(refs.get(r.env.id)) === null).map((r) => r.env.id)
+  if (unnamed.length)
+    for (const m of (await db(MOVES)
+      .whereIn('environment_id', unnamed)
+      .whereIn('status', OPEN_MOVE)
+      .select('environment_id', 'steps')) as Array<{ environment_id: number; steps: unknown }>) {
+      try {
+        const st = JSON.parse(String(m.steps ?? '{}')) as { sqlite_record?: unknown }
+        if (typeof st.sqlite_record === 'number')
+          moveRecords.set(Number(m.environment_id), st.sqlite_record)
+      } catch {
+        // a damaged step list names nothing
+      }
+    }
   for (const row of rows) {
     const { env, app, placement, wireStatus } = row
     const id = tenantIdFor(app, env)
-    const recordId = databaseId(refs.get(env.id))
+    const recordId = databaseId(refs.get(env.id)) ?? moveRecords.get(env.id) ?? null
     if (recordId === null) {
       warnOnce(
         log,
@@ -248,10 +264,13 @@ export async function tenantsBody(
     }
     let client: HubTenantWire['db']['client']
     let connection: string
+    let create = false
     try {
-      const c = await openDatabaseConnection(recordId)
-      client = c.engine
-      connection = connectionUrl(c)
+      // A server record's URL, or a SQLite record's file name (0.3.215).
+      const c = await openDatabaseWire(recordId)
+      client = c.client
+      connection = c.connection
+      create = c.create === true
     } catch (err) {
       // The code only (NOT_READY, NO_CONNECTION, …): driver text could carry the connection.
       const raw = (err as { code?: unknown } | null)?.code
@@ -271,7 +290,13 @@ export async function tenantsBody(
       name: app.name,
       status: wireStatus,
       hostnames: environmentNames(env),
-      db: { client, connection }
+      db: {
+        client,
+        connection,
+        ...(create ? { create: true } : {}),
+        // L7: the record a SQLite file belongs to (its `.created` marker must name it).
+        ...(client === 'sqlite' ? { record: recordId } : {})
+      }
     }
     const pool = poolMaxOf(placement)
     if (pool !== null) wire.pool_max = pool

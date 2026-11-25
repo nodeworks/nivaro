@@ -1,4 +1,5 @@
 import { createHmac } from 'node:crypto'
+import { sqliteAppsRoot, sqliteTenantPath, sqliteTenantProblem } from '../../db/sqlite-tenant.js'
 import { cleanTenantHost } from '../../db/tenant-context.js'
 import { APP_KEY_RE } from '../app-key-fingerprint.js'
 import { type AppLimits, parseAppLimits } from '../capacity/limits.js'
@@ -23,7 +24,16 @@ export interface HubTenantWire {
   name: string
   status: 'active' | 'maintenance' | 'suspended' | 'provisioning'
   hostnames: string[]
-  db: { client: 'mssql' | 'pg' | 'mysql2' | 'mariadb'; connection: string }
+  /** `sqlite` (0.3.215): `connection` is the database FILE NAME only (`app.sqlite`); the
+   *  deployment keeps it in the app's own folder (db/sqlite-tenant.ts). */
+  db: {
+    client: 'mssql' | 'pg' | 'mysql2' | 'mariadb' | 'sqlite'
+    connection: string
+    /** SQLite only: the Hub placed this database as NEW; the deployment may make the file once. */
+    create?: boolean
+    /** SQLite only (review 4, L7): the Hub database record the file belongs to. */
+    record?: number
+  }
   pool_max?: number
   /** Phase 6, optional: the environment's origin (`https://host[:port]`). A value that is not an
    *  http(s) origin is ignored (the tenant stays). */
@@ -110,6 +120,26 @@ function wireConnection(t: unknown): string | null {
   return typeof db?.connection === 'string' && db.connection.trim() ? db.connection.trim() : null
 }
 
+/** What two tenants must not share: the connection, or for SQLite the app's own file (its id). */
+function wireDatabaseClaim(t: unknown, id: string): string | null {
+  const c = wireConnection(t)
+  if (!c) return null
+  const db = isObj(t) && isObj(t.db) ? t.db : null
+  return typeof db?.client === 'string' && /sqlite/i.test(db.client) ? `sqlite:${id}/${c}` : c
+}
+
+/** Where this deployment keeps SQLite apps and whether it may serve them (parseHubTenants). */
+export interface SqliteHere {
+  root: string
+  /** Why this process serves no SQLite app (sqliteTenantProblem), or null. */
+  problem: string | null
+}
+
+const sqliteHereNow = (): SqliteHere => ({
+  root: sqliteAppsRoot(),
+  problem: sqliteTenantProblem()
+})
+
 /** A listed origin as `scheme://host[:port]`, or undefined (absent, not http(s), unparsable).
  *  Ruling M19: a bad origin drops the field only, never the tenant. */
 function wireOrigin(raw: unknown): string | undefined {
@@ -133,7 +163,7 @@ function wireHubLink(raw: unknown): string | undefined {
 }
 
 /** One wire tenant as a TenantRecord, or why this deployment cannot serve it. */
-function toRecord(t: unknown): TenantRecord | string {
+function toRecord(t: unknown, sqliteHere: () => SqliteHere): TenantRecord | string {
   if (!isObj(t)) return 'not an object'
   if (typeof t.id !== 'string' || !ID_RE.test(t.id)) return 'invalid id'
   if (typeof t.app_key !== 'string' || !ID_RE.test(t.app_key)) return 'invalid app key'
@@ -141,9 +171,19 @@ function toRecord(t: unknown): TenantRecord | string {
   if (typeof t.status !== 'string' || !STATUSES.has(t.status)) return 'unknown status'
   const db = isObj(t.db) ? t.db : null
   const client = typeof db?.client === 'string' ? db.client : ''
-  if (/sqlite/i.test(client)) return 'SQLite cannot be served on a shared deployment'
-  if (!CLIENTS.has(client)) return 'unknown database client'
-  const connection = wireConnection(t)
+  let connection = wireConnection(t)
+  if (client === 'sqlite') {
+    // 0.3.215: a SQLite app's file, in its own folder of this deployment's uploads volume. The
+    // Hub names the file only; a name that could leave the folder drops the tenant.
+    const here = sqliteHere()
+    if (here.problem) return here.problem
+    if (!connection) return 'no connection'
+    try {
+      connection = sqliteTenantPath(t.id, connection, here.root)
+    } catch {
+      return 'bad SQLite file name'
+    }
+  } else if (!CLIENTS.has(client)) return 'unknown database client'
   if (!connection) return 'no connection'
   let poolMax: number | null = null
   if (t.pool_max !== undefined && t.pool_max !== null) {
@@ -171,6 +211,10 @@ function toRecord(t: unknown): TenantRecord | string {
     status: t.status,
     dbClient: client,
     dbConnection: connection,
+    ...(client === 'sqlite' && db?.create === true ? { dbCreate: true } : {}),
+    ...(client === 'sqlite' && sqliteRecordOf(db) !== null
+      ? { dbRecord: sqliteRecordOf(db) as number }
+      : {}),
     poolMax,
     hostnames: hosts,
     ...(Object.keys(ports).length ? { originPorts: ports } : {}),
@@ -179,6 +223,12 @@ function toRecord(t: unknown): TenantRecord | string {
     ...(hubLink ? { hubLink } : {}),
     ...(limits ? { limits } : {})
   }
+}
+
+/** A SQLite tenant's record id (review 4, L7), or null. */
+function sqliteRecordOf(db: unknown): number | null {
+  const r = (db as { record?: unknown } | null)?.record
+  return typeof r === 'number' && Number.isSafeInteger(r) && r > 0 ? r : null
 }
 
 /**
@@ -192,7 +242,8 @@ function toRecord(t: unknown): TenantRecord | string {
  */
 export function parseHubTenants(
   body: unknown,
-  deployment: string
+  deployment: string,
+  sqliteHere: () => SqliteHere = sqliteHereNow
 ): { tenants: TenantRecord[]; dropped: { id: string; why: string }[] } | null {
   if (!isObj(body) || !isObj(body.data)) return null
   const { data } = body
@@ -209,7 +260,7 @@ export function parseHubTenants(
   wire.forEach((t, i) => {
     idClaims.set(ids[i], (idClaims.get(ids[i]) ?? 0) + 1)
     for (const h of wireHosts(t)) hostClaims.set(h, [...(hostClaims.get(h) ?? []), ids[i]])
-    const c = wireConnection(t)
+    const c = wireDatabaseClaim(t, ids[i])
     if (c) dbClaims.set(c, [...(dbClaims.get(c) ?? []), ids[i]])
   })
   const others = (claims: string[] | undefined, self: string) =>
@@ -217,12 +268,13 @@ export function parseHubTenants(
 
   /** The record, or why this tenant is dropped (its own fault, or a shared claim). */
   const dropReason = (t: unknown, id: string): TenantRecord | string => {
-    const r = toRecord(t)
+    const r = toRecord(t, sqliteHere)
     if (typeof r === 'string') return r
     if ((idClaims.get(id) ?? 0) > 1) return 'duplicate id'
     const clash = r.hostnames.find((h) => (hostClaims.get(h) ?? []).length > 1)
     if (clash) return `hostname ${clash} also claimed by ${others(hostClaims.get(clash), id)}`
-    const sharers = dbClaims.get(r.dbConnection) ?? []
+    const claim = wireDatabaseClaim(t, id)
+    const sharers = (claim ? dbClaims.get(claim) : null) ?? []
     // Names the other tenants, never the connection string.
     if (sharers.length > 1) return `shares its database with ${others(sharers, id)}`
     return r

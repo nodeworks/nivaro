@@ -7,8 +7,7 @@ import { logActivity } from '../../activity.js'
 import { getApp } from '../../io-holder.js'
 import { type JobRunHandle, startJobRun } from '../../job-runs.js'
 import { environmentFromRow, readApp } from '../apps.js'
-import { connectionUrl } from '../db/connection.js'
-import { attachDatabase, getDatabase, openDatabaseConnection } from '../db/databases.js'
+import { attachDatabase, getDatabase, isSqliteRecord, openDatabaseWire } from '../db/databases.js'
 import { HubDbError } from '../db/servers.js'
 import { agentHealth as realAgentHealth } from '../docker/agent-client.js'
 import { environmentNames } from '../docker/render-spec.js'
@@ -46,6 +45,22 @@ import { APP_KEY_UNKNOWN_MESSAGE } from './app-key-check.js'
 import { DeploymentLinkError, deploymentClient } from './deployment-client.js'
 import { runsSharedHubSignin, SHARED_HUB_SIGNIN_SINCE } from './hub-signin-floor.js'
 import { replicasHolding } from './sightings.js'
+import {
+  SQLITE_PLACE_HINT,
+  type SqliteStorageFacts,
+  sqliteSharedRefusal,
+  sqliteStorageRefusal,
+  uploadsOnNetwork
+} from './sqlite-apps.js'
+
+/** The parts of an agent's health a SQLite placement reads. */
+type AgentHealthLike = {
+  uploads_network?: boolean
+  volume_nfs?: boolean
+  volume_driver?: string
+  swarm?: { nodes?: number | null }
+}
+
 import { patternCovers } from './stack-render.js'
 import { getShared, openAppKey, type SharedDeployment, setAppKey, tenantIdFor } from './store.js'
 import { tenantsBody } from './tenants.js'
@@ -62,8 +77,9 @@ import { tenantsBody } from './tenants.js'
  * the deployment (NOT_FOUND, SHARED_RETIRED, SHARED_BUSY while it is upgraded or another action
  * holds it), the app (SIGNIN_VIA_HUB, EXTENSION_NOT_ALLOWED), the database record (NOT_FOUND,
  * DATABASE_NOT_READY, DATABASE_IN_USE), the pool (POOL_TOO_SMALL under 2, POOL_BUDGET when the
- * deployment's Σ pool_max would pass its budget). Preflight M5: a Hub database record is never
- * SQLite (HubDbEngine), so there is no SQLITE_NOT_SHARED here.
+ * deployment's Σ pool_max would pass its budget). A SQLite record (0.3.215, the app's file kept by
+ * the deployment) only on a Docker deployment of size small that serves SQLite apps
+ * (SQLITE_ONE_PROCESS / SQLITE_SHARED_VERSION, sqlite-apps.ts), judged again under the lock.
  *
  * Locks: the environment's lock (holder `creation`, ruling X-6b) for the whole run, renewed as a
  * creation leg renews it; the deployment's shared lock (holder `place`, R10) only while the
@@ -487,7 +503,8 @@ async function assertLinkSilent(
 async function assertDatabaseUnserved(
   databaseId: number,
   shared: SharedDeployment,
-  deps: PlaceSharedDeps
+  deps: PlaceSharedDeps,
+  tenant: string
 ): Promise<void> {
   const unknown = (why: string) =>
     refuse(
@@ -496,10 +513,9 @@ async function assertDatabaseUnserved(
     )
   let answer: Awaited<ReturnType<ReturnType<typeof deploymentClient>['dbCheck']>>
   try {
-    const c = await openDatabaseConnection(databaseId)
     answer = await (deps.client ?? deploymentClient)(shared).dbCheck({
-      client: c.engine,
-      connection: connectionUrl(c)
+      ...(await openDatabaseWire(databaseId)),
+      tenant
     })
   } catch (err) {
     throw unknown(
@@ -527,6 +543,7 @@ async function assertDatabaseEmpty(
   databaseId: number,
   shared: SharedDeployment,
   deps: PlaceSharedDeps,
+  tenant: string,
   sharedRetry = false
 ): Promise<void> {
   const unknownKey = (why: string) =>
@@ -536,10 +553,9 @@ async function assertDatabaseEmpty(
     )
   let answer: Awaited<ReturnType<ReturnType<typeof deploymentClient>['dbCheck']>>
   try {
-    const c = await openDatabaseConnection(databaseId)
     answer = await (deps.client ?? deploymentClient)(shared).dbCheck({
-      client: c.engine,
-      connection: connectionUrl(c)
+      ...(await openDatabaseWire(databaseId)),
+      tenant
     })
   } catch (err) {
     const code =
@@ -797,6 +813,36 @@ async function checkAndWrite(
     )
   if (database.environment && database.environment.id !== envId)
     throw refuse('DATABASE_IN_USE', 'Another environment already uses this database.')
+  // 0.3.215: a SQLite app's file is served only by one process (sqlite-apps.ts).
+  const sqlite = isSqliteRecord(database)
+  const sqliteNo = sqlite ? sqliteSharedRefusal(shared0) : null
+  if (sqliteNo) throw refuse(sqliteNo.code, `${sqliteNo.message} ${SQLITE_PLACE_HINT}`)
+  // M5 / H2: the file's volume is local to one node, never NFS (the agent says; unknown refuses).
+  if (sqlite) {
+    let facts: SqliteStorageFacts | null = null
+    try {
+      const driver = shared0.driver_id != null ? await getDriver(shared0.driver_id) : null
+      if (driver?.kind === 'docker') {
+        const h = (await (deps.agentHealth ?? realAgentHealth)(
+          driver
+        )) as unknown as AgentHealthLike
+        facts = {
+          uploads_network: uploadsOnNetwork(h),
+          volume_driver: h.volume_driver ?? null,
+          multi_node:
+            typeof h.swarm?.nodes === 'number' && (h.volume_driver ?? 'local') === 'local'
+              ? h.swarm.nodes
+              : null,
+          nodes_unknown: typeof h.swarm?.nodes !== 'number'
+        }
+      }
+    } catch {
+      facts = null
+    }
+    const storageNo = sqliteStorageRefusal(shared0.key, facts)
+    if (storageNo) throw refuse(storageNo.code, storageNo.message)
+  }
+  const tenant = tenantIdFor(app, { id: envId })
 
   // Ruling P6-11 (I-2): the same running-stack check as an env PATCH of placement_id — a stack
   // that came up (even if its deploy then failed) is never orphaned by a placement swap.
@@ -824,8 +870,8 @@ async function checkAndWrite(
   // install, or cannot be looked at, needs the app's own key entered first. I-1: with a known
   // key, a database that already holds an install is an app that has served → USE_MOVE.
   const known = await openAppKey(envId)
-  if (!known) await assertDatabaseEmpty(input.database_id, shared0, deps, sameRetry)
-  else if (!sameRetry) await assertDatabaseUnserved(input.database_id, shared0, deps)
+  if (!known) await assertDatabaseEmpty(input.database_id, shared0, deps, tenant, sameRetry)
+  else if (!sameRetry) await assertDatabaseUnserved(input.database_id, shared0, deps, tenant)
 
   const sharedLock = deps.sharedLock ?? defaultSharedLock()
   const held = await sharedLock.take(input.shared_id, 'place')
@@ -839,6 +885,9 @@ async function checkAndWrite(
     if (!shared) throw refuse('NOT_FOUND', 'No such shared deployment.', 404)
     const again = sharedStateRefusal(shared)
     if (again) throw again
+    // A size change or an upgrade takes this same lock: judged again here.
+    const sqliteAgain = sqlite ? sqliteSharedRefusal(shared) : null
+    if (sqliteAgain) throw refuse(sqliteAgain.code, `${sqliteAgain.message} ${SQLITE_PLACE_HINT}`)
     // Re-review FW1-M-3: an extension PATCH drops one only under this same lock — judged again
     // here so a drop between the checks and this write never strips this app's extension.
     const gone = app.extensions.filter((x) => !shared.extensions.includes(x))
@@ -1116,6 +1165,11 @@ async function runPlacement(
         error: null,
         finished_at: new Date()
       })
+      // Hub gap sqlite (H2): a NEW SQLite file was made once at this placement; from now on the
+      // record names an existing database, and the deployment never makes it again.
+      await trx('nivaro_hub_databases')
+        .where({ id: placed.input.database_id, engine: 'sqlite' })
+        .update({ adopted: true, updated_at: new Date() })
     })
     await logActivity({
       action: 'hub-place-shared-done',

@@ -28,6 +28,7 @@ import {
   ENGINE_PORT,
   type HubDatabaseFull,
   type HubDatabaseRow,
+  SERVER_ENGINES,
   SSL_LABEL,
   type SslMode,
   STATUS_LABEL,
@@ -342,6 +343,8 @@ export function DbConnectionForm({
   clearPassword?: number
 }) {
   const qc = useQueryClient()
+  // Only a DBA-made (manual) row takes a connection, never a SQLite record (0.3.215).
+  const engine = row.engine as DbEngine
   const [draft, setDraft] = useState<ConnDraft>({
     host: row.host,
     port: row.port != null ? String(row.port) : '',
@@ -363,7 +366,7 @@ export function DbConnectionForm({
   const save = useMutation({
     mutationFn: () =>
       api
-        .put<{ check: DbCheck }>(`/hub/databases/${row.id}/connection`, connBody(row.engine, draft))
+        .put<{ check: DbCheck }>(`/hub/databases/${row.id}/connection`, connBody(engine, draft))
         .then((r) => r.data.check)
         .catch(describeFailure('Could not save the connection', { owner: lockPlace })),
     onSuccess: (check) => {
@@ -386,7 +389,7 @@ export function DbConnectionForm({
       <div className='space-y-4 p-4'>
         <ConnectionFields
           idp={`hub-dbconn-${row.id}`}
-          engine={row.engine}
+          engine={engine}
           draft={draft}
           set={set}
           tried={tried}
@@ -472,7 +475,7 @@ export function AdoptDatabaseForm({
             <SimpleSelect
               value={engine}
               onChange={(v) => setEngine(v as DbEngine)}
-              options={(Object.keys(ENGINE_LABEL) as DbEngine[]).map((e) => ({
+              options={SERVER_ENGINES.map((e) => ({
                 value: e,
                 label: ENGINE_LABEL[e]
               }))}
@@ -577,11 +580,18 @@ function DatabaseBody({
     onError: (err) => dbToast(err, 'Could not delete the database')
   })
 
+  const sqlite = d.engine === 'sqlite'
+  // A SQLite app's file sits in its own folder of its home's uploads volume (app-db/<app id>/).
+  const liteFolder = d.environment
+    ? `app-db/${d.environment.app_key.slice(0, 48)}-e${d.environment.id}/`
+    : 'app-db/<app id>/'
   const meta: Array<[string, string]> = [
     ['Engine', ENGINE_LABEL[d.engine]],
-    ['Server', d.server_name ?? 'None (adopted)'],
-    ['Address', `${d.host}${d.port ? `:${d.port}` : ''}`],
-    ['Login', d.login_name ?? '—'],
+    ['Server', sqlite ? 'None (a file)' : (d.server_name ?? 'None (adopted)')],
+    sqlite
+      ? ['File', `${liteFolder}${d.database_name}`]
+      : ['Address', `${d.host}${d.port ? `:${d.port}` : ''}`],
+    sqlite ? ['Kept by', "The app's home (uploads volume)"] : ['Login', d.login_name ?? '—'],
     ['Used by', environmentWords(d)],
     ['Made by', d.adopted ? 'Adopted' : d.created_by_hub ? 'The Hub' : 'A DBA']
   ]
@@ -630,9 +640,13 @@ function DatabaseBody({
               <CheckResult check={last} checkedAt={checked ? checked.at : d.checked_at} />
             ) : (
               <p className='m-0 text-[12px] text-slate-500 dark:text-muted-foreground'>
-                {d.status === 'requested'
-                  ? 'Not checked yet — waiting for the DBA.'
-                  : 'Not checked yet.'}
+                {sqlite
+                  ? d.environment
+                    ? 'The Hub has no connection to a SQLite file. Its home checks it when the app is placed or moved there (a move copies the file and checks it read-only).'
+                    : 'The Hub has no connection to a SQLite file. Place a new environment with it on a shared deployment of size small: the deployment makes the file and checks it then.'
+                  : d.status === 'requested'
+                    ? 'Not checked yet — waiting for the DBA.'
+                    : 'Not checked yet.'}
               </p>
             )}
           </div>
@@ -646,14 +660,18 @@ function DatabaseBody({
           <DbConnectionForm row={d} onChecked={setChecked} clearPassword={checks} />
         )}
 
-        <EnvironmentAttach d={d} onChanged={refresh} />
+        {!sqlite && <EnvironmentAttach d={d} onChanged={refresh} />}
 
         <SectionCard
           title='Remove from the Hub'
           description={
             d.environment
-              ? `Used by ${environmentWords(d)}. Detach it first (above), then remove it here.`
-              : 'Detaching forgets the record; the database stays on the server.'
+              ? sqlite
+                ? `Used by ${environmentWords(d)}: it stays while that environment uses it.`
+                : `Used by ${environmentWords(d)}. Detach it first (above), then remove it here.`
+              : sqlite
+                ? 'Detaching forgets the record; a file a deployment already made stays in its volume.'
+                : 'Detaching forgets the record; the database stays on the server.'
           }
         >
           {d.environment ? null : (

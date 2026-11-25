@@ -684,6 +684,16 @@ export function buildCreationPlan(input: CreateAppInput, facts: CreationFacts): 
           label
         )
       seenDbId.add(id)
+      // 0.3.215: a SQLite record is a file a shared deployment keeps for an app it places; a new
+      // app's own stack keeps its SQLite file in its stack settings instead.
+      if (row.engine === 'sqlite') {
+        block(
+          'SQLITE_PLACE_ONLY',
+          `${row.database_name} is a SQLite record: it is used by placing an environment on a shared deployment of size small, not by a new app's own stack.`,
+          label
+        )
+        return { ...none, mode: 'existing' }
+      }
       if (row.status !== 'ready')
         block(
           'DATABASE_NOT_READY',

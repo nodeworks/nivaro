@@ -65,7 +65,9 @@ export const HUB_DB_CODES = [
   'HOST_NOT_SERVER',
   'TOO_MANY_TRIES',
   'DB_ERROR',
-  'HUB_ERROR'
+  'HUB_ERROR',
+  // A SQLite app's database (0.3.215): a file its shared deployment keeps
+  'SQLITE_FILE'
 ] as const
 
 export type HubDbCode = (typeof HUB_DB_CODES)[number]

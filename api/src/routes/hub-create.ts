@@ -36,6 +36,7 @@ import { connectionFromInput, type HubDbEngine } from '../services/hub/db/connec
 import {
   adoptDatabase,
   checkDatabase,
+  createSqliteDatabase,
   deleteDatabase,
   getDatabase,
   type HubDatabase,
@@ -435,6 +436,16 @@ async function ownerTryRefused(
   return false
 }
 
+/** A SQLite record has no connection the Hub uses (services/hub/db/databases.ts). */
+function sqliteRefused(reply: FastifyReply) {
+  return dbFail(
+    reply,
+    409,
+    'SQLITE_FILE',
+    'A SQLite database is a file its shared deployment keeps: the Hub has no connection to it. The deployment checks it when the app is placed.'
+  )
+}
+
 function databaseRoutes(app: FastifyInstance) {
   app.get('/databases', { preHandler: requireAdmin }, async () => {
     return { data: await listDatabases() }
@@ -474,9 +485,27 @@ function databaseRoutes(app: FastifyInstance) {
     })
   )
 
+  // 0.3.215: a SQLite app's database record (the file its shared deployment keeps). Ready at
+  // once; used by placing a new environment on a Docker shared deployment of size small.
+  app.post('/databases/sqlite', { preHandler: requireAdmin }, async (req, reply) =>
+    guarded(reply, async () => {
+      const made = await createSqliteDatabase(userId(req) || null)
+      await logActivity({
+        action: 'hub-db-sqlite',
+        user: userId(req),
+        collection: DATABASES,
+        item: String(made.id),
+        comment: `Recorded a SQLite database (${made.database_name})`,
+        req
+      })
+      return reply.code(201).send({ data: { ...made, checklist: null } })
+    })
+  )
+
   app.put('/databases/:id/connection', { preHandler: requireAuth }, async (req, reply) => {
     const found = await readableDatabase(req)
     if (!found) return notFound(reply)
+    if (found.engine === 'sqlite') return sqliteRefused(reply)
     let input = connectionInput(body(req), found.engine)
     if (!req.isAdmin) {
       const parsed = connectionFromInput(input)
@@ -509,6 +538,7 @@ function databaseRoutes(app: FastifyInstance) {
   app.post('/databases/:id/check', { preHandler: requireAuth }, async (req, reply) => {
     const found = await readableDatabase(req)
     if (!found) return notFound(reply)
+    if (found.engine === 'sqlite') return sqliteRefused(reply)
     // An owner's Check now connects where the row points: only to its own server.
     if (
       await ownerTryRefused(app, req, reply, found, {

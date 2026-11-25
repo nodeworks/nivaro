@@ -569,6 +569,7 @@ export const CREATE_COPY: Record<string, Copy> = {
   },
   DATABASE_IN_USE: { title: 'That database is already in use', detail: true },
   DATABASE_NOT_READY: { title: 'That database is not ready yet', detail: true },
+  SQLITE_PLACE_ONLY: { title: 'A SQLite record is not for a new app of its own', detail: true },
   HOSTNAME_REQUIRED: {
     title: 'Enter the hostname',
     hint: 'This target makes names by hand: enter the name you will request.'

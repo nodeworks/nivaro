@@ -11,6 +11,10 @@ import { type DbCheck, DescribedError, dbError, type HubDatabaseRow } from './db
 /** Refusals of the attach / detach routes, in plain words (database codes fall back to db-api). */
 export const ENV_DB_COPY: Record<string, { title: string; hint?: string }> = {
   BAD_DATABASE: { title: 'Pick a database first' },
+  SQLITE_PLACE_ONLY: {
+    title: 'A SQLite record is not attached to a running environment',
+    hint: 'Use it by placing a new environment on a shared deployment of size small.'
+  },
   ALREADY_ATTACHED: {
     title: 'That environment already has a database record',
     hint: 'Detach its record first (open that database here), then attach this one.'

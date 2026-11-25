@@ -40,6 +40,7 @@ import {
   deploymentClient
 } from '../shared/deployment-client.js'
 import { sharedPoolUsed } from '../shared/place.js'
+import { sqliteRecordIds, uploadsOnNetwork } from '../shared/sqlite-apps.js'
 import { sharedStackSettings } from '../shared/stack-render.js'
 import { getShared, openAppKey, type SharedDeployment, tenantIdFor } from '../shared/store.js'
 import { tenantsOf } from '../shared/tenants.js'
@@ -209,7 +210,12 @@ async function stackFacts(
   ctx: Ctx,
   driverId: number,
   stack: string
-): Promise<{ redis: string | null; storage: string | null; keyFp: string | null }> {
+): Promise<{
+  redis: string | null
+  storage: string | null
+  keyFp: string | null
+  size?: string | null
+}> {
   let row: Awaited<ReturnType<typeof readStackSettings>>
   try {
     row = await readStackSettings(ctx.envId)
@@ -233,7 +239,8 @@ async function stackFacts(
   return {
     redis,
     storage: row.settings.STORAGE_PROVIDER?.trim() || 'local',
-    keyFp: key && APP_KEY_RE.test(key) ? keyFingerprint(key.toLowerCase()) : null
+    keyFp: key && APP_KEY_RE.test(key) ? keyFingerprint(key.toLowerCase()) : null,
+    size: row.size ?? null
   }
 }
 
@@ -667,6 +674,10 @@ async function sharedTargetFacts(
     // An agent the Hub cannot read is unknown, not "one node" (N-2, P6-15).
     if (h) out.multi_node = multiNode(h)
     else out.multi_node_unread = true
+    // Hub gap sqlite (M5): what the agent says of its uploads volume (null = not said).
+    out.uploads_network = h ? uploadsOnNetwork(h) : null
+    out.volume_driver = h?.volume_driver ?? null
+    if (h && typeof h.swarm?.nodes !== 'number') out.nodes_unknown = true
   }
 
   let rows: Awaited<ReturnType<typeof tenantsOf>> = []
@@ -728,9 +739,14 @@ async function sharedTargetFacts(
         : []
     )
     const lim = ctx.deps.identity ?? {}
+    // Hub gap sqlite: a SQLite app's file is its own (app-db/<id>/), never a server another app
+    // could share: it is not compared.
+    const lite = await sqliteRecordIds(
+      [...refs.values()].filter((id): id is number => id != null)
+    ).catch(() => new Set<number>())
     const candidates = others.filter((r) => {
       const id = refs.get(r.env.id)
-      return id != null && id !== recordId
+      return id != null && id !== recordId && !lite.has(id)
     })
     const asks = candidates.slice(0, lim.max ?? IDENTITY_CHECK_MAX)
     /** Per ask: a match label, 'no' (compared, differs), or undefined (not compared). */
@@ -906,11 +922,15 @@ async function dedicatedTargetFacts(
     driver?.kind === 'docker' ? await healthOf(ctx, driver) : { h: null, code: 'NO_DRIVER' }
   if (!h) return { ...out, reachable: false, error: code ?? 'AGENT_UNREACHABLE' }
   out.multi_node = multiNode(h)
+  out.uploads_network = uploadsOnNetwork(h)
+  out.volume_driver = h.volume_driver ?? null
+  if (typeof h.swarm?.nodes !== 'number') out.nodes_unknown = true
   if (side.stack) {
     const f = await stackFacts(ctx, side.driverId, side.stack)
     out.redis = f.redis
     out.storage_provider = f.storage
     out.stack_key_fp = f.keyFp
+    if (f.size !== undefined) out.stack_size = f.size
   }
   return out
 }
@@ -1112,7 +1132,13 @@ export async function gatherMovePlanInput(
     target,
     names,
     names_taken: names.filter((n) => others.has(n)),
-    database: record ? { id: record.id, ready: record.status === 'ready' } : null,
+    database: record
+      ? {
+          id: record.id,
+          ready: record.status === 'ready',
+          ...(record.engine === 'sqlite' ? { sqlite: true } : {})
+        }
+      : null,
     app_key: {
       known: !!appKey,
       fp: appKey ? keyFingerprint(appKey) : null,

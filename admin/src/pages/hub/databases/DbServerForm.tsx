@@ -22,6 +22,7 @@ import {
   MODE_LABEL,
   type ProvisionMode,
   probeWords,
+  SERVER_ENGINES,
   type ServerProbe,
   SSL_LABEL,
   type SslMode
@@ -198,7 +199,7 @@ export function DbServerForm({
             <SimpleSelect
               value={engine}
               onChange={(v) => setEngine(v as DbEngine)}
-              options={(Object.keys(ENGINE_LABEL) as DbEngine[]).map((e) => ({
+              options={SERVER_ENGINES.map((e) => ({
                 value: e,
                 label: ENGINE_LABEL[e]
               }))}

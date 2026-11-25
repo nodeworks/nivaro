@@ -1,10 +1,12 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { isAbsolute } from 'node:path'
 import knex, { type Knex } from 'knex'
 import { tenantSource } from '../services/deployment-mode.js'
 import { normaliseSslMode } from './connection-url.js'
 import { mssqlUrlConnection } from './mssql-url-connection.js'
 import { mysqlFlavorConfig } from './mysql-flavor.js'
 import { MYSQL_SESSION_SQL, mysqlTypeCast } from './mysql-session.js'
+import { openSqliteTenantKnex, releaseSqliteTenantFile } from './sqlite-tenant.js'
 import { sqlSslOption } from './tls-options.js'
 
 // Per-request tenant store — populated by the tenant middleware in cloud mode.
@@ -50,16 +52,35 @@ function runPoolHook(fn: (pool: Knex) => void, pool: Knex): void {
   }
 }
 
+/** What a SQLite tenant's pool is opened with: may it make its file, and the record it is (L7). */
+export function tenantPoolOpts(t: { dbCreate?: boolean; dbRecord?: number }): {
+  create: boolean
+  record: number | null
+} {
+  return { create: t.dbCreate === true, record: t.dbRecord ?? null }
+}
+
 /** `max` (a tenant's own pool size) defaults to TENANT_POOL_MAX; it applies when the pool is
  *  first created for the connection string. */
 export function getOrCreateTenantPool(
   connectionString: string,
   client = 'pg',
-  max: number = TENANT_POOL_MAX
+  max: number = TENANT_POOL_MAX,
+  opts: { create?: boolean; record?: number | null } = {}
 ): Knex {
-  // SQLite is one file owned by one process (db/sqlite.ts): never a tenant's database.
-  if (/sqlite/i.test(client))
-    throw new Error('A cloud tenant cannot use SQLite: provision SQL Server, Postgres or MySQL.')
+  // SQLite is one file owned by one process (db/sqlite.ts): never a Nivaro Cloud tenant's
+  // database. A Hub shared deployment of one process serves SQLite apps, each its own file in its
+  // own folder (db/sqlite-tenant.ts; the path is checked again when the pool opens).
+  if (/sqlite/i.test(client)) {
+    if (tenantSource() !== 'hub')
+      throw new Error('A cloud tenant cannot use SQLite: provision SQL Server, Postgres or MySQL.')
+    let pool = pools.get(connectionString)
+    if (!pool) {
+      pool = openSqliteTenantKnex(connectionString, max, undefined, opts)
+      pools.set(connectionString, pool)
+    }
+    return pool
+  }
   // A MariaDB tenant ('mariadb') runs on knex's mysql2 client, marked (db/mysql-flavor.ts).
   const mariadb = client === 'mariadb'
   if (mariadb) client = 'mysql2'
@@ -110,6 +131,22 @@ export function peekTenantPool(connectionString: string): Knex | undefined {
 }
 
 /**
+ * Close the pool of one connection string and forget it (a SQLite app's database file a move
+ * replaces: db/sqlite-tenant.ts). The next use opens a new pool. A SQLite file's lock is released
+ * once the pool is destroyed.
+ */
+export async function closeTenantPool(connectionString: string): Promise<void> {
+  const pool = pools.get(connectionString)
+  pools.delete(connectionString)
+  try {
+    if (pool) await pool.destroy()
+  } finally {
+    if (isAbsolute(connectionString) && /\.(sqlite|sqlite3|db)$/.test(connectionString))
+      releaseSqliteTenantFile(connectionString)
+  }
+}
+
+/**
  * mysql2 reads `?ssl=<json>` from a URI but silently ignores libpq/MySQL-style `sslmode=` /
  * `ssl-mode=` — a tenant URL carrying one connected in plain text. Those two parameters are
  * taken out and turned into mysql2's `ssl` option (db/tls-options.ts). A URL without them is
@@ -148,11 +185,24 @@ export function runWithTenantDb(
 /** Run `fn` as a tenant (its pool, slug, id and optional verified origin) outside a request:
  *  crons, flows and the Hub's per-app jobs. The context ends when `fn` settles. */
 export function withTenant<T>(
-  t: { id: string; slug: string; dbClient: string; dbConnection: string; poolMax: number | null },
+  t: {
+    id: string
+    slug: string
+    dbClient: string
+    dbConnection: string
+    poolMax: number | null
+    dbCreate?: boolean
+    dbRecord?: number
+  },
   fn: () => Promise<T>,
   origin?: string
 ): Promise<T> {
-  const db = getOrCreateTenantPool(t.dbConnection, t.dbClient, t.poolMax ?? undefined)
+  const db = getOrCreateTenantPool(
+    t.dbConnection,
+    t.dbClient,
+    t.poolMax ?? undefined,
+    tenantPoolOpts(t)
+  )
   return store.run({ db, slug: t.slug, tenantId: t.id, ...(origin ? { origin } : {}) }, fn)
 }
 

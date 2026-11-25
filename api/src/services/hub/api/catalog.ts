@@ -412,6 +412,7 @@ export const HUB_ROUTES: HubRoute[] = [
       connection: o('Login', { secret: true })
     }
   }),
+  r('POST', '/databases/sqlite', 'Databases', 'admin', 'write', 'Record a new SQLite database'),
   r('PUT', '/databases/:id/connection', 'Databases', 'owner', 'write', 'Store the database login', {
     body: { login: s(), password: secret('Password') },
     sensitive: true

@@ -75,6 +75,8 @@ export interface MoveSteps {
     status: string
     hub_managed: boolean
     version_pin: string | null
+    /** Hub gap sqlite: the db_ref before release named the move's SQLite record. */
+    db_ref?: string | null
   }
   /** R2-M-2: env.extension_pins before deploy_target replaced them (raw column text or null). */
   prev_extension_pins?: string | null
@@ -102,6 +104,11 @@ export interface MoveSteps {
   addresses?: MoveAddresses
   /** sha256 of the source's database identity, read at `check` (R2; never the identity). */
   source_db?: string | null
+  /** Hub gap sqlite: the database copy db_copy made and checked (checksum, size, ledger). */
+  db_copy?: { sha256: string; bytes: number; migrations: number; at: string }
+  /** Hub gap sqlite: the SQLite database record the move made for a dedicated source; the
+   *  environment names it at release, a rollback before that removes it. */
+  sqlite_record?: number
   /**
    * R5-I-1 (P6-30): the source was put in maintenance for the deploy of a target whose boot
    * maintenance is not proven (GITLAB_BOOT_WINDOW) before `maintenance_on` ran: `on` until the
@@ -372,13 +379,16 @@ export async function restoreEnvRow(
   envId: number,
   prev: NonNullable<MoveSteps['release_prev']>
 ): Promise<void> {
-  await db(ENVS).where({ id: envId }).update({
-    placement_id: prev.placement_id,
-    status: prev.status,
-    hub_managed: prev.hub_managed,
-    version_pin: prev.version_pin,
-    updated_at: new Date()
-  })
+  await db(ENVS)
+    .where({ id: envId })
+    .update({
+      placement_id: prev.placement_id,
+      status: prev.status,
+      hub_managed: prev.hub_managed,
+      version_pin: prev.version_pin,
+      ...(prev.db_ref !== undefined ? { db_ref: prev.db_ref } : {}),
+      updated_at: new Date()
+    })
 }
 
 /** R2-M-2: puts the environment's extension pins back as they were before the target deploy. */

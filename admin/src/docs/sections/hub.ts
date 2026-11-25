@@ -1305,7 +1305,7 @@ export const hubDatabasesDocs: DocSection = {
     { type: 'h2', id: 'hub-databases-servers', text: 'Servers and modes' },
     {
       type: 'p',
-      text: "A server is an engine, a host, a port and a mode. Engines: SQL Server (`mssql`), Postgres (`pg`), MySQL (`mysql2`) and MariaDB (`mariadb`). SQLite is a file on the app's own host, so the Hub cannot make one: a SQLite server is refused with `ENGINE_NOT_PROVISIONABLE`."
+      text: "A server is an engine, a host, a port and a mode. Engines: SQL Server (`mssql`), Postgres (`pg`), MySQL (`mysql2`) and MariaDB (`mariadb`). SQLite is a file, so there is no SQLite server: a SQLite server is refused with `ENGINE_NOT_PROVISIONABLE`. A SQLite app on a shared deployment gets a SQLite database record instead (New SQLite database, `POST /api/hub/databases/sqlite`, 0.3.215): ready at once, no host, login or connection, `database_name` = the file name. The Hub never connects to it (Check now and Connection answer `SQLITE_FILE`); it is used only by placing a new environment on a Docker shared deployment of size small, never attached to a running environment (`SQLITE_PLACE_ONLY`) or given to a new app's own stack."
     },
     {
       type: 'table',

@@ -12,6 +12,9 @@ import { hubError } from '../hub-api'
  */
 
 export type DbEngine = 'mssql' | 'pg' | 'mysql2' | 'mariadb'
+/** A database record's engine: a server engine, or `sqlite` (0.3.215) — a SQLite app's file its
+ *  shared deployment keeps (no server, no connection; database_name = the file name). */
+export type RecordEngine = DbEngine | 'sqlite'
 export type ProvisionMode = 'automatic' | 'manual'
 export type SslMode = 'disable' | 'require' | 'verify-ca' | 'verify-full'
 export type DatabaseStatus = 'requested' | 'creating' | 'ready' | 'failed' | 'dropping'
@@ -57,7 +60,7 @@ export interface HubDatabaseRow {
   id: number
   server_id: number | null
   server_name: string | null
-  engine: DbEngine
+  engine: RecordEngine
   host: string
   port: number | null
   database_name: string
@@ -136,6 +139,11 @@ export const fetchDatabases = () =>
 export const fetchDatabase = (id: number) =>
   api.get<{ data: HubDatabaseFull }>(`/hub/databases/${id}`).then((r) => r.data.data)
 
+/** 0.3.215: record a SQLite app's database (ready at once; used by placing an environment on a
+ *  shared deployment of size small). */
+export const createSqliteDatabase = () =>
+  api.post<{ data: HubDatabaseFull }>('/hub/databases/sqlite').then((r) => r.data.data)
+
 export function useDbServers(enabled = true) {
   return useQuery({ queryKey: dbKeys.servers(), queryFn: fetchDbServers, enabled })
 }
@@ -152,12 +160,16 @@ export function useDatabase(id: number | null) {
 
 // ─── Words ────────────────────────────────────────────────────────────────────
 
-export const ENGINE_LABEL: Record<DbEngine, string> = {
+export const ENGINE_LABEL: Record<RecordEngine, string> = {
   mssql: 'SQL Server',
   pg: 'PostgreSQL',
   mysql2: 'MySQL',
-  mariadb: 'MariaDB'
+  mariadb: 'MariaDB',
+  sqlite: 'SQLite'
 }
+
+/** The engines a database server (and an adopted database) can have: never `sqlite`. */
+export const SERVER_ENGINES: readonly DbEngine[] = ['mssql', 'pg', 'mysql2', 'mariadb']
 
 export const ENGINE_PORT: Record<DbEngine, number> = {
   mssql: 1433,
@@ -408,6 +420,10 @@ export const DB_CODE_COPY: Record<string, { title: string; hint?: string }> = {
   HUB_ERROR: copy(
     'The Hub could not do that',
     'Try again. If it keeps happening, ask whoever runs the Hub.'
+  ),
+  SQLITE_FILE: copy(
+    'A SQLite database is a file on its shared deployment',
+    'The Hub has no connection to it; the deployment checks it when the app is placed.'
   )
 }
 
