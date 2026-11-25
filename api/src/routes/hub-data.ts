@@ -135,6 +135,34 @@ export function hubDataRoutes(app: FastifyInstance) {
       const v = last.get(`${id}|${kind}`)?.at
       return v ? new Date(String(v)).toISOString() : null
     }
+    // The newest drill of each environment whatever it ended as (a failed drill must read as
+    // failed), and the run open on it now, if any.
+    const newestIds = (
+      (await db(RUNS)
+        .where({ kind: 'restore_drill' })
+        .groupBy('environment_id')
+        .select('environment_id')
+        .max('id as id')) as Record<string, unknown>[]
+    ).map((r) => Number(r.id))
+    const drills = new Map(
+      (newestIds.length
+        ? ((await db(RUNS)
+            .whereIn('id', newestIds)
+            .select('environment_id', 'status', 'started_at')) as Record<string, unknown>[])
+        : []
+      ).map((r) => [
+        Number(r.environment_id),
+        { status: String(r.status), at: r.started_at ? new Date(String(r.started_at)).toISOString() : null }
+      ])
+    )
+    const open = new Map(
+      ((await db(RUNS)
+        .whereIn('status', ['running', 'waiting', 'interrupted'])
+        .select('environment_id', 'kind', 'status')) as Record<string, unknown>[]).map((r) => [
+        Number(r.environment_id),
+        { kind: String(r.kind), status: String(r.status) }
+      ])
+    )
     const on = (v: unknown) => v === true || Number(v) === 1
     return {
       data: rows.map((r) => {
@@ -156,7 +184,9 @@ export function hubDataRoutes(app: FastifyInstance) {
             backup_seen: at(r.id, 'backup_seen'),
             files_backup: at(r.id, 'files_backup'),
             restore_drill: at(r.id, 'restore_drill')
-          }
+          },
+          drill: drills.get(Number(r.id)) ?? null,
+          open: open.get(Number(r.id)) ?? null
         }
       })
     }
