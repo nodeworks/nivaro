@@ -179,7 +179,7 @@ export const deploymentModesDocs: DocSection = {
         ],
         [
           '`HUB_TOKEN`',
-          'The token an app answers the Hub link with (`GET /api/hub-link/status`). It is not honoured on a shared deployment (rule T4): the hub link routes are not mounted there, and the log says so ("HUB_TOKEN is set on a deployment that serves many apps").'
+          'The token an app answers the Hub link with (`GET /api/hub-link/status`). It is not honoured on a shared deployment (rule T4): the hub link routes are not mounted there, and the log says so ("HUB_TOKEN is set on a deployment that serves many apps"). From 0.3.215 each app’s own hub token (sign-in reports and the app switcher) and Hub sign-in client come from the Hub’s tenant list instead; `HUB_TOKEN` and `HUB_CLIENT_*` on the deployment are never used for an app.'
         ]
       ]
     },
