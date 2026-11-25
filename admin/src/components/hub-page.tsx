@@ -3,6 +3,7 @@ import { type ComponentType, type ReactNode, Suspense, useCallback, useEffect } 
 import { Navigate, useLocation, useNavigate } from 'react-router'
 import { ScrollTabStrip } from '@/components/tab-strip'
 import { Skeleton } from '@/components/ui/skeleton'
+import { useHubProductFlag } from '@/lib/hub-product'
 import { type HubDef, hubForPath, hubTabPath } from '@/lib/hubs'
 import { cn } from '@/lib/utils'
 
@@ -22,6 +23,7 @@ export function HubPage({
 }) {
   const navigate = useNavigate()
   const { pathname } = useLocation()
+  const hubLook = useHubProductFlag()
   const match = hubForPath(pathname)
   const tabDomId = useCallback(
     (path: string) => `hub-tab${hub.base.replace(/\//g, '-')}-${path || 'index'}`,
@@ -42,6 +44,11 @@ export function HubPage({
   if (!match || match.hub !== hub) return <Navigate to={hub.base} replace />
 
   const active = match.tab
+  // The standalone Hub look names the tab (its top bar already names the hub); a tab without
+  // its own hint, and every regular install, keeps the hub's title and hint.
+  const tabHeader = hubLook && !!active.hint
+  const title = tabHeader ? active.label : hub.title
+  const hint = tabHeader ? active.hint : hub.hint
   const panelId = `hub-panel${hub.base.replace(/\//g, '-')}`
   const Body = components[active.path]
   const Icon = hub.icon
@@ -56,10 +63,15 @@ export function HubPage({
           </div>
           <div className='min-w-0'>
             <h1 className='m-0 truncate text-base font-semibold text-slate-900 dark:text-foreground'>
-              {hub.title}
+              {title}
             </h1>
-            <p className='m-0 truncate text-[12px] text-slate-500 dark:text-muted-foreground'>
-              {hub.hint}
+            <p
+              className={cn(
+                'm-0 truncate text-[12px] text-slate-500 dark:text-muted-foreground',
+                tabHeader && 'max-sm:hidden'
+              )}
+            >
+              {hint}
             </p>
           </div>
         </div>

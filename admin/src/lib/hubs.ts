@@ -48,6 +48,12 @@ export type HubTabDef = {
   label: string
   /** The screen's old standalone path: redirected here, and its permission key. */
   legacy?: string
+  /**
+   * What this tab is for, in one line. Only the standalone Hub look reads it: there the page
+   * header names the tab (the top bar already names the hub); everywhere else the hub's own
+   * title and hint stay.
+   */
+  hint?: string
 }
 
 export type HubDef = {
@@ -71,22 +77,78 @@ export const APPS_HUB: HubDef = {
   icon: AppWindow,
   feature: 'hub',
   tabs: [
-    { path: '', label: 'Apps' },
-    { path: 'shared', label: 'Shared deployments' },
-    { path: 'capacity', label: 'Capacity' },
-    { path: 'drivers', label: 'Drivers' },
-    { path: 'targets', label: 'Targets' },
-    { path: 'templates', label: 'Templates' },
-    { path: 'databases', label: 'Databases' },
-    { path: 'data', label: 'Backups & data' },
-    { path: 'signin', label: 'Sign-in' },
-    { path: 'releases', label: 'Releases' },
-    { path: 'issues', label: 'Issues' },
-    { path: 'storage', label: 'Storage' },
-    { path: 'secrets', label: 'Secrets' },
-    { path: 'fleet', label: 'Fleet' },
-    { path: 'audit', label: 'Audit' },
-    { path: 'people', label: 'People' }
+    {
+      path: '',
+      label: 'Apps',
+      hint: 'The apps this Hub looks after: their environments, whether they are up and what was deployed.'
+    },
+    {
+      path: 'shared',
+      label: 'Shared deployments',
+      hint: 'One process serving many apps, each with its own database, files and key.'
+    },
+    {
+      path: 'capacity',
+      label: 'Capacity',
+      hint: 'How busy each shared deployment and app is, and which apps should move.'
+    },
+    {
+      path: 'drivers',
+      label: 'Drivers',
+      hint: 'Where apps are deployed: a GitLab project or a Docker host the Hub agent runs.'
+    },
+    {
+      path: 'targets',
+      label: 'Targets',
+      hint: 'Where a new app goes: the GitLab group, template and hostnames it gets.'
+    },
+    {
+      path: 'templates',
+      label: 'Templates',
+      hint: 'App Blueprints a new app can start from.'
+    },
+    {
+      path: 'databases',
+      label: 'Databases',
+      hint: 'The servers new apps get a database on, and every database the Hub knows.'
+    },
+    {
+      path: 'data',
+      label: 'Backups & data',
+      hint: 'Backups, restore drills and refreshes, per environment.'
+    },
+    {
+      path: 'signin',
+      label: 'Sign-in',
+      hint: 'The Hub as the sign-in for its apps: keys, clients and who signed in where.'
+    },
+    {
+      path: 'releases',
+      label: 'Releases',
+      hint: 'Release trains, scheduled promotions, freezes and automatic rollbacks.'
+    },
+    {
+      path: 'issues',
+      label: 'Issues',
+      hint: 'Crashes and server errors from every app, grouped by signature.'
+    },
+    {
+      path: 'storage',
+      label: 'Storage',
+      hint: 'How full each driver and environment is.'
+    },
+    {
+      path: 'secrets',
+      label: 'Secrets',
+      hint: 'Tokens and keys the Hub holds, and when each is due to rotate.'
+    },
+    {
+      path: 'fleet',
+      label: 'Fleet',
+      hint: 'Every environment at a glance: version, health and uptime.'
+    },
+    { path: 'audit', label: 'Audit', hint: 'Every change made through the Hub, by whom and when.' },
+    { path: 'people', label: 'People', hint: 'Who can reach which app, and offboarding.' }
   ]
 }
 
