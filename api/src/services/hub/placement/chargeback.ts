@@ -1,6 +1,7 @@
+import type { Knex } from 'knex'
 import { db } from '../../../db/index.js'
 import { csvRow } from '../../../lib/csv-cell.js'
-import { samplesSince } from '../capacity/store.js'
+import { SAMPLES } from '../capacity/store.js'
 import { plainText, REGION_DRIVERS, REGIONS } from './regions.js'
 
 /**
@@ -96,6 +97,9 @@ export function chargebackRefusal(raw: unknown): string | null {
   const o =
     raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null
   if (!o) return 'Send the settings as an object.'
+  // Review L5: a misspelled key is refused, never silently ignored.
+  const unknown = Object.keys(o).filter((k) => !['currency', 'rates', 'window_days'].includes(k))
+  if (unknown.length) return `Unknown setting: ${unknown[0].slice(0, 40)}.`
   if (
     o.currency !== undefined &&
     (typeof o.currency !== 'string' || !/^[A-Za-z]{3}$/.test(o.currency.trim()))
@@ -242,8 +246,6 @@ export function costOf(u: EnvUsage, rates: ChargebackRates, factorPercent = 100)
   }
 }
 
-const mean = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null)
-
 interface SampleLike {
   scope: 'shared' | 'environment'
   shared_deployment_id: number | null
@@ -257,10 +259,109 @@ interface SampleLike {
 }
 
 /**
- * Per environment: its usage over the samples (pure). `sharedOf` = the shared deployment an
- * environment runs on now (its memory is split from the deployment's), `appsOn` = how many of
- * this Hub's environments each deployment serves (the even split when nobody answered).
+ * What the report needs of the samples in the window, per environment and per shared
+ * deployment: means and sums, which the database computes (review L4: never every sample of the
+ * window in the process), and each environment's newest stored-files total.
  */
+export interface UsageAggregates {
+  env: Map<number, { cpu: number | null; memory: number | null; busy: number }>
+  shared: Map<number, { memory: number | null; busy: number }>
+  storage: Map<number, number>
+}
+
+const meanOf = (xs: number[] | undefined) =>
+  xs?.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null
+
+/** The aggregates of a list of samples (pure: the rule the SQL follows, and the tests). */
+export function aggregatesOf(samples: readonly SampleLike[]): UsageAggregates {
+  const acc = (m: Map<number, number[]>, k: number, v: number | null) => {
+    if (v == null) return
+    const l = m.get(k) ?? []
+    l.push(v)
+    m.set(k, l)
+  }
+  const cpu = new Map<number, number[]>()
+  const mem = new Map<number, number[]>()
+  const busy = new Map<number, number>()
+  const sMem = new Map<number, number[]>()
+  const sBusy = new Map<number, number>()
+  const storage = new Map<number, { at: number; v: number }>()
+  const envIds = new Set<number>()
+  const sharedIds = new Set<number>()
+  for (const s of samples) {
+    if (s.error && s.error !== 'PARTIAL') continue
+    if (s.scope === 'shared' && s.shared_deployment_id != null) {
+      const k = s.shared_deployment_id
+      sharedIds.add(k)
+      acc(sMem, k, s.memory_mb)
+      sBusy.set(k, (sBusy.get(k) ?? 0) + (s.busy_ms_per_min ?? 0))
+    } else if (s.scope === 'environment' && s.environment_id != null) {
+      const k = s.environment_id
+      envIds.add(k)
+      acc(cpu, k, s.cpu_pct)
+      acc(mem, k, s.memory_mb)
+      busy.set(k, (busy.get(k) ?? 0) + (s.busy_ms_per_min ?? 0))
+      const at = s.sampled_at.getTime()
+      if (s.storage_bytes != null && (storage.get(k)?.at ?? -1) <= at)
+        storage.set(k, { at, v: s.storage_bytes })
+    }
+  }
+  return {
+    env: new Map(
+      [...envIds].map((k) => [
+        k,
+        { cpu: meanOf(cpu.get(k)), memory: meanOf(mem.get(k)), busy: busy.get(k) ?? 0 }
+      ])
+    ),
+    shared: new Map(
+      [...sharedIds].map((k) => [k, { memory: meanOf(sMem.get(k)), busy: sBusy.get(k) ?? 0 }])
+    ),
+    storage: new Map([...storage].map(([k, x]) => [k, x.v]))
+  }
+}
+
+/**
+ * Per environment: its usage from the aggregates (pure). `sharedOf` = the shared deployment an
+ * environment runs on now (its memory is split from the deployment's by answering time),
+ * `appsOn` = how many of this Hub's environments each deployment serves (the even split when
+ * nobody answered).
+ */
+export function usageFromAggregates(
+  agg: UsageAggregates,
+  envIds: readonly number[],
+  sharedOf: ReadonlyMap<number, number>,
+  appsOn: ReadonlyMap<number, number>,
+  dbBytes: ReadonlyMap<number, number>
+): Map<number, EnvUsage> {
+  const out = new Map<number, EnvUsage>()
+  for (const id of envIds) {
+    const own = agg.env.get(id)
+    const sid = sharedOf.get(id)
+    let memoryGb: number | null = null
+    if (sid === undefined) memoryGb = own?.memory == null ? null : own.memory / 1024
+    else {
+      const dep = agg.shared.get(sid)
+      if (dep?.memory != null) {
+        const share =
+          dep.busy > 0
+            ? Math.min(1, (own?.busy ?? 0) / dep.busy)
+            : 1 / Math.max(1, appsOn.get(sid) ?? 1)
+        memoryGb = (dep.memory * share) / 1024
+      }
+    }
+    const st = agg.storage.get(id)
+    const dbb = dbBytes.get(id)
+    out.set(id, {
+      cpu_cores: own?.cpu == null ? null : own.cpu / 100,
+      memory_gb: memoryGb,
+      storage_gb: st == null ? null : st / GB,
+      database_gb: dbb == null ? null : dbb / GB
+    })
+  }
+  return out
+}
+
+/** usageFromAggregates over a list of samples (tests). */
 export function usageFromSamples(
   samples: readonly SampleLike[],
   envIds: readonly number[],
@@ -268,52 +369,66 @@ export function usageFromSamples(
   appsOn: ReadonlyMap<number, number>,
   dbBytes: ReadonlyMap<number, number>
 ): Map<number, EnvUsage> {
-  const byEnv = new Map<number, SampleLike[]>()
-  const byShared = new Map<number, SampleLike[]>()
-  for (const s of samples) {
-    if (s.error && s.error !== 'PARTIAL') continue
-    if (s.scope === 'shared' && s.shared_deployment_id != null) {
-      const l = byShared.get(s.shared_deployment_id) ?? []
-      l.push(s)
-      byShared.set(s.shared_deployment_id, l)
-    } else if (s.scope === 'environment' && s.environment_id != null) {
-      const l = byEnv.get(s.environment_id) ?? []
-      l.push(s)
-      byEnv.set(s.environment_id, l)
-    }
-  }
-  const out = new Map<number, EnvUsage>()
-  for (const id of envIds) {
-    const own = byEnv.get(id) ?? []
-    const sid = sharedOf.get(id)
-    const cpus = own.map((s) => s.cpu_pct).filter((v): v is number => v != null)
-    const latestStorage = [...own].reverse().find((s) => s.storage_bytes != null)?.storage_bytes
-    let memoryGb: number | null = null
-    if (sid === undefined) {
-      const m = mean(own.map((s) => s.memory_mb).filter((v): v is number => v != null))
-      memoryGb = m == null ? null : m / 1024
-    } else {
-      const dep = byShared.get(sid) ?? []
-      const depMem = mean(dep.map((s) => s.memory_mb).filter((v): v is number => v != null))
-      if (depMem != null) {
-        const appBusy = own.reduce((n, s) => n + (s.busy_ms_per_min ?? 0), 0)
-        // The deployment's answering time over the same rounds this app was sampled in.
-        const depBusy = dep.reduce((n, s) => n + (s.busy_ms_per_min ?? 0), 0)
-        const share =
-          depBusy > 0 ? Math.min(1, appBusy / depBusy) : 1 / Math.max(1, appsOn.get(sid) ?? 1)
-        memoryGb = (depMem * share) / 1024
-      }
-    }
-    const c = mean(cpus)
-    const dbb = dbBytes.get(id)
-    out.set(id, {
-      cpu_cores: c == null ? null : c / 100,
-      memory_gb: memoryGb,
-      storage_gb: latestStorage == null ? null : latestStorage / GB,
-      database_gb: dbb == null ? null : dbb / GB
+  return usageFromAggregates(aggregatesOf(samples), envIds, sharedOf, appsOn, dbBytes)
+}
+
+const numOrNull = (v: unknown): number | null =>
+  v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v)
+
+/** The aggregates, computed by the database over the window (review L4). */
+export async function usageAggregates(since: Date): Promise<UsageAggregates> {
+  const ok = (q: Knex.QueryBuilder) =>
+    q
+      .where('sampled_at', '>=', since)
+      .where((w) => w.whereNull('error').orWhere('error', 'PARTIAL'))
+  const envRows = (await ok(db(SAMPLES).where('scope', 'environment'))
+    .whereNotNull('environment_id')
+    .groupBy('environment_id')
+    .select('environment_id')
+    .avg({ cpu: 'cpu_pct' })
+    .avg({ memory: 'memory_mb' })
+    .sum({ busy: 'busy_ms_per_min' })) as Array<Record<string, unknown>>
+  const sharedRows = (await ok(db(SAMPLES).where('scope', 'shared'))
+    .whereNotNull('shared_deployment_id')
+    .groupBy('shared_deployment_id')
+    .select('shared_deployment_id')
+    .avg({ memory: 'memory_mb' })
+    .sum({ busy: 'busy_ms_per_min' })) as Array<Record<string, unknown>>
+  const newest = ok(db(SAMPLES).where('scope', 'environment'))
+    .whereNotNull('storage_bytes')
+    .whereNotNull('environment_id')
+    .groupBy('environment_id')
+    .select('environment_id')
+    .max({ at: 'sampled_at' })
+    .as('n')
+  const storeRows = (await db(`${SAMPLES} as s`)
+    .join(newest, function () {
+      this.on('s.environment_id', '=', 'n.environment_id').andOn('s.sampled_at', '=', 'n.at')
     })
+    .where('s.scope', 'environment')
+    .whereNotNull('s.storage_bytes')
+    .select('s.environment_id', 's.storage_bytes')) as Array<Record<string, unknown>>
+  const storage = new Map<number, number>()
+  for (const r of storeRows) {
+    const k = Number(r.environment_id)
+    const v = numOrNull(r.storage_bytes)
+    if (v != null) storage.set(k, Math.max(storage.get(k) ?? 0, v))
   }
-  return out
+  return {
+    env: new Map(
+      envRows.map((r) => [
+        Number(r.environment_id),
+        { cpu: numOrNull(r.cpu), memory: numOrNull(r.memory), busy: numOrNull(r.busy) ?? 0 }
+      ])
+    ),
+    shared: new Map(
+      sharedRows.map((r) => [
+        Number(r.shared_deployment_id),
+        { memory: numOrNull(r.memory), busy: numOrNull(r.busy) ?? 0 }
+      ])
+    ),
+    storage
+  }
 }
 
 // ─── the report ──────────────────────────────────────────────────────────────
@@ -368,15 +483,17 @@ function iso(v: unknown): string | null {
   return Number.isFinite(d.getTime()) ? d.toISOString() : null
 }
 
-/** The newest successful Hub backup's size per environment. */
+/** The newest successful Hub backup's size per environment (one row per environment, L4). */
 async function databaseBytes(envIds: number[]): Promise<Map<number, number>> {
   const out = new Map<number, number>()
   if (!envIds.length || !(await db.schema.hasTable(DATA_RUNS))) return out
-  const rows = (await db(DATA_RUNS)
-    .where({ kind: 'db_backup', status: 'done' })
-    .whereNotNull('artifact')
-    .orderBy('id', 'asc')
-    .select('environment_id', 'artifact')) as Array<{ environment_id: number; artifact: unknown }>
+  const done = () =>
+    db(DATA_RUNS).where({ kind: 'db_backup', status: 'done' }).whereNotNull('artifact')
+  const newest = done().groupBy('environment_id').max({ id: 'id' })
+  const rows = (await done().whereIn('id', newest).select('environment_id', 'artifact')) as Array<{
+    environment_id: number
+    artifact: unknown
+  }>
   for (const r of rows) {
     let a: unknown = r.artifact
     if (typeof a === 'string') {
@@ -433,7 +550,7 @@ export async function chargebackReport(now = new Date()): Promise<ChargebackRepo
   const regionOfDriver = new Map(members.map((m) => [Number(m.driver_id), Number(m.region_id)]))
   const owners = (await db(`${OWNERS} as o`)
     .leftJoin(`${USERS} as u`, 'u.id', 'o.user_id')
-    .select('o.app_id', 'o.user_id', 'u.first_name', 'u.last_name', 'u.email')) as Array<
+    .select('o.app_id', 'o.user_id', 'u.first_name', 'u.last_name')) as Array<
     Record<string, unknown>
   >
   const centers = await costCenters()
@@ -448,8 +565,13 @@ export async function chargebackReport(now = new Date()): Promise<ChargebackRepo
       appsOn.set(sid, (appsOn.get(sid) ?? 0) + 1)
     }
   const since = new Date(now.getTime() - settings.window_days * 86_400_000)
-  const samples = await samplesSince(since)
-  const usage = usageFromSamples(samples, envIds, sharedOf, appsOn, await databaseBytes(envIds))
+  const usage = usageFromAggregates(
+    await usageAggregates(since),
+    envIds,
+    sharedOf,
+    appsOn,
+    await databaseBytes(envIds)
+  )
 
   const appMapById = new Map<number, AppCost>()
   for (const a of appsAll) {
@@ -471,7 +593,7 @@ export async function chargebackReport(now = new Date()): Promise<ChargebackRepo
     if (!app) continue
     const name =
       [o.first_name, o.last_name].filter((x) => x != null && String(x).trim()).join(' ') ||
-      (o.email == null ? 'Former user' : String(o.email))
+      'Unnamed'
     app.owners.push({ user_id: String(o.user_id), name })
   }
   for (const r of envRows) {

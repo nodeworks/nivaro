@@ -179,6 +179,9 @@ describe('placement helpers', () => {
     expect(peerLink('https://hub.other.example', '//evil.example/hub?app=5')).toBeNull()
     expect(peerLink('https://hub.other.example', 'javascript:alert(1)')).toBeNull()
     expect(peerLink('javascript:alert(1)', '/hub?app=5')).toBeNull()
+    // Review L2: https only; no stored address, no link.
+    expect(peerLink('http://hub.other.example', '/hub?app=5')).toBeNull()
+    expect(peerLink(null, '/hub?app=5')).toBeNull()
   })
 })
 
@@ -235,6 +238,7 @@ describe('Other Hubs (Fleet tab)', () => {
       peer_id: 3,
       name: 'US Hub',
       base_url: 'https://hub.us.example',
+      link_base: 'https://hub.us.example',
       ok: false,
       error: 'PEER_UNREACHABLE',
       error_text: 'The other Hub did not answer.',

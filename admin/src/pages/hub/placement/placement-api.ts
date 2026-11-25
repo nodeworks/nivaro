@@ -256,7 +256,8 @@ export interface FederatedRow {
 export interface PeerFleet {
   peer_id: number
   name: string
-  base_url: string
+  base_url: string | null
+  link_base: string | null
   ok: boolean
   error: string | null
   error_text: string | null
@@ -294,11 +295,12 @@ export const checkPeer = (id: number) =>
  * The one link a remote row gets: the peer's own stored origin + a path the server built
  * (`/hub?app=<integer>`). Anything else (a path that is not plain host-relative) gets no link.
  */
-export function peerLink(baseUrl: string, path: string): string | null {
-  if (!/^\/hub\?app=\d{1,10}$/.test(path)) return null
+export function peerLink(baseUrl: string | null, path: string): string | null {
+  if (!baseUrl || !/^\/hub\?app=\d{1,10}$/.test(path)) return null
   try {
     const u = new URL(baseUrl)
-    if (u.protocol !== 'https:' && u.protocol !== 'http:') return null
+    // Review L2: https only.
+    if (u.protocol !== 'https:') return null
     return `${u.origin}${path}`
   } catch {
     return null

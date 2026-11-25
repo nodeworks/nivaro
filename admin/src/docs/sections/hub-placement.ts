@@ -22,7 +22,7 @@ export const hubPlacementDocs: DocSection = {
     {
       type: 'ul',
       items: [
-        '**Run an environment on a host.** An environment with no placement yet gets a new Docker stack placement on the host picked (Not running anywhere yet → Pick a host → Run here). Deploy it after with Apply now on its row. An environment that already runs is never placed again here: 409 `ALREADY_PLACED`.',
+        '**Run an environment on a host.** An environment with no placement yet gets a new Docker stack placement on the host picked (Not running anywhere yet → Pick a host → Run here). Deploy it after with Apply now on its row. An environment that already runs is never placed again here: 409 `ALREADY_PLACED`; one an app creation is still placing is not listed and is refused (409 `CREATION_RUNNING`); a freeze holds it, and the placement edit of an environment, too (action `placement`, 409 `FROZEN`).',
         '**Move one to another host.** Move… on a host row opens that environment’s Move panel with a new stack on the other host to pick. The Hub moves it with the move engine (below): plan, checklist, typed confirm, rollback until release.',
         'Writes are logged (`nivaro_hub_regions`, `nivaro_hub_region_drivers`, `hub-env-place`) and refused with 409 `MOVE_OPEN` while a move holds the environment.'
       ]
@@ -43,7 +43,15 @@ export const hubPlacementDocs: DocSection = {
         ],
         [
           '`SOURCE_UNREACHABLE`',
-          'With a manual route the Hub needs an address of the old stack that does not depend on its public name (a published port), or it could not hold it in maintenance or roll back once the name moved. A Traefik-only source is refused for a move to another host.'
+          'A move to ANOTHER host is always routed by hand, so the Hub needs an address of the old stack that does not depend on its public name, or it could not hold it in maintenance or roll back once the name moved. In practice: the old stack must be on a host whose agent publishes stacks on a port, and that agent’s address must be a loopback or private (RFC 1918) address, or a `.test` name. A Traefik-only source is refused for a move to another host; between two stacks on one Traefik host the move is automatic.'
+        ],
+        [
+          'The new stack is proven',
+          'Both stacks answer the same version, so the version never proves the name moved. The new stack is deployed with the move’s number (HUB_BOOT_MAINTENANCE) and reports it on `/api/version` as `move_target`. Verify, the manual-route wait and Confirm route, release, retire and a rollback’s "point the name back" all require that marker on the public name; release lifts maintenance only with `only_target` (the old stack answers 409 `NOT_THE_MOVE_TARGET` and keeps its freeze), and the old stack is never retired while the name may still reach it (`NAME_NOT_ON_NEW_STACK`). Needs 0.3.215 or later (`MOVE_TARGET_MARKER`).'
+        ],
+        [
+          '`PORT_IN_USE`',
+          'Two stacks of one environment on one host that publishes stacks on a port would ask for the same port. Enter another free published port for the new stack in the Move panel (`to.publish_port`); each stack keeps its own port for the move, and release makes the new one the environment’s.'
         ],
         [
           '`DB_CONNECTIONS`',
@@ -88,9 +96,9 @@ export const hubPlacementDocs: DocSection = {
     {
       type: 'ul',
       items: [
-        'A figure the Hub could not read counts as nothing and is named under Not measured.',
+        'A figure the Hub could not read counts as nothing and is named under Not measured. The means and the newest figures are computed by the database (one row per environment and per shared deployment), never read sample by sample.',
         'Set an app’s department and cost centre on its row; the report groups by department and by owner. An app with several owners is counted under each, so owner totals overlap.',
-        'Export CSV gives one line per environment. Every text cell that starts with `=`, `+`, `-` or `@` is written with a leading quote, so a spreadsheet shows it as text. Each export is logged (`hub-chargeback-export`).'
+        'Export CSV gives one line per environment. Every text cell that starts with `=`, `+`, `-` or `@` is written with a leading quote, so a spreadsheet shows it as text. Owners are named by their name (Unnamed without one), never an email address. Each export is logged (`hub-chargeback-export`).'
       ]
     },
 
@@ -104,8 +112,8 @@ export const hubPlacementDocs: DocSection = {
       items: [
         'On the other Hub, make an API key with the `hub:read` scope only. Add it here (Fleet → Other Hubs → Add a Hub) with that Hub’s https origin. Before it is stored, this Hub asks the other one `GET /api/hub/federation/self`: a key that can write (`hub:write`) is refused (`PEER_KEY_TOO_WIDE`), and so is anything that is not a named API key. The check runs again on every fresh read.',
         'The key is sealed with this Hub’s ENCRYPTION_KEY and never answered back (reads show the mask). A new address needs the key again (`TOKEN_REQUIRED`): an old key never goes to a new origin.',
-        'This Hub only ever sends two GETs to the other: `/api/hub/federation/self` and `/api/hub/fleet` (what the key’s owner may see there). Every call goes through the SSRF guard (redirects refused; a private or reserved address needs SSRF_ALLOW_HOSTS on this Hub), with a 10 s timeout and a 4 MB answer cap.',
-        'What the other Hub answers is not trusted: each row is rebuilt from plain text, numbers, booleans and dates with length caps; addresses become a host name only. The one link shown is the other Hub’s stored origin plus `/hub?app=<id>`.',
+        'This Hub only ever sends two GETs to the other: `/api/hub/federation/self` (it answers an API key with hub:read, or a Hub administrator’s own session) and `/api/hub/fleet` (what the key’s owner may see there). Every call goes through the SSRF guard (redirects refused; a private or reserved address needs SSRF_ALLOW_HOSTS on this Hub), with a 10 s timeout and a 4 MB answer cap.',
+        'What the other Hub answers is not trusted: each row is rebuilt from plain text, numbers, booleans and dates with length caps; addresses become a host name only. The one link shown is the other Hub’s stored https origin plus `/hub?app=<id>` (a stored address that fails the address rule, or plain http, gets no link and is not answered back).',
         'Reads are cached 60 s; a Hub that stops answering shows its last answer for up to 15 minutes, marked as such. Read now asks every Hub at once.'
       ]
     },

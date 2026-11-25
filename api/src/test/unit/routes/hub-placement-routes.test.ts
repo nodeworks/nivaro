@@ -41,8 +41,11 @@ vi.mock('../../../services/activity.js', () => ({ logActivity: m.logActivity }))
 const { db } = (await import('../../../db/index.js')) as unknown as { db: Knex }
 const migrations = [
   await import('../../../db/migrations/542_hub_tables.js'),
+  await import('../../../db/migrations/543_hub_promotions.js'),
   await import('../../../db/migrations/552_hub_shared_deployments.js'),
+  await import('../../../db/migrations/545_hub_creations.js'),
   await import('../../../db/migrations/553_hub_moves.js'),
+  await import('../../../db/migrations/565_hub_release_ops.js'),
   await import('../../../db/migrations/567_hub_capacity.js'),
   await import('../../../db/migrations/569_hub_data.js'),
   await import('../../../db/migrations/580_hub_placement.js')
@@ -128,6 +131,8 @@ beforeEach(async () => {
     'nivaro_hub_region_drivers',
     'nivaro_hub_app_cost_centers',
     'nivaro_hub_peers',
+    'nivaro_hub_creations',
+    'nivaro_hub_freezes',
     'nivaro_extension_settings',
     'nivaro_users'
   ])
@@ -267,6 +272,52 @@ describe('regions and hosts', () => {
     expect(m.logActivity).toHaveBeenCalledWith(expect.objectContaining({ action: 'hub-env-place' }))
   })
 
+  it('refuses while an app creation is placing it, and leaves it out of the list (M2)', async () => {
+    await db('nivaro_hub_creations').insert({
+      app_id: 2,
+      environment_id: 12,
+      status: 'running',
+      steps: '[]',
+      version: '0.3.215',
+      first_admin: '{}'
+    })
+    const map = (await req('GET', '/placement')).json().data
+    expect(map.unplaced).toEqual([])
+    const r = await req('POST', '/placement/environments/12/place', ADMIN, {
+      driver_id: 2,
+      stack: 'crm-prod'
+    })
+    expect(r.statusCode).toBe(409)
+    expect(r.json().code).toBe('CREATION_RUNNING')
+    expect((await db('nivaro_hub_environments').where({ id: 12 }).first()).placement_id).toBeNull()
+  })
+
+  it('a freeze holds placing an environment (action placement, L1)', async () => {
+    await db('nivaro_hub_freezes').insert({
+      app_id: 2,
+      name: 'Year end',
+      starts_at: new Date(Date.now() - 3_600_000),
+      ends_at: new Date(Date.now() + 3_600_000)
+    })
+    const r = await req('POST', '/placement/environments/12/place', ADMIN, {
+      driver_id: 2,
+      stack: 'crm-prod'
+    })
+    expect(r.statusCode).toBe(409)
+    expect(r.json().code).toBe('FROZEN')
+    expect(r.json().message).toMatch(/Placement changes are frozen/)
+  })
+
+  it('deleting a driver removes its region row (L6)', async () => {
+    const region = (await req('POST', '/regions', ADMIN, { key: 'eu', name: 'EU' })).json().data
+    await req('PUT', '/placement/hosts/2', ADMIN, { region_id: region.id })
+    const { deleteDriver } = await import('../../../services/hub/drivers.js')
+    expect(await deleteDriver(2)).toEqual({ ok: true })
+    expect(await db('nivaro_hub_region_drivers').where({ driver_id: 2 }).first()).toBeUndefined()
+    // A region that is gone is never pointed at.
+    expect((await req('PUT', '/placement/hosts/1', ADMIN, { region_id: 999 })).statusCode).toBe(404)
+  })
+
   it('refuses while a move holds the environment', async () => {
     await db('nivaro_hub_moves').insert({
       id: 1,
@@ -329,6 +380,23 @@ describe('cost chargeback', () => {
     ])
     expect(r.owners[0]).toMatchObject({ label: 'Olive Owner', total: 58 })
     expect(r.total).toBe(63)
+  })
+
+  it('refuses an unknown settings key (L5)', async () => {
+    const r = await req('PUT', '/chargeback/settings', ADMIN, { windowDays: 10 })
+    expect(r.statusCode).toBe(400)
+    expect(r.json().message).toMatch(/Unknown setting: windowDays/)
+  })
+
+  it('never writes an email address: an owner without a name is Unnamed (L7)', async () => {
+    await db('nivaro_users').where({ id: OWNER['x-user'] }).update({
+      first_name: null,
+      last_name: null,
+      email: 'olive@example.com'
+    })
+    const csv = (await req('GET', '/chargeback.csv')).body
+    expect(csv).not.toContain('olive@example.com')
+    expect(csv).toContain('"Unnamed"')
   })
 
   it('exports a formula-safe CSV and logs it', async () => {
@@ -501,6 +569,27 @@ describe('federation (read only)', () => {
     peer.fleet = { rows: [row({ app_name: 'x'.repeat(5 * 1024 * 1024) })] }
     const a = (await req('GET', '/federation/fleet?fresh=1')).json().data[0]
     expect(a.error).toBe('PEER_TOO_LARGE')
+  })
+
+  it('gives no link and never answers a stored address that fails the rule (L2)', async () => {
+    await db('nivaro_hub_peers').insert({
+      name: 'Old',
+      base_url: 'http://hub.plain.example',
+      token: null,
+      enabled: false
+    })
+    const list = (await req('GET', '/federation/peers')).json().data
+    expect(list[0].base_url).toBe('')
+    await db('nivaro_hub_peers').update({ enabled: true })
+    const f = (await req('GET', '/federation/fleet')).json().data[0]
+    expect(f.base_url).toBeNull()
+    expect(f.link_base).toBeNull()
+  })
+
+  it('answers /federation/self only to an API key, or a Hub administrator (L3)', async () => {
+    const r = await req('GET', '/federation/self', OWNER)
+    expect(r.statusCode).toBe(403)
+    expect(r.json().code).toBe('HUB_SCOPE_MISSING')
   })
 
   it('answers /federation/self with the caller key’s Hub scope only', async () => {

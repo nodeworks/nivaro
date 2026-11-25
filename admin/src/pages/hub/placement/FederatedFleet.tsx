@@ -146,7 +146,7 @@ function PeerBlock({ p }: { p: PeerFleet }) {
           {p.name}
         </span>
         <span className='font-mono text-[11px] text-slate-500 dark:text-muted-foreground'>
-          {p.base_url.replace(/^https?:\/\//, '')}
+          {(p.base_url ?? '').replace(/^https?:\/\//, '')}
         </span>
         <span className='text-[11px] text-slate-500 tabular-nums dark:text-muted-foreground'>
           {p.version ? `runs ${p.version}` : ''}
@@ -177,7 +177,7 @@ function PeerBlock({ p }: { p: PeerFleet }) {
             </thead>
             <tbody>
               {p.rows.map((r) => {
-                const href = peerLink(p.base_url, r.path)
+                const href = peerLink(p.link_base, r.path)
                 const chip = stateChip(r)
                 return (
                   <tr

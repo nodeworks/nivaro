@@ -709,6 +709,10 @@ function environmentRoutes(app: FastifyInstance) {
           'USE_MOVE',
           'Moving an environment onto or off a shared deployment is a move: use Move instead.'
         )
+      // Hub placement (review L1): a freeze also holds placement edits (deploy windows do not).
+      const { environmentFreezeRefusal } = await import('../services/hub/releases/freeze.js')
+      const frozen = await environmentFreezeRefusal(id, 'placement', { skipWindows: true })
+      if (frozen) return fail(reply, frozen.status, frozen.code, frozen.message)
     }
     if (
       patch.version_pin !== undefined &&

@@ -1,5 +1,6 @@
 import { insertReturningId } from '../../../db/dialect/ef.js'
 import { db } from '../../../db/index.js'
+import { CREATIONS, OPEN_CREATION_STATUSES } from '../create/store.js'
 import { createPlacement, placementStackRefusal, STACK_NAME_RE } from '../drivers.js'
 
 /**
@@ -173,9 +174,11 @@ export async function setHostRegion(
       'NOT_A_HOST',
       'Only a Docker driver is a host: a GitLab pipeline decides where its app runs.'
     )
-  if (regionId !== null && !(await getRegion(regionId)))
-    throw new PlacementError('NOT_FOUND', 'No such region.', 404)
   return db.transaction(async (trx) => {
+    // Review L6: the region is checked inside the write, so a region deleted meanwhile is never
+    // pointed at.
+    if (regionId !== null && !(await trx(REGIONS).where({ id: regionId }).first('id')))
+      throw new PlacementError('NOT_FOUND', 'No such region.', 404)
     await trx(REGION_DRIVERS).where({ driver_id: driverId }).del()
     if (regionId !== null)
       await trx(REGION_DRIVERS).insert({
@@ -345,6 +348,13 @@ export async function placementMap(now = new Date()): Promise<PlacementMap> {
     for (const c of counts) sharedApps.set(Number(c.sid), Number(c.n))
   }
   const figures = await latestFigures(now)
+  // Review M2: an environment an app creation is placing right now is not "unplaced".
+  const creating = new Set<number>()
+  if (await db.schema.hasTable(CREATIONS))
+    for (const c of (await db(CREATIONS)
+      .whereIn('status', OPEN_CREATION_STATUSES as string[])
+      .select('environment_id')) as Array<{ environment_id: number }>)
+      creating.add(Number(c.environment_id))
 
   const hosts = new Map<number, Host>()
   for (const d of drivers) {
@@ -370,7 +380,7 @@ export async function placementMap(now = new Date()): Promise<PlacementMap> {
       status: String(r.status)
     }
     if (r.placement_id == null) {
-      unplaced.push(base)
+      if (!creating.has(base.env_id)) unplaced.push(base)
       continue
     }
     if (r.p_kind !== 'dedicated' || r.p_driver == null) continue

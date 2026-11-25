@@ -76,7 +76,14 @@ function peerFromRow(r: Record<string, unknown>): PeerRow {
 }
 
 export function publicPeer(p: PeerRow): PublicPeer {
-  return { ...p, token: p.token ? HUB_MASK : null }
+  // Review L2: a stored address that fails the address rule now is never answered back.
+  return { ...p, base_url: peerOrigin(p.base_url) ?? '', token: p.token ? HUB_MASK : null }
+}
+
+/** Review L2: the origin a remote row's link may use: the stored one, https only. */
+export function peerLinkOrigin(raw: string): string | null {
+  const o = peerOrigin(raw)
+  return o?.startsWith('https://') ? o : null
 }
 
 /** A peer's origin by the HUB_URL rule (https; plain http only to loopback outside production). */
@@ -371,8 +378,10 @@ export function parseFleet(data: unknown): { rows: FederatedRow[]; newest: strin
 export interface PeerFleet {
   peer_id: number
   name: string
-  /** The peer's origin as stored here (operator-set), for the one link the view builds. */
-  base_url: string
+  /** The peer's origin as stored here (operator-set) when it passes the address rule now. */
+  base_url: string | null
+  /** The origin the one link of each row may use: https only (review L2), else null. */
+  link_base: string | null
   ok: boolean
   error: PeerError | null
   error_text: string | null
@@ -476,7 +485,8 @@ export async function readPeerFleet(
   return {
     peer_id: p.id,
     name: p.name,
-    base_url: peerOrigin(p.base_url) ?? p.base_url,
+    base_url: peerOrigin(p.base_url),
+    link_base: peerLinkOrigin(p.base_url),
     ok: c.error === null,
     error: c.error,
     error_text: c.error ? PEER_ERROR_WORDS[c.error] : null,

@@ -5,6 +5,7 @@ import { logActivity } from '../services/activity.js'
 import { hubScopeLevel } from '../services/hub/api/scopes.js'
 import { idParam } from '../services/hub/apps.js'
 import { HUB_PRODUCT_NAME } from '../services/hub/brand.js'
+import { creationOpenRefusal } from '../services/hub/create/store.js'
 import { moveOpenRefusal } from '../services/hub/move-open.js'
 import {
   chargebackCsv,
@@ -44,6 +45,7 @@ import {
   setHostRegion,
   updateRegion
 } from '../services/hub/placement/regions.js'
+import { environmentFreezeRefusal } from '../services/hub/releases/freeze.js'
 import { HubSecretError } from '../services/hub/secrets.js'
 import { NIVARO_VERSION } from '../version.js'
 
@@ -193,6 +195,12 @@ export function hubPlacementRoutes(app: FastifyInstance, deps: PlacementRouteDep
         const open = await moveOpenRefusal({ envIds: [envId] })
         if (open)
           return refuse(reply, open.status, open.code, open.message, { move_id: open.move_id })
+        // Review M2: an app creation in progress places this environment itself.
+        const creating = await creationOpenRefusal(envId)
+        if (creating) return refuse(reply, creating.status, 'CREATION_RUNNING', creating.message)
+        // Review L1: a freeze also holds placement edits (deploy windows do not: nothing deploys).
+        const frozen = await environmentFreezeRefusal(envId, 'placement', { skipWindows: true })
+        if (frozen) return refuse(reply, frozen.status, frozen.code, frozen.message)
         const b = body(req)
         const driverId = typeof b.driver_id === 'number' ? b.driver_id : Number.NaN
         if (!Number.isInteger(driverId))
@@ -278,14 +286,20 @@ export function hubPlacementRoutes(app: FastifyInstance, deps: PlacementRouteDep
 
   // Another Hub asks this with its key (hub:read): who answers, and which Hub scope the key has.
   // Nothing else: no apps, no names, no settings.
-  app.get('/federation/self', { preHandler: requireAuth }, async (req) => ({
-    data: {
-      product: HUB_PRODUCT_NAME,
-      version: NIVARO_VERSION,
-      auth: req.authMethod === 'api_key' ? 'api_key' : (req.authMethod ?? 'session'),
-      key_scope: req.authMethod === 'api_key' ? hubScopeLevel(req.apiKeyScopes) : null
+  app.get('/federation/self', { preHandler: requireAuth }, async (req, reply) => {
+    // Review L3: for another Hub's key (the Hub gate requires hub:read on it); a person's own
+    // session reaches it only as a Hub administrator.
+    if (req.authMethod !== 'api_key' && req.isAdmin !== true)
+      return refuse(reply, 403, 'HUB_SCOPE_MISSING', 'This answers an API key with hub:read.')
+    return {
+      data: {
+        product: HUB_PRODUCT_NAME,
+        version: NIVARO_VERSION,
+        auth: req.authMethod === 'api_key' ? 'api_key' : (req.authMethod ?? 'session'),
+        key_scope: req.authMethod === 'api_key' ? hubScopeLevel(req.apiKeyScopes) : null
+      }
     }
-  }))
+  })
 
   app.get('/federation/peers', { preHandler: requireAdmin }, async () => ({
     data: (await listPeers()).map(publicPeer)
