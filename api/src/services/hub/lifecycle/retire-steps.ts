@@ -17,7 +17,7 @@
 //            kept), the app taken off its shared deployment, or the operator's word that they
 //            stopped it; each environment `suspended`. No undo.
 //   archive  every environment `archived`, the app marked retired (archived_at), the freeze
-//            renamed "Retired: <app>" and held for 10 years so nothing deploys there again.
+//            ended: every start refuses the archived app with ENV_ARCHIVED from here on.
 import { insertReturningId } from '../../../db/dialect/ef.js'
 import { db } from '../../../db/index.js'
 import { getApp } from '../../io-holder.js'
@@ -30,7 +30,6 @@ import { RetireError } from './retire-plan.js'
 import type { RetireEnvPlan, Retirement, RetirePlan, RetireStepKey } from './retire-store.js'
 
 export const FREEZE_FOR_MS = 366 * 86_400_000
-export const RETIRED_FREEZE_MS = 10 * 366 * 86_400_000
 export const EXPORT_POLL_MS = 15_000
 export const EXPORT_DEADLINE_MS = 24 * 3600_000
 
@@ -539,15 +538,13 @@ const archiveStep: StepBody = async (ctx) => {
       archived_by: ctx.by && /^[0-9a-f-]{36}$/i.test(ctx.by) ? ctx.by : null,
       updated_at: at
     })
-  // The freeze stays: an archived environment must never be deployed to again.
+  // The freeze has done its job: from here every start refuses the archived app with
+  // ENV_ARCHIVED (services/hub/releases/archived.ts, judged inside freezeRefusal).
   await db(FREEZES)
     .where({ source: retireFreezeSource(ctx.ret.id) })
-    .update({
-      name: `Retired: ${ctx.plan.app.key}`.slice(0, 120),
-      ends_at: new Date(at.getTime() + RETIRED_FREEZE_MS),
-      updated_at: at
-    })
-  return `${ctx.plan.app.name} is retired: its environments are archived and deploys to it stay frozen.`
+    .where('ends_at', '>', at)
+    .update({ ends_at: at, updated_at: at })
+  return `${ctx.plan.app.name} is retired: its environments are archived, and every deploy, move, scale or restart of it is refused.`
 }
 
 export const STEP_BODIES: Record<RetireStepKey, StepBody> = {

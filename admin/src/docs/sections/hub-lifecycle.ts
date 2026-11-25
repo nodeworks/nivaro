@@ -43,7 +43,7 @@ export const hubLifecycleDocs: DocSection = {
       rows: [
         [
           '1. Freeze writes',
-          'A Hub freeze for the app (every promotion, Apply now, move and upgrade is refused while it lasts), and strict maintenance on each environment over its hub link — nobody writes, administrators included. A shared-placed environment is served in maintenance by its deployment. An environment without a hub link is put in maintenance by hand and ticked.',
+          'A Hub freeze for the app (every promotion, Apply now and move of it is refused while it lasts; it is app-scoped and never holds back the upgrade of a shared deployment the app sits on), and strict maintenance on each environment over its hub link — nobody writes, administrators included. A shared-placed environment is served in maintenance by its deployment. An environment without a hub link is put in maintenance by hand and ticked.',
           'Maintenance lifted, freeze ended'
         ],
         [
@@ -63,7 +63,7 @@ export const hubLifecycleDocs: DocSection = {
         ],
         [
           '5. Archive',
-          'Every environment is archived and the app marked retired. The freeze is renamed `Retired: <app>` and kept for ten years, so nothing is deployed to it again.',
+          'Every environment is archived and the app marked retired; the retirement’s freeze ends. From then on every start on the app — promote, Apply now, rollback, schedule, train step, move, config or extension promotion, scaling, restart — is refused with `ENV_ARCHIVED`.',
           'None'
         ]
       ]

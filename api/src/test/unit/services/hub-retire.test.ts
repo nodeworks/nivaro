@@ -365,8 +365,8 @@ describe('steps, undo and cancel', () => {
     const f = await db('nivaro_hub_freezes')
       .where({ source: `retire:${retId}` })
       .first()
-    expect(f.name).toBe('Retired: shop')
-    expect(new Date(f.ends_at).getTime()).toBeGreaterThan(Date.now() + 5 * 365 * 86_400_000)
+    // The freeze ends at archive: ENV_ARCHIVED refuses every start from here on.
+    expect(new Date(f.ends_at).getTime()).toBeLessThanOrEqual(Date.now())
     expect((await plan.retirePlan(1)).blockers.map((b) => b.code)).toEqual(['APP_ARCHIVED'])
   })
 })
@@ -427,5 +427,86 @@ describe('lease, heal and resume', () => {
       'resumed',
       'done'
     ])
+  })
+})
+
+describe('a retired (archived) app refuses every start: ENV_ARCHIVED', () => {
+  // App 1 (shop) was archived by the retirement above: its environments 1 and 2 are archived.
+  const actions = ['promote', 'apply', 'move', 'config_promote', 'extension_promote'] as const
+
+  it('through the freeze engine, for every gated action, by environment and by app', async () => {
+    const { environmentFreezeRefusal } = await import('../../../services/hub/releases/freeze.js')
+    for (const action of actions) {
+      expect((await freezeRefusal({ appIds: [1], action, envId: 2 }))?.code, action).toBe(
+        'ENV_ARCHIVED'
+      )
+      // Schedules, train steps and scaling judge the app (with or without an environment).
+      expect((await freezeRefusal({ appIds: [1], action }))?.code, action).toBe('ENV_ARCHIVED')
+    }
+    const move = await environmentFreezeRefusal(1, 'move')
+    expect(move).toMatchObject({ code: 'ENV_ARCHIVED', status: 409 })
+    expect(move?.message).toContain('is retired (archived)')
+    // Another app's start is untouched.
+    expect((await freezeRefusal({ appIds: [2], action: 'promote', envId: 3 }))?.code).not.toBe(
+      'ENV_ARCHIVED'
+    )
+  })
+
+  it('restart and rollback ask the same helper; scaling blocks even a change by hand', async () => {
+    const { archivedRefusal } = await import('../../../services/hub/releases/archived.js')
+    expect((await archivedRefusal({ envId: 2 }))?.code).toBe('ENV_ARCHIVED')
+    expect(await archivedRefusal({ envId: 3 })).toBeNull()
+    const { scalePauses } = await import('../../../services/hub/scale/pause.js')
+    const target = {
+      kind: 'environment',
+      id: 2,
+      key: 'shop/production',
+      label: 'Shop · production',
+      confirm: 'production',
+      app_ids: [1],
+      env_ids: [2],
+      production: true,
+      stack: null,
+      driver: null
+    } as never
+    const deps = {
+      envLock: { held: async () => false } as never,
+      incidentOpen: (async () => null) as never
+    }
+    const manual = await scalePauses(target, 'manual', deps)
+    expect(manual.blockers.map((b) => b.code)).toContain('ENV_ARCHIVED')
+  })
+})
+
+describe('a retiring app’s freeze never holds back its shared deployment', () => {
+  it('a shared upgrade runs during a retirement; a person’s freeze still stops it', async () => {
+    const { sharedFreezeRefusal } = await import('../../../services/hub/releases/freeze.js')
+    await db('nivaro_hub_placements').insert({
+      id: 20,
+      kind: 'shared',
+      shared_deployment_id: 9,
+      target: '{}'
+    })
+    await db('nivaro_hub_environments').where({ id: 3 }).update({ placement_id: 20 })
+    const now = Date.now()
+    const freeze = {
+      app_id: 2,
+      recurrence: 'none',
+      starts_at: new Date(now - 60_000),
+      ends_at: new Date(now + 3600_000)
+    }
+    await db('nivaro_hub_freezes').insert({
+      ...freeze,
+      id: 950,
+      name: 'Retiring blog',
+      source: 'retire:77'
+    })
+    // The retirement's own freeze still holds the app's own starts.
+    expect((await freezeRefusal({ appIds: [2], action: 'promote', envId: 3 }))?.code).toBe('FROZEN')
+    // … but the deployment's upgrade goes ahead.
+    expect(await sharedFreezeRefusal(9)).toBeNull()
+    await db('nivaro_hub_freezes').insert({ ...freeze, id: 951, name: 'Quarter end' })
+    expect((await sharedFreezeRefusal(9))?.code).toBe('FROZEN')
+    await db('nivaro_hub_freezes').whereIn('id', [950, 951]).delete()
   })
 })

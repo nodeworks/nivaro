@@ -145,7 +145,7 @@ export function planLines(p: RetirePlan): Record<string, string[]> {
           : `${name(e)}: the Hub cannot stop it — stop it yourself and confirm at sign-off.`
     ),
     archive: [
-      'Every environment is archived and the app is marked retired. The freeze stays, so nothing is deployed to it again.'
+      'Every environment is archived and the app is marked retired. From then on every promotion, move, scale or restart of it is refused.'
     ]
   }
 }

@@ -17,6 +17,8 @@ import { daysInMonth, isTimeZone, zonedMidnightUtc, zonedParts } from './zoned.j
  * (409 OUTSIDE_WINDOW), so every caller honours both.
  */
 
+import { archivedRefusal } from './archived.js'
+
 export const FREEZES = 'nivaro_hub_freezes'
 
 export type FreezeRecurrence = 'none' | 'month_end'
@@ -46,6 +48,8 @@ export interface HubFreeze {
   days_before: number | null
   days_after: number | null
   time_zone: string | null
+  /** What made it (`incident:<id>`, `retire:<id>`); null = a person's own freeze window. */
+  source?: string | null
 }
 
 export interface FreezeWindow {
@@ -71,7 +75,8 @@ export function freezeFromRow(r: Record<string, unknown>): HubFreeze {
     ends_at: iso(r.ends_at),
     days_before: intOrNull(r.days_before),
     days_after: intOrNull(r.days_after),
-    time_zone: r.time_zone == null ? null : String(r.time_zone)
+    time_zone: r.time_zone == null ? null : String(r.time_zone),
+    source: r.source == null ? null : String(r.source)
   }
 }
 
@@ -162,7 +167,7 @@ export interface FreezeRefusal {
    * OUTSIDE_WINDOW: a deploy window governs the app and none is open (windows.ts); `ends_at` is
    * then the next opening. WINDOW_INVALID: a governing window cannot be read (fails closed).
    */
-  code: 'FROZEN' | 'FREEZE_UNKNOWN' | 'OUTSIDE_WINDOW' | 'WINDOW_INVALID'
+  code: 'FROZEN' | 'FREEZE_UNKNOWN' | 'OUTSIDE_WINDOW' | 'WINDOW_INVALID' | 'ENV_ARCHIVED'
   message: string
   freeze: { id: number; name: string; app_id: number | null; ends_at: string }
   /** OUTSIDE_WINDOW: the next opening, or null when none opens within 14 days. */
@@ -243,7 +248,18 @@ export async function freezeRefusal(o: {
   skipWindows?: boolean
   /** App keys to name in the refusal (a shared upgrade names the frozen app). */
   appKeys?: Map<number, string>
+  /**
+   * Freezes this judgement leaves out, by their `source` (a shared upgrade leaves out the
+   * `retire:<id>` freezes of apps being taken off the deployment).
+   */
+  ignoreSource?: (source: string) => boolean
 }): Promise<FreezeRefusal | null> {
+  // Hub enhancement 47: nothing starts on a retired app (409 ENV_ARCHIVED). The retirement's
+  // own steps archive it; a shared upgrade names no environment of its own.
+  if (o.action !== 'retire' && o.action !== 'upgrade') {
+    const archived = await archivedRefusal({ appIds: o.appIds, envId: o.envId ?? null })
+    if (archived) return archived
+  }
   let rows = o.rows
   if (!rows) {
     try {
@@ -253,6 +269,10 @@ export async function freezeRefusal(o: {
     }
   }
   const now = o.now ?? Date.now()
+  if (o.ignoreSource) {
+    const skip = o.ignoreSource
+    rows = rows.filter((f) => !(f.source && skip(f.source)))
+  }
   const ids = o.appIds.length ? o.appIds : [null]
   for (const appId of ids) {
     const r = refusalFor(
@@ -361,6 +381,9 @@ export async function sharedFreezeRefusal(
     appIds: apps,
     action: 'upgrade',
     appKeys: keys,
+    // A retiring app's own freeze (`retire:<id>`) is app-scoped: it holds that app's starts,
+    // never the upgrade of the shared deployment the retirement is taking it off.
+    ignoreSource: (source) => source.startsWith('retire:'),
     ...(o.skipWindows ? { skipWindows: true } : {})
   })
 }

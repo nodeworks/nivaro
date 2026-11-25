@@ -1134,6 +1134,13 @@ export async function startPromotion(
   // Gap `create` (review L4): an environment still being created is the creation's.
   const creating = await creationOpenRefusal(envId)
   if (creating) throw new PromotionError(creating.code, creating.message, creating.status)
+  // Hub enhancement 47: a retired (archived) app takes no deploy, a rollback included (the
+  // freeze engine judges the same for every other start).
+  {
+    const { archivedRefusal } = await import('./releases/archived.js')
+    const archived = await archivedRefusal({ appIds: [Number(env.app_id)], envId })
+    if (archived) throw new PromotionError(archived.code, archived.message, archived.status)
+  }
   // Release operations: a freeze window stops promotions and Apply now. A rollback is judged
   // after gather (only one to an OLDER version than the running one is exempt).
   if (req.kind !== 'rollback') {
