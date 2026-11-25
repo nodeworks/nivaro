@@ -178,6 +178,11 @@ export const APPS_HUB: HubDef = {
       hint: 'Every planned change on one calendar, deploy windows and checklists.'
     },
     {
+      path: 'config',
+      label: 'Config',
+      hint: 'Move configuration from one environment of an app to another, with undo.'
+    },
+    {
       path: 'issues',
       label: 'Issues',
       hint: 'Crashes and server errors from every app, grouped by signature.'

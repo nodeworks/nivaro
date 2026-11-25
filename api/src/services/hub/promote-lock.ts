@@ -69,6 +69,8 @@ export type LockHolder =
   | 'data'
   // Hub scaling: a change of the stack's replicas or limits (services/hub/scale/run.ts).
   | 'scale'
+  // Hub config promotion (idea 30): config being applied to (or undone on) this environment.
+  | 'config'
 const HOLDERS: readonly LockHolder[] = [
   'creation',
   'promotion',
@@ -79,7 +81,8 @@ const HOLDERS: readonly LockHolder[] = [
   'app-key',
   'database',
   'data',
-  'scale'
+  'scale',
+  'config'
 ]
 
 const tokenFor = (holder: LockHolder | undefined) => `${holder ?? 'promotion'}:${randomUUID()}`
@@ -142,6 +145,11 @@ export function lockHolderRefusal(
     return {
       code: 'SCALE_RUNNING',
       message: "This environment's stack is being scaled — wait for it to end."
+    }
+  if (holder === 'config')
+    return {
+      code: 'CONFIG_PROMOTION_RUNNING',
+      message: 'Configuration is being promoted to this environment — wait for it to end.'
     }
   if (holder === 'shared')
     return {

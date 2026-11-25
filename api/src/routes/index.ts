@@ -171,6 +171,7 @@ import { hierarchyRoutes } from './hierarchy.js'
 import { hubRoutes } from './hub.js'
 import { hubAppLinkRoutes } from './hub-app-link.js'
 import { hubDeploymentUsageRoutes, hubLinkUsageRoutes } from './hub-capacity-link.js'
+import { hubConfigDeploymentRoutes, hubConfigLinkRoutes } from './hub-config-link.js'
 import { hubDeploymentLinkRoutes } from './hub-deployment-link.js'
 import { hubFleetRoutes } from './hub-fleet.js'
 import { hubIncidentRoutes } from './hub-incidents.js'
@@ -519,6 +520,9 @@ export async function registerRoutes(app: FastifyInstance) {
   // Hub insight (usage counts under a privacy floor, dependency hosts): same mounts, same bearer.
   await app.register(hubInsightLinkRoutes, { prefix: '/hub-link' })
   await app.register(hubInsightDeploymentRoutes, { prefix: '/hub-deployment' })
+  // Hub config promotion (snapshot / plan / apply / undo) over the hub / deployment link.
+  await app.register(hubConfigLinkRoutes, { prefix: '/hub-link' })
+  await app.register(hubConfigDeploymentRoutes, { prefix: '/hub-deployment' })
   // Hub incident status banner (plain text, bearer-only): beside each link.
   await app.register(hubLinkBannerRoutes, { prefix: '/hub-link' })
   await app.register(hubDeploymentBannerRoutes, { prefix: '/hub-deployment' })

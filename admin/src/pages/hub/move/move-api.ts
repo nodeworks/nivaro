@@ -1291,6 +1291,10 @@ export const MOVE_CODE_COPY: Record<string, Copy> = {
     title: "This environment's database is being refreshed or rolled back",
     hint: 'Wait for it to finish, then try again.'
   },
+  CONFIG_PROMOTION_RUNNING: {
+    title: 'Configuration is being promoted to this environment',
+    hint: 'Wait for it to finish (Apps → Config), then try again.'
+  },
   SHARED_UPGRADE_RUNNING: {
     title: 'The shared deployment is being upgraded',
     hint: 'Wait for the upgrade to end (Shared deployments tab), then try again.'

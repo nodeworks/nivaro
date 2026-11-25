@@ -276,6 +276,12 @@ const SECRET_SITES: Record<string, Entry & { reads: number }> = {
       'public submission status links: the app is in the HMAC input (appBoundSigInput, Task 12 fix); the token hash is also judged in the app database'
     )
   },
+  'services/hub-link/config-promote.ts': {
+    reads: 1,
+    ...T(
+      'a webhook flow new on the target gets a secret HMAC(SESSION_SECRET, appBoundSigInput(run key + flow)): the app is in the input, the run key is one promotion, the secret lives in that app’s own database'
+    )
+  },
   'services/keyset-secret.ts': {
     reads: 2,
     ...P('defines the keyset-cursor key (SESSION_SECRET, else ENCRYPTION_KEY)')

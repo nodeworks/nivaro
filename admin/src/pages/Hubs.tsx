@@ -181,6 +181,7 @@ const SCREENS: Record<string, Screens> = {
     hosts: lazy(() => import('@/pages/hub/placement/HubHosts')),
     costs: lazy(() => import('@/pages/hub/placement/HubCosts')),
     releases: lazy(() => import('@/pages/hub/releases/HubReleases')),
+    config: lazy(() => import('@/pages/hub/config/HubConfig')),
     incidents: lazy(() => import('@/pages/hub/incident/HubIncidents')),
     'on-call': lazy(() => import('@/pages/hub/incident/HubOnCall')),
     status: lazy(() => import('@/pages/hub/incident/HubStatusPages')),

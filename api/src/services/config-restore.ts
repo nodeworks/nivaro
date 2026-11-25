@@ -55,6 +55,7 @@ import knexFactory, { type Knex } from 'knex'
 import { config } from '../config.js'
 import { buildConnection, isMssql, writePort } from '../db/index.js'
 import { mysqlFlavorConfig } from '../db/mysql-flavor.js'
+import { getTenantDb } from '../db/tenant-context.js'
 import { isUniqueViolation } from '../lib/unique-violation.js'
 import { NIVARO_VERSION } from '../version.js'
 import { appBox } from './app-state.js'
@@ -68,6 +69,7 @@ import {
   type SnapshotRow
 } from './config-inventory.js'
 import { chunkArray } from './db-batch.js'
+import { tenantSource } from './deployment-mode.js'
 import { isSecretColumn } from './system-collections.js'
 
 /** Config tables a restore never writes, with the reason the preview shows. */
@@ -197,6 +199,9 @@ export function planTable(
     keys?: Set<string> | null
     /** For GRANT_TABLES: whether the person a row grants to is active now (absent = all are). */
     isActiveUser?: (id: string) => boolean
+    /** Live rows deleted even with `deletes` off (a Hub promotion: steps of a promoted flow the
+     *  source no longer has). */
+    alsoDelete?: Set<string> | null
   }
 ): TablePlan {
   const scope = opts.keys && opts.keys.size > 0 ? opts.keys : null
@@ -248,9 +253,10 @@ export function planTable(
     }
     ops.push({ op: 'update', key, live_hash: current.hash, target_hash: row.hash, fields })
   }
-  if (opts.deletes) {
+  if (opts.deletes || opts.alsoDelete?.size) {
     for (const [key, row] of Object.entries(live)) {
       if (target[key]) continue
+      if (!opts.deletes && !opts.alsoDelete?.has(key)) continue
       if (scope && !scope.has(key)) continue
       if (key.startsWith('#')) {
         skippedKeyless++
@@ -478,6 +484,22 @@ export function toDbValue(v: unknown, info: ColumnInfo | undefined): unknown {
 
 // ── database side ────────────────────────────────────────────────────────────
 
+/** Inside one app of a Hub shared deployment: that app's pool; else null. */
+function hubTenantDb(): Knex | null {
+  if (tenantSource() !== 'hub') return null
+  return getTenantDb() ?? null
+}
+
+/**
+ * Whether this engine can plan and apply here: SQL Server only (sys.* reads, IDENTITY_INSERT,
+ * UPDLOCK). On a Hub shared deployment the app's own database decides, not the deployment's.
+ */
+export function restoreEngineSupported(): boolean {
+  const tenant = hubTenantDb()
+  if (tenant) return /mssql/i.test(String(tenant.client?.config?.client ?? ''))
+  return isMssql()
+}
+
 /**
  * A short-lived pool for one restore or preview: its own 2-minute request timeout, never the
  * request pool, destroyed afterwards (so no session state outlives it). The driver-seam hooks
@@ -485,6 +507,34 @@ export function toDbValue(v: unknown, info: ColumnInfo | undefined): unknown {
  * writes; afterConfigWrite does the rest explicitly.
  */
 export async function withRestoreDb<T>(fn: (k: Knex) => Promise<T>): Promise<T> {
+  // One app of a Hub shared deployment (hub config promotion over the deployment link): its own
+  // pool, never the deployment's DB_* connection (that is not this app's database). Nivaro Cloud
+  // keeps its old path.
+  const tenant = hubTenantDb()
+  if (tenant) {
+    // Its own short-lived pool on the app's connection, with the 2-minute request timeout (the
+    // app's request pool keeps the driver default, 15 s on SQL Server — too short for a locked
+    // read of a large table). A connection given as a string falls back to the app's pool.
+    const cfg = (tenant.client as { config?: { client?: unknown; connection?: unknown } })?.config
+    const conn = cfg?.connection
+    if (/mssql/i.test(String(cfg?.client ?? '')) && conn && typeof conn === 'object') {
+      const c = conn as { options?: Record<string, unknown> }
+      const own = knexFactory({
+        client: 'mssql',
+        connection: {
+          ...c,
+          options: { ...(c.options ?? {}), requestTimeout: REQUEST_TIMEOUT_MS }
+        } as Knex.StaticConnectionConfig,
+        pool: { min: 0, max: 4 }
+      })
+      try {
+        return await fn(own)
+      } finally {
+        await own.destroy().catch(() => {})
+      }
+    }
+    return fn(tenant)
+  }
   const base = buildConnection(config.DB_HOST, writePort) as { options?: Record<string, unknown> }
   const k = knexFactory({
     client: config.DB_CLIENT,
@@ -1005,15 +1055,65 @@ export class RestoreError extends Error {
   }
 }
 
+/**
+ * What a plan makes the config tables look like: a stored restore point of this instance (the
+ * restore), or a snapshot handed in whole (a Hub config promotion: services/hub-link/
+ * config-promote.ts) — same engine, same binding. `ref` names the handed-in snapshot in the plan
+ * hash; `deletes` off = upsert only.
+ */
+export type RestoreSource =
+  | { kind: 'stored'; id: number }
+  | {
+      kind: 'given'
+      snapshot: ConfigSnapshot
+      ref: string
+      deletes: boolean
+      /** Only these rows of each table (a Hub promotion's undo: exactly the rows it wrote). */
+      keys?: Record<string, string[]> | null
+      /** Rows deleted whatever `deletes` says, per table. */
+      alsoDelete?: Record<string, string[]> | null
+    }
+
+/** Context a Hub promotion's apply writes its own record from, inside the same transaction. */
+export interface GivenWriteContext {
+  /** The operations written, per table. */
+  plans: TablePlan[]
+  /** The rows as they were before the write (locked). */
+  before: ConfigSnapshot['tables']
+  /** The rows as they are after the write, read back inside the transaction. */
+  after: ConfigSnapshot['tables']
+}
+
+const sourceRef = (s: RestoreSource) =>
+  s.kind === 'stored' ? `snapshot:${s.id}` : `given:${s.ref}`
+const sourceDeletes = (s: RestoreSource) => (s.kind === 'stored' ? true : s.deletes)
+const sourceKeys = (s: RestoreSource, table: string): Set<string> | null => {
+  if (s.kind !== 'given' || !s.keys) return null
+  return new Set(s.keys[table] ?? [])
+}
+const sourceAlsoDelete = (s: RestoreSource, table: string): Set<string> | null =>
+  s.kind === 'given' && s.alsoDelete?.[table]?.length ? new Set(s.alsoDelete[table]) : null
+
 async function computeWith(
   k: Knex,
-  id: number,
+  source: RestoreSource | number,
   scope: string[] | null | undefined,
   allowCascade: boolean
 ): Promise<ComputedPlan> {
-  const { loadConfigSnapshot } = await import('./config-snapshots.js')
-  const target = await loadConfigSnapshot(id)
+  const src: RestoreSource = typeof source === 'number' ? { kind: 'stored', id: source } : source
+  const id = src.kind === 'stored' ? src.id : 0
+  const deletes = sourceDeletes(src)
+  let target: ConfigSnapshot | null
+  if (src.kind === 'stored') {
+    const { loadConfigSnapshot } = await import('./config-snapshots.js')
+    target = await loadConfigSnapshot(id)
+  } else {
+    target = src.snapshot
+  }
   if (!target) throw new RestoreError(404, 'Snapshot not found', 'NOT_FOUND')
+  // A Changed-here baseline a Hub promotion moved (trigger hub-baseline) is not a point in time.
+  if (src.kind === 'stored' && target.restore_point?.trigger === 'hub-baseline')
+    throw new RestoreError(400, 'That record is not a restore point', 'NOT_A_RESTORE_POINT')
   if (target.format !== 1)
     throw new RestoreError(400, `Unsupported snapshot format ${target.format}`, 'FORMAT')
 
@@ -1061,7 +1161,9 @@ async function computeWith(
     }
     plans.push(
       planTable(table, target.tables[table], live.tables[table], columns.get(table) ?? new Map(), {
-        deletes: true,
+        deletes,
+        keys: sourceKeys(src, table),
+        alsoDelete: sourceAlsoDelete(src, table),
         isActiveUser
       })
     )
@@ -1071,7 +1173,12 @@ async function computeWith(
 
   const dbName = ((await k.raw('SELECT DB_NAME() AS n;')) as Array<{ n: string }>)[0]?.n
   const warnings: string[] = []
-  if (target.instance.database && dbName && target.instance.database !== dbName) {
+  if (
+    src.kind === 'stored' &&
+    target.instance.database &&
+    dbName &&
+    target.instance.database !== dbName
+  ) {
     warnings.push(
       `This snapshot was taken on ${target.instance.database}; this instance is ${dbName} (a database restored from another one carries its snapshots).`
     )
@@ -1094,7 +1201,7 @@ async function computeWith(
       database: target.instance.database,
       restore_point: target.restore_point ?? null
     },
-    plan_hash: planHash(`snapshot:${id}`, changed, { cascade, allowCascade }),
+    plan_hash: planHash(sourceRef(src), changed, { cascade, allowCascade }),
     tables: changed.map((p) => {
       const { ops, inactive_keys: _k, ...rest } = p
       return {
@@ -1119,9 +1226,40 @@ export async function previewRestore(
   scope?: string[] | null,
   allowCascade = false
 ): Promise<RestorePreview> {
-  if (!isMssql())
+  if (!restoreEngineSupported())
     throw new RestoreError(501, 'This needs a SQL Server database.', 'NOT_SUPPORTED_ON_DATABASE')
   return withRestoreDb(async (k) => (await computeWith(k, id, scope, allowCascade)).preview)
+}
+
+/**
+ * Hub config promotion (target side): the plan that makes this instance's config tables look like
+ * a snapshot handed in (redacted and stripped of what this environment keeps by the caller).
+ * Inserts and updates; deletes only with `deletes`. Same preview and hash rules as a restore.
+ */
+export async function previewGivenSnapshot(
+  snapshot: ConfigSnapshot,
+  opts: {
+    ref: string
+    deletes: boolean
+    tables?: string[] | null
+    allowCascade?: boolean
+    keys?: Record<string, string[]> | null
+    alsoDelete?: Record<string, string[]> | null
+  }
+): Promise<RestorePreview> {
+  if (!restoreEngineSupported())
+    throw new RestoreError(501, 'This needs a SQL Server database.', 'NOT_SUPPORTED_ON_DATABASE')
+  const src: RestoreSource = {
+    kind: 'given',
+    snapshot,
+    ref: opts.ref,
+    deletes: opts.deletes,
+    keys: opts.keys ?? null,
+    alsoDelete: opts.alsoDelete ?? null
+  }
+  return withRestoreDb(
+    async (k) => (await computeWith(k, src, opts.tables, opts.allowCascade === true)).preview
+  )
 }
 
 /** Probes only (rolled back): the computed plan on a caller's pool. */
@@ -1135,6 +1273,10 @@ export async function computeRestorePlan(
 }
 
 export interface RestoreResult {
+  /** What a Hub promotion's inTransaction hook answered (written in the same transaction). */
+  extra?: unknown
+  /** What its afterCommit hook answered (after the commit, on the same connection). */
+  after_commit?: unknown
   snapshot_id: number
   /** The restore point stored just before the write — restore it to undo this. */
   pre_restore_id: number | null
@@ -1144,36 +1286,90 @@ export interface RestoreResult {
 
 const restoring = appBox(() => false)
 
+export interface RestoreApplyOpts {
+  planHash: string
+  tables?: string[] | null
+  allowCascade?: boolean
+  userId?: string | null
+  req?: Parameters<typeof import('./activity.js').logActivity>[0]['req']
+}
+
 /**
  * Apply a restore bound to the preview `planHash`. Throws RestoreError: 409 STALE (with the
  * fresh preview) when live config moved since, 409 BUSY / LOCKED, 409 CASCADE when deletes
  * would take rows with them and the plan did not opt in, 400 OVER_CAP, 422 FAILED (nothing
  * written) when an operation failed.
  */
-export async function applyRestore(
-  id: number,
-  opts: {
-    planHash: string
-    tables?: string[] | null
-    allowCascade?: boolean
-    userId?: string | null
-    req?: Parameters<typeof import('./activity.js').logActivity>[0]['req']
+export async function applyRestore(id: number, opts: RestoreApplyOpts): Promise<RestoreResult> {
+  return applyPlanned({ kind: 'stored', id }, opts, null)
+}
+
+/**
+ * Hub config promotion (target side): apply the plan previewGivenSnapshot answered, bound to its
+ * hash. The pre-restore point (`note`) is stored inside the same transaction, from the locked
+ * rows: restoring it (applyRestore) undoes the promotion. Same refusals as applyRestore.
+ */
+export async function applyGivenSnapshot(
+  snapshot: ConfigSnapshot,
+  opts: RestoreApplyOpts & {
+    ref: string
+    deletes: boolean
+    note: string
+    activityNote: string
+    keys?: Record<string, string[]> | null
+    alsoDelete?: Record<string, string[]> | null
+    /** Runs inside the write's transaction, after the rows are written (its answer = `extra`). */
+    inTransaction?: (trx: Knex, ctx: GivenWriteContext) => Promise<unknown>
+    /** Runs right after the commit on the same connection (its answer = `after_commit`). */
+    afterCommit?: (k: Knex, ctx: GivenWriteContext) => Promise<unknown>
   }
 ): Promise<RestoreResult> {
-  if (!isMssql())
+  return applyPlanned(
+    {
+      kind: 'given',
+      snapshot,
+      ref: opts.ref,
+      deletes: opts.deletes,
+      keys: opts.keys ?? null,
+      alsoDelete: opts.alsoDelete ?? null
+    },
+    opts,
+    {
+      note: opts.note,
+      activity: opts.activityNote,
+      inTransaction: opts.inTransaction,
+      afterCommit: opts.afterCommit
+    }
+  )
+}
+
+async function applyPlanned(
+  src: RestoreSource,
+  opts: RestoreApplyOpts,
+  given: {
+    note: string
+    activity: string
+    inTransaction?: (trx: Knex, ctx: GivenWriteContext) => Promise<unknown>
+    afterCommit?: (k: Knex, ctx: GivenWriteContext) => Promise<unknown>
+  } | null
+): Promise<RestoreResult> {
+  if (!restoreEngineSupported())
     throw new RestoreError(501, 'This needs a SQL Server database.', 'NOT_SUPPORTED_ON_DATABASE')
   if (restoring.value) throw new RestoreError(409, 'Another config restore is running', 'BUSY')
   restoring.value = true
+  const id = src.kind === 'stored' ? src.id : 0
+  const ref = sourceRef(src)
+  const deletes = sourceDeletes(src)
   const allowCascade = opts.allowCascade === true
   try {
     const out = await withRestoreDb(async (k) => {
-      const plan = await computeWith(k, id, opts.tables, allowCascade)
+      const plan = await computeWith(k, src, opts.tables, allowCascade)
       const stale = async () =>
         new RestoreError(
           409,
           'Configuration changed since the preview — review the new preview and apply again.',
           'STALE',
-          { preview: (await computeWith(k, id, opts.tables, allowCascade)).preview }
+          { preview: (await computeWith(k, src, opts.tables, allowCascade)).preview }
         )
       if (plan.preview.plan_hash !== opts.planHash) {
         throw new RestoreError(
@@ -1199,12 +1395,22 @@ export async function applyRestore(
         )
       }
       const touched = plan.plans.filter((p) => p.ops.length > 0).map((p) => p.table)
-      if (touched.length === 0) return { applied: [] as AppliedCounts[], pre: null, touched }
+      if (touched.length === 0)
+        return {
+          applied: [] as AppliedCounts[],
+          pre: null,
+          touched,
+          extra: undefined as unknown,
+          afterCommit: undefined as unknown
+        }
+      const box: { written: GivenWriteContext | null } = { written: null }
       const hashTables = plan.plans.map((p) => p.table)
       const when = new Date(plan.target.generated_at)
-      const note = `Before restoring ${touched.length} table${touched.length === 1 ? '' : 's'} to snapshot #${id} (${when.toISOString().slice(0, 16).replace('T', ' ')} UTC)`
+      const note =
+        given?.note ??
+        `Before restoring ${touched.length} table${touched.length === 1 ? '' : 's'} to snapshot #${id} (${when.toISOString().slice(0, 16).replace('T', ' ')} UTC)`
       try {
-        return await lockedWrite(
+        const res = await lockedWrite(
           k,
           hashTables,
           async (trx, locked) => {
@@ -1219,7 +1425,9 @@ export async function applyRestore(
                 locked.tables[t] ?? {},
                 plan.columns.get(t) ?? new Map(),
                 {
-                  deletes: true,
+                  deletes,
+                  keys: sourceKeys(src, t),
+                  alsoDelete: sourceAlsoDelete(src, t),
                   isActiveUser: (u) => active.has(u.toUpperCase())
                 }
               )
@@ -1227,7 +1435,7 @@ export async function applyRestore(
             const changed = plans.filter((p) => p.ops.length > 0 || p.inactive_keys.length > 0)
             const cascade = await computeCascade(trx as unknown as Knex, changed, plan.fks)
             return {
-              hash: planHash(`snapshot:${id}`, changed, { cascade, allowCascade }),
+              hash: planHash(ref, changed, { cascade, allowCascade }),
               plans: changed
             }
           },
@@ -1242,8 +1450,10 @@ export async function applyRestore(
             }
             const pre = await storeConfigSnapshot(
               preSnap,
-              'pre-restore',
-              { userId: opts.userId ?? null, restoreOf: id, note },
+              // A Hub promotion's points keep their own retention (never push out a human
+              // restore's undo point).
+              given ? 'hub-pre-apply' : 'pre-restore',
+              { userId: opts.userId ?? null, restoreOf: id || null, note },
               trx as unknown as Knex
             )
             const applied = await applyTablePlans(
@@ -1254,9 +1464,30 @@ export async function applyRestore(
               plan.columns,
               plan.fks
             )
-            return { applied, pre, touched }
+            let extra: unknown
+            if (given?.inTransaction || given?.afterCommit) {
+              const after = await buildConfigSnapshot(
+                { tables: touched, version: NIVARO_VERSION, environment: config.NODE_ENV },
+                trx as unknown as Parameters<typeof buildConfigSnapshot>[1]
+              )
+              box.written = { plans, before: locked.tables, after: after.tables }
+              if (given.inTransaction)
+                extra = await given.inTransaction(trx as unknown as Knex, box.written)
+            }
+            return { applied, pre, touched, extra }
           }
         )
+        // After the commit, on the same connection (never inside the write: a read of another
+        // table there could wait on this transaction's own rows).
+        let afterCommit: unknown
+        if (given?.afterCommit && box.written) {
+          try {
+            afterCommit = await given.afterCommit(k, box.written)
+          } catch (e) {
+            afterCommit = { error: e instanceof Error ? e.message : String(e) }
+          }
+        }
+        return { ...res, afterCommit }
       } catch (err) {
         if (err instanceof StaleInsideTransaction) throw await stale()
         if (err instanceof RestoreError) throw err
@@ -1282,11 +1513,13 @@ export async function applyRestore(
     const { logActivity } = await import('./activity.js')
     for (const a of out.applied) {
       await logActivity({
-        action: 'config-restore',
+        action: given ? 'config-promote' : 'config-restore',
         user: opts.userId ?? null,
         collection: a.table,
-        item: String(id),
-        comment: `restored to snapshot #${id}: ${a.inserted} inserted, ${a.updated} updated, ${a.deleted} deleted`,
+        item: given ? String(out.pre.id) : String(id),
+        comment: given
+          ? `${given.activity}: ${a.inserted} inserted, ${a.updated} updated, ${a.deleted} deleted`
+          : `restored to snapshot #${id}: ${a.inserted} inserted, ${a.updated} updated, ${a.deleted} deleted`,
         req: opts.req
       })
     }
@@ -1299,14 +1532,23 @@ export async function applyRestore(
       { inserted: 0, updated: 0, deleted: 0 }
     )
     await logActivity({
-      action: 'config-restore',
+      action: given ? 'config-promote' : 'config-restore',
       user: opts.userId ?? null,
       collection: 'nivaro_config_snapshots',
-      item: String(id),
-      comment: `${out.applied.length} tables restored to snapshot #${id} (${totals.inserted} inserted, ${totals.updated} updated, ${totals.deleted} deleted); undo = restore #${out.pre.id}`,
+      item: given ? String(out.pre.id) : String(id),
+      comment: given
+        ? `${given.activity}: ${out.applied.length} tables (${totals.inserted} inserted, ${totals.updated} updated, ${totals.deleted} deleted); undo = restore #${out.pre.id}`
+        : `${out.applied.length} tables restored to snapshot #${id} (${totals.inserted} inserted, ${totals.updated} updated, ${totals.deleted} deleted); undo = restore #${out.pre.id}`,
       req: opts.req
     })
-    return { snapshot_id: id, pre_restore_id: out.pre.id, tables: out.applied, totals }
+    return {
+      snapshot_id: id,
+      pre_restore_id: out.pre.id,
+      tables: out.applied,
+      totals,
+      ...(out.extra !== undefined ? { extra: out.extra } : {}),
+      ...(out.afterCommit !== undefined ? { after_commit: out.afterCommit } : {})
+    }
   } finally {
     restoring.value = false
   }
@@ -1343,7 +1585,7 @@ export async function applyUploadedTable(
     userId?: string | null
   }
 ): Promise<UploadApplyPreview | (AppliedCounts & { plan_hash: string })> {
-  if (!isMssql())
+  if (!restoreEngineSupported())
     throw new RestoreError(501, 'This needs a SQL Server database.', 'NOT_SUPPORTED_ON_DATABASE')
   if (RESTORE_EXCLUDED[table]) {
     throw new RestoreError(400, `${table}: ${RESTORE_EXCLUDED[table]}`, 'EXCLUDED')

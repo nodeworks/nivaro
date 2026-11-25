@@ -50,6 +50,8 @@ describe('hub registry', () => {
       'Extensions',
       // Hub change operations (enhancements 26–28) sit beside Releases.
       'Changes',
+      // Config promotion (hub-enh/config) follows Releases.
+      'Config',
       // Hub ops (enhancements 10, 20, 19) come last, then People (hub-enh/people).
       'Issues',
       'Storage',
@@ -70,6 +72,7 @@ describe('hub registry', () => {
     expect(hubForPath('/hub/security')?.tab.label).toBe('Security')
     expect(hubForPath('/hub/signin')?.tab.label).toBe('Sign-in')
     expect(hubForPath('/hub/releases')?.tab.label).toBe('Releases')
+    expect(hubForPath('/hub/config')?.tab.label).toBe('Config')
     expect(hubForPath('/hub/secrets')?.tab.label).toBe('Secrets')
     expect(hubForPath('/hub/fleet')?.tab.label).toBe('Fleet')
     expect(hubForPath('/hub/audit')?.tab.label).toBe('Audit')

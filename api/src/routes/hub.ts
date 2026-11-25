@@ -102,6 +102,7 @@ import {
 import { readJobLog } from '../services/job-runs.js'
 import { hubCapacityRoutes } from './hub-capacity.js'
 import { hubChangeRoutes } from './hub-changes.js'
+import { hubConfigRoutes } from './hub-config.js'
 import { hubPhase3Routes } from './hub-create.js'
 import { hubDataRoutes } from './hub-data.js'
 import { hubDockerRoutes } from './hub-docker.js'
@@ -152,6 +153,7 @@ export async function hubRoutes(app: FastifyInstance) {
   hubReleaseRoutes(app) // release trains, schedules, freezes, auto-rollback, release notes
   hubChangeRoutes(app) // change calendar, deploy windows, pre-deploy checklists
   hubDataRoutes(app) // data care: backups, restore drills, refreshes, move rehearsals
+  hubConfigRoutes(app) // config promotion between an app's environments (idea 30)
   hubScaleRoutes(app) // scaling: manual + automatic replicas and limits of Docker stacks
   hubPlacementRoutes(app) // hosts + regions, cost chargeback, read-only federation with Hubs
   hubSecurityRoutes(app) // access reviews, compliance pack, image scan, TLS watch, break-glass
