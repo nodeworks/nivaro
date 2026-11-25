@@ -32,6 +32,7 @@ import { NIVARO_VERSION } from '../version.js'
  *   POST /api/hub-deployment/apps/:id/first-admin    → as POST /api/hub-link/first-admin, in that app
  *   POST /api/hub-deployment/refresh                 → 202; every replica re-reads its tenant list
  *   POST /api/hub-deployment/db-check {client, connection} → {reachable, ledger, db_identity, error}
+ *   POST /api/hub-deployment/apps/:id/people/lookup|suspend → as POST /api/hub-link/people/*
  *
  * Mounted only on a Hub shared deployment (tenantSource() === 'hub'), never in Nivaro Cloud and
  * never on a dedicated app (HUB_TOKEN alone). The tenant hook frees `/api/hub-deployment/`, so a
@@ -197,6 +198,49 @@ export async function hubDeploymentLinkRoutes(app: FastifyInstance): Promise<voi
         'deployment link: seeding the first administrator failed'
       )
       return refuse(reply, 500, 'The first administrator could not be saved', 'FIRST_ADMIN_FAILED')
+    }
+  })
+
+  // Hub people directory + "Offboard everywhere", inside the app (services/hub-link/people.ts):
+  // the same answers as POST /api/hub-link/people/lookup|suspend. Never frozen by the app's own
+  // maintenance switch: offboarding is a security action.
+  app.post<{ Params: { id: string; op: string } }>('/apps/:id/people/:op', async (req, reply) => {
+    const op = req.params.op
+    if (op !== 'lookup' && op !== 'suspend') return refuse(reply, 404, 'Not found', 'NOT_FOUND')
+    const registry = registryOr503(reply)
+    if (!registry) return reply
+    const t = await tenantById(registry, req.params.id)
+    if (!t) return refuse(reply, 404, 'This deployment does not serve that app', 'UNKNOWN_APP')
+    try {
+      const out = await withTenant(
+        t,
+        async () => {
+          const people = await import('../services/hub-link/people.js')
+          if (op === 'lookup') return people.lookupPeople(req.body, getTenantDb())
+          return people.suspendPeople(req.body, {
+            k: getTenantDb(),
+            redis: (app as unknown as { redis?: unknown }).redis,
+            app
+          })
+        },
+        t.origin
+      )
+      if (!out.ok)
+        return refuse(
+          reply,
+          out.status,
+          'message' in out ? out.message : 'Give up to 5 emails and/or Entra ids',
+          out.code
+        )
+      return reply.send(
+        'state' in out ? { state: out.state, accounts: out.accounts } : { accounts: out.accounts }
+      )
+    } catch (err) {
+      app.log.error(
+        { tenant: t.id, code: (err as { code?: unknown } | null)?.code ?? null },
+        'deployment link: a people call failed'
+      )
+      return refuse(reply, 500, 'The people call failed', 'PEOPLE_FAILED')
     }
   })
 

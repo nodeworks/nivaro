@@ -316,6 +316,37 @@ export async function hubLinkRoutes(app: FastifyInstance) {
     }
   })
 
+  // ─── Hub people directory + "Offboard everywhere" (services/hub-link/people.ts) ───────────
+  // POSTs so the identity travels in the body, never the URL. Matched by email or Entra object
+  // id only; suspend only (never delete), refused 409 LAST_ADMIN. Exempt from the maintenance
+  // freeze like every hub-link call but first-admin: offboarding must not wait for a freeze.
+  app.post('/people/lookup', async (req, reply) => {
+    reply.header('Cache-Control', 'no-store')
+    const { lookupPeople } = await import('../services/hub-link/people.js')
+    const out = await lookupPeople(req.body)
+    if (!out.ok) return fail(reply, 400, 'BAD_PERSON', 'Give up to 5 emails and/or Entra ids')
+    return reply.send({ accounts: out.accounts })
+  })
+
+  app.post('/people/suspend', async (req, reply) => {
+    reply.header('Cache-Control', 'no-store')
+    const { suspendPeople } = await import('../services/hub-link/people.js')
+    try {
+      const out = await suspendPeople(req.body, {
+        redis: (app as unknown as { redis?: unknown }).redis,
+        app
+      })
+      if (!out.ok) return fail(reply, out.status, out.code, out.message)
+      return reply.send({ state: out.state, accounts: out.accounts })
+    } catch (err) {
+      app.log.error(
+        { code: (err as { code?: unknown } | null)?.code ?? null },
+        'hub link: suspending a person failed'
+      )
+      return fail(reply, 500, 'SUSPEND_FAILED', 'The person could not be suspended')
+    }
+  })
+
   // ─── Hub phase 6 Task 10: file transfer for a move (services/hub-transfer/*) ──────────────
   // As the SOURCE: a 6 h transfer ticket the target presents to GET /api/hub-transfer/files/:id
   // (routes/hub-transfer.ts). As the TARGET: pull every env-local stored object from the source
