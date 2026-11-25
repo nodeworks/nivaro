@@ -4,13 +4,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 // caller gets its own copy, a write to nivaro_users through an attached pool forgets them,
 // and nothing is kept in a process that never attached the seam.
 
-const state = vi.hoisted(() => ({ reads: 0, row: null as Record<string, unknown> | null }))
+const state = vi.hoisted(() => ({
+  reads: 0,
+  row: null as Record<string, unknown> | null,
+  fail: null as Error | null
+}))
 
 vi.mock('../../../db/index.js', () => {
   const builder = () => ({
     where: () => ({
       first: async () => {
         state.reads++
+        if (state.fail) throw state.fail
         return state.row ? { ...state.row } : undefined
       },
       update: () => Promise.resolve(1)
@@ -29,6 +34,8 @@ import {
   attachIdentitySeam,
   authenticate,
   forgetIdentityRows,
+  IDENTITY_STALE_ON_TIMEOUT_MS,
+  isDbRequestTimeout,
   isIdentityWrite
 } from '../../../middleware/authenticate.js'
 import { setStoredCacheConfigForTests } from '../../../services/cache-config.js'
@@ -57,6 +64,7 @@ describe('identity rows', () => {
   beforeEach(() => {
     state.reads = 0
     state.row = { id: 'U1', role: null, status: 'active', first_name: 'A' }
+    state.fail = null
     setStoredCacheConfigForTests(null)
     forgetIdentityRows()
   })
@@ -102,5 +110,54 @@ describe('identity rows', () => {
     } finally {
       delete process.env.IDENTITY_CACHE
     }
+  })
+
+  it('a timed-out read answers with the kept row (≤ 2 min), never on other errors or after a forget', async () => {
+    // seam attached by the earlier test
+    vi.useFakeTimers({ now: Date.now(), toFake: ['Date'] })
+    try {
+      const a = req('U1') as { user?: Record<string, unknown> }
+      await authenticate(a as never, {} as never).catch(() => {})
+      expect(a.user?.id).toBe('U1')
+      vi.setSystemTime(Date.now() + 10_000) // past the 5 s TTL: the next request reads again
+      state.fail = Object.assign(
+        new Error(
+          'select top (@p0) * from [nivaro_users] where [id] = @p1 and [status] = @p2 - Timeout: Request failed to complete in 15000ms'
+        ),
+        { code: 'ETIMEOUT' }
+      )
+      const b = req('U1') as { user?: Record<string, unknown> }
+      await authenticate(b as never, {} as never)
+      expect(b.user?.id).toBe('U1')
+
+      // another error is not hidden
+      state.fail = new Error('Login failed for user')
+      await expect(authenticate(req('U1'), {} as never)).rejects.toThrow('Login failed')
+
+      // too old
+      state.fail = Object.assign(new Error('x'), { code: 'ETIMEOUT' })
+      vi.setSystemTime(Date.now() + IDENTITY_STALE_ON_TIMEOUT_MS + 1)
+      await expect(authenticate(req('U1'), {} as never)).rejects.toMatchObject({ code: 'ETIMEOUT' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a forgotten row never answers a timeout', async () => {
+    await authenticate(req('U1'), {} as never).catch(() => {})
+    forgetIdentityRows('U1')
+    state.fail = Object.assign(new Error('x'), { code: 'ETIMEOUT' })
+    await expect(authenticate(req('U1'), {} as never)).rejects.toMatchObject({ code: 'ETIMEOUT' })
+  })
+})
+
+describe('isDbRequestTimeout', () => {
+  it('the driver timeout by code or message, nothing else', () => {
+    expect(isDbRequestTimeout({ code: 'ETIMEOUT' })).toBe(true)
+    expect(
+      isDbRequestTimeout(new Error('q - Timeout: Request failed to complete in 15000ms'))
+    ).toBe(true)
+    expect(isDbRequestTimeout(new Error('ECONNRESET'))).toBe(false)
+    expect(isDbRequestTimeout(null)).toBe(false)
   })
 })

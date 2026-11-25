@@ -28,13 +28,18 @@ export function issueMessage(message: string | null | undefined): string {
  * views (the Traffic Map's error groups) group exactly the way issues dedupe.
  */
 export function issueFingerprint(source: string, route: string, message: string): string {
+  // One database statement timing out is one issue whichever route ran it (issue-key.ts).
+  const timedOut = source === 'server' ? dbTimeoutStatement(issueMessage(message)) : null
+  if (timedOut) return stableIssueKey('db-timeout', timedOut.key)
   return createHash('sha256')
     .update(`${source}|${route}|${issueMessage(message)}`)
     .digest('hex')
 }
 
 // The stable-key rule for system issues lives in a leaf module (the cron plugin imports it).
-export { normalizeIssueText, stableIssueKey } from './issue-key.js'
+export { dbTimeoutStatement, normalizeIssueText, stableIssueKey } from './issue-key.js'
+
+import { dbTimeoutStatement, stableIssueKey } from './issue-key.js'
 
 const OCCURRENCE_KEEP = 50
 const OCCURRENCE_DAYS = 30
@@ -131,6 +136,20 @@ export async function trackError(opts: {
   try {
     const message = issueMessage(opts.message)
     const fingerprint = opts.fingerprint ?? issueFingerprint(opts.source, opts.route, message)
+    // A statement timeout groups across routes (issueFingerprint): its title names the
+    // statement, not the first route, and its details follow the latest route.
+    const timedOut =
+      !opts.fingerprint && opts.source === 'server' ? dbTimeoutStatement(message) : null
+    const refreshDetails = opts.refreshDetails ?? !!timedOut
+    const fallbackTitle = timedOut
+      ? `Database statement timed out after ${Math.round(timedOut.ms / 1000)} s: ${timedOut.sql.replace(/\s+/g, ' ')}`.slice(
+          0,
+          300
+        )
+      : undefined
+    const fallbackSummary = timedOut
+      ? 'The database did not answer this statement in time. Every route that ran it while the database was busy or locked adds to this issue; Route shows the latest one.'
+      : undefined
 
     // The occurrence an open issue page streams (admin room): who, where, which build.
     // Names a person by id only — the page resolves it through an admin-only route.
@@ -179,9 +198,11 @@ export async function trackError(opts: {
       // A stable-key issue shows its latest occurrence (the `Message:` line is always written,
       // so a reader of an older machine-titled row still finds the latest text in details).
       let refreshed: string | null = null
-      if (opts.refreshDetails) {
+      if (refreshDetails) {
         const readable = await describe()
-        const summary = (opts.summary ?? readable?.description ?? '').replace(/\s+/g, ' ').trim()
+        const summary = (opts.summary ?? readable?.description ?? fallbackSummary ?? '')
+          .replace(/\s+/g, ' ')
+          .trim()
         refreshed = detailsFor(summary, true)
       }
       await db('nivaro_issues')
@@ -213,8 +234,10 @@ export async function trackError(opts: {
     if (existing) return await bump(existing)
 
     const readable = await describe()
-    const title = (opts.title ?? readable?.title ?? '').replace(/\s+/g, ' ').trim()
-    const summary = (opts.summary ?? readable?.description ?? '').replace(/\s+/g, ' ').trim()
+    const title = (opts.title ?? readable?.title ?? fallbackTitle ?? '').replace(/\s+/g, ' ').trim()
+    const summary = (opts.summary ?? readable?.description ?? fallbackSummary ?? '')
+      .replace(/\s+/g, ' ')
+      .trim()
     const details = detailsFor(summary, !!title)
 
     const id = await insertIssueOnce({

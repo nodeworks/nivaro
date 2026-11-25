@@ -54,3 +54,22 @@ export function normalizeIssueText(text: string | null | undefined, max = 300): 
     .toLowerCase()
     .slice(0, max)
 }
+
+const DB_TIMEOUT_RE = /^([\s\S]+?) - Timeout: Request failed to complete in (\d+)ms/
+
+/**
+ * A server error that is the database driver's request timeout on one statement
+ * (`<sql> - Timeout: Request failed to complete in 15000ms`): the statement as written and
+ * its normalised form (the grouping key), else null. Every route that runs the same statement
+ * while the database cannot answer is ONE problem — EFP production's daily replication snapshot
+ * timed out the sign-in read on 35 routes in one second and filed 35 issues (2026-11-25).
+ */
+export function dbTimeoutStatement(
+  message: string | null | undefined
+): { sql: string; key: string; ms: number } | null {
+  const m = DB_TIMEOUT_RE.exec(String(message ?? '').trim())
+  if (!m) return null
+  const sql = m[1].trim()
+  const key = normalizeIssueText(sql)
+  return key ? { sql, key, ms: Number(m[2]) } : null
+}

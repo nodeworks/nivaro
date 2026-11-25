@@ -220,7 +220,37 @@ type IdentityEntry = { at: number; row: User }
 const identityRows = registerAppKeyed(new Map<string, IdentityEntry>())
 const identityInflight = registerAppKeyed(new Map<string, Promise<User | undefined>>())
 let identityGen = 0
-const identityCounters = { hits: 0, misses: 0, busts: 0 }
+const identityCounters = { hits: 0, misses: 0, busts: 0, stale_served: 0 }
+
+/**
+ * How old a kept row may be and still answer when the fresh read TIMES OUT (EFP production's
+ * daily replication snapshot locks nivaro_users for ~15 s around 4:35 AM ET: every request's
+ * sign-in read timed out and a record page failed 41 calls at once, 2026-11-25). Only a request
+ * timeout, never another error, and never a row this process has forgotten (a write to
+ * nivaro_users here, an access-version move, a config epoch, the cache console). The price: a
+ * suspension or role change made on ANOTHER replica in the last two minutes is not seen while
+ * the database cannot answer.
+ */
+export const IDENTITY_STALE_ON_TIMEOUT_MS = 120_000
+
+/** Exported for tests: is this the driver's request timeout (tedious ETIMEOUT / its message)? */
+export function isDbRequestTimeout(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false
+  const e = err as { code?: unknown; message?: unknown }
+  if (e.code === 'ETIMEOUT') return true
+  return (
+    typeof e.message === 'string' && /Timeout: Request failed to complete in \d+ms/.test(e.message)
+  )
+}
+
+/** The kept row a timed-out read may fall back to (a copy), or undefined. */
+function staleIdentityRow(key: string, err: unknown): User | undefined {
+  if (!isDbRequestTimeout(err)) return undefined
+  const hit = identityRows.get(key)
+  if (!hit || Date.now() - hit.at > IDENTITY_STALE_ON_TIMEOUT_MS) return undefined
+  identityCounters.stale_served++
+  return { ...hit.row }
+}
 
 function identityTtlMs(): number {
   return cacheSetting('identity.enabled') ? cacheSetting('identity.ttl_ms') : 0
@@ -323,7 +353,14 @@ async function activeUserById(id: unknown): Promise<User | undefined> {
       .finally(() => identityInflight.delete(key))
     identityInflight.set(key, p)
   }
-  const row = await p
+  let row: User | undefined
+  try {
+    row = await p
+  } catch (err) {
+    const stale = staleIdentityRow(key, err)
+    if (stale) return stale
+    throw err
+  }
   return row ? { ...row } : undefined
 }
 
