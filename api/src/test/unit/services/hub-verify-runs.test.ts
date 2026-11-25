@@ -322,6 +322,9 @@ describe('running smoke checks', () => {
 describe('a failed smoke run and the automatic rollback rule', () => {
   async function failedPromotionRun(onFail: 'notify' | 'rollback') {
     await smoke.saveSuite(env.staging, suite({ on_fail: onFail }), USER)
+    // Saved an hour before the promotion (a deploy finished before the suite was saved is never
+    // tested): the real clock is past the test's fixed one.
+    await db('nivaro_hub_smoke_suites').update({ updated_at: new Date(clock - 60 * MIN) })
     await rollback.saveRule(
       env.staging,
       {
@@ -389,6 +392,9 @@ describe('a failed smoke run and the automatic rollback rule', () => {
   /** A promotion of `envId` watched by an enabled rule, with its smoke run queued (not run). */
   async function watchedPromotion(envId: number, over: Record<string, unknown> = {}) {
     await smoke.saveSuite(envId, suite({ on_fail: 'rollback', ...over }), USER)
+    // Saved an hour before the promotion (a deploy finished before the suite was saved is never
+    // tested): the real clock is past the test's fixed one.
+    await db('nivaro_hub_smoke_suites').update({ updated_at: new Date(clock - 60 * MIN) })
     await rollback.saveRule(
       envId,
       {
@@ -523,6 +529,9 @@ describe('a failed smoke run and the automatic rollback rule', () => {
 
   it('rollback without a watching rule: the people are told it is not rolled back', async () => {
     await smoke.saveSuite(env.staging, suite({ on_fail: 'rollback' }), USER)
+    // Saved an hour before the promotion (a deploy finished before the suite was saved is never
+    // tested): the real clock is past the test's fixed one.
+    await db('nivaro_hub_smoke_suites').update({ updated_at: new Date(clock - 60 * MIN) })
     await deployRow({
       envId: env.staging,
       version: '0.3.215',
