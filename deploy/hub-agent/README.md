@@ -38,6 +38,17 @@ holds the Docker socket for writes.
 2. Edit `HUB_AGENT_IMAGES`, the edge settings and the host suffixes.
 3. `docker stack deploy -c stack.example.yml nivaro-hub-agent` on a manager.
 
+A Hub (0.3.215 or later) can also create a brand-new app straight onto this agent
+(Apps → Create app → Docker). Its plan reads `GET /v1/health` and refuses before
+anything is written when the agent would refuse the stack: the Hub image not in
+`HUB_AGENT_IMAGES` (`IMAGE_NOT_ALLOWED`), an extension image not in it
+(`EXTENSION_NOT_ALLOWED`), a hostname outside `HUB_AGENT_HOST_SUFFIXES`
+(`HOSTNAME_NOT_ALLOWED`), a setting outside the known keys and
+`HUB_AGENT_ENV_PREFIXES` (`SETTING_INVALID`), bundled Redis without
+`HUB_AGENT_REDIS_IMAGE` (`REDIS_NOT_OFFERED`), a publish port outside
+`HUB_AGENT_PUBLISH_PORTS` (`PUBLISH_PORT_NOT_ALLOWED`) or a stack name the swarm
+already runs (`STACK_EXISTS`).
+
 `cap_drop: [ALL]` is intended. The agent runs as root and root already owns the
 socket's access path, so it needs no capability. A host whose socket is not
 owned by root needs group access instead: run the service as `0:<docker gid>`

@@ -5,6 +5,7 @@ import type { GitCtx } from '../gitlab-client.js'
 import { getApp } from '../io-holder.js'
 import { type JobRunHandle, startJobRun } from '../job-runs.js'
 import { ciConfigVerifier } from './create/promote-ci-check.js'
+import { creationOpenRefusal } from './create/store.js'
 import { hubDeploysKeys } from './deploys.js'
 import { type DockerStepOps, defaultDockerOps, type StackDeployed } from './docker/run-step.js'
 import { DriverMisconfiguredError, repositoryIdentity } from './drivers.js'
@@ -1108,6 +1109,9 @@ export async function startPromotion(
   // deployComponentAt, never this.
   const open = await moveOpenRefusal({ envIds: [envId] })
   if (open) throw new PromotionError(open.code, open.message, open.status)
+  // Gap `create` (review L4): an environment still being created is the creation's.
+  const creating = await creationOpenRefusal(envId)
+  if (creating) throw new PromotionError(creating.code, creating.message, creating.status)
   if (req.kind !== 'promote' && req.kind !== 'rollback')
     throw new PromotionError('BAD_KIND', 'kind must be promote or rollback')
   const apply = req.apply === true

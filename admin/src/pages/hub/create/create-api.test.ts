@@ -22,6 +22,9 @@ const API = join(import.meta.dirname, '../../../../../api/src')
 const SOURCES = [
   'routes/hub-create.ts',
   'services/hub/create/plan.ts',
+  'services/hub/create/gather.ts',
+  'services/hub/create/docker-steps.ts',
+  'services/hub/create/dest.ts',
   'services/hub/create/run.ts',
   'services/hub/create/steps.ts',
   'services/hub/create/store.ts',

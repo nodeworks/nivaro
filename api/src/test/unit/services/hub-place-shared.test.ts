@@ -1435,3 +1435,83 @@ describe('re-review FW1-M-3: the place re-checks extensions under the deployment
     }
   })
 })
+
+describe('gap create (review L6): placeForCreation, the creation place step', () => {
+  async function creating() {
+    const app = await newApp()
+    const envId = await newEnv(app.id, { status: 'provisioning' })
+    // The creation's own open row: placeForCreation is that creation, so it is no refusal.
+    await db('nivaro_hub_creations').insert({
+      app_id: app.id,
+      environment_id: envId,
+      status: 'running',
+      steps: '[]',
+      version: '0.3.210',
+      first_admin: '{}'
+    })
+    TENANTS = [Store.tenantIdFor(app, { id: envId })]
+    return { app, envId, dbId: await newDb() }
+  }
+
+  it('places inline under the caller lock, never releasing it; a second call answers already', async () => {
+    const { envId, dbId } = await creating()
+    const lock = memoryPromoteLock
+    const token = (await lock.take(envId, 'creation')) as string
+    const fake = fakeClient()
+    const lines: string[] = []
+    const input = { shared_id: sharedId, database_id: dbId, first_admin: ADMIN }
+    const out = await Place.placeForCreation(envId, input, 'admin-1', {
+      lock,
+      token,
+      log: (l) => lines.push(l),
+      deps: { client: fake.factory, sleep, now }
+    })
+    expect(out).toEqual({ already: false })
+    const env = await db('nivaro_hub_environments').where({ id: envId }).first()
+    expect(env.status).toBe('active')
+    expect(fake.calls.firstAdmin).toHaveLength(1)
+    expect(lines.join('\n')).toMatch(/1\. placed on shared-one/)
+    // The lock is still the caller's.
+    expect(await lock.renew(envId, token)).toBe(true)
+    // Done already: nothing placed again.
+    const again = await Place.placeForCreation(envId, input, 'admin-1', {
+      lock,
+      token,
+      log: () => undefined,
+      deps: { client: fake.factory, sleep, now }
+    })
+    expect(again).toEqual({ already: true })
+    expect(fake.calls.firstAdmin).toHaveLength(1)
+  })
+
+  it('a failed run throws its code (lock kept); a retry places again with the kept app key', async () => {
+    const { envId, dbId } = await creating()
+    const lock = memoryPromoteLock
+    const token = (await lock.take(envId, 'creation')) as string
+    let schema: { state: string; error: string | null } = {
+      state: 'failed',
+      error: 'migration 512 failed'
+    }
+    const fake = fakeClient({ schema: () => schema })
+    const input = { shared_id: sharedId, database_id: dbId, first_admin: ADMIN }
+    const o = { lock, token, log: () => undefined, deps: { client: fake.factory, sleep, now } }
+    const err = await refusal(Place.placeForCreation(envId, input, 'admin-1', o))
+    expect(err).toBeInstanceOf(Place.PlaceSharedError)
+    expect(err.code).toBe('SCHEMA_FAILED')
+    expect(await lock.renew(envId, token)).toBe(true)
+    const key = await Store.openAppKey(envId)
+    expect(key).toMatch(/^[0-9a-f]{64}$/)
+
+    schema = { state: 'ok', error: null }
+    expect(await Place.placeForCreation(envId, input, 'admin-1', o)).toEqual({ already: false })
+    expect(await Store.openAppKey(envId)).toBe(key)
+    const env = await db('nivaro_hub_environments').where({ id: envId }).first()
+    expect(env.status).toBe('active')
+  })
+
+  it('the open-creation refusal still holds for a plain place-shared', async () => {
+    const { envId, dbId } = await creating()
+    const err = await refusal(place(envId, { database_id: dbId }, { client: fakeClient().factory }))
+    expect(err.code).toBe('CREATION_RUNNING')
+  })
+})
