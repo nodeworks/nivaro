@@ -1177,6 +1177,9 @@ export const AGENT_FIELD_COPY: Record<string, string> = {
   SETTING_INVALID: 'A stack setting has a value the agent cannot use.',
   SHARED_KEY_MISMATCH: 'The stack belongs to another shared deployment.',
   ROLE_NOT_SHARED: 'That process role, or that set of roles, cannot run on a shared deployment.',
+  FOLDER_BAD: 'A files folder name is not one the agent accepts (plain folder names only, no dots or slashes at the start).',
+  NO_NFS_EXPORT: 'A per-stack files folder needs an NFS share set up on the agent first.',
+  RUN_AS_BAD: 'The process user setting is not one the agent accepts.',
   ROLE_NEEDS_TRAEFIK_V3:
     'A separate realtime role needs Traefik v3: set the agent to Traefik v3 (HUB_AGENT_TRAEFIK_VERSION=3), or run without a separate realtime role.'
 }

@@ -1122,6 +1122,10 @@ export const MOVE_CODE_COPY: Record<string, Copy> = {
     title: "This environment's database record is being attached or detached",
     hint: 'Try again in a moment.'
   },
+  REFRESH_RUNNING: {
+    title: "This environment's database is being refreshed or rolled back",
+    hint: 'Wait for it to finish, then try again.'
+  },
   SHARED_UPGRADE_RUNNING: {
     title: 'The shared deployment is being upgraded',
     hint: 'Wait for the upgrade to end (Shared deployments tab), then try again.'
