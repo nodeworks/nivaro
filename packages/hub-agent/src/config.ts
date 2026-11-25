@@ -9,6 +9,7 @@
 import { createHash } from 'node:crypto'
 import { parsePinned } from './image-ref.js'
 import { operatorPrefixConflict } from './spec.js'
+import { isNfsOpts, nfsExport, redisVolumeDefault } from './volumes.js'
 
 export class ConfigError extends Error {
   readonly code: string
@@ -42,8 +43,22 @@ export type AgentConfig = {
   publishPorts: [number, number] | null
   /** `<repo>[:<tag>]@sha256:<64 hex>` or null (bundled Redis not offered). */
   redisImage: string | null
+  /** The uploads volumes' driver and options. An NFS `device` here is the export ROOT (0.2.2). */
   volumeDriver: string
   volumeOpts: Record<string, string>
+  /**
+   * HUB_AGENT_REDIS_VOLUME_DRIVER / _OPTS_FILE (0.2.2): bundled Redis's volume. Default: the
+   * uploads driver and options, except `local` with none when those mount NFS (Redis never on
+   * NFS). NFS options are refused here (REDIS_VOLUME_OPTS_BAD).
+   */
+  redisVolumeDriver: string
+  redisVolumeOpts: Record<string, string>
+  /**
+   * HUB_AGENT_VOLUME_EXPORT_MOUNT (0.2.2): where the agent's own container sees the NFS export
+   * root, so it can check (and make) each stack's folder before a deploy. null = not mounted:
+   * a stack on the export is refused (EXPORT_MOUNT_MISSING) rather than deployed blind.
+   */
+  exportMount: string | null
   extensionsRoot: string
   extensionsHostRoot: string
   extensionsShared: boolean
@@ -286,6 +301,37 @@ export function loadAgentConfig(env: NodeJS.ProcessEnv, readFile: ReadFile): Age
     if (!volumeOptsSafe(volumeOpts)) throw new ConfigError('VOLUME_OPTS_BAD')
   }
 
+  // Bundled Redis (0.2.2): its own driver and options, never NFS.
+  let redis = redisVolumeDefault(volumeDriver, volumeOpts)
+  const redisDriverRaw = env.HUB_AGENT_REDIS_VOLUME_DRIVER?.trim()
+  const redisOptsRaw = readJson(
+    readFile,
+    env.HUB_AGENT_REDIS_VOLUME_OPTS_FILE,
+    'REDIS_VOLUME_OPTS_BAD'
+  )
+  if (redisDriverRaw || redisOptsRaw !== undefined) {
+    let opts: Record<string, string> = {}
+    if (redisOptsRaw !== undefined) {
+      if (
+        !isPlainObject(redisOptsRaw) ||
+        Object.values(redisOptsRaw).some((v) => typeof v !== 'string')
+      ) {
+        throw new ConfigError('REDIS_VOLUME_OPTS_BAD')
+      }
+      opts = redisOptsRaw as Record<string, string>
+    }
+    if (!volumeOptsSafe(opts) || isNfsOpts(opts)) throw new ConfigError('REDIS_VOLUME_OPTS_BAD')
+    redis = { driver: redisDriverRaw || 'local', opts }
+  }
+
+  // The export root as the agent sees it: only with an NFS export, absolute, no `..`.
+  const exportMountRaw = env.HUB_AGENT_VOLUME_EXPORT_MOUNT?.trim() || null
+  if (exportMountRaw !== null) {
+    if (!extensionRootOk(exportMountRaw)) throw new ConfigError('VOLUME_EXPORT_MOUNT_BAD')
+    if (nfsExport({ volumeOpts }) === null) throw new ConfigError('VOLUME_EXPORT_MOUNT_BAD')
+  }
+  const exportMount = exportMountRaw ? exportMountRaw.replace(/\/+$/, '') : null
+
   const extensionsRoot = env.HUB_AGENT_EXTENSIONS_ROOT?.trim() || DEFAULT_EXTENSIONS_ROOT
   const extensionsHostRoot = env.HUB_AGENT_EXTENSIONS_HOST_ROOT?.trim() || extensionsRoot
   if (!extensionRootOk(extensionsRoot) || !extensionRootOk(extensionsHostRoot))
@@ -330,6 +376,9 @@ export function loadAgentConfig(env: NodeJS.ProcessEnv, readFile: ReadFile): Age
     redisImage,
     volumeDriver,
     volumeOpts,
+    redisVolumeDriver: redis.driver,
+    redisVolumeOpts: redis.opts,
+    exportMount,
     extensionsRoot,
     extensionsHostRoot,
     extensionsShared,

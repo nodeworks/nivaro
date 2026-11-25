@@ -20,10 +20,10 @@
  */
 import http from 'node:http'
 import path from 'node:path'
-import { isDeepStrictEqual } from 'node:util'
 import { type AgentConfig, volumeOptsSafe } from './config.js'
 import { parsePinned } from './image-ref.js'
 import { LABEL_MANAGED, LABEL_NAMESPACE } from './names.js'
+import { APP_USER, volumeAllowed } from './volumes.js'
 
 export const ENGINE_API_PREFIX = '/v1.44'
 
@@ -294,17 +294,21 @@ function insideRoot(root: string, source: unknown): boolean {
 }
 
 /**
- * A volume mount may carry a DriverConfig only when it is exactly the agent's
- * configured driver and options (checked safe at start and again here): any
- * other driver config can turn a "volume" into a bind of a host path. Swarm
- * needs it to create the volume the same way on every node a task lands on.
+ * A volume mount may carry a DriverConfig only when it is exactly what the agent
+ * makes for that volume (volumes.ts volumeAllowed: the Redis volume's driver and
+ * options, or the uploads driver and options — on an NFS export, a folder under
+ * it, under the name its digest gives), and the options are safe (checked at
+ * start and again here): any other driver config can turn a "volume" into a bind
+ * of a host path. Swarm needs it to create the volume the same way on every node
+ * a task lands on.
  */
-function driverConfigOk(cfg: AgentConfig, dc: unknown): boolean {
+function driverConfigOk(cfg: AgentConfig, stack: string, source: unknown, dc: unknown): boolean {
   if (!isPlainObject(dc)) return false
   if (Object.keys(dc).some((k) => k !== 'Name' && k !== 'Options')) return false
-  if (dc.Name !== cfg.volumeDriver) return false
   const opts = dc.Options ?? {}
-  return isPlainObject(opts) && volumeOptsSafe(opts) && isDeepStrictEqual(opts, cfg.volumeOpts)
+  return (
+    isPlainObject(opts) && volumeOptsSafe(opts) && volumeAllowed(cfg, stack, source, dc.Name, opts)
+  )
 }
 
 function checkMount(cfg: AgentConfig, stack: string, m: unknown): void {
@@ -317,7 +321,7 @@ function checkMount(cfg: AgentConfig, stack: string, m: unknown): void {
       if (!isPlainObject(m.VolumeOptions)) refuse('volume options')
       if (
         m.VolumeOptions.DriverConfig !== undefined &&
-        !driverConfigOk(cfg, m.VolumeOptions.DriverConfig)
+        !driverConfigOk(cfg, stack, m.Source, m.VolumeOptions.DriverConfig)
       )
         refuse('volume DriverConfig')
     }
@@ -416,6 +420,8 @@ function checkServiceBody(cfg: AgentConfig, p: string, body: Record<string, unkn
   for (const k of ['Privileges', 'CapabilityAdd', 'Sysctls', 'Isolation']) {
     if (spec[k] !== undefined) refuse(`service ${k}`)
   }
+  // The only user a service may name is the image's own (a spec's run_as: 'app').
+  if (spec.User !== undefined && spec.User !== APP_USER) refuse('service User')
   if (!ownedBy(spec.Labels, stack)) refuse('container labels')
   checkSecretRefs(stack, spec)
   const mounts = spec.Mounts ?? []
@@ -433,10 +439,12 @@ function checkVolumeCreate(cfg: AgentConfig, body: Record<string, unknown>): voi
   const stack = objectStack(body.Name)
   if (!stack || body.Name === `nvh_${stack}`) refuse('volume name')
   if (!ownedBy(body.Labels, stack)) refuse('volume labels')
-  if (body.Driver !== cfg.volumeDriver) refuse('volume driver')
+  if (typeof body.Driver !== 'string') refuse('volume driver')
   const opts = body.DriverOpts ?? {}
   if (!isPlainObject(opts) || !volumeOptsSafe(opts)) refuse('volume driver options')
-  if (!isDeepStrictEqual(opts, cfg.volumeOpts)) refuse('volume driver options')
+  // Only the stack's uploads or Redis volume, each with exactly the driver and options the
+  // agent gives it (volumes.ts).
+  if (!volumeAllowed(cfg, stack, body.Name, body.Driver, opts)) refuse('volume driver options')
 }
 
 function checkNetworkCreate(body: Record<string, unknown>): void {

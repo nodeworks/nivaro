@@ -13,6 +13,7 @@ import { sweepUnpackContainers, sweepUnpackFolders } from './extensions.js'
 import { makeHandlers } from './handlers.js'
 import { createLog, type Log } from './log.js'
 import { createServer, type HandlerResult, type Handlers } from './server.js'
+import { nfsExport } from './volumes.js'
 
 export const AGENT_VERSION = '0.2.2'
 export const MIN_ENGINE_API = [1, 44] as const
@@ -91,6 +92,11 @@ export function baseHandlers(cfg: AgentConfig, facts: EngineFacts, engine?: Engi
         engine_api: facts.engineApi,
         swarm: { manager: true, node_id: facts.nodeId, nodes: await swarmNodes() },
         volume_driver: cfg.volumeDriver,
+        // 0.2.2: uploads on an NFS export, one folder per stack (shared by every node), whether
+        // the agent sees the export to check those folders, and bundled Redis's own driver.
+        volume_nfs: nfsExport(cfg) !== null,
+        export_mount: cfg.exportMount !== null,
+        redis_volume_driver: cfg.redisVolumeDriver,
         images: cfg.images,
         host_suffixes: cfg.hostSuffixes,
         edge: cfg.edge,

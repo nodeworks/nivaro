@@ -7,6 +7,7 @@ import { Buffer } from 'node:buffer'
 import { parsePinned } from './image-ref.js'
 import { KNOWN_ENV_KEYS } from './known-env.js'
 import { ENV_KEY_RE } from './names.js'
+import { folderOk, nfsExport } from './volumes.js'
 
 export type Role = 'all' | 'web' | 'worker' | 'realtime' | 'importer' | 'exporter'
 
@@ -36,6 +37,23 @@ export type StackSpec = {
    * claim: it never enters LABEL_HOSTS and never makes another stack's name HOSTNAME_TAKEN.
    */
   host_pattern?: string
+  /**
+   * 0.2.2: an EXISTING folder under the agent's NFS export (relative, 1–8 segments, no `..`)
+   * the stack uses as its uploads instead of `<stack>/uploads`. Never created or changed by the
+   * agent; needs an NFS export on the agent (NO_NFS_EXPORT).
+   */
+  uploads_folder?: string
+  /**
+   * 0.2.2: where the files sit inside the uploads volume (relative, same rule):
+   * STORAGE_LOCAL_ROOT becomes `/app/uploads/<files_subfolder>`. Any volume driver.
+   */
+  files_subfolder?: string
+  /**
+   * 0.2.2: `app` = the app services run as uid 1000 (the image's `node` user, ContainerSpec.User
+   * 1000:1000) from the start, never as root: for an NFS export with root squash, where root in
+   * the container can do nothing on the files. Absent = the image decides (it steps down to 1000).
+   */
+  run_as?: 'app'
 }
 
 /** The part of AgentConfig validation reads (a full AgentConfig satisfies it). */
@@ -52,6 +70,8 @@ export type SpecConfig = {
   envPrefixes?: readonly string[]
   /** HUB_AGENT_TRAEFIK_VERSION (P6-34); absent = 3. A host_pattern needs v3 (HostRegexp). */
   traefikVersion?: 2 | 3
+  /** The uploads volume options: an NFS `device` makes `uploads_folder` possible. */
+  volumeOpts?: Record<string, string> | null
 }
 
 export type FieldCode =
@@ -75,6 +95,9 @@ export type FieldCode =
   | 'SHARED_KEY_MISMATCH'
   | 'ROLE_NOT_SHARED'
   | 'ROLE_NEEDS_TRAEFIK_V3'
+  | 'FOLDER_BAD'
+  | 'NO_NFS_EXPORT'
+  | 'RUN_AS_BAD'
 
 export type FieldError = { field: string; code: FieldCode }
 
@@ -104,7 +127,10 @@ const TOP_FIELDS = new Set([
   'redis',
   'extensions',
   'publish_port',
-  'host_pattern'
+  'host_pattern',
+  'uploads_folder',
+  'files_subfolder',
+  'run_as'
 ])
 const ROLE_FIELDS = new Set(['role', 'replicas', 'cpus', 'memory_mb', 'env'])
 
@@ -628,6 +654,27 @@ export function validateStackSpec(body: unknown, cfg: SpecConfig): SpecResult {
     } else publishPort = port
   } else if (cfg.edge === 'publish' && hasWeb) bad('publish_port', 'REQUIRED')
 
+  // Files (0.2.2): an adopted folder on the export, the files' sub-folder, the run-as user.
+  let uploadsFolder: string | undefined
+  if (has('uploads_folder')) {
+    const v = body.uploads_folder
+    if (!folderOk(v)) bad('uploads_folder', 'FOLDER_BAD')
+    else if (nfsExport({ volumeOpts: cfg.volumeOpts }) === null)
+      bad('uploads_folder', 'NO_NFS_EXPORT')
+    else uploadsFolder = v
+  }
+  let filesSubfolder: string | undefined
+  if (has('files_subfolder')) {
+    const v = body.files_subfolder
+    if (!folderOk(v)) bad('files_subfolder', 'FOLDER_BAD')
+    else filesSubfolder = v
+  }
+  let runAs: 'app' | undefined
+  if (has('run_as')) {
+    if (body.run_as !== 'app') bad('run_as', 'RUN_AS_BAD')
+    else runAs = 'app'
+  }
+
   if (errs.length > 0 || !owner) return { ok: false, fields: errs }
 
   const spec: StackSpec = {
@@ -643,5 +690,8 @@ export function validateStackSpec(body: unknown, cfg: SpecConfig): SpecResult {
   }
   if (publishPort !== undefined) spec.publish_port = publishPort
   if (hostPattern !== undefined) spec.host_pattern = hostPattern
+  if (uploadsFolder !== undefined) spec.uploads_folder = uploadsFolder
+  if (filesSubfolder !== undefined) spec.files_subfolder = filesSubfolder
+  if (runAs !== undefined) spec.run_as = runAs
   return { ok: true, spec }
 }

@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { pack } from 'tar-stream'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { type AgentConfig, loadAgentConfig } from '../src/config.js'
+import type { FolderFs } from '../src/folders.js'
 import type { StackSpec } from '../src/spec.js'
 import {
   applyStack,
@@ -15,6 +16,7 @@ import {
   stackLeftovers,
   stackStatus
 } from '../src/stacks.js'
+import { nfsUploadsName } from '../src/volumes.js'
 import { FakeEngine, type Recorded } from './fake-engine.js'
 
 const IMAGE = `nodeworks/nivaro@sha256:${'1'.repeat(64)}`
@@ -989,5 +991,226 @@ describe('shared deployment host pattern (phase 6)', () => {
     await applyStack(fake, cfg, S, spec({ hostnames: [] }), deps)
     const labels = creates(fake).flatMap((c) => Object.keys((c.body as any)?.Labels ?? {}))
     expect(labels.some((k) => k.startsWith('traefik.http.routers.'))).toBe(false)
+  })
+})
+
+describe('0.2.2: uploads on an NFS export, one folder per stack', () => {
+  const NFS = { type: 'nfs', o: 'addr=nas,rw,nfsvers=4', device: ':/volume1/nivaro' }
+  const MOUNT = '/var/lib/nivaro-hub-agent/export'
+
+  function nfsCfg(over: Record<string, string> = {}): AgentConfig {
+    return loadAgentConfig(
+      {
+        HUB_AGENT_TOKEN_FILE: '/t',
+        HUB_AGENT_EDGE_NETWORK: 'edge',
+        HUB_AGENT_HOST_SUFFIXES: '.apps.corp',
+        HUB_AGENT_REDIS_IMAGE: REDIS,
+        HUB_AGENT_EXTENSIONS_ROOT: root,
+        HUB_AGENT_EXTENSIONS_HOST_ROOT: '/srv/ext',
+        HUB_AGENT_VOLUME_OPTS_FILE: '/v',
+        HUB_AGENT_VOLUME_EXPORT_MOUNT: MOUNT,
+        ...over
+      },
+      (p) => (p === '/v' ? JSON.stringify(NFS) : TOKEN)
+    )
+  }
+
+  type Entry = { uid: number; gid: number; mode: number; dir: boolean }
+  /** An in-memory export: path → owner/mode. chown works unless `noChown`. */
+  function fakeFs(
+    initial: Record<string, Entry> = {},
+    opts: { noChown?: boolean; deny?: string } = {}
+  ) {
+    const files = new Map<string, Entry>(Object.entries(initial))
+    const calls: string[] = []
+    const err = (code: string) => Object.assign(new Error(code), { code })
+    const fs: FolderFs = {
+      async stat(p) {
+        calls.push(`stat ${p}`)
+        if (opts.deny && p.startsWith(opts.deny)) throw err('EACCES')
+        const e = files.get(p)
+        if (!e) throw err('ENOENT')
+        return { uid: e.uid, gid: e.gid, mode: e.mode, isDirectory: () => e.dir }
+      },
+      async mkdir(p) {
+        calls.push(`mkdir ${p}`)
+        files.set(p, { uid: 0, gid: 0, mode: 0o40755, dir: true })
+      },
+      async chown(p, uid, gid) {
+        calls.push(`chown ${p} ${uid}:${gid}`)
+        if (opts.noChown) throw err('EPERM')
+        const e = files.get(p)
+        if (e) files.set(p, { ...e, uid, gid })
+      }
+    }
+    return { fs, files, calls }
+  }
+  const mine = (dir = true): Entry => ({ uid: 1000, gid: 1000, mode: 0o40755, dir })
+
+  const byName = (f: FakeEngine, n: string) =>
+    [...f.services.values()].find((x) => x.Spec.Name === n)
+
+  let ncfg: AgentConfig
+  let nfake: FakeEngine
+  beforeEach(() => {
+    ncfg = nfsCfg()
+    nfake = new FakeEngine(ncfg)
+  })
+
+  it("makes the stack's folder, hands it to uid 1000 and mounts it; Redis stays local", async () => {
+    const f = fakeFs()
+    const r = await applyStack(nfake, ncfg, S, spec(), { ...deps, folderFs: f.fs })
+    expect(f.calls).toContain(`mkdir ${MOUNT}/${S}/uploads`)
+    expect(f.calls).toContain(`chown ${MOUNT}/${S}/uploads 1000:1000`)
+    const device = `:/volume1/nivaro/${S}/uploads`
+    const name = nfsUploadsName(S, 'local', { ...NFS, device })
+    expect([...nfake.volumes.keys()].sort()).toEqual([`nvh_${S}_redis`, name])
+    expect(nfake.volumes.get(name)?.Options).toEqual({ ...NFS, device })
+    expect(nfake.volumes.get(`nvh_${S}_redis`)).toMatchObject({ Driver: 'local', Options: {} })
+    const web = byName(nfake, `${S}_web`)
+    expect(web?.Spec.TaskTemplate.ContainerSpec.Mounts[0]).toMatchObject({ Source: name })
+    expect(byName(nfake, `${S}_redis`)?.Spec.TaskTemplate.Placement).toEqual({
+      Constraints: [`node.id==${NODE}`]
+    })
+    expect(nfake.refused).toEqual([])
+    // A second apply finds it there and changes nothing.
+    nfake.calls.length = 0
+    const again = await applyStack(nfake, ncfg, S, spec(), { ...deps, folderFs: f.fs })
+    expect(again.spec_hash).toBe(r.spec_hash)
+    expect(nfake.writes()).toEqual([])
+  })
+
+  it('the stack hash changes with the per-stack layout and with an adopted folder', () => {
+    expect(stackHash(spec(), ncfg, NODE)).not.toBe(stackHash(spec(), cfg, NODE))
+    expect(stackHash(spec({ uploads_folder: 'efp' }), ncfg, NODE)).not.toBe(
+      stackHash(spec(), ncfg, NODE)
+    )
+    expect(stackHash(spec({ files_subfolder: 'x' }), ncfg, NODE)).not.toBe(
+      stackHash(spec(), ncfg, NODE)
+    )
+  })
+
+  it('uses an adopted folder as it is: never made, never chowned', async () => {
+    const f = fakeFs({
+      [`${MOUNT}/efp`]: mine(),
+      [`${MOUNT}/efp/directus-uploads`]: mine()
+    })
+    await applyStack(
+      nfake,
+      ncfg,
+      S,
+      spec({ uploads_folder: 'efp', files_subfolder: 'directus-uploads', run_as: 'app' }),
+      { ...deps, folderFs: f.fs }
+    )
+    expect(f.calls.some((c) => c.startsWith('mkdir') || c.startsWith('chown'))).toBe(false)
+    const web = byName(nfake, `${S}_web`)?.Spec.TaskTemplate.ContainerSpec
+    expect(web.User).toBe('1000:1000')
+    expect(web.Env).toContain('STORAGE_LOCAL_ROOT=/app/uploads/directus-uploads')
+    expect(web.Mounts[0].VolumeOptions.DriverConfig.Options.device).toBe(':/volume1/nivaro/efp')
+    expect(nfake.refused).toEqual([])
+  })
+
+  it('refuses before any Docker write: missing, not writable, unseen folders, no mount', async () => {
+    const cases: Array<[string, ReturnType<typeof fakeFs>, Partial<StackSpec>, AgentConfig?]> = [
+      ['UPLOADS_FOLDER_MISSING', fakeFs(), { uploads_folder: 'efp' }],
+      [
+        'UPLOADS_FOLDER_MISSING',
+        fakeFs({ [`${MOUNT}/efp`]: mine(false) }),
+        { uploads_folder: 'efp' }
+      ],
+      [
+        'UPLOADS_FOLDER_MISSING',
+        fakeFs({ [`${MOUNT}/efp`]: mine() }),
+        { uploads_folder: 'efp', files_subfolder: 'gone' }
+      ],
+      [
+        'UPLOADS_FOLDER_NOT_WRITABLE',
+        fakeFs({ [`${MOUNT}/efp`]: { uid: 0, gid: 0, mode: 0o40755, dir: true } }),
+        { uploads_folder: 'efp' }
+      ],
+      ['UPLOADS_FOLDER_NOT_WRITABLE', fakeFs({}, { noChown: true }), {}],
+      ['UPLOADS_FOLDER_UNCHECKED', fakeFs({}, { deny: MOUNT }), {}],
+      ['EXPORT_MOUNT_MISSING', fakeFs(), {}, nfsCfg({ HUB_AGENT_VOLUME_EXPORT_MOUNT: '' })]
+    ]
+    for (const [want, f, over, c] of cases) {
+      const e = new FakeEngine(c ?? ncfg)
+      expect(
+        await codeOf(applyStack(e, c ?? ncfg, S, spec(over), { ...deps, folderFs: f.fs })),
+        want
+      ).toBe(want)
+      expect(e.writes()).toEqual([])
+    }
+    // An adopted folder is never handed over, even when chown would work.
+    const f = fakeFs({ [`${MOUNT}/efp`]: { uid: 0, gid: 0, mode: 0o40755, dir: true } })
+    await codeOf(
+      applyStack(nfake, ncfg, S, spec({ uploads_folder: 'efp' }), { ...deps, folderFs: f.fs })
+    )
+    expect(f.calls.some((x) => x.startsWith('chown'))).toBe(false)
+  })
+
+  it('a group- or other-writable folder of another owner is fine', async () => {
+    for (const e of [
+      { uid: 0, gid: 1000, mode: 0o40775, dir: true },
+      { uid: 0, gid: 0, mode: 0o40777, dir: true }
+    ]) {
+      const f = fakeFs({ [`${MOUNT}/efp`]: e }, { noChown: true })
+      const fe = new FakeEngine(ncfg)
+      await applyStack(fe, ncfg, S, spec({ uploads_folder: 'efp' }), { ...deps, folderFs: f.fs })
+      expect(fe.refused).toEqual([])
+    }
+  })
+
+  it('two Hub stacks never share a folder (UPLOADS_FOLDER_TAKEN)', async () => {
+    const f = fakeFs({ [`${MOUNT}/efp`]: mine(), [`${MOUNT}/efp/sub`]: mine() })
+    await applyStack(nfake, ncfg, S, spec({ uploads_folder: 'efp' }), { ...deps, folderFs: f.fs })
+    const other = (over: Partial<StackSpec>) =>
+      applyStack(
+        nfake,
+        ncfg,
+        'other-st',
+        spec({ owner: { app: 'other' }, hostnames: ['other.apps.corp'], ...over }),
+        { ...deps, folderFs: f.fs }
+      )
+    nfake.calls.length = 0
+    for (const folder of ['efp', 'efp/sub']) {
+      expect(await codeOf(other({ uploads_folder: folder })), folder).toBe('UPLOADS_FOLDER_TAKEN')
+    }
+    // The derived folder of `acme-st` taken by an adopted one around it.
+    const g = fakeFs({ [`${MOUNT}/${S}`]: mine() })
+    const e2 = new FakeEngine(ncfg)
+    await applyStack(
+      e2,
+      ncfg,
+      'other-st',
+      spec({ owner: { app: 'other' }, hostnames: ['other.apps.corp'], uploads_folder: S }),
+      {
+        ...deps,
+        folderFs: g.fs
+      }
+    )
+    expect(await codeOf(applyStack(e2, ncfg, S, spec(), { ...deps, folderFs: g.fs }))).toBe(
+      'UPLOADS_FOLDER_TAKEN'
+    )
+    expect(nfake.writes()).toEqual([])
+  })
+
+  it("an older stack's volume on the export root (pre-0.2.2 layout) takes no folder", async () => {
+    nfake.volumes.set('nvh_old_uploads', {
+      Name: 'nvh_old_uploads',
+      Driver: 'local',
+      Labels: MANAGED('old', 'old'),
+      Options: { ...NFS },
+      Scope: 'local'
+    })
+    const f = fakeFs()
+    await applyStack(nfake, ncfg, S, spec(), { ...deps, folderFs: f.fs })
+    expect(nfake.refused).toEqual([])
+  })
+
+  it('a non-NFS agent never touches the file system', async () => {
+    const f = fakeFs()
+    await applyStack(fake, cfg, S, spec({ files_subfolder: 'x' }), { ...deps, folderFs: f.fs })
+    expect(f.calls).toEqual([])
+    expect([...fake.volumes.keys()].sort()).toEqual([`nvh_${S}_redis`, `nvh_${S}_uploads`])
   })
 })

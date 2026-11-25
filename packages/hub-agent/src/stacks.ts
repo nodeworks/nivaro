@@ -46,6 +46,7 @@ import {
   registryAuthHeader,
   removeExtensionFolders
 } from './extensions.js'
+import { ensureUploadsFolder, type FolderFs } from './folders.js'
 import { parsePinned } from './image-ref.js'
 import type { Log } from './log.js'
 import {
@@ -60,13 +61,22 @@ import {
   LABEL_SHARED,
   LABEL_SPEC_HASH,
   ownershipLabels,
-  redisVolume,
   secretName,
-  specHash,
-  uploadsVolume
+  specHash
 } from './names.js'
 import { type EngineServiceSpec, patternRule, renderServices } from './render.js'
 import type { StackSpec } from './spec.js'
+import {
+  foldersOverlap,
+  folderUnderExport,
+  nfsExport,
+  redisPinned,
+  redisVolumeChanged,
+  redisVolumeOf,
+  redisVolumePlan,
+  uploadsVolumePlan,
+  type VolumePlan
+} from './volumes.js'
 
 export { StackError } from './errors.js'
 
@@ -85,7 +95,7 @@ type ServiceRow = {
 }
 type SecretRow = { ID: string; Spec?: { Name?: string; Labels?: Labels } }
 type NetworkRow = { Id?: string; Name?: string; Labels?: Labels }
-type VolumeRow = { Name?: string; Labels?: Labels }
+type VolumeRow = { Name?: string; Labels?: Labels; Options?: Record<string, unknown> | null }
 type TaskRow = {
   ServiceID?: string
   DesiredState?: string
@@ -116,6 +126,8 @@ export type StackDeps = {
   log?: Log
   sleep?: (ms: number) => Promise<void>
   extension?: ExtensionDeps
+  /** File access to the NFS export mount (stack uploads folders); tests pass a fake. */
+  folderFs?: FolderFs
   /** Remove retries for objects still in use while tasks shut down. */
   removeAttempts?: number
   removeDelayMs?: number
@@ -403,7 +415,9 @@ function repoOfImage(image: string): string | null {
  * an agent without one keeps the hash it had before the option existed.
  */
 export function stackHash(spec: StackSpec, cfg: AgentConfig, nodeId: string): string {
-  const pinned = Object.keys(spec.extensions).length > 0 && !cfg.extensionsShared
+  const pinned =
+    (Object.keys(spec.extensions).length > 0 && !cfg.extensionsShared) ||
+    (spec.redis === 'bundled' && redisPinned(cfg))
   const agent = {
     edge: cfg.edge,
     edgeNetwork: cfg.edgeNetwork,
@@ -417,7 +431,11 @@ export function stackHash(spec: StackSpec, cfg: AgentConfig, nodeId: string): st
     extensionsShared: cfg.extensionsShared,
     extensionsHostRoot: cfg.extensionsHostRoot,
     node: pinned ? nodeId : null,
-    ...(cfg.caBundle ? { caBundle: cfg.caBundle.sha256 } : {})
+    ...(cfg.caBundle ? { caBundle: cfg.caBundle.sha256 } : {}),
+    // 0.2.2, each only where it changes what is rendered (else the hash an older agent made):
+    // one folder per stack on an NFS export, and a Redis volume other than the uploads one.
+    ...(nfsExport(cfg) !== null ? { uploadsLayout: 'per-stack' } : {}),
+    ...(redisVolumeChanged(cfg) ? { redisVolume: redisVolumeOf(cfg) } : {})
   }
   return sha256(JSON.stringify(canonical({ v: 1, spec: specHash(spec, cfg.hmacKey), agent })))
 }
@@ -536,6 +554,9 @@ type Survey = {
   myNetwork: NetworkRow[]
   myVolumes: VolumeRow[]
   mySecrets: SecretRow[]
+  /** Every service and volume read (the uploads-folder check looks at other stacks' ones). */
+  services: ServiceRow[]
+  volumes: VolumeRow[]
 }
 
 /**
@@ -589,7 +610,7 @@ async function survey(engine: Engine, name: string, spec: StackSpec): Promise<Su
     )
   }
   mine.sort((a, b) => nameOf(a).localeCompare(nameOf(b)))
-  return { owner, network, mine, myNetwork, myVolumes, mySecrets }
+  return { owner, network, mine, myNetwork, myVolumes, mySecrets, services, volumes }
 }
 
 /** The live TaskTemplate.ForceUpdate of a service (0 when unset). */
@@ -652,6 +673,48 @@ function authFor(cfg: AgentConfig, svc: EngineServiceSpec): string | undefined {
   return repo ? registryAuthHeader(cfg, repo) : undefined
 }
 
+/** The NFS device a managed volume or service mount names (null when none). */
+function mountDevices(s: ServiceRow): unknown[] {
+  const mounts = s.Spec?.TaskTemplate?.ContainerSpec?.Mounts
+  if (!Array.isArray(mounts)) return []
+  return mounts.map((m) => (isObj(m) ? m.VolumeOptions?.DriverConfig?.Options?.device : null))
+}
+
+/**
+ * Two stacks never share an uploads folder (0.2.2): another Hub stack's service or volume that
+ * mounts this folder, a folder inside it or one around it refuses 409 UPLOADS_FOLDER_TAKEN.
+ * The export root itself is the pre-0.2.2 layout every older stack used: it counts for none.
+ * Services and volumes the Hub does not manage (an app's old stack during its cutover) do not
+ * count: the same app may keep reading its folder from there.
+ */
+function assertFolderFree(
+  stack: string,
+  plan: VolumePlan,
+  exportDevice: string,
+  services: ServiceRow[],
+  volumes: VolumeRow[]
+): void {
+  const folder = plan.folder as string
+  const taken = (device: unknown) => {
+    const rel = folderUnderExport(exportDevice, device)
+    return !!rel && foldersOverlap(rel, folder)
+  }
+  const byService = services.some(
+    (s) => !belongs(s, stack) && isManaged(labelsOf(s)) && mountDevices(s).some(taken)
+  )
+  const byVolume = volumes.some(
+    (v) => !objectOfStack(v.Name, stack) && isManaged(v.Labels) && taken(v.Options?.device)
+  )
+  if (byService || byVolume) {
+    throw new StackError(
+      409,
+      'UPLOADS_FOLDER_TAKEN',
+      `Another Hub stack keeps its files in ${folder}, or in a folder inside or around it`,
+      [{ field: plan.adopted ? 'uploads_folder' : 'uploads', code: 'UPLOADS_FOLDER_TAKEN' }]
+    )
+  }
+}
+
 export async function applyStack(
   engine: Engine,
   cfg: AgentConfig,
@@ -661,8 +724,21 @@ export async function applyStack(
 ): Promise<ApplyResult> {
   assertName(name)
   // 1. Read everything, judge ownership and hostnames — before any write.
-  const { owner, network, mine, myNetwork, myVolumes, mySecrets } = await survey(engine, name, spec)
+  const { owner, network, mine, myNetwork, myVolumes, mySecrets, services, volumes } = await survey(
+    engine,
+    name,
+    spec
+  )
   const hash = stackHash(spec, cfg, deps.nodeId)
+
+  // 1b. The uploads folder on an NFS export: free, there (or made) and writable by uid 1000 —
+  // before any Docker write, so a refusal leaves the stack as it was.
+  const uploads = uploadsVolumePlan(name, spec, cfg)
+  const exportDevice = nfsExport(cfg)
+  if (uploads.folder !== null && exportDevice !== null) {
+    assertFolderFree(name, uploads, exportDevice, services, volumes)
+    await ensureUploadsFolder(cfg.exportMount, uploads, spec.files_subfolder, deps.folderFs)
+  }
 
   // 2. The stack network.
   if (myNetwork.length === 0) {
@@ -672,16 +748,16 @@ export async function applyStack(
     if (!ok(r.status)) throw engineFailed()
   }
 
-  // 3. Volumes, with the configured driver and options.
-  const wantVolumes = [uploadsVolume(name)]
-  if (spec.redis === 'bundled') wantVolumes.push(redisVolume(name))
+  // 3. Volumes: uploads (on an export, the stack's own folder) and Redis, each with its driver.
+  const wantVolumes = [uploads]
+  if (spec.redis === 'bundled') wantVolumes.push(redisVolumePlan(name, cfg))
   for (const v of wantVolumes) {
-    if (myVolumes.some((x) => x.Name === v)) continue
+    if (myVolumes.some((x) => x.Name === v.name)) continue
     const r = await engine.call('POST', '/volumes/create', {
       body: {
-        Name: v,
-        Driver: cfg.volumeDriver,
-        DriverOpts: { ...cfg.volumeOpts },
+        Name: v.name,
+        Driver: v.driver,
+        DriverOpts: { ...v.opts },
         Labels: { ...owner }
       }
     })

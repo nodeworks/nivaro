@@ -1172,3 +1172,76 @@ describe('validateStackSpec — shared deployment owners (phase 6)', () => {
     expect(r.ok && 'host_pattern' in r.spec).toBe(false)
   })
 })
+
+describe('validateStackSpec — files on an NFS export (0.2.2)', () => {
+  const nfs = cfg({ volumeOpts: { type: 'nfs', o: 'addr=nas', device: ':/export/nivaro' } })
+
+  it('takes an adopted folder, a files sub-folder and run_as app', () => {
+    const r = validateStackSpec(
+      {
+        ...base(),
+        uploads_folder: 'efp',
+        files_subfolder: 'directus-uploads',
+        run_as: 'app'
+      },
+      nfs
+    )
+    if (!r.ok) throw new Error(JSON.stringify(r.fields))
+    expect(r.spec.uploads_folder).toBe('efp')
+    expect(r.spec.files_subfolder).toBe('directus-uploads')
+    expect(r.spec.run_as).toBe('app')
+    const deep = validateStackSpec({ ...base(), uploads_folder: 'a/b.c/d_e-f' }, nfs)
+    expect(deep.ok).toBe(true)
+  })
+
+  it('a spec without them is unchanged (and keeps its hash)', () => {
+    const r = validateStackSpec(base(), nfs)
+    expect(r).toEqual({ ok: true, spec: EXAMPLE })
+  })
+
+  it('an adopted folder needs an NFS export on the agent (NO_NFS_EXPORT)', () => {
+    expect(codeOf({ ...base(), uploads_folder: 'efp' }, 'uploads_folder')).toBe('NO_NFS_EXPORT')
+    expect(
+      codeOf(
+        { ...base(), uploads_folder: 'efp' },
+        'uploads_folder',
+        cfg({ volumeOpts: { type: 'nfs', o: 'addr=nas' } })
+      )
+    ).toBe('NO_NFS_EXPORT')
+    // A files sub-folder works on any volume.
+    expect(validateStackSpec({ ...base(), files_subfolder: 'x' }, cfg()).ok).toBe(true)
+  })
+
+  it('FOLDER_BAD for a path that could leave the export', () => {
+    for (const v of [
+      '',
+      '..',
+      '../x',
+      'a/../b',
+      '/abs',
+      'a/',
+      'a//b',
+      '.hidden',
+      'a/.b',
+      'a b',
+      'a\\b',
+      'a/b/c/d/e/f/g/h/i',
+      'x'.repeat(65),
+      7,
+      null
+    ]) {
+      expect(codeOf({ ...base(), uploads_folder: v }, 'uploads_folder', nfs), String(v)).toBe(
+        'FOLDER_BAD'
+      )
+      expect(codeOf({ ...base(), files_subfolder: v }, 'files_subfolder', nfs), String(v)).toBe(
+        'FOLDER_BAD'
+      )
+    }
+  })
+
+  it('RUN_AS_BAD for anything but app', () => {
+    for (const v of ['root', '0', '1000:1000', 'image', null, true]) {
+      expect(codeOf({ ...base(), run_as: v }, 'run_as'), String(v)).toBe('RUN_AS_BAD')
+    }
+  })
+})

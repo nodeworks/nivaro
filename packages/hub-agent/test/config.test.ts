@@ -450,6 +450,76 @@ describe('fix round 1: listen, token strength, volume options, extension root', 
     }
   })
 
+  describe('0.2.2: Redis volume and the export mount', () => {
+    const nfs = { type: 'nfs', o: 'addr=10.0.0.5,rw', device: ':/export/nivaro' }
+    const load = (env: Record<string, string>, extra: Record<string, string> = {}) =>
+      loadAgentConfig(
+        { ...traefikEnv, ...env },
+        files({ ...baseFiles, '/v': JSON.stringify(nfs), ...extra })
+      )
+
+    it('Redis follows the uploads driver and options unless those mount NFS', () => {
+      const plain = loadAgentConfig(
+        { ...traefikEnv, HUB_AGENT_VOLUME_DRIVER: 'rexray', HUB_AGENT_VOLUME_OPTS_FILE: '/v' },
+        files({ ...baseFiles, '/v': '{"size":"10"}' })
+      )
+      expect(plain.redisVolumeDriver).toBe('rexray')
+      expect(plain.redisVolumeOpts).toEqual({ size: '10' })
+      const onNfs = load({ HUB_AGENT_VOLUME_OPTS_FILE: '/v' })
+      expect(onNfs.redisVolumeDriver).toBe('local')
+      expect(onNfs.redisVolumeOpts).toEqual({})
+      expect(onNfs.exportMount).toBeNull()
+    })
+
+    it('takes a Redis driver and options of its own, never NFS or a bind', () => {
+      const cfg = load(
+        {
+          HUB_AGENT_VOLUME_OPTS_FILE: '/v',
+          HUB_AGENT_REDIS_VOLUME_DRIVER: 'rexray',
+          HUB_AGENT_REDIS_VOLUME_OPTS_FILE: '/r'
+        },
+        { '/r': '{"size":"5"}' }
+      )
+      expect(cfg.redisVolumeDriver).toBe('rexray')
+      expect(cfg.redisVolumeOpts).toEqual({ size: '5' })
+      for (const r of [JSON.stringify(nfs), '{"type":"nfs4"}', '{"o":"bind"}', '[1]', '{"a":1}']) {
+        expect(
+          codeOf(() =>
+            load(
+              { HUB_AGENT_VOLUME_OPTS_FILE: '/v', HUB_AGENT_REDIS_VOLUME_OPTS_FILE: '/r' },
+              { '/r': r }
+            )
+          ),
+          r
+        ).toBe('REDIS_VOLUME_OPTS_BAD')
+      }
+    })
+
+    it('reads the export mount only beside an NFS export, absolute and without ..', () => {
+      const cfg = load({
+        HUB_AGENT_VOLUME_OPTS_FILE: '/v',
+        HUB_AGENT_VOLUME_EXPORT_MOUNT: '/var/lib/nivaro-hub-agent/export/'
+      })
+      expect(cfg.exportMount).toBe('/var/lib/nivaro-hub-agent/export')
+      expect(
+        codeOf(() =>
+          loadAgentConfig(
+            { ...traefikEnv, HUB_AGENT_VOLUME_EXPORT_MOUNT: '/var/lib/export' },
+            files(baseFiles)
+          )
+        )
+      ).toBe('VOLUME_EXPORT_MOUNT_BAD')
+      for (const m of ['relative/x', '/', '/srv', '/srv/../etc']) {
+        expect(
+          codeOf(() =>
+            load({ HUB_AGENT_VOLUME_OPTS_FILE: '/v', HUB_AGENT_VOLUME_EXPORT_MOUNT: m })
+          ),
+          m
+        ).toBe('VOLUME_EXPORT_MOUNT_BAD')
+      }
+    })
+  })
+
   it('EXTENSIONS_ROOT_BAD for /, a single segment, . or ..', () => {
     for (const root of ['/', '/srv', '//srv', '/srv/./x', '/srv/../etc']) {
       expect(

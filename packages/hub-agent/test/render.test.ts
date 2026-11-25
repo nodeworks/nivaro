@@ -6,15 +6,16 @@ import {
   type EngineServiceSpec,
   patternRouterName,
   REALTIME_PATHS,
-  realtimePatternRouterName,
   type RenderConfig,
   type RenderContext,
+  realtimePatternRouterName,
   realtimeRouterName,
   renderServices,
   webRouterName
 } from '../src/render.js'
 import { AGENT_SET_ENV_KEYS, type StackSpec } from '../src/spec.js'
 import { hostTaken } from '../src/stacks.js'
+import { nfsUploadsName } from '../src/volumes.js'
 
 const DIGEST = `sha256:${'a'.repeat(64)}`
 const IMAGE = `nodeworks/nivaro@${DIGEST}`
@@ -709,7 +710,10 @@ describe('renderServices — shared deployment host pattern (phase 6)', () => {
     for (const p of REALTIME_PATHS) expect(paths).toContain(p.split('/:')[0])
     // A pattern alone (no names yet): the pattern's live paths still reach realtime.
     const alone = traefik(
-      byName(renderServices('sh', sharedSpec({ roles, hostnames: [] }), cfg(), ctx()), 'sh_realtime')
+      byName(
+        renderServices('sh', sharedSpec({ roles, hostnames: [] }), cfg(), ctx()),
+        'sh_realtime'
+      )
     )
     expect(alone['traefik.http.routers.nvh_rt_sh.rule']).toBeUndefined()
     expect(alone['traefik.http.routers.nvh_rtpat_sh.service']).toBe('nvh_rt_sh')
@@ -784,5 +788,106 @@ describe('E2E B1 (P6-34): exactly one Traefik network label', () => {
       expect(netLabels(byName(svcs, name))).toEqual(['traefik.docker.network'])
       expect(byName(svcs, name).Labels['traefik.docker.network']).toBe('edge')
     }
+  })
+})
+
+describe('renderServices — files on an NFS export (0.2.2)', () => {
+  const NFS = { type: 'nfs', o: 'addr=nas,rw,nfsvers=4', device: ':/volume1/nivaro' }
+  const nfsCfg = (over: Partial<RenderConfig> = {}) => cfg({ volumeOpts: NFS, ...over })
+  const mountOf = (s: EngineServiceSpec, target: string) => {
+    const m = s.TaskTemplate.ContainerSpec.Mounts.find((x) => x.Target === target)
+    if (m?.Type !== 'volume') throw new Error(`no volume at ${target}`)
+    return m
+  }
+
+  it("each stack's uploads mount its own folder under the export, Redis a local volume", () => {
+    const svcs = renderServices('st', large(), nfsCfg(), ctx())
+    const web = mountOf(byName(svcs, 'st_web'), '/app/uploads')
+    expect(web.Source).toBe(
+      nfsUploadsName('st', 'local', { ...NFS, device: ':/volume1/nivaro/st/uploads' })
+    )
+    expect(web.VolumeOptions.DriverConfig).toEqual({
+      Name: 'local',
+      Options: { ...NFS, device: ':/volume1/nivaro/st/uploads' }
+    })
+    // Every app role mounts the same volume.
+    for (const r of ['worker', 'realtime', 'importer'])
+      expect(mountOf(byName(svcs, `st_${r}`), '/app/uploads').Source).toBe(web.Source)
+    // Two stacks, two folders.
+    const other = mountOf(
+      byName(renderServices('nd', large(), nfsCfg(), ctx()), 'nd_web'),
+      '/app/uploads'
+    )
+    expect(other.VolumeOptions.DriverConfig.Options.device).toBe(':/volume1/nivaro/nd/uploads')
+    expect(other.Source).not.toBe(web.Source)
+    const redis = byName(svcs, 'st_redis')
+    expect(mountOf(redis, '/data')).toMatchObject({
+      Source: 'nvh_st_redis',
+      VolumeOptions: { DriverConfig: { Name: 'local', Options: {} } }
+    })
+    // Its local volume lives on the agent's node: Redis stays there.
+    expect(redis.TaskTemplate.Placement).toEqual({ Constraints: ['node.id==node-1'] })
+    expect(byName(svcs, 'st_web').TaskTemplate.Placement).toBeUndefined()
+  })
+
+  it('an adopted folder is mounted as named; the files sub-folder sets STORAGE_LOCAL_ROOT', () => {
+    const svcs = renderServices(
+      'st',
+      large({ uploads_folder: 'efp', files_subfolder: 'directus-uploads' }),
+      nfsCfg(),
+      ctx()
+    )
+    const web = byName(svcs, 'st_web')
+    expect(mountOf(web, '/app/uploads').VolumeOptions.DriverConfig.Options.device).toBe(
+      ':/volume1/nivaro/efp'
+    )
+    expect(envOf(web).STORAGE_LOCAL_ROOT).toBe('/app/uploads/directus-uploads')
+  })
+
+  it('an export root of :/ joins without a double slash', () => {
+    const svcs = renderServices(
+      'st',
+      large(),
+      nfsCfg({ volumeOpts: { ...NFS, device: ':/' } }),
+      ctx()
+    )
+    expect(
+      mountOf(byName(svcs, 'st_web'), '/app/uploads').VolumeOptions.DriverConfig.Options.device
+    ).toBe(':/st/uploads')
+  })
+
+  it("run_as app sets the image's own user on app services, never on Redis", () => {
+    const svcs = renderServices('st', large({ run_as: 'app' }), nfsCfg(), ctx())
+    for (const r of ['web', 'worker', 'realtime', 'importer'])
+      expect(byName(svcs, `st_${r}`).TaskTemplate.ContainerSpec.User).toBe('1000:1000')
+    expect(byName(svcs, 'st_redis').TaskTemplate.ContainerSpec.User).toBeUndefined()
+    const plain = renderServices('st', large(), nfsCfg(), ctx())
+    expect('User' in byName(plain, 'st_web').TaskTemplate.ContainerSpec).toBe(false)
+  })
+
+  it('without an export nothing changes: one uploads volume, Redis on the same driver, no pin', () => {
+    const svcs = renderServices('st', large({ files_subfolder: 'files' }), cfg(), ctx())
+    const web = byName(svcs, 'st_web')
+    expect(mountOf(web, '/app/uploads')).toMatchObject({
+      Source: 'nvh_st_uploads',
+      VolumeOptions: { DriverConfig: { Name: 'local', Options: {} } }
+    })
+    expect(envOf(web).STORAGE_LOCAL_ROOT).toBe('/app/uploads/files')
+    expect(byName(svcs, 'st_redis').TaskTemplate.Placement).toBeUndefined()
+  })
+
+  it('a Redis driver of its own is used and not pinned', () => {
+    const svcs = renderServices(
+      'st',
+      large(),
+      nfsCfg({ redisVolumeDriver: 'rexray', redisVolumeOpts: { size: '5' } }),
+      ctx()
+    )
+    const redis = byName(svcs, 'st_redis')
+    expect(mountOf(redis, '/data').VolumeOptions.DriverConfig).toEqual({
+      Name: 'rexray',
+      Options: { size: '5' }
+    })
+    expect(redis.TaskTemplate.Placement).toBeUndefined()
   })
 })
