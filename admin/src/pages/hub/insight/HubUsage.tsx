@@ -176,7 +176,16 @@ export default function HubUsage() {
                           <HubEnvTag envKey={env.env_key} />
                         </span>
                       </span>
-                      <span className='text-right text-[12px] tabular-nums text-slate-700 dark:text-slate-200'>
+                      <span
+                        className='text-right text-[12px] tabular-nums text-slate-700 dark:text-slate-200'
+                        data-tip={
+                          env.people_7d == null
+                            ? env.state === 'ok'
+                              ? `Fewer than ${usage.data?.floor ?? 5} people`
+                              : 'Not read yet'
+                            : undefined
+                        }
+                      >
                         {env.people_7d ?? '—'}
                         <span className='block text-[10px] text-slate-400 dark:text-muted-foreground'>
                           7 days

@@ -208,7 +208,7 @@ export default function HubAsk() {
       </div>
 
       <form
-        className='shrink-0 border-t border-slate-200 bg-white px-4 py-3 dark:border-border dark:bg-card'
+        className='shrink-0 border-t border-slate-200 bg-white py-3 pr-16 pl-4 dark:border-border dark:bg-card'
         onSubmit={(e) => {
           e.preventDefault()
           send(draft)

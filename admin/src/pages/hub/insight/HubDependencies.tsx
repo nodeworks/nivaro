@@ -57,6 +57,13 @@ export default function HubDependencies() {
   const node = params.get('node') ?? ''
   const kind = params.get('kind') ?? ''
   const q = params.get('q') ?? ''
+  const pick = (id: string) => {
+    set('node', id)
+    if (id && !window.matchMedia('(min-width: 1024px)').matches)
+      requestAnimationFrame(() =>
+        document.getElementById('hub-impact')?.scrollIntoView({ block: 'start' })
+      )
+  }
   const set = (k: string, v: string) =>
     setParams(
       (p) => {
@@ -169,22 +176,19 @@ export default function HubDependencies() {
             ) : (
               <>
                 <div className='hidden rounded-lg border border-slate-200 bg-white p-3 md:block dark:border-border dark:bg-card'>
-                  <DepGraph
-                    view={view}
-                    selected={selected?.id ?? null}
-                    onPick={(id) => set('node', id)}
-                  />
+                  <DepGraph view={view} selected={selected?.id ?? null} onPick={pick} />
                 </div>
-                <DepList
-                  view={view}
-                  selected={selected?.id ?? null}
-                  onPick={(id) => set('node', id)}
-                />
+                <DepList view={view} selected={selected?.id ?? null} onPick={pick} />
               </>
             )}
           </div>
           <aside
-            className='shrink-0 border-t border-slate-200 bg-white lg:w-[340px] lg:overflow-y-auto lg:border-t-0 lg:border-l dark:border-border dark:bg-card'
+            id='hub-impact'
+            className={cn(
+              'shrink-0 scroll-mt-2 border-slate-200 bg-white lg:order-none lg:w-[340px] lg:overflow-y-auto lg:border-t-0 lg:border-b-0 lg:border-l dark:border-border dark:bg-card',
+              // On a phone or tablet the pick shows above the list, not under it.
+              selected ? 'order-first border-b' : 'border-t'
+            )}
             aria-label='Impact'
           >
             <ImpactPanel node={selected} affected={affected} onClear={() => set('node', '')} />
@@ -256,9 +260,11 @@ function DepGraph({
     y += ROW
   }
   const rightH = y
-  const leftGap = Math.max(ROW, (rightH - 8) / Math.max(1, view.apps.length))
-  const leftY = new Map(view.apps.map((a, i) => [a.id, 4 + i * Math.min(leftGap, ROW * 1.6)]))
-  const height = Math.max(rightH, 8 + view.apps.length * Math.min(leftGap, ROW * 1.6)) + 4
+  const step = Math.min(ROW * 3, Math.max(ROW, (rightH - 8) / Math.max(1, view.apps.length)))
+  const leftH = view.apps.length * step
+  const top = Math.max(4, (rightH - leftH) / 2)
+  const leftY = new Map(view.apps.map((a, i) => [a.id, top + i * step + (step - 24) / 2]))
+  const height = Math.max(rightH, top + leftH) + 4
   const linked = selected
     ? new Set(view.edges.filter((e) => e.to === selected).map((e) => e.from))
     : null
@@ -496,12 +502,15 @@ function ImpactPanel({
               {a.app_name} <span className='text-slate-400'>/</span> {a.env_key}
             </Link>
             <HubEnvTag envKey={a.env_key} className='ml-1.5 align-[1px]' />
-            {(a.label || a.detail) && (
-              <p className='m-0 text-[11px] text-slate-500 dark:text-muted-foreground'>
-                {[a.label, a.detail].filter(Boolean).join(' · ')}
-                {a.source === 'hub' ? ' · Hub record' : ''}
-              </p>
-            )}
+            {(() => {
+              const words = [a.label !== node.label ? a.label : null, a.detail].filter(Boolean)
+              if (a.source === 'hub') words.push('from the Hub’s records')
+              return words.length ? (
+                <p className='m-0 text-[11px] text-slate-500 dark:text-muted-foreground'>
+                  {words.join(' · ')}
+                </p>
+              ) : null
+            })()}
           </li>
         ))}
       </ul>
