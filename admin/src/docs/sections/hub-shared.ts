@@ -150,7 +150,7 @@ export const hubSharedDocs: DocSection = {
     },
     {
       type: 'p',
-      text: "Plan blockers about routing: `PATTERN_NOT_ALLOWED` (the pattern is outside the agent host suffixes), `HOSTNAME_NOT_ALLOWED`, `TOO_MANY_HOSTNAMES`, `NO_ROUTE` (no pattern, no explicit name and no publish port), `PUBLISH_PORT_NOT_ALLOWED`, and `HUB_URL_UNUSABLE` (the address the stack would get as `HUB_URL` is not an https origin a deployment accepts). Warnings: `HUB_URL_PROBLEM` (the Hub's own `HUB_URL` is ignored and its public address is used instead) and `MULTI_NODE_VOLUMES` (the swarm has several nodes and local volumes: uploads and bundled Redis stay on the node a task first ran on)."
+      text: "Plan blockers about routing: `PATTERN_NOT_ALLOWED` (the pattern is outside the agent host suffixes), `HOSTNAME_NOT_ALLOWED`, `TOO_MANY_HOSTNAMES`, `NO_ROUTE` (no pattern, no explicit name and no publish port), `PUBLISH_PORT_NOT_ALLOWED`, and `HUB_URL_UNUSABLE` (the address the stack would get as `HUB_URL` is not an https origin a deployment accepts). Warnings: `HUB_URL_PROBLEM` (the Hub's own `HUB_URL` is ignored and its public address is used instead) and `MULTI_NODE_VOLUMES` (the swarm has several nodes and local volumes that are not on an NFS export: uploads and bundled Redis stay on the node a task first ran on; an agent 0.2.2 with an NFS export ends it)."
     },
     { type: 'h2', id: 'hub-shared-pool', text: 'Pool budget' },
     {
@@ -460,11 +460,6 @@ export const hubSharedDocs: DocSection = {
           'Upgrades driven by GitLab',
           'A GitLab-run deployment is registered and upgraded by its pipeline.',
           '-'
-        ],
-        [
-          'More than one swarm node with bundled volumes',
-          'Same limit as dedicated stacks.',
-          'warning `MULTI_NODE_VOLUMES`'
         ]
       ]
     },
@@ -482,7 +477,8 @@ export const hubSharedDocs: DocSection = {
         'The daily retention pass (03:30, one job per app) and the boot passes (owner-group warm, integrity checks, cache warms, readiness warm, db-tuning sweep). They run once per app when it becomes ready. Retention status shows per app. Stale help-video import folders are swept once a day per process (deployment-wide, not per app).',
         'Microsoft directory lookups and sync. The app uses its own Microsoft app registration, saved in Settings → Microsoft directory (tenant id, client id, client secret; the secret is sealed with the app key). The server `GRAPH_*` and `OIDC_*` variables and the directory keys of `NIVARO_SETTINGS_OVERRIDES` are never used on shared.',
         "The Teams bot. The app uses only the bot saved in its own Settings. `TEAMS_BOT_*`, `MICROSOFT_APP_*`, the sign-in app fallback and the `teams_bot_*` override keys are ignored. `TEAMS_BOT=off` still disables the bot on the whole deployment, but `TEAMS_BOT=on` does not switch an app on: each app saves its own switch. Register each bot with that app's host as its messaging endpoint.",
-        "Phone push. An app admin connects the app's push relay in Settings → Mobile app. The server `MOBILE_PUSH_RELAY_KEY` is not used on shared. Phone sign-in was already per app."
+        "Phone push. An app admin connects the app's push relay in Settings → Mobile app. The server `MOBILE_PUSH_RELAY_KEY` is not used on shared. Phone sign-in was already per app.",
+        "Files on a swarm of several nodes. With Hub agent 0.2.2 and an NFS export (`HUB_AGENT_VOLUME_OPTS_FILE` + `HUB_AGENT_VOLUME_EXPORT_MOUNT`), the shared stack keeps its uploads in its own folder on the export, `<export>/<stack>/uploads`, which every node mounts; each app's files sit inside it under `apps/<app>/`, and bundled Redis stays on a local volume on the agent's node. `MULTI_NODE_VOLUMES` then no longer fires; it still does for local volumes on several nodes (Docker driver and Hub agent, Files on an NFS export)."
       ]
     },
     {
@@ -899,7 +895,7 @@ export const hubMovesDocs: DocSection = {
         ],
         [
           '`MULTI_NODE_VOLUMES`, `MULTI_NODE_UNVERIFIED`',
-          'The target stack has local volumes on a swarm with several nodes (or the Hub could not read the agent to tell).'
+          'The target stack has local volumes, not on an NFS export, on a swarm with several nodes (or the Hub could not read the agent to tell).'
         ],
         [
           '`ISSUER_UNVERIFIED`, `REDIS_UNVERIFIED`, `STORAGE_UNVERIFIED`, `DB_IDENTITY_UNCHECKED`, `EXTENSION_PIN_UNVERIFIED`',

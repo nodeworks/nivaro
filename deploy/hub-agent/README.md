@@ -74,8 +74,10 @@ Secrets are read from files only (`*_FILE`). All values are read once at start.
 | `HUB_AGENT_HOST_SUFFIXES` | required for traefik | Comma list such as `.apps.example.com`; an app host must end in one. |
 | `HUB_AGENT_PUBLISH_PORTS` | required for publish | Range `lo-hi` (1024-65535) the agent may publish. |
 | `HUB_AGENT_REDIS_IMAGE` | none | `<repo>[:<tag>]@sha256:<digest>` to offer a bundled Redis (the digest pins it; a tag alone is refused); omit to not offer it. |
-| `HUB_AGENT_VOLUME_DRIVER` | `local` | Driver for uploads and Redis volumes. `local` is per node: see the warning below. |
-| `HUB_AGENT_VOLUME_OPTS_FILE` | none | JSON object of driver options (for example an NFS export). `o=bind` and `device` (unless an NFS export) are refused. |
+| `HUB_AGENT_VOLUME_DRIVER` | `local` | Driver for the uploads volumes (and Redis, unless set below). `local` is per node: see the warning below. |
+| `HUB_AGENT_VOLUME_OPTS_FILE` | none | JSON object of driver options for the uploads volumes. `o=bind` and `device` (unless an NFS export) are refused. From 0.2.2 an NFS `device` is the export ROOT: each stack gets its own folder under it (see Uploads on an NFS export). |
+| `HUB_AGENT_VOLUME_EXPORT_MOUNT` | none | 0.2.2: where the agent's own container mounts that same NFS export, so it can check and make each stack's folder before a deploy. Absolute, no `..`; only with an NFS `device` (else `VOLUME_EXPORT_MOUNT_BAD`). Without it, a stack on the export is refused (`EXPORT_MOUNT_MISSING`). |
+| `HUB_AGENT_REDIS_VOLUME_DRIVER` / `HUB_AGENT_REDIS_VOLUME_OPTS_FILE` | see below | 0.2.2: the bundled Redis volume's own driver and options. Default: the uploads driver and options, except `local` with none when those mount NFS. NFS options here are refused (`REDIS_VOLUME_OPTS_BAD`): Redis never sits on NFS. |
 | `HUB_AGENT_EXTENSIONS_ROOT` | `/var/lib/nivaro-hub-agent/extensions` | Where the agent unpacks extensions (path inside the container). |
 | `HUB_AGENT_EXTENSIONS_HOST_ROOT` | the root | The same folder as the host sees it; app services bind this path. |
 | `HUB_AGENT_EXTENSIONS_SHARED` | off | `on` when the folder is shared storage every node mounts. |
@@ -89,11 +91,76 @@ Secrets are read from files only (`*_FILE`). All values are read once at start.
 swarm with more than one node, each node a web, worker or importer task lands
 on gets its own uploads, and a Redis task that moves to another node starts
 empty. "Remove volumes" removes only this (the agent's) node's copies, because
-the Engine's `/volumes` is node-local. Pin the stack to one node, or set a
-shared volume driver (`HUB_AGENT_VOLUME_DRIVER` + `HUB_AGENT_VOLUME_OPTS_FILE`,
-for example an NFS export). `GET /v1/health` reports `swarm.nodes` and
-`volume_driver`; the Hub's stack panel warns when the swarm has more than one
-node and volumes are local.
+the Engine's `/volumes` is node-local. Pin the stack to one node, or put the
+uploads on an NFS export (below). `GET /v1/health` reports `swarm.nodes`,
+`volume_driver` and (0.2.2) `volume_nfs`; the Hub's stack panel warns when the
+swarm has more than one node and volumes are local and not on an NFS export.
+
+## Uploads on an NFS export (0.2.2)
+
+Give the agent the export ROOT, once:
+
+```json
+{"type": "nfs", "o": "addr=nas.example.com,rw,nfsvers=4", "device": ":/volume1/nivaro"}
+```
+
+in `HUB_AGENT_VOLUME_OPTS_FILE`, and mount the same export into the agent's own
+container at `HUB_AGENT_VOLUME_EXPORT_MOUNT` (`stack.example.yml` shows both).
+
+- **One folder per stack.** Each stack's uploads volume mounts
+  `<export>/<stack>/uploads` (`:/volume1/nivaro/acme-prod/uploads`). Two stacks
+  never share a folder: a stack whose folder is, holds or sits inside another
+  Hub stack's is refused (`409 UPLOADS_FOLDER_TAKEN`). The volume is named
+  `nvh_<stack>_uploads-<10 hex>`, a digest of its driver and options: Docker never
+  changes an existing volume's options, so a new folder takes a new volume.
+- **The folder is made before the deploy.** Docker's NFS driver does not create
+  the folder a `device` names (every task would fail to mount), so before any
+  Docker write the agent checks it through its export mount. Its own folder it
+  creates (`<stack>`, then `<stack>/uploads`) and hands to uid 1000 (`lchown`).
+  The agent runs without capabilities, so that hand-over works only when the
+  export maps the agent's writes to uid 1000 already (Synology "map all users",
+  `all_squash,anonuid=1000`), or when `no_root_squash` is set and you give the
+  agent `cap_add: [CHOWN]`. Otherwise create `<stack>/uploads` on the file server
+  yourself, owned by 1000:1000, and apply again. Refusals: `409
+  UPLOADS_FOLDER_MISSING`, `UPLOADS_FOLDER_NOT_WRITABLE` (uid 1000 cannot write
+  it, by mode bits), `UPLOADS_FOLDER_UNCHECKED` (the agent cannot look), `409
+  EXPORT_MOUNT_MISSING`.
+- **Links are never followed.** The app writes inside its folder, so every
+  segment from the export mount down is read without following links; a link or
+  a file where a folder should be is refused (`409 UPLOADS_FOLDER_LINK`), the
+  folder's real path must be exactly `<export>/<folder>`, and the agent creates
+  and hands over only `<stack>` and `<stack>/uploads`, never anything inside.
+- **Adopt an existing folder.** A stack's `uploads_folder` (a relative path under
+  the export, 1–8 parts of letters, digits, `.`, `_` and `-`, no `..`) is used as
+  it is instead of `<stack>/uploads`: never created, chowned, changed or deleted.
+  It must exist and uid 1000 must be able to write it. `files_subfolder` says
+  where the files sit inside the volume: `STORAGE_LOCAL_ROOT` becomes
+  `/app/uploads/<files_subfolder>`; the agent only checks it (an adopted folder
+  must already hold it; in the stack's own folder the app creates it).
+- **Who runs the app.** The image starts as root and steps down to uid 1000. On
+  an export with root squash root in the container is `nobody` there, so the
+  step-down only works while the folder's top level holds nothing uid 1000 cannot
+  write; a stray root-owned file keeps the server root, and root can then write
+  nothing. A stack's `run_as: app` makes every app service run as `1000:1000`
+  from the start (ContainerSpec.User; the only user the agent ever sets). The
+  secret files already belong to uid 1000.
+- **Redis never on NFS.** Bundled Redis gets a `local` volume (or
+  `HUB_AGENT_REDIS_VOLUME_*`), and a local Redis volume is pinned to the agent's
+  node so its task never moves away from its data.
+- **Remove never deletes files.** "Remove volumes" deletes the Docker volume
+  objects only; Docker's local driver unmounts an NFS volume without touching the
+  files on the share. A move, its rollback and "Finish and stop the old home"
+  keep volumes anyway. Delete a folder on the file server when you mean it.
+- **Stack hashes.** An agent with an NFS `device` (or a Redis volume of its own)
+  hashes every stack differently from 0.2.1: apply each stack once after the
+  upgrade. Stacks deployed by an older agent mounted the export root itself;
+  their files stay there. Move them into `<stack>/uploads` (or adopt the folder
+  they are in) before that apply. An agent without NFS keeps every hash.
+
+Example, an app whose files already sit on the NAS in
+`/volume1/efp/directus-uploads` (owned by uid 1000): agent device
+`:/volume1`, the stack's `uploads_folder: efp`, `files_subfolder:
+directus-uploads`, `run_as: app`.
 
 ## Which env keys a stack may set
 
@@ -151,6 +218,15 @@ have not ended yet (a removed service's containers that are still shutting down
 count). Removing a stack now deletes the app's services first and the stack's
 Redis last. Stack hashes do not change. A Hub refuses "Finish and stop the old
 home" for a Docker old home whose agent is older (it cannot prove the stop).
+
+**0.2.2 (files on an NFS export).** One uploads folder per stack under the
+export, the `uploads_folder` / `files_subfolder` / `run_as` stack fields,
+`HUB_AGENT_VOLUME_EXPORT_MOUNT`, `HUB_AGENT_REDIS_VOLUME_*`, and `volume_nfs`,
+`export_mount`, `redis_volume_driver` in `GET /v1/health` (see Uploads on an NFS
+export). The Hub sends those stack fields only to a 0.2.2 agent (else the plan
+stops with `AGENT_TOO_OLD`). Hashes change only on an agent with an NFS export
+or a Redis volume of its own. 0.2.2 also takes the `exporter` role and a split
+shared deployment.
 
 ## Secrets in the app
 
