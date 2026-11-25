@@ -228,6 +228,14 @@ export const RENDERER_ENV_KEYS: readonly string[] = [
 ]
 
 /**
+ * Keys only a Hub MOVE sets on a target stack (review 2 L4): HUB_BOOT_MAINTENANCE=<move id> holds
+ * the new stack in maintenance and is its "I am the new stack" marker (/api/version
+ * move_target). Never a stack setting. Not in the agent's HUB_OWNED_KEYS: the agent sees only
+ * the rendered spec, which carries it on purpose during a move.
+ */
+export const MOVE_OWNED_ENV_KEYS: readonly string[] = ['HUB_BOOT_MAINTENANCE']
+
+/**
  * A key a stack's settings may not hold, as a plain setting or as a secret (RESERVED_SETTING):
  * everything the agent refuses, every key the renderer owns, and every `<KEY>_FILE` (a path inside
  * the container; secrets reach /run/secrets through the agent, never through a settings path).
@@ -235,6 +243,7 @@ export const RENDERER_ENV_KEYS: readonly string[] = [
 export function reservedSettingKey(key: string, redis: RedisMode): boolean {
   if (agentRefusesEnvKey(key, redis)) return true
   if (RENDERER_ENV_KEYS.includes(key)) return true
+  if (MOVE_OWNED_ENV_KEYS.includes(key)) return true
   return key.endsWith(AGENT_ENV_RULES.file_suffix)
 }
 

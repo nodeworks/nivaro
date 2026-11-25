@@ -19,6 +19,7 @@ async function version() {
   await app.register(healthRoutes, { prefix: '/api' })
   const r = await app.inject({ method: 'GET', url: '/api/version' })
   await app.close()
+  expect(r.headers['cache-control']).toBe('no-store')
   return r.json() as Record<string, unknown>
 }
 
@@ -33,6 +34,11 @@ describe('/api/version move_target', () => {
     expect(await version()).not.toHaveProperty('move_target')
     process.env.HUB_BOOT_MAINTENANCE = 'yes'
     expect(await version()).not.toHaveProperty('move_target')
+  })
+
+  it('is never a stack setting (review 2 L4)', async () => {
+    const { reservedSettingKey } = await import('../../../services/hub/docker/stack-env.js')
+    expect(reservedSettingKey('HUB_BOOT_MAINTENANCE', 'bundled')).toBe(true)
   })
 
   it('parses only a positive whole move id', () => {

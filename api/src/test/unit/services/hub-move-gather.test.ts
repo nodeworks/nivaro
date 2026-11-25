@@ -968,6 +968,17 @@ describe('gatherMovePlanInput — a Docker stack to another stack (Hub placement
     expect(hostConnections).toHaveBeenCalledWith(env.id)
   })
 
+  it('a published port of its own only between stacks on a publish edge (review 2 L7)', async () => {
+    const env = await newEnv({ placement_id: await dockerPlacement(`shop-p${seq + 1}`) })
+    const target = await dockerPlacement(`shop-q${seq}`)
+    const r = await Gather.gatherMovePlanInput(
+      env.id,
+      { kind: 'dedicated', placement_id: target, publish_port: 8090 },
+      deps({ hostConnections: async () => ({ refusal: null, warning: null }) })
+    ).catch((e: unknown) => e as { code?: string })
+    expect((r as { code?: string }).code).toBe('BAD_PORT')
+  })
+
   it('a connection check that cannot be read is a gather failure, never a pass', async () => {
     const env = await newEnv({ placement_id: await dockerPlacement(`shop-c${seq + 1}`) })
     const target = await dockerPlacement(`shop-d${seq}`)

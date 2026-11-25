@@ -2453,13 +2453,18 @@ describe('between_stacks: the real verifyName tells the new stack from the old o
    * The app behind the public name, as /api/version answers: the OLD stack (same version, no
    * marker) or the NEW one (move_target = the move). The real defaultMoveOps.verifyName reads it.
    */
-  const app = { onNew: false, calls: 0, moveId: 0 }
+  const app = {
+    onNew: false,
+    calls: 0,
+    moveId: 0,
+    decide: undefined as undefined | ((n: number) => boolean)
+  }
   const appFetch = (async () => {
     app.calls++
     return new Response(
       JSON.stringify({
         version: '0.3.210',
-        ...(app.onNew ? { move_target: app.moveId } : {})
+        ...((app.decide ? app.decide(app.calls) : app.onNew) ? { move_target: app.moveId } : {})
       }),
       { status: 200, headers: { 'content-type': 'application/json' } }
     )
@@ -2482,6 +2487,7 @@ describe('between_stacks: the real verifyName tells the new stack from the old o
   beforeEach(() => {
     app.onNew = false
     app.calls = 0
+    app.decide = undefined
   })
 
   it('automatic: the old stack still answering the name → no release, no retire, rolled back', async () => {
@@ -2543,8 +2549,12 @@ describe('between_stacks: the real verifyName tells the new stack from the old o
       to_placement_id: w.dockerPlacementB,
       steps: {}
     } as never
+    const urls: string[] = []
     const answer = (body: Record<string, unknown>) =>
-      (async () => new Response(JSON.stringify(body), { status: 200 })) as unknown as typeof fetch
+      (async (u: string) => {
+        urls.push(String(u))
+        return new Response(JSON.stringify(body), { status: 200 })
+      }) as unknown as typeof fetch
     const v = (kind: MoveKind, body: Record<string, unknown>) =>
       Ops.defaultMoveOps(move, planOf(kind), { fetch: answer(body) }).verifyName({
         version: '0.3.210',
@@ -2559,5 +2569,142 @@ describe('between_stacks: the real verifyName tells the new stack from the old o
     // to_dedicated (a shared source): a dedicated answer still verifies without a marker.
     expect(await v('to_dedicated', { version: '0.3.210' })).toBe(true)
     expect(await v('to_dedicated', { version: '0.3.210', shared_deployment: 'pool' })).toBe(false)
+    // Review 2 L6: every check carries a cache-buster (no proxy answers from a copy).
+    expect(urls.every((u) => /\/api\/version\?_=[0-9a-z]+$/.test(u))).toBe(true)
+    expect(new Set(urls).size).toBe(urls.length)
+  })
+
+  // ── review 2 L9: the gaps ─────────────────────────────────────────────────────────────────
+
+  it('verify passes, then the name flips back before release → nothing switched, rolled back', async () => {
+    plan = planOf('between_stacks')
+    withRealVerify()
+    app.decide = (n) => n === 1 // verify sees the new stack once; release never does
+    const w = await world('docker')
+    const { move_id } = await start(w, toFor('between_stacks', w))
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    expect(m?.status).toBe('rolled_back')
+    expect(m?.error).toMatch(/^NAME_NOT_ON_NEW_STACK/)
+    // Tried again before giving up (review 2 M1), never lifted, env row on the source.
+    expect(app.calls).toBeGreaterThanOrEqual(5)
+    expect(fake.calls.some((c) => c[0] === 'targetMaintenance' && c[1] === false)).toBe(false)
+    const env = await db('nivaro_hub_environments').where({ id: w.envId }).first()
+    expect(Number(env.placement_id)).toBe(w.dockerPlacement)
+  })
+
+  it('a blip at release is tried again: the move still succeeds', async () => {
+    plan = planOf('between_stacks')
+    withRealVerify()
+    app.decide = (n) => n !== 2 // the first check at release misses, the next one sees it
+    const w = await world('docker')
+    const { move_id } = await start(w, toFor('between_stacks', w))
+    await Run.awaitMove(move_id)
+    expect((await readMove(move_id))?.status).toBe('success')
+  })
+
+  it('the retire check fails → interrupted, the old stack is not retired, the cause is kept', async () => {
+    plan = planOf('between_stacks')
+    withRealVerify()
+    // verify (1) and release (2) see the new stack; every retire check after does not.
+    app.decide = (n) => n <= 2
+    const w = await world('docker')
+    const { move_id } = await start(w, toFor('between_stacks', w))
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    expect(m?.status).toBe('interrupted')
+    expect(m?.error).toMatch(/^OLD_STACK_STILL_NAMED/)
+    expect(fake.names()).not.toContain('retireSource')
+    const env = await db('nivaro_hub_environments').where({ id: w.envId }).first()
+    expect(Number(env.placement_id)).toBe(w.dockerPlacementB)
+  })
+
+  it('the release lift refused (the name reached the old stack) → rolled back, never lifted', async () => {
+    plan = planOf('between_stacks')
+    withRealVerify()
+    app.decide = () => true
+    fake.state.failOn = (name, arg) => name === 'targetMaintenance' && arg === false
+    const w = await world('docker')
+    const { move_id } = await start(w, toFor('between_stacks', w))
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    expect(m?.status).toBe('rolled_back')
+    expect(fake.names()).not.toContain('retireSource')
+    const env = await db('nivaro_hub_environments').where({ id: w.envId }).first()
+    expect(Number(env.placement_id)).toBe(w.dockerPlacement)
+  })
+
+  it('confirmRoute with the real check: {serving:false} while the old stack answers', async () => {
+    plan = planOf('between_stacks', 'manual')
+    withRealVerify()
+    useDeps({
+      ops: (move, p) => {
+        app.moveId = move.id
+        const real = Ops.defaultMoveOps(move, p, { fetch: appFetch })
+        return { ...fake.ops, verifyName: (e) => real.verifyName(e) }
+      },
+      sleep: async (ms: number) => {
+        t += ms
+        await new Promise((r) => setTimeout(r, 20))
+      }
+    })
+    const w = await world('docker')
+    const { move_id } = await start(w, toFor('between_stacks', w))
+    await waitFor(async () => (await readMove(move_id))?.status === 'waiting')
+    expect(await Run.confirmRoute(move_id, 'u')).toEqual({ serving: false })
+    app.decide = () => true
+    expect(await Run.confirmRoute(move_id, 'u')).toEqual({ serving: true })
+    await Run.awaitMove(move_id)
+    expect((await readMove(move_id))?.status).toBe('success')
+  })
+
+  it('Finish refuses to stop the old stack while the name may still reach it, in a key stop too', async () => {
+    plan = planOf('between_stacks')
+    withRealVerify()
+    app.decide = () => true
+    fake.ops.verifyTargetKey = async () => {
+      throw new MoveStepError('APP_KEY_MISMATCH', 'The new home runs another key.')
+    }
+    const w = await world('docker')
+    const { move_id } = await start(w, toFor('between_stacks', w))
+    await Run.awaitMove(move_id)
+    expect((await readMove(move_id))?.status).toBe('interrupted')
+    app.decide = () => false
+    const r = await Run.finishStopSource(move_id, `${w.appKey}/${w.envKey}`, 'u').catch(
+      (e: unknown) => e as { code?: string }
+    )
+    expect((r as { code?: string }).code).toBe('NEW_HOME_NOT_SERVING')
+    expect(fake.names()).not.toContain('stopSource')
+  })
+
+  it('a published port of its own: written at release, put back by a rollback of release (L1)', async () => {
+    const w = await world('docker')
+    await db('nivaro_hub_stack_settings').insert({ environment_id: w.envId, publish_port: 8080 })
+    plan = planOf('between_stacks')
+    withRealVerify()
+    app.decide = () => true
+    const ok = await start(w, { ...toFor('between_stacks', w), publish_port: 8090 })
+    expect((await readMove(ok.move_id))?.steps.publish_ports).toEqual({
+      source: 8080,
+      target: 8090
+    })
+    await Run.awaitMove(ok.move_id)
+    expect((await readMove(ok.move_id))?.status).toBe('success')
+    expect(
+      (await db('nivaro_hub_stack_settings').where({ environment_id: w.envId }).first())
+        .publish_port
+    ).toBe(8090)
+
+    // A second environment: release commits, then its lift fails → the old port comes back.
+    const w2 = await world('docker')
+    await db('nivaro_hub_stack_settings').insert({ environment_id: w2.envId, publish_port: 8080 })
+    fake.state.failOn = (name, arg) => name === 'targetMaintenance' && arg === false
+    const bad = await start(w2, { ...toFor('between_stacks', w2), publish_port: 8091 })
+    await Run.awaitMove(bad.move_id)
+    expect((await readMove(bad.move_id))?.status).toBe('rolled_back')
+    expect(
+      (await db('nivaro_hub_stack_settings').where({ environment_id: w2.envId }).first())
+        .publish_port
+    ).toBe(8080)
   })
 })

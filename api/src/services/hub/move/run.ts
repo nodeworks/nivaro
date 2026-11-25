@@ -1223,11 +1223,30 @@ async function waitManualRoute(ctx: Ctx, steps: MoveSteps): Promise<void> {
  * move, ops.verifyName). The version alone never proves it: the old stack answers the same.
  */
 async function requireNameOnNewStack(ctx: Ctx, step: 'release' | 'retire_source'): Promise<void> {
-  if (await ctx.ops.verifyName({ version: ctx.plan.version, shared: null })) return
-  throw new MoveStepError(
-    'NAME_NOT_ON_NEW_STACK',
-    `${ctx.plan.hostnames[0] ?? 'The public name'} does not answer from the new stack, so ${step === 'release' ? 'nothing is released' : 'the old stack is not retired'}: it may still reach the old one.`
-  )
+  // Review 2 M1: a blip never rolls a healthy move back: tried again within about a minute, as
+  // the key check is (verifyTargetKeyWithRetry).
+  const waits = [5_000, 10_000, 15_000, 30_000]
+  for (let attempt = 0; ; attempt++) {
+    if (await ctx.ops.verifyName({ version: ctx.plan.version, shared: null })) return
+    if (attempt >= waits.length) break
+    ctx.run.log(
+      `${step}: the public name does not answer from the new stack yet; trying again`,
+      'warn'
+    )
+    await ctx.e.sleep(waits[attempt])
+  }
+  const name = ctx.plan.hostnames[0] ?? 'The public name'
+  // Review 2 L2: what happens next differs: at release the move rolls back; at retire the move
+  // stays open with the old stack as it is (Resume once the name points at the new one).
+  throw step === 'release'
+    ? new MoveStepError(
+        'NAME_NOT_ON_NEW_STACK',
+        `${name} does not answer from the new stack, so nothing is released: it may still reach the old one. The move rolls back.`
+      )
+    : new MoveStepError(
+        'OLD_STACK_STILL_NAMED',
+        `${name} does not answer from the new stack, so the old stack is not retired: it may still reach it. Point the name at the new stack, then Resume.`
+      )
 }
 
 /**
@@ -1279,10 +1298,15 @@ async function release(ctx: Ctx, steps: MoveSteps): Promise<void> {
       version_pin: env.version_pin == null ? null : String(env.version_pin),
       ...(steps.sqlite_record || move.steps.sqlite_record
         ? { db_ref: env.db_ref == null ? null : String(env.db_ref) }
+        : {}),
+      // Review 2 L1: the old stack's published port goes back with the row on a rollback.
+      ...((move.steps.publish_ports ?? steps.publish_ports)
+        ? { publish_port: (move.steps.publish_ports ?? steps.publish_ports)?.source ?? null }
         : {})
     }
     await saveSteps(ctx, steps)
   }
+  const ports = move.steps.publish_ports ?? steps.publish_ports
   // E2E B4 (P6-38): a shared-placed app's key is read from the environment's own entry only
   // (openAppKey). A Docker source keeps it in its stack settings, so it is resolved now (the R9
   // order: the entry, then the stack settings), before the switch, and written into the entry in
@@ -1329,21 +1353,20 @@ async function release(ctx: Ctx, steps: MoveSteps): Promise<void> {
         ...(ctx.shared.toDocker ? { hub_managed: true } : {}),
         updated_at: new Date()
       })
+    // Review M1 / review 2 L1: the new stack's published port is the environment's from now on,
+    // committed with the row (a rollback of release puts both back: restoreEnvRow).
+    if (ports?.target)
+      await trx('nivaro_hub_stack_settings')
+        .where({ environment_id: ctx.envId })
+        .update({ publish_port: ports.target, updated_at: new Date() })
   })
+  if (ports?.target)
+    ctx.run.log(`release: the environment's stack now publishes port ${ports.target}`)
   if (carryKey) ctx.run.log("release: the app's encryption key is kept with the environment")
   ctx.run.log(`release: the environment now lives on placement ${move.to_placement_id}`)
   // Committed: the target serves for real now (a Docker target's boot maintenance is released
   // for good with the move id; a shared target's replicas re-read their list).
   await ctx.ops.targetMaintenance(false)
-  // Review M1: the new stack's published port is the environment's from now on (every later
-  // apply renders it from the settings).
-  const ports = move.steps.publish_ports ?? steps.publish_ports
-  if (ports?.target) {
-    await db('nivaro_hub_stack_settings')
-      .where({ environment_id: ctx.envId })
-      .update({ publish_port: ports.target, updated_at: new Date() })
-    ctx.run.log(`release: the environment's stack now publishes port ${ports.target}`)
-  }
   // M10: the shared target serves the app `active` on every replica.
   if (ctx.shared.to !== null)
     await ctx.ops
@@ -1569,8 +1592,8 @@ async function stopRetireKey(ctx: Ctx, err: RetireKeyStop): Promise<void> {
   if (err.kind === 'unreachable')
     ctx.run.log(`retire_source: the new home could not be asked for its key (${err.code})`, 'warn')
   const error = safeLine(
-    err.kind === 'key'
-      ? `${err.code}: ${err.message} The old home was not retired.`
+    err.kind === 'key' || err.code === 'OLD_STACK_STILL_NAMED'
+      ? `${err.code}: ${err.message}${err.kind === 'key' ? ' The old home was not retired.' : ''}`
       : `${RETIRE_UNREACHABLE_CODE}: The Hub could not reach the new home to check its key; the old home was not retired.`
   )
   const ours = await patchMoveIfHolder(ctx.moveId, ctx.held.envToken, {
@@ -2122,7 +2145,12 @@ export async function finishStopSource(
   // Review R2-3: at a stop where the Hub could not reach the new home, the old home is the only
   // other copy: it is stopped only once the public name is seen answering from the new home
   // (the same check `verify` makes: version, shared key or none, tenant).
-  if (stop.case === 'unreachable' && !(await newHomeServes(move, e)))
+  // Review 2 L3: between two stacks the old one is stopped only once the name is seen leaving it,
+  // whatever the stop's case.
+  if (
+    (stop.case === 'unreachable' || move.plan?.kind === 'between_stacks') &&
+    !(await newHomeServes(move, e))
+  )
     throw new MoveError(
       'NEW_HOME_NOT_SERVING',
       `${move.plan?.hostnames[0] ?? 'The public name'} does not answer from the new home right now, so the old home was not stopped. Resume once the new home answers (it checks the key again), or try Finish again then.`

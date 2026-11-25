@@ -192,9 +192,11 @@ export interface MoveOps {
   targetKeyFp(): Promise<string | null>
   /**
    * P6-27: once rollback is no longer possible, a Docker target stack is applied again with only
-   * the environment's own names and the per-move name is proven gone (the agent converged on a
-   * spec without it, and the name no longer serves the app). Answers the name removed, or null
-   * when the target never had one.
+   * the environment's own names and without its boot maintenance (HUB_BOOT_MAINTENANCE), and the
+   * per-move name is proven gone (the agent converged on a spec without it, and the name no
+   * longer serves the app). A Docker target with no per-move name (a publish edge) is applied
+   * again without the boot maintenance only (review 2 L5). Answers the name removed, or null when
+   * the target never had one.
    */
   dropTempHost(): Promise<string | null>
   /** T10 carry: revokes any transfer ticket this move still holds (move end, rollback). */
@@ -1032,8 +1034,11 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
       // here. A GitLab target is set both ways (M18). A rollback freezes a lifted target through
       // freezeTarget (P6-26 Rule 1), never through this.
       if (l.to.kind === 'docker' && on) return
-      // `off` happens at release, after verify saw the name serve the target.
-      const link = !on ? await verifiedTargetLink() : await targetLink()
+      // `off` happens at release, after verify saw the name serve the target. Between two stacks
+      // (review 2 M1) it goes to the new stack's OWN address once the marker proved the name:
+      // a load balancer still holding both stacks never decides where it lands.
+      const link =
+        !on && plan.kind !== 'between_stacks' ? await verifiedTargetLink() : await targetLink()
       // Hub placement (review C1): between two stacks of one environment the public name may
       // still reach the OLD stack; only the move's new stack takes this release.
       if (!on && plan.kind === 'between_stacks')
@@ -1705,8 +1710,16 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
     async dropTempHost() {
       const l = await load()
       const temp = await tempHost()
-      if (!temp || l.to.kind !== 'docker') return null
+      if (l.to.kind !== 'docker') return null
       const to = l.to
+      // Review 2 L5: a target with no per-move name (a publish edge) is applied once more without
+      // its boot maintenance, so the released stack never carries this move's marker on.
+      if (!temp) {
+        await applyStack(to, await runningWant(to), (spec) => {
+          delete spec.env.HUB_BOOT_MAINTENANCE
+        })
+        return null
+      }
       const want = await runningWant(to)
       let sent: string[] = []
       await applyStack(to, want, (spec) => {
@@ -1783,8 +1796,10 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
       const ctl = new AbortController()
       const timer = setTimeout(() => ctl.abort(), 8_000)
       try {
-        const res = await (deps.fetch ?? fetch)(`${origin}/api/version`, {
-          headers: { Accept: 'application/json' },
+        // Review 2 L6: a cache-buster, so no proxy answers from a copy (the app sends no-store too).
+        const bust = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
+        const res = await (deps.fetch ?? fetch)(`${origin}/api/version?_=${bust}`, {
+          headers: { Accept: 'application/json', 'Cache-Control': 'no-cache' },
           redirect: 'manual',
           signal: ctl.signal
         })

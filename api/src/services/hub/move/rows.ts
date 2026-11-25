@@ -77,6 +77,8 @@ export interface MoveSteps {
     version_pin: string | null
     /** Hub gap sqlite: the db_ref before release named the move's SQLite record. */
     db_ref?: string | null
+    /** Review 2 L1: the stack settings' published port before release (a move between stacks). */
+    publish_port?: number | null
   }
   /** R2-M-2: env.extension_pins before deploy_target replaced them (raw column text or null). */
   prev_extension_pins?: string | null
@@ -395,6 +397,10 @@ export async function restoreEnvRow(
       ...(prev.db_ref !== undefined ? { db_ref: prev.db_ref } : {}),
       updated_at: new Date()
     })
+  if (prev.publish_port !== undefined)
+    await db('nivaro_hub_stack_settings')
+      .where({ environment_id: envId })
+      .update({ publish_port: prev.publish_port, updated_at: new Date() })
 }
 
 /** R2-M-2: puts the environment's extension pins back as they were before the target deploy. */

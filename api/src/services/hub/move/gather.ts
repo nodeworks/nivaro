@@ -1049,6 +1049,17 @@ export async function gatherMovePlanInput(
   const fromShared = stored.from
   const toShared = stored.to
   const kind = kindOf(from, target, toSide)
+  // Review 2 L7: a published port of its own only for a move between stacks on a publish edge.
+  if (target.kind === 'dedicated' && target.publish_port !== undefined) {
+    const publishEdge =
+      (from.kind === 'docker' && from.edge === 'publish') ||
+      (toSide.kind === 'docker' && toSide.edge === 'publish')
+    if (kind !== 'between_stacks' || !publishEdge)
+      throw new MoveError(
+        'BAD_PORT',
+        'to.publish_port is only for a move between two Docker stacks on a host that publishes stacks on a port.'
+      )
+  }
 
   // The Hub's own records.
   const recordId = databaseRecordId(row.db_ref)

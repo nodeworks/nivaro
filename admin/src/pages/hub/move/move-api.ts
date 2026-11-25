@@ -1312,8 +1312,12 @@ export const MOVE_CODE_COPY: Record<string, Copy> = {
     hint: 'A new environment is placed, not moved: use Place on shared deployment….'
   },
   NAME_NOT_ON_NEW_STACK: {
-    title: 'The name still reaches the old stack',
-    hint: 'The Hub releases and retires only once the public name answers from the new stack. Point the name at the new stack, then resume.'
+    title: 'The name still reached the old stack at release',
+    hint: 'The Hub releases only once the public name answers from the new stack, so the move rolls back: the old stack serves again. Point the name at the new stack before you move again.'
+  },
+  OLD_STACK_STILL_NAMED: {
+    title: 'The name may still reach the old stack',
+    hint: 'The new stack runs, but the old one is not retired while the public name may still reach it. Point the name at the new stack, then Resume.'
   },
   BAD_PORT: {
     title: 'That is not a port the new stack can publish',

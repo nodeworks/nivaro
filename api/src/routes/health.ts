@@ -95,6 +95,8 @@ export async function healthRoutes(app: FastifyInstance) {
     // Hub sets it, and only on a dedicated target stack (never cloud or a shared deployment). Not
     // a secret: a Hub move's number.
     const moveTarget = hubBootMoveId()
+    // Review 2 L6: never kept by a proxy (a move judges its routing by this answer).
+    reply.header('Cache-Control', 'no-store')
     return reply.send({
       version: NIVARO_VERSION,
       // The shared-code (@nivaro/react) version the admin SPA carries — a
