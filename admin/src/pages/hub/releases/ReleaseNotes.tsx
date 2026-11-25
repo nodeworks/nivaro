@@ -4,6 +4,7 @@ import { FileText, Snowflake, X } from 'lucide-react'
 import { useState } from 'react'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn, formatDateTime } from '@/lib/utils'
+import { DeployWindowNotice } from '../changes/DeployWindowNotice'
 import { hubError } from '../hub-api'
 import { ghostButton } from '../hub-parts'
 import {
@@ -265,13 +266,38 @@ export function DeployNotesButton({
 }
 
 /** A freeze on now for this environment's app (promotions refused, rollbacks allowed). */
-export function FreezeBanner({ envId, kind }: { envId: number; kind: 'promote' | 'rollback' }) {
+export function FreezeBanner({
+  envId,
+  kind,
+  envKey,
+  version,
+  confirm
+}: {
+  envId: number
+  kind: 'promote' | 'rollback'
+  /** For queuing a promotion refused by a closed deploy window (changes/DeployWindowNotice). */
+  envKey?: string
+  version?: string
+  confirm?: string
+}) {
   const q = useQuery({
     queryKey: releaseKeys.freeze(envId),
     queryFn: () => fetchEnvFreeze(envId),
     staleTime: 30_000
   })
   if (!q.data) return null
+  // A closed deploy window never stops a rollback (the same exemption as a freeze).
+  if (q.data.code === 'OUTSIDE_WINDOW')
+    return kind === 'rollback' ? null : (
+      <DeployWindowNotice
+        envId={envId}
+        envKey={envKey}
+        version={version}
+        confirm={confirm}
+        opensAt={q.data.freeze.ends_at}
+        message={q.data.message}
+      />
+    )
   return (
     <p
       role='status'

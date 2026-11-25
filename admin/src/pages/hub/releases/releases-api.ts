@@ -136,7 +136,8 @@ export interface ReleasesOverview {
 }
 
 export interface FreezeRefusal {
-  code: 'FROZEN' | 'FREEZE_UNKNOWN'
+  /** OUTSIDE_WINDOW: a deploy window governs and none is open (ends_at = the next opening). */
+  code: 'FROZEN' | 'FREEZE_UNKNOWN' | 'OUTSIDE_WINDOW'
   message: string
   freeze: { id: number; name: string; app_id: number | null; ends_at: string }
 }

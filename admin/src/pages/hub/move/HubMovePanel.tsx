@@ -30,6 +30,7 @@ import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn, formatDateTime, formatRelative } from '@/lib/utils'
+import { type ChecklistState, PreDeployChecklist } from '../changes/PreDeployChecklist'
 import { RunnerError } from '../HubPromotePanel'
 import { type HubEnvironment, hubKeys } from '../hub-api'
 import { CopyButton, dangerArmed, dangerGhost, Field, ghostButton } from '../hub-parts'
@@ -565,11 +566,18 @@ function MoveForm({
   const offerOverride = pullCodes.length > 0
   // The overridable blocker stops nothing once its box is ticked; every other blocker does.
   const blocking = (p?.blockers ?? []).filter((b) => !(override && isPullOverride(b.code)))
+  /** The production pre-deploy checklist of this move (Hub change operations). */
+  const [preDeploy, setPreDeploy] = useState<ChecklistState>({
+    required: false,
+    ready: true,
+    runId: null
+  })
   const ready =
     !!p &&
     !!p.plan_hash &&
     blocking.length === 0 &&
     !requiredOpen &&
+    !(preDeploy.required && !preDeploy.ready) &&
     (!offerOverride || override) &&
     confirm.trim() === expected
 
@@ -586,7 +594,8 @@ function MoveForm({
         plan_hash: (p as MovePlan).plan_hash,
         confirm: confirm.trim(),
         checklist: Object.fromEntries((p?.checklist ?? []).map((c) => [c.id, !!checked[c.id]])),
-        ...(offerOverride && override ? { overrides: pullCodes } : {})
+        ...(offerOverride && override ? { overrides: pullCodes } : {}),
+        ...(preDeploy.runId != null ? { checklist_run_id: preDeploy.runId } : {})
       }),
     onSuccess: (r) => {
       // The move owns the placement it starts on: it is never removed by this form.
@@ -774,6 +783,14 @@ function MoveForm({
             </span>
           </label>
         </div>
+      )}
+
+      {target && (
+        <PreDeployChecklist
+          target={{ kind: 'environment', envId: env.id }}
+          action='move'
+          onState={setPreDeploy}
+        />
       )}
 
       {target && (

@@ -17,6 +17,7 @@ import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn, formatRelative } from '@/lib/utils'
+import { type ChecklistState, PreDeployChecklist } from '../changes/PreDeployChecklist'
 import {
   isLivePromotion,
   promotionStatusTone,
@@ -236,6 +237,12 @@ function UpgradeForm({
   const downgrade = plan.data
     ? plan.data.downgrade === true
     : isDowngrade(kind, version, shared.version_pin)
+  /** The pre-deploy checklist of the production apps on this deployment (upgrades only). */
+  const [preDeploy, setPreDeploy] = useState<ChecklistState>({
+    required: false,
+    ready: true,
+    runId: null
+  })
   const start = useMutation({
     mutationFn: () =>
       startSharedUpgrade(shared.id, {
@@ -244,7 +251,10 @@ function UpgradeForm({
         plan_hash: plan.data?.plan_hash ?? '',
         confirm: confirm.trim(),
         overrides: [...overrides].sort(),
-        ...(downgrade && downgradeOk ? { downgrade: true as const } : {})
+        ...(downgrade && downgradeOk ? { downgrade: true as const } : {}),
+        ...(kind === 'upgrade' && preDeploy.runId != null
+          ? { checklist_run_id: preDeploy.runId }
+          : {})
       }),
     onSuccess: (r) => {
       void qc.invalidateQueries({ queryKey: upgradeKeys.deploys(shared.id) })
@@ -279,6 +289,7 @@ function UpgradeForm({
     open === 0 &&
     confirm.trim() === shared.key &&
     (!downgrade || downgradeOk) &&
+    !(kind === 'upgrade' && preDeploy.required && !preDeploy.ready) &&
     !start.isPending
   const label = downgrade ? DOWNGRADE_LABEL : KIND_LABEL[kind]
   const downgradeNote = plan.data?.warnings.find((w) => w.code === 'DOWNGRADE')?.text
@@ -427,6 +438,15 @@ function UpgradeForm({
         <ErrorNotice
           description={upgradeError(plan.error, 'Could not check this version')}
           onRetry={() => void plan.refetch()}
+        />
+      )}
+
+      {kind === 'upgrade' && version && (
+        <PreDeployChecklist
+          target={{ kind: 'shared', sharedId: shared.id }}
+          action='upgrade'
+          version={version}
+          onState={setPreDeploy}
         />
       )}
 

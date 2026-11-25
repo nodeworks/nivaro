@@ -173,6 +173,8 @@ export const startSharedUpgrade = (
     overrides: string[]
     /** Sent (true) only when the person confirmed an upgrade to an older version. */
     downgrade?: true
+    /** The ticked pre-deploy checklist (an upgrade carrying production apps with one). */
+    checklist_run_id?: number
   }
 ) =>
   api

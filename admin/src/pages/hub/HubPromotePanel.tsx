@@ -15,6 +15,7 @@ import { Input } from '@/components/ui/input'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn, formatDateTime, formatRelative } from '@/lib/utils'
+import { type ChecklistState, PreDeployChecklist } from './changes/PreDeployChecklist'
 import {
   blockerCopy,
   blockerDetailLine,
@@ -52,6 +53,8 @@ import {
   FreezeBanner,
   ReleaseNotesPreview
 } from './releases/ReleaseNotes'
+
+const NO_CHECKLIST: ChecklistState = { required: false, ready: true, runId: null }
 
 /**
  * Promote and roll back (Hub phase 2): pick a version, read the plan in plain words, type the
@@ -187,6 +190,10 @@ function PromoteForm({
     if (planHash) shownHash.current = planHash
   }, [planHash])
 
+  /** The production pre-deploy checklist of this promotion (rollbacks never need one). */
+  const [checklist, setChecklist] = useState<ChecklistState>(NO_CHECKLIST)
+  const checklistBlocks = kind === 'promote' && checklist.required && !checklist.ready
+
   const start = useMutation({
     mutationFn: () =>
       startPromotion(env.id, {
@@ -194,7 +201,10 @@ function PromoteForm({
         kind,
         confirm: confirm.trim(),
         // The plan on screen: the Hub starts only if it would still do exactly this.
-        plan_hash: plan.data?.plan_hash ?? ''
+        plan_hash: plan.data?.plan_hash ?? '',
+        ...(kind === 'promote' && checklist.runId != null
+          ? { checklist_run_id: checklist.runId }
+          : {})
       }),
     onSuccess: (r) => {
       void qc.invalidateQueries({ queryKey: hubKeys.promotions(env.id) })
@@ -227,6 +237,7 @@ function PromoteForm({
     !!plan.data?.ok &&
     !!plan.data.plan_hash &&
     !refused &&
+    !checklistBlocks &&
     confirm.trim() === env.key &&
     !start.isPending
 
@@ -302,7 +313,13 @@ function PromoteForm({
           <code className='font-mono font-semibold'>{env.key}</code> again to start it.
         </p>
       )}
-      <FreezeBanner envId={env.id} kind={kind} />
+      <FreezeBanner
+        envId={env.id}
+        kind={kind}
+        envKey={env.key}
+        version={version}
+        confirm={confirm}
+      />
       {plan.data ? (
         <PlanPreview plan={plan.data} blockers={blockers} />
       ) : plan.isPending ? (
@@ -315,6 +332,15 @@ function PromoteForm({
       )}
 
       <ReleaseNotesPreview envId={env.id} kind={kind} version={version} />
+
+      {kind === 'promote' && version && (
+        <PreDeployChecklist
+          target={{ kind: 'environment', envId: env.id }}
+          action='promote'
+          version={version}
+          onState={setChecklist}
+        />
+      )}
 
       <div className='space-y-1.5'>
         <label
