@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, Circle, Loader2, Pause, RefreshCw, RotateCcw, X } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import { toast } from 'sonner'
+import { HubRunTimeline } from '@/components/hub-brand/HubRunTimeline'
 import { Button } from '@/components/ui/button'
 import { cn, formatRelative } from '@/lib/utils'
 import { CheckResult, DbaChecklist, DbConnectionForm } from '../databases/DatabaseDetail'
@@ -175,6 +176,20 @@ function CreationBody({
       }
     >
       <div className='space-y-4 px-4 py-3'>
+        {/* Standalone Hub: the creation as a track (renders nothing otherwise). */}
+        <HubRunTimeline
+          what='Creation'
+          live={v.status === 'running'}
+          steps={STEP_ORDER.map((key) => {
+            const st = v.steps.find((s) => s.key === key)?.status ?? 'pending'
+            const stopped = ['failed', 'interrupted', 'cancelled'].includes(v.status)
+            return {
+              key,
+              label: STEP_LABELS[key],
+              state: stopped && st === 'running' ? ('stopped' as const) : st
+            }
+          })}
+        />
         <StepTrack
           steps={v.steps}
           stopped={['failed', 'interrupted', 'cancelled'].includes(v.status)}

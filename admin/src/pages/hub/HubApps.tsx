@@ -91,7 +91,7 @@ export default function HubApps() {
               className='m-3'
             />
           ) : apps.data.length === 0 ? (
-            <div className='px-4 py-8 text-center'>
+            <div className='hub-texture px-4 py-8 text-center'>
               <p className='m-0 text-[13px] font-medium text-slate-700 dark:text-foreground'>
                 No apps yet
               </p>
@@ -198,7 +198,7 @@ function AppListItem({
 
 function NoAppSelected({ isAdmin, onAdopt }: { isAdmin: boolean; onAdopt: () => void }) {
   return (
-    <div className='flex h-full flex-col items-center justify-center p-8 text-center'>
+    <div className='hub-texture flex h-full flex-col items-center justify-center p-8 text-center'>
       <div className='flex h-12 w-12 items-center justify-center rounded-xl bg-slate-100 dark:bg-muted'>
         <AppWindow className='h-5 w-5 text-slate-400 dark:text-muted-foreground' aria-hidden />
       </div>

@@ -8,6 +8,8 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowRight, Ban, Check, Circle, Eye, Loader2, RotateCcw, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { ProductionGuard } from '@/components/hub-brand/HubBits'
+import { HubRunTimeline } from '@/components/hub-brand/HubRunTimeline'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { SimpleSelect } from '@/components/ui/simple-select'
@@ -447,7 +449,7 @@ function PlanPreview({ plan, blockers }: { plan: PromotionPlan; blockers: Promot
 type StepState = 'done' | 'running' | 'failed' | 'stopped' | 'pending'
 type Phase = 'push' | 'deploy' | 'verify'
 
-interface StepRow {
+export interface StepRow {
   key: string
   phase: Phase
   component: string | null
@@ -512,6 +514,14 @@ export function stepRows(plan: PromotionPlan | null, kind: PromotionKind = 'prom
     label: 'Check the new version answers'
   })
   return rows
+}
+
+/** A step's word on the standalone Hub's run track: "Merge api", "Deploy frontend", "Check". */
+export function trackLabel(r: StepRow, rollback = false): string {
+  if (r.phase === 'verify' || !r.component) return 'Check'
+  const word =
+    r.phase === 'push' ? (rollback ? 'Find build' : 'Merge') : rollback ? 'Redeploy' : 'Deploy'
+  return `${word} ${r.component}`
 }
 
 const PHASE_WORDS: [Phase, RegExp][] = [
@@ -681,6 +691,19 @@ function PromotionProgress({
         </span>
       </div>
 
+      {/* Standalone Hub: the run as a track (renders nothing otherwise). */}
+      <HubRunTimeline
+        what={d.kind === 'rollback' ? 'Rollback' : 'Promotion'}
+        live={live}
+        steps={[
+          { key: 'plan', label: 'Plan', state: 'done' },
+          ...rows.map((r, i) => ({
+            key: r.key,
+            label: trackLabel(r, d.kind === 'rollback'),
+            state: states[i]
+          }))
+        ]}
+      />
       <ol aria-label='Promotion steps' className='m-0 list-none space-y-1.5 p-0'>
         {rows.map((r, i) => (
           <li
@@ -1078,17 +1101,22 @@ function EnvPromotions({ env, canPromote }: { env: HubEnvironment; canPromote: b
         {env.key}
       </h4>
       {panel && (
-        <HubPromotePanel
-          // A new pick starts a fresh panel (version, confirmation, plan).
-          key={'deployId' in panel ? `d${panel.deployId}` : `v${panel.version}`}
-          env={env}
-          kind={panel.kind}
-          initialVersion={'version' in panel ? panel.version : undefined}
-          deployId={'deployId' in panel ? panel.deployId : undefined}
-          canCancel={canPromote}
-          idPrefix={`hub-rb-${env.id}`}
-          onClose={() => setPanel(null)}
-        />
+        <ProductionGuard
+          envKey={env.key}
+          what={panel.kind === 'rollback' ? 'rollback' : 'promotion'}
+        >
+          <HubPromotePanel
+            // A new pick starts a fresh panel (version, confirmation, plan).
+            key={'deployId' in panel ? `d${panel.deployId}` : `v${panel.version}`}
+            env={env}
+            kind={panel.kind}
+            initialVersion={'version' in panel ? panel.version : undefined}
+            deployId={'deployId' in panel ? panel.deployId : undefined}
+            canCancel={canPromote}
+            idPrefix={`hub-rb-${env.id}`}
+            onClose={() => setPanel(null)}
+          />
+        </ProductionGuard>
       )}
       <PromotionHistory
         env={env}
