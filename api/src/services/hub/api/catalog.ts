@@ -2333,6 +2333,229 @@ export const HUB_ROUTES: HubRoute[] = [
         'Docker: the pin is written inside the promotion lock as part of Apply now (202, a normal Hub deploy) and put back when the deploy fails. GitLab: the pin file extensions/<id>.pin beside the driver’s pin file is committed under the promotion and branch locks, a deploy record (kind extension) is written and the repository pipeline is watched (202). Refused for an extension the app neither lists nor runs (UNKNOWN_EXTENSION), on a shared deployment (EXTENSION_ON_SHARED), while a move or creation is open (MOVE_OPEN, CREATION_OPEN), in a freeze (FROZEN) or while the environment deploys (LOCKED).'
     }
   ),
+  // ─── Security (routes/hub-security.ts) ──────────────────────────────────────
+  r(
+    'GET',
+    '/security/overview',
+    'Security',
+    'owner',
+    'read',
+    'Security counts for the caller’s apps'
+  ),
+  r(
+    'GET',
+    '/security/settings',
+    'Security',
+    'admin',
+    'read',
+    'Scanner endpoint, longest break-glass, TLS watch',
+    {
+      notes: 'The scanner token is answered masked.'
+    }
+  ),
+  r('PUT', '/security/settings', 'Security', 'admin', 'write', 'Save the security settings', {
+    sensitive: true,
+    body: {
+      scanner_url: s('Scanner endpoint (https); empty = no scanner, no outbound call'),
+      scanner_token: secret('Bearer the Hub sends to the scanner; the mask keeps the stored one'),
+      break_glass_max_hours: n('Longest grant a request may ask for (1–24)'),
+      tls_watch: b('Check certificates and DNS every 6 hours')
+    }
+  }),
+  r('GET', '/apps/:id/security', 'Security', 'owner', 'read', 'The app’s access review cadence'),
+  r(
+    'PUT',
+    '/apps/:id/security',
+    'Security',
+    'admin',
+    'write',
+    'Set the app’s access review cadence',
+    {
+      body: {
+        review_every_months: n('0 = off, else every 1–12 months', { required: true }),
+        review_due_days: n('Days owners have to finish a review (1–90)')
+      }
+    }
+  ),
+  r('GET', '/access-reviews', 'Security', 'owner', 'read', 'Access reviews, newest first', {
+    query: { app_id: n('Only this app') }
+  }),
+  r('POST', '/apps/:id/access-reviews', 'Security', 'owner', 'write', 'Start an access review', {
+    accepted: true,
+    body: { note: s('Why (optional)') },
+    notes:
+      'Reads every environment’s role holders over the hub link; one open review per app (409 REVIEW_OPEN).'
+  }),
+  r(
+    'GET',
+    '/access-reviews/:id',
+    'Security',
+    'owner',
+    'read',
+    'One review with every account and its decision'
+  ),
+  r(
+    'POST',
+    '/access-reviews/:id/decisions',
+    'Security',
+    'owner',
+    'write',
+    'Keep or remove accounts',
+    {
+      body: { items: list('object', '[{id, decision: keep | remove | pending, note?}], 1–1000') }
+    }
+  ),
+  r(
+    'POST',
+    '/access-reviews/:id/complete',
+    'Security',
+    'owner',
+    'write',
+    'Complete the review and run the removals',
+    {
+      accepted: true,
+      sensitive: true,
+      notes:
+        'Every account needs a decision (409 DECISIONS_PENDING). Removals go through the app’s suspend route (never delete; LAST_ADMIN refused).'
+    }
+  ),
+  r(
+    'POST',
+    '/access-reviews/:id/retry',
+    'Security',
+    'owner',
+    'write',
+    'Try failed removals again',
+    {
+      accepted: true
+    }
+  ),
+  r('POST', '/access-reviews/:id/cancel', 'Security', 'owner', 'write', 'Cancel an open review'),
+  r(
+    'GET',
+    '/access-reviews/:id/evidence.csv',
+    'Security',
+    'owner',
+    'read',
+    'The review as CSV evidence'
+  ),
+  r('GET', '/access-reviews/:id/evidence.pdf', 'Security', 'owner', 'read', 'The review as a PDF', {
+    notes: '503 RENDER_UNAVAILABLE without Chromium or a render peer.'
+  }),
+  r(
+    'GET',
+    '/apps/:id/compliance-pack',
+    'Security',
+    'owner',
+    'read',
+    'Compliance pack (zip of a PDF and CSVs)',
+    {
+      query: { months: n('1–36, default 12') },
+      notes:
+        'Deploys, access reviews, break-glass, backups and drills, secret rotations, incidents, certificates, vulnerabilities. Never a secret.'
+    }
+  ),
+  r(
+    'GET',
+    '/security/vulnerabilities',
+    'Security',
+    'owner',
+    'read',
+    'Pinned images and their open findings'
+  ),
+  r(
+    'POST',
+    '/security/vulnerabilities/scan',
+    'Security',
+    'admin',
+    'write',
+    'Scan every pinned image now',
+    {
+      accepted: true,
+      notes: '409 NO_SCANNER without a scanner endpoint, 409 SCAN_RUNNING while one runs.'
+    }
+  ),
+  r(
+    'GET',
+    '/security/certificates',
+    'Security',
+    'owner',
+    'read',
+    'Certificate expiry and DNS of every environment name'
+  ),
+  r(
+    'POST',
+    '/security/certificates/check',
+    'Security',
+    'admin',
+    'write',
+    'Check every certificate now',
+    {
+      accepted: true
+    }
+  ),
+  r(
+    'GET',
+    '/break-glass',
+    'Security',
+    'owner',
+    'read',
+    'Break-glass requests (and always the caller’s own)'
+  ),
+  r(
+    'POST',
+    '/environments/:envId/break-glass',
+    'Security',
+    'owner',
+    'write',
+    'Ask for temporary admin access',
+    {
+      sensitive: true,
+      body: {
+        hours: n('1 – the longest grant', { required: true }),
+        reason: s('10–1000 characters', { required: true }),
+        self_approve: b('On call during an open incident of the app: approve it yourself')
+      },
+      notes:
+        'Own browser session only (403 OWN_SESSION_ONLY for View-as, keys, phones, connected apps).'
+    }
+  ),
+  r(
+    'POST',
+    '/break-glass/:id/approve',
+    'Security',
+    'admin',
+    'write',
+    'Approve a request and grant it',
+    {
+      sensitive: true,
+      body: { note: s('Optional') },
+      notes:
+        'Own session only; never your own request (403 SELF_APPROVAL) unless on call during an open incident.'
+    }
+  ),
+  r('POST', '/break-glass/:id/deny', 'Security', 'admin', 'write', 'Deny a request', {
+    body: { note: s('Optional') }
+  }),
+  r(
+    'POST',
+    '/break-glass/:id/cancel',
+    'Security',
+    'owner',
+    'write',
+    'Withdraw your own pending request'
+  ),
+  r(
+    'POST',
+    '/break-glass/:id/revoke',
+    'Security',
+    'owner',
+    'write',
+    'End temporary admin access now',
+    {
+      sensitive: true
+    }
+  ),
   // ─── Phone app (routes/hub-people.ts) ───────────────────────────────────────
   r('GET', '/mobile/summary', 'Phone', 'owner', 'read', 'Fleet at a glance (last known status)'),
   r('GET', '/mobile/runs', 'Phone', 'owner', 'read', 'Recent promotions, rollbacks and applies', {

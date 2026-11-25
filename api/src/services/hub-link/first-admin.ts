@@ -85,13 +85,18 @@ export function oldestAdminRoleQuery(k: Knex) {
 }
 
 /** First active admin person, or undefined (activeAdminIds' rule, first row only). */
-function firstActiveAdmin(k: Knex) {
-  return k('nivaro_users as u')
+async function firstActiveAdmin(k: Knex) {
+  // A break-glass grantee is not an administrator of this app (their access ends by itself).
+  const { withoutLiveGrantees } = await import('../break-glass-grants.js')
+  const q = k('nivaro_users as u')
     .join('nivaro_roles as r', 'r.id', 'u.role')
     .where('r.admin_access', true)
     .where('u.status', 'active')
     .whereNull('u.account_kind')
-    .first('u.id')
+    .select('u.id')
+    .limit(1)
+  const rows = (await withoutLiveGrantees(q, k)) as Array<{ id: unknown }>
+  return rows[0]
 }
 
 // One call at a time in this process (the transaction's row lock covers other processes).

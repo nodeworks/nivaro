@@ -194,7 +194,9 @@ const SCREENS: Record<string, Screens> = {
     usage: lazy(() => import('@/pages/hub/insight/HubUsage')),
     dependencies: lazy(() => import('@/pages/hub/insight/HubDependencies')),
     ask: lazy(() => import('@/pages/hub/insight/HubAsk')),
-    people: lazy(() => import('@/pages/hub/people/HubPeople'))
+    people: lazy(() => import('@/pages/hub/people/HubPeople')),
+    access: lazy(() => import('@/pages/hub/security/HubAccess')),
+    security: lazy(() => import('@/pages/hub/security/HubSecurity'))
   }
 }
 

@@ -17,7 +17,14 @@ function crc32(buf: Buffer): number {
 }
 
 export function buildZip(files: Array<{ name: string; data: Buffer }>): Buffer {
-  const local: Buffer[] = []
+  return Buffer.concat([...zipParts(files)])
+}
+
+/**
+ * The same stored zip as buildZip, piece by piece (each file's header + data, then the central
+ * directory): a caller streams it without holding a second whole copy.
+ */
+export function* zipParts(files: Array<{ name: string; data: Buffer }>): Generator<Buffer> {
   const central: Buffer[] = []
   let offset = 0
   for (const f of files) {
@@ -34,7 +41,8 @@ export function buildZip(files: Array<{ name: string; data: Buffer }>): Buffer {
     h.writeUInt32LE(f.data.length, 18)
     h.writeUInt32LE(f.data.length, 22)
     h.writeUInt16LE(name.length, 26)
-    local.push(h, name, f.data)
+    yield Buffer.concat([h, name])
+    yield f.data
     const c = Buffer.alloc(46)
     c.writeUInt32LE(0x02014b50, 0)
     c.writeUInt16LE(20, 4)
@@ -58,5 +66,5 @@ export function buildZip(files: Array<{ name: string; data: Buffer }>): Buffer {
   end.writeUInt16LE(files.length, 10)
   end.writeUInt32LE(centralBuf.length, 12)
   end.writeUInt32LE(offset, 16)
-  return Buffer.concat([...local, centralBuf, end])
+  yield Buffer.concat([centralBuf, end])
 }

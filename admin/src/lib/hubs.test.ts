@@ -56,8 +56,13 @@ describe('hub registry', () => {
       'Dependencies',
       'Ask the Hub',
       'Audit',
-      'People'
+      'People',
+      // Hub security (hub-enh/security): break-glass + access reviews, then certificates/scans.
+      'Access',
+      'Security'
     ])
+    expect(hubForPath('/hub/access')?.tab.label).toBe('Access')
+    expect(hubForPath('/hub/security')?.tab.label).toBe('Security')
     expect(hubForPath('/hub/signin')?.tab.label).toBe('Sign-in')
     expect(hubForPath('/hub/releases')?.tab.label).toBe('Releases')
     expect(hubForPath('/hub/secrets')?.tab.label).toBe('Secrets')

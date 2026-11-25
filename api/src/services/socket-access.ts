@@ -883,6 +883,14 @@ async function runRecheckPass(io: SocketIOServer, target: RecheckTarget): Promis
   for (const group of authedSocketGroups(io, filter)) {
     await inGroupTenant(group, async () => {
       const ids = [...new Set(group.map((s) => String(hooksOf(s)?.user()?.id)))]
+      // A Nivaro Hub break-glass grant of one of these people that has ended is made real here
+      // too (role back, their sockets end and reconnect with it) — no cron needed.
+      try {
+        const { endDueGrantsOf } = await import('./break-glass-grants.js')
+        await endDueGrantsOf(ids.filter((x) => x && x !== 'undefined'))
+      } catch {
+        /* the next sweep, request or job ends it */
+      }
       const rows = await freshUsers(ids).catch(() => null)
       if (!rows) return
       // One memo per tenant group: room verdicts are shared by a person's sockets.

@@ -373,6 +373,14 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_hub_smoke_runs', //          sightings + promotions (per-Hub state, never promoted)
   'nivaro_hub_extension_sightings',
   'nivaro_hub_extension_promotions',
+  'nivaro_break_glass_grants', //    break-glass grants of THIS app (578): travel with nivaro_users
+  'nivaro_hub_access_reviews', //    Hub security (578): access reviews, scans, TLS, break-glass
+  'nivaro_hub_access_review_items',
+  'nivaro_hub_security_settings',
+  'nivaro_hub_vuln_scans',
+  'nivaro_hub_vuln_findings',
+  'nivaro_hub_cert_checks',
+  'nivaro_hub_break_glass',
   'nivaro_share_links',
   'nivaro_dashboard_links',
   'nivaro_webhook_deliveries',
