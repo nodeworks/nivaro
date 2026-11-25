@@ -1,9 +1,11 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
+import { runInBackgroundPool } from '../db/pool-context.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { idParam } from '../services/hub/apps.js'
 import { hubModeEnabled } from '../services/hub/mode.js'
+import { claimOpsLease, releaseOpsLease } from '../services/hub/ops/health-row.js'
 import {
   collectIssues,
   issueGroupDetail,
@@ -80,12 +82,31 @@ function body(req: FastifyRequest): Body {
 
 const REF_RE = /^[a-z_]{3,32}:[A-Za-z0-9_:-]{1,90}$/
 
-/** The ops collection (cron + Collect now). */
-export async function collectOps(): Promise<{ issues: number; files: number; drivers: number }> {
-  const issues = await collectIssues()
-  const files = await collectFilesUsage()
-  const drivers = await collectDriverStorage()
-  return { issues: issues.read, files, drivers }
+/** One collection run (the caller holds the ops lease). */
+async function collectHeld(): Promise<{ issues: number; files: number; drivers: number }> {
+  try {
+    const issues = await collectIssues()
+    const files = await collectFilesUsage()
+    const drivers = await collectDriverStorage()
+    return { issues: issues.read, files, drivers }
+  } finally {
+    await releaseOpsLease().catch(() => undefined)
+  }
+}
+
+/**
+ * The ops collection (cron + Read now): single flight across processes (the ops lease), on the
+ * background pool. null = another run holds the lease.
+ */
+export async function collectOps(): Promise<{
+  issues: number
+  files: number
+  drivers: number
+} | null> {
+  return runInBackgroundPool(async () => {
+    if (!(await claimOpsLease())) return null
+    return collectHeld()
+  })
 }
 
 export async function hubOpsRoutes(app: FastifyInstance): Promise<void> {
@@ -120,13 +141,16 @@ export async function hubOpsRoutes(app: FastifyInstance): Promise<void> {
   })
 
   app.post('/ops/collect', { preHandler: requireAdmin }, async (req, reply) => {
+    // Taken here so a second click answers at once; the run itself goes on in the background.
+    if (!(await claimOpsLease()))
+      return fail(reply, 409, 'COLLECT_RUNNING', 'The apps are being read already.')
     await logActivity({
       action: 'hub-ops-collect',
       user: userId(req),
       collection: 'nivaro_hub_issue_groups',
       req
     })
-    void collectOps().catch((err) =>
+    void runInBackgroundPool(() => collectHeld()).catch((err) =>
       req.log.warn({ err: (err as Error | null)?.name ?? 'Error' }, 'hub ops: collect failed')
     )
     return reply.code(202).send({ data: { started: true } })
@@ -267,6 +291,10 @@ export async function hubOpsRoutes(app: FastifyInstance): Promise<void> {
     '*/15 * * * *',
     async () => {
       const r = await collectOps()
+      if (!r) {
+        app.log.info('hub-ops-collect: another run holds the lease; skipped')
+        return
+      }
       app.log.info(
         `hub-ops-collect: issues from ${r.issues} environments, files from ${r.files}, storage of ${r.drivers} drivers`
       )

@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { db } from '../../db/index.js'
 import { errorTag } from '../../lib/error-tag.js'
+import { environmentForPrevToken } from './ops/hub-token-grace.js'
 import { HUB_MASK, openSecret, sealSecret } from './secrets.js'
 
 /**
@@ -173,6 +174,9 @@ export async function environmentForLinkToken(bearer: string): Promise<Found | n
   if (typeof bearer !== 'string' || !bearer || bearer.length > MAX_TOKEN_LENGTH) return null
   const found = await byLookup(bearer)
   if (found) return found
+  // Hub ops: the previous token, for 24 h after the Hub rotated it (ops/hub-token-grace.ts).
+  const prev = await environmentForPrevToken(bearer).catch(() => null)
+  if (prev) return prev
   if (backfilled) return null
   await repairOnce()
   return byLookup(bearer)

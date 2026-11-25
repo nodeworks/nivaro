@@ -1,5 +1,6 @@
 import type { Knex } from 'knex'
 import { utcNow } from '../dialect.js'
+import { longText } from '../portable-ddl.js'
 
 /**
  * Nivaro Hub operations (enhancements 10, 19, 20): cross-app issue rollup, secret rotation
@@ -20,6 +21,10 @@ import { utcNow } from '../dialect.js'
  *                                 last rotated, the reminder sent, the readiness check after a
  *                                 rotation
  *  - nivaro_hub_secret_rotations  history: one row per rotation (helper or detected)
+ *  - nivaro_hub_environments.hub_token_prev / _prev_lookup / _prev_until  the previous hub token
+ *                                 (sealed + its SHA-256 lookup) for 24 h after the Hub rotates
+ *                                 it: the Hub's calls fall back to it and the app's calls with it
+ *                                 are still accepted until the stack runs the new one
  */
 export async function up(knex: Knex): Promise<void> {
   if (!(await knex.schema.hasTable('nivaro_hub_issue_groups'))) {
@@ -40,7 +45,8 @@ export async function up(knex: Knex): Promise<void> {
       t.integer('app_issue_id').nullable()
       t.dateTime('collected_at').notNullable().defaultTo(utcNow(knex))
       t.index(['sig'], 'ix_nivaro_hub_issue_groups_sig')
-      t.index(['environment_id'], 'ix_nivaro_hub_issue_groups_env')
+      // One row per signature per environment: an overlapping replace fails instead of doubling.
+      t.unique(['environment_id', 'sig'], { indexName: 'ux_nivaro_hub_issue_groups_env_sig' })
     })
   }
 
@@ -114,6 +120,20 @@ export async function up(knex: Knex): Promise<void> {
       t.string('check_detail', 300).nullable()
       t.index(['ref'], 'ix_nivaro_hub_secret_rot_ref')
     })
+  }
+
+  const ENVS = 'nivaro_hub_environments'
+  if (await knex.schema.hasTable(ENVS)) {
+    if (!(await knex.schema.hasColumn(ENVS, 'hub_token_prev')))
+      await knex.schema.alterTable(ENVS, (t) => longText(t, knex, 'hub_token_prev').nullable())
+    if (!(await knex.schema.hasColumn(ENVS, 'hub_token_prev_lookup')))
+      await knex.schema.alterTable(ENVS, (t) => {
+        t.string('hub_token_prev_lookup', 64).nullable()
+      })
+    if (!(await knex.schema.hasColumn(ENVS, 'hub_token_prev_until')))
+      await knex.schema.alterTable(ENVS, (t) => {
+        t.dateTime('hub_token_prev_until').nullable()
+      })
   }
 }
 

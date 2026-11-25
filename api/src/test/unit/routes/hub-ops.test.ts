@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import Fastify, { type FastifyInstance, type InjectOptions } from 'fastify'
 import type { Knex } from 'knex'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -311,6 +312,46 @@ describe('issue rollup (enhancement 10)', () => {
   })
 })
 
+describe('issue rollup: counts and single flight (review M4)', () => {
+  it('a signature sent twice by one app is one row: counted once per environment', async () => {
+    const a = await seedApp('alpha')
+    const parsed = issues.parseRollup(a.envId, {
+      groups: [
+        group(SIG_A, { count: 2, people: 3, severity: 'low' }),
+        group(SIG_A, { count: 4, people: 1, severity: 'critical' })
+      ]
+    })
+    expect(parsed?.groups).toHaveLength(1)
+    expect(parsed?.groups[0]).toMatchObject({ occurrences: 6, people: 3, severity: 'critical' })
+    await issues.storeIssueGroups(a.envId, parsed?.groups ?? [])
+    const g = (await inject('GET', '/hub/ops/issues', asAdmin)).json().data.groups[0]
+    expect(g).toMatchObject({ environments: 1, apps: 1, occurrences: 6 })
+  })
+
+  it('the unique index refuses a second row for one (environment, signature)', async () => {
+    const a = await seedApp('alpha')
+    const [row] = issues.parseRollup(a.envId, { groups: [group(SIG_A)] })?.groups ?? []
+    await issues.storeIssueGroups(a.envId, [row])
+    await expect(db('nivaro_hub_issue_groups').insert({ ...row })).rejects.toThrow()
+  })
+
+  it('one collection at a time: Read now answers 409 while a run holds the lease', async () => {
+    const { claimOpsLease, releaseOpsLease } = await import(
+      '../../../services/hub/ops/health-row.js'
+    )
+    expect(await claimOpsLease()).toBe(true)
+    expect(await claimOpsLease()).toBe(false)
+    const busy = await inject('POST', '/hub/ops/collect', asAdmin, {})
+    expect(busy.statusCode).toBe(409)
+    expect(busy.json().code).toBe('COLLECT_RUNNING')
+    // A dead run's lease is taken over once stale.
+    expect(await claimOpsLease(new Date(Date.now() + 11 * 60_000))).toBe(true)
+    await releaseOpsLease()
+    expect(await claimOpsLease()).toBe(true)
+    await releaseOpsLease()
+  })
+})
+
 describe('storage health (enhancement 20)', () => {
   async function dockerDriver() {
     const [id] = await db('nivaro_hub_drivers').insert({
@@ -363,12 +404,16 @@ describe('storage health (enhancement 20)', () => {
     expect((await run(95))?.level).toBe('critical')
     expect(sent.map((s) => s.subject)).toEqual([
       'Storage filling up on swarm-a',
-      'Storage almost full on swarm-a'
+      'The storage your app runs on is filling up',
+      'Storage almost full on swarm-a',
+      'The storage your app runs on is almost full'
     ])
-    expect(sent[0].ids).toEqual(expect.arrayContaining([ADMIN, OWNER]))
+    // Admins get the driver; owners never see its name (the overview hides drivers from them).
+    expect(sent[0].ids).toEqual([ADMIN])
+    expect(sent[1].ids).toEqual([OWNER])
     await run(40)
     await run(85)
-    expect(sent).toHaveLength(3)
+    expect(sent).toHaveLength(6)
 
     const row = (await inject('GET', `/hub/drivers/${driverId}/storage`, asAdmin)).json().data
     expect(row).toMatchObject({ state: 'ok', level: 'warn', kind: 'nfs', files: 12 })
@@ -429,6 +474,7 @@ describe('secret rotation helper (enhancement 19)', () => {
     )
     await db('nivaro_hub_stack_settings').insert({ environment_id: envId, secrets: sealedStack })
 
+    await secrets.scanSecrets()
     const res = await inject('GET', '/hub/secrets', asAdmin)
     expect(res.statusCode).toBe(200)
     const text = res.body
@@ -572,7 +618,7 @@ describe('secret rotation helper (enhancement 19)', () => {
     )
   })
 
-  it('puts the old token back when Apply now cannot start', async () => {
+  async function dockerEnv() {
     const { envId } = await seedApp('alpha')
     const [driverId] = await db('nivaro_hub_drivers').insert({
       kind: 'docker',
@@ -588,30 +634,165 @@ describe('secret rotation helper (enhancement 19)', () => {
     await db('nivaro_hub_environments')
       .where({ id: envId })
       .update({ placement_id: placementId, version_pin: '0.3.215' })
-    const before = await db('nivaro_hub_environments').where({ id: envId }).first()
+    await secrets.scanSecrets()
+    return envId
+  }
+  const envRow = (envId: number) => db('nivaro_hub_environments').where({ id: envId }).first()
+  const freeLock = async <T>(_e: number, work: () => Promise<T>) => ({
+    held: true as const,
+    value: await work()
+  })
+
+  it('rotates under the lock: new token, the old one kept 24 h, recorded as the person’s', async () => {
+    const envId = await dockerEnv()
+    const before = await envRow(envId)
+    const ok = await secrets.rotateHubToken(
+      envId,
+      { id: ADMIN },
+      { lock: freeLock, apply: async () => ({ deployId: 5, jobRunId: null }) }
+    )
+    expect(ok).toEqual({ deploy_id: 5, job_run_id: null })
+    const after = await envRow(envId)
+    expect(after.hub_token).not.toBe(before.hub_token)
+    expect(after.hub_token_prev).toBe(before.hub_token)
+    expect(after.hub_token_prev_lookup).toBe(before.hub_token_lookup)
+    expect(new Date(after.hub_token_prev_until).getTime()).toBeGreaterThan(Date.now())
+    const row = await db('nivaro_hub_secrets')
+      .where({ ref: `hub_token:${envId}` })
+      .first()
+    expect(row).toMatchObject({ rotated_via: 'helper', check_state: 'pending' })
+
+    // The app may still present the old token during the grace: the Hub accepts it.
+    const { environmentForLinkToken } = await import('../../../services/hub/link-token.js')
+    expect((await environmentForLinkToken(HUB_TOKEN))?.environment_id).toBe(envId)
+    // The Hub's own read falls back to the old token on a refusal.
+    const urls: string[] = []
+    const auths: string[] = []
+    const r = await readOps(
+      (await (await import('../../../services/hub/ops/link-read.js')).opsTargets([envId]))[0],
+      'files',
+      {},
+      {
+        fetch: async (url, headers) => {
+          urls.push(url)
+          auths.push(headers.Authorization)
+          return headers.Authorization === `Bearer ${HUB_TOKEN}`
+            ? { ok: true, status: 200, body: { files: 1, bytes: 1 } }
+            : { ok: false, status: 401, body: { code: 'HUB_LINK_REFUSED' } }
+        }
+      }
+    )
+    expect(r.state).toBe('ok')
+    expect(auths).toHaveLength(2)
+    expect(auths[1]).toBe(`Bearer ${HUB_TOKEN}`)
+
+    // The check proves the NEW token, then the grace ends.
+    await db('nivaro_hub_secrets')
+      .where({ ref: `hub_token:${envId}` })
+      .update({ check_due_at: new Date(Date.now() - 1000) })
+    const checked = await secrets.runDueChecks(new Date(), {
+      envStatus: async () => ({ state: 'ok' }),
+      notify: async () => 0
+    })
+    expect(checked).toEqual({ ran: 1, failed: 0 })
+    expect((await envRow(envId)).hub_token_prev).toBeNull()
+    expect(await environmentForLinkToken(HUB_TOKEN)).toBeNull()
+  })
+
+  it('refuses while another holder has the lock or a deploy is planned/running', async () => {
+    const envId = await dockerEnv()
+    const before = await envRow(envId)
+    await expect(
+      secrets.rotateHubToken(
+        envId,
+        { id: ADMIN },
+        { lock: async () => ({ held: false as const, holder: null }) }
+      )
+    ).rejects.toMatchObject({ code: 'ENV_BUSY' })
+    await db('nivaro_hub_deploys').insert({
+      app_id: 1,
+      environment_id: envId,
+      kind: 'promote',
+      version: '0.3.215',
+      status: 'running'
+    })
+    await expect(
+      secrets.rotateHubToken(envId, { id: ADMIN }, { lock: freeLock })
+    ).rejects.toMatchObject({ code: 'DEPLOY_RUNNING' })
+    expect((await envRow(envId)).hub_token).toBe(before.hub_token)
+    await db('nivaro_hub_deploys').del()
+  })
+
+  it('Apply now refused: the old token comes back only while the new one is still stored', async () => {
+    const envId = await dockerEnv()
+    const before = await envRow(envId)
     await expect(
       secrets.rotateHubToken(
         envId,
         { id: ADMIN },
         {
+          lock: freeLock,
           apply: async () => {
-            throw new Error('busy')
+            throw Object.assign(new Error('busy'), { code: 'ENV_LOCKED' })
           }
         }
       )
     ).rejects.toThrow('busy')
-    const after = await db('nivaro_hub_environments').where({ id: envId }).first()
-    expect(after.hub_token).toBe(before.hub_token)
-    expect(after.hub_token_lookup).toBe(before.hub_token_lookup)
+    const undone = await envRow(envId)
+    expect(undone.hub_token).toBe(before.hub_token)
+    expect(undone.hub_token_lookup).toBe(before.hub_token_lookup)
+    expect(undone.hub_token_prev).toBeNull()
+    expect(activity.some((a) => a.action === 'hub-secret-rotate-undone')).toBe(true)
+    // The fingerprint is the old one again: the next scan sees no rotation.
+    expect((await secrets.scanSecrets()).rotated).toEqual([])
+    const hist = await db('nivaro_hub_secret_rotations').orderBy('id', 'desc').first()
+    expect(hist.check_state).toBe('undone')
 
-    const ok = await secrets.rotateHubToken(
-      envId,
-      { id: ADMIN },
-      { apply: async () => ({ deployId: 5, jobRunId: null }) }
+    // A deploy that started meanwhile may carry the new token: it is kept.
+    await expect(
+      secrets.rotateHubToken(
+        envId,
+        { id: ADMIN },
+        {
+          lock: freeLock,
+          apply: async () => {
+            await db('nivaro_hub_deploys').insert({
+              app_id: 1,
+              environment_id: envId,
+              kind: 'promote',
+              version: '0.3.215',
+              status: 'running'
+            })
+            throw Object.assign(new Error('busy'), { code: 'ENV_LOCKED' })
+          }
+        }
+      )
+    ).rejects.toThrow('busy')
+    const kept = await envRow(envId)
+    expect(kept.hub_token).not.toBe(before.hub_token)
+    expect(kept.hub_token_prev).toBe(before.hub_token)
+    expect(activity.some((a) => a.action === 'hub-secret-rotate-kept')).toBe(true)
+    await db('nivaro_hub_deploys').del()
+  })
+
+  it('two scans at once record one rotation', async () => {
+    const { envId } = await seedApp('alpha')
+    await secrets.scanSecrets()
+    await db('nivaro_hub_environments')
+      .where({ id: envId })
+      .update(hubTokenColumns('z'.repeat(48)))
+    const [a, b] = await Promise.all([secrets.scanSecrets(), secrets.scanSecrets()])
+    expect(a.rotated.length + b.rotated.length).toBe(1)
+    expect(await db('nivaro_hub_secret_rotations').count({ n: '*' }).first()).toMatchObject({
+      n: 1
+    })
+  })
+
+  it('a value stored unsealed is never hashed as it is', () => {
+    const fp = secrets.fingerprintOf('plain-password')
+    expect(fp).not.toContain(
+      createHash('sha256').update('plain-password').digest('hex').slice(0, 12)
     )
-    expect(ok).toEqual({ deploy_id: 5, job_run_id: null })
-    expect((await db('nivaro_hub_environments').where({ id: envId }).first()).hub_token).not.toBe(
-      before.hub_token
-    )
+    expect(fp.startsWith('u')).toBe(true)
   })
 })

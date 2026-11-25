@@ -8,6 +8,7 @@ import {
   openSharedToken,
   tenantIdFor
 } from '../shared/store.js'
+import { prevSealedHubToken } from './hub-token-grace.js'
 
 /**
  * Hub operations: read one environment's ops aggregates (services/hub-link/ops-report.ts on the
@@ -165,7 +166,19 @@ export async function readOps(
     token = null
   }
   if (!token) return { state: 'refused', body: null }
-  const res = await call(`${base}/api/hub-link/ops/${what}${suffix}`, token)
+  const url = `${base}/api/hub-link/ops/${what}${suffix}`
+  let res = await call(url, token)
+  // Inside the 24 h grace after a rotation the app may still run the previous token.
+  if (res && res.status === 401) {
+    const sealed = await prevSealedHubToken(env.id).catch(() => null)
+    let prev: string | null = null
+    try {
+      prev = sealed ? openSecret(sealed) : null
+    } catch {
+      prev = null
+    }
+    if (prev) res = await call(url, prev)
+  }
   if (!res) return { state: 'unreachable', body: null }
   if (res.ok) return { state: 'ok', body: res.body }
   return { state: stateOf(res.status, res.body), body: null }

@@ -1,4 +1,5 @@
 import { type FetchJsonOptions, fetchJson } from '../gitlab-client.js'
+import { prevSealedHubToken } from './ops/hub-token-grace.js'
 import { openSecret } from './secrets.js'
 
 /**
@@ -61,6 +62,8 @@ export interface StatusOptions {
   redis?: StatusCache | null
   /** Per-request timeout; tests pass a short one. */
   timeoutMs?: number
+  /** Hub ops: never fall back to the previous hub token (a check that proves the new one). */
+  currentTokenOnly?: boolean
 }
 
 export const HUB_STATUS_TTL_S = 30
@@ -382,6 +385,11 @@ export async function readEnvironmentStatus(
     }
   } else if (env.hub_token) {
     status = await readLinked(base, env.hub_token, timeoutMs, at)
+    // Hub ops: inside the 24 h grace after a rotation the app may still run the previous token.
+    if (status.error === 'HUB_LINK_REFUSED' && !opts.currentTokenOnly) {
+      const prev = await prevSealedHubToken(env.id).catch(() => null)
+      if (prev) status = await readLinked(base, prev, timeoutMs, at)
+    }
   } else {
     status = await readPublic(base, timeoutMs, at)
   }

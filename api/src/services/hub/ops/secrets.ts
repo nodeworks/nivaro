@@ -1,15 +1,18 @@
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, createHmac, randomBytes } from 'node:crypto'
 import { db } from '../../../db/index.js'
+import { logActivity } from '../../activity.js'
+import { isEncrypted } from '../../encryption.js'
 import { AgentError, agentHealth } from '../docker/agent-client.js'
-import { dockerTargetOf } from '../docker/stack-guards.js'
+import { dockerTargetOf, type LockedRun, withEnvironmentLock } from '../docker/stack-guards.js'
 import { getDriver } from '../drivers.js'
 import { hubTokenColumns } from '../link-token.js'
 import { moveOpenRefusal } from '../move-open.js'
 import { startStackApply } from '../promote-run.js'
 import { openSecret } from '../secrets.js'
 import { deploymentClient } from '../shared/deployment-client.js'
-import { getShared } from '../shared/store.js'
+import { getShared, openSharedToken } from '../shared/store.js'
 import { readEnvironmentStatus } from '../status.js'
+import { clearPrevHubToken, prevHubTokenColumns } from './hub-token-grace.js'
 import { hubAdminIds, notifyOps, type OpsNotifier } from './notify.js'
 
 /**
@@ -99,8 +102,10 @@ export const KINDS: Record<SecretKind, KindInfo> = {
     label: 'Shared deployment token',
     every_days: 180,
     remind_days: 14,
-    rotate: 'route',
-    how: 'Rotate on the shared deployment: the old token keeps working for 24 h, a Docker deployment gets the new one when its stack is applied.'
+    // Rotated on its own page: that answer carries the settings block, the grace deadline and
+    // whether the stack was re-applied, which this tab would drop.
+    rotate: 'manual',
+    how: 'Rotate it on the shared deployment’s page: the new token is shown once with the settings block, the old one keeps working for 24 h, a Docker deployment gets the new one when its stack is applied.'
   },
   shared_secrets: {
     label: 'Shared deployment secrets',
@@ -183,8 +188,23 @@ export interface FoundSecret {
   driver_id?: number
 }
 
-export const fingerprintOf = (sealed: string): string =>
-  createHash('sha256').update(String(sealed)).digest('hex').slice(0, 32)
+/**
+ * The fingerprint of a stored secret: SHA-256 of its SEALED form (AES-GCM, random IV — reveals
+ * nothing). A value stored unsealed (saved before sealing) is never hashed as it is — that would
+ * be a dictionary oracle for a weak password: it gets an HMAC keyed by a hash of ENCRYPTION_KEY,
+ * or the fixed word `unsealed` without one.
+ */
+export function fingerprintOf(stored: string): string {
+  const v = String(stored)
+  if (isEncrypted(v)) return createHash('sha256').update(v).digest('hex').slice(0, 32)
+  const key = process.env.ENCRYPTION_KEY
+  if (!key) return 'unsealed'
+  const k = createHash('sha256').update(`hub-secret-fp|${key}`).digest()
+  return `u${createHmac('sha256', k).update(v).digest('hex').slice(0, 31)}`
+}
+
+/** False for a value stored unsealed (fingerprintOf marks it with a leading `u`). */
+const isSealedFp = (fp: string) => fp !== 'unsealed' && !fp.startsWith('u')
 
 const dateOf = (v: unknown): Date | null => {
   if (v == null) return null
@@ -522,13 +542,23 @@ export interface ScanResult {
 /**
  * Syncs nivaro_hub_secrets with what is found. A changed fingerprint is a rotation: recorded
  * (history row), its reminder cleared and a readiness check set CHECK_DELAY_MS later. `by` +
- * `refs`: those refs' rotations are recorded as the helper's, by that person.
+ * `refs`: those refs' rotations are recorded as the helper's, by that person. `only`: look at
+ * those refs alone (nothing is marked gone). Every change is a compare-and-swap on the old
+ * fingerprint, so two scans at once record one rotation, never two.
  */
 export async function scanSecrets(
-  opts: { now?: Date; by?: string | null; refs?: string[]; found?: FoundSecret[] } = {}
+  opts: {
+    now?: Date
+    by?: string | null
+    refs?: string[]
+    only?: string[]
+    found?: FoundSecret[]
+  } = {}
 ): Promise<ScanResult> {
   const now = opts.now ?? new Date()
-  const found = opts.found ?? (await gatherSecrets())
+  const all = opts.found ?? (await gatherSecrets())
+  const only = opts.only ? new Set(opts.only) : null
+  const found = only ? all.filter((f) => only.has(f.ref)) : all
   const rows = (await db(SECRETS).select('ref', 'fp', 'gone_at')) as Array<{
     ref: string
     fp: string
@@ -562,8 +592,8 @@ export async function scanSecrets(
     const helper = mine.has(f.ref)
     const via = helper ? 'helper' : 'detected'
     const by = helper ? (opts.by ?? null) : null
-    await db(SECRETS)
-      .where({ ref: f.ref })
+    const changed = await db(SECRETS)
+      .where({ ref: f.ref, fp: row.fp })
       .update({
         fp: f.fp,
         rotated_at: now,
@@ -576,6 +606,8 @@ export async function scanSecrets(
         check_detail: null,
         gone_at: null
       })
+    // Another scan recorded this change first.
+    if (Number(changed) !== 1) continue
     await db(ROTATIONS).insert({
       ref: f.ref,
       kind: f.kind,
@@ -586,7 +618,9 @@ export async function scanSecrets(
     })
     result.rotated.push(f.ref)
   }
-  const goneRefs = [...known.values()].filter((r) => r.gone_at == null).map((r) => r.ref)
+  const goneRefs = only
+    ? []
+    : [...known.values()].filter((r) => r.gone_at == null).map((r) => r.ref)
   if (goneRefs.length) {
     await db(SECRETS).whereIn('ref', goneRefs).update({ gone_at: now })
     result.gone = goneRefs.length
@@ -603,8 +637,10 @@ export interface InventoryItem {
   kind: SecretKind
   kind_label: string
   label: string
-  /** First 12 hex of the fingerprint of the SEALED value: shows a change, says nothing of it. */
+  /** First 12 hex of the fingerprint of the SEALED value: shows a change, says nothing of it.
+   *  Empty for a value stored unsealed (`sealed` false). */
   fingerprint: string
+  sealed: boolean
   path: string
   rotate: RotateMode
   /** For rotate = helper: whether this one can be rotated here (a Docker environment). */
@@ -641,10 +677,16 @@ export function dueOf(
   return { due_at: due, due: 'ok' }
 }
 
-/** The inventory: a fresh scan, then the stored state with its due dates. */
-export async function secretInventory(now = new Date()): Promise<InventoryItem[]> {
+/**
+ * The inventory: what is found, with the stored state and its due dates. A read: the scan that
+ * records rotations runs from the cron and the write routes (`scan: true` runs one first).
+ */
+export async function secretInventory(
+  now = new Date(),
+  opts: { scan?: boolean } = {}
+): Promise<InventoryItem[]> {
   const found = await gatherSecrets()
-  await scanSecrets({ now, found })
+  if (opts.scan) await scanSecrets({ now, found })
   const policies = await readPolicies()
   const rows = (await db(SECRETS).whereNull('gone_at').select('*')) as Array<
     Record<string, unknown>
@@ -663,7 +705,8 @@ export async function secretInventory(now = new Date()): Promise<InventoryItem[]
       kind: f.kind,
       kind_label: KINDS[f.kind].label,
       label: f.label,
-      fingerprint: f.fp.slice(0, 12),
+      fingerprint: isSealedFp(f.fp) ? f.fp.slice(0, 12) : '',
+      sealed: isSealedFp(f.fp),
       path: f.path,
       rotate: KINDS[f.kind].rotate,
       helper_ready: f.kind === 'hub_token' && f.env_id != null && dockerEnvs.has(f.env_id),
@@ -740,22 +783,40 @@ export class SecretRotateError extends Error {
 
 export interface RotateDeps {
   apply?: typeof startStackApply
+  /** The environment's promotion lock (tests pass their own). */
+  lock?: <T>(envId: number, work: () => Promise<T>) => Promise<LockedRun<T>>
+}
+
+const ENVS = 'nivaro_hub_environments'
+
+/** The environment row narrowed to the hub token lookup `lookup` (null-safe). */
+function envWithLookup(envId: number, lookup: string | null) {
+  const q = db(ENVS).where({ id: envId })
+  return lookup === null ? q.whereNull('hub_token_lookup') : q.where('hub_token_lookup', lookup)
 }
 
 /**
- * A new hub token for a Docker environment, delivered by Apply now. Refused while a move is open
- * (MOVE_OPEN), without a deployed Docker stack (NOT_DOCKER / NOT_DEPLOYED); when the apply
- * cannot start (a promotion holds the environment, …) the old token is put back and the
- * apply's own refusal is passed on. The new token is never answered: it goes to the stack only.
+ * A new hub token for a Docker environment, delivered by Apply now.
+ *
+ * Refused while a move is open (MOVE_OPEN), without a deployed Docker stack (NOT_DOCKER /
+ * NOT_DEPLOYED), while another promotion or Apply now holds the environment (ENV_BUSY) or a
+ * deploy of it is planned or running (DEPLOY_RUNNING). The write happens UNDER the
+ * environment's promotion lock, as a compare-and-swap on the token it read (ROTATE_RACED when
+ * another write got there first), and keeps the old token for 24 h (hub-token-grace.ts): the
+ * Hub falls back to it and the app may still present it until its stack runs the new one. The
+ * rotation is recorded (by the person) inside the lock.
+ *
+ * Then Apply now starts (it takes the lock itself). When it cannot start: if a deploy of the
+ * environment has started meanwhile it may already carry the new token, so the new token is
+ * kept; otherwise the old one is put back, again only if the new one is still the stored one.
+ * Either way it is logged. The new token is never answered: it goes to the stack only.
  */
 export async function rotateHubToken(
   envId: number,
   user: { id: string },
   deps: RotateDeps = {}
 ): Promise<{ deploy_id: number; job_run_id: number | null }> {
-  const env = (await db('nivaro_hub_environments')
-    .where({ id: envId })
-    .first('id', 'key', 'version_pin', 'hub_token', 'hub_token_lookup')) as
+  const env = (await db(ENVS).where({ id: envId }).first('id', 'key', 'version_pin')) as
     | Record<string, unknown>
     | undefined
   if (!env) throw new SecretRotateError('NOT_FOUND', 404, 'Not found')
@@ -774,27 +835,91 @@ export async function rotateHubToken(
       409,
       'This environment has no deployed stack to deliver a new token to.'
     )
-  const before = {
-    hub_token: (env.hub_token as string | null) ?? null,
-    hub_token_lookup: (env.hub_token_lookup as string | null) ?? null
-  }
-  await db('nivaro_hub_environments')
-    .where({ id: envId })
-    .update({ ...hubTokenColumns(randomBytes(32).toString('hex')), updated_at: new Date() })
-  let started: { deployId: number; jobRunId: number | null }
+  const ref = `hub_token:${envId}`
+
+  const locked = await (deps.lock ?? withEnvironmentLock)(envId, async () => {
+    if (await deployRunning(envId))
+      throw new SecretRotateError(
+        'DEPLOY_RUNNING',
+        409,
+        'A deploy of this environment is planned or running. Rotate once it has finished.'
+      )
+    const cur = (await db(ENVS).where({ id: envId }).first('hub_token', 'hub_token_lookup')) as
+      | { hub_token: string | null; hub_token_lookup: string | null }
+      | undefined
+    const old = {
+      hub_token: cur?.hub_token ?? null,
+      hub_token_lookup: cur?.hub_token_lookup ?? null
+    }
+    const next = hubTokenColumns(randomBytes(32).toString('hex'))
+    const now = new Date()
+    const n = await envWithLookup(envId, old.hub_token_lookup).update({
+      ...next,
+      ...prevHubTokenColumns(old.hub_token, old.hub_token_lookup, now),
+      updated_at: now
+    })
+    if (Number(n) !== 1)
+      throw new SecretRotateError(
+        'ROTATE_RACED',
+        409,
+        'The hub token changed while it was being rotated. Look at it again.'
+      )
+    await scanSecrets({ by: user.id, refs: [ref], only: [ref], now })
+    return { old, newLookup: next.hub_token_lookup }
+  })
+  if (!locked.held)
+    throw new SecretRotateError(
+      'ENV_BUSY',
+      409,
+      'A promotion or Apply now holds this environment. Rotate once it has finished.'
+    )
+  const { old, newLookup } = locked.value
+
   try {
-    started = await (deps.apply ?? startStackApply)(envId, {
+    const started = await (deps.apply ?? startStackApply)(envId, {
       confirm: String(env.key),
       user: { id: user.id }
     })
+    return { deploy_id: started.deployId, job_run_id: started.jobRunId }
   } catch (err) {
-    await db('nivaro_hub_environments')
-      .where({ id: envId })
-      .update({ ...before, updated_at: new Date() })
+    const code = String((err as { code?: unknown } | null)?.code ?? 'APPLY_REFUSED').slice(0, 64)
+    let undone = false
+    if (!(await deployRunning(envId))) {
+      const n = await envWithLookup(envId, newLookup).update({
+        ...old,
+        ...prevHubTokenColumns(null, null),
+        updated_at: new Date()
+      })
+      undone = Number(n) === 1
+    }
+    if (undone && old.hub_token) {
+      await db(SECRETS)
+        .where({ ref })
+        .update({
+          fp: fingerprintOf(old.hub_token),
+          check_state: null,
+          check_due_at: null,
+          check_detail: 'Rotation undone: Apply now could not start.'
+        })
+      const last = (await db(ROTATIONS).where({ ref }).orderBy('id', 'desc').first('id')) as
+        | { id: number }
+        | undefined
+      if (last)
+        await db(ROTATIONS)
+          .where({ id: last.id })
+          .update({ check_state: 'undone', check_detail: `Apply now refused (${code})` })
+    }
+    await logActivity({
+      action: undone ? 'hub-secret-rotate-undone' : 'hub-secret-rotate-kept',
+      user: user.id,
+      collection: SECRETS,
+      item: ref,
+      comment: undone
+        ? `Apply now could not start (${code}); the previous hub token was put back`
+        : `Apply now could not start (${code}); the new hub token was kept (a deploy started meanwhile, or the token changed again); the previous one stays valid for 24 h`
+    }).catch(() => undefined)
     throw err
   }
-  await scanSecrets({ by: user.id, refs: [`hub_token:${envId}`] })
-  return { deploy_id: started.deployId, job_run_id: started.jobRunId }
 }
 
 /** After an existing route rotated `ref`: records it as the helper's (by `userId`). */
@@ -829,14 +954,18 @@ async function defaultEnvStatus(envId: number) {
       hub_token: (env.hub_token as string | null) ?? null,
       placement_id: env.placement_id == null ? null : Number(env.placement_id)
     },
-    { fresh: true }
+    // A check proves the CURRENT token: never the previous one's grace.
+    { fresh: true, currentTokenOnly: true }
   )
 }
 
+/** The deployment link with the CURRENT token only (the previous one's 24 h grace would pass). */
 async function defaultSharedStatus(sharedId: number) {
   const s = await getShared(sharedId)
   if (!s) throw Object.assign(new Error('gone'), { code: 'NOT_FOUND' })
-  await deploymentClient(s).status()
+  await deploymentClient(s, {
+    tokens: async () => ({ current: await openSharedToken(sharedId), previous: null })
+  }).status()
 }
 
 async function defaultAgent(driverId: number) {
@@ -885,10 +1014,17 @@ export async function checkSecret(ref: string, deps: CheckDeps = {}): Promise<Ch
   }
   try {
     switch (kind) {
-      case 'hub_token':
+      case 'hub_token': {
         if (await deployRunning(id))
           return { state: 'wait', detail: 'Waiting for Apply now to finish.' }
-        return await envStatus(id)
+        const out = await envStatus(id)
+        if (out.state === 'ok') {
+          // The new token is proven: the previous one's grace ends now.
+          await clearPrevHubToken(id)
+          return { state: 'ok', detail: 'The app answers the Hub with the new token.' }
+        }
+        return out
+      }
       case 'oidc_client_secret':
       case 'stack_secret':
         return await envStatus(id)

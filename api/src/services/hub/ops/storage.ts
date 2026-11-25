@@ -38,7 +38,7 @@ export interface AgentStorage {
   tree: { bytes: number; files: number; complete: boolean; walked_at: string } | null
 }
 
-const STATES = new Set(['ok', 'not_configured', 'unreadable', 'timeout'])
+const STATES = new Set(['ok', 'not_configured', 'unreadable', 'timeout', 'pending'])
 const nn = (v: unknown): number | null =>
   typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null
 
@@ -162,7 +162,10 @@ export async function checkDriverStorage(
 
   if (shouldNotify(level, prev?.notified_level ?? null)) {
     const apps = await appIdsOnDriver(driver.id)
-    const people = [...(await hubAdminIds()), ...(await ownerIdsOfApps(apps))]
+    const admins = await hubAdminIds()
+    const adminKeys = new Set(admins.map((a) => a.toLowerCase()))
+    // Owners do not see drivers (storageOverview hides them): they get a notice without one.
+    const owners = (await ownerIdsOfApps(apps)).filter((o) => !adminKeys.has(o.toLowerCase()))
     const pct = typeof fields.used_bytes === 'number' ? Number(fields.used_bytes) : null
     const total = typeof fields.total_bytes === 'number' ? Number(fields.total_bytes) : null
     const free = typeof fields.free_bytes === 'number' ? Number(fields.free_bytes) : null
@@ -171,13 +174,25 @@ export async function checkDriverStorage(
       level === 'critical'
         ? `Storage almost full on ${driver.name}`
         : `Storage filling up on ${driver.name}`
-    await (deps.notify ?? notifyOps)(people, {
+    const notify = deps.notify ?? notifyOps
+    await notify(admins, {
       subject,
       message: `The volume storage of Docker driver ${driver.name} is ${shown ?? '?'}% used (${fmtBytes(free)} free of ${fmtBytes(total)}). Apps on it stop writing files when it is full.`,
       path: `/hub/drivers?driver=${driver.id}`,
-      why: 'You are a Hub administrator or own an app that runs on this driver.',
+      why: 'You are a Hub administrator.',
       source: { kind: 'hub_storage', label: driver.name, id: driver.id }
     })
+    if (owners.length)
+      await notify(owners, {
+        subject:
+          level === 'critical'
+            ? 'The storage your app runs on is almost full'
+            : 'The storage your app runs on is filling up',
+        message: `The storage your app’s files live on is ${shown ?? '?'}% used. Your app stops writing files when it is full; a Hub administrator has been told.`,
+        path: '/hub/storage',
+        why: 'You own an app that runs on this storage.',
+        source: { kind: 'hub_storage' }
+      })
     await db(OPS_HEALTH)
       .where({ scope: 'driver', ref_id: driver.id })
       .update({ notified_level: level, notified_at: now })
@@ -340,7 +355,11 @@ export async function storageOverview(viewer: {
       db('nivaro_hub_app_owners').where({ user_id: viewer.userId }).select('app_id')
     )
   const rows = (await q) as Array<Record<string, unknown>>
-  const iso = (v: unknown) => (v == null ? null : new Date(String(v)).toISOString())
+  const iso = (v: unknown): string | null => {
+    if (v == null) return null
+    const d = v instanceof Date ? v : new Date(String(v))
+    return Number.isNaN(d.getTime()) ? null : d.toISOString()
+  }
   return {
     drivers,
     environments: rows.map((r) => {

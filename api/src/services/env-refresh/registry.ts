@@ -442,7 +442,7 @@ export const CORE_KEEPS: readonly EnvKeepEntry[] = [
       kind: 'table',
       ...(table === 'nivaro_hub_drivers' ? { secret_columns: ['secret'] } : {}),
       ...(table === 'nivaro_hub_environments'
-        ? { secret_columns: ['hub_token', 'encryption_key'] }
+        ? { secret_columns: ['hub_token', 'hub_token_prev', 'encryption_key'] }
         : {}),
       ...(table === 'nivaro_hub_stack_settings' ? { secret_columns: ['secrets'] } : {}),
       ...(table === 'nivaro_hub_oidc_keys' ? { secret_columns: ['private_jwk'] } : {}),

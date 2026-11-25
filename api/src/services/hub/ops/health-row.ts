@@ -98,3 +98,35 @@ export async function writeOpsHealth(
     await k(OPS_HEALTH).where({ scope, ref_id: refId }).update(fields)
   }
 }
+
+/** How long a collection run may hold the lease before another may take it (a dead run). */
+export const OPS_LEASE_MS = 10 * 60_000
+
+/**
+ * Single flight for the ops collection (cron + Read now), across processes: one conditional
+ * UPDATE on the (lease, 0) row takes it when it is free or stale — atomic on every engine.
+ */
+export async function claimOpsLease(now = new Date(), k: Knex = db): Promise<boolean> {
+  const where = { scope: 'lease', ref_id: 0 }
+  if (!(await k(OPS_HEALTH).where(where).first('id'))) {
+    try {
+      await k(OPS_HEALTH).insert({ ...where, state: 'idle', level: 'unknown' })
+    } catch {
+      // Another process made it first.
+    }
+  }
+  const stale = new Date(now.getTime() - OPS_LEASE_MS)
+  const n = await k(OPS_HEALTH)
+    .where(where)
+    .where((q) => {
+      void q.whereNull('checked_at').orWhere('checked_at', '<', stale)
+    })
+    .update({ state: 'running', checked_at: now })
+  return Number(n) === 1
+}
+
+export async function releaseOpsLease(k: Knex = db): Promise<void> {
+  await k(OPS_HEALTH)
+    .where({ scope: 'lease', ref_id: 0 })
+    .update({ state: 'idle', checked_at: null })
+}
