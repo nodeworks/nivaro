@@ -97,7 +97,14 @@ const EXTRA_CALLS: Record<string, { multiTenant?: number; nivaroCloud?: number }
   // entries are weight 0). realtimeBoardRuns() (+1): the realtime board runs everywhere but Nivaro
   // Cloud — server.ts and realtime-server.ts start it on a shared deployment too (server.ts's T3
   // entry is weight 0).
-  'services/process-role.ts': { nivaroCloud: 3 }
+  'services/process-role.ts': { nivaroCloud: 3 },
+  // Hub gap watch (0.3.215): the outside-write watch runs per app on a shared deployment, so its
+  // effective setting and tick refuse in Nivaro Cloud only (their T1 entries are weight 0).
+  'services/outside-write-watch.ts': { nivaroCloud: 2 },
+  // ...and huddle media servers: the platform's replace an app's in Nivaro Cloud only
+  // (huddleCloudMode, its T7 entry is weight 0); `ws://` to the same computer stays refused on
+  // every multi-tenant process (validLiveKitUrl's default, sfuDestinationAllowed, the save check).
+  'services/huddle-destinations.ts': { multiTenant: 3, nivaroCloud: 1 }
 }
 
 type Rule = 'T1' | 'T2' | 'T3' | 'T4' | 'T5' | 'T6' | 'T7' | 'C1' | 'C2' | 'C3' | 'C4' | 'C5'

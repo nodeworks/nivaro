@@ -191,7 +191,6 @@ export const SELF_HOSTED_ONLY_CRONS: Record<string, string> = {
   'huddle-turn-probe': 'huddle crons are off on multi-tenant (operator TURN hosts)',
   'huddle-sessions-sweep': 'huddle crons are off on multi-tenant',
   'huddle-sessions-prune': 'huddle crons are off on multi-tenant',
-  'outside-write-watch': 'returns at once on multi-tenant (process-local change tracking)',
   // file-cleanup and session-replay-tiering run per app since Hub phase 6: every storage call
   // they make goes through getStorage() / the app's own settings driver, which a shared
   // deployment scopes to apps/<tenantId>/ (services/storage/app-scope.ts).

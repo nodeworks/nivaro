@@ -1,10 +1,12 @@
 import type { Redis } from 'ioredis'
 import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
+import { appBox, appMap } from './app-state.js'
 import { liveModeOf } from './collection-live-mode.js'
-import { isMultiTenant } from './deployment-mode.js'
+import { isNivaroCloud, perAppJobs } from './deployment-mode.js'
 import { type JournalEntry, journalTail } from './event-journal.js'
 import { instanceKey } from './instance-key.js'
+import { instanceValue, saveInstanceValue } from './instance-row.js'
 import { getApp } from './io-holder.js'
 import {
   childDetailQuery,
@@ -19,6 +21,8 @@ import {
 } from './outside-write-system.js'
 import { announceRawWrites, BULK_CAP } from './raw-write-announcer.js'
 import { runLongSql } from './run-long.js'
+import { appKeyPart } from './tenancy/credential-binding.js'
+import { currentTenantKey } from './tenant-rooms.js'
 
 /**
  * The outside-write watcher (realtime safety net). Writes through the items service tell every
@@ -53,6 +57,17 @@ import { runLongSql } from './run-long.js'
  *
  * What it caught is counted per collection per hour (Redis, 25 hours) — the realtime page shows
  * "rows caught in 24 h": writes still made without announcing.
+ *
+ * Hub shared deployment (0.3.215): the cron is an app job (services/cron-scope.ts), so the process
+ * holding the scheduler lease walks the ready apps in turn (plugins/cron.ts fan-out: one per-fire
+ * claim per app in Redis, at most TENANT_JOB_CONCURRENCY apps at once, an app whose look is still
+ * going skips the fire, an app that left the deployment is no longer listed). Each app is watched
+ * inside its own tenant context: its own database (SQL Server apps only; Postgres and MySQL apps
+ * return at once, as self-hosted), its own settings, state (appMap / appBox, dropped when the app
+ * leaves), journal entries (its tenant-scoped rooms only), viewers and Redis keys (appKeyPart()).
+ * One look of one app stops starting collections after APP_LOOK_BUDGET_MS and resumes with the
+ * first one it skipped at the next look, so a slow app neither holds its lane long nor starves
+ * its own last collections. Nivaro Cloud still never runs it.
  */
 
 export const OUTSIDE_WRITES_KEY = 'outside_writes'
@@ -73,6 +88,12 @@ export const SETTLE_S = 3
  * write, and the watcher reads that row at the first look after SETTLE_S.
  */
 export const recentWindowMs = (intervalS: number) => (intervalS + SETTLE_S + 2) * 1000
+/**
+ * Hub shared deployment: one look of one app starts no further collection after this long (the
+ * one in flight finishes within its own 5 s timeout); the next look starts with the first one
+ * skipped. Self-hosted looks have no budget, as before.
+ */
+export const APP_LOOK_BUDGET_MS = 4000
 /** A watermark older than this is not resumed (a lease that moved long ago starts fresh). */
 const RESUME_MAX_MS = 10 * 60_000
 const CATALOG_TTL_MS = 10 * 60_000
@@ -128,64 +149,47 @@ export function outsideWriteEnv(raw = process.env.OUTSIDE_WRITE_WATCH): boolean 
 }
 
 // ── Storage: this instance's nivaro_settings_overrides row, key `outside_writes` ────────
+// On a shared deployment: the app's own database, with the one-other-row fallback of
+// services/instance-row.ts (a moved app's row carries its old stack's instance name).
 
-let settingsCache: { at: number; value: OutsideWriteSettings } | null = null
-
-async function readRow(): Promise<{ id: number; data: Record<string, unknown> } | null> {
-  const row = (await db('nivaro_settings_overrides')
-    .where({ instance_key: instanceKey() })
-    .first('id', 'data')) as { id: number; data?: string | null } | undefined
-  if (!row) return null
-  try {
-    const obj = row.data ? JSON.parse(row.data) : {}
-    return { id: row.id, data: obj && typeof obj === 'object' && !Array.isArray(obj) ? obj : {} }
-  } catch {
-    return { id: row.id, data: {} }
-  }
-}
+const settingsCache = appBox<{ at: number; value: OutsideWriteSettings } | null>(() => null)
 
 export async function getOutsideWriteSettings(): Promise<OutsideWriteSettings> {
-  if (settingsCache && Date.now() - settingsCache.at < 30_000) return settingsCache.value
+  const hit = settingsCache.value
+  if (hit && Date.now() - hit.at < 30_000) return hit.value
   let value = OUTSIDE_WRITE_DEFAULTS
   try {
-    value = normalizeOutsideWriteSettings((await readRow())?.data[OUTSIDE_WRITES_KEY])
+    value = normalizeOutsideWriteSettings((await instanceValue(OUTSIDE_WRITES_KEY)).value)
   } catch {
     /* table absent / DB not ready — defaults */
   }
-  settingsCache = { at: Date.now(), value }
+  settingsCache.value = { at: Date.now(), value }
   return value
 }
 
 export async function saveOutsideWriteSettings(patch: unknown): Promise<OutsideWriteSettings> {
-  const row = await readRow()
-  const stored = normalizeOutsideWriteSettings(row?.data[OUTSIDE_WRITES_KEY])
+  const { row, value } = await instanceValue(OUTSIDE_WRITES_KEY)
+  const stored = normalizeOutsideWriteSettings(value)
   const p =
     patch && typeof patch === 'object' && !Array.isArray(patch)
       ? (patch as Record<string, unknown>)
       : {}
   const next = normalizeOutsideWriteSettings({ ...stored, ...p })
-  const data = { ...(row?.data ?? {}), [OUTSIDE_WRITES_KEY]: next }
-  if (row)
-    await db('nivaro_settings_overrides')
-      .where({ id: row.id })
-      .update({ data: JSON.stringify(data), updated_at: new Date() })
-  else
-    await db('nivaro_settings_overrides').insert({
-      instance_key: instanceKey(),
-      data: JSON.stringify(data),
-      updated_at: new Date()
-    })
-  settingsCache = null
+  await saveInstanceValue(row, OUTSIDE_WRITES_KEY, next)
+  settingsCache.value = null
   return next
 }
 
-/** The env switch over the stored value (and never in cloud mode). */
+/**
+ * The env switch over the stored value, and never in Nivaro Cloud. A Hub shared deployment runs
+ * it per app (0.3.215): `cloud` is Nivaro Cloud only.
+ */
 export function effectiveOutsideWrites(stored: OutsideWriteSettings): OutsideWriteSettings & {
   env: boolean | null
   cloud: boolean
 } {
   const env = outsideWriteEnv()
-  const cloud = isMultiTenant()
+  const cloud = isNivaroCloud()
   return { ...stored, enabled: !cloud && (env ?? stored.enabled), env, cloud }
 }
 
@@ -286,12 +290,12 @@ export function judgeWatchable(
   return { ...base, ts, pk: facts.pk[0], watchable: true, method: 'timestamp' }
 }
 
-let catalogCache: { at: number; map: Map<string, Watchable> } | null = null
+const catalogCache = appBox<{ at: number; map: Map<string, Watchable> } | null>(() => null)
 
 /** Every registered collection's watchability (three catalog reads, cached 10 minutes). */
 export async function watchCatalog(fresh = false): Promise<Map<string, Watchable>> {
-  if (!fresh && catalogCache && Date.now() - catalogCache.at < CATALOG_TTL_MS)
-    return catalogCache.map
+  const hit = catalogCache.value
+  if (!fresh && hit && Date.now() - hit.at < CATALOG_TTL_MS) return hit.map
   const map = new Map<string, Watchable>()
   if (!isMssql(db)) return map
   const q = db('nivaro_collections').distinct('collection')
@@ -372,22 +376,27 @@ export async function watchCatalog(fresh = false): Promise<Map<string, Watchable
       tables.get(`dbo.${lc(c)}`) ?? [...tables.values()].find((t) => lc(t.table) === lc(c))
     map.set(lc(c), judgeWatchable(c, facts, marked.get(lc(c)) ?? []))
   }
-  catalogCache = { at: Date.now(), map }
+  catalogCache.value = { at: Date.now(), map }
   return map
 }
 
 // ── What the app already announced (the event journal) ──────────────────────────
 
-/** Collection → ids (or "the whole collection") announced in these journal entries (pure). */
+/**
+ * Collection → ids (or "the whole collection") announced in these journal entries (pure). The
+ * journal is deployment-wide: only `tenant`'s rooms count (`t:<tenant>:collection:<c>` on a
+ * shared deployment, plain `collection:<c>` self-hosted, where the tenant is '').
+ */
 export function journalAnnounced(
-  entries: JournalEntry[]
+  entries: JournalEntry[],
+  tenant: string = currentTenantKey()
 ): Map<string, { ids: Set<string>; whole: boolean }> {
   const out = new Map<string, { ids: Set<string>; whole: boolean }>()
   for (const e of entries) {
     if (e.event !== 'collection:update') continue
-    const m = /^collection:(.+)$/.exec(e.room)
-    if (!m) continue
-    const key = m[1].toLowerCase()
+    const m = /^(?:t:([^:]+):)?collection:(.+)$/.exec(e.room)
+    if (!m || (m[1] ?? '') !== tenant) continue
+    const key = m[2].toLowerCase()
     const g = out.get(key) ?? { ids: new Set<string>(), whole: false }
     const p = e.payload ?? {}
     const item = p.item
@@ -577,16 +586,19 @@ export interface CollectionStatus {
   viewers?: number
 }
 
-let lastTickAt = 0
-let journalCursor: number | null = null
-const states = new Map<string, CollState>()
-const seenRows = new Map<string, Map<string, number>>()
-const recent = new Map<string, Recent>()
-const statusLocal = new Map<string, CollectionStatus>()
-const countsLocal = new Map<string, { caught: number; deduped: number }>()
+// Per app (appMap / appBox: one slot per app on a shared deployment, dropped when it leaves).
+const lastTickAt = appBox(() => 0)
+const journalCursor = appBox<number | null>(() => null)
+const states = appMap<string, CollState>()
+const seenRows = appMap<string, Map<string, number>>()
+const recent = appMap<string, Recent>()
+const statusLocal = appMap<string, CollectionStatus>()
+const countsLocal = appMap<string, { caught: number; deduped: number }>()
 /** What the previous look announced itself (collection → ids / whole). */
-let lastMine = new Map<string, { ids: Set<string>; whole: boolean }>()
-let lastReport: TickReport | null = null
+const lastMine = appBox(() => new Map<string, { ids: Set<string>; whole: boolean }>())
+const lastReport = appBox<TickReport | null>(() => null)
+/** The collection (lower-cased) a look cut short by its budget starts with next time. */
+const resumeAt = appBox<string | null>(() => null)
 
 export interface TickReport {
   at: number
@@ -594,26 +606,30 @@ export interface TickReport {
   caught: number
   deduped: number
   ms: number
+  /** Collections the look left for the next one (its time budget ran out). */
+  deferred?: number
 }
 
 const redisOf = (): Redis | null => (getApp()?.redis as Redis | undefined) ?? null
-const rkey = (part: string) => `nvr:rt:outside:${instanceKey()}:${part}`
+// The app on a shared deployment ('' elsewhere, keys unchanged): appKeyPart().
+const rkey = (part: string) => `nvr:rt:outside:${appKeyPart()}${instanceKey()}:${part}`
 const hourOf = (ms: number) => Math.floor(ms / 3_600_000)
 
 /** Tests only. */
 export function resetOutsideWriteWatch(): void {
-  lastTickAt = 0
-  journalCursor = null
+  lastTickAt.reset()
+  journalCursor.reset()
   states.clear()
   seenRows.clear()
   recent.clear()
   statusLocal.clear()
   countsLocal.clear()
-  lastMine = new Map()
-  settingsCache = null
-  catalogCache = null
-  trackedCache = null
-  lastReport = null
+  lastMine.reset()
+  settingsCache.reset()
+  catalogCache.reset()
+  trackedCache.reset()
+  lastReport.reset()
+  resumeAt.reset()
 }
 
 /**
@@ -624,10 +640,11 @@ export function noteJournal(
   entries: JournalEntry[],
   now: number,
   recentMs: number,
-  mine: Map<string, { ids: Set<string>; whole: boolean }> = lastMine,
-  into: Map<string, Recent> = recent
+  mine: Map<string, { ids: Set<string>; whole: boolean }> = lastMine.value,
+  into: Map<string, Recent> = recent,
+  tenant: string = currentTenantKey()
 ): void {
-  for (const [c, g] of journalAnnounced(entries)) {
+  for (const [c, g] of journalAnnounced(entries, tenant)) {
     const own = mine.get(c)
     const r = into.get(c) ?? { ids: new Map<string, number>(), wholeAt: -Infinity }
     if (g.whole && !own?.whole) r.wholeAt = now
@@ -655,8 +672,13 @@ function pruneSeen(now: number): void {
   }
 }
 
-/** Collections someone has open now: list rooms + record viewers, busiest first. */
+/**
+ * Collections someone has open now: list rooms + record viewers, busiest first. Only the current
+ * app's rooms (`t:<tenant>:collection:<c>` on a shared deployment; record viewers are already
+ * the caller's app's).
+ */
 export async function viewedCollections(): Promise<Array<{ collection: string; viewers: number }>> {
+  const tenant = currentTenantKey()
   const counts = new Map<string, { collection: string; viewers: number }>()
   const add = (c: string, n: number) => {
     if (!c || /^(nivaro_|directus_|sysdiagrams$)/i.test(c)) return
@@ -673,8 +695,8 @@ export async function viewedCollections(): Promise<Array<{ collection: string; v
       ...boardStats().flatMap((b) => b.rooms ?? [])
     ]
     for (const r of rooms) {
-      const m = /^collection:(.+)$/.exec(r.room)
-      if (m) add(m[1], r.size)
+      const m = /^(?:t:([^:]+):)?collection:(.+)$/.exec(r.room)
+      if (m && (m[1] ?? '') === tenant) add(m[2], r.size)
     }
     for (const v of sock.getRecordViewerSnapshot()) add(v.collection, v.viewers.length)
   } catch {
@@ -697,18 +719,19 @@ async function readClock(): Promise<{ u: string; l: string } | null> {
 /** CHANGE_TRACKING_CURRENT_VERSION() as text (null when change tracking is off). */
 /** The watcher's state key for the dependents group (system + child tables). */
 const DEP_KEY = '__dependents__'
-let trackedCache: { at: number; set: Set<string> } | null = null
+const trackedCache = appBox<{ at: number; set: Set<string> } | null>(() => null)
 
 /** dbo tables with change tracking on, lower-cased (cached 10 minutes). */
 async function trackedTables(): Promise<Set<string>> {
-  if (trackedCache && Date.now() - trackedCache.at < CATALOG_TTL_MS) return trackedCache.set
+  const hit = trackedCache.value
+  if (hit && Date.now() - hit.at < CATALOG_TTL_MS) return hit.set
   const rows = (await db
     .raw(`SELECT t.name AS tbl FROM sys.change_tracking_tables ct
            JOIN sys.tables t ON t.object_id = ct.object_id
            JOIN sys.schemas s ON s.schema_id = t.schema_id WHERE s.name = 'dbo'`)
     .catch(() => [])) as Array<{ tbl: string }>
   const set = new Set(rows.map((r) => r.tbl.toLowerCase()))
-  trackedCache = { at: Date.now(), set }
+  trackedCache.value = { at: Date.now(), set }
   return set
 }
 
@@ -840,36 +863,51 @@ async function resumeState(collection: string): Promise<CollState | null> {
 }
 
 /**
- * One look (the cron body, every 5 s; it skips until the interval has passed). Returns null when
- * it did not look (off, cloud, not SQL Server, not due).
+ * The collections of one look, starting with `resume` when it is among them (a look cut short
+ * by its budget carries on where it stopped; pure).
  */
-export async function outsideWriteTick(now = Date.now()): Promise<TickReport | null> {
-  if (isMultiTenant() || !isMssql(db)) return null
+export function lookOrder(list: string[], resume: string | null): string[] {
+  const i = resume ? list.findIndex((c) => c.toLowerCase() === resume) : -1
+  return i > 0 ? [...list.slice(i), ...list.slice(0, i)] : list
+}
+
+/**
+ * One look (the cron body, every 5 s; it skips until the interval has passed). Returns null when
+ * it did not look (off, Nivaro Cloud, not SQL Server, not due). On a Hub shared deployment it runs
+ * inside one app (the cron fan-out) and stops starting collections after `budgetMs`.
+ */
+export async function outsideWriteTick(
+  now = Date.now(),
+  budgetMs: number = perAppJobs() ? APP_LOOK_BUDGET_MS : Number.POSITIVE_INFINITY
+): Promise<TickReport | null> {
+  if (isNivaroCloud() || !isMssql(db)) return null
   const settings = effectiveOutsideWrites(await getOutsideWriteSettings())
   if (!settings.enabled) return null
-  if (now - lastTickAt < settings.interval_seconds * 1000 - 500) return null
-  lastTickAt = now
+  if (now - lastTickAt.value < settings.interval_seconds * 1000 - 500) return null
+  lastTickAt.value = now
   const t0 = Date.now()
+  const outOfTime = () => Date.now() - t0 >= budgetMs
 
   // 1. what the app announced since the last look (dedupe)
   const recentMs = recentWindowMs(settings.interval_seconds)
-  const tail = await journalTail(journalCursor)
+  const tail = await journalTail(journalCursor.value)
   if (tail) {
-    if (journalCursor != null) noteJournal(tail.entries, now, recentMs)
-    journalCursor = tail.seq
+    if (journalCursor.value != null) noteJournal(tail.entries, now, recentMs)
+    journalCursor.value = tail.seq
   }
   const mine = new Map<string, { ids: Set<string>; whole: boolean }>()
-  lastMine = mine
+  lastMine.value = mine
 
   // 2. which collections
   const viewed = await viewedCollections()
   const viewers = new Map(viewed.map((v) => [v.collection.toLowerCase(), v.viewers]))
   const wanted = settings.mode === 'chosen' ? settings.collections : viewed.map((v) => v.collection)
-  const list = wanted.slice(0, MAX_WATCHED)
+  const list = lookOrder(wanted.slice(0, MAX_WATCHED), resumeAt.value)
+  resumeAt.value = null
   const report: TickReport = { at: now, watched: 0, caught: 0, deduped: 0, ms: 0 }
   if (!list.length) {
-    lastReport = { ...report, ms: Date.now() - t0 }
-    return lastReport
+    lastReport.value = { ...report, ms: Date.now() - t0 }
+    return lastReport.value
   }
   const catalog = await watchCatalog()
   const clock = await readClock()
@@ -881,8 +919,14 @@ export async function outsideWriteTick(now = Date.now()): Promise<TickReport | n
   const statuses: CollectionStatus[] = []
   const caughtBy = new Map<string, { caught: number; deduped: number }>()
 
-  for (const c of list) {
+  for (const [i, c] of list.entries()) {
     const key = c.toLowerCase()
+    if (outOfTime()) {
+      // out of this look's time: the rest keep their watermarks and go first next time
+      resumeAt.value = key
+      report.deferred = list.length - i
+      break
+    }
     const status: CollectionStatus = {
       collection: c,
       state: 'watching',
@@ -1029,8 +1073,8 @@ export async function outsideWriteTick(now = Date.now()): Promise<TickReport | n
 
   // tables whose rows belong to the open records (system + child tables), via change tracking
   try {
-    ctCurrent ??= await readChangeTrackingVersion()
-    if (ctCurrent) {
+    if (!outOfTime()) ctCurrent ??= await readChangeTrackingVersion()
+    if (ctCurrent && !outOfTime()) {
       const dep = await lookDependents({
         now,
         clock,
@@ -1072,8 +1116,11 @@ export async function outsideWriteTick(now = Date.now()): Promise<TickReport | n
       }
       const st: Record<string, string> = {}
       for (const s of statuses) st[s.collection.toLowerCase()] = JSON.stringify(s)
-      pipe.hset(rkey('status'), st)
-      pipe.expire(rkey('status'), 3600)
+      // a look its budget cut before the first collection has no status to write
+      if (statuses.length) {
+        pipe.hset(rkey('status'), st)
+        pipe.expire(rkey('status'), 3600)
+      }
       if (caughtBy.size) {
         const hk = rkey(`h:${hourOf(now)}`)
         for (const [k, n] of caughtBy) {
@@ -1088,8 +1135,8 @@ export async function outsideWriteTick(now = Date.now()): Promise<TickReport | n
       /* counters are best effort */
     }
   }
-  lastReport = { ...report, ms: Date.now() - t0 }
-  return lastReport
+  lastReport.value = { ...report, ms: Date.now() - t0 }
+  return lastReport.value
 }
 
 // ── The report (any process: Redis, else this process) ───────────────────────
@@ -1140,7 +1187,7 @@ export async function outsideWriteReport(now = Date.now()): Promise<OutsideWrite
       } catch {
         last = null
       }
-      return { last_tick: last ?? lastReport, statuses, counts }
+      return { last_tick: last ?? lastReport.value, statuses, counts }
     } catch {
       /* fall through to this process's own figures */
     }
@@ -1151,5 +1198,5 @@ export async function outsideWriteReport(now = Date.now()): Promise<OutsideWrite
     bump(c, 'caught', n.caught)
     bump(c, 'deduped', n.deduped)
   }
-  return { last_tick: lastReport, statuses: [...statusLocal.values()], counts }
+  return { last_tick: lastReport.value, statuses: [...statusLocal.values()], counts }
 }
