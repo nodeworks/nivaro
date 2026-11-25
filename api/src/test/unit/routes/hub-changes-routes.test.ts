@@ -74,6 +74,7 @@ const migrations = [
   await import('../../../db/migrations/552_hub_shared_deployments.js'),
   await import('../../../db/migrations/553_hub_moves.js'),
   await import('../../../db/migrations/565_hub_release_ops.js'),
+  await import('../../../db/migrations/566_hub_fleet.js'),
   await import('../../../db/migrations/570_hub_people_owner_policy.js'),
   await import('../../../db/migrations/573_hub_change_ops.js')
 ]
@@ -221,7 +222,8 @@ beforeEach(async () => {
     'nivaro_hub_schedules',
     'nivaro_hub_freezes',
     'nivaro_hub_deploys',
-    'nivaro_hub_shared_deploys'
+    'nivaro_hub_shared_deploys',
+    'nivaro_hub_fleet_status'
   ])
     await db(t).del()
 })
@@ -655,6 +657,78 @@ describe('hub change routes', () => {
       asOwner
     )
     expect(forward.json().data.required).toBe(true)
+  })
+
+  it('the Hub’s record counts only when its newest deploy succeeded and nothing says otherwise', async () => {
+    await inject('POST', '/checklist-items', { app_id: appId, text: 'Support told' })
+    await closedWindow()
+    const row = (status: string, version: string) =>
+      db('nivaro_hub_deploys').insert({
+        app_id: appId,
+        environment_id: prod,
+        kind: 'promote',
+        version,
+        status,
+        started_at: new Date(),
+        finished_at: status === 'running' ? null : new Date()
+      })
+    // Production is down: gather answers no running version.
+    const rollback = (version: string) =>
+      startPromotion(
+        prod,
+        { kind: 'rollback', version, confirm: 'prod', planHash: 'a'.repeat(64), user: null },
+        {
+          ...defaultStartDeps(),
+          lock: memoryPromoteLock,
+          gather: async () => ({ targetVersion: null }) as never
+        }
+      ).then(
+        () => ({ code: 'STARTED' }),
+        (e) => e as { code: string }
+      )
+    const exempt = async (version: string) => {
+      const c = String((await rollback(version)).code)
+      return c !== 'OUTSIDE_WINDOW' && !c.startsWith('CHECKLIST_')
+    }
+    // The automatic rollback of the newest (successful) deploy: back to the build before it.
+    await row('success', '0.3.215')
+    expect(await exempt('0.3.214')).toBe(true)
+    // A later deploy failed: what runs is unknown — gated.
+    await row('failed', '0.3.216')
+    expect(await exempt('0.3.214')).toBe(false)
+    await db('nivaro_hub_deploys').del()
+    // A later deploy was interrupted: gated.
+    await row('success', '0.3.215')
+    await row('interrupted', '0.3.216')
+    expect(await exempt('0.3.214')).toBe(false)
+    await db('nivaro_hub_deploys').del()
+    // The last status sample names another version (changed outside the Hub): gated.
+    await row('success', '0.3.215')
+    await db('nivaro_hub_fleet_status').insert({
+      environment_id: prod,
+      app_id: appId,
+      version: '0.3.213'
+    })
+    expect(await exempt('0.3.214')).toBe(false)
+    await db('nivaro_hub_fleet_status').update({ version: '0.3.215' })
+    expect(await exempt('0.3.214')).toBe(true)
+  })
+
+  it('a shared deployment’s record counts only when its newest run succeeded', async () => {
+    const { sharedRunningVersion } = await import('../../../services/hub/releases/freeze.js')
+    const run = (status: string, version: string) =>
+      db('nivaro_hub_shared_deploys').insert({
+        shared_deployment_id: sharedId,
+        kind: 'upgrade',
+        version,
+        status
+      })
+    await run('success', '0.3.210')
+    expect(await sharedRunningVersion(sharedId)).toBe('0.3.210')
+    await run('failed', '0.3.211')
+    expect(await sharedRunningVersion(sharedId)).toBeNull()
+    // The link's own answer still wins.
+    expect(await sharedRunningVersion(sharedId, '0.3.211')).toBe('0.3.211')
   })
 
   it('a move honours the app’s windows; an admin may start outside them with a reason (M4)', async () => {

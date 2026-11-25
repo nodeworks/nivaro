@@ -364,9 +364,10 @@ export async function sharedFreezeRefusal(
 
 /**
  * The version a shared deployment runs, for the rollback exemption: what its link reports (the
- * live status, passed in), else the version of its last successful run (a Hub run, or a
- * registered deployment's observed version), else null (unknown: gated). Never the stored pin
- * alone.
+ * live status, passed in), else the Hub's record — but only when the NEWEST run of it (any
+ * status) is a successful one (a Hub run, or a registered deployment's observed version). A
+ * later run that failed, was interrupted, cancelled or is still running leaves what runs
+ * unknown. Unknown = null = gated. Never the stored pin alone.
  */
 export async function sharedRunningVersion(
   sharedId: number,
@@ -375,10 +376,10 @@ export async function sharedRunningVersion(
   if (reported) return reported
   try {
     const row = (await db('nivaro_hub_shared_deploys')
-      .where({ shared_deployment_id: sharedId, status: 'success' })
+      .where({ shared_deployment_id: sharedId })
       .orderBy('id', 'desc')
-      .first('version')) as { version: string } | undefined
-    return row?.version ? String(row.version) : null
+      .first('version', 'status')) as { version: string; status: string } | undefined
+    return row && row.status === 'success' && row.version ? String(row.version) : null
   } catch {
     return null
   }
@@ -386,16 +387,32 @@ export async function sharedRunningVersion(
 
 /**
  * The version an environment runs for the rollback exemption when its live status is unknown:
- * the Hub's own record — its last successful Hub promotion or rollback (Apply now redeploys the
- * same version). Hub-recorded, never app-claimed. Null = unknown: gated.
+ * the Hub's own record, trusted only when
+ *   - the NEWEST Hub deploy row of the environment (any status) is a successful one — a later
+ *     run that failed, was interrupted, cancelled or is still running leaves what runs unknown;
+ *   - and the environment's last status sample (nivaro_hub_fleet_status, when there is one)
+ *     does not name another version — a version changed outside the Hub.
+ * An automatic rollback reverts that newest successful deploy, so its target (the build before
+ * it) is a real downgrade by this record. Anything else = null = unknown = gated.
  */
 export async function recordedRunningVersion(envId: number): Promise<string | null> {
   try {
     const row = (await db('nivaro_hub_deploys')
-      .where({ environment_id: envId, status: 'success' })
+      .where({ environment_id: envId })
       .orderBy('id', 'desc')
-      .first('version')) as { version: string } | undefined
-    return row?.version ? String(row.version) : null
+      .first('version', 'status')) as { version: string; status: string } | undefined
+    if (!row || row.status !== 'success' || !row.version) return null
+    const recorded = String(row.version)
+    let sampled: string | null = null
+    try {
+      const st = (await db('nivaro_hub_fleet_status')
+        .where({ environment_id: envId })
+        .first('version')) as { version: string | null } | undefined
+      sampled = st?.version ? String(st.version) : null
+    } catch {
+      // No fleet table (an install behind 566): nothing sampled to disagree.
+    }
+    return sampled && sampled !== recorded ? null : recorded
   } catch {
     return null
   }
