@@ -93,7 +93,11 @@ const migrations = [
 const { hubIncidentRoutes } = await import('../../../routes/hub-incidents.js')
 const { hubStatusPublicRoutes } = await import('../../../routes/hub-status-public.js')
 const { freezeRefusal } = await import('../../../services/hub/releases/freeze.js')
-const { escalateDuePages, routeToOnCall } = await import('../../../services/hub/incident/paging.js')
+const { escalateDuePages, listPages, routeToOnCall, LEASE_MS } = await import(
+  '../../../services/hub/incident/paging.js'
+)
+const { freezeOn } = await import('../../../services/hub/incident/incidents.js')
+const { plannedMaintenance } = await import('../../../services/hub/incident/planned.js')
 const { runIncidentTick } = await import('../../../services/hub/incident/tick.js')
 const { sendHubEvent } = await import('../../../services/hub/notify-events.js')
 
@@ -317,7 +321,12 @@ describe('on-call and escalation', () => {
     await setRota()
     const inc = await openOne({ summary: 'Internal: the DB password rotated' })
     // The pager notice names app, severity and title only.
-    expect(delivered[0].message).toBe('SEV 1 · EFP: Orders fail')
+    // ONCALL cannot read the app: app, environment kind, severity and a generic title only.
+    expect(delivered[0].subject).toBe('SEV 1 alert: EFP')
+    expect(delivered[0].message).toBe(
+      'EFP · SEV 1: An incident was opened. Open the Hub to acknowledge.'
+    )
+    expect(delivered[0].message).not.toContain('Orders fail')
     expect(delivered[0].message).not.toContain('password')
     const r = await app.inject({
       method: 'POST',
@@ -469,7 +478,7 @@ describe('on-call and escalation', () => {
       production: async () => [prod]
     })
     expect(up.recovered).toBe(1)
-    expect(delivered.at(-1)).toMatchObject({ ids: [ONCALL], subject: 'Back up: EFP · production' })
+    expect(delivered.at(-1)).toMatchObject({ ids: [ONCALL], subject: 'Back up: EFP' })
     expect((await db('nivaro_hub_pages').first('status')).status).toBe('closed')
   })
 })
@@ -643,5 +652,187 @@ describe('post-mortem', () => {
     })
     expect(pdf.headers['content-type']).toBe('application/pdf')
     expect(pdf.body.startsWith('%PDF')).toBe(true)
+  })
+})
+
+describe('review fixes', () => {
+  it('H1: a delivery that throws mid-step is resumed by the next tick, never lost', async () => {
+    await setRota()
+    const inc = await openOne()
+    const later = Date.now() + 16 * 60_000
+    // The escalation to NEXT throws inside the delivery.
+    const boom = vi.fn(async () => {
+      throw new Error('push gateway down')
+    })
+    const r1 = await escalateDuePages({ now: () => later, deliver: boom as never })
+    expect(r1.errors.length).toBe(1)
+    const row = await db('nivaro_hub_pages').where({ id: inc.page_id }).first()
+    // Still claimed with a lease (never NULL), the step recorded for NEXT, nobody marked yet.
+    expect(row.next_at).not.toBeNull()
+    const sent = JSON.parse(row.sent_to)
+    expect(sent.at(-1)).toMatchObject({ users: [NEXT], delivered: [] })
+    // Before the lease runs out nothing happens; after it the step is delivered once.
+    expect((await escalateDuePages({ now: () => later + 60_000 })).escalated).toBe(0)
+    const before = delivered.length
+    const r2 = await escalateDuePages({ now: () => later + LEASE_MS + 1000 })
+    expect(r2.escalated).toBe(1)
+    expect(delivered.slice(before).map((d) => d.ids)).toEqual([[NEXT]])
+    // NEXT may acknowledge it (the step was recorded before the throw).
+    const ok = await app.inject({
+      method: 'POST',
+      url: `/hub/pages/${inc.page_id}/acknowledge`,
+      headers: { 'x-user': NEXT }
+    })
+    expect(ok.json().data.status).toBe('acked')
+  })
+
+  it('M2: a 2-hour outage is one page and at most 5 notices', async () => {
+    await setRota({ people: [ONCALL] })
+    const start = Date.now()
+    let t = start
+    const deps = {
+      now: () => t,
+      samples: async () => [false, false, false],
+      production: async () => [prod],
+      hubEvent: (e: Parameters<typeof sendHubEvent>[0]) =>
+        sendHubEvent(e, {
+          page: (p) => routeToOnCall(p, { now: () => t }),
+          notify: async () => null
+        })
+    }
+    const before = delivered.length
+    for (let m = 0; m <= 120; m++) {
+      t = start + m * 60_000
+      await runIncidentTick(deps)
+    }
+    const notices = delivered.slice(before)
+    expect(notices.length).toBeGreaterThan(0)
+    expect(notices.length).toBeLessThanOrEqual(5)
+    expect(
+      await db('nivaro_hub_pages').where({ kind: 'uptime_down' }).count({ n: '*' }).first()
+    ).toMatchObject({ n: 1 })
+    // The chain ended with the owners and the administrators even though the rota lists one step.
+    expect(notices.map((n) => n.ids[0])).toEqual(expect.arrayContaining([ONCALL, OWNER, ADMIN]))
+  })
+
+  it('M2: a rota needs at least one person', async () => {
+    const r = await app.inject({
+      method: 'PUT',
+      url: `/hub/apps/${appId}/on-call`,
+      headers: asAdmin,
+      payload: { people: [] }
+    })
+    expect(r.statusCode).toBe(400)
+  })
+
+  it('M3: a rota member who cannot read the app sees receipts and their own shifts only', async () => {
+    await setRota()
+    await routeToOnCall({
+      appId,
+      envId: prod,
+      kind: 'promote_failed',
+      subject: 'Deploy failed: EFP · production — 0.3.215 on production',
+      message: 'The deploy did not finish — promote 0.3.215 on production.'
+    })
+    expect(delivered.at(-1)?.subject).toBe('Urgent alert: EFP')
+    expect(delivered.at(-1)?.message).not.toMatch(/0\.3\.215|production —/)
+    const v = (await app.inject({ url: '/hub/on-call', headers: { 'x-user': NEXT } })).json().data
+    expect(v.rotas[0].limited).toBe(true)
+    expect(v.rotas[0].rota.people).toEqual([NEXT])
+    expect(v.rotas[0].on_call.user_id).toBeNull()
+    expect(v.pages).toEqual([])
+    const mine = (await app.inject({ url: '/hub/on-call', headers: { 'x-user': ONCALL } })).json()
+      .data
+    expect(mine.pages).toHaveLength(1)
+    expect(mine.pages[0]).toMatchObject({
+      limited: true,
+      sent_to: [],
+      subject: 'Urgent alert: EFP'
+    })
+    expect(JSON.stringify(mine)).not.toMatch(/0\.3\.215|Nell Next/)
+    const own = (await app.inject({ url: '/hub/on-call', headers: { 'x-user': OWNER } })).json()
+      .data
+    expect(own.pages[0].subject).toMatch(/0\.3\.215/)
+  })
+
+  it('L1: two freezes at once leave exactly one live freeze, lifted on resolve', async () => {
+    const inc = await openOne({ freeze: false })
+    await Promise.all([freezeOn(inc.id, ADMIN), freezeOn(inc.id, ADMIN)])
+    const live = await db('nivaro_hub_freezes')
+      .where({ source: `incident:${inc.id}` })
+      .where('ends_at', '>', new Date())
+    expect(live).toHaveLength(1)
+    await app.inject({
+      method: 'POST',
+      url: `/hub/incidents/${inc.id}/resolve`,
+      headers: asAdmin,
+      payload: {}
+    })
+    expect(await freezeRefusal({ appIds: [appId], action: 'promote' })).toBeNull()
+  })
+
+  it('L9: planned maintenance hides incident freezes by tag, not by name', async () => {
+    await openOne()
+    await db('nivaro_hub_freezes').insert({
+      app_id: appId,
+      name: 'Incident #99 drill (a person’s own window)',
+      recurrence: 'none',
+      starts_at: new Date(Date.now() + 3_600_000),
+      ends_at: new Date(Date.now() + 7_200_000)
+    })
+    const items = await plannedMaintenance({ appIds: [appId] })
+    expect(items.filter((i) => i.kind === 'freeze')).toHaveLength(1)
+  })
+
+  it('L2: an incident on a non-production environment is not the app’s outage', async () => {
+    await db('nivaro_hub_fleet_status').insert({
+      environment_id: prod,
+      app_id: appId,
+      state: 'ok',
+      checked_at: new Date(),
+      probed_at: new Date(),
+      up: true
+    })
+    await openOne({ environment_id: staging, severity: 'sev1' })
+    const c = await app.inject({
+      method: 'POST',
+      url: '/hub/status-pages',
+      headers: asAdmin,
+      payload: { name: 'S' }
+    })
+    const j = (
+      await app.inject({ url: `/hub/status-page/${c.json().data.token}?format=json` })
+    ).json()
+    expect(j.data.apps[0]).toMatchObject({ state: 'operational', incident: null })
+  })
+
+  it('L4: a person’s own older page is found past other apps’ newer pages', async () => {
+    await db('nivaro_hub_pages').insert({
+      app_id: appId,
+      kind: 'test',
+      subject: 's',
+      message: 'm',
+      path: '/hub/on-call',
+      status: 'open',
+      level: 0,
+      sent_to: JSON.stringify([
+        { level: 0, step: 'on_call', users: [NEXT], delivered: [NEXT], at: '' }
+      ]),
+      created_at: new Date(Date.now() - 86_400_000)
+    })
+    const rows = Array.from({ length: 120 }, () => ({
+      app_id: 999,
+      kind: 'test',
+      subject: 's',
+      message: 'm',
+      path: '/hub/on-call',
+      status: 'open',
+      level: 0,
+      sent_to: '[]',
+      created_at: new Date()
+    }))
+    await db('nivaro_hub_pages').insert(rows)
+    const mine = await listPages({ userId: NEXT, isAdmin: false, ownedAppIds: [], limit: 100 })
+    expect(mine).toHaveLength(1)
   })
 })

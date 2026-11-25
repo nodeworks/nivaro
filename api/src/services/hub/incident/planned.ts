@@ -1,3 +1,4 @@
+import { db } from '../../../db/index.js'
 import { activeWindow, listFreezes, nextWindow } from '../releases/freeze.js'
 import { listSchedules } from '../releases/schedules.js'
 
@@ -42,10 +43,18 @@ const iso = (ms: number) => new Date(ms).toISOString()
 /** Freeze windows that are on now or start inside the horizon. */
 export const freezeSource: PlannedSource = async (q) => {
   const out: PlannedItem[] = []
+  const incidentFreezes = new Set(
+    (
+      (await db('nivaro_hub_freezes')
+        .where('source', 'like', 'incident:%')
+        .select('id')
+        .catch(() => [])) as Array<{ id: number }>
+    ).map((r) => Number(r.id))
+  )
   for (const f of await listFreezes()) {
     if (f.app_id != null && !q.appIds.includes(f.app_id)) continue
-    // An incident's own freeze is the incident on the page, not planned work.
-    if (/^Incident #\d+/.test(f.name)) continue
+    // An incident's own freeze is the incident on the page, not planned work (by source tag).
+    if (incidentFreezes.has(f.id)) continue
     for (const w of [activeWindow(f, q.from), nextWindow(f, q.from)]) {
       if (!w || w.start > q.to) continue
       out.push({

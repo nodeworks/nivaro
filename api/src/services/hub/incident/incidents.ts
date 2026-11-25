@@ -25,7 +25,7 @@ import {
  * Incident mode (Hub enhancement 32). Opening an incident for an app (optionally one
  * environment):
  *
- *   1. freezes deploys for the app — one nivaro_hub_freezes row named "Incident #<id>: …", so
+ *   1. freezes deploys for the app — one nivaro_hub_freezes row tagged `incident:<id>`, so
  *      EVERY promote / apply / upgrade / move path the freeze engine already guards refuses with
  *      409 FROZEN (a rollback to an older version stays allowed). Lifted when the incident is
  *      resolved, or earlier by an administrator ("Lift freeze") for a fix that must ship;
@@ -222,21 +222,34 @@ export async function openIncident(
   return (await readIncident(id)) as Incident
 }
 
-/** Freezes deploys for the incident's app (a freeze row the freeze engine judges). */
+/** The tag on every freeze an incident made (nivaro_hub_freezes.source). */
+export const freezeSource = (incidentId: number) => `incident:${incidentId}`
+
+/** The incident's freezes that have not ended, oldest first. */
+async function liveFreezes(incidentId: number, now: number): Promise<number[]> {
+  const rows = (await db(FREEZES)
+    .where({ source: freezeSource(incidentId) })
+    .where('ends_at', '>', new Date(now))
+    .orderBy('id', 'asc')
+    .select('id')) as Array<{ id: number }>
+  return rows.map((r) => Number(r.id))
+}
+
+/**
+ * Freezes deploys for the incident's app (a freeze row the freeze engine judges), idempotent per
+ * incident: a freeze still on is kept, and two calls at once (a double click, a freeze racing the
+ * open) both insert, then every row but the oldest is ended at once — never an orphan freeze.
+ */
 export async function freezeOn(id: number, userId: string, deps: IncidentDeps = {}): Promise<void> {
   const inc = await readIncident(id)
   if (!inc) throw new IncidentError(404, 'NOT_FOUND', 'Not found')
   const now = (deps.now ?? Date.now)()
-  if (inc.freeze_id != null) {
-    const f = (await db(FREEZES).where({ id: inc.freeze_id }).first('ends_at')) as
-      | { ends_at: unknown }
-      | undefined
-    if (f && Date.parse(new Date(f.ends_at as string).toISOString()) > now) return
-  }
-  const freezeId = Number(
+  if ((await liveFreezes(inc.id, now)).length) return
+  const mine = Number(
     await insertReturningId(db, FREEZES, {
       app_id: inc.app_id,
       name: `Incident #${inc.id}: ${inc.title}`.slice(0, 120),
+      source: freezeSource(inc.id),
       recurrence: 'none',
       starts_at: new Date(now),
       ends_at: new Date(now + FREEZE_FOR_MS),
@@ -248,45 +261,46 @@ export async function freezeOn(id: number, userId: string, deps: IncidentDeps = 
       updated_at: new Date(now)
     })
   )
-  await patchIncident(inc.id, { freeze_id: freezeId })
-  await addEvent(
-    inc.id,
-    'freeze',
-    'Deploys frozen for this app until the incident is resolved (rollbacks still allowed)',
-    userId,
-    new Date(now)
-  )
+  const live = await liveFreezes(inc.id, now)
+  const keep = live[0] ?? mine
+  const losers = live.filter((x) => x !== keep)
+  if (losers.length)
+    await db(FREEZES)
+      .whereIn('id', losers)
+      .update({ ends_at: new Date(now), updated_at: new Date(now) })
+  await patchIncident(inc.id, { freeze_id: keep })
+  if (keep === mine)
+    await addEvent(
+      inc.id,
+      'freeze',
+      'Deploys frozen for this app until the incident is resolved (rollbacks still allowed)',
+      userId,
+      new Date(now)
+    )
 }
 
-/** Ends the incident's freeze now (a fix must ship, or the incident is over). */
+/** Ends every freeze the incident made, now (a fix must ship, or the incident is over). */
 export async function freezeOff(
-  inc: Incident,
+  inc: Pick<Incident, 'id'>,
   userId: string | null,
   why: string,
   now = new Date()
 ): Promise<boolean> {
-  if (inc.freeze_id == null) return false
   const n = await db(FREEZES)
-    .where({ id: inc.freeze_id })
+    .where({ source: freezeSource(inc.id) })
     .where('ends_at', '>', now)
     .update({ ends_at: now, updated_at: now })
   if (Number(n) > 0) await addEvent(inc.id, 'freeze', why, userId, now)
   return Number(n) > 0
 }
 
-/** Whether the incident's freeze is on now. */
-export async function freezeActive(
-  inc: Pick<Incident, 'freeze_id'>,
-  now = Date.now()
-): Promise<boolean> {
-  if (inc.freeze_id == null) return false
-  const f = (await db(FREEZES).where({ id: inc.freeze_id }).first('starts_at', 'ends_at')) as
-    | { starts_at: unknown; ends_at: unknown }
-    | undefined
-  if (!f) return false
-  const s = new Date(f.starts_at as string).getTime()
-  const e = new Date(f.ends_at as string).getTime()
-  return now >= s && now < e
+/** Whether one of the incident's freezes is on now. */
+export async function freezeActive(inc: Pick<Incident, 'id'>, now = Date.now()): Promise<boolean> {
+  const rows = (await db(FREEZES)
+    .where({ source: freezeSource(inc.id) })
+    .where('ends_at', '>', new Date(now))
+    .select('starts_at')) as Array<{ starts_at: unknown }>
+  return rows.some((r) => new Date(r.starts_at as string).getTime() <= now)
 }
 
 /** Shows (or re-pushes) the incident banner and records where it landed. */
@@ -355,6 +369,7 @@ export async function pageFor(inc: Incident, deps: IncidentDeps = {}): Promise<v
       environment_id: inc.environment_id,
       incident_id: inc.id,
       kind: 'incident',
+      severity: inc.severity,
       subject,
       message,
       path

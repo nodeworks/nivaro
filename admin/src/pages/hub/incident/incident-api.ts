@@ -133,6 +133,8 @@ export interface OnCallView {
     overrides: Override[]
     shifts: Array<{ user_id: string; from: string; to: string; override?: boolean }>
     can_write: boolean
+    /** The caller is on this rota but cannot read the app: only their own shifts. */
+    limited?: boolean
   }>
   pages: Page[]
   recent: Page[]

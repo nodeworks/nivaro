@@ -1836,7 +1836,7 @@ export const HUB_ROUTES: HubRoute[] = [
       audience: s('public (token link) or internal (signed-in people)', {
         enum: ['public', 'internal']
       }),
-      app_ids: list('integer', 'Apps on the page (empty = every app)'),
+      app_ids: list('integer', 'Apps on the page: null or absent = every app, [] = none'),
       expires_in_days: n('Public link lifetime, 1–366 (default 90)')
     },
     notes: 'A public page answers its token once; only its SHA-256 is stored.'

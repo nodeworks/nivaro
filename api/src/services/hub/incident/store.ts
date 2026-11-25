@@ -219,12 +219,13 @@ export async function listOverrides(appId: number, since = new Date()): Promise<
 
 // ─── People the escalation steps name ───────────────────────────────────────
 
-/** An app's owners who are active Hub accounts. */
+/** An app's owners who are active Hub people (never machine accounts). */
 export async function activeOwnerIds(appId: number): Promise<string[]> {
   const rows = (await db('nivaro_hub_app_owners as o')
     .join('nivaro_users as u', 'u.id', 'o.user_id')
     .where('o.app_id', appId)
     .where('u.status', 'active')
+    .whereNull('u.account_kind')
     .select('u.id')) as Array<{ id: unknown }>
   return rows.map((r) => String(r.id))
 }

@@ -319,8 +319,14 @@ export async function statusAnswer(
       total = { s: total.s + c.s, u: total.u + c.u }
       return { date: d, uptime: pct(c.u, c.s) }
     })
+    // An incident on a non-production environment never shows as the app's outage.
     const open = incidents
-      .filter((i) => i.app_id === a.id && i.status === 'open')
+      .filter(
+        (i) =>
+          i.app_id === a.id &&
+          i.status === 'open' &&
+          (i.environment_id == null || prod.includes(i.environment_id))
+      )
       .sort(
         (x, y) => (RANK[SEVERITY_STATE[y.severity]] ?? 0) - (RANK[SEVERITY_STATE[x.severity]] ?? 0)
       )[0]

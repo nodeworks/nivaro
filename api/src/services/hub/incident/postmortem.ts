@@ -487,9 +487,12 @@ export interface ExportFacts {
 
 const SEV_WORDS: Record<string, string> = { sev1: 'SEV 1', sev2: 'SEV 2', sev3: 'SEV 3' }
 
-/** Markdown text that cannot break the document: no raw HTML, list/heading markers kept as text. */
+/** Markdown text that cannot break the document: no raw HTML, and link, image, emphasis and code
+ *  markers backslash-escaped (an edited `![](…)` or `[x](javascript:…)` stays text). */
 function mdText(v: string): string {
-  return v.replace(/[<>]/g, (c) => (c === '<' ? '&lt;' : '&gt;'))
+  return v
+    .replace(/[\\`*_[\]()!#|~]/g, (c) => `\\${c}`)
+    .replace(/[<>]/g, (c) => (c === '<' ? '&lt;' : '&gt;'))
 }
 
 export function postMortemMarkdown(pm: PostMortem, f: ExportFacts): string {

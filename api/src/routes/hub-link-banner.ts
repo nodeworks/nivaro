@@ -50,20 +50,6 @@ function answer(reply: FastifyReply, out: BannerWrite) {
   return reply.send({ banner: out.banner })
 }
 
-/**
- * PUT / DELETE on any other path under this plugin's prefix lands here instead of the global
- * 404, so the plugin's bearer hook judges it too: a near-miss spelling of the route (trailing
- * slash, an encoded slash, `;x`, other case) answers 401 without the bearer, never a route.
- * Every route a sibling plugin declares is more specific and still wins.
- */
-function catchRest(app: FastifyInstance) {
-  app.route({
-    method: ['PUT', 'DELETE'],
-    url: '/*',
-    handler: async (_req, reply) => refuse(reply, 404, 'Not found', 'NOT_FOUND')
-  })
-}
-
 /** PUT / DELETE /api/hub-link/status-banner on a dedicated app (HUB_TOKEN). */
 export async function hubLinkBannerRoutes(app: FastifyInstance): Promise<void> {
   const token = hubLinkToken()
@@ -77,8 +63,6 @@ export async function hubLinkBannerRoutes(app: FastifyInstance): Promise<void> {
       return refuse(reply, 401, 'Unauthorized', REFUSED)
     }
   })
-
-  catchRest(app)
 
   app.put('/status-banner', async (req, reply) => {
     try {
@@ -136,8 +120,6 @@ export async function hubDeploymentBannerRoutes(app: FastifyInstance): Promise<v
       return refuse(reply, 503, 'The banner could not be written (Redis)', 'REDIS_UNAVAILABLE')
     }
   }
-
-  catchRest(app)
 
   app.put<{ Params: { id: string } }>('/apps/:id/status-banner', async (req, reply) =>
     inApp(reply, req.params.id, () => setStatusBanner(redisOf(app), req.body))

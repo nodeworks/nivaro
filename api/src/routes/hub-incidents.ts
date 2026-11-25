@@ -17,7 +17,14 @@ import {
   toneFor,
   validateOpen
 } from '../services/hub/incident/incidents.js'
-import { acknowledgePage, listPages, PageError, readPage } from '../services/hub/incident/paging.js'
+import {
+  acknowledgePage,
+  genericNotice,
+  listPages,
+  type Page,
+  PageError,
+  readPage
+} from '../services/hub/incident/paging.js'
 import {
   draftPostMortem,
   normalizePostMortem,
@@ -26,6 +33,7 @@ import {
   postMortemMarkdown
 } from '../services/hub/incident/postmortem.js'
 import {
+  chainOf,
   onCallAt,
   upcomingShifts,
   validateOverride,
@@ -602,43 +610,64 @@ export async function hubIncidentRoutes(app: FastifyInstance): Promise<void> {
 
   // ─── On-call ───────────────────────────────────────────────────────────────
 
+  // Full rows (pages, recipients, rota members, names) only for apps the caller may read
+  // (administrators; owners for their apps). A rota member who cannot read the app sees their
+  // own shifts and their own pages as receipts (generic words, no recipients, no producer text).
   app.get('/on-call', { preHandler: requireAuth }, async (req) => {
     const me = userId(req)
+    const meUp = me.toUpperCase()
     const owned = req.isAdmin ? null : await ownedAppIds(req)
+    const reads = (appId: number) => !owned || owned.includes(appId)
     const all = await listRotas(null)
     const rotas = all.filter(
-      (r) =>
-        !owned ||
-        owned.includes(r.app_id) ||
-        r.people.some((p) => p.toUpperCase() === me.toUpperCase())
+      (r) => reads(r.app_id) || r.people.some((p) => p.toUpperCase() === meUp)
     )
     const now = Date.now()
     const out = await Promise.all(
       rotas.map(async (r) => {
         const overrides = await listOverrides(r.app_id, new Date(now - 86_400_000))
         const oc = onCallAt(r, overrides, now)
+        const live = overrides.filter((o) => Date.parse(o.ends_at) > now)
+        const shifts = upcomingShifts(r, overrides, now, 8)
+        if (reads(r.app_id))
+          return {
+            rota: { ...r, steps: chainOf(r) },
+            on_call: oc,
+            overrides: live,
+            shifts,
+            can_write: !!req.isAdmin,
+            limited: false
+          }
+        const mine = (id: string | null) => !!id && id.toUpperCase() === meUp
         return {
-          rota: r,
-          on_call: oc,
-          overrides: overrides.filter((o) => Date.parse(o.ends_at) > now),
-          shifts: upcomingShifts(r, overrides, now, 8),
-          can_write: !!req.isAdmin
+          rota: {
+            id: r.id,
+            app_id: r.app_id,
+            enabled: r.enabled,
+            people: [me],
+            time_zone: r.time_zone,
+            handover_weekday: r.handover_weekday,
+            handover_time: r.handover_time,
+            starts_on: r.starts_on,
+            escalate_minutes: r.escalate_minutes,
+            steps: chainOf(r)
+          },
+          on_call: {
+            user_id: mine(oc.user_id) ? me : null,
+            next_user_id: mine(oc.next_user_id) ? me : null,
+            until: mine(oc.user_id) ? oc.until : null,
+            override: null
+          },
+          overrides: live.filter((o) => mine(o.user_id)),
+          shifts: shifts.filter((x) => mine(x.user_id)),
+          can_write: false,
+          limited: true
         }
       })
     )
-    const pages = await listPages({
-      userId: me,
-      isAdmin: !!req.isAdmin,
-      ownedAppIds: owned ?? [],
-      status: 'active',
-      limit: 100
-    })
-    const recent = await listPages({
-      userId: me,
-      isAdmin: !!req.isAdmin,
-      ownedAppIds: owned ?? [],
-      limit: 50
-    })
+    const ask = { userId: me, isAdmin: !!req.isAdmin, ownedAppIds: owned ?? [] }
+    const pages = await listPages({ ...ask, status: 'active', limit: 100 })
+    const recent = await listPages({ ...ask, limit: 50 })
     const appIds = [...new Set([...out.map((o) => o.rota.app_id), ...recent.map((p) => p.app_id)])]
     // Apps the caller may set a rota on (admins: every app; others: none).
     const appRows = req.isAdmin
@@ -649,9 +678,38 @@ export async function hubIncidentRoutes(app: FastifyInstance): Promise<void> {
         }>)
       : []
     const apps = await appInfo([...new Set([...appIds, ...appRows.map((a) => Number(a.id))])])
+    const appName = (id: number) => apps.get(id)?.name ?? `App ${id}`
+    const shape = (p: Page) => {
+      if (reads(p.app_id)) return { ...p, app_name: appName(p.app_id), limited: false }
+      const g = genericNotice(p, appName(p.app_id), null)
+      return {
+        id: p.id,
+        app_id: p.app_id,
+        app_name: appName(p.app_id),
+        environment_id: null,
+        incident_id: null,
+        kind: p.kind,
+        severity: p.severity,
+        subject: g.subject,
+        message: g.message,
+        status: p.status,
+        level: 0,
+        sent_to: [],
+        next_at: null,
+        acknowledged_by: p.acknowledged_by && p.acknowledged_by.toUpperCase() === meUp ? me : null,
+        acknowledged_at: p.acknowledged_at,
+        created_at: p.created_at,
+        limited: true
+      }
+    }
     const names = await personNames([
-      ...out.flatMap((o) => [...o.rota.people, ...o.overrides.map((x) => x.user_id)]),
-      ...recent.flatMap((p) => [p.acknowledged_by, ...p.sent_to.flatMap((s) => s.users)])
+      me,
+      ...out
+        .filter((o) => !o.limited)
+        .flatMap((o) => [...o.rota.people, ...o.overrides.map((x) => x.user_id)]),
+      ...recent
+        .filter((p) => reads(p.app_id))
+        .flatMap((p) => [p.acknowledged_by, ...p.sent_to.flatMap((s) => s.users)])
     ])
     return {
       data: {
@@ -659,8 +717,8 @@ export async function hubIncidentRoutes(app: FastifyInstance): Promise<void> {
           .map(([id, a]) => ({ id, key: a.key, name: a.name }))
           .sort((a, b) => a.name.localeCompare(b.name)),
         rotas: out,
-        pages: pages.map((p) => ({ ...p, app_name: apps.get(p.app_id)?.name ?? null })),
-        recent: recent.map((p) => ({ ...p, app_name: apps.get(p.app_id)?.name ?? null })),
+        pages: pages.map(shape),
+        recent: recent.map(shape),
         names: Object.fromEntries(names),
         me,
         now: new Date(now).toISOString()

@@ -276,6 +276,11 @@ function RotaView({
         <h4 className='m-0 min-w-0 flex-1 text-[13px] font-semibold text-slate-900 dark:text-foreground'>
           {appName}
           {!r.enabled && <span className='ml-2 text-[11px] font-medium text-slate-500'>Off</span>}
+          {item.limited && (
+            <span className='ml-2 text-[11px] font-normal text-slate-500 dark:text-muted-foreground'>
+              You are on this rota — your shifts only
+            </span>
+          )}
         </h4>
         {onEdit && (
           <>
@@ -394,6 +399,8 @@ function usePeople() {
 }
 
 const ALL_STEPS: StepKind[] = ['on_call', 'next', 'owners', 'admins']
+/** Always in the chain (the server adds owners and admins when a rota leaves them out). */
+const LOCKED: ReadonlySet<StepKind> = new Set(['on_call', 'owners', 'admins'])
 
 function RotaForm({
   data,
@@ -595,6 +602,10 @@ function RotaForm({
           <legend className='mb-1.5 text-[12px] font-medium text-slate-700 dark:text-foreground'>
             Escalation steps
           </legend>
+          <p className='m-0 mb-1.5 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+            The person on call is always first; app owners and then the administrators always end
+            the chain, so a page always reaches someone who can act.
+          </p>
           <div className='flex flex-wrap gap-3'>
             {ALL_STEPS.map((s) => (
               <label
@@ -604,8 +615,8 @@ function RotaForm({
               >
                 <Switch
                   id={`rota-step-${s}`}
-                  checked={steps.includes(s)}
-                  disabled={s === 'on_call'}
+                  checked={LOCKED.has(s) || steps.includes(s)}
+                  disabled={LOCKED.has(s)}
                   onCheckedChange={(v) =>
                     setSteps(ALL_STEPS.filter((x) => (x === s ? v : steps.includes(x))))
                   }
@@ -617,7 +628,12 @@ function RotaForm({
         </fieldset>
       </div>
       <div className='flex flex-wrap gap-2'>
-        <Button type='submit' size='sm' className='h-8' disabled={!app || save.isPending}>
+        <Button
+          type='submit'
+          size='sm'
+          className='h-8'
+          disabled={!app || !list.length || save.isPending}
+        >
           {save.isPending ? 'Saving…' : 'Save rota'}
         </Button>
         <button type='button' className={ghostButton} onClick={onDone}>

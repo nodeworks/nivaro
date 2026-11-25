@@ -1,9 +1,22 @@
 import { db } from '../../../db/index.js'
 import { deliverHubNotice, sendHubEvent } from '../notify-events.js'
 import { FREEZES } from '../releases/freeze.js'
-import { bannerDue, bannerTick, FREEZE_FOR_MS, type IncidentDeps } from './incidents.js'
+import {
+  bannerDue,
+  bannerTick,
+  FREEZE_FOR_MS,
+  freezeSource,
+  type IncidentDeps
+} from './incidents.js'
 import { closeAlertPages, escalateDuePages, pagedUserIds, pageFromRow } from './paging.js'
-import { listRotas, openIncidents, PAGES, productionEnvIds } from './store.js'
+import {
+  activeAdminIds,
+  activeOwnerIds,
+  listRotas,
+  openIncidents,
+  PAGES,
+  productionEnvIds
+} from './store.js'
 
 /**
  * The incident minute tick (cron hub-incident-tick, Hub only, one leader through the cron lease;
@@ -49,11 +62,11 @@ async function lastSamples(envId: number, n: number): Promise<boolean[]> {
 /** Keeps open incidents' freezes on (never re-opens one an administrator lifted). */
 async function keepFreezes(now: number): Promise<number> {
   const open = await openIncidents()
-  const ids = open.map((i) => i.freeze_id).filter((x): x is number => x != null)
-  if (!ids.length) return 0
+  const tags = open.map((i) => freezeSource(i.id))
+  if (!tags.length) return 0
   return Number(
     await db(FREEZES)
-      .whereIn('id', ids)
+      .whereIn('source', tags)
       .where('ends_at', '>', new Date(now))
       .where('ends_at', '<', new Date(now + 86_400_000))
       .update({ ends_at: new Date(now + FREEZE_FOR_MS), updated_at: new Date(now) })
@@ -98,17 +111,43 @@ async function watchOutages(deps: IncidentTickDeps, now: number, errors: string[
         } else if (up && open) {
           const page = pageFromRow(open)
           await closeAlertPages(rota.app_id, envId, 'uptime_down', new Date(now))
-          await (deps.deliver ?? deliverHubNotice)(
-            pagedUserIds(page),
-            {
-              subject: page.subject.replace(/^Down:/, 'Back up:'),
-              message: 'The environment answers the Hub’s probes again.',
-              path: `/hub/on-call?page=${page.id}`,
-              source: { kind: 'hub-page', label: 'uptime_up', id: page.id },
-              why: 'You were paged when it stopped answering.'
-            },
-            deps
-          ).catch(() => 0)
+          // Owners and administrators read the alert's own words; anyone else on the rota a
+          // generic line (the app's name only).
+          const readers = new Set(
+            [
+              ...(await (deps.owners ?? activeOwnerIds)(rota.app_id)),
+              ...(await (deps.admins ?? activeAdminIds)())
+            ].map((u) => u.toUpperCase())
+          )
+          const app = (await db('nivaro_hub_apps')
+            .where({ id: rota.app_id })
+            .first('key', 'name')) as { key: string; name: string } | undefined
+          const appName = app ? String(app.name || app.key) : `App ${rota.app_id}`
+          const people = pagedUserIds(page)
+          const base = {
+            path: `/hub/on-call?page=${page.id}`,
+            source: { kind: 'hub-page', label: 'uptime_up', id: page.id },
+            why: 'You were paged when it stopped answering.'
+          }
+          const deliver = deps.deliver ?? deliverHubNotice
+          const own = people.filter((u) => readers.has(u.toUpperCase()))
+          const other = people.filter((u) => !readers.has(u.toUpperCase()))
+          if (own.length)
+            await deliver(
+              own,
+              {
+                ...base,
+                subject: page.subject.replace(/^Down:/, 'Back up:'),
+                message: 'The environment answers the Hub’s probes again.'
+              },
+              deps
+            ).catch(() => 0)
+          if (other.length)
+            await deliver(
+              other,
+              { ...base, subject: `Back up: ${appName}`, message: `${appName} answers again.` },
+              deps
+            ).catch(() => 0)
           recovered++
         }
       } catch (err) {

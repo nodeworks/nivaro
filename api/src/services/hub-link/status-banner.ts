@@ -124,9 +124,12 @@ export async function setStatusBanner(
       code: 'REDIS_UNAVAILABLE',
       message: 'The banner could not be stored (Redis)'
     }
+  const before = parse(await redis.get(bannerKey()).catch(() => null))
   const banner: StatusBanner = { text, tone, incident, set_at: now.toISOString() }
   await redis.set(bannerKey(), JSON.stringify(banner), 'EX', BANNER_TTL_S)
-  announceToTenant('announcements:changed')
+  // A refresh with the same words only renews the TTL; open tabs re-read only on a change.
+  if (!before || before.text !== text || before.tone !== tone || before.incident !== incident)
+    announceToTenant('announcements:changed')
   return { ok: true, banner }
 }
 

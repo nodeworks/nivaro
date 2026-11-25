@@ -20,6 +20,7 @@ import { longText } from '../portable-ddl.js'
  *                                 the next step is due, who acknowledged it
  *  - nivaro_hub_status_pages      status page links: SHA-256 of the token (never the token),
  *                                 expiry, the apps on the page, public or company-internal
+ *  - nivaro_hub_freezes.source    `incident:<id>` on a freeze an incident made (else NULL)
  */
 export async function up(knex: Knex): Promise<void> {
   if (!(await knex.schema.hasTable('nivaro_hub_incidents'))) {
@@ -103,6 +104,7 @@ export async function up(knex: Knex): Promise<void> {
       t.integer('environment_id').nullable()
       t.integer('incident_id').nullable()
       t.string('kind', 32).notNullable()
+      t.string('severity', 8).nullable()
       t.string('subject', 200).notNullable()
       t.string('message', 1000).notNullable()
       t.string('path', 300).notNullable()
@@ -110,6 +112,7 @@ export async function up(knex: Knex): Promise<void> {
       t.integer('level').notNullable()
       longText(t, knex, 'sent_to').nullable()
       t.dateTime('next_at').nullable()
+      t.dateTime('last_sent_at').nullable()
       t.uuid('acknowledged_by').nullable()
       t.dateTime('acknowledged_at').nullable()
       t.dateTime('closed_at').nullable()
@@ -135,6 +138,17 @@ export async function up(knex: Knex): Promise<void> {
       // Not unique: an internal page has no token (NULL), and SQL Server's unique index allows
       // one NULL only. Tokens are 32 random bytes; the lookup reads by hash.
       t.index(['token_hash'], 'ix_nivaro_hub_status_pages_token')
+    })
+  }
+
+  // Which freezes an incident made (`incident:<id>`), so planned maintenance and the incident's
+  // own lift/resolve find them by tag, never by name. NULL = a person's own freeze window.
+  if (
+    (await knex.schema.hasTable('nivaro_hub_freezes')) &&
+    !(await knex.schema.hasColumn('nivaro_hub_freezes', 'source'))
+  ) {
+    await knex.schema.alterTable('nivaro_hub_freezes', (t) => {
+      t.string('source', 40).nullable()
     })
   }
 }

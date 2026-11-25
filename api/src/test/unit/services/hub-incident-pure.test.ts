@@ -9,6 +9,7 @@ import {
   windowOf
 } from '../../../services/hub/incident/postmortem.js'
 import {
+  chainOf,
   firstHandover,
   onCallAt,
   type Rota,
@@ -33,6 +34,7 @@ import {
   readStatusBanner,
   setStatusBanner
 } from '../../../services/hub-link/status-banner.js'
+import { maskUrlPath, maskUrlQuery } from '../../../services/secret-mask.js'
 
 // Hub incidents (enhancements 32–35), the pure parts: rota arithmetic, the banner's plain text
 // and store, status page states and HTML, post-mortem timeline and exports.
@@ -369,5 +371,40 @@ describe('post-mortem', () => {
     expect(html).not.toContain('<script>bad')
     expect(html).toContain('&lt;script&gt;bad&lt;/script&gt;')
     expect(normalizePostMortem({ timeline: [{ at: 'nope', text: 'x' }] })).toHaveProperty('error')
+  })
+})
+
+describe('review fixes (pure)', () => {
+  it('M1: a status page token never reaches a log in clear', () => {
+    const t = `nvs_${'a'.repeat(43)}`
+    expect(maskUrlPath(`/api/hub/status-page/${t}`)).toBe('/api/hub/status-page/••••••')
+    expect(maskUrlQuery(`/api/hub/status-page/${t}?format=json`)).not.toContain(t)
+  })
+
+  it('L7: Markdown export escapes link and image syntax', () => {
+    const pm = normalizePostMortem({
+      title: 'PM',
+      summary: '![x](https://tracker.example/beacon) and [click](javascript:alert(1))',
+      timeline: [],
+      actions: []
+    })
+    if ('error' in pm) throw new Error(pm.error)
+    const md = postMortemMarkdown(pm, {
+      app: 'EFP',
+      environment: null,
+      severity: 'sev2',
+      status: 'open',
+      opened_at: '2026-11-25T10:00:00.000Z',
+      resolved_at: null
+    })
+    expect(md).not.toContain('![x](')
+    expect(md).not.toContain('[click](')
+    expect(md).toContain('\\!\\[x\\]\\(https://tracker.example/beacon\\)')
+  })
+
+  it('M2: a rota without people is refused; the chain always ends with owners and admins', () => {
+    expect(validateRota({ people: [] })).toEqual({ error: 'a rota names at least one person' })
+    expect(chainOf({ steps: ['on_call'] })).toEqual(['on_call', 'owners', 'admins'])
+    expect(chainOf({ steps: ['on_call', 'admins'] })).toEqual(['on_call', 'admins', 'owners'])
   })
 })

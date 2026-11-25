@@ -78,7 +78,7 @@ describe('PUT / DELETE /api/hub-link/status-banner', () => {
     expect(redis.store.size).toBe(0)
   })
 
-  it('every path variant still needs the bearer (no URL-based skip)', async () => {
+  it('no path variant reaches a banner handler without the bearer', async () => {
     for (const url of [
       '/hub-link/status-banner/',
       '/hub-link/%2Fstatus-banner',
@@ -87,9 +87,24 @@ describe('PUT / DELETE /api/hub-link/status-banner', () => {
       '/hub-link/status-banner?x=1'
     ]) {
       const r = await app.inject({ method: 'PUT', url, payload: { text: 'x', incident_id: 1 } })
-      expect(r.statusCode, url).toBe(401)
+      // The real route (`?x=1`) answers 401; a spelling no route matches is a plain 404.
+      expect([401, 404], url).toContain(r.statusCode)
+      // …and WITH the bearer a near-miss still reaches no handler (nothing is stored).
+      if (url !== '/hub-link/status-banner?x=1') {
+        const a = await app.inject({
+          method: 'PUT',
+          url,
+          headers: auth,
+          payload: { text: 'x', incident_id: 1 }
+        })
+        expect(a.statusCode, url).toBe(404)
+      }
     }
     expect(redis.store.size).toBe(0)
+    expect(
+      (await app.inject({ method: 'PUT', url: '/hub-link/status-banner?x=1', payload: {} }))
+        .statusCode
+    ).toBe(401)
     expect((await app.inject({ method: 'DELETE', url: '/hub-link/retire' })).json()).toEqual({
       sibling: true
     })
@@ -126,6 +141,30 @@ describe('PUT / DELETE /api/hub-link/status-banner', () => {
     })
     expect(own.json().banner).toBeNull()
     expect(redis.store.size).toBe(0)
+  })
+
+  it('a refresh with the same words renews the TTL without telling every tab again', async () => {
+    const body = { text: 'Orders are slow', tone: 'warn', incident_id: 3 }
+    await app.inject({
+      method: 'PUT',
+      url: '/hub-link/status-banner',
+      headers: auth,
+      payload: body
+    })
+    await app.inject({
+      method: 'PUT',
+      url: '/hub-link/status-banner',
+      headers: auth,
+      payload: body
+    })
+    expect(announced).toEqual(['announcements:changed'])
+    await app.inject({
+      method: 'PUT',
+      url: '/hub-link/status-banner',
+      headers: auth,
+      payload: { ...body, text: 'Orders are back' }
+    })
+    expect(announced).toHaveLength(2)
   })
 
   it('refuses a bad body', async () => {

@@ -9,8 +9,9 @@ import { isTimeZone, zonedParts } from '../releases/zoned.js'
  * every hand-over passes to the next person, round the list. An override (a person for a time
  * range) beats the rota while it runs; when two overlap, the newest wins.
  *
- * Escalation: `steps` in order (on_call → next → owners → admins by default); a page goes to the
- * first step at once and to the next one every `escalate_minutes` while nobody acknowledges it.
+ * Escalation: `steps` in order (on_call → next → owners → admins by default; owners and admins
+ * are always appended when missing, chainOf); a page goes to the first step at once and to the
+ * next one every `escalate_minutes` while nobody acknowledges it.
  */
 
 export const WEEK_MS = 7 * 86_400_000
@@ -108,6 +109,16 @@ export function overrideFromRow(r: Record<string, unknown>): Override {
     note: (r.note as string | null) ?? null,
     created_by: (r.created_by as string | null) ?? null
   }
+}
+
+/**
+ * The escalation chain a page walks: the rota's own steps, then the app's owners and the Hub
+ * administrators when the rota does not list them — every chain ends with someone who can act.
+ */
+export function chainOf(rota: Pick<Rota, 'steps'>): StepKind[] {
+  const out = [...rota.steps]
+  for (const s of ['owners', 'admins'] as const) if (!out.includes(s)) out.push(s)
+  return out
 }
 
 /** The UTC instant of wall-clock (y, m 1–12, d, hh:mm) in `tz` (day may overflow the month). */
@@ -265,6 +276,7 @@ export interface RotaInput {
 export function validateRota(b: Record<string, unknown>): RotaInput | { error: string } {
   const people = Array.isArray(b.people) ? b.people.map((x) => String(x).trim()) : null
   if (!people) return { error: 'people is a list of Hub account ids' }
+  if (!people.length) return { error: 'a rota names at least one person' }
   if (people.length > MAX_PEOPLE) return { error: `at most ${MAX_PEOPLE} people` }
   if (people.some((p) => !UUID_RE.test(p))) return { error: 'people are Hub account ids' }
   const lower = people.map((p) => p.toLowerCase())
