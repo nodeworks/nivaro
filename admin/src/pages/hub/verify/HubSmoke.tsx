@@ -20,6 +20,7 @@ import {
   fetchEnvSmoke,
   fetchSmokeOverview,
   KIND_WORDS,
+  MAX_READS,
   type OnFail,
   runSuiteNow,
   type SmokeCheck,
@@ -45,13 +46,16 @@ const RUN_TONE: Record<SmokeRun['status'], string> = {
   queued:
     'border-slate-200 bg-slate-50 text-slate-700 dark:border-border dark:bg-muted dark:text-slate-300',
   running:
-    'border-sky-200 bg-sky-50 text-sky-800 dark:border-sky-900 dark:bg-sky-950/40 dark:text-sky-300'
+    'border-sky-200 bg-sky-50 text-sky-800 dark:border-sky-900 dark:bg-sky-950/40 dark:text-sky-300',
+  unverified:
+    'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300'
 }
 const RUN_WORDS: Record<SmokeRun['status'], string> = {
   passed: 'Passed',
   failed: 'Failed',
   queued: 'Waiting',
-  running: 'Running'
+  running: 'Running',
+  unverified: 'Not judged'
 }
 
 function RunChip({ status }: { status: SmokeRun['status'] }) {
@@ -264,7 +268,14 @@ function EnvDetail({
         <QueryErrorState error={q.error} what='the smoke checks' onRetry={() => void q.refetch()} />
       ) : (
         <>
-          <SuiteCard envId={envId} suite={q.data.suite} isAdmin={isAdmin} linked={env.linked} />
+          <SuiteCard
+            envId={envId}
+            suite={q.data.suite}
+            isAdmin={isAdmin}
+            linked={env.linked}
+            rollbackWindow={q.data.rollback_window_minutes}
+            longestRun={q.data.longest_run_seconds}
+          />
           <RunsCard runs={q.data.runs} openRun={openRun} />
         </>
       )}
@@ -355,12 +366,17 @@ function SuiteCard({
   envId,
   suite,
   isAdmin,
-  linked
+  linked,
+  rollbackWindow,
+  longestRun
 }: {
   envId: number
   suite: SmokeSuite | null
   isAdmin: boolean
   linked: boolean
+  /** The automatic rollback rule's window in minutes; null = no enabled rule. */
+  rollbackWindow: number | null
+  longestRun: number | null
 }) {
   const qc = useQueryClient()
   const [editing, setEditing] = useState(false)
@@ -404,6 +420,7 @@ function SuiteCard({
     },
     onError: (e) => hubToast(e, 'The smoke checks could not be removed')
   })
+  const readCount = checks.filter((c) => c.kind !== 'http').length
   const set = (key: string, patch: Partial<Draft>) =>
     setChecks((list) => list.map((c) => (c.key === key ? { ...c, ...patch } : c)))
 
@@ -468,6 +485,16 @@ function SuiteCard({
               </div>
             </Field>
           </div>
+
+          {onFail === 'rollback' && (
+            <p className='m-0 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200'>
+              {rollbackWindow == null
+                ? 'No automatic rollback rule is on for this environment (Releases tab): a failed run only tells the people.'
+                : (longestRun ?? 0) > rollbackWindow * 60
+                  ? `A run can finish after the rollback rule’s ${rollbackWindow}-minute window, and then it no longer rolls back. Shorten the wait or lengthen the window.`
+                  : `Only a check that fails on the app’s own answer rolls back, within the rule’s ${rollbackWindow}-minute window. A run that cannot judge the app (no link, a timeout, maintenance) only tells the people.`}
+            </p>
+          )}
 
           <ol className='m-0 list-none space-y-3 p-0'>
             {checks.map((c, i) => (
@@ -617,6 +644,16 @@ function SuiteCard({
             >
               <Plus className='h-3.5 w-3.5' aria-hidden /> Add a check
             </button>
+            <span
+              className={cn(
+                'text-[11px] tabular-nums',
+                readCount > MAX_READS
+                  ? 'font-medium text-red-700 dark:text-red-400'
+                  : 'text-slate-500 dark:text-muted-foreground'
+              )}
+            >
+              {readCount} of {MAX_READS} signed-in reads and saved queries
+            </span>
             <div className='ml-auto flex flex-wrap items-center gap-2'>
               {suite && (
                 <ConfirmButton
@@ -642,7 +679,7 @@ function SuiteCard({
               <Button
                 size='sm'
                 className='h-8 bg-nvr-cyan text-white'
-                disabled={save.isPending || !checks.length}
+                disabled={save.isPending || !checks.length || readCount > MAX_READS}
                 onClick={() => save.mutate()}
               >
                 {save.isPending ? 'Saving…' : 'Save checks'}

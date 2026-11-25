@@ -69,7 +69,13 @@ export default function HubExtensions() {
   const refresh = useMutation({
     mutationFn: () => refreshExtensions(),
     onSuccess: (r) => {
-      toast.success(r.read === 1 ? 'Read 1 environment' : `Read ${r.read} environments`)
+      toast.success(
+        r.background
+          ? 'Reading every environment — this tab updates when it is done'
+          : r.read === 1
+            ? 'Read 1 environment'
+            : `Read ${r.read ?? 0} environments`
+      )
       void qc.invalidateQueries({ queryKey: verifyKeys.extensions() })
     },
     onError: (e) => hubToast(e, 'The extensions could not be read')
@@ -297,7 +303,7 @@ function PromotePanel({
       toast.success(
         r.via === 'docker'
           ? `Deploying ${target.extId} to ${env?.key} (deploy #${r.deploy_id})`
-          : `Pin committed for ${target.extId} on ${env?.key}`
+          : `Pin committed for ${target.extId} on ${env?.key}; watching its pipeline (deploy #${r.deploy_id})`
       )
       void qc.invalidateQueries({ queryKey: verifyKeys.extensions() })
       onClose()
@@ -349,9 +355,9 @@ function PromotePanel({
               <dt className='text-slate-500 dark:text-muted-foreground'>How</dt>
               <dd className='m-0 text-slate-800 dark:text-foreground'>
                 {p.via === 'docker'
-                  ? 'Writes the pin into the stack and runs Apply now (a normal Hub deploy).'
+                  ? 'Writes the pin inside the promotion lock and runs Apply now (a normal Hub deploy); a failed deploy puts the old pin back.'
                   : p.via === 'gitlab'
-                    ? 'Commits the extension’s pin file to the deploy branch; that repository’s CI deploys it.'
+                    ? 'Commits the extension’s pin file to the deploy branch, records an extension deploy and watches the repository’s pipeline like a promotion.'
                     : '—'}
               </dd>
               <dt className='text-slate-500 dark:text-muted-foreground'>Now</dt>
@@ -391,6 +397,7 @@ function PromotePanel({
 }
 
 const PROMO_WORDS: Record<string, string> = {
+  starting: 'Starting',
   deploying: 'Deploying',
   done: 'Deployed',
   failed: 'Failed',

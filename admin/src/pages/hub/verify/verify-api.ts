@@ -37,6 +37,8 @@ export interface CheckResult {
   name: string
   kind: CheckKind
   ok: boolean
+  /** False when the failure was not the app's verdict (no link, timeout…). */
+  judged?: boolean
   status: number | null
   ms: number | null
   rows: number | null
@@ -44,8 +46,16 @@ export interface CheckResult {
   reason: string | null
 }
 
-export type RunTrigger = 'promote' | 'rollback' | 'apply' | 'move' | 'upgrade' | 'manual'
-export type RunStatus = 'queued' | 'running' | 'passed' | 'failed'
+export type RunTrigger =
+  | 'promote'
+  | 'rollback'
+  | 'apply'
+  | 'extension'
+  | 'move'
+  | 'upgrade'
+  | 'manual'
+/** `unverified`: checks failed only because they could not be judged — never rolled back. */
+export type RunStatus = 'queued' | 'running' | 'passed' | 'failed' | 'unverified'
 
 export interface SmokeRun {
   id: number
@@ -87,10 +97,14 @@ export const TRIGGER_WORDS: Record<RunTrigger, string> = {
   promote: 'After a promotion',
   rollback: 'After a rollback',
   apply: 'After Apply now',
+  extension: 'After an extension deploy',
   move: 'After a move',
   upgrade: 'After a shared upgrade',
   manual: 'Run by hand'
 }
+
+/** Signed-in reads + saved queries one suite may hold (the app runs no more in one go). */
+export const MAX_READS = 10
 
 export const KIND_WORDS: Record<CheckKind, string> = {
   http: 'Page answers',
@@ -110,9 +124,14 @@ export const fetchSmokeOverview = () =>
 
 export const fetchEnvSmoke = (envId: number) =>
   api
-    .get<{ data: { suite: SmokeSuite | null; runs: SmokeRun[] } }>(
-      `/hub/environments/${envId}/smoke`
-    )
+    .get<{
+      data: {
+        suite: SmokeSuite | null
+        runs: SmokeRun[]
+        rollback_window_minutes: number | null
+        longest_run_seconds: number | null
+      }
+    }>(`/hub/environments/${envId}/smoke`)
     .then((r) => r.data.data)
 
 export const saveSuite = (
@@ -195,7 +214,7 @@ export const fetchExtensions = () =>
 
 export const refreshExtensions = (appId?: number) =>
   api
-    .post<{ data: { read: number } }>(
+    .post<{ data: { read: number | null; background: boolean } }>(
       '/hub/verify/extensions/refresh',
       appId ? { app_id: appId } : {}
     )
